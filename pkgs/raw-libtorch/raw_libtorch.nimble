@@ -1,4 +1,4 @@
-# Tattletale - raw-libtorch
+# Tattletale
 # Copyright (c) 2026 Mamy Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).

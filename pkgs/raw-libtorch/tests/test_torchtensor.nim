@@ -1,5 +1,5 @@
-# Tattletale - raw-libtorch tests
-# Copyright (c) 2024 Tattletale Contributors
+# Flambeau
+# Copyright (c) 2021 The Flambeau contributors
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
