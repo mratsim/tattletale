@@ -54,7 +54,7 @@ proc main() =
       check fileExists(fixturePath)
 
       var memFile = memFiles.open(fixturePath, mode = fmRead)
-      defer: close(memFile)
+      defer: close(memFile) # TODO - close them after data is loaded but before testing to ensure we own the buffer
 
       let (st, dataSectionOffset) = safetensors.load(memFile)
 

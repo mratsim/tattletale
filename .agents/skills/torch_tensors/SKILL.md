@@ -246,3 +246,74 @@ try:
 except IndexDefect as e:
   echo "Out of bounds: ", e.msg
 ```
+
+## Test patterns from test_safetensors.nim
+
+### Shape conversion with asTorchView
+
+Convert Nim sequences to Torch ArrayRef for shape parameters:
+
+```nim
+proc generateExpectedTensor*(pattern: string, shape: seq[int64], dtype: ScalarKind): TorchTensor =
+  let shapeRef = shape.asTorchView()
+  let numel = shape.product()
+
+  case pattern
+  of "gradient":
+    arange(numel, dtype).reshape(shapeRef).to(dtype)
+  of "alternating":
+    let flat = arange(numel, kInt64)
+    let modVal = (flat % 2).to(kFloat64)
+    modVal.reshape(shapeRef).to(dtype)
+  else:
+    raise newException(ValueError, "Unknown pattern: " & pattern)
+```
+
+### Dtype conversion with toTorchType
+
+Convert between Dtype enum and ScalarKind:
+
+```nim
+const TestedDtypes = [F64, F32, F16, I64, I32, I16, I8, U64, U32, U16, U8]
+
+proc runTests*() =
+  for dtype in TestedDtypes:
+    let torchType = dtype.toTorchType()
+    let tensor = arange(8, torchType)
+    check tensor.scalarType() == torchType
+```
+
+### Tensor creation and comparison
+
+Create expected tensors and compare with loaded ones:
+
+```nim
+proc compareTensors*(expected, actual: TorchTensor) =
+  check expected.shape == actual.shape
+  check expected.scalarType() == actual.scalarType()
+  check actual == expected  # Uses equal() under the hood
+
+# Usage in tests
+let expectedTensor = generateExpectedTensor(pattern, shape, dtype.toTorchType())
+let actualTensor = safetensorsLoader.getTensor(key)
+check actualTensor == expectedTensor
+```
+
+### Tensor chaining pattern
+
+Many tensor operations can be chained:
+
+```nim
+let tensor = arange(numel, kInt64)
+  .reshape(shapeRef)
+  .to(kFloat64)
+  .cpu()
+```
+
+### Key test patterns
+
+1. Always wrap test code in `proc runTests*()` to avoid C++ `= {}` initialization
+2. Use `shape.asTorchView()` for shape parameters
+3. Use `dtype.toTorchType()` for dtype conversion
+4. Use `==` for tensor comparison (uses `equal()` internally)
+5. Each branch of `case` must assign to `result`
