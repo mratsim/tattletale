@@ -90,6 +90,35 @@ let dtype = int32.toScalarKind()
 let nimType = kFloat32.toTypedesc()  # Returns typedesc[float32]
 ```
 
+## ArrayRef conversions (torch_tensors_sugar.nim)
+
+Torch uses `ArrayRef[T]` for shape/size parameters. These templates convert between Nim openArrays and Torch ArrayRef:
+
+```nim
+# Convert Nim openArray to Torch ArrayRef (for shape/size parameters)
+template asTorchView*[T](oa: openArray[T]): ArrayRef[T]
+template asTorchView*(meta: Metadata): ArrayRef[int64]
+
+# Convert Torch ArrayRef back to Nim openArray
+template asNimView*[T](ar: ArrayRef[T]): openArray[T]
+
+# Example: Creating tensors with shape
+let shape = @[3, 4, 5].asTorchView()
+let tensor = empty(shape, kFloat32)
+
+# Reading tensor shape
+let sizes = tensor.sizes()  # Returns ArrayRef[int64]
+echo sizes.asNimView()      # @[3, 4, 5]
+
+# ArrayRef helpers
+let len = sizes.len()       # 3
+for val in sizes.items():   # Iterate values
+  echo val
+let first = sizes[0]        # Index access
+```
+
+Note: `asTorchView` creates a temporary copy because ArrayRef requires a pointer to data.
+
 ## Tensor metadata
 
 ```nim

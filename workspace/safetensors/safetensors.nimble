@@ -10,6 +10,7 @@ version = "0.1.0"
 author = "Mamy Ratsimbazafy"
 description = "Safetensors implementation for Nim"
 license = "MIT or Apache License 2.0"
+installDirs = @["src"]
 
 # Dependencies
 # ---------------------------------------------------------

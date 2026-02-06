@@ -1,0 +1,2 @@
+import workspace/safetensors/src/safetensors
+export safetensors
