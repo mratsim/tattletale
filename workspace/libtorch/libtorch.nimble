@@ -21,16 +21,5 @@ requires "zip"
 
 # Tasks
 # ---------------------------------------------------------
-
-import os
-
-task install_libtorch, "Download and install libtorch":
-  const libInstaller = "vendor" / "libtorch_installer.nim"
-  selfExec("cpp -r --skipParentCfg:on " & libInstaller)
-
-task test, "Execute TorchTensor tests ":
-  withDir "tests":
-    for fstr in listFiles("."):
-      if fstr.endsWith(".nim") and fstr.startsWith("." / "test_"):
-        echo "Running ", fstr
-        selfExec("cpp -r -d:release --nimcache:nimcache --outdir:build " & fstr)
+#
+# Tasks are defined in at the monorepo root in config.nims

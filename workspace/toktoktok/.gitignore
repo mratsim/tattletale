@@ -1,0 +1,4 @@
+# Tokenizers
+# -----------------------------------------------------------------------------------------
+tests/tokenizers/gpt2-tokenizer.json
+tests/tokenizers/llama3-tokenizer.json
