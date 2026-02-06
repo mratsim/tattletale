@@ -1,14 +1,21 @@
-## Toktoktok - BPE Tokenizer for Nim
-##
-## A BPE tokenizer that loads HuggingFace tokenizer.json files.
-## Uses jsony for fast JSON parsing. Supports both encoding and decoding.
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/json
+# Toktoktok - BPE Tokenizer for Nim
+#
+# A BPE tokenizer that loads HuggingFace tokenizer.json files.
+
+# Vibe-coded: This passes tests but need in-depth fixes, see VCR comments (Vibe-Code review)
+
 import std/tables
 import std/options
 import std/os
-import std/json
 import std/re
+import std/json # TODO(VCR) switch to jsony and direct to object parsing
 
 type
   ByteLevelConfig* = object
@@ -17,24 +24,25 @@ type
     use_regex*: bool
 
   BPETokenizer* = object
-    vocab*: seq[seq[byte]]
+    vocab*: seq[string]
+    # TODO(VCR): I think we need a `decoder` cache.
+    # TODO(VCR): Also ids_to_tokens and tokens_to_ids is clearer.
     encoder*: Table[string, int]
     merges*: seq[(int, int)]
     merge_ranks*: Table[string, int]
-    special_tokens*: Table[int, seq[byte]]
+    special_tokens*: Table[int, string]
     special_tokens_encoder*: Table[string, int]
     max_token_id*: int
     byte_level_config*: ByteLevelConfig
-    pattern*: string
+    pattern*: Regex
 
   TokenizerError* = object of ValueError
-    message*: string
 
   EncodingResult* = object
     ids*: seq[int]
     tokens*: seq[string]
 
-proc new_byte_level_config*(
+proc new_byte_level_config*( # TODO(VCR) code style
   add_prefix_space = true,
   trim_offsets = true,
   use_regex = true
@@ -48,24 +56,32 @@ proc new_byte_level_config*(
 proc new_bpe_tokenizer*(): BPETokenizer =
   BPETokenizer(
     vocab: @[],
-    encoder: init_table[string, int](),
+    encoder: init_table[string, int](), # TODO(VCR) code style
     merges: @[],
     merge_ranks: init_table[string, int](),
-    special_tokens: init_table[int, seq[byte]](),
+    special_tokens: init_table[int, string](),
     special_tokens_encoder: init_table[string, int](),
     max_token_id: 0,
     byte_level_config: new_byte_level_config(),
-    pattern: ""
+    pattern: re("")
   )
 
-proc decode_token*(tokenizer: BPETokenizer, token_id: int): seq[byte] =
+proc decode_token*(tokenizer: BPETokenizer, token_id: int): string =
+  # TODO(VCR):
+  #   I think all the range checks should be
+  #   extracted in a separate proc to be done
+  #   at the sequence level instead of here.
+  #   While this makes 2 passes over the data, the first one
+  #   is just a range-check that can use SIMD vectorization
+  #   and will ready data in cache.
+  #   It also avoids duplicate checks if the merge recursion below cannot be avoided.
   if token_id < 0:
     raise new_exception(
       TokenizerError,
       "Invalid token ID: " & $token_id & " (negative)"
     )
   if token_id < 256:
-    return @[byte(token_id)]
+    return $chr(token_id)
   if token_id >= tokenizer.max_token_id:
     raise new_exception(
       TokenizerError,
@@ -83,48 +99,29 @@ proc decode_token*(tokenizer: BPETokenizer, token_id: int): seq[byte] =
       "Merge index out of bounds: " & $merge_idx &
       " (merges count: " & $(tokenizer.merges.len) & ")"
     )
+  # TODO(VCR): Can this be precomputed to avoid potentially costly recursion here?
   let (left_id, right_id) = tokenizer.merges[merge_idx]
-  let left_bytes = decode_token(tokenizer, left_id)
-  let right_bytes = decode_token(tokenizer, right_id)
-  left_bytes & right_bytes
+  decode_token(tokenizer, left_id) & decode_token(tokenizer, right_id)
 
 proc decode_to_string*(tokenizer: BPETokenizer, token_ids: seq[int]): string =
-  var decoded = new_string_of_cap(token_ids.len * 2)
+  result = "" # TODO(VCR): preallocate some sensible size, atleast token_ids.len
   for id in token_ids:
-    let bytes = decode_token(tokenizer, id)
-    for b in bytes:
-      decoded.add(chr(b))
-  decoded
-
-proc decode_to_bytes*(tokenizer: BPETokenizer, token_ids: seq[int]): seq[byte] =
-  var decoded = new_seq[byte](token_ids.len * 2)
-  for id in token_ids:
-    let bytes = decode_token(tokenizer, id)
-    decoded.add(bytes)
-  decoded
+    # TODO(VCR): decode_token should likely work in-place of result
+    result &= decode_token(tokenizer, id)
 
 proc token_count*(tokenizer: BPETokenizer): int = tokenizer.max_token_id
 proc get_vocab_size*(tokenizer: BPETokenizer): int = tokenizer.max_token_id
 proc is_special_token*(tokenizer: BPETokenizer, token_id: int): bool =
   hasKey(tokenizer.special_tokens, token_id)
 
-proc to_utf8_bytes*(s: string): seq[byte] =
-  var result = new_seq[byte](s.len)
-  for i, c in s:
-    result[i] = byte(ord(c))
-  result
+type
+  MergePart* = tuple[idx: int, rank: int]
 
-proc bytes_to_string*(bytes: seq[byte]): string =
-  var result = new_string(bytes.len)
-  for i, b in bytes:
-    result[i] = chr(b)
-  result
-
-proc byte_pair_merge*(tokenizer: BPETokenizer, piece: seq[byte]): seq[(int, int)] =
-  var parts: seq[(int, int)] = new_seq[(int, int)](piece.len + 1)
+proc byte_pair_merge*(tokenizer: BPETokenizer, piece: string): seq[MergePart] =
+  var parts: seq[MergePart] = new_seq[MergePart](piece.len + 1) # TODO(VCR): code style
   var min_rank = (high(int), -1)
   for i in 0..<piece.len - 1:
-    let pair_str = bytes_to_string(@[piece[i], piece[i+1]])
+    let pair_str = piece[i..i+1]
     let rank = tokenizer.merge_ranks.getOrDefault(pair_str, high(int))
     parts[i] = (i, rank)
     if rank < min_rank[0]:
@@ -132,12 +129,12 @@ proc byte_pair_merge*(tokenizer: BPETokenizer, piece: seq[byte]): seq[(int, int)
   parts[piece.len - 1] = (piece.len - 1, high(int))
   parts[piece.len] = (piece.len, high(int))
 
-  proc get_rank(parts: seq[(int, int)], i: int, piece: seq[byte]): int =
+  proc get_rank(parts: seq[MergePart], i: int, piece: string): int =
     if i + 3 < parts.len:
-      let start_idx = parts[i][0]
-      let end_idx = parts[i+3][0]
+      let start_idx = parts[i].idx
+      let end_idx = parts[i+3].idx
       if end_idx <= piece.len:
-        let pair_str = bytes_to_string(piece[start_idx..<end_idx])
+        let pair_str = piece[start_idx..<end_idx]
         result = tokenizer.merge_ranks.getOrDefault(pair_str, high(int))
       else:
         result = high(int)
@@ -156,47 +153,42 @@ proc byte_pair_merge*(tokenizer: BPETokenizer, piece: seq[byte]): seq[(int, int)
         min_rank = (parts[j][1], j)
   parts
 
-proc byte_pair_encode*(tokenizer: BPETokenizer, piece: seq[byte]): seq[int] =
+proc byte_pair_encode*(tokenizer: BPETokenizer, piece: string): seq[int] =
   if piece.len == 1:
-    let b = piece[0]
-    if b < 256:
-      let char_str = bytes_to_string(piece)
-      if hasKey(tokenizer.encoder, char_str):
-        return @[tokenizer.encoder[char_str]]
-      else:
-        return @[int(b)]
+    let char_str = piece
+    # TODO(VCR): use `proc getOrDefault[A, B](t: OrderedTable[A, B]; key: A; def: B): B`
+    if hasKey(tokenizer.encoder, char_str):
+      return @[tokenizer.encoder[char_str]]
     else:
-      raise new_exception(TokenizerError, "Invalid byte value: " & $b)
+      return @[int(ord(char_str[0]))]
   let parts = byte_pair_merge(tokenizer, piece)
-  var token_ids = new_seq[int](parts.len - 1)
+  var token_ids = new_seq[int](parts.len - 1) # TODO(VCR): code style
   for i in 0..<parts.len - 1:
-    let start_idx = parts[i][0]
-    let end_idx = parts[i+1][0]
-    let token_bytes = piece[start_idx..<end_idx]
-    let s = bytes_to_string(token_bytes)
-    token_ids[i] = tokenizer.encoder.getOrDefault(s, -1)
+    let start_idx = parts[i].idx
+    let end_idx = parts[i+1].idx
+    let token_str = piece[start_idx..<end_idx]
+    token_ids[i] = tokenizer.encoder.getOrDefault(token_str, -1)
   token_ids
 
 proc encode_ordinary*(tokenizer: BPETokenizer, text: string): seq[int] =
-  if tokenizer.pattern == "":
+  if tokenizer.pattern == re(""):
     raise new_exception(TokenizerError, "Pattern not set for tokenizer")
-  let regex = re(tokenizer.pattern)
-  var result: seq[int] = @[]
-  let pieces = findAll(text, regex)
+  var ids: seq[int] = @[]
+  let pieces = findAll(text, tokenizer.pattern)
   for piece_str in pieces:
     if piece_str.len == 0:
       continue
-    let piece_bytes = to_utf8_bytes(piece_str)
     if hasKey(tokenizer.encoder, piece_str):
-      result.add(tokenizer.encoder[piece_str])
+      ids.add(tokenizer.encoder[piece_str])
     else:
-      for pb in piece_bytes:
-        let char_str = bytes_to_string(@[pb])
+      for c in piece_str:
+        let char_str = $c
+        # TODO(VCR): use `proc getOrDefault[A, B](t: OrderedTable[A, B]; key: A; def: B): B`
         if hasKey(tokenizer.encoder, char_str):
-          result.add(tokenizer.encoder[char_str])
+          ids.add(tokenizer.encoder[char_str])
         else:
-          result.add(int(pb))
-  result
+          ids.add(int(ord(c)))
+  ids
 
 proc encode*(tokenizer: BPETokenizer, text: string, special: bool = false): EncodingResult =
   var result_ids: seq[int] = @[]
@@ -209,9 +201,10 @@ proc encode*(tokenizer: BPETokenizer, text: string, special: bool = false): Enco
   while pos < text.len:
     var found_special = false
     for special_token in special_tokens:
-      let token_pattern = re(escapeRe(special_token))
+      let token_pattern = re(escapeRe(special_token)) # TODO(VCR): Can this be cached?
       if match(text, token_pattern, pos):
         let special_token_str = special_token
+        # TODO(VCR): why are `<` `>` special-cased? MiniMax-M2 has very unique tokens for example
         if special or (special_token_str.len > 1 and special_token_str[0] == '<' and special_token_str[^1] == '>'):
           let token_id = tokenizer.special_tokens_encoder[special_token_str]
           result_ids.add(token_id)
@@ -222,19 +215,17 @@ proc encode*(tokenizer: BPETokenizer, text: string, special: bool = false): Enco
     if found_special:
       continue
 
-    let regex = re(tokenizer.pattern)
     var matched = false
-    let pieces = findAll(text[pos..^1], regex)
+    let pieces = findAll(text[pos..^1], tokenizer.pattern)
     if pieces.len > 0:
       let piece_str = pieces[0]
       if piece_str.len == 0:
         pos += 1
         continue
-      let piece_bytes = to_utf8_bytes(piece_str)
       if hasKey(tokenizer.encoder, piece_str):
         result_ids.add(tokenizer.encoder[piece_str])
       else:
-        let encoded = byte_pair_encode(tokenizer, piece_bytes)
+        let encoded = byte_pair_encode(tokenizer, piece_str)
         for id in encoded:
           result_ids.add(id)
       result_tokens.add(piece_str)
@@ -243,11 +234,10 @@ proc encode*(tokenizer: BPETokenizer, text: string, special: bool = false): Enco
 
     if not matched and pos < text.len:
       let c = text[pos]
-      let piece_bytes = @[byte(ord(c))]
-      let piece_str = bytes_to_string(piece_bytes)
-      if hasKey(tokenizer.encoder, piece_str):
-        result_ids.add(tokenizer.encoder[piece_str])
-        result_tokens.add(piece_str)
+      let char_str = $c
+      if hasKey(tokenizer.encoder, char_str):
+        result_ids.add(tokenizer.encoder[char_str])
+        result_tokens.add(char_str)
       else:
         raise new_exception(TokenizerError, "Unknown character: " & $c)
       pos += 1
@@ -264,119 +254,122 @@ type
     rstrip*: Option[bool]
     normalized*: Option[bool]
 
-  TokenizerJson* = object
-    version*: Option[string]
-    added_tokens*: Option[seq[AddedTokenJson]]
-    model*: Option[ModelJson]
-
-  ModelJson* = object
-    modelType*: string
-    vocab*: Option[JsonNode]
-    merges*: Option[seq[seq[string]]]
-
-proc load_tokenizer_json*(path: string): BPETokenizer =
+proc load_tokenizer_json*(path: string): BPETokenizer = # TODO(VCR): code style in whole proc
   if not file_exists(path):
     raise new_exception(TokenizerError, "Tokenizer file not found: " & path)
   let content = read_file(path)
   if content.len == 0:
     raise new_exception(TokenizerError, "Tokenizer file is empty: " & path)
+
   let jsonNode = content.parseJson()
   var tokenizer = new_bpe_tokenizer()
 
   if jsonNode.hasKey("added_tokens"):
-    var special_tokens = init_table[int, seq[byte]]()
+    var special_tokens = init_table[int, string]()
     var special_tokens_encoder = init_table[string, int]()
     let added_tokens = jsonNode["added_tokens"]
     for token in added_tokens:
-      let id = int(token["id"].getInt)
-      let content_str = token["content"].getStr
-      special_tokens[id] = content_str.to_utf8_bytes
-      special_tokens_encoder[content_str] = id
+      let id_val = token["id"]
+      if id_val.kind == JInt:
+        let id = int(id_val.getInt)
+        let content_str = token["content"].getStr
+        special_tokens[id] = content_str
+        special_tokens_encoder[content_str] = id
     tokenizer.special_tokens = special_tokens
     tokenizer.special_tokens_encoder = special_tokens_encoder
 
   if not jsonNode.hasKey("model"):
     raise new_exception(TokenizerError, "Missing 'model' section")
   let model = jsonNode["model"]
-  if model["type"].getStr != "BPE":
-    raise new_exception(TokenizerError, "Unsupported model type: " & model["type"].getStr)
 
-  var vocab: seq[seq[byte]]
+  let model_type = model["type"].getStr
+  if model_type != "BPE":
+    raise new_exception(TokenizerError, "Unsupported model type: " & model_type)
+
+  var vocab: seq[string]
   var encoder = init_table[string, int]()
-  let vocabNode = model["vocab"]
-  if vocabNode.kind == JObject:
-    vocab = new_seq[seq[byte]]()
-    for key, value in vocabNode:
-      let id = int(value.getInt)
-      if id >= vocab.len:
-        let old_len = vocab.len
-        vocab.set_len(id + 1)
-        for i in old_len ..< id:
-          vocab[i] = @[]
-      vocab[id] = key.to_utf8_bytes
-      encoder[key] = id
+  var token_to_id = init_table[string, int]()
+
+  # I think all of that can be skipped with proper `jsony` parseJSON direct to object
+  if model.hasKey("vocab"):
+    let vocabNode = model["vocab"]
+    if vocabNode.kind == JObject:
+      var max_id = 0
+      for key, value in vocabNode:
+        if value.kind == JInt:
+          let id = int(value.getInt)
+          vocab.add(key)
+          encoder[key] = id
+          if id >= max_id:
+            max_id = id + 1
+      vocab = new_seq[string](max_id)
+      for key, value in vocabNode:
+        if value.kind == JInt:
+          let id = int(value.getInt)
+          vocab[id] = key
+          encoder[key] = id
+    elif vocabNode.kind == JArray:
+      for item in vocabNode:
+        if item.kind == JArray:
+          let id = int(item[1].getInt)
+          let token_str = item[0].getStr
+          vocab[id] = token_str
+          encoder[token_str] = id
   else:
-    vocab = new_seq[seq[byte]](vocabNode.len)
-    for item in vocabNode:
-      let id = int(item["id"].getInt)
-      let token_str = item["token"].getStr
-      vocab[id] = token_str.to_utf8_bytes
-      encoder[token_str] = id
+    vocab = @[]
+
+  for id in 0..<vocab.len:
+    let token_str = vocab[id]
+    if token_str.len > 0:
+      token_to_id[token_str] = id
+
   tokenizer.vocab = vocab
   tokenizer.encoder = encoder
 
   var merges: seq[(int, int)]
   var merge_ranks = init_table[string, int]()
-  var token_to_id = init_table[string, int]()
-  for id in 0 ..< vocab.len:
-    let bytes = vocab[id]
-    if bytes.len > 0:
-      var token_str = new_string(bytes.len)
-      for i, b in bytes:
-        token_str[i] = chr(b)
-      token_to_id[token_str] = id
 
-  let mergesNode = model["merges"]
-  merges = new_seq[(int, int)](mergesNode.len)
-  for i in 0 ..< mergesNode.len:
-    let mergeItem = mergesNode[i]
-    var left_token, right_token: string
-    if mergeItem.kind == JArray:
-      left_token = mergeItem[0].getStr
-      right_token = mergeItem[1].getStr
-    else:
-      let merge_str = mergeItem.getStr
+  if model.hasKey("merges"):
+    let mergesNode = model["merges"]
+    var merge_list: seq[string] = @[]
+    if mergesNode.kind == JArray:
+      for item in mergesNode:
+        if item.kind == JString:
+          merge_list.add(item.getStr)
+        elif item.kind == JArray:
+          merge_list.add(item[0].getStr & " " & item[1].getStr)
+    merges = new_seq[(int, int)](merge_list.len)
+    for i, merge_str in merge_list:
       let space_idx = merge_str.find(' ')
-      left_token = if space_idx >= 0: merge_str[0..<space_idx] else: merge_str
-      right_token = if space_idx >= 0: merge_str[space_idx+1..^1] else: ""
-    let pair_key = left_token & right_token
-    merge_ranks[pair_key] = i
-    var left_id = token_to_id.getOrDefault(left_token, -1)
-    var right_id = token_to_id.getOrDefault(right_token, -1)
-    if left_id < 0:
-      if left_token.len == 1:
-        left_id = int(ord(left_token[0]))
-      else:
-        raise new_exception(TokenizerError, "Left token not found: " & left_token)
-    if right_id < 0:
-      if right_token.len == 1:
-        right_id = int(ord(right_token[0]))
-      else:
-        raise new_exception(TokenizerError, "Right token not found: " & right_token)
-    merges[i] = (left_id, right_id)
+      let left_token = if space_idx >= 0: merge_str[0..<space_idx] else: merge_str
+      let right_token = if space_idx >= 0: merge_str[space_idx+1..^1] else: ""
+      let pair_key = left_token & right_token
+      merge_ranks[pair_key] = i
+      var left_id = token_to_id.getOrDefault(left_token, -1)
+      var right_id = token_to_id.getOrDefault(right_token, -1)
+      if left_id < 0:
+        if left_token.len == 1:
+          left_id = int(ord(left_token[0]))
+        else:
+          raise new_exception(TokenizerError, "Left token not found: " & left_token)
+      if right_id < 0:
+        if right_token.len == 1:
+          right_id = int(ord(right_token[0]))
+        else:
+          raise new_exception(TokenizerError, "Right token not found: " & right_token)
+      merges[i] = (left_id, right_id)
+  else:
+    merges = @[]
+
   tokenizer.merges = merges
   tokenizer.merge_ranks = merge_ranks
   tokenizer.max_token_id = vocab.len
 
-  if jsonNode.hasKey("post_processor"):
-    let post_processor = jsonNode["post_processor"]
-    if post_processor.hasKey("type") and post_processor["type"].getStr == "ByteLevel":
-      tokenizer.byte_level_config = new_byte_level_config()
-  if jsonNode.hasKey("pre_tokenizer"):
-    let pre_tokenizer = jsonNode["pre_tokenizer"]
-    if pre_tokenizer.hasKey("type") and pre_tokenizer["type"].getStr == "ByteLevel":
-      tokenizer.byte_level_config = new_byte_level_config()
+  if jsonNode.hasKey("added_tokens"):
+    let added_len = jsonNode["added_tokens"].len
+    tokenizer.max_token_id = max(tokenizer.max_token_id, added_len)
 
-  tokenizer.pattern = "'s|'t|'re|'ve|'m|'ll|'d|[\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s+(?!\\S)|\\s+"
+  tokenizer.byte_level_config = new_byte_level_config()
+  tokenizer.pattern = re("'s|'t|'re|'ve|'m|'ll|'d|[\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s+(?!\\S)|\\s+")
 
   tokenizer
