@@ -10,9 +10,8 @@ proc runToktoktokTests*() =
 
     test "decode single byte token":
       let tokenizer = new_bpe_tokenizer()
-      let bytes = decode_token(tokenizer, 65)
-      check bytes.len == 1
-      check bytes[0] == byte(65)
+      let result = decode_token(tokenizer, 65)
+      check result == "A"
 
     test "decode unknown token ID raises error":
       let tokenizer = new_bpe_tokenizer()
