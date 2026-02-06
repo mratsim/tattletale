@@ -159,9 +159,12 @@ Note: Each branch of a `case` must assign to `result`.
 
 ## Running tests
 
-This project uses task-based test commands in `config.nims`:
+Each module has a task defined in `config.nims` for running its tests:
 
 ```bash
+# Test toktoktok
+nim test_toktoktok
+
 # Test libtorch
 nim test_libtorch
 
@@ -169,30 +172,25 @@ nim test_libtorch
 nim test_safetensors
 ```
 
-### How test commands work
+The command `nim test_toktoktok` compiles and runs all test files in `workspace/toktoktok/tests/` that start with `test_` or `t_`.
 
-The `config.nims` has:
-- `task test_libtorch` - Runs all tests in `workspace/libtorch/tests/`
-- `task test_safetensors` - Runs all tests in `workspace/safetensors/tests/`
+### Compilation settings
 
-Tests are discovered automatically by:
-1. File name starts with `test_` or `t_`
-2. File extension is `.nim`
-3. Located in the module's `tests/` directory
+The project uses:
+- `--path:.` - Makes `workspace/module` imports work
+- Tests compiled with: `nim cpp -r` plus flags for output and cache directories
 
-### Compilation command
+### Fixture files
 
-Each test file is compiled with:
+For this project, fixtures are in:
 ```bash
-nim cpp -r --verbosity:0 --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests <test_file.nim>
+workspace/toktoktok/tests/tokenizers/
 ```
 
-Flags:
-- `-r` - Run after compilation
-- `--verbosity:0` - Minimal output
-- `--hints:off --warnings:off` - Suppress hints/warnings (libtorch bindings trigger some)
-- `--outdir:build/tests` - Output binaries to build/tests
-- `--nimcache:nimcache/tests` - Separate cache for test compilation
+Reference fixtures using:
+```nim
+const FIXTURES_DIR = currentSourcePath().parentDir() / "tokenizers"
+```
 
 ## Common errors and fixes
 
