@@ -21,7 +21,7 @@ import
 # TODO: this will likely evolve and be put at a higher level in the stack
 #       so that we can accelerate loading with multiple workers / async CUDA streams
 
-proc toTorchType(dtype: Dtype): ScalarKind =
+proc toTorchType*(dtype: Dtype): ScalarKind =
   ## Convert safetensors dtype to libtorch ScalarKind.
   ## Raises ValueError if no direct mapping exists.
 

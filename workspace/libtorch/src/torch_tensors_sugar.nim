@@ -22,6 +22,16 @@ import
 
 type Metadata* = DynamicStackArray[int64]
 
+# Shape
+# -----------------------------------------------------
+
+func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
+  if unlikely(a.len == 0):
+    return 0
+  result = 1
+  for value in items(a):
+    result *= value
+
 # ArrayRefs
 # -----------------------------------------------------
 # libtorch/include/c10/util/ArrayRef.h

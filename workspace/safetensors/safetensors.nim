@@ -1,2 +1,3 @@
 import workspace/safetensors/src/safetensors
-export safetensors
+import workspace/safetensors/src/safetensors_libtorch
+export safetensors, safetensors_libtorch
