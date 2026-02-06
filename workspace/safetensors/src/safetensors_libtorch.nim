@@ -44,4 +44,4 @@ proc getTensor*(st: Safetensor, memFile: MemFile, dataSectionOffset: int, tensor
   let view = st.getMmapView(memFile, dataSectionOffset, tensorName)
   let info = st.tensors[tensorName]
   let torchType = info.dtype
-  return view.data.from_blob(info.shape.asTorchView(), info.dType.toTorchType())
+  return view.data.from_blob(info.shape.asTorchView(), info.dtype.toTorchType())

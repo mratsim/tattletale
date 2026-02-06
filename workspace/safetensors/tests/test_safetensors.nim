@@ -47,8 +47,39 @@ proc generateExpectedTensor*(pattern: string, shape: seq[int64], dtype: ScalarKi
   else:
     raise newException(ValueError, "Unknown pattern: " & pattern)
 
+proc generateVandermondeExpected*(shape: seq[int64], dtype: ScalarKind): TorchTensor =
+  let shapeRef = shape.asTorchView()
+  let numel = int(shape.product())
+  var data = newSeq[float64](numel)
+  for i in 0..<5:
+    for j in 0..<5:
+      data[j * 5 + i] = pow(float64(i + 1), float64(j))
+  let sizes = @[int64 numel].asTorchView()
+  let flat = from_blob(data[0].unsafeAddr, sizes, dtype)
+  flat.reshape(shapeRef)
+
 proc main() =
   suite "safetensors fixtures tests":
+    test "vandermonde single fixture test":
+      let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
+      check fileExists(fixturePath)
+
+      var memFile = memFiles.open(fixturePath, mode = fmRead)
+      defer: close(memFile)
+
+      let (st, dataSectionOffset) = safetensors.load(memFile)
+
+      let key = "F64_vandermonde_5x5"
+      check st.tensors.hasKey(key)
+
+      let shape = @[int64 5, 5]
+      let info = st.tensors[key]
+      check info.shape == shape
+
+      let expectedTensor = generateVandermondeExpected(shape, kFloat64)
+      let actualTensor = st.getTensor(memFile, dataSectionOffset, key)
+      check actualTensor == expectedTensor
+
     test "load python-generated safetensors fixtures":
       let fixturePath = FIXTURES_DIR / "fixtures.safetensors"
       check fileExists(fixturePath)
@@ -60,6 +91,11 @@ proc main() =
 
       var count = 0
       for dtype in Dtype:
+        case dtype
+        of F64, F32, F16, I64, I32, I16, I8, U8:
+          discard
+        else:
+          continue
         for pattern in Patterns:
           for shape in Shapes:
             let key = &"""{dtype}_{pattern}_{shape.join("x")}"""
@@ -75,7 +111,8 @@ proc main() =
             check actualTensor == expectedTensor
             count += 1
 
-      doAssert count == Patterns.len * Shapes.len * TestedDtypes.len
+      let ExpectedDtypes = [F64, F32, F16, I64, I32, I16, I8, U8]
+      doAssert count == Patterns.len * Shapes.len * ExpectedDtypes.len
 
 when isMainModule:
   main()
