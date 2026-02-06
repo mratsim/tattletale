@@ -226,6 +226,6 @@ proc getMmapView*(st: Safetensor, memFile: MemFile, dataSectionOffset: int, tens
   let info = st.tensors[tensorName]
   let (start, stopEx) = info.dataOffsets
   MemSlice(
-    data: memFile.mem +% dataSectionOffset,
+    data: memFile.mem +% dataSectionOffset +% start,
     size: stopEx - start
   )
