@@ -8,7 +8,6 @@
 import
   ./safetensors,
   std/memfiles,
-  std/strformat,
   std/tables,
   workspace/libtorch
 
@@ -20,6 +19,7 @@ import
 
 # TODO: this will likely evolve and be put at a higher level in the stack
 #       so that we can accelerate loading with multiple workers / async CUDA streams
+#       and safetensors can be made backend-agnostic
 
 proc toTorchType*(dtype: Dtype): ScalarKind =
   ## Convert safetensors dtype to libtorch ScalarKind.
@@ -38,10 +38,7 @@ proc toTorchType*(dtype: Dtype): ScalarKind =
     of F64:  kFloat64
     of I64:  kInt64
     else:
-      raise newException(
-        ValueError,
-        &"No direct libtorch mapping for safetensors dtype: {dtype}"
-      )
+      raise newException(ValueError, "No direct libtorch mapping for safetensors dtype: " & $dtype)
 
 proc getTensor*(st: Safetensor, memFile: MemFile, dataSectionOffset: int, tensorName: string): TorchTensor =
   let view = st.getMmapView(memFile, dataSectionOffset, tensorName)
