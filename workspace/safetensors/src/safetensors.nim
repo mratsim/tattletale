@@ -86,7 +86,7 @@ type
     ## The dataOffsets are relative to the start of the `data` section.
     ## They ignore the initial 8 bytes for headerSize + the actual header.
     dtype*: Dtype
-    shape*: seq[int] # The reference impl uses usize, but AFAIK Cuda doesn't support 32-bit.
+    shape*: seq[int64] # The reference impl uses usize, but AFAIK Cuda doesn't support 32-bit. This makes conversion to IntArrayRef easier.
     dataOffsets*: tuple[start, stopEx: int] # stop is exclusive
 
   Safetensor* = object
@@ -137,7 +137,7 @@ template `+%`(p: pointer, offset: SomeInteger): pointer =
   ## Pointer arithmetic | increment
   cast[pointer](cast[uint](p) + uint(offset))
 
-func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
+func product(a: openArray[SomeInteger]): SomeInteger {.inline.} =
   if unlikely(a.len == 0):
     return 0
   result = 1
@@ -201,13 +201,28 @@ proc load*(memFile: MemFile): tuple[st: Safetensor, dataSectionOffset: int] =
 
   return (header, dataSectionOffset)
 
-proc getMmapView*[T](st: Safetensor, memFile: MemFile, dataSectionOffset: int, tensorName: string): MemSlice {.inline.} =
-  ## Get a typed pointer to the tensor data.
+# Individual tensor API (WIP)
+# ---------------------------------------------------------
+#
+# The API here will likely change with the following considerations
+# - How to allow fast loading (async Streams, parallel workers, direct to GPU, ...)
+# - How to associate lifetimes of `MemFile` and `MemSlice`
+# - Don't leak implementation details like `dataSectionOffset`
+#
+# For now the goal is to get something working
+# and keep it independent from the backend.
+
+proc getMmapView*(st: Safetensor, memFile: MemFile, dataSectionOffset: int, tensorName: string): MemSlice {.inline.} =
+  ## Get a memory view to the tensor data.
   ## This allows zero-copy access to the tensor data.
   ## Lifetime:
   ##   Unfortunately MemFile predates `lent` and `openarray` as values view `{.experimental: "views".}`
   ##   so we don't get compiler-enforced borrow-checking.
   ##   https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
+  ##
+  ##   And this is not available yet
+  ##   https://nim-lang.org/docs/manual.html#var-return-type-future-directions
+  ##   `proc foo(other: Y; container: var X): var T from container`
   let info = st.tensors[tensorName]
   let (start, stopEx) = info.dataOffsets
   MemSlice(

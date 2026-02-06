@@ -252,15 +252,9 @@ func from_blob*(data: pointer, sizes: int64, options: TensorOptions): TorchTenso
 func from_blob*(data: pointer, sizes: int64, scalarKind: ScalarKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
 func from_blob*(data: pointer, sizes: int64, device: DeviceKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
 
-func from_blob*(
-  data: pointer, sizes, strides: IntArrayRef, options: TensorOptions
-): TorchTensor {.importcpp: "torch::from_blob(@)".}
-func from_blob*(
-  data: pointer, sizes, strides: IntArrayRef, scalarKind: ScalarKind
-): TorchTensor {.importcpp: "torch::from_blob(@)".}
-func from_blob*(
-  data: pointer, sizes, strides: IntArrayRef, device: DeviceKind
-): TorchTensor {.importcpp: "torch::from_blob(@)".}
+func from_blob*(data: pointer, sizes, strides: IntArrayRef, options: TensorOptions): TorchTensor {.importcpp: "torch::from_blob(@)".}
+func from_blob*(data: pointer, sizes, strides: IntArrayRef, scalarKind: ScalarKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
+func from_blob*(data: pointer, sizes, strides: IntArrayRef, device: DeviceKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
 
 func empty*(size: IntArrayRef, options: TensorOptions): TorchTensor {.importcpp: "torch::empty(@)".}
   ## Create an uninitialized tensor of shape `size`
