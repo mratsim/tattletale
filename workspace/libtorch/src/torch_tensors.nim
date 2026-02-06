@@ -9,9 +9,9 @@ import
   # Standard library
   std/complex,
   # Internal
-  src/std_cpp,
-  src/c10,
-  vendor/libtorch
+  workspace/libtorch/src/std_cpp,
+  workspace/libtorch/src/c10,
+  workspace/libtorch/vendor/libtorch
 
 # (Almost) raw bindings to PyTorch Tensors
 # -----------------------------------------------------------------------
@@ -143,7 +143,7 @@ func init*(T: type TensorOptions): TensorOptions {.constructor, importcpp: "torc
 #
 # Hence in Nim we don't need to care about Scalar or defined converters
 # (except maybe for complex)
-type Scalar* = SomeNumber or bool or C10_Complex
+type Scalar* = SomeNumber or bool or TorchComplex
 
 # TensorAccessors
 # -----------------------------------------------------------------------
@@ -309,10 +309,10 @@ func rand*(size: IntArrayRef): TorchTensor {.importcpp: "torch::rand(@)".}
 
 func item*(self: TorchTensor, T: typedesc): T {.importcpp: "#.item<'0>()".}
   ## Extract the scalar from a 0-dimensional tensor
-func item*(self: TorchTensor, T: typedesc[Complex32]): C10_Complex[float32] {.importcpp: "#.item<c10::complex<float>>()".}
+func item*(self: TorchTensor, T: typedesc[Complex32]): TorchComplex[float32] {.importcpp: "#.item<c10::complex<float>>()".}
 func item*(
   self: TorchTensor, T: typedesc[Complex64]
-): C10_Complex[float64] {.importcpp: "#.item<c10::complex<double>>()".}
+): TorchComplex[float64] {.importcpp: "#.item<c10::complex<double>>()".}
 
 # Bounds checking for raw tensors
 func check_index*(t: TorchTensor, idx: varargs[int]) {.inline.} =
@@ -470,7 +470,7 @@ func start*(s: TorchSlice): int64 {.importcpp: "#.start()".}
 func stop*(s: TorchSlice): int64 {.importcpp: "#.stop()".}
 func step*(s: TorchSlice): int64 {.importcpp: "#.step()".}
 
-# Operators
+# Operators. We expose PyTorch convention for `div` and `mod` instead of Nim's
 # -----------------------------------------------------------------------
 func assign*(self: var TorchTensor, other: TorchTensor) {.importcpp: "# = #".}
 
@@ -480,12 +480,16 @@ func `-`*(self: TorchTensor): TorchTensor {.importcpp: "(-#)".}
 func `+`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "(# + #)".}
 func `-`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "(# - #)".}
 func `*`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "(# * #)".}
+func `%`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.remainder(#)".}
 
 func `*`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "(# * #)".}
 func `*`*(self: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# * #)".}
 
 func `+`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "(# + #)".}
 func `+`*(self: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# + #)".}
+
+func `%`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "#.remainder(#)".}
+func `%`*(self: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "#.remainder(#)".}
 
 func `+=`*(self: var TorchTensor, b: TorchTensor) {.importcpp: "(# += #)".}
 func `+=`*(self: var TorchTensor, s: Scalar) {.importcpp: "(# += #)".}

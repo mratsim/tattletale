@@ -6,8 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  src/std_cpp,
-  vendor/libtorch
+  workspace/libtorch/src/std_cpp,
+  workspace/libtorch/vendor/libtorch
 
 # c10 is a collection of utilities in PyTorch
 
@@ -73,23 +73,23 @@ func value*[T](o: Optional[T]): T {.importcpp: "#.value()".}
 
 # c10::complex
 # -----------------------------------------------------------------------
-type C10_Complex*[T: SomeFloat] {.importcpp: "c10::complex".} = object
+type TorchComplex*[T: SomeFloat] {.importcpp: "c10::complex".} = object
 
-func initC10_Complex*[T: SomeFloat](re, im: T): C10_Complex[T] {.constructor, importcpp: "c10::complex<'*0>(@)".}
-func real*[T: SomeFloat](self: C10_Complex[T]): T {.importcpp: "#.real()".}
-func imag*[T: SomeFloat](self: C10_Complex[T]): T {.importcpp: "#.imag()".}
+func torchComplex*[T: SomeFloat](re, im: T): TorchComplex[T] {.constructor, importcpp: "c10::complex<'*0>(@)".}
+func real*[T: SomeFloat](self: TorchComplex[T]): T {.importcpp: "#.real()".}
+func imag*[T: SomeFloat](self: TorchComplex[T]): T {.importcpp: "#.imag()".}
 
-proc `+`*[T: SomeFloat](a, b: C10_Complex[T]): C10_Complex[T] {.importcpp: "(# + #)".}
-proc `-`*[T: SomeFloat](a, b: C10_Complex[T]): C10_Complex[T] {.importcpp: "(# - #)".}
-proc `*`*[T: SomeFloat](a, b: C10_Complex[T]): C10_Complex[T] {.importcpp: "(# * #)".}
-proc `/`*[T: SomeFloat](a, b: C10_Complex[T]): C10_Complex[T] {.importcpp: "(# / #)".}
+proc `+`*[T: SomeFloat](a, b: TorchComplex[T]): TorchComplex[T] {.importcpp: "(# + #)".}
+proc `-`*[T: SomeFloat](a, b: TorchComplex[T]): TorchComplex[T] {.importcpp: "(# - #)".}
+proc `*`*[T: SomeFloat](a, b: TorchComplex[T]): TorchComplex[T] {.importcpp: "(# * #)".}
+proc `/`*[T: SomeFloat](a, b: TorchComplex[T]): TorchComplex[T] {.importcpp: "(# / #)".}
 
-proc `=+`*[T: SomeFloat](self: var C10_Complex[T], arg: C10_Complex[T]) {.importcpp: "(# += #)".}
-proc `=-`*[T: SomeFloat](self: var C10_Complex[T], arg: C10_Complex[T]) {.importcpp: "(# -= #)".}
-proc `=*`*[T: SomeFloat](self: var C10_Complex[T], arg: C10_Complex[T]) {.importcpp: "(# *= #)".}
-proc `=/`*[T: SomeFloat](self: var C10_Complex[T], arg: C10_Complex[T]) {.importcpp: "(# /= #)".}
+proc `=+`*[T: SomeFloat](self: var TorchComplex[T], arg: TorchComplex[T]) {.importcpp: "(# += #)".}
+proc `=-`*[T: SomeFloat](self: var TorchComplex[T], arg: TorchComplex[T]) {.importcpp: "(# -= #)".}
+proc `=*`*[T: SomeFloat](self: var TorchComplex[T], arg: TorchComplex[T]) {.importcpp: "(# *= #)".}
+proc `=/`*[T: SomeFloat](self: var TorchComplex[T], arg: TorchComplex[T]) {.importcpp: "(# /= #)".}
 
-proc `==`*[T: SomeFloat](a, b: C10_Complex[T]): bool {.importcpp: "(# == #)".}
-proc `!=`*[T: SomeFloat](a, b: C10_Complex[T]): bool {.importcpp: "(# != #)".}
+proc `==`*[T: SomeFloat](a, b: TorchComplex[T]): bool {.importcpp: "(# == #)".}
+proc `!=`*[T: SomeFloat](a, b: TorchComplex[T]): bool {.importcpp: "(# != #)".}
 
 {.pop.}

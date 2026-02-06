@@ -91,7 +91,7 @@ type
 
   Safetensor* = object
     metadata*: Option[OrderedTable[string, string]]
-    tensors: OrderedTable[string, TensorInfo]
+    tensors*: OrderedTable[string, TensorInfo]
 
 const DtypeSize: array[Dtype, int] = [
   ## Size in bytes.
@@ -137,7 +137,7 @@ template `+%`(p: pointer, offset: SomeInteger): pointer =
   ## Pointer arithmetic | increment
   cast[pointer](cast[uint](p) + uint(offset))
 
-func product(a: openArray[SomeInteger]): SomeInteger =
+func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
   if unlikely(a.len == 0):
     return 0
   result = 1
@@ -168,7 +168,15 @@ func validate_offsets(st: Safetensor, dataSectionSize: int) =
   if cur != dataSectionSize:
     raise newException(RangeDefect, &"safetensors: Tensor offsets and data section size mismatch")
 
-proc load*(memFile: MemFile): Safetensor =
+proc load*(memFile: MemFile): tuple[st: Safetensor, dataSectionOffset: int] =
+  ## Load a safetensor file and return
+  ## - for each tensor
+  ##   * tensor names
+  ##   * the type of the data
+  ##   * the shape of the data
+  ##   * start and (exclusive) stop offset of the tensor data relative to the data offset
+  ## - the dataSection offset
+
   let parsedHeaderSize = uint64.fromBytesLE(toOpenArray(cast[ptr UncheckedArray[byte]](memFile.mem), 0, sizeof(uint64)-1))
   let headerSize = int(parsedHeaderSize)
 
@@ -186,7 +194,23 @@ proc load*(memFile: MemFile): Safetensor =
   # Sort tensors by offsets
   header.tensors.sort((lhs, rhs) => system.cmp(lhs[1].dataOffsets.start, rhs[1].dataOffsets.start))
 
-  # Validate that offsets are within the file with no gap or overlap
-  header.validate_offsets(memFile.size - headerSize - sizeof(uint64))
+  let dataSectionOffset = sizeof(uint64) + headerSize
 
-  return header
+  # Validate that offsets are within the file with no gap or overlap
+  header.validate_offsets(memFile.size - dataSectionOffset)
+
+  return (header, dataSectionOffset)
+
+proc getMmapView*[T](st: Safetensor, memFile: MemFile, dataSectionOffset: int, tensorName: string): MemSlice {.inline.} =
+  ## Get a typed pointer to the tensor data.
+  ## This allows zero-copy access to the tensor data.
+  ## Lifetime:
+  ##   Unfortunately MemFile predates `lent` and `openarray` as values view `{.experimental: "views".}`
+  ##   so we don't get compiler-enforced borrow-checking.
+  ##   https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
+  let info = st.tensors[tensorName]
+  let (start, stopEx) = info.dataOffsets
+  MemSlice(
+    data: memFile.mem +% dataSectionOffset,
+    size: stopEx - start
+  )

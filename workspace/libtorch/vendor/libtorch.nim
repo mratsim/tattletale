@@ -7,7 +7,7 @@
 
 import
   std/[strutils, os],
-  vendor/libtorch_config
+  workspace/libtorch/vendor/libtorch_config
 
 {.used.}
 

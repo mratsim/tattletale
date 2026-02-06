@@ -8,11 +8,11 @@
 import
   std/[complex, enumerate, macros, strformat],
   # Internal
-  src/std_cpp,
-  src/c10,
-  src/torch_tensors,
-  src/dynamic_stack_arrays,
-  src/[ast_utils, indexing_macros]
+  workspace/libtorch/src/std_cpp,
+  workspace/libtorch/src/c10,
+  workspace/libtorch/src/torch_tensors,
+  workspace/libtorch/src/dynamic_stack_arrays,
+  workspace/libtorch/src/[ast_utils, indexing_macros]
 
 # #######################################################################
 #
