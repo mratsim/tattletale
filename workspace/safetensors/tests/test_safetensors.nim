@@ -27,7 +27,7 @@ const Shapes: array[4, seq[int64]] = [
   @[int64 3, 2, 2, 2]
 ]
 
-const TestedDtypes = [F64, F32, F16, I64, I32, I16, I8, U64, U32, U16, U8]
+const TestedDtypes = [F64, F32, F16, I64, I32, I16, I8, U8]
 
 proc generateExpectedTensor*(pattern: string, shape: seq[int64], dtype: ScalarKind): TorchTensor =
   let shapeRef = shape.asTorchView()
@@ -90,12 +90,7 @@ proc main() =
       let (st, dataSectionOffset) = safetensors.load(memFile)
 
       var count = 0
-      for dtype in Dtype:
-        case dtype
-        of F64, F32, F16, I64, I32, I16, I8, U8:
-          discard
-        else:
-          continue
+      for dtype in TestedDtypes:
         for pattern in Patterns:
           for shape in Shapes:
             let key = &"""{dtype}_{pattern}_{shape.join("x")}"""
@@ -111,8 +106,7 @@ proc main() =
             check actualTensor == expectedTensor
             count += 1
 
-      let ExpectedDtypes = [F64, F32, F16, I64, I32, I16, I8, U8]
-      doAssert count == Patterns.len * Shapes.len * ExpectedDtypes.len
+      doAssert count == Patterns.len * Shapes.len * TestedDtypes.len
 
 when isMainModule:
   main()
