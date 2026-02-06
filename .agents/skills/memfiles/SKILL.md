@@ -52,6 +52,27 @@ type MemSlice* = object
   size*: int          ## Size in bytes
 ```
 
+MemSlice provides a view into memory-mapped data without ownership:
+- Used for zero-copy access to tensor data in safetensors
+- Can be cast to typed pointers for element access
+- Lifetime tied to the parent MemFile
+
+```nim
+# Creating MemSlice from MemFile
+var mf = memfiles.open("tensor.safetensors")
+defer: mf.close()
+
+let dataOffset = 8 + headerSize.nextMultipleOf(8)
+let slice = MemSlice(data: mf.mem + dataOffset, size: tensorSize)
+
+# Access as typed array
+let floatData = cast[ptr UncheckedArray[float32]](slice.data)
+
+# Safe access with bounds checking
+if index < slice.size div sizeof(float32):
+  echo floatData[index]
+```
+
 ## Opening files
 
 ```nim
