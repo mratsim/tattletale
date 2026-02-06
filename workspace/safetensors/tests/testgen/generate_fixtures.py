@@ -7,25 +7,6 @@ FIXTURES_DIR = os.path.join(
     "fixtures",
 )
 
-
-def make_pattern_tensor(dtype, shape, pattern_type):
-    if pattern_type == "gradient":
-        arr = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
-    elif pattern_type == "alternating":
-        arr = (np.arange(np.prod(shape)) % 2).astype(dtype).reshape(shape)
-    elif pattern_type == "repeating":
-        arr = (np.arange(np.prod(shape)) % 10 + 1).astype(dtype).reshape(shape)
-    elif pattern_type == "vandermonde":
-        arr = np.zeros(shape, dtype=dtype)
-        for idx in np.ndindex(shape):
-            val = 1
-            for dim_idx, coord in enumerate(idx):
-                val *= (coord + 1) ** dim_idx
-            arr[idx] = val
-
-    return arr
-
-
 DTYPES = {
     "F64": (np.float64, "f64"),
     "F32": (np.float32, "f32"),
@@ -40,7 +21,7 @@ DTYPES = {
     "U8": (np.uint8, "u8"),
 }
 
-PATTERNS = ["gradient", "alternating", "repeating", "vandermonde"]
+PATTERNS = ["gradient", "alternating", "repeating"]
 
 SHAPES = [
     (8,),
@@ -49,6 +30,20 @@ SHAPES = [
     (3, 2, 2, 2),
 ]
 
+def make_pattern_tensor(dtype, shape, pattern_type):
+    if pattern_type == "gradient":
+        arr = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+    elif pattern_type == "alternating":
+        arr = (np.arange(np.prod(shape)) % 2).astype(dtype).reshape(shape)
+    elif pattern_type == "repeating":
+        arr = (np.arange(np.prod(shape)) % 10 + 1).astype(dtype).reshape(shape)
+    elif pattern_type == "vandermonde":
+        if len(shape) != 2:
+            raise ValueError("vandermonde only supports 2D shapes")
+        x = np.arange(1, shape[0] + 1, dtype=np.float64)
+        arr = np.vander(x, increasing=True).T.astype(dtype)
+
+    return arr
 
 def main():
     fixtures = {}
@@ -56,6 +51,8 @@ def main():
     for dtype_name, (np_dtype, ext) in DTYPES.items():
         for pattern in PATTERNS:
             for shape in SHAPES:
+                if pattern == "vandermonde" and len(shape) != 2:
+                    continue
                 key = f"{dtype_name}_{pattern}_{'x'.join(map(str, shape))}"
                 arr = make_pattern_tensor(np_dtype, shape, pattern)
                 fixtures[key] = arr

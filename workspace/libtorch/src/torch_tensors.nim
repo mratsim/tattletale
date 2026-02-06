@@ -236,9 +236,9 @@ func scalarType*(self: TorchTensor): ScalarKind {.importcpp: "#.scalar_type()".}
 
 func init*(T: type TorchTensor): TorchTensor {.constructor, importcpp: "torch::Tensor".}
 # Default empty constructor
-func initRawTensor*(): TorchTensor {.constructor, importcpp: "torch::Tensor".}
+func initTorchTensor*(): TorchTensor {.constructor, importcpp: "torch::Tensor".}
 # Move / Copy constructor ?
-func initRawTensor*(t: TorchTensor): TorchTensor {.constructor, importcpp: "torch::Tensor(@)".}
+func initTorchTensor*(t: TorchTensor): TorchTensor {.constructor, importcpp: "torch::Tensor(@)".}
 
 func from_blob*(
   data: pointer, sizes: IntArrayRef, options: TensorOptions
