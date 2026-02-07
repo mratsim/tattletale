@@ -3,6 +3,7 @@
 Test Toktoktok against OpenAI's tiktoken tokenizer.
 
 Compares tokenization output for GPT-2 and LLaMA tokenizers.
+Uses HF to tiktoken conversion to ensure proper byte-level BPE format.
 
 Usage:
     python test_vs_tiktoken.py --tokenizer gpt2 --quick
@@ -17,8 +18,15 @@ import argparse
 
 import tiktoken
 import pytoktoktok
+from hf_to_tiktoken import (
+    convert_hf_to_tiktoken,
+    convert_vocab_to_mergeable_ranks,
+    extract_pattern,
+    extract_special_tokens,
+)
 
 TEST_DIR = Path(__file__).parent.resolve()
+CONVERTED_DIR = TEST_DIR / "tokenizers" / "converted"
 
 
 def load_tiktoken(model: str):
@@ -28,14 +36,29 @@ def load_tiktoken(model: str):
     return encoding
 
 
-def load_toktoktok(tokenizer_path: str):
-    """Load toktoktok tokenizer."""
-    path = Path(tokenizer_path)
+def load_toktoktok_from_converted(converted_path: str):
+    """Load toktoktok tokenizer from converted tiktoken format."""
+    path = Path(converted_path)
     if not path.exists():
-        raise FileNotFoundError(f"Tokenizer file not found: {tokenizer_path}")
+        raise FileNotFoundError(f"Converted tokenizer not found: {converted_path}")
     tokenizer = pytoktoktok.load_tokenizer(str(path))
-    print(f"✓ Toktoktok loaded ({path.name})")
+    print(f"✓ Toktoktok loaded (converted format)")
     return tokenizer
+
+
+def load_toktoktok(hf_tokenizer_path: str) -> str:
+    """Convert HF tokenizer to tiktoken format and return path."""
+    CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
+
+    hf_path = Path(hf_tokenizer_path)
+    converted_path = CONVERTED_DIR / f"{hf_path.stem}_tiktoken.json"
+
+    if not converted_path.exists():
+        convert_hf_to_tiktoken(hf_tokenizer_path, str(converted_path))
+    else:
+        print(f"✓ Using cached converted tokenizer: {converted_path}")
+
+    return str(converted_path)
 
 
 def load_fixture_sample(fixture_path: Path, max_chars: int = 10000) -> str:
@@ -202,6 +225,9 @@ def main():
     parser.add_argument(
         "--quick", action="store_true", help="Run quick test with fewer samples"
     )
+    parser.add_argument(
+        "--convert", action="store_true", help="Force reconversion of tokenizer"
+    )
 
     args = parser.parse_args()
 
@@ -218,12 +244,14 @@ def main():
     try:
         tik_encoding = load_tiktoken(model)
 
-        tokenizer_path = TEST_DIR / "tokenizers" / f"{tokenizer_type}-tokenizer.json"
+        hf_tokenizer_path = TEST_DIR / "tokenizers" / f"{tokenizer_type}-tokenizer.json"
+        if not hf_tokenizer_path.exists():
+            print(f"⚠ HF tokenizer file not found: {hf_tokenizer_path}")
+            return 1
+
         tt_tokenizer = None
-        if tokenizer_path.exists():
-            tt_tokenizer = load_toktoktok(str(tokenizer_path))
-        else:
-            print(f"⚠ Tokenizer file not found: {tokenizer_path}")
+        converted_path = load_toktoktok(str(hf_tokenizer_path))
+        tt_tokenizer = load_toktoktok_from_converted(converted_path)
 
         errors += run_encoding_tests(
             tokenizer_type, args.quick, tik_encoding, tt_tokenizer
