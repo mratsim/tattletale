@@ -4,17 +4,42 @@
 # For Python integration, use hf_converter.py instead.
 
 import std/tables
-import std/json
 import std/os
 import std/strutils
+import std/options
+import std/json
+import pkg/jsony
 
 type
+  HFSpecialToken* = object
+    id*: int
+    content*: string
+
+  HFTokenizerModel* = object
+    vocab*: OrderedTable[string, int]
+    `type`*: string
+
+  HFTokenizer* = object
+    model*: HFTokenizerModel
+    pre_tokenizer*: Option[OrderedTable[string, string]]
+    added_tokens*: Option[seq[HFSpecialToken]]
+
   TiktokenFormat* = object
-    mergeable_ranks*: Table[seq[byte], int]
+    mergeable_ranks*: OrderedTable[string, int]
     pat_str*: string
-    special_tokens*: Table[string, int]
+    special_tokens*: OrderedTable[string, int]
 
   TokenizerParseError* = object of ValueError
+
+proc parseHook*(src: string, pos: var int, value: var seq[byte]) =
+  var strVal: string
+  parseHook(src, pos, strVal)
+  value = @[]
+  if strVal.startsWith("[") and strVal.endsWith("]"):
+    let inner = strVal[1..^2]
+    for part in inner.split(", "):
+      if part.len > 0:
+        value.add(byte(parseInt(part)))
 
 proc bytesToUnicode*(): Table[int, string] =
   var bs: seq[int] = @[]
@@ -74,35 +99,24 @@ proc hfTokenToRawBytes*(token: string, byteDecoder: Table[string, int]): seq[byt
       raw_bytes.add(byte(ord(c)))
   raw_bytes
 
-proc extractPatternFromJson*(jsonNode: JsonNode): string =
-  if jsonNode.hasKey("pre_tokenizer"):
-    let pre_tok = jsonNode["pre_tokenizer"]
+proc extractPatternFromJson*(hfTokenizer: HFTokenizer): string =
+  if hfTokenizer.pre_tokenizer.isSome:
+    let pre_tok = hfTokenizer.pre_tokenizer.get
     if pre_tok.hasKey("type"):
-      if pre_tok["type"].getStr == "ByteLevel":
+      let tokType = pre_tok["type"]
+      if tokType == "ByteLevel":
         return "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\r?\\n|\\s+(?!\\S)|\\s+"
-      elif pre_tok["type"].getStr == "Sequence":
-        if pre_tok.hasKey("pretokenizers"):
-          for item in pre_tok["pretokenizers"]:
-            if item.hasKey("type") and item["type"].getStr == "Split":
-              if item.hasKey("pattern"):
-                let pattern_info = item["pattern"]
-                if pattern_info.hasKey("Regex"):
-                  return pattern_info["Regex"].getStr
 
   "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\r?\\n|\\s+(?!\\S)|\\s+"
 
-proc extractSpecialTokensFromJson*(jsonNode: JsonNode): Table[string, int] =
-  result = init_table[string, int]()
+proc extractSpecialTokensFromJson*(hfTokenizer: HFTokenizer): OrderedTable[string, int] =
+  result = init_ordered_table[string, int]()
 
-  if jsonNode.hasKey("added_tokens"):
-    let added_tokens = jsonNode["added_tokens"]
-    for token in added_tokens:
-      if token.hasKey("id") and token.hasKey("content"):
-        let id = int(token["id"].getInt)
-        let content_str = token["content"].getStr
-        result[content_str] = id
+  if hfTokenizer.added_tokens.isSome:
+    for token in hfTokenizer.added_tokens.get:
+      result[token.content] = token.id
 
-proc convertHfToTiktokenJson*(hfTokenizerPath: string): JsonNode =
+proc convertHfToTiktoken*(hfTokenizerPath: string): TiktokenFormat =
   if not file_exists(hf_tokenizer_path):
     raise new_exception(TokenizerParseError, "Tokenizer file not found: " & hf_tokenizer_path)
 
@@ -110,51 +124,31 @@ proc convertHfToTiktokenJson*(hfTokenizerPath: string): JsonNode =
   if content.len == 0:
     raise new_exception(TokenizerParseError, "Tokenizer file is empty: " & hf_tokenizer_path)
 
-  let jsonNode = content.parseJson()
+  let hfTokenizer = content.fromJson(HFTokenizer)
 
-  if not jsonNode.hasKey("model"):
-    raise new_exception(TokenizerParseError, "Missing 'model' section in tokenizer")
+  if hfTokenizer.model.vocab.len == 0:
+    raise new_exception(TokenizerParseError, "Missing 'model.vocab' section in tokenizer")
 
-  let model = jsonNode["model"]
   let byte_decoder = unicodeToBytes()
 
-  var mergeable_ranks = init_table[seq[byte], int]()
+  var mergeable_ranks = init_ordered_table[string, int]()
 
-  if model.hasKey("vocab"):
-    let vocabNode = model["vocab"]
-    if vocabNode.kind == JObject:
-      for key, value in vocabNode:
-        if value.kind == JInt:
-          let id = int(value.getInt)
-          let raw_bytes = hfTokenToRawBytes(key, byteDecoder)
-          mergeable_ranks[raw_bytes] = id
-    elif vocabNode.kind == JArray:
-      for item in vocabNode:
-        if item.kind == JArray:
-          let id = int(item[1].getInt)
-          let token_str = item[0].getStr
-          let raw_bytes = hfTokenToRawBytes(token_str, byteDecoder)
-          mergeable_ranks[raw_bytes] = id
+  for token, rank in hfTokenizer.model.vocab:
+    mergeable_ranks[token] = rank
 
-  let pat_str = extractPatternFromJson(jsonNode)
+  let pat_str = extractPatternFromJson(hfTokenizer)
 
-  let special_tokens = extractSpecialTokensFromJson(jsonNode)
+  let special_tokens = extractSpecialTokensFromJson(hfTokenizer)
 
-  var result_json = newJObject()
-  var ranks_json = newJObject()
-  for bytes, rank in mergeable_ranks:
-    var bytes_list = newJArray()
-    for b in bytes:
-      bytes_list.add(%b)
-    ranks_json[$bytes_list] = %rank
-  result_json["mergeable_ranks"] = ranks_json
-  result_json["pat_str"] = %pat_str
-  var special_json = newJObject()
-  for token, id in special_tokens:
-    special_json[token] = %id
-  result_json["special_tokens"] = special_json
+  TiktokenFormat(
+    mergeable_ranks: mergeable_ranks,
+    pat_str: pat_str,
+    special_tokens: special_tokens
+  )
 
-  result = result_json
+proc convertHfToTiktokenJson*(hfTokenizerPath: string): string =
+  let format = convertHfToTiktoken(hfTokenizerPath)
+  format.toJson()
 
 proc saveTiktokenFormat*(tiktokenFormat: TiktokenFormat, outputPath: string) =
   var lines: seq[string] = @[]

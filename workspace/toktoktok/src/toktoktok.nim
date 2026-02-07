@@ -8,9 +8,10 @@
 import std/tables
 import std/os
 import pkg/regex
-import std/json
+import pkg/jsony
 import std/strutils
 import std/sequtils
+import ./serialization
 
 const MaxInt = high(int)
 
@@ -507,6 +508,17 @@ proc `$`*(tokens: seq[int]): string =
     result.add($token)
   result.add("]")
 
+proc strKeyToBytes*(keyStr: string): seq[byte] =
+  result = @[]
+  if keyStr.startsWith("[") and keyStr.endsWith("]"):
+    let inner = keyStr[1..^2]
+    for part in inner.split(", "):
+      if part.len > 0:
+        result.add(byte(parseInt(part)))
+  else:
+    for c in keyStr:
+      result.add(byte(ord(c)))
+
 proc loadTokenizerJson*(path: string): BPETokenizer =
   if not file_exists(path):
     raise new_exception(TokenizerError, "Tokenizer file not found: " & path)
@@ -515,116 +527,28 @@ proc loadTokenizerJson*(path: string): BPETokenizer =
   if content.len == 0:
     raise new_exception(TokenizerError, "Tokenizer file is empty: " & path)
 
-  let jsonNode = content.parseJson()
+  let format = content.fromJson(TiktokenFormat)
   var tokenizer = BPETokenizer.init()
 
   tokenizer.byte_decoder = createByteDecoder()
 
-  if jsonNode.hasKey("added_tokens"):
-    let added_tokens = jsonNode["added_tokens"]
-    for token in added_tokens:
-      let id = int(token["id"].getInt)
-      let content_str = token["content"].getStr
-      tokenizer.special_tokens_encoder[content_str] = id
+  if format.special_tokens.len > 0:
+    for token, id in format.special_tokens:
+      tokenizer.special_tokens_encoder[token] = id
 
   var encoder = init_table[seq[byte], int]()
 
-  if jsonNode.hasKey("mergeable_ranks"):
-    let ranksNode = jsonNode["mergeable_ranks"]
-    if ranksNode.kind == JObject:
-      for key, value in ranksNode:
-        var raw_bytes: seq[byte] = @[]
-        if value.kind == JInt:
-          let id = int(value.getInt)
-          let keyStr = key
-          if keyStr.startsWith("[") and keyStr.endsWith("]"):
-            let inner = keyStr[1..^2]
-            for part in inner.split(", "):
-              raw_bytes.add(byte(parseInt(part)))
-          if raw_bytes.len > 0:
-            encoder[raw_bytes] = id
-
-  elif jsonNode.hasKey("model"):
-    let model = jsonNode["model"]
-
-    if model.hasKey("type") and model["type"].getStr != "BPE":
-      raise new_exception(TokenizerError, "Unsupported model type: " & model["type"].getStr)
-
-    if model.hasKey("vocab"):
-      let vocabNode = model["vocab"]
-      if vocabNode.kind == JObject:
-        var max_id = 0
-        for key, value in vocabNode:
-          if value.kind == JInt:
-            let id = int(value.getInt)
-            var raw_bytes: seq[byte] = @[]
-            for c in key:
-              let char_str = $c
-              if tokenizer.byte_decoder.hasKey(char_str):
-                raw_bytes.add(byte(tokenizer.byte_decoder[char_str]))
-              else:
-                raw_bytes.add(byte(ord(c)))
-            encoder[raw_bytes] = id
-            if id >= max_id:
-              max_id = id + 1
-      elif vocabNode.kind == JArray:
-        for item in vocabNode:
-          if item.kind == JArray:
-            let id = int(item[1].getInt)
-            let token_str = item[0].getStr
-            var raw_bytes: seq[byte] = @[]
-            for c in token_str:
-              let char_str = $c
-              if tokenizer.byte_decoder.hasKey(char_str):
-                raw_bytes.add(byte(tokenizer.byte_decoder[char_str]))
-              else:
-                raw_bytes.add(byte(ord(c)))
-            encoder[raw_bytes] = id
-  else:
-    raise new_exception(TokenizerError, "Missing 'model' section and no 'mergeable_ranks' found")
-
-  if jsonNode.hasKey("mergeable_ranks"):
-    let ranksNode = jsonNode["mergeable_ranks"]
-    if ranksNode.kind == JObject:
-      for key, value in ranksNode:
-        var raw_bytes: seq[byte] = @[]
-        if value.kind == JInt:
-          let id = int(value.getInt)
-          let keyNode = ranksNode[key]
-          if keyNode.kind == JArray:
-            for item in keyNode:
-              if item.kind == JInt:
-                raw_bytes.add(byte(int(item.getInt())))
-          elif keyNode.kind == JString:
-            let keyStr = keyNode.getStr
-            if keyStr.startsWith("[") and keyStr.endsWith("]"):
-              let inner = keyStr[1..^2]
-              for part in inner.split(", "):
-                raw_bytes.add(byte(parseInt(part)))
-          if raw_bytes.len > 0:
-            encoder[raw_bytes] = id
-            if raw_bytes.len == 1 and raw_bytes[0] == byte(72):
-              echo "DEBUG load: Found raw_bytes=[72] id=", id
-  else:
-    raise new_exception(TokenizerError, "Missing 'model' section and no 'mergeable_ranks' found")
+  for keyStr, rank in format.mergeable_ranks:
+    let raw_bytes = strKeyToBytes(keyStr)
+    if raw_bytes.len > 0:
+      encoder[raw_bytes] = rank
 
   tokenizer.encoder = encoder
 
   for k, v in encoder:
     tokenizer.decoder[v] = k
 
-  var merges: seq[string]
-  if jsonNode.hasKey("model") and jsonNode["model"].hasKey("merges"):
-    let mergesNode = jsonNode["model"]["merges"]
-    if mergesNode.kind == JArray:
-      for item in mergesNode:
-        if item.kind == JString:
-          merges.add(item.getStr)
-        elif item.kind == JArray:
-          merges.add(item[0].getStr & " " & item[1].getStr)
-
-  let pat_str = if jsonNode.hasKey("pat_str"): jsonNode["pat_str"].getStr else: "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\r?\\n|\\s+(?!\\S)|\\s+"
-  tokenizer.pattern = re2(pat_str)
+  tokenizer.pattern = re2(format.pat_str)
 
   if tokenizer.special_tokens_encoder.len > 0:
     let special_keys = toSeq(tokenizer.special_tokens_encoder.keys)

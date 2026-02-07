@@ -31,8 +31,12 @@ def _unicode_to_bytes() -> dict[str, int]:
     return {v: k for k, v in _bytes_to_unicode().items()}
 
 
-def convert_vocab_to_mergeable_ranks(hf_tokenizer_path: str) -> dict[bytes, int]:
-    """Convert HF vocab to tiktoken mergeable_ranks format."""
+def convert_vocab_to_mergeable_ranks(hf_tokenizer_path: str) -> dict[str, int]:
+    """Convert HF vocab to tiktoken mergeable_ranks format.
+
+    Keys are string representations of byte arrays like "[196, 160, 105]".
+    This matches the Nim jsony parseHook expectation.
+    """
     with open(hf_tokenizer_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -43,8 +47,9 @@ def convert_vocab_to_mergeable_ranks(hf_tokenizer_path: str) -> dict[bytes, int]
 
     for token, rank in vocab.items():
         try:
-            token_bytes = bytes([byte_decoder[c] for c in token])
-            mergeable_ranks[token_bytes] = rank
+            token_bytes = [byte_decoder[c] for c in token]
+            key = str(token_bytes)
+            mergeable_ranks[key] = rank
         except KeyError:
             continue
 
@@ -86,16 +91,12 @@ def convert_hf_to_tiktoken(hf_tokenizer_path: str, output_path: str) -> None:
     special_tokens = extract_special_tokens(hf_tokenizer_path)
 
     data = {
-        "mergeable_ranks": {},
+        "mergeable_ranks": mergeable_ranks,
         "pat_str": pat_str,
         "special_tokens": special_tokens,
     }
 
-    for token_bytes, rank in mergeable_ranks.items():
-        key = list(token_bytes)
-        data["mergeable_ranks"][str(key)] = rank
-
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2, separators=(",", ": "))
 
     print(f"✓ Converted tokenizer saved to: {output_path}")
