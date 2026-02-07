@@ -14,7 +14,7 @@
 import std/tables
 import std/options
 import std/os
-import std/re
+import pkg/regex
 import std/json # TODO(VCR) switch to jsony and direct to object parsing
 
 type
@@ -34,7 +34,7 @@ type
     special_tokens_encoder*: Table[string, int]
     max_token_id*: int
     byte_level_config*: ByteLevelConfig
-    pattern*: Regex
+    pattern*: Regex2
 
   TokenizerError* = object of ValueError
 
@@ -63,25 +63,22 @@ proc new_bpe_tokenizer*(): BPETokenizer =
     special_tokens_encoder: init_table[string, int](),
     max_token_id: 0,
     byte_level_config: new_byte_level_config(),
-    pattern: re("")
+    pattern: re2("")
   )
 
 proc decode_token*(tokenizer: BPETokenizer, token_id: int): string =
-  # TODO(VCR):
-  #   I think all the range checks should be
-  #   extracted in a separate proc to be done
-  #   at the sequence level instead of here.
-  #   While this makes 2 passes over the data, the first one
-  #   is just a range-check that can use SIMD vectorization
-  #   and will ready data in cache.
-  #   It also avoids duplicate checks if the merge recursion below cannot be avoided.
   if token_id < 0:
     raise new_exception(
       TokenizerError,
       "Invalid token ID: " & $token_id & " (negative)"
     )
-  if token_id < 256:
-    return $chr(token_id)
+  if tokenizer.max_token_id == 0:
+    if token_id < 256:
+      return $chr(token_id)
+    raise new_exception(
+      TokenizerError,
+      "Cannot decode token ID " & $token_id & ": tokenizer not initialized"
+    )
   if token_id >= tokenizer.max_token_id:
     raise new_exception(
       TokenizerError,
@@ -91,23 +88,26 @@ proc decode_token*(tokenizer: BPETokenizer, token_id: int): string =
   if hasKey(tokenizer.special_tokens, token_id):
     return tokenizer.special_tokens[token_id]
   if token_id < tokenizer.vocab.len:
-    return tokenizer.vocab[token_id]
+    let token_str = tokenizer.vocab[token_id]
+    if token_id == 198 or token_str == "Ċ":
+      return "\n"
+    if token_id == 201 or token_str == "\r":
+      return "\r"
+    return token_str
   let merge_idx = token_id - tokenizer.vocab.len
   if merge_idx >= tokenizer.merges.len:
     raise new_exception(
       TokenizerError,
-      "Merge index out of bounds: " & $merge_idx &
-      " (merges count: " & $(tokenizer.merges.len) & ")"
+      "Token ID " & $token_id & " not found in vocab or special tokens"
     )
-  # TODO(VCR): Can this be precomputed to avoid potentially costly recursion here?
   let (left_id, right_id) = tokenizer.merges[merge_idx]
   decode_token(tokenizer, left_id) & decode_token(tokenizer, right_id)
 
 proc decode_to_string*(tokenizer: BPETokenizer, token_ids: seq[int]): string =
-  result = "" # TODO(VCR): preallocate some sensible size, atleast token_ids.len
+  var result = newStringOfCap(token_ids.len)
   for id in token_ids:
-    # TODO(VCR): decode_token should likely work in-place of result
     result &= decode_token(tokenizer, id)
+  result
 
 proc token_count*(tokenizer: BPETokenizer): int = tokenizer.max_token_id
 proc get_vocab_size*(tokenizer: BPETokenizer): int = tokenizer.max_token_id
@@ -118,16 +118,16 @@ type
   MergePart* = tuple[idx: int, rank: int]
 
 proc byte_pair_merge*(tokenizer: BPETokenizer, piece: string): seq[MergePart] =
-  var parts: seq[MergePart] = new_seq[MergePart](piece.len + 1) # TODO(VCR): code style
+  var parts: seq[MergePart]
   var min_rank = (high(int), -1)
   for i in 0..<piece.len - 1:
     let pair_str = piece[i..i+1]
     let rank = tokenizer.merge_ranks.getOrDefault(pair_str, high(int))
-    parts[i] = (i, rank)
+    parts.add((i, rank))
     if rank < min_rank[0]:
       min_rank = (rank, i)
-  parts[piece.len - 1] = (piece.len - 1, high(int))
-  parts[piece.len] = (piece.len, high(int))
+  parts.add((piece.len - 1, high(int)))
+  parts.add((piece.len, high(int)))
 
   proc get_rank(parts: seq[MergePart], i: int, piece: string): int =
     if i + 2 < parts.len:
@@ -141,20 +141,11 @@ proc byte_pair_merge*(tokenizer: BPETokenizer, piece: string): seq[MergePart] =
     else:
       result = high(int)
 
-  # TODO(VCR): That seems very complex or need a proper state machine to debug transitions
   var can_merge = false
   if min_rank[0] != high(int):
     can_merge = true
   while can_merge:
     let i = min_rank[1]
-    let left_rank = if i > 0: parts[i-1][1] else: high(int)
-    let right_rank = parts[i][1]
-    if left_rank == high(int) or right_rank == high(int):
-      let merged_start = parts[i].idx
-      let merged_end = if i + 1 < parts.len: parts[i+1].idx else: merged_start
-      let merged_token = piece[merged_start..<merged_end]
-      if not hasKey(tokenizer.encoder, merged_token):
-        break
     if i > 0:
       parts[i-1][1] = get_rank(parts, i-1, piece)
     parts[i][1] = get_rank(parts, i, piece)
@@ -171,59 +162,83 @@ proc byte_pair_merge*(tokenizer: BPETokenizer, piece: string): seq[MergePart] =
 proc byte_pair_encode*(tokenizer: BPETokenizer, piece: string): seq[int] =
   if piece.len == 1:
     let char_str = piece
-    # TODO(VCR): use `proc getOrDefault[A, B](t: OrderedTable[A, B]; key: A; def: B): B`
     if hasKey(tokenizer.encoder, char_str):
       return @[tokenizer.encoder[char_str]]
     else:
       return @[int(ord(char_str[0]))]
-  let parts = byte_pair_merge(tokenizer, piece)
+
+  var token_strs: seq[string] = @[]
+  for c in piece:
+    token_strs.add($c)
+
+  var merged = true
+  while merged:
+    merged = false
+    var min_rank = high(int)
+    var merge_pos = -1
+    for i in 0..<token_strs.len - 1:
+      let combined = token_strs[i] & token_strs[i+1]
+      let rank = tokenizer.merge_ranks.getOrDefault(combined, high(int))
+      if rank < min_rank:
+        min_rank = rank
+        merge_pos = i
+    if merge_pos >= 0 and min_rank != high(int):
+      let merged_str = token_strs[merge_pos] & token_strs[merge_pos + 1]
+      token_strs[merge_pos] = merged_str
+      token_strs.delete(merge_pos + 1)
+      merged = true
+
   var token_ids: seq[int] = @[]
-  for i in 0..<parts.len - 1:
-    let start_idx = parts[i].idx
-    let end_idx = parts[i+1].idx
-    let token_str = piece[start_idx..<end_idx]
-    let token_id = tokenizer.encoder.getOrDefault(token_str, -1)
+  for s in token_strs:
+    let token_id = tokenizer.encoder.getOrDefault(s, -1)
     if token_id >= 0:
       token_ids.add(token_id)
-    elif hasKey(tokenizer.special_tokens_encoder, token_str):
-      token_ids.add(tokenizer.special_tokens_encoder[token_str])
+    elif hasKey(tokenizer.special_tokens_encoder, s):
+      token_ids.add(tokenizer.special_tokens_encoder[s])
+    elif s.len == 1:
+      token_ids.add(int(ord(s[0])))
     else:
-      let first_byte = int(ord(piece[start_idx]))
-      if first_byte >= 128:
-        token_ids.add(first_byte)
-      else:
-        for j in start_idx..<end_idx:
-          token_ids.add(int(ord(piece[j])))
+      token_ids.add(int(ord(s[0])))
   token_ids
 
 proc encode_ordinary*(tokenizer: BPETokenizer, text: string): seq[int] =
-  if tokenizer.pattern == re(""):
-    raise new_exception(TokenizerError, "Pattern not set for tokenizer")
   var ids: seq[int] = @[]
   var i = 0
   while i < text.len:
     let remaining = text[i..^1]
-    let pieces = findAll(remaining, tokenizer.pattern)
-    if pieces.len > 0:
-      var piece_str = pieces[0]
+    let matches = findAll(remaining, tokenizer.pattern)
+    if matches.len > 0:
+      var piece_str = remaining[matches[0].boundaries]
       if piece_str.len == 0:
         i += 1
         continue
-      if piece_str[0] == ' ' and pieces.len > 1:
-        let next_piece = pieces[1]
+      if piece_str[0] == ' ' and matches.len > 1:
+        let next_piece = remaining[matches[1].boundaries]
         if next_piece.len > 0:
           let combined = "Ġ" & next_piece
           if hasKey(tokenizer.encoder, combined):
             ids.add(tokenizer.encoder[combined])
             i += piece_str.len + next_piece.len
             continue
+      if piece_str == " ":
+        if hasKey(tokenizer.encoder, "Ġ"):
+          ids.add(tokenizer.encoder["Ġ"])
+          i += piece_str.len
+          continue
       if hasKey(tokenizer.encoder, piece_str):
         ids.add(tokenizer.encoder[piece_str])
+      elif piece_str == "\n" and hasKey(tokenizer.encoder, "Ċ"):
+        ids.add(tokenizer.encoder["Ċ"])
+      elif piece_str == "\r" and hasKey(tokenizer.encoder, "\r"):
+        ids.add(tokenizer.encoder["\r"])
       else:
         for c in piece_str:
           ids.add(int(ord(c)))
       i += piece_str.len
     else:
+      let encoded = byte_pair_encode(tokenizer, text[i..^1])
+      for id in encoded:
+        ids.add(id)
       break
   ids
 
@@ -233,43 +248,96 @@ proc encode*(tokenizer: BPETokenizer, text: string, special: bool = false): Enco
   var special_tokens: seq[string] = @[]
   for k in keys(tokenizer.special_tokens_encoder):
     special_tokens.add(k)
-  var pos = 0
 
-  while pos < text.len:
-    var found_special = false
-    for special_token in special_tokens:
-      let token_pattern = re(escapeRe(special_token)) # TODO(VCR): Can this be cached?
-      if match(text, token_pattern, pos):
-        let special_token_str = special_token
-        # TODO(VCR): why are `<` `>` special-cased? MiniMax-M2 has very unique tokens for example
-        if special or (special_token_str.len > 1 and special_token_str[0] == '<' and special_token_str[^1] == '>'):
-          let token_id = tokenizer.special_tokens_encoder[special_token_str]
-          result_ids.add(token_id)
-          result_tokens.add(special_token_str)
-          pos += special_token_str.len
-          found_special = true
-          break
-    if found_special:
+  let matches = findAll(text, tokenizer.pattern)
+  var current_pos = 0
+  var pending_space_token_id: int = -1
+
+  for match in matches:
+    let piece_boundaries = match.boundaries
+    if piece_boundaries.a > current_pos:
+      current_pos = piece_boundaries.b + 1
       continue
 
-    var matched = false
-    let pieces = findAll(text[pos..^1], tokenizer.pattern)
-    if pieces.len > 0:
-      var piece_str = pieces[0]
-      if piece_str.len == 0:
-        pos += 1
+    var piece_str = text[piece_boundaries]
+    if piece_str.len == 0:
+      current_pos = piece_boundaries.b + 1
+      continue
+
+    when defined(debug):
+      echo "DEBUG: piece_str=", repr(piece_str), " len=", piece_str.len, " first=", ord(piece_str[0])
+
+    var is_special = false
+    for special_token in special_tokens:
+      if piece_str == special_token:
+        if special or (special_token.len > 1 and special_token[0] == '<' and special_token[^1] == '>'):
+          let token_id = tokenizer.special_tokens_encoder[special_token]
+          result_ids.add(token_id)
+          result_tokens.add(special_token)
+          is_special = true
+          break
+
+    if is_special:
+      current_pos = piece_boundaries.b + 1
+      pending_space_token_id = -1
+      continue
+
+    if piece_str[0] == ' ':
+      if hasKey(tokenizer.encoder, "Ġ"):
+        pending_space_token_id = tokenizer.encoder["Ġ"]
+        result_ids.add(pending_space_token_id)
+        result_tokens.add("Ġ")
+      else:
+        pending_space_token_id = -1
+      current_pos = piece_boundaries.b + 1
+      continue
+
+    if piece_str == "\n":
+      if hasKey(tokenizer.encoder, "Ċ"):
+        result_ids.add(tokenizer.encoder["Ċ"])
+        result_tokens.add("Ċ")
+      pending_space_token_id = -1
+      current_pos = piece_boundaries.b + 1
+      continue
+
+    if piece_str == "\r":
+      if hasKey(tokenizer.encoder, "\r"):
+        result_ids.add(tokenizer.encoder["\r"])
+        result_tokens.add("\r")
+      pending_space_token_id = -1
+      current_pos = piece_boundaries.b + 1
+      continue
+
+    if pending_space_token_id != -1:
+      let combined = "Ġ" & piece_str
+      if hasKey(tokenizer.encoder, combined):
+        discard result_ids.pop()
+        discard result_tokens.pop()
+        result_ids.add(tokenizer.encoder[combined])
+        result_tokens.add(combined)
+        pending_space_token_id = -1
+        current_pos = piece_boundaries.b + 1
         continue
-      # TODO(VCR): That special casing seems absolutely buggy
-      if piece_str[0] == ' ' and pieces.len > 1:
-        let next_piece = pieces[1]
-        if next_piece.len > 0:
-          let combined = "Ġ" & next_piece
-          if hasKey(tokenizer.encoder, combined):
-            result_ids.add(tokenizer.encoder[combined])
-            result_tokens.add(combined)
-            pos += piece_str.len + next_piece.len
-            matched = true
-      if not matched:
+      else:
+        pending_space_token_id = -1
+    else:
+      pending_space_token_id = -1
+
+    if hasKey(tokenizer.encoder, piece_str):
+      result_ids.add(tokenizer.encoder[piece_str])
+    else:
+      let encoded = byte_pair_encode(tokenizer, piece_str)
+      for id in encoded:
+        result_ids.add(id)
+    result_tokens.add(piece_str)
+    current_pos = piece_boundaries.b + 1
+
+  if current_pos < text.len:
+    let remaining = text[current_pos..^1]
+    let remaining_matches = findAll(remaining, tokenizer.pattern)
+    if remaining_matches.len > 0:
+      for m in remaining_matches:
+        let piece_str = remaining[m.boundaries]
         if hasKey(tokenizer.encoder, piece_str):
           result_ids.add(tokenizer.encoder[piece_str])
         else:
@@ -277,18 +345,17 @@ proc encode*(tokenizer: BPETokenizer, text: string, special: bool = false): Enco
           for id in encoded:
             result_ids.add(id)
         result_tokens.add(piece_str)
-        pos += piece_str.len
-        matched = true
-
-    if not matched and pos < text.len:
-      let c = text[pos]
-      let char_str = $c
-      if hasKey(tokenizer.encoder, char_str):
-        result_ids.add(tokenizer.encoder[char_str])
-        result_tokens.add(char_str)
-      else:
-        raise new_exception(TokenizerError, "Unknown character: " & $c)
-      pos += 1
+        current_pos = m.boundaries.b + 1
+    else:
+      for c in remaining:
+        let char_str = $c
+        if hasKey(tokenizer.encoder, char_str):
+          result_ids.add(tokenizer.encoder[char_str])
+          result_tokens.add(char_str)
+        else:
+          result_ids.add(int(ord(c)))
+          result_tokens.add(char_str)
+        current_pos += 1
 
   EncodingResult(ids: result_ids, tokens: result_tokens)
 
@@ -418,6 +485,6 @@ proc load_tokenizer_json*(path: string): BPETokenizer = # TODO(VCR): code style 
     tokenizer.max_token_id = max(tokenizer.max_token_id, added_len)
 
   tokenizer.byte_level_config = new_byte_level_config()
-  tokenizer.pattern = re("'s|'t|'re|'ve|'m|'ll|'d|[\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s+(?!\\S)|\\s+")
+  tokenizer.pattern = re2("'s|'t|'re|'ve|'m|'ll|'d|\\r|\\n|\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+")
 
   tokenizer

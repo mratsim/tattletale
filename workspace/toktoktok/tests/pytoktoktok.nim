@@ -10,7 +10,7 @@ import std/tables
 import workspace/toktoktok
 
 type
-  TokenizerRef* = ref object
+  TokenizerRef* = ref object of PyNimObjectExperimental
     tokenizer*: BPETokenizer
 
 proc load_tokenizer*(path: string): TokenizerRef {.exportpy.} =
