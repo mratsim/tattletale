@@ -1,248 +1,173 @@
 ---
 name: tables
-description: Nim hash tables (dictionaries) with value and ref semantics
+description: Nim's hash table module for key-value storage
 license: MIT
 compatibility: opencode
 metadata:
-  audience: general-developers
-  workflow: general-programming
+  audience: nim-developers
+  use-case: data-structures
 ---
 
-## What I do
+# Nim `tables` Module
 
-Nim's `tables` module provides hash table implementations:
-- `Table[K, V]` - generic hash table with value semantics
-- `OrderedTable[K, V]` - hash table preserving insertion order
-- `CountTable[K]` - maps keys to occurrence counts
-- `Ref` variants share reference semantics
+The `tables` module provides hash table implementations for key-value storage in Nim.
 
-## When to use me
+## Table Types
 
-Use tables when you need:
-- Key-value mappings (dictionary behavior)
-- Fast O(1) lookup by key
-- Ordered insertions (use OrderedTable)
-- Counting frequencies (use CountTable)
+- **`Table[A, B]`** - Standard hash table (value semantics, copies on assignment)
+- **`TableRef[A, B]`** - Reference-based hash table (shared on assignment)
+- **`OrderedTable[A, B]`** - Preserves insertion order
+- **`CountTable[A]`** - Maps keys to occurrence counts
 
-## Core types
+## Creating Tables
 
 ```nim
-type
-  Table*[K, V] = object
-    data: KeyValuePairSeq[K, V]
-    counter: int
+import std/tables
 
-  TableRef*[K, V] = ref Table[K, V]  # Ref shares memory
-
-  OrderedTable*[K, V] = object
-    data: OrderedKeyValuePairSeq[K, V]
-    counter, first, last: int
-
-  OrderedTableRef*[K, V] = ref OrderedTable[K, V]
-
-  CountTable*[K] = object
-    data: seq[tuple[key: K, val: int]]
-    counter: int
-    isSorted: bool
-
-  CountTableRef*[K] = ref CountTable[K]
-```
-
-## Creating tables
-
-```nim
-# Empty tables
-let empty = initTable[string, int]()
-let emptyRef = newTable[string, int]()
-
-# From pairs
-let t1 = {"a": 1, "b": 2}.toTable
-let t2 = @[("x", 10), ("y", 20)].toTable
-
-# Ordered
-let ordered = [('z', 1), ('y', 2), ('x', 3)].toOrderedTable
-
-# CountTable from container
-let freq = toCountTable("abracadabra")
-```
-
-## Insertion and assignment
-
-```nim
+# Create empty table
 var t = initTable[string, int]()
+t["key"] = 42
 
+# Create from pairs literal
+let t2 = {"a": 1, "b": 2}.toTable
+
+# TableRef for ref semantics (shared state)
+let ref_t = newTable[string, int]()
+ref_t["key"] = 42
+```
+
+## Basic Operations
+
+```nim
 # Insert or update
 t["key"] = 42
 
-# HasKeyOrPut returns bool indicating if key existed
-if t.hasKeyOrPut("key", 99):
-  t["key"] = t["key"] + 1  # key existed, increment
-else:
-  discard  # key was just inserted
-```
+# Access (raises KeyError if missing)
+let val = t["key"]
 
-## Lookup
-
-```nim
-let t = {"a": 1, "b": 2}.toTable
-
-# Direct lookup - raises KeyError if missing
-let val = t["a"]
-
-# HasKey check before access
-if t.hasKey("a"):
-  echo t["a"]
-
-# getOrDefault returns default (0) or custom value
-let x = t.getOrDefault("missing")       # 0
-let y = t.getOrDefault("missing", -1)   # -1
-
-# contains for `in` operator
-if "a" in t:
+# Check if key exists
+if t.hasKey("key"):
   discard
-```
 
-## Deletion
+# Get with default value
+let val = t.getOrDefault("key", 0)
 
-```nim
-var t = {"a": 1, "b": 2, "c": 3}.toTable
+# Atomic check-and-set
+if t.hasKeyOrPut("key", defaultValue):
+  # key already existed
+else:
+  # key was just inserted
 
-t.del("a")        # Does nothing if key absent
+# Get or modify
+discard t.mgetOrPut("key", defaultValue)
+t["key"] = t["key"] + 1
 
-# pop removes and returns whether it existed
-var val: int
-if t.pop("b", val):
-  echo "removed b with value: ", val
-```
+# Delete (does nothing if missing)
+t.del("key")
 
-## Size
-
-```nim
-let t = {"a": 1, "b": 2}.toTable
-echo len(t)  # 2
+# Length
+echo t.len
 ```
 
 ## Iteration
 
-```nim
-let t = {"a": 1, "b": 2, "c": 3}.toTable
+Use `pairs`, `keys`, and `values` iterators to traverse tables:
 
-# Pairs - yields (key, value)
+```nim
 for k, v in t.pairs:
-  echo k, ": ", v
+  echo "key: ", k, " value: ", v
 
-# Keys only
 for k in t.keys:
-  echo k
+  echo "key: ", k
 
-# Values only
 for v in t.values:
-  echo v
+  echo "value: ", v
 
-# Mutable iteration
-var t2 = {"a": @[1], "b": @[2]}.toTable
-for k, v in t2.mpairs:
-  v.add(v[0] + 10)
+# For mutable tables, use mpairs/mvalues to modify in place
+for k, v in t.mpairs:
+  v = v + 1
 ```
 
-## OrderedTable preserves order
+## OrderedTable
+
+Preserves insertion order (unlike regular Table):
 
 ```nim
-let ordered = [('z', 1), ('y', 2), ('x', 3)].toOrderedTable
+import std/tables
 
-for k, v in ordered.pairs:
-  echo k, ": ", v
-# Output: z: 1, y: 2, x: 3 (insertion order preserved)
+var ot = initOrderedTable[string, int]()
+ot["z"] = 1
+ot["a"] = 2
+ot["m"] = 3
+
+# Iteration follows insertion order: z, a, m
+for k, v in ot.pairs:
+  echo k, " -> ", v
 ```
 
-## CountTable for frequencies
+## CountTable
+
+Counts occurrences (useful for frequency analysis):
 
 ```nim
-var counts = initCountTable[char]()
+import std/tables
 
-# Increment
-for c in "abracadabra":
-  counts.inc(c)
+# Create from sequence
+var ct = toCountTable("abracadabra")
+# Result: {'a': 5, 'b': 2, 'r': 2, 'c': 1, 'd': 1}
 
-# Or create from container
-let freq = toCountTable("abracadabra")
+# Increment count
+ct.inc('x')
+ct.inc('y', 5)  # increment by 5
 
-# Access count (0 if missing)
-echo freq['a']  # 5
+# Get count (returns 0 if missing)
+echo ct['a']  # 5
 
-# Most/least common
-let most = freq.largest    # ('a', 5)
-let least = freq.smallest  # ('c', 1)
-
-# Sort by count (destructive)
-counts.sort()  # descending by default
-for k, v in counts.pairs:
-  echo k, ": ", v
+# Sort by frequency
+ct.sort()  # descending by default
 ```
 
-## Value vs Ref semantics
+## Common Patterns
+
+### Safe dictionary access pattern
 
 ```nim
-# Table (value semantics - copy on assignment)
-var a = {"x": 1}.toTable
-var b = a
-b["x"] = 99
-assert a["x"] == 1   # a unchanged
+template withValue*[A, B](t: var Table[A, B], key: A, value, body: untyped) =
+  ## Retrieves value at t[key] if it exists, binds to `value`
+  mixin rawGet
+  var hc: Hash
+  var index = rawGet(t, key, hc)
+  let hasKey = index >= 0
+  if hasKey:
+    var value {.inject.} = addr(t.data[index].val)
+    body
 
-# TableRef (ref semantics - shared)
-var c = {"x": 1}.newTable
-var d = c
-d["x"] = 99
-assert c["x"] == 99   # c changed too
+# Usage
+t.withValue("mykey", val):
+  echo "Found: ", val
+do:
+  echo "Key not found"
 ```
 
-## Common patterns
+### Merge two CountTables
 
 ```nim
-# Build table from zip
-from std/sequtils import zip
-let names = ["John", "Paul"]
-let ages = [30, 25]
-var table = initTable[string, int]()
-for (n, a) in zip(names, ages):
-  table[n] = a
-
-# Group by key
-var byYear = initTable[int, seq[string]]()
-for (year, name) in zip(years, names):
-  if not byYear.hasKey(year):
-    byYear[year] = @[]
-  byYear[year].add(name)
-
-# Safe get-or-put with mgetOrPut
-var t = initTable[string, int]()
-t.mgetOrPut("counter", 0).inc
-# Returns mutable reference, can modify directly
+var result = ct1
+for k, v in ct2:
+  result.inc(k, v)
 ```
 
-## Clear and reset
+## Semantics Differences
 
-```nim
-var t = {"a": 1, "b": 2}.toTable
-clear(t)
-assert len(t) == 0
-```
+| Feature | `Table` | `TableRef` |
+|---------|---------|------------|
+| Assignment | Copies entire table | Shares reference |
+| Memory | Each copy is independent | All refs point to same data |
+| Use when | Isolation needed | Shared mutable state |
 
-## Error handling
+## Notes
 
-```nim
-let t = {"a": 1}.toTable
-
-try:
-  echo t["missing"]
-except KeyError:
-  echo "key not found"
-```
-
-## Performance notes
-
-- All lookup operations are O(1) amortized
-- Insertion may trigger table enlargement (amortized O(1))
-- Iteration is O(n)
-- `len()` is O(1)
-- CountTable.sort() is destructive - don't modify after sorting
+- Tables use `hash` proc for keys - works with int, string, and custom types with defined `hash` proc
+- `pairs` iterator returns `(key, value)` tuples - use `toSeq()` to convert to seq
+- `OrderedTable` uses more memory but preserves insertion order
+- `CountTable` uses zero as sentinel, so count of 0 means "empty slot"

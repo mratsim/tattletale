@@ -78,3 +78,19 @@ task test_toktoktok, "Test workspace/toktoktok":
     download_test_tokenizersTask()
   for cmd in getTestCommands("workspace/toktoktok/tests"):
     runCmd(cmd)
+
+# Python extension tasks
+# --------------------------------------------------
+
+func pytoktoktokBuildCmd(): string =
+  return
+    "nim c --app:lib" &
+    " --verbosity:0 --hints:off --warnings:off" &
+    " --outdir:workspace/toktoktok/tests" &
+    " --nimcache:nimcache/pytoktoktok" &
+    " -o:workspace/toktoktok/tests/pytoktoktok.so" &
+    " workspace/toktoktok/tests/pytoktoktok.nim"
+
+task make_pytoktoktok, "Build pytoktoktok.so for Python import":
+  let cmd = pytoktoktokBuildCmd()
+  runCmd(cmd)
