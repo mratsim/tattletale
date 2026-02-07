@@ -88,10 +88,24 @@ assert mymodule.greet(name="world") == "Hello, world!"
 
 ### Exporting Nim Types as Python Classes (Experimental)
 
+nimpy can export Nim types as Python classes. This is useful for creating Python-native objects that wrap Nim state and behavior.
+
+#### Requirements
+
+- An exported type must be a `ref object` that inherits from `PyNimObjectExperimental` (directly or indirectly)
+- At least one exported proc must have `self` as first argument to trigger type export
+- Procs with `self` as first argument become methods on the Python type
+- The type is only exported if requirements are met
+
+#### Simple Example
+
 ```nim
 # mymodule.nim
-type TestType = ref object of PyNimObjectExperimental
-  myField: string
+import nimpy
+
+type
+  TestType* = ref object
+    myField*: string
 
 proc setMyField*(self: TestType, value: string) {.exportpy.} =
   self.myField = value
@@ -106,10 +120,143 @@ proc newTestType*(): TestType {.exportpy.} =
 ```python
 # test.py
 import mymodule
+
 tt = mymodule.newTestType()
 tt.setMyField("Hello")
 assert tt.getMyField() == "Hello"
 ```
+
+#### `__init__` and `__repr__`
+
+nimpy provides special handling for initialization and representation:
+
+**`__init__`** - Export a proc as Python `__init__` method when:
+1. Proc name matches pattern `init##TypeName`
+2. Has at least one argument
+3. First argument named `self`
+4. First argument type is `##TypeName`
+5. No return type
+
+**`__repr__`** - Export a proc as Python `__repr__` method when:
+1. Proc name is `$`
+2. Has exactly one argument
+3. First argument named `self`
+4. First argument type is `##TypeName`
+5. Return type is `string`
+
+**Documentation** - Set module and type docstrings:
+```nim
+setModuleDocString("This is a test module")
+setDocStringForType(MyType, "This is a test type")
+```
+
+#### Complete Example
+
+```nim
+# simple.nim
+import nimpy
+import strformat
+
+pyExportModule("simple")  # Only needed if filename differs from module name
+
+type
+  SimpleObj* = ref object
+    a*: int
+
+## Export as __init__ (tp_init)
+proc initSimpleObj*(self: SimpleObj, a: int = 1) {.exportpy.} =
+  echo "Calling initSimpleObj for SimpleObj"
+  self.a = a
+
+## Export as __repr__ (tp_repr)
+proc `$`*(self: SimpleObj): string {.exportpy.} =
+  &"SimpleObj(a={self.a})"
+
+setModuleDocString("This is a test module")
+setDocStringForType(SimpleObj, "This is a test type")
+```
+
+Compile:
+```bash
+nim c --app:lib -o:./simple.so ./simple.nim
+```
+
+Use in Python:
+```python
+import simple
+
+print(simple.__doc__)          # This is a test module
+print(simple.SimpleObj.__doc__)  # This is a test type
+
+obj = simple.SimpleObj(a=2)
+print(obj)                    # SimpleObj(a=2)
+```
+
+#### Full Test Example
+
+```nim
+# texport_pytype.nim
+import nimpy
+import nimpy/py_types
+import nimpy/py_lib as lib
+import strformat
+
+type
+  PyCustomType* = ref object
+    a*: int
+    b*: float
+    c*: string
+
+proc initPyCustomType*(self: PyCustomType, aa: int = 1, bb: float = 2.0, cc: string = "default") {.exportpy} =
+  self.a = aa
+  self.b = bb
+  self.c = cc
+
+proc destroyPyCustomType*(self: PyCustomType) {.exportpy} =
+  discard  # Cleanup if needed
+
+proc `$`*(self: PyCustomType): string {.exportpy} =
+  &"a: {self.a}, b: {self.b}, c: {self.c}"
+
+proc get_a*(self: PyCustomType): int {.exportpy} =
+  self.a
+
+proc set_a*(self: PyCustomType, val: int) {.exportpy} =
+  self.a = val
+
+setModuleDocString("Test module for exported Python types")
+setDocStringForType(PyCustomType, "Custom type with a, b, c fields")
+
+import unittest
+
+suite "Test Exported Python Types":
+  let m = pyImport("texport_pytype")
+
+  test "Test __doc__":
+    check getAttr(m, "__doc__").`$` == "Test module for exported Python types"
+    check getAttr(getAttr(m, "PyCustomType"), "__doc__").`$` == "Custom type with a, b, c fields"
+
+  test "Test __init__ and methods":
+    let constructor = getAttr(m, "PyCustomType")
+    let obj = callObject(constructor, 99, 3.14, "hello")
+    check obj.get_a().to(int) == 99
+    obj.set_a(42)
+    check obj.get_a().to(int) == 42
+
+  test "Test __repr__":
+    let constructor = getAttr(m, "PyCustomType")
+    let obj = callObject(constructor, 99, 3.14, "hello")
+    check obj.`$` == "a: 99, b: 3.14, c: hello"
+```
+
+#### Method Signatures
+
+| Usage | Proc Signature | Becomes |
+|-------|----------------|---------|
+| Constructor | `proc newType*(): Type` | Class method (factory) |
+| `__init__` | `proc initType*(self: Type, args...)` | `Type.__init__(self, args...)` |
+| `__repr__` | `proc `$`*(self: Type): string` | `Type.__repr__(self)` |
+| Method | `proc method*(self: Type, args...): R` | `Type.method(self, args...)` |
 
 ### Type Mapping for Exports
 

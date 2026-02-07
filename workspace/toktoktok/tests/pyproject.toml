@@ -1,0 +1,10 @@
+[project]
+name = "toktoktok-tests"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "tokenizers>=0.20.0",
+    "tiktoken>=0.12.0",
+]
