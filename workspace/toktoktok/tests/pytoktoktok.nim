@@ -15,19 +15,28 @@ type
 
 proc load_tokenizer*(path: string): TokenizerRef {.exportpy.} =
   result = TokenizerRef()
-  result.tokenizer = load_tokenizer_json(path)
+  result.tokenizer = loadTokenizerJson(path)
 
 proc encode*(self: TokenizerRef, text: string): seq[int] {.exportpy.} =
-  result = self.tokenizer.encode(text).ids
+  result = self.tokenizer.encodeWithSpecial(text)
+
+proc encode_ordinary*(self: TokenizerRef, text: string): seq[int] {.exportpy.} =
+  result = self.tokenizer.encodeOrdinary(text)
 
 proc decode*(self: TokenizerRef, ids: seq[int]): string {.exportpy.} =
-  result = decode_to_string(self.tokenizer, ids)
+  result = decodeToString(self.tokenizer, ids)
+
+proc decode_bytes*(self: TokenizerRef, ids: seq[int]): seq[byte] {.exportpy.} =
+  result = self.tokenizer.decodeToBytes(ids)
 
 proc vocab_size*(self: TokenizerRef): int {.exportpy.} =
-  result = self.tokenizer.max_token_id
+  result = self.tokenizer.tokenCount
+
+proc special_tokens*(self: TokenizerRef): seq[string] {.exportpy.} =
+  result = self.tokenizer.getSpecialTokens()
 
 proc `$`*(self: TokenizerRef): string {.exportpy.} =
-  result = "Tokenizer(vocab_size=" & $self.tokenizer.max_token_id & ")"
+  result = "Tokenizer(vocabSize=" & $self.tokenizer.tokenCount & ")"
 
-setModuleDocString("Toktoktok BPE Tokenizer - A fast tokenizer written in Nim")
-setDocStringForType(TokenizerRef, "Opaque wrapper around a loaded BPE tokenizer")
+setModuleDocString("Toktoktok tokenizer - A fast byte-level BPE tokenizer written in Nim")
+setDocStringForType(TokenizerRef, "Opaque wrapper around a loaded Toktoktok tokenizer")

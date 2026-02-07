@@ -86,6 +86,53 @@ assert mymodule.greet("world") == "Hello, world!"
 assert mymodule.greet(name="world") == "Hello, world!"
 ```
 
+### Returning Complex Types (Tables, JsonNode)
+
+nimpy supports returning Nim complex types that Python can use:
+
+```nim
+import nimpy, tables, json
+
+proc getTable*(): Table[string, int] {.exportpy.} =
+  result = {"Hello": 0, "SomeKey": 10}.toTable
+
+proc getJsonAsDict*(): JsonNode {.exportpy.} =
+  result = %*{
+    "SomeKey": 1.0,
+    "Another": 5,
+    "Foo": [1, 2, 3.5, {"InArray": 5}],
+    "Bar": {"Nested": "Value"}
+  }
+```
+
+```python
+import mymodule
+
+# Table becomes dict
+table = mymodule.getTable()
+assert table["Hello"] == 0
+assert table["SomeKey"] == 10
+
+# JsonNode becomes dict
+json_obj = mymodule.getJsonAsDict()
+assert json_obj["SomeKey"] == 1.0
+assert json_obj["Foo"] == [1, 2, 3.5, {"InArray": 5}]
+```
+
+### Type Mapping for Exports
+
+| Nim Type | Python Type |
+|----------|-------------|
+| int | int |
+| float | float |
+| string | str |
+| seq[T] | list |
+| tuple | tuple |
+| bool | bool |
+| Table[K, V] | dict |
+| JsonNode | dict |
+| ref object of PyNimObjectExperimental | Python class |
+
 ### Exporting Nim Types as Python Classes (Experimental)
 
 nimpy can export Nim types as Python classes. This is useful for creating Python-native objects that wrap Nim state and behavior.
