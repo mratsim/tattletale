@@ -104,7 +104,7 @@ nimpy can export Nim types as Python classes. This is useful for creating Python
 import nimpy
 
 type
-  TestType* = ref object
+  TestType* = ref object of PyNimObjectExperimental
     myField*: string
 
 proc setMyField*(self: TestType, value: string) {.exportpy.} =
@@ -160,7 +160,7 @@ import strformat
 pyExportModule("simple")  # Only needed if filename differs from module name
 
 type
-  SimpleObj* = ref object
+  SimpleObj* = ref object of PyNimObjectExperimental
     a*: int
 
 ## Export as __init__ (tp_init)
@@ -202,7 +202,7 @@ import nimpy/py_lib as lib
 import strformat
 
 type
-  PyCustomType* = ref object
+  PyCustomType* = ref object of PyNimObjectExperimental
     a*: int
     b*: float
     c*: string
@@ -268,7 +268,9 @@ suite "Test Exported Python Types":
 | seq[T] | list |
 | tuple | tuple |
 | bool | bool |
-| ref object | Python class |
+| ref object of PyNimObjectExperimental | Python class |
+
+**Note**: For Python class exports, the Nim type must inherit from `PyNimObjectExperimental`. See "Exporting Nim Types as Python Classes" above.
 
 ---
 
