@@ -1,3 +1,8 @@
+---
+name: regex
+description: Regex functionality in Nim including std/re, std/nre wrappers around PCRE, and the pure Nim nim-regex alternative with linear-time matching guarantees
+---
+
 # Regex Skill for Nim
 
 This skill covers regex functionality in Nim, including the standard library modules (`std/re`, `std/nre`), the pure Nim alternative (nim-regex), and the context around PCRE vs PCRE2 migration.
