@@ -587,3 +587,173 @@ except StudyError:
 3. **nim-regex**: Use compile-time strings (`const` or `static`)
 4. **Prefer `contains`** over `find` for boolean checks
 5. **Use `findAllBounds`** when you only need positions, not captures
+
+---
+
+## PCRE2 - Direct Bindings for Maximum Performance
+
+Tattletale provides direct PCRE2 bindings at `workspace/pcre2/pcre2.nim` for maximum performance and compatibility with tokenizers like TokenDagger and jtokkit.
+
+### Why Direct PCRE2?
+
+- **No thread-local storage**: Pattern and match data stored in regular objects
+- **Full control**: Access to all PCRE2 features including JIT compilation
+- **Matches tokenizers**: Behavior compatible with C++ TokenDagger implementation
+- **8-bit support**: Uses PCRE2's native 8-bit API
+
+### Basic Usage
+
+```nim
+import workspace/pcre2/pcre2
+
+# PCRE2 constants
+const PCRE2_ZERO_TERMINATED = PCRE2_SIZE(-1)
+const PCRE2_ERROR_NOMATCH = cint(-1)
+const PCRE2_NOTEMPTY* = MatchOption(0x00000004'u32)
+const PCRE2_UTF* = CompileOption(0x00080000'u32)
+const PCRE2_UCP* = CompileOption(0x00020000'u32)
+const PCRE2_NO_UTF_CHECK* = MatchOption(0x40000000'u32)
+
+# Compile a pattern
+var errorCode: CompileError
+var errorOffset: csize_t
+
+let pattern = r"\p{L}+"  # Unicode letters
+let code = compile(pattern, {PCRE2_UTF, PCRE2_UCP}, errorCode, errorOffset)
+
+if code == nil:
+  echo "Compile error: ", errorCode, " at offset ", errorOffset
+
+# Create match data from pattern (ensures correct size)
+let matchData = match_data_create_from_pattern(code, nil)
+
+# Get offset vector pointer
+let ovector = get_ovector_pointer(matchData)
+
+# Perform match
+let rc = match(code, "hello world", 0, {PCRE2_NOTEMPTY}, matchData, nil)
+
+if rc == PCRE2_ERROR_NOMATCH:
+  echo "No match"
+elif rc >= 0:
+  let matchStart = ovector[0].int
+  let matchEnd = ovector[1].int
+  echo "Match at ", matchStart, " to ", matchEnd
+
+# Cleanup
+match_data_free(matchData)
+code_free(code)
+```
+
+### High-Level Pattern: Pcre2Code and Pcre2Matcher
+
+```nim
+import workspace/pcre2/pcre2
+
+type
+  Pcre2Code* = object
+    code*: ptr Code
+    pattern*: string
+
+  Pcre2Matcher* = object
+    code*: ptr Code
+    matchData*: ptr MatchData
+    ovector*: ptr csize_t
+    ovectorCount*: uint32
+
+proc compilePcre2*(pattern: string, utf8: bool = true): Pcre2Code =
+  var errorCode: CompileError
+  var errorOffset: csize_t
+  var options: set[CompileOption] = {PCRE2_UTF, PCRE2_UCP}
+  let code = compile(pattern, options, errorCode, errorOffset)
+  if code == nil:
+    raise newException(ValueError, "PCRE2 compile error")
+  Pcre2Code(code: code, pattern: pattern)
+
+proc createMatcher*(code: Pcre2Code): Pcre2Matcher =
+  result.code = code.code
+  result.matchData = match_data_create_from_pattern(code.code, nil)
+  result.ovector = get_ovector_pointer(result.matchData)
+  result.ovectorCount = get_ovector_count(result.matchData)
+
+proc findAllPcre2*(matcher: var Pcre2Matcher, text: string, startOffset: int = 0): seq[(int, int)] =
+  let subjectLen = text.len.csize_t
+  var offset = startOffset.csize_t
+  result = @[]
+
+  while offset < subjectLen:
+    let rc = match(matcher.code, text, offset, {PCRE2_NOTEMPTY, PCRE2_NO_UTF_CHECK}, matcher.matchData, nil)
+    if rc == PCRE2_ERROR_NOMATCH:
+      break
+    if rc < 0:
+      raise newException(ValueError, "Match error")
+    let matchStart = matcher.ovector[0].int
+    let matchEnd = matcher.ovector[1].int
+    result.add((matchStart, matchEnd))
+    offset = matchEnd.csize_t
+    if matchStart == matchEnd:
+      offset += 1  # Prevent infinite loop
+  result
+
+proc free*(matcher: var Pcre2Matcher) =
+  if matcher.matchData != nil:
+    match_data_free(matcher.matchData)
+    matcher.matchData = nil
+
+proc free*(code: var Pcre2Code) =
+  if code.code != nil:
+    code_free(code.code)
+    code.code = nil
+
+# Usage
+let pat = compilePcre2(r"\p{L}+")
+var matcher = createMatcher(pat)
+let matches = findAllPcre2(matcher, "Hello 世界 🌍")
+# matches: @[(0, 5), (6, 8), (9, 10)]
+
+matcher.free()
+pat.free()
+```
+
+### Tokenizer Integration Pattern
+
+```nim
+import std/tables
+import workspace/pcre2/pcre2
+
+type
+  BPETokenizer* = object
+    encoder*: Table[seq[byte], int]
+    pattern*: Pcre2Code
+    matcher*: Pcre2Matcher
+
+proc splitText*(tokenizer: BPETokenizer, text: string): seq[string] =
+  result = @[]
+  let matches = findAllPcre2(tokenizer.matcher, text)
+
+  var lastPos = 0
+  for (start, end) in matches:
+    if start > lastPos:
+      result.add(text[lastPos..<start])
+    result.add(text[start..<end])
+    lastPos = end
+
+  if lastPos < text.len:
+    result.add(text[lastPos..<text.len])
+
+  result
+```
+
+### Reference Documentation
+
+- **man pcre2api.3**: Full PCRE2 API documentation
+- **man pcre2demo.3**: Demonstration program showing correct usage
+- **workspace/pcre2/pcre2.nim**: Tattletale's PCRE2 bindings
+
+### Key Takeaways
+
+1. Use `match_data_create_from_pattern()` to ensure correct match data size
+2. Use `get_ovector_pointer()` to access match offsets
+3. Call `match()` in a loop with incrementing offsets for find-all
+4. Always free resources with `match_data_free()` and `code_free()`
+5. Store pattern and matcher in regular objects (not thread-local) for simplicity

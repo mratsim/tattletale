@@ -7,537 +7,163 @@
 
 import std/tables
 import std/os
-import pkg/regex
 import std/strutils
 import std/sequtils
+import std/strformat
+import std/math
+import std/base64
+import workspace/pcre2/pcre2
 import ./serialization
 
 const MaxInt = high(int)
 
-proc createByteDecoder(): Table[string, int] =
-  result = initTable[string, int]()
-
-  result["!"] = 33
-  result["\""] = 34
-  result["#"] = 35
-  result["$"] = 36
-  result["%"] = 37
-  result["&"] = 38
-  result["'"] = 39
-  result["("] = 40
-  result[")"] = 41
-  result["*"] = 42
-  result["+"] = 43
-  result[","] = 44
-  result["-"] = 45
-  result["."] = 46
-  result["/"] = 47
-  result["0"] = 48
-  result["1"] = 49
-  result["2"] = 50
-  result["3"] = 51
-  result["4"] = 52
-  result["5"] = 53
-  result["6"] = 54
-  result["7"] = 55
-  result["8"] = 56
-  result["9"] = 57
-  result[":"] = 58
-  result[";"] = 59
-  result["<"] = 60
-  result["="] = 61
-  result[">"] = 62
-  result["?"] = 63
-  result["@"] = 64
-  result["A"] = 65
-  result["B"] = 66
-  result["C"] = 67
-  result["D"] = 68
-  result["E"] = 69
-  result["F"] = 70
-  result["G"] = 71
-  result["H"] = 72
-  result["I"] = 73
-  result["J"] = 74
-  result["K"] = 75
-  result["L"] = 76
-  result["M"] = 77
-  result["N"] = 78
-  result["O"] = 79
-  result["P"] = 80
-  result["Q"] = 81
-  result["R"] = 82
-  result["S"] = 83
-  result["T"] = 84
-  result["U"] = 85
-  result["V"] = 86
-  result["W"] = 87
-  result["X"] = 88
-  result["Y"] = 89
-  result["Z"] = 90
-  result["["] = 91
-  result["\\"] = 92
-  result["]"] = 93
-  result["^"] = 94
-  result["_"] = 95
-  result["`"] = 96
-  result["a"] = 97
-  result["b"] = 98
-  result["c"] = 99
-  result["d"] = 100
-  result["e"] = 101
-  result["f"] = 102
-  result["g"] = 103
-  result["h"] = 104
-  result["i"] = 105
-  result["j"] = 106
-  result["k"] = 107
-  result["l"] = 108
-  result["m"] = 109
-  result["n"] = 110
-  result["o"] = 111
-  result["p"] = 112
-  result["q"] = 113
-  result["r"] = 114
-  result["s"] = 115
-  result["t"] = 116
-  result["u"] = 117
-  result["v"] = 118
-  result["w"] = 119
-  result["x"] = 120
-  result["y"] = 121
-  result["z"] = 122
-  result["{"] = 123
-  result["|"] = 124
-  result["}"] = 125
-  result["~"] = 126
-  result["¡"] = 161
-  result["¢"] = 162
-  result["£"] = 163
-  result["¤"] = 164
-  result["¥"] = 165
-  result["¦"] = 166
-  result["§"] = 167
-  result["¨"] = 168
-  result["©"] = 169
-  result["ª"] = 170
-  result["«"] = 171
-  result["¬"] = 172
-  result["®"] = 174
-  result["¯"] = 175
-  result["°"] = 176
-  result["±"] = 177
-  result["²"] = 178
-  result["³"] = 179
-  result["´"] = 180
-  result["µ"] = 181
-  result["¶"] = 182
-  result["·"] = 183
-  result["¸"] = 184
-  result["¹"] = 185
-  result["º"] = 186
-  result["»"] = 187
-  result["¼"] = 188
-  result["½"] = 189
-  result["¾"] = 190
-  result["¿"] = 191
-  result["À"] = 192
-  result["Á"] = 193
-  result["Â"] = 194
-  result["Ã"] = 195
-  result["Ä"] = 196
-  result["Å"] = 197
-  result["Æ"] = 198
-  result["Ç"] = 199
-  result["È"] = 200
-  result["É"] = 201
-  result["Ê"] = 202
-  result["Ë"] = 203
-  result["Ì"] = 204
-  result["Í"] = 205
-  result["Î"] = 206
-  result["Ï"] = 207
-  result["Ð"] = 208
-  result["Ñ"] = 209
-  result["Ò"] = 210
-  result["Ó"] = 211
-  result["Ô"] = 212
-  result["Õ"] = 213
-  result["Ö"] = 214
-  result["×"] = 215
-  result["Ø"] = 216
-  result["Ù"] = 217
-  result["Ú"] = 218
-  result["Û"] = 219
-  result["Ü"] = 220
-  result["Ý"] = 221
-  result["Þ"] = 222
-  result["ß"] = 223
-  result["à"] = 224
-  result["á"] = 225
-  result["â"] = 226
-  result["ã"] = 227
-  result["ä"] = 228
-  result["å"] = 229
-  result["æ"] = 230
-  result["ç"] = 231
-  result["è"] = 232
-  result["é"] = 233
-  result["ê"] = 234
-  result["ë"] = 235
-  result["ì"] = 236
-  result["í"] = 237
-  result["î"] = 238
-  result["ï"] = 239
-  result["ð"] = 240
-  result["ñ"] = 241
-  result["ò"] = 242
-  result["ó"] = 243
-  result["ô"] = 244
-  result["õ"] = 245
-  result["ö"] = 246
-  result["÷"] = 247
-  result["ø"] = 248
-  result["ù"] = 249
-  result["ú"] = 250
-  result["û"] = 251
-  result["ü"] = 252
-  result["ý"] = 253
-  result["þ"] = 254
-  result["ÿ"] = 255
-
-  result["Ā"] = 0
-  result["ā"] = 1
-  result["Ă"] = 2
-  result["ă"] = 3
-  result["Ą"] = 4
-  result["ą"] = 5
-  result["Ć"] = 6
-  result["ć"] = 7
-  result["Ĉ"] = 8
-  result["ĉ"] = 9
-  result["Ċ"] = 10
-  result["ċ"] = 11
-  result["Č"] = 12
-  result["č"] = 13
-  result["Ď"] = 14
-  result["ď"] = 15
-  result["Đ"] = 16
-  result["đ"] = 17
-  result["Ē"] = 18
-  result["ē"] = 19
-  result["Ĕ"] = 20
-  result["ĕ"] = 21
-  result["Ė"] = 22
-  result["ė"] = 23
-  result["Ę"] = 24
-  result["ę"] = 25
-  result["Ě"] = 26
-  result["ě"] = 27
-  result["Ĝ"] = 28
-  result["ĝ"] = 29
-  result["Ğ"] = 30
-  result["ğ"] = 31
-  result["Ġ"] = 32
-  result["ġ"] = 33
-  result["Ģ"] = 34
-  result["ģ"] = 35
-  result["Ĥ"] = 36
-  result["ĥ"] = 37
-  result["Ħ"] = 38
-  result["ħ"] = 39
-  result["Ĩ"] = 40
-  result["ĩ"] = 41
-  result["Ī"] = 42
-  result["ī"] = 43
-  result["Ĭ"] = 44
-  result["ĭ"] = 45
-  result["Į"] = 46
-  result["į"] = 47
-  result["İ"] = 48
-  result["ı"] = 49
-  result["Ĳ"] = 50
-  result["ĳ"] = 51
-  result["Ĵ"] = 52
-  result["ĵ"] = 53
-  result["Ķ"] = 54
-  result["ķ"] = 55
-  result["ĸ"] = 56
-  result["Ĺ"] = 57
-  result["ĺ"] = 58
-  result["Ļ"] = 59
-  result["ļ"] = 60
-  result["Ľ"] = 61
-  result["ľ"] = 62
-  result["Ŀ"] = 63
-  result["ŀ"] = 64
-  result["Ł"] = 65
-  result["ł"] = 66
-  result["Ń"] = 67
-  result["ń"] = 68
-  result["Ņ"] = 69
-  result["ņ"] = 70
-  result["ň"] = 71
-  result["ŉ"] = 72
-  result["Ŋ"] = 73
-  result["ŋ"] = 74
-  result["Ō"] = 75
-  result["ō"] = 76
-  result["Ŏ"] = 77
-  result["ŏ"] = 78
-  result["Ő"] = 79
-  result["ő"] = 80
-  result["Œ"] = 81
-  result["œ"] = 82
-  result["Ŕ"] = 83
-  result["ŕ"] = 84
-  result["Ŗ"] = 85
-  result["ŗ"] = 86
-  result["Ř"] = 87
-  result["ř"] = 88
-  result["Ś"] = 89
-  result["ś"] = 90
-  result["Ŝ"] = 91
-  result["ŝ"] = 92
-  result["Ş"] = 93
-  result["ş"] = 94
-  result["Š"] = 95
-  result["š"] = 96
-  result["Ţ"] = 97
-  result["ţ"] = 98
-  result["Ť"] = 99
-  result["ť"] = 100
-  result["Ŧ"] = 101
-  result["ŧ"] = 102
-  result["Ũ"] = 103
-  result["ũ"] = 104
-  result["Ū"] = 105
-  result["ū"] = 106
-  result["Ŭ"] = 107
-  result["ŭ"] = 108
-  result["Ů"] = 109
-  result["ů"] = 110
-  result["Ű"] = 111
-  result["ű"] = 112
-  result["Ų"] = 113
-  result["ų"] = 114
-  result["Ŵ"] = 115
-  result["ŵ"] = 116
-  result["Ŷ"] = 117
-  result["ŷ"] = 118
-  result["Ÿ"] = 119
-  result["Ź"] = 120
-  result["ź"] = 121
-  result["Ż"] = 122
-  result["ż"] = 123
-  result["Ž"] = 124
-  result["ž"] = 125
-  result["ŀ"] = 126
-  result["ⱀ"] = 127
-  result["ⱁ"] = 128
-  result["ⱂ"] = 129
-  result["ⱃ"] = 130
-  result["ⱄ"] = 131
-  result["ⱅ"] = 132
-  result["ⱆ"] = 133
-  result["ⱇ"] = 134
-  result["ⱈ"] = 135
-  result["ⱉ"] = 136
-  result["ⱊ"] = 137
-  result["ⱋ"] = 138
-  result["ⱌ"] = 139
-  result["ⱍ"] = 140
-  result["ⱎ"] = 141
-  result["ⱏ"] = 142
-  result["ⱐ"] = 143
-  result["ⱑ"] = 144
-  result["ⱒ"] = 145
-  result["ⱓ"] = 146
-  result["ⱔ"] = 147
-  result["ⱕ"] = 148
-  result["ⱖ"] = 149
-  result["ⱗ"] = 150
-  result["ⱘ"] = 151
-  result["ⱙ"] = 152
-  result["ⱚ"] = 153
-  result["ⱛ"] = 154
-  result["ⱜ"] = 155
-  result["ⱝ"] = 156
-  result["ⱞ"] = 157
-  result["ⱟ"] = 158
-  result["Ⱡ"] = 159
-  result["ⱡ"] = 160
-  result["Ɫ"] = 161
-  result["Ᵽ"] = 162
-  result["Ɽ"] = 163
-  result["ⱥ"] = 164
-  result["ⱦ"] = 165
-  result["Ⱨ"] = 166
-  result["ⱨ"] = 167
-  result["Ⱪ"] = 168
-  result["ⱪ"] = 169
-  result["Ⱬ"] = 170
-  result["ⱬ"] = 171
-  result["Ɑ"] = 172
-  result["Ɱ"] = 173
-  result["Ɐ"] = 174
-  result["Ɒ"] = 175
-  result["ⱱ"] = 176
-  result["Ⱳ"] = 177
-  result["ⱳ"] = 178
-  result["ⱴ"] = 179
-  result["Ⱶ"] = 180
-  result["ⱶ"] = 181
-  result["ⱷ"] = 182
-  result["ⱸ"] = 183
-  result["ⱹ"] = 184
-  result["ⱺ"] = 185
-  result["ⱻ"] = 186
-  result["ⱼ"] = 187
-  result["ⱽ"] = 188
-  result["Ȿ"] = 189
-  result["Ɀ"] = 190
-  result["Ⲁ"] = 191
-  result["ⲁ"] = 192
-  result["Ⲃ"] = 193
-  result["ⲃ"] = 194
-  result["Ⲅ"] = 195
-  result["ⲅ"] = 196
-  result["Ⲇ"] = 197
-  result["ⲇ"] = 198
-  result["Ⲉ"] = 199
-  result["ⲉ"] = 200
-  result["Ⲋ"] = 201
-  result["ⲋ"] = 202
-  result["Ⲍ"] = 203
-  result["ⲍ"] = 204
-  result["Ⲏ"] = 205
-  result["ⲏ"] = 206
-  result["Ⲑ"] = 207
-  result["ⲑ"] = 208
-  result["Ⲓ"] = 209
-  result["ⲓ"] = 210
-  result["Ⲕ"] = 211
-  result["ⲕ"] = 212
-  result["Ⲗ"] = 213
-  result["ⲗ"] = 214
-  result["Ⲙ"] = 215
-  result["ⲙ"] = 216
-  result["Ⲛ"] = 217
-  result["ⲛ"] = 218
-  result["Ⲝ"] = 219
-  result["ⲝ"] = 220
-  result["Ⲟ"] = 221
-  result["ⲟ"] = 222
-  result["Ⲡ"] = 223
-  result["ⲡ"] = 224
-  result["Ⲣ"] = 225
-  result["ⲣ"] = 226
-  result["Ⲥ"] = 227
-  result["ⲥ"] = 228
-  result["Ⲧ"] = 229
-  result["ⲧ"] = 230
-  result["Ⲩ"] = 231
-  result["ⲩ"] = 232
-  result["Ⲫ"] = 233
-  result["ⲫ"] = 234
-  result["Ⲭ"] = 235
-  result["ⲭ"] = 236
-  result["Ⲯ"] = 237
-  result["ⲯ"] = 238
-  result["Ⲱ"] = 239
-  result["ⲱ"] = 240
-  result["Ⲳ"] = 241
-  result["ⲳ"] = 242
-  result["Ⲵ"] = 243
-  result["ⲵ"] = 244
-  result["Ⲷ"] = 245
-  result["ⲷ"] = 246
-  result["Ⲹ"] = 247
-  result["ⲹ"] = 248
-  result["Ⲻ"] = 249
-  result["ⲻ"] = 250
-  result["Ⲽ"] = 251
-  result["ⲽ"] = 252
-  result["Ⲿ"] = 253
-  result["ⲿ"] = 254
-  result["Ⳁ"] = 255
+const DefaultPat* = "'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\\s0-9a-zA-Z]+|\\r?\\n|\\s+(?!\\S)|\\s+"
 
 type
+  Pcre2Code* = object
+    ## Wrapper for compiled PCRE2 pattern
+    code*: ptr Code
+    pattern*: string
+
+  Pcre2Matcher* = object
+    code*: ptr Code
+    matchData*: ptr MatchData
+    ovector*: ptr UncheckedArray[int]
+    ovectorCount*: uint32
+
   BPETokenizer* = object
     encoder*: Table[seq[byte], int]
     decoder*: Table[int, seq[byte]]
     specialTokensEncoder*: Table[string, int]
     specialTokensDecoder*: Table[int, seq[byte]]
-    pattern*: Regex2
-    specialRegex*: Regex2
+    pattern*: Pcre2Code
+    patternMatcher*: Pcre2Matcher
+    specialPattern*: Pcre2Code
+    specialMatcher*: Pcre2Matcher
     cache*: Table[seq[byte], seq[int]]
     byteDecoder*: Table[string, int]
 
   TokenizerError* = object of ValueError
 
-proc init*(_: type BPETokenizer): BPETokenizer =
-  BPETokenizer(
-    encoder: initTable[seq[byte], int](),
-    decoder: initTable[int, seq[byte]](),
-    specialTokensEncoder: initTable[string, int](),
-    specialTokensDecoder: initTable[int, seq[byte]](),
-    pattern: re2(""),
-    specialRegex: re2(""),
-    cache: initTable[seq[byte], seq[int]](),
-    byteDecoder: initTable[string, int]()
-  )
+proc compilePcre2(pattern: string, utf8: bool = true): Pcre2Code =
+  var errorCode: CompileError
+  var errorOffset: csize_t
 
-proc toBytes(str: string): seq[byte] =
-  result = newSeq[byte](str.len)
-  for i in 0..<str.len:
-    result[i] = byte(ord(str[i]))
+  let options: Flag[CompileOption] = if utf8: flag(UTF, UCP) else: Flag[CompileOption](0)
+  let code = compile(pattern, options, errorCode, errorOffset)
+  if code == nil:
+    raise newException(TokenizerError, &"PCRE2 compile error {errorCode} at offset {errorOffset}")
 
-proc strKeyToBytes(keyStr: string): seq[byte] =
-  result = newSeq[byte]()
-  if keyStr.startsWith("[") and keyStr.endsWith("]"):
-    let inner = keyStr[1..^2]
-    for part in inner.split(", "):
-      if part.len > 0:
-        try:
-          result.add(byte(parseInt(part)))
-        except:
-          return newSeq[byte]()
-  else:
-    for c in keyStr:
-      result.add(byte(ord(c)))
+  result.code = code
+  result.pattern = pattern
 
-proc loadTokenizerFromFormat*(format: TiktokenFormat): BPETokenizer =
-  var tokenizer = BPETokenizer.init()
+proc createMatcher(code: Pcre2Code): Pcre2Matcher =
+  result.code = code.code
+  result.matchData = match_data_create_from_pattern(code.code, nil)
+  if result.matchData == nil:
+    raise newException(TokenizerError, "Failed to create match data from pattern")
 
-  tokenizer.byteDecoder = createByteDecoder()
+  result.ovector = get_ovector_pointer(result.matchData)
+  result.ovectorCount = get_ovector_count(result.matchData)
 
+proc free(matcher: var Pcre2Matcher) =
+  if matcher.matchData != nil:
+    match_data_free(matcher.matchData)
+    matcher.matchData = nil
+    matcher.ovector = nil
+
+proc free(code: var Pcre2Code) =
+  if code.code != nil:
+    code_free(code.code)
+    code.code = nil
+
+proc findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0): seq[(int, int)] =
+  let subjectLen = text.len.csize_t
+  var offset = startOffset.csize_t
+
+  let options: Flag[pcre2.MatchOption] = flag(NOTEMPTY, pcre2.MatchOption.NO_UTF_CHECK)
+
+  while offset < subjectLen:
+    let rc = match(
+      matcher.code,
+      text,
+      offset.int,
+      options,
+      matcher.matchData,
+      nil
+    )
+
+    if rc == -1:
+      break
+
+    if rc < 0:
+      raise newException(TokenizerError, &"PCRE2 match error: {rc}")
+
+    let matchStart = matcher.ovector[0].int
+    let matchEnd = matcher.ovector[1].int
+
+    if matchStart >= text.len or matchEnd > text.len:
+      break
+
+    result.add((matchStart, matchEnd))
+
+    offset = matchEnd.csize_t
+
+    if matchStart == matchEnd:
+       offset += 1
+
+proc `[]`(t: Table[int, seq[byte]], key: int, default: seq[byte]): seq[byte] =
+  if t.hasKey(key): t[key] else: default
+
+proc loadTokenizerFromFormat(format: TiktokenFormat): BPETokenizer =
+  var tokenizer = BPETokenizer()
+
+  # Build byte decoder
+  tokenizer.byteDecoder = initTable[string, int]()
+  for i in 0..255:
+    tokenizer.byteDecoder[$char(i)] = i
+
+  # Load special tokens
   if format.specialTokens.len > 0:
     for token, id in format.specialTokens:
       tokenizer.specialTokensEncoder[token] = id
+      tokenizer.specialTokensDecoder[id] = toBytes(token)
 
+  # Build encoder/decoder tables
   var encoder = initTable[seq[byte], int]()
 
-  for keyStr, rank in format.mergeableRanks:
-    let rawBytes = strKeyToBytes(keyStr)
-    if rawBytes.len > 0:
-      encoder[rawBytes] = rank
+  for keyBytes, rank in format.mergeableRanks:
+    encoder[keyBytes] = rank
 
   tokenizer.encoder = encoder
 
+  # Build decoder (reverse mapping)
+  tokenizer.decoder = initTable[int, seq[byte]]()
   for k, v in encoder:
     tokenizer.decoder[v] = k
 
-  tokenizer.pattern = re2(format.patStr)
+  # Build special tokens decoder
+  for k, v in tokenizer.specialTokensEncoder:
+    tokenizer.specialTokensDecoder[v] = toBytes(k)
 
+   # Compile regex pattern
+  tokenizer.pattern = compilePcre2(format.patStr)
+  tokenizer.patternMatcher = createMatcher(tokenizer.pattern)
+
+  # Compile special tokens pattern
   if tokenizer.specialTokensEncoder.len > 0:
-    let specialKeys = toSeq(tokenizer.specialTokensEncoder.keys)
-    let specialPattern = specialKeys.join("|")
-    tokenizer.specialRegex = re2(specialPattern)
+    let specialTokens = toSeq(tokenizer.specialTokensEncoder.keys)
+    let specialPatternStr = specialTokens.join("|")
+    tokenizer.specialPattern = compilePcre2(specialPatternStr)
+    tokenizer.specialMatcher = createMatcher(tokenizer.specialPattern)
+  else:
+    # Create a matcher that never matches
+    tokenizer.specialPattern = compilePcre2("(?!)")  # Never matches
+    tokenizer.specialMatcher = createMatcher(tokenizer.specialPattern)
 
   tokenizer
 
-proc loadTokenizerJSON*(path: string): BPETokenizer =
+proc loadHFTokenizer*(path: string): BPETokenizer =
   if not fileExists(path):
     raise newException(TokenizerError, "HF tokenizer JSON file not found: " & path)
 
@@ -547,6 +173,43 @@ proc loadTokenizerJSON*(path: string): BPETokenizer =
 
   let hf = deserializeHfTokenizer(content)
   let format = convertHfToTiktoken(hf)
+  loadTokenizerFromFormat(format)
+
+proc loadTiktokenizer*(path: string): BPETokenizer =
+  if not fileExists(path):
+    raise newException(TokenizerError, "Tiktoken file not found: " & path)
+
+  let content = readFile(path)
+  if content.len == 0:
+    raise newException(TokenizerError, "Tiktoken file is empty: " & path)
+
+  let lines = content.splitLines()
+  var mergeableRanks = initOrderedTable[seq[byte], int]()
+
+  for line in lines:
+    if line.len == 0:
+      continue
+    if line.startsWith("#"):
+      continue
+
+    let parts = line.split(" ")
+    if parts.len >= 2:
+      let encodedToken = parts[0]
+      let rankStr = parts[1]
+      try:
+        let rank = parseInt(rankStr)
+        let decodedTokenStr = decode(encodedToken)
+        let decodedTokenBytes = toBytes(decodedTokenStr)
+        if decodedTokenBytes.len > 0:
+          mergeableRanks[decodedTokenBytes] = rank
+      except:
+        discard
+
+  let format = TiktokenFormat(
+    mergeableRanks: mergeableRanks,
+    patStr: DefaultPat,
+    specialTokens: initOrderedTable[string, int]()
+  )
   loadTokenizerFromFormat(format)
 
 proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] =
@@ -620,13 +283,18 @@ proc bytePairEncode(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
 
   bpeResult
 
-proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] =
-  result = @[]
-  let matches = findAll(text, tokenizer.pattern)
-  for match in matches:
-    let piece = text[match.boundaries]
-    if piece.len > 0:
-      result.add(piece)
+proc splitTextOrdinary*(tokenizer: BPETokenizer, text: string): seq[string] =
+  let pieces = findAllPcre2(tokenizer.patternMatcher, text)
+
+  var lastPos = 0
+  for (start, stop) in pieces:
+    if start > lastPos:
+      result.add(text[lastPos..<start])
+    result.add(text[start..<stop])
+    lastPos = stop
+
+  if lastPos < text.len:
+    result.add(text[lastPos..<text.len])
 
 proc splitTextSpecial*(tokenizer: BPETokenizer, text: string, start: int): tuple[pieces: seq[string], specialPos: int, specialToken: string] =
   var pieces: seq[string] = @[]
@@ -638,6 +306,7 @@ proc splitTextSpecial*(tokenizer: BPETokenizer, text: string, start: int): tuple
     var found = false
     var nextPos = text.len
 
+    # Use direct string find for special tokens (faster than regex for literals)
     if tokenizer.specialTokensEncoder.len > 0:
       for token, _ in tokenizer.specialTokensEncoder:
         let foundPos = text.find(token, pos)
@@ -667,6 +336,7 @@ proc splitTextSpecial*(tokenizer: BPETokenizer, text: string, start: int): tuple
   (pieces, specialPos, specialToken)
 
 proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] =
+  result = @[]
   let pieces = tokenizer.splitTextOrdinary(text)
   for piece in pieces:
     let pieceBytes = toBytes(piece)
@@ -677,7 +347,7 @@ proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] =
       for tok in bpeTokens:
         result.add(tok)
 
-proc encodeWithSpecial(tokenizer: BPETokenizer, text: string): seq[int] =
+proc encodeWithSpecial*(tokenizer: BPETokenizer, text: string): seq[int] =
   var pos = 0
 
   while pos < text.len:
@@ -714,24 +384,25 @@ proc encode*(tokenizer: BPETokenizer, text: string): seq[int] =
 
 proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] =
   for id in tokenIds:
-    if tokenizer.decoder.hasKey(id):
-      let bytes = tokenizer.decoder[id]
-      for b in bytes:
-        result.add(b)
-    elif tokenizer.specialTokensDecoder.hasKey(id):
-      let bytes = tokenizer.specialTokensDecoder[id]
-      for b in bytes:
-        result.add(b)
+    let bytes = tokenizer.decoder[id, @[]]
+    if bytes.len > 0:
+      result.add(bytes)
     else:
-      raise newException(TokenizerError, "Invalid token: " & $id)
+      let specialBytes = tokenizer.specialTokensDecoder[id, @[]]
+      if specialBytes.len > 0:
+        result.add(specialBytes)
+      else:
+        raise newException(TokenizerError, "Invalid token: " & $id)
 
 proc decodeToString*(tokenizer: BPETokenizer, tokenIds: seq[int]): string =
   let bytes = tokenizer.decodeToBytes(tokenIds)
-  result = newStringOfCap(bytes.len)
-  for b in bytes:
-    result.add(chr(int(b)))
+  if bytes.len == 0:
+    return ""
+  result = newString(bytes.len)
+  copyMem(result[0].addr, bytes[0].unsafeAddr, bytes.len)
 
-proc tokenCount*(tokenizer: BPETokenizer): int = tokenizer.encoder.len + tokenizer.specialTokensEncoder.len
+proc tokenCount*(tokenizer: BPETokenizer): int =
+  tokenizer.encoder.len + tokenizer.specialTokensEncoder.len
 
 proc isSpecialToken*(tokenizer: BPETokenizer, token: int): bool =
   tokenizer.specialTokensDecoder.hasKey(token)
@@ -743,3 +414,23 @@ proc decodeToken*(tokenizer: BPETokenizer, tokenId: int): seq[byte] =
     return tokenizer.specialTokensDecoder[tokenId]
   else:
     raise newException(TokenizerError, "Invalid token: " & $tokenId)
+
+proc init*(_: type BPETokenizer): BPETokenizer =
+  BPETokenizer(
+    encoder: initTable[seq[byte], int](),
+    decoder: initTable[int, seq[byte]](),
+    specialTokensEncoder: initTable[string, int](),
+    specialTokensDecoder: initTable[int, seq[byte]](),
+    pattern: Pcre2Code(code: nil, pattern: ""),
+    patternMatcher: Pcre2Matcher(code: nil, matchData: nil, ovector: nil, ovectorCount: 0),
+    specialPattern: Pcre2Code(code: nil, pattern: ""),
+    specialMatcher: Pcre2Matcher(code: nil, matchData: nil, ovector: nil, ovectorCount: 0),
+    cache: initTable[seq[byte], seq[int]](),
+    byteDecoder: initTable[string, int]()
+  )
+
+proc free*(tokenizer: var BPETokenizer) =
+  tokenizer.specialMatcher.free()
+  tokenizer.specialPattern.free()
+  tokenizer.patternMatcher.free()
+  tokenizer.pattern.free()
