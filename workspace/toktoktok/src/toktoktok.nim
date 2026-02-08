@@ -8,15 +8,14 @@
 import std/tables
 import std/os
 import pkg/regex
-import pkg/jsony
 import std/strutils
 import std/sequtils
 import ./serialization
 
 const MaxInt = high(int)
 
-proc createByteDecoder*(): Table[string, int] =
-  result = init_table[string, int]()
+proc createByteDecoder(): Table[string, int] =
+  result = initTable[string, int]()
 
   result["!"] = 33
   result["\""] = 34
@@ -468,147 +467,140 @@ type
   BPETokenizer* = object
     encoder*: Table[seq[byte], int]
     decoder*: Table[int, seq[byte]]
-    special_tokens_encoder*: Table[string, int]
-    special_tokens_decoder*: Table[int, seq[byte]]
+    specialTokensEncoder*: Table[string, int]
+    specialTokensDecoder*: Table[int, seq[byte]]
     pattern*: Regex2
-    special_regex*: Regex2
+    specialRegex*: Regex2
     cache*: Table[seq[byte], seq[int]]
-    byte_decoder*: Table[string, int]
+    byteDecoder*: Table[string, int]
 
   TokenizerError* = object of ValueError
 
 proc init*(_: type BPETokenizer): BPETokenizer =
   BPETokenizer(
-    encoder: init_table[seq[byte], int](),
-    decoder: init_table[int, seq[byte]](),
-    special_tokens_encoder: init_table[string, int](),
-    special_tokens_decoder: init_table[int, seq[byte]](),
+    encoder: initTable[seq[byte], int](),
+    decoder: initTable[int, seq[byte]](),
+    specialTokensEncoder: initTable[string, int](),
+    specialTokensDecoder: initTable[int, seq[byte]](),
     pattern: re2(""),
-    special_regex: re2(""),
-    cache: init_table[seq[byte], seq[int]](),
-    byte_decoder: init_table[string, int]()
+    specialRegex: re2(""),
+    cache: initTable[seq[byte], seq[int]](),
+    byteDecoder: initTable[string, int]()
   )
 
-proc `$`*(bytes: seq[byte]): string =
-  result = "["
-  for i, b in bytes:
-    if i > 0: result.add(", ")
-    result.add($b)
-  result.add("]")
-
-proc toBytes*(str: string): seq[byte] =
-  result = new_seq[byte](str.len)
+proc toBytes(str: string): seq[byte] =
+  result = newSeq[byte](str.len)
   for i in 0..<str.len:
     result[i] = byte(ord(str[i]))
 
-proc `$`*(tokens: seq[int]): string =
-  result = "["
-  for i, token in tokens:
-    if i > 0: result.add(", ")
-    result.add($token)
-  result.add("]")
-
-proc strKeyToBytes*(keyStr: string): seq[byte] =
-  result = @[]
+proc strKeyToBytes(keyStr: string): seq[byte] =
+  result = newSeq[byte]()
   if keyStr.startsWith("[") and keyStr.endsWith("]"):
     let inner = keyStr[1..^2]
     for part in inner.split(", "):
       if part.len > 0:
-        result.add(byte(parseInt(part)))
+        try:
+          result.add(byte(parseInt(part)))
+        except:
+          return newSeq[byte]()
   else:
     for c in keyStr:
       result.add(byte(ord(c)))
 
-proc loadTokenizerJson*(path: string): BPETokenizer =
-  if not file_exists(path):
-    raise new_exception(TokenizerError, "Tokenizer file not found: " & path)
-
-  let content = read_file(path)
-  if content.len == 0:
-    raise new_exception(TokenizerError, "Tokenizer file is empty: " & path)
-
-  let format = content.fromJson(TiktokenFormat)
+proc loadTokenizerFromFormat*(format: TiktokenFormat): BPETokenizer =
   var tokenizer = BPETokenizer.init()
 
-  tokenizer.byte_decoder = createByteDecoder()
+  tokenizer.byteDecoder = createByteDecoder()
 
-  if format.special_tokens.len > 0:
-    for token, id in format.special_tokens:
-      tokenizer.special_tokens_encoder[token] = id
+  if format.specialTokens.len > 0:
+    for token, id in format.specialTokens:
+      tokenizer.specialTokensEncoder[token] = id
 
-  var encoder = init_table[seq[byte], int]()
+  var encoder = initTable[seq[byte], int]()
 
-  for keyStr, rank in format.mergeable_ranks:
-    let raw_bytes = strKeyToBytes(keyStr)
-    if raw_bytes.len > 0:
-      encoder[raw_bytes] = rank
+  for keyStr, rank in format.mergeableRanks:
+    let rawBytes = strKeyToBytes(keyStr)
+    if rawBytes.len > 0:
+      encoder[rawBytes] = rank
 
   tokenizer.encoder = encoder
 
   for k, v in encoder:
     tokenizer.decoder[v] = k
 
-  tokenizer.pattern = re2(format.pat_str)
+  tokenizer.pattern = re2(format.patStr)
 
-  if tokenizer.special_tokens_encoder.len > 0:
-    let special_keys = toSeq(tokenizer.special_tokens_encoder.keys)
-    let special_pattern = special_keys.join("|")
-    tokenizer.special_regex = re2(special_pattern)
+  if tokenizer.specialTokensEncoder.len > 0:
+    let specialKeys = toSeq(tokenizer.specialTokensEncoder.keys)
+    let specialPattern = specialKeys.join("|")
+    tokenizer.specialRegex = re2(specialPattern)
 
   tokenizer
 
-proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] =
+proc loadTokenizerJSON*(path: string): BPETokenizer =
+  if not fileExists(path):
+    raise newException(TokenizerError, "HF tokenizer JSON file not found: " & path)
+
+  let content = readFile(path)
+  if content.len == 0:
+    raise newException(TokenizerError, "HF tokenizer JSON file is empty: " & path)
+
+  let hf = deserializeHfTokenizer(content)
+  let format = convertHfToTiktoken(hf)
+  loadTokenizerFromFormat(format)
+
+proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] =
   var parts = newSeqOfCap[(int, int)](piece.len + 2)
 
-  var min_rank = MaxInt
-  var min_rank_idx = 0
+  var minRank = MaxInt
+  var minRankIdx = 0
 
   for i in 0..<piece.len - 1:
     let pair = @[piece[i], piece[i+1]]
-    var rank = MAX_INT
+    var rank = MaxInt
     if ranks.hasKey(pair):
       rank = ranks[pair]
 
-    if rank < min_rank:
-      min_rank = rank
-      min_rank_idx = i
+    if rank < minRank:
+      minRank = rank
+      minRankIdx = i
 
     parts.add((i, rank))
 
   parts.add((piece.len - 1, MaxInt))
-  parts.add((piece.len, MAX_INT))
+  parts.add((piece.len, MaxInt))
 
-  proc get_rank(parts: seq[(int, int)], i: int, piece: seq[byte], ranks: Table[seq[byte], int]): int =
+  proc getRank(parts: seq[(int, int)], i: int, piece: seq[byte], ranks: Table[seq[byte], int]): int =
     if i + 3 < parts.len:
-      let start_idx = parts[i][0]
-      let end_idx = parts[i+3][0]
+      let startIdx = parts[i][0]
+      let endIdx = parts[i+3][0]
       var pair: seq[byte] = @[]
-      for j in start_idx..<end_idx:
+      for j in startIdx..<endIdx:
         pair.add(piece[j])
       if ranks.hasKey(pair):
         return ranks[pair]
     return MaxInt
 
-  while min_rank != MaxInt:
-    let i = min_rank_idx
+  while minRank != MaxInt:
+    let i = minRankIdx
 
     if i > 0:
-      parts[i-1] = (parts[i-1][0], get_rank(parts, i-1, piece, ranks))
+      parts[i-1] = (parts[i-1][0], getRank(parts, i-1, piece, ranks))
 
-    parts[i] = (parts[i][0], get_rank(parts, i, piece, ranks))
+    parts[i] = (parts[i][0], getRank(parts, i, piece, ranks))
     parts.delete(i + 1)
 
-    min_rank = MaxInt
-    min_rank_idx = 0
+    minRank = MaxInt
+    minRankIdx = 0
     for idx in 0..<parts.len - 1:
       let (_, rank) = parts[idx]
-      if rank < min_rank:
-        min_rank = rank
-        min_rank_idx = idx
+      if rank < minRank:
+        minRank = rank
+        minRankIdx = idx
 
   parts
 
-proc bytePairEncode*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
+proc bytePairEncode(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
   if piece.len == 1:
     if ranks.hasKey(piece):
       return @[ranks[piece]]
@@ -616,19 +608,19 @@ proc bytePairEncode*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
       return @[]
 
   let merged = bytePairMerge(piece, ranks)
-  var bpe_result: seq[int] = @[]
+  var bpeResult: seq[int] = @[]
   for i in 0..<merged.len - 1:
-    let start_idx = merged[i][0]
-    let end_idx = merged[i+1][0]
+    let startIdx = merged[i][0]
+    let endIdx = merged[i+1][0]
     var pair: seq[byte] = @[]
-    for j in start_idx..<end_idx:
+    for j in startIdx..<endIdx:
       pair.add(piece[j])
     if ranks.hasKey(pair):
-      bpe_result.add(ranks[pair])
+      bpeResult.add(ranks[pair])
 
-  bpe_result
+  bpeResult
 
-proc splitTextOrdinary*(tokenizer: BPETokenizer, text: string): seq[string] =
+proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] =
   result = @[]
   let matches = findAll(text, tokenizer.pattern)
   for match in matches:
@@ -638,81 +630,78 @@ proc splitTextOrdinary*(tokenizer: BPETokenizer, text: string): seq[string] =
 
 proc splitTextSpecial*(tokenizer: BPETokenizer, text: string, start: int): tuple[pieces: seq[string], specialPos: int, specialToken: string] =
   var pieces: seq[string] = @[]
-  var special_pos = -1
-  var special_token = ""
+  var specialPos = -1
+  var specialToken = ""
 
   var pos = start
   while pos < text.len:
     var found = false
-    var next_pos = text.len
+    var nextPos = text.len
 
-    if tokenizer.special_tokens_encoder.len > 0:
-      for token, _ in tokenizer.special_tokens_encoder:
-        let found_pos = text.find(token, pos)
-        if found_pos != -1 and (next_pos == text.len or found_pos < next_pos):
-          next_pos = found_pos
-          special_token = token
+    if tokenizer.specialTokensEncoder.len > 0:
+      for token, _ in tokenizer.specialTokensEncoder:
+        let foundPos = text.find(token, pos)
+        if foundPos != -1 and (nextPos == text.len or foundPos < nextPos):
+          nextPos = foundPos
+          specialToken = token
           found = true
 
-    if found and next_pos == pos:
-      pieces.add(special_token)
-      special_pos = pos
-      pos = pos + special_token.len
+    if found and nextPos == pos:
+      pieces.add(specialToken)
+      specialPos = pos
+      pos = pos + specialToken.len
     elif found:
-      if pos < next_pos:
-        let ordinary = text[pos ..< next_pos]
-        let ordinary_pieces = tokenizer.splitTextOrdinary(ordinary)
-        for p in ordinary_pieces:
+      if pos < nextPos:
+        let ordinary = text[pos ..< nextPos]
+        let ordinaryPieces = tokenizer.splitTextOrdinary(ordinary)
+        for p in ordinaryPieces:
           pieces.add(p)
-      pos = next_pos
+      pos = nextPos
     else:
       let remaining = text[pos ..< text.len]
-      let remaining_pieces = tokenizer.splitTextOrdinary(remaining)
-      for p in remaining_pieces:
+      let remainingPieces = tokenizer.splitTextOrdinary(remaining)
+      for p in remainingPieces:
         pieces.add(p)
       break
 
-  (pieces, special_pos, special_token)
+  (pieces, specialPos, specialToken)
 
 proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] =
-  var result: seq[int] = @[]
   let pieces = tokenizer.splitTextOrdinary(text)
   for piece in pieces:
-    let piece_bytes = toBytes(piece)
-    if tokenizer.encoder.hasKey(piece_bytes):
-      result.add(tokenizer.encoder[piece_bytes])
+    let pieceBytes = toBytes(piece)
+    if tokenizer.encoder.hasKey(pieceBytes):
+      result.add(tokenizer.encoder[pieceBytes])
     else:
-      let bpe_tokens = bytePairEncode(piece_bytes, tokenizer.encoder)
-      for tok in bpe_tokens:
+      let bpeTokens = bytePairEncode(pieceBytes, tokenizer.encoder)
+      for tok in bpeTokens:
         result.add(tok)
-  result
 
-proc encodeWithSpecial*(tokenizer: BPETokenizer, text: string): seq[int] =
-  var result: seq[int] = @[]
+proc encodeWithSpecial(tokenizer: BPETokenizer, text: string): seq[int] =
   var pos = 0
 
   while pos < text.len:
-    var found_special = false
-    var next_pos = text.len
-    var special_token = ""
+    var foundSpecial = false
+    var nextPos = text.len
+    var specialToken = ""
 
-    for token, token_id in tokenizer.special_tokens_encoder:
-      let found_pos = text.find(token, pos)
-      if found_pos != -1 and (next_pos == text.len or found_pos < next_pos):
-        next_pos = found_pos
-        special_token = token
-        found_special = true
+    for token, tokenId in tokenizer.specialTokensEncoder:
+      let foundPos = text.find(token, pos)
+      if foundPos != -1 and (nextPos == text.len or foundPos < nextPos):
+        nextPos = foundPos
+        specialToken = token
+        foundSpecial = true
 
-    if found_special and next_pos == pos:
-      result.add(tokenizer.special_tokens_encoder[special_token])
-      pos = pos + special_token.len
-    elif found_special:
-      if pos < next_pos:
-        let ordinary = text[pos ..< next_pos]
+    if foundSpecial and nextPos == pos:
+      result.add(tokenizer.specialTokensEncoder[specialToken])
+      pos = pos + specialToken.len
+    elif foundSpecial:
+      if pos < nextPos:
+        let ordinary = text[pos ..< nextPos]
         let encoded = tokenizer.encodeOrdinary(ordinary)
         for tok in encoded:
           result.add(tok)
-      pos = next_pos
+      pos = nextPos
     else:
       let remaining = text[pos ..< text.len]
       let encoded = tokenizer.encodeOrdinary(remaining)
@@ -720,55 +709,37 @@ proc encodeWithSpecial*(tokenizer: BPETokenizer, text: string): seq[int] =
         result.add(tok)
       break
 
-  result
-
 proc encode*(tokenizer: BPETokenizer, text: string): seq[int] =
   tokenizer.encodeWithSpecial(text)
 
-proc decodeToBytes*(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] =
-  var result: seq[byte] = @[]
+proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] =
   for id in tokenIds:
     if tokenizer.decoder.hasKey(id):
       let bytes = tokenizer.decoder[id]
       for b in bytes:
         result.add(b)
-    elif tokenizer.special_tokens_decoder.hasKey(id):
-      let bytes = tokenizer.special_tokens_decoder[id]
+    elif tokenizer.specialTokensDecoder.hasKey(id):
+      let bytes = tokenizer.specialTokensDecoder[id]
       for b in bytes:
         result.add(b)
     else:
-      raise new_exception(TokenizerError, "Invalid token: " & $id)
-  result
+      raise newException(TokenizerError, "Invalid token: " & $id)
 
 proc decodeToString*(tokenizer: BPETokenizer, tokenIds: seq[int]): string =
   let bytes = tokenizer.decodeToBytes(tokenIds)
-  result = new_string_of_cap(bytes.len)
+  result = newStringOfCap(bytes.len)
   for b in bytes:
     result.add(chr(int(b)))
 
-proc tokenCount*(tokenizer: BPETokenizer): int = tokenizer.encoder.len + tokenizer.special_tokens_encoder.len
-proc getVocabSize*(tokenizer: BPETokenizer): int = tokenizer.encoder.len
-
-proc getSpecialTokens*(tokenizer: BPETokenizer): seq[string] =
-  result = @[]
-  for k in tokenizer.special_tokens_encoder.keys:
-    result.add(k)
+proc tokenCount*(tokenizer: BPETokenizer): int = tokenizer.encoder.len + tokenizer.specialTokensEncoder.len
 
 proc isSpecialToken*(tokenizer: BPETokenizer, token: int): bool =
-  tokenizer.special_tokens_decoder.hasKey(token)
+  tokenizer.specialTokensDecoder.hasKey(token)
 
-proc decodeToken*(tokenizer: BPETokenizer, tokenId: int): string =
-  if tokenizer.decoder.hasKey(token_id):
-    let bytes = tokenizer.decoder[token_id]
-    result = $bytes
-  elif tokenizer.special_tokens_decoder.hasKey(token_id):
-    let bytes = tokenizer.special_tokens_decoder[token_id]
-    result = $bytes
+proc decodeToken*(tokenizer: BPETokenizer, tokenId: int): seq[byte] =
+  if tokenizer.decoder.hasKey(tokenId):
+    return tokenizer.decoder[tokenId]
+  elif tokenizer.specialTokensDecoder.hasKey(tokenId):
+    return tokenizer.specialTokensDecoder[tokenId]
   else:
-    raise new_exception(TokenizerError, "Invalid token: " & $token_id)
-
-proc tokenToString*(tokenizer: BPETokenizer, tokenId: int): string =
-  tokenizer.decodeToken(tokenId)
-
-proc specialTokens*(tokenizer: BPETokenizer): Table[string, int] =
-  tokenizer.special_tokens_encoder
+    raise newException(TokenizerError, "Invalid token: " & $tokenId)

@@ -84,8 +84,14 @@ def extract_special_tokens(hf_tokenizer_path: str) -> dict[str, int]:
     return special_tokens
 
 
-def convert_hf_to_tiktoken(hf_tokenizer_path: str, output_path: str) -> None:
-    """Convert HF tokenizer to tiktoken format and save."""
+def convert_hf_to_tiktoken(
+    hf_tokenizer_path: str, output_path: str | None = None
+) -> str:
+    """Convert HF tokenizer to tiktoken format.
+
+    If output_path is provided, saves to file and returns the path.
+    If output_path is None, returns the JSON string directly.
+    """
     mergeable_ranks = convert_vocab_to_mergeable_ranks(hf_tokenizer_path)
     pat_str = extract_pattern(hf_tokenizer_path)
     special_tokens = extract_special_tokens(hf_tokenizer_path)
@@ -96,7 +102,10 @@ def convert_hf_to_tiktoken(hf_tokenizer_path: str, output_path: str) -> None:
         "special_tokens": special_tokens,
     }
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, separators=(",", ": "))
-
-    print(f"✓ Converted tokenizer saved to: {output_path}")
+    if output_path is not None:
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, separators=(",", ": "))
+        print(f"[OK] Converted tokenizer saved to: {output_path}")
+        return output_path
+    else:
+        return json.dumps(data, ensure_ascii=False, indent=2, separators=(",", ": "))
