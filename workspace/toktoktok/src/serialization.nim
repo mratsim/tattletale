@@ -7,6 +7,7 @@
 
 import std/tables
 import std/options
+import std/strutils
 import pkg/jsony
 
 type
@@ -55,13 +56,21 @@ type
     special*: Option[bool]
 
   TiktokenFormat* = object
-    mergeableRanks*: OrderedTable[string, int]
+    mergeableRanks*: OrderedTable[seq[byte], int]
     patStr*: string
+    specialTokens*: OrderedTable[string, int]
+
+  TiktokenFile* = object
+    patStr*: string
+    mergeableRanks*: OrderedTable[string, int]
     specialTokens*: OrderedTable[string, int]
 
   TokenizerParseError* = object of ValueError
 
-const DefaultPat = "'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\\s0-9a-zA-Z]+|\\r?\\n|\\s+(?!\\S)|\\s+"
+const DefaultPat* = "'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\\s0-9a-zA-Z]+|\\r?\\n|\\s+(?!\\S)|\\s+"
+
+proc toBytes*(str: string): seq[byte] =
+  @(toOpenArrayByte(str, 0, str.len - 1))
 
 proc renameHook*(v: var HFTokenizer, key: var string) =
   if key == "added_tokens":
@@ -102,6 +111,8 @@ proc renameHook*(v: var HFDecoder, key: var string) =
 proc renameHook*(v: var HFSpecialToken, key: var string) =
   if key == "single_word":
     key = "singleWord"
+  elif key == "special_tokens":
+    key = "specialTokens"
 
 proc newHook*(v: var HFTokenizerModel) =
   v.`type` = ""
@@ -125,29 +136,25 @@ proc newHook*(v: var HFDecoder) =
 proc deserializeHfTokenizer*(jsonContent: string): HFTokenizer =
   jsonContent.fromJson(HFTokenizer)
 
+proc deserializeTiktoken*(jsonContent: string): TiktokenFile =
+  jsonContent.fromJson(TiktokenFile)
+
 proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
-  var mergeableRanks = initOrderedTable[string, int]()
+  var mergeableRanks = initOrderedTable[seq[byte], int]()
 
   if hf.model.vocab.len > 0:
     for key, rank in hf.model.vocab:
-      var bytesSeq: seq[int] = @[]
-      var valid = true
-      for c in key:
-        let codePoint = ord(c)
-        if codePoint < 128 or (codePoint >= 161 and codePoint <= 172) or (codePoint >= 174 and codePoint <= 255):
-          bytesSeq.add(codePoint)
-        elif codePoint >= 256:
-          bytesSeq.add(codePoint - 128)
-        else:
-          valid = false
-          break
-      if valid and bytesSeq.len > 0:
-        var bytesStr = "["
-        for i, b in bytesSeq:
-          if i > 0: bytesStr.add(", ")
-          bytesStr.add($b)
-        bytesStr.add("]")
-        mergeableRanks[bytesStr] = rank
+      let bytesSeq = toBytes(key)
+      if bytesSeq.len > 0:
+        mergeableRanks[bytesSeq] = rank
+
+  # Ensure individual bytes are always in the encoder (for UTF-8 fallback)
+  # These get very high ranks (low priority) so they're only used when no merge is available
+  let byteRankStart = 1000000  # High rank for byte tokens
+  for i in 0..<256:
+    let byteSeq = @[byte(i)]
+    if not mergeableRanks.hasKey(byteSeq):
+      mergeableRanks[byteSeq] = byteRankStart + i
 
   var specialTokens = initOrderedTable[string, int]()
   if hf.addedTokens.isSome:

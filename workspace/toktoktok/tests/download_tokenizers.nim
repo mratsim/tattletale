@@ -10,10 +10,28 @@ import chronos/apps/http/httpclient
 
 const
   TOKENIZERS_DIR = "tokenizers"
-  GPT2_URL = "https://huggingface.co/anthony/tokenizers-test/resolve/gpt-2/tokenizer.json?download=true"
-  GPT2_FILENAME = "gpt2-tokenizer.json"
-  LLAMA3_URL = "https://huggingface.co/hf-internal-testing/llama3-tokenizer/resolve/main/tokenizer.json"
-  LLAMA3_FILENAME = "llama3-tokenizer.json"
+
+  # HuggingFace tokenizers (HF JSON format)
+  GPT2_HF_URL = "https://huggingface.co/anthony/tokenizers-test/resolve/gpt-2/tokenizer.json?download=true"
+  GPT2_HF_FILENAME = "gpt2-tokenizer.json"
+  LLAMA3_HF_URL = "https://huggingface.co/hf-internal-testing/llama3-tokenizer/resolve/main/tokenizer.json"
+  LLAMA3_HF_FILENAME = "llama3-tokenizer.json"
+
+  # OpenAI tiktoken format (GPT-2 original BPE format)
+  GPT2_VOCAB_URL = "https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/vocab.bpe"
+  GPT2_VOCAB_FILENAME = "gpt2-vocab.bpe"
+  GPT2_ENCODER_URL = "https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/encoder.json"
+  GPT2_ENCODER_FILENAME = "gpt2-encoder.json"
+
+  # OpenAI tiktoken format (.tiktoken files)
+  R50K_BASE_URL = "https://openaipublic.blob.core.windows.net/encodings/r50k_base.tiktoken"
+  R50K_BASE_FILENAME = "r50k_base.tiktoken"
+  P50K_BASE_URL = "https://openaipublic.blob.core.windows.net/encodings/p50k_base.tiktoken"
+  P50K_BASE_FILENAME = "p50k_base.tiktoken"
+  CL100K_BASE_URL = "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
+  CL100K_BASE_FILENAME = "cl100k_base.tiktoken"
+  O200K_BASE_URL = "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken"
+  O200K_BASE_FILENAME = "o200k_base.tiktoken"
 
 proc getProjectDir(): string {.compileTime.} =
   currentSourcePath.rsplit(DirSep, 1)[0]
@@ -39,8 +57,21 @@ proc downloadAllTokenizers*() {.async.} =
   echo "Downloading tokenizer test fixtures"
   echo "======================================================================"
   let targetDir = getProjectDir() / TOKENIZERS_DIR
-  await downloadTokenizer(GPT2_URL, targetDir, GPT2_FILENAME)
-  await downloadTokenizer(LLAMA3_URL, targetDir, LLAMA3_FILENAME)
+
+  # HuggingFace tokenizers (HF JSON format)
+  await downloadTokenizer(GPT2_HF_URL, targetDir, GPT2_HF_FILENAME)
+  await downloadTokenizer(LLAMA3_HF_URL, targetDir, LLAMA3_HF_FILENAME)
+
+  # OpenAI tiktoken format (GPT-2 original BPE format)
+  await downloadTokenizer(GPT2_VOCAB_URL, targetDir, GPT2_VOCAB_FILENAME)
+  await downloadTokenizer(GPT2_ENCODER_URL, targetDir, GPT2_ENCODER_FILENAME)
+
+  # OpenAI tiktoken format (.tiktoken files)
+  await downloadTokenizer(R50K_BASE_URL, targetDir, R50K_BASE_FILENAME)
+  await downloadTokenizer(P50K_BASE_URL, targetDir, P50K_BASE_FILENAME)
+  await downloadTokenizer(CL100K_BASE_URL, targetDir, CL100K_BASE_FILENAME)
+  await downloadTokenizer(O200K_BASE_URL, targetDir, O200K_BASE_FILENAME)
+
   echo "======================================================================"
   echo "All tokenizers downloaded successfully"
   echo "======================================================================"
