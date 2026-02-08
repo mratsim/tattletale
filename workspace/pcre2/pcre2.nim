@@ -70,8 +70,6 @@
 #                 PCRE2 API                          #
 # ################################################## #
 
-import workspace/utils/c_abi
-
 # Overview of general API
 # ----------------------------------------------------
 # man pcre2api.3
@@ -88,6 +86,22 @@ import workspace/utils/c_abi
 # - Compiler-enforced proper flag usage
 # - str+len are also presented with openArray[char] overload to pass Nim strings
 # - csize_t may be wrapped with int (assuming 64-bit, and addresses using less than 48 bits, int is large enough)
+
+# Flag parameters
+# ------------------------------------------------------------
+
+type Flag*[E: enum] = distinct cint
+
+func flag*[E: enum](e: varargs[E]): Flag[E] {.inline.} =
+  ## Enum should only have power of 2 fields
+  # static:
+  #   for val in E:
+  #     assert (ord(val) and (ord(val) - 1)) == 0, "Enum values should all be power of 2, found " &
+  #                                                 $val & " with value " & $ord(val) & "."
+  var flags = 0
+  for val in e:
+    flags = flags or ord(val)
+  return Flag[E](flags)
 
 # Constants enumified
 # ----------------------------------------------------
@@ -350,17 +364,21 @@ type MiscError* {.size: sizeof(cint).} = enum
 # Note: for proper resource management, we should wrap the low-level procs/types
 # in high-level proc/types with destructors
 type
-  Code = object
-  GeneralContext = object
-  MatchData = object
+  Code* = object
+  GeneralContext* = object
+  MatchData* = object
 
-{.push importc: "pcre2_$1_8".}
+proc compile*(pattern: ptr char|cstring, patlen: int,
+              options: Flag[CompileOption],
+              errorptr: var CompileError,
+              erroroffset: var csize_t,
+              ccontext: pointer = nil): ptr Code {.importc: "pcre2_$1_8".}
 
 proc compile*(pattern: openArray[char],
               options: Flag[CompileOption],
               errorptr: var CompileError,
               erroroffset: var csize_t,
-              ccontext: pointer = nil): ptr Code {.wrapOpenArrayLenType: char.}
+              ccontext: pointer = nil): ptr Code {.inline.} =
   ## Doc:
   ##    man pcre2_compile.3
   ## or workspace/pcre2/vendor/pcre2/doc/pcre2_compile.3
@@ -385,6 +403,16 @@ proc compile*(pattern: openArray[char],
   ##
   ## Returns:        pointer to compiled data block, or NULL on error,
   ##                 with errorcode and erroroffset set
+  return compile(
+    if pattern.len == 0: nil else: pattern[0].addr,
+    pattern.len,
+    options,
+    errorptr,
+    erroroffset,
+    ccontext
+  )
+
+{.push importc: "pcre2_$1_8".}
 
 proc match*(code: ptr Code,
            subject: openArray[char],
@@ -458,7 +486,7 @@ proc match_data_create_from_pattern*(
 
 proc match_data_free*(data: ptr MatchData)
 
-proc get_ovector_pointer*(ovector: ptr MatchData): ptr csize_t
+proc get_ovector_pointer*(ovector: ptr MatchData): ptr UncheckedArray[int]
   ## This function returns a pointer to the vector of offsets that forms part of the given match data block.
   ## The number of pairs can be found by calling pcre2_get_ovector_count().
 
