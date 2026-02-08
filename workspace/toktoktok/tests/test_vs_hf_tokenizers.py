@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """
-Test Toktoktok against HuggingFace tokenizers.
+Test HF to tiktoken conversion on the fly against HuggingFace tokenizers.
 
-Compares tokenization output using the `tokenizers` library
-with local tokenizer JSON files.
+This test verifies that the conversion from HF format to tiktoken format
+works correctly by comparing against the HuggingFace tokenizers library.
 
 Usage:
-    python test_vs_hf_tokenizers.py --tokenizer gpt2 --quick
-    python test_vs_hf_tokenizers.py --tokenizer llama --quick
+    python test_vs_hf_tokenizers.py --tokenizer gpt2
+    python test_vs_hf_tokenizers.py --tokenizer llama
 """
 
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple
+import json
 import time
 import argparse
 
 from tokenizers import Tokenizer
-import pytoktoktok
+from hf_to_tiktoken import convert_hf_to_tiktoken
 
 TEST_DIR = Path(__file__).parent.resolve()
 
@@ -27,51 +28,39 @@ def load_hf_tokenizer(tokenizer_path: str):
     if not path.exists():
         raise FileNotFoundError(f"Tokenizer file not found: {tokenizer_path}")
     tokenizer = Tokenizer.from_file(str(path))
-    print(f"✓ HuggingFace tokenizer loaded ({path.name})")
+    print(f"[OK] HuggingFace tokenizer loaded ({path.name})")
     return tokenizer
 
 
-def load_toktoktok(tokenizer_path: str):
-    """Load toktoktok tokenizer."""
-    path = Path(tokenizer_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Tokenizer file not found: {tokenizer_path}")
-    tokenizer = pytoktoktok.load_tokenizer(str(path))
-    print(f"✓ Toktoktok loaded ({path.name})")
-    return tokenizer
+def get_tiktoken_format(hf_tokenizer_path: str):
+    """Get tiktoken format by converting HF to tiktoken format in memory."""
+    hf_path = Path(hf_tokenizer_path)
+    if not hf_path.exists():
+        raise FileNotFoundError(f"HF tokenizer file not found: {hf_tokenizer_path}")
+    tiktoken_json = convert_hf_to_tiktoken(hf_tokenizer_path, None)
+    print(f"[OK] HF converted to tiktoken format (in memory)")
+    return json.loads(tiktoken_json)
 
 
-def load_fixture_sample(fixture_path: Path, max_chars: int = 10000) -> str:
-    """Load a sample from fixture file."""
-    if not fixture_path.exists():
-        return ""
-    with open(fixture_path, "r", encoding="utf-8", errors="replace") as f:
-        return f.read(max_chars)
-
-
-def get_test_samples(tokenizer_type: str, quick: bool) -> List[Tuple[str, str]]:
+def get_test_samples() -> List[Tuple[str, str]]:
     """Get test samples from fixture files."""
     samples = []
     fixtures_dir = TEST_DIR / "fixtures"
 
-    sample_sizes = {"shakespeare": 10000, "sanguozhi": 5000, "verne": 5000}
-    if quick:
-        sample_sizes = {"shakespeare": 1000, "sanguozhi": 500, "verne": 1000}
-
     fixture_files = [
-        ("shakespeare", fixtures_dir / "pg100-shakespeare.txt"),
+        ("shakespeare", fixtures_dir / "pg100-shakespeare.txt", 10000),
         (
             "sanguozhi",
             fixtures_dir / "pg23950-三國志演義-Romance_of_the_Three_Kingdoms.txt",
+            5000,
         ),
-        ("verne", fixtures_dir / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt"),
+        ("verne", fixtures_dir / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt", 5000),
     ]
 
-    for name, path in fixture_files:
-        if path.exists():
-            sample = load_fixture_sample(path, sample_sizes.get(name, 5000))
-            if sample:
-                samples.append((name, sample))
+    for name, path, max_chars in fixture_files:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            sample = f.read(max_chars)
+            samples.append((name, sample))
 
     synthetic_samples = [
         ("hello_world", "Hello, world! This is a test."),
@@ -81,54 +70,95 @@ def get_test_samples(tokenizer_type: str, quick: bool) -> List[Tuple[str, str]]:
         ("repetitive", "the " * 50),
     ]
 
-    if quick:
-        synthetic_samples = synthetic_samples[:2]
-
     samples.extend(synthetic_samples)
     return samples
 
 
 def compare_encoding(
-    text: str, hf_tokenizer, tt_tokenizer
-) -> Tuple[Optional[List[int]], Optional[List[int]], float, float, bool]:
-    """Compare encoding between HF tokenizer and toktoktok."""
-    hf_tokens = None
-    hf_time = 0.0
-    tt_tokens = None
-    tt_time = 0.0
-    match = False
+    text: str, hf_tokenizer, tt_format
+) -> Tuple[List[int], float, bool]:
+    """Compare encoding between HF tokenizer and our tiktoken format."""
+    start = time.perf_counter()
+    output = hf_tokenizer.encode(text)
+    hf_tokens = output.ids
+    hf_time = time.perf_counter() - start
 
-    try:
-        start = time.perf_counter()
-        output = hf_tokenizer.encode(text)
-        hf_tokens = output.ids
-        hf_time = time.perf_counter() - start
-    except Exception:
-        pass
+    start = time.perf_counter()
+    tt_tokens = encode_with_format(text, tt_format)
+    tt_time = time.perf_counter() - start
 
-    if tt_tokenizer is not None:
-        try:
-            start = time.perf_counter()
-            tt_tokens = tt_tokenizer.encode(text)
-            tt_time = time.perf_counter() - start
-        except Exception:
-            pass
-
-    if hf_tokens is not None and tt_tokens is not None:
-        match = hf_tokens == tt_tokens
-
-    return hf_tokens, tt_tokens, hf_time, tt_time, match
+    match = hf_tokens == tt_tokens
+    return hf_tokens, hf_time, match
 
 
-def run_encoding_tests(
-    tokenizer_type: str, quick: bool, hf_tokenizer, tt_tokenizer
-) -> int:
+def encode_with_format(text: str, format_dict: dict) -> List[int]:
+    """Encode text using a tiktoken format dict (simplified implementation)."""
+    from hf_to_tiktoken import _bytes_to_unicode, _unicode_to_bytes
+
+    byte_encoder = _unicode_to_bytes()
+    mergeable_ranks = format_dict["mergeable_ranks"]
+
+    def get_pairs(word):
+        pairs = set()
+        for i in range(len(word) - 1):
+            pairs.add((word[i], word[i + 1]))
+        return pairs
+
+    def byte_pair_encode(word, ranks):
+        if len(word) == 1:
+            return []
+
+        pairs = get_pairs(word)
+        while pairs:
+            bigram = min(pairs, key=lambda p: ranks.get(str(list(p)), float("inf")))
+            if bigram not in ranks:
+                break
+
+            i = word.index(bigram[0])
+            if bigram[1] == word[i + 1]:
+                word = word[:i] + [bigram[1]] + word[i + 2 :]
+            else:
+                word = word[: i + 1] + word[i + 2 :]
+
+            if len(word) > 1:
+                pairs = get_pairs(word)
+
+        result = []
+        for token in word:
+            if str(token) in mergeable_ranks:
+                result.append(mergeable_ranks[str(token)])
+        return result
+
+    text_bytes = []
+    for char in text:
+        if char in byte_encoder:
+            text_bytes.append(byte_encoder[char])
+        else:
+            text_bytes.append(ord(char))
+
+    tokens = []
+    i = 0
+    while i < len(text_bytes):
+        if i + 1 < len(text_bytes):
+            pair = (text_bytes[i], text_bytes[i + 1])
+            pair_str = str(list(pair))
+            if pair_str in mergeable_ranks:
+                tokens.append(mergeable_ranks[pair_str])
+                i += 2
+                continue
+        tokens.append(mergeable_ranks.get(str([text_bytes[i]]), text_bytes[i]))
+        i += 1
+
+    return tokens
+
+
+def run_encoding_tests(hf_tokenizer, tt_format) -> int:
     """Run encoding comparison tests."""
     print("\n" + "=" * 70)
     print("ENCODING TESTS")
     print("=" * 70)
 
-    samples = get_test_samples(tokenizer_type, quick)
+    samples = get_test_samples()
     errors = 0
 
     for i, (name, text) in enumerate(samples):
@@ -137,24 +167,19 @@ def run_encoding_tests(
             f"\n[{i + 1}/{len(samples)}] {name}: {display_text}...", end=" ", flush=True
         )
 
-        hf_tokens, tt_tokens, _, _, match = compare_encoding(
-            text, hf_tokenizer, tt_tokenizer
-        )
+        hf_tokens, _, match = compare_encoding(text, hf_tokenizer, tt_format)
 
         if match:
-            print("✓ MATCH")
-        elif hf_tokens and tt_tokens and len(hf_tokens) == len(tt_tokens):
-            print("✗ TOKENS MISMATCH (same length)")
+            print("[OK] MATCH")
         else:
-            hf_len = len(hf_tokens) if hf_tokens else "err"
-            tt_len = len(tt_tokens) if tt_tokens else "err"
-            print(f"✗ LENGTH MISMATCH (HF:{hf_len} vs TT:{tt_len})")
+            hf_len = len(hf_tokens)
+            print(f"[FAIL] MISMATCH (HF:{hf_len})")
             errors += 1
 
     return errors
 
 
-def run_length_tests(quick: bool, hf_tokenizer, tt_tokenizer) -> int:
+def run_length_tests(hf_tokenizer, tt_format) -> int:
     """Test encoding at various text lengths."""
     print("\n" + "=" * 70)
     print("LENGTH-BASED TESTS")
@@ -162,9 +187,6 @@ def run_length_tests(quick: bool, hf_tokenizer, tt_tokenizer) -> int:
 
     base_text = "The quick brown fox jumps over the lazy dog. "
     lengths = [10, 50, 100, 500, 1000]
-
-    if quick:
-        lengths = [10, 50, 100]
 
     errors = 0
 
@@ -174,19 +196,13 @@ def run_length_tests(quick: bool, hf_tokenizer, tt_tokenizer) -> int:
 
         print(f"\nLength {length:4d}: ", end="", flush=True)
 
-        hf_tokens, tt_tokens, _, _, match = compare_encoding(
-            text, hf_tokenizer, tt_tokenizer
-        )
+        hf_tokens, _, match = compare_encoding(text, hf_tokenizer, tt_format)
 
         if match:
-            print("✓ MATCH")
-        elif hf_tokens and tt_tokens and len(hf_tokens) == len(tt_tokens):
-            print(f"✗ tokens differ (HF:{len(hf_tokens)} vs TT:{len(tt_tokens)})")
-            errors += 1
+            print("[OK] MATCH")
         else:
-            hf_len = len(hf_tokens) if hf_tokens else "err"
-            tt_len = len(tt_tokens) if tt_tokens else "err"
-            print(f"✗ length diff (HF:{hf_len} vs TT:{tt_len})")
+            hf_len = len(hf_tokens)
+            print(f"[FAIL] MISMATCH (HF:{hf_len})")
             errors += 1
 
     return errors
@@ -195,7 +211,7 @@ def run_length_tests(quick: bool, hf_tokenizer, tt_tokenizer) -> int:
 def main():
     """Main test runner."""
     parser = argparse.ArgumentParser(
-        description="Toktoktok vs HuggingFace Correctness Test"
+        description="HF to tiktoken Conversion Test vs HuggingFace"
     )
     parser.add_argument(
         "--tokenizer",
@@ -203,47 +219,27 @@ def main():
         default="gpt2",
         help="Tokenizer to use (default: gpt2)",
     )
-    parser.add_argument(
-        "--quick", action="store_true", help="Run quick test with fewer samples"
-    )
 
     args = parser.parse_args()
 
     tokenizer_type = args.tokenizer.lower()
     tokenizer_path = TEST_DIR / "tokenizers" / f"{tokenizer_type}-tokenizer.json"
 
-    print("Toktoktok vs HuggingFace Correctness Test")
+    print("HF to tiktoken Conversion Test vs HuggingFace")
     print(f"Tokenizer: {tokenizer_type.upper()}")
-    print(f"Quick mode: {args.quick}")
     print("=" * 70)
 
+    hf_tokenizer = load_hf_tokenizer(str(tokenizer_path))
+    tt_format = get_tiktoken_format(str(tokenizer_path))
+
     errors = 0
+    errors += run_encoding_tests(hf_tokenizer, tt_format)
+    errors += run_length_tests(hf_tokenizer, tt_format)
 
-    try:
-        hf_tokenizer = load_hf_tokenizer(str(tokenizer_path))
-
-        tt_tokenizer = None
-        if tokenizer_path.exists():
-            tt_tokenizer = load_toktoktok(str(tokenizer_path))
-        else:
-            print(f"⚠ Tokenizer file not found: {tokenizer_path}")
-
-        errors += run_encoding_tests(
-            tokenizer_type, args.quick, hf_tokenizer, tt_tokenizer
-        )
-        errors += run_length_tests(args.quick, hf_tokenizer, tt_tokenizer)
-
-        if errors == 0:
-            print("\n✓ All tests passed!")
-        else:
-            print(f"\n✗ {errors} test(s) failed")
-
-    except Exception as e:
-        print(f"\n✗ Test suite failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return 1
+    if errors == 0:
+        print("\n[OK] All tests passed!")
+    else:
+        print(f"\n[FAIL] {errors} test(s) failed")
 
     return 1 if errors > 0 else 0
 
