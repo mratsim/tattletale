@@ -1,2 +1,2 @@
-import workspace/toktoktok/src/[toktoktok, serialization, tokenizers_regexps]
-export toktoktok, serialization, tokenizers_regexps
+import workspace/toktoktok/src/[bpe_codec, serialization, tokenizers_regexps]
+export bpe_codec, serialization, tokenizers_regexps
