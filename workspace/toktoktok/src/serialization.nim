@@ -9,6 +9,7 @@ import std/base64
 import std/strutils
 import std/options
 import std/tables
+import std/unicode
 import pkg/jsony
 import ./tokenizers_regexps
 
@@ -79,6 +80,36 @@ type
 
 template toBytes*(str: string): seq[byte] =
   @(toOpenArrayByte(str, 0, str.len - 1))
+
+proc initByteDecoder*(): Table[uint32, int] =
+  result = initTable[uint32, int]()
+  var bs = newSeq[int]()
+  var cs = newSeq[int]()
+
+  for b in ord('!')..ord('~'):
+    bs.add(b)
+    cs.add(b)
+  for b in 0x00A1..0x00AC:
+    bs.add(b)
+    cs.add(b)
+  for b in 0x00AE..0x00FF:
+    bs.add(b)
+    cs.add(b)
+
+  var n = 0
+  for b in 0..<256:
+    var found = false
+    for x in bs:
+      if x == b:
+        found = true
+        break
+    if not found:
+      bs.add(b)
+      cs.add(256 + n)
+      n += 1
+
+  for i in 0..<cs.len:
+    result[uint32(cs[i])] = bs[i]
 
 proc renameHook*(v: var HFTokenizer, key: var string) =
   if key == "added_tokens":
@@ -180,8 +211,15 @@ proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
   var mergeableRanks = initOrderedTable[seq[byte], int]()
 
   if hf.model.vocab.len > 0:
+    let byteDecoder = initByteDecoder()
     for key, rank in hf.model.vocab:
-      let bytesSeq = toBytes(key)
+      var bytesSeq: seq[byte] = @[]
+      let keyRunes = toRunes(key)
+      for c in keyRunes:
+        let runeVal = uint32(c)
+        let byteVal = byteDecoder.getOrDefault(runeVal, -1)
+        if byteVal >= 0:
+          bytesSeq.add(byte(byteVal))
       if bytesSeq.len > 0:
         mergeableRanks[bytesSeq] = rank
 
