@@ -7,16 +7,8 @@ import pytoktoktok
 from pathlib import Path
 from typing import List, Tuple
 import tiktoken
-from enum import IntEnum
 
 TEST_DIR = Path(__file__).parent.resolve()
-
-
-class RegexPattern(IntEnum):
-    r50k = 1
-    p50k = 2
-    cl100k = 3
-    o200k = 4
 
 
 TIKTOKEN_FILES = {
@@ -24,12 +16,14 @@ TIKTOKEN_FILES = {
     "p50k_base": "p50k_base.tiktoken",
     "cl100k_base": "cl100k_base.tiktoken",
     "o200k_base": "o200k_base.tiktoken",
+    "kimik2.5": "kimik2.5.tiktoken",
 }
 REGEX_MAP = {
-    "r50k_base": RegexPattern.r50k,
-    "p50k_base": RegexPattern.p50k,
-    "cl100k_base": RegexPattern.cl100k,
-    "o200k_base": RegexPattern.o200k,
+    "r50k_base": "r50k",
+    "p50k_base": "p50k",
+    "cl100k_base": "cl100k",
+    "o200k_base": "o200k",
+    "kimik2.5": "kimik2.5",
 }
 
 
@@ -107,13 +101,14 @@ def run_tiktoken_format_tests(
 def main():
     """Main test runner."""
     import argparse
+    import base64
 
     parser = argparse.ArgumentParser(
         description="Nim BPETokenizer vs tiktoken (file format) Test"
     )
     parser.add_argument(
         "--tokenizer",
-        choices=["r50k_base", "p50k_base", "cl100k_base", "o200k_base"],
+        choices=["r50k_base", "p50k_base", "cl100k_base", "o200k_base", "kimik2.5"],
         default="r50k_base",
         help="Tokenizer to use (default: r50k_base)",
     )
@@ -128,8 +123,29 @@ def main():
 
     tiktoken_file = TIKTOKEN_FILES[tokenizer_type]
     tiktoken_path = TEST_DIR / "tokenizers" / tiktoken_file
-    tik_encoding = tiktoken.get_encoding(tokenizer_type)
-    print(f"[OK] tiktoken loaded ({tokenizer_type})")
+
+    if tokenizer_type == "kimik2.5":
+        # Kimi K2.5 uses custom tiktoken file with custom pattern
+        from hf_to_tiktoken import KIMI_K25_PATTERN
+
+        mergeable_ranks = {}
+        with open(tiktoken_path, "r") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) == 2:
+                    token_bytes = base64.b64decode(parts[0])
+                    rank = int(parts[1])
+                    mergeable_ranks[token_bytes] = rank
+        tik_encoding = tiktoken.Encoding(
+            name="kimik2.5",
+            pat_str=KIMI_K25_PATTERN,
+            mergeable_ranks=mergeable_ranks,
+            special_tokens={},
+        )
+        print(f"[OK] tiktoken loaded ({tokenizer_type})")
+    else:
+        tik_encoding = tiktoken.get_encoding(tokenizer_type)
+        print(f"[OK] tiktoken loaded ({tokenizer_type})")
     errors += run_tiktoken_format_tests(
         tokenizer_type, tiktoken_path, tik_encoding, tokenizer_type
     )

@@ -26,6 +26,10 @@ FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
 HF_FILES = {
     "gpt2": "gpt2-tokenizer.json",
     "llama3": "llama3-tokenizer.json",
+    "minimax-m2.1": "minimax-m2.1-tokenizer.json",
+    "glm-4.7": "glm-4.7-tokenizer.json",
+    "exaone": "exaone-tokenizer.json",
+    "step-3.5-flash": "step-3.5-flash-tokenizer.json",
 }
 
 
@@ -178,39 +182,6 @@ def generate_hf_fixtures():
             json.dump(fixtures, f, ensure_ascii=False, indent=2)
         print(f"  [OK] Generated {len(fixtures)} fixtures to {output_path}")
 
-
-def check_hf_nim_consistency():
-    """Sanity check: HF tokenizers library and our Nim implementation should produce same token IDs."""
-    hf_path = FIXTURES_DIR / "hf_gpt2.json"
-    nim_path = FIXTURES_DIR / "tiktoken_from_hf_gpt2.json"
-
-    if not hf_path.exists() or not nim_path.exists():
-        print("[SKIP] HF-Nim consistency check - fixture files not found")
-        return
-
-    with open(hf_path, "r", encoding="utf-8") as f:
-        hf_fixtures = json.load(f)
-    with open(nim_path, "r", encoding="utf-8") as f:
-        nim_fixtures = json.load(f)
-
-    hf_by_name = {f["name"]: f["token_ids"] for f in hf_fixtures}
-    nim_by_name = {f["name"]: f["token_ids"] for f in nim_fixtures}
-
-    mismatches = []
-    for name in hf_by_name:
-        if name in nim_by_name:
-            if hf_by_name[name] != nim_by_name[name]:
-                mismatches.append(name)
-
-    if mismatches:
-        raise AssertionError(
-            f"HF tokenizers library and Nim implementation produce different token IDs for: {mismatches}"
-        )
-    print(
-        "[OK] HF tokenizers library and Nim implementation produce identical token IDs"
-    )
-
-
 def main():
     """Generate all fixtures."""
     print("=" * 70)
@@ -218,7 +189,6 @@ def main():
     print("=" * 70)
 
     generate_hf_fixtures()
-    check_hf_nim_consistency()
 
     print("=" * 70)
     print("Fixture generation complete")

@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 """
-Test HF to tiktoken conversion on the fly against HuggingFace tokenizers.
+Test HF to tiktoken conversion against HuggingFace tokenizers library.
 
-This test verifies that the conversion from HF format to tiktoken format
-works correctly by comparing against the HuggingFace tokenizers library.
+This test verifies that our HF tokenizer parsing and conversion produces
+identical token IDs to the HuggingFace tokenizers library.
 
 Usage:
     python test_vs_hf_tokenizers.py --tokenizer gpt2
-    python test_vs_hf_tokenizers.py --tokenizer llama
+    python test_vs_hf_tokenizers.py --tokenizer exaone
 """
 
 from pathlib import Path
 from typing import List, Tuple
-import json
-import time
 import argparse
 
 from tokenizers import Tokenizer
-from hf_to_tiktoken import convert_hf_to_tiktoken
 
 TEST_DIR = Path(__file__).parent.resolve()
 
@@ -30,16 +27,6 @@ def load_hf_tokenizer(tokenizer_path: str):
     tokenizer = Tokenizer.from_file(str(path))
     print(f"[OK] HuggingFace tokenizer loaded ({path.name})")
     return tokenizer
-
-
-def get_tiktoken_format(hf_tokenizer_path: str):
-    """Get tiktoken format by converting HF to tiktoken format in memory."""
-    hf_path = Path(hf_tokenizer_path)
-    if not hf_path.exists():
-        raise FileNotFoundError(f"HF tokenizer file not found: {hf_tokenizer_path}")
-    tiktoken_json = convert_hf_to_tiktoken(hf_tokenizer_path, None)
-    print(f"[OK] HF converted to tiktoken format (in memory)")
-    return json.loads(tiktoken_json)
 
 
 def get_test_samples() -> List[Tuple[str, str]]:
@@ -74,89 +61,17 @@ def get_test_samples() -> List[Tuple[str, str]]:
     return samples
 
 
-def compare_encoding(
-    text: str, hf_tokenizer, tt_format
-) -> Tuple[List[int], float, bool]:
-    """Compare encoding between HF tokenizer and our tiktoken format."""
-    start = time.perf_counter()
-    output = hf_tokenizer.encode(text)
-    hf_tokens = output.ids
-    hf_time = time.perf_counter() - start
-
-    start = time.perf_counter()
-    tt_tokens = encode_with_format(text, tt_format)
-    tt_time = time.perf_counter() - start
-
-    match = hf_tokens == tt_tokens
-    return hf_tokens, hf_time, match
-
-
-def encode_with_format(text: str, format_dict: dict) -> List[int]:
-    """Encode text using a tiktoken format dict (simplified implementation)."""
-    from hf_to_tiktoken import _bytes_to_unicode, _unicode_to_bytes
-
-    byte_encoder = _unicode_to_bytes()
-    mergeable_ranks = format_dict["mergeable_ranks"]
-
-    def get_pairs(word):
-        pairs = set()
-        for i in range(len(word) - 1):
-            pairs.add((word[i], word[i + 1]))
-        return pairs
-
-    def byte_pair_encode(word, ranks):
-        if len(word) == 1:
-            return []
-
-        pairs = get_pairs(word)
-        while pairs:
-            bigram = min(pairs, key=lambda p: ranks.get(str(list(p)), float("inf")))
-            if bigram not in ranks:
-                break
-
-            i = word.index(bigram[0])
-            if bigram[1] == word[i + 1]:
-                word = word[:i] + [bigram[1]] + word[i + 2 :]
-            else:
-                word = word[: i + 1] + word[i + 2 :]
-
-            if len(word) > 1:
-                pairs = get_pairs(word)
-
-        result = []
-        for token in word:
-            if str(token) in mergeable_ranks:
-                result.append(mergeable_ranks[str(token)])
-        return result
-
-    text_bytes = []
-    for char in text:
-        if char in byte_encoder:
-            text_bytes.append(byte_encoder[char])
-        else:
-            text_bytes.append(ord(char))
-
-    tokens = []
-    i = 0
-    while i < len(text_bytes):
-        if i + 1 < len(text_bytes):
-            pair = (text_bytes[i], text_bytes[i + 1])
-            pair_str = str(list(pair))
-            if pair_str in mergeable_ranks:
-                tokens.append(mergeable_ranks[pair_str])
-                i += 2
-                continue
-        tokens.append(mergeable_ranks.get(str([text_bytes[i]]), text_bytes[i]))
-        i += 1
-
-    return tokens
-
-
-def run_encoding_tests(hf_tokenizer, tt_format) -> int:
-    """Run encoding comparison tests."""
+def run_nim_encoding_tests(hf_tokenizer_path: str) -> int:
+    """Run encoding tests comparing Nim BPETokenizer against HuggingFace tokenizer."""
     print("\n" + "=" * 70)
-    print("ENCODING TESTS")
+    print("ENCODING TESTS (HuggingFace vs Nim BPETokenizer)")
     print("=" * 70)
+
+    import pytoktoktok
+
+    hf_tokenizer = load_hf_tokenizer(hf_tokenizer_path)
+    nim_tokenizer = pytoktoktok.load_tokenizer_hf(hf_tokenizer_path)
+    print(f"[OK] Nim BPETokenizer loaded ({nim_tokenizer})")
 
     samples = get_test_samples()
     errors = 0
@@ -167,42 +82,18 @@ def run_encoding_tests(hf_tokenizer, tt_format) -> int:
             f"\n[{i + 1}/{len(samples)}] {name}: {display_text}...", end=" ", flush=True
         )
 
-        hf_tokens, _, match = compare_encoding(text, hf_tokenizer, tt_format)
+        hf_output = hf_tokenizer.encode(text)
+        hf_tokens = hf_output.ids
+        nim_tokens = nim_tokenizer.encode_ordinary(text)
+
+        hf_len = len(hf_tokens)
+        nim_len = len(nim_tokens)
+        match = hf_tokens == nim_tokens
 
         if match:
-            print("[OK] MATCH")
+            print(f"[OK] MATCH (HF:{hf_len}, Nim:{nim_len})")
         else:
-            hf_len = len(hf_tokens)
-            print(f"[FAIL] MISMATCH (HF:{hf_len})")
-            errors += 1
-
-    return errors
-
-
-def run_length_tests(hf_tokenizer, tt_format) -> int:
-    """Test encoding at various text lengths."""
-    print("\n" + "=" * 70)
-    print("LENGTH-BASED TESTS")
-    print("=" * 70)
-
-    base_text = "The quick brown fox jumps over the lazy dog. "
-    lengths = [10, 50, 100, 500, 1000]
-
-    errors = 0
-
-    for length in lengths:
-        text = base_text * (length // len(base_text) + 1)
-        text = text[:length]
-
-        print(f"\nLength {length:4d}: ", end="", flush=True)
-
-        hf_tokens, _, match = compare_encoding(text, hf_tokenizer, tt_format)
-
-        if match:
-            print("[OK] MATCH")
-        else:
-            hf_len = len(hf_tokens)
-            print(f"[FAIL] MISMATCH (HF:{hf_len})")
+            print(f"[FAIL] MISMATCH (HF:{hf_len}, Nim:{nim_len})")
             errors += 1
 
     return errors
@@ -211,11 +102,18 @@ def run_length_tests(hf_tokenizer, tt_format) -> int:
 def main():
     """Main test runner."""
     parser = argparse.ArgumentParser(
-        description="HF to tiktoken Conversion Test vs HuggingFace"
+        description="HF Tokenizer Test vs Nim BPETokenizer"
     )
     parser.add_argument(
         "--tokenizer",
-        choices=["gpt2", "llama"],
+        choices=[
+            "gpt2",
+            "llama3",
+            "minimax-m2.1",
+            "glm-4.7",
+            "exaone",
+            "step-3.5-flash",
+        ],
         default="gpt2",
         help="Tokenizer to use (default: gpt2)",
     )
@@ -223,18 +121,15 @@ def main():
     args = parser.parse_args()
 
     tokenizer_type = args.tokenizer.lower()
-    tokenizer_path = TEST_DIR / "tokenizers" / f"{tokenizer_type}-tokenizer.json"
+    tokenizer_filename = f"{tokenizer_type}-tokenizer.json"
+    tokenizer_path = TEST_DIR / "tokenizers" / tokenizer_filename
 
-    print("HF to tiktoken Conversion Test vs HuggingFace")
+    print("HF Tokenizer Test vs Nim BPETokenizer")
     print(f"Tokenizer: {tokenizer_type.upper()}")
     print("=" * 70)
 
-    hf_tokenizer = load_hf_tokenizer(str(tokenizer_path))
-    tt_format = get_tiktoken_format(str(tokenizer_path))
-
     errors = 0
-    errors += run_encoding_tests(hf_tokenizer, tt_format)
-    errors += run_length_tests(hf_tokenizer, tt_format)
+    errors += run_nim_encoding_tests(str(tokenizer_path))
 
     if errors == 0:
         print("\n[OK] All tests passed!")

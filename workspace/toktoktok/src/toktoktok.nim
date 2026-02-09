@@ -308,10 +308,20 @@ proc loadFromTiktoken(ttk: TiktokenFormat): BPETokenizer =
   tokenizer.pattern = compilePcre2(ttk.pattern.regexp)
   tokenizer.patternMatcher = createMatcher(tokenizer.pattern)
 
-  # Compile special tokens pattern
+   # Compile special tokens pattern
   if tokenizer.specialTokensEncoder.len > 0:
     let specialTokens = toSeq(tokenizer.specialTokensEncoder.keys)
-    let specialPatternStr = specialTokens.join("|")
+    var escapedTokens: seq[string] = @[]
+    for token in specialTokens:
+      var escaped = ""
+      for c in token:
+        if c in ['\\', '[', ']', '(', ')', '{', '}', '^', '$', '|', '*', '+', '?', '.', '#', '~']:
+          escaped.add('\\')
+          escaped.add(c)
+        else:
+          escaped.add(c)
+      escapedTokens.add(escaped)
+    let specialPatternStr = escapedTokens.join("|")
     tokenizer.specialPattern = compilePcre2(specialPatternStr)
     tokenizer.specialMatcher = createMatcher(tokenizer.specialPattern)
   else:
