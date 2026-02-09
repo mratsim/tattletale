@@ -131,43 +131,33 @@ proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, i
 
   for i in 0..<piece.len - 1:
     let pair = @[piece[i], piece[i+1]]
-    var rank = MaxInt
-    if ranks.hasKey(pair):
-      rank = ranks[pair]
-
+    let rank = ranks.getOrDefault(pair, MaxInt)
     if rank < minRank:
       minRank = rank
       minRankIdx = i
-
     parts.add((i, rank))
 
   parts.add((piece.len - 1, MaxInt))
   parts.add((piece.len, MaxInt))
 
-  proc getRank(parts: seq[(int, int)], i: int, piece: seq[byte], ranks: Table[seq[byte], int]): int =
+  proc getRank(parts: seq[(int, int)], i: int): int {.closure.} =
+    ## Get rank for pair starting at parts[i], spanning to parts[i+3] boundary.
+    ##
     if i + 3 < parts.len:
       let startIdx = parts[i][0]
       let endIdx = parts[i+3][0]
-      var pair: seq[byte] = @[]
-      for j in startIdx..<endIdx:
-        pair.add(piece[j])
-      if ranks.hasKey(pair):
-        return ranks[pair]
+      let pair = piece[startIdx..<endIdx]
+      return ranks.getOrDefault(pair, MaxInt)
     return MaxInt
-
-  let sentinelPos = parts[^1][0]
 
   while minRank != MaxInt:
     let i = minRankIdx
 
     if i > 0:
-      parts[i-1] = (parts[i-1][0], getRank(parts, i-1, piece, ranks))
+      parts[i-1] = (parts[i-1][0], getRank(parts, i-1))
 
-    parts[i] = (parts[i][0], getRank(parts, i, piece, ranks))
+    parts[i] = (parts[i][0], getRank(parts, i))
     parts.delete(i + 1)
-
-    if parts[^1][0] != sentinelPos:
-      parts[^1] = (sentinelPos, MaxInt)
 
     minRank = MaxInt
     minRankIdx = 0
@@ -191,17 +181,13 @@ proc bytePairEncode*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
   for i in 0..<merged.len - 1:
     let startIdx = merged[i][0]
     let endIdx = merged[i+1][0]
-    var pair: seq[byte] = @[]
-    for j in startIdx..<endIdx:
-      pair.add(piece[j])
+    let pair = piece[startIdx..<endIdx]
     if ranks.hasKey(pair):
       bpeResult.add(ranks[pair])
     elif pair.len == 1:
       let byteSeq = @[pair[0]]
       if ranks.hasKey(byteSeq):
         bpeResult.add(ranks[byteSeq])
-      else:
-        return @[]
 
   bpeResult
 
@@ -364,7 +350,13 @@ proc loadTiktokenizer*(path: string): BPETokenizer =
   if content.len == 0:
     raise newException(TokenizerError, "Tiktoken file is empty: " & path)
 
-  let format = deserializeTiktokenizer(content)
+  let patStr = if path.contains("r50k_base"): R50kBasePat
+               elif path.contains("p50k_base"): P50kBasePat
+               elif path.contains("cl100k_base"): Cl100kBasePat
+               elif path.contains("o200k_base"): O200kBasePat
+               else: DefaultPat
+
+  let format = deserializeTiktokenizer(content, patStr)
   loadFromTiktoken(format)
 
 proc tokenCount*(tokenizer: BPETokenizer): int =

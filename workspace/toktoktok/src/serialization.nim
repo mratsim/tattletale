@@ -6,55 +6,73 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/tables
-import std/options
 import std/strutils
 import std/base64
 import pkg/jsony
 
 type
   HFTokenizer* = object
-    version*: Option[string]
-    truncation*: Option[string]
-    padding*: Option[string]
-    addedTokens*: Option[seq[HFSpecialToken]]
-    normalizer*: Option[string]
-    preTokenizer*: Option[HFPreTokenizer]
-    postProcessor*: Option[HFPostProcessor]
-    decoder*: Option[HFDecoder]
+    version*: string
+    truncation*: string
+    padding*: string
+    addedTokens*: seq[HFSpecialToken]
+    normalizer*: string
+    preTokenizer*: HFPreTokenizer
+    postProcessor*: HFPostProcessor
+    decoder*: HFDecoder
     model*: HFTokenizerModel
 
   HFTokenizerModel* = object
     vocab*: OrderedTable[string, int]
-    dropout*: Option[string]
-    unkToken*: Option[string]
-    continuingSubwordPrefix*: Option[string]
-    endOfWordSuffix*: Option[string]
-    fuseUnk*: Option[bool]
+    dropout*: string
+    unkToken*: string
+    continuingSubwordPrefix*: string
+    endOfWordSuffix*: string
+    fuseUnk*: bool
     `type`*: string
+    pattern*: string
 
   HFPreTokenizer* = object
-    addPrefixSpace*: Option[bool]
-    trimOffsets*: Option[bool]
+    addPrefixSpace*: bool
+    trimOffsets*: bool
     `type`*: string
+    pretokenizers*: seq[HFPretokenizerStep]
+
+  HFPretokenizerStep* = object
+    `type`*: string
+    pattern*: HFPretokenizerRegex
+    behavior*: string
+    invert*: bool
+    addPrefixSpace*: bool
+    trimOffsets*: bool
+    useRegex*: bool
+
+  HFPretokenizerRegex* = object
+    regex*: string
+
+  HFSplitPreTokenizer* = object
+    regex*: string
+    behavior*: string
+    invert*: bool
 
   HFPostProcessor* = object
-    addPrefixSpace*: Option[bool]
-    trimOffsets*: Option[bool]
+    addPrefixSpace*: bool
+    trimOffsets*: bool
     `type`*: string
 
   HFDecoder* = object
-    addPrefixSpace*: Option[bool]
-    trimOffsets*: Option[bool]
+    addPrefixSpace*: bool
+    trimOffsets*: bool
     `type`*: string
 
   HFSpecialToken* = object
     content*: string
     id*: int
-    lstrip*: Option[bool]
-    normalized*: Option[bool]
-    rstrip*: Option[bool]
-    singleWord*: Option[bool]
-    special*: Option[bool]
+    lstrip*: bool
+    normalized*: bool
+    rstrip*: bool
+    singleWord*: bool
+    special*: bool
 
   TiktokenFormat* = object
     mergeableRanks*: OrderedTable[seq[byte], int]
@@ -65,6 +83,14 @@ type
   TokenizerParseError* = object of ValueError
 
 const DefaultPat* = r"'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\s0-9a-zA-Z]+|\r?\n|\s+(?!\S)|\s+"
+
+const Gpt2Pat* = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s"""
+const R50kBasePat* = Gpt2Pat
+const P50kBasePat* = Gpt2Pat
+
+const Cl100kBasePat* = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s"""
+
+const O200kBasePat* = "'(?i:[sdmt]|ll|ve|re)|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
 
 template toBytes*(str: string): seq[byte] =
   @(toOpenArrayByte(str, 0, str.len - 1))
@@ -111,29 +137,14 @@ proc renameHook*(v: var HFSpecialToken, key: var string) =
   elif key == "special_tokens":
     key = "specialTokens"
 
-proc newHook*(v: var HFTokenizerModel) =
-  v.`type` = ""
-
-proc newHook*(v: var HFSpecialToken) =
-  v.special = some(false)
-  v.singleWord = some(false)
-  v.lstrip = some(false)
-  v.rstrip = some(false)
-  v.normalized = some(true)
-
-proc newHook*(v: var HFPreTokenizer) =
-  discard
-
-proc newHook*(v: var HFPostProcessor) =
-  discard
-
-proc newHook*(v: var HFDecoder) =
-  discard
+proc renameHook*(v: var HFPretokenizerRegex, key: var string) =
+  if key == "Regex":
+    key = "regex"
 
 proc deserializeHfTokenizer*(jsonContent: string): HFTokenizer =
   jsonContent.fromJson(HFTokenizer)
 
-proc deserializeTiktokenizer*(content: string): TiktokenFormat =
+proc deserializeTiktokenizer*(content: string, patStr: string = DefaultPat): TiktokenFormat =
   let lines = content.splitLines()
   var mergeableRanks = initOrderedTable[seq[byte], int]()
 
@@ -156,7 +167,7 @@ proc deserializeTiktokenizer*(content: string): TiktokenFormat =
 
   TiktokenFormat(
     mergeableRanks: mergeableRanks,
-    patStr: DefaultPat,
+    patStr: patStr,
     specialTokens: initOrderedTable[string, int]()
   )
 
@@ -169,8 +180,6 @@ proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
       if bytesSeq.len > 0:
         mergeableRanks[bytesSeq] = rank
 
-  # Ensure individual bytes are always in the encoder (for UTF-8 fallback)
-  # These get very high ranks (low priority) so they're only used when no merge is available
   let byteRankStart = 1000000  # High rank for byte tokens
   for i in 0..<256:
     let byteSeq = @[byte(i)]
@@ -178,12 +187,20 @@ proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
       mergeableRanks[byteSeq] = byteRankStart + i
 
   var specialTokens = initOrderedTable[string, int]()
-  if hf.addedTokens.isSome:
-    for token in hf.addedTokens.get:
-      specialTokens[token.content] = token.id
+  for token in hf.addedTokens:
+    specialTokens[token.content] = token.id
+
+  var patStr = DefaultPat
+  if hf.model.pattern != "":
+    patStr = hf.model.pattern
+  elif hf.preTokenizer.`type` == "Sequence":
+    for pretok in hf.preTokenizer.pretokenizers:
+      if pretok.`type` == "Split" and pretok.pattern.regex != "":
+        patStr = pretok.pattern.regex
+        break
 
   TiktokenFormat(
     mergeableRanks: mergeableRanks,
-    patStr: DefaultPat,
+    patStr: patStr,
     specialTokens: specialTokens
   )
