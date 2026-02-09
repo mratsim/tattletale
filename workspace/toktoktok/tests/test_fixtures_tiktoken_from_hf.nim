@@ -24,7 +24,7 @@ proc runHfTokenizerFixturesTests*() =
     for pair in HfFixtures:
       let fixtureName = pair[0]
       let hfFile = pair[1]
-      let fixturePath = FIXTURES_DIR / "hf_" & fixtureName & ".json"
+      let fixturePath = FIXTURES_DIR / "tiktoken_from_hf_" & fixtureName & ".json"
       let hfPath = TOKENIZERS_DIR / hfFile
       let testName = "HF tokenizer fixture (" & fixtureName & ")"
 
