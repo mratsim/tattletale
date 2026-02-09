@@ -11,7 +11,6 @@ import std/strutils
 import std/sequtils
 import std/strformat
 import std/math
-import std/base64
 import workspace/pcre2/pcre2
 import ./serialization
 
@@ -45,6 +44,23 @@ type
 
   TokenizerError* = object of ValueError
 
+proc `=destroy`(code: Pcre2Code) =
+  if code.code != nil:
+    code_free(code.code)
+
+proc `=destroy`(matcher: Pcre2Matcher) =
+  if matcher.matchData != nil:
+    match_data_free(matcher.matchData)
+
+proc init*(_: type BPETokenizer): BPETokenizer =
+  default(BPETokenizer)
+
+################################################################################
+#                                                                              #
+#                          Pattern Matching                                    #
+#                                                                              #
+################################################################################
+
 proc compilePcre2(pattern: string, utf8: bool = true): Pcre2Code =
   var errorCode: CompileError
   var errorOffset: csize_t
@@ -66,18 +82,7 @@ proc createMatcher(code: Pcre2Code): Pcre2Matcher =
   result.ovector = get_ovector_pointer(result.matchData)
   result.ovectorCount = get_ovector_count(result.matchData)
 
-proc free(matcher: var Pcre2Matcher) =
-  if matcher.matchData != nil:
-    match_data_free(matcher.matchData)
-    matcher.matchData = nil
-    matcher.ovector = nil
-
-proc free(code: var Pcre2Code) =
-  if code.code != nil:
-    code_free(code.code)
-    code.code = nil
-
-proc findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0): seq[(int, int)] =
+iterator findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0): (int, int) =
   let subjectLen = text.len.csize_t
   var offset = startOffset.csize_t
 
@@ -105,112 +110,18 @@ proc findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0): se
     if matchStart >= text.len or matchEnd > text.len:
       break
 
-    result.add((matchStart, matchEnd))
+    yield (matchStart, matchEnd)
 
     offset = matchEnd.csize_t
 
     if matchStart == matchEnd:
        offset += 1
 
-proc `[]`(t: Table[int, seq[byte]], key: int, default: seq[byte]): seq[byte] =
-  if t.hasKey(key): t[key] else: default
-
-proc loadTokenizerFromFormat(format: TiktokenFormat): BPETokenizer =
-  var tokenizer = BPETokenizer()
-
-  # Build byte decoder
-  tokenizer.byteDecoder = initTable[string, int]()
-  for i in 0..255:
-    tokenizer.byteDecoder[$char(i)] = i
-
-  # Load special tokens
-  if format.specialTokens.len > 0:
-    for token, id in format.specialTokens:
-      tokenizer.specialTokensEncoder[token] = id
-      tokenizer.specialTokensDecoder[id] = toBytes(token)
-
-  # Build encoder/decoder tables
-  var encoder = initTable[seq[byte], int]()
-
-  for keyBytes, rank in format.mergeableRanks:
-    encoder[keyBytes] = rank
-
-  tokenizer.encoder = encoder
-
-  # Build decoder (reverse mapping)
-  tokenizer.decoder = initTable[int, seq[byte]]()
-  for k, v in encoder:
-    tokenizer.decoder[v] = k
-
-  # Build special tokens decoder
-  for k, v in tokenizer.specialTokensEncoder:
-    tokenizer.specialTokensDecoder[v] = toBytes(k)
-
-   # Compile regex pattern
-  tokenizer.pattern = compilePcre2(format.patStr)
-  tokenizer.patternMatcher = createMatcher(tokenizer.pattern)
-
-  # Compile special tokens pattern
-  if tokenizer.specialTokensEncoder.len > 0:
-    let specialTokens = toSeq(tokenizer.specialTokensEncoder.keys)
-    let specialPatternStr = specialTokens.join("|")
-    tokenizer.specialPattern = compilePcre2(specialPatternStr)
-    tokenizer.specialMatcher = createMatcher(tokenizer.specialPattern)
-  else:
-    # Create a matcher that never matches
-    tokenizer.specialPattern = compilePcre2("(?!)")  # Never matches
-    tokenizer.specialMatcher = createMatcher(tokenizer.specialPattern)
-
-  tokenizer
-
-proc loadHFTokenizer*(path: string): BPETokenizer =
-  if not fileExists(path):
-    raise newException(TokenizerError, "HF tokenizer JSON file not found: " & path)
-
-  let content = readFile(path)
-  if content.len == 0:
-    raise newException(TokenizerError, "HF tokenizer JSON file is empty: " & path)
-
-  let hf = deserializeHfTokenizer(content)
-  let format = convertHfToTiktoken(hf)
-  loadTokenizerFromFormat(format)
-
-proc loadTiktokenizer*(path: string): BPETokenizer =
-  if not fileExists(path):
-    raise newException(TokenizerError, "Tiktoken file not found: " & path)
-
-  let content = readFile(path)
-  if content.len == 0:
-    raise newException(TokenizerError, "Tiktoken file is empty: " & path)
-
-  let lines = content.splitLines()
-  var mergeableRanks = initOrderedTable[seq[byte], int]()
-
-  for line in lines:
-    if line.len == 0:
-      continue
-    if line.startsWith("#"):
-      continue
-
-    let parts = line.split(" ")
-    if parts.len >= 2:
-      let encodedToken = parts[0]
-      let rankStr = parts[1]
-      try:
-        let rank = parseInt(rankStr)
-        let decodedTokenStr = decode(encodedToken)
-        let decodedTokenBytes = toBytes(decodedTokenStr)
-        if decodedTokenBytes.len > 0:
-          mergeableRanks[decodedTokenBytes] = rank
-      except:
-        discard
-
-  let format = TiktokenFormat(
-    mergeableRanks: mergeableRanks,
-    patStr: DefaultPat,
-    specialTokens: initOrderedTable[string, int]()
-  )
-  loadTokenizerFromFormat(format)
+################################################################################
+#                                                                              #
+#                          Byte-Pair Encoding                                  #
+#                                                                              #
+################################################################################
 
 proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] =
   var parts = newSeqOfCap[(int, int)](piece.len + 2)
@@ -283,11 +194,9 @@ proc bytePairEncode(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
 
   bpeResult
 
-proc splitTextOrdinary*(tokenizer: BPETokenizer, text: string): seq[string] =
-  let pieces = findAllPcre2(tokenizer.patternMatcher, text)
-
+proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] =
   var lastPos = 0
-  for (start, stop) in pieces:
+  for (start, stop) in findAllPcre2(tokenizer.patternMatcher, text):
     if start > lastPos:
       result.add(text[lastPos..<start])
     result.add(text[start..<stop])
@@ -295,45 +204,6 @@ proc splitTextOrdinary*(tokenizer: BPETokenizer, text: string): seq[string] =
 
   if lastPos < text.len:
     result.add(text[lastPos..<text.len])
-
-proc splitTextSpecial*(tokenizer: BPETokenizer, text: string, start: int): tuple[pieces: seq[string], specialPos: int, specialToken: string] =
-  var pieces: seq[string] = @[]
-  var specialPos = -1
-  var specialToken = ""
-
-  var pos = start
-  while pos < text.len:
-    var found = false
-    var nextPos = text.len
-
-    # Use direct string find for special tokens (faster than regex for literals)
-    if tokenizer.specialTokensEncoder.len > 0:
-      for token, _ in tokenizer.specialTokensEncoder:
-        let foundPos = text.find(token, pos)
-        if foundPos != -1 and (nextPos == text.len or foundPos < nextPos):
-          nextPos = foundPos
-          specialToken = token
-          found = true
-
-    if found and nextPos == pos:
-      pieces.add(specialToken)
-      specialPos = pos
-      pos = pos + specialToken.len
-    elif found:
-      if pos < nextPos:
-        let ordinary = text[pos ..< nextPos]
-        let ordinaryPieces = tokenizer.splitTextOrdinary(ordinary)
-        for p in ordinaryPieces:
-          pieces.add(p)
-      pos = nextPos
-    else:
-      let remaining = text[pos ..< text.len]
-      let remainingPieces = tokenizer.splitTextOrdinary(remaining)
-      for p in remainingPieces:
-        pieces.add(p)
-      break
-
-  (pieces, specialPos, specialToken)
 
 proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] =
   result = @[]
@@ -384,11 +254,11 @@ proc encode*(tokenizer: BPETokenizer, text: string): seq[int] =
 
 proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] =
   for id in tokenIds:
-    let bytes = tokenizer.decoder[id, @[]]
+    let bytes = tokenizer.decoder.getOrDefault(id, @[])
     if bytes.len > 0:
       result.add(bytes)
     else:
-      let specialBytes = tokenizer.specialTokensDecoder[id, @[]]
+      let specialBytes = tokenizer.specialTokensDecoder.getOrDefault(id, @[])
       if specialBytes.len > 0:
         result.add(specialBytes)
       else:
@@ -401,36 +271,79 @@ proc decodeToString*(tokenizer: BPETokenizer, tokenIds: seq[int]): string =
   result = newString(bytes.len)
   copyMem(result[0].addr, bytes[0].unsafeAddr, bytes.len)
 
-proc tokenCount*(tokenizer: BPETokenizer): int =
-  tokenizer.encoder.len + tokenizer.specialTokensEncoder.len
+################################################################################
+#                                                                              #
+#                        Vocabulary loaders                                    #
+#                                                                              #
+################################################################################
 
-proc isSpecialToken*(tokenizer: BPETokenizer, token: int): bool =
-  tokenizer.specialTokensDecoder.hasKey(token)
+proc loadFromTiktoken(format: TiktokenFormat): BPETokenizer =
+  var tokenizer = BPETokenizer()
 
-proc decodeToken*(tokenizer: BPETokenizer, tokenId: int): seq[byte] =
-  if tokenizer.decoder.hasKey(tokenId):
-    return tokenizer.decoder[tokenId]
-  elif tokenizer.specialTokensDecoder.hasKey(tokenId):
-    return tokenizer.specialTokensDecoder[tokenId]
+  # Build byte decoder
+  tokenizer.byteDecoder = initTable[string, int]()
+  for i in 0..255:
+    tokenizer.byteDecoder[$char(i)] = i
+
+  # Load special tokens
+  if format.specialTokens.len > 0:
+    for token, id in format.specialTokens:
+      tokenizer.specialTokensEncoder[token] = id
+      tokenizer.specialTokensDecoder[id] = toBytes(token)
+
+  # Build encoder/decoder tables
+  var encoder = initTable[seq[byte], int]()
+
+  for keyBytes, rank in format.mergeableRanks:
+    encoder[keyBytes] = rank
+
+  tokenizer.encoder = encoder
+
+  # Build decoder (reverse mapping)
+  tokenizer.decoder = initTable[int, seq[byte]]()
+  for k, v in encoder:
+    tokenizer.decoder[v] = k
+
+  # Build special tokens decoder
+  for k, v in tokenizer.specialTokensEncoder:
+    tokenizer.specialTokensDecoder[v] = toBytes(k)
+
+   # Compile regex pattern
+  tokenizer.pattern = compilePcre2(format.patStr)
+  tokenizer.patternMatcher = createMatcher(tokenizer.pattern)
+
+  # Compile special tokens pattern
+  if tokenizer.specialTokensEncoder.len > 0:
+    let specialTokens = toSeq(tokenizer.specialTokensEncoder.keys)
+    let specialPatternStr = specialTokens.join("|")
+    tokenizer.specialPattern = compilePcre2(specialPatternStr)
+    tokenizer.specialMatcher = createMatcher(tokenizer.specialPattern)
   else:
-    raise newException(TokenizerError, "Invalid token: " & $tokenId)
+    # Create a matcher that never matches
+    tokenizer.specialPattern = compilePcre2("(?!)")  # Never matches
+    tokenizer.specialMatcher = createMatcher(tokenizer.specialPattern)
 
-proc init*(_: type BPETokenizer): BPETokenizer =
-  BPETokenizer(
-    encoder: initTable[seq[byte], int](),
-    decoder: initTable[int, seq[byte]](),
-    specialTokensEncoder: initTable[string, int](),
-    specialTokensDecoder: initTable[int, seq[byte]](),
-    pattern: Pcre2Code(code: nil, pattern: ""),
-    patternMatcher: Pcre2Matcher(code: nil, matchData: nil, ovector: nil, ovectorCount: 0),
-    specialPattern: Pcre2Code(code: nil, pattern: ""),
-    specialMatcher: Pcre2Matcher(code: nil, matchData: nil, ovector: nil, ovectorCount: 0),
-    cache: initTable[seq[byte], seq[int]](),
-    byteDecoder: initTable[string, int]()
-  )
+  tokenizer
 
-proc free*(tokenizer: var BPETokenizer) =
-  tokenizer.specialMatcher.free()
-  tokenizer.specialPattern.free()
-  tokenizer.patternMatcher.free()
-  tokenizer.pattern.free()
+proc loadHFTokenizer*(path: string): BPETokenizer =
+  if not fileExists(path):
+    raise newException(TokenizerError, "HF tokenizer JSON file not found: " & path)
+
+  let content = readFile(path)
+  if content.len == 0:
+    raise newException(TokenizerError, "HF tokenizer JSON file is empty: " & path)
+
+  let hf = deserializeHfTokenizer(content)
+  let format = convertHfToTiktoken(hf)
+  loadFromTiktoken(format)
+
+proc loadTiktokenizer*(path: string): BPETokenizer =
+  if not fileExists(path):
+    raise newException(TokenizerError, "Tiktoken file not found: " & path)
+
+  let content = readFile(path)
+  if content.len == 0:
+    raise newException(TokenizerError, "Tiktoken file is empty: " & path)
+
+  let format = deserializeTiktokenizer(content)
+  loadFromTiktoken(format)
