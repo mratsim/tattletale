@@ -28,11 +28,14 @@ TIKTOKEN_FILES = {
     "p50k_base": "p50k_base.tiktoken",
     "cl100k_base": "cl100k_base.tiktoken",
     "o200k_base": "o200k_base.tiktoken",
+    "kimik2.5": "kimik2.5.tiktoken",
 }
 
 HF_FILES = {
     "gpt2": "gpt2-tokenizer.json",
     "llama3": "llama3-tokenizer.json",
+    "minimax-m2.1": "minimax-m2.1-tokenizer.json",
+    "glm-4.7": "glm-4.7-tokenizer.json",
 }
 
 
@@ -182,7 +185,9 @@ def get_test_texts() -> List[tuple[str, str]]:
 
 
 def generate_tiktoken_fixtures():
-    """Generate fixtures for all tiktoken files using get_encoding."""
+    """Generate fixtures for all tiktoken files."""
+    built_in_encodings = {"r50k_base", "p50k_base", "cl100k_base", "o200k_base"}
+
     for tokenizer_name, filename in TIKTOKEN_FILES.items():
         path = TOKENIZERS_DIR / filename
         if not path.exists():
@@ -190,7 +195,18 @@ def generate_tiktoken_fixtures():
             continue
 
         print(f"Processing tiktoken {tokenizer_name}...")
-        encoding = tiktoken.get_encoding(tokenizer_name)
+
+        if tokenizer_name in built_in_encodings:
+            encoding = tiktoken.get_encoding(tokenizer_name)
+        else:
+            # Custom tiktoken file - load from file with pattern
+            mergeable_ranks = hf_to_tiktoken.parse_tiktoken_file(str(path))
+            encoding = tiktoken.Encoding(
+                name=tokenizer_name,
+                pat_str=hf_to_tiktoken.KIMI_K25_PATTERN,
+                mergeable_ranks=mergeable_ranks,
+                special_tokens={},
+            )
 
         fixtures = []
         for name, text in get_test_texts():
@@ -205,10 +221,6 @@ def generate_tiktoken_fixtures():
 
 def generate_tiktoken_from_hf():
     """Generate fixtures for HF tokenizers using tiktoken.Encoding via conversion."""
-    hf_to_pat = {
-        "gpt2": r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\r?\n|\s+(?!\S)|\s+",
-        "llama3": r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
-    }
 
     for hf_name, hf_filename in HF_FILES.items():
         hf_path = TOKENIZERS_DIR / hf_filename
@@ -217,10 +229,8 @@ def generate_tiktoken_from_hf():
             continue
 
         print(f"Processing tiktoken from HF {hf_name}...")
-        mergeable_ranks = hf_to_tiktoken.convert_vocab_to_mergeable_ranks(
-            str(hf_path)
-        )
-        pat_str = hf_to_pat.get(hf_name, hf_to_pat["gpt2"])
+        mergeable_ranks = hf_to_tiktoken.convert_vocab_to_mergeable_ranks(str(hf_path))
+        pat_str = hf_to_tiktoken.extract_pattern(str(hf_path))
         special_tokens = hf_to_tiktoken.extract_special_tokens(str(hf_path))
 
         encoding = tiktoken.Encoding(

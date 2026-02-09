@@ -17,6 +17,18 @@ const
   LLAMA3_HF_URL = "https://huggingface.co/hf-internal-testing/llama3-tokenizer/resolve/main/tokenizer.json"
   LLAMA3_HF_FILENAME = "llama3-tokenizer.json"
 
+  # Moonshot AI Kimi-K2.5 (tiktoken format)
+  KIMIK25_URL = "https://huggingface.co/moonshotai/Kimi-K2.5/resolve/main/tiktoken.model?download=true"
+  KIMIK25_FILENAME = "kimik2.5.tiktoken"
+
+  # MiniMax AI MiniMax-M2.1 (HF format)
+  MINIMAXM21_HF_URL = "https://huggingface.co/MiniMaxAI/MiniMax-M2.1/resolve/main/tokenizer.json?download=true"
+  MINIMAXM21_HF_FILENAME = "minimax-m2.1-tokenizer.json"
+
+  # Zhipu AI GLM-4.7 (HF format)
+  GLM47_HF_URL = "https://huggingface.co/zai-org/GLM-4.7/resolve/main/tokenizer.json?download=true"
+  GLM47_HF_FILENAME = "glm-4.7-tokenizer.json"
+
   # OpenAI tiktoken format (GPT-2 original BPE format)
   GPT2_VOCAB_URL = "https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/vocab.bpe"
   GPT2_VOCAB_FILENAME = "gpt2-vocab.bpe"
@@ -61,6 +73,11 @@ proc downloadAllTokenizers*() {.async.} =
   # HuggingFace tokenizers (HF JSON format)
   await downloadTokenizer(GPT2_HF_URL, targetDir, GPT2_HF_FILENAME)
   await downloadTokenizer(LLAMA3_HF_URL, targetDir, LLAMA3_HF_FILENAME)
+
+  # New state-of-the-art tokenizers
+  await downloadTokenizer(KIMIK25_URL, targetDir, KIMIK25_FILENAME)
+  await downloadTokenizer(MINIMAXM21_HF_URL, targetDir, MINIMAXM21_HF_FILENAME)
+  await downloadTokenizer(GLM47_HF_URL, targetDir, GLM47_HF_FILENAME)
 
   # OpenAI tiktoken format (GPT-2 original BPE format)
   await downloadTokenizer(GPT2_VOCAB_URL, targetDir, GPT2_VOCAB_FILENAME)
