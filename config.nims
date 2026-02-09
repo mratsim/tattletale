@@ -57,6 +57,24 @@ task download_test_tokenizers, "Download gpt-2 and llama3 tokenizers for testing
   withDir(ProjectRoot):
     runCmd(cmd)
 
+
+# Python extension tasks
+# --------------------------------------------------
+
+func pytoktoktokBuildCmd(): string =
+  return
+    "nim c --app:lib" &
+    " --verbosity:0 --hints:off --warnings:off" &
+    " --outdir:workspace/toktoktok/tests" &
+    " --nimcache:nimcache/pytoktoktok" &
+    " -o:workspace/toktoktok/tests/pytoktoktok.so" &
+    " workspace/toktoktok/tests/pytoktoktok.nim"
+
+task make_pytoktoktok, "Build pytoktoktok.so for Python import":
+  let cmd = pytoktoktokBuildCmd()
+  withDir(ProjectRoot):
+    runCmd(cmd)
+
 # Test tasks
 # --------------------------------------------------
 # Compile with: nim cpp --outdir:build/tests --nimcache:nimcache/tests --hints:off --warnings:off
@@ -88,25 +106,11 @@ task test_toktoktok, "Test workspace/toktoktok":
     if not dirExists(fixturesDir) or not fileExists(gpt2Fixture) or not fileExists(llama3Fixture):
       echo "Downloading tokenizer fixtures..."
       download_test_tokenizersTask()
+
+    # Ensure we regenerate the dynlib
+    make_pytoktoktokTask()
     for cmd in getTestCommands("workspace/toktoktok/tests"):
       runCmd(cmd)
-
-# Python extension tasks
-# --------------------------------------------------
-
-func pytoktoktokBuildCmd(): string =
-  return
-    "nim c --app:lib" &
-    " --verbosity:0 --hints:off --warnings:off" &
-    " --outdir:workspace/toktoktok/tests" &
-    " --nimcache:nimcache/pytoktoktok" &
-    " -o:workspace/toktoktok/tests/pytoktoktok.so" &
-    " workspace/toktoktok/tests/pytoktoktok.nim"
-
-task make_pytoktoktok, "Build pytoktoktok.so for Python import":
-  let cmd = pytoktoktokBuildCmd()
-  withDir(ProjectRoot):
-    runCmd(cmd)
 
 # Per-file ENV variables configuration for PCRE2
 # ---------------------------------------------------

@@ -13,10 +13,9 @@ import std/strformat
 import std/math
 import workspace/pcre2/pcre2
 import ./serialization
+import ./tokenizers_regexps
 
 const MaxInt = high(int)
-
-const DefaultPat* = r"'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\s0-9a-zA-Z]+|\r?\n|\s+(?!\S)|\s+"
 
 type
   Pcre2Code* = object
@@ -274,7 +273,7 @@ proc decodeToString*(tokenizer: BPETokenizer, tokenIds: seq[int]): string =
 #                                                                              #
 ################################################################################
 
-proc loadFromTiktoken(format: TiktokenFormat): BPETokenizer =
+proc loadFromTiktoken(ttk: TiktokenFormat): BPETokenizer =
   var tokenizer = BPETokenizer()
 
   # Build byte decoder
@@ -283,15 +282,15 @@ proc loadFromTiktoken(format: TiktokenFormat): BPETokenizer =
     tokenizer.byteDecoder[$char(i)] = i
 
   # Load special tokens
-  if format.specialTokens.len > 0:
-    for token, id in format.specialTokens:
+  if ttk.specialTokens.len > 0:
+    for token, id in ttk.specialTokens:
       tokenizer.specialTokensEncoder[token] = id
       tokenizer.specialTokensDecoder[id] = toBytes(token)
 
    # Build encoder/decoder tables
   var encoder = initTable[seq[byte], int]()
 
-  for keyBytes, rank in format.mergeableRanks:
+  for keyBytes, rank in ttk.mergeableRanks:
     encoder[keyBytes] = rank
 
   # Ensure individual bytes are always in the encoder (for UTF-8 fallback)
@@ -314,7 +313,7 @@ proc loadFromTiktoken(format: TiktokenFormat): BPETokenizer =
     tokenizer.specialTokensDecoder[v] = toBytes(k)
 
    # Compile regex pattern
-  tokenizer.pattern = compilePcre2(format.patStr)
+  tokenizer.pattern = compilePcre2(ttk.pattern.regexp)
   tokenizer.patternMatcher = createMatcher(tokenizer.pattern)
 
   # Compile special tokens pattern
@@ -339,10 +338,10 @@ proc loadHFTokenizer*(path: string): BPETokenizer =
     raise newException(TokenizerError, "HF tokenizer JSON file is empty: " & path)
 
   let hf = deserializeHfTokenizer(content)
-  let format = convertHfToTiktoken(hf)
-  loadFromTiktoken(format)
+  let ttk = convertHfToTiktoken(hf)
+  loadFromTiktoken(ttk)
 
-proc loadTiktokenizer*(path: string): BPETokenizer =
+proc loadTiktokenizer*(path: string, regexp: TokRegexp): BPETokenizer =
   if not fileExists(path):
     raise newException(TokenizerError, "Tiktoken file not found: " & path)
 
@@ -350,14 +349,8 @@ proc loadTiktokenizer*(path: string): BPETokenizer =
   if content.len == 0:
     raise newException(TokenizerError, "Tiktoken file is empty: " & path)
 
-  let patStr = if path.contains("r50k_base"): R50kBasePat
-               elif path.contains("p50k_base"): P50kBasePat
-               elif path.contains("cl100k_base"): Cl100kBasePat
-               elif path.contains("o200k_base"): O200kBasePat
-               else: DefaultPat
-
-  let format = deserializeTiktokenizer(content, patStr)
-  loadFromTiktoken(format)
+  let ttk = deserializeTiktokenizer(content, regexp)
+  loadFromTiktoken(ttk)
 
 proc tokenCount*(tokenizer: BPETokenizer): int =
   tokenizer.encoder.len + tokenizer.specialTokensEncoder.len
