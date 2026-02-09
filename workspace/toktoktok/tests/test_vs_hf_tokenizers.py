@@ -83,7 +83,7 @@ def run_nim_encoding_tests(hf_tokenizer_path: str) -> int:
             f"\n[{i + 1}/{len(samples)}] {name}: {display_text}...", end=" ", flush=True
         )
 
-        hf_output = hf_tokenizer.encode(text)
+        hf_output = hf_tokenizer.encode(text, add_special_tokens=False)
         hf_tokens = hf_output.ids
         nim_tokens = nim_tokenizer.encode_ordinary(text)
 
