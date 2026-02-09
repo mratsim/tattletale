@@ -12,9 +12,13 @@ type
   TokenizerRef* = ref object of PyNimObjectExperimental
     tokenizer*: BPETokenizer
 
-proc load_tokenizer*(path: string): TokenizerRef {.exportpy.} =
+proc load_tokenizer_hf*(path: string): TokenizerRef {.exportpy.} =
   result = TokenizerRef()
-  result.tokenizer = loadTokenizerJSON(path)
+  result.tokenizer = loadHFTokenizer(path)
+
+proc load_tokenizer_tiktoken*(path: string): TokenizerRef {.exportpy.} =
+  result = TokenizerRef()
+  result.tokenizer = loadTiktokenizer(path)
 
 proc encode*(self: TokenizerRef, text: string): seq[int] {.exportpy.} =
   self.tokenizer.encode(text)
