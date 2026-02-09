@@ -96,7 +96,8 @@ def extract_pattern(hf_tokenizer_path: str) -> str:
     if "pre_tokenizer" in data:
         pre_tok = data["pre_tokenizer"]
         if pre_tok.get("type") == "ByteLevel":
-            return r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\r?\n|\s+(?!\S)|\s+"
+            # Gpt2Regexp = R50kRegexp from tokenizers_regexps.nim
+            return r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s"""
         elif pre_tok.get("type") == "Sequence":
             split_patterns = []
             if "pretokenizers" in pre_tok:
@@ -109,7 +110,7 @@ def extract_pattern(hf_tokenizer_path: str) -> str:
             if split_patterns:
                 return "|".join(split_patterns)
 
-    return r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\r?\n|\s+(?!\S)|\s+"
+    return r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s"""
 
 
 def extract_special_tokens(hf_tokenizer_path: str) -> dict[str, int]:
