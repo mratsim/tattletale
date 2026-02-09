@@ -85,7 +85,11 @@ def parse_tiktoken_file(tiktoken_path: str) -> dict[bytes, int]:
 
 
 def extract_pattern(hf_tokenizer_path: str) -> str:
-    """Extract the pre-tokenization regex pattern from the tokenizer."""
+    """Extract the pre-tokenization regex pattern from the tokenizer.
+
+    For Sequence pre-tokenizers with multiple Split steps, joins all patterns with '|'.
+    This ensures that all tokenization rules are applied in a single pass.
+    """
     with open(hf_tokenizer_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -94,11 +98,16 @@ def extract_pattern(hf_tokenizer_path: str) -> str:
         if pre_tok.get("type") == "ByteLevel":
             return r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\r?\n|\s+(?!\S)|\s+"
         elif pre_tok.get("type") == "Sequence":
-            # Check for Split pretokenizer with pattern
+            split_patterns = []
             if "pretokenizers" in pre_tok:
                 for step in pre_tok["pretokenizers"]:
                     if step.get("type") == "Split" and "pattern" in step:
-                        return step["pattern"].get("Regex", "")
+                        pattern = step["pattern"].get("Regex", "")
+                        if pattern:
+                            split_patterns.append(pattern)
+
+            if split_patterns:
+                return "|".join(split_patterns)
 
     return r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\r?\n|\s+(?!\S)|\s+"
 
@@ -126,9 +135,17 @@ def convert_hf_to_tiktoken(
     If output_path is provided, saves to file and returns the path.
     If output_path is None, returns the JSON string directly.
     """
-    mergeable_ranks = convert_vocab_to_mergeable_ranks(hf_tokenizer_path)
+    mergeable_ranks_bytes = convert_vocab_to_mergeable_ranks(hf_tokenizer_path)
     pat_str = extract_pattern(hf_tokenizer_path)
     special_tokens = extract_special_tokens(hf_tokenizer_path)
+
+    # Convert bytes keys to base64-encoded strings for JSON serialization
+    import base64
+
+    mergeable_ranks = {}
+    for token_bytes, rank in mergeable_ranks_bytes.items():
+        token_b64 = base64.b64encode(token_bytes).decode("utf-8")
+        mergeable_ranks[token_b64] = rank
 
     data = {
         "mergeable_ranks": mergeable_ranks,

@@ -29,6 +29,16 @@ const
   GLM47_HF_URL = "https://huggingface.co/zai-org/GLM-4.7/resolve/main/tokenizer.json?download=true"
   GLM47_HF_FILENAME = "glm-4.7-tokenizer.json"
 
+  # LGAI EXAONE K-EXAONE (HF format)
+  # SuperBPE strategy with superword tokens for Korean, English and multilingual coverage
+  EXAONE_HF_URL = "https://huggingface.co/LGAI-EXAONE/K-EXAONE-236B-A23B/resolve/main/tokenizer.json?download=true"
+  EXAONE_HF_FILENAME = "exaone-tokenizer.json"
+
+  # StepFun AI Step-3.5-Flash (HF format)
+  # Has multiple Split patterns for numbers, CJK, and general text
+  STEP35_HF_URL = "https://huggingface.co/stepfun-ai/Step-3.5-Flash/resolve/main/tokenizer.json?download=true"
+  STEP35_HF_FILENAME = "step-3.5-flash-tokenizer.json"
+
   # OpenAI tiktoken format (GPT-2 original BPE format)
   GPT2_VOCAB_URL = "https://openaipublic.blob.core.windows.net/gpt-2/encodings/main/vocab.bpe"
   GPT2_VOCAB_FILENAME = "gpt2-vocab.bpe"
@@ -78,6 +88,8 @@ proc downloadAllTokenizers*() {.async.} =
   await downloadTokenizer(KIMIK25_URL, targetDir, KIMIK25_FILENAME)
   await downloadTokenizer(MINIMAXM21_HF_URL, targetDir, MINIMAXM21_HF_FILENAME)
   await downloadTokenizer(GLM47_HF_URL, targetDir, GLM47_HF_FILENAME)
+  await downloadTokenizer(EXAONE_HF_URL, targetDir, EXAONE_HF_FILENAME)
+  await downloadTokenizer(STEP35_HF_URL, targetDir, STEP35_HF_FILENAME)
 
   # OpenAI tiktoken format (GPT-2 original BPE format)
   await downloadTokenizer(GPT2_VOCAB_URL, targetDir, GPT2_VOCAB_FILENAME)
