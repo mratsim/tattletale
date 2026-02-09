@@ -16,7 +16,8 @@ proc runTiktokenizerTests*() =
       ("r50k_base", "r50k_base.tiktoken", R50kRegexp),
       ("p50k_base", "p50k_base.tiktoken", P50kRegexp),
       ("cl100k_base", "cl100k_base.tiktoken", Cl100kRegexp),
-      ("o200k_base", "o200k_base.tiktoken", O200kRegexp)
+      ("o200k_base", "o200k_base.tiktoken", O200kRegexp),
+      ("kimik2.5", "kimik2.5.tiktoken", KimiK25Regexp),
     ]
 
     for tokenizerPair in TiktokenPairs:
