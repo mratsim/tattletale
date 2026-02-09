@@ -10,6 +10,13 @@
 # --------------------------------------------------
 import std/os, std/strutils, std/strformat
 
+# Project root
+# --------------------------------------------------
+#
+# We want to be able to execute tasks even when we `cd` into subfolders
+
+const ProjectRoot = currentSourcePath.rsplit(DirSep, 1)[0]
+
 # Utils
 # --------------------------------------------------
 
@@ -41,12 +48,14 @@ func downloaderCmd(path: string): string =
 task install_libtorch, "Download and install libtorch":
   const libInstaller = "workspace/libtorch/vendor/libtorch_installer.nim"
   let cmd = downloaderCmd(libInstaller)
-  runCmd(cmd)
+  withDir(ProjectRoot):
+    runCmd(cmd)
 
 task download_test_tokenizers, "Download gpt-2 and llama3 tokenizers for testing":
   const tokDownloader = "workspace/toktoktok/tests/download_tokenizers.nim"
   let cmd = downloaderCmd(tokDownloader)
-  runCmd(cmd)
+  withDir(ProjectRoot):
+    runCmd(cmd)
 
 # Test tasks
 # --------------------------------------------------
@@ -62,22 +71,25 @@ iterator getTestCommands(path: string): string =
       yield testerCmd(filepath)
 
 task test_libtorch, "Test workspace/libtorch":
-  for cmd in getTestCommands("workspace/libtorch/tests"):
-    runCmd(cmd)
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/libtorch/tests"):
+      runCmd(cmd)
 
 task test_safetensors, "Test workspace/safetensors":
-  for cmd in getTestCommands("workspace/safetensors/tests"):
-    runCmd(cmd)
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/safetensors/tests"):
+      runCmd(cmd)
 
 task test_toktoktok, "Test workspace/toktoktok":
-  const fixturesDir = "workspace/toktoktok/tests/tokenizers"
-  const gpt2Fixture = fixturesDir / "gpt2-tokenizer.json"
-  const llama3Fixture = fixturesDir / "llama3-tokenizer.json"
-  if not dirExists(fixturesDir) or not fileExists(gpt2Fixture) or not fileExists(llama3Fixture):
-    echo "Downloading tokenizer fixtures..."
-    download_test_tokenizersTask()
-  for cmd in getTestCommands("workspace/toktoktok/tests"):
-    runCmd(cmd)
+  withDir(ProjectRoot):
+    const fixturesDir = "workspace/toktoktok/tests/tokenizers"
+    const gpt2Fixture = fixturesDir / "gpt2-tokenizer.json"
+    const llama3Fixture = fixturesDir / "llama3-tokenizer.json"
+    if not dirExists(fixturesDir) or not fileExists(gpt2Fixture) or not fileExists(llama3Fixture):
+      echo "Downloading tokenizer fixtures..."
+      download_test_tokenizersTask()
+    for cmd in getTestCommands("workspace/toktoktok/tests"):
+      runCmd(cmd)
 
 # Python extension tasks
 # --------------------------------------------------
@@ -93,14 +105,13 @@ func pytoktoktokBuildCmd(): string =
 
 task make_pytoktoktok, "Build pytoktoktok.so for Python import":
   let cmd = pytoktoktokBuildCmd()
-  runCmd(cmd)
+  withDir(ProjectRoot):
+    runCmd(cmd)
 
 # Per-file ENV variables configuration for PCRE2
 # ---------------------------------------------------
 
-import std/[strutils, os]
-const CurDir = currentSourcePath.rsplit(DirSep, 1)[0]
-const Pcre2Dir = CurDir/"workspace/pcre2"
+const Pcre2Dir = ProjectRoot/"workspace/pcre2"
 
 const CONFIG_H =
   # Include local pcre2.h
