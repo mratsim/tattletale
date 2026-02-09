@@ -287,19 +287,11 @@ proc loadFromTiktoken(ttk: TiktokenFormat): BPETokenizer =
       tokenizer.specialTokensEncoder[token] = id
       tokenizer.specialTokensDecoder[id] = toBytes(token)
 
-   # Build encoder/decoder tables
+  # Build encoder/decoder tables
   var encoder = initTable[seq[byte], int]()
 
   for keyBytes, rank in ttk.mergeableRanks:
     encoder[keyBytes] = rank
-
-  # Ensure individual bytes are always in the encoder (for UTF-8 fallback)
-  # These get very high ranks (low priority) so they're only used when no merge is available
-  let byteRankStart = 1000000  # High rank for byte tokens
-  for i in 0..<256:
-    let byteSeq = @[byte(i)]
-    if not encoder.hasKey(byteSeq):
-      encoder[byteSeq] = byteRankStart + i
 
   tokenizer.encoder = encoder
 
