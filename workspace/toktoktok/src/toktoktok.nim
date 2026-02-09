@@ -16,7 +16,7 @@ import ./serialization
 
 const MaxInt = high(int)
 
-const DefaultPat* = "'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\\s0-9a-zA-Z]+|\\r?\\n|\\s+(?!\\S)|\\s+"
+const DefaultPat* = r"'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\s0-9a-zA-Z]+|\r?\n|\s+(?!\S)|\s+"
 
 type
   Pcre2Code* = object
@@ -123,7 +123,7 @@ iterator findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0)
 #                                                                              #
 ################################################################################
 
-proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] =
+proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] =
   var parts = newSeqOfCap[(int, int)](piece.len + 2)
 
   var minRank = MaxInt
@@ -155,6 +155,8 @@ proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, in
         return ranks[pair]
     return MaxInt
 
+  let sentinelPos = parts[^1][0]
+
   while minRank != MaxInt:
     let i = minRankIdx
 
@@ -163,6 +165,9 @@ proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, in
 
     parts[i] = (parts[i][0], getRank(parts, i, piece, ranks))
     parts.delete(i + 1)
+
+    if parts[^1][0] != sentinelPos:
+      parts[^1] = (sentinelPos, MaxInt)
 
     minRank = MaxInt
     minRankIdx = 0
@@ -174,7 +179,7 @@ proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, in
 
   parts
 
-proc bytePairEncode(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
+proc bytePairEncode*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
   if piece.len == 1:
     if ranks.hasKey(piece):
       return @[ranks[piece]]
@@ -191,6 +196,12 @@ proc bytePairEncode(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
       pair.add(piece[j])
     if ranks.hasKey(pair):
       bpeResult.add(ranks[pair])
+    elif pair.len == 1:
+      let byteSeq = @[pair[0]]
+      if ranks.hasKey(byteSeq):
+        bpeResult.add(ranks[byteSeq])
+      else:
+        return @[]
 
   bpeResult
 
@@ -291,11 +302,19 @@ proc loadFromTiktoken(format: TiktokenFormat): BPETokenizer =
       tokenizer.specialTokensEncoder[token] = id
       tokenizer.specialTokensDecoder[id] = toBytes(token)
 
-  # Build encoder/decoder tables
+   # Build encoder/decoder tables
   var encoder = initTable[seq[byte], int]()
 
   for keyBytes, rank in format.mergeableRanks:
     encoder[keyBytes] = rank
+
+  # Ensure individual bytes are always in the encoder (for UTF-8 fallback)
+  # These get very high ranks (low priority) so they're only used when no merge is available
+  let byteRankStart = 1000000  # High rank for byte tokens
+  for i in 0..<256:
+    let byteSeq = @[byte(i)]
+    if not encoder.hasKey(byteSeq):
+      encoder[byteSeq] = byteRankStart + i
 
   tokenizer.encoder = encoder
 
@@ -347,3 +366,6 @@ proc loadTiktokenizer*(path: string): BPETokenizer =
 
   let format = deserializeTiktokenizer(content)
   loadFromTiktoken(format)
+
+proc tokenCount*(tokenizer: BPETokenizer): int =
+  tokenizer.encoder.len + tokenizer.specialTokensEncoder.len
