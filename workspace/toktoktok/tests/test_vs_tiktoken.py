@@ -38,14 +38,24 @@ def get_test_samples() -> List[Tuple[str, str]]:
     samples = []
     fixtures_dir = TEST_DIR / "fixtures"
 
+    synthetic_samples = [
+        ("hello_world", "Hello, world! This is a test."),
+        ("numbers", "123 456.789 @#$%"),
+        ("code", "def foo():\n    return 42"),
+        ("unicode", "你好世界 🌍 Unicode test"),
+        ("repetitive", "the " * 50),
+    ]
+
+    samples.extend(synthetic_samples)
+
     fixture_files = [
+        ("verne", fixtures_dir / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt", 5000),
         ("shakespeare", fixtures_dir / "pg100-shakespeare.txt", 10000),
         (
             "sanguozhi",
             fixtures_dir / "pg23950-三國志演義-Romance_of_the_Three_Kingdoms.txt",
             5000,
         ),
-        ("verne", fixtures_dir / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt", 5000),
     ]
 
     for name, path, max_chars in fixture_files:
@@ -53,15 +63,6 @@ def get_test_samples() -> List[Tuple[str, str]]:
             sample = f.read(max_chars)
             samples.append((name, sample))
 
-    synthetic_samples = [
-        ("hello_world", "Hello, world! This is a test."),
-        ("unicode", "你好世界 🌍 Unicode test"),
-        ("numbers", "123 456.789 @#$%"),
-        ("code", "def foo():\n    return 42"),
-        ("repetitive", "the " * 50),
-    ]
-
-    samples.extend(synthetic_samples)
     return samples
 
 
@@ -98,6 +99,7 @@ def run_tiktoken_format_tests(
         else:
             print(f"[FAIL] MISMATCH (HF:{hf_len}, Nim:{nim_len})")
             errors += 1
+            return errors  # Exit early on first failure
 
     return errors
 
