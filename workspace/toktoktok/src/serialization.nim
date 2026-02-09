@@ -5,9 +5,10 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/tables
-import std/strutils
 import std/base64
+import std/strutils
+import std/options
+import std/tables
 import pkg/jsony
 import ./tokenizers_regexps
 
@@ -38,6 +39,7 @@ type
     trimOffsets*: bool
     `type`*: string
     pretokenizers*: seq[HFPretokenizerStep]
+    useRegex*: Option[bool]
 
   HFPretokenizerStep* = object
     `type`*: string
@@ -46,7 +48,7 @@ type
     invert*: bool
     addPrefixSpace*: bool
     trimOffsets*: bool
-    useRegex*: bool
+    useRegex*: Option[bool]
 
   HFPostProcessor* = object
     addPrefixSpace*: bool
@@ -156,8 +158,24 @@ proc deserializeTiktokenizer*(content: string, regexp = R50kRegexp): TiktokenFor
 
 proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
 
-  if hf.model.pattern.regexp.len == 0:
-    raise newException(ValueError, "Error: the HuggingFace tokenizer JSON file is missing regexp information.")
+  var pattern: TokRegexp
+
+  if hf.model.pattern.regexp.len > 0:
+    pattern = hf.model.pattern
+  else:
+    var useByteLevelDefault = false
+    if hf.preTokenizer.type == "ByteLevel":
+      useByteLevelDefault = hf.preTokenizer.useRegex.get(true)
+    elif hf.preTokenizer.pretokenizers.len > 0:
+      for step in hf.preTokenizer.pretokenizers:
+        if step.type == "ByteLevel":
+          useByteLevelDefault = step.useRegex.get(true)
+          break
+
+    if useByteLevelDefault:
+      pattern = Gpt2Regexp
+    else:
+      raise newException(ValueError, "Error: the HuggingFace tokenizer JSON file is missing regexp information.")
 
   var mergeableRanks = initOrderedTable[seq[byte], int]()
 
@@ -179,6 +197,6 @@ proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
 
   TiktokenFormat(
     mergeableRanks: mergeableRanks,
-    pattern: hf.model.pattern,
+    pattern: pattern,
     specialTokens: specialTokens
   )
