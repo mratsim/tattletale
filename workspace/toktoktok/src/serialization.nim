@@ -14,6 +14,16 @@ import pkg/jsony
 import ./tokenizers_regexps
 
 type
+  HFtokRegexp* = object
+    Regex*: string
+
+  TiktokenFormat* = object
+    mergeableRanks*: OrderedTable[seq[byte], int]
+    pattern*: TokRegexp
+    specialTokens*: OrderedTable[string, int]
+
+  TokenizerParseError* = object of ValueError
+
   HFTokenizer* = object
     version*: string
     truncation*: string
@@ -44,7 +54,7 @@ type
 
   HFPretokenizerStep* = object
     `type`*: string
-    pattern*: TokRegexp
+    pattern*: HFtokRegexp
     behavior*: string
     invert*: bool
     addPrefixSpace*: bool
@@ -69,14 +79,6 @@ type
     rstrip*: bool
     singleWord*: bool
     special*: bool
-
-  TiktokenFormat* = object
-    mergeableRanks*: OrderedTable[seq[byte], int]
-    pattern*: TokRegexp
-    specialTokens*: OrderedTable[string, int]
-
-
-  TokenizerParseError* = object of ValueError
 
 template toBytes*(str: string): seq[byte] =
   @(toOpenArrayByte(str, 0, str.len - 1))
@@ -153,9 +155,9 @@ proc renameHook*(v: var HFSpecialToken, key: var string) =
   elif key == "special_tokens":
     key = "specialTokens"
 
-proc renameHook*(v: var TokRegexp, key: var string) =
+proc renameHook*(v: var HFtokRegexp, key: var string) =
   if key == "Regex":
-    key = "regex"
+    key = "Regex"
 
 proc deserializeHfTokenizer*(jsonContent: string): HFTokenizer =
   jsonContent.fromJson(HFTokenizer)
@@ -194,24 +196,41 @@ proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
   if hf.model.pattern.regexp.len > 0:
     pattern = hf.model.pattern
   else:
-    var useByteLevelDefault = false
-    if hf.preTokenizer.type == "ByteLevel":
-      useByteLevelDefault = hf.preTokenizer.useRegex.get(true)
-    elif hf.preTokenizer.pretokenizers.len > 0:
+    var foundPattern = false
+    when defined(debug_pretokenizers):
+      echo "DEBUG: preTokenizer.type = ", hf.preTokenizer.type
+      echo "DEBUG: pretokenizers.len = ", hf.preTokenizer.pretokenizers.len
+    if hf.preTokenizer.pretokenizers.len > 0:
       for step in hf.preTokenizer.pretokenizers:
-        if step.type == "ByteLevel":
-          useByteLevelDefault = step.useRegex.get(true)
+        when defined(debug_pretokenizers):
+          echo "DEBUG: step.type = ", step.type, ", pattern.Regex.len = ", step.pattern.Regex.len
+        if step.type == "Split" and step.pattern.Regex.len > 0:
+          pattern = TokRegexp(regexp: step.pattern.Regex)
+          foundPattern = true
           break
 
-    if useByteLevelDefault:
-      pattern = Gpt2Regexp
-    else:
-      raise newException(ValueError, "Error: the HuggingFace tokenizer JSON file is missing regexp information.")
+    if not foundPattern:
+      var useByteLevelDefault = false
+      if hf.preTokenizer.type == "ByteLevel":
+        useByteLevelDefault = hf.preTokenizer.useRegex.get(true)
+      elif hf.preTokenizer.pretokenizers.len > 0:
+        for step in hf.preTokenizer.pretokenizers:
+          if step.type == "ByteLevel":
+            useByteLevelDefault = step.useRegex.get(true)
+            break
+
+      if useByteLevelDefault:
+        pattern = Gpt2Regexp
+        foundPattern = true
+      else:
+        raise newException(ValueError, "Error: the HuggingFace tokenizer JSON file is missing regexp information.")
 
   var mergeableRanks = initOrderedTable[seq[byte], int]()
 
   if hf.model.vocab.len > 0:
     let byteDecoder = initByteDecoder()
+    var convertedCount = 0
+    var failedCount = 0
     for key, rank in hf.model.vocab:
       var bytesSeq: seq[byte] = @[]
       let keyRunes = toRunes(key)
@@ -220,8 +239,16 @@ proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
         let byteVal = byteDecoder.getOrDefault(runeVal, -1)
         if byteVal >= 0:
           bytesSeq.add(byte(byteVal))
-      if bytesSeq.len > 0:
+        else:
+          when defined(debug_bytes):
+            echo "DEBUG: failed to convert rune ", int(c), " '", c, "' for key: ", key
+      if bytesSeq.len == keyRunes.len:
         mergeableRanks[bytesSeq] = rank
+        inc convertedCount
+      else:
+        inc failedCount
+    when defined(debug_bytes):
+      echo "DEBUG: converted ", convertedCount, " vocab entries, failed ", failedCount
 
   let byteRankStart = 1000000  # High rank for byte tokens
   for i in 0..<256:
