@@ -20,7 +20,7 @@ import hf_to_tiktoken
 
 TEST_DIR = Path(__file__).parent.resolve()
 TOKENIZERS_DIR = TEST_DIR / "tokenizers"
-FIXTURES_DIR = TEST_DIR / "fixtures" / "codec"
+FIXTURES_DIR = TEST_DIR / "fixtures" / "small"
 FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
 
 TIKTOKEN_FILES = {
