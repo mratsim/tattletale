@@ -17,15 +17,14 @@ type
 proc runTiktokenFixturesTests*() =
   suite "Tiktoken Fixtures Tests":
     const TiktokenFixtures = [
-      ("r50k_base", "r50k_base.tiktoken"),
-      ("p50k_base", "p50k_base.tiktoken"),
-      ("cl100k_base", "cl100k_base.tiktoken"),
-      ("o200k_base", "o200k_base.tiktoken"),
+      ("r50k_base", "r50k_base.tiktoken", R50kRegexp),
+      ("p50k_base", "p50k_base.tiktoken", P50kRegexp),
+      ("cl100k_base", "cl100k_base.tiktoken", Cl100kRegexp),
+      ("o200k_base", "o200k_base.tiktoken", O200kRegexp),
     ]
 
-    for pair in TiktokenFixtures:
-      let fixtureName = pair[0]
-      let tiktokenFile = pair[1]
+    for config in TiktokenFixtures:
+      let (fixtureName, tiktokenFile, regexp) = config
       let fixturePath = FIXTURES_DIR / fixtureName & ".json"
       let tiktokenPath = TOKENIZERS_DIR / tiktokenFile
       let testName = "Tiktoken fixture (" & fixtureName & ")"
@@ -34,7 +33,7 @@ proc runTiktokenFixturesTests*() =
         doAssert fileExists(fixturePath), "Fixture not found: " & fixturePath
         doAssert fileExists(tiktokenPath), "Tiktoken not found: " & tiktokenPath
 
-        let tokenizer = loadTiktokenizer(tiktokenPath)
+        let tokenizer = loadTiktokenizer(tiktokenPath, regexp)
         let content = readFile(fixturePath)
         let fixtures = content.fromJson(seq[CodecFixture])
 
