@@ -29,7 +29,6 @@ type
     truncation*: string
     padding*: string
     addedTokens*: seq[HFSpecialToken]
-    normalizer*: string
     preTokenizer*: HFPreTokenizer
     postProcessor*: HFPostProcessor
     decoder*: HFDecoder

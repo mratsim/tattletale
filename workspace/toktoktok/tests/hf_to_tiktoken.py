@@ -4,8 +4,24 @@ Converts HuggingFace tokenizer JSON files to tiktoken-compatible format.
 Handles byte-level BPE tokenizers (GPT-2 style).
 """
 
+import base64
 import json
 from pathlib import Path
+
+
+# Kimi-K2.5 pattern from https://huggingface.co/moonshotai/Kimi-K2.5/blob/main/tokenization_kimi.py
+KIMI_K25_PATTERN = "|".join(
+    [
+        r"""[\p{Han}]+""",
+        r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
+        r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
+        r"""\p{N}{1,3}""",
+        r""" ?[^\s\p{L}\p{N}]+[\r\n]*""",
+        r"""\s*[\r\n]+""",
+        r"""\s+(?!\S)""",
+        r"""\s+""",
+    ]
+)
 
 
 def _bytes_to_unicode() -> dict[int, str]:
@@ -30,6 +46,7 @@ def _unicode_to_bytes() -> dict[str, int]:
     """Returns the reverse mapping: unicode characters back to bytes."""
     return {v: k for k, v in _bytes_to_unicode().items()}
 
+
 def convert_vocab_to_mergeable_ranks(hf_tokenizer_path: str) -> dict[bytes, int]:
     """Convert HF vocab to tiktoken mergeable_ranks format with bytes keys."""
     with open(hf_tokenizer_path, "r", encoding="utf-8") as f:
@@ -50,6 +67,23 @@ def convert_vocab_to_mergeable_ranks(hf_tokenizer_path: str) -> dict[bytes, int]
     return mergeable_ranks
 
 
+def parse_tiktoken_file(tiktoken_path: str) -> dict[bytes, int]:
+    """Parse a tiktoken file and return mergeable_ranks dict."""
+    mergeable_ranks = {}
+    with open(tiktoken_path, "r") as f:
+        content = f.read()
+    for line in content.strip().split("\n"):
+        parts = line.split()
+        if len(parts) == 2:
+            try:
+                token_bytes = base64.b64decode(parts[0])
+                rank = int(parts[1])
+                mergeable_ranks[token_bytes] = rank
+            except:
+                pass
+    return mergeable_ranks
+
+
 def extract_pattern(hf_tokenizer_path: str) -> str:
     """Extract the pre-tokenization regex pattern from the tokenizer."""
     with open(hf_tokenizer_path, "r", encoding="utf-8") as f:
@@ -59,6 +93,12 @@ def extract_pattern(hf_tokenizer_path: str) -> str:
         pre_tok = data["pre_tokenizer"]
         if pre_tok.get("type") == "ByteLevel":
             return r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\r?\n|\s+(?!\S)|\s+"
+        elif pre_tok.get("type") == "Sequence":
+            # Check for Split pretokenizer with pattern
+            if "pretokenizers" in pre_tok:
+                for step in pre_tok["pretokenizers"]:
+                    if step.get("type") == "Split" and "pattern" in step:
+                        return step["pattern"].get("Regex", "")
 
     return r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\r?\n|\s+(?!\S)|\s+"
 
