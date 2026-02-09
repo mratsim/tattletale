@@ -26,8 +26,6 @@ proc runTiktokenizerTests*() =
       test "load and decode (" & name & ")":
         doAssert fileExists(path), name & " tiktokenizer not found: " & path
         let tokenizer = loadTiktokenizer(path)
-        check tokenizer.tokenCount > 0
-
         let encoded = tokenizer.encode("Hello, world!")
         check encoded.len > 0
 

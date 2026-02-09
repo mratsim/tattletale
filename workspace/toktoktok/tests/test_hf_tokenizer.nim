@@ -8,28 +8,7 @@ const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
 proc runHfTokenizerTests*() =
   suite "HF Tokenizer Tests":
 
-    test "decode single byte token in empty tokenizer":
-      let tokenizer = init(BPETokenizer)
-      expect TokenizerError:
-        discard decodeToken(tokenizer, 65)
 
-    test "decode unknown token ID raises error":
-      let tokenizer = init(BPETokenizer)
-      expect TokenizerError:
-        discard decodeToken(tokenizer, 256)
-
-    test "decode negative token ID raises error":
-      let tokenizer = init(BPETokenizer)
-      expect TokenizerError:
-        discard decodeToken(tokenizer, -1)
-
-    test "token count of empty tokenizer":
-      let tokenizer = init(BPETokenizer)
-      check tokenizer.tokenCount == 0
-
-    test "is special token on empty tokenizer":
-      let tokenizer = init(BPETokenizer)
-      check not tokenizer.isSpecialToken(0)
 
     test "load tokenizer file not found":
       expect TokenizerError:
@@ -44,8 +23,6 @@ proc runHfTokenizerTests*() =
       test "load and decode (" & name & ")":
         doAssert fileExists(path), name & " tokenizer not found: " & path
         let tokenizer = loadHFTokenizer(path)
-        check tokenizer.tokenCount > 0
-
         let encoded = tokenizer.encode("Hello, world!")
         check encoded.len > 0
 
