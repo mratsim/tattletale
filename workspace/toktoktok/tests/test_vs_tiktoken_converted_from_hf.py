@@ -1,35 +1,18 @@
 #!/usr/bin/env python3
 """
-Test Nim BPETokenizer against tiktoken for tiktoken file format (base64 line format).
+Test Nim BPETokenizer against tiktoken for HF tokenizer JSON format (after conversion).
 """
 
 import pytoktoktok
 from pathlib import Path
 from typing import List, Tuple
 import tiktoken
-from enum import IntEnum
 
 TEST_DIR = Path(__file__).parent.resolve()
 
-
-class RegexPattern(IntEnum):
-    r50k = 1
-    p50k = 2
-    cl100k = 3
-    o200k = 4
-
-
-TIKTOKEN_FILES = {
-    "r50k_base": "r50k_base.tiktoken",
-    "p50k_base": "p50k_base.tiktoken",
-    "cl100k_base": "cl100k_base.tiktoken",
-    "o200k_base": "o200k_base.tiktoken",
-}
-REGEX_MAP = {
-    "r50k_base": RegexPattern.r50k,
-    "p50k_base": RegexPattern.p50k,
-    "cl100k_base": RegexPattern.cl100k,
-    "o200k_base": RegexPattern.o200k,
+HF_FILES = {
+    "gpt2": "gpt2-tokenizer.json",
+    "llama3": "llama3-tokenizer.json",
 }
 
 
@@ -65,16 +48,13 @@ def get_test_samples() -> List[Tuple[str, str]]:
     return samples
 
 
-def run_tiktoken_format_tests(
-    nim_tokenizer_name: str, tiktoken_path: Path, tik_encoding, tokenizer_type: str
-) -> int:
-    """Run encoding comparison tests using tiktoken file format."""
+def run_hf_conversion_tests(model_name: str, hf_path: Path, tik_encoding) -> int:
+    """Run encoding comparison tests using HF tokenizer JSON format (after conversion)."""
     print("\n" + "=" * 70)
-    print(f"TIKTOKEN FILE FORMAT TESTS ({nim_tokenizer_name})")
+    print(f"HF TOKENIZER CONVERSION TESTS ({model_name})")
     print("=" * 70)
 
-    pattern = REGEX_MAP[tokenizer_type]
-    nim_tokenizer = pytoktoktok.load_tokenizer_tiktoken(str(tiktoken_path), pattern)
+    nim_tokenizer = pytoktoktok.load_tokenizer_hf(str(hf_path))
     print(f"[OK] Nim BPETokenizer loaded ({nim_tokenizer})")
 
     samples = get_test_samples()
@@ -107,13 +87,13 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Nim BPETokenizer vs tiktoken (file format) Test"
+        description="Nim BPETokenizer vs tiktoken (HF conversion) Test"
     )
     parser.add_argument(
         "--tokenizer",
-        choices=["r50k_base", "p50k_base", "cl100k_base", "o200k_base"],
-        default="r50k_base",
-        help="Tokenizer to use (default: r50k_base)",
+        choices=["gpt2", "llama3"],
+        default="gpt2",
+        help="Tokenizer to use (default: gpt2)",
     )
 
     args = parser.parse_args()
@@ -121,16 +101,15 @@ def main():
     tokenizer_type = args.tokenizer.lower()
     errors = 0
 
-    print("Nim BPETokenizer vs tiktoken (file format) Test")
+    print("Nim BPETokenizer vs tiktoken (HF conversion) Test")
     print("=" * 70)
 
-    tiktoken_file = TIKTOKEN_FILES[tokenizer_type]
-    tiktoken_path = TEST_DIR / "tokenizers" / tiktoken_file
-    tik_encoding = tiktoken.get_encoding(tokenizer_type)
-    print(f"[OK] tiktoken loaded ({tokenizer_type})")
-    errors += run_tiktoken_format_tests(
-        tokenizer_type, tiktoken_path, tik_encoding, tokenizer_type
-    )
+    hf_file = HF_FILES[tokenizer_type]
+    hf_path = TEST_DIR / "tokenizers" / hf_file
+    model = "gpt2" if tokenizer_type == "gpt2" else tokenizer_type
+    tik_encoding = tiktoken.encoding_for_model(model)
+    print(f"[OK] tiktoken loaded ({model})")
+    errors += run_hf_conversion_tests(tokenizer_type, hf_path, tik_encoding)
 
     if errors == 0:
         print("\n[OK] All tests passed!")
