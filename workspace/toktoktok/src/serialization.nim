@@ -64,7 +64,7 @@ type
 
   TokenizerParseError* = object of ValueError
 
-const DefaultPat* = "'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\\s0-9a-zA-Z]+|\\r?\\n|\\s+(?!\\S)|\\s+"
+const DefaultPat* = r"'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\s0-9a-zA-Z]+|\r?\n|\s+(?!\S)|\s+"
 
 template toBytes*(str: string): seq[byte] =
   @(toOpenArrayByte(str, 0, str.len - 1))
