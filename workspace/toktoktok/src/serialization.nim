@@ -8,6 +8,7 @@
 import std/tables
 import std/options
 import std/strutils
+import std/base64
 import pkg/jsony
 
 type
@@ -60,16 +61,12 @@ type
     patStr*: string
     specialTokens*: OrderedTable[string, int]
 
-  TiktokenFile* = object
-    patStr*: string
-    mergeableRanks*: OrderedTable[string, int]
-    specialTokens*: OrderedTable[string, int]
 
   TokenizerParseError* = object of ValueError
 
 const DefaultPat* = "'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\\s0-9a-zA-Z]+|\\r?\\n|\\s+(?!\\S)|\\s+"
 
-proc toBytes*(str: string): seq[byte] =
+template toBytes*(str: string): seq[byte] =
   @(toOpenArrayByte(str, 0, str.len - 1))
 
 proc renameHook*(v: var HFTokenizer, key: var string) =
@@ -136,8 +133,32 @@ proc newHook*(v: var HFDecoder) =
 proc deserializeHfTokenizer*(jsonContent: string): HFTokenizer =
   jsonContent.fromJson(HFTokenizer)
 
-proc deserializeTiktoken*(jsonContent: string): TiktokenFile =
-  jsonContent.fromJson(TiktokenFile)
+proc deserializeTiktokenizer*(content: string): TiktokenFormat =
+  let lines = content.splitLines()
+  var mergeableRanks = initOrderedTable[seq[byte], int]()
+
+  for line in lines:
+    if line.len == 0:
+      continue
+    if line.startsWith("#"):
+      continue
+
+    let parts = line.split(" ")
+    if parts.len < 2:
+      raise newException(TokenizerParseError, "Invalid tiktoken line: " & line)
+
+    let encodedToken = parts[0]
+    let rankStr = parts[1]
+    let rank = parseInt(rankStr)
+    let decodedTokenStr = decode(encodedToken)
+    let decodedTokenBytes = toBytes(decodedTokenStr)
+    mergeableRanks[decodedTokenBytes] = rank
+
+  TiktokenFormat(
+    mergeableRanks: mergeableRanks,
+    patStr: DefaultPat,
+    specialTokens: initOrderedTable[string, int]()
+  )
 
 proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
   var mergeableRanks = initOrderedTable[seq[byte], int]()
