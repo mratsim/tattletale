@@ -13,7 +13,8 @@ type
     r50k = 1,
     p50k = 2,
     cl100k = 3,
-    o200k = 4
+    o200k = 4,
+    kimik25 = 5
 
   TokenizerRef* = ref object of PyNimObjectExperimental
     tokenizer*: BPETokenizer
@@ -22,13 +23,16 @@ proc load_tokenizer_hf*(path: string): TokenizerRef {.exportpy.} =
   result = TokenizerRef()
   result.tokenizer = loadHFTokenizer(path)
 
-proc load_tokenizer_tiktoken*(path: string, pattern: RegexPattern): TokenizerRef {.exportpy.} =
+proc load_tokenizer_tiktoken*(path: string, pattern: string): TokenizerRef {.exportpy.} =
   result = TokenizerRef()
   let regexp = case pattern
-    of RegexPattern.r50k: R50kRegexp
-    of RegexPattern.p50k: P50kRegexp
-    of RegexPattern.cl100k: Cl100kRegexp
-    of RegexPattern.o200k: O200kRegexp
+    of "r50k": R50kRegexp
+    of "p50k": P50kRegexp
+    of "cl100k": Cl100kRegexp
+    of "o200k": O200kRegexp
+    of "kimik2.5": KimiK25Regexp
+    else:
+      raise newException(ValueError, "Unknown pattern: " & pattern)
   result.tokenizer = loadTiktokenizer(path, regexp)
 
 proc encode*(self: TokenizerRef, text: string): seq[int] {.exportpy.} =

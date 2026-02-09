@@ -195,34 +195,33 @@ proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
   if hf.model.pattern.regexp.len > 0:
     pattern = hf.model.pattern
   else:
-    var foundPattern = false
-    when defined(debug_pretokenizers):
-      echo "DEBUG: preTokenizer.type = ", hf.preTokenizer.type
-      echo "DEBUG: pretokenizers.len = ", hf.preTokenizer.pretokenizers.len
+    var splitPatterns: seq[string] = @[]
     if hf.preTokenizer.pretokenizers.len > 0:
       for step in hf.preTokenizer.pretokenizers:
-        when defined(debug_pretokenizers):
-          echo "DEBUG: step.type = ", step.type, ", pattern.Regex.len = ", step.pattern.Regex.len
         if step.type == "Split" and step.pattern.Regex.len > 0:
-          pattern = TokRegexp(regexp: step.pattern.Regex)
-          foundPattern = true
-          break
+          splitPatterns.add(step.pattern.Regex)
 
-    if not foundPattern:
+    if splitPatterns.len > 0:
+      pattern = TokRegexp(regexp: splitPatterns.join("|"))
+    elif hf.preTokenizer.type == "ByteLevel":
+      let useByteLevelDefault = hf.preTokenizer.useRegex.get(true)
+      if useByteLevelDefault:
+        pattern = Gpt2Regexp
+      else:
+        raise newException(ValueError, "Error: the HuggingFace tokenizer JSON file is missing regexp information.")
+    elif hf.preTokenizer.pretokenizers.len > 0:
       var useByteLevelDefault = false
-      if hf.preTokenizer.type == "ByteLevel":
-        useByteLevelDefault = hf.preTokenizer.useRegex.get(true)
-      elif hf.preTokenizer.pretokenizers.len > 0:
-        for step in hf.preTokenizer.pretokenizers:
-          if step.type == "ByteLevel":
-            useByteLevelDefault = step.useRegex.get(true)
-            break
+      for step in hf.preTokenizer.pretokenizers:
+        if step.type == "ByteLevel":
+          useByteLevelDefault = step.useRegex.get(true)
+          break
 
       if useByteLevelDefault:
         pattern = Gpt2Regexp
-        foundPattern = true
       else:
         raise newException(ValueError, "Error: the HuggingFace tokenizer JSON file is missing regexp information.")
+    else:
+      raise newException(ValueError, "Error: the HuggingFace tokenizer JSON file is missing regexp information.")
 
   var mergeableRanks = initOrderedTable[seq[byte], int]()
 
@@ -238,16 +237,11 @@ proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
         let byteVal = byteDecoder.getOrDefault(runeVal, -1)
         if byteVal >= 0:
           bytesSeq.add(byte(byteVal))
-        else:
-          when defined(debug_bytes):
-            echo "DEBUG: failed to convert rune ", int(c), " '", c, "' for key: ", key
       if bytesSeq.len == keyRunes.len:
         mergeableRanks[bytesSeq] = rank
         inc convertedCount
       else:
         inc failedCount
-    when defined(debug_bytes):
-      echo "DEBUG: converted ", convertedCount, " vocab entries, failed ", failedCount
 
   let byteRankStart = 1000000  # High rank for byte tokens
   for i in 0..<256:

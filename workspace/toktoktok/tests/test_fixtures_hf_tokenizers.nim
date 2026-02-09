@@ -19,6 +19,10 @@ proc runHfTokenizersLibraryTests*() =
     const HfFixtures = [
       ("gpt2", "gpt2-tokenizer.json"),
       ("llama3", "llama3-tokenizer.json"),
+      ("minimax-m2.1", "minimax-m2.1-tokenizer.json"),
+      ("glm-4.7", "glm-4.7-tokenizer.json"),
+      ("exaone", "exaone-tokenizer.json"),
+      ("step-3.5-flash", "step-3.5-flash-tokenizer.json"),
     ]
 
     for pair in HfFixtures:

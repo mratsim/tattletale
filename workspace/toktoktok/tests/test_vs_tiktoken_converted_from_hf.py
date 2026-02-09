@@ -14,40 +14,24 @@ TEST_DIR = Path(__file__).parent.resolve()
 HF_FILES = {
     "gpt2": "gpt2-tokenizer.json",
     "llama3": "llama3-tokenizer.json",
+    "minimax-m2.1": "minimax-m2.1-tokenizer.json",
+    "glm-4.7": "glm-4.7-tokenizer.json",
+    "exaone": "exaone-tokenizer.json",
+    "step-3.5-flash": "step-3.5-flash-tokenizer.json",
 }
-
-
-def _bytes_to_unicode() -> dict[int, str]:
-    """Returns the GPT-2 byte-to-unicode mapping."""
-    bs = (
-        list(range(ord("!"), ord("~") + 1))
-        + list(range(ord("¡"), ord("¬") + 1))
-        + list(range(ord("®"), ord("ÿ") + 1))
-    )
-    cs = bs[:]
-    n = 0
-    for b in range(256):
-        if b not in bs:
-            bs.append(b)
-            cs.append(256 + n)
-            n += 1
-    return dict(zip(bs, [chr(n) for n in cs]))
-
-
-def _unicode_to_bytes() -> dict[str, int]:
-    """Returns the reverse mapping: unicode characters back to bytes."""
-    return {v: k for k, v in _bytes_to_unicode().items()}
 
 
 def load_tiktoken_encoding_from_json(json_str: str) -> tiktoken.Encoding:
     """Load tiktoken JSON format from string and create tiktoken.Encoding object."""
+    import base64
+
     data = json.loads(json_str)
 
     mergeable_ranks: dict[bytes, int] = {}
 
     for key, rank in data["mergeable_ranks"].items():
-        bytes_list = eval(key)
-        token_bytes = bytes(bytes_list)
+        # Keys are base64-encoded bytes
+        token_bytes = base64.b64decode(key)
         mergeable_ranks[token_bytes] = rank
 
     special_tokens = data.get("special_tokens", {})
@@ -143,7 +127,14 @@ def main():
     )
     parser.add_argument(
         "--tokenizer",
-        choices=["gpt2", "llama3"],
+        choices=[
+            "gpt2",
+            "llama3",
+            "minimax-m2.1",
+            "glm-4.7",
+            "exaone",
+            "step-3.5-flash",
+        ],
         default="gpt2",
         help="Tokenizer to use (default: gpt2)",
     )
