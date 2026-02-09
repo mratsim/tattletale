@@ -101,17 +101,17 @@ def run_hf_conversion_tests(model_name: str, hf_path: Path, tik_encoding) -> int
             f"\n[{i + 1}/{len(samples)}] {name}: {display_text}...", end=" ", flush=True
         )
 
-        hf_tokens = tik_encoding.encode_ordinary(text)
-        nim_tokens = nim_tokenizer.encode_ordinary(text)
+        tthf_tokens = tik_encoding.encode(text)
+        nim_tokens = nim_tokenizer.encode(text)
 
-        hf_len = len(hf_tokens)
+        tthf_len = len(tthf_tokens)
         nim_len = len(nim_tokens)
-        match = hf_tokens == nim_tokens
+        match = tthf_tokens == nim_tokens
 
         if match:
-            print(f"[OK] MATCH (HF:{hf_len}, Nim:{nim_len})")
+            print(f"[OK] MATCH (TTHF:{tthf_len}, Nim:{nim_len})")
         else:
-            print(f"[FAIL] MISMATCH (HF:{hf_len}, Nim:{nim_len})")
+            print(f"[FAIL] MISMATCH (TTHF:{tthf_len}, Nim:{nim_len})")
             errors += 1
             return errors  # Exit early on first failure
 
