@@ -9,6 +9,7 @@ import std/tables
 import std/strutils
 import std/base64
 import pkg/jsony
+import ./tokenizers_regexps
 
 type
   HFTokenizer* = object
@@ -30,7 +31,7 @@ type
     endOfWordSuffix*: string
     fuseUnk*: bool
     `type`*: string
-    pattern*: string
+    pattern*: TokRegexp
 
   HFPreTokenizer* = object
     addPrefixSpace*: bool
@@ -40,20 +41,12 @@ type
 
   HFPretokenizerStep* = object
     `type`*: string
-    pattern*: HFPretokenizerRegex
+    pattern*: TokRegexp
     behavior*: string
     invert*: bool
     addPrefixSpace*: bool
     trimOffsets*: bool
     useRegex*: bool
-
-  HFPretokenizerRegex* = object
-    regex*: string
-
-  HFSplitPreTokenizer* = object
-    regex*: string
-    behavior*: string
-    invert*: bool
 
   HFPostProcessor* = object
     addPrefixSpace*: bool
@@ -76,21 +69,11 @@ type
 
   TiktokenFormat* = object
     mergeableRanks*: OrderedTable[seq[byte], int]
-    patStr*: string
+    pattern*: TokRegexp
     specialTokens*: OrderedTable[string, int]
 
 
   TokenizerParseError* = object of ValueError
-
-const DefaultPat* = r"'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-Z]+| ?[0-9]+| ?[^\s0-9a-zA-Z]+|\r?\n|\s+(?!\S)|\s+"
-
-const Gpt2Pat* = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s"""
-const R50kBasePat* = Gpt2Pat
-const P50kBasePat* = Gpt2Pat
-
-const Cl100kBasePat* = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s"""
-
-const O200kBasePat* = "'(?i:[sdmt]|ll|ve|re)|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
 
 template toBytes*(str: string): seq[byte] =
   @(toOpenArrayByte(str, 0, str.len - 1))
@@ -137,14 +120,14 @@ proc renameHook*(v: var HFSpecialToken, key: var string) =
   elif key == "special_tokens":
     key = "specialTokens"
 
-proc renameHook*(v: var HFPretokenizerRegex, key: var string) =
+proc renameHook*(v: var TokRegexp, key: var string) =
   if key == "Regex":
     key = "regex"
 
 proc deserializeHfTokenizer*(jsonContent: string): HFTokenizer =
   jsonContent.fromJson(HFTokenizer)
 
-proc deserializeTiktokenizer*(content: string, patStr: string = DefaultPat): TiktokenFormat =
+proc deserializeTiktokenizer*(content: string, regexp = R50kRegexp): TiktokenFormat =
   let lines = content.splitLines()
   var mergeableRanks = initOrderedTable[seq[byte], int]()
 
@@ -167,11 +150,15 @@ proc deserializeTiktokenizer*(content: string, patStr: string = DefaultPat): Tik
 
   TiktokenFormat(
     mergeableRanks: mergeableRanks,
-    patStr: patStr,
+    pattern: regexp,
     specialTokens: initOrderedTable[string, int]()
   )
 
 proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
+
+  if hf.model.pattern.regexp.len == 0:
+    raise newException(ValueError, "Error: the HuggingFace tokenizer JSON file is missing regexp information.")
+
   var mergeableRanks = initOrderedTable[seq[byte], int]()
 
   if hf.model.vocab.len > 0:
@@ -190,17 +177,8 @@ proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
   for token in hf.addedTokens:
     specialTokens[token.content] = token.id
 
-  var patStr = DefaultPat
-  if hf.model.pattern != "":
-    patStr = hf.model.pattern
-  elif hf.preTokenizer.`type` == "Sequence":
-    for pretok in hf.preTokenizer.pretokenizers:
-      if pretok.`type` == "Split" and pretok.pattern.regex != "":
-        patStr = pretok.pattern.regex
-        break
-
   TiktokenFormat(
     mergeableRanks: mergeableRanks,
-    patStr: patStr,
+    pattern: hf.model.pattern,
     specialTokens: specialTokens
   )

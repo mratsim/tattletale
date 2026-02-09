@@ -9,14 +9,27 @@ import pytoktoktok
 from pathlib import Path
 from typing import List, Tuple
 import tiktoken
+from enum import IntEnum
 
 TEST_DIR = Path(__file__).parent.resolve()
+
+class RegexPattern(IntEnum):
+    r50k = 1
+    p50k = 2
+    cl100k = 3
+    o200k = 4
 
 TIKTOKEN_FILES = {
     "r50k_base": "r50k_base.tiktoken",
     "p50k_base": "p50k_base.tiktoken",
     "cl100k_base": "cl100k_base.tiktoken",
     "o200k_base": "o200k_base.tiktoken",
+}
+REGEX_MAP = {
+    "r50k_base": RegexPattern.r50k,
+    "p50k_base": RegexPattern.p50k,
+    "cl100k_base": RegexPattern.cl100k,
+    "o200k_base": RegexPattern.o200k,
 }
 
 HF_FILES = {
@@ -58,14 +71,15 @@ def get_test_samples() -> List[Tuple[str, str]]:
 
 
 def run_tiktoken_format_tests(
-    nim_tokenizer_name: str, tiktoken_path: Path, tik_encoding
+    nim_tokenizer_name: str, tiktoken_path: Path, tik_encoding, tokenizer_type: str
 ) -> int:
     """Run encoding comparison tests using tiktoken file format."""
     print("\n" + "=" * 70)
     print(f"TIKTOKEN FILE FORMAT TESTS ({nim_tokenizer_name})")
     print("=" * 70)
 
-    nim_tokenizer = pytoktoktok.load_tokenizer_tiktoken(str(tiktoken_path))
+    pattern = REGEX_MAP[tokenizer_type]
+    nim_tokenizer = pytoktoktok.load_tokenizer_tiktoken(str(tiktoken_path), pattern)
     print(f"[OK] Nim BPETokenizer loaded ({nim_tokenizer})")
 
     samples = get_test_samples()
@@ -155,23 +169,17 @@ def main():
 
     # Tiktoken file format tests
     if args.format in ("tiktoken", "all"):
-        tiktoken_file = TIKTOKEN_FILES.get(tokenizer_type)
-        if tiktoken_file is None:
-            raise ValueError(
-                f"Unknown tiktoken tokenizer: {tokenizer_type}. Available: {list(TIKTOKEN_FILES.keys())}"
-            )
+        tiktoken_file = TIKTOKEN_FILES[tokenizer_type]
         tiktoken_path = TEST_DIR / "tokenizers" / tiktoken_file
         tik_encoding = tiktoken.get_encoding(tokenizer_type)
         print(f"[OK] tiktoken loaded ({tokenizer_type})")
-        errors += run_tiktoken_format_tests(tokenizer_type, tiktoken_path, tik_encoding)
+        errors += run_tiktoken_format_tests(
+            tokenizer_type, tiktoken_path, tik_encoding, tokenizer_type
+        )
 
     # HF tokenizer conversion tests
     if args.format in ("hf", "all"):
-        hf_file = HF_FILES.get(tokenizer_type)
-        if hf_file is None:
-            raise ValueError(
-                f"Unknown HF tokenizer: {tokenizer_type}. Available: {list(HF_FILES.keys())}"
-            )
+        hf_file = HF_FILES[tokenizer_type]
         hf_path = TEST_DIR / "tokenizers" / hf_file
         model = "gpt2" if tokenizer_type == "gpt2" else tokenizer_type
         tik_encoding = tiktoken.encoding_for_model(model)

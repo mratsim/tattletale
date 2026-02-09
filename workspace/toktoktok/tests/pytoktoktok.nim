@@ -9,6 +9,12 @@ import std/tables
 import workspace/toktoktok
 
 type
+  RegexPattern* {.size: 4, pure.} = enum
+    r50k = 1,
+    p50k = 2,
+    cl100k = 3,
+    o200k = 4
+
   TokenizerRef* = ref object of PyNimObjectExperimental
     tokenizer*: BPETokenizer
 
@@ -16,9 +22,14 @@ proc load_tokenizer_hf*(path: string): TokenizerRef {.exportpy.} =
   result = TokenizerRef()
   result.tokenizer = loadHFTokenizer(path)
 
-proc load_tokenizer_tiktoken*(path: string): TokenizerRef {.exportpy.} =
+proc load_tokenizer_tiktoken*(path: string, pattern: RegexPattern): TokenizerRef {.exportpy.} =
   result = TokenizerRef()
-  result.tokenizer = loadTiktokenizer(path)
+  let regexp = case pattern
+    of RegexPattern.r50k: R50kRegexp
+    of RegexPattern.p50k: P50kRegexp
+    of RegexPattern.cl100k: Cl100kRegexp
+    of RegexPattern.o200k: O200kRegexp
+  result.tokenizer = loadTiktokenizer(path, regexp)
 
 proc encode*(self: TokenizerRef, text: string): seq[int] {.exportpy.} =
   self.tokenizer.encode(text)
