@@ -1,0 +1,44 @@
+import std/unittest
+import std/os
+import pkg/jsony
+
+import workspace/toktoktok
+
+const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures" / "codec"
+const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
+
+type
+  CodecFixture* = object
+    name*: string
+    text*: string
+    tokenIds*: seq[int]
+    tokenizer*: string
+
+proc runHfTokenizersLibraryTests*() =
+  suite "HF Tokenizers Library Fixtures Tests":
+    const HfFixtures = [
+      ("gpt2", "gpt2-tokenizer.json"),
+      ("llama3", "llama3-tokenizer.json"),
+    ]
+
+    for pair in HfFixtures:
+      let fixtureName = pair[0]
+      let hfFile = pair[1]
+      let fixturePath = FIXTURES_DIR / "hf_" & fixtureName & ".json"
+      let hfPath = TOKENIZERS_DIR / hfFile
+      let testName = "HF tokenizers library fixture (" & fixtureName & ")"
+
+      test testName:
+        doAssert fileExists(fixturePath), "Fixture not found: " & fixturePath
+        doAssert fileExists(hfPath), "HF tokenizer not found: " & hfPath
+
+        let tokenizer = loadHFTokenizer(hfPath)
+        let content = readFile(fixturePath)
+        let fixtures = content.fromJson(seq[CodecFixture])
+
+        for fixture in fixtures:
+          let result = tokenizer.encodeOrdinary(fixture.text)
+          check result == fixture.tokenIds
+
+when isMainModule:
+  runHfTokenizersLibraryTests()
