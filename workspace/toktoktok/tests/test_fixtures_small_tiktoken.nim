@@ -4,7 +4,7 @@ import pkg/jsony
 
 import workspace/toktoktok
 
-const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures" / "codec"
+const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures" / "small"
 const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
 
 type
