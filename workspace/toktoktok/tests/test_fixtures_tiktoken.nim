@@ -25,7 +25,7 @@ proc runTiktokenFixturesTests*() =
 
     for config in TiktokenFixtures:
       let (fixtureName, tiktokenFile, regexp) = config
-      let fixturePath = FIXTURES_DIR / fixtureName & ".json"
+      let fixturePath = FIXTURES_DIR / "tiktoken_" & fixtureName & ".json"
       let tiktokenPath = TOKENIZERS_DIR / tiktokenFile
       let testName = "Tiktoken fixture (" & fixtureName & ")"
 

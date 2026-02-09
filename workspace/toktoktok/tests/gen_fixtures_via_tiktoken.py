@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Generate fixture files for tokenizer testing.
+Generate fixture files for tokenizer testing via tiktoken.
 
 Fixtures are JSON files with the format:
 {
     "text": "Some example text",
     "token_ids": [10, 234, 6909, ..., 99],
-    "tokenizer": "r50k_base.tiktoken"
+    "tokenizer": "tiktoken_r50k_base.tiktoken"
 }
 """
 
@@ -15,6 +15,8 @@ import base64
 from pathlib import Path
 from typing import Dict, List, Any
 import tiktoken
+
+import hf_to_tiktoken
 
 TEST_DIR = Path(__file__).parent.resolve()
 TOKENIZERS_DIR = TEST_DIR / "tokenizers"
@@ -51,7 +53,9 @@ def parse_tiktoken(path: Path) -> Dict[bytes, int]:
     return mergeable_ranks
 
 
-def generate_fixture(text: str, tokenizer_name: str, encoding) -> Dict[str, Any]:
+def generate_fixture(
+    text: str, tokenizer_name: str, encoding: tiktoken.Encoding
+) -> Dict[str, Any]:
     """Generate a single fixture entry."""
     token_ids = encoding.encode_ordinary(text)
     return {"text": text, "token_ids": token_ids, "tokenizer": tokenizer_name}
@@ -178,14 +182,14 @@ def get_test_texts() -> List[tuple[str, str]]:
 
 
 def generate_tiktoken_fixtures():
-    """Generate fixtures for all tiktoken files."""
+    """Generate fixtures for all tiktoken files using get_encoding."""
     for tokenizer_name, filename in TIKTOKEN_FILES.items():
         path = TOKENIZERS_DIR / filename
         if not path.exists():
             print(f"[SKIP] {path} not found")
             continue
 
-        print(f"Processing {tokenizer_name}...")
+        print(f"Processing tiktoken {tokenizer_name}...")
         encoding = tiktoken.get_encoding(tokenizer_name)
 
         fixtures = []
@@ -193,87 +197,58 @@ def generate_tiktoken_fixtures():
             fixture = generate_fixture(text, filename, encoding)
             fixtures.append({"name": name, **fixture})
 
-        output_path = FIXTURES_DIR / f"{tokenizer_name}.json"
+        output_path = FIXTURES_DIR / f"tiktoken_{tokenizer_name}.json"
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(fixtures, f, ensure_ascii=False, indent=2)
         print(f"  [OK] Generated {len(fixtures)} fixtures to {output_path}")
 
 
-def generate_hf_fixtures():
-    """Generate fixtures for HF tokenizers (via tiktoken comparison)."""
-    hf_to_tiktoken = {
-        "gpt2": "gpt2",
-        "llama3": "llama3",
+def generate_tiktoken_from_hf():
+    """Generate fixtures for HF tokenizers using tiktoken.Encoding via conversion."""
+    hf_to_pat = {
+        "gpt2": r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\r?\n|\s+(?!\S)|\s+",
+        "llama3": r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
     }
 
-    hf_to_encoding = {
-        "gpt2": "gpt2",
-        "llama3": "o200k_base",  # llama3 uses o200k_base encoding
-    }
-
-    for hf_name, tik_name in hf_to_tiktoken.items():
-        hf_filename = HF_FILES.get(hf_name)
-        if hf_filename is None:
-            continue
-
+    for hf_name, hf_filename in HF_FILES.items():
         hf_path = TOKENIZERS_DIR / hf_filename
         if not hf_path.exists():
             print(f"[SKIP] {hf_path} not found")
             continue
 
-        print(f"Processing HF {hf_name}...")
-        encoding = tiktoken.get_encoding(hf_to_encoding[hf_name])
+        print(f"Processing tiktoken from HF {hf_name}...")
+        mergeable_ranks = hf_to_tiktoken.convert_vocab_to_mergeable_ranks(
+            str(hf_path)
+        )
+        pat_str = hf_to_pat.get(hf_name, hf_to_pat["gpt2"])
+        special_tokens = hf_to_tiktoken.extract_special_tokens(str(hf_path))
+
+        encoding = tiktoken.Encoding(
+            name=hf_name,
+            pat_str=pat_str,
+            mergeable_ranks=mergeable_ranks,
+            special_tokens=special_tokens,
+        )
 
         fixtures = []
         for name, text in get_test_texts():
             fixture = generate_fixture(text, hf_filename, encoding)
             fixtures.append({"name": name, **fixture})
 
-        output_path = FIXTURES_DIR / f"hf_{hf_name}.json"
+        output_path = FIXTURES_DIR / f"tiktoken_from_hf_{hf_name}.json"
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(fixtures, f, ensure_ascii=False, indent=2)
         print(f"  [OK] Generated {len(fixtures)} fixtures to {output_path}")
 
 
-def check_gpt2_consistency():
-    """Sanity check: GPT-2 HF and Tiktoken should produce same token IDs."""
-    hf_path = FIXTURES_DIR / "hf_gpt2.json"
-    tiktoken_path = FIXTURES_DIR / "r50k_base.json"
-
-    if not hf_path.exists() or not tiktoken_path.exists():
-        print("[SKIP] GPT-2 consistency check - fixture files not found")
-        return
-
-    with open(hf_path, "r", encoding="utf-8") as f:
-        hf_fixtures = json.load(f)
-    with open(tiktoken_path, "r", encoding="utf-8") as f:
-        tiktoken_fixtures = json.load(f)
-
-    hf_by_name = {f["name"]: f["token_ids"] for f in hf_fixtures}
-    tiktoken_by_name = {f["name"]: f["token_ids"] for f in tiktoken_fixtures}
-
-    mismatches = []
-    for name in hf_by_name:
-        if name in tiktoken_by_name:
-            if hf_by_name[name] != tiktoken_by_name[name]:
-                mismatches.append(name)
-
-    if mismatches:
-        raise AssertionError(
-            f"GPT-2 HF and Tiktoken produce different token IDs for: {mismatches}"
-        )
-    print("[OK] GPT-2 HF and Tiktoken produce identical token IDs")
-
-
 def main():
     """Generate all fixtures."""
     print("=" * 70)
-    print("Generating tokenizer fixtures")
+    print("Generating tokenizer fixtures via tiktoken")
     print("=" * 70)
 
     generate_tiktoken_fixtures()
-    generate_hf_fixtures()
-    check_gpt2_consistency()
+    generate_tiktoken_from_hf()
 
     print("=" * 70)
     print("Fixture generation complete")

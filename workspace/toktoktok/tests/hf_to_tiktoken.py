@@ -30,13 +30,8 @@ def _unicode_to_bytes() -> dict[str, int]:
     """Returns the reverse mapping: unicode characters back to bytes."""
     return {v: k for k, v in _bytes_to_unicode().items()}
 
-
-def convert_vocab_to_mergeable_ranks(hf_tokenizer_path: str) -> dict[str, int]:
-    """Convert HF vocab to tiktoken mergeable_ranks format.
-
-    Keys are string representations of byte arrays like "[196, 160, 105]".
-    This matches the Nim jsony parseHook expectation.
-    """
+def convert_vocab_to_mergeable_ranks(hf_tokenizer_path: str) -> dict[bytes, int]:
+    """Convert HF vocab to tiktoken mergeable_ranks format with bytes keys."""
     with open(hf_tokenizer_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -47,9 +42,8 @@ def convert_vocab_to_mergeable_ranks(hf_tokenizer_path: str) -> dict[str, int]:
 
     for token, rank in vocab.items():
         try:
-            token_bytes = [byte_decoder[c] for c in token]
-            key = str(token_bytes)
-            mergeable_ranks[key] = rank
+            token_bytes = bytes([byte_decoder[c] for c in token])
+            mergeable_ranks[token_bytes] = rank
         except KeyError:
             continue
 
