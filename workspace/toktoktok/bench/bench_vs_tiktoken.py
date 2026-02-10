@@ -5,7 +5,6 @@ Benchmark Nim BPETokenizer against tiktoken for KimiK2.5 tokenizer.
 Benchmarks encoding performance on large fixture files.
 """
 
-import pytoktoktok
 from pathlib import Path
 from typing import List, Tuple
 import time
@@ -14,6 +13,8 @@ import argparse
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "tests"))
+import pytoktoktok
+
 from hf_to_tiktoken import KIMI_K25_PATTERN
 import tiktoken
 

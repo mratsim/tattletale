@@ -11,7 +11,10 @@ import std/strutils
 import std/sequtils
 import std/strformat
 import std/math
-import workspace/pcre2/pcre2
+
+import workspace/pcre2
+import workspace/probes
+
 import ./serialization
 import ./tokenizers_regexps
 
@@ -60,7 +63,7 @@ proc init*(_: type BPETokenizer): BPETokenizer =
 #                                                                              #
 ################################################################################
 
-proc compilePcre2(pattern: string, utf8: bool = true): Pcre2Code =
+proc compilePcre2(pattern: string, utf8: bool = true): Pcre2Code {.meter.} =
   var errorCode: CompileError
   var errorOffset: csize_t
 
@@ -72,7 +75,7 @@ proc compilePcre2(pattern: string, utf8: bool = true): Pcre2Code =
   result.code = code
   result.pattern = pattern
 
-proc createMatcher(code: Pcre2Code): Pcre2Matcher =
+proc createMatcher(code: Pcre2Code): Pcre2Matcher {.meter.} =
   result.code = code.code
   result.matchData = match_data_create_from_pattern(code.code, nil)
   if result.matchData == nil:
@@ -122,7 +125,7 @@ iterator findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0)
 #                                                                              #
 ################################################################################
 
-proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] =
+proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] {.meter.} =
   var parts = newSeqOfCap[(int, int)](piece.len + 2)
 
   var minRank = MaxInt
@@ -168,7 +171,7 @@ proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, i
 
   parts
 
-proc bytePairEncode*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
+proc bytePairEncode*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] {.meter.} =
   if piece.len == 1:
     return @[ranks[piece]]
 
@@ -183,7 +186,7 @@ proc bytePairEncode*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
 #                                                                              #
 ################################################################################
 
-proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] =
+proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] {.meter.} =
   var lastPos = 0
   for (start, stop) in findAllPcre2(tokenizer.patternMatcher, text):
     if start > lastPos:
@@ -194,7 +197,7 @@ proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] =
   if lastPos < text.len:
     result.add(text[lastPos..<text.len])
 
-proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] =
+proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
   result = @[]
   let pieces = tokenizer.splitTextOrdinary(text)
   for piece in pieces:
@@ -206,7 +209,7 @@ proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] =
       for tok in bpeTokens:
         result.add(tok)
 
-proc encodeWithSpecial*(tokenizer: BPETokenizer, text: string): seq[int] =
+proc encodeWithSpecial*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
   var pos = 0
 
   while pos < text.len:
@@ -238,10 +241,10 @@ proc encodeWithSpecial*(tokenizer: BPETokenizer, text: string): seq[int] =
         result.add(tok)
       break
 
-proc encode*(tokenizer: BPETokenizer, text: string): seq[int] =
+proc encode*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
   tokenizer.encodeWithSpecial(text)
 
-proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] =
+proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] {.meter.} =
   for id in tokenIds:
     let bytes = tokenizer.decoder.getOrDefault(id, @[])
     if bytes.len > 0:
@@ -253,7 +256,7 @@ proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] =
       else:
         raise newException(TokenizerError, "Invalid token: " & $id)
 
-proc decodeToString*(tokenizer: BPETokenizer, tokenIds: seq[int]): string =
+proc decodeToString*(tokenizer: BPETokenizer, tokenIds: seq[int]): string {.meter.} =
   let bytes = tokenizer.decodeToBytes(tokenIds)
   if bytes.len == 0:
     return ""
