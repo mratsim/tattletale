@@ -9,9 +9,9 @@ import
   # Standard library
   std/complex,
   # Internal
-  workspace/libtorch/src/std_cpp,
-  workspace/libtorch/src/c10,
-  workspace/libtorch/vendor/libtorch
+  workspace/libtorch/vendor/libtorch,
+  workspace/libtorch/src/abi/c10,
+  workspace/libtorch/src/abi/std_cpp
 
 # (Almost) raw bindings to PyTorch Tensors
 # -----------------------------------------------------------------------

@@ -7,9 +7,9 @@
 
 import
   # Internal
-  workspace/libtorch/src/torch_tensors,
-  workspace/libtorch/src/std_cpp,
-  workspace/libtorch/src/c10,
+  workspace/libtorch/src/abi/torch_tensors,
+  workspace/libtorch/src/abi/std_cpp,
+  workspace/libtorch/src/abi/c10,
   workspace/libtorch/vendor/libtorch
 
 # (Almost) raw bindings to PyTorch Neural Networks
@@ -136,6 +136,11 @@ func pRelu_mut*(input: var TorchTensor) {.importcpp: "torch::prelu_(@)".}
 func selu*(input: TorchTensor): TorchTensor {.importcpp: "torch::selu(@)".}
 func selu_mut*(input: var TorchTensor) {.importcpp: "torch::selu_(@)".}
 
+func silu*(self: TorchTensor): TorchTensor {.importcpp: "torch::silu(@)".}
+  ## SiLU (Sigmoid Linear Unit) activation function: x / (1 + exp(-x))
+  ## Also known as Swish.
+func silu_mut*(self: TorchTensor): TorchTensor {.importcpp: "torch::silu_(@)".}
+
 func tanh*(input: TorchTensor): TorchTensor {.importcpp: "torch::tanh(@)".}
 func tanh_mut*(input: var TorchTensor) {.importcpp: "torch::tanh_(@)".}
 
@@ -155,6 +160,11 @@ func log_softmax*(input: TorchTensor, axis: int64, dtype: ScalarKind): TorchTens
 
 func dropout*(input: TorchTensor, p = 0.5, training = true): TorchTensor {.importcpp: "torch::dropout(@)".}
 func dropout_mut*(input: var TorchTensor, p = 0.5, training = true) {.importcpp: "torch::dropout_(@)".}
+
+# Normalization functions
+# -------------------------------------------------------------------------
+func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef) {.importcpp: "torch::rms_norm(@)".}
+func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef, weight: TorchTensor) {.importcpp: "torch::rms_norm(@)".}
 
 # Loss functions
 # -------------------------------------------------------------------------
