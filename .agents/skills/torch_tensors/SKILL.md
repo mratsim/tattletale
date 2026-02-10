@@ -310,6 +310,162 @@ let tensor = arange(numel, kInt64)
   .cpu()
 ```
 
+### Advanced slicing syntax (indexing_macros.nim)
+
+The indexing macros provide Python-like slicing with Nim syntax:
+
+```nim
+# Basic slices (inclusive start, exclusive end like Python)
+let slice = tensor[0..5]        # elements 0,1,2,3,4
+let slice = tensor[1..3, 0..2]  # 2D slice
+
+# Exclusive end with ..<
+let slice = tensor[0..<5]       # elements 0,1,2,3,4 (same as 0..4)
+
+# Relative to end with ^ (negative indexing)
+let slice = tensor[^2..^1]      # last 2 elements
+let slice = tensor[0..^3]       # all but last 2
+
+# Stepped slices with |
+let slice = tensor[0..10|2]     # every 2nd element
+let slice = tensor[_.._|2]      # entire dim, every 2nd
+
+# Span slices (whole dimension)
+let span = tensor[_, 3]         # all of dim 0, index 3 of dim 1
+let span = tensor[1.._, _]      # dim 0 from 1, all of dim 1
+
+# Combined
+let slice = tensor[^1..0|-1, 0..<5|1]  # reverse dim 0, first 5 of dim 1
+```
+
+### Step type and operators
+
+Internal workaround for operator precedence:
+
+```nim
+type Step = object
+  b: int       # end of range
+  step: int    # step size
+
+# Operators:
+# `|` - step operator
+# `..` - inclusive range
+# `..<` - exclusive range
+# `..^` - relative-to-end range
+```
+
+### FancySelectorKind - Indexing dispatch
+
+Types for dispatching different indexing modes:
+
+```nim
+type FancySelectorKind* = enum
+  FancyNone          # No fancy indexing
+  FancyIndex        # Integer array indexing
+  FancyMaskFull     # Boolean mask on full tensor
+  FancyMaskAxis     # Boolean mask on specific axis
+  FancyUnknownFull  # Unknown selector full
+  FancyUnknownAxis  # Unknown selector axis
+```
+
+### Slicing macros
+
+```nim
+# Desugar all syntactic sugar to TorchSlice
+desugarSlices*(args: untyped)
+
+# Typed dispatch for read operations
+slice_typed_dispatch*(t: typed, args: varargs[typed])
+
+# Typed dispatch for write operations
+slice_typed_dispatch_mut*(t: typed, args: varargs[typed], val: typed)
+```
+
+### FFT test patterns (test_torchtensors.nim)
+
+Test FFT operations with roundtrip verification:
+
+```nim
+suite "FFT1D":
+  setup:
+    let shape = [8'i64]
+    let f64input = rand(shape.asTorchView(), kfloat64)
+    let c64input = rand(shape.asTorchView(), kComplexF64)
+
+  test "fft, ifft":
+    let fftout = fft(c64input)
+    let ifftout = ifft(fftout)
+    let max_input = max(abs(ifftout)).item(float64)
+    var rel_diff = abs(ifftout - c64input)
+    rel_diff /= max_input
+    check mean(rel_diff).item(float64) < 1e-12
+
+  test "rfft, irfft":
+    let fftout = rfft(f64input)
+    let ifftout = irfft(fftout)
+    # ... similar verification
+```
+
+### Tensor creation test patterns
+
+```nim
+suite "Tensor creation":
+  test "eye":
+    let t = eye(2, kInt64)
+    check t == [[1, 0], [0, 1]].toTorchTensor()
+
+  test "zeros":
+    let shape = [2'i64, 3]
+    let t = zeros(shape.asTorchView(), kFloat32)
+    check t == [[0.0'f32, 0.0, 0.0], [0.0'f32, 0.0, 0.0]].toTorchTensor()
+
+  test "linspace":
+    let steps = 120'i64
+    let reft = toSeq(0..<120).map(x => float64(x)/float64(steps-1)).toTorchTensor()
+    let t = linspace(0.0, 1.0, steps, kFloat64)
+    let rel_error = mean(t - reft)
+    check rel_error.item(float64) <= 1e-12
+
+  test "arange":
+    let steps = 130'i64
+    let step = 1.0/float64(steps)
+    let t = arange(0.0, 1.0, step, float64)
+    for i in 0..<130:
+      let val = t[i].item(float64)
+      let refval: float64 = i.float64 / 130.0
+      check (val - refval) < 1e-12
+```
+
+### Sort and argsort tests
+
+```nim
+test "sort, argsort":
+  let t = [2, 3, 4, 1, 5, 6].toTorchTensor()
+  let
+    s = t.sort()
+    args = t.argsort()
+  check s.get(0) == [1, 2, 3, 4, 5, 6].toTorchTensor()
+  check s.get(1) == args
+  check args == [3, 0, 1, 2, 4, 5].toTorchTensor()
+```
+
+### Operator precedence tests
+
+```nim
+suite "Operator precedence":
+  test "+ and *":
+    let a = [[1, 2], [3, 4]].toTorchTensor()
+    let b = -a
+    check b * a + b == [[-2, -6], [-12, -20]].toTorchTensor()
+    check b * (a + b) == [[0, 0], [0, 0]].toTorchTensor()
+
+  test "+ and .abs":
+    let a = [[1, 2], [3, 4]].toTorchTensor()
+    let b = -a
+    check a + b.abs == [[2, 4], [6, 8]].toTorchTensor()
+    check (a + b).abs == [[0, 0], [0, 0]].toTorchTensor()
+```
+
 ### Key test patterns
 
 1. Always wrap test code in `proc runTests*()` to avoid C++ `= {}` initialization
@@ -317,3 +473,5 @@ let tensor = arange(numel, kInt64)
 3. Use `dtype.toTorchType()` for dtype conversion
 4. Use `==` for tensor comparison (uses `equal()` internally)
 5. Each branch of `case` must assign to `result`
+6. For FFT tests, verify roundtrip with `abs()` and `mean()` of difference
+7. Use `max(abs(tensor)).item(float64)` for normalization in error calculations
