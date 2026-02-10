@@ -404,6 +404,10 @@ func t*(self: TorchTensor): TorchTensor {.importcpp: "#.t()".}
 func permute*(self: TorchTensor, dims: IntArrayRef): TorchTensor {.importcpp: "#.permute(@)".}
   ## Returns a view of the original tensor with its dimensions permuted.
 
+func narrow*(self: TorchTensor, dim: int64, start: int64, length: int64): TorchTensor {.importcpp: "#.narrow(@)".}
+  ## Slices the tensor at the given dimension.
+  ## Equivalent to PyTorch's narrow operation.
+
 # Automatic Differentiation
 # -----------------------------------------------------------------------
 
