@@ -7,7 +7,7 @@ import ../src/serialization
 
 const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
 
-proc runSerializationTests*() =
+proc runSerializationTests() =
   suite "Serialization Tests":
 
 

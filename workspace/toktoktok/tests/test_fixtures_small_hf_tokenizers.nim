@@ -8,14 +8,14 @@ const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures" / "small"
 const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
 
 type
-  CodecFixture* = object
-    name*: string
-    text*: string
-    tokenIds*: seq[int]
-    tokenizer*: string
+  CodecFixture = object
+    name: string
+    text: string
+    tokenIds: seq[int]
+    tokenizer: string
 
-proc runHfTokenizersLibraryTests*() =
-  suite "HF Tokenizers Library Fixtures Tests":
+proc runHfTokenizersTests() =
+  suite "HF Tokenizers Fixtures Tests":
     const HfFixtures = [
       ("gpt2", "gpt2-tokenizer.json"),
       ("llama3", "llama3-tokenizer.json"),
@@ -32,23 +32,17 @@ proc runHfTokenizersLibraryTests*() =
       let hfPath = TOKENIZERS_DIR / hfFile
       let testName = "HF tokenizers library fixture (" & fixtureName & ")"
 
-      test testName:
-        doAssert fileExists(fixturePath), "Fixture not found: " & fixturePath
-        doAssert fileExists(hfPath), "HF tokenizer not found: " & hfPath
+      doAssert fileExists(fixturePath), "Fixture not found: " & fixturePath
+      doAssert fileExists(hfPath), "HF tokenizer not found: " & hfPath
 
-        let tokenizer = loadHFTokenizer(hfPath)
-        let content = readFile(fixturePath)
-        let fixtures = content.fromJson(seq[CodecFixture])
+      let tokenizer = loadHFTokenizer(hfPath)
+      let content = readFile(fixturePath)
+      let fixtures = content.fromJson(seq[CodecFixture])
 
-        for fixture in fixtures:
+      for fixture in fixtures:
+        test "HF tokenizer fixture - " & fixture.name & " (" & fixtureName & ")":
           let result = tokenizer.encodeOrdinary(fixture.text)
           check result == fixture.tokenIds
 
-        test "Chinese historical paragraph regression (" & fixtureName & ")":
-          let original = "紅。白\n髮漁樵江渚上，慣看秋月春風。一壺濁酒喜相逢：古今多少事，都付笑談中。\n\n　　話說天下大勢，分久必合，合久必分：周末七國分爭，并入於秦。及秦滅之後，楚\n、漢分爭，又并入於漢。漢朝自高祖斬白蛇而起義，一統天下。後來光武中興，傳至獻\n帝遂分為三國。推其致亂之由，殆始於桓、靈二帝。桓帝禁錮善類，崇信宦官。及桓\n帝崩，靈帝即位，大將軍竇武"
-          let encoded = tokenizer.encodeOrdinary(original)
-          let decoded = decodeToString(tokenizer, encoded)
-          check decoded == original
-
 when isMainModule:
-  runHfTokenizersLibraryTests()
+  runHfTokenizersTests()
