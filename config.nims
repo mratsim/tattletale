@@ -99,6 +99,11 @@ task test_safetensors, "Test workspace/safetensors":
     for cmd in getTestCommands("workspace/safetensors/tests"):
       runCmd(cmd)
 
+task test_models, "Test workspace/models":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/models/tests"):
+      runCmd(cmd)
+
 task test_toktoktok, "Test workspace/toktoktok":
   withDir(ProjectRoot):
     const fixturesDir = "workspace/toktoktok/tests/tokenizers"
