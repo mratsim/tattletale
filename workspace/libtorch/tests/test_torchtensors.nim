@@ -33,8 +33,8 @@ proc main() =
       check t == [[1, 0], [0, 1]].toTorchTensor()
 
     test "zeros":
-      let shape = [2'i64, 3]
-      let t = zeros(shape.asTorchView(), kFloat32)
+      let shape = [2, 3]
+      let t = zeros(shape, kFloat32)
       check t == [[0.0'f32, 0.0, 0.0], [0.0'f32, 0.0, 0.0]].toTorchTensor()
 
     test "linspace":
@@ -60,8 +60,8 @@ proc main() =
 
   suite "Tensor utils":
     test "Print":
-      let shape = [2'i64, 3, 4]
-      let t = rand(shape.asTorchView(), kfloat64)
+      let shape = [2, 3, 4]
+      let t = rand(shape, kfloat64)
       echo t
 
     test "sort, argsort":
@@ -87,9 +87,9 @@ proc main() =
 
   suite "FFT1D":
     setup:
-      let shape = [8'i64]
-      var f64input {.used.} = rand(shape.asTorchView(), kfloat64)
-      var c64input {.used.} = rand(shape.asTorchView(), kComplexF64)
+      let shape = [8]
+      var f64input {.used.} = rand(shape, kfloat64)
+      var c64input {.used.} = rand(shape, kComplexF64)
 
     test "item(Complex64)":
       # Check item for complex
@@ -125,9 +125,9 @@ proc main() =
 
   suite "FFT2D":
     setup:
-      let shape = [3'i64, 5]
-      var f64input {.used.} = rand(shape.asTorchView(), kfloat64)
-      var c64input {.used.} = rand(shape.asTorchView(), kComplexF64)
+      let shape = [3, 5]
+      var f64input {.used.} = rand(shape, kfloat64)
+      var c64input {.used.} = rand(shape, kComplexF64)
 
     test "fft2, ifft2":
       let fft2out = fft2(c64input)
@@ -144,9 +144,9 @@ proc main() =
 
   suite "FFTND":
     setup:
-      let shape = [3'i64, 4, 5]
-      var f64input {.used.} = rand(shape.asTorchView(), kfloat64)
-      var c64input {.used.} = rand(shape.asTorchView(), kComplexF64)
+      let shape = [3, 4, 5]
+      var f64input {.used.} = rand(shape, kfloat64)
+      var c64input {.used.} = rand(shape, kComplexF64)
 
     test "fftn, ifftn":
       let fftnout = fftn(c64input)

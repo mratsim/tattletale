@@ -5,7 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/math, workspace/libtorch
+import std/math
+import workspace/libtorch
 
 {.experimental: "views".}
 
@@ -42,7 +43,7 @@ proc newRotaryEmb*(
   let positions = arange(max_seq_len.int64, kFloat32).to(dtype)
 
   let shape = @[max_seq_len.int64, 1.int64]
-  let freqs = positions.reshape(shape.asTorchView()) * inv_freq_tensor
+  let freqs = positions.reshape(shape) * inv_freq_tensor
 
   result.cos_cache = freqs.cos().to(dtype)
   result.sin_cache = freqs.sin().to(dtype)
@@ -55,7 +56,7 @@ proc rotate_half*(x: TorchTensor): TorchTensor =
   let x2 = x.narrow(-1, half_dim, half_dim)
 
   let neg_x2 = -x2
-  result = cat(@[neg_x2, x1].asTorchView(), -1)
+  result = cat(@[neg_x2, x1], -1)
 
 proc apply_rope*(
   self: RotaryEmb,
