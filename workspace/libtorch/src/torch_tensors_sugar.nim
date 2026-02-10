@@ -14,6 +14,8 @@ import
   workspace/libtorch/src/dynamic_stack_arrays,
   workspace/libtorch/src/[ast_utils, indexing_macros]
 
+static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
+
 # #######################################################################
 #
 #               Syntactic sugar for Torch and Nim interop
@@ -37,27 +39,41 @@ func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
 # libtorch/include/c10/util/ArrayRef.h
 
 {.experimental: "views".}
+# Note:
+#   templates do literal replacement,
+#   i.e. if you pass (echo "launch missiles"; [1, 2]) to
+#   ```
+#   template foo(oa: openArray[int]): IntArrayRef =
+#     init(IntArrayRef, oa[0].unsafeAddr, oa.len)
+#   ```
+#   launch missiles will be called twice.
+#
+#   So either assign `let oa = oa` in the template body
+#   or use a proc.
+#
+#   But we can't store an openArray in a let variable
+#   or return it from a proc without {.experimental: "views".}
 
-template asNimView*[T](ar: ArrayRef[T]): openArray[T] =
+func asNimView*[T](ar: ArrayRef[T]): openArray[T] {.inline.} =
   toOpenArray(ar.data.unsafeAddr, 0, ar.size.int - 1)
 
-template asTorchView*(oa: openArray[int]): IntArrayRef =
-  static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
+func asTorchView*(oa: openArray[int]): IntArrayRef {.inline.} =
+  # libtorch only works (and actively checks) on 64-bit OSes.
   init(IntArrayRef, oa[0].unsafeAddr, oa.len)
 
-template asTorchView*(oa: openArray[int64]): IntArrayRef =
+func asTorchView*(oa: openArray[int64]): IntArrayRef {.inline.} =
   init(IntArrayRef, oa[0].unsafeAddr, oa.len)
 
-template asTorchView*[T: not (int|int64)](oa: openArray[T]): ArrayRef[T] =
+func asTorchView*[T: not (int|int64)](oa: openArray[T]): ArrayRef[T] {.inline.} =
   init(ArrayRef[T], oa[0].unsafeAddr, oa.len)
 
-template asTorchView*(meta: Metadata): ArrayRef[int64] =
+func asTorchView*(meta: Metadata): ArrayRef[int64] {.inline.} =
   init(ArrayRef[int64], meta.data[0].unsafeAddr, meta.len)
 
-proc `$`*[T](ar: ArrayRef[T]): string =
+proc `$`*[T](ar: ArrayRef[T]): string {.inline.} =
   `$`(ar.asNimView())
 
-func len*[T](ar: ArrayRef[T]): int =
+func len*[T](ar: ArrayRef[T]): int {.inline.} =
   # Nim idiomatic proc for seq
   ar.size().int
 
@@ -68,7 +84,7 @@ iterator items*[T](ar: ArrayRef[T]): T =
     yield ar.data()[i]
     inc i
 
-func `[]`*[T](ar: ArrayRef[T], idx: SomeInteger): T =
+func `[]`*[T](ar: ArrayRef[T], idx: SomeInteger): T {.inline.} =
   when compileOption("boundChecks"):
     if idx < 0 or idx >= ar.len():
       raise newException(
@@ -77,7 +93,7 @@ func `[]`*[T](ar: ArrayRef[T], idx: SomeInteger): T =
       )
   result = getAt(ar, idx)
 
-func `[]=`*[T](ar: var ArrayRef[T], idx: SomeInteger, val: T) =
+func `[]=`*[T](ar: var ArrayRef[T], idx: SomeInteger, val: T) {.inline.} =
   when compileOption("boundChecks"):
     if idx < 0 or idx >= ar.len():
       raise newException(
@@ -179,7 +195,7 @@ iterator flatIter*[T](s: openarray[T]): auto {.noSideEffect.} =
     else:
       yield item
 
-func toTorchTensorView*[T: SomeTorchType](oa: openarray[T]): lent TorchTensor =
+func toTorchTensorView*[T: SomeTorchType](oa: openarray[T]): lent TorchTensor {.inline.} =
   ## Interpret an openarray as a CPU Tensor
   ## Important:
   ##   the buffer is shared.
