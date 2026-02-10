@@ -170,25 +170,18 @@ proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, i
 
 proc bytePairEncode*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] =
   if piece.len == 1:
-    if ranks.hasKey(piece):
-      return @[ranks[piece]]
-    else:
-      return @[]
+    return @[ranks[piece]]
 
   let merged = bytePairMerge(piece, ranks)
-  var bpeResult: seq[int] = @[]
+  result.newSeq(merged.len - 1)
   for i in 0..<merged.len - 1:
-    let startIdx = merged[i][0]
-    let endIdx = merged[i+1][0]
-    let pair = piece[startIdx..<endIdx]
-    if ranks.hasKey(pair):
-      bpeResult.add(ranks[pair])
-    elif pair.len == 1:
-      let byteSeq = @[pair[0]]
-      if ranks.hasKey(byteSeq):
-        bpeResult.add(ranks[byteSeq])
+    result[i] = ranks[piece[merged[i][0]..<merged[i+1][0]]]
 
-  bpeResult
+################################################################################
+#                                                                              #
+#                             Tokenizing                                       #
+#                                                                              #
+################################################################################
 
 proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] =
   var lastPos = 0
