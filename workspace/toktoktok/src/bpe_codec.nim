@@ -124,15 +124,63 @@ iterator findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0)
 #                          Byte-Pair Encoding                                  #
 #                                                                              #
 ################################################################################
+#
+# Benchmarking shows that repeatedly returning/concatenating sequences was too much overhead
+# in `bytePairEncode` and in-place construction was necessary.
+#
+# Note: TTL_METER introduces significant overhead especially for small functions (cache misses + atomic increment on function in/out)
+#
+# ❯ nim c -r --hints:off --warnings:off --verbosity:0 -d:danger -d:TTL_METER --outdir:build workspace/toktoktok/bench/meter_tokenizer.nim
+#
+# ======================================================================
+# PERFORMANCE METERING: BPETokenizer.encode
+# ======================================================================
+# [INFO] Loading KimiK2.5 tokenizer...
+# [OK] Tokenizer loaded with 163584 tokens
+# [INFO] Reading Verne text (limited to 10000 chars)...
+# [OK] Read 10000 chars
+#
+# ============================================================
+# Metering tokenizer.encode on Verne text (10000 chars)
+# ============================================================
+#
+# CPU: Intel(R) Core(TM) Ultra 7 265K
+# The CPU Cycle Count is indicative only. It cannot be used to compare across systems, works at your CPU nominal frequency and is sensitive to overclocking, throttling and frequency scaling (powersaving and Turbo Boost).
+#
+# **BEFORE**
+#
+# |                         Procedures                         |  # of Calls  | Throughput (ops/s) |   Time (10⁻⁶s)   | Avg Time (10⁻⁶s) | CPU 10³cycles | Avg 10³cycles |
+# |------------------------------------------------------------|--------------|--------------------|------------------|------------------|---------------|---------------|
+# |bytePairMerge*(piece: seq[byte]; ranks: Table[seq[byte], ...|           662|          777351.135|           851.610|             1.286|       3162.868|          4.778|
+# |bytePairEncode*(piece: seq[byte]; ranks: Table[seq[byte] ...|           662|             257.659|       2569284.415|          3881.094|    9964170.880|      15051.618|
+# |splitTextOrdinary(tokenizer: BPETokenizer; text: string) ...|             1|            3152.058|           317.253|           317.253|       1230.220|       1230.220|
+# |encodeOrdinary*(tokenizer: BPETokenizer; text: string):  ...|             1|               0.389|       2569959.520|       2569959.520|    9967008.492|    9967008.492|
+# |encodeWithSpecialTokens*(tokenizer: BPETokenizer; text:  ...|             1|               0.389|       2569969.828|       2569969.828|    9967048.497|    9967048.497|
+# |encode*(tokenizer: BPETokenizer; text: string): seq[int]    |             1|               0.389|       2569969.950|       2569969.950|    9967049.001|    9967049.001|
+#
+# Result: 3124 tokens encoded
+#
+# **AFTER**
+#
+# |                         Procedures                         |  # of Calls  | Throughput (ops/s) |   Time (10⁻⁶s)   | Avg Time (10⁻⁶s) | CPU 10³cycles | Avg 10³cycles |
+# |------------------------------------------------------------|--------------|--------------------|------------------|------------------|---------------|---------------|
+# |bytePairMerge(piece: seq[byte]; ranks: Table[seq[byte],  ...|           662|         1076666.108|           614.861|             0.929|       2337.808|          3.531|
+# |bytePairEncode*(encodedResult: var seq[int]; piece: seq[ ...|           662|          966358.464|           685.046|             1.035|       2610.018|          3.943|
+# |splitTextOrdinary(tokenizer: BPETokenizer; text: string) ...|             1|            2934.221|           340.806|           340.806|       1321.500|       1321.500|
+# |encodeOrdinaryImpl(encodedResult: var seq[int]; tokenize ...|             1|             832.752|          1200.837|          1200.837|       4656.916|       4656.916|
+# |encodeWithSpecialTokens*(tokenizer: BPETokenizer; text:  ...|             1|             830.313|          1204.365|          1204.365|       4670.778|       4670.778|
+# |encode*(tokenizer: BPETokenizer; text: string): seq[int]    |             1|             830.270|          1204.427|          1204.427|       4671.020|       4671.020|
+#
+# Result: 3124 tokens encoded
 
-proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] {.meter.} =
+proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] {.meter.} =
   var parts = newSeqOfCap[(int, int)](piece.len + 2)
 
   var minRank = MaxInt
   var minRankIdx = 0
 
   for i in 0..<piece.len - 1:
-    let pair = @[piece[i], piece[i+1]]
+    let pair = @[piece[i], piece[i+1]]          # TODO: That seems like a wasteful allocation
     let rank = ranks.getOrDefault(pair, MaxInt)
     if rank < minRank:
       minRank = rank
@@ -142,15 +190,17 @@ proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, i
   parts.add((piece.len - 1, MaxInt))
   parts.add((piece.len, MaxInt))
 
-  proc getRank(parts: seq[(int, int)], i: int): int {.closure.} =
+  template getRank(parts: seq[(int, int)], i: int): int =
     ## Get rank for pair starting at parts[i], spanning to parts[i+3] boundary.
-    ##
+    ## Captures `ranks` and `piece`
+    ## Always inlined
     if i + 3 < parts.len:
       let startIdx = parts[i][0]
       let endIdx = parts[i+3][0]
       let pair = piece[startIdx..<endIdx]
-      return ranks.getOrDefault(pair, MaxInt)
-    return MaxInt
+      ranks.getOrDefault(pair, MaxInt)
+    else:
+      MaxInt
 
   while minRank != MaxInt:
     let i = minRankIdx
@@ -171,14 +221,18 @@ proc bytePairMerge*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, i
 
   parts
 
-proc bytePairEncode*(piece: seq[byte], ranks: Table[seq[byte], int]): seq[int] {.meter.} =
-  if piece.len == 1:
-    return @[ranks[piece]]
+proc bytePairEncode*(
+        encodedResult: var seq[int],
+        piece: seq[byte],
+        ranks: Table[seq[byte], int]) {.meter.} =
 
-  let merged = bytePairMerge(piece, ranks)
-  result.newSeq(merged.len - 1)
-  for i in 0..<merged.len - 1:
-    result[i] = ranks[piece[merged[i][0]..<merged[i+1][0]]]
+  if piece.len == 1:
+    encodedResult.add(ranks[piece])
+
+  let mergedParts = bytePairMerge(piece, ranks)
+
+  for i in 0 ..< mergedParts.len-1:
+    encodedResult.add(ranks[piece[mergedParts[i][0]..<mergedParts[i+1][0]]])
 
 ################################################################################
 #                                                                              #
@@ -197,19 +251,22 @@ proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] {.met
   if lastPos < text.len:
     result.add(text[lastPos..<text.len])
 
-proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
-  result = @[]
+proc encodeOrdinaryImpl(encodedResult: var seq[int], tokenizer: BPETokenizer, text: string) {.meter.} =
+  # TODO: text should be a view to avoid alloc
   let pieces = tokenizer.splitTextOrdinary(text)
   for piece in pieces:
-    let pieceBytes = toBytes(piece)
-    if tokenizer.encoder.hasKey(pieceBytes):
-      result.add(tokenizer.encoder[pieceBytes])
+    # string and seq[byte] have the same internal repr in Nim, at leat Nim v0, v1 and v2
+    # except string have also a terminating \0 (not counted in len)
+    let pieceByte = cast[seq[byte]](piece)
+    if pieceByte in tokenizer.encoder:
+      encodedResult.add(tokenizer.encoder[pieceByte])
     else:
-      let bpeTokens = bytePairEncode(pieceBytes, tokenizer.encoder)
-      for tok in bpeTokens:
-        result.add(tok)
+      encodedResult.bytePairEncode(pieceByte, tokenizer.encoder)
 
-proc encodeWithSpecial*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
+proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] =
+  result.encodeOrdinaryImpl(tokenizer, text)
+
+proc encodeWithSpecialTokens*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
   var pos = 0
 
   while pos < text.len:
@@ -229,20 +286,14 @@ proc encodeWithSpecial*(tokenizer: BPETokenizer, text: string): seq[int] {.meter
       pos = pos + specialToken.len
     elif foundSpecial:
       if pos < nextPos:
-        let ordinary = text[pos ..< nextPos]
-        let encoded = tokenizer.encodeOrdinary(ordinary)
-        for tok in encoded:
-          result.add(tok)
+        result.encodeOrdinaryImpl(tokenizer, text[pos ..< nextPos]) # TODO: view slices
       pos = nextPos
     else:
-      let remaining = text[pos ..< text.len]
-      let encoded = tokenizer.encodeOrdinary(remaining)
-      for tok in encoded:
-        result.add(tok)
+      result.encodeOrdinaryImpl(tokenizer, text[pos ..< text.len]) # TODO: view slices
       break
 
 proc encode*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
-  tokenizer.encodeWithSpecial(text)
+  tokenizer.encodeWithSpecialTokens(text)
 
 proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] {.meter.} =
   for id in tokenIds:
