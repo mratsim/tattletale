@@ -1,0 +1,4 @@
+# HugginfFace models used for testing
+# -----------------------------------------------------------------------------------------
+tests/hf_models/*
+!tests/hf_models/.gitkeep
