@@ -5,7 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# This file statically compiles PCRE2 and exposes its API in Nim
+# This file statically compiles PCRE2 or dynamically link to system PCRE2
+# and exposes its API in Nim
 # We don't modify or path the original library
 # so that version updates only need:
 # - git checkout
@@ -34,37 +35,40 @@
 # and `git clone -c core.symlinks=true https://github.com/mratsim/tattletale`
 # to enable cloning with symlink
 
-{.compile:"vendor/pcre2_chartables.c".}
-{.compile:"vendor/pcre2/src/pcre2_auto_possess.c".}
-{.compile:"vendor/pcre2/src/pcre2_chkdint.c".}
-{.compile:"vendor/pcre2/src/pcre2_compile.c".}
-{.compile:"vendor/pcre2/src/pcre2_compile_cgroup.c".}
-{.compile:"vendor/pcre2/src/pcre2_compile_class.c".}
-{.compile:"vendor/pcre2/src/pcre2_config.c".}
-{.compile:"vendor/pcre2/src/pcre2_context.c".}
-{.compile:"vendor/pcre2/src/pcre2_convert.c".}
-{.compile:"vendor/pcre2/src/pcre2_dfa_match.c".}
-{.compile:"vendor/pcre2/src/pcre2_error.c".}
-{.compile:"vendor/pcre2/src/pcre2_extuni.c".}
-{.compile:"vendor/pcre2/src/pcre2_find_bracket.c".}
-{.compile:"vendor/pcre2/src/pcre2_jit_compile.c".}
-{.compile:"vendor/pcre2/src/pcre2_maketables.c".}
-{.compile:"vendor/pcre2/src/pcre2_match.c".}
-{.compile:"vendor/pcre2/src/pcre2_match_data.c".}
-{.compile:"vendor/pcre2/src/pcre2_match_next.c".}
-{.compile:"vendor/pcre2/src/pcre2_newline.c".}
-{.compile:"vendor/pcre2/src/pcre2_ord2utf.c".}
-{.compile:"vendor/pcre2/src/pcre2_pattern_info.c".}
-{.compile:"vendor/pcre2/src/pcre2_script_run.c".}
-{.compile:"vendor/pcre2/src/pcre2_serialize.c".}
-{.compile:"vendor/pcre2/src/pcre2_string_utils.c".}
-{.compile:"vendor/pcre2/src/pcre2_study.c".}
-{.compile:"vendor/pcre2/src/pcre2_substitute.c".}
-{.compile:"vendor/pcre2/src/pcre2_substring.c".}
-{.compile:"vendor/pcre2/src/pcre2_tables.c".}
-{.compile:"vendor/pcre2/src/pcre2_ucd.c".}
-{.compile:"vendor/pcre2/src/pcre2_valid_utf.c".}
-{.compile:"vendor/pcre2/src/pcre2_xclass.c".}
+const TTL_USE_SYSTEM_PCRE2 {.booldefine.} = true
+
+when not TTL_USE_SYSTEM_PCRE2:
+  {.compile:"vendor/pcre2_chartables.c".}
+  {.compile:"vendor/pcre2/src/pcre2_auto_possess.c".}
+  {.compile:"vendor/pcre2/src/pcre2_chkdint.c".}
+  {.compile:"vendor/pcre2/src/pcre2_compile.c".}
+  {.compile:"vendor/pcre2/src/pcre2_compile_cgroup.c".}
+  {.compile:"vendor/pcre2/src/pcre2_compile_class.c".}
+  {.compile:"vendor/pcre2/src/pcre2_config.c".}
+  {.compile:"vendor/pcre2/src/pcre2_context.c".}
+  {.compile:"vendor/pcre2/src/pcre2_convert.c".}
+  {.compile:"vendor/pcre2/src/pcre2_dfa_match.c".}
+  {.compile:"vendor/pcre2/src/pcre2_error.c".}
+  {.compile:"vendor/pcre2/src/pcre2_extuni.c".}
+  {.compile:"vendor/pcre2/src/pcre2_find_bracket.c".}
+  {.compile:"vendor/pcre2/src/pcre2_jit_compile.c".}
+  {.compile:"vendor/pcre2/src/pcre2_maketables.c".}
+  {.compile:"vendor/pcre2/src/pcre2_match.c".}
+  {.compile:"vendor/pcre2/src/pcre2_match_data.c".}
+  {.compile:"vendor/pcre2/src/pcre2_match_next.c".}
+  {.compile:"vendor/pcre2/src/pcre2_newline.c".}
+  {.compile:"vendor/pcre2/src/pcre2_ord2utf.c".}
+  {.compile:"vendor/pcre2/src/pcre2_pattern_info.c".}
+  {.compile:"vendor/pcre2/src/pcre2_script_run.c".}
+  {.compile:"vendor/pcre2/src/pcre2_serialize.c".}
+  {.compile:"vendor/pcre2/src/pcre2_string_utils.c".}
+  {.compile:"vendor/pcre2/src/pcre2_study.c".}
+  {.compile:"vendor/pcre2/src/pcre2_substitute.c".}
+  {.compile:"vendor/pcre2/src/pcre2_substring.c".}
+  {.compile:"vendor/pcre2/src/pcre2_tables.c".}
+  {.compile:"vendor/pcre2/src/pcre2_ucd.c".}
+  {.compile:"vendor/pcre2/src/pcre2_valid_utf.c".}
+  {.compile:"vendor/pcre2/src/pcre2_xclass.c".}
 
 # ################################################## #
 #                 PCRE2 API                          #
@@ -368,11 +372,22 @@ type
   GeneralContext* = object
   MatchData* = object
 
+when not TTL_USE_SYSTEM_PCRE2:
+  {.pragma: pcre2, importc: "pcre2_$1_8", cdecl.}
+else:
+  when hostOS == "windows":
+    const pcre2lib = "libpcre2-8-0.dll"
+  elif hostOS == "macosx":
+    const pcre2lib = "libpcre2-8.0.dylib"
+  else:
+    const pcre2lib = "libpcre2-8.so.0"
+  {.pragma: pcre2, importc: "pcre2_$1_8", cdecl, dynlib: pcre2lib.}
+
 proc compile*(pattern: ptr char|cstring, patlen: int,
               options: Flag[CompileOption],
               errorptr: var CompileError,
               erroroffset: var csize_t,
-              ccontext: pointer = nil): ptr Code {.importc: "pcre2_$1_8".}
+              ccontext: pointer = nil): ptr Code {.pcre2.}
 
 proc compile*(pattern: openArray[char],
               options: Flag[CompileOption],
@@ -412,14 +427,12 @@ proc compile*(pattern: openArray[char],
     ccontext
   )
 
-{.push importc: "pcre2_$1_8".}
-
 proc match*(code: ptr Code,
            subject: openArray[char],
            startoffset: int,
            options: Flag[MatchOption],
            ovector: ptr MatchData,
-           mcontext: pointer = nil): cint
+           mcontext: pointer = nil): cint {.pcre2.}
   ## Doc:
   ##    man pcre2_match.3
   ## or workspace/pcre2/vendor/pcre2/doc/pcre2_match.3
@@ -455,7 +468,7 @@ proc jit_match*(code: ptr Code,
            startoffset: int,
            options: Flag[MatchOption],
            ovector: ptr MatchData,
-           mcontext: pointer = nil): cint
+           mcontext: pointer = nil): cint {.pcre2.}
   ## Doc:
   ##    man pcre2_match.3
   ## or workspace/pcre2/vendor/pcre2/doc/pcre2_jit_match.3
@@ -476,7 +489,7 @@ proc jit_match*(code: ptr Code,
 proc match_data_create_from_pattern*(
   code: ptr Code,
   ctx: ptr GeneralContext
-): ptr MatchData
+): ptr MatchData {.pcre2.}
   ## This  function  creates  a new match data block for holding the result of a match.  If the first argument is NULL, this function returns NULL, otherwise the first argument points to a compiled pattern. The number of capturing parentheses within the pattern is
   ## used to compute the number of pairs of offsets that are required in the match data block. These form the "output vector" (ovector) within the match data block, and are used to identify the  matched  string  and  any  captured  substrings  when  matching  with
   ## pcre2_match(). If you are using pcre2_dfa_match(), which uses the output vector in a different way, you should use pcre2_match_data_create() instead of this function.
@@ -484,18 +497,18 @@ proc match_data_create_from_pattern*(
   ## The  second argument points to a general context, for custom memory management, or is NULL to use the same memory allocator that was used for the compiled pattern. The result of the function is NULL if the memory for the block could not be obtained or if NULL
   ## was provided as the first argument.
 
-proc match_data_free*(data: ptr MatchData)
+proc match_data_free*(data: ptr MatchData) {.pcre2.}
 
-proc get_ovector_pointer*(ovector: ptr MatchData): ptr UncheckedArray[int]
+proc get_ovector_pointer*(ovector: ptr MatchData): ptr UncheckedArray[int] {.pcre2.}
   ## This function returns a pointer to the vector of offsets that forms part of the given match data block.
   ## The number of pairs can be found by calling pcre2_get_ovector_count().
 
-proc get_ovector_count*(ovector: ptr MatchData): uint32
+proc get_ovector_count*(ovector: ptr MatchData): uint32 {.pcre2.}
   ## This function returns the number of pairs of offsets in the ovector that forms part of the given match data block.
 
-proc code_free*(code: ptr Code)
+proc code_free*(code: ptr Code) {.pcre2.}
 
-proc jit_compile*(code: ptr Code, options: uint32): cint
+proc jit_compile*(code: ptr Code, options: uint32): cint {.pcre2.}
   ## This  function  requests  JIT  compilation, which, if the just-in-time compiler is available,
   ## further processes a compiled pattern into machine code that executes
   ## much faster than the pcre2_match() interpretive matching function.
@@ -513,5 +526,3 @@ proc jit_compile*(code: ptr Code, options: uint32): cint
   ## The function can also return PCRE2_ERROR_NOMEMORY if JIT is unable to allocate executable memory for the compiler,
   ## even if it was because of a system security restriction.
   ## In a few cases, the function may return with PCRE2_ERROR_JIT_UNSUPPORTED for unsupported features.
-
-{.pop.}
