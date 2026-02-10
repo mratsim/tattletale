@@ -388,6 +388,52 @@ def get_test_cases() -> List[Dict[str, Any]]:
         }
     )
 
+    # Combined token 。\n (Chinese period + newline) - regression test for KimiK2.5
+    # This tests that when a 4-byte token exists in vocab, it should be found during BPE
+    # and not split into separate tokens
+    cases.append(
+        {
+            "description": "Chinese period + newline '。\\n' - combined 4-byte token regression",
+            "input_bytes": [227, 128, 130, 10],  # 。 (3 bytes) + \n (1 byte)
+            "ranks": bytes_to_b64_key(
+                {
+                    bytes([227, 128, 130]): 292,  # 。 standalone rank
+                    bytes([10]): 198,  # \n standalone rank
+                    bytes([227, 128, 130, 10]): 10155,  # 。\n combined rank
+                }
+            ),
+        }
+    )
+
+    # More complex: testing 。\n in context with surrounding text
+    cases.append(
+        {
+            "description": "Chinese text with 。\\n combined token in context",
+            "input_bytes": [
+                232,
+                131,
+                142,
+                232,
+                131,
+                136,
+                227,
+                128,
+                130,
+                10,
+            ],  # 談中。\n
+            "ranks": bytes_to_b64_key(
+                {
+                    bytes([232, 131]): 60412,
+                    bytes([142, 232]): 229,
+                    bytes([232, 131, 136]): 435,
+                    bytes([227, 128, 130]): 292,  # 。
+                    bytes([10]): 198,  # \n
+                    bytes([227, 128, 130, 10]): 10155,  # 。\n combined
+                }
+            ),
+        }
+    )
+
     return cases
 
 
