@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  workspace/libtorch/src/std_cpp,
+  workspace/libtorch/src/abi/std_cpp,
   workspace/libtorch/vendor/libtorch
 
 # c10 is a collection of utilities in PyTorch

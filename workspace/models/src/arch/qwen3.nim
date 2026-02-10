@@ -25,9 +25,6 @@ proc newQwen3MLP*(cfg: Qwen3Config, vb: VarBuilder): Qwen3MLP =
   result.up_proj = vb.pp("up_proj").get_tensor("weight")
   result.down_proj = vb.pp("down_proj").get_tensor("weight")
 
-proc silu*(x: TorchTensor): TorchTensor =
-  x * sigmoid(x)
-
 proc forward*(self: Qwen3MLP, x: TorchTensor): TorchTensor =
   let gate = linear(x, self.gate_proj)
   let up = linear(x, self.up_proj)

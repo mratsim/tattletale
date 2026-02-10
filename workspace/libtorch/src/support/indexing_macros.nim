@@ -6,8 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  workspace/libtorch/src/ast_utils,
-  workspace/libtorch/src/torch_tensors
+  workspace/libtorch/src/support/ast_utils,
+  workspace/libtorch/src/abi/torch_tensors
 
 # #######################################################################
 #
