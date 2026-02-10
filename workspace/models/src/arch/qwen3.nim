@@ -50,8 +50,8 @@ proc append*(self: ConcatKvCache, k, v: TorchTensor): (TorchTensor, TorchTensor)
   self.k_cache.add(k)
   self.v_cache.add(v)
 
-  let k_cat = cat(self.k_cache.asTorchView(), self.concat_dim)
-  let v_cat = cat(self.v_cache.asTorchView(), self.concat_dim)
+  let k_cat = cat(self.k_cache, self.concat_dim)
+  let v_cat = cat(self.v_cache, self.concat_dim)
   (k_cat, v_cat)
 
 proc reset*(self: ConcatKvCache) =
@@ -107,8 +107,8 @@ proc repeat_kv*(x: TorchTensor, num_groups: int): TorchTensor =
   if num_groups == 1:
     return x
   let new_shape = @[shape[0], shape[1], num_groups.int64, shape[2] div num_groups.int64, shape[3]]
-  x.reshape(new_shape.asTorchView())
-    .reshape(@[shape[0], shape[1] * num_groups.int64, shape[2] div num_groups.int64, shape[3]].asTorchView())
+  x.reshape(new_shape)
+    .reshape(@[shape[0], shape[1] * num_groups.int64, shape[2] div num_groups.int64, shape[3]])
     .contiguous()
 
 proc forward*(
@@ -124,21 +124,21 @@ proc forward*(
   let k = linear(x, self.k_proj)
   let v = linear(x, self.v_proj)
 
-  let q_reshaped = q.reshape(@[batch_size.int64, seq_len.int64, self.num_head.int64, self.head_dim.int64].asTorchView())
+  let q_reshaped = q.reshape(@[batch_size.int64, seq_len.int64, self.num_head.int64, self.head_dim.int64])
     .transpose(1, 2)
-  let k_reshaped = k.reshape(@[batch_size.int64, seq_len.int64, self.num_kv_head.int64, self.head_dim.int64].asTorchView())
+  let k_reshaped = k.reshape(@[batch_size.int64, seq_len.int64, self.num_kv_head.int64, self.head_dim.int64])
     .transpose(1, 2)
-  let v_reshaped = v.reshape(@[batch_size.int64, seq_len.int64, self.num_kv_head.int64, self.head_dim.int64].asTorchView())
+  let v_reshaped = v.reshape(@[batch_size.int64, seq_len.int64, self.num_kv_head.int64, self.head_dim.int64])
     .transpose(1, 2)
 
-  let q_flat = q_reshaped.reshape(@[(batch_size * self.num_head).int64, seq_len.int64, self.head_dim.int64].asTorchView())
-  let k_flat = k_reshaped.reshape(@[(batch_size * self.num_kv_head).int64, seq_len.int64, self.head_dim.int64].asTorchView())
+  let q_flat = q_reshaped.reshape(@[(batch_size * self.num_head).int64, seq_len.int64, self.head_dim.int64])
+  let k_flat = k_reshaped.reshape(@[(batch_size * self.num_kv_head).int64, seq_len.int64, self.head_dim.int64])
 
   let q_normed = self.q_norm.forward(q_flat)
   let k_normed = self.k_norm.forward(k_flat)
 
-  let q_normed_reshaped = q_normed.reshape(@[batch_size.int64, self.num_head.int64, seq_len.int64, self.head_dim.int64].asTorchView())
-  let k_normed_reshaped = k_normed.reshape(@[batch_size.int64, self.num_kv_head.int64, seq_len.int64, self.head_dim.int64].asTorchView())
+  let q_normed_reshaped = q_normed.reshape(@[batch_size.int64, self.num_head.int64, seq_len.int64, self.head_dim.int64])
+  let k_normed_reshaped = k_normed.reshape(@[batch_size.int64, self.num_kv_head.int64, seq_len.int64, self.head_dim.int64])
 
   let (q_rot, k_rot) = self.rotary_emb.apply_rope(q_normed_reshaped, k_normed_reshaped, offset)
 
@@ -157,7 +157,7 @@ proc forward*(
   let context = probs.matmul(v_expanded)
 
   let context_transposed = context.transpose(1, 2)
-    .reshape(@[batch_size.int64, seq_len.int64, self.hidden_size.int64].asTorchView())
+    .reshape(@[batch_size.int64, seq_len.int64, self.hidden_size.int64])
 
   linear(context_transposed, self.o_proj)
 
@@ -256,7 +256,7 @@ proc causal_mask*(
         mask_data.add(minf)
 
   let mask_shape = @[batch_size.int64, 1.int64, tgt_len.int64, (tgt_len + offset).int64]
-  mask_data.toTorchTensor().reshape(mask_shape.asTorchView())
+  mask_data.toTorchTensor().reshape(mask_shape)
 
 proc forward*(
   self: Qwen3Model,

@@ -41,13 +41,18 @@ func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
 template asNimView*[T](ar: ArrayRef[T]): openArray[T] =
   toOpenArray(ar.data.unsafeAddr, 0, ar.size.int - 1)
 
-template asTorchView*[T](oa: openArray[T]): ArrayRef[T] =
-  # Don't remove. This makes @[1, 2, 3].asTorchView works
-  let a = @oa
-  ArrayRef[T].init(a[0].unsafeAddr, a.len)
+template asTorchView*(oa: openArray[int]): IntArrayRef =
+  static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
+  init(IntArrayRef, oa[0].unsafeAddr, oa.len)
+
+template asTorchView*(oa: openArray[int64]): IntArrayRef =
+  init(IntArrayRef, oa[0].unsafeAddr, oa.len)
+
+template asTorchView*[T: not (int|int64)](oa: openArray[T]): ArrayRef[T] =
+  init(ArrayRef[T], oa[0].unsafeAddr, oa.len)
 
 template asTorchView*(meta: Metadata): ArrayRef[int64] =
-  ArrayRef[int64].init(meta.data[0].unsafeAddr, meta.len)
+  init(ArrayRef[int64], meta.data[0].unsafeAddr, meta.len)
 
 proc `$`*[T](ar: ArrayRef[T]): string =
   `$`(ar.asNimView())

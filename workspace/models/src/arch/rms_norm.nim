@@ -41,7 +41,7 @@ proc newRmsNorm*(
   result.eps = eps
 
   let shape = @[normalized_shape.int64]
-  result.weight = zeros(shape.asTorchView(), kFloat32)
+  result.weight = zeros(shape, kFloat32)
 
 func rms_norm_libtorch*(
   input: TorchTensor,
