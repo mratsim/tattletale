@@ -11,6 +11,7 @@ import time
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "tests"))
+import pytoktoktok
 
 from tokenizers import Tokenizer
 
@@ -89,8 +90,6 @@ def benchmark_tokenizer(
 
 
 def main():
-    import pytoktoktok
-
     print("\n" + "=" * 70)
     print("BENCHMARK: Nim BPETokenizer vs HuggingFace (GLM-4.7)")
     print("=" * 70)
