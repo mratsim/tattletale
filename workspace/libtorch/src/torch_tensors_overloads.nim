@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/sequtils
-import workspace/libtorch/src/torch_tensors
+import workspace/libtorch/src/abi/torch_tensors
 import workspace/libtorch/src/torch_tensors_sugar
 
 static: doAssert sizeof(int) == 8, "Only 64-bit OSes are supported"

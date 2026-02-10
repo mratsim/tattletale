@@ -8,11 +8,11 @@
 import
   std/[complex, enumerate, macros, strformat],
   # Internal
-  workspace/libtorch/src/std_cpp,
-  workspace/libtorch/src/c10,
-  workspace/libtorch/src/torch_tensors,
-  workspace/libtorch/src/dynamic_stack_arrays,
-  workspace/libtorch/src/[ast_utils, indexing_macros]
+  workspace/libtorch/src/abi/std_cpp,
+  workspace/libtorch/src/abi/c10,
+  workspace/libtorch/src/abi/torch_tensors,
+  workspace/libtorch/src/support/dynamic_stack_arrays,
+  workspace/libtorch/src/support/[ast_utils, indexing_macros]
 
 static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
 
