@@ -375,5 +375,50 @@
       30006,
       30007
     ]
+  },
+  {
+    "description": "Chinese period + newline '。\\n' - combined 4-byte token regression",
+    "input_bytes": [
+      227,
+      128,
+      130,
+      10
+    ],
+    "ranks": {
+      "44CC": 292,
+      "Cg==": 198,
+      "44CCCg==": 10155
+    },
+    "expected_tokens": [
+      198
+    ]
+  },
+  {
+    "description": "Chinese text with 。\\n combined token in context",
+    "input_bytes": [
+      232,
+      131,
+      142,
+      232,
+      131,
+      136,
+      227,
+      128,
+      130,
+      10
+    ],
+    "ranks": {
+      "6IM=": 60412,
+      "jug=": 229,
+      "6IOI": 435,
+      "44CC": 292,
+      "Cg==": 198,
+      "44CCCg==": 10155
+    },
+    "expected_tokens": [
+      60412,
+      229,
+      198
+    ]
   }
 ]

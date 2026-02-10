@@ -184,14 +184,15 @@ def get_test_texts() -> List[tuple[str, str]]:
     )
 
     # Chinese historical text with Chinese punctuation - regression test for KimiK2.5
-    texts.extend(
-        [
-            (
-                "sanguozhi_paragraph",
-                "紅。白\n髮漁樵江渚上，慣看秋月春風。一壺濁酒喜相逢：古今多少事，都付笑談中。\n\n　　話說天下大勢，分久必合，合久必分：周末七國分爭，并入於秦。及秦滅之後，楚\n、漢分爭，又并入於漢。漢朝自高祖斬白蛇而起義，一統天下。後來光武中興，傳至獻\n帝遂分為三國。推其致亂之由，殆始於桓、靈二帝。桓帝禁錮善類，崇信宦官。及桓\n帝崩，靈帝即位，大將軍竇武",
-            ),
-        ]
-    )
+    master_text = (
+        TEST_DIR
+        / "fixtures"
+        / "large"
+        / "pg23950-三國志演義-Romance_of_the_Three_Kingdoms.txt"
+    ).read_text(encoding="utf-8")
+    start = master_text.find("紅。白")
+    sanguozhi_text = master_text[start : start + 182]
+    texts.extend([("sanguozhi_paragraph", sanguozhi_text)])
 
     return texts
 
