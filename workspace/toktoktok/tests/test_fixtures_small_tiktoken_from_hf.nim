@@ -8,14 +8,14 @@ const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures" / "small"
 const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
 
 type
-  CodecFixture* = object
-    name*: string
-    text*: string
-    tokenIds*: seq[int]
-    tokenizer*: string
+  CodecFixture = object
+    name: string
+    text: string
+    tokenIds: seq[int]
+    tokenizer: string
 
-proc runHfTokenizerFixturesTests*() =
-  suite "HF Tokenizer Fixtures Tests":
+proc runTiktokenFromHFTests() =
+  suite "Tiktoken from HF Fixtures Tests":
     const HfFixtures = [
       ("gpt2", "gpt2-tokenizer.json"),
       ("llama3", "llama3-tokenizer.json"),
@@ -30,19 +30,18 @@ proc runHfTokenizerFixturesTests*() =
       let hfFile = pair[1]
       let fixturePath = FIXTURES_DIR / "tiktoken_from_hf_" & fixtureName & ".json"
       let hfPath = TOKENIZERS_DIR / hfFile
-      let testName = "HF tokenizer fixture (" & fixtureName & ")"
 
-      test testName:
-        doAssert fileExists(fixturePath), "Fixture not found: " & fixturePath
-        doAssert fileExists(hfPath), "HF tokenizer not found: " & hfPath
+      doAssert fileExists(fixturePath), "Fixture not found: " & fixturePath
+      doAssert fileExists(hfPath), "HF tokenizer not found: " & hfPath
 
-        let tokenizer = loadHFTokenizer(hfPath)
-        let content = readFile(fixturePath)
-        let fixtures = content.fromJson(seq[CodecFixture])
+      let tokenizer = loadHFTokenizer(hfPath)
+      let content = readFile(fixturePath)
+      let fixtures = content.fromJson(seq[CodecFixture])
 
-        for fixture in fixtures:
+      for fixture in fixtures:
+        test "Tiktoken from HF fixture - " & fixture.name & " (" & fixtureName & ")":
           let result = tokenizer.encodeOrdinary(fixture.text)
           check result == fixture.tokenIds
 
 when isMainModule:
-  runHfTokenizerFixturesTests()
+  runTiktokenFromHFTests()
