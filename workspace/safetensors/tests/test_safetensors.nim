@@ -29,34 +29,32 @@ const Shapes: array[4, seq[int64]] = [
 
 const TestedDtypes = [F64, F32, F16, I64, I32, I16, I8, U8]
 
-proc generateExpectedTensor*(pattern: string, shape: seq[int64], dtype: ScalarKind): TorchTensor =
-  let shapeRef = shape.asTorchView()
+proc generateExpectedTensor*(pattern: string, shape: seq[int|int64], dtype: ScalarKind): TorchTensor =
   let numel = shape.product()
 
   case pattern
   of "gradient":
-    arange(numel, dtype).reshape(shapeRef).to(dtype)
+    arange(numel, dtype).reshape(shape).to(dtype)
   of "alternating":
     let flat = arange(numel, kInt64)
     let modVal = (flat % 2).to(kFloat64)
-    modVal.reshape(shapeRef).to(dtype)
+    modVal.reshape(shape).to(dtype)
   of "repeating":
     let flat = arange(numel, kInt64)
     let modVal = ((flat % 10) + 1).to(kFloat64)
-    modVal.reshape(shapeRef).to(dtype)
+    modVal.reshape(shape).to(dtype)
   else:
     raise newException(ValueError, "Unknown pattern: " & pattern)
 
-proc generateVandermondeExpected*(shape: seq[int64], dtype: ScalarKind): TorchTensor =
-  let shapeRef = shape.asTorchView()
-  let numel = int(shape.product())
+proc generateVandermondeExpected*(shape: openArray[int|int64], dtype: ScalarKind): TorchTensor =
+  let numel = shape.product()
   var data = newSeq[float64](numel)
   for i in 0..<5:
     for j in 0..<5:
       data[j * 5 + i] = pow(float64(i + 1), float64(j))
-  let sizes = @[int64 numel].asTorchView()
+  let sizes = [numel]
   let flat = from_blob(data[0].unsafeAddr, sizes, dtype)
-  flat.reshape(shapeRef)
+  flat.reshape(shape)
 
 proc main() =
   suite "safetensors fixtures tests":
