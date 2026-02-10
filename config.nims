@@ -64,6 +64,7 @@ task download_test_tokenizers, "Download gpt-2 and llama3 tokenizers for testing
 func pytoktoktokBuildCmd(): string =
   return
     "nim c --app:lib" &
+    " -d:release" &
     " --verbosity:0 --hints:off --warnings:off" &
     " --outdir:workspace/toktoktok/tests" &
     " --nimcache:nimcache/pytoktoktok" &
