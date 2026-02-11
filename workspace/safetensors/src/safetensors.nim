@@ -86,7 +86,7 @@ type
     ## The dataOffsets are relative to the start of the `data` section.
     ## They ignore the initial 8 bytes for headerSize + the actual header.
     dtype*: Dtype
-    shape*: seq[int64] # The reference impl uses usize, but AFAIK Cuda doesn't support 32-bit. This makes conversion to IntArrayRef easier.
+    shape*: seq[int] # The reference impl uses usize, but AFAIK Cuda doesn't support 32-bit. This makes conversion to IntArrayRef easier.
     dataOffsets*: tuple[start, stopEx: int] # stop is exclusive
 
   Safetensor* = object
