@@ -20,16 +20,16 @@ const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"
 
 const Patterns = ["gradient", "alternating", "repeating"]
 
-const Shapes: array[4, seq[int64]] = [
-  @[int64 8],
-  @[int64 4, 4],
-  @[int64 2, 3, 4],
-  @[int64 3, 2, 2, 2]
+const Shapes: array[4, seq[int]] = [
+  @[8],
+  @[4, 4],
+  @[2, 3, 4],
+  @[3, 2, 2, 2]
 ]
 
 const TestedDtypes = [F64, F32, F16, I64, I32, I16, I8, U8]
 
-proc generateExpectedTensor*(pattern: string, shape: seq[int|int64], dtype: ScalarKind): TorchTensor =
+proc generateExpectedTensor*(pattern: string, shape: seq[int], dtype: ScalarKind): TorchTensor =
   let numel = shape.product()
 
   case pattern
@@ -46,7 +46,7 @@ proc generateExpectedTensor*(pattern: string, shape: seq[int|int64], dtype: Scal
   else:
     raise newException(ValueError, "Unknown pattern: " & pattern)
 
-proc generateVandermondeExpected*(shape: openArray[int|int64], dtype: ScalarKind): TorchTensor =
+proc generateVandermondeExpected*(shape: openArray[int], dtype: ScalarKind): TorchTensor =
   let numel = shape.product()
   var data = newSeq[float64](numel)
   for i in 0..<5:
@@ -70,7 +70,7 @@ proc main() =
       let key = "F64_vandermonde_5x5"
       check st.tensors.hasKey(key)
 
-      let shape = @[int64 5, 5]
+      let shape = @[5, 5]
       let info = st.tensors[key]
       check info.shape == shape
 

@@ -88,49 +88,49 @@ template rand*(size: openArray[int64 | int]): TorchTensor =
 # Shapeshifting
 # -----------------------------------------------------------------------
 
-template reshape*(self: TorchTensor, sizes: openArray[int64 | int]): TorchTensor =
+func reshape*(self: TorchTensor, sizes: varargs[int]): TorchTensor {.inline.} =
   reshape(self, asTorchView(sizes))
 
-template view*(self: TorchTensor, size: openArray[int64 | int]): TorchTensor =
+func view*(self: TorchTensor, size: varargs[int]): TorchTensor {.inline.} =
   view(self, asTorchView(size))
 
-template permute*(self: TorchTensor, dims: openArray[int64 | int]): TorchTensor =
+func permute*(self: TorchTensor, dims: varargs[int]): TorchTensor {.inline.} =
   permute(self, asTorchView(dims))
 
-template flip*(self: TorchTensor, dims: openArray[int64 | int]): TorchTensor =
+func flip*(self: TorchTensor, dims: varargs[int]): TorchTensor {.inline.} =
   flip(self, asTorchView(dims))
 
 # Functions.h
 # -----------------------------------------------------------------------
 
-template zeros*(dim: openArray[int64 | int]): TorchTensor =
+template zeros*(dim: varargs[int]): TorchTensor =
   zeros(asTorchView(dim))
 
-template zeros*(dim: openArray[int64 | int], options: TensorOptions): TorchTensor =
+template zeros*(dim: varargs[int], options: TensorOptions): TorchTensor =
   zeros(asTorchView(dim), options)
 
-template zeros*(dim: openArray[int64 | int], scalarKind: ScalarKind): TorchTensor =
+template zeros*(dim: varargs[int], scalarKind: ScalarKind): TorchTensor =
   zeros(asTorchView(dim), scalarKind)
 
-template zeros*(dim: openArray[int64 | int], device: DeviceKind): TorchTensor =
+template zeros*(dim: varargs[int], device: DeviceKind): TorchTensor =
   zeros(asTorchView(dim), device)
 
-template ones*(dim: openArray[int64 | int]): TorchTensor =
+template ones*(dim: varargs[int]): TorchTensor =
   ones(asTorchView(dim))
 
-template ones*(dim: openArray[int64 | int], options: TensorOptions): TorchTensor =
+template ones*(dim: varargs[int], options: TensorOptions): TorchTensor =
   ones(asTorchView(dim), options)
 
-template ones*(dim: openArray[int64 | int], scalarKind: ScalarKind): TorchTensor =
+template ones*(dim: varargs[int], scalarKind: ScalarKind): TorchTensor =
   ones(asTorchView(dim), scalarKind)
 
-template ones*(dim: openArray[int64 | int], device: DeviceKind): TorchTensor =
+template ones*(dim: varargs[int], device: DeviceKind): TorchTensor =
   ones(asTorchView(dim), device)
 
-template full*(size: openArray[int64 | int], fill_value: Scalar): TorchTensor =
+template full*(size: varargs[int], fill_value: Scalar): TorchTensor =
   full(asTorchView(size), fill_value)
 
-template full*(size: openArray[int64 | int], fill_value: Scalar, options: TensorOptions): TorchTensor =
+template full*(size: varargs[int], fill_value: Scalar, options: TensorOptions): TorchTensor =
   full(asTorchView(size), fill_value, options)
 
 template full*(size: openArray[int64 | int], fill_value: Scalar, scalarKind: ScalarKind): TorchTensor =
