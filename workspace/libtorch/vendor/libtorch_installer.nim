@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  std/[httpclient, strformat, strutils, os],
+  std/[httpclient, strformat, os],
   zip/zipfiles
 
 {.passl: "-lz".}
@@ -35,7 +35,7 @@ type
     Cpp11 = "cxx11-abi-shared-with-deps"
 
 proc getProjectDir(): string {.compileTime.} =
-  currentSourcePath.rsplit(DirSep, 1)[0]
+  currentSourcePath.parentDir()
 
 proc onProgressChanged(total, progress, speed: BiggestInt) =
   echo &"Downloaded {progress} of {total}"
