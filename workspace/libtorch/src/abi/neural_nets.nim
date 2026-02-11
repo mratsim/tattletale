@@ -140,9 +140,9 @@ func dropout_mut*(input: var TorchTensor, p = 0.5, training = true) {.importcpp:
 
 # Normalization functions
 # -------------------------------------------------------------------------
-func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef) {.importcpp: "torch::rms_norm(@)".}
-func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef, weight: TorchTensor) {.importcpp: "torch::rms_norm(@)".}
-func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef, weight: TorchTensor, eps: float64) {.importcpp: "torch::rms_norm(@)".}
+func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef): TorchTensor {.importcpp: "torch::rms_norm(@)".}
+func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef, weight: TorchTensor): TorchTensor {.importcpp: "torch::rms_norm(@)".}
+func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef, weight: TorchTensor, eps: float64): TorchTensor {.importcpp: "torch::rms_norm(@)".}
   ## RMSNorm with optional eps parameter.
   ##
   ## C++ signature:
