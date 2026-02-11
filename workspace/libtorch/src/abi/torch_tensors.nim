@@ -172,33 +172,33 @@ type TorchTensor* {.importcpp: "torch::Tensor", cppNonPod, bycopy.} = object
 # Strings & Debugging
 # -----------------------------------------------------------------------
 
-proc print*(self: TorchTensor) {.sideeffect, importcpp: "torch::print(@)".}
+proc print*(a: TorchTensor) {.sideeffect, importcpp: "torch::print(@)".}
 
 # Metadata
 # -----------------------------------------------------------------------
 
-func dim*(self: TorchTensor): int {.importcpp: "#.dim()".} ## Number of dimensions
-func reset*(self: var TorchTensor) {.importcpp: "#.reset()".}
+func dim*(a: TorchTensor): int {.importcpp: "#.dim()".} ## Number of dimensions
+func reset*(a: var TorchTensor) {.importcpp: "#.reset()".}
 func is_same*(self, other: TorchTensor): bool {.importcpp: "#.is_same(#)".}
   ## Reference equality
   ## Do the tensors use the same memory.
 
-func sizes*(self: TorchTensor): IntArrayRef {.importcpp: "#.sizes()".} ## This is Arraymancer and Numpy "shape"
+func sizes*(a: TorchTensor): IntArrayRef {.importcpp: "#.sizes()".} ## This is Arraymancer and Numpy "shape"
 
-func strides*(self: TorchTensor): IntArrayRef {.importcpp: "#.strides()".}
+func strides*(a: TorchTensor): IntArrayRef {.importcpp: "#.strides()".}
 
-func ndimension*(self: TorchTensor): int {.importcpp: "#.ndimension()".} ## This is Arraymancer rank
-func nbytes*(self: TorchTensor): uint {.importcpp: "#.nbytes()".} ## Bytes-size of the Tensor
-func numel*(self: TorchTensor): int {.importcpp: "#.numel()".} ## This is Arraymancer and Numpy "size"
+func ndimension*(a: TorchTensor): int {.importcpp: "#.ndimension()".} ## This is Arraymancer rank
+func nbytes*(a: TorchTensor): uint {.importcpp: "#.nbytes()".} ## Bytes-size of the Tensor
+func numel*(a: TorchTensor): int {.importcpp: "#.numel()".} ## This is Arraymancer and Numpy "size"
 
-func size*(self: TorchTensor, axis: int): int {.importcpp: "#.size(#)".}
-func itemsize*(self: TorchTensor): uint {.importcpp: "#.itemsize()".}
-func element_size*(self: TorchTensor): int {.importcpp: "#.element_size()".}
+func size*(a: TorchTensor, axis: int): int {.importcpp: "#.size(#)".}
+func itemsize*(a: TorchTensor): uint {.importcpp: "#.itemsize()".}
+func element_size*(a: TorchTensor): int {.importcpp: "#.element_size()".}
 
 # Accessors
 # -----------------------------------------------------------------------
 
-func data_ptr*(self: TorchTensor, T: typedesc): ptr UncheckedArray[T] {.importcpp: "#.data_ptr<'2>(#)".}
+func data_ptr*(a: TorchTensor, T: typedesc): ptr UncheckedArray[T] {.importcpp: "#.data_ptr<'2>(#)".}
   ## Gives raw access to a tensor data of type T.
   ##
   ## This is a very low-level procedure. You need to take care
@@ -211,28 +211,28 @@ func data_ptr*(self: TorchTensor, T: typedesc): ptr UncheckedArray[T] {.importcp
 # Backend
 # -----------------------------------------------------------------------
 
-func has_storage*(self: TorchTensor): bool {.importcpp: "#.has_storage()".}
-func get_device*(self: TorchTensor): int {.importcpp: "#.get_device()".}
-func is_cuda*(self: TorchTensor): bool {.importcpp: "#.is_cuda()".}
-func is_hip*(self: TorchTensor): bool {.importcpp: "#.is_hip()".}
-func is_sparse*(self: TorchTensor): bool {.importcpp: "#.is_sparse()".}
-func is_mkldnn*(self: TorchTensor): bool {.importcpp: "#.is_mkldnn()".}
-func is_vulkan*(self: TorchTensor): bool {.importcpp: "#.is_vulkan()".}
-func is_quantized*(self: TorchTensor): bool {.importcpp: "#.is_quantized()".}
-func is_meta*(self: TorchTensor): bool {.importcpp: "#.is_meta()".}
+func has_storage*(a: TorchTensor): bool {.importcpp: "#.has_storage()".}
+func get_device*(a: TorchTensor): int {.importcpp: "#.get_device()".}
+func is_cuda*(a: TorchTensor): bool {.importcpp: "#.is_cuda()".}
+func is_hip*(a: TorchTensor): bool {.importcpp: "#.is_hip()".}
+func is_sparse*(a: TorchTensor): bool {.importcpp: "#.is_sparse()".}
+func is_mkldnn*(a: TorchTensor): bool {.importcpp: "#.is_mkldnn()".}
+func is_vulkan*(a: TorchTensor): bool {.importcpp: "#.is_vulkan()".}
+func is_quantized*(a: TorchTensor): bool {.importcpp: "#.is_quantized()".}
+func is_meta*(a: TorchTensor): bool {.importcpp: "#.is_meta()".}
 
-func cpu*(self: TorchTensor): TorchTensor {.importcpp: "#.cpu()".}
-func cuda*(self: TorchTensor): TorchTensor {.importcpp: "#.cuda()".}
-func hip*(self: TorchTensor): TorchTensor {.importcpp: "#.hip()".}
-func vulkan*(self: TorchTensor): TorchTensor {.importcpp: "#.vulkan()".}
-func to*(self: TorchTensor, device: DeviceKind): TorchTensor {.importcpp: "#.to(#)".}
-func to*(self: TorchTensor, device: Device): TorchTensor {.importcpp: "#.to(#)".}
+func cpu*(a: TorchTensor): TorchTensor {.importcpp: "#.cpu()".}
+func cuda*(a: TorchTensor): TorchTensor {.importcpp: "#.cuda()".}
+func hip*(a: TorchTensor): TorchTensor {.importcpp: "#.hip()".}
+func vulkan*(a: TorchTensor): TorchTensor {.importcpp: "#.vulkan()".}
+func to*(a: TorchTensor, device: DeviceKind): TorchTensor {.importcpp: "#.to(#)".}
+func to*(a: TorchTensor, device: Device): TorchTensor {.importcpp: "#.to(#)".}
 
 # dtype
 # -----------------------------------------------------------------------
 
-func to*(self: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.to(#)".}
-func scalarType*(self: TorchTensor): ScalarKind {.importcpp: "#.scalar_type()".}
+func to*(a: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.to(#)".}
+func scalarType*(a: TorchTensor): ScalarKind {.importcpp: "#.scalar_type()".}
 
 # Constructors
 # -----------------------------------------------------------------------
@@ -276,23 +276,23 @@ func empty*(size: IntArrayRef, device: DeviceKind): TorchTensor {.importcpp: "to
   ##
   ## The output tensor will be row major (C contiguous)
 
-func clone*(self: TorchTensor): TorchTensor {.importcpp: "#.clone()".}
+func clone*(a: TorchTensor): TorchTensor {.importcpp: "#.clone()".}
 
 # TODO : Test this
-func view_as_real*(self: TorchTensor): TorchTensor {.importcpp: "#.view_as_real()".}
-func view_as_complex*(self: TorchTensor): TorchTensor {.importcpp: "#.view_as_complex()".}
+func view_as_real*(a: TorchTensor): TorchTensor {.importcpp: "#.view_as_real()".}
+func view_as_complex*(a: TorchTensor): TorchTensor {.importcpp: "#.view_as_complex()".}
 
 # Random sampling
 # -----------------------------------------------------------------------
-func random_mut*(self: var TorchTensor, start, stopEx: int) {.importcpp: "#.random_(@)".}
+func random_mut*(a: var TorchTensor, start, stopEx: int) {.importcpp: "#.random_(@)".}
 func randint*(start, stopEx: int): TorchTensor {.varargs, importcpp: "torch::randint(#, #, {@})".}
 func randint*(start, stopEx: int, size: IntArrayRef): TorchTensor {.importcpp: "torch::randint(@)".}
 
-func rand_like*(self: TorchTensor, options: TensorOptions): TorchTensor {.importcpp: "torch::rand_like(@)".}
-func rand_like*(self: TorchTensor, options: ScalarKind): TorchTensor {.importcpp: "torch::rand_like(@)".}
-func rand_like*(self: TorchTensor, options: DeviceKind): TorchTensor {.importcpp: "torch::rand_like(@)".}
-func rand_like*(self: TorchTensor, options: Device): TorchTensor {.importcpp: "torch::rand_like(@)".}
-func rand_like*(self: TorchTensor): TorchTensor {.importcpp: "torch::rand_like(@)".}
+func rand_like*(a: TorchTensor, options: TensorOptions): TorchTensor {.importcpp: "torch::rand_like(@)".}
+func rand_like*(a: TorchTensor, options: ScalarKind): TorchTensor {.importcpp: "torch::rand_like(@)".}
+func rand_like*(a: TorchTensor, options: DeviceKind): TorchTensor {.importcpp: "torch::rand_like(@)".}
+func rand_like*(a: TorchTensor, options: Device): TorchTensor {.importcpp: "torch::rand_like(@)".}
+func rand_like*(a: TorchTensor): TorchTensor {.importcpp: "torch::rand_like(@)".}
 
 func rand*(size: IntArrayRef, options: TensorOptions): TorchTensor {.importcpp: "torch::rand(@)".}
 func rand*(size: IntArrayRef, options: DeviceKind): TorchTensor {.importcpp: "torch::rand(@)".}
@@ -305,11 +305,11 @@ func rand*(size: IntArrayRef): TorchTensor {.importcpp: "torch::rand(@)".}
 # libtorch/include/ATen/TensorIndexing.h
 # and https://pytorch.org/cppdocs/notes/tensor_indexing.html
 
-func item*(self: TorchTensor, T: typedesc): T {.importcpp: "#.item<'0>()".}
+func item*(a: TorchTensor, T: typedesc): T {.importcpp: "#.item<'0>()".}
   ## Extract the scalar from a 0-dimensional tensor
-func item*(self: TorchTensor, T: typedesc[Complex32]): TorchComplex[float32] {.importcpp: "#.item<c10::complex<float>>()".}
+func item*(a: TorchTensor, T: typedesc[Complex32]): TorchComplex[float32] {.importcpp: "#.item<c10::complex<float>>()".}
 func item*(
-  self: TorchTensor, T: typedesc[Complex64]
+  a: TorchTensor, T: typedesc[Complex64]
 ): TorchComplex[float64] {.importcpp: "#.item<c10::complex<double>>()".}
 
 # Bounds checking for raw tensors
@@ -338,7 +338,7 @@ func check_index*(t: TorchTensor, idx: varargs[int]) {.inline.} =
 # func `[]`*(self: Tensor, index: Tensor): Tensor {.importcpp: "#[#]".}
 # func `[]`*(self: Tensor, index: int64): Tensor {.importcpp: "#[#]".}
 
-func index*(self: TorchTensor): TorchTensor {.varargs, importcpp: "#.index({@})".}
+func index*(a: TorchTensor): TorchTensor {.varargs, importcpp: "#.index({@})".}
   ## Tensor indexing. It is recommended
   ## to Nimify this in a high-level wrapper.
   ## `tensor.index(indexers)`
@@ -348,29 +348,29 @@ func index*(self: TorchTensor): TorchTensor {.varargs, importcpp: "#.index({@})"
 # 6d seems reasonable, that would be a batch of 3D videos (videoID/batchID, Time, Color Channel, Height, Width, Depth)
 # If you need more you likely aren't indexing individual values.
 
-func index_put*(self: var TorchTensor, i0: auto, val: Scalar or TorchTensor) {.importcpp: "#.index_put_({#}, #)".}
+func index_put*(a: var TorchTensor, i0: auto, val: Scalar or TorchTensor) {.importcpp: "#.index_put_({#}, #)".}
   ## Tensor mutation at index. It is recommended
   ## to Nimify this in a high-level wrapper.
-func index_put*(self: var TorchTensor, i0, i1: auto, val: Scalar or TorchTensor) {.importcpp: "#.index_put_({#, #}, #)".}
+func index_put*(a: var TorchTensor, i0, i1: auto, val: Scalar or TorchTensor) {.importcpp: "#.index_put_({#, #}, #)".}
   ## Tensor mutation at index. It is recommended
   ## to Nimify this in a high-level wrapper.
 func index_put*(
-  self: var TorchTensor, i0, i1, i2: auto, val: Scalar or TorchTensor
+  a: var TorchTensor, i0, i1, i2: auto, val: Scalar or TorchTensor
 ) {.importcpp: "#.index_put_({#, #, #}, #)".}
   ## Tensor mutation at index. It is recommended
   ## to Nimify this in a high-level wrapper.
 func index_put*(
-  self: var TorchTensor, i0, i1, i2, i3: auto, val: Scalar or TorchTensor
+  a: var TorchTensor, i0, i1, i2, i3: auto, val: Scalar or TorchTensor
 ) {.importcpp: "#.index_put_({#, #, #, #}, #)".}
   ## Tensor mutation at index. It is recommended
   ## to Nimify this in a high-level wrapper.
 func index_put*(
-  self: var TorchTensor, i0, i1, i2, i3, i4: auto, val: Scalar or TorchTensor
+  a: var TorchTensor, i0, i1, i2, i3, i4: auto, val: Scalar or TorchTensor
 ) {.importcpp: "#.index_put_({#, #, #, #, #}, #)".}
   ## Tensor mutation at index. It is recommended
   ## to Nimify this in a high-level wrapper.
 func index_put*(
-  self: var TorchTensor, i0, i1, i2, i3, i4, i5: auto, val: Scalar or TorchTensor
+  a: var TorchTensor, i0, i1, i2, i3, i4, i5: auto, val: Scalar or TorchTensor
 ) {.importcpp: "#.index_put_({#, #, #, #, #, #}, #)".}
   ## Tensor mutation at index. It is recommended
   ## to Nimify this in a high-level wrapper.
@@ -378,30 +378,30 @@ func index_put*(
 # Fancy Indexing
 # -----------------------------------------------------------------------
 # TODO -> separate the FFI from the Nim Raw API to add IndexDefect when compileOptions("boundsCheck")
-func index_select*(self: TorchTensor, axis: int, indices: TorchTensor): TorchTensor {.importcpp: "#.index_select(@)".}
-func masked_select*(self: TorchTensor, mask: TorchTensor): TorchTensor {.importcpp: "#.masked_select(@)".}
+func index_select*(a: TorchTensor, axis: int, indices: TorchTensor): TorchTensor {.importcpp: "#.index_select(@)".}
+func masked_select*(a: TorchTensor, mask: TorchTensor): TorchTensor {.importcpp: "#.masked_select(@)".}
 
 # PyTorch exposes in-place `index_fill_` and `masked_fill_`
 # and out-of-place `index_fill` and `masked_fill`
 # that does in-place + clone
 # we only exposes the in-place version.
 
-func index_fill_mut*(self: var TorchTensor, mask: TorchTensor, value: Scalar or TorchTensor) {.importcpp: "#.index_fill_(@)".}
+func index_fill_mut*(a: var TorchTensor, mask: TorchTensor, value: Scalar or TorchTensor) {.importcpp: "#.index_fill_(@)".}
 func masked_fill_mut*(
-  self: var TorchTensor, mask: TorchTensor, value: Scalar or TorchTensor
+  a: var TorchTensor, mask: TorchTensor, value: Scalar or TorchTensor
 ) {.importcpp: "#.masked_fill_(@)".}
 
 # Shapeshifting
 # -----------------------------------------------------------------------
 
-func reshape*(self: TorchTensor, sizes: IntArrayRef): TorchTensor {.importcpp: "#.reshape({@})".}
-func view*(self: TorchTensor, size: IntArrayRef): TorchTensor {.importcpp: "#.reshape({@})".}
+func reshape*(a: TorchTensor, sizes: IntArrayRef): TorchTensor {.importcpp: "#.reshape({@})".}
+func view*(a: TorchTensor, size: IntArrayRef): TorchTensor {.importcpp: "#.reshape({@})".}
 
-func transpose*(self: TorchTensor, dim0, dim1: int64): TorchTensor {.importcpp: "#.transpose(@)".}
+func transpose*(a: TorchTensor, dim0, dim1: int64): TorchTensor {.importcpp: "#.transpose(@)".}
   ## Swaps two dimensions. Returns a tensor that is a transposed version of input.
   ## The given dimensions dim0 and dim1 are swapped.
 
-func repeat_interleave*(self: TorchTensor, repeats: int, dim: int = -1): TorchTensor {.importcpp: "at::repeat_interleave(@)".}
+func repeat_interleave*(a: TorchTensor, repeats: int, dim: int = -1): TorchTensor {.importcpp: "at::repeat_interleave(@)".}
   ## Repeats elements along a dimension.
   ##
   ## C++ signature:
@@ -411,18 +411,18 @@ func repeat_interleave*(self: TorchTensor, repeats: int, dim: int = -1): TorchTe
     ##     ::std::optional<int64_t> dim = ::std::nullopt
     ##   )
 
-func t*(self: TorchTensor): TorchTensor {.importcpp: "#.t()".}
+func t*(a: TorchTensor): TorchTensor {.importcpp: "#.t()".}
   ## Transposes a 2D tensor. Equivalent to transpose(0, 1).
   ## This function is only supported for 2D tensors.
 
-func permute*(self: TorchTensor, dims: IntArrayRef): TorchTensor {.importcpp: "#.permute(@)".}
+func permute*(a: TorchTensor, dims: IntArrayRef): TorchTensor {.importcpp: "#.permute(@)".}
   ## Returns a view of the original tensor with its dimensions permuted.
 
-func narrow*(self: TorchTensor, dim: int, start: int, length: int): TorchTensor {.importcpp: "#.narrow(@)".}
+func narrow*(a: TorchTensor, dim: int, start: int, length: int): TorchTensor {.importcpp: "#.narrow(@)".}
   ## Slices the tensor at the given dimension.
   ## Equivalent to PyTorch's narrow operation.
 
-func chunk*(self: TorchTensor, chunks: int, dim: int = 0): CppVector[TorchTensor] {.importcpp: "at::chunk(@)".}
+func chunk*(a: TorchTensor, chunks: int, dim: int = 0): CppVector[TorchTensor] {.importcpp: "at::chunk(@)".}
   ## Splits the tensor into chunks along a given dimension.
   ##
   ## C++ signature:
@@ -438,7 +438,7 @@ func chunk*(self: TorchTensor, chunks: int, dim: int = 0): CppVector[TorchTensor
   ##
   ## Returns a vector of tensors.
 
-func unbind*(self: TorchTensor, dim: int = 0): CppVector[TorchTensor] {.importcpp: "at::unbind(@)".}
+func unbind*(a: TorchTensor, dim: int = 0): CppVector[TorchTensor] {.importcpp: "at::unbind(@)".}
   ## Removes a dimension and returns a tuple of all slices along that dimension.
   ##
   ## C++ signature:
@@ -453,8 +453,8 @@ func unbind*(self: TorchTensor, dim: int = 0): CppVector[TorchTensor] {.importcp
 # Automatic Differentiation
 # -----------------------------------------------------------------------
 
-func backward*(self: var TorchTensor) {.importcpp: "#.backward()".}
-func detach*(self: TorchTensor): TorchTensor {.importcpp: "#.detach()".}
+func backward*(a: var TorchTensor) {.importcpp: "#.backward()".}
+func detach*(a: TorchTensor): TorchTensor {.importcpp: "#.detach()".}
   ## Detach tensor from computation graph (stop gradient tracking).
   ##
   ## Returns a new tensor that shares the same storage but is completely
@@ -512,41 +512,49 @@ func step*(s: TorchSlice): int {.importcpp: "#.step()".}
 
 # Operators. We expose PyTorch convention for `div` and `mod` instead of Nim's
 # -----------------------------------------------------------------------
-func assign*(self: var TorchTensor, other: TorchTensor) {.importcpp: "# = #".}
+func assign*(a: var TorchTensor, other: TorchTensor) {.importcpp: "# = #".}
 
-func `not`*(self: TorchTensor): TorchTensor {.importcpp: "(~#)".}
-func `-`*(self: TorchTensor): TorchTensor {.importcpp: "(-#)".}
+func `not`*(a: TorchTensor): TorchTensor {.importcpp: "(~#)".}
+func `-`*(a: TorchTensor): TorchTensor {.importcpp: "(-#)".}
 
-func `+`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "(# + #)".}
-func `-`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "(# - #)".}
-func `*`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "(# * #)".}
-func `%`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.remainder(#)".}
+func `+`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "(# + #)".}
+func `-`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "(# - #)".}
+func `*`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "(# * #)".}
+func `%`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.remainder(#)".}
 
 func `*`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "(# * #)".}
-func `*`*(self: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# * #)".}
+func `*`*(a: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# * #)".}
 
 func `+`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "(# + #)".}
-func `+`*(self: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# + #)".}
+func `+`*(a: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# + #)".}
 
-func `%`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "#.remainder(#)".}
-func `%`*(self: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "#.remainder(#)".}
+proc `/`*(a, b: TorchTensor): TorchTensor {.importcpp: "(# / #)".}
+proc `/`*(a: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# / #)".}
 
-func `+=`*(self: var TorchTensor, b: TorchTensor) {.importcpp: "(# += #)".}
-func `+=`*(self: var TorchTensor, s: Scalar) {.importcpp: "(# += #)".}
-func `-=`*(self: var TorchTensor, b: TorchTensor) {.importcpp: "(# -= #)".}
-func `-=`*(self: var TorchTensor, s: Scalar) {.importcpp: "(# -= #)".}
-func `*=`*(self: var TorchTensor, b: TorchTensor) {.importcpp: "(# *= #)".}
-func `*=`*(self: var TorchTensor, s: Scalar) {.importcpp: "(# *= #)".}
-func `/=`*(self: var TorchTensor, b: TorchTensor) {.importcpp: "(# /= #)".}
-func `/=`*(self: var TorchTensor, s: Scalar) {.importcpp: "(# /= #)".}
+# func `%`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "#.remainder(#)".}
+# func `%`*(a: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "#.remainder(#)".}
 
-func `and`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_and(#)".} ## bitwise `and`.
-func `or`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_or(#)".} ## bitwise `or`.
-func `xor`*(self: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_xor(#)".} ## bitwise `xor`.
+func `%`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "(# % #)".}
+  ## Note: this uses the Python remainder behavior, not C/C++
+func `%`*(a: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# % #)".}
+  ## Note: this uses the Python remainder behavior, not C/C++
 
-func bitand_mut*(self: var TorchTensor, s: TorchTensor) {.importcpp: "#.bitwise_and_(#)".} ## In-place bitwise `and`.
-func bitor_mut*(self: var TorchTensor, s: TorchTensor) {.importcpp: "#.bitwise_or_(#)".} ## In-place bitwise `or`.
-func bitxor_mut*(self: var TorchTensor, s: TorchTensor) {.importcpp: "#.bitwise_xor_(#)".} ## In-place bitwise `xor`.
+func `+=`*(a: var TorchTensor, b: TorchTensor) {.importcpp: "(# += #)".}
+func `+=`*(a: var TorchTensor, s: Scalar) {.importcpp: "(# += #)".}
+func `-=`*(a: var TorchTensor, b: TorchTensor) {.importcpp: "(# -= #)".}
+func `-=`*(a: var TorchTensor, s: Scalar) {.importcpp: "(# -= #)".}
+func `*=`*(a: var TorchTensor, b: TorchTensor) {.importcpp: "(# *= #)".}
+func `*=`*(a: var TorchTensor, s: Scalar) {.importcpp: "(# *= #)".}
+func `/=`*(a: var TorchTensor, b: TorchTensor) {.importcpp: "(# /= #)".}
+func `/=`*(a: var TorchTensor, s: Scalar) {.importcpp: "(# /= #)".}
+
+func `and`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_and(#)".} ## bitwise `and`.
+func `or`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_or(#)".} ## bitwise `or`.
+func `xor`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_xor(#)".} ## bitwise `xor`.
+
+func bitand_mut*(a: var TorchTensor, s: TorchTensor) {.importcpp: "#.bitwise_and_(#)".} ## In-place bitwise `and`.
+func bitor_mut*(a: var TorchTensor, s: TorchTensor) {.importcpp: "#.bitwise_or_(#)".} ## In-place bitwise `or`.
+func bitxor_mut*(a: var TorchTensor, s: TorchTensor) {.importcpp: "#.bitwise_xor_(#)".} ## In-place bitwise `xor`.
 
 func eq*(a, b: TorchTensor): TorchTensor {.importcpp: "#.eq(#)".} ## Equality of each tensor values
 func equal*(a, b: TorchTensor): bool {.importcpp: "#.equal(#)".}
@@ -556,10 +564,10 @@ template `==`*(a, b: TorchTensor): bool =
 # Functions.h
 # -----------------------------------------------------------------------
 
-func contiguous*(self: TorchTensor): TorchTensor {.importcpp: "#.contiguous(@)".}
-func toType*(self: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.toType(@)".}
-func toSparse*(self: TorchTensor): TorchTensor {.importcpp: "#.to_sparse()".}
-func toSparse*(self: TorchTensor, sparseDim: int): TorchTensor {.importcpp: "#.to_sparse(@)".}
+func contiguous*(a: TorchTensor): TorchTensor {.importcpp: "#.contiguous(@)".}
+func toType*(a: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.toType(@)".}
+func toSparse*(a: TorchTensor): TorchTensor {.importcpp: "#.to_sparse()".}
+func toSparse*(a: TorchTensor, sparseDim: int): TorchTensor {.importcpp: "#.to_sparse(@)".}
 
 func eye*(n: int): TorchTensor {.importcpp: "torch::eye(@)".}
 func eye*(n: int, options: TensorOptions): TorchTensor {.importcpp: "torch::eye(@)".}
@@ -642,10 +650,10 @@ func arange*(start, stop, step: Scalar): TorchTensor {.importcpp: "torch::arange
 
 # Operations
 # -----------------------------------------------------------------------
-func add*(self: TorchTensor, other: TorchTensor, alpha: Scalar = 1): TorchTensor {.importcpp: "#.add(@)".}
-func add*(self: TorchTensor, other: Scalar, alpha: Scalar = 1): TorchTensor {.importcpp: "#.add(@)".}
+func add*(a: TorchTensor, other: TorchTensor, alpha: Scalar = 1): TorchTensor {.importcpp: "#.add(@)".}
+func add*(a: TorchTensor, other: Scalar, alpha: Scalar = 1): TorchTensor {.importcpp: "#.add(@)".}
 func addmv*(
-  self: TorchTensor, mat: TorchTensor, vec: TorchTensor, beta: Scalar = 1, alpha: Scalar = 1
+  a: TorchTensor, mat: TorchTensor, vec: TorchTensor, beta: Scalar = 1, alpha: Scalar = 1
 ): TorchTensor {.importcpp: "#.addmv(@)".}
 func addmm*(t, mat1, mat2: TorchTensor, beta: Scalar = 1, alpha: Scalar = 1): TorchTensor {.importcpp: "#.addmm(@)".}
 func mm*(t, other: TorchTensor): TorchTensor {.importcpp: "#.mm(@)".}
@@ -654,7 +662,7 @@ func bmm*(t, other: TorchTensor): TorchTensor {.importcpp: "#.bmm(@)".}
 
 func luSolve*(t, data, pivots: TorchTensor): TorchTensor {.importcpp: "#.lu_solve(@)".}
 
-func qr*(self: TorchTensor, some: bool = true): CppTuple2[TorchTensor, TorchTensor] {.importcpp: "#.qr(@)".}
+func qr*(a: TorchTensor, some: bool = true): CppTuple2[TorchTensor, TorchTensor] {.importcpp: "#.qr(@)".}
   ## Returns a tuple:
   ## - Q of shape (∗,m,k)
   ## - R of shape (∗,k,n)
@@ -664,89 +672,89 @@ func qr*(self: TorchTensor, some: bool = true): CppTuple2[TorchTensor, TorchTens
   ## t = QR
 
 # addr?
-func all*(self: TorchTensor, axis: int): TorchTensor {.importcpp: "#.all(@)".}
-func all*(self: TorchTensor, axis: int, keepdim: bool): TorchTensor {.importcpp: "#.all(@)".}
+func all*(a: TorchTensor, axis: int): TorchTensor {.importcpp: "#.all(@)".}
+func all*(a: TorchTensor, axis: int, keepdim: bool): TorchTensor {.importcpp: "#.all(@)".}
 func allClose*(
   t, other: TorchTensor, rtol: float64 = 1e-5, abstol: float64 = 1e-8, equalNan: bool = false
 ): bool {.importcpp: "#.allclose(@)".}
-func any*(self: TorchTensor, axis: int): TorchTensor {.importcpp: "#.any(@)".}
-func any*(self: TorchTensor, axis: int, keepdim: bool): TorchTensor {.importcpp: "#.any(@)".}
-func argmax*(self: TorchTensor): TorchTensor {.importcpp: "#.argmax()".}
-func argmax*(self: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.argmax(@)".}
-func argmin*(self: TorchTensor): TorchTensor {.importcpp: "#.argmin()".}
-func argmin*(self: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.argmin(@)".}
+func any*(a: TorchTensor, axis: int): TorchTensor {.importcpp: "#.any(@)".}
+func any*(a: TorchTensor, axis: int, keepdim: bool): TorchTensor {.importcpp: "#.any(@)".}
+func argmax*(a: TorchTensor): TorchTensor {.importcpp: "#.argmax()".}
+func argmax*(a: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.argmax(@)".}
+func argmin*(a: TorchTensor): TorchTensor {.importcpp: "#.argmin()".}
+func argmin*(a: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.argmin(@)".}
 
 # aggregate
 # -----------------------------------------------------------------------
 
 # sum needs wrapper procs/templates to allow for using nim arrays and single axis.
-func sum*(self: TorchTensor): TorchTensor {.importcpp: "#.sum()".}
-func sum*(self: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.sum(@)".}
-func sum*(self: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.sum(@)".}
-func sum*(self: TorchTensor, axis: int, keepdim: bool = false, dtype: ScalarKind): TorchTensor {.importcpp: "#.sum(@)".}
-func sum*(self: TorchTensor, axis: IntArrayRef, keepdim: bool = false): TorchTensor {.importcpp: "#.sum(@)".}
+func sum*(a: TorchTensor): TorchTensor {.importcpp: "#.sum()".}
+func sum*(a: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.sum(@)".}
+func sum*(a: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.sum(@)".}
+func sum*(a: TorchTensor, axis: int, keepdim: bool = false, dtype: ScalarKind): TorchTensor {.importcpp: "#.sum(@)".}
+func sum*(a: TorchTensor, axis: IntArrayRef, keepdim: bool = false): TorchTensor {.importcpp: "#.sum(@)".}
 func sum*(
-  self: TorchTensor, axis: IntArrayRef, keepdim: bool = false, dtype: ScalarKind
+  a: TorchTensor, axis: IntArrayRef, keepdim: bool = false, dtype: ScalarKind
 ): TorchTensor {.importcpp: "#.sum(@)".}
 
 # mean as well
-func mean*(self: TorchTensor): TorchTensor {.importcpp: "#.mean()".}
-func mean*(self: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.mean(@)".}
-func mean*(self: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.mean(@)".}
-func mean*(self: TorchTensor, axis: int, keepdim: bool = false, dtype: ScalarKind): TorchTensor {.importcpp: "#.mean(@)".}
-func mean*(self: TorchTensor, axis: IntArrayRef, keepdim: bool = false): TorchTensor {.importcpp: "#.mean(@)".}
+func mean*(a: TorchTensor): TorchTensor {.importcpp: "#.mean()".}
+func mean*(a: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.mean(@)".}
+func mean*(a: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.mean(@)".}
+func mean*(a: TorchTensor, axis: int, keepdim: bool = false, dtype: ScalarKind): TorchTensor {.importcpp: "#.mean(@)".}
+func mean*(a: TorchTensor, axis: IntArrayRef, keepdim: bool = false): TorchTensor {.importcpp: "#.mean(@)".}
 func mean*(
-  self: TorchTensor, axis: IntArrayRef, keepdim: bool = false, dtype: ScalarKind
+  a: TorchTensor, axis: IntArrayRef, keepdim: bool = false, dtype: ScalarKind
 ): TorchTensor {.importcpp: "#.mean(@)".}
 
 # median requires std::tuple
 
-func prod*(self: TorchTensor): TorchTensor {.importcpp: "#.prod()".}
-func prod*(self: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.prod(@)".}
-func prod*(self: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.prod(@)".}
-func prod*(self: TorchTensor, axis: int, keepdim: bool = false, dtype: ScalarKind): TorchTensor {.importcpp: "#.prod(@)".}
+func prod*(a: TorchTensor): TorchTensor {.importcpp: "#.prod()".}
+func prod*(a: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.prod(@)".}
+func prod*(a: TorchTensor, axis: int, keepdim: bool = false): TorchTensor {.importcpp: "#.prod(@)".}
+func prod*(a: TorchTensor, axis: int, keepdim: bool = false, dtype: ScalarKind): TorchTensor {.importcpp: "#.prod(@)".}
 
-func min*(self: TorchTensor): TorchTensor {.importcpp: "#.min()".}
+func min*(a: TorchTensor): TorchTensor {.importcpp: "#.min()".}
 func min*(
-  self: TorchTensor, axis: int, keepdim: bool = false
+  a: TorchTensor, axis: int, keepdim: bool = false
 ): CppTuple2[TorchTensor, TorchTensor] {.importcpp: "torch::min(@)".}
   ## Returns a tuple (values, indices) of type (TensorT, TensorInt64)
   ## of the minimum values and their index in the specified axis
 
-func max*(self: TorchTensor): TorchTensor {.importcpp: "#.max()".}
+func max*(a: TorchTensor): TorchTensor {.importcpp: "#.max()".}
 func max*(
-  self: TorchTensor, axis: int, keepdim: bool = false
+  a: TorchTensor, axis: int, keepdim: bool = false
 ): CppTuple2[TorchTensor, TorchTensor] {.importcpp: "torch::max(@)".}
   ## Returns a tuple (values, indices) of type (TensorT, TensorInt64)
   ## of the maximum values and their index in the specified axis
 
-func variance*(self: TorchTensor, unbiased: bool = true): TorchTensor {.importcpp: "#.var(@)".}
+func variance*(a: TorchTensor, unbiased: bool = true): TorchTensor {.importcpp: "#.var(@)".}
   # can't use `var` because of keyword.
 func variance*(
-  self: TorchTensor, axis: int, unbiased: bool = true, keepdim: bool = false
+  a: TorchTensor, axis: int, unbiased: bool = true, keepdim: bool = false
 ): TorchTensor {.importcpp: "#.var(@)".}
 func variance*(
-  self: TorchTensor, axis: IntArrayRef, unbiased: bool = true, keepdim: bool = false
+  a: TorchTensor, axis: IntArrayRef, unbiased: bool = true, keepdim: bool = false
 ): TorchTensor {.importcpp: "#.var(@)".}
 
-func stddev*(self: TorchTensor, unbiased: bool = true): TorchTensor {.importcpp: "#.std(@)".}
+func stddev*(a: TorchTensor, unbiased: bool = true): TorchTensor {.importcpp: "#.std(@)".}
 func stddev*(
-  self: TorchTensor, axis: int, unbiased: bool = true, keepdim: bool = false
+  a: TorchTensor, axis: int, unbiased: bool = true, keepdim: bool = false
 ): TorchTensor {.importcpp: "#.std(@)".}
 func stddev*(
-  self: TorchTensor, axis: IntArrayRef, unbiased: bool = true, keepdim: bool = false
+  a: TorchTensor, axis: IntArrayRef, unbiased: bool = true, keepdim: bool = false
 ): TorchTensor {.importcpp: "#.std(@)".}
 
 # algorithms:
 # -----------------------------------------------------------------------
 func sort*(
-  self: TorchTensor, axis: int = -1, descending: bool = false
+  a: TorchTensor, axis: int = -1, descending: bool = false
 ): CppTuple2[TorchTensor, TorchTensor] {.importcpp: "#.sort(@)".}
   ## Sorts the elements of the input tensor along a given dimension in ascending order by value.
   ## If dim is not given, the last dimension of the input is chosen (dim=-1).
   ## Returns (values, originalIndices) or type (TensorT, TensorInt64)
   ## where originalIndices is the original index of each values (before sorting)
-func argsort*(self: TorchTensor, axis: int = -1, descending: bool = false): TorchTensor {.importcpp: "#.argsort(@)".}
+func argsort*(a: TorchTensor, axis: int = -1, descending: bool = false): TorchTensor {.importcpp: "#.argsort(@)".}
 
 func cat*(tensors: ArrayRef[TorchTensor], axis: int = 0): TorchTensor {.importcpp: "torch::cat(@)".}
 func stack*(tensors: ArrayRef[TorchTensor], dim: int = 0): TorchTensor {.importcpp: "torch::stack(@)".}
@@ -754,87 +762,87 @@ func stack*(tensors: ArrayRef[TorchTensor], dim: int = 0): TorchTensor {.importc
   ## All tensors must have the same shape.
   ## Example: stack([2x3, 2x3, 2x3], dim=0) -> 3x2x3
   ##          stack([2x3, 2x3], dim=1) -> 2x2x3
-func flip*(self: TorchTensor, dims: IntArrayRef): TorchTensor {.importcpp: "#.flip(@)".}
+func flip*(a: TorchTensor, dims: IntArrayRef): TorchTensor {.importcpp: "#.flip(@)".}
 
 # math
 # -----------------------------------------------------------------------
-func abs*(self: TorchTensor): TorchTensor {.importcpp: "#.abs()".}
-func absolute*(self: TorchTensor): TorchTensor {.importcpp: "#.absolute()".}
-func angle*(self: TorchTensor): TorchTensor {.importcpp: "#.angle()".}
-func sgn*(self: TorchTensor): TorchTensor {.importcpp: "#.sgn()".}
-func conj*(self: TorchTensor): TorchTensor {.importcpp: "#.conj()".}
-func acos*(self: TorchTensor): TorchTensor {.importcpp: "#.acos()".}
-func arccos*(self: TorchTensor): TorchTensor {.importcpp: "#.arccos()".}
-func acosh*(self: TorchTensor): TorchTensor {.importcpp: "#.acosh()".}
-func arccosh*(self: TorchTensor): TorchTensor {.importcpp: "#.arccosh()".}
-func asinh*(self: TorchTensor): TorchTensor {.importcpp: "#.asinh()".}
-func arcsinh*(self: TorchTensor): TorchTensor {.importcpp: "#.arcsinh()".}
-func atanh*(self: TorchTensor): TorchTensor {.importcpp: "#.atanh()".}
-func arctanh*(self: TorchTensor): TorchTensor {.importcpp: "#.arctanh()".}
-func asin*(self: TorchTensor): TorchTensor {.importcpp: "#.asin()".}
-func arcsin*(self: TorchTensor): TorchTensor {.importcpp: "#.arcsin()".}
-func atan*(self: TorchTensor): TorchTensor {.importcpp: "#.atan()".}
-func arctan*(self: TorchTensor): TorchTensor {.importcpp: "#.arctan()".}
-func cos*(self: TorchTensor): TorchTensor {.importcpp: "#.cos()".}
-func sin*(self: TorchTensor): TorchTensor {.importcpp: "#.sin()".}
-func tan*(self: TorchTensor): TorchTensor {.importcpp: "#.tan()".}
-func exp*(self: TorchTensor): TorchTensor {.importcpp: "#.exp()".}
-func exp2*(self: TorchTensor): TorchTensor {.importcpp: "#.exp2()".}
-func log*(self: TorchTensor): TorchTensor {.importcpp: "#.log()".}
+func abs*(a: TorchTensor): TorchTensor {.importcpp: "#.abs()".}
+func absolute*(a: TorchTensor): TorchTensor {.importcpp: "#.absolute()".}
+func angle*(a: TorchTensor): TorchTensor {.importcpp: "#.angle()".}
+func sgn*(a: TorchTensor): TorchTensor {.importcpp: "#.sgn()".}
+func conj*(a: TorchTensor): TorchTensor {.importcpp: "#.conj()".}
+func acos*(a: TorchTensor): TorchTensor {.importcpp: "#.acos()".}
+func arccos*(a: TorchTensor): TorchTensor {.importcpp: "#.arccos()".}
+func acosh*(a: TorchTensor): TorchTensor {.importcpp: "#.acosh()".}
+func arccosh*(a: TorchTensor): TorchTensor {.importcpp: "#.arccosh()".}
+func asinh*(a: TorchTensor): TorchTensor {.importcpp: "#.asinh()".}
+func arcsinh*(a: TorchTensor): TorchTensor {.importcpp: "#.arcsinh()".}
+func atanh*(a: TorchTensor): TorchTensor {.importcpp: "#.atanh()".}
+func arctanh*(a: TorchTensor): TorchTensor {.importcpp: "#.arctanh()".}
+func asin*(a: TorchTensor): TorchTensor {.importcpp: "#.asin()".}
+func arcsin*(a: TorchTensor): TorchTensor {.importcpp: "#.arcsin()".}
+func atan*(a: TorchTensor): TorchTensor {.importcpp: "#.atan()".}
+func arctan*(a: TorchTensor): TorchTensor {.importcpp: "#.arctan()".}
+func cos*(a: TorchTensor): TorchTensor {.importcpp: "#.cos()".}
+func sin*(a: TorchTensor): TorchTensor {.importcpp: "#.sin()".}
+func tan*(a: TorchTensor): TorchTensor {.importcpp: "#.tan()".}
+func exp*(a: TorchTensor): TorchTensor {.importcpp: "#.exp()".}
+func exp2*(a: TorchTensor): TorchTensor {.importcpp: "#.exp2()".}
+func log*(a: TorchTensor): TorchTensor {.importcpp: "#.log()".}
   ## Natural logarithm (base e). log(exp(x)) = x
   ## Returns NaN for negative inputs, -Inf for 0
-func log2*(self: TorchTensor): TorchTensor {.importcpp: "#.log2()".}
+func log2*(a: TorchTensor): TorchTensor {.importcpp: "#.log2()".}
   ## Base-2 logarithm. Useful for information theory (entropy, bits)
-func log10*(self: TorchTensor): TorchTensor {.importcpp: "#.log10()".}
+func log10*(a: TorchTensor): TorchTensor {.importcpp: "#.log10()".}
   ## Base-10 logarithm. Useful for decibels and scientific notation
-func erf*(self: TorchTensor): TorchTensor {.importcpp: "#.erf()".}
-func erfc*(self: TorchTensor): TorchTensor {.importcpp: "#.erfc()".}
-func reciprocal*(self: TorchTensor): TorchTensor {.importcpp: "#.reciprocal()".}
-func neg*(self: TorchTensor): TorchTensor {.importcpp: "#.neg()".}
-func clamp*(self: TorchTensor, min, max: Scalar): TorchTensor {.importcpp: "#.clamp(@)".}
-func clampMin*(self: TorchTensor, min: Scalar): TorchTensor {.importcpp: "#.clamp_min(@)".}
-func clampMax*(self: TorchTensor, max: Scalar): TorchTensor {.importcpp: "#.clamp_max(@)".}
+func erf*(a: TorchTensor): TorchTensor {.importcpp: "#.erf()".}
+func erfc*(a: TorchTensor): TorchTensor {.importcpp: "#.erfc()".}
+func reciprocal*(a: TorchTensor): TorchTensor {.importcpp: "#.reciprocal()".}
+func neg*(a: TorchTensor): TorchTensor {.importcpp: "#.neg()".}
+func clamp*(a: TorchTensor, min, max: Scalar): TorchTensor {.importcpp: "#.clamp(@)".}
+func clampMin*(a: TorchTensor, min: Scalar): TorchTensor {.importcpp: "#.clamp_min(@)".}
+func clampMax*(a: TorchTensor, max: Scalar): TorchTensor {.importcpp: "#.clamp_max(@)".}
 
-func dot*(self: TorchTensor, other: TorchTensor): TorchTensor {.importcpp: "#.dot(@)".}
+func dot*(a: TorchTensor, other: TorchTensor): TorchTensor {.importcpp: "#.dot(@)".}
 
-func squeeze*(self: TorchTensor): TorchTensor {.importcpp: "#.squeeze()".}
-func squeeze*(self: TorchTensor, axis: int): TorchTensor {.importcpp: "#.squeeze(@)".}
-func unsqueeze*(self: TorchTensor, axis: int): TorchTensor {.importcpp: "#.unsqueeze(@)".}
-func square*(self: TorchTensor): TorchTensor {.importcpp: "#.square()".}
-func sqrt*(self: TorchTensor): TorchTensor {.importcpp: "#.sqrt()".}
-func pow*(self: TorchTensor, exponent: TorchTensor): TorchTensor {.importcpp: "#.pow(@)".}
-func pow*(self: TorchTensor, exponent: Scalar): TorchTensor {.importcpp: "#.pow(@)".}
+func squeeze*(a: TorchTensor): TorchTensor {.importcpp: "#.squeeze()".}
+func squeeze*(a: TorchTensor, axis: int): TorchTensor {.importcpp: "#.squeeze(@)".}
+func unsqueeze*(a: TorchTensor, axis: int): TorchTensor {.importcpp: "#.unsqueeze(@)".}
+func square*(a: TorchTensor): TorchTensor {.importcpp: "#.square()".}
+func sqrt*(a: TorchTensor): TorchTensor {.importcpp: "#.sqrt()".}
+func pow*(a: TorchTensor, exponent: TorchTensor): TorchTensor {.importcpp: "#.pow(@)".}
+func pow*(a: TorchTensor, exponent: Scalar): TorchTensor {.importcpp: "#.pow(@)".}
 
 # FFT
 # -----------------------------------------------------------------------
-func fftshift*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_fftshift(@)".}
-func fftshift*(self: TorchTensor, dim: IntArrayRef): TorchTensor {.importcpp: "torch::fft_ifftshift(@)".}
-func ifftshift*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_fftshift(@)".}
-func ifftshift*(self: TorchTensor, dim: IntArrayRef): TorchTensor {.importcpp: "torch::fft_ifftshift(@)".}
+func fftshift*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_fftshift(@)".}
+func fftshift*(a: TorchTensor, dim: IntArrayRef): TorchTensor {.importcpp: "torch::fft_ifftshift(@)".}
+func ifftshift*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_fftshift(@)".}
+func ifftshift*(a: TorchTensor, dim: IntArrayRef): TorchTensor {.importcpp: "torch::fft_ifftshift(@)".}
 
-func fft*(self: TorchTensor, n: int, dim: int, norm: CppString): TorchTensor {.importcpp: "torch::fft_fft(@)".}
-func fft*(self: TorchTensor, n: int, dim: int = -1): TorchTensor {.importcpp: "torch::fft_fft(@)".}
+func fft*(a: TorchTensor, n: int, dim: int, norm: CppString): TorchTensor {.importcpp: "torch::fft_fft(@)".}
+func fft*(a: TorchTensor, n: int, dim: int = -1): TorchTensor {.importcpp: "torch::fft_fft(@)".}
 ## Compute the 1-D Fourier transform
 ## ``n`` represent Signal length. If given, the input will either be zero-padded or trimmed to this length before computing the FFT.
 ## ``norm`` can be :
 ##    * "forward" - normalize by 1/n
 ##    * "backward" - no normalization
 ##    * "ortho" - normalize by 1/sqrt(n)
-func fft*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_fft(@)".}
+func fft*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_fft(@)".}
 ## Compute the 1-D Fourier transform
 
-func ifft*(self: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::fft_ifft(@)".}
+func ifft*(a: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::fft_ifft(@)".}
 ## Compute the 1-D Fourier transform
 ## ``n`` represent Signal length. If given, the input will either be zero-padded or trimmed to this length before computing the FFT.
 ## ``norm`` can be :
 ##   * "forward" - no normalization
 ##   * "backward" - normalization by 1/n
 ##   * "ortho" - normalization by 1/sqrt(n)
-func ifft*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_ifft(@)".}
+func ifft*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_ifft(@)".}
 ## Compute the 1-D Fourier transform
 
 func fft2*(
-  self: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
+  a: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
 ): TorchTensor {.importcpp: "torch::fft_fft2(@)".}
 ## Compute the 2-D Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
@@ -843,14 +851,14 @@ func fft2*(
 ##    * "backward" - no normalization
 ##    * "ortho" - normalize by 1/sqrt(n)
 ## With n the logical FFT size: ``n = prod(s)``.
-func fft2*(self: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_fft2(@)".}
+func fft2*(a: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_fft2(@)".}
 ## Compute the 2-D Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
-func fft2*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_fft2(@)".}
+func fft2*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_fft2(@)".}
 ## Compute the 2-D Fourier transform
 
 func ifft2*(
-  self: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
+  a: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
 ): TorchTensor {.importcpp: "torch::fft_ifft2(@)".}
 ## Compute the 2-D Inverse Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
@@ -859,14 +867,14 @@ func ifft2*(
 ##   * "backward" - normalization by 1/n
 ##   * "ortho" - normalization by 1/sqrt(n)
 ## With n the logical FFT size: ``n = prod(s)``.
-func ifft2*(self: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_ifft2(@)".}
+func ifft2*(a: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_ifft2(@)".}
 ## Compute the 2-D Inverse Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
-func ifft2*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_ifft2(@)".}
+func ifft2*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_ifft2(@)".}
 ## Compute the 2-D Inverse Fourier transform
 
 func fftn*(
-  self: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
+  a: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
 ): TorchTensor {.importcpp: "torch::fft_fftn(@)".}
 ## Compute the N-D Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
@@ -875,14 +883,14 @@ func fftn*(
 ##    * "backward" - no normalization
 ##    * "ortho" normalize by 1/sqrt(n)
 ## With n the logical FFT size: ``n = prod(s)``.
-func fftn*(self: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_fftn(@)".}
+func fftn*(a: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_fftn(@)".}
 ## Compute the N-D Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
-func fftn*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_fftn(@)".}
+func fftn*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_fftn(@)".}
 ## Compute the N-D Fourier transform
 
 func ifftn*(
-  self: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
+  a: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
 ): TorchTensor {.importcpp: "torch::fft_ifftn(@)".}
 ## Compute the N-D Inverse Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
@@ -891,24 +899,24 @@ func ifftn*(
 ##   * "backward" - normalization by 1/n
 ##   * "ortho" - normalization by 1/sqrt(n)
 ## With n the logical FFT size: ``n = prod(s)``.
-func ifftn*(self: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_ifftn(@)".}
+func ifftn*(a: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_ifftn(@)".}
 ## Compute the N-D Inverse Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
-func ifftn*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_ifftn(@)".}
+func ifftn*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_ifftn(@)".}
 ## Compute the N-D Inverse Fourier transform
 
-func rfft*(self: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::fft_rfft(@)".}
+func rfft*(a: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::fft_rfft(@)".}
 ## Computes the one dimensional Fourier transform of real-valued input.
-func rfft*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_rfft(@)".}
+func rfft*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_rfft(@)".}
 ## Computes the one dimensional Fourier transform of real-valued input.
 
-func irfft*(self: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::fft_irfft(@)".}
+func irfft*(a: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::fft_irfft(@)".}
 ## Computes the one dimensional Fourier transform of real-valued input.
-func irfft*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_irfft(@)".}
+func irfft*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_irfft(@)".}
 ## Computes the one dimensional Fourier transform of real-valued input.
 
 func rfft2*(
-  self: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
+  a: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
 ): TorchTensor {.importcpp: "torch::fft_rfft2(@)".}
 ## Compute the N-D Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
@@ -917,14 +925,14 @@ func rfft2*(
 ##    * "backward" - no normalization
 ##    * "ortho" - normalize by 1/sqrt(n)
 ## With n the logical FFT size: ``n = prod(s)``.
-func rfft2*(self: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_rfft2(@)".}
+func rfft2*(a: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_rfft2(@)".}
 ## Compute the N-D Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
-func rfft2*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_rfft2(@)".}
+func rfft2*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_rfft2(@)".}
 ## Compute the N-D Fourier transform
 
 func irfft2*(
-  self: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
+  a: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
 ): TorchTensor {.importcpp: "torch::fft_irfft2(@)".}
 ## Compute the N-D Inverse Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
@@ -933,14 +941,14 @@ func irfft2*(
 ##   * "backward" - normalization by 1/n
 ##   * "ortho" - normalization by 1/sqrt(n)
 ## With n the logical FFT size: ``n = prod(s)``.
-func irfft2*(self: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_irfft2(@)".}
+func irfft2*(a: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_irfft2(@)".}
 ## Compute the N-D Inverse Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
-func irfft2*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_irfft2(@)".}
+func irfft2*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_irfft2(@)".}
 ## Compute the N-D Inverse Fourier transform
 
 func rfftn*(
-  self: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
+  a: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
 ): TorchTensor {.importcpp: "torch::fft_rfftn(@)".}
 ## Compute the N-D Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
@@ -949,14 +957,14 @@ func rfftn*(
 ##    * "backward" - no normalization
 ##    * "ortho" - normalize by 1/sqrt(n)
 ## With n the logical FFT size: ``n = prod(s)``.
-func rfftn*(self: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_rfftn(@)".}
+func rfftn*(a: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_rfftn(@)".}
 ## Compute the N-D Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
-func rfftn*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_rfftn(@)".}
+func rfftn*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_rfftn(@)".}
 ## Compute the N-D Fourier transform
 
 func irfftn*(
-  self: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
+  a: TorchTensor, s: IntArrayRef, dim: IntArrayRef, norm: CppString
 ): TorchTensor {.importcpp: "torch::fft_irfftn(@)".}
 ## Compute the N-D Inverse Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
@@ -965,19 +973,19 @@ func irfftn*(
 ##   * "backward" - normalization by 1/n
 ##   * "ortho" - normalization by 1/sqrt(n)
 ## With n the logical FFT size: ``n = prod(s)``.
-func irfftn*(self: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_irfftn(@)".}
+func irfftn*(a: TorchTensor, s: IntArrayRef): TorchTensor {.importcpp: "torch::fft_irfftn(@)".}
 ## Compute the N-D Inverse Fourier transform
 ## ``s`` represents signal size. If given, each dimension dim[i] will either be zero padded or trimmed to the length s[i] before computing the FFT.
-func irfftn*(self: TorchTensor): TorchTensor {.importcpp: "torch::fft_irfftn(@)".}
+func irfftn*(a: TorchTensor): TorchTensor {.importcpp: "torch::fft_irfftn(@)".}
 ## Compute the N-D Inverse Fourier transform
 
-func hfft*(self: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::hfft(@)".}
+func hfft*(a: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::hfft(@)".}
 ## Computes the 1 dimensional FFT of a onesided Hermitian signal.
-func hfft*(self: TorchTensor): TorchTensor {.importcpp: "torch::hfft(@)".}
+func hfft*(a: TorchTensor): TorchTensor {.importcpp: "torch::hfft(@)".}
 ## Computes the 1 dimensional FFT of a onesided Hermitian signal.
-func ihfft*(self: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::ihfft(@)".}
+func ihfft*(a: TorchTensor, n: int, dim: int = -1, norm: CppString): TorchTensor {.importcpp: "torch::ihfft(@)".}
 ## Computes the inverse FFT of a real-valued Fourier domain signal.
-func ihfft*(self: TorchTensor): TorchTensor {.importcpp: "torch::ihfft(@)".}
+func ihfft*(a: TorchTensor): TorchTensor {.importcpp: "torch::ihfft(@)".}
 ## Computes the inverse FFT of a real-valued Fourier domain signal.
 
 {.pop.}
