@@ -142,6 +142,19 @@ func dropout_mut*(input: var TorchTensor, p = 0.5, training = true) {.importcpp:
 # -------------------------------------------------------------------------
 func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef) {.importcpp: "torch::rms_norm(@)".}
 func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef, weight: TorchTensor) {.importcpp: "torch::rms_norm(@)".}
+func rms_norm*(input: TorchTensor, normalized_shape: IntArrayRef, weight: TorchTensor, eps: float64) {.importcpp: "torch::rms_norm(@)".}
+  ## RMSNorm with optional eps parameter.
+  ##
+  ## C++ signature:
+  ##   inline at::Tensor at::rms_norm(
+  ##     const at::Tensor &input,
+  ##     at::IntArrayRef normalized_shape,
+  ##     const ::std::optional<at::Tensor> &weight = {},
+  ##     ::std::optional<double> eps = ::std::nullopt
+  ##   )
+  ##
+  ## Computes
+  ##   y = x * weight / sqrt(mean(x^2) + eps)
 
 # Loss functions
 # -------------------------------------------------------------------------
@@ -277,6 +290,18 @@ func scaled_dot_product_attention*(
   enable_gqa: bool = false
 ): TorchTensor {.importcpp: "torch::scaled_dot_product_attention(@)".}
   ## SDPA - the core attention operation in Transformers.
+  ##
+  ## C++ signature:
+  ##   inline at::Tensor at::scaled_dot_product_attention(
+  ##     const at::Tensor &query,
+  ##     const at::Tensor &key,
+  ##     const at::Tensor &value,
+  ##     const ::std::optional<at::Tensor> &attn_mask = {},
+  ##     double dropout_p = 0.0,
+  ##     bool is_causal = false,
+  ##     ::std::optional<double> scale = ::std::nullopt,
+  ##     bool enable_gqa = false
+  ##   )
   ##
   ## Computes softmax(Q @ K^T / scale) @ V with efficient memory attention.
   ## Uses Paged KV cache for efficient generation and supports:

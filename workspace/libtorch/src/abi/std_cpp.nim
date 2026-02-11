@@ -13,7 +13,9 @@ import std/macros
 #
 # ############################################################
 
-when not defined(cpp):
+const nimTools = defined(nimCheck) or defined(nimDoc)
+
+when not defined(cpp) and not nimTools:
   {.error: "C++ backend required to use STL wrapper".}
 
 # std::string
@@ -28,8 +30,8 @@ func len*(s: CppString): int {.importcpp: "#.length()".}
 func data*(s: CppString): ptr char {.importcpp: "const_cast<char*>(#.data())".}
 func c_str*(s: CppString): cstring {.importcpp: "#.c_str()".}
 
-proc initCppString*(s: cstring): CppString {.importcpp: "std::string(@)".}
-proc initCppString*(s: cstring, n: csize_t): CppString {.importcpp: "std::string(@)".}
+proc toCppString*(s: cstring): CppString {.importcpp: "std::string(@)".}
+proc toCppString*(s: cstring, n: csize_t): CppString {.importcpp: "std::string(@)".}
 
 {.pop.}
 

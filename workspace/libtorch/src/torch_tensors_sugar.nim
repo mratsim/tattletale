@@ -57,14 +57,11 @@ func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
 func asNimView*[T](ar: ArrayRef[T]): openArray[T] {.inline.} =
   toOpenArray(ar.data.unsafeAddr, 0, ar.size.int - 1)
 
-func asTorchView*(oa: openArray[int]): IntArrayRef {.inline.} =
+func asTorchView*(oa: varargs[int]): IntArrayRef {.inline.} =
   # libtorch only works (and actively checks) on 64-bit OSes.
   init(IntArrayRef, oa[0].unsafeAddr, oa.len)
 
-func asTorchView*(oa: openArray[int64]): IntArrayRef {.inline.} =
-  init(IntArrayRef, oa[0].unsafeAddr, oa.len)
-
-func asTorchView*[T: not (int|int64)](oa: openArray[T]): ArrayRef[T] {.inline.} =
+func asTorchView*[T: not int](oa: openArray[T]): ArrayRef[T] {.inline.} =
   init(ArrayRef[T], oa[0].unsafeAddr, oa.len)
 
 func asTorchView*(meta: Metadata): ArrayRef[int64] {.inline.} =
