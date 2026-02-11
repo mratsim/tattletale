@@ -1,0 +1,23 @@
+[project]
+name = "transformers-tests"
+version = "0.1.0"
+description = "Test fixtures and utilities for transformer layers"
+readme = "tests/README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "safetensors>=0.4.0",
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+]
