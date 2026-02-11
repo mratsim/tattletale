@@ -44,16 +44,18 @@ API reference:
 - Tensor methods: https://pytorch.org/cppdocs/api/classat_1_1_tensor.html
 - Free-standing functions: https://pytorch.org/cppdocs/api/file_build_aten_src_ATen_Functions.h.html
 
-#### Dealing with c10::optional
+#### Dealing with std::optional
+
+std::optional replaces c10::optional
 
 c10::optional is similar to Nim `Option` for PyTorch.
 The type `T` is implicitly convertible to `c10::optional<T>` at the C++ compiler level
-hence we don't expose `c10::optional` in Nim but the bindings directly use the base type and an overload with no input.
+hence we don't expose `c10::optional` in Nim but the bindings directly use the base type and overloads with no input if those are skippable (default init + last parameters)
 
 #### On TensorOptions, Device, DeviceKind and ScalarType
 
 `TensorOptions` has a default param of empty `{}`.
-Also DeviceKind (for example kCuda), Device ({kCuda, 0} for Cuda GPU0 and scalar type (kFloat32) are implictly convertible to TensorOptions.
+Also DeviceKind (for example kCuda), Device ({kCuda, 0} for Cuda GPU0) and scalar type (kFloat32) are implictly convertible to TensorOptions.
 
 This means that for ergonomic use, it's best to create overload with each parameters, for instance for
 
