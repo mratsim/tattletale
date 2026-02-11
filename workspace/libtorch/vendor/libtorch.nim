@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  std/[strutils, os],
+  std/os,
   workspace/libtorch/vendor/libtorch_config
 
 {.used.}
@@ -20,7 +20,7 @@ import
 # Libraries
 # -----------------------------------------------------------------------
 
-const LibTorchPath* = currentSourcePath.rsplit(DirSep, 1)[0] / "libtorch"
+const LibTorchPath* = currentSourcePath.parentDir() / "libtorch"
 const LibrariesPath* = LibTorchPath / "lib"
 
 # TODO: proper build system on "nimble install" (put libraries in .nimble/bin?)

@@ -37,7 +37,7 @@ func testerCmd(path: string): string =
 func downloaderCmd(path: string): string =
   let filename = path.extractFilename()
   return
-    "nim c -r" &
+    "nim c -r -d:ssl" &
     " --verbosity:0 --hints:off --warnings:off " &
     &" --outdir:build/downloaders/{filename} --nimcache:nimcache/downloaders/{filename} " &
     path
@@ -99,9 +99,9 @@ task test_safetensors, "Test workspace/safetensors":
     for cmd in getTestCommands("workspace/safetensors/tests"):
       runCmd(cmd)
 
-task test_models, "Test workspace/models":
+task test_transformers, "Test workspace/transformers":
   withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/models/tests"):
+    for cmd in getTestCommands("workspace/transformers/tests"):
       runCmd(cmd)
 
 task test_toktoktok, "Test workspace/toktoktok":

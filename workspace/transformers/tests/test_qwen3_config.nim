@@ -8,12 +8,16 @@
 import std/unittest
 import std/options
 import std/json
+import std/os
 
-import workspace/models/src/config
+const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"
+const CONFIGS_DIR = FIXTURES_DIR / "configs"
+
+import workspace/transformers
 
 suite "Qwen3 Config":
   test "Parse Qwen3-0.6B config":
-    let cfg = loadQwen3Config("tests/fixtures/configs/config-Qwen3-0.6B.json")
+    let cfg = loadQwen3Config(CONFIGS_DIR / "config-Qwen3-0.6B.json")
 
     check cfg.architecture == "Qwen3ForCausalLM"
     check cfg.model_type == "qwen3"
@@ -37,7 +41,7 @@ suite "Qwen3 Config":
     check cfg.numKvGroups == 2  # 16 / 8 = 2
 
   test "Parse Qwen3-4B config":
-    let cfg = loadQwen3Config("tests/fixtures/configs/config-Qwen3-4B.json")
+    let cfg = loadQwen3Config(CONFIGS_DIR / "config-Qwen3-4B.json")
 
     check cfg.hidden_size == 2560
     check cfg.num_hidden_layers == 36
@@ -47,6 +51,6 @@ suite "Qwen3 Config":
     check cfg.numKvGroups == 4  # 32 / 8 = 4
 
   test "Parse Qwen3-4B-AWQ config has quantization":
-    let cfg = loadQwen3Config("tests/fixtures/configs/config-Qwen3-4B-AWQ.json")
+    let cfg = loadQwen3Config(CONFIGS_DIR / "config-Qwen3-4B-AWQ.json")
 
     check cfg.rope_scaling.isNil == false
