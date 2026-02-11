@@ -21,14 +21,11 @@ func init*(_: type RmsNorm, weight: TorchTensor, eps: float = 1e-6): RmsNorm =
   RmsNorm(weight: weight, eps: eps, hidden_size: hidden_size)
 
 proc forward*(self: RmsNorm, x: TorchTensor): TorchTensor =
-  let normalized_shape = asTorchView([self.hidden_size])
+  let normalized_shape = asTorchView(self.hidden_size)
   rms_norm(x, normalized_shape, self.weight, self.eps)
 
 proc forward_with_residual*(self: RmsNorm, x, residual: TorchTensor): (TorchTensor, TorchTensor) =
-  let orig_dtype = x.scalarType()
-  let x_float = x.to(kFloat32).add(residual.to(kFloat32))
-  let residual_output = x_float.to(orig_dtype)
-  let var_mean = x_float.pow(2).mean(-1, true)
-  let inv_std = F.pow(var_mean + self.eps, -0.5)
-  let normalized = x_float * inv_std
-  result = (normalized.to(orig_dtype) * self.weight, residual_output)
+  let new_residual = x + residual
+  let normalized_shape = asTorchView(self.hidden_size)
+  let normalized = rms_norm(new_residual, normalized_shape, self.weight, self.eps)
+  (normalized, new_residual)
