@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[os, strutils]
+import std/os
 import chronos/apps/http/httpclient
 
 const
@@ -56,7 +56,7 @@ const
   O200K_BASE_FILENAME = "o200k_base.tiktoken"
 
 proc getProjectDir(): string {.compileTime.} =
-  currentSourcePath.rsplit(DirSep, 1)[0]
+  currentSourcePath.parentDir()
 
 proc downloadTokenizer*(url, targetDir, filename: string) {.async.} =
   createDir(targetDir)
