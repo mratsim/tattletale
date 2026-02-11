@@ -450,6 +450,18 @@ func unbind*(a: TorchTensor, dim: int = 0): CppVector[TorchTensor] {.importcpp: 
   ## Returns a tuple of tensors where the dim-th dimension is removed.
   ## Equivalent to: tensor.unbind(dim) == tuple(tensor[i] for i in range(tensor.size(dim)))
 
+func expand*(a: TorchTensor, sizes: IntArrayRef, implicit: bool = false): TorchTensor {.importcpp: "#.expand(@)".}
+  ## Returns a view of the input tensor with size expanded to a larger size.
+  ##
+  ## C++ signature:
+  ##   Tensor expand(const Tensor& self, IntArrayRef size, bool implicit = false)
+  ##
+  ## Passing -1 as the size for a dimension means not changing the size of that dimension.
+  ## The dimensions must match between the original tensor and the required tensor.
+
+func expand*(a: TorchTensor, sizes: openArray[int64], implicit: bool = false): TorchTensor {.importcpp: "#.expand(@)".}
+  ## Overload for runtime sizes passed as openArray[int64].
+
 # Automatic Differentiation
 # -----------------------------------------------------------------------
 

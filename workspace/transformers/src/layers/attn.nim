@@ -62,6 +62,7 @@ proc forward*(self: MultiHeadAttention, q, k, v: TorchTensor, positions: TorchTe
   let v_attn = v_reshaped.permute([1, 0, 2, 3])
 
   let (q_rot, k_rot) = self.rotary.apply_rope(q_attn, k_attn, 0)
+  discard k_rot  # Used in GQA path via k_expanded
 
   var attn_out: TorchTensor
   if self.num_kv_groups > 1:
@@ -107,8 +108,12 @@ func init*(_: type RopeMHAttention, q_weight, k_weight, v_weight, o_weight: Torc
   let o_proj = Linear.init(o_weight)
 
   let has_qk_norm = rotary.head_dim == head_dim
-  let q_norm: Option[RmsNorm] = if has_qk_norm: some(RmsNorm.init(weight = F.ones([head_dim], kFloat32), eps = rms_norm_eps)) else: none[RmsNorm]
-  let k_norm: Option[RmsNorm] = if has_qk_norm: some(RmsNorm.init(weight = F.ones([head_dim], kFloat32), eps = rms_norm_eps)) else: none[RmsNorm]
+  let q_norm =
+    if has_qk_norm: some(RmsNorm.init(weight = F.ones([head_dim], kFloat32), eps = rms_norm_eps))
+    else: none(RmsNorm)
+  let k_norm =
+    if has_qk_norm: some(RmsNorm.init(weight = F.ones([head_dim], kFloat32), eps = rms_norm_eps))
+    else: none(RmsNorm)
 
   let attn = MultiHeadAttention.init(
     layer_id = 0,
