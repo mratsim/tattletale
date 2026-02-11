@@ -13,3 +13,10 @@
 #   - @[Conv2D, MaxPool2D, Conv2D ..., MLP]
 #   - @[Embedding, Attention, MLP, ..., MLP]
 #   for inference, all the layers are defined at load-time, fixed and can be hidden within a "Model" type
+
+import
+  ./rotary_emb,
+  ./norm
+
+export
+  rotary_emb, norm
