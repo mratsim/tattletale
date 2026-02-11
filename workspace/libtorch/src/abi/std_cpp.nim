@@ -40,6 +40,21 @@ func `$`*(s: CppString): string =
   result = newString(s.len)
   copyMem(result[0].addr, s.data, s.len)
 
+# std::optional<T>
+# -----------------------------------------------------------------------
+{.push header: "<optional>".}
+
+type
+  Optional*[T] {.bycopy, importcpp: "std::optional".} = T or Nullopt_t
+  Nullopt_t* {.bycopy, importcpp: "std::nullopt_t".} = distinct cint
+
+# Nullopt is nullopt_t{0}
+const nullopt*: Nullopt_t = Nullopt_t(0)
+
+func value*[T](o: Optional[T]): T {.importcpp: "#.value()".}
+
+{.pop.}
+
 # std::shared_ptr<T>
 # -----------------------------------------------------------------------
 

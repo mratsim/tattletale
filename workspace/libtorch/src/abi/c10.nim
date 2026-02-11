@@ -59,18 +59,6 @@ func init*[T](AR: type ArrayRef[T]): ArrayRef[T] {.constructor, varargs, importc
 func getAt*[T](ar: ArrayRef[T], idx: SomeInteger): T {.importcpp: "#[#]".}
 func `==`*[T](ar1, ar2: ArrayRef[T]): bool {.importcpp: "(# == #)".}
 
-# Optional
-# -----------------------------------------------------------------------
-
-type
-  Optional*[T] {.bycopy, importcpp: "c10::optional".} = object
-  Nullopt_t* {.bycopy, importcpp: "c10::nullopt_t".} = distinct cint
-
-# Nullopt is nullopt_t{0}
-const nullopt*: Nullopt_t = Nullopt_t(0)
-
-func value*[T](o: Optional[T]): T {.importcpp: "#.value()".}
-
 # c10::complex
 # -----------------------------------------------------------------------
 type TorchComplex*[T: SomeFloat] {.importcpp: "c10::complex".} = object
