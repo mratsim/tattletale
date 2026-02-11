@@ -15,9 +15,24 @@
 #   for inference, all the layers are defined at load-time, fixed and can be hidden within a "Model" type
 
 import
-  ./rope,
+  ./attn,
+  ./linear,
+  ./mlp,
   ./norm,
+  ./rope,
   ./transformer
 
 export
-  rope, norm, transformer
+  attn,
+  linear,
+  mlp,
+  norm,
+  rope,
+  transformer
+
+import
+  ../kernels/[
+    activations
+  ]
+
+export ActivationKind

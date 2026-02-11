@@ -24,11 +24,12 @@ func rotate_half*(self: RotaryPositionEmbedding, x: TorchTensor): TorchTensor =
   F.cat(@[x2.neg(), x1], axis = -1)
 
 func init*(_: type RotaryPositionEmbedding, head_dim, max_seq_len: int, rope_theta: float64, dtype: ScalarKind, device: DeviceKind): RotaryPositionEmbedding =
-  let inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / (head_dim.float)
-  inv_freq = inv_freq / pow(rope_theta, inv_freq)
+  var inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / (head_dim.float)
+  let rope_theta_tensor = F.full([1], rope_theta, kFloat64)
+  inv_freq = inv_freq / F.pow(rope_theta_tensor, inv_freq)
   let positions = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq.unsqueeze(0)
-  let fused = F.cat(positions, positions, dim = -1)
-  let emb = F.cat(fused.cos(), fused.sin(), dim = -1)
+  let fused = F.cat(positions, positions, axis = -1)
+  let emb = F.cat(fused.cos(), fused.sin(), axis = -1)
   result.head_dim = head_dim
   result.max_seq_len = max_seq_len
   result.rope_theta = rope_theta
