@@ -10,20 +10,20 @@ import
   workspace/libtorch as F
 
 type
-  RotaryEmb* = object
+  RotaryPositionEmbedding* = object
     head_dim*: int
     max_seq_len*: int
     rope_theta*: float64
     cos_cache*: TorchTensor
     sin_cache*: TorchTensor
 
-func rotate_half*(self: RotaryEmb, x: TorchTensor): TorchTensor =
+func rotate_half*(self: RotaryPositionEmbedding, x: TorchTensor): TorchTensor =
   let dim = x.size(-1)
   let x1 = x[0..<dim div 2]
   let x2 = x[dim div 2..<dim]
   F.cat(@[x2.neg(), x1], axis = -1)
 
-func init*(_: type RotaryEmb, head_dim, max_seq_len: int, rope_theta: float64, dtype: ScalarKind, device: DeviceKind): RotaryEmb =
+func init*(_: type RotaryPositionEmbedding, head_dim, max_seq_len: int, rope_theta: float64, dtype: ScalarKind, device: DeviceKind): RotaryPositionEmbedding =
   let inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / (head_dim.float)
   inv_freq = inv_freq / pow(rope_theta, inv_freq)
   let positions = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq.unsqueeze(0)
@@ -36,7 +36,7 @@ func init*(_: type RotaryEmb, head_dim, max_seq_len: int, rope_theta: float64, d
   result.sin_cache = emb[0..<max_seq_len, head_dim..<2*head_dim].to(dtype).to(device)
 
 func apply_rope*(
-  self: RotaryEmb,
+  self: RotaryPositionEmbedding,
   q: TorchTensor,
   k: TorchTensor,
   offset: int

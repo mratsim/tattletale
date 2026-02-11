@@ -13,21 +13,8 @@ import
   workspace/libtorch/src/torch_tensors_sugar,
   workspace/libtorch/src/torch_tensors_overloads,
   workspace/transformers/src/layers/linear,
-  workspace/transformers/src/layers/rmsnorm
-
-type
-  RotaryConfig* = object
-    head_dim*: int
-    rotary_dim*: int
-    max_position*: int
-    base*: float
-    scaling_cached*: TorchTensor
-
-func init*(_: type RotaryConfig, head_dim, rotary_dim, max_position: int, base: float): RotaryConfig =
-  RotaryConfig(head_dim: head_dim, rotary_dim: rotary_dim, max_position: max_position, base: base)
-
-proc apply_rope*(self: RotaryConfig, q, k: TorchTensor, positions: TorchTensor): (TorchTensor, TorchTensor) =
-  result = (q, k)
+  workspace/transformers/src/layers/norm,
+  ./rope
 
 type
   MultiHeadAttention* = object
@@ -38,11 +25,11 @@ type
     num_kv_groups*: int
     qo_attn_dim*: int
     kv_attn_dim*: int
-    rotary*: RotaryConfig
+    rotary*: RotaryPositionEmbedding
     q_norm*: Option[RmsNorm]
     k_norm*: Option[RmsNorm]
 
-func init*(_: type MultiHeadAttention, layer_id, num_qo_heads, num_kv_heads, head_dim: int, rotary: RotaryConfig, q_norm, k_norm: Option[RmsNorm]): MultiHeadAttention =
+func init*(_: type MultiHeadAttention, layer_id, num_qo_heads, num_kv_heads, head_dim: int, rotary: RotaryPositionEmbedding, q_norm, k_norm: Option[RmsNorm]): MultiHeadAttention =
   let num_kv_groups = num_qo_heads div num_kv_heads
   MultiHeadAttention(
     layer_id: layer_id,
@@ -74,18 +61,18 @@ proc forward*(self: MultiHeadAttention, q, k, v: TorchTensor, positions: TorchTe
   let k_attn = k_reshaped.permute([1, 0, 2, 3])
   let v_attn = v_reshaped.permute([1, 0, 2, 3])
 
-  let (q_rot, k_rot) = self.rotary.apply_rope(q_attn, k_attn, positions)
+  let (q_rot, k_rot) = self.rotary.apply_rope(q_attn, k_attn, 0)
 
   var attn_out: TorchTensor
   if self.num_kv_groups > 1:
     let k_expanded = k_attn.repeat_interleave(self.num_kv_groups, 0)
     let v_expanded = v_attn.repeat_interleave(self.num_kv_groups, 0)
     attn_out = F.scaled_dot_product_attention(
-      q_attn, k_expanded, v_expanded, is_causal = true, enable_gqa = true
+      q_rot, k_expanded, v_expanded, is_causal = true, enable_gqa = true
     )
   else:
     attn_out = F.scaled_dot_product_attention(
-      q_attn, k_attn, v_attn, is_causal = true
+      q_rot, k_attn, v_attn, is_causal = true
     )
 
   result = attn_out.permute([1, 0, 2, 3]).reshape([batch, seq_len, self.qo_attn_dim])
@@ -114,12 +101,12 @@ type
     attn*: MultiHeadAttention
     kv_cache*: KVCache
 
-func init*(_: type RopeMHAttention, q_weight, k_weight, v_weight, o_weight: TorchTensor, num_qo_heads, num_kv_heads, head_dim: int, rotary: RotaryConfig, rms_norm_eps: float = 1e-6): RopeMHAttention =
+func init*(_: type RopeMHAttention, q_weight, k_weight, v_weight, o_weight: TorchTensor, num_qo_heads, num_kv_heads, head_dim: int, rotary: RotaryPositionEmbedding, rms_norm_eps: float = 1e-6): RopeMHAttention =
   let qkv_fused = F.cat([q_weight, k_weight, v_weight], 0)
   let qkv = Linear.init(qkv_fused)
   let o_proj = Linear.init(o_weight)
 
-  let has_qk_norm = rotary.rotary_dim == head_dim
+  let has_qk_norm = rotary.head_dim == head_dim
   let q_norm: Option[RmsNorm] = if has_qk_norm: some(RmsNorm.init(weight = F.ones([head_dim], kFloat32), eps = rms_norm_eps)) else: none[RmsNorm]
   let k_norm: Option[RmsNorm] = if has_qk_norm: some(RmsNorm.init(weight = F.ones([head_dim], kFloat32), eps = rms_norm_eps)) else: none[RmsNorm]
 
@@ -173,18 +160,18 @@ proc forward*(self: var RopeMHAttention, x: TorchTensor, positions: TorchTensor,
   let k_attn = k_reshaped.permute([1, 0, 2, 3])
   let v_attn = v_reshaped.permute([1, 0, 2, 3])
 
-  discard self.attn.rotary.apply_rope(q_attn, k_attn, positions)
+  let (q_rot, k_rot) = self.attn.rotary.apply_rope(q_attn, k_attn, 0)
 
   var attn_out: TorchTensor
   if self.attn.num_kv_groups > 1:
-    let k_expanded = k_attn.repeat_interleave(self.attn.num_kv_groups, 0)
+    let k_expanded = k_rot.repeat_interleave(self.attn.num_kv_groups, 0)
     let v_expanded = v_attn.repeat_interleave(self.attn.num_kv_groups, 0)
     attn_out = F.scaled_dot_product_attention(
-      q_attn, k_expanded, v_expanded, is_causal = true, enable_gqa = true
+      q_rot, k_expanded, v_expanded, is_causal = true, enable_gqa = true
     )
   else:
     attn_out = F.scaled_dot_product_attention(
-      q_attn, k_attn, v_attn, is_causal = true
+      q_rot, k_rot, v_attn, is_causal = true
     )
 
   let attn_flat = attn_out.permute([1, 0, 2, 3]).reshape([batch * seq_len, self.attn.qo_attn_dim])

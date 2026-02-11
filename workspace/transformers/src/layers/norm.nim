@@ -20,12 +20,19 @@ func init*(_: type RmsNorm, weight: TorchTensor, eps: float = 1e-6): RmsNorm =
   let hidden_size = weight.size(0).int
   RmsNorm(weight: weight, eps: eps, hidden_size: hidden_size)
 
-proc forward*(self: RmsNorm, x: TorchTensor): TorchTensor =
+proc forward*(self: RmsNorm, hidden_state: TorchTensor): TorchTensor =
   let normalized_shape = asTorchView(self.hidden_size)
-  rms_norm(x, normalized_shape, self.weight, self.eps)
+  rms_norm(hidden_state, normalized_shape, self.weight, self.eps)
 
-proc forward_with_residual*(self: RmsNorm, x, residual: TorchTensor): (TorchTensor, TorchTensor) =
-  let new_residual = x + residual
+proc forward_with_residual*(self: RmsNorm, hidden_state, residual: TorchTensor): (TorchTensor, TorchTensor) =
+  # Usually at the end of a transformer block
+  # you do
+  #   x = self.post_layernorm.forward(hidden_state)
+  #   return x + residual
+  #
+  # Instead you can defer the addition to the beginning of the next layer
+  # where it's easier to fuse with rms_norm (once an optimized kernel is there)
+  let new_residual = hidden_state + residual
   let normalized_shape = asTorchView(self.hidden_size)
   let normalized = rms_norm(new_residual, normalized_shape, self.weight, self.eps)
   (normalized, new_residual)
