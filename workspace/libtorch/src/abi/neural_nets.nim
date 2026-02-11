@@ -28,29 +28,6 @@ import
 
 # #######################################################################
 #
-#                       Autograd
-#
-# #######################################################################
-
-type AutoGradMode* {.bycopy, pure, inheritable, importcpp: "torch::AutoGradMode".} = object
-
-type NoGradGuard* {.bycopy, pure, inheritable, importcpp: "torch::NoGradGuard".} = object
-
-func autogradMode(enabled: bool): AutoGradMode {.constructor, importcpp: "torch::AutoGradMode(#)".}
-
-template with*(T: type AutoGradMode, enabled: bool, body: untyped): untyped =
-  bind autogradMode
-  block:
-    let gradMode = autogradMode(enabled)
-    body
-
-template no_grad_mode*(body: untyped): untyped =
-  ## Disable precomputations necessary for gradient propagation
-  with(AutoGradMode, enabled = false):
-    body
-
-# #######################################################################
-#
 #                       LibTorch Functional API
 #
 # #######################################################################
@@ -219,204 +196,109 @@ func mse_loss*(input, target: TorchTensor): TorchTensor {.importcpp: "torch::mse
 
 func l1_loss*(input, target: TorchTensor): TorchTensor {.importcpp: "torch::l1_loss(@)".} ## target must be int (Long)!
 
-# #######################################################################
+# Scaled Dot Product Attention
+# -------------------------------------------------------------------------
+# https://pytorch.org/docs/stable/functional.html#torch.nn.functional.scaled_dot_product_attention
 #
-#                       LibTorch Module API
+# Computes softmax(Q @ K^T / scale) @ V with efficient memory attention.
+# Uses Paged KV cache for efficient generation and supports:
+#   - Attention masking (padding masks, etc.)
+#   - Causal/prefix attention (autoregressive decoding)
+#   - Grouped-Query Attention (GQA) for efficient LLaMA-style models
 #
-# #######################################################################
+# Input shapes:
+#   - query: (B, H_q, L, d_k) or (B, L, H_q * d_k)
+#   - key:   (B, H_kv, L, d_k) or (B, L, H_kv * d_k)
+#   - value: (B, H_kv, L, d_v) or (B, L, H_kv * d_v)
 #
-# LibTorch Module API is described here.
-# https://pytorch.org/cppdocs/api/namespace_torch__nn.html#classes
-# libtorch/include/torch/csrc/api/include/torch/nn/module.h
+# Output shape:
+#   - (B, H_q, L, d_v) or (B, L, H_q * d_v)
 #
-# It uses class derived from the base "Module" class.
-# The modules keep track of weights and biases for the users.
-# They also keep track of the training or evaluation mode,
-# allow pretty-printing of a computation graph,
-# serialization and deserialization.
+# Parameters (forwarded to C++ std::optional):
+#   - attn_mask: Mask to apply before softmax (broadcasts to batch).
+#                Shape: (B, L, L) or (1, L, L) for broadcast.
+#                Values: -inf or large negative for masked positions.
+#   - dropout_p: Dropout probability. Default: 0.0 (no dropout).
+#   - is_causal: Apply causal masking for autoregressive decoding.
+#   - scale: Scale factor for Q @ K^T. Default: 1/sqrt(head_dim).
+#   - enable_gqa: Enable grouped-query attention (H_kv must divide H_q).
 #
-# See Module ownership notes:
-# - https://pytorch.org/cppdocs/api/classtorch_1_1nn_1_1_module_holder.html#classtorch_1_1nn_1_1_module_holder
-# - https://pytorch.org/tutorials/advanced/cpp_frontend.html#module-ownership
-# all modules are thin wrapper around shared_ptr + ModuleImpl
+# Backends
+# -------------------------------------------------------------------------
+# SDPA automatically selects the most efficient backend based on input constraints.
+# Available backends (selected by priority on each device):
 #
-# Torch serialization expect the shared_ptr so we should respect their Module API.
+# | Backend              | CUDA                    | XPU (oneDNN)     | CPU  | MPS          |
+# |---------------------|-------------------------|-----------------|------|--------------|
+# | cuDNN Attention    | Hopper+ (SM 9/10)      | -               | -    | -           |
+# | Flash Attention    | CUDA, XPU             | Flash           | Flash| -           |
+# | Efficient Attention| CUDA (SM 70+)         | -               | -    | -           |
+# | Overrideable       | -                     | oneDNN          | -    | -           |
+# | Math (fallback)    | All devices           | All            | All  | Fast path   |
+#
+# Backend priority (CUDA):
+#   1. cuDNN Attention (Hopper+ with cuDNN >9.15.0)
+#   2. Flash Attention
+#   3. Efficient Attention
+#   4. Math (fallback)
+#
+# Backend priority (XPU):
+#   1. Overrideable (oneDNN)
+#   2. Flash Attention
+#   3. Math
+#   4. Efficient (logs warning, falls back to math)
+#
+# Backend constraints summary:
+#   - Flash Attention: CUDA/XPU, dtype (FP16/BF16/FP32), head_dim % 8 == 0,
+#                      no arbitrary mask (except causal), no nested tensors with training
+#   - Efficient Attention: CUDA/ROCm (SM 70+), dtype (FP16/BF16/FP32),
+#                          head_dim constraints, no nested tensors with training
+#   - cuDNN Attention: Hopper/Blackwell GPUs, cuDNN >9.15.0
+#   - Math: Fallback, supports all dtypes including FP64
+#   - GQA: Supported only in Flash and Math backends on CUDA (experimental)
+#
+# Controlling backends:
+#   - Context manager: torch.nn.attention.sdpa_kernel(backends=[SDPBackend.X])
+#   - Global toggles:
+#     - torch.backends.cuda.enable_flash_sdp
+#     - torch.backends.cuda.enable_mem_efficient_sdp
+#     - torch.backends.cuda.enable_math_sdp
+#     - torch.backends.cuda.enable_cudnn_sdp
+#
+# Note: If no backend passes constraints, checks re-run with debug=True
+#       and warnings print the rejection reasons.
 
-type
-  Module* {.bycopy, pure, inheritable, importcpp: "torch::nn::Module".} = object
-    ## A LibTorch neural network module that can be inherited from
-    # Impl detaim:
-    #   Nim inheritable objects have runtime type information pointer
-    #   as a hidden first field.
-    #   {.pure, inheritable.} removes that to make the object C++ compatible.
-
-  ModuleHolder* {.bycopy, pure, inheritable, importcpp: "torch::nn::ModuleHolder".} = object
-
-  SharedModule*[T: Module] = CppSharedPtr[T]
-
-proc register_module*[ParMod: ModuleHolder, ChildMod: ModuleHolder](
-  parent: var ParMod, name: cstring, child: var ChildMod
-) {.importcpp: "#.register_module(@)".} ## Register a submodule to a parent module.
-
-proc register_module*[ParMod: ModuleHolder, ChildMod: ModuleHolder](
-  parent: var ParMod, name: cstring, child: sink ChildMod
-): ChildMod {.importcpp: "#.register_module(@)".} ## Register a submodule to a parent module.
-
-proc register_module*[ParMod: Module, ChildMod: ModuleHolder](
-  parent: var SharedModule[ParMod], name: cstring, child: var ChildMod
-) {.importcpp: "#->register_module(@)".} ## Register a submodule to a parent module.
-
-proc register_module*[ParMod: Module, ChildMod: ModuleHolder](
-  parent: var SharedModule[ParMod], name: cstring, child: sink ChildMod
-): ChildMod {.importcpp: "#->register_module(@)".} ## Register a submodule to a parent module.
-
-proc register_module*[ParMod: Module, ChildMod: Module](
-  parent: var SharedModule[ParMod], name: cstring, child: var SharedModule[ChildMod]
-) {.importcpp: "#->register_module(@)".} ## Register a submodule to a parent module.
-
-proc register_module*[ParMod: Module, ChildMod: Module](
-  parent: var SharedModule[ParMod], name: cstring, child: sink SharedModule[ChildMod]
-): SharedModule[ChildMod] {.importcpp: "#->register_module(@)".} ## Register a submodule to a parent module.
-
-proc register_parameter*[ParMod: Module](
-  parent: var SharedModule[ParMod], name: cstring, child: sink TorchTensor
-): TorchTensor {.importcpp: "#->register_parameter(@)".} ## Register a submodule to a parent module.
-
-func parameters*(module: Module, recurse = true): CppVector[TorchTensor] {.importcpp: "#.parameters(#)".}
-
-func is_training*(module: Module): bool {.importcpp: "#.is_training()".}
-
-proc to*(module: ModuleHolder or SharedModule, device: DeviceKind) {.importcpp: "#->to(#)".}
-proc to*(module: ModuleHolder or SharedModule, device: Device) {.importcpp: "#->to(#)".}
-
-func train*(module: var ModuleHolder or SharedModule, on = true) {.importcpp: "#->train(#)".} ## Enable training mode
-
-func eval*(module: var ModuleHolder or SharedModule) {.importcpp: "#->eval()".} ## Enable evaluation mode
-
-# Linear layer
-# --------------------------------
-# https://pytorch.org/cppdocs/api/classtorch_1_1nn_1_1_linear_impl.html
-
-type
-  LinearOptions* {.bycopy, importcpp: "torch::nn::LinearOptions".} = object
-
-  Linear* {.pure, bycopy, importcpp: "torch::nn::Linear".} = object of ModuleHolder
-    # Linear is a shared_ptr underneath.
-    # The ptr is bycopy which results in the actual data being byref.
-    options* {.importc.}: LinearOptions
-    weight* {.importc.}: TorchTensor
-    bias* {.importc.}: TorchTensor
-
-func init*(
-  T: type LinearOptions, in_features, out_features: int64
-): T {.constructor, importcpp: "torch::nn::LinearOptions(@)".}
-func bias*(options: LinearOptions, bias: bool): LinearOptions {.importcpp: "#.bias(@)".}
-
-func init*(T: type Linear, in_features, out_features: int64): T {.constructor, importcpp: "torch::nn::Linear(@)".}
-func init*(T: type Linear, options: LinearOptions): T {.constructor, importcpp: "torch::nn::Linear(@)".}
-
-# Non-generic wrappers to avoid Nim compiler type inference bug
-proc newLinear*(in_features, out_features: int64): Linear {.importcpp: "torch::nn::Linear(@)", constructor.}
-
-proc newLinear*(options: LinearOptions): Linear {.importcpp: "torch::nn::Linear(@)", constructor.}
-
-func reset*(linear: Linear) {.importcpp: "#.reset()".}
-  ## reset() must perform initialization of all members with reference semantics,
-  ## most importantly parameters, buffers and submodules.
-
-func reset_parameters*(linear: Linear) {.importcpp: "#.reset_parameters()".}
-
-# pretty_print
-
-func forward*(linear: Linear, input: TorchTensor): TorchTensor {.importcpp: "#->forward(#)".}
-  ## Transforms the ``input`` tensor
-  ## by multiplying with the ``weight``
-  ## and optionally adding the ``bias``,
-  ## if ``with_bias`` is true in the ``options``.
-
-# Conv2D layer
-# --------------------------------
-# Link TODO
-
-type
-  Conv2dOptions* {.bycopy, importcpp: "torch::nn::Conv2dOptions".} = object
-
-  Conv2d* {.pure, bycopy, importcpp: "torch::nn::Conv2d".} = object of ModuleHolder
-    # Conv2d is a shared_ptr underneath.
-    # The ptr is bycopy which results in the actual data being byref.
-    options* {.importc.}: Conv2DOptions
-    bias* {.importc.}: TorchTensor
-
-func init*(
-  T: type Conv2dOptions, in_channels, out_channels, kernel_size: int64 or array[2, int64]
-): T {.constructor, importcpp: "torch::nn::Conv2dOptions(@)".}
-func bias*(options: Conv2dOptions, bias: bool): Conv2dOptions {.importcpp: "#.bias(@)".}
-func stride*(options: Conv2dOptions, stride: int64): Conv2dOptions {.importcpp: "#.stride(@)".}
-func stride*(options: Conv2dOptions, stride: array[2, int64]): Conv2dOptions {.importcpp: "#.stride(@)".}
-func padding*(options: Conv2dOptions, padding: int64): Conv2dOptions {.importcpp: "#.padding(@)".}
-func dilation*(options: Conv2dOptions, dilation: int64 or array[2, int64]): Conv2dOptions {.importcpp: "#.dilation(@)".}
-func groups*(options: Conv2dOptions, groups: int64): Conv2dOptions {.importcpp: "#.groups(@)".}
-
-func stride*(options: Conv2dOptions): IntArrayRef {.importcpp: "at::ArrayRef<int64_t>(#.stride())".}
-
-func init*(
-  T: type Conv2d, in_channels, out_channels, kernel_size: int64
-): T {.constructor, importcpp: "torch::nn::Conv2d(@)".}
-func init*(
-  T: type Conv2d, in_channels, out_channels, kernel_size: array[2, int64]
-): T {.constructor, importcpp: "torch::nn::Conv2d(@)".}
-func init*(T: type Conv2d, options: Conv2dOptions): T {.constructor, importcpp: "torch::nn::Conv2d(@)".}
-
-# Non-generic wrappers to avoid Nim compiler type inference bug
-proc newConv2d*(
-  in_channels, out_channels, kernel_size: int64
-): Conv2d {.importcpp: "torch::nn::Conv2d(@)", constructor.}
-
-proc newConv2d*(options: Conv2dOptions): Conv2d {.importcpp: "torch::nn::Conv2d(@)", constructor.}
-
-func `weight=`*(x: Conv2d, w: TorchTensor) {.importcpp: "#->weight = #".}
-
-func reset*(conv2d: Conv2d) {.importcpp: "#.reset()".}
-  ## reset() must perform initialization of all members with reference semantics,
-  ## most importantly parameters, buffers and submodules.
-
-func reset_parameters*(conv2d: Conv2d) {.importcpp: "#.reset_parameters()".}
-
-# pretty_print
-
-func forward*(conv2d: Conv2d, input: TorchTensor): TorchTensor {.importcpp: "#->forward(#)".}
-  ## Transforms the ``input`` tensor
-  ## by multiplying with the ``weight``
-  ## and optionally adding the ``bias``,
-  ## if ``with_bias`` is true in the ``options``.
-
-# Dropout layers
-# --------------------------------
-# Link TODO
-
-type
-  DropoutOptions* {.bycopy, importcpp: "torch::nn::DropoutOptions".} = object
-
-  Dropout* {.pure, bycopy, importcpp: "torch::nn::Dropout".} = object of ModuleHolder
-    options* {.importc.}: DropoutOptions
-
-  Dropout2d* {.pure, bycopy, importcpp: "torch::nn::Dropout2d".} = object of ModuleHolder
-    options* {.importc.}: DropoutOptions
-
-  Dropout3d* {.pure, bycopy, importcpp: "torch::nn::Dropout3d".} = object of ModuleHolder
-    options* {.importc.}: DropoutOptions
-
-  SomeDropout* = Dropout or Dropout2d or Dropout3d
-
-func init*(T: type Dropout, proba = 0.5): T {.constructor, importcpp: "torch::nn::Dropout(@)".}
-func init*(T: type Dropout2d, proba = 0.5): T {.constructor, importcpp: "torch::nn::Dropout2d(@)".}
-func init*(T: type Dropout3d, proba = 0.5): T {.constructor, importcpp: "torch::nn::Dropout3d(@)".}
-
-# Non-generic wrappers to avoid Nim compiler type inference bug
-proc newDropout*(proba = 0.5): Dropout {.importcpp: "torch::nn::Dropout(@)", constructor.}
-
-proc newDropout2d*(proba = 0.5): Dropout2d {.importcpp: "torch::nn::Dropout2d(@)", constructor.}
-
-proc newDropout3d*(proba = 0.5): Dropout3d {.importcpp: "torch::nn::Dropout3d(@)", constructor.}
-
-func forward*(dropout: SomeDropout, input: TorchTensor): TorchTensor {.importcpp: "#->forward(#)".}
+func scaled_dot_product_attention*(
+  query, key, value: TorchTensor,
+  attn_mask: Optional[TorchTensor] = nullopt,
+  dropout_p: cdouble = 0.0,
+  is_causal: bool = false,
+  scale: Optional[float64] = nullopt,
+  enable_gqa: bool = false
+): TorchTensor {.importcpp: "torch::scaled_dot_product_attention(@)".}
+  ## SDPA - the core attention operation in Transformers.
+  ##
+  ## Computes softmax(Q @ K^T / scale) @ V with efficient memory attention.
+  ## Uses Paged KV cache for efficient generation and supports:
+  ##   - Attention masking (padding masks, etc.)
+  ##   - Causal/prefix attention (autoregressive decoding)
+  ##   - Grouped-Query Attention (GQA) for efficient LLaMA-style models
+  ##
+  ## Input shapes:
+  ##   - query: (B, H_q, L, d_k) or (B, L, H_q * d_k)
+  ##   - key:   (B, H_kv, L, d_k) or (B, L, H_kv * d_k)
+  ##   - value: (B, H_kv, L, d_v) or (B, L, H_kv * d_v)
+  ##
+  ## Output shape:
+  ##   - (B, H_q, L, d_v) or (B, L, H_q * d_v)
+  ##
+  ## Parameters (forwarded to C++ std::optional):
+  ##   - attn_mask: Mask to apply before softmax (broadcasts to batch).
+  ##                Shape: (B, L, L) or (1, L, L) for broadcast.
+  ##                Values: -inf or large negative for masked positions.
+  ##   - dropout_p: Dropout probability. Default: 0.0 (no dropout).
+  ##   - is_causal: Apply causal masking for autoregressive decoding.
+  ##   - scale: Scale factor for Q @ K^T. Default: 1/sqrt(head_dim).
+  ##   - enable_gqa: Enable grouped-query attention (H_kv must divide H_q).
+  ##
+  ## Backends: See module-level documentation for backend selection details.
