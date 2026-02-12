@@ -16,12 +16,26 @@ import
 #               Safetensors + libtorch syntactic sugar
 #
 # #######################################################################
+#
+# The API here might change with the following consideration
+# - How to allow fast loading (async Streams, parallel workers, direct to GPU, ...)
+# - How to associate lifetimes of `MemFile` and `MemSlice`
+#
+#   Unfortunately MemFile predates `lent` and `openarray` as values view `{.experimental: "views".}`
+#   so we don't get compiler-enforced borrow-checking.
+#   https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
+#
+#   And this is not available yet
+#   https://nim-lang.org/docs/manual.html#var-return-type-future-directions
+#   `proc foo(other: Y; container: var X): var T from container`
+#
+# The borrow check for `var T` return types:
+#   https://nim-lang.org/docs/manual.html#procedures-var-return-type
+#
+# is not applicable here because we allocate a fresh address to store MemSlice
+# instead of using the input Safetensor or one of its field.
 
-# TODO: this will likely evolve and be put at a higher level in the stack
-#       so that we can accelerate loading with multiple workers / async CUDA streams
-#       and safetensors can be made backend-agnostic
-
-proc toTorchType*(dtype: Dtype): ScalarKind =
+proc toTorchType*(dtype: Dtype): ScalarKind {.inline.} =
   ## Convert safetensors dtype to libtorch ScalarKind.
   ## Raises ValueError if no direct mapping exists.
 
@@ -40,7 +54,19 @@ proc toTorchType*(dtype: Dtype): ScalarKind =
     else:
       raise newException(ValueError, "No direct libtorch mapping for safetensors dtype: " & $dtype)
 
-proc getTensor*(st: Safetensor, memFile: MemFile, tensorName: string): TorchTensor =
-  let view = st.getMmapView(memFile, tensorName)
+proc getTensor*(st: var Safetensor, tensorName: string): TorchTensor =
+  ## Get a memory view to the tensor data.
+  ## Returns a `MemSlice` that allows zero-copy access to the tensor data.
+  ##
+  ## Memory safety:
+  ##   The returned `MemSlice` is derived from `st.memFile`,
+  ##   the view MUST NOT outlive the underlying memory mapping.
+  ##   Currently this is not enforced by the compiler but is an area of research:
+  ##   - https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
+  ##   - https://nim-lang.org/docs/manual.html#var-return-type-future-directions
+  ## Lifetime:
+  ##   The `MemSlice` is valid as long as `st` is valid, which is tied to
+  ##   the original `MemFile` passed to `load`.
+  let view = st.getMmapView(tensorName)
   let info = st.tensors[tensorName]
-  return view.data.from_blob(info.shape.asTorchView(), info.dtype.toTorchType())
+  view.data.from_blob(info.shape.asTorchView(), info.dtype.toTorchType())
