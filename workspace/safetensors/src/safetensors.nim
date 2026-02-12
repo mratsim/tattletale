@@ -90,12 +90,29 @@ type
     dataOffsets*: tuple[start, stopEx: int] # stop is exclusive
 
   Safetensor* = object
+    ## A safetensor file loaded into memory.
+    ## Stores for each tensor
+    ##   * tensor names
+    ##   * the type of the data
+    ##   * the shape of the data
+    ##   * start and (exclusive) stop offset of the tensor data relative to the data offset
+    ##
+    ## Memory safety:
+    ##   A `SafeTensor` is derived from an input `memFile`,
+    ##   the `SafeTensor` MUST NOT outlive the underlying memory mapping.
+    ##   Currently this is not enforced by the compiler but is an area of research:
+    ##   - https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
+    ##   - https://nim-lang.org/docs/manual.html#var-return-type-future-directions
+    ## Lifetime:
+    ##   The `MemSlice` is valid as long as `st` is valid, which is tied to
+    ##   the original `MemFile` passed to `load`.
     metadata*: Option[OrderedTable[string, string]]
     tensors*: OrderedTable[string, TensorInfo]
-    dataSectionOffset*: int ## Offset of the data section in the file. Set after parsing.
+    dataSectionOffset: int ## Offset of the data section in the file. Set after parsing.
+    memFile: MemFile ## The memory-mapped file. Lifetime tied to the `load` caller's MemFile.
 
 proc skipHook*(T: typedesc[Safetensor], key: string): bool =
-  key == "dataSectionOffset"
+  key == "dataSectionOffset" or key == "memFile"
 
 const DtypeSize: array[Dtype, int] = [
   ## Size in bytes.
@@ -173,13 +190,22 @@ func validate_offsets(st: Safetensor, dataSectionSize: int) =
     raise newException(RangeDefect, &"safetensors: Tensor offsets and data section size mismatch")
 
 proc load*(memFile: MemFile): Safetensor =
-  ## Load a safetensor file and return
+  ## Load a safetensor file and return a Safetensor object with
   ## - for each tensor
   ##   * tensor names
   ##   * the type of the data
   ##   * the shape of the data
   ##   * start and (exclusive) stop offset of the tensor data relative to the data offset
-  ## - the dataSection offset
+  ##
+  ## Memory safety:
+  ##   The returned `SafeTensor` is derived from `memFile`,
+  ##   the `SafeTensor` MUST NOT outlive the underlying memory mapping.
+  ##   Currently this is not enforced by the compiler but is an area of research:
+  ##   - https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
+  ##   - https://nim-lang.org/docs/manual.html#var-return-type-future-directions
+  ## Lifetime:
+  ##   The `MemSlice` is valid as long as `st` is valid, which is tied to
+  ##   the original `MemFile` passed to `load`.
 
   let parsedHeaderSize = uint64.fromBytesLE(toOpenArray(cast[ptr UncheckedArray[byte]](memFile.mem), 0, sizeof(uint64)-1))
   let headerSize = int(parsedHeaderSize)
@@ -193,43 +219,56 @@ proc load*(memFile: MemFile): Safetensor =
   # https://github.com/treeform/jsony/issues/102
   var rawHeader = newString(headerSize)
   copyMem(rawHeader[0].addr, memFile.mem +% sizeof(uint64), headerSize)
-  var header = fromJson(rawHeader, Safetensor)
+  result = fromJson(rawHeader, Safetensor)
 
   # Sort tensors by offsets
-  header.tensors.sort((lhs, rhs) => system.cmp(lhs[1].dataOffsets.start, rhs[1].dataOffsets.start))
+  result.tensors.sort((lhs, rhs) => system.cmp(lhs[1].dataOffsets.start, rhs[1].dataOffsets.start))
 
-  header.dataSectionOffset = sizeof(uint64) + headerSize
+  result.dataSectionOffset = sizeof(uint64) + headerSize
 
   # Validate that offsets are within the file with no gap or overlap
-  header.validate_offsets(memFile.size - header.dataSectionOffset)
+  result.validate_offsets(memFile.size - result.dataSectionOffset)
 
-  return header
+  result.memFile = memFile
+
 
 # Individual tensor API (WIP)
 # ---------------------------------------------------------
 #
-# The API here will likely change with the following considerations
+# The API here might change with the following consideration
 # - How to allow fast loading (async Streams, parallel workers, direct to GPU, ...)
 # - How to associate lifetimes of `MemFile` and `MemSlice`
-# - Don't leak implementation details like `dataSectionOffset`
 #
-# For now the goal is to get something working
-# and keep it independent from the backend.
+#   Unfortunately MemFile predates `lent` and `openarray` as values view `{.experimental: "views".}`
+#   so we don't get compiler-enforced borrow-checking.
+#   https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
+#
+#   And this is not available yet
+#   https://nim-lang.org/docs/manual.html#var-return-type-future-directions
+#   `proc foo(other: Y; container: var X): var T from container`
+#
+# The borrow check for `var T` return types:
+#   https://nim-lang.org/docs/manual.html#procedures-var-return-type
+#
+# is not applicable here because we allocate a fresh address to store MemSlice
+# instead of using the input Safetensor or one of its field.
 
-proc getMmapView*(st: Safetensor, memFile: MemFile, tensorName: string): MemSlice {.inline.} =
+proc getMmapView*(st: Safetensor, tensorName: string): MemSlice {.inline.} =
   ## Get a memory view to the tensor data.
-  ## This allows zero-copy access to the tensor data.
-  ## Lifetime:
-  ##   Unfortunately MemFile predates `lent` and `openarray` as values view `{.experimental: "views".}`
-  ##   so we don't get compiler-enforced borrow-checking.
-  ##   https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
+  ## Returns a `MemSlice` that allows zero-copy access to the tensor data.
   ##
-  ##   And this is not available yet
-  ##   https://nim-lang.org/docs/manual.html#var-return-type-future-directions
-  ##   `proc foo(other: Y; container: var X): var T from container`
+  ## Memory safety:
+  ##   The returned `MemSlice` is derived from `st.memFile`,
+  ##   the view MUST NOT outlive the underlying memory mapping.
+  ##   Currently this is not enforced by the compiler but is an area of research:
+  ##   - https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
+  ##   - https://nim-lang.org/docs/manual.html#var-return-type-future-directions
+  ## Lifetime:
+  ##   The `MemSlice` is valid as long as `st` is valid, which is tied to
+  ##   the original `MemFile` passed to `load`.
   let info = st.tensors[tensorName]
   let (start, stopEx) = info.dataOffsets
   MemSlice(
-    data: memFile.mem +% st.dataSectionOffset +% start,
+    data: st.memFile.mem +% st.dataSectionOffset +% start,
     size: stopEx - start
   )
