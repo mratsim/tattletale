@@ -246,21 +246,35 @@ func scalarType*(a: TorchTensor): ScalarKind {.importcpp: "#.scalar_type()".}
 #
 # I'm unsure about a Move / Copy constructor since torch::Tensor uses intrusive reference counting.
 
-func from_blob*(
-  data: pointer, sizes: IntArrayRef, options: TensorOptions
-): TorchTensor {.importcpp: "torch::from_blob(@)".}
-func from_blob*(
-  data: pointer, sizes: IntArrayRef, scalarKind: ScalarKind
-): TorchTensor {.importcpp: "torch::from_blob(@)".}
+func from_blob*(data: pointer, sizes: IntArrayRef, options: TensorOptions): TorchTensor {.importcpp: "torch::from_blob(@)".}
+  ## Create a non-owning tensor view from a data pointer.
+  ## The data MUST remaining valid for the lifetime of the view.
+func from_blob*(data: pointer, sizes: IntArrayRef, scalarKind: ScalarKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
+  ## Create a non-owning tensor view from a data pointer.
+  ## The data MUST remaining valid for the lifetime of the view.
 func from_blob*(data: pointer, sizes: IntArrayRef, device: DeviceKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
+  ## Create a non-owning tensor view from a data pointer.
+  ## The data MUST remaining valid for the lifetime of the view.
 
 func from_blob*(data: pointer, sizes: int, options: TensorOptions): TorchTensor {.importcpp: "torch::from_blob(@)".}
+  ## Create a non-owning tensor view from a data pointer.
+  ## The data MUST remaining valid for the lifetime of the view.
 func from_blob*(data: pointer, sizes: int, scalarKind: ScalarKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
+  ## Create a non-owning tensor view from a data pointer.
+  ## The data MUST remaining valid for the lifetime of the view.
 func from_blob*(data: pointer, sizes: int, device: DeviceKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
+  ## Create a non-owning tensor view from a data pointer.
+  ## The data MUST remaining valid for the lifetime of the view.
 
 func from_blob*(data: pointer, sizes, strides: IntArrayRef, options: TensorOptions): TorchTensor {.importcpp: "torch::from_blob(@)".}
+  ## Create a non-owning tensor view from a data pointer.
+  ## The data MUST remaining valid for the lifetime of the view.
 func from_blob*(data: pointer, sizes, strides: IntArrayRef, scalarKind: ScalarKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
+  ## Create a non-owning tensor view from a data pointer.
+  ## The data MUST remaining valid for the lifetime of the view.
 func from_blob*(data: pointer, sizes, strides: IntArrayRef, device: DeviceKind): TorchTensor {.importcpp: "torch::from_blob(@)".}
+  ## Create a non-owning tensor view from a data pointer.
+  ## The data MUST remaining valid for the lifetime of the view.
 
 func empty*(size: IntArrayRef, options: TensorOptions): TorchTensor {.importcpp: "torch::empty(@)".}
   ## Create an uninitialized tensor of shape `size`
