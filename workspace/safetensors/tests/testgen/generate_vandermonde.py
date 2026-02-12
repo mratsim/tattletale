@@ -1,5 +1,5 @@
-import numpy as np
-from safetensors.numpy import save_file
+import torch
+from safetensors.torch import save_file, load_file
 import os
 
 FIXTURES_DIR = os.path.join(
@@ -10,12 +10,13 @@ FIXTURES_DIR = os.path.join(
 
 def main():
     shape = (5, 5)
-    x = np.arange(1, 6, dtype=np.float64)
-    vandermonde = np.vander(x, increasing=True).T
+    x = torch.arange(1, 6, dtype=torch.float64)
+    vandermonde = torch.vander(x, increasing=True).T
 
     fixtures = {
-        "F64_vandermonde_5x5": vandermonde.astype(np.float64),
-        "F32_vandermonde_5x5": vandermonde.astype(np.float32),
+        "F64_vandermonde_5x5": vandermonde.to(torch.float64).contiguous(),
+        "F32_vandermonde_5x5": vandermonde.to(torch.float32).contiguous(),
+        "BF16_vandermonde_5x5": vandermonde.to(torch.bfloat16).contiguous(),
     }
 
     output_path = os.path.join(FIXTURES_DIR, "vandermonde.safetensors")
@@ -24,6 +25,13 @@ def main():
     print(f"Shape: {shape}")
     print(f"Vandermonde matrix (increasing powers):")
     print(vandermonde)
+
+    print("\nVerifying BF16 fixture reload...")
+    loaded = load_file(output_path)
+    bf16_original = fixtures["BF16_vandermonde_5x5"]
+    bf16_loaded = loaded["BF16_vandermonde_5x5"]
+    assert torch.equal(bf16_loaded, bf16_original), "BF16 reload mismatch"
+    print("BF16 fixture reload verified successfully")
 
 
 if __name__ == "__main__":
