@@ -24,6 +24,30 @@ static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
 
 type Metadata* = DynamicStackArray[int64]
 
+# Debugging
+# -----------------------------------------------------
+
+template checked*(t: TorchTensor): TorchTensor =
+  ## This checks if a tensor is initialized.
+  ## And throws an exception otherwise.
+  ## This is intended for debugging purposes
+  ## as C++ exceptions are likely lacking source location information
+  ## due to symbol stripping.
+  ## Usage: replace `myCall(a, b)` with `myCall(checked a, checked b)`
+
+  let name = astToStr(t) # Can't use astToStr and get the arguments name in proc, but templates are broken too
+
+  # In templates
+  #   Ensure chains are not executed twice say `(echo "Launch Missiles"; t)`
+  #   Unfortunately I get `Error: cannot use symbol of kind 'param' as a 'let'`
+  #   So DO NOT USE `checked` EXCEPT FOR DEBUGGING
+  # let t = t
+
+  if t.isDefined():
+    t
+  else:
+    raise newException(ValueError, "Tensor '" & name & "' is uninitialized")
+
 # Shape
 # -----------------------------------------------------
 
@@ -249,28 +273,6 @@ func toCppString(t: TorchTensor): CppString =
 
 proc `$`*(t: TorchTensor): string =
   "TorchTensor\n" & $(toCppString(t))
-
-template checked*(t: TorchTensor): TorchTensor =
-  ## This checks if a tensor is initialized.
-  ## And throws an exception otherwise.
-  ## This is intended for debugging purposes
-  ## as C++ exceptions are likely lacking source location information
-  ## due to symbol stripping.
-  ## Usage: replace `myCall(a, b)` with `myCall(checked a, checked b)`
-
-  let name = astToStr(t) # Can't use astToStr and get the arguments name in proc, but templates are broken too
-
-  # In templates
-  #   Ensure chains are not executed twice say `(echo "Launch Missiles"; t)`
-  #   Unfortunately I get `Error: cannot use symbol of kind 'param' as a 'let'`
-  #   So DO NOT USE `checked` EXCEPT FOR DEBUGGING
-  # let t = t
-
-  if t.defined():
-    t
-  else:
-    raise newException(ValueError, "Tensor '" & name & "' is uninitialized")
-
 
 # #######################################################################
 #
