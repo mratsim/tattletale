@@ -18,13 +18,14 @@ import
   workspace/transformers/src/layers/all
 
 const
-  FixtureDir = currentSourcePath().parentDir() / "fixtures" / "layers"
-  WeightsFile = currentSourcePath().parentDir() / "Qwen3-0.6B.model.layers.8.safetensors"
+  FixtureDir = currentSourcePath().parentDir() / "fixtures" / "layers" / "Qwen3-0.6B-layer-8"
+  WeightsFile = FixtureDir / "Weights-Qwen3-0.6B-layer-8.safetensor"
   ModelName = "Qwen3-0.6B"
 
 proc main() =
   suite "Qwen3-0.6B layer fixture tests":
     test "RMSNorm layer fixtures":
+      echo WeightsFile
       var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
       defer: close(weightsMemFile)
 
@@ -47,7 +48,7 @@ proc main() =
         let normLayer =
           if layerPath.endsWith("post_attention_layernorm"):
             RmsNorm.init(postAttnWeight)
-          elif layerPath.endsWith("input_layernorm.weight"):
+          elif layerPath.endsWith("input_layernorm"):
             RmsNorm.init(inputLnWeight)
           else:
             raise newException(ValueError, &"Invalid layer: '{layerPath}'")

@@ -32,7 +32,7 @@ proc forward_with_residual*(self: RmsNorm, hidden_state, residual: TorchTensor):
   #
   # Instead you can defer the addition to the beginning of the next layer
   # where it's easier to fuse with rms_norm (once an optimized kernel is there)
-  let new_residual = hidden_state + residual
+  let new_residual = hidden_state + residual # TODO: fused add + RMSNorm
   let normalized_shape = asTorchView(self.hidden_size)
   let normalized = rms_norm(new_residual, normalized_shape, self.weight, self.eps)
   (normalized, new_residual)
