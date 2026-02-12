@@ -78,6 +78,26 @@ proc main() =
       let actualTensor = st.getTensor(memFile, dataSectionOffset, key)
       check actualTensor == expectedTensor
 
+    test "vandermonde BF16 fixture test":
+      let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
+      check fileExists(fixturePath)
+
+      var memFile = memFiles.open(fixturePath, mode = fmRead)
+      defer: close(memFile)
+
+      let (st, dataSectionOffset) = safetensors.load(memFile)
+
+      let key = "BF16_vandermonde_5x5"
+      check st.tensors.hasKey(key)
+
+      let shape = @[5, 5]
+      let info = st.tensors[key]
+      check info.shape == shape
+
+      let expectedTensor = generateVandermondeExpected(shape, kBFloat16)
+      let actualTensor = st.getTensor(memFile, dataSectionOffset, key)
+      check actualTensor == expectedTensor
+
     test "load python-generated safetensors fixtures":
       let fixturePath = FIXTURES_DIR / "fixtures.safetensors"
       check fileExists(fixturePath)
