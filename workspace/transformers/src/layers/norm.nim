@@ -17,7 +17,7 @@ type
     hidden_size*: int
 
 func init*(_: type RmsNorm, weight: TorchTensor, eps: float = 1e-6): RmsNorm =
-  let hidden_size = weight.size(0).int
+  let hidden_size = weight.size(0)
   RmsNorm(weight: weight, eps: eps, hidden_size: hidden_size)
 
 proc forward*(self: RmsNorm, hidden_state: TorchTensor): TorchTensor =
