@@ -11,27 +11,16 @@ import
   std/memfiles,
   std/strformat,
   std/strutils,
-  std/tables,
   workspace/safetensors as ST,
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
-  workspace/transformers/src/layers/all
+  workspace/transformers/src/layers/all,
+  ./common_utils
 
 const
   FixtureDir = currentSourcePath().parentDir() / "fixtures" / "layers" / "Qwen3-0.6B-layer-8"
   WeightsFile = FixtureDir / "Weights-Qwen3-0.6B-layer-8.safetensor"
   ModelName = "Qwen3-0.6B"
-
-proc runTest(name: string, body: proc(): bool) =
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "Section: " & name
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  let passed = body()
-  if passed:
-    echo "✅ PASS | ", name
-  else:
-    echo "❌ FAIL | ", name
-  echo ""
 
 proc main() =
   # runTest "RMSNorm layer fixtures":
@@ -83,18 +72,14 @@ proc main() =
       var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
       defer: close(weightsMemFile)
 
-      let (weightsSt, _) = safetensors.load(weightsMemFile)
-      let gateWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "mlp.gate_proj.weight")
-      let upWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "mlp.up_proj.weight")
-      let downWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "mlp.down_proj.weight")
-
-      doAssert gateWeight.isDefined()
-      doAssert upWeight.isDefined()
-      doAssert downWeight.isDefined()
+      let (weightsSt, weightsDataOffset) = safetensors.load(weightsMemFile)
+      let gateWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "mlp.gate_proj.weight")
+      let upWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "mlp.up_proj.weight")
+      let downWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "mlp.down_proj.weight")
 
       let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
-      doAssert mlp.down_proj.weight.isDefined()
-      doAssert mlp.gate_up_proj.weight.isDefined()
+      assertDefined(mlp.down_proj.weight)
+      assertDefined(mlp.gate_up_proj.weight)
 
       for caseNum in 0..3:
         let fixturePath = FixtureDir / &"mlp-{ModelName}-{caseNum:02d}.safetensor"
@@ -102,34 +87,28 @@ proc main() =
           continue
 
         var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
+        defer: close(fixtureMemFile)
+
         let (st, dataOffset) = safetensors.load(fixtureMemFile)
 
         let inputX = ST.getTensor(st, fixtureMemFile, dataOffset, "input_x")
         let expectedOutput = ST.getTensor(st, fixtureMemFile, dataOffset, "output")
 
         let output = mlp.forward(inputX)
-        let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
-        doAssert allClose, block:
-          "MLP case " & $caseNum & " failed\n" &
-          "--------------------------------------------\n" &
-          "Input[0, 0..<5, 0..<5]:\n" & $inputX[0, 0..<5, 0..<5] &
-          "\n--------------------------------------------\n" &
-          "Output[0, 0..<5, 0..<5]:\n" & $output[0, 0..<5, 0..<5] &
-          "\n--------------------------------------------\n" &
-          "Expected[0, 0..<5, 0..<5]:\n" & $expectedOutput[0, 0..<5, 0..<5] &
-          "\n--------------------------------------------\n"
-        close(fixtureMemFile)
+        assertAllClose(output, expectedOutput)
+        echo "MLP case ", caseNum, " PASSED"
+      true
 
   runTest "Attention layer fixtures":
     proc(): bool =
       var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
       defer: close(weightsMemFile)
 
-      let (weightsSt, _) = safetensors.load(weightsMemFile)
-      let qWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "self_attn.q_proj.weight")
-      let kWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "self_attn.k_proj.weight")
-      let vWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "self_attn.v_proj.weight")
-      let oWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "self_attn.o_proj.weight")
+      let (weightsSt, weightsDataOffset) = safetensors.load(weightsMemFile)
+      let qWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "self_attn.q_proj.weight")
+      let kWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "self_attn.k_proj.weight")
+      let vWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "self_attn.v_proj.weight")
+      let oWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "self_attn.o_proj.weight")
 
       let numQoHeads = 16
       let numKvHeads = 8
@@ -141,7 +120,6 @@ proc main() =
       var attn: RopeMHAttention
       attn = RopeMHAttention.init(qWeight, kWeight, vWeight, oWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
 
-      var allPassed = true
       for caseNum in 0..1:
         let fixturePath = FixtureDir / &"attn-{ModelName}-{caseNum:02d}.safetensor"
         if not fileExists(fixturePath):
@@ -159,10 +137,9 @@ proc main() =
         let basePos = F.arange(seqLen.int64, F.kInt64)
         let positions = basePos.unsqueeze(0).expand([batchSize.int64, seqLen.int64])
         let output = attn.forward(hiddenStates, positions, use_cache = false)
-        let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
-        doAssert allClose, "Attention case " & $caseNum & " failed"
+        assertAllClose(output, expectedOutput, msg = "Attention case " & $caseNum & " failed")
         close(fixtureMemFile)
-      allPassed
+      true
 
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "All tests completed"
