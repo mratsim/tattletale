@@ -11,7 +11,7 @@ import
   std/memfiles,
   std/strformat,
   std/strutils,
-  workspace/safetensors as ST,
+  workspace/safetensors,
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
   workspace/transformers/src/layers/all,
@@ -72,10 +72,10 @@ proc main() =
       var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
       defer: close(weightsMemFile)
 
-      let (weightsSt, weightsDataOffset) = safetensors.load(weightsMemFile)
-      let gateWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "mlp.gate_proj.weight")
-      let upWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "mlp.up_proj.weight")
-      let downWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "mlp.down_proj.weight")
+      let weightsSt = safetensors.load(weightsMemFile)
+      let gateWeight = weightsSt.getTensor(weightsMemFile, "mlp.gate_proj.weight")
+      let upWeight = weightsSt.getTensor(weightsMemFile, "mlp.up_proj.weight")
+      let downWeight = weightsSt.getTensor(weightsMemFile, "mlp.down_proj.weight")
 
       let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
       assertDefined(mlp.down_proj.weight)
@@ -89,10 +89,10 @@ proc main() =
         var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
         defer: close(fixtureMemFile)
 
-        let (st, dataOffset) = safetensors.load(fixtureMemFile)
+        let st = safetensors.load(fixtureMemFile)
 
-        let inputX = ST.getTensor(st, fixtureMemFile, dataOffset, "input_x")
-        let expectedOutput = ST.getTensor(st, fixtureMemFile, dataOffset, "output")
+        let inputX = st.getTensor(fixtureMemFile, "input_x")
+        let expectedOutput = st.getTensor(fixtureMemFile, "output")
 
         let output = mlp.forward(inputX)
         assertAllClose(output, expectedOutput)
@@ -104,11 +104,11 @@ proc main() =
       var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
       defer: close(weightsMemFile)
 
-      let (weightsSt, weightsDataOffset) = safetensors.load(weightsMemFile)
-      let qWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "self_attn.q_proj.weight")
-      let kWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "self_attn.k_proj.weight")
-      let vWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "self_attn.v_proj.weight")
-      let oWeight = ST.getTensor(weightsSt, weightsMemFile, weightsDataOffset, "self_attn.o_proj.weight")
+      let weightsSt = safetensors.load(weightsMemFile)
+      let qWeight = weightsSt.getTensor(weightsMemFile, "self_attn.q_proj.weight")
+      let kWeight = weightsSt.getTensor(weightsMemFile, "self_attn.k_proj.weight")
+      let vWeight = weightsSt.getTensor(weightsMemFile, "self_attn.v_proj.weight")
+      let oWeight = weightsSt.getTensor(weightsMemFile, "self_attn.o_proj.weight")
 
       let numQoHeads = 16
       let numKvHeads = 8
@@ -126,10 +126,10 @@ proc main() =
           continue
 
         var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
-        let (st, dataOffset) = safetensors.load(fixtureMemFile)
+        let st = safetensors.load(fixtureMemFile)
 
-        let hiddenStates = ST.getTensor(st, fixtureMemFile, dataOffset, "hidden_states")
-        let expectedOutput = ST.getTensor(st, fixtureMemFile, dataOffset, "output")
+        let hiddenStates = st.getTensor(fixtureMemFile, "hidden_states")
+        let expectedOutput = st.getTensor(fixtureMemFile, "output")
 
         let batchSize = hiddenStates.size(0).int
         let seqLen = hiddenStates.size(1).int
