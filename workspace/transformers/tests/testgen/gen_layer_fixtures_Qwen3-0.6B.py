@@ -24,9 +24,10 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 MODEL_NAME = "Qwen3-0.6B"
 LAYER_IDX = 8
-FIXTURE_DIR = os.path.join(os.path.dirname(__file__).parent(), "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}")
+GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
+FIXTURE_DIR = os.path.join(GRANDPARENT_DIR, "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}")
 WEIGHTS_FILE = f"{FIXTURE_DIR}/Weights-{MODEL_NAME}-layer-{LAYER_IDX}.safetensor"
-MODEL_PATH = f"tests/hf_models/{MODEL_NAME}/model.safetensors" # Assuming a very small model were everything fits in a safetensor
+MODEL_PATH = os.path.join(os.path.dirname(GRANDPARENT_DIR), f"tests/hf_models/{MODEL_NAME}/model.safetensors") # Assuming a very small model were everything fits in a single safetensor
 FIXED_SEED = 42
 
 
@@ -136,7 +137,7 @@ def generate_norm_fixtures(
 
     # Case 00: input_layernorm normal forward
     x = torch.randn(2, 8, 1024, dtype=torch.bfloat16)
-    # print(f"input_x[0, 0:5, 0:5]:\n{x[0, 0:5, 0:5]}")
+    print(f"input_x[0, 0:5, 0:5]:\n{x[0, 0:5, 0:5]}")
     output = input_layernorm(x)
     save_fixture(
         layer_name,

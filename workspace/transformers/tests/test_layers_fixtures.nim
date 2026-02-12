@@ -11,6 +11,7 @@ import
   std/memfiles,
   std/strformat,
   std/strutils,
+  std/tables,
   workspace/safetensors as ST,
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
@@ -63,10 +64,18 @@ proc main() =
   #         else:
   #           raise newException(ValueError, &"Invalid layer: '{layerPath}'")
 
-  #       let output = normLayer.forward(inputHiddenStates)
+  #       # Note: Transformers does the hidden_state + residual while we don't
+  #       var output = normLayer.forward(inputHiddenStates)
+  #       output += inputHiddenStates
   #       let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
   #       echo "allClose: ", allClose
-  #       doAssert allClose, "RMSNorm case " & $caseNum & " failed"
+  #       doAssert allClose, block:
+  #         "RMSNorm case " & $caseNum & " failed\n" &
+  #         "--------------------------------------------\n" &
+  #         "Output[0, 0..<5, 0..<5]:\n" & $output[0, 0..<5, 0..<5] &
+  #         "\n--------------------------------------------\n" &
+  #         "Expected[0, 0..<5, 0..<5]:\n" & $expectedOutput[0, 0..<5, 0..<5] &
+  #         "\n--------------------------------------------\n"
   #       close(fixtureMemFile)
 
   runTest "MLP layer fixtures":
@@ -79,7 +88,13 @@ proc main() =
       let upWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "mlp.up_proj.weight")
       let downWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "mlp.down_proj.weight")
 
+      doAssert gateWeight.isDefined()
+      doAssert upWeight.isDefined()
+      doAssert downWeight.isDefined()
+
       let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
+      doAssert mlp.down_proj.weight.isDefined()
+      doAssert mlp.gate_up_proj.weight.isDefined()
 
       for caseNum in 0..3:
         let fixturePath = FixtureDir / &"mlp-{ModelName}-{caseNum:02d}.safetensor"
@@ -94,7 +109,15 @@ proc main() =
 
         let output = mlp.forward(inputX)
         let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
-        doAssert allClose, "MLP case " & $caseNum & " failed"
+        doAssert allClose, block:
+          "MLP case " & $caseNum & " failed\n" &
+          "--------------------------------------------\n" &
+          "Input[0, 0..<5, 0..<5]:\n" & $inputX[0, 0..<5, 0..<5] &
+          "\n--------------------------------------------\n" &
+          "Output[0, 0..<5, 0..<5]:\n" & $output[0, 0..<5, 0..<5] &
+          "\n--------------------------------------------\n" &
+          "Expected[0, 0..<5, 0..<5]:\n" & $expectedOutput[0, 0..<5, 0..<5] &
+          "\n--------------------------------------------\n"
         close(fixtureMemFile)
 
   runTest "Attention layer fixtures":
