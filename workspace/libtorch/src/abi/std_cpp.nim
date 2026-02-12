@@ -35,12 +35,18 @@ proc toCppString*(s: cstring, n: csize_t): CppString {.importcpp: "std::string(@
 
 {.pop.}
 
-# Interop
-# -----------------------------------------------------------------------
-
 func `$`*(s: CppString): string =
   result = newString(s.len)
   copyMem(result[0].addr, s.data, s.len)
+
+# std::exception
+# -----------------------------------------------------------------------
+
+type
+  CppStdException* {.importcpp: "std::exception", header: "<exception>", inheritable.} = object
+  CppRuntimeError* {.requiresInit, importcpp: "std::runtime_error", header: "<stdexcept>".} = object of CppStdException
+
+proc what*(e: CppStdException): cstring {.importcpp: "((char *)#.what())".}
 
 # std::optional<T>
 # -----------------------------------------------------------------------

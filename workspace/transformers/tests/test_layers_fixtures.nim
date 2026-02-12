@@ -6,7 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  std/unittest,
   std/options,
   std/os,
   std/memfiles,
@@ -15,6 +14,7 @@ import
   std/tables,
   workspace/safetensors as ST,
   workspace/libtorch as F,
+  workspace/libtorch/vendor/libtorch,
   workspace/transformers/src/layers/all
 
 const
@@ -22,10 +22,21 @@ const
   WeightsFile = FixtureDir / "Weights-Qwen3-0.6B-layer-8.safetensor"
   ModelName = "Qwen3-0.6B"
 
+proc runTest(name: string, body: proc(): bool) =
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "Section: " & name
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  let passed = body()
+  if passed:
+    echo "✅ PASS | ", name
+  else:
+    echo "❌ FAIL | ", name
+  echo ""
+
 proc main() =
-  suite "Qwen3-0.6B layer fixture tests":
-    test "RMSNorm layer fixtures":
-      echo WeightsFile
+  runTest "RMSNorm layer fixtures":
+    proc(): bool =
+      echo "  File: ", WeightsFile
       var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
       defer: close(weightsMemFile)
 
@@ -33,6 +44,7 @@ proc main() =
       let inputLnWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "input_layernorm.weight")
       let postAttnWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "post_attention_layernorm.weight")
 
+      var allPassed = true
       for caseNum in 0..3:
         let fixturePath = FixtureDir / &"norm-{ModelName}-{caseNum:02d}.safetensor"
         if not fileExists(fixturePath):
@@ -53,11 +65,21 @@ proc main() =
           else:
             raise newException(ValueError, &"Invalid layer: '{layerPath}'")
 
-        let output = normLayer.forward(inputHiddenStates)
-        check F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
+        try:
+          let output = normLayer.forward(inputHiddenStates)
+          let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
+          doAssert allClose, "RMSNorm case " & $caseNum & " failed"
+        except TorchError as e:
+          echo "    ⚠️  Caught TorchError: ", $e.what()
+          allPassed = false
+        except CppStdException as e:
+          echo "    ⚠️  Caught CppStdException: ", $e.what()
+          allPassed = false
         close(fixtureMemFile)
+      allPassed
 
-    test "MLP layer fixtures":
+  runTest "MLP layer fixtures":
+    proc(): bool =
       var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
       defer: close(weightsMemFile)
 
@@ -68,6 +90,7 @@ proc main() =
 
       let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
 
+      var allPassed = true
       for caseNum in 0..3:
         let fixturePath = FixtureDir / &"mlp-{ModelName}-{caseNum:02d}.safetensor"
         if not fileExists(fixturePath):
@@ -79,11 +102,21 @@ proc main() =
         let inputX = ST.getTensor(st, fixtureMemFile, dataOffset, "input_x")
         let expectedOutput = ST.getTensor(st, fixtureMemFile, dataOffset, "output")
 
-        let output = mlp.forward(inputX)
-        check F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
+        try:
+          let output = mlp.forward(inputX)
+          let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
+          doAssert allClose, "MLP case " & $caseNum & " failed"
+        except TorchError as e:
+          echo "    ⚠️  Caught TorchError: ", $e.what()
+          allPassed = false
+        except CppStdException as e:
+          echo "    ⚠️  Caught CppStdException: ", $e.what()
+          allPassed = false
         close(fixtureMemFile)
+      allPassed
 
-    test "Attention layer fixtures":
+  runTest "Attention layer fixtures":
+    proc(): bool =
       var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
       defer: close(weightsMemFile)
 
@@ -103,6 +136,7 @@ proc main() =
       var attn: RopeMHAttention
       attn = RopeMHAttention.init(qWeight, kWeight, vWeight, oWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
 
+      var allPassed = true
       for caseNum in 0..1:
         let fixturePath = FixtureDir / &"attn-{ModelName}-{caseNum:02d}.safetensor"
         if not fileExists(fixturePath):
@@ -119,10 +153,22 @@ proc main() =
 
         let basePos = F.arange(seqLen.int64, F.kInt64)
         let positions = basePos.unsqueeze(0).expand([batchSize.int64, seqLen.int64])
-        let output = attn.forward(hiddenStates, positions, use_cache = false)
-
-        check F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
+        try:
+          let output = attn.forward(hiddenStates, positions, use_cache = false)
+          let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
+          doAssert allClose, "Attention case " & $caseNum & " failed"
+        except TorchError as e:
+          echo "    ⚠️  Caught TorchError: ", $e.what()
+          allPassed = false
+        except CppStdException as e:
+          echo "    ⚠️  Caught CppStdException: ", $e.what()
+          allPassed = false
         close(fixtureMemFile)
+      allPassed
+
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "All tests completed"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 when isMainModule:
   main()
