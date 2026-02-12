@@ -46,6 +46,6 @@ proc forward*(self: Linear, x: TorchTensor): TorchTensor =
   ##   Output tensor of shape (..., out_features)
 
   if self.bias.isSome:
-    F.linear(x, self.weight, self.bias.get())
+    F.linear(checked x, checked self.weight, checked self.bias.get())
   else:
-    F.linear(x, self.weight)
+    F.linear(checked x, checked self.weight)

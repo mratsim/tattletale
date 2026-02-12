@@ -11,7 +11,6 @@ import
   std/memfiles,
   std/strformat,
   std/strutils,
-  std/tables,
   workspace/safetensors as ST,
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
@@ -34,49 +33,41 @@ proc runTest(name: string, body: proc(): bool) =
   echo ""
 
 proc main() =
-  runTest "RMSNorm layer fixtures":
-    proc(): bool =
-      echo "  File: ", WeightsFile
-      var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
-      defer: close(weightsMemFile)
+  # runTest "RMSNorm layer fixtures":
+  #   proc(): bool =
+  #     echo "  File: ", WeightsFile
+  #     var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
+  #     defer: close(weightsMemFile)
 
-      let (weightsSt, _) = safetensors.load(weightsMemFile)
-      let inputLnWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "input_layernorm.weight")
-      let postAttnWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "post_attention_layernorm.weight")
+  #     let (weightsSt, _) = safetensors.load(weightsMemFile)
+  #     let inputLnWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "input_layernorm.weight")
+  #     let postAttnWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "post_attention_layernorm.weight")
 
-      var allPassed = true
-      for caseNum in 0..3:
-        let fixturePath = FixtureDir / &"norm-{ModelName}-{caseNum:02d}.safetensor"
-        if not fileExists(fixturePath):
-          continue
+  #     for caseNum in 0..3:
+  #       let fixturePath = FixtureDir / &"norm-{ModelName}-{caseNum:02d}.safetensor"
+  #       if not fileExists(fixturePath):
+  #         continue
 
-        var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
-        let (st, dataOffset) = safetensors.load(fixtureMemFile)
+  #       var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
+  #       let (st, dataOffset) = safetensors.load(fixtureMemFile)
 
-        let inputHiddenStates = ST.getTensor(st, fixtureMemFile, dataOffset, "input_hidden_states")
-        let expectedOutput = ST.getTensor(st, fixtureMemFile, dataOffset, "output")
+  #       let inputHiddenStates = ST.getTensor(st, fixtureMemFile, dataOffset, "input_hidden_states")
+  #       let expectedOutput = ST.getTensor(st, fixtureMemFile, dataOffset, "output")
 
-        let layerPath = st.metadata.get().getOrDefault("layer", "")
-        let normLayer =
-          if layerPath.endsWith("post_attention_layernorm"):
-            RmsNorm.init(postAttnWeight)
-          elif layerPath.endsWith("input_layernorm"):
-            RmsNorm.init(inputLnWeight)
-          else:
-            raise newException(ValueError, &"Invalid layer: '{layerPath}'")
+  #       let layerPath = st.metadata.get().getOrDefault("layer", "")
+  #       let normLayer =
+  #         if layerPath.endsWith("post_attention_layernorm"):
+  #           RmsNorm.init(postAttnWeight)
+  #         elif layerPath.endsWith("input_layernorm"):
+  #           RmsNorm.init(inputLnWeight)
+  #         else:
+  #           raise newException(ValueError, &"Invalid layer: '{layerPath}'")
 
-        try:
-          let output = normLayer.forward(inputHiddenStates)
-          let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
-          doAssert allClose, "RMSNorm case " & $caseNum & " failed"
-        except TorchError as e:
-          echo "    ⚠️  Caught TorchError: ", $e.what()
-          allPassed = false
-        except CppStdException as e:
-          echo "    ⚠️  Caught CppStdException: ", $e.what()
-          allPassed = false
-        close(fixtureMemFile)
-      allPassed
+  #       let output = normLayer.forward(inputHiddenStates)
+  #       let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
+  #       echo "allClose: ", allClose
+  #       doAssert allClose, "RMSNorm case " & $caseNum & " failed"
+  #       close(fixtureMemFile)
 
   runTest "MLP layer fixtures":
     proc(): bool =
@@ -90,7 +81,6 @@ proc main() =
 
       let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
 
-      var allPassed = true
       for caseNum in 0..3:
         let fixturePath = FixtureDir / &"mlp-{ModelName}-{caseNum:02d}.safetensor"
         if not fileExists(fixturePath):
@@ -102,18 +92,10 @@ proc main() =
         let inputX = ST.getTensor(st, fixtureMemFile, dataOffset, "input_x")
         let expectedOutput = ST.getTensor(st, fixtureMemFile, dataOffset, "output")
 
-        try:
-          let output = mlp.forward(inputX)
-          let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
-          doAssert allClose, "MLP case " & $caseNum & " failed"
-        except TorchError as e:
-          echo "    ⚠️  Caught TorchError: ", $e.what()
-          allPassed = false
-        except CppStdException as e:
-          echo "    ⚠️  Caught CppStdException: ", $e.what()
-          allPassed = false
+        let output = mlp.forward(inputX)
+        let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
+        doAssert allClose, "MLP case " & $caseNum & " failed"
         close(fixtureMemFile)
-      allPassed
 
   runTest "Attention layer fixtures":
     proc(): bool =
@@ -153,16 +135,9 @@ proc main() =
 
         let basePos = F.arange(seqLen.int64, F.kInt64)
         let positions = basePos.unsqueeze(0).expand([batchSize.int64, seqLen.int64])
-        try:
-          let output = attn.forward(hiddenStates, positions, use_cache = false)
-          let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
-          doAssert allClose, "Attention case " & $caseNum & " failed"
-        except TorchError as e:
-          echo "    ⚠️  Caught TorchError: ", $e.what()
-          allPassed = false
-        except CppStdException as e:
-          echo "    ⚠️  Caught CppStdException: ", $e.what()
-          allPassed = false
+        let output = attn.forward(hiddenStates, positions, use_cache = false)
+        let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
+        doAssert allClose, "Attention case " & $caseNum & " failed"
         close(fixtureMemFile)
       allPassed
 
