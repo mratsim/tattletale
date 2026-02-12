@@ -24,7 +24,7 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 MODEL_NAME = "Qwen3-0.6B"
 LAYER_IDX = 8
-FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "layers", {MODEL_NAME}-layer-{LAYER_IDX})
+FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}")
 WEIGHTS_FILE = f"{FIXTURE_DIR}/Weights-{MODEL_NAME}-layer-{LAYER_IDX}.safetensor"
 MODEL_PATH = f"tests/hf_models/{MODEL_NAME}/model.safetensors" # Assuming a very small model were everything fits in a safetensor
 FIXED_SEED = 42
@@ -85,9 +85,6 @@ def create_layers_from_weights(weights: dict) -> tuple:
         rms_norm_eps=1e-6,
     )
 
-    # Convert weights to float32 for compatibility
-    weights = {k: v.float() for k, v in weights.items()}
-
     # Create norm layers with weights
     input_layernorm = Qwen3RMSNorm(1024, eps=1e-6)
     input_layernorm.weight.data = weights["input_layernorm.weight"]
@@ -138,7 +135,8 @@ def generate_norm_fixtures(
     layer_name = "norm"
 
     # Case 00: input_layernorm normal forward
-    x = torch.randn(2, 8, 1024)
+    x = torch.randn(2, 8, 1024, dtype=torch.bfloat16)
+    # print(f"input_x[0, 0:5, 0:5]:\n{x[0, 0:5, 0:5]}")
     output = input_layernorm(x)
     save_fixture(
         layer_name,
@@ -152,7 +150,7 @@ def generate_norm_fixtures(
     )
 
     # Case 01: input_layernorm single token
-    x = torch.randn(1, 1, 1024)
+    x = torch.randn(1, 1, 1024, dtype=torch.bfloat16)
     output = input_layernorm(x)
     save_fixture(
         layer_name,
@@ -166,7 +164,7 @@ def generate_norm_fixtures(
     )
 
     # Case 02: post_attention_layernorm
-    x = torch.randn(2, 4, 1024)
+    x = torch.randn(2, 4, 1024, dtype=torch.bfloat16)
     output = post_attention_layernorm(x)
     save_fixture(
         layer_name,
@@ -180,7 +178,7 @@ def generate_norm_fixtures(
     )
 
     # Case 03: Zeros
-    x = torch.zeros(2, 4, 1024)
+    x = torch.zeros(2, 4, 1024, dtype=torch.bfloat16)
     output = input_layernorm(x)
     save_fixture(
         layer_name,
@@ -202,7 +200,7 @@ def generate_mlp_fixtures(mlp: Qwen3MLP) -> None:
     layer_name = "mlp"
 
     # Case 00: Normal forward
-    x = torch.randn(2, 8, 1024)
+    x = torch.randn(2, 8, 1024, dtype=torch.bfloat16)
     output = mlp(x)
     save_fixture(
         layer_name,
@@ -216,7 +214,7 @@ def generate_mlp_fixtures(mlp: Qwen3MLP) -> None:
     )
 
     # Case 01: Single token
-    x = torch.randn(1, 1, 1024)
+    x = torch.randn(1, 1, 1024, dtype=torch.bfloat16)
     output = mlp(x)
     save_fixture(
         layer_name,
@@ -230,7 +228,7 @@ def generate_mlp_fixtures(mlp: Qwen3MLP) -> None:
     )
 
     # Case 02: Short sequence
-    x = torch.randn(1, 4, 1024)
+    x = torch.randn(1, 4, 1024, dtype=torch.bfloat16)
     output = mlp(x)
     save_fixture(
         layer_name,
@@ -244,7 +242,7 @@ def generate_mlp_fixtures(mlp: Qwen3MLP) -> None:
     )
 
     # Case 03: Zeros
-    x = torch.zeros(2, 4, 1024)
+    x = torch.zeros(2, 4, 1024, dtype=torch.bfloat16)
     output = mlp(x)
     save_fixture(
         layer_name,
@@ -269,7 +267,7 @@ def generate_attn_fixtures(attn: Qwen3Attention, rotary: Qwen3RotaryEmbedding) -
 
     # Case 00: Normal forward
     batch, seq_len = 2, 8
-    hidden_states = torch.randn(batch, seq_len, 1024)
+    hidden_states = torch.randn(batch, seq_len, 1024, dtype=torch.bfloat16)
     position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1).contiguous()
     cos, sin = rotary(hidden_states, position_ids)
 
@@ -314,7 +312,7 @@ def generate_attn_fixtures(attn: Qwen3Attention, rotary: Qwen3RotaryEmbedding) -
     )
 
     # Case 01: Single token
-    hidden_states = torch.randn(1, 1, 1024)
+    hidden_states = torch.randn(1, 1, 1024, dtype=torch.bfloat16)
     position_ids = torch.tensor([[0]]).contiguous()
     cos, sin = rotary(hidden_states, position_ids)
 

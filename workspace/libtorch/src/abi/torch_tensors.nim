@@ -192,7 +192,8 @@ func nbytes*(a: TorchTensor): uint {.importcpp: "#.nbytes()".} ## Bytes-size of 
 func numel*(a: TorchTensor): int {.importcpp: "#.numel()".} ## This is Arraymancer and Numpy "size"
 
 func size*(a: TorchTensor, axis: int): int {.importcpp: "#.size(#)".}
-func defined*(a: TorchTensor): bool {.importcpp: "#.defined()".}
+func isDefined*(a: TorchTensor): bool {.importcpp: "#.defined()".}
+  # Check if a Tensor is initialized (C++ `defined` but it's already used in Nim)
 func itemsize*(a: TorchTensor): uint {.importcpp: "#.itemsize()".}
 func element_size*(a: TorchTensor): int {.importcpp: "#.element_size()".}
 
