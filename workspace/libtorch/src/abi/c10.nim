@@ -16,6 +16,12 @@ import
 
 {.push cdecl, header: TorchHeader.}
 
+# Exceptions
+# -----------------------------------------------------------------------
+
+type
+  TorchError* {.requiresInit, importcpp: "c10::Error", header: TorchHeader.} = object of CppStdException
+
 # ArrayRef
 # -----------------------------------------------------------------------
 #
