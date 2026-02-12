@@ -48,10 +48,12 @@ func `$`*(s: CppString): string =
 
 type
   Optional*[T] {.bycopy, importcpp: "std::optional".} = T or Nullopt_t
-  Nullopt_t* {.bycopy, importcpp: "std::nullopt_t".} = distinct cint
+  Nullopt_t* {.bycopy, importcpp: "std::nullopt_t".} = object
 
-# Nullopt is nullopt_t{0}
-const nullopt*: Nullopt_t = Nullopt_t(0)
+let Nullopt {.importcpp: "std::nullopt".}: Nullopt_t
+template nullopt*(): Nullopt_t =
+  {.cast(noSideEffect).}: # Workaround to allow ergonomic usage of std::nullopt in sideeffect-free functions
+    Nullopt
 
 func value*[T](o: Optional[T]): T {.importcpp: "#.value()".}
 
