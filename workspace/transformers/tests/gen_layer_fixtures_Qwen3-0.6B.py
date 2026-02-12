@@ -7,9 +7,11 @@ This script:
 3. Generates test fixtures using those real weights
 """
 
+import json
 import os
 import torch
 from safetensors import safe_open
+from safetensors import torch as st
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     Qwen3MLP,
@@ -22,8 +24,8 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 MODEL_NAME = "Qwen3-0.6B"
 LAYER_IDX = 8
-FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "layers")
-WEIGHTS_FILE = f"tests/fixtures/layers/{MODEL_NAME}-layer-{LAYER_IDX}/Weights-{MODEL_NAME}-layer-{LAYER_IDX}.safetensors"
+FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "layers", {MODEL_NAME}-layer-{LAYER_IDX})
+WEIGHTS_FILE = f"{FIXTURE_DIR}/Weights-{MODEL_NAME}-layer-{LAYER_IDX}.safetensor"
 MODEL_PATH = f"tests/hf_models/{MODEL_NAME}/model.safetensors" # Assuming a very small model were everything fits in a safetensor
 FIXED_SEED = 42
 
@@ -55,23 +57,17 @@ def extract_layer_weights() -> dict:
 
 def save_layer_weights(weights: dict) -> str:
     """Save layer weights to a separate safetensors file."""
-    filepath = os.path.join(os.path.dirname(__file__), WEIGHTS_FILE)
-
-    from safetensors import torch as st
-
     serialized = st.save(weights)
-    with open(filepath, "wb") as f:
+    with open(WEIGHTS_FILE, "wb") as f:
         f.write(serialized)
 
-    print(f"Saved layer weights to {filepath}")
-    return filepath
+    print(f"Saved layer weights to {WEIGHTS_FILE}")
+    return WEIGHTS_FILE
 
 
 def load_layer_weights() -> dict:
     """Load layer weights from the separate safetensors file."""
-    filepath = os.path.join(os.path.dirname(__file__), WEIGHTS_FILE)
-
-    with safe_open(filepath, framework="pt") as f:
+    with safe_open(WEIGHTS_FILE, framework="pt") as f:
         weights = {key: f.get_tensor(key).clone() for key in f.keys()}
 
     return weights
@@ -122,21 +118,12 @@ def save_fixture(layer_name: str, case_num: int, metadata: dict, tensors: dict) 
     filename = f"{layer_name}-{MODEL_NAME}-{case_num:02d}.safetensor"
     filepath = os.path.join(FIXTURE_DIR, filename)
 
-    from safetensors import torch as st
-
     safe_tensors = {}
     for name, tensor in tensors.items():
         if tensor is not None:
             safe_tensors[name] = tensor.detach().cpu().contiguous()
 
-    # Add metadata
-    import json
-
-    safe_tensors["__metadata__"] = torch.tensor(
-        bytearray(json.dumps(metadata).encode())
-    )
-
-    serialized = st.save(safe_tensors)
+    serialized = st.save(safe_tensors, metadata=metadata)
     with open(filepath, "wb") as f:
         f.write(serialized)
 
