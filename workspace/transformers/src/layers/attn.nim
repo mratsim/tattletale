@@ -91,10 +91,6 @@ proc append*(self: var KVCache, k, v: TorchTensor): (TorchTensor, TorchTensor) =
   self.values = F.cat([self.values, v], 1)
   result = (self.keys, self.values)
 
-proc reset*(self: var KVCache) =
-  self.keys = F.init(TorchTensor)
-  self.values = F.init(TorchTensor)
-
 type
   RopeMHAttention* = object
     qkv*: Linear
@@ -154,8 +150,7 @@ proc forward*(self: var RopeMHAttention, x: TorchTensor, positions: TorchTensor,
   else:
     k_full = k_new
     v_full = v_new
-    self.kv_cache.keys = F.init(TorchTensor)
-    self.kv_cache.values = F.init(TorchTensor)
+    self.kv_cache.reset()
 
   let q_reshaped = q.reshape([batch, seq_len, self.attn.num_qo_heads, self.attn.head_dim])
   let k_reshaped = k_full.reshape([batch, k_full.size(1), self.attn.num_kv_heads, self.attn.head_dim])
