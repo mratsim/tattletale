@@ -237,12 +237,12 @@ func scalarType*(a: TorchTensor): ScalarKind {.importcpp: "#.scalar_type()".}
 # Constructors
 # -----------------------------------------------------------------------
 
-# DeviceType and ScalarType are auto-convertible to TensorOptions
+# Note: DeviceType and ScalarType are auto-convertible to TensorOptions
 
-func init*(T: type TorchTensor): TorchTensor {.constructor, importcpp: "torch::Tensor".}
-
-# Default empty constructor
-# Move / Copy constructor ?
+# We don't expose a default empty constructor, they cause ICE "Error: internal error: expr(skType); unknown symbol"
+# And they are completely unidiomatic.
+#
+# I'm unsure about a Move / Copy constructor since torch::Tensor uses intrusive reference counting.
 
 func from_blob*(
   data: pointer, sizes: IntArrayRef, options: TensorOptions
