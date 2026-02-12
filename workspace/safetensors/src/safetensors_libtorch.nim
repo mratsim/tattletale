@@ -40,7 +40,7 @@ proc toTorchType*(dtype: Dtype): ScalarKind =
     else:
       raise newException(ValueError, "No direct libtorch mapping for safetensors dtype: " & $dtype)
 
-proc getTensor*(st: Safetensor, memFile: MemFile, dataSectionOffset: int, tensorName: string): TorchTensor =
-  let view = st.getMmapView(memFile, dataSectionOffset, tensorName)
+proc getTensor*(st: Safetensor, memFile: MemFile, tensorName: string): TorchTensor =
+  let view = st.getMmapView(memFile, tensorName)
   let info = st.tensors[tensorName]
-  return view.data.from_blob(info.shape, info.dtype.toTorchType())
+  return view.data.from_blob(info.shape.asTorchView(), info.dtype.toTorchType())

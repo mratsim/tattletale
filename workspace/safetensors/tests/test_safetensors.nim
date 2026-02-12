@@ -65,7 +65,7 @@ proc main() =
       var memFile = memFiles.open(fixturePath, mode = fmRead)
       defer: close(memFile)
 
-      let (st, dataSectionOffset) = safetensors.load(memFile)
+      let st = safetensors.load(memFile)
 
       let key = "F64_vandermonde_5x5"
       check st.tensors.hasKey(key)
@@ -75,7 +75,7 @@ proc main() =
       check info.shape == shape
 
       let expectedTensor = generateVandermondeExpected(shape, kFloat64)
-      let actualTensor = st.getTensor(memFile, dataSectionOffset, key)
+      let actualTensor = st.getTensor(memFile, key)
       check actualTensor == expectedTensor
 
     test "vandermonde BF16 fixture test":
@@ -85,7 +85,7 @@ proc main() =
       var memFile = memFiles.open(fixturePath, mode = fmRead)
       defer: close(memFile)
 
-      let (st, dataSectionOffset) = safetensors.load(memFile)
+      let st = safetensors.load(memFile)
 
       let key = "BF16_vandermonde_5x5"
       check st.tensors.hasKey(key)
@@ -95,7 +95,7 @@ proc main() =
       check info.shape == shape
 
       let expectedTensor = generateVandermondeExpected(shape, kBFloat16)
-      let actualTensor = st.getTensor(memFile, dataSectionOffset, key)
+      let actualTensor = st.getTensor(memFile, key)
       check actualTensor == expectedTensor
 
     test "load python-generated safetensors fixtures":
@@ -105,7 +105,7 @@ proc main() =
       var memFile = memFiles.open(fixturePath, mode = fmRead)
       defer: close(memFile) # TODO - close them after data is loaded but before testing to ensure we own the buffer
 
-      let (st, dataSectionOffset) = safetensors.load(memFile)
+      let st = safetensors.load(memFile)
 
       var count = 0
       for dtype in TestedDtypes:
@@ -120,7 +120,7 @@ proc main() =
             check info.shape == shape
 
             let expectedTensor = generateExpectedTensor(pattern, shape, dtype.toTorchType())
-            let actualTensor = st.getTensor(memFile, dataSectionOffset, key)
+            let actualTensor = st.getTensor(memFile, key)
             check actualTensor == expectedTensor
             count += 1
 
