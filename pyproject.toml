@@ -13,7 +13,6 @@ test-vectors = [
     "tokenizers>=0.20.0",
     "tiktoken>=0.12.0",
     "tokendagger>=0.1.0",
-    "numpy>=2.4.2",
 ]
 
 [tool.uv]
