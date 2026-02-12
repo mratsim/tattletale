@@ -192,6 +192,7 @@ func nbytes*(a: TorchTensor): uint {.importcpp: "#.nbytes()".} ## Bytes-size of 
 func numel*(a: TorchTensor): int {.importcpp: "#.numel()".} ## This is Arraymancer and Numpy "size"
 
 func size*(a: TorchTensor, axis: int): int {.importcpp: "#.size(#)".}
+func defined*(a: TorchTensor): bool {.importcpp: "#.defined()".}
 func itemsize*(a: TorchTensor): uint {.importcpp: "#.itemsize()".}
 func element_size*(a: TorchTensor): int {.importcpp: "#.element_size()".}
 
