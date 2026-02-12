@@ -53,7 +53,7 @@ proc generateVandermondeExpected*(shape: openArray[int], dtype: ScalarKind): Tor
     for j in 0..<5:
       data[j * 5 + i] = pow(float64(i + 1), float64(j))
   let sizes = [numel]
-  let flat = from_blob(data[0].unsafeAddr, sizes, dtype)
+  let flat = from_blob(data[0].unsafeAddr, sizes, kFloat64).to(dtype)
   flat.reshape(shape)
 
 proc main() =

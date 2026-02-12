@@ -43,5 +43,4 @@ proc toTorchType*(dtype: Dtype): ScalarKind =
 proc getTensor*(st: Safetensor, memFile: MemFile, dataSectionOffset: int, tensorName: string): TorchTensor =
   let view = st.getMmapView(memFile, dataSectionOffset, tensorName)
   let info = st.tensors[tensorName]
-  let torchType = info.dtype
   return view.data.from_blob(info.shape, info.dtype.toTorchType())
