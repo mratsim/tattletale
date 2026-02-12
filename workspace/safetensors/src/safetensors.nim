@@ -92,6 +92,10 @@ type
   Safetensor* = object
     metadata*: Option[OrderedTable[string, string]]
     tensors*: OrderedTable[string, TensorInfo]
+    dataSectionOffset*: int ## Offset of the data section in the file. Set after parsing.
+
+proc skipHook*(T: typedesc[Safetensor], key: string): bool =
+  key == "dataSectionOffset"
 
 const DtypeSize: array[Dtype, int] = [
   ## Size in bytes.
@@ -168,7 +172,7 @@ func validate_offsets(st: Safetensor, dataSectionSize: int) =
   if cur != dataSectionSize:
     raise newException(RangeDefect, &"safetensors: Tensor offsets and data section size mismatch")
 
-proc load*(memFile: MemFile): tuple[st: Safetensor, dataSectionOffset: int] =
+proc load*(memFile: MemFile): Safetensor =
   ## Load a safetensor file and return
   ## - for each tensor
   ##   * tensor names
@@ -194,12 +198,12 @@ proc load*(memFile: MemFile): tuple[st: Safetensor, dataSectionOffset: int] =
   # Sort tensors by offsets
   header.tensors.sort((lhs, rhs) => system.cmp(lhs[1].dataOffsets.start, rhs[1].dataOffsets.start))
 
-  let dataSectionOffset = sizeof(uint64) + headerSize
+  header.dataSectionOffset = sizeof(uint64) + headerSize
 
   # Validate that offsets are within the file with no gap or overlap
-  header.validate_offsets(memFile.size - dataSectionOffset)
+  header.validate_offsets(memFile.size - header.dataSectionOffset)
 
-  return (header, dataSectionOffset)
+  return header
 
 # Individual tensor API (WIP)
 # ---------------------------------------------------------
@@ -212,7 +216,7 @@ proc load*(memFile: MemFile): tuple[st: Safetensor, dataSectionOffset: int] =
 # For now the goal is to get something working
 # and keep it independent from the backend.
 
-proc getMmapView*(st: Safetensor, memFile: MemFile, dataSectionOffset: int, tensorName: string): MemSlice {.inline.} =
+proc getMmapView*(st: Safetensor, memFile: MemFile, tensorName: string): MemSlice {.inline.} =
   ## Get a memory view to the tensor data.
   ## This allows zero-copy access to the tensor data.
   ## Lifetime:
@@ -226,6 +230,6 @@ proc getMmapView*(st: Safetensor, memFile: MemFile, dataSectionOffset: int, tens
   let info = st.tensors[tensorName]
   let (start, stopEx) = info.dataOffsets
   MemSlice(
-    data: memFile.mem +% dataSectionOffset +% start,
+    data: memFile.mem +% st.dataSectionOffset +% start,
     size: stopEx - start
   )
