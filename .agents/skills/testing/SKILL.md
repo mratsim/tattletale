@@ -279,3 +279,72 @@ let fixturePath = FIXTURES_DIR / "test_data.bin"
 - [ ] Uses `defer` for resource cleanup (files, etc.)
 - [ ] Helper procedures exported with `*`
 - [ ] Constants defined at module level with `const`
+
+## Python test vector generation
+
+For AI/ML modules, test vectors are generated via Python scripts using torch and safetensors.
+
+### Directory structure
+
+```
+workspace/module/
+├── tests/
+│   ├── test_module.nim          # Nim tests
+│   ├── fixtures/                # Generated fixture files
+│   │   ├── model.safetensors
+│   │   └── tokenizer.json
+│   └── testgen/                 # Python test vector generators
+│       └── generate_vectors.py
+```
+
+### Convention
+
+- **Python 3.12** standard for all test vector generation (matches vLLM/SGLang)
+- **Single root `pyproject.toml`** with `[dependency-groups]` for shared dependencies:
+  ```toml
+  [dependency-groups]
+  test-vectors = [
+      "torch>=2.0.0",
+      "safetensors>=0.7.0",
+      "transformers>=4.40.0",
+      "numpy>=2.4.2",
+  ]
+  ```
+- **Run generators** with: `uv run --group test-vectors python workspace/module/tests/testgen/generate_vectors.py`
+
+### Example testgen script
+
+```python
+import torch
+import numpy as np
+from safetensors.numpy import save_file
+import os
+
+FIXTURES_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "fixtures",
+)
+
+def generate_vandermonde():
+    x = torch.arange(1, 6, dtype=torch.float32)
+    vandermonde = torch.vander(x, increasing=True).T
+    return vandermonde.to(torch.bfloat16).view(torch.uint16).numpy()
+
+def main():
+    fixtures = {
+        "BF16_vandermonde_5x5": generate_vandermonde(),
+    }
+    save_file(fixtures, os.path.join(FIXTURES_DIR, "vandermonde.safetensors"))
+    print("Fixtures generated")
+
+if __name__ == "__main__":
+    main()
+```
+
+### Fixture regeneration
+
+When adding new test vectors, regenerate the fixture files:
+
+```bash
+uv run --group test-vectors python workspace/module/tests/testgen/generate_vectors.py
+```
