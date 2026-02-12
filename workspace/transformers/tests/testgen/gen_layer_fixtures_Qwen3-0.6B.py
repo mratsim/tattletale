@@ -24,7 +24,7 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 MODEL_NAME = "Qwen3-0.6B"
 LAYER_IDX = 8
-FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}")
+FIXTURE_DIR = os.path.join(os.path.dirname(__file__).parent(), "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}")
 WEIGHTS_FILE = f"{FIXTURE_DIR}/Weights-{MODEL_NAME}-layer-{LAYER_IDX}.safetensor"
 MODEL_PATH = f"tests/hf_models/{MODEL_NAME}/model.safetensors" # Assuming a very small model were everything fits in a safetensor
 FIXED_SEED = 42
