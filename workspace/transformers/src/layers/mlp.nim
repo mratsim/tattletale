@@ -15,18 +15,18 @@ type
     ## Gated MLP layer with fused gate-up projection and SiLU activation.
     ##
     ## This follows the Qwen3 MLP architecture:
-    ##   gate_up = Linear(hidden_size, 2 * intermediate_size)
-    ##   act = silu_and_mul(gate_up)
-    ##   output = Linear(intermediate_size, hidden_size)(act)
+    ##   gate_up_proj = Linear(hidden_size, 2 * intermediate_size)
+    ##   activation = silu_and_mul(gate_up_proj)
+    ##   output = Linear(intermediate_size, hidden_size)(activation)
     ##
     ## Input:
     ##   - An externally provided `x` of shape (..., hidden_size)
     ##
     ## Return:
     ##   - Output tensor of shape (..., hidden_size)
-    gate_up*: Linear
-    down*: Linear
-    act*: ActivationKind
+    gate_up_proj*: Linear
+    down_proj*: Linear
+    activation*: ActivationKind
 
 func init*(_: type GatedMLP, gate_weight, up_weight, down_weight: TorchTensor, activation: ActivationKind): GatedMLP =
   ## Creates a GatedMLP layer from separate gate and up weights.
@@ -35,12 +35,10 @@ func init*(_: type GatedMLP, gate_weight, up_weight, down_weight: TorchTensor, a
   ##   gate_weight: Weight tensor of shape (intermediate_size, hidden_size)
   ##   up_weight: Weight tensor of shape (intermediate_size, hidden_size)
   ##   down_weight: Weight tensor of shape (hidden_size, intermediate_size)
-  ##   act: Activation function to use
-
-  let gate_up_fused = F.cat([gate_weight, up_weight], 0)
-  let gate_up = Linear.init(gate_up_fused)
-  let down = Linear.init(down_weight)
-  GatedMLP(gate_up: gate_up, down: down, act: activation)
+  ##   activation: Activation function to use
+  let gate_up_proj = Linear.init(F.cat([gate_weight, up_weight], 0))
+  let down_proj = Linear.init(down_weight)
+  GatedMLP(gate_up_proj: gate_up_proj, down_proj: down_proj, activation: activation)
 
 proc forward*(self: GatedMLP, x: TorchTensor): TorchTensor =
   ## Forward pass for inference.
@@ -52,12 +50,11 @@ proc forward*(self: GatedMLP, x: TorchTensor): TorchTensor =
   ##   Output tensor of shape (..., hidden_size)
   ##
   ## Computes:
-  ##   gate_up = self.gate_up.forward(x)  # (..., 2 * intermediate_size)
-  ##   act = silu_and_mul(gate_up)        # (..., intermediate_size)
-  ##   return self.down.forward(act)      # (..., hidden_size)
-
-  let gate_up_out = self.gate_up.forward(x)
+  ##   gate_up_proj = self.gate_up_proj.forward(x)  # (..., 2 * intermediate_size)
+  ##   activation = silu_and_mul(gate_up_proj)        # (..., intermediate_size)
+  ##   return self.down_proj.forward(activation)      # (..., hidden_size)
+  let gate_up_out = self.gate_up_proj.forward(x)
   let act_out =
-    case self.act
+    case self.activation
     of kSilu: silu_and_mul(gate_up_out)
-  result = self.down.forward(act_out)
+  result = self.down_proj.forward(act_out)

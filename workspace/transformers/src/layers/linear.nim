@@ -35,6 +35,12 @@ func init*(_: type Linear, weight: TorchTensor, bias = none(TorchTensor)): Linea
   ##
   ## Computes:
   ##   y = x @ weight^T + bias
+  Linear(
+    weight: weight,
+    bias: bias,
+    in_features: weight.size(1),
+    out_features: weight.size(0)
+  )
 
 proc forward*(self: Linear, x: TorchTensor): TorchTensor =
   ## Forward pass for inference.
@@ -46,6 +52,6 @@ proc forward*(self: Linear, x: TorchTensor): TorchTensor =
   ##   Output tensor of shape (..., out_features)
 
   if self.bias.isSome:
-    F.linear(checked x, checked self.weight, checked self.bias.get())
+    F.linear(x, self.weight, self.bias.get())
   else:
-    F.linear(checked x, checked self.weight)
+    F.linear(x, self.weight)
