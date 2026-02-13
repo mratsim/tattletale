@@ -44,13 +44,16 @@ import
 # Span stepping - foo[_.._|+2, 3]
 # Span stepping - foo[1.._|1, 2..3]
 # Span stepping - foo[_..<4|2, 3]
-# Slicing until at n from the end - foo[0..^4, 3]
-# Span Slicing until at n from the end - foo[_..^2, 3]
-# Stepped Slicing until at n from the end - foo[1..^1|2, 3]
-# Slice from the end - foo[^1..0|-1, 3]
-# Slice from the end - expect non-negative step error - foo[^1..0, 3]
-# Slice from the end - foo[^(2*2)..2*2, 3]
-# Slice from the end - foo[^3..^2, 3]
+# Slicing until at n from the end - foo[0..-4, 3]
+# Span Slicing until at n from the end - foo[_..-2, 3]
+# Stepped Slicing until at n from the end - foo[1..-1|2, 3]
+#
+# TODO: C++ libtorch doesn't support negative stride
+#       PyTorch does preprocessing with flip before indexing.
+# Slice from the end - foo[-1..0|-1, 3]
+# Slice from the end - expect non-negative step error - foo[-1..0, 3]
+# Slice from the end - foo[-(2*2)..2*2, 3]
+# Slice from the end - foo[-3..-2, 3]
 #
 # Important: Nim slices are inclusive while TorchSlice are exclusive!
 #
@@ -179,24 +182,124 @@ func `..<`*(a: int, s: Step): TorchSlice {.inline.} =
   ##     - a ``TorchSlice``, end of range will be exclusive.
   return torchSlice(a, s.b, s.step)
 
-func `..^`*(a: int, s: Step): TorchSlice {.inline.} =
-  ## Internal: Build a TorchSlice from [a ..^ (b|step)] (workaround to operator precedence and ..^b not being interpreted as .. ^b)
+func `..-`*(a: int, s: Step): TorchSlice {.inline.} =
+  ## Internal: Build a TorchSlice from [a ..- (b|step)] (workaround to operator precedence)
   ## Input:
   ##     - the beginning of the slice range
   ##     - a ``Step`` workaround object
   ## Returns:
-  ##     - a ``TorchSlice``, end of range will start at "b" away from the end
+  ##     - a ``TorchSlice``, end of range will be at negative position from end
   return torchSlice(a, -s.b, s.step)
 
-func `^`*(s: TorchSlice): TorchSlice {.inline.} =
-  ## Internal: Prefix to a to indicate starting the slice at "a" away from the end
-  ## Note: This does not automatically inverse stepping, what if we want ^5..^1
+func `-`*(s: TorchSlice): TorchSlice {.inline.} =
+  ## Internal: Prefix to a slice to indicate starting at negative position from end
   return torchSlice(-s.start, s.stop, s.step)
 
-func `^`*(s: Slice): TorchSlice {.inline.} =
-  ## Internal: Prefix to a to indicate starting the slice at "a" away from the end
-  ## Note: This does not automatically inverse stepping, what if we want ^5..^1
+func `-`*(s: Slice): TorchSlice {.inline.} =
+  ## Internal: Prefix to a slice to indicate starting at negative position from end
   return torchSlice(-s.a, s.b, 1)
+
+# #######################################################################
+#
+#          Python Slice Semantics to libtorch Slice Conversion
+#
+# #######################################################################
+#
+# Python slicing uses EXCLUSIVE upper bound (like C++ standard).
+# Negative indices are normalized by adding the dimension size.
+#
+# Examples for a 5-element array (indices 0, 1, 2, 3, 4):
+#
+# Python             | Start | Stop  | Result indices | Nim equivalent
+# ------------------+-------+-------+---------------+----------------
+# a[:]              | 0     | 5     | 0,1,2,3,4     | a[_.._]
+# a[1:]              | 1     | 5     | 1,2,3,4      | a[1.._]
+# a[:3]              | 0     | 3     | 0,1,2        | a[_..<3]
+# a[1:3]             | 1     | 3     | 1,2          | a[1..<3]
+# a[:-1]             | 0     | 4     | 0,1,2,3      | a[_..-1]
+# a[-3:]             | 2     | 5     | 2,3,4        | a[-3.._]
+# a[-3:-1]           | 2     | 4     | 2,3          | a[-3..-1]
+#
+# Key insight: In Python, -1 as STOP means "up to but NOT including the last element"
+# -1 as START means "starting at the last element"
+#
+# libtorch Slice(start, stop) has EXCLUSIVE upper bound, matching Python.
+# Negative values are normalized by adding size at runtime.
+#
+# Translation rules:
+# - `_` (underscore) means "full span" → nullopt
+# - `..<` (exclusive) → stop stays as-is
+# - `..-` (end-relative, Python exclusive) → stop becomes size + (-N) = size - N
+# - `..` (inclusive, rarely used) → stop becomes size + (-N) + 1 = size - N + 1
+
+func pythonSliceToTorchSlice*(
+  start: int | Nullopt_t,
+  stop: int | Nullopt_t,
+  size: int
+): TorchSlice {.inline.} =
+  ## Convert Python-style slice to libtorch Slice with proper negative index handling.
+  ##
+  ## Python semantics:
+  ##   - Exclusive upper bound (stop is not included)
+  ##   - Negative indices are normalized: -N → size + (-N) = size - N
+  ##
+  ## Args:
+  ##   start: Starting index (or nullopt for "from beginning")
+  ##   stop: Stopping index (exclusive, or nullopt for "to end")
+  ##   size: Dimension size for negative index normalization
+  ##
+  ## Returns:
+  ##   A TorchSlice with properly normalized indices
+
+  # Normalize start
+  let normStart = if start of Nullopt_t:
+    start
+  elif start < 0:
+    start + size
+  else:
+    start
+
+  # Normalize stop
+  let normStop = if stop of Nullopt_t:
+    stop
+  elif stop < 0:
+    stop + size
+  else:
+    stop
+
+  torchSlice(normStart, normStop)
+
+func pytorchToCppLibTorch*(
+  start: int | Nullopt_t,
+  stop: int | Nullopt_t,
+  step: int | Nullopt_t,
+  size: int
+): TorchSlice {.inline.} =
+  ## Convert Python-style slice with step to C++ libtorch slices.
+
+  let normStart =
+    when start is Nullopt_t:
+      start
+    else:
+      if start < 0:
+        start + size
+      else:
+        start
+
+  let normStop =
+    when start is Nullopt_t:
+      start
+    else:
+      if start < 0:
+        start + size
+      else:
+        start
+
+  when step is int:
+    # 0 repeats the first item of the axis, unsure why it would be useful but it shouldn't be an issue
+    doAssert step >= 0, "C++ libtorch backend does not support negative steps" # TODO, flip tensor to support negative steps
+
+  torchSlice(normStart, normStop, step)
 
 # #######################################################################
 #
@@ -256,24 +359,24 @@ macro desugarSlices*(args: untyped): void =
     # Node is of the form "* .. *"
     let nnk0_inf_dotdot = (nnk.kind == nnkInfix and eqIdent(nnk[0], ".."))
 
-    # Node is of the form "* ..< *" or "* ..^ *" or "* ..| *"
+    # Node is of the form "* ..< *" or "* ..- *" or "* ..| *"
     let nnk0_inf_dotdot_alt = (nnk.kind == nnkInfix and (
       eqIdent(nnk[0], "..<") or
-      eqident(nnk[0], "..^") or
+      eqident(nnk[0], "..-") or
       eqident(nnk[0], "..|")
     ))
 
-    # Node is of the form "* .. *", "* ..< *" or "* ..^ *" or "* ..| *"
+    # Node is of the form "* .. *", "* ..< *" or "* ..- *" or "* ..| *"
     let nnk0_inf_dotdot_all = (nnk0_inf_dotdot or nnk0_inf_dotdot_alt)
 
-    # Node is of the form "^ *"
-    let nnk0_pre_hat = (nnk.kind == nnkPrefix and eqIdent(nnk[0], "^"))
+    # Node is of the form "- *" (minus prefix)
+    let nnk0_pre_minus = (nnk.kind == nnkPrefix and eqIdent(nnk[0], "-"))
 
     # Node is of the form "_ `op` *"
     let nnk1_joker = (nnk.kind == nnkInfix and eqIdent(nnk[1], "_"))
 
-    # Node is of the form "_ `op` *"
-    let nnk10_hat = (nnk.kind == nnkInfix and nnk[1].kind == nnkPrefix and eqident(nnk[1][0], "^"))
+    # Node is of the form "* `op` - *"
+    let nnk10_minus = (nnk.kind == nnkInfix and nnk[1].kind == nnkPrefix and eqident(nnk[1][0], "-"))
 
     # Node is of the form "* `op` _"
     let nnk2_joker = (nnk.kind == nnkInfix and eqident(nnk[2], "_"))
@@ -317,32 +420,27 @@ macro desugarSlices*(args: untyped): void =
       ## [_.._|-2 doesn't make sense and will throw out of bounds
       r.add(Slice(sliceNone(), sliceNone(), nnk[2][2]))
     elif nnk0_inf_dotdot_all and nnk1_joker and nnk20_bar_all:
-      ## [_..10|1, 3] into [{Slice(None, 10+1, 1), 3}] (for inclusive)
-      ## [_..^10|1, 3] into [{Slice(None, -10, 1), 3}]
-      ## [_..<10|1, 3] into [{Slice(None, 10, 1), 3}] (exclusive)
+      ## [_..10|1, 3] into [{Slice(None, 10+1, 1), 3}] (inclusive end)
+      ## [_..-10|1, 3] into [{Slice(None, endRelative(-10, size), 1), 3}]
+      ## [_..<10|1, 3] into [{Slice(None, 10, 1), 3}] (exclusive end)
       if nnk[0].eqident(".."):
         r.add Slice(sliceNone(), succ(nnk[2][1]), nnk[2][2])
-      elif nnk[0].eqident("..^"):
-        if nnk[2][1] == (newIntLitNode(0)):
-          error "Slicing does not support '^0' syntax."
-        else:
-          r.add Slice(sliceNone(), -nnk[2][1], nnk[2][2])
+      elif nnk[0].eqident("..-"):
+        let stopVal = quote: endRelative(`nnk[2][1]`, `sliceNone()`)
+        r.add Slice(sliceNone(), stopVal, nnk[2][2])
       elif nnk[0].eqident("..<"):
         r.add Slice(sliceNone(), nnk[2][1], nnk[2][2])
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot_all and nnk1_joker:
-      ## [_..10, 3] into [{Slice(None, 10+1), 3}]
-      ## [_..^10, 3] into [{Slice(None, -10), 3}]
-      ## [_..<10, 3] into [{Slice(None, 10), 3}]
+      ## [_..10, 3] into [{Slice(None, 10+1), 3}] (inclusive end)
+      ## [_..-10, 3] into [{Slice(None, endRelative(-10, size)), 3}]
+       ## [_..<10, 3] into [{Slice(None, 10), 3}] (exclusive end)
       ## [_..|2, 3] into [{Slice(None, None, 2), 3}]
       if nnk[0].eqident(".."):
         r.add Slice(sliceNone(), succ(nnk[2]))
-      elif nnk[0].eqident("..^"):
-        if nnk[2] == (newIntLitNode(0)):
-          error "Slicing does not support '^0' syntax."
-        else:
-          r.add Slice(sliceNone(), -nnk[2])
+      elif nnk[0].eqident("..-"):
+        r.add Slice(sliceNone(), nnk[2])  # Runtime fixNegativeSliceStop will handle negative indices
       elif nnk[0].eqident("..<"):
         r.add Slice(sliceNone(), nnk[2])
       elif nnk[0].eqident("..|"):
@@ -351,7 +449,7 @@ macro desugarSlices*(args: untyped): void =
         error "Unreachable"
     elif nnk0_inf_dotdot and nnk2_joker:
       ## [1.._, 3] into [{Slice(1, None, None), 3}]
-      r.add Slice(nnk[1])
+      r.add Slice(nnk[1], sliceNone())
     elif nnk0_inf_dotdot and nnk20_bar_pos and nnk21_joker:
       ## [1.._|1, 3] into [{Slice(1, None, 1), 3}]
       ## [1.._|+1, 3] into [{Slice(1, None, 1), 3}]
@@ -362,26 +460,24 @@ macro desugarSlices*(args: untyped): void =
       raise newException(
         IndexDefect, "Please use explicit end of range " & "instead of `_` " & "when the steps are negative"
       )
-    elif nnk0_inf_dotdot_all and nnk10_hat and nnk20_bar_all:
+    elif nnk0_inf_dotdot_all and nnk10_minus and nnk20_bar_all:
       # TODO disable negative step at CT
-      ## [^1..2|-1, 3] into [{Slice(-1, 2, -1), 3}]
-      # r.add Slice(-nnk[1][1], nnk[2][1], -nnk[2][2])
+      ## [-1..2|-1, 3] into [{Slice(-1, 2, -1), 3}]
+      # r.add Slice(nnk[1][1], nnk[2][1], -nnk[2][2])
       error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
-    elif nnk0_inf_dotdot_all and nnk10_hat:
+    elif nnk0_inf_dotdot_all and nnk10_minus:
       # TODO disable negative step at CT
-      ## [^1..2*3, 3] into [{Slice(-1, 2*3 + 1), 3}]
-      ## [^1..0, 3] into [{Slice(-1, 0 + 1), 3}]
-      ## [^1..<10, 3] into [{Slice(-1, 10), 3}]
-      ## [^10..^1, 3] into [{Slice(-10, -1), 3}]
+      ## [-1..2*3, 3] into [{Slice(-1, 2*3 + 1), 3}]
+      ## [-1..0, 3] into [{Slice(-1, 0 + 1), 3}]
+      ## [-1..<10, 3] into [{Slice(-1, 10), 3}]
+      ## [-10..-1, 3] into [{Slice(-10, -1), 3}]
       ## Note: apart from the last case, the other
       ## should throw a non-negative step error
       if nnk[0].eqident(".."):
-        # r.add Slice(nnk[1][1], succ(nnk[2]))
         error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
       elif nnk[0].eqident("..<"):
-        # r.add Slice(nnk[1][1], nnk[2])
         error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
-      elif nnk[0].eqident("..^"):
+      elif nnk[0].eqident("..-"):
         if nnk[1][1].toStrLit.strVal[0] > nnk[2].toStrLit.strVal[0]:
           r.add Slice(nnk[1][1], -nnk[2])
         else:
@@ -390,46 +486,38 @@ macro desugarSlices*(args: untyped): void =
         error "Unreachable"
     elif nnk0_inf_dotdot_all and nnk20_bar_all:
       ## [1..10|1] into [{Slice(1, 10 + 1, 1)}]
-      ## [1..^10|1] into [{Slice(1, -10, 1)}]
+      ## [1..-10|1] into [{Slice(1, -10, 1)}]
       ## [1..<10|1] into [{Slice(1, 10, 1)}]
       if nnk[0].eqident(".."):
         r.add Slice(nnk[1], succ(nnk[2][1]), nnk[2][2])
-      elif nnk[0].eqident("..^"):
-        if nnk[2][1] == (newIntLitNode(0)):
-          error "Slicing does not support '^0' syntax."
-        else:
-          r.add Slice(nnk[1], -nnk[2][1], nnk[2][2])
+      elif nnk[0].eqident("..-"):
+        r.add Slice(nnk[1], nnk[2][1], nnk[2][2])
       elif nnk[0].eqident("..<"):
         r.add Slice(nnk[1], nnk[2][1], nnk[2][2])
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot_all:
       ## [1..10] into [{Slice(1, 10 + 1)}]
-      ## [1..^10] into [{Slice(1, -10)}]
+      ## [1..-10] into [{Slice(1, -10)}]
       ## [1..<10] into [{Slice(1, 10)}]
+      ## [1..|2] into [{Slice(1, None, 2)}]
       if nnk[0].eqident(".."):
         r.add Slice(nnk[1], succ(nnk[2]))
-      elif nnk[0].eqident("..^"):
-        if nnk[2] == (newIntLitNode(0)):
-          error "Slicing does not support '^0' syntax."
-        else:
-          r.add Slice(nnk[1], -nnk[2])
+      elif nnk[0].eqident("..-"):
+        r.add Slice(nnk[1], -nnk[2])
       elif nnk[0].eqident("..<"):
         r.add Slice(nnk[1], nnk[2])
       elif nnk[0].eqident("..|"):
         r.add Slice(nnk[1], sliceNone(), nnk[2])
       else:
         error "Unreachable"
-    elif nnk0_pre_hat:
-      ## [^2, 3] into [^2..^2|1, 3]
-      if nnk[1] == (newIntLitNode(0)):
-        error "Slicing does not support '^0' syntax."
-      else:
-        r.add(-nnk[1])
+    elif nnk0_pre_minus:
+      ## [-2, 3] into [-2..-2|1, 3]
+      r.add(-nnk[1])
     else:
       r.add(nnk)
-  echo "\nAfter modif"
-  echo r.treerepr
+  # echo "\nAfter modif"
+  # echo r.treerepr
   return r
 
 # #######################################################################
@@ -551,8 +639,24 @@ macro slice_typed_dispatch*(t: typed, args: varargs[typed]): untyped =
   # -----------------------------------------------------------------
   if fancy == FancyNone:
     result = newCall(bindSym"index", t)
+    var axis = 0
     for slice in args:
-      result.add(slice)
+      let sliceKind = slice.kind
+      if sliceKind == nnkCall and slice[0].eqIdent"torchSlice":
+        # torchSlice has structure: torchSlice(start, stop, step?)
+        # slice[0] = torchSlice (function name), slice[1] = start, slice[2] = stop
+        let startNode = slice[1]
+        let stopNode = slice[2]
+        let stepNode = if slice.len > 3: slice[3] else: newLit(1)
+        if stopNode.kind == nnkIntLit and stopNode.intVal < 0:
+          let axisLen = quote: `t`.shape[`axis`]
+          let fixedSlice = quote: pytorchToCppLibTorch(`startNode`, `stopNode`, `stepNode`, `axisLen`)
+          result.add(fixedSlice)
+        else:
+          result.add(slice)
+      else:
+        result.add(slice)
+      inc axis
     return
 
   # Fancy bug in Nim compiler
