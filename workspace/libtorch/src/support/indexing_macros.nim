@@ -98,7 +98,7 @@ import
 
 type OptInt = int | Nullopt_t
 
-template handleNegativeIndex[T: int|Nullopt_t](idx: T, axisLen: int): T =
+template normalizeNegativeIndex[T: int|Nullopt_t](idx: T, axisLen: int): T =
   when idx is Nullopt_t:
     idx
   else:
@@ -108,17 +108,59 @@ template handleNegativeIndex[T: int|Nullopt_t](idx: T, axisLen: int): T =
       idx
 
 func normalizedSlice*(
-        start, stop: distinct OptInt,
-        step: OptInt = nullopt, axisLen: int): TorchSlice {.inline.} =
+        start: distinct OptInt,
+        stop: distinct OptInt = nullopt,
+        step: distinct OptInt = nullopt,
+        axisLen: int): TorchSlice {.inline.} =
   ## Convert Python-style slice with step to C++ libtorch slices.
 
-  let normStart = handleNegativeIndex(start, axisLen)
-  let normStop = handleNegativeIndex(stop, axisLen)
+  let normStart = normalizeNegativeIndex(start, axisLen)
+  let normStop =
+    when stop is int:
+      normalizeNegativeIndex(stop, axisLen)
+    else:
+      stop
   when step is int:
     # 0 repeats the first item of the axis, unsure why it would be useful but it shouldn't be an issue
     doAssert step >= 0, "C++ libtorch backend does not support negative steps" # TODO, flip tensor to support negative steps
 
+  # debugEcho "normalizedStep:"
+  # debugEcho "  start:     ", start
+  # debugEcho "  stop:      ", stop
+  # debugEcho "  step:      ", step
+  # debugEcho "  axisLen:   ", axisLen
+  # debugEcho "  ---"
+  # debugEcho "  normStart: ", normStart
+  # debugEcho "  normStop:  ", normStop
+  # debugEcho "  ---"
+
   torchSlice(normStart, normStop, step)
+
+template handleInclusiveDotDot(stop: OptInt): OptInt =
+  # For positive numbers we want the classic Nim inclusive stop slice
+  # For negative numbers we want equivalence of a ..- b and a .. -b
+  # Ergo
+  #   - Inclusive for positive
+  #   - Exclusive for negative, Nim negative slices are inclusive with ^n so no collision
+  when stop is Nullopt_t:
+    stop
+  else:
+    if stop >= 0: succ(stop)
+    else: stop
+
+template handleExclusiveDotDot(stop: OptInt): OptInt =
+  # For positive numbers we want the classic Nim exclusive stop slice
+  # For negative numbers a ..<- b doesn't exist
+  #   For now let's throw because it likely might reveal a logic problem
+  when stop is Nullopt_t:
+    stop
+  else:
+    if stop >= 0: stop
+    else: raise newException(
+      ValueError,
+      "Slicing with exclusive stop ` * ..< " & $stop & "`.\n" &
+      "This is currently not allowed as it's likely a logic bug that would be hard to debug otherwise."
+    )
 
 # #######################################################################
 #
@@ -286,8 +328,11 @@ func sliceNone(): NimNode =
 func sliceEllipsis(): NimNode =
   newCall(bindSym"ellipsis")
 
-func succ(node: NimNode): NimNode =
-  newCall(bindsym"succ", node)
+func dotdotIncl(node: NimNode): NimNode =
+  newCall(bindsym"handleInclusiveDotDot", node)
+
+func dotdotExcl(node: NimNode): NimNode =
+  newCall(bindsym"handleExclusiveDotDot", node)
 
 func `-`(node: NimNode): NimNode =
   newCall(bindsym"-", node)
@@ -392,11 +437,11 @@ macro desugarSlices*(args: untyped): void =
       ## [_..-10|1, 3] into [{Slice(None, -10, 1), 3}] (negative handled at runtime)
       ## [_..<10|1, 3] into [{Slice(None, 10, 1), 3}] (exclusive end)
       if nnk[0].eqident(".."):
-        r.add Slice(sliceNone(), succ(nnk[2][1]), nnk[2][2])
+        r.add Slice(sliceNone(), dotdotIncl(nnk[2][1]), nnk[2][2])
       elif nnk[0].eqident("..-"):
-        r.add Slice(sliceNone(), nnk[2][1], nnk[2][2])  # negative handled by normalizedSlice
+        r.add Slice(sliceNone(), -nnk[2][1], nnk[2][2])  # negative handled by normalizedSlice
       elif nnk[0].eqident("..<"):
-        r.add Slice(sliceNone(), nnk[2][1], nnk[2][2])
+        r.add Slice(sliceNone(), dotdotExcl(nnk[2][1]), nnk[2][2])
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot_all and nnk1_joker:
@@ -405,18 +450,18 @@ macro desugarSlices*(args: untyped): void =
       ## [_..<10, 3] into [{Slice(None, 10), 3}] (exclusive end)
       ## [_..|2, 3] into [{Slice(None, None, 2), 3}]
       if nnk[0].eqident(".."):
-        r.add Slice(sliceNone(), succ(nnk[2]))
+        r.add Slice(sliceNone(), dotdotIncl(nnk[2]))
       elif nnk[0].eqident("..-"):
-        r.add Slice(sliceNone(), nnk[2])  # negative handled by normalizedSlice
+        r.add Slice(sliceNone(), -nnk[2])  # negative handled by normalizedSlice
       elif nnk[0].eqident("..<"):
-        r.add Slice(sliceNone(), nnk[2])
+        r.add Slice(sliceNone(), dotdotExcl(nnk[2]))
       elif nnk[0].eqident("..|"):
         r.add Slice(sliceNone(), sliceNone(), nnk[2])
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot and nnk2_joker:
       ## [1.._, 3] into [{Slice(1, None, None), 3}]
-      r.add Slice(nnk[1], sliceNone())
+      r.add Slice(nnk[1])
     elif nnk0_inf_dotdot and nnk20_bar_pos and nnk21_joker:
       ## [1.._|1, 3] into [{Slice(1, None, 1), 3}]
       ## [1.._|+1, 3] into [{Slice(1, None, 1), 3}]
@@ -433,21 +478,25 @@ macro desugarSlices*(args: untyped): void =
       # r.add Slice(nnk[1][1], nnk[2][1], -nnk[2][2])
       error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
     elif nnk0_inf_dotdot_all and nnk10_minus:
-      ## Cases like a[-1..3], a[-(n-2)..3], etc.
-      ## For Python semantics, negative start is allowed.
-      ## We negate the start and let normalizedSlice handle at runtime.
+      # TODO disable negative step at CT
+      ## [-1..2*3, 3] into [{Slice(-1, 2*3 + 1), 3}]
+      ## [-1..0, 3] into [{Slice(-1, 0 + 1), 3}]
+      ## [-1..<10, 3] into [{Slice(-1, 10), 3}]
+      ## [-10..^1, 3] into [{Slice(-10, -1), 3}]
       if nnk[0].eqident(".."):
-        # a[-1..3] -> negate start to get Python semantics
-        r.add Slice(nnk[1][1], -nnk[2])
+        # a[-1..3]
+        error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
       elif nnk[0].eqident("..<"):
-        # a[-1..<3] -> similar handling
-        r.add Slice(nnk[1][1], -nnk[2])
+        # a[-1..<3]
+        # r.add Slice(nnk[1][1], nnk[2])
+        error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
       elif nnk[0].eqident("..-"):
-        # For Python semantics, both start and stop can be negative
-        # The runtime normalizedSlice will handle the conversion
-        # e.g., -(n-2)..-(n-4) will become Slice(normalized_start, normalized_stop)
-        # where the negative values are converted at runtime
-        r.add Slice(nnk[1][1], -nnk[2])  # Negate both for Python semantics
+        # a[-3..-1]
+        # TODO currently we allow string literals but not variables or expressions
+        if nnk[1][1].toStrLit.strVal[0] > nnk[2].toStrLit.strVal[0]:
+          r.add Slice(nnk[1][1], -nnk[2])
+        else:
+          error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot_all and nnk20_bar_all:
@@ -455,11 +504,11 @@ macro desugarSlices*(args: untyped): void =
       ## [1..-10|1] into [{Slice(1, -10, 1)}]
       ## [1..<10|1] into [{Slice(1, 10, 1)}]
       if nnk[0].eqident(".."):
-        r.add Slice(nnk[1], succ(nnk[2][1]), nnk[2][2])
+        r.add Slice(nnk[1], dotdotIncl(nnk[2][1]), nnk[2][2])
       elif nnk[0].eqident("..-"):
-        r.add Slice(nnk[1], nnk[2][1], nnk[2][2])
+        r.add Slice(nnk[1], -nnk[2][1], nnk[2][2])
       elif nnk[0].eqident("..<"):
-        r.add Slice(nnk[1], nnk[2][1], nnk[2][2])
+        r.add Slice(nnk[1], dotdotExcl(nnk[2][1]), nnk[2][2])
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot_all:
@@ -468,11 +517,11 @@ macro desugarSlices*(args: untyped): void =
       ## [1..<10] into [{Slice(1, 10)}]
       ## [1..|2] into [{Slice(1, None, 2)}]
       if nnk[0].eqident(".."):
-        r.add Slice(nnk[1], succ(nnk[2]))
+        r.add Slice(nnk[1], dotdotIncl(nnk[2]))
       elif nnk[0].eqident("..-"):
         r.add Slice(nnk[1], -nnk[2])
       elif nnk[0].eqident("..<"):
-        r.add Slice(nnk[1], nnk[2])
+        r.add Slice(nnk[1], dotdotExcl(nnk[2]))
       elif nnk[0].eqident("..|"):
         r.add Slice(nnk[1], sliceNone(), nnk[2])
       else:
