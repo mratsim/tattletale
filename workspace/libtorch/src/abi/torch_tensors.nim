@@ -530,7 +530,7 @@ template ellipsis*: EllipsisIndexType =
   {.cast(noSideEffect).}: # Workaround to allow ergonomic usage of torch::indexing::Ellipsis in sideeffect-free functions
     Ellipsis
 
-template `...`: EllipsisIndexType =
+template `...`*: EllipsisIndexType =
   ellipsis()
 
 func SliceSpan*(): TorchSlice {.constructor, importcpp: "torch::indexing::Slice()".}
