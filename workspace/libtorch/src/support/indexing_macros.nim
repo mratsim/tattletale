@@ -389,26 +389,25 @@ macro desugarSlices*(args: untyped): void =
       r.add(Slice(sliceNone(), sliceNone(), nnk[2][2]))
     elif nnk0_inf_dotdot_all and nnk1_joker and nnk20_bar_all:
       ## [_..10|1, 3] into [{Slice(None, 10+1, 1), 3}] (inclusive end)
-      ## [_..-10|1, 3] into [{Slice(None, endRelative(-10, size), 1), 3}]
+      ## [_..-10|1, 3] into [{Slice(None, -10, 1), 3}] (negative handled at runtime)
       ## [_..<10|1, 3] into [{Slice(None, 10, 1), 3}] (exclusive end)
       if nnk[0].eqident(".."):
         r.add Slice(sliceNone(), succ(nnk[2][1]), nnk[2][2])
       elif nnk[0].eqident("..-"):
-        let stopVal = quote: endRelative(`nnk[2][1]`, `sliceNone()`)
-        r.add Slice(sliceNone(), stopVal, nnk[2][2])
+        r.add Slice(sliceNone(), nnk[2][1], nnk[2][2])  # negative handled by normalizedSlice
       elif nnk[0].eqident("..<"):
         r.add Slice(sliceNone(), nnk[2][1], nnk[2][2])
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot_all and nnk1_joker:
       ## [_..10, 3] into [{Slice(None, 10+1), 3}] (inclusive end)
-      ## [_..-10, 3] into [{Slice(None, endRelative(-10, size)), 3}]
-       ## [_..<10, 3] into [{Slice(None, 10), 3}] (exclusive end)
+      ## [_..-10, 3] into [{Slice(None, -10), 3}] (negative handled at runtime)
+      ## [_..<10, 3] into [{Slice(None, 10), 3}] (exclusive end)
       ## [_..|2, 3] into [{Slice(None, None, 2), 3}]
       if nnk[0].eqident(".."):
         r.add Slice(sliceNone(), succ(nnk[2]))
       elif nnk[0].eqident("..-"):
-        r.add Slice(sliceNone(), nnk[2])  # Runtime fixNegativeSliceStop will handle negative indices
+        r.add Slice(sliceNone(), nnk[2])  # negative handled by normalizedSlice
       elif nnk[0].eqident("..<"):
         r.add Slice(sliceNone(), nnk[2])
       elif nnk[0].eqident("..|"):
@@ -434,22 +433,21 @@ macro desugarSlices*(args: untyped): void =
       # r.add Slice(nnk[1][1], nnk[2][1], -nnk[2][2])
       error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
     elif nnk0_inf_dotdot_all and nnk10_minus:
-      # TODO disable negative step at CT
-      ## [-1..2*3, 3] into [{Slice(-1, 2*3 + 1), 3}]
-      ## [-1..0, 3] into [{Slice(-1, 0 + 1), 3}]
-      ## [-1..<10, 3] into [{Slice(-1, 10), 3}]
-      ## [-10..-1, 3] into [{Slice(-10, -1), 3}]
-      ## Note: apart from the last case, the other
-      ## should throw a non-negative step error
+      ## Cases like a[-1..3], a[-(n-2)..3], etc.
+      ## For Python semantics, negative start is allowed.
+      ## We negate the start and let normalizedSlice handle at runtime.
       if nnk[0].eqident(".."):
-        error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
+        # a[-1..3] -> negate start to get Python semantics
+        r.add Slice(nnk[1][1], -nnk[2])
       elif nnk[0].eqident("..<"):
-        error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
+        # a[-1..<3] -> similar handling
+        r.add Slice(nnk[1][1], -nnk[2])
       elif nnk[0].eqident("..-"):
-        if nnk[1][1].toStrLit.strVal[0] > nnk[2].toStrLit.strVal[0]:
-          r.add Slice(nnk[1][1], -nnk[2])
-        else:
-          error "Slicing Tensor in reverse is equivalent to using negative steps. Negative steps are not supported when indexing torch::tensor. Use flip() instead."
+        # For Python semantics, both start and stop can be negative
+        # The runtime normalizedSlice will handle the conversion
+        # e.g., -(n-2)..-(n-4) will become Slice(normalized_start, normalized_stop)
+        # where the negative values are converted at runtime
+        r.add Slice(nnk[1][1], -nnk[2])  # Negate both for Python semantics
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot_all and nnk20_bar_all:
