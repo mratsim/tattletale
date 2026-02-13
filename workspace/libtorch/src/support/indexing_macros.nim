@@ -6,8 +6,12 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
+  std/macros,
   workspace/libtorch/src/support/ast_utils,
-  workspace/libtorch/src/abi/torch_tensors
+  workspace/libtorch/src/abi/[
+    torch_tensors,
+    std_cpp
+  ]
 
 # #######################################################################
 #
@@ -16,12 +20,13 @@ import
 # #######################################################################
 # https://github.com/mratsim/Arraymancer/blob/bdcdfe1/src/arraymancer/tensor/accessors_macros_syntax.nim
 
-# Tensor of shape 5x5 of type "int" on backend "Cpu"
-# |1      1       1       1       1|
-# |2      4       8       16      32|
-# |3      9       27      81      243|
-# |4      16      64      256     1024|
-# |5      25      125     625     3125|
+# Using a shifted Vandermonde matrix as an example v[i, j] = i^(j+1)
+# torch.arange(1, 6).reshape(-1, 1) ** torch.arange(1, 6)
+# [[   1    1    1    1    1]
+#  [   2    4    8   16   32]
+#  [   3    9   27   81  243]
+#  [   4   16   64  256 1024]
+#  [   5   25  125  625 3125]]
 #
 #
 # Slicing syntax:
@@ -131,6 +136,31 @@ func `|-`*(ss: TorchSlice, step: int): TorchSlice {.inline.} =
   ## Properly create ``TorchSlice`` with negative stepping
   return torchSlice(ss.start, ss.stop, -step)
 
+func `|`*(step: int): TorchSlice {.inline.} =
+  ## Create a full-span slice with step.
+  ## Equivalent to Python's `::step` or `[::step]`
+  ##
+  ## Usage:
+  ##   tensor[|2]       -> Slice(None, None, 2)  (every 2nd element)
+  ##   tensor[|2, 3]    -> Slice(None, None, 2), 3
+  ##   tensor[1, |2, _] -> 1, Slice(None, None, 2), Slice()
+  ##
+  ## This is cleaner than the older `_.._|step` syntax.
+  return torchSlice(nullopt, nullopt, step)
+
+func `|+`*(step: int): TorchSlice {.inline.} =
+  ## Alias for ``|`` - positive step
+  return `|`(step)
+
+func `..|`*(a: int, step: int): TorchSlice {.inline.} =
+  ## Internal: Build a TorchSlice from [a..|step]
+  ## Input:
+  ##     - the beginning of the slice range
+  ##     - a `step` stride
+  ## Returns:
+  ##     - a ``TorchSlice``, end of range will be inclusive
+  return torchSlice(a, nullopt, step)
+
 func `..`*(a: int, s: Step): TorchSlice {.inline.} =
   ## Internal: Build a TorchSlice from [a .. (b|step)] (workaround to operator precedence)
   ## Input:
@@ -175,17 +205,22 @@ func `^`*(s: Slice): TorchSlice {.inline.} =
 # #######################################################################
 # https://github.com/mratsim/Arraymancer/blob/bdcdfe1/src/arraymancer/tensor/private/p_accessors_macros_desugar.nim
 
-import std/macros
+# We need to catch all `sym` (resolved symbol)
+# in the AST to untype them
+# so we can delay generics/template symbol resolution
+# for after the indexing macro is done.
+#
+# Not doing so and having a type mismatch also results
+# in cryptic `undeclared identifier` errors.
 
-func sliceNone(): NimNode {.used.} =
-  bindSym("SliceSpan")
+func sliceSpan(): NimNode =
+  newCall(bindSym"SliceSpan")
 
-proc indexNone(): NimNode =
-  bindSym("None")
+func sliceNone(): NimNode =
+  newCall(bindSym("nullopt"))
 
-proc sliceEllipsis(): NimNode =
-  # Ellipsis is a ``importcpp`` global variable therefore the compiler cannot prove noSideEffect -> not a func
-  bindSym("Ellipsis")
+func sliceEllipsis(): NimNode =
+  newCall(bindSym"ellipsis")
 
 func succ(node: NimNode): NimNode =
   newCall(bindsym"succ", node)
@@ -200,6 +235,13 @@ func Slice(nodes: varargs[NimNode]): NimNode =
 
 macro desugarSlices*(args: untyped): void =
   ## Transform all syntactic sugar into Slice(start, stop, step)
+  ## or integers
+  ##
+  ## This is necessary otherwise something like `[_, _]`
+  ## will try to be matched against FancyIndexing functions
+  ## that can't handle it
+  ## AND due to template/macro early name resolution rule
+  ## the error message will be a confusing `undeclared identifier`
 
   # echo "\n------------------\nOriginal tree"
   # echo args.treerepr
@@ -214,10 +256,14 @@ macro desugarSlices*(args: untyped): void =
     # Node is of the form "* .. *"
     let nnk0_inf_dotdot = (nnk.kind == nnkInfix and eqIdent(nnk[0], ".."))
 
-    # Node is of the form "* ..< *" or "* ..^ *"
-    let nnk0_inf_dotdot_alt = (nnk.kind == nnkInfix and (eqIdent(nnk[0], "..<") or eqident(nnk[0], "..^")))
+    # Node is of the form "* ..< *" or "* ..^ *" or "* ..| *"
+    let nnk0_inf_dotdot_alt = (nnk.kind == nnkInfix and (
+      eqIdent(nnk[0], "..<") or
+      eqident(nnk[0], "..^") or
+      eqident(nnk[0], "..|")
+    ))
 
-    # Node is of the form "* .. *", "* ..< *" or "* ..^ *"
+    # Node is of the form "* .. *", "* ..< *" or "* ..^ *" or "* ..| *"
     let nnk0_inf_dotdot_all = (nnk0_inf_dotdot or nnk0_inf_dotdot_alt)
 
     # Node is of the form "^ *"
@@ -245,48 +291,62 @@ macro desugarSlices*(args: untyped): void =
     # Node is of the form "* `op1` _ `op2` *"
     let nnk21_joker = (nnk.kind == nnkInfix and nnk[2].kind == nnkInfix and eqIdent(nnk[2][1], "_"))
 
+    # Node is of the form "|step" (unary pipe operator for stepped span)
+    # e.g., tensor[|2, 3] -> tensor[Slice(None, None, 2), 3]
+    let nnk_pre_bar = (nnk.kind == nnkPrefix and (eqIdent(nnk[0], "|") or eqIdent(nnk[0], "|+")))
+
     ###### Core desugaring logic
     if nnk_joker:
-      ## [_, 3] into [{None, 3}]
-      r.add(sliceEllipsis())
+      ## [_, 3] into [Slice(), 3]  # Arraymancer span, equivalent to Python ":"
+      ## This is NOT Ellipsis - it should be Slice() (full span for one dimension)
+      r.add(sliceSpan())
+    elif nnk_pre_bar:
+      ## [|2] into [Slice(None, None, 2)]
+      ## [|2, 3] into [Slice(None, None, 2), 3]
+      ## Equivalent to Python's [::2] or [::2, 3]
+      r.add(Slice(sliceNone(), sliceNone(), nnk[1]))
     elif nnk20_bar_min:
       error "Negative steps are not supported when indexing in torch::Tensor. The use of flip() is recommended."
     elif nnk0_inf_dotdot and nnk1_joker and nnk2_joker:
-      ## [_.._, 3] into [{None, 3}]
-      r.add(sliceEllipsis())
+      ## [_.._, 3] into [Slice(), 3]  # Full span, not Ellipsis
+      ## PyTorch Slice() is equivalent to Python ":", "::", not "..."
+      r.add(sliceSpan())
     elif nnk0_inf_dotdot and nnk1_joker and nnk20_bar_all and nnk21_joker:
       ## [_.._|2, 3] into [{Slice(None, None, 2), 3}]
       ## [_.._|+2, 3] into [{Slice(None, None, 2), 3}]
       ## [_.._|-2 doesn't make sense and will throw out of bounds
-      r.add(Slice(indexNone(), indexNone(), nnk[2][2]))
+      r.add(Slice(sliceNone(), sliceNone(), nnk[2][2]))
     elif nnk0_inf_dotdot_all and nnk1_joker and nnk20_bar_all:
       ## [_..10|1, 3] into [{Slice(None, 10+1, 1), 3}] (for inclusive)
       ## [_..^10|1, 3] into [{Slice(None, -10, 1), 3}]
       ## [_..<10|1, 3] into [{Slice(None, 10, 1), 3}] (exclusive)
       if nnk[0].eqident(".."):
-        r.add Slice(indexNone(), succ(nnk[2][1]), nnk[2][2])
+        r.add Slice(sliceNone(), succ(nnk[2][1]), nnk[2][2])
       elif nnk[0].eqident("..^"):
         if nnk[2][1] == (newIntLitNode(0)):
           error "Slicing does not support '^0' syntax."
         else:
-          r.add Slice(indexNone(), -nnk[2][1], nnk[2][2])
+          r.add Slice(sliceNone(), -nnk[2][1], nnk[2][2])
       elif nnk[0].eqident("..<"):
-        r.add Slice(indexNone(), nnk[2][1], nnk[2][2])
+        r.add Slice(sliceNone(), nnk[2][1], nnk[2][2])
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot_all and nnk1_joker:
       ## [_..10, 3] into [{Slice(None, 10+1), 3}]
       ## [_..^10, 3] into [{Slice(None, -10), 3}]
       ## [_..<10, 3] into [{Slice(None, 10), 3}]
+      ## [_..|2, 3] into [{Slice(None, None, 2), 3}]
       if nnk[0].eqident(".."):
-        r.add Slice(indexNone(), succ(nnk[2]))
+        r.add Slice(sliceNone(), succ(nnk[2]))
       elif nnk[0].eqident("..^"):
         if nnk[2] == (newIntLitNode(0)):
           error "Slicing does not support '^0' syntax."
         else:
-          r.add Slice(indexNone(), -nnk[2])
+          r.add Slice(sliceNone(), -nnk[2])
       elif nnk[0].eqident("..<"):
-        r.add Slice(indexNone(), nnk[2])
+        r.add Slice(sliceNone(), nnk[2])
+      elif nnk[0].eqident("..|"):
+        r.add Slice(sliceNone(), sliceNone(), nnk[2])
       else:
         error "Unreachable"
     elif nnk0_inf_dotdot and nnk2_joker:
@@ -295,7 +355,7 @@ macro desugarSlices*(args: untyped): void =
     elif nnk0_inf_dotdot and nnk20_bar_pos and nnk21_joker:
       ## [1.._|1, 3] into [{Slice(1, None, 1), 3}]
       ## [1.._|+1, 3] into [{Slice(1, None, 1), 3}]
-      r.add Slice(nnk[1], indexNone(), nnk[2][2])
+      r.add Slice(nnk[1], sliceNone(), nnk[2][2])
     elif nnk0_inf_dotdot and nnk20_bar_min and nnk21_joker:
       # TODO : Remove ? This is actually unreachable because nnk20_bar_min is disallowed
       ## Raise error on [5.._|-1, 3]
@@ -356,6 +416,8 @@ macro desugarSlices*(args: untyped): void =
           r.add Slice(nnk[1], -nnk[2])
       elif nnk[0].eqident("..<"):
         r.add Slice(nnk[1], nnk[2])
+      elif nnk[0].eqident("..|"):
+        r.add Slice(nnk[1], sliceNone(), nnk[2])
       else:
         error "Unreachable"
     elif nnk0_pre_hat:
@@ -366,8 +428,8 @@ macro desugarSlices*(args: untyped): void =
         r.add(-nnk[1])
     else:
       r.add(nnk)
-  # echo "\nAfter modif"
-  # echo r.treerepr
+  echo "\nAfter modif"
+  echo r.treerepr
   return r
 
 # #######################################################################
@@ -405,14 +467,14 @@ proc getFancySelector(ast: NimNode, axis: var int, selector: var NimNode): Fancy
     let cur = ast[i]
     # Important: sameType doesn't work for generic type like Array, Seq or Tensors ...
     #            https://github.com/nim-lang/Nim/issues/14021
-    if cur.kind in {nnkIdent, nnkSym} and cur.eqIdent"Ellipsis":
+    if (cur.kind == nnkCall and cur[0].eqIdent"SliceSpan"):
       # Found a span
       discard
     elif (cur.kind == nnkCall and cur[0].eqIdent"torchSlice") or cur.isInt():
       doAssert result == FancyNone,
         "Internal FancyIndexing Error: Expected FancyNone, but got " & $result & " for AST: " & cur.repr()
       foundNonSpanOrEllipsis = true
-    elif cur.eqIdent"IndexEllipsis":
+    elif (cur.kind == nnkCall and cur[0].eqIdent"ellipsis"):
       if i == ast.len - 1: # t[t.sum(axis = 1) >. 0.5, `...`]
         doAssert not ellipsisAtStart,
           "Cannot deduce the indexed/sliced dimensions due to ellipsis at the start and end of indexing."
@@ -477,6 +539,7 @@ macro slice_typed_dispatch*(t: typed, args: varargs[typed]): untyped =
   var selector: NimNode
   var axis: int
   let fancy = args.getFancySelector(axis, selector)
+
   if fancy == FancyIndex:
     return newCall(ident"index_select", t, newLit axis, selector)
   if fancy == FancyMaskFull:
