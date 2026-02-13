@@ -63,6 +63,69 @@ import
 #       for dispatch requires help for the type system, and so
 #       all the sigils must be defined as properly typed procedures.
 
+# #######################################################################
+#
+#          Python Slice Semantics to libtorch Slice Conversion
+#
+# #######################################################################
+#
+# Python slicing uses EXCLUSIVE upper bound (like C++ standard).
+# Negative indices are normalized by adding the dimension size.
+#
+# Examples for a 5-element array (indices 0, 1, 2, 3, 4):
+#
+# Python             | Start | Stop  | Result indices | Nim equivalent
+# ------------------+-------+-------+---------------+----------------
+# a[:]              | 0     | 5     | 0,1,2,3,4     | a[_.._]
+# a[1:]              | 1     | 5     | 1,2,3,4      | a[1.._]
+# a[:3]              | 0     | 3     | 0,1,2        | a[_..<3]
+# a[1:3]             | 1     | 3     | 1,2          | a[1..<3]
+# a[:-1]             | 0     | 4     | 0,1,2,3      | a[_..-1]
+# a[-3:]             | 2     | 5     | 2,3,4        | a[-3.._]
+# a[-3:-1]           | 2     | 4     | 2,3          | a[-3..-1]
+#
+# Key insight: In Python, -1 as STOP means "up to but NOT including the last element"
+# -1 as START means "starting at the last element"
+#
+# libtorch Slice(start, stop) has EXCLUSIVE upper bound, matching Python.
+# Negative values are normalized by adding size at runtime.
+#
+# Translation rules:
+# - `_` (underscore) means "full span" → nullopt
+# - `..<` (exclusive) → stop stays as-is
+# - `..-` (end-relative, Python exclusive) → stop becomes size + (-N) = size - N
+# - `..` (inclusive, rarely used) → stop becomes size + (-N) + 1 = size - N + 1
+
+type OptInt = int | Nullopt_t
+
+template handleNegativeIndex[T: int|Nullopt_t](idx: T, axisLen: int): T =
+  when idx is Nullopt_t:
+    idx
+  else:
+    if idx < 0:
+      idx + axisLen
+    else:
+      idx
+
+func normalizedSlice*(
+        start, stop: distinct OptInt,
+        step: OptInt = nullopt, axisLen: int): TorchSlice {.inline.} =
+  ## Convert Python-style slice with step to C++ libtorch slices.
+
+  let normStart = handleNegativeIndex(start, axisLen)
+  let normStop = handleNegativeIndex(stop, axisLen)
+  when step is int:
+    # 0 repeats the first item of the axis, unsure why it would be useful but it shouldn't be an issue
+    doAssert step >= 0, "C++ libtorch backend does not support negative steps" # TODO, flip tensor to support negative steps
+
+  torchSlice(normStart, normStop, step)
+
+# #######################################################################
+#
+#                     Slicing Syntax Sugar
+#
+# #######################################################################
+
 type Step = object
   ## Internal: Workaround to build ``TorchSlice`` without using parenthesis.
   ##
@@ -201,108 +264,6 @@ func `-`*(s: Slice): TorchSlice {.inline.} =
 
 # #######################################################################
 #
-#          Python Slice Semantics to libtorch Slice Conversion
-#
-# #######################################################################
-#
-# Python slicing uses EXCLUSIVE upper bound (like C++ standard).
-# Negative indices are normalized by adding the dimension size.
-#
-# Examples for a 5-element array (indices 0, 1, 2, 3, 4):
-#
-# Python             | Start | Stop  | Result indices | Nim equivalent
-# ------------------+-------+-------+---------------+----------------
-# a[:]              | 0     | 5     | 0,1,2,3,4     | a[_.._]
-# a[1:]              | 1     | 5     | 1,2,3,4      | a[1.._]
-# a[:3]              | 0     | 3     | 0,1,2        | a[_..<3]
-# a[1:3]             | 1     | 3     | 1,2          | a[1..<3]
-# a[:-1]             | 0     | 4     | 0,1,2,3      | a[_..-1]
-# a[-3:]             | 2     | 5     | 2,3,4        | a[-3.._]
-# a[-3:-1]           | 2     | 4     | 2,3          | a[-3..-1]
-#
-# Key insight: In Python, -1 as STOP means "up to but NOT including the last element"
-# -1 as START means "starting at the last element"
-#
-# libtorch Slice(start, stop) has EXCLUSIVE upper bound, matching Python.
-# Negative values are normalized by adding size at runtime.
-#
-# Translation rules:
-# - `_` (underscore) means "full span" → nullopt
-# - `..<` (exclusive) → stop stays as-is
-# - `..-` (end-relative, Python exclusive) → stop becomes size + (-N) = size - N
-# - `..` (inclusive, rarely used) → stop becomes size + (-N) + 1 = size - N + 1
-
-func pythonSliceToTorchSlice*(
-  start: int | Nullopt_t,
-  stop: int | Nullopt_t,
-  size: int
-): TorchSlice {.inline.} =
-  ## Convert Python-style slice to libtorch Slice with proper negative index handling.
-  ##
-  ## Python semantics:
-  ##   - Exclusive upper bound (stop is not included)
-  ##   - Negative indices are normalized: -N → size + (-N) = size - N
-  ##
-  ## Args:
-  ##   start: Starting index (or nullopt for "from beginning")
-  ##   stop: Stopping index (exclusive, or nullopt for "to end")
-  ##   size: Dimension size for negative index normalization
-  ##
-  ## Returns:
-  ##   A TorchSlice with properly normalized indices
-
-  # Normalize start
-  let normStart = if start of Nullopt_t:
-    start
-  elif start < 0:
-    start + size
-  else:
-    start
-
-  # Normalize stop
-  let normStop = if stop of Nullopt_t:
-    stop
-  elif stop < 0:
-    stop + size
-  else:
-    stop
-
-  torchSlice(normStart, normStop)
-
-func pytorchToCppLibTorch*(
-  start: int | Nullopt_t,
-  stop: int | Nullopt_t,
-  step: int | Nullopt_t,
-  size: int
-): TorchSlice {.inline.} =
-  ## Convert Python-style slice with step to C++ libtorch slices.
-
-  let normStart =
-    when start is Nullopt_t:
-      start
-    else:
-      if start < 0:
-        start + size
-      else:
-        start
-
-  let normStop =
-    when start is Nullopt_t:
-      start
-    else:
-      if start < 0:
-        start + size
-      else:
-        start
-
-  when step is int:
-    # 0 repeats the first item of the axis, unsure why it would be useful but it shouldn't be an issue
-    doAssert step >= 0, "C++ libtorch backend does not support negative steps" # TODO, flip tensor to support negative steps
-
-  torchSlice(normStart, normStop, step)
-
-# #######################################################################
-#
 #                          Slicing desugaring
 #
 # #######################################################################
@@ -332,6 +293,13 @@ func `-`(node: NimNode): NimNode =
   newCall(bindsym"-", node)
 
 func Slice(nodes: varargs[NimNode]): NimNode =
+  # We model with torchSlices first
+  # then in the latest step we change to normalizedSlice and append the axis-length
+  # to handle negative indices.
+  # C++ libtorch slices with a.index({None, -1}) will slice to -1 inclusive
+  # Pytorch with a[:-1] will slice to -1 exclusive
+  #
+  # The solution is to pass a.index({None, axisLen-1}) which will slice to axisLen-1 exclusive
   result = newCall(bindSym"torchSlice")
   for node in nodes:
     result.add node
@@ -618,6 +586,8 @@ macro slice_typed_dispatch*(t: typed, args: varargs[typed]): untyped =
     for slice in args:
       indexCall.add(slice)
     result = indexCall
+    # echo result.repr
+    # echo "--------------------"
     return
 
   # Fancy indexing
@@ -639,24 +609,30 @@ macro slice_typed_dispatch*(t: typed, args: varargs[typed]): untyped =
   # -----------------------------------------------------------------
   if fancy == FancyNone:
     result = newCall(bindSym"index", t)
-    var axis = 0
-    for slice in args:
-      let sliceKind = slice.kind
-      if sliceKind == nnkCall and slice[0].eqIdent"torchSlice":
-        # torchSlice has structure: torchSlice(start, stop, step?)
-        # slice[0] = torchSlice (function name), slice[1] = start, slice[2] = stop
-        let startNode = slice[1]
-        let stopNode = slice[2]
-        let stepNode = if slice.len > 3: slice[3] else: newLit(1)
-        if stopNode.kind == nnkIntLit and stopNode.intVal < 0:
-          let axisLen = quote: `t`.shape[`axis`]
-          let fixedSlice = quote: pytorchToCppLibTorch(`startNode`, `stopNode`, `stepNode`, `axisLen`)
-          result.add(fixedSlice)
-        else:
-          result.add(slice)
+    for i in 0 ..< args.len:
+      let slice = args[i]
+      if slice.kind == nnkCall and slice[0].eqIdent"torchSlice":
+        # Call normalizedSlice(start, stop, step, axisLen)
+        # instead of torchSlice(start, stop, step)
+        let normalizedSlice = newCall(bindSym"normalizedSlice")
+        for j in 1 ..< slice.len:
+          normalizedSlice.add(slice[j])
+        let axisLen = nnkExprEqExpr.newTree(
+          # use named argument
+          # axisLen = `t`.shape[`i`]
+          ident"axisLen",
+          nnkBracketExpr.newTree(
+            nnkDotExpr.newTree(
+              t,
+              bindSym"shape"
+            ),
+            newLit i
+          )
+        )
+        normalizedSlice.add axisLen
+        result.add(normalizedSlice)
       else:
         result.add(slice)
-      inc axis
     return
 
   # Fancy bug in Nim compiler
