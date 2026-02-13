@@ -184,6 +184,7 @@ func is_same*(self, other: TorchTensor): bool {.importcpp: "#.is_same(#)".}
   ## Do the tensors use the same memory.
 
 func sizes*(a: TorchTensor): IntArrayRef {.importcpp: "#.sizes()".} ## This is Arraymancer and Numpy "shape"
+func shape*(a: TorchTensor): IntArrayRef {.importcpp: "#.sizes()".}
 
 func strides*(a: TorchTensor): IntArrayRef {.importcpp: "#.strides()".}
 
@@ -508,31 +509,46 @@ type
   TensorIndexType* {.size: sizeof(cint), bycopy, importcpp: "torch::indexing::TensorIndexType".} = enum
     ## This is passed to torchSlice functions
     IndexNone = 0
-    IndexEllipsis = 1
+    IndexEllipsis = 1 # Python ...
     IndexInteger = 2
     IndexBoolean = 3
-    IndexSlice = 4
+    IndexSlice = 4    # Python :
     IndexTensor = 5
 
-# The None used in Torch isn't actually the enum but a c10::nullopt
-let None* {.importcpp: "torch::indexing::None".}: Nullopt_t
+# The torch::indexing::None used in Torch is
+# std::nullopt which can be called in Nim via nullopt
 
 type EllipsisIndexType* {.importcpp: "torch::indexing::EllipsisIndexType".} = object
 
-let Ellipsis* {.importcpp: "torch::indexing::Ellipsis".}: EllipsisIndexType # SomeSlicer* = TensorIndexType|SomeSignedInt
+let Ellipsis {.importcpp: "torch::indexing::Ellipsis".}: EllipsisIndexType
+  ## libtorch's ellipsis for tensor indexing.
+  ## In Nim, `...` must be used quoted a[0..<2, `...`] or a[0..<2, ellipsis]
+  ##
+  ## Usage: tensor[ellipsis, 0] or tensor[`...`, 0]
 
-proc SliceSpan*(): TorchSlice {.importcpp: "at::indexing::Slice()".}
+template ellipsis*: EllipsisIndexType =
+  {.cast(noSideEffect).}: # Workaround to allow ergonomic usage of torch::indexing::Ellipsis in sideeffect-free functions
+    Ellipsis
+
+template `...`: EllipsisIndexType =
+  ellipsis()
+
+func SliceSpan*(): TorchSlice {.constructor, importcpp: "torch::indexing::Slice()".}
   ## This is passed to the "index" function
   ## This is Python ":", span / whole dimension
 
-func torchSlice*() {.importcpp: "torch::indexing::Slice(@)", constructor.}
-func torchSlice*(start: Nullopt_t | SomeSignedInt): TorchSlice {.importcpp: "torch::indexing::Slice(@)", constructor.}
+template `_`*: Nullopt_t =
+  # It's either replaced by SliceSpan in fancy indexing expression
+  # or pass as-is to torchSlice
+  nullopt
+
+func torchSlice*(start: Nullopt_t | SomeSignedInt): TorchSlice {.constructor, importcpp: "torch::indexing::Slice(@)".}
 func torchSlice*(
   start: Nullopt_t | SomeSignedInt, stop: Nullopt_t | SomeSignedInt
-): TorchSlice {.importcpp: "torch::indexing::Slice(@)", constructor.}
+): TorchSlice {.constructor, importcpp: "torch::indexing::Slice(@)".}
 func torchSlice*(
   start: Nullopt_t | SomeSignedInt, stop: Nullopt_t | SomeSignedInt, step: Nullopt_t | SomeSignedInt
-): TorchSlice {.importcpp: "torch::indexing::Slice(@)", constructor.}
+): TorchSlice {.constructor, importcpp: "torch::indexing::Slice(@)".}
 
 func start*(s: TorchSlice): int {.importcpp: "#.start()".}
 func stop*(s: TorchSlice): int {.importcpp: "#.stop()".}
@@ -840,6 +856,11 @@ func square*(a: TorchTensor): TorchTensor {.importcpp: "#.square()".}
 func sqrt*(a: TorchTensor): TorchTensor {.importcpp: "#.sqrt()".}
 func pow*(a: TorchTensor, exponent: TorchTensor): TorchTensor {.importcpp: "#.pow(@)".}
 func pow*(a: TorchTensor, exponent: Scalar): TorchTensor {.importcpp: "#.pow(@)".}
+
+func `^`*(a: TorchTensor, exponent: TorchTensor): TorchTensor {.importcpp: "#.pow(@)".}
+func `^`*(a: TorchTensor, exponent: Scalar): TorchTensor {.importcpp: "#.pow(@)".}
+func `**`*(a: TorchTensor, exponent: TorchTensor): TorchTensor {.importcpp: "#.pow(@)".}
+func `**`*(a: TorchTensor, exponent: Scalar): TorchTensor {.importcpp: "#.pow(@)".}
 
 # FFT
 # -----------------------------------------------------------------------

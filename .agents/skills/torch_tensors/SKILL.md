@@ -155,14 +155,52 @@ tensor[0, 1] = 42.0
 ### Slicing
 
 ```nim
-# Range slice
-let slice = tensor[0..5, 3]
+# Inclusive range (end included)
+let slice = tensor[0..5, 3]     # elements 0,1,2,3,4,5
 
-# Span slice (whole dimension)
-let span = tensor[_, 3]
+# Exclusive range (end excluded)
+let slice = tensor[0..<5, 3]    # elements 0,1,2,3,4
+
+# Span slice (whole dimension, equivalent to Python ":")
+let span = tensor[_, 3]          # all of dimension 0, index 3 of dimension 1
+
+# Full span (all dimensions)
+let all = tensor[_.._]           # all dimensions, equivalent to Slice()
 
 # With step
 let stepped = tensor[0..10|2]
+```
+
+### Span (`_`) vs Ellipsis (`...`)
+
+The `_` symbol and `...` ellipsis have different meanings:
+
+- **`_` (Span)**: Selects the entire dimension. Equivalent to Python's `:` or libtorch's `Slice()`.
+  - `tensor[_, 3]` = `tensor[:, 3]` = all of dim 0, specific index of dim 1
+  - `tensor[_.._]` = `tensor[:, :]` = all dimensions fully selected
+
+- **`...` (Ellipsis)**: Expands to fill remaining dimensions. Equivalent to Python's `...` and libtorch's `torch::indexing::Ellipsis`.
+  - `tensor[..., 0]` = `tensor[:, :, :, 0]` = ellipsis expands to match tensor rank
+  - `tensor[0, ...]` = `tensor[0, :, :, :]` = leading index, ellipsis fills rest
+  - `tensor[1, ..., 0]` = `tensor[1, :, :, 0]` = indices at start and end, ellipsis in middle
+
+### Relative-to-end slicing with ^
+
+The `^N` syntax refers to positions from the end (Python-style negative indexing):
+- `^1` = last element
+- `^2` = second-to-last element
+- etc.
+
+Combined with `..` (inclusive) or `..<` (exclusive):
+
+```nim
+# Inclusive range to end (includes last element)
+let slice = tensor[^2..^1]     # last 2 elements
+let slice = tensor[0..^1]      # all elements, includes last
+
+# Exclusive range to end (excludes last element)
+let slice = tensor[0..<^1]     # all elements, excludes last
+let slice = tensor[^3..<^1]    # elements from 3rd-from-end to before last
 ```
 
 ### Set via slice
@@ -323,20 +361,74 @@ let slice = tensor[1..3, 0..2]  # 2D slice
 let slice = tensor[0..<5]       # elements 0,1,2,3,4 (same as 0..4)
 
 # Relative to end with ^ (negative indexing)
+# ^1 = last element, ^2 = second-to-last, etc.
 let slice = tensor[^2..^1]      # last 2 elements
 let slice = tensor[0..^3]       # all but last 2
 
 # Stepped slices with |
 let slice = tensor[0..10|2]     # every 2nd element
 let slice = tensor[_.._|2]      # entire dim, every 2nd
+let slice = tensor[|2]          # NEW: cleaner syntax for every 2nd (Python [::2])
+let slice = tensor[|2, 3]       # every 2nd of dim 0, index 3 of dim 1
 
-# Span slices (whole dimension)
+# Negative steps (reversing) - NOT supported, use flip()
+let reversed = tensor.flip(@[0])  # Reverse along dimension 0
+
+# Span slices (whole dimension, equivalent to Python ":")
 let span = tensor[_, 3]         # all of dim 0, index 3 of dim 1
 let span = tensor[1.._, _]      # dim 0 from 1, all of dim 1
+let span = tensor[_.._]         # entire dimension (Slice)
+
+# Ellipsis for multi-dimensional expansion (Python "...")
+let result = tensor[IndexEllipsis, 0]  # last dimension index 0
+let result = tensor[0, IndexEllipsis]  # first dimension index 0, rest all
+let result = tensor[1, IndexEllipsis, 0]  # first dim index 1, last dim index 0
 
 # Combined
-let slice = tensor[^1..0|-1, 0..<5|1]  # reverse dim 0, first 5 of dim 1
+let slice = tensor[^2..^1, 0..<5]  # last 2 elements, first 5 of dim 1
 ```
+
+### Key distinctions
+
+| Nim syntax | Python equivalent | libtorch equivalent | Notes |
+|-----------|------------------|-------------------|-------|
+| `_` | `:` | `Slice()` | Full span of one dimension |
+| `_.._` | `:` | `Slice()` | Full span (not Ellipsis!) |
+| `|step` | `::step` | `Slice(None, None, step)` | Stepped full span |
+| `...` | `...` | `Ellipsis` | Expands to fill remaining dims |
+| `^1` | `-1` | N/A | Last element |
+| `^2` | `-2` | N/A | Second-to-last element |
+
+### Python Slice to Nim Translation Reference
+
+Python slices are **exclusive** on the end. Nim uses `..` (inclusive) or `..<` (exclusive).
+
+| Python syntax | Nim syntax | Description |
+|---------------|-----------|-------------|
+| `t[:]` | `t[_.._]` | All elements |
+| `t[:2]` | `t[_..<2]` | Elements 0, 1 |
+| `t[2:]` | `t[2..^1]` | Elements from 2 to end |
+| `t[1:4]` | `t[1..<4]` | Elements 1, 2, 3 |
+| `t[::2]` | `t[_.._|2]` or `t[|2]` | Every 2nd element |
+| `t[1::2]` | `t[1.._|2]` | From 1, every 2nd |
+| `t[:4:2]` | `t[_..<4|2]` | Elements 0, 2 |
+| `t[1:4:2]` | `t[1..<4|2]` | Elements 1, 3 |
+| `t[:-1]` | `t[_..<^1]` | All but last |
+| `t[-3:]` | `t[^3..^1]` | Last 3 elements |
+| `t[::-1]` | `t.flip([dim])` | Reverse (use flip()) |
+
+### Ellipsis (`...`) vs Span (`_`)
+
+The `_` symbol and `...` ellipsis have different meanings:
+
+- **`_` (Span)**: Selects the entire dimension. Equivalent to Python's `:` or libtorch's `Slice()`.
+  - `tensor[_, 3]` = `tensor[:, 3]` = all of dim 0, specific index of dim 1
+  - `tensor[_.._]` = `tensor[:, :]` = all dimensions fully selected
+
+- **`...` (Ellipsis)**: Expands to fill remaining dimensions. Equivalent to Python's `...` and libtorch's `torch::indexing::Ellipsis`.
+  - `tensor[..., 0]` = `tensor[:, :, :, 0]` = ellipsis expands to match tensor rank
+  - `tensor[0, ...]` = `tensor[0, :, :, :]` = leading index, ellipsis fills rest
+  - `tensor[1, ..., 0]` = `tensor[1, :, :, 0]` = indices at start and end, ellipsis in middle
 
 ### Step type and operators
 
@@ -348,11 +440,15 @@ type Step = object
   step: int    # step size
 
 # Operators:
-# `|` - step operator
+# `|` - step operator (positive only)
 # `..` - inclusive range
 # `..<` - exclusive range
 # `..^` - relative-to-end range
+# `|-` - negative step (NOT SUPPORTED - use flip() instead)
 ```
+
+Note: Negative steps (`|-`) are not supported because libtorch's Slice() doesn't support them.
+To reverse a dimension, use `tensor.flip(@[dim])` instead.
 
 ### FancySelectorKind - Indexing dispatch
 
