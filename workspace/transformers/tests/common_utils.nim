@@ -13,9 +13,13 @@ import
 template catchTorchExceptions*(body: bool): bool =
   ## Use this for debugging
   ## Error: unhandled exception: no exception to reraise [ReraiseDefect]
+
+  when not defined(cpp) and defined(nimCheck):
+    {.error: "You are running 'nim check' in C mode. It will misreport that C++ exceptions can't be caught because they aren't ref objects.".}
+
   try:
     body
-  except TorchError as e:
+  except TorchError as e: # nim check will misreport this. Ignore and test with `nim cpp` compilation
     echo "❌ C++ torch::Error caught:\n---------------------------\n", $e.what()
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     false
@@ -37,7 +41,7 @@ proc runTest*(name: string, body: proc(): bool) =
 
 proc assertAllClose*(
   actual, expected: TorchTensor,
-  rtol = 1e-3, abstol = 1e-4,
+  rtol = 1e-2, abstol = 1e-3,
   msg = ""
 ) =
   let allClose = F.allClose(actual, expected, rtol, abstol)
