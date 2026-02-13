@@ -665,70 +665,114 @@ proc main() =
           [[   2,    4,    8,   16,   32],
            [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
 
-  # suite "Multidimensional Slice Behavior":
-  #   ## Reference: https://pytorch.org/cppdocs/notes/tensor_indexing.html
-  #   ## For 3D tensor: a[0:3] is equivalent to a[0:3, ...] / a[0:3, :, :]
+  suite "Multidimensional Slice Behavior":
+    ## Reference: https://pytorch.org/cppdocs/notes/tensor_indexing.html
+    ## For 3D tensor: a[0:3] is equivalent to a[0:3, ...] / a[0:3, :, :]
 
-  #   test formatName("Partial slice on 3D tensor", "a[0..<2]"):
-  #     ## Nim: a[0..<2] on 3D tensor is equivalent to a[0..<2, ...]
-  #     ## Python: a[0:3] equivalent to a[0:3, ...] on 3D tensor
-  #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
-  #     let sliced = t3d[0..<2, _, _]
-  #     check: sliced.shape[0] == 2
-  #     check: sliced.shape[1] == 3
-  #     check: sliced.shape[2] == 4
+    vandermonde.display()
 
-  #   test formatName("Slice equivalent to explicit spans", "a[0..<3] vs a[0..<3, _, :]"):
-  #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
-  #     let implicit = t3d[0..<2]
-  #     let explicit = t3d[0..<2, _, _]
-  #     check: implicit.shape == explicit.shape
+    test formatName("Partial slice on 3D tensor", "a[0..<2]"):
+      ## Nim: a[0..<2] on 3D tensor is equivalent to a[0..<2, ...]
+      ## Python: a[0:3] equivalent to a[0:3, ...] on 3D tensor
+      let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
+      let sliced = t3d[0..<2, _, _]
+      check: sliced.shape[0] == 2
+      check: sliced.shape[1] == 3
+      check: sliced.shape[2] == 4
 
-  #   test formatName("Slice last dimension", "a[..., 0:2]"):
-  #     ## Nim: a[..., 0..<2] -> a.index({Ellipsis, Slice(0, 2)})
-  #     ## Python: a[..., 0:2]
-  #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
-  #     let sliced = t3d[`...`, 0..<2]
-  #     check: sliced.shape[0] == 2
-  #     check: sliced.shape[1] == 3
-  #     check: sliced.shape[2] == 2
+    test formatName("Slice equivalent to explicit spans", "a[0..<3] vs a[0..<3, _, :]"):
+      let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
+      let implicit = t3d[0..<2]
+      let explicit = t3d[0..<2, _, _]
+      check: implicit.shape == explicit.shape
+      check: implicit == explicit
 
-  # suite "Assignment Operations (index_put_)":
-  #   test formatName("Point assignment", "a[0, 0] = 999"):
-  #     ## Nim: a[0, 0] = 999
-  #     ## Python: a[0, 0] = 999
-  #     ## C++ libtorch: a.index_put_({0, 0}, 999)
-  #     var t = genShiftedVandermonde5x5(kFloat64)
-  #     t[0, 0] = 999.0
-  #     check: t[0, 0].item(float64) == 999.0
+    # TODO - Ellipsis
+    # test formatName("Slice last dimension", "a[..., 0:2]"):
+    #   ## Nim: a[..., 0..<2] -> a.index({Ellipsis, Slice(0, 2)})
+    #   ## Python: a[..., 0:2]
+    #   let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
+    #   let sliced = t3d[`...`, 0..<2]
+    #   check: sliced.shape[0] == 2
+    #   check: sliced.shape[1] == 3
+    #   check: sliced.shape[2] == 2
 
-  #   test formatName("Slice assignment", "a[0..2, 0..2] = 0"):
-  #     ## Nim: a[0..<2, 0..<2] = 0
-  #     ## Python: a[0:2, 0:2] = 0
-  #     ## C++ libtorch: a.index_put_({Slice(0, 2), Slice(0, 2)}, 0)
-  #     var t = genShiftedVandermonde5x5(kFloat64)
-  #     t[0..<2, 0..<2] = 0.0
-  #     check: t[0, 0].item(float64) == 0.0
-  #     check: t[1, 1].item(float64) == 0.0
-  #     check: t[2, 2].item(float64) == 81.0  # Unchanged
+  suite "Assignment Operations (index_put_)":
 
-  #   test formatName("Ellipsis assignment", "a[...] = 0"):
-  #     ## Nim: a[...] = 0
-  #     ## Python: a[...] = 0
-  #     ## C++ libtorch: a.index_put_({Ellipsis}, 0)
-  #     var t = genShiftedVandermonde5x5(kFloat64)
-  #     t[IndexEllipsis] = 0.0
-  #     check: t[0, 0].item(float64) == 0.0
-  #     check: t[4, 4].item(float64) == 0.0
+    vandermonde.display()
 
-  #   test formatName("Assignment with step", "a[::2, ::2] = 999"):
-  #     ## Nim: a[_..<5|2, _..<5|2] = 999
-  #     ## Python: a[::2, ::2] = 999
-  #     var t = genShiftedVandermonde5x5(kFloat64)
-  #     t[_..<5|2, _..<5|2] = 999.0
-  #     check: t[0, 0].item(float64) == 999.0
-  #     check: t[2, 2].item(float64) == 999.0
-  #     check: t[1, 1].item(float64) == 81.0  # Unchanged
+    test formatName("Point assignment", "a[0, 0] = 999"):
+      ## Nim: a[0, 0] = 999
+      ## Python: a[0, 0] = 999
+      ## C++ libtorch: a.index_put_({0, 0}, 999)
+      var t = vandermonde.clone()
+      t[0, 0] = 999.0
+      check: t[0, 0].item(float64) == 999.0
+      check:
+        t ==
+          [[ 999,    1,    1,    1,    1],
+           [   2,    4,    8,   16,   32],
+           [   3,    9,   27,   81,  243],
+           [   4,   16,   64,  256, 1024],
+           [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
+
+    test formatName("Slice assignment", "a[0..2, 0..2] = 0"):
+      ## Nim: a[0..<2, 0..<2] = 0
+      ## Python: a[0:2, 0:2] = 0
+      ## C++ libtorch: a.index_put_({Slice(0, 2), Slice(0, 2)}, 0)
+      var t = vandermonde.clone()
+      t[0..<2, 0..<2] = 0.0
+      check: t[0, 0].item(float64) == 0.0
+      check: t[1, 1].item(float64) == 0.0
+      check: t[2, 2].item(float64) == 27.0  # Unchanged
+      check:
+        t ==
+          [[   0,    0,    1,    1,    1],
+           [   0,    0,    8,   16,   32],
+           [   3,    9,   27,   81,  243],
+           [   4,   16,   64,  256, 1024],
+           [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
+
+    test formatName("Assignment with step", "a[::2, ::2] = 999"):
+      ## Nim: a[_..<5|2, _..<5|2] = 999
+      ## Python: a[::2, ::2] = 999
+      var t = vandermonde.clone()
+      t[_..<5|2, _..<5|2] = 999.0
+      check: t[0, 0].item(float64) == 999.0
+      check: t[2, 2].item(float64) == 999.0
+      check: t[1, 1].item(float64) == 4.0  # Unchanged (row 1, col 1 is not stepped)
+      check:
+        t ==
+          [[ 999,    1,  999,    1,  999],
+           [   2,    4,    8,   16,   32],
+           [ 999,    9,  999,   81,  999],
+           [   4,   16,   64,  256, 1024],
+           [ 999,   25,  999,  625,  999]].toTorchTensor.to(kFloat64)
+
+    # test formatName("Ellipsis assignment", "a[...] = 0"):
+    #   ## Nim: a[...] = 0 sets all elements to 0
+    #   ## Python: a[...] = 0
+    #   var t = vandermonde.clone()
+    #   t[IndexEllipsis] = 0.0
+    #   check: t[0, 0].item(float64) == 0.0
+    #   check: t[4, 4].item(float64) == 0.0
+    #   check: t.numel() == 25
+
+    test formatName("Assignment with step", "a[::2, ::2] = 999"):
+      ## Nim: a[_..<5|2, _..<5|2] = 999
+      ## Python: a[::2, ::2] = 999
+      var t = vandermonde.clone()
+      t[_..<5|2, _..<5|2] = 999.0
+      check: t[0, 0].item(float64) == 999.0
+      check: t[2, 2].item(float64) == 999.0
+      check: t[1, 1].item(float64) == 4.0  # Unchanged (row 1, col 1 is not stepped)
+      check:
+        t ==
+          [[ 999,    1,  999,    1,  999],
+           [   2,    4,    8,   16,   32],
+           [ 999,    9,  999,   81,  999],
+           [   4,   16,   64,  256, 1024],
+           [ 999,   25,  999,  625,  999]].toTorchTensor.to(kFloat64)
 
   # suite "Common Attention Mechanism Patterns":
   #   ## These patterns appear frequently in transformer attention implementations
