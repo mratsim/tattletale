@@ -10,6 +10,7 @@ import
   workspace/libtorch/vendor/libtorch
 
 # c10 is a collection of utilities in PyTorch
+static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
 
 # C++ interop
 # -----------------------------------------------------------------------
@@ -55,7 +56,7 @@ type
     #p: lent UncheckedArray[T]
     #len: csize_t
 
-  IntArrayRef* = ArrayRef[int64]
+  IntArrayRef* = ArrayRef[int]
 
 func data*[T](ar: ArrayRef[T]): lent UncheckedArray[T] {.importcpp: "const_cast<'*1*>(#.data())".}
 func size*(ar: ArrayRef): csize_t {.importcpp: "#.size()".}
