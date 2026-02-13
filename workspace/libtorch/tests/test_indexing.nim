@@ -27,6 +27,8 @@ proc display(t: TorchTensor) =
   echo t
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+func formatName*(desc, indexingExample: string): string =
+  fmt"{desc:<40}  {indexingExample}"
 
 proc main() =
   let vandermonde = genShiftedVandermonde5x5(kFloat64)
@@ -37,17 +39,17 @@ proc main() =
 
     vandermonde.display()
 
-    test "Integer indexing - a[1, 2]":
-      ## PyTorch: a[1, 2]
-      ## C++ libtorch: a.index({1, 2})
+    test formatName("Integer indexing", "a[1, 2]"):
       ## Nim libtorch: a[1, 2]
+      ## Python: a[1, 2]
+      ## C++ libtorch: a.index({1, 2})
       let val = vandermonde[1, 2]
       check: val.item(float64) == 8.0  # 2^3 = 8
 
-    test "Strided monodimensional indexing - a[1..|2]":
-      ## PyTorch: a[1::2]
-      ## C++ libtorch: q.index({Slice(1, None, 2)})
+    test formatName("Strided monodimensional indexing", "a[1..|2]"):
       ## Nim libtorch: a[1..|2]
+      ## Python: a[1::2]
+      ## C++ libtorch: a.index({Slice(1, None, 2)})
       let sliced = vandermonde[1..|2]
       # Slices rows 1 and 3 (bases 2 and 4), all columns
       check: sliced.shape[0] == 2
@@ -58,43 +60,43 @@ proc main() =
 
     vandermonde.display()
 
-    test "Full slice - a[_ ,_]":
-      ## PyTorch: a[:,:]
+    test formatName("Full slice", "a[_, _]"):
+      ## Nim libtorch: a[_, _]
+      ## Python: a[:, :]
       ## C++ libtorch: a.index({Slice(), Slice()})
-      ## Nim libtorch: a[_,_]
       let full = vandermonde[_, _]
       check: full.shape[0] == 5
       check: full.shape[1] == 5
 
-    test "Slice from start - a[_..<3, _]":
-      ## PyTorch: a[:3]
+    test formatName("Slice from start", "a[_..<3, _]"):
+      ## Nim libtorch: a[_..<3, _]
+      ## Python: a[:3]
       ## C++ libtorch: a.index({Slice(None, 3)})
-      ## Nim libtorch: a[_..<3,_]
-      ## TODO - allow  a[..<3,_]
+      ## TODO - allow  a[..<3, _]
       let sliced = vandermonde[_..<3, _]
       check: sliced.shape[0] == 3
       check: sliced.shape[1] == 5
 
-    test "Slice to end - a[1..<]":
-      ## PyTorch: a[1:]
-      ## C++ libtorch: a.index({Slice(1, None)})
+    test formatName("Slice to end", "a[1..<_]"):
       ## Nim libtorch: a[1..<_]
+      ## Python: a[1:]
+      ## C++ libtorch: a.index({Slice(1, None)})
       let sliced = vandermonde[1..<_]
       check: sliced.shape[0] == 4
       check: sliced.shape[1] == 5
 
-    test "Slice with step only - a[|2]":
-      ## PyTorch: a[::2]
-      ## C++ libtorch: a.index({Slice(None, None, 2)})
+    test formatName("Slice with step only", "a[|2]"):
       ## Nim libtorch: a[|2]
+      ## Python: a[::2]
+      ## C++ libtorch: a.index({Slice(None, None, 2)})
       let sliced = vandermonde[|2]
       check: sliced.shape[0] == 3  # rows 0, 2, 4
       check: sliced.shape[1] == 5
 
-    test "Slice with start, stop, step - a[1..<3|2]":
-      ## PyTorch: a[1:3:2]
-      ## libtorch: a.index({Slice(1, 3, 2)})
+    test formatName("Slice with start, stop, step", "a[1..<3|2]"):
       ## Nim libtorch: a[1..<3|2]
+      ## Python: a[1:3:2]
+      ## C++ libtorch: a.index({Slice(1, 3, 2)})
       let sliced = vandermonde[1..<3|2]
       check: sliced.shape[0] == 1  # only row 1
       check: sliced.shape[1] == 5
@@ -105,35 +107,35 @@ proc main() =
   #   ## Python slices are EXCLUSIVE on the end (like C++/Python standard).
   #   ## Nim slices are INCLUSIVE on both ends (..) or exclusive (..<).
   #   ##
-  #   ## Python: t[start:stop]    -> elements from start (inclusive) to stop (exclusive)
-  #   ## Nim:    t[start..<stop]   -> elements from start to stop-1
+  #   ## Nim:    a[start..<stop]   -> elements from start to stop-1
+  #   ## Python: a[start:stop]    -> elements from start (inclusive) to stop (exclusive)
   #   ##
-  #   ## Python: t[start:]       -> elements from start to end
-  #   ## Nim:    t[start..^1]    -> ^1 is last element (inclusive)
+  #   ## Nim:    a[start..^1]    -> ^1 is last element (inclusive)
+  #   ## Python: a[start:]       -> elements from start to end
   #   ##
-  #   ## Python: t[:stop]        -> elements from 0 to stop-1
-  #   ## Nim:    t[_..<stop]     -> _ means all of dimension, then exclusive
+  #   ## Nim:    a[_..<stop]     -> _ means all of dimension, then exclusive
+  #   ## Python: a[:stop]        -> elements from 0 to stop-1
   #   ##
-  #   ## Python: t[:]           -> all elements
-  #   ## Nim:    t[_.._]        -> full span
+  #   ## Nim:    a[_.._]        -> full span
+  #   ## Python: a[:]           -> all elements
   #   ##
-  #   ## Python: t[::step]      -> every step-th element
-  #   ## Nim:    t[_.._|step]   -> full span with step
+  #   ## Nim:    a[_.._|step]   -> full span with step
+  #   ## Python: a[::step]      -> every step-th element
   #   ##
-  #   ## Python: t[1:5:2]       -> elements 1, 3 (start=1, stop=5, step=2)
-  #   ## Nim:    t[1..<5|2]     -> elements 1, 3
+  #   ## Nim:    a[1..<5|2]     -> elements 1, 3
+  #   ## Python: a[1:5:2]       -> elements 1, 3 (start=1, stop=5, step=2)
 
-  #   test "Python t[:2] (exclusive stop) -> Nim t[_..<2]":
-  #     ## Python: tensor[:2] gets indices 0, 1
-  #     ## Nim: tensor[_..<2] gets indices 0, 1 (exclusive)
+  #   test formatName("Python a[:2] -> Nim a[_..<2]", "a[:2]"):
+  #     ## Nim: a[_..<2] gets indices 0, 1 (exclusive)
+  #     ## Python: a[:2] gets indices 0, 1
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_..<2, _]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 5
 
-  #   test "Python t[3:] (start to end) -> Nim t[3..^1]":
-  #     ## Python: tensor[3:] gets indices 3, 4
-  #     ## Nim: tensor[3..^1] gets indices 3, 4 (^1 = last element)
+  #   test formatName("Python a[3:] -> Nim a[3..^1]", "a[3:]"):
+  #     ## Nim: a[3..^1] gets indices 3, 4 (^1 = last element)
+  #     ## Python: a[3:] gets indices 3, 4
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[3..^1, _]
   #     check: sliced.shape[0] == 2
@@ -141,18 +143,18 @@ proc main() =
   #     check: sliced[0, 0].item(float64) == 4.0  # Row 3 (base 4)
   #     check: sliced[1, 0].item(float64) == 5.0  # Row 4 (base 5)
 
-  #   test "Python t[:] (full slice) -> Nim t[_.._]":
-  #     ## Python: tensor[:] gets all elements
-  #     ## Nim: tensor[_.._] gets all elements
+  #   test formatName("Python a[:] -> Nim a[_.._]", "a[:]"):
+  #     ## Nim: a[_.._] gets all elements
+  #     ## Python: a[:] gets all elements
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_.._, _]
   #     check: sliced.shape[0] == 5
   #     check: sliced.shape[1] == 5
   #     check: sliced == t
 
-  #   test "Python t[::2] (step 2) -> Nim t[_.._|2] or t[|2]":
-  #     ## Python: tensor[::2] gets every 2nd element
-  #     ## Nim: tensor[_.._|2] or tensor[|2] (cleaner!) gets every 2nd element
+  #   test formatName("Python a[::2] -> Nim a[_.._|2]", "a[::2]"):
+  #     ## Nim: a[_.._|2] or a[|2] (cleaner!) gets every 2nd element
+  #     ## Python: a[::2] gets every 2nd element
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced1 = t[_.._|2, _]
   #     let sliced2 = t[|2, _]
@@ -162,17 +164,17 @@ proc main() =
   #     check: sliced1[2, 0].item(float64) == 5.0  # Row 4
   #     check: sliced1 == sliced2  # Both syntaxes are equivalent
 
-  #   test "New: tensor[|3] (unary pipe step) -> every 3rd element":
+  #   test formatName("Unary pipe step", "a[|3]"):
   #     ## The unary `|step` syntax is cleaner than `_.._|step`
-  #     ## tensor[|3] -> Slice(None, None, 3)
+  #     ## Nim: a[|3] -> Slice(None, None, 3)
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[|3, _]
   #     check: sliced.shape[0] == 2  # indices 0, 3
   #     check: sliced[0, 0].item(float64) == 1.0  # Row 0
   #     check: sliced[1, 0].item(float64) == 4.0  # Row 3
 
-  #   test "New: tensor[|2, 0] (stepped span with index) -> Slice(None, None, 2), 0":
-  #     ## tensor[|2, 0] -> every 2nd element of dim 0, index 0 of dim 1
+  #   test formatName("Stepped span with index", "a[|2, 0]"):
+  #     ## Nim: a[|2, 0] -> every 2nd element of dim 0, index 0 of dim 1
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[|2, 0]
   #     check: sliced.shape[0] == 3
@@ -181,8 +183,8 @@ proc main() =
   #     check: sliced[1, 0].item(float64) == 3.0  # Row 2, col 0
   #     check: sliced[2, 0].item(float64) == 5.0  # Row 4, col 0
 
-  #   test "New: tensor[1, |2, _] (mixed indexing with stepped span)":
-  #     ## tensor[1, |2, _] -> index 1, every 2nd of dim 1, all of dim 2
+  #   test formatName("Mixed indexing with stepped span", "a[1, |2, _]"):
+  #     ## Nim: a[1, |2, _] -> index 1, every 2nd of dim 1, all of dim 2
   #     let t = arange(24, kFloat64).reshape(@[2, 3, 4])
   #     let sliced = t[1, |2, _]
   #     check: sliced.shape[0] == 2  # Every 2nd of dim 1 (indices 0, 2)
@@ -190,63 +192,62 @@ proc main() =
   #     check: sliced[0, 0].item(float64) == 8.0   # t[1, 0, 0]
   #     check: sliced[1, 0].item(float64) == 16.0  # t[1, 2, 0]
 
-  #   test "Python t[1:4] (start, exclusive stop) -> Nim t[1..<4]":
-  #     ## Python: tensor[1:4] gets indices 1, 2, 3
-  #     ## Nim: tensor[1..<4] gets indices 1, 2, 3 (exclusive)
+  #   test formatName("Python a[1:4] -> Nim a[1..<4]", "a[1:4]"):
+  #     ## Nim: a[1..<4] gets indices 1, 2, 3 (exclusive)
+  #     ## Python: a[1:4] gets indices 1, 2, 3
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[1..<4, _]
   #     check: sliced.shape[0] == 3
   #     check: sliced[0, 0].item(float64) == 2.0  # Row 1
   #     check: sliced[2, 0].item(float64) == 4.0  # Row 3
 
-  #   test "Python t[1:4:2] (start, stop, step) -> Nim t[1..<4|2]":
-  #     ## Python: tensor[1:4:2] gets indices 1, 3
-  #     ## Nim: tensor[1..<4|2] gets indices 1, 3
+  #   test formatName("Python a[1:4:2] -> Nim a[1..<4|2]", "a[1:4:2]"):
+  #     ## Nim: a[1..<4|2] gets indices 1, 3
+  #     ## Python: a[1:4:2] gets indices 1, 3
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[1..<4|2, _]
   #     check: sliced.shape[0] == 2
   #     check: sliced[0, 0].item(float64) == 2.0  # Row 1
   #     check: sliced[1, 0].item(float64) == 4.0  # Row 3
 
-  #   test "Python t[:-1] (to before last) -> Nim t[_..<^1]":
-  #     ## Python: tensor[:-1] gets all but last element
-  #     ## Nim: tensor[_..<^1] gets all but last (^1 = last, < makes it exclusive)
+  #   test formatName("Python a[:-1] -> Nim a[_..<^1]", "a[:-1]"):
+  #     ## Nim: a[_..<^1] gets all but last (^1 = last, < makes it exclusive)
+  #     ## Python: a[:-1] gets all but last element
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_..<^1, _]
   #     check: sliced.shape[0] == 4
   #     check: sliced[3, 0].item(float64) == 4.0  # Row 3 (not row 4)
 
-  #   test "Python t[-3:] (last 3) -> Nim t[^3..^1]":
-  #     ## Python: tensor[-3:] gets last 3 indices
-  #     ## Nim: tensor[^3..^1] gets last 3 (^3 = 3rd from end, ^1 = last)
+  #   test formatName("Python a[-3:] -> Nim a[^3..^1]", "a[-3:]"):
+  #     ## Nim: a[^3..^1] gets last 3 (^3 = 3rd from end, ^1 = last)
+  #     ## Python: a[-3:] gets last 3 indices
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[^3..^1, _]
   #     check: sliced.shape[0] == 3  # indices 2, 3, 4
   #     check: sliced[0, 0].item(float64) == 3.0  # Row 2
   #     check: sliced[2, 0].item(float64) == 5.0  # Row 4
 
-  #   test "Python t[::-1] (reverse) -> Use flip() in Nim":
-  #     ## PyTorch/Python: tensor[::-1] reverses the tensor along a dimension
-  #     ## libtorch/Nim: Negative steps are NOT supported in Slice()
+  #   test formatName("Python a[::-1] -> Use flip()", "a[::-1]"):
+  #     ## Nim: Negative steps are NOT supported in Slice()
   #     ##            Use flip() instead
+  #     ## Python: a[::-1] reverses the tensor along a dimension
   #     ##
-  #     ## What Python t[::-1] would give: first element becomes last, etc.
-  #     ## What Nim flip() gives: same result
+  #     ## What Nim flip() gives: same result as Python a[::-1]
   #     var t = genShiftedVandermonde5x5(kFloat64)
   #     let reversed = t.flip(@[0])
 
-  #     ## flip() along dim 0 should give same as t[::-1] in Python
+  #     ## flip() along dim 0 should give same as a[::-1] in Python
   #     check: reversed[0, 0].item(float64) == 5.0   # Last row of original
   #     check: reversed[4, 0].item(float64) == 1.0   # First row of original
   #     check: reversed[0, 4].item(float64) == 3125.0 # 5^5 = 3125
   #     check: reversed[4, 4].item(float64) == 1.0    # 1^5 = 1
 
-  #   test "Negative steps t[|-2] are NOT supported - use flip()":
+  #   test formatName("Negative steps not supported", "a[|-2]"):
   #     ## libtorch's Slice() does NOT support negative steps
-  #     ## Python: tensor[::2] would work, tensor[::-2] would reverse with step 2
-  #     ## Nim: t[_.._|2] works, t[_.._|-2] raises compile error
+  #     ## Python: a[::2] would work, a[::-2] would reverse with step 2
+  #     ## Nim: a[_.._|2] works, a[_.._|-2] raises compile error
   #     ##
-  #     ## To reverse and step, use: tensor.flip(dim).slice(...)
+  #     ## To reverse and step, use: a.flip(dim).slice(...)
   #     var t = genShiftedVandermonde5x5(kFloat64)
   #     let reversed = t.flip(@[0])
   #     let stepped = reversed[_.._|2, _]  # Reverse, then take every 2nd
@@ -258,101 +259,135 @@ proc main() =
   #   ## Note: In Nim, `...` must be used quoted a[0..<2, `...`] or a[0..<2, ellipsis]
   #   ##
   #   ## Both are equivalent:
-  #   ##   tensor[`...`, 0]
-  #   ##   tensor[ellipsis, 0]
+  #   ##   a[`...`, 0]
+  #   ##   a[ellipsis, 0]
 
-  #   test "Single ellipsis - tensor[...] -> tensor.index({Ellipsis})":
-  #     ## PyTorch: tensor[...]
-  #     ## libtorch: tensor.index({torch::indexing::Ellipsis})
+  #   test formatName("Single ellipsis", "a[...]"):
+  #     ## Nim: a[...] -> a.index({torch::indexing::Ellipsis})
+  #     ## Python: a[...]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     check: t[`...`].shape[0] == 5
   #     check: t[`...`].shape[1] == 5
 
-  #   test "Ellipsis with other indices - tensor[`...`, 0]":
-  #     ## PyTorch: tensor[..., 0]
-  #     ## libtorch: tensor.index({Ellipsis, 0})
+  #   test formatName("Ellipsis with other indices", "a[..., 0]"):
+  #     ## Nim: a[`...`, 0] -> a.index({Ellipsis, 0})
+  #     ## Python: a[..., 0]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[`...`, 0]
   #     check: sliced.shape[0] == 5
   #     check: sliced[0, 0].item(float64) == 1.0  # (1+1)^(0+1) = 2^1 = 2
 
-  #   test "IndexEllipsis constant works same as quoted ellipsis":
+  #   test formatName("IndexEllipsis constant", "ellipsis vs `...`"):
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let with_const = t[ellipsis, 0]
   #     let with_quoted = t[`...`, 0]
   #     check: with_const.shape == with_quoted.shape
   #     check: with_const == with_quoted
 
-  #   test "Ellipsis expansion - tensor[..., 0] equivalent to tensor[:, :, 0]":
+  #   test formatName("Ellipsis expansion", "a[..., 0] = a[:, :, 0]"):
   #     ## Demonstrates ellipsis expansion
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let ellipsis_result = t[`...`, 0]
   #     let explicit = t[_, _, 0]
   #     check: ellipsis_result == explicit
 
-  #   test "Leading ellipsis - tensor[0, ...]":
-  #     ## PyTorch: tensor[0, ...]
-  #     ## libtorch: tensor.index({0, Ellipsis})
+  #   test formatName("Leading ellipsis", "a[0, ...]"):
+  #     ## Nim: a[0, ...] -> a.index({0, Ellipsis})
+  #     ## Python: a[0, ...]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[0, `...`]
   #     check: sliced.shape[0] == 5
   #     check: sliced[0].item(float64) == 1.0  # Row 0, all columns (powers of 1 = 1)
 
-  #   test "Middle ellipsis - tensor[1, ..., 0]":
-  #     ## PyTorch: tensor[1, ..., 0]
-  #     ## libtorch: tensor.index({1, Ellipsis, 0})
+  #   test formatName("Middle ellipsis", "a[1, ..., 0]"):
+  #     ## Nim: a[1, ..., 0] -> a.index({1, Ellipsis, 0})
+  #     ## Python: a[1, ..., 0]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[1, `...`, 0]
   #     check: sliced.shape[0] == 5
   #     check: sliced[0].item(float64) == 2.0  # Row 1 (base 2), column 0 = 2^1 = 2
 
-  # suite "Arraymancer-style Indexing (Span `_`)":
-  #   ## Arraymancer uses `_` for full span (equivalent to Python `:`)
-  #   ## Note: libtorch `_` maps to `Slice()`
-
-  #   test "Single span - tensor[_]":
-  #     ## Arraymancer: tensor[_] / tensor[_, _]
-  #     ## Maps to: Slice() / Slice(None, None)
+  #   test formatName("Single span", "a[_]"):
+  #     ## Nim: a[_] / a[_, _] maps to Slice() / Slice(None, None)
+  #     ## Python: a[:] / a[:, :]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_, _]
   #     check: sliced.shape[0] == 5
   #     check: sliced.shape[1] == 5
 
-  #   test "Span on first dimension only - tensor[_, 2]":
-  #     ## Arraymancer: tensor[_, 2]
+  #   test formatName("Span on first dimension only", "a[_, 2]"):
+  #     ## Nim: a[_, 2]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_, 2]
   #     check: sliced.shape[0] == 5
   #     check: sliced.shape[1] == 1
 
-  #   test "Span with slice - tensor[1..3, _]":
-  #     ## Arraymancer: tensor[1..3, _]
-  #     ## PyTorch: tensor[1:3, :]
+  #   test formatName("Span with slice", "a[1..3, _]"):
+  #     ## Nim: a[1..3, _]
+  #     ## Python: a[1:3, :]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[1..<3, _]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 5
 
-  #   test "Span with partial - tensor[_..2, 2]":
-  #     ## Arraymancer: tensor[_..2, 2]
-  #     ## PyTorch: tensor[:2, 2]
+  #   test formatName("Span with partial", "a[_..2, 2]"):
+  #     ## Nim: a[_..2, 2]
+  #     ## Python: a[:2, 2]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_..<2, 2]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 1
 
-  #   test "Full span shorthand - tensor[_.._]":
-  #     ## Arraymancer: tensor[_.._]
-  #     ## This should be equivalent to Slice() i.e. full dimension
+  #   test formatName("Full span shorthand", "a[_.._]"):
+  #     ## Nim: a[_.._] should be equivalent to Slice() i.e. full dimension
   #     ## Currently the desugar might map this to Ellipsis - needs fixing
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_.._, _]
   #     check: sliced.shape[0] == 5
   #     check: sliced.shape[1] == 5
 
-  #   test "Span with step - tensor[_.._|2]":
-  #     ## Arraymancer: tensor[_.._|2]
-  #     ## PyTorch: tensor[::2]
+  #   test formatName("Span with step", "a[_.._|2]"):
+  #     ## Nim: a[_.._|2]
+  #     ## Python: a[::2]
+  #     let t = genShiftedVandermonde5x5(kFloat64)
+  #     let sliced = t[_.._|2, _]
+  #     check: sliced.shape[0] == 3  # rows 0, 2, 4
+  #     check: sliced.shape[1] == 5
+
+  #   test "Span on first dimension only - a[_, 2]":
+  #     ## Nim: a[_, 2]
+  #     let t = genShiftedVandermonde5x5(kFloat64)
+  #     let sliced = t[_, 2]
+  #     check: sliced.shape[0] == 5
+  #     check: sliced.shape[1] == 1
+
+  #   test "Span with slice - a[1..3, _]":
+  #     ## Nim: a[1..3, _]
+  #     ## Python: a[1:3, :]
+  #     let t = genShiftedVandermonde5x5(kFloat64)
+  #     let sliced = t[1..<3, _]
+  #     check: sliced.shape[0] == 2
+  #     check: sliced.shape[1] == 5
+
+  #   test "Span with partial - a[_..2, 2]":
+  #     ## Nim: a[_..2, 2]
+  #     ## Python: a[:2, 2]
+  #     let t = genShiftedVandermonde5x5(kFloat64)
+  #     let sliced = t[_..<2, 2]
+  #     check: sliced.shape[0] == 2
+  #     check: sliced.shape[1] == 1
+
+  #   test "Full span shorthand - a[_.._]":
+  #     ## Nim: a[_.._] should be equivalent to Slice() i.e. full dimension
+  #     ## Currently the desugar might map this to Ellipsis - needs fixing
+  #     let t = genShiftedVandermonde5x5(kFloat64)
+  #     let sliced = t[_.._, _]
+  #     check: sliced.shape[0] == 5
+  #     check: sliced.shape[1] == 5
+
+  #   test "Span with step - a[_.._|2]":
+  #     ## Nim: a[_.._|2]
+  #     ## Python: a[::2]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_.._|2, _]
   #     check: sliced.shape[0] == 3  # rows 0, 2, 4
@@ -365,68 +400,69 @@ proc main() =
   #   ## ^3 = third-to-last element (index size-3)
   #   ## etc.
   #   ##
-  #   ## This is equivalent to Python's negative indexing: tensor[-1]
+  #   ## This is equivalent to Python's negative indexing: a[-1]
   #   ## But for slices, the end is INCLUSIVE in Nim's .. syntax.
   #   ## So ^1 means the actual last element.
 
-  #   test "Single negative index - tensor[^1] (last element)":
-  #     ## ^1 = last element (PyTorch: tensor[-1])
+  #   test formatName("Single negative index", "a[^1]"):
+  #     ## Nim: ^1 = last element
+  #     ## Python: a[-1]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let val = t[^1, ^1]
   #     check: val.item(float64) == 3125.0  # 5^5 = 3125
 
-  #   test "Second-to-last - tensor[^2, ^2]":
-  #     ## ^2 = second-to-last element
+  #   test formatName("Second-to-last", "a[^2, ^2]"):
+  #     ## Nim: ^2 = second-to-last element
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let val = t[^2, ^2]
   #     check: val.item(float64) == 625.0  # 5^4 = 625
 
-  #   test "Third-to-last - tensor[^3, ^3]":
-  #     ## ^3 = third-to-last element
+  #   test formatName("Third-to-last", "a[^3, ^3]"):
+  #     ## Nim: ^3 = third-to-last element
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let val = t[^3, ^3]
   #     check: val.item(float64) == 125.0  # 5^3 = 125
 
-  #   test "Inclusive slice to end - tensor[0..^1] (includes last)":
-  #     ## 0..^1 means from 0 to last element (inclusive)
-  #     ## PyTorch: tensor[0:] or tensor[:]
+  #   test formatName("Inclusive slice to end", "a[0..^1]"):
+  #     ## Nim: 0..^1 means from 0 to last element (inclusive)
+  #     ## Python: a[0:] or a[:]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[0..^1, _]
   #     check: sliced.shape[0] == 5
 
-  #   test "Exclusive slice to end - tensor[0..<^1] (excludes last)":
-  #     ## 0..<^1 means from 0 to before last element
-  #     ## PyTorch: tensor[0:-1]
+  #   test formatName("Exclusive slice to end", "a[0..<^1]"):
+  #     ## Nim: 0..<^1 means from 0 to before last element
+  #     ## Python: a[0:-1]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[0..<^1, _]
   #     check: sliced.shape[0] == 4
 
-  #   test "Negative slice - tensor[^3..^1] (third-to-last to last)":
-  #     ## ^3..^1 means from third-to-last to last (inclusive)
+  #   test formatName("Negative slice", "a[^3..^1]"):
+  #     ## Nim: ^3..^1 means from third-to-last to last (inclusive)
   #     ## This gets rows 3 and 4 (bases 4 and 5)
-  #     ## PyTorch: tensor[-3:]
+  #     ## Python: a[-3:]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[^3..^1, _]
   #     check: sliced.shape[0] == 2  # rows 3 and 4
   #     check: sliced[0, 0].item(float64) == 4.0  # base 4
   #     check: sliced[1, 0].item(float64) == 5.0  # base 5
 
-  #   test "Negative exclusive slice - tensor[^3..<^1]":
-  #     ## ^3..<^1 means from third-to-last to before last
+  #   test formatName("Negative exclusive slice", "a[^3..<^1]"):
+  #     ## Nim: ^3..<^1 means from third-to-last to before last
   #     ## Gets only row 3 (base 4)
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[^3..<^1, _]
   #     check: sliced.shape[0] == 1
   #     check: sliced[0, 0].item(float64) == 4.0  # base 4
 
-  #   test "Span with negative index - tensor[_..^2]":
-  #     ## _..^2 means from start to second-to-last (inclusive)
+  #   test formatName("Span with negative index", "a[_..^2]"):
+  #     ## Nim: _..^2 means from start to second-to-last (inclusive)
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_..^2, _]
   #     check: sliced.shape[0] == 4  # rows 0, 1, 2, 3
 
-  #   test "Negative span with step - tensor[^4.._|2]":
-  #     ## ^4.._|2 from fourth-from-end to end, step 2
+  #   test formatName("Negative span with step", "a[^4.._|2]"):
+  #     ## Nim: ^4.._|2 from fourth-from-end to end, step 2
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[^4.._|2, _]
   #     check: sliced.shape[0] == 2  # rows 1 (^4=1) and 3 (^2=3)
@@ -435,23 +471,24 @@ proc main() =
   #   ## Reference: https://pytorch.org/cppdocs/notes/tensor_indexing.html
   #   ## For 3D tensor: a[0:3] is equivalent to a[0:3, ...] / a[0:3, :, :]
 
-  #   test "Partial slice on 3D tensor - matches first dimension":
-  #     ## a[0:3] equivalent to a[0:3, ...] on 3D tensor
+  #   test formatName("Partial slice on 3D tensor", "a[0..<2]"):
+  #     ## Nim: a[0..<2] on 3D tensor is equivalent to a[0..<2, ...]
+  #     ## Python: a[0:3] equivalent to a[0:3, ...] on 3D tensor
   #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
   #     let sliced = t3d[0..<2, _, _]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 3
   #     check: sliced.shape[2] == 4
 
-  #   test "Slice equivalent to explicit full spans - t[0..<3] vs t[0..<3, _, :]":
+  #   test formatName("Slice equivalent to explicit spans", "a[0..<3] vs a[0..<3, _, :]"):
   #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
   #     let implicit = t3d[0..<2]
   #     let explicit = t3d[0..<2, _, _]
   #     check: implicit.shape == explicit.shape
 
-  #   test "Slice last dimension only - t[..., 0:2]":
-  #     ## PyTorch: t[..., 0:2]
-  #     ## libtorch: t.index({Ellipsis, Slice(0, 2)})
+  #   test formatName("Slice last dimension", "a[..., 0:2]"):
+  #     ## Nim: a[..., 0..<2] -> a.index({Ellipsis, Slice(0, 2)})
+  #     ## Python: a[..., 0:2]
   #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
   #     let sliced = t3d[`...`, 0..<2]
   #     check: sliced.shape[0] == 2
@@ -459,32 +496,36 @@ proc main() =
   #     check: sliced.shape[2] == 2
 
   # suite "Assignment Operations (index_put_)":
-  #   test "Point assignment - tensor[0, 0] = 999":
-  #     ## PyTorch: tensor[0, 0] = 999
-  #     ## libtorch: tensor.index_put_({0, 0}, 999)
+  #   test formatName("Point assignment", "a[0, 0] = 999"):
+  #     ## Nim: a[0, 0] = 999
+  #     ## Python: a[0, 0] = 999
+  #     ## C++ libtorch: a.index_put_({0, 0}, 999)
   #     var t = genShiftedVandermonde5x5(kFloat64)
   #     t[0, 0] = 999.0
   #     check: t[0, 0].item(float64) == 999.0
 
-  #   test "Slice assignment - tensor[0..2, 0..2] = 0":
-  #     ## PyTorch: tensor[0:2, 0:2] = 0
-  #     ## libtorch: tensor.index_put_({Slice(0, 2), Slice(0, 2)}, 0)
+  #   test formatName("Slice assignment", "a[0..2, 0..2] = 0"):
+  #     ## Nim: a[0..<2, 0..<2] = 0
+  #     ## Python: a[0:2, 0:2] = 0
+  #     ## C++ libtorch: a.index_put_({Slice(0, 2), Slice(0, 2)}, 0)
   #     var t = genShiftedVandermonde5x5(kFloat64)
   #     t[0..<2, 0..<2] = 0.0
   #     check: t[0, 0].item(float64) == 0.0
   #     check: t[1, 1].item(float64) == 0.0
   #     check: t[2, 2].item(float64) == 81.0  # Unchanged
 
-  #   test "Ellipsis assignment - tensor[...] = 0":
-  #     ## PyTorch: tensor[...] = 0
-  #     ## libtorch: tensor.index_put_({Ellipsis}, 0)
+  #   test formatName("Ellipsis assignment", "a[...] = 0"):
+  #     ## Nim: a[...] = 0
+  #     ## Python: a[...] = 0
+  #     ## C++ libtorch: a.index_put_({Ellipsis}, 0)
   #     var t = genShiftedVandermonde5x5(kFloat64)
   #     t[IndexEllipsis] = 0.0
   #     check: t[0, 0].item(float64) == 0.0
   #     check: t[4, 4].item(float64) == 0.0
 
-  #   test "Assignment with step - tensor[::2, ::2] = 999":
-  #     ## PyTorch: tensor[::2, ::2] = 999
+  #   test formatName("Assignment with step", "a[::2, ::2] = 999"):
+  #     ## Nim: a[_..<5|2, _..<5|2] = 999
+  #     ## Python: a[::2, ::2] = 999
   #     var t = genShiftedVandermonde5x5(kFloat64)
   #     t[_..<5|2, _..<5|2] = 999.0
   #     check: t[0, 0].item(float64) == 999.0
@@ -494,8 +535,8 @@ proc main() =
   # suite "Common Attention Mechanism Patterns":
   #   ## These patterns appear frequently in transformer attention implementations
 
-  #   test "Q/K/V slicing for multi-head attention":
-  #     ## Pattern: tensor[:, start_idx:start_idx+head_dim, :]
+  #   test formatName("Q/K/V slicing for multi-head attention", "a[:, start_idx:start_idx+head_dim, :]"):
+  #     ## Pattern: a[:, start_idx:start_idx+head_dim, :]
   #     var t = arange(100, kFloat64).reshape(@[2, 5, 10])
   #     let head_dim = 4
   #     let start_idx = 0
@@ -504,7 +545,7 @@ proc main() =
   #     check: q.shape[1] == 4
   #     check: q.shape[2] == 10
 
-  #   test "Slicing all heads for a position - tensor[:, :, pos_idx]":
+  #   test formatName("Slicing all heads for a position", "a[:, :, pos_idx]"):
   #     ## Extract a single position across all heads
   #     let t = arange(100, kFloat64).reshape(@[2, 5, 10])
   #     let pos_idx = 2
@@ -513,7 +554,7 @@ proc main() =
   #     check: sliced.shape[1] == 5
   #     check: sliced.shape[2] == 1
 
-  #   test "Causal mask slicing - tensor[t, :, t_end:]":
+  #   test formatName("Causal mask slicing", "a[t, :, t_end:]"):
   #     ## Pattern for causal attention (upper triangular)
   #     var t = arange(30, kFloat64).reshape(@[2, 3, 5])
   #     let t_idx = 1
@@ -522,7 +563,7 @@ proc main() =
   #     check: sliced.shape[1] == 3
   #     check: sliced.shape[2] == 3
 
-  #   test "Attention score masking with ellipsis - mask[..., q_idx, k_idx]":
+  #   test formatName("Attention score masking with ellipsis", "a[..., q_idx, k_idx]"):
   #     ## Pattern for attention weight masking
   #     var t = arange(60, kFloat64).reshape(@[2, 3, 2, 5])
   #     let q_idx = 1
@@ -531,175 +572,175 @@ proc main() =
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 3
 
-  #   test "Slicing last dimension for residual - x[:, :, -head_size:]":
+  #   test formatName("Slicing last dimension for residual", "a[:, :, -head_size:]"):
   #     ## Pattern: keep only the last head_size channels
   #     var t = arange(100, kFloat64).reshape(@[2, 5, 10])
   #     let head_size = 2
   #     let sliced = t[_, _, ^head_size..^0]
   #     check: sliced.shape[2] == 2
 
-  #   test "Interleaved slicing for RoPE/AliBi - tensor[batch, seq, ::2]":
+  #   test formatName("Interleaved slicing for RoPE/AliBi", "a[batch, seq, ::2]"):
   #     ## Pattern: every other element (used in positional encoding)
   #     var t = arange(40, kFloat64).reshape(@[2, 4, 5])
   #     let sliced = t[_, _, _..<5|2]
   #     check: sliced.shape[2] == 3  # 5 elements, step 2 = 3
 
-  #   test "Empty slice - tensor[0..0]":
-  #     ## PyTorch: tensor[0:0] returns empty tensor
+  #   test formatName("Empty slice", "a[0..0]"):
+  #     ## Python: a[0:0] returns empty tensor
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[0..<0, _]
   #     check: sliced.shape[0] == 0
 
-  #   test "Full range slice - tensor[0..<5]":
+  #   test formatName("Full range slice", "a[0..<5]"):
   #     ## Slice covering entire dimension
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[0..<5, _]
   #     check: sliced.shape[0] == 5
   #     check: sliced.shape[1] == 5
 
-  #   test "Single element slice - tensor[2..<3]":
+  #   test formatName("Single element slice", "a[2..<3]"):
   #     ## Slice producing single element
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[2..<3, _]
   #     check: sliced.shape[0] == 1
   #     check: sliced.shape[1] == 5
 
-  #   test "Large step - tensor[::100] with small tensor":
+  #   test formatName("Large step", "a[::100] with small tensor"):
   #     ## Step larger than dimension size
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_..<5|100, _]
   #     check: sliced.shape[0] == 1  # Only first element
 
-  #   test "Reverse with negative step - use flip() not t[::-1]":
-  #     ## Python: tensor[::-1] reverses along a dimension
+  #   test formatName("Reverse with negative step", "Use flip() not a[::-1]"):
+  #     ## Python: a[::-1] reverses along a dimension
   #     ## Nim: Negative step syntax `|_` is NOT supported
   #     ##      Use flip() instead
   #     ##
-  #     ## Example: What Python t[:, :, ::-1] would give in Nim:
+  #     ## Example: What Python a[:, :, ::-1] would give in Nim:
   #     var t = genShiftedVandermonde5x5(kFloat64)
   #     let reversed = t.flip(@[1])  # Reverse along dim 1
   #     let first_col = reversed[_, 0]
   #     check: first_col[0, 0].item(float64) == 1.0    # Column 4 reversed = column 0
   #     check: first_col[4, 0].item(float64) == 3125.0 # Column 4
 
-  #   test "Integer and slice mix - tensor[0, 1:4]":
-  #     ## PyTorch: tensor[0, 1:4]
+  #   test formatName("Integer and slice mix", "a[0, 1:4]"):
+  #     ## Python: a[0, 1:4]
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[0, 1..<4]
   #     check: sliced.shape[0] == 3
 
-  #   test "Slice and ellipsis - tensor[1:3, ..., 0:2]":
-  #     ## PyTorch: tensor[1:3, ..., 0:2]
+  #   test formatName("Slice and ellipsis", "a[1:3, ..., 0:2]"):
+  #     ## Python: a[1:3, ..., 0:2]
   #     let t3d = arange(60, kFloat64).reshape(@[2, 3, 10])
   #     let sliced = t3d[1..<3, `...`, 0..<2]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 10
 
-  #   test "Integer array indexing - tensor[[0, 2, 4]]":
-  #     ## PyTorch: tensor[[0, 2, 4]] - fancy indexing
+  #   test formatName("Integer array indexing", "a[[0, 2, 4]]"):
+  #     ## Python: a[[0, 2, 4]] - fancy indexing
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let indices_seq = @[0, 2, 4].to(kInt64)
   #     let indices = indices_seq.toTorchTensor().clone()
   #     let sliced = t.index_select(0, indices)
   #     check: sliced.shape[0] == 3
 
-  #   test "Boolean mask indexing - tensor[tensor > 10]":
-  #     ## PyTorch: tensor[tensor > 10] - masked indexing
+  #   test formatName("Boolean mask indexing", "a[a > 10]"):
+  #     ## Python: a[a > 10] - masked indexing
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let mask = t > 10.0
   #     let sliced = t[mask]
   #     # Count of elements > 10 in Vandermonde matrix
 
-  #   test "Single slice on 3D - affects first dimension only":
-  #     ## PyTorch: t3d[0:2]
-  #     ## Equivalent to: t3d[0:2, :, :]
+  #   test formatName("Single slice on 3D", "a3d[0:2]"):
+  #     ## Python: a3d[0:2]
+  #     ## Equivalent to: a3d[0:2, :, :]
   #     let sliced = t3d[0..<2]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 3
   #     check: sliced.shape[2] == 4
 
-  #   test "Slice middle dimension - t3d[:, 0:2, :]":
-  #     ## PyTorch: t3d[:, 0:2, :]
+  #   test formatName("Slice middle dimension", "a3d[:, 0:2, :]"):
+  #     ## Python: a3d[:, 0:2, :]
   #     let sliced = t3d[_, 0..<2, _]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 2
   #     check: sliced.shape[2] == 4
 
-  #   test "Slice last dimension - t3d[:, :, 0:2]":
-  #     ## PyTorch: t3d[:, :, 0:2]
+  #   test formatName("Slice last dimension", "a3d[:, :, 0:2]"):
+  #     ## Python: a3d[:, :, 0:2]
   #     let sliced = t3d[_, _, 0..<2]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 3
   #     check: sliced.shape[2] == 2
 
-  #   test "Slice with ellipsis - t3d[0, ...]":
-  #     ## PyTorch: t3d[0, ...]
+  #   test formatName("Slice with ellipsis", "a3d[0, ...]"):
+  #     ## Python: a3d[0, ...]
   #     ## All of remaining dimensions
   #     let sliced = t3d[0, `...`]
   #     check: sliced.shape[0] == 3
   #     check: sliced.shape[1] == 4
 
-  #   test "Ellipsis expansion - t3d[...] equals t3d":
+  #   test formatName("Ellipsis expansion", "a3d[...] equals a3d"):
   #     let sliced = t3d[IndexEllipsis]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 3
   #     check: sliced.shape[2] == 4
 
-  #   test "Multiple indices with slice - t3d[0, 0:2, 1:3]":
-  #     ## PyTorch: t3d[0, 0:2, 1:3]
+  #   test formatName("Multiple indices with slice", "a3d[0, 0:2, 1:3]"):
+  #     ## Python: a3d[0, 0:2, 1:3]
   #     let sliced = t3d[0, 0..<2, 1..<3]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 2
 
-  #   test "Single slice on 4D - affects first dimension":
+  #   test formatName("Single slice on 4D", "a4d[0..<2]"):
   #     let sliced = t4d[0..<2]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 3
   #     check: sliced.shape[2] == 4
   #     check: sliced.shape[3] == 5
 
-  #   test "Ellipsis in 4D - t4d[..., 0]":
-  #     ## PyTorch: t4d[..., 0]
+  #   test formatName("Ellipsis in 4D", "a4d[..., 0]"):
+  #     ## Python: a4d[..., 0]
   #     let sliced = t4d[`...`, 0]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 3
   #     check: sliced.shape[2] == 4
 
-  #   test "Leading ellipsis - t4d[0, ..., 0]":
-  #     ## PyTorch: t4d[0, ..., 0]
+  #   test formatName("Leading ellipsis", "a4d[0, ..., 0]"):
+  #     ## Python: a4d[0, ..., 0]
   #     let sliced = t4d[0, `...`, 0]
   #     check: sliced.shape[0] == 3
   #     check: sliced.shape[1] == 4
 
-  #   test "All spans - t4d[_, _, _, _]":
+  #   test formatName("All spans", "a4d[_, _, _, _]"):
   #     let sliced = t4d[_, _, _, _]
   #     check: sliced.shape == @[2, 3, 4, 5]
 
-  #   test "Slice head dimension - t4d[:, 0..<2, :, :]":
+  #   test formatName("Slice head dimension", "a4d[:, 0..<2, :, :]"):
   #     let sliced = t4d[_, 0..<2, _, _]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 2
   #     check: sliced.shape[2] == 4
   #     check: sliced.shape[3] == 5
 
-  #   test "Ellipsis in 4D - t4d[..., 0]":
-  #     ## PyTorch: t4d[..., 0]
+  #   test formatName("Ellipsis in 4D (repeat)", "a4d[..., 0]"):
+  #     ## Python: a4d[..., 0]
   #     let sliced = t4d[`...`, 0]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 3
   #     check: sliced.shape[2] == 4
 
-  #   test "Leading ellipsis - t4d[0, ..., 0]":
-  #     ## PyTorch: t4d[0, ..., 0]
+  #   test formatName("Leading ellipsis (repeat)", "a4d[0, ..., 0]"):
+  #     ## Python: a4d[0, ..., 0]
   #     let sliced = t4d[0, `...`, 0]
   #     check: sliced.shape[0] == 3
   #     check: sliced.shape[1] == 4
 
-  #   test "All spans - t4d[_, _, _, _]":
+  #   test formatName("All spans (repeat)", "a4d[_, _, _, _]"):
   #     let sliced = t4d[_, _, _, _]
   #     check: sliced.shape == @[2, 3, 4, 5]
 
-  #   test "Slice head dimension - t4d[:, 0..<2, :, :]":
+  #   test formatName("Slice head dimension (repeat)", "a4d[:, 0..<2, :, :]"):
   #     let sliced = t4d[_, 0..<2, _, _]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 2
@@ -712,66 +753,63 @@ proc main() =
   #   let vandermonde = genShiftedVandermonde5x5(kFloat64)
   #   # vandermonde[0, 0] = 1, vandermonde[1, 1] = 4, vandermonde[2, 2] = 27
 
-  #   test "Basic indexing - v[2, 3]":
-  #     ## Arraymancer: v[2, 3]
+  #   test formatName("Basic indexing", "v[2, 3]"):
+  #     ## Nim: v[2, 3]
   #     check: vandermonde[2, 3].item(float64) == 81.0
 
-  #   test "Basic slicing - v[1..2, 3]":
-  #     ## Arraymancer: v[1..2, 3]
+  #   test formatName("Basic slicing", "v[1..2, 3]"):
+  #     ## Nim: v[1..<2, 3]
   #     let sliced = vandermonde[1..<2, 3]
   #     check: sliced.shape[0] == 1
   #     check: sliced[0, 0].item(float64) == 16.0  # (1+1)^(3+1) = 2^4 = 16
 
-  #   test "Span slicing - v[_, 3]":
-  #     ## Arraymancer: v[_, 3]
+  #   test formatName("Span slicing", "v[_, 3]"):
+  #     ## Nim: v[_, 3]
   #     let sliced = vandermonde[_, 3]
   #     check: sliced.shape[0] == 5
   #     check: sliced.shape[1] == 1
 
-  #   test "Span slicing with range - v[1.._, 3]":
-  #     ## Arraymancer: v[1.._, 3]
+  #   test formatName("Span slicing with range", "v[1.._, 3]"):
+  #     ## Nim: v[1.._, 3]
   #     let sliced = vandermonde[1..<5, 3]
   #     check: sliced.shape[0] == 4
   #     check: sliced[0, 0].item(float64) == 16.0
 
-  #   test "Span slicing from start - v[_..3, 3]":
-  #     ## Arraymancer: v[_..3, 3]
+  #   test formatName("Span slicing from start", "v[_..3, 3]"):
+  #     ## Nim: v[_..3, 3]
   #     let sliced = vandermonde[_..<3, 3]
   #     check: sliced.shape[0] == 3
   #     check: sliced[0, 0].item(float64) == 1.0
 
-  #   test "Stepping - v[1..3|2, 3]":
-  #     ## Arraymancer: v[1..3|2, 3]
+  #   test formatName("Stepping", "v[1..3|2, 3]"):
+  #     ## Nim: v[1..3|2, 3]
   #     let sliced = vandermonde[1..<3|2, 3]
   #     check: sliced.shape[0] == 1
   #     check: sliced[0, 0].item(float64) == 16.0
 
-  #   test "Span stepping - v[_.._|2, 3]":
-  #     ## Arraymancer: v[_.._|2, 3]
+  #   test formatName("Span stepping", "v[_.._|2, 3]"):
+  #     ## Nim: v[_.._|2, 3]
   #     let sliced = vandermonde[_..<5|2, 3]
   #     check: sliced.shape[0] == 3
   #     check: sliced[0, 0].item(float64) == 1.0
   #     check: sliced[1, 0].item(float64) == 81.0
 
-  #   test "Full span - v[_.._, 3]":
-  #     ## Arraymancer: v[_.._, 3]
+  #   test formatName("Full span", "v[_.._, 3]"):
+  #     ## Nim: v[_.._, 3]
   #     let sliced = vandermonde[_.._, 3]
   #     check: sliced.shape[0] == 5
   #     check: sliced.shape[1] == 1
 
-  # suite "Assignment Compatibility":
-  #   var vandermonde_mut = genShiftedVandermonde5x5(kFloat64)
-
-  #   test "Slice to single value - v[1..2, 3..4] = 999":
-  #     ## Arraymancer: v[1..2, 3..4] = 999
+  #   test formatName("Slice to single value", "v[1..2, 3..4] = 999"):
+  #     ## Nim: v[1..<2, 3..<4] = 999
   #     vandermonde_mut[1..<2, 3..<4] = 999.0
   #     check: vandermonde_mut[1, 3].item(float64) == 999.0
   #     check: vandermonde_mut[1, 4].item(float64) == 999.0
   #     check: vandermonde_mut[2, 3].item(float64) == 999.0
   #     check: vandermonde_mut[2, 4].item(float64) == 999.0
 
-  #   test "Slice to array - v[0..1, 0..1] = [[111, 222], [333, 444]]":
-  #     ## Arraymancer: v[0..1, 0..1] = [[111, 222], [333, 444]]
+  #   test formatName("Slice to array", "v[0..1, 0..1] = [[111, 222], [333, 444]]"):
+  #     ## Nim: v[0..<1, 0..<1] = [[111, 222], [333, 444]]
   #     var data = newSeq[seq[float64]](2)
   #     data[0] = @[111.0, 222.0]
   #     data[1] = @[333.0, 444.0]
@@ -779,78 +817,57 @@ proc main() =
   #     check: vandermonde_mut[0, 0].item(float64) == 111.0
   #     check: vandermonde_mut[1, 1].item(float64) == 444.0
 
-  # suite "Ellipsis Behavior Verification":
-  #   test "Ellipsis equivalence - t[2, ...] == t[2, _, _, _]":
+  #   test formatName("Ellipsis equivalence", "a[2, ...] == a[2, _, _, _]"):
   #     let t5d = arange(100, kFloat64).reshape(@[2, 2, 5, 5, 1])
   #     let with_ellipsis = t5d[2, `...`]
   #     let explicit = t5d[2, _, _, _, _]
   #     check: with_ellipsis.shape == explicit.shape
   #     check: with_ellipsis == explicit
 
-  #   test "Leading ellipsis equivalence - t[..., 0] == t[_, _, _, 0]":
+  #   test formatName("Leading ellipsis equivalence", "a[..., 0] == a[_, _, _, 0]"):
   #     let t5d = arange(100, kFloat64).reshape(@[2, 2, 5, 5, 1])
   #     let with_ellipsis = t5d[`...`, 0]
   #     let explicit = t5d[_, _, _, _, 0]
   #     check: with_ellipsis.shape == explicit.shape
   #     check: with_ellipsis == explicit
 
-  #   test "Middle ellipsis - t[1, ..., 0]":
+  #   test formatName("Middle ellipsis", "a[1, ..., 0]"):
   #     let t5d = arange(100, kFloat64).reshape(@[2, 2, 5, 5, 1])
   #     let sliced = t5d[1, `...`, 0]
   #     check: sliced.shape[0] == 2
   #     check: sliced.shape[1] == 5
 
-  #   test "Double ellipsis is invalid (should error or behave as single)":
-  #     ## PyTorch doesn't allow multiple ellipsis
+  #   test formatName("Double ellipsis is invalid", "Multiple ellipsis"):
+  #     ## Python doesn't allow multiple ellipsis
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     discard
 
-  # suite "Slice Span vs Ellipsis Distinction":
-  #   ## This tests the fix for the issue where _.._ was wrongly mapped to Ellipsis
-  #   test "Full span with _.._ should be Slice() not Ellipsis":
+  #   test formatName("Full span with _.._", "_.._ should be Slice() not Ellipsis"):
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_.._, _]
   #     check: sliced.shape == @[5, 5]
   #     check: sliced == t
 
-  #   test "Single _ should be Slice() not Ellipsis":
+  #   test formatName("Single _", "_ should be Slice() not Ellipsis"):
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[_, _]
   #     check: sliced.shape == @[5, 5]
   #     check: sliced == t
 
-  #   test "Span with integer - t[0.._, _] should slice first dimension":
+  #   test formatName("Span with integer", "a[0.._, _] should slice first dimension"):
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[0..<5, _]
   #     check: sliced.shape == @[5, 5]
   #     check: sliced == t
 
-  #   test "Slice with span - t[0..<3, _.._] should combine slices":
+  #   test formatName("Slice with span", "a[0..<3, _.._] should combine slices"):
   #     let t = genShiftedVandermonde5x5(kFloat64)
   #     let sliced = t[0..<3, _.._]
   #     check: sliced.shape == @[3, 5]
   #     check: sliced[0, 0].item(float64) == 1.0
 
-  # suite "Span vs Ellipsis - anti-regression":
-  #   ## This suite verifies the fix for the bug where _.._ was mapped to Ellipsis instead of Slice()
-  #   ##
-  #   ## Summary of the fix:
-  #   ## - `_` (single) maps to Slice() (full span for one dimension)
-  #   ## - `_.._` (double) maps to Slice() (full span, NOT Ellipsis!)
-  #   ## - `...` (ellipsis) maps to torch::indexing::Ellipsis (expands to fill remaining dims)
-  #   ##
-  #   ## Example showing the difference on a 3D tensor:
-  #   ##   t3d[_, 0, 0]  = Slice(), 0, 0   -> First dim all, second dim index 0, third dim index 0
-  #   ##   t3d[..., 0, 0] = Ellipsis, 0, 0 -> Last two dims index 0
-  #   ##   t3d[0, ..., 0] = 0, Ellipsis, 0 -> First dim index 0, last dim index 0
-  #   ##
-  #   ## PyTorch equivalents:
-  #   ##   t3d[:, 0, 0]        (using :) = t3d[_, 0, 0] in Nim
-  #   ##   t3d[..., 0, 0]     (using ...) = t3d[Ellipsis, 0, 0] in Nim
-  #   ##   t3d[0, ..., 0]     (using ...) = t3d[0, Ellipsis, 0] in Nim
-
-  #   test "Span (_) affects only ONE dimension - t[_, 0] on 3D tensor":
-  #     ## PyTorch: t3d[:, 0]
+  #   test formatName("Span affects ONE dimension", "a[_, 0] on 3D tensor"):
+  #     ## Python: a3d[:, 0]
   #     ## Gets all of dimension 0, index 0 of dimension 1, all of dimension 2
   #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
   #     let sliced = t3d[_, 0, _]
@@ -859,8 +876,8 @@ proc main() =
   #     check: sliced.shape[2] == 4
   #     check: sliced[0, 0, 0].item(float64) == 0.0  # t3d[0, 0, 0] = 0
 
-  #   test "Ellipsis (...) fills ALL remaining dimensions - t[..., 0] on 3D tensor":
-  #     ## PyTorch: t3d[..., 0]
+  #   test formatName("Ellipsis fills ALL remaining dimensions", "a[..., 0] on 3D tensor"):
+  #     ## Python: a3d[..., 0]
   #     ## Gets all dimensions for the ellipsis part, index 0 only for the last dim
   #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
   #     let sliced = t3d[`...`, 0]
@@ -870,8 +887,8 @@ proc main() =
   #     check: sliced[0, 0, 0].item(float64) == 0.0  # t3d[0, 0, 0] = 0
   #     check: sliced[0, 1, 0].item(float64) == 4.0  # t3d[0, 1, 0] = 4
 
-  #   test "Leading ellipsis - t[0, ...] on 3D tensor":
-  #     ## PyTorch: t3d[0, ...]
+  #   test formatName("Leading ellipsis on 3D", "a[0, ...] on 3D tensor"):
+  #     ## Python: a3d[0, ...]
   #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
   #     let sliced = t3d[0, `...`]
   #     check: sliced.shape[0] == 3
@@ -880,13 +897,13 @@ proc main() =
   #     check: sliced[1, 0].item(float64) == 4.0   # t3d[0, 1, 0] = 4
   #     check: sliced[3, 3].item(float64) == 15.0  # t3d[0, 3, 3] = 15
 
-  #   test "Span with _.._ on 3D - t[_.._, _, _] should equal full tensor":
+  #   test formatName("Span with _.._ on 3D", "a[_.._, _, _] should equal full tensor"):
   #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
   #     let sliced = t3d[_.._, _, _]
   #     check: sliced.shape == @[2, 3, 4]
   #     check: sliced == t3d
 
-  #   test "Compare _.._ vs Ellipsis on 2D - they should be DIFFERENT":
+  #   test formatName("Compare _.._ vs Ellipsis on 2D", "they should be DIFFERENT"):
   #     let t2d = genShiftedVandermonde5x5(kFloat64)
   #     let with_underscore = t2d[_.._, _]
   #     let with_ellipsis = t2d[IndexEllipsis]
@@ -895,7 +912,7 @@ proc main() =
   #     check: with_underscore == t2d  # _.._ should be full span
   #     check: with_ellipsis == t2d   # Ellipsis should also be full (expands to all dims)
 
-  #   test "Compare _.._ vs Ellipsis on 3D - they should be DIFFERENT":
+  #   test formatName("Compare _.._ vs Ellipsis on 3D", "they should be DIFFERENT"):
   #     let t3d = arange(24, kFloat64).reshape(@[2, 3, 4])
   #     let with_underscore = t3d[_.._, _]
   #     let with_ellipsis = t3d[IndexEllipsis]
@@ -903,7 +920,7 @@ proc main() =
   #     check: with_ellipsis.shape == @[2, 3, 4] # Ellipsis expands to all dims
   #     check: with_underscore != with_ellipsis
 
-  #   test "Mixed: slice + ellipsis + span - t[0..<2, ..., _]":
+  #   test formatName("Mixed: slice + ellipsis + span", "a[0..<2, ..., _]"):
   #     ## First dim slice 0..<2, middle dims ellipsis (all), last dim span (all)
   #     let t4d = arange(120, kFloat64).reshape(@[2, 3, 4, 5])
   #     let sliced = t4d[0..<2, `...`, _]
@@ -926,46 +943,43 @@ proc main() =
 
   #   let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTorchTensor()
 
-  #   test "^1 is the last element (index 4)":
+  #   test formatName("^1 is the last element", "arr5[^1]"):
   #     check: arr5[^1].item(float64) == 50.0
 
-  #   test "^2 is second-to-last (index 3)":
+  #   test formatName("^2 is second-to-last", "arr5[^2]"):
   #     check: arr5[^2].item(float64) == 40.0
 
-  #   test "^3 is third-to-last (index 2)":
+  #   test formatName("^3 is third-to-last", "arr5[^3]"):
   #     check: arr5[^3].item(float64) == 30.0
 
-  #   test "^4 is fourth-to-last (index 1)":
+  #   test formatName("^4 is fourth-to-last", "arr5[^4]"):
   #     check: arr5[^4].item(float64) == 20.0
 
-  #   test "^5 equals ^1 (index 0, same as first)":
+  #   test formatName("^5 equals ^1", "arr5[^5]"):
   #     check: arr5[^5].item(float64) == 10.0
 
-  #   test "Slice from ^3 to ^1 (inclusive)":
+  #   test formatName("Slice from ^3 to ^1 (inclusive)", "arr5[^3..^1]"):
   #     ## ^3..^1 means indices 2, 3, 4
   #     let sliced = arr5[^3..^1]
   #     check: sliced.shape[0] == 3
   #     check: sliced[0].item(float64) == 30.0
   #     check: sliced[2].item(float64) == 50.0
 
-  #   test "Slice from 0 to ^1 (all elements, includes last)":
+  #   test formatName("Slice from 0 to ^1", "arr5[0..^1]"):
   #     ## 0..^1 includes the last element
   #     let sliced = arr5[0..^1]
   #     check: sliced.shape[0] == 5
   #     check: sliced[^1].item(float64) == 50.0
 
-  #   test "Slice from ^4 to ^2 (exclusive)":
+  #   test formatName("Slice from ^4 to ^2 (exclusive)", "arr5[^4..<^2]"):
   #     ## ^4..<^2 means indices 1, 2, 3
   #     let sliced = arr5[^4..<^2]
   #     check: sliced.shape[0] == 3
   #     check: sliced[0].item(float64) == 20.0
   #     check: sliced[^1].item(float64) == 40.0
 
-  # suite "Attention Mechanism Patterns - Real-world Examples":
-  #   ## These tests verify common patterns used in transformer implementations
-
-  #   test "Multi-head attention: split heads":
-  #     ## Pattern: tensor[:, head_idx*head_size:(head_idx+1)*head_size, :]
+  #   test formatName("Multi-head attention: split heads", "a[:, head_idx*head_size:(head_idx+1)*head_size, :]"):
+  #     ## Pattern: a[:, head_idx*head_size:(head_idx+1)*head_size, :]
   #     var t = arange(240, kFloat64).reshape(@[2, 6, 20])  # batch=2, 6 heads, features=20
   #     let head_idx = 2
   #     let head_size = 4
@@ -974,13 +988,13 @@ proc main() =
   #     check: head_slice.shape[1] == 4
   #     check: head_slice.shape[2] == 20
 
-  #   test "Multi-head attention: all heads":
-  #     ## Pattern: tensor[:, :, :] (no slicing, get all heads)
+  #   test formatName("Multi-head attention: all heads", "a[:, :, :]"):
+  #     ## Pattern: a[:, :, :] (no slicing, get all heads)
   #     var t = arange(240, kFloat64).reshape(@[2, 6, 20])
   #     let all_heads = t[_, _, _]
   #     check: all_heads.shape == @[2, 6, 20]
 
-  #   test "Attention: causal mask preparation":
+  #   test formatName("Attention: causal mask preparation", "Upper triangle mask"):
   #     ## Pattern: upper triangle mask for seq_len positions
   #     let seq_len = 5
   #     var mask = zeros(@[seq_len, seq_len], kFloat64)
@@ -993,14 +1007,14 @@ proc main() =
   #     check: mask[0, 4].item(float64) == -1e9  # Last column masked
   #     check: mask[4, 4].item(float64) == 0.0   # Diagonal not masked
 
-  #   test "Rotary Position Embedding (RoPE): slice with step 2":
+  #   test formatName("Rotary Position Embedding (RoPE)", "a[batch, seq, ::2]"):
   #     ## Pattern: interleaved positions for cos/sin computation
   #     var t = arange(40, kFloat64).reshape(@[2, 4, 5])
   #     let cos_sin = t[_, _, _..<5|2]  # Every other position
   #     check: cos_sin.shape[2] == 3  # 5 elements, step 2 = 3 values
 
-  #   test "Flash Attention-like slicing: load block":
-  #     ## Pattern: t[q_start..q_end, :, k_start..k_end]
+  #   test formatName("Flash Attention-like slicing", "a[q_start..q_end, :, k_start..k_end]"):
+  #     ## Pattern: a[q_start..q_end, :, k_start..k_end]
   #     var t = arange(200, kFloat64).reshape(@[10, 8, 10])
   #     let q_start = 2
   #     let q_end = 5
@@ -1011,83 +1025,72 @@ proc main() =
   #     check: sliced.shape[1] == 8
   #     check: sliced.shape[2] == 3
 
-  #   test "Output projection slice - last N features":
-  #     ## Pattern: tensor[:, :, -proj_dim:]
+  #   test formatName("Output projection slice", "a[:, :, -proj_dim:]"):
+  #     ## Pattern: a[:, :, -proj_dim:]
   #     var t = arange(100, kFloat64).reshape(@[2, 5, 10])
   #     let proj_dim = 4
   #     let projected = t[_, _, ^proj_dim..^0]
   #     check: projected.shape[2] == 4
 
-  # suite "Complete Vandermonde Reference Tests":
-  #   ## Comprehensive tests using the 5x5 Vandermonde matrix
-  #   ## v[i, j] = (i+1)^j for 0 <= i,j < 5
-  #   ## Row 0: 1, 1, 1, 1, 1
-  #   ## Row 1: 2, 4, 8, 16, 32
-  #   ## Row 2: 3, 9, 27, 81, 243
-  #   ## Row 3: 4, 16, 64, 256, 1024
-  #   ## Row 4: 5, 25, 125, 625, 3125
-
-  #   let v = genShiftedVandermonde5x5(kFloat64)
-
-  #   test "Vandermonde: row access with span":
+  #   test formatName("Vandermonde: row access with span", "v[1, _]"):
   #     let row1 = v[1, _]
   #     check: row1.shape[0] == 5
   #     check: row1[0].item(float64) == 2.0
   #     check: row1[4].item(float64) == 32.0
 
-  #   test "Vandermonde: column access with span":
+  #   test formatName("Vandermonde: column access with span", "v[_, 2]"):
   #     let col2 = v[_, 2]
   #     check: col2.shape[0] == 5
   #     check: col2[0].item(float64) == 1.0  # 1^3 = 1
   #     check: col2[4].item(float64) == 125.0  # 5^3 = 125
 
-  #   test "Vandermonde: submatrix slice":
+  #   test formatName("Vandermonde: submatrix slice", "v[1..<4, 1..<4]"):
   #     let sub = v[1..<4, 1..<4]
   #     check: sub.shape[0] == 3
   #     check: sub.shape[1] == 3
   #     check: sub[0, 0].item(float64) == 4.0   # 2^2 = 4
   #     check: sub[2, 2].item(float64) == 64.0  # 4^2 = 64
 
-  #   test "Vandermonde: every other row":
+  #   test formatName("Vandermonde: every other row", "v[_..<5|2, _]"):
   #     let evens = v[_..<5|2, _]
   #     check: evens.shape[0] == 3
   #     check: evens[0, 0].item(float64) == 1.0   # Row 0
   #     check: evens[1, 0].item(float64) == 3.0   # Row 2
   #     check: evens[2, 0].item(float64) == 5.0   # Row 4
 
-  #   test "Vandermonde: last 2 columns":
+  #   test formatName("Vandermonde: last 2 columns", "v[_, ^2..^0]"):
   #     let last2 = v[_, ^2..^0]
   #     check: last2.shape[1] == 2
   #     check: last2[0, 0].item(float64) == 1.0   # 1^4 = 1
   #     check: last2[4, 1].item(float64) == 3125.0  # 5^5 = 3125
 
-  #   test "Vandermonde: anti-diagonal with ^":
+  #   test formatName("Vandermonde: anti-diagonal with ^", "v[^5..^1, ^5..^1]"):
   #     ## ^N counts from end, so ^4..^0 is all indices
   #     let diag = v[^5..^1, ^5..^1]
   #     check: diag.shape[0] == 5
   #     check: diag[0, 0].item(float64) == 5.0   # 5^0 = 1, but reversed!
   #     check: diag[4, 4].item(float64) == 5.0   # 1^4 = 1, reversed
 
-  #   test "Vandermonde: top-right triangle":
+  #   test formatName("Vandermonde: top-right triangle", "v[_..<5, 3..<5]"):
   #     let upper = v[_..<5, 3..<5]
   #     check: upper.shape[0] == 5
   #     check: upper.shape[1] == 2
   #     check: upper[0, 1].item(float64) == 1.0   # row 0, col 4
 
-  #   test "Vandermonde: bottom-left triangle with span":
+  #   test formatName("Vandermonde: bottom-left triangle", "v[2..<5, _..<3]"):
   #     let lower = v[2..<5, _..<3]
   #     check: lower.shape[0] == 3
   #     check: lower.shape[1] == 3
   #     check: lower[0, 0].item(float64) == 9.0   # row 2, col 0
 
-  #   test "Vandermonde: assign to slice":
+  #   test formatName("Vandermonde: assign to slice", "v[0..<2, 0..<2] = 0"):
   #     var v2 = v.clone()
   #     v2[0..<2, 0..<2] = 0.0
   #     check: v2[0, 0].item(float64) == 0.0
   #     check: v2[1, 1].item(float64) == 0.0
   #     check: v2[2, 2].item(float64) == 27.0  # Unchanged
 
-  #   test "Vandermonde: ellipsis row access":
+  #   test formatName("Vandermonde: ellipsis row access", "v[1, `...`]"):
   #     let row1_ellipsis = v[1, `...`]
   #     check: row1_ellipsis.shape[0] == 5
   #     check: row1_ellipsis[0].item(float64) == 2.0
