@@ -19,6 +19,9 @@ import
 # Exceptions
 # -----------------------------------------------------------------------
 
+when not defined(cpp) and defined(nimCheck):
+  {.error: "You are running 'nim check' in C mode. It will misreport that C++ exceptions can't be caught because they aren't ref objects.".}
+
 type
   TorchError* {.requiresInit, importcpp: "c10::Error", header: TorchHeader.} = object of CppStdException
 
