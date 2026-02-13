@@ -22,7 +22,7 @@ static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
 #
 # #######################################################################
 
-type Metadata* = DynamicStackArray[int64]
+type Metadata* = DynamicStackArray[int]
 
 # Debugging
 # -----------------------------------------------------
@@ -88,8 +88,8 @@ func asTorchView*(oa: varargs[int]): IntArrayRef {.inline.} =
 func asTorchView*[T: not int](oa: openArray[T]): ArrayRef[T] {.inline.} =
   init(ArrayRef[T], oa[0].unsafeAddr, oa.len)
 
-func asTorchView*(meta: Metadata): ArrayRef[int64] {.inline.} =
-  init(ArrayRef[int64], meta.data[0].unsafeAddr, meta.len)
+func asTorchView*(meta: Metadata): ArrayRef[int] {.inline.} =
+  init(ArrayRef[int], meta.data[0].unsafeAddr, meta.len)
 
 proc `$`*[T](ar: ArrayRef[T]): string {.inline.} =
   `$`(ar.asNimView())
