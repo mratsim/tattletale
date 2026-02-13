@@ -107,7 +107,7 @@ let shape = @[3, 4, 5].asTorchView()
 let tensor = empty(shape, kFloat32)
 
 # Reading tensor shape
-let sizes = tensor.sizes()  # Returns ArrayRef[int64]
+let sizes = tensor.sizes()  # Returns IntArrayRef
 echo sizes.asNimView()      # @[3, 4, 5]
 
 # ArrayRef helpers
@@ -155,10 +155,10 @@ tensor[0, 1] = 42.0
 ### Slicing
 
 ```nim
-# Inclusive range (end included)
+# Inclusive range (end included) - rarely used
 let slice = tensor[0..5, 3]     # elements 0,1,2,3,4,5
 
-# Exclusive range (end excluded)
+# Exclusive range (end excluded) - matches Python semantics
 let slice = tensor[0..<5, 3]    # elements 0,1,2,3,4
 
 # Span slice (whole dimension, equivalent to Python ":")
@@ -170,6 +170,48 @@ let all = tensor[_.._]           # all dimensions, equivalent to Slice()
 # With step
 let stepped = tensor[0..10|2]
 ```
+
+### Negative indexing with `-` (Python-style)
+
+**IMPORTANT**: The syntax uses `-N` (negative numbers) following Python conventions, NOT `^N` (hat notation).
+
+Negative indexing rules:
+- `-1` = last element (excludes last in slicing)
+- `-2` = second-to-last element
+- `-3` = third-to-last element
+- etc.
+
+Combined with `..-` for end-relative slicing:
+
+```nim
+# Python equivalents:
+# a[:-1] -> all but last element
+# a[-3:] -> last 3 elements
+# a[-3:-1] -> elements from 3rd-from-end to before last
+
+# Nim equivalents (using - for negative, ..- for end-relative):
+let slice = tensor[_..-1, _]    # all but last (Python: a[:-1])
+let slice = tensor[-3.._, _]     # last 3 elements (Python: a[-3:])
+let slice = tensor[-3..-1, _]    # 3rd-from-end to before last (Python: a[-3:-1])
+
+# Combined with start index:
+let slice = tensor[1..-1, _]     # from index 1 to before last
+```
+
+### Why `-` instead of `^`
+
+The change from `^` (Nim inclusive) to `-` (Python exclusive) was intentional:
+
+| Old (^) | New (-) | Reason |
+|----------|----------|--------|
+| Exclusive mental model | Matches Python exactly | Easier to port Python algorithms |
+| Off-by-one confusion | No off-by-one | Just subtract 1 from negative index |
+| `a[^1..^2]` | `a[-1..-2]` | Direct Python translation |
+
+**Python to Nim translation cheat sheet:**
+- `a[:-1]` → `a[_..-1]` (subtract 1 from stop)
+- `a[-3:]` → `a[-3.._]` (use `_` for "to end")
+- `a[-3:-1]` → `a[-3..-1]` (stop is exclusive, so -1 means "before last")
 
 ### Span (`_`) vs Ellipsis (`...`)
 
@@ -184,25 +226,6 @@ The `_` symbol and `...` ellipsis have different meanings:
   - `tensor[0, ...]` = `tensor[0, :, :, :]` = leading index, ellipsis fills rest
   - `tensor[1, ..., 0]` = `tensor[1, :, :, 0]` = indices at start and end, ellipsis in middle
 
-### Relative-to-end slicing with ^
-
-The `^N` syntax refers to positions from the end (Python-style negative indexing):
-- `^1` = last element
-- `^2` = second-to-last element
-- etc.
-
-Combined with `..` (inclusive) or `..<` (exclusive):
-
-```nim
-# Inclusive range to end (includes last element)
-let slice = tensor[^2..^1]     # last 2 elements
-let slice = tensor[0..^1]      # all elements, includes last
-
-# Exclusive range to end (excludes last element)
-let slice = tensor[0..<^1]     # all elements, excludes last
-let slice = tensor[^3..<^1]    # elements from 3rd-from-end to before last
-```
-
 ### Set via slice
 
 ```nim
@@ -213,7 +236,7 @@ tensor[0..5, 3] = 999.0
 tensor[0..1, 0..1] = [[111, 222], [333, 444]]
 
 # Assign from another tensor
-tensor[^2..^1, 2..4] = other_tensor
+tensor[-2..-1, 2..<5] = other_tensor  # last 2 elements, cols 2-4
 ```
 
 ## Tensor operations
@@ -348,7 +371,7 @@ let tensor = arange(numel, kInt64)
   .cpu()
 ```
 
-### Advanced slicing syntax (indexing_macros.nim)
+## Advanced slicing syntax (indexing_macros.nim)
 
 The indexing macros provide Python-like slicing with Nim syntax:
 
@@ -360,10 +383,11 @@ let slice = tensor[1..3, 0..2]  # 2D slice
 # Exclusive end with ..<
 let slice = tensor[0..<5]       # elements 0,1,2,3,4 (same as 0..4)
 
-# Relative to end with ^ (negative indexing)
-# ^1 = last element, ^2 = second-to-last, etc.
-let slice = tensor[^2..^1]      # last 2 elements
-let slice = tensor[0..^3]       # all but last 2
+# Negative indexing with - (Python-style, EXCLUSIVE upper bound)
+# -1 = last element, -2 = second-to-last, etc.
+let slice = tensor[-2..-1]      # last 2 elements (Python: a[-2:])
+let slice = tensor[0..-1]       # all but last element (Python: a[:-1])
+let slice = tensor[0..-3]       # all but last 2 elements (Python: a[:-3])
 
 # Stepped slices with |
 let slice = tensor[0..10|2]     # every 2nd element
@@ -385,7 +409,7 @@ let result = tensor[0, IndexEllipsis]  # first dimension index 0, rest all
 let result = tensor[1, IndexEllipsis, 0]  # first dim index 1, last dim index 0
 
 # Combined
-let slice = tensor[^2..^1, 0..<5]  # last 2 elements, first 5 of dim 1
+let slice = tensor[-2..-1, 0..<5]  # last 2 elements, first 5 of dim 1
 ```
 
 ### Key distinctions
@@ -396,26 +420,42 @@ let slice = tensor[^2..^1, 0..<5]  # last 2 elements, first 5 of dim 1
 | `_.._` | `:` | `Slice()` | Full span (not Ellipsis!) |
 | `|step` | `::step` | `Slice(None, None, step)` | Stepped full span |
 | `...` | `...` | `Ellipsis` | Expands to fill remaining dims |
-| `^1` | `-1` | N/A | Last element |
-| `^2` | `-2` | N/A | Second-to-last element |
+| `-1` | `-1` | N/A | Last element (exclusive in slicing) |
+| `-2` | `-2` | N/A | Second-to-last element |
 
-### Python Slice to Nim Translation Reference
+### Python Slice to Nim Translation Reference (Updated for Python semantics)
 
-Python slices are **exclusive** on the end. Nim uses `..` (inclusive) or `..<` (exclusive).
+**Python slices are EXCLUSIVE on the end.** Nim uses `..` (inclusive) or `..<` (exclusive), but for negative indices we use `..-` following Python semantics directly.
 
-| Python syntax | Nim syntax | Description |
-|---------------|-----------|-------------|
-| `t[:]` | `t[_.._]` | All elements |
-| `t[:2]` | `t[_..<2]` | Elements 0, 1 |
-| `t[2:]` | `t[2..^1]` | Elements from 2 to end |
-| `t[1:4]` | `t[1..<4]` | Elements 1, 2, 3 |
-| `t[::2]` | `t[_.._|2]` or `t[|2]` | Every 2nd element |
-| `t[1::2]` | `t[1.._|2]` | From 1, every 2nd |
-| `t[:4:2]` | `t[_..<4|2]` | Elements 0, 2 |
-| `t[1:4:2]` | `t[1..<4|2]` | Elements 1, 3 |
-| `t[:-1]` | `t[_..<^1]` | All but last |
-| `t[-3:]` | `t[^3..^1]` | Last 3 elements |
-| `t[::-1]` | `t.flip([dim])` | Reverse (use flip()) |
+| Python syntax | Nim syntax | Result indices | Description |
+|---------------|-----------|---------------|-------------|
+| `t[:]` | `t[_.._]` | 0,1,2,3,4 | All elements |
+| `t[:2]` | `t[_..<2]` | 0,1 | First 2 elements |
+| `t[2:]` | `t[2.._]` | 2,3,4 | From index 2 to end |
+| `t[1:4]` | `t[1..<4]` | 1,2,3 | Elements 1,2,3 |
+| `t[::2]` | `t[_.._|2]` or `t[|2]` | 0,2,4 | Every 2nd element |
+| `t[1::2]` | `t[1.._|2]` | 1,3 | From 1, every 2nd |
+| `t[:4:2]` | `t[_..<4|2]` | 0,2 | Elements 0,2 |
+| `t[1:4:2]` | `t[1..<4|2]` | 1,3 | Elements 1,3 |
+| `t[:-1]` | `t[_..-1]` | 0,1,2,3 | All but last |
+| `t[-3:]` | `t[-3.._]` | 2,3,4 | Last 3 elements |
+| `t[-3:-1]` | `t[-3..-1]` | 2,3 | 3rd-from-end to before last |
+| `t[::-1]` | `t.flip([dim])` | - | Reverse (use flip()) |
+
+### Negative indexing rules
+
+For a 5-element array (indices 0, 1, 2, 3, 4):
+
+| Python | Nim | Actual indices | Explanation |
+|--------|-----|---------------|-------------|
+| -1 | -1 | 4 | Last element |
+| -2 | -2 | 3 | Second-to-last |
+| -3 | -3 | 2 | Third-to-last |
+| `a[:-1]` | `a[_..-1]` | 0,1,2,3 | Stop at -1 (4), exclusive → 0-3 |
+| `a[-3:]` | `a[-3.._]` | 2,3,4 | Start at -3 (2), go to end |
+| `a[-3:-1]` | `a[-3..-1]` | 2,3 | Start at -3 (2), stop before -1 (4) |
+
+**Key insight**: In Python slicing, `-1` as stop means "up to but NOT including the last element". The libtorch `Slice` constructor follows Python's exclusive upper bound semantics.
 
 ### Ellipsis (`...`) vs Span (`_`)
 
@@ -443,12 +483,35 @@ type Step = object
 # `|` - step operator (positive only)
 # `..` - inclusive range
 # `..<` - exclusive range
-# `..^` - relative-to-end range
+# `..-` - end-relative range (Python exclusive semantics)
 # `|-` - negative step (NOT SUPPORTED - use flip() instead)
 ```
 
 Note: Negative steps (`|-`) are not supported because libtorch's Slice() doesn't support them.
 To reverse a dimension, use `tensor.flip(@[dim])` instead.
+
+### Runtime negative index normalization
+
+Negative indices are normalized at runtime using `pythonSliceToTorchSlice` function:
+
+```nim
+func pythonSliceToTorchSlice*(
+  start: int | Nullopt_t,
+  stop: int | Nullopt_t,
+  size: int
+): TorchSlice {.inline.} =
+  ## Convert Python-style slice to libtorch Slice with proper negative index handling.
+  ##
+  ## Python semantics:
+  ##   - Exclusive upper bound (stop is not included)
+  ##   - Negative indices are normalized: -N → size + (-N) = size - N
+  ##
+  ## Example for size=5, stop=-1:
+  ##   -1 + 5 = 4 → Slice(start, 4) which gives elements [start, 4)
+  ##   Since stop=4 is exclusive, we get elements up to index 3 (all but last)
+```
+
+This function is automatically called during tensor indexing when negative indices are detected.
 
 ### FancySelectorKind - Indexing dispatch
 
@@ -475,6 +538,42 @@ slice_typed_dispatch*(t: typed, args: varargs[typed])
 
 # Typed dispatch for write operations
 slice_typed_dispatch_mut*(t: typed, args: varargs[typed], val: typed)
+```
+
+## Negative indexing tests (test_indexing.nim)
+
+Test patterns for negative indexing:
+
+```nim
+suite "Python Slice Syntax to Nim Translation Reference":
+  ## For a 5x5 Vandermonde matrix (indices 0-4 on each axis):
+  ## [[1,1,1,1,1], [2,4,8,16,32], [3,9,27,81,243], [4,16,64,256,1024], [5,25,125,625,3125]]
+
+  test formatName("Python a[:-1] -> Nim a[_..-1]", "a[:-1]"):
+    ## Nim: a[_..-1] gets all but last (stop=-1 is exclusive)
+    ## Python: a[:-1] gets all but last element
+    let t = genShiftedVandermonde5x5(kFloat64)
+    let sliced = t[_..-1, _]
+    check: sliced.shape[0] == 4  # indices 0,1,2,3 (not 4)
+    check: sliced[3, 0].item(float64) == 4.0  # Row 3, not row 4
+
+  test formatName("Python a[-3:] -> Nim a[-3.._]", "a[-3:]"):
+    ## Nim: a[-3.._] gets last 3 (start=-3 means 3rd from end)
+    ## Python: a[-3:] gets last 3 indices (2,3,4)
+    let t = genShiftedVandermonde5x5(kFloat64)
+    let sliced = t[-3.._, _]
+    check: sliced.shape[0] == 3  # indices 2,3,4
+    check: sliced[0, 0].item(float64) == 3.0  # Row 2
+    check: sliced[2, 0].item(float64) == 5.0  # Row 4
+
+  test formatName("Python a[-3:-1] -> Nim a[-3..-1]", "a[-3:-1]"):
+    ## Nim: a[-3..-1] gets 3rd-from-end to before last
+    ## Python: a[-3:-1] gets indices 2, 3 (exclusive stop)
+    let t = genShiftedVandermonde5x5(kFloat64)
+    let sliced = t[-3..-1, _]
+    check: sliced.shape[0] == 2  # indices 2, 3
+    check: sliced[0, 0].item(float64) == 3.0  # Row 2
+    check: sliced[1, 0].item(float64) == 4.0  # Row 3
 ```
 
 ### FFT test patterns (test_torchtensors.nim)

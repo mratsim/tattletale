@@ -9,9 +9,13 @@ FIXTURES_DIR = os.path.join(
 
 
 def main():
-    shape = (5, 5)
-    x = torch.arange(1, 6, dtype=torch.float64)
-    vandermonde = torch.vander(x, increasing=True).T
+    # Generate 5x5 shifted Vandermonde matrix: v[i, j] = i^(j+1)
+    # [[   1    1    1    1    1]
+    #  [   2    4    8   16   32]
+    #  [   3    9   27   81  243]
+    #  [   4   16   64  256 1024]
+    #  [   5   25  125  625 3125]]
+    vandermonde = torch.arange(1, 6).reshape(-1, 1) ** torch.arange(1, 6)
 
     fixtures = {
         "F64_vandermonde_5x5": vandermonde.to(torch.float64).contiguous(),
@@ -22,8 +26,8 @@ def main():
     output_path = os.path.join(FIXTURES_DIR, "vandermonde.safetensors")
     save_file(fixtures, output_path)
     print(f"Saved Vandermonde tensors to {output_path}")
-    print(f"Shape: {shape}")
-    print(f"Vandermonde matrix (increasing powers):")
+    print(f"Shape: {vandermonde.shape}")
+    print(f"5x5 shifted Vandermonde matrix: v[i, j] = i^(j+1):")
     print(vandermonde)
 
     print("\nVerifying BF16 fixture reload...")
