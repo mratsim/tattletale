@@ -14,7 +14,7 @@ import
   std/strutils,
   std/tables,
   workspace/safetensors,
-  workspace/libtorch
+  workspace/libtorch as torch
 
 const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"
 
@@ -46,15 +46,15 @@ proc generateExpectedTensor*(pattern: string, shape: seq[int], dtype: ScalarKind
   else:
     raise newException(ValueError, "Unknown pattern: " & pattern)
 
-proc generateVandermondeExpected*(shape: openArray[int], dtype: ScalarKind): TorchTensor =
-  let numel = shape.product()
-  var data = newSeq[float64](numel)
-  for i in 0..<5:
-    for j in 0..<5:
-      data[j * 5 + i] = pow(float64(i + 1), float64(j))
-  let sizes = [numel]
-  let flat = from_blob(data[0].unsafeAddr, sizes, kFloat64).to(dtype)
-  flat.reshape(shape)
+proc genShiftedVandermonde5x5*(dtype: ScalarKind): TorchTensor =
+  ## Generate 5x5 shifted Vandermonde matrix: v[i, j] = i^(j+1)
+  ## [[   1    1    1    1    1]
+  ##  [   2    4    8   16   32]
+  ##  [   3    9   27   81  243]
+  ##  [   4   16   64  256 1024]
+  ##  [   5   25  125  625 3125]]
+  let v = torch.arange(1, 6).reshape(-1, 1) ** torch.arange(1, 6)
+  return v.to(dtype)
 
 proc main() =
   suite "safetensors fixtures tests (view)":
@@ -74,7 +74,7 @@ proc main() =
       let info = st.tensors[key]
       check info.shape == shape
 
-      let expectedTensor = generateVandermondeExpected(shape, kFloat64)
+      let expectedTensor = genShiftedVandermonde5x5(kFloat64)
       let actualTensor = st.getTensorView(key)
       check actualTensor == expectedTensor
 
@@ -94,7 +94,7 @@ proc main() =
       let info = st.tensors[key]
       check info.shape == shape
 
-      let expectedTensor = generateVandermondeExpected(shape, kBFloat16)
+      let expectedTensor = genShiftedVandermonde5x5(kBFloat16)
       let actualTensor = st.getTensorView(key)
       check actualTensor == expectedTensor
 
@@ -126,5 +126,5 @@ proc main() =
 
       doAssert count == Patterns.len * Shapes.len * TestedDtypes.len
 
-  when isMainModule:
-    main()
+when isMainModule:
+  main()
