@@ -176,22 +176,24 @@ proc main() =
 
     test formatName("Stepped span with index", "a[|2, 0]"):
       ## Nim: a[|2, 0] -> every 2nd element of dim 0, index 0 of dim 1
+      ## Note: Indexing with a scalar (like 0) squeezes that axis since size is 1
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[|2, 0]
       check: sliced.shape[0] == 3
-      check: sliced.shape[1] == 1
-      check: sliced[0, 0].item(float64) == 1.0  # Row 0, col 0
-      check: sliced[1, 0].item(float64) == 3.0  # Row 2, col 0
-      check: sliced[2, 0].item(float64) == 5.0  # Row 4, col 0
+      check: sliced.shape.len == 1  # Scalar index squeezes axis, so only 1 dim remains
+      check: sliced[0].item(float64) == 1.0  # Row 0, col 0
+      check: sliced[1].item(float64) == 3.0  # Row 2, col 0
+      check: sliced[2].item(float64) == 5.0  # Row 4, col 0
 
     test formatName("Mixed indexing with stepped span", "a[1, |2, _]"):
       ## Nim: a[1, |2, _] -> index 1, every 2nd of dim 1, all of dim 2
+      ## numpy equivalent: t[1, ::2, :]
       let t = arange(24, kFloat64).reshape(@[2, 3, 4])
       let sliced = t[1, |2, _]
       check: sliced.shape[0] == 2  # Every 2nd of dim 1 (indices 0, 2)
       check: sliced.shape[1] == 4  # All of dim 2
-      check: sliced[0, 0].item(float64) == 8.0   # t[1, 0, 0]
-      check: sliced[1, 0].item(float64) == 16.0  # t[1, 2, 0]
+      check: sliced[0, 0].item(float64) == 12.0  # t[1, 0, 0]
+      check: sliced[1, 0].item(float64) == 20.0  # t[1, 2, 0]
 
     test formatName("Python a[1:4] -> Nim a[1..<4]", "a[1:4]"):
       ## Nim: a[1..<4] gets indices 1, 2, 3 (exclusive)
@@ -212,12 +214,17 @@ proc main() =
       check: sliced[1, 0].item(float64) == 4.0  # Row 3
 
     test formatName("Python a[:-1] -> Nim a[_..-1]", "a[:-1]"):
-      ## Nim: a[_..-1] gets all but last (negative index)
+      ## Nim: a[_..-1] gets all but last (stop=-1 is exclusive)
       ## Python: a[:-1] gets all but last element
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_..-1, _]
-      check: sliced.shape[0] == 4
-      check: sliced[3, 0].item(float64) == 4.0  # Row 3 (not row 4)
+      check:
+        t ==
+          [[   1,    1,    1,    1,    1],
+           [   2,    4,    8,   16,   32],
+           [   3,    9,   27,   81,  243],
+           [   4,   16,   64,  256, 1024],
+           [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
 
     test formatName("Python a[-3:] -> Nim a[-3.._]", "a[-3:]"):
       ## Nim: a[-3.._] gets last 3 (start at -3, go to end with _)
@@ -309,22 +316,21 @@ proc main() =
 
     test formatName("Negative index via expression", "a[0..-(n-1)]"):
       ## Python equivalent: a[:-(n-1)] where n is tensor size
-      ## For a 5x5 tensor, -(n-1) = -(5-1) = -4, which means "up to index 3"
+      ## For a 5x5 tensor, -(n-1) = -(5-1) = -4, stop at index 1 (exclusive)
       let t = genShiftedVandermonde5x5(kFloat64)
       let n = 5
       let sliced = t[0..-(n-1), _]
-      check: sliced.shape[0] == 4  # indices 0, 1, 2, 3
+      check: sliced.shape[0] == 1  # index 0 only (stop before index 1)
       check: sliced[0, 0].item(float64) == 1.0  # Row 0
-      check: sliced[3, 0].item(float64) == 4.0  # Row 3
 
     test formatName("Negative index via expression (2*n)", "a[_..-(2*n)]"):
-      ## Python equivalent: a[:-(2*n)] 
-      ## For n=2, -(2*n) = -4, which means "up to index 3"
+      ## Python equivalent: a[:-(2*n)]
+      ## For m=2, -(2*m) = -4, stop at index 1 (exclusive)
       let t = genShiftedVandermonde5x5(kFloat64)
       let m = 2
       let sliced = t[_..-(2*m), _]
-      check: sliced.shape[0] == 4  # indices 0, 1, 2, 3 (up to but not including last)
-      check: sliced[3, 0].item(float64) == 4.0  # Row 3
+      check: sliced.shape[0] == 1  # index 0 only (stop before index 1)
+      check: sliced[0, 0].item(float64) == 1.0  # Row 0
 
     test formatName("Negative start via expression", "a[-(n-3).._]"):
       ## Python equivalent: a[-(n-3):] for n=5 gives a[-2:] = indices 3, 4
