@@ -121,16 +121,16 @@ func silu_mut*(self: TorchTensor): TorchTensor {.importcpp: "torch::silu_(@)".}
 func tanh*(input: TorchTensor): TorchTensor {.importcpp: "torch::tanh(@)".}
 func tanh_mut*(input: var TorchTensor) {.importcpp: "torch::tanh_(@)".}
 
-func softmax*(input: TorchTensor, dim: int64): TorchTensor {.importcpp: "torch::softmax(@)".}
+func softmax*(input: TorchTensor, dim: int): TorchTensor {.importcpp: "torch::softmax(@)".}
   ## Softmax activation function: softmax(x_i) = exp(x_i) / sum(exp(x_j))
   ## Converts logits to probabilities (output sums to 1 along dim).
   ## Critical for attention mechanisms in transformers and multi-class classification.
   ## dim: dimension along which to apply softmax (usually last dim for classification)
-func softmax*(input: TorchTensor, dim: int64, dtype: ScalarKind): TorchTensor {.importcpp: "torch::softmax(@)".}
+func softmax*(input: TorchTensor, dim: int, dtype: ScalarKind): TorchTensor {.importcpp: "torch::softmax(@)".}
   ## Softmax with explicit output dtype (useful for mixed precision)
 
-func log_softmax*(input: TorchTensor, axis: int64): TorchTensor {.importcpp: "torch::log_softmax(@)".}
-func log_softmax*(input: TorchTensor, axis: int64, dtype: ScalarKind): TorchTensor {.importcpp: "torch::log_softmax(@)".}
+func log_softmax*(input: TorchTensor, axis: int): TorchTensor {.importcpp: "torch::log_softmax(@)".}
+func log_softmax*(input: TorchTensor, axis: int, dtype: ScalarKind): TorchTensor {.importcpp: "torch::log_softmax(@)".}
 
 # Dropout functions
 # -------------------------------------------------------------------------

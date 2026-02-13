@@ -21,9 +21,9 @@ static: doAssert sizeof(int) == 8, "Only 64-bit OSes are supported"
 #   Instead of: tensor.reshape(@[3, 4].asTorchView())
 #   Write:      tensor.reshape(@[3, 4])
 #   Or:         tensor.reshape([3, 4])
+#   Or:         tensor.reshape(3, 4)
 #
-# The template automatically converts the openArray to ArrayRef.
-# Supports both seq[int64] and array literals like [1'i64, 2, 3].
+# The template automatically converts the varargs to ArrayRef.
 
 # Constructors
 # -----------------------------------------------------------------------
@@ -66,7 +66,7 @@ template empty*(size: openArray[int], device: DeviceKind): TorchTensor =
 # Random sampling
 # -----------------------------------------------------------------------
 
-template randint*(start, stopEx: int64, size: openArray[int]): TorchTensor =
+template randint*(start, stopEx: int, size: openArray[int]): TorchTensor =
   randint(start, stopEx, asTorchView(size))
 
 template rand*(size: openArray[int], options: TensorOptions): TorchTensor =
