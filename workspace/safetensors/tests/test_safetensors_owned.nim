@@ -57,8 +57,8 @@ proc generateVandermondeExpected*(shape: openArray[int], dtype: ScalarKind): Tor
   flat.reshape(shape)
 
 proc main() =
-  suite "safetensors fixtures tests":
-    test "vandermonde single fixture test":
+  suite "safetensors fixtures tests (owned tensors)":
+    test "vandermonde single fixture test (owned)":
       let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
       check fileExists(fixturePath)
 
@@ -75,10 +75,10 @@ proc main() =
       check info.shape == shape
 
       let expectedTensor = generateVandermondeExpected(shape, kFloat64)
-      let actualTensor = st.getTensor(key)
+      let actualTensor = st.getTensorOwned(key)
       check actualTensor == expectedTensor
 
-    test "vandermonde BF16 fixture test":
+    test "vandermonde BF16 fixture test (owned)":
       let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
       check fileExists(fixturePath)
 
@@ -95,15 +95,15 @@ proc main() =
       check info.shape == shape
 
       let expectedTensor = generateVandermondeExpected(shape, kBFloat16)
-      let actualTensor = st.getTensor(key)
+      let actualTensor = st.getTensorOwned(key)
       check actualTensor == expectedTensor
 
-    test "load python-generated safetensors fixtures":
+    test "load python-generated safetensors fixtures (owned)":
       let fixturePath = FIXTURES_DIR / "fixtures.safetensors"
       check fileExists(fixturePath)
 
       var memFile = memFiles.open(fixturePath, mode = fmRead)
-      defer: close(memFile) # TODO - close them after data is loaded but before testing to ensure we own the buffer
+      defer: close(memFile)
 
       var st = safetensors.load(memFile)
 
@@ -120,7 +120,7 @@ proc main() =
             check info.shape == shape
 
             let expectedTensor = generateExpectedTensor(pattern, shape, dtype.toTorchType())
-            let actualTensor = st.getTensor(key)
+            let actualTensor = st.getTensorOwned(key)
             check actualTensor == expectedTensor
             count += 1
 

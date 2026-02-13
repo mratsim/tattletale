@@ -54,19 +54,54 @@ proc toTorchType*(dtype: Dtype): ScalarKind {.inline.} =
     else:
       raise newException(ValueError, "No direct libtorch mapping for safetensors dtype: " & $dtype)
 
-proc getTensor*(st: var Safetensor, tensorName: string): TorchTensor =
+proc getTensorView*(st: var Safetensor, tensorName: string): TorchTensor =
   ## Get a memory view to the tensor data.
-  ## Returns a `MemSlice` that allows zero-copy access to the tensor data.
+  ## Returns a `TorchTensor` that views the underlying memory-mapped data.
   ##
   ## Memory safety:
-  ##   The returned `MemSlice` is derived from `st.memFile`,
-  ##   the view MUST NOT outlive the underlying memory mapping.
-  ##   Currently this is not enforced by the compiler but is an area of research:
-  ##   - https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
-  ##   - https://nim-lang.org/docs/manual.html#var-return-type-future-directions
+  ##   ⚠️ WARNING: The returned `TorchTensor` is a view into `st.memFile`.
+  ##   The tensor MUST NOT outlive the underlying memory mapping.
+  ##   If the `MemFile` is closed, accessing this tensor will cause undefined behavior / crash.
+  ##
+  ## For safe tensor loading, use `getTensorOwned` instead.
+  ## This is intended to:
+  ## - build high-performance loading primitives for example, direct-to-GPU weight loading.
+  ## - memory-mapped inference on CPU
+  ##
   ## Lifetime:
-  ##   The `MemSlice` is valid as long as `st` is valid, which is tied to
+  ##   The tensor is valid as long as `st` is valid, which is tied to
   ##   the original `MemFile` passed to `load`.
   let view = st.getMmapView(tensorName)
   let info = st.tensors[tensorName]
   view.data.from_blob(info.shape.asTorchView(), info.dtype.toTorchType())
+
+proc getTensorOwned*(st: var Safetensor, tensorName: string, device = kCPU): TorchTensor =
+  ## Get an owned copy of the tensor data.
+  ## Returns a `TorchTensor` that owns its data, safe to use after closing the `MemFile`.
+  ##
+  ## This is the recommended way to load tensors for inference.
+  ## The tensor is cloned to `device` memory (default CPU).
+  ##
+  ## Args:
+  ##   st: A loaded Safetensor (must remain valid during the copy)
+  ##   tensorName: Name of the tensor to load
+  ##
+  ## Returns:
+  ##   An owned `TorchTensor` on CPU.
+  st.getTensorView(tensorName).to(device, copy=true) # Force copy
+
+proc getTensorOwned*(st: var Safetensor, tensorName: string, device: Device): TorchTensor =
+  ## Get an owned copy of the tensor data on the specified device.
+  ## Returns a `TorchTensor` that owns its data, safe to use after closing the `MemFile`.
+  ##
+  ## This is the recommended way to load tensors for inference.
+  ## The tensor is copied to the specified device.
+  ##
+  ## Args:
+  ##   st: A loaded Safetensor (must remain valid during the copy)
+  ##   tensorName: Name of the tensor to load
+  ##   device: Target device (e.g., kCUDA, kCPU)
+  ##
+  ## Returns:
+  ##   An owned `TorchTensor` on the specified device.
+  st.getTensorView(tensorName).to(device, copy=true) # Force copy
