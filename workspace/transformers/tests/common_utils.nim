@@ -10,6 +10,17 @@ import
   std/macros,
   workspace/libtorch as F
 
+macro traceExec*(body: untyped): untyped =
+  result = nnkStmtList.newTree()
+  for statement in body:
+    let stmtRepr = statement.repr
+    let echoNode = nnkCall.newTree(
+      ident"debugEcho",
+      newLit("Will execute '" & stmtRepr & "'")
+    )
+    result.add(echoNode)
+    result.add(statement)
+
 template catchTorchExceptions*(body: bool): bool =
   ## Use this for debugging
   ## Error: unhandled exception: no exception to reraise [ReraiseDefect]
