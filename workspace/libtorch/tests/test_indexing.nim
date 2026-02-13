@@ -502,82 +502,92 @@ proc main() =
       check: sliced.shape[1] == 5
 
     test formatName("Span on first dimension only", "a[_, 2]"):
-      ## Nim: a[_, 2]
+      ## Nim: a[_, 2] - all rows, column 2 (squeezed to 1D since size 1)
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_, 2]
       check: sliced.shape[0] == 5
-      check: sliced.shape[1] == 1
+      check: sliced.shape.len == 1  # Scalar index squeezes axis
+      check: sliced == [1, 8, 27, 64, 125].toTorchTensor.to(kFloat64)
 
     test formatName("Span with slice", "a[1..3, _]"):
-      ## Nim: a[1..3, _]
+      ## Nim: a[1..<3, _] - rows 1, 2, all columns
       ## Python: a[1:3, :]
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[1..<3, _]
-      check: sliced.shape[0] == 2
-      check: sliced.shape[1] == 5
+      check:
+        sliced ==
+          [[   2,    4,    8,   16,   32],
+           [   3,    9,   27,   81,  243]].toTorchTensor.to(kFloat64)
 
     test formatName("Span with partial", "a[_..2, 2]"):
-      ## Nim: a[_..2, 2]
+      ## Nim: a[_..<2, 2] - rows 0, 1, column 2 (squeezed)
       ## Python: a[:2, 2]
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_..<2, 2]
       check: sliced.shape[0] == 2
-      check: sliced.shape[1] == 1
+      check: sliced.shape.len == 1  # Scalar index squeezes axis
+      check: sliced == [1, 8].toTorchTensor.to(kFloat64)
 
     test formatName("Full span shorthand", "a[_.._]"):
-      ## Nim: a[_.._] should be equivalent to Slice() i.e. full dimension
-      ## Currently the desugar might map this to Ellipsis - needs fixing
+      ## Nim: a[_.._, _] - all rows, all columns
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_.._, _]
-      check: sliced.shape[0] == 5
-      check: sliced.shape[1] == 5
+      check: sliced == t
 
     test formatName("Span with step", "a[_.._|2]"):
-      ## Nim: a[_.._|2]
+      ## Nim: a[_.._|2] - rows 0, 2, 4, all columns
       ## Python: a[::2]
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_.._|2, _]
-      check: sliced.shape[0] == 3  # rows 0, 2, 4
-      check: sliced.shape[1] == 5
+      check:
+        sliced ==
+          [[   1,    1,    1,    1,    1],
+           [   3,    9,   27,   81,  243],
+           [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
 
     test "Span on first dimension only - a[_, 2]":
       ## Nim: a[_, 2]
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_, 2]
       check: sliced.shape[0] == 5
-      check: sliced.shape[1] == 1
+      check: sliced.shape.len == 1
+      check: sliced == [1, 8, 27, 64, 125].toTorchTensor.to(kFloat64)
 
     test "Span with slice - a[1..3, _]":
-      ## Nim: a[1..3, _]
+      ## Nim: a[1..<3, _]
       ## Python: a[1:3, :]
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[1..<3, _]
-      check: sliced.shape[0] == 2
-      check: sliced.shape[1] == 5
+      check:
+        sliced ==
+          [[   2,    4,    8,   16,   32],
+           [   3,    9,   27,   81,  243]].toTorchTensor.to(kFloat64)
 
     test "Span with partial - a[_..2, 2]":
-      ## Nim: a[_..2, 2]
+      ## Nim: a[_..<2, 2]
       ## Python: a[:2, 2]
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_..<2, 2]
       check: sliced.shape[0] == 2
-      check: sliced.shape[1] == 1
+      check: sliced.shape.len == 1
+      check: sliced == [1, 8].toTorchTensor.to(kFloat64)
 
     test "Full span shorthand - a[_.._]":
-      ## Nim: a[_.._] should be equivalent to Slice() i.e. full dimension
-      ## Currently the desugar might map this to Ellipsis - needs fixing
+      ## Nim: a[_.._, _]
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_.._, _]
-      check: sliced.shape[0] == 5
-      check: sliced.shape[1] == 5
+      check: sliced == t
 
     test "Span with step - a[_.._|2]":
       ## Nim: a[_.._|2]
       ## Python: a[::2]
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_.._|2, _]
-      check: sliced.shape[0] == 3  # rows 0, 2, 4
-      check: sliced.shape[1] == 5
+      check:
+        sliced ==
+          [[   1,    1,    1,    1,    1],
+           [   3,    9,   27,   81,  243],
+           [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
 
   # suite "Negative Indexing (End-relative with -N)":
   #   ## Nim uses negative indices like Python:
