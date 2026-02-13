@@ -227,8 +227,8 @@ func cpu*(a: TorchTensor): TorchTensor {.importcpp: "#.cpu()".}
 func cuda*(a: TorchTensor): TorchTensor {.importcpp: "#.cuda()".}
 func hip*(a: TorchTensor): TorchTensor {.importcpp: "#.hip()".}
 func vulkan*(a: TorchTensor): TorchTensor {.importcpp: "#.vulkan()".}
-func to*(a: TorchTensor, device: DeviceKind): TorchTensor {.importcpp: "#.to(#)".}
-func to*(a: TorchTensor, device: Device): TorchTensor {.importcpp: "#.to(#)".}
+func to*(a: TorchTensor, device: DeviceKind, non_blocking = false, copy = false): TorchTensor {.importcpp: "#.to(#)".}
+func to*(a: TorchTensor, device: Device, non_blocking = false, copy = false): TorchTensor {.importcpp: "#.to(#)".}
 
 # dtype
 # -----------------------------------------------------------------------
