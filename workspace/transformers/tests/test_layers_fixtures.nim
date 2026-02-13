@@ -73,9 +73,9 @@ proc main() =
       defer: close(weightsMemFile)
 
       var weightsSt = safetensors.load(weightsMemFile)
-      let gateWeight = weightsSt.getTensor("mlp.gate_proj.weight")
-      let upWeight = weightsSt.getTensor("mlp.up_proj.weight")
-      let downWeight = weightsSt.getTensor("mlp.down_proj.weight")
+      let gateWeight = weightsSt.getTensorOwned("mlp.gate_proj.weight")
+      let upWeight = weightsSt.getTensorOwned("mlp.up_proj.weight")
+      let downWeight = weightsSt.getTensorOwned("mlp.down_proj.weight")
 
       let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
       assertDefined(mlp.down_proj.weight)
@@ -91,8 +91,8 @@ proc main() =
 
         var st = safetensors.load(fixtureMemFile)
 
-        let inputX = st.getTensor("input_x")
-        let expectedOutput = st.getTensor("output")
+        let inputX = st.getTensorOwned("input_x")
+        let expectedOutput = st.getTensorOwned("output")
 
         let output = mlp.forward(inputX)
         assertAllClose(output, expectedOutput)
@@ -105,10 +105,10 @@ proc main() =
       defer: close(weightsMemFile)
 
       var weightsSt = safetensors.load(weightsMemFile)
-      let qWeight = weightsSt.getTensor("self_attn.q_proj.weight")
-      let kWeight = weightsSt.getTensor("self_attn.k_proj.weight")
-      let vWeight = weightsSt.getTensor("self_attn.v_proj.weight")
-      let oWeight = weightsSt.getTensor("self_attn.o_proj.weight")
+      let qWeight = weightsSt.getTensorOwned("self_attn.q_proj.weight")
+      let kWeight = weightsSt.getTensorOwned("self_attn.k_proj.weight")
+      let vWeight = weightsSt.getTensorOwned("self_attn.v_proj.weight")
+      let oWeight = weightsSt.getTensorOwned("self_attn.o_proj.weight")
 
       let numQoHeads = 16
       let numKvHeads = 8
@@ -128,8 +128,8 @@ proc main() =
         var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
         var st = safetensors.load(fixtureMemFile)
 
-        let hiddenStates = st.getTensor("hidden_states")
-        let expectedOutput = st.getTensor("output")
+        let hiddenStates = st.getTensorOwned("hidden_states")
+        let expectedOutput = st.getTensorOwned("output")
 
         let batchSize = hiddenStates.size(0).int
         let seqLen = hiddenStates.size(1).int
