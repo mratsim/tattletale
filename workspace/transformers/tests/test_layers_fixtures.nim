@@ -11,6 +11,7 @@ import
   std/memfiles,
   std/strformat,
   std/strutils,
+  std/tables,
   workspace/safetensors,
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
@@ -23,49 +24,40 @@ const
   ModelName = "Qwen3-0.6B"
 
 proc main() =
-  # runTest "RMSNorm layer fixtures":
-  #   proc(): bool =
-  #     echo "  File: ", WeightsFile
-  #     var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
-  #     defer: close(weightsMemFile)
+  runTest "RMSNorm layer fixtures":
+    proc(): bool =
+      echo "  File: ", WeightsFile
+      var weightsMemFile = memFiles.open(WeightsFile, mode = fmRead)
+      defer: close(weightsMemFile)
 
-  #     let (weightsSt, _) = safetensors.load(weightsMemFile)
-  #     let inputLnWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "input_layernorm.weight")
-  #     let postAttnWeight = ST.getTensor(weightsSt, weightsMemFile, 0, "post_attention_layernorm.weight")
+      var weightsSt = safetensors.load(weightsMemFile)
+      let inputLnWeight = weightsSt.getTensorOwned("input_layernorm.weight")
+      let postAttnWeight = weightsSt.getTensorOwned("post_attention_layernorm.weight")
 
-  #     for caseNum in 0..3:
-  #       let fixturePath = FixtureDir / &"norm-{ModelName}-{caseNum:02d}.safetensor"
-  #       if not fileExists(fixturePath):
-  #         continue
+      for caseNum in 0..3:
+        let fixturePath = FixtureDir / &"norm-{ModelName}-{caseNum:02d}.safetensor"
+        if not fileExists(fixturePath):
+          continue
 
-  #       var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
-  #       let (st, dataOffset) = safetensors.load(fixtureMemFile)
+        var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
+        var st = safetensors.load(fixtureMemFile)
 
-  #       let inputHiddenStates = ST.getTensor(st, fixtureMemFile, dataOffset, "input_hidden_states")
-  #       let expectedOutput = ST.getTensor(st, fixtureMemFile, dataOffset, "output")
+        let inputHiddenStates = st.getTensorOwned("input_hidden_states")
+        let expectedOutput = st.getTensorOwned("output")
 
-  #       let layerPath = st.metadata.get().getOrDefault("layer", "")
-  #       let normLayer =
-  #         if layerPath.endsWith("post_attention_layernorm"):
-  #           RmsNorm.init(postAttnWeight)
-  #         elif layerPath.endsWith("input_layernorm"):
-  #           RmsNorm.init(inputLnWeight)
-  #         else:
-  #           raise newException(ValueError, &"Invalid layer: '{layerPath}'")
+        let layerPath = st.metadata.unsafeGet().getOrDefault("layer", "")
+        let normLayer =
+          if layerPath.endsWith("post_attention_layernorm"):
+            RmsNorm.init(postAttnWeight)
+          elif layerPath.endsWith("input_layernorm"):
+            RmsNorm.init(inputLnWeight)
+          else:
+            raise newException(ValueError, &"Invalid layer: '{layerPath}'")
 
-  #       # Note: Transformers does the hidden_state + residual while we don't
-  #       var output = normLayer.forward(inputHiddenStates)
-  #       output += inputHiddenStates
-  #       let allClose = F.allClose(output, expectedOutput, rtol = 1e-3, abstol = 1e-4)
-  #       echo "allClose: ", allClose
-  #       doAssert allClose, block:
-  #         "RMSNorm case " & $caseNum & " failed\n" &
-  #         "--------------------------------------------\n" &
-  #         "Output[0, 0..<5, 0..<5]:\n" & $output[0, 0..<5, 0..<5] &
-  #         "\n--------------------------------------------\n" &
-  #         "Expected[0, 0..<5, 0..<5]:\n" & $expectedOutput[0, 0..<5, 0..<5] &
-  #         "\n--------------------------------------------\n"
-  #       close(fixtureMemFile)
+        var output = normLayer.forward(inputHiddenStates)
+        assertAllClose(output, expectedOutput, msg = "RMSNorm case " & $caseNum & " failed")
+        close(fixtureMemFile)
+      true
 
   runTest "MLP layer fixtures":
     proc(): bool =
