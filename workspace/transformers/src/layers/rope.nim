@@ -18,16 +18,19 @@ type
     sin_cache*: TorchTensor
 
 func rotate_half*(self: RotaryPositionEmbedding, x: TorchTensor): TorchTensor =
-  let dim = x.size(-1)
-  let x1 = x[0..<dim div 2]
-  let x2 = x[dim div 2..<dim]
-  F.cat(@[x2.neg(), x1], axis = -1)
+  # Input x: (batch, head, seq, head_dim), Output: (batch, head, seq, head_dim)
+  let head_dim = x.size(3)
+  let half_dim = head_dim div 2
+  let x1 = x[_, _, _, 0..<half_dim]
+  let x2 = x[_, _, _, half_dim..<head_dim]
+  F.cat([x2.neg(), x1], -1)
 
 func init*(_: type RotaryPositionEmbedding, head_dim, max_seq_len: int, rope_theta: float64, dtype: ScalarKind, device: DeviceKind): RotaryPositionEmbedding =
-  var inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / (head_dim.float)
+  let head_dim_float = head_dim.float64
+  let inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / head_dim_float
   let rope_theta_tensor = F.full([1], rope_theta, kFloat64)
-  inv_freq = inv_freq / F.pow(rope_theta_tensor, inv_freq)
-  let positions = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq.unsqueeze(0)
+  let inv_freq_final = F.pow(rope_theta_tensor, -inv_freq)
+  let positions = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq_final.unsqueeze(0)
   let fused = F.cat(positions, positions, axis = -1)
   let emb = F.cat(fused.cos(), fused.sin(), axis = -1)
   result.head_dim = head_dim
@@ -43,8 +46,8 @@ func apply_rope*(
   offset: int
 ): (TorchTensor, TorchTensor) =
   let seq_len = q.size(2)
-  let cos = self.cos_cache[offset..<offset+seq_len].unsqueeze(1)
-  let sin = self.sin_cache[offset..<offset+seq_len].unsqueeze(1)
+  let cos = self.cos_cache[offset..<offset+seq_len, _].unsqueeze(0).unsqueeze(1)
+  let sin = self.sin_cache[offset..<offset+seq_len, _].unsqueeze(0).unsqueeze(1)
   let q_rot = q * cos + self.rotate_half(q) * sin
   let k_rot = k * cos + self.rotate_half(k) * sin
   (q_rot, k_rot)

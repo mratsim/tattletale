@@ -107,11 +107,11 @@ import
 type
   TransformerBlock* = object
     attn_norm*: RmsNorm
-    attn*: RopeMHAttention
+    attn*: RopeGQAttention
     mlp_norm*: RmsNorm
     mlp*: GatedMLP
 
-func init*(_: type TransformerBlock, attn_norm: RmsNorm, attn: RopeMHAttention, mlp_norm: RmsNorm, mlp: GatedMLP): TransformerBlock =
+func init*(_: type TransformerBlock, attn_norm: RmsNorm, attn: RopeGQAttention, mlp_norm: RmsNorm, mlp: GatedMLP): TransformerBlock =
   TransformerBlock(
     attn_norm: attn_norm,
     attn: attn,

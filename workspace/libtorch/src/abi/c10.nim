@@ -58,7 +58,7 @@ type
 
   IntArrayRef* = ArrayRef[int]
 
-func data*[T](ar: ArrayRef[T]): lent UncheckedArray[T] {.importcpp: "const_cast<'*1*>(#.data())".}
+func data*[T](ar: ArrayRef[T]): ptr UncheckedArray[T] {.importcpp: "const_cast<'*1*>(#.data())".}
 func size*(ar: ArrayRef): csize_t {.importcpp: "#.size()".}
 
 func init*[T](AR: type ArrayRef[T], p: ptr T, len: SomeInteger): ArrayRef[T] {.constructor, importcpp: "c10::ArrayRef<'*0>(@)".}
