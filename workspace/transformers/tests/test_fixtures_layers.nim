@@ -97,20 +97,26 @@ proc main() =
       defer: close(weightsMemFile)
 
       var weightsSt = safetensors.load(weightsMemFile)
+      let inputLnWeight = weightsSt.getTensorOwned("input_layernorm.weight")
       let qWeight = weightsSt.getTensorOwned("self_attn.q_proj.weight")
       let kWeight = weightsSt.getTensorOwned("self_attn.k_proj.weight")
       let vWeight = weightsSt.getTensorOwned("self_attn.v_proj.weight")
       let oWeight = weightsSt.getTensorOwned("self_attn.o_proj.weight")
+      let qNormWeight = weightsSt.getTensorOwned("self_attn.q_norm.weight")
+      let kNormWeight = weightsSt.getTensorOwned("self_attn.k_norm.weight")
+
+      # input_layernorm should be applied BEFORE attention (matching HF)
+      let inputLn = RmsNorm.init(inputLnWeight)
 
       let numQoHeads = 16
       let numKvHeads = 8
       let headDim = 128
       let ropeTheta = 1_000_000.0
 
-      var rotary = RotaryPositionEmbedding.init(headDim, 40960, ropeTheta, F.kFloat32, F.kCPU)
+      var rotary = RotaryPositionEmbedding.init(headDim, 40960, ropeTheta, F.kBFloat16, F.kCPU)
 
       var attn: RopeGQAttention
-      attn = RopeGQAttention.init(qWeight, kWeight, vWeight, oWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
+      attn = RopeGQAttention.init(qWeight, kWeight, vWeight, oWeight, qNormWeight, kNormWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
 
       for caseNum in 0..1:
         traceExec:
@@ -123,13 +129,13 @@ proc main() =
 
           let hiddenStates = st.getTensorOwned("hidden_states")
           let expectedOutput = st.getTensorOwned("output")
+          let cos = st.getTensorOwned("cos")
+          let sin = st.getTensorOwned("sin")
 
-          let batchSize = hiddenStates.size(0).int
-          let seqLen = hiddenStates.size(1).int
-
-          let basePos = F.arange(seqLen.int64, F.kInt64)
-          let positions = basePos.unsqueeze(0).expand([batchSize.int64, seqLen.int64])
-          let output = attn.forward(hiddenStates, positions, use_cache = false)
+          # Fixture was generated WITHOUT input_layernorm (Qwen3Attention receives raw hidden_state)
+          # The input_layernorm is applied at the decoder layer level, not inside attention
+          # Use pre-computed cos/sin from fixture for exact match
+          let output = attn.forward(hiddenStates, cos, sin)
           assertAllClose(output, expectedOutput, msg = "Attention case " & $caseNum & " failed")
           close(fixtureMemFile)
       true

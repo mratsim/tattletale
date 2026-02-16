@@ -19,15 +19,20 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3DecoderLayer,
     Qwen3RotaryEmbedding,
     apply_rotary_pos_emb,
+    rotate_half,
 )
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 MODEL_NAME = "Qwen3-0.6B"
 LAYER_IDX = 8
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
-FIXTURE_DIR = os.path.join(GRANDPARENT_DIR, "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}")
+FIXTURE_DIR = os.path.join(
+    GRANDPARENT_DIR, "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}"
+)
 WEIGHTS_FILE = f"{FIXTURE_DIR}/Weights-{MODEL_NAME}-layer-{LAYER_IDX}.safetensor"
-MODEL_PATH = os.path.join(os.path.dirname(GRANDPARENT_DIR), f"tests/hf_models/{MODEL_NAME}/model.safetensors") # Assuming a very small model were everything fits in a single safetensor
+MODEL_PATH = os.path.join(
+    os.path.dirname(GRANDPARENT_DIR), f"tests/hf_models/{MODEL_NAME}/model.safetensors"
+)  # Assuming a very small model were everything fits in a single safetensor
 FIXED_SEED = 42
 
 
@@ -85,6 +90,8 @@ def create_layers_from_weights(weights: dict) -> tuple:
         attention_bias=False,
         rms_norm_eps=1e-6,
     )
+    # Force SDPA to match our Nim implementation
+    config._attn_implementation = "sdpa"
 
     # Create norm layers with weights
     input_layernorm = Qwen3RMSNorm(1024, eps=1e-6)
@@ -259,12 +266,62 @@ def generate_mlp_fixtures(mlp: Qwen3MLP) -> None:
     print(f"Generated {layer_name} fixtures")
 
 
+def generate_rope_fixtures(rotary: Qwen3RotaryEmbedding) -> None:
+    """Generate fixtures for RoPE layer."""
+    set_seed(FIXED_SEED + 3)
+    layer_name = "rope"
+
+    # Case 00: apply_rotary_pos_emb on 4D tensor [seq_len, batch, heads, head_dim]
+    batch, seq_len, num_heads, head_dim = 2, 8, 16, 128
+    hidden_states = torch.randn(batch, seq_len, 1024, dtype=torch.bfloat16)
+    position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1).contiguous()
+    cos, sin = rotary(hidden_states, position_ids)
+    q = torch.randn(seq_len, batch, num_heads, head_dim, dtype=torch.bfloat16)
+    k = torch.randn(seq_len, batch, num_heads // 2, head_dim, dtype=torch.bfloat16)
+    q_rot, k_rot = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+
+    save_fixture(
+        layer_name,
+        0,
+        {
+            "model": MODEL_NAME,
+            "layer": f"model.layers.{LAYER_IDX}.self_attn.rotary_emb",
+            "case": "apply_rotary_pos_emb_4d",
+        },
+        {
+            "q": q,
+            "k": k,
+            "cos": cos,
+            "sin": sin,
+            "q_rot": q_rot,
+            "k_rot": k_rot,
+        },
+    )
+
+    # Case 01: rotate_half on 4D tensor [seq_len, batch, heads, head_dim] - direct test
+    x = torch.randn(seq_len, batch, num_heads, head_dim, dtype=torch.bfloat16)
+    rotated_half = rotate_half(x)
+    save_fixture(
+        layer_name,
+        1,
+        {
+            "model": MODEL_NAME,
+            "layer": f"model.layers.{LAYER_IDX}.self_attn.rotary_emb.rotate_half",
+            "case": "rotate_half_4d",
+        },
+        {
+            "input": x,
+            "output": rotated_half,
+        },
+    )
+
+    print(f"Generated {layer_name} fixtures")
+
+
 def generate_attn_fixtures(attn: Qwen3Attention, rotary: Qwen3RotaryEmbedding) -> None:
     """Generate fixtures for attention layer using real weights."""
     set_seed(FIXED_SEED + 2)
     layer_name = "attn"
-
-    num_kv_groups = attn.num_key_value_groups
 
     # Case 00: Normal forward
     batch, seq_len = 2, 8
@@ -272,25 +329,12 @@ def generate_attn_fixtures(attn: Qwen3Attention, rotary: Qwen3RotaryEmbedding) -
     position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1).contiguous()
     cos, sin = rotary(hidden_states, position_ids)
 
-    query_states = attn.q_norm(
-        attn.q_proj(hidden_states).view(batch, seq_len, -1, 128)
-    ).transpose(1, 2)
-    key_states = attn.k_norm(
-        attn.k_proj(hidden_states).view(batch, seq_len, -1, 128)
-    ).transpose(1, 2)
-    value_states = (
-        attn.v_proj(hidden_states).view(batch, seq_len, -1, 128).transpose(1, 2)
+    output, _ = attn(
+        hidden_states,
+        position_embeddings=(cos, sin),
+        attention_mask=None,
+        past_key_values=None,
     )
-
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-    key_states = key_states.repeat_interleave(num_kv_groups, dim=1)
-    value_states = value_states.repeat_interleave(num_kv_groups, dim=1)
-
-    attn_out = torch.nn.functional.scaled_dot_product_attention(
-        query_states, key_states, value_states, is_causal=True, enable_gqa=True
-    )
-    output = attn.o_proj(attn_out.transpose(1, 2).reshape(batch, seq_len, -1))
 
     save_fixture(
         layer_name,
@@ -305,9 +349,6 @@ def generate_attn_fixtures(attn: Qwen3Attention, rotary: Qwen3RotaryEmbedding) -
             "position_ids": position_ids,
             "cos": cos,
             "sin": sin,
-            "query_states": query_states,
-            "key_states": key_states,
-            "value_states": value_states,
             "output": output,
         },
     )
@@ -317,23 +358,12 @@ def generate_attn_fixtures(attn: Qwen3Attention, rotary: Qwen3RotaryEmbedding) -
     position_ids = torch.tensor([[0]]).contiguous()
     cos, sin = rotary(hidden_states, position_ids)
 
-    query_states = attn.q_norm(
-        attn.q_proj(hidden_states).view(1, 1, -1, 128)
-    ).transpose(1, 2)
-    key_states = attn.k_norm(attn.k_proj(hidden_states).view(1, 1, -1, 128)).transpose(
-        1, 2
+    output, _ = attn(
+        hidden_states,
+        position_embeddings=(cos, sin),
+        attention_mask=None,
+        past_key_values=None,
     )
-    value_states = attn.v_proj(hidden_states).view(1, 1, -1, 128).transpose(1, 2)
-
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-    key_states = key_states.repeat_interleave(num_kv_groups, dim=1)
-    value_states = value_states.repeat_interleave(num_kv_groups, dim=1)
-
-    attn_out = torch.nn.functional.scaled_dot_product_attention(
-        query_states, key_states, value_states, is_causal=True, enable_gqa=True
-    )
-    output = attn.o_proj(attn_out.transpose(1, 2).reshape(1, 1, -1))
 
     save_fixture(
         layer_name,
@@ -348,9 +378,6 @@ def generate_attn_fixtures(attn: Qwen3Attention, rotary: Qwen3RotaryEmbedding) -
             "position_ids": position_ids,
             "cos": cos,
             "sin": sin,
-            "query_states": query_states,
-            "key_states": key_states,
-            "value_states": value_states,
             "output": output,
         },
     )

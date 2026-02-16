@@ -99,6 +99,9 @@ func view*(self: TorchTensor, size: varargs[int]): TorchTensor {.inline.} =
 func permute*(self: TorchTensor, dims: varargs[int]): TorchTensor {.inline.} =
   permute(self, asTorchView(dims))
 
+func expand*(self: TorchTensor, size: varargs[int]): TorchTensor {.inline.} =
+  expand(self, asTorchView(size))
+
 func flip*(self: TorchTensor, dims: varargs[int]): TorchTensor {.inline.} =
   flip(self, asTorchView(dims))
 
