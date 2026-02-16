@@ -109,28 +109,29 @@ proc main() =
 
       var rotary = RotaryPositionEmbedding.init(headDim, 40960, ropeTheta, F.kFloat32, F.kCPU)
 
-      var attn: RopeMHAttention
-      attn = RopeMHAttention.init(qWeight, kWeight, vWeight, oWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
+      var attn: RopeGQAttention
+      attn = RopeGQAttention.init(qWeight, kWeight, vWeight, oWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
 
       for caseNum in 0..1:
-        let fixturePath = FixtureDir / &"attn-{ModelName}-{caseNum:02d}.safetensor"
-        if not fileExists(fixturePath):
-          continue
+        traceExec:
+          let fixturePath = FixtureDir / &"attn-{ModelName}-{caseNum:02d}.safetensor"
+          if not fileExists(fixturePath):
+            continue
 
-        var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
-        var st = safetensors.load(fixtureMemFile)
+          var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
+          var st = safetensors.load(fixtureMemFile)
 
-        let hiddenStates = st.getTensorOwned("hidden_states")
-        let expectedOutput = st.getTensorOwned("output")
+          let hiddenStates = st.getTensorOwned("hidden_states")
+          let expectedOutput = st.getTensorOwned("output")
 
-        let batchSize = hiddenStates.size(0).int
-        let seqLen = hiddenStates.size(1).int
+          let batchSize = hiddenStates.size(0).int
+          let seqLen = hiddenStates.size(1).int
 
-        let basePos = F.arange(seqLen.int64, F.kInt64)
-        let positions = basePos.unsqueeze(0).expand([batchSize.int64, seqLen.int64])
-        let output = attn.forward(hiddenStates, positions, use_cache = false)
-        assertAllClose(output, expectedOutput, msg = "Attention case " & $caseNum & " failed")
-        close(fixtureMemFile)
+          let basePos = F.arange(seqLen.int64, F.kInt64)
+          let positions = basePos.unsqueeze(0).expand([batchSize.int64, seqLen.int64])
+          let output = attn.forward(hiddenStates, positions, use_cache = false)
+          assertAllClose(output, expectedOutput, msg = "Attention case " & $caseNum & " failed")
+          close(fixtureMemFile)
       true
 
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -329,6 +329,14 @@ func scaled_dot_product_attention*(
   ##
   ## Backends: See module-level documentation for backend selection details.
 
+{.pop.}
+
+# #######################################################################
+#
+#                       Syntactic Sugar
+#
+# #######################################################################
+
 func scaled_dot_product_attention*(
     query, key, value: TorchTensor,
     attn_mask = none(TorchTensor),
@@ -337,11 +345,42 @@ func scaled_dot_product_attention*(
     scale = none(float64),
     enable_gqa = false): TorchTensor {.inline.} =
 
-    scaled_dot_product_attention(
-      query, key, value,
-      attn_mask.toCppOptional(),
-      dropout_p,
-      is_causal,
-      scale.toCppOptional(),
-      enable_gqa
-    )
+  # TODO can we do better?
+  if attn_mask.isSome():
+    if scale.isSome():
+      scaled_dot_product_attention(
+        query, key, value,
+        attn_mask.unsafeGet(),
+        dropout_p,
+        is_causal,
+        scale.unsafeGet(),
+        enable_gqa
+      )
+    else:
+      scaled_dot_product_attention(
+        query, key, value,
+        attn_mask.unsafeGet(),
+        dropout_p,
+        is_causal,
+        cpp_nullopt(),
+        enable_gqa
+      )
+  else:
+    if scale.isSome():
+      scaled_dot_product_attention(
+        query, key, value,
+        cpp_nullopt(),
+        dropout_p,
+        is_causal,
+        scale.unsafeGet(),
+        enable_gqa
+      )
+    else:
+      scaled_dot_product_attention(
+        query, key, value,
+        cpp_nullopt(),
+        dropout_p,
+        is_causal,
+        cpp_nullopt(),
+        enable_gqa
+      )

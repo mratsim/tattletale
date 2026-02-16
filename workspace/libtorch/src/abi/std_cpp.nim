@@ -69,12 +69,6 @@ template cpp_nullopt*(): Nullopt_t =
 func value*[T](o: Optional[T]): T {.importcpp: "#.value()".}
 {.pop.}
 
-func toCppOptional*[T](o: Option[T]): Optional[T] {.inline.} =
-  if o.isSome():
-    result = unsafeGet(o)
-  else:
-    {.emit: [result, " = std::nullopt;"].}
-
 # std::shared_ptr<T>
 # -----------------------------------------------------------------------
 

@@ -78,8 +78,9 @@ func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
 #   But we can't store an openArray in a let variable
 #   or return it from a proc without {.experimental: "views".}
 
-func asNimView*[T](ar: ArrayRef[T]): openArray[T] {.inline.} =
-  toOpenArray(ar.data.unsafeAddr, 0, ar.size.int - 1)
+template asNimView*(ar: IntArrayRef): openArray[int] =
+  let dataptr = cast[ptr UncheckedArray[int]](ar.data[0].unsafeAddr())
+  toOpenArray(dataptr, 0, ar.size.int - 1)
 
 func asTorchView*(oa: varargs[int]): IntArrayRef {.inline.} =
   # libtorch only works (and actively checks) on 64-bit OSes.

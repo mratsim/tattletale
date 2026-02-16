@@ -19,16 +19,16 @@ import
   ./linear,
   ./mlp,
   ./norm,
-  ./rope,
-  ./transformer
+  ./rope
+  # ./transformer
 
 export
   attn,
   linear,
   mlp,
   norm,
-  rope,
-  transformer
+  rope
+  # transformer
 
 import
   ../kernels/[
