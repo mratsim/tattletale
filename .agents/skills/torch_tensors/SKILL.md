@@ -192,10 +192,14 @@ Combined with `..-` for end-relative slicing:
 # Nim equivalents (using - for negative, ..- for end-relative):
 let slice = tensor[_..-1, _]    # all but last (Python: a[:-1])
 let slice = tensor[-3.._, _]     # last 3 elements (Python: a[-3:])
-let slice = tensor[-3..-1, _]    # 3rd-from-end to before last (Python: a[-3:-1])
+let slice = tensor[-3..-1, _]   # 3rd-from-end to before last (Python: a[-3:-1])
 
 # Combined with start index:
-let slice = tensor[1..-1, _]     # from index 1 to before last
+let slice = tensor[1..-1, _]     # from index 1 to before last (Python: a[1:-1])
+
+# From negative start to end (use _ for "to end"):
+let slice = tensor[-4.._]         # Python: a[-4:] - last 4 elements (all remaining dims)
+let slice = tensor[-4.._, _]     # Python: a[-4:, :] - same, explicit for dim 1
 ```
 
 ### Why `-` instead of `^`

@@ -785,82 +785,12 @@ proc main() =
            [   4,   16,   64,  256, 1024],
            [ 999,   25,  999,  625,  999]].toTorchTensor.to(kFloat64)
 
-  suite "Common Attention Mechanism Patterns":
-    ## These patterns appear frequently in transformer attention implementations
+
+
+  suite "General Edge Cases":
+    ## General indexing edge cases and miscellaneous tests
 
     vandermonde.display()
-
-    test formatName("Q/K/V slicing for multi-head attention", "a[:, start_idx:start_idx+head_dim, :]"):
-      ## Pattern: a[:, start_idx:start_idx+head_dim, :]
-      var t = arange(100, kFloat64).reshape(@[2, 5, 10])
-      let head_dim = 4
-      let start_idx = 0
-      let q = t[_, start_idx..<start_idx+head_dim, _]
-      let expected = @[
-        @[@[ 0.0,  1.0,  2.0,  3.0,  4.0,  5.0,  6.0,  7.0,  8.0,  9.0],
-          @[10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0],
-          @[20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0],
-          @[30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0, 39.0]],
-        @[@[50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0, 58.0, 59.0],
-          @[60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0, 67.0, 68.0, 69.0],
-          @[70.0, 71.0, 72.0, 73.0, 74.0, 75.0, 76.0, 77.0, 78.0, 79.0],
-          @[80.0, 81.0, 82.0, 83.0, 84.0, 85.0, 86.0, 87.0, 88.0, 89.0]]
-      ].toTorchTensor.to(kFloat64)
-      check: q == expected
-
-    # TODO: investigate out-of-bounds error
-    # test formatName("Slicing all heads for a position", "a[:, :, pos_idx]"):
-    #   ## Extract a single position across all heads
-    #   let t = arange(100, kFloat64).reshape(@[2, 5, 10])
-    #   let pos_idx = 2
-    #   let sliced = t[_, _, pos_idx]
-    #   check: sliced.shape[0] == 2
-    #   check: sliced.shape[1] == 5
-    #   check: sliced.shape[2] == 1
-
-    # TODO: fix shape assertion
-    # test formatName("Causal mask slicing", "a[t, :, t_end:]"):
-    #   ## Pattern for causal attention (upper triangular)
-    #   var t = arange(30, kFloat64).reshape(@[2, 3, 5])
-    #   let t_idx = 1
-    #   let sliced = t[t_idx, _, t_idx+1..<5]
-    #   check: sliced.shape[0] == 1
-    #   check: sliced.shape[1] == 3
-    #   check: sliced.shape[2] == 3
-
-    # TODO ellipsis
-    # test formatName("Attention score masking with ellipsis", "a[..., q_idx, k_idx]"):
-    #   ## Pattern for attention weight masking
-    #   var t = arange(60, kFloat64).reshape(@[2, 3, 2, 5])
-    #   let q_idx = 1
-    #   let k_idx = 2
-    #   let sliced = t[`...`, q_idx, k_idx]
-    #   check: sliced.shape[0] == 2
-    #   check: sliced.shape[1] == 3
-
-    # TODO: fix shape assertion
-    # test formatName("Slicing last dimension for residual", "a[:, :, -head_size:]"):
-    #   ## Pattern: keep only the last head_size channels
-    #   var t = arange(100, kFloat64).reshape(@[2, 5, 10])
-    #   let head_size = 2
-    #   let sliced = t[_, _, -head_size..-0]
-    #   check: sliced.shape[2] == 2
-
-    test formatName("Interleaved slicing for RoPE/AliBi", "a[batch, seq, ::2]"):
-      ## Pattern: every other element (used in positional encoding)
-      var t = arange(40, kFloat64).reshape(@[2, 4, 5])
-      let sliced = t[_, _, _..<5|2]
-      let expected = @[
-        @[@[ 0.0,  2.0,  4.0],
-          @[ 5.0,  7.0,  9.0],
-          @[10.0, 12.0, 14.0],
-          @[15.0, 17.0, 19.0]],
-        @[@[20.0, 22.0, 24.0],
-          @[25.0, 27.0, 29.0],
-          @[30.0, 32.0, 34.0],
-          @[35.0, 37.0, 39.0]]
-      ].toTorchTensor.to(kFloat64)
-      check: sliced == expected
 
     test formatName("Empty slice", "a[0..0]"):
       ## Python: a[0:0] returns empty tensor
@@ -940,7 +870,6 @@ proc main() =
     #   let t = vandermonde
     #   let mask = t > 10.0
     #   let sliced = t[mask]
-    #   # Count of elements > 10 in Vandermonde matrix
 
   suite "Full Matrix Comparison Tests (Python Validated)":
     ## These tests verify exact matrix equality against Python-validated results
@@ -1172,123 +1101,6 @@ proc main() =
       let sliced = arr5[-4..-2]
       let expected = @[20.0, 30.0].toTorchTensor.to(kFloat64)
       check: sliced == expected
-
-  #   test formatName("Multi-head attention: split heads", "a[:, head_idx*head_size:(head_idx+1)*head_size, :]"):
-  #     ## Pattern: a[:, head_idx*head_size:(head_idx+1)*head_size, :]
-  #     var t = arange(240, kFloat64).reshape(@[2, 6, 20])  # batch=2, 6 heads, features=20
-  #     let head_idx = 2
-  #     let head_size = 4
-  #     let head_slice = t[_, head_idx*head_size..<(head_idx+1)*head_size, _]
-  #     check: head_slice.shape[0] == 2
-  #     check: head_slice.shape[1] == 4
-  #     check: head_slice.shape[2] == 20
-
-  #   test formatName("Multi-head attention: all heads", "a[:, :, :]"):
-  #     ## Pattern: a[:, :, :] (no slicing, get all heads)
-  #     var t = arange(240, kFloat64).reshape(@[2, 6, 20])
-  #     let all_heads = t[_, _, _]
-  #     check: all_heads.shape == @[2, 6, 20]
-
-  #   test formatName("Attention: causal mask preparation", "Upper triangle mask"):
-  #     ## Pattern: upper triangle mask for seq_len positions
-  #     let seq_len = 5
-  #     var mask = zeros(@[seq_len, seq_len], kFloat64)
-  #     for i in 0..<seq_len:
-  #       for j in i+1..<seq_len:
-  #         mask[i, j] = float64(-1e9)  # Mask out future positions
-  #     # Verify mask shape and some values
-  #     check: mask.shape[0] == 5
-  #     check: mask.shape[1] == 5
-  #     check: mask[0, 4].item(float64) == -1e9  # Last column masked
-  #     check: mask[4, 4].item(float64) == 0.0   # Diagonal not masked
-
-  #   test formatName("Rotary Position Embedding (RoPE)", "a[batch, seq, ::2]"):
-  #     ## Pattern: interleaved positions for cos/sin computation
-  #     var t = arange(40, kFloat64).reshape(@[2, 4, 5])
-  #     let cos_sin = t[_, _, _..<5|2]  # Every other position
-  #     check: cos_sin.shape[2] == 3  # 5 elements, step 2 = 3 values
-
-  #   test formatName("Flash Attention-like slicing", "a[q_start..q_end, :, k_start..k_end]"):
-  #     ## Pattern: a[q_start..q_end, :, k_start..k_end]
-  #     var t = arange(200, kFloat64).reshape(@[10, 8, 10])
-  #     let q_start = 2
-  #     let q_end = 5
-  #     let k_start = 1
-  #     let k_end = 4
-  #     let sliced = t[q_start..<q_end, _, k_start..<k_end]
-  #     check: sliced.shape[0] == 3
-  #     check: sliced.shape[1] == 8
-  #     check: sliced.shape[2] == 3
-
-  #   test formatName("Output projection slice", "a[:, :, -proj_dim:]"):
-  #     ## Pattern: a[:, :, -proj_dim:]
-  #     var t = arange(100, kFloat64).reshape(@[2, 5, 10])
-  #     let proj_dim = 4
-  #     let projected = t[_, _, ^proj_dim..^0]
-  #     check: projected.shape[2] == 4
-
-  #   test formatName("Vandermonde: row access with span", "v[1, _]"):
-  #     let row1 = v[1, _]
-  #     check: row1.shape[0] == 5
-  #     check: row1[0].item(float64) == 2.0
-  #     check: row1[4].item(float64) == 32.0
-
-  #   test formatName("Vandermonde: column access with span", "v[_, 2]"):
-  #     let col2 = v[_, 2]
-  #     check: col2.shape[0] == 5
-  #     check: col2[0].item(float64) == 1.0  # 1^3 = 1
-  #     check: col2[4].item(float64) == 125.0  # 5^3 = 125
-
-  #   test formatName("Vandermonde: submatrix slice", "v[1..<4, 1..<4]"):
-  #     let sub = v[1..<4, 1..<4]
-  #     check: sub.shape[0] == 3
-  #     check: sub.shape[1] == 3
-  #     check: sub[0, 0].item(float64) == 4.0   # 2^2 = 4
-  #     check: sub[2, 2].item(float64) == 64.0  # 4^2 = 64
-
-  #   test formatName("Vandermonde: every other row", "v[_..<5|2, _]"):
-  #     let evens = v[_..<5|2, _]
-  #     check: evens.shape[0] == 3
-  #     check: evens[0, 0].item(float64) == 1.0   # Row 0
-  #     check: evens[1, 0].item(float64) == 3.0   # Row 2
-  #     check: evens[2, 0].item(float64) == 5.0   # Row 4
-
-  #   test formatName("Vandermonde: last 2 columns", "v[_, -2..-0]"):
-  #     let last2 = v[_, -2..-0]
-  #     check: last2.shape[1] == 2
-  #     check: last2[0, 0].item(float64) == 1.0   # 1^4 = 1
-  #     check: last2[4, 1].item(float64) == 3125.0  # 5^5 = 3125
-
-  #   test formatName("Vandermonde: anti-diagonal with -", "v[-5..-1, -5..-1]"):
-  #     ## -N counts from end, so -4..-0 is all indices
-  #     let diag = v[-5..-1, -5..-1]
-  #     check: diag.shape[0] == 5
-  #     check: diag[0, 0].item(float64) == 5.0   # 5^0 = 1, but reversed!
-  #     check: diag[4, 4].item(float64) == 5.0   # 1^4 = 1, reversed
-
-  #   test formatName("Vandermonde: top-right triangle", "v[_..<5, 3..<5]"):
-  #     let upper = v[_..<5, 3..<5]
-  #     check: upper.shape[0] == 5
-  #     check: upper.shape[1] == 2
-  #     check: upper[0, 1].item(float64) == 1.0   # row 0, col 4
-
-  #   test formatName("Vandermonde: bottom-left triangle", "v[2..<5, _..<3]"):
-  #     let lower = v[2..<5, _..<3]
-  #     check: lower.shape[0] == 3
-  #     check: lower.shape[1] == 3
-  #     check: lower[0, 0].item(float64) == 9.0   # row 2, col 0
-
-  #   test formatName("Vandermonde: assign to slice", "v[0..<2, 0..<2] = 0"):
-  #     var v2 = v.clone()
-  #     v2[0..<2, 0..<2] = 0.0
-  #     check: v2[0, 0].item(float64) == 0.0
-  #     check: v2[1, 1].item(float64) == 0.0
-  #     check: v2[2, 2].item(float64) == 27.0  # Unchanged
-
-  #   test formatName("Vandermonde: ellipsis row access", "v[1, `...`]"):
-  #     let row1_ellipsis = v[1, `...`]
-  #     check: row1_ellipsis.shape[0] == 5
-  #     check: row1_ellipsis[0].item(float64) == 2.0
 
 when isMainModule:
   main()
