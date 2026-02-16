@@ -277,6 +277,9 @@ func from_blob*(data: pointer, sizes, strides: IntArrayRef, device: DeviceKind):
   ## Create a non-owning tensor view from a data pointer.
   ## The data MUST remaining valid for the lifetime of the view.
 
+func empty*(size: IntArrayRef): TorchTensor {.importcpp: "torch::empty(@)".}
+  ## Create an uninitialized tensor of shape `size`
+  ## The tensor data must be filled manually
 func empty*(size: IntArrayRef, options: TensorOptions): TorchTensor {.importcpp: "torch::empty(@)".}
   ## Create an uninitialized tensor of shape `size`
   ## The tensor data must be filled manually
@@ -516,7 +519,7 @@ type
     IndexTensor = 5
 
 # The torch::indexing::None used in Torch is
-# std::nullopt which can be called in Nim via nullopt
+# std::nullopt which can be called in Nim via cpp_nullopt
 
 type EllipsisIndexType* {.importcpp: "torch::indexing::EllipsisIndexType".} = object
 
@@ -540,7 +543,7 @@ func SliceSpan*(): TorchSlice {.constructor, importcpp: "torch::indexing::Slice(
 template `_`*: Nullopt_t =
   # It's either replaced by SliceSpan in fancy indexing expression
   # or pass as-is to torchSlice
-  nullopt
+  cpp_nullopt
 
 func torchSlice*(start: Nullopt_t | SomeSignedInt): TorchSlice {.constructor, importcpp: "torch::indexing::Slice(@)".}
 func torchSlice*(
