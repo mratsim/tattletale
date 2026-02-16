@@ -66,15 +66,15 @@ func forward*(
   # Input q,k,v: (batch, seq, num_head, head_dim)
   let batch = q.size(0)
   let seq_len = q.size(1)
-  
+
   var q_attn = q.permute([0, 2, 1, 3])
   var k_attn = k.permute([0, 2, 1, 3])
   let v_attn = v.permute([0, 2, 1, 3])
-  
+
   let target_dtype = v_attn.scalarType()
   let q_final = q_attn.to(target_dtype)
   let k_final = k_attn.to(target_dtype)
-  
+
   let attn_out = F.scaled_dot_product_attention(
     q_final, k_final, v_attn,
     attn_mask = attn_mask,
@@ -83,7 +83,7 @@ func forward*(
     scale = some(self.softmax_scale),
     enable_gqa = self.num_kv_groups > 1
   )
-  
+
   let attn_perm = attn_out.permute([0, 2, 1, 3])
   result = attn_perm.reshape([batch, seq_len, self.qo_attn_dim])
 
@@ -142,33 +142,33 @@ func init*(
     kv_cache: KVCache.init()
   )
 
-proc reset_cache*(self: var RopeGQAttention) =
+proc resetCache*(self: var RopeGQAttention) =
   self.kv_cache.reset()
+  self.rotary.resetCache()
 
 proc forward*(
   self: var RopeGQAttention,
   x: TorchTensor,
-  rope_offset: int
 ): TorchTensor =
   # Use separate Q, K, V projections (matching HF/Qwen3)
   let q = self.q_proj.forward(x)
   var k_new = self.k_proj.forward(x)
   var v_new = self.v_proj.forward(x)
-   
+
   let batch = x.size(0)
   let seq_len = x.size(1)
- 
+
   # KV cache transformation:
   # - Prefill: cache is empty, we append new KV, returning (k_new, v_new)
   # - Decode: cache has prior KV, we append new KV, returning full concatenated KV
   (k_new, v_new) = self.kv_cache.append(k_new, v_new)
- 
+
   # Reshape to (batch, seq, heads, head_dim)
   # Note: for decode, k_new/v_new now has seq_len = 1 + cache_size
   let q_reshaped = q.reshape([batch, seq_len, self.attn.num_qo_head, self.attn.head_dim])
   let k_reshaped = k_new.reshape([batch, k_new.size(1), self.attn.num_kv_head, self.attn.head_dim])
   let v_reshaped = v_new.reshape([batch, v_new.size(1), self.attn.num_kv_head, self.attn.head_dim])
- 
+
   # Apply q/k norm (on reshaped tensor before permute)
   var q_norm_input = q_reshaped
   var k_norm_input = k_reshaped
@@ -176,41 +176,14 @@ proc forward*(
     q_norm_input = self.q_norm.get().forward(q_reshaped)
   if self.k_norm.isSome:
     k_norm_input = self.k_norm.get().forward(k_reshaped)
- 
-  # Apply RoPE using the rotary cache with offset into the cache
-  let (q_rot, k_rot) = self.rotary.apply_rope(q_norm_input, k_norm_input, rope_offset)
- 
-  # Pass to backend (GroupedQueryAttention) which handles permute/dtype/SDPA/reshape
-  let attn_out_reshaped = self.attn.forward(q_rot, k_rot, v_reshaped, is_causal = true)
-  result = self.o_proj.forward(attn_out_reshaped)
 
-proc forward*(
-  self: var RopeGQAttention,
-  x: TorchTensor,
-  cos: TorchTensor,
-  sin: TorchTensor
-): TorchTensor =
-  # For testing: use pre-computed cos/sin from fixture
-  let q = self.q_proj.forward(x)
-  let k_new = self.k_proj.forward(x)
-  let v_new = self.v_proj.forward(x)
-   
-  let batch = x.size(0)
-  let seq_len = x.size(1)
- 
-  let q_reshaped = q.reshape([batch, seq_len, self.attn.num_qo_head, self.attn.head_dim])
-  let k_reshaped = k_new.reshape([batch, k_new.size(1), self.attn.num_kv_head, self.attn.head_dim])
-  let v_reshaped = v_new.reshape([batch, v_new.size(1), self.attn.num_kv_head, self.attn.head_dim])
- 
-  var q_norm_input = q_reshaped
-  var k_norm_input = k_reshaped
-  if self.q_norm.isSome:
-    q_norm_input = self.q_norm.get().forward(q_reshaped)
-  if self.k_norm.isSome:
-    k_norm_input = self.k_norm.get().forward(k_reshaped)
- 
-  let (q_rot, k_rot) = apply_rope_impl(q_norm_input, k_norm_input, cos, sin)
-  
+  echo "before rope"
+
+  # Apply RoPE using the rotary cache with offset into the cache
+  let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input)
+
+  echo "after rope"
+
   # Pass to backend (GroupedQueryAttention) which handles permute/dtype/SDPA/reshape
   let attn_out_reshaped = self.attn.forward(q_rot, k_rot, v_reshaped, is_causal = true)
   result = self.o_proj.forward(attn_out_reshaped)
