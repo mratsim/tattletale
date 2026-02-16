@@ -479,9 +479,6 @@ func expand*(a: TorchTensor, sizes: IntArrayRef, implicit: bool = false): TorchT
   ## Passing -1 as the size for a dimension means not changing the size of that dimension.
   ## The dimensions must match between the original tensor and the required tensor.
 
-func expand*(a: TorchTensor, sizes: openArray[int64], implicit: bool = false): TorchTensor {.importcpp: "#.expand(@)".}
-  ## Overload for runtime sizes passed as openArray[int64].
-
 # Automatic Differentiation
 # -----------------------------------------------------------------------
 

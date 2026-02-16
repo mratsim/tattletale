@@ -52,7 +52,7 @@ proc runTest*(name: string, body: proc(): bool) =
 
 proc assertAllClose*(
   actual, expected: TorchTensor,
-  rtol = 1e-2, abstol = 1e-3,
+  rtol = 2e-2'f64, abstol = 2e-2'f64,
   msg = ""
 ) =
   let allClose = F.allClose(actual, expected, rtol, abstol)

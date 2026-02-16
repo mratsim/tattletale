@@ -17,14 +17,48 @@ type
     cos_cache*: TorchTensor
     sin_cache*: TorchTensor
 
-func rotate_half*(self: RotaryPositionEmbedding, x: TorchTensor): TorchTensor =
-  # Input x: (batch, head, seq, head_dim), Output: (batch, head, seq, head_dim)
+# Input/Output: (batch, head, seq, head_dim)
+func rotate_half*(x: TorchTensor): TorchTensor =
   let head_dim = x.size(3)
   let half_dim = head_dim div 2
   let x1 = x[_, _, _, 0..<half_dim]
   let x2 = x[_, _, _, half_dim..<head_dim]
   F.cat([x2.neg(), x1], -1)
 
+# Freestanding RoPE implementation with pre-computed cos/sin tensor
+# Input q,k: (batch, seq, head, head_dim)
+# Input cos, sin: (batch, seq, head_dim) or (seq, head_dim)
+# Output: (batch, seq, head, head_dim)
+func apply_rope_impl*(
+  q: TorchTensor,
+  k: TorchTensor,
+  cos: TorchTensor,
+  sin: TorchTensor
+): (TorchTensor, TorchTensor) =
+  # Transpose to (batch, head, seq, head_dim) for rotation
+  var q_t = q.transpose(1, 2)
+  var k_t = k.transpose(1, 2)
+  
+  # cos/sin can be:
+  # - (seq, head_dim): slice from cache -> unsqueeze(0,1) -> (1, 1, seq, head_dim)
+  # - (batch, seq, head_dim): from HF fixture -> unsqueeze(1) -> (batch, 1, seq, head_dim)
+  let cos = 
+    if cos.dim() == 2: cos.unsqueeze(0).unsqueeze(1)
+    else: cos.unsqueeze(1)
+  let sin = 
+    if sin.dim() == 2: sin.unsqueeze(0).unsqueeze(1)
+    else: sin.unsqueeze(1)
+  
+  # Apply rotation for q
+  let q_rot_t = q_t * cos + rotate_half(q_t) * sin
+  
+  # Apply rotation for k
+  let k_rot_t = k_t * cos + rotate_half(k_t) * sin
+  
+  # Transpose back to (batch, seq, head, head_dim)
+  result = (q_rot_t.transpose(1, 2), k_rot_t.transpose(1, 2))
+
+# Output: cos_cache (max_seq_len, head_dim), sin_cache (max_seq_len, head_dim)
 func init*(_: type RotaryPositionEmbedding, head_dim, max_seq_len: int, rope_theta: float64, dtype: ScalarKind, device: DeviceKind): RotaryPositionEmbedding =
   let head_dim_float = head_dim.float64
   let inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / head_dim_float
@@ -39,15 +73,21 @@ func init*(_: type RotaryPositionEmbedding, head_dim, max_seq_len: int, rope_the
   result.cos_cache = emb[0..<max_seq_len, 0..<head_dim].to(dtype).to(device)
   result.sin_cache = emb[0..<max_seq_len, head_dim..<2*head_dim].to(dtype).to(device)
 
-func apply_rope*(
+# Method using cache - calls freestanding apply_rope_impl
+# Input q.k: (batch, seq, head, head_dim)
+# Input offset: scalar offset into the cache (for prefill, typically 0)
+# Output: (batch, seq, head, head_dim)
+proc apply_rope*(
   self: RotaryPositionEmbedding,
   q: TorchTensor,
   k: TorchTensor,
   offset: int
 ): (TorchTensor, TorchTensor) =
-  let seq_len = q.size(2)
-  let cos = self.cos_cache[offset..<offset+seq_len, _].unsqueeze(0).unsqueeze(1)
-  let sin = self.sin_cache[offset..<offset+seq_len, _].unsqueeze(0).unsqueeze(1)
-  let q_rot = q * cos + self.rotate_half(q) * sin
-  let k_rot = k * cos + self.rotate_half(k) * sin
-  (q_rot, k_rot)
+  let seq_len = q.size(1)
+  
+  # Slice cache: (seq_len, head_dim) - contiguous due to first-dim slice
+  let cos_seq = self.cos_cache[offset..<offset+seq_len, _]
+  let sin_seq = self.sin_cache[offset..<offset+seq_len, _]
+  
+  # Apply rotation using freestanding impl (pass 2D cache, let impl handle broadcasting)
+  result = apply_rope_impl(q, k, cos_seq, sin_seq)
