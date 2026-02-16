@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
+  std/options,
   # Internal
   workspace/libtorch/src/abi/torch_tensors,
   workspace/libtorch/src/abi/std_cpp,
@@ -283,10 +284,10 @@ func l1_loss*(input, target: TorchTensor): TorchTensor {.importcpp: "torch::l1_l
 
 func scaled_dot_product_attention*(
   query, key, value: TorchTensor,
-  attn_mask: Optional[TorchTensor] = nullopt,
+  attn_mask: Optional[TorchTensor] = cpp_nullopt,
   dropout_p: cdouble = 0.0,
   is_causal: bool = false,
-  scale: Optional[float64] = nullopt,
+  scale: Optional[float64] = cpp_nullopt,
   enable_gqa: bool = false
 ): TorchTensor {.importcpp: "torch::scaled_dot_product_attention(@)".}
   ## SDPA - the core attention operation in Transformers.
@@ -327,3 +328,20 @@ func scaled_dot_product_attention*(
   ##   - enable_gqa: Enable grouped-query attention (H_kv must divide H_q).
   ##
   ## Backends: See module-level documentation for backend selection details.
+
+func scaled_dot_product_attention*(
+    query, key, value: TorchTensor,
+    attn_mask = none(TorchTensor),
+    dropout_p = 0.0,
+    is_causal = false,
+    scale = none(float64),
+    enable_gqa = false): TorchTensor {.inline.} =
+
+    scaled_dot_product_attention(
+      query, key, value,
+      attn_mask.toCppOptional(),
+      dropout_p,
+      is_causal,
+      scale.toCppOptional(),
+      enable_gqa
+    )

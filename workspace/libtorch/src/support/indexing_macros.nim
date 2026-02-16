@@ -91,7 +91,7 @@ import
 # Negative values are normalized by adding size at runtime.
 #
 # Translation rules:
-# - `_` (underscore) means "full span" → nullopt
+# - `_` (underscore) means "full span" → cpp_nullopt
 # - `..<` (exclusive) → stop stays as-is
 # - `..-` (end-relative, Python exclusive) → stop becomes size + (-N) = size - N
 # - `..` (inclusive, rarely used) → stop becomes size + (-N) + 1 = size - N + 1
@@ -109,8 +109,8 @@ template normalizeNegativeIndex[T: int|Nullopt_t](idx: T, axisLen: int): T =
 
 func normalizedSlice*(
         start: distinct OptInt,
-        stop: distinct OptInt = nullopt,
-        step: distinct OptInt = nullopt,
+        stop: distinct OptInt = cpp_nullopt(),
+        step: distinct OptInt = cpp_nullopt(),
         axisLen: int): TorchSlice {.inline.} =
   ## Convert Python-style slice with step to C++ libtorch slices.
 
@@ -254,7 +254,7 @@ func `|`*(step: int): TorchSlice {.inline.} =
   ##   tensor[1, |2, _] -> 1, Slice(None, None, 2), Slice()
   ##
   ## This is cleaner than the older `_.._|step` syntax.
-  return torchSlice(nullopt, nullopt, step)
+  return torchSlice(cpp_nullopt(), cpp_nullopt(), step)
 
 func `|+`*(step: int): TorchSlice {.inline.} =
   ## Alias for ``|`` - positive step
@@ -267,7 +267,7 @@ func `..|`*(a: int, step: int): TorchSlice {.inline.} =
   ##     - a `step` stride
   ## Returns:
   ##     - a ``TorchSlice``, end of range will be inclusive
-  return torchSlice(a, nullopt, step)
+  return torchSlice(a, cpp_nullopt(), step)
 
 func `..`*(a: int, s: Step): TorchSlice {.inline.} =
   ## Internal: Build a TorchSlice from [a .. (b|step)] (workaround to operator precedence)
@@ -323,7 +323,7 @@ func sliceSpan(): NimNode =
   newCall(bindSym"SliceSpan")
 
 func sliceNone(): NimNode =
-  newCall(bindSym("nullopt"))
+  newCall(bindSym"cpp_nullopt")
 
 func sliceEllipsis(): NimNode =
   newCall(bindSym"ellipsis")
