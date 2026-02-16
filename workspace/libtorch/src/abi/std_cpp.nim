@@ -5,7 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/macros
+import
+  std/macros,
+  std/options
 
 # ############################################################
 #
@@ -59,14 +61,19 @@ type
   Optional*[T] {.bycopy, importcpp: "std::optional".} = T or Nullopt_t
   Nullopt_t* {.bycopy, importcpp: "std::nullopt_t".} = object
 
-let Nullopt {.importcpp: "std::nullopt".}: Nullopt_t
-template nullopt*(): Nullopt_t =
+let CppNullopt {.importcpp: "std::nullopt".}: Nullopt_t
+template cpp_nullopt*(): Nullopt_t =
   {.cast(noSideEffect).}: # Workaround to allow ergonomic usage of std::nullopt in sideeffect-free functions
-    Nullopt
+    CppNullopt
 
 func value*[T](o: Optional[T]): T {.importcpp: "#.value()".}
-
 {.pop.}
+
+func toCppOptional*[T](o: Option[T]): Optional[T] {.inline.} =
+  if o.isSome():
+    result = unsafeGet(o)
+  else:
+    {.emit: [result, " = std::nullopt;"].}
 
 # std::shared_ptr<T>
 # -----------------------------------------------------------------------

@@ -54,13 +54,16 @@ template from_blob*(data: pointer, sizes, strides: openArray[int], scalarKind: S
 template from_blob*(data: pointer, sizes, strides: openArray[int], device: DeviceKind): TorchTensor =
   from_blob(data, asTorchView(sizes), asTorchView(strides), device)
 
-template empty*(size: openArray[int], options: TensorOptions): TorchTensor =
+template empty*(size: varargs[int]): TorchTensor =
+  empty(asTorchView(size))
+
+template empty*(size: varargs[int], options: TensorOptions): TorchTensor =
   empty(asTorchView(size), options)
 
-template empty*(size: openArray[int], scalarKind: ScalarKind): TorchTensor =
+template empty*(size: varargs[int], scalarKind: ScalarKind): TorchTensor =
   empty(asTorchView(size), scalarKind)
 
-template empty*(size: openArray[int], device: DeviceKind): TorchTensor =
+template empty*(size: varargs[int], device: DeviceKind): TorchTensor =
   empty(asTorchView(size), device)
 
 # Random sampling
