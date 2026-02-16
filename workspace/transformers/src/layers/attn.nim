@@ -17,88 +17,87 @@ import
   ./rope
 
 type
-  MultiHeadAttention* = object
-    layer_id*: int
+  GroupedQueryAttention* = object
     head_dim*: int
-    num_qo_heads*: int
-    num_kv_heads*: int
+    num_qo_head*: int
+    num_kv_head*: int
     num_kv_groups*: int
     qo_attn_dim*: int
     kv_attn_dim*: int
-    rotary*: RotaryPositionEmbedding
-    q_norm*: Option[RmsNorm]
-    k_norm*: Option[RmsNorm]
+    softmax_scale*: float64
 
-func init*(_: type MultiHeadAttention, layer_id, num_qo_heads, num_kv_heads, head_dim: int, rotary: RotaryPositionEmbedding, q_norm, k_norm: Option[RmsNorm]): MultiHeadAttention =
-  let num_kv_groups = num_qo_heads div num_kv_heads
-  MultiHeadAttention(
-    layer_id: layer_id,
-    head_dim: head_dim,
-    num_qo_heads: num_qo_heads,
-    num_kv_heads: num_kv_heads,
-    num_kv_groups: num_kv_groups,
-    qo_attn_dim: num_qo_heads * head_dim,
-    kv_attn_dim: num_kv_heads * head_dim,
-    rotary: rotary,
-    q_norm: q_norm,
-    k_norm: k_norm
-  )
-
-proc forward*(self: MultiHeadAttention, q, k, v: TorchTensor, positions: TorchTensor): TorchTensor =
-  let batch = q.size(0)
-  let seq_len = q.size(1)
-
-  let q_reshaped = q.reshape([batch, seq_len, self.num_qo_heads, self.head_dim])
-  let k_reshaped = k.reshape([batch, seq_len, self.num_kv_heads, self.head_dim])
-  let v_reshaped = v.reshape([batch, seq_len, self.num_kv_heads, self.head_dim])
-
-  if self.q_norm.isSome:
-    discard self.q_norm.get().forward(q_reshaped)
-  if self.k_norm.isSome:
-    discard self.k_norm.get().forward(k_reshaped)
-
-  let q_attn = q_reshaped.permute([1, 0, 2, 3])
-  let k_attn = k_reshaped.permute([1, 0, 2, 3])
-  let v_attn = v_reshaped.permute([1, 0, 2, 3])
-
-  let (q_rot, k_rot) = self.rotary.apply_rope(q_attn, k_attn, 0)
-  discard k_rot  # Used in GQA path via k_expanded
-
-  var attn_out: TorchTensor
-  if self.num_kv_groups > 1:
-    let k_expanded = k_attn.repeat_interleave(self.num_kv_groups, 0)
-    let v_expanded = v_attn.repeat_interleave(self.num_kv_groups, 0)
-    attn_out = F.scaled_dot_product_attention(
-      q_rot, k_expanded, v_expanded, is_causal = true, enable_gqa = true
-    )
-  else:
-    attn_out = F.scaled_dot_product_attention(
-      q_rot, k_attn, v_attn, is_causal = true
-    )
-
-  result = attn_out.permute([1, 0, 2, 3]).reshape([batch, seq_len, self.qo_attn_dim])
-
-type
   KVCache* = object
     keys*: TorchTensor
     values*: TorchTensor
 
+  RopeGQAttention* = object
+    qkv*: Linear
+    o_proj*: Linear
+    attn*: GroupedQueryAttention
+    rotary*: RotaryPositionEmbedding
+    q_norm*: Option[RmsNorm]
+    k_norm*: Option[RmsNorm]
+    kv_cache*: KVCache
+
+func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
+  let num_kv_groups = num_qo_head div num_kv_head
+  GroupedQueryAttention(
+    head_dim: head_dim,
+    num_qo_head: num_qo_head,
+    num_kv_head: num_kv_head,
+    num_kv_groups: num_kv_groups,
+    qo_attn_dim: num_qo_head * head_dim,
+    kv_attn_dim: num_kv_head * head_dim,
+    softmax_scale: 1.0'f64 / sqrt(head_dim.float64)
+  )
+
+func forward*(
+  self: GroupedQueryAttention,
+  q: TorchTensor,
+  k: TorchTensor,
+  v: TorchTensor,
+  is_causal: bool = true,
+  attn_mask = none(TorchTensor),
+  dropout_p = 0.0'f64
+): TorchTensor =
+  let enable_gqa = self.num_kv_groups > 1
+  var key = k
+  var value = v
+  if enable_gqa:
+    key = k.repeat_interleave(self.num_kv_groups, 1)
+    value = v.repeat_interleave(self.num_kv_groups, 1)
+  F.scaled_dot_product_attention(
+    q, key, value,
+    attn_mask = attn_mask,
+    dropout_p = dropout_p,
+    is_causal = is_causal,
+    scale = some(self.softmax_scale),
+    enable_gqa = enable_gqa
+  )
+
 func init*(_: type KVCache): KVCache =
   KVCache()
 
+proc reset*(self: var KVCache) =
+  self.keys = F.empty(0)
+  self.values = F.empty(0)
+
 proc append*(self: var KVCache, k, v: TorchTensor): (TorchTensor, TorchTensor) =
-  self.keys = F.cat([self.keys, k], 1)
-  self.values = F.cat([self.values, v], 1)
-  result = (self.keys, self.values)
+  if self.keys.numel == 0:
+    self.keys = k
+    self.values = v
+  else:
+    self.keys = F.cat([self.keys, k], 1)
+    self.values = F.cat([self.values, v], 1)
+  (self.keys, self.values)
 
-type
-  RopeMHAttention* = object
-    qkv*: Linear
-    o_proj*: Linear
-    attn*: MultiHeadAttention
-    kv_cache*: KVCache
-
-func init*(_: type RopeMHAttention, q_weight, k_weight, v_weight, o_weight: TorchTensor, num_qo_heads, num_kv_heads, head_dim: int, rotary: RotaryPositionEmbedding, rms_norm_eps: float = 1e-6): RopeMHAttention =
+func init*(
+  _: type RopeGQAttention,
+  q_weight, k_weight, v_weight, o_weight: TorchTensor,
+  num_qo_head, num_kv_head, head_dim: int,
+  rotary: RotaryPositionEmbedding,
+  rms_norm_eps = 1e-6'f64
+): RopeGQAttention =
   let qkv_fused = F.cat([q_weight, k_weight, v_weight], 0)
   let qkv = Linear.init(qkv_fused)
   let o_proj = Linear.init(o_weight)
@@ -111,36 +110,46 @@ func init*(_: type RopeMHAttention, q_weight, k_weight, v_weight, o_weight: Torc
     if has_qk_norm: some(RmsNorm.init(weight = F.ones([head_dim], kFloat32), eps = rms_norm_eps))
     else: none(RmsNorm)
 
-  let attn = MultiHeadAttention.init(
-    layer_id = 0,
-    num_qo_heads = num_qo_heads,
-    num_kv_heads = num_kv_heads,
-    head_dim = head_dim,
-    rotary = rotary,
-    q_norm = q_norm,
-    k_norm = k_norm
+  let attn = GroupedQueryAttention.init(
+    num_qo_head = num_qo_head,
+    num_kv_head = num_kv_head,
+    head_dim = head_dim
   )
 
-  RopeMHAttention(
+  RopeGQAttention(
     qkv: qkv,
     o_proj: o_proj,
     attn: attn,
+    rotary: rotary,
+    q_norm: q_norm,
+    k_norm: k_norm,
     kv_cache: KVCache.init()
   )
 
-func reset_cache*(self: var RopeMHAttention) =
+proc reset_cache*(self: var RopeGQAttention) =
   self.kv_cache.reset()
 
-proc forward*(self: var RopeMHAttention, x: TorchTensor, positions: TorchTensor, use_cache: bool): TorchTensor =
+proc forward*(
+  self: var RopeGQAttention,
+  x: TorchTensor,
+  position: TorchTensor,
+  use_cache: bool
+): TorchTensor =
   let qkv_out = self.qkv.forward(x)
+  # doAssert qkv_out.shape.asNimView() == @[2, 8, 4096], "qkv_out shape"
   let batch = x.size(0)
   let seq_len = x.size(1)
-  let qo_dim = self.attn.qo_attn_dim
-  let kv_dim = self.attn.kv_attn_dim
 
-  let q = qkv_out[0..<qo_dim]
-  let k_new = qkv_out[qo_dim..<qo_dim+kv_dim]
-  let v_new = qkv_out[qo_dim+kv_dim..^1]
+  # Input: qkv_out is (batch, seq, qo_attn_dim + 2*kv_attn_dim)
+  # Shape: (2, 8, 2048 + 2*1024) = (2, 8, 4096)
+  # For 3D tensor: t[_, _, start..<stop] to slice last dim only
+  let q = qkv_out[_, _, 0..<self.attn.qo_attn_dim]     # (2, 8, 2048)
+  let k_new = qkv_out[_, _, self.attn.qo_attn_dim..<self.attn.qo_attn_dim + self.attn.kv_attn_dim]  # (2, 8, 1024)
+  let v_new = qkv_out[_, _, self.attn.qo_attn_dim + self.attn.kv_attn_dim.._]  # (2, 8, 1024)
+  # Expected: q,k_new,v_new = (batch, seq, qo_attn_dim/kv_attn_dim) = (2, 8, 2048/1024)
+  doAssert q.size(0) == batch and q.size(1) == seq_len and q.size(2) == self.attn.qo_attn_dim, "q slice shape"
+  doAssert k_new.size(0) == batch and k_new.size(1) == seq_len and k_new.size(2) == self.attn.kv_attn_dim, "k_new slice shape"
+  doAssert v_new.size(0) == batch and v_new.size(1) == seq_len and v_new.size(2) == self.attn.kv_attn_dim, "v_new slice shape"
 
   var k_full: TorchTensor
   var v_full: TorchTensor
@@ -152,27 +161,40 @@ proc forward*(self: var RopeMHAttention, x: TorchTensor, positions: TorchTensor,
     v_full = v_new
     self.kv_cache.reset()
 
-  let q_reshaped = q.reshape([batch, seq_len, self.attn.num_qo_heads, self.attn.head_dim])
-  let k_reshaped = k_full.reshape([batch, k_full.size(1), self.attn.num_kv_heads, self.attn.head_dim])
-  let v_reshaped = v_full.reshape([batch, v_full.size(1), self.attn.num_kv_heads, self.attn.head_dim])
+  # Reshape to (batch, seq, heads, head_dim)
+  let q_reshaped = q.reshape([batch, seq_len, self.attn.num_qo_head, self.attn.head_dim])   # (2, 8, 16, 128)
+  let k_reshaped = k_full.reshape([batch, k_full.size(1), self.attn.num_kv_head, self.attn.head_dim])  # (2, 8, 8, 128)
+  let v_reshaped = v_full.reshape([batch, v_full.size(1), self.attn.num_kv_head, self.attn.head_dim])  # (2, 8, 8, 128)
 
-  let q_attn = q_reshaped.permute([1, 0, 2, 3])
-  let k_attn = k_reshaped.permute([1, 0, 2, 3])
-  let v_attn = v_reshaped.permute([1, 0, 2, 3])
+  doAssert q_reshaped.shape.asNimView() == @[batch, seq_len, self.attn.num_qo_head, self.attn.head_dim], "q_reshaped shape"
+  doAssert k_reshaped.shape.asNimView() == @[batch, k_full.size(1), self.attn.num_kv_head, self.attn.head_dim], "k_reshaped shape"
+  doAssert v_reshaped.shape.asNimView() == @[batch, v_full.size(1), self.attn.num_kv_head, self.attn.head_dim], "v_reshaped shape"
 
-  let (q_rot, k_rot) = self.attn.rotary.apply_rope(q_attn, k_attn, 0)
+  # Permute to (batch, head, seq, head_dim) for SDPA: (0,2,1,3)
+  var q_attn = q_reshaped.permute([0, 2, 1, 3])  # (2, 16, 8, 128)
+  var k_attn = k_reshaped.permute([0, 2, 1, 3])  # (2, 8, 8, 128)
+  let v_attn = v_reshaped.permute([0, 2, 1, 3])  # (2, 8, 8, 128)
 
-  var attn_out: TorchTensor
-  if self.attn.num_kv_groups > 1:
-    let k_expanded = k_rot.repeat_interleave(self.attn.num_kv_groups, 0)
-    let v_expanded = v_attn.repeat_interleave(self.attn.num_kv_groups, 0)
-    attn_out = F.scaled_dot_product_attention(
-      q_rot, k_expanded, v_expanded, is_causal = true, enable_gqa = true
-    )
-  else:
-    attn_out = F.scaled_dot_product_attention(
-      q_rot, k_rot, v_attn, is_causal = true
-    )
+  doAssert q_attn.shape.asNimView() == @[batch, self.attn.num_qo_head, seq_len, self.attn.head_dim], "q_attn shape"
+  doAssert k_attn.shape.asNimView() == @[batch, self.attn.num_kv_head, k_full.size(1), self.attn.head_dim], "k_attn shape"
+  doAssert v_attn.shape.asNimView() == @[batch, self.attn.num_kv_head, v_full.size(1), self.attn.head_dim], "v_attn shape"
 
-  let attn_flat = attn_out.permute([1, 0, 2, 3]).reshape([batch * seq_len, self.attn.qo_attn_dim])
-  result = self.o_proj.forward(attn_flat)
+  if self.q_norm.isSome:
+    q_attn = self.q_norm.get().forward(q_attn)
+  if self.k_norm.isSome:
+    k_attn = self.k_norm.get().forward(k_attn)
+
+  let pos_offset = position[0, 0].item(int)  # First batch, first position as offset
+  let (q_rot, k_rot) = self.rotary.apply_rope(q_attn, k_attn, pos_offset)
+
+  # Ensure q, k, v have same dtype (v may be bfloat16 from safetensors weights)
+  let target_dtype = v_attn.scalarType()
+  let q_final = q_rot.to(target_dtype)
+  let k_final = k_rot.to(target_dtype)
+
+  # SDPA output: (batch, head, seq, head_dim) -> permute back to (batch, seq, head*head_dim)
+  # Expected: attn_out = (2, 16, 8, 128), attn_perm = (2, 8, 16, 128), attn_out_reshaped = (2, 8, 2048)
+  let attn_out = self.attn.forward(q_final, k_final, v_attn, is_causal = true)
+  let attn_perm = attn_out.permute([0, 2, 1, 3])
+  let attn_out_reshaped = attn_perm.reshape([batch, seq_len, self.attn.qo_attn_dim])
+  result = self.o_proj.forward(attn_out_reshaped)
