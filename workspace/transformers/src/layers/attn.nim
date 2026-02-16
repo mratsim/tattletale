@@ -62,17 +62,30 @@ func forward*(
   attn_mask = none(TorchTensor),
   dropout_p = 0.0'f64
 ): TorchTensor =
-  let enable_gqa = self.num_kv_groups > 1
-  # When enable_gqa=True, PyTorch handles KV expansion internally
-  # Don't manually expand - that causes double expansion!
-  F.scaled_dot_product_attention(
-    q, k, v,
+  # Backend: permute to (batch, head, seq, head_dim), ensure dtype, SDPA, reshape
+  # Input q,k,v: (batch, seq, num_head, head_dim)
+  let batch = q.size(0)
+  let seq_len = q.size(1)
+  
+  var q_attn = q.permute([0, 2, 1, 3])
+  var k_attn = k.permute([0, 2, 1, 3])
+  let v_attn = v.permute([0, 2, 1, 3])
+  
+  let target_dtype = v_attn.scalarType()
+  let q_final = q_attn.to(target_dtype)
+  let k_final = k_attn.to(target_dtype)
+  
+  let attn_out = F.scaled_dot_product_attention(
+    q_final, k_final, v_attn,
     attn_mask = attn_mask,
     dropout_p = dropout_p,
     is_causal = is_causal,
     scale = some(self.softmax_scale),
-    enable_gqa = enable_gqa
+    enable_gqa = self.num_kv_groups > 1
   )
+  
+  let attn_perm = attn_out.permute([0, 2, 1, 3])
+  result = attn_perm.reshape([batch, seq_len, self.qo_attn_dim])
 
 func init*(_: type KVCache): KVCache =
   KVCache()
@@ -167,20 +180,8 @@ proc forward*(
   # Apply RoPE using the rotary cache with offset into the cache
   let (q_rot, k_rot) = self.rotary.apply_rope(q_norm_input, k_norm_input, rope_offset)
  
-  # Permute to (batch, head, seq, head_dim) for SDPA
-  var q_attn = q_rot.permute([0, 2, 1, 3])
-  var k_attn = k_rot.permute([0, 2, 1, 3])
-  let v_attn = v_reshaped.permute([0, 2, 1, 3])
- 
-  # Ensure q, k, v have same dtype
-  let target_dtype = v_attn.scalarType()
-  let q_final = q_attn.to(target_dtype)
-  let k_final = k_attn.to(target_dtype)
- 
-  # SDPA output: (batch, head, seq, head_dim) -> permute back to (batch, seq, head*head_dim)
-  let attn_out = self.attn.forward(q_final, k_final, v_attn, is_causal = true)
-  let attn_perm = attn_out.permute([0, 2, 1, 3])
-  let attn_out_reshaped = attn_perm.reshape([batch, seq_len, self.attn.qo_attn_dim])
+  # Pass to backend (GroupedQueryAttention) which handles permute/dtype/SDPA/reshape
+  let attn_out_reshaped = self.attn.forward(q_rot, k_rot, v_reshaped, is_causal = true)
   result = self.o_proj.forward(attn_out_reshaped)
 
 proc forward*(
@@ -209,16 +210,7 @@ proc forward*(
     k_norm_input = self.k_norm.get().forward(k_reshaped)
  
   let (q_rot, k_rot) = apply_rope_impl(q_norm_input, k_norm_input, cos, sin)
- 
-  var q_attn = q_rot.permute([0, 2, 1, 3])
-  var k_attn = k_rot.permute([0, 2, 1, 3])
-  let v_attn = v_reshaped.permute([0, 2, 1, 3])
- 
-  let target_dtype = v_attn.scalarType()
-  let q_final = q_attn.to(target_dtype)
-  let k_final = k_attn.to(target_dtype)
- 
-  let attn_out = self.attn.forward(q_final, k_final, v_attn, is_causal = true)
-  let attn_perm = attn_out.permute([0, 2, 1, 3])
-  let attn_out_reshaped = attn_perm.reshape([batch, seq_len, self.attn.qo_attn_dim])
+  
+  # Pass to backend (GroupedQueryAttention) which handles permute/dtype/SDPA/reshape
+  let attn_out_reshaped = self.attn.forward(q_rot, k_rot, v_reshaped, is_causal = true)
   result = self.o_proj.forward(attn_out_reshaped)
