@@ -16,6 +16,7 @@ import
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
   workspace/transformers/src/layers/all,
+  workspace/transformers/src/layers/rope {.all.},
   ./common_utils
 
 const
@@ -135,7 +136,9 @@ proc main() =
           # Fixture was generated WITHOUT input_layernorm (Qwen3Attention receives raw hidden_state)
           # The input_layernorm is applied at the decoder layer level, not inside attention
           # Use pre-computed cos/sin from fixture for exact match
-          let output = attn.forward(hiddenStates, cos, sin)
+          attn.resetCache()
+          attn.rotary.setCache(cos, sin)
+          let output = attn.forward(hiddenStates)
           assertAllClose(output, expectedOutput, msg = "Attention case " & $caseNum & " failed")
           close(fixtureMemFile)
       true
