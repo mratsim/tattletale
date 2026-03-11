@@ -177,12 +177,8 @@ proc forward*(
   if self.k_norm.isSome:
     k_norm_input = self.k_norm.get().forward(k_reshaped)
 
-  echo "before rope"
-
   # Apply RoPE using the rotary cache with offset into the cache
   let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input)
-
-  echo "after rope"
 
   # Pass to backend (GroupedQueryAttention) which handles permute/dtype/SDPA/reshape
   let attn_out_reshaped = self.attn.forward(q_rot, k_rot, v_reshaped, is_causal = true)

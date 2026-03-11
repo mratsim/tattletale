@@ -120,27 +120,26 @@ proc main() =
       attn = RopeGQAttention.init(qWeight, kWeight, vWeight, oWeight, qNormWeight, kNormWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
 
       for caseNum in 0..1:
-        traceExec:
-          let fixturePath = FixtureDir / &"attn-{ModelName}-{caseNum:02d}.safetensor"
-          if not fileExists(fixturePath):
-            continue
+        let fixturePath = FixtureDir / &"attn-{ModelName}-{caseNum:02d}.safetensor"
+        if not fileExists(fixturePath):
+          continue
 
-          var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
-          var st = safetensors.load(fixtureMemFile)
+        var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
+        var st = safetensors.load(fixtureMemFile)
 
-          let hiddenStates = st.getTensorOwned("hidden_states")
-          let expectedOutput = st.getTensorOwned("output")
-          let cos = st.getTensorOwned("cos")
-          let sin = st.getTensorOwned("sin")
+        let hiddenStates = st.getTensorOwned("hidden_states")
+        let expectedOutput = st.getTensorOwned("output")
+        let cos = st.getTensorOwned("cos")
+        let sin = st.getTensorOwned("sin")
 
-          # Fixture was generated WITHOUT input_layernorm (Qwen3Attention receives raw hidden_state)
-          # The input_layernorm is applied at the decoder layer level, not inside attention
-          # Use pre-computed cos/sin from fixture for exact match
-          attn.resetCache()
-          attn.rotary.setCache(cos, sin)
-          let output = attn.forward(hiddenStates)
-          assertAllClose(output, expectedOutput, msg = "Attention case " & $caseNum & " failed")
-          close(fixtureMemFile)
+        # Fixture was generated WITHOUT input_layernorm (Qwen3Attention receives raw hidden_state)
+        # The input_layernorm is applied at the decoder layer level, not inside attention
+        # Use pre-computed cos/sin from fixture for exact match
+        attn.resetCache()
+        attn.rotary.setCache(cos, sin)
+        let output = attn.forward(hiddenStates)
+        assertAllClose(output, expectedOutput, msg = "Attention case " & $caseNum & " failed")
+        close(fixtureMemFile)
       true
 
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
