@@ -186,14 +186,74 @@ proc main() =
         echo "Embedding + LMHead case ", caseNum, " PASSED"
       true
 
-  # TransformerBlock tests temporarily disabled due to KV cache shape mismatch
-  # The long residual pattern needs further debugging to match HF attention behavior
-  echo "TransformerBlock fixtures: SKIPPED (KV cache shape mismatch - needs debugging)"
-  #
-  # Original test code preserved for future debugging:
-  # runTest "TransformerBlock fixtures":
-  #   ... (see git history)
+  runTest "TransformerBlock fixtures":
+    proc(): bool =
+      # Load weights from main model (space-saving approach)
+      var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
+      defer: close(weightsMemFile)
 
+      var weightsSt = safetensors.load(weightsMemFile)
+      let inputLnWeight = weightsSt.getTensorOwned("model.layers.8.input_layernorm.weight")
+      let postAttnWeight = weightsSt.getTensorOwned("model.layers.8.post_attention_layernorm.weight")
+      let qWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.q_proj.weight")
+      let kWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.k_proj.weight")
+      let vWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.v_proj.weight")
+      let oWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.o_proj.weight")
+      let qNormWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.q_norm.weight")
+      let kNormWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.k_norm.weight")
+      let gateWeight = weightsSt.getTensorOwned("model.layers.8.mlp.gate_proj.weight")
+      let upWeight = weightsSt.getTensorOwned("model.layers.8.mlp.up_proj.weight")
+      let downWeight = weightsSt.getTensorOwned("model.layers.8.mlp.down_proj.weight")
+
+      let numQoHeads = 16
+      let numKvHeads = 8
+      let headDim = 128
+      let ropeTheta = 1_000_000.0
+
+      var rotary = RotaryPositionEmbedding.init(headDim, 40960, ropeTheta, F.kBFloat16, F.kCPU)
+
+      # Initialize sublayers
+      let attn_norm = RmsNorm.init(inputLnWeight)
+      var attn = RopeGQAttention.init(qWeight, kWeight, vWeight, oWeight, qNormWeight, kNormWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
+      let mlp_norm = RmsNorm.init(postAttnWeight)
+      let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
+
+      # Create TransformerBlock
+      # Create TransformerBlock
+      var transBlock = TransformerBlock.init(attn_norm, attn, mlp_norm, mlp)
+
+      for caseNum in 0..3:
+        let fixturePath = TransformerBlockFixtureDir / &"transformer-block-{ModelName}-{caseNum:02d}.safetensor"
+        if not fileExists(fixturePath):
+          continue
+
+        var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
+        defer: close(fixtureMemFile)
+
+        var st = safetensors.load(fixtureMemFile)
+
+        let inputHiddenStates = st.getTensorOwned("input_hidden_states")
+        let expectedOutput = st.getTensorOwned("output")
+        let expectedOutputResidual = st.getTensorOwned("output_residual")
+        let cos = st.getTensorOwned("cos")
+        let sin = st.getTensorOwned("sin")
+
+        # Handle residual: fixture always has it, but for "no residual" cases it's a clone of input
+        let residualOpt = some(st.getTensorOwned("residual"))
+
+        # Reset cache and set RoPE cos/sin from fixture
+        transBlock.attn.resetCache()
+        transBlock.attn.rotary.setCache(cos, sin)
+
+        # Run forward pass
+        let (output, outputResidual) = transBlock.forward(inputHiddenStates, residualOpt)
+
+        # Validate outputs within BF16 tolerance
+        assertAllClose(output, expectedOutput, rtol = 5e-2, abstol = 5e-2, msg = "TransformerBlock output case " & $caseNum & " failed")
+        assertAllClose(outputResidual, expectedOutputResidual, rtol = 5e-2, abstol = 5e-2, msg = "TransformerBlock output_residual case " & $caseNum & " failed")
+
+        echo "TransformerBlock case ", caseNum, " PASSED"
+      true
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "All tests completed"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
