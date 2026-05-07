@@ -2,3 +2,7 @@
 # -----------------------------------------------------------------------------------------
 tests/hf_models/*
 !tests/hf_models/.gitkeep
+
+# Large weights
+# -----------------------------------------------------------------------------------------
+tattletale/workspace/transformers/tests/fixtures/layers/Qwen3-0.6B-embed-lmhead/embed-lmhead-Qwen3-0.6B-01.safetensor
