@@ -29,10 +29,3 @@ export
   norm,
   rope
   # transformer
-
-import
-  ../kernels/[
-    activations
-  ]
-
-export ActivationKind

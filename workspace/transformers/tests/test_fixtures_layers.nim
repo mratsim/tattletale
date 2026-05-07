@@ -17,6 +17,7 @@ import
   workspace/libtorch/vendor/libtorch,
   workspace/transformers/src/layers/all,
   workspace/transformers/src/layers/rope {.all.},
+  workspace/positron,
   ./common_utils
 
 const

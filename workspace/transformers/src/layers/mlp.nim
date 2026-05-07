@@ -7,8 +7,8 @@
 
 import
   workspace/libtorch as F,
-  ./linear,
-  ../kernels/activations
+  workspace/positron,
+  ./linear
 
 type
   GatedMLP* = object
