@@ -117,7 +117,7 @@ func selu_mut*(input: var TorchTensor) {.importcpp: "torch::selu_(@)".}
 func silu*(self: TorchTensor): TorchTensor {.importcpp: "torch::silu(@)".}
   ## SiLU (Sigmoid Linear Unit) activation function: x / (1 + exp(-x))
   ## Also known as Swish.
-func silu_mut*(self: TorchTensor): TorchTensor {.importcpp: "torch::silu_(@)".}
+func silu_mut*(self: var TorchTensor) {.importcpp: "torch::silu_(@)".}
 
 func tanh*(input: TorchTensor): TorchTensor {.importcpp: "torch::tanh(@)".}
 func tanh_mut*(input: var TorchTensor) {.importcpp: "torch::tanh_(@)".}
