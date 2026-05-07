@@ -119,7 +119,7 @@ func init*(_: type TransformerBlock, attn_norm: RmsNorm, attn: RopeGQAttention, 
     mlp: mlp
   )
 
-func forward*(self: var TransformerBlock, x: TorchTensor, residual: Option[TorchTensor], positions: TorchTensor, use_cache: bool): (TorchTensor, TorchTensor) =
+func forward*(self: var TransformerBlock, x: TorchTensor, residual: Option[TorchTensor]): (TorchTensor, TorchTensor) =
   ## Forward pass for a transformer block with long residual stream.
   ##
   ## This pattern defers residual additions to the norm layers, enabling:
@@ -130,18 +130,20 @@ func forward*(self: var TransformerBlock, x: TorchTensor, residual: Option[Torch
   ## Args:
   ##   x: Input tensor of shape (batch, seq_len, hidden_size)
   ##   residual: Optional residual from previous layer. If None, uses x.
-  ##   positions: Position indices for RoPE, shape (batch, seq_len) or similar
-  ##   use_cache: Whether to use KV cache for autoregressive decoding
   ##
   ## Returns:
   ##   (output, residual) where:
   ##     - output: Tensor of shape (batch, seq_len, hidden_size)
   ##     - residual: The original input residual, passed through unchanged
   ##
+  ## Note:
+  ##   RoPE positions and KV cache are handled internally by the attention layer.
+  ##   Call self.attn.rotary.setCache(cos, sin) before forward() to set RoPE.
+  ##
   ## Computation:
   ##   residual = residual.get(x)  # Use x if residual is None
   ##   (h, residual) = self.attn_norm.forward_with_residual(x, residual)
-  ##   attn_out = self.attn.forward(h, positions, use_cache)
+  ##   attn_out = self.attn.forward(h)
   ##   (h2, residual) = self.mlp_norm.forward_with_residual(h + attn_out, residual)
   ##   mlp_out = self.mlp.forward(h2)
   ##   (h2 + mlp_out, residual)
@@ -150,7 +152,7 @@ func forward*(self: var TransformerBlock, x: TorchTensor, residual: Option[Torch
       self.attn_norm.forward_with_residual(x, residual.unsafeGet())
     else:
       (self.attn_norm.forward(x), x)
-  let attn_out = self.attn.forward(h, positions, use_cache)
+  let attn_out = self.attn.forward(h)
   let (h2, r2) = self.mlp_norm.forward_with_residual(h + attn_out, r)
   let mlp_out = self.mlp.forward(h2)
   (h2 + mlp_out, r2)

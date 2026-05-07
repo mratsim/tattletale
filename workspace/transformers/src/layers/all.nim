@@ -16,16 +16,20 @@
 
 import
   ./attn,
+  ./embedding,
   ./linear,
+  ./lmhead,
   ./mlp,
   ./norm,
-  ./rope
-  # ./transformer
+  ./rope,
+  ./transformer
 
 export
   attn,
+  embedding,
   linear,
+  lmhead,
   mlp,
   norm,
-  rope
-  # transformer
+  rope,
+  transformer
