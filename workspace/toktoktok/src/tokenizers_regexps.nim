@@ -35,8 +35,11 @@ const
     )
   KimiK25Regexp* = TokRegexp(regexp:
       # From https://huggingface.co/moonshotai/Kimi-K2.5/blob/main/tokenization_kimi.py
+      # Note: Using \p{Script=Han} instead of \p{Han} to exclude punctuation like 。 (U+3002)
+      # that have Han in ScriptExtensions but are not actually Han script characters.
+      # Tiktoken uses Rust regex which seems to mismatch PCRE2
       [
-            r"""[\p{Han}]+""",
+            r"""[\p{Script=Han}]+""",
             r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
             r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
             r"""\p{N}{1,3}""",
