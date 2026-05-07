@@ -1,10 +1,12 @@
 """
-Generate safetensor fixtures for transformer layer testing using real Qwen3-0.6B weights.
+Generate Safetensor fixtures for transformer layer testing using real Qwen3-0.6B weights.
 
 This script:
-1. Extracts layer 8 weights from the model
-2. Saves them to Qwen3-0.6B.model.layers.8.safetensors
-3. Generates test fixtures using those real weights
+1. Loads layer 8 weights directly from the main model file (no separate weights file)
+2. Generates test fixtures using those real weights
+
+Space-saving: Weights are loaded from tests/hf_models/Qwen3-0.6B/model.safetensors
+instead of being saved to a separate file (~30 MiB saved per layer).
 """
 
 import json
@@ -29,7 +31,7 @@ GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 FIXTURE_DIR = os.path.join(
     GRANDPARENT_DIR, "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}"
 )
-WEIGHTS_FILE = f"{FIXTURE_DIR}/Weights-{MODEL_NAME}-layer-{LAYER_IDX}.safetensor"
+# WEIGHTS_FILE removed - load directly from main model
 MODEL_PATH = os.path.join(
     os.path.dirname(GRANDPARENT_DIR), f"tests/hf_models/{MODEL_NAME}/model.safetensors"
 )  # Assuming a very small model were everything fits in a single safetensor
@@ -47,36 +49,36 @@ def ensure_fixture_dir() -> None:
     os.makedirs(FIXTURE_DIR, exist_ok=True)
 
 
-def extract_layer_weights() -> dict:
-    """Extract weights for a specific layer from the model safetensors."""
-    prefix = f"model.layers.{LAYER_IDX}."
-    weights = {}
-
-    with safe_open(MODEL_PATH, framework="pt") as f:
-        for key in f.keys():
-            if key.startswith(prefix):
-                new_key = key.replace(prefix, "")
-                weights[new_key] = f.get_tensor(key).clone()
-
-    return weights
+# Weights are loaded directly from main model in generate_all_fixtures()
+# No separate weights file is saved (space-saving approach)
 
 
-def save_layer_weights(weights: dict) -> str:
-    """Save layer weights to a separate safetensors file."""
-    serialized = st.save(weights)
-    with open(WEIGHTS_FILE, "wb") as f:
-        f.write(serialized)
+# OLD: def extract_layer_weights() -> dict:
+# OLD:     """Extract weights for a specific layer from the model safetensors."""
+# OLD:     prefix = f"model.layers.{LAYER_IDX}."
+# OLD:     weights = {}
+# OLD:     with safe_open(MODEL_PATH, framework="pt") as f:
+# OLD:         for key in f.keys():
+# OLD:             if key.startswith(prefix):
+# OLD:                 new_key = key.replace(prefix, "")
+# OLD:                 weights[new_key] = f.get_tensor(key).clone()
+# OLD:     return weights
 
-    print(f"Saved layer weights to {WEIGHTS_FILE}")
-    return WEIGHTS_FILE
+
+# OLD: def save_layer_weights(weights: dict) -> str:
+# OLD:     """Save layer weights to a separate safetensors file."""
+# OLD:     serialized = st.save(weights)
+# OLD:     with open(WEIGHTS_FILE, "wb") as f:
+# OLD:         f.write(serialized)
+# OLD:     print(f"Saved layer weights to {WEIGHTS_FILE}")
+# OLD:     return WEIGHTS_FILE
 
 
-def load_layer_weights() -> dict:
-    """Load layer weights from the separate safetensors file."""
-    with safe_open(WEIGHTS_FILE, framework="pt") as f:
-        weights = {key: f.get_tensor(key).clone() for key in f.keys()}
-
-    return weights
+# OLD: def load_layer_weights() -> dict:
+# OLD:     """Load layer weights from the separate safetensors file."""
+# OLD:     with safe_open(WEIGHTS_FILE, framework="pt") as f:
+# OLD:         weights = {key: f.get_tensor(key).clone() for key in f.keys()}
+# OLD:     return weights
 
 
 def create_layers_from_weights(weights: dict) -> tuple:
@@ -392,28 +394,31 @@ def generate_all_fixtures() -> None:
 
     ensure_fixture_dir()
 
-    # Step 1: Extract and save layer weights
-    print("Extracting layer weights...")
-    weights = extract_layer_weights()
-    save_layer_weights(weights)
+    # Space-saving: Load weights directly from main model (no separate file)
+    print("Loading layer weights from main model...")
+    prefix = f"model.layers.{LAYER_IDX}."
+    weights = {}
+    with safe_open(MODEL_PATH, framework="pt") as f:
+        for key in f.keys():
+            if key.startswith(prefix):
+                weights[key.replace(prefix, "")] = f.get_tensor(key).clone()
 
-    # Step 2: Create layers with real weights
+    # Create layers with real weights
     print("Creating layers with real weights...")
     input_layernorm, post_attention_layernorm, mlp, attn = create_layers_from_weights(
         weights
     )
     rotary = Qwen3RotaryEmbedding(Qwen3Config())
 
-    # Step 3: Generate fixtures
+    # Generate fixtures
     generate_norm_fixtures(input_layernorm, post_attention_layernorm)
     generate_mlp_fixtures(mlp)
     generate_attn_fixtures(attn, rotary)
 
     print("=" * 60)
     print(f"Fixture generation complete!")
-    print(f"Weights saved to: {WEIGHTS_FILE}")
     print(f"Fixtures saved to: {FIXTURE_DIR}")
-
+    print(f"Note: Weights loaded from main model (no separate weights file)")
 
 if __name__ == "__main__":
     generate_all_fixtures()
