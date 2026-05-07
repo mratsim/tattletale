@@ -96,5 +96,13 @@ func resetCache*(self: var RotaryPositionEmbedding) =
 
 func setCache(self: var RotaryPositionEmbedding, cos, sin: TorchTensor) {.used.} =
   # Private for testing only
-  self.cos_cache = cos
-  self.sin_cache = sin
+  # Handle both (seq, head_dim) and (batch, seq, head_dim) shapes
+  # Squeeze batch dimension if present to get (seq, head_dim)
+  var cos_2d = cos
+  var sin_2d = sin
+  if cos.dim == 3:
+    # Squeeze batch dimension: (batch, seq, head_dim) -> (seq, head_dim)
+    cos_2d = cos.squeeze(0)
+    sin_2d = sin.squeeze(0)
+  self.cos_cache = cos_2d
+  self.sin_cache = sin_2d
