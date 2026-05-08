@@ -167,7 +167,104 @@ type Scalar* = SomeNumber or bool or TorchComplex
 # Tensors
 # -----------------------------------------------------------------------
 
-type TorchTensor* {.importcpp: "torch::Tensor", cppNonPod, bycopy.} = object
+type TorchTensor* {.importcpp: "torch::Tensor", cppNonPod, bycopy, noInit.} = object
+
+# Lifetime / Resource management
+# -----------------------------------------------------------------------
+
+# We have an interesting mapping challenge to make the type compatible with seqs
+# Unfortunately cppNonPod isn't enough to tell the Nim compiler to insert destructor.
+#
+# Destruction itself should be managed by decrementing the intrusive refcount of TorchTensor
+# which comes from c10/util/intrusive_ptr.h
+# as intrusive_ptr<TensorImpl>
+#
+# ```cpp
+# // From c10/util/intrusive_ptr.h
+# struct intrusive_ptr_target {
+#   // Combined refcount + weakcount in a single atomic
+#   std::atomic<uint64_t> combined_refcount_;
+#
+#   protected:
+#     virtual ~intrusive_ptr_target() {}
+#   private:
+#     virtual void release_resources() {}
+# };
+#
+# template<typename T>
+# class intrusive_ptr {
+#   T* target_;
+#
+# public:
+#   // Copy: increments refcount
+#   intrusive_ptr(const intrusive_ptr& rhs) : target_(rhs.target_) {
+#     retain_();  // atomic increment
+#   }
+#
+#   // Move: steals pointer, zeros source
+#   intrusive_ptr(intrusive_ptr&& rhs) noexcept : target_(rhs.target_) {
+#     rhs.target_ = nullptr;
+#   }
+#
+#   // Move assignment: destroys old, copies new
+#   intrusive_ptr& operator=(const intrusive_ptr& rhs) {
+#     intrusive_ptr(rhs).swap(*this);
+#   }
+#
+#   // Destructor: decrements refcount
+#   ~intrusive_ptr() {
+#     reset_();  // atomic decrement, free if zero
+#   }
+#
+#   // Reset: release internal pointer
+#   void reset() { reset_(); }
+# };
+# ```
+#
+# Now we can make the type bycopy or byref. The question becomes,
+# does passing the object increase the refcount or not.
+#
+# And then corollary, if it does and you pass by reference, what is more costly
+# the double dereference to access the data or the refcount increment?
+
+# 0. Default constructor used instead of ambiguous brace-init {} (for example when initializing a seq)
+# proc initTorchTensor*(): TorchTensor {.constructor, importcpp: "torch::Tensor()".}
+
+proc reset*(a: var TorchTensor) {.importcpp: "#.reset()".}
+
+# 1. =destroy: C++ destructor decrements refcount
+proc `=destroy`*(t: var TorchTensor) {.importcpp: "#.~Tensor()".}
+  # Calls ~intrusive_ptr() which calls reset_() → decrements refcount
+
+# 2. =wasMoved: Null out so destroy doesn't double-decrement
+# proc `=wasMoved`*(t: var TorchTensor){.importcpp: "#.reset()".}
+  # Calls intrusive_ptr::reset() → releases pointer without decrementing
+  # (reset_() already called the decrement, we just null the local copy)
+  #
+  # We are supposed to use {.importcpp: "#.reset()".}
+  # but the lowering is broken https://github.com/nim-lang/Nim/issues/25800
+  #
+  # Unfortunately, using an indirection doesn't help
+  # i.e. calling reset(t) because for some reason
+  # =wasMoved is not properly mangled in this codebase
+
+proc `=wasMoved`*(t: var TorchTensor) =
+  reset(t)
+
+# 3. =copy: C++ copy constructor increments refcount
+proc `=copy`*(dest: var TorchTensor; src: TorchTensor) {.importcpp: "# = #".}
+  # C++ assignment operator: increments refcount via retain_()
+  # Self-assignment safe (C++ handles it)
+
+# 4. =sink: Move assignment - steal pointer, no refcount change
+proc `=sink`*(dest: var TorchTensor; src: TorchTensor) {.importcpp: "# = std::move(#)".}
+  # C++ move assignment: steals pointer, src becomes null
+  # No refcount increment/decrement needed
+
+# 5. =dup: Duplicate for copy-on-sink scenarios
+proc `=dup`*(t: TorchTensor): TorchTensor {.importcpp: "torch::Tensor(#)", nodestroy.}
+  # C++ copy constructor increments refcount, returns new value
+  # nodestroy: result is moved, not destroyed
 
 # Strings & Debugging
 # -----------------------------------------------------------------------
@@ -178,7 +275,6 @@ proc print*(a: TorchTensor) {.sideeffect, importcpp: "torch::print(@)".}
 # -----------------------------------------------------------------------
 
 func dim*(a: TorchTensor): int {.importcpp: "#.dim()".} ## Number of dimensions
-func reset*(a: var TorchTensor) {.importcpp: "#.reset()".}
 func is_same*(self, other: TorchTensor): bool {.importcpp: "#.is_same(#)".}
   ## Reference equality
   ## Do the tensors use the same memory.
@@ -213,6 +309,8 @@ func data_ptr*(a: TorchTensor, T: typedesc): ptr UncheckedArray[T] {.importcpp: 
 
 # Backend
 # -----------------------------------------------------------------------
+
+func is_alias_of*(a, b: TorchTensor): bool {.importcpp: "#.is_alias_of(#)".}
 
 func has_storage*(a: TorchTensor): bool {.importcpp: "#.has_storage()".}
 func get_device*(a: TorchTensor): int {.importcpp: "#.get_device()".}
@@ -298,7 +396,6 @@ func empty*(size: IntArrayRef, device: DeviceKind): TorchTensor {.importcpp: "to
 
 func clone*(a: TorchTensor): TorchTensor {.importcpp: "#.clone()".}
 
-# TODO : Test this
 func view_as_real*(a: TorchTensor): TorchTensor {.importcpp: "#.view_as_real()".}
 func view_as_complex*(a: TorchTensor): TorchTensor {.importcpp: "#.view_as_complex()".}
 
@@ -716,6 +813,7 @@ func qr*(a: TorchTensor, some: bool = true): CppTuple2[TorchTensor, TorchTensor]
   ## t = QR
 
 # addr?
+func all*(a: TorchTensor): TorchTensor {.importcpp: "#.all()".}
 func all*(a: TorchTensor, axis: int): TorchTensor {.importcpp: "#.all(@)".}
 func all*(a: TorchTensor, axis: int, keepdim: bool): TorchTensor {.importcpp: "#.all(@)".}
 func allClose*(
