@@ -228,7 +228,7 @@ type TorchTensor* {.importcpp: "torch::Tensor", cppNonPod, bycopy, noInit.} = ob
 # the double dereference to access the data or the refcount increment?
 
 # 0. Default constructor used instead of ambiguous brace-init {} (for example when initializing a seq)
-# proc initTorchTensor*(): TorchTensor {.constructor, importcpp: "torch::Tensor()".}
+proc initTorchTensor*(): TorchTensor {.constructor, importcpp: "torch::Tensor()".}
 
 proc reset*(a: var TorchTensor) {.importcpp: "#.reset()".}
 
@@ -243,13 +243,13 @@ proc `=destroy`*(t: var TorchTensor) {.importcpp: "#.~Tensor()".}
   #
   # We are supposed to use {.importcpp: "#.reset()".}
   # but the lowering is broken https://github.com/nim-lang/Nim/issues/25800
-  #
-  # Unfortunately, using an indirection doesn't help
-  # i.e. calling reset(t) because for some reason
-  # =wasMoved is not properly mangled in this codebase
+
+{.pop.}
 
 proc `=wasMoved`*(t: var TorchTensor) =
   reset(t)
+
+{.push cdecl, header: TorchHeader.}
 
 # 3. =copy: C++ copy constructor increments refcount
 proc `=copy`*(dest: var TorchTensor; src: TorchTensor) {.importcpp: "# = #".}
