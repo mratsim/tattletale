@@ -228,7 +228,7 @@ type TorchTensor* {.importcpp: "torch::Tensor", cppNonPod, bycopy, noInit.} = ob
 # the double dereference to access the data or the refcount increment?
 
 # 0. Default constructor used instead of ambiguous brace-init {} (for example when initializing a seq)
-proc initTorchTensor*(): TorchTensor {.constructor, importcpp: "torch::Tensor()".}
+proc init*(T: typedesc[TorchTensor]): T {.importcpp:"'0(@)", varargs, constructor.}
 
 proc reset*(a: var TorchTensor) {.importcpp: "#.reset()".}
 
