@@ -22,14 +22,7 @@ import
   std/[strformat, typetraits],
   ./allocs
 
-{.emit: """
-template<typename T>
-static void defaultConstruct(T* p) {
-  new (p) T();  // Placement new: call default constructor
-}
-""".}
-
-proc defaultConstruct*[T](p: ptr T) {.importcpp: "defaultConstruct(@)".}
+proc placementNew[T](p: ptr T): ptr T {.importcpp: "(new (#) '*0(@))", nodecl, discardable.}
   ## Default-construct an object at the given memory location via placement-new.
 
 const Alignment = 64
@@ -48,7 +41,7 @@ func new*[T](_: type Vec[T], len: int): Vec[T] =
     result.data = allocHeapArrayAligned(T, len, Alignment)
     # Explicitly default-construct each element via C++ ctor
     for i in 0..<len:
-      defaultConstruct(addr(result.data[i]))
+      placementNew(result.data[i].addr)
   else:
     result.data = nil
 
@@ -77,7 +70,7 @@ func dupImpl[T](dst: var Vec[T], src: Vec[T]) {.nodestroy.} =
       copyMem(dst.data, src.data, src.len * sizeof(T))
     else:
       for i in 0..<src.len:
-        defaultConstruct(addr(dst.data[i]))
+        placementNew(dst.data[i].addr)
         `=copy`(dst.data[i], src.data[i])
   else:
     dst.data = nil
