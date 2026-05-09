@@ -16,7 +16,7 @@ installDirs = @["src"]
 # ---------------------------------------------------------
 
 requires "nim >= 2.2.0"
-requires "packedjson"
+requires "packedjson@#head" # Need the shallowCopy fix https://github.com/Araq/packedjson/pull/13
 requires "https://github.com/yglukhov/iface"
 
 # Tasks
