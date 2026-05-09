@@ -85,8 +85,18 @@ type
     ## Ordering is assumed to be 'C' (i.e. row-major, as opposed to Fortran col-major)
     ## The dataOffsets are relative to the start of the `data` section.
     ## They ignore the initial 8 bytes for headerSize + the actual header.
+    ##
+    ## IMPORTANT: do not store TensorInfo on the stack / make a copy
+    ##   before passing the shape to from_blob or from_blob will
+    ##   store a pointer to memory location that will be invalidated.
+    ##   use `let info: lent TensorInfo = ...` to avoid temporaries
     dtype*: Dtype
-    shape*: seq[int] # The reference impl uses usize, but AFAIK Cuda doesn't support 32-bit. This makes conversion to IntArrayRef easier.
+    shape*: seq[int]
+      # The reference impl uses usize, but AFAIK Cuda doesn't support 32-bit. This makes conversion to IntArrayRef easier.
+      # Also from_blob does NOT copy the ArrayRef passed to it but refers to it by address
+      # Hence:
+      # 1. we will pass is slice of this shape field and not using temporary arrays or sequences
+      # 2. don't make a temporary TensorInfo.
     dataOffsets*: tuple[start, stopEx: int] # stop is exclusive
 
   Safetensor* = object
