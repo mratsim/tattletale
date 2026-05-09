@@ -6,13 +6,13 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  std/json,
   std/options,
   std/os,
   std/memfiles,
   std/tables,
 
   pkg/iface,
+  pkg/packedjson,
   workspace/libtorch,
   workspace/safetensors,
   workspace/containers,
