@@ -122,7 +122,7 @@ proc forward*(self: Qwen3Model, input: TorchTensor, positions: TorchTensor, cach
 # iface generates to[Model] converter automatically
 
 proc loadQwen3Model(modelPath: string, device = kCPU): Model =
-  let config = loadQwen3Config(modelPath)
+  let config = loadQwen3Config(modelPath / "config.json")
 
   let weightsPath = modelPath / "model.safetensors"
   var weightsMemFile = memFiles.open(weightsPath, mode = fmRead)
