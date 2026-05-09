@@ -13,7 +13,7 @@ import std/os
 const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"
 const CONFIGS_DIR = FIXTURES_DIR / "configs"
 
-import workspace/transformers
+import workspace/transformers/src/models/qwen3 {.all.}
 
 suite "Qwen3 Config":
   test "Parse Qwen3-0.6B config":
