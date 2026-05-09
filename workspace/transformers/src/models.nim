@@ -5,6 +5,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+## Models module - imports all model implementations and provides the generic loadModel proc
+##
+## Import order matters:
+## 1. all_interfaces - defines ModelRegistry and Model iface
+## 2. Individual models (qwen3, etc.) - populate ModelRegistry via static blocks
+## 3. This file - uses ModelRegistry in loadModel (after it's populated)
+
 import ./models/all_reexports
 export all_reexports
 
