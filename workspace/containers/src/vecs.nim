@@ -45,7 +45,7 @@ func new*[T](_: type Vec[T], len: int): Vec[T] =
   else:
     result.data = nil
 
-func `=destroy`*[T](v: var Vec[T]) =
+proc `=destroy`*[T](v: var Vec[T]) =
   ## Destroy all elements, free memory.
   if v.data != nil:
     when not supportsCopyMem(T):
@@ -78,7 +78,7 @@ func dupImpl[T](dst: var Vec[T], src: Vec[T]) {.nodestroy.} =
 func `=dup`*[T](src: Vec[T]): Vec[T] {.nodestroy, inline.} =
   result.dupImpl(src)
 
-func `=copy`*[T](dst: var Vec[T], src: Vec[T]) {.inline.} =
+proc `=copy`*[T](dst: var Vec[T], src: Vec[T]) {.inline.} =
   ## Deep copy with proper lifetime management.
   ## Uses copyMem for trivially copyable types (supportsCopyMem).
   `=destroy`(dst)  # Destroy old elements first
