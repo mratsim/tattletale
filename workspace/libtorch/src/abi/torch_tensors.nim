@@ -297,6 +297,17 @@ func element_size*(a: TorchTensor): int {.importcpp: "#.element_size()".}
 # Accessors
 # -----------------------------------------------------------------------
 
+func data_ptr*(a: TorchTensor): pointer {.importcpp: "#.data_ptr()".}
+  ## Gives raw access to a tensor data.
+  ## The return pointer is type-erased
+  ##
+  ## This is a very low-level procedure. You need to take care
+  ## of the tensor shape and strides yourself.
+  ##
+  ## It is recommended to use this only on contiguous tensors
+  ## (freshly created or freshly cloned) and to avoid
+  ## sliced tensors.
+
 func data_ptr*(a: TorchTensor, T: typedesc): ptr UncheckedArray[T] {.importcpp: "#.data_ptr<'2>(#)".}
   ## Gives raw access to a tensor data of type T.
   ##
