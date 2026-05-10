@@ -90,16 +90,4 @@ proc `=/`*[T: SomeFloat](self: var TorchComplex[T], arg: TorchComplex[T]) {.impo
 proc `==`*[T: SomeFloat](a, b: TorchComplex[T]): bool {.importcpp: "(# == #)".}
 proc `!=`*[T: SomeFloat](a, b: TorchComplex[T]): bool {.importcpp: "(# != #)".}
 
-# Low-level tensor plumbing
-# -----------------------------------------------------------------------
-# Unfortunately `Tensor.impl_: IntrusivePtr[TensorImpl, UndefinedTensorImpl]`
-# is protected in C++ so we can't access it nicely.
-#
-type
-  TensorImpl {.importcpp: "c10::TensorImpl", header: "c10/core/TensorImpl.h", bycopy.} = object
-  UndefinedTensorImpl {.importcpp: "c10::UndefinedTensorImpl", header: "c10/core/UndefinedTensorImpl.h", bycopy.} = object
-  IntrusivePtr[Impl, NullType] {.importcpp: "c10::intrusive_ptr<'0, '1>", header: "c10/util/intrusive_ptr.h", bycopy.} = object
-
-  IntrusivePtrTensorImpl* = IntrusivePtr[TensorImpl, UndefinedTensorImpl]
-
 {.pop.}
