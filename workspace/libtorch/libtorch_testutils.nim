@@ -16,6 +16,7 @@
 
 import
   std/strformat,
+  std/strutils,
   std/macros,
   workspace/libtorch as F
 
@@ -28,7 +29,7 @@ template catchCppExceptions*(body: bool): bool =
   ## Returns true if body executed successfully, false if an exception was caught.
   ##
   ## Use this for tests that involve C++ FFI types like TorchTensor.
-
+  
   when not defined(cpp) and defined(nimCheck):
     {.error: "You are running 'nim check' in C mode. It will misreport that C++ exceptions can't be caught because they aren't ref objects.".}
 
@@ -174,3 +175,23 @@ proc printTensorShape*(t: F.TorchTensor, label: string = "") =
     echo label, ":"
   echo "  Shape: ", t.shape.asNimView(), ", Dtype: ", t.scalarType()
   echo ""
+
+# =============================================================================
+# Pointer Debug Helpers
+# =============================================================================
+
+proc ptrHex*(p: pointer): string =
+  ## Convert a pointer address to hex string for debugging.
+  ## Useful for detecting memory aliasing issues.
+  ##
+  ## Example:
+  ##   echo "tensor.data_ptr() = 0x", tensor.data_ptr().ptrHex()
+  toHex(cast[uint](p))
+
+proc dataPtrHex*(tensor: F.TorchTensor): string =
+  ## Get tensor data pointer as hex string.
+  F.data_ptr(tensor).ptrHex()
+
+proc shapePtrHex*(tensor: F.TorchTensor): string =
+  ## Get tensor shape pointer as hex string.
+  tensor.shape.data().ptrHex()
