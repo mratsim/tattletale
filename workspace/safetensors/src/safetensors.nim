@@ -79,7 +79,7 @@ type
     ## Unsigned integer (64-bit)
     U64
 
-  TensorInfo* = object
+  TensorInfo* = ref object
     ## A single tensor information.
     ## Endianness is assumed to be little endian
     ## Ordering is assumed to be 'C' (i.e. row-major, as opposed to Fortran col-major)
@@ -89,7 +89,8 @@ type
     ## IMPORTANT: do not store TensorInfo on the stack / make a copy
     ##   before passing the shape to from_blob or from_blob will
     ##   store a pointer to memory location that will be invalidated.
-    ##   use `let info: lent TensorInfo = ...` to avoid temporaries
+    ##   to avoid those pitfall or the verbosity of using views `let info: lent TensorInfo = ...`
+    ##   we make info have reference semantics
     dtype*: Dtype
     shape*: seq[int]
       # The reference impl uses usize, but AFAIK Cuda doesn't support 32-bit. This makes conversion to IntArrayRef easier.
@@ -97,6 +98,7 @@ type
       # Hence:
       # 1. we will pass is slice of this shape field and not using temporary arrays or sequences
       # 2. don't make a temporary TensorInfo.
+      # 3. Ensure address stability even if stored in a Table ...
     dataOffsets*: tuple[start, stopEx: int] # stop is exclusive
 
   Safetensor* = object
@@ -153,7 +155,7 @@ proc parseHook(src: string, pos: var int, value: var Safetensor) =
     if key == "__metadata__":
       parseHook(src, pos, safetensor.metadata)
     else:
-      var tensorInfo: TensorInfo
+      var tensorInfo = new TensorInfo
       parseHook(src, pos, tensorInfo)
       safetensor.tensors[key] = tensorInfo
 
