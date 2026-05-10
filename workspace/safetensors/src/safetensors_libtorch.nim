@@ -54,7 +54,7 @@ proc toTorchType*(dtype: Dtype): ScalarKind {.inline.} =
     else:
       raise newException(ValueError, "No direct libtorch mapping for safetensors dtype: " & $dtype)
 
-proc getTensorView*(st: var Safetensor, tensorName: string): TorchTensor =
+proc getTensorView*(st: Safetensor, tensorName: string): TorchTensor =
   ## Get a memory view to the tensor data.
   ## Returns a `TorchTensor` that views the underlying memory-mapped data.
   ##
@@ -72,10 +72,15 @@ proc getTensorView*(st: var Safetensor, tensorName: string): TorchTensor =
   ##   The tensor is valid as long as `st` is valid, which is tied to
   ##   the original `MemFile` passed to `load`.
   let view = st.getMmapView(tensorName)
+
+  # Important: from_blob captures a pointer to the shape
+  # so info MUST NOT be a copy
+  # that will be invalid at the end of the scope (and seq have value semantics)
+  # The easiest is to make info a ref object. Or the temporary info should be a view
   let info = st.tensors[tensorName]
   view.data.from_blob(info.shape.asTorchView(), info.dtype.toTorchType())
 
-proc getTensorOwned*(st: var Safetensor, tensorName: string, device = kCPU): TorchTensor =
+proc getTensorOwned*(st: Safetensor, tensorName: string, device = kCPU): TorchTensor =
   ## Get an owned copy of the tensor data.
   ## Returns a `TorchTensor` that owns its data, safe to use after closing the `MemFile`.
   ##
@@ -88,20 +93,4 @@ proc getTensorOwned*(st: var Safetensor, tensorName: string, device = kCPU): Tor
   ##
   ## Returns:
   ##   An owned `TorchTensor` on CPU.
-  st.getTensorView(tensorName).to(device, copy=true) # Force copy
-
-proc getTensorOwned*(st: var Safetensor, tensorName: string, device: Device): TorchTensor =
-  ## Get an owned copy of the tensor data on the specified device.
-  ## Returns a `TorchTensor` that owns its data, safe to use after closing the `MemFile`.
-  ##
-  ## This is the recommended way to load tensors for inference.
-  ## The tensor is copied to the specified device.
-  ##
-  ## Args:
-  ##   st: A loaded Safetensor (must remain valid during the copy)
-  ##   tensorName: Name of the tensor to load
-  ##   device: Target device (e.g., kCUDA, kCPU)
-  ##
-  ## Returns:
-  ##   An owned `TorchTensor` on the specified device.
   st.getTensorView(tensorName).to(device, copy=true) # Force copy
