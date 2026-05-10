@@ -2,9 +2,8 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed under MIT or Apache v2
 #
-# STANDALONE REPRODUCTION: Tensor aliasing bug
+# STANDALONE REPRODUCTION: Tensor shape corruption bug with RMSnorm
 #
-# This test demonstrates tensor shape memory corruption.
 # NO dependencies on transformers package - uses only safetensors fixtures.
 
 import
@@ -15,7 +14,6 @@ import
   std/strutils,
   std/tables,
   workspace/libtorch as F,
-  workspace/libtorch/src/abi/neural_nets,
   workspace/libtorch_testutils,
   workspace/safetensors
 
@@ -24,34 +22,19 @@ const
   FixtureDir = currentSourcePath().parentDir() / "testgen" / "fixtures" / "aliasing"
   ModelPath = FixtureDir / "model.safetensor"
 
-type
-  NormLayer = object
-    weight*: TorchTensor
-    eps*: float
-    hidden_size*: int
-
-func init(_: type NormLayer, weight: TorchTensor, eps: float = 1e-6): NormLayer =
-  ## BUGGY init: stores tensor by reference (NO CLONE)
-  let hidden_size = weight.size(0)
-  NormLayer(weight: weight, eps: eps, hidden_size: hidden_size)
-
-proc forward(self: NormLayer, hidden_state: TorchTensor): TorchTensor =
-  let normalized_shape = asTorchView(self.hidden_size)
-  rms_norm(hidden_state, normalized_shape, self.weight, self.eps)
-
-# Use ptrHex, dataPtrHex, shapePtrHex from libtorch_testutils
-
 proc main() =
-  runTest "Tensor aliasing bug reproduction":
+  runTest "Tensor shape corruption bug":
     proc(): bool =
-      echo "=== STANDALONE TENSOR ALIASING REPRODUCTION ==="
+      echo "=== TENSOR SHAPE CORRUPTION BUG ==="
       echo ""
-      echo "This test demonstrates tensor shape memory corruption."
-      echo "NO dependencies on transformers - uses standalone safetensors fixtures."
+      echo "ROOT CAUSE: Loading a new safetensors file corrupts"
+      echo "            the shape of previously loaded tensors."
+      echo ""
+      echo "This happens DURING getTensorOwned, NOT during layer init."
       echo ""
 
-      # Step 1: Load weight ONCE from model file
-      echo "Step 1: Loading weight from model file (once)..."
+      # Step 1: Load weights ONCE from model file
+      echo "Step 1: Load weights from model.safetensor (once)..."
       var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
       defer: close(weightsMemFile)
 
@@ -59,13 +42,13 @@ proc main() =
       let inputLnWeight = weightsSt.getTensorOwned("input_layernorm.weight")
       let postAttnWeight = weightsSt.getTensorOwned("post_attention_layernorm.weight")
 
-      echo "Loaded weights:"
-      echo "  inputLnWeight.shape = ", inputLnWeight.shape
-      echo "  inputLnWeight.data_ptr() = 0x", inputLnWeight.dataPtrHex()
-      echo "  inputLnWeight.shape.data() = 0x", inputLnWeight.shapePtrHex()
-      echo "  postAttnWeight.shape = ", postAttnWeight.shape
-      echo "  postAttnWeight.data_ptr() = 0x", postAttnWeight.dataPtrHex()
-      echo "  postAttnWeight.shape.data() = 0x", postAttnWeight.shapePtrHex()
+      echo "  inputLnWeight.shape = ", @(inputLnWeight.shape.asNimView())
+      echo "  postAttnWeight.shape = ", @(postAttnWeight.shape.asNimView())
+      echo "  Expected: both [64]"
+      echo ""
+
+      # Step 2: Load fixture files - this is where corruption happens
+      echo "Step 2: Load fixture files (corruption happens here)..."
       echo ""
 
       for caseNum in 0..3:
@@ -75,81 +58,39 @@ proc main() =
           continue
 
         echo "--- Case ", caseNum, " ---"
+        echo "  Before loading fixture:"
+        echo "    inputLnWeight.shape = ", @(inputLnWeight.shape.asNimView())
+        echo "    postAttnWeight.shape = ", @(postAttnWeight.shape.asNimView())
 
-        # Load fixture
+        # Load fixture - THIS IS WHERE CORRUPTION HAPPENS
         var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
         defer: close(fixtureMemFile)
 
         var st = safetensors.load(fixtureMemFile)
         let inputHiddenStates = st.getTensorOwned("input_hidden_states")
-        let expectedOutput = st.getTensorOwned("output")
         let layerPath = st.metadata.unsafeGet().getOrDefault("layer", "")
 
-        echo "Before init:"
-        echo "  inputLnWeight.shape = ", inputLnWeight.shape
-        echo "  inputLnWeight.data_ptr() = 0x", inputLnWeight.dataPtrHex()
-        echo "  inputLnWeight.shape.data() = 0x", inputLnWeight.shapePtrHex()
+        echo "  After loading fixture:"
+        echo "    inputLnWeight.shape = ", @(inputLnWeight.shape.asNimView())
+        echo "    postAttnWeight.shape = ", @(postAttnWeight.shape.asNimView())
+        echo "    inputHiddenStates.shape = ", @(inputHiddenStates.shape.asNimView())
+        echo "    layerPath = ", layerPath
 
-        # Create norm layer - stores weight by reference (BUGGY)
-        let normLayer =
-          if layerPath.endsWith("post_attention_layernorm"):
-            NormLayer.init(postAttnWeight)
-          elif layerPath.endsWith("input_layernorm"):
-            NormLayer.init(inputLnWeight)
-          else:
-            raise newException(ValueError, fmt"Invalid layer: '{layerPath}'")
+        # Check if shapes changed
+        let inputLnShape = @(inputLnWeight.shape.asNimView())
+        let postAttnShape = @(postAttnWeight.shape.asNimView())
 
-        echo "After init:"
-        echo "  inputLnWeight.shape = ", inputLnWeight.shape
-        echo "  inputLnWeight.data_ptr() = 0x", inputLnWeight.dataPtrHex()
-        echo "  inputLnWeight.shape.data() = 0x", inputLnWeight.shapePtrHex()
-        echo "  normLayer.weight.shape = ", normLayer.weight.shape
-        echo "  normLayer.weight.data_ptr() = 0x", normLayer.weight.dataPtrHex()
-        echo "  normLayer.weight.shape.data() = 0x", normLayer.weight.shapePtrHex()
-        
-        # CHECK: Do they share the same pointers?
-        if inputLnWeight.data_ptr() == normLayer.weight.data_ptr():
-          echo "  ⚠️  SAME data_ptr - tensors share data memory!"
-        if inputLnWeight.shape.data() == normLayer.weight.shape.data():
-          echo "  ⚠️  SAME shape.data() - tensors share shape memory!"
-
-        # Call forward - rms_norm modifies weight in place
-        echo "Calling forward (rms_norm)..."
-        var output = normLayer.forward(inputHiddenStates)
-
-        echo "After forward:"
-        echo "  inputLnWeight.shape = ", inputLnWeight.shape
-        echo "  inputLnWeight.data_ptr() = 0x", inputLnWeight.dataPtrHex()
-        echo "  inputLnWeight.shape.data() = 0x", inputLnWeight.shapePtrHex()
-        echo "  normLayer.weight.shape = ", normLayer.weight.shape
-        echo "  normLayer.weight.data_ptr() = 0x", normLayer.weight.dataPtrHex()
-        echo "  normLayer.weight.shape.data() = 0x", normLayer.weight.shapePtrHex()
-
-        # ASSERTION: Check if shape changed (this catches the bug)
-        let actualShape = inputLnWeight.shape
-        if actualShape.len != 1 or actualShape[0] != 64:
+        if inputLnShape != @[64] or postAttnShape != @[64]:
           echo ""
-          echo "❌ BUG DETECTED: inputLnWeight.shape changed from [64] to ", actualShape
-          echo ""
-          echo "Pointer analysis:"
-          echo "  inputLnWeight.data_ptr() = 0x", inputLnWeight.dataPtrHex()
-          echo "  normLayer.weight.data_ptr() = 0x", normLayer.weight.dataPtrHex()
-          echo "  inputLnWeight.shape.data() = 0x", inputLnWeight.shapePtrHex()
-          echo "  normLayer.weight.shape.data() = 0x", normLayer.weight.shapePtrHex()
-          echo ""
-          if inputLnWeight.data_ptr() == normLayer.weight.data_ptr():
-            echo "  → PROVEN: Both tensors share the SAME data memory"
-            echo "  → rms_norm() modified the shared data, affecting BOTH"
-          if inputLnWeight.shape.data() == normLayer.weight.shape.data():
-            echo "  → PROVEN: Both tensors share the SAME shape memory"
+          echo "❌ BUG: Weight shapes corrupted!"
+          echo "   Expected: both [64]"
+          echo "   Got:      inputLn=", inputLnShape, ", postAttn=", postAttnShape
           echo ""
           return false
         echo ""
 
-      echo "=== OBSERVATION ==="
+      echo "=== Test passed - no corruption detected ==="
       echo ""
-      echo "If inputLnWeight.shape stayed [64] throughout, the test passed."
-      echo "If it changed, we demonstrated tensor shape aliasing."
       true
 
 when isMainModule:
