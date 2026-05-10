@@ -119,7 +119,7 @@ func init*(_: type TransformerBlock, attn_norm: RmsNorm, attn: RopeGQAttention, 
     mlp: mlp
   )
 
-func forward*(self: var TransformerBlock, x: TorchTensor, residual: Option[TorchTensor]): (TorchTensor, TorchTensor) =
+proc forward*(self: var TransformerBlock, x: TorchTensor, residual: Option[TorchTensor]): (TorchTensor, TorchTensor) =
   ## Forward pass for a transformer block with long residual stream.
   ##
   ## This pattern defers residual additions to the norm layers, enabling:
