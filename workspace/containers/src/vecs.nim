@@ -128,3 +128,19 @@ iterator mitems*[T](v: var Vec[T]): var T =
   ## Iterate over elements (mutable).
   for i in 0..<v.len:
     yield v.data[i]
+
+# #######################################################################
+#
+#               Syntactic sugar for Torch and Nim interop
+#
+# #######################################################################
+
+import workspace/libtorch/src/abi/c10
+
+func asTorchView*[T](v: Vec[T]): ArrayRef[T] {.inline.} =
+  ## Convert Vec to ArrayRef view.
+  ## Returns a non-owning view - Vec must outlive the ArrayRef.
+  if v.len == 0:
+    init(ArrayRef[T])
+  else:
+    init(ArrayRef[T], v.data[0].addr, v.len)
