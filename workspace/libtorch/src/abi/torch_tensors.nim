@@ -331,7 +331,7 @@ func to*(a: TorchTensor, device: Device, non_blocking = false, copy = false): To
 
 # dtype
 # -----------------------------------------------------------------------
-
+func to*(a: TorchTensor, device: DeviceKind, dtype: ScalarKind, non_blocking = false, copy = false): TorchTensor {.importcpp: "#.to(@)".}
 func to*(a: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.to(#)".}
 func scalarType*(a: TorchTensor): ScalarKind {.importcpp: "#.scalar_type()".}
 
