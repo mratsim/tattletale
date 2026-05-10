@@ -10,7 +10,7 @@ import
   std/complex,
   # Internal
   workspace/libtorch/vendor/libtorch,
-  workspace/libtorch/src/abi/c10,
+  workspace/libtorch/src/abi/c10 {.all.},
   workspace/libtorch/src/abi/std_cpp
 
 # (Almost) raw bindings to PyTorch Tensors
@@ -167,7 +167,6 @@ type Scalar* = SomeNumber or bool or TorchComplex
 # Tensors
 # -----------------------------------------------------------------------
 
-type TorchTensor* {.importcpp: "torch::Tensor", cppNonPod, bycopy, noInit.} = object
 
 # Lifetime / Resource management
 # -----------------------------------------------------------------------
@@ -227,27 +226,34 @@ type TorchTensor* {.importcpp: "torch::Tensor", cppNonPod, bycopy, noInit.} = ob
 # And then corollary, if it does and you pass by reference, what is more costly
 # the double dereference to access the data or the refcount increment?
 
+type TorchTensor* {.importcpp: "torch::Tensor", cppNonPod, bycopy, noInit.} = object
+  # impl {.importcpp: "impl_".}: IntrusivePtrTensorImpl
+
 # 0. Default constructor used instead of ambiguous brace-init {} (for example when initializing a seq)
 proc init*(T: typedesc[TorchTensor]): T {.importcpp:"'0(@)", varargs, constructor.}
 
-proc reset*(a: var TorchTensor) {.importcpp: "#.reset()".}
+func isDefined*(a: TorchTensor): bool {.importcpp: "#.defined()".}
+  # Check if a Tensor is initialized (C++ `defined` but it's already used in Nim)
+
+proc reset(a: var TorchTensor) {.importcpp: "#.reset()".}
+
+proc unsafeReleaseIntrusivePtr(t: var TorchTensor): IntrusivePtrTensorImpl {.discardable, importcpp: "#.unsafeReleaseIntrusivePtr()".}
 
 # 1. =destroy: C++ destructor decrements refcount
 proc `=destroy`*(t: var TorchTensor) {.importcpp: "#.~Tensor()".}
   # Calls ~intrusive_ptr() which calls reset_() → decrements refcount
 
-# 2. =wasMoved: Null out so destroy doesn't double-decrement
-# proc `=wasMoved`*(t: var TorchTensor){.importcpp: "#.reset()".}
-  # Calls intrusive_ptr::reset() → releases pointer without decrementing
-  # (reset_() already called the decrement, we just null the local copy)
-  #
-  # We are supposed to use {.importcpp: "#.reset()".}
-  # but the lowering is broken https://github.com/nim-lang/Nim/issues/25800
-
 {.pop.}
 
-proc `=wasMoved`*(t: var TorchTensor) =
-  reset(t)
+# 2. =wasMoved: Null out intrusive pointer  so destroy doesn't double-decrement
+proc `=wasMoved`*(t: var TorchTensor) {.inline.} =
+  # Unfortunately the following does not work due to `protected` field
+  # t.impl = IntrusivePtrTensorImpl()
+
+  # Release the intrusive_ptr without decrementing refcount
+  # This "leaks" the reference, but it's safe because the object
+  # is being moved and the new owner will take over
+  t.unsafeReleaseIntrusivePtr()
 
 {.push cdecl, header: TorchHeader.}
 
@@ -289,8 +295,6 @@ func nbytes*(a: TorchTensor): uint {.importcpp: "#.nbytes()".} ## Bytes-size of 
 func numel*(a: TorchTensor): int {.importcpp: "#.numel()".} ## This is Arraymancer and Numpy "size"
 
 func size*(a: TorchTensor, axis: int): int {.importcpp: "#.size(#)".}
-func isDefined*(a: TorchTensor): bool {.importcpp: "#.defined()".}
-  # Check if a Tensor is initialized (C++ `defined` but it's already used in Nim)
 func itemsize*(a: TorchTensor): uint {.importcpp: "#.itemsize()".}
 func element_size*(a: TorchTensor): int {.importcpp: "#.element_size()".}
 
@@ -916,6 +920,7 @@ func sort*(
 func argsort*(a: TorchTensor, axis: int = -1, descending: bool = false): TorchTensor {.importcpp: "#.argsort(@)".}
 
 func cat*(tensors: ArrayRef[TorchTensor], axis: int = 0): TorchTensor {.importcpp: "torch::cat(@)".}
+func cat*(tensors: CppVector[TorchTensor], axis: int = 0): TorchTensor {.importcpp: "torch::cat(@)".}
 func stack*(tensors: ArrayRef[TorchTensor], dim: int = 0): TorchTensor {.importcpp: "torch::stack(@)".}
   ## Stack tensors along a NEW dimension (unlike cat which concatenates along existing dim).
   ## All tensors must have the same shape.
