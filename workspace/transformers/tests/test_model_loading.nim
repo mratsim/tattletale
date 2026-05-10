@@ -10,7 +10,7 @@ import
   workspace/libtorch,
   workspace/transformers/src/layers/attn,
   workspace/transformers/src/models,
-  ./common_utils
+  workspace/libtorch_testutils
 
 const ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
 
