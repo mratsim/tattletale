@@ -11,7 +11,7 @@ import
   std/unittest,
   workspace/containers,
   workspace/libtorch,
-  ./common_utils
+  workspace/libtorch_testutils
 
 proc testNewWithLength(): bool =
   let v = Vec[TorchTensor].new(5)

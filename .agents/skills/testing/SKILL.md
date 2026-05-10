@@ -348,3 +348,132 @@ When adding new test vectors, regenerate the fixture files:
 ```bash
 uv run --group test-vectors python workspace/module/tests/testgen/generate_vectors.py
 ```
+
+## Test utilities for libtorch tests
+
+Tests involving `TorchTensor` and other libtorch FFI types should use the shared test utilities:
+
+```nim
+import workspace/libtorch_testutils
+```
+
+### C++ exception handling
+
+Wrap test code that may throw C++ exceptions:
+
+```nim
+proc testTensorOps(): bool =
+  let a = ones(@[2, 3], kFloat32)
+  let b = zeros(@[2, 3], kFloat32)
+  let c = a + b
+  result = c.isDefined()
+
+when isMainModule:
+  runTest("tensor operations", testTensorOps)  # Handles exceptions automatically
+```
+
+Or use the template directly:
+
+```nim
+check catchCppExceptions(testTensorOps())
+```
+
+### Tensor assertions
+
+**assertDefined** - Check tensor is initialized:
+
+```nim
+let tensor = ones(@[2, 3], kFloat32)
+assertDefined(tensor)  # Raises if not defined
+assertDefined(tensor, "weight")  # Custom name in error
+```
+
+**assertShape** - Verify tensor dimensions:
+
+```nim
+let tensor = randn(@[2, 3, 4])
+assertShape(tensor, 2, 3, 4)
+```
+
+**assertDtype** - Verify tensor dtype:
+
+```nim
+let tensor = ones(@[2, 3], kFloat32)
+assertDtype(tensor, kFloat32)
+```
+
+**assertAllClose** / **assertClose** - Compare tensor values:
+
+```nim
+let actual = computeSomething()
+let expected = ones(@[2, 3], kFloat32) * 2.0
+assertAllClose(actual, expected)  # Default rtol=2e-2, abstol=2e-2
+assertClose(actual, expected, rtol=1e-5, abstol=1e-5)  # Custom tolerance
+```
+
+### Debug helpers
+
+**printTensor** - Print tensor with label:
+
+```nim
+printTensor(myTensor, "Weight matrix")
+```
+
+**printTensorShape** - Print shape and dtype:
+
+```nim
+printTensorShape(myTensor, "Input")
+# Output: Input:
+#         Shape: [2, 3, 4], Dtype: kFloat32
+```
+
+**traceExec** - Debug macro to trace execution:
+
+```nim
+traceExec:
+  let a = ones(@[2, 3])
+  let b = zeros(@[2, 3])
+  let c = a + b
+# Prints each statement before executing
+```
+
+### Test file structure
+
+Complete example:
+
+```nim
+# workspace/my_module/tests/test_feature.nim
+import
+  std/unittest,
+  workspace/libtorch,
+  workspace/libtorch_testutils,
+  workspace/my_module
+
+proc testBasicFunctionality(): bool =
+  let input = ones(@[2, 3], kFloat32)
+  let result = myModule.process(input)
+  
+  assertDefined(result)
+  assertShape(result, 2, 3)
+  result = true
+
+proc testEdgeCase(): bool =
+  let input = zeros(@[1], kFloat32)
+  let output = myModule.process(input)
+  assertAllClose(output, input)
+  result = true
+
+when isMainModule:
+  runTest("basic functionality", testBasicFunctionality)
+  runTest("edge case", testEdgeCase)
+```
+
+### Key points
+
+- Always import `workspace/libtorch_testutils` for tests with TorchTensor
+- Use `runTest` for formatted output with automatic exception handling
+- Use `catchCppExceptions` when integrating with `std/unittest` `check`
+- Use assertion helpers (`assertDefined`, `assertShape`, etc.) for clear error messages
+- Use `printTensor` and `printTensorShape` for debugging failures
+- Test files should be in `workspace/module/tests/` directory
+- File names should start with `test_` or `t_`
