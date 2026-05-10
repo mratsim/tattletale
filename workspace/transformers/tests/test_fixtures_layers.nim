@@ -18,7 +18,7 @@ import
   workspace/transformers/src/layers/all,
   workspace/transformers/src/layers/rope {.all.},
   workspace/positron,
-  ./common_utils
+  workspace/libtorch_testutils
 
 const
   FixtureDir = currentSourcePath().parentDir() / "fixtures" / "layers" / "Qwen3-0.6B-layer-8"
