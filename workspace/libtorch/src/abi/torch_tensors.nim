@@ -237,7 +237,11 @@ func isDefined*(a: TorchTensor): bool {.importcpp: "#.defined()".}
 
 proc reset(a: var TorchTensor) {.importcpp: "#.reset()".}
 
-proc unsafeReleaseIntrusivePtr(t: var TorchTensor): IntrusivePtrTensorImpl {.discardable, importcpp: "#.unsafeReleaseIntrusivePtr()".}
+proc unsafeReleaseTensorImpl(t: var TorchTensor): pointer {.discardable, importcpp: "#.unsafeReleaseTensorImpl()".}
+  ## Returns an owning (!) pointer to the underlying object and makes the
+  ## intrusive_ptr instance invalid. That means the refcount is not decreased.
+  ## You *must* put the returned pointer back into a intrusive_ptr using
+  ## intrusive_ptr::reclaim(ptr) to properly destruct it.
 
 # 1. =destroy: C++ destructor decrements refcount
 proc `=destroy`*(t: var TorchTensor) {.importcpp: "#.~Tensor()".}
@@ -250,10 +254,10 @@ proc `=wasMoved`*(t: var TorchTensor) {.inline.} =
   # Unfortunately the following does not work due to `protected` field
   # t.impl = IntrusivePtrTensorImpl()
 
-  # Release the intrusive_ptr without decrementing refcount
+  # Release the TensorBase without decrementing refcount
   # This "leaks" the reference, but it's safe because the object
-  # is being moved and the new owner will take over
-  t.unsafeReleaseIntrusivePtr()
+  # is being moved and the new owner has taken over
+  t.unsafeReleaseTensorImpl()
 
 {.push cdecl, header: TorchHeader.}
 
