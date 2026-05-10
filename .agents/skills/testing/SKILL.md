@@ -427,6 +427,30 @@ printTensorShape(myTensor, "Input")
 #         Shape: [2, 3, 4], Dtype: kFloat32
 ```
 
+**ptrHex** - Convert pointer to hex string for aliasing detection:
+
+```nim
+let tensor = ones(@[2, 3], kFloat32)
+echo "data_ptr = 0x", tensor.data_ptr().ptrHex()
+echo "shape.data() = 0x", tensor.shape.data().ptrHex()
+# Useful for detecting memory aliasing issues
+```
+
+**dataPtrHex** / **shapePtrHex** - Convenience wrappers:
+
+```nim
+let tensor = ones(@[2, 3], kFloat32)
+echo "data_ptr = 0x", tensor.dataPtrHex()
+echo "shape_ptr = 0x", tensor.shapePtrHex()
+# Equivalent to above but more convenient
+```
+
+```nim
+printTensorShape(myTensor, "Input")
+# Output: Input:
+#         Shape: [2, 3, 4], Dtype: kFloat32
+```
+
 **traceExec** - Debug macro to trace execution:
 
 ```nim
