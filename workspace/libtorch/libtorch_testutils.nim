@@ -28,7 +28,7 @@ template catchCppExceptions*(body: bool): bool =
   ## Returns true if body executed successfully, false if an exception was caught.
   ##
   ## Use this for tests that involve C++ FFI types like TorchTensor.
-  
+
   when not defined(cpp) and defined(nimCheck):
     {.error: "You are running 'nim check' in C mode. It will misreport that C++ exceptions can't be caught because they aren't ref objects.".}
 
@@ -172,5 +172,5 @@ proc printTensorShape*(t: F.TorchTensor, label: string = "") =
   ## Print tensor shape and dtype with an optional label.
   if label.len > 0:
     echo label, ":"
-  echo "  Shape: ", t.shape, ", Dtype: ", t.scalarType()
+  echo "  Shape: ", t.shape.asNimView(), ", Dtype: ", t.scalarType()
   echo ""
