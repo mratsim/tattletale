@@ -264,5 +264,90 @@ proc main() =
       doAssert sliced == [1, 3, 5].toTorchTensor.to(kFloat64)
       true
 
+  # -----------------------------------------------------------------------
+  # Single evaluation - normalizedSlice path (FancyNone with t.shape[i])
+  # These codepaths access t MULTIPLE times inside slice_typed_dispatch:
+  #   - index(t) for the call
+  #   - t.shape[0], t.shape[1], ... for each normalizedSlice axisLen
+  # Without the `let tmp = t` guard, launchMissile would fire 3+ times.
+
+  runTest formatName("Two slices on same tensor", "launchMissile(t)[_..<3, _..<2]"):
+    proc(): bool =
+      ## normalizedSlice accesses t.shape[0] AND t.shape[1] inside the macro
+      ## t is referenced 3 times total: index(t), t.shape[0], t.shape[1]
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_..<3, _..<2]
+      doAssert i == 1  # must be 1, not 3
+      doAssert sliced.shape[0] == 3
+      doAssert sliced.shape[1] == 2
+      true
+
+  runTest formatName("Three slices (3D tensor)", "launchMissile(t3d)[_..<2, _..<2, _..<2]"):
+    proc(): bool =
+      ## normalizedSlice on 3 axes: t.shape[0], t.shape[1], t.shape[2]
+      ## t is referenced 4 times: index(t) + 3x t.shape[i]
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let t3d = torch.arange(24, kFloat64).reshape(@[2, 3, 4])
+      let sliced = launchMissile(t3d)[_..<2, _..<2, _..<2]
+      doAssert i == 1  # must be 1, not 4
+      doAssert sliced.shape[0] == 2
+      doAssert sliced.shape[1] == 2
+      doAssert sliced.shape[2] == 2
+      true
+
+  runTest formatName("Negative index slice (runtime normalization)", "launchMissile(t)[_..-1, _..-1]"):
+    proc(): bool =
+      ## Negative indices require normalizedSlice which accesses t.shape[i]
+      ## Two negative-indexed slices: t.shape[0] and t.shape[1] accessed
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_..-1, _..-1]
+      doAssert i == 1  # must be 1, not 3
+      doAssert sliced.shape[0] == 4
+      doAssert sliced.shape[1] == 4
+      true
+
+  runTest formatName("Slice with mixed int + slice", "launchMissile(t)[_..<3, 2]"):
+    proc(): bool =
+      ## Only the first dim is a slice, so t.shape[0] is accessed once
+      ## t referenced 2 times: index(t) + t.shape[0]
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_..<3, 2]
+      doAssert i == 1  # must be 1, not 2
+      doAssert sliced.shape.len == 1  # int index squeezes axis
+      true
+
+  # -----------------------------------------------------------------------
+  # Single evaluation - fancy indexing path (masked_select / index_select)
+  # These codepaths access t MULTIPLE times inside the quote block:
+  #   - t.scalarType to check dtype
+  #   - t passed to masked_select / index_select
+  # Without the guard, launchMissile would fire 2+ times.
+
+  runTest "Boolean mask full (masked_select) [SKIPPED]":
+    proc(): bool =
+      ## FancyUnknownFull path: quote block accesses t.scalarType then masked_select(t, ...)
+      ## t referenced 2 times inside the quote block
+      ## TODO: Re-enable when TorchTensor comparison operators are implemented
+      true  # skip: no comparison operators on TorchTensor yet
+  runTest "Integer fancy index via [] [SKIPPED: macro generates raw array, ABI needs Tensor]":
+    proc(): bool =
+      ## FancyIndex path via [] macro: index_select(t, axis, [0, 2])
+      ## TODO: Re-enable when the macro converts [0, 2] to toTorchTensor().to(kInt64)
+      true  # skip: macro generates index_select(tmp, 2, [0, 2]) but ABI needs Tensor
 when isMainModule:
   main()
