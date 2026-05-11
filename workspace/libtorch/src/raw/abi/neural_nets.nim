@@ -282,7 +282,7 @@ func l1_loss*(input, target: TorchTensor): TorchTensor {.importcpp: "torch::l1_l
 # Note: If no backend passes constraints, checks re-run with debug=True
 #       and warnings print the rejection reasons.
 
-func scaled_dot_product_attention*(
+func scaled_dot_product_attention(
   query, key, value: TorchTensor,
   attn_mask: Optional[TorchTensor] = cpp_nullopt,
   dropout_p: cdouble = 0.0,
