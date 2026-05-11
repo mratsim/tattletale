@@ -8,8 +8,7 @@ import
   std/strutils,
   workspace/libtorch/src/raw_libtorch as F,
   workspace/libtorch/src/vecs/vecs,
-  ../raw_libtorch_testutils,
-
+  ../raw_libtorch_testutils
 
 proc main() =
   echo "=== Test Suite: torch::cat with Vec ==="
