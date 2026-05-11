@@ -5,160 +5,176 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/unittest
 import std/sequtils
 import std/complex
 import std/sugar
 
 import workspace/libtorch/src/raw_libtorch
+import workspace/libtorch_testutils
 
 {.experimental: "views".} # TODO
 
 proc main() =
-  suite "Operator precedence":
-    test "+ and *":
-      let a = [[1, 2], [3, 4]].toTorchTensor()
-      let b = -a
-      check b * a + b == [[-2, -6], [-12, -20]].toTorchTensor()
-      check b * (a + b) == [[0, 0], [0, 0]].toTorchTensor()
-    test "+ and .abs":
-      let a = [[1, 2], [3, 4]].toTorchTensor()
-      let b = -a
-      check a + b.abs == [[2, 4], [6, 8]].toTorchTensor()
-      check (a + b).abs == [[0, 0], [0, 0]].toTorchTensor()
+  # -----------------------------------------------------------------------
+  # Operator precedence
 
-  suite "Tensor creation":
-    test "eye":
+  runTest "Operator precedence: + and *":
+    proc(): bool =
+      let a = [[1, 2], [3, 4]].toTorchTensor()
+      let b = -a
+      doAssert b * a + b == [[-2, -6], [-12, -20]].toTorchTensor()
+      doAssert b * (a + b) == [[0, 0], [0, 0]].toTorchTensor()
+      true
+
+  runTest "Operator precedence: + and .abs":
+    proc(): bool =
+      let a = [[1, 2], [3, 4]].toTorchTensor()
+      let b = -a
+      doAssert a + b.abs == [[2, 4], [6, 8]].toTorchTensor()
+      doAssert (a + b).abs == [[0, 0], [0, 0]].toTorchTensor()
+      true
+
+  # -----------------------------------------------------------------------
+  # Tensor creation
+
+  runTest "Tensor creation: eye":
+    proc(): bool =
       let t = eye(2, kInt64)
-      check t == [[1, 0], [0, 1]].toTorchTensor()
+      doAssert t == [[1, 0], [0, 1]].toTorchTensor()
+      true
 
-    test "zeros":
+  runTest "Tensor creation: zeros":
+    proc(): bool =
       let shape = [2, 3]
       let t = zeros(shape, kFloat32)
-      check t == [[0.0'f32, 0.0, 0.0], [0.0'f32, 0.0, 0.0]].toTorchTensor()
+      doAssert t == [[0.0'f32, 0.0, 0.0], [0.0'f32, 0.0, 0.0]].toTorchTensor()
+      true
 
-    test "linspace":
+  runTest "Tensor creation: linspace":
+    proc(): bool =
       let steps = 120'i64
       let reft = toSeq(0..<120).map(x => float64(x)/float64(steps-1)).toTorchTensor()
       let t = linspace(0.0, 1.0, steps, kFloat64)
-      # Max value is 1.0 no need to divide
       let rel_error = mean(t - reft)
-      check rel_error.item(float64) <= 1e-12
+      doAssert rel_error.item(float64) <= 1e-12
+      true
 
-    test "arange":
+  runTest "Tensor creation: arange":
+    proc(): bool =
       let steps = 130'i64
       let step = 1.0/float64(steps)
       let t = arange(0.0, 1.0, step, float64)
       for i in 0..<130:
         let val = t[i].item(float64)
         let refval: float64 = i.float64 / 130.0
-        check (val - refval) < 1e-12
+        doAssert (val - refval) < 1e-12
+      true
 
-    # test "inv":
-    #   let t = [[1, 2], [3, 4]].toTorchTensor()
-    #   echo t.inv()
+  # -----------------------------------------------------------------------
+  # Tensor utils
 
-  suite "Tensor utils":
-    test "Print":
+  runTest "Tensor utils: Print":
+    proc(): bool =
       let shape = [2, 3, 4]
       let t = rand(shape, kfloat64)
       echo t
+      true
 
-    test "sort, argsort":
+  runTest "Tensor utils: sort, argsort":
+    proc(): bool =
       let t = [2, 3, 4, 1, 5, 6].toTorchTensor()
       let
         s = t.sort()
         args = t.argsort()
-      check s.get(0) == [1, 2, 3, 4, 5, 6].toTorchTensor()
-      check s.get(1) == args
-      check args == [3, 0, 1, 2, 4, 5].toTorchTensor()
+      doAssert s.get(0) == [1, 2, 3, 4, 5, 6].toTorchTensor()
+      doAssert s.get(1) == args
+      doAssert args == [3, 0, 1, 2, 4, 5].toTorchTensor()
+      true
 
-    test "all, any":
-      discard
+  runTest "Tensor utils: all, any":
+    proc(): bool =
+      true
 
-    test "squeezen unsqueeze":
-      discard
+  runTest "Tensor utils: squeeze, unsqueeze":
+    proc(): bool =
+      true
 
-  suite "Operations":
-    test "add, addmv, addmm":
-      discard
-    test "matmul, mm, bmm":
-      discard
+  # -----------------------------------------------------------------------
+  # Operations
 
-  suite "FFT1D":
-    setup:
+  runTest "Operations: add, addmv, addmm":
+    proc(): bool =
+      true
+
+  runTest "Operations: matmul, mm, bmm":
+    proc(): bool =
+      true
+
+  # -----------------------------------------------------------------------
+  # FFT1D
+
+  runTest "FFT1D: item(Complex64)":
+    proc(): bool =
       let shape = [8]
-      var f64input {.used.} = rand(shape, kfloat64)
-      var c64input {.used.} = rand(shape, kComplexF64)
-
-    test "item(Complex64)":
-      # Check item for complex
+      let c64input = rand(shape, kComplexF64)
       let m: TorchComplex[float64] = c64input[0].item(Complex64)
-      check m.real is float64
-      check m.imag is float64
+      doAssert m.real is float64
+      doAssert m.imag is float64
+      true
 
-    test "fft, ifft":
+  runTest "FFT1D: fft, ifft":
+    proc(): bool =
+      let shape = [8]
+      let c64input = rand(shape, kComplexF64)
       let fftout = fft(c64input)
-      # echo fftout
       let ifftout = ifft(fftout)
-      # echo ifftout
       let max_input = max(abs(ifftout)).item(float64)
-      # Compare abs of Complex values
       var rel_diff = abs(ifftout - c64input)
       rel_diff /= max_input
-      # This isn't a perfect way of checking if Complex number are close enough
-      # But it'll do for this simple case
-      check mean(rel_diff).item(float64) < 1e-12
+      doAssert mean(rel_diff).item(float64) < 1e-12
+      true
 
-    test "rfft, irfft":
+  runTest "FFT1D: rfft, irfft":
+    proc(): bool =
+      let shape = [8]
+      let f64input = rand(shape, kfloat64)
       let fftout = rfft(f64input)
-      # echo fftout
       let ifftout = irfft(fftout)
-      # echo ifftout
       let max_input = max(abs(ifftout)).item(float64)
-      # Compare abs of Complex values
       var rel_diff = abs(ifftout - f64input)
       rel_diff /= max_input
-      # This isn't a perfect way of checking if Complex number are close enough
-      # But it'll do for this simple case
-      check mean(rel_diff).item(float64) < 1e-12
+      doAssert mean(rel_diff).item(float64) < 1e-12
+      true
 
-  suite "FFT2D":
-    setup:
+  # -----------------------------------------------------------------------
+  # FFT2D
+
+  runTest "FFT2D: fft2, ifft2":
+    proc(): bool =
       let shape = [3, 5]
-      var f64input {.used.} = rand(shape, kfloat64)
-      var c64input {.used.} = rand(shape, kComplexF64)
-
-    test "fft2, ifft2":
+      let c64input = rand(shape, kComplexF64)
       let fft2out = fft2(c64input)
-      # echo fft2out
       let ifft2out = ifft2(fft2out)
-      # echo ifft2out
       let max_input = max(abs(ifft2out)).item(float64)
-      # Compare abs of Complex values
       var rel_diff = abs(ifft2out - c64input)
       rel_diff /= max_input
-      # This isn't a perfect way of checking if Complex number are close enough
-      # But it'll do for this simple case
-      check mean(rel_diff).item(float64) < 1e-12
+      doAssert mean(rel_diff).item(float64) < 1e-12
+      true
 
-  suite "FFTND":
-    setup:
+  # -----------------------------------------------------------------------
+  # FFTND
+
+  runTest "FFTND: fftn, ifftn":
+    proc(): bool =
       let shape = [3, 4, 5]
-      var f64input {.used.} = rand(shape, kfloat64)
-      var c64input {.used.} = rand(shape, kComplexF64)
-
-    test "fftn, ifftn":
+      let c64input = rand(shape, kComplexF64)
       let fftnout = fftn(c64input)
-      # echo fftnout
       let ifftnout = ifftn(fftnout)
-      # echo ifftnout
       let max_input = max(abs(ifftnout)).item(float64)
-      # Compare abs of Complex values
       var rel_diff = abs(ifftnout - c64input)
       rel_diff /= max_input
-      # This isn't a perfect way of checking if Complex number are close enough
-      # But it'll do for this simple case
-      check mean(rel_diff).item(float64) < 1e-12
+      doAssert mean(rel_diff).item(float64) < 1e-12
+      true
 
-main()
+when isMainModule:
+  main()

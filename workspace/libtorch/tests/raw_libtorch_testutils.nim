@@ -89,8 +89,8 @@ proc assertAllClose*(
     if msg.len > 0:
       echo msg
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Actual[0, 0..<5, 0..<5]:\n", actual[0, 0..<5, 0..<5]
-    echo "Expected[0, 0..<5, 0..<5]:\n", expected[0, 0..<5, 0..<5]
+    echo "Actual:   "; actual.print()
+    echo "Expected: "; expected.print()
     raise newException(AssertionDefect, "allClose assertion failed")
 
 template assertDefined*(tensor: untyped, name: string = "") =
