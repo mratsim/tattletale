@@ -10,8 +10,8 @@ import
   std/complex,
   # Internal
   workspace/libtorch/vendor/libtorch,
-  workspace/libtorch/src/abi/c10 {.all.},
-  workspace/libtorch/src/abi/std_cpp
+  ./c10 {.all.},
+  ./std_cpp
 
 # (Almost) raw bindings to PyTorch Tensors
 # -----------------------------------------------------------------------
@@ -225,6 +225,15 @@ type Scalar* = SomeNumber or bool or TorchComplex
 #
 # And then corollary, if it does and you pass by reference, what is more costly
 # the double dereference to access the data or the refcount increment?
+#
+#
+# Unfortunately when stored in a seq or objects, Nim doesn't generate std::move
+# It does copy constructor then wasMoved.
+#
+# This does not happen with array or custom Vec with placement new for some reason.
+#
+# Hence similar to Python or C++ stable API we rewrap TorchTensor in a refcounted object.
+# (Yes the C++ stable API does a shared_ptr on top of the intrusive_ptr)
 
 type TorchTensor* {.importcpp: "torch::Tensor", cppNonPod, bycopy, noInit.} = object
   # impl {.importcpp: "impl_".}: IntrusivePtrTensorImpl
@@ -235,7 +244,7 @@ proc init*(T: typedesc[TorchTensor]): T {.importcpp:"'0(@)", varargs, constructo
 func isDefined*(a: TorchTensor): bool {.importcpp: "#.defined()".}
   # Check if a Tensor is initialized (C++ `defined` but it's already used in Nim)
 
-proc reset(a: var TorchTensor) {.importcpp: "#.reset()".}
+proc reset(a: var TorchTensor) {.importcpp: "#.reset()", used.}
 
 proc unsafeReleaseTensorImpl(t: var TorchTensor): pointer {.discardable, importcpp: "#.unsafeReleaseTensorImpl()".}
   ## Returns an owning (!) pointer to the underlying object and makes the
@@ -519,7 +528,7 @@ func index_put*(
 
 # Fancy Indexing
 # -----------------------------------------------------------------------
-# TODO -> separate the FFI from the Nim Raw API to add IndexDefect when compileOptions("boundsCheck")
+# TODO -> separate the FFI from the Nim Raw API to add IndexDefect when compileOption("boundsCheck")
 func index_select*(a: TorchTensor, axis: int, indices: TorchTensor): TorchTensor {.importcpp: "#.index_select(@)".}
 func masked_select*(a: TorchTensor, mask: TorchTensor): TorchTensor {.importcpp: "#.masked_select(@)".}
 

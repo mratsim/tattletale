@@ -6,9 +6,10 @@
 
 import
   std/strutils,
-  workspace/libtorch as F,
-  workspace/libtorch_testutils,
-  workspace/containers
+  workspace/libtorch/src/raw_libtorch as F,
+  workspace/libtorch/src/vecs/vecs,
+  ../raw_libtorch_testutils,
+
 
 proc main() =
   echo "=== Test Suite: torch::cat with Vec ==="

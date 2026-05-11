@@ -9,7 +9,7 @@ import
   std/unittest,
   std/math,
   std/strformat,
-  workspace/libtorch as torch
+  workspace/libtorch/src/raw_libtorch as torch
 
 proc genShiftedVandermonde5x5*(dtype: ScalarKind): TorchTensor =
   ## Generate 5x5 shifted Vandermonde matrix: v[i, j] = i^(j+1)

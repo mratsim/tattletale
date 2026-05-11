@@ -9,9 +9,9 @@
 
 import
   std/unittest,
-  workspace/containers,
-  workspace/libtorch,
-  workspace/libtorch_testutils
+  workspace/libtorch/src/raw_libtorch as F,
+  workspace/libtorch/src/vecs/vecs,
+  ../raw_libtorch_testutils
 
 proc testNewWithLength(): bool =
   let v = Vec[TorchTensor].new(5)
@@ -31,6 +31,8 @@ proc testIndexAccess(): bool =
             v[2].dim() == 2 and v[2].size(0) == 2 and v[2].size(1) == 3)
 
 proc testIndexOutOfBounds(): bool =
+  static: doAssert compileOption("boundChecks"), "You cannot test bound checks if you compile without bound checks."
+
   var v = Vec[TorchTensor].new(3)
   try:
     discard v[10]  # Out of bounds access

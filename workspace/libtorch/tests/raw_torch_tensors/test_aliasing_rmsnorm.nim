@@ -6,9 +6,8 @@
 
 import
   std/strutils,
-  workspace/libtorch as F,
-  workspace/libtorch/src/abi/neural_nets,
-  workspace/libtorch_testutils
+  workspace/libtorch/src/raw_libtorch as F,
+  ../raw_libtorch_testutils
 
 proc main() =
   runTest "rms_norm weight aliasing":
@@ -29,9 +28,9 @@ proc main() =
       type NormLayer = object
         weight*: TorchTensor
         eps*: float
-      
+
       let normLayer = NormLayer(weight: weight, eps: 1e-6)
-      
+
       echo "After storing in normLayer (no clone):"
       echo "  weight.data_ptr() = 0x", weight.dataPtrHex()
       echo "  normLayer.weight.data_ptr() = 0x", normLayer.weight.dataPtrHex()
@@ -57,7 +56,7 @@ proc main() =
       echo "  weight.data_ptr() = 0x", weight.dataPtrHex()
       echo "  normLayer.weight.shape = ", @(normLayer.weight.shape.asNimView())
       echo "  normLayer.weight.data_ptr() = 0x", normLayer.weight.dataPtrHex()
-      weight.print()
+      # weight.print()
       echo ""
 
       # Check if shape changed
@@ -69,7 +68,7 @@ proc main() =
         return false
       else:
         echo "✓ weight.shape unchanged ([64])"
-      
+
       # Check if data values changed by checking first few elements
       let weightData = cast[ptr UncheckedArray[float32]](F.data_ptr(weight))
       var dataChanged = false
@@ -78,7 +77,7 @@ proc main() =
           dataChanged = true
           echo "  weight[", i, "] = ", weightData[i], " (expected 1.0)"
           break
-      
+
       if dataChanged:
         echo "⚠️  weight data values changed (no longer all 1.0)"
         echo "  This means rms_norm modifies weight data in place"

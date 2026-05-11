@@ -20,7 +20,7 @@
 
 import
   std/[strformat, typetraits],
-  ./allocs
+  ./lowlevel/allocs
 
 proc placementNew[T](p: ptr T): ptr T {.importcpp: "(new (#) '*0(@))", nodecl, discardable.}
   ## Default-construct an object at the given memory location via placement-new.
@@ -135,7 +135,7 @@ iterator mitems*[T](v: var Vec[T]): var T =
 #
 # #######################################################################
 
-import workspace/libtorch/src/abi/c10
+import workspace/libtorch/src/raw/abi/c10
 
 func asTorchView*[T](v: Vec[T]): ArrayRef[T] {.inline.} =
   ## Convert Vec to ArrayRef view.

@@ -5,8 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import workspace/libtorch/src/abi/torch_tensors
-import workspace/libtorch/src/torch_tensors_sugar
+import ./abi/torch_tensors
+import ./torch_tensors_sugar
 
 static: doAssert sizeof(int) == 8, "Only 64-bit OSes are supported"
 

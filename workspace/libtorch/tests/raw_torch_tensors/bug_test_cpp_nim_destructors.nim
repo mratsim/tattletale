@@ -24,8 +24,7 @@
 
 import
   std/unittest,
-  workspace/libtorch as F,
-  workspace/libtorch/src/torch_tensors_sugar
+  workspace/libtorch/src/raw_libtorch as F
 
 # Currently not part of the test suite
 # Blocked by
