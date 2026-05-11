@@ -736,6 +736,23 @@ func equal*(a, b: TorchTensor): bool {.importcpp: "#.equal(#)".}
 template `==`*(a, b: TorchTensor): bool =
   a.equal(b)
 
+# Comparison operators
+
+func lt*(a: TorchTensor, b: TorchTensor|SomeFloat): TorchTensor {.importcpp: "(# < #)".}
+func lt*(a: SomeFloat, b: TorchTensor): TorchTensor {.importcpp: "(# < #)".}
+
+func gt*(a: TorchTensor, b: TorchTensor|SomeFloat): TorchTensor {.importcpp: "(# > #)".}
+func gt*(a: SomeFloat, b: TorchTensor): TorchTensor {.importcpp: "(# > #)".}
+
+func le*(a: TorchTensor, b: TorchTensor|SomeFloat): TorchTensor {.importcpp: "(# <= #)".}
+func le*(a: SomeFloat, b: TorchTensor): TorchTensor {.importcpp: "(# <= #)".}
+
+func ge*(a: TorchTensor, b: TorchTensor|SomeFloat): TorchTensor {.importcpp: "(# >= #)".}
+func ge*(a: SomeFloat, b: TorchTensor): TorchTensor {.importcpp: "(# >= #)".}
+
+func ne*(a: TorchTensor, b: TorchTensor|SomeFloat): TorchTensor {.importcpp: "(# != #)".}
+func ne*(a: SomeFloat, b: TorchTensor): TorchTensor {.importcpp: "(# != #)".}
+
 # Functions.h
 # -----------------------------------------------------------------------
 

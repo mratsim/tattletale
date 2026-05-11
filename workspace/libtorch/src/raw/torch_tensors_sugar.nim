@@ -383,7 +383,7 @@ macro `[]=`*(t: var TorchTensor, args: varargs[untyped]): untyped =
   # https://github.com/nim-lang/Nim/issues/5855
 
   var tmp = args
-  let val = tmp.pop
+  let val = tmp.pop()
   let new_args = getAST(desugarSlices(tmp))
 
   result = quote do:
