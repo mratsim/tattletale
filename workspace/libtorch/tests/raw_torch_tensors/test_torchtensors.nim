@@ -10,7 +10,7 @@ import std/sequtils
 import std/complex
 import std/sugar
 
-import workspace/libtorch
+import workspace/libtorch/src/raw_libtorch
 
 {.experimental: "views".} # TODO
 

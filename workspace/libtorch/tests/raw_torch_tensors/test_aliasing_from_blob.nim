@@ -6,7 +6,7 @@
 
 import
   std/strutils,
-  workspace/libtorch as F
+  workspace/libtorch/src/raw_libtorch as F
 
 proc main() =
   echo "=== Test 1: IntArrayRef.data() ==="
@@ -15,7 +15,7 @@ proc main() =
   # Create first IntArrayRef
   let shape1 = F.asTorchView(64, 128, 256)
   echo "shape1.size() = ", shape1.size()
-  
+
   let dataPtr1 = shape1.data()
   echo "shape1.data() = 0x", toHex(cast[uint](dataPtr1))
   echo ""
@@ -23,7 +23,7 @@ proc main() =
   # Create second IntArrayRef
   let shape2 = F.asTorchView(1, 2, 3, 4, 5)
   echo "shape2.size() = ", shape2.size()
-  
+
   let dataPtr2 = shape2.data()
   echo "shape2.data() = 0x", toHex(cast[uint](dataPtr2))
   echo ""
@@ -31,7 +31,7 @@ proc main() =
   # Compare addresses
   let addr1 = cast[uint](dataPtr1)
   let addr2 = cast[uint](dataPtr2)
-  
+
   let diff = if addr2 > addr1: addr2 - addr1 else: addr1 - addr2
   echo "Address difference: ", diff, " bytes"
   echo ""
@@ -50,7 +50,7 @@ proc main() =
   # Create a tensor
   let tensor = F.randn([2, 3, 4], scalarKind=F.kFloat32)
   echo "tensor.shape = ", @(tensor.shape.asNimView())
-  
+
   # Get data pointer
   let tensorDataPtr = F.data_ptr(tensor)
   echo "tensor.data_ptr() = 0x", toHex(cast[uint](tensorDataPtr))
@@ -69,7 +69,7 @@ proc main() =
   var sourceData: array[4, float32] = [1.0, 2.0, 3.0, 4.0]
   let sourceDataPtr = sourceData[0].unsafeAddr
   echo "Source data address = 0x", toHex(cast[uint](sourceDataPtr))
-  
+
   # Create shape
   let shape = F.asTorchView(2, 2)
   let shapePtr = shape.data()
@@ -87,7 +87,7 @@ proc main() =
   # Verify addresses match
   let blobDataPtr = F.data_ptr(tensorFromBlob)
   let blobShapePtr = tensorFromBlob.shape.data()
-  
+
   if cast[uint](blobDataPtr) == cast[uint](sourceDataPtr):
     echo "✓ PASS: data_ptr matches source data address"
     echo "  → from_blob does NOT copy data (zero-copy view)"

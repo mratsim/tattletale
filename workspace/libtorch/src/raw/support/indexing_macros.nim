@@ -7,8 +7,8 @@
 
 import
   std/macros,
-  workspace/libtorch/src/support/ast_utils,
-  workspace/libtorch/src/abi/[
+  workspace/libtorch/src/raw/support/ast_utils,
+  workspace/libtorch/src/raw/abi/[
     torch_tensors,
     std_cpp
   ]
