@@ -34,7 +34,7 @@ type
     len: int
     data: ptr UncheckedArray[T]
 
-func new*[T](_: type Vec[T], len: int): Vec[T] =
+func new*[T](_: type Vec[T], len: int): Vec[T] {.nodestroy.} =
   ## Create Vec with exact length.
   result.len = len
   if len > 0:

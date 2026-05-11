@@ -281,9 +281,8 @@ proc `=sink`*(dest: var TorchTensor; src: TorchTensor) {.importcpp: "# = std::mo
   # No refcount increment/decrement needed
 
 # 5. =dup: Duplicate for copy-on-sink scenarios
-proc `=dup`*(t: TorchTensor): TorchTensor {.importcpp: "torch::Tensor(#)", nodestroy.}
+proc `=dup`*(t: TorchTensor): TorchTensor {.importcpp: "torch::Tensor(#)".}
   # C++ copy constructor increments refcount, returns new value
-  # nodestroy: result is moved, not destroyed
 
 # Strings & Debugging
 # -----------------------------------------------------------------------
