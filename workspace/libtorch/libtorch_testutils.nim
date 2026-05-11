@@ -19,7 +19,6 @@ import
   workspace/libtorch/src/tensors,
   workspace/libtorch/src/raw_libtorch as F
 
-
 # =============================================================================
 # C++ Exception Handling
 # =============================================================================
@@ -47,6 +46,12 @@ template catchCppExceptions*(body: bool): bool =
     echo e.msg
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     false
+  except Defect as e:
+    echo "❌ Defect caught:"
+    echo "---------------------------"
+    echo e.msg
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    false
 
 # =============================================================================
 # Test Runner
@@ -55,6 +60,7 @@ template catchCppExceptions*(body: bool): bool =
 proc runTest*(name: string, body: proc(): bool) =
   ## Run a test with C++ exception handling.
   ## Prints PASS/FAIL status with formatted output.
+  ## Exits with code 1 on first failure.
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Section: " & name
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -63,7 +69,13 @@ proc runTest*(name: string, body: proc(): bool) =
     echo "✅ PASS | ", name
   else:
     echo "❌ FAIL | ", name
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "❌ FAILED: ", name
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    quit(1)
   echo ""
+
 
 # =============================================================================
 # Tensor Assertions
@@ -72,10 +84,9 @@ proc runTest*(name: string, body: proc(): bool) =
 proc assertAllClose*(
   actual, expected: Tensor,
   rtol = 2e-2'f64, abstol = 2e-2'f64,
-  msg = ""
-) =
+  msg = ""): bool =
   ## Assert that two tensors are close within tolerance.
-  ## Raises AssertionDefect if they differ.
+  ## Returns false if they differ (for use in runTest).
   ##
   ## Args:
   ##   actual: The tensor produced by the test
@@ -91,24 +102,25 @@ proc assertAllClose*(
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Actual:   "; actual.print()
     echo "Expected: "; expected.print()
-    raise newException(AssertionDefect, "allClose assertion failed")
+    return false
+  true
 
-template assertDefined*(tensor: untyped, name: string = "") =
+template assertDefined*(tensor: untyped, name: string = ""): bool =
   ## Assert that a tensor is defined (initialized).
-  ## Raises AssertionDefect if tensor is not defined.
+  ## Returns false if tensor is not defined (for use in runTest).
   ##
   ## Args:
   ##   tensor: The tensor to check
   ##   name: Optional name for error message (defaults to variable name)
   if not tensor.isDefined():
-    raise newException(
-      AssertionDefect,
-      "Tensor '" & (if name.len > 0: name else: astToStr(tensor)) & "' is not defined"
-    )
+    echo "Tensor '" & (if name.len > 0: name else: astToStr(tensor)) & "' is not defined"
+    false
+  else:
+    true
 
-template assertShape*(tensor: untyped, expectedShape: openArray[int], name: string = "") =
+template assertShape*(tensor: untyped, expectedShape: openArray[int], name: string = ""): bool =
   ## Assert that a tensor has the expected shape.
-  ## Raises AssertionDefect if shape doesn't match.
+  ## Returns false if shape doesn't match (for use in runTest).
   ##
   ## Args:
   ##   tensor: The tensor to check
@@ -118,31 +130,31 @@ template assertShape*(tensor: untyped, expectedShape: openArray[int], name: stri
   let expected = @expectedShape
   if actual != expected:
     let tensorName = if name.len > 0: name else: astToStr(tensor)
-    raise newException(
-      AssertionDefect,
-      "Tensor '" & tensorName & "' shape mismatch. Expected: " & $expected & ", Got: " & $actual
-    )
+    echo "Tensor '" & tensorName & "' shape mismatch. Expected: " & $expected & ", Got: " & $actual
+    false
+  else:
+    true
 
-template assertDtype*(tensor: untyped, expectedDtype: ScalarKind, name: string = "") =
+template assertDtype*(tensor: untyped, expectedDtype: ScalarKind, name: string = ""): bool =
   ## Assert that a tensor has the expected dtype.
-  ## Raises AssertionDefect if dtype doesn't match.
+  ## Returns false if dtype doesn't match (for use in runTest).
   let actual = tensor.scalarType()
   if actual != expectedDtype:
     let tensorName = if name.len > 0: name else: astToStr(tensor)
-    raise newException(
-      AssertionDefect,
-      "Tensor '" & tensorName & "' dtype mismatch. Expected: " & $expectedDtype & ", Got: " & $actual
-    )
+    echo "Tensor '" & tensorName & "' dtype mismatch. Expected: " & $expectedDtype & ", Got: " & $actual
+    false
+  else:
+    true
 
 template assertClose*(
   actual, expected: Tensor,
   rtol = 2e-2'f64, abstol = 2e-2'f64,
-  msg = ""
-) =
+  msg = ""): bool =
   ## Assert that two tensors are close within tolerance.
-  ## Raises AssertionDefect if they differ.
+  ## Returns false if they differ (for use in runTest).
   ## Alias for assertAllClose for consistency with other assert* templates.
   assertAllClose(actual, expected, rtol, abstol, msg)
+
 
 # =============================================================================
 # Debug Helpers
