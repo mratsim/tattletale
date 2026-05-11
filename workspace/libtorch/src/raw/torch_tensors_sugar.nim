@@ -217,7 +217,7 @@ iterator flatIter*[T](s: openarray[T]): auto {.noSideEffect.} =
     else:
       yield item
 
-func toTorchTensorView*[T: SomeTorchType](oa: openarray[T]): lent TorchTensor {.inline.} =
+func asTorchTensorView*[T: SomeTorchType](oa: openarray[T]): lent TorchTensor {.inline.} =
   ## Interpret an openarray as a CPU Tensor
   ## Important:
   ##   the buffer is shared.
