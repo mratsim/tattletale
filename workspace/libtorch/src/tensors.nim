@@ -435,14 +435,14 @@ func vulkan*(a: Tensor): Tensor {.inline.} =
 func dim*(a: Tensor): int {.inline.} =
   F.dim(a.raw)
 
-func sizes*(a: Tensor): IntArrayRef {.inline.} =
-  F.sizes(a.raw)
+template sizes*(a: Tensor): openArray[int] =
+  F.sizes(a.raw).asNimView()
 
-func shape*(a: Tensor): IntArrayRef {.inline.} =
-  F.shape(a.raw)
+template shape*(a: Tensor): openArray[int] =
+  F.shape(a.raw).asNimView()
 
-func strides*(a: Tensor): IntArrayRef {.inline.} =
-  F.strides(a.raw)
+template strides*(a: Tensor): openArray[int] =
+  F.strides(a.raw).asNimView()
 
 func ndimension*(a: Tensor): int {.inline.} =
   F.ndimension(a.raw)
