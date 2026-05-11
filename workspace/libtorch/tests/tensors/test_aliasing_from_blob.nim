@@ -100,7 +100,7 @@ proc main() =
       echo ""
 
       # Create tensor from blob using wrapper API
-      let tensorFromBlob = from_blob(sourceDataPtr, 2, 2, kFloat32)
+      let tensorFromBlob = from_blob(sourceDataPtr, [2, 2], kFloat32)
       echo "  Tensor from blob:"
       echo "    tensor.shape = ", @(tensorFromBlob.shape)
       echo "    tensor.data_ptr() = 0x", toHex(cast[uint](tensorFromBlob.data_ptr()))
