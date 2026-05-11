@@ -13,6 +13,29 @@ import
 proc main() =
   runTest "Tensor.shape returns openArray view":
     proc(): bool =
+      # This may crash with GCC v15.2.0 in the very first line `let t1 = zeros(64, 128, 256, kFloat32)`
+      # but not with GCC v15.2.1 or Clang v22.1.x
+      #
+      # Thread 1 "test_aliasing_f" received signal SIGSEGV, Segmentation fault.
+      # c10::intrusive_ptr<c10::TensorImpl, c10::UndefinedTensorImpl>::reset_not_null_ (target=0x0) at /home/beta/Programming/Perso/workspace-tattletale/tattletale/workspace/libtorch/vendor/libtorch/include/c10/util/intrusive_ptr.h:405
+      # 405         if (detail::is_uniquely_owned(
+      # (gdb) bt
+      # #0  c10::intrusive_ptr<c10::TensorImpl, c10::UndefinedTensorImpl>::reset_not_null_ (target=0x0) at /home/beta/Programming/Perso/workspace-tattletale/tattletale/workspace/libtorch/vendor/libtorch/include/c10/util/intrusive_ptr.h:405
+      # #1  0x000055555556a225 in c10::intrusive_ptr<c10::TensorImpl, c10::UndefinedTensorImpl>::reset_ (this=0x7fffffffd5d0) at /home/beta/Programming/Perso/workspace-tattletale/tattletale/workspace/libtorch/vendor/libtorch/include/c10/util/intrusive_ptr.h:398
+      # #2  c10::intrusive_ptr<c10::TensorImpl, c10::UndefinedTensorImpl>::~intrusive_ptr (this=0x7fffffffd5d0) at /home/beta/Programming/Perso/workspace-tattletale/tattletale/workspace/libtorch/vendor/libtorch/include/c10/util/intrusive_ptr.h:532
+      # #3  at::TensorBase::~TensorBase (this=0x7fffffffd5d0) at /home/beta/Programming/Perso/workspace-tattletale/tattletale/workspace/libtorch/vendor/libtorch/include/ATen/core/TensorBase.h:119
+      # #4  at::Tensor::~Tensor (this=0x7fffffffd5d0) at /home/beta/Programming/Perso/workspace-tattletale/tattletale/workspace/libtorch/vendor/libtorch/include/ATen/core/TensorBody.h:94
+      # #5  zeros__OOZOOZsrcZtensors_u120 (size_p0=size_p0@entry=0x555555576410 <TM__pyeSeDytlwzdVj9cD9bOyVGQ_4>, size_p0Len_0=size_p0Len_0@entry=3, scalarKind_p1=c10::ScalarType::Float) at /home/beta/Programming/Perso/workspace-tattletale/tattletale/nimcache/wip/@mtest_aliasing_from_blob.nim.cpp:344
+      # #6  0x000055555556a534 in colonanonymous___test95aliasing95from95blob_u5 () at /home/beta/Programming/Perso/workspace-tattletale/tattletale/nimcache/wip/@mtest_aliasing_from_blob.nim.cpp:432
+      # #7  0x0000555555569906 in runTest__OOZOOZlibtorch95testutils_u10 (name_p0=..., body_p1=...) at /home/beta/Programming/Perso/workspace-tattletale/tattletale/nimcache/wip/@m..@s..@slibtorch_testutils.nim.cpp:254
+      # #8  0x0000555555569d47 in main__test95aliasing95from95blob_u4 () at /home/beta/Programming/Perso/workspace-tattletale/tattletale/nimcache/wip/@mtest_aliasing_from_blob.nim.cpp:858
+      # #9  0x0000555555569ecd in NimMainModule () at /home/beta/Programming/Perso/workspace-tattletale/tattletale/nimcache/wip/@mtest_aliasing_from_blob.nim.cpp:916
+      # #10 0x0000555555569f48 in NimMainInner () at /home/beta/Programming/Perso/workspace-tattletale/tattletale/nimcache/wip/@mtest_aliasing_from_blob.nim.cpp:890
+      # #11 0x0000555555559631 in main (argc=<optimized out>, args=<optimized out>, env=<optimized out>) at /home/beta/Programming/Perso/workspace-tattletale/tattletale/nimcache/wip/@mtest_aliasing_from_blob.nim.cpp:909
+      #
+      # This is indicative of extra destructors being inserted after C++ std::move / Nim =sink
+      # which should be suppressed by {.nodestroy.}
+
       # Create first tensor and get shape view
       let t1 = zeros(64, 128, 256, kFloat32)
       echo "  t1.shape = ", @(t1.shape)

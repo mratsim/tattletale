@@ -33,7 +33,7 @@ type Tensor* = ref object
 proc placementNew[T](p: ptr T): ptr T {.importcpp: "(new (#) '*0(@))", nodecl, discardable.}
   ## Default-construct an object at the given memory location via placement-new.
 
-proc wrapTorchTensor(a: sink TorchTensor): Tensor {.inline.} =
+proc wrapTorchTensor(a: sink TorchTensor): Tensor {.inline, nodestroy.} =
   new result
   placementNew(result.raw.addr)
   `=sink`(result.raw, a)
