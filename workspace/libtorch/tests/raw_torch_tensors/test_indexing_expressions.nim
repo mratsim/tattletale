@@ -1,0 +1,268 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+import
+  std/math,
+  std/strformat,
+  workspace/libtorch/src/raw_libtorch as torch,
+  workspace/libtorch_testutils
+
+proc genShiftedVandermonde5x5*(dtype: ScalarKind): TorchTensor =
+  torch.arange(1, 6).reshape(-1, 1) ** torch.arange(1, 6)
+
+func formatName*(desc, indexingExample: string): string =
+  fmt"{desc:<40}  {indexingExample}"
+
+proc main() =
+  # IMPORTANT: Tensors AND launchMissile must be INSIDE each runTest body.
+  # Capturing TorchTensor in a closure corrupts the C++ object.
+
+  # -----------------------------------------------------------------------
+  # Single evaluation - integer indexing (isAllInt path)
+
+  runTest formatName("Point indexing", "launchMissile(t)[1, 2]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let val = launchMissile(vandermonde)[1, 2]
+      doAssert i == 1  # launchMissile called exactly once
+      doAssert val.item(float64) == 8.0
+      true
+
+  runTest formatName("Negative point indexing", "launchMissile(t)[-1, -1]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let val = launchMissile(vandermonde)[-1, -1]
+      doAssert i == 1
+      doAssert val.item(float64) == 3125.0
+      true
+
+  runTest formatName("Expression indices", "launchMissile(t)[1+1, 2*2]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let val = launchMissile(vandermonde)[1+1, 2*2]
+      doAssert i == 1
+      doAssert val.item(float64) == 243.0  # (2+1)^(4+1) = 3^5 = 243
+      true
+
+  # -----------------------------------------------------------------------
+  # Single evaluation - full slice (sliceSpan path)
+
+  runTest formatName("Full span", "launchMissile(t)[_, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_, _]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 5
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Full span shorthand _.._", "launchMissile(t)[_.._, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_.._, _]
+      doAssert i == 1
+      doAssert sliced == vandermonde
+      true
+
+  # -----------------------------------------------------------------------
+  # Single evaluation - slice indexing (normalizedSlice path)
+
+  runTest formatName("Slice from start", "launchMissile(t)[_..<3, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_..<3, _]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 3
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Slice to end", "launchMissile(t)[1..<_]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[1..<_]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 4
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Stepped slice with ..|", "launchMissile(t)[1..|2]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[1..|2]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 2
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Span with step _.._|N", "launchMissile(t)[_.._|2, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_.._|2, _]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 3
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Slice with start, stop, step", "launchMissile(t)[1..<4|2, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[1..<4|2, _]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 2
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Negative end-relative slice", "launchMissile(t)[_..-1, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_..-1, _]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 4
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Negative start slice", "launchMissile(t)[-3.._, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[-3.._, _]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 3
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Negative slice with step", "launchMissile(t)[_..-1|2, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_..-1|2, _]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 2
+      doAssert sliced.shape[1] == 5
+      true
+
+  # -----------------------------------------------------------------------
+  # Single evaluation - mixed indexing
+
+  runTest formatName("Span on first dim, int on second", "launchMissile(t)[_, 2]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[_, 2]
+      doAssert i == 1
+      doAssert sliced.shape.len == 1
+      doAssert sliced == [1, 8, 27, 64, 125].toTorchTensor.to(kFloat64)
+      true
+
+  runTest formatName("Slice on first dim, span on second", "launchMissile(t)[1..3, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[1..3, _]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 3
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Two slices", "launchMissile(t)[1..<3, 1..<3]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[1..<3, 1..<3]
+      doAssert i == 1
+      doAssert sliced ==
+        [[ 4,  8],
+         [ 9, 27]].toTorchTensor.to(kFloat64)
+      true
+
+  runTest formatName("Unary pipe step with span", "launchMissile(t)[|2, _]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[|2, _]
+      doAssert i == 1
+      doAssert sliced.shape[0] == 3
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Stepped span with index", "launchMissile(t)[|2, 0]"):
+    proc(): bool =
+      var i = 0
+      proc launchMissile(a: TorchTensor): TorchTensor =
+        i += 1
+        a
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = launchMissile(vandermonde)[|2, 0]
+      doAssert i == 1
+      doAssert sliced.shape.len == 1
+      doAssert sliced == [1, 3, 5].toTorchTensor.to(kFloat64)
+      true
+
+when isMainModule:
+  main()

@@ -283,8 +283,45 @@ proc `$`*(t: TorchTensor): string =
 # Checkers func to Raise IndexDefect
 # -----------------------------------------------------------------------
 
-macro `[]`*(t: TorchTensor, args: varargs[untyped]): untyped =
-  ## Slice a Tensor
+macro `[]`*(t: TorchTensor{call}, args: varargs[untyped]): untyped =
+  ## Slice a Tensor expression (ensure expression is only evaluated once)
+  ## Input:
+  ##   - a Tensor
+  ##   - and:
+  ##     - specific coordinates (``varargs[int]``)
+  ##     - or a slice (cf. tutorial)
+  ## Returns:
+  ##   - a value or a tensor corresponding to the slice
+  ##
+  ## Usage:
+  ##    - Basic indexing - foo[2, 3]
+  ##    - Basic indexing - foo[1+1, 2*2*1]
+  ##    - Basic slicing - foo[1..2, 3]
+  ##    - Basic slicing - foo[1+1..4, 3-2..2]
+  ##    - Span slices - foo[_, 3]
+  ##    - Span slices - foo[1.._, 3]
+  ##    - Span slices - foo[_..3, 3]
+  ##    - Span slices - foo[_.._, 3]
+  ##    - Stepping - foo[1..3\|2, 3]
+  ##    - Span stepping - foo[_.._|2, 3]
+  ##    - Span stepping - foo[_.._|+2, 3]
+  ##    - Span stepping - foo[1.._|1, 2..3]
+  ##    - Span stepping - foo[_..<4|2, 3]
+  ##    - Slicing until at n from the end - foo[0..^4, 3]
+  ##    - Span Slicing until at n from the end - foo[_..^2, 3]
+  ##    - Stepped Slicing until at n from the end - foo[1..^1|2, 3]
+  ##    - Slice from the end - foo[^1..0|-1, 3]
+  ##    - Slice from the end - expect non-negative step error - foo[^1..0, 3]
+  ##    - Slice from the end - foo[^(2*2)..2*2, 3]
+  ##    - Slice from the end - foo[^3..^2, 3]
+  let new_args = getAST(desugarSlices(args))
+
+  result = quote do:
+    let tmp = `t` # Ensure an expression is only evaluated once
+    slice_typed_dispatch(tmp, `new_args`)
+
+macro `[]`*(t: TorchTensor{`let`|`var`|`const`|lvalue}, args: varargs[untyped]): untyped =
+  ## Slice a Tensor variable
   ## Input:
   ##   - a Tensor
   ##   - and:
