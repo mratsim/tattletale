@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Common utilities for tests involving TorchTensor and other libtorch FFI types.
+## Common utilities for tests involving Tensor and other libtorch FFI types.
 ##
 ## Provides:
 ## - C++ exception handling for tests
@@ -16,7 +16,8 @@ import
   std/strformat,
   std/strutils,
   std/macros,
-  workspace/libtorch/src/raw_libtorch as F
+  workspace/libtorch/src/tensors,
+  workspace/libtorch/src/raw_libtorch
 
 {.experimental: "views".}
 
@@ -25,10 +26,10 @@ import
 # =============================================================================
 
 template catchCppExceptions*(body: bool): bool =
-  ## Catch C++ exceptions from TorchTensor operations.
+  ## Catch C++ exceptions from Tensor operations.
   ## Returns true if body executed successfully, false if an exception was caught.
   ##
-  ## Use this for tests that involve C++ FFI types like TorchTensor.
+  ## Use this for tests that involve C++ FFI types like Tensor.
 
   when not defined(cpp) and defined(nimCheck):
     {.error: "You are running 'nim check' in C mode. It will misreport that C++ exceptions can't be caught because they aren't ref objects.".}
@@ -70,7 +71,7 @@ proc runTest*(name: string, body: proc(): bool) =
 # =============================================================================
 
 proc assertAllClose*(
-  actual, expected: F.TorchTensor,
+  actual, expected: Tensor,
   rtol = 2e-2'f64, abstol = 2e-2'f64,
   msg = ""
 ) =
@@ -83,7 +84,7 @@ proc assertAllClose*(
   ##   rtol: Relative tolerance (default: 2e-2)
   ##   abstol: Absolute tolerance (default: 2e-2)
   ##   msg: Optional error message
-  let allClose = F.allClose(actual, expected, rtol, abstol)
+  let allClose = actual.allClose(expected, rtol, abstol)
   if not allClose:
     echo "Assertion failed: allClose"
     if msg.len > 0:
@@ -122,7 +123,7 @@ template assertShape*(tensor: untyped, expectedShape: openArray[int], name: stri
       "Tensor '" & tensorName & "' shape mismatch. Expected: " & $expected & ", Got: " & $actual
     )
 
-template assertDtype*(tensor: untyped, expectedDtype: F.ScalarKind, name: string = "") =
+template assertDtype*(tensor: untyped, expectedDtype: ScalarKind, name: string = "") =
   ## Assert that a tensor has the expected dtype.
   ## Raises AssertionDefect if dtype doesn't match.
   let actual = tensor.scalarType()
@@ -134,7 +135,7 @@ template assertDtype*(tensor: untyped, expectedDtype: F.ScalarKind, name: string
     )
 
 template assertClose*(
-  actual, expected: F.TorchTensor,
+  actual, expected: Tensor,
   rtol = 2e-2'f64, abstol = 2e-2'f64,
   msg = ""
 ) =
@@ -160,7 +161,7 @@ macro traceExec*(body: untyped): untyped =
     result.add(echoNode)
     result.add(statement)
 
-proc printTensor*(t: F.TorchTensor, label: string = "") =
+proc printTensor*(t: Tensor, label: string = "") =
   ## Print a tensor with an optional label.
   ## Useful for debugging test failures.
   if label.len > 0:
@@ -168,11 +169,11 @@ proc printTensor*(t: F.TorchTensor, label: string = "") =
   t.print()
   echo ""
 
-proc printTensorShape*(t: F.TorchTensor, label: string = "") =
+proc printTensorShape*(t: Tensor, label: string = "") =
   ## Print tensor shape and dtype with an optional label.
   if label.len > 0:
     echo label, ":"
-  echo "  Shape: ", t.shape.asNimView(), ", Dtype: ", t.scalarType()
+  echo "  Shape: ", @(t.shape.asNimView()), ", Dtype: ", t.scalarType()
   echo ""
 
 # =============================================================================
@@ -187,10 +188,10 @@ proc ptrHex*(p: pointer): string =
   ##   echo "tensor.data_ptr() = 0x", tensor.data_ptr().ptrHex()
   toHex(cast[uint](p))
 
-proc dataPtrHex*(tensor: F.TorchTensor): string =
+proc dataPtrHex*(tensor: Tensor): string =
   ## Get tensor data pointer as hex string.
-  F.data_ptr(tensor).ptrHex()
+  tensor.data_ptr().ptrHex()
 
-proc shapePtrHex*(tensor: F.TorchTensor): string =
+proc shapePtrHex*(tensor: Tensor): string =
   ## Get tensor shape pointer as hex string.
   tensor.shape.data().ptrHex()
