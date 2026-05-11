@@ -262,7 +262,7 @@ func toTorchTensor*[T: seq | array](oa: openarray[T]): TorchTensor =
 # TorchTensor -> Nim string
 # -----------------------------------------------------
 
-func toCppString(t: TorchTensor): CppString =
+func toCppString*(t: TorchTensor): CppString =
   ## Tensors don't have a `$` equivilent so we have to put it into
   ## a ostringstream and convert it to a CppString.
   {.emit:

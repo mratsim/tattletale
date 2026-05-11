@@ -1,0 +1,1240 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+import
+  std/math,
+  std/strformat,
+  workspace/libtorch/src/tensors,
+  workspace/libtorch/libtorch_testutils
+
+proc genShiftedVandermonde5x5*(dtype: ScalarKind): Tensor =
+  ## Generate 5x5 shifted Vandermonde matrix: v[i, j] = i^(j+1)
+  ## [[   1    1    1    1    1]
+  ##  [   2    4    8   16   32]
+  ##  [   3    9   27   81  243]
+  ##  [   4   16   64  256 1024]
+  ##  [   5   25  125  625 3125]]
+  (arange(1, 6, kFloat64).reshape(-1, 1) ** arange(1, 6, kFloat64)).to(dtype)
+
+func formatName*(desc, indexingExample: string): string =
+  fmt"{desc:<40}  {indexingExample}"
+
+proc main() =
+  ## IMPORTANT: Tensors must be created INSIDE each runTest body.
+  ## Capturing Tensor in a closure corrupts the C++ object
+  ## because Tensor has cppNonPod and Nim's closure capture
+  ## doesn't handle it correctly (destructor/copy semantics).
+
+  ## Torch Tensor Indexing - PyTorch/libtorch Documentation Examples
+  ## Reference: https://pytorch.org/cppdocs/notes/tensor_indexing.html
+  ## All tests include equivalent PyTorch and libtorch syntax for documentation
+
+  runTest formatName("Integer indexing", "a[1, 2]"):
+    proc(): bool =
+      ## Nim libtorch: a[1, 2]
+      ## Python: a[1, 2]
+      ## C++ libtorch: a.index({1, 2})
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let val = vandermonde[1, 2]
+      doAssert val.item(float64) == 8.0  # 2^3 = 8
+      true
+
+  runTest formatName("Strided monodimensional indexing", "a[1..|2]"):
+    proc(): bool =
+      ## Nim libtorch: a[1..|2]
+      ## Python: a[1::2]
+      ## C++ libtorch: a.index({Slice(1, None, 2)})
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = vandermonde[1..|2]
+      # Slices rows 1 and 3 (bases 2 and 4), all columns
+      doAssert sliced.shape[0] == 2
+      doAssert sliced.shape[1] == 5
+      true
+
+  ## -----------------------------------------------------------------------
+  ## Slice Types (Python ':' equivalent to libtorch Slice)
+  ## Python `:` / `::` maps to `torch::indexing::Slice()`
+
+  runTest formatName("Full slice", "a[_, _]"):
+    proc(): bool =
+      ## Nim libtorch: a[_, _]
+      ## Python: a[:, :]
+      ## C++ libtorch: a.index({Slice(), Slice()})
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let full = vandermonde[_, _]
+      doAssert full.shape[0] == 5
+      doAssert full.shape[1] == 5
+      true
+
+  runTest formatName("Slice from start", "a[_..<3, _]"):
+    proc(): bool =
+      ## Nim libtorch: a[_..<3, _]
+      ## Python: a[:3]
+      ## C++ libtorch: a.index({Slice(None, 3)})
+      ## TODO - allow  a[..<3, _]
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = vandermonde[_..<3, _]
+      doAssert sliced.shape[0] == 3
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Slice to end", "a[1..<_]"):
+    proc(): bool =
+      ## Nim libtorch: a[1..<_]
+      ## Python: a[1:]
+      ## C++ libtorch: a.index({Slice(1, None)})
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = vandermonde[1..<_]
+      doAssert sliced.shape[0] == 4
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Slice with step only", "a[|2]"):
+    proc(): bool =
+      ## Nim libtorch: a[|2]
+      ## Python: a[::2]
+      ## C++ libtorch: a.index({Slice(None, None, 2)})
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = vandermonde[|2]
+      doAssert sliced.shape[0] == 3  # rows 0, 2, 4
+      doAssert sliced.shape[1] == 5
+      true
+
+  runTest formatName("Slice with start, stop, step", "a[1..<3|2]"):
+    proc(): bool =
+      ## Nim libtorch: a[1..<3|2]
+      ## Python: a[1:3:2]
+      ## C++ libtorch: a.index({Slice(1, 3, 2)})
+      let vandermonde = genShiftedVandermonde5x5(kFloat64)
+      let sliced = vandermonde[1..<3|2]
+      doAssert sliced.shape[0] == 1  # only row 1
+      doAssert sliced.shape[1] == 5
+      true
+
+  ## -----------------------------------------------------------------------
+  ## Python Slice Syntax to Nim Translation Reference
+  ##
+  ## This suite documents the mapping between Python slice syntax and Nim syntax.
+  ##
+  ## Python slices are EXCLUSIVE on the end (like C++/Python standard).
+  ## Nim slices are INCLUSIVE on both ends (..) or exclusive (..<).
+  ##
+  ## Nim:    a[start..<stop]   -> elements from start to stop-1
+  ## Python: a[start:stop]    -> elements from start (inclusive) to stop (exclusive)
+  ##
+  ## Nim:    a[start..-1]    -> elements from start to end (negative index)
+  ## Python: a[start:]       -> elements from start to end
+  ##
+  ## Nim:    a[_..<stop]     -> _ means all of dimension, then exclusive
+  ## Python: a[:stop]        -> elements from 0 to stop-1
+  ##
+  ## Nim:    a[_.._]        -> full span
+  ## Python: a[:]           -> all elements
+  ##
+  ## Nim:    a[_.._|step]   -> full span with step
+  ## Python: a[::step]      -> every step-th element
+  ##
+  ## Nim:    a[1..<5|2]     -> elements 1, 3
+  ## Python: a[1:5:2]       -> elements 1, 3 (start=1, stop=5, step=2)
+
+  runTest formatName("Python a[:2] -> Nim a[_..<2]", "a[:2]"):
+    proc(): bool =
+      ## Nim: a[_..<2] gets indices 0, 1 (exclusive)
+      ## Python: a[:2] gets indices 0, 1
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_..<2, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   2,    4,    8,   16,   32]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Python a[3:] -> Nim a[3.._]", "a[3:]"):
+    proc(): bool =
+      ## Nim: a[3.._] gets indices 3, 4 (use _ for "to the end")
+      ## Python: a[3:] gets indices 3, 4
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[3.._, _]
+      doAssert sliced.equal(
+        [[   4,   16,   64,  256, 1024],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Python a[:] -> Nim a[_.._]", "a[:]"):
+    proc(): bool =
+      ## Nim: a[_.._] gets all elements
+      ## Python: a[:] gets all elements
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_.._, _]
+      doAssert sliced.equal(t)
+      true
+
+  runTest formatName("Python a[::2] -> Nim a[_.._|2]", "a[::2]"):
+    proc(): bool =
+      ## Nim: a[_.._|2] or a[|2] (cleaner!) gets every 2nd element
+      ## Python: a[::2] gets every 2nd element
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced1 = t[_.._|2, _]
+      let sliced2 = t[|2, _]
+      doAssert sliced1.equal(sliced2)  # Both syntaxes are equivalent
+      doAssert sliced1.equal(
+        [[   1,    1,    1,    1,    1],
+         [   3,    9,   27,   81,  243],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Unary pipe step", "a[|3]"):
+    proc(): bool =
+      ## The unary `|step` syntax is cleaner than `_.._|step`
+      ## Nim: a[|3] -> Slice(None, None, 3)
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[|3, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Stepped span with index", "a[|2, 0]"):
+    proc(): bool =
+      ## Nim: a[|2, 0] -> every 2nd element of dim 0, index 0 of dim 1
+      ## Note: Indexing with a scalar (like 0) squeezes that axis since size is 1
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[|2, 0]
+      doAssert sliced.shape[0] == 3
+      doAssert sliced.shape.len == 1  # Scalar index squeezes axis, so only 1 dim remains
+      doAssert sliced.equal( [1, 3, 5].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Mixed indexing with stepped span", "a[1, |2, _]"):
+    proc(): bool =
+      ## Nim: a[1, |2, _] -> index 1, every 2nd of dim 1, all of dim 2
+      ## numpy equivalent: t[1, ::2, :]
+      let t = arange(24, kFloat64).reshape([2, 3, 4])
+      let sliced = t[1, |2, _]
+      doAssert sliced.equal(
+        [[  12,  13,  14,  15],
+         [  20,  21,  22,  23]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Python a[1:4] -> Nim a[1..<4]", "a[1:4]"):
+    proc(): bool =
+      ## Nim: a[1..<4] gets indices 1, 2, 3 (exclusive)
+      ## Python: a[1:4] gets indices 1, 2, 3
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[1..<4, _]
+      doAssert sliced.equal(
+        [[   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Python a[1:4:2] -> Nim a[1..<4|2]", "a[1:4:2]"):
+    proc(): bool =
+      ## Nim: a[1..<4|2] gets indices 1, 3
+      ## Python: a[1:4:2] gets indices 1, 3
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[1..<4|2, _]
+      doAssert sliced.equal(
+        [[   2,    4,    8,   16,   32],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Python a[:-1] -> Nim a[_..-1]", "a[:-1]"):
+    proc(): bool =
+      ## Nim: a[_..-1] gets all but last (stop=-1 is exclusive)
+      ## Python: a[:-1] gets all but last element
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_..-1, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Python a[-3:] -> Nim a[-3.._]", "a[-3:]"):
+    proc(): bool =
+      ## Nim: a[-3.._] gets last 3 (start at -3, go to end with _)
+      ## Python: a[-3:] gets last 3 indices (2, 3, 4)
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[-3.._, _]
+      doAssert sliced.equal(
+        [[   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Python a[-3:-1] -> Nim a[-3..-1]", "a[-3:-1]"):
+    proc(): bool =
+      ## Nim: a[-3..-1] gets indices 2, 3 (3rd-from-end to before last)
+      ## Python: a[-3:-1] gets indices 2, 3 (exclusive upper bound)
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[-3..-1, _]
+      doAssert sliced.equal(
+        [[   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Python a[::-1] -> Use flip()", "a[::-1]"):
+    proc(): bool =
+      ## Nim: Negative steps are NOT supported in Slice()
+      ##            Use flip() instead
+      ## Python: a[::-1] reverses the tensor along a dimension
+      ##
+      ## What Nim flip() gives: same result as Python a[::-1]
+      var t = genShiftedVandermonde5x5(kFloat64).clone()
+      let reversed = t.flip(@[0])
+      let expected = @[
+        @[  5.0,  25.0,  125.0,  625.0, 3125.0],
+        @[  4.0,  16.0,   64.0,  256.0, 1024.0],
+        @[  3.0,   9.0,   27.0,   81.0,  243.0],
+        @[  2.0,   4.0,    8.0,   16.0,   32.0],
+        @[  1.0,   1.0,    1.0,    1.0,    1.0]
+      ].toTensor().to(kFloat64)
+      doAssert reversed.equal(expected)
+      true
+
+  runTest formatName("Negative steps not supported", "a[|-2]"):
+    proc(): bool =
+      ## libtorch's Slice() does NOT support negative steps
+      ## Python: a[::2] would work, a[::-2] would reverse with step 2
+      ## Nim: a[_.._|2] works, a[_.._|-2] raises compile error
+      ##
+      ## To reverse and step, use: a.flip(dim).slice(...)
+      var t = genShiftedVandermonde5x5(kFloat64).clone()
+      let reversed = t.flip(@[0])
+      let stepped = reversed[_.._|2, _]  # Reverse, then take every 2nd
+      let expected = @[
+        @[  5.0,  25.0,  125.0,  625.0, 3125.0],
+        @[  3.0,   9.0,   27.0,   81.0,  243.0],
+        @[  1.0,   1.0,    1.0,    1.0,    1.0]
+      ].toTensor().to(kFloat64)
+      doAssert stepped.equal(expected)
+      true
+
+  ## -----------------------------------------------------------------------
+  ## Negative Indexing with Variables and Expressions
+  ## Tests that negative indices work with variables and runtime expressions
+  ## The key insight is that handleNegativeIndex normalizes at runtime
+
+  runTest formatName("Negative index via variable", "a[_..negOne]"):
+    proc(): bool =
+      ## Python equivalent: a[:-1] (all but last)
+      ## Using a variable to hold the negative index
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let negOne = -1
+      let sliced = t[_..negOne, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Negative index via variable (different value)", "a[_..negTwo]"):
+    proc(): bool =
+      ## Python equivalent: a[:-2] (all but last 2)
+      ## Using a variable for -2
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let negTwo = -2
+      let sliced = t[_..negTwo, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Negative start via variable", "a[negThree.._]"):
+    proc(): bool =
+      ## Python equivalent: a[-3:] (last 3 elements)
+      ## Using a variable for the start index
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let negThree = -3
+      let sliced = t[negThree.._, _]
+      doAssert sliced.equal(
+        [[   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Both bounds via variables", "a[negTwo..negOne]"):
+    proc(): bool =
+      ## Python equivalent: a[-2:-1] (second-to-last element only)
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let negTwo = -2
+      let negOne = -1
+      let sliced = t[negTwo..negOne]
+      doAssert sliced.shape[0] == 1  # Squeezed to 1D
+      doAssert sliced.equal( [[4, 16, 64, 256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Negative index via expression", "a[0..-(n-1)]"):
+    proc(): bool =
+      ## Python equivalent: a[:-(n-1)] where n is tensor size
+      ## For a 5x5 tensor, -(n-1) = -(5-1) = -4, stop at index 1 (exclusive)
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let n = 5
+      let sliced = t[0..-(n-1), _]
+      doAssert sliced.shape[0] == 1  # Squeezed to 1D
+      doAssert sliced.equal( [[1, 1, 1, 1, 1]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Negative index via expression (2*n)", "a[_..-(2*n)]"):
+    proc(): bool =
+      ## Python equivalent: a[:-(2*n)]
+      ## For m=2, -(2*m) = -4, stop at index 1 (exclusive)
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let m = 2
+      let sliced = t[_..-(2*m), _]
+      doAssert sliced.shape[0] == 1  # Squeezed to 1D
+      doAssert sliced.equal( [[1, 1, 1, 1, 1]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Negative start via expression", "a[-(n-3).._]"):
+    proc(): bool =
+      ## Python equivalent: a[-(n-3):] for n=5 gives a[-2:] = indices 3, 4
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let n = 5
+      let sliced = t[-(n-3).._, _]
+      doAssert sliced.equal(
+        [[   4,   16,   64,  256, 1024],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  # TODO
+  # test formatName("Both bounds via expressions", "a[-(n-2)..-(n-4)]"):
+  #   ## Python equivalent: a[-(n-2):-(n-4)] for n=5 gives a[-3:-1] = indices 2, 3
+  #   let t = vandermonde
+  #   let n = 5
+  #   let sliced = t[-(n-2)..-(n-4), _]
+  #   check:
+  #     sliced ==
+  #       [[3,  9, 27,  81,  243]
+  #        [4, 16, 64, 256, 1024]].toTensor().to(kFloat64))
+
+  runTest formatName("Negative index with step", "a[_..-1|2]"):
+    proc(): bool =
+      ## Python equivalent: a[:-1:2] - every 2nd element excluding last
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_..-1|2, _]
+      doAssert sliced.equal(
+        [[1, 1,  1,  1,   1],
+         [3, 9, 27, 81, 243]].toTensor().to(kFloat64))
+      true
+
+  # TODO
+  # test formatName("Runtime negative computation", "a[-(2*n)..-n]"):
+  #   ## Python equivalent: a[-(2*n):-n] for n=2 gives a[-4:-2] = indices 1, 2
+  #   let t = vandermonde
+  #   let n = 2
+  #   let sliced = t[-(2*n)..-n, _]
+  #   check:
+  #     sliced ==
+  #       [[   2,    4,    8,   16,   32],
+  #        [   3,    9,   27,   81,  243]].toTensor().to(kFloat64))
+
+  runTest formatName("Mixed: literal start, variable stop", "a[1..negOne]"):
+    proc(): bool =
+      ## Python equivalent: a[1:-1] (from index 1 to before last)
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let negOne = -1
+      let sliced = t[1..negOne, _]
+      doAssert sliced.equal(
+        [[   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  # TODO
+  # test formatName("Mixed: expression start, literal stop", "a[-(n-2)..3]"):
+  #   ## Python equivalent: a[-(n-2):3] for n=5 gives a[-3:3] = indices 2, 3
+  #   let t = vandermonde
+  #   let n = 5
+  #   let sliced = t[-(n-2)..3, _]
+  #   check:
+  #     sliced ==
+  #       [   3,    9,   27,   81,  243].toTensor().to(kFloat64))
+
+  ## -----------------------------------------------------------------------
+  ## TODO: Negative step via autoflipping first
+  # suite "Python a[::-1] -> Use flip()":
+  #   test formatName("Python a[::-1] -> Use flip()", "a[::-1]"):
+  #     ## Nim: Negative steps are NOT supported in Slice()
+  #     ##            Use flip() instead
+  #     ## Python: a[::-1] reverses the tensor along a dimension
+  #     ##
+  #     ## What Nim flip() gives: same result as Python a[::-1]
+  #     var t = genShiftedVandermonde5x5(kFloat64)
+  #     let reversed = t.flip(@[0])
+  #
+  #     ## flip() along dim 0 should give same as a[::-1] in Python
+  #     check: reversed[0, 0].item(float64) == 5.0   # Last row of original
+  #     check: reversed[4, 0].item(float64) == 1.0   # First row of original
+  #     check: reversed[0, 4].item(float64) == 3125.0 # 5^5 = 3125
+  #     check: reversed[4, 4].item(float64) == 1.0    # 1^5 = 1
+  #
+  #   test formatName("Negative steps not supported", "a[|-2]"):
+  #     ## libtorch's Slice() does NOT support negative steps
+  #     ## Python: a[::2] would work, a[::-2] would reverse with step 2
+  #     ## Nim: a[_.._|2] works, a[_.._|-2] raises compile error
+  #     ##
+  #     ## To reverse and step, use: a.flip(dim).slice(...)
+  #     var t = genShiftedVandermonde5x5(kFloat64)
+  #     let reversed = t.flip(@[0])
+  #     let stepped = reversed[_.._|2, _]  # Reverse, then take every 2nd
+  #     check: stepped.shape[0] == 3  # rows 0, 2, 4 of reversed = rows 4, 2, 0 of original
+  #     check: stepped[0, 0].item(float64) == 5.0  # Row 4 (first of reversed)
+  #     check: stepped[2, 0].item(float64) == 1.0  # Row 0 (last of reversed)
+
+  ## -----------------------------------------------------------------------
+  ## Ellipsis `...` or ellipsis - Python '...' equivalent to libtorch Ellipsis
+  ## Note: In Nim, `...` must be used quoted a[0..<2, `...`] or a[0..<2, ellipsis]
+  ##
+  ## Both are equivalent:
+  ##   a[`...`, 0]
+  ##   a[ellipsis, 0]
+
+  # TODO
+  # test formatName("Single ellipsis", "a[...]"):
+  #   ## Nim: a[...] -> a.index({torch::indexing::Ellipsis})
+  #   ## Python: a[...]
+  #   let t = genShiftedVandermonde5x5(kFloat64)
+  #   check: t[`...`].shape[0] == 5
+  #   check: t[`...`].shape[1] == 5
+  #
+  # test formatName("Ellipsis with other indices", "a[..., 0]"):
+  #   ## Nim: a[`...`, 0] -> a.index({Ellipsis, 0})
+  #   ## Python: a[..., 0]
+  #   let t = genShiftedVandermonde5x5(kFloat64)
+  #   let sliced = t[`...`, 0]
+  #   check: sliced.shape[0] == 5
+  #   check: sliced[0, 0].item(float64) == 1.0  # (1+1)^(0+1) = 2^1 = 2
+  #
+  # test formatName("IndexEllipsis constant", "ellipsis vs `...`"):
+  #   let t = genShiftedVandermonde5x5(kFloat64)
+  #   let with_const = t[ellipsis, 0]
+  #   let with_quoted = t[`...`, 0]
+  #   check: with_const.shape == with_quoted.shape
+  #   check: with_const == with_quoted
+  #
+  # test formatName("Ellipsis expansion", "a[..., 0] = a[:, :, 0]"):
+  #   ## Demonstrates ellipsis expansion
+  #   let t = genShiftedVandermonde5x5(kFloat64)
+  #   let ellipsis_result = t[`...`, 0]
+  #   let explicit = t[_, _, 0]
+  #   check: ellipsis_result == explicit
+  #
+  # test formatName("Leading ellipsis", "a[0, ...]"):
+  #   ## Nim: a[0, ...] -> a.index({0, Ellipsis})
+  #   ## Python: a[0, ...]
+  #   let t = genShiftedVandermonde5x5(kFloat64)
+  #   let sliced = t[0, `...`]
+  #   check: sliced.shape[0] == 5
+  #   check: sliced[0].item(float64) == 1.0  # Row 0, all columns (powers of 1 = 1)
+  #
+  # test formatName("Middle ellipsis", "a[1, ..., 0]"):
+  #   ## Nim: a[1, ..., 0] -> a.index({1, Ellipsis, 0})
+  #   ## Python: a[1, ..., 0]
+  #   let t = genShiftedVandermonde5x5(kFloat64)
+  #   let sliced = t[1, `...`, 0]
+  #   check: sliced.shape[0] == 5
+  #   check: sliced[0].item(float64) == 2.0  # Row 1 (base 2), column 0 = 2^1 = 2
+
+  runTest formatName("Single span", "a[_]"):
+    proc(): bool =
+      ## Nim: a[_] / a[_, _] maps to Slice() / Slice(None, None)
+      ## Python: a[:] / a[:, :]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_, _]
+      doAssert sliced.equal(t)
+      true
+
+  runTest formatName("Span on first dimension only", "a[_, 2]"):
+    proc(): bool =
+      ## Nim: a[_, 2] - all rows, column 2 (squeezed to 1D since size 1)
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_, 2]
+      doAssert sliced.shape[0] == 5
+      doAssert sliced.shape.len == 1  # Scalar index squeezes axis
+      doAssert sliced.equal( [1, 8, 27, 64, 125].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Span with slice", "a[1..3, _]"):
+    proc(): bool =
+      ## Nim: a[1..<3, _] - rows 1, 2, all columns
+      ## Python: a[1:3, :]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[1..<3, _]
+      doAssert sliced.equal(
+        [[   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Span with partial", "a[_..2, 2]"):
+    proc(): bool =
+      ## Nim: a[_..<2, 2] - rows 0, 1, column 2 (squeezed)
+      ## Python: a[:2, 2]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_..<2, 2]
+      doAssert sliced.shape[0] == 2
+      doAssert sliced.shape.len == 1  # Scalar index squeezes axis
+      doAssert sliced.equal( [1, 8].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Full span shorthand", "a[_.._]"):
+    proc(): bool =
+      ## Nim: a[_.._, _] - all rows, all columns
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_.._, _]
+      doAssert sliced.equal(t)
+      true
+
+  runTest formatName("Span with step", "a[_.._|2]"):
+    proc(): bool =
+      ## Nim: a[_.._|2] - rows 0, 2, 4, all columns
+      ## Python: a[::2]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_.._|2, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   3,    9,   27,   81,  243],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest "Span on first dimension only - a[_, 2]":
+    proc(): bool =
+      ## Nim: a[_, 2]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_, 2]
+      doAssert sliced.shape[0] == 5
+      doAssert sliced.shape.len == 1
+      doAssert sliced.equal( [1, 8, 27, 64, 125].toTensor().to(kFloat64))
+      true
+
+  runTest "Span with slice - a[1..3, _]":
+    proc(): bool =
+      ## Nim: a[1..<3, _]
+      ## Python: a[1:3, :]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[1..<3, _]
+      doAssert sliced.equal(
+        [[   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243]].toTensor().to(kFloat64))
+      true
+
+  runTest "Span with partial - a[_..2, 2]":
+    proc(): bool =
+      ## Nim: a[_..<2, 2]
+      ## Python: a[:2, 2]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_..<2, 2]
+      doAssert sliced.shape[0] == 2
+      doAssert sliced.shape.len == 1
+      doAssert sliced.equal( [1, 8].toTensor().to(kFloat64))
+      true
+
+  runTest "Full span shorthand - a[_.._]":
+    proc(): bool =
+      ## Nim: a[_.._, _]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_.._, _]
+      doAssert sliced.equal(t)
+      true
+
+  runTest "Span with step - a[_.._|2]":
+    proc(): bool =
+      ## Nim: a[_.._|2]
+      ## Python: a[::2]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_.._|2, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   3,    9,   27,   81,  243],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  ## -----------------------------------------------------------------------
+  ## Negative Indexing (End-relative with -N)
+  ## Nim-libtorch uses negative indices like Python:
+  ## -1 = last element (index size-1)
+  ## -2 = second-to-last element (index size-2)
+  ## -3 = third-to-last element (index size-3)
+  ## etc.
+  ##
+  ## This is equivalent to Python's negative indexing: a[-1]
+  ## For slices, use `..-N` for end-relative slicing (exclusive)
+
+  runTest formatName("Single negative index", "a[-1]"):
+    proc(): bool =
+      ## Nim: -1 = last element at both dims
+      ## Python: a[-1, -1]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let val = t[-1, -1]
+      doAssert val.item(float64) == 3125.0  # 5^5 = 3125
+      true
+
+  runTest formatName("Second-to-last", "a[-2, -2]"):
+    proc(): bool =
+      ## Nim: -2 = second-to-last element
+      ## Python: a[-2, -2]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let val = t[-2, -2]
+      doAssert val.item(float64) == 256.0  # 4^4 = 256
+      true
+
+  runTest formatName("Third-to-last", "a[-3, -3]"):
+    proc(): bool =
+      ## Nim: -3 = third-to-last element
+      ## Python: a[-3, -3]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let val = t[-3, -3]
+      doAssert val.item(float64) == 27.0  # 3^3 = 27
+      true
+
+  runTest formatName("Inclusive slice to end", "a[0..-1]"):
+    proc(): bool =
+      ## Nim: 0..-1 from 0 to before last (exclusive via ..-)
+      ## Python: a[0:-1]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[0..-1, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Negative slice", "a[-3..-1]"):
+    proc(): bool =
+      ## Nim: -3..-1 from third-to-last to before last
+      ## Python: a[-3:-1]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[-3..-1, _]
+      doAssert sliced.equal(
+        [[   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Span with negative index", "a[_..-2]"):
+    proc(): bool =
+      ## Nim: _..-2 from start to before second-to-last
+      ## Python: a[:-2]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_..-2, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Negative span with step", "a[-4.._|2]"):
+    proc(): bool =
+      ## Nim: -4.._|2 from fourth-from-end to end, step 2
+      ## Python: a[-4::2]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[-4.._|2, _]
+      doAssert sliced.equal(
+        [[   2,    4,    8,   16,   32],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  ## -----------------------------------------------------------------------
+  ## Multidimensional Slice Behavior
+  ## Reference: https://pytorch.org/cppdocs/notes/tensor_indexing.html
+  ## For 3D tensor: a[0:3] is equivalent to a[0:3, ...] / a[0:3, :, :]
+
+  runTest formatName("Partial slice on 3D tensor", "a[0..<2]"):
+    proc(): bool =
+      ## Nim: a[0..<2] on 3D tensor is equivalent to a[0..<2, ...]
+      ## Python: a[0:3] equivalent to a[0:3, ...] on 3D tensor
+      let t3d = arange(24, kFloat64).reshape([2, 3, 4])
+      let sliced = t3d[0..<2, _, _]
+      let expected = @[
+        @[@[0.0, 1.0, 2.0, 3.0],
+          @[4.0, 5.0, 6.0, 7.0],
+          @[8.0, 9.0, 10.0, 11.0]],
+        @[@[12.0, 13.0, 14.0, 15.0],
+          @[16.0, 17.0, 18.0, 19.0],
+          @[20.0, 21.0, 22.0, 23.0]]
+      ].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  runTest formatName("Slice equivalent to explicit spans", "a[0..<3] vs a[0..<3, _, :]"):
+    proc(): bool =
+      let t3d = arange(24, kFloat64).reshape([2, 3, 4])
+      let implicit = t3d[0..<2]
+      let explicit = t3d[0..<2, _, _]
+      doAssert implicit.equal(explicit)
+      true
+
+  # TODO - Ellipsis
+  # test formatName("Slice last dimension", "a[..., 0:2]"):
+  #   ## Nim: a[..., 0..<2] -> a.index({Ellipsis, Slice(0, 2)})
+  #   ## Python: a[..., 0:2]
+  #   let t3d = arange(24, kFloat64).reshape([2, 3, 4])
+  #   let sliced = t3d[`...`, 0..<2]
+  #   check: sliced.shape[0] == 2
+  #   check: sliced.shape[1] == 3
+  #   check: sliced.shape[2] == 2
+
+  ## -----------------------------------------------------------------------
+  ## Assignment Operations (index_put_)
+
+  runTest formatName("Point assignment", "a[0, 0] = 999"):
+    proc(): bool =
+      ## Nim: a[0, 0] = 999
+      ## Python: a[0, 0] = 999
+      ## C++ libtorch: a.index_put_({0, 0}, 999)
+      var t = genShiftedVandermonde5x5(kFloat64).clone()
+      t[0, 0] = 999.0
+      doAssert t[0, 0].item(float64) == 999.0
+      doAssert t.equal(
+        [[ 999,    1,    1,    1,    1],
+         [   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Slice assignment", "a[0..2, 0..2] = 0"):
+    proc(): bool =
+      ## Nim: a[0..<2, 0..<2] = 0
+      ## Python: a[0:2, 0:2] = 0
+      ## C++ libtorch: a.index_put_({Slice(0, 2), Slice(0, 2)}, 0)
+      var t = genShiftedVandermonde5x5(kFloat64).clone()
+      t[0..<2, 0..<2] = 0.0
+      doAssert t[0, 0].item(float64) == 0.0
+      doAssert t[1, 1].item(float64) == 0.0
+      doAssert t[2, 2].item(float64) == 27.0  # Unchanged
+      doAssert t.equal(
+        [[   0,    0,    1,    1,    1],
+         [   0,    0,    8,   16,   32],
+         [   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Assignment with step", "a[::2, ::2] = 999"):
+    proc(): bool =
+      ## Nim: a[_..<5|2, _..<5|2] = 999
+      ## Python: a[::2, ::2] = 999
+      var t = genShiftedVandermonde5x5(kFloat64).clone()
+      t[_..<5|2, _..<5|2] = 999.0
+      doAssert t[0, 0].item(float64) == 999.0
+      doAssert t[2, 2].item(float64) == 999.0
+      doAssert t[1, 1].item(float64) == 4.0  # Unchanged (row 1, col 1 is not stepped)
+      doAssert t.equal(
+        [[ 999,    1,  999,    1,  999],
+         [   2,    4,    8,   16,   32],
+         [ 999,    9,  999,   81,  999],
+         [   4,   16,   64,  256, 1024],
+         [ 999,   25,  999,  625,  999]].toTensor().to(kFloat64))
+      true
+
+  # test formatName("Ellipsis assignment", "a[...] = 0"):
+  #   ## Nim: a[...] = 0 sets all elements to 0
+  #   ## Python: a[...] = 0
+  #   var t = vandermonde.clone()
+  #   t[IndexEllipsis] = 0.0
+  #   check: t[0, 0].item(float64) == 0.0
+  #   check: t[4, 4].item(float64) == 0.0
+  #   check: t.numel() == 25
+
+  runTest formatName("Assignment with step (repeat)", "a[::2, ::2] = 999"):
+    proc(): bool =
+      ## Nim: a[_..<5|2, _..<5|2] = 999
+      ## Python: a[::2, ::2] = 999
+      var t = genShiftedVandermonde5x5(kFloat64).clone()
+      t[_..<5|2, _..<5|2] = 999.0
+      doAssert t[0, 0].item(float64) == 999.0
+      doAssert t[2, 2].item(float64) == 999.0
+      doAssert t[1, 1].item(float64) == 4.0  # Unchanged (row 1, col 1 is not stepped)
+      doAssert t.equal(
+        [[ 999,    1,  999,    1,  999],
+         [   2,    4,    8,   16,   32],
+         [ 999,    9,  999,   81,  999],
+         [   4,   16,   64,  256, 1024],
+         [ 999,   25,  999,  625,  999]].toTensor().to(kFloat64))
+      true
+
+  ## -----------------------------------------------------------------------
+  ## General Edge Cases
+  ## General indexing edge cases and miscellaneous tests
+
+  runTest formatName("Empty slice", "a[0..0]"):
+    proc(): bool =
+      ## Python: a[0:0] returns empty tensor
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[0..<0, _]
+      doAssert sliced.shape[0] == 0
+      doAssert sliced.shape[1] == 5
+      # Cannot use full matrix comparison for empty tensor
+      true
+
+  runTest formatName("Full range slice", "a[0..<5]"):
+    proc(): bool =
+      ## Slice covering entire dimension
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[0..<5, _]
+      doAssert sliced.equal(t)
+      true
+
+  runTest formatName("Single element slice", "a[2..<3]"):
+    proc(): bool =
+      ## Slice producing single element
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[2..<3, _]
+      let expected = @[
+        @[  3.0,   9.0,   27.0,   81.0,  243.0]
+      ].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  runTest formatName("Large step", "a[::100] with small tensor"):
+    proc(): bool =
+      ## Step larger than dimension size
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_..<5|100, _]
+      let expected = @[
+        @[1.0, 1.0, 1.0, 1.0, 1.0]
+      ].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  runTest formatName("Reverse with negative step", "Use flip() not a[::-1]"):
+    proc(): bool =
+      ## Python: a[::-1] reverses along a dimension
+      ## Nim: Negative step syntax `|_` is NOT supported
+      ##      Use flip() instead
+      ##
+      ## Example: What Python a[:, :, ::-1] would give in Nim:
+      var t = genShiftedVandermonde5x5(kFloat64).clone()
+      let reversed = t.flip(@[1])  # Reverse along dim 1
+      let first_col = reversed[_, 0]
+      let expected_col = @[1.0, 32.0, 243.0, 1024.0, 3125.0].toTensor().to(kFloat64)
+      doAssert first_col.equal(expected_col)
+      true
+
+  runTest formatName("Integer and slice mix", "a[0, 1:4]"):
+    proc(): bool =
+      ## Python: a[0, 1:4]
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[0, 1..<4]
+      let expected = @[1.0, 1.0, 1.0].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  # TODO ellipsis
+  # test formatName("Slice and ellipsis", "a[1:3, ..., 0:2]"):
+  #   ## Python: a[1:3, ..., 0:2]
+  #   let t3d = arange(60, kFloat64).reshape([2, 3, 10])
+  #   let sliced = t3d[1..<3, `...`, 0..<2]
+  #   check: sliced.shape[0] == 2
+  #   check: sliced.shape[1] == 10
+
+  runTest formatName("Integer array indexing", "a[[0, 2, 4]]"):
+    proc(): bool =
+      ## Python: a[[0, 2, 4]] - fancy indexing
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let indices_seq = [0, 2, 4].toTensor().to(kInt64)
+      let indices = indices_seq.clone()
+      let sliced = t.index_select(0, indices)
+      let expected = @[
+        @[  1.0,   1.0,   1.0,   1.0,   1.0],
+        @[  3.0,   9.0,  27.0,  81.0, 243.0],
+        @[  5.0,  25.0, 125.0, 625.0, 3125.0]
+      ].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  # TODO: fix comparison operator
+  # test formatName("Boolean mask indexing", "a[a > 10]"):
+  #   ## Python: a[a > 10] - masked indexing
+  #   let t = vandermonde
+  #   let mask = t > 10.0
+  #   let sliced = t[mask]
+
+  ## -----------------------------------------------------------------------
+  ## Full Matrix Comparison Tests (Python Validated)
+  ## These tests verify exact matrix equality against Python-validated results
+
+  runTest formatName("First 2 rows", "t[_..<2, _]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_..<2, _]
+      doAssert sliced.equal(
+        [[ 1,  1,  1,  1,  1],
+         [ 2,  4,  8, 16, 32]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Rows 1 to 3", "t[1..<4, _]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[1..<4, _]
+      doAssert sliced.equal(
+        [[   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Last 2 rows", "t[-2.._, _]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[-2.._, _]
+      doAssert sliced.equal(
+        [[   4,   16,   64,  256, 1024],
+         [   5,   25,  125,  625, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("All but last row", "t[0..-1, _]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[0..-1, _]
+      doAssert sliced.equal(
+        [[   1,    1,    1,    1,    1],
+         [   2,    4,    8,   16,   32],
+         [   3,    9,   27,   81,  243],
+         [   4,   16,   64,  256, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Every 2nd row", "t[0..<4|2, _]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[0..<4|2, _]
+      doAssert sliced.equal(
+        [[  1,   1,   1,   1,   1],
+         [  3,   9,  27,  81, 243]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("First 2 columns", "t[_, 0..<2]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_, 0..<2]
+      doAssert sliced.equal(
+        [[ 1,  1],
+         [ 2,  4],
+         [ 3,  9],
+         [ 4, 16],
+         [ 5, 25]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Last 2 columns", "t[_, -2.._]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_, -2.._]
+      doAssert sliced.equal(
+        [[   1,    1],
+         [  16,   32],
+         [  81,  243],
+         [ 256, 1024],
+         [ 625, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Submatrix 2x2", "t[1..<3, 1..<3]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[1..<3, 1..<3]
+      doAssert sliced.equal(
+        [[ 4,  8],
+         [ 9, 27]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Every 2nd column", "t[_, |2]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[_, |2]
+      doAssert sliced.equal(
+        [[   1,    1,    1],
+         [   2,    8,   32],
+         [   3,   27,  243],
+         [   4,   64, 1024],
+         [   5,  125, 3125]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Rows 1,3 cols 0,2,4", "t[1..<4|2, 0..<5|2]"):
+    proc(): bool =
+      let t = genShiftedVandermonde5x5(kFloat64)
+      let sliced = t[1..<4|2, 0..<5|2]
+      doAssert sliced.equal(
+        [[   2,    8,   32],
+         [   4,   64, 1024]].toTensor().to(kFloat64))
+      true
+
+  runTest formatName("Single slice on 3D", "a3d[0:2]"):
+    proc(): bool =
+      ## Python: a3d[0:2] equivalent to a3d[0:2, :, :]
+      let t3d = arange(24, kFloat64).reshape([2, 3, 4])
+      let sliced = t3d[0..<2]
+      let expected = @[
+        @[@[0.0, 1.0, 2.0, 3.0],
+          @[4.0, 5.0, 6.0, 7.0],
+          @[8.0, 9.0, 10.0, 11.0]],
+        @[@[12.0, 13.0, 14.0, 15.0],
+          @[16.0, 17.0, 18.0, 19.0],
+          @[20.0, 21.0, 22.0, 23.0]]
+      ].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  runTest formatName("Slice middle dimension", "a3d[:, 0:2, :]"):
+    proc(): bool =
+      ## Python: a3d[:, 0:2, :]
+      let t3d = arange(24, kFloat64).reshape([2, 3, 4])
+      let sliced = t3d[_, 0..<2, _]
+      let expected = @[
+        @[@[0.0, 1.0, 2.0, 3.0],
+          @[4.0, 5.0, 6.0, 7.0]],
+        @[@[12.0, 13.0, 14.0, 15.0],
+          @[16.0, 17.0, 18.0, 19.0]]
+      ].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  runTest formatName("Slice last dimension", "a3d[:, :, 0:2]"):
+    proc(): bool =
+      ## Python: a3d[:, :, 0:2]
+      let t3d = arange(24, kFloat64).reshape([2, 3, 4])
+      let sliced = t3d[_, _, 0..<2]
+      let expected = @[
+        @[@[0.0, 1.0],
+          @[4.0, 5.0],
+          @[8.0, 9.0]],
+        @[@[12.0, 13.0],
+          @[16.0, 17.0],
+          @[20.0, 21.0]]
+      ].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  # TODO ellipsis
+  # test formatName("Slice with ellipsis", "a3d[0, ...]"):
+  #   ## Python: a3d[0, ...]
+  #   ## All of remaining dimensions
+  #   let sliced = t3d[0, `...`]
+  #   check: sliced.shape[0] == 3
+  #   check: sliced.shape[1] == 4
+
+  # TODO: IndexEllipsis not fully supported
+  # test formatName("Ellipsis expansion", "a3d[...] equals a3d"):
+  #   let sliced = t3d[IndexEllipsis]
+  #   check: sliced.shape[0] == 2
+  #   check: sliced.shape[1] == 3
+  #   check: sliced.shape[2] == 4
+
+  runTest formatName("Multiple indices with slice", "a3d[0, 0:2, 1:3]"):
+    proc(): bool =
+      ## Python: a3d[0, 0:2, 1:3]
+      let t3d = arange(24, kFloat64).reshape([2, 3, 4])
+      let sliced = t3d[0, 0..<2, 1..<3]
+      let expected = @[
+        @[1.0, 2.0],
+        @[5.0, 6.0]
+      ].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  runTest formatName("Single slice on 4D", "a4d[0..<2]"):
+    proc(): bool =
+      let t4d = arange(120, kFloat64).reshape([2, 3, 4, 5])
+      let sliced = t4d[0..<2]
+      doAssert sliced.shape[0] == 2
+      doAssert sliced.shape[1] == 3
+      doAssert sliced.shape[2] == 4
+      doAssert sliced.shape[3] == 5
+      true
+
+  # TODO: Ellipsis not fully supported
+  # test formatName("Ellipsis in 4D (repeat)", "a4d[..., 0]"):
+  #   ## Python: a4d[..., 0]
+  #   let sliced = t4d[`...`, 0]
+  #   check: sliced.shape[0] == 2
+  #   check: sliced.shape[1] == 3
+  #   check: sliced.shape[2] == 4
+
+  # TODO: Ellipsis not fully supported
+  # test formatName("Leading ellipsis (repeat)", "a4d[0, ..., 0]"):
+  #   ## Python: a4d[0, ..., 0]
+  #   let sliced = t4d[0, `...`, 0]
+  #   check: sliced.shape[0] == 3
+  #   check: sliced.shape[1] == 4
+
+  ## -----------------------------------------------------------------------
+  ## -N End-relative Indexing Reference
+  ## Summary: -1 is the LAST element, -2 is second-to-last, etc.
+  ##
+  ## For a 5-element array/dimension (indices 0, 1, 2, 3, 4):
+  ##   -1 refers to index 4 (last)
+  ##   -2 refers to index 3 (second-to-last)
+  ##   -3 refers to index 2 (third-to-last)
+  ##   -4 refers to index 1 (fourth-to-last)
+  ##   -5 refers to index 0 (first element, but this is unusual)
+  ##
+  ## This is equivalent to Python's -1, -2, -3, etc. negative indexing.
+
+  runTest formatName("-1 is the last element", "arr5[-1]"):
+    proc(): bool =
+      let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTensor()
+      doAssert arr5[-1].item(float64) == 50.0
+      true
+
+  runTest formatName("-2 is second-to-last", "arr5[-2]"):
+    proc(): bool =
+      let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTensor()
+      doAssert arr5[-2].item(float64) == 40.0
+      true
+
+  runTest formatName("-3 is third-to-last", "arr5[-3]"):
+    proc(): bool =
+      let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTensor()
+      doAssert arr5[-3].item(float64) == 30.0
+      true
+
+  runTest formatName("-4 is fourth-to-last", "arr5[-4]"):
+    proc(): bool =
+      let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTensor()
+      doAssert arr5[-4].item(float64) == 20.0
+      true
+
+  runTest formatName("-5 equals 0", "arr5[-5]"):
+    proc(): bool =
+      let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTensor()
+      doAssert arr5[-5].item(float64) == 10.0
+      true
+
+  runTest formatName("Slice from -3 to -1 (inclusive)", "arr5[-3..-1]"):
+    proc(): bool =
+      ## arr5[-3:-1] -> Python equivalent: arr5[-3:-1] -> indices 2, 3
+      ## Note: -1 as STOP is exclusive in Python, so -3:-1 gives 2 elements
+      let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTensor()
+      let sliced = arr5[-3..-1]
+      let expected = @[30.0, 40.0].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  runTest formatName("Slice from 0 to -1", "arr5[0..-1]"):
+    proc(): bool =
+      ## arr5[0:-1] -> Python equivalent: arr5[0:-1] -> all but last
+      ## Note: -1 as STOP is exclusive in Python
+      let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTensor()
+      let sliced = arr5[0..-1]
+      let expected = @[10.0, 20.0, 30.0, 40.0].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+  # TODO: exclusive with negative (a[<..-2]) not yet supported
+  runTest formatName("Slice from -4 to -2", "arr5[-4..-2]"):
+    proc(): bool =
+      ## arr5[-4:-2] -> Python equivalent: arr5[-4:-2] -> indices 1, 2
+      ## Note: -2 as STOP is exclusive in Python
+      let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTensor()
+      let sliced = arr5[-4..-2]
+      let expected = @[20.0, 30.0].toTensor().to(kFloat64)
+      doAssert sliced.equal(expected)
+      true
+
+when isMainModule:
+  main()
