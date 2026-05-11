@@ -79,7 +79,8 @@ func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
 #   or return it from a proc without {.experimental: "views".}
 
 template asNimView*(ar: IntArrayRef): openArray[int] =
-  let dataptr = cast[ptr UncheckedArray[int]](ar.data())
+  # Note: Clang doesn't like assigning to a temporary because it discards the const qualifier
+  let dataptr {.codegenDecl: "const $# $#".}= cast[ptr UncheckedArray[int]](ar.data())
   toOpenArray(dataptr, 0, ar.size.int - 1)
 
 func asTorchView*(oa: varargs[int]): IntArrayRef {.inline.} =
