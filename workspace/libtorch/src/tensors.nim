@@ -9,7 +9,6 @@ import
   std/macros,
   # Internal
   workspace/libtorch/src/raw_libtorch as F,
-  workspace/libtorch/src/raw/torch_tensors_sugar,
   workspace/libtorch/src/raw/support/[ast_utils, indexing_macros],
   workspace/libtorch/src/vecs/vecs
 
@@ -18,6 +17,9 @@ export F.ScalarKind, F.DeviceKind, F.Device, F.TensorOptions,
        F.Scalar, F.SomeTorchType, F.TorchComplex
 # Indexing sugar
 export F.`_`, F.ellipsis, F.`...`
+
+# Generic sandwich for indexing with ArrayRef
+export F.shape, F.`[]`, F.len
 
 # #######################################################################
 #
@@ -866,10 +868,12 @@ func item*(t: Tensor, T: typedesc): T {.inline.} =
   t.raw.item(T)
 
 template `[]`*(t: Tensor{call}, args: varargs[untyped]): untyped =
+  # Due to generic sandwich bug, this needs export of F.shape, F.`[]`, F.len
   let tmp = t
   wrapTorchTensor(tmp.raw[args])
 
 template `[]`*(t: Tensor{`let`|`var`|`const`|lvalue}, args: varargs[untyped]): untyped =
+  # Due to generic sandwich bug, this needs export of F.shape, F.`[]`, F.len
   wrapTorchTensor(t.raw[args])
 
 macro `[]=`*(t: var Tensor, args: varargs[untyped]): untyped =
@@ -912,13 +916,13 @@ func ihfft*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.ihfft(a.raw))
 
 # N-D
 func fft2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.fft2(a.raw))
-func fft2*(a: Tensor, s: varargs[int]): Tensor {.inline.} = wrapTorchTensor(F.fft2(a.raw, asTorchView(s)))
+func fft2*(a: Tensor, s: openArray[int]): Tensor {.inline.} = wrapTorchTensor(F.fft2(a.raw, asTorchView(s)))
 func ifft2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.ifft2(a.raw))
-func ifft2*(a: Tensor, s: varargs[int]): Tensor {.inline.} = wrapTorchTensor(F.ifft2(a.raw, asTorchView(s)))
+func ifft2*(a: Tensor, s: openArray[int]): Tensor {.inline.} = wrapTorchTensor(F.ifft2(a.raw, asTorchView(s)))
 func fftn*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.fftn(a.raw))
-func fftn*(a: Tensor, s: varargs[int]): Tensor {.inline.} = wrapTorchTensor(F.fftn(a.raw, asTorchView(s)))
+func fftn*(a: Tensor, s: openArray[int]): Tensor {.inline.} = wrapTorchTensor(F.fftn(a.raw, asTorchView(s)))
 func ifftn*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.ifftn(a.raw))
-func ifftn*(a: Tensor, s: varargs[int]): Tensor {.inline.} = wrapTorchTensor(F.ifftn(a.raw, asTorchView(s)))
+func ifftn*(a: Tensor, s: openArray[int]): Tensor {.inline.} = wrapTorchTensor(F.ifftn(a.raw, asTorchView(s)))
 func rfft2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.rfft2(a.raw))
 func irfft2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.irfft2(a.raw))
 func rfftn*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.rfftn(a.raw))
@@ -937,13 +941,7 @@ func ifftshift*(a: Tensor, dim: varargs[int]): Tensor {.inline.} = wrapTorchTens
 # #######################################################################
 
 proc `$`*(t: Tensor): string =
-  {.emit:
-    """
-    std::ostringstream stream;
-    stream << `t.raw`;
-    result = "Tensor\\n" + stream.str();
-    """
-  .}
+  "Tensor\n" & $(F.toCppString(t.raw))
 
 proc print*(t: Tensor) {.sideeffect, inline.} =
   F.print(t.raw)
