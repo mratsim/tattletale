@@ -58,7 +58,11 @@ type
 
   IntArrayRef* = ArrayRef[int]
 
-func data*[T](ar: ArrayRef[T]): ptr T {.importcpp: "#.data()".}
+  ConstPtr*[T] {.importcpp: "const '0*", nodecl.} = object
+    # This avoids Clang complaining about dropping const qualifier from pointers
+    # when manipulating IntArrayRef
+
+func data*[T](ar: ArrayRef[T]): ConstPtr[T] {.importcpp: "#.data()".}
 func size*(ar: ArrayRef): csize_t {.importcpp: "#.size()".}
 
 func init*[T](AR: type ArrayRef[T], p: ptr T, len: SomeInteger): ArrayRef[T] {.constructor, importcpp: "c10::ArrayRef<'*0>(@)".}
