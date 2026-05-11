@@ -623,6 +623,9 @@ macro slice_typed_dispatch*(t: typed, args: varargs[typed]): untyped =
   ## Else, all ints are converted to SteppedSlices and we return a Tensor.
   ## Note, normal slices and `_` were already converted in the `[]` macro
   ## TODO in total we do 3 passes over the list of arguments :/. It is done only at compile time though
+  ##
+  ## ⚠ Important, ensure `t` is a materialized lvalue tensor before calling this macro
+  ## if it's an expression it might get computed twice or thrice or more.
 
   # Point indexing
   # -----------------------------------------------------------------
@@ -710,6 +713,9 @@ macro slice_typed_dispatch*(t: typed, args: varargs[typed]): untyped =
 
 macro slice_typed_dispatch_mut*(t: typed, args: varargs[typed], val: typed): untyped =
   ## Assign `val` to Tensor T at slice/position `args`
+  ##
+  ## ⚠ Important, ensure `t` is a materialized lvalue tensor before calling this macro
+  ## if it's an expression it might get computed twice or thrice or more.
 
   # Point indexing
   # -----------------------------------------------------------------
