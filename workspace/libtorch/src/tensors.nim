@@ -35,7 +35,7 @@ proc placementNew[T](p: ptr T): ptr T {.importcpp: "(new (#) '*0(@))", nodecl, d
 
 proc wrapTorchTensor(a: sink TorchTensor): Tensor {.inline.} =
   new result
-  discard placementNew(result.raw.addr)
+  placementNew(result.raw.addr)
   `=sink`(result.raw, a)
 
 # #######################################################################
@@ -469,7 +469,9 @@ func get_device*(a: Tensor): int {.inline.} =
   F.get_device(a.raw)
 
 func isDefined*(a: Tensor): bool {.inline.} =
-  F.isDefined(a.raw)
+  if a.isNil():
+    return false
+  return F.isDefined(a.raw)
 
 # Backend checks
 
