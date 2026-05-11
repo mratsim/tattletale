@@ -19,7 +19,6 @@ import
   workspace/libtorch/src/tensors,
   workspace/libtorch/src/raw_libtorch
 
-{.experimental: "views".}
 
 # =============================================================================
 # C++ Exception Handling
@@ -115,7 +114,8 @@ template assertShape*(tensor: untyped, expectedShape: openArray[int], name: stri
   ##   tensor: The tensor to check
   ##   expectedShape: Expected dimensions
   ##   name: Optional name for error message
-  let actual: openArray[int] = tensor.shape.asNimView()
+  let actual = @tensor.shape.asNimView()
+  let expected = @expectedShape
   if actual != expected:
     let tensorName = if name.len > 0: name else: astToStr(tensor)
     raise newException(
