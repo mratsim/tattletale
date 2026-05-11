@@ -91,11 +91,11 @@ proc `=sink`*[T](dst: var Vec[T], src: Vec[T]) {.inline.} =
   dst.data = src.data
   # Note: compiler automatically calls =wasMoved on src after this proc returns
 
-func len*[T](v: Vec[T]): int {.inline.} =
+template len*[T](v: Vec[T]): int =
   ## Get current length.
   v.len
 
-func `[]`*[T](v: Vec[T], i: Natural): lent T {.inline.} =
+template `[]`*[T](v: Vec[T], i: Natural): lent T =
   ## Read access (returns lent to avoid copy).
   ## Bounds checking is enabled with compileOption("boundChecks").
   when compileOption("boundChecks"):
@@ -103,8 +103,9 @@ func `[]`*[T](v: Vec[T], i: Natural): lent T {.inline.} =
       raise newException(IndexError, "[ttt] Index '" & $i & "' out of bounds (length: " & $v.len & ")")
   v.data[i]
 
-func `[]=`*[T](v: var Vec[T], i: Natural, item: sink T) {.inline.} =
-  ## Write access (move assignment).
+template `[]=`*[T](v: var Vec[T], i: Natural, item: T) =
+  ## Write access (move or copy assignment).
+  ## Made template so that the compiler has full context for move vs copy
   ## Bounds checking is enabled with compileOption("boundChecks").
   when compileOption("boundChecks"):
     if i >= v.len:
@@ -137,7 +138,7 @@ iterator mitems*[T](v: var Vec[T]): var T =
 
 import workspace/libtorch/src/raw/abi/c10
 
-func asTorchView*[T](v: Vec[T]): ArrayRef[T] {.inline.} =
+template asTorchView*[T](v: Vec[T]): ArrayRef[T] =
   ## Convert Vec to ArrayRef view.
   ## Returns a non-owning view - Vec must outlive the ArrayRef.
   if v.len == 0:
