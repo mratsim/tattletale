@@ -17,7 +17,7 @@ import
   std/strutils,
   std/macros,
   workspace/libtorch/src/tensors,
-  workspace/libtorch/src/raw_libtorch
+  workspace/libtorch/src/raw_libtorch as F
 
 
 # =============================================================================
@@ -173,7 +173,7 @@ proc printTensorShape*(t: Tensor, label: string = "") =
   ## Print tensor shape and dtype with an optional label.
   if label.len > 0:
     echo label, ":"
-  echo "  Shape: ", @(t.shape.asNimView()), ", Dtype: ", t.scalarType()
+  echo "  Shape: ", t.shape, ", Dtype: ", t.scalarType()
   echo ""
 
 # =============================================================================
@@ -194,4 +194,4 @@ proc dataPtrHex*(tensor: Tensor): string =
 
 proc shapePtrHex*(tensor: Tensor): string =
   ## Get tensor shape pointer as hex string.
-  tensor.shape.data().ptrHex()
+  tensor.shape[0].unsafeAddr.ptrHex()
