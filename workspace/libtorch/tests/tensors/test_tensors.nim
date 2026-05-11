@@ -8,303 +8,380 @@
 ## Core Tensor wrapper tests: creation, math, operators, reductions, FFT.
 
 import
-  std/unittest,
   std/sequtils,
   std/complex,
   std/sugar,
-  workspace/libtorch/src/tensors
+  workspace/libtorch/src/tensors,
+  workspace/libtorch/libtorch_testutils
 
 proc runTests*() =
   # -----------------------------------------------------------------------
   # Factory / creation
 
-  suite "Tensor creation":
-    test "zeros":
+  runTest "zeros":
+    proc(): bool =
       let t = zeros(2, 3, kFloat32)
-      check t.dim() == 2
-      check t.size(0) == 2
-      check t.size(1) == 3
-      check t.item(float32) == 0.0
+      doAssert t.dim() == 2
+      doAssert t.size(0) == 2
+      doAssert t.size(1) == 3
+      # item() only works on singleton tensors, use indexing for multi-dim
+      doAssert t[0, 0].item(float32) == 0.0
+      true
 
-    test "ones":
+  runTest "ones":
+    proc(): bool =
       let t = ones(2, 3, kFloat32)
-      check t.item(float32) == 1.0
+      doAssert t[0, 0].item(float32) == 1.0
+      true
 
-    test "full":
+  runTest "full":
+    proc(): bool =
       let t = full(2, 3, 42.0'f32, kFloat32)
-      check t.item(float32) == 42.0'f32
+      doAssert t[0, 0].item(float32) == 42.0'f32
+      true
 
-    test "eye":
+  runTest "eye":
+    proc(): bool =
       let t = eye(2, kInt64)
-      check t[0, 0].item(int64) == 1
-      check t[0, 1].item(int64) == 0
-      check t[1, 0].item(int64) == 0
-      check t[1, 1].item(int64) == 1
+      doAssert t[0, 0].item(int64) == 1
+      doAssert t[0, 1].item(int64) == 0
+      doAssert t[1, 0].item(int64) == 0
+      doAssert t[1, 1].item(int64) == 1
+      true
 
-    test "linspace":
+  runTest "linspace":
+    proc(): bool =
       let steps = 120'i64
       let t = linspace(0.0, 1.0, steps, kFloat64)
       let reft = toSeq(0..<120).map(x => float64(x) / float64(steps - 1)).toTensor()
       let rel_error = mean(t - reft)
-      check rel_error.item(float64) <= 1e-12
+      doAssert rel_error.item(float64) <= 1e-12
+      true
 
-    test "arange":
+  runTest "arange":
+    proc(): bool =
       let steps = 130'i64
       let step = 1.0 / float64(steps)
       let t = arange(0.0, 1.0, step, kFloat64)
       for i in 0 ..< 130:
         let val = t[i].item(float64)
         let refval: float64 = float64(i) / 130.0
-        check (val - refval).abs <= 1e-12
+        doAssert (val - refval).abs <= 1e-12
+      true
 
-    test "from_blob":
+  runTest "from_blob":
+    proc(): bool =
       var data: array[4, float32] = [1.0, 2.0, 3.0, 4.0]
-      let t = from_blob(data[0].unsafeAddr, 2, 2, kFloat32)
-      check t[0, 0].item(float32) == 1.0
-      check t[1, 1].item(float32) == 4.0
+      let t = from_blob(data[0].unsafeAddr, [2, 2], kFloat32)
+      doAssert t[0, 0].item(float32) == 1.0
+      doAssert t[1, 1].item(float32) == 4.0
+      true
 
-    test "clone":
+  runTest "clone":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = clone(a)
-      check not a.is_alias_of(b)
+      doAssert not a.is_alias_of(b)
+      true
 
   # -----------------------------------------------------------------------
   # Operator precedence
 
-  suite "Operator precedence":
-    test "+ and *":
+  runTest "+ and *":
+    proc(): bool =
       let a = toTensor([[1, 2], [3, 4]]).to(kFloat64)
       let b = -a
-      check (b * a + b).equal(toTensor([[-2, -6], [-12, -20]]).to(kFloat64))
-      check (b * (a + b)).equal(zeros(2, 2).to(kFloat64))
+      doAssert (b * a + b).equal(toTensor([[-2, -6], [-12, -20]]).to(kFloat64))
+      doAssert (b * (a + b)).equal(zeros(2, 2).to(kFloat64))
+      true
 
-    test "+ and abs":
+  runTest "+ and abs":
+    proc(): bool =
       let a = toTensor([[1, 2], [3, 4]]).to(kFloat64)
       let b = -a
-      check (a + abs(b)).equal(toTensor([[2, 4], [6, 8]]).to(kFloat64))
-      check abs(a + b).equal(zeros(2, 2).to(kFloat64))
+      doAssert (a + abs(b)).equal(toTensor([[2, 4], [6, 8]]).to(kFloat64))
+      doAssert abs(a + b).equal(zeros(2, 2).to(kFloat64))
+      true
 
   # -----------------------------------------------------------------------
   # Math unary
 
-  suite "Math unary":
-    test "exp / log":
+  runTest "exp / log":
+    proc(): bool =
       let a = toTensor(@[1.0, 2.0, 3.0]).to(kFloat64)
       let b = log(exp(a))
-      check a.allClose(b)
+      doAssert a.allClose(b)
+      true
 
-    test "sin / cos":
+  runTest "sin / cos":
+    proc(): bool =
       let t = toTensor(@[0.0]).to(kFloat64)
-      check sin(t)[0].item(float64) == 0.0
-      check cos(t)[0].item(float64) == 1.0
+      doAssert sin(t)[0].item(float64) == 0.0
+      doAssert cos(t)[0].item(float64) == 1.0
+      true
 
-    test "sqrt":
+  runTest "sqrt":
+    proc(): bool =
       let t = toTensor(@[4.0, 9.0, 16.0]).to(kFloat64)
-      check sqrt(t)[0].item(float64) == 2.0
-      check sqrt(t)[1].item(float64) == 3.0
+      doAssert sqrt(t)[0].item(float64) == 2.0
+      doAssert sqrt(t)[1].item(float64) == 3.0
+      true
 
   # -----------------------------------------------------------------------
   # Binary / Linear Algebra
 
-  suite "Linear Algebra":
-    test "add":
+  runTest "add":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(2, 3, kFloat32) * 2.0
       let c = add(a, b)
-      check c[0, 0].item(float32) == 3.0
+      doAssert c[0, 0].item(float32) == 3.0
+      true
 
-    test "mm":
+  runTest "mm":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(3, 4, kFloat32)
       let c = mm(a, b)
-      check c.dim() == 2
-      check c.size(0) == 2
-      check c.size(1) == 4
-      check c[0, 0].item(float32) == 3.0  # each row of a * each col of b = 3
+      doAssert c.dim() == 2
+      doAssert c.size(0) == 2
+      doAssert c.size(1) == 4
+      doAssert c[0, 0].item(float32) == 3.0  # each row of a * each col of b = 3
+      true
 
-    test "matmul":
+  runTest "matmul":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(3, 4, kFloat32)
       let c = matmul(a, b)
-      check c.size(0) == 2
-      check c.size(1) == 4
+      doAssert c.size(0) == 2
+      doAssert c.size(1) == 4
+      true
 
-    test "dot":
+  runTest "dot":
+    proc(): bool =
       let a = toTensor(@[1.0, 2.0, 3.0]).to(kFloat64)
       let b = toTensor(@[4.0, 5.0, 6.0]).to(kFloat64)
       let d = dot(a, b)
-      check d.item(float64) == 32.0  # 1*4 + 2*5 + 3*6
+      doAssert d.item(float64) == 32.0  # 1*4 + 2*5 + 3*6
+      true
 
   # -----------------------------------------------------------------------
   # Comparison
 
-  suite "Comparison":
-    test "equal (bool)":
+  runTest "equal (bool)":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(2, 3, kFloat32)
       let c = zeros(2, 3, kFloat32)
-      check equal(a, b)
-      check not equal(a, c)
+      doAssert equal(a, b)
+      doAssert not equal(a, c)
+      true
 
-    test "eq (tensor)":
+  runTest "eq (tensor)":
+    proc(): bool =
       let a = toTensor(@[1.0, 2.0]).to(kFloat64)
       let b = toTensor(@[1.0, 3.0]).to(kFloat64)
       let eq_result = eq(a, b)
-      check eq_result[0].item(float64) == 1.0
-      check eq_result[1].item(float64) == 0.0
+      doAssert eq_result[0].item(float64) == 1.0
+      doAssert eq_result[1].item(float64) == 0.0
+      true
 
-    test "element-wise <. >. <=. >=. !=.":
+  runTest "element-wise <. >. <=. >=. !=.":
+    proc(): bool =
       let a = toTensor(@[1.0, 2.0, 3.0]).to(kFloat64)
       let b = toTensor(@[1.0, 1.0, 4.0]).to(kFloat64)
-      check (a <. b)[1].item(float64) == 0.0  # 2 < 1 -> false
-      check (a >. b)[2].item(float64) == 0.0  # 3 > 4 -> false
-      check (a <=. b)[0].item(float64) == 1.0 # 1 <= 1 -> true
-      check (a >=. b)[0].item(float64) == 1.0 # 1 >= 1 -> true
-      check (a !=. b)[1].item(float64) == 1.0 # 2 != 1 -> true
+      doAssert (a <. b)[1].item(float64) == 0.0  # 2 < 1 -> false
+      doAssert (a >. b)[2].item(float64) == 0.0  # 3 > 4 -> false
+      doAssert (a <=. b)[0].item(float64) == 1.0 # 1 <= 1 -> true
+      doAssert (a >=. b)[0].item(float64) == 1.0 # 1 >= 1 -> true
+      doAssert (a !=. b)[1].item(float64) == 1.0 # 2 != 1 -> true
+      true
 
-    test "allClose":
+  runTest "allClose":
+    proc(): bool =
       let a = toTensor(@[1.0, 2.0, 3.0]).to(kFloat64)
       let b = toTensor(@[1.00001, 2.00001, 3.00001]).to(kFloat64)
-      check allClose(a, b)
+      doAssert allClose(a, b)
+      true
 
   # -----------------------------------------------------------------------
   # Reductions
 
-  suite "Reductions":
-    test "sum":
+  runTest "sum":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
-      check sum(a).item(float32) == 6.0
+      doAssert sum(a).item(float32) == 6.0
+      true
 
-    test "mean":
+  runTest "mean":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
-      check mean(a).item(float32) == 1.0
+      doAssert mean(a).item(float32) == 1.0
+      true
 
-    test "max":
+  runTest "max":
+    proc(): bool =
       let a = toTensor([[1, 3], [2, 4]]).to(kFloat64)
-      check max(a).item(float64) == 4.0
+      doAssert max(a).item(float64) == 4.0
+      true
 
-    test "min":
+  runTest "min":
+    proc(): bool =
       let a = toTensor([[1, 3], [2, 4]]).to(kFloat64)
-      check min(a).item(float64) == 1.0
+      doAssert min(a).item(float64) == 1.0
+      true
 
-    test "argmax":
+  runTest "argmax":
+    proc(): bool =
       let a = toTensor(@[1.0, 5.0, 3.0]).to(kFloat64)
-      check argmax(a).item(int64) == 1
+      doAssert argmax(a).item(int64) == 1
+      true
 
-    test "sum with axis":
+  runTest "sum with axis":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let s = sum(a, axis = 1)
-      check s.size(0) == 2
-      check s[0].item(float32) == 3.0
+      doAssert s.size(0) == 2
+      doAssert s[0].item(float32) == 3.0
+      true
 
-    test "min with axis (tuple)":
+  runTest "min with axis (tuple)":
+    proc(): bool =
       let a = toTensor([[1, 3], [2, 4]]).to(kFloat64)
       let (vals, idx) = min(a, axis = 1)
-      check vals[0].item(float64) == 1.0
-      check vals[1].item(float64) == 2.0
+      doAssert vals[0].item(float64) == 1.0
+      doAssert vals[1].item(float64) == 2.0
+      true
 
-    test "sort":
+  runTest "sort":
+    proc(): bool =
       let t = toTensor(@[2, 3, 4, 1, 5, 6]).to(kInt64)
       let (s, args) = sort(t)
-      check s[0].item(int64) == 1
-      check s[1].item(int64) == 2
-      check args[0].item(int64) == 3  # index of 1
-      check args[1].item(int64) == 0  # index of 2
+      doAssert s[0].item(int64) == 1
+      doAssert s[1].item(int64) == 2
+      doAssert args[0].item(int64) == 3  # index of 1
+      doAssert args[1].item(int64) == 0  # index of 2
+      true
 
   # -----------------------------------------------------------------------
   # Shape manipulation
 
-  suite "Shape manipulation":
-    test "reshape":
+  runTest "reshape":
+    proc(): bool =
       let a = arange(12, kFloat64)
       let b = reshape(a, 3, 4)
-      check b.size(0) == 3
-      check b.size(1) == 4
+      doAssert b.size(0) == 3
+      doAssert b.size(1) == 4
+      true
 
-    test "view":
+  runTest "view":
+    proc(): bool =
       let a = arange(12, kFloat64)
       let b = view(a, 3, 4)
-      check b.size(0) == 3
-      check b.size(1) == 4
+      doAssert b.size(0) == 3
+      doAssert b.size(1) == 4
+      true
 
-    test "permute":
+  runTest "permute":
+    proc(): bool =
       let a = zeros(2, 3, 4, kFloat32)
       let b = permute(a, 2, 1, 0)
-      check b.size(0) == 4
-      check b.size(1) == 3
-      check b.size(2) == 2
+      doAssert b.size(0) == 4
+      doAssert b.size(1) == 3
+      doAssert b.size(2) == 2
+      true
 
-    test "transpose":
+  runTest "transpose":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = transpose(a, 0, 1)
-      check b.size(0) == 3
-      check b.size(1) == 2
+      doAssert b.size(0) == 3
+      doAssert b.size(1) == 2
+      true
 
-    test "t":
+  runTest "t":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = t(a)
-      check b.size(0) == 3
-      check b.size(1) == 2
+      doAssert b.size(0) == 3
+      doAssert b.size(1) == 2
+      true
 
-    test "squeeze / unsqueeze":
+  runTest "squeeze / unsqueeze":
+    proc(): bool =
       let a = ones(1, 3, 1, kFloat32)
       let b = squeeze(a)
-      check b.size(0) == 3
+      doAssert b.size(0) == 3
       let c = unsqueeze(b, 0)
-      check c.dim() == 2
-      check c.size(0) == 1
-      check c.size(1) == 3
+      doAssert c.dim() == 2
+      doAssert c.size(0) == 1
+      doAssert c.size(1) == 3
+      true
 
   # -----------------------------------------------------------------------
   # Arithmetic operators
 
-  suite "Arithmetic operators":
-    test "+":
+  runTest "+":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(2, 3, kFloat32)
       let c = a + b
-      check c[0, 0].item(float32) == 2.0
+      doAssert c[0, 0].item(float32) == 2.0
+      true
 
-    test "-":
+  runTest "-":
+    proc(): bool =
       let a = full(2, 3, 5.0'f32, kFloat32)
       let b = ones(2, 3, kFloat32)
       let c = a - b
-      check c[0, 0].item(float32) == 4.0
+      doAssert c[0, 0].item(float32) == 4.0
+      true
 
-    test "*":
+  runTest "*":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = full(2, 3, 3.0'f32, kFloat32)
       let c = a * b
-      check c[0, 0].item(float32) == 3.0
+      doAssert c[0, 0].item(float32) == 3.0
+      true
 
-    test "/":
+  runTest "/":
+    proc(): bool =
       let a = full(2, 3, 6.0'f32, kFloat32)
       let b = full(2, 3, 2.0'f32, kFloat32)
       let c = a / b
-      check c[0, 0].item(float32) == 3.0
+      doAssert c[0, 0].item(float32) == 3.0
+      true
 
-    test "scalar mixed":
+  runTest "scalar mixed":
+    proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = a + 2.0
-      check b[0, 0].item(float32) == 3.0
+      doAssert b[0, 0].item(float32) == 3.0
       let c = 2.0 * a
-      check c[0, 0].item(float32) == 2.0
+      doAssert c[0, 0].item(float32) == 2.0
+      true
 
-    test "in-place +=":
+  runTest "in-place +=":
+    proc(): bool =
       var a = ones(2, 3, kFloat32)
       a += ones(2, 3, kFloat32)
-      check a[0, 0].item(float32) == 2.0
+      doAssert a[0, 0].item(float32) == 2.0
+      true
 
-    test "in-place scalar *=":
+  runTest "in-place scalar *=":
+    proc(): bool =
       var a = ones(2, 3, kFloat32)
       a *= 5.0
-      check a[0, 0].item(float32) == 5.0
+      doAssert a[0, 0].item(float32) == 5.0
+      true
 
   # -----------------------------------------------------------------------
   # FFT
 
-  suite "FFT 1D":
-    test "fft / ifft":
+  runTest "fft / ifft":
+    proc(): bool =
       let shape = @[8]
       let c64input = randn(shape, kComplexF64)
       let fftout = fft(c64input)
@@ -312,9 +389,11 @@ proc runTests*() =
       let max_input = max(abs(ifftout)).item(float64)
       var rel_diff = abs(ifftout - c64input)
       rel_diff = rel_diff / max_input
-      check mean(rel_diff).item(float64) < 1e-12
+      doAssert mean(rel_diff).item(float64) < 1e-12
+      true
 
-    test "rfft / irfft":
+  runTest "rfft / irfft":
+    proc(): bool =
       let shape = @[8]
       let f64input = randn(shape, kFloat64)
       let fftout = rfft(f64input)
@@ -322,17 +401,23 @@ proc runTests*() =
       let max_input = max(abs(ifftout)).item(float64)
       var rel_diff = abs(ifftout - f64input)
       rel_diff = rel_diff / max_input
-      check mean(rel_diff).item(float64) < 1e-12
+      doAssert mean(rel_diff).item(float64) < 1e-12
+      true
 
-  suite "FFT 2D":
-    test "fft2 / ifft2":
+  runTest "fft2 / ifft2":
+    proc(): bool =
       let shape = @[3, 5]
       let c64input = randn(shape, kComplexF64)
       let fft2out = fft2(c64input)
       let ifft2out = ifft2(fft2out)
+      let max_input = max(abs(ifft2out)).item(float64)
+      var rel_diff = abs(ifft2out - c64input)
+      rel_diff = rel_diff / max_input
+      doAssert mean(rel_diff).item(float64) < 1e-12
+      true
 
-  suite "FFT ND":
-    test "fftn / ifftn":
+  runTest "fftn / ifftn":
+    proc(): bool =
       let shape = @[3, 4, 5]
       let c64input = randn(shape, kComplexF64)
       let fftnout = fftn(c64input)
@@ -340,7 +425,8 @@ proc runTests*() =
       let max_input = max(abs(ifftnout)).item(float64)
       var rel_diff = abs(ifftnout - c64input)
       rel_diff = rel_diff / max_input
-      check mean(rel_diff).item(float64) < 1e-12
+      doAssert mean(rel_diff).item(float64) < 1e-12
+      true
 
 when isMainModule:
   runTests()

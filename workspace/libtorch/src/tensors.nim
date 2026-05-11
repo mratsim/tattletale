@@ -293,42 +293,42 @@ func randint*(start, stopEx: int, size: varargs[int], T: typedesc[SomeTorchType]
 
 # from_blob
 
-func from_blob*(data: pointer, sizes: varargs[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
+func from_blob*(data: pointer, sizes: openArray[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
   ## Create a non-owning Tensor view from a data pointer.
   ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
   wrapTorchTensor(F.from_blob(data, asTorchView(sizes), toScalarKind(T)))
 
-func from_blob*(data: pointer, sizes: varargs[int], scalarKind: ScalarKind): Tensor {.inline.} =
+func from_blob*(data: pointer, sizes: openArray[int], scalarKind: ScalarKind): Tensor {.inline.} =
   ## Create a non-owning Tensor view from a data pointer.
   ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
   wrapTorchTensor(F.from_blob(data, asTorchView(sizes), scalarKind))
 
-func from_blob*(data: pointer, sizes: varargs[int], device: DeviceKind): Tensor {.inline.} =
+func from_blob*(data: pointer, sizes: openArray[int], device: DeviceKind): Tensor {.inline.} =
   ## Create a non-owning Tensor view from a data pointer.
   ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
   wrapTorchTensor(F.from_blob(data, asTorchView(sizes), device))
 
-func from_blob*(data: pointer, sizes: varargs[int], options: TensorOptions): Tensor {.inline.} =
+func from_blob*(data: pointer, sizes: openArray[int], options: TensorOptions): Tensor {.inline.} =
   ## Create a non-owning Tensor view from a data pointer.
   ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
   wrapTorchTensor(F.from_blob(data, asTorchView(sizes), options))
 
-func from_blob*(data: pointer, sizes, strides: varargs[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
+func from_blob*(data: pointer, sizes: openArray[int], strides: openArray[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
   ## Create a non-owning Tensor view from a data pointer with explicit strides.
   ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
   wrapTorchTensor(F.from_blob(data, asTorchView(sizes), asTorchView(strides), toScalarKind(T)))
 
-func from_blob*(data: pointer, sizes, strides: varargs[int], scalarKind: ScalarKind): Tensor {.inline.} =
+func from_blob*(data: pointer, sizes: openArray[int], strides: openArray[int], scalarKind: ScalarKind): Tensor {.inline.} =
   ## Create a non-owning Tensor view from a data pointer with explicit strides.
   ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
   wrapTorchTensor(F.from_blob(data, asTorchView(sizes), asTorchView(strides), scalarKind))
 
-func from_blob*(data: pointer, sizes, strides: varargs[int], device: DeviceKind): Tensor {.inline.} =
+func from_blob*(data: pointer, sizes: openArray[int], strides: openArray[int], device: DeviceKind): Tensor {.inline.} =
   ## Create a non-owning Tensor view from a data pointer with explicit strides.
   ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
   wrapTorchTensor(F.from_blob(data, asTorchView(sizes), asTorchView(strides), device))
 
-func from_blob*(data: pointer, sizes, strides: varargs[int], options: TensorOptions): Tensor {.inline.} =
+func from_blob*(data: pointer, sizes: openArray[int], strides: openArray[int], options: TensorOptions): Tensor {.inline.} =
   ## Create a non-owning Tensor view from a data pointer with explicit strides.
   ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
   wrapTorchTensor(F.from_blob(data, asTorchView(sizes), asTorchView(strides), options))
