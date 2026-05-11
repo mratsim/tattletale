@@ -194,4 +194,4 @@ proc dataPtrHex*(tensor: F.TorchTensor): string =
 
 proc shapePtrHex*(tensor: F.TorchTensor): string =
   ## Get tensor shape pointer as hex string.
-  tensor.shape.data().ptrHex()
+  cast[pointer](tensor.shape.data()).ptrHex()
