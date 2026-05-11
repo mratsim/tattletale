@@ -73,7 +73,7 @@ proc main() =
         s.add(full(3, float32(i), kFloat32))
       doAssert s.len == 10
       for i in 0 ..< 10:
-        doAssert s[i].item(float32) == float32(i)
+        doAssert s[i][0].item(float32) == float32(i)
       true
 
   runTest "seq[Tensor] pre-alloc and assign":
@@ -82,8 +82,8 @@ proc main() =
       s[0] = zeros(2, kFloat32)
       s[1] = ones(2, kFloat32)
       s[2] = zeros(2, kFloat32)
-      doAssert s[0].item(float32) == 0.0
-      doAssert s[1].item(float32) == 1.0
+      doAssert s[0][0].item(float32) == 0.0
+      doAssert s[1][0].item(float32) == 1.0
       true
 
   runTest "seq[Tensor] with grow-in-place (realloc)":
@@ -93,7 +93,7 @@ proc main() =
         s.add(full(1, float32(i), kFloat32))
       doAssert s.len == 100
       for i in 0 ..< 100:
-        doAssert s[i].item(float32) == float32(i)
+        doAssert s[i][0].item(float32) == float32(i)
       true
 
   # =============================================================================
@@ -193,7 +193,7 @@ proc main() =
         ones(2, kFloat32)
       let result = inner()
       doAssert result.isDefined()
-      doAssert result.item(float32) == 1.0
+      doAssert result[0].item(float32) == 1.0
       true
 
   runTest "scope exit of seq[Tensor]":
@@ -205,8 +205,10 @@ proc main() =
         return s
       let result = inner()
       doAssert result.len == 2
-      doAssert result[0].item(float32) == 1.0
-      doAssert result[1].item(float32) == 0.0
+      let t0 = result[0]
+      let t1 = result[1]
+      doAssert t0[0].item(float32) == 1.0
+      doAssert t1[0].item(float32) == 0.0
       true
 
   runTest "seq element assignment after scope exit":
@@ -217,7 +219,7 @@ proc main() =
         Wrapper(t: ones(2, kFloat32))
       var s: seq[Wrapper] = @[]
       s.add(inner())
-      doAssert s[0].t.item(float32) == 1.0
+      doAssert s[0].t[0].item(float32) == 1.0
       true
 
   # =============================================================================
@@ -229,8 +231,8 @@ proc main() =
       let a = ones(2, 3, kFloat32)
       let b = clone(a)
       let c = b + 1
-      doAssert a.item(float32) == 1.0
-      doAssert c.item(float32) == 2.0
+      doAssert a[0, 0].item(float32) == 1.0
+      doAssert c[0, 0].item(float32) == 2.0
       true
 
   runTest "clone vs copy share no memory":
@@ -239,6 +241,7 @@ proc main() =
       let b = clone(a)
       doAssert not a.is_alias_of(b)
       true
+
 
 when isMainModule:
   main()
