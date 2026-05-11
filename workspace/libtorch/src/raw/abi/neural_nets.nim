@@ -8,9 +8,9 @@
 import
   std/options,
   # Internal
-  workspace/libtorch/src/abi/torch_tensors,
-  workspace/libtorch/src/abi/std_cpp,
-  workspace/libtorch/src/abi/c10,
+  ./torch_tensors,
+  ./std_cpp,
+  ./c10,
   workspace/libtorch/vendor/libtorch
 
 # (Almost) raw bindings to PyTorch Neural Networks

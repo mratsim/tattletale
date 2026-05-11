@@ -18,7 +18,7 @@ import
   std/strformat,
   std/strutils,
   std/macros,
-  workspace/libtorch as F
+  workspace/libtorch/src/raw_libtorch as F
 
 # =============================================================================
 # C++ Exception Handling
@@ -29,7 +29,7 @@ template catchCppExceptions*(body: bool): bool =
   ## Returns true if body executed successfully, false if an exception was caught.
   ##
   ## Use this for tests that involve C++ FFI types like TorchTensor.
-  
+
   when not defined(cpp) and defined(nimCheck):
     {.error: "You are running 'nim check' in C mode. It will misreport that C++ exceptions can't be caught because they aren't ref objects.".}
 
