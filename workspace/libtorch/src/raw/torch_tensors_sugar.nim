@@ -11,7 +11,6 @@ import
   ./abi/std_cpp,
   ./abi/c10,
   ./abi/torch_tensors,
-  ./support/dynamic_stack_arrays,
   ./support/[ast_utils, indexing_macros]
 
 static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
@@ -21,8 +20,6 @@ static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
 #               Syntactic sugar for Torch and Nim interop
 #
 # #######################################################################
-
-type Metadata* = DynamicStackArray[int]
 
 # Debugging
 # -----------------------------------------------------
@@ -89,9 +86,6 @@ func asTorchView*(oa: varargs[int]): IntArrayRef {.inline.} =
 
 func asTorchView*[T: not int](oa: openArray[T]): ArrayRef[T] {.inline.} =
   init(ArrayRef[T], oa[0].unsafeAddr, oa.len)
-
-func asTorchView*(meta: Metadata): ArrayRef[int] {.inline.} =
-  init(ArrayRef[int], meta.data[0].unsafeAddr, meta.len)
 
 proc `$`*[T](ar: ArrayRef[T]): string {.inline.} =
   `$`(ar.asNimView())
@@ -185,18 +179,19 @@ converter convertTypeDef*(T: typedesc[SomeTorchType]): static ScalarKind =
 # Nim openarrays -> Torch Tensors
 # -----------------------------------------------------
 
-func getShape*[T](s: openarray[T], parent_shape = Metadata()): Metadata =
+func getShapeImpl[T](shapeAccum: var seq[int], s: openarray[T]) =
+  ## Recurse until we have a non-seq / non-array underlying type.
+  shapeAccum.add(s.len)
+  when (T is seq | array):
+    shapeAccum.getShapeImpl(s[0])
+
+func getShape*[T](s: openarray[T]): seq[int] =
   ## Get the shape of nested seqs/arrays
   ## Important ⚠: at each nesting level, only the length
   ##   of the first element is used for the shape.
   ##   Ensure before or after that seqs have the expected length
   ##   or that the total number of elements matches the product of the dimensions.
-
-  result = parent_shape
-  result.add(s.len)
-
-  when (T is seq | array):
-    result = getShape(s[0], result)
+  result.getShapeImpl(s)
 
 macro getBaseType*(T: typedesc): untyped =
   # Get the base T of a seq[T] input
