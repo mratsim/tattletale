@@ -9,8 +9,7 @@ import
   std/macros,
   # Internal
   workspace/libtorch/src/raw_libtorch as F,
-  workspace/libtorch/src/raw/support/[ast_utils, indexing_macros],
-  workspace/libtorch/src/vecs/vecs
+  workspace/libtorch/src/raw/support/[ast_utils, indexing_macros]
 
 # Export Nim-friendly types (no C++ types leak past this boundary)
 export F.ScalarKind, F.DeviceKind, F.Device, F.TensorOptions,
@@ -45,14 +44,14 @@ template wrapTorchTensor(body: untyped): untyped =
   when typeof(body) is TorchTensor:
     wrapTorchTensorImpl(body)
   elif typeof(body) is CppVector[TorchTensor]:
-    let raws = block: body
-    var tensors = newSeq[Tensor](len(raws))
-    for i in 0 ..< len(raws):
-      tensors[i] = wrapTorchTensorImpl(raws[i])
+    let rawsOut = block: body
+    var tensors = newSeq[Tensor](len(rawsOut))
+    for i in 0 ..< len(rawsOut):
+      tensors[i] = wrapTorchTensorImpl(rawsOut[i])
     tensors
   elif typeof(body) is CppTuple2[TorchTensor, TorchTensor]:
-    let raws = block: body
-    (wrapTorchTensorImpl(get(raws, 0)), wrapTorchTensorImpl(get(raws, 1)))
+    let rawsOut = block: body
+    (wrapTorchTensorImpl(get(rawsOut, 0)), wrapTorchTensorImpl(get(rawsOut, 1)))
   else:
     body
 
@@ -129,10 +128,10 @@ template unwrapArg(arg: untyped): untyped =
     asTorchView(arg)
   elif arg is varargs[Tensor] or arg is openArray[Tensor]:
     block:
-      var raws {.gensym.} = new(Vec[TorchTensor], arg.len)
+      var unwrappedRaws {.gensym.} = CppVector[TorchTensor].init(arg.len)
       for i in 0 ..< arg.len:
-        raws[i] = arg[i].raw
-      asTorchView(raws)
+        unwrappedRaws[i] = arg[i].raw
+      unwrappedRaws
   else:
     arg
 

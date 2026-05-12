@@ -35,10 +35,20 @@ template catchCppExceptions*(body: bool): bool =
   try:
     body
   except TorchError as e:
-    echo "❌ C++ torch::Error caught:"
+    echo "❌ C++ torch::Error caught (this shouldn't happen, they should be wrapped in Nim exceptions)"
     echo "---------------------------"
     echo $e.what()
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    false
+  except CppStdException as e:
+    echo "❌ Raw C++ exception caught (this shouldn't happen, they should be wrapped in Nim exceptions)"
+    echo "---------------------------"
+    echo $e.what()
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    false
+  except LibTorchDefect as e:
+    # LibTorchDefect already has pretty printing by default
+    echo e.msg
     false
   except CatchableError as e:
     echo "❌ Exception caught:"
