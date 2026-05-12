@@ -13,16 +13,14 @@
 ## - Tensor assertion helpers
 
 import
-  std/strformat,
   std/strutils,
-  std/macros,
   workspace/libtorch/src/raw_libtorch as F
 
 # =============================================================================
 # C++ Exception Handling
 # =============================================================================
 
-template catchCppExceptions*(body: bool): bool =
+template catchExceptions*(body: bool): bool =
   ## Catch C++ exceptions from TorchTensor operations.
   ## Returns true if body executed successfully, false if an exception was caught.
   ##
@@ -68,88 +66,11 @@ proc runTest*(name: string, body: proc(): bool) =
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Section: " & name
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  let passed = catchCppExceptions(body())
+  let passed = catchExceptions(body())
   if passed:
     echo "✅ PASS | ", name
   else:
     echo "❌ FAIL | ", name
-  echo ""
-
-# =============================================================================
-# Tensor Assertions
-# =============================================================================
-
-proc assertAllClose*(
-  actual, expected: F.TorchTensor,
-  rtol = 2e-2'f64, abstol = 2e-2'f64,
-  msg = ""
-) =
-  ## Assert that two tensors are close within tolerance.
-  ## Raises AssertionDefect if they differ.
-  ##
-  ## Args:
-  ##   actual: The tensor produced by the test
-  ##   expected: The expected tensor values
-  ##   rtol: Relative tolerance (default: 2e-2)
-  ##   abstol: Absolute tolerance (default: 2e-2)
-  ##   msg: Optional error message
-  let allClose = F.allClose(actual, expected, rtol, abstol)
-  if not allClose:
-    echo "Assertion failed: allClose"
-    if msg.len > 0:
-      echo msg
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Actual:   "; actual.print()
-    echo "Expected: "; expected.print()
-    raise newException(AssertionDefect, "allClose assertion failed")
-
-template assertShape*(tensor: untyped, expectedShape: openArray[int], name: string = "") =
-  ## Assert that a tensor has the expected shape.
-  ## Raises AssertionDefect if shape doesn't match.
-  ##
-  ## Args:
-  ##   tensor: The tensor to check
-  ##   expectedShape: Expected dimensions
-  ##   name: Optional name for error message
-  let actual = @tensor.shape.asNimView()
-  let expected = @expectedShape
-  if actual != expected:
-    let tensorName = if name.len > 0: name else: astToStr(tensor)
-    raise newException(
-      AssertionDefect,
-      "Tensor '" & tensorName & "' shape mismatch. Expected: " & $expected & ", Got: " & $actual
-    )
-
-# =============================================================================
-# Debug Helpers
-# =============================================================================
-
-macro traceExec*(body: untyped): untyped =
-  ## Debug macro to trace statement execution.
-  ## Prints each statement before executing it.
-  result = nnkStmtList.newTree()
-  for statement in body:
-    let stmtRepr = statement.repr
-    let echoNode = nnkCall.newTree(
-      ident"debugEcho",
-      newLit("Will execute '" & stmtRepr & "'")
-    )
-    result.add(echoNode)
-    result.add(statement)
-
-proc printTensor*(t: F.TorchTensor, label: string = "") =
-  ## Print a tensor with an optional label.
-  ## Useful for debugging test failures.
-  if label.len > 0:
-    echo label, ":"
-  t.print()
-  echo ""
-
-proc printTensorShape*(t: F.TorchTensor, label: string = "") =
-  ## Print tensor shape and dtype with an optional label.
-  if label.len > 0:
-    echo label, ":"
-  echo "  Shape: ", t.shape.asNimView(), ", dtype: ", t.scalarType()
   echo ""
 
 # =============================================================================
