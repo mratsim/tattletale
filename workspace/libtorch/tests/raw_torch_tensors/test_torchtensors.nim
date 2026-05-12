@@ -12,8 +12,6 @@ import std/sugar
 import workspace/libtorch/src/raw_libtorch
 import workspace/libtorch_testutils
 
-{.experimental: "views".} # TODO
-
 proc main() =
   # -----------------------------------------------------------------------
   # Operator precedence
