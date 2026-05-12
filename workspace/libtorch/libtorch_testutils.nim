@@ -16,8 +16,9 @@ import
   std/strformat,
   std/strutils,
   std/macros,
-  workspace/libtorch/src/tensors,
-  workspace/libtorch/src/raw_libtorch as F
+  workspace/libtorch/src/tensors
+
+from workspace/libtorch/src/raw_libtorch import TorchError, CppStdException, what
 
 # =============================================================================
 # C++ Exception Handling

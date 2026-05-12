@@ -37,12 +37,24 @@ template catchCppExceptions*(body: bool): bool =
     body
   except TorchError as e:
     echo "❌ C++ torch::Error caught:"
-    echo "---------------------------"
+    echo "----------------------------"
+    echo $e.what()
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    false
+  except CppStdException as e:
+    echo "❌ Raw C++ exception caught:"
+    echo "----------------------------"
     echo $e.what()
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     false
   except CatchableError as e:
     echo "❌ Exception caught:"
+    echo "----------------------------"
+    echo e.msg
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    false
+  except Defect as e:
+    echo "❌ Defect caught:"
     echo "---------------------------"
     echo e.msg
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -135,8 +135,6 @@ template unwrapArg(arg: untyped): untyped =
   else:
     arg
 
-{.experimental: "dynamicbindsym".}
-
 proc autoForward(fnDef: NimNode): NimNode =
   ## Take a function signature for example
   ##
@@ -150,6 +148,10 @@ proc autoForward(fnDef: NimNode): NimNode =
   ##         foo(a.raw, b)
   fnDef.expectKind {nnkProcDef, nnkFuncDef}
 
+  # Note: for some reason, doc comment don't appear in the treeRepr
+  # Hence we don't need to special-case for doc-comment only bodies.
+  # And comment still get attached, which I assume is due to
+  # the global comment store https://github.com/nim-lang/Nim/issues/16616
   if fnDef.body.kind != nnkEmpty:
     return fnDef
 
@@ -170,14 +172,7 @@ proc autoForward(fnDef: NimNode): NimNode =
 
   body = getAst(wrapTorchTensor(body))
   body = getAst(convertLibTorchExceptions(body))
-
   result.body = body
-
-  when false:
-    # View proc signature.
-    debugEcho "Rewrapped:\n",
-          result.toStrLit(),
-          "\n───────────────────────────────────────────────────────────────────────────────"
 
 macro wrapLibtorch(body: untyped): untyped =
   result = newStmtList()
