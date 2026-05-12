@@ -9,7 +9,7 @@ import
   std/macros,
   # Internal
   workspace/libtorch/src/raw_libtorch as F,
-  workspace/libtorch/src/raw/support/[ast_utils, indexing_macros]
+  workspace/libtorch/src/raw/indexing_macros
 
 # Export Nim-friendly types (no C++ types leak past this boundary)
 export F.ScalarKind, F.DeviceKind, F.Device, F.TensorOptions,
@@ -756,6 +756,12 @@ wrapLibtorch:
     convertLibTorchExceptions:
       wrapTorchTensor:
         t.raw[args]
+
+  proc pop(tree: var NimNode): NimNode {.compileTime.} =
+    ## varargs[untyped] consumes all arguments so the actual value should be popped
+    ## https://github.com/nim-lang/Nim/issues/5855
+    result = tree[tree.len-1]
+    tree.del(tree.len-1)
 
   macro `[]=`*(t: var Tensor, args: varargs[untyped]): untyped =
     var tmp = args
