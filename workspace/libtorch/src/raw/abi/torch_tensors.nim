@@ -951,6 +951,7 @@ func argsort*(a: TorchTensor, axis: int = -1, descending: bool = false): TorchTe
 func cat*(tensors: ArrayRef[TorchTensor], axis: int = 0): TorchTensor {.importcpp: "torch::cat(@)".}
 func cat*(tensors: CppVector[TorchTensor], axis: int = 0): TorchTensor {.importcpp: "torch::cat(@)".}
 func stack*(tensors: ArrayRef[TorchTensor], dim: int = 0): TorchTensor {.importcpp: "torch::stack(@)".}
+func stack*(tensors: CppVector[TorchTensor], dim: int = 0): TorchTensor {.importcpp: "torch::stack(@)".}
   ## Stack tensors along a NEW dimension (unlike cat which concatenates along existing dim).
   ## All tensors must have the same shape.
   ## Example: stack([2x3, 2x3, 2x3], dim=0) -> 3x2x3
