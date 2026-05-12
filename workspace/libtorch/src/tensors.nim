@@ -18,27 +18,177 @@ export F.ScalarKind, F.DeviceKind, F.Device, F.TensorOptions,
 # Indexing sugar
 export F.`_`, F.ellipsis, F.`...`
 
-# Generic sandwich for indexing with ArrayRef
+# Generic sandwich with ArrayRef when fancy indexing via `[]` and `[]=` macro
 export F.shape, F.`[]`, F.len
 
 # #######################################################################
 #
-#                            Core Type
+#                            Core Types
 #
 # #######################################################################
 
 type Tensor* = ref object
   raw: TorchTensor
 
-# Construction helpers
+# Construction
+# ----------------------------------------------------------
 
 proc placementNew[T](p: ptr T): ptr T {.importcpp: "(new (#) '*0(@))", nodecl, discardable.}
   ## Default-construct an object at the given memory location via placement-new.
 
-proc wrapTorchTensor(a: sink TorchTensor): Tensor {.inline, nodestroy.} =
+proc wrapTorchTensorImpl(a: sink TorchTensor): Tensor {.inline, nodestroy.} =
   new result
   placementNew(result.raw.addr)
   `=sink`(result.raw, a)
+
+template wrapTorchTensor(body: untyped): untyped =
+  when typeof(body) is TorchTensor:
+    wrapTorchTensorImpl(body)
+  elif typeof(body) is CppVector[TorchTensor]:
+    let raws = block: body
+    var tensors = newSeq[Tensor](len(raws))
+    for i in 0 ..< len(raws):
+      tensors[i] = wrapTorchTensorImpl(raws[i])
+    tensors
+  elif typeof(body) is CppTuple2[TorchTensor, TorchTensor]:
+    let raws = block: body
+    (wrapTorchTensorImpl(get(raws, 0)), wrapTorchTensorImpl(get(raws, 1)))
+  else:
+    body
+
+# Existence
+# ----------------------------------------------------------
+
+func isDefined*(a: Tensor): bool {.inline.} =
+  if a.isNil():
+    return false
+  return F.isDefined(a.raw)
+
+# C++ Exception handling
+# ----------------------------------------------------------
+
+type LibTorchDefect* = object of Defect
+
+template convertLibTorchExceptions(body: untyped): untyped =
+  ## Catches C++ torch::Error and convert it to Nim exceptions
+  ## so they don't leak into downstream Nim packages.
+  ## and also are properly reported in CLI.
+  when not defined(cpp) and defined(nimCheck):
+    {.error: "You are running 'nim check' in C mode. It will misreport that C++ exceptions can't be caught because they aren't ref objects.".}
+
+  try:
+    body
+  except TorchError as e:
+    raise newException(
+      LibTorchDefect,
+      "\n❌ Caught low-level C++ libtorch exception:\n" &
+      "───────────────────────────────────────────────────────────────────────────────\n" &
+      $e.what() &
+      "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+
+# #######################################################################
+#
+#                         Debugging
+#
+# #######################################################################
+
+proc `$`*(t: Tensor): string =
+  "Tensor\n" & $(F.toCppString(t.raw))
+
+proc print*(t: Tensor) {.sideeffect, inline.} =
+  F.print(t.raw)
+
+# #######################################################################
+#
+#                       Wrapping routines
+#
+# #######################################################################
+#
+# We want to ease wrapping as much as possible as there are hundreds
+# of procedures to wrap. And this is a reference file for everything available.
+#
+# We don't want to pollute LLM agents context with redundancy when a call is
+# transparently forwarded with just TorchTensor<->Tensor conversion.
+# Or having {.inline.} everywhere.
+#
+# We want 4 things:
+# 1. Tag all proc and func (func == proc {.noSIdeEffect.}) as {.inline.}
+# 2. Convert torch::Error exceptions into Nim exceptions
+# 3. Auto-wrap TorchTensor return values into Tensor
+# 4. Auto-forward inputs to torch_tensors.nim overload, unwrapping Tensor->TorchTensor
+#    iff there is no function body defined. I.e. we can always write the function body
+
+template unwrapArg(arg: untyped): untyped =
+  # Convert Nim -> libtorch
+  when arg is Tensor:
+    arg.raw
+  elif arg is typedesc[SomeTorchType]:
+    toScalarKind(arg)
+  elif arg is varargs[int] or arg is openArray[int]:
+    asTorchView(arg)
+  elif arg is varargs[Tensor] or arg is openArray[Tensor]:
+    block:
+      var raws {.gensym.} = new(Vec[TorchTensor], arg.len)
+      for i in 0 ..< arg.len:
+        raws[i] = arg[i].raw
+      asTorchView(raws)
+  else:
+    arg
+
+{.experimental: "dynamicbindsym".}
+
+proc autoForward(fnDef: NimNode): NimNode =
+  ## Take a function signature for example
+  ##
+  ##   proc foo(a: Tensor, b: int): Tensor
+  ##
+  ## and transform it into a forwarding call to the underlying libtorch C++ call
+  ##
+  ##   proc foo(a: Tensor, b: int): Tensor =
+  ##     convertLibTorchExceptions:
+  ##       wrapTorchTensor:
+  ##         foo(a.raw, b)
+  fnDef.expectKind {nnkProcDef, nnkFuncDef}
+
+  if fnDef.body.kind != nnkEmpty:
+    return fnDef
+
+  let fnName = fnDef.name
+
+  result = fnDef
+  result.addPragma ident"inline"
+
+  # Call F.myFunction(...) to disambiguate when types can't
+  var body = newCall(nnkDotExpr.newTree(ident"F", fnName))
+
+  fnDef[3].expectKind nnkFormalParams
+  for i in 1 ..< fnDef[3].len:
+    # Skip arg 0 - the return type
+    for j in 0 ..< fnDef[3][i].len - 2:
+      # Handle proc(a, b: int = 1)
+      body.add getAST(unwrapArg(fnDef[3][i][j]))
+
+  body = getAst(wrapTorchTensor(body))
+  body = getAst(convertLibTorchExceptions(body))
+
+  result.body = body
+
+  when false:
+    # View proc signature.
+    debugEcho "Rewrapped:\n",
+          result.toStrLit(),
+          "\n───────────────────────────────────────────────────────────────────────────────"
+
+macro wrapLibtorch(body: untyped): untyped =
+  result = newStmtList()
+
+  for statement in body:
+    if statement.kind notin {nnkProcDef, nnkFuncDef}:
+      result.add statement
+      continue
+
+    result.add autoForward(statement)
 
 # #######################################################################
 #
@@ -54,894 +204,617 @@ func toTensor*[T: seq | array](oa: openarray[T]): Tensor {.inline.} =
   ## Convert a nested Nim array/seq to a multi-dimensional Tensor (owning copy).
   wrapTorchTensor(toTorchTensor(oa))
 
-# #######################################################################
-#
-#                              Factory
-#
-# #######################################################################
-
-# empty
-
-func empty*(size: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.empty(asTorchView(size)))
-
-func empty*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.empty(asTorchView(size), toScalarKind(T)))
-
-func empty*(size: varargs[int], scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.empty(asTorchView(size), scalarKind))
-
-func empty*(size: varargs[int], device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.empty(asTorchView(size), device))
-
-func empty*(size: varargs[int], options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.empty(asTorchView(size), options))
-
-# zeros
-
-func zeros*(size: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.zeros(asTorchView(size)))
-
-func zeros*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.zeros(asTorchView(size), toScalarKind(T)))
-
-func zeros*(size: varargs[int], scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.zeros(asTorchView(size), scalarKind))
-
-func zeros*(size: varargs[int], device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.zeros(asTorchView(size), device))
-
-func zeros*(size: varargs[int], options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.zeros(asTorchView(size), options))
-
-# ones
-
-func ones*(size: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.ones(asTorchView(size)))
-
-func ones*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.ones(asTorchView(size), toScalarKind(T)))
-
-func ones*(size: varargs[int], scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.ones(asTorchView(size), scalarKind))
-
-func ones*(size: varargs[int], device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.ones(asTorchView(size), device))
-
-func ones*(size: varargs[int], options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.ones(asTorchView(size), options))
-
-# full
-
-func full*(size: varargs[int], fillValue: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.full(asTorchView(size), fillValue))
-
-func full*(size: varargs[int], fillValue: Scalar, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.full(asTorchView(size), fillValue, toScalarKind(T)))
-
-func full*(size: varargs[int], fillValue: Scalar, scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.full(asTorchView(size), fillValue, scalarKind))
-
-func full*(size: varargs[int], fillValue: Scalar, device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.full(asTorchView(size), fillValue, device))
-
-func full*(size: varargs[int], fillValue: Scalar, options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.full(asTorchView(size), fillValue, options))
-
-# rand
-
-func rand*(size: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.rand(asTorchView(size)))
-
-func rand*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.rand(asTorchView(size), toScalarKind(T)))
-
-func rand*(size: varargs[int], scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.rand(asTorchView(size), scalarKind))
-
-func rand*(size: varargs[int], device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.rand(asTorchView(size), device))
-
-func rand*(size: varargs[int], options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.rand(asTorchView(size), options))
-
-# randn
-
-func randn*(size: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.randn(asTorchView(size)))
-
-func randn*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.randn(asTorchView(size), toScalarKind(T)))
-
-func randn*(size: varargs[int], scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.randn(asTorchView(size), scalarKind))
-
-func randn*(size: varargs[int], device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.randn(asTorchView(size), device))
-
-func randn*(size: varargs[int], options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.randn(asTorchView(size), options))
-
-# rand_like
-
-func rand_like*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.rand_like(a.raw))
-
-func rand_like*(a: Tensor, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.rand_like(a.raw, toScalarKind(T)))
-
-func rand_like*(a: Tensor, scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.rand_like(a.raw, scalarKind))
-
-func rand_like*(a: Tensor, device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.rand_like(a.raw, device))
-
-func rand_like*(a: Tensor, options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.rand_like(a.raw, options))
-
-# eye
-
-func eye*(n: int): Tensor {.inline.} =
-  wrapTorchTensor(F.eye(n))
-
-func eye*(n: int, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.eye(n, toScalarKind(T)))
-
-func eye*(n: int, scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.eye(n, scalarKind))
-
-func eye*(n: int, device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.eye(n, device))
-
-func eye*(n: int, options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.eye(n, options))
-
-# arange
-
-func arange*(stop: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(stop))
-
-func arange*(stop: Scalar, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(stop, toScalarKind(T)))
-
-func arange*(stop: Scalar, scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(stop, scalarKind))
-
-func arange*(stop: Scalar, device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(stop, device))
-
-func arange*(stop: Scalar, options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(stop, options))
-
-func arange*(start, stop: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop))
-
-func arange*(start, stop: Scalar, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop, toScalarKind(T)))
-
-func arange*(start, stop: Scalar, scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop, scalarKind))
-
-func arange*(start, stop: Scalar, device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop, device))
-
-func arange*(start, stop: Scalar, options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop, options))
-
-func arange*(start, stop, step: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop, step))
-
-func arange*(start, stop, step: Scalar, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop, step, toScalarKind(T)))
-
-func arange*(start, stop, step: Scalar, scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop, step, scalarKind))
-
-func arange*(start, stop, step: Scalar, device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop, step, device))
-
-func arange*(start, stop, step: Scalar, options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.arange(start, stop, step, options))
-
-# linspace
-
-func linspace*(start, stop: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.linspace(start, stop))
-
-func linspace*(start, stop: Scalar, steps: int): Tensor {.inline.} =
-  wrapTorchTensor(F.linspace(start, stop, steps))
-
-func linspace*(start, stop: Scalar, steps: int, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.linspace(start, stop, steps, toScalarKind(T)))
-
-func linspace*(start, stop: Scalar, steps: int, scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.linspace(start, stop, steps, scalarKind))
-
-func linspace*(start, stop: Scalar, steps: int, device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.linspace(start, stop, steps, device))
-
-func linspace*(start, stop: Scalar, steps: int, options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.linspace(start, stop, steps, options))
-
-# logspace
-
-func logspace*(start, stop: Scalar, steps: int): Tensor {.inline.} =
-  wrapTorchTensor(F.logspace(start, stop, steps))
-
-func logspace*(start, stop: Scalar, steps: int, base: int): Tensor {.inline.} =
-  wrapTorchTensor(F.logspace(start, stop, steps, base))
-
-func logspace*(start, stop: Scalar, steps: int, base: int, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.logspace(start, stop, steps, base, toScalarKind(T)))
-
-func logspace*(start, stop: Scalar, steps: int, base: int, scalarKind: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.logspace(start, stop, steps, base, scalarKind))
-
-func logspace*(start, stop: Scalar, steps: int, base: int, device: DeviceKind): Tensor {.inline.} =
-  wrapTorchTensor(F.logspace(start, stop, steps, base, device))
-
-func logspace*(start, stop: Scalar, steps: int, base: int, options: TensorOptions): Tensor {.inline.} =
-  wrapTorchTensor(F.logspace(start, stop, steps, base, options))
-
-# randint
-
-func randint*(start, stopEx: int, size: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.randint(start, stopEx, asTorchView(size)))
-
-func randint*(start, stopEx: int, size: varargs[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.randint(start, stopEx, asTorchView(size), toScalarKind(T)))
-
-# from_blob
-
-func from_blob*(data: pointer, sizes: openArray[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  ## Create a non-owning Tensor view from a data pointer.
-  ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
-  wrapTorchTensor(F.from_blob(data, asTorchView(sizes), toScalarKind(T)))
-
-func from_blob*(data: pointer, sizes: openArray[int], scalarKind: ScalarKind): Tensor {.inline.} =
-  ## Create a non-owning Tensor view from a data pointer.
-  ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
-  wrapTorchTensor(F.from_blob(data, asTorchView(sizes), scalarKind))
-
-func from_blob*(data: pointer, sizes: openArray[int], device: DeviceKind): Tensor {.inline.} =
-  ## Create a non-owning Tensor view from a data pointer.
-  ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
-  wrapTorchTensor(F.from_blob(data, asTorchView(sizes), device))
-
-func from_blob*(data: pointer, sizes: openArray[int], options: TensorOptions): Tensor {.inline.} =
-  ## Create a non-owning Tensor view from a data pointer.
-  ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
-  wrapTorchTensor(F.from_blob(data, asTorchView(sizes), options))
-
-func from_blob*(data: pointer, sizes: openArray[int], strides: openArray[int], T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  ## Create a non-owning Tensor view from a data pointer with explicit strides.
-  ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
-  wrapTorchTensor(F.from_blob(data, asTorchView(sizes), asTorchView(strides), toScalarKind(T)))
-
-func from_blob*(data: pointer, sizes: openArray[int], strides: openArray[int], scalarKind: ScalarKind): Tensor {.inline.} =
-  ## Create a non-owning Tensor view from a data pointer with explicit strides.
-  ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
-  wrapTorchTensor(F.from_blob(data, asTorchView(sizes), asTorchView(strides), scalarKind))
-
-func from_blob*(data: pointer, sizes: openArray[int], strides: openArray[int], device: DeviceKind): Tensor {.inline.} =
-  ## Create a non-owning Tensor view from a data pointer with explicit strides.
-  ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
-  wrapTorchTensor(F.from_blob(data, asTorchView(sizes), asTorchView(strides), device))
-
-func from_blob*(data: pointer, sizes: openArray[int], strides: openArray[int], options: TensorOptions): Tensor {.inline.} =
-  ## Create a non-owning Tensor view from a data pointer with explicit strides.
-  ## ⚠ `data` MUST remain valid for the lifetime of this Tensor.
-  wrapTorchTensor(F.from_blob(data, asTorchView(sizes), asTorchView(strides), options))
-
-# clone
-
-func clone*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.clone(a.raw))
-
-# #######################################################################
-#
-#                         Methods / Shapeshifting
-#
-# #######################################################################
-
-# Shape manipulation
-
-func reshape*(a: Tensor, size: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.reshape(a.raw, asTorchView(size)))
-
-func view*(a: Tensor, size: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.view(a.raw, asTorchView(size)))
-
-func permute*(a: Tensor, dims: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.permute(a.raw, asTorchView(dims)))
-
-func expand*(a: Tensor, size: varargs[int], implicit: bool = false): Tensor {.inline.} =
-  wrapTorchTensor(F.expand(a.raw, asTorchView(size), implicit))
-
-func transpose*(a: Tensor, dim0, dim1: int64): Tensor {.inline.} =
-  wrapTorchTensor(F.transpose(a.raw, dim0, dim1))
-
-func t*(a: Tensor): Tensor {.inline.} =
-  ## Transposes a 2D tensor. Equivalent to ``transpose(0, 1)``.
-  wrapTorchTensor(F.t(a.raw))
-
-func repeat_interleave*(a: Tensor, repeats: int, dim: int = -1): Tensor {.inline.} =
-  wrapTorchTensor(F.repeat_interleave(a.raw, repeats, dim))
-
-func narrow*(a: Tensor, dim: int, start: int, length: int): Tensor {.inline.} =
-  wrapTorchTensor(F.narrow(a.raw, dim, start, length))
-
-func flip*(a: Tensor, dims: varargs[int]): Tensor {.inline.} =
-  wrapTorchTensor(F.flip(a.raw, asTorchView(dims)))
-
-func squeeze*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.squeeze(a.raw))
-
-func squeeze*(a: Tensor, axis: int): Tensor {.inline.} =
-  wrapTorchTensor(F.squeeze(a.raw, axis))
-
-func unsqueeze*(a: Tensor, axis: int): Tensor {.inline.} =
-  wrapTorchTensor(F.unsqueeze(a.raw, axis))
-
-# Backend / dtype
-
-func to*(a: Tensor, device: DeviceKind, non_blocking: bool = false, copy: bool = false): Tensor {.inline.} =
-  wrapTorchTensor(F.to(a.raw, device, non_blocking, copy))
-
-func to*(a: Tensor, dtype: ScalarKind): Tensor {.inline.} =
-  wrapTorchTensor(F.to(a.raw, dtype))
-
-func to*(a: Tensor, device: DeviceKind, dtype: ScalarKind, non_blocking: bool = false, copy: bool = false): Tensor {.inline.} =
-  wrapTorchTensor(F.to(a.raw, device, dtype, non_blocking, copy))
-
-func to*(a: Tensor, device: Device, non_blocking: bool = false, copy: bool = false): Tensor {.inline.} =
-  wrapTorchTensor(F.to(a.raw, device, non_blocking, copy))
-
-func contiguous*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.contiguous(a.raw))
-
-func toSparse*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.toSparse(a.raw))
-
-func toSparse*(a: Tensor, sparseDim: int): Tensor {.inline.} =
-  wrapTorchTensor(F.toSparse(a.raw, sparseDim))
-
-# Complex
-
-func view_as_real*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.view_as_real(a.raw))
-
-func view_as_complex*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.view_as_complex(a.raw))
-
-# Device transfers
-
-func cpu*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.cpu(a.raw))
-
-func cuda*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.cuda(a.raw))
-
-func hip*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.hip(a.raw))
-
-func vulkan*(a: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.vulkan(a.raw))
-
-# #######################################################################
-#
-#                            Metadata
-#
-# #######################################################################
-
-func dim*(a: Tensor): int {.inline.} =
-  F.dim(a.raw)
-
-template sizes*(a: Tensor): openArray[int] =
-  F.sizes(a.raw).asNimView()
-
-template shape*(a: Tensor): openArray[int] =
-  F.shape(a.raw).asNimView()
-
-template strides*(a: Tensor): openArray[int] =
-  F.strides(a.raw).asNimView()
-
-func ndimension*(a: Tensor): int {.inline.} =
-  F.ndimension(a.raw)
-
-func nbytes*(a: Tensor): uint {.inline.} =
-  F.nbytes(a.raw)
-
-func numel*(a: Tensor): int {.inline.} =
-  F.numel(a.raw)
-
-func size*(a: Tensor, axis: int): int {.inline.} =
-  F.size(a.raw, axis)
-
-func itemsize*(a: Tensor): uint {.inline.} =
-  F.itemsize(a.raw)
-
-func element_size*(a: Tensor): int {.inline.} =
-  F.element_size(a.raw)
-
-func scalarType*(a: Tensor): ScalarKind {.inline.} =
-  F.scalarType(a.raw)
-
-func get_device*(a: Tensor): int {.inline.} =
-  F.get_device(a.raw)
-
-func isDefined*(a: Tensor): bool {.inline.} =
-  if a.isNil():
-    return false
-  return F.isDefined(a.raw)
-
-# Backend checks
-
-func is_cuda*(a: Tensor): bool {.inline.} =
-  F.is_cuda(a.raw)
-
-func is_hip*(a: Tensor): bool {.inline.} =
-  F.is_hip(a.raw)
-
-func is_sparse*(a: Tensor): bool {.inline.} =
-  F.is_sparse(a.raw)
-
-func is_mkldnn*(a: Tensor): bool {.inline.} =
-  F.is_mkldnn(a.raw)
-
-func is_vulkan*(a: Tensor): bool {.inline.} =
-  F.is_vulkan(a.raw)
-
-func is_quantized*(a: Tensor): bool {.inline.} =
-  F.is_quantized(a.raw)
-
-func is_meta*(a: Tensor): bool {.inline.} =
-  F.is_meta(a.raw)
-
-func has_storage*(a: Tensor): bool {.inline.} =
-  F.has_storage(a.raw)
-
-# Reference checks
-
-func is_same*(a: Tensor, b: Tensor): bool {.inline.} =
-  F.is_same(a.raw, b.raw)
-
-func is_alias_of*(a: Tensor, b: Tensor): bool {.inline.} =
-  F.is_alias_of(a.raw, b.raw)
-
-# #######################################################################
-#
-#                          Math Unary
-#
-# #######################################################################
-
-func abs*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.abs(a.raw))
-func absolute*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.absolute(a.raw))
-func angle*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.angle(a.raw))
-func sgn*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.sgn(a.raw))
-func conj*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.conj(a.raw))
-func acos*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.acos(a.raw))
-func arccos*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.arccos(a.raw))
-func acosh*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.acosh(a.raw))
-func arccosh*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.arccosh(a.raw))
-func asinh*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.asinh(a.raw))
-func arcsinh*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.arcsinh(a.raw))
-func atanh*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.atanh(a.raw))
-func arctanh*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.arctanh(a.raw))
-func asin*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.asin(a.raw))
-func arcsin*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.arcsin(a.raw))
-func atan*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.atan(a.raw))
-func arctan*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.arctan(a.raw))
-func cos*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.cos(a.raw))
-func sin*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.sin(a.raw))
-func tan*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.tan(a.raw))
-func exp*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.exp(a.raw))
-func exp2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.exp2(a.raw))
-func log*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.log(a.raw))
-func log2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.log2(a.raw))
-func log10*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.log10(a.raw))
-func erf*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.erf(a.raw))
-func erfc*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.erfc(a.raw))
-func reciprocal*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.reciprocal(a.raw))
-func neg*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.neg(a.raw))
-func square*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.square(a.raw))
-func sqrt*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.sqrt(a.raw))
-
-# With scalar params
-
-func clamp*(a: Tensor, minVal, maxVal: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.clamp(a.raw, minVal, maxVal))
-
-func clampMin*(a: Tensor, minVal: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.clampMin(a.raw, minVal))
-
-func clampMax*(a: Tensor, maxVal: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.clampMax(a.raw, maxVal))
-
-# #######################################################################
-#
-#                          Math Binary
-#
-# #######################################################################
-
-func dot*(a: Tensor, other: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.dot(a.raw, other.raw))
-
-func pow*(a: Tensor, exponent: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.pow(a.raw, exponent.raw))
-
-func pow*(a: Tensor, exponent: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.pow(a.raw, exponent))
-
-# #######################################################################
-#
-#                         Linear Algebra
-#
-# #######################################################################
-
-func add*(a: Tensor, other: Tensor, alpha: Scalar = 1): Tensor {.inline.} =
-  wrapTorchTensor(F.add(a.raw, other.raw, alpha))
-
-func add*(a: Tensor, other: Scalar, alpha: Scalar = 1): Tensor {.inline.} =
-  wrapTorchTensor(F.add(a.raw, other, alpha))
-
-func addmv*(a: Tensor, mat: Tensor, vec: Tensor, beta: Scalar = 1, alpha: Scalar = 1): Tensor {.inline.} =
-  wrapTorchTensor(F.addmv(a.raw, mat.raw, vec.raw, beta, alpha))
-
-func addmm*(a: Tensor, mat1: Tensor, mat2: Tensor, beta: Scalar = 1, alpha: Scalar = 1): Tensor {.inline.} =
-  wrapTorchTensor(F.addmm(a.raw, mat1.raw, mat2.raw, beta, alpha))
-
-func mm*(a: Tensor, other: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.mm(a.raw, other.raw))
-
-func matmul*(a: Tensor, other: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.matmul(a.raw, other.raw))
-
-func bmm*(a: Tensor, other: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.bmm(a.raw, other.raw))
-
-func luSolve*(a: Tensor, data: Tensor, pivots: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.luSolve(a.raw, data.raw, pivots.raw))
-
-# #######################################################################
-#
-#                         Comparison
-#
-# #######################################################################
-
-func equal*(a: Tensor, b: Tensor): bool {.inline.} =
-  ## Checks if two tensors have the same shape and all elements are equal.
-  ## For floating-point tensors, prefer allClose() for tolerance-based comparison.
-  F.equal(a.raw, b.raw)
-
-func eq*(a: Tensor, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.eq(a.raw, b.raw))
-
-func `==.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
-  eq(a, b)
-
-func `<.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.lt(a.raw, b.raw))
-
-func `>.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.gt(a.raw, b.raw))
-
-func `<=.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.le(a.raw, b.raw))
-
-func `>=.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.ge(a.raw, b.raw))
-
-func `!=.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.ne(a.raw, b.raw))
-
-func `<.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.lt(a.raw, b))
-
-func `>.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.gt(a.raw, b))
-
-func `<=.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.le(a.raw, b))
-
-func `>=.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.ge(a.raw, b))
-
-func `!=.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
-  wrapTorchTensor(F.ne(a.raw, b))
-
-func `<.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.lt(a, b.raw))
-
-func `>.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.gt(a, b.raw))
-
-func `<=.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.le(a, b.raw))
-
-func `>=.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.ge(a, b.raw))
-
-func `!=.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.ne(a, b.raw))
-
-func allClose*(a: Tensor, b: Tensor, rtol: float64 = 1e-5, abstol: float64 = 1e-8, equalNan: bool = false): bool {.inline.} =
-  F.allClose(a.raw, b.raw, rtol, abstol, equalNan)
-
-# #######################################################################
-#
-#                        Arithmetic Operators
-#
-# #######################################################################
-
-# Binary (Tensor + Tensor)
-
-func `+`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`+`(a.raw, b.raw))
-func `-`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`-`(a.raw, b.raw))
-func `*`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`*`(a.raw, b.raw))
-func `/`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`/`(a.raw, b.raw))
-func `%`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`%`(a.raw, b.raw))
-func `^`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`^`(a.raw, b.raw))
-func `**`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`**`(a.raw, b.raw))
-
-# Scalar mixed
-
-func `+`*(a: SomeNumber, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`+`(a, b.raw))
-func `+`*(a: Tensor, b: SomeNumber): Tensor {.inline.} = wrapTorchTensor(F.`+`(a.raw, b))
-func `-`*(a: Tensor, b: SomeNumber): Tensor {.inline.} = wrapTorchTensor(F.`-`(a.raw, b))
-func `*`*(a: SomeNumber, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`*`(a, b.raw))
-func `*`*(a: Tensor, b: SomeNumber): Tensor {.inline.} = wrapTorchTensor(F.`*`(a.raw, b))
-func `/`*(a: Tensor, b: SomeNumber): Tensor {.inline.} = wrapTorchTensor(F.`/`(a.raw, b))
-func `%`*(a: SomeNumber, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`%`(a, b.raw))
-func `%`*(a: Tensor, b: SomeNumber): Tensor {.inline.} = wrapTorchTensor(F.`%`(a.raw, b))
-func `^`*(a: Tensor, b: Scalar): Tensor {.inline.} = wrapTorchTensor(F.`^`(a.raw, b))
-func `**`*(a: Tensor, b: Scalar): Tensor {.inline.} = wrapTorchTensor(F.`**`(a.raw, b))
-
-# Unary
-
-func `-`*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`-`(a.raw))
-func `not`*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`not`(a.raw))
-
-# Bitwise (returns Tensor)
-
-func `and`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`and`(a.raw, b.raw))
-func `or`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`or`(a.raw, b.raw))
-func `xor`*(a: Tensor, b: Tensor): Tensor {.inline.} = wrapTorchTensor(F.`xor`(a.raw, b.raw))
-
-# In-place (var Tensor)
-
-proc `+=`*(a: var Tensor, b: Tensor) {.inline.} = F.`+=`(a.raw, b.raw)
-proc `+=`*(a: var Tensor, s: Scalar) {.inline.} = F.`+=`(a.raw, s)
-proc `-=`*(a: var Tensor, b: Tensor) {.inline.} = F.`-=`(a.raw, b.raw)
-proc `-=`*(a: var Tensor, s: Scalar) {.inline.} = F.`-=`(a.raw, s)
-proc `*=`*(a: var Tensor, b: Tensor) {.inline.} = F.`*=`(a.raw, b.raw)
-proc `*=`*(a: var Tensor, s: Scalar) {.inline.} = F.`*=`(a.raw, s)
-proc `/=`*(a: var Tensor, b: Tensor) {.inline.} = F.`/=`(a.raw, b.raw)
-proc `/=`*(a: var Tensor, s: Scalar) {.inline.} = F.`/=`(a.raw, s)
-proc bitand_mut*(a: var Tensor, b: Tensor) {.inline.} = F.bitand_mut(a.raw, b.raw)
-proc bitor_mut*(a: var Tensor, b: Tensor) {.inline.} = F.bitor_mut(a.raw, b.raw)
-proc bitxor_mut*(a: var Tensor, b: Tensor) {.inline.} = F.bitxor_mut(a.raw, b.raw)
-proc assign*(a: var Tensor, other: Tensor) {.inline.} = a.raw = other.raw
-
-# #######################################################################
-#
-#                        Reductions (Scalar)
-#
-# #######################################################################
-
-func sum*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.sum(a.raw))
-func sum*(a: Tensor, T: typedesc[SomeTorchType]): Tensor {.inline.} = wrapTorchTensor(F.sum(a.raw, toScalarKind(T)))
-func sum*(a: Tensor, axis: int, keepdim: bool = false): Tensor {.inline.} = wrapTorchTensor(F.sum(a.raw, axis, keepdim))
-func sum*(a: Tensor, axis: int, keepdim: bool = false, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.sum(a.raw, axis, keepdim, toScalarKind(T)))
-
-func mean*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.mean(a.raw))
-func mean*(a: Tensor, T: typedesc[SomeTorchType]): Tensor {.inline.} = wrapTorchTensor(F.mean(a.raw, toScalarKind(T)))
-func mean*(a: Tensor, axis: int, keepdim: bool = false): Tensor {.inline.} = wrapTorchTensor(F.mean(a.raw, axis, keepdim))
-func mean*(a: Tensor, axis: int, keepdim: bool = false, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.mean(a.raw, axis, keepdim, toScalarKind(T)))
-
-func prod*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.prod(a.raw))
-func prod*(a: Tensor, T: typedesc[SomeTorchType]): Tensor {.inline.} = wrapTorchTensor(F.prod(a.raw, toScalarKind(T)))
-func prod*(a: Tensor, axis: int, keepdim: bool = false): Tensor {.inline.} = wrapTorchTensor(F.prod(a.raw, axis, keepdim))
-func prod*(a: Tensor, axis: int, keepdim: bool = false, T: typedesc[SomeTorchType]): Tensor {.inline.} =
-  wrapTorchTensor(F.prod(a.raw, axis, keepdim, toScalarKind(T)))
-
-func min*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.min(a.raw))
-func max*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.max(a.raw))
-
-func all*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.all(a.raw))
-func all*(a: Tensor, axis: int): Tensor {.inline.} = wrapTorchTensor(F.all(a.raw, axis))
-func all*(a: Tensor, axis: int, keepdim: bool): Tensor {.inline.} = wrapTorchTensor(F.all(a.raw, axis, keepdim))
-
-func any*(a: Tensor, axis: int): Tensor {.inline.} = wrapTorchTensor(F.any(a.raw, axis))
-func any*(a: Tensor, axis: int, keepdim: bool): Tensor {.inline.} = wrapTorchTensor(F.any(a.raw, axis, keepdim))
-
-func argmax*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.argmax(a.raw))
-func argmax*(a: Tensor, axis: int, keepdim: bool = false): Tensor {.inline.} = wrapTorchTensor(F.argmax(a.raw, axis, keepdim))
-func argmin*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.argmin(a.raw))
-func argmin*(a: Tensor, axis: int, keepdim: bool = false): Tensor {.inline.} = wrapTorchTensor(F.argmin(a.raw, axis, keepdim))
-
-func variance*(a: Tensor, unbiased: bool = true): Tensor {.inline.} = wrapTorchTensor(F.variance(a.raw, unbiased))
-func variance*(a: Tensor, axis: int, unbiased: bool = true, keepdim: bool = false): Tensor {.inline.} =
-  wrapTorchTensor(F.variance(a.raw, axis, unbiased, keepdim))
-
-func stddev*(a: Tensor, unbiased: bool = true): Tensor {.inline.} = wrapTorchTensor(F.stddev(a.raw, unbiased))
-func stddev*(a: Tensor, axis: int, unbiased: bool = true, keepdim: bool = false): Tensor {.inline.} =
-  wrapTorchTensor(F.stddev(a.raw, axis, unbiased, keepdim))
-
-# #######################################################################
-#
-#                       Reductions (Tuple)
-#
-# #######################################################################
-
-func min*(a: Tensor, axis: int, keepdim: bool = false): tuple[values: Tensor, indices: Tensor] {.inline.} =
-  let raw = F.min(a.raw, axis, keepdim)
-  (values: wrapTorchTensor(get(raw, 0)), indices: wrapTorchTensor(get(raw, 1)))
-
-func max*(a: Tensor, axis: int, keepdim: bool = false): tuple[values: Tensor, indices: Tensor] {.inline.} =
-  let raw = F.max(a.raw, axis, keepdim)
-  (values: wrapTorchTensor(get(raw, 0)), indices: wrapTorchTensor(get(raw, 1)))
-
-func sort*(a: Tensor, axis: int = -1, descending: bool = false): tuple[values: Tensor, indices: Tensor] {.inline.} =
-  let raw = F.sort(a.raw, axis, descending)
-  (values: wrapTorchTensor(get(raw, 0)), indices: wrapTorchTensor(get(raw, 1)))
-
-func argsort*(a: Tensor, axis: int = -1, descending: bool = false): Tensor {.inline.} =
-  wrapTorchTensor(F.argsort(a.raw, axis, descending))
-
-func qr*(a: Tensor, some: bool = true): tuple[q: Tensor, r: Tensor] {.inline.} =
-  let raw = F.qr(a.raw, some)
-  (q: wrapTorchTensor(get(raw, 0)), r: wrapTorchTensor(get(raw, 1)))
-
-# #######################################################################
-#
-#                          Algorithms
-#
-# #######################################################################
-
-func cat*(tensors: varargs[Tensor], axis: int = 0): Tensor {.inline.} =
-  var raws = new(Vec[TorchTensor], tensors.len)
-  for i, t in tensors:
-    raws[i] = t.raw
-  wrapTorchTensor(F.cat(raws.asTorchView(), axis))
-
-func stack*(tensors: varargs[Tensor], dim: int = 0): Tensor {.inline.} =
-  var raws = new(Vec[TorchTensor], tensors.len)
-  for i, t in tensors:
-    raws[i] = t.raw
-  wrapTorchTensor(F.stack(raws.asTorchView(), dim))
-
-func chunk*(a: Tensor, chunks: int, dim: int = 0): seq[Tensor] {.inline.} =
-  var raw = F.chunk(a.raw, chunks, dim)
-  result = newSeq[Tensor](len(raw))
-  for i in 0..<len(raw):
-    result[i] = wrapTorchTensor(move raw[i])
-
-func unbind*(a: Tensor, dim: int = 0): seq[Tensor] {.inline.} =
-  var raw = F.unbind(a.raw, dim)
-  result = newSeq[Tensor](len(raw))
-  for i in 0..<len(raw):
-    result[i] = wrapTorchTensor(move raw[i])
-
-# #######################################################################
-#
-#                        Fancy Indexing
-#
-# #######################################################################
-
-func index_select*(a: Tensor, axis: int, indices: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.index_select(a.raw, axis, indices.raw))
-
-func masked_select*(a: Tensor, mask: Tensor): Tensor {.inline.} =
-  wrapTorchTensor(F.masked_select(a.raw, mask.raw))
-
-# #######################################################################
-#
-#                        In-place Mutation
-#
-# #######################################################################
-
-proc random_mut*(a: var Tensor, start, stopEx: int) {.inline.} =
-  F.random_mut(a.raw, start, stopEx)
-
-proc index_fill_mut*(a: var Tensor, mask: Tensor, value: Scalar) {.inline.} =
-  F.index_fill_mut(a.raw, mask.raw, value)
-
-proc index_fill_mut*(a: var Tensor, mask: Tensor, value: Tensor) {.inline.} =
-  F.index_fill_mut(a.raw, mask.raw, value.raw)
-
-proc masked_fill_mut*(a: var Tensor, mask: Tensor, value: Scalar) {.inline.} =
-  F.masked_fill_mut(a.raw, mask.raw, value)
-
-proc masked_fill_mut*(a: var Tensor, mask: Tensor, value: Tensor) {.inline.} =
-  F.masked_fill_mut(a.raw, mask.raw, value.raw)
-
-# #######################################################################
-#
-#                           Indexing
-#
-# #######################################################################
-
-func item*(t: Tensor, T: typedesc): T {.inline.} =
-  t.raw.item(T)
-
-template `[]`*(t: Tensor{call}, args: varargs[untyped]): untyped =
-  # Due to generic sandwich bug, this needs export of F.shape, F.`[]`, F.len
-  let tmp = t
-  wrapTorchTensor(tmp.raw[args])
-
-template `[]`*(t: Tensor{`let`|`var`|`const`|lvalue}, args: varargs[untyped]): untyped =
-  # Due to generic sandwich bug, this needs export of F.shape, F.`[]`, F.len
-  wrapTorchTensor(t.raw[args])
-
-macro `[]=`*(t: var Tensor, args: varargs[untyped]): untyped =
-  var tmp = args
-  let valAST = tmp.pop()
-  let new_args = getAST(desugarSlices(tmp))
-  result = quote do:
-    let tmpVal = `valAST`
-    when tmpVal is Tensor:
-      slice_typed_dispatch_mut(`t`.raw, `new_args`, tmpVal.raw)
-    else:
-      slice_typed_dispatch_mut(`t`.raw, `new_args`, tmpVal)
-
-# #######################################################################
-#
-#                           Data Access
-#
-# #######################################################################
-
-func data_ptr*(a: Tensor): pointer {.inline.} =
-  F.data_ptr(a.raw)
-
-func data_ptr*(a: Tensor, T: typedesc): ptr UncheckedArray[T] {.inline.} =
-  F.data_ptr(a.raw, T)
-
-# #######################################################################
-#
-#                              FFT
-#
-# #######################################################################
-
-# 1-D
-func fft*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.fft(a.raw))
-func fft*(a: Tensor, n: int, dim: int = -1): Tensor {.inline.} = wrapTorchTensor(F.fft(a.raw, n, dim))
-func ifft*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.ifft(a.raw))
-func rfft*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.rfft(a.raw))
-func irfft*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.irfft(a.raw))
-func hfft*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.hfft(a.raw))
-func ihfft*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.ihfft(a.raw))
-
-# N-D
-func fft2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.fft2(a.raw))
-func fft2*(a: Tensor, s: openArray[int]): Tensor {.inline.} = wrapTorchTensor(F.fft2(a.raw, asTorchView(s)))
-func ifft2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.ifft2(a.raw))
-func ifft2*(a: Tensor, s: openArray[int]): Tensor {.inline.} = wrapTorchTensor(F.ifft2(a.raw, asTorchView(s)))
-func fftn*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.fftn(a.raw))
-func fftn*(a: Tensor, s: openArray[int]): Tensor {.inline.} = wrapTorchTensor(F.fftn(a.raw, asTorchView(s)))
-func ifftn*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.ifftn(a.raw))
-func ifftn*(a: Tensor, s: openArray[int]): Tensor {.inline.} = wrapTorchTensor(F.ifftn(a.raw, asTorchView(s)))
-func rfft2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.rfft2(a.raw))
-func irfft2*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.irfft2(a.raw))
-func rfftn*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.rfftn(a.raw))
-func irfftn*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.irfftn(a.raw))
-
-# Shift
-func fftshift*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.fftshift(a.raw))
-func fftshift*(a: Tensor, dim: varargs[int]): Tensor {.inline.} = wrapTorchTensor(F.fftshift(a.raw, asTorchView(dim)))
-func ifftshift*(a: Tensor): Tensor {.inline.} = wrapTorchTensor(F.ifftshift(a.raw))
-func ifftshift*(a: Tensor, dim: varargs[int]): Tensor {.inline.} = wrapTorchTensor(F.ifftshift(a.raw, asTorchView(dim)))
-
-# #######################################################################
-#
-#                         Debugging
-#
-# #######################################################################
-
-proc `$`*(t: Tensor): string =
-  "Tensor\n" & $(F.toCppString(t.raw))
-
-proc print*(t: Tensor) {.sideeffect, inline.} =
-  F.print(t.raw)
+wrapLibtorch:
+
+  # #######################################################################
+  #
+  #                              Factory
+  #
+  # #######################################################################
+
+  # empty
+  func empty*(size: varargs[int]): Tensor
+  func empty*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor
+  func empty*(size: varargs[int], scalarKind: ScalarKind): Tensor
+  func empty*(size: varargs[int], device: DeviceKind): Tensor
+  func empty*(size: varargs[int], options: TensorOptions): Tensor
+
+  # zeros
+  func zeros*(size: varargs[int]): Tensor
+  func zeros*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor
+  func zeros*(size: varargs[int], scalarKind: ScalarKind): Tensor
+  func zeros*(size: varargs[int], device: DeviceKind): Tensor
+  func zeros*(size: varargs[int], options: TensorOptions): Tensor
+
+  # ones
+  func ones*(size: varargs[int]): Tensor
+  func ones*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor
+  func ones*(size: varargs[int], scalarKind: ScalarKind): Tensor
+  func ones*(size: varargs[int], device: DeviceKind): Tensor
+  func ones*(size: varargs[int], options: TensorOptions): Tensor
+
+  # full
+  func full*(size: varargs[int], fillValue: Scalar): Tensor
+  func full*(size: varargs[int], fillValue: Scalar, T: typedesc[SomeTorchType]): Tensor
+  func full*(size: varargs[int], fillValue: Scalar, scalarKind: ScalarKind): Tensor
+  func full*(size: varargs[int], fillValue: Scalar, device: DeviceKind): Tensor
+  func full*(size: varargs[int], fillValue: Scalar, options: TensorOptions): Tensor
+
+  # rand
+  func rand*(size: varargs[int]): Tensor
+  func rand*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor
+  func rand*(size: varargs[int], scalarKind: ScalarKind): Tensor
+  func rand*(size: varargs[int], device: DeviceKind): Tensor
+  func rand*(size: varargs[int], options: TensorOptions): Tensor
+
+  # randn
+  func randn*(size: varargs[int]): Tensor
+  func randn*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor
+  func randn*(size: varargs[int], scalarKind: ScalarKind): Tensor
+  func randn*(size: varargs[int], device: DeviceKind): Tensor
+  func randn*(size: varargs[int], options: TensorOptions): Tensor
+
+  # rand_like
+  func rand_like*(a: Tensor): Tensor
+  func rand_like*(a: Tensor, T: typedesc[SomeTorchType]): Tensor
+  func rand_like*(a: Tensor, scalarKind: ScalarKind): Tensor
+  func rand_like*(a: Tensor, device: DeviceKind): Tensor
+  func rand_like*(a: Tensor, options: TensorOptions): Tensor
+
+  # eye
+  func eye*(n: int): Tensor
+  func eye*(n: int, T: typedesc[SomeTorchType]): Tensor
+  func eye*(n: int, scalarKind: ScalarKind): Tensor
+  func eye*(n: int, device: DeviceKind): Tensor
+  func eye*(n: int, options: TensorOptions): Tensor
+
+  # arange
+  func arange*(stop: Scalar): Tensor
+  func arange*(stop: Scalar, T: typedesc[SomeTorchType]): Tensor
+  func arange*(stop: Scalar, scalarKind: ScalarKind): Tensor
+  func arange*(stop: Scalar, device: DeviceKind): Tensor
+  func arange*(stop: Scalar, options: TensorOptions): Tensor
+  func arange*(start, stop: Scalar): Tensor
+  func arange*(start, stop: Scalar, T: typedesc[SomeTorchType]): Tensor
+  func arange*(start, stop: Scalar, scalarKind: ScalarKind): Tensor
+  func arange*(start, stop: Scalar, device: DeviceKind): Tensor
+  func arange*(start, stop: Scalar, options: TensorOptions): Tensor
+  func arange*(start, stop, step: Scalar): Tensor
+  func arange*(start, stop, step: Scalar, T: typedesc[SomeTorchType]): Tensor
+  func arange*(start, stop, step: Scalar, scalarKind: ScalarKind): Tensor
+  func arange*(start, stop, step: Scalar, device: DeviceKind): Tensor
+  func arange*(start, stop, step: Scalar, options: TensorOptions): Tensor
+
+  # linspace
+  func linspace*(start, stop: Scalar): Tensor
+  func linspace*(start, stop: Scalar, steps: int): Tensor
+  func linspace*(start, stop: Scalar, steps: int, T: typedesc[SomeTorchType]): Tensor
+  func linspace*(start, stop: Scalar, steps: int, scalarKind: ScalarKind): Tensor
+  func linspace*(start, stop: Scalar, steps: int, device: DeviceKind): Tensor
+  func linspace*(start, stop: Scalar, steps: int, options: TensorOptions): Tensor
+
+  # logspace
+  func logspace*(start, stop: Scalar, steps: int): Tensor
+  func logspace*(start, stop: Scalar, steps: int, base: int): Tensor
+  func logspace*(start, stop: Scalar, steps: int, base: int, T: typedesc[SomeTorchType]): Tensor
+  func logspace*(start, stop: Scalar, steps: int, base: int, scalarKind: ScalarKind): Tensor
+  func logspace*(start, stop: Scalar, steps: int, base: int, device: DeviceKind): Tensor
+  func logspace*(start, stop: Scalar, steps: int, base: int, options: TensorOptions): Tensor
+
+  # randint
+  func randint*(start, stopEx: int, size: varargs[int]): Tensor
+  func randint*(start, stopEx: int, size: varargs[int], T: typedesc[SomeTorchType]): Tensor
+
+  # from_blob
+
+  func from_blob*(data: pointer, sizes: openArray[int], T: typedesc[SomeTorchType]): Tensor
+    ## Create a non-owning tensor view from a data pointer.
+    ## The data MUST remain valid for the lifetime of the view.
+    ## The sizes are copied and managed by the new view and do not need to remain valid.
+
+  func from_blob*(data: pointer, sizes: openArray[int], scalarKind: ScalarKind): Tensor
+    ## Create a non-owning tensor view from a data pointer.
+    ## The data MUST remain valid for the lifetime of the view.
+    ## The sizes are copied and managed by the new view and do not need to remain valid.
+
+  func from_blob*(data: pointer, sizes: openArray[int], device: DeviceKind): Tensor
+    ## Create a non-owning tensor view from a data pointer.
+    ## The data MUST remain valid for the lifetime of the view.
+    ## The sizes are copied and managed by the new view and do not need to remain valid.
+
+  func from_blob*(data: pointer, sizes: openArray[int], options: TensorOptions): Tensor
+    ## Create a non-owning tensor view from a data pointer.
+    ## The data MUST remain valid for the lifetime of the view.
+    ## The sizes are copied and managed by the new view and do not need to remain valid.
+
+  func from_blob*(data: pointer, sizes, strides: openArray[int], T: typedesc[SomeTorchType]): Tensor
+    ## Create a non-owning tensor view from a data pointer.
+    ## The data MUST remain valid for the lifetime of the view.
+    ## The sizes and strides are copied and managed by the new view and do not need to remain valid.
+
+  func from_blob*(data: pointer, sizes, strides: openArray[int], scalarKind: ScalarKind): Tensor
+    ## Create a non-owning tensor view from a data pointer.
+    ## The data MUST remain valid for the lifetime of the view.
+    ## The sizes and strides are copied and managed by the new view and do not need to remain valid.
+
+  func from_blob*(data: pointer, sizes, strides: openArray[int], device: DeviceKind): Tensor
+    ## Create a non-owning tensor view from a data pointer.
+    ## The data MUST remain valid for the lifetime of the view.
+    ## The sizes and strides are copied and managed by the new view and do not need to remain valid.
+
+  func from_blob*(data: pointer, sizes, strides: openArray[int], options: TensorOptions): Tensor
+    ## Create a non-owning tensor view from a data pointer.
+    ## The data MUST remain valid for the lifetime of the view.
+    ## The sizes and strides are copied and managed by the new view and do not need to remain valid.
+
+  # clone
+  func clone*(a: Tensor): Tensor
+
+  # #######################################################################
+  #
+  #                         Methods / Shapeshifting
+  #
+  # #######################################################################
+
+  # Shape manipulation
+  func reshape*(a: Tensor, size: varargs[int]): Tensor
+  func view*(a: Tensor, size: varargs[int]): Tensor
+  func permute*(a: Tensor, dims: varargs[int]): Tensor
+  func expand*(a: Tensor, size: varargs[int], implicit: bool = false): Tensor
+  func transpose*(a: Tensor, dim0, dim1: int64): Tensor
+  func t*(a: Tensor): Tensor
+  func repeat_interleave*(a: Tensor, repeats: int, dim: int = -1): Tensor
+  func narrow*(a: Tensor, dim: int, start: int, length: int): Tensor
+  func flip*(a: Tensor, dims: varargs[int]): Tensor
+  func squeeze*(a: Tensor): Tensor
+  func squeeze*(a: Tensor, axis: int): Tensor
+  func unsqueeze*(a: Tensor, axis: int): Tensor
+
+  # Backend / dtype
+  func to*(a: Tensor, device: Device, non_blocking = false, copy = false): Tensor
+  func to*(a: Tensor, device: DeviceKind, non_blocking = false, copy = false): Tensor
+  func to*(a: Tensor, dtype: ScalarKind): Tensor
+  func to*(a: Tensor, device: DeviceKind, dtype: ScalarKind, non_blocking = false, copy = false): Tensor
+  func contiguous*(a: Tensor): Tensor
+  func toSparse*(a: Tensor): Tensor
+  func toSparse*(a: Tensor, sparseDim: int): Tensor
+
+  # Complex
+  func view_as_real*(a: Tensor): Tensor
+  func view_as_complex*(a: Tensor): Tensor
+
+  # Device transfers
+  func cpu*(a: Tensor): Tensor
+  func cuda*(a: Tensor): Tensor
+  func hip*(a: Tensor): Tensor
+  func vulkan*(a: Tensor): Tensor
+
+  # #######################################################################
+  #
+  #                            Metadata
+  #
+  # #######################################################################
+
+  template sizes*(a: Tensor): openArray[int] =
+    F.sizes(a.raw).asNimView()
+
+  template shape*(a: Tensor): openArray[int] =
+    F.shape(a.raw).asNimView()
+
+  template strides*(a: Tensor): openArray[int] =
+    F.strides(a.raw).asNimView()
+
+  func dim*(a: Tensor): int
+  func ndimension*(a: Tensor): int
+  func nbytes*(a: Tensor): uint
+  func numel*(a: Tensor): int
+  func size*(a: Tensor, axis: int): int
+  func itemsize*(a: Tensor): uint
+  func element_size*(a: Tensor): int
+  func scalarType*(a: Tensor): ScalarKind
+  func get_device*(a: Tensor): int
+
+  # Backend checks
+  func is_cuda*(a: Tensor): bool
+  func is_hip*(a: Tensor): bool
+  func is_sparse*(a: Tensor): bool
+  func is_mkldnn*(a: Tensor): bool
+  func is_vulkan*(a: Tensor): bool
+  func is_quantized*(a: Tensor): bool
+  func is_meta*(a: Tensor): bool
+  func has_storage*(a: Tensor): bool
+
+  # Reference checks
+  func is_same*(a, b: Tensor): bool
+  func is_alias_of*(a, b: Tensor): bool
+
+  # #######################################################################
+  #
+  #                          Math Unary
+  #
+  # #######################################################################
+
+  func abs*(a: Tensor): Tensor
+  func absolute*(a: Tensor): Tensor
+  func angle*(a: Tensor): Tensor
+  func sgn*(a: Tensor): Tensor
+  func conj*(a: Tensor): Tensor
+  func acos*(a: Tensor): Tensor
+  func arccos*(a: Tensor): Tensor
+  func acosh*(a: Tensor): Tensor
+  func arccosh*(a: Tensor): Tensor
+  func asinh*(a: Tensor): Tensor
+  func arcsinh*(a: Tensor): Tensor
+  func atanh*(a: Tensor): Tensor
+  func arctanh*(a: Tensor): Tensor
+  func asin*(a: Tensor): Tensor
+  func arcsin*(a: Tensor): Tensor
+  func atan*(a: Tensor): Tensor
+  func arctan*(a: Tensor): Tensor
+  func cos*(a: Tensor): Tensor
+  func sin*(a: Tensor): Tensor
+  func tan*(a: Tensor): Tensor
+  func exp*(a: Tensor): Tensor
+  func exp2*(a: Tensor): Tensor
+  func log*(a: Tensor): Tensor
+  func log2*(a: Tensor): Tensor
+  func log10*(a: Tensor): Tensor
+  func erf*(a: Tensor): Tensor
+  func erfc*(a: Tensor): Tensor
+  func reciprocal*(a: Tensor): Tensor
+  func neg*(a: Tensor): Tensor
+  func square*(a: Tensor): Tensor
+  func sqrt*(a: Tensor): Tensor
+
+  # With scalar params
+  func clamp*(a: Tensor, minVal, maxVal: Scalar): Tensor
+  func clampMin*(a: Tensor, minVal: Scalar): Tensor
+  func clampMax*(a: Tensor, maxVal: Scalar): Tensor
+
+  # #######################################################################
+  #
+  #                          Math Binary
+  #
+  # #######################################################################
+
+  func dot*(a, other: Tensor): Tensor
+  func pow*(a, exponent: Tensor): Tensor
+  func pow*(a, exponent: Scalar): Tensor
+
+  # #######################################################################
+  #
+  #                         Linear Algebra
+  #
+  # #######################################################################
+
+  func add*(a: Tensor, other: Tensor, alpha: Scalar = 1): Tensor
+  func add*(a: Tensor, other: Scalar, alpha: Scalar = 1): Tensor
+  func addmv*(a, mat, vec: Tensor, beta, alpha: Scalar = 1): Tensor
+  func addmm*(a, mat1, mat2: Tensor, beta, alpha: Scalar = 1): Tensor
+  func mm*(a, other: Tensor): Tensor
+  func matmul*(a, other: Tensor): Tensor
+  func bmm*(a, other: Tensor): Tensor
+  func luSolve*(a, data, pivots: Tensor): Tensor
+
+  # #######################################################################
+  #
+  #                         Comparison
+  #
+  # #######################################################################
+
+  func equal*(a: Tensor, b: Tensor): bool
+  func eq*(a: Tensor, b: Tensor): Tensor
+
+  func `==.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
+    eq(a, b)
+
+  func `<.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.lt(a.raw, b.raw)
+
+  func `>.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.gt(a.raw, b.raw)
+
+  func `<=.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.le(a.raw, b.raw)
+
+  func `>=.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.ge(a.raw, b.raw)
+
+  func `!=.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.ne(a.raw, b.raw)
+
+  func `<.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.lt(a.raw, b)
+
+  func `>.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.gt(a.raw, b)
+
+  func `<=.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.le(a.raw, b)
+
+  func `>=.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.ge(a.raw, b)
+
+  func `!=.`*(a: Tensor, b: Scalar): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.ne(a.raw, b)
+
+  func `<.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.lt(a, b.raw)
+
+  func `>.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.gt(a, b.raw)
+
+  func `<=.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.le(a, b.raw)
+
+  func `>=.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.ge(a, b.raw)
+
+  func `!=.`*(a: Scalar, b: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensorImpl:
+        F.ne(a, b.raw)
+
+  func allClose*(a: Tensor, b: Tensor, rtol = 1e-5, abstol = 1e-8, equalNan = false): bool
+
+  # #######################################################################
+  #
+  #                        Arithmetic Operators
+  #
+  # #######################################################################
+
+  # Binary (Tensor + Tensor)
+
+  func `+`*(a: Tensor, b: Tensor): Tensor
+  func `-`*(a: Tensor, b: Tensor): Tensor
+  func `*`*(a: Tensor, b: Tensor): Tensor
+  func `/`*(a: Tensor, b: Tensor): Tensor
+  func `%`*(a: Tensor, b: Tensor): Tensor
+  func `^`*(a: Tensor, b: Tensor): Tensor
+  func `**`*(a: Tensor, b: Tensor): Tensor
+
+  # Scalar mixed
+
+  func `+`*(a: SomeNumber, b: Tensor): Tensor
+  func `+`*(a: Tensor, b: SomeNumber): Tensor
+  func `-`*(a: Tensor, b: SomeNumber): Tensor
+  func `*`*(a: SomeNumber, b: Tensor): Tensor
+  func `*`*(a: Tensor, b: SomeNumber): Tensor
+  func `/`*(a: Tensor, b: SomeNumber): Tensor
+  func `%`*(a: SomeNumber, b: Tensor): Tensor
+  func `%`*(a: Tensor, b: SomeNumber): Tensor
+  func `^`*(a: Tensor, b: Scalar): Tensor
+  func `**`*(a: Tensor, b: Scalar): Tensor
+
+  # Unary
+
+  func `-`*(a: Tensor): Tensor
+  func `not`*(a: Tensor): Tensor
+
+  # Bitwise (returns Tensor)
+
+  func `and`*(a: Tensor, b: Tensor): Tensor
+  func `or`*(a: Tensor, b: Tensor): Tensor
+  func `xor`*(a: Tensor, b: Tensor): Tensor
+
+  # In-place (var Tensor)
+
+  proc `+=`*(a: var Tensor, b: Tensor)
+  proc `+=`*(a: var Tensor, s: Scalar)
+  proc `-=`*(a: var Tensor, b: Tensor)
+  proc `-=`*(a: var Tensor, s: Scalar)
+  proc `*=`*(a: var Tensor, b: Tensor)
+  proc `*=`*(a: var Tensor, s: Scalar)
+  proc `/=`*(a: var Tensor, b: Tensor)
+  proc `/=`*(a: var Tensor, s: Scalar)
+  proc bitand_mut*(a: var Tensor, b: Tensor)
+  proc bitor_mut*(a: var Tensor, b: Tensor)
+  proc bitxor_mut*(a: var Tensor, b: Tensor)
+  proc assign*(a: var Tensor, other: Tensor)
+
+  # #######################################################################
+  #
+  #                        Reductions (Scalar)
+  #
+  # #######################################################################
+
+  func sum*(a: Tensor): Tensor
+  func sum*(a: Tensor, T: typedesc[SomeTorchType]): Tensor
+  func sum*(a: Tensor, dtype: ScalarKind): Tensor
+  func sum*(a: Tensor, axis: int, keepdim = false): Tensor
+  func sum*(a: Tensor, axis: int, keepdim = false, dtype: ScalarKind): Tensor
+  func sum*(a: Tensor, axes: openArray[int], keepdim = false): Tensor
+  func sum*(a: Tensor, axes: openArray[int], keepdim = false, dtype: ScalarKind): Tensor
+
+
+  func mean*(a: Tensor): Tensor
+  func mean*(a: Tensor, T: typedesc[SomeTorchType]): Tensor
+  func mean*(a: Tensor, axis: int, keepdim = false): Tensor
+  func mean*(a: Tensor, axis: int, keepdim = false, dtype: ScalarKind): Tensor
+  func mean*(a: Tensor, axes: openArray[int], keepdim = false): Tensor
+  func mean*(a: Tensor, axes: openArray[int], keepdim = false, dtype: ScalarKind): Tensor
+
+  func prod*(a: Tensor): Tensor
+  func prod*(a: Tensor, T: typedesc[SomeTorchType]): Tensor
+  func prod*(a: Tensor, axis: int, keepdim = false): Tensor
+  func prod*(a: Tensor, axis: int, keepdim = false, dtype: ScalarKind): Tensor
+
+  func min*(a: Tensor): Tensor
+  func max*(a: Tensor): Tensor
+
+  func all*(a: Tensor): Tensor
+  func all*(a: Tensor, axis: int): Tensor
+  func all*(a: Tensor, axis: int, keepdim: bool): Tensor
+
+  func any*(a: Tensor, axis: int): Tensor
+  func any*(a: Tensor, axis: int, keepdim: bool): Tensor
+
+  func argmax*(a: Tensor): Tensor
+  func argmax*(a: Tensor, axis: int, keepdim = false): Tensor
+  func argmin*(a: Tensor): Tensor
+  func argmin*(a: Tensor, axis: int, keepdim = false): Tensor
+
+  func variance*(a: Tensor, unbiased = true): Tensor
+  func variance*(a: Tensor, axis: int, unbiased = true): Tensor
+
+  func stddev*(a: Tensor, unbiased = true): Tensor
+  func stddev*(a: Tensor, axis: int, unbiased = true): Tensor
+
+  # #######################################################################
+  #
+  #                       Reductions (Tuple)
+  #
+  # #######################################################################
+
+  func min*(a: Tensor, axis: int, keepdim = false): tuple[values, indices: Tensor]
+  func max*(a: Tensor, axis: int, keepdim = false): tuple[values, indices: Tensor]
+  func sort*(a: Tensor, axis = -1, descending = false): tuple[values, indices: Tensor]
+    ## Sorts the elements of the input tensor along a given dimension in ascending order by value.
+    ## If dim is not given, the last dimension of the input is chosen (dim=-1).
+    ## Returns (values, originalIndices) of type (TensorT, TensorInt64)
+    ## where originalIndices is the original index of each values (before sorting)
+  func argsort*(a: Tensor, axis = -1, descending = false): Tensor
+  func qr*(a: Tensor, some: bool): tuple[q, r: Tensor]
+
+  # #######################################################################
+  #
+  #                          Algorithms
+  #
+  # #######################################################################
+
+  func cat*(tensors: varargs[Tensor], axis = 0): Tensor
+  func stack*(tensors: varargs[Tensor], dim = 0): Tensor
+  func chunk*(a: Tensor, chunks: int, dim = 0): seq[Tensor]
+  func unbind*(a: Tensor, dim = 0): seq[Tensor]
+
+  # #######################################################################
+  #
+  #                        Fancy Indexing
+  #
+  # #######################################################################
+
+  func index_select*(a: Tensor, axis: int, indices: Tensor): Tensor
+  func masked_select*(a: Tensor, mask: Tensor): Tensor
+
+  # #######################################################################
+  #
+  #                        In-place Mutation
+  #
+  # #######################################################################
+
+  proc random_mut*(a: var Tensor, start, stopEx: int)
+  proc index_fill_mut*(a: var Tensor, mask: Tensor, value: Scalar)
+  proc index_fill_mut*(a: var Tensor, mask: Tensor, value: Tensor)
+  proc masked_fill_mut*(a: var Tensor, mask: Tensor, value: Scalar)
+  proc masked_fill_mut*(a: var Tensor, mask: Tensor, value: Tensor)
+
+  # #######################################################################
+  #
+  #                           Indexing
+  #
+  # #######################################################################
+
+  func item*(t: Tensor, T: typedesc): T {.inline.} =
+    F.item(t.raw, T)
+
+  template `[]`*(t: Tensor{call}, args: varargs[untyped]): untyped =
+    # Due to generic sandwich bug, this needs export of F.shape, F.`[]`, F.len
+    let tmp = t
+    convertLibTorchExceptions:
+      wrapTorchTensor:
+        tmp.raw[args]
+
+  template `[]`*(t: Tensor{`let`|`var`|`const`|lvalue}, args: varargs[untyped]): untyped =
+    # Due to generic sandwich bug, this needs export of F.shape, F.`[]`, F.len
+    convertLibTorchExceptions:
+      wrapTorchTensor:
+        t.raw[args]
+
+  macro `[]=`*(t: var Tensor, args: varargs[untyped]): untyped =
+    var tmp = args
+    let valAST = tmp.pop()
+    let new_args = getAST(desugarSlices(tmp))
+    result = quote do:
+      convertLibTorchExceptions:
+        let tmpVal = `valAST`
+        when tmpVal is Tensor:
+          slice_typed_dispatch_mut(`t`.raw, `new_args`, tmpVal.raw)
+        else:
+          slice_typed_dispatch_mut(`t`.raw, `new_args`, tmpVal)
+
+  # #######################################################################
+  #
+  #                           Data Access
+  #
+  # #######################################################################
+
+  func data_ptr*(a: Tensor): pointer
+  func data_ptr*(a: Tensor, T: typedesc): ptr UncheckedArray[T] {.inline.} =
+    F.data_ptr(a.raw, T)
+
+  # #######################################################################
+  #
+  #                              FFT
+  #
+  # #######################################################################
+
+  # 1-D
+  func fft*(a: Tensor): Tensor
+  func fft*(a: Tensor, n: int, dim = -1): Tensor
+  func ifft*(a: Tensor): Tensor
+  func rfft*(a: Tensor): Tensor
+  func irfft*(a: Tensor): Tensor
+  func hfft*(a: Tensor): Tensor
+  func ihfft*(a: Tensor): Tensor
+
+  # N-D
+  func fft2*(a: Tensor): Tensor
+  func fft2*(a: Tensor, s: openArray[int]): Tensor
+  func ifft2*(a: Tensor): Tensor
+  func ifft2*(a: Tensor, s: openArray[int]): Tensor
+  func fftn*(a: Tensor): Tensor
+  func fftn*(a: Tensor, s: openArray[int]): Tensor
+  func ifftn*(a: Tensor): Tensor
+  func ifftn*(a: Tensor, s: openArray[int]): Tensor
+  func rfft2*(a: Tensor): Tensor
+  func rfft2*(a: Tensor, s: openArray[int]): Tensor
+  func irfft2*(a: Tensor): Tensor
+  func irfft2*(a: Tensor, s: openArray[int]): Tensor
+  func rfftn*(a: Tensor): Tensor
+  func rfftn*(a: Tensor, s: openArray[int]): Tensor
+  func irfftn*(a: Tensor): Tensor
+  func irfftn*(a: Tensor, s: openArray[int]): Tensor
+
+  # Shift
+  func fftshift*(a: Tensor): Tensor
+  func fftshift*(a: Tensor, dim: varargs[int]): Tensor
+  func ifftshift*(a: Tensor): Tensor
+  func ifftshift*(a: Tensor, dim: varargs[int]): Tensor
