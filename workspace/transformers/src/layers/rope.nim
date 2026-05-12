@@ -41,10 +41,18 @@ func applyRopeImpl*(
   var k_t = k.transpose(1, 2)
 
   # cos/sin can be:
-  # - (seq, head_dim): slice from cache -> unsqueeze(0,1) -> (1, 1, seq, head_dim)
+  # - (seq, head_dim): slice from cache -> unsqueeze(0).unsqueeze(0) -> (1, 1, seq, head_dim)
   # - (batch, seq, head_dim): from HF fixture -> unsqueeze(1) -> (batch, 1, seq, head_dim)
-  let cos = cos.unsqueeze(1)
-  let sin = sin.unsqueeze(1)
+  let cos =
+    if cos.dim == 2:
+      cos.unsqueeze(0).unsqueeze(0)  # (seq, head_dim) -> (1, 1, seq, head_dim)
+    else:
+      cos.unsqueeze(1)               # (batch, seq, head_dim) -> (batch, 1, seq, head_dim)
+  let sin =
+    if sin.dim == 2:
+      sin.unsqueeze(0).unsqueeze(0)
+    else:
+      sin.unsqueeze(1)
 
   # Apply rotation for q and k
   let q_rot_t = q_t * cos + rotateHalf(q_t) * sin
