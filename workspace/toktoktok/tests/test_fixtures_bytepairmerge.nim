@@ -34,6 +34,14 @@ proc parseFixture(node: JsonNode): Fixture =
 
 proc runBytePairMergeTests() =
   suite "Byte Pair Merge Fixtures":
+    # TODO: test failing for
+    # - 'a'
+    # - Chinese period + newline '。\n'
+    #
+    # Untested, interaction with 。 (U+3002)
+    # coming from Rust vs Pcre2 mismatch on "\p{Han}" (excludes punctuation in Rust)
+    # Pcre2 \p{Script=Han} seems to work.
+    # See Kimi-K2.5 workaround commit bc8d9df32db81a9d08c4458bce5df2b1098a8f68
     let content = readFile(FixtureFilePath)
     let fixtureNodes = parseJson(content).getElems()
 
@@ -43,8 +51,9 @@ proc runBytePairMergeTests() =
       test fixture.description:
         let ranks = fixture.ranks
         let piece = fixture.inputBytes
-        let result = bytePairEncode(piece, ranks)
-        check result == fixture.expectedTokens
+        var r: seq[int]
+        r.bytePairEncode(piece, ranks)
+        check r == fixture.expectedTokens
 
 when isMainModule:
   runBytePairMergeTests()
