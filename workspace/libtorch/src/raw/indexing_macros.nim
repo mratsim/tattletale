@@ -7,7 +7,6 @@
 
 import
   std/macros,
-  workspace/libtorch/src/raw/support/ast_utils,
   workspace/libtorch/src/raw/abi/[
     torch_tensors,
     std_cpp
@@ -537,6 +536,43 @@ macro desugarSlices*(args: untyped): void =
 
 # #######################################################################
 #
+#                          Macro utilities
+#
+# #######################################################################
+
+proc hasType(x: NimNode, t: static[string]): bool {.compileTime.} =
+  sameType(x, bindSym(t))
+
+proc isAllInt(slice_args: NimNode): bool {.compileTime.} =
+  for child in slice_args:
+    if not child.hasType("int"):
+      return false
+  return true
+
+template letsGoDeeper =
+  var rTree = node.kind.newTree()
+  for child in node:
+    rTree.add inspect(child)
+  return rTree
+
+proc replaceSymsByIdents(ast: NimNode): NimNode {.compileTime.} =
+  proc inspect(node: NimNode): NimNode =
+    case node.kind:
+    of {nnkIdent, nnkSym}:
+      return ident($node)
+    of nnkEmpty:
+      return node
+    of nnkLiterals:
+      return node
+    of nnkHiddenStdConv: # see `test_fancy_indexing,nim` why needed
+      expectKind(node[1], nnkSym)
+      return ident($node[1])
+    else:
+      letsGoDeeper()
+  result = inspect(ast)
+
+# #######################################################################
+#
 #                          Slicing dispatch
 #
 # #######################################################################
@@ -573,7 +609,7 @@ proc getFancySelector(ast: NimNode, axis: var int, selector: var NimNode): Fancy
     if (cur.kind == nnkCall and cur[0].eqIdent"SliceSpan"):
       # Found a span
       discard
-    elif (cur.kind == nnkCall and cur[0].eqIdent"torchSlice") or cur.isInt():
+    elif (cur.kind == nnkCall and cur[0].eqIdent"torchSlice") or cur.hasType"int":
       doAssert result == FancyNone,
         "Internal FancyIndexing Error: Expected FancyNone, but got " & $result & " for AST: " & cur.repr()
       foundNonSpanOrEllipsis = true
@@ -594,7 +630,7 @@ proc getFancySelector(ast: NimNode, axis: var int, selector: var NimNode): Fancy
       if cur[0].kind == nnkIntLit:
         result = FancyIndex
         selector = cur
-      elif cur[0].isBool():
+      elif cur[0].hasType"bool":
         let full = i == 0 and ast.len == 1
         result = if full: FancyMaskFull else: FancyMaskAxis
         selector = cur

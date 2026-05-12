@@ -11,7 +11,7 @@ import
   ./abi/std_cpp,
   ./abi/c10,
   ./abi/torch_tensors,
-  ./support/[ast_utils, indexing_macros]
+  ./indexing_macros
 
 static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
 
@@ -351,6 +351,12 @@ macro `[]`*(t: TorchTensor{`let`|`var`|`const`|lvalue}, args: varargs[untyped]):
 
   result = quote do:
     slice_typed_dispatch(`t`, `new_args`)
+
+proc pop(tree: var NimNode): NimNode {.compileTime.} =
+  ## varargs[untyped] consumes all arguments so the actual value should be popped
+  ## https://github.com/nim-lang/Nim/issues/5855
+  result = tree[tree.len-1]
+  tree.del(tree.len-1)
 
 macro `[]=`*(t: var TorchTensor, args: varargs[untyped]): untyped =
   ## Modifies a tensor inplace at the corresponding location or slice
