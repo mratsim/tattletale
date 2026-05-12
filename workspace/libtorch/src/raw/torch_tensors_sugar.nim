@@ -230,7 +230,7 @@ macro `[]`*(t: TorchTensor{call}, args: varargs[untyped]): untyped =
     let tmp = `t` # Ensure an expression is only evaluated once
     slice_typed_dispatch(tmp, `new_args`)
 
-macro `[]`*(t: TorchTensor{`let`|`var`|`const`|lvalue}, args: varargs[untyped]): untyped =
+macro `[]`*(t: TorchTensor{`let`|`var`|`const`|lvalue|param}, args: varargs[untyped]): untyped =
   ## Slice a Tensor variable
   ## Input:
   ##   - a Tensor

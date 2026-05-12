@@ -282,7 +282,7 @@ func l1_loss*(input, target: TorchTensor): TorchTensor {.importcpp: "torch::l1_l
 # Note: If no backend passes constraints, checks re-run with debug=True
 #       and warnings print the rejection reasons.
 
-func scaled_dot_product_attention(
+func scaled_dot_product_attention*(
   query, key, value: TorchTensor,
   attn_mask: Optional[TorchTensor] = cpp_nullopt,
   dropout_p: cdouble = 0.0,
@@ -290,7 +290,7 @@ func scaled_dot_product_attention(
   scale: Optional[float64] = cpp_nullopt,
   enable_gqa: bool = false
 ): TorchTensor {.importcpp: "torch::scaled_dot_product_attention(@)".}
-  ## SDPA - the core attention operation in Transformers.
+  ## SDPA — Transformers' attention
   ##
   ## C++ signature:
   ##   inline at::Tensor at::scaled_dot_product_attention(
@@ -330,57 +330,3 @@ func scaled_dot_product_attention(
   ## Backends: See module-level documentation for backend selection details.
 
 {.pop.}
-
-# #######################################################################
-#
-#                       Syntactic Sugar
-#
-# #######################################################################
-
-func scaled_dot_product_attention*(
-    query, key, value: TorchTensor,
-    attn_mask = none(TorchTensor),
-    dropout_p = 0.0,
-    is_causal = false,
-    scale = none(float64),
-    enable_gqa = false): TorchTensor {.inline.} =
-
-  # TODO can we do better?
-  if attn_mask.isSome():
-    if scale.isSome():
-      scaled_dot_product_attention(
-        query, key, value,
-        attn_mask.unsafeGet(),
-        dropout_p,
-        is_causal,
-        scale.unsafeGet(),
-        enable_gqa
-      )
-    else:
-      scaled_dot_product_attention(
-        query, key, value,
-        attn_mask.unsafeGet(),
-        dropout_p,
-        is_causal,
-        cpp_nullopt(),
-        enable_gqa
-      )
-  else:
-    if scale.isSome():
-      scaled_dot_product_attention(
-        query, key, value,
-        cpp_nullopt(),
-        dropout_p,
-        is_causal,
-        scale.unsafeGet(),
-        enable_gqa
-      )
-    else:
-      scaled_dot_product_attention(
-        query, key, value,
-        cpp_nullopt(),
-        dropout_p,
-        is_causal,
-        cpp_nullopt(),
-        enable_gqa
-      )

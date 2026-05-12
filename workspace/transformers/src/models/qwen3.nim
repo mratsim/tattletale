@@ -15,7 +15,6 @@ import
   pkg/packedjson,
   workspace/libtorch,
   workspace/safetensors,
-  workspace/containers,
   workspace/positron,
 
   # Transformers local imports
@@ -102,14 +101,14 @@ proc numKvGroups(cfg: Qwen3Config): int =
 type
   Qwen3Model* = ref object
     embedTokens: Embedding
-    layers: Vec[TransformerBlock]
+    layers: seq[TransformerBlock]
     norm: RmsNorm
     lmHead: LMHead
     config*: Qwen3Config
 
-proc forward*(self: Qwen3Model, input: TorchTensor, positions: TorchTensor, cache: var KVCache): TorchTensor =
+proc forward*(self: Qwen3Model, input: Tensor, positions: Tensor, cache: var KVCache): Tensor =
   var x = self.embedTokens.forward(input)
-  var residual: Option[TorchTensor]
+  var residual: Option[Tensor]
   for layer in mitems(self.layers):
     layer.attn.resetCache()
     let layerOut = layer.forward(x, residual)
@@ -133,7 +132,7 @@ proc loadQwen3Model(modelPath: string, device = kCPU): Model =
   let embedWeight = weightsSt.getTensorOwned("model.embed_tokens.weight")
   let embedTokens = Embedding.init(embedWeight)
 
-  var layers = Vec[TransformerBlock].new(config.num_hidden_layers)
+  var layers = newSeq[TransformerBlock](config.num_hidden_layers)
 
   for i in 0..<config.num_hidden_layers:
     let layerPrefix = "model.layers." & $i & "."

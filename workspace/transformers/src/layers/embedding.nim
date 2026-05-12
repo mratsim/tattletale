@@ -18,11 +18,11 @@ type
     ##
     ## Return:
     ##   - Embeddings of shape (batch, seq, hidden_size) or (batch, hidden_size)
-    weight*: TorchTensor
+    weight*: Tensor
     vocab_size*: int
     hidden_size*: int
 
-func init*(_: type Embedding, weight: TorchTensor): Embedding =
+func init*(_: type Embedding, weight: Tensor): Embedding =
   ## Creates an embedding layer from a weight tensor.
   ##
   ## Args:
@@ -32,14 +32,14 @@ func init*(_: type Embedding, weight: TorchTensor): Embedding =
   ##   Embedding layer with the given weight
   if weight.numel() == 0:
     raise newException(ValueError, "[ttt] Internal Error: Embedding weight tensor is empty")
-  
+
   Embedding(
     weight: weight,
     vocab_size: weight.size(0),
     hidden_size: weight.size(1)
   )
 
-proc forward*(self: Embedding, input_ids: TorchTensor): TorchTensor =
+proc forward*(self: Embedding, input_ids: Tensor): Tensor =
   ## Forward pass for inference.
   ##
   ## Args:
@@ -52,13 +52,13 @@ proc forward*(self: Embedding, input_ids: TorchTensor): TorchTensor =
   ##   embeddings = weight.index_select(0, input_ids.flatten()).reshape(input_ids.shape + (hidden_size,))
   if self.weight.numel() == 0:
     raise newException(ValueError, "[ttt] Internal Error: Embedding weight tensor is empty")
-  
+
   # Embedding lookup: select rows from weight based on input_ids
   # For multi-dimensional input_ids, flatten, select, then reshape
-  let inputShape = input_ids.shape
+  template inputShape: untyped = input_ids.shape
   let flatInput = input_ids.view(-1)
   let selected = self.weight.index_select(0, flatInput)
-  
+
   # Reshape to (batch, seq, hidden_size) or (batch, hidden_size)
   if inputShape.len == 1:
     # input_ids is (batch,), output should be (batch, hidden_size)
