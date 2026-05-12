@@ -28,7 +28,7 @@ type
     down_proj*: Linear
     activation*: ActivationKind
 
-func init*(_: type GatedMLP, gate_weight, up_weight, down_weight: TorchTensor, activation: ActivationKind): GatedMLP =
+func init*(_: type GatedMLP, gate_weight, up_weight, down_weight: Tensor, activation: ActivationKind): GatedMLP =
   ## Creates a GatedMLP layer from separate gate and up weights.
   ##
   ## Args:
@@ -40,7 +40,7 @@ func init*(_: type GatedMLP, gate_weight, up_weight, down_weight: TorchTensor, a
   let down_proj = Linear.init(down_weight)
   GatedMLP(gate_up_proj: gate_up_proj, down_proj: down_proj, activation: activation)
 
-proc forward*(self: GatedMLP, x: TorchTensor): TorchTensor =
+proc forward*(self: GatedMLP, x: Tensor): Tensor =
   ## Forward pass for inference.
   ##
   ## Args:

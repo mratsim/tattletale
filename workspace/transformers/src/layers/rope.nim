@@ -15,10 +15,10 @@ type
     max_seq_len*: int
     rope_theta: float64
     cachePos: int
-    cos_cache: TorchTensor
-    sin_cache: TorchTensor
+    cos_cache: Tensor
+    sin_cache: Tensor
 
-func rotateHalf(x: TorchTensor): TorchTensor =
+func rotateHalf(x: Tensor): Tensor =
   # Input/Output: (batch, head, seq, head_dim)
   let head_dim = x.size(3)
   let half_dim = head_dim div 2
@@ -27,11 +27,10 @@ func rotateHalf(x: TorchTensor): TorchTensor =
   F.cat([x2.neg(), x1], -1)
 
 func applyRopeImpl*(
-  q: TorchTensor,
-  k: TorchTensor,
-  cos: TorchTensor,
-  sin: TorchTensor
-): (TorchTensor, TorchTensor) =
+      q: Tensor,
+      k: Tensor,
+      cos: Tensor,
+      sin: Tensor): (Tensor, Tensor) =
   # Freestanding RoPE implementation with pre-computed cos/sin tensor
   # Input q,k: (batch, seq, head, head_dim)
   # Input cos, sin: (batch, seq, head_dim) or (seq, head_dim)
@@ -54,7 +53,11 @@ func applyRopeImpl*(
   # Transpose back to (batch, seq, head, head_dim)
   result = (q_rot_t.transpose(1, 2), k_rot_t.transpose(1, 2))
 
-func init*(_: type RotaryPositionEmbedding, head_dim, max_seq_len: int, rope_theta: float64, dtype: ScalarKind, device: DeviceKind): RotaryPositionEmbedding =
+func init*(_: type RotaryPositionEmbedding,
+      head_dim, max_seq_len: int,
+      rope_theta: float64,
+      dtype: ScalarKind,
+      device: DeviceKind): RotaryPositionEmbedding =
   # Output: cos_cache (max_seq_len, head_dim), sin_cache (max_seq_len, head_dim)
   let head_dim_float = head_dim.float64
   let inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / head_dim_float
@@ -71,10 +74,9 @@ func init*(_: type RotaryPositionEmbedding, head_dim, max_seq_len: int, rope_the
   result.sin_cache = emb[0..<max_seq_len, head_dim..<2*head_dim].to(dtype).to(device)
 
 proc applyRope*(
-    self: var RotaryPositionEmbedding,
-    q: TorchTensor,
-    k: TorchTensor,
-  ): (TorchTensor, TorchTensor) =
+      self: var RotaryPositionEmbedding,
+      q: Tensor,
+      k: Tensor): (Tensor, Tensor) =
   # Method using cache - calls freestanding apply_rope_impl
   # Input q.k: (batch, seq, head, head_dim)
   # Output: (batch, seq, head, head_dim)
@@ -94,7 +96,7 @@ proc applyRope*(
 func resetCache*(self: var RotaryPositionEmbedding) =
   self.cachePos = 0
 
-func setCache(self: var RotaryPositionEmbedding, cos, sin: TorchTensor) {.used.} =
+func setCache(self: var RotaryPositionEmbedding, cos, sin: Tensor) {.used.} =
   # Private for testing only
   # Handle both (seq, head_dim) and (batch, seq, head_dim) shapes
   # Squeeze batch dimension if present to get (seq, head_dim)

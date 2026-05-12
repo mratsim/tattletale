@@ -21,12 +21,12 @@ type
     ##
     ## Return:
     ##   - Weight * x + bias
-    weight*: TorchTensor
-    bias*: Option[TorchTensor]
+    weight*: Tensor
+    bias*: Option[Tensor]
     in_features*: int
     out_features*: int
 
-func init*(_: type Linear, weight: TorchTensor, bias = none(TorchTensor)): Linear =
+func init*(_: type Linear, weight: Tensor, bias = none(Tensor)): Linear =
   ## Creates a linear layer from existing weights.
   ##
   ## Args:
@@ -42,7 +42,7 @@ func init*(_: type Linear, weight: TorchTensor, bias = none(TorchTensor)): Linea
     out_features: weight.size(0)
   )
 
-proc forward*(self: Linear, x: TorchTensor): TorchTensor =
+proc forward*(self: Linear, x: Tensor): Tensor =
   ## Forward pass for inference.
   ##
   ## Args:
@@ -52,6 +52,6 @@ proc forward*(self: Linear, x: TorchTensor): TorchTensor =
   ##   Output tensor of shape (..., out_features)
 
   if self.bias.isSome:
-    F.linear(x, self.weight, self.bias.get())
+    F.linear(x, self.weight, self.bias.unsafeGet())
   else:
     F.linear(x, self.weight)

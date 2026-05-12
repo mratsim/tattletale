@@ -23,11 +23,11 @@ type
     ##
     ## Return:
     ##   - Logits of shape (batch, seq, vocab_size) in same dtype as input (BF16)
-    weight*: Option[TorchTensor]
-    bias*: Option[TorchTensor]
+    weight*: Option[Tensor]
+    bias*: Option[Tensor]
     tied_embedding*: Option[Embedding]
 
-func init*(_: type LMHead, weight: TorchTensor, bias = none(TorchTensor)): LMHead =
+func init*(_: type LMHead, weight: Tensor, bias = none(Tensor)): LMHead =
   ## Creates an LMHead with explicit weights.
   ##
   ## Args:
@@ -42,7 +42,7 @@ func init*(_: type LMHead, weight: TorchTensor, bias = none(TorchTensor)): LMHea
     tied_embedding: none(Embedding)
   )
 
-func initTied*(_: type LMHead, embedding: Embedding, bias = none(TorchTensor)): LMHead =
+func initTied*(_: type LMHead, embedding: Embedding, bias = none(Tensor)): LMHead =
   ## Creates an LMHead with tied embedding (shares weights with embedding layer).
   ##
   ## Args:
@@ -52,12 +52,12 @@ func initTied*(_: type LMHead, embedding: Embedding, bias = none(TorchTensor)): 
   ## Returns:
   ##   LMHead with tied embedding weights
   LMHead(
-    weight: none(TorchTensor),
+    weight: none(Tensor),
     bias: bias,
     tied_embedding: some(embedding)
   )
 
-proc forward*(self: LMHead, hidden_states: TorchTensor): TorchTensor =
+proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
   ## Forward pass for inference.
   ##
   ## Args:
@@ -79,7 +79,7 @@ proc forward*(self: LMHead, hidden_states: TorchTensor): TorchTensor =
       self.tied_embedding.get().weight
     else:
       raise newException(ValueError, "[ttt] Internal Error: LMHead has no weights")
-  
+
   if self.bias.isSome:
     F.linear(hidden_states, weight, self.bias.get())
   else:

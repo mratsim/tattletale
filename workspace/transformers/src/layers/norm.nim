@@ -7,24 +7,22 @@
 
 import
   std/math,
-  workspace/libtorch as F,
-  workspace/libtorch/src/abi/neural_nets
+  workspace/libtorch as F
 
 type
   RmsNorm* = object
-    weight*: TorchTensor
+    weight*: Tensor
     eps*: float
     hidden_size*: int
 
-func init*(_: type RmsNorm, weight: TorchTensor, eps: float = 1e-6): RmsNorm =
+func init*(_: type RmsNorm, weight: Tensor, eps: float = 1e-6): RmsNorm =
   let hidden_size = weight.size(0)
   RmsNorm(weight: weight, eps: eps, hidden_size: hidden_size)
 
-proc forward*(self: RmsNorm, hidden_state: TorchTensor): TorchTensor =
-  let normalized_shape = asTorchView(self.hidden_size)
-  rms_norm(hidden_state, normalized_shape, self.weight, self.eps)
+proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
+  rms_norm(hidden_state, normalized_shape = self.hidden_size, self.weight, self.eps)
 
-proc forward_with_residual*(self: RmsNorm, hidden_state, residual: TorchTensor): (TorchTensor, TorchTensor) =
+proc forward_with_residual*(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
   # Usually at the end of a transformer block
   # you do
   #   x = self.post_layernorm.forward(hidden_state)
@@ -33,6 +31,5 @@ proc forward_with_residual*(self: RmsNorm, hidden_state, residual: TorchTensor):
   # Instead you can defer the addition to the beginning of the next layer
   # where it's easier to fuse with rms_norm (once an optimized kernel is there)
   let new_residual = hidden_state + residual # TODO: fused add + RMSNorm
-  let normalized_shape = asTorchView(self.hidden_size)
-  let normalized = rms_norm(new_residual, normalized_shape, self.weight, self.eps)
+  let normalized = rms_norm(new_residual, normalized_shape = self.hidden_size, self.weight, self.eps)
   (normalized, new_residual)

@@ -87,10 +87,10 @@
 ## ## Usage
 ##
 ## For single-layer inference:
-##   let (out, _) = block.forward(x, none(TorchTensor), positions, use_cache)
+##   let (out, _) = block.forward(x, none(Tensor), positions, use_cache)
 ##
 ## For stacked layers in a model:
-##   var residual: TorchTensor
+##   var residual: Tensor
 ##   for layer in layers:
 ##     (x, residual) = layer.forward(x, residual, positions, use_cache)
 ##
@@ -119,7 +119,7 @@ func init*(_: type TransformerBlock, attn_norm: RmsNorm, attn: RopeGQAttention, 
     mlp: mlp
   )
 
-proc forward*(self: var TransformerBlock, x: TorchTensor, residual: Option[TorchTensor]): (TorchTensor, TorchTensor) =
+proc forward*(self: var TransformerBlock, x: Tensor, residual: Option[Tensor]): (Tensor, Tensor) =
   ## Forward pass for a transformer block with long residual stream.
   ##
   ## This pattern defers residual additions to the norm layers, enabling:
