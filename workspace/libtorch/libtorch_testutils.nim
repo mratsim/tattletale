@@ -13,7 +13,6 @@
 ## - Tensor assertion helpers
 
 import
-  std/strformat,
   std/strutils,
   std/macros,
   workspace/libtorch/src/tensors
@@ -24,8 +23,8 @@ from workspace/libtorch/src/raw_libtorch import TorchError, CppStdException, wha
 # C++ Exception Handling
 # =============================================================================
 
-template catchCppExceptions*(body: bool): bool =
-  ## Catch C++ exceptions from Tensor operations.
+template catchExceptions*(body: bool): bool =
+  ## Catch exceptions from Tensor operations.
   ## Returns true if body executed successfully, false if an exception was caught.
   ##
   ## Use this for tests that involve C++ FFI types like Tensor.
@@ -75,15 +74,11 @@ proc runTest*(name: string, body: proc(): bool) =
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Section: " & name
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  let passed = catchCppExceptions(body())
+  let passed = catchExceptions(body())
   if passed:
     echo "✅ PASS | ", name
   else:
     echo "❌ FAIL | ", name
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "❌ FAILED: ", name
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     quit(1)
   echo ""
 
@@ -92,10 +87,10 @@ proc runTest*(name: string, body: proc(): bool) =
 # Tensor Assertions
 # =============================================================================
 
-proc assertAllClose*(
-  actual, expected: Tensor,
-  rtol = 2e-2'f64, abstol = 2e-2'f64,
-  msg = ""): bool =
+template assertAllClose*(
+          tensor, expectedTensor: Tensor,
+          rtol = 2e-2'f64, abstol = 2e-2'f64,
+          msg = "") =
   ## Assert that two tensors are close within tolerance.
   ## Returns false if they differ (for use in runTest).
   ##
@@ -105,18 +100,23 @@ proc assertAllClose*(
   ##   rtol: Relative tolerance (default: 2e-2)
   ##   abstol: Absolute tolerance (default: 2e-2)
   ##   msg: Optional error message
+
+  # Ensure computation is done only once and side-effect are done only once:
+  let actual = tensor
+  let expected = expectedTensor
+
   let allClose = actual.allClose(expected, rtol, abstol)
   if not allClose:
     echo "Assertion failed: allClose"
+    echo "  '", astToStr(tensor), "'"
     if msg.len > 0:
       echo msg
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Actual:   "; actual.print()
     echo "Expected: "; expected.print()
-    return false
-  true
+    raise newException(AssertionDefect, "[ttt] allClose assertion failed")
 
-template assertShape*(tensor: untyped, expectedShape: openArray[int], name: string = ""): bool =
+template assertShape*(tensor: untyped, expectedShape: openArray[int], msg = ""): bool =
   ## Assert that a tensor has the expected shape.
   ## Returns false if shape doesn't match (for use in runTest).
   ##
@@ -124,14 +124,20 @@ template assertShape*(tensor: untyped, expectedShape: openArray[int], name: stri
   ##   tensor: The tensor to check
   ##   expectedShape: Expected dimensions
   ##   name: Optional name for error message
-  let actual = @tensor.shape.asNimView()
+
+  # Ensure computation is done only once and side-effect are done only once:
+  let actual = @tensor.shape
   let expected = @expectedShape
+
   if actual != expected:
-    let tensorName = if name.len > 0: name else: astToStr(tensor)
-    echo "Tensor '" & tensorName & "' shape mismatch. Expected: " & $expected & ", Got: " & $actual
-    false
-  else:
-    true
+    echo "Assertion failed: allClose"
+    echo "  '", astToStr(tensor), "'"
+    if msg.len > 0:
+      echo msg
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Actual:   "; actual.print()
+    echo "Expected: "; expected.print()
+    raise newException(AssertionDefect, "[ttt] Shape assertion failed")
 
 # =============================================================================
 # Debug Helpers

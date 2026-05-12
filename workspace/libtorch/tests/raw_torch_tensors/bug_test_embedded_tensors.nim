@@ -344,43 +344,43 @@ proc runEmbeddedTensorTests*() =
   suite "Embedded Tensors":
     suite "TensorWrapper":
       test "init":
-        check catchCppExceptions(testWrapperInit())
+        check catchExceptions(testWrapperInit())
       test "copy":
-        check catchCppExceptions(testWrapperCopy())
+        check catchExceptions(testWrapperCopy())
       test "move":
-        check catchCppExceptions(testWrapperMove())
+        check catchExceptions(testWrapperMove())
       test "return from proc":
-        check catchCppExceptions(testWrapperReturnFromProc())
+        check catchExceptions(testWrapperReturnFromProc())
       test "assignment":
-        check catchCppExceptions(testWrapperAssignment())
+        check catchExceptions(testWrapperAssignment())
 
     suite "TensorPair":
       test "init":
-        check catchCppExceptions(testPairInit())
+        check catchExceptions(testPairInit())
       test "copy":
-        check catchCppExceptions(testPairCopy())
+        check catchExceptions(testPairCopy())
       test "move":
-        check catchCppExceptions(testPairMove())
+        check catchExceptions(testPairMove())
       test "return from proc":
-        check catchCppExceptions(testPairReturnFromProc())
+        check catchExceptions(testPairReturnFromProc())
 
     suite "NestedObject":
       test "init":
-        check catchCppExceptions(testNestedInit())
+        check catchExceptions(testNestedInit())
       test "copy":
-        check catchCppExceptions(testNestedCopy())
+        check catchExceptions(testNestedCopy())
       test "move":
-        check catchCppExceptions(testNestedMove())
+        check catchExceptions(testNestedMove())
       test "return from proc":
-        check catchCppExceptions(testNestedReturnFromProc())
+        check catchExceptions(testNestedReturnFromProc())
 
     suite "Refcount":
       test "refcount after copy":
-        check catchCppExceptions(testRefcountAfterCopy())
+        check catchExceptions(testRefcountAfterCopy())
       test "refcount after move":
-        check catchCppExceptions(testRefcountAfterMove())
+        check catchExceptions(testRefcountAfterMove())
       test "multiple copies":
-        check catchCppExceptions(testMultipleCopies())
+        check catchExceptions(testMultipleCopies())
 
 when isMainModule:
   runEmbeddedTensorTests()
