@@ -162,7 +162,7 @@ proc printTensorShape*(t: Tensor, label: string = "") =
   ## Print tensor shape and dtype with an optional label.
   if label.len > 0:
     echo label, ":"
-  echo "  Shape: ", t.shape, ", Dtype: ", t.scalarType()
+  echo "  Shape: ", t.shape, ", dtype: ", t.scalarType()
   echo ""
 
 # =============================================================================

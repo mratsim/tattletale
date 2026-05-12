@@ -35,7 +35,7 @@ import
 # is not applicable here because we allocate a fresh address to store MemSlice
 # instead of using the input Safetensor or one of its field.
 
-proc toTorchType*(dtype: Dtype): ScalarKind {.inline.} =
+proc toTorchType*(dtype: ST_dtype): ScalarKind {.inline.} =
   ## Convert safetensors dtype to libtorch ScalarKind.
   ## Raises ValueError if no direct mapping exists.
 
@@ -54,12 +54,12 @@ proc toTorchType*(dtype: Dtype): ScalarKind {.inline.} =
     else:
       raise newException(ValueError, "No direct libtorch mapping for safetensors dtype: " & $dtype)
 
-proc getTensorView*(st: Safetensor, tensorName: string): TorchTensor =
+proc getTensorView*(st: Safetensor, tensorName: string): Tensor =
   ## Get a memory view to the tensor data.
-  ## Returns a `TorchTensor` that views the underlying memory-mapped data.
+  ## Returns a `Tensor` that views the underlying memory-mapped data.
   ##
   ## Memory safety:
-  ##   ⚠️ WARNING: The returned `TorchTensor` is a view into `st.memFile`.
+  ##   ⚠️ WARNING: The returned `Tensor` is a view into `st.memFile`.
   ##   The tensor MUST NOT outlive the underlying memory mapping.
   ##   If the `MemFile` is closed, accessing this tensor will cause undefined behavior / crash.
   ##
@@ -72,15 +72,10 @@ proc getTensorView*(st: Safetensor, tensorName: string): TorchTensor =
   ##   The tensor is valid as long as `st` is valid, which is tied to
   ##   the original `MemFile` passed to `load`.
   let view = st.getMmapView(tensorName)
-
-  # Important: from_blob captures a pointer to the shape
-  # so info MUST NOT be a copy
-  # that will be invalid at the end of the scope (and seq have value semantics)
-  # The easiest is to make info a ref object. Or the temporary info should be a view
   let info = st.tensors[tensorName]
-  view.data.from_blob(info.shape.asTorchView(), info.dtype.toTorchType())
+  return from_blob(view.data, info.shape, info.dtype.toTorchType())
 
-proc getTensorOwned*(st: Safetensor, tensorName: string, device = kCPU): TorchTensor =
+proc getTensorOwned*(st: Safetensor, tensorName: string, device = kCPU): Tensor =
   ## Get an owned copy of the tensor data.
   ## Returns a `TorchTensor` that owns its data, safe to use after closing the `MemFile`.
   ##
@@ -92,5 +87,5 @@ proc getTensorOwned*(st: Safetensor, tensorName: string, device = kCPU): TorchTe
   ##   tensorName: Name of the tensor to load
   ##
   ## Returns:
-  ##   An owned `TorchTensor` on CPU.
+  ##   An owned `TorchTensor` on `device`.
   st.getTensorView(tensorName).to(device, copy=true) # Force copy
