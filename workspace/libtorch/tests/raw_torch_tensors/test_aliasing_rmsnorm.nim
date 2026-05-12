@@ -7,7 +7,7 @@
 import
   std/strutils,
   workspace/libtorch/src/raw_libtorch as F,
-  ../raw_libtorch_testutils
+  ./utils/[torch_tensors_overloads, raw_libtorch_testutils]
 
 proc main() =
   runTest "rms_norm weight aliasing":
@@ -16,12 +16,12 @@ proc main() =
       echo ""
 
       # Create weight tensor
-      let weight = F.ones([64], scalarKind=F.kFloat32)
+      let weight = ones(64, scalarKind = F.kFloat32)
       echo "Original weight:"
-      echo "  shape = ", @(weight.shape.asNimView())
+      echo "  shape = ", weight.shape
       echo "  data_ptr() = 0x", weight.dataPtrHex()
       echo "  shape.data() = 0x", weight.shapePtrHex()
-      weight.print()
+      # weight.print()
       echo ""
 
       # Store weight in a "layer" object (simulating NormLayer.init without clone)
@@ -39,9 +39,9 @@ proc main() =
       echo ""
 
       # Create input tensor
-      let input = F.randn([2, 8, 64], scalarKind=F.kFloat32)
+      let input = randn(2, 8, 64, kFloat32)
       echo "Input tensor:"
-      echo "  shape = ", @(input.shape.asNimView())
+      echo "  shape = ", input.shape
       echo ""
 
       # Call rms_norm
@@ -52,16 +52,16 @@ proc main() =
 
       # Check if original weight was modified
       echo "After rms_norm:"
-      echo "  weight.shape = ", @(weight.shape.asNimView())
+      echo "  weight.shape = ", weight.shape
       echo "  weight.data_ptr() = 0x", weight.dataPtrHex()
-      echo "  normLayer.weight.shape = ", @(normLayer.weight.shape.asNimView())
+      echo "  normLayer.weight.shape = ", normLayer.weight.shape
       echo "  normLayer.weight.data_ptr() = 0x", normLayer.weight.dataPtrHex()
       # weight.print()
       echo ""
 
       # Check if shape changed
       if @(weight.shape.asNimView()) != @[64]:
-        echo "❌ BUG: weight.shape changed from [64] to ", @(weight.shape.asNimView())
+        echo "❌ BUG: weight.shape changed from [64] to ", weight.shape
         echo ""
         echo "This proves rms_norm (or our wrapper) modifies the weight tensor."
         echo "When weight is shared (no clone), the modification affects all references."

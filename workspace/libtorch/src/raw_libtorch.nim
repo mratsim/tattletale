@@ -11,12 +11,9 @@
 import workspace/libtorch/src/raw/[
   abi/torch_tensors,
   torch_tensors_sugar,
-  torch_tensors_overloads,
   abi/c10,
   abi/neural_nets,
   abi/std_cpp
 ]
-export torch_tensors, torch_tensors_sugar, torch_tensors_overloads, c10, neural_nets
-
-# TODO: for now we expose C++ tuples `get` and CppVector
+export torch_tensors, torch_tensors_sugar, c10, neural_nets
 export std_cpp

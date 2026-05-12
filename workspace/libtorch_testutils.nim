@@ -1,2 +1,2 @@
-import workspace/libtorch/tests/raw_libtorch_testutils
-export raw_libtorch_testutils
+import workspace/libtorch/libtorch_testutils
+export libtorch_testutils

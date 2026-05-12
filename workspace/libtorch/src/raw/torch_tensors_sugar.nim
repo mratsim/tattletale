@@ -1,5 +1,5 @@
-# Flambeau
-# Copyright (c) 2020 Mamy André-Ratsimbazafy
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
@@ -21,40 +21,6 @@ static: doAssert sizeof(int) == sizeof(int64), "Libtorch requires a 64-bit OS"
 #
 # #######################################################################
 
-# Debugging
-# -----------------------------------------------------
-
-template checked*(t: TorchTensor): TorchTensor =
-  ## This checks if a tensor is initialized.
-  ## And throws an exception otherwise.
-  ## This is intended for debugging purposes
-  ## as C++ exceptions are likely lacking source location information
-  ## due to symbol stripping.
-  ## Usage: replace `myCall(a, b)` with `myCall(checked a, checked b)`
-
-  let name = astToStr(t) # Can't use astToStr and get the arguments name in proc, but templates are broken too
-
-  # In templates
-  #   Ensure chains are not executed twice say `(echo "Launch Missiles"; t)`
-  #   Unfortunately I get `Error: cannot use symbol of kind 'param' as a 'let'`
-  #   So DO NOT USE `checked` EXCEPT FOR DEBUGGING
-  # let t = t
-
-  if t.isDefined():
-    t
-  else:
-    raise newException(ValueError, "Tensor '" & name & "' is uninitialized")
-
-# Shape
-# -----------------------------------------------------
-
-func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
-  if unlikely(a.len == 0):
-    return 0
-  result = 1
-  for value in items(a):
-    result *= value
-
 # ArrayRefs
 # -----------------------------------------------------
 # libtorch/include/c10/util/ArrayRef.h
@@ -74,18 +40,17 @@ func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
 #   But we can't store an openArray in a let variable
 #   or return it from a proc without {.experimental: "views".}
 
-func getPtrLen(ar: IntArrayRef): (ptr UncheckedArray[int], int) {.inline.} =
+func getPtrLen(ar: IntArrayRef): (ConstPtr[int], int) {.inline.} =
   # Indirection to ensure the input and potential side-effect/computation
   # are only evaluated/done once
-
   # Note: Clang doesn't like assigning to a temporary because it discards the const qualifier
-  let dataptr {.codegenDecl: "const $# $#".}= cast[ptr UncheckedArray[int]](ar.data())
-  (dataptr, ar.size.int)
+  # So we use an opaque ConstPtr type
+  (ar.data(), ar.size.int)
 
 template asNimView*(ar: IntArrayRef): openArray[int] =
   # Ensure `ar` is only evaluated once to avoid double computation or double side-effects
   let (p, len) = getPtrLen(ar)
-  toOpenArray(p, 0, len - 1)
+  toOpenArray(cast[ptr UncheckedArray[int]](p), 0, len - 1)
 
 func asTorchView*(oa: varargs[int]): IntArrayRef {.inline.} =
   # libtorch only works (and actively checks) on 64-bit OSes.
@@ -101,13 +66,6 @@ func len*[T](ar: ArrayRef[T]): int {.inline.} =
   # Nim idiomatic proc for seq
   ar.size().int
 
-iterator items*[T](ar: ArrayRef[T]): T =
-  # Iterate over ArrayRef
-  var i: int = 0
-  while i < ar.len():
-    yield ar.data()[i]
-    inc i
-
 func `[]`*[T](ar: ArrayRef[T], idx: SomeInteger): T {.inline.} =
   when compileOption("boundChecks"):
     if idx < 0 or idx >= ar.len():
@@ -117,44 +75,8 @@ func `[]`*[T](ar: ArrayRef[T], idx: SomeInteger): T {.inline.} =
       )
   result = getAt(ar, idx)
 
-func `[]=`*[T](ar: var ArrayRef[T], idx: SomeInteger, val: T) {.inline.} =
-  when compileOption("boundChecks"):
-    if idx < 0 or idx >= ar.len():
-      raise newException(
-        IndexDefect,
-        &"ArrayRef `[]` access out-of-bounds. Index constrained by 0 <= {idx} <= ArrayRef.len() = {ar.len()}.",
-      )
-  let p = ar.data()
-  p[idx] = val
-
 # Type map
 # -----------------------------------------------------
-func toTypedesc*(scalarKind: ScalarKind): typedesc =
-  ## Maps a Torch ScalarKind to Nim type
-  case scalarKind
-  of kUint8:
-    typedesc(uint8)
-  of kInt8:
-    typedesc(int8)
-  of kInt16:
-    typedesc(int16)
-  of kInt32:
-    typedesc(int32)
-  of kInt64:
-    typedesc(int64)
-  of kFloat32:
-    typedesc(float32)
-  of kFloat64:
-    typedesc(float64)
-  of kComplexF32:
-    typedesc(Complex32)
-  of kComplexF64:
-    typedesc(Complex64)
-  of kBool:
-    typedesc(bool)
-  else:
-    raise newException(ValueError, "Unsupported libtorch type in Nim: " & $scalarKind)
-
 func toScalarKind*(T: typedesc[SomeTorchType]): static ScalarKind =
   ## Maps a Nim type to Torch scalar kind
   when T is uint8 | byte:
@@ -180,8 +102,6 @@ func toScalarKind*(T: typedesc[SomeTorchType]): static ScalarKind =
   else:
     {.error: "Unsupported type in libtorch: " & $T.}
 
-converter convertTypeDef*(T: typedesc[SomeTorchType]): static ScalarKind =
-  toScalarKind(T)
 
 # Nim openarrays -> Torch Tensors
 # -----------------------------------------------------
@@ -192,7 +112,7 @@ func getShapeImpl[T](shapeAccum: var seq[int], s: openarray[T]) =
   when (T is seq | array):
     shapeAccum.getShapeImpl(s[0])
 
-func getShape*[T](s: openarray[T]): seq[int] =
+func getShape[T](s: openarray[T]): seq[int] =
   ## Get the shape of nested seqs/arrays
   ## Important ⚠: at each nesting level, only the length
   ##   of the first element is used for the shape.
@@ -200,7 +120,7 @@ func getShape*[T](s: openarray[T]): seq[int] =
   ##   or that the total number of elements matches the product of the dimensions.
   result.getShapeImpl(s)
 
-macro getBaseType*(T: typedesc): untyped =
+macro getBaseType(T: typedesc): untyped =
   # Get the base T of a seq[T] input
   result = T.getTypeInst()[1]
   while result.kind == nnkBracketExpr and (result[0].eqIdent"seq" or result[0].eqIdent"array"):
@@ -210,7 +130,7 @@ macro getBaseType*(T: typedesc): untyped =
     else: # array
       result = result[2]
 
-iterator flatIter*[T](s: openarray[T]): auto {.noSideEffect.} =
+iterator flatIter[T](s: openarray[T]): auto {.noSideEffect.} =
   ## Inline iterator on any-depth seq or array
   ## Returns values in order
   for item in s:
@@ -219,19 +139,6 @@ iterator flatIter*[T](s: openarray[T]): auto {.noSideEffect.} =
         yield subitem
     else:
       yield item
-
-func asTorchTensorView*[T: SomeTorchType](oa: openarray[T]): lent TorchTensor {.inline.} =
-  ## Interpret an openarray as a CPU Tensor
-  ## Important:
-  ##   the buffer is shared.
-  ##   There is no copy but modifications are shared
-  ##   and the view cannot outlive its buffer.
-  ##
-  ## Input:
-  ##      - An array or a seq (can be nested)
-  ## Result:
-  ##      - A view Tensor of the same shape
-  return from_blob(oa[0].unsafeAddr, oa.len.int64, toScalarKind(T))
 
 func toTorchTensor*[T: SomeTorchType](oa: openarray[T]): TorchTensor =
   ## Convert an openarray to CPU Tensor

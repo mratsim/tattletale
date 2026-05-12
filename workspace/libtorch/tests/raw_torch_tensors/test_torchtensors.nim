@@ -1,5 +1,5 @@
-# Flambeau
-# Copyright (c) 2021 The Flambeau contributors
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
@@ -10,7 +10,7 @@ import std/complex
 import std/sugar
 
 import workspace/libtorch/src/raw_libtorch
-import workspace/libtorch_testutils
+import ./utils/[torch_tensors_overloads, raw_libtorch_testutils]
 
 proc main() =
   # -----------------------------------------------------------------------
@@ -61,7 +61,7 @@ proc main() =
     proc(): bool =
       let steps = 130'i64
       let step = 1.0/float64(steps)
-      let t = arange(0.0, 1.0, step, float64)
+      let t = arange(0.0, 1.0, step, kFloat64)
       for i in 0..<130:
         let val = t[i].item(float64)
         let refval: float64 = i.float64 / 130.0

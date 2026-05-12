@@ -6,7 +6,8 @@
 
 import
   std/strutils,
-  workspace/libtorch/src/raw_libtorch as F
+  workspace/libtorch/src/raw_libtorch as F,
+  ./utils/torch_tensors_overloads
 
 proc main() =
   echo "=== Test 1: IntArrayRef.data() ==="
@@ -48,7 +49,7 @@ proc main() =
   echo ""
 
   # Create a tensor
-  let tensor = F.randn([2, 3, 4], scalarKind=F.kFloat32)
+  let tensor = randn(2, 3, 4, kFloat32)
   echo "tensor.shape = ", tensor.shape
 
   # Get data pointer

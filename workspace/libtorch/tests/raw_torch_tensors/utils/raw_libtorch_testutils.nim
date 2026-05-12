@@ -103,19 +103,6 @@ proc assertAllClose*(
     echo "Expected: "; expected.print()
     raise newException(AssertionDefect, "allClose assertion failed")
 
-template assertDefined*(tensor: untyped, name: string = "") =
-  ## Assert that a tensor is defined (initialized).
-  ## Raises AssertionDefect if tensor is not defined.
-  ##
-  ## Args:
-  ##   tensor: The tensor to check
-  ##   name: Optional name for error message (defaults to variable name)
-  if not tensor.isDefined():
-    raise newException(
-      AssertionDefect,
-      "Tensor '" & (if name.len > 0: name else: astToStr(tensor)) & "' is not defined"
-    )
-
 template assertShape*(tensor: untyped, expectedShape: openArray[int], name: string = "") =
   ## Assert that a tensor has the expected shape.
   ## Raises AssertionDefect if shape doesn't match.
@@ -132,27 +119,6 @@ template assertShape*(tensor: untyped, expectedShape: openArray[int], name: stri
       AssertionDefect,
       "Tensor '" & tensorName & "' shape mismatch. Expected: " & $expected & ", Got: " & $actual
     )
-
-template assertDtype*(tensor: untyped, expectedDtype: F.ScalarKind, name: string = "") =
-  ## Assert that a tensor has the expected dtype.
-  ## Raises AssertionDefect if dtype doesn't match.
-  let actual = tensor.scalarType()
-  if actual != expectedDtype:
-    let tensorName = if name.len > 0: name else: astToStr(tensor)
-    raise newException(
-      AssertionDefect,
-      "Tensor '" & tensorName & "' dtype mismatch. Expected: " & $expectedDtype & ", Got: " & $actual
-    )
-
-template assertClose*(
-  actual, expected: F.TorchTensor,
-  rtol = 2e-2'f64, abstol = 2e-2'f64,
-  msg = ""
-) =
-  ## Assert that two tensors are close within tolerance.
-  ## Raises AssertionDefect if they differ.
-  ## Alias for assertAllClose for consistency with other assert* templates.
-  assertAllClose(actual, expected, rtol, abstol, msg)
 
 # =============================================================================
 # Debug Helpers
