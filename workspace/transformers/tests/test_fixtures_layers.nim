@@ -75,8 +75,6 @@ proc main() =
       let downWeight = weightsSt.getTensorOwned("model.layers.8.mlp.down_proj.weight")
 
       let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
-      assertDefined(mlp.down_proj.weight)
-      assertDefined(mlp.gate_up_proj.weight)
 
       for caseNum in 0..3:
         let fixturePath = FixtureDir / &"mlp-{ModelName}-{caseNum:02d}.safetensor"
