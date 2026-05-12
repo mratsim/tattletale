@@ -8,7 +8,7 @@
 import
   std/strutils,
   workspace/libtorch/src/raw_libtorch as F,
-  ../raw_libtorch_testutils
+  ./utils/[torch_tensors_overloads, raw_libtorch_testutils]
 
 proc main() =
   echo "=== Test Suite: torch::cat ==="
@@ -20,8 +20,8 @@ proc main() =
   runTest "cat with lvalue CppVector":
     proc(): bool =
       echo "Test 1: cat with lvalue CppVector"
-      let a = F.randn([2, 3], scalarKind=F.kFloat32)
-      let b = F.randn([2, 3], scalarKind=F.kFloat32)
+      let a = randn(2, 3, kFloat32)
+      let b = randn(2, 3, kFloat32)
 
       var tensors = init(CppVector[TorchTensor])
       tensors.add(a)
@@ -29,7 +29,7 @@ proc main() =
 
       let c = F.cat(tensors, 0)
 
-      echo "  c.shape = ", @(c.shape.asNimView())
+      echo "  c.shape = ", c.shape
       echo "  c.data_ptr = 0x", c.dataPtrHex()
       echo ""
       true
@@ -40,15 +40,15 @@ proc main() =
   runTest "cat with lvalue array + lvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 2: cat with lvalue array + lvalue ArrayRef[TorchTensor]"
-      let a = F.randn([2, 3], scalarKind=F.kFloat32)
-      let b = F.randn([2, 3], scalarKind=F.kFloat32)
+      let a = randn(2, 3, kFloat32)
+      let b = randn(2, 3, kFloat32)
 
       let ab = [a, b]
       let abv = ab.asTorchView()
 
       let c = F.cat(abv, axis=0)
 
-      echo "  c.shape = ", @(c.shape.asNimView())
+      echo "  c.shape = ", c.shape
       echo "  c.data_ptr = 0x", c.dataPtrHex()
       echo ""
       true
@@ -59,13 +59,13 @@ proc main() =
   runTest "cat with lvalue array + rvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 3: cat with lvalue array + rvalue ArrayRef[TorchTensor]"
-      let a = F.randn([2, 3], scalarKind=F.kFloat32)
-      let b = F.randn([2, 3], scalarKind=F.kFloat32)
+      let a = randn(2, 3, kFloat32)
+      let b = randn(2, 3, kFloat32)
 
       let ab = [a, b]
       let c = F.cat(ab.asTorchView(), axis=0)
 
-      echo "  c.shape = ", @(c.shape.asNimView())
+      echo "  c.shape = ", c.shape
       echo "  c.data_ptr = 0x", c.dataPtrHex()
       echo ""
       true
@@ -76,12 +76,12 @@ proc main() =
   runTest "cat with rvalue array + rvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 4: cat with rvalue array + rvalue ArrayRef[TorchTensor]"
-      let a = F.randn([2, 3], scalarKind=F.kFloat32)
-      let b = F.randn([2, 3], scalarKind=F.kFloat32)
+      let a = randn(2, 3, kFloat32)
+      let b = randn(2, 3, kFloat32)
 
       let c = F.cat([a, b].asTorchView(), axis=0)
 
-      echo "  c.shape = ", @(c.shape.asNimView())
+      echo "  c.shape = ", c.shape
       echo "  c.data_ptr = 0x", c.dataPtrHex()
       echo ""
       true
@@ -92,12 +92,12 @@ proc main() =
   runTest "cat with rvalue array + [sugar] implicit conversion ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 5: cat with rvalue array + [sugar] implicit conversion ArrayRef[TorchTensor]"
-      let a = F.randn([2, 3], scalarKind=F.kFloat32)
-      let b = F.randn([2, 3], scalarKind=F.kFloat32)
+      let a = randn(2, 3, kFloat32)
+      let b = randn(2, 3, kFloat32)
 
-      let c = F.cat([a, b], axis=0)
+      let c = cat(a, b, axis=0)
 
-      echo "  c.shape = ", @(c.shape.asNimView())
+      echo "  c.shape = ", c.shape
       echo "  c.data_ptr = 0x", c.dataPtrHex()
       echo ""
       true
@@ -108,8 +108,8 @@ proc main() =
   runTest "cat with lvalue seq + lvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 6: cat with lvalue seq + lvalue ArrayRef[TorchTensor]"
-      let a = F.randn([2, 3], scalarKind=F.kFloat32)
-      let b = F.randn([2, 3], scalarKind=F.kFloat32)
+      let a = randn(2, 3, kFloat32)
+      let b = randn(2, 3, kFloat32)
 
       var tensors = @[a, b]
       let abv = tensors.asTorchView()
@@ -120,7 +120,7 @@ proc main() =
 
       let c = F.cat(abv, axis=0)
 
-      echo "  c.shape = ", @(c.shape.asNimView())
+      echo "  c.shape = ", c.shape
       echo "  c.data_ptr = 0x", c.dataPtrHex()
       echo ""
       true
@@ -131,8 +131,8 @@ proc main() =
   runTest "cat with lvalue seq + rvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 7: cat with lvalue seq + rvalue ArrayRef[TorchTensor]"
-      let a = F.randn([2, 3], scalarKind=F.kFloat32)
-      let b = F.randn([2, 3], scalarKind=F.kFloat32)
+      let a = randn(2, 3, kFloat32)
+      let b = randn(2, 3, kFloat32)
 
       var tensors = @[a, b]
 
@@ -141,7 +141,7 @@ proc main() =
 
       let c = F.cat(tensors.asTorchView(), axis=0)
 
-      echo "  c.shape = ", @(c.shape.asNimView())
+      echo "  c.shape = ", c.shape
       echo "  c.data_ptr = 0x", c.dataPtrHex()
       echo ""
       true
@@ -152,12 +152,12 @@ proc main() =
   runTest "cat with rvalue seq + rvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 8: cat with rvalue seq + rvalue ArrayRef[TorchTensor]"
-      let a = F.randn([2, 3], scalarKind=F.kFloat32)
-      let b = F.randn([2, 3], scalarKind=F.kFloat32)
+      let a = randn(2, 3, kFloat32)
+      let b = randn(2, 3, kFloat32)
 
-      let c = F.cat(@[a, b].asTorchView(), axis=0)
+      let c = cat(a, b, axis=0)
 
-      echo "  c.shape = ", @(c.shape.asNimView())
+      echo "  c.shape = ", c.shape
       echo "  c.data_ptr = 0x", c.dataPtrHex()
       echo ""
       true
@@ -168,12 +168,12 @@ proc main() =
   runTest "cat with @[a, b] syntax (implicit seq)":
     proc(): bool =
       echo "Test 9: cat with @[a, b] syntax (implicit seq)"
-      let a = F.randn([2, 3], scalarKind=F.kFloat32)
-      let b = F.randn([2, 3], scalarKind=F.kFloat32)
+      let a = randn(2, 3, kFloat32)
+      let b = randn(2, 3, kFloat32)
 
-      let c = F.cat(@[a, b], 0)
+      let c = cat(a, b, axis=0)
 
-      echo "  c.shape = ", @(c.shape.asNimView())
+      echo "  c.shape = ", c.shape
       echo "  c.data_ptr = 0x", c.dataPtrHex()
       echo ""
       true

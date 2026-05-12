@@ -1,5 +1,5 @@
-# Flambeau
-# Copyright (c) 2020 Mamy André-Ratsimbazafy
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).

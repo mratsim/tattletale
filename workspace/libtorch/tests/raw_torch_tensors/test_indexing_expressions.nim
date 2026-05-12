@@ -9,7 +9,7 @@ import
   std/math,
   std/strformat,
   workspace/libtorch/src/raw_libtorch as torch,
-  workspace/libtorch_testutils
+  ./utils/[torch_tensors_overloads, raw_libtorch_testutils]
 
 proc genShiftedVandermonde5x5*(dtype: ScalarKind): TorchTensor =
   torch.arange(1, 6).reshape(-1, 1) ** torch.arange(1, 6)
@@ -294,7 +294,7 @@ proc main() =
       proc launchMissile(a: TorchTensor): TorchTensor =
         i += 1
         a
-      let t3d = torch.arange(24, kFloat64).reshape(@[2, 3, 4])
+      let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
       let sliced = launchMissile(t3d)[_..<2, _..<2, _..<2]
       doAssert i == 1  # must be 1, not 4
       doAssert sliced.shape[0] == 2

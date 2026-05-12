@@ -116,19 +116,6 @@ proc assertAllClose*(
     return false
   true
 
-template assertDefined*(tensor: untyped, name: string = ""): bool =
-  ## Assert that a tensor is defined (initialized).
-  ## Returns false if tensor is not defined (for use in runTest).
-  ##
-  ## Args:
-  ##   tensor: The tensor to check
-  ##   name: Optional name for error message (defaults to variable name)
-  if not tensor.isDefined():
-    echo "Tensor '" & (if name.len > 0: name else: astToStr(tensor)) & "' is not defined"
-    false
-  else:
-    true
-
 template assertShape*(tensor: untyped, expectedShape: openArray[int], name: string = ""): bool =
   ## Assert that a tensor has the expected shape.
   ## Returns false if shape doesn't match (for use in runTest).
@@ -145,27 +132,6 @@ template assertShape*(tensor: untyped, expectedShape: openArray[int], name: stri
     false
   else:
     true
-
-template assertDtype*(tensor: untyped, expectedDtype: ScalarKind, name: string = ""): bool =
-  ## Assert that a tensor has the expected dtype.
-  ## Returns false if dtype doesn't match (for use in runTest).
-  let actual = tensor.scalarType()
-  if actual != expectedDtype:
-    let tensorName = if name.len > 0: name else: astToStr(tensor)
-    echo "Tensor '" & tensorName & "' dtype mismatch. Expected: " & $expectedDtype & ", Got: " & $actual
-    false
-  else:
-    true
-
-template assertClose*(
-  actual, expected: Tensor,
-  rtol = 2e-2'f64, abstol = 2e-2'f64,
-  msg = ""): bool =
-  ## Assert that two tensors are close within tolerance.
-  ## Returns false if they differ (for use in runTest).
-  ## Alias for assertAllClose for consistency with other assert* templates.
-  assertAllClose(actual, expected, rtol, abstol, msg)
-
 
 # =============================================================================
 # Debug Helpers

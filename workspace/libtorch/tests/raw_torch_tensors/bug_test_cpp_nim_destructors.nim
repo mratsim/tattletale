@@ -24,7 +24,8 @@
 
 import
   std/unittest,
-  workspace/libtorch/src/raw_libtorch as F
+  workspace/libtorch/src/raw_libtorch as F,
+  ./utils/torch_tensors_overloads
 
 # Currently not part of the test suite
 # Blocked by
@@ -34,13 +35,13 @@ import
 proc main() =
   suite "TorchTensor basic lifetime":
     test "stack-to-stack copy":
-      let a = F.zeros([2, 3], F.kFloat32)
+      let a = zeros(2, 3, F.kFloat32)
       let b = a
       check b.dim() == 2 and b.size(0) == 2 and b.size(1) == 3
       check a == b
 
     test "stack-to-stack move":
-      var a = F.zeros([2, 3], F.kFloat32)
+      var a = zeros(2, 3, F.kFloat32)
       var b = move a
       check b.dim() == 2 and b.size(0) == 2 and b.size(1) == 3
       check b.isDefined()
@@ -49,25 +50,25 @@ proc main() =
       proc takeTensor(t: sink F.TorchTensor): F.TorchTensor =
         t
 
-      let a = F.zeros([2, 3], F.kFloat32)
+      let a = zeros(2, 3, F.kFloat32)
       let b = takeTensor(a)
       check b.dim() == 2 and b.size(0) == 2 and b.size(1) == 3
 
     test "seq[TorchTensor] add (copy)":
       var seq: seq[F.TorchTensor] = @[]
-      let a = F.zeros([2, 3], F.kFloat32)
+      let a = zeros(2, 3, F.kFloat32)
       seq.add(a)
       check seq[0].dim() == 2 and seq[0].size(0) == 2 and seq[0].size(1) == 3
 
     test "seq[TorchTensor] add (move)":
       var seq: seq[F.TorchTensor] = @[]
-      var a = F.zeros([2, 3], F.kFloat32)
+      var a = zeros(2, 3, F.kFloat32)
       seq.add(move a)
       check seq[0].dim() == 2 and seq[0].size(0) == 2 and seq[0].size(1) == 3
 
     test "seq[TorchTensor] indexed access after add":
       var seq: seq[F.TorchTensor] = @[]
-      let a = F.zeros([2, 3], F.kFloat32)
+      let a = zeros(2, 3, F.kFloat32)
       seq.add(a)
       let b = seq[0]
       check b.dim() == 2 and b.size(0) == 2 and b.size(1) == 3
@@ -75,23 +76,23 @@ proc main() =
     test "seq[TorchTensor] multiple elements":
       var seq: seq[F.TorchTensor] = @[]
       for i in 0 ..< 10:
-        seq.add(F.full([3], float32(i), F.kFloat32))
+        seq.add(full(3, float32(i), F.kFloat32))
       check seq.len == 10
       for i in 0 ..< 10:
         check seq[i].item(float32) == float32(i)
 
     test "seq[TorchTensor] pre-alloc and assign":
       var seq: seq[F.TorchTensor] = newSeq[F.TorchTensor](3)
-      seq[0] = F.zeros([2], F.kFloat32)
-      seq[1] = F.ones([2], F.kFloat32)
-      seq[2] = F.zeros([2], F.kFloat32)
+      seq[0] = zeros(2, F.kFloat32)
+      seq[1] = ones(2, F.kFloat32)
+      seq[2] = zeros(2, F.kFloat32)
       check seq[0].item(float32) == 0.0
       check seq[1].item(float32) == 1.0
 
     test "seq[TorchTensor] with grow-in-place (realloc)":
       var seq: seq[F.TorchTensor] = @[]
       for i in 0 ..< 100:
-        seq.add(F.full([1], float32(i), F.kFloat32))
+        seq.add(full(1, float32(i), F.kFloat32))
       check seq.len == 100
       # Verify all elements survived reallocs
       for i in 0 ..< 100:
@@ -104,7 +105,7 @@ proc main() =
         t: F.TorchTensor
         n: int
 
-      let a = MyObj(t: F.zeros([2], F.kFloat32), n: 42)
+      let a = MyObj(t: zeros(2, F.kFloat32), n: 42)
       let b = a
       check b.t.dim() == 1 and b.t.size(0) == 2
       check b.n == 42
@@ -115,7 +116,7 @@ proc main() =
         n: int
 
       var seq: seq[MyObj] = @[]
-      let a = MyObj(t: F.zeros([2], F.kFloat32), n: 42)
+      let a = MyObj(t: zeros(2, F.kFloat32), n: 42)
       seq.add(a)
       check seq[0].t.dim() == 1 and seq[0].t.size(0) == 2
       check seq[0].n == 42
@@ -126,7 +127,7 @@ proc main() =
         n: int
 
       var seq: seq[MyObj] = @[]
-      var a = MyObj(t: F.zeros([2], F.kFloat32), n: 42)
+      var a = MyObj(t: zeros(2, F.kFloat32), n: 42)
       seq.add(move a)
       check seq[0].t.dim() == 1 and seq[0].t.size(0) == 2
       check seq[0].n == 42
@@ -140,7 +141,7 @@ proc main() =
         n: int
 
       var seq: seq[Outer] = @[]
-      let o = Outer(inner: Inner(t: F.zeros([2], F.kFloat32)), n: 42)
+      let o = Outer(inner: Inner(t: zeros(2, F.kFloat32)), n: 42)
       seq.add(o)
       check seq[0].inner.t.dim() == 1 and seq[0].inner.t.size(0) == 2
 
@@ -149,7 +150,7 @@ proc main() =
         t: F.TorchTensor
 
       let p = cast[ptr MyObj](alloc(sizeof(MyObj)))
-      p.t = F.zeros([2], F.kFloat32)
+      p.t = zeros(2, F.kFloat32)
       check p.t.dim() == 1 and p.t.size(0) == 2
       # Note: manual dealloc needed, no GC for raw ptr
 
@@ -158,14 +159,14 @@ proc main() =
         t: F.TorchTensor
 
       var seq: seq[MyRef] = @[]
-      let r = MyRef(t: F.zeros([2], F.kFloat32))
+      let r = MyRef(t: zeros(2, F.kFloat32))
       seq.add(r)
       check seq[0].t.dim() == 1 and seq[0].t.size(0) == 2
 
   suite "TorchTensor refcount correctness":
 
     test "multiple copies all valid":
-      let a = F.ones([2, 3], F.kFloat32)
+      let a = ones(2, 3, F.kFloat32)
       let b = a
       let c = b
       let d = c
@@ -180,7 +181,7 @@ proc main() =
 
     test "scope exit of copies":
       proc inner(): F.TorchTensor =
-        let t = F.ones([2], F.kFloat32)
+        let t = ones(2, F.kFloat32)
         return t
 
       let result = inner()
@@ -190,8 +191,8 @@ proc main() =
     test "scope exit of seq[TorchTensor]":
       proc inner(): seq[F.TorchTensor] =
         var s: seq[F.TorchTensor] = @[]
-        s.add(F.ones([2], F.kFloat32))
-        s.add(F.zeros([2], F.kFloat32))
+        s.add(ones(2, F.kFloat32))
+        s.add(zeros(2, F.kFloat32))
         return s
 
       let result = inner()
@@ -204,7 +205,7 @@ proc main() =
         t: F.TorchTensor
 
       proc inner(): Wrapper =
-        Wrapper(t: F.ones([2], F.kFloat32))
+        Wrapper(t: ones(2, F.kFloat32))
 
       var seq: seq[Wrapper] = @[]
       seq.add(inner())
@@ -213,7 +214,7 @@ proc main() =
   suite "TorchTensor clone (deep copy)":
 
     test "clone creates independent tensor":
-      let a = F.ones([2, 3], F.kFloat32)
+      let a = ones(2, 3, F.kFloat32)
       let b = a.clone()
       # Modifying b should not affect a
       let c = b.add(1.0)
@@ -221,7 +222,7 @@ proc main() =
       check c.item(float32) == 2.0
 
     test "clone vs copy share no memory":
-      let a = F.ones([2, 3], F.kFloat32)
+      let a = ones(2, 3, F.kFloat32)
       let b = a.clone()
       check not a.is_alias_of(b)
 

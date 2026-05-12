@@ -7,11 +7,31 @@
 
 ## Tests for objects containing TorchTensor fields.
 ## Verifies copy/move semantics and refcount management.
+##
+## This test fails with SIGSEGV on GCC 15.2.0 but works on GCC 15.2.1
+##
+## This is similar to the error when wrapping raw TorchTensor into a ref object.
+##
+##      proc wrapTorchTensorImpl(a: sink TorchTensor): Tensor {.inline, nodestroy.} =
+##        new result
+##        placementNew(result.raw.addr)
+##        `=sink`(result.raw, a)
+##
+## without {.nodestroy.}, there is extra destruction done on `a` which violates invariants of torch::Tensor intrusive refcount.
+## I am unsure why only GCC v15.2.0 crashes, maybe GCC v15.2.1 and Clang optimize away the extra destructor.
+##
+## It may be that with a {.constructor, nodestroy.} proc we could avoid the issue but that's quite clunky
+## to have to remember that for all intermediate objects, even if we create a type macro pragma
+##
+## like
+##
+## type TensorWrapper {.constructNoDestroy.} = object
+##   data: TorchTensor
 
 import
   std/unittest,
   workspace/libtorch/src/raw_libtorch,
-  ../raw_libtorch_testutils
+  ./utils/[torch_tensors_overloads, raw_libtorch_testutils]
 
 type
   TensorWrapper = object
@@ -35,13 +55,13 @@ type
 # =============================================================================
 
 proc testWrapperInit(): bool =
-  let wrapper = TensorWrapper(data: ones(@[2, 3], kFloat32))
+  let wrapper = TensorWrapper(data: ones(2, 3, kFloat32))
   result = wrapper.data.isDefined() and
            wrapper.data.size(0) == 2 and
            wrapper.data.size(1) == 3
 
 proc testWrapperCopy(): bool =
-  var wrapper1 = TensorWrapper(data: ones(@[2, 3], kFloat32) * 2.0'f32)
+  var wrapper1 = TensorWrapper(data: ones(2, 3, kFloat32) * 2.0'f32)
   var wrapper2 = wrapper1  # Should call =copy
 
   # Both should be defined
@@ -53,14 +73,14 @@ proc testWrapperCopy(): bool =
     return false
 
   # Modify wrapper2's data
-  wrapper2.data = zeros(@[2, 3], kFloat32)
+  wrapper2.data = zeros(2, 3, kFloat32)
 
   # wrapper1 should still have original values
-  let expected = ones(@[2, 3], kFloat32) * 2.0'f32
+  let expected = ones(2, 3, kFloat32) * 2.0'f32
   result = wrapper1.data.allClose(expected)
 
 proc testWrapperMove(): bool =
-  var wrapper1 = TensorWrapper(data: ones(@[2, 3], kFloat32))
+  var wrapper1 = TensorWrapper(data: ones(2, 3, kFloat32))
   let originalData = wrapper1.data
 
   var wrapper2 = move(wrapper1)  # Should call =sink
@@ -78,15 +98,15 @@ proc testWrapperMove(): bool =
 
 proc testWrapperReturnFromProc(): bool =
   proc createWrapper(): TensorWrapper =
-    TensorWrapper(data: ones(@[2, 3], kFloat32) * 5.0'f32)
+    TensorWrapper(data: ones(2, 3, kFloat32) * 5.0'f32)
 
   let wrapper = createWrapper()
-  let expected = ones(@[2, 3], kFloat32) * 5.0'f32
+  let expected = ones(2, 3, kFloat32) * 5.0'f32
   result = wrapper.data.isDefined() and wrapper.data.allClose(expected)
 
 proc testWrapperAssignment(): bool =
-  var wrapper1 = TensorWrapper(data: ones(@[2, 3], kFloat32))
-  var wrapper2 = TensorWrapper(data: zeros(@[2, 3], kFloat32))
+  var wrapper1 = TensorWrapper(data: ones(2, 3, kFloat32))
+  var wrapper2 = TensorWrapper(data: zeros(2, 3, kFloat32))
 
   wrapper2 = wrapper1  # Should call =copy
 
@@ -101,8 +121,8 @@ proc testWrapperAssignment(): bool =
 
 proc testPairInit(): bool =
   let pair = TensorPair(
-    first: ones(@[2], kFloat32),
-    second: zeros(@[2], kFloat32)
+    first: ones(2, kFloat32),
+    second: zeros(2, kFloat32)
   )
   result = pair.first.isDefined() and
            pair.second.isDefined() and
@@ -111,8 +131,8 @@ proc testPairInit(): bool =
 
 proc testPairCopy(): bool =
   var pair1 = TensorPair(
-    first: ones(@[2], kFloat32) * 3.0'f32,
-    second: zeros(@[2], kFloat32)
+    first: ones(2, kFloat32) * 3.0'f32,
+    second: zeros(2, kFloat32)
   )
   var pair2 = pair1  # Should call =copy
 
@@ -122,16 +142,16 @@ proc testPairCopy(): bool =
     return false
 
   # Modify pair2
-  pair2.first = full(@[2], 999.0'f32, kFloat32)
+  pair2.first = full(2, 999.0'f32, kFloat32)
 
   # pair1 should be unchanged
-  let expected = ones(@[2], kFloat32) * 3.0'f32
+  let expected = ones(2, kFloat32) * 3.0'f32
   result = pair1.first.allClose(expected)
 
 proc testPairMove(): bool =
   var pair1 = TensorPair(
-    first: ones(@[2], kFloat32),
-    second: zeros(@[2], kFloat32)
+    first: ones(2, kFloat32),
+    second: zeros(2, kFloat32)
   )
   let originalFirst = pair1.first
   let originalSecond = pair1.second
@@ -154,13 +174,13 @@ proc testPairMove(): bool =
 proc testPairReturnFromProc(): bool =
   proc createPair(): TensorPair =
     TensorPair(
-      first: ones(@[3], kFloat32) * 7.0'f32,
-      second: zeros(@[3], kFloat32)
+      first: ones(3, kFloat32) * 7.0'f32,
+      second: zeros(3, kFloat32)
     )
 
   let pair = createPair()
-  let expectedFirst = ones(@[3], kFloat32) * 7.0'f32
-  let expectedSecond = zeros(@[3], kFloat32)
+  let expectedFirst = ones(3, kFloat32) * 7.0'f32
+  let expectedSecond = zeros(3, kFloat32)
 
   result = pair.first.isDefined() and
            pair.second.isDefined() and
@@ -174,8 +194,8 @@ proc testPairReturnFromProc(): bool =
 proc testNestedInit(): bool =
   let obj = NestedObject(
     id: 42'i32,
-    weight: ones(@[2, 2], kFloat32),
-    bias: zeros(@[2], kFloat32),
+    weight: ones(2, 2, kFloat32),
+    bias: zeros(2, kFloat32),
     scale: 1.5'f32
   )
   result = obj.id == 42 and
@@ -186,8 +206,8 @@ proc testNestedInit(): bool =
 proc testNestedCopy(): bool =
   var obj1 = NestedObject(
     id: 100'i32,
-    weight: ones(@[2, 2], kFloat32) * 4.0'f32,
-    bias: zeros(@[2], kFloat32) * 5.0'f32,
+    weight: ones(2, 2, kFloat32) * 4.0'f32,
+    bias: zeros(2, kFloat32) * 5.0'f32,
     scale: 2.0'f32
   )
   var obj2 = obj1  # Should call =copy
@@ -202,17 +222,17 @@ proc testNestedCopy(): bool =
     return false
 
   # Modify obj2 tensors
-  obj2.weight = full(@[2, 2], 999.0'f32, kFloat32)
+  obj2.weight = full(2, 2, 999.0'f32, kFloat32)
 
   # obj1 should be unchanged
-  let expected = ones(@[2, 2], kFloat32) * 4.0'f32
+  let expected = ones(2, 2, kFloat32) * 4.0'f32
   result = obj1.weight.allClose(expected)
 
 proc testNestedMove(): bool =
   var obj1 = NestedObject(
     id: 200'i32,
-    weight: ones(@[2], kFloat32),
-    bias: zeros(@[2], kFloat32),
+    weight: ones(2, kFloat32),
+    bias: zeros(2, kFloat32),
     scale: 3.0'f32
   )
   let originalWeight = obj1.weight
@@ -237,14 +257,14 @@ proc testNestedReturnFromProc(): bool =
   proc createNested(): NestedObject =
     NestedObject(
       id: 999'i32,
-      weight: ones(@[4], kFloat32) * 11.0'f32,
-      bias: zeros(@[4], kFloat32),
+      weight: ones(4, kFloat32) * 11.0'f32,
+      bias: zeros(4, kFloat32),
       scale: 0.5'f32
     )
 
   let obj = createNested()
-  let expectedWeight = ones(@[4], kFloat32) * 11.0'f32
-  let expectedBias = zeros(@[4], kFloat32)
+  let expectedWeight = ones(4, kFloat32) * 11.0'f32
+  let expectedBias = zeros(4, kFloat32)
 
   result = obj.id == 999 and
            obj.scale == 0.5'f32 and
@@ -259,7 +279,7 @@ proc testNestedReturnFromProc(): bool =
 
 proc testRefcountAfterCopy(): bool =
   # Verify that copy increments refcount
-  var wrapper1 = TensorWrapper(data: ones(@[2, 3], kFloat32))
+  var wrapper1 = TensorWrapper(data: ones(2, 3, kFloat32))
   let originalData = wrapper1.data
 
   var wrapper2 = wrapper1  # Copy
@@ -279,7 +299,7 @@ proc testRefcountAfterCopy(): bool =
            wrapper2.data.is_same(wrapper3.data)
 
 proc testRefcountAfterMove(): bool =
-  var wrapper1 = TensorWrapper(data: ones(@[2, 3], kFloat32))
+  var wrapper1 = TensorWrapper(data: ones(2, 3, kFloat32))
   let originalData = wrapper1.data
 
   var wrapper2 = move(wrapper1)  # Move
@@ -299,7 +319,7 @@ proc testRefcountAfterMove(): bool =
            wrapper2.data.is_same(originalData)
 
 proc testMultipleCopies(): bool =
-  let original = ones(@[2, 3], kFloat32)
+  let original = ones(2, 3, kFloat32)
 
   var w1 = TensorWrapper(data: original)
   var w2 = w1  # Copy 1
