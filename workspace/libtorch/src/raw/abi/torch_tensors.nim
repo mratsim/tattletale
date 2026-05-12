@@ -944,7 +944,7 @@ func sort*(
 ): CppTuple2[TorchTensor, TorchTensor] {.importcpp: "#.sort(@)".}
   ## Sorts the elements of the input tensor along a given dimension in ascending order by value.
   ## If dim is not given, the last dimension of the input is chosen (dim=-1).
-  ## Returns (values, originalIndices) or type (TensorT, TensorInt64)
+  ## Returns (values, originalIndices) of type (TensorT, TensorInt64)
   ## where originalIndices is the original index of each values (before sorting)
 func argsort*(a: TorchTensor, axis: int = -1, descending: bool = false): TorchTensor {.importcpp: "#.argsort(@)".}
 
