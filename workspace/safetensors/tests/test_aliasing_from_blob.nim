@@ -37,45 +37,45 @@ proc main() =
   echo "Testing safetensors shape aliasing bug"
   echo "Fixture: ", FIXTURE_PATH
   echo ""
-  
+
   if not fileExists(FIXTURE_PATH):
     echo "❌ Fixture not found. Run generate_multi_shape_tensors.py first."
     quit(1)
-  
+
   var mf = memFiles.open(FIXTURE_PATH, mode = fmRead)
   defer: mf.close()
-  
+
   var st = safetensors.load(mf)
-  
+
   echo "Loading tensors and verifying shapes:"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  
+
   # Load all tensors and verify shapes on initial load
   let tensor_a = st.getTensorOwned("tensor_a")
-  let shape_a = tensor_a.shape
+  template shape_a: untyped = tensor_a.shape
   echo "tensor_a loaded: [", shape_a[0], ", ", shape_a[1], "] (expected: [", expected_shape_a[0], ", ", expected_shape_a[1], "])"
   doAssert shape_a[0] == expected_shape_a[0] and shape_a[1] == expected_shape_a[1], "tensor_a initial shape wrong"
-  
+
   let tensor_b = st.getTensorOwned("tensor_b")
-  let shape_b = tensor_b.shape
+  template shape_b: untyped = tensor_b.shape
   echo "tensor_b loaded: [", shape_b[0], ", ", shape_b[1], "] (expected: [", expected_shape_b[0], ", ", expected_shape_b[1], "])"
   doAssert shape_b[0] == expected_shape_b[0] and shape_b[1] == expected_shape_b[1], "tensor_b initial shape wrong"
-  
+
   let tensor_c = st.getTensorOwned("tensor_c")
-  let shape_c = tensor_c.shape
+  template shape_c: untyped = tensor_c.shape
   echo "tensor_c loaded: [", shape_c[0], ", ", shape_c[1], "] (expected: [", expected_shape_c[0], ", ", expected_shape_c[1], "])"
   doAssert shape_c[0] == expected_shape_c[0] and shape_c[1] == expected_shape_c[1], "tensor_c initial shape wrong"
-  
+
   let tensor_d = st.getTensorOwned("tensor_d")
-  let shape_d = tensor_d.shape
+  template shape_d: untyped = tensor_d.shape
   echo "tensor_d loaded: [", shape_d[0], ", ", shape_d[1], "] (expected: [", expected_shape_d[0], ", ", expected_shape_d[1], "])"
   doAssert shape_d[0] == expected_shape_d[0] and shape_d[1] == expected_shape_d[1], "tensor_d initial shape wrong"
-  
+
   let tensor_e = st.getTensorOwned("tensor_e")
-  let shape_e = tensor_e.shape
+  template shape_e: untyped = tensor_e.shape
   echo "tensor_e loaded: [", shape_e[0], ", ", shape_e[1], "] (expected: [", expected_shape_e[0], ", ", expected_shape_e[1], "])"
   doAssert shape_e[0] == expected_shape_e[0] and shape_e[1] == expected_shape_e[1], "tensor_e initial shape wrong"
-  
+
   echo ""
   echo "Rechecking saved shape variables after all loads:"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -84,17 +84,17 @@ proc main() =
   echo "tensor_c shape: [", shape_c[0], ", ", shape_c[1], "] (expected: [", expected_shape_c[0], ", ", expected_shape_c[1], "])"
   echo "tensor_d shape: [", shape_d[0], ", ", shape_d[1], "] (expected: [", expected_shape_d[0], ", ", expected_shape_d[1], "])"
   echo "tensor_e shape: [", shape_e[0], ", ", shape_e[1], "] (expected: [", expected_shape_e[0], ", ", expected_shape_e[1], "])"
-  
+
   echo ""
   echo "Verification:"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  
+
   doAssert shape_a[0] == expected_shape_a[0] and shape_a[1] == expected_shape_a[1], "tensor_a shape corrupted after loading all tensors"
   doAssert shape_b[0] == expected_shape_b[0] and shape_b[1] == expected_shape_b[1], "tensor_b shape corrupted after loading all tensors"
   doAssert shape_c[0] == expected_shape_c[0] and shape_c[1] == expected_shape_c[1], "tensor_c shape corrupted after loading all tensors"
   doAssert shape_d[0] == expected_shape_d[0] and shape_d[1] == expected_shape_d[1], "tensor_d shape corrupted after loading all tensors"
   doAssert shape_e[0] == expected_shape_e[0] and shape_e[1] == expected_shape_e[1], "tensor_e shape corrupted after loading all tensors"
-  
+
   echo "✅ All shapes correct - no aliasing bug detected"
 
 when isMainModule:

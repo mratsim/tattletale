@@ -29,7 +29,12 @@ const Shapes: array[4, seq[int]] = [
 
 const TestedDtypes = [F64, F32, F16, I64, I32, I16, I8, U8]
 
-proc generateExpectedTensor*(pattern: string, shape: seq[int], dtype: ScalarKind): TorchTensor =
+func product(a: seq[int]): int =
+  result = 1
+  for i in 0 ..< a.len:
+    result *= a[i]
+
+proc generateExpectedTensor*(pattern: string, shape: seq[int], dtype: ScalarKind): Tensor =
   let numel = shape.product()
 
   case pattern
@@ -46,7 +51,7 @@ proc generateExpectedTensor*(pattern: string, shape: seq[int], dtype: ScalarKind
   else:
     raise newException(ValueError, "Unknown pattern: " & pattern)
 
-proc genShiftedVandermonde5x5*(dtype: ScalarKind): TorchTensor =
+proc genShiftedVandermonde5x5*(dtype: ScalarKind): Tensor =
   ## Generate 5x5 shifted Vandermonde matrix: v[i, j] = i^(j+1)
   ## [[   1    1    1    1    1]
   ##  [   2    4    8   16   32]
@@ -76,7 +81,7 @@ proc main() =
 
       let expectedTensor = genShiftedVandermonde5x5(kFloat64)
       let actualTensor = st.getTensorView(key)
-      check actualTensor == expectedTensor
+      check actualTensor.equal(expectedTensor)
 
     test "vandermonde BF16 fixture test (view)":
       let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
@@ -96,7 +101,7 @@ proc main() =
 
       let expectedTensor = genShiftedVandermonde5x5(kBFloat16)
       let actualTensor = st.getTensorView(key)
-      check actualTensor == expectedTensor
+      check actualTensor.equal(expectedTensor)
 
     test "load python-generated safetensors fixtures (view)":
       let fixturePath = FIXTURES_DIR / "fixtures.safetensors"
@@ -121,7 +126,7 @@ proc main() =
 
             let expectedTensor = generateExpectedTensor(pattern, shape, dtype.toTorchType())
             let actualTensor = st.getTensorView(key)
-            check actualTensor == expectedTensor
+            check actualTensor.equal(expectedTensor)
             count += 1
 
       doAssert count == Patterns.len * Shapes.len * TestedDtypes.len
