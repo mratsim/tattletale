@@ -42,8 +42,8 @@ proc main() =
       let inputLnWeight = weightsSt.getTensorOwned("input_layernorm.weight")
       let postAttnWeight = weightsSt.getTensorOwned("post_attention_layernorm.weight")
 
-      echo "  inputLnWeight.shape = ", @(inputLnWeight.shape.asNimView())
-      echo "  postAttnWeight.shape = ", @(postAttnWeight.shape.asNimView())
+      echo "  inputLnWeight.shape = ", inputLnWeight.shape
+      echo "  postAttnWeight.shape = ", postAttnWeight.shape
       echo "  Expected: both [64]"
       echo ""
 
@@ -59,8 +59,8 @@ proc main() =
 
         echo "--- Case ", caseNum, " ---"
         echo "  Before loading fixture:"
-        echo "    inputLnWeight.shape = ", @(inputLnWeight.shape.asNimView())
-        echo "    postAttnWeight.shape = ", @(postAttnWeight.shape.asNimView())
+        echo "    inputLnWeight.shape = ", inputLnWeight.shape
+        echo "    postAttnWeight.shape = ", postAttnWeight.shape
 
         # Load fixture - THIS IS WHERE CORRUPTION HAPPENS
         var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
@@ -71,14 +71,14 @@ proc main() =
         let layerPath = st.metadata.unsafeGet().getOrDefault("layer", "")
 
         echo "  After loading fixture:"
-        echo "    inputLnWeight.shape = ", @(inputLnWeight.shape.asNimView())
-        echo "    postAttnWeight.shape = ", @(postAttnWeight.shape.asNimView())
-        echo "    inputHiddenStates.shape = ", @(inputHiddenStates.shape.asNimView())
+        echo "    inputLnWeight.shape = ", inputLnWeight.shape
+        echo "    postAttnWeight.shape = ", postAttnWeight.shape
+        echo "    inputHiddenStates.shape = ", inputHiddenStates.shape
         echo "    layerPath = ", layerPath
 
         # Check if shapes changed
-        let inputLnShape = @(inputLnWeight.shape.asNimView())
-        let postAttnShape = @(postAttnWeight.shape.asNimView())
+        let inputLnShape = @(inputLnWeight.shape)
+        let postAttnShape = @(postAttnWeight.shape)
 
         if inputLnShape != @[64] or postAttnShape != @[64]:
           echo ""

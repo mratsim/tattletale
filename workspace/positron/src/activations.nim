@@ -11,7 +11,7 @@ type
   ActivationKind* {.size: sizeof(int8).} = enum
     kSilu = 0
 
-func silu_and_mul*(x: TorchTensor): TorchTensor =
+func silu_and_mul*(x: Tensor): Tensor =
   ## Fused SiLU and Mul activation.
   ##
   ## Input:
