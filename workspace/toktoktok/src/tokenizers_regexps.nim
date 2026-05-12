@@ -38,6 +38,11 @@ const
       # Note: Using \p{Script=Han} instead of \p{Han} to exclude punctuation like 。 (U+3002)
       # that have Han in ScriptExtensions but are not actually Han script characters.
       # Tiktoken uses Rust regex which seems to mismatch PCRE2
+      # TODO:
+      #   Given that in many cases the regex is supplied by the model
+      #   we might want to add a preprocessing phase
+      #   that would translate [\p{Han}]+ into [\p{Script=Han}]
+      # see commit bc8d9df32db81a9d08c4458bce5df2b1098a8f68
       [
             r"""[\p{Script=Han}]+""",
             r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
