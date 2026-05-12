@@ -134,12 +134,12 @@ wrapLibtorch:
 #       and warnings print the rejection reasons.
 
 func scaled_dot_product_attention*(
-  query, key, value: Tensor,
-  attn_mask: Option[Tensor] = none(Tensor),
-  dropout_p: cdouble = 0.0,
-  is_causal: bool = false,
-  scale: Option[float64] = none(float64),
-  enable_gqa: bool = false): Tensor {.inline.} =
+      query, key, value: Tensor,
+      attn_mask: Option[Tensor] = none(Tensor),
+      dropout_p: cdouble = 0.0,
+      is_causal: bool = false,
+      scale: Option[float64] = none(float64),
+      enable_gqa: bool = false): Tensor {.inline, nodestroy.} =
   ## SDPA — Transformers' attention
   ##
   ## Computes softmax(Q @ K^T / scale) @ V with efficient memory attention.
@@ -166,6 +166,13 @@ func scaled_dot_product_attention*(
   ##   - enable_gqa: Enable grouped-query attention (H_kv must divide H_q).
   ##
   ## Backends: See module-level documentation for backend selection details.
+
+  # {.nodestroy.} is necessary or we have a segfault if compiled with GCC v15.2.0
+  # but not GCC v15.2.1 or Clang.
+  # as with `bug_test_embedded_tensors.nim`
+  # and `wrapTorchTensorImpl` in `tensors.nim`
+  # it looks like when moving in/out of an object (here Option[T])
+  # Nim inserts destructors that interferes with the intrusive refcount
 
   convertLibTorchExceptions:
     wrapTorchTensor:
