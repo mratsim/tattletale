@@ -9,7 +9,7 @@ import
   std/math,
   std/strformat,
   workspace/libtorch/src/raw_libtorch as torch,
-  workspace/libtorch_testutils
+  ./utils/[torch_tensors_overloads, raw_libtorch_testutils]
 
 proc genShiftedVandermonde5x5*(dtype: ScalarKind): TorchTensor =
   ## Generate 5x5 shifted Vandermonde matrix: v[i, j] = i^(j+1)
@@ -212,7 +212,7 @@ proc main() =
     proc(): bool =
       ## Nim: a[1, |2, _] -> index 1, every 2nd of dim 1, all of dim 2
       ## numpy equivalent: t[1, ::2, :]
-      let t = torch.arange(24, kFloat64).reshape(@[2, 3, 4])
+      let t = torch.arange(24, kFloat64).reshape(2, 3, 4)
       let sliced = t[1, |2, _]
       doAssert sliced ==
         [[  12,  13,  14,  15],
@@ -286,7 +286,7 @@ proc main() =
       ##
       ## What Nim flip() gives: same result as Python a[::-1]
       var t = genShiftedVandermonde5x5(kFloat64).clone()
-      let reversed = t.flip(@[0])
+      let reversed = t.flip(0)
       let expected = @[
         @[  5.0,  25.0,  125.0,  625.0, 3125.0],
         @[  4.0,  16.0,   64.0,  256.0, 1024.0],
@@ -305,7 +305,7 @@ proc main() =
       ##
       ## To reverse and step, use: a.flip(dim).slice(...)
       var t = genShiftedVandermonde5x5(kFloat64).clone()
-      let reversed = t.flip(@[0])
+      let reversed = t.flip(0)
       let stepped = reversed[_.._|2, _]  # Reverse, then take every 2nd
       let expected = @[
         @[  5.0,  25.0,  125.0,  625.0, 3125.0],
@@ -750,7 +750,7 @@ proc main() =
     proc(): bool =
       ## Nim: a[0..<2] on 3D tensor is equivalent to a[0..<2, ...]
       ## Python: a[0:3] equivalent to a[0:3, ...] on 3D tensor
-      let t3d = torch.arange(24, kFloat64).reshape(@[2, 3, 4])
+      let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
       let sliced = t3d[0..<2, _, _]
       let expected = @[
         @[@[0.0, 1.0, 2.0, 3.0],
@@ -765,7 +765,7 @@ proc main() =
 
   runTest formatName("Slice equivalent to explicit spans", "a[0..<3] vs a[0..<3, _, :]"):
     proc(): bool =
-      let t3d = torch.arange(24, kFloat64).reshape(@[2, 3, 4])
+      let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
       let implicit = t3d[0..<2]
       let explicit = t3d[0..<2, _, _]
       doAssert implicit == explicit
@@ -913,7 +913,7 @@ proc main() =
       ##
       ## Example: What Python a[:, :, ::-1] would give in Nim:
       var t = genShiftedVandermonde5x5(kFloat64).clone()
-      let reversed = t.flip(@[1])  # Reverse along dim 1
+      let reversed = t.flip(1)  # Reverse along dim 1
       let first_col = reversed[_, 0]
       let expected_col = @[1.0, 32.0, 243.0, 1024.0, 3125.0].toTorchTensor.to(kFloat64)
       doAssert first_col == expected_col
@@ -1067,7 +1067,7 @@ proc main() =
   runTest formatName("Single slice on 3D", "a3d[0:2]"):
     proc(): bool =
       ## Python: a3d[0:2] equivalent to a3d[0:2, :, :]
-      let t3d = torch.arange(24, kFloat64).reshape(@[2, 3, 4])
+      let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
       let sliced = t3d[0..<2]
       let expected = @[
         @[@[0.0, 1.0, 2.0, 3.0],
@@ -1083,7 +1083,7 @@ proc main() =
   runTest formatName("Slice middle dimension", "a3d[:, 0:2, :]"):
     proc(): bool =
       ## Python: a3d[:, 0:2, :]
-      let t3d = torch.arange(24, kFloat64).reshape(@[2, 3, 4])
+      let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
       let sliced = t3d[_, 0..<2, _]
       let expected = @[
         @[@[0.0, 1.0, 2.0, 3.0],
@@ -1097,7 +1097,7 @@ proc main() =
   runTest formatName("Slice last dimension", "a3d[:, :, 0:2]"):
     proc(): bool =
       ## Python: a3d[:, :, 0:2]
-      let t3d = torch.arange(24, kFloat64).reshape(@[2, 3, 4])
+      let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
       let sliced = t3d[_, _, 0..<2]
       let expected = @[
         @[@[0.0, 1.0],
@@ -1128,7 +1128,7 @@ proc main() =
   runTest formatName("Multiple indices with slice", "a3d[0, 0:2, 1:3]"):
     proc(): bool =
       ## Python: a3d[0, 0:2, 1:3]
-      let t3d = torch.arange(24, kFloat64).reshape(@[2, 3, 4])
+      let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
       let sliced = t3d[0, 0..<2, 1..<3]
       let expected = @[
         @[1.0, 2.0],
@@ -1139,7 +1139,7 @@ proc main() =
 
   runTest formatName("Single slice on 4D", "a4d[0..<2]"):
     proc(): bool =
-      let t4d = torch.arange(120, kFloat64).reshape(@[2, 3, 4, 5])
+      let t4d = torch.arange(120, kFloat64).reshape(2, 3, 4, 5)
       let sliced = t4d[0..<2]
       doAssert sliced.shape[0] == 2
       doAssert sliced.shape[1] == 3
