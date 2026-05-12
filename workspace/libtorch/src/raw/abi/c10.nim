@@ -48,8 +48,6 @@ type
 # We can model that in a zero-copy and safely borrow-checked way
 # with "openarray[T]"
 
-{.experimental: "views".} # TODO this is ignored
-
 type
   ArrayRef*[T] {.importcpp: "c10::ArrayRef", bycopy.} = object
     # The field are private so we can't use them, but `lent` enforces borrow checking
