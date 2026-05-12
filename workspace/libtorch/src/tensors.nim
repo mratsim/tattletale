@@ -746,7 +746,7 @@ wrapLibtorch:
       wrapTorchTensor:
         tmp.raw[args]
 
-  template `[]`*(t: Tensor{`let`|`var`|`const`|lvalue}, args: varargs[untyped]): untyped =
+  template `[]`*(t: Tensor{`let`|`var`|`const`|lvalue|param}, args: varargs[untyped]): untyped =
     # Due to generic sandwich bug, this needs export of F.shape, F.`[]`, F.len
     convertLibTorchExceptions:
       wrapTorchTensor:

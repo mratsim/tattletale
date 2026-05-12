@@ -1,5 +1,5 @@
-import workspace/libtorch/src/tensors
-export tensors
+import workspace/libtorch/src/[tensors, tensors_nn]
+export tensors, tensors_nn
 
 # An important note. There are 3 types of equality:
 #

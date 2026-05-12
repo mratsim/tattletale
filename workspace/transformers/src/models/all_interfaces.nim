@@ -12,7 +12,7 @@ import
   ../layers/attn
 
 iface *Model:
-  proc forward(input: TorchTensor, positions: TorchTensor, cache: var KVCache): TorchTensor
+  proc forward(input: Tensor, positions: Tensor, cache: var KVCache): Tensor
 
 var ModelRegistry* {.compileTime.}: Table[string, proc(modelPath: string, device: DeviceKind): Model {.nimcall.}]
   ## Model registry - populated by each model module at initialization

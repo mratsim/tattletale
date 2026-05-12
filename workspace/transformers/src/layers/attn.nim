@@ -9,9 +9,6 @@ import
   std/math,
   std/options,
   workspace/libtorch as F,
-  workspace/libtorch/src/abi/neural_nets,
-  workspace/libtorch/src/torch_tensors_sugar,
-  workspace/libtorch/src/torch_tensors_overloads,
   workspace/transformers/src/layers/linear,
   workspace/transformers/src/layers/norm,
   ./rope
@@ -27,8 +24,8 @@ type
     softmax_scale*: float64
 
   KVCache* = object
-    keys*: TorchTensor
-    values*: TorchTensor
+    keys*: Tensor
+    values*: Tensor
 
   RopeGQAttention* = object
     q_proj*: Linear
@@ -54,14 +51,13 @@ func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: in
   )
 
 func forward*(
-  self: GroupedQueryAttention,
-  q: TorchTensor,
-  k: TorchTensor,
-  v: TorchTensor,
-  is_causal: bool = true,
-  attn_mask = none(TorchTensor),
-  dropout_p = 0.0'f64
-): TorchTensor =
+      self: GroupedQueryAttention,
+      q: Tensor,
+      k: Tensor,
+      v: Tensor,
+      is_causal: bool = true,
+      attn_mask = none(Tensor),
+      dropout_p = 0.0'f64): Tensor =
   # Backend: permute to (batch, head, seq, head_dim), ensure dtype, SDPA, reshape
   # Input q,k,v: (batch, seq, num_head, head_dim)
   let batch = q.size(0)
@@ -94,7 +90,7 @@ proc reset*(self: var KVCache) =
   self.keys = F.empty(0)
   self.values = F.empty(0)
 
-proc append*(self: var KVCache, k, v: TorchTensor): (TorchTensor, TorchTensor) =
+proc append*(self: var KVCache, k, v: Tensor): (Tensor, Tensor) =
   if self.keys.numel == 0:
     self.keys = k
     self.values = v
@@ -104,12 +100,11 @@ proc append*(self: var KVCache, k, v: TorchTensor): (TorchTensor, TorchTensor) =
   (self.keys, self.values)
 
 func init*(
-  _: type RopeGQAttention,
-  q_weight, k_weight, v_weight, o_weight, q_norm_weight, k_norm_weight: TorchTensor,
-  num_qo_head, num_kv_head, head_dim: int,
-  rotary: RotaryPositionEmbedding,
-  rms_norm_eps = 1e-6'f64
-): RopeGQAttention =
+      _: type RopeGQAttention,
+      q_weight, k_weight, v_weight, o_weight, q_norm_weight, k_norm_weight: Tensor,
+      num_qo_head, num_kv_head, head_dim: int,
+      rotary: RotaryPositionEmbedding,
+      rms_norm_eps = 1e-6'f64): RopeGQAttention =
   let q_proj = Linear.init(q_weight)
   let k_proj = Linear.init(k_weight)
   let v_proj = Linear.init(v_weight)
@@ -147,9 +142,8 @@ proc resetCache*(self: var RopeGQAttention) =
   self.rotary.resetCache()
 
 proc forward*(
-  self: var RopeGQAttention,
-  x: TorchTensor,
-): TorchTensor =
+      self: var RopeGQAttention,
+      x: Tensor): Tensor =
   # Use separate Q, K, V projections (matching HF/Qwen3)
   let q = self.q_proj.forward(x)
   var k_new = self.k_proj.forward(x)

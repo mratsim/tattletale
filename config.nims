@@ -30,6 +30,8 @@ func testerCmd(path: string): string =
   let filename = path.extractFilename()
   return
     "nim cpp -r" &
+    # " -d:release --stackTrace:on --lineTrace:on " &
+    " --debugger:native " &
     " --verbosity:0 --hints:off --warnings:off " &
     &" --outdir:build/tests/{filename} --nimcache:nimcache/tests/{filename} " &
     path
@@ -64,7 +66,8 @@ task download_test_tokenizers, "Download gpt-2 and llama3 tokenizers for testing
 func pytoktoktokBuildCmd(): string =
   return
     "nim c --app:lib" &
-    " -d:release" &
+    # " -d:release --stackTrace:on --lineTrace:on " &
+    " --debugger:native " &
     " --verbosity:0 --hints:off --warnings:off" &
     " --outdir:workspace/toktoktok/tests" &
     " --nimcache:nimcache/pytoktoktok" &
