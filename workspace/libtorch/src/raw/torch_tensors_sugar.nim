@@ -59,7 +59,6 @@ func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
 # -----------------------------------------------------
 # libtorch/include/c10/util/ArrayRef.h
 
-{.experimental: "views".}
 # Note:
 #   templates do literal replacement,
 #   i.e. if you pass (echo "launch missiles"; [1, 2]) to
@@ -75,10 +74,18 @@ func product*(a: openArray[SomeInteger]): SomeInteger {.inline.} =
 #   But we can't store an openArray in a let variable
 #   or return it from a proc without {.experimental: "views".}
 
-template asNimView*(ar: IntArrayRef): openArray[int] =
+func getPtrLen(ar: IntArrayRef): (ptr UncheckedArray[int], int) {.inline.} =
+  # Indirection to ensure the input and potential side-effect/computation
+  # are only evaluated/done once
+
   # Note: Clang doesn't like assigning to a temporary because it discards the const qualifier
   let dataptr {.codegenDecl: "const $# $#".}= cast[ptr UncheckedArray[int]](ar.data())
-  toOpenArray(dataptr, 0, ar.size.int - 1)
+  (dataptr, ar.size.int)
+
+template asNimView*(ar: IntArrayRef): openArray[int] =
+  # Ensure `ar` is only evaluated once to avoid double computation or double side-effects
+  let (p, len) = getPtrLen(ar)
+  toOpenArray(p, 0, len - 1)
 
 func asTorchView*(oa: varargs[int]): IntArrayRef {.inline.} =
   # libtorch only works (and actively checks) on 64-bit OSes.

@@ -18,8 +18,6 @@ import
   std/macros,
   workspace/libtorch/src/raw_libtorch as F
 
-{.experimental: "views".}
-
 # =============================================================================
 # C++ Exception Handling
 # =============================================================================

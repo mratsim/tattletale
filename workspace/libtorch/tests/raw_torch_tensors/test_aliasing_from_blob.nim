@@ -49,7 +49,7 @@ proc main() =
 
   # Create a tensor
   let tensor = F.randn([2, 3, 4], scalarKind=F.kFloat32)
-  echo "tensor.shape = ", @(tensor.shape.asNimView())
+  echo "tensor.shape = ", tensor.shape
 
   # Get data pointer
   let tensorDataPtr = F.data_ptr(tensor)
@@ -79,7 +79,7 @@ proc main() =
   # Create tensor from blob
   let tensorFromBlob = F.from_blob(sourceDataPtr, shape, scalarKind=F.kFloat32)
   echo "Tensor from blob:"
-  echo "  tensor.shape = ", @(tensorFromBlob.shape.asNimView())
+  echo "  tensor.shape = ", tensorFromBlob.shape
   echo "  tensor.data_ptr() = 0x", toHex(cast[uint](F.data_ptr(tensorFromBlob)))
   echo "  tensor.shape.data() = 0x", toHex(cast[uint](tensorFromBlob.shape.data()))
   echo ""
