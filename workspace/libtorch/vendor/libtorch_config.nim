@@ -19,6 +19,6 @@
 
 const UseCuda* = defined(cuda)
 
-const TTT_LIBTORCH_SOURCE* {.strdefine.} = "vendor"
+const TTT_LIBTORCH_SOURCE* {.strdefine.} = "venv"
 
 const TTT_LIBTORCH_VENV_PYTHON_LIB* {.strdefine.} = "python3.14"
