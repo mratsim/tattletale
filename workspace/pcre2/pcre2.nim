@@ -35,9 +35,9 @@
 # and `git clone -c core.symlinks=true https://github.com/mratsim/tattletale`
 # to enable cloning with symlink
 
-const TTL_USE_SYSTEM_PCRE2 {.booldefine.} = true
+const TTT_USE_SYSTEM_PCRE2 {.booldefine.} = true
 
-when not TTL_USE_SYSTEM_PCRE2:
+when not TTT_USE_SYSTEM_PCRE2:
   {.compile:"vendor/pcre2_chartables.c".}
   {.compile:"vendor/pcre2/src/pcre2_auto_possess.c".}
   {.compile:"vendor/pcre2/src/pcre2_chkdint.c".}
@@ -372,7 +372,7 @@ type
   GeneralContext* = object
   MatchData* = object
 
-when not TTL_USE_SYSTEM_PCRE2:
+when not TTT_USE_SYSTEM_PCRE2:
   {.pragma: pcre2, importc: "pcre2_$1_8", cdecl.}
 else:
   when hostOS == "windows":
