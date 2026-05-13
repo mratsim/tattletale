@@ -15,7 +15,7 @@ import
   workspace/safetensors,
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
-  workspace/transformers/src/layers/all,
+  workspace/transformers/src/layers,
   workspace/transformers/src/layers/rope {.all.},
   workspace/positron,
   workspace/libtorch_testutils
@@ -26,6 +26,7 @@ const
   TransformerBlockFixtureDir = currentSourcePath().parentDir() / "fixtures" / "layers" / "Qwen3-0.6B-block-8"
   ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B" / "model.safetensors"
   ModelName = "Qwen3-0.6B"
+
 proc main() =
   runTest "RMSNorm layer fixtures":
     proc(): bool =
