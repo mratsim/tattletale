@@ -105,6 +105,21 @@ task make_pytoktoktok, "Build pytoktoktok.so for Python import":
   withDir(ProjectRoot):
     runCmd(cmd)
 
+func pytttransformersBuildCmd(): string =
+  return
+    "nim c --app:lib" &
+    " --debugger:native " &
+    " --verbosity:0 --hints:off --warnings:off" &
+    " --outdir:workspace/transformers/tests" &
+    " --nimcache:nimcache/pytttransformers" &
+    " -o:workspace/transformers/tests/pytttransformers.so" &
+    " workspace/transformers/tests/pytttransformers.nim"
+
+task make_pytttransformers, "Build pytttransformers.so for Python import":
+  let cmd = pytttransformersBuildCmd()
+  withDir(ProjectRoot):
+    runCmd(cmd)
+
 # Test tasks
 # --------------------------------------------------
 # Compile with: nim cpp --outdir:build/tests --nimcache:nimcache/tests --hints:off --warnings:off
