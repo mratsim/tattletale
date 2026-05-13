@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Compile with
-# nim c -r --hints:off --warnings:off --verbosity:0 -d:danger -d:TTL_METER --outdir:build workspace/toktoktok/bench/meter_tokenizer.nim
+# nim c -r --hints:off --warnings:off --verbosity:0 -d:danger -d:TTT_METER --outdir:build workspace/toktoktok/bench/meter_tokenizer.nim
 
 import workspace/probes # probes MUST be imported before measured import
 

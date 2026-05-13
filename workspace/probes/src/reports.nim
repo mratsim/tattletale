@@ -15,7 +15,7 @@ import
 # -------------------------------------------------------
 
 proc reportMetering*() =
-  when TTL_METER:
+  when TTT_METER:
     let name = when SupportsCPUName: cpuName() else: "(name auto-detection not implemented for this CPU family)"
     echo "\nCPU: ", name
 
@@ -67,4 +67,4 @@ proc reportMetering*() =
         echo &"""|{shortname:<60}|{m.numCalls:>14}|{throughput:>20.3f}|{cumulTimeUs:>18.3f}|{avgTimeUs:>18.3f}|"""
       # echo lineSep
   else:
-    echo "Please recompile with -d:TTL_METER to get function call statistics"
+    echo "Please recompile with -d:TTT_METER to get function call statistics"

@@ -15,10 +15,10 @@
 # Types
 # --------------------------------------------------
 
-const TTL_METER* {.booldefine.} = off
-const TTL_TRACE {.booldefine.} = off # For manual "debug-echo"-style timing.
+const TTT_METER* {.booldefine.} = off
+const TTT_TRACE {.booldefine.} = off # For manual "debug-echo"-style timing.
 
-when TTL_METER or TTL_TRACE:
+when TTT_METER or TTT_TRACE:
 
   import ./benchmarking
 
@@ -101,7 +101,7 @@ when TTL_METER or TTL_TRACE:
       when SupportsGetTicks:
         discard Metrics[id].cumulatedCycles.atomicInc(elapsedCycles)
 
-      when TTL_TRACE:
+      when TTT_TRACE:
         # Advice: Use "when name == relevantProc" to isolate specific procedures.
         # strformat doesn't work in templates.
         when SupportsGetTicks:
@@ -136,7 +136,7 @@ else:
     discard
 
 template meter*(procBody: untyped): untyped =
-  when TTL_METER or TTL_TRACE:
+  when TTT_METER or TTT_TRACE:
     meterAnnotate(procBody)
   else:
     procBody
@@ -146,9 +146,9 @@ template meter*(procBody: untyped): untyped =
 
 when isMainModule:
 
-  static: doAssert TTL_METER or TTL_TRACE, "TTL_METER or TTL_TRACE must be on for tracing"
+  static: doAssert TTT_METER or TTT_TRACE, "TTT_METER or TTT_TRACE must be on for tracing"
 
-  when TTL_METER or TTL_TRACE: # Avoid warnings from nim check or nimsuggest
+  when TTT_METER or TTT_TRACE: # Avoid warnings from nim check or nimsuggest
     expandMacros:
       proc foo(x: int): int{.meter.} =
         echo "Hey hey hey"

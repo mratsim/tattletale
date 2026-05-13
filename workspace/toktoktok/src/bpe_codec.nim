@@ -128,9 +128,9 @@ iterator findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0)
 # Benchmarking shows that repeatedly returning/concatenating sequences was too much overhead
 # in `bytePairEncode` and in-place construction was necessary.
 #
-# Note: TTL_METER introduces significant overhead especially for small functions (cache misses + atomic increment on function in/out)
+# Note: TTT_METER introduces significant overhead especially for small functions (cache misses + atomic increment on function in/out)
 #
-# ❯ nim c -r --hints:off --warnings:off --verbosity:0 -d:danger -d:TTL_METER --outdir:build workspace/toktoktok/bench/meter_tokenizer.nim
+# ❯ nim c -r --hints:off --warnings:off --verbosity:0 -d:danger -d:TTT_METER --outdir:build workspace/toktoktok/bench/meter_tokenizer.nim
 #
 # ======================================================================
 # PERFORMANCE METERING: BPETokenizer.encode
