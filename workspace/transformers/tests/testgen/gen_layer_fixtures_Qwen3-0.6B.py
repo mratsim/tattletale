@@ -7,10 +7,14 @@ This script:
 
 Space-saving: Weights are loaded from tests/hf_models/Qwen3-0.6B/model.safetensors
 instead of being saved to a separate file (~30 MiB saved per layer).
+
+Determinism: each generator calls torch.manual_seed with its own seed constant.
+Adding or reordering generators never changes other fixture files.
+Use ``--only <name>`` to regenerate a single fixture type.
 """
 
-import json
 import os
+import sys
 import torch
 from safetensors import safe_open
 from safetensors import torch as st
@@ -25,60 +29,34 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+# ── Determinism (called ONCE at import time) ──────────────────────────
+# Determinism: cudnn settings for reproducibility.
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.benchmark = False
+
+# ── Config ────────────────────────────────────────────────────────────
 MODEL_NAME = "Qwen3-0.6B"
 LAYER_IDX = 8
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 FIXTURE_DIR = os.path.join(
     GRANDPARENT_DIR, "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}"
 )
-# WEIGHTS_FILE removed - load directly from main model
 MODEL_PATH = os.path.join(
     os.path.dirname(GRANDPARENT_DIR), f"tests/hf_models/{MODEL_NAME}/model.safetensors"
-)  # Assuming a very small model were everything fits in a single safetensor
-FIXED_SEED = 42
+)
+
+# Per-generator seeds — independent, order-agnostic.
+SEED_NORM  = 42
+SEED_MLP   = 43
+SEED_ATTN  = 44
+SEED_ROPE  = 45
 
 
-def set_seed(seed: int = FIXED_SEED) -> None:
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-    torch.use_deterministic_algorithms(True, warn_only=True)
-
+# ── Helpers ───────────────────────────────────────────────────────────
 
 def ensure_fixture_dir() -> None:
     os.makedirs(FIXTURE_DIR, exist_ok=True)
-
-
-# Weights are loaded directly from main model in generate_all_fixtures()
-# No separate weights file is saved (space-saving approach)
-
-
-# OLD: def extract_layer_weights() -> dict:
-# OLD:     """Extract weights for a specific layer from the model safetensors."""
-# OLD:     prefix = f"model.layers.{LAYER_IDX}."
-# OLD:     weights = {}
-# OLD:     with safe_open(MODEL_PATH, framework="pt") as f:
-# OLD:         for key in f.keys():
-# OLD:             if key.startswith(prefix):
-# OLD:                 new_key = key.replace(prefix, "")
-# OLD:                 weights[new_key] = f.get_tensor(key).clone()
-# OLD:     return weights
-
-
-# OLD: def save_layer_weights(weights: dict) -> str:
-# OLD:     """Save layer weights to a separate safetensors file."""
-# OLD:     serialized = st.save(weights)
-# OLD:     with open(WEIGHTS_FILE, "wb") as f:
-# OLD:         f.write(serialized)
-# OLD:     print(f"Saved layer weights to {WEIGHTS_FILE}")
-# OLD:     return WEIGHTS_FILE
-
-
-# OLD: def load_layer_weights() -> dict:
-# OLD:     """Load layer weights from the separate safetensors file."""
-# OLD:     with safe_open(WEIGHTS_FILE, framework="pt") as f:
-# OLD:         weights = {key: f.get_tensor(key).clone() for key in f.keys()}
-# OLD:     return weights
 
 
 def create_layers_from_weights(weights: dict) -> tuple:
@@ -137,16 +115,17 @@ def save_fixture(layer_name: str, case_num: int, metadata: dict, tensors: dict) 
     return filepath
 
 
+# ── Generators ────────────────────────────────────────────────────────
+
 def generate_norm_fixtures(
     input_layernorm: Qwen3RMSNorm, post_attention_layernorm: Qwen3RMSNorm
 ) -> None:
     """Generate fixtures for RMSNorm layers using real weights."""
-    set_seed(FIXED_SEED)
+    torch.manual_seed(SEED_NORM)
     layer_name = "norm"
 
     # Case 00: input_layernorm normal forward
     x = torch.randn(2, 8, 1024, dtype=torch.bfloat16)
-    print(f"input_x[0, 0:5, 0:5]:\n{x[0, 0:5, 0:5]}")
     output = input_layernorm(x)
     save_fixture(
         layer_name,
@@ -206,7 +185,7 @@ def generate_norm_fixtures(
 
 def generate_mlp_fixtures(mlp: Qwen3MLP) -> None:
     """Generate fixtures for MLP layer using real weights."""
-    set_seed(FIXED_SEED + 1)
+    torch.manual_seed(SEED_MLP)
     layer_name = "mlp"
 
     # Case 00: Normal forward
@@ -269,8 +248,8 @@ def generate_mlp_fixtures(mlp: Qwen3MLP) -> None:
 
 
 def generate_rope_fixtures(rotary: Qwen3RotaryEmbedding, config) -> None:
-    """Generate fixtures for RoPE apply — matches Nim tensor layout (batch, seq, heads, head_dim)."""
-    set_seed(FIXED_SEED + 3)
+    """Generate fixtures for RoPE apply — matches Nim tensor layout."""
+    torch.manual_seed(SEED_ROPE)
     layer_name = "rope"
 
     # Case 00: batch=2, seq=8, full heads (16), GQA k_heads (8)
@@ -322,7 +301,7 @@ def generate_rope_fixtures(rotary: Qwen3RotaryEmbedding, config) -> None:
 
 def generate_attn_fixtures(attn: Qwen3Attention, rotary: Qwen3RotaryEmbedding) -> None:
     """Generate fixtures for attention layer using real weights."""
-    set_seed(FIXED_SEED + 2)
+    torch.manual_seed(SEED_ATTN)
     layer_name = "attn"
 
     # Case 00: Normal forward
@@ -387,6 +366,39 @@ def generate_attn_fixtures(attn: Qwen3Attention, rotary: Qwen3RotaryEmbedding) -
     print(f"Generated {layer_name} fixtures")
 
 
+# ── Generators registry (for --only) ──────────────────────────────────
+
+GENERATORS = {
+    "norm": lambda layers: generate_norm_fixtures(*layers["norm"]),
+    "mlp":  lambda layers: generate_mlp_fixtures(*layers["mlp"]),
+    "rope": lambda layers: generate_rope_fixtures(*layers["rope"]),
+    "attn": lambda layers: generate_attn_fixtures(*layers["attn"]),
+}
+
+
+# ── Main ──────────────────────────────────────────────────────────────
+
+def _load_weights() -> dict:
+    prefix = f"model.layers.{LAYER_IDX}."
+    weights = {}
+    with safe_open(MODEL_PATH, framework="pt") as f:
+        for key in f.keys():
+            if key.startswith(prefix):
+                weights[key.replace(prefix, "")] = f.get_tensor(key).clone()
+    return weights
+
+
+def _build_layers(weights: dict):
+    input_ln, post_ln, mlp, attn = create_layers_from_weights(weights)
+    rotary = Qwen3RotaryEmbedding(Qwen3Config())
+    return {
+        "norm": (input_ln, post_ln),
+        "mlp":  (mlp,),
+        "rope": (rotary, Qwen3Config()),
+        "attn": (attn, rotary),
+    }
+
+
 def generate_all_fixtures() -> None:
     """Generate all layer fixtures."""
     print(f"Generating {MODEL_NAME} layer {LAYER_IDX} fixtures")
@@ -394,31 +406,40 @@ def generate_all_fixtures() -> None:
 
     ensure_fixture_dir()
 
-    # Space-saving: Load weights directly from main model (no separate file)
-    print("Loading layer weights from main model...")
-    prefix = f"model.layers.{LAYER_IDX}."
-    weights = {}
-    with safe_open(MODEL_PATH, framework="pt") as f:
-        for key in f.keys():
-            if key.startswith(prefix):
-                weights[key.replace(prefix, "")] = f.get_tensor(key).clone()
+    weights = _load_weights()
+    layers = _build_layers(weights)
 
-    # Create layers with real weights
-    print("Creating layers with real weights...")
-    input_layernorm, post_attention_layernorm, mlp, attn = create_layers_from_weights(
-        weights
-    )
-    rotary = Qwen3RotaryEmbedding(Qwen3Config())
+    generate_norm_fixtures(*layers["norm"])
+    generate_mlp_fixtures(*layers["mlp"])
+    generate_rope_fixtures(*layers["rope"])
+    generate_attn_fixtures(*layers["attn"])
 
-    # Generate fixtures
-    generate_norm_fixtures(input_layernorm, post_attention_layernorm)
-    generate_mlp_fixtures(mlp)
-    generate_rope_fixtures(rotary, Qwen3Config())
-    generate_attn_fixtures(attn, rotary)
     print("=" * 60)
     print(f"Fixture generation complete!")
     print(f"Fixtures saved to: {FIXTURE_DIR}")
-    print(f"Note: Weights loaded from main model (no separate weights file)")
+
+
+def main():
+    # --only: regenerate just one fixture type (doesn't touch the rest)
+    only = None
+    if len(sys.argv) > 1 and sys.argv[1] == "--only":
+        if len(sys.argv) < 3:
+            print(f"Usage: python {sys.argv[0]} [--only norm|mlp|rope|attn]")
+            sys.exit(1)
+        only = sys.argv[2]
+        if only not in GENERATORS:
+            print(f"Unknown: {only}. Available: {', '.join(sorted(GENERATORS))}")
+            sys.exit(1)
+
+    if only is None:
+        generate_all_fixtures()
+    else:
+        ensure_fixture_dir()
+        weights = _load_weights()
+        layers = _build_layers(weights)
+        GENERATORS[only](layers)
+        print(f"Done: {only} fixtures written to {FIXTURE_DIR}")
+
 
 if __name__ == "__main__":
-    generate_all_fixtures()
+    main()
