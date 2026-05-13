@@ -17,3 +17,4 @@ test-vectors = [
 
 [tool.uv]
 package = false
+managed-python-version = "3.14"
