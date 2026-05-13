@@ -44,7 +44,7 @@ elif TTT_LIBTORCH_SOURCE == "venv":
   const HeadersPath* = LibTorchPath / "include"
 
   static:
-    doAssert dirExists(HeadersPath), , block:
+    doAssert dirExists(HeadersPath), block:
       "Tattletale is currently configured with -dTTT_LIBTORCH_SOURCE=" & TTT_LIBTORCH_SOURCE & "\n" &
       "PyTorch headers do not exist at '" & HeadersPath & "\n" &
       "Please double-check your Python version or venv installation\n" &

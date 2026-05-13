@@ -98,6 +98,8 @@ task test_libtorch, "Test workspace/libtorch":
       runCmd(cmd)
     for cmd in getTestCommands("workspace/libtorch/tests/tensors"):
       runCmd(cmd)
+    for cmd in getTestCommands("workspace/libtorch/tests/python_integration"):
+      runCmd(cmd)
 
 task test_safetensors, "Test workspace/safetensors":
   withDir(ProjectRoot):
