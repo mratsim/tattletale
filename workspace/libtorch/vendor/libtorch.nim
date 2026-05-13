@@ -28,6 +28,13 @@ when TTT_LIBTORCH_SOURCE == "vendor":
   const LibrariesPath* = LibTorchPath / "lib"
   const HeadersPath* = LibTorchPath / "include"
 
+  static:
+    doAssert dirExists(HeadersPath), block:
+      "Tattletale is currently configured with -dTTT_LIBTORCH_SOURCE=" & TTT_LIBTORCH_SOURCE & "\n" &
+      "PyTorch headers do not exist at '" & HeadersPath & "\n" &
+      "Please run the libtorch downloader via `nim install_libtorch`\n" &
+      "or switch to -dTTT_LIBTORCH_SOURCE=venv"
+
 elif TTT_LIBTORCH_SOURCE == "venv":
   # .venv is at project root: go up from vendor/ → libtorch/ → workspace/ → tattletale/
   const ProjectRoot = LibTorchSourceRoot.parentDir().parentDir().parentDir()
@@ -35,6 +42,14 @@ elif TTT_LIBTORCH_SOURCE == "venv":
   const LibTorchPath* = VenvSitePackages / "torch"
   const LibrariesPath* = LibTorchPath / "lib"
   const HeadersPath* = LibTorchPath / "include"
+
+  static:
+    doAssert dirExists(HeadersPath), , block:
+      "Tattletale is currently configured with -dTTT_LIBTORCH_SOURCE=" & TTT_LIBTORCH_SOURCE & "\n" &
+      "PyTorch headers do not exist at '" & HeadersPath & "\n" &
+      "Please double-check your Python version or venv installation\n" &
+      "or switch to -dTTT_LIBTORCH_SOURCE=vendor\n" &
+      "and run the libtorch downloader via `nim install_libtorch`"
 
 elif TTT_LIBTORCH_SOURCE == "system":
   {.error: "system libtorch mode is not yet implemented".}

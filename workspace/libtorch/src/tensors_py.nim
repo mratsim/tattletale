@@ -26,7 +26,7 @@ privateAccess(Tensor)
 # THPVariable — Memory layout of Python torch.Tensor (64-bit)
 # =============================================================================
 
-type THPVariable* = object
+type THPVariable = object
   ## Memory layout of Python torch.Tensor (verified at offset 16 on 64-bit).
   ob_refcnt: csize_t                          # 0..7
   ob_type: pointer                            # 8..15
@@ -34,13 +34,11 @@ type THPVariable* = object
   backward_hooks: pointer                     # 24..31
   post_accumulate_grad_hooks: pointer         # 32..39
 
-
-const THPVariableSize* = 40  # bytes on 64-bit
 # =============================================================================
 # Helper: cast PyObject → ptr THPVariable
 # =============================================================================
 
-proc thpVariableFromPyObject*(pyobj: PyObject): ptr THPVariable {.inline.} =
+proc thpVariableFromPyObject(pyobj: PyObject): ptr THPVariable {.inline.} =
   ## Cast a Python torch.Tensor to its underlying THPVariable struct pointer.
   ## Caller must verify the object is a torch.Tensor first.
   cast[ptr THPVariable](pyobj.privateRawPyObj())
@@ -66,7 +64,7 @@ proc capsuleGetPointer(obj: PyObject, name: cstring): pointer {.inline.} =
 # Validation helpers
 # =============================================================================
 
-proc isTorchTensor*(pyobj: PyObject): bool {.inline.} =
+proc isTorchTensor(pyobj: PyObject): bool =
   ## Check if a PyObject is a torch.Tensor instance.
   let tensorType = pyImport("torch").getAttr("Tensor")
   let objPtr = pyobj.privateRawPyObj()
@@ -75,7 +73,7 @@ proc isTorchTensor*(pyobj: PyObject): bool {.inline.} =
     cast[PyTypeObject](objType), cast[PyTypeObject](tensorType.privateRawPyObj())
   ) == 1
 
-proc checkTorchTensor*(pyobj: PyObject) =
+proc checkTorchTensor(pyobj: PyObject) =
   ## Raise ValueError if pyobj is not a torch.Tensor.
   if not isTorchTensor(pyobj):
     let objPtr = pyobj.privateRawPyObj()
