@@ -27,11 +27,11 @@ const FIXTURE_PATH = FIXTURES_DIR / "shape_aliasing_multi_tensor.safetensors"
 
 # Expected shapes for each tensor
 const
-  expected_shape_a = [2048, 1024]
-  expected_shape_b = [1024, 1024]
-  expected_shape_c = [1024, 2048]
-  expected_shape_d = [3072, 1024]
-  expected_shape_e = [1024, 3072]
+  expected_shape_a = [4, 2]
+  expected_shape_b = [2, 2]
+  expected_shape_c = [2, 4]
+  expected_shape_d = [6, 2]
+  expected_shape_e = [2, 6]
 
 proc main() =
   echo "Testing safetensors shape aliasing bug"

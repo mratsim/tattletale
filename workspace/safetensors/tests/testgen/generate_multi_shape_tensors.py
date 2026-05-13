@@ -16,12 +16,13 @@ def main():
     os.makedirs(FIXTURES_DIR, exist_ok=True)
     
     # Create tensors with distinctly different shapes
+    # Minimal sizes for aliasing test - only shape diversity matters
     tensors = {
-        "tensor_a": torch.randn([2048, 1024], dtype=torch.bfloat16),
-        "tensor_b": torch.randn([1024, 1024], dtype=torch.bfloat16),
-        "tensor_c": torch.randn([1024, 2048], dtype=torch.bfloat16),
-        "tensor_d": torch.randn([3072, 1024], dtype=torch.bfloat16),
-        "tensor_e": torch.randn([1024, 3072], dtype=torch.bfloat16),
+        "tensor_a": torch.randn([4, 2], dtype=torch.bfloat16),
+        "tensor_b": torch.randn([2, 2], dtype=torch.bfloat16),
+        "tensor_c": torch.randn([2, 4], dtype=torch.bfloat16),
+        "tensor_d": torch.randn([6, 2], dtype=torch.bfloat16),
+        "tensor_e": torch.randn([2, 6], dtype=torch.bfloat16),
     }
     
     output_path = os.path.join(FIXTURES_DIR, "shape_aliasing_multi_tensor.safetensors")
