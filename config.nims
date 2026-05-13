@@ -17,6 +17,32 @@ import std/os, std/strutils, std/strformat
 
 const ProjectRoot = currentSourcePath.rsplit(DirSep, 1)[0]
 
+# Dependencies
+# --------------------------------------------------
+# Gathered from each subpackage's .nimble file.
+# `deps` = runtime dependencies (needed for compilation/testing)
+# `deps_dev` = dev-only dependencies (nim install_libtorch, test tokenizers downloads)
+
+const deps = [
+  "nimpy >= 0.2.1",        # libtorch: Python interop
+  "jsony",                  # safetensors, toktoktok: JSON parsing
+  "stew",                   # safetensors: bit manipulation
+  "packedjson@#head",       # transformers: JSON config loading (needs shallowCopy fix)
+  "https://github.com/yglukhov/iface",  # transformers: interface support
+]
+
+const deps_dev: seq[string] = @[
+  "zip",       # dev: nim install_libtorch (download/extract libtorch)
+  "chronos",   # dev: download_test_tokenizers (HTTP async)
+] & newSeq[string]()
+
+task install_deps, "Install runtime dependencies":
+  exec "nimble install " & deps.join(" ")
+
+task install_deps_dev, "Install dev-only dependencies (zip, chronos)":
+  exec "nimble install " & deps_dev.join(" ")
+
+
 # Utils
 # --------------------------------------------------
 
