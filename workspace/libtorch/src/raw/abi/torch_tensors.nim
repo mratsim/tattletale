@@ -251,7 +251,10 @@ proc unsafeReleaseTensorImpl(t: var TorchTensor): pointer {.discardable, importc
   ## intrusive_ptr instance invalid. That means the refcount is not decreased.
   ## You *must* put the returned pointer back into a intrusive_ptr using
   ## intrusive_ptr::reclaim(ptr) to properly destruct it.
-
+proc unsafeGetTensorImpl*(a: TorchTensor): pointer {.importcpp: "#.unsafeGetTensorImpl()".}
+  ## Returns raw TensorImpl* without modifying refcount.
+  ## The caller must not free this pointer.
+  ## Used by Nim → Python path (capsule creation).
 # 1. =destroy: C++ destructor decrements refcount
 proc `=destroy`*(t: var TorchTensor) {.importcpp: "#.~Tensor()".}
   # Calls ~intrusive_ptr() which calls reset_() → decrements refcount
