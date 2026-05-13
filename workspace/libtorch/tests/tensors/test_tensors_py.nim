@@ -28,7 +28,7 @@ proc main() =
   runTest "Python → Nim: basic float32 tensor":
     proc(): bool =
       let torch = pyImport("torch")
-      let pyTensor = callMethod(torch, "tensor", @[@[1.0, 2.0, 3.0]])
+      let pyTensor = callMethod(torch, "tensor", @[1.0, 2.0, 3.0])
       let nim = tensorFromPyObject(pyTensor)
       nim.isDefined() and nim.shape == @[3]
 
@@ -48,7 +48,8 @@ proc main() =
 
   runTest "Python → Nim: non-torch object raises ValueError":
     proc(): bool =
-      let pyList = pyImport("builtins").`(`("list", @[@[1, 2, 3]])
+      let listFn = pyImport("builtins").getAttr("list")
+      let pyList = callMethod(listFn, "__call__", @[@[1, 2, 3]])
       try:
         discard tensorFromPyObject(pyList)
         false  # Should have raised

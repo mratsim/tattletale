@@ -20,25 +20,46 @@ import
 # Libraries
 # -----------------------------------------------------------------------
 
-const LibTorchPath* = currentSourcePath.parentDir() / "libtorch"
-const LibrariesPath* = LibTorchPath / "lib"
+# Source root (vendor directory containing libtorch/)
+const LibTorchSourceRoot = currentSourcePath.parentDir()
+
+when TTT_LIBTORCH_SOURCE == "vendor":
+  const LibTorchPath* = LibTorchSourceRoot / "libtorch"
+  const LibrariesPath* = LibTorchPath / "lib"
+  const HeadersPath* = LibTorchPath / "include"
+
+elif TTT_LIBTORCH_SOURCE == "venv":
+  # .venv is at project root: go up from vendor/ → libtorch/ → workspace/ → tattletale/
+  const ProjectRoot = LibTorchSourceRoot.parentDir().parentDir().parentDir()
+  const VenvSitePackages = ProjectRoot / ".venv" / "lib" / TTT_LIBTORCH_VENV_PYTHON_LIB / "site-packages"
+  const LibTorchPath* = VenvSitePackages / "torch"
+  const LibrariesPath* = LibTorchPath / "lib"
+  const HeadersPath* = LibTorchPath / "include"
+
+elif TTT_LIBTORCH_SOURCE == "system":
+  {.error: "system libtorch mode is not yet implemented".}
+
+else:
+  {.error: "Unknown TTT_LIBTORCH_SOURCE: " & TTT_LIBTORCH_SOURCE &
+            " (must be 'vendor', 'venv', or 'system')".}
+
+# Torch header sub-path is the same for vendor and venv
+const TorchHeadersPath* = HeadersPath / "torch" / "csrc" / "api" / "include"
+const TorchHeader* = TorchHeadersPath / "torch" / "torch.h"
 
 # TODO: proper build system on "nimble install" (put libraries in .nimble/bin?)
 # if the libPath is not in LD_LIBRARY_PATH
 # The libraries won't be loaded at runtime
-
 
 when defined(windows): # Static linking
   when defined(windows):
     const libSuffix = ".lib"
     const libPrefix = ""
   elif defined(maxosx):
-    #
     const libSuffix = ".a" # MacOS
     const libPrefix = "lib"
   else:
     const libSuffix = ".a" # BSD / Linux
-    const libPrefix = "lib"
   {.link: librariesPath / (libPrefix & "c10" & libSuffix).}
   {.link: librariesPath / (libPrefix & "torch_cpu" & libSuffix).}
 
@@ -51,27 +72,27 @@ else: # Dynamic linking
   when UseCuda:
     {.passL: " -ltorch_cuda ".}
 
-  when not UseGlobalTorch:
-    # Link to library in vendor (not for deployment!)!
+  when TTT_LIBTORCH_SOURCE == "vendor":
+    # Link to library in vendor (not for deployment!)
     when defined(macosx):
       {.passL:"-rpath " & LibrariesPath.}
     elif defined(posix):
       {.passL:"-Wl,-rpath," & LibrariesPath.}
+  # For "venv": runtime library discovery is handled by the venv environment
+  # or LD_LIBRARY_PATH. The .venv's libtorch_python.so already has proper rpath.
 
-    # Look next to the final binary
-    # when defined(macosx):
-    #   {.passL:"-rpath @loader_path".}
-    # elif defined(posix):
-    #   {.passL:"-Wl,-rpath,\\$ORIGIN".}
+  # For "system": system linker paths should handle it
+
+  # Look next to the final binary
+  # when defined(macosx):
+  #   {.passL:"-rpath @loader_path".}
+  # elif defined(posix):
+  #   {.passL:"-Wl,-rpath,\\$ORIGIN".}
 
 {.push cdecl.}
 
 # Headers
 # -----------------------------------------------------------------------
-
-const HeadersPath* = LibTorchPath / "include"
-const TorchHeadersPath* = HeadersPath / "torch" / "csrc" / "api" / "include"
-const TorchHeader* = TorchHeadersPath / "torch" / "torch.h"
 
 {.passC: "-I" & HeadersPath.}
 {.passC: "-I" & TorchHeadersPath.}
