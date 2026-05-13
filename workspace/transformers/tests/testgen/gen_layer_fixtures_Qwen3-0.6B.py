@@ -8,11 +8,16 @@ This script:
 Space-saving: Weights are loaded from tests/hf_models/Qwen3-0.6B/model.safetensors
 instead of being saved to a separate file (~30 MiB saved per layer).
 
-Determinism: each generator calls torch.manual_seed with its own seed constant.
-Adding or reordering generators never changes other fixture files.
-Use ``--only <name>`` to regenerate a single fixture type.
+Determinism:
+- Each generator calls torch.manual_seed with its own seed constant (SEED_NORM=42, SEED_MLP=43, etc.)
+- Fixture files are fully deterministic across separate process invocations
+- Metadata saved to separate `.metadata.json` files (safetensors HashMap has randomized order in Rust)
+- JSON metadata uses `sort_keys=True` for deterministic serialization
+- Use ``--only <name>`` to regenerate a single fixture type without affecting others
 """
 
+import json
+from collections import OrderedDict
 import os
 import sys
 import torch
@@ -99,18 +104,30 @@ def create_layers_from_weights(weights: dict) -> tuple:
 
 
 def save_fixture(layer_name: str, case_num: int, metadata: dict, tensors: dict) -> str:
-    """Save a fixture to safetensors format."""
+    """Save a fixture to safetensors format with separate metadata file.
+
+    Metadata is saved to a separate .metadata.json file for determinism.
+    safetensors uses HashMap which has randomized iteration order in Rust.
+    """
     filename = f"{layer_name}-{MODEL_NAME}-{case_num:02d}.safetensor"
     filepath = os.path.join(FIXTURE_DIR, filename)
 
-    safe_tensors = {}
-    for name, tensor in tensors.items():
-        if tensor is not None:
-            safe_tensors[name] = tensor.detach().cpu().contiguous()
-
-    serialized = st.save(safe_tensors, metadata=metadata)
+    # Sort tensors for deterministic serialization (safetensors sorts by dtype then name)
+    sorted_tensors = OrderedDict(
+        (name, tensor.detach().cpu().contiguous())
+        for name, tensor in sorted(tensors.items())
+        if tensor is not None
+    )
+    # Save tensors without metadata (deterministic)
+    serialized = st.save(sorted_tensors, metadata=None)
     with open(filepath, "wb") as f:
         f.write(serialized)
+
+    # Save metadata to separate JSON file (deterministic with sorted keys)
+    metadata_path = filepath + ".metadata.json"
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, sort_keys=True, indent=2)
+        f.write("\n")
 
     return filepath
 

@@ -26,7 +26,7 @@ func rotateHalf(x: Tensor): Tensor =
   let x2 = x[_, _, _, half_dim..<head_dim]
   F.cat([x2.neg(), x1], -1)
 
-func applyRopeImpl*(
+func applyRopeImpl(
       q: Tensor,
       k: Tensor,
       cos: Tensor,
@@ -41,19 +41,19 @@ func applyRopeImpl*(
   ## Output: (batch, seq, head, head_dim)
   doAssert cos.dim == 2, "applyRopeImpl: cos must be 2D (seq, head_dim), got " & $cos.dim & "D"
   doAssert sin.dim == 2, "applyRopeImpl: sin must be 2D (seq, head_dim), got " & $sin.dim & "D"
-  
+
   # Transpose to (batch, head, seq, head_dim) for rotation
   var q_t = q.transpose(1, 2)
   var k_t = k.transpose(1, 2)
-  
+
   # Broadcast: (seq, head_dim) -> (1, 1, seq, head_dim) -> matches (batch, head, seq, head_dim)
   let cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, seq, head_dim)
   let sin = sin.unsqueeze(0).unsqueeze(0)  # (1, 1, seq, head_dim)
-  
+
   # Apply rotation for q and k
   let q_rot_t = q_t * cos + rotateHalf(q_t) * sin
   let k_rot_t = k_t * cos + rotateHalf(k_t) * sin
-  
+
   # Transpose back to (batch, seq, head, head_dim)
   result = (q_rot_t.transpose(1, 2), k_rot_t.transpose(1, 2))
 
@@ -81,7 +81,7 @@ proc applyRope*(
       self: var RotaryPositionEmbedding,
       q: Tensor,
       k: Tensor): (Tensor, Tensor) =
-  # Method using cache - calls freestanding apply_rope_impl
+  # Method using cache - calls freestanding applyRopeImpl
   # Input q.k: (batch, seq, head, head_dim)
   # Output: (batch, seq, head, head_dim)
 
@@ -95,7 +95,7 @@ proc applyRope*(
   self.cachePos += seq_len
 
   # Apply rotation using freestanding impl (pass 2D cache, let impl handle broadcasting)
-  result = apply_rope_impl(q, k, cos_seq, sin_seq)
+  result = applyRopeImpl(q, k, cos_seq, sin_seq)
 
 func resetCache*(self: var RotaryPositionEmbedding) =
   self.cachePos = 0
