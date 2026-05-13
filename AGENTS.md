@@ -1,130 +1,254 @@
 # Tattletale Agent Guidelines
 
-This document provides guidelines for AI agentic coding tools operating in the Tattletale repository.
+AI coding tool guidelines for Tattletale repo.
 
-## Project Overview
+## Project
 
-Tattletale is an AI inference framework primarily written in Nim (targeting C++ backend) with Python for test vector generation. The project uses libtorch for tensor operations and implements tokenizers, safetensors loaders, and transformer models.
+AI inference library in Nim (C++ backend) wrapping libtorch. Tensor ops, safetensors loading, tokenizers, transformer layers.
 
-## Build, Test, and Lint Commands
+Python only for test-vector generation (`uv run`). Dev: prefer PyTorch from `uv` / `.venv` (Python 3.14 per `pyproject.toml`) for reference vectors, not system Python.
 
-### Running Tests
+## Build / Test / Lint
+
+### Dependencies (from `config.nims`)
+
 ```bash
-# Test all modules
+nim install_deps          # runtime: nimpy, jsony, stew, packedjson, iface
+nim install_deps_dev      # dev: zip (vendor libtorch), chronos (download test tokenizers)
+```
+
+### Tests
+
+```bash
 nim test_libtorch
 nim test_safetensors
 nim test_transformers
 nim test_toktoktok
+```
 
-# Run a single test file (use --build and --nimcache to avoid polluting directory)
-nim cpp -r --verbosity:0 --hint:off --warnings:off \
-  --build:build/tests/test_name --nimcache:nimcache/tests/test_name \
+Single file:
+```bash
+nim cpp -r --verbosity:0 --hints:off --warnings:off \
+  --outdir:build/tests/test_name --nimcache:nimcache/tests/test_name \
   workspace/path/to/test_file.nim
 ```
 
-### Building
+### Vendoring
+
 ```bash
-nim make_pytoktoktok    # Build Python extension
-nim download_test_tokenizers
-nim install_libtorch
+nim install_libtorch          # download libtorch (needs zip)
+nim download_test_tokenizers  # gpt-2 + llama3 fixtures (needs chronos)
+nim make_pytoktoktok          # build pytoktoktok.so for Python import
 ```
 
-### Python Testing
-Always use `uv run` for Python testing:
+### Python
+
+Always `uv run`. `.venv` managed by `uv`:
+
 ```bash
 uv run --group test-vectors python workspace/module/tests/testgen/generate_vectors.py
 ```
-NEVER use `--break-system-packages` flag.
 
-### Code Analysis: Prefer Compilation over `nim check`
+NEVER `--break-system-packages`.
 
-Use `nim cpp` (compilation) rather than `nim check` for code analysis. The C backend misreports C++ exceptions: it says "only ref objects can raise" but C++ exceptions ARE NOT ref object and CAN be caught with C++ backend.
+### Code Analysis
 
-## Code Style Guidelines
+`nim cpp` only. `nim check` in C mode lies about C++ exceptions. Hard error on libtorch imports:
+> "You are running 'nim check' in C mode. It will misreport that C++ exceptions can't be caught because they aren't ref objects."
 
-### General Principles
-- **Nim 2.2.0+ required** - Use modern Nim features
-- **C++ backend** - All code compiles with `nim cpp`
-- **Comments are welcome** - Do not delete comments unless wrong or outdated. Technical explanations, algorithmic rationale, and edge case reasoning should be preserved. For tensor-heavy code, include expected shapes in comments to ease debugging.
+## Architecture: Tensor Layer
 
-### File Organization
-- Re-export modules at package root: `workspace/mylib/mylib.nim` exports `src/mylib`
-- Tests in `workspace/module/tests/` directory
-- Fixtures in `workspace/module/tests/fixture/`
+### `Tensor` — Ref Wrapper
 
-### Import Convention
+`TorchTensor` (raw `importcpp: "torch::Tensor"`) never public. Wrapped in `ref object` `Tensor` (`tensors.nim:29`):
+
 ```nim
-# Standard library - use std/ prefix
-import std/tables
-import std/os
-import std/sequtils  # Required for mapIt
-
-# Third-party packages - use pkg/ prefix
-import pkg/jsony
-
-# First-party workspace libraries - use workspace/ prefix
-import workspace/toktoktok
-import workspace/safetensors
-
-# Local import (relative)
-import ./serialization
+type Tensor* = ref object
+  raw: TorchTensor
 ```
 
-### Naming Convention
-- **Types**: PascalCase, `*` for public (e.g., `BPETokenizer*`, `Dtype*`)
-- **Procedures/Functions**: camelCase, `*` for public (e.g., `compilePcre2*`)
-- **Constants**: PascalCase (e.g., `MaxInt`, `MAX_HEADER_SIZE`)
-- **Variables**: camelCase (e.g., `errorCode`, `filename`)
+Avoids Nim C++ FFI issues with value types in containers (copy-ctor, `=wasMoved`, `{}` default init).
 
-### Type System
-- Use `{.final.}` for sealed types when appropriate
-- Prefer value types over ref types for performance
-- Use `distinct` for type safety
-- Use `enum` for type-safe constants
-- For FFI types (TorchTensor), use value type, avoid brace initialization
+**Contract:** No C++ types (`TorchTensor`, `CppVector`, `CppTuple`, `IntArrayRef`, `ArrayRef`, `CppString`) leak past `tensors.nim` / `tensors_nn.nim`. `workspace/libtorch` (`libtorch.nim:1-2`) only re-exports those two.
 
-### Error Handling
-- Use exceptions primarily for unrecoverable errors (file not found, invalid format)
-- Document the error model in the file header (e.g., "raises on invalid format, returns result on success")
-- Use `result` return pattern for fallible operations
-- Use `newException(Type, message)` for raising
+### `wrapLibtorch:` Macro — Auto-Forwarding
 
-### C++ Exceptions
+`tensors.nim:177`. Inside `wrapLibtorch:` block, every `proc`/`func` gets:
 
-C++ exceptions (like `torch::Error`) cannot be caught by `std/unittest`. Use custom test runner with `catchTorchExceptions` template (see `workspace/transformers/tests/common_utils.nim`):
+1. `{.inline.}` auto-added
+2. C++ exceptions → `LibTorchDefect` via `convertLibTorchExceptions` (`tensors.nim:71`)
+3. Return wrapped via `wrapTorchTensor` (`tensors.nim:43`) — no-op for non-Tensor returns
+4. Inputs unwrapped via `unwrapArg` (`tensors.nim:121`) — `Tensor` → `.raw`, `varargs[int]` → `asTorchView`, `typedesc` → `toScalarKind`
+
+**Bare signatures** (~95% of procs). `autoForward` (`tensors.nim:138`) generates forwarding body:
+
 ```nim
-proc runTest*(name: string, body: proc(): bool) =
-  let passed = catchTorchExceptions(body())
-  if passed: echo "✅ PASS | ", name
-  else: echo "❌ FAIL | ", name
-```
-Import C++ exceptions:
-```nim
-type
-  CStdException {.importcpp: "std::exception", header: "<exception>", inheritable.} = object
-  CRuntimeError {.importcpp: "std::runtime_error", header: "<stdexcept>".} = object of CStdException
-proc fn() =
-  try: raise initRuntimeError("foo2")
-  except CStdException as e:
-    doAssert e is CStdException
-  # Note: getCurrentException() not available for imported exceptions
+wrapLibtorch:
+  func zeros*(size: varargs[int]): Tensor
+  func zeros*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor
+  func dim*(a: Tensor): int
 ```
 
-### Code Patterns
-**Testing (Critical)**: Wrap test code in a proc to avoid C++ brace init with FFI types:
+`autoForward` generates: `{.inline.} convertLibTorchExceptions: wrapTorchTensor: F.zeros(asTorchView(size))`
+
+**Explicit bodies** bypass auto-forward. Write wrapping manually (`tensors.nim:505`):
+
 ```nim
-import std/unittest, workspace/libtorch
+func `<.`*(a: Tensor, b: Tensor): Tensor {.inline.} =
+  convertLibTorchExceptions:
+    wrapTorchTensorImpl:
+      F.lt(a.raw, b.raw)
+```
+
+Templates always explicit (`tensors.nim:392`):
+
+```nim
+template sizes*(a: Tensor): openArray[int] =
+  F.sizes(a.raw).asNimView()
+```
+
+**`wrapTorchTensor`** (`tensors.nim:43`): `when typeof(...)` dispatch — `TorchTensor` → `Tensor`, `CppVector[TorchTensor]` → `seq[Tensor]`, `CppTuple2` → tuple. No-op else.
+
+### C++ Exception Handling
+
+`LibTorchDefect` inherits `Defect` (`tensors.nim:69`). Keeps `raises: []` clean.
+
+`convertLibTorchExceptions` (`tensors.nim:71`) catches `TorchError` (`c10::Error`), re-raises as `LibTorchDefect` with `.what()` message.
+
+`LibTorchDefect` exported — test harnesses can `except LibTorchDefect`.
+
+### Module Structure (libtorch)
+
+```
+workspace/libtorch/libtorch.nim        — re-export: tensors + tensors_nn [line 1-2]
+
+PUBLIC (no C++ types leak):
+  src/tensors.nim          — Core wrapper (Tensor + ~500 procs)
+  src/tensors_nn.nim       — NN functional (activations, losses, SDPA)
+  src/tensors_py.nim       — Nim ↔ Python Tensor bridge
+
+INTERNAL (not exported):
+  src/raw/abi/torch_tensors.nim   — Pure C++ FFI (~265 procs)
+  src/raw/abi/neural_nets.nim     — C++ FFI neural net API
+  src/raw/abi/c10.nim             — TorchError, IntArrayRef
+  src/raw/abi/std_cpp.nim         — CppStdException, what()
+  src/raw/torch_tensors_sugar.nim — asTorchView, indexing macros
+  src/raw_libtorch.nim            — Re-exports raw modules
+```
+
+## Testing
+
+### `runTest` from `libtorch_testutils`
+
+Use for ALL tests. Catches C++ exceptions. `quit(1)` on failure.
+
+```nim
+import
+  workspace/libtorch/src/tensors,
+  workspace/libtorch_testutils
+
 proc runTests*() =
-  suite "tensor tests":
-    test "generate tensor":
-      let tensor = arange(10, kFloat32)
-      check tensor.numel() == 10
+  runTest "my test":
+    proc(): bool =
+      let t = zeros(2, 3, kFloat32)
+      doAssert t.dim() == 2
+      doAssert t.size(0) == 2
+      true
+
 when isMainModule:
   runTests()
 ```
-**Never** declare module-level variables with FFI types.
 
-**Case Statements**: Every branch must assign to `result`:
+**NEVER `std/unittest`.** Cannot catch C++ exceptions. Happy-path-only tests still need `runTest` for error coverage.
+
+### `runTest` API (`libtorch_testutils.nim`)
+
+- `runTest(name, body)` (`:70`): PASS/FAIL print, `quit(1)` on fail
+- `catchExceptions(body)` (`:26`): `true`/`false` return. Catches: `TorchError`, `CppStdException`, `LibTorchDefect`, `CatchableError`, `Defect`
+- `assertAllClose(actual, expected, rtol, abstol)` (`:90`): Tensor tolerance comparison
+- `assertShape(tensor, expectedShape)` (`:119`): Shape check
+- `printTensor(t, label)` / `printTensorShape(t, label)` (`:159/167`): Debug
+- `dataPtrHex(t)` / `shapePtrHex(t)` (`:186/190`): Pointer aliasing debug
+- `traceExec(body)` (`:146`): Statement execution tracer
+
+### Test Org
+
+- CI: `tests/test_*.nim` or `tests/t_*.nim`
+- Manual: `tests/manual_test_*.nim` (multi-GB models)
+- Fixtures: `tests/fixtures/` or `tests/testgen/fixtures/`
+- `const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"`
+
+### Test Discipline
+
+- Don't change tests to pass. Proof needed. Python verification script if test wrong.
+- Comment-out OK for focus. Re-enable before finish.
+- Compile ≠ work. Tests prove work.
+
+## Code Style
+
+### General
+
+- Nim 2.2.0+. C++ backend (`nim cpp`).
+- **Comments are welcome** — Do not delete comments unless wrong or outdated. Technical explanations, algorithmic rationale, and edge case reasoning should be preserved. For tensor-heavy code, include expected shapes in comments to ease debugging.
+
+### File Org
+
+- Re-export at root: `workspace/mylib/mylib.nim` exports `src/mylib`
+- Tests: `workspace/module/tests/`
+- Fixtures: `workspace/module/tests/fixtures/`
+- Tasks: `config.nims` only. **NEVER `.nimble` files.**
+
+### Imports
+
+```nim
+import std/tables
+import std/sequtils  # mapIt
+
+import pkg/jsony
+
+import workspace/libtorch             # Tensor + NN API
+import workspace/libtorch as F        # Short alias
+import workspace/libtorch/src/tensors # Direct (Tensor, LibTorchDefect)
+import workspace/libtorch_testutils   # runTest, assertAllClose
+import workspace/safetensors
+import workspace/toktoktok
+
+import ./internal {.all.}             # Friend modules: test internals
+```
+
+**libtorch imports:**
+- `workspace/libtorch` — Public API
+- `workspace/libtorch as F` — Short alias
+- `workspace/libtorch/src/tensors` — Direct
+- **NEVER** `src/raw/abi/` or `src/raw_liborch` from app code
+
+**Friend modules:** `import ./internal {.all.}` exposes private symbols for testing. Use from sibling test modules only.
+
+### Naming
+
+- Types: PascalCase, `*` public (`BPETokenizer*`)
+- Procs: camelCase, `*` public (`compilePcre2*`)
+- Consts: PascalCase (`MaxInt`, `MAX_HEADER_SIZE`)
+- Vars: camelCase (`errorCode`)
+
+### Type System
+
+- `{.final.}` for sealed types
+- Value > ref for perf
+- `distinct` for type safety
+- `enum` for type-safe constants
+
+### Error Handling
+
+- Exceptions for unrecoverable (logic bug, key dependency missing, preconditions/invariant failures, ...)
+- Document error model in headers
+- `Result[T, Err]` pattern for fallible ops (bad user input, network connectivity, ...)
+- `newException(Type, message)` for raising
+
+### Patterns
+
+**Case** — every branch assigns `result`:
+
 ```nim
 proc foo(x: int): int =
   case x
@@ -133,42 +257,69 @@ proc foo(x: int): int =
   else: result = 0
 ```
 
-### Resource Management
-- Use `defer` for cleanup (files, handles):
-  ```nim
-  var mf = memfiles.open(fixturePath, mode = fmRead)
-  defer: mf.close()
-  ```
-- Use `=destroy` hook for FFI resource cleanup:
-  ```nim
-  proc `=destroy`(code: Pcre2Code) =
-    if code.code != nil:
-      code_free(code.code)
-  ```
+**Resources:**
 
-### Test Organization
-- **CI tests**: Files in `tests/` starting with `test_` or `t_`
-- **Manual tests**: Files starting with `manual_test_` (require multi-GB model downloads, not run in CI)
-- Use `std/unittest` with `suite`, `test`, `check` OR custom `runTest` for C++ exceptions
-- Define test constants as `const` at module level
-- Reference fixture using `const FIXTURES_DIR = currentSourcePath().parentDir() / "fixture"`
+```nim
+var mf = memfiles.open(path, mode = fmRead)
+defer: mf.close()
 
-### Working with Tests
-- **Do not change tests to make them pass** unless there is overwhelming evidence the test is wrong. Create a Python verification script to generate that evidence.
-- **Commenting out tests to focus on something else is fine**, but you MUST re-enable them before finishing.
-- **Claims need proof** - Don't oversell features completion or quality. Use nuance like "should work" or "may need verification" when uncertain. Compiling is the bare minimum; working is demonstrated with tests.
+proc `=destroy`(code: Pcre2Code) =
+  if code.code != nil:
+    code_free(code.code)
+```
+
+### Tensor Equality
+
+| Type | Method | Desc |
+|------|--------|------|
+| Referential | `a == b` (Nim `ref`) | Same Nim ref |
+| LibTorch same | `is_same(a, b)` | Same internal ptr |
+| Value | `equal(a, b)` → `bool` | Same values + shape |
+| Tolerance | `allClose(a, b, rtol, abstol)` → `bool` | Float comparison |
+| Element-wise | `eq(a, b)` → `Tensor` | Bool Tensor |
+
+No `==` overload. Referential = default `ref` behavior.
+
+### Adding Wrappers
+
+Inside existing `wrapLibtorch:` block. Two modes:
+
+**Bare** (auto-forward, ~95%):
+
+```nim
+wrapLibtorch:
+  func myNewOp*(a: Tensor, b: Tensor): Tensor
+```
+
+Generates: `{.inline.} convertLibTorchExceptions: wrapTorchTensor: F.myNewOp(a.raw, b.raw)`
+
+**Explicit** (custom logic):
+
+```nim
+wrapLibtorch:
+  func myComplexOp*(a: Tensor): Tensor {.inline.} =
+    convertLibTorchExceptions:
+      wrapTorchTensor:
+        F.myComplexOp(a.raw, someComputedArg)
+```
+
+`tensors_nn.nim` uses same `wrapLibtorch:` (`:32`). Imports `./tensors {.all.}` for infra. `privateAccess(Tensor)` for `.raw` direct access.
 
 ### Common Pitfalls
-1. Missing `import std/sequtils` when using `mapIt`
-2. Using wrong workspace import path (use `workspace/module`)
-3. Module-level FFI variable declarations causing C++ brace init error
-4. Forgetting `result =` in case branches
-5. Parameter shadowing field access
-6. Using `nim check` instead of `nim cpp` - gives false warning about C++ exceptions
-7. Using `python` instead of `uv run` for Python scripts
+
+1. Missing `import std/sequtils` for `mapIt`
+2. Wrong workspace path (use `workspace/module`)
+3. Module-level FFI vars → C++ brace init error
+4. Missing `result =` in case branches
+5. Shadowing `result` special variable
+6. `nim check` instead of `nim cpp` → false C++ exception warnings
+7. `python` instead of `uv run`
+8. `std/unittest` → use `runTest` from `libtorch_testutils`
+9. Import `TorchTensor` from app code → always `Tensor`
+10. Missing `convertLibTorchExceptions:` in explicit `wrapLibtorch:` bodies
 
 ### License Header
-Include in new files:
+
 ```nim
 # Tattletale
 # Copyright (c) 2026 Mamy Ratsimbazafy
