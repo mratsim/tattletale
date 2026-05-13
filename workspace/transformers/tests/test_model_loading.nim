@@ -8,7 +8,7 @@
 import
   std/os,
   workspace/libtorch,
-  workspace/transformers/src/layers/attn,
+  workspace/transformers/src/layers,
   workspace/transformers/src/models,
   workspace/libtorch_testutils
 

@@ -15,8 +15,8 @@ type
     max_seq_len*: int
     rope_theta: float64
     cachePos: int
-    cos_cache: Tensor
-    sin_cache: Tensor
+    cos_cache*: Tensor
+    sin_cache*: Tensor
 
 func rotateHalf(x: Tensor): Tensor =
   # Input/Output: (batch, head, seq, head_dim)
@@ -31,33 +31,29 @@ func applyRopeImpl*(
       k: Tensor,
       cos: Tensor,
       sin: Tensor): (Tensor, Tensor) =
-  # Freestanding RoPE implementation with pre-computed cos/sin tensor
-  # Input q,k: (batch, seq, head, head_dim)
-  # Input cos, sin: (batch, seq, head_dim) or (seq, head_dim)
-  # Output: (batch, seq, head, head_dim)
-
+  ## Freestanding RoPE implementation.
+  ##
+  ## **Contract:** cos and sin MUST be 2D `(seq, head_dim)`.
+  ## Shape normalization is the caller's responsibility.
+  ##
+  ## Input q,k: (batch, seq, head, head_dim)
+  ## Input cos, sin: (seq, head_dim)
+  ## Output: (batch, seq, head, head_dim)
+  doAssert cos.dim == 2, "applyRopeImpl: cos must be 2D (seq, head_dim), got " & $cos.dim & "D"
+  doAssert sin.dim == 2, "applyRopeImpl: sin must be 2D (seq, head_dim), got " & $sin.dim & "D"
+  
   # Transpose to (batch, head, seq, head_dim) for rotation
   var q_t = q.transpose(1, 2)
   var k_t = k.transpose(1, 2)
-
-  # cos/sin can be:
-  # - (seq, head_dim): slice from cache -> unsqueeze(0).unsqueeze(0) -> (1, 1, seq, head_dim)
-  # - (batch, seq, head_dim): from HF fixture -> unsqueeze(1) -> (batch, 1, seq, head_dim)
-  let cos =
-    if cos.dim == 2:
-      cos.unsqueeze(0).unsqueeze(0)  # (seq, head_dim) -> (1, 1, seq, head_dim)
-    else:
-      cos.unsqueeze(1)               # (batch, seq, head_dim) -> (batch, 1, seq, head_dim)
-  let sin =
-    if sin.dim == 2:
-      sin.unsqueeze(0).unsqueeze(0)
-    else:
-      sin.unsqueeze(1)
-
+  
+  # Broadcast: (seq, head_dim) -> (1, 1, seq, head_dim) -> matches (batch, head, seq, head_dim)
+  let cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, seq, head_dim)
+  let sin = sin.unsqueeze(0).unsqueeze(0)  # (1, 1, seq, head_dim)
+  
   # Apply rotation for q and k
   let q_rot_t = q_t * cos + rotateHalf(q_t) * sin
   let k_rot_t = k_t * cos + rotateHalf(k_t) * sin
-
+  
   # Transpose back to (batch, seq, head, head_dim)
   result = (q_rot_t.transpose(1, 2), k_rot_t.transpose(1, 2))
 
@@ -105,14 +101,17 @@ func resetCache*(self: var RotaryPositionEmbedding) =
   self.cachePos = 0
 
 func setCache(self: var RotaryPositionEmbedding, cos, sin: Tensor) {.used.} =
-  # Private for testing only
-  # Handle both (seq, head_dim) and (batch, seq, head_dim) shapes
-  # Squeeze batch dimension if present to get (seq, head_dim)
+  # Private for testing only.
+  # Normalizes cos/sin to 2D (seq, head_dim) for storage in cos_cache.
+  # RoPE is per-position — identical across all batch items.
+  #
+  # Handles: (seq, head_dim) [2D] or (batch, seq, head_dim) [3D from HF fixtures]
   var cos_2d = cos
   var sin_2d = sin
   if cos.dim == 3:
-    # Squeeze batch dimension: (batch, seq, head_dim) -> (seq, head_dim)
-    cos_2d = cos.squeeze(0)
-    sin_2d = sin.squeeze(0)
+    # Take first batch item: (batch, seq, head_dim) -> (seq, head_dim)
+    cos_2d = cos[0, _, _]
+    sin_2d = sin[0, _, _]
+  doAssert cos_2d.dim == 2, "setCache: cos must be 2D or 3D, got " & $cos.dim & "D"
   self.cos_cache = cos_2d
   self.sin_cache = sin_2d

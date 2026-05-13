@@ -268,53 +268,53 @@ def generate_mlp_fixtures(mlp: Qwen3MLP) -> None:
     print(f"Generated {layer_name} fixtures")
 
 
-def generate_rope_fixtures(rotary: Qwen3RotaryEmbedding) -> None:
-    """Generate fixtures for RoPE layer."""
+def generate_rope_fixtures(rotary: Qwen3RotaryEmbedding, config) -> None:
+    """Generate fixtures for RoPE apply — matches Nim tensor layout (batch, seq, heads, head_dim)."""
     set_seed(FIXED_SEED + 3)
     layer_name = "rope"
 
-    # Case 00: apply_rotary_pos_emb on 4D tensor [seq_len, batch, heads, head_dim]
-    batch, seq_len, num_heads, head_dim = 2, 8, 16, 128
-    hidden_states = torch.randn(batch, seq_len, 1024, dtype=torch.bfloat16)
+    # Case 00: batch=2, seq=8, full heads (16), GQA k_heads (8)
+    batch, seq_len, num_heads, num_kv_heads, head_dim = 2, 8, 16, 8, 128
     position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1).contiguous()
-    cos, sin = rotary(hidden_states, position_ids)
-    q = torch.randn(seq_len, batch, num_heads, head_dim, dtype=torch.bfloat16)
-    k = torch.randn(seq_len, batch, num_heads // 2, head_dim, dtype=torch.bfloat16)
-    q_rot, k_rot = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+    cos, sin = rotary(torch.randn(batch, seq_len, config.hidden_size, dtype=torch.bfloat16), position_ids)
+    # cos/sin from HF: (batch, seq, head_dim)
+    # Save 2D (seq, head_dim) for our Nim cache
+    cos_2d = cos[0]  # drop batch: (seq, head_dim)
+    sin_2d = sin[0]
+    q = torch.randn(batch, seq_len, num_heads, head_dim, dtype=torch.bfloat16)
+    k = torch.randn(batch, seq_len, num_kv_heads, head_dim, dtype=torch.bfloat16)
+    # Use HF's apply_rotary_pos_emb with unsqueeze_dim=2 for 4D tensors
+    q_rot, k_rot = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
 
     save_fixture(
-        layer_name,
-        0,
-        {
-            "model": MODEL_NAME,
-            "layer": f"model.layers.{LAYER_IDX}.self_attn.rotary_emb",
-            "case": "apply_rotary_pos_emb_4d",
-        },
-        {
-            "q": q,
-            "k": k,
-            "cos": cos,
-            "sin": sin,
-            "q_rot": q_rot,
-            "k_rot": k_rot,
-        },
+        layer_name, 0,
+        {"model": MODEL_NAME, "layer": f"model.layers.{LAYER_IDX}.self_attn.rotary_emb", "case": "batch2_seq8_gqa"},
+        {"q": q, "k": k, "cos": cos_2d, "sin": sin_2d, "q_rot": q_rot, "k_rot": k_rot, "position_ids": position_ids},
     )
 
-    # Case 01: rotate_half on 4D tensor [seq_len, batch, heads, head_dim] - direct test
-    x = torch.randn(seq_len, batch, num_heads, head_dim, dtype=torch.bfloat16)
+    # Case 01: single token
+    batch, seq_len = 1, 1
+    position_ids = torch.tensor([[0]]).contiguous()
+    cos, sin = rotary(torch.randn(batch, seq_len, config.hidden_size, dtype=torch.bfloat16), position_ids)
+    cos_2d = cos[0]
+    sin_2d = sin[0]
+    q = torch.randn(batch, seq_len, num_heads, head_dim, dtype=torch.bfloat16)
+    k = torch.randn(batch, seq_len, num_kv_heads, head_dim, dtype=torch.bfloat16)
+    q_rot, k_rot = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
+
+    save_fixture(
+        layer_name, 1,
+        {"model": MODEL_NAME, "layer": f"model.layers.{LAYER_IDX}.self_attn.rotary_emb", "case": "single_token"},
+        {"q": q, "k": k, "cos": cos_2d, "sin": sin_2d, "q_rot": q_rot, "k_rot": k_rot, "position_ids": position_ids},
+    )
+
+    # Case 02: rotate_half direct test
+    x = torch.randn(batch, seq_len, num_heads, head_dim, dtype=torch.bfloat16)
     rotated_half = rotate_half(x)
     save_fixture(
-        layer_name,
-        1,
-        {
-            "model": MODEL_NAME,
-            "layer": f"model.layers.{LAYER_IDX}.self_attn.rotary_emb.rotate_half",
-            "case": "rotate_half_4d",
-        },
-        {
-            "input": x,
-            "output": rotated_half,
-        },
+        layer_name, 2,
+        {"model": MODEL_NAME, "layer": f"model.layers.{LAYER_IDX}.self_attn.rotary_emb.rotate_half", "case": "rotate_half_4d"},
+        {"input": x, "output": rotated_half},
     )
 
     print(f"Generated {layer_name} fixtures")
@@ -413,8 +413,8 @@ def generate_all_fixtures() -> None:
     # Generate fixtures
     generate_norm_fixtures(input_layernorm, post_attention_layernorm)
     generate_mlp_fixtures(mlp)
+    generate_rope_fixtures(rotary, Qwen3Config())
     generate_attn_fixtures(attn, rotary)
-
     print("=" * 60)
     print(f"Fixture generation complete!")
     print(f"Fixtures saved to: {FIXTURE_DIR}")
