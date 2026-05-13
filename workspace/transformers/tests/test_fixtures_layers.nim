@@ -12,6 +12,7 @@ import
   std/strformat,
   std/strutils,
   std/tables,
+  pkg/packedjson,
   workspace/safetensors,
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
@@ -49,8 +50,12 @@ proc main() =
 
         let inputHiddenStates = st.getTensorOwned("input_hidden_states")
         let expectedOutput = st.getTensorOwned("output")
+        # Load metadata from separate JSON file (deterministic)
+        let metadataPath = fixturePath & ".metadata.json"
+        let metadataJson = readFile(metadataPath)
+        let metadata = parseJson(metadataJson)
 
-        let layerPath = st.metadata.unsafeGet().getOrDefault("layer", "")
+        let layerPath = metadata{"layer"}.getStr()
         let normLayer =
           if layerPath.endsWith("post_attention_layernorm"):
             RmsNorm.init(postAttnWeight)
@@ -58,7 +63,6 @@ proc main() =
             RmsNorm.init(inputLnWeight)
           else:
             raise newException(ValueError, &"Invalid layer: '{layerPath}'")
-
         var output = normLayer.forward(inputHiddenStates)
         assertAllClose(output, expectedOutput, msg = "RMSNorm case " & $caseNum & " failed")
         echo "RMSNorm case ", caseNum, " PASSED"
