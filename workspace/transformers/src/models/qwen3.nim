@@ -19,7 +19,7 @@ import
   workspace/positron,
 
   # Transformers local imports
-  ../layers/all,
+  ../layers,
   ./all_interfaces
 
 ################################################################################

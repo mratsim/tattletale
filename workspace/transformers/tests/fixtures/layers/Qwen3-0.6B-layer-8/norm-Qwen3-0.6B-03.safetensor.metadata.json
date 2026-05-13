@@ -1,0 +1,5 @@
+{
+  "case": "zeros_input",
+  "layer": "model.layers.8.input_layernorm",
+  "model": "Qwen3-0.6B"
+}

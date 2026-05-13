@@ -1,0 +1,5 @@
+{
+  "case": "single_token",
+  "layer": "model.layers.8.self_attn.rotary_emb",
+  "model": "Qwen3-0.6B"
+}

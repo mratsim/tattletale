@@ -1,0 +1,5 @@
+{
+  "case": "single_token",
+  "layer": "model.layers.8.mlp",
+  "model": "Qwen3-0.6B"
+}

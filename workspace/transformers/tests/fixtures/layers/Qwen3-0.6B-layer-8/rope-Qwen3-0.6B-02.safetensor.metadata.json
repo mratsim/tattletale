@@ -1,0 +1,5 @@
+{
+  "case": "rotate_half_4d",
+  "layer": "model.layers.8.self_attn.rotary_emb.rotate_half",
+  "model": "Qwen3-0.6B"
+}
