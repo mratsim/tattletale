@@ -18,6 +18,7 @@ backend = "cpp"
 
 requires "nim >= 2.2.0"
 requires "zip"
+requires "nimpy >= 0.2.1"
 
 # Tasks
 # ---------------------------------------------------------
