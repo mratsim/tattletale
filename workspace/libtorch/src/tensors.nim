@@ -15,7 +15,10 @@ import
 export F.ScalarKind, F.DeviceKind, F.Device,
        F.Scalar, F.SomeTorchType, F.TorchComplex,
        # TensorOptions
-       F.TensorOptions, device, dtype, tensorOptions
+       F.TensorOptions, init, device, dtype, tensorOptions
+
+# Global state
+export Torch, cuda_is_available, deviceCount
 
 # Indexing sugar
 export F.`_`, F.ellipsis, F.`...`
@@ -462,7 +465,7 @@ wrapLibtorch:
   func neg*(a: Tensor): Tensor
   func square*(a: Tensor): Tensor
   func sqrt*(a: Tensor): Tensor
-
+  func rsqrt*(a: Tensor): Tensor
   # With scalar params
   func clamp*(a: Tensor, minVal, maxVal: Scalar): Tensor
   func clampMin*(a: Tensor, minVal: Scalar): Tensor
@@ -476,7 +479,7 @@ wrapLibtorch:
 
   func dot*(a, other: Tensor): Tensor
   func pow*(a, exponent: Tensor): Tensor
-  func pow*(a, exponent: Scalar): Tensor
+  func pow*(a: Tensor, exponent: Scalar): Tensor
 
   # #######################################################################
   #
