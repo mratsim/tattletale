@@ -2,12 +2,15 @@
 """
 Proof and fixtures for the long residual stream invariant.
 
-This script generates fixtures for the 3-block long residual stream test.
-It computes:
+Generates fixtures for the 3-block long residual stream test.
+Computes:
 1. HF local residual outputs (x_local)
 2. Long residual stream outputs (mlp_out, r2)
 
-Then verifies the invariant: mlp_out + r2 == x_local at each layer boundary.
+Verifies the invariant: mlp_out + r2 == x_local at each layer boundary.
+The invariant holds with EXACT equality (diff=0.0) when both paths use:
+- BF16 addition for residuals (not FP32)
+- FP32 RMSNorm internally (HF's Qwen3RMSNorm, not F.rms_norm)
 
 Usage:
     cd tattletale
@@ -23,7 +26,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_PATH = str(Path(__file__).parent.parent / "hf_models" / MODEL_NAME)
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "long-residual-3-block"
-NUM_LAYERS = 3  # Only first 3 layers
+NUM_LAYERS = 3
 INPUT_TEXT = "Hello, how are you?"
 
 
@@ -59,34 +62,35 @@ def main():
         # ── HF LOCAL RESIDUAL (actual model forward) ─────────────────────
         # Sublayer 1: attention
         res = x_hf
-        h = layer.input_layernorm(x_hf)
-        attn_out, _ = layer.self_attn(
-            hidden_states=h,
+        h_hf = layer.input_layernorm(x_hf)
+        attn_out_hf, _ = layer.self_attn(
+            hidden_states=h_hf,
             position_embeddings=(cos, sin),
             attention_mask=None,
             past_key_values=None,
         )
-        x_hf = res + attn_out
+        x_hf = res + attn_out_hf
 
         # Sublayer 2: mlp
         res2 = x_hf
-        h2 = layer.post_attention_layernorm(x_hf)
-        mlp_out_hf = layer.mlp(h2)
+        h2_hf = layer.post_attention_layernorm(x_hf)
+        mlp_out_hf = layer.mlp(h2_hf)
         x_hf = res2 + mlp_out_hf
 
         # ── LONG RESIDUAL STREAM (matches Nim implementation) ────────────
+        # Step 1: attn_norm.forward_with_residual(x, residual)
+        # CRITICAL: use BF16 addition (not FP32), then HF's FP32 RMSNorm module
         if r_long is None:
             # First layer: attn_norm(x), residual = x
-            h_l, r_l = layer.input_layernorm(x_long), x_long.clone()
+            h_l = layer.input_layernorm(x_long)
+            r_l = x_long.clone()
         else:
-            # Subsequent layers: fused norm(x + r)
-            r_l = x_long + r_long
-            h_l = torch.nn.functional.rms_norm(
-                r_l, layer.input_layernorm.weight.shape,
-                weight=layer.input_layernorm.weight, eps=1e-6
-            )
+            # Subsequent layers: fused norm(x + r), BF16 addition
+            combined = x_long + r_long  # BF16 addition
+            r_l = combined.clone()
+            h_l = layer.input_layernorm(combined)  # HF's FP32 RMSNorm
 
-        # Attention
+        # Step 2: Attention
         attn_l, _ = layer.self_attn(
             hidden_states=h_l,
             position_embeddings=(cos, sin),
@@ -94,28 +98,49 @@ def main():
             past_key_values=None,
         )
 
-        # mlp_norm.forward_with_residual(attn_out, r)
-        # Invariant: mlp_out + r2 == x_local (HF local output)
-        r2_l = attn_l + r_l
-        h2_l = torch.nn.functional.rms_norm(
-            r2_l, layer.post_attention_layernorm.weight.shape,
-            weight=layer.post_attention_layernorm.weight, eps=1e-6
-        )
+        # Step 3: mlp_norm.forward_with_residual(attn_out, residual)
+        # CRITICAL: BF16 addition, then HF's FP32 RMSNorm
+        combined2 = attn_l + r_l  # BF16 addition
+        r2_l = combined2.clone()
+        h2_l = layer.post_attention_layernorm(combined2)  # HF's FP32 RMSNorm
 
+        # Step 4: MLP
         mlp_l = layer.mlp(h2_l)
 
-        # Verify invariant
+        # ── Assert invariant ─────────────────────────────────────────────
         invariant_check = (mlp_l + r2_l).float() - x_hf.float()
         max_inv_diff = invariant_check.abs().max().item()
+        # The invariant should hold EXACTLY (diff=0.0) because both paths
+        # use identical BF16 addition and FP32 RMSNorm.
+        assert max_inv_diff == 0.0, (
+            f"Layer {layer_idx:02d}: invariant check FAILED! "
+            f"mlp_out + r2 vs HF out: max_diff={max_inv_diff:.6e}"
+        )
         print(f"Layer {layer_idx:02d}: invariant check (mlp+r vs HF out): max_diff={max_inv_diff:.2e}")
 
-        # Save fixtures
+        # ── Save ALL intermediate values ──────────────────────────────────
         fixture = {
+            # Input
             "layer_input": x_long.clone(),
-            "residual": r_l.clone() if r_long is not None else x_long.clone(),
+
+            # After attn_norm.forward_with_residual(x, residual)
+            "after_attn_norm": h_l.clone(),
+            "after_attn_norm_residual": r_l.clone(),
+
+            # After attention
+            "after_attn": attn_l.clone(),
+
+            # After mlp_norm.forward_with_residual(attn_out, residual)
+            "after_mlp_norm": h2_l.clone(),
+            "after_mlp_norm_residual": r2_l.clone(),
+
+            # After MLP
+            "mlp_out": mlp_l.clone(),
+
+            # HF local reference
             "hf_layer_output": x_hf.clone(),
-            "long_mlp_out": mlp_l.clone(),
-            "long_mlp_residual": r2_l.clone(),
+
+            # RoPE (for Nim test)
             "position_ids": pos_ids.clone(),
             "cos": cos.clone(),
             "sin": sin.clone(),
@@ -145,13 +170,8 @@ def main():
 
         print(f"  Saved: {filepath}")
 
-    # Final check
-    print("\nInvariant summary:")
-    print("  At each layer boundary: mlp_out + r2 == x_local")
-    print("  This is the key invariant that allows the long residual stream")
-    print("  to be mathematically equivalent to the HF local residual pattern.")
-    print("\n  The invariant is proven in WIP/Spec_Residual_Patterns.md")
-    print("  and tested in test_qwen3_long_residual_3_blocks.nim")
+    print("\n✓ All invariants verified (EXACT equality, diff=0.0)")
+    print("  The invariant is tested in test_qwen3_long_residual_3_blocks.nim")
 
 
 if __name__ == "__main__":
