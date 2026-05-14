@@ -62,20 +62,25 @@ func init*(_: type RotaryPositionEmbedding,
       rope_theta: float64,
       dtype: ScalarKind,
       device: DeviceKind): RotaryPositionEmbedding =
-  # Output: cos_cache (max_seq_len, head_dim), sin_cache (max_seq_len, head_dim)
+  ## RoPE: cos(pos * inv_freq[i]), sin(pos * inv_freq[i]) for i in 0..head_dim-1
+  ## inv_freq[i] = 1/theta^(i/head_dim), but we compute for i=0,2,4,...,head_dim-2 (64 values for head_dim=128)
+  ## Then repeat each value twice to get head_dim cos/sin values.
   let head_dim_float = head_dim.float64
-  let inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / head_dim_float
+  let inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / head_dim_float  # [0, 2, ..., 126] / 128
   let rope_theta_tensor = F.full([1], rope_theta, kFloat64)
-  let inv_freq_final = F.pow(rope_theta_tensor, -inv_freq)
-  let positions = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq_final.unsqueeze(0)
-  let fused = F.cat(positions, positions, axis = -1)
-  let emb = F.cat(fused.cos(), fused.sin(), axis = -1)
+  let inv_freq_final = F.pow(rope_theta_tensor, -inv_freq)  # theta^(-inv_freq), shape (64,)
+  let positions = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq_final.unsqueeze(0)  # (max_seq_len, 64)
+  let cos_64 = positions.cos()  # (max_seq_len, 64)
+  let sin_64 = positions.sin()  # (max_seq_len, 64)
+  # Repeat each value twice: [cos0, cos0, cos1, cos1, ...] to get (max_seq_len, head_dim)
   result.head_dim = head_dim
   result.max_seq_len = max_seq_len
   result.rope_theta = rope_theta
   result.cachePos = 0
-  result.cos_cache = emb[0..<max_seq_len, 0..<head_dim].to(dtype).to(device)
-  result.sin_cache = emb[0..<max_seq_len, head_dim..<2*head_dim].to(dtype).to(device)
+  # NEOX style: concatenate cos with itself [c0,c1,...,c63,c0,c1,...,c63]
+  # Store in FP32 for precision (HF pattern), cast during apply
+  result.cos_cache = F.cat([cos_64, cos_64], -1).to(dtype).to(device)  # (max_seq_len, 128)
+  result.sin_cache = F.cat([sin_64, sin_64], -1).to(dtype).to(device)  # (max_seq_len, 128)
 
 proc applyRope*(
       self: var RotaryPositionEmbedding,

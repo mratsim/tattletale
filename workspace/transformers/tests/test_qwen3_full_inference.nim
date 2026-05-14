@@ -89,6 +89,9 @@ proc main() =
         if inputDiff > tol:
           raise newException(ValueError, &"Layer {layerIdx:02d}: layer_input diff = {inputDiff:.6e}")
 
+        # Reset RoPE and KV cache for this layer (each layer processes same positions)
+        layer.attn.resetCache()
+
         # Forward through layer (long residual stream pattern)
         let (output, newResidual) = layer.forward(hidden, residual)
 
