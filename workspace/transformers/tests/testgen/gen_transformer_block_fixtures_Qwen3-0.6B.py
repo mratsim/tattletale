@@ -159,8 +159,9 @@ def generate_transformer_block_fixtures() -> None:
             past_key_values=None,
         )
         
-        # Step 4: mlp_norm.forward_with_residual(h + attn_out, residual)
-        mlp_norm_input = attn_norm_out + attn_out + r_after_attn_norm
+        # Step 4: mlp_norm.forward_with_residual(attn_out, r)
+        # Invariant: mlp_out + r2 == x_local (HF local residual output)
+        mlp_norm_input = attn_out + r_after_attn_norm
         mlp_norm_out = mlp_norm(mlp_norm_input)
         r_after_mlp_norm = mlp_norm_input  # Passed through unchanged after norm
         
@@ -168,7 +169,7 @@ def generate_transformer_block_fixtures() -> None:
         mlp_out = layer.mlp(mlp_norm_out)
         
         # Step 6: Final output
-        output = mlp_norm_out + mlp_out
+        output = mlp_out  # Invariant: mlp_out + r2 == x_local (HF local residual output)
         output_residual = r_after_mlp_norm
         
         save_fixture(case_num, {
