@@ -20,16 +20,10 @@ import
   std/os,
   std/strutils,
   std/sequtils,
-  workspace/libtorch,
-  workspace/libtorch/src/raw_libtorch
+  workspace/libtorch
 
 # ── RMSNorm implementations ────────────────────────────────────────────
 
-func rmsNormManualBF16(x, weight: Tensor, eps: float64): Tensor =
-  let x2 = x * x
-  let variance = x2.mean(axis = -1, keepdim = true)
-  let rstd = variance.add(eps).sqrt().reciprocal()
-  (x * rstd) * weight
 
 func rmsNormManualFP32(x, weight: Tensor, eps: float64): Tensor =
   let x_fp = x.to(kFloat32)
@@ -38,6 +32,12 @@ func rmsNormManualFP32(x, weight: Tensor, eps: float64): Tensor =
   let normed = (x_fp * rstd).to(x.scalarType())
   normed * weight
 
+func rmsNormManualBF16(x, weight: Tensor, eps: float64): Tensor =
+  let x2 = x * x
+  let variance = x2.mean(axis = -1, keepdim = true)
+  let rstd = variance.add(eps).sqrt().reciprocal()
+  (x * rstd) * weight
+
 func rmsNormFusedBF16(x, weight: Tensor, eps: float64): Tensor =
   rms_norm(x, weight.size(0), weight, eps)
 
@@ -45,12 +45,27 @@ func rmsNormFusedFP32(x, weight: Tensor, eps: float64): Tensor =
   let weight_fp = weight.to(kFloat32)
   rms_norm(x.to(kFloat32), weight_fp.size(0), weight_fp, eps).to(x.scalarType())
 
-func rmsNormFusedFP32BF16Weight(x, weight: Tensor, eps: float64): Tensor =
-  let opts = TensorOptions.init()
-                          .dtype(kBFloat16)
-                          .device(if x.is_cuda(): kCUDA else: kCPU)
-  let ones = ones(weight.size(0), opts)
-  let normed = rms_norm(x.to(kFloat32), weight.size(0), ones, eps).to(x.scalarType())
+# note: according to https://github.com/pytorch/pytorch/issues/167308
+# nn.RMSNorm is supposed to dispatch to fused impl with mixed precision,
+# but we get a warning
+#   [TIMESTAMP layer_norm.cpp:344] Warning: Mismatch dtype between input and weight: input dtype = float, weight dtype = c10::BFloat16, Cannot dispatch to fused implementation. (function operator())
+
+func rmsNormOptPow2RsqrtFP32(x, weight: Tensor, eps: float64): Tensor =
+  ## Optimized FP32 RMSNorm
+  ## Uses `.pow(2)` and `.rsqrt()`
+  let x_fp = x.to(kFloat32)
+  let variance = x_fp.pow(2).mean(axis = -1, keepdim = true)
+  let rstd = variance.add(eps).rsqrt()
+  let normed = (x_fp * rstd).to(x.scalarType())
+  normed * weight
+
+func rmsNormOptSqrRsqrtFP32(x, weight: Tensor, eps: float64): Tensor =
+  ## Optimized FP32 RMSNorm
+  ## Uses `.square()` and `.rsqrt()`
+  let x_fp = x.to(kFloat32)
+  let variance = x_fp.square().mean(axis = -1, keepdim = true)
+  let rstd = variance.add(eps).rsqrt()
+  let normed = (x_fp * rstd).to(x.scalarType())
   normed * weight
 
 # ── Benchmark infrastructure ───────────────────────────────────────────
@@ -103,62 +118,64 @@ proc benchRMSNorm() =
     weight = weight.cuda()
   const eps = 1e-6
 
-  echo "Warmup..."
-  for _ in 0 ..< Warmup:
-    discard rmsNormManualBF16(x, weight, eps)
-    discard rmsNormManualFP32(x, weight, eps)
-    discard rmsNormFusedBF16(x, weight, eps)
-    discard rmsNormFusedFP32(x, weight, eps)
-    discard rmsNormFusedFP32BF16Weight(x, weight, eps)
-  echo "Done."
-  echo()
-
   # Header
   echo "Implementation                                  ns/op  ops/s  vs ref     diff"
   echo "-----------------------------------------------------------------------------"
 
   # Reference first (exact FP32 match)
   var rRef: Tensor
+  for _ in 0 ..< Warmup:
+    rRef = rmsNormManualFP32(x, weight, eps)
   let nsRef = measure(Iters):
     rRef = rmsNormManualFP32(x, weight, eps)
   let fp32Ref = rRef.to(kCPU).to(kFloat32)
+  reportLine("Naive FP32 (ref)", nsRef, 0.0, nsRef)
 
-  # Collect results
-  var results: seq[tuple[name: string, ns: int64, diff: float64]]
+  block: # Manual BF16
+    var r1: Tensor
+    for _ in 0 ..< Warmup:
+      r1 = rmsNormManualBF16(x, weight, eps)
+    let ns1 = measure(Iters):
+      r1 = rmsNormManualBF16(x, weight, eps)
+    let d1 = (r1.to(kCPU).to(kFloat32) - fp32Ref).abs().max().item(float)
+    reportLine("Naive BF16", ns1, d1, nsRef)
 
-  # Manual BF16
-  var r1: Tensor
-  let ns1 = measure(Iters):
-    r1 = rmsNormManualBF16(x, weight, eps)
-  let d1 = (r1.to(kCPU).to(kFloat32) - fp32Ref).abs().max().item(float)
-  results.add(("Manual BF16", ns1, d1))
+  block: # Fused BF16
+    var r3: Tensor
+    for _ in 0 ..< Warmup:
+      r3 = rmsNormFusedBF16(x, weight, eps)
+    let ns3 = measure(Iters):
+      r3 = rmsNormFusedBF16(x, weight, eps)
+    let d3 = (r3.to(kCPU).to(kFloat32) - fp32Ref).abs().max().item(float)
+    reportLine("Fused BF16", ns3, d3, nsRef)
 
-  # Fused BF16
-  var r3: Tensor
-  let ns3 = measure(Iters):
-    r3 = rmsNormFusedBF16(x, weight, eps)
-  let d3 = (r3.to(kCPU).to(kFloat32) - fp32Ref).abs().max().item(float)
-  results.add(("Fused BF16", ns3, d3))
+  block: # Fused FP32
+    var r4: Tensor
+    for _ in 0 ..< Warmup:
+      r4 = rmsNormFusedFP32(x, weight, eps)
+    let ns4 = measure(Iters):
+      r4 = rmsNormFusedFP32(x, weight, eps)
+    let d4 = (r4.to(kCPU).to(kFloat32) - fp32Ref).abs().max().item(float)
+    reportLine("Fused FP32", ns4, d4, nsRef)
 
-  # Fused FP32
-  var r4: Tensor
-  let ns4 = measure(Iters):
-    r4 = rmsNormFusedFP32(x, weight, eps)
-  let d4 = (r4.to(kCPU).to(kFloat32) - fp32Ref).abs().max().item(float)
-  results.add(("Fused FP32", ns4, d4))
+  block: # Optimized FP32 (.pow(2) + .rsqrt())
+    var r6: Tensor
+    for _ in 0 ..< Warmup:
+      r6 = rmsNormOptPow2RsqrtFP32(x, weight, eps)
+    let ns6 = measure(Iters):
+      r6 = rmsNormOptPow2RsqrtFP32(x, weight, eps)
+    let d6 = (r6.to(kCPU).to(kFloat32) - fp32Ref).abs().max().item(float)
+    reportLine("Opt FP32 (pow(2)+rsqrt)", ns6, d6, nsRef)
 
-  # Fused FP32 + BF16 wt
-  var r5: Tensor
-  let ns5 = measure(Iters):
-    r5 = rmsNormFusedFP32BF16Weight(x, weight, eps)
-  let d5 = (r5.to(kCPU).to(kFloat32) - fp32Ref).abs().max().item(float)
-  results.add(("Fused FP32 + BF16 weight", ns5, d5))
+  block: # Optimized FP32 (.square() + .rsqrt())
+    var r7: Tensor
+    for _ in 0 ..< Warmup:
+      r7 = rmsNormOptSqrRsqrtFP32(x, weight, eps)
+    let ns7 = measure(Iters):
+      r7 = rmsNormOptSqrRsqrtFP32(x, weight, eps)
+    let d7 = (r7.to(kCPU).to(kFloat32) - fp32Ref).abs().max().item(float)
+    reportLine("Opt FP32 (square+rsqrt)", ns7, d7, nsRef)
 
-  # Print reference
-  reportLine("Manual FP32 (ref)", nsRef, 0.0, nsRef)
-  # Print others
-  for e in results:
-    reportLine(e.name, e.ns, e.diff, nsRef)
 
 when isMainModule:
   benchRMSNorm()

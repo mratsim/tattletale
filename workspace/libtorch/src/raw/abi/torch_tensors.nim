@@ -1025,6 +1025,7 @@ func squeeze*(a: TorchTensor, axis: int): TorchTensor {.importcpp: "#.squeeze(@)
 func unsqueeze*(a: TorchTensor, axis: int): TorchTensor {.importcpp: "#.unsqueeze(@)".}
 func square*(a: TorchTensor): TorchTensor {.importcpp: "#.square()".}
 func sqrt*(a: TorchTensor): TorchTensor {.importcpp: "#.sqrt()".}
+func rsqrt*(a: TorchTensor): TorchTensor {.importcpp: "#.rsqrt()".}
 func pow*(a: TorchTensor, exponent: TorchTensor): TorchTensor {.importcpp: "#.pow(@)".}
 func pow*(a: TorchTensor, exponent: Scalar): TorchTensor {.importcpp: "#.pow(@)".}
 
