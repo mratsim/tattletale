@@ -19,19 +19,19 @@ func init*(_: type RmsNorm, weight: Tensor, eps: float = 1e-6): RmsNorm =
   RmsNorm(weight: weight, eps: eps, hidden_size: hidden_size)
 
 proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
-  ## Forward pass with float32 upcasting:
-  ##   - Converts to FP32 for numerical stability
-  ##   - Computes variance and rsqrt in FP32
-  ##   - Converts back to input dtype, then multiplies by weight
+  ## Forward pass with float32 upcasting (aphrodite-engine style):
+  ##   1. Converts to FP32 for numerical stability
+  ##   2. Squaring
+  ##   3. `.sqrt().reciprocal`
+  ##      The single instruction rsqrt accumulate 0.03 abs error
+  ##   4. Converts back to input dtype, then multiplies by BF16 weight
   ##
   ## Without float32 conversion, we accumulate errors of
-  ## 1.562500e-02 = 1/64 = 2^-6
-  ## every layer
+  ## 1.562500e-02 = 1/64 = 2^-6 every layer
   let input_dtype = hidden_state.scalarType()
   let x = hidden_state.to(kFloat32)
-  let variance = x * x  # x.pow(2) equivalent
-  let mean_var = variance.mean(axis = -1, keepdim = true)
-  let rstd = mean_var.add(Scalar(self.eps)).sqrt().reciprocal() # TODO fast_invsqrt
+  let variance = x.square().mean(axis = -1, keepdim = true)
+  let rstd = variance.add(Scalar(self.eps)).rsqrt()
   let normalized = x * rstd
   normalized.to(input_dtype) * self.weight
 
