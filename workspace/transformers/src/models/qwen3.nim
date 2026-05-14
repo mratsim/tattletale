@@ -13,7 +13,7 @@ import
 
   pkg/iface,
   pkg/packedjson,
-  
+
   workspace/libtorch,
   workspace/safetensors,
   workspace/positron,
@@ -119,9 +119,9 @@ proc forward*(self: Qwen3Model, input: Tensor, positions: Tensor, cache: var KVC
   let normed = self.norm.forward(x + finalResidual)
   self.lmHead.forward(normed)
 
-# iface generates to[Model] converter automatically
-
-proc loadQwen3Model(modelPath: string, device = kCPU): Model =
+proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
+  ## Load Qwen3 model and return as concrete Qwen3Model type (not interface).
+  ## Use this when you need to access internal fields for instrumentation/testing.
   let config = loadQwen3Config(modelPath / "config.json")
 
   let weightsPath = modelPath / "model.safetensors"
@@ -174,7 +174,7 @@ proc loadQwen3Model(modelPath: string, device = kCPU): Model =
   let norm = RmsNorm.init(finalNormWeight)
   let lmHead = LMHead.initTied(embedTokens)
 
-  let qwen3Model = Qwen3Model(
+  result = Qwen3Model(
     embedTokens: embedTokens,
     layers: layers,
     norm: norm,
@@ -182,6 +182,9 @@ proc loadQwen3Model(modelPath: string, device = kCPU): Model =
     config: config
   )
 
+proc loadQwen3Model*(modelPath: string, device = kCPU): Model =
+  let qwen3Model = loadQwen3ModelRaw(modelPath, device)
+  # iface generates to[Model] converter automatically
   qwen3Model.to(Model)
 
 static:
