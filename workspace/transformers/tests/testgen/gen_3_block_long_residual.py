@@ -25,7 +25,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # ── Config ──────────────────────────────────────────────────────────────
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_PATH = str(Path(__file__).parent.parent / "hf_models" / MODEL_NAME)
-FIXTURE_DIR = Path(__file__).parent / "fixtures" / "long-residual-3-block"
+FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "long-residual-3-block" / MODEL_NAME
 NUM_LAYERS = 3
 INPUT_TEXT = "Hello, how are you?"
 
