@@ -25,7 +25,7 @@
 ## x = residual + x  ← ADD here
 ## ```
 ##
-## **2. Long residual stream** (vLLM, SGLang, nano-vllm):
+## **2. Long residual stream** (vLLM, SGLang):
 ## ```
 ## residual = x  ← saved once
 ## (x, residual) = attn_norm(x, residual)  ← residual passed through
@@ -96,6 +96,24 @@
 ##
 ## The final model forward typically adds the residual before the final norm:
 ##   let (normed, _) = final_norm.forward(x + residual, none)
+##
+## INVARIANT:
+##
+##   At each layer boundary: output + residual == x_local
+##
+##   where x_local is the output of the equivalent HF local residual pattern:
+##     x_local = x + attn(RMSNorm(x)) + mlp(RMSNorm(x + attn(RMSNorm(x))))
+##
+##   This invariant holds because:
+##     - attn_norm.forward_with_residual(x, r) → (RMSNorm(x+r), x+r)
+##     - mlp_norm.forward_with_residual(attn_out, r) → (RMSNorm(attn_out+r), attn_out+r)
+##     - So output = mlp(RMSNorm(attn_out+r)), residual = attn_out+r
+##     - Therefore output + residual = mlp + attn_out + x = x_local
+##
+##     The invariant is tested in
+##     gen_3_block_long_residual.py
+##     via test_qwen3_long_residual_3_blocks.nim.
+
 
 import
   std/options,
@@ -134,7 +152,7 @@ proc forward*(self: var TransformerBlock, x: Tensor, residual: Option[Tensor]): 
   ## Returns:
   ##   (output, residual) where:
   ##     - output: Tensor of shape (batch, seq_len, hidden_size)
-  ##     - residual: The original input residual, passed through unchanged
+  ##     - residual: The accumulated residual, passed through unchanged
   ##
   ## Note:
   ##   RoPE positions and KV cache are handled internally by the attention layer.
@@ -144,9 +162,10 @@ proc forward*(self: var TransformerBlock, x: Tensor, residual: Option[Tensor]): 
   ##   residual = residual.get(x)  # Use x if residual is None
   ##   (h, residual) = self.attn_norm.forward_with_residual(x, residual)
   ##   attn_out = self.attn.forward(h)
-  ##   (h2, residual) = self.mlp_norm.forward_with_residual(h + attn_out, residual)
+  ##   (h2, residual) = self.mlp_norm.forward_with_residual(attn_out, residual)
   ##   mlp_out = self.mlp.forward(h2)
-  ##   (h2 + mlp_out, residual)
+  ##   (mlp_out, residual)
+
   let (h, r) =
     if residual.isSome():
       self.attn_norm.forward_with_residual(x, residual.unsafeGet())
