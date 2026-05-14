@@ -21,7 +21,7 @@ from collections import OrderedDict
 # ── Config ──────────────────────────────────────────────────────────────
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_PATH = str(Path(__file__).parent.parent / "hf_models" / MODEL_NAME)
-OUTPUT_DIR = Path(__file__).parent.parent / "fixtures"/ "full-inference/hf"
+OUTPUT_DIR = Path(__file__).parent.parent / "fixtures" / "full-inference" / MODEL_NAME
 INPUT_TEXT = "Hello, how are you?"
 DTYPE = torch.bfloat16
 DEVICE = "cpu"
@@ -142,7 +142,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
     hf_intermediates = capture_hf_intermediates(hf_model, tokenizer, INPUT_TEXT)
     # Save
-    hf_dir = OUTPUT_DIR / "hf"
+    hf_dir = OUTPUT_DIR
     hf_logits = hf_model(**tokenizer(INPUT_TEXT, return_tensors="pt"), use_cache=False).logits
     for i, intermediates in enumerate(hf_intermediates):
         if intermediates is None:
