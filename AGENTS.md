@@ -175,7 +175,8 @@ when isMainModule:
 
 - CI: `tests/test_*.nim` or `tests/t_*.nim`
 - Manual: `tests/manual_test_*.nim` (multi-GB models)
-- Fixtures: `tests/fixtures/` or `tests/testgen/fixtures/`
+- Fixtures: `tests/fixtures/`
+- Fixtures generator: `tests/testgen/`
 - `const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"`
 
 ### Test Discipline
