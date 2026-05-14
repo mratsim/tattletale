@@ -48,7 +48,7 @@ proc loadFixture(layerIdx: int): Table[string, Tensor] =
   for name in st.tensors.keys():
     result[name] = st.getTensorOwned(name, kCPU)
 
-proc checkTensor(name: string, actual, expected: Tensor, tol: float): float =
+proc checkTensor(name: string, actual, expected: Tensor, tol: float): float {.discardable.} =
   ## Check that actual and expected tensors match within tolerance.
   ## Raises exception if diff exceeds tolerance.
   ## Returns the max diff for reporting.
@@ -131,6 +131,7 @@ proc main() =
 
         block:
           # ── Call real TransformerBlock.forward and verify it matches ──
+          layer.attn.resetCache()
           layer.attn.rotary.setCache(fixture["cos"], fixture["sin"])
           let (real_out, real_res) = layer.forward(hidden, residual)
 
@@ -144,6 +145,7 @@ proc main() =
           echo &"  real forward invariant diff={realInvDiff:.2e}"
 
         # Update state for next layer using the real forward's output
+        layer.attn.resetCache()
         layer.attn.rotary.setCache(fixture["cos"], fixture["sin"])
         let (fwd_out, fwd_res) = layer.forward(hidden, residual)
         hidden = fwd_out
