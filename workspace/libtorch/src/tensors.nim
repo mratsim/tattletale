@@ -12,8 +12,11 @@ import
   workspace/libtorch/src/raw/indexing_macros
 
 # Export Nim-friendly types (no C++ types leak past this boundary)
-export F.ScalarKind, F.DeviceKind, F.Device, F.TensorOptions,
-       F.Scalar, F.SomeTorchType, F.TorchComplex
+export F.ScalarKind, F.DeviceKind, F.Device,
+       F.Scalar, F.SomeTorchType, F.TorchComplex,
+       # TensorOptions
+       F.TensorOptions, device, dtype, tensorOptions
+
 # Indexing sugar
 export F.`_`, F.ellipsis, F.`...`
 
