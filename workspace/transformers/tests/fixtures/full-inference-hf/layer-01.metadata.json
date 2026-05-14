@@ -1,0 +1,18 @@
+{
+  "batch_size": 1,
+  "device": "cpu",
+  "dtype": "bfloat16",
+  "framework": "hf",
+  "input_text": "Hello, how are you?",
+  "input_tokens": [
+    9707,
+    11,
+    1246,
+    525,
+    498,
+    30
+  ],
+  "layer": 1,
+  "model": "Qwen3-0.6B",
+  "seq_len": 6
+}

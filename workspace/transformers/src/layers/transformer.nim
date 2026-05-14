@@ -153,6 +153,6 @@ proc forward*(self: var TransformerBlock, x: Tensor, residual: Option[Tensor]): 
     else:
       (self.attn_norm.forward(x), x)
   let attn_out = self.attn.forward(h)
-  let (h2, r2) = self.mlp_norm.forward_with_residual(h + attn_out, r)
+  let (h2, r2) = self.mlp_norm.forward_with_residual(attn_out, r)
   let mlp_out = self.mlp.forward(h2)
-  (h2 + mlp_out, r2)
+  (mlp_out, r2)
