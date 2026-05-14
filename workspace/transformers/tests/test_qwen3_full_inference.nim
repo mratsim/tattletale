@@ -33,7 +33,7 @@ import
   workspace/libtorch_testutils
 
 const
-  FixtureDir = currentSourcePath().parentDir() / "fixtures" / "full-inference-hf"
+  FixtureDir = currentSourcePath().parentDir() / "fixtures" / "full-inference" / "Qwen3-0.6B"
   ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
 
 proc loadLayerFixture(layerIdx: int): Table[string, Tensor] =
