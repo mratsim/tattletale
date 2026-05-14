@@ -56,6 +56,8 @@ proc main() =
       ## - after_attn_norm, after_attn, after_mlp: EXPECTED to differ
       ##   (norms see different inputs: N(x+r) vs N(x))
 
+      const tol = 1e-5
+
       let model = loadQwen3ModelRaw(ModelPath, kCPU)
       privateAccess(Qwen3Model)
 
@@ -74,28 +76,32 @@ proc main() =
         let hfFixture = loadLayerFixture(layerIdx)
         var layer = model.layers[layerIdx]
 
-        echo &"Layer {layerIdx:02d}:"
+        # Compare layer_input
+        # For layer 0: hidden is the embedding output
+        # For layers 1+: hidden + residual is the boundary sum (matches HF layer_input)
+        let nimInput = if residual.isSome():
+          hidden + residual.unsafeGet()
+        else:
+          hidden
+        let inputDiff = (nimInput.to(kFloat32) - hfFixture["layer_input"].to(kFloat32)).abs().max().item(float)
+        echo &"Layer {layerIdx:02d}: input_diff={inputDiff:.2e}"
 
-        # Compare layer_input (should match exactly)
-        let inputDiff = (hidden.to(kFloat32) - hfFixture["layer_input"].to(kFloat32)).abs().max().item(float)
-        echo &"  layer_input diff: {inputDiff:.6e}"
-        if inputDiff > 1e-5:
+        if inputDiff > tol:
           raise newException(ValueError, &"Layer {layerIdx:02d}: layer_input diff = {inputDiff:.6e}")
 
         # Forward through layer (long residual stream pattern)
         let (output, newResidual) = layer.forward(hidden, residual)
 
         # Compare: Nim (output + residual) vs HF (layer_output)
-        # KEY TEST: by the mathematical proof, these sums should be identical
         let nimSum = output + newResidual
         let outputDiff = (hfFixture["layer_output"].to(kFloat32) - nimSum.to(kFloat32)).abs().max().item(float)
-        echo &"  output + residual diff: {outputDiff:.6e}"
+        echo &"  output + residual diff={outputDiff:.2e}"
 
         # Update state
         hidden = output
         residual = some(newResidual)
 
-        if outputDiff > 1e-5:
+        if outputDiff > tol:
           raise newException(ValueError, &"Layer {layerIdx:02d}: output + residual diff = {outputDiff:.6e}")
 
       # Final logits comparison
@@ -106,7 +112,7 @@ proc main() =
       let finalLogits = model.lmHead.forward(finalNorm)
       echo &"  Nim logits mean: {finalLogits.mean().item(float):.6f}"
 
-      echo "✓ PASS: All layers match within tolerance"
+      echo "✓ PASS: All layers match within tolerance (", tol, ")"
       true
 
 when isMainModule:
