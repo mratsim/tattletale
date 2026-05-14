@@ -84,7 +84,10 @@ func forward*(
   result = attn_perm.reshape([batch, seq_len, self.qo_attn_dim])
 
 func init*(_: type KVCache): KVCache =
-  KVCache()
+  KVCache(
+    keys: F.empty(0),
+    values: F.empty(0)
+  )
 
 proc reset*(self: var KVCache) =
   self.keys = F.empty(0)
