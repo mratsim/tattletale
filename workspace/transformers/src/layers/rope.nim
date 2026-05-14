@@ -115,3 +115,4 @@ func setCache(self: var RotaryPositionEmbedding, cos, sin: Tensor) {.used.} =
   doAssert cos_2d.dim == 2, "setCache: cos must be 2D or 3D, got " & $cos.dim & "D"
   self.cos_cache = cos_2d
   self.sin_cache = sin_2d
+  self.cachePos = 0  # Reset position when loading new cache
