@@ -8,6 +8,7 @@
 import
   # Standard library
   std/complex,
+  std/macros,
   # Internal
   workspace/libtorch/vendor/libtorch,
   ./c10 {.all.},
@@ -138,7 +139,24 @@ type
 
 type TensorOptions* {.importcpp: "torch::TensorOptions", bycopy.} = object
 
-func init*(T: type TensorOptions): TensorOptions {.constructor, importcpp: "torch::TensorOptions".}
+func init*(T: type TensorOptions): TensorOptions {.constructor, importcpp: "torch::TensorOptions()".}
+
+func device*(opts: TensorOptions, dev: Device): TensorOptions {.importcpp: "#.device(#)".}
+  ## Set the device for tensor creation.
+
+func device*(opts: TensorOptions, kind: DeviceKind): TensorOptions {.importcpp: "#.device(#)".}
+  ## Set the device kind (CPU/CUDA/etc.) for tensor creation.
+
+func dtype*(opts: TensorOptions, kind: ScalarKind): TensorOptions {.importcpp: "#.dtype(#)".}
+  ## Set the scalar type for tensor creation.
+
+macro tensorOptions*(opts: varargs[typed]): TensorOptions =
+  result = nnkCall.newTree(bindSym"init", ident"TensorOptions")
+  for i in 0 ..< opts.len:
+    if opts[i].sameType(bindSym"ScalarKind"):
+      result = nnkCall.newTree(bindSym"dtype", result, opts[i])
+    else:
+      result = nnkCall.newTree(bindSym"device", result, opts[i])
 
 # Scalars
 # -----------------------------------------------------------------------
