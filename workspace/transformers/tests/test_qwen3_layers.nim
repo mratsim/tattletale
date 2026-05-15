@@ -187,8 +187,8 @@ proc main() =
           # Verify compute() produces the same cos/sin as HF reference (batch-independent)
           let hfCos2d = if hfCos.dim == 3: hfCos[b] else: hfCos
           let hfSin2d = if hfSin.dim == 3: hfSin[b] else: hfSin
-          assertAllClose(cos, hfCos2d, rtol = 1e-2, abstol = 1e-2, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
-          assertAllClose(sin, hfSin2d, rtol = 1e-2, abstol = 1e-2, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(cos, hfCos2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
 
           let x = hiddenStates[b].unsqueeze(0)  # (1, seq, hidden)
           let o = attn.forward(ctx, cos, sin, x)
@@ -332,8 +332,8 @@ proc main() =
           # Verify compute() produces the same cos/sin as HF reference (batch-independent)
           let hfCos2d = if hfCos.dim == 3: hfCos[b] else: hfCos
           let hfSin2d = if hfSin.dim == 3: hfSin[b] else: hfSin
-          assertAllClose(cos, hfCos2d, rtol = 1e-2, abstol = 1e-2, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
-          assertAllClose(sin, hfSin2d, rtol = 1e-2, abstol = 1e-2, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(cos, hfCos2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
 
           let x = inputHiddenStates[b].unsqueeze(0)     # (1, seq, hidden)
           let res = residual[b].unsqueeze(0)             # (1, seq, hidden)

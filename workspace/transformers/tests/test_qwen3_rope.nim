@@ -58,7 +58,7 @@ const
 # SECTION 1: MATHEMATICAL PROPERTIES
 # ============================================================================
 
-const Tol = 1e-2 # TODO - this seems very high
+const Tol = 1e-5  # BF16 precision — valid once fixtures use f32 inv_freq
 
 proc main() =
   # ──────────────────────────────────────────────────────────────────────────
@@ -244,7 +244,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   runTest "Qwen3 RoPE cos/sin cache vs HF — end-to-end correctness":
     proc(): bool =
-      const tol = 1e-2  # BF16 precision + operation ordering differences
+      const tol = 1e-5  # BF16 precision — valid once fixtures use f32 inv_freq
       # Load HF cos/sin from fixture (computed by HF's RotaryEmbedding)
       var memFile = memFiles.open(FixtureDir_3Block / "block-00.safetensor", mode = fmRead)
       defer: close(memFile)
@@ -281,7 +281,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   runTest "Qwen3 RoPE apply output vs HF — end-to-end correctness":
     proc(): bool =
-      const tol = 2e-2  # TODO, use Tol and this is way to high a tolerance
+      const tol = Tol  # Uses global Tol (1e-5)
 
       # Load HF cos/sin from fixture
       var memFile = memFiles.open(FixtureDir_3Block / "block-00.safetensor", mode = fmRead)
