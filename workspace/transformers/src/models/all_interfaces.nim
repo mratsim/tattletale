@@ -11,10 +11,24 @@ import
   workspace/libtorch,
   ../stateful/inference_context
 
+type ModelConfigBase* = ref object
+  ## Minimal config shared by all model types for InferenceContext creation.
+  architecture*: string
+  model_type*: string
+  num_hidden_layers*: int
+  hidden_size*: int
+  vocab_size*: int
+  rms_norm_eps*: float
+  torch_dtype*: string
+  num_attention_heads*: int
+  num_key_value_heads*: int
+  head_dim*: int
+  intermediate_size*: int
+  max_position_embeddings*: int
+
 iface *Model:
   proc forward(ctx: var InferenceContext, input_ids: Tensor): Tensor
+  proc getConfig(): ModelConfigBase
 
 var ModelRegistry* {.compileTime.}: Table[string, proc(modelPath: string, device: DeviceKind): Model {.nimcall.}]
   ## Model registry - populated by each model module at initialization
-  ## Ensure it is used after all individual model files are imported
-  ## or it will miss the ones loaded after
