@@ -16,6 +16,7 @@ import
   workspace/transformers/src/layers,
   workspace/transformers/src/stateful/kvcache,
   workspace/transformers/src/stateful/inference_context,
+  workspace/transformers/src/layers/attn {.all.},
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/libtorch_testutils
@@ -47,6 +48,10 @@ const
   ModelDir = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
   ModelName = "Qwen3-0.6B"
 
+privateAccess(Qwen3Model)
+privateAccess(RopeGQAttention)
+privateAccess(GroupedQueryAttention)
+
 
 proc setupAttn(): RopeGQAttention =
   var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
@@ -61,7 +66,6 @@ proc setupAttn(): RopeGQAttention =
   let kNormWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.k_norm.weight")
 
   let model = loadQwen3ModelRaw(ModelDir, kCPU)
-  privateAccess(Qwen3Model)
   let rotary = model.rotary
 
   return RopeGQAttention.init(
@@ -103,8 +107,8 @@ proc main() =
       let cache = ctx.kv_caches[attn.layer_idx]
       let (cachedK, _) = cache.read(8)
 
-      let k = attn.k_proj(x)
-      let k_reshaped = k.reshape([x.size(0), x.size(1), attn.attn.num_kv_head, attn.attn.head_dim])
+      let k = attn.k_proj.forward(x)
+      let k_reshaped = k.reshape([x.size(0), x.size(1), attn.gqa_attn.num_kv_head, attn.gqa_attn.head_dim])
       let k_normed = if attn.k_norm.isSome: attn.k_norm.get()(k_reshaped) else: k_reshaped
       let (_, k_rot) = rotary.applyRope(k_normed, k_normed, cos, sin)
       let k_rot_expected = k_rot.permute([0, 2, 1, 3])
@@ -151,8 +155,8 @@ proc main() =
       let cache = ctx.kv_caches[attn.layer_idx]
       let (_, cachedV) = cache.read(8)
 
-      let v = attn.v_proj(x)
-      let v_expected = v.reshape([x.size(0), x.size(1), attn.attn.num_kv_head, attn.attn.head_dim]).permute([0, 2, 1, 3])
+      let v = attn.v_proj.forward(x)
+      let v_expected = v.reshape([x.size(0), x.size(1), attn.gqa_attn.num_kv_head, attn.gqa_attn.head_dim]).permute([0, 2, 1, 3])
 
       let diff = (cachedV - v_expected).abs().max().item(float64)
       echo "  Cached vs raw values: max diff = ", diff
