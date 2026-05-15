@@ -57,7 +57,7 @@ proc checkTensor(name: string, actual, expected: Tensor, tol: float): float {.di
 proc main() =
   runTest "Qwen3 long residual stream - intermediate verification (3 blocks)":
     proc(): bool =
-      const tol = 2e-1
+      const tol = 1e-5
       let model = loadQwen3ModelRaw(ModelPath, kCPU)
       privateAccess(Qwen3Model)
 

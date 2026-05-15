@@ -19,31 +19,30 @@ func init*(_: type RmsNorm, weight: Tensor, eps: float = 1e-6): RmsNorm =
   RmsNorm(weight: weight, eps: eps, hidden_size: hidden_size)
 
 proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
-  ## Forward pass with float32 upcasting (aphrodite-engine style):
+  ## Forward pass with float32 upcasting for normalization:
   ##   1. Converts to FP32 for numerical stability
-  ##   2. Squaring
+  ##   2. Squares
   ##   3. `.sqrt().reciprocal`
-  ##      The single instruction rsqrt accumulate 0.03 abs error
-  ##   4. Multiplies by weight in FP32 (matches HF's `weight.float()`)
-  ##   5. Converts back to input dtype
+  ##      The single instruction rsqrt accumulates 0.03 abs error
+  ##   4. Converts normalized result back to input dtype
+  ##   5. Multiplies by weight in INPUT DTYPE (matches HF's Qwen3RMSNorm)
   ##
-  ## Without float32 conversion, we accumulate errors of
-  ## 1.562500e-02 = 1/64 = 2^-6 every layer
+  ## HF's Qwen3RMSNorm does: self.weight * hidden_states.to(input_dtype)
+  ## The weight multiplication is in the input dtype (bf16), not fp32.
+  ##
+  ## Without float32 for the normalization step itself, we accumulate errors
+  ## of ~0.03 per layer from the rsqrt approximation.
   let input_dtype = hidden_state.scalarType()
   let x = hidden_state.to(kFloat32)
   let variance = x.square().mean(axis = -1, keepdim = true)
   let rstd = variance.add(Scalar(self.eps)).rsqrt()
   let normalized = x * rstd
-  (normalized * self.weight.to(kFloat32)).to(input_dtype)
+  self.weight * normalized.to(input_dtype)
 
 proc forward_with_residual*(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
   ## Fused residual addition + RMSNorm.
   # The residual addition is done in the input dtype (BF16).
-  # The RMSNorm then converts to FP32, normalizes, and converts back.
-  # This matches HF's Qwen3RMSNorm behavior exactly.
-  #
-  # Without float32 conversion, we accumulate errors of
-  # 1.562500e-02 = 1/64 = 2^-6
-  # every layer
+  # The RMSNorm then converts to FP32, normalizes, and multiplies by weight
+  # in the input dtype (matches HF's Qwen3RMSNorm behavior exactly).
   let new_residual = hidden_state + residual
   (self.forward(new_residual), new_residual)

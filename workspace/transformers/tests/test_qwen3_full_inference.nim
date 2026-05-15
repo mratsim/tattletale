@@ -13,10 +13,7 @@
 ##   (proven invariant: ``y_long + r_long == x_local``)
 ## - Sublayer intermediates: EXPECTED to differ (norms see different inputs)
 ##
-## This isolates whether the 0.1875 diff comes from:
-## 1. Weight loading (if layer_input mismatches)
-## 2. Sublayer implementation (if output + residual mismatches)
-## 3. Expected residual pattern difference (if only sublayer norms differ)
+## All layers should match with tolerance 1e-5.
 
 import
   std/memfiles,
@@ -25,10 +22,10 @@ import
   std/os,
   std/options,
   std/importutils,
-  workspace/libtorch,
+  workspace/libtorch as F,
   workspace/safetensors,
-  workspace/safetensors/src/safetensors_libtorch,
   workspace/transformers/src/layers,
+  workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/libtorch_testutils
 
@@ -61,6 +58,14 @@ proc main() =
       let model = loadQwen3ModelRaw(ModelPath, kCPU)
       privateAccess(Qwen3Model)
 
+      # InferenceContext for stateful attention
+      var ctx = InferenceContext.init(
+        num_layers = model.config.num_hidden_layers,
+        batch_size = 1, kv_heads = model.config.num_key_value_heads,
+        max_seq = 4096, head_dim = model.config.head_dim,
+        dtype = F.kBFloat16, device = F.kCPU
+      )
+
       # Input tokens: "Hello, how are you?"
       let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0)
 
@@ -89,11 +94,14 @@ proc main() =
         if inputDiff > tol:
           raise newException(ValueError, &"Layer {layerIdx:02d}: layer_input diff = {inputDiff:.6e}")
 
-        # Reset RoPE and KV cache for this layer (each layer processes same positions)
-        layer.attn.resetCache()
+        # Prepare InferenceContext for this layer
+        ctx.reset()
+        let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64)
+        ctx.position_ids = pos_ids
+        let (cos, sin) = layer.attn.rotary.compute(ctx.position_ids)
 
         # Forward through layer (long residual stream pattern)
-        let (output, newResidual) = layer.forward(hidden, residual)
+        let (output, newResidual) = layer.forward(ctx, cos, sin, hidden, residual)
 
         # Compare: Nim (output + residual) vs HF (layer_output)
         let nimSum = output + newResidual
@@ -115,7 +123,7 @@ proc main() =
       let finalLogits = model.lmHead.forward(finalNorm)
       echo &"  Nim logits mean: {finalLogits.mean().item(float):.6f}"
 
-      echo "✓ PASS: All layers match within tolerance (", tol, ")"
+      echo "✓ PASS: All layers match within tolerance (" & $tol & ")"
       true
 
 when isMainModule:
