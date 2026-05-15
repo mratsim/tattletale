@@ -112,8 +112,19 @@ template assertAllClose*(
     if msg.len > 0:
       echo msg
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Actual:   "; actual.print()
-    echo "Expected: "; expected.print()
+    # Print only a 5-element snippet along each dimension to avoid flooding the terminal
+    let showN = 5
+    var actualSnippet = actual
+    var expectedSnippet = expected
+    for d in 0 ..< actual.dim():
+      let sn = min(showN, actual.size(d))
+      actualSnippet = actualSnippet.narrow(d, 0, sn)
+      expectedSnippet = expectedSnippet.narrow(d, 0, sn)
+    echo "Actual (shape: ", actual.shape, "):"
+    actualSnippet.print()
+    echo ""
+    echo "Expected (shape: ", expected.shape, "):"
+    expectedSnippet.print()
     raise newException(AssertionDefect, "[ttt] allClose assertion failed")
 
 template assertShape*(tensor: untyped, expectedShape: openArray[int], msg = ""): bool =
