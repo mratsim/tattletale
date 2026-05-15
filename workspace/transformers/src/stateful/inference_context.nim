@@ -7,7 +7,8 @@
 
 import
   workspace/libtorch as F,
-  ./kvcache
+  ./kvcache,
+  ../layers/rope
 
 type InferenceContext* = object
   ## State container for a SINGLE forward pass.
@@ -27,6 +28,11 @@ type InferenceContext* = object
   kv_heads*: int
   max_seq*: int
   head_dim*: int
+
+  ## RoPE cos/sin for current forward pass.
+  ## Sliced from the model's precomputed cache using position_ids.
+  cos*: Tensor   ## (seq_len, head_dim) — valid after setRopeForPositions()
+  sin*: Tensor   ## (seq_len, head_dim) — valid after setRopeForPositions()
 
 proc init*(
     _: type InferenceContext,
@@ -52,12 +58,24 @@ proc init*(
   InferenceContext(
     kv_caches: kv_caches,
     position_ids: F.empty(0),
+    cos: F.empty(0),
+    sin: F.empty(0),
     num_layers: num_layers,
     batch_size: batch_size,
     kv_heads: kv_heads,
     max_seq: max_seq,
-    head_dim: head_dim
+  head_dim: head_dim
   )
+
+proc setRopeForPositions*(ctx: var InferenceContext, rotary: RotaryPositionEmbeddingRef) =
+  ## Populate ctx.cos and ctx.sin from the model's RoPE cache.
+  ##
+  ## Internally calls `rotary.ropeByPositions(ctx.position_ids)` and stores
+  ## the result in `ctx.cos` / `ctx.sin` for downstream attention layers.
+  ##
+  ## Called once per forward pass. The model is responsible for calling this
+  ## so the orchestrator stays ignorant of rope variants.
+  (ctx.cos, ctx.sin) = rotary.ropeByPositions(ctx.position_ids)
 
 proc reset*(ctx: var InferenceContext) =
   ## Reset for NEW sequence (not new token!).

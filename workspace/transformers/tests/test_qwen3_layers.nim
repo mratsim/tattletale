@@ -117,8 +117,8 @@ proc main() =
   # Pattern:
   #   1. Get RoPE from model level (shared across all layers)
   #   2. Set position_ids on InferenceContext
-  #   3. Compute cos/sin via rotary.compute(ctx.position_ids)
-  #   4. Pass cos/sin to attn(ctx, cos, sin, x)
+  #   3. Compute cos/sin via rotary.ropeByPositions(ctx.position_ids)
+  #   4. Pass cos/sin to attn(ctx, x)
   #
   # The fixture stores raw HF values (3D cos/sin, 2D position_ids).
   #
@@ -185,16 +185,16 @@ proc main() =
         for b in 0..<batch:
           ctx.reset()
           ctx.position_ids = hfPosIds[b]  # (seq,) for this batch item
-          let (cos, sin) = rotary.compute(ctx.position_ids)
+          ctx.setRopeForPositions(rotary)
 
           # Verify compute() produces the same cos/sin as HF reference (batch-independent)
           let hfCos2d = if hfCos.dim == 3: hfCos[b] else: hfCos
           let hfSin2d = if hfSin.dim == 3: hfSin[b] else: hfSin
-          assertAllClose(cos, hfCos2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
-          assertAllClose(sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(ctx.cos, hfCos2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(ctx.sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
 
           let x = hiddenStates[b].unsqueeze(0)
-          let o = attn(ctx, cos, sin, x)
+          let o = attn(ctx, x)
           outputs.add(o)
 
         let finalOutput = F.cat(outputs)
@@ -251,8 +251,8 @@ proc main() =
   # Pattern:
   #   1. Get RoPE from model level (shared across all layers)
   #   2. Set position_ids on InferenceContext
-  #   3. Compute cos/sin via rotary.compute(ctx.position_ids)
-  #   4. Pass cos/sin to transformer(ctx, cos, sin, x, residual)
+  #   3. Compute cos/sin via rotary.ropeByPositions(ctx.position_ids)
+  #   4. Pass cos/sin to transformer(ctx, x, residual)
   #
   # The fixture stores raw HF values (3D cos/sin, 2D position_ids).
   #
@@ -333,17 +333,17 @@ proc main() =
         for b in 0..<batch:
           ctx.reset()
           ctx.position_ids = hfPosIds[b]  # (seq,) for this batch item
-          let (cos, sin) = rotary.compute(ctx.position_ids)
+          ctx.setRopeForPositions(rotary)
 
           # Verify compute() produces the same cos/sin as HF reference (batch-independent)
           let hfCos2d = if hfCos.dim == 3: hfCos[b] else: hfCos
           let hfSin2d = if hfSin.dim == 3: hfSin[b] else: hfSin
-          assertAllClose(cos, hfCos2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
-          assertAllClose(sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(ctx.cos, hfCos2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(ctx.sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
 
           let x = inputHiddenStates[b].unsqueeze(0)     # (1, seq, hidden)
           let res = residual[b].unsqueeze(0)             # (1, seq, hidden)
-          let (o, oRes) = transformer(ctx, cos, sin, x, some(res))
+          let (o, oRes) = transformer(ctx, x, some(res))
           outputs.add(o)
           outputResiduals.add(oRes)
 

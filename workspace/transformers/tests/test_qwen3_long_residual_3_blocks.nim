@@ -63,6 +63,7 @@ proc main() =
       let model = loadQwen3ModelRaw(ModelPath, kCPU)
       privateAccess(Qwen3Model)
       privateAccess(TransformerBlock)
+      privateAccess(RopeGQAttention)
 
       # InferenceContext for stateful attention
       var ctx = InferenceContext.init(
@@ -90,7 +91,7 @@ proc main() =
         ctx.reset()
         let hfPosIds = fixture["position_ids"].to(kInt64)
         ctx.position_ids = hfPosIds[0]  # (seq,)
-        let (cos, sin) = layer.self_attn.rotary.compute(ctx.position_ids)
+        ctx.setRopeForPositions(layer.self_attn.rotary)
 
         echo &"Layer {layerIdx:02d}:"
 
@@ -117,7 +118,7 @@ proc main() =
               (h_norm, hidden)
 
           # Step 2: attention
-          let attn_out = layer.self_attn(ctx, cos, sin, h)
+          let attn_out = layer.self_attn(ctx, h)
           checkTensor(&"L{layerIdx:02d}_attn", attn_out, fixture["after_attn"], tol)
 
           # Step 3: mlp_norm.forward_with_residual(attn_out, r)
@@ -142,8 +143,8 @@ proc main() =
           # ── Call real TransformerBlock.forward and verify it matches ──
           ctx.reset()
           ctx.position_ids = hfPosIds[0]
-          let (r_cos, r_sin) = layer.self_attn.rotary.compute(ctx.position_ids)
-          let (real_out, real_res) = layer(ctx, r_cos, r_sin, hidden, residual)
+          ctx.setRopeForPositions(layer.self_attn.rotary)
+          let (real_out, real_res) = layer(ctx, hidden, residual)
 
           checkTensor(&"L{layerIdx:02d}_real_out", real_out,
                       fixture["mlp_out"], tol)
@@ -157,8 +158,8 @@ proc main() =
         # Update state for next layer using the real forward's output
         ctx.reset()
         ctx.position_ids = hfPosIds[0]
-        let (f_cos, f_sin) = layer.self_attn.rotary.compute(ctx.position_ids)
-        let (fwd_out, fwd_res) = layer(ctx, f_cos, f_sin, hidden, residual)
+        ctx.setRopeForPositions(layer.self_attn.rotary)
+        let (fwd_out, fwd_res) = layer(ctx, hidden, residual)
         hidden = fwd_out
         residual = some(fwd_res)
 

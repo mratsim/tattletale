@@ -103,10 +103,10 @@ proc main() =
         ctx.reset()
         let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64)
         ctx.position_ids = pos_ids
-        let (cos, sin) = layer.self_attn.rotary.compute(ctx.position_ids)
+        ctx.setRopeForPositions(layer.self_attn.rotary)
 
         # Forward through layer (long residual stream pattern)
-        let (output, newResidual) = layer(ctx, cos, sin, hidden, residual)
+        let (output, newResidual) = layer(ctx, hidden, residual)
 
         # Compare: Nim (output + residual) vs HF (layer_output)
         let nimSum = output + newResidual

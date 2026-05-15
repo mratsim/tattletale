@@ -151,7 +151,6 @@ func init*(_: type TransformerBlock,
 proc forward*(
   self: TransformerBlock,
   ctx: var InferenceContext,
-  cos, sin: Tensor,
   x: Tensor,
   residual: Option[Tensor]
 ): (Tensor, Tensor) =
@@ -163,8 +162,7 @@ proc forward*(
   ## - Single addition per layer (instead of two)
   ##
   ## Args:
-  ##   ctx: InferenceContext with KV caches (ctx.kv_caches[self.layer_idx])
-  ##   cos, sin: Precomputed RoPE of shape (seq_len, head_dim)
+  ##   ctx: InferenceContext with KV caches and RoPE (ctx.kv_caches, ctx.cos, ctx.sin)
   ##   x: Input tensor of shape (batch, seq_len, hidden_size)
   ##   residual: Optional residual from previous layer. If None, uses x.
   ##
@@ -179,7 +177,7 @@ proc forward*(
   ## Computation:
   ##   residual = residual.get(x)  # Use x if residual is None
   ##   (h, residual) = self.input_layernorm(x, residual)
-  ##   self_attn_out = self.self_attn(ctx, cos, sin, h)
+  ##   self_attn_out = self.self_attn(ctx, h)  # reads ctx.cos, ctx.sin
   ##   (h2, residual) = self.post_attention_layernorm(self_attn_out, residual)
   ##   mlp_out = self.mlp(h2)
   ##   (mlp_out, residual)
@@ -190,14 +188,13 @@ proc forward*(
     else:
       (self.input_layernorm(x), x)
 
-  let self_attn_out = self.self_attn(ctx, cos, sin, h)
+  let self_attn_out = self.self_attn(ctx, h)
 
   let (h2, r2) = self.post_attention_layernorm(self_attn_out, r)
   (self.mlp(h2), r2)
 
 template `()`*(layer: TransformerBlock,
             ctx: var InferenceContext,
-            cos, sin: Tensor,
             x: Tensor,
             residual: Option[Tensor]): untyped =
-  forward(layer, ctx, cos, sin, x, residual)
+  layer.forward(ctx, x, residual)
