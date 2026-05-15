@@ -87,7 +87,7 @@ else: # Dynamic linking
   when UseCuda:
     {.passL: " -ltorch_cuda ".}
 
-  when TTT_LIBTORCH_SOURCE == "vendor":
+  when TTT_LIBTORCH_SOURCE == "vendor" or TTT_LIBTORCH_SOURCE == "venv":
     # Link to library in vendor (not for deployment!)
     when defined(macosx):
       {.passL:"-rpath " & LibrariesPath.}
