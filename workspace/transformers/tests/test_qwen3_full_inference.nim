@@ -29,6 +29,12 @@ import
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/libtorch_testutils
 
+{.experimental: "callOperator".}
+
+privateAccess(Qwen3Model)
+privateAccess(TransformerBlock)
+privateAccess(RopeGQAttention)
+
 const
   FixtureDir = currentSourcePath().parentDir() / "fixtures" / "full-inference" / "Qwen3-0.6B"
   ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
@@ -56,7 +62,6 @@ proc main() =
       const tol = 1e-5
 
       let model = loadQwen3ModelRaw(ModelPath, kCPU)
-      privateAccess(Qwen3Model)
 
       # InferenceContext for stateful attention
       var ctx = InferenceContext.init(
@@ -70,7 +75,7 @@ proc main() =
       let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0)
 
       # Embedding pass
-      let x = model.embedTokens.forward(inputIds)
+      let x = model.embedTokens(inputIds)
       var hidden = x
       var residual: Option[Tensor] = none(Tensor)
 
@@ -98,10 +103,10 @@ proc main() =
         ctx.reset()
         let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64)
         ctx.position_ids = pos_ids
-        let (cos, sin) = layer.attn.rotary.compute(ctx.position_ids)
+        let (cos, sin) = layer.self_attn.rotary.compute(ctx.position_ids)
 
         # Forward through layer (long residual stream pattern)
-        let (output, newResidual) = layer.forward(ctx, cos, sin, hidden, residual)
+        let (output, newResidual) = layer(ctx, cos, sin, hidden, residual)
 
         # Compare: Nim (output + residual) vs HF (layer_output)
         let nimSum = output + newResidual
@@ -119,8 +124,8 @@ proc main() =
       echo "================================================================="
       echo "Final logits:"
       let finalResidual = residual.get(hidden)
-      let finalNorm = model.norm.forward(hidden + finalResidual)
-      let finalLogits = model.lmHead.forward(finalNorm)
+      let finalNorm = model.norm(hidden + finalResidual)
+      let finalLogits = model.lmHead(finalNorm)
       echo &"  Nim logits mean: {finalLogits.mean().item(float):.6f}"
 
       echo "✓ PASS: All layers match within tolerance (" & $tol & ")"

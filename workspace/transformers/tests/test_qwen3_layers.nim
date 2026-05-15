@@ -70,7 +70,7 @@ proc main() =
             RmsNorm.init(inputLnWeight)
           else:
             raise newException(ValueError, &"Invalid layer: '{layerPath}'")
-        var output = normLayer.forward(inputHiddenStates)
+        var output = normLayer(inputHiddenStates)
         assertAllClose(output, expectedOutput, msg = "RMSNorm case " & $caseNum & " failed")
         echo "RMSNorm case ", caseNum, " PASSED"
       true
@@ -104,7 +104,7 @@ proc main() =
         let inputX = st.getTensorOwned("input_x")
         let expectedOutput = st.getTensorOwned("output")
 
-        let output = mlp.forward(inputX)
+        let output = mlp(inputX)
         assertAllClose(output, expectedOutput)
         echo "MLP case ", caseNum, " PASSED"
       true
@@ -112,13 +112,13 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   # Attention layer fixtures
   #
-  # Tests attention.forward() with InferenceContext, KV cache, and RoPE.
+  # Tests attention() with InferenceContext, KV cache, and RoPE.
   #
   # Pattern:
   #   1. Get RoPE from model level (shared across all layers)
   #   2. Set position_ids on InferenceContext
   #   3. Compute cos/sin via rotary.compute(ctx.position_ids)
-  #   4. Pass cos/sin to attn.forward(ctx, cos, sin, x)
+  #   4. Pass cos/sin to attn(ctx, cos, sin, x)
   #
   # The fixture stores raw HF values (3D cos/sin, 2D position_ids).
   #
@@ -194,7 +194,7 @@ proc main() =
           assertAllClose(sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
 
           let x = hiddenStates[b].unsqueeze(0)
-          let o = attn.forward(ctx, cos, sin, x)
+          let o = attn(ctx, cos, sin, x)
           outputs.add(o)
 
         let finalOutput = F.cat(outputs)
@@ -231,13 +231,13 @@ proc main() =
         # Test embedding
         let embedInput = st.getTensorOwned("embed_input_ids")
         let embedExpected = st.getTensorOwned("embed_output")
-        let embedOutput = embedding.forward(embedInput)
+        let embedOutput = embedding(embedInput)
         assertAllClose(embedOutput, embedExpected, msg = "Embedding case " & $caseNum & " failed")
 
         # Test LMHead
         let lmheadInput = st.getTensorOwned("lmhead_input")
         let lmheadExpected = st.getTensorOwned("lmhead_output")
-        let lmheadOutput = lmhead.forward(lmheadInput)
+        let lmheadOutput = lmhead(lmheadInput)
         assertAllClose(lmheadOutput, lmheadExpected, msg = "LMHead case " & $caseNum & " failed")
 
         echo "Embedding + LMHead case ", caseNum, " PASSED"
@@ -252,7 +252,7 @@ proc main() =
   #   1. Get RoPE from model level (shared across all layers)
   #   2. Set position_ids on InferenceContext
   #   3. Compute cos/sin via rotary.compute(ctx.position_ids)
-  #   4. Pass cos/sin to transBlock.forward(ctx, cos, sin, x, residual)
+  #   4. Pass cos/sin to transformer(ctx, cos, sin, x, residual)
   #
   # The fixture stores raw HF values (3D cos/sin, 2D position_ids).
   #
@@ -304,7 +304,7 @@ proc main() =
       let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
 
       # Create TransformerBlock
-      var transBlock = TransformerBlock.init(8, attn_norm, attn, mlp_norm, mlp)
+      var transformer = TransformerBlock.init(8, attn_norm, attn, mlp_norm, mlp)
 
       for caseNum in 0..3:
         let fixturePath = TransformerBlockFixtureDir / &"transformer-block-{ModelName}-{caseNum:02d}.safetensor"
@@ -343,7 +343,7 @@ proc main() =
 
           let x = inputHiddenStates[b].unsqueeze(0)     # (1, seq, hidden)
           let res = residual[b].unsqueeze(0)             # (1, seq, hidden)
-          let (o, oRes) = transBlock.forward(ctx, cos, sin, x, some(res))
+          let (o, oRes) = transformer(ctx, cos, sin, x, some(res))
           outputs.add(o)
           outputResiduals.add(oRes)
 

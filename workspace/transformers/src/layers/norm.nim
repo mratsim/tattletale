@@ -8,9 +8,11 @@
 import
   workspace/libtorch as F
 
+{.experimental: "callOperator".}
+
 type
   RmsNorm* = object
-    weight*: Tensor
+    weight: Tensor
     eps*: float
     hidden_size*: int
 
@@ -38,11 +40,19 @@ proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
   let rstd = variance.add(Scalar(self.eps)).rsqrt()
   let normalized = x * rstd
   self.weight * normalized.to(input_dtype)
-
-proc forward_with_residual*(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
+proc forward_with_residual(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
   ## Fused residual addition + RMSNorm.
   # The residual addition is done in the input dtype (BF16).
   # The RMSNorm then converts to FP32, normalizes, and multiplies by weight
   # in the input dtype (matches HF's Qwen3RMSNorm behavior exactly).
   let new_residual = hidden_state + residual
   (self.forward(new_residual), new_residual)
+
+## Call operator overloads:
+## - norm(x)              → forward(x)           → Tensor
+## - norm(x, residual)    → forward_with_residual(x, residual) → (Tensor, Tensor)
+template `()`*(layer: RmsNorm, x: Tensor): untyped =
+  forward(layer, x)
+
+template `()`*(layer: RmsNorm, x, residual: Tensor): untyped =
+  forward_with_residual(layer, x, residual)

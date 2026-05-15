@@ -17,10 +17,10 @@
 ## **1. Local residuals** (huggingface, exllamav3):
 ## ```
 ## residual = x
-## x = attn_norm(x)
-## x = attn(x)
+## x = input_layernorm(x)
+## x = self_attn(x)
 ## x = residual + x  ← ADD here
-## x = mlp_norm(x)
+## x = post_attention_layernorm(x)
 ## x = mlp(x)
 ## x = residual + x  ← ADD here
 ## ```
@@ -28,9 +28,9 @@
 ## **2. Long residual stream** (vLLM, SGLang):
 ## ```
 ## residual = x  ← saved once
-## (x, residual) = attn_norm(x, residual)  ← residual passed through
-## x = attn(x)
-## (x, residual) = mlp_norm(x, residual)  ← x + residual normalized
+## (x, residual) = input_layernorm(x, residual)  ← residual passed through
+## x = self_attn(x)
+## (x, residual) = post_attention_layernorm(x, residual)  ← x + residual normalized
 ## x = mlp(x)
 ## return (x, residual)  ← to next layer
 ## ```
@@ -45,13 +45,13 @@
 ## kernel, reducing memory bandwidth (vLLM's RMSNorm does this).
 ##
 ## **Deferred addition**: The addition happens once per layer (inside norm)
-## rather than twice (after attn, after MLP). For inference, this saves one
+## rather than twice (after self_attn, after MLP). For inference, this saves one
 ## addition operation.
 ##
 ## **Equivalent outputs**: Mathematically, both patterns produce identical
 ## outputs when residual is the block input:
-##   Local: x' = norm(x) + norm(attn(x)) = norm(x) + norm(x + attn(x) - x) = norm(x) + norm(x + attn(x) - x)
-##   Long:  x' = norm(x + norm(x + attn(x) - x)) = norm(x + norm(x + attn(x) - x))
+##   Local: x' = norm(x) + norm(self_attn(x)) = norm(x) + norm(x + self_attn(x) - x) = norm(x) + norm(x + self_attn(x) - x)
+##   Long:  x' = norm(x + norm(x + self_attn(x) - x)) = norm(x + norm(x + self_attn(x) - x))
 ##
 ## ## Architecture
 ##
@@ -60,7 +60,7 @@
 ##   │
 ##   ▼
 ## ┌─────────────────────────┐
-## │   attn_norm             │  ← forward_with_residual(x, residual)
+## │   input_layernorm       │  ← forward_with_residual(x, residual)
 ## │   returns (normed, res) │  ← residual passed through unchanged
 ## └───────────┬─────────────┘
 ##             │
@@ -70,10 +70,10 @@
 ## └───────────┬─────────────┘
 ##             │
 ##             ▼
-## ┌─────────────────────────┐
-## │   mlp_norm              │  ← forward_with_residual(x + attn_out, residual)
-## │   adds x + res, normalizes│
-## └───────────┬─────────────┘
+## ┌─────────────────────────────┐
+## │   post_attention_layernorm  │  ← forward_with_residual(x + self_attn_out, residual)
+## │   adds x + res, normalizes  │
+## └───────────┬─────────────────┘
 ##             │
 ##             ▼
 ## ┌─────────────────────────┐
@@ -87,28 +87,28 @@
 ## ## Usage
 ##
 ## For single-layer inference:
-##   let (out, _) = block.forward(x, none(Tensor), positions, use_cache)
+##   let (out, _) = block(x, none(Tensor), positions, use_cache)
 ##
 ## For stacked layers in a model:
 ##   var residual: Tensor
 ##   for layer in layers:
-##     (x, residual) = layer.forward(x, residual, positions, use_cache)
+##     (x, residual) = layer(x, residual, positions, use_cache)
 ##
 ## The final model forward typically adds the residual before the final norm:
-##   let (normed, _) = final_norm.forward(x + residual, none)
+##   let (normed, _) = final_norm(x + residual, none)
 ##
 ## INVARIANT:
 ##
 ##   At each layer boundary: output + residual == x_local
 ##
 ##   where x_local is the output of the equivalent HF local residual pattern:
-##     x_local = x + attn(RMSNorm(x)) + mlp(RMSNorm(x + attn(RMSNorm(x))))
+##     x_local = x + self_attn(RMSNorm(x)) + mlp(RMSNorm(x + self_attn(RMSNorm(x))))
 ##
 ##   This invariant holds because:
-##     - attn_norm.forward_with_residual(x, r) → (RMSNorm(x+r), x+r)
-##     - mlp_norm.forward_with_residual(attn_out, r) → (RMSNorm(attn_out+r), attn_out+r)
-##     - So output = mlp(RMSNorm(attn_out+r)), residual = attn_out+r
-##     - Therefore output + residual = mlp + attn_out + x = x_local
+##     - input_layernorm.forward_with_residual(x, r) → (RMSNorm(x+r), x+r)
+##     - post_attention_layernorm.forward_with_residual(self_attn_out, r) → (RMSNorm(self_attn_out+r), self_attn_out+r)
+##     - So output = mlp(RMSNorm(self_attn_out+r)), residual = self_attn_out+r
+##     - Therefore output + residual = mlp + self_attn_out + x = x_local
 ##
 ##     The invariant is tested in
 ##     gen_3_block_long_residual.py
@@ -123,29 +123,30 @@ import
   ./norm,
   ../stateful/inference_context
 
+{.experimental: "callOperator".}
+
 type
   TransformerBlock* = object
     ## Transformer block for decoder-only LLM.
     layer_idx*: int        # 0..num_layers-1 (self-indexing)
     name*: string          # e.g., "model.layers.23"
-    attn_norm*: RmsNorm
-    attn*: RopeGQAttention
-    mlp_norm*: RmsNorm
-    mlp*: GatedMLP
+    input_layernorm: RmsNorm
+    self_attn: RopeGQAttention
+    post_attention_layernorm: RmsNorm
+    mlp: GatedMLP
 
 func init*(_: type TransformerBlock,
            layer_idx: int,
-           attn_norm: RmsNorm, attn: RopeGQAttention,
-           mlp_norm: RmsNorm, mlp: GatedMLP): TransformerBlock =
+           input_layernorm: RmsNorm, self_attn: RopeGQAttention,
+           post_attention_layernorm: RmsNorm, mlp: GatedMLP): TransformerBlock =
   TransformerBlock(
     layer_idx: layer_idx,
     name: "model.layers." & $layer_idx,
-    attn_norm: attn_norm,
-    attn: attn,
-    mlp_norm: mlp_norm,
+    input_layernorm: input_layernorm,
+    self_attn: self_attn,
+    post_attention_layernorm: post_attention_layernorm,
     mlp: mlp
   )
-
 
 proc forward*(
   self: TransformerBlock,
@@ -177,20 +178,26 @@ proc forward*(
   ##
   ## Computation:
   ##   residual = residual.get(x)  # Use x if residual is None
-  ##   (h, residual) = self.attn_norm.forward_with_residual(x, residual)
-  ##   attn_out = self.attn.forward(ctx, cos, sin, h)
-  ##   (h2, residual) = self.mlp_norm.forward_with_residual(attn_out, residual)
-  ##   mlp_out = self.mlp.forward(h2)
+  ##   (h, residual) = self.input_layernorm(x, residual)
+  ##   self_attn_out = self.self_attn(ctx, cos, sin, h)
+  ##   (h2, residual) = self.post_attention_layernorm(self_attn_out, residual)
+  ##   mlp_out = self.mlp(h2)
   ##   (mlp_out, residual)
 
   let (h, r) =
     if residual.isSome():
-      self.attn_norm.forward_with_residual(x, residual.unsafeGet())
+      self.input_layernorm(x, residual.unsafeGet())
     else:
-      (self.attn_norm.forward(x), x)
+      (self.input_layernorm(x), x)
 
-  let attn_out = self.attn.forward(ctx, cos, sin, h)
+  let self_attn_out = self.self_attn(ctx, cos, sin, h)
 
-  let (h2, r2) = self.mlp_norm.forward_with_residual(attn_out, r)
-  let mlp_out = self.mlp.forward(h2)
-  (mlp_out, r2)
+  let (h2, r2) = self.post_attention_layernorm(self_attn_out, r)
+  (self.mlp(h2), r2)
+
+template `()`*(layer: TransformerBlock,
+            ctx: var InferenceContext,
+            cos, sin: Tensor,
+            x: Tensor,
+            residual: Option[Tensor]): untyped =
+  forward(layer, ctx, cos, sin, x, residual)

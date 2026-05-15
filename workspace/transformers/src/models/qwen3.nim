@@ -23,6 +23,8 @@ import
   ../stateful/inference_context,
   ./all_interfaces
 
+{.experimental: "callOperator".}
+
 ################################################################################
 #                          Qwen3 Configuration                                 #
 ################################################################################
@@ -130,20 +132,20 @@ proc forward*(self: Qwen3Model, ctx: var InferenceContext, input_ids: Tensor): T
   ##   x = self.norm(x + residual)
   ##   return self.lmHead(x)
 
-  var x = self.embedTokens.forward(input_ids)
+  var x = self.embedTokens(input_ids)
 
   # Precompute RoPE cos/sin ONCE for all layers (using model-level rotary)
   let (cos, sin) = self.rotary.compute(ctx.position_ids)
 
   var residual: Option[Tensor]
   for layer in mitems(self.layers):
-    let layerOut = layer.forward(ctx, cos, sin, x, residual)
+    let layerOut = layer(ctx, cos, sin, x, residual)
     x = layerOut[0]
     residual = some(layerOut[1])
 
   let finalResidual = residual.get(x)
-  let normed = self.norm.forward(x + finalResidual)
-  result = self.lmHead.forward(normed)
+  let normed = self.norm(x + finalResidual)
+  result = self.lmHead(normed)
 
 proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
   ## Load Qwen3 model and return as concrete Qwen3Model type (not interface).
