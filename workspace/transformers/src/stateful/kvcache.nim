@@ -52,8 +52,9 @@ proc allocate*(cache: var KVCache, batch_size, kv_heads, max_seq, head_dim: int,
   cache.values = F.empty([batch_size, kv_heads, max_seq, head_dim]).to(dtype).to(device)
   cache.offset = 0
 
-proc write*(cache: var KVCache, k, v: Tensor, offset: int) =
-  ## Write new KV to cache at given offset.
+proc store*(cache: var KVCache, k, v: Tensor, offset: int) =
+  ## Store KV to cache at given offset.
+  ## Existing values are overwritten
   ##
   ## Args:
   ##   k, v: New key/value tensors of shape (batch, seq_len, kv_heads, head_dim)

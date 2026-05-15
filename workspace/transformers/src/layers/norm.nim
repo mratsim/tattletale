@@ -24,7 +24,8 @@ proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
   ##   2. Squaring
   ##   3. `.sqrt().reciprocal`
   ##      The single instruction rsqrt accumulate 0.03 abs error
-  ##   4. Converts back to input dtype, then multiplies by BF16 weight
+  ##   4. Multiplies by weight in FP32 (matches HF's `weight.float()`)
+  ##   5. Converts back to input dtype
   ##
   ## Without float32 conversion, we accumulate errors of
   ## 1.562500e-02 = 1/64 = 2^-6 every layer
@@ -33,7 +34,7 @@ proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
   let variance = x.square().mean(axis = -1, keepdim = true)
   let rstd = variance.add(Scalar(self.eps)).rsqrt()
   let normalized = x * rstd
-  normalized.to(input_dtype) * self.weight
+  (normalized * self.weight.to(kFloat32)).to(input_dtype)
 
 proc forward_with_residual*(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
   ## Fused residual addition + RMSNorm.

@@ -190,7 +190,7 @@ proc main() =
           assertAllClose(cos, hfCos2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
           assertAllClose(sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
 
-          let x = hiddenStates[b].unsqueeze(0)  # (1, seq, hidden)
+          let x = hiddenStates[b].unsqueeze(0)
           let o = attn.forward(ctx, cos, sin, x)
           outputs.add(o)
 
