@@ -6,22 +6,77 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  std/math,
   workspace/libtorch as F
 
 type
   RotaryPositionEmbeddingRef* = ref object
-    ## RoPE: precomputed cos/sin cache for all positions (0..max_seq_len-1).
+    ## Rotary Position Embedding (RoPE): precomputed cosine/sine lookup table.
     ##
-    ## USAGE:
-    ##   - Model calls compute(position_ids) to get (cos, sin) for current forward pass
-    ##   - Layers receive precomputed (cos, sin) and call applyRope()
-    ##   - NO internal state (cachePos removed)
+    ## **LIFETIME**: Per-model. Created once by `new()` at model initialization;
+    ##   destroyed when the model (and its shared `rotary` ref) is dropped.
+    ##   `cos_cache` and `sin_cache` are **immutable after init** — they are
+    ##   **precomputed tables**, not mutable runtime state.
+    ##
+    ## **DATA FLOW**:
+    ##
+    ## ```
+    ##  ┌─────────────────────────────────────────────────────────┐
+    ##  │  Model Init (once, per model)                           │
+    ##  │  new(head_dim, max_seq_len, rope_theta, dtype, device)  │
+    ##  │  └─► fills cos_cache, sin_cache  (max_seq_len, head_dim)│
+    ##  └─────────────────────────────────────────────────────────┘
+    ##
+    ##  ┌─────────────────────────────────────────────────────────┐
+    ##  │  Each Forward Pass                                      │
+    ##  │  compute(position_ids)                                  │
+    ##  │    └─► index_select on cache  (seq_len, head_dim)       │
+    ##  │        └─► (cos, sin) passed to attention layers        │
+    ##  │              └─► applyRope(q, k, cos, sin)              │
+    ##  └─────────────────────────────────────────────────────────┘
+    ## ```
+    ##
+    ## **WHY THE CACHE LIVES HERE (not in InferenceContext)**:
+    ##
+    ## The cache is **model config**, not **request state**:
+    ##
+    ##  | Kind                  | Lifetime     | Owner                      |
+    ##  |-----------------------|--------------|------------------------------|
+    ##  | Layer weights         | Per model    | Layer objects              |
+    ##  | Precomputed tables    | Per model    | Config objects (this one)    |
+    ##  | Mutable runtime state | Per request  | InferenceContext             |
+    ##
+    ## `cos_cache`/`sin_cache` fall in the second category. They are derived
+    ## from `rope_theta` (model config) and reused across every forward pass
+    ## and every request on this model. Moving them to `InferenceContext` would
+    ## mean recomputing them per-request or passing a ref to the RoPE object
+    ## anyway — defeating the purpose.
+    ##
+    ## **INVARIANTS**:
+    ##
+    ##  - `cos_cache.shape == sin_cache.shape == (max_seq_len, head_dim)`,
+    ##    where `head_dim == self.head_dim` and `max_seq_len == self.max_seq_len`
+    ##  - Each value `cos_cache[p, d]` equals `cos(p * rope_theta^(-d/head_dim))`
+    ##    (with NEOX-style dim repetition: odd dims copy even dims)
+    ##  - `compute(position_ids)` returns tensors of shape `(seq_len, head_dim)`
+    ##    where `seq_len == position_ids.numel()`
+    ##  - `applyRope` is pure: same inputs always produce same outputs
+    ##
+    ## **USAGE**:
+    ##
+    ##  ```nim
+    ##  # Model init (once)
+    ##  let rotary = RotaryPositionEmbeddingRef.new(128, 8192, 1e6, kBFloat16, kCPU)
+    ##
+    ##  # Each forward pass
+    ##  let (cos, sin) = rotary.compute(ctx.position_ids)
+    ##  let (q_rot, k_rot) = rotary.applyRope(q, k, cos, sin)
+    ##  ```
+    ##
     head_dim*: int
     max_seq_len*: int
     rope_theta*: float64
-    cos_cache*: Tensor    # (max_seq_len, head_dim)
-    sin_cache*: Tensor    # (max_seq_len, head_dim)
+    cos_cache*: Tensor     ## Precomputed (max_seq_len, head_dim). Immutable after init.
+    sin_cache*: Tensor     ## Precomputed (max_seq_len, head_dim). Immutable after init.
 
 func rotateHalf(x: Tensor): Tensor =
   # Input/Output: (batch, head, seq, head_dim)
@@ -67,29 +122,40 @@ func new*(_: type RotaryPositionEmbeddingRef,
       rope_theta: float64,
       dtype: ScalarKind,
       device: DeviceKind): RotaryPositionEmbeddingRef =
-  ## RoPE: cos(pos * inv_freq[i]), sin(pos * inv_freq[i]) for i in 0..head_dim-1
-  ## inv_freq[i] = 1/theta^(i/head_dim), but we compute for i=0,2,4,...,head_dim-2 (64 values for head_dim=128)
-  ## Then repeat each value twice to get head_dim cos/sin values.
-  let head_dim_float = head_dim.float64
-  let inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / head_dim_float  # [0, 2, ..., 126] / 128
-  let rope_theta_tensor = F.full([1], rope_theta, kFloat64)
-  let inv_freq_final = F.pow(rope_theta_tensor, -inv_freq)  # theta^(-inv_freq), shape (64,)
-  let positions = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq_final.unsqueeze(0)  # (max_seq_len, 64)
-  let cos_64 = positions.cos()  # (max_seq_len, 64)
-  let sin_64 = positions.sin()  # (max_seq_len, 64)
+  ## Build RoPE lookup table for all positions `0..max_seq_len-1`.
+  ##
+  ## **Algorithm (NEOX-style)**:
+  ##
+  ##  1. Compute inverse frequencies for even dimensions only:
+  ##     `inv_freq[d] = theta^(-d/head_dim)` for `d in {0, 2, 4, ..., head_dim-2}`
+  ##     This gives `head_dim/2` unique frequencies.
+  ##     Odd dimensions reuse the same frequency (pairwise repetition).
+  ##
+  ##  2. For each position `p in {0, ..., max_seq_len-1}` and each
+  ##     unique dimension `d`, compute `cos(p * inv_freq[d])` and
+  ##     `sin(p * inv_freq[d])` in FP64 for precision.
+  ##
+  ##  3. Duplicate even-dimension values to cover all `head_dim` positions:
+  ##     `[freq_0, freq_0, freq_1, freq_1, ...]` by concatenating the
+  ##     even-dim table with itself along the dimension axis.
+  ##
+  ##  4. Cast result to `dtype` (e.g., BF16) and move to `device`.
+  ##
+  ## **Complexity**: O(max_seq_len * head_dim) — done once per model load.
+  ##
+  let half_dim = head_dim div 2
+  let inv_freq = F.arange(0, head_dim, 2).to(kFloat64) / head_dim.float64
+  let inv_freq_final = F.pow(F.full([1], rope_theta, kFloat64), -inv_freq)  # theta^(-inv_freq), (head_dim/2,)
+  let angles = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq_final.unsqueeze(0)
+  let cos_half = angles.cos()   # (max_seq_len, head_dim/2)
+  let sin_half = angles.sin()   # (max_seq_len, head_dim/2)
   new(result)
-  # Repeat each value twice: [cos0, cos0, cos1, cos1, ...] to get (max_seq_len, head_dim)
   result.head_dim = head_dim
   result.max_seq_len = max_seq_len
   result.rope_theta = rope_theta
-  # NEOX style: concatenate cos with itself [c0,c1,...,c63,c0,c1,...,c63]
-  # Store in model dtype (BF16 for Qwen3)
-  result.cos_cache = F.cat([cos_64, cos_64], -1).to(dtype).to(device)  # (max_seq_len, head_dim)
-  result.sin_cache = F.cat([sin_64, sin_64], -1).to(dtype).to(device)  # (max_seq_len, head_dim)
-  # NEOX style: concatenate cos with itself [c0,c1,...,c63,c0,c1,...,c63]
-  # Store in FP32 for precision (HF pattern), cast during apply
-  result.cos_cache = F.cat([cos_64, cos_64], -1).to(dtype).to(device)  # (max_seq_len, 128)
-  result.sin_cache = F.cat([sin_64, sin_64], -1).to(dtype).to(device)  # (max_seq_len, 128)
+  # NEOX-style: [c0, c0, c1, c1, ...] to cover full head_dim
+  result.cos_cache = F.cat([cos_half, cos_half], -1).to(dtype).to(device)
+  result.sin_cache = F.cat([sin_half, sin_half], -1).to(dtype).to(device)
 
 proc compute*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (Tensor, Tensor) =
   ## Slice cos/sin cache using position_ids.
@@ -131,22 +197,4 @@ proc applyRope*(
   ## Note:
   ##   Pure function — no mutation of self.
   ##   cos/sin must match seq_len of q/k.
-
-  # Just call the freestanding impl
-  result = applyRopeImpl(q, k, cos, sin)
-
-func setCache(self: var RotaryPositionEmbeddingRef, cos, sin: Tensor) {.used.} =
-  # Private for testing only.
-  # Normalizes cos/sin to 2D (seq, head_dim) for storage in cos_cache.
-  # RoPE is per-position — identical across all batch items.
-  #
-  # Handles: (seq, head_dim) [2D] or (batch, seq, head_dim) [3D from HF fixtures]
-  var cos_2d = cos
-  var sin_2d = sin
-  if cos.dim == 3:
-    # Take first batch item: (batch, seq, head_dim) -> (seq, head_dim)
-    cos_2d = cos[0, _, _]
-    sin_2d = sin[0, _, _]
-  doAssert cos_2d.dim == 2, "setCache: cos must be 2D or 3D, got " & $cos.dim & "D"
-  self.cos_cache = cos_2d
-  self.sin_cache = sin_2d
+  applyRopeImpl(q, k, cos, sin)
