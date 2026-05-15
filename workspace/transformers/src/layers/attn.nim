@@ -40,6 +40,32 @@ type
     q_norm*: Option[RmsNorm]
     k_norm*: Option[RmsNorm]
 
+
+  # =====================================================================
+  # Data flow through RopeGQAttention
+  # =====================================================================
+  #
+  #   x (batch, seq, hidden)
+  #   │
+  #   ├─→ q_proj → reshape → q_norm → applyRope → q_rot ───────────────────┐
+  #   │                                                                    │
+  #   ├─→ k_proj → reshape → k_norm → applyRope → k_rot ─→ cache.write ◄───┤
+  #   │                                             ↑                      │
+  #   │                                    cache.getKV ─→ k_full           │
+  #   │                                                                    │
+  #   └─→ v_proj → reshape ─────────────────────→ cache.write ◄────────────┘
+  #                                                 ↑
+  #                                        cache.getKV ─→ v_full
+  #
+  #   q_rot, k_full, v_full → SDPA(is_causal, enable_gqa) → attn_out
+  #   attn_out → o_proj → output
+  #
+  # Note: V is NOT rotated. RoPE (Su et al., 2021) only rotates Q and K
+  # because the attention mechanism computes similarity via q·k. V simply
+  # carries content to be aggregated by attention weights — it has no
+  # positional role in the similarity computation.
+  # =====================================================================
+
 func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
   let num_kv_groups = num_qo_head div num_kv_head
   GroupedQueryAttention(
@@ -122,12 +148,11 @@ func init*(
   let o_proj = Linear.init(o_weight)
 
   let has_qk_norm = rotary.head_dim == head_dim
-  let norm_dtype = kBFloat16
   let q_norm =
-    if has_qk_norm: some(RmsNorm.init(weight = q_norm_weight.to(norm_dtype), eps = rms_norm_eps))
+    if has_qk_norm: some(RmsNorm.init(weight = q_norm_weight, eps = rms_norm_eps))
     else: none(RmsNorm)
   let k_norm =
-    if has_qk_norm: some(RmsNorm.init(weight = k_norm_weight.to(norm_dtype), eps = rms_norm_eps))
+    if has_qk_norm: some(RmsNorm.init(weight = k_norm_weight, eps = rms_norm_eps))
     else: none(RmsNorm)
 
   let attn = GroupedQueryAttention.init(
@@ -202,10 +227,9 @@ proc forward*(
   var cache = ctx.kv_caches[self.layer_idx]
   let offset = ctx.position_ids.min().item(int) # Get current position offset
 
-  # Write to cache (slice assignment, not cat)
-  cache.write(k_reshaped, v_reshaped, offset)
-
-  # Get full KV (cached + new)
+  # Append to KV cache (K rotated, V)
+  cache.store(k_rot, v_reshaped, offset)
+  # Get full KV (cached + appended)
   let (k_full, v_full) = cache.getKV(cache.offset)
 
   # Transpose k_full, v_full from (batch, kv_heads, seq, head_dim) to (batch, seq, kv_heads, head_dim)
