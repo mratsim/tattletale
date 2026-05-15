@@ -98,14 +98,14 @@ proc main() =
       ctx.position_ids = hfPosIds[0]
       let (cos, sin) = rotary.compute(ctx.position_ids)
       let x = hiddenStates[0].unsqueeze(0)
-      let _ = attn.forward(ctx, cos, sin, x)
+      let _ = attn(ctx, cos, sin, x)
 
       let cache = ctx.kv_caches[attn.layer_idx]
       let (cachedK, _) = cache.read(8)
 
-      let k = attn.k_proj.forward(x)
+      let k = attn.k_proj(x)
       let k_reshaped = k.reshape([x.size(0), x.size(1), attn.attn.num_kv_head, attn.attn.head_dim])
-      let k_normed = if attn.k_norm.isSome: attn.k_norm.get().forward(k_reshaped) else: k_reshaped
+      let k_normed = if attn.k_norm.isSome: attn.k_norm.get()(k_reshaped) else: k_reshaped
       let (_, k_rot) = rotary.applyRope(k_normed, k_normed, cos, sin)
       let k_rot_expected = k_rot.permute([0, 2, 1, 3])
 
@@ -146,12 +146,12 @@ proc main() =
       ctx.position_ids = hfPosIds[0]
       let (cos, sin) = attn.rotary.compute(ctx.position_ids)
       let x = hiddenStates[0].unsqueeze(0)
-      let _ = attn.forward(ctx, cos, sin, x)
+      let _ = attn(ctx, cos, sin, x)
 
       let cache = ctx.kv_caches[attn.layer_idx]
       let (_, cachedV) = cache.read(8)
 
-      let v = attn.v_proj.forward(x)
+      let v = attn.v_proj(x)
       let v_expected = v.reshape([x.size(0), x.size(1), attn.attn.num_kv_head, attn.attn.head_dim]).permute([0, 2, 1, 3])
 
       let diff = (cachedV - v_expected).abs().max().item(float64)

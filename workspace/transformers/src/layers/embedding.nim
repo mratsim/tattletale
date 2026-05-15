@@ -8,6 +8,8 @@
 import
   workspace/libtorch as F
 
+{.experimental: "callOperator".}
+
 type
   Embedding* = object
     ## Embedding layer for token ID to hidden state conversion.
@@ -18,7 +20,7 @@ type
     ##
     ## Return:
     ##   - Embeddings of shape (batch, seq, hidden_size) or (batch, hidden_size)
-    weight*: Tensor
+    weight: Tensor
     vocab_size*: int
     hidden_size*: int
 
@@ -64,5 +66,7 @@ proc forward*(self: Embedding, input_ids: Tensor): Tensor =
     # input_ids is (batch,), output should be (batch, hidden_size)
     selected.view([inputShape[0], self.hidden_size])
   else:
-    # input_ids is (batch, seq), output should be (batch, seq, hidden_size)
     selected.view([inputShape[0], inputShape[1], self.hidden_size])
+
+template `()`*(layer: Embedding, x: Tensor): untyped =
+  layer.forward(x)

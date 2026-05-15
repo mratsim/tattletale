@@ -10,6 +10,8 @@ import
   std/options,
   workspace/libtorch as F
 
+{.experimental: "callOperator".}
+
 type
   Linear* = object
     ## Linear layer
@@ -21,8 +23,8 @@ type
     ##
     ## Return:
     ##   - Weight * x + bias
-    weight*: Tensor
-    bias*: Option[Tensor]
+    weight: Tensor
+    bias: Option[Tensor]
     in_features*: int
     out_features*: int
 
@@ -55,3 +57,6 @@ proc forward*(self: Linear, x: Tensor): Tensor =
     F.linear(x, self.weight, self.bias.unsafeGet())
   else:
     F.linear(x, self.weight)
+
+template `()`*(layer: Linear, x: Tensor): untyped =
+  forward(layer, x)

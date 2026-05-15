@@ -6,9 +6,12 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
+  std/importutils,
   std/options,
   workspace/libtorch as F,
   ./embedding
+
+{.experimental: "callOperator".}
 
 type
   LMHead* = object
@@ -23,9 +26,9 @@ type
     ##
     ## Return:
     ##   - Logits of shape (batch, seq, vocab_size) in same dtype as input (BF16)
-    weight*: Option[Tensor]
-    bias*: Option[Tensor]
-    tied_embedding*: Option[Embedding]
+    weight: Option[Tensor]
+    bias: Option[Tensor]
+    tied_embedding: Option[Embedding]
 
 func init*(_: type LMHead, weight: Tensor, bias = none(Tensor)): LMHead =
   ## Creates an LMHead with explicit weights.
@@ -75,12 +78,17 @@ proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
   let weight =
     if self.weight.isSome:
       self.weight.get()
-    elif self.tied_embedding.isSome:
-      self.tied_embedding.get().weight
+    elif self.tied_embedding.isSome():
+      privateAccess(Embedding)
+      self.tied_embedding.unsafeGet().weight
     else:
       raise newException(ValueError, "[ttt] Internal Error: LMHead has no weights")
 
-  if self.bias.isSome:
-    F.linear(hidden_states, weight, self.bias.get())
-  else:
-    F.linear(hidden_states, weight)
+  result =
+    if self.bias.isSome():
+      F.linear(hidden_states, weight, self.bias.get())
+    else:
+      F.linear(hidden_states, weight)
+
+template `()`*(layer: LMHead, x: Tensor): untyped =
+  forward(layer, x)
