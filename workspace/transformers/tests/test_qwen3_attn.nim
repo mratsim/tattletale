@@ -130,9 +130,10 @@ proc main() =
   runTest "KV cache stores unrotated values":
     proc(): bool =
       let attn = setupAttn()
-      var ctx = InferenceContext.init(28)
-      ctx.allocateCaches(1, 8, 4096, 128, F.kBFloat16, F.kCPU)
-
+      var ctx = InferenceContext.init(
+        num_layers = 28, batch_size = 1,
+        kv_heads = 8, max_seq = 4096, head_dim = 128,
+        dtype = F.kBFloat16, device = F.kCPU)
       var fixtureMemFile = memFiles.open(
         FixtureDir / &"attn-{ModelName}-00.safetensor", mode = fmRead)
       defer: close(fixtureMemFile)
