@@ -185,13 +185,11 @@ func init*(
 proc forward(
     self: RopeGQAttention,
     ctx: var InferenceContext,
-    cos, sin: Tensor,
     x: Tensor): Tensor =
   ## Forward pass for attention.
   ##
   ## Args:
-  ##   ctx: InferenceContext with KV caches (ctx.kv_caches[self.layer_idx])
-  ##   cos, sin: Precomputed RoPE of shape (seq_len, head_dim)
+  ##   ctx: InferenceContext with KV caches and RoPE (ctx.kv_caches, ctx.cos, ctx.sin)
   ##   x: Input tensor of shape (batch, seq, hidden_size)
   ##
   ## Returns:
@@ -201,9 +199,8 @@ proc forward(
   ##   q = self.q_proj(x)
   ##   k = self.k_proj(x)
   ##   v = self.v_proj(x)
-  ##   cache = ctx.kv_caches[self.layer_idx]
   ##   cache.write(k, v, offset)
-  ##   (q_rot, k_rot) = self.rotary.applyRope(q, k, cos, sin)
+  ##   (q_rot, k_rot) = self.rotary.applyRope(q, k, ctx.cos, ctx.sin)
   ##   attn_out = self.gqa_attn(q_rot, k_rot, cache.values)
   ##   return self.o_proj(attn_out)
 
@@ -229,7 +226,7 @@ proc forward(
     k_norm_input = self.k_norm.get()(k_reshaped)
 
   # Apply RoPE using precomputed cos/sin
-  let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, cos, sin)
+  let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, ctx.cos, ctx.sin)
 
   # Get this layer's KV cache
   var cache = ctx.kv_caches[self.layer_idx]
@@ -253,6 +250,5 @@ proc forward(
 
 template `()`*(layer: RopeGQAttention,
             ctx: var InferenceContext,
-            cos, sin: Tensor,
             x: Tensor): untyped =
-  layer.forward(ctx, cos, sin, x)
+  layer.forward(ctx, x)

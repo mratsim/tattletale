@@ -28,28 +28,29 @@ type
     ##
     ##  ┌─────────────────────────────────────────────────────────┐
     ##  │  Each Forward Pass                                      │
-    ##  │  compute(position_ids)                                  │
+    ##  │  ropeByPositions(position_ids)                                  │
     ##  │    └─► index_select on cache  (seq_len, head_dim)       │
-    ##  │        └─► (cos, sin) passed to attention layers        │
-    ##  │              └─► applyRope(q, k, cos, sin)              │
+    ##  │        └─► ctx.setRopeForPositions(rotary)                     │
+    ##  │              └─► attention layers read ctx.cos, ctx.sin │
     ##  └─────────────────────────────────────────────────────────┘
     ## ```
     ##
-    ## **WHY THE CACHE LIVES HERE (not in InferenceContext)**:
+    ## **WHY THE CACHE LIVES HERE (not the sliced cos/sin)**:
     ##
-    ## The cache is **model config**, not **request state**:
+    ## The **cache** is **model config** (immutable after init). The **sliced cos/sin**
+    ## for each forward pass are **request state** and live in InferenceContext:
     ##
     ##  | Kind                  | Lifetime     | Owner                      |
     ##  |-----------------------|--------------|------------------------------|
     ##  | Layer weights         | Per model    | Layer objects              |
     ##  | Precomputed tables    | Per model    | Config objects (this one)    |
-    ##  | Mutable runtime state | Per request  | InferenceContext             |
+    ##  | Sliced cos/sin        | Per request  | InferenceContext             |
+    ##  | Rope variant config   | Per model    | Model (not orchestrator)     |
     ##
     ## `cos_cache`/`sin_cache` fall in the second category. They are derived
     ## from `rope_theta` (model config) and reused across every forward pass
-    ## and every request on this model. Moving them to `InferenceContext` would
-    ## mean recomputing them per-request or passing a ref to the RoPE object
-    ## anyway — defeating the purpose.
+    ## and every request on this model. The sliced cos/sin for each forward pass
+    ## are stored in InferenceContext via `ctx.setRopeForPositions(rotary)`.
     ##
     ## **INVARIANTS**:
     ##
@@ -57,7 +58,7 @@ type
     ##    where `head_dim == self.head_dim` and `max_seq_len == self.max_seq_len`
     ##  - Each value `cos_cache[p, d]` equals `cos(p * rope_theta^(-d/head_dim))`
     ##    (with NEOX-style dim repetition: odd dims copy even dims)
-    ##  - `compute(position_ids)` returns tensors of shape `(seq_len, head_dim)`
+    ##  - `ropeByPositions(position_ids)` returns tensors of shape `(seq_len, head_dim)`
     ##    where `seq_len == position_ids.numel()`
     ##  - `applyRope` is pure: same inputs always produce same outputs
     ##
@@ -67,9 +68,9 @@ type
     ##  # Model init (once)
     ##  let rotary = RotaryPositionEmbeddingRef.new(128, 8192, 1e6, kBFloat16, kCPU)
     ##
-    ##  # Each forward pass
-    ##  let (cos, sin) = rotary.compute(ctx.position_ids)
-    ##  let (q_rot, k_rot) = rotary.applyRope(q, k, cos, sin)
+    ##  # Each forward pass: model calls ctx.setRopeForPositions(rotary)
+    ##  ctx.setRopeForPositions(rotary)
+    ##  # ... attention layers read ctx.cos, ctx.sin internally
     ##  ```
     ##
     head_dim*: int
@@ -157,8 +158,20 @@ func new*(_: type RotaryPositionEmbeddingRef,
   result.cos_cache = F.cat([cos_half, cos_half], -1).to(dtype).to(device)
   result.sin_cache = F.cat([sin_half, sin_half], -1).to(dtype).to(device)
 
-proc compute*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (Tensor, Tensor) =
+proc ropeByPositions*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (Tensor, Tensor) =
   ## Slice cos/sin cache using position_ids.
+  ##
+  ## **input_ids vs position_ids — they are NOT the same**:
+  ##
+  ##   - `input_ids`: Token IDs. *What* to compute (e.g., `[9707, 11, 1246]` = "Hello, how")
+  ##   - `position_ids`: Absolute positions in the sequence. *Where* each token sits
+  ##
+  ##   For the common case (prefill from 0, decode sequentially):
+  ##     input_ids = `[9707, 11, 1246]`  →  position_ids = `[0, 1, 2]`
+  ##     input_ids = `[498]`             →  position_ids = `[3]`  (next token at offset 3)
+  ##
+  ##   They diverge for continuous batching (different sequences at different positions),
+  ##   prefix caching (skip cached tokens), and speculative decoding (non-contiguous).
   ##
   ## Args:
   ##   position_ids: Tensor of shape (seq_len,) or (batch, seq_len)
@@ -168,7 +181,7 @@ proc compute*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (Tensor, 
   ##
   ## Note:
   ##   Called once per forward pass at model level.
-  ##   Layers receive precomputed (cos, sin), not position_ids.
+  ##   Result is stored in InferenceContext via `ctx.setRopeForPositions(rotary)`.
 
   # Handle 1D or 2D position_ids
   var pos_ids = position_ids

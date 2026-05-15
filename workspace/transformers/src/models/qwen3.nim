@@ -126,20 +126,20 @@ proc forward*(self: Qwen3Model, ctx: var InferenceContext, input_ids: Tensor): T
   ##
   ## Computes:
   ##   x = self.embedTokens(input_ids)
-  ##   (cos, sin) = self.rotary.compute(ctx.position_ids)
+  ##   ctx.setRopeForPositions(self.rotary)
   ##   for layer in self.layers:
-  ##     (x, residual) = layer(ctx, cos, sin, x, residual)
+  ##     (x, residual) = layer(ctx, x, residual)
   ##   x = self.norm(x + residual)
   ##   return self.lmHead(x)
 
   var x = self.embedTokens(input_ids)
 
-  # Precompute RoPE cos/sin ONCE for all layers (using model-level rotary)
-  let (cos, sin) = self.rotary.compute(ctx.position_ids)
+  # Populate ctx.cos/sin from model's RoPE cache
+  ctx.setRopeForPositions(self.rotary)
 
   var residual: Option[Tensor]
   for layer in mitems(self.layers):
-    let layerOut = layer(ctx, cos, sin, x, residual)
+    let layerOut = layer(ctx, x, residual)
     x = layerOut[0]
     residual = some(layerOut[1])
 
