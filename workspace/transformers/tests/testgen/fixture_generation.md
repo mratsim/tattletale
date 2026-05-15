@@ -70,12 +70,29 @@ Each safetensor contains:
 - Output tensors
 - Intermediate tensors (for attn: query/key/value states, cos/sin)
 
-## Reproducibility
+## Precision Discipline
 
-Fixed seed (42) ensures deterministic inputs:
+### Float32 Buffers That Must Be Preserved
+
+When calling `model.to(torch.bfloat16)`, some internal buffers lose too much
+precision. They MUST be saved in float32 before the conversion and restored after:
+
 ```python
-torch.manual_seed(42)
+# Save before model.to(bfloat16)
+inv_freq = model.model.rotary_emb.inv_freq.float()
+original_inv_freq = model.model.rotary_emb.original_inv_freq.float()
+
+model = model.to(torch.bfloat16)
+
+# Restore after dtype conversion
+model.model.rotary_emb.inv_freq = inv_freq
+model.model.rotary_emb.original_inv_freq = original_inv_freq
 ```
+
+Buffer | Why it matters
+-------|----------------
+`rotary_emb.inv_freq` | RoPE frequency exponents. BF16 loses up to 1.2e-3 per element, causing ~4e-3 cos/sin error that compounds across layers
+`rotary_emb.original_inv_freq` | Same as above (used by dynamic RoPE scaling)
 
 ## Generating Fixtures
 
