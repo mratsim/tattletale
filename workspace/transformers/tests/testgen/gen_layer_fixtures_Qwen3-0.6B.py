@@ -47,9 +47,10 @@ GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 FIXTURE_DIR = os.path.join(
     GRANDPARENT_DIR, "fixtures", "layers", f"{MODEL_NAME}-layer-{LAYER_IDX}"
 )
-MODEL_PATH = os.path.join(
-    os.path.dirname(GRANDPARENT_DIR), f"tests/hf_models/{MODEL_NAME}/model.safetensors"
+MODEL_DIR = os.path.join(
+    os.path.dirname(GRANDPARENT_DIR), f"tests/hf_models/{MODEL_NAME}"
 )
+MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
 
 # Per-generator seeds — independent, order-agnostic.
 SEED_NORM  = 42
@@ -60,29 +61,24 @@ SEED_ROPE  = 45
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
+def _load_config() -> Qwen3Config:
+    """Load model config from config.json."""
+    return Qwen3Config.from_pretrained(MODEL_DIR)
+
 def ensure_fixture_dir() -> None:
     os.makedirs(FIXTURE_DIR, exist_ok=True)
 
 
 def create_layers_from_weights(weights: dict) -> tuple:
     """Create Qwen3 layers initialized with real weights."""
-    config = Qwen3Config(
-        hidden_size=1024,
-        intermediate_size=3072,
-        num_attention_heads=16,
-        num_key_value_heads=8,
-        head_dim=128,
-        attention_bias=False,
-        rms_norm_eps=1e-6,
-    )
-    # Force SDPA to match our Nim implementation
+    config = _load_config()
     config._attn_implementation = "sdpa"
 
     # Create norm layers with weights
-    input_layernorm = Qwen3RMSNorm(1024, eps=1e-6)
+    input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
     input_layernorm.weight.data = weights["input_layernorm.weight"]
 
-    post_attention_layernorm = Qwen3RMSNorm(1024, eps=1e-6)
+    post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
     post_attention_layernorm.weight.data = weights["post_attention_layernorm.weight"]
 
     # Create MLP with weights
@@ -407,11 +403,12 @@ def _load_weights() -> dict:
 
 def _build_layers(weights: dict):
     input_ln, post_ln, mlp, attn = create_layers_from_weights(weights)
-    rotary = Qwen3RotaryEmbedding(Qwen3Config())
+    config = _load_config()
+    rotary = Qwen3RotaryEmbedding(config)
     return {
         "norm": (input_ln, post_ln),
         "mlp":  (mlp,),
-        "rope": (rotary, Qwen3Config()),
+        "rope": (rotary, config),
         "attn": (attn, rotary),
     }
 

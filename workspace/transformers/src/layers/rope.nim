@@ -10,13 +10,18 @@ import
   workspace/libtorch as F
 
 type
-  RotaryPositionEmbedding* = object
+  RotaryPositionEmbeddingRef* = ref object
+    ## RoPE: precomputed cos/sin cache for all positions (0..max_seq_len-1).
+    ##
+    ## USAGE:
+    ##   - Model calls compute(position_ids) to get (cos, sin) for current forward pass
+    ##   - Layers receive precomputed (cos, sin) and call applyRope()
+    ##   - NO internal state (cachePos removed)
     head_dim*: int
     max_seq_len*: int
     rope_theta: float64
-    cachePos: int
-    cos_cache*: Tensor
-    sin_cache*: Tensor
+    cos_cache*: Tensor    # (max_seq_len, head_dim)
+    sin_cache*: Tensor    # (max_seq_len, head_dim)
 
 func rotateHalf(x: Tensor): Tensor =
   # Input/Output: (batch, head, seq, head_dim)
@@ -57,11 +62,11 @@ func applyRopeImpl(
   # Transpose back to (batch, seq, head, head_dim)
   result = (q_rot_t.transpose(1, 2), k_rot_t.transpose(1, 2))
 
-func init*(_: type RotaryPositionEmbedding,
+func new*(_: type RotaryPositionEmbeddingRef,
       head_dim, max_seq_len: int,
       rope_theta: float64,
       dtype: ScalarKind,
-      device: DeviceKind): RotaryPositionEmbedding =
+      device: DeviceKind): RotaryPositionEmbeddingRef =
   ## RoPE: cos(pos * inv_freq[i]), sin(pos * inv_freq[i]) for i in 0..head_dim-1
   ## inv_freq[i] = 1/theta^(i/head_dim), but we compute for i=0,2,4,...,head_dim-2 (64 values for head_dim=128)
   ## Then repeat each value twice to get head_dim cos/sin values.
@@ -72,40 +77,65 @@ func init*(_: type RotaryPositionEmbedding,
   let positions = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq_final.unsqueeze(0)  # (max_seq_len, 64)
   let cos_64 = positions.cos()  # (max_seq_len, 64)
   let sin_64 = positions.sin()  # (max_seq_len, 64)
+  new(result)
   # Repeat each value twice: [cos0, cos0, cos1, cos1, ...] to get (max_seq_len, head_dim)
   result.head_dim = head_dim
   result.max_seq_len = max_seq_len
   result.rope_theta = rope_theta
-  result.cachePos = 0
+  # NEOX style: concatenate cos with itself [c0,c1,...,c63,c0,c1,...,c63]
+  # Store in model dtype (BF16 for Qwen3)
+  result.cos_cache = F.cat([cos_64, cos_64], -1).to(dtype).to(device)  # (max_seq_len, head_dim)
+  result.sin_cache = F.cat([sin_64, sin_64], -1).to(dtype).to(device)  # (max_seq_len, head_dim)
   # NEOX style: concatenate cos with itself [c0,c1,...,c63,c0,c1,...,c63]
   # Store in FP32 for precision (HF pattern), cast during apply
   result.cos_cache = F.cat([cos_64, cos_64], -1).to(dtype).to(device)  # (max_seq_len, 128)
   result.sin_cache = F.cat([sin_64, sin_64], -1).to(dtype).to(device)  # (max_seq_len, 128)
 
+proc compute*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (Tensor, Tensor) =
+  ## Slice cos/sin cache using position_ids.
+  ##
+  ## Args:
+  ##   position_ids: Tensor of shape (seq_len,) or (batch, seq_len)
+  ##
+  ## Returns:
+  ##   (cos, sin) of shape (seq_len, head_dim) — sliced from cache
+  ##
+  ## Note:
+  ##   Called once per forward pass at model level.
+  ##   Layers receive precomputed (cos, sin), not position_ids.
+  
+  # Handle 1D or 2D position_ids
+  var pos_ids = position_ids
+  if pos_ids.dim == 2:
+    # Take first batch item (positions same for all batch items)
+    pos_ids = pos_ids[0, _]
+  
+  # Slice cache using position_ids (advanced indexing)
+  # cos_cache[position_ids, :] → (seq_len, head_dim)
+  result = (self.cos_cache.index_select(0, pos_ids), self.sin_cache.index_select(0, pos_ids))
+
 proc applyRope*(
-      self: var RotaryPositionEmbedding,
-      q: Tensor,
-      k: Tensor): (Tensor, Tensor) =
-  # Method using cache - calls freestanding applyRopeImpl
-  # Input q.k: (batch, seq, head, head_dim)
-  # Output: (batch, seq, head, head_dim)
+    self: RotaryPositionEmbeddingRef,
+    q: Tensor,
+    k: Tensor,
+    cos, sin: Tensor): (Tensor, Tensor) =
+  ## Apply RoPE using precomputed cos/sin.
+  ##
+  ## Args:
+  ##   q, k: Input tensors of shape (batch, seq, head, head_dim)
+  ##   cos, sin: Precomputed RoPE of shape (seq, head_dim)
+  ##
+  ## Returns:
+  ##   (q_rot, k_rot) of shape (batch, seq, head, head_dim)
+  ##
+  ## Note:
+  ##   Pure function — no mutation of self.
+  ##   cos/sin must match seq_len of q/k.
+  
+  # Just call the freestanding impl
+  result = applyRopeImpl(q, k, cos, sin)
 
-  let seq_len = q.size(1)
-
-  # Slice cache: (seq_len, head_dim) - contiguous due to first-dim slice
-  let cos_seq = self.cos_cache[self.cachePos..<self.cachePos+seq_len, _]
-  let sin_seq = self.sin_cache[self.cachePos..<self.cachePos+seq_len, _]
-
-  # Advance cache position
-  self.cachePos += seq_len
-
-  # Apply rotation using freestanding impl (pass 2D cache, let impl handle broadcasting)
-  result = applyRopeImpl(q, k, cos_seq, sin_seq)
-
-func resetCache*(self: var RotaryPositionEmbedding) =
-  self.cachePos = 0
-
-func setCache(self: var RotaryPositionEmbedding, cos, sin: Tensor) {.used.} =
+func setCache(self: var RotaryPositionEmbeddingRef, cos, sin: Tensor) {.used.} =
   # Private for testing only.
   # Normalizes cos/sin to 2D (seq, head_dim) for storage in cos_cache.
   # RoPE is per-position — identical across all batch items.
@@ -120,4 +150,3 @@ func setCache(self: var RotaryPositionEmbedding, cos, sin: Tensor) {.used.} =
   doAssert cos_2d.dim == 2, "setCache: cos must be 2D or 3D, got " & $cos.dim & "D"
   self.cos_cache = cos_2d
   self.sin_cache = sin_2d
-  self.cachePos = 0  # Reset position when loading new cache
