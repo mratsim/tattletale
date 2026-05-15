@@ -18,45 +18,50 @@ type InferenceContext* = object
   ##   - Reused across decode steps (kv_caches accumulate)
   ##   - position_ids updated each forward pass
   ##   - Discarded when sequence completes
-  
+
   kv_caches*: seq[KVCache]    # One per layer (preallocated)
   position_ids*: Tensor       # [0,1,2] for prefill, [3] for decode, [6,3,11] for ragged
+  ## Debug metadata — describes the context configuration
+  num_layers*: int
+  batch_size*: int
+  kv_heads*: int
+  max_seq*: int
+  head_dim*: int
 
-proc init*(_: type InferenceContext, num_layers: int): InferenceContext =
-  ## Initialize InferenceContext with KV caches for all layers.
+proc init*(
+    _: type InferenceContext,
+    num_layers: int,
+    batch_size, kv_heads, max_seq, head_dim: int,
+    dtype: ScalarKind,
+    device: DeviceKind): InferenceContext =
+  ## Initialize InferenceContext with preallocated KV caches for all layers.
   ##
   ## Args:
   ##   num_layers: Number of transformer layers (one KV cache per layer)
-  ##
-  ## Note: KV caches are NOT preallocated here.
-  ## Call allocateCaches() after to allocate with proper shapes.
-  var kv_caches = newSeq[KVCache](num_layers)
-  for i in 0..<num_layers:
-    kv_caches[i] = KVCache.init()
-  
-  InferenceContext(
-    kv_caches: kv_caches,
-    position_ids: F.empty(0)
-  )
-
-proc allocateCaches*(ctx: var InferenceContext, batch_size, kv_heads, max_seq, head_dim: int, dtype: ScalarKind, device: DeviceKind) =
-  ## Preallocate all KV caches.
-  ##
-  ## Args:
   ##   batch_size: Number of sequences in batch
   ##   kv_heads: Number of KV heads (GQA)
   ##   max_seq: Maximum sequence length
   ##   head_dim: Dimension per head
   ##   dtype: Data type (e.g., kBFloat16)
   ##   device: Device (e.g., kCUDA)
-  for i in 0..<ctx.kv_caches.len:
-    ctx.kv_caches[i].allocate(batch_size, kv_heads, max_seq, head_dim, dtype, device)
+
+  var kv_caches = newSeq[KVCache](num_layers)
+  for i in 0..<num_layers:
+    kv_caches[i] = KVCache.init(batch_size, kv_heads, max_seq, head_dim, dtype, device)
+
+  InferenceContext(
+    kv_caches: kv_caches,
+    position_ids: F.empty(0),
+    num_layers: num_layers,
+    batch_size: batch_size,
+    kv_heads: kv_heads,
+    max_seq: max_seq,
+    head_dim: head_dim
+  )
 
 proc reset*(ctx: var InferenceContext) =
   ## Reset for NEW sequence (not new token!).
   ## Keeps allocated buffers for reuse.
-  for i in 0..<ctx.kv_caches.len:
-    ctx.kv_caches[i].reset()
   ctx.position_ids = F.empty(0)
 
 proc setPositionIds*(ctx: var InferenceContext, position_ids: Tensor) =

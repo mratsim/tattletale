@@ -40,31 +40,29 @@ type
     q_norm*: Option[RmsNorm]
     k_norm*: Option[RmsNorm]
 
-
-  # =====================================================================
-  # Data flow through RopeGQAttention
-  # =====================================================================
-  #
-  #   x (batch, seq, hidden)
-  #   │
-  #   ├─→ q_proj → reshape → q_norm → applyRope → q_rot ───────────────────┐
-  #   │                                                                    │
-  #   ├─→ k_proj → reshape → k_norm → applyRope → k_rot ─→ cache.write ◄───┤
-  #   │                                             ↑                      │
-  #   │                                    cache.getKV ─→ k_full           │
-  #   │                                                                    │
-  #   └─→ v_proj → reshape ─────────────────────→ cache.write ◄────────────┘
-  #                                                 ↑
-  #                                        cache.getKV ─→ v_full
-  #
-  #   q_rot, k_full, v_full → SDPA(is_causal, enable_gqa) → attn_out
-  #   attn_out → o_proj → output
-  #
-  # Note: V is NOT rotated. RoPE (Su et al., 2021) only rotates Q and K
-  # because the attention mechanism computes similarity via q·k. V simply
-  # carries content to be aggregated by attention weights — it has no
-  # positional role in the similarity computation.
-  # =====================================================================
+# =============================================================================
+# Data flow through RopeGQAttention
+# =============================================================================
+#
+#   x (batch, seq, hidden)
+#   │
+#   ├─→ q_proj → reshape → q_norm → applyRope → q_rot ────────────────────┐
+#   │                                                                     │
+#   ├─→ k_proj → reshape → k_norm → applyRope → k_rot ─→ cache.write ◄────┤
+#   │                                         offset from ctx.position_ids│
+#   │                                            cache.read ─→ k_full     │
+#   │                                                                     │
+#   └─→ v_proj → reshape ─────────────────→ cache.write ◄─────────────────┘
+#                                                cache.read ─→ v_full
+#
+#   q_rot, k_full, v_full → SDPA(is_causal, enable_gqa) → attn_out
+#   attn_out → o_proj → output
+#
+# Note: V is NOT rotated. RoPE (Su et al., 2021) only rotates Q and K
+# because the attention mechanism computes similarity via q·k. V simply
+# carries content to be aggregated by attention weights — it has no
+# positional role in the similarity computation.
+# =============================================================================
 
 func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
   let num_kv_groups = num_qo_head div num_kv_head
@@ -194,7 +192,7 @@ proc forward*(
   ##   k = self.k_proj(x)
   ##   v = self.v_proj(x)
   ##   cache = ctx.kv_caches[self.layer_idx]
-  ##   cache.write(k, v, ctx.position_ids)
+  ##   cache.write(k, v, offset)
   ##   (q_rot, k_rot) = self.rotary.applyRope(q, k, cos, sin)
   ##   attn_out = self.attn(q_rot, k_rot, cache.values)
   ##   return self.o_proj(attn_out)
@@ -223,14 +221,16 @@ proc forward*(
   # Apply RoPE using precomputed cos/sin
   let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, cos, sin)
 
-  # Get this layer's KV cache and write new KV
+  # Get this layer's KV cache
   var cache = ctx.kv_caches[self.layer_idx]
-  let offset = ctx.position_ids.min().item(int) # Get current position offset
+  let offset = ctx.position_ids.min().item(int)  # Write position
 
   # Append to KV cache (K rotated, V)
-  cache.store(k_rot, v_reshaped, offset)
-  # Get full KV (cached + appended)
-  let (k_full, v_full) = cache.getKV(cache.offset)
+  cache.write(k_rot, v_reshaped, offset)
+
+  # Read full KV (cached + appended)
+  let totalSeqLen = offset + seq_len
+  let (k_full, v_full) = cache.read(totalSeqLen)
 
   # Transpose k_full, v_full from (batch, kv_heads, seq, head_dim) to (batch, seq, kv_heads, head_dim)
   let k_attn = k_full.permute([0, 2, 1, 3])
