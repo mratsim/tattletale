@@ -28,6 +28,9 @@ FIXTURE_DIR = os.path.join(
 MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), f"hf_models/{MODEL_NAME}/model.safetensors"
 )
+MODEL_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), f"hf_models/{MODEL_NAME}"
+)
 FIXED_SEED = 42
 
 
@@ -96,16 +99,8 @@ def generate_transformer_block_fixtures() -> None:
             if key.startswith(prefix):
                 weights[key.replace(prefix, "")] = f.get_tensor(key).clone()
 
-    # Create config and layer
-    config = Qwen3Config(
-        hidden_size=1024,
-        intermediate_size=3072,
-        num_attention_heads=16,
-        num_key_value_heads=8,
-        head_dim=128,
-        attention_bias=False,
-        rms_norm_eps=1e-6,
-    )
+    # Load real config from model directory (ensures rope_theta, rope_scaling match)
+    config = Qwen3Config.from_pretrained(MODEL_DIR)
     config._attn_implementation = "sdpa"
     
     print("Creating Qwen3DecoderLayer with real weights...")
