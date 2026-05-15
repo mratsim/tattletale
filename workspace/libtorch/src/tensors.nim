@@ -350,6 +350,13 @@ wrapLibtorch:
   # clone
   func clone*(a: Tensor): Tensor
 
+  func copyFrom*(dst: Tensor, src: Tensor)
+    ## In-place copy into `dst` from `src`
+    ## Allows assignment into views
+    ##
+    ## TODO: should take a var Tensor
+    ## and []= should dispatch to it
+
   # #######################################################################
   #
   #                         Methods / Shapeshifting

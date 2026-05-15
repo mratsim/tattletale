@@ -450,6 +450,11 @@ func empty*(size: IntArrayRef, device: DeviceKind): TorchTensor {.importcpp: "to
 
 func clone*(a: TorchTensor): TorchTensor {.importcpp: "#.clone()".}
 
+proc copyFrom*(dst: TorchTensor, src: TorchTensor) {.importcpp: "#.copy_(@)".}
+  ## Copies the contents of `src` into `dst` in-place.
+  ## Requires both tensors to have the same shape or be broadcastable.
+  ## Equivalent to PyTorch's `dst.copy_(src)`.
+
 func view_as_real*(a: TorchTensor): TorchTensor {.importcpp: "#.view_as_real()".}
 func view_as_complex*(a: TorchTensor): TorchTensor {.importcpp: "#.view_as_complex()".}
 

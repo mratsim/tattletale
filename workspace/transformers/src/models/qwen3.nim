@@ -20,6 +20,7 @@ import
 
   # Transformers local imports
   ../layers,
+  ../stateful/inference_context,
   ./all_interfaces
 
 ################################################################################
@@ -106,18 +107,43 @@ type
     norm: RmsNorm
     lmHead: LMHead
     config*: Qwen3Config
+    rotary*: RotaryPositionEmbeddingRef
 
-proc forward*(self: Qwen3Model, input: Tensor, positions: Tensor, cache: var KVCache): Tensor =
-  var x = self.embedTokens.forward(input)
+proc forward*(self: Qwen3Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
+  ## Forward pass for Qwen3 model.
+  ##
+  ## Args:
+  ## Forward pass for Qwen3 model.
+  ##
+  ## Args:
+  ##   ctx: InferenceContext with KV caches and position_ids
+  ##   input_ids: Input token IDs of shape (batch, seq_len)
+  ##
+  ## Returns:
+  ##   Logits of shape (batch, seq_len, vocab_size)
+  ##
+  ## Computes:
+  ##   x = self.embedTokens(input_ids)
+  ##   (cos, sin) = self.rotary.compute(ctx.position_ids)
+  ##   for layer in self.layers:
+  ##     (x, residual) = layer(ctx, cos, sin, x, residual)
+  ##   x = self.norm(x + residual)
+  ##   return self.lmHead(x)
+
+  var x = self.embedTokens.forward(input_ids)
+
+  # Precompute RoPE cos/sin ONCE for all layers (using model-level rotary)
+  let (cos, sin) = self.rotary.compute(ctx.position_ids)
+
   var residual: Option[Tensor]
   for layer in mitems(self.layers):
-    layer.attn.resetCache()
-    let layerOut = layer.forward(x, residual)
+    let layerOut = layer.forward(ctx, cos, sin, x, residual)
     x = layerOut[0]
     residual = some(layerOut[1])
+
   let finalResidual = residual.get(x)
   let normed = self.norm.forward(x + finalResidual)
-  self.lmHead.forward(normed)
+  result = self.lmHead.forward(normed)
 
 proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
   ## Load Qwen3 model and return as concrete Qwen3Model type (not interface).
@@ -135,6 +161,15 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
 
   var layers = newSeq[TransformerBlock](config.num_hidden_layers)
 
+  # Create ONE RoPE instance for entire model (shared across all layers)
+  let rotary = RotaryPositionEmbeddingRef.new(
+    config.head_dim,
+    config.max_position_embeddings,
+    config.rope_theta,
+    kBFloat16,
+    device
+  )
+
   for i in 0..<config.num_hidden_layers:
     let layerPrefix = "model.layers." & $i & "."
     let inputLnWeight = weightsSt.getTensorOwned(layerPrefix & "input_layernorm.weight")
@@ -149,26 +184,20 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     let upWeight = weightsSt.getTensorOwned(layerPrefix & "mlp.up_proj.weight")
     let downWeight = weightsSt.getTensorOwned(layerPrefix & "mlp.down_proj.weight")
 
-    var rotary = RotaryPositionEmbedding.init(
-      config.head_dim,
-      config.max_position_embeddings,
-      config.rope_theta,
-      kBFloat16,
-      device
-    )
-
     let attn_norm = RmsNorm.init(inputLnWeight)
-    var attn = RopeGQAttention.init(
+    let attn = RopeGQAttention.init(
+      i,  # layer_idx
+      layerPrefix & "self_attn",  # name
       qWeight, kWeight, vWeight, oWeight,
       qNormWeight, kNormWeight,
       config.num_attention_heads, config.num_key_value_heads, config.head_dim,
-      rotary,
+      rotary,  # ← SHARED across all layers
       rms_norm_eps = config.rms_norm_eps
     )
     let mlp_norm = RmsNorm.init(postAttnWeight)
     let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
 
-    layers[i] = TransformerBlock.init(attn_norm, attn, mlp_norm, mlp)
+    layers[i] = TransformerBlock.init(i, attn_norm, attn, mlp_norm, mlp)
 
   let finalNormWeight = weightsSt.getTensorOwned("model.norm.weight")
   let norm = RmsNorm.init(finalNormWeight)
@@ -179,7 +208,8 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     layers: layers,
     norm: norm,
     lmHead: lmHead,
-    config: config
+    config: config,
+    rotary: rotary
   )
 
 proc loadQwen3Model*(modelPath: string, device = kCPU): Model =

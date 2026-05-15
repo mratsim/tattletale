@@ -120,24 +120,40 @@ import
   workspace/libtorch as F,
   ./attn,
   ./mlp,
-  ./norm
+  ./norm,
+  ../stateful/inference_context
 
 type
   TransformerBlock* = object
+    ## Transformer block for decoder-only LLM.
+    layer_idx*: int        # 0..num_layers-1 (self-indexing)
+    name*: string          # e.g., "model.layers.23"
     attn_norm*: RmsNorm
     attn*: RopeGQAttention
     mlp_norm*: RmsNorm
     mlp*: GatedMLP
 
-func init*(_: type TransformerBlock, attn_norm: RmsNorm, attn: RopeGQAttention, mlp_norm: RmsNorm, mlp: GatedMLP): TransformerBlock =
+func init*(_: type TransformerBlock,
+           layer_idx: int,
+           attn_norm: RmsNorm, attn: RopeGQAttention,
+           mlp_norm: RmsNorm, mlp: GatedMLP): TransformerBlock =
   TransformerBlock(
+    layer_idx: layer_idx,
+    name: "model.layers." & $layer_idx,
     attn_norm: attn_norm,
     attn: attn,
     mlp_norm: mlp_norm,
     mlp: mlp
   )
 
-proc forward*(self: var TransformerBlock, x: Tensor, residual: Option[Tensor]): (Tensor, Tensor) =
+
+proc forward*(
+  self: TransformerBlock,
+  ctx: var InferenceContext,
+  cos, sin: Tensor,
+  x: Tensor,
+  residual: Option[Tensor]
+): (Tensor, Tensor) =
   ## Forward pass for a transformer block with long residual stream.
   ##
   ## This pattern defers residual additions to the norm layers, enabling:
@@ -146,6 +162,8 @@ proc forward*(self: var TransformerBlock, x: Tensor, residual: Option[Tensor]): 
   ## - Single addition per layer (instead of two)
   ##
   ## Args:
+  ##   ctx: InferenceContext with KV caches (ctx.kv_caches[self.layer_idx])
+  ##   cos, sin: Precomputed RoPE of shape (seq_len, head_dim)
   ##   x: Input tensor of shape (batch, seq_len, hidden_size)
   ##   residual: Optional residual from previous layer. If None, uses x.
   ##
@@ -155,13 +173,12 @@ proc forward*(self: var TransformerBlock, x: Tensor, residual: Option[Tensor]): 
   ##     - residual: The accumulated residual, passed through unchanged
   ##
   ## Note:
-  ##   RoPE positions and KV cache are handled internally by the attention layer.
-  ##   Call self.attn.rotary.setCache(cos, sin) before forward() to set RoPE.
+  ##   RoPE and KV cache handled by attention layer via InferenceContext.
   ##
   ## Computation:
   ##   residual = residual.get(x)  # Use x if residual is None
   ##   (h, residual) = self.attn_norm.forward_with_residual(x, residual)
-  ##   attn_out = self.attn.forward(h)
+  ##   attn_out = self.attn.forward(ctx, cos, sin, h)
   ##   (h2, residual) = self.mlp_norm.forward_with_residual(attn_out, residual)
   ##   mlp_out = self.mlp.forward(h2)
   ##   (mlp_out, residual)
@@ -171,7 +188,9 @@ proc forward*(self: var TransformerBlock, x: Tensor, residual: Option[Tensor]): 
       self.attn_norm.forward_with_residual(x, residual.unsafeGet())
     else:
       (self.attn_norm.forward(x), x)
-  let attn_out = self.attn.forward(h)
+
+  let attn_out = self.attn.forward(ctx, cos, sin, h)
+
   let (h2, r2) = self.mlp_norm.forward_with_residual(attn_out, r)
   let mlp_out = self.mlp.forward(h2)
   (mlp_out, r2)
