@@ -174,5 +174,17 @@ def main():
         )
         print(f"  Layer {i:02d}: {filepath}")
 
+    # Save final logits fixture
+    print()
+    print("Saving final logits...")
+    hf_dir.mkdir(parents=True, exist_ok=True)
+    logits_file = hf_dir / "final_logits.safetensor"
+    logits_serialized = st.save(
+        {"logits": hf_logits.detach().cpu().to(DTYPE).contiguous()},
+        metadata={"model": MODEL_NAME, "input_text": INPUT_TEXT, "dtype": "bfloat16"}
+    )
+    with open(logits_file, "wb") as f:
+        f.write(logits_serialized)
+    print(f"  Logits: {logits_file}")
 if __name__ == "__main__":
     main()

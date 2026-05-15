@@ -127,8 +127,24 @@ proc main() =
       let finalNorm = model.norm(hidden + finalResidual)
       let finalLogits = model.lmHead(finalNorm)
       echo &"  Nim logits mean: {finalLogits.mean().item(float):.6f}"
+      echo &"  Nim logits shape: {finalLogits.shape}"
 
-      echo "✓ PASS: All layers match within tolerance (" & $tol & ")"
+      # Load HF logits fixture
+      let logitsFixturePath = FixtureDir / "final_logits.safetensor"
+      var logitsMemFile = memFiles.open(logitsFixturePath, mode = fmRead)
+      defer: close(logitsMemFile)
+      let logitsSt = safetensors.load(logitsMemFile)
+      let hfLogits = logitsSt.getTensorOwned("logits", kCPU)
+      echo &"  HF  logits mean: {hfLogits.mean().item(float):.6f}"
+      echo &"  HF  logits shape: {hfLogits.shape}"
+
+      let logitsDiff = (finalLogits.to(kFloat32) - hfLogits.to(kFloat32)).abs().max().item(float)
+      echo &"  max_diff: {logitsDiff:.6e}"
+
+      if logitsDiff > tol:
+        raise newException(ValueError, &"Logits diff = {logitsDiff:.6e} (tol={tol})")
+
+      echo "✓ PASS: All layers + logits match within tolerance (" & $tol & ")"
       true
 
 when isMainModule:
