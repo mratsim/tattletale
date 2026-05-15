@@ -9,10 +9,10 @@ import
   std/tables,
   pkg/iface,
   workspace/libtorch,
-  ../layers/attn
+  ../stateful/inference_context
 
 iface *Model:
-  proc forward(input: Tensor, positions: Tensor, cache: var KVCache): Tensor
+  proc forward(ctx: var InferenceContext, input_ids: Tensor): Tensor
 
 var ModelRegistry* {.compileTime.}: Table[string, proc(modelPath: string, device: DeviceKind): Model {.nimcall.}]
   ## Model registry - populated by each model module at initialization
