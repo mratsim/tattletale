@@ -14,6 +14,7 @@ import
   workspace/libtorch as F,
   workspace/safetensors,
   workspace/transformers/src/layers,
+  workspace/transformers/src/stateful/kvcache,
   workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/models/qwen3 {.all.},
@@ -80,8 +81,10 @@ proc main() =
     proc(): bool =
       let attn = setupAttn()
       let rotary = attn.rotary
-      var ctx = InferenceContext.init(28)
-      ctx.allocateCaches(1, 8, 4096, 128, F.kBFloat16, F.kCPU)
+      var ctx = InferenceContext.init(
+        num_layers = 28, batch_size = 1,
+        kv_heads = 8, max_seq = 4096, head_dim = 128,
+        dtype = F.kBFloat16, device = F.kCPU)
 
       var fixtureMemFile = memFiles.open(
         FixtureDir / &"attn-{ModelName}-00.safetensor", mode = fmRead)
@@ -98,7 +101,7 @@ proc main() =
       let _ = attn.forward(ctx, cos, sin, x)
 
       let cache = ctx.kv_caches[attn.layer_idx]
-      let cachedK = cache.keys.narrow(2, 0, 8)
+      let (cachedK, _) = cache.read(8)
 
       let k = attn.k_proj.forward(x)
       let k_reshaped = k.reshape([x.size(0), x.size(1), attn.attn.num_kv_head, attn.attn.head_dim])
@@ -145,7 +148,7 @@ proc main() =
       let _ = attn.forward(ctx, cos, sin, x)
 
       let cache = ctx.kv_caches[attn.layer_idx]
-      let cachedV = cache.values.narrow(2, 0, 8)
+      let (_, cachedV) = cache.read(8)
 
       let v = attn.v_proj.forward(x)
       let v_expected = v.reshape([x.size(0), x.size(1), attn.attn.num_kv_head, attn.attn.head_dim]).permute([0, 2, 1, 3])

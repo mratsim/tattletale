@@ -386,10 +386,102 @@ type Qwen3Config* = ref object
   hiddenSize*: int
   numLayers*: int
 ```
+## 5. Initialization Conventions
 
----
+### 5.1 Naming Convention
 
-## 5. Summary Checklist
+- **Objects**: `init*(T: typedesc[MyType], ...): T`
+- **Ref objects**: `new*(T: typedesc[MyTypeRef], ...): T`
+
+```nim
+# ✅ Object init
+proc init*(_: type KVCache, batch, heads, seq, dim: int, dtype: ScalarKind, device: DeviceKind): KVCache =
+  KVCache(
+    keys: F.empty([batch, heads, seq, dim]).to(dtype).to(device),
+    values: F.empty([batch, heads, seq, dim]).to(dtype).to(device)
+  )
+
+# ✅ Ref object init
+proc new*(_: type Qwen3Model, path: string): Qwen3Model =
+  ...
+```
+
+### 5.2 Don't Overdo Initialization
+
+If the init is just passing parameters through to fields, use the object init syntax directly instead of defining a wrapper:
+
+```nim
+# ✅ Simple pass-through: just use object init syntax
+let config = Qwen3Config(hidden_size: 2048, num_heads: 16)
+
+# ❌ Don't add an init proc for this
+proc init*(_: type Qwen3Config, hidden_size, num_heads: int): Qwen3Config =
+  Qwen3Config(hidden_size: hidden_size, num_heads: num_heads)  # redundant
+
+# ✅ Complex init: compute derived fields, allocate resources, validate
+proc init*(_: type RotaryEmbedding, head_dim: int, max_seq: int, theta: float64, dtype: ScalarKind): RotaryEmbedding =
+  let inv_freq = (1.0.float64 / theta) ** arange(0, head_dim div 2) / head_dim
+  let angles = outerProduct(arange(max_seq), inv_freq)
+  RotaryEmbedding(
+    cos_cache: cos(angles).to(dtype),
+    sin_cache: sin(angles).to(dtype)
+  )
+```
+
+### 5.3 Single-Phase Init Contract
+
+**After init, the object is assumed usable.** The init function must leave the object in a fully functional state. No `allocate()`, `prepare()`, `reset()` follow-up required for basic usage.
+
+```nim
+# ❌ Two-phase anti-pattern: init + allocate needed
+let cache = KVCache.init()  # unusable: keys/values are empty tensors
+cache.allocate(1, 8, 4096, 128, ...)  # now usable
+
+# ✅ Single-phase: init returns usable object
+let cache = KVCache.init(1, 8, 4096, 128, ...)  # ready to use
+```
+
+### 5.4 Exceptions: When Two-Phase Init Is Unavoidable
+
+If a rare reason (database initialization/preparation, lazy allocation, etc.) requires two-phase init
+there are 3 main options:
+
+1. **`preInit()` function** — explicit second step with descriptive name
+2. **`once` template** from `system.nim` — for lazy one-time setup
+3. **`let foo {.global.} = ...`** — globals in a proc are evaluated once at startup
+
+```nim
+# Option 1: explicit preInit
+db.preInit(user, password, ...) # Check if DB exists, admin user and metadata table is configured, handle migration ...
+let conn = db.init(...)
+
+# Option 2: lazy init with once
+proc ensureInitialized(db: var DB) =
+  once:
+    db.pool = createPool(db.maxConnections)
+
+# Option 3: proc-local global
+proc getConnection(): DB =
+  let conn {.global.} = DB.init(host, port)
+  conn  # evaluated once at first call
+```
+
+### 5.5 Internal Types May Skip `init*`
+
+For non-user-facing types where init is just pass-through and there is no generic use-case/interface, omitting `init*` is fine. Callers use object init syntax directly.
+
+```nim
+# Internal type: no init* needed
+type InternalState = object
+  buffer: Tensor
+  count: int
+
+# Callers initialize directly
+var state = InternalState(buffer: F.empty(0), count: 0)
+```
+
+
+## 6. Summary Checklist
 
 Before committing code, verify:
 
@@ -402,5 +494,7 @@ Before committing code, verify:
 - [ ] **Broadcast docs**: Document if dimensions are broadcast
 - [ ] **Invariants**: Documented for complex types
 - [ ] **Tests**: Follow naming and structure conventions
+- [ ] **Init**: Single-phase (usable after init), correct naming (init* vs new*)
+- [ ] **Init overhead**: No redundant init* for pass-through types
 
 ---

@@ -152,8 +152,11 @@ proc main() =
       let headDim = model.config.head_dim
 
       # Create InferenceContext for all layers (layer 8 self-indexes via layer_idx)
-      var ctx = InferenceContext.init(model.config.num_hidden_layers)
-      ctx.allocateCaches(1, numKvHeads, 4096, headDim, F.kBFloat16, F.kCPU)
+      var ctx = InferenceContext.init(
+        num_layers = model.config.num_hidden_layers,
+        batch_size = 1, kv_heads = numKvHeads,
+        max_seq = 4096, head_dim = headDim,
+        dtype = F.kBFloat16, device = F.kCPU)
 
       var attn: RopeGQAttention
       attn = RopeGQAttention.init(8, "model.layers.8.self_attn", qWeight, kWeight, vWeight, oWeight, qNormWeight, kNormWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
@@ -288,8 +291,11 @@ proc main() =
       let headDim = model.config.head_dim
 
       # Create InferenceContext for all layers (layer 8 self-indexes via layer_idx)
-      var ctx = InferenceContext.init(model.config.num_hidden_layers)
-      ctx.allocateCaches(1, numKvHeads, 4096, headDim, F.kBFloat16, F.kCPU)
+      var ctx = InferenceContext.init(
+        num_layers = model.config.num_hidden_layers,
+        batch_size = 1, kv_heads = numKvHeads,
+        max_seq = 4096, head_dim = headDim,
+        dtype = F.kBFloat16, device = F.kCPU)
 
       # Initialize sublayers
       let attn_norm = RmsNorm.init(inputLnWeight)
