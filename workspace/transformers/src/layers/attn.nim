@@ -11,6 +11,8 @@ import
   workspace/libtorch as F,
   workspace/transformers/src/layers/linear,
   workspace/transformers/src/layers/norm,
+  workspace/transformers/src/stateful/kvcache,
+  workspace/transformers/src/stateful/inference_context,
   ./rope
 
 type
@@ -23,20 +25,20 @@ type
     kv_attn_dim*: int
     softmax_scale*: float64
 
-  KVCache* = object
-    keys*: Tensor
-    values*: Tensor
-
   RopeGQAttention* = object
+    ## Rope + Grouped Query Attention.
+    ##
+    ## State is external (InferenceContext), not owned by this layer.
+    layer_idx*: int             # Layer index for self-indexing KV cache
+    name*: string               # Safetensor key prefix (e.g., "model.layers.23.self_attn")
     q_proj*: Linear
     k_proj*: Linear
     v_proj*: Linear
     o_proj*: Linear
     attn*: GroupedQueryAttention
-    rotary*: RotaryPositionEmbedding
+    rotary*: RotaryPositionEmbeddingRef
     q_norm*: Option[RmsNorm]
     k_norm*: Option[RmsNorm]
-    kv_cache*: KVCache
 
 func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
   let num_kv_groups = num_qo_head div num_kv_head
@@ -58,8 +60,18 @@ func forward*(
       is_causal: bool = true,
       attn_mask = none(Tensor),
       dropout_p = 0.0'f64): Tensor =
+  ## Scaled dot-product attention with GQA support.
+  ##
+  ## Args:
+  ##   q: Query tensor of shape (batch, seq, num_qo_head, head_dim)
+  ##   k: Key tensor of shape (batch, seq, num_kv_head, head_dim)
+  ##   v: Value tensor of shape (batch, seq, num_kv_head, head_dim)
+  ##   is_causal: If true, apply causal mask
+  ##
+  ## Returns:
+  ##   Attention output of shape (batch, seq, num_qo_head * head_dim)
+
   # Backend: permute to (batch, head, seq, head_dim), ensure dtype, SDPA, reshape
-  # Input q,k,v: (batch, seq, num_head, head_dim)
   let batch = q.size(0)
   let seq_len = q.size(1)
 
@@ -83,31 +95,27 @@ func forward*(
   let attn_perm = attn_out.permute([0, 2, 1, 3])
   result = attn_perm.reshape([batch, seq_len, self.qo_attn_dim])
 
-func init*(_: type KVCache): KVCache =
-  KVCache(
-    keys: F.empty(0),
-    values: F.empty(0)
-  )
-
-proc reset*(self: var KVCache) =
-  self.keys = F.empty(0)
-  self.values = F.empty(0)
-
-proc append*(self: var KVCache, k, v: Tensor): (Tensor, Tensor) =
-  if self.keys.numel == 0:
-    self.keys = k
-    self.values = v
-  else:
-    self.keys = F.cat([self.keys, k], 1)
-    self.values = F.cat([self.values, v], 1)
-  (self.keys, self.values)
-
 func init*(
-      _: type RopeGQAttention,
-      q_weight, k_weight, v_weight, o_weight, q_norm_weight, k_norm_weight: Tensor,
-      num_qo_head, num_kv_head, head_dim: int,
-      rotary: RotaryPositionEmbedding,
-      rms_norm_eps = 1e-6'f64): RopeGQAttention =
+    _: type RopeGQAttention,
+    layer_idx: int,
+    name: string,
+    q_weight, k_weight, v_weight, o_weight, q_norm_weight, k_norm_weight: Tensor,
+    num_qo_head, num_kv_head, head_dim: int,
+    rotary: RotaryPositionEmbeddingRef,
+    rms_norm_eps = 1e-6'f64): RopeGQAttention =
+  ## Initialize RopeGQAttention.
+  ##
+  ## Args:
+  ##   layer_idx: Layer index (0..num_layers-1)
+  ##   name: Safetensor key prefix (e.g., "model.layers.23.self_attn")
+  ##   q_weight, k_weight, v_weight, o_weight: Projection weights
+  ##   q_norm_weight, k_norm_weight: Q/K normalization weights
+  ##   num_qo_head: Number of query/output heads
+  ##   num_kv_head: Number of KV heads (GQA)
+  ##   head_dim: Dimension per head
+  ##   rotary: RoPE module (shared across layers)
+  ##   rms_norm_eps: Epsilon for Q/K norm
+
   let q_proj = Linear.init(q_weight)
   let k_proj = Linear.init(k_weight)
   let v_proj = Linear.init(v_weight)
@@ -129,6 +137,8 @@ func init*(
   )
 
   RopeGQAttention(
+    layer_idx: layer_idx,
+    name: name,
     q_proj: q_proj,
     k_proj: k_proj,
     v_proj: v_proj,
@@ -136,37 +146,48 @@ func init*(
     attn: attn,
     rotary: rotary,
     q_norm: q_norm,
-    k_norm: k_norm,
-    kv_cache: KVCache.init()
+    k_norm: k_norm
   )
 
-proc resetCache*(self: var RopeGQAttention) =
-  self.kv_cache.reset()
-  self.rotary.resetCache()
-
 proc forward*(
-      self: var RopeGQAttention,
-      x: Tensor): Tensor =
+    self: RopeGQAttention,
+    ctx: var InferenceContext,
+    cos, sin: Tensor,
+    x: Tensor): Tensor =
+  ## Forward pass for attention.
+  ##
+  ## Args:
+  ##   ctx: InferenceContext with KV caches (ctx.kv_caches[self.layer_idx])
+  ##   cos, sin: Precomputed RoPE of shape (seq_len, head_dim)
+  ##   x: Input tensor of shape (batch, seq, hidden_size)
+  ##
+  ## Returns:
+  ##   Output tensor of shape (batch, seq, num_qo_head * head_dim)
+  ##
+  ## Computes:
+  ##   q = self.q_proj(x)
+  ##   k = self.k_proj(x)
+  ##   v = self.v_proj(x)
+  ##   cache = ctx.kv_caches[self.layer_idx]
+  ##   cache.write(k, v, ctx.position_ids)
+  ##   (q_rot, k_rot) = self.rotary.applyRope(q, k, cos, sin)
+  ##   attn_out = self.attn(q_rot, k_rot, cache.values)
+  ##   return self.o_proj(attn_out)
+
   # Use separate Q, K, V projections (matching HF/Qwen3)
   let q = self.q_proj.forward(x)
-  var k_new = self.k_proj.forward(x)
-  var v_new = self.v_proj.forward(x)
+  var k = self.k_proj.forward(x)
+  var v = self.v_proj.forward(x)
 
   let batch = x.size(0)
   let seq_len = x.size(1)
 
-  # KV cache transformation:
-  # - Prefill: cache is empty, we append new KV, returning (k_new, v_new)
-  # - Decode: cache has prior KV, we append new KV, returning full concatenated KV
-  (k_new, v_new) = self.kv_cache.append(k_new, v_new)
-
   # Reshape to (batch, seq, heads, head_dim)
-  # Note: for decode, k_new/v_new now has seq_len = 1 + cache_size
   let q_reshaped = q.reshape([batch, seq_len, self.attn.num_qo_head, self.attn.head_dim])
-  let k_reshaped = k_new.reshape([batch, k_new.size(1), self.attn.num_kv_head, self.attn.head_dim])
-  let v_reshaped = v_new.reshape([batch, v_new.size(1), self.attn.num_kv_head, self.attn.head_dim])
+  let k_reshaped = k.reshape([batch, seq_len, self.attn.num_kv_head, self.attn.head_dim])
+  let v_reshaped = v.reshape([batch, seq_len, self.attn.num_kv_head, self.attn.head_dim])
 
-  # Apply q/k norm (on reshaped tensor before permute)
+  # Apply q/k norm (on reshaped tensor before RoPE)
   var q_norm_input = q_reshaped
   var k_norm_input = k_reshaped
   if self.q_norm.isSome:
@@ -174,9 +195,24 @@ proc forward*(
   if self.k_norm.isSome:
     k_norm_input = self.k_norm.get().forward(k_reshaped)
 
-  # Apply RoPE using the rotary cache with offset into the cache
-  let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input)
+  # Apply RoPE using precomputed cos/sin
+  let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, cos, sin)
+
+  # Get this layer's KV cache and write new KV
+  var cache = ctx.kv_caches[self.layer_idx]
+  let offset = ctx.position_ids.min().item(int) # Get current position offset
+
+  # Write to cache (slice assignment, not cat)
+  cache.write(k_reshaped, v_reshaped, offset)
+
+  # Get full KV (cached + new)
+  let (k_full, v_full) = cache.getKV(cache.offset)
+
+  # Transpose k_full, v_full from (batch, kv_heads, seq, head_dim) to (batch, seq, kv_heads, head_dim)
+  let k_attn = k_full.permute([0, 2, 1, 3])
+  let v_attn = v_full.permute([0, 2, 1, 3])
 
   # Pass to backend (GroupedQueryAttention) which handles permute/dtype/SDPA/reshape
-  let attn_out_reshaped = self.attn.forward(q_rot, k_rot, v_reshaped, is_causal = true)
+  let attn_out_reshaped = self.attn.forward(q_rot, k_attn, v_attn, is_causal = true)
+
   result = self.o_proj.forward(attn_out_reshaped)
