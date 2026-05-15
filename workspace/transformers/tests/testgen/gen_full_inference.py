@@ -137,8 +137,17 @@ def main():
     from transformers import Qwen3ForCausalLM, AutoTokenizer
     hf_model = Qwen3ForCausalLM.from_pretrained(MODEL_PATH)
     hf_model.eval()
-    hf_model.to(DEVICE)
+    hf_model = hf_model.to(DEVICE)
+    # Preserve inv_freq buffers in float32 — model.to(bfloat16) would corrupt them.
+    # bfloat16 loses too much precision for RoPE frequency values (up to 1.2e-3 per element).
+    inv_freq = hf_model.model.rotary_emb.inv_freq.float()
+    original_inv_freq = hf_model.model.rotary_emb.original_inv_freq.float()
+
     hf_model = hf_model.to(DTYPE)
+
+    # Restore inv_freq in float32 after dtype conversion
+    hf_model.model.rotary_emb.inv_freq = inv_freq
+    hf_model.model.rotary_emb.original_inv_freq = original_inv_freq
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
     hf_intermediates = capture_hf_intermediates(hf_model, tokenizer, INPUT_TEXT)
     # Save
