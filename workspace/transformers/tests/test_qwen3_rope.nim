@@ -26,7 +26,7 @@
 ##    - RoPE owned by Model level (shared across all layers)
 ##    - RoPE applied post Q/K projection and Q/K norm
 ##    - Cache stored as (max_seq_len, head_dim) precomputed table
-##    - compute(position_ids) slices cache for current forward pass
+##    - ropeByPositions(position_ids) slices cache for current forward pass
 ##
 ## 3. IMPLEMENTATION DETAILS (should NOT be tested — hinder refactoring):
 ##    - Specific tensor dtype for cache storage (FP32 vs BF16)
@@ -46,6 +46,7 @@ import
   workspace/safetensors,
   workspace/libtorch as F,
   workspace/transformers/src/layers/rope {.all.},
+  workspace/transformers/src/layers,
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/libtorch_testutils
 
@@ -159,6 +160,8 @@ proc main() =
       privateAccess(Qwen3Model)
       let rotary = model.rotary
       privateAccess(RotaryPositionEmbeddingRef)
+      privateAccess(TransformerBlock)
+      privateAccess(RopeGQAttention)
       let cos_0 = rotary.cos_cache[0, 0..<5].to(kFloat32)
       let sin_0 = rotary.sin_cache[0, 0..<5].to(kFloat32)
       let cos_expected = F.ones([5], kFloat32)
@@ -183,6 +186,8 @@ proc main() =
       privateAccess(Qwen3Model)
       let rotary = model.rotary
       privateAccess(RotaryPositionEmbeddingRef)
+      privateAccess(TransformerBlock)
+      privateAccess(RopeGQAttention)
 
       # Verify it has expected properties
       doAssert rotary.head_dim > 0, "head_dim must be set"
@@ -191,19 +196,19 @@ proc main() =
       doAssert rotary.sin_cache.dim == 2, "sin_cache must be 2D"
 
       # Verify all layers share the SAME rotary instance
-      let layer0_rotary = model.layers[0].attn.rotary
-      let layer1_rotary = model.layers[1].attn.rotary
+      let layer0_rotary = model.layers[0].self_attn.rotary
+      let layer1_rotary = model.layers[1].self_attn.rotary
       doAssert rotary == layer0_rotary, "Layer 0 should share model.rotary"
       doAssert rotary == layer1_rotary, "Layer 1 should share model.rotary"
       true
 
   # ──────────────────────────────────────────────────────────────────────────
-  # Test: applyRope via compute() + applyRope
-  # Invariant: ARCHITECTURAL — integration of compute + apply
+  # Test: applyRope via ropeByPositions() + applyRope
+  # Invariant: ARCHITECTURAL — integration of ropeByPositions + apply
   # What: Verifies full RoPE forward (compute → applyRope) works correctly
-  # Why: This is the production path — model.forward calls compute, layers call applyRope
+  # Why: This is the production path — model.forward calls ropeByPositions, layers call applyRope
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "RoPE applyRope via compute() (batch=2, seq=8, GQA) — architectural integration":
+  runTest "RoPE applyRope via ropeByPositions() (batch=2, seq=8, GQA) — architectural integration":
     proc(): bool =
       var fixtureMemFile = memFiles.open(FixtureDir_Layers / "rope-Qwen3-0.6B-00.safetensor", mode = fmRead)
       defer: close(fixtureMemFile)
@@ -219,16 +224,18 @@ proc main() =
       privateAccess(Qwen3Model)
       let rotary = model.rotary
       privateAccess(RotaryPositionEmbeddingRef)
+      privateAccess(TransformerBlock)
+      privateAccess(RopeGQAttention)
 
       # Compute cos/sin for positions [0,1,2,3,4,5,6,7]
       let position_ids = F.arange(0, 8, device=kCPU)
-      let (cos_sliced, sin_sliced) = rotary.compute(position_ids)
+      let (cos_sliced, sin_sliced) = rotary.ropeByPositions(position_ids)
 
       # Apply RoPE
       let (q_rot, k_rot) = rotary.applyRope(q, k, cos_sliced, sin_sliced)
 
-      assertAllClose(q_rot, q_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE via compute() q_rot mismatch")
-      assertAllClose(k_rot, k_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE via compute() k_rot mismatch")
+      assertAllClose(q_rot, q_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE via ropeByPositions() q_rot mismatch")
+      assertAllClose(k_rot, k_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE via ropeByPositions() k_rot mismatch")
       true
 
   # ============================================================================
@@ -257,6 +264,8 @@ proc main() =
       privateAccess(Qwen3Model)
       let rotary = model.rotary
       privateAccess(RotaryPositionEmbeddingRef)
+      privateAccess(TransformerBlock)
+      privateAccess(RopeGQAttention)
 
       # Slice Nim cache to match HF seq length
       let seqLen = if hfCos.dim == 3: hfCos.size(1) else: hfCos.size(0)
@@ -295,6 +304,8 @@ proc main() =
       privateAccess(Qwen3Model)
       let rotary = model.rotary
       privateAccess(RotaryPositionEmbeddingRef)
+      privateAccess(TransformerBlock)
+      privateAccess(RopeGQAttention)
 
       # Create test Q/K tensors
       let batch = 1
@@ -307,9 +318,9 @@ proc main() =
       let q = F.randn([batch, seqLen, q_heads, head_dim], kFloat32).to(kCPU) * 0.1
       let k = F.randn([batch, seqLen, k_heads, head_dim], kFloat32).to(kCPU) * 0.1
 
-      # Apply Nim RoPE (using compute() + applyRope())
+      # Apply Nim RoPE (using ropeByPositions() + applyRope())
       let position_ids = F.arange(0, seqLen, device=kCPU)
-      let (cos_sliced, sin_sliced) = rotary.compute(position_ids)
+      let (cos_sliced, sin_sliced) = rotary.ropeByPositions(position_ids)
       let (qNim, kNim) = rotary.applyRope(q.clone(), k.clone(), cos_sliced, sin_sliced)
 
       # Apply HF RoPE (using applyRopeImpl with HF cos/sin from fixture)

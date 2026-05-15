@@ -13,6 +13,24 @@ import
 type Orchestrator* = object
   ## High-level orchestration for inference.
   ##
+  ## **input_ids vs position_ids**:
+  ##
+  ##   The orchestrator owns both, but they serve different roles:
+  ##
+  ##   - `input_ids`: Token IDs passed to `model.forward()`. *What* to compute.
+  ##     Example: `[9707, 11, 1246]` = "Hello, how". Set by the caller before
+  ##     invoking the model.
+  ##
+  ##   - `position_ids`: Stored in `InferenceContext.position_ids`. *Where* each
+  ##     token sits in the absolute sequence. Set by the orchestrator based on
+  ##     scheduler state (prefill offset, decode step, etc.).
+  ##
+  ##   For single-sequence sync inference:
+  ##     prefill:  position_ids = [0, 1, 2, ..., seq_len-1]
+  ##     decode:   position_ids = [current_position]
+  ##
+  ##   They diverge for continuous batching, prefix caching, and speculative decoding.
+  ##
   ## MVP: Single active sequence.
   ## Future: Multiple contexts for continuous batching.
 
