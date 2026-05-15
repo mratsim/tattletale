@@ -35,6 +35,8 @@ import
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/libtorch_testutils
 
+{.experimental: "callOperator".}
+
 const
   FixtureDir = currentSourcePath().parentDir() / "fixtures" / "long-residual-3-block" / "Qwen3-0.6B"
   ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
@@ -60,6 +62,7 @@ proc main() =
       const tol = 1e-5
       let model = loadQwen3ModelRaw(ModelPath, kCPU)
       privateAccess(Qwen3Model)
+      privateAccess(TransformerBlock)
 
       # InferenceContext for stateful attention
       var ctx = InferenceContext.init(
@@ -72,7 +75,7 @@ proc main() =
       let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0)
 
       # Embedding pass
-      let x = model.embedTokens.forward(inputIds)
+      let x = model.embedTokens(inputIds)
       var hidden = x
       var residual: Option[Tensor] = none(Tensor)
 
@@ -87,7 +90,7 @@ proc main() =
         ctx.reset()
         let hfPosIds = fixture["position_ids"].to(kInt64)
         ctx.position_ids = hfPosIds[0]  # (seq,)
-        let (cos, sin) = layer.attn.rotary.compute(ctx.position_ids)
+        let (cos, sin) = layer.self_attn.rotary.compute(ctx.position_ids)
 
         echo &"Layer {layerIdx:02d}:"
 
@@ -100,13 +103,13 @@ proc main() =
             if residual.isSome():
               let res = residual.unsafeGet()
               let new_res = hidden + res
-              checkTensor(&"L{layerIdx:02d}_attn_norm", layer.attnNorm.forward(new_res),
+              checkTensor(&"L{layerIdx:02d}_attn_norm", layer.input_layernorm(new_res),
                           fixture["after_attn_norm"], tol)
               checkTensor(&"L{layerIdx:02d}_attn_res", new_res,
                           fixture["after_attn_norm_residual"], tol)
-              (layer.attnNorm.forward(new_res), new_res)
+              (layer.input_layernorm(new_res), new_res)
             else:
-              let h_norm = layer.attnNorm.forward(hidden)
+              let h_norm = layer.input_layernorm(hidden)
               checkTensor(&"L{layerIdx:02d}_attn_norm", h_norm,
                           fixture["after_attn_norm"], tol)
               checkTensor(&"L{layerIdx:02d}_attn_res", hidden,
@@ -114,19 +117,19 @@ proc main() =
               (h_norm, hidden)
 
           # Step 2: attention
-          let attn_out = layer.attn.forward(ctx, cos, sin, h)
+          let attn_out = layer.self_attn(ctx, cos, sin, h)
           checkTensor(&"L{layerIdx:02d}_attn", attn_out, fixture["after_attn"], tol)
 
           # Step 3: mlp_norm.forward_with_residual(attn_out, r)
           let combined = attn_out + r
           checkTensor(&"L{layerIdx:02d}_mlp_res", combined,
                       fixture["after_mlp_norm_residual"], tol)
-          let h2_norm = layer.mlpNorm.forward(combined)
+          let h2_norm = layer.post_attention_layernorm(combined)
           checkTensor(&"L{layerIdx:02d}_mlp_norm", h2_norm,
                       fixture["after_mlp_norm"], tol)
 
           # Step 4: mlp
-          let mlp_out = layer.mlp.forward(h2_norm)
+          let mlp_out = layer.mlp(h2_norm)
           checkTensor(&"L{layerIdx:02d}_mlp", mlp_out, fixture["mlp_out"], tol)
 
           # Step 5: Invariant check - mlp_out + residual == hf_layer_output
@@ -139,8 +142,8 @@ proc main() =
           # ── Call real TransformerBlock.forward and verify it matches ──
           ctx.reset()
           ctx.position_ids = hfPosIds[0]
-          let (r_cos, r_sin) = layer.attn.rotary.compute(ctx.position_ids)
-          let (real_out, real_res) = layer.forward(ctx, r_cos, r_sin, hidden, residual)
+          let (r_cos, r_sin) = layer.self_attn.rotary.compute(ctx.position_ids)
+          let (real_out, real_res) = layer(ctx, r_cos, r_sin, hidden, residual)
 
           checkTensor(&"L{layerIdx:02d}_real_out", real_out,
                       fixture["mlp_out"], tol)
@@ -154,8 +157,8 @@ proc main() =
         # Update state for next layer using the real forward's output
         ctx.reset()
         ctx.position_ids = hfPosIds[0]
-        let (f_cos, f_sin) = layer.attn.rotary.compute(ctx.position_ids)
-        let (fwd_out, fwd_res) = layer.forward(ctx, f_cos, f_sin, hidden, residual)
+        let (f_cos, f_sin) = layer.self_attn.rotary.compute(ctx.position_ids)
+        let (fwd_out, fwd_res) = layer(ctx, f_cos, f_sin, hidden, residual)
         hidden = fwd_out
         residual = some(fwd_res)
 

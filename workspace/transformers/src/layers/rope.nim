@@ -19,7 +19,7 @@ type
     ##   - NO internal state (cachePos removed)
     head_dim*: int
     max_seq_len*: int
-    rope_theta: float64
+    rope_theta*: float64
     cos_cache*: Tensor    # (max_seq_len, head_dim)
     sin_cache*: Tensor    # (max_seq_len, head_dim)
 
@@ -103,13 +103,13 @@ proc compute*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (Tensor, 
   ## Note:
   ##   Called once per forward pass at model level.
   ##   Layers receive precomputed (cos, sin), not position_ids.
-  
+
   # Handle 1D or 2D position_ids
   var pos_ids = position_ids
   if pos_ids.dim == 2:
     # Take first batch item (positions same for all batch items)
     pos_ids = pos_ids[0, _]
-  
+
   # Slice cache using position_ids (advanced indexing)
   # cos_cache[position_ids, :] → (seq_len, head_dim)
   result = (self.cos_cache.index_select(0, pos_ids), self.sin_cache.index_select(0, pos_ids))
@@ -131,7 +131,7 @@ proc applyRope*(
   ## Note:
   ##   Pure function — no mutation of self.
   ##   cos/sin must match seq_len of q/k.
-  
+
   # Just call the freestanding impl
   result = applyRopeImpl(q, k, cos, sin)
 

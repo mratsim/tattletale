@@ -15,15 +15,17 @@ import
   workspace/transformers/src/stateful/inference_context,
   ./rope
 
+{.experimental: "callOperator".}
+
 type
-  GroupedQueryAttention* = object
-    head_dim*: int
-    num_qo_head*: int
-    num_kv_head*: int
-    num_kv_groups*: int
-    qo_attn_dim*: int
-    kv_attn_dim*: int
-    softmax_scale*: float64
+  GroupedQueryAttention = object
+    head_dim: int
+    num_qo_head: int
+    num_kv_head: int
+    num_kv_groups: int
+    qo_attn_dim: int
+    kv_attn_dim: int
+    softmax_scale: float64
 
   RopeGQAttention* = object
     ## Rope + Grouped Query Attention.
@@ -31,14 +33,14 @@ type
     ## State is external (InferenceContext), not owned by this layer.
     layer_idx*: int             # Layer index for self-indexing KV cache
     name*: string               # Safetensor key prefix (e.g., "model.layers.23.self_attn")
-    q_proj*: Linear
-    k_proj*: Linear
-    v_proj*: Linear
-    o_proj*: Linear
-    attn*: GroupedQueryAttention
-    rotary*: RotaryPositionEmbeddingRef
-    q_norm*: Option[RmsNorm]
-    k_norm*: Option[RmsNorm]
+    q_proj: Linear
+    k_proj: Linear
+    v_proj: Linear
+    o_proj: Linear
+    gqa_attn: GroupedQueryAttention
+    rotary: RotaryPositionEmbeddingRef
+    q_norm: Option[RmsNorm]
+    k_norm: Option[RmsNorm]
 
 # =============================================================================
 # Data flow through RopeGQAttention
@@ -64,7 +66,7 @@ type
 # positional role in the similarity computation.
 # =============================================================================
 
-func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
+func init(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
   let num_kv_groups = num_qo_head div num_kv_head
   GroupedQueryAttention(
     head_dim: head_dim,
@@ -76,7 +78,7 @@ func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: in
     softmax_scale: 1.0'f64 / sqrt(head_dim.float64)
   )
 
-func forward*(
+func forward(
       self: GroupedQueryAttention,
       q: Tensor,
       k: Tensor,
@@ -118,6 +120,14 @@ func forward*(
 
   let attn_perm = attn_out.permute([0, 2, 1, 3])
   result = attn_perm.reshape([batch, seq_len, self.qo_attn_dim])
+
+template `()`*(layer: GroupedQueryAttention,
+            q, k, v: Tensor,
+            is_causal: bool = true,
+            attn_mask = none(Tensor),
+            dropout_p = 0.0'f64): untyped =
+  layer.forward(q, k, v, is_causal, attn_mask, dropout_p)
+
 
 func init*(
     _: type RopeGQAttention,
@@ -166,13 +176,13 @@ func init*(
     k_proj: k_proj,
     v_proj: v_proj,
     o_proj: o_proj,
-    attn: attn,
+    gqa_attn: attn,
     rotary: rotary,
     q_norm: q_norm,
     k_norm: k_norm
   )
 
-proc forward*(
+proc forward(
     self: RopeGQAttention,
     ctx: var InferenceContext,
     cos, sin: Tensor,
@@ -194,29 +204,29 @@ proc forward*(
   ##   cache = ctx.kv_caches[self.layer_idx]
   ##   cache.write(k, v, offset)
   ##   (q_rot, k_rot) = self.rotary.applyRope(q, k, cos, sin)
-  ##   attn_out = self.attn(q_rot, k_rot, cache.values)
+  ##   attn_out = self.gqa_attn(q_rot, k_rot, cache.values)
   ##   return self.o_proj(attn_out)
 
   # Use separate Q, K, V projections (matching HF/Qwen3)
-  let q = self.q_proj.forward(x)
-  var k = self.k_proj.forward(x)
-  var v = self.v_proj.forward(x)
+  let q = self.q_proj(x)
+  var k = self.k_proj(x)
+  var v = self.v_proj(x)
 
   let batch = x.size(0)
   let seq_len = x.size(1)
 
   # Reshape to (batch, seq, heads, head_dim)
-  let q_reshaped = q.reshape([batch, seq_len, self.attn.num_qo_head, self.attn.head_dim])
-  let k_reshaped = k.reshape([batch, seq_len, self.attn.num_kv_head, self.attn.head_dim])
-  let v_reshaped = v.reshape([batch, seq_len, self.attn.num_kv_head, self.attn.head_dim])
+  let q_reshaped = q.reshape([batch, seq_len, self.gqa_attn.num_qo_head, self.gqa_attn.head_dim])
+  let k_reshaped = k.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
+  let v_reshaped = v.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
 
   # Apply q/k norm (on reshaped tensor before RoPE)
   var q_norm_input = q_reshaped
   var k_norm_input = k_reshaped
   if self.q_norm.isSome:
-    q_norm_input = self.q_norm.get().forward(q_reshaped)
+    q_norm_input = self.q_norm.get()(q_reshaped)
   if self.k_norm.isSome:
-    k_norm_input = self.k_norm.get().forward(k_reshaped)
+    k_norm_input = self.k_norm.get()(k_reshaped)
 
   # Apply RoPE using precomputed cos/sin
   let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, cos, sin)
@@ -237,6 +247,12 @@ proc forward*(
   let v_attn = v_full.permute([0, 2, 1, 3])
 
   # Pass to backend (GroupedQueryAttention) which handles permute/dtype/SDPA/reshape
-  let attn_out_reshaped = self.attn.forward(q_rot, k_attn, v_attn, is_causal = true)
+  let attn_out_reshaped = self.gqa_attn(q_rot, k_attn, v_attn, is_causal = true)
 
-  result = self.o_proj.forward(attn_out_reshaped)
+  result = self.o_proj(attn_out_reshaped)
+
+template `()`*(layer: RopeGQAttention,
+            ctx: var InferenceContext,
+            cos, sin: Tensor,
+            x: Tensor): untyped =
+  layer.forward(ctx, cos, sin, x)

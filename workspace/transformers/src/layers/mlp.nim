@@ -10,6 +10,8 @@ import
   workspace/positron,
   ./linear
 
+{.experimental: "callOperator".}
+
 type
   GatedMLP* = object
     ## Gated MLP layer with fused gate-up projection and SiLU activation.
@@ -24,9 +26,9 @@ type
     ##
     ## Return:
     ##   - Output tensor of shape (..., hidden_size)
-    gate_up_proj*: Linear
-    down_proj*: Linear
-    activation*: ActivationKind
+    gate_up_proj: Linear
+    down_proj: Linear
+    activation: ActivationKind
 
 func init*(_: type GatedMLP, gate_weight, up_weight, down_weight: Tensor, activation: ActivationKind): GatedMLP =
   ## Creates a GatedMLP layer from separate gate and up weights.
@@ -50,11 +52,14 @@ proc forward*(self: GatedMLP, x: Tensor): Tensor =
   ##   Output tensor of shape (..., hidden_size)
   ##
   ## Computes:
-  ##   gate_up_proj = self.gate_up_proj.forward(x)  # (..., 2 * intermediate_size)
-  ##   activation = silu_and_mul(gate_up_proj)        # (..., intermediate_size)
-  ##   return self.down_proj.forward(activation)      # (..., hidden_size)
-  let gate_up_out = self.gate_up_proj.forward(x)
+  ##   gate_up_proj = self.gate_up_proj(x)     # (..., 2 * intermediate_size)
+  ##   activation = silu_and_mul(gate_up_proj) # (..., intermediate_size)
+  ##   return self.down_proj(activation)       # (..., hidden_size)
+  let gate_up_out = self.gate_up_proj(x)
   let act_out =
     case self.activation
     of kSilu: silu_and_mul(gate_up_out)
-  result = self.down_proj.forward(act_out)
+  result = self.down_proj(act_out)
+
+template `()`*(layer: GatedMLP, x: Tensor): untyped =
+  forward(layer, x)
