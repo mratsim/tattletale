@@ -35,7 +35,18 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(MODEL_PATH)
     model.eval()
     model.to("cpu")
+
+    # Preserve inv_freq buffers in float32 — model.to(bfloat16) would corrupt them.
+    # bfloat16 loses too much precision for RoPE frequency values (up to 1.2e-3 per element).
+    # This causes ~4e-3 cos/sin discrepancy that propagates through every layer.
+    inv_freq = model.model.rotary_emb.inv_freq.float()
+    original_inv_freq = model.model.rotary_emb.original_inv_freq.float()
+
     model = model.to(torch.bfloat16)
+
+    # Restore inv_freq in float32 after dtype conversion
+    model.model.rotary_emb.inv_freq = inv_freq
+    model.model.rotary_emb.original_inv_freq = original_inv_freq
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
     input_ids = tokenizer(INPUT_TEXT, return_tensors="pt")["input_ids"]
