@@ -8,7 +8,6 @@ import os
 import random
 import torch
 from pathlib import Path
-import ctypes
 
 # Add the tests directory to path for pytttransformers import
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -27,7 +26,21 @@ def main():
     print("Loading HuggingFace model...")
     hf_model = Qwen3ForCausalLM.from_pretrained(MODEL_PATH)
     hf_model.eval()
-    hf_model.to("cpu")
+    hf_model = hf_model.to("cpu")
+
+    # Preserve inv_freq in float32 — bfloat16 loses too much precision
+    # for RoPE frequency values (up to 1.2e-3 per element).
+    inv_freq = hf_model.model.rotary_emb.inv_freq.float()
+    original_inv_freq = hf_model.model.rotary_emb.original_inv_freq.float()
+
+    # Convert model weights to bfloat16 (matches Nim model dtype).
+    # Without this, HF runs in float32 and Nim runs in bfloat16,
+    # producing apparent diffs of 0.2-0.8 even with identical weights.
+    hf_model = hf_model.to(torch.bfloat16)
+
+    # Restore inv_freq in float32 after dtype conversion
+    hf_model.model.rotary_emb.inv_freq = inv_freq
+    hf_model.model.rotary_emb.original_inv_freq = original_inv_freq
 
     # Load Nim model
     print("Loading Nim model...")
@@ -52,12 +65,12 @@ def main():
         # Nim forward pass
         nim_logits = nim_model.forward(input_ids)
 
-        # Compare
+        # Compare (both cast to float32 for comparison)
         hf_f32 = hf_logits.float()
         nim_f32 = nim_logits.float()
 
         max_diff = (hf_f32 - nim_f32).abs().max().item()
-        allclose = torch.allclose(hf_f32, nim_f32, rtol=5e-2, atol=5e-2)
+        allclose = torch.allclose(hf_f32, nim_f32, rtol=1e-3, atol=1e-3)
 
         if allclose:
             print(f"  ✅ Case {i} passed (seq_len={seq_len}, max_diff={max_diff:.6f})")
@@ -77,7 +90,6 @@ def main():
     else:
         print(f"{20 - passed} test(s) failed")
         return 1
-
 
 if __name__ == "__main__":
     sys.exit(main())
