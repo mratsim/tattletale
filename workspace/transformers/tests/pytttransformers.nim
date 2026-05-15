@@ -14,8 +14,8 @@ import
   nimpy,
   workspace/libtorch,
   workspace/libtorch/src/tensors_py,
-  workspace/transformers/src/layers,
-  workspace/transformers/src/models
+  workspace/transformers/src/models,
+  workspace/transformers/src/stateful/inference_context
 
 type
   ModelRef* = ref object of PyNimObjectExperimental
@@ -44,19 +44,27 @@ proc forward*(self: ModelRef, inputIds: PyObject): PyObject {.exportpy.} =
   # Python → Nim: extract input tensor
   let input = tensorFromPyObject(inputIds)
 
-  # Auto-derive positions: (1, seq_len) tensor of 0..seq_len-1
-  # Matches HF: ``position_ids = arange(seq_len) + past_seen_tokens``
-  # For prefix pass: past_seen_tokens = 0
+  # Derive dimensions from input + model config
+  let batch = input.shape[0]
   let seqLen = input.shape[1]
-  var posSeq: seq[int64] = newSeq[int64](seqLen)
-  for i in 0..<seqLen: posSeq[i] = i.int64
-  let positions = posSeq.toTensor().unsqueeze(0)
+  let cfg = self.model.getConfig()
 
-  # Empty cache for prefix pass (cache is per-layer inside RopeGQAttention)
-  var cache = KVCache.init()
+  # Create InferenceContext with preallocated KV caches
+  var ctx = InferenceContext.init(
+    cfg.num_hidden_layers,
+    batch,
+    cfg.num_key_value_heads,
+    cfg.max_position_embeddings,
+    cfg.head_dim,
+    kBFloat16,
+    kCPU
+  )
 
-  # Run forward
-  let logits = self.model.forward(input, positions, cache)
+  # Set position_ids for prefill: [0, 1, 2, ..., seq_len-1]
+  ctx.setPositionIdsArange(seqLen, offset = 0, device = kCPU)
+
+  # Model forward populates ctx.cos/ctx.sin via setRopeForPositions internally
+  let logits = self.model.forward(ctx, input)
 
   # Nim → Python: return logits tensor
   tensorToPyObject(logits)
