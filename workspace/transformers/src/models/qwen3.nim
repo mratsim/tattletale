@@ -147,6 +147,21 @@ proc forward*(self: Qwen3Model, ctx: var InferenceContext, input_ids: Tensor): T
   let normed = self.norm(x + finalResidual)
   result = self.lmHead(normed)
 
+proc getConfig(self: Qwen3Model): ModelConfigBase =
+  ModelConfigBase(
+    architecture: self.config.architecture,
+    model_type: self.config.model_type,
+    num_hidden_layers: self.config.num_hidden_layers,
+    hidden_size: self.config.hidden_size,
+    vocab_size: self.config.vocab_size,
+    rms_norm_eps: self.config.rms_norm_eps.float,
+    torch_dtype: self.config.torch_dtype,
+    num_attention_heads: self.config.num_attention_heads,
+    num_key_value_heads: self.config.num_key_value_heads,
+    head_dim: self.config.head_dim,
+    intermediate_size: self.config.intermediate_size,
+    max_position_embeddings: self.config.max_position_embeddings
+  )
 proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
   ## Load Qwen3 model and return as concrete Qwen3Model type (not interface).
   ## Use this when you need to access internal fields for instrumentation/testing.
