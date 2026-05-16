@@ -21,7 +21,7 @@ from collections import OrderedDict
 # ── Config ──────────────────────────────────────────────────────────────
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_PATH = str(Path(__file__).parent.parent / "hf_models" / MODEL_NAME)
-OUTPUT_DIR = Path(__file__).parent.parent / "fixtures" / "full-inference" / MODEL_NAME
+OUTPUT_DIR = Path(__file__).parent.parent / "fixtures" / "ids-inference" / MODEL_NAME
 INPUT_TEXT = "Hello, how are you?"
 DTYPE = torch.bfloat16
 DEVICE = "cpu"

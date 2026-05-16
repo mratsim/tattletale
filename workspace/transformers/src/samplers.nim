@@ -22,6 +22,10 @@ proc sample*(logits: Tensor, temp = 1.0f): int =
   ## **Complexity**: O(V) — no sort, no softmax, no CDF.
   ## **GPU-friendly**: all ops stay on GPU. No CPU-GPU sync.
 
+  # temp=0 → pure greedy (argmax), no noise
+  if temp == 0.0f:
+    return logits.argmax().item(int)
+
   # Clamp uniform random away from exact 0.0 — log(0) is -inf, breaks gumbel
   let u = F.rand_like(logits, F.kFloat32)
             .clamp(1e-6, 1.0)

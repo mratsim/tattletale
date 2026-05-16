@@ -27,8 +27,8 @@ proc main*() =
   let output = model.generate(prompt, temp = 1.0f, maxTokens = 20)
   echo &"Output: {output}"
 
-  assert output.len > prompt.len, "Output must be longer than prompt"
-  assert output.startsWith(prompt), "Output must start with prompt"
+  doAssert output.len > prompt.len, "Output must be longer than prompt"
+  doAssert output.startsWith(prompt), "Output must start with prompt"
 
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
