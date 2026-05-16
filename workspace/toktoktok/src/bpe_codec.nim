@@ -32,7 +32,7 @@ type
     ovector*: ptr UncheckedArray[int]
     ovectorCount*: uint32
 
-  BPETokenizer* = object
+  BPETokenizer* = ref object
     encoder*: Table[seq[byte], int]
     decoder*: Table[int, seq[byte]]
     specialTokensEncoder*: Table[string, int]
@@ -46,13 +46,26 @@ type
 
   TokenizerError* = object of ValueError
 
-proc `=destroy`(code: Pcre2Code) =
+proc `=destroy`(code: Pcre2Code) {.inline.} =
   if code.code != nil:
     code_free(code.code)
+  `=destroy`(code.pattern)
 
-proc `=destroy`(matcher: Pcre2Matcher) =
+proc `=wasMoved`(code: var Pcre2Code) {.inline.}  =
+  code.code = nil
+  `=wasMoved`(code.pattern)
+
+proc `=destroy`(matcher: Pcre2Matcher) {.inline.} =
+  # Pcre2Matcher does NOT own the ptr Code — it is borrowed from Pcre2Code.
+  # Only Pcre2Code's destructor calls code_free. Freeing matchData is sufficient.
   if matcher.matchData != nil:
     match_data_free(matcher.matchData)
+
+proc `=wasMoved`(matcher: var Pcre2Matcher) {.inline.} =
+  matcher.code = nil
+  matcher.matchData = nil
+  matcher.ovector = nil
+  matcher.ovectorCount = 0
 
 proc init*(_: type BPETokenizer): BPETokenizer =
   default(BPETokenizer)
@@ -295,7 +308,7 @@ proc encodeWithSpecialTokens*(tokenizer: BPETokenizer, text: string): seq[int] {
 proc encode*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
   tokenizer.encodeWithSpecialTokens(text)
 
-proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] {.meter.} =
+proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: openArray[int]): seq[byte] {.meter.} =
   for id in tokenIds:
     let bytes = tokenizer.decoder.getOrDefault(id, @[])
     if bytes.len > 0:
@@ -307,7 +320,7 @@ proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: seq[int]): seq[byte] {.met
       else:
         raise newException(TokenizerError, "Invalid token: " & $id)
 
-proc decodeToString*(tokenizer: BPETokenizer, tokenIds: seq[int]): string {.meter.} =
+proc decodeToString*(tokenizer: BPETokenizer, tokenIds: openArray[int]): string {.meter.} =
   let bytes = tokenizer.decodeToBytes(tokenIds)
   if bytes.len == 0:
     return ""

@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Test Qwen3-0.6B full inference intermediates against HF fixtures.
+## Test Qwen3-0.6B token IDs to logit inference with layer intermediates values checked against HF fixtures.
 ##
 ## Strategy:
 ## - ``layer_input``: should match exactly (same embedding)
