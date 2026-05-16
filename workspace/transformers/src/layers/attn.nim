@@ -244,7 +244,10 @@ proc forward(
   let v_attn = v_full.permute([0, 2, 1, 3])
 
   # Pass to backend (GroupedQueryAttention) which handles permute/dtype/SDPA/reshape
-  let attn_out_reshaped = self.gqa_attn(q_rot, k_attn, v_attn, is_causal = true)
+  # is_causal only makes sense when Q and K seq_lens are equal (prefill).
+  # In decode mode (Q=1, K=N), causal mask would block K[1..N-1].
+  let doCausal = q_rot.size(1) == k_attn.size(1)
+  let attn_out_reshaped = self.gqa_attn(q_rot, k_attn, v_attn, is_causal = doCausal)
 
   result = self.o_proj(attn_out_reshaped)
 
