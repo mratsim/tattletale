@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
@@ -17,6 +17,7 @@ import
   workspace/libtorch,
   workspace/safetensors,
   workspace/positron,
+  workspace/toktoktok,
 
   # Transformers local imports
   ../layers,
@@ -110,11 +111,9 @@ type
     lmHead: LMHead
     config*: Qwen3Config
     rotary*: RotaryPositionEmbeddingRef
+    tokenizer*: BPETokenizer
 
 proc forward*(self: Qwen3Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
-  ## Forward pass for Qwen3 model.
-  ##
-  ## Args:
   ## Forward pass for Qwen3 model.
   ##
   ## Args:
@@ -160,8 +159,13 @@ proc getConfig(self: Qwen3Model): ModelConfigBase =
     num_key_value_heads: self.config.num_key_value_heads,
     head_dim: self.config.head_dim,
     intermediate_size: self.config.intermediate_size,
-    max_position_embeddings: self.config.max_position_embeddings
+    max_position_embeddings: self.config.max_position_embeddings,
+    eosTokenId: self.config.eos_token_id
   )
+
+proc getTokenizer(self: Qwen3Model): BPETokenizer =
+  self.tokenizer
+
 proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
   ## Load Qwen3 model and return as concrete Qwen3Model type (not interface).
   ## Use this when you need to access internal fields for instrumentation/testing.
@@ -220,13 +224,18 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
   let norm = RmsNorm.init(finalNormWeight)
   let lmHead = LMHead.initTied(embedTokens)
 
+  let tokenizerPath = modelPath / "tokenizer.json"
+  doAssert fileExists(tokenizerPath) # TODO - result API
+  let tokenizer = loadHFTokenizer(tokenizerPath)
+
   result = Qwen3Model(
     embedTokens: embedTokens,
     layers: layers,
     norm: norm,
     lmHead: lmHead,
     config: config,
-    rotary: rotary
+    rotary: rotary,
+    tokenizer: tokenizer
   )
 
 proc loadQwen3Model*(modelPath: string, device = kCPU): Model =
