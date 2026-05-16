@@ -49,7 +49,7 @@ proc init*(_: type Orchestrator, num_layers: int): Orchestrator =
     num_layers: num_layers
   )
 
-proc startSequence*(orch: var Orchestrator, batch_size, kv_heads, max_seq, head_dim: int, 
+proc startSequence*(orch: var Orchestrator, batch_size, kv_heads, max_seq, head_dim: int,
                     dtype: ScalarKind, device: DeviceKind, seq_len: int) =
   ## Start new sequence (prefill phase).
   ##
@@ -74,7 +74,7 @@ proc startSequence*(orch: var Orchestrator, batch_size, kv_heads, max_seq, head_
 
   orch.is_active = true
 
-proc decodeStep*(orch: var Orchestrator, position: int, device: DeviceKind = kCPU) =
+proc decodeStep*(orch: var Orchestrator, position: int, device: DeviceKind | Device = kCPU) =
   ## Prepare for decode step.
   ##
   ## Args:
