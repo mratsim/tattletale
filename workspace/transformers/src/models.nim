@@ -76,8 +76,8 @@ proc generate*(
         temp = 1.0f,
         maxTokens = 200): string =
   let cfg = model.getConfig()
-  var orc = init(Orchestrator, cfg.num_hidden_layers)
-  defer: orc.endSequence()
+  var orch = init(Orchestrator, cfg.num_hidden_layers)
+  defer: orch.endSequence()
 
   let dtype = parseTorchDtype(cfg.torch_dtype)
 
@@ -85,29 +85,33 @@ proc generate*(
   var ids = model.getTokenizer().encode(prompt)
   let startPos = ids.len
 
-  orc.startSequence(1, cfg.num_key_value_heads, maxTokens + startPos,
+  orch.startSequence(1, cfg.num_key_value_heads, maxTokens + startPos,
                      cfg.head_dim, dtype, device, startPos)
 
+  # === PREFILL: forward on full prompt ===
+  let inputIds = F.toTensor([ids])
+  let logits = model.forward(orch.active_context, inputIds)
+  let lastLogits = logits.narrow(1, startPos - 1, 1).squeeze(1)
+  var nextToken = sample(lastLogits, temp)
+  ids.add(nextToken)
+
+  # === DECODE LOOP: forward on 1 token at a time ===
   while ids.len < startPos + maxTokens:
-    # Forward pass on current sequence
-    let inputIds = F.toTensor([ids])
-    let logits = model.forward(orc.active_context, inputIds)
+    # Set position for this decode step
+    orch.decodeStep(ids.len - 1, device)
 
-    # Extract logits for last position: [1, seq_len, vocab] -> [1, vocab]
-    let lastPos = inputIds.shape[1] - 1
-    let lastLogits = logits.narrow(1, lastPos, 1).squeeze(1)
+    # Forward on single token: [1, 1]
+    let singleToken = F.toTensor([[nextToken]])
+    let stepLogits = model.forward(orch.active_context, singleToken)
 
-    # Sample next token
-    let nextToken = sample(lastLogits, temp)
+    # Sample next token from [1, 1, vocab] -> [vocab]
+    let stepLastLogits = stepLogits.squeeze(0).squeeze(0)
+    nextToken = sample(stepLastLogits, temp)
     ids.add(nextToken)
 
     stdout.write model.getTokenizer().decodeToString([ids[^1]])
 
-    # Stop on EOS token
     if ids[^1] == cfg.eosTokenId:
       break
-
-    # Update position for next decode step
-    orc.decodeStep(ids.len - 1, device)
 
   model.getTokenizer().decodeToString(ids)
