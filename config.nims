@@ -58,7 +58,7 @@ func testerCmd(path: string): string =
     "nim cpp -r" &
     # " -d:release --stackTrace:on --lineTrace:on " &
     " --debugger:native " &
-    " --verbosity:0 --hints:off --warnings:off " &
+    " --hints:off --warnings:off " &
     &" --outdir:build/tests/{filename} --nimcache:nimcache/tests/{filename} " &
     path
 
@@ -150,6 +150,10 @@ task test_safetensors, "Test workspace/safetensors":
 task test_transformers, "Test workspace/transformers":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/transformers/tests"):
+      runCmd(cmd)
+    for cmd in getTestCommands("workspace/transformers/tests/q_bf16"):
+      runCmd(cmd)
+    for cmd in getTestCommands("workspace/transformers/tests/q_exl3"):
       runCmd(cmd)
 
 task test_toktoktok, "Test workspace/toktoktok":

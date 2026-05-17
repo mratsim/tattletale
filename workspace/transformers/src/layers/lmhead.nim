@@ -9,12 +9,14 @@ import
   std/importutils,
   std/options,
   workspace/libtorch as F,
-  ./embedding
+  workspace/positron/src/hadamard_transforms,
+  ./embedding,
+  ../quantizations/datatypes
 
 {.experimental: "callOperator".}
 
 type
-  LMHead* = object
+  LMHead* = ref object
     ## Language Model Head for projecting hidden states to vocabulary logits.
     ##
     ## Supports tied embeddings (Qwen3-0.6B has tie_word_embeddings=true).
@@ -29,6 +31,13 @@ type
     weight: Option[Tensor]
     bias: Option[Tensor]
     tied_embedding: Option[Embedding]
+    case quant_format*: QuantFormatKind
+    of qBF16:
+      discard
+    of qExl3:
+      suh: Tensor    # [in_features] float16 — Hadamard input scale (EXL3 only)
+      svh: Tensor    # [out_features] float16 — Hadamard output scale (EXL3 only)
+
 
 func init*(_: type LMHead, weight: Tensor, bias = none(Tensor)): LMHead =
   ## Creates an LMHead with explicit weights.
@@ -40,6 +49,7 @@ func init*(_: type LMHead, weight: Tensor, bias = none(Tensor)): LMHead =
   ## Returns:
   ##   LMHead with the given weight and optional bias
   LMHead(
+    quant_format: qBF16,
     weight: some(weight),
     bias: bias,
     tied_embedding: none(Embedding)
@@ -55,6 +65,7 @@ func initTied*(_: type LMHead, embedding: Embedding, bias = none(Tensor)): LMHea
   ## Returns:
   ##   LMHead with tied embedding weights
   LMHead(
+    quant_format: qBF16,
     weight: none(Tensor),
     bias: bias,
     tied_embedding: some(embedding)
@@ -75,20 +86,26 @@ proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
   ## Note:
   ##   Returns BF16 if input is BF16 (matches HF transformers).
   ##   Sampling module will upcast to FP32 when needed.
-  let weight =
-    if self.weight.isSome:
-      self.weight.get()
-    elif self.tied_embedding.isSome():
-      privateAccess(Embedding)
-      self.tied_embedding.unsafeGet().weight
-    else:
-      raise newException(ValueError, "[ttt] Internal Error: LMHead has no weights")
 
-  result =
-    if self.bias.isSome():
-      F.linear(hidden_states, weight, self.bias.get())
-    else:
-      F.linear(hidden_states, weight)
+  case self.quant_format
+  of qBF16:
+    let weight =
+      if self.weight.isSome:
+        self.weight.get()
+      elif self.tied_embedding.isSome():
+        privateAccess(Embedding)
+        self.tied_embedding.unsafeGet().weight
+      else:
+        raise newException(ValueError, "[ttt] Internal Error: LMHead has no weights")
+
+    result =
+      if self.bias.isSome():
+        F.linear(hidden_states, weight, self.bias.get())
+      else:
+        F.linear(hidden_states, weight)
+  of qEXL3:
+    # TODO: EXL3-quantized lm_head (lm_head has its own trellis)
+    raise newException(ValueError, "[ttt] EXL3 lm_head not yet implemented")
 
 template `()`*(layer: LMHead, x: Tensor): untyped =
   forward(layer, x)

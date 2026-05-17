@@ -11,7 +11,7 @@ import std/os
 
 import pkg/packedjson
 
-const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"
+const FIXTURES_DIR = currentSourcePath().parentDir() / ".." / "fixtures"
 const CONFIGS_DIR = FIXTURES_DIR / "configs"
 
 import workspace/transformers/src/models/qwen3 {.all.}

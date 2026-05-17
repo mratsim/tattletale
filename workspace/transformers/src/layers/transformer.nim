@@ -126,7 +126,7 @@ import
 {.experimental: "callOperator".}
 
 type
-  TransformerBlock* = object
+  TransformerBlock* = ref object
     ## Transformer block for decoder-only LLM.
     layer_idx*: int        # 0..num_layers-1 (self-indexing)
     name*: string          # e.g., "model.layers.23"

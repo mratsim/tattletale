@@ -141,16 +141,11 @@ iterator flatIter[T](s: openarray[T]): auto {.noSideEffect.} =
       yield item
 
 func toTorchTensor*[T: SomeTorchType](oa: openarray[T]): TorchTensor =
-  ## Convert an openarray to CPU Tensor
-  ##
-  ## Input:
-  ##      - An array or a seq
-  ## Result:
-  ##      - A view Tensor of the same shape
-  let shape = getShape(oa)
-  result = empty(shape.asTorchView(), T.toScalarKind())
-
-  return from_blob(oa[0].unsafeAddr, oa.len.int64, toScalarKind(T)).clone()
+  ## Convert an openarray to CPU Tensor (owning copy, not a view).
+  result = empty(asTorchView(oa.len), toScalarKind(T))
+  let data = result.data_ptr(T)
+  for i, val in oa.pairs:
+    data[i] = val
 
 func toTorchTensor*[T: seq | array](oa: openarray[T]): TorchTensor =
   ## Convert an openarray of openarrays to a CPU Tensor
