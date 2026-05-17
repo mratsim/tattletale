@@ -49,7 +49,26 @@ Always `uv run`. `.venv` managed by `uv`:
 uv run --group test-vectors python workspace/module/tests/testgen/generate_vectors.py
 ```
 
-NEVER `--break-system-packages`.
+### CUDA Tests
+
+If working withing this dir, the following might not be needed as
+`tattletale/workspace/libtorch/vendor/libtorch.nim` is configuring rpath
+
+To run tests on CUDA, use `LD_PRELOAD` to inject `libtorch_cuda.so` at runtime:
+
+```bash
+# Build normally (no -d:cuda needed)
+nim cpp -r --hints:off --warnings:off \
+  --outdir:build/wip --nimcache:nimcache/wip \
+  workspace/transformers/tests/q_exl3/test_*.nim
+
+# Run with CUDA injected
+LD_PRELOAD="$(pwd)/.venv/lib/python3.14/site-packages/torch/lib/libtorch_cuda.so" \
+LD_LIBRARY_PATH="$(pwd)/.venv/lib:$(pwd)/.venv/lib/python3.14/site-packages/torch/lib:$(pwd)/.venv/lib/python3.14/site-packages/nvidia/cu13/lib" \
+build/wip/test_*.nim
+```
+
+Test code must move tensors to CUDA via `.cuda()` and `kCUDA` device.
 
 ### Code Analysis
 

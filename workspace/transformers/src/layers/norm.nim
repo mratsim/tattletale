@@ -11,7 +11,7 @@ import
 {.experimental: "callOperator".}
 
 type
-  RmsNorm* = object
+  RmsNorm* = ref object
     weight: Tensor
     eps*: float
     hidden_size*: int

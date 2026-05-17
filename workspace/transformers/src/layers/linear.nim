@@ -8,12 +8,14 @@
 import
   std/math,
   std/options,
-  workspace/libtorch as F
+  workspace/libtorch as F,
+  workspace/positron/src/hadamard_transforms,
+  ../quantizations/datatypes
 
 {.experimental: "callOperator".}
 
 type
-  Linear* = object
+  Linear* = ref object
     ## Linear layer
     ##
     ## Input:
@@ -27,6 +29,12 @@ type
     bias: Option[Tensor]
     in_features*: int
     out_features*: int
+    case quant_format*: QuantFormatKind
+    of qBF16:
+      discard
+    of qExl3:
+      suh: Tensor    # [in_features] float16 — Hadamard input scale (EXL3 only)
+      svh: Tensor    # [out_features] float16 — Hadamard output scale (EXL3 only)
 
 func init*(_: type Linear, weight: Tensor, bias = none(Tensor)): Linear =
   ## Creates a linear layer from existing weights.
@@ -38,11 +46,25 @@ func init*(_: type Linear, weight: Tensor, bias = none(Tensor)): Linear =
   ## Computes:
   ##   y = x @ weight^T + bias
   Linear(
+    quant_format: qBF16,
     weight: weight,
     bias: bias,
     in_features: weight.size(1),
     out_features: weight.size(0)
   )
+
+proc init*(_: type Linear, weight: Tensor, bias = none(Tensor), suh, svh: Tensor): Linear =
+  ## EXL3 weight is stored [in_features, out_features] (for F.mm layout, matching ext.hgemm)
+  Linear(
+    quant_format: qEXL3,
+    weight: weight,
+    bias: bias,
+    in_features: weight.size(0),
+    out_features: weight.size(1),
+    suh: suh,
+    svh: svh,
+  )
+
 
 proc forward*(self: Linear, x: Tensor): Tensor =
   ## Forward pass for inference.
@@ -53,10 +75,25 @@ proc forward*(self: Linear, x: Tensor): Tensor =
   ## Returns:
   ##   Output tensor of shape (..., out_features)
 
-  if self.bias.isSome:
-    F.linear(x, self.weight, self.bias.unsafeGet())
-  else:
-    F.linear(x, self.weight)
+  case self.quant_format
+  of qBF16:
+    result =
+      if self.bias.isSome:
+        F.linear(x, self.weight, self.bias.unsafeGet())
+      else:
+        F.linear(x, self.weight)
+  of qEXL3:
+    # EXL3 operates in float16
+    # Input Hadamard: scale(suh) BEFORE FWHT, then /sqrt(128) in fp32
+    # Output Hadamard: FWHT in fp32, then /sqrt(128), then scale(svh)
+    let xf16 = x.to(kFloat16)
+    let xh = hadamard_rotate_128(xf16, self.suh, INV_SQRT_128, pre_scale=true)
+    # F.matmul handles ND @ 2D broadcasting (unlike F.mm which is 2D-only)
+    result = F.matmul(xh, self.weight)  # [..., in_f] @ [in_f, out_f] = [..., out_f]
+    let yh = hadamard_rotate_128(result, nil, INV_SQRT_128, pre_scale=false)
+    result = yh * self.svh
+    if self.bias.isSome:
+      result += self.bias.unsafeGet()
 
 template `()`*(layer: Linear, x: Tensor): untyped =
   forward(layer, x)

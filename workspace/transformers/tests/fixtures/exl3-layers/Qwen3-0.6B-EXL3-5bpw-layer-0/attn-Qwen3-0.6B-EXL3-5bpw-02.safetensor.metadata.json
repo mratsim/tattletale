@@ -1,0 +1,11 @@
+{
+  "backend": "exllamav3_cuda",
+  "batch": 2,
+  "case": "multi_batch_prefill",
+  "head_dim": 128,
+  "layer": "model.layers.0",
+  "model": "Qwen3-0.6B-EXL3-5bpw",
+  "num_heads": 16,
+  "num_kv_heads": 8,
+  "seq": 8
+}

@@ -130,6 +130,24 @@ type
     kQint32 = 14 # Quantized int32
     kBfloat16 = 15 # Brain float16
 
+    # Shell dtypes - limited support on a backend by backend basis,
+    # safe usage for metadata-only operations
+    # otherwise, this needs backend specific tests.
+    kQuint4x2 = 16
+    kQuint2x4 = 17
+    kBits1x8 = 18
+    kBits2x4 = 19
+    kBits4x2 = 20
+    kBits8 = 21
+    kBits16 = 22
+    kFloat8_e5m2 = 23
+    kFloat8_e4m3fn = 24
+    kFloat8_e5m2fnuz = 25
+    kFloat8_e4m3fnuz = 26
+    kUint16 = 27
+    kUint32 = 28
+    kUint64 = 29
+
   SomeTorchType* = uint8 | byte or SomeSignedInt or SomeUnsignedInt or SomeFloat or Complex[float32] or Complex[float64]
   ## Torch Tensor type mapped to Nim type
 
@@ -555,6 +573,9 @@ func index_put*(
 # -----------------------------------------------------------------------
 # TODO -> separate the FFI from the Nim Raw API to add IndexDefect when compileOption("boundsCheck")
 func index_select*(a: TorchTensor, axis: int, indices: TorchTensor): TorchTensor {.importcpp: "#.index_select(@)".}
+func gather*(a: TorchTensor, dim: int, index: TorchTensor): TorchTensor {.importcpp: "#.gather(@)".}
+func scatter*(a: TorchTensor, dim: int, index: TorchTensor, src: TorchTensor): TorchTensor {.importcpp: "#.scatter(@)".}
+func scatter_add*(a: TorchTensor, dim: int, index: TorchTensor, src: TorchTensor): TorchTensor {.importcpp: "#.scatter_add(@)".}
 func masked_select*(a: TorchTensor, mask: TorchTensor): TorchTensor {.importcpp: "#.masked_select(@)".}
 
 # PyTorch exposes in-place `index_fill_` and `masked_fill_`
@@ -572,6 +593,7 @@ func masked_fill_mut*(
 
 func reshape*(a: TorchTensor, sizes: IntArrayRef): TorchTensor {.importcpp: "#.reshape({@})".}
 func view*(a: TorchTensor, size: IntArrayRef): TorchTensor {.importcpp: "#.reshape({@})".}
+func view*(a: TorchTensor, dtype: ScalarKind): TorchTensor {.importcpp: "#.view(@)".}
 
 func transpose*(a: TorchTensor, dim0, dim1: int64): TorchTensor {.importcpp: "#.transpose(@)".}
   ## Swaps two dimensions. Returns a tensor that is a transposed version of input.
