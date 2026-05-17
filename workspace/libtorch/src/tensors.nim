@@ -631,6 +631,11 @@ wrapLibtorch:
   func `and`*(a: Tensor, b: Tensor): Tensor
   func `or`*(a: Tensor, b: Tensor): Tensor
   func `xor`*(a: Tensor, b: Tensor): Tensor
+  func `shl`*(a: Tensor, b: Tensor): Tensor
+  func `shr`*(a: Tensor, b: Tensor): Tensor
+  func `shl`*(a: Tensor, b: int): Tensor
+  func `shr`*(a: Tensor, b: int): Tensor
+
 
   # In-place (var Tensor)
 
