@@ -751,6 +751,11 @@ func `/=`*(a: var TorchTensor, s: Scalar) {.importcpp: "(# /= #)".}
 func `and`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_and(#)".} ## bitwise `and`.
 func `or`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_or(#)".} ## bitwise `or`.
 func `xor`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_xor(#)".} ## bitwise `xor`.
+func `shl`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_left_shift(#)".} ## bitwise left shift.
+func `shr`*(a: TorchTensor, b: TorchTensor): TorchTensor {.importcpp: "#.bitwise_right_shift(#)".} ## bitwise right shift.
+func `shl`*(a: TorchTensor, b: SomeInteger): TorchTensor {.importcpp: "#.bitwise_left_shift(#)".} ## bitwise left shift by scalar.
+func `shr`*(a: TorchTensor, b: SomeInteger): TorchTensor {.importcpp: "#.bitwise_right_shift(#)".} ## bitwise right shift by scalar.
+
 
 func bitand_mut*(a: var TorchTensor, s: TorchTensor) {.importcpp: "#.bitwise_and_(#)".} ## In-place bitwise `and`.
 func bitor_mut*(a: var TorchTensor, s: TorchTensor) {.importcpp: "#.bitwise_or_(#)".} ## In-place bitwise `or`.
