@@ -1,0 +1,8 @@
+{
+  "backend": "exllamav3_cuda",
+  "case": "seq_with_residual",
+  "framework": "exl3",
+  "layer": "model.layers.0",
+  "model": "Qwen3-0.6B-EXL3-5bpw",
+  "with_residual": "True"
+}

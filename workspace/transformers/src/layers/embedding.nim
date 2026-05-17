@@ -11,7 +11,7 @@ import
 {.experimental: "callOperator".}
 
 type
-  Embedding* = object
+  Embedding* = ref object
     ## Embedding layer for token ID to hidden state conversion.
     ##
     ## Input:

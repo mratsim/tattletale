@@ -1,0 +1,18 @@
+{
+  "batch_size": 1,
+  "device": "cpu",
+  "dtype": "float16",
+  "framework": "exl3",
+  "input_text": "Hello, how are you?",
+  "input_tokens": [
+    9707,
+    11,
+    1246,
+    525,
+    498,
+    30
+  ],
+  "layer": 1,
+  "model": "Qwen3-0.6B-EXL3-5bpw",
+  "seq_len": 6
+}

@@ -1,0 +1,6 @@
+{
+  "backend": "exllamav3_cuda",
+  "case": "single_token",
+  "layer": "model.layers.0.self_attn",
+  "model": "Qwen3-0.6B-EXL3-5bpw"
+}

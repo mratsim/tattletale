@@ -1,0 +1,10 @@
+{
+  "K": 5,
+  "backend": "exllamav3_cuda",
+  "case": "short_sequence",
+  "cb": 0,
+  "in_features": 1024,
+  "layer": "model.layers.0.self_attn.v_proj",
+  "model": "Qwen3-0.6B-EXL3-5bpw",
+  "out_features": 1024
+}

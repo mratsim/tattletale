@@ -1,0 +1,91 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Verify greedy (temp=0) decoding matches HF Transformers output.
+
+import
+  std/os,
+  std/json,
+  std/strformat,
+  std/sequtils,
+  workspace/libtorch,
+  workspace/toktoktok,
+  workspace/transformers/src/models
+
+const
+  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "greedy-decoding" / "Qwen3-0.6B"
+
+proc checkFixture(model: Model, jsonPath: string) =
+  let data = parseJson(readFile(jsonPath))
+  let prompt = data["prompt"].getStr()
+
+  # Parse generated_ids from JSON array
+  var expectedIds: seq[int] = @[]
+  for el in data["generated_ids"]:
+    expectedIds.add(el.getInt())
+
+  let expectedText = data["generated_text"].getStr()
+  let numPrompt = data["num_prompt_tokens"].getInt()
+  let numGen = data["num_generated_tokens"].getInt()
+
+  echo &"  Prompt ({numPrompt} tokens): {prompt}"
+
+  # Generate with temp=0 (greedy)
+  let output = model.generate(prompt, temp = 0.0f, maxTokens = numGen)
+
+  # Compare token IDs — re-encode the output to get generated portion
+  let actualIds = model.getTokenizer().encode(output)
+  let actualGenerated = if actualIds.len >= numPrompt:
+    actualIds[numPrompt ..< actualIds.len]
+  else:
+    actualIds
+
+  echo &"  Expected ({expectedIds.len} tokens): {expectedText}"
+  echo &"  Actual   ({actualGenerated.len} tokens): {model.getTokenizer().decodeToString(actualGenerated)}"
+
+  let idMatch = actualGenerated == expectedIds
+  if idMatch:
+    echo "  ✅ Token IDs match perfectly"
+  else:
+    var firstDiff = "N/A"
+    for i in 0 ..< min(expectedIds.len, actualGenerated.len):
+      if expectedIds[i] != actualGenerated[i]:
+        firstDiff = &"token {i}: expected {expectedIds[i]}, got {actualGenerated[i]}"
+        break
+    if expectedIds.len != actualGenerated.len:
+      firstDiff = &"length: expected {expectedIds.len}, got {actualGenerated.len}"
+    echo &"  ❌ Token IDs diverge: {firstDiff}"
+    raise newException(AssertionError, &"[greedy-test] Token mismatch for {jsonPath}")
+
+proc main*() =
+  echo "Loading model..."
+  let model = loadModel($ModelPath, kCPU)
+  echo "Model loaded.\n"
+
+  var passed = 0
+  var total = 0
+
+  for fixture in walkPattern($FixtureDir & "/*.json"):
+    inc total
+    try:
+      checkFixture(model, fixture)
+      inc passed
+    except AssertionError:
+      discard
+    echo ""
+
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  if passed == total:
+    echo &"✅ PASS | Greedy decoding: {passed}/{total} fixtures match"
+  else:
+    echo &"❌ FAIL | Greedy decoding: {passed}/{total} fixtures match"
+    raise newException(AssertionError, &"{passed}/{total} greedy fixtures passed")
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+when isMainModule:
+  main()
