@@ -25,11 +25,11 @@ import
   workspace/libtorch_testutils
 
 const
-  FixtureDir = currentSourcePath().parentDir() / "fixtures" / "layers" / "Qwen3-0.6B-layer-8"
-  EmbedLmHeadFixtureDir = currentSourcePath().parentDir() / "fixtures" / "layers" / "Qwen3-0.6B-embed-lmhead"
-  TransformerBlockFixtureDir = currentSourcePath().parentDir() / "fixtures" / "layers" / "Qwen3-0.6B-block-8"
-  ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B" / "model.safetensors"
-  ModelDir = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "layers" / "Qwen3-0.6B-layer-8"
+  EmbedLmHeadFixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "layers" / "Qwen3-0.6B-embed-lmhead"
+  TransformerBlockFixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "layers" / "Qwen3-0.6B-block-8"
+  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B" / "model.safetensors"
+  ModelDir = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
   ModelName = "Qwen3-0.6B"
 
 proc main() =
@@ -351,8 +351,8 @@ proc main() =
         let finalOutputResidual = F.cat(outputResiduals)
 
         # Validate outputs within BF16 tolerance
-        assertAllClose(finalOutput, expectedOutput, rtol = 5e-2, abstol = 5e-2, msg = "TransformerBlock output case " & $caseNum & " failed")
-        assertAllClose(finalOutputResidual, expectedOutputResidual, rtol = 5e-2, abstol = 5e-2, msg = "TransformerBlock output_residual case " & $caseNum & " failed")
+        assertAllClose(finalOutput, expectedOutput, rtol = 1e-5, abstol = 1e-5, msg = "TransformerBlock output case " & $caseNum & " failed")
+        assertAllClose(finalOutputResidual, expectedOutputResidual, rtol = 1e-5, abstol = 1e-5, msg = "TransformerBlock output_residual case " & $caseNum & " failed")
 
         echo "TransformerBlock case ", caseNum, " PASSED"
       true

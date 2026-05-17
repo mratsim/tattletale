@@ -13,34 +13,53 @@ import
 {.experimental: "callOperator".}
 
 type
-  GatedMLP* = object
-    ## Gated MLP layer with fused gate-up projection and SiLU activation.
+  GatedMLP* = ref object
+    ## Gated MLP layer with separate gate and up projections and SiLU activation.
     ##
     ## This follows the Qwen3 MLP architecture:
-    ##   gate_up_proj = Linear(hidden_size, 2 * intermediate_size)
-    ##   activation = silu_and_mul(gate_up_proj)
-    ##   output = Linear(intermediate_size, hidden_size)(activation)
+    ##   gate = gate_proj(x)        # (..., intermediate_size)
+    ##   up   = up_proj(x)          # (..., intermediate_size)
+    ##   activation = silu(gate) * up
+    ##   output = down_proj(activation)
     ##
     ## Input:
     ##   - An externally provided `x` of shape (..., hidden_size)
     ##
     ## Return:
     ##   - Output tensor of shape (..., hidden_size)
-    gate_up_proj: Linear
+    gate_proj: Linear
+    up_proj: Linear
     down_proj: Linear
     activation: ActivationKind
 
-func init*(_: type GatedMLP, gate_weight, up_weight, down_weight: Tensor, activation: ActivationKind): GatedMLP =
-  ## Creates a GatedMLP layer from separate gate and up weights.
-  ##
-  ## Args:
-  ##   gate_weight: Weight tensor of shape (intermediate_size, hidden_size)
-  ##   up_weight: Weight tensor of shape (intermediate_size, hidden_size)
-  ##   down_weight: Weight tensor of shape (hidden_size, intermediate_size)
-  ##   activation: Activation function to use
-  let gate_up_proj = Linear.init(F.cat([gate_weight, up_weight], 0))
-  let down_proj = Linear.init(down_weight)
-  GatedMLP(gate_up_proj: gate_up_proj, down_proj: down_proj, activation: activation)
+func init*(
+    _: type GatedMLP,
+    gate_proj: Linear,
+    up_proj: Linear,
+    down_proj: Linear,
+    activation: ActivationKind = kSilu
+  ): GatedMLP =
+  ## Creates a GatedMLP layer from pre-constructed Linear projections.
+  GatedMLP(
+    gate_proj: gate_proj,
+    up_proj: up_proj,
+    down_proj: down_proj,
+    activation: activation
+  )
+
+func init*(
+    _: type GatedMLP,
+    gate_weight, up_weight, down_weight: Tensor,
+    activation: ActivationKind = kSilu
+  ): GatedMLP =
+  ## Creates a GatedMLP layer from separate gate and up weight tensors.
+  ## The weights are still stored as separate projections (no fusion).
+  GatedMLP(
+    gate_proj: Linear.init(gate_weight),
+    up_proj: Linear.init(up_weight),
+    down_proj: Linear.init(down_weight),
+    activation: activation
+  )
 
 proc forward*(self: GatedMLP, x: Tensor): Tensor =
   ## Forward pass for inference.
@@ -52,13 +71,15 @@ proc forward*(self: GatedMLP, x: Tensor): Tensor =
   ##   Output tensor of shape (..., hidden_size)
   ##
   ## Computes:
-  ##   gate_up_proj = self.gate_up_proj(x)     # (..., 2 * intermediate_size)
-  ##   activation = silu_and_mul(gate_up_proj) # (..., intermediate_size)
-  ##   return self.down_proj(activation)       # (..., hidden_size)
-  let gate_up_out = self.gate_up_proj(x)
+  ##   gate_out = self.gate_proj(x)     # (..., intermediate_size)
+  ##   up_out   = self.up_proj(x)       # (..., intermediate_size)
+  ##   act      = silu(gate_out) * up_out
+  ##   return self.down_proj(act)
+  let gate_out = self.gate_proj(x)
+  let up_out = self.up_proj(x)
   let act_out =
     case self.activation
-    of kSilu: silu_and_mul(gate_up_out)
+    of kSilu: F.silu(gate_out) * up_out # TODO silu_and_mul fusion
   result = self.down_proj(act_out)
 
 template `()`*(layer: GatedMLP, x: Tensor): untyped =

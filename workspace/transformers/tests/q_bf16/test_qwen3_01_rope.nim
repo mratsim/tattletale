@@ -51,9 +51,9 @@ import
   workspace/libtorch_testutils
 
 const
-  FixtureDir_Layers = currentSourcePath().parentDir() / "fixtures" / "layers" / "Qwen3-0.6B-layer-8"
-  FixtureDir_3Block = currentSourcePath().parentDir() / "fixtures" / "long-residual-3-block" / "Qwen3-0.6B"
-  ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
+  FixtureDir_Layers = currentSourcePath().parentDir() / ".." / "fixtures" / "layers" / "Qwen3-0.6B-layer-8"
+  FixtureDir_3Block = currentSourcePath().parentDir() / ".." / "fixtures" / "long-residual-3-block" / "Qwen3-0.6B"
+  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
 
 # ============================================================================
 # SECTION 1: MATHEMATICAL PROPERTIES
@@ -77,7 +77,7 @@ proc main() =
       let x = st.getTensorOwned("input")
       let expected = st.getTensorOwned("output")
       let got = rotateHalf(x)
-      assertAllClose(got, expected, rtol = 1e-3, abstol = 1e-3, msg = "rotateHalf mismatch")
+      assertAllClose(got, expected, rtol = 1e-5, abstol = 1e-5, msg = "rotateHalf mismatch")
       true
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -101,8 +101,8 @@ proc main() =
       let k_rot_expected = st.getTensorOwned("k_rot")  # (2, 8, 8, 128)
 
       let (q_rot, k_rot) = applyRopeImpl(q, k, cos, sin)
-      assertAllClose(q_rot, q_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE q_rot mismatch")
-      assertAllClose(k_rot, k_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE k_rot mismatch")
+      assertAllClose(q_rot, q_rot_expected, rtol = 1e-5, abstol = 1e-5, msg = "RoPE q_rot mismatch")
+      assertAllClose(k_rot, k_rot_expected, rtol = 1e-5, abstol = 1e-5, msg = "RoPE k_rot mismatch")
       true
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -125,8 +125,8 @@ proc main() =
       let k_rot_expected = st.getTensorOwned("k_rot")
 
       let (q_rot, k_rot) = applyRopeImpl(q, k, cos, sin)
-      assertAllClose(q_rot, q_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE q_rot mismatch")
-      assertAllClose(k_rot, k_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE k_rot mismatch")
+      assertAllClose(q_rot, q_rot_expected, rtol = 1e-5, abstol = 1e-5, msg = "RoPE q_rot mismatch")
+      assertAllClose(k_rot, k_rot_expected, rtol = 1e-5, abstol = 1e-5, msg = "RoPE k_rot mismatch")
       true
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -234,8 +234,8 @@ proc main() =
       # Apply RoPE
       let (q_rot, k_rot) = rotary.applyRope(q, k, cos_sliced, sin_sliced)
 
-      assertAllClose(q_rot, q_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE via ropeByPositions() q_rot mismatch")
-      assertAllClose(k_rot, k_rot_expected, rtol = 1e-3, abstol = 1e-3, msg = "RoPE via ropeByPositions() k_rot mismatch")
+      assertAllClose(q_rot, q_rot_expected, rtol = 1e-5, abstol = 1e-5, msg = "RoPE via ropeByPositions() q_rot mismatch")
+      assertAllClose(k_rot, k_rot_expected, rtol = 1e-5, abstol = 1e-5, msg = "RoPE via ropeByPositions() k_rot mismatch")
       true
 
   # ============================================================================

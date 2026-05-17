@@ -43,9 +43,9 @@ import
 # =============================================================================
 
 const
-  FixtureDir = currentSourcePath().parentDir() / "fixtures" / "layers" / "Qwen3-0.6B-layer-8"
-  ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B" / "model.safetensors"
-  ModelDir = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "layers" / "Qwen3-0.6B-layer-8"
+  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B" / "model.safetensors"
+  ModelDir = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
   ModelName = "Qwen3-0.6B"
 
 privateAccess(Qwen3Model)

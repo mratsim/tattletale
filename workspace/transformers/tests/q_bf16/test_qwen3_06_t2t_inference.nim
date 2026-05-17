@@ -15,7 +15,7 @@ import
   workspace/transformers/src/models
 
 const
-  ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
+  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
 
 proc main*() =
   echo "Loading model..."

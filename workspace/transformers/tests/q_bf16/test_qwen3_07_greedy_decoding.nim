@@ -17,8 +17,8 @@ import
   workspace/transformers/src/models
 
 const
-  ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
-  FixtureDir = currentSourcePath().parentDir() / "fixtures" / "greedy-decoding"
+  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "greedy-decoding" / "Qwen3-0.6B"
 
 proc checkFixture(model: Model, jsonPath: string) =
   let data = parseJson(readFile(jsonPath))

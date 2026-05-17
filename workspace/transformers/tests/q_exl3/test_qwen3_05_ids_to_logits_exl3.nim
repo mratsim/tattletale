@@ -5,15 +5,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Test Qwen3-0.6B token IDs to logit inference with layer intermediates values checked against HF fixtures.
+## Test Qwen3-0.6B-EXL3-5bpw: token IDs to logit inference with layer intermediates
+## checked against EXL3-specific fixtures.
 ##
 ## Strategy:
-## - ``layer_input``: should match exactly (same embedding)
-## - ``layer_output + layer_residual`` (Nim) vs ``layer_output`` (HF): should match exactly
-##   (proven invariant: ``y_long + r_long == x_local``)
-## - Sublayer intermediates: EXPECTED to differ (norms see different inputs)
-##
-## All layers should match with tolerance 1e-5.
+## - Same structure as the FP16 test (long residual stream)
+## - EXL3 quantization is lossy, so tolerance is relaxed to 1e-2
+##   (vs 1e-5 for FP16)
 
 import
   std/memfiles,
@@ -36,11 +34,11 @@ privateAccess(TransformerBlock)
 privateAccess(RopeGQAttention)
 
 const
-  FixtureDir = currentSourcePath().parentDir() / "fixtures" / "ids-inference" / "Qwen3-0.6B"
-  ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-ids-inference" / "Qwen3-0.6B-EXL3-5bpw"
+  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
 
 proc loadLayerFixture(layerIdx: int): Table[string, Tensor] =
-  ## Load HF layer intermediates from safetensor fixture.
+  ## Load EXL3 layer intermediates from safetensor fixture.
   let fixturePath = FixtureDir / &"layer-{layerIdx:02d}.safetensor"
   var memFile = memFiles.open(fixturePath, mode = fmRead)
   defer: close(memFile)
@@ -50,25 +48,23 @@ proc loadLayerFixture(layerIdx: int): Table[string, Tensor] =
     result[name] = st.getTensorOwned(name, kCPU)
 
 proc main() =
-  runTest "Qwen3-0.6B full inference - long residual stream vs HF":
+  runTest "Qwen3-0.6B-EXL3-5bpw: ids-to-logits — long residual stream vs EXL3 fixtures":
     proc(): bool =
       ## Strategy:
-      ## - layer_input: should match exactly (same embedding)
-      ## - layer_output + layer_residual (Nim) vs layer_output (HF): should match exactly
-      ##   (proven invariant: y_long + r_long == x_local)
-      ## - after_attn_norm, after_attn, after_mlp: EXPECTED to differ
-      ##   (norms see different inputs: N(x+r) vs N(x))
+      ## - layer_input: should match (same embedding)
+      ## - layer_output + layer_residual (Nim) vs layer_output (HF): should match
+      ## - EXL3 tolerance: 1e-2 (lossy quantization vs FP16's 1e-5)
 
-      const tol = 1e-5
+      const tol = 1e-2
 
-      let model = loadQwen3ModelRaw(ModelPath, kCPU)
+      let model = loadQwen3ModelRaw($ModelPath, kCPU)
 
       # InferenceContext for stateful attention
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = model.config.num_key_value_heads,
         max_seq = 4096, head_dim = model.config.head_dim,
-        dtype = F.kBFloat16, device = F.kCPU
+        dtype = F.kFloat16, device = F.kCPU
       )
 
       # Input tokens: "Hello, how are you?"
@@ -79,7 +75,7 @@ proc main() =
       var hidden = x
       var residual: Option[Tensor] = none(Tensor)
 
-      echo "Comparing layer-by-layer intermediates..."
+      echo "Comparing layer-by-layer EXL3 intermediates..."
       echo "================================================================="
 
       for layerIdx in 0..<model.layers.len:
@@ -87,8 +83,6 @@ proc main() =
         var layer = model.layers[layerIdx]
 
         # Compare layer_input
-        # For layer 0: hidden is the embedding output
-        # For layers 1+: hidden + residual is the boundary sum (matches HF layer_input)
         let nimInput = if residual.isSome():
           hidden + residual.unsafeGet()
         else:
@@ -108,7 +102,7 @@ proc main() =
         # Forward through layer (long residual stream pattern)
         let (output, newResidual) = layer(ctx, hidden, residual)
 
-        # Compare: Nim (output + residual) vs HF (layer_output)
+        # Compare: Nim (output + residual) vs EXL3 fixture (layer_output)
         let nimSum = output + newResidual
         let outputDiff = (hfFixture["layer_output"].to(kFloat32) - nimSum.to(kFloat32)).abs().max().item(float)
         echo &"  output + residual diff={outputDiff:.2e}"
@@ -118,7 +112,7 @@ proc main() =
         residual = some(newResidual)
 
         if outputDiff > tol:
-          raise newException(ValueError, &"Layer {layerIdx:02d}: output + residual diff = {outputDiff:.6e}")
+          raise newException(ValueError, &"Layer {layerIdx:02d}: output + residual diff = {outputDiff:.6e} (tol={tol})")
 
       # Final logits comparison
       echo "================================================================="
@@ -129,14 +123,14 @@ proc main() =
       echo &"  Nim logits mean: {finalLogits.mean().item(float):.6f}"
       echo &"  Nim logits shape: {finalLogits.shape}"
 
-      # Load HF logits fixture
+      # Load EXL3 logits fixture
       let logitsFixturePath = FixtureDir / "final_logits.safetensor"
       var logitsMemFile = memFiles.open(logitsFixturePath, mode = fmRead)
       defer: close(logitsMemFile)
       let logitsSt = safetensors.load(logitsMemFile)
       let hfLogits = logitsSt.getTensorOwned("logits", kCPU)
-      echo &"  HF  logits mean: {hfLogits.mean().item(float):.6f}"
-      echo &"  HF  logits shape: {hfLogits.shape}"
+      echo &"  Fixture logits mean: {hfLogits.mean().item(float):.6f}"
+      echo &"  Fixture logits shape: {hfLogits.shape}"
 
       let logitsDiff = (finalLogits.to(kFloat32) - hfLogits.to(kFloat32)).abs().max().item(float)
       echo &"  max_diff: {logitsDiff:.6e}"
@@ -144,7 +138,7 @@ proc main() =
       if logitsDiff > tol:
         raise newException(ValueError, &"Logits diff = {logitsDiff:.6e} (tol={tol})")
 
-      echo "✓ PASS: All layers + logits match within tolerance (" & $tol & ")"
+      echo "✓ PASS: All layers + logits match within EXL3 tolerance (" & $tol & ")"
       true
 
 when isMainModule:

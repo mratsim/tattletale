@@ -366,6 +366,7 @@ wrapLibtorch:
   # Shape manipulation
   func reshape*(a: Tensor, size: varargs[int]): Tensor
   func view*(a: Tensor, size: varargs[int]): Tensor
+  func view*(a: Tensor, dtype: ScalarKind): Tensor
   func permute*(a: Tensor, dims: varargs[int]): Tensor
   func expand*(a: Tensor, size: varargs[int], implicit: bool = false): Tensor
   func transpose*(a: Tensor, dim0, dim1: int64): Tensor
@@ -734,6 +735,9 @@ wrapLibtorch:
   # #######################################################################
 
   func index_select*(a: Tensor, axis: int, indices: Tensor): Tensor
+  func gather*(a: Tensor, axis: int, indices: Tensor): Tensor
+  func scatter*(a: Tensor, axis: int, indices: Tensor, value: Tensor): Tensor
+  func scatter_add*(a: Tensor, axis: int, indices: Tensor, value: Tensor): Tensor
   func masked_select*(a: Tensor, mask: Tensor): Tensor
 
   # #######################################################################

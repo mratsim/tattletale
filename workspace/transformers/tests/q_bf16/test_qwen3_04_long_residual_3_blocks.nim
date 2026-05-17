@@ -38,8 +38,8 @@ import
 {.experimental: "callOperator".}
 
 const
-  FixtureDir = currentSourcePath().parentDir() / "fixtures" / "long-residual-3-block" / "Qwen3-0.6B"
-  ModelPath = currentSourcePath().parentDir() / "hf_models" / "Qwen3-0.6B"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "long-residual-3-block" / "Qwen3-0.6B"
+  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
 
 proc loadFixture(layerIdx: int): Table[string, Tensor] =
   let fixturePath = FixtureDir / &"block-{layerIdx:02d}.safetensor"

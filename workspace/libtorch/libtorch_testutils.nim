@@ -89,7 +89,7 @@ proc runTest*(name: string, body: proc(): bool) =
 
 template assertAllClose*(
           tensor, expectedTensor: Tensor,
-          rtol = 2e-2'f64, abstol = 2e-2'f64,
+          rtol = 1e-4'f64, abstol = 1e-4'f64,
           msg = "") =
   ## Assert that two tensors are close within tolerance.
   ## Returns false if they differ (for use in runTest).

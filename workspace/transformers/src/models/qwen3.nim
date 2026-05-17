@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
@@ -10,17 +10,14 @@ import
   std/os,
   std/memfiles,
   std/tables,
-
   pkg/iface,
   pkg/packedjson,
-
   workspace/libtorch,
   workspace/safetensors,
   workspace/positron,
   workspace/toktoktok,
-
-  # Transformers local imports
   ../layers,
+  ../deserialization,
   ../stateful/inference_context,
   ./all_interfaces
 
@@ -167,60 +164,62 @@ proc getTokenizer(self: Qwen3Model): BPETokenizer =
   self.tokenizer
 
 proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
-  ## Load Qwen3 model and return as concrete Qwen3Model type (not interface).
-  ## Use this when you need to access internal fields for instrumentation/testing.
+  ## Load Qwen3 model — no quantization knowledge, all dispatched via
+  ## deserialization.nim and QuantLoaderRegistry.
   let config = loadQwen3Config(modelPath / "config.json")
-
   let weightsPath = modelPath / "model.safetensors"
   var weightsMemFile = memFiles.open(weightsPath, mode = fmRead)
   defer: close(weightsMemFile)
-
   var weightsSt = safetensors.load(weightsMemFile)
 
-  let embedWeight = weightsSt.getTensorOwned("model.embed_tokens.weight")
+  # Raw config JSON for deserialization (codecs inspect quantization_config)
+  let cfgJson = (modelPath / "config.json").parseFile()
+  let actDtype = activationDtype(cfgJson)
+
+  let embedWeight = Embedding.load(weightsSt, cfgJson, "model.embed_tokens")
   let embedTokens = Embedding.init(embedWeight)
 
   var layers = newSeq[TransformerBlock](config.num_hidden_layers)
 
-  # Create ONE RoPE instance for entire model (shared across all layers)
   let rotary = RotaryPositionEmbeddingRef.new(
     config.head_dim,
     config.max_position_embeddings,
     config.rope_theta,
-    kBFloat16,
+    actDtype,
     device
   )
 
   for i in 0..<config.num_hidden_layers:
-    let layerPrefix = "model.layers." & $i & "."
-    let inputLnWeight = weightsSt.getTensorOwned(layerPrefix & "input_layernorm.weight")
-    let postAttnWeight = weightsSt.getTensorOwned(layerPrefix & "post_attention_layernorm.weight")
-    let qWeight = weightsSt.getTensorOwned(layerPrefix & "self_attn.q_proj.weight")
-    let kWeight = weightsSt.getTensorOwned(layerPrefix & "self_attn.k_proj.weight")
-    let vWeight = weightsSt.getTensorOwned(layerPrefix & "self_attn.v_proj.weight")
-    let oWeight = weightsSt.getTensorOwned(layerPrefix & "self_attn.o_proj.weight")
-    let qNormWeight = weightsSt.getTensorOwned(layerPrefix & "self_attn.q_norm.weight")
-    let kNormWeight = weightsSt.getTensorOwned(layerPrefix & "self_attn.k_norm.weight")
-    let gateWeight = weightsSt.getTensorOwned(layerPrefix & "mlp.gate_proj.weight")
-    let upWeight = weightsSt.getTensorOwned(layerPrefix & "mlp.up_proj.weight")
-    let downWeight = weightsSt.getTensorOwned(layerPrefix & "mlp.down_proj.weight")
+    let lp = "model.layers." & $i & "."
+    let inputLnWeight = RmsNorm.load(weightsSt, cfgJson, lp & "input_layernorm")
+    let postAttnWeight = RmsNorm.load(weightsSt, cfgJson, lp & "post_attention_layernorm")
+    let qNormWeight = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.q_norm")
+    let kNormWeight = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.k_norm")
+
+    let qProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.q_proj")
+    let kProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.k_proj")
+    let vProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.v_proj")
+    let oProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.o_proj")
 
     let attn_norm = RmsNorm.init(inputLnWeight)
     let attn = RopeGQAttention.init(
-      i,  # layer_idx
-      layerPrefix & "self_attn",  # name
-      qWeight, kWeight, vWeight, oWeight,
+      i, lp & "self_attn",
+      qProj, kProj, vProj, oProj,
       qNormWeight, kNormWeight,
       config.num_attention_heads, config.num_key_value_heads, config.head_dim,
-      rotary,  # ← SHARED across all layers
+      rotary,
       rms_norm_eps = config.rms_norm_eps
     )
+
     let mlp_norm = RmsNorm.init(postAttnWeight)
-    let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
+    let gateProj = Linear.load(weightsSt, cfgJson, lp & "mlp.gate_proj")
+    let upProj = Linear.load(weightsSt, cfgJson, lp & "mlp.up_proj")
+    let downProj = Linear.load(weightsSt, cfgJson, lp & "mlp.down_proj")
+    let mlp = GatedMLP.init(gateProj, upProj, downProj, kSilu)
 
     layers[i] = TransformerBlock.init(i, attn_norm, attn, mlp_norm, mlp)
 
-  let finalNormWeight = weightsSt.getTensorOwned("model.norm.weight")
+  let finalNormWeight = RmsNorm.load(weightsSt, cfgJson, "model.norm")
   let norm = RmsNorm.init(finalNormWeight)
   let lmHead = LMHead.initTied(embedTokens)
 
