@@ -54,13 +54,14 @@ proc load*(_: type Linear, st: Safetensor, cfg: JsonNode, prefix: string): Linea
 
 # ─── RmsNorm ───────────────────────────────────────────────────────────
 
-proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string): Tensor =
-  ## Load RMS norm weights from safetensors, dispatching to the right codec.
+proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string): RmsNorm = 
+  ## Load RMS norm layer from safetensors, dispatching to the right codec.
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].rmsNorm
   if loader == nil:
     raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
-  loader(st, prefix, cfg)
+  let weight = loader(st, prefix, cfg)
+  RmsNorm.init(weight, quant, cfg["rms_norm_eps"].getFloat(1e-6))
 
 # ─── Embedding ──────────────────────────────────────────────────────────
 
