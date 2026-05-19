@@ -9,20 +9,23 @@ import
   workspace/libtorch as F,
   workspace/transformers/src/quantizations/datatypes {.all.}
 
+when defined(cuda):
+  import workspace/libpositron_cuda
+
 {.experimental: "callOperator".}
 
 type
   RmsNorm* = ref object
     weight*: Tensor
-    eps*: float
+    eps*: float64
     hidden_size*: int
     quant_format*: QuantFormatKind
 
 func init*(_: type RmsNorm, weight: Tensor, quant_format: QuantFormatKind = qBF16,
-           eps: float = 1e-6): RmsNorm =
+           eps: SomeFloat = 1e-6): RmsNorm =
   let hidden_size = weight.size(0)
   RmsNorm(
-    weight: weight, eps: eps,
+    weight: weight, eps: float64(eps),
     hidden_size: hidden_size,
     quant_format: quant_format,
   )
@@ -47,23 +50,35 @@ proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
   ## The multiplication order (weight-first vs rstd-first) is the dominant
   ## factor in matching EXL3 vs HF fixtures (0.000244 vs 0.0 CPU diff).
   ## FP16/BF16 intermediates are significantly worse (0.125+ diff).
-  let input_dtype = hidden_state.scalarType()
-  let x = hidden_state.to(kFloat32)
-  let w = self.weight.to(kFloat32)
-  let variance = x.square().mean(axis = -1, keepdim = true)
   case self.quant_format
   of qExl3:
-    # ext.rms_norm order: (x*w)*rstd, all FP32, then cast to input dtype
-    # sqrt().reciprocal() is used instead of rsqrt() because:
-    #   - On CPU, rsqrt() = sqrt().reciprocal() exactly (no HW rsqrt)
-    #   - sqrt().reciprocal() is ~25% faster on CPU (bench_rmsnorm)
-    #   - On CUDA, a custom kernel overrides this path entirely
+    # We emulate warp-shuffle reduction
+    # TODO: optimized kernel
+    # See
+    #  - tattletale/workspace/transformers/tests/rounding_rmsnorm/test_exl3_rms_norm.nim
+    #  - tattletale/workspace/transformers/tests/rounding_rmsnorm/rmsnorm_common.nim
+    when defined(cuda):
+      if hidden_state.deviceType() == kCuda:
+        return pkl_rms_norm_fp16_cuda(hidden_state, self.weight, self.eps)
+
+    ## EXL3 order: (x*w)*rstd, all FP32. Weight upcast to FP32.
+    let input_dtype = hidden_state.scalarType()
+    let x = hidden_state.to(kFloat32)
+    let w = self.weight.to(kFloat32)
+    let variance = x.square().mean(axis = -1, keepdim = true)
     let rstd = variance.add(Scalar(self.eps)).rsqrt()
-    ((x * w) * rstd).to(input_dtype)
+    return ((x * w) * rstd).to(input_dtype)
   of qBF16:
     # HF Qwen3RMSNorm order: (x*rstd).cast * w (w in input dtype)
-    let rstd = variance.add(Scalar(self.eps)).sqrt().reciprocal()
-    (x * rstd).to(input_dtype) * self.weight
+    # sqrt().reciprocal() may be used instead of rsqrt() because:
+    #   - On CPU, rsqrt() = sqrt().reciprocal() exactly (no HW rsqrt)
+    #   - sqrt().reciprocal() is ~25% faster on CPU (bench_rmsnorm) (to be checked on GPU)
+    let input_dtype = hidden_state.scalarType()
+    let x = hidden_state.to(kFloat32)
+    let w = self.weight.to(kFloat32)
+    let variance = x.square().mean(axis = -1, keepdim = true)
+    let rstd = variance.add(Scalar(self.eps)).rsqrt()
+    return (x * rstd).to(input_dtype) * self.weight
 
 proc forward_with_residual(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
   ## Fused residual addition + RMSNorm.

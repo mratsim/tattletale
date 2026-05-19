@@ -27,18 +27,22 @@ const
   Tol = 1e-2
 
 proc main() =
+  # Due to floating point associativity issue, rounding and
+  # warp-shuffle reduction, the tests cannot match on CPU
+  # and tests against EXL3 fixtures MUST be done with Cuda backend.
+
   runTest "Qwen3-0.6B-EXL3-5bpw: 3-block long residual chain":
     proc(): bool =
-      let model = loadQwen3ModelRaw($ModelPath, kCPU)
+      let model = loadQwen3ModelRaw($ModelPath, kCuda)
 
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = model.config.num_key_value_heads,
         max_seq = 4096, head_dim = model.config.head_dim,
-        dtype = F.kFloat16, device = F.kCPU
+        dtype = F.kFloat16, device = F.kCuda
       )
 
-      let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0).to(kInt64)
+      let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0).to(kInt64).to(kCuda)
       let x = model.embedTokens(inputIds)
       var hidden = x
       var residual: Option[Tensor] = none(Tensor)
@@ -51,8 +55,8 @@ proc main() =
         var memFile = memFiles.open(fixturePath, mode = fmRead)
         defer: close(memFile)
         let st = safetensors.load(memFile)
-        let fixtureInput = st.getTensorOwned("layer_input")
-        let fixtureOutput = st.getTensorOwned("layer_output")
+        let fixtureInput = st.getTensorOwned("layer_input", kCuda)
+        let fixtureOutput = st.getTensorOwned("layer_output", kCuda)
 
         let layer = model.layers[layerIdx]
 
@@ -68,7 +72,7 @@ proc main() =
             &"Layer {layerIdx:02d}: input diff = {inputDiff:.6e} (tol={Tol})")
 
         ctx.reset()
-        let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64)
+        let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64).to(kCuda)
         ctx.position_ids = pos_ids
         ctx.setRopeForPositions(model.rotary)
 
@@ -85,7 +89,7 @@ proc main() =
         residual = some(newResidual)
 
       echo "================================================================="
-      echo "✓ 3 blocks PASSED within tolerance ({Tol})"
+      echo &"✓ 3 blocks PASSED within tolerance ({Tol})"
       true
 
 when isMainModule:

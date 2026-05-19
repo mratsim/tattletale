@@ -35,6 +35,6 @@ iface *Model:
   proc forward(ctx: var InferenceContext, input_ids: Tensor): Tensor
   proc getConfig(): ModelConfigBase
   proc getTokenizer(): BPETokenizer
-
+  proc getDeviceKind(): DeviceKind
 var ModelRegistry* {.compileTime.}: Table[string, proc(modelPath: string, device: DeviceKind): Model {.nimcall.}]
   ## Model registry - populated by each model module at initialization

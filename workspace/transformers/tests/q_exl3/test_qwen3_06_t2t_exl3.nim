@@ -22,13 +22,13 @@ const
 
 proc main*() =
   echo "Loading EXL3-quantized model..."
-  let model = loadModel($ModelPath, kCPU)
+  let model = loadModel($ModelPath, kCuda)
 
   let prompt = "Hello, how are you?"
-  echo &"Prompt: {prompt}"
+  echo &"Prompt:\n----\n{prompt}\n"
 
   let output = model.generate(prompt, temp = 1.0f, maxTokens = 20)
-  echo &"Output: {output}"
+  echo &"\n----\nOutput:\n----\n{output}\n"
 
   doAssert output.len > prompt.len, "Output must be longer than prompt"
   doAssert output.startsWith(prompt), "Output must start with prompt"

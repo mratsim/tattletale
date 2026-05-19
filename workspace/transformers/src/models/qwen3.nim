@@ -110,6 +110,7 @@ type
     config*: Qwen3Config
     rotary*: RotaryPositionEmbeddingRef
     tokenizer*: BPETokenizer
+    device*: DeviceKind
 
 proc forward*(self: Qwen3Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   ## Forward pass for Qwen3 model.
@@ -164,6 +165,9 @@ proc getConfig(self: Qwen3Model): ModelConfigBase =
 proc getTokenizer(self: Qwen3Model): BPETokenizer =
   self.tokenizer
 
+proc getDeviceKind(self: Qwen3Model): DeviceKind =
+  self.device
+
 proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
   ## Load Qwen3 model — no quantization knowledge, all dispatched via
   ## deserialization.nim and QuantLoaderRegistry.
@@ -213,7 +217,7 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     layers[i] = TransformerBlock.init(i, attn_norm, attn, mlp_norm, mlp)
 
   let norm = RmsNorm.load(weightsSt, cfgJson, "model.norm", device)
-  let lmHead = LMHead.initTied(embedTokens)
+  let lmHead = LMHead.load(weightsSt, cfgJson, embedTokens, device)
   let tokenizerPath = modelPath / "tokenizer.json"
   let tokenizer = loadHFTokenizer(tokenizerPath)
   result = Qwen3Model(
@@ -223,7 +227,8 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     lmHead: lmHead,
     config: config,
     rotary: rotary,
-    tokenizer: tokenizer
+    tokenizer: tokenizer,
+    device: device
   )
 
 proc loadQwen3Model*(modelPath: string, device = kCPU): Model =
