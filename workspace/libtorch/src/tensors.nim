@@ -219,6 +219,9 @@ wrapLibtorch:
   func empty*(size: varargs[int], device: DeviceKind): Tensor
   func empty*(size: varargs[int], options: TensorOptions): Tensor
 
+  # empty_like
+  func empty_like*(a: Tensor): Tensor
+
   # zeros
   func zeros*(size: varargs[int]): Tensor
   func zeros*(size: varargs[int], T: typedesc[SomeTorchType]): Tensor

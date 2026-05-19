@@ -184,7 +184,7 @@ proc ropeByPositions*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (
   ##   Result is stored in InferenceContext via `ctx.setRopeForPositions(rotary)`.
 
   # Handle 1D or 2D position_ids
-  var pos_ids = position_ids
+  var pos_ids = position_ids.to(self.cos_cache.deviceType())
   if pos_ids.dim == 2:
     # Take first batch item (positions same for all batch items)
     pos_ids = pos_ids[0, _]

@@ -52,6 +52,8 @@ proc forward*(self: Embedding, input_ids: Tensor): Tensor =
   ##
   ## Computes:
   ##   embeddings = weight.index_select(0, input_ids.flatten()).reshape(input_ids.shape + (hidden_size,))
+  # Ensure input_ids is on the same device as the weight tensor
+  let input_ids = input_ids.to(self.weight.deviceType())
   if self.weight.numel() == 0:
     raise newException(ValueError, "[ttt] Internal Error: Embedding weight tensor is empty")
 

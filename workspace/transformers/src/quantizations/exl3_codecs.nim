@@ -18,6 +18,7 @@ import
   workspace/safetensors,
   workspace/libtorch as F,
   ../layers/linear,
+  ../layers/lmhead,
   ./all_interfaces,
   ./exl3
 
@@ -60,9 +61,34 @@ proc loadExl3Linear(
 
   Linear.init(
     weight = w,
-    bias = none(Tensor),
+    bias,
     suh,
-    svh,
+    svh
+  )
+
+# ─── LM Head loader (EXL3-quantized) ──────────────────────────
+
+proc loadExl3LmHead*(
+    st: Safetensor, device: DeviceKind
+): LMHead =
+  ## Load EXL3-quantized lm_head from safetensors.
+  ## lm_head is huge ([1024, 151936]), reconstruct on CPU to avoid OOM on GPU.
+  ## Result weight goes to the requested device.
+  let trellis = st.getTensorOwned("lm_head.trellis", kCPU)
+  let suh = st.getTensorOwned("lm_head.suh", kCPU).to(kFloat16)
+  let svh = st.getTensorOwned("lm_head.svh", kCPU).to(kFloat16)
+  let K = derive_K(trellis)
+  let has_mcg = st.tensors.hasKey("lm_head.mcg")
+  let has_mul1 = st.tensors.hasKey("lm_head.mul1")
+  let cb = derive_cb(has_mcg, has_mul1)
+  let in_f = suh.size(0)
+  let out_f = svh.size(0)
+
+  let w = exl3_reconstruct(trellis, K, cb, in_f, out_f).contiguous()
+  LMHead.init(
+    weight = w.to(device),
+    suh = suh.to(device),
+    svh = svh.to(device),
   )
 
 # ─── RMSNorm loader (EXL3: cast to float16) ──────────────────
@@ -86,5 +112,6 @@ static:
     linear: loadExl3Linear,
     rmsNorm: loadExl3RmsNorm,
     embedding: loadExl3Embedding,
+    lmHead: loadExl3LmHead,
     activationDtype: kFloat16,
   )
