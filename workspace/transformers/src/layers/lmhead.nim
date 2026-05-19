@@ -9,9 +9,11 @@ import
   std/importutils,
   std/options,
   workspace/libtorch as F,
-  workspace/positron/src/hadamard_transforms,
+  workspace/positron,
   ./embedding,
   ../quantizations/datatypes
+when defined(cuda):
+  import workspace/libpositron_cuda
 
 {.experimental: "callOperator".}
 
@@ -41,6 +43,18 @@ type
       suh: Tensor    # [in_features] float16 — Hadamard input scale (EXL3 only)
       svh: Tensor    # [out_features] float16 — Hadamard output scale (EXL3 only)
 
+
+proc init*(_: type LMHead, weight: Tensor, suh, svh: Tensor, bias = none(Tensor)): LMHead =
+  ## Creates an LMHead with EXL3-quantized weights.
+  ## Weight is [in_features, out_features] (non-transposed, for F.matmul/hgemm layout).
+  LMHead(
+    quant_format: qExl3,
+    tied: false,
+    weight: weight,
+    suh: suh,
+    svh: svh,
+    bias: bias,
+  )
 
 func init*(_: type LMHead, weight: Tensor, bias = none(Tensor)): LMHead =
   ## Creates an LMHead with explicit weights.
@@ -104,9 +118,28 @@ proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
         F.linear(hidden_states, weight, self.bias.get())
       else:
         F.linear(hidden_states, weight)
-  of qEXL3:
-    # TODO: EXL3-quantized lm_head (lm_head has its own trellis)
-    raise newException(ValueError, "[ttt] EXL3 lm_head not yet implemented")
+  of qExl3:
+    # EXL3 operates in float16
+    when defined(cuda):
+      if hidden_states.deviceType() == kCuda:
+        # GPU path: in-register warp-shuffle CUDA kernel (no alloc storm)
+        let xf16 = hidden_states.to(kFloat16)
+        let xh = hadamard_rotate_128_cuda(xf16, self.suh, nil, INV_SQRT_128, pre_scale=true)
+        result = F.matmul(xh, self.weight)
+        let yh = hadamard_rotate_128_cuda(result, nil, self.svh, INV_SQRT_128, pre_scale=false)
+        result = yh * self.svh
+        if self.bias.isSome:
+          result += self.bias.unsafeGet()
+        return
+    # CPU fallback: portable tensor-op FWHT
+    let xf16 = hidden_states.to(kFloat16)
+    let xh = hadamard_rotate_128(xf16, self.suh, INV_SQRT_128, pre_scale=true)
+    result = F.matmul(xh, self.weight)
+    let yh = hadamard_rotate_128(result, nil, INV_SQRT_128, pre_scale=false)
+    result = yh * self.svh
+    if self.bias.isSome:
+      result += self.bias.unsafeGet()
+
 
 template `()`*(layer: LMHead, x: Tensor): untyped =
   forward(layer, x)

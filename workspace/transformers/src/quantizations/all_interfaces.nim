@@ -17,6 +17,7 @@ import
   workspace/safetensors,
   workspace/libtorch,
   ../layers/linear,
+  ../layers/lmhead,
   ../layers/norm,
   ../layers/embedding,
   ./datatypes
@@ -28,6 +29,7 @@ type
     linear*: proc(st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind): Linear {.nimcall.}
     rmsNorm*: proc(st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind): Tensor {.nimcall.}
     embedding*: proc(st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind): Tensor {.nimcall.}
+    lmHead*: proc(st: Safetensor, device: DeviceKind): LMHead {.nimcall.}
     activationDtype*: ScalarKind  ## Activation dtype for this quant format
 
 var QuantLoaderRegistry* {.compileTime.}: Table[QuantFormatKind, QuantLoaders]

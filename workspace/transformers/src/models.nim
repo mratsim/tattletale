@@ -72,10 +72,10 @@ proc parseTorchDtype(s: string): ScalarKind =
 proc generate*(
         model: Model,
         prompt: string,
-        device: DeviceKind | Device = kCPU,
         temp = 1.0f,
         maxTokens = 200): string =
   let cfg = model.getConfig()
+  let device = model.getDeviceKind()
   var orch = init(Orchestrator, cfg.num_hidden_layers)
   defer: orch.endSequence()
 
@@ -89,7 +89,7 @@ proc generate*(
                      cfg.head_dim, dtype, device, startPos)
 
   # === PREFILL: forward on full prompt ===
-  let inputIds = F.toTensor([ids])
+  let inputIds = F.toTensor([ids]).to(device)
   let logits = model.forward(orch.active_context, inputIds)
   let lastLogits = logits.narrow(1, startPos - 1, 1).squeeze(1)
   var nextToken = sample(lastLogits, temp)
@@ -101,7 +101,7 @@ proc generate*(
     orch.decodeStep(ids.len - 1, device)
 
     # Forward on single token: [1, 1]
-    let singleToken = F.toTensor([[nextToken]])
+    let singleToken = F.toTensor([[nextToken]]).to(device)
     let stepLogits = model.forward(orch.active_context, singleToken)
 
     # Sample next token from [1, 1, vocab] -> [vocab]

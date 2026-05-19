@@ -72,3 +72,26 @@ proc load*(_: type Embedding, st: Safetensor, cfg: JsonNode, prefix: string, dev
   if loader == nil:
     raise newException(ValueError, "[ttt] No embedding loader for " & $quant)
   loader(st, prefix, cfg, device)
+
+# ─── LMHead ──────────────────────────────────────────────────────────
+
+proc load*(_: type LMHead, st: Safetensor, cfg: JsonNode, embedTokens: Embedding, device = kCPU): LMHead =
+  ## Load LMHead from safetensors, dispatching to the right codec.
+  ## Codec returns nil when weight is tied — falls back to initTied.
+  let quant = detectQuantization(cfg)
+  let loader = QuantLoaderRegistry[quant].lmHead
+  if loader.isNil():
+    # 1. Check if misconfigured coded
+    raise newException(ValueError, "[ttt] No LMHead loader for " & $quant)
+  let lmHead = loader(st, device)
+  if lmHead.isNil():
+    # 2. Check for tied embeddings
+    #
+    # The flow is a bit strange due to tied_embeddings
+    # we want to isolate models from quantization peculiarities
+    # but LMHead and Embeddings can share weight
+    # but even if mentioned that they share weights, they might be quantized differently
+    # and so are not shareable
+    LMHead.initTied(embedTokens)
+  else:
+    return lmHead

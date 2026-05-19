@@ -17,6 +17,7 @@ import
   workspace/safetensors,
   workspace/libtorch,
   ../layers/all_reexports,
+  ../layers/all_reexports,
   ./all_interfaces
 
 # ─── Linear ─────────────────────────────────────────────────────────────
@@ -45,6 +46,20 @@ proc loadUnquantEmbedding(
 ): Tensor =
   st.getTensorOwned(prefix & ".weight", device)
 
+
+# ─── LMHead ────────────────────────────────────────────────────────────
+
+proc loadUnquantLmHead(
+    st: Safetensor, device: DeviceKind
+): LMHead =
+  ## Load unquantized lm_head from safetensors.
+  ## Returns nil when weight-tied (no explicit lm_head.weight).
+  if st.tensors.hasKey("lm_head.weight"):
+    let weight = st.getTensorOwned("lm_head.weight", device)
+    LMHead.init(weight)
+  else:
+    nil
+    
 # ─── Registration ───────────────────────────────────────────────────────
 
 static:
@@ -52,5 +67,6 @@ static:
     linear: loadUnquantLinear,
     rmsNorm: loadUnquantRmsNorm,
     embedding: loadUnquantEmbedding,
+    lmHead: loadUnquantLmHead,
     activationDtype: kBFloat16,
   )

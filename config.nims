@@ -15,7 +15,7 @@ import std/os, std/strutils, std/strformat
 #
 # We want to be able to execute tasks even when we `cd` into subfolders
 
-const ProjectRoot = currentSourcePath.rsplit(DirSep, 1)[0]
+const ProjectRoot = currentSourcePath().parentDir()
 
 # Dependencies
 # --------------------------------------------------
@@ -42,6 +42,15 @@ task install_deps, "Install runtime dependencies":
 task install_deps_dev, "Install dev-only dependencies (zip, chronos)":
   exec "nimble install " & deps_dev.join(" ")
 
+# Build libpositron_cuda.a (CUDA kernel static library)
+# ---------------------------------------------------
+
+task make_libpositron_cuda, "Build Positron Cuda kernels in static library":
+  # Compiles make_libpositron_cuda.cu directly with nvcc.
+  # The .cu file #include's all kernel source files as a single translation unit.
+  # Caller must have nvcc on PATH (e.g. export PATH="$VENV/lib/python3.14/site-packages/nvidia/cu13/bin:$PATH")
+  exec("mkdir -p build/")
+  exec "nvcc -lib -O3 --use_fast_math --std=c++17 -o build/libpositron_cuda.a workspace/positron/make_libpositron_cuda.cu"
 
 # Utils
 # --------------------------------------------------
