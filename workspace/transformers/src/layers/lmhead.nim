@@ -71,7 +71,6 @@ func initTied*(_: type LMHead, embedding: Embedding, bias = none(Tensor)): LMHea
     quant_format: qBF16,
     tied: true,
     tied_embedding: embedding,
-    weight: none(Tensor),
     bias: bias,
   )
 

@@ -420,6 +420,8 @@ wrapLibtorch:
   func itemsize*(a: Tensor): uint
   func element_size*(a: Tensor): int
   func scalarType*(a: Tensor): ScalarKind
+  func device*(a: Tensor): Device
+  func deviceType*(a: Tensor): DeviceKind
   func get_device*(a: Tensor): int
 
   # Backend checks

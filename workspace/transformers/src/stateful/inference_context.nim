@@ -64,7 +64,7 @@ proc init*(
     batch_size: batch_size,
     kv_heads: kv_heads,
     max_seq: max_seq,
-  head_dim: head_dim
+    head_dim: head_dim
   )
 
 proc setRopeForPositions*(ctx: var InferenceContext, rotary: RotaryPositionEmbeddingRef) =

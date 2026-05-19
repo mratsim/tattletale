@@ -25,9 +25,9 @@ export datatypes
 
 type
   QuantLoaders* = object
-    linear*: proc(st: Safetensor, prefix: string, cfg: JsonNode): Linear {.nimcall.}
-    rmsNorm*: proc(st: Safetensor, prefix: string, cfg: JsonNode): Tensor {.nimcall.}
-    embedding*: proc(st: Safetensor, prefix: string, cfg: JsonNode): Tensor {.nimcall.}
+    linear*: proc(st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind): Linear {.nimcall.}
+    rmsNorm*: proc(st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind): Tensor {.nimcall.}
+    embedding*: proc(st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind): Tensor {.nimcall.}
     activationDtype*: ScalarKind  ## Activation dtype for this quant format
 
 var QuantLoaderRegistry* {.compileTime.}: Table[QuantFormatKind, QuantLoaders]

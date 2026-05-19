@@ -8,7 +8,7 @@
 ## Serialization dispatch — loads layer objects from safetensors.
 ##
 ## This is the ONLY file that bridges model loaders with quantization codecs.
-## Model loaders call `Linear.load(st, cfg, prefix)`, `RmsNorm.load(st, cfg, prefix)`,
+## Model loaders call `Linear.load(st, cfg, prefix, device)`, `RmsNorm.load(st, cfg, prefix, device)`,
 ## etc. without any knowledge of which quant format is being used.
 ##
 ## The quant format is detected from the model config.json (`cfg`).
@@ -44,31 +44,31 @@ proc activationDtype*(cfg: JsonNode): ScalarKind =
 
 # ─── Linear ─────────────────────────────────────────────────────────────
 
-proc load*(_: type Linear, st: Safetensor, cfg: JsonNode, prefix: string): Linear =
+proc load*(_: type Linear, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): Linear =
   ## Load a linear layer from safetensors, dispatching to the right codec.
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].linear
   if loader == nil:
     raise newException(ValueError, "[ttt] No linear loader for " & $quant)
-  loader(st, prefix, cfg)
+  loader(st, prefix, cfg, device)
 
 # ─── RmsNorm ───────────────────────────────────────────────────────────
 
-proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string): RmsNorm = 
+proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): RmsNorm =
   ## Load RMS norm layer from safetensors, dispatching to the right codec.
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].rmsNorm
   if loader == nil:
     raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
-  let weight = loader(st, prefix, cfg)
+  let weight = loader(st, prefix, cfg, device)
   RmsNorm.init(weight, quant, cfg["rms_norm_eps"].getFloat(1e-6))
 
 # ─── Embedding ──────────────────────────────────────────────────────────
 
-proc load*(_: type Embedding, st: Safetensor, cfg: JsonNode, prefix: string): Tensor =
+proc load*(_: type Embedding, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): Tensor =
   ## Load embedding weights from safetensors, dispatching to the right codec.
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].embedding
   if loader == nil:
     raise newException(ValueError, "[ttt] No embedding loader for " & $quant)
-  loader(st, prefix, cfg)
+  loader(st, prefix, cfg, device)

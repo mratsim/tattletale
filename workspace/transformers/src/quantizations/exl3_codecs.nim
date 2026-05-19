@@ -36,16 +36,16 @@ func derive_cb(has_mcg, has_mul1: bool): int =
 # ─── Linear projection loader ────────────────────────────────
 
 proc loadExl3Linear(
-    st: Safetensor, prefix: string, cfg: JsonNode
+    st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind
 ): Linear =
   ## Load one EXL3-quantized linear projection from safetensors.
   ## EXL3 always operates in float16 — weight, scales, activations.
-  let trellis = st.getTensorOwned(prefix & ".trellis")
-  let suh = st.getTensorOwned(prefix & ".suh").to(kFloat16)
-  let svh = st.getTensorOwned(prefix & ".svh").to(kFloat16)
+  let trellis = st.getTensorOwned(prefix & ".trellis", device)
+  let suh = st.getTensorOwned(prefix & ".suh", device).to(kFloat16)
+  let svh = st.getTensorOwned(prefix & ".svh", device).to(kFloat16)
   let bias =
     if st.tensors.hasKey(prefix & ".bias"):
-      some(st.getTensorOwned(prefix & ".bias"))
+      some(st.getTensorOwned(prefix & ".bias", device))
     else:
       none(F.Tensor)
 
@@ -68,16 +68,16 @@ proc loadExl3Linear(
 # ─── RMSNorm loader (EXL3: cast to float16) ──────────────────
 
 proc loadExl3RmsNorm(
-    st: Safetensor, prefix: string, cfg: JsonNode
+    st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind
 ): Tensor =
-  st.getTensorOwned(prefix & ".weight").to(kFloat16)
+  st.getTensorOwned(prefix & ".weight", device).to(kFloat16)
 
 # ─── Embedding loader (EXL3: cast to float16) ────────────────
 
 proc loadExl3Embedding(
-    st: Safetensor, prefix: string, cfg: JsonNode
+    st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind
 ): Tensor =
-  st.getTensorOwned(prefix & ".weight").to(kFloat16)
+  st.getTensorOwned(prefix & ".weight", device).to(kFloat16)
 
 # ─── Registration ─────────────────────────────────────────────
 
