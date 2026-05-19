@@ -11,9 +11,11 @@ import
   std/options,
   std/strformat,
   std/importutils,
+  pkg/packedjson,
   workspace/libtorch as F,
   workspace/safetensors,
   workspace/transformers/src/layers,
+  workspace/transformers/src/deserialization,
   workspace/transformers/src/stateful/kvcache,
   workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/layers/attn {.all.},
@@ -57,22 +59,25 @@ proc setupAttn(): RopeGQAttention =
   var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
   defer: close(weightsMemFile)
 
+  let cfgJson = (ModelDir / "config.json").parseFile()
   var weightsSt = safetensors.load(weightsMemFile)
-  let qWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.q_proj.weight")
-  let kWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.k_proj.weight")
-  let vWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.v_proj.weight")
-  let oWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.o_proj.weight")
-  let qNormWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.q_norm.weight")
-  let kNormWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.k_norm.weight")
+
+  let qProj = Linear.load(weightsSt, cfgJson, "model.layers.8.self_attn.q_proj")
+  let kProj = Linear.load(weightsSt, cfgJson, "model.layers.8.self_attn.k_proj")
+  let vProj = Linear.load(weightsSt, cfgJson, "model.layers.8.self_attn.v_proj")
+  let oProj = Linear.load(weightsSt, cfgJson, "model.layers.8.self_attn.o_proj")
+  let qNorm = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.self_attn.q_norm")
+  let kNorm = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.self_attn.k_norm")
 
   let model = loadQwen3ModelRaw(ModelDir, kCPU)
   let rotary = model.rotary
 
   return RopeGQAttention.init(
-    8, "model.layers.8.self_attn", qWeight, kWeight, vWeight, oWeight,
-    qNormWeight, kNormWeight,
+    8, "model.layers.8.self_attn",
+    qProj, kProj, vProj, oProj,
+    qNorm, kNorm,
     model.config.num_attention_heads, model.config.num_key_value_heads,
-    model.config.head_dim, rotary, rms_norm_eps = 1e-6
+    model.config.head_dim, rotary
   )
 
 

@@ -28,9 +28,12 @@ type
     ##
     ## Return:
     ##   - Logits of shape (batch, seq, vocab_size) in same dtype as input (BF16)
-    weight: Option[Tensor]
+    case tied: bool
+    of false:
+      weight: Tensor
+    of true:
+      tied_embedding: Embedding
     bias: Option[Tensor]
-    tied_embedding: Option[Embedding]
     case quant_format*: QuantFormatKind
     of qBF16:
       discard
@@ -50,9 +53,9 @@ func init*(_: type LMHead, weight: Tensor, bias = none(Tensor)): LMHead =
   ##   LMHead with the given weight and optional bias
   LMHead(
     quant_format: qBF16,
-    weight: some(weight),
+    tied: false,
+    weight: weight,
     bias: bias,
-    tied_embedding: none(Embedding)
   )
 
 func initTied*(_: type LMHead, embedding: Embedding, bias = none(Tensor)): LMHead =
@@ -66,9 +69,10 @@ func initTied*(_: type LMHead, embedding: Embedding, bias = none(Tensor)): LMHea
   ##   LMHead with tied embedding weights
   LMHead(
     quant_format: qBF16,
+    tied: true,
+    tied_embedding: embedding,
     weight: none(Tensor),
     bias: bias,
-    tied_embedding: some(embedding)
   )
 
 proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
@@ -90,13 +94,11 @@ proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
   case self.quant_format
   of qBF16:
     let weight =
-      if self.weight.isSome:
-        self.weight.get()
-      elif self.tied_embedding.isSome():
+      if self.tied:
         privateAccess(Embedding)
-        self.tied_embedding.unsafeGet().weight
+        self.tied_embedding.weight
       else:
-        raise newException(ValueError, "[ttt] Internal Error: LMHead has no weights")
+        self.weight
 
     result =
       if self.bias.isSome():

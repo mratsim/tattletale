@@ -6,45 +6,67 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  workspace/libtorch as F
+  workspace/libtorch as F,
+  workspace/transformers/src/quantizations/datatypes {.all.}
 
 {.experimental: "callOperator".}
 
 type
   RmsNorm* = ref object
-    weight: Tensor
+    weight*: Tensor
     eps*: float
     hidden_size*: int
+    quant_format*: QuantFormatKind
 
-func init*(_: type RmsNorm, weight: Tensor, eps: float = 1e-6): RmsNorm =
+func init*(_: type RmsNorm, weight: Tensor, quant_format: QuantFormatKind = qBF16,
+           eps: float = 1e-6): RmsNorm =
   let hidden_size = weight.size(0)
-  RmsNorm(weight: weight, eps: eps, hidden_size: hidden_size)
+  RmsNorm(
+    weight: weight, eps: eps,
+    hidden_size: hidden_size,
+    quant_format: quant_format,
+  )
 
 proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
+  ## RMSNorm with FP32 intermediate.
+  ##
   ## Forward pass with float32 upcasting for normalization:
   ##   1. Converts to FP32 for numerical stability
   ##   2. Squares
   ##   3. `.sqrt().reciprocal`
-  ##      The single instruction rsqrt accumulates 0.03 abs error
-  ##   4. Converts normalized result back to input dtype
-  ##   5. Multiplies by weight in INPUT DTYPE (matches HF's Qwen3RMSNorm)
+  ##      `.square().mean().add(eps).rsqrt()` is equivalent on CPU
+  ##      (no hardware rsqrt). `sqrt().reciprocal()` is faster on CPU.
+  ##      On CUDA, a custom kernel using hardware rsqrt is used
+  ##      to match ext.rms_norm's rounding.
+  ##   4. Multiplies by weight
   ##
-  ## HF's Qwen3RMSNorm does: self.weight * hidden_states.to(input_dtype)
-  ## The weight multiplication is in the input dtype (bf16), not fp32.
+  ## The multiplication order differs by quantization format:
+  ##   qExl3: (x*w)*rstd → cast (weight-first, all FP32, matches ext.rms_norm)
+  ##   qBF16: (x*rstd).to(dtype)*w (rstd-first, matches HF Qwen3RMSNorm)
   ##
-  ## Without float32 for the normalization step itself, we accumulate errors
-  ## of ~0.03 per layer from the rsqrt approximation.
+  ## The multiplication order (weight-first vs rstd-first) is the dominant
+  ## factor in matching EXL3 vs HF fixtures (0.000244 vs 0.0 CPU diff).
+  ## FP16/BF16 intermediates are significantly worse (0.125+ diff).
   let input_dtype = hidden_state.scalarType()
   let x = hidden_state.to(kFloat32)
+  let w = self.weight.to(kFloat32)
   let variance = x.square().mean(axis = -1, keepdim = true)
-  let rstd = variance.add(Scalar(self.eps)).rsqrt()
-  let normalized = x * rstd
-  self.weight * normalized.to(input_dtype)
+  case self.quant_format
+  of qExl3:
+    # ext.rms_norm order: (x*w)*rstd, all FP32, then cast to input dtype
+    # sqrt().reciprocal() is used instead of rsqrt() because:
+    #   - On CPU, rsqrt() = sqrt().reciprocal() exactly (no HW rsqrt)
+    #   - sqrt().reciprocal() is ~25% faster on CPU (bench_rmsnorm)
+    #   - On CUDA, a custom kernel overrides this path entirely
+    let rstd = variance.add(Scalar(self.eps)).sqrt().reciprocal()
+    ((x * w) * rstd).to(input_dtype)
+  of qBF16:
+    # HF Qwen3RMSNorm order: (x*rstd).cast * w (w in input dtype)
+    let rstd = variance.add(Scalar(self.eps)).sqrt().reciprocal()
+    (x * rstd).to(input_dtype) * self.weight
+
 proc forward_with_residual(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
   ## Fused residual addition + RMSNorm.
-  # The residual addition is done in the input dtype (BF16).
-  # The RMSNorm then converts to FP32, normalizes, and multiplies by weight
-  # in the input dtype (matches HF's Qwen3RMSNorm behavior exactly).
   let new_residual = hidden_state + residual
   (self.forward(new_residual), new_residual)
 

@@ -10,6 +10,7 @@ import
   std/options,
   workspace/libtorch as F,
   workspace/transformers/src/layers/linear,
+  workspace/transformers/src/quantizations/datatypes {.all.},
   workspace/transformers/src/layers/norm,
   workspace/transformers/src/stateful/kvcache,
   workspace/transformers/src/stateful/inference_context,
@@ -129,41 +130,28 @@ template `()`*(layer: GroupedQueryAttention,
   layer.forward(q, k, v, is_causal, attn_mask, dropout_p)
 
 
-func initFromWeightsAndProjs(
+func init*(
     _: type RopeGQAttention,
     layer_idx: int,
     name: string,
     q_proj, k_proj, v_proj, o_proj: Linear,
-    q_norm_weight, k_norm_weight: Tensor,
+    q_norm, k_norm: RmsNorm,
     num_qo_head, num_kv_head, head_dim: int,
-    rotary: RotaryPositionEmbeddingRef,
-    rms_norm_eps = 1e-6'f64): RopeGQAttention =
+    rotary: RotaryPositionEmbeddingRef): RopeGQAttention =
   ## Initialize RopeGQAttention.
   ##
   ## Args:
   ##   layer_idx: Layer index (0..num_layers-1)
   ##   name: Safetensor key prefix (e.g., "model.layers.23.self_attn")
   ##   q_proj, k_proj, v_proj, o_proj: Preinitialized projections
-  ##   q_norm_weight, k_norm_weight: Q/K normalization weights
+  ##   q_norm, k_norm: Q/K normalization
   ##   num_qo_head: Number of query/output heads
   ##   num_kv_head: Number of KV heads (GQA)
   ##   head_dim: Dimension per head
   ##   rotary: RoPE module (shared across layers)
+  ##   quant_format: Quantization format of this layer (determines RMSNorm impl)
   ##   rms_norm_eps: Epsilon for Q/K norm
   let has_qk_norm = rotary.head_dim == head_dim
-  let q_norm =
-    if has_qk_norm: some(RmsNorm.init(weight = q_norm_weight, eps = rms_norm_eps))
-    else: none(RmsNorm)
-  let k_norm =
-    if has_qk_norm: some(RmsNorm.init(weight = k_norm_weight, eps = rms_norm_eps))
-    else: none(RmsNorm)
-
-  let attn = GroupedQueryAttention.init(
-    num_qo_head = num_qo_head,
-    num_kv_head = num_kv_head,
-    head_dim = head_dim
-  )
-
   RopeGQAttention(
     layer_idx: layer_idx,
     name: name,
@@ -171,67 +159,10 @@ func initFromWeightsAndProjs(
     k_proj: k_proj,
     v_proj: v_proj,
     o_proj: o_proj,
-    gqa_attn: attn,
+    gqa_attn: GroupedQueryAttention.init(num_qo_head, num_kv_head, head_dim),
     rotary: rotary,
-    q_norm: q_norm,
-    k_norm: k_norm
-  )
-
-func init*(
-    _: type RopeGQAttention,
-    layer_idx: int,
-    name: string,
-    q_weight, k_weight, v_weight, o_weight, q_norm_weight, k_norm_weight: Tensor,
-    num_qo_head, num_kv_head, head_dim: int,
-    rotary: RotaryPositionEmbeddingRef,
-    rms_norm_eps = 1e-6'f64): RopeGQAttention =
-  ## Initialize RopeGQAttention.
-  ##
-  ## Args:
-  ##   layer_idx: Layer index (0..num_layers-1)
-  ##   name: Safetensor key prefix (e.g., "model.layers.23.self_attn")
-  ##   q_weight, k_weight, v_weight, o_weight: Projection weights
-  ##   q_norm_weight, k_norm_weight: Q/K normalization weights
-  ##   num_qo_head: Number of query/output heads
-  ##   num_kv_head: Number of KV heads (GQA)
-  ##   head_dim: Dimension per head
-  ##   rotary: RoPE module (shared across layers)
-  ##   rms_norm_eps: Epsilon for Q/K norm
-  let q_proj = Linear.init(q_weight)
-  let k_proj = Linear.init(k_weight)
-  let v_proj = Linear.init(v_weight)
-  let o_proj = Linear.init(o_weight)
-  RopeGQAttention.initFromWeightsAndProjs(
-    layer_idx, name, q_proj, k_proj, v_proj, o_proj,
-    q_norm_weight, k_norm_weight,
-    num_qo_head, num_kv_head, head_dim, rotary, rms_norm_eps
-  )
-
-func init*(
-    _: type RopeGQAttention,
-    layer_idx: int,
-    name: string,
-    q_proj, k_proj, v_proj, o_proj: Linear,
-    q_norm_weight, k_norm_weight: Tensor,
-    num_qo_head, num_kv_head, head_dim: int,
-    rotary: RotaryPositionEmbeddingRef,
-    rms_norm_eps = 1e-6'f64): RopeGQAttention =
-  ## Initialize RopeGQAttention.
-  ##
-  ## Args:
-  ##   layer_idx: Layer index (0..num_layers-1)
-  ##   name: Safetensor key prefix (e.g., "model.layers.23.self_attn")
-  ##   q_proj, k_proj, v_proj, o_proj: Preinitialized projections
-  ##   q_norm_weight, k_norm_weight: Q/K normalization weights
-  ##   num_qo_head: Number of query/output heads
-  ##   num_kv_head: Number of KV heads (GQA)
-  ##   head_dim: Dimension per head
-  ##   rotary: RoPE module (shared across layers)
-  ##   rms_norm_eps: Epsilon for Q/K norm
-  RopeGQAttention.initFromWeightsAndProjs(
-    layer_idx, name, q_proj, k_proj, v_proj, o_proj,
-    q_norm_weight, k_norm_weight,
-    num_qo_head, num_kv_head, head_dim, rotary, rms_norm_eps
+    q_norm: if has_qk_norm: some(q_norm) else: none(RmsNorm),
+    k_norm: if has_qk_norm: some(k_norm) else: none(RmsNorm)
   )
 
 proc forward(

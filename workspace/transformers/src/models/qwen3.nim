@@ -18,6 +18,7 @@ import
   workspace/toktoktok,
   ../layers,
   ../deserialization,
+  ../quantizations/datatypes,
   ../stateful/inference_context,
   ./all_interfaces
 
@@ -188,45 +189,33 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     actDtype,
     device
   )
-
   for i in 0..<config.num_hidden_layers:
     let lp = "model.layers." & $i & "."
-    let inputLnWeight = RmsNorm.load(weightsSt, cfgJson, lp & "input_layernorm")
-    let postAttnWeight = RmsNorm.load(weightsSt, cfgJson, lp & "post_attention_layernorm")
-    let qNormWeight = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.q_norm")
-    let kNormWeight = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.k_norm")
-
+    let attn_norm = RmsNorm.load(weightsSt, cfgJson, lp & "input_layernorm")
+    let mlp_norm = RmsNorm.load(weightsSt, cfgJson, lp & "post_attention_layernorm")
+    let qNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.q_norm")
+    let kNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.k_norm")
     let qProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.q_proj")
     let kProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.k_proj")
     let vProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.v_proj")
     let oProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.o_proj")
-
-    let attn_norm = RmsNorm.init(inputLnWeight)
-    let attn = RopeGQAttention.init(
-      i, lp & "self_attn",
-      qProj, kProj, vProj, oProj,
-      qNormWeight, kNormWeight,
-      config.num_attention_heads, config.num_key_value_heads, config.head_dim,
-      rotary,
-      rms_norm_eps = config.rms_norm_eps
-    )
-
-    let mlp_norm = RmsNorm.init(postAttnWeight)
     let gateProj = Linear.load(weightsSt, cfgJson, lp & "mlp.gate_proj")
     let upProj = Linear.load(weightsSt, cfgJson, lp & "mlp.up_proj")
     let downProj = Linear.load(weightsSt, cfgJson, lp & "mlp.down_proj")
+    let attn = RopeGQAttention.init(
+      i, lp & "self_attn",
+      qProj, kProj, vProj, oProj,
+      qNorm, kNorm,
+      config.num_attention_heads, config.num_key_value_heads, config.head_dim,
+      rotary
+    )
     let mlp = GatedMLP.init(gateProj, upProj, downProj, kSilu)
-
     layers[i] = TransformerBlock.init(i, attn_norm, attn, mlp_norm, mlp)
 
-  let finalNormWeight = RmsNorm.load(weightsSt, cfgJson, "model.norm")
-  let norm = RmsNorm.init(finalNormWeight)
+  let norm = RmsNorm.load(weightsSt, cfgJson, "model.norm")
   let lmHead = LMHead.initTied(embedTokens)
-
   let tokenizerPath = modelPath / "tokenizer.json"
-  doAssert fileExists(tokenizerPath) # TODO - result API
   let tokenizer = loadHFTokenizer(tokenizerPath)
-
   result = Qwen3Model(
     embedTokens: embedTokens,
     layers: layers,
