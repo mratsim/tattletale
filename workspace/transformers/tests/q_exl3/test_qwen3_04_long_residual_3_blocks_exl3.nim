@@ -1,11 +1,6 @@
 ## Test Qwen3 EXL3: 3-block long residual stream chain.
 ##
 ## Chains 3 EXL3 transformer blocks sequentially vs fixtures.
-## This bridges the gap between:
-##   - 03: individual isolated blocks (passes ✅)
-##   - 05: full 28-layer chain (fails at layer 02 ❌)
-##
-## Tolerance: 1e-2 (EXL3 quantization is lossy)
 
 import
   std/memfiles,
@@ -14,8 +9,8 @@ import
   std/os,
   std/options,
   std/importutils,
-  workspace/libtorch as F,
   workspace/safetensors,
+  workspace/libtorch as F,
   workspace/transformers/src/layers,
   workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/models/qwen3 {.all.},
@@ -25,26 +20,17 @@ import
 
 privateAccess(Qwen3Model)
 privateAccess(TransformerBlock)
-privateAccess(RopeGQAttention)
 
 const
   FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-ids-inference" / "Qwen3-0.6B-EXL3-5bpw"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
   Tol = 1e-2
 
-proc loadLayerFixture(layerIdx: int): Table[string, Tensor] =
-  let fixturePath = FixtureDir / &"layer-{layerIdx:02d}.safetensor"
-  var memFile = memFiles.open(fixturePath, mode = fmRead)
-  defer: close(memFile)
-  let st = safetensors.load(memFile)
-  result = initTable[string, Tensor]()
-  for name in st.tensors.keys():
-    result[name] = st.getTensorOwned(name, kCPU)
-
 proc main() =
   runTest "Qwen3-0.6B-EXL3-5bpw: 3-block long residual chain":
     proc(): bool =
       let model = loadQwen3ModelRaw($ModelPath, kCPU)
+
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = model.config.num_key_value_heads,
@@ -52,7 +38,7 @@ proc main() =
         dtype = F.kFloat16, device = F.kCPU
       )
 
-      let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0)
+      let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0).to(kInt64)
       let x = model.embedTokens(inputIds)
       var hidden = x
       var residual: Option[Tensor] = none(Tensor)
@@ -61,30 +47,34 @@ proc main() =
       echo "================================================================="
 
       for layerIdx in 0..2:
-        let fixture = loadLayerFixture(layerIdx)
-        var layer = model.layers[layerIdx]
+        let fixturePath = FixtureDir / &"layer-{layerIdx:02d}.safetensor"
+        var memFile = memFiles.open(fixturePath, mode = fmRead)
+        defer: close(memFile)
+        let st = safetensors.load(memFile)
+        let fixtureInput = st.getTensorOwned("layer_input")
+        let fixtureOutput = st.getTensorOwned("layer_output")
 
-        # Check input
+        let layer = model.layers[layerIdx]
+
         let nimInput = if residual.isSome:
           hidden + residual.unsafeGet
         else:
           hidden
-        let inputDiff = (nimInput.to(kFloat32) - fixture["layer_input"].to(kFloat32)).abs().max().item(float)
+        let inputDiff = (nimInput.to(kFloat32) - fixtureInput.to(kFloat32)).abs().max().item(float)
         echo &"Layer {layerIdx:02d}: input_diff={inputDiff:.2e}"
 
         if inputDiff > Tol:
           raise newException(ValueError,
             &"Layer {layerIdx:02d}: input diff = {inputDiff:.6e} (tol={Tol})")
 
-        # Forward through block
         ctx.reset()
         let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64)
         ctx.position_ids = pos_ids
-        ctx.setRopeForPositions(layer.self_attn.rotary)
+        ctx.setRopeForPositions(model.rotary)
 
         let (output, newResidual) = layer(ctx, hidden, residual)
         let nimSum = output + newResidual
-        let outputDiff = (fixture["layer_output"].to(kFloat32) - nimSum.to(kFloat32)).abs().max().item(float)
+        let outputDiff = (fixtureOutput.to(kFloat32) - nimSum.to(kFloat32)).abs().max().item(float)
         echo &"  output + residual diff={outputDiff:.2e}"
 
         if outputDiff > Tol:
@@ -95,7 +85,7 @@ proc main() =
         residual = some(newResidual)
 
       echo "================================================================="
-      echo "& 3 blocks PASSED within tolerance ({Tol})"
+      echo "✓ 3 blocks PASSED within tolerance ({Tol})"
       true
 
 when isMainModule:

@@ -48,12 +48,12 @@ proc testCase(name: string) =
   defer: close(memFile)
   var st = safetensors.load(memFile)
 
-  let input = st.getTensorOwned("input").cuda()
-  let suh = st.getTensorOwned("suh").cuda()
-  let svh = st.getTensorOwned("svh").cuda()
-  let expPre = st.getTensorOwned("output_pre").cuda()
-  let expPost = st.getTensorOwned("output_post").cuda()
-  let expNone = st.getTensorOwned("output_none").cuda()
+  let input = st.getTensorOwned("input")
+  let suh = st.getTensorOwned("suh")
+  let svh = st.getTensorOwned("svh")
+  let expPre = st.getTensorOwned("output_pre")
+  let expPost = st.getTensorOwned("output_post")
+  let expNone = st.getTensorOwned("output_none")
 
   echo &"  {name}: input={input.shape}"
 
