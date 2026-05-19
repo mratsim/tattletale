@@ -7,11 +7,9 @@
 
 ## Test Qwen3-0.6B-EXL3-5bpw: token IDs to logit inference with layer intermediates
 ## checked against EXL3-specific fixtures.
-##
-## Strategy:
-## - Same structure as the FP16 test (long residual stream)
-## - EXL3 quantization is lossy, so tolerance is relaxed to 1e-2
-##   (vs 1e-5 for FP16)
+## Due to floating point associativity issue, rounding and
+## warp-shuffle reduction, the tests cannot match on CPU
+## and tests against EXL3 fixtures MUST be done with Cuda backend.
 
 import
   std/memfiles,
@@ -45,7 +43,7 @@ proc loadLayerFixture(layerIdx: int): Table[string, Tensor] =
   let st = safetensors.load(memFile)
   result = initTable[string, Tensor]()
   for name in st.tensors.keys():
-    result[name] = st.getTensorOwned(name, kCPU)
+    result[name] = st.getTensorOwned(name, kCuda)
 
 proc main() =
   runTest "Qwen3-0.6B-EXL3-5bpw: ids-to-logits — long residual stream vs EXL3 fixtures":
@@ -53,22 +51,22 @@ proc main() =
       ## Strategy:
       ## - layer_input: should match (same embedding)
       ## - layer_output + layer_residual (Nim) vs layer_output (HF): should match
-      ## - EXL3 tolerance: 1e-2 (lossy quantization vs FP16's 1e-5)
+      ## - EXL3 tolerance: 1e-4 (Must use Cuda due to RMSNorm warp-shuffle)
 
-      const tol = 1e-2
+      const tol = 1e-4
 
-      let model = loadQwen3ModelRaw($ModelPath, kCPU)
+      let model = loadQwen3ModelRaw($ModelPath, kCuda)
 
       # InferenceContext for stateful attention
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = model.config.num_key_value_heads,
         max_seq = 4096, head_dim = model.config.head_dim,
-        dtype = F.kFloat16, device = F.kCPU
+        dtype = F.kFloat16, device = F.kCuda
       )
 
       # Input tokens: "Hello, how are you?"
-      let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0)
+      let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0).to(kCuda)
 
       # Embedding pass
       let x = model.embedTokens(inputIds)
@@ -95,7 +93,7 @@ proc main() =
 
         # Prepare InferenceContext for this layer
         ctx.reset()
-        let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64)
+        let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64).to(kCuda)
         ctx.position_ids = pos_ids
         ctx.setRopeForPositions(layer.self_attn.rotary)
 
@@ -120,19 +118,20 @@ proc main() =
       let finalResidual = residual.get(hidden)
       let finalNorm = model.norm(hidden + finalResidual)
       let finalLogits = model.lmHead(finalNorm)
-      echo &"  Nim logits mean: {finalLogits.mean().item(float):.6f}"
-      echo &"  Nim logits shape: {finalLogits.shape}"
-
-      # Load EXL3 logits fixture
+      # Load EXL3 logits fixture to CPU (save GPU memory)
       let logitsFixturePath = FixtureDir / "final_logits.safetensor"
       var logitsMemFile = memFiles.open(logitsFixturePath, mode = fmRead)
       defer: close(logitsMemFile)
       let logitsSt = safetensors.load(logitsMemFile)
       let hfLogits = logitsSt.getTensorOwned("logits", kCPU)
-      echo &"  Fixture logits mean: {hfLogits.mean().item(float):.6f}"
-      echo &"  Fixture logits shape: {hfLogits.shape}"
-
-      let logitsDiff = (finalLogits.to(kFloat32) - hfLogits.to(kFloat32)).abs().max().item(float)
+      # Compare on CPU to avoid GPU OOM
+      let finalLogits_cpu = finalLogits.to(kCPU).to(kFloat32)
+      let hfLogits_cpu = hfLogits.to(kCPU).to(kFloat32)  # already CPU but no-op is fine
+      echo &"  Nim logits mean: {finalLogits_cpu.mean().item(float):.6f}"
+      echo &"  Nim logits shape: {finalLogits_cpu.shape}"
+      echo &"  Fixture logits mean: {hfLogits_cpu.mean().item(float):.6f}"
+      echo &"  Fixture logits shape: {hfLogits_cpu.shape}"
+      let logitsDiff = (finalLogits_cpu - hfLogits_cpu).abs().max().item(float)
       echo &"  max_diff: {logitsDiff:.6e}"
 
       if logitsDiff > tol:

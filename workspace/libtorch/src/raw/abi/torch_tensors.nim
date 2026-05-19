@@ -470,6 +470,8 @@ func empty*(size: IntArrayRef, device: DeviceKind): TorchTensor {.importcpp: "to
   ##
   ## The output tensor will be row major (C contiguous)
 
+func empty_like*(t: TorchTensor): TorchTensor {.importcpp: "torch::empty_like(@)".}
+
 func clone*(a: TorchTensor): TorchTensor {.importcpp: "#.clone()".}
 
 proc copyFrom*(dst: TorchTensor, src: TorchTensor) {.importcpp: "#.copy_(@)".}

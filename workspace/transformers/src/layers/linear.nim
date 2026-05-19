@@ -9,9 +9,10 @@ import
   std/math,
   std/options,
   workspace/libtorch as F,
-  workspace/positron/src/hadamard_transforms,
+  workspace/positron,
   ../quantizations/datatypes
-
+when defined(cuda):
+  import workspace/libpositron_cuda
 {.experimental: "callOperator".}
 
 type
@@ -86,10 +87,20 @@ proc forward*(self: Linear, x: Tensor): Tensor =
     # EXL3 operates in float16
     # Input Hadamard: scale(suh) BEFORE FWHT, then /sqrt(128) in fp32
     # Output Hadamard: FWHT in fp32, then /sqrt(128), then scale(svh)
+    when defined(cuda):
+      if x.deviceType() == kCuda:
+        let xf16 = x.to(kFloat16)
+        let xh = hadamard_rotate_128_cuda(xf16, self.suh, nil, INV_SQRT_128, pre_scale=true)
+        result = F.matmul(xh, self.weight)
+        let yh = hadamard_rotate_128_cuda(result, nil, self.svh, INV_SQRT_128, pre_scale=false)
+        result = yh * self.svh
+        if self.bias.isSome:
+          result += self.bias.unsafeGet()
+        return
+    # CPU fallback: portable tensor-op FWHT
     let xf16 = x.to(kFloat16)
     let xh = hadamard_rotate_128(xf16, self.suh, INV_SQRT_128, pre_scale=true)
-    # F.matmul handles ND @ 2D broadcasting (unlike F.mm which is 2D-only)
-    result = F.matmul(xh, self.weight)  # [..., in_f] @ [in_f, out_f] = [..., out_f]
+    result = F.matmul(xh, self.weight)
     let yh = hadamard_rotate_128(result, nil, INV_SQRT_128, pre_scale=false)
     result = yh * self.svh
     if self.bias.isSome:
