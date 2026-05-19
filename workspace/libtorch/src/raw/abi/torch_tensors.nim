@@ -85,7 +85,7 @@ proc cudnn_is_available*(_: type Torch): bool {.sideeffect, importcpp: "torch::c
 # libtorch/include/c10/core/Device.h
 
 type
-  DeviceIndex = int16
+  DeviceIndex = int8
 
   DeviceKind* {.importc: "c10::DeviceType", size: sizeof(int16).} = enum
     kCPU = 0
@@ -100,11 +100,12 @@ type
     kXLA = 9
     kVulkan = 10
 
-  Device* {.importc: "c10::Device", bycopy.} = object
-    kind: DeviceKind
-    index: DeviceIndex
+  Device* {.importcpp: "c10::Device", bycopy.} = object
+    kind* {.importc: "type_".}: DeviceKind
+    index* {.importc: "index_".}: DeviceIndex
 
-func init*(T: type Device, kind: DeviceKind): T {.constructor, importcpp: "torch::Device(#)".}
+# TODO: cannot initialize a device for the raw "device" method
+# func ctorDevice(kind: DeviceKind, index = -1): Device {.importcpp: "torch::Device(@)", constructor.}
 
 # Datatypes
 # -----------------------------------------------------------------------
@@ -379,6 +380,9 @@ func data_ptr*(a: TorchTensor, T: typedesc): ptr UncheckedArray[T] {.importcpp: 
 func is_alias_of*(a, b: TorchTensor): bool {.importcpp: "#.is_alias_of(#)".}
 
 func has_storage*(a: TorchTensor): bool {.importcpp: "#.has_storage()".}
+func device*(a: TorchTensor): Device {.importcpp: "#.device()".}
+func deviceType*(a: TorchTensor): DeviceKind {.importcpp: "#.device().type()".}
+  ## Workaround .device().kind hitting constructor issues
 func get_device*(a: TorchTensor): int {.importcpp: "#.get_device()".}
 func is_cuda*(a: TorchTensor): bool {.importcpp: "#.is_cuda()".}
 func is_hip*(a: TorchTensor): bool {.importcpp: "#.is_hip()".}

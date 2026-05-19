@@ -22,11 +22,11 @@ import
 # ─── Linear ─────────────────────────────────────────────────────────────
 
 proc loadUnquantLinear(
-    st: Safetensor, prefix: string, cfg: JsonNode
+    st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind
 ): Linear =
-  let w = st.getTensorOwned(prefix & ".weight")
+  let w = st.getTensorOwned(prefix & ".weight", device)
   let b = if st.tensors.hasKey(prefix & ".bias"):
-            some(st.getTensorOwned(prefix & ".bias"))
+            some(st.getTensorOwned(prefix & ".bias", device))
           else:
             none(Tensor)
   Linear.init(w, b)
@@ -34,16 +34,16 @@ proc loadUnquantLinear(
 # ─── RMSNorm ────────────────────────────────────────────────────────────
 
 proc loadUnquantRmsNorm(
-    st: Safetensor, prefix: string, cfg: JsonNode
+    st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind
 ): Tensor =
-  st.getTensorOwned(prefix & ".weight")
+  st.getTensorOwned(prefix & ".weight", device)
 
 # ─── Embedding ──────────────────────────────────────────────────────────
 
 proc loadUnquantEmbedding(
-    st: Safetensor, prefix: string, cfg: JsonNode
+    st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind
 ): Tensor =
-  st.getTensorOwned(prefix & ".weight")
+  st.getTensorOwned(prefix & ".weight", device)
 
 # ─── Registration ───────────────────────────────────────────────────────
 
