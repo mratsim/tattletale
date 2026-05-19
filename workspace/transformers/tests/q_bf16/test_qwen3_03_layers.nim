@@ -18,6 +18,7 @@ import
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
   workspace/transformers/src/layers,
+  workspace/transformers/src/deserialization,
   workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/models/qwen3 {.all.},
@@ -42,9 +43,10 @@ proc main() =
       var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
       defer: close(weightsMemFile)
 
+      let cfgJson = (ModelDir / "config.json").parseFile()
       var weightsSt = safetensors.load(weightsMemFile)
-      let inputLnWeight = weightsSt.getTensorOwned("model.layers.8.input_layernorm.weight")
-      let postAttnWeight = weightsSt.getTensorOwned("model.layers.8.post_attention_layernorm.weight")
+      let inputLn = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.input_layernorm")
+      let postAttnLn = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.post_attention_layernorm")
 
       for caseNum in 0..3:
         let fixturePath = FixtureDir / &"norm-{ModelName}-{caseNum:02d}.safetensor"
@@ -65,9 +67,9 @@ proc main() =
         let layerPath = metadata{"layer"}.getStr()
         let normLayer =
           if layerPath.endsWith("post_attention_layernorm"):
-            RmsNorm.init(postAttnWeight)
+            postAttnLn
           elif layerPath.endsWith("input_layernorm"):
-            RmsNorm.init(inputLnWeight)
+            inputLn
           else:
             raise newException(ValueError, &"Invalid layer: '{layerPath}'")
         var output = normLayer(inputHiddenStates)
@@ -138,8 +140,10 @@ proc main() =
       let kWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.k_proj.weight")
       let vWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.v_proj.weight")
       let oWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.o_proj.weight")
-      let qNormWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.q_norm.weight")
-      let kNormWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.k_norm.weight")
+
+      let cfgJson = (ModelDir / "config.json").parseFile()
+      let qNorm = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.self_attn.q_norm")
+      let kNorm = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.self_attn.k_norm")
 
       # Get RoPE from model level (shared across all layers)
       let model = loadQwen3ModelRaw(ModelDir, kCPU)
@@ -157,9 +161,10 @@ proc main() =
         batch_size = 1, kv_heads = numKvHeads,
         max_seq = 4096, head_dim = headDim,
         dtype = F.kBFloat16, device = F.kCPU)
-
-      var attn: RopeGQAttention
-      attn = RopeGQAttention.init(8, "model.layers.8.self_attn", qWeight, kWeight, vWeight, oWeight, qNormWeight, kNormWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
+      var attn = RopeGQAttention.init(8, "model.layers.8.self_attn",
+        Linear.init(qWeight), Linear.init(kWeight), Linear.init(vWeight), Linear.init(oWeight),
+        qNorm, kNorm,
+        numQoHeads, numKvHeads, headDim, rotary)
 
       for caseNum in 0..1:
         let fixturePath = FixtureDir / &"attn-{ModelName}-{caseNum:02d}.safetensor"
@@ -267,15 +272,16 @@ proc main() =
       var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
       defer: close(weightsMemFile)
 
+      let cfgJson = (ModelDir / "config.json").parseFile()
       var weightsSt = safetensors.load(weightsMemFile)
-      let inputLnWeight = weightsSt.getTensorOwned("model.layers.8.input_layernorm.weight")
-      let postAttnWeight = weightsSt.getTensorOwned("model.layers.8.post_attention_layernorm.weight")
+      let attn_norm = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.input_layernorm")
+      let mlp_norm = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.post_attention_layernorm")
+      let qNorm = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.self_attn.q_norm")
+      let kNorm = RmsNorm.load(weightsSt, cfgJson, "model.layers.8.self_attn.k_norm")
       let qWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.q_proj.weight")
       let kWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.k_proj.weight")
       let vWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.v_proj.weight")
       let oWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.o_proj.weight")
-      let qNormWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.q_norm.weight")
-      let kNormWeight = weightsSt.getTensorOwned("model.layers.8.self_attn.k_norm.weight")
       let gateWeight = weightsSt.getTensorOwned("model.layers.8.mlp.gate_proj.weight")
       let upWeight = weightsSt.getTensorOwned("model.layers.8.mlp.up_proj.weight")
       let downWeight = weightsSt.getTensorOwned("model.layers.8.mlp.down_proj.weight")
@@ -298,10 +304,11 @@ proc main() =
         dtype = F.kBFloat16, device = F.kCPU)
 
       # Initialize sublayers
-      let attn_norm = RmsNorm.init(inputLnWeight)
-      var attn = RopeGQAttention.init(8, "model.layers.8.self_attn", qWeight, kWeight, vWeight, oWeight, qNormWeight, kNormWeight, numQoHeads, numKvHeads, headDim, rotary, rms_norm_eps = 1e-6)
-      let mlp_norm = RmsNorm.init(postAttnWeight)
-      let mlp = GatedMLP.init(gateWeight, upWeight, downWeight, kSilu)
+      var attn = RopeGQAttention.init(8, "model.layers.8.self_attn",
+        Linear.init(qWeight), Linear.init(kWeight), Linear.init(vWeight), Linear.init(oWeight),
+        qNorm, kNorm,
+        numQoHeads, numKvHeads, headDim, rotary)
+      let mlp = GatedMLP.init(Linear.init(gateWeight), Linear.init(upWeight), Linear.init(downWeight), kSilu)
 
       # Create TransformerBlock
       var transformer = TransformerBlock.init(8, attn_norm, attn, mlp_norm, mlp)

@@ -16,69 +16,54 @@ import
   std/memfiles,
   std/strformat,
   std/strutils,
-  std/tables,
   std/importutils,
-  pkg/packedjson,
   workspace/safetensors,
   workspace/libtorch as F,
   workspace/libtorch/vendor/libtorch,
   workspace/transformers/src/layers,
-  workspace/transformers/src/layers/linear {.all.},
   workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/models/qwen3 {.all.},
-  workspace/transformers/src/deserialization,
-  workspace/transformers/src/quantizations/datatypes,
-  workspace/positron/src/activations,
   workspace/libtorch_testutils
 
 const
   FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-layers" / "Qwen3-0.6B-EXL3-5bpw-layer-0"
-  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw" / "model.safetensors"
-  ModelDir = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
+  ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
   ModelName = "Qwen3-0.6B-EXL3-5bpw"
 
 {.experimental: "callOperator".}
-privateAccess(Linear)
-const Tol = 1e-4
-const TolAttn = 5e-3  # SDPA (F.scaled_dot_product_attention) differs from production kernel by ~0.001 in fp16 softmax
-const TolBlock = 5e-3  # Compounds 7 linears + SDPA + RoPE + RMSNorm + SiLU; SDPA varies from production kernel
 
-proc linearToDevice(l: Linear) =
-  ## Move Linear layer tensors to CUDA.
-  l.weight = l.weight.cuda()
-  case l.quant_format
-  of qBF16:
-    if l.bias.isSome:
-      l.bias.get() = l.bias.get().cuda()
-  of qExl3:
-    l.suh = l.suh.cuda()
-    l.svh = l.svh.cuda()
-    if l.bias.isSome:
-      l.bias.get() = l.bias.get().cuda()
+privateAccess(Qwen3Model)
+privateAccess(TransformerBlock)
+privateAccess(RopeGQAttention)
+privateAccess(GatedMLP)
+
+const Tol = 1e-4
+const TolAttn = 5e-3  # SDPA differs from production kernel by ~0.001 in fp16 softmax
+const TolBlock = 5e-3  # Compounds 7 linears + SDPA + RoPE + RMSNorm + SiLU
 
 proc main() =
-  let cfgJson = (ModelDir / "config.json").parseFile()
+  # Model loaded once on CUDA — all layers already on the right device
+  let model = loadQwen3ModelRaw($ModelPath, kCPU)
 
   # ──────────────────────────────────────────────────────────────────────────
   # EXL3 Linear layer fixtures
   # ──────────────────────────────────────────────────────────────────────────
   runTest "EXL3 Linear layer fixtures":
     proc(): bool =
-      var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
-      defer: close(weightsMemFile)
-      var weightsSt = safetensors.load(weightsMemFile)
-
-      let projNames = [
-        "self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj",
-        "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj",
+      let layer = model.layers[0]
+      let projNames = @[
+        ("self_attn.q_proj", layer.self_attn.q_proj),
+        ("self_attn.k_proj", layer.self_attn.k_proj),
+        ("self_attn.v_proj", layer.self_attn.v_proj),
+        ("self_attn.o_proj", layer.self_attn.o_proj),
+        ("mlp.gate_proj", layer.mlp.gate_proj),
+        ("mlp.up_proj", layer.mlp.up_proj),
+        ("mlp.down_proj", layer.mlp.down_proj),
       ]
 
-      for projName in projNames:
+      for (projName, linear) in projNames:
         let fixturePrefix = &"linear-{projName}-{ModelName}"
-        var linear = Linear.load(weightsSt, cfgJson, "model.layers.0." & projName)
-        linearToDevice(linear)
-
         echo &"\n  {projName}: in={linear.in_features}, out={linear.out_features}, fmt={linear.quant_format}"
 
         for caseNum in 0..3:
@@ -87,10 +72,10 @@ proc main() =
 
           var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
           defer: close(fixtureMemFile)
-          var st = safetensors.load(fixtureMemFile)
+          let st = safetensors.load(fixtureMemFile)
 
-          var input = st.getTensorOwned("input").cuda()
-          var expectedOutput = st.getTensorOwned("output").cuda()
+          let input = st.getTensorOwned("input")
+          let expectedOutput = st.getTensorOwned("output")
           let output = linear(input)
 
           assertAllClose(output, expectedOutput, rtol = Tol, abstol = Tol,
@@ -99,57 +84,19 @@ proc main() =
 
       true
 
-
   # ──────────────────────────────────────────────────────────────────────────
   # EXL3 Attention layer fixtures (RopeGQAttention)
-  #
-  # Tests RopeGQAttention with InferenceContext, KV cache, and RoPE.
-  #
-  # Pattern (matches bf16 test):
-  #   1. Get RoPE from model level (shared across all layers)
-  #   2. Set position_ids on InferenceContext
-  #   3. Compute cos/sin via rotary.ropeByPositions(ctx.position_ids)
-  #   4. Verify cos/sin match fixture reference
-  #   5. Pass cos/sin to attn(ctx, x)
-  #
-  # TODO: Batch processing — currently one batch at a time
   # ──────────────────────────────────────────────────────────────────────────
   runTest "EXL3 Attention layer fixtures":
     proc(): bool =
-      var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
-      defer: close(weightsMemFile)
-      var weightsSt = safetensors.load(weightsMemFile)
-
-      let model = loadQwen3ModelRaw($ModelDir, kCUDA)
-      privateAccess(Qwen3Model)
+      let attn = model.layers[0].self_attn
       let rotary = model.rotary
-
-      let numQoHeads = model.config.num_attention_heads
-      let numKvHeads = model.config.num_key_value_heads
-      let headDim = model.config.head_dim
 
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
-        batch_size = 1, kv_heads = numKvHeads,
-        max_seq = 4096, head_dim = headDim,
-        dtype = F.kFloat16, device = F.kCUDA
-      )
-
-      let qNormWeight = RmsNorm.load(weightsSt, cfgJson, "model.layers.0.self_attn.q_norm")
-      let kNormWeight = RmsNorm.load(weightsSt, cfgJson, "model.layers.0.self_attn.k_norm")
-
-      var qProj = Linear.load(weightsSt, cfgJson, "model.layers.0.self_attn.q_proj")
-      var kProj = Linear.load(weightsSt, cfgJson, "model.layers.0.self_attn.k_proj")
-      var vProj = Linear.load(weightsSt, cfgJson, "model.layers.0.self_attn.v_proj")
-      var oProj = Linear.load(weightsSt, cfgJson, "model.layers.0.self_attn.o_proj")
-      linearToDevice(qProj); linearToDevice(kProj); linearToDevice(vProj); linearToDevice(oProj)
-
-      var attn = RopeGQAttention.init(
-        0, "model.layers.0.self_attn",
-        qProj, kProj, vProj, oProj,
-        qNormWeight.cuda(), kNormWeight.cuda(),
-        numQoHeads, numKvHeads, headDim, rotary,
-        rms_norm_eps = model.config.rms_norm_eps
+        batch_size = 1, kv_heads = model.config.num_key_value_heads,
+        max_seq = 4096, head_dim = model.config.head_dim,
+        dtype = F.kFloat16, device = F.kCPU
       )
 
       for caseNum in 0..1:
@@ -160,13 +107,13 @@ proc main() =
 
         var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
         defer: close(fixtureMemFile)
-        var st = safetensors.load(fixtureMemFile)
+        let st = safetensors.load(fixtureMemFile)
 
-        let hiddenStates = st.getTensorOwned("hidden_states").cuda()
-        let expectedOutput = st.getTensorOwned("output").cuda()
-        let hfCos = st.getTensorOwned("cos").cuda()
-        let hfSin = st.getTensorOwned("sin").cuda()
-        let hfPosIds = st.getTensorOwned("position_ids").cuda()
+        let hiddenStates = st.getTensorOwned("hidden_states")
+        let expectedOutput = st.getTensorOwned("output")
+        let hfCos = st.getTensorOwned("cos")
+        let hfSin = st.getTensorOwned("sin")
+        let hfPosIds = st.getTensorOwned("position_ids")
 
         let batch = hiddenStates.size(0)
         var outputs: seq[Tensor] = @[]
@@ -203,53 +150,15 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   runTest "EXL3 TransformerBlock fixtures":
     proc(): bool =
-      var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
-      defer: close(weightsMemFile)
-      var weightsSt = safetensors.load(weightsMemFile)
-
-      let model = loadQwen3ModelRaw($ModelDir, kCUDA)
-      privateAccess(Qwen3Model)
+      let layer = model.layers[0]
       let rotary = model.rotary
-
-      let numQoHeads = model.config.num_attention_heads
-      let numKvHeads = model.config.num_key_value_heads
-      let headDim = model.config.head_dim
 
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
-        batch_size = 1, kv_heads = numKvHeads,
-        max_seq = 4096, head_dim = headDim,
-        dtype = F.kFloat16, device = F.kCUDA
+        batch_size = 1, kv_heads = model.config.num_key_value_heads,
+        max_seq = 4096, head_dim = model.config.head_dim,
+        dtype = F.kFloat16, device = F.kCPU
       )
-
-      let inputLnWeight = RmsNorm.load(weightsSt, cfgJson, "model.layers.0.input_layernorm")
-      let postAttnWeight = RmsNorm.load(weightsSt, cfgJson, "model.layers.0.post_attention_layernorm")
-      let qNormWeight = RmsNorm.load(weightsSt, cfgJson, "model.layers.0.self_attn.q_norm")
-      let kNormWeight = RmsNorm.load(weightsSt, cfgJson, "model.layers.0.self_attn.k_norm")
-
-      var qProj = Linear.load(weightsSt, cfgJson, "model.layers.0.self_attn.q_proj")
-      var kProj = Linear.load(weightsSt, cfgJson, "model.layers.0.self_attn.k_proj")
-      var vProj = Linear.load(weightsSt, cfgJson, "model.layers.0.self_attn.v_proj")
-      var oProj = Linear.load(weightsSt, cfgJson, "model.layers.0.self_attn.o_proj")
-      linearToDevice(qProj); linearToDevice(kProj); linearToDevice(vProj); linearToDevice(oProj)
-
-      var gateProj = Linear.load(weightsSt, cfgJson, "model.layers.0.mlp.gate_proj")
-      var upProj = Linear.load(weightsSt, cfgJson, "model.layers.0.mlp.up_proj")
-      var downProj = Linear.load(weightsSt, cfgJson, "model.layers.0.mlp.down_proj")
-      linearToDevice(gateProj); linearToDevice(upProj); linearToDevice(downProj)
-
-      let attn_norm = RmsNorm.init(inputLnWeight.cuda())
-      var attn = RopeGQAttention.init(
-        0, "model.layers.0.self_attn",
-        qProj, kProj, vProj, oProj,
-        qNormWeight.cuda(), kNormWeight.cuda(),
-        numQoHeads, numKvHeads, headDim, rotary,
-        rms_norm_eps = model.config.rms_norm_eps
-      )
-      let mlp_norm = RmsNorm.init(postAttnWeight.cuda())
-      let mlp = GatedMLP.init(gateProj, upProj, downProj, kSilu)
-
-      var transformer = TransformerBlock.init(0, attn_norm, attn, mlp_norm, mlp)
 
       for caseNum in 0..3:
         let fixturePath = FixtureDir / &"transformer-block-{ModelName}-{caseNum:02d}.safetensor"
@@ -259,12 +168,12 @@ proc main() =
 
         var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
         defer: close(fixtureMemFile)
-        var st = safetensors.load(fixtureMemFile)
+        let st = safetensors.load(fixtureMemFile)
 
-        let inputHiddenStates = st.getTensorOwned("input_hidden_states").cuda()
-        let expectedOutput = st.getTensorOwned("output").cuda()
-        let expectedOutputResidual = st.getTensorOwned("output_residual").cuda()
-        let hfPosIds = st.getTensorOwned("position_ids").cuda()
+        let inputHiddenStates = st.getTensorOwned("input_hidden_states")
+        let expectedOutput = st.getTensorOwned("output")
+        let expectedOutputResidual = st.getTensorOwned("output_residual")
+        let hfPosIds = st.getTensorOwned("position_ids")
 
         let batch = inputHiddenStates.size(0)
         var outputs: seq[Tensor] = @[]
@@ -276,10 +185,10 @@ proc main() =
           ctx.position_ids = hfPosIds[b]
           ctx.setRopeForPositions(rotary)
 
-          let residualTensor = st.getTensorOwned("residual").cuda()
+          let residualTensor = st.getTensorOwned("residual")
           let residual = some(residualTensor[b].unsqueeze(0))
 
-          let (o, oRes) = transformer(ctx, x, residual)
+          let (o, oRes) = layer(ctx, x, residual)
           outputs.add(o)
           outputResiduals.add(oRes)
 
