@@ -65,7 +65,8 @@ proc funnel_shift_batch(b, a, shift: F.Tensor): F.Tensor =
 
 proc decode_codebook(words: F.Tensor, cb: int): F.Tensor =
   ## Decode uint16 words to float16 values.
-  var x = words.to(kInt64) and F.toTensor([0xFFFF'i64])  # mask to avoid sign-ext
+  let device = words.deviceType()
+  var x = words.to(kInt64) and F.toTensor([0xFFFF'i64]).to(device)  # mask to avoid sign-ext
 
   if cb == 0:
     x = x * 89226354 + 64248484
@@ -73,26 +74,26 @@ proc decode_codebook(words: F.Tensor, cb: int): F.Tensor =
     x = x * 0xCBAC1FED'i64
   elif cb == 2:
     x = x * 0x83DCD12D'i64
-    let mask8 = F.toTensor([0xFF'i64])
+    let mask8 = F.toTensor([0xFF'i64]).to(device)
     let b0 = x and mask8
     let b1 = (x shr 8  and mask8)
     let b2 = (x shr 16 and mask8)
     let b3 = (x shr 24 and mask8)
-    x = b0 + b1 + b2 + b3 + F.toTensor([0x6400'i64])
+    x = b0 + b1 + b2 + b3 + F.toTensor([0x6400'i64]).to(device)
     return x.to(kFloat16) * 0.00677'f32 + (-10.39'f32)
   # Mask to 32 bits (simulate uint32 overflow)
-  let mask32 = F.toTensor([0xFFFFFFFF'i64])
+  let mask32 = F.toTensor([0xFFFFFFFF'i64]).to(device)
   x = x and mask32
 
   # LOP3 with truth table 0x6a, SASS index reversal (inline asm):
   # PTX spec says 0x6a = a^(b&c), but inline asm passes LUT to SASS
   # which reverses the index, so 0x6a = c^(a&b) = (x & m1) ^ m2
-  let m1 = F.toTensor([0x8fff8fff'i64])
-  let m2 = F.toTensor([0x3b603b60'i64])
+  let m1 = F.toTensor([0x8fff8fff'i64]).to(device)
+  let m2 = F.toTensor([0x3b603b60'i64]).to(device)
   x = (x and m1) xor m2
 
   # Reinterpret lower/upper 16 bits as float16 and sum
-  let mask16 = F.toTensor([0xFFFF'i64])
+  let mask16 = F.toTensor([0xFFFF'i64]).to(device)
   let lo = (x and mask16).to(kInt16)
   let hi = ((x shr 16) and mask16).to(kInt16)
   result = lo.view(kFloat16) + hi.view(kFloat16)
@@ -129,6 +130,8 @@ proc shuffleTile(decoded: F.Tensor, idx: F.Tensor): F.Tensor =
 proc exl3_reconstruct*(trellis: F.Tensor, K: int, cb: int,
                   in_features, out_features: int): F.Tensor =
   ## Decode packed trellis to [in_features, out_features] float16 weight matrix.
+  let device = trellis.deviceType()
+
   let consts = compute_decode_constants(K)
   let tiles_k = trellis.size(0)
   let tiles_n = trellis.size(1)
@@ -142,12 +145,12 @@ proc exl3_reconstruct*(trellis: F.Tensor, K: int, cb: int,
   let packed = (packed_hi shl 16) or packed_lo  # [tk, tn, pw]
 
   # Expand indices: [256] -> [1, 1, 256] -> [tk, tn, 256]
-  let i0_exp = consts.i0.unsqueeze(0).unsqueeze(0).expand([tiles_k, tiles_n, tile_size])
-  let i1_exp = consts.i1.unsqueeze(0).unsqueeze(0).expand([tiles_k, tiles_n, tile_size])
-  let s0_exp = consts.s0.unsqueeze(0).unsqueeze(0).expand([tiles_k, tiles_n, tile_size])
+  let i0_exp = consts.i0.unsqueeze(0).unsqueeze(0).expand([tiles_k, tiles_n, tile_size]).to(device)
+  let i1_exp = consts.i1.unsqueeze(0).unsqueeze(0).expand([tiles_k, tiles_n, tile_size]).to(device)
+  let s0_exp = consts.s0.unsqueeze(0).unsqueeze(0).expand([tiles_k, tiles_n, tile_size]).to(device)
 
   # Batch gather a and b: [tk,tn,pw] gather [tk,tn,256] -> [tk,tn,256]
-  let mask32 = F.toTensor([0xFFFFFFFF'i64])
+  let mask32 = F.toTensor([0xFFFFFFFF'i64]).to(device)
   let a = packed.gather(2, i0_exp.to(kInt64)) and mask32
   let b = packed.gather(2, i1_exp.to(kInt64)) and mask32
 
@@ -156,13 +159,13 @@ proc exl3_reconstruct*(trellis: F.Tensor, K: int, cb: int,
   let b64 = b.to(kInt64) and mask32
   let merged = (a64 shl 32) or b64
   let words64 = merged shr s0_exp.to(kInt64)
-  let words = (words64 and F.toTensor([0xFFFF'i64])).to(kInt16)  # [tk, tn, 256]
+  let words = (words64 and F.toTensor([0xFFFF'i64]).to(device)).to(kInt16)  # [tk, tn, 256]
 
   # Codebook decode (element-wise, flatten to 1D then reshape)
   let decoded = decode_codebook(words.reshape(-1), cb).reshape(tiles_k, tiles_n, tile_size)
 
   # Tile shuffle (batched: index_select on last dim)
-  let sIdx = F.toTensor(tileShuffle)
+  let sIdx = F.toTensor(tileShuffle).to(device)
   let shuffled = F.index_select(decoded, 2, sIdx)  # [tk, tn, 256]
 
   # Reshape to weight matrix

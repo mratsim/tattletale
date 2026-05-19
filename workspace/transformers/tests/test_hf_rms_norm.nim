@@ -26,7 +26,7 @@ const
 
 proc d(name: string, a, b: Tensor): float =
   result = (a.to(kFloat32) - b.to(kFloat32)).abs().max().item(float)
-  let s = if result < 1e-6: "✓" elif result < MaxDiffTol: "⚠" else: "✗"
+  let s = if result < 1e-6: "✅" elif result < MaxDiffTol: "⚠️" else: "❌"
   echo &"  {s} {name}: max={result:.8f}"
 
 proc main() =

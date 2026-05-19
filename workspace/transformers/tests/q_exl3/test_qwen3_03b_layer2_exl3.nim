@@ -24,11 +24,11 @@ const
 proc check(name: string, actual, expected: Tensor, maxDiff: var float) =
   let d = (actual.to(kFloat32) - expected.to(kFloat32)).abs().max().item(float)
   maxDiff = max(maxDiff, d)
-  let symbol = if d < 1e-4: "✅" elif d < 0.01: "⚠️ " else: "❌"
+  let symbol = if d < 1e-4: "✅" elif d < 0.01: "⚠️" else: "❌"
   echo &"  {symbol} {name}: max|Δ|={d:.6f}"
 
 proc main() =
-  let model = loadQwen3ModelRaw($ModelPath, kCPU)
+  let model = loadQwen3ModelRaw(ModelPath, kCuda)
   let layer = model.layers[2]
 
   # Load fixture tensors on CUDA
@@ -36,7 +36,12 @@ proc main() =
   defer: close(memFile)
   let st = safetensors.load(memFile)
 
-  template load(name: string): Tensor = st.getTensorOwned(name, kCPU)
+  template load(name: string): Tensor =
+    # Due to floating point associativity issue, rounding and
+    # warp-shuffle reduction, the tests cannot match on CPU
+    # and tests against EXL3 fixtures MUST be done with Cuda backend.
+    st.getTensorOwned(name, kCPU).to(kCuda)
+
   let x = load("input_hidden_states")
   let e_ln = load("after_input_layernorm")
   let e_q = load("q_proj_out")
@@ -56,10 +61,13 @@ proc main() =
   let e_down = load("mlp_down_out")
   let e_out = load("output")
 
-  let batch = x.size(0); let seq = x.size(1); let hd = 128
+  let batch = x.size(0)
+  let S = x.size(1)
+  let hd = 128
   var maxDiff = 0.0
 
   # Step 1: input_layernorm
+  debugEcho "x cuda: ", x.is_cuda()
   let h = layer.input_layernorm(x)
   check("input_layernorm", h, e_ln, maxDiff)
 
@@ -72,9 +80,9 @@ proc main() =
   check("v_proj", v, e_v, maxDiff)
 
   # Step 3: QK norms (per-head)
-  let q_mh = q.reshape(batch, seq, 16, hd)
-  let k_mh = k.reshape(batch, seq, 8, hd)
-  let v_mh = v.reshape(batch, seq, 8, hd)
+  let q_mh = q.reshape(batch, S, 16, hd)
+  let k_mh = k.reshape(batch, S, 8, hd)
+  let v_mh = v.reshape(batch, S, 8, hd)
   let q_normed = layer.self_attn.q_norm.get()(q_mh).reshape(q.shape)
   let k_normed = layer.self_attn.k_norm.get()(k_mh).reshape(k.shape)
   check("q_norm", q_normed, e_qn, maxDiff)
@@ -84,22 +92,24 @@ proc main() =
   var ctx = InferenceContext.init(
     num_layers = 1, batch_size = 1, kv_heads = 8,
     max_seq = 4096, head_dim = hd,
-    dtype = F.kFloat16, device = F.kCPU)
+    dtype = F.kFloat16, device = F.kCuda)
   ctx.reset()
-  ctx.position_ids = arange(seq).unsqueeze(0).to(kInt64)
+  ctx.position_ids = arange(S).unsqueeze(0).to(kInt64).to(kCuda)
   ctx.setRopeForPositions(layer.self_attn.rotary)
-  let qn_mh = q_normed.reshape(batch, seq, 16, hd)
-  let kn_mh = k_normed.reshape(batch, seq, 8, hd)
+  let qn_mh = q_normed.reshape(batch, S, 16, hd)
+  let kn_mh = k_normed.reshape(batch, S, 8, hd)
   let (q_rot, k_rot) = layer.self_attn.rotary.applyRope(qn_mh, kn_mh, ctx.cos, ctx.sin)
-  check("rope_q", q_rot.reshape(batch, seq, -1), e_rq, maxDiff)
-  check("rope_k", k_rot.reshape(batch, seq, -1), e_rk, maxDiff)
+  check("rope_q", q_rot.reshape(batch, S, -1), e_rq, maxDiff)
+  check("rope_k", k_rot.reshape(batch, S, -1), e_rk, maxDiff)
 
   # Step 5: SDPA
-  let qs = q_rot.transpose(1, 2); let ks = k_rot.transpose(1, 2); let vs = v_mh.transpose(1, 2)
+  let qs = q_rot.transpose(1, 2)
+  let ks = k_rot.transpose(1, 2)
+  let vs = v_mh.transpose(1, 2)
   let attn = F.scaled_dot_product_attention(
     qs, ks, vs, attn_mask = none(Tensor), dropout_p = 0.0'f64,
     is_causal = true, scale = some(0.088388347648'f64), enable_gqa = true)
-  let attn_out = attn.transpose(1, 2).reshape(batch, seq, -1)
+  let attn_out = attn.transpose(1, 2).reshape(batch, S, -1)
   check("attn (sdpa)", attn_out, e_attn, maxDiff)
 
   # Step 6: O projection

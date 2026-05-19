@@ -9,6 +9,10 @@
 ##
 ## Runs on CUDA via LD_PRELOAD of libtorch_cuda.so.
 ## Analogous to test_qwen3_03_layers.nim (bf16) but uses EXL3-quantized weights.
+##
+## Due to floating point associativity issue, rounding and
+## warp-shuffle reduction, the tests cannot match on CPU
+## and tests against EXL3 fixtures MUST be done with Cuda backend.
 
 import
   std/options,
@@ -43,8 +47,8 @@ const TolAttn = 5e-3  # SDPA differs from production kernel by ~0.001 in fp16 so
 const TolBlock = 5e-3  # Compounds 7 linears + SDPA + RoPE + RMSNorm + SiLU
 
 proc main() =
-  # Model loaded once on CUDA — all layers already on the right device
-  let model = loadQwen3ModelRaw($ModelPath, kCPU)
+  # Model MUST be loaded on Cuda due to RMSNorm warp shuffle rounding differently from CPU
+  let model = loadQwen3ModelRaw($ModelPath, kCuda)
 
   # ──────────────────────────────────────────────────────────────────────────
   # EXL3 Linear layer fixtures
@@ -74,8 +78,8 @@ proc main() =
           defer: close(fixtureMemFile)
           let st = safetensors.load(fixtureMemFile)
 
-          let input = st.getTensorOwned("input")
-          let expectedOutput = st.getTensorOwned("output")
+          let input = st.getTensorOwned("input", kCuda)
+          let expectedOutput = st.getTensorOwned("output", kCuda)
           let output = linear(input)
 
           assertAllClose(output, expectedOutput, rtol = Tol, abstol = Tol,
@@ -96,7 +100,7 @@ proc main() =
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = model.config.num_key_value_heads,
         max_seq = 4096, head_dim = model.config.head_dim,
-        dtype = F.kFloat16, device = F.kCPU
+        dtype = F.kFloat16, device = F.kCuda
       )
 
       for caseNum in 0..1:
@@ -109,11 +113,11 @@ proc main() =
         defer: close(fixtureMemFile)
         let st = safetensors.load(fixtureMemFile)
 
-        let hiddenStates = st.getTensorOwned("hidden_states")
-        let expectedOutput = st.getTensorOwned("output")
-        let hfCos = st.getTensorOwned("cos")
-        let hfSin = st.getTensorOwned("sin")
-        let hfPosIds = st.getTensorOwned("position_ids")
+        let hiddenStates = st.getTensorOwned("hidden_states", kCuda)
+        let expectedOutput = st.getTensorOwned("output", kCuda)
+        let hfCos = st.getTensorOwned("cos", kCuda)
+        let hfSin = st.getTensorOwned("sin", kCuda)
+        let hfPosIds = st.getTensorOwned("position_ids", kCuda)
 
         let batch = hiddenStates.size(0)
         var outputs: seq[Tensor] = @[]
@@ -157,7 +161,7 @@ proc main() =
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = model.config.num_key_value_heads,
         max_seq = 4096, head_dim = model.config.head_dim,
-        dtype = F.kFloat16, device = F.kCPU
+        dtype = F.kFloat16, device = F.kCuda
       )
 
       for caseNum in 0..3:
@@ -170,10 +174,10 @@ proc main() =
         defer: close(fixtureMemFile)
         let st = safetensors.load(fixtureMemFile)
 
-        let inputHiddenStates = st.getTensorOwned("input_hidden_states")
-        let expectedOutput = st.getTensorOwned("output")
-        let expectedOutputResidual = st.getTensorOwned("output_residual")
-        let hfPosIds = st.getTensorOwned("position_ids")
+        let inputHiddenStates = st.getTensorOwned("input_hidden_states", kCuda)
+        let expectedOutput = st.getTensorOwned("output", kCuda)
+        let expectedOutputResidual = st.getTensorOwned("output_residual", kCuda)
+        let hfPosIds = st.getTensorOwned("position_ids", kCuda)
 
         let batch = inputHiddenStates.size(0)
         var outputs: seq[Tensor] = @[]
@@ -185,7 +189,7 @@ proc main() =
           ctx.position_ids = hfPosIds[b]
           ctx.setRopeForPositions(rotary)
 
-          let residualTensor = st.getTensorOwned("residual")
+          let residualTensor = st.getTensorOwned("residual", kCuda)
           let residual = some(residualTensor[b].unsqueeze(0))
 
           let (o, oRes) = layer(ctx, x, residual)

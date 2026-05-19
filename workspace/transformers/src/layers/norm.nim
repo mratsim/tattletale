@@ -58,7 +58,7 @@ proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
     #   - On CPU, rsqrt() = sqrt().reciprocal() exactly (no HW rsqrt)
     #   - sqrt().reciprocal() is ~25% faster on CPU (bench_rmsnorm)
     #   - On CUDA, a custom kernel overrides this path entirely
-    let rstd = variance.add(Scalar(self.eps)).sqrt().reciprocal()
+    let rstd = variance.add(Scalar(self.eps)).rsqrt()
     ((x * w) * rstd).to(input_dtype)
   of qBF16:
     # HF Qwen3RMSNorm order: (x*rstd).cast * w (w in input dtype)

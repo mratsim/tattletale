@@ -189,8 +189,8 @@ proc forward(
 
   # Use separate Q, K, V projections (matching HF/Qwen3)
   let q = self.q_proj(x)
-  var k = self.k_proj(x)
-  var v = self.v_proj(x)
+  let k = self.k_proj(x)
+  let v = self.v_proj(x)
 
   let batch = x.size(0)
   let seq_len = x.size(1)
