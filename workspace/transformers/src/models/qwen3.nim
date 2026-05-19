@@ -177,7 +177,7 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
   let cfgJson = (modelPath / "config.json").parseFile()
   let actDtype = activationDtype(cfgJson)
 
-  let embedWeight = Embedding.load(weightsSt, cfgJson, "model.embed_tokens")
+  let embedWeight = Embedding.load(weightsSt, cfgJson, "model.embed_tokens", device)
   let embedTokens = Embedding.init(embedWeight)
 
   var layers = newSeq[TransformerBlock](config.num_hidden_layers)
@@ -191,17 +191,17 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
   )
   for i in 0..<config.num_hidden_layers:
     let lp = "model.layers." & $i & "."
-    let attn_norm = RmsNorm.load(weightsSt, cfgJson, lp & "input_layernorm")
-    let mlp_norm = RmsNorm.load(weightsSt, cfgJson, lp & "post_attention_layernorm")
-    let qNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.q_norm")
-    let kNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.k_norm")
-    let qProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.q_proj")
-    let kProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.k_proj")
-    let vProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.v_proj")
-    let oProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.o_proj")
-    let gateProj = Linear.load(weightsSt, cfgJson, lp & "mlp.gate_proj")
-    let upProj = Linear.load(weightsSt, cfgJson, lp & "mlp.up_proj")
-    let downProj = Linear.load(weightsSt, cfgJson, lp & "mlp.down_proj")
+    let attn_norm = RmsNorm.load(weightsSt, cfgJson, lp & "input_layernorm", device)
+    let mlp_norm = RmsNorm.load(weightsSt, cfgJson, lp & "post_attention_layernorm", device)
+    let qNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.q_norm", device)
+    let kNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.k_norm", device)
+    let qProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.q_proj", device)
+    let kProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.k_proj", device)
+    let vProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.v_proj", device)
+    let oProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.o_proj", device)
+    let gateProj = Linear.load(weightsSt, cfgJson, lp & "mlp.gate_proj", device)
+    let upProj = Linear.load(weightsSt, cfgJson, lp & "mlp.up_proj", device)
+    let downProj = Linear.load(weightsSt, cfgJson, lp & "mlp.down_proj", device)
     let attn = RopeGQAttention.init(
       i, lp & "self_attn",
       qProj, kProj, vProj, oProj,
@@ -212,7 +212,7 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     let mlp = GatedMLP.init(gateProj, upProj, downProj, kSilu)
     layers[i] = TransformerBlock.init(i, attn_norm, attn, mlp_norm, mlp)
 
-  let norm = RmsNorm.load(weightsSt, cfgJson, "model.norm")
+  let norm = RmsNorm.load(weightsSt, cfgJson, "model.norm", device)
   let lmHead = LMHead.initTied(embedTokens)
   let tokenizerPath = modelPath / "tokenizer.json"
   let tokenizer = loadHFTokenizer(tokenizerPath)
