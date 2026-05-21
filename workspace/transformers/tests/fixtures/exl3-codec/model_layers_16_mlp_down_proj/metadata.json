@@ -1,0 +1,9 @@
+{
+  "K": 5,
+  "backend": "pytorch",
+  "cb": 0,
+  "in_features": 3072,
+  "layer_key": "model.layers.16.mlp.down_proj",
+  "out_features": 1024,
+  "weight_hash": "007cd80000000000"
+}
