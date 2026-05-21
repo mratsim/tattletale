@@ -190,3 +190,29 @@ torch.backends.cudnn.benchmark = False
 
 This guarantees identical fixture values across separate Python invocations on
 the same GPU architecture.
+
+---
+
+## 8.  Exponential layer sampling for codec fixtures
+
+The codec fixtures (`exl3/`) store the **full decoded FP16 weight** plus the
+quantized trellis for each linear projection.  To keep storage tractable (~1.1 GB
+for all 28 layers × 7 projections = 196 fixtures), fixtures are generated only
+for an **exponential subset** of layers:
+
+| Layer | Rationale |
+|---|---|
+| 0 | First layer — simplest residual state |
+| 1 | Second layer — immediately adjacent to first |
+| 2 | Exponential step (×2) |
+| 4 | Exponential step |
+| 8 | Exponential step |
+| 16 | Exponential step |
+| 27 | Last layer (LAYER_COUNT - 1) — accumulates most residual |
+
+This yields 7 layers × 7 projections = **49 fixtures** instead of 196, a ~75%
+storage reduction while maintaining coverage of early, middle, and late layers.
+
+The generator `gen_exl3_codec_fixtures.py` defaults to this mode.  Pass
+`--all-layers` to generate for all 28 layers (e.g. for a full verification run,
+not tracked in git), or `--layer N` for a single layer.

@@ -238,9 +238,6 @@ def generate_linear_fixtures(tensors: dict, config: dict) -> None:
                 {
                     "input": x.cpu(),
                     "output": y.cpu(),
-                    "weight_decoded": layer_info["weight"].cpu(),
-                    "suh": layer_info["suh"].cpu(),
-                    "svh": layer_info["svh"].cpu(),
                 },
             )
 

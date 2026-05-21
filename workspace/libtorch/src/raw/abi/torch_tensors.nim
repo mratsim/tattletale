@@ -350,6 +350,11 @@ func size*(a: TorchTensor, axis: int): int {.importcpp: "#.size(#)".}
 func itemsize*(a: TorchTensor): uint {.importcpp: "#.itemsize()".}
 func element_size*(a: TorchTensor): int {.importcpp: "#.element_size()".}
 
+func hash_tensor*(a: TorchTensor): uint64 {.importcpp: "(*static_cast<const uint64_t*>(#.hash_tensor().data_ptr()))".}
+  # libtorch doesn't seem to have an instantiation of uint64
+  # in its standard library so .item<uint64>() doesn't link
+  # hence we read directly from the pointer
+
 # Accessors
 # -----------------------------------------------------------------------
 
