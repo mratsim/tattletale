@@ -441,6 +441,9 @@ wrapLibtorch:
   func is_same*(a, b: Tensor): bool
   func is_alias_of*(a, b: Tensor): bool
 
+  # Integrity checks
+  func hash_tensor*(a: Tensor): uint64
+
   # #######################################################################
   #
   #                          Math Unary

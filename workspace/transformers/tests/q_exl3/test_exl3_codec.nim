@@ -22,7 +22,7 @@ import
   workspace/transformers/src/quantizations/exl3
 
 const
-  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-codec"
 
 proc runTests*() =
   # Enumerate all layer fixture dirs
@@ -40,13 +40,13 @@ proc runTests*() =
       for fixturePath in fixtureList:
         let metaJson = parseJson(readFile(fixturePath / "metadata.json"))
         let key = metaJson["layer_key"].getStr
+        let expectedHash = metaJson["weight_hash"].getStr
 
         var memFile = memFiles.open(fixturePath / "fixture.safetensors", mode = fmRead)
         defer: close(memFile)
         var st = safetensors.load(memFile)
 
         let trellis = st.getTensorOwned("trellis")
-        let expectedWeight = st.getTensorOwned("weight_decoded")
         let K = metaJson["K"].getInt
         let cb = metaJson["cb"].getInt
         let inF = metaJson["in_features"].getInt
@@ -55,16 +55,17 @@ proc runTests*() =
         # Decode packed trellis to [in_features, out_features] then transpose to [out, in]
         let weight = exl3_reconstruct(trellis, K, cb, inF, outF).t().contiguous()
 
-        if weight.allClose(expectedWeight, 0, 0):
+        let computedHash = weight.hash_tensor().toHex.toLowerAscii
+
+        if computedHash == expectedHash:
           inc passed
         else:
           inc failed
-          let diff = (weight - expectedWeight).abs().max().item(float32)
-          echo &"  ❌ {key}: max|Δ| = {diff:.6f}"
+          echo &"  ❌ {key}: hash mismatch (got {computedHash}, expected {expectedHash})"
 
       if failed > 0:
         echo &"\n  Summary: {passed}/{total} passed, {failed} failed"
-        raise newException(AssertionDefect, &"[ttt] {failed} layers failed allClose check")
+        raise newException(AssertionDefect, &"[ttt] {failed} layers failed hash check")
 
       echo &"  Summary: {passed}/{total} layers verified ✓"
       true

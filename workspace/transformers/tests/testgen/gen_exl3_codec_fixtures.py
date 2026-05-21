@@ -78,12 +78,15 @@ except ImportError:
 
 # ─── Paths ─────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # tests/
-FIXTURE_DIR = os.path.join(BASE_DIR, "fixtures", "exl3")
+FIXTURE_DIR = os.path.join(BASE_DIR, "fixtures", "exl3-codec")
 MODEL_DIR = os.path.join(BASE_DIR, "hf_models", "Qwen3-0.6B-EXL3-5bpw")
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
 FP16_MODEL_DIR = os.path.join(BASE_DIR, "hf_models", "Qwen3-0.6B")
 FP16_MODEL_PATH = os.path.join(FP16_MODEL_DIR, "model.safetensors")
 LAYER_COUNT = 28
+
+# Exponential layer subset: early, middle, late coverage at ~25% storage cost
+EXPONENTIAL_LAYERS = sorted({0, 1, 2, 4, 8, 16, LAYER_COUNT - 1})
 
 # ─── Determinism ───────────────────────────────────────────────────
 torch.backends.cudnn.deterministic = True
@@ -184,20 +187,22 @@ def generate_forward_fixture(layer_key: str, layer_entry: dict,
         else:
             print(f"  [OK] Decoders match (diff < 1e-3)")
 
-    # ── Forward pass ──
+      # ── Forward pass ──
     weight = weight_pytorch if weight_pytorch is not None else weight_prod
     y = linear_forward_reimpl_exl3(
         x, weight, suh, svh, bias, device=device
     )
 
+    # Compute integrity hash via torch.hash_tensor before any CPU transfer
+    weight_cpu = weight.cpu().contiguous()
+    weight_hash = f"{torch.hash_tensor(weight_cpu).item():016x}"
+
     return {
         "input": x.cpu().contiguous(),
         "output": y.cpu().contiguous(),
-        "weight_decoded": weight.cpu().contiguous(),
         "trellis": trellis.cpu().contiguous(),
-        "suh": suh.cpu().contiguous(),
-        "svh": svh.cpu().contiguous(),
         "bias": bias.cpu().contiguous() if bias is not None else None,
+        "weight_hash": weight_hash,
     }
 
 
@@ -205,9 +210,14 @@ def generate_all_fixtures(device: torch.device,
                           backend: str = "pytorch",
                           check: bool = False,
                           dry_run: bool = False,
-                          layer_filter: Optional[int] = None,
-                          proj_filter: Optional[str] = None):
-    """Generate fixtures for all (or filtered) EXL3 layers."""
+                          layer_filter: int | None = None,
+                          proj_filter: str | None = None,
+                          all_layers: bool = False):
+    """Generate fixtures for EXL3 layers.
+
+    By default generates only the exponential subset ({0,1,2,4,8,16,last}).
+    Pass all_layers=True or use --layer N for full/single-layer coverage.
+    """
     config = load_config()
     tensors = get_exl3_tensors(MODEL_PATH)
 
@@ -221,6 +231,8 @@ def generate_all_fixtures(device: torch.device,
             continue
         layer_idx, component, proj_name = parsed
         if layer_filter is not None and layer_idx != layer_filter:
+            continue
+        if not all_layers and layer_filter is None and layer_idx not in EXPONENTIAL_LAYERS:
             continue
         if proj_filter is not None and proj_filter not in proj_name:
             continue
@@ -267,10 +279,7 @@ def generate_all_fixtures(device: torch.device,
         for name, tensor in [
             ("input", fixtures["input"]),
             ("output", fixtures["output"]),
-            ("weight_decoded", fixtures["weight_decoded"]),
             ("trellis", fixtures["trellis"]),
-            ("suh", fixtures["suh"]),
-            ("svh", fixtures["svh"]),
         ]:
             if tensor is not None:
                 tensors_to_save[name] = tensor
@@ -280,13 +289,12 @@ def generate_all_fixtures(device: torch.device,
 
         meta = OrderedDict([
             ("layer_key", layer_key),
-            ("in_features", fixtures.get("weight_decoded").shape[1]
-             if fixtures.get("weight_decoded") is not None else 0),
-            ("out_features", fixtures.get("weight_decoded").shape[0]
-             if fixtures.get("weight_decoded") is not None else 0),
+            ("in_features", int(fixtures["input"].shape[-1])),
+            ("out_features", int(fixtures["output"].shape[-1])),
             ("K", derive_K(entry["trellis"])),
             ("cb", derive_cb(entry)),
             ("backend", backend),
+            ("weight_hash", fixtures["weight_hash"]),
         ])
         meta_path = os.path.join(layer_fixture_dir, "metadata.json")
         with open(meta_path, "w") as f:
@@ -442,6 +450,8 @@ def verify_against_fp16(device: torch.device, num_layers: int = 5):
 def main():
     parser = argparse.ArgumentParser(
         description="Generate EXL3 codec fixtures")
+    parser.add_argument("--all-layers", action="store_true",
+                        help="Generate for ALL layers (default: exponential subset)")
     parser.add_argument("--backend", choices=["pytorch", "exllamav3", "both"],
                         default="pytorch",
                         help="Which decoder backend to use")
@@ -478,6 +488,7 @@ def main():
         dry_run=args.dry_run,
         layer_filter=args.layer,
         proj_filter=args.proj,
+        all_layers=args.all_layers,
     )
 
 

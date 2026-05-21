@@ -1,0 +1,9 @@
+{
+  "K": 5,
+  "backend": "pytorch",
+  "cb": 0,
+  "in_features": 1024,
+  "layer_key": "model.layers.27.self_attn.q_proj",
+  "out_features": 2048,
+  "weight_hash": "3fc80c0000000000"
+}
