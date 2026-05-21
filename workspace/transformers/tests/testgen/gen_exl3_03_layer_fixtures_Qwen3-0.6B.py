@@ -275,8 +275,10 @@ def generate_attn_fixtures(tensors: dict, config: dict) -> None:
             print(f"  Warning: {name} not available, skipping attn fixtures")
             return
 
-    q_norm_weight = norms.get(f"{prefix}.self_attn.q_norm.weight").to(DEVICE)
-    k_norm_weight = norms.get(f"{prefix}.self_attn.k_norm.weight").to(DEVICE)
+    q_norm_weight_t = norms.get(f"{prefix}.self_attn.q_norm.weight")
+    k_norm_weight_t = norms.get(f"{prefix}.self_attn.k_norm.weight")
+    q_norm_weight = q_norm_weight_t.to(DEVICE) if q_norm_weight_t is not None else None
+    k_norm_weight = k_norm_weight_t.to(DEVICE) if k_norm_weight_t is not None else None
 
     for case_num, (batch, seq) in enumerate([(1, 1), (2, 8)]):
         print(f"  Generating attn case {case_num}: batch={batch}, seq={seq}")
@@ -383,10 +385,14 @@ def generate_block_fixtures(tensors: dict, config: dict) -> None:
             return
 
     # Norm weights on device
-    input_ln_weight = norms.get(f"{prefix}.input_layernorm.weight").to(DEVICE)
-    post_attn_ln_weight = norms.get(f"{prefix}.post_attention_layernorm.weight").to(DEVICE)
-    q_norm_weight = norms.get(f"{prefix}.self_attn.q_norm.weight").to(DEVICE)
-    k_norm_weight = norms.get(f"{prefix}.self_attn.k_norm.weight").to(DEVICE)
+    input_ln_weight_t = norms.get(f"{prefix}.input_layernorm.weight")
+    post_attn_ln_weight_t = norms.get(f"{prefix}.post_attention_layernorm.weight")
+    q_norm_weight_t = norms.get(f"{prefix}.self_attn.q_norm.weight")
+    k_norm_weight_t = norms.get(f"{prefix}.self_attn.k_norm.weight")
+    input_ln_weight = input_ln_weight_t.to(DEVICE) if input_ln_weight_t is not None else None
+    post_attn_ln_weight = post_attn_ln_weight_t.to(DEVICE) if post_attn_ln_weight_t is not None else None
+    q_norm_weight = q_norm_weight_t.to(DEVICE) if q_norm_weight_t is not None else None
+    k_norm_weight = k_norm_weight_t.to(DEVICE) if k_norm_weight_t is not None else None
 
     if input_ln_weight is None or post_attn_ln_weight is None:
         print("  Warning: norm weights not available, skipping block fixtures")

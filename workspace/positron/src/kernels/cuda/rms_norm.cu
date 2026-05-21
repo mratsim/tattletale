@@ -382,8 +382,8 @@ int pkl_rms_norm_fp16_cuda(
     int dim,
     cudaStream_t stream)
 {
+  if (rows <= 0 || dim <= 0) return -1;
   if (dim % 4 != 0) return -1;
-
   dim3 grid(rows, 1, 1);
 
   // ----------------------------------------------------------------------
