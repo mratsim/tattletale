@@ -124,19 +124,17 @@ proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
       if hidden_states.deviceType() == kCuda:
         # GPU path: in-register warp-shuffle CUDA kernel (no alloc storm)
         let xf16 = hidden_states.to(kFloat16)
-        let xh = hadamard_rotate_128_cuda(xf16, self.suh, nil, INV_SQRT_128, pre_scale=true)
+        let xh = hadamard_rotate_128_cuda(xf16, pre_scale = some(self.suh), post_scale = none(Tensor))
         result = F.matmul(xh, self.weight)
-        let yh = hadamard_rotate_128_cuda(result, nil, self.svh, INV_SQRT_128, pre_scale=false)
-        result = yh * self.svh
+        result = hadamard_rotate_128_cuda(result, pre_scale = none(Tensor), post_scale = some(self.svh))
         if self.bias.isSome:
           result += self.bias.unsafeGet()
         return
     # CPU fallback: portable tensor-op FWHT
     let xf16 = hidden_states.to(kFloat16)
-    let xh = hadamard_rotate_128(xf16, self.suh, INV_SQRT_128, pre_scale=true)
+    let xh = hadamard_rotate_128(xf16, pre_scale = some(self.suh), post_scale = none(Tensor))
     result = F.matmul(xh, self.weight)
-    let yh = hadamard_rotate_128(result, nil, INV_SQRT_128, pre_scale=false)
-    result = yh * self.svh
+    result = hadamard_rotate_128(result, pre_scale = none(Tensor), post_scale = some(self.svh))
     if self.bias.isSome:
       result += self.bias.unsafeGet()
 

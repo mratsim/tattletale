@@ -24,12 +24,12 @@
 
 import
   std/os,
+  std/options,
   std/strformat,
   std/memfiles,
   workspace/safetensors,
   workspace/libtorch as F,
-  workspace/libtorch/vendor/libtorch,
-  workspace/positron/src/hadamard_transforms,
+  workspace/positron,
   workspace/libtorch_testutils
 
 const
@@ -57,19 +57,19 @@ proc testCase(name: string) =
 
   echo &"  {name}: input={input.shape}"
 
-  # Test 1: no scale (norm=INV_SQRT_128 to match kernel's baked-in 1/sqrt(128))
-  let yNone = hadamard_rotate_128(input, nil, INV_SQRT_128, pre_scale=false)
+  # Test 1: no scale
+  let yNone = hadamard_rotate_128(input, pre_scale = none(Tensor), post_scale = none(Tensor))
   assertAllClose(yNone, expNone, rtol = Tol, abstol = Tol,
     msg = &"Hadamard [{name}] none: FWHT/√128 mismatch")
 
   # Test 2: pre_scale only (input Hadamard: suh before FWHT)
-  let yPre = hadamard_rotate_128(input, suh, INV_SQRT_128, pre_scale=true)
+  let yPre = hadamard_rotate_128(input, pre_scale = some(suh), post_scale = none(Tensor))
   assertAllClose(yPre, expPre, rtol = Tol, abstol = Tol,
     msg = &"Hadamard [{name}] pre_scale mismatch")
 
-  # Test 3: post_scale only (output Hadamard: svh after FWHT, applied externally)
-  let yPostRaw = hadamard_rotate_128(input, nil, INV_SQRT_128, pre_scale=false)
-  assertAllClose(yPostRaw * svh, expPost, rtol = Tol, abstol = Tol,
+  # Test 3: post_scale only (output Hadamard: svh after FWHT)
+  let yPost = hadamard_rotate_128(input, pre_scale = none(Tensor), post_scale = some(svh))
+  assertAllClose(yPost, expPost, rtol = Tol, abstol = Tol,
     msg = &"Hadamard [{name}] post_scale mismatch")
 
 
