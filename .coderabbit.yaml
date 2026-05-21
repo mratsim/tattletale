@@ -1,0 +1,6 @@
+reviews:
+  path_filters:
+    - "!**/*.safetensor"
+    - "!**/*.safetensors"
+    - "!**/fixtures/**"
+    - "!**/tokenizers/**"
