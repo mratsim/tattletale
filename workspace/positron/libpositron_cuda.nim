@@ -6,8 +6,11 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/os
+import std/options
 import std/strutils
 import workspace/libtorch
+
+from ./src/kernels/portable/hadamard_transforms import INV_SQRT_128
 
 # This file wraps the static lib built by make_positron_cuda
 
@@ -80,26 +83,31 @@ proc pkl_hadamard_rotate_128_cuda(
        r_scale: float32, rows, cols: int32
      ): int {.importc, cdecl, discardable.}
 
-proc hadamard_rotate_128_cuda*(x, suh, svh: Tensor, r_scale: float32, pre_scale: bool): Tensor =
-  ## Apply 128-block Walsh-Hadamard transform on CUDA
+proc hadamard_rotate_128_cuda*(
+    x: Tensor,
+    pre_scale: Option[Tensor],
+    post_scale: Option[Tensor],
+    norm = INV_SQRT_128
+  ): Tensor =
+  ## Apply 128-block Walsh-Hadamard transform on CUDA.
   ## Matches ext.had_r_128(input, output, pre_scale, post_scale, norm).
   ## x: [batch, dim] fp16 on CUDA, dim must be multiple of 128.
-  ## suh/svh: [dim] fp16 on CUDA or nil.
-  ## pre_scale: if true, suh is applied before FWHT; if false, svh is applied after.
+  ## pre_scale: optional [dim] scale applied before FWHT (fp16).
+  ## post_scale: optional [dim] scale applied after FWHT + norm (fp16).
   let x_f16 = x.to(kFloat16).contiguous()
   result = empty_like(x_f16)
   let rows = (x_f16.numel div x_f16.size(-1)).int32
   let cols = x_f16.size(-1).int32
-  let pre = if pre_scale and not suh.isNil:
-               suh.to(kFloat16).contiguous().dataPtr()
+  let pre = if pre_scale.isSome:
+               pre_scale.unsafeGet().to(kFloat16).contiguous().dataPtr()
              else:
                nil
-  let post = if not pre_scale and not svh.isNil:
-                svh.to(kFloat16).contiguous().dataPtr()
+  let post = if post_scale.isSome:
+                post_scale.unsafeGet().to(kFloat16).contiguous().dataPtr()
               else:
                 nil
   let status = pkl_hadamard_rotate_128_cuda(
     x_f16.dataPtr(), result.dataPtr(),
     pre, post,
-    r_scale, rows, cols)
+    norm, rows, cols)
   doAssert status == 0, "[ttt] hadamard_rotate_128_cuda failed"
