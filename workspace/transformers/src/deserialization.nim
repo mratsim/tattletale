@@ -26,9 +26,13 @@ import
 proc detectQuantization*(cfg: JsonNode): QuantFormatKind =
   ## Detect quantization method from parsed config.json.
   ## Future: accept `prefix` for per-layer mixed quantization.
-  if cfg.hasKey("quantization_config") and
-     cfg["quantization_config"]["quant_method"].getStr("") == "exl3":
-    qExl3
+  if cfg.hasKey("quantization_config"):
+    let qm = cfg["quantization_config"]["quant_method"].getStr("")
+    if qm == "exl3":
+      qExl3
+    else:
+      raise newException(ValueError,
+        "[ttt] Unsupported quant_method: '" & qm & "' (expected 'exl3' or no quantization_config)")
   else:
     qBF16
 
@@ -92,6 +96,6 @@ proc load*(_: type LMHead, st: Safetensor, cfg: JsonNode, embedTokens: Embedding
     # but LMHead and Embeddings can share weight
     # but even if mentioned that they share weights, they might be quantized differently
     # and so are not shareable
-    LMHead.initTied(embedTokens)
+    return LMHead.initTied(embedTokens)
   else:
     return lmHead

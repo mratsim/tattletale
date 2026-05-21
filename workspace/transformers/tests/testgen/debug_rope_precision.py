@@ -80,8 +80,10 @@ for name, key in [("q", f"{prefix}.self_attn.q_proj"), ("k", f"{prefix}.self_att
                    ("v", f"{prefix}.self_attn.v_proj"), ("o", f"{prefix}.self_attn.o_proj")]:
     lin[name] = build_linear(key, tensors[key])
 
-q_norm_w = norms.get(f"{prefix}.self_attn.q_norm.weight").to(device)
-k_norm_w = norms.get(f"{prefix}.self_attn.k_norm.weight").to(device)
+q_norm_w_t = norms.get(f"{prefix}.self_attn.q_norm.weight")
+k_norm_w_t = norms.get(f"{prefix}.self_attn.k_norm.weight")
+q_norm_w = q_norm_w_t.to(device) if q_norm_w_t is not None else None
+k_norm_w = k_norm_w_t.to(device) if k_norm_w_t is not None else None
 
 # --- Test: compare RoPE in f16 vs f32 ---
 batch, seq = 2, 8

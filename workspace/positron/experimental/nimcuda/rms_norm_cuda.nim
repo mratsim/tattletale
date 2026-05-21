@@ -112,9 +112,12 @@ proc rmsNormCuda_fp16*(
        y: pHalf, epsilon: float32,
        rows: int32, dim: int32,
        stream: cudaStream_t = nil) {.exportc: "pkl_$1".} =
+  if rows <= 0 or dim <= 0:
+    raise newException(ValueError,
+      "rmsNormCuda_fp16: expected rows > 0 and dim > 0, got rows=" & $rows & ", dim=" & $dim)
   if dim mod 4 != 0:
-    stderr.writeLine("rmsNormCuda: dim must be divisible by 4, got ", dim)
-    quit(1)
+    raise newException(ValueError,
+      "rmsNormCuda_fp16: dim must be divisible by 4, got dim=" & $dim)
   var args: array[6, pointer]
   args[0] = addr x;    args[1] = addr w
   args[2] = addr y;    args[3] = addr epsilon
@@ -124,3 +127,4 @@ proc rmsNormCuda_fp16*(
   check cudaLaunchKernel(rmsNormFp16Kernel,
     gridDim, blockDim, args[0].addr, 0.csize_t, stream)
   check cudaDeviceSynchronize()
+

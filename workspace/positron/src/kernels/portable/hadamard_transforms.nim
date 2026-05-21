@@ -1,3 +1,10 @@
+## Tattletale
+## Copyright (c) 2026 Mamy André-Ratsimbazafy
+## Licensed and distributed under either of
+##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+## at your option. This file may not be copied, modified, or distributed except according to those terms.
+
 ## EXL3 Quantization — Fast Walsh-Hadamard Transform
 ##
 ## 128-block FWHT for input/output incoherence processing.
@@ -66,6 +73,9 @@ proc hadamard_rotate_128*(
   ##   Transformed tensor.
   result = x.clone()
   let dim = x.size(-1)
+  if dim <= 0 or dim mod HADAMARD_DIM != 0:
+    raise newException(ValueError,
+      "[ttt] hadamard_rotate_128 expects last dimension to be a positive multiple of 128, got dim=" & $dim)
 
   for blk_start in countup(0, dim - 1, HADAMARD_DIM):
     var blk = result.narrow(-1, blk_start, HADAMARD_DIM)

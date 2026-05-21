@@ -7,7 +7,7 @@
 
 ## Syntactic sugar and utility helpers for Positron CUDA kernels.
 
-import ./cuda_datatypes
+import workspace/positron/experimental/platforms/cuda/cuda_datatypes
 
 # ─── Pointer type aliases ─────────────────────────────────────────
 
@@ -46,10 +46,9 @@ template `+%`*[P: ptr Half2 or ptr UncheckedArray[Half2]](p: P, offset: SomeInte
 template check*(status: cudaError_t) =
   let code = status
   if code != cudaError_t(0):
-    writeStackTrace()
-    stderr.writeLine("CUDA error: " & $cudaGetErrorString(code) &
-                     " (" & $ord(code) & ") at " & $instantiationInfo())
-    quit(1)
+    let errMsg = "CUDA error: " & $cudaGetErrorString(code) &
+                " (" & $ord(code) & ") at " & $instantiationInfo()
+    raise newException(Exception, errMsg)
 
 # ─── Override Nim magic += with C++ += (nvcc device compat) ───────
 

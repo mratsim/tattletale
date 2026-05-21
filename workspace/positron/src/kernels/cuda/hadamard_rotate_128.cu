@@ -140,6 +140,8 @@ int pkl_hadamard_rotate_128_cuda(
   dim3 block(32);
   hadamard_rotate_128_kernel<<<grid, block, 0, 0>>>(
       input, output, pre_scale, post_scale, r_scale);
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) return -1;
   return 0;
 }
 

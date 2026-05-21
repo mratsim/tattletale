@@ -74,7 +74,8 @@ proc pkl_rms_norm_fp16_cuda*(x, weight: Tensor, eps: float64): Tensor =
     eps.float32,
     (x_f16.numel div x_f16.size(-1)).int32,
     x_f16.size(-1).int32)
-  doAssert status == 0, "[ttt] Internal error when calling RMSNorm"
+  if status != 0:
+    raise newException(ValueError, "[ttt] Internal error when calling RMSNorm, status=" & $status)
 
 # ─── FWHT-128 (EXL3 Hadamard) CUDA kernel ──────────────────────
 
@@ -110,4 +111,5 @@ proc hadamard_rotate_128_cuda*(
     x_f16.dataPtr(), result.dataPtr(),
     pre, post,
     norm, rows, cols)
-  doAssert status == 0, "[ttt] hadamard_rotate_128_cuda failed"
+  if status != 0:
+    raise newException(ValueError, "[ttt] hadamard_rotate_128_cuda failed, status=" & $status)
