@@ -85,24 +85,21 @@ proc forward*(self: Linear, x: Tensor): Tensor =
         F.linear(x, self.weight)
   of qEXL3:
     # EXL3 operates in float16
-    # Input Hadamard: scale(suh) BEFORE FWHT, then /sqrt(128) in fp32
-    # Output Hadamard: FWHT in fp32, then /sqrt(128), then scale(svh)
+    # Input Hadamard: suh before FWHT; Output Hadamard: svh after FWHT
     when defined(cuda):
       if x.deviceType() == kCuda:
         let xf16 = x.to(kFloat16)
-        let xh = hadamard_rotate_128_cuda(xf16, self.suh, nil, INV_SQRT_128, pre_scale=true)
+        let xh = hadamard_rotate_128_cuda(xf16, pre_scale = some(self.suh), post_scale = none(Tensor))
         result = F.matmul(xh, self.weight)
-        let yh = hadamard_rotate_128_cuda(result, nil, self.svh, INV_SQRT_128, pre_scale=false)
-        result = yh * self.svh
+        result = hadamard_rotate_128_cuda(result, pre_scale = none(Tensor), post_scale = some(self.svh))
         if self.bias.isSome:
           result += self.bias.unsafeGet()
         return
     # CPU fallback: portable tensor-op FWHT
     let xf16 = x.to(kFloat16)
-    let xh = hadamard_rotate_128(xf16, self.suh, INV_SQRT_128, pre_scale=true)
+    let xh = hadamard_rotate_128(xf16, pre_scale = some(self.suh), post_scale = none(Tensor))
     result = F.matmul(xh, self.weight)
-    let yh = hadamard_rotate_128(result, nil, INV_SQRT_128, pre_scale=false)
-    result = yh * self.svh
+    result = hadamard_rotate_128(result, pre_scale = none(Tensor), post_scale = some(self.svh))
     if self.bias.isSome:
       result += self.bias.unsafeGet()
 

@@ -2,16 +2,17 @@
  * Tattletale — Positron FWHT-128 CUDA kernel
  *
  * Incoherence-processing Hadamard transform for EXL3 quantization.
- * Each block is one warp (32 threads), each thread processes 4 half2 values.
+ * Each block is one warp (32 threads), each thread processes 4 half values
+ * via a half4 load.
  *
- * Algorithm (matches exllamav3's hadamard_inner.cuh):
- *   1. Load 4 half2 (8 half) values per thread → 256 elements/warp.
- *   2. Optional pre-scale via __hmul2 (fp16, exact same rounding as EXL3).
+ * Matches exllamav3's had_hf_r_128_inner exactly:
+ *   1. Load half4 (4 half) per thread → 128 elements/warp.
+ *   2. Optional pre-scale via __hmul2 on two half2.
  *   3. 4-element butterfly (fp32, per-thread).
  *   4. 32-element butterfly via __shfl_xor_sync (warp shuffle).
  *   5. Convert back to fp16 with norm factor.
  *   6. Optional post-scale via __hmul2.
- *   7. Store 4 half2 values per thread.
+ *   7. Store half4 per thread.
  *
  * Grid: (rows, cols/128).  Block: (32).
  */
@@ -20,7 +21,6 @@
 #include <cuda_runtime.h>
 #include <stdint.h>
 
-// ─── Full-mask for warp shuffle ────────────────────────────────────────
 #define FULL_MASK 0xffffffff
 
 // ─── 4-element butterfly (in-register, fp32) ──────────────────────────
@@ -34,6 +34,7 @@ __device__ __forceinline__ void butterfly4(
 }
 
 // ─── 32-element warp-shuffle butterfly (fp32) ────────────────────────
+// Matches shuffle_had_f4x32 in exllamav3's hadamard_inner.cuh.
 
 __device__ __forceinline__ void shuffle_butterfly_f4x32(
     float& h0, float& h1, float& h2, float& h3, int lane_id) {
@@ -64,81 +65,63 @@ __device__ __forceinline__ void shuffle_butterfly_f4x32(
 }
 
 // ─── Main kernel (half I/O, half scales) ──────────────────────────────
+// Each thread: 4 half values (1 half4 = 2 half2).
+// 32 threads = 128 elements per block.
 
 __global__ __launch_bounds__(32) void hadamard_rotate_128_kernel(
     const half* __restrict__ input, half* __restrict__ output,
     const half* __restrict__ pre_scale, const half* __restrict__ post_scale,
     float r_scale) {
-  // Each block processes one 128-element segment.
-  // blockIdx.x = row index, blockIdx.y = 128-block index within row.
   int row = blockIdx.x;
   int blk = blockIdx.y;
-  int t   = threadIdx.x;      // 0..31 — each thread holds 4 half2 (8 half)
+  int t   = threadIdx.x;      // 0..31
 
-  // Pointer to this thread's 8 consecutive half values.
-  size_t offset = (size_t)row * gridDim.y * 128 + blk * 128 + (size_t)t * 8;
+  // Pointer to this thread's 4 consecutive half values.
+  size_t offset = (size_t)row * gridDim.y * 128 + blk * 128 + (size_t)t * 4;
   const half* in_ptr  = input  + offset;
   half*       out_ptr = output + offset;
 
-  // Load 4 half2 values as 2 half4 via vectorised loads.
+  // Load 2 half2 = 4 half values per thread.
   const half2* src = reinterpret_cast<const half2*>(in_ptr);
-  half2 v0 = src[0];
-  half2 v1 = src[1];
-  half2 v2 = src[2];
-  half2 v3 = src[3];
+  half2 vx = src[0];  // elements t*4+0, t*4+1
+  half2 vy = src[1];  // elements t*4+2, t*4+3
 
-  // Pre-scale (fp16, __hmul2 matches EXL3's __hmul2 accumulation).
+  // Pre-scale (fp16, __hmul2 matches EXL3's __hmul2).
   if (pre_scale) {
-    int sidx = blk * 32 + t;  // each thread covers 8 scale elements
-    const half2* ps = reinterpret_cast<const half2*>(pre_scale + sidx * 2);
-    v0 = __hmul2(v0, ps[0]);
-    v1 = __hmul2(v1, ps[1]);
-    v2 = __hmul2(v2, ps[2]);
-    v3 = __hmul2(v3, ps[3]);
-  }
-
-  // Convert to fp32 for butterfly.
-  float h0 = __half2float(__low2half(v0));
-  float h1 = __half2float(__high2half(v0));
-  float h2 = __half2float(__low2half(v1));
-  float h3 = __half2float(__high2half(v1));
-  float h4 = __half2float(__low2half(v2));
-  float h5 = __half2float(__high2half(v2));
-  float h6 = __half2float(__low2half(v3));
-  float h7 = __half2float(__high2half(v3));
-
-  // 4-element butterfly on each pair of 4.
-  butterfly4(h0, h1, h2, h3);
-  butterfly4(h4, h5, h6, h7);
-
-  // 32-element warp-shuffle butterfly (each thread has 8 values).
-  // Process in two rounds of 4, reusing the same shuffle kernel.
-  shuffle_butterfly_f4x32(h0, h1, h2, h3, t);
-  shuffle_butterfly_f4x32(h4, h5, h6, h7, t);
-
-  // Apply norm factor and convert back to half2.
-  // Norm is already pre-multiplied by 1/sqrt(128) in r_scale.
-  v0 = __halves2half2(h0 * r_scale, h1 * r_scale);
-  v1 = __halves2half2(h2 * r_scale, h3 * r_scale);
-  v2 = __halves2half2(h4 * r_scale, h5 * r_scale);
-  v3 = __halves2half2(h6 * r_scale, h7 * r_scale);
-
-  // Post-scale (fp16, __hmul2 matches EXL3).
-  if (post_scale) {
+    const half2* ps = reinterpret_cast<const half2*>(pre_scale);
     int sidx = blk * 32 + t;
-    const half2* ps = reinterpret_cast<const half2*>(post_scale + sidx * 2);
-    v0 = __hmul2(v0, ps[0]);
-    v1 = __hmul2(v1, ps[1]);
-    v2 = __hmul2(v2, ps[2]);
-    v3 = __hmul2(v3, ps[3]);
+    vx = __hmul2(vx, ps[sidx * 2 + 0]);
+    vy = __hmul2(vy, ps[sidx * 2 + 1]);
   }
 
-  // Store.
+  // Convert to fp32.
+  float h0 = __half2float(__low2half(vx));
+  float h1 = __half2float(__high2half(vx));
+  float h2 = __half2float(__low2half(vy));
+  float h3 = __half2float(__high2half(vy));
+
+  // 4-element butterfly (per-thread, fp32).
+  butterfly4(h0, h1, h2, h3);
+
+  // 32-element warp-shuffle butterfly.
+  shuffle_butterfly_f4x32(h0, h1, h2, h3, t);
+
+  // Apply norm factor and convert back to half2 (round-to-nearest-even).
+  vx = __floats2half2_rn(h0 * r_scale, h1 * r_scale);
+  vy = __floats2half2_rn(h2 * r_scale, h3 * r_scale);
+
+  // Post-scale (fp16).
+  if (post_scale) {
+    const half2* ps = reinterpret_cast<const half2*>(post_scale);
+    int sidx = blk * 32 + t;
+    vx = __hmul2(vx, ps[sidx * 2 + 0]);
+    vy = __hmul2(vy, ps[sidx * 2 + 1]);
+  }
+
+  // Store 2 half2 per thread.
   half2* dst = reinterpret_cast<half2*>(out_ptr);
-  dst[0] = v0;
-  dst[1] = v1;
-  dst[2] = v2;
-  dst[3] = v3;
+  dst[0] = vx;
+  dst[1] = vy;
 }
 
 // ─── Host entry point (extern "C" for Nim FFI) ────────────────────────

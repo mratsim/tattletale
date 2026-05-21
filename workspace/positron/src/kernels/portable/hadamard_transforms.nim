@@ -6,6 +6,7 @@
 ## Reference: exl3.py forward(), hadamard_inner.cuh
 
 import
+  std/options,
   std/sequtils,
   std/math,
   workspace/libtorch as F
@@ -13,7 +14,6 @@ import
 const
   HADAMARD_DIM* = 128
   INV_SQRT_128* = 0.088388347648'f32  # 1/sqrt(128)
-
 
 # ─── Core butterfly ────────────────────────────────────────────────
 
@@ -45,9 +45,12 @@ proc fwht_128(x: var F.Tensor) =
 
 # ─── Block-wise transform ──────────────────────────────────────────
 
-proc hadamard_rotate_128*(x: F.Tensor, scale: F.Tensor = nil,
-                norm: float32 = 1.0'f32,
-                pre_scale: bool = true): F.Tensor =
+proc hadamard_rotate_128*(
+    x: F.Tensor,
+    pre_scale: Option[F.Tensor],
+    post_scale: Option[F.Tensor],
+    norm = INV_SQRT_128
+  ): F.Tensor =
   ## Apply 128-block Walsh-Hadamard transform on the last dimension.
   ##
   ## Matches ``ext.had_r_128(input, output, pre_scale, post_scale, norm)``.
@@ -55,9 +58,9 @@ proc hadamard_rotate_128*(x: F.Tensor, scale: F.Tensor = nil,
   ##
   ## Args:
   ##   x: [batch, dim] where dim is a multiple of 128.
-  ##   scale: [dim] optional element-wise scale (pre_scale or post_scale).
-  ##   norm: post-transform normalization factor.
-  ##   pre_scale: If true, apply scale before FWHT; if false, after.
+  ##   pre_scale: optional [dim] element-wise scale, applied before FWHT.
+  ##   post_scale: optional [dim] element-wise scale, applied after FWHT + norm.
+  ##   norm: post-transform normalization factor (1/sqrt(128) by default).
   ##
   ## Returns:
   ##   Transformed tensor.
@@ -66,15 +69,15 @@ proc hadamard_rotate_128*(x: F.Tensor, scale: F.Tensor = nil,
 
   for blk_start in countup(0, dim - 1, HADAMARD_DIM):
     var blk = result.narrow(-1, blk_start, HADAMARD_DIM)
-    # Apply pre-scale in fp16 (matching CUDA kernel: __hmul2 in half precision)
-    if not scale.isNil and pre_scale:
-      let s = scale.narrow(0, blk_start, HADAMARD_DIM)
+    # Pre-scale in fp16 (matching CUDA kernel's __hmul2)
+    if pre_scale.isSome:
+      let s = pre_scale.unsafeGet().narrow(0, blk_start, HADAMARD_DIM)
       F.copyFrom(blk, blk * s)
     # Convert to fp32 for FWHT + norm
     var blk_f32 = blk.to(kFloat32)
     fwht_128(blk_f32)
     F.copyFrom(blk, blk_f32 * norm)
-    # Apply post-scale in fp16 (matching CUDA kernel)
-    if not scale.isNil and not pre_scale:
-      let s = scale.narrow(0, blk_start, HADAMARD_DIM)
+    # Post-scale in fp16 (matching CUDA kernel's __hmul2)
+    if post_scale.isSome:
+      let s = post_scale.unsafeGet().narrow(0, blk_start, HADAMARD_DIM)
       F.copyFrom(blk, blk * s)
