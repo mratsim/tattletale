@@ -31,6 +31,8 @@ proc runTests*() =
     fixtureList.add(f)
   fixtureList.sort()
   let total = fixtureList.len
+  if total == 0:
+    raise newException(AssertionDefect, "[ttt] No EXL3 codec fixtures found at " & FixtureDir)
 
   runTest &"EXL3 decoder: {total} layers (K=5, cb=0) match production CUDA kernel":
     proc(): bool =

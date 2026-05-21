@@ -7,7 +7,7 @@
 
 ## Low-level CUDA runtime API bindings and device intrinsics for Positron.
 
-import ./cuda_datatypes
+import workspace/positron/experimental/platforms/cuda/cuda_datatypes
 
 # ############################################################
 #              Host-side CUDA Runtime API

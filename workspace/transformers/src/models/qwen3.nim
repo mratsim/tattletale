@@ -193,12 +193,16 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     actDtype,
     device
   )
+
   for i in 0..<config.num_hidden_layers:
+
     let lp = "model.layers." & $i & "."
+
     let attn_norm = RmsNorm.load(weightsSt, cfgJson, lp & "input_layernorm", device)
     let mlp_norm = RmsNorm.load(weightsSt, cfgJson, lp & "post_attention_layernorm", device)
     let qNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.q_norm", device)
     let kNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.k_norm", device)
+
     let qProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.q_proj", device)
     let kProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.k_proj", device)
     let vProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.v_proj", device)

@@ -119,6 +119,7 @@ proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
       else:
         F.linear(hidden_states, weight)
   of qExl3:
+    let input_dtype = hidden_states.scalarType()
     # EXL3 operates in float16
     when defined(cuda):
       if hidden_states.deviceType() == kCuda:
@@ -126,7 +127,7 @@ proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
         let xf16 = hidden_states.to(kFloat16)
         let xh = hadamard_rotate_128_cuda(xf16, pre_scale = some(self.suh), post_scale = none(Tensor))
         result = F.matmul(xh, self.weight)
-        result = hadamard_rotate_128_cuda(result, pre_scale = none(Tensor), post_scale = some(self.svh))
+        result = hadamard_rotate_128_cuda(result, pre_scale = none(Tensor), post_scale = some(self.svh)).to(input_dtype)
         if self.bias.isSome:
           result += self.bias.unsafeGet()
         return
@@ -134,7 +135,7 @@ proc forward*(self: LMHead, hidden_states: Tensor): Tensor =
     let xf16 = hidden_states.to(kFloat16)
     let xh = hadamard_rotate_128(xf16, pre_scale = some(self.suh), post_scale = none(Tensor))
     result = F.matmul(xh, self.weight)
-    result = hadamard_rotate_128(result, pre_scale = none(Tensor), post_scale = some(self.svh))
+    result = hadamard_rotate_128(result, pre_scale = none(Tensor), post_scale = some(self.svh)).to(input_dtype)
     if self.bias.isSome:
       result += self.bias.unsafeGet()
 
