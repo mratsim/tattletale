@@ -33,7 +33,7 @@ proc to*[T: Layer](layer: T, target: Device|DeviceKind|ScalarKind): T =
       dst = src.to(target)
     elif src is Option[Tensor]:
       if src.isSome():
-        dst = some(src.unsageGet().to(target))
+        dst = some(src.unsafeGet().to(target))
     elif src is seq[Tensor]|seq[Layer]:
       dst = newSeq[typeof(src)](src.len)
       for i in 0 ..< src.len:
