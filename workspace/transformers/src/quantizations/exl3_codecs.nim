@@ -17,16 +17,25 @@ import
   pkg/packedjson,
   workspace/safetensors,
   workspace/libtorch as F,
-  ../layers/linear,
-  ../layers/lmhead,
-  ./all_interfaces,
-  ./exl3
+  workspace/transformers/src/layers/linear,
+  workspace/transformers/src/layers/lmhead,
+  workspace/transformers/src/quantizations/all_interfaces,
+  workspace/transformers/src/quantizations/exl3
 
 # ─── Helpers ─────────────────────────────────────────────────
 
 func derive_K(trellis: F.Tensor): int =
   ## Derive bitrate K from trellis shape.
-  trellis.size(2) * 16 div 256
+  ## trellis must have at least 3 dimensions.
+  if trellis.dim < 3:
+    raise newException(ValueError,
+      "[ttt] derive_K: trellis must have at least 3 dimensions, got " & $trellis.dim)
+  let d2 = trellis.size(2)
+  let numerator = d2 * 16
+  if numerator mod 256 != 0:
+    raise newException(ValueError,
+      "[ttt] derive_K: trellis.size(2)*16 must be divisible by 256, got size(2)=" & $d2)
+  d2 * 16 div 256
 
 func derive_cb(has_mcg, has_mul1: bool): int =
   ## Codebook variant: 0=default, 1=MCG, 2=MUL1.

@@ -136,7 +136,7 @@ def lop3_reference(a: uint32, b: uint32, c: uint32, lut: uint8) -> uint32:
     """Bit-serial LOP3 emulation — matches GPU exactly."""
     result = uint32(0)
     for i in range(32):
-        idx = ((a >> i) & 1) << 2) | ((b >> i) & 1) << 1) | ((c >> i) & 1)
+        idx = (((a >> i) & 1) << 2) | (((b >> i) & 1) << 1) | ((c >> i) & 1)
         result |= ((lut >> idx) & 1) << i
     return result
 ```

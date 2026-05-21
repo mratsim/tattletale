@@ -97,8 +97,8 @@ template assertAllClose*(
   ## Args:
   ##   actual: The tensor produced by the test
   ##   expected: The expected tensor values
-  ##   rtol: Relative tolerance (default: 2e-2)
-  ##   abstol: Absolute tolerance (default: 2e-2)
+  ##   rtol: Relative tolerance (default: 1e-4)
+  ##   abstol: Absolute tolerance (default: 1e-4)
   ##   msg: Optional error message
 
   # Ensure computation is done only once and side-effect are done only once:
