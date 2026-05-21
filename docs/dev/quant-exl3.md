@@ -1,16 +1,27 @@
 # EXL3 Quantization Format — Technical Specification
 
-> Based on exllamav3 v0.0.32, Qwen3-0.6B-EXL3-5bpw
-> Reference files: `exl3.py`, `exl3_dq.cuh`, `codebook.cuh`, `reconstruct.cu`, `quantize.py`, `pack.cu`
+> Based on exllamav3 v0.0.32 (https://github.com/turboderp-org/exllamav3), Qwen3-0.6B-EXL3-5bpw
+> Reference files (exllamav3 root `exllamav3/`):
+> - `modules/quant/exl3.py` — LinearEXL3 forward, unpack_bf, get_weight_tensor
+> - `modules/quant/exl3_lib/quantize.py` — Quantizer, preapply_had_l/r, regularize
+> - `exllamav3_ext/quant/hadamard.cu` — `had_r_128` host wrapper
+> - `exllamav3_ext/quant/hadamard_inner.cuh` — CUDA kernel (`had_hf_r_128_inner`)
+> - `exllamav3_ext/quant/exl3_dq.cuh` — Trellis unpack + codebook decode
+> - `util/hadamard.py` — Hadamard matrix generation
+
+---
 
 ## 1. Overview
 
 EXL3 is a post-training quantization format that uses:
+
 - **Trellis Coded Quantization (TCQ)** with a bitshift trellis to encode weights
 - **Procedural codebooks** (LCG + LOP3) — no stored codebook, computed on-the-fly
 - **Incoherence processing** via random Hadamard transforms on activations
 
 A linear layer's weights are replaced by three tensors: `trellis`, `suh`, `svh`.
+
+---
 
 ## 2. Tensor Layout
 
@@ -91,7 +102,7 @@ Shape:  [in_features]
 Dtype:  float16
 ```
 
-Scale factors applied to the input activations before the Hadamard transform.
+Scale factors applied to the input activations **before** the Hadamard transform.
 Each element `suh[i]` scales input channel `i`.
 
 The suh tensor encodes:
@@ -136,6 +147,8 @@ If neither tensor exists, cb=0 is used.
 | `mul1` | cb=2 | 0x83DCD12D |
 
 Key: `mcg` and `mul1` are encoded as their **multiplier constants cast to uint32** in the safetensors file. During loading, these are checked for existence, not value.
+
+---
 
 ## 3. Procedural Codebook Decode
 
@@ -212,6 +225,8 @@ With a=x, b=0x8fff8fff, c=0x3b603b60:
 result = (x & 0x8fff8fff) | (~x & 0x3b603b60)
 ```
 
+---
+
 ## 4. Reconstruct (Full Weight Decode)
 
 The `reconstruct` kernel produces a full FP16 weight matrix from the packed trellis.
@@ -229,32 +244,34 @@ def reconstruct(trellis, in_features, out_features, K, cb):
     trellis:  [tiles_k, tiles_n, tile_packed_size]  int16
     K:        bitrate
     cb:       codebook variant (0, 1, or 2)
-    
+
     Returns:  [in_features, out_features]  float16
     """
     tiles_k = in_features // 16
     tiles_n = out_features // 16
     output = zeros(in_features, out_features, dtype=float16)
-    
+
     for tk in range(tiles_k):
         for tn in range(tiles_n):
             tile_packed = trellis[tk, tn, :]  # packed tile data
-            
+
             # Decode 256 values per tile
             for i in range(256):
                 # Extract K-bit word at position i
                 w = extract_word(tile_packed, K, i)  # returns uint16
                 # Decode to float16
                 val = decode(w, cb)  # cb0/cb1/cb2
-                
+
                 r = tk * 16 + (i // 16)   # row in weight matrix
                 c = tn * 16 + (i % 16)    # col in weight matrix
                 output[r, c] = val
-    
+
     return output
 ```
 
 Note: The **Tensor Core permutation** used in `reconstruct.cu` (`__shfl_down_sync` + shared memory scatter) is specific to the NVIDIA Tensor Core layout and is **not needed for the CPU decoder**. The CUDA kernel permutes tile values to match Tensor Core's m16n8k16 MMA format (8 warps × 8 rows × 4 cols). For CPU, values should be stored directly in row-major order.
+
+---
 
 ## 5. Inference Pipeline
 
@@ -269,38 +286,84 @@ The matmul is: `y = x @ W` where:
 
 This is the same as `y = x @ W` in linear algebra notation, NOT PyTorch's `F.linear(x, weight)` which does `x @ weight.T`.
 
-In the EXL3 forward pass:
-```python
-# Torch mode (batch > 32 or reconstruct=True):
-xh = had_r_128(x, suh, 1/sqrt(128))   # Apply input Hadamard + scaling
-w  = reconstruct(trellis)              # [in_features, out_features]
-y_ = hgemm(xh, w)                      # [batch, in_features] @ [in_features, out_features]
-y  = had_r_128(y_, svh, 1.0)          # Apply output Hadamard + scaling (no scale for svh)
+### 5.2 Two Forward Strategies
+
+EXL3 supports two mathematically equivalent forward strategies. Our implementation uses **Strategy A** (reconstruct path, matching exllamav3's batch > 32 path). Strategy B is documented for reference.
+
+#### Strategy A: Reconstruct path (what we use)
+
+Decode raw weights from trellis at load time, then apply Hadamard transforms to activations during forward:
+
+```
+input x:  [batch, in_features]
+
+# Apply input-side incoherence
+x_had = fwht_128(x * suh)            # pre_scale before FWHT
+x_had *= 0.088388347648              # 1/sqrt(128)
+
+# Reconstructed raw weights (no Hadamard pre-applied)
+w = reconstruct(trellis)             # [in_features, out_features] fp16
+
+# GEMM
+y = x_had @ w                        # fp16 matmul
+
+# Apply output-side incoherence
+y = fwht_128(y)                      # 128-block FWHT on output
+y *= 0.088388347648                  # 1/sqrt(128) normalization
+y *= svh                             # Element-wise scale
+
+if bias is not None:
+    y += bias
+
+return y
 ```
 
-### 5.2 Hadamard Transform (128×128)
+Note: `suh` is applied **before** the FWHT (as a pre-scale), `svh` is applied **after** the FWHT + norm (as a post-scale). The FWHT itself is always unnormalized; normalization is applied as a separate multiply after the transform.
 
-The Hadamard transform operates on the 128-element leading dimension for both input and output:
+#### Strategy B: Weight-fused path (exllamav3 `get_weight_tensor`)
+
+Pre-apply the Hadamard transforms into the weight tensor itself, then do a plain matmul. Used by exllamav3 for model inspection/saving:
 
 ```python
-def had_r_128(x, scale, norm_factor):
-    """
-    Apply block-wise Walsh-Hadamard transform to the last dimension of x.
-    
-    x:            [batch, dim]  float16  (dim must be multiple of 128)
-    scale:        [dim]        float16  (element-wise scale, or None)
-    norm_factor:  float                 (1/sqrt(128) for suh, 1.0 for svh)
-    """
-    for block_start in range(0, dim, 128):
-        block = x[:, block_start:block_start + 128]
-        block = fwht_128(block)       # fast Walsh-Hadamard butterfly
-        if scale is not None:
-            s = scale[block_start:block_start + 128]
-            block *= s.view(1, 128)
-        block *= norm_factor
+def get_weight_tensor(self):
+    suh = self.suh.unsqueeze(1)   # [in_features, 1]
+    svh = self.svh.unsqueeze(0)   # [1, out_features]
+    w = self.get_inner_weight_tensor()  # raw trellis decode
+
+    # Pre-apply input Hadamard + suh
+    w = preapply_had_l(w, had_k)  # (1/sqrt(128)) * H @ w  (per 128-row block)
+    w *= suh                      # element-wise input scale
+
+    # Pre-apply output Hadamard + svh
+    w = preapply_had_r(w, had_n)  # w @ H * (1/sqrt(128))  (per 128-col block)
+    w *= svh                      # element-wise output scale
+    return w
 ```
 
-The FWHT-128 butterfly in 9 stages (log2(128) = 7 steps, each step doing a radix-2 butterfly):
+Forward then becomes a plain matmul on already-Hadamarded weights:
+```python
+y = x @ get_weight_tensor()
+```
+
+**The two strategies produce identical results.** Strategy A applies `1/sqrt(128)` to the activations during forward; Strategy B bakes the same factor into the weights at load time.
+
+### 5.3 Hadamard Transform (128×128)
+
+The Hadamard transform operates on the 128-element leading dimension for both input and output.
+
+**Our implementation** (`hadamard_rotate_128` / `hadamard_rotate_128_cuda`):
+
+```
+output = FWHT(input × pre_scale) × norm × post_scale
+```
+
+Where:
+- `pre_scale`: optional [dim] element-wise scale, applied before FWHT (in fp16)
+- `FWHT`: unnormalized fast Walsh-Hadamard transform (in fp32)
+- `norm`: post-transform normalization factor
+- `post_scale`: optional [dim] element-wise scale, applied after norm (in fp16)
+
+The FWHT-128 butterfly in 7 stages (log2(128) = 7 steps):
 
 ```python
 def fwht_128(x):
@@ -318,32 +381,25 @@ def fwht_128(x):
     return x
 ```
 
-### 5.3 Full Forward Pass
+### 5.4 ABI Note: Normalization Convention vs exllamav3
 
-```
-input x:  [batch, in_features]
+The `norm` parameter in our API has **different semantics** from the `scale` parameter in exllamav3's `ext.had_r_128`. This is a common source of confusion:
 
-# Apply input-side incoherence
-x_had = fwht_128(x)                    # 128-block FWHT
-x_had *= suh.view(1, in_features)      # Element-wise scale
-x_had *= 0.088388347648                # 1/sqrt(128)
+| | exllamav3 `ext.had_r_128` | Our `hadamard_rotate_128[_cuda]` |
+|---|---|---|
+| Kernel computes | `r_scale = scale × **1/√128**` | `r_scale = **norm**` (direct) |
+| Call for input side | `had_r_128(..., suh, None, scale=1.0)` | `hadamard_rotate_128(..., pre_scale=suh, norm=INV_SQRT_128)` |
+| Effective r_scale | `1.0 × 1/√128 = 1/√128` | `1/√128` |
+| Call for output side | `had_r_128(..., None, svh, scale=1.0)` | `hadamard_rotate_128(..., post_scale=svh, norm=INV_SQRT_128)` |
+| Effective r_scale | same: `1/√128` | same: `1/√128` |
 
-# Dequantize weights (done once per forward or cached)
-w = reconstruct(trellis)               # [in_features, out_features] fp16
+**Both sides use the same `1/√128` normalization** in both implementations. The difference is only in how the parameter is labeled and whether the kernel multiplies by `1/√128` internally.
 
-# GEMM
-y = x_had @ w                          # fp16 matmul
+The default `norm = INV_SQRT_128` in our Nim API is correct for **both** input and output sides when using the reconstruct path (Strategy A). The exllamav3 reference calls `ext.had_r_128(..., scale=1.0)` for both sides — the `1.0` does **not** mean "no normalization"; it means "use the kernel's built-in `1/√128`".
 
-# Apply output-side incoherence
-y = fwht_128(y)                        # 128-block FWHT on output
-y *= svh.view(1, out_features)         # Element-wise scale
-# Note: svh uses norm_factor=1.0 (scale already baked in)
+> ℹ️ The older spec note `norm_factor: 1/sqrt(128) for suh, 1.0 for svh` described the exllamav3 kernel API where `scale=1.0` maps to `1/√128`. It does NOT apply to our kernel, which interprets `norm` directly.
 
-if bias is not None:
-    y += bias
-
-return y
-```
+---
 
 ## 6. EXL3 Weight Tensors in Safetensors
 
@@ -381,6 +437,8 @@ Only **linear projection layers** are quantized. In Qwen3-0.6B-EXL3-5bpw:
 - Layer norm weights: stored as float16, unchanged
 - Rotary embeddings: stored as float16, unchanged
 
+---
+
 ## 7. Deriving Parameters from Model
 
 ### 7.1 From config.json
@@ -413,27 +471,77 @@ K = tile_packed_size * 16 // 256     # e.g., 80 * 16 / 256 = 5
 ### 7.3 Deriving Codebook from mcg/mul1
 
 ```python
-has_mcg = "mcg" in safetensors_keys  # → cb=1
-has_mul1 = "mul1" in safetensors_keys  # → cb=2
+has_mcg = "mcg" in safetensors_keys   # → cb=1
+has_mul1 = "mul1" in safetensors_keys # → cb=2
 else cb=0
 ```
 
-## 8. Autoregressive Decoding Considerations
+---
 
-For batch-1 autoregressive decoding (the common case):
+## 8. Our Implementation Details
+
+Our Nim implementation (`workspace/transformers/src/` and `workspace/positron/`) follows Strategy A (reconstruct path):
+
+### 8.1 Forward Path
+
+```nim
+# CUDA path
+let xf16 = x.to(kFloat16)
+let xh = hadamard_rotate_128_cuda(xf16,
+              pre_scale = some(self.suh),
+              post_scale = none(Tensor))
+              # norm=INV_SQRT_128 (default): FWHT(x·suh) × 1/√128
+result = F.matmul(xh, self.weight)
+result = hadamard_rotate_128_cuda(result,
+              pre_scale = none(Tensor),
+              post_scale = some(self.svh))
+              # norm=INV_SQRT_128 (default): FWHT(y) × 1/√128 × svh
+
+# CPU fallback (same logic, portable tensor operations)
+let xf16 = x.to(kFloat16)
+let xh = hadamard_rotate_128(xf16,
+              pre_scale = some(self.suh),
+              post_scale = none(Tensor))
+result = F.matmul(xh, self.weight)
+result = hadamard_rotate_128(result,
+              pre_scale = none(Tensor),
+              post_scale = some(self.svh))
+```
+
+### 8.2 Weight Loading
+
+```nim
+let w = exl3_reconstruct(trellis, K, cb, in_f, out_f).contiguous()
+# w is [in_features, out_features], raw fp16 from trellis decode
+# No Hadamard pre-applied — Hadamard is applied to activations during forward
+
+Linear.init(
+  weight = w,
+  bias,
+  suh,
+  svh
+)
+```
+
+### 8.3 Load-Time Decode for Autoregressive Decoding
+
+For batch-1 autoregressive decoding:
 
 1. **Decode weights once** at load time — store the full FP16 weight matrix
    - Cost: ~0.3 seconds for Qwen3-0.6B on CPU, ~3-5 seconds for 7B
    - Decoded memory: in_features × out_features × 2 bytes per linear layer
 
-2. **Forward pass** then becomes a standard fp16 matmul:
-   - `x @ W` where both are already fp16
-   - Use `F.linear` (libtorch) or laser GEMM
+2. **Forward pass** then becomes: Hadamard → matmul → Hadamard:
+   - `xh = FWHT(x·suh) × 1/√128`
+   - `y = xh @ W`
+   - `y = FWHT(y) × 1/√128 × svh`
 
 3. **Hadamard on activations** is lightweight:
    - 7 stages of butterfly per activation vector
    - For Qwen3-0.6B (dim=1024, n_layers=28): 28 × 6 × 1024 × 2 = ~344K fp16 ops per token
    - Negligible compared to matmul
+
+---
 
 ## 9. Codebook C++ Port Reference
 
@@ -495,4 +603,4 @@ float decode_cb2(uint16_t x) {
 
 On x86, use `_mm_cvtss_f32(_mm_cvtph_ps(_mm_set1_epi16(v)))` for F16C.
 On ARM, use `vcvt_f32_f16`.
-On Nim with libtorch, use `torch::from_blob` and let PyTorch handle the format.
+In Nim with libtorch, use `torch::from_blob` and let PyTorch handle the format.
