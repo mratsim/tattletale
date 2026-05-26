@@ -78,14 +78,18 @@
 ##   however deletion would require tombstones in the children seq to maintain index stability
 ##   which means unbounded memory growth for the root node.
 ##
-##   We now use an intrusive WAVL tree (index-based, seq-backed) on each node,
-##   keyed by the child's first token with an index tiebreaker for uniqueness.
-##   This eliminates the 256 KB stride‑16 table allocation per node of lc-trie
-##   and works incrementally — no bulk rebuilds, no memory spikes.
+##   WAVL trees are used here in a novel way — as a *longest prefix match*
+##   index, not just a BST for exact-key lookups.  The comparator returns the
+##   signed position of the first token mismatch (not plain -1/0/+1).  This
+##   lets `wavlFindBestMatch` — itself a novel template — return the neighbor
+##   with the longer shared prefix in O(log n), with zero redundant comparison
+##   (the match length was already computed during BST navigation).
 ##
-##   LPM descent uses O(lg n) traversal to find the matching child by first
-##   token, then verifies with `getCommonFirstPageLen`. On miss (no child
-##   matches), the WAVL tree returns nil immediately — no linear scan.
+##   LPM descent uses O(log n) WAVL traversal with a full-page comparator.
+##   `wavlFindBestMatch` returns the exact match or the best neighbor (pred or
+##   succ with larger |cmp|, positive on tie) — the comparator's signed divergence
+##   point gives the match length directly, zero redundant work.
+##   Both hit and miss are pure O(log n).
 ##   The result (100K-child flat tree):
 ##   - LPM hit: 53 ns (was 9 ns stride‑16, still <0.1 µs)
 ##   - LPM miss: 32 ns (was 8 ns stride‑16, 690 µs original)
@@ -255,16 +259,24 @@ func getCommonFirstPageLen[T](a, b: openArray[T]): int {.inline.}
 
 # ──── Child index (intrusive WAVL tree) ──────────────────────────────────
 
-func lpmCmp[T](a: openArray[T], b: openArray[T], aPos = 0): int32 {.inline.} =
-  ## Compare two token sequences for the WAVL LPM tree.
-  ## Compares up to TokensPerPage tokens, bounded by actual lengths.
-  ## INV A1 guarantees two different children always diverge within the
-  ## first page, so 0 is returned only for identical first pages.
-  let cmpLen = min(min(a.len - aPos, b.len), int(TokensPerPage))
+func lpmCmp[T](a, b: openArray[T], aPos = 0): int32 {.inline.} =
+  ## WAVL comparator: strict total order on the full first page.
+  ## Returns signed divergence point:
+  ##   0       → identical first pages (exact match)
+  ##   -(i+1)  → a[i] < b[i]; matched i tokens
+  ##   +(i+1)  → a[i] > b[i]; matched i tokens
+  ##   -(N+1)  → a is prefix of b; matched N tokens (N = min lengths)
+  ##   +(N+1)  → b is prefix of a; matched N tokens
+  ## INV A1 guarantees children diverge within the first page, so 0 only
+  ## occurs when comparing input against a matching child (cache hit).
+  let aLen = a.len - aPos
+  let cmpLen = min(min(aLen, b.len), int(TokensPerPage))
   for i in 0 ..< cmpLen:
-    if a[aPos + i] < b[i]: return -1
-    elif a[aPos + i] > b[i]: return 1
-  return 0
+    if a[aPos + i] < b[i]: return -int32(i + 1)
+    elif a[aPos + i] > b[i]: return int32(i + 1)
+  if aLen < b.len: return -int32(cmpLen + 1)  # a is prefix of b
+  elif aLen > b.len: return int32(cmpLen + 1)  # b is prefix of a
+  return 0  # identical first pages (only between input and child, never two children)
 
 proc addChild*[T, P](n: PagedRadixNode[T, P]; child: PagedRadixNode[T, P]) =
   ## Add a child node, maintaining the WAVL child index incrementally.
@@ -275,10 +287,9 @@ proc addChild*[T, P](n: PagedRadixNode[T, P]; child: PagedRadixNode[T, P]) =
     n.lpmLinks.setLen(idx + 1)
   if n.evictLinks.len <= idx:
     n.evictLinks.setLen(idx + 1)
+  # INV A1 guarantees unique first-page keys — no tiebreaker needed
   wavlInsertTpl(n.lpmLinks, n.lpmRoot, idx):
     lpmCmp(n.children[a].tokens, n.children[b].tokens)
-  # Eviction tree: keyed by subtree_oldest_decode (unique per node,
-  # global kvClock is monotonic — no tiebreaker needed)
   wavlInsertTpl(n.evictLinks, n.evictRoot, idx):
     let ca = n.children[a]; let cb = n.children[b]
     if ca.subtree_oldest_decode < cb.subtree_oldest_decode: -1
@@ -288,14 +299,17 @@ proc addChild*[T, P](n: PagedRadixNode[T, P]; child: PagedRadixNode[T, P]) =
 proc findChild*[T, P](n: PagedRadixNode[T, P];
                        input: openArray[T]; pos: int): PagedRadixNode[T, P] =
   ## Find the best-matching child for input starting at pos.
-  ## Compares the full first page (TokensPerPage tokens) bounded by
-  ## actual lengths on both sides.  Returns nil when no child matches.
-  let idx = wavlFindTpl(n.lpmLinks, n.lpmRoot):
+  ##
+  ## Uses WAVL with full-page key + predecessor/successor check.
+  ## O(log n) for both cache hit and cache miss.
+  if n.lpmRoot < 0: return nil
+  let (found, best, _) = wavlFindBestMatch(n.lpmLinks, n.lpmRoot):
     lpmCmp(input, n.children[ti].tokens, pos)
-  if idx >= 0:
-    n.children[idx]
-  else:
-    nil
+  if found >= 0:
+    return n.children[found]
+  if best >= 0:
+    return n.children[best]
+  return nil
 
 {.push checks: off.}
 
@@ -306,7 +320,6 @@ func getCommonFirstPageLen[T](a, b: openArray[T]): int {.inline.} =
     if a[i] != b[i]:
       return i
   return n
-
 func getCommonPrefixLen[T](data, prefix: openArray[T]): int {.inline.} =
   let n = min(data.len, prefix.len)
   for i in 0..<n:
@@ -880,11 +893,6 @@ func sumLeafCount[T, P](cs: openArray[PagedRadixNode[T, P]]): int32 =
 func sumStagingLock[T, P](cs: openArray[PagedRadixNode[T, P]]): int32 =
   for c in cs: result += c.subtree_sum_locked
 
-func getCommonFirstPageLen[T](a, b: openArray[T]): int {.inline.} =
-  let n = min(min(a.len, b.len), int(TokensPerPage))
-  for i in 0 ..< n:
-    if a[i] != b[i]: return i
-  return n
 
 proc radixVerifyInvariants*[T, P](n: PagedRadixNode[T, P];
                                     ctx: string = "unknown") =

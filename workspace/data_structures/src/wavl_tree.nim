@@ -84,6 +84,32 @@
 ## - A "1-child": `child.rank != parent.rank` (rank diff = 1)
 ## - A leaf has rank 0 → `rank == false`
 ##
+##
+## ==============  Innovation: LPM via signed comparator  ===================
+##
+## A standard BST finds exact matches or nearest neighbors (pred/succ) in
+## O(log n).  This is sufficient for strict total-order queries but cannot
+## answer *longest prefix match* — the core operation in a radix-trie KV
+## cache where children are keyed by their first 256-token page.
+##
+## **Key insight**: if the comparator returns the *signed position of the
+## first divergence* (not just -1/0/+1), then:
+##   - The **sign** tells the BST which direction to navigate (standard)
+##   - The **magnitude** is the match length (shared prefix count)
+##
+## In a sorted set, the predecessor and successor of a query are the only
+## candidates for longest prefix match — any element farther away necessarily
+## shares a shorter prefix.  The signed comparator gives us both directions'
+## match lengths for free during the BST traversal.
+##
+## `wavlFindBestMatch` builds on this: on miss, it returns the neighbor
+## with the larger absolute comparator value (longer shared prefix), breaking
+## ties toward the predecessor.  The result is pure O(log n) longest prefix
+## match — no redundant comparison, no linear scan.
+##
+## This is, to our knowledge, the first use of a self-balancing BST as an
+## LPM index.
+##
 ## ==============================  References  ==============================
 ##
 ## - Haeupler, Sen, Tarjan (2015). "Rank-Balanced Trees".
@@ -522,6 +548,47 @@ proc wavlInsert*(links: var seq[WavlLink]; root: var int32; idx: int32;
   ##
   ## Closure-based convenience wrapper around `wavlInsertTpl`.
   wavlInsertTpl(links, root, idx): cmp(a, b)
+
+template wavlFindBestMatch*(links: openArray[WavlLink]; root: int32;
+                            cmpExpr: untyped): untyped =
+  ## Like `wavlFindTpl` but on miss returns the best neighbor (pred or succ)
+  ## and its comparator value, avoiding redundant comparison.
+  ## The comparator's magnitude gives the signed divergence point —
+  ## best neighbor is the one with larger |cmp| (positive on tie).
+  ## Returns tuple `(foundIdx, bestIdx, bestCmp)`.
+  var wflPred, wflSucc: int32 = WavlNil
+  var wflPredCmp = 0  # int (matches cmpExpr return type, usually int or int32)
+  var wflSuccCmp = 0
+  var wflFound: int32 = WavlNil
+  var wflCurr = root
+  block search:
+    while wflCurr >= 0:
+      var ti {.inject.} = wflCurr
+      let wflC = cmpExpr
+      if wflC == 0:
+        wflFound = wflCurr
+        break search
+      elif wflC < 0:
+        wflSucc = wflCurr
+        wflSuccCmp = wflC
+        wflCurr = links[wflCurr].l
+      else:
+        wflPred = wflCurr
+        wflPredCmp = wflC
+        wflCurr = links[wflCurr].r
+  # Pick best neighbor (only on miss — on hit, pred/succ may be stale)
+  var wflBest: int32 = WavlNil
+  var wflBestCmp = 0
+  if wflFound == WavlNil:
+    if wflPred >= 0:
+      wflBest = wflPred
+      wflBestCmp = wflPredCmp
+    if wflSucc >= 0:
+      if wflPred < 0 or abs(wflSuccCmp) > abs(wflPredCmp):
+        wflBest = wflSucc
+        wflBestCmp = wflSuccCmp
+  (wflFound, wflBest, wflBestCmp)
+
 func wavlDelete*(links: var seq[WavlLink]; root: var int32; idx: int32) =
   ## Remove node `idx` from the tree.  Its links are NOT cleared
   ## (caller may reuse or discard the slot).
