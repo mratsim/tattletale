@@ -255,6 +255,17 @@ func getCommonFirstPageLen[T](a, b: openArray[T]): int {.inline.}
 
 # ──── Child index (intrusive WAVL tree) ──────────────────────────────────
 
+func lpmCmp[T](a: openArray[T], b: openArray[T], aPos = 0): int32 {.inline.} =
+  ## Compare two token sequences for the WAVL LPM tree.
+  ## Compares up to TokensPerPage tokens, bounded by actual lengths.
+  ## INV A1 guarantees two different children always diverge within the
+  ## first page, so 0 is returned only for identical first pages.
+  let cmpLen = min(min(a.len - aPos, b.len), int(TokensPerPage))
+  for i in 0 ..< cmpLen:
+    if a[aPos + i] < b[i]: return -1
+    elif a[aPos + i] > b[i]: return 1
+  return 0
+
 proc addChild*[T, P](n: PagedRadixNode[T, P]; child: PagedRadixNode[T, P]) =
   ## Add a child node, maintaining the WAVL child index incrementally.
   let idx = int32(n.children.len)
@@ -264,18 +275,8 @@ proc addChild*[T, P](n: PagedRadixNode[T, P]; child: PagedRadixNode[T, P]) =
     n.lpmLinks.setLen(idx + 1)
   if n.evictLinks.len <= idx:
     n.evictLinks.setLen(idx + 1)
-  # LPM tree: 4-token comparison
   wavlInsertTpl(n.lpmLinks, n.lpmRoot, idx):
-    let ca = n.children[a]; let cb = n.children[b]
-    if ca.tokens[0] < cb.tokens[0]: -1
-    elif ca.tokens[0] > cb.tokens[0]: 1
-    elif ca.tokens[1] < cb.tokens[1]: -1
-    elif ca.tokens[1] > cb.tokens[1]: 1
-    elif ca.tokens[2] < cb.tokens[2]: -1
-    elif ca.tokens[2] > cb.tokens[2]: 1
-    elif ca.tokens[3] < cb.tokens[3]: -1
-    elif ca.tokens[3] > cb.tokens[3]: 1
-    else: cmp(a, b)
+    lpmCmp(n.children[a].tokens, n.children[b].tokens)
   # Eviction tree: keyed by subtree_oldest_decode (unique per node,
   # global kvClock is monotonic — no tiebreaker needed)
   wavlInsertTpl(n.evictLinks, n.evictRoot, idx):
@@ -287,38 +288,10 @@ proc addChild*[T, P](n: PagedRadixNode[T, P]; child: PagedRadixNode[T, P]) =
 proc findChild*[T, P](n: PagedRadixNode[T, P];
                        input: openArray[T]; pos: int): PagedRadixNode[T, P] =
   ## Find the best-matching child for input starting at pos.
-  ## Uses 4-token WAVL traversal (avoids collisions).
-  ## Returns nil when no child matches the input's first page.
-  ## Guards against input shorter than 4 tokens from pos.
+  ## Compares the full first page (TokensPerPage tokens) bounded by
+  ## actual lengths on both sides.  Returns nil when no child matches.
   let idx = wavlFindTpl(n.lpmLinks, n.lpmRoot):
-    let child = n.children[ti]
-    let t0 = input[pos].int
-    let c0 = child.tokens[0].int
-    if t0 < c0: -1
-    elif t0 > c0: 1
-    elif pos + 1 >= input.len:
-      # Input exhausted — treat remaining as a match (no further tokens to compare)
-      0
-    else:
-      let t1 = input[pos+1].int
-      let c1 = child.tokens[1].int
-      if t1 < c1: -1
-      elif t1 > c1: 1
-      elif pos + 2 >= input.len:
-        0
-      else:
-        let t2 = input[pos+2].int
-        let c2 = child.tokens[2].int
-        if t2 < c2: -1
-        elif t2 > c2: 1
-        elif pos + 3 >= input.len:
-          0
-        else:
-          let t3 = input[pos+3].int
-          let c3 = child.tokens[3].int
-          if t3 < c3: -1
-          elif t3 > c3: 1
-          else: 0
+    lpmCmp(input, n.children[ti].tokens, pos)
   if idx >= 0:
     n.children[idx]
   else:

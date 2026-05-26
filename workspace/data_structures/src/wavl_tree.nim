@@ -445,69 +445,6 @@ func rebalance22Leaf(links: var seq[WavlLink]; root: var int32;
 func wavlInit*(links: var seq[WavlLink]; root: var int32) {.inline.} =
   root = WavlNil
 
-proc wavlFind*(links: openArray[WavlLink]; root: int32;
-               cmp: FindCmp): int32 =
-  ## Find the node index matching the caller's search datum.
-  ## `cmp` receives each candidate index; return <0 / 0 / >0.
-  ## Returns `WavlNil` if not found.
-  var curr = root
-  while curr >= 0:
-    let c = cmp(curr)
-    if c == 0: return curr
-    curr = if c < 0: links[curr].l else: links[curr].r
-  WavlNil
-
-proc wavlInsert*(links: var seq[WavlLink]; root: var int32; idx: int32;
-                 cmp: NodeCmp) =
-  ## Insert node `idx`.  Its links are overwritten — starts as rank-0 leaf.
-  ## `cmp(a, b)` compares node `a` against node `b`.
-  ## Raises `AssertionError` on duplicate key.
-
-  links[idx] = WavlLink(p: WavlNil, l: WavlNil, r: WavlNil, rank: false)
-
-  if root < 0:
-    root = idx
-    return
-
-  var curr = root
-  var wasLeaf = false
-
-  while true:
-    let c = cmp(idx, curr)
-    if c == 0:
-      doAssert false, "wavlInsert: duplicate key at index " & $curr
-
-    if c < 0:
-      let child = links[curr].l
-      if child < 0:
-        wasLeaf = isLeaf(links, curr)
-        links[curr].l = idx
-        links[idx].p = curr
-        break
-      curr = child
-    else:
-      let child = links[curr].r
-      if child < 0:
-        wasLeaf = isLeaf(links, curr)
-        links[curr].r = idx
-        links[idx].p = curr
-        break
-      curr = child
-
-  if wasLeaf:
-    balanceAfterInsert(links, root, idx)
-
-# ---------------------------------------------------------------------------
-# Template (inline expression) versions
-# ---------------------------------------------------------------------------
-#
-# These avoid closure allocation and enable direct access to caller-scope
-# variables (e.g. openArray comparison without a capturing closure).
-#
-# The caller provides an inline `cmpExpr` that uses injected identifiers:
-#   wavlFindTpl:  `idx` is the current candidate node index.
-#   wavlInsertTpl: `a` is the inserted node index, `b` is the current node.
-
 template wavlFindTpl*(links: openArray[WavlLink]; root: int32;
                        cmpExpr: untyped): int32 =
   ## Find the node index matching the caller's search datum.
@@ -568,6 +505,23 @@ template wavlInsertTpl*(links: var seq[WavlLink]; root: var int32; idx: int32;
     if wasLeaf:
       balanceAfterInsert(links, root, idx)
 
+proc wavlFind*(links: openArray[WavlLink]; root: int32;
+               cmp: FindCmp): int32 =
+  ## Find the node index matching the caller's search datum.
+  ## `cmp` receives each candidate index; return <0 / 0 / >0.
+  ## Returns `WavlNil` if not found.
+  ##
+  ## Closure-based convenience wrapper around `wavlFindTpl`.
+  wavlFindTpl(links, root): cmp(ti)
+
+proc wavlInsert*(links: var seq[WavlLink]; root: var int32; idx: int32;
+                 cmp: NodeCmp) =
+  ## Insert node `idx`.  Its links are overwritten — starts as rank-0 leaf.
+  ## `cmp(a, b)` compares node `a` against node `b`.
+  ## Raises `AssertionError` on duplicate key.
+  ##
+  ## Closure-based convenience wrapper around `wavlInsertTpl`.
+  wavlInsertTpl(links, root, idx): cmp(a, b)
 func wavlDelete*(links: var seq[WavlLink]; root: var int32; idx: int32) =
   ## Remove node `idx` from the tree.  Its links are NOT cleared
   ## (caller may reuse or discard the slot).

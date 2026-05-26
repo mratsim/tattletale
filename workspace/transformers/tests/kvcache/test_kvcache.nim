@@ -313,6 +313,35 @@ proc testRegressionPartialMatchSiblingFork(): bool =
     "LPM on B matched " & $rB.totalTokenMatched & ", expected 512"
   result = true
 
+proc testRegressionLpmFourTokenCollision(): bool =
+  ## Two children share tokens[0..3] but diverge at token[4].
+  ## A 4-token WAVL key returns 0 (collision) → findChild returns wrong child.
+  ## Full-page comparator resolves this correctly.
+  var cache = KVCache[uint32, int].new()
+  # Child A: [1,2,3,4,100,101,...,354]
+  var aTok = newSeq[uint32](256)
+  aTok[0] = 1; aTok[1] = 2; aTok[2] = 3; aTok[3] = 4
+  for i in 4..<256: aTok[i] = uint32(100 + i)
+  discard cache.lpm(aTok)
+  cache.graftPages(aTok, makePages(256))
+  # Child B: [1,2,3,4,200,201,...,454] — same first 4, diverges at [4]
+  var bTok = newSeq[uint32](256)
+  bTok[0] = 1; bTok[1] = 2; bTok[2] = 3; bTok[3] = 4
+  for i in 4..<256: bTok[i] = uint32(200 + i)
+  discard cache.lpm(bTok)
+  cache.graftPages(bTok, makePages(256))
+  doAssert cache.root.children.len == 2,
+    "root should have 2 children after fork"
+  # LPM for A must find A (not B), despite 4-token prefix collision
+  let rA = cache.lpm(aTok)
+  doAssert rA.totalTokenMatched == 256,
+    "LPM on A matched " & $rA.totalTokenMatched & ", expected 256"
+  # LPM for B must find B (not A)
+  let rB = cache.lpm(bTok)
+  doAssert rB.totalTokenMatched == 256,
+    "LPM on B matched " & $rB.totalTokenMatched & ", expected 256"
+  result = true
+
 # ════════════════════════════════════════════════════════
 # Runner
 # ════════════════════════════════════════════════════════
@@ -376,6 +405,7 @@ proc runTests*() =
       check testRegressionMultiUserRootLinking()
     test "partial match sibling fork at correct level":
       check testRegressionPartialMatchSiblingFork()
-
+    test "4-token WAVL LPM collision resolved by full-page compare":
+      check testRegressionLpmFourTokenCollision()
 when isMainModule:
   runTests()
