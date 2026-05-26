@@ -103,12 +103,14 @@
 ##
 ##
 ## Usage:
-##   var cache: GpuKVCache
-##   let updateTarget = cache.lpm(tokens) # pure query, no structural changes
-##   updateTarget.node.graftPages(pages, staging)  # attach GPU pages to the target node
+##   var cache: KVCache[TokenID, PageIdx]
+##   let prefix = cache.lpm(tokens)    # pure query, locks path, returns matched pages
+##   # ── caller uses tokens + pages however they like (prefill, decode, ...) ──
+##   # ── when done, pass EVERYTHING back to the trie ──
+##   cache.graftPages(allTokens, allPages)  # trie sorts out matching/fork/append
 ##   # eviction:
-##   let victim = findEvictionCandidate(cache)
-##   discard cache.evict(victim)
+##   while not cache.evictable():
+##     cache.evict()
 ##
 ## Invariants:
 ## - It is a PagedRadixTrie, the unit is a page of 256 tokens
@@ -439,7 +441,11 @@ template walkDown[T, P](cache: KVCache[T, P]; tokens: openArray[T], prologueBody
 # Pages returned: sliced to the matched portion only (ceilDiv(numShared, 256)),
 # NOT the full node's page array.  This avoids leaking page indices beyond
 # the prefix that was actually matched.
-
+#
+# NOTE: The caller MUST call graftPages with the FULL token sequence and ALL
+# pages to release the lock.  The trie handles matching, forking, and appending
+# internally — you just pass back everything and let classifyGraft decide.
+#
 proc lpm*[T, P](cache: KVCache[T, P]; tokens: openArray[T]): LongestPrefixMatch[P] =
   cache.walkDown(tokens):
     # PrologueBody
@@ -646,15 +652,36 @@ proc appendOp[T, P](cache: var KVCache[T, P];
 # graftPages — public API
 # ═══════════════════════════════════════════════════════════════════════════
 #
+# CONTRACT:
+#
+#   The caller manages exactly two things:
+#     tokens: the COMPLETE token sequence for this request
+#     pages:  ALL GPU page indices for the FULL token range
+#
+#   Call graftPages ONCE at sequence end (or whenever pages fill) by passing
+#   back the FULL tokens + pages.  The trie internally:
+#
+#     1. walkDown(tokens)  — finds the deepest matching node
+#     2. classifyGraft      — decides: fullMatch? partialMatch? fork? append?
+#     3. branch proc        — attaches pages to the tree, releases locks
+#
+#   This means:
+#     - Callers do NOT need to track "which pages are cached vs new"
+#     - Callers do NOT need to reason about fork points or page boundaries
+#     - The trie handles all tree-structure invariants internally
+#     - Sequences can be started/finished in ANY order (no ordering assumption)
+#     - The trie's locking (subtree_sum_locked) prevents eviction of active paths
+#       regardless of interleaving
+#
 # Lock lifecycle:
-#   walkDown prologue inc root.subtree_sum_locked
-#   walkDown descent  inc node.subtree_sum_locked
-#   Each branch proc releases exactly these locks.
+#   lpm()  → inc subtree_sum_locked on each visited node
+#   graftPages() → branch proc decrements subtree_sum_locked via walkUpUpdate
+#   Locks are always released by graftPages. There is no separate unlock.
 #
 # ┌─────────────────────────────────────────────────────────────────────────┐
 # │                     graftPages (after walkDown)                        │
-# │                                                                         │
-# │  classifyGraft: decision table ─────────────────────────────────────────│
+# ├─────────────────────────────────────────────────────────────────────────┤
+# │  classifyGraft: decision table                                        │
 # │                                                                         │
 # │  Condition                                 │ Branch    │ Action        │
 # │  ──────────────────────────────────────────┼───────────┼───────────────│
@@ -677,13 +704,20 @@ proc appendOp[T, P](cache: var KVCache[T, P];
 #   rootNewChild   walkUp cache.root (handles root lock)
 #   forkPage       target.subtree_sum_locked -= 1   + walkUp newParent
 #   append         target.subtree_sum_locked -= 1   + walkUp target.parent
-
+#
 proc graftPages*[T, P](
       cache: var KVCache[T, P],
       tokens: openArray[T],
       pages: sink openArray[P]) =
-  ## Add new pages to the KV cache.
+  ## Commit a token sequence and its pages into the trie.
   ## Takes ownership of `pages`.
+  ##
+  ## Call this with the COMPLETE `tokens` and matching `pages` for this
+  ## sequence.  The trie already holds some of these pages from earlier
+  ## sequences (matched via LPM) — it sorts out which are new vs cached
+  ## via classifyGraft.  You do NOT need to separate them.
+  ##
+  ## The lock acquired by lpm() is released as a side effect.
 
   var target {.cursor.}: PagedRadixNode[T, P]
   var targetMatchLen: int
@@ -746,6 +780,7 @@ proc compressPath(parent: PagedRadixNode) =
   let gp = parent.parent
   if gp != nil and gp.children.len == 1:
     gp.compressPath()
+    
 proc findEvictionCandidate[T, P](cache: KVCache[T, P]): PagedRadixNode[T, P] =
   ## Find the coldest unlocked leaf for eviction.
   ## Uses the eviction WAVL tree for O(lg n) coldest-child selection.

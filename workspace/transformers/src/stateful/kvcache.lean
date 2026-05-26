@@ -137,6 +137,9 @@ def minOldestDecode (cs : List PagedRadixNode) : Nat :=
 /--
 LPM — longest prefix match at page granularity.
 Mirrors Nim's walkDown.
+
+NOTE: the trie path is implicitly "locked" (subtreeSumLocked incremented).
+The caller MUST call graftPages with the FULL tokens + ALL pages to unlock.
 -/
 partial def lpm (n : PagedRadixNode) (input : List TokenID) : LongestPrefixMatch :=
   let rec go (node : PagedRadixNode) (pos : Nat) : LongestPrefixMatch :=
@@ -399,6 +402,19 @@ def appendOp (n : PagedRadixNode) (tokens : List TokenID) (pages : List PageIdx)
 
 /--
 graftPages — public API.  Mirrors Nim's graftPages.
+
+CONTRACT:
+  The caller provides the COMPLETE token sequence and ALL page indices.
+  The trie does the rest: it walks down via LPM, matches against existing
+  nodes, forks/appends as needed, attaches pages, and releases locks.
+
+  The caller's responsibility: produce tokens and manage pages.
+  The trie handles all tree-structure invariants (splitting, forking,
+  path compression, lock management) internally.
+
+  There is NO ordering requirement between sequences.  Any number of
+  sequences can interleave without breaking invariants.
+
 Simplified: dispatch via classifyGraft on the LPM result.
 -/
 def graftPages (s : KVCacheState) (tokens : List TokenID) (pages : List PageIdx) : KVCacheState :=
