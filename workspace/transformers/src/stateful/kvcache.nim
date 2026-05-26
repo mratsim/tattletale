@@ -852,3 +852,145 @@ proc evict*[T, P](cache: var KVCache[T, P]) =
   # A child can be merged into root (single user with only enough KV-cache for a single conversation)
   if parent.children.len == 1:
     parent.compressPath()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Validation
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Formal specification for PagedRadixTrie invariants (Nim)
+# Mirrors the Lean formalization (kvcache.lean) and Patricia trie invariants.
+#
+# Invariants checked:
+#  A1. Prefix entropy (children diverge within first page)
+#  A3. Parent consistency (parent ↔ child bidirectional links)
+#  A5. subtreeLeafCount correctness
+#  A6. subtreeLeafCount monotonicity
+#  C2. subtreeSumLocked partition
+#  C3. subtreeSumLocked monotonicity
+#  C4. Locked → locked descendant
+#  E1. No single-child nodes (Patricia trie path compression invariant)
+#  P1. Non-zero tokens/pages for valid nodes
+#  P2. childId consistency with parent's children seq
+#  W1. WAVL tree consistency (lpmLinks/evictLinks mirror children seq)
+
+# Helper functions to compute subtree sums
+func sumLeafCount[T, P](cs: openArray[PagedRadixNode[T, P]]): int32 =
+  for c in cs: result += c.subtree_sum_leaves
+
+func sumStagingLock[T, P](cs: openArray[PagedRadixNode[T, P]]): int32 =
+  for c in cs: result += c.subtree_sum_locked
+
+func getCommonFirstPageLen[T](a, b: openArray[T]): int {.inline.} =
+  let n = min(min(a.len, b.len), int(TokensPerPage))
+  for i in 0 ..< n:
+    if a[i] != b[i]: return i
+  return n
+
+proc radixVerifyInvariants*[T, P](n: PagedRadixNode[T, P];
+                                    ctx: string = "unknown") =
+  ## Verify all structural and cumulative invariants on the subtree rooted at `n`.
+  ## Recursively checks children. Raises `KVCacheDefect` on first violation.
+
+  # ── A5: subtreeLeafCount correctness ──
+  if n.children.len == 0:
+    # Leaf nodes should have subtree_sum_leaves == 1
+    # Exception: empty root (0 tokens, 0 pages) starts with 0 leaves
+    if n.subtree_sum_leaves == 0 and n.tokens.len == 0 and n.pages.len == 0:
+      discard # Empty root is allowed to have 0 leaves
+    elif n.subtree_sum_leaves != 1:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] A5: leaf subtree_sum_leaves == " & $n.subtree_sum_leaves.int & ", expected 1")
+  else:
+    let sumLeaves = sumLeafCount(n.children)
+    if n.subtree_sum_leaves != sumLeaves:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] A5: subtree_sum_leaves == " & $n.subtree_sum_leaves.int &
+        " != sum children " & $sumLeaves.int)
+
+  # ── C2: subtreeSumLocked partition ──
+  if n.children.len > 0:
+    let sumLocked = sumStagingLock(n.children)
+    if n.subtree_sum_locked != sumLocked:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] C2: subtree_sum_locked == " & $n.subtree_sum_locked.int &
+        " != sum children " & $sumLocked.int)
+
+  # ── A6: subtreeLeafCount monotonicity ──
+  for i, c in n.children:
+    if c.subtree_sum_leaves > n.subtree_sum_leaves:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] A6: child[" & $i & "].subtree_sum_leaves (" & $c.subtree_sum_leaves.int &
+        ") > parent (" & $n.subtree_sum_leaves.int & ")")
+
+  # ── C3: subtreeSumLocked monotonicity ──
+  for i, c in n.children:
+    if c.subtree_sum_locked > n.subtree_sum_locked:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] C3: child[" & $i & "].subtree_sum_locked (" & $c.subtree_sum_locked.int &
+        ") > parent (" & $n.subtree_sum_locked.int & ")")
+
+  # ── C4: Locked implies locked descendant ──
+  if n.subtree_sum_locked > 0 and not n.isLeaf:
+    var hasLockedChild = false
+    for c in n.children:
+      if c.subtree_sum_locked > 0:
+        hasLockedChild = true
+        break
+    if not hasLockedChild:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] C4: subtree_sum_locked > 0 but no locked child")
+
+  # ── E1: No single-child nodes (Patricia trie path compression) ──
+  if n.children.len == 1:
+    raise newException(KVCacheDefect,
+      "[" & ctx & "] E1: node has exactly 1 child (path compression violation)")
+
+  # ── P2: childId consistency ──
+  for i, c in n.children:
+    if c.childId != i.int32:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] P2: child[" & $i & "].childId == " & $c.childId.int & ", expected " & $i)
+
+  # ── A3: Parent consistency ──
+  for c in n.children:
+    if c.parent != n:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] A3: child.parent != this node")
+
+  # ── P1: Non-zero tokens/pages for valid nodes ──
+  if n.children.len > 0:
+    # Internal nodes can have 0 tokens (e.g., root after fork)
+    # But leaf nodes should have tokens
+    for c in n.children:
+      if c.isLeaf and c.tokens.len == 0:
+        raise newException(KVCacheDefect,
+          "[" & ctx & "] P1: leaf child has 0 tokens")
+      if c.isLeaf and c.pages.len == 0:
+        raise newException(KVCacheDefect,
+          "[" & ctx & "] P1: leaf child has 0 pages")
+
+  # ── W1: WAVL tree consistency ──
+  if n.lpmRoot >= 0 or n.evictRoot >= 0:
+    # WAVL links should match children seq length
+    if n.lpmLinks.len != n.children.len:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] W1: lpmLinks.len (" & $n.lpmLinks.len &
+        ") != children.len (" & $n.children.len & ")")
+    if n.evictLinks.len != n.children.len:
+      raise newException(KVCacheDefect,
+        "[" & ctx & "] W1: evictLinks.len (" & $n.evictLinks.len &
+        ") != children.len (" & $n.children.len & ")")
+
+  # ── A1: Prefix entropy (children diverge within first page) ──
+  # Check all pairs of children have different first pages
+  for i in 0 ..< n.children.len:
+    for j in i+1 ..< n.children.len:
+      let ci = n.children[i]; let cj = n.children[j]
+      if getCommonFirstPageLen(ci.tokens, cj.tokens) > 0:
+        raise newException(KVCacheDefect,
+          "[" & ctx & "] A1: children[" & $i & "] and children[" & $j &
+          "] share first-page prefix")
+
+  # ── Recurse into children ──
+  for c in n.children:
+    radixVerifyInvariants(c, ctx)

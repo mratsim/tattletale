@@ -772,7 +772,3 @@ func wavlVerifyInvariants*(links: openArray[WavlLink]; root: int32; ctx: string)
     var relRank = newSeq[int](N)
     relRank[root] = 0
     verifySubtree(links, relRank, root, 0, N, ctx)
-
-func wavlAssertValid*(links: openArray[WavlLink]; root: int32; ctx: string) =
-  ## Assert WAVL invariants (shorthand).
-  wavlVerifyInvariants(links, root, ctx)
