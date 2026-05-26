@@ -76,8 +76,8 @@ proc generate*(
         maxTokens = 200): string =
   let cfg = model.getConfig()
   let device = model.getDeviceKind()
-  var orch = init(Orchestrator, cfg.num_hidden_layers)
-  defer: orch.endSequence()
+  var orc = init(Orchestrator, cfg.num_hidden_layers)
+  defer: orc.endSequence()
 
   let dtype = parseTorchDtype(cfg.torch_dtype)
 
@@ -85,12 +85,12 @@ proc generate*(
   var ids = model.getTokenizer().encode(prompt)
   let startPos = ids.len
 
-  orch.startSequence(1, cfg.num_key_value_heads, maxTokens + startPos,
+  orc.startSequence(1, cfg.num_key_value_heads, maxTokens + startPos,
                      cfg.head_dim, dtype, device, startPos)
 
   # === PREFILL: forward on full prompt ===
   let inputIds = F.toTensor([ids]).to(device)
-  let logits = model.forward(orch.active_context, inputIds)
+  let logits = model.forward(orc.active_context, inputIds)
   let lastLogits = logits.narrow(1, startPos - 1, 1).squeeze(1)
   var nextToken = sample(lastLogits, temp)
   ids.add(nextToken)
@@ -98,11 +98,11 @@ proc generate*(
   # === DECODE LOOP: forward on 1 token at a time ===
   while ids.len < startPos + maxTokens:
     # Set position for this decode step
-    orch.decodeStep(ids.len - 1, device)
+    orc.decodeStep(ids.len - 1, device)
 
     # Forward on single token: [1, 1]
     let singleToken = F.toTensor([[nextToken]]).to(device)
-    let stepLogits = model.forward(orch.active_context, singleToken)
+    let stepLogits = model.forward(orc.active_context, singleToken)
 
     # Sample next token from [1, 1, vocab] -> [vocab]
     let stepLastLogits = stepLogits.squeeze(0).squeeze(0)
