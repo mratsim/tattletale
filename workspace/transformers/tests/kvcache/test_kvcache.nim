@@ -342,6 +342,86 @@ proc testRegressionLpmFourTokenCollision(): bool =
     "LPM on B matched " & $rB.totalTokenMatched & ", expected 256"
   result = true
 
+proc testRegressionCompressPathRecursiveAndReKey(): bool =
+  ## P3: Recursive compressPath when grandparent becomes single-child.
+  ##
+  ## Build: root → [forkA(256) → [A_tail(512), C_tail(256)], B(256)]
+  ## Evict through the tree. After recursive compress, root is a leaf.
+  var cache = KVCache[uint32, int].new()
+
+  # Step 1: Unique conversation A (3 pages = 768 tok)
+  var seqA = newSeq[uint32](768)
+  for i in 0..<768: seqA[i] = uint32(i)
+  discard cache.lpm(seqA)
+  cache.graftPages(seqA, makePages(768))
+
+  # Step 2: Unique conversation B (1 page = 256 tok, different first page)
+  var seqB = newSeq[uint32](256)
+  for i in 0..<256: seqB[i] = uint32(5000+i)
+  discard cache.lpm(seqB)
+  cache.graftPages(seqB, makePages(256))
+  # root → [A(768), B(256)]
+
+  # Step 3: C shares A's first 256 tokens, diverges after
+  var seqC = newSeq[uint32](512)
+  for i in 0..<256: seqC[i] = uint32(i)
+  for i in 256..<512: seqC[i] = uint32(6000+i)
+  discard cache.lpm(seqC)
+  cache.graftPages(seqC, makePages(512))
+  # root → [forkA(256) → [A_tail(512), C_tail(256)], B(256)]
+
+  # Evict through the tree
+  cache.evict()
+  cache.evict()
+  # After two evictions, root should be a leaf (recursive compress cleaned up)
+  # No single-child nodes (E1 invariant)
+  doAssert cache.root.children.len == 0
+  doAssert cache.root.parent == nil
+  result = true
+
+proc testRegressionCompressPathPreservesTimestamp(): bool =
+  ## Verify compressPath does NOT change subtree_oldest_decode — parent
+  ## and child share the same timestamp from the last graftPages walk-up.
+  ##
+  ## Build: root → [forkA(256) → [A_tail, C_tail], B(256)]
+  ## After evicting one child under forkA, compressPath fires. forkA's
+  ## timestamp equals the absorbed child's (same walk-up path).
+  var cache = KVCache[uint32, int].new()
+
+  var seqA = newSeq[uint32](768)
+  for i in 0..<768: seqA[i] = uint32(i)
+  discard cache.lpm(seqA)
+  cache.graftPages(seqA, makePages(768))
+
+  var seqB = newSeq[uint32](256)
+  for i in 0..<256: seqB[i] = uint32(5000+i)
+  discard cache.lpm(seqB)
+  cache.graftPages(seqB, makePages(256))
+
+  var seqC = newSeq[uint32](512)
+  for i in 0..<256: seqC[i] = uint32(i)
+  for i in 256..<512: seqC[i] = uint32(6000+i)
+  discard cache.lpm(seqC)
+  cache.graftPages(seqC, makePages(512))
+  # root → [forkA(256) → [A_tail, C_tail], B(256)]
+
+  # Lock B so eviction must descend through forkA
+  cache.root.children[1].subtree_sum_locked = 1
+
+  # Capture forkA's timestamp before compression
+  let forkA = cache.root.children[0]
+  let forkAoldestBefore = forkA.subtree_oldest_decode
+
+  cache.evict()
+  # forkA had 2 children, now has 1 → compressPath fires
+
+  # compressPath sets parent.subtree_oldest_decode = only.subtree_oldest_decode.
+  # But parent and only shared the same last graftPages walk-up (both were
+  # set to kvClock in the same walkUpUpdate). The assignment is a no-op.
+  doAssert forkA.subtree_oldest_decode == forkAoldestBefore,
+    "compressPath must not change subtree_oldest_decode"
+  result = true
+
 # ════════════════════════════════════════════════════════
 # Runner
 # ════════════════════════════════════════════════════════
@@ -407,5 +487,9 @@ proc runTests*() =
       check testRegressionPartialMatchSiblingFork()
     test "4-token WAVL LPM collision resolved by full-page compare":
       check testRegressionLpmFourTokenCollision()
+    test "compressPath recursive + eviction tree re-key (P3)":
+      check testRegressionCompressPathRecursiveAndReKey()
+    test "compressPath preserves subtree_oldest_decode (no-op assignment)":
+      check testRegressionCompressPathPreservesTimestamp()
 when isMainModule:
   runTests()

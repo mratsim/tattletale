@@ -417,8 +417,7 @@ func rebalance3Child(links: var seq[WavlLink]; root: var int32;
       rotateLeft(links, root, y, curZ)
       promote(links, y)
       if isLeaf(links, curZ):
-        demote(links, curZ)
-        demote(links, curZ)
+        doubleDemote(links, curZ)
       else:
         demote(links, curZ)
     else:
@@ -427,8 +426,7 @@ func rebalance3Child(links: var seq[WavlLink]; root: var int32;
       doubleRotateLeft(links, root, v, y, curZ)
       promote(links, v)
       demote(links, y)
-      demote(links, curZ)
-      demote(links, curZ)
+      doubleDemote(links, curZ)
   else:
     let y = links[curZ].l
     let w = links[y].l
@@ -438,8 +436,7 @@ func rebalance3Child(links: var seq[WavlLink]; root: var int32;
       rotateRight(links, root, y, curZ)
       promote(links, y)
       if isLeaf(links, curZ):
-        demote(links, curZ)
-        demote(links, curZ)
+        doubleDemote(links, curZ)
       else:
         demote(links, curZ)
     else:
@@ -447,8 +444,7 @@ func rebalance3Child(links: var seq[WavlLink]; root: var int32;
       doubleRotateRight(links, root, v, y, curZ)
       promote(links, v)
       demote(links, y)
-      demote(links, curZ)
-      demote(links, curZ)
+      doubleDemote(links, curZ)
 
 func rebalance22Leaf(links: var seq[WavlLink]; root: var int32;
                       node: int32) =

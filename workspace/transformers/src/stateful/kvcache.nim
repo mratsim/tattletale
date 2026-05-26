@@ -280,13 +280,13 @@ func lpmCmp[T](a, b: openArray[T], aPos = 0): int32 {.inline.} =
 
 proc addChild*[T, P](n: PagedRadixNode[T, P]; child: PagedRadixNode[T, P]) =
   ## Add a child node, maintaining the WAVL child index incrementally.
-  let idx = int32(n.children.len)
-  child.childId = idx
   n.children.add(child)
-  if n.lpmLinks.len <= idx:
-    n.lpmLinks.setLen(idx + 1)
-  if n.evictLinks.len <= idx:
-    n.evictLinks.setLen(idx + 1)
+  let idx = int32(n.children.len - 1)
+  child.childId = idx
+  # Nim setLen uses exponential growth (×2 up to 32K, ×1.5 beyond),
+  # matching children.add(). The link seqs stay in lockstep.
+  n.lpmLinks.setLen(n.children.len)
+  n.evictLinks.setLen(n.children.len)
   # INV A1 guarantees unique first-page keys — no tiebreaker needed
   wavlInsertTpl(n.lpmLinks, n.lpmRoot, idx):
     lpmCmp(n.children[a].tokens, n.children[b].tokens)
@@ -303,11 +303,11 @@ proc findChild*[T, P](n: PagedRadixNode[T, P];
   ## Uses WAVL with full-page key + predecessor/successor check.
   ## O(log n) for both cache hit and cache miss.
   if n.lpmRoot < 0: return nil
-  let (found, best, _) = wavlFindBestMatch(n.lpmLinks, n.lpmRoot):
+  let (found, best, bestCmp) = wavlFindBestMatch(n.lpmLinks, n.lpmRoot):
     lpmCmp(input, n.children[ti].tokens, pos)
   if found >= 0:
     return n.children[found]
-  if best >= 0:
+  if best >= 0 and abs(bestCmp) - 1 > 0:  # bestCmp = signed divergence point; 0 → no match
     return n.children[best]
   return nil
 
@@ -417,8 +417,7 @@ template walkDown[T, P](cache: KVCache[T, P]; tokens: openArray[T], prologueBody
     if node.children.len != 0:
       var best {.inject.}: PagedRadixNode[T, P]
       let found = node.findChild(tokens, pos)
-      if found != nil and
-            getCommonFirstPageLen(tokens.toOpenArray(pos, tokens.high), found.tokens) > 0:
+      if found != nil:
         best = found
         descentIntoNodeBody
         matched = true
@@ -494,8 +493,28 @@ func classifyGraft*(targetMatchLen, tokensLen, lastLevel, targetTokLen: int;
   elif lastLevel < targetTokLen:                         gcFork
   else:                                                  gcAppend
 
-# ──── Branch procs ──────────────────────────────────────────────────────
+func walkUpUpdate[T, P](
+    cache: KVCache[T, P];
+    startNode: PagedRadixNode[T, P];
+    pagesDelta, leavesDelta: int) =
+  ## Walk up from startNode to root, re-keying eviction trees
+  ## (oldest_decode changed), releasing locks, and updating counters.
+  for up in startNode.walkUp():
+    let upParent = up.parent
+    if upParent != nil and upParent.evictRoot >= 0:
+      wavlDelete(upParent.evictLinks, upParent.evictRoot, up.childId)
+    up.subtree_oldest_decode = cache.kvClock
+    if upParent != nil:
+      wavlInsertTpl(upParent.evictLinks, upParent.evictRoot, up.childId):
+        let ea = upParent.children[a]; let eb = upParent.children[b]
+        if ea.subtree_oldest_decode < eb.subtree_oldest_decode: -1
+        elif ea.subtree_oldest_decode > eb.subtree_oldest_decode: 1
+        else: cmp(a, b)
+    up.subtree_sum_locked -= 1
+    up.subtree_sum_pages += pagesDelta.int32
+    up.subtree_sum_leaves += leavesDelta.int32
 
+# ──── Branch procs ──────────────────────────────────────────────────────
 proc fullMatchOp[T, P](cache: var KVCache[T, P]; target: PagedRadixNode[T, P]) =
   ## All input already in cache — update timestamps, release locks.
   # Re-key target in parent's eviction tree
@@ -510,20 +529,7 @@ proc fullMatchOp[T, P](cache: var KVCache[T, P]; target: PagedRadixNode[T, P]) =
       elif ca.subtree_oldest_decode > cb.subtree_oldest_decode: 1
       else: cmp(a, b)
   target.subtree_sum_locked -= 1
-  if p != nil:
-    for up in p.walkUp():
-      # Re-key in parent's eviction tree (oldest_decode changed)
-      let upParent = up.parent
-      if upParent != nil and upParent.evictRoot >= 0:
-        wavlDelete(upParent.evictLinks, upParent.evictRoot, up.childId)
-      up.subtree_oldest_decode = cache.kvClock
-      if upParent != nil:
-        wavlInsertTpl(upParent.evictLinks, upParent.evictRoot, up.childId):
-          let ea = upParent.children[a]; let eb = upParent.children[b]
-          if ea.subtree_oldest_decode < eb.subtree_oldest_decode: -1
-          elif ea.subtree_oldest_decode > eb.subtree_oldest_decode: 1
-          else: cmp(a, b)
-      up.subtree_sum_locked -= 1
+  cache.walkUpUpdate(target.parent, pagesDelta = 0, leavesDelta = 0)
 
 proc partialMatchOp[T, P](cache: var KVCache[T, P];
     target: PagedRadixNode[T, P]; tokens: openArray[T]; pages: openArray[P];
@@ -547,21 +553,7 @@ proc partialMatchOp[T, P](cache: var KVCache[T, P];
     subtree_sum_leaves: 1)
   target.parent.addChild(sibling)
   target.subtree_sum_locked -= 1
-  for up in sibling.parent.walkUp():
-    # Re-key in parent's eviction tree (oldest_decode changed)
-    let upParent = up.parent
-    if upParent != nil and upParent.evictRoot >= 0:
-      wavlDelete(upParent.evictLinks, upParent.evictRoot, up.childId)
-    up.subtree_oldest_decode = cache.kvClock
-    if upParent != nil:
-      wavlInsertTpl(upParent.evictLinks, upParent.evictRoot, up.childId):
-        let ea = upParent.children[a]; let eb = upParent.children[b]
-        if ea.subtree_oldest_decode < eb.subtree_oldest_decode: -1
-        elif ea.subtree_oldest_decode > eb.subtree_oldest_decode: 1
-        else: cmp(a, b)
-    up.subtree_sum_locked -= 1
-    up.subtree_sum_pages += siblingPages.int32
-    up.subtree_sum_leaves += 1
+  cache.walkUpUpdate(sibling.parent, pagesDelta = siblingPages, leavesDelta = 1)
 
 proc rootNewChildOp[T, P](cache: var KVCache[T, P];
     tokens: openArray[T]; pages: openArray[P]) =
@@ -573,21 +565,7 @@ proc rootNewChildOp[T, P](cache: var KVCache[T, P];
     subtree_sum_pages: pages.len.int32,
     subtree_oldest_decode: cache.kvClock, subtree_sum_leaves: 1)
   cache.root.addChild(sibling)
-  for up in cache.root.walkUp():
-    # Re-key in parent's eviction tree (oldest_decode changed)
-    let upParent = up.parent
-    if upParent != nil and upParent.evictRoot >= 0:
-      wavlDelete(upParent.evictLinks, upParent.evictRoot, up.childId)
-    up.subtree_oldest_decode = cache.kvClock
-    if upParent != nil:
-      wavlInsertTpl(upParent.evictLinks, upParent.evictRoot, up.childId):
-        let ea = upParent.children[a]; let eb = upParent.children[b]
-        if ea.subtree_oldest_decode < eb.subtree_oldest_decode: -1
-        elif ea.subtree_oldest_decode > eb.subtree_oldest_decode: 1
-        else: cmp(a, b)
-    up.subtree_sum_locked -= 1
-    up.subtree_sum_pages += pages.len.int32
-    up.subtree_sum_leaves += 1
+  cache.walkUpUpdate(cache.root, pagesDelta = pages.len, leavesDelta = 1)
 
 proc forkPageOp[T, P](cache: var KVCache[T, P];
     target: PagedRadixNode[T, P]; tokens: openArray[T]; pages: openArray[P];
@@ -636,21 +614,7 @@ proc forkPageOp[T, P](cache: var KVCache[T, P];
     grandparent.children[target.childId] = newParent
     newParent.childId = target.childId
 
-  for up in newParent.walkUp():
-    # Re-key in parent's eviction tree (oldest_decode changed)
-    let upParent = up.parent
-    if upParent != nil and upParent.evictRoot >= 0:
-      wavlDelete(upParent.evictLinks, upParent.evictRoot, up.childId)
-    up.subtree_oldest_decode = cache.kvClock
-    if upParent != nil:
-      wavlInsertTpl(upParent.evictLinks, upParent.evictRoot, up.childId):
-        let ea = upParent.children[a]; let eb = upParent.children[b]
-        if ea.subtree_oldest_decode < eb.subtree_oldest_decode: -1
-        elif ea.subtree_oldest_decode > eb.subtree_oldest_decode: 1
-        else: cmp(a, b)
-    up.subtree_sum_locked -= 1
-    up.subtree_sum_pages += extraPages
-    up.subtree_sum_leaves += 1
+  cache.walkUpUpdate(newParent, pagesDelta = extraPages, leavesDelta = 1)
 
 proc appendOp[T, P](cache: var KVCache[T, P];
     target: PagedRadixNode[T, P]; tokens: openArray[T]; pages: openArray[P]) =
@@ -676,21 +640,7 @@ proc appendOp[T, P](cache: var KVCache[T, P];
   target.subtree_sum_locked -= 1
   if target.subtree_sum_leaves == 0:
     target.subtree_sum_leaves = 1
-  if p != nil:
-    for up in p.walkUp():
-      # Re-key in parent's eviction tree (oldest_decode changed)
-      let upParent = up.parent
-      if upParent != nil and upParent.evictRoot >= 0:
-        wavlDelete(upParent.evictLinks, upParent.evictRoot, up.childId)
-      up.subtree_oldest_decode = cache.kvClock
-      if upParent != nil:
-        wavlInsertTpl(upParent.evictLinks, upParent.evictRoot, up.childId):
-          let ea = upParent.children[a]; let eb = upParent.children[b]
-          if ea.subtree_oldest_decode < eb.subtree_oldest_decode: -1
-          elif ea.subtree_oldest_decode > eb.subtree_oldest_decode: 1
-          else: cmp(a, b)
-      up.subtree_sum_locked -= 1
-      up.subtree_sum_pages += extraPages
+  cache.walkUpUpdate(target.parent, pagesDelta = extraPages, leavesDelta = 0)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # graftPages — public API
@@ -787,6 +737,15 @@ proc compressPath(parent: PagedRadixNode) =
   for gc in parent.children:
     gc.parent = parent
 
+  # Recursive compress — grandparent may now be a single-child node
+  # Fixes P3: Patricia tree invariant (no node has exactly 1 child).
+  #
+  # Note: subtree_oldest_decode is NOT re-keyed in grandparent's eviction
+  # tree because it hasn't changed — parent and only were both updated to
+  # the same kvClock during the last graftPages walk-up on this path.
+  let gp = parent.parent
+  if gp != nil and gp.children.len == 1:
+    gp.compressPath()
 proc findEvictionCandidate[T, P](cache: KVCache[T, P]): PagedRadixNode[T, P] =
   ## Find the coldest unlocked leaf for eviction.
   ## Uses the eviction WAVL tree for O(lg n) coldest-child selection.
@@ -794,6 +753,8 @@ proc findEvictionCandidate[T, P](cache: KVCache[T, P]): PagedRadixNode[T, P] =
   ## via wavlNext. Returns nil if no evictable child exists.
   ## Decrements subtree_sum_leaves on the way down.
   var n = cache.root
+  if n.subtree_sum_locked >= n.subtree_sum_leaves:
+    return nil
   while true:
     if n.isLeaf and not n.isLocked:
       return n
