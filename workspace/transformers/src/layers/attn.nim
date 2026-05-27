@@ -216,7 +216,10 @@ proc forward(
   # Each page covers TokensPerPage token positions.
   # page.k_view[layer_idx] is (PAGE_SIZE, kv_heads, head_dim)
   let offset = ctx.position_ids.min().item(int)
-  for t in 0 ..< seq_len:
+  # Skip writing cached prefix positions (already in trie from COW)
+  # TODO: how to test usage of cache?
+  let writeStart = max(0, ctx.kv_position - offset)
+  for t in writeStart ..< seq_len:
     let globalPos = offset + t
     let pageIdx = globalPos div TokensPerPage
     let withinPage = globalPos mod TokensPerPage

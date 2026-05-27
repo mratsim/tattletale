@@ -93,6 +93,9 @@ proc generate*(
   let startPos = ids.len
 
   orc.startSequence(ids.mapIt(it.uint32))
+  # TODO: change tokenization to uint32/int32 directly — no point using 64-bit
+  #   when vocabulary is at most ~230K (fits in 2^18).
+  #   This would avoid the temporary seq allocation from mapIt.
 
   # === PREFILL: forward on full prompt ===
   let inputIds = F.toTensor([ids]).to(device)

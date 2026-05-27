@@ -157,6 +157,7 @@ type
     active_context*: InferenceContext
     num_layers: int
     device: DeviceKind
+    position_ids_buf: Tensor  # pre-allocated 1-element tensor for decodeStep
     logical_map: KVCache[uint32, Page]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -186,9 +187,10 @@ proc init*(_: type Orchestrator;
     active_context: InferenceContext.init(
       num_layers, batch_size, kv_heads, max_seq, head_dim),
     num_layers: num_layers,
-    device: device)
+    device: device,
+    position_ids_buf: F.zeros(1, F.tensorOptions(F.kInt64, device))
+  )
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Pool management
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -198,6 +200,9 @@ proc ensurePoolCapacity(orc: var Orchestrator, needed: int) =
   ##
   ## Raises `ValueError` if no eviction candidates are available (all pages
   ## are locked on active decode paths).
+  # TODO (serving API): add max eviction loop count + request budget
+  #   When we have a serving API, the orchestrator will run in an event
+  #   loop with rate-limiting and per-request fairness budgets.
   while orc.page_pool.pagesAvailable() < needed:
     let freed = orc.logical_map.evict()
     if freed == 0:
@@ -318,7 +323,8 @@ proc decodeStep*(orc: var Orchestrator, position: int, token_id: uint32,
   ctx.kv_position += 1
 
   # 4. Update position_ids for single token: [position] on device
-  ctx.position_ids = [position].toTensor().to(F.kInt64).to(device)
+  orc.position_ids_buf[0] = position.int64
+  ctx.position_ids = orc.position_ids_buf
 
 proc endSequence*(orc: var Orchestrator) =
   ## End the current sequence and commit all data to the trie.
