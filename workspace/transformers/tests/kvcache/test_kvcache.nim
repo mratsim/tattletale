@@ -418,10 +418,57 @@ proc testRegressionCompressPathPreservesTimestamp(): bool =
     "compressPath must not change subtree_oldest_decode"
   result = true
 
+
+# ════════════════════════════════════════════════════════
+# classifyGraft unit test
+# ════════════════════════════════════════════════════════
+proc testClassifyGraft(): bool =
+  ## Verify the 5-branch decision table.
+  # gcFullMatch when targetMatchLen == tokensLen
+  doAssert classifyGraft(10, 10, 10, 10, true, false) == gcFullMatch
+  # gcPartialMatch: lastLevel < 256, hasParent, lastLevel == targetTokLen
+  doAssert classifyGraft(200, 300, 200, 200, true, false) == gcPartialMatch
+  # gcRootNewChild: lastLevel < 256, no parent, root has children
+  doAssert classifyGraft(0, 100, 0, 0, false, true) == gcRootNewChild
+  # gcFork: lastLevel < targetTokLen (not full match, not sub-page)
+  doAssert classifyGraft(256, 512, 256, 512, true, false) == gcFork
+  # gcAppend: fallthrough
+  doAssert classifyGraft(512, 768, 256, 512, true, false) == gcAppend
+  result = true
+
+# ════════════════════════════════════════════════════════
+# appendOp leaves == 0 boundary
+# ════════════════════════════════════════════════════════
+proc testAppendOpLeavesZero(): bool =
+  ## appendOp sets subtree_sum_leaves = 1 when it was 0.
+  ## This happens after compressPath where the merged parent
+  ## inherits the child's subtree_sum_leaves.
+  var cache = KVCache[uint32, int].new()
+  let tokA = makeTokens(256)
+  let tokB = makeTokens(512)
+  discard cache.lpm(tokA)
+  cache.graftPages(tokA, makePages(256))
+  discard cache.lpm(tokB)
+  cache.graftPages(tokB, makePages(512))
+  # Evict A — leaves B with 1 page at root
+  cache.evict()
+  # Root now has 1 child with subtree_sum_leaves = 0 after compressPath
+  # Append to B should set leaves to 1
+  let tokC = makeTokens(768)
+  discard cache.lpm(tokC)
+  cache.graftPages(tokC, makePages(768))
+  doAssert cache.root.subtree_sum_leaves == 1,
+    "appendOp should set subtree_sum_leaves to 1"
+  result = true
+
 # ════════════════════════════════════════════════════════
 # Runner
 # ════════════════════════════════════════════════════════
 proc runTests*() =
+  suite "classifyGraft":
+    test "5-branch decision table":
+      check testClassifyGraft()
+
   suite "LPM":
     test "LPM on empty trie returns root without creating children":
       check testLPMEmptyTrie()
@@ -441,6 +488,8 @@ proc runTests*() =
       check testGraftPagesReleasesLock()
     test "graftPages walks entire path to root":
       check testGraftPagesWalksToRoot()
+    test "appendOp sets subtree_sum_leaves = 1 when it was 0":
+      check testAppendOpLeavesZero()
 
   suite "Evict":
     test "evict unlocked leaf after graft":

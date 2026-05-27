@@ -41,7 +41,9 @@ proc init*(_: type PagePool;
   )
 
 proc borrow*(pool: PagePool): Page =
-  assert pool.free_indices.len > 0, "PagePool exhausted!"
+  if pool.free_indices.len == 0:
+    raise newException(ResourceExhaustedError,
+      "[ttt] PagePool exhausted!")
   let idx = pool.free_indices.pop()
   result = Page(
     index: idx,

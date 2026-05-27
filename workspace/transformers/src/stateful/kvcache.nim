@@ -805,7 +805,7 @@ proc findEvictionCandidate[T, P](cache: KVCache[T, P]): PagedRadixNode[T, P] =
     if candidateIdx < 0:
       return nil
 
-proc evict*[T, P](cache: var KVCache[T, P]): int =
+proc evict*[T, P](cache: var KVCache[T, P]): int {.discardable.} =
   ## Evict a leaf from the tree. Must be evictable (leaf + unlocked).
   ## Returns the number of pages freed (leaf.pages.len before removal).
   ##

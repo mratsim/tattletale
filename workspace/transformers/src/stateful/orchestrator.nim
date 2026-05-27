@@ -154,7 +154,7 @@ type
     ## the Nim Tensor → C++ TorchTensor → intrusive_ptr → CUDA allocator
     ## chain correctly without extra nil-ing.
     page_pool: PagePool
-    active_context*: InferenceContext
+    active_context: InferenceContext
     num_layers: int
     device: DeviceKind
     position_ids_buf: Tensor  # pre-allocated 1-element tensor for decodeStep
@@ -190,6 +190,11 @@ proc init*(_: type Orchestrator;
     device: device,
     position_ids_buf: F.zeros(1, F.tensorOptions(F.kInt64, device))
   )
+
+proc getInferenceContext*(orc: Orchestrator): InferenceContext {.inline.} =
+  ## Get the active inference context.
+  orc.active_context
+
 
 # Pool management
 # ═══════════════════════════════════════════════════════════════════════════

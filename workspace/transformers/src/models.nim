@@ -99,7 +99,7 @@ proc generate*(
 
   # === PREFILL: forward on full prompt ===
   let inputIds = F.toTensor([ids]).to(device)
-  let logits = model.forward(orc.active_context, inputIds)
+  let logits = model.forward(orc.getInferenceContext(), inputIds)
   let lastLogits = logits.narrow(1, startPos - 1, 1).squeeze(1)
   var nextToken = sample(lastLogits, temp)
   ids.add(nextToken)
@@ -111,7 +111,7 @@ proc generate*(
 
     # Forward on single token: [1, 1]
     let singleToken = F.toTensor([[nextToken]]).to(device)
-    let stepLogits = model.forward(orc.active_context, singleToken)
+    let stepLogits = model.forward(orc.getInferenceContext(), singleToken)
 
     # Sample next token from [1, 1, vocab] -> [vocab]
     let stepLastLogits = stepLogits.squeeze(0).squeeze(0)
