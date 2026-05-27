@@ -432,8 +432,8 @@ proc testClassifyGraft(): bool =
   doAssert classifyGraft(0, 100, 0, 0, false, true) == gcRootNewChild
   # gcFork: lastLevel < targetTokLen (not full match, not sub-page)
   doAssert classifyGraft(256, 512, 256, 512, true, false) == gcFork
-  # gcAppend: fallthrough
-  doAssert classifyGraft(512, 768, 256, 512, true, false) == gcAppend
+  # gcAppend: fallthrough (lastLevel >= targetTokLen)
+  doAssert classifyGraft(512, 768, 512, 512, true, false) == gcAppend
   result = true
 
 # ════════════════════════════════════════════════════════
@@ -459,6 +459,63 @@ proc testAppendOpLeavesZero(): bool =
   cache.graftPages(tokC, makePages(768))
   doAssert cache.root.subtree_sum_leaves == 1,
     "appendOp should set subtree_sum_leaves to 1"
+  result = true
+
+# ════════════════════════════════════════════════════════
+# evict root-with-no-parent
+# ════════════════════════════════════════════════════════
+proc testEvictRootWithNoParent(): bool =
+  var cache = KVCache[uint32, int].new()
+  let tokens = makeTokens(256)
+  discard cache.lpm(tokens)
+  cache.graftPages(tokens, makePages(256))
+  # First evict removes child, root becomes empty leaf
+  cache.evict()
+  # Second evict: root is a leaf with no parent → replace root
+  cache.evict()
+  doAssert cache.root.subtree_sum_leaves == 0
+  doAssert cache.root.pages.len == 0
+  result = true
+
+# ════════════════════════════════════════════════════════
+# findEvictionCandidate wavlNext skip
+# ════════════════════════════════════════════════════════
+proc testEvictionCandidateSkipLocked(): bool =
+  var cache = KVCache[uint32, int].new()
+  # Different first tokens → separate children at root
+  let seqA = @[0'u32] & makeTokens(255)
+  let seqB = @[1'u32] & makeTokens(255)
+  discard cache.lpm(seqA)
+  cache.graftPages(seqA, makePages(256))
+  discard cache.lpm(seqB)
+  cache.graftPages(seqB, makePages(256))
+  # Lock seqA via LPM (locks persist without matching graftPages)
+  discard cache.lpm(seqA)
+  # findEvictionCandidate should skip locked seqA, find seqB
+  let candidate = cache.findEvictionCandidate()
+  doAssert candidate != nil, "should find an evictable leaf"
+  doAssert candidate.tokens.len == 256
+  doAssert not candidate.isLocked, "candidate must not be locked"
+  result = true
+
+# ════════════════════════════════════════════════════════
+# walkUpUpdate WAVL re-key
+# ════════════════════════════════════════════════════════
+proc testWalkUpUpdateReKey(): bool =
+  ## Verify that walkUpUpdate properly re-keys the eviction tree.
+  ## After graftPages, the eviction tree should reflect the new
+  ## subtree_oldest_decode ordering.
+  var cache = KVCache[uint32, int].new()
+  let seqA = makeTokens(256)
+  let seqB = makeTokens(256)
+  discard cache.lpm(seqA)
+  cache.graftPages(seqA, makePages(256))  # oldest_decode = 1
+  discard cache.lpm(seqB)
+  cache.graftPages(seqB, makePages(256))  # oldest_decode = 2
+  # A is older than B. Eviction should evict A first.
+  let candidate = cache.findEvictionCandidate()
+  doAssert candidate != nil
+  doAssert candidate.tokens == seqA, "oldest should be evicted first"
   result = true
 
 # ════════════════════════════════════════════════════════
@@ -500,12 +557,18 @@ proc runTests*() =
       check testEvictEmptyTree()
     test "evict propagates subtree_sum_leaves up":
       check testEvictPropagatesLeaves()
+    test "evict root-with-no-parent replaces root":
+      check testEvictRootWithNoParent()
 
   suite "findEvictionCandidate":
     test "finds unlocked leaf when one exists":
       check testFindCandidateUnlocked()
     test "returns nil when all leaves locked":
       check testFindCandidateAllLocked()
+    test "wavlNext skip-locked path":
+      check testEvictionCandidateSkipLocked()
+    test "walkUpUpdate re-keys eviction tree":
+      check testWalkUpUpdateReKey()
 
   suite "Invariants (A5, C2)":
     test "A5 subtree_sum_leaves partition":

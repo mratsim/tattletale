@@ -350,8 +350,19 @@ proc testFindWithBoundsDivergence() =
   echo "  [PASS] testFindWithBoundsDivergence"
 
 # ---------------------------------------------------------------------------
-# Runner
+# Empty tree tests
 # ---------------------------------------------------------------------------
+proc testEmptyTree() =
+  var links: seq[WavlLink] = @[]
+  var root: int32 = WavlNil
+  wavlInit(links, root)
+  doAssert wavlFind(links, root, proc(idx: int32): int = 0) == WavlNil
+  doAssert wavlMin(links, root) == WavlNil
+  doAssert wavlMax(links, root) == WavlNil
+  doAssert wavlNext(links, WavlNil) == WavlNil
+  doAssert wavlPrev(links, WavlNil) == WavlNil
+  echo "  [PASS] testEmptyTree"
+
 
 proc runTests*() =
   echo "WAVL Tree Tests"
@@ -363,6 +374,7 @@ proc runTests*() =
   testRemoveChild()
   testFindWithBounds()
   testFindWithBoundsDivergence()
+  testEmptyTree()
   echo "All tests passed."
 
 when isMainModule:
