@@ -216,7 +216,7 @@ func new*[T, P](_: typedesc[KVCache[T, P]]): KVCache[T, P] =
 # Utilities
 # ═══════════════════════════════════════════════════════════════════════════
 
-func ceilDiv(num, denom: int): int {.inline.} =
+func ceilDiv*(num, denom: int): int {.inline.} =
   (num + denom - 1) div denom
 
 func isPowerOf2*(n: SomeInteger): bool {.inline.} =
@@ -780,7 +780,7 @@ proc compressPath(parent: PagedRadixNode) =
   let gp = parent.parent
   if gp != nil and gp.children.len == 1:
     gp.compressPath()
-    
+
 proc findEvictionCandidate[T, P](cache: KVCache[T, P]): PagedRadixNode[T, P] =
   ## Find the coldest unlocked leaf for eviction.
   ## Uses the eviction WAVL tree for O(lg n) coldest-child selection.
@@ -805,8 +805,9 @@ proc findEvictionCandidate[T, P](cache: KVCache[T, P]): PagedRadixNode[T, P] =
     if candidateIdx < 0:
       return nil
 
-proc evict*[T, P](cache: var KVCache[T, P]) =
+proc evict*[T, P](cache: var KVCache[T, P]): int =
   ## Evict a leaf from the tree. Must be evictable (leaf + unlocked).
+  ## Returns the number of pages freed (leaf.pages.len before removal).
   ##
   ## This implies:
   ## - leaf is removed from parent's children
@@ -821,7 +822,9 @@ proc evict*[T, P](cache: var KVCache[T, P]) =
 
   let leaf = cache.findEvictionCandidate()
   if leaf.isNil():
-    return
+    return 0
+
+  result = leaf.pages.len  # capture pages count before removal
 
   let parent {.cursor.} = leaf.parent
   if parent == nil:

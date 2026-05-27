@@ -19,6 +19,7 @@ import std/json
 import std/os
 import std/tables
 import std/strutils
+import std/sequtils
 import workspace/libtorch as F
 import workspace/toktoktok
 import ./stateful/orchestrator
@@ -72,11 +73,17 @@ proc parseTorchDtype(s: string): ScalarKind =
 proc generate*(
         model: Model,
         prompt: string,
+        device: DeviceKind | Device = kCPU,
         temp = 1.0f,
-        maxTokens = 200): string =
+        maxTokens = 200,
+        maxContextLen: int = -1): string =
   let cfg = model.getConfig()
   let device = model.getDeviceKind()
-  var orc = init(Orchestrator, cfg.num_hidden_layers)
+  let maxCtx = if maxContextLen < 0: cfg.max_position_embeddings else: maxContextLen
+  let numPoolPages = computeNumPages(maxCtx, concurrentRequests = 1)
+  var orc = init(Orchestrator, cfg.num_hidden_layers, 1,
+                 cfg.num_key_value_heads, maxCtx, cfg.head_dim,
+                 numPoolPages, parseTorchDtype(cfg.torch_dtype), device)
   defer: orc.endSequence()
 
   let dtype = parseTorchDtype(cfg.torch_dtype)
@@ -85,8 +92,13 @@ proc generate*(
   var ids = model.getTokenizer().encode(prompt)
   let startPos = ids.len
 
-  orc.startSequence(1, cfg.num_key_value_heads, maxTokens + startPos,
-                     cfg.head_dim, dtype, device, startPos)
+  orc.startSequence(
+    ids.mapIt(it.uint32),
+    cfg.num_key_value_heads,
+    cfg.head_dim,
+    dtype,
+    device
+  )
 
   # === PREFILL: forward on full prompt ===
   let inputIds = F.toTensor([ids]).to(device)
@@ -98,7 +110,7 @@ proc generate*(
   # === DECODE LOOP: forward on 1 token at a time ===
   while ids.len < startPos + maxTokens:
     # Set position for this decode step
-    orc.decodeStep(ids.len - 1, device)
+    orc.decodeStep(ids.len - 1, nextToken.uint32, device)
 
     # Forward on single token: [1, 1]
     let singleToken = F.toTensor([[nextToken]]).to(device)

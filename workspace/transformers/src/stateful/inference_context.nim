@@ -8,19 +8,23 @@
 import
   workspace/libtorch as F,
   ./kvcache,
+  ./page_pool,
   ../layers/rope
 
-type InferenceContext* = object
+type InferenceContext* = ref object
   ## State container for a SINGLE forward pass.
   ## Created by orchestrator per request, passed through layers.
   ##
   ## LIFECYCLE:
   ##   - Created at start of sequence (prefill)
-  ##   - Reused across decode steps (kv_caches accumulate)
+  ##   - Reused across decode steps (pages accumulate)
   ##   - position_ids updated each forward pass
   ##   - Discarded when sequence completes
 
-  kv_caches*: seq[KVCache]    # One per layer (preallocated)
+  pages*: seq[Page]           # KV pages: matched from trie + newly borrowed
+  kv_position*: int            # Write cursor (next token position to write into)
+  input_tokens*: seq[uint32]   # Token sequence tracking (for graftPages at sequence end)
+
   position_ids*: Tensor       # [0,1,2] for prefill, [3] for decode, [6,3,11] for ragged
   ## Debug metadata — describes the context configuration
   num_layers*: int
@@ -37,26 +41,24 @@ type InferenceContext* = object
 proc init*(
     _: type InferenceContext,
     num_layers: int,
-    batch_size, kv_heads, max_seq, head_dim: int,
-    dtype: ScalarKind,
-    device: DeviceKind): InferenceContext =
-  ## Initialize InferenceContext with preallocated KV caches for all layers.
+    batch_size: int,
+    kv_heads: int,
+    max_seq: int,
+    head_dim: int): InferenceContext =
+  ## Initialize InferenceContext with empty KV page tracking.
+  ## KV buffer dimensions are on PagePool (owned by orchestrator).
   ##
   ## Args:
-  ##   num_layers: Number of transformer layers (one KV cache per layer)
-  ##   batch_size: Number of sequences in batch
-  ##   kv_heads: Number of KV heads (GQA)
-  ##   max_seq: Maximum sequence length
-  ##   head_dim: Dimension per head
-  ##   dtype: Data type (e.g., kBFloat16)
-  ##   device: Device (e.g., kCUDA)
-
-  var kv_caches = newSeq[KVCache](num_layers)
-  for i in 0..<num_layers:
-    kv_caches[i] = KVCache.init(batch_size, kv_heads, max_seq, head_dim, dtype, device)
+  ##   num_layers: Number of transformer layers
+  ##   batch_size: Number of sequences in batch (metadata)
+  ##   kv_heads: Number of KV heads (GQA) (metadata)
+  ##   max_seq: Maximum sequence length (metadata)
+  ##   head_dim: Dimension per head (metadata)
 
   InferenceContext(
-    kv_caches: kv_caches,
+    pages: newSeq[Page](0),
+    kv_position: 0,
+    input_tokens: newSeq[uint32](0),
     position_ids: F.empty(0),
     cos: F.empty(0),
     sin: F.empty(0),
@@ -77,10 +79,14 @@ proc setRopeForPositions*(ctx: var InferenceContext, rotary: RotaryPositionEmbed
   ## so the orchestrator stays ignorant of rope variants.
   (ctx.cos, ctx.sin) = rotary.ropeByPositions(ctx.position_ids)
 
-proc reset*(ctx: var InferenceContext) =
-  ## Reset for NEW sequence (not new token!).
-  ## Keeps allocated buffers for reuse.
-  ctx.position_ids = F.empty(0)
+proc clearState*(ctx: var InferenceContext) =
+  ## Clear KV state for reuse in a new sequence.
+  ## Drops page references (GC may recycle to pool).
+  ## Keeps metadata fields (num_layers, head_dim, etc.) for reuse.
+  ctx.pages = default(seq[Page])
+  ctx.kv_position = 0
+  ctx.input_tokens = default(seq[uint32])
+  ctx.position_ids = nil
 
 proc setPositionIds*(ctx: var InferenceContext, position_ids: Tensor) =
   ## Set position_ids for current forward pass.
@@ -92,7 +98,7 @@ proc setPositionIds*(ctx: var InferenceContext, position_ids: Tensor) =
   ctx.position_ids = position_ids
 
 proc setPositionIdsArange*(ctx: var InferenceContext, seq_len: int, offset: int = 0, device: DeviceKind = kCPU) =
-  ## Set position_ids to arange(offset, offset+seq_len).
+  ## Set position_ids to arange(offset, offset+seq_len) as int64.
   ##
   ## Convenience proc for common case.
   ##
@@ -100,4 +106,5 @@ proc setPositionIdsArange*(ctx: var InferenceContext, seq_len: int, offset: int 
   ##   seq_len: Sequence length
   ##   offset: Starting offset (default 0 for prefill)
   ##   device: Device for tensor
-  ctx.position_ids = F.arange(offset, offset + seq_len, device=device)
+  let opts = F.tensorOptions(F.kInt64, device)
+  ctx.position_ids = F.arange(offset, offset + seq_len, opts)

@@ -18,6 +18,7 @@ import
   workspace/transformers/src/deserialization,
   workspace/transformers/src/stateful/kvcache,
   workspace/transformers/src/stateful/inference_context,
+  workspace/transformers/src/stateful/page_pool,
   workspace/transformers/src/layers/attn {.all.},
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/models/qwen3 {.all.},
@@ -92,8 +93,9 @@ proc main() =
       let rotary = attn.rotary
       var ctx = InferenceContext.init(
         num_layers = 28, batch_size = 1,
-        kv_heads = 8, max_seq = 4096, head_dim = 128,
-        dtype = F.kBFloat16, device = F.kCPU)
+        kv_heads = 8, max_seq = 4096, head_dim = 128)
+      # Pool and pages setup BEFORE reset,
+      # reset no longer clears them (it only resets non-KV state).
 
       var fixtureMemFile = memFiles.open(
         FixtureDir / &"attn-{ModelName}-00.safetensor", mode = fmRead)
@@ -103,14 +105,21 @@ proc main() =
       let hiddenStates = st.getTensorOwned("hidden_states")
       let hfPosIds = st.getTensorOwned("position_ids")
 
-      ctx.reset()
+      let pool = PagePool.init(
+        64, num_layers = 28, kv_heads = 8, head_dim = 128,
+        dtype = F.kBFloat16, device = F.kCPU)
+      let numPages = ceilDiv(4096, TokensPerPage)
+      for i in 0 ..< numPages:
+        ctx.pages.add(pool.borrow())
+
       ctx.position_ids = hfPosIds[0]
       ctx.setRopeForPositions(rotary)
       let x = hiddenStates[0].unsqueeze(0)
       let _ = attn(ctx, x)
 
-      let cache = ctx.kv_caches[attn.layer_idx]
-      let (cachedK, _) = cache.read(8)
+      let totalSeqLen = ctx.position_ids.size(0)
+      let page = ctx.pages[0]
+      let cachedK = page.k_view[attn.layer_idx, 0 ..< totalSeqLen].permute([1, 0, 2]).unsqueeze(0)
 
       let k = attn.k_proj.forward(x)
       let k_reshaped = k.reshape([x.size(0), x.size(1), attn.gqa_attn.num_kv_head, attn.gqa_attn.head_dim])
@@ -141,8 +150,15 @@ proc main() =
       let attn = setupAttn()
       var ctx = InferenceContext.init(
         num_layers = 28, batch_size = 1,
-        kv_heads = 8, max_seq = 4096, head_dim = 128,
+        kv_heads = 8, max_seq = 4096, head_dim = 128)
+
+      let pool = PagePool.init(
+        64, num_layers = 28, kv_heads = 8, head_dim = 128,
         dtype = F.kBFloat16, device = F.kCPU)
+      let numPages = ceilDiv(4096, TokensPerPage)
+      for i in 0 ..< numPages:
+        ctx.pages.add(pool.borrow())
+
       var fixtureMemFile = memFiles.open(
         FixtureDir / &"attn-{ModelName}-00.safetensor", mode = fmRead)
       defer: close(fixtureMemFile)
@@ -151,14 +167,15 @@ proc main() =
       let hiddenStates = st.getTensorOwned("hidden_states")
       let hfPosIds = st.getTensorOwned("position_ids")
 
-      ctx.reset()
+      # No ctx.clearState() — context is freshly created above
       ctx.position_ids = hfPosIds[0]
       ctx.setRopeForPositions(attn.rotary)
       let x = hiddenStates[0].unsqueeze(0)
       let _ = attn(ctx, x)
 
-      let cache = ctx.kv_caches[attn.layer_idx]
-      let (_, cachedV) = cache.read(8)
+      let totalSeqLen = ctx.position_ids.size(0)
+      let page = ctx.pages[0]
+      let cachedV = page.v_view[attn.layer_idx, 0 ..< totalSeqLen].permute([1, 0, 2]).unsqueeze(0)
 
       let v = attn.v_proj.forward(x)
       let v_expected = v.reshape([x.size(0), x.size(1), attn.gqa_attn.num_kv_head, attn.gqa_attn.head_dim]).permute([0, 2, 1, 3])
