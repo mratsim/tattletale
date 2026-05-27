@@ -13,7 +13,8 @@ import
   std/unittest,
   std/math,
   std/importutils,
-  ../../src/stateful/kvcache {.all.}
+  ../../src/stateful/kvcache {.all.},
+  ../../src/stateful/stateful_testutils
 
 privateAccess(PagedRadixNode)
 privateAccess(KVCache)
@@ -32,10 +33,6 @@ proc makeTokens(grp, uid, n: int): seq[uint32] =
     let x = uid*10000 + (i-uOff) mod 997
     result[i] = x.uint32
 
-proc makePages(nTokens: int): seq[int] =
-  let nPages = ceilDiv(nTokens, 256)
-  result = newSeq[int](nPages)
-  for i in 0..<nPages: result[i] = i + 1
 
 proc checkInvariants(n: PagedRadixNode[uint32, int]):
     tuple[leaves: int32, locks: int32] =

@@ -14,7 +14,8 @@ import
   std/unittest,
   std/math,
   std/importutils,
-  ../../src/stateful/kvcache {.all.}
+  ../../src/stateful/kvcache {.all.},
+  ../../src/stateful/stateful_testutils
 
 privateAccess(PagedRadixNode)
 privateAccess(KVCache)

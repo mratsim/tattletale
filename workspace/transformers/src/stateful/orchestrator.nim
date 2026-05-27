@@ -262,6 +262,7 @@ proc startSequence*(
   if partialTokens > 0 and matched.pages.len > 0:
     # Last matched page is partial — borrow a new page, copy partial content
     let cachedPage = matched.pages[^1]
+    orc.ensurePoolCapacity(1)
     let cowPage = orc.page_pool.borrow()
     cowPartialPage(cowPage, cachedPage, partialTokens, orc.num_layers)
     ctx.pages.add(cowPage)
@@ -274,6 +275,8 @@ proc startSequence*(
 
   # ── 4. Borrow new pages for unmatched prompt portion ──
   let promptPages = ceilDiv(input_ids.len, TokensPerPage)
+  doAssert promptPages >= ctx.pages.len,
+    "[ttt] Invariant: prompt should need >= pages than already matched by trie"
   let newPagesNeeded = promptPages - ctx.pages.len
   if newPagesNeeded > 0:
     orc.ensurePoolCapacity(newPagesNeeded)

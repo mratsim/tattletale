@@ -25,7 +25,8 @@ import
   std/strutils,
   std/math,
   std/importutils,
-  ../src/stateful/kvcache {.all.}
+  ../src/stateful/kvcache {.all.},
+  ../src/stateful/stateful_testutils
 
 privateAccess(PagedRadixNode)
 privateAccess(KVCache)
@@ -43,13 +44,6 @@ proc report(name: string; ns: int64; ops: float; note = "") =
 # ── Helpers ─────────────────────────────────────────────────────────────
 type Payload = int
 
-proc makePages(n: int): seq[Payload] =
-  result = newSeq[Payload](ceilDiv(n, 256))
-  for i in 0..<result.len: result[i] = i + 1
-
-proc makeTokens(n: int): seq[uint32] =
-  result = newSeq[uint32](n)
-  for i in 0..<n: result[i] = uint32(i)
 
 proc makeTokens(start, n: int): seq[uint32] =
   result = newSeq[uint32](n)

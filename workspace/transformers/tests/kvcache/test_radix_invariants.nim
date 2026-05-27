@@ -9,15 +9,12 @@ import
   std/unittest,
   std/math,
   std/importutils,
-  ../../src/stateful/kvcache {.all.}
+  ../../src/stateful/kvcache {.all.},
+  ../../src/stateful/stateful_testutils
 
 privateAccess(PagedRadixNode)
 privateAccess(KVCache)
 
-func makePages(nTokens: int): seq[int] =
-  let nPages = ceilDiv(nTokens, 256)
-  result = newSeq[int](nPages)
-  for i in 0..<nPages: result[i] = i + 1
 
 # Test that invariants hold after basic operations
 proc testInvariantsEmptyCache(): bool =

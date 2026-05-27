@@ -230,7 +230,7 @@ proc forward(
   # k_full/v_full: (1, totalSeqLen, kv_heads, head_dim)
   let kvDtype = v_reshaped.scalarType()
   # Determine device (page views may be on GPU)
-  let kvDevice: F.DeviceKind = if v_reshaped.is_cuda(): F.kCUDA else: F.kCPU
+  let kvDevice: F.DeviceKind = v_reshaped.deviceType()
   let kvOpts = F.tensorOptions(kvDtype, kvDevice)
   var k_full = F.empty(
     1, totalSeqLen, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim, kvOpts)
