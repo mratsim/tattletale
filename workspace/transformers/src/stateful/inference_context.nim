@@ -56,12 +56,6 @@ proc init*(
   ##   head_dim: Dimension per head (metadata)
 
   InferenceContext(
-    pages: newSeq[Page](0),
-    kv_position: 0,
-    input_tokens: newSeq[uint32](0),
-    position_ids: F.empty(0),
-    cos: F.empty(0),
-    sin: F.empty(0),
     num_layers: num_layers,
     batch_size: batch_size,
     kv_heads: kv_heads,
@@ -83,6 +77,11 @@ proc clearState*(ctx: var InferenceContext) =
   ## Clear KV state for reuse in a new sequence.
   ## Drops page references (GC may recycle to pool).
   ## Keeps metadata fields (num_layers, head_dim, etc.) for reuse.
+  ##
+  ## NOTE: cos/sin (RoPE) are NOT cleared — they are stable per model
+  ## and are overwritten by the next `setRopeForPositions` call.
+  ## Stale cos/sin cannot leak between sequences because
+  ## `setRopeForPositions` is always called before any forward pass.
   ctx.pages = default(seq[Page])
   ctx.kv_position = 0
   ctx.input_tokens = default(seq[uint32])

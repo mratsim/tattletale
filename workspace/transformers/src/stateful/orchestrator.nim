@@ -156,6 +156,7 @@ type
     page_pool: PagePool
     active_context*: InferenceContext
     num_layers: int
+    device: DeviceKind
     logical_map: KVCache[uint32, Page]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -184,9 +185,8 @@ proc init*(_: type Orchestrator;
     page_pool: PagePool.init(num_pages, num_layers, kv_heads, head_dim, dtype, device),
     active_context: InferenceContext.init(
       num_layers, batch_size, kv_heads, max_seq, head_dim),
-    num_layers: num_layers
-  )
-
+    num_layers: num_layers,
+    device: device)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Pool management
@@ -220,9 +220,10 @@ proc cowPartialPage(dst, src: Page; partialTokens, numLayers: int) =
   ## Copies `partialTokens` positions across all `numLayers` layers.
   ## The tensor slices are temporaries destroyed on return; they do not
   ## leak references to the pool's buffers.
-  for layerIdx in 0 ..< numLayers:
-    dst.k_view[layerIdx, 0 ..< partialTokens] = src.k_view[layerIdx, 0 ..< partialTokens]
-    dst.v_view[layerIdx, 0 ..< partialTokens] = src.v_view[layerIdx, 0 ..< partialTokens]
+  dst.k_view[0 ..< numLayers, 0 ..< partialTokens].copyFrom(
+    src.k_view[0 ..< numLayers, 0 ..< partialTokens])
+  dst.v_view[0 ..< numLayers, 0 ..< partialTokens].copyFrom(
+    src.v_view[0 ..< numLayers, 0 ..< partialTokens])
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -284,7 +285,7 @@ proc startSequence*(
       ctx.pages.add(orc.page_pool.borrow())
 
   # ── 5. Set position_ids for prefill ──
-  ctx.setPositionIdsArange(input_ids.len, offset = 0, device = device)
+  ctx.setPositionIdsArange(input_ids.len, offset = 0, device = orc.device)
 
 proc decodeStep*(orc: var Orchestrator, position: int, token_id: uint32,
                  device: DeviceKind | Device = kCPU) =
