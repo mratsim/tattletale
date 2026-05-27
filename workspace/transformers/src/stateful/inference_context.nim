@@ -102,6 +102,10 @@ proc setPositionIdsArange*(ctx: var InferenceContext, seq_len: int, offset: int 
   ##
   ## Convenience proc for common case.
   ##
+  ## Note: dtype is now kInt64 (changed from previous default).
+  ## The old `device=device` keyword argument was replaced with
+  ## explicit `tensorOptions(kInt64, device)`.
+  ##
   ## Args:
   ##   seq_len: Sequence length
   ##   offset: Starting offset (default 0 for prefill)

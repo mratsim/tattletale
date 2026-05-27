@@ -115,7 +115,7 @@
 ## Invariants:
 ## - It is a PagedRadixTrie, the unit is a page of 256 tokens
 ##     Fork only happen at 256 token boundaries. Eviction at 256 token boundaries.
-##     Data is stored as a sequence of tokens inteas of seq[array[256, token]] for convenience
+##     Data is stored as a sequence of tokens instead of seq[array[256, token]] for convenience
 ## - LPM (LongestPrefixMatch) doesn't modify the tree structure.
 ##   During traversal, the path taken is locked.
 ##   Assumption:
@@ -219,11 +219,11 @@ func new*[T, P](_: typedesc[KVCache[T, P]]): KVCache[T, P] =
 func ceilDiv*(num, denom: int): int {.inline.} =
   (num + denom - 1) div denom
 
-func isPowerOf2*(n: SomeInteger): bool {.inline.} =
+func isPowerOf2(n: SomeInteger): bool {.inline.} =
   ## Returns true if n is a power of 2
   (n and (n - 1)) == 0 and n > 0
 
-func round_step_down*(x: int, step: static int): int {.inline.} =
+func round_step_down(x: int, step: static int): int {.inline.} =
   ## Round the input to the previous multiple of "step"
   when step.isPowerOf2():
     # Step is a power of 2. (If compiler cannot prove that x>0 it does not make the optim)
@@ -231,7 +231,7 @@ func round_step_down*(x: int, step: static int): int {.inline.} =
   else:
     result = x - x mod step
 
-func round_step_up*(x: int, step: static int): int {.inline.} =
+func round_step_up(x: int, step: static int): int {.inline.} =
   ## Round the input to the next multiple of "step"
   when step.isPowerOf2():
     # Step is a power of 2. (If C compiler cannot prove that x>0 it does not make the optim)
@@ -344,7 +344,7 @@ template walkDown[T, P](cache: KVCache[T, P]; tokens: openArray[T], prologueBody
   ## walkDown the trie, following the `tokens` path
   ## and applying:
   ## - `descentIntoNodeBody` when descending into a new node level
-  ## - `processMatchBody` when the best match is found
+  ## - `processMatchAndExitBody` when the best match is found
   ##
   ## Available injected variable for the caller are:
   ## - node
@@ -855,9 +855,9 @@ proc evict*[T, P](cache: var KVCache[T, P]): int =
 
   # 3. seq.del + fixLinks for both WAVL trees
   parent.lpmLinks.del(idx)
-  fixLinksAfterDataDeletion(parent.lpmLinks, parent.lpmRoot, lastIdx, idx)
+  fixLinksAfterIndexRemap(parent.lpmLinks, parent.lpmRoot, lastIdx, idx)
   parent.evictLinks.del(idx)
-  fixLinksAfterDataDeletion(parent.evictLinks, parent.evictRoot, lastIdx, idx)
+  fixLinksAfterIndexRemap(parent.evictLinks, parent.evictRoot, lastIdx, idx)
 
   # If parent now has exactly 1 child, merge it upward (path compression)
   # to maintain the invariant, 0 child, 2 children or more, never one.

@@ -47,7 +47,7 @@ runnableExamples:
   wavlDelete(links, root, 1)
   data.del(1)
   links.del(1)
-  fixLinksAfterDataDeletion(links, root, lastIdx, 1)
+  fixLinksAfterIndexRemap(links, root, lastIdx, 1)
 
 import ./src/wavl_tree
 

@@ -1,3 +1,10 @@
+## Tattletale
+## Copyright (c) 2026 Mamy André-Ratsimbazafy
+## Licensed and distributed under either of
+##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+## at your option. This file may not be copied, modified, or distributed except according to those terms.
+
 ## Tests for PagedRadixTrie KV Cache
 ##
 ## Each test is a standalone proc so that ARC/ORC destructors fire
@@ -11,18 +18,6 @@ import
 
 privateAccess(PagedRadixNode)
 privateAccess(KVCache)
-
-# ── Local helpers ──────────────────────────────────────
-func sumLeafCount[T, P](cs: openArray[PagedRadixNode[T, P]]): int32 =
-  for c in cs: result += c.subtree_sum_leaves
-
-func sumStagingLock[T, P](cs: openArray[PagedRadixNode[T, P]]): int32 =
-  for c in cs: result += c.subtree_sum_locked
-
-func makePages(nTokens: int): seq[int] =
-  let nPages = ceilDiv(nTokens, 256)
-  result = newSeq[int](nPages)
-  for i in 0..<nPages: result[i] = i + 1
 
 # ════════════════════════════════════════════════════════
 # LPM

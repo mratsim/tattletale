@@ -816,9 +816,6 @@ theorem eviction_succeeds_if_possible (s : KVCacheState) (hInv : StateInvariants
   · exfalso; exact h_nonempty h
   · simp
 
--- ============================================================================
--- 6. Operation postconditions
--- ============================================================================
 -- 9. Operation postconditions
 -- ============================================================================
 

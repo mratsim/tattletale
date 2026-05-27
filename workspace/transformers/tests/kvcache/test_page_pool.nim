@@ -2,7 +2,7 @@
 ## Copyright (c) 2026 Mamy André-Ratsimbazafy
 ## Licensed and distributed under either of
 ##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the http://www.apache.org/licenses/LICENSE-2.0).
+##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/unittest
@@ -37,7 +37,7 @@ suite "Page + KVCache integration (P = Page, public API only)":
     # Graft two single-token sequences, each with one "page"
     # Note: Page here is just a token type for the trie; actual pool/buffer
     # management is tested via the orchestrator integration tests.
-    type DummyPage = int  # use int to verify evict's return type still works
+    type DummyPage = int  # int as page payload (no GPU pool needed for trie-only tests)
     var dcache = KVCache[uint32, DummyPage].new()
     dcache.graftPages(@[1'u32], @[42])
     dcache.graftPages(@[2'u32], @[43])

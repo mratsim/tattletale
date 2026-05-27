@@ -55,7 +55,7 @@
 ##   if link.r >= 0: links[link.r].p = deleteIdx
 ##   if root == lastIdx: root = deleteIdx
 ##
-## **fixLinksAfterDataDeletion**
+## **fixLinksAfterIndexRemap**
 ## ~~~~~~~~~~~~~~~~~~~~~
 ## Exported so containers (e.g. kvcache.nim) can compose the removal
 ## dance themselves:
@@ -63,7 +63,7 @@
 ##   wavlDelete(links, root, childIdx)   # O(log N)
 ##   dataSeq.del(childIdx)                # O(1) swap-pop
 ##   links.del(childIdx)                  # O(1)
-##   fixLinksAfterDataDeletion(links, root, lastIdx, deleteIdx)  # O(1)
+##   fixLinksAfterIndexRemap(links, root, lastIdx, deleteIdx)  # O(1)
 ##
 ## **Comparison callbacks**
 ## ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -741,7 +741,7 @@ func wavlPrev*(links: openArray[WavlLink]; idx: int32): int32 =
 # Index fixup after seq.del
 # ---------------------------------------------------------------------------
 
-func fixLinksAfterDataDeletion*(links: var seq[WavlLink]; root: var int32;
+func fixLinksAfterIndexRemap*(links: var seq[WavlLink]; root: var int32;
                         oldIdx, newIdx: int32) =
   ## After `seq.del(delIdx)` moved the last element from `oldIdx` to
   ## `newIdx` (= delIdx), update all remaining WAVL references that

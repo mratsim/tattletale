@@ -92,13 +92,7 @@ proc generate*(
   var ids = model.getTokenizer().encode(prompt)
   let startPos = ids.len
 
-  orc.startSequence(
-    ids.mapIt(it.uint32),
-    cfg.num_key_value_heads,
-    cfg.head_dim,
-    dtype,
-    device
-  )
+  orc.startSequence(ids.mapIt(it.uint32))
 
   # === PREFILL: forward on full prompt ===
   let inputIds = F.toTensor([ids]).to(device)

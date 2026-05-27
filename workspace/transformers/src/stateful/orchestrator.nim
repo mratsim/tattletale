@@ -231,10 +231,7 @@ proc cowPartialPage(dst, src: Page; partialTokens, numLayers: int) =
 
 proc startSequence*(
     orc: var Orchestrator,
-    input_ids: seq[uint32],
-    kv_heads, head_dim: int,
-    dtype: ScalarKind,
-    device: DeviceKind) =
+    input_ids: seq[uint32]) =
   ## Start a new sequence.
   ##
   ## 1. Resets the InferenceContext (clears pages, tokens, position).
@@ -245,15 +242,10 @@ proc startSequence*(
   ##
   ## Args:
   ##   input_ids: Input token IDs (prompt)
-  ##   kv_heads: Number of KV heads (from config)
-  ##   head_dim: Dimension per head
-  ##   dtype: Data type (e.g., kBFloat16)
-  ##   device: Device (e.g., kCUDA)
-  ##
-  ## Note:
-  ##   `kv_heads`, `head_dim`, `dtype`, `device` are currently unused
-  ##   (pool is created eagerly in `init`).  They remain in the signature
-  ##   for API stability and future use (e.g., dynamic page sizing).
+
+  if input_ids.len == 0:
+    raise newException(ValueError,
+      "[ttt] Empty prompt")
 
   # Reset context for fresh sequence
   orc.active_context.clearState()

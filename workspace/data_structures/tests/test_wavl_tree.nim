@@ -8,9 +8,6 @@
 import std/random
 import ../data_structures
 
-proc wavlAssertValid(links: openArray[WavlLink]; root: int32; ctx: string) =
-  ## Assert WAVL invariants
-  wavlVerifyInvariants(links, root, ctx)
 
 # ---------------------------------------------------------------------------
 # Quick sanity test
@@ -27,7 +24,7 @@ proc testBasic() =
   # Insert
   for i in 0..4:
     wavlInsert(links, root, int32(i), cmp)
-  wavlAssertValid(links, root, "after insert")
+  wavlVerifyInvariants(links, root, "after insert")
 
   # Find
   let idx20 = wavlFind(links, root, proc(idx: int32): int =
@@ -52,15 +49,15 @@ proc testBasic() =
 
   # Delete leaf (10 — index 1)
   wavlDelete(links, root, 1)
-  wavlAssertValid(links, root, "after delete 10")
+  wavlVerifyInvariants(links, root, "after delete 10")
 
   # Delete middle (30 — index 0)
   wavlDelete(links, root, 0)
-  wavlAssertValid(links, root, "after delete 30")
+  wavlVerifyInvariants(links, root, "after delete 30")
 
   # Delete max (50 — index 2)
   wavlDelete(links, root, 2)
-  wavlAssertValid(links, root, "after delete 50")
+  wavlVerifyInvariants(links, root, "after delete 50")
 
   ordered.setLen(0)
   curr = wavlMin(links, root)
@@ -88,7 +85,7 @@ proc testMonotonic(N: int) =
 
   for i in 0..<N:
     wavlInsert(links, root, int32(i), cmp)
-  wavlAssertValid(links, root, "after monotonic insert")
+  wavlVerifyInvariants(links, root, "after monotonic insert")
 
   # Check in-order
   var ordered: seq[int]
@@ -106,7 +103,7 @@ proc testMonotonic(N: int) =
       if i < data[k]: -1 elif i > data[k]: 1 else: 0)
     doAssert idx >= 0, "should find " & $i
     wavlDelete(links, root, idx)
-  wavlAssertValid(links, root, "after delete half")
+  wavlVerifyInvariants(links, root, "after delete half")
 
   let remaining = N div 2
   ordered.setLen(0)
@@ -137,7 +134,7 @@ proc testRandom(N: int) =
 
   for i in 0..<N:
     wavlInsert(links, root, int32(i), cmp)
-  wavlAssertValid(links, root, "after random insert")
+  wavlVerifyInvariants(links, root, "after random insert")
 
   var ordered: seq[int]
   var curr = wavlMin(links, root)
@@ -163,7 +160,7 @@ proc testRemoveChild() =
 
   for i in 0 ..< data.len:
     wavlInsert(links, root, int32(i), cmp)
-  wavlAssertValid(links, root, "after insert")
+  wavlVerifyInvariants(links, root, "after insert")
 
   # Remove child at index 2 (value 80) via the dance
   let delIdx: int32 = 2
@@ -172,8 +169,8 @@ proc testRemoveChild() =
   wavlDelete(links, root, delIdx)
   data.del(delIdx)
   links.del(delIdx)
-  fixLinksAfterDataDeletion(links, root, lastIdx, delIdx)
-  wavlAssertValid(links, root, "after removeChild dance")
+  fixLinksAfterIndexRemap(links, root, lastIdx, delIdx)
+  wavlVerifyInvariants(links, root, "after removeChild dance")
 
   doAssert data.len == 9
 
