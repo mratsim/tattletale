@@ -7,8 +7,8 @@
 
 import std/unittest
 import std/importutils
-import ../../src/stateful/page_pool
-import ../../src/stateful/kvcache
+import workspace/transformers/src/stateful/page_pool
+import workspace/transformers/src/stateful/kvcache
 
 # These tests verify Page + KVCache lifecycle using only public APIs.
 # PageObj fields (index, pool) are private — we interact via borrow() and

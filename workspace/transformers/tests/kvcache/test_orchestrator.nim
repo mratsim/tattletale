@@ -31,10 +31,10 @@ import
   std/importutils,
   workspace/libtorch as F,
   workspace/libtorch_testutils,
-  ../../src/stateful/kvcache,        # TokensPerPage, ceilDiv
-  ../../src/stateful/page_pool,       # Page, pageIndex
-  ../../src/stateful/inference_context,
-  ../../src/stateful/orchestrator {.all.}
+  workspace/transformers/src/stateful/kvcache,        # TokensPerPage, ceilDiv
+  workspace/transformers/src/stateful/page_pool,       # Page, pageIndex
+  workspace/transformers/src/stateful/inference_context,
+  workspace/transformers/src/stateful/orchestrator {.all.}
 privateAccess(Orchestrator)
 
 # ═════════════════════════════════════════════════════════════════════════════

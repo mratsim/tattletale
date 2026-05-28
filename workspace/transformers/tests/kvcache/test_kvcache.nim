@@ -14,8 +14,8 @@ import
   std/unittest,
   std/math,
   std/importutils,
-  ../../src/stateful/kvcache {.all.},
-  ../../src/stateful/stateful_testutils
+  workspace/transformers/src/stateful/kvcache {.all.},
+  workspace/transformers/src/stateful/stateful_testutils
 
 privateAccess(PagedRadixNode)
 privateAccess(KVCache)
@@ -849,9 +849,9 @@ proc runTests*() =
     test "three different prompts at first token use all 3 branches":
       check testThreeDifferentPrompts()
 
-suite "CODERA-018 (subtree_sum_leaves decrement order)":
-  test "eviction from 3-level tree maintains A5 invariant":
-    check testCoderA018SubtreeSumLeavesDecrement()
+  suite "CODERA-018 (subtree_sum_leaves decrement order)":
+    test "eviction from 3-level tree maintains A5 invariant":
+      check testCoderA018SubtreeSumLeavesDecrement()
 
 when isMainModule:
   runTests()

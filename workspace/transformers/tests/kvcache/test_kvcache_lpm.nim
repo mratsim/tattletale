@@ -8,7 +8,7 @@
 import std/unittest
 import std/math
 import std/importutils
-import ../../src/stateful/kvcache {.all.}
+import workspace/transformers/src/stateful/kvcache {.all.}
 
 privateAccess(PagedRadixNode)
 privateAccess(KVCache)
