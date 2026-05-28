@@ -73,7 +73,6 @@ proc parseTorchDtype(s: string): ScalarKind =
 proc generate*(
         model: Model,
         prompt: string,
-        device: DeviceKind | Device = kCPU,
         temp = 1.0f,
         maxTokens = 200,
         maxContextLen: int = -1): string =

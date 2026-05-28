@@ -654,6 +654,52 @@ proc testInferenceContextRefSemantic(): bool =
 
   result = true
 
+# ═════════════════════════════════════════════════════════════════════════════
+# computeNumPages and computePageSizeBytes
+# ═════════════════════════════════════════════════════════════════════════════
+
+proc testComputeNumPages(): bool =
+  ## Verify computeNumPages computes correct page counts.
+  ## Pure function: no orchestrator needed.
+  ##
+  ## Qwen3-0.6B: max_position_embeddings=4096 -> pagesPerRequest=16, headroom=1
+  doAssert computeNumPages(4096, concurrentRequests = 1) == 17,
+    "computeNumPages(4096,1) should be 17"
+  ## 8192 context: 8192/256 = 32 pages, headroom for 1 concurrent = 33
+  doAssert computeNumPages(8192, concurrentRequests = 1) == 33,
+    "computeNumPages(8192,1) should be 33"
+  ## 2 concurrent requests at 4096: 16*2 = 32, headroom 2 = 34
+  doAssert computeNumPages(4096, concurrentRequests = 2) == 34,
+    "computeNumPages(4096,2) should be 34"
+  ## Edge: 0 context should not crash (returns at least headroom)
+  doAssert computeNumPages(0, concurrentRequests = 1) == 1,
+    "computeNumPages(0,1) should be 1"
+  result = true
+
+proc testComputePageSizeBytes(): bool =
+  ## Verify computePageSizeBytes computes correct byte sizes.
+  ## Pure function: no orchestrator needed.
+  ## Formula: num_layers * TokensPerPage * kv_heads * head_dim * elementSize * 2
+  ##
+  ## Qwen3-0.6B params: layers=28, kv_heads=8, head_dim=128, bf16=2 bytes
+  let size = computePageSizeBytes(num_layers = 28, kv_heads = 8,
+    head_dim = 128, dtype = kBFloat16)
+  ## elPerBuf = 28 * 256 * 8 * 128 = 7,340,032
+  ## result = 7,340,032 * 2 * 2 = 29,360,128
+  doAssert size == 29360128,
+    "computePageSizeBytes(Qwen3-0.6B) should be 29360128, got " & $size
+  ## Single layer, 1 head, dim=4, bf16: 1*256*1*4*2*2 = 4096
+  let small = computePageSizeBytes(num_layers = 1, kv_heads = 1,
+    head_dim = 4, dtype = kBFloat16)
+  doAssert small == 4096,
+    "computePageSizeBytes(1,1,4,bf16) should be 4096, got " & $small
+  ## Float32 doubles the size vs bf16 for same layout
+  let f32 = computePageSizeBytes(num_layers = 1, kv_heads = 1,
+    head_dim = 4, dtype = kFloat32)
+  doAssert f32 == 8192,
+    "computePageSizeBytes(1,1,4,f32) should be 8192, got " & $f32
+  result = true
+
 proc runTests*() =
   runTest("BUG-B-001: kv_position tracking through startSequence and decodeStep",
     testBugB001KvPositionTracking)
@@ -696,6 +742,12 @@ proc runTests*() =
 
   runTest("COV-B-008: InferenceContext ref semantic aliasing",
     testInferenceContextRefSemantic)
+
+  runTest("COV-A-007: computeNumPages pure function",
+    testComputeNumPages)
+
+  runTest("COV-A-007: computePageSizeBytes pure function",
+    testComputePageSizeBytes)
 
 when isMainModule:
   runTests()
