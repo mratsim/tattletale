@@ -292,6 +292,7 @@ proc unsafeGetTensorImpl*(a: TorchTensor): pointer {.importcpp: "#.unsafeGetTens
   ## Returns raw TensorImpl* without modifying refcount.
   ## The caller must not free this pointer.
   ## Used by Nim → Python path (capsule creation).
+
 # 1. =destroy: C++ destructor decrements refcount
 proc `=destroy`*(t: var TorchTensor) {.importcpp: "#.~Tensor()".}
   # Calls ~intrusive_ptr() which calls reset_() → decrements refcount
@@ -323,6 +324,14 @@ proc `=sink`*(dest: var TorchTensor; src: TorchTensor) {.importcpp: "# = std::mo
 # 5. =dup: Duplicate for copy-on-sink scenarios
 proc `=dup`*(t: TorchTensor): TorchTensor {.importcpp: "torch::Tensor(#)".}
   # C++ copy constructor increments refcount, returns new value
+
+proc use_count*(t: TorchTensor): int {.importcpp: "#.use_count()".}
+  ## Returns the refcount of a Tensor at a libtorch level
+  ## This counts cached tensor as well
+
+proc adjusted_use_count*(t: TorchTensor): int {.importcpp: "#.adjusted_use_count()".}
+  ## Returns the refcount minus caching of a Tensor at a libtorch level
+  ##
 
 # Strings & Debugging
 # -----------------------------------------------------------------------

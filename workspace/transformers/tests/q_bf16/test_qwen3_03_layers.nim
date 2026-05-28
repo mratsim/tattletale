@@ -20,6 +20,8 @@ import
   workspace/transformers/src/layers,
   workspace/transformers/src/deserialization,
   workspace/transformers/src/stateful/inference_context,
+  workspace/transformers/src/stateful/kvcache,
+  workspace/transformers/src/stateful/page_pool,
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/positron,
@@ -159,8 +161,18 @@ proc main() =
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = numKvHeads,
-        max_seq = 4096, head_dim = headDim,
+        max_seq = 4096, head_dim = headDim)
+
+      let pool = PagePool.init(
+        64, num_layers = 9,
+        kv_heads = numKvHeads, head_dim = headDim,
         dtype = F.kBFloat16, device = F.kCPU)
+      let numPages = ceilDiv(4096, TokensPerPage)
+
+      # Borrow pages once — reused across all batch items
+      for i in 0 ..< numPages:
+        ctx.pages.add(pool.borrow())
+
       var attn = RopeGQAttention.init(8, "model.layers.8.self_attn",
         Linear.init(qWeight), Linear.init(kWeight), Linear.init(vWeight), Linear.init(oWeight),
         qNorm, kNorm,
@@ -185,18 +197,20 @@ proc main() =
 
         let batch = hiddenStates.size(0)
         var outputs: seq[Tensor] = @[]
-
         # Process one batch at a time
         for b in 0..<batch:
-          ctx.reset()
+          # Reset positional state — keep pages (same attn, same pages, different positions)
+          ctx.kv_position = 0
           ctx.position_ids = hfPosIds[b]  # (seq,) for this batch item
           ctx.setRopeForPositions(rotary)
 
           # Verify compute() produces the same cos/sin as HF reference (batch-independent)
           let hfCos2d = if hfCos.dim == 3: hfCos[b] else: hfCos
           let hfSin2d = if hfSin.dim == 3: hfSin[b] else: hfSin
-          assertAllClose(ctx.cos, hfCos2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
-          assertAllClose(ctx.sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(ctx.cos, hfCos2d, rtol = 1e-5, abstol = 1e-5,
+              msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(ctx.sin, hfSin2d, rtol = 1e-5, abstol = 1e-5,
+              msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
 
           let x = hiddenStates[b].unsqueeze(0)
           let o = attn(ctx, x)
@@ -300,8 +314,17 @@ proc main() =
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = numKvHeads,
-        max_seq = 4096, head_dim = headDim,
+        max_seq = 4096, head_dim = headDim)
+
+      let pool = PagePool.init(
+        64, num_layers = 9,
+        kv_heads = numKvHeads, head_dim = headDim,
         dtype = F.kBFloat16, device = F.kCPU)
+      let numPages = ceilDiv(4096, TokensPerPage)
+
+      # Borrow pages once — reused across all case/batch iterations
+      for i in 0 ..< numPages:
+        ctx.pages.add(pool.borrow())
 
       # Initialize sublayers
       var attn = RopeGQAttention.init(8, "model.layers.8.self_attn",
@@ -335,25 +358,26 @@ proc main() =
         let batch = inputHiddenStates.size(0)
         var outputs: seq[Tensor] = @[]
         var outputResiduals: seq[Tensor] = @[]
-
         # Process one batch at a time
         for b in 0..<batch:
-          ctx.reset()
+          # Reset positional state -- keep pages (same block, different positions)
+          ctx.kv_position = 0
           ctx.position_ids = hfPosIds[b]  # (seq,) for this batch item
           ctx.setRopeForPositions(rotary)
 
           # Verify compute() produces the same cos/sin as HF reference (batch-independent)
           let hfCos2d = if hfCos.dim == 3: hfCos[b] else: hfCos
           let hfSin2d = if hfSin.dim == 3: hfSin[b] else: hfSin
-          assertAllClose(ctx.cos, hfCos2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
-          assertAllClose(ctx.sin, hfSin2d, rtol = 1e-5, abstol = 1e-5, msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(ctx.cos, hfCos2d, rtol = 1e-5, abstol = 1e-5,
+              msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
+          assertAllClose(ctx.sin, hfSin2d, rtol = 1e-5, abstol = 1e-5,
+              msg = "RoPE cos/sin mismatch (case " & $caseNum & ", batch " & $b & ")")
 
           let x = inputHiddenStates[b].unsqueeze(0)     # (1, seq, hidden)
           let res = residual[b].unsqueeze(0)             # (1, seq, hidden)
           let (o, oRes) = transformer(ctx, x, some(res))
           outputs.add(o)
           outputResiduals.add(oRes)
-
         let finalOutput = F.cat(outputs)
         let finalOutputResidual = F.cat(outputResiduals)
 

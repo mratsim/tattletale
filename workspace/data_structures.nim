@@ -1,0 +1,2 @@
+import workspace/data_structures/data_structures
+export data_structures
