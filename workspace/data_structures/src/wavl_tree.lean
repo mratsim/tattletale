@@ -66,7 +66,7 @@ structure WavlLink where
   p    : Int := WavlNil
   l    : Int := WavlNil
   r    : Int := WavlNil
-  rank : Bool := false
+  rank : Nat := 0
   deriving Repr, DecidableEq
 
 structure WavlTree (α : Type) where
@@ -86,7 +86,7 @@ def getLink (links : Array WavlLink) (idx : Int) : WavlLink :=
   if h : 0 ≤ idx ∧ idx.toNat < links.size then
     links[idx.toNat]
   else
-    { p := WavlNil, l := WavlNil, r := WavlNil, rank := false }
+    { p := WavlNil, l := WavlNil, r := WavlNil, rank := 0 }
 
 
 /-- Modify a link at Int index. No-op if out of bounds. -/
@@ -105,19 +105,20 @@ def modLinks (links : Array WavlLink) (mods : List (Int × (WavlLink → WavlLin
 -- ============================================================================
 
 def getParity (t : WavlTree α) (idx : Int) : Bool :=
-  (getLink t.links idx).rank
+  (getLink t.links idx).rank % 2 == 1
 
 def is2Child (t : WavlTree α) (child parent : Int) : Prop :=
-  getParity t child = getParity t parent
+  (getLink t.links parent).rank - (getLink t.links child).rank = 2
 
 def isLeaf (t : WavlTree α) (idx : Int) : Prop :=
   let lnk := getLink t.links idx
   lnk.l = WavlNil ∧ lnk.r = WavlNil
 
 def promote (t : WavlTree α) (idx : Int) : WavlTree α :=
-  { t with links := modLink t.links idx (fun l => { l with rank := !l.rank }) }
+  { t with links := modLink t.links idx (fun l => { l with rank := l.rank + 1 }) }
 
-def demote (t : WavlTree α) (idx : Int) : WavlTree α := promote t idx
+def demote (t : WavlTree α) (idx : Int) : WavlTree α :=
+  { t with links := modLink t.links idx (fun l => { l with rank := l.rank - 1 }) }
 
 def doublePromote (t : WavlTree α) (idx : Int) : WavlTree α := t
 def doubleDemote  (t : WavlTree α) (idx : Int) : WavlTree α := t
@@ -253,12 +254,11 @@ partial def rankInvariant (t : WavlTree α) (idx : Int) : Prop :=
     let lnk := getLink t.links idx
     let lChild := lnk.l
     let rChild := lnk.r
-    let idxParity := getParity t idx
-    let lParity := getParity t lChild
-    let rParity := getParity t rChild
-    (lChild ≠ WavlNil ∨ rChild ≠ WavlNil ∨ ¬ idxParity) ∧
-    (lChild = WavlNil ∨ idxParity = lParity ∨ idxParity ≠ lParity) ∧
-    (rChild = WavlNil ∨ idxParity = rParity ∨ idxParity ≠ rParity) ∧
+    let idxRank := lnk.rank
+    let lRank := (getLink t.links lChild).rank
+    let rRank := (getLink t.links rChild).rank
+    (lChild = WavlNil ∨ idxRank = lRank + 1 ∨ idxRank = lRank + 2) ∧
+    (rChild = WavlNil ∨ idxRank = rRank + 1 ∨ idxRank = rRank + 2) ∧
     rankInvariant t lChild ∧ rankInvariant t rChild
 
 partial def parentPointersConsistent (t : WavlTree α) (idx : Int) : Prop :=
@@ -287,7 +287,7 @@ partial def verifySubtree (t : WavlTree α) (n : Int) : Prop :=
     lnk.l ≠ n ∧ lnk.r ≠ n ∧ lnk.p ≠ n ∧
     (lnk.l = WavlNil ∨ (getLink t.links lnk.l).p = n) ∧
     (lnk.r = WavlNil ∨ (getLink t.links lnk.r).p = n) ∧
-    (lnk.l ≠ WavlNil ∨ lnk.r ≠ WavlNil ∨ ¬ getParity t n) ∧
+    (lnk.l ≠ WavlNil ∨ lnk.r ≠ WavlNil ∨ (getLink t.links n).rank = 0) ∧
     verifySubtree t lnk.l ∧ verifySubtree t lnk.r
 
 def wavlVerifyInvariants (t : WavlTree α) (cmp : ComparisonFunction α) : Prop :=
@@ -540,10 +540,17 @@ theorem fixLinksAfterIndexRemap_root_updated (t : WavlTree α) (oldIdx newIdx : 
 theorem promote_flips_parity (t : WavlTree α) (idx : Int) (h : 0 ≤ idx ∧ idx.toNat < t.links.size) :
     getParity (promote t idx) idx = ¬ getParity t idx := by
   unfold promote getParity getLink modLink
-  have hsize : idx.toNat < (t.links.modify idx.toNat (fun l => { l with rank := !l.rank })).size := by
+  have hsize : idx.toNat < (t.links.modify idx.toNat (fun l => { l with rank := l.rank + 1 })).size := by
     simpa using h.2
   have hget := Array.getElem_modify (h := hsize)
-  simp [h.1, h.2, hget]
+  have hparity : ∀ (n : Nat), ((n + 1) % 2 == 1) = ¬ (n % 2 == 1) := by
+    intro n
+    have hm := Nat.mod_two_eq_zero_or_one n
+    have hsucc := Nat.succ_mod_succ_eq n 1
+    rcases hm with (hm | hm)
+    · simp [hm, hsucc]
+    · simp [hm, hsucc]
+  simp [h.1, h.2, hget, hparity]
 
 -- ============================================================================
 -- 18. Easy theorems (fully proved)
@@ -667,6 +674,12 @@ theorem wavlFindBestMatch_lpm_correct (t : WavlTree α) (cmp : ComparisonFunctio
     )) := by
   sorry
 
+-- TODO(proof): rankInvariant should imply a logarithmic height bound.
+-- A WAVL tree satisfying rankInvariant has height ≤ 2 * log₂(size + 1).
+-- Proving this requires defining height/size functions and proving an
+-- exponential size lower bound from the rank constraint (each non-leaf node
+-- has rank at least 1 + min(child_rank), giving size doubling per rank level).
+-- See Haeupler, Sen, Tarjan (2015) "Rank-Balanced Trees" Lemma 2.1.
 theorem rank_invariant_implies_log_height (t : WavlTree α) (idx : Int) :
     rankInvariant t idx → True := by
   intro hRank; trivial

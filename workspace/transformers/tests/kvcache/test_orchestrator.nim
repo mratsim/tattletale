@@ -27,7 +27,6 @@
 ##       workspace/transformers/tests/kvcache/test_orchestrator.nim
 
 import
-  std/unittest,
   std/importutils,
   workspace/libtorch as F,
   workspace/libtorch_testutils,
@@ -206,9 +205,9 @@ proc testOrchestratorLifecycleRoundtrip(): bool =
   # Sequence 1
   orc.startSequence(tokens)
   let ctx = orc.getInferenceContextMut()
-  # kv_position reflects total prefill tokens (BUG-B-001 fix)
+  # kv_position is the write cursor; stays 0 after startSequence (set later by generate())
   doAssert ctx.kv_position == 0,
-    "Expected kv_position=128 after 128-token prefill, got " &
+    "Expected kv_position=0 (write cursor stays 0 after prefill), got " &
     $ctx.kv_position
   doAssert ctx.pages.len == 1
 
@@ -298,7 +297,6 @@ proc testWriteStartFirstPrefill(): bool =
 
   # All 128 tokens would be written to page 0 (positions 0-127)
   # No positions are skipped — verified by writeStart = 0
-  result = true
   result = true
 
 proc testWriteStartCachedPrefix(): bool =
