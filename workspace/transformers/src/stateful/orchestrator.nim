@@ -34,6 +34,79 @@ import
 #     └──────────────────┘   └──────────────────┘   └──────────┘   └──────────────────┘
 # ```
 #
+# ## Field lifecycles
+#
+# Two critical fields in `InferenceContext` manage write tracking.
+# They serve DIFFERENT purposes and must not be confused:
+#
+# ### `cached_tokens` — Attention write-skip offset
+#
+# Purpose: Tell the attention layer how many prefix positions are ALREADY in the
+#          trie from LPM, so it can skip writing them (protecting immutable pages).
+#
+# ```
+#            startSequence                     decodeStep × N
+#                 │                                │
+#                 ▼                                ▼
+#     ┌─────────────────────┐           ┌────────────────────┐
+#     │ LPM → cached_tokens │           │  cached_tokens     │
+#     │ = matched count     │──────────▶│  unchanged         │
+#     │                     │           │  (never updated    │
+#     │ Attention read:     │           │   after LPM)       │
+#     │ writeStart =        │           │                    │
+#     │   max(0, cached     │           │ Attention reads    │
+#     │    - offset)        │           │ same cached_tokens │
+#     └─────────────────────┘           └────────────────────┘
+# ```
+#
+# Lifecycle:
+#   1. `startSequence`: set to `matched.totalTokenMatched` (0 for empty trie).
+#   2. **Never updated again** during the sequence (stable across decode steps).
+#   3. `clearState`: reset to 0.
+#
+# Attention's `writeStart` formula:
+#   writeStart = max(0, cached_tokens - offset)
+#   - First prefill: cached_tokens=0, offset=0 → writeStart=0, ALL positions written.
+#   - COW continuation: cached_tokens=300, offset=0 → writeStart=300, cached prefix skipped.
+#   - Decode: cached_tokens=0, offset=28 → writeStart=0, writes 1 new token.
+#
+# ### `kv_position` — Page allocation write cursor
+#
+# Purpose: Track total tokens written to the KV cache so far in this sequence.
+#          Used ONLY by `decodeStep` for page-boundary detection.
+#
+# ```
+#            startSequence         generate() after          decodeStep × N
+#                                    prefill forward
+#                 │                       │                       │
+#                 ▼                       ▼                       ▼
+#     ┌─────────────────────┐   ┌─────────────────────┐   ┌────────────────────┐
+#     │ kv_position = 0    │   │ setKvPosition(      │   │ Check: kv_position  │
+#     │ (no tokens written  │──▶│   ids.len)          │──▶│  > 0 and mod 256    │
+#     │  yet, LPM matched   │   │                     │   │  == 0 → borrow page │
+#     │  tokens are in trie,│   │ kv_position now     │   │ kv_position += 1    │
+#     │  not in local pages)│   │ reflects total      │   │                     │
+#     └─────────────────────┘   │ written tokens      │   │ Positions 0..N-1    │
+#                              └─────────────────────┘   │ are in local pages  │
+#                                                         └────────────────────┘
+# ```
+#
+# Lifecycle:
+#   1. `startSequence`: set to 0 (no local tokens written yet).
+#   2. `setKvPosition(n)` (called by generate() AFTER prefill forward): set to ids.len.
+#   3. `decodeStep`: checked for page boundary, then incremented by 1.
+#   4. `clearState`: reset to 0.
+#
+# ### Why two fields? (BUG-B-001 history)
+#
+# Originally `kv_position` was used for BOTH purposes. Setting it to `input_ids.len`
+# in `startSequence` caused the attention layer's `writeStart = max(0, kv_position - offset)`
+# to compute writeStart = seq_len for the first prefill — skipping ALL KV writes.
+# The KV cache was empty, and every decode step read garbage.
+#
+# Separating `cached_tokens` (write-skip, stable after LPM) from `kv_position`
+# (write-cursor, updated after forward pass) eliminates this coupling.
+#
 # ## Sequence lifecycle
 #
 # 1. **init** — Creates the GPU page pool (eager allocation), the PagedRadixTrie
@@ -44,11 +117,12 @@ import
 #    on the trie to find shared prefix with existing sequences.  Handles
 #    Copy-on-Write for the partially-matched page (if the match ends mid-page).
 #    Borrows fresh pages from the pool for any unmatched prompt tokens.  Sets
-#    position_ids for the prefill forward pass.
+#    position_ids for the prefill forward pass.  Sets `cached_tokens` from LPM.
 #
 # 3. **decodeStep (× N)** — Appends one token to the tracking sequence.  If
 #    the write cursor crosses a page boundary, borrows a new page.  Updates
-#    position_ids for the single-token decode forward pass.
+#    position_ids for the single-token decode forward pass.  Checks `kv_position`
+#    for page boundaries (not `cached_tokens`).
 #
 # 4. **endSequence** — Collects ALL tokens and ALL pages accumulated during the
 #    sequence, then sinks them into the trie via `graftPages`.  The trie
@@ -84,7 +158,6 @@ import
 # correctly handles the Nim Tensor ref → C++ TorchTensor → intrusive_ptr →
 # Storage → CUDA allocator chain.
 #
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -195,6 +268,10 @@ proc getInferenceContextMut*(orc: var Orchestrator): var InferenceContext {.inli
   ## Get the active inference context.
   orc.active_context
 
+proc setKvPosition*(orc: var Orchestrator, pos: int) {.inline.} =
+  ## Set the write cursor position (called after prefill forward completes).
+  orc.active_context.kv_position = pos
+
 # Pool management
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -264,10 +341,10 @@ proc startSequence*(
   # ── 1. LPM — find shared prefix ──
   ctx.input_tokens = input_ids
   let matched = orc.logical_map.lpm(input_ids)
-  ctx.kv_position = matched.totalTokenMatched
+  ctx.cached_tokens = matched.totalTokenMatched  # for attention writeStart
 
   # ── 2. COW partial page handling ──
-  let partialTokens = ctx.kv_position mod TokensPerPage
+  let partialTokens = ctx.cached_tokens mod TokensPerPage
   var cowPage: Page = nil
   var cowPageUsed = false
   if partialTokens > 0 and matched.pages.len > 0:
@@ -299,8 +376,6 @@ proc startSequence*(
 
   # ── 5. Set position_ids for prefill ──
   ctx.setPositionIdsArange(input_ids.len, offset = 0, device = orc.device)
-  # FIX BUG-B-001: Update write cursor to reflect actual prefill token count
-  ctx.kv_position = input_ids.len
 
 proc decodeStep*(orc: var Orchestrator, position: int, token_id: uint32,
                  device: DeviceKind | Device = kCPU) =

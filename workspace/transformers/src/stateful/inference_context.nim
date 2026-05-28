@@ -22,7 +22,8 @@ type InferenceContext* = ref object
   ##   - Discarded when sequence completes
 
   pages*: seq[Page]           # KV pages: matched from trie + newly borrowed
-  kv_position*: int            # Write cursor (next token position to write into)
+  kv_position*: int            # Write cursor (next token position to write into), for page allocation
+  cached_tokens*: int          # Tokens already in trie from LPM (for attention writeStart)
   input_tokens*: seq[uint32]   # Token sequence tracking (for graftPages at sequence end)
 
   position_ids*: Tensor       # [0,1,2] for prefill, [3] for decode, [6,3,11] for ragged
@@ -84,6 +85,7 @@ proc clearState*(ctx: var InferenceContext) =
   ## `setRopeForPositions` is always called before any forward pass.
   ctx.pages = default(seq[Page])
   ctx.kv_position = 0
+  ctx.cached_tokens = 0
   ctx.input_tokens = default(seq[uint32])
   ctx.position_ids = nil
 

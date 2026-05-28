@@ -100,6 +100,8 @@ proc generate*(
   # === PREFILL: forward on full prompt ===
   let inputIds = F.toTensor([ids]).to(device)
   let logits = model.forward(orc.getInferenceContextMut(), inputIds)
+  # kv_position must reflect total prefill tokens for correct decode page allocation
+  orc.setKvPosition(ids.len)
   let lastLogits = logits.narrow(1, startPos - 1, 1).squeeze(1)
   var nextToken = sample(lastLogits, temp)
   ids.add(nextToken)

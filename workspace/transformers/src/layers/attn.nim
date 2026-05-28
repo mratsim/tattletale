@@ -218,7 +218,7 @@ proc forward(
   let offset = ctx.position_ids.min().item(int)
   # Skip writing cached prefix positions (already in trie from COW)
   # TODO: how to test usage of cache?
-  let writeStart = max(0, ctx.kv_position - offset)
+  let writeStart = max(0, ctx.cached_tokens - offset)
   for t in writeStart ..< seq_len:
     let globalPos = offset + t
     let pageIdx = globalPos div TokensPerPage
