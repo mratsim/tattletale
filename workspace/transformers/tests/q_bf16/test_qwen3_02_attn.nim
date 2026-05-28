@@ -189,8 +189,89 @@ proc main() =
       echo "  ✅ KV cache stores unrotated values"
       true
 
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Multi-page attention write loop + gather
+  # ────────────────────────────────────────────────────────────────────────
+  runTest "Multi-page write loop + gather (300 tokens = 1 full + 44 partial)":
+    proc(): bool =
+      let attn = setupAttn()
+      var ctx = InferenceContext.init(
+        num_layers = 28, batch_size = 1,
+        kv_heads = 8, max_seq = 4096, head_dim = 128)
+
+      let pool = PagePool.init(
+        64, num_layers = 28, kv_heads = 8, head_dim = 128,
+        dtype = F.kBFloat16, device = F.kCPU)
+      let numPages = ceilDiv(4096, TokensPerPage)
+      for i in 0 ..< numPages:
+        ctx.pages.add(pool.borrow())
+
+      let seqLen = 300
+      let x = F.randn(1, seqLen, 1024, F.tensorOptions(F.kBFloat16, F.kCPU))
+
+      ctx.position_ids = F.arange(seqLen, F.tensorOptions(F.kInt64, F.kCPU))
+      ctx.setRopeForPositions(attn.rotary)
+
+      let output = attn(ctx, x)
+      doAssert output.size(0) == 1, "batch dim mismatch"
+      doAssert output.size(1) == seqLen, "seq len mismatch"
+      doAssert output.size(2) == 1024, "hidden dim mismatch"
+      doAssert ctx.pages.len >= 2,
+        "Expected >= 2 pages for 300 tokens, got " & $ctx.pages.len
+
+      # Compute expected k_rot and v_reshaped
+      let k = attn.k_proj.forward(x)
+      let k_reshaped = k.reshape([x.size(0), x.size(1),
+        attn.gqa_attn.num_kv_head, attn.gqa_attn.head_dim])
+      let k_normed = if attn.k_norm.isSome: attn.k_norm.get()(k_reshaped)
+                     else: k_reshaped
+      let (_, k_rot) = attn.rotary.applyRope(k_normed, k_normed,
+        ctx.cos, ctx.sin)
+
+      let v = attn.v_proj.forward(x)
+      let v_reshaped = v.reshape([x.size(0), x.size(1),
+        attn.gqa_attn.num_kv_head, attn.gqa_attn.head_dim])
+
+      let partialCount = seqLen - TokensPerPage
+
+      # Page 0: tokens 0-255 (full page)
+      let p0k = ctx.pages[0].k_view[attn.layer_idx, 0 ..< TokensPerPage]
+      let p0kExp = k_rot[0, 0 ..< TokensPerPage]
+      assertAllClose(p0k, p0kExp, rtol = 1e-4, abstol = 1e-4,
+        msg = "Page 0 K mismatch")
+
+      let p0v = ctx.pages[0].v_view[attn.layer_idx, 0 ..< TokensPerPage]
+      let p0vExp = v_reshaped[0, 0 ..< TokensPerPage]
+      assertAllClose(p0v, p0vExp, rtol = 1e-4, abstol = 1e-4,
+        msg = "Page 0 V mismatch")
+
+      # Page 1: tokens 256-299 (partial page, 44 tokens)
+      let p1k = ctx.pages[1].k_view[attn.layer_idx, 0 ..< partialCount]
+      let p1kExp = k_rot[0, TokensPerPage ..< seqLen]
+      assertAllClose(p1k, p1kExp, rtol = 1e-4, abstol = 1e-4,
+        msg = "Page 1 K mismatch (partial page)")
+
+      let p1v = ctx.pages[1].v_view[attn.layer_idx, 0 ..< partialCount]
+      let p1vExp = v_reshaped[0, TokensPerPage ..< seqLen]
+      assertAllClose(p1v, p1vExp, rtol = 1e-4, abstol = 1e-4,
+        msg = "Page 1 V mismatch (partial page)")
+
+      # Verify unwritten page 1 positions (>44) are still zero
+      let zeroSlots = TokensPerPage - partialCount
+      let zeroK = ctx.pages[1].k_view[attn.layer_idx, partialCount ..< TokensPerPage]
+      let zeroV = ctx.pages[1].v_view[attn.layer_idx, partialCount ..< TokensPerPage]
+      let zeroExp = F.zeros(zeroSlots, attn.gqa_attn.num_kv_head,
+        attn.gqa_attn.head_dim, F.tensorOptions(F.kBFloat16, F.kCPU))
+      assertAllClose(zeroK, zeroExp, rtol = 1e-6, abstol = 1e-6,
+        msg = "Page 1 unwritten slots should be zero (K)")
+      assertAllClose(zeroV, zeroExp, rtol = 1e-6, abstol = 1e-6,
+        msg = "Page 1 unwritten slots should be zero (V)")
+
+      true
+
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "All attention invariant tests passed"
+  echo "All attention tests completed"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 when isMainModule:
