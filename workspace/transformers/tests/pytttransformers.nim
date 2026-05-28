@@ -15,8 +15,9 @@ import
   workspace/libtorch,
   workspace/libtorch/src/tensors_py,
   workspace/transformers/src/models,
-  workspace/transformers/src/stateful/inference_context
-
+  workspace/transformers/src/stateful/inference_context,
+  workspace/transformers/src/stateful/kvcache,
+  workspace/transformers/src/stateful/page_pool
 type
   ModelRef* = ref object of PyNimObjectExperimental
     model: Model
@@ -49,16 +50,22 @@ proc forward*(self: ModelRef, inputIds: PyObject): PyObject {.exportpy.} =
   let seqLen = input.shape[1]
   let cfg = self.model.getConfig()
 
-  # Create InferenceContext with preallocated KV caches
+  # Create InferenceContext with preallocated KV caches and PagePool
   var ctx = InferenceContext.init(
     cfg.num_hidden_layers,
     batch,
     cfg.num_key_value_heads,
     cfg.max_position_embeddings,
-    cfg.head_dim,
-    kBFloat16,
-    kCPU
-  )
+    cfg.head_dim)
+
+  let pool = PagePool.init(
+    64, num_layers = cfg.num_hidden_layers,
+    kv_heads = cfg.num_key_value_heads, head_dim = cfg.head_dim,
+    dtype = kBFloat16, device = kCPU)
+  let numPages = ceilDiv(seqLen, TokensPerPage)
+
+  for i in 0 ..< numPages:
+    ctx.pages.add(pool.borrow())
 
   # Set position_ids for prefill: [0, 1, 2, ..., seq_len-1]
   ctx.setPositionIdsArange(seqLen, offset = 0, device = kCPU)

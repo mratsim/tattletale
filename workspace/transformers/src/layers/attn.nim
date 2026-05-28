@@ -42,7 +42,6 @@ type
     rotary: RotaryPositionEmbeddingRef
     q_norm: Option[RmsNorm]
     k_norm: Option[RmsNorm]
-
 # =============================================================================
 # Data flow through RopeGQAttention
 # =============================================================================
@@ -169,10 +168,10 @@ proc forward(
     self: RopeGQAttention,
     ctx: var InferenceContext,
     x: Tensor): Tensor =
-  ## Forward pass for attention.
+  ## Forward pass for attention with paged KV cache.
   ##
   ## Args:
-  ##   ctx: InferenceContext with KV caches and RoPE (ctx.kv_caches, ctx.cos, ctx.sin)
+  ##   ctx: InferenceContext with page refs (ctx.pages, ctx.cos, ctx.sin)
   ##   x: Input tensor of shape (batch, seq, hidden_size)
   ##
   ## Returns:
@@ -182,19 +181,27 @@ proc forward(
   ##   q = self.q_proj(x)
   ##   k = self.k_proj(x)
   ##   v = self.v_proj(x)
-  ##   cache.write(k, v, offset)
   ##   (q_rot, k_rot) = self.rotary.applyRope(q, k, ctx.cos, ctx.sin)
-  ##   attn_out = self.gqa_attn(q_rot, k_rot, cache.values)
+  ##   Write k_rot, v_reshaped into ctx.pages page slots
+  ##   Gather pages into contiguous k_full, v_full
+  ##   attn_out = self.gqa_attn(q_rot, k_full, v_full)
   ##   return self.o_proj(attn_out)
+  let batch = x.size(0)
+
+  # Guard against batch_size > 1
+  # The paged KV cache write/gather path indexes with [0, ...] throughout
+  # (k_rot[0, ...], v_reshaped[0, ...], ctx.k_gather_buf[0, ...]).
+  # Multi-batch support requires per-sequence page allocation and gather.
+  if batch != 1:
+    raise newException(ValueError,
+      "[ttt] Paged KV attention currently supports batch_size == 1 only, got " & $batch)
 
   # Use separate Q, K, V projections (matching HF/Qwen3)
   let q = self.q_proj(x)
   let k = self.k_proj(x)
   let v = self.v_proj(x)
 
-  let batch = x.size(0)
   let seq_len = x.size(1)
-
   # Reshape to (batch, seq, heads, head_dim)
   let q_reshaped = q.reshape([batch, seq_len, self.gqa_attn.num_qo_head, self.gqa_attn.head_dim])
   let k_reshaped = k.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
@@ -211,26 +218,81 @@ proc forward(
   # Apply RoPE using precomputed cos/sin
   let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, ctx.cos, ctx.sin)
 
-  # Get this layer's KV cache
-  var cache = ctx.kv_caches[self.layer_idx]
-  let offset = ctx.position_ids.min().item(int)  # Write position
+  # ── Write new KV into page slots ──
+  # Each page covers TokensPerPage token positions.
+  # page.k_view[layer_idx] is (PAGE_SIZE, kv_heads, head_dim)
+  #
+  # offset = ctx.kv_position  (instead of position_ids.min().item(int))
+  # to avoid a GPU->CPU synchronous read every forward pass.
+  #
+  # Lifecycle overview:
+  #   1. Prefill:  startSequence sets kv_position=0
+  #                forward writes at offset=0
+  #                generate() calls setKvPosition(ids.len)
+  #   2. Decode:   decodeStep sets position_ids WITHOUT incrementing
+  #                forward writes at offset=kv_position (matches pos_ids.min())
+  #                generate() increments kv_position after forward
+  #   => Invariant: kv_position == position_ids.min() during forward.
+  let offset = ctx.kv_position
+  # Skip writing cached prefix positions (already in trie from COW)
+  # TODO: how to test usage of cache?
+  let writeStart = max(0, ctx.cached_tokens - offset)
+  # Write in page-sized chunks instead of per-token indexed writes.
+  # Reduces GPU kernel launches from O(seq_len) to O(num_pages).
+  block pageWrite:
+    var t = writeStart
+    while t < seq_len:
+      let globalPos = offset + t
+      let pageIdx = globalPos div TokensPerPage
+      let withinPage = globalPos mod TokensPerPage
+      let page = ctx.pages[pageIdx]
+      # Chunk size = min(remaining in this page, remaining to write)
+      let chunkRemaining = TokensPerPage - withinPage
+      let seqRemaining = seq_len - t
+      let chunkLen = min(chunkRemaining, seqRemaining)
+      let chunkEnd = t + chunkLen
+      # Single copyFrom per page instead of one kernel per token
+      page.k_view[self.layer_idx, withinPage ..< withinPage + chunkLen].copyFrom(
+        k_rot[0, t ..< chunkEnd, _, _])
+      page.v_view[self.layer_idx, withinPage ..< withinPage + chunkLen].copyFrom(
+        v_reshaped[0, t ..< chunkEnd, _, _])
+      t = chunkEnd
 
-  # Append to KV cache (K rotated, V)
-  cache.write(k_rot, v_reshaped, offset)
-
-  # Read full KV (cached + appended)
+  # ── Gather pages into contiguous K/V for SDPA ──
   let totalSeqLen = offset + seq_len
-  let (k_full, v_full) = cache.read(totalSeqLen)
+  let numPages = ceilDiv(totalSeqLen, TokensPerPage)
 
-  # Transpose k_full, v_full from (batch, kv_heads, seq, head_dim) to (batch, seq, kv_heads, head_dim)
-  let k_attn = k_full.permute([0, 2, 1, 3])
-  let v_attn = v_full.permute([0, 2, 1, 3])
+  # Reuse pre-allocated buffers to avoid F.empty allocation per forward pass.
+  # Allocate once at max_seq size, narrow to actual totalSeqLen each call.
+  let kvDtype = v_reshaped.scalarType()
+  let kvDevice: F.DeviceKind = v_reshaped.deviceType()
+  # Pre-allocate gather buffers at max_seq to avoid F.empty per forward pass.
+  if ctx.k_gather_buf.isNil or ctx.k_gather_buf.size(1) < totalSeqLen:
+    let allocSize = max(totalSeqLen, ctx.max_seq)
+    let kvOpts = F.tensorOptions(kvDtype, kvDevice)
+    ctx.k_gather_buf = F.zeros(
+      1, allocSize, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim, kvOpts)
+    ctx.v_gather_buf = F.zeros(
+      1, allocSize, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim, kvOpts)
 
-  # Pass to backend (GroupedQueryAttention) which handles permute/dtype/SDPA/reshape
+  for p in 0 ..< numPages:
+    let pageStart = p * TokensPerPage
+    let pageEnd = min(pageStart + TokensPerPage, totalSeqLen)
+    let pageValidLen = pageEnd - pageStart
+    let page = ctx.pages[p]
+    ctx.k_gather_buf[0, pageStart ..< pageEnd, _, _] = page.k_view[self.layer_idx, 0 ..< pageValidLen]
+    ctx.v_gather_buf[0, pageStart ..< pageEnd, _, _] = page.v_view[self.layer_idx, 0 ..< pageValidLen]
+
+  # Narrow pre-allocated buffers to actual sequence length for SDPA
+  let k_full = ctx.k_gather_buf.narrow(1, 0, totalSeqLen)
+  let v_full = ctx.v_gather_buf.narrow(1, 0, totalSeqLen)
+
+  # k_full/v_full are already (batch, seq, kv_heads, head_dim) — the format GQA expects.
+  # GQA's forward permutes internally to (batch, kv_heads, seq, head_dim) for SDPA.
   # is_causal only makes sense when Q and K seq_lens are equal (prefill).
   # In decode mode (Q=1, K=N), causal mask would block K[1..N-1].
-  let doCausal = q_rot.size(1) == k_attn.size(1)
-  let attn_out_reshaped = self.gqa_attn(q_rot, k_attn, v_attn, is_causal = doCausal)
+  let doCausal = q_rot.size(1) == k_full.size(1)
+  let attn_out_reshaped = self.gqa_attn(q_rot, k_full, v_full, is_causal = doCausal)
 
   result = self.o_proj(attn_out_reshaped)
 

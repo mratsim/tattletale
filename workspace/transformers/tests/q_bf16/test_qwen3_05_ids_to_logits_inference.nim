@@ -26,6 +26,8 @@ import
   workspace/safetensors,
   workspace/transformers/src/layers,
   workspace/transformers/src/stateful/inference_context,
+  workspace/transformers/src/stateful/kvcache,
+  workspace/transformers/src/stateful/page_pool,
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/libtorch_testutils
 
@@ -67,13 +69,21 @@ proc main() =
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = model.config.num_key_value_heads,
-        max_seq = 4096, head_dim = model.config.head_dim,
-        dtype = F.kBFloat16, device = F.kCPU
-      )
+        max_seq = 4096, head_dim = model.config.head_dim)
+
+      let pool = PagePool.init(
+        64, num_layers = model.config.num_hidden_layers,
+        kv_heads = model.config.num_key_value_heads,
+        head_dim = model.config.head_dim,
+        dtype = F.kBFloat16, device = F.kCPU)
+      let numPages = ceilDiv(4096, TokensPerPage)
+
+      # Borrow pages once — reused across all layers (each writes to own layerIdx slice)
+      for i in 0 ..< numPages:
+        ctx.pages.add(pool.borrow())
 
       # Input tokens: "Hello, how are you?"
       let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0)
-
       # Embedding pass
       let x = model.embedTokens(inputIds)
       var hidden = x
@@ -99,8 +109,9 @@ proc main() =
         if inputDiff > tol:
           raise newException(ValueError, &"Layer {layerIdx:02d}: layer_input diff = {inputDiff:.6e}")
 
-        # Prepare InferenceContext for this layer
-        ctx.reset()
+        # Prepare InferenceContext for this layer — reuse pages, reset positional state
+        ctx.kv_position = 0
+        ctx.position_ids = nil
         let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64)
         ctx.position_ids = pos_ids
         ctx.setRopeForPositions(layer.self_attn.rotary)
