@@ -191,10 +191,9 @@ proc init*(_: type Orchestrator;
     position_ids_buf: F.zeros(1, F.tensorOptions(F.kInt64, device))
   )
 
-proc getInferenceContext*(orc: Orchestrator): InferenceContext {.inline.} =
+proc getInferenceContextMut*(orc: var Orchestrator): var InferenceContext {.inline.} =
   ## Get the active inference context.
   orc.active_context
-
 
 # Pool management
 # ═══════════════════════════════════════════════════════════════════════════

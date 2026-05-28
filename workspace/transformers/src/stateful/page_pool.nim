@@ -16,7 +16,8 @@ type
     v_buffer: Tensor         # same shape
     free_indices: seq[int32] # stack of available slot indices
 
-  Page* = ref object
+  Page* = ref PageObj
+  PageObj = object
     ## Underlying data for Page ref objects.
     index: int32 = -1i32
     pool {.cursor.}: PagePool # Back-pointer (orchestrator keeps pool alive, and we only have integers to return so don't refcount)
@@ -24,7 +25,20 @@ type
     v_view*: Tensor           # same
 
 # No custom =destroy, =copy, =sink hooks — ORC default field-by-field
-# destruction handles Tensor/TorchTensor lifecycle correctly.
+# destruction handles Tensor/TorchTensor lifecycle correctly for PagePool
+#
+# For the Page, if the PagePool is not destroyed return the index to it so it can be borrowed again
+# We need to nil Tensor field to ensure their destructor is called so the TorchTensor's refcount is decremnented and they are collected
+
+proc `=destroy`(p: var PageObj) =
+  ## Auto-recycle slot index to the pool's free stack.
+  ## Called by ORC when the last Page ref is dropped.
+  ## SAFETY: PagePool outlives all Pages (orchestrator lifetime).
+  if p.pool != nil and p.index >= 0:
+    p.pool.free_indices.add(p.index)
+    p.index = -1
+  p.k_view = nil
+  p.v_view = nil
 
 proc init*(_: type PagePool;
             num_pages: int; num_layers: int;
