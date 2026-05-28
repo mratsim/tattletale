@@ -269,20 +269,24 @@ proc startSequence*(
 
   # ── 2. COW partial page handling ──
   let partialTokens = ctx.kv_position mod TokensPerPage
+  var cowPage: Page = nil
   var cowPageUsed = false
   if partialTokens > 0 and matched.pages.len > 0:
     # Last matched page is partial — borrow a new page, copy partial content
     let cachedPage = matched.pages[^1]
     orc.ensurePoolCapacity(1)
-    let cowPage = orc.page_pool.borrow()
+    cowPage = orc.page_pool.borrow()
     cowPartialPage(cowPage, cachedPage, partialTokens, orc.num_layers)
-    ctx.pages.add(cowPage)
     cowPageUsed = true
 
-  # ── 3. Add fully-matched pages from trie ──
+  # ── 3. Add fully-matched pages from trie (in order) ──
   let fullMatchCount = matched.pages.len - (if cowPageUsed: 1 else: 0)
   for i in 0 ..< fullMatchCount:
     ctx.pages.add(matched.pages[i])
+
+  # ── 3b. Append COW page after fully-matched pages ──
+  if cowPageUsed:
+    ctx.pages.add(cowPage)
 
   # ── 4. Borrow new pages for unmatched prompt portion ──
   let promptPages = ceilDiv(input_ids.len, TokensPerPage)
@@ -296,6 +300,8 @@ proc startSequence*(
 
   # ── 5. Set position_ids for prefill ──
   ctx.setPositionIdsArange(input_ids.len, offset = 0, device = orc.device)
+  # FIX BUG-B-001: Update write cursor to reflect actual prefill token count
+  ctx.kv_position = input_ids.len
 
 proc decodeStep*(orc: var Orchestrator, position: int, token_id: uint32,
                  device: DeviceKind | Device = kCPU) =
