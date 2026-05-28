@@ -799,8 +799,8 @@ proc findEvictionCandidate[T, P](cache: KVCache[T, P]): PagedRadixNode[T, P] =
     while candidateIdx >= 0:
       let candidate = n.children[candidateIdx]
       if candidate.subtree_sum_leaves > candidate.subtree_sum_locked:
-        n = candidate
         n.subtree_sum_leaves -= 1
+        n = candidate
         break
       candidateIdx = wavlNext(n.evictLinks, candidateIdx)
     if candidateIdx < 0:

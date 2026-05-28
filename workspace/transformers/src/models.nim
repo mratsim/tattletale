@@ -89,6 +89,12 @@ proc generate*(
 
   # Tokenize prompt with special tokens
   var ids = model.getTokenizer().encode(prompt)
+
+  # guard against prompt exceeding max context length
+  if ids.len > maxCtx:
+    raise newException(ValueError,
+      "[ttt] Prompt length exceeds max context length: " & $ids.len & " > " & $maxCtx)
+
   let startPos = ids.len
 
   orc.startSequence(ids.mapIt(it.uint32))
@@ -106,7 +112,7 @@ proc generate*(
   ids.add(nextToken)
 
   # === DECODE LOOP: forward on 1 token at a time ===
-  while ids.len < startPos + maxTokens:
+  while ids.len < startPos + maxTokens and ids.len < maxCtx:
     # Set position for this decode step
     orc.decodeStep(ids.len - 1, nextToken.uint32, device)
     # Forward on single token: [1, 1]

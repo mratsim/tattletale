@@ -186,15 +186,22 @@ proc forward(
   ##   Gather pages into contiguous k_full, v_full
   ##   attn_out = self.gqa_attn(q_rot, k_full, v_full)
   ##   return self.o_proj(attn_out)
+  let batch = x.size(0)
+
+  # Guard against batch_size > 1
+  # The paged KV cache write/gather path indexes with [0, ...] throughout
+  # (k_rot[0, ...], v_reshaped[0, ...], ctx.k_gather_buf[0, ...]).
+  # Multi-batch support requires per-sequence page allocation and gather.
+  if batch != 1:
+    raise newException(ValueError,
+      "[ttt] Paged KV attention currently supports batch_size == 1 only, got " & $batch)
 
   # Use separate Q, K, V projections (matching HF/Qwen3)
   let q = self.q_proj(x)
   let k = self.k_proj(x)
   let v = self.v_proj(x)
 
-  let batch = x.size(0)
   let seq_len = x.size(1)
-
   # Reshape to (batch, seq, heads, head_dim)
   let q_reshaped = q.reshape([batch, seq_len, self.gqa_attn.num_qo_head, self.gqa_attn.head_dim])
   let k_reshaped = k.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])

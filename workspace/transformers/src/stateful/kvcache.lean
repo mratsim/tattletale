@@ -874,6 +874,25 @@ theorem forkPageOp_increments_leafCount (n : PagedRadixNode) (tokens : List Toke
   -- Proof deferred.
   sorry
 
+-- CODERA-018 (subtree_sum_leaves decrement order) — Lean immunity note.
+-- The Nim bug: findEvictionCandidate reassigns `n = candidate` BEFORE
+-- `n.subtree_sum_leaves -= 1`, causing the child (not the ancestor) to be
+-- decremented. This corrupts subtree_sum_leaves on the path to root.
+--
+-- The Lean model is immune because findEvictionCandidate is a PURE selector
+-- (no mutation). All decrementing happens in `evict / removeFromTree` via
+-- structural recursion (List.map), which correctly decrements every ancestor:
+--
+--   removeFromTree n := { n with
+--     children      := n.children.map removeFromTree,
+--     subtreeLeafCount := n.subtreeLeafCount - 1 }
+--
+-- The `map` visits node on every recursive descent, so each ancestor's
+-- subtreeLeafCount is decremented exactly once — there is no mutable `var n`
+-- that can be reassigned before the decrement fires.
+
+
+
 
 
 end KVCache

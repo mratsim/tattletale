@@ -697,6 +697,62 @@ proc testThreeDifferentPrompts(): bool =
   radixVerifyInvariants(cache.root, "three-prompts")
   result = true
 
+proc testCoderA018SubtreeSumLeavesDecrement(): bool =
+  ## CODERA-018: findEvictionCandidate decrements the child's
+  ## subtree_sum_leaves instead of the ancestor's, corrupting
+  ## subtree_sum_leaves on the path to root after eviction from a
+  ## multi-level tree.
+  ##
+  ## Build a 3-level tree (root → splitNode(256 tok, 2 children) → leaves,
+  ## and root → B(512 tok)), lock B to force eviction from the deep
+  ## subtree, then verify A5 invariant after eviction.
+  var cache = KVCache[uint32, int].new()
+
+  # Step 1: A = [0..511] (2 pages)
+  var aFull = newSeq[uint32](512)
+  for i in 0..<512: aFull[i] = uint32(i)
+  discard cache.lpm(aFull)
+  cache.graftPages(aFull, makePages(512))
+
+  # Step 2: B = [1000..1511] — different first token → fork at page 0
+  var bFull = newSeq[uint32](512)
+  for i in 0..<512: bFull[i] = uint32(1000 + i)
+  discard cache.lpm(bFull)
+  cache.graftPages(bFull, makePages(512))
+  doAssert cache.root.children.len == 2,
+    "root should have 2 children after fork"
+
+  # Step 3: C matches first 256 of A, then diverges
+  # -> fork under root[0]: root[0] becomes splitNode(256, 2 children)
+  var cTok = newSeq[uint32](258)
+  for i in 0..<256: cTok[i] = uint32(i)
+  cTok[256] = 2000; cTok[257] = 2001
+  discard cache.lpm(cTok)
+  cache.graftPages(cTok, makePages(258))
+
+  let splitNode = cache.root.children[0]
+  doAssert splitNode.children.len == 2,
+    "splitNode should have 2 children, got " & $splitNode.children.len
+  doAssert splitNode.subtree_sum_leaves == 2,
+    "splitNode.subtree_sum_leaves == " & $splitNode.subtree_sum_leaves & ", expected 2"
+
+  # Lock B to force eviction from splitNode's subtree
+  cache.root.children[1].subtree_sum_locked = 1
+  cache.root.subtree_sum_locked = 1
+
+  # Verify invariants BEFORE eviction
+  radixVerifyInvariants(cache.root, "CODERA-018 before evict")
+
+  # Evict — must pick from splitNode's subtree (B is locked)
+  cache.evict()
+
+  # Verify invariants AFTER eviction
+  # With CODERA-018 bug: root.subtree_sum_leaves was never decremented
+  # during descent, so A5 fails: root.subtree_sum_leaves != sum(children)
+  radixVerifyInvariants(cache.root, "CODERA-018 after evict")
+
+  result = true
+
 # ════════════════════════════════════════════════════════
 # Runner
 # ════════════════════════════════════════════════════════
@@ -792,6 +848,10 @@ proc runTests*() =
   suite "Graft lifecycle (append -> fork -> rootNewChild)":
     test "three different prompts at first token use all 3 branches":
       check testThreeDifferentPrompts()
+
+suite "CODERA-018 (subtree_sum_leaves decrement order)":
+  test "eviction from 3-level tree maintains A5 invariant":
+    check testCoderA018SubtreeSumLeavesDecrement()
 
 when isMainModule:
   runTests()
