@@ -109,11 +109,14 @@ proc generate*(
   while ids.len < startPos + maxTokens:
     # Set position for this decode step
     orc.decodeStep(ids.len - 1, nextToken.uint32, device)
-
     # Forward on single token: [1, 1]
     let singleToken = F.toTensor([[nextToken]]).to(device)
     let stepLogits = model.forward(orc.getInferenceContextMut(), singleToken)
-
+    # Advance kv_position AFTER forward — the attention layer used
+    # ctx.kv_position as the write offset (equal to position_ids.min())
+    # during this call, avoiding a GPU→CPU sync.  Now advance so the
+    # next decodeStep's boundary check sees the updated total.
+    orc.setKvPosition(ids.len)
     # Sample next token from [1, 1, vocab] -> [vocab]
     let stepLastLogits = stepLogits.squeeze(0).squeeze(0)
     nextToken = sample(stepLastLogits, temp)

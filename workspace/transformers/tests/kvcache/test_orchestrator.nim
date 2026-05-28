@@ -108,8 +108,8 @@ proc testBugB001KvPositionTracking(): bool =
 
   # decodeStep: kv_position increments by 1 each step
   orc.decodeStep(position = TokensPerPage, token_id = 42'u32, device = kCPU)
-  doAssert ctx.kv_position == 1,
-    "kv_position should be 1 after 1 decode step, got " & $ctx.kv_position
+  doAssert ctx.kv_position == 0,
+    "kv_position should be 0 after 1 decode step, got " & $ctx.kv_position
 
   # Page boundary crossing detection: kv_position=0 starts tracking from 0,
   # so the first 256 decode steps won't trigger page allocation.
@@ -245,17 +245,17 @@ proc testOrchestratorDecodeTracking(): bool =
   doAssert ctx.kv_position == 0,
     "kv_position should be 0 after startSequence, got " & $ctx.kv_position
 
-  # Decode at position 255 — kv_position increments by 1
+  # Decode at position 255 — kv_position stays 0 (inc happens after forward in generate)
   orc.decodeStep(position = TokensPerPage - 1, token_id = 100'u32, device = kCPU)
   doAssert ctx.pages.len == 1,
     "Expected still 1 page after 1 decode, got " & $ctx.pages.len
-  doAssert ctx.kv_position == 1,
-    "kv_position should be 1 after decode, got " & $ctx.kv_position
+  doAssert ctx.kv_position == 0,
+    "kv_position should be 0 after decode, got " & $ctx.kv_position
 
   # Second decode
   orc.decodeStep(position = TokensPerPage, token_id = 101'u32, device = kCPU)
-  doAssert ctx.kv_position == 2,
-    "kv_position should be 2, got " & $ctx.kv_position
+  doAssert ctx.kv_position == 0,
+    "kv_position should be 0, got " & $ctx.kv_position
 
   result = true
 # ═════════════════════════════════════════════════════════════════════════════
@@ -389,12 +389,11 @@ proc testFieldIndependencePrefillDecode(): bool =
   doAssert ctx.cached_tokens == 0,
     "cached_tokens must not change when kv_position is set, got " & $ctx.cached_tokens
 
-  # decodeSteps increment kv_position only, not cached_tokens
+  # decodeSteps no longer increment kv_position — generate() does it after forward
   orc.decodeStep(position = 64, token_id = 100'u32, device = kCPU)
-  doAssert ctx.kv_position == 65,
-    "kv_position should be 65 after decodeStep, got " & $ctx.kv_position
-  doAssert ctx.cached_tokens == 0,
-    "cached_tokens must not change during decodeStep, got " & $ctx.cached_tokens
+  doAssert ctx.kv_position == 64,
+    "kv_position should be 64 after decodeStep (no inc), got " & $ctx.kv_position
+  doAssert ctx.cached_tokens == 0
 
   result = true
 
@@ -535,18 +534,19 @@ proc testDecodePageBoundary(): bool =
   # First decode at position 256 — kv_position=256, triggers boundary crossing
   #   condition: kv_position > 0 and 256 mod 256 == 0 → borrow page
   orc.decodeStep(position = TokensPerPage, token_id = 100'u32, device = kCPU)
-  doAssert ctx.kv_position == TokensPerPage + 1,
-    "kv_position should be 257, got " & $ctx.kv_position
+  doAssert ctx.kv_position == TokensPerPage,
+    "kv_position should be 256 (no inc in decodeStep), got " & $ctx.kv_position
   doAssert ctx.pages.len == 2,
     "Expected 2 pages after boundary crossing, got " & $ctx.pages.len
 
+  # Simulate generate(): advance kv_position after forward
+  orc.setKvPosition(ctx.kv_position + 1)
+
   # Second decode at position 257 — no boundary (257 mod 256 != 0)
   orc.decodeStep(position = TokensPerPage + 1, token_id = 101'u32, device = kCPU)
-  doAssert ctx.kv_position == TokensPerPage + 2,
-    "kv_position should be 258, got " & $ctx.kv_position
-  doAssert ctx.pages.len == 2,
-    "Expected still 2 pages (no boundary crossed), got " & $ctx.pages.len
-
+  doAssert ctx.kv_position == TokensPerPage + 1,
+    "kv_position should be 257 (no inc in decodeStep), got " & $ctx.kv_position
+  doAssert ctx.pages.len == 2
   result = true
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -582,8 +582,8 @@ proc testPartialPageStructure(): bool =
 
   # Decode: position 300, no boundary (300 mod 256 != 0)
   orc.decodeStep(position = 300, token_id = 200'u32, device = kCPU)
-  doAssert ctx.kv_position == 301,
-    "kv_position should be 301, got " & $ctx.kv_position
+  doAssert ctx.kv_position == 300,
+    "kv_position should be 300 after decodeStep (no inc), got " & $ctx.kv_position
   doAssert ctx.pages.len == 2,
     "Expected still 2 pages (no boundary), got " & $ctx.pages.len
 

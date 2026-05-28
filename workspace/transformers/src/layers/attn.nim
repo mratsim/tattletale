@@ -42,7 +42,8 @@ type
     rotary: RotaryPositionEmbeddingRef
     q_norm: Option[RmsNorm]
     k_norm: Option[RmsNorm]
-
+    k_gather_buf*: Tensor
+    v_gather_buf*: Tensor
 # =============================================================================
 # Data flow through RopeGQAttention
 # =============================================================================
@@ -215,37 +216,71 @@ proc forward(
   # ── Write new KV into page slots ──
   # Each page covers TokensPerPage token positions.
   # page.k_view[layer_idx] is (PAGE_SIZE, kv_heads, head_dim)
-  let offset = ctx.position_ids.min().item(int)
+  #
+  # offset = ctx.kv_position  (instead of position_ids.min().item(int))
+  # to avoid a GPU->CPU synchronous read every forward pass.
+  #
+  # Lifecycle overview:
+  #   1. Prefill:  startSequence sets kv_position=0
+  #                forward writes at offset=0
+  #                generate() calls setKvPosition(ids.len)
+  #   2. Decode:   decodeStep sets position_ids WITHOUT incrementing
+  #                forward writes at offset=kv_position (matches pos_ids.min())
+  #                generate() increments kv_position after forward
+  #   => Invariant: kv_position == position_ids.min() during forward.
+  let offset = ctx.kv_position
   # Skip writing cached prefix positions (already in trie from COW)
   # TODO: how to test usage of cache?
   let writeStart = max(0, ctx.cached_tokens - offset)
-  for t in writeStart ..< seq_len:
-    let globalPos = offset + t
-    let pageIdx = globalPos div TokensPerPage
-    let withinPage = globalPos mod TokensPerPage
-    let page = ctx.pages[pageIdx]
-    page.k_view[self.layer_idx, withinPage] = k_rot[0, t]
-    page.v_view[self.layer_idx, withinPage] = v_reshaped[0, t]
+  # Write in page-sized chunks instead of per-token indexed writes.
+  # Reduces GPU kernel launches from O(seq_len) to O(num_pages).
+  block pageWrite:
+    var t = writeStart
+    while t < seq_len:
+      let globalPos = offset + t
+      let pageIdx = globalPos div TokensPerPage
+      let withinPage = globalPos mod TokensPerPage
+      let page = ctx.pages[pageIdx]
+      # Chunk size = min(remaining in this page, remaining to write)
+      let chunkRemaining = TokensPerPage - withinPage
+      let seqRemaining = seq_len - t
+      let chunkLen = min(chunkRemaining, seqRemaining)
+      let chunkEnd = t + chunkLen
+      # Single copyFrom per page instead of one kernel per token
+      page.k_view[self.layer_idx, withinPage ..< withinPage + chunkLen].copyFrom(
+        k_rot[0, t ..< chunkEnd, _, _])
+      page.v_view[self.layer_idx, withinPage ..< withinPage + chunkLen].copyFrom(
+        v_reshaped[0, t ..< chunkEnd, _, _])
+      t = chunkEnd
 
   # ── Gather pages into contiguous K/V for SDPA ──
   let totalSeqLen = offset + seq_len
   let numPages = ceilDiv(totalSeqLen, TokensPerPage)
-  # k_full/v_full: (1, totalSeqLen, kv_heads, head_dim)
+
+  # Reuse pre-allocated buffers to avoid F.empty allocation per forward pass.
+  # Allocate once at max_seq size, narrow to actual totalSeqLen each call.
   let kvDtype = v_reshaped.scalarType()
-  # Determine device (page views may be on GPU)
   let kvDevice: F.DeviceKind = v_reshaped.deviceType()
-  let kvOpts = F.tensorOptions(kvDtype, kvDevice)
-  var k_full = F.empty(
-    1, totalSeqLen, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim, kvOpts)
-  var v_full = F.empty(
-    1, totalSeqLen, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim, kvOpts)
+  # Pre-allocate gather buffers at max_seq to avoid F.empty per forward pass.
+  if self.k_gather_buf.isNil or self.k_gather_buf.size(1) < totalSeqLen:
+    let allocSize = max(totalSeqLen, ctx.max_seq)
+    let kvOpts = F.tensorOptions(kvDtype, kvDevice)
+    self.k_gather_buf = F.zeros(
+      1, allocSize, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim, kvOpts)
+    self.v_gather_buf = F.zeros(
+      1, allocSize, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim, kvOpts)
+
   for p in 0 ..< numPages:
     let pageStart = p * TokensPerPage
     let pageEnd = min(pageStart + TokensPerPage, totalSeqLen)
     let pageValidLen = pageEnd - pageStart
     let page = ctx.pages[p]
-    k_full[0, pageStart ..< pageEnd] = page.k_view[self.layer_idx, 0 ..< pageValidLen]
-    v_full[0, pageStart ..< pageEnd] = page.v_view[self.layer_idx, 0 ..< pageValidLen]
+    self.k_gather_buf[0, pageStart ..< pageEnd, _, _] = page.k_view[self.layer_idx, 0 ..< pageValidLen]
+    self.v_gather_buf[0, pageStart ..< pageEnd, _, _] = page.v_view[self.layer_idx, 0 ..< pageValidLen]
+
+  # Narrow pre-allocated buffers to actual sequence length for SDPA
+  let k_full = self.k_gather_buf.narrow(1, 0, totalSeqLen)
+  let v_full = self.v_gather_buf.narrow(1, 0, totalSeqLen)
 
   # k_full/v_full are already (batch, seq, kv_heads, head_dim) — the format GQA expects.
   # GQA's forward permutes internally to (batch, kv_heads, seq, head_dim) for SDPA.

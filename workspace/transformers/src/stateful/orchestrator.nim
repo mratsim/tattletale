@@ -384,9 +384,23 @@ proc decodeStep*(orc: var Orchestrator, position: int, token_id: uint32,
   ## 1. Appends the token to input_tokens tracking.
   ## 2. If the write cursor crosses a page boundary, lazily borrows a new
   ##    page from the pool.
-  ## 3. Increments the write cursor.
-  ## 4. Updates position_ids for the single-token forward pass.
+  ## 3. Updates position_ids for the single-token forward pass.
   ##
+  ## NOTE: kv_position is NOT incremented here — the caller (generate())
+  ## increments it AFTER the forward call.  This ensures that during the
+  ## attention forward, `ctx.kv_position` equals `position_ids.min()`,
+  ## so the attention layer can use `kv_position` as the write offset
+  ## instead of reading position_ids.min().item(int) (which forces a
+  ## GPU→CPU synchronous read on every forward pass).
+  ##
+  ## Lifecycle for one decode step:
+  ##   decodeStep(position=300) -> forward() -> generate: setKvPosition(+1)
+  ##     |                            |
+  ##     | position_ids = [300]       | attn reads kv_position (=300)
+  ##     | kv_position unchanged      | which equals position_ids.min()
+  ##     |                            | writes at offset 300
+  ##     V                            V
+  ##   kv_pos=300 matches pos.min()   kv_pos advanced to 301 after forward
   ## Args:
   ##   position: Current position (cumulative sequence length - 1)
   ##   token_id: The token being decoded
@@ -399,18 +413,18 @@ proc decodeStep*(orc: var Orchestrator, position: int, token_id: uint32,
   ctx.input_tokens.add(token_id)
 
   # 2. Lazily allocate pages on page-boundary crossing
+  #    (kv_position still reflects total written tokens before this decode)
   if ctx.kv_position > 0 and (ctx.kv_position mod TokensPerPage) == 0:
     # About to write into a new page — borrow one
     orc.ensurePoolCapacity(1)
     ctx.pages.add(orc.page_pool.borrow())
 
-  # 3. Increment write cursor
-  ctx.kv_position += 1
-
-  # 4. Update position_ids for single token: [position] on device
+  # 3. Update position_ids for single token: [position] on device
+  #    kv_position is NOT incremented here — generate() does it after forward
+  #    so that attention's `let offset = ctx.kv_position` gives the correct
+  #    write position (equal to position_ids.min()) without GPU→CPU sync.
   orc.position_ids_buf[0] = position.int64
   ctx.position_ids = orc.position_ids_buf
-
 proc endSequence*(orc: var Orchestrator) =
   ## End the current sequence and commit all data to the trie.
   ##
