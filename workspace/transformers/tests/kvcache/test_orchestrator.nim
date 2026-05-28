@@ -508,6 +508,152 @@ proc testCowPartialPageIsolated(): bool =
 # Test runner
 # ═════════════════════════════════════════════════════════════════════════════
 # Test runner
+# ═════════════════════════════════════════════════════════════════════════════
+# COV-B-005: Page boundary crossing during decodeStep
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# decodeStep checks ctx.kv_position > 0 and (ctx.kv_position mod 256) == 0
+# to trigger lazy page allocation. After a full-page prefill, setKvPosition
+# sets kv_position = 256, and the first decodeStep should trigger a page borrow.
+
+proc testDecodePageBoundary(): bool =
+  ## Verify decodeStep borrows a new page when kv_position crosses a
+  ## TokensPerPage boundary.
+  var orc = makeOrchestrator()
+  let tokens = makeTokens(TokensPerPage)  # exactly 256 tokens = 1 page
+
+  orc.startSequence(tokens)
+  let ctx = orc.getInferenceContextMut()
+  doAssert ctx.pages.len == 1,
+    "Expected 1 page, got " & $ctx.pages.len
+
+  # Simulate generate(): set kv_position after prefill forward
+  orc.setKvPosition(tokens.len)
+  doAssert ctx.kv_position == TokensPerPage,
+    "kv_position should be 256, got " & $ctx.kv_position
+
+  # First decode at position 256 — kv_position=256, triggers boundary crossing
+  #   condition: kv_position > 0 and 256 mod 256 == 0 → borrow page
+  orc.decodeStep(position = TokensPerPage, token_id = 100'u32, device = kCPU)
+  doAssert ctx.kv_position == TokensPerPage + 1,
+    "kv_position should be 257, got " & $ctx.kv_position
+  doAssert ctx.pages.len == 2,
+    "Expected 2 pages after boundary crossing, got " & $ctx.pages.len
+
+  # Second decode at position 257 — no boundary (257 mod 256 != 0)
+  orc.decodeStep(position = TokensPerPage + 1, token_id = 101'u32, device = kCPU)
+  doAssert ctx.kv_position == TokensPerPage + 2,
+    "kv_position should be 258, got " & $ctx.kv_position
+  doAssert ctx.pages.len == 2,
+    "Expected still 2 pages (no boundary crossed), got " & $ctx.pages.len
+
+  result = true
+
+# ═════════════════════════════════════════════════════════════════════════════
+# COV-B-009: Partial-page gather boundary
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# The attention gather loop (attn.nim:239-245) handles the last page when
+# totalSeqLen is not a multiple of TokensPerPage. This test verifies the
+# page structure that the gather loop operates on, for a non-aligned prefill.
+
+proc testPartialPageStructure(): bool =
+  ## Verify page structure for non-page-aligned sequence length.
+  ## The gather loop uses pageValidLen = min(...) for the last partial page.
+  var orc = makeOrchestrator()
+  let tokens = makeTokens(300)  # 256 + 44 = 1 full + 1 partial page
+
+  orc.startSequence(tokens)
+  let ctx = orc.getInferenceContextMut()
+
+  doAssert ctx.pages.len == 2,
+    "Expected 2 pages for 300 tokens, got " & $ctx.pages.len
+
+  # Simulate generate(): set kv_position after prefill
+  orc.setKvPosition(tokens.len)
+  doAssert ctx.kv_position == 300,
+    "kv_position should be 300, got " & $ctx.kv_position
+
+  # Verify page ordering
+  doAssert ctx.pages[0].pageIndex() == 0,
+    "Expected pages[0].index == 0, got " & $ctx.pages[0].pageIndex()
+  doAssert ctx.pages[1].pageIndex() == 1,
+    "Expected pages[1].index == 1, got " & $ctx.pages[1].pageIndex()
+
+  # Decode: position 300, no boundary (300 mod 256 != 0)
+  orc.decodeStep(position = 300, token_id = 200'u32, device = kCPU)
+  doAssert ctx.kv_position == 301,
+    "kv_position should be 301, got " & $ctx.kv_position
+  doAssert ctx.pages.len == 2,
+    "Expected still 2 pages (no boundary), got " & $ctx.pages.len
+
+  result = true
+
+# ═════════════════════════════════════════════════════════════════════════════
+# COV-B-010: endSequence round-trip (graftPages → trie → new sequence)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# endSequence collects all tokens+pages and grafts them into the trie.
+# Subsequent startSequence with the same prefix should get a full LPM match.
+
+proc testEndSequenceRoundTrip(): bool =
+  ## Verify endSequence → startSequence cycle through multiple sequences.
+  ## Tests: graftPages, LPM re-match, and growing match on longer prefix.
+  var orc = makeOrchestrator()
+
+  # Sequence 1: 512 tokens (2 full pages)
+  orc.startSequence(makeTokens(TokensPerPage * 2))
+  orc.endSequence()
+
+  # Sequence 2: same 512 tokens → LPM matches all 512
+  orc.startSequence(makeTokens(TokensPerPage * 2))
+  let ctx = orc.getInferenceContextMut()
+  doAssert ctx.cached_tokens == TokensPerPage * 2,
+    "cached_tokens should be " & $(TokensPerPage*2) & " after LPM, got " &
+    $ctx.cached_tokens
+  orc.endSequence()
+
+  # Sequence 3: 300 tokens (overlap: first 300 of [0..511])
+  orc.startSequence(makeTokens(300))
+  doAssert ctx.cached_tokens == 300,
+    "cached_tokens should be 300 after LPM match, got " & $ctx.cached_tokens
+  orc.endSequence()
+
+  # Sequence 4: same 300 tokens → LPM matches all 300
+  orc.startSequence(makeTokens(300))
+  doAssert ctx.cached_tokens == 300,
+    "cached_tokens should be 300 after LPM, got " & $ctx.cached_tokens
+
+  result = true
+# ═════════════════════════════════════════════════════════════════════════════
+# COV-B-008: InferenceContext ref semantic verification
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# InferenceContext was changed from `object` to `ref object`. Multiple handles
+# to the same orchestrator context should alias (not copy).
+
+proc testInferenceContextRefSemantic(): bool =
+  ## Verify InferenceContext is a ref object: getInferenceContextMut always
+  ## returns the same object. (The type is `ref object` so this is guaranteed
+  ## by the compiler — this test documents that invariant.)
+  var orc = makeOrchestrator()
+  let ctx = orc.getInferenceContextMut()
+
+  # Verify: cached_tokens=0 initially, then changes reflect in both handles
+  doAssert ctx.cached_tokens == 0,
+    "Expected cached_tokens=0 initially"
+
+  orc.startSequence(makeTokens(100))
+  # First-ever sequence: LPM matches nothing, cached_tokens stays 0
+  doAssert ctx.cached_tokens == 0,
+    "cached_tokens should be 0 for first sequence, got " & $ctx.cached_tokens
+
+  # Verify the ctx handle sees the pages the orchestrator allocated
+  doAssert ctx.pages.len == 1,
+    "Expected 1 page for 100 tokens, got " & $ctx.pages.len
+
+  result = true
+
 proc runTests*() =
   runTest("BUG-B-001: kv_position tracking through startSequence and decodeStep",
     testBugB001KvPositionTracking)
@@ -538,6 +684,18 @@ proc runTests*() =
 
   runTest("COV-A-005: cowPartialPage copy verification",
     testCowPartialPageIsolated)
+
+  runTest("COV-B-005: page boundary crossing during decodeStep",
+    testDecodePageBoundary)
+
+  runTest("COV-B-009: partial-page gather structure (300 tokens, non-aligned)",
+    testPartialPageStructure)
+
+  runTest("COV-B-010: endSequence round-trip through multiple sequences",
+    testEndSequenceRoundTrip)
+
+  runTest("COV-B-008: InferenceContext ref semantic aliasing",
+    testInferenceContextRefSemantic)
 
 when isMainModule:
   runTests()
