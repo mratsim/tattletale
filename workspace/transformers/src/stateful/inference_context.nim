@@ -38,6 +38,11 @@ type InferenceContext* = ref object
   ## Sliced from the model's precomputed cache using position_ids.
   cos*: Tensor   ## (seq_len, head_dim) — valid after setRopeForPositions()
   sin*: Tensor   ## (seq_len, head_dim) — valid after setRopeForPositions()
+  ## Gather buffers for K/V page gathering into contiguous tensors for SDPA.
+  ## Pre-allocated at max_seq size to avoid per-forward-pass GPU allocations.
+  ## Owned here (not on the layer) to keep attention stateless.
+  k_gather_buf*: Tensor  ## (1, max_seq, kv_heads, head_dim) — allocated lazily on first forward
+  v_gather_buf*: Tensor  ## (1, max_seq, kv_heads, head_dim) — allocated lazily on first forward
 
 proc init*(
     _: type InferenceContext,
@@ -88,6 +93,8 @@ proc clearState*(ctx: var InferenceContext) =
   ctx.cached_tokens = 0
   ctx.input_tokens = default(seq[uint32])
   ctx.position_ids = nil
+  ctx.k_gather_buf = nil
+  ctx.v_gather_buf = nil
 
 proc setPositionIds*(ctx: var InferenceContext, position_ids: Tensor) =
   ## Set position_ids for current forward pass.

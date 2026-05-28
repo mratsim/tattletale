@@ -42,8 +42,6 @@ type
     rotary: RotaryPositionEmbeddingRef
     q_norm: Option[RmsNorm]
     k_norm: Option[RmsNorm]
-    k_gather_buf*: Tensor
-    v_gather_buf*: Tensor
 # =============================================================================
 # Data flow through RopeGQAttention
 # =============================================================================
@@ -262,12 +260,12 @@ proc forward(
   let kvDtype = v_reshaped.scalarType()
   let kvDevice: F.DeviceKind = v_reshaped.deviceType()
   # Pre-allocate gather buffers at max_seq to avoid F.empty per forward pass.
-  if self.k_gather_buf.isNil or self.k_gather_buf.size(1) < totalSeqLen:
+  if ctx.k_gather_buf.isNil or ctx.k_gather_buf.size(1) < totalSeqLen:
     let allocSize = max(totalSeqLen, ctx.max_seq)
     let kvOpts = F.tensorOptions(kvDtype, kvDevice)
-    self.k_gather_buf = F.zeros(
+    ctx.k_gather_buf = F.zeros(
       1, allocSize, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim, kvOpts)
-    self.v_gather_buf = F.zeros(
+    ctx.v_gather_buf = F.zeros(
       1, allocSize, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim, kvOpts)
 
   for p in 0 ..< numPages:
@@ -275,12 +273,12 @@ proc forward(
     let pageEnd = min(pageStart + TokensPerPage, totalSeqLen)
     let pageValidLen = pageEnd - pageStart
     let page = ctx.pages[p]
-    self.k_gather_buf[0, pageStart ..< pageEnd, _, _] = page.k_view[self.layer_idx, 0 ..< pageValidLen]
-    self.v_gather_buf[0, pageStart ..< pageEnd, _, _] = page.v_view[self.layer_idx, 0 ..< pageValidLen]
+    ctx.k_gather_buf[0, pageStart ..< pageEnd, _, _] = page.k_view[self.layer_idx, 0 ..< pageValidLen]
+    ctx.v_gather_buf[0, pageStart ..< pageEnd, _, _] = page.v_view[self.layer_idx, 0 ..< pageValidLen]
 
   # Narrow pre-allocated buffers to actual sequence length for SDPA
-  let k_full = self.k_gather_buf.narrow(1, 0, totalSeqLen)
-  let v_full = self.v_gather_buf.narrow(1, 0, totalSeqLen)
+  let k_full = ctx.k_gather_buf.narrow(1, 0, totalSeqLen)
+  let v_full = ctx.v_gather_buf.narrow(1, 0, totalSeqLen)
 
   # k_full/v_full are already (batch, seq, kv_heads, head_dim) — the format GQA expects.
   # GQA's forward permutes internally to (batch, kv_heads, seq, head_dim) for SDPA.

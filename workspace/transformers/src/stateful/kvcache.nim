@@ -803,7 +803,12 @@ proc findEvictionCandidate[T, P](cache: KVCache[T, P]): PagedRadixNode[T, P] =
         break
       candidateIdx = wavlNext(n.evictLinks, candidateIdx)
     if candidateIdx < 0:
-      return nil
+      # This is unreachable. See kvcache.lean for formalization and sketch of a proof.
+      # We only descend n the while true loop if n.subtree_sum_locked >= n.subtree_sum_leaves
+      # By pigeonhole principle this means at least 1 child has unlocked.
+      raise newException(
+        KVCacheDefect,
+        "[ttt] KVCache invariant violated: Found no eviction target.")
 
 proc evict*[T, P](cache: var KVCache[T, P]): int {.discardable.} =
   ## Evict a leaf from the tree. Must be evictable (leaf + unlocked).

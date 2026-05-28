@@ -226,7 +226,7 @@ type
     ## No custom `=destroy` hook — ORC default field destruction handles
     ## the Nim Tensor → C++ TorchTensor → intrusive_ptr → CUDA allocator
     ## chain correctly without extra nil-ing.
-    page_pool: PagePool
+    page_pool: PagePool # first field so it's destroyed last so pages in flight in `logical_map` don't access an invalid pointer.
     active_context: InferenceContext
     num_layers: int
     device: DeviceKind
