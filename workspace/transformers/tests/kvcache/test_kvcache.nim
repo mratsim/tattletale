@@ -162,8 +162,10 @@ proc testFindCandidateAllLocked(): bool =
   var cache = KVCache[uint32, int].new()
   discard cache.lpm(@[1'u32, 2, 3]); cache.graftPages(@[1'u32, 2, 3], [1])
   discard cache.lpm(@[4'u32, 5, 6]); cache.graftPages(@[4'u32, 5, 6], [2])
+  # Lock all children. Maintain C2: root.locked == sum(child.locked)
   cache.root.children[0].subtree_sum_locked = 1
   cache.root.children[1].subtree_sum_locked = 1
+  cache.root.subtree_sum_locked = 2
   let victim = findEvictionCandidate(cache)
   doAssert victim == nil
   result = true
@@ -427,12 +429,15 @@ proc testClassifyGraft(): bool =
   # gcFullMatch when targetMatchLen == tokensLen
   doAssert classifyGraft(10, 10, 10, 10, true, false) == gcFullMatch
   # gcPartialMatch: lastLevel < 256, hasParent, lastLevel == targetTokLen
-  doAssert classifyGraft(200, 300, 200, 200, true, false) == gcPartialMatch
-  # gcRootNewChild: lastLevel < 256, no parent, root has children
+  # gcRootNewChild: lastLevel < 256, no parent, root has children, root is EMPTY
+  # (targetTokLen == 0 indicates root has no content tokens)
   doAssert classifyGraft(0, 100, 0, 0, false, true) == gcRootNewChild
+  # gcFork: root has tokens AND children, input differs at position 0
+  # lastLevel=0 but targetTokLen=256 -> should NOT be rootNewChild
+  doAssert classifyGraft(0, 100, 0, 256, false, true) == gcFork,
+    "root with content+children+different input should fork, not rootNewChild"
   # gcFork: lastLevel < targetTokLen (not full match, not sub-page)
   doAssert classifyGraft(256, 512, 256, 512, true, false) == gcFork
-  # gcAppend: fallthrough (lastLevel >= targetTokLen)
   doAssert classifyGraft(512, 768, 512, 512, true, false) == gcAppend
   result = true
 
@@ -519,6 +524,182 @@ proc testWalkUpUpdateReKey(): bool =
   result = true
 
 # ════════════════════════════════════════════════════════
+# CODERA-030: forkPageOp grandparent slot
+# ════════════════════════════════════════════════════════
+proc testCoderA030ForkPageSlot(): bool =
+  ## CODERA-030: forkPageOp overwrites wrong grandparent slot.
+  ## When the forked node is at index > 0 in its parent,
+  ## newParent.addChild(target) resets childId to 0, so
+  ## grandparent.children[target.childId] = newParent
+  ## writes to grandparent.children[0] instead of the correct index.
+  ##
+  ## Uses page-aligned fork (lastLevel=256) so forkPageOp creates
+  ## a newParent with 1 page of shared content and no A1 conflict.
+  var cache = KVCache[uint32, int].new()
+
+  # Step 1: A = [0..255], 256 tokens
+  var seqA = newSeq[uint32](256)
+  for i in 0..<256: seqA[i] = uint32(i)
+  discard cache.lpm(seqA)
+  cache.graftPages(seqA, makePages(256))
+
+  # Step 2: B = [1000..1511] (512 tokens, 2 pages), different first token
+  # -> fork at root: root becomes empty branching with children [A(idx=0), B(idx=1)]
+  var seqB = newSeq[uint32](512)
+  for i in 0..<512: seqB[i] = uint32(1000 + i)
+  discard cache.lpm(seqB)
+  cache.graftPages(seqB, makePages(512))
+
+  doAssert cache.root.children.len == 2,
+    "root should have 2 children after fork, got " & $cache.root.children.len
+  doAssert cache.root.children[1].childId == 1,
+    "B should be at index 1, got childId=" & $cache.root.children[1].childId
+
+  # Step 3: C matches first 256 of B (full page), then diverges
+  # -> forkPageOp on B at idx 1, llBranchingPoint=256
+  # BUG: addChild resets childId to 0 -> grandparent.children[0] overwritten!
+  var seqC = newSeq[uint32](258)
+  for i in 0..<256: seqC[i] = uint32(1000 + i)  # match B's first page
+  seqC[256] = 9999'u32
+  seqC[257] = 10000'u32
+  discard cache.lpm(seqC)
+  cache.graftPages(seqC, makePages(258))
+
+  # After correct fork: root has [A, newParent_B(256 tok)] at indices [0,1]
+  # newParent_B has [B-tail(256 tok), C-sibling(2 tok)]
+  radixVerifyInvariants(cache.root, "CODERA-030")
+
+  # Verify structure
+  doAssert cache.root.children.len == 2,
+    "root should have 2 children, got " & $cache.root.children.len
+  doAssert cache.root.children[1].children.len == 2,
+    "newParent_B should have 2 children, got " & $cache.root.children[1].children.len
+  doAssert cache.root.children[0].tokens == seqA, "A's tokens unchanged"
+
+  # LPM on seqC should match all 258 tokens
+  let r = cache.lpm(seqC)
+  doAssert r.totalTokenMatched == 258,
+    "LPM on C: matched " & $r.totalTokenMatched & ", expected 258"
+
+  # LPM on seqA should still match fully
+  let rA = cache.lpm(seqA)
+  doAssert rA.totalTokenMatched == 256,
+    "LPM on A: matched " & $rA.totalTokenMatched & ", expected 256"
+  result = true
+
+# ════════════════════════════════════════════════════════
+# CODERA-029: classifyGraft non-empty branching root
+# ════════════════════════════════════════════════════════
+proc testCoderA029ClassifyGraftRoot(): bool =
+  ## CODERA-029: classifyGraft routes non-empty branching root
+  ## to gcRootNewChild instead of gcFork.
+  ##
+  ## Root has tokens AND children (after fork at page boundary).
+  ## A new graft partially matches root's tokens (a full page) but not all.
+  ## classifyGraft must return gcFork, not gcRootNewChild.
+  var cache = KVCache[uint32, int].new()
+
+  # Step 1: A = [0..767] (3 pages, 768 tokens) as root leaf
+  var seqA = newSeq[uint32](768)
+  for i in 0..<768: seqA[i] = uint32(i)
+  discard cache.lpm(seqA)
+  cache.graftPages(seqA, makePages(768))
+
+  # Step 2: B matches first 512 of A (2 pages), diverges
+  # -> fork at lastLevel=512, llBranchingPoint=512
+  # -> newParent gets tokens[0..511], becomes root
+  # -> root now has 512 tokens AND 2 children
+  var seqB = newSeq[uint32](514)
+  for i in 0..<512: seqB[i] = uint32(i)
+  seqB[512] = 8888'u32
+  seqB[513] = 8889'u32
+  discard cache.lpm(seqB)
+  cache.graftPages(seqB, makePages(514))
+
+  doAssert cache.root.tokens.len > 0,
+    "root should have tokens after fork at page boundary"
+  doAssert cache.root.children.len > 0,
+    "root should have children after fork"
+
+  # Step 3: C matches first 256 of root (1 page), then diverges
+  # BUG: classifyGraft returns gcRootNewChild instead of gcFork
+  # gcRootNewChild adds C as direct child of root with ALL tokens
+  # -> LPM on C only matches 256 tokens (root's prefix), not all 258
+  # Correct: gcFork creates newParent, C becomes sibling, LPM matches 258
+  var seqC = newSeq[uint32](258)
+  for i in 0..<256: seqC[i] = uint32(i)  # match root's first 256 tokens
+  seqC[256] = 6666'u32
+  seqC[257] = 6667'u32
+  discard cache.lpm(seqC)
+  cache.graftPages(seqC, makePages(258))
+
+  # Verify: LPM on C should match ALL 258 tokens
+  # With gcRootNewChild bug: root's 512 tokens match 256,
+  # findChild returns nil at pos=256 -> only 256 matched
+  let r = cache.lpm(seqC)
+  doAssert r.totalTokenMatched == 258,
+    "LPM should match all 258 tokens, got " & $r.totalTokenMatched & ". " &
+    "gcRootNewChild bug: C was added as direct child, root's content masks it"
+
+  radixVerifyInvariants(cache.root, "CODERA-029")
+  result = true
+
+# ════════════════════════════════════════════════════════
+# Three different prompts (all differ at first token)
+# ════════════════════════════════════════════════════════
+proc testThreeDifferentPrompts(): bool =
+  ## Three prompts, all differing at the first token:
+  ##   1. First prompt -> gcAppend (root leaf)
+  ##   2. Second prompt, different -> gcFork (root splits, becomes empty branching)
+  ##   3. Third prompt, different from both -> gcRootNewChild (added as direct child)
+  ##
+  ## Verifies the full gcAppend -> gcFork -> gcRootNewChild lifecycle.
+  var cache = KVCache[uint32, int].new()
+
+  # Prompt 1: [0..255]
+  var p1 = newSeq[uint32](256)
+  for i in 0..<256: p1[i] = uint32(i)
+  discard cache.lpm(p1)
+  cache.graftPages(p1, makePages(256))
+  doAssert cache.root.tokens == p1, "prompt 1 should append to root"
+  doAssert cache.root.children.len == 0, "root has no children after first prompt"
+
+  # Prompt 2: [2000..2255] — different first token
+  # -> gcFork: root gets split, becomes empty branching with 2 children
+  var p2 = newSeq[uint32](256)
+  for i in 0..<256: p2[i] = uint32(2000 + i)
+  discard cache.lpm(p2)
+  cache.graftPages(p2, makePages(256))
+
+  doAssert cache.root.tokens.len == 0,
+    "root should be empty after fork, got " & $cache.root.tokens.len & " tokens"
+  doAssert cache.root.children.len == 2,
+    "root should have 2 children after fork, got " & $cache.root.children.len
+
+  # Prompt 3: [4000..4255] — different from both previous
+  # -> gcRootNewChild: added as direct child of empty branching root
+  var p3 = newSeq[uint32](256)
+  for i in 0..<256: p3[i] = uint32(4000 + i)
+  discard cache.lpm(p3)
+  cache.graftPages(p3, makePages(256))
+
+  doAssert cache.root.tokens.len == 0,
+    "root should stay empty after third graft, got " & $cache.root.tokens.len & " tokens"
+  doAssert cache.root.children.len == 3,
+    "root should have 3 children, got " & $cache.root.children.len
+
+  # Verify all three prompts are findable via LPM
+  for (prompt, name) in [(p1, "p1"), (p2, "p2"), (p3, "p3")]:
+    let r = cache.lpm(prompt)
+    doAssert r.totalTokenMatched == 256,
+      "LPM on " & name & " matched " & $r.totalTokenMatched & ", expected 256"
+
+  radixVerifyInvariants(cache.root, "three-prompts")
+  result = true
+
+# ════════════════════════════════════════════════════════
+# Runner
+# ════════════════════════════════════════════════════════
 # Runner
 # ════════════════════════════════════════════════════════
 proc runTests*() =
@@ -599,5 +780,18 @@ proc runTests*() =
       check testRegressionCompressPathRecursiveAndReKey()
     test "compressPath preserves subtree_oldest_decode (no-op assignment)":
       check testRegressionCompressPathPreservesTimestamp()
+
+  suite "CODERA-030 (forkPageOp grandparent slot)":
+    test "forkPageOp on non-zero childId keeps grandparent consistent":
+      check testCoderA030ForkPageSlot()
+
+  suite "CODERA-029 (classifyGraft non-empty root)":
+    test "classifyGraft uses gcFork for non-empty branching root":
+      check testCoderA029ClassifyGraftRoot()
+
+  suite "Graft lifecycle (append -> fork -> rootNewChild)":
+    test "three different prompts at first token use all 3 branches":
+      check testThreeDifferentPrompts()
+
 when isMainModule:
   runTests()

@@ -494,7 +494,7 @@ func classifyGraft*(targetMatchLen, tokensLen, lastLevel, targetTokLen: int;
   if targetMatchLen == tokensLen:                        gcFullMatch
   elif lastLevel < TokensPerPage and hasParent and lastLevel == targetTokLen:
     gcPartialMatch
-  elif lastLevel < TokensPerPage and not hasParent and rootHasChildren:
+  elif lastLevel < TokensPerPage and not hasParent and rootHasChildren and targetTokLen == 0:
     gcRootNewChild
   elif lastLevel < targetTokLen:                         gcFork
   else:                                                  gcAppend
@@ -610,6 +610,7 @@ proc forkPageOp[T, P](cache: var KVCache[T, P];
     subtree_sum_pages: extraPages,
     subtree_oldest_decode: cache.kvClock, subtree_sum_leaves: 1)
 
+  let oldChildId = target.childId  # save before addChild resets it
   newParent.addChild(target)
   newParent.addChild(sibling)
 
@@ -617,8 +618,8 @@ proc forkPageOp[T, P](cache: var KVCache[T, P];
     cache.root = newParent
   else:
     let grandparent {.cursor.} = newParent.parent
-    grandparent.children[target.childId] = newParent
-    newParent.childId = target.childId
+    grandparent.children[oldChildId] = newParent
+    newParent.childId = oldChildId
 
   cache.walkUpUpdate(newParent, pagesDelta = extraPages, leavesDelta = 1)
 
