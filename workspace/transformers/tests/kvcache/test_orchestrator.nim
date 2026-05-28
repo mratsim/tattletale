@@ -30,10 +30,12 @@ import
   std/unittest,
   std/importutils,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   ../../src/stateful/kvcache,        # TokensPerPage, ceilDiv
   ../../src/stateful/page_pool,       # Page, pageIndex
   ../../src/stateful/inference_context,
-  ../../src/stateful/orchestrator
+  ../../src/stateful/orchestrator {.all.}
+privateAccess(Orchestrator)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Test configuration
@@ -427,37 +429,115 @@ proc testFieldIndependenceCOWMatch(): bool =
   result = true
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ensurePoolCapacity OOM ValueError
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# When the pool is exhausted and no eviction candidates exist (empty trie
+# or all pages locked), ensurePoolCapacity raises ValueError.
+
+proc testOOMError(): bool =
+  ## Verify ensurePoolCapacity raises ValueError when pool exhausted
+  ## and no eviction candidates are available.
+  var orc = makeOrchestrator()  # 32-page pool
+  let ctx = orc.getInferenceContextMut()
+
+  # Prompt large enough to need more pages than pool has.
+  # TokensPerPage = 256, pool = 32 pages → 33 pages need 8193 tokens
+  let pageCountNeeded = TestNumPages + 1  # 33 pages
+  let tokens = makeTokens(pageCountNeeded * TokensPerPage)
+
+  try:
+    orc.startSequence(tokens)
+    # Should not reach here — pool exhaustion should raise
+    doAssert false, "Expected ValueError was not raised"
+  except ValueError:
+    # Expected: ensurePoolCapacity can't evict (empty trie)
+    discard
+
+  result = true
+
+# ═════════════════════════════════════════════════════════════════════════════
+# cowPartialPage isolated test
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Verify the COW helper correctly copies partial page content
+# from source page to destination page.
+
+proc testCowPartialPageIsolated(): bool =
+  ## Verify cowPartialPage copies partial tokens from src to dst.
+  ## Uses CPU tensors (cpuOrc) to avoid CUDA item() issues.
+  var cpuOrc = Orchestrator.init(
+    num_layers = TestLayers,
+    batch_size = 1,
+    kv_heads = TestKvHeads,
+    max_seq = TestMaxSeq,
+    head_dim = TestHeadDim,
+    num_pages = TestNumPages,
+    dtype = kBFloat16,
+    device = kCPU
+  )
+
+  let srcPage = cpuOrc.page_pool.borrow()
+  let dstPage = cpuOrc.page_pool.borrow()
+  let partialTokens = 42
+
+  # k_view shape: (1, 256, 1, 4) — write a gradient to each position
+  for t in 0 ..< partialTokens:
+    srcPage.k_view[0, t] = F.toTensor([float32(t + 100), 0, 0, 0]).reshape(1, 4)
+    srcPage.v_view[0, t] = F.toTensor([float32(t + 200), 0, 0, 0]).reshape(1, 4)
+
+  # COW copy
+  cowPartialPage(dstPage, srcPage, partialTokens, numLayers = 1)
+
+  # Verify: read back and check each position
+  for t in 0 ..< partialTokens:
+    let kVal = dstPage.k_view[0, t, 0, 0].item(float32)
+    doAssert kVal == float32(t + 100),
+      "k_view[" & $t & "] should be " & $(t+100) & " got " & $kVal
+    let vVal = dstPage.v_view[0, t, 0, 0].item(float32)
+    doAssert vVal == float32(t + 200),
+      "v_view[" & $t & "] should be " & $(t+200) & " got " & $vVal
+
+  # Verify beyond partialTokens is still zero
+  let kBeyond = dstPage.k_view[0, partialTokens, 0, 0].item(float32)
+  let vBeyond = dstPage.v_view[0, partialTokens, 0, 0].item(float32)
+  doAssert kBeyond == 0.0, "k_view beyond partial should be 0, got " & $kBeyond
+  doAssert vBeyond == 0.0, "v_view beyond partial should be 0, got " & $vBeyond
+
+  result = true
 # Test runner
 # ═════════════════════════════════════════════════════════════════════════════
-
+# Test runner
 proc runTests*() =
-  suite "Orchestrator — BUG-B-001 (kv_position tracking)":
-    test "kv_position tracking through startSequence and decodeStep":
-      check testBugB001KvPositionTracking()
+  runTest("BUG-B-001: kv_position tracking through startSequence and decodeStep",
+    testBugB001KvPositionTracking)
 
-  suite "Orchestrator — BUG-B-002 (COW page ordering inverted)":
-    test "LPM 300 tokens (256 full + 44 partial) → correct page order":
-      check testBugB002CowPageOrdering()
+  runTest("BUG-B-002: LPM 300 tokens (256 full + 44 partial) → correct page order",
+    testBugB002CowPageOrdering)
 
-  suite "Orchestrator — decode tracking":
-    test "kv_position increments through decode steps":
-      check testOrchestratorDecodeTracking()
+  runTest("kv_position increments through decode steps",
+    testOrchestratorDecodeTracking)
 
-  suite "Orchestrator — lifecycle round-trip":
-    test "startSequence → endSequence → startSequence reuse":
-      check testOrchestratorLifecycleRoundtrip()
+  runTest("lifecycle: startSequence → endSequence → startSequence reuse",
+    testOrchestratorLifecycleRoundtrip)
 
-  suite "Orchestrator — writeStart (attention interaction)":
-    test "writeStart=0 for first prefill (no LPM match)":
-      check testWriteStartFirstPrefill()
-    test "writeStart skips cached prefix after LPM match":
-      check testWriteStartCachedPrefix()
+  runTest("writeStart=0 for first prefill (no LPM match)",
+    testWriteStartFirstPrefill)
 
-  suite "Orchestrator — field independence (kv_position vs cached_tokens)":
-    test "kv_position set independently of cached_tokens (no LPM)":
-      check testFieldIndependencePrefillDecode()
-    test "cached_tokens stable through setKvPosition (COW match)":
-      check testFieldIndependenceCOWMatch()
+  runTest("writeStart skips cached prefix after LPM match",
+    testWriteStartCachedPrefix)
+
+  runTest("field independence: kv_position set independently of cached_tokens",
+    testFieldIndependencePrefillDecode)
+
+  runTest("field independence: cached_tokens stable through setKvPosition",
+    testFieldIndependenceCOWMatch)
+
+  runTest("COV-A-004: OOM ValueError on pool exhaustion",
+    testOOMError)
+
+  runTest("COV-A-005: cowPartialPage copy verification",
+    testCowPartialPageIsolated)
 
 when isMainModule:
   runTests()
