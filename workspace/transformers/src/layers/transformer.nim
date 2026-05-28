@@ -162,7 +162,7 @@ proc forward*(
   ## - Single addition per layer (instead of two)
   ##
   ## Args:
-  ##   ctx: InferenceContext with KV caches and RoPE (ctx.kv_caches, ctx.cos, ctx.sin)
+  ##   ctx: InferenceContext with page refs and RoPE (ctx.pages, ctx.cos, ctx.sin)
   ##   x: Input tensor of shape (batch, seq_len, hidden_size)
   ##   residual: Optional residual from previous layer. If None, uses x.
   ##

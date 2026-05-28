@@ -14,6 +14,8 @@ import
   workspace/safetensors,
   workspace/transformers/src/layers,
   workspace/transformers/src/stateful/inference_context,
+  workspace/transformers/src/stateful/kvcache,
+  workspace/transformers/src/stateful/page_pool,
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/libtorch_testutils
 
@@ -97,10 +99,9 @@ proc main() =
 
   # Step 4: RoPE
   var ctx = InferenceContext.init(
-    num_layers = 1, batch_size = 1, kv_heads = 8,
-    max_seq = 4096, head_dim = hd,
-    dtype = F.kFloat16, device = F.kCuda)
-  ctx.reset()
+      num_layers = 1, batch_size = 1, kv_heads = 8,
+      max_seq = 4096, head_dim = hd)
+  ctx.clearState()
   ctx.position_ids = arange(S).unsqueeze(0).to(kInt64).to(kCuda)
   ctx.setRopeForPositions(layer.self_attn.rotary)
   let qn_mh = q_normed.reshape(batch, S, 16, hd)

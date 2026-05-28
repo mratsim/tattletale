@@ -19,6 +19,7 @@ import std/json
 import std/os
 import std/tables
 import std/strutils
+import std/sequtils
 import workspace/libtorch as F
 import workspace/toktoktok
 import ./stateful/orchestrator
@@ -73,37 +74,55 @@ proc generate*(
         model: Model,
         prompt: string,
         temp = 1.0f,
-        maxTokens = 200): string =
+        maxTokens = 200,
+        maxContextLen: int = -1): string =
   let cfg = model.getConfig()
   let device = model.getDeviceKind()
-  var orch = init(Orchestrator, cfg.num_hidden_layers)
-  defer: orch.endSequence()
+  let maxCtx = if maxContextLen < 0: cfg.max_position_embeddings else: maxContextLen
+  let numPoolPages = computeNumPages(maxCtx, concurrentRequests = 1)
+  var orc = init(Orchestrator, cfg.num_hidden_layers, 1,
+                 cfg.num_key_value_heads, maxCtx, cfg.head_dim,
+                 numPoolPages, parseTorchDtype(cfg.torch_dtype), device)
+  defer: orc.endSequence()
 
   let dtype = parseTorchDtype(cfg.torch_dtype)
 
   # Tokenize prompt with special tokens
   var ids = model.getTokenizer().encode(prompt)
+
+  # guard against prompt exceeding max context length
+  if ids.len > maxCtx:
+    raise newException(ValueError,
+      "[ttt] Prompt length exceeds max context length: " & $ids.len & " > " & $maxCtx)
+
   let startPos = ids.len
 
-  orch.startSequence(1, cfg.num_key_value_heads, maxTokens + startPos,
-                     cfg.head_dim, dtype, device, startPos)
+  orc.startSequence(ids.mapIt(it.uint32))
+  # TODO: change tokenization to uint32/int32 directly — no point using 64-bit
+  #   when vocabulary is at most ~230K (fits in 2^18).
+  #   This would avoid the temporary seq allocation from mapIt.
 
   # === PREFILL: forward on full prompt ===
   let inputIds = F.toTensor([ids]).to(device)
-  let logits = model.forward(orch.active_context, inputIds)
+  let logits = model.forward(orc.getInferenceContextMut(), inputIds)
+  # kv_position must reflect total prefill tokens for correct decode page allocation
+  orc.setKvPosition(ids.len)
   let lastLogits = logits.narrow(1, startPos - 1, 1).squeeze(1)
   var nextToken = sample(lastLogits, temp)
   ids.add(nextToken)
 
   # === DECODE LOOP: forward on 1 token at a time ===
-  while ids.len < startPos + maxTokens:
+  while ids.len < startPos + maxTokens and ids.len < maxCtx:
     # Set position for this decode step
-    orch.decodeStep(ids.len - 1, device)
-
+    orc.decodeStep(ids.len - 1, nextToken.uint32, device)
     # Forward on single token: [1, 1]
     let singleToken = F.toTensor([[nextToken]]).to(device)
-    let stepLogits = model.forward(orch.active_context, singleToken)
-
+    let stepLogits = model.forward(orc.getInferenceContextMut(), singleToken)
+    # Advance kv_position AFTER forward — the attention layer used
+    # ctx.kv_position as the write offset (equal to position_ids.min())
+    # during this call, avoiding a GPU→CPU sync.  Now advance so the
+    # next decodeStep's boundary check sees the updated total.
+    orc.setKvPosition(ids.len)
     # Sample next token from [1, 1, vocab] -> [vocab]
     let stepLastLogits = stepLogits.squeeze(0).squeeze(0)
     nextToken = sample(stepLastLogits, temp)

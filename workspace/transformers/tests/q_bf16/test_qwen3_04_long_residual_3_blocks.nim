@@ -31,6 +31,8 @@ import
   workspace/safetensors/src/safetensors_libtorch,
   workspace/transformers/src/layers,
   workspace/transformers/src/stateful/inference_context,
+  workspace/transformers/src/stateful/kvcache,
+  workspace/transformers/src/stateful/page_pool,
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/libtorch_testutils
@@ -69,26 +71,33 @@ proc main() =
       var ctx = InferenceContext.init(
         num_layers = model.config.num_hidden_layers,
         batch_size = 1, kv_heads = model.config.num_key_value_heads,
-        max_seq = 4096, head_dim = model.config.head_dim,
+        max_seq = 4096, head_dim = model.config.head_dim)
+
+      let pool = PagePool.init(
+        64, num_layers = 3,
+        kv_heads = model.config.num_key_value_heads,
+        head_dim = model.config.head_dim,
         dtype = F.kBFloat16, device = F.kCPU)
+      let numPages = ceilDiv(4096, TokensPerPage)
+
+      # Borrow pages once — reused across all layers (each writes to own layerIdx slice)
+      for i in 0 ..< numPages:
+        ctx.pages.add(pool.borrow())
 
       # Input tokens: "Hello, how are you?"
       let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0)
-
       # Embedding pass
       let x = model.embedTokens(inputIds)
       var hidden = x
       var residual: Option[Tensor] = none(Tensor)
-
       echo "Comparing 3-block long residual stream intermediates..."
       echo "================================================================="
 
       for layerIdx in 0..2:
         let fixture = loadFixture(layerIdx)
         var layer = model.layers[layerIdx]
-
-        # Get cos, sin from rotary compute
-        ctx.reset()
+        # Reset positional state — keep pages (each layer writes to own layerIdx slice)
+        ctx.kv_position = 0
         let hfPosIds = fixture["position_ids"].to(kInt64)
         ctx.position_ids = hfPosIds[0]  # (seq,)
         ctx.setRopeForPositions(layer.self_attn.rotary)
@@ -141,7 +150,7 @@ proc main() =
 
         block:
           # ── Call real TransformerBlock.forward and verify it matches ──
-          ctx.reset()
+          ctx.kv_position = 0
           ctx.position_ids = hfPosIds[0]
           ctx.setRopeForPositions(layer.self_attn.rotary)
           let (real_out, real_res) = layer(ctx, hidden, residual)
@@ -154,15 +163,14 @@ proc main() =
           let realInvDiff = checkTensor(&"L{layerIdx:02d}_real_invariant", realSum,
                                         fixture["hf_layer_output"], tol)
           echo &"  real forward invariant diff={realInvDiff:.2e}"
-
-        # Update state for next layer using the real forward's output
-        ctx.reset()
+        # Update state for next layer using the real forward
+        ctx.kv_position = 0
         ctx.position_ids = hfPosIds[0]
         ctx.setRopeForPositions(layer.self_attn.rotary)
+
         let (fwd_out, fwd_res) = layer(ctx, hidden, residual)
         hidden = fwd_out
         residual = some(fwd_res)
-
       echo "================================================================="
       echo "✓ PASS: All 3 blocks match within tolerance"
       true
