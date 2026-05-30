@@ -395,7 +395,7 @@ proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
-                     ssboCount: int): VulkanPipeline =
+                     ssboCount: int, entryPoint: string = "main"): VulkanPipeline =
   result.device = ctx.device
   result.ssboCount = ssboCount
 
@@ -472,7 +472,7 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
     sType: VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
     stage: VK_SHADER_STAGE_COMPUTE_BIT,
     module: shaderModule,
-    pName: "main"
+    pName: entryPoint
   )
   var cpCI = VkComputePipelineCreateInfo(
     sType: VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -692,7 +692,7 @@ proc execVulkan*(
       buf.dealloc(ctx)
     outBuf.dealloc(ctx)
 
-  var pipeline = ctx.createPipeline(shaderModule, totalSsboCount)
+  var pipeline = ctx.createPipeline(shaderModule, totalSsboCount, entryPoint)
   defer:
     pipeline.destroyPipeline(ctx)
 

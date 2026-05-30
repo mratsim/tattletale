@@ -265,5 +265,5 @@ proc execOpenCL*(
 ): seq[byte] =
   ## Convenience overload that creates a temporary OpenCL context.
   var ctx = initOpenCL()
+  defer: ctx.shutdown()
   result = ctx.execOpenCL(source, entryPoint, outputBytes, inputs)
-  ctx.shutdown()

@@ -375,7 +375,7 @@ proc nimToGpuType(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, al
     #  error("o")
     of ntyGenericInvocation:
       result = initGpuType(gtInvalid)
-      error("Generics are not supported in the CUDA DSL so far.") # Note: this should not appear nowadays
+      error("Generic invocations are not supported in the GPU compiler")
     of ntyGenericInst:
       result = ctx.initGpuGenericInst(n)
     of ntyTypeDesc:
