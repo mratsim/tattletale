@@ -16,12 +16,12 @@
 ##   PATH="$CUDA_HOME/bin:$PATH" \
 ##   nim cpp -r --hints:off --warnings:off \
 ##     --outdir:build/tests/positron --nimcache:nimcache/tests/positron \
-##     workspace/positron/tests/test_cuda_hello.nim
+##     workspace/positron/experimental/nimcuda/tests/test_cuda_hello.nim
 
 import
   std/math,
-  workspace/positron/experimental/platforms/cuda,
-  workspace/positron/experimental/nimcuda/rms_norm_cuda
+  workspace/positron/experimental/nimcuda/platforms/cuda,
+  workspace/positron/experimental/nimcuda/src/rms_norm_cuda
 
 # ############################################################
 #

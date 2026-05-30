@@ -11,7 +11,7 @@
 #   Unfortunately, it is not possible to compile this kernel as a Nim static library at the moment
 #   and import it due to Nim core symbols being defined multiple times
 
-import workspace/positron/experimental/platforms/cuda
+import workspace/positron/experimental/nimcuda/platforms/cuda
 
 const NUM_THREADS = 1024
 
@@ -127,4 +127,3 @@ proc rmsNormCuda_fp16*(
   check cudaLaunchKernel(rmsNormFp16Kernel,
     gridDim, blockDim, args[0].addr, 0.csize_t, stream)
   check cudaDeviceSynchronize()
-
