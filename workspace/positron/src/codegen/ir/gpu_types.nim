@@ -464,7 +464,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result = GpuAst(kind: gpuAlias)
     result.aTyp = ast.aTyp.clone()
     result.aTo = ast.aTo.clone()
-    result.aDistinct = ast.aDistinct.clone()
+    result.aDistinct = ast.aDistinct
   of gpuObjConstr:
     result = GpuAst(kind: gpuObjConstr)
     result.ocType = ast.ocType.clone()

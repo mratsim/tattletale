@@ -22,6 +22,25 @@ type
     shaderc_glsl_default_fragment_shader = 2
     shaderc_glsl_default_compute_shader = 3
 
+  shaderc_target_env* = enum
+    shaderc_target_env_vulkan = 0
+    shaderc_target_env_opengl = 1
+    shaderc_target_env_opengl_compat = 2
+    shaderc_target_env_webgpu = 3
+    shaderc_target_env_glslang = 4
+
+  shaderc_spirv_version* = enum
+    shaderc_spirv_version_1_0 = 0x00010000'u32
+    shaderc_spirv_version_1_1 = 0x00010100'u32
+    shaderc_spirv_version_1_2 = 0x00010200'u32
+    shaderc_spirv_version_1_3 = 0x00010300'u32
+    shaderc_spirv_version_1_4 = 0x00010400'u32
+    shaderc_spirv_version_1_5 = 0x00010500'u32
+    shaderc_spirv_version_1_6 = 0x00010600'u32
+
+  shaderc_source_language* = enum
+    shaderc_source_language_glsl = 0
+    shaderc_source_language_hlsl = 1
 # ═══════════════════════════════════════════════════════════════════════
 # Library
 # ═══════════════════════════════════════════════════════════════════════
@@ -68,3 +87,26 @@ proc shaderc_result_get_compilation_status*(result: shaderc_compilation_result_t
 
 proc shaderc_result_get_error_message*(result: shaderc_compilation_result_t): cstring
   {.importc: "shaderc_result_get_error_message", dynlib: ShadercLib.}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Compile options API
+# ═══════════════════════════════════════════════════════════════════════
+
+proc shaderc_compile_options_initialize*(): shaderc_compile_options_t
+  {.importc: "shaderc_compile_options_initialize", dynlib: ShadercLib.}
+
+proc shaderc_compile_options_release*(options: shaderc_compile_options_t): void
+  {.importc: "shaderc_compile_options_release", dynlib: ShadercLib.}
+
+proc shaderc_compile_options_set_target_env*(options: shaderc_compile_options_t,
+                                               target: shaderc_target_env,
+                                               version: uint32): void
+  {.importc: "shaderc_compile_options_set_target_env", dynlib: ShadercLib.}
+
+proc shaderc_compile_options_set_target_spirv*(options: shaderc_compile_options_t,
+                                                 version: shaderc_spirv_version): void
+  {.importc: "shaderc_compile_options_set_target_spirv", dynlib: ShadercLib.}
+
+proc shaderc_compile_options_set_source_language*(options: shaderc_compile_options_t,
+                                                    lang: shaderc_source_language): void
+  {.importc: "shaderc_compile_options_set_source_language", dynlib: ShadercLib.}
