@@ -154,6 +154,9 @@ proc execWgpu*(ctx: var WgpuContext,
   )
   let shader = wgpuDeviceCreateShaderModule(device, addr shaderDesc)
   doAssert shader != nil, "Failed to create shader module"
+  defer:
+    wgpuShaderModuleRelease(shader)
+
   # 2. Create buffers via staging pattern (no Map usage on storage buffers)
   let numInputs = inputs.len
   let totalBindings = numInputs + 1
@@ -166,6 +169,10 @@ proc execWgpu*(ctx: var WgpuContext,
     )
     inputBuffers[i] = wgpuDeviceCreateBuffer(device, addr desc)
     doAssert inputBuffers[i] != nil, "Failed to create input buffer"
+  defer:
+    for buf in inputBuffers:
+      wgpuBufferRelease(buf)
+
   # Output buffer: shader writes here, then we copy to staging
   var outBufDesc = WGPUBufferDescriptor(
     usage: wgpuBufferUsageStorage or wgpuBufferUsageCopySrc,
@@ -173,6 +180,9 @@ proc execWgpu*(ctx: var WgpuContext,
     mappedAtCreation: false)
   let outBuf = wgpuDeviceCreateBuffer(device, addr outBufDesc)
   doAssert outBuf != nil, "Failed to create output buffer"
+  defer:
+    wgpuBufferRelease(outBuf)
+
   # Staging buffer: copy output here, then map for CPU reading
   var stagingDesc = WGPUBufferDescriptor(
     usage: wgpuBufferUsageMapRead or wgpuBufferUsageCopyDst,
@@ -180,6 +190,8 @@ proc execWgpu*(ctx: var WgpuContext,
     mappedAtCreation: false)
   let stagingBuf = wgpuDeviceCreateBuffer(device, addr stagingDesc)
   doAssert stagingBuf != nil, "Failed to create staging buffer"
+  defer:
+    wgpuBufferRelease(stagingBuf)
   # 4. Create bind group layout: inputs 0..N-1, output N
   var entries = newSeq[WGPUBindGroupLayoutEntry](totalBindings)
   for i in 0 ..< numInputs:
@@ -205,12 +217,18 @@ proc execWgpu*(ctx: var WgpuContext,
   )
   let bgl = wgpuDeviceCreateBindGroupLayout(device, addr bglDesc)
   doAssert bgl != nil, "Failed to create bind group layout"
+  defer:
+    wgpuBindGroupLayoutRelease(bgl)
+
   var plDesc = WGPUPipelineLayoutDescriptor(
     bindGroupLayoutCount: 1,
     bindGroupLayouts: bgl.addr
   )
   let pl = wgpuDeviceCreatePipelineLayout(device, addr plDesc)
   doAssert pl != nil, "Failed to create pipeline layout"
+  defer:
+    wgpuPipelineLayoutRelease(pl)
+
   # 5. Create bind group entries (same order: inputs then output)
   var bgEntries = newSeq[WGPUBindGroupEntry](totalBindings)
   for i in 0 ..< numInputs:
@@ -231,6 +249,9 @@ proc execWgpu*(ctx: var WgpuContext,
   )
   let bg = wgpuDeviceCreateBindGroup(device, addr bgDesc)
   doAssert bg != nil, "Failed to create bind group"
+  defer:
+    wgpuBindGroupRelease(bg)
+
   # 6. Create compute pipeline
   var entryPtView = WGPUStringView(data: cstring(entryPoint), length: entryPoint.len.csize_t)
   var computeState = WGPUComputeState(
@@ -243,24 +264,34 @@ proc execWgpu*(ctx: var WgpuContext,
   )
   let pipeline = wgpuDeviceCreateComputePipeline(device, addr cpDesc)
   doAssert pipeline != nil, "Failed to create compute pipeline"
+  defer:
+    wgpuComputePipelineRelease(pipeline)
+
   # 7. Write input data before recording (uses queue, not encoder)
   for i in 0 ..< numInputs:
     wgpuQueueWriteBuffer(queue, inputBuffers[i], 0, inputs[i].data, inputs[i].size.csize_t)
   # 8. Record commands: compute pass + copy output → staging
   let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
   doAssert encoder != nil, "Failed to create command encoder"
+  defer:
+    wgpuCommandEncoderRelease(encoder)
+
   let pass = wgpuCommandEncoderBeginComputePass(encoder, nil)
   wgpuComputePassEncoderSetPipeline(pass, pipeline)
   wgpuComputePassEncoderSetBindGroup(pass, 0, bg, 0, nil)
   # Compute workgroup count from output size (1 workgroup = 256 threads)
   let wgs = 256'u32
-  let totalThreads = ((outBytes + 3'u32) div 4'u32).max(wgs)
+  let totalThreads = ((outBytes.uint32 + 3'u32) div 4'u32).max(wgs)
   let numWorkgroups = (totalThreads + wgs - 1'u32) div wgs
   wgpuComputePassEncoderDispatchWorkgroups(pass, numWorkgroups, 1'u32, 1'u32)
+  wgpuComputePassEncoderEnd(pass)
   wgpuCommandEncoderCopyBufferToBuffer(encoder, outBuf, 0, stagingBuf, 0, outBytes.csize_t)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
   # 9. Submit
   wgpuQueueSubmit(queue, 1, cmdBuf.addr)
+  defer:
+    wgpuCommandBufferRelease(cmdBuf)
+
   # 10. Request map + poll to process callback
   var mapData = MapDoneData(done: false, resultBytes: outBytes)
   var mapCbInfo = WGPUBufferMapCallbackInfo(
@@ -278,15 +309,3 @@ proc execWgpu*(ctx: var WgpuContext,
   if mappedPtr != nil:
     copyMem(result[0].addr, mappedPtr, mapData.resultBytes)
   wgpuBufferUnmap(stagingBuf)
-  # 11. Cleanup
-  wgpuCommandBufferRelease(cmdBuf)
-  wgpuCommandEncoderRelease(encoder)
-  wgpuComputePipelineRelease(pipeline)
-  wgpuBindGroupRelease(bg)
-  wgpuPipelineLayoutRelease(pl)
-  wgpuBindGroupLayoutRelease(bgl)
-  for buf in inputBuffers:
-    wgpuBufferDestroy(buf)
-  wgpuBufferDestroy(outBuf)
-  wgpuBufferDestroy(stagingBuf)
-  wgpuShaderModuleRelease(shader)

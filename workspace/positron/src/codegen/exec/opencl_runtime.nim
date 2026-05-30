@@ -225,14 +225,19 @@ proc execOpenCL*(
   var inputBuffers = newSeq[OpenCLBuffer](numInputs)
   for i in 0 ..< numInputs:
     inputBuffers[i] = ctx.allocBuffer(inputs[i].size)
+  defer:
+    for buf in inputBuffers.mitems:
+      buf.dealloc()
   var outBuf = ctx.allocBuffer(outputBytes)
+  defer:
+    outBuf.dealloc()
+  var kernel = ctx.compileKernel(entryPoint, source)
+  defer:
+    kernel.destroyKernel()
 
   # Write input data
   for i in 0 ..< numInputs:
     inputBuffers[i].writeBuffer(inputs[i].data, inputs[i].size)
-
-  # Compile and run
-  var kernel = ctx.compileKernel(entryPoint, source)
 
   # Set kernel args: inputs first, then output
   for i in 0 ..< numInputs:
@@ -248,13 +253,6 @@ proc execOpenCL*(
   check outBuf.ctx.commands.enqueueReadBuffer(
     outBuf.mem, CL_TRUE, 0, cl_size_t(outputBytes), result[0].addr, 0, nil, nil
   )
-
-  # Cleanup
-  for buf in inputBuffers.mitems:
-    buf.dealloc()
-  outBuf.dealloc()
-  kernel.destroyKernel()
-
 # ═══════════════════════════════════════════════════════════════════════
 # Even higher-level combined: create context + exec + shutdown
 # ═══════════════════════════════════════════════════════════════════════

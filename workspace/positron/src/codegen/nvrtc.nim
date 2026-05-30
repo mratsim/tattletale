@@ -58,6 +58,9 @@ proc initNvrtc*(cuda: string, name = "sample.cu"): NVRTC =
     echo cudaGetDeviceProperties(prop, 0);
     echo "Compute capability: ", prop.major, " ", prop.minor
 
+
+  ## TODO: consider in-memory and on-disk caching option for compiled PTX.
+  ## (Compile once, reuse PTX or CUmodule for subsequent runs.)
   var
     context: CUcontext
     device: CUdevice
@@ -212,7 +215,7 @@ proc link*(nvrtc: var NVRTC) =
 
 proc copyToSymbol*[T](nvrtc: NVRTC, symbol: string, data: T, offset = 0) =
   ## Copies `data` to the symbol in the current CUDA kernel.
-  ## There is absolutely type safety involved here. We only check that the amount of
+  ## There is NO type safety involved here. We only check that the amount of
   ## data you wish to copy to the global matches the size of the global storage.
   ## This function does help you with automatically copying `seq[T]` for example.
   ##
