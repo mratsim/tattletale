@@ -252,8 +252,11 @@ proc execWgpu*(ctx: var WgpuContext,
   let pass = wgpuCommandEncoderBeginComputePass(encoder, nil)
   wgpuComputePassEncoderSetPipeline(pass, pipeline)
   wgpuComputePassEncoderSetBindGroup(pass, 0, bg, 0, nil)
-  wgpuComputePassEncoderDispatchWorkgroups(pass, 1, 1, 1)
-  wgpuComputePassEncoderEnd(pass)
+  # Compute workgroup count from output size (1 workgroup = 256 threads)
+  let wgs = 256'u32
+  let totalThreads = ((outBytes + 3'u32) div 4'u32).max(wgs)
+  let numWorkgroups = (totalThreads + wgs - 1'u32) div wgs
+  wgpuComputePassEncoderDispatchWorkgroups(pass, numWorkgroups, 1'u32, 1'u32)
   wgpuCommandEncoderCopyBufferToBuffer(encoder, outBuf, 0, stagingBuf, 0, outBytes.csize_t)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
   # 9. Submit

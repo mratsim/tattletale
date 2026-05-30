@@ -61,24 +61,30 @@ proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
   ## it to a single global kernel (WebGPU) if any given.
   ## Default backend is CUDA.
   var ctx = GpuContext()
-  for fn in gen.procs: # assign generics info to correct table
-    ctx.genericInsts[fn.pName] = fn
-  for typ in gen.types: # assign generics info to correct table
-    case typ.kind
+  # Clone IR before backend preprocessing — backend preprocessors mutate in place,
+  # so without cloning, one call to codegen(..., backend=A) contaminates later calls for backend=B.
+  # TODO: Make codegen idempotent
+  let astCopy = ast.clone()
+  for fn in gen.procs:
+    let fnCopy = fn.clone()
+    ctx.genericInsts[fnCopy.pName] = fnCopy
+  for typ in gen.types:
+    let typCopy = typ.clone()
+    case typCopy.kind
     of gpuTypeDef:
-      ctx.types[typ.tTyp] = typ
+      ctx.types[typCopy.tTyp] = typCopy
     of gpuAlias:
-      ctx.types[typ.aTyp] = typ
+      ctx.types[typCopy.aTyp] = typCopy
     else: raiseAssert "Unexpected node kind assigning to `types`: " & $typ
   case backend
   of bkCuda:
-    result = ctx.codegenCuda(ast, kernel)
+    result = ctx.codegenCuda(astCopy, kernel)
   of bkWGSL:
-    result = ctx.codegenWebGpu(ast, kernel)
+    result = ctx.codegenWebGpu(astCopy, kernel)
   of bkOpenCL:
-    result = ctx.codegenOpenCL(ast, kernel)
+    result = ctx.codegenOpenCL(astCopy, kernel)
   of bkVulkan:
-    result = ctx.codegenVulkan(ast, kernel)
+    result = ctx.codegenVulkan(astCopy, kernel)
 
 when isMainModule:
   # Mini example

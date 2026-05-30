@@ -238,15 +238,15 @@ proc copyToSymbol*[T](nvrtc: NVRTC, symbol: string, data: T, offset = 0) =
   when T is seq: # copy len * sizeof(element)
     doAssert data.len > 0, "Input data is empty!"
     let elSize = sizeof(data[0])
-    totSize = data.len * sizeof(elSize)
+    totSize = data.len * elSize
     srcPtr = data[0].addr
 
   else:
     # For now just copy by `sizeof`!
     totSize = sizeof(data)
     srcPtr = data.addr
-  doAssert totSize.csize_t == size, "Input data size does not match size of global to copy to: " & $totSize & " vs. " & $size
-  check cuMemcpyHtoD(devPtr, srcPtr, csize_t(totSize))
+  doAssert csize_t(totSize) <= size, "Input data size does not fit target: " & $totSize & " vs. " & $size
+  check cuMemcpyHtoD(devPtr + csize_t(offset), srcPtr, csize_t(totSize))
 
 template execute*(nvrtc: var NVRTC, fn: string, res, inputs: typed, sharedMemSize: typed) =
   ## Load the generated PTX, get the target kernel `fn` and execute it with the `res` and `inputs`

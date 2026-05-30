@@ -258,14 +258,14 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # For kernel parameters that are pointers and not marked as local,
       # emit __global T* restrict
       let typStr = gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
-      if isKernel and p.typ.kind == gtPtr:
-        # __global T* restrict — for kernel pointer parameters
-        let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
-        params.add &"__global {inner}* restrict {p.ident.ident()}"
-      elif p.addressSpace == asWorkspace:
+      if p.addressSpace == asWorkspace:
         # __local T* — shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__local {inner}* {p.ident.ident()}"
+      elif isKernel and p.typ.kind == gtPtr:
+        # __global T* restrict — for kernel pointer parameters
+        let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
+        params.add &"__global {inner}* restrict {p.ident.ident()}"
       else:
         params.add typStr
     let fnArgs = params.join(", ")

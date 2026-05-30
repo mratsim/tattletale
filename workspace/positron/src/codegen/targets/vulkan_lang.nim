@@ -42,8 +42,8 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtFloat64: "double"
   of gtVoid: "void"
   of gtSize_t: "uint"
-  of gtPtr: "*"
-  of gtVoidPtr: "void*"
+  of gtPtr: raiseAssert "Vulkan GLSL does not support raw pointers — lower to SSBO/indexing first"
+  of gtVoidPtr: raiseAssert "Vulkan GLSL does not support void* pointers — lower to SSBO/indexing first"
   of gtObject: "struct"
   of gtString: "const char*"
   of gtUA: ""       # UncheckedArray used as buffer pointer
@@ -462,10 +462,10 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = '(' & gpuTypeToString(ast.cTo, allowEmptyIdent = true) & ')' & ctx.genVulkan(ast.cExpr)
 
   of gpuAddr:
-    result = "(&" & ctx.genVulkan(ast.aOf) & ')'
+    raiseAssert "Vulkan GLSL does not support addr — lower to SSBO/indexing first"
 
   of gpuDeref:
-    result = "(*" & ctx.genVulkan(ast.dOf) & ')'
+    raiseAssert "Vulkan GLSL does not support deref — lower to SSBO/indexing first"
 
   of gpuConstexpr:
     if ast.cType.kind == gtArray:
@@ -499,13 +499,16 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
   result.add "\n"
 
+  # Enforce exactly one global kernel — GLSL compute shader must have a single `void main()`.
+  let globalCount = ctx.fnTab.values.countIt(it.isGlobal())
+  doAssert globalCount == 1, "Vulkan codegen requires selecting exactly one {.global.} kernel (found " & $globalCount & ")"
+
   # 1. Generate SSBO declarations from kernel pointer parameters
   var ssboBinding = 0
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
       for p in fn.pParams:
         if p.typ.kind == gtPtr:
-          # Lift pointer parameter to SSBO
           let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
           result.add genSsboDeclaration(p.ident.ident(), inner, ssboBinding)
           inc ssboBinding
