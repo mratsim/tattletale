@@ -9,6 +9,7 @@
 import std/strformat
 
 import workspace/positron/src/abis/nvidia_abi
+import workspace/positron/src/abis/nvidia_paths
 
 import ./gpu_compiler
 import ./exec/cuda_runtime
@@ -180,16 +181,17 @@ proc link*(nvrtc: var NVRTC) =
     quit(1)
 
   # Add the device runtime (provides printf support)
-  ## NOTE: Linking requires yout to pass the path to `libcudadevrt.a` at CT
-  res = cuLinkAddFile(linkState, CU_JIT_INPUT_LIBRARY,
-                      "/usr/local/cuda/targets/x86_64-linux/lib/libcudadevrt.a",  # Adjust path as needed
-                      0, nil, nil)
-  if res != CUDA_SUCCESS:
-    var error_str: cstring
-    check cuGetErrorString(res, error_str);
-    echo "Link add device runtime failed: ", error_str
-    echo "Error log: ", errorLog
-    quit(1)
+  ## NOTE: Linking requires you to pass the path to `libcudadevrt.a` at CT
+  let devrtPath = findCudaDevrt()
+  if devrtPath.len > 0:
+    res = cuLinkAddFile(linkState, CU_JIT_INPUT_LIBRARY,
+                        cstring devrtPath, 0, nil, nil)
+    if res != CUDA_SUCCESS:
+      var error_str: cstring
+      check cuGetErrorString(res, error_str)
+      echo "Link add device runtime failed: ", error_str
+      echo "Error log: ", errorLog
+      quit(1)
 
   # Complete linking
   var cubn: pointer

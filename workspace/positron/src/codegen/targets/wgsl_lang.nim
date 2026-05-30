@@ -13,9 +13,10 @@ import ../ir/gpu_types
 import ./lang_utils
 
 proc gpuTypeToString*(t: GpuType,
-                      id: GpuAst = newGpuIdent(),
+                      ident: string = "",
                       allowArrayToPtr = false,
-                      allowEmptyIdent = false): string
+                      allowEmptyIdent = false,
+                      symbolKind: GpuSymbolKind = gsNone): string
 
 proc size*(ctx: var GpuContext, a: GpuType): string = size(gpuTypeToString(a, allowEmptyIdent = true))
 
@@ -78,12 +79,12 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   else:
     raiseAssert "Invalid type : " & $t
 
-proc gpuTypeToString*(t: GpuType, id: GpuAst = newGpuIdent(), allowArrayToPtr = false,
+proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                            allowEmptyIdent = false,
+                           symbolKind: GpuSymbolKind = gsNone
                     ): string =
   ## WebGPU type generation is a bit more complicated than CUDA, due to their pointer semantics.
   var skipIdent = false
-  let ident = id.ident() # get the ident from the `gpuIdent`
   case t.kind
   of gtPtr:
     # Let `foo` be the symbol `id`. If for example we generate code for `addr(foo)`, the type
@@ -91,10 +92,10 @@ proc gpuTypeToString*(t: GpuType, id: GpuAst = newGpuIdent(), allowArrayToPtr = 
     # Thus, can use `id's` type to determine if we need mutability or not. If `id` was a
     # pointer, `mutable` will be true and `false` otherwise.
     # If code called with default `id`, type will be nil
-    let addrSpace = id.symbolKind.toAddressSpace()
+    let addrSpace = symbolKind.toAddressSpace()
     let ptrStr = gpuTypeToString(t.kind)
     let typStr = gpuTypeToString(t.to, allowEmptyIdent = true)
-    result = constructPtrSignature(addrSpace, id.iTyp, ptrStr, typStr)
+    result = constructPtrSignature(addrSpace, t.to, ptrStr, typStr)
   of gtArray:
     # empty idents happen in e.g. function return types or casts
     if ident.len == 0 and not allowEmptyIdent: # and not allowArrayToPtr:
@@ -812,7 +813,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
     var params: seq[string]
     for p in ast.pParams:
-      params.add gpuTypeToString(p.typ, p.ident, allowEmptyIdent = false)
+      params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false, symbolKind = p.ident.symbolKind)
     var fnArgs = params.join(", ")
     if $attGlobal in attrs:
       doAssert fnArgs.len == 0, "Global function `" & $ast.pName.ident() & "` still has arguments!"
@@ -842,7 +843,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let letOrVar = if ast.vMutable: "var" else: "let"
     var attrs = ast.vAttributes.join(", ")
     if attrs.len > 0: attrs = &"<{attrs}>"
-    result = &"{indentStr}{letOrVar}{attrs} {gpuTypeToString(ast.vType, ast.vName)}"
+    result = &"{indentStr}{letOrVar}{attrs} {gpuTypeToString(ast.vType, ast.vName.ident(), symbolKind = ast.vName.symbolKind)}"
     # If there is an initialization, the type might require a memcpy
     doAssert not ast.vInit.isNil, "Variable initialization is nil. Should not happen."
     if ast.vInit.kind != gpuVoid and not ast.vRequiresMemcpy:
@@ -974,7 +975,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuTypeDef:
     result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
     for el in ast.tFields:
-      result.add "  " & gpuTypeToString(el.typ, newGpuIdent(el.name)) & ",\n"
+      result.add "  " & gpuTypeToString(el.typ, el.name) & ",\n"
     result.add '}'
 
   of gpuAlias:
@@ -1041,7 +1042,7 @@ proc codegen*(ctx: var GpuContext): string =
     let rw = if p.typ.kind == gtPtr: "read_write" else: "read"
     result = &"@group(0) @binding({bindingCounter}) var<storage, " & rw & "> "
     let typ = mutateToAllowedTypes(p.typ)
-    result.add gpuTypeToString(typ, p.ident, allowEmptyIdent = false) & ";\n"
+    result.add gpuTypeToString(typ, p.ident.ident(), allowEmptyIdent = false, symbolKind = p.ident.symbolKind) & ";\n"
     inc bindingCounter
 
   # 1. Generate the header for all global variables
