@@ -7,7 +7,7 @@
 
 ## Syntactic sugar and utility helpers for Positron CUDA kernels.
 
-import workspace/positron/experimental/platforms/cuda/cuda_datatypes
+import workspace/positron/experimental/nimcuda/platforms/cuda/cuda_datatypes
 
 # ─── Pointer type aliases ─────────────────────────────────────────
 
