@@ -365,7 +365,10 @@ type
 # Library loading
 # ═══════════════════════════════════════════════════════════════════════
 
-const VulkanLib* = "libvulkan.so.1"
+const VulkanLib* =
+  when defined(windows): "vulkan-1.dll"
+  elif defined(macosx):  "libvulkan.1.dylib"
+  else:                  "libvulkan.so.1"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Instance API

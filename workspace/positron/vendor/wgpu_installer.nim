@@ -17,7 +17,10 @@
 ## or its CPU-based shader execution path (Naga IR interpreter).
 
 import
-  std/[httpclient, os, strutils, strformat, osproc]
+  std/[httpclient, os, strutils, strformat],
+  zip/zipfiles
+
+{.passl: "-lz".}
 
 # ############################################################
 #
@@ -106,9 +109,18 @@ proc extractFile(targetDir, zipPath: string, platform: Platform) =
   echo "Extracting \"", zipPath, "\" into \"", targetDir, "\""
   echo "  extracting: ", libFile
   echo "  extracting: ", headerFile
-  let res = execCmd(&"unzip -o \"{zipPath}\" \"{libFile}\" \"{headerFile}\" -d \"{targetDir}\"")
-  if res != 0:
-    raise newException(IOError, &"unzip failed with code {res}")
+
+  var z: ZipArchive
+  if not z.open(zipPath):
+    raise newException(IOError, &"Could not open zip file: \"{zipPath}\"")
+  defer:
+    z.close()
+
+  createDir(targetDir / "lib")
+  createDir(targetDir / "include/webgpu")
+  z.extractFile(libFile, targetDir / libFile)
+  z.extractFile(headerFile, targetDir / headerFile)
+
   echo "Removing \"", zipPath, '"'
   removeFile(zipPath)
   echo "Done."

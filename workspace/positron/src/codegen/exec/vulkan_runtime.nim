@@ -79,12 +79,12 @@ proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer 
 # Vulkan applications.
 
 proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
-  result.lib = loadLib("libvulkan.so.1")
+  result.lib = loadLib(vk.VulkanLib)
   if result.lib == nil:
-    raise VulkanError(msg: "Cannot load libvulkan.so.1 — install a Vulkan loader (e.g. libvulkan1)")
+    raise VulkanError(msg: "Cannot load " & vk.VulkanLib & " — install a Vulkan loader (e.g. libvulkan1)")
   result.gpa = result.lib.symAddr("vkGetInstanceProcAddr")
   if result.gpa == nil:
-    raise VulkanError(msg: "libvulkan.so.1 missing vkGetInstanceProcAddr")
+    raise VulkanError(msg: vk.VulkanLib & " missing vkGetInstanceProcAddr")
 
 # ═══════════════════════════════════════════════════════════════════════
 # SPIR-V compilation
@@ -335,10 +335,21 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
   check vkAllocateMemory(ctx.device, allocInfo.addr, nil, result.memory.addr)
   check vkBindBufferMemory(ctx.device, result.handle, result.memory, 0)
 
-proc dealloc*(buffer: var VulkanBuffer) =
-  if buffer.handle != nil:
-    discard
-
+proc dealloc*(buffer: var VulkanBuffer, ctx: VulkanContext) =
+  if buffer.handle == nil:
+    return
+  let vkDestroyBuffer = cast[
+    proc(device: VkDevice, buffer: VkBuffer, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkDestroyBuffer"))
+  let vkFreeMemory = cast[
+    proc(device: VkDevice, memory: VkDeviceMemory, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkFreeMemory"))
+  if buffer.handle != nil and vkDestroyBuffer != nil:
+    vkDestroyBuffer(buffer.device, buffer.handle, nil)
+    buffer.handle = nil
+  if buffer.memory != nil and vkFreeMemory != nil:
+    vkFreeMemory(buffer.device, buffer.memory, nil)
+    buffer.memory = nil
 proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size: int) =
   if size > buf.size:
     raise VulkanError(msg: "writeBuffer overflow")
@@ -656,27 +667,34 @@ proc execVulkan*(
   )
   var shaderModule: VkShaderModule
   check vkCreateShaderModule(ctx.device, smCI.addr, nil, shaderModule.addr)
-
+  defer:
+    let vkDestroyShaderModule = cast[
+      proc(device: VkDevice, shaderModule: VkShaderModule,
+           pAllocator: pointer) {.cdecl.}
+    ](ctx.gpaAddr(ctx.instance, "vkDestroyShaderModule"))
+    if shaderModule != nil and vkDestroyShaderModule != nil:
+      vkDestroyShaderModule(ctx.device, shaderModule, nil)
   var inputBuffers = newSeq[VulkanBuffer](numInputs)
   for i in 0 ..< numInputs:
     inputBuffers[i] = ctx.allocBuffer(inputs[i].size)
     ctx.writeBuffer(inputBuffers[i], inputs[i].data, inputs[i].size)
   var outBuf = ctx.allocBuffer(outputBytes)
 
+  # Deferred cleanup: always free resources even if an exception occurs later
+  defer:
+    for buf in inputBuffers.mitems:
+      buf.dealloc(ctx)
+    outBuf.dealloc(ctx)
+
   var pipeline = ctx.createPipeline(shaderModule, totalSsboCount)
+  defer:
+    pipeline.destroyPipeline(ctx)
+
   for i in 0 ..< numInputs:
     pipeline.setArg(i, inputBuffers[i], ctx)
   pipeline.setArg(numInputs, outBuf, ctx)
-
   let wgs: uint32 = 256
   let nwg = ((outputBytes div 4).uint32 + wgs - 1) div wgs
   ctx.runKernel(pipeline, [nwg * wgs], [wgs, 1'u32, 1'u32])
 
   result = readBuffer[byte](ctx, outBuf)
-
-  let vkDestroyShaderModule = cast[
-    proc(device: VkDevice, shaderModule: VkShaderModule,
-         pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyShaderModule"))
-  if shaderModule != nil and vkDestroyShaderModule != nil:
-    vkDestroyShaderModule(ctx.device, shaderModule, nil)

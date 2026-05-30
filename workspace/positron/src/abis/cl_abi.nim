@@ -124,7 +124,7 @@ type
 proc createContext*(
   properties: pointer,
   num_devices: cl_uint,
-  devices: Pdevice_id,
+  devices: ptr Pdevice_id,
   pfn_notify: PContextCallback,
   user_data: pointer,
   errcode_ret: ptr TClResult

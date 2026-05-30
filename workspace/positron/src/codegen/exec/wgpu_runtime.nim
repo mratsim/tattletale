@@ -78,23 +78,28 @@ proc initWgpu*(): WgpuContext =
   doAssert instance != nil, "wgpuCreateInstance failed"
   var ad = AdapterCallbackData(done: false)
   var cbInfo = WGPURequestAdapterCallbackInfo(
-    mode: wgpuCallbackModeWaitAnyOnly,
+    mode: wgpuCallbackModeAllowProcessEvents,
     callback: adapterCb,
     userdata1: ad.addr,
     userdata2: nil
   )
   discard wgpuInstanceRequestAdapter(instance, nil, cbInfo)
-  doAssert ad.done, "wgpuInstanceRequestAdapter callback never fired"
+  # Poll until adapter request completes (wgpu-native stubs WGPUFuture/WaitAnyOnly)
+  while not ad.done:
+    wgpuInstanceProcessEvents(instance)
   doAssert ad.adapter != nil, "No suitable WebGPU adapter found"
   var dd = DeviceCallbackData(done: false)
   var devCbInfo = WGPURequestDeviceCallbackInfo(
-    mode: wgpuCallbackModeWaitAnyOnly,
+    mode: wgpuCallbackModeAllowProcessEvents,
     callback: deviceCb,
     userdata1: dd.addr,
     userdata2: nil
   )
   discard wgpuAdapterRequestDevice(ad.adapter, nil, devCbInfo)
-  doAssert dd.done and dd.device != nil, "Failed to get WebGPU device"
+  # Poll until device request completes
+  while not dd.done:
+    wgpuInstanceProcessEvents(instance)
+  doAssert dd.device != nil, "Failed to get WebGPU device"
   let queue = wgpuDeviceGetQueue(dd.device)
   doAssert queue != nil, "wgpuDeviceGetQueue failed"
   result = WgpuContext(

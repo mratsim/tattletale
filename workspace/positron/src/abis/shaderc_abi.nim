@@ -26,7 +26,10 @@ type
 # Library
 # ═══════════════════════════════════════════════════════════════════════
 
-const ShadercLib* = "libshaderc_shared.so"
+const ShadercLib* =
+  when defined(windows): "shaderc_shared.dll"
+  elif defined(macosx):  "libshaderc_shared.dylib"
+  else:                  "libshaderc_shared.so"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Compiler API

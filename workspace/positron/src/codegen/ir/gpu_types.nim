@@ -366,7 +366,7 @@ proc clone*(ast: GpuAst): GpuAst =
       result.pParams.add(clonedParam)
     result.pBody = ast.pBody.clone()
     result.pAttributes = ast.pAttributes
-    result.forwardDeclare = result.forwardDeclare
+    result.forwardDeclare = ast.forwardDeclare
   of gpuCall:
     result = GpuAst(kind: gpuCall)
     result.cIsExpr = ast.cIsExpr
@@ -464,6 +464,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result = GpuAst(kind: gpuAlias)
     result.aTyp = ast.aTyp.clone()
     result.aTo = ast.aTo.clone()
+    result.aDistinct = ast.aDistinct.clone()
   of gpuObjConstr:
     result = GpuAst(kind: gpuObjConstr)
     result.ocType = ast.ocType.clone()

@@ -339,6 +339,8 @@ proc wgpuAdapterRequestDevice*(
     callbackInfo: WGPURequestDeviceCallbackInfo): WGPUFuture
   {.importc: "wgpuAdapterRequestDevice", dynlib: libWgpu.}
 
+proc wgpuInstanceProcessEvents*(instance: WGPUInstance)
+  {.importc: "wgpuInstanceProcessEvents", dynlib: libWgpu.}
 proc wgpuInstanceWaitAny*(
     instance: WGPUInstance,
     futureCount: csize_t,
