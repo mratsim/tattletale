@@ -176,8 +176,11 @@ proc determineArrayLength(n: NimNode, allowArrayIdent: bool): int =
   case n[1].kind
   of nnkSym:
     # likely a constant, try to get its value
+    # In typed macros, integer values are constant-folded into nnkIntLit — this
+    # nnkSym branch is only hit for non-constant symbols (generics, forward refs).
+    # Calling .intVal on nil (missing impl) or a ConstDef node will crash the compiler
+    # right here, which is preferable fpr debugging
     result = n[1].getImpl.intVal
-  of nnkIdent:
     if not allowArrayIdent:
       let msg = """Found array with length given by identifier: $#!
 You might want to create a typed template taking a typed parameter for this
