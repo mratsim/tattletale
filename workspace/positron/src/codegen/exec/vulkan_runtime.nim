@@ -23,7 +23,6 @@
 ##                        inputs = [([10'u32, 20'u32], 8u)])
 ##   ctx.shutdown()
 
-import std/[os, osproc, strutils, sequtils]
 import std/dynlib
 import workspace/positron/src/abis/vulkan_abi as vk
 import workspace/positron/src/abis/shaderc_abi
@@ -91,20 +90,30 @@ proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc compileGlslToSpirV*(glsl: string): seq[uint32] =
-  let tmpDir = getTempDir()
-  let srcPath = tmpDir / "vk_shader_comp" & ".comp"
-  let spvPath = tmpDir / "vk_shader_comp" & ".spv"
-  try:
-    writeFile(srcPath, glsl)
-    let exitCode = execCmd("glslangValidator -V -o " & spvPath & " " & srcPath)
-    if exitCode != 0:
-      raise VulkanError(msg: "glslangValidator failed: exit=" & $exitCode)
-    let raw = readFile(spvPath)
-    result = newSeq[uint32](raw.len div 4)
-    copyMem(result[0].addr, raw[0].addr, raw.len)
-  finally:
-    removeFile(srcPath)
-    removeFile(spvPath)
+  # Compile GLSL to SPIR-V in-memory via shaderc (no temp files, no subprocess).
+  let compiler = shaderc_compiler_initialize()
+  if compiler == nil:
+    raise VulkanError(msg: "shaderc_compiler_initialize failed — is libshaderc_shared installed?")
+  defer: shaderc_compiler_release(compiler)
+
+  let shadercResult = shaderc_compile_into_spv(
+    compiler, glsl.cstring, glsl.len.csize_t,
+    shaderc_glsl_default_compute_shader,
+    "shader.comp",   # input_file_name (informational)
+    "main",           # entry_point_name
+    nil               # additional_options
+  )
+  defer: shaderc_result_release(shadercResult)
+
+  let status = shaderc_result_get_compilation_status(shadercResult)
+  if status != 0:
+    let errMsg = $shaderc_result_get_error_message(shadercResult)
+    raise VulkanError(msg: "shaderc compilation failed (status=" & $status & "): " & errMsg)
+
+  let bytes = shaderc_result_get_bytes(shadercResult)
+  let byteLen = shaderc_result_get_length(shadercResult)
+  result = newSeq[uint32](byteLen div 4)
+  copyMem(result[0].addr, bytes, byteLen)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Vulkan initialization
