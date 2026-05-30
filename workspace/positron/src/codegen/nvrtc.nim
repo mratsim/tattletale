@@ -52,11 +52,11 @@ proc initNvrtc*(cuda: string, name = "sample.cu"): NVRTC =
     echo "Driver version: ", x
 
     var rtVer: cint
-    echo cudaRuntimeGetVersion(rtVer)
+    check cudaRuntimeGetVersion(rtVer)
     echo "Runtime ver: ", rtVer
 
     var prop: cudaDeviceProp
-    echo cudaGetDeviceProperties(prop, 0);
+    check cudaGetDeviceProperties(prop, 0);
     echo "Compute capability: ", prop.major, " ", prop.minor
 
 

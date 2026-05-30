@@ -745,7 +745,7 @@ proc isExpression(n: GpuAst): bool =
   of gpuCall: # only if it returns something!
     result = n.cIsExpr
   of gpuBinOp, gpuIdent, gpuLit, gpuArrayLit, gpuPrefix, gpuDot, gpuIndex, gpuObjConstr,
-     gpuAddr, gpuDeref, gpuConv, gpuCast, gpuConstExpr:
+     gpuAddr, gpuDeref, gpuConv, gpuCast, gpuConstexpr:
     result = true
   else:
     result = false

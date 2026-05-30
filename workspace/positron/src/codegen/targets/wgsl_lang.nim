@@ -922,10 +922,11 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuTemplateCall:
     when nimvm:
       error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `cuda` macro.")
+        "calls in the expanded body of the `webgpu` macro.")
+
     else:
       raise newException(ValueError, "Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `cuda` macro.")
+        "calls in the expanded body of the `webgpu` macro.")
 
     when false: # Template replacement would look something like this:
       let templ = ctx.templates[ast.tcName]
