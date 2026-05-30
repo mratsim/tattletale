@@ -894,10 +894,11 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= indentStr & '}'
 
   of gpuFor:
-    result = indentStr & "for(var " & ast.fVar.ident() & ": i32 = " &
+    let i = ast.fVar.ident()
+    result = indentStr & "for(var " & i & ": i32 = " &
              ctx.genWebGpu(ast.fStart) & "; " &
-             ast.fVar.ident() & " < " & ctx.genWebGpu(ast.fEnd) & "; " &
-             ast.fVar.ident() & "++) {\n"
+             i & " < " & ctx.genWebGpu(ast.fEnd) & "; " &
+             i & " = " & i & " + 1) {\n"
     result &= ctx.genWebGpu(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
   of gpuWhile:

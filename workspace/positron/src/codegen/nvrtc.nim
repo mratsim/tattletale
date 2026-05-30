@@ -171,7 +171,7 @@ proc link*(nvrtc: var NVRTC) =
   var status: CUresult
   if res != CUDA_SUCCESS:
     var error_str: cstring
-    check cuGetErrorString(status, error_str)
+    check cuGetErrorString(res, error_str)
     echo "Link add PTX failed: ", error_str
     echo "Error log: ", errorLog
     quit(1)
@@ -183,7 +183,7 @@ proc link*(nvrtc: var NVRTC) =
                       0, nil, nil)
   if res != CUDA_SUCCESS:
     var error_str: cstring
-    check cuGetErrorString(status, error_str);
+    check cuGetErrorString(res, error_str);
     echo "Link add device runtime failed: ", error_str
     echo "Error log: ", errorLog
     quit(1)
@@ -195,7 +195,7 @@ proc link*(nvrtc: var NVRTC) =
   nvrtc.cubinSize = cubinSize
   if res != CUDA_SUCCESS:
     var error_str: cstring
-    check cuGetErrorString(status, error_str);
+    check cuGetErrorString(res, error_str);
     echo "Link complete failed: ", error_str
     echo "Error log: ", errorLog
     quit(1)
