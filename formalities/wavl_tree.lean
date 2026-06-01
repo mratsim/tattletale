@@ -1,1 +1,1 @@
-/home/beta/Programming/Perso/workspace-tattletale/tattletale/workspace/data_structures/src/wavl_tree.lean
+../workspace/tattletale/workspace/data_structures/src/wavl_tree.lean
