@@ -11,6 +11,7 @@ import std/strutils
 import workspace/libtorch
 
 from ./src/kernels/portable/hadamard_transforms import INV_SQRT_128
+from src/abis/nvidia_paths import CudaLibFlag
 
 # This file wraps the static lib built by make_positron_cuda
 
@@ -19,36 +20,6 @@ const BuildDir = currentSourcePath()
                   .parentDir()
                   .parentDir()/
                   "build"
-# CUDA runtime library discovery for linking libpositron_cuda.a
-# Priority:
-#   1. Derive from nvcc on PATH (must be on PATH to build the .cu file)
-#   2. CUDA_HOME env var (user may set this explicitly)
-#   3. Known standard locations: /usr/local/cuda, /opt/cuda
-#   4. Blind -lcudart (user must have LIBRARY_PATH / system install)
-const CudaHome = block:
-  let nvccPath = staticExec("command -v nvcc 2>/dev/null || true").strip()
-  if nvccPath.len > 0:
-    nvccPath.parentDir().parentDir()
-  else:
-    let envHome = getEnv("CUDA_HOME")
-    if envHome.len > 0:
-      envHome
-    elif dirExists("/usr/local/cuda"):
-      "/usr/local/cuda"
-    elif dirExists("/opt/cuda"):
-      "/opt/cuda"
-    else:
-      ""
-const CudaLibDir = block:
-  if CudaHome.len > 0:
-    (if dirExists(CudaHome / "lib64"): "lib64" else: "lib")
-  else:
-    ""
-const CudaLibFlag =
-  if CudaLibDir.len > 0:
-    "-L" & CudaHome / CudaLibDir & " -lcudart"
-  else:
-    "-lcudart"
 
 {.passL: BuildDir / "libpositron_cuda.a " & CudaLibFlag.}
 
