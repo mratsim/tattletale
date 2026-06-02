@@ -19,6 +19,15 @@ _At the moment the project is still in its infancy, we present key differentiato
 - Embeddable, single dependency on drivers + libTorch C++.
   LibTorch dependency will be removed in the future.
 
+- Bidirectional Python, C, C++ integration:
+  - Nim can call Python and Python can call Nim\
+    https://github.com/mratsim/tattletale/blob/9975f37/workspace/libtorch/tests/python_integration/test_tensor_bridge.nim#L25-L85
+  - Nim can call C/C++ and C/C++ can call Nim (by virtue of compiling to C/C++ as an intermediate language.
+
+- Nim -> Cuda, OpenCL, Vulkan, WebGPU compiler implemented in Nim macros.\
+  Build time or runtime portable code generation on any accelerator:\
+  https://github.com/mratsim/tattletale/tree/dbb44dd/workspace/positron/src/codegen
+
 - IntrusiveAttention, a PagedRadixTrie implemented on top of intrusive WAVL-tree for guaranteed worst-case latency.\
   No rebuilding, rehashing or tombstones like with hashmaps\
   ~50ns+O(memory bandwidth) for prefix matching whatever the fan-out or the depth\
@@ -26,10 +35,6 @@ _At the moment the project is still in its infancy, we present key differentiato
   Partial formal verification in Lean4.\
   - https://github.com/mratsim/tattletale/blob/dbb44dd/workspace/transformers/src/stateful/kvcache.nim
   - https://github.com/mratsim/tattletale/blob/dbb44dd/workspace/transformers/src/stateful/kvcache.lean
-   
-- Nim -> Cuda, OpenCL, Vulkan, WebGPU compiler implemented in Nim macros.\
-  Build time or runtime portable code generation on any accelerator:\
-  https://github.com/mratsim/tattletale/tree/dbb44dd/workspace/positron/src/codegen
 
 - EXL3 quant support, currently the highest quality quantization scheme
   using random Hadamard rotations, trellis and lattice codebooks.
