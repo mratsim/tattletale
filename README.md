@@ -6,6 +6,7 @@ See motivation and MVP goals at https://github.com/mratsim/tattletale/issues/1
 
 TL;DR of goals (README-driven development):
 - High-performance: concurrent queries, 1M+ context per queries, highly-tuned kernels, fused kernels, SOTA CPU threadpool and kernels
+- Embeddable: Single-binary, callable from C, C++, Rust, Python, ...
 - Multi-hardware: Currently Cuda, OpenCL, Vulkan, WebGPU. Future HIP and Metal and why not DX12
 - Multi-modality: Audio and Image input AND generation
 - Maintainable and easy to extend
