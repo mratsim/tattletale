@@ -132,48 +132,6 @@ func `>=`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V >= U
 
 func `$`*[V: static int](x: Int[V]): string = $V
 
-# ═══════════════════════════════════════════════════════════════
-#  mapIt / applyIt — element-wise tuple operations
-# ═══════════════════════════════════════════════════════════════
-## These provide element-wise mapping over tuples,
-## avoiding macros and the getTypeInst/getTypeImpl issues with
-## typeof()-generic types.
-
-# TODO: in their current form, incompatible with varying mix of Int / int elementwise mismatch
-
-
-template applyIt*(dst: untyped, src: untyped, op: untyped) =
-  ## Element-wise unary write into dst. Injects `it`.
-  when dst is int or dst is Int:
-    let it {.inject.} = src
-    dst = op
-  else:
-    for dstf, srcf in fields(dst, src):
-      applyIt(dstf, srcf, op)
-
-template mapIt*(t: untyped, op: untyped): auto =
-  ## Map unary op over all leaf elements. Injects `it`.
-  block:
-    var r: typeof(t)
-    applyIt(r, t, op)
-    r
-
-template applyIt2*(dst: untyped, src0, src1: untyped, op: untyped) =
-  ## Element-wise binary write. Injects `it0` (from src0) and `it1` (from src1).
-  when dst is int or dst is Int:
-    let it0 {.inject.} = src0
-    let it1 {.inject.} = src1
-    dst = op
-  else:
-    staticFor i, 0, tupleLen(typeof(dst)):
-      applyIt2(dst[i], src0[i], src1[i], op)
-
-template mapIt2*(src0, src1: untyped, op: untyped): auto =
-  ## Element-wise binary map. Injects `it0`, `it1`.
-  block:
-    var r: typeof(src0)
-    applyIt2(r, src0, src1, op)
-    r
 
 # ═══════════════════════════════════════════════════════════════
 #  fold — left-fold reduction with Int[N] support
@@ -328,7 +286,7 @@ macro makeIntTupleRec*(a: IntOrIntTuple): untyped =
     let msg = "[makeIntTupleRec] invalid type: " & a.repr & " got " & a.getTypeInst().repr
     error msg
 
-template makeIntTuple*(a: IntOrIntTuple): untyped =
+template makeIntTuple(a: IntOrIntTuple): untyped =
   ## Public face: wraps static ints in Int[N] via the recursive macro.
   makeIntTupleRec(a)
 
@@ -613,19 +571,6 @@ proc concat*[V: static int](a: static int; b: Int[V]): static auto =
     result.add bNode
   concatImpl()
 
-# ═══════════════════════════════════════════════════════════════
-#  elem_mul / elem_div / ceil_div — element-wise on tuples
-# ═══════════════════════════════════════════════════════════════
-# TODO: in its current form, incompatible with varying mix of Int / int elementwise mismatch
-
-func elem_mul*(a, b: IntOrIntTuple): IntOrIntTuple =
-  mapIt2(a, b, it0 * it1)
-
-func elem_div*(a, b: IntOrIntTuple): IntOrIntTuple =
-  mapIt2(a, b, it0 div it1)
-
-func ceil_div*(a, b: IntOrIntTuple): IntOrIntTuple =
-  mapIt2(a, b, (it0 + it1 - 1) div it1)
 
 # ═══════════════════════════════════════════════════════════════
 #  flatIter — yield each leaf int in a nested tuple

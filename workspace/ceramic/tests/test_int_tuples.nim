@@ -313,42 +313,6 @@ proc runFoldWrapperTests* =
   block:
     doAssert min((5, 3, 8)) == 3
   echo "  Fold wrappers: 7 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
-#  mapIt / mapIt2 — element-wise operations
-# ═══════════════════════════════════════════════════════════════
-
-proc runMapTests* =
-  block:
-    let r = mapIt((1, 2, 3), it * 2)
-    doAssert r == (2, 4, 6)
-  block:
-    let r = mapIt2((1, 2, 3), (10, 20, 30), it0 + it1)
-    doAssert r == (11, 22, 33)
-  block:
-    let r = mapIt2((1, 2, 3), (4, 5, 6), it0 * it1)
-    doAssert r == (4, 10, 18)
-  block:
-    let r = mapIt(42, it * 2)
-    doAssert r == 84
-  echo "  Map: 4 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
-#  elem_mul / elem_div / ceil_div
-# ═══════════════════════════════════════════════════════════════
-
-proc runElemOpTests* =
-  block:
-    doAssert elem_mul((2, 3), (4, 5)) == (8, 15)
-  block:
-    doAssert elem_div((10, 12), (5, 3)) == (2, 4)
-  block:
-    doAssert ceil_div((10, 9), (3, 4)) == (4, 3)
-  block:
-    doAssert elem_mul(6, 7) == 42
-  echo "  Elem ops: 4 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  flatIter — leaf iteration
 # ═══════════════════════════════════════════════════════════════
 
@@ -473,8 +437,7 @@ proc runTests* =
   runProductScanTests()
   runTypeClassTests()
   runFoldWrapperTests()
-  runMapTests()
-  runElemOpTests()
+
   runFlatIterTests()
   runFlattenConcatTests()
   runMixedStaticDynamicTests()
