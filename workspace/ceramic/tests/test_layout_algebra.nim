@@ -63,6 +63,7 @@ proc runRakedProductTests*: void
 proc runZippedProductTests*: void
 proc runTiledProductTests*: void
 proc runFlatProductTests*: void
+proc runTileToShapeTests*: void
 proc runTests* =
   echo "\n── Coalesce [CUTE-C]: 20 cases ──"
   runCoalesceTests()
@@ -96,6 +97,8 @@ proc runTests* =
   runZippedProductTests()
   runTiledProductTests()
   runFlatProductTests()
+  echo "\n── tile_to_shape [CUTE] ──"
+  runTileToShapeTests()
   echo "\nALL TESTS PASSED"
 
 when isMainModule:
@@ -1284,3 +1287,52 @@ proc runFlatProductTests* =
     doAssert size(fp) === 4 * 12
 
   echo "    flat_divide/product: 5 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  tile_to_shape [CUTE]
+# ═══════════════════════════════════════════════════════════════
+proc runTileToShapeTests*: void =
+  block:
+    ## [tensor-layouts] 2D: block=(2,3):(1,2), target=(8,6)
+    # product_shape = (4,2), tiler = make_layout((4,2)): strides (1,4)
+    let r = tile_to_shape(make_layout((2, 3), (1, 2)), (8, 6))
+    doAssert size(r) === 48
+    doAssert rank(r) === 2
+  block:
+    ## [tensor-layouts] Exact fit: block=(4,8):(1,4), target=(4,8)
+    # product_shape = (1,1), tiler = make_layout((1,1)): strides (1,1)
+    let r = tile_to_shape(make_layout((4, 8), (1, 4)), (4, 8))
+    doAssert size(r) === 32
+    doAssert rank(r) === 2
+  block:
+    ## [tensor-layouts] Size preserved: (2,3):(1,2) → (8,9)
+    let r = tile_to_shape(make_layout((2, 3), (1, 2)), (8, 9))
+    doAssert size(r) === 72
+    doAssert rank(r) === 2
+  block:
+    ## [tensor-layouts] Size preserved: (2,4):(1,2) → (4,8)
+    let r = tile_to_shape(make_layout((2, 4), (1, 2)), (4, 8))
+    doAssert size(r) === 32
+    doAssert rank(r) === 2
+  block:
+    ## [oracle_nv] Size preserved: (3,5):(1,1) → (12,15)
+    let r = tile_to_shape(make_layout((3, 5), (1, 1)), (12, 15))
+    doAssert size(r) === 180
+    doAssert rank(r) === 2
+  block:
+    ## Basic: (2,3):(1,2) → (6,12)
+    let r = tile_to_shape(make_layout((2, 3), (1, 2)), (6, 12))
+    doAssert size(r) === 72
+    doAssert cosize(r) === 72
+    doAssert rank(r) === 2
+  block:
+    ## Larger: (4,8):(1,4) → (8,16)
+    let r = tile_to_shape(make_layout((4, 8), (1, 4)), (8, 16))
+    doAssert size(r) === 128
+    doAssert rank(r) === 2
+  block:
+    ## [oracle_nv] Row-major order: (2,3):(1,2) → (4,6) with LayoutRight
+    let r = tile_to_shape(make_layout((2, 3), (1, 2)), (4, 6), LayoutRight)
+    doAssert size(r) === 24
+    doAssert rank(r) === 2
+  echo "    tile_to_shape: 8 cases OK"

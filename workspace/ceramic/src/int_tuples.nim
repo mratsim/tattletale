@@ -765,3 +765,19 @@ macro zipWith*(a, b: typed; body: untyped): untyped =
     else:
       items.add nnkBracketExpr.newTree(b, newLit(i))
   result.add nnkTupleConstr.newTree(items)
+
+# ═══════════════════════════════════════════════════════════════
+#  product_each — product of each top-level tuple element
+# ═══════════════════════════════════════════════════════════════
+
+func product_each*(t: IntOrIntTuple): auto =
+  ## For each top-level element of tuple `t`, compute the product of its leaves.
+  ##
+  ## Examples:
+  ##   product_each(((2,2), (2,8)))  →  (4, 16)
+  ##   product_each(5)                →  5
+  ##
+  when t is tuple:
+    map(t): product(it)
+  else:
+    t
