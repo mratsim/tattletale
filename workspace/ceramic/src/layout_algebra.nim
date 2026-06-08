@@ -341,6 +341,10 @@ func composeImpl(
     remainingStride:     auto;
     lhsShapes,
     lhsStrides:          tuple): auto {.inline.} =
+  ## Fold over LHS modes with a 4-state accumulator
+  ## (accShapes, accStrides, remainingShape, remainingStride).
+  ## Uses recursion because the accumulator types change each iteration
+  ## (shape/stride tuples grow via concat).
   when modeIdx >= lhsShapes.tupleLen() - 1:
     ## Last mode (R-1): append remaining RHS as final mode,
     ## but skip when RHS was fully consumed (remaining is an Int[1] artifact).
@@ -459,6 +463,8 @@ func logical_divide*[L: Layout](layout: L; tiler: tuple): auto =
     "logical_divide: tiler has more modes (" & $tupleLen(tiler) &
     ") than layout (" & $LayoutRank & ")"
 
+  # Recursive template: accumulator types change each iteration
+  # (shape/stride tuples grow via concat), so a flat loop would not work.
   template build(idx: static int; accSh, accSt: typed): auto =
     when idx >= max(tupleLen(tiler), LayoutRank):
       make_layout(accSh, accSt)
