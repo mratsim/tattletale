@@ -569,6 +569,13 @@ proc runComposeExactValueTests* =
   doAssert compose(make_layout((4, 8), (1, 4)), make_layout(4, 4)) === (4, 4)
   # Python: assert compose(Layout(16, 1), Layout((4, 4), (1, 4))) == Layout((4, 4), (1, 4))
   doAssert compose(make_layout(16, 1), make_layout((4, 4), (1, 4))) === ((4, 4), (1, 4))
+  # compose rank-1 LHS with hierarchical RHS — must preserve nesting
+  # Previously buggy: b.shape.flatten() destroyed ((2,2),(2,8)) into (2,2,2,8)
+  doAssert compose(make_layout(64, 1), make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))) === (((2, 2), (2, 8)), ((1, 4), (2, 8)))
+  # compose rank-2 coalescable LHS with hierarchical RHS — triggered the bug
+  # A=(8,8):(1,8) coalesces inside compose to (64):(1), then the buggy path
+  # called b.shape.flatten() which destroyed ((2,2),(2,8)).
+  doAssert compose(make_layout((8, 8), (1, 8)), make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))) === (((2, 2), (2, 8)), ((1, 4), (2, 8)))
   # Python: assert compose(Layout(16, 2), Layout((4, 4), (1, 4))) == Layout((4, 4), (2, 8))
   doAssert compose(make_layout(16, 2), make_layout((4, 4), (1, 4))) === ((4, 4), (2, 8))
   # Python: assert compose(Layout((4, 4), (1, 4)), Layout((2, 2), (1, 2))) == Layout((2, 2), (1, 2))
@@ -784,6 +791,16 @@ proc runDivideTests*: void =
   checkDivMap(make_layout(((2, 4), 8), ((1, 2), 8)), (4, 4))
   echo "    1/1"
 
+
+  ## logical_divide with Layout tiler — triggered compose flattening bug
+  ## A=(8,8):(1,8), T=(2,2):(1,4)
+  ## logical_divide must preserve nested tile structure, not flatten to 4 modes
+  block:
+    let A = make_layout((8, 8), (1, 8))
+    let T = make_layout((2, 2), (1, 4))
+    let ld = logical_divide(A, T)
+    doAssert rank(ld) == 2, "logical_divide rank: " & $rank(ld)
+    doAssert ld === (((2, 2), (2, 8)), ((1, 4), (2, 8))), "ld: " & $ld
 
 # ═══════════════════════════════════════════════════════════════
 #  right_inverse, left_inverse, logical_product — helpers
