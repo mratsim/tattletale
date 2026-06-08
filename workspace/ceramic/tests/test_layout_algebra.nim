@@ -112,10 +112,10 @@ when isMainModule:
 proc chkCoalesce*(layout: Layout) =
   ## Check coalesce preserves size and mapping.
   let c = coalesce(layout)
-  doAssert size(c) == size(layout),
+  doAssert size(c) === size(layout),
     "coalesce size mismatch: " & $size(c) & " != " & $size(layout)
   for i in 0 ..< size(layout):
-    doAssert c[i] == layout[i],
+    doAssert c[i] === layout[i],
       "coalesce mapping mismatch at " & $i & ": " & $c[i] & " != " & $layout[i]
 
 # ═══════════════════════════════════════════════════════════════
@@ -303,7 +303,7 @@ template testComplementProps*(layout, result: typed; cotarget: untyped) =
   # (9) If static stride, complement(completed) has size 1
   when typeof(completed.stride) is Int or typeof(completed.stride) is int:
     let cc = complement(completed)
-    doAssert size(cc) == 1
+    doAssert size(cc) === 1
 
 proc chkComplement[T](layout: Layout; cotarget: T) =
   let r = complement(layout, cotarget)
@@ -715,7 +715,7 @@ proc runDivideTests*: void =
 
   template checkDiv(L, T: typed): untyped =
     let R = logical_divide(L, T)
-    doAssert rank(R) == 2, "rank not 2 for " & $L & " / " & $T
+    doAssert rank(R) === 2, "rank not 2 for " & $L & " / " & $T
 
   echo "  Static (rank-1 tilers):"
   checkDiv(make_layout(1, 0), make_layout(1, 0))
@@ -756,10 +756,10 @@ proc runDivideTests*: void =
 
   template checkDivMap(L, T: typed): untyped =
     let R = logical_divide(L, T)
-    doAssert rank(R) == 2, "rank not 2 for " & $L & " / " & $T
-    doAssert size(R) == size(L)
+    doAssert rank(R) === 2, "rank not 2 for " & $L & " / " & $T
+    doAssert size(R) === size(L)
     for i in 0 ..< size(L):
-      doAssert R[i] == L[i], "mapping fail at " & $i & " for " & $L & " / " & $T
+      doAssert R[i] === L[i], "mapping fail at " & $i & " for " & $L & " / " & $T
 
   echo "  Python port: test_logical_divide_basic + test_logical_divide_strided:"
   checkDivMap(make_layout((8,)), 2)
@@ -799,7 +799,7 @@ proc runDivideTests*: void =
     let A = make_layout((8, 8), (1, 8))
     let T = make_layout((2, 2), (1, 4))
     let ld = logical_divide(A, T)
-    doAssert rank(ld) == 2, "logical_divide rank: " & $rank(ld)
+    doAssert rank(ld) === 2, "logical_divide rank: " & $rank(ld)
     doAssert ld === (((2, 2), (2, 8)), ((1, 4), (2, 8))), "ld: " & $ld
 
 # ═══════════════════════════════════════════════════════════════
@@ -810,7 +810,7 @@ proc chkRightInv*(layout: Layout) =
   ## Check right_inverse invariant: L(R(i)) == i for all i < size(R)
   let R = right_inverse(layout)
   for i in 0 ..< size(R):
-    doAssert layout[R[i]] == i,
+    doAssert layout[R[i]] === i,
       "right_inverse(" & $layout & "): L(R(" & $i & "))=" & $layout[R[i]] & " != " & $i
 
 proc chkLeftInv*(layout: Layout) =
@@ -818,7 +818,7 @@ proc chkLeftInv*(layout: Layout) =
   ##   L(Li(L(i))) == L(i) for all i < size(L)
   let Li = left_inverse(layout)
   for i in 0 ..< size(layout):
-    doAssert layout[Li[layout[i]]] == layout[i],
+    doAssert layout[Li[layout[i]]] === layout[i],
       "left_inverse(" & $layout & "): L(Li(L(" & $i & ")))=" & $layout[Li[layout[i]]] & " != " & $layout[i]
 
 proc chkLogicalProduct*[A, B: Layout](blk: A; tiler: B) =
@@ -827,7 +827,7 @@ proc chkLogicalProduct*[A, B: Layout](blk: A; tiler: B) =
   ##   block == result.mode(0)
   ##   compatible(tiler, result.mode(1))
   let R = logical_product(blk, tiler)
-  doAssert rank(R) == 2,
+  doAssert rank(R) === 2,
     "logical_product: rank=" & $rank(R) & " != 2"
   let mode0 = mode(R, 0)
   let mode1 = mode(R, 1)
@@ -1057,14 +1057,14 @@ proc runLogicalProductExactValueTests* =
   block:
     # tile=(2,2):(1,2), matrix=(3,4):(4,1)
     let R = logical_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
-    doAssert rank(R) == 2
+    doAssert rank(R) === 2
     let m0 = mode(R, 0); let m1 = mode(R, 1)
     doAssert m0 === ((2, 2), (1, 2)), "mode0: " & $m0
     doAssert m1 === ((3, 4), (16, 4)), "mode1: " & $m1
   block:
     # 1:0 × (2,2) — trivial
     let R = logical_product(make_layout(1, 0), make_layout((2, 2)))
-    doAssert rank(R) == 2
+    doAssert rank(R) === 2
   echo "  Exact-value: 2 cases OK"
 
 proc runLogicalProductTests* =
@@ -1092,7 +1092,7 @@ proc runBlockedProductTests* =
     let tile = make_layout((C2, C2), (1, 2))
     let mat  = make_layout((C3, C4), (4, 1))
     let R = blocked_product(tile, mat)
-    doAssert rank(R) == 2
+    doAssert rank(R) === 2
     let m0 = mode(R, 0); let m1 = mode(R, 1)
     doAssert m0 === ((2, 3), (1, 16)), "blocked mode0: " & $m0
     doAssert m1 === ((2, 4), (2, 4)), "blocked mode1: " & $m1
@@ -1100,7 +1100,7 @@ proc runBlockedProductTests* =
     # Scalar rank-1 block * rank-1 tiler
 
     let R = blocked_product(make_layout(4, 1), make_layout(3, 1))
-    doAssert rank(R) == 2
+    doAssert rank(R) === 2
     let m0 = mode(R, 0); let m1 = mode(R, 1)
     doAssert m0 === (4, 1), "blocked 1d mode0: " & $m0
     doAssert m1 === (3, 4), "blocked 1d mode1: " & $m1
@@ -1110,18 +1110,18 @@ proc runBlockedProductTests* =
     let til = make_layout((2, 2), (1, 2))
     let bR = blocked_product(blk, til)
     let rR = raked_product(blk, til)
-    doAssert size(bR) == size(rR)
+    doAssert size(bR) === size(rR)
     var bSet, rSet: seq[int]
     for i in 0 ..< size(bR): bSet.add bR[i]; rSet.add rR[i]
-    doAssert bSet.len == rSet.len
+    doAssert bSet.len === rSet.len
     for x in bSet:
       doAssert x in rSet, "blocked/raked offset mismatch: " & $x & " not in raked"
   echo "    blocked_product: 5 cases OK"
   block:
     # rank-1 block × rank-2 tiler (needs padRight)
     let R = blocked_product(make_layout(4, 1), make_layout((2, 2), (1, 2)))
-    doAssert rank(R) == 2
-    doAssert size(R) == 16, "blocked diff-rank size: " & $size(R)
+    doAssert rank(R) === 2
+    doAssert size(R) === 16, "blocked diff-rank size: " & $size(R)
     # offset sanity: blocked covers [0, cosize)
     var offsets: seq[int]
     for i in 0 ..< size(R): offsets.add R[i]
@@ -1138,7 +1138,7 @@ proc runRakedProductTests* =
     let tile = make_layout((C2, C2), (1, 2))
     let mat  = make_layout((C3, C4), (4, 1))
     let R = raked_product(tile, mat)
-    doAssert rank(R) == 2
+    doAssert rank(R) === 2
     let m0 = mode(R, 0); let m1 = mode(R, 1)
     doAssert m0 === ((3, 2), (16, 1)), "raked mode0: " & $m0
     doAssert m1 === ((4, 2), (4, 2)), "raked mode1: " & $m1
@@ -1148,10 +1148,10 @@ proc runRakedProductTests* =
     let til = make_layout(3, 1)
     let bR = blocked_product(blk, til)
     let rR = raked_product(blk, til)
-    doAssert size(bR) == size(rR)
+    doAssert size(bR) === size(rR)
     var bSet, rSet: seq[int]
     for i in 0 ..< size(bR): bSet.add bR[i]; rSet.add rR[i]
-    doAssert bSet.len == rSet.len
+    doAssert bSet.len === rSet.len
     for x in bSet:
       doAssert x in rSet, "blocked/raked offset mismatch: " & $x & " not in raked"
   block:
@@ -1159,7 +1159,7 @@ proc runRakedProductTests* =
 
 
     let R = raked_product(make_layout(4, 1), make_layout(2, 1))
-    doAssert rank(R) == 2
+    doAssert rank(R) === 2
     let m0 = mode(R, 0); let m1 = mode(R, 1)
     doAssert m0 === (2, 4), "raked 1d m0: " & $m0
     doAssert m1 === (4, 1), "raked 1d m1: " & $m1
@@ -1171,8 +1171,8 @@ proc runRakedProductTests* =
   block:
     # rank-2 block × rank-1 tiler (needs padRight)
     let R = raked_product(make_layout((2, 2), (1, 2)), make_layout(4, 1))
-    doAssert rank(R) == 2
-    doAssert size(R) == 16, "raked diff-rank size: " & $size(R)
+    doAssert rank(R) === 2
+    doAssert size(R) === 16, "raked diff-rank size: " & $size(R)
     var offsets: seq[int]
     for i in 0 ..< size(R): offsets.add R[i]
     for o in offsets:
@@ -1188,7 +1188,7 @@ proc runZippedProductTests* =
     ## Python ref: zipped_divide(Layout((4,8)), (2,4)) -> ((2,4),(2,2)):((1,4),(2,16))
     let L = make_layout((4, 8), (1, 4))
     let zd = zipped_divide(L, (2, 4))
-    doAssert rank(zd) == 2
+    doAssert rank(zd) === 2
     let m0 = mode(zd, 0); let m1 = mode(zd, 1)
     doAssert m0 === ((2, 4), (1, 4)), "zd m0: " & $m0
     doAssert m1 === ((2, 2), (2, 16)), "zd m1: " & $m1
@@ -1203,9 +1203,9 @@ proc runZippedProductTests* =
   block:
     ## zipped_divide: int tiler (rank-1)
     let zd = zipped_divide(make_layout(6, 1), 2)
-    doAssert rank(zd) == 2
-    doAssert size(mode(zd, 0)) == 2
-    doAssert size(mode(zd, 1)) == 3
+    doAssert rank(zd) === 2
+    doAssert size(mode(zd, 0)) === 2
+    doAssert size(mode(zd, 1)) === 3
 
   block:
     ## [MOYE] zipped_product(tile=(2,2):(1,2), matrix=(3,4):(4,1))
@@ -1213,7 +1213,7 @@ proc runZippedProductTests* =
     let blk = make_layout((2, 2), (1, 2))
     let mat = make_layout((3, 4), (4, 1))
     let zp = zipped_product(blk, mat)
-    doAssert rank(zp) == 2
+    doAssert rank(zp) === 2
     let m0 = mode(zp, 0); let m1 = mode(zp, 1)
     doAssert m0 === ((2, 2), (1, 2)), "zp m0: " & $m0
     doAssert m1 === ((3, 4), (16, 4)), "zp m1: " & $m1
@@ -1224,17 +1224,17 @@ proc runTiledProductTests* =
   block:
     ## tiled_divide: rank-1, second mode unpacked
     let td = tiled_divide(make_layout(12, 1), 3)
-    doAssert rank(td) == 2, "rank-1 tiled rank: " & $rank(td)
-    doAssert size(mode(td, 0)) == 3
-    doAssert size(mode(td, 1)) == 4
+    doAssert rank(td) === 2, "rank-1 tiled rank: " & $rank(td)
+    doAssert size(mode(td, 0)) === 3
+    doAssert size(mode(td, 1)) === 4
   block:
     ## tiled_divide: rank-2, exact mode structure
     let L = make_layout((4, 8), (1, 4))
     let td = tiled_divide(L, (2, 4))
-    doAssert rank(td) == 3, "tiled rank: " & $rank(td)
-    doAssert size(mode(td, 0)) == 8
-    doAssert size(mode(td, 1)) == 2
-    doAssert size(mode(td, 2)) == 2
+    doAssert rank(td) === 3, "tiled rank: " & $rank(td)
+    doAssert size(mode(td, 0)) === 8
+    doAssert size(mode(td, 1)) === 2
+    doAssert size(mode(td, 2)) === 2
   block:
     ## [PY-L] CuTe C++: tiled_divide with Layout tiler
     ## A=(8,8):(1,8), T=(2,2):(1,4)
@@ -1243,22 +1243,22 @@ proc runTiledProductTests* =
     doAssert td === (((2, 2), 2, 8), ((1, 4), 2, 8)), "td: " & $td
     ## tiled vs flat: same input, rank(tiled) = rank(flat) - 1
     let L = make_layout((4, 8), (1, 4))
-    doAssert rank(tiled_divide(L, (2, 4))) == rank(flat_divide(L, (2, 4))) - 1
+    doAssert rank(tiled_divide(L, (2, 4))) === rank(flat_divide(L, (2, 4))) - 1
 
   block:
     ## tiled_product: smoke test
     let tp = tiled_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
     doAssert rank(tp) >= 2
-    doAssert size(tp) == 4 * 12
+    doAssert size(tp) === 4 * 12
   echo "    tiled_divide/product: 5 cases OK"
 
 proc runFlatProductTests* =
   block:
     ## flat_divide: rank-1, both modes unpacked
     let fd = flat_divide(make_layout(12, 1), 3)
-    doAssert rank(fd) == 2, "rank-1 flat rank: " & $rank(fd)
-    doAssert size(mode(fd, 0)) == 3
-    doAssert size(mode(fd, 1)) == 4
+    doAssert rank(fd) === 2, "rank-1 flat rank: " & $rank(fd)
+    doAssert size(mode(fd, 0)) === 3
+    doAssert size(mode(fd, 1)) === 4
   block:
     ## [PY-L] CuTe C++: flat_divide with Layout tiler
     ## A=(8,8):(1,8), T=(2,2):(1,4)
@@ -1269,7 +1269,7 @@ proc runFlatProductTests* =
     ## flat_divide: rank-2, exact mode structure
     let L = make_layout((4, 8), (1, 4))
     let fd = flat_divide(L, (2, 4))
-    doAssert rank(fd) == 4, "flat rank: " & $rank(fd)
+    doAssert rank(fd) === 4, "flat rank: " & $rank(fd)
     let m0 = mode(fd, 0); let m1 = mode(fd, 1)
     let m2 = mode(fd, 2); let m3 = mode(fd, 3)
     doAssert m0 === (2, 1), "flat m0: " & $m0
@@ -1280,7 +1280,7 @@ proc runFlatProductTests* =
   block:
     ## flat_product: both modes unpacked
     let fp = flat_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
-    doAssert rank(fp) == 4, "flat product rank: " & $rank(fp)
-    doAssert size(fp) == 4 * 12
+    doAssert rank(fp) === 4, "flat product rank: " & $rank(fp)
+    doAssert size(fp) === 4 * 12
 
   echo "    flat_divide/product: 5 cases OK"

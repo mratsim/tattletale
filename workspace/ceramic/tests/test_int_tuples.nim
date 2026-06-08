@@ -19,56 +19,56 @@ import workspace/ceramic/src/layouts
 proc runFoldTests* =
   block:
     let r = fold(5, 1, acc * it)
-    doAssert r == 5
+    doAssert r === 5
     doAssert typeof(r) is int
 
   block:
     let r = fold(5, 10, acc + it)
-    doAssert r == 15
+    doAssert r === 15
 
   block:
     let r = fold(Int[7](), 1, acc * it)
-    doAssert r == 7
+    doAssert r === 7
     doAssert typeof(r) is int
 
   block:
     let r = fold(Int[7](), 10, acc + it)
-    doAssert r == 17
+    doAssert r === 17
 
   block:
     let r = fold((2, 3, 4), 1, acc * it)
-    doAssert r == 24
+    doAssert r === 24
 
   block:
     let r = fold((Int[2](), Int[3](), Int[4]()), 1, acc * it)
-    doAssert r == 24
+    doAssert r === 24
 
   block:
     let d4 = 4
     let r = fold((Int[2](), d4, Int[3]()), 1, acc * it)
-    doAssert r == 24
+    doAssert r === 24
     doAssert typeof(r) is int
 
   block:
     let r = fold(((2, 3), 4), 1, acc * it)
-    doAssert r == 24
+    doAssert r === 24
 
   block:
     let d7 = 7
     let r = fold(((Int[2](), d7), Int[3]()), 1, acc * it)
-    doAssert r == 42
+    doAssert r === 42
 
   block:
     let r = fold((Int[7](),), 1, acc * it)
-    doAssert r == 7
+    doAssert r === 7
 
   block:
     let r = fold((1, 2, 3, 4, 5), 0, acc + it)
-    doAssert r == 15
+    doAssert r === 15
 
   block:
     let r = fold((3, 7, 2, 9, 1), 0, max(acc, it))
-    doAssert r == 9
+    doAssert r === 9
   echo "  Fold: 12 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -78,42 +78,42 @@ proc runFoldTests* =
 proc runProductTests* =
   block:
     const r = product(42)
-    doAssert r == 42
+    doAssert r === 42
     doAssert typeof(r) is int
 
   block:
     const r = product(Int[5]())
-    doAssert r == 5
+    doAssert r === 5
     doAssert typeof(r) is Int
 
   block:
     let r = product((2, 3, 4))
-    doAssert r == 24
+    doAssert r === 24
     doAssert typeof(r) is int
 
   block:
     const r = product((Int[2](), Int[3](), Int[4]()))
-    doAssert r == 24
+    doAssert r === 24
 
   block:
     let d4 = 4
     let r = product((Int[2](), d4, Int[3]()))
-    doAssert r == 24
+    doAssert r === 24
 
   block:
     const r = product(((Int[2](), Int[3]()), Int[4]()))
-    doAssert r == 24
+    doAssert r === 24
 
   block:
     let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[2]()))
     let r = product(l.shape)
-    doAssert r == 8
+    doAssert r === 8
 
   block:
     let d1 = 1; let d4dyn = 4
     let l = make_layout((Int[2](), d4dyn), (d1, Int[2]()))
     let r = product(l.shape)
-    doAssert r == 8
+    doAssert r === 8
   echo "  Product: 8 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -123,32 +123,32 @@ proc runProductTests* =
 proc runMaxTests* =
   block:
     let r = max(42)
-    doAssert r == 42
+    doAssert r === 42
 
   block:
     const r = max(Int[42]())
-    doAssert r == 42
+    doAssert r === 42
 
   block:
     let r = max((3, 7, 2, 9, 1))
-    doAssert r == 9
+    doAssert r === 9
 
   block:
     let r = max((Int[3](), Int[7](), Int[2](), Int[9](), Int[1]()))
-    doAssert r == 9
+    doAssert r === 9
 
   block:
     let d7 = 7; let d9 = 9
     let r = max((Int[3](), d7, Int[2](), d9, Int[1]()))
-    doAssert r == 9
+    doAssert r === 9
 
   block:
     let r = max((-5, -2, -9, -1))
-    doAssert r == -1
+    doAssert r === -1
 
   block:
     let r = max(((3, 7), (9, 1)))
-    doAssert r == 9
+    doAssert r === 9
   echo "  Max: 7 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -158,32 +158,32 @@ proc runMaxTests* =
 proc runMinTests* =
   block:
     let r = min(42)
-    doAssert r == 42
+    doAssert r === 42
 
   block:
     const r = min(Int[42]())
-    doAssert r == 42
+    doAssert r === 42
 
   block:
     let r = min((3, 7, 2, 9, 1))
-    doAssert r == 1
+    doAssert r === 1
 
   block:
     let r = min((Int[3](), Int[7](), Int[2](), Int[9](), Int[1]()))
-    doAssert r == 1
+    doAssert r === 1
 
   block:
     let d7 = 7; let d9 = 9
     let r = min((Int[3](), d7, Int[2](), d9, Int[1]()))
-    doAssert r == 1
+    doAssert r === 1
 
   block:
     let r = min((-5, -2, -9, -1))
-    doAssert r == -9
+    doAssert r === -9
 
   block:
     let r = min(((3, 7), (9, 1)))
-    doAssert r == 1
+    doAssert r === 1
   echo "  Min: 7 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -192,12 +192,12 @@ proc runMinTests* =
 
 proc runIntCmpTests* =
   block:
-    doAssert Int[5]() == Int[5]()
-    doAssert not (Int[5]() == Int[8]())
-    doAssert Int[5]() == 5
-    doAssert 5 == Int[5]()
-    doAssert Int[5]() != 8
-    doAssert 8 != Int[5]()
+    doAssert Int[5]() === Int[5]()
+    doAssert not (Int[5]() === Int[8]())
+    doAssert Int[5]() === 5
+    doAssert 5 === Int[5]()
+    doAssert Int[5]() !== 8
+    doAssert 8 !== Int[5]()
     doAssert Int[5]() <= 8
     doAssert Int[5]() >= 3
     doAssert Int[5]() <= Int[8]()
@@ -210,31 +210,31 @@ proc runIntCmpTests* =
 
 proc runScanTests* =
   block:
-    doAssert prefix_scanIt(5, 1, acc * it) == 1
+    doAssert prefix_scanIt(5, 1, acc * it) === 1
   block:
-    doAssert prefix_scanIt(Int[5](), 1, acc * it) == 1
+    doAssert prefix_scanIt(Int[5](), 1, acc * it) === 1
   block:
-    doAssert prefix_scanIt((2, 3, 4), 1, acc * it) == (1, 2, 6)
+    doAssert prefix_scanIt((2, 3, 4), 1, acc * it) === (1, 2, 6)
 
   block:
-    doAssert suffix_scanIt(5, 1, acc * it) == 1
+    doAssert suffix_scanIt(5, 1, acc * it) === 1
   block:
-    doAssert suffix_scanIt(Int[5](), 1, acc * it) == 1
+    doAssert suffix_scanIt(Int[5](), 1, acc * it) === 1
   block:
-    doAssert suffix_scanIt((2, 3, 4), 1, acc * it) == (12, 4, 1)
+    doAssert suffix_scanIt((2, 3, 4), 1, acc * it) === (12, 4, 1)
 
   block:
     # prefix_scanIt with max operation
-    doAssert prefix_scanIt((3, 5, 2), low(int), max(acc, it)) == (low(int), 3, 5)
+    doAssert prefix_scanIt((3, 5, 2), low(int), max(acc, it)) === (low(int), 3, 5)
   block:
     # prefix_scanIt with addition (sum so far)
-    doAssert prefix_scanIt((1, 2, 3), 0, acc + it) == (0, 1, 3)
+    doAssert prefix_scanIt((1, 2, 3), 0, acc + it) === (0, 1, 3)
   block:
     # suffix_scanIt single-element tuple with addition
-    doAssert suffix_scanIt((5,), 10, acc + it) == (10,)
+    doAssert suffix_scanIt((5,), 10, acc + it) === (10,)
   block:
     # suffix_scanIt with sum
-    doAssert suffix_scanIt((1, 2, 3), 0, acc + it) == (5, 3, 0)
+    doAssert suffix_scanIt((1, 2, 3), 0, acc + it) === (5, 3, 0)
   echo "  Scan: 10 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -243,24 +243,24 @@ proc runScanTests* =
 
 proc runProductScanTests* =
   block:
-    doAssert prefix_product(5) == 1
+    doAssert prefix_product(5) === 1
   block:
-    doAssert prefix_product(Int[5]()) == 1
+    doAssert prefix_product(Int[5]()) === 1
   block:
     doAssert prefix_product((2, 3, 4)) === (1, 2, 6)
   block:
     let pp = prefix_product((Int[4](), Int[8]()))
-    doAssert pp[0] == 1 and pp[1] == 4
+    doAssert pp[0] === 1 and pp[1] === 4
 
   block:
-    doAssert suffix_product(5) == 1
+    doAssert suffix_product(5) === 1
   block:
-    doAssert suffix_product(Int[5]()) == 1
+    doAssert suffix_product(Int[5]()) === 1
   block:
     doAssert suffix_product((2, 3, 4)) === (12, 4, 1)
   block:
     let sp = suffix_product((Int[4](), Int[8]()))
-    doAssert sp[0] == 8 and sp[1] == 1
+    doAssert sp[0] === 8 and sp[1] === 1
   echo "  Product scan: 8 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -299,19 +299,19 @@ proc runTypeClassTests* =
 
 proc runFoldWrapperTests* =
   block:
-    doAssert product(7) == 7
+    doAssert product(7) === 7
   block:
-    doAssert product((3, 4, 5)) == 60
+    doAssert product((3, 4, 5)) === 60
   block:
-    doAssert product(((2, 3), 4)) == 24
+    doAssert product(((2, 3), 4)) === 24
   block:
-    doAssert max(42) == 42
+    doAssert max(42) === 42
   block:
-    doAssert max((3, 7, 2)) == 7
+    doAssert max((3, 7, 2)) === 7
   block:
-    doAssert min(42) == 42
+    doAssert min(42) === 42
   block:
-    doAssert min((5, 3, 8)) == 3
+    doAssert min((5, 3, 8)) === 3
   echo "  Fold wrappers: 7 cases OK"
 # ═══════════════════════════════════════════════════════════════
 #  flatten / concat — extra cases
@@ -319,23 +319,23 @@ proc runFoldWrapperTests* =
 
 proc runFlattenConcatTests* =
   block:
-    doAssert flatten((4, 8, 2)) == (4, 8, 2)
+    doAssert flatten((4, 8, 2)) === (4, 8, 2)
   block:
-    doAssert flatten((4, (1, 8), 2)) == (4, 1, 8, 2)
+    doAssert flatten((4, (1, 8), 2)) === (4, 1, 8, 2)
   block:
-    doAssert flatten(((1, 2), (3, (4, 5)), 6)) == (1, 2, 3, 4, 5, 6)
+    doAssert flatten(((1, 2), (3, (4, 5)), 6)) === (1, 2, 3, 4, 5, 6)
   block:
-    doAssert flatten(42) == 42
+    doAssert flatten(42) === 42
   block:
     type Shape2d = (int, int)
     const s: Shape2d = (4, 8)
-    doAssert flatten(s) == (4, 8)
+    doAssert flatten(s) === (4, 8)
   block:
     let t = (4, (1, 8), 2)
-    doAssert flatten(t) == (4, 1, 8, 2)
+    doAssert flatten(t) === (4, 1, 8, 2)
   block:
     let a = 4; let b = (1, 8)
-    doAssert flatten((a, b)) == (4, 1, 8)
+    doAssert flatten((a, b)) === (4, 1, 8)
   block:
     # flatten of proc return value
     proc foo(): (int, (int, int), (int, int, int)) =
@@ -353,7 +353,7 @@ proc runMixedStaticDynamicTests* =
     let dN = 2
     let shape = (dN, Int[3](), Int[8](), Int[8]())
     let stride = suffix_product(shape)
-    doAssert stride[0] == 3*8*8 and stride[1] == 8*8 and stride[2] == 8 and stride[3] == 1
+    doAssert stride[0] === 3*8*8 and stride[1] === 8*8 and stride[2] === 8 and stride[3] === 1
     doAssert not isConst(shape[0])
     doAssert isConst(shape[1])
     doAssert isConst(shape[2])
@@ -367,7 +367,7 @@ proc runMixedStaticDynamicTests* =
     let dN = 2
     let shape = (dN, Int[3](), Int[8](), Int[8]())
     let stride = prefix_product(shape)
-    doAssert stride[0] == 1 and stride[1] == dN and stride[2] == dN*3 and stride[3] == dN*3*8
+    doAssert stride[0] === 1 and stride[1] === dN and stride[2] === dN*3 and stride[3] === dN*3*8
   echo "  Mixed static/dynamic: 2 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -379,27 +379,27 @@ proc runEvalOnceTests* =
       result = 42
 
     evalOnceAs(foo, launchMissile())
-    doAssert missileCount == 1, "launchMissile called " & $missileCount
-    doAssert foo() == 42
-    doAssert foo() == 42  # repeat uses cached value
-    doAssert missileCount == 1, "side-effect evaluated more than once"
+    doAssert missileCount === 1, "launchMissile called " & $missileCount
+    doAssert foo() === 42
+    doAssert foo() === 42  # repeat uses cached value
+    doAssert missileCount === 1, "side-effect evaluated more than once"
 
   block:  # Compile-time expression — preserves Int[N] type
     func double(x: static int): static int = x * 2
     evalOnceAs(bar, double(3))
     doAssert typeof(bar()) is Int, "CT expression should preserve Int[N]"
-    doAssert bar() == 6
+    doAssert bar() === 6
 
   block:  # Literal — captured as Int[N]
     evalOnceAs(baz, 7)
     doAssert typeof(baz()) is Int, "literal should be Int[N]"
-    doAssert baz() == 7
+    doAssert baz() === 7
 
   block:  # Symbol — reused directly
     let x = 5
     evalOnceAs(qux, x)
     doAssert typeof(qux()) is int
-    doAssert qux() == 5
+    doAssert qux() === 5
   echo "  evalOnceAs: 4 cases OK"
 
 # ═══════════════════════════════════════════════════════════════

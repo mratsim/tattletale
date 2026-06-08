@@ -30,20 +30,17 @@ func `$`*[V: static int](x: Int[V]): string = $V
 # ═══════════════════════════════════════════════════════════════
 
 proc isConst*(a: static int): static bool = true
-proc isConst*(a: int): bool = false
+template isConst*(a: int): bool = false
 proc isConst*[V: static int](a: Int[V]): static bool = true
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] == int — global overloads for tuple comparison
 # ═══════════════════════════════════════════════════════════════
 
-func `==`*[V: static int](a: Int[V]; b: int): bool = V == b
-func `==`*[V: static int](a: int; b: Int[V]): bool = a == V
-func `==`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V == U
-func `<=`*[V: static int](a: Int[V]; b: int): bool = V <= b
-func `<=`*[V: static int](a: int; b: Int[V]): bool = a <= V
-func `>=`*[V: static int](a: Int[V]; b: int): bool = V >= b
-func `>=`*[V: static int](a: int; b: Int[V]): bool = a >= V
+func `<=`*[V: static int](a: Int[V]; b: int): bool {.inline.} = V <= b
+func `<=`*[V: static int](a: int; b: Int[V]): bool {.inline.} = a <= V
+func `>=`*[V: static int](a: Int[V]; b: int): bool {.inline.} = V >= b
+func `>=`*[V: static int](a: int; b: Int[V]): bool {.inline.} = a >= V
 func `<=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V <= U
 func `>=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V >= U
 
@@ -51,16 +48,16 @@ func `>=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V >= U
 #  `===` — deep element-wise tuple comparison (handles Int[N] vs int)
 # ═══════════════════════════════════════════════════════════════
 
-func `===`*(a, b: int): bool = a == b
+func `===`*(a, b: int): bool {.inline.} = a == b
 func `===`*(a, b: static int): static bool = a == b
 func `===`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V == U
 
-func `===`*[V: static int](a: Int[V]; b: int): bool = V == b
-func `===`*[V: static int](a: int; b: Int[V]): bool = V == b
+func `===`*[V: static int](a: Int[V]; b: int): bool {.inline.} = V == b
+func `===`*[V: static int](a: int; b: Int[V]): bool {.inline.} = a == V
 func `===`*[V: static int](a: Int[V]; b: static int): static bool = V == b
-func `===`*[V: static int](a: static int; b: Int[V]): static bool = V == b
+func `===`*[V: static int](a: static int; b: Int[V]): static bool = a == V
 
-func `===`*[T: tuple, U: tuple](a: T; b: U): bool =
+func `===`*[T: tuple, U: tuple](a: T; b: U): bool {.inline.} =
   ## Deep element-wise tuple comparison.
   ## Handles Int[N] vs int mismatches via per-element === overloads.
   when tupleLen(T) != tupleLen(U):
@@ -71,19 +68,25 @@ func `===`*[T: tuple, U: tuple](a: T; b: U): bool =
         return false
     true
 
-func `===`*[T: tuple](a: T; b: int): bool =
+func `===`*[T: tuple](a: T; b: int): bool {.inline.} =
   ## Compare a tuple against an int — only valid for 1-element tuples.
   when tupleLen(T) == 1:
     a[0] === b
   else:
     false
 
-func `===`*[U: tuple](a: int; b: U): bool =
+func `===`*[U: tuple](a: int; b: U): bool {.inline.} =
   ## Compare an int against a tuple — only valid for 1-element tuples.
   when tupleLen(U) == 1:
     a === b[0]
   else:
     false
+
+# ═══════════════════════════════════════════════════════════════
+#  `!==` — negation of deep element-wise tuple comparison
+# ═══════════════════════════════════════════════════════════════
+
+func `!==`*(a, b: auto): bool {.inline.} = not (a === b)
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] arithmetic
@@ -245,9 +248,6 @@ macro scaleBy*(t: typed; multiplier: typed): untyped =
 #    fold((2,(3,4)), 1, acc * it)    → 24
 # ═══════════════════════════════════════════════════════════════
 
-# fold_recurse — recursively folds over tuple fields.
-# Each field is folded independently via fold(), so sub-tuples are handled
-# naturally without flattening. Returns the accumulated value.
 template fold_recurse*(idx: static int; t: tuple; state: typed; body: untyped): auto =
   let field = fold(t[idx], state, body)
   when idx == tupleLen(t) - 1:

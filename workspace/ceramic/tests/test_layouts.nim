@@ -288,29 +288,29 @@ proc runMakeLayoutTests* =
 
 proc runFlattenTests* =
   block:
-    doAssert flatten(5) == 5
+    doAssert flatten(5) === 5
 
   block:
     let f1 = flatten((1, 2, 3))
-    doAssert f1[0] == 1 and f1[1] == 2 and f1[2] == 3
+    doAssert f1[0] === 1 and f1[1] === 2 and f1[2] === 3
 
   block:
     let f2 = flatten((1, (2, 3), 4))
-    doAssert f2[0] == 1 and f2[1] == 2 and f2[2] == 3 and f2[3] == 4
+    doAssert f2[0] === 1 and f2[1] === 2 and f2[2] === 3 and f2[3] === 4
 
   block:
     let f3 = flatten(((1, 2), (3, (4, 5))))
-    doAssert f3[0] == 1 and f3[1] == 2 and f3[2] == 3 and f3[3] == 4 and f3[4] == 5
+    doAssert f3[0] === 1 and f3[1] === 2 and f3[2] === 3 and f3[3] === 4 and f3[4] === 5
 
   block:
     let d4 = 4
     let f4 = flatten((d4, (5, 6)))
-    doAssert f4[0] == d4 and f4[1] == 5 and f4[2] == 6
+    doAssert f4[0] === d4 and f4[1] === 5 and f4[2] === 6
 
   block:
     let l = make_layout(((2,2),(2,2)), ((1,4),(8,32)))
     let f5 = flatten(l.shape)
-    doAssert f5[0] == 2 and f5[1] == 2 and f5[2] == 2 and f5[3] == 2
+    doAssert f5[0] === 2 and f5[1] === 2 and f5[2] === 2 and f5[3] === 2
   echo "  Flatten: 6 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -321,22 +321,22 @@ proc runConcatTests* =
   block:
     # concat int + tuple
     let c1 = concat(1, (4, 8))
-    doAssert c1[0] == 1 and c1[1] == 4 and c1[2] == 8
+    doAssert c1[0] === 1 and c1[1] === 4 and c1[2] === 8
 
   block:
     # concat tuple + int
     let c2 = concat((4, 8), 1)
-    doAssert c2[0] == 4 and c2[1] == 8 and c2[2] == 1
+    doAssert c2[0] === 4 and c2[1] === 8 and c2[2] === 1
 
   block:
     # concat tuple + tuple
     let c3 = concat((4,), (8, 2))
-    doAssert c3[0] == 4 and c3[1] == 8 and c3[2] == 2
+    doAssert c3[0] === 4 and c3[1] === 8 and c3[2] === 2
 
   block:
     # concat int + int
     let c4 = concat(4, 8)
-    doAssert c4[0] == 4 and c4[1] == 8
+    doAssert c4[0] === 4 and c4[1] === 8
 
   block:
     # concat with dynamic variables
@@ -357,14 +357,14 @@ proc runConcatTests* =
     let a = make_layout(3, 1)
     let b = make_layout(4, 3)
     let c7 = concat(a.shape, b.shape)
-    doAssert c7[0] == 3 and c7[1] == 4
+    doAssert c7[0] === 3 and c7[1] === 4
 
   block:
     # concat with Int[N] + dynamic tuple
     const C1 = 1
     let dt = (4, 8)
     let c8 = concat(C1, dt)
-    doAssert c8[0] == 1 and c8[1] == 4 and c8[2] == 8
+    doAssert c8[0] === 1 and c8[1] === 4 and c8[2] === 8
   echo "  Concat: 8 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -374,19 +374,19 @@ proc runConcatTests* =
 proc runSizeTests* =
   block:
     let l = make_layout(31, 1)
-    doAssert size(l) == 31
+    doAssert size(l) === 31
 
   block:
     let l = make_layout((64, 32), (1, 128))
-    doAssert size(l) == 64 * 32
+    doAssert size(l) === 64 * 32
 
   block:
     let l = make_layout((3, 8, 8, 8), (1, 3, 24, 192))
-    doAssert size(l) == 3 * 8 * 8 * 8
+    doAssert size(l) === 3 * 8 * 8 * 8
 
   block:
     let l = make_layout((2, 2, 2, 2, 2), (160, 80, 40, 20, 10))
-    doAssert size(l) == 32
+    doAssert size(l) === 32
   echo "  Size: 4 Python reference cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -440,32 +440,32 @@ proc runCosizeTests* =
   block:
     # cosize(Layout((64, 32), (1, 128))) == 4032
     let l = make_layout((64, 32), (1, 128))
-    doAssert d1 * cosize(l) == 4032
+    doAssert d1 * cosize(l) === 4032
 
   block:
     # cosize(Layout((3, 8, 8, 8), (1, 3, 24, 192))) == 1536
     let l = make_layout((3, 8, 8, 8), (1, 3, 24, 192))
-    doAssert d1 * cosize(l) == 1536
+    doAssert d1 * cosize(l) === 1536
 
   block:
     # cosize(Layout((2, 2, 2, 2, 2), (160, 80, 40, 20, 10))) == 311
     let l = make_layout((2, 2, 2, 2, 2), (160, 80, 40, 20, 10))
-    doAssert d1 * cosize(l) == 311
+    doAssert d1 * cosize(l) === 311
 
   block:
     # cosize(Layout(4, -1)) == 4 (uses abs stride)
     let l = make_layout(4, -1)
-    doAssert d1 * cosize(l) == 4
+    doAssert d1 * cosize(l) === 4
 
   block:
     # cosize(Layout((2, 4), (4, -1))) == 8
     let l = make_layout((2, 4), (4, -1))
-    doAssert d1 * cosize(l) == 8
+    doAssert d1 * cosize(l) === 8
 
   block:
     # cosize(Layout((2, 2), (-1, -2))) == 4
     let l = make_layout((2, 2), (-1, -2))
-    doAssert d1 * cosize(l) == 4
+    doAssert d1 * cosize(l) === 4
   echo "  Cosize: 6 Python reference cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -480,19 +480,19 @@ proc runFilterZerosTests* =
     let l = make_layout((64, 8, 8, 128), (8, 1, 0, 512))
     let f = filter_zeros(l)
     let fFlat = flatten(f.shape)
-    doAssert d1 * fFlat[0] == 64
-    doAssert d1 * fFlat[1] == 8
-    doAssert d1 * fFlat[2] == 1   # stride-0 mode became size-1
-    doAssert d1 * fFlat[3] == 128
+    doAssert d1 * fFlat[0] === 64
+    doAssert d1 * fFlat[1] === 8
+    doAssert d1 * fFlat[2] === 1   # stride-0 mode became size-1
+    doAssert d1 * fFlat[3] === 128
 
   block:
     let l = make_layout((3, 8, 8, 8), (16, 0, 0, 0))
     let f = filter_zeros(l)
     let fFlat = flatten(f.shape)
-    doAssert d1 * fFlat[0] == 3
-    doAssert d1 * fFlat[1] == 1  # stride-0 → size-1
-    doAssert d1 * fFlat[2] == 1
-    doAssert d1 * fFlat[3] == 1
+    doAssert d1 * fFlat[0] === 3
+    doAssert d1 * fFlat[1] === 1  # stride-0 → size-1
+    doAssert d1 * fFlat[2] === 1
+    doAssert d1 * fFlat[3] === 1
   echo "  filter_zeros: 2 Python reference cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -516,11 +516,11 @@ proc runStringifyTests* =
 
 proc runRankTests* =
   block:
-    doAssert rank(make_layout(4, 1)) == 1
+    doAssert rank(make_layout(4, 1)) === 1
   block:
-    doAssert rank(make_layout((4, 8), (1, 4))) == 2
+    doAssert rank(make_layout((4, 8), (1, 4))) === 2
   block:
-    doAssert rank(make_layout(Int[4](), Int[1]())) == 1
+    doAssert rank(make_layout(Int[4](), Int[1]())) === 1
   echo "  Rank: 3 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -609,32 +609,32 @@ proc runPredicateTests* =
 
 proc runCrd2IdxTests* =
   block:
-    doAssert crd2idx(5, (3, 4), (2, 8)) == 12
+    doAssert crd2idx(5, (3, 4), (2, 8)) === 12
   block:
-    doAssert crd2idx(0, (3, 4), (2, 8)) == 0
+    doAssert crd2idx(0, (3, 4), (2, 8)) === 0
   block:
-    doAssert crd2idx(3, (3, 4), (2, 8)) == 8
+    doAssert crd2idx(3, (3, 4), (2, 8)) === 8
   block:
-    doAssert crd2idx((2, 2), (3, 4), (2, 8)) == 20
+    doAssert crd2idx((2, 2), (3, 4), (2, 8)) === 20
   block:
-    doAssert crd2idx((1, 3), (3, 4), (2, 8)) == 26
+    doAssert crd2idx((1, 3), (3, 4), (2, 8)) === 26
   block:
-    doAssert crd2idx((3, 4), (3, 4), (2, 8)) == 38
+    doAssert crd2idx((3, 4), (3, 4), (2, 8)) === 38
   block:
     # 3D coordinate lookup: 1*1 + 2*3 + 3*12 = 43
-    doAssert crd2idx((1, 2, 3), (3, 4, 5), (1, 3, 12)) == 43
+    doAssert crd2idx((1, 2, 3), (3, 4, 5), (1, 3, 12)) === 43
   block:
     # negative stride: 2*-1 + 1*-4 = -6
-    doAssert crd2idx((2, 1), (4, 8), (-1, -4)) == -6
+    doAssert crd2idx((2, 1), (4, 8), (-1, -4)) === -6
   block:
     let st = col_major_strides((3, 4))
-    doAssert crd2idx((1, 2), (3, 4), st) == 7
+    doAssert crd2idx((1, 2), (3, 4), st) === 7
   block:
     let st = col_major_strides((3, 4))
-    doAssert crd2idx((2, 3), (3, 4), st) == 11
+    doAssert crd2idx((2, 3), (3, 4), st) === 11
   block:
     let st = col_major_strides((3, 4))
-    doAssert crd2idx((3, 4), (3, 4), st) == 15
+    doAssert crd2idx((3, 4), (3, 4), st) === 15
   echo "  crd2idx: 11 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -644,13 +644,13 @@ proc runCrd2IdxTests* =
 proc runCallOperatorTests* =
   block:
     let l = make_layout(8, 1)
-    doAssert l[0] == 0
-    doAssert l[3] == 3
-    doAssert l[7] == 7
+    doAssert l[0] === 0
+    doAssert l[3] === 3
+    doAssert l[7] === 7
   block:
     let l = make_layout((4, 8), (1, 4))
-    doAssert l[0] == 0
-    doAssert l[10] == 10
+    doAssert l[0] === 0
+    doAssert l[10] === 10
   echo "  layout[]: 2 checks OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -659,11 +659,11 @@ proc runCallOperatorTests* =
 
 proc runColMajorStridesTests* =
   block:
-    doAssert col_major_strides(4) == 1
+    doAssert col_major_strides(4) === 1
   block:
     doAssert col_major_strides((4, 8)) === (1, 4)
   block:
-    let cm = col_major_strides((Int[4](), Int[8]())); doAssert cm[0] == 1 and cm[1] == 4
+    let cm = col_major_strides((Int[4](), Int[8]())); doAssert cm[0] === 1 and cm[1] === 4
   block:
     doAssert col_major_strides((3, 4, 5)) === (1, 3, 12)
   block:
@@ -703,7 +703,7 @@ proc runZipTests* =
     let a = make_layout((2, 2), (1, 2))
     let b = make_layout((3, 4), (4, 1))
     let R = zip(a, b)
-    doAssert rank(R) == 2
+    doAssert rank(R) === 2
     let m0 = mode(R, 0); let m1 = mode(R, 1)
     doAssert m0 === ((2, 3), (1, 4)), "zip mode0: " & $m0
     doAssert m1 === ((2, 4), (2, 1)), "zip mode1: " & $m1
@@ -712,7 +712,7 @@ proc runZipTests* =
     let a = make_layout(4, 1)
     let b = make_layout(3, 1)
     let R = zip(a, b)
-    doAssert rank(R) == 2
+    doAssert rank(R) === 2
     let m0 = mode(R, 0); let m1 = mode(R, 1)
     doAssert m0 === (4, 1), "zip m0: " & $m0
     doAssert m1 === (3, 1), "zip m1: " & $m1
@@ -729,7 +729,7 @@ proc runTileUnzipTests* =
     let tiler = make_layout(2, 1)
     let divided = logical_divide(L, tiler)
     let unzipped = tile_unzip(divided, tiler)
-    doAssert rank(unzipped) == 2
+    doAssert rank(unzipped) === 2
   block:
     ## Rank-2 layout / tuple tiler (2 ints) — Python reference
     # zipped_divide(Layout((4,8)), (2,4)) -> Layout(((2,4),(2,2)), ((1,4),(2,16)))
@@ -739,7 +739,7 @@ proc runTileUnzipTests* =
     let unzipped = tile_unzip(divided, tiler)
     let m0 = mode(unzipped, 0)
     let m1 = mode(unzipped, 1)
-    doAssert rank(unzipped) == 2, "rank: " & $rank(unzipped)
+    doAssert rank(unzipped) === 2, "rank: " & $rank(unzipped)
     doAssert m0 === ((2, 4), (1, 4)), "m0: " & $m0
     doAssert m1 === ((2, 2), (2, 16)), "m1: " & $m1
   block:
@@ -748,16 +748,16 @@ proc runTileUnzipTests* =
     let tiler = (make_layout(2, 1), make_layout(4, 1))
     let divided = logical_divide(L, tiler)
     let unzipped = tile_unzip(divided, tiler)
-    doAssert rank(unzipped) == 2
-    doAssert size(mode(unzipped, 0)) == 8
-    doAssert size(mode(unzipped, 1)) == 4
+    doAssert rank(unzipped) === 2
+    doAssert size(mode(unzipped, 0)) === 8
+    doAssert size(mode(unzipped, 1)) === 4
   block:
     ## Rank-2 layout / rank-1 tiler (partial tiler)
     let L = make_layout((4, 8), (1, 4))
     let tiler = (2,)
     let divided = logical_divide(L, tiler)
     let unzipped = tile_unzip(divided, tiler)
-    doAssert rank(unzipped) == 2
+    doAssert rank(unzipped) === 2
   echo "  tile_unzip: 4 cases OK"
 # ═══════════════════════════════════════════════════════════════
 #  Run all
