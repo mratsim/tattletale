@@ -376,21 +376,16 @@ func composeImpl(
                   ceil_div(absRemainingStride, currShape) * sign(remainingStride),
                   lhsShapes, lhsStrides)
 
-# Revert: map macro doesn't work here yet (Nim resolves `it` before macro expansion)
-func composeDistribute(
-    lhsShapes, lhsStrides: tuple;
-    rhsShapes, rhsStrides: tuple;
-    idx: static int = 0): auto {.inline.} =
-  ## Layer RHS modes one by one over the FULL coalesced LHS.
-  let r = when typeof(rhsShapes[idx]) is tuple:
-    composeDistribute(lhsShapes, lhsStrides, rhsShapes[idx], rhsStrides[idx])
-  else:
-    composeImpl(0, (), (), rhsShapes[idx], rhsStrides[idx], lhsShapes, lhsStrides)
-  when idx >= rhsShapes.tupleLen() - 1:
-    r
-  else:
-    let rest = composeDistribute(lhsShapes, lhsStrides, rhsShapes, rhsStrides, idx + 1)
-    make_layout((r.shape, rest.shape), (r.stride, rest.stride))
+func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
+  ## Layer RHS modes one by one over the FULL coalesced LHS via mapModesWith.
+  ## Nested RHS modes are handled by recursive composeDistribute calls;
+  ## scalar modes go directly to composeImpl.
+  mapModesWith(make_layout(rhsShapes, rhsStrides)):
+    when it.shape is tuple:
+      composeDistribute(lhsShapes, lhsStrides, it.shape, it.stride)
+    else:
+      composeImpl(0, (), (), it.shape, it.stride, lhsShapes, lhsStrides)
+
 
 func compose*[A, B: Layout](a: A, b: B): auto =
   ## Layout composition.

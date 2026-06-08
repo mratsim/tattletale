@@ -18,7 +18,6 @@ import std/macros
 import std/typetraits
 import ./macros/static_for
 import ./int_tuples
-import ../../crucible/src/macros/ast_rebuilder
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St] — typed shape + stride pair
@@ -574,13 +573,12 @@ macro mapModesWith*(arg: typed; body: untyped): untyped =
 
   result = newStmtList()
   proc subst(n: NimNode; i: int; la: NimNode): NimNode =
-    let n2 = rebuildUntypedAst(n)
-    if n2.kind == nnkIdent and n2.eqIdent("it"):
+    if n.kind in {nnkIdent, nnkSym} and n.eqIdent("it"):
       result = newCall(bindSym"mode", la, newLit(i))
     else:
-      result = n2.copyNimTree()
-      for j in 0 ..< n2.len:
-        result[j] = subst(n2[j], i, la)
+      result = n.copyNimTree()
+      for j in 0 ..< n.len:
+        result[j] = subst(n[j], i, la)
 
   var ct = LayoutCT()
   for i in 0 ..< R:
@@ -610,15 +608,14 @@ macro zipModesWith*(a, b: typed; body: untyped): untyped =
   let rMax = max(RA, RB)
 
   proc subst(n: NimNode; i: int; la, lb: NimNode): NimNode =
-    let n2 = rebuildUntypedAst(n)
-    if n2.kind == nnkIdent and n2.eqIdent("it_a"):
+    if n.kind in {nnkIdent, nnkSym} and n.eqIdent("it_a"):
       result = newCall(bindSym"mode", la, newLit(i))
-    elif n2.kind == nnkIdent and n2.eqIdent("it_b"):
+    elif n.kind in {nnkIdent, nnkSym} and n.eqIdent("it_b"):
       result = newCall(bindSym"mode", lb, newLit(i))
     else:
-      result = n2.copyNimTree()
-      for j in 0 ..< n2.len:
-        result[j] = subst(n2[j], i, la, lb)
+      result = n.copyNimTree()
+      for j in 0 ..< n.len:
+        result[j] = subst(n[j], i, la, lb)
 
   var ct = LayoutCT()
   result = newStmtList()
