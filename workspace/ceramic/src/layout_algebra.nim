@@ -193,24 +193,20 @@ proc complementScalar(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
 #  Pure seq-based helpers (no NimNode manipulation)
 # ═══════════════════════════════════════════════════════════════
 
-proc complementGaps*(
-    strides, shapes: seq[int]): (seq[(int, int)], int) {.compileTime.} =
-  ## Return (gap_modes: (gap, cur) pairs, final_cur).
-  ## `cur` tracks cumulative coverage = stride × shape of processed modes.
-  ## Gap check `stride > cur` is always CT (strides are Int[N]).
-  ## Remainder is `ceil_div(bound, cur)` — computed by caller with boundExpr.
-  ## shape == 0 means dynamic — can't advance cur, scan stops.
-  var gaps: seq[(int, int)] = @[]
+proc complementGaps(
+    strides, shapes: seq[int]; boundExpr: NimNode): LayoutCT {.compileTime.} =
+  ## Build full complement LayoutCT (gap modes + remainder).
   var cur = 1
+  result = LayoutCT()
   for idx in getIndicesSortedByStride(strides):
     let gap = if strides[idx] > cur: strides[idx] div cur else: 1
     if gap > 1:
-      gaps.add (gap, cur)
+      result.append(IntCT(gap), IntCT(cur))
     if shapes[idx] == 0:
-      # Dynamic shape — can't advance cur. Emit remainder at current coverage.
       break
     cur = strides[idx] * shapes[idx]
-  (gaps, cur)
+  let rem = newCall(bindSym"ceil_div", boundExpr, IntCT(cur))
+  result.append(rem, IntCT(cur))
 
 proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
   ## Multi-mode complement: sort by stride, fold to fill gaps.
@@ -227,12 +223,7 @@ proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
 
   let strides = toSeqStaticInts(stTyp)
   let shapes  = toSeqStaticInts(shTyp)
-  let (gaps, cur) = complementGaps(strides, shapes)
-  var acc = LayoutCT()
-  for (gapVal, curVal) in gaps:
-    acc.append(IntCT(gapVal), IntCT(curVal))
-  let rem = newCall(bindSym"ceil_div", boundExpr, IntCT(cur))
-  acc.append(rem, IntCT(cur))
+  let acc = complementGaps(strides, shapes, boundExpr)
   newCall(bindSym"coalesce", acc.emit())
 
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
@@ -529,31 +520,18 @@ template flat_divide*(layout: Layout; tiler: auto): auto =
 # ═══════════════════════════════════════════════════════════════
 
 proc rightInverseChain*(
-    strides, shapes, prefixProd: seq[int]): seq[int] {.compileTime.} =
-  ## Return original indices (in sorted iteration order) of modes
-  ## forming a maximal contiguous chain.
-  ##
-  ## `curr` tracks cumulative size of modes already in the chain.
-  ## A mode joins when its stride == curr; then curr advances by
-  ## stride × shape. Since curr can leapfrog ahead of the next few
-  ## strides, mismatches just skip — don't break.
-  ##
-  ##   sorted idx order:
-  ##     stride:    1      2      4      8
-  ##     shape:     8      4      6      2
-  ##     curr:   1 →  8
-  ##                    2≠8   4≠8    8=8 → 16
-  ##                    skip  skip   ✓ add
-  ##
-  ##   result = [original_idx_of_stride_1, original_idx_of_stride_8]
+    strides, shapes, prefixProd: seq[int]; shNode: NimNode): LayoutCT {.compileTime.} =
+  ## Return right-inverse modes as LayoutCT (empty if no chain found).
+  result = LayoutCT()
   var curr = 1
   for idx in getIndicesSortedByStride(strides):
     if strides[idx] == curr:
-      result.add idx
+      result.append(
+        newTree(nnkBracketExpr, shNode, newLit(idx)),
+        IntCT(prefixProd[idx]))
       if shapes[idx] != 0:
         curr = strides[idx] * shapes[idx]
       else:
-        # Dynamic shape — can't advance curr, chain stops.
         break
 
 macro rightInverseImpl(sh, st: typed): untyped =
@@ -570,22 +548,15 @@ macro rightInverseImpl(sh, st: typed): untyped =
       result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
     return
 
-  # Multi-mode: extract values, compute chain via pure helper
+  # Multi-mode: extract values, fill LayoutCT via helper
   let strides = toSeqStaticInts(stTyp)
   let shapes  = toSeqStaticInts(shTyp)
   let prefixProd = prefixProduct(shapes)
-  let chain      = rightInverseChain(strides, shapes, prefixProd)
-
-  if chain.len == 0:
+  let acc = rightInverseChain(strides, shapes, prefixProd, sh)
+  if acc.shape.len == 0:
     result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
-    return
-
-  var acc = LayoutCT()
-  for idx in chain:
-    acc.append(
-      newTree(nnkBracketExpr, sh, newLit(idx)),
-      IntCT(prefixProd[idx]))
-  result = newCall(bindSym"coalesce", acc.emit())
+  else:
+    result = newCall(bindSym"coalesce", acc.emit())
 
 func right_inverse*(layout: Layout): auto =
   ## Quasi-inverse: L(R(i)) == i for all i < size(R).

@@ -18,7 +18,7 @@ import std/macros
 import std/typetraits
 import ./macros/static_for
 import ./int_tuples
-import ./macros/ast_rebuilder
+import ../../crucible/src/macros/ast_rebuilder
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St] — typed shape + stride pair
@@ -312,13 +312,16 @@ func crd2idx*(coord: IntOrIntTuple; layout: Layout): int =
 
 macro filterZerosFlat(sh, st: typed): untyped =
   ## Stride-0 mode shapes → Int[1](), everything else as-is.
-  let stT = st.getTypeInst(); let shT = sh.getTypeInst()
+  let stT = st.getTypeInst()
+  let shT = sh.getTypeInst()
+  # ── scalar path: single mode ──
   if shT.kind != nnkTupleConstr:
     if stT.kind == nnkBracketExpr and $stT[0] == "Int" and stT[1].intVal == 0:
       result = IntCT(1)
     else:
       result = sh
     return
+  # ── tuple path: iterate over modes ──
   result = newNimNode(nnkTupleConstr)
   for i in 0 ..< shT.len:
     let stN = stT[i]
@@ -559,7 +562,12 @@ macro tile_unzip*(layout: typed; tiler: typed): untyped =
 
 macro mapModesWith*(arg: typed; body: untyped): untyped =
   ## Apply `body` to each mode of `arg`. Within body, `it` is the current mode.
-  ## body must evaluate to a Layout.
+  ## `body` must evaluate to a Layout.
+  ##
+  ## Example:
+  ##   mapModesWith(make_layout((2, 4), (1, 2))):
+  ##     make_layout(it.shape, it.stride * 2)
+  ##   # → (2, 4):(2, 4)
   let typ = getTypeInst(arg)
   let shTy = typ[1]
   let R = if shTy.kind == nnkTupleConstr: shTy.len else: 1
@@ -577,17 +585,25 @@ macro mapModesWith*(arg: typed; body: untyped): untyped =
   var ct = LayoutCT()
   for i in 0 ..< R:
     let bodyExpr = subst(body, i, arg)
-    let resName = ident("res" & $i)
-    result.add newLetStmt(resName, bodyExpr)
-    ct.append(nnkDotExpr.newTree(resName, ident"shape"),
-               nnkDotExpr.newTree(resName, ident"stride"))
+    let dName = ident("d" & $i)
+    result.add newLetStmt(dName, bodyExpr)
+    ct.append(newTree(nnkDotExpr, dName, ident"shape"),
+               newTree(nnkDotExpr, dName, ident"stride"))
   result.add ct.emit()
 
 macro zipModesWith*(a, b: typed; body: untyped): untyped =
   ## Zip modes of `a` and `b` pairwise via body, append leftovers.
   ## Within body, `it_a` / `it_b` are the current modes.
-  let ta = getTypeInst(a); let tb = getTypeInst(b)
-  let shA = ta[1]; let shB = tb[1]
+  ##
+  ## Example:
+  ##   let r = zipModesWith(a, b):
+  ##     make_layout(it_a.shape, it_b.stride)
+  ##   # zips first min(rank(a), rank(b)) modes pairwise,
+  ##   # appends any leftover modes unchanged.
+  let ta = getTypeInst(a)
+  let tb = getTypeInst(b)
+  let shA = ta[1]
+  let shB = tb[1]
   let RA = if shA.kind == nnkTupleConstr: shA.len else: 1
   let RB = if shB.kind == nnkTupleConstr: shB.len else: 1
   let rMin = min(RA, RB)
@@ -609,18 +625,18 @@ macro zipModesWith*(a, b: typed; body: untyped): untyped =
   for i in 0 ..< rMax:
     if i < rMin:
       let bodyExpr = subst(body, i, a, b)
-      let resName = ident("res" & $i)
-      result.add newLetStmt(resName, bodyExpr)
-      ct.append(nnkDotExpr.newTree(resName, ident"shape"),
-                 nnkDotExpr.newTree(resName, ident"stride"))
+      let dName = ident("d" & $i)
+      result.add newLetStmt(dName, bodyExpr)
+      ct.append(newTree(nnkDotExpr, dName, ident"shape"),
+                 newTree(nnkDotExpr, dName, ident"stride"))
     elif i < RA:
       let mName = ident("m" & $i)
       result.add newLetStmt(mName, newCall(bindSym"mode", a, newLit(i)))
-      ct.append(nnkDotExpr.newTree(mName, ident"shape"),
-                 nnkDotExpr.newTree(mName, ident"stride"))
+      ct.append(newTree(nnkDotExpr, mName, ident"shape"),
+                 newTree(nnkDotExpr, mName, ident"stride"))
     else:
       let mName = ident("m" & $i)
       result.add newLetStmt(mName, newCall(bindSym"mode", b, newLit(i)))
-      ct.append(nnkDotExpr.newTree(mName, ident"shape"),
-                 nnkDotExpr.newTree(mName, ident"stride"))
+      ct.append(newTree(nnkDotExpr, mName, ident"shape"),
+                 newTree(nnkDotExpr, mName, ident"stride"))
   result.add ct.emit()
