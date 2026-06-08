@@ -643,13 +643,11 @@ func logical_product*[A, B: Layout](a: A; tiler: B): auto =
 func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
   ## Repeat block over tiler grid, each block contiguous.
   ## Results in ((BLK_A, TILER_A), (BLK_B, TILER_B), ...).
-  let lp = logical_product(blk, tiler)
+  const mxR = max(rank(type(blk)), rank(type(tiler)))
+  let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
   let m0 = mode(lp, 0)
   let m1 = mode(lp, 1)
   zip(m0, m1)
-
-# ═══════════════════════════════════════════════════════════════
-#  raked_product — blocks interleaved (raked)
 # ═══════════════════════════════════════════════════════════════
 #
 #  raked_product(block, tiler):
@@ -659,7 +657,8 @@ func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
 func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
   ## Repeat block over tiler grid, blocks interleaved.
   ## Results in ((TILER_A, BLK_A), (TILER_B, BLK_B), ...).
-  let lp = logical_product(blk, tiler)
+  const mxR = max(rank(type(blk)), rank(type(tiler)))
+  let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
   let m0 = mode(lp, 0)
   let m1 = mode(lp, 1)
   zip(m1, m0)

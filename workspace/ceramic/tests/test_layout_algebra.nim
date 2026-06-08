@@ -1099,6 +1099,17 @@ proc runBlockedProductTests* =
     for x in bSet:
       doAssert x in rSet, "blocked/raked offset mismatch: " & $x & " not in raked"
   echo "    blocked_product: 5 cases OK"
+  block:
+    # rank-1 block × rank-2 tiler (needs padRight)
+    let R = blocked_product(make_layout(4, 1), make_layout((2, 2), (1, 2)))
+    doAssert rank(R) == 2
+    doAssert size(R) == 16, "blocked diff-rank size: " & $size(R)
+    # offset sanity: blocked covers [0, cosize)
+    var offsets: seq[int]
+    for i in 0 ..< size(R): offsets.add R[i]
+    for o in offsets:
+      doAssert o in 0 ..< 16, "blocked diff-rank offset out of range: " & $o
+  echo "    blocked_product: 6 cases OK"
 
 # ── raked_product ──
 
@@ -1139,7 +1150,21 @@ proc runRakedProductTests* =
     for i in 0 ..< size(R): offsets.add R[i]
     doAssert offsets == [0, 4, 1, 5, 2, 6, 3, 7],
       "raked offsets: " & $offsets
-  echo "    raked_product: 4 cases OK"
+  block:
+    # rank-2 block × rank-1 tiler (needs padRight)
+    let R = raked_product(make_layout((2, 2), (1, 2)), make_layout(4, 1))
+    doAssert rank(R) == 2
+    doAssert size(R) == 16, "raked diff-rank size: " & $size(R)
+    var offsets: seq[int]
+    for i in 0 ..< size(R): offsets.add R[i]
+    for o in offsets:
+      doAssert o in 0 ..< 16, "raked diff-rank offset out of range: " & $o
+    # Verify exact structure from Python reference
+    let m0 = mode(R, 0); let m1 = mode(R, 1)
+    doAssert m0 === ((4, 2), (4, 1)), "raked diff-rank m0: " & $m0
+    doAssert m1 === ((1, 2), (0, 2)), "raked diff-rank m1: " & $m1
+  echo "    raked_product: 5 cases OK"
+
 proc runZippedProductTests* =
   echo "    (requires tile_unzip — implement later)"
 

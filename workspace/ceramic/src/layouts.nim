@@ -48,6 +48,13 @@ func rank*(layout: Layout): static int =
   else:
     layout.shape.tupleLen()
 
+func rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
+  ## Number of modes in a layout type (compile-time constant).
+  when Sh is int or Sh is Int:
+    1
+  else:
+    tupleLen(Sh)
+
 func mode*(layout: Layout; idx: static int): auto =
   ## Extract mode `idx` as a standalone rank-1 Layout.
   ## For scalar layouts (rank-1), only idx=0 is valid.
@@ -491,3 +498,38 @@ macro zip*[A, B: Layout](a: A, b: B): untyped =
   let zShape = zipElems(aShape, bShape, aShT, bShT)
   let zStride = zipElems(aStride, bStride, aStT, bStT)
   result = newCall(bindSym"make_layout", zShape, zStride)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  padRight — extend layout rank by padding with identity modes
+# ═══════════════════════════════════════════════════════════════
+#
+#  CuTe: append<R>(layout) pads to rank R with (1, 0) modes.
+#  Used by blocked_product / raked_product to equalize ranks.
+#  Pads on the RIGHT (appends identity modes at the end).
+
+macro padRight*(layout: typed; rank: static int): untyped =
+  ## Extend layout to target rank by padding with identity modes (1, 0).
+  ## Identity modes are appended on the right.
+  ## Zero-cost if layout is at least the target rank. The input AST is passed as-is
+  ## No intermediate value is materialized.
+  let lTyp = layout.getTypeInst()
+  let shTyp = lTyp[1]
+  let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
+
+  if curRank >= rank:
+    result = layout
+    return
+
+  var ct = LayoutCT()
+  if shTyp.kind == nnkTupleConstr:
+    for i in 0 ..< shTyp.len:
+      ct.shape.add newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"shape"), newLit i)
+      ct.stride.add newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"stride"), newLit i)
+  else:
+    ct.shape.add newTree(nnkDotExpr, layout, ident"shape")
+    ct.stride.add newTree(nnkDotExpr, layout, ident"stride")
+  for i in curRank ..< rank:
+    ct.shape.add IntCT(1)
+    ct.stride.add IntCT(0)
+  result = ct.emit()
