@@ -30,10 +30,10 @@ when TTT_LIBTORCH_SOURCE == "vendor":
 
   static:
     doAssert dirExists(HeadersPath), block:
-      "Tattletale is currently configured with -d:TTT_LIBTORCH_SOURCE=" & TTT_LIBTORCH_SOURCE & "\n" &
+      "Tattletale is currently configured with -dTTT_LIBTORCH_SOURCE=" & TTT_LIBTORCH_SOURCE & "\n" &
       "PyTorch headers do not exist at '" & HeadersPath & "\n" &
       "Please run the libtorch downloader via `nim install_libtorch`\n" &
-      "or switch to -d:TTT_LIBTORCH_SOURCE=venv"
+      "or switch to -dTTT_LIBTORCH_SOURCE=venv"
 
 elif TTT_LIBTORCH_SOURCE == "venv":
   # .venv is at project root: go up from vendor/ → libtorch/ → workspace/ → tattletale/
@@ -45,10 +45,10 @@ elif TTT_LIBTORCH_SOURCE == "venv":
 
   static:
     doAssert dirExists(HeadersPath), block:
-      "Tattletale is currently configured with -dTTT_LIBTORCH_SOURCE=" & TTT_LIBTORCH_SOURCE & "\n" &
+      "Tattletale is currently configured with -d:TTT_LIBTORCH_SOURCE=" & TTT_LIBTORCH_SOURCE & "\n" &
       "PyTorch headers do not exist at '" & HeadersPath & "\n" &
       "Please double-check your Python version or venv installation\n" &
-      "or switch to -dTTT_LIBTORCH_SOURCE=vendor\n" &
+      "or switch to -d:TTT_LIBTORCH_SOURCE=vendor\n" &
       "and run the libtorch downloader via `nim install_libtorch`"
 
 elif TTT_LIBTORCH_SOURCE == "system":
