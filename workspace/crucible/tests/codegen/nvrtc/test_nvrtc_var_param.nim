@@ -1,5 +1,5 @@
 ## NVRTC: var T (byref) param via codegen pipeline
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_var_param.nim
+## Run with: nim cpp -d:cuda -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_var_param.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
 import workspace/crucible/src/codegen/nvrtc
 
