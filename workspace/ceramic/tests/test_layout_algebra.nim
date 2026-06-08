@@ -56,6 +56,7 @@ proc runLogicalProductTrivialTests*: void
 proc runLogicalProductMultiTests*: void
 proc runLogicalProductExactValueTests*: void
 proc runLogicalProductTests*: void
+
 proc runBlockedProductTests*: void
 proc runRakedProductTests*: void
 proc runZippedProductTests*: void
@@ -1060,15 +1061,85 @@ proc runLogicalProductTests* =
 # ═══════════════════════════════════════════════════════════════
 #  Product variants  [MOYE]
 # ═══════════════════════════════════════════════════════════════
-#  These require append<R>(layout) + zip(layout_a, layout_b) + tile_unzip.
-#  Will be activated once the helpers are implemented.
+#  [MOYE] layout.jl lines 858-878 (blocked), 897-917 (raked)
+#  [PY-L] tensor-layouts/tests/layouts.py (all variants)
+#  [CUTE-LP] Cutlass logical_product.cpp
+
+# ── blocked_product ──
 
 proc runBlockedProductTests* =
-  echo "    (requires append + zip — implement later)"
+  block:
+    # [MOYE] tile=(2,2):(1,2), matrix=(3,4):(4,1)
+    const C2 = 2; const C3 = 3; const C4 = 4
+    let tile = make_layout((C2, C2), (1, 2))
+    let mat  = make_layout((C3, C4), (4, 1))
+    let R = blocked_product(tile, mat)
+    doAssert rank(R) == 2
+    let m0 = mode(R, 0); let m1 = mode(R, 1)
+    doAssert m0 === ((2, 3), (1, 16)), "blocked mode0: " & $m0
+    doAssert m1 === ((2, 4), (2, 4)), "blocked mode1: " & $m1
+  block:
+    # Scalar rank-1 block * rank-1 tiler
+
+    let R = blocked_product(make_layout(4, 1), make_layout(3, 1))
+    doAssert rank(R) == 2
+    let m0 = mode(R, 0); let m1 = mode(R, 1)
+    doAssert m0 === (4, 1), "blocked 1d mode0: " & $m0
+    doAssert m1 === (3, 4), "blocked 1d mode1: " & $m1
+  block:
+    # [PY-L] blocked vs raked: same offset set
+    let blk = make_layout((2, 2), (1, 2))
+    let til = make_layout((2, 2), (1, 2))
+    let bR = blocked_product(blk, til)
+    let rR = raked_product(blk, til)
+    doAssert size(bR) == size(rR)
+    var bSet, rSet: seq[int]
+    for i in 0 ..< size(bR): bSet.add bR[i]; rSet.add rR[i]
+    doAssert bSet.len == rSet.len
+    for x in bSet:
+      doAssert x in rSet, "blocked/raked offset mismatch: " & $x & " not in raked"
+  echo "    blocked_product: 5 cases OK"
+
+# ── raked_product ──
 
 proc runRakedProductTests* =
-  echo "    (requires append + zip — implement later)"
+  block:
+    # [MOYE] tile=(2,2):(1,2), matrix=(3,4):(4,1)
+    const C2 = 2; const C3 = 3; const C4 = 4
+    let tile = make_layout((C2, C2), (1, 2))
+    let mat  = make_layout((C3, C4), (4, 1))
+    let R = raked_product(tile, mat)
+    doAssert rank(R) == 2
+    let m0 = mode(R, 0); let m1 = mode(R, 1)
+    doAssert m0 === ((3, 2), (16, 1)), "raked mode0: " & $m0
+    doAssert m1 === ((4, 2), (4, 2)), "raked mode1: " & $m1
+  block:
+    # [PY-L] raked 1d: block=4, tiler=3 — same offsets as blocked
+    let blk = make_layout(4, 1)
+    let til = make_layout(3, 1)
+    let bR = blocked_product(blk, til)
+    let rR = raked_product(blk, til)
+    doAssert size(bR) == size(rR)
+    var bSet, rSet: seq[int]
+    for i in 0 ..< size(bR): bSet.add bR[i]; rSet.add rR[i]
+    doAssert bSet.len == rSet.len
+    for x in bSet:
+      doAssert x in rSet, "blocked/raked offset mismatch: " & $x & " not in raked"
+  block:
+    # [PY-L] raked interleave order: block=4, tiler=2
 
+
+    let R = raked_product(make_layout(4, 1), make_layout(2, 1))
+    doAssert rank(R) == 2
+    let m0 = mode(R, 0); let m1 = mode(R, 1)
+    doAssert m0 === (2, 4), "raked 1d m0: " & $m0
+    doAssert m1 === (4, 1), "raked 1d m1: " & $m1
+    # Exact offset enumeration: tiler varies fastest
+    var offsets: seq[int]
+    for i in 0 ..< size(R): offsets.add R[i]
+    doAssert offsets == [0, 4, 1, 5, 2, 6, 3, 7],
+      "raked offsets: " & $offsets
+  echo "    raked_product: 4 cases OK"
 proc runZippedProductTests* =
   echo "    (requires tile_unzip — implement later)"
 

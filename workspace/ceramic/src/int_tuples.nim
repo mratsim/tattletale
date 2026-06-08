@@ -216,7 +216,6 @@ template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
   else:  # tuple
     fold_recurse(0, t, startingAcc, body)
 
-
 # ═══════════════════════════════════════════════════════════════
 #  prefix_scanIt / suffix_scanIt - scans while preserving constness
 # ═══════════════════════════════════════════════════════════════

@@ -630,3 +630,36 @@ func logical_product*[A, B: Layout](a: A; tiler: B): auto =
   ## Inverse of logical_divide.
   let rest = compose(complement(a, size(a) * cosize(tiler)), tiler)
   make_layout((a.shape, rest.shape), (a.stride, rest.stride))
+
+# ═══════════════════════════════════════════════════════════════
+#  blocked_product — blocks laid out contiguously
+# ═══════════════════════════════════════════════════════════════
+#
+#  blocked_product(block, tiler):
+#    1. Append both to rank R = max(rank(block), rank(tiler))
+#    2. result = logical_product(padded_block, padded_layout)
+#    3. return zip(result[0], result[1])
+
+func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
+  ## Repeat block over tiler grid, each block contiguous.
+  ## Results in ((BLK_A, TILER_A), (BLK_B, TILER_B), ...).
+  let lp = logical_product(blk, tiler)
+  let m0 = mode(lp, 0)
+  let m1 = mode(lp, 1)
+  zip(m0, m1)
+
+# ═══════════════════════════════════════════════════════════════
+#  raked_product — blocks interleaved (raked)
+# ═══════════════════════════════════════════════════════════════
+#
+#  raked_product(block, tiler):
+#    1. Same logical_product as blocked_product
+#    2. return zip(result[1], result[0])  (swapped order)
+
+func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
+  ## Repeat block over tiler grid, blocks interleaved.
+  ## Results in ((TILER_A, BLK_A), (TILER_B, BLK_B), ...).
+  let lp = logical_product(blk, tiler)
+  let m0 = mode(lp, 0)
+  let m1 = mode(lp, 1)
+  zip(m1, m0)

@@ -194,6 +194,7 @@ type StrideOrder* = enum
 template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
   ## Create a compact Layout from a shape, computing strides automatically.
   ## Encode compile-time integers into a Int[V] type for constant folding
+  ## NOTE: inline makeIntTupleRec to avoid C++ temp-name collision
   let convShape = makeIntTupleRec(shapeArg)
   let strideVal = when order == LayoutLeft:
     prefix_product(convShape)
@@ -207,11 +208,10 @@ template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = Layou
 template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): auto =
   ## Make a Layout from explicit shape and stride.
   ## Encode compile-time integers into a Int[V] type for constant folding
-  let convShape = makeIntTupleRec(shapeArg)
-  let convStride = makeIntTupleRec(strideArg)
-  Layout[typeof(convShape), typeof(convStride)](
-    shape: convShape,
-    stride: convStride
+  ## NOTE: inline makeIntTupleRec to avoid C++ temp-name collision
+  Layout[typeof(makeIntTupleRec(shapeArg)), typeof(makeIntTupleRec(strideArg))](
+    shape: makeIntTupleRec(shapeArg),
+    stride: makeIntTupleRec(strideArg)
   )
 
 # ═══════════════════════════════════════════════════════════════
@@ -448,3 +448,46 @@ proc getIndicesSortedByStride*(strides: seq[int]): seq[int] {.compileTime.} =
     for j in i + 1 ..< result.len:
       if strides[result[i]] > strides[result[j]]:
         swap result[i], result[j]
+
+# ═══════════════════════════════════════════════════════════════
+#  zip — interleave corresponding modes of two layouts
+# ═══════════════════════════════════════════════════════════════
+#
+#  Given layouts A with modes (a0, a1, ..., aN) and
+#  B with modes (b0, b1, ..., bN), zip produces a layout
+#  with modes ((a0,b0), (a1,b1), ..., (aN,bN)).
+#
+#  For rank-1 inputs: (a:b, x:y) → ((a,x):(b,y))
+
+macro zip*[A, B: Layout](a: A, b: B): untyped =
+  ## Zip two layouts: interleave corresponding modes pairwise.
+  let aTyp = a.getTypeInst()
+  let bTyp = b.getTypeInst()
+  let aShape = newTree(nnkDotExpr, a, ident"shape")
+  let bShape = newTree(nnkDotExpr, b, ident"shape")
+  let aStride = newTree(nnkDotExpr, a, ident"stride")
+  let bStride = newTree(nnkDotExpr, b, ident"stride")
+  let aShT = aTyp[1]
+  let bShT = bTyp[1]
+  let aStT = aTyp[2]
+  let bStT = bTyp[2]
+
+  proc zipElems(valA, valB, typA, typB: NimNode): NimNode =
+    let aIsTuple = typA.kind == nnkTupleConstr
+    let bIsTuple = typB.kind == nnkTupleConstr
+    if not aIsTuple and not bIsTuple:
+      result = newTree(nnkTupleConstr, valA, valB)
+    elif aIsTuple and bIsTuple:
+      result = newNimNode(nnkTupleConstr)
+      for i in 0 ..< typA.len:
+        let ai = newTree(nnkBracketExpr, valA, newLit i)
+        let bi = newTree(nnkBracketExpr, valB, newLit i)
+        let subA = typA[i].getTypeInst()
+        let subB = typB[i].getTypeInst()
+        result.add zipElems(ai, bi, subA, subB)
+    else:
+      error "zip: mismatched rank"
+
+  let zShape = zipElems(aShape, bShape, aShT, bShT)
+  let zStride = zipElems(aStride, bStride, aStT, bStT)
+  result = newCall(bindSym"make_layout", zShape, zStride)
