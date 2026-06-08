@@ -17,6 +17,7 @@
 ##   [PY-L]   = tensor-layouts/tests/layouts.py
 ##   [PY-E]   = tensor-layouts/tests/external.py
 
+import std/algorithm
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
@@ -1166,10 +1167,84 @@ proc runRakedProductTests* =
   echo "    raked_product: 5 cases OK"
 
 proc runZippedProductTests* =
-  echo "    (requires tile_unzip — implement later)"
+  block:
+    ## Python ref: zipped_divide(Layout((4,8)), (2,4)) -> ((2,4),(2,2)):((1,4),(2,16))
+    let L = make_layout((4, 8), (1, 4))
+    let zd = zipped_divide(L, (2, 4))
+    doAssert rank(zd) == 2
+    let m0 = mode(zd, 0); let m1 = mode(zd, 1)
+    doAssert m0 === ((2, 4), (1, 4)), "zd m0: " & $m0
+    doAssert m1 === ((2, 2), (2, 16)), "zd m1: " & $m1
+  block:
+    ## zipped_divide: int tiler (rank-1)
+    let zd = zipped_divide(make_layout(6, 1), 2)
+    doAssert rank(zd) == 2
+    doAssert size(mode(zd, 0)) == 2
+    doAssert size(mode(zd, 1)) == 3
+
+  block:
+    ## [MOYE] zipped_product(tile=(2,2):(1,2), matrix=(3,4):(4,1))
+    ## shape=((2,2),(3,4)), stride=((1,2),(16,4))
+    let blk = make_layout((2, 2), (1, 2))
+    let mat = make_layout((3, 4), (4, 1))
+    let zp = zipped_product(blk, mat)
+    doAssert rank(zp) == 2
+    let m0 = mode(zp, 0); let m1 = mode(zp, 1)
+    doAssert m0 === ((2, 2), (1, 2)), "zp m0: " & $m0
+    doAssert m1 === ((3, 4), (16, 4)), "zp m1: " & $m1
+
+  echo "    zipped_divide/product: 3 cases OK"
 
 proc runTiledProductTests* =
-  echo "    (requires tile_unzip + unpack — implement later)"
+  block:
+    ## tiled_divide: rank-1, second mode unpacked
+    let td = tiled_divide(make_layout(12, 1), 3)
+    doAssert rank(td) == 2, "rank-1 tiled rank: " & $rank(td)
+    doAssert size(mode(td, 0)) == 3
+    doAssert size(mode(td, 1)) == 4
+  block:
+    ## tiled_divide: rank-2, exact mode structure
+    let L = make_layout((4, 8), (1, 4))
+    let td = tiled_divide(L, (2, 4))
+    doAssert rank(td) == 3, "tiled rank: " & $rank(td)
+    doAssert size(mode(td, 0)) == 8
+    doAssert size(mode(td, 1)) == 2
+    doAssert size(mode(td, 2)) == 2
+  block:
+    ## tiled vs flat: same input, rank(tiled) = rank(flat) - 1
+    let L = make_layout((4, 8), (1, 4))
+    doAssert rank(tiled_divide(L, (2, 4))) == rank(flat_divide(L, (2, 4))) - 1
+
+  block:
+    ## tiled_product: smoke test
+    let tp = tiled_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
+    doAssert rank(tp) >= 2
+    doAssert size(tp) == 4 * 12
+  echo "    tiled_divide/product: 4 cases OK"
 
 proc runFlatProductTests* =
-  echo "    (requires tile_unzip + unpack — implement later)"
+  block:
+    ## flat_divide: rank-1, both modes unpacked
+    let fd = flat_divide(make_layout(12, 1), 3)
+    doAssert rank(fd) == 2, "rank-1 flat rank: " & $rank(fd)
+    doAssert size(mode(fd, 0)) == 3
+    doAssert size(mode(fd, 1)) == 4
+  block:
+    ## flat_divide: rank-2, exact mode structure
+    let L = make_layout((4, 8), (1, 4))
+    let fd = flat_divide(L, (2, 4))
+    doAssert rank(fd) == 4, "flat rank: " & $rank(fd)
+    let m0 = mode(fd, 0); let m1 = mode(fd, 1)
+    let m2 = mode(fd, 2); let m3 = mode(fd, 3)
+    doAssert m0 === (2, 1), "flat m0: " & $m0
+    doAssert m1 === (4, 4), "flat m1: " & $m1
+    doAssert m2 === (2, 2), "flat m2: " & $m2
+    doAssert m3 === (2, 16), "flat m3: " & $m3
+
+  block:
+    ## flat_product: both modes unpacked
+    let fp = flat_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
+    doAssert rank(fp) == 4, "flat product rank: " & $rank(fp)
+    doAssert size(fp) == 4 * 12
+
+  echo "    flat_divide/product: 4 cases OK"

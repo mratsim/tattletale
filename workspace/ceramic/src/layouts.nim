@@ -533,3 +533,20 @@ macro padRight*(layout: typed; rank: static int): untyped =
     ct.shape.add IntCT(1)
     ct.stride.add IntCT(0)
   result = ct.emit()
+
+# ═══════════════════════════════════════════════════════════════
+#  tile_unzip — unzip a logical_divide/product result into tiles+rest
+# ═══════════════════════════════════════════════════════════════
+##
+## CuTe: tile_unzip(layout, tiler) -> make_layout(zip2_by(shape, tiler), zip2_by(stride, tiler))
+## MoYe: tile_unzip(layout, tile) (same)
+## Python: no direct equivalent — inlined into zipped_divide/product
+##
+macro tile_unzip*(layout: typed; tiler: typed): untyped =
+  ## Unzip a logical_divide/logical_product result according to a tiler.
+  ## Returns a rank-2 Layout: ((tile_modes), (rest_modes)).
+  let zShape = newCall(bindSym"zip2_by",
+    newTree(nnkDotExpr, layout, ident"shape"), tiler)
+  let zStride = newCall(bindSym"zip2_by",
+    newTree(nnkDotExpr, layout, ident"stride"), tiler)
+  result = newCall(bindSym"make_layout", zShape, zStride)

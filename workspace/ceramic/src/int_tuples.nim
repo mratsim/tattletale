@@ -672,3 +672,44 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
       result.add result[^1] * vals[i]
     else:
       result.add 0
+
+# ═══════════════════════════════════════════════════════════════
+#  zip2_by — guided zip for rank-2 tuples
+# ═══════════════════════════════════════════════════════════════
+#
+# CuTe: zip2_by(t, guide) — tuple_algorithms.hpp
+#   Takes a tuple like ((A,a),((B,b),(C,c)),d) and
+#   a guide like (X,(X,X)) and produces ((A,(B,C)),(a,(b,c),d)).
+#
+# Terminal guide: t must be a pair (tile, rest), returned as-is.
+# Tuple guide:     recursively split each (t[i], guide[i]), gather
+#                   first-parts into group 0, second-parts into group 1.
+
+func zip2_by*(t: tuple; guide: int): auto = t
+func zip2_by*[V: static int](t: tuple; guide: Int[V]): auto = t
+func zip2_by*(t: tuple; guide: auto): auto = t
+
+func zip2_by*[T: tuple, G: tuple](t: T; guide: G): auto =
+  ## Guided zip for tuples. Both t and guide must be tuples.
+  ##
+  ## Terminal sub-guides (int, Int[N], Layout, etc.) leave corresponding
+  ## t[i] pairs unchanged. Tuple sub-guides recurse.
+  ##
+  ## Returns ((first_parts...), (second_parts...)).
+  macro impl: untyped =
+    let tNode = bindSym"t"
+    let guideNode = bindSym"guide"
+    let GR = guideNode.getTypeInst().len
+    let TR = tNode.getTypeInst().len
+    var group0 = newNimNode(nnkTupleConstr)
+    var group1 = newNimNode(nnkTupleConstr)
+    for i in 0 ..< GR:
+      let ti = nnkBracketExpr.newTree(tNode, newLit(i))
+      let gi = nnkBracketExpr.newTree(guideNode, newLit(i))
+      let split = newCall(bindSym"zip2_by", ti, gi)
+      group0.add nnkBracketExpr.newTree(split, newLit(0))
+      group1.add nnkBracketExpr.newTree(split, newLit(1))
+    for i in GR ..< TR:
+      group1.add nnkBracketExpr.newTree(tNode, newLit(i))
+    result = nnkTupleConstr.newTree(group0, group1)
+  impl()

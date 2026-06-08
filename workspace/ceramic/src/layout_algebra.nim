@@ -487,6 +487,45 @@ func logical_divide*[L: Layout](layout: L; tiler: tuple): auto =
         build(idx + 1, concat(accSh, (m.shape,)), concat(accSt, (m.stride,)))
   build(0, (), ())
 
+
+# ── zipped_divide / tiled_divide / flat_divide ──
+
+func zipped_divide*[L: Layout](layout: L; tiler: auto): auto =
+  ## Divide layout by tiler and zip tile/rest modes into rank-2 result.
+  ##
+  ## CuTe: zipped_divide = tile_unzip(logical_divide(layout, tiler), tiler)
+  tile_unzip(logical_divide(layout, tiler), tiler)
+
+template tiled_divide*(layout: Layout; tiler: auto): auto =
+  ## Like zipped_divide but unpack the second mode into individual modes.
+  ## Keeps mode-0 grouped (the tile).
+  let zd = zipped_divide(layout, tiler)
+  make_layout(
+    concat(
+      (flatten(mode(zd, 0).shape),),
+      flatten(mode(zd, 1).shape)
+    ),
+    concat(
+      (flatten(mode(zd, 0).stride),),
+      flatten(mode(zd, 1).stride)
+    )
+  )
+
+template flat_divide*(layout: Layout; tiler: auto): auto =
+  ## Like zipped_divide but unpack BOTH modes into a flat layout.
+  ## Difference from tiled_divide: tile modes are also unpacked.
+  let zd = zipped_divide(layout, tiler)
+  make_layout(
+    concat(
+      flatten(mode(zd, 0).shape),
+      flatten(mode(zd, 1).shape),
+    ),
+    concat(
+      flatten(mode(zd, 0).stride),
+      flatten(mode(zd, 1).stride),
+    ),
+  )
+
 # ═══════════════════════════════════════════════════════════════
 #  right_inverse — quasi-inverse sorted by stride
 # ═══════════════════════════════════════════════════════════════
@@ -631,6 +670,45 @@ func logical_product*[A, B: Layout](a: A; tiler: B): auto =
   let rest = compose(complement(a, size(a) * cosize(tiler)), tiler)
   make_layout((a.shape, rest.shape), (a.stride, rest.stride))
 
+
+# ── zipped_product / tiled_product / flat_product ──
+
+func zipped_product*[A: Layout](blk: A; tiler: auto): auto =
+  ## Reproduce block over tiler, zipped into rank-2 result.
+  ##
+  ## CuTe: zipped_product = tile_unzip(logical_product(block, tiler), tiler)
+  tile_unzip(logical_product(blk, tiler), tiler)
+
+template tiled_product*(blk: Layout; tiler: auto): auto =
+  ## Like zipped_product but unpack the second mode.
+  ## Keeps mode-0 grouped (the block).
+  let zp = zipped_product(blk, tiler)
+  make_layout(
+    concat(
+      (flatten(mode(zp, 0).shape),),
+      flatten(mode(zp, 1).shape),
+    ),
+    concat(
+      (flatten(mode(zp, 0).stride),),
+      flatten(mode(zp, 1).stride),
+    ),
+  )
+
+template flat_product*(blk: Layout; tiler: auto): auto =
+  ## Like zipped_product but unpack BOTH modes into a flat layout.
+  ## Difference from tiled_product: block modes are also unpacked.
+  let zp = zipped_product(blk, tiler)
+  make_layout(
+    concat(
+      flatten(mode(zp, 0).shape),
+      flatten(mode(zp, 1).shape),
+    ),
+    concat(
+      flatten(mode(zp, 0).stride),
+      flatten(mode(zp, 1).stride),
+    ),
+  )
+
 # ═══════════════════════════════════════════════════════════════
 #  blocked_product — blocks laid out contiguously
 # ═══════════════════════════════════════════════════════════════
@@ -648,6 +726,7 @@ func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
   let m0 = mode(lp, 0)
   let m1 = mode(lp, 1)
   zip(m0, m1)
+
 # ═══════════════════════════════════════════════════════════════
 #
 #  raked_product(block, tiler):
