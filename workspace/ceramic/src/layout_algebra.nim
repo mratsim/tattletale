@@ -385,15 +385,12 @@ func composeImpl(
                   ceil_div(absRemainingStride, currShape) * sign(remainingStride),
                   lhsShapes, lhsStrides)
 
+# Revert: map macro doesn't work here yet (Nim resolves `it` before macro expansion)
 func composeDistribute(
     lhsShapes, lhsStrides: tuple;
     rhsShapes, rhsStrides: tuple;
     idx: static int = 0): auto {.inline.} =
   ## Layer RHS modes one by one over the FULL coalesced LHS.
-  ##
-  ## Each scalar RHS mode is composed against ALL lhs modes via
-  ## composeImpl (a fold over LHS modes). Results are nested:
-  ## make_layout(compose(LHS, RHS_mode_0), compose(LHS, RHS_mode_1), ...)
   let r = when typeof(rhsShapes[idx]) is tuple:
     composeDistribute(lhsShapes, lhsStrides, rhsShapes[idx], rhsStrides[idx])
   else:

@@ -18,6 +18,7 @@ import std/macros
 import std/typetraits
 import ./macros/static_for
 import ./int_tuples
+import ./macros/ast_rebuilder
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St] — typed shape + stride pair
@@ -541,7 +542,7 @@ macro padRight*(layout: typed; rank: static int): untyped =
 ## CuTe: tile_unzip(layout, tiler) -> make_layout(zip2_by(shape, tiler), zip2_by(stride, tiler))
 ## MoYe: tile_unzip(layout, tile) (same)
 ## Python: no direct equivalent — inlined into zipped_divide/product
-##
+
 macro tile_unzip*(layout: typed; tiler: typed): untyped =
   ## Unzip a logical_divide/logical_product result according to a tiler.
   ## Returns a rank-2 Layout: ((tile_modes), (rest_modes)).
@@ -550,3 +551,76 @@ macro tile_unzip*(layout: typed; tiler: typed): untyped =
   let zStride = newCall(bindSym"zip2_by",
     newTree(nnkDotExpr, layout, ident"stride"), tiler)
   result = newCall(bindSym"make_layout", zShape, zStride)
+
+# ═══════════════════════════════════════════════════════════════
+#  map — apply fn to each mode independently
+#  zipWith — pairwise fn over modes of two Layouts
+# ═══════════════════════════════════════════════════════════════
+
+macro mapModesWith*(arg: typed; body: untyped): untyped =
+  ## Apply `body` to each mode of `arg`. Within body, `it` is the current mode.
+  ## body must evaluate to a Layout.
+  let typ = getTypeInst(arg)
+  let shTy = typ[1]
+  let R = if shTy.kind == nnkTupleConstr: shTy.len else: 1
+
+  result = newStmtList()
+  proc subst(n: NimNode; i: int; la: NimNode): NimNode =
+    let n2 = rebuildUntypedAst(n)
+    if n2.kind == nnkIdent and n2.eqIdent("it"):
+      result = newCall(bindSym"mode", la, newLit(i))
+    else:
+      result = n2.copyNimTree()
+      for j in 0 ..< n2.len:
+        result[j] = subst(n2[j], i, la)
+
+  var ct = LayoutCT()
+  for i in 0 ..< R:
+    let bodyExpr = subst(body, i, arg)
+    let resName = ident("res" & $i)
+    result.add newLetStmt(resName, bodyExpr)
+    ct.append(nnkDotExpr.newTree(resName, ident"shape"),
+               nnkDotExpr.newTree(resName, ident"stride"))
+  result.add ct.emit()
+
+macro zipModesWith*(a, b: typed; body: untyped): untyped =
+  ## Zip modes of `a` and `b` pairwise via body, append leftovers.
+  ## Within body, `it_a` / `it_b` are the current modes.
+  let ta = getTypeInst(a); let tb = getTypeInst(b)
+  let shA = ta[1]; let shB = tb[1]
+  let RA = if shA.kind == nnkTupleConstr: shA.len else: 1
+  let RB = if shB.kind == nnkTupleConstr: shB.len else: 1
+  let rMin = min(RA, RB)
+  let rMax = max(RA, RB)
+
+  proc subst(n: NimNode; i: int; la, lb: NimNode): NimNode =
+    let n2 = rebuildUntypedAst(n)
+    if n2.kind == nnkIdent and n2.eqIdent("it_a"):
+      result = newCall(bindSym"mode", la, newLit(i))
+    elif n2.kind == nnkIdent and n2.eqIdent("it_b"):
+      result = newCall(bindSym"mode", lb, newLit(i))
+    else:
+      result = n2.copyNimTree()
+      for j in 0 ..< n2.len:
+        result[j] = subst(n2[j], i, la, lb)
+
+  var ct = LayoutCT()
+  result = newStmtList()
+  for i in 0 ..< rMax:
+    if i < rMin:
+      let bodyExpr = subst(body, i, a, b)
+      let resName = ident("res" & $i)
+      result.add newLetStmt(resName, bodyExpr)
+      ct.append(nnkDotExpr.newTree(resName, ident"shape"),
+                 nnkDotExpr.newTree(resName, ident"stride"))
+    elif i < RA:
+      let mName = ident("m" & $i)
+      result.add newLetStmt(mName, newCall(bindSym"mode", a, newLit(i)))
+      ct.append(nnkDotExpr.newTree(mName, ident"shape"),
+                 nnkDotExpr.newTree(mName, ident"stride"))
+    else:
+      let mName = ident("m" & $i)
+      result.add newLetStmt(mName, newCall(bindSym"mode", b, newLit(i)))
+      ct.append(nnkDotExpr.newTree(mName, ident"shape"),
+                 nnkDotExpr.newTree(mName, ident"stride"))
+  result.add ct.emit()

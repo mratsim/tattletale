@@ -794,6 +794,46 @@ proc runTests* =
   runNCHWTests()
   echo "--- zip ---"
   runTileUnzipTests()
+  echo "--- mapModesWith/zipModesWith ---"
+  block:
+    # map: double each mode's stride
+    let a = make_layout((2, 4), (1, 2))
+    let r = mapModesWith(a):
+      make_layout(it.shape, it.stride * 2)
+    doAssert r.shape === (2, 4) and r.stride === (2, 4)
+  block:
+    # map over single-mode layout
+    let a = make_layout(3, 5)
+    let r = mapModesWith(a):
+      make_layout(it.shape, it.stride * 10)
+    doAssert r.shape === 3 and r.stride === 50
+  block:
+    # map over hierarchical layout: scale each mode's stride
+    let a = make_layout(((2,2),(2,8)), ((1,4),(2,8)))
+    let r = mapModesWith(a):
+      make_layout(it.shape, it.stride.scaleBy(2))
+    doAssert r.shape === ((2,2),(2,8))
+    doAssert r.stride === ((2,8),(4,16))
+  block:
+    # zipWith: pairwise — take stride from it_b (rightover writes over)
+    let a = make_layout((2, 4), (1, 2))
+    let b = make_layout((3, 5), (10, 20))
+    let r = zipModesWith(a, b):
+      make_layout(it_a.shape, it_b.stride)
+    doAssert r.shape === (2, 4) and r.stride === (10, 20)
+  block:
+    # zipWith: a shorter (leftover b appended)
+    let a = make_layout((2,), (1,))
+    let b = make_layout(((2,2),(2,8)), ((1,4),(2,8)))
+    let r = zipModesWith(a, b):
+      make_layout(it_a.shape, it_b.stride)
+    doAssert rank(r) == 2
+    # mode 0 = zip result: shape from a, stride from b mode 0
+    doAssert mode(r, 0).shape === 2
+    doAssert mode(r, 0).stride === (1, 4)
+    # mode 1 = leftover from b (unchanged)
+    doAssert mode(r, 1).shape === (2, 8)
+  echo "  5 checks OK"
   echo "ALL LAYOUT TESTS PASSED"
 
 when isMainModule:
