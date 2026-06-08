@@ -23,6 +23,16 @@ type Int*[V: static int] = object
 type IntOrIntTuple* = int | Int | tuple
   ## Shape/stride element type alias for convenience.
 
+func `$`*[V: static int](x: Int[V]): string = $V
+
+# ═══════════════════════════════════════════════════════════════
+#  isConst — compile-time detection (runtime via proc dispatch)
+# ═══════════════════════════════════════════════════════════════
+
+proc isConst*(a: static int): bool = true
+proc isConst*(a: int): bool = false
+proc isConst*[V: static int](a: Int[V]): bool = true
+
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] == int — global overloads for tuple comparison
 # ═══════════════════════════════════════════════════════════════
@@ -33,6 +43,111 @@ func `==`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V == U
 func `<=`*[V: static int](a: Int[V]; b: int): bool = V <= b
 func `<=`*[V: static int](a: int; b: Int[V]): bool = a <= V
 func `>=`*[V: static int](a: Int[V]; b: int): bool = V >= b
+
+# ═══════════════════════════════════════════════════════════════
+#  `===` — deep element-wise tuple comparison (handles Int[N] vs int)
+# ═══════════════════════════════════════════════════════════════
+
+func `===`*(a: int; b: int): bool = a == b
+func `===`*[V: static int](a: Int[V]; b: int): bool = V == b
+func `===`*[V: static int](a: int; b: Int[V]): bool = V == b
+func `===`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V == U
+
+func `===`*[T: tuple, U: tuple](a: T; b: U): bool =
+  ## Deep element-wise tuple comparison.
+  ## Handles Int[N] vs int mismatches via per-element === overloads.
+  when tupleLen(T) != tupleLen(U):
+    false
+  else:
+    staticFor i, 0, tupleLen(T):
+      if not (a[i] === b[i]):
+        return false
+    true
+
+func `===`*[T: tuple](a: T; b: int): bool =
+  ## Compare a tuple against an int — only valid for 1-element tuples.
+  when tupleLen(T) == 1:
+    a[0] === b
+  else:
+    false
+
+func `===`*[U: tuple](a: int; b: U): bool =
+  ## Compare an int against a tuple — only valid for 1-element tuples.
+  when tupleLen(U) == 1:
+    a === b[0]
+  else:
+    false
+
+func `>=`*[V: static int](a: int; b: Int[V]): bool = a >= V
+func `<=`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V <= U
+func `>=`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V >= U
+
+# ═══════════════════════════════════════════════════════════════
+#  Int[N] arithmetic
+# ═══════════════════════════════════════════════════════════════
+
+func ceil_div*(a, b: int): int =
+  (a + b - 1) div b
+
+func abs*[V: static int](x: Int[V]): Int[abs(V)] = Int[abs(V)]()
+
+template genBinOp(op: untyped): untyped =
+  func op*[V, U: static int](a: Int[V]; b: Int[U]): Int[op(V, U)] = Int[op(V, U)]()
+  func op*[V: static int](a: Int[V]; b: static int): Int[op(V, b)] = Int[op(V, b)]()
+  func op*[V: static int](a: static int; b: Int[V]): Int[op(a, V)] = Int[op(a, V)]()
+  func op*[V: static int](a: Int[V]; b: int): int = op(V, b)
+  func op*[V: static int](a: int; b: Int[V]): int = op(a, V)
+
+genBinOp(`+`)
+genBinOp(`-`)
+genBinOp(`*`)
+genBinOp(`div`)
+genBinOp(`mod`)
+
+genBinOp(`max`)
+genBinOp(`min`)
+genBinOp(`ceil_div`)
+
+# ═══════════════════════════════════════════════════════════════
+#  Int[N] compile-time helpers (for macros)
+# ═══════════════════════════════════════════════════════════════
+
+func IntCT*(val: int): NimNode {.compileTime.} =
+  ## Shorthand: Int[val]() AST node.
+  newNimNode(nnkObjConstr).add(
+    newNimNode(nnkBracketExpr).add(ident"Int", newLit(val)))
+
+func isStaticInt*(t: NimNode): bool {.compileTime.} =
+  (t.kind == nnkBracketExpr and $t[0] == "Int") or t.kind == nnkIntLit
+
+func isStaticOne*(t: NimNode): bool {.compileTime.} =
+  (t.kind == nnkBracketExpr and $t[0] == "Int" and t[1].intVal == 1) or
+  (t.kind == nnkIntLit and t.intVal == 1)
+
+func getStaticInt*(t: NimNode): int {.compileTime.} =
+  if t.kind == nnkBracketExpr and $t[0] == "Int": int(t[1].intVal)
+  elif t.kind == nnkIntLit: int(t.intVal)
+  else: error("getStaticInt on non-static: " & t.repr)
+
+func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
+  ## Extract Int[N] values from a tuple type AST node.
+  ## Returns 0 for non-static (dynamic int) elements.
+  for i in 0 ..< t.len:
+    let node = t[i]
+    if node.kind == nnkBracketExpr and $node[0] == "Int":
+      result.add int(node[1].intVal)
+    else:
+      result.add 0
+
+func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
+  ## Prefix product of a flat seq (0 entries treated as 1 for scan,
+  ## but produce 0 in output to mark unknown positions).
+  result = @[1]
+  for i in 0 ..< vals.len:
+    if vals[i] != 0:
+      result.add result[^1] * vals[i]
+    else:
+      result.add 0
 
 # ═══════════════════════════════════════════════════════════════
 #  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs
@@ -90,48 +205,23 @@ macro evalOnceAs(expAlias: untyped{nkIdent}, exp: typed): untyped =
       body = val, procType = nnkTemplateDef))
 
 # ═══════════════════════════════════════════════════════════════
-#  `===` — deep element-wise tuple comparison (handles Int[N] vs int)
+#  scaleBy — element-wise tuple scaling preserving nesting
 # ═══════════════════════════════════════════════════════════════
 
-func `===`*(a: int; b: int): bool = a == b
-
-func `===`*[V: static int](a: Int[V]; b: int): bool = V == b
-
-func `===`*[V: static int](a: int; b: Int[V]): bool = V == b
-
-func `===`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V == U
-
-func `===`*[T: tuple, U: tuple](a: T; b: U): bool =
-  ## Deep element-wise tuple comparison.
-  ## Handles Int[N] vs int mismatches via per-element === overloads.
-  when tupleLen(T) != tupleLen(U):
-    false
-  else:
-    staticFor i, 0, tupleLen(T):
-      if not (a[i] === b[i]):
-        return false
-    true
-
-func `===`*[T: tuple](a: T; b: int): bool =
-  ## Compare a tuple against an int — only valid for 1-element tuples.
-  when tupleLen(T) == 1:
-    a[0] === b
-  else:
-    false
-
-func `===`*[U: tuple](a: int; b: U): bool =
-  ## Compare an int against a tuple — only valid for 1-element tuples.
-  when tupleLen(U) == 1:
-    a === b[0]
-  else:
-    false
-
-func `>=`*[V: static int](a: int; b: Int[V]): bool = a >= V
-func `<=`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V <= U
-func `>=`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V >= U
-
-func `$`*[V: static int](x: Int[V]): string = $V
-
+macro scaleBy*(t: typed; multiplier: typed): untyped =
+  ## Multiply each leaf of a (possibly nested) tuple by scalar m.
+  ## Preserves nesting structure.
+  # `typed` required: type-class constraints (tuple, int or Int)
+  # fail in generic functions where types aren't concrete yet.
+  proc scaleImpl(nestedExpr, node, mul: NimNode): NimNode =
+    if node.kind == nnkTupleConstr:
+      result = newNimNode(nnkTupleConstr)
+      for i in 0 ..< node.len:
+        result.add scaleImpl(
+          nnkBracketExpr.newTree(nestedExpr, newLit(i)), node[i], mul)
+    else:
+      result = newCall(bindSym"*", nestedExpr, mul)
+  result = scaleImpl(t, t.getTypeInst().getTypeImpl(), multiplier)
 
 # ═══════════════════════════════════════════════════════════════
 #  fold — left-fold reduction with Int[N] support
@@ -290,15 +380,6 @@ template makeIntTuple(a: IntOrIntTuple): untyped =
   ## Public face: wraps static ints in Int[N] via the recursive macro.
   makeIntTupleRec(a)
 
-# ═══════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════
-#  isConst — compile-time detection (runtime via proc dispatch)
-# ═══════════════════════════════════════════════════════════════
-
-proc isConst*(a: static int): bool = true
-proc isConst*(a: int): bool = false
-proc isConst*[V: static int](a: Int[V]): bool = true
 
 template prefix_product*(shape: IntOrIntTuple): untyped =
   ## Cumulative left-to-right product scan.
@@ -571,131 +652,24 @@ proc concat*[V: static int](a: static int; b: Int[V]): static auto =
     result.add bNode
   concatImpl()
 
-
-# ═══════════════════════════════════════════════════════════════
-#  flatIter — yield each leaf int in a nested tuple
-# ═══════════════════════════════════════════════════════════════
-# TODO: loses compile-time info, useless?
-
-iterator flatIter*[T: IntOrIntTuple](t: T): int =
-  ## Yield each leaf int in a nested IntOrIntTuple.
-  ## Works at compile time in `const` contexts.
-  when T is int:
-    yield t
-  elif T is Int:
-    yield t * 1
-  else:
-    for f in fields(t):
-      when f is int:
-        yield f
-      elif f is Int:
-        yield f * 1
-      else:
-        for sub in flatIter(f):
-          yield sub
-
-# ═══════════════════════════════════════════════════════════════
-#  Int[N] arithmetic
-# ═══════════════════════════════════════════════════════════════
-
-template genBinOp(op: untyped): untyped =
-  func op*[V, U: static int](a: Int[V]; b: Int[U]): Int[op(V, U)] = Int[op(V, U)]()
-  func op*[V: static int](a: Int[V]; b: static int): Int[op(V, b)] = Int[op(V, b)]()
-  func op*[V: static int](a: static int; b: Int[V]): Int[op(a, V)] = Int[op(a, V)]()
-  func op*[V: static int](a: Int[V]; b: int): int = op(V, b)
-  func op*[V: static int](a: int; b: Int[V]): int = op(a, V)
-
-genBinOp(`+`)
-genBinOp(`-`)
-genBinOp(`*`)
-genBinOp(`div`)
-genBinOp(`mod`)
-
-# ═══════════════════════════════════════════════════════════════
-#  ceil_div — base function
-# ═══════════════════════════════════════════════════════════════
-
-func ceil_div*(a, b: int): int =
-  (a + b - 1) div b
-
-# ═══════════════════════════════════════════════════════════════
-#  Int[N] overloads via genBinOp (max, min, ceil_div)
-# ═══════════════════════════════════════════════════════════════
-
-genBinOp(`max`)
-genBinOp(`min`)
-genBinOp(`ceil_div`)
-
-# ═══════════════════════════════════════════════════════════════
-#  abs — support for Int[N]
-# ═══════════════════════════════════════════════════════════════
-
-func abs*[V: static int](x: Int[V]): Int[abs(V)] = Int[abs(V)]()
-
-# ═══════════════════════════════════════════════════════════════
-#  Int[N] compile-time helpers (for macros)
-# ═══════════════════════════════════════════════════════════════
-
-func IntCT*(val: int): NimNode {.compileTime.} =
-  ## Shorthand: Int[val]() AST node.
-  newNimNode(nnkObjConstr).add(
-    newNimNode(nnkBracketExpr).add(ident"Int", newLit(val)))
-
-func isStaticInt*(t: NimNode): bool {.compileTime.} =
-  (t.kind == nnkBracketExpr and $t[0] == "Int") or t.kind == nnkIntLit
-
-func isStaticOne*(t: NimNode): bool {.compileTime.} =
-  (t.kind == nnkBracketExpr and $t[0] == "Int" and t[1].intVal == 1) or
-  (t.kind == nnkIntLit and t.intVal == 1)
-
-func getStaticInt*(t: NimNode): int {.compileTime.} =
-  if t.kind == nnkBracketExpr and $t[0] == "Int": int(t[1].intVal)
-  elif t.kind == nnkIntLit: int(t.intVal)
-  else: error("getStaticInt on non-static: " & t.repr)
-
-func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
-  ## Extract Int[N] values from a tuple type AST node.
-  ## Returns 0 for non-static (dynamic int) elements.
-  for i in 0 ..< t.len:
-    let node = t[i]
-    if node.kind == nnkBracketExpr and $node[0] == "Int":
-      result.add int(node[1].intVal)
-    else:
-      result.add 0
-
-func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
-  ## Prefix product of a flat seq (0 entries treated as 1 for scan,
-  ## but produce 0 in output to mark unknown positions).
-  result = @[1]
-  for i in 0 ..< vals.len:
-    if vals[i] != 0:
-      result.add result[^1] * vals[i]
-    else:
-      result.add 0
-
 # ═══════════════════════════════════════════════════════════════
 #  zip2_by — guided zip for rank-2 tuples
 # ═══════════════════════════════════════════════════════════════
-#
-# CuTe: zip2_by(t, guide) — tuple_algorithms.hpp
-#   Takes a tuple like ((A,a),((B,b),(C,c)),d) and
-#   a guide like (X,(X,X)) and produces ((A,(B,C)),(a,(b,c),d)).
-#
-# Terminal guide: t must be a pair (tile, rest), returned as-is.
-# Tuple guide:     recursively split each (t[i], guide[i]), gather
-#                   first-parts into group 0, second-parts into group 1.
 
-func zip2_by*(t: tuple; guide: int): auto = t
-func zip2_by*[V: static int](t: tuple; guide: Int[V]): auto = t
-func zip2_by*(t: tuple; guide: auto): auto = t
-
+func zip2_by*(t: tuple; guide: int): auto =
+  ## CuTe: zip2_by(t, guide) — tuple_algorithms.hpp
+  ## Terminal guide: t must be a pair, returned as-is.
+  t
+func zip2_by*[V: static int](t: tuple; guide: Int[V]): auto =
+  ## Terminal Int[N] guide.
+  t
+func zip2_by*(t: tuple; guide: auto): auto =
+  ## Terminal guide fallback (Layout, etc.).
+  t
 func zip2_by*[T: tuple, G: tuple](t: T; guide: G): auto =
   ## Guided zip for tuples. Both t and guide must be tuples.
-  ##
-  ## Terminal sub-guides (int, Int[N], Layout, etc.) leave corresponding
-  ## t[i] pairs unchanged. Tuple sub-guides recurse.
-  ##
-  ## Returns ((first_parts...), (second_parts...)).
+  ## Terminal sub-guides leave their t[i] pairs unchanged.
+  ## Tuple sub-guides recurse.
   macro impl: untyped =
     let tNode = bindSym"t"
     let guideNode = bindSym"guide"

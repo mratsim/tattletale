@@ -1176,6 +1176,14 @@ proc runZippedProductTests* =
     doAssert m0 === ((2, 4), (1, 4)), "zd m0: " & $m0
     doAssert m1 === ((2, 2), (2, 16)), "zd m1: " & $m1
   block:
+    ## [PY-L] CuTe C++ validated: Layout tiler preserves nesting
+    ## A=(8,8):(1,8), T=(2,2):(1,4)
+    ## zipped_divide -> ((2,2),(2,8)):((1,4),(2,8))
+    let A = make_layout((8, 8), (1, 8))
+    let T = make_layout((2, 2), (1, 4))
+    let zd = zipped_divide(A, T)
+    doAssert zd === (((2, 2), (2, 8)), ((1, 4), (2, 8))), "zd: " & $zd
+  block:
     ## zipped_divide: int tiler (rank-1)
     let zd = zipped_divide(make_layout(6, 1), 2)
     doAssert rank(zd) == 2
@@ -1193,7 +1201,7 @@ proc runZippedProductTests* =
     doAssert m0 === ((2, 2), (1, 2)), "zp m0: " & $m0
     doAssert m1 === ((3, 4), (16, 4)), "zp m1: " & $m1
 
-  echo "    zipped_divide/product: 3 cases OK"
+  echo "    zipped_divide/product: 4 cases OK"
 
 proc runTiledProductTests* =
   block:
@@ -1211,6 +1219,11 @@ proc runTiledProductTests* =
     doAssert size(mode(td, 1)) == 2
     doAssert size(mode(td, 2)) == 2
   block:
+    ## [PY-L] CuTe C++: tiled_divide with Layout tiler
+    ## A=(8,8):(1,8), T=(2,2):(1,4)
+    ## tiled_divide -> ((2,2),2,8):((1,4),2,8)
+    let td = tiled_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
+    doAssert td === (((2, 2), 2, 8), ((1, 4), 2, 8)), "td: " & $td
     ## tiled vs flat: same input, rank(tiled) = rank(flat) - 1
     let L = make_layout((4, 8), (1, 4))
     doAssert rank(tiled_divide(L, (2, 4))) == rank(flat_divide(L, (2, 4))) - 1
@@ -1220,7 +1233,7 @@ proc runTiledProductTests* =
     let tp = tiled_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
     doAssert rank(tp) >= 2
     doAssert size(tp) == 4 * 12
-  echo "    tiled_divide/product: 4 cases OK"
+  echo "    tiled_divide/product: 5 cases OK"
 
 proc runFlatProductTests* =
   block:
@@ -1229,6 +1242,12 @@ proc runFlatProductTests* =
     doAssert rank(fd) == 2, "rank-1 flat rank: " & $rank(fd)
     doAssert size(mode(fd, 0)) == 3
     doAssert size(mode(fd, 1)) == 4
+  block:
+    ## [PY-L] CuTe C++: flat_divide with Layout tiler
+    ## A=(8,8):(1,8), T=(2,2):(1,4)
+    ## flat_divide -> (2,2,2,8):(1,4,2,8)
+    let fd = flat_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
+    doAssert fd === ((2, 2, 2, 8), (1, 4, 2, 8)), "fd: " & $fd
   block:
     ## flat_divide: rank-2, exact mode structure
     let L = make_layout((4, 8), (1, 4))
@@ -1247,4 +1266,4 @@ proc runFlatProductTests* =
     doAssert rank(fp) == 4, "flat product rank: " & $rank(fp)
     doAssert size(fp) == 4 * 12
 
-  echo "    flat_divide/product: 4 cases OK"
+  echo "    flat_divide/product: 5 cases OK"

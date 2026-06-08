@@ -424,7 +424,8 @@ func compose*[A, B: Layout](a: A, b: B): auto =
   else:
     let flatA = coalesce(a)
     when flatA.shape isnot tuple:
-      make_layout(b.shape.flatten(), buildStride(b.stride.flatten(), flatA.stride))
+      # flatA is rank-1 scalar: preserve B's nesting, scale strides by flatA.stride
+      make_layout(b.shape, b.stride.scaleBy(flatA.stride))
     else:
       composeDistribute(flatA.shape, flatA.stride, b.shape, b.stride)
 

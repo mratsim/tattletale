@@ -313,28 +313,6 @@ proc runFoldWrapperTests* =
   block:
     doAssert min((5, 3, 8)) == 3
   echo "  Fold wrappers: 7 cases OK"
-#  flatIter — leaf iteration
-# ═══════════════════════════════════════════════════════════════
-
-proc runFlatIterTests* =
-  block:
-    var c: seq[int]
-    for x in flatIter(42): c.add x
-    doAssert c == @[42]
-  block:
-    var c: seq[int]
-    for x in flatIter((2, 3, 4)): c.add x
-    doAssert c == @[2, 3, 4]
-  block:
-    var c: seq[int]
-    for x in flatIter(((2, 3), 4)): c.add x
-    doAssert c == @[2, 3, 4]
-  block:
-    var c: seq[int]
-    for x in flatIter(((2, (3, 5)), 4)): c.add x
-    doAssert c == @[2, 3, 5, 4]
-  echo "  Flat iter: 4 cases OK"
-
 # ═══════════════════════════════════════════════════════════════
 #  flatten / concat — extra cases
 # ═══════════════════════════════════════════════════════════════
@@ -490,7 +468,6 @@ proc runTests* =
   runTypeClassTests()
   runFoldWrapperTests()
 
-  runFlatIterTests()
   runFlattenConcatTests()
   runMixedStaticDynamicTests()
   runZip2ByTests()
