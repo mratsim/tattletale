@@ -569,22 +569,31 @@ func right_inverse*(layout: Layout): auto =
 # ═══════════════════════════════════════════════════════════════
 
 proc leftInverseModes*(
-    strides, shapes, prefixProd: seq[int]): (seq[int], seq[int], int) {.compileTime.} =
-  ## Return (result_shapes, result_prefix_strides, last_mode_original_idx).
-  ## Builds left inverse from stride ratios:
+    strides, shapes, prefixProd: seq[int]; shNode: NimNode): LayoutCT {.compileTime.} =
+  ## Return left-inverse modes as a LayoutCT.
+  ## Builds from stride ratios:
   ##   result_shape[i] = stride / size_so_far
-  ##   result_prefix[i] = prefixProd[idx]
-  var resultShapes, resultPrefix: seq[int]
+  ##   result_prefix[i] = prefixProd[prev_idx]
+  result = LayoutCT()
   var sizeSoFar = 1
-  var sortedIdx = getIndicesSortedByStride(strides)
-  for idx in sortedIdx:
-    if strides[idx] == 0: continue
+  var prevIdx = -1
+  var prevPrefix = 0
+  for idx in getIndicesSortedByStride(strides):
+    if strides[idx] == 0:
+      continue
     doAssert strides[idx] mod sizeSoFar == 0,
       "left_inverse: stride " & $strides[idx] & " not divisible by " & $sizeSoFar
-    resultShapes.add strides[idx] div sizeSoFar
-    resultPrefix.add prefixProd[idx]
+    if prevIdx == -1:
+      # First mode: computed shape, zero stride
+      result.append(IntCT(strides[idx] div sizeSoFar), IntCT(0))
+    else:
+      # Intermediate mode: computed shape, previous prefix as stride
+      result.append(IntCT(strides[idx] div sizeSoFar), IntCT(prevPrefix))
     sizeSoFar = strides[idx]
-  (resultShapes, resultPrefix, sortedIdx[^1])
+    prevIdx = idx
+    prevPrefix = prefixProd[idx]
+  # Last mode from original layout
+  result.append(newTree(nnkBracketExpr, shNode, newLit(prevIdx)), IntCT(prevPrefix))
 
 macro leftInverseImpl(sh, st: typed): untyped =
   ## left_inverse on flattened (shape, stride). All strides must be static.
@@ -609,18 +618,11 @@ macro leftInverseImpl(sh, st: typed): untyped =
   let strides = toSeqStaticInts(stTyp)
   let shapes  = toSeqStaticInts(shTyp)
   let prefixProd = prefixProduct(shapes)
-  let (rShapes, rPrefix, lastIdx) = leftInverseModes(strides, shapes, prefixProd)
-
-  if rShapes.len == 0:
+  let acc = leftInverseModes(strides, shapes, prefixProd, sh)
+  if acc.shape.len == 0:
     result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
-    return
-
-  var acc = LayoutCT()
-  acc.append(IntCT(rShapes[0]), IntCT(0))
-  for i in 1 ..< rShapes.len:
-    acc.append(IntCT(rShapes[i]), IntCT(rPrefix[i - 1]))
-  acc.append(newTree(nnkBracketExpr, sh, newLit(lastIdx)), IntCT(rPrefix[^1]))
-  result = newCall(bindSym"coalesce", acc.emit())
+  else:
+    result = newCall(bindSym"coalesce", acc.emit())
 
 func left_inverse*(layout: Layout): auto =
   ## Left inverse: Li(L(i)) == i for injective layouts.
