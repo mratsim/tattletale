@@ -456,6 +456,32 @@ proc runZip2ByTests* =
 #  Run all
 # ═══════════════════════════════════════════════════════════════
 
+
+proc runMapZipWithTests* =
+  block:
+    let r = map((2, 4, 6)): it * 2
+    doAssert r === (4, 8, 12)
+  block:
+    let r = map((Int[2](), Int[4]())): it * 3
+    doAssert r === (6, 12)
+  block:
+    # product_each: product of each top-level element
+    let r = map(((2,2), (2,8))): product(it)
+    doAssert r === (4, 16)
+  block:
+    let r = zipWith((2, 4), (10, 20)): it_a + it_b
+    doAssert r === (12, 24)
+  block:
+    let r = zipWith((2, 4, 6), (10, 20)): it_a + it_b
+    doAssert r === (12, 24, 6)
+  block:
+    let r = zipWith((2, 4), (10, 20, 30)): it_a + it_b
+    doAssert r === (12, 24, 30)
+  block:
+    let r = zipWith((7, 10, 15), (3, 4, 6)): ceil_div(it_a, it_b)
+    doAssert r === (3, 3, 3)
+  echo "  map/zipWith: 7 checks OK"
+
 proc runTests* =
   echo "── Int tuples ──"
   runFoldTests()
@@ -471,6 +497,7 @@ proc runTests* =
   runFlattenConcatTests()
   runMixedStaticDynamicTests()
   runZip2ByTests()
+  runMapZipWithTests()
   echo "ALL INT_TUPLES TESTS PASSED"
 
 when isMainModule:

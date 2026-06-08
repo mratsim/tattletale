@@ -670,23 +670,98 @@ func zip2_by*(t: tuple; guide: auto): auto =
   ## Terminal guide fallback (Layout, etc.).
   t
 func zip2_by*[T: tuple, G: tuple](t: T; guide: G): auto =
-  ## Guided zip for tuples. Both t and guide must be tuples.
-  ## Terminal sub-guides leave their t[i] pairs unchanged.
-  ## Tuple sub-guides recurse.
+  ## Guided zip: split flat tuple `t` into (first_parts, second_parts).
+  ##
+  ## For each i where guide[i] is a tuple: recurse zip2_by(t[i], guide[i]).
+  ## For each i where guide[i] is scalar: t[i] must be a pair; its two
+  ##   elements go to first_parts and second_parts respectively.
+  ## Extra elements of t (beyond guide length) append to second_parts.
+  ##
+  ## Result: (first_parts_tuple, second_parts_tuple) — rank-2.
+  ##
+  ## CuTe: zip2_by(t, guide) — tuple_algorithms.hpp line ~739
+  ## Used by tile_unzip → zipped_divide/zipped_product.
   macro impl: untyped =
     let tNode = bindSym"t"
     let guideNode = bindSym"guide"
-    let GR = guideNode.getTypeInst().len
-    let TR = tNode.getTypeInst().len
-    var group0 = newNimNode(nnkTupleConstr)
-    var group1 = newNimNode(nnkTupleConstr)
-    for i in 0 ..< GR:
+    let guideLen = guideNode.getTypeInst().len
+    let tLen = tNode.getTypeInst().len
+    var firstParts = newNimNode(nnkTupleConstr)
+    var secondParts = newNimNode(nnkTupleConstr)
+    # Guided elements: each produces (first_elem, second_elem)
+    for i in 0 ..< guideLen:
       let ti = nnkBracketExpr.newTree(tNode, newLit(i))
       let gi = nnkBracketExpr.newTree(guideNode, newLit(i))
-      let split = newCall(bindSym"zip2_by", ti, gi)
-      group0.add nnkBracketExpr.newTree(split, newLit(0))
-      group1.add nnkBracketExpr.newTree(split, newLit(1))
-    for i in GR ..< TR:
-      group1.add nnkBracketExpr.newTree(tNode, newLit(i))
-    result = nnkTupleConstr.newTree(group0, group1)
+      let splitPair = newCall(bindSym"zip2_by", ti, gi)
+      firstParts.add nnkBracketExpr.newTree(splitPair, newLit(0))
+      secondParts.add nnkBracketExpr.newTree(splitPair, newLit(1))
+    # Unguided tail: append to second parts
+    for i in guideLen ..< tLen:
+      secondParts.add nnkBracketExpr.newTree(tNode, newLit(i))
+    result = nnkTupleConstr.newTree(firstParts, secondParts)
   impl()
+
+# ═══════════════════════════════════════════════════════════════
+#  map — apply fn to each tuple element
+#  zipWith — zip two tuples element-wise, append leftovers
+# ═══════════════════════════════════════════════════════════════
+
+macro map*(t: typed; body: untyped): untyped =
+  ## Apply `body` to each element of tuple `t`.
+  ## `it` binds to the current element.
+  ##
+  ## Example:
+  ##   map((2, 4, 6)): it * 2  →  (4, 8, 12)
+  let tt = getTypeInst(t)
+  let n = if tt.kind == nnkTupleConstr: tt.len else: 1
+
+  proc subst(x: NimNode; i: int; ttup: NimNode): NimNode =
+    if x.kind in {nnkIdent, nnkSym} and x.eqIdent("it"):
+      result = nnkBracketExpr.newTree(ttup, newLit(i))
+    else:
+      result = x.copyNimTree()
+      for j in 0 ..< x.len:
+        result[j] = subst(x[j], i, ttup)
+
+  var items: seq[NimNode]
+  for i in 0 ..< n:
+    items.add subst(body, i, t)
+  result = nnkTupleConstr.newTree(items)
+
+macro zipWith*(a, b: typed; body: untyped): untyped =
+  ## Zip elements of tuples `a` and `b` pairwise via `body`.
+  ## `it_a` / `it_b` bind to corresponding elements.
+  ## Leftover elements from the longer tuple are appended unchanged.
+  ##
+  ## Example:
+  ##   zipWith((2, 4), (10, 20)): it_a + it_b  →  (12, 24)
+  ##   zipWith((2, 4, 6), (10, 20)): it_a + it_b  →  (12, 24, 6)
+  let ta = getTypeInst(a)
+  let tb = getTypeInst(b)
+  let RA = if ta.kind == nnkTupleConstr: ta.len else: 1
+  let RB = if tb.kind == nnkTupleConstr: tb.len else: 1
+  let rMin = min(RA, RB)
+  let rMax = max(RA, RB)
+
+  proc subst(x: NimNode; i: int; la, lb: NimNode): NimNode =
+    if x.kind in {nnkIdent, nnkSym} and x.eqIdent("it_a"):
+      result = nnkBracketExpr.newTree(la, newLit(i))
+    elif x.kind in {nnkIdent, nnkSym} and x.eqIdent("it_b"):
+      result = nnkBracketExpr.newTree(lb, newLit(i))
+    else:
+      result = x.copyNimTree()
+      for j in 0 ..< x.len:
+        result[j] = subst(x[j], i, la, lb)
+
+  result = newStmtList()
+  var items: seq[NimNode]
+  for i in 0 ..< rMax:
+    let name = ident("__zw" & $i)
+    if i < rMin:
+      items.add name
+      result.add newLetStmt(name, subst(body, i, a, b))
+    elif i < RA:
+      items.add nnkBracketExpr.newTree(a, newLit(i))
+    else:
+      items.add nnkBracketExpr.newTree(b, newLit(i))
+  result.add nnkTupleConstr.newTree(items)
