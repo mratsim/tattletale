@@ -188,68 +188,49 @@ proc complementScalar(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
       newTree(nnkTupleConstr, gap, rem),
       newTree(nnkTupleConstr, newLit(1), prd)))
 
+# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+#  Pure seq-based helpers (no NimNode manipulation)
+# ═══════════════════════════════════════════════════════════════
+
+proc complementGaps*(
+    strides, shapes: seq[int]): (seq[(int, int)], int) {.compileTime.} =
+  ## Return (gap_modes: (gap, cur) pairs, final_cur).
+  ## `cur` tracks cumulative coverage = stride × shape of processed modes.
+  ## Gap check `stride > cur` is always CT (strides are Int[N]).
+  ## Remainder is `ceil_div(bound, cur)` — computed by caller with boundExpr.
+  ## shape == 0 means dynamic — can't advance cur, scan stops.
+  var gaps: seq[(int, int)] = @[]
+  var cur = 1
+  for idx in getIndicesSortedByStride(strides):
+    let gap = if strides[idx] > cur: strides[idx] div cur else: 1
+    if gap > 1:
+      gaps.add (gap, cur)
+    if shapes[idx] == 0:
+      # Dynamic shape — can't advance cur. Emit remainder at current coverage.
+      break
+    cur = strides[idx] * shapes[idx]
+  (gaps, cur)
+
 proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
   ## Multi-mode complement: sort by stride, fold to fill gaps.
   ## All strides must be static Int[N] (compile-time check).
+  let stTyp = st.getTypeInst()
+  let shTyp = sh.getTypeInst()
 
-  # ── Read types from the typed AST nodes ──
-  # `sh` and `st` are flattened shape/stride AST coming from complementImpl,
-  # which received them as typed macro params.  Their type ASTs (getTypeInst)
-  # are tuple types like `(Int[2], Int[4])` — we inspect tuple elements below.
-  let stTyp = st.getTypeInst()  # e.g. `(Int[1], Int[4], Int[8])`
-  let shTyp = sh.getTypeInst()  # e.g. `(Int[2], Int[1], Int[2])`
-
-  # ── Collect (stride, shape) pairs ──
-  # Strides must be Int[N] (CuTe requires static strides for multi-mode).
-  # Shapes may be Int[N] (static) or `int` (dynamic).
-  type Md = tuple[stVal: int,         # stride value (static, Int[N])
-                   shNode: NimNode,   # shape AST node (static Int[N] or runtime int)
-                   shStatic: bool,    # true if shape is Int[N]
-                   shVal: int]        # shape value (0 if dynamic)
-  var modes: seq[Md]
-
+  doAssert stTyp.kind == nnkTupleConstr,
+    "complementMulti: expected tuple type for strides"
   for i in 0 ..< stTyp.len:
-    let stNode = stTyp[i]; let shNode = shTyp[i]
+    let stNode = stTyp[i]
     doAssert stNode.kind == nnkBracketExpr and $stNode[0] == "Int",
-      "complement: multi-mode with dynamic strides not supported"
-    let shSt = shNode.kind == nnkBracketExpr and $shNode[0] == "Int"
-    modes.add (stVal: int(stNode[1].intVal),
-               shNode: shNode,
-               shStatic: shSt,
-               shVal: (if shSt: int(shNode[1].intVal) else: 0))
+      "complement: multi-mode with dynamic strides not supported at index " & $i
 
-  # ── Sort by stride ascending ──
-  # This ensures we process strides in order so gap-detection is correct
-  # (e.g. stride-2 before stride-4).  When strides are equal: static-shape
-  # modes sort before dynamic-shape modes (deterministic ordering).
-  modes.sort do (a, b: Md) -> int:
-    result = cmp(a.stVal, b.stVal)
-    if result == 0:
-      if a.shStatic and b.shStatic: result = cmp(a.shVal, b.shVal)
-      elif a.shStatic: result = -1
-      elif b.shStatic: result = 1
-
-  # ── Scan loop: emit gap modes + final remainder ──
-  # `cur` tracks cumulative coverage = st × sh of processed modes (Nim int).
-  # Gap check `m.stVal > cur` is always CT since strides are Int[N].
-  # Remainder is always `ceil_div(bound, cur)`
-  # `LayoutCT.emit()` resolves
-  # automatically constant folds
+  let strides = toSeqStaticInts(stTyp)
+  let shapes  = toSeqStaticInts(shTyp)
+  let (gaps, cur) = complementGaps(strides, shapes)
   var acc = LayoutCT()
-  var cur = 1
-
-  for idx, m in modes:
-    let gap = if m.stVal > cur: m.stVal div cur else: 1
-    if gap > 1:
-      acc.append(IntCT(gap), IntCT(cur))
-
-    if not m.shStatic:
-      # Dynamic shape — can't advance cur.  Emit remainder at current coverage.
-      break
-
-    cur = m.stVal * m.shVal
-
-  # All modes processed — emit final remainder
+  for (gapVal, curVal) in gaps:
+    acc.append(IntCT(gapVal), IntCT(curVal))
   let rem = newCall(bindSym"ceil_div", boundExpr, IntCT(cur))
   acc.append(rem, IntCT(cur))
   newCall(bindSym"coalesce", acc.emit())
@@ -505,3 +486,147 @@ func logical_divide*[L: Layout](layout: L; tiler: tuple): auto =
         let m = mode(layout, idx)
         build(idx + 1, concat(accSh, (m.shape,)), concat(accSt, (m.stride,)))
   build(0, (), ())
+
+# ═══════════════════════════════════════════════════════════════
+#  right_inverse — quasi-inverse sorted by stride
+# ═══════════════════════════════════════════════════════════════
+
+proc rightInverseChain*(
+    strides, shapes, prefixProd: seq[int]): seq[int] {.compileTime.} =
+  ## Return original indices (in sorted iteration order) of modes
+  ## forming a maximal contiguous chain.
+  ##
+  ## `curr` tracks cumulative size of modes already in the chain.
+  ## A mode joins when its stride == curr; then curr advances by
+  ## stride × shape. Since curr can leapfrog ahead of the next few
+  ## strides, mismatches just skip — don't break.
+  ##
+  ##   sorted idx order:
+  ##     stride:    1      2      4      8
+  ##     shape:     8      4      6      2
+  ##     curr:   1 →  8
+  ##                    2≠8   4≠8    8=8 → 16
+  ##                    skip  skip   ✓ add
+  ##
+  ##   result = [original_idx_of_stride_1, original_idx_of_stride_8]
+  var curr = 1
+  for idx in getIndicesSortedByStride(strides):
+    if strides[idx] == curr:
+      result.add idx
+      if shapes[idx] != 0:
+        curr = strides[idx] * shapes[idx]
+      else:
+        # Dynamic shape — can't advance curr, chain stops.
+        break
+
+macro rightInverseImpl(sh, st: typed): untyped =
+  ## right_inverse on flattened (shape, stride).
+  let stTyp = st.getTypeInst()
+  let shTyp = sh.getTypeInst()
+
+  # Scalar: no sorting needed
+  if shTyp.kind != nnkTupleConstr:
+    let stNode = stTyp
+    if stNode.kind == nnkBracketExpr and $stNode[0] == "Int" and stNode[1].intVal == 1:
+      result = newCall(bindSym"make_layout", sh, st)
+    else:
+      result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
+    return
+
+  # Multi-mode: extract values, compute chain via pure helper
+  let strides = toSeqStaticInts(stTyp)
+  let shapes  = toSeqStaticInts(shTyp)
+  let prefixProd = prefixProduct(shapes)
+  let chain      = rightInverseChain(strides, shapes, prefixProd)
+
+  if chain.len == 0:
+    result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
+    return
+
+  var acc = LayoutCT()
+  for idx in chain:
+    acc.append(
+      newTree(nnkBracketExpr, sh, newLit(idx)),
+      IntCT(prefixProd[idx]))
+  result = newCall(bindSym"coalesce", acc.emit())
+
+func right_inverse*(layout: Layout): auto =
+  ## Quasi-inverse: L(R(i)) == i for all i < size(R).
+  ## Sorts modes by stride, finds max contiguous chain.
+  let c = coalesce(layout)
+  rightInverseImpl(flatten(c.shape), flatten(c.stride))
+
+# ═══════════════════════════════════════════════════════════════
+#  left_inverse — left inverse (injective layouts only)
+# ═══════════════════════════════════════════════════════════════
+
+proc leftInverseModes*(
+    strides, shapes, prefixProd: seq[int]): (seq[int], seq[int], int) {.compileTime.} =
+  ## Return (result_shapes, result_prefix_strides, last_mode_original_idx).
+  ## Builds left inverse from stride ratios:
+  ##   result_shape[i] = stride / size_so_far
+  ##   result_prefix[i] = prefixProd[idx]
+  var resultShapes, resultPrefix: seq[int]
+  var sizeSoFar = 1
+  var sortedIdx = getIndicesSortedByStride(strides)
+  for idx in sortedIdx:
+    if strides[idx] == 0: continue
+    doAssert strides[idx] mod sizeSoFar == 0,
+      "left_inverse: stride " & $strides[idx] & " not divisible by " & $sizeSoFar
+    resultShapes.add strides[idx] div sizeSoFar
+    resultPrefix.add prefixProd[idx]
+    sizeSoFar = strides[idx]
+  (resultShapes, resultPrefix, sortedIdx[^1])
+
+macro leftInverseImpl(sh, st: typed): untyped =
+  ## left_inverse on flattened (shape, stride). All strides must be static.
+  let stTyp = st.getTypeInst()
+  let shTyp = sh.getTypeInst()
+
+  if shTyp.kind != nnkTupleConstr:
+    let stNode = stTyp
+    if stNode.kind == nnkBracketExpr and $stNode[0] == "Int" and stNode[1].intVal == 1:
+      result = newCall(bindSym"make_layout", sh, st)
+    elif stNode.kind == nnkBracketExpr and $stNode[0] == "Int" and stNode[1].intVal == 0:
+      result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
+    else:
+      # Non-unit, non-zero stride: build left_inverse from stride ratios
+      let strideVal = stNode[1].intVal
+      var acc = LayoutCT()
+      acc.append(IntCT(strideVal), IntCT(0))
+      acc.append(sh, IntCT(1))
+      result = newCall(bindSym"coalesce", acc.emit())
+    return
+
+  let strides = toSeqStaticInts(stTyp)
+  let shapes  = toSeqStaticInts(shTyp)
+  let prefixProd = prefixProduct(shapes)
+  let (rShapes, rPrefix, lastIdx) = leftInverseModes(strides, shapes, prefixProd)
+
+  if rShapes.len == 0:
+    result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
+    return
+
+  var acc = LayoutCT()
+  acc.append(IntCT(rShapes[0]), IntCT(0))
+  for i in 1 ..< rShapes.len:
+    acc.append(IntCT(rShapes[i]), IntCT(rPrefix[i - 1]))
+  acc.append(newTree(nnkBracketExpr, sh, newLit(lastIdx)), IntCT(rPrefix[^1]))
+  result = newCall(bindSym"coalesce", acc.emit())
+
+func left_inverse*(layout: Layout): auto =
+  ## Left inverse: Li(L(i)) == i for injective layouts.
+  ## Requires all-static strides. Builds from stride ratios.
+  let c = coalesce(layout)
+  leftInverseImpl(flatten(c.shape), flatten(c.stride))
+
+
+# ═══════════════════════════════════════════════════════════════
+#  logical_product — reproduce a block over a tiler
+# ═══════════════════════════════════════════════════════════════
+
+func logical_product*[A, B: Layout](a: A; tiler: B): auto =
+  ## Reproduce block over tiler: rank-2 result ((BLOCK), (TILE)).
+  ## Inverse of logical_divide.
+  let rest = compose(complement(a, size(a) * cosize(tiler)), tiler)
+  make_layout((a.shape, rest.shape), (a.stride, rest.stride))

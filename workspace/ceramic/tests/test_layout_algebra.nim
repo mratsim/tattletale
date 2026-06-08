@@ -45,7 +45,22 @@ proc runComposeSwizzleTests*: void
 proc runComposeEStrideTests*: void
 proc runComposeNegStrideTests*: void
 proc runDivideTests*: void
-
+proc runRightInvSimpleTests*: void
+proc runRightInvExactValueTests*: void
+proc runRightInvDynamicTests*: void
+proc runRightInvTests*: void
+proc runLeftInvSimpleTests*: void
+proc runLeftInvExactValueTests*: void
+proc runLeftInvTests*: void
+proc runLogicalProductTrivialTests*: void
+proc runLogicalProductMultiTests*: void
+proc runLogicalProductExactValueTests*: void
+proc runLogicalProductTests*: void
+proc runBlockedProductTests*: void
+proc runRakedProductTests*: void
+proc runZippedProductTests*: void
+proc runTiledProductTests*: void
+proc runFlatProductTests*: void
 proc runTests* =
   echo "\n── Coalesce [CUTE-C]: 20 cases ──"
   runCoalesceTests()
@@ -67,6 +82,18 @@ proc runTests* =
   runComposeNegStrideTests()
   echo "\n── logical_divide [CUTE-LD] ──"
   runDivideTests()
+  echo "\n── right_inverse [CUTE-IR] + [PY-E Table 5] ──"
+  runRightInvTests()
+  echo "\n── left_inverse [CUTE-IL] + [PY-E Table 6] ──"
+  runLeftInvTests()
+  echo "\n── logical_product [CUTE-LP] + [MOYE] ──"
+  runLogicalProductTests()
+  echo "\n── Product variants [MOYE] ──"
+  runBlockedProductTests()
+  runRakedProductTests()
+  runZippedProductTests()
+  runTiledProductTests()
+  runFlatProductTests()
   echo "\nALL TESTS PASSED"
 
 when isMainModule:
@@ -754,3 +781,299 @@ proc runDivideTests*: void =
   echo "  Python port: test_logical_divide_hierarchical_stride:"
   checkDivMap(make_layout(((2, 4), 8), ((1, 2), 8)), (4, 4))
   echo "    1/1"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  right_inverse, left_inverse, logical_product — helpers
+# ═══════════════════════════════════════════════════════════════
+
+proc chkRightInv*(layout: Layout) =
+  ## Check right_inverse invariant: L(R(i)) == i for all i < size(R)
+  let R = right_inverse(layout)
+  for i in 0 ..< size(R):
+    doAssert layout[R[i]] == i,
+      "right_inverse(" & $layout & "): L(R(" & $i & "))=" & $layout[R[i]] & " != " & $i
+
+proc chkLeftInv*(layout: Layout) =
+  ## Check left_inverse invariant (matches CuTe C++):
+  ##   L(Li(L(i))) == L(i) for all i < size(L)
+  let Li = left_inverse(layout)
+  for i in 0 ..< size(layout):
+    doAssert layout[Li[layout[i]]] == layout[i],
+      "left_inverse(" & $layout & "): L(Li(L(" & $i & ")))=" & $layout[Li[layout[i]]] & " != " & $layout[i]
+
+proc chkLogicalProduct*[A, B: Layout](blk: A; tiler: B) =
+  ## Check logical_product invariants:
+  ##   rank(result) == 2
+  ##   block == result.mode(0)
+  ##   compatible(tiler, result.mode(1))
+  let R = logical_product(blk, tiler)
+  doAssert rank(R) == 2,
+    "logical_product: rank=" & $rank(R) & " != 2"
+  let mode0 = mode(R, 0)
+  let mode1 = mode(R, 1)
+  doAssert blk === (mode0.shape, mode0.stride),
+    "logical_product: block mismatch, expected " & $blk & " got " & $mode0
+  doAssert compatible(tiler.shape, mode1.shape),
+    "logical_product: compatible(tiler, mode1) failed, tiler=" & $tiler & " mode1=" & $mode1
+
+# ═══════════════════════════════════════════════════════════════
+#  right_inverse [CUTE-IR] + [PY-E Table 5]
+# ═══════════════════════════════════════════════════════════════
+
+proc runRightInvSimpleTests* =
+  ## [CUTE-IR] Simple tests (all-static)
+  chkRightInv(make_layout(1, 0))
+  chkRightInv(make_layout(1, 1))
+
+  chkRightInv(make_layout((1, 1), (0, 0)))
+  chkRightInv(make_layout((3, 7), (0, 0)))
+  chkRightInv(make_layout((1,), (1,)))
+
+  chkRightInv(make_layout(4, 0))
+  chkRightInv(make_layout(4, 1))
+  chkRightInv(make_layout(4, 2))
+  chkRightInv(make_layout((2, 4), (0, 2)))
+  chkRightInv(make_layout((8, 4)))
+  chkRightInv(make_layout((8, 4), (4, 1)))
+
+  chkRightInv(make_layout((2, 4, 6)))
+  chkRightInv(make_layout((2, 4, 6), (4, 1, 8)))
+  chkRightInv(make_layout((2, 4, 4, 6), (4, 1, 0, 8)))
+
+  chkRightInv(make_layout((4, 2), (1, 16)))
+  chkRightInv(make_layout((4, 2), (1, 5)))
+
+  chkRightInv(make_layout((128, 128), (65536, 1)))
+  chkRightInv(make_layout((128, 160), (65536, 1)))
+  chkRightInv(make_layout((128, 3, 160), (65536, 512, 1)))
+  chkRightInv(make_layout((128, 64), (131072, 2)))
+  chkRightInv(make_layout((32, 4, 4, 4), (262144, 4, 8388608, 1)))
+  chkRightInv(make_layout((2, 2, 2), (4, 0, 1)))
+  echo "  Simple: 22 cases OK"
+
+proc runRightInvExactValueTests* =
+  ## [PY-E Table 5] Exact expected values
+  block:
+    # Col-major: right_inverse((4,8):(1,4)) = 32:1
+    let R = right_inverse(make_layout((4, 8), (1, 4)))
+    doAssert R === (32, 1), "expected 32:1 got " & $R
+  block:
+    # Row-major: right_inverse((4,8):(8,1)) = (8,4):(4,1)
+    let R = right_inverse(make_layout((4, 8), (8, 1)))
+    doAssert R === ((8, 4), (4, 1)), "expected (8,4):(4,1) got " & $R
+  block:
+    # Padded: right_inverse((4,8):(1,5)) = 4:1
+    let R = right_inverse(make_layout((4, 8), (1, 5)))
+    doAssert R === (4, 1), "expected 4:1 got " & $R
+  block:
+    # Rank-3: right_inverse((3,7,5):(5,15,1)) = (5,21):(21,1)
+    let R = right_inverse(make_layout((3, 7, 5), (5, 15, 1)))
+    doAssert R === ((5, 21), (21, 1)), "expected (5,21):(21,1) got " & $R
+  block:
+    # Nested col-major: right_inverse((4,(4,2)):(4,(1,16))) = (4,4,2):(4,1,16)
+    let R = right_inverse(make_layout((4, (4, 2)), (4, (1, 16))))
+    doAssert R === ((4, 4, 2), (4, 1, 16)), "expected (4,4,2):(4,1,16) got " & $R
+  block:
+    # Nested mixed: right_inverse(((2,2),(4,2)):((1,8),(2,16))) = (2,4,2,2):(1,4,2,16)
+    let R = right_inverse(make_layout(((2, 2), (4, 2)), ((1, 8), (2, 16))))
+    doAssert R === ((2, 4, 2, 2), (1, 4, 2, 16)), "expected (2,4,2,2):(1,4,2,16) got " & $R
+  block:
+    # Broadcast even stride: right_inverse(((2,2),(2,4)):((0,2),(0,4))) = 1:0
+    let R = right_inverse(make_layout(((2, 2), (2, 4)), ((0, 2), (0, 4))))
+    doAssert R === (1, 0), "expected 1:0 got " & $R
+  block:
+    # Broadcast unit stride: right_inverse(((2,2),(2,4)):((0,1),(0,2))) = (2,4):(2,8)
+    let R = right_inverse(make_layout(((2, 2), (2, 4)), ((0, 1), (0, 2))))
+    doAssert R === ((2, 4), (2, 8)), "expected (2,4):(2,8) got " & $R
+  block:
+    # Non-adjacent chain: right_inverse((8,4,6,2):(1,2,4,8))
+    # After coalesce: (8,24,2):(1,2,8)
+    # strides=[1,2,8], shapes=[8,24,2], preprod=[1,8,192,384]
+    # curr: 1→8, 2≠8, 8=8→16  →  chain indices [0, 2]
+    # result: (8,2):(1,192)
+    let R = right_inverse(make_layout((8, 4, 6, 2), (1, 2, 4, 8)))
+    doAssert R === ((8, 2), (1, 192)), "got " & $R
+  echo "  Exact-value [PY-E Table 5]: 10 cases OK"
+
+proc runRightInvDynamicTests* =
+  ## [CUTE-IR] Dynamic shapes/strides
+  ## Note: shapes must be static for compile-time preprod. Only strides may be dynamic.
+  ## Use `let` indirection so ints stay as runtime `int` (not Int[N]).
+  block:
+    # Static shapes (4,2), mixed strides: mode0=Int[1], mode1=dynamic 4
+    let d4 = 4
+    let layout = make_layout((4, 2), (Int[1](), d4))
+    chkRightInv(layout)
+  block:
+    # Static shapes (2,4), mixed strides: mode0=dynamic 4, mode1=Int[1]
+    let d4 = 4
+    let layout = make_layout((2, 4), (d4, Int[1]()))
+    chkRightInv(layout)
+  echo "  Dynamic: 2 cases OK"
+
+proc runRightInvTests* =
+  echo "    Simple:"
+  runRightInvSimpleTests()
+  echo "    Exact-value:"
+  runRightInvExactValueTests()
+  echo "    Dynamic:"
+  runRightInvDynamicTests()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  left_inverse [CUTE-IL] + [PY-E Table 6]
+# ═══════════════════════════════════════════════════════════════
+
+proc runLeftInvSimpleTests* =
+  ## [CUTE-IL] Simple tests (all-static)
+  chkLeftInv(make_layout(1, 0))
+  chkLeftInv(make_layout(1, 1))
+
+  chkLeftInv(make_layout((1, 1), (0, 0)))
+  chkLeftInv(make_layout((3, 7), (0, 0)))
+
+  chkLeftInv(make_layout(4, 0))
+  chkLeftInv(make_layout(4, 1))
+  chkLeftInv(make_layout(4, 2))
+  chkLeftInv(make_layout((2, 4), (0, 2)))
+  chkLeftInv(make_layout((8, 4)))
+  chkLeftInv(make_layout((8, 4), (4, 1)))
+
+  chkLeftInv(make_layout((2, 4, 6)))
+  chkLeftInv(make_layout((2, 4, 6), (4, 1, 8)))
+  chkLeftInv(make_layout((2, 4, 4, 6), (4, 1, 0, 8)))
+
+  chkLeftInv(make_layout((4, 2), (1, 16)))
+  chkLeftInv(make_layout((4, 2), (1, 5)))
+
+  chkLeftInv(make_layout((128, 128), (65536, 1)))
+  chkLeftInv(make_layout((128, 160), (65536, 1)))
+  chkLeftInv(make_layout((128, 3, 160), (65536, 512, 1)))
+  chkLeftInv(make_layout((128, 64), (131072, 2)))
+  chkLeftInv(make_layout((32, 4, 4, 4), (262144, 4, 8388608, 1)))
+  chkLeftInv(make_layout((2, 2, 2), (4, 0, 1)))
+  echo "  Simple: 21 cases OK"
+
+proc runLeftInvExactValueTests* =
+  ## [PY-E Table 6] Exact expected values
+  block:
+    # Col-major: left_inverse((4,8):(1,4)) = 32:1
+    let Li = left_inverse(make_layout((4, 8), (1, 4)))
+    doAssert Li === (32, 1), "expected 32:1 got " & $Li
+  block:
+    # Row-major: left_inverse((4,8):(8,1)) = (8,4):(4,1)
+    let Li = left_inverse(make_layout((4, 8), (8, 1)))
+    doAssert Li === ((8, 4), (4, 1)), "expected (8,4):(4,1) got " & $Li
+  block:
+    # Padded: left_inverse((4,8):(1,5)) = (5,8):(1,4)
+    let Li = left_inverse(make_layout((4, 8), (1, 5)))
+    doAssert Li === ((5, 8), (1, 4)), "expected (5,8):(1,4) got " & $Li
+  block:
+    # Rank-3: left_inverse((3,7,5):(5,15,1)) = (5,21):(21,1)
+    let Li = left_inverse(make_layout((3, 7, 5), (5, 15, 1)))
+    doAssert Li === ((5, 21), (21, 1)), "expected (5,21):(21,1) got " & $Li
+  block:
+    # Nested col-major: left_inverse((4,(4,2)):(4,(1,16))) = (4,4,2):(4,1,16)
+    let Li = left_inverse(make_layout((4, (4, 2)), (4, (1, 16))))
+    doAssert Li === ((4, 4, 2), (4, 1, 16)), "expected (4,4,2):(4,1,16) got " & $Li
+  block:
+    # Nested mixed: left_inverse(((2,2),(4,2)):((1,8),(2,16))) = (2,4,2,2):(1,4,2,16)
+    let Li = left_inverse(make_layout(((2, 2), (4, 2)), ((1, 8), (2, 16))))
+    doAssert Li === ((2, 4, 2, 2), (1, 4, 2, 16)), "expected (2,4,2,2):(1,4,2,16) got " & $Li
+  block:
+    # Broadcast even stride: left_inverse(((2,2),(2,4)):((0,2),(0,4))) = (2,2,4):(0,2,8)
+    let Li = left_inverse(make_layout(((2, 2), (2, 4)), ((0, 2), (0, 4))))
+    doAssert Li === ((2, 2, 4), (0, 2, 8)), "expected (2,2,4):(0,2,8) got " & $Li
+  block:
+    # Broadcast unit stride: left_inverse(((2,2),(2,4)):((0,1),(0,2))) = (2,4):(2,8)
+    let Li = left_inverse(make_layout(((2, 2), (2, 4)), ((0, 1), (0, 2))))
+    doAssert Li === ((2, 4), (2, 8)), "expected (2,4):(2,8) got " & $Li
+  echo "  Exact-value [PY-E Table 6]: 9 cases OK"
+
+
+proc runLeftInvTests* =
+  echo "    Simple:"
+  runLeftInvSimpleTests()
+  echo "    Exact-value:"
+  runLeftInvExactValueTests()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  logical_product [CUTE-LP] + [MOYE]
+# ═══════════════════════════════════════════════════════════════
+
+proc runLogicalProductTrivialTests* =
+  ## [CUTE-LP] Trivial layouts
+  chkLogicalProduct(make_layout(1, 0), make_layout(1, 0))
+  chkLogicalProduct(make_layout(1, 1), make_layout(1, 0))
+  chkLogicalProduct(make_layout(1, 0), make_layout(1, 1))
+  chkLogicalProduct(make_layout(1, 1), make_layout(1, 1))
+  chkLogicalProduct(make_layout(3, 1), make_layout(4, 0))
+  chkLogicalProduct(make_layout(3, 0), make_layout(4, 1))
+  chkLogicalProduct(make_layout(3, 0), make_layout(4, 0))
+  chkLogicalProduct(make_layout(3, 2), make_layout(4, 1))
+  echo "  Trivial: 8 cases OK"
+
+proc runLogicalProductMultiTests* =
+  ## [CUTE-LP] Multi-mode layouts
+  chkLogicalProduct(make_layout((3,)), make_layout((2, 4)))
+  chkLogicalProduct(make_layout((8, (2, 2)), (1, (2, 4))), make_layout(4, 2))
+  chkLogicalProduct(make_layout((2, 2)), make_layout((3, 3), (3, 1)))
+  chkLogicalProduct(make_layout(3, 32), make_layout((8, 8)))
+  chkLogicalProduct(make_layout(3, 32), make_layout((8, 8), (8, 1)))
+  chkLogicalProduct(make_layout(((4, 2),), ((1, 16),)), make_layout((4, 4)))
+  chkLogicalProduct(make_layout(((4, 2),), ((1, 16),)), make_layout((4, 2), (2, 1)))
+  chkLogicalProduct(
+    make_layout(((2, 2), (2, 2)), ((1, 4), (8, 32))),
+    make_layout((2, 2), (1, 2)))
+  chkLogicalProduct(
+    make_layout(((2, 2), (2, 2)), ((1, 4), (8, 32))),
+    make_layout((2, 2), (2, 1)))
+  chkLogicalProduct(make_layout(((4, 6),), ((1, 6),)), make_layout(3, 1))
+  echo "  Multi-mode: 10 cases OK"
+
+proc runLogicalProductExactValueTests* =
+  ## [MOYE] Expected exact values
+  block:
+    # tile=(2,2):(1,2), matrix=(3,4):(4,1)
+    let R = logical_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
+    doAssert rank(R) == 2
+    let m0 = mode(R, 0); let m1 = mode(R, 1)
+    doAssert m0 === ((2, 2), (1, 2)), "mode0: " & $m0
+    doAssert m1 === ((3, 4), (16, 4)), "mode1: " & $m1
+  block:
+    # 1:0 × (2,2) — trivial
+    let R = logical_product(make_layout(1, 0), make_layout((2, 2)))
+    doAssert rank(R) == 2
+  echo "  Exact-value: 2 cases OK"
+
+proc runLogicalProductTests* =
+  echo "    Trivial:"
+  runLogicalProductTrivialTests()
+  echo "    Multi-mode:"
+  runLogicalProductMultiTests()
+  echo "    Exact-value:"
+  runLogicalProductExactValueTests()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Product variants  [MOYE]
+# ═══════════════════════════════════════════════════════════════
+#  These require append<R>(layout) + zip(layout_a, layout_b) + tile_unzip.
+#  Will be activated once the helpers are implemented.
+
+proc runBlockedProductTests* =
+  echo "    (requires append + zip — implement later)"
+
+proc runRakedProductTests* =
+  echo "    (requires append + zip — implement later)"
+
+proc runZippedProductTests* =
+  echo "    (requires tile_unzip — implement later)"
+
+proc runTiledProductTests* =
+  echo "    (requires tile_unzip + unpack — implement later)"
+
+proc runFlatProductTests* =
+  echo "    (requires tile_unzip + unpack — implement later)"

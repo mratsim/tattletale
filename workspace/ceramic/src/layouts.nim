@@ -432,3 +432,19 @@ func emit*(ct: LayoutCT): NimNode {.compileTime.} =
     result = newCall(bindSym"make_layout", outSh, outSt)
   else:
     result = newCall(bindSym"make_layout", outSh, outSt)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  getIndicesSortedByStride — sort permutation by stride
+# ═══════════════════════════════════════════════════════════════
+
+proc getIndicesSortedByStride*(strides: seq[int]): seq[int] {.compileTime.} =
+  ## Return indices sorted by stride ascending.
+  ## Data stays in original arrays — just iterate this permutation.
+  result = newSeq[int](strides.len)
+  for i in 0 ..< result.len:
+    result[i] = i
+  for i in 0 ..< result.len:
+    for j in i + 1 ..< result.len:
+      if strides[result[i]] > strides[result[j]]:
+        swap result[i], result[j]

@@ -708,3 +708,23 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
   if t.kind == nnkBracketExpr and $t[0] == "Int": int(t[1].intVal)
   elif t.kind == nnkIntLit: int(t.intVal)
   else: error("getStaticInt on non-static: " & t.repr)
+
+func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
+  ## Extract Int[N] values from a tuple type AST node.
+  ## Returns 0 for non-static (dynamic int) elements.
+  for i in 0 ..< t.len:
+    let node = t[i]
+    if node.kind == nnkBracketExpr and $node[0] == "Int":
+      result.add int(node[1].intVal)
+    else:
+      result.add 0
+
+func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
+  ## Prefix product of a flat seq (0 entries treated as 1 for scan,
+  ## but produce 0 in output to mark unknown positions).
+  result = @[1]
+  for i in 0 ..< vals.len:
+    if vals[i] != 0:
+      result.add result[^1] * vals[i]
+    else:
+      result.add 0
