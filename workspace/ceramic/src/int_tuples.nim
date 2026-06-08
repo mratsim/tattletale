@@ -29,9 +29,9 @@ func `$`*[V: static int](x: Int[V]): string = $V
 #  isConst — compile-time detection (runtime via proc dispatch)
 # ═══════════════════════════════════════════════════════════════
 
-proc isConst*(a: static int): bool = true
+proc isConst*(a: static int): static bool = true
 proc isConst*(a: int): bool = false
-proc isConst*[V: static int](a: Int[V]): bool = true
+proc isConst*[V: static int](a: Int[V]): static bool = true
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] == int — global overloads for tuple comparison
@@ -39,19 +39,26 @@ proc isConst*[V: static int](a: Int[V]): bool = true
 
 func `==`*[V: static int](a: Int[V]; b: int): bool = V == b
 func `==`*[V: static int](a: int; b: Int[V]): bool = a == V
-func `==`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V == U
+func `==`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V == U
 func `<=`*[V: static int](a: Int[V]; b: int): bool = V <= b
 func `<=`*[V: static int](a: int; b: Int[V]): bool = a <= V
 func `>=`*[V: static int](a: Int[V]; b: int): bool = V >= b
+func `>=`*[V: static int](a: int; b: Int[V]): bool = a >= V
+func `<=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V <= U
+func `>=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V >= U
 
 # ═══════════════════════════════════════════════════════════════
 #  `===` — deep element-wise tuple comparison (handles Int[N] vs int)
 # ═══════════════════════════════════════════════════════════════
 
-func `===`*(a: int; b: int): bool = a == b
+func `===`*(a, b: int): bool = a == b
+func `===`*(a, b: static int): static bool = a == b
+func `===`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V == U
+
 func `===`*[V: static int](a: Int[V]; b: int): bool = V == b
 func `===`*[V: static int](a: int; b: Int[V]): bool = V == b
-func `===`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V == U
+func `===`*[V: static int](a: Int[V]; b: static int): static bool = V == b
+func `===`*[V: static int](a: static int; b: Int[V]): static bool = V == b
 
 func `===`*[T: tuple, U: tuple](a: T; b: U): bool =
   ## Deep element-wise tuple comparison.
@@ -77,10 +84,6 @@ func `===`*[U: tuple](a: int; b: U): bool =
     a === b[0]
   else:
     false
-
-func `>=`*[V: static int](a: int; b: Int[V]): bool = a >= V
-func `<=`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V <= U
-func `>=`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V >= U
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] arithmetic
