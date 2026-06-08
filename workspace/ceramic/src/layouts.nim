@@ -445,7 +445,7 @@ func emit*(ct: LayoutCT): NimNode {.compileTime.} =
 
 
 # ═══════════════════════════════════════════════════════════════
-#  getIndicesSortedByStride — sort permutation by stride
+#  getIndicesSortedByStride — sor t permutation by stride
 # ═══════════════════════════════════════════════════════════════
 
 proc getIndicesSortedByStride*(strides: seq[int]): seq[int] {.compileTime.} =
@@ -583,10 +583,10 @@ macro mapModesWith*(arg: typed; body: untyped): untyped =
   var ct = LayoutCT()
   for i in 0 ..< R:
     let bodyExpr = subst(body, i, arg)
-    let dName = ident("d" & $i)
-    result.add newLetStmt(dName, bodyExpr)
-    ct.append(newTree(nnkDotExpr, dName, ident"shape"),
-               newTree(nnkDotExpr, dName, ident"stride"))
+    let resName = ident("r" & $i)
+    result.add newLetStmt(resName, bodyExpr)
+    ct.append(newTree(nnkDotExpr, resName, ident"shape"),
+               newTree(nnkDotExpr, resName, ident"stride"))
   result.add ct.emit()
 
 macro zipModesWith*(a, b: typed; body: untyped): untyped =
@@ -622,10 +622,10 @@ macro zipModesWith*(a, b: typed; body: untyped): untyped =
   for i in 0 ..< rMax:
     if i < rMin:
       let bodyExpr = subst(body, i, a, b)
-      let dName = ident("d" & $i)
-      result.add newLetStmt(dName, bodyExpr)
-      ct.append(newTree(nnkDotExpr, dName, ident"shape"),
-                 newTree(nnkDotExpr, dName, ident"stride"))
+      let resName = ident("r" & $i)
+      result.add newLetStmt(resName, bodyExpr)
+      ct.append(newTree(nnkDotExpr, resName, ident"shape"),
+                 newTree(nnkDotExpr, resName, ident"stride"))
     elif i < RA:
       let mName = ident("m" & $i)
       result.add newLetStmt(mName, newCall(bindSym"mode", a, newLit(i)))
