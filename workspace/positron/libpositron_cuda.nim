@@ -11,7 +11,7 @@ import std/strutils
 import workspace/libtorch
 
 from ./src/kernels/portable/hadamard_transforms import INV_SQRT_128
-from src/abis/nvidia_paths import CudaLibFlag
+from workspace/crucible/src/abis/nvidia_paths import CudaLibFlag
 
 # This file wraps the static lib built by make_positron_cuda
 
