@@ -595,14 +595,14 @@ macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
 
 
 # ═══════════════════════════════════════════════════════════════
-#  zip — interleave corresponding modes of two layouts
+#  zipModes — interleave corresponding modes of two layouts
 # ═══════════════════════════════════════════════════════════════
 
-macro zip*[A, B: Layout](a: A, b: B): untyped =
-  ## Zip two layouts: interleave corresponding modes pairwise.
+macro zipModes*[A, B: Layout](a: A, b: B): untyped =
+  ## Zip modes of two layouts: interleave corresponding modes pairwise.
   ##
   ##   Given layouts A with modes (a0, a1, ..., aN) and
-  ##   B with modes (b0, b1, ..., bN), zip produces a layout
+  ##   B with modes (b0, b1, ..., bN), zipModes produces a layout
   ##   with modes ((a0,b0), (a1,b1), ..., (aN,bN)).
   ##
   ##   For rank-1 inputs: (a:b, x:y) → ((a,x):(b,y))
@@ -632,7 +632,7 @@ macro zip*[A, B: Layout](a: A, b: B): untyped =
         let subB = typB[i].getTypeInst()
         result.add zipElems(ai, bi, subA, subB)
     else:
-      error "zip: mismatched rank"
+      error "zipModes: mismatched rank"
 
   let zShape = zipElems(aShape, bShape, aShT, bShT)
   let zStride = zipElems(aStride, bStride, aStT, bStT)
@@ -746,14 +746,29 @@ macro mapModesWith*[L: Layout](arg: L; body: untyped): untyped =
   result.add ct.emit()
 
 macro zipModesWith*[A: Layout, B: Layout](a: A; b: B; body: untyped): untyped =
-  ## Zip modes of `a` and `b` pairwise via body, append leftovers.
-  ## Within body, `it_a` / `it_b` are the current modes.
+  ## Zip modes of two layouts pairwise via body, appending leftovers from the longer one.
   ##
-  ## Example:
+  ## Within body, `it_a` is the current mode of `a` and `it_b` the current mode of `b`.
+  ## Body must return a Layout.
+  ##
+  ## For the first `min(rank(a), rank(b))` modes, both `it_a` and `it_b` are
+  ## available — the body combines them. Any remaining modes from the longer
+  ## layout are appended unchanged.
+  ##
+  ## Example (a shorter, b longer):
+  ##   let a = make_layout((2,), (1,))           # rank-1
+  ##   let b = make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))  # rank-2
   ##   let r = zipModesWith(a, b):
-  ##     make_layout(it_a.shape, it_b.stride)
-  ##   # zips first min(rank(a), rank(b)) modes pairwise,
-  ##   # appends any leftover modes unchanged.
+  ##     make_layout(it_a.shape, it_b.stride)   # shape from a, stride from b's 1st mode
+  ##   # mode 0 = zip result:  (2):(1, 4)       — shape from a (2), stride from b's 1st (1, 4)
+  ##   # mode 1 = b's 2nd mode leftover:  (2, 8):(2, 8)
+  ##
+  ## Example (same rank):
+  ##   let a = make_layout((2, 4), (1, 2))
+  ##   let b = make_layout((3, 5), (10, 20))
+  ##   let r = zipModesWith(a, b):
+  ##     make_layout(it_a.shape, it_b.stride)   # take shape from a, stride from b
+  ##   # r == (2, 4):(10, 20)
   let ta = getTypeInst(a)
   let tb = getTypeInst(b)
   let shA = ta[1]

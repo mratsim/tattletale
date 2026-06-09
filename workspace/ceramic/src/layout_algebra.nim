@@ -701,7 +701,7 @@ template flat_product*(blk: Layout; tiler: auto): auto =
 #  blocked_product(block, tiler):
 #    1. Append both to rank R = max(rank(block), rank(tiler))
 #    2. result = logical_product(padded_block, padded_layout)
-#    3. return zip(result[0], result[1])
+#    3. return zipModes(result[0], result[1])
 
 func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
   ## Repeat block over tiler grid, each block contiguous.
@@ -710,13 +710,13 @@ func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
   let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
   let m0 = mode(lp, 0)
   let m1 = mode(lp, 1)
-  zip(m0, m1)
+  zipModes(m0, m1)
 
 # ═══════════════════════════════════════════════════════════════
 #
 #  raked_product(block, tiler):
 #    1. Same logical_product as blocked_product
-#    2. return zip(result[1], result[0])  (swapped order)
+#    2. return zipModes(result[1], result[0])  (swapped order)
 
 func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
   ## Repeat block over tiler grid, blocks interleaved.
@@ -725,7 +725,7 @@ func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
   let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
   let m0 = mode(lp, 0)
   let m1 = mode(lp, 1)
-  zip(m1, m0)
+  zipModes(m1, m0)
 
 # ═══════════════════════════════════════════════════════════════
 #  tile_to_shape — repeat block layout to fill target shape

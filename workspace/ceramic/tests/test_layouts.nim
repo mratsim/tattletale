@@ -748,7 +748,7 @@ proc runNCHWTests* =
     doAssert not isConst(l.stride[3])
   echo "  NCHW mixed static/dynamic: 1 case OK"
 # ═══════════════════════════════════════════════════════════════
-#  zip — interleave corresponding modes pairwise
+#  zipModes — interleave corresponding modes pairwise
 # ═══════════════════════════════════════════════════════════════
 
 proc runZipTests* =
@@ -756,7 +756,7 @@ proc runZipTests* =
     # Interleave two rank-2 layouts
     let a = make_layout((2, 2), (1, 2))
     let b = make_layout((3, 4), (4, 1))
-    let R = zip(a, b)
+    let R = zipModes(a, b)
     doAssert rank(R) === 2
     let m0 = mode(R, 0); let m1 = mode(R, 1)
     doAssert m0 === ((2, 3), (1, 4)), "zip mode0: " & $m0
@@ -765,12 +765,12 @@ proc runZipTests* =
     # Single-element interleave (rank-1 with rank-1)
     let a = make_layout(4, 1)
     let b = make_layout(3, 1)
-    let R = zip(a, b)
+    let R = zipModes(a, b)
     doAssert rank(R) === 2
     let m0 = mode(R, 0); let m1 = mode(R, 1)
     doAssert m0 === (4, 1), "zip m0: " & $m0
     doAssert m1 === (3, 1), "zip m1: " & $m1
-  echo "  zip: 2 cases OK"
+  echo "  zipModes: 2 cases OK"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -869,7 +869,7 @@ proc runTests* =
   runColMajorStridesTests()
   echo "--- NCHW ---"
   runNCHWTests()
-  echo "--- zip ---"
+  echo "--- zipModes ---"
   echo "--- mapModesWith/zipModesWith ---"
   block:
     # map: double each mode's stride
