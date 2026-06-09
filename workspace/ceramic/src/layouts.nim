@@ -532,6 +532,38 @@ macro padRight*(layout: typed; rank: static int): untyped =
     ct.stride.add IntCT(0)
   result = ct.emit()
 
+#  padLeft — extend layout rank by prepending identity modes
+# ═══════════════════════════════════════════════════════════════
+##
+##  CuTe: prepend<R>(layout) pads to rank R with (1, 0) modes.
+##  Used by gemm.hpp to lift 2D operands to 3D.
+##  Pads on the LEFT (prepends identity modes at the front).
+
+macro padLeft*(layout: typed; rank: static int): untyped =
+  ## Extend layout to target rank by prepending identity modes (1, 0).
+  ## Identity modes are prepended on the left.
+  ## Zero-cost if layout is at least the target rank.
+  let lTyp = layout.getTypeInst()
+  let shTyp = lTyp[1]
+  let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
+
+  if curRank >= rank:
+    result = layout
+    return
+
+  var ct = LayoutCT()
+  for i in 0 ..< (rank - curRank):
+    ct.shape.add IntCT(1)
+    ct.stride.add IntCT(0)
+  if shTyp.kind == nnkTupleConstr:
+    for i in 0 ..< shTyp.len:
+      ct.shape.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i)
+      ct.stride.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i)
+  else:
+    ct.shape.add nnkDotExpr.newTree(layout, ident"shape")
+    ct.stride.add nnkDotExpr.newTree(layout, ident"stride")
+  result = ct.emit()
+
 # ═══════════════════════════════════════════════════════════════
 #  groupModes — wrap modes [B, E) into a nested sub-Layout
 # ═══════════════════════════════════════════════════════════════

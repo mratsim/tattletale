@@ -915,5 +915,45 @@ proc runTests* =
   #   doAssert rank(b) === 2
   echo "    groupModes: 8 checks OK"
 
+  echo "--- padRight/padLeft ---"
+  block:
+    ## padRight: append identity modes
+    let a = make_layout((3, 4))
+    let b = padRight(a, 3)
+    doAssert b.shape === (3, 4, 1)
+    doAssert b.stride === (1, 3, 0)
+    doAssert rank(b) === 3
+  block:
+    ## padLeft: prepend identity modes
+    let a = make_layout((3, 4))
+    let b = padLeft(a, 3)
+    doAssert b.shape === (1, 3, 4)
+    doAssert b.stride === (0, 1, 3)
+    doAssert rank(b) === 3
+  block:
+    ## padRight no-op (already at target rank)
+    let a = make_layout((3, 4))
+    let b = padRight(a, 2)
+    doAssert b.shape === (3, 4)
+    doAssert b.stride === (1, 3)
+  block:
+    ## padLeft no-op (already at target rank)
+    let a = make_layout((3, 4))
+    let b = padLeft(a, 2)
+    doAssert b.shape === (3, 4)
+    doAssert b.stride === (1, 3)
+  block:
+    ## padRight on scalar layout
+    let a = make_layout(5)
+    let b = padRight(a, 3)
+    doAssert b.shape === (5, 1, 1)
+    doAssert b.stride === (1, 0, 0)
+  block:
+    ## padLeft on scalar layout
+    let a = make_layout(5)
+    let b = padLeft(a, 3)
+    doAssert b.shape === (1, 1, 5)
+    doAssert b.stride === (0, 0, 1)
+  echo "    padRight/padLeft: 6 cases OK"
 when isMainModule:
   runTests()
