@@ -102,6 +102,8 @@ func ceil_div*(a, b: int): int =
 
 func abs*[V: static int](x: Int[V]): Int[abs(V)] = Int[abs(V)]()
 
+func sign*[V: static int](x: Int[V]): Int[if V > 0: 1 elif V < 0: -1 else: 0] = discard
+
 template genBinOp(op: untyped): untyped =
   func op*[V, U: static int](a: Int[V]; b: Int[U]): Int[op(V, U)] = Int[op(V, U)]()
   func op*[V: static int](a: Int[V]; b: static int): Int[op(V, b)] = Int[op(V, b)]()

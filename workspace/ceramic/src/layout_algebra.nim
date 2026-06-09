@@ -316,7 +316,6 @@ func buildStride(t: tuple; s: int or Int, idx: static int = 0): auto {.inline.} 
   else:
     concat(t[idx] * s, buildStride(t, s, idx + 1))
 
-func sign[V](x: Int[V]): Int[if V>0: 1 elif V<0: -1 else: 0] = discard
 
 template divisibilityCheck(remainingShape, clampedShape: untyped) =
   ## Python tensor-layouts compatible divisibility check.

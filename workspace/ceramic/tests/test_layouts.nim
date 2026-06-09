@@ -747,6 +747,7 @@ proc runNCHWTests* =
     doAssert not isConst(l.stride[2])
     doAssert not isConst(l.stride[3])
   echo "  NCHW mixed static/dynamic: 1 case OK"
+
 # ═══════════════════════════════════════════════════════════════
 #  zipModes — interleave corresponding modes pairwise
 # ═══════════════════════════════════════════════════════════════
@@ -834,6 +835,170 @@ proc runMapLeavesWithTests* =
     doAssert b.shape === ((4, 6), 10)
     doAssert b.stride === ((2, 4), 12)
   echo "    mapLeavesWith: 7 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  upcast / downcast — ref: tensor-layouts/tests/layouts.py + MoYe.jl
+# ═══════════════════════════════════════════════════════════════
+
+proc runUpcastDowncastTests* =
+  # ── Python tensor-layouts: test_upcast_simple_stride1 ──
+  block:
+    ## upcast divides innermost (stride-1) shape by n.
+    ## (32, 32):(32, 1) → upcast<16> → (32, 2):(2, 1)
+    let a = make_layout((32, 32), (32, 1))
+    let b = a.upcast(16)
+    doAssert b.shape === (32, 2), "shape: " & $b.shape
+    doAssert b.stride === (2, 1), "stride: " & $b.stride
+  # ── Python: test_upcast_hierarchical_value_mode ──
+  block:
+    ## upcast handles nested value modes.
+    ## SM75_U32x4_LDSM_N dst_layout_bits: (32, (32, 4)):(32, (1, 1024))
+    ## upcast<16> → (32, (2, 4)):(2, (1, 64))
+    let a = make_layout((32, (32, 4)), (32, (1, 1024)))
+    let b = a.upcast(16)
+    doAssert b.shape === (32, (2, 4)), "shape: " & $b.shape
+    doAssert b.stride === (2, (1, 64)), "stride: " & $b.stride
+  # ── Python: test_upcast_transpose_layout ──
+  block:
+    ## upcast handles transpose layouts (innermost stride > 1).
+    ## SM75_U16x2_LDSM_T dst_layout_bits:
+    ##   ((4, 8), (16, 2)):((256, 16), (1, 128))
+    ## upcast<16> → ((4, 8), (1, 2)):((16, 1), (1, 8))
+    let a = make_layout(((4, 8), (16, 2)), ((256, 16), (1, 128)))
+    let b = a.upcast(16)
+    doAssert b.shape === ((4, 8), (1, 2)), "shape: " & $b.shape
+    doAssert b.stride === ((16, 1), (1, 8)), "stride: " & $b.stride
+  # ── Python: test_upcast_identity ──
+  block:
+    ## upcast<1> returns the same layout.
+    let a = make_layout((4, 8), (8, 1))
+    let b = a.upcast(1)
+    doAssert b.shape === (4, 8)
+    doAssert b.stride === (8, 1)
+  # ── Python: test_upcast_broadcast_stride ──
+  block:
+    ## upcast preserves stride-0 (broadcast) modes unchanged.
+    let a = make_layout((4, 8), (0, 1))
+    let b = a.upcast(4)
+    doAssert b.stride[0] == 0
+    doAssert b.shape[0] == 4
+  # ── Python: test_downcast_simple ──
+  block:
+    ## downcast multiplies stride-1 shape by n, other strides by n.
+    ## (32, 2):(2, 1) → downcast<16> → (32, 32):(32, 1)
+    let a = make_layout((32, 2), (2, 1))
+    let b = a.downcast(16)
+    doAssert b.shape === (32, 32), "shape: " & $b.shape
+    doAssert b.stride === (32, 1), "stride: " & $b.stride
+  # ── Python: test_upcast_downcast_roundtrip ──
+  block:
+    ## downcast(upcast(layout, n), n) recovers original (innermost size >= n).
+    let l1 = make_layout((32, 32), (32, 1))
+    let r1 = l1.upcast(16).downcast(16)
+    doAssert r1.shape === l1.shape, "r1 shape: " & $r1.shape
+    doAssert r1.stride === l1.stride
+  block:
+    let l2 = make_layout((32, (32, 4)), (32, (1, 1024)))
+    let r2 = l2.upcast(16).downcast(16)
+    doAssert r2.shape === l2.shape, "r2 shape: " & $r2.shape
+    doAssert r2.stride === l2.stride
+  # ── Python: test_downcast_upcast_roundtrip ──
+  block:
+    ## upcast(downcast(layout, n), n) recovers the original.
+    let l1 = make_layout((32, 2), (2, 1))
+    let r1 = l1.downcast(4).upcast(4)
+    doAssert r1.shape === l1.shape, "r1 shape: " & $r1.shape
+    doAssert r1.stride === l1.stride
+  block:
+    let l2 = make_layout((4, 8), (8, 1))
+    let r2 = l2.downcast(4).upcast(4)
+    doAssert r2.shape === l2.shape, "r2 shape: " & $r2.shape
+    doAssert r2.stride === l2.stride
+  # ── MoYe.jl: recast (array.jl) ──
+  block:
+    ## MoYe: recast(Int32, a) on Int8 layout(4,3) → layout(16,3):(1,16).
+    ## sizeof(Int32)/sizeof(Int8)=4 → downcast<4> on (4,3):(1,4)
+    ## Leaf0 sh=4,st=1: |1|==1 → (16,1)     Leaf1 sh=3,st=4: |4|>1 → (3,16)
+    let a = make_layout((4, 3))
+    let b = a.downcast(4)
+    doAssert b.shape === (16, 3), "shape: " & $b.shape
+    doAssert b.stride === (1, 16)
+  block:
+    ## MoYe: Float32 layout(4,3) recast to Float64 → (2,3):(1,2).
+    ## sizeof(Float64)/sizeof(Float32)=2 → upcast<2>
+    ## Leaf0 sh=4,st=1: ceil_div(4,ceil_div(2,1))=2, stride=1  → (2,1)
+    ## Leaf1 sh=3,st=4: ceil_div(3,ceil_div(2,4))=3, stride=2  → (3,2)
+    let a = make_layout((4, 3))
+    let b = a.upcast(2)
+    doAssert b.shape === (2, 3), "shape: " & $b.shape
+    doAssert b.stride === (1, 2), "stride: " & $b.stride
+  block:
+    ## MoYe: Float32 layout(4,3) recast to Float16 → (8,3):(1,8).
+    ## sizeof(Float16)/sizeof(Float32)=0.5 → downcast<2>
+    ## Leaf0 sh=4,st=1: |1|==1 → (8,1)     Leaf1 sh=3,st=4: |4|>1 → (3,8)
+    let a = make_layout((4, 3))
+    let b = a.downcast(2)
+    doAssert b.shape === (8, 3), "shape: " & $b.shape
+    doAssert b.stride === (1, 8), "stride: " & $b.stride
+  # ── Own: stride-2 / broadcast / N=1 ──
+  block:
+    ## upcast: stride-2 gapped layout
+    let a = make_layout(8, 2)
+    let b = a.upcast(4)
+    doAssert b.shape === 4, "shape: " & $b.shape
+    doAssert b.stride === 1, "stride: " & $b.stride
+  block:
+    ## upcast: broadcast stride 0 unchanged
+    let a = make_layout(8, 0)
+    let b = a.upcast(4)
+    doAssert b.shape === 8
+    doAssert b.stride === 0
+  block:
+    ## downcast: stride-2 (stride multiplies)
+    let a = make_layout(8, 2)
+    let b = a.downcast(4)
+    doAssert b.shape === 8
+    doAssert b.stride === 8
+  block:
+    ## downcast: broadcast stride 0 unchanged
+    let a = make_layout(8, 0)
+    let b = a.downcast(4)
+    doAssert b.shape === 8
+    doAssert b.stride === 0
+  block:
+    ## upcast nested layout
+    let a = make_layout(((2, 4), 8), ((1, 2), 4))
+    let b = a.upcast(2)
+    # leaf (2,1): ceil_div(2, ceil_div(2,1))=1, ceil_div(1,2)=1  → (1,1)
+    # leaf (4,2): ceil_div(4, ceil_div(2,2))=4, ceil_div(2,2)=1  → (4,1)
+    # leaf (8,4): ceil_div(8, ceil_div(2,4))=8, ceil_div(4,2)=2  → (8,2)
+    doAssert b.shape === ((1, 4), 8), "shape: " & $b.shape
+    doAssert b.stride === ((1, 1), 2), "stride: " & $b.stride
+  block:
+    ## downcast nested layout
+    let a = make_layout(((2, 4), 8), ((1, 2), 4))
+    let b = a.downcast(2)
+    # leaf (2,1): |1|==1 → (4,1)
+    # leaf (4,2): |2|!=1 → (4,4)
+    # leaf (8,4): |4|!=1 → (8,8)
+    doAssert b.shape === ((4, 4), 8), "shape: " & $b.shape
+    doAssert b.stride === ((1, 4), 8), "stride: " & $b.stride
+  block:
+    ## upcast dynamic strides
+    let d8 = 8; let d1 = 1; let d2 = 2
+    let a = make_layout((d8, d1), (d1, d2))
+    let b = a.upcast(4)
+    doAssert b.shape === (8, 1)
+    doAssert b.stride === (1, 1)
+  block:
+    ## downcast dynamic stride 1 (shape expands)
+    let d8 = 8; let d1 = 1
+    let a = make_layout(d8, d1)
+    let b = a.downcast(4)
+    doAssert b.shape === 32
+    doAssert b.stride === 1
+  echo "    upcast/downcast: 24 cases OK"
+
 
 # ═══════════════════════════════════════════════════════════════
 #  Run all
@@ -1016,6 +1181,8 @@ proc runTests* =
 
   echo "--- mapLeavesWith ---"
   runMapLeavesWithTests()
+  echo "--- upcast/downcast ---"
+  runUpcastDowncastTests()
 
 when isMainModule:
   runTests()
