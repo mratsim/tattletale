@@ -844,7 +844,7 @@ proc runTests* =
     let b = a.group(0, 2)
     let c = b.group(1, 3)
     doAssert rank(c) === 2
-  # block:
+  # block: -- blocked by tuple hash collision, pending https://github.com/nim-lang/Nim/pull/25889
   #   ## From start (B=0, E=3) — groups 3 elements into sub-tuple
   #   let a = make_layout((2, 3, 5, 7))
   #   let b = a.group(0, 3)

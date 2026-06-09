@@ -553,6 +553,7 @@ macro padRight*(layout: typed; rank: static int): untyped =
 ## Examples:
 ##   group(make_layout((2, 3, 5, 7)), 0, 2)
 ##   # → ((2, 3), 5, 7):((1, 2), 6, 30)
+
 macro group*(layout: Layout; B, E: static int): untyped =
   ## Wraps modes at indices `[B, E)` into a nested sub-tuple in both
   ## shape and stride, producing a higher-rank Layout.
@@ -563,6 +564,11 @@ macro group*(layout: Layout; B, E: static int): untyped =
   ## Examples:
   ##   group(make_layout((2, 3, 5, 7)), 0, 2)
   ##   # → ((2, 3), 5, 7):((1, 2), 6, 30)
+  ##
+  ## ⚠ Nim currently only hashes the leaves of nested tuples for symbol generation
+  ## Pending https://github.com/nim-lang/Nim/pull/25889
+  ## as `group` reorg tuples while leaving the flattened representation unchanged
+  ## calling `group` might lead to invalid C/C++ codegen
   var ct = LayoutCT()
   let lTyp = layout.getTypeInst()
   let shTyp = lTyp[1]
