@@ -638,6 +638,60 @@ proc runCrd2IdxTests* =
   echo "  crd2idx: 11 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
+#  idx2crd — index to coordinate (on Layout)
+# ═══════════════════════════════════════════════════════════════
+
+proc runIdx2crdTests* =
+  block:
+    ## Basic 2D flat shape
+    let L = make_layout((3, 4), (1, 4))
+    let crd = idx2crd(5, L)
+    doAssert crd[0] === 2
+    doAssert crd[1] === 1
+  block:
+    ## Index 0 -> first element
+    let L = make_layout((3, 4), (1, 4))
+    let crd = idx2crd(0, L)
+    doAssert crd[0] === 0
+    doAssert crd[1] === 0
+  block:
+    ## Last element
+    let L = make_layout((3, 4), (1, 4))
+    let crd = idx2crd(11, L)
+    doAssert crd[0] === 2
+    doAssert crd[1] === 2
+  block:
+    ## Non-compact stride (MoYe test case, 0-indexed)
+    let L = make_layout((3, 4), (1, 3))
+    let crd = idx2crd(9, L)
+    doAssert crd[0] === 0
+    doAssert crd[1] === 3
+  block:
+    ## Index at shape boundary
+    let L = make_layout((3, 4), (1, 3))
+    let crd = idx2crd(3, L)
+    doAssert crd[0] === 0
+    doAssert crd[1] === 1
+  block:
+    ## Single mode layout
+    let L = make_layout(8, 1)
+    let crd = idx2crd(5, L)
+    doAssert crd === 5
+  block:
+    ## 3D flat shape
+    let L = make_layout((3, 4, 5), (1, 3, 12))
+    let crd = idx2crd(43, L)
+    doAssert crd[0] === 1
+    doAssert crd[1] === 2
+    doAssert crd[2] === 3
+  block:
+    ## Roundtrip: crd2idx(idx2crd(i, L), L) == i
+    let L = make_layout((4, 8), (1, 4))
+    for i in 0 ..< size(L):
+      let crd = idx2crd(i, L)
+      let idx = crd2idx(crd, L)
+      doAssert idx === i, "roundtrip i=" & $i & ": got " & $idx
+  echo "  idx2crd: 8 cases OK"
 #  layout[] — call operator
 # ═══════════════════════════════════════════════════════════════
 
@@ -786,6 +840,8 @@ proc runTests* =
   runPredicateTests()
   echo "--- crd2idx ---"
   runCrd2IdxTests()
+  echo "--- idx2crd ---"
+  runIdx2crdTests()
   echo "--- layout[] ---"
   runCallOperatorTests()
   echo "--- col_major_strides ---"

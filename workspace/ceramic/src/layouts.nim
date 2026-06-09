@@ -244,60 +244,26 @@ func crd2idx[V: static int](coord: Int[V]; shape, stride: int): int = V * stride
 
 # 3-arg: macro handles tuple coord + tuple stride → inner product
 #         or int coord + tuple shape + tuple stride → decompose
-macro crd2IdxImpl(coord, shape, stride: typed): untyped =
-  let cT = coord.getTypeInst(); let sT = shape.getTypeInst(); let dT = stride.getTypeInst()
-  if sT.kind != nnkTupleConstr:
-    # Scalar: 1 * (coord * stride) to force runtime int return
-    result = newCall(bindSym"*", newLit(1), newCall(bindSym"*", coord, stride))
-    return
-  if cT.kind == nnkTupleConstr:
-    # Tuple coord: inner product with stride
-    result = newLit(0)
-    for i in 0 ..< sT.len:
-      let t = newCall(bindSym"*",
-        newTree(nnkBracketExpr, coord, newLit(i)),
-        newTree(nnkBracketExpr, stride, newLit(i)))
-      result = newCall(bindSym"+", result, t)
-  else:
-    # Int coord: decompose across modes — single expression, no intermediate vars
-    var sum = newLit(0)
-    for i in 0 ..< sT.len:
-      let shI = newTree(nnkBracketExpr, shape, newLit(i))
-      let stI = newTree(nnkBracketExpr, stride, newLit(i))
-      # Build: coord div s0 div s1 ... div si-1
-      var cur = coord
-      for j in 0 ..< i:
-        cur = newCall(bindSym"div", cur, newTree(nnkBracketExpr, shape, newLit(j)))
-      if i < sT.len - 1:
-        sum = newCall(bindSym"+", sum,
-          newCall(bindSym"*", newCall(bindSym"mod", cur, shI), stI))
-      else:
-        sum = newCall(bindSym"+", sum, newCall(bindSym"*", cur, stI))
-    result = sum
+# 3-arg: tuple coord → inner product (a·b)
+func crd2idx*[C, Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
+  ## Inner product: sum coord[i] * stride[i]
+  foldZipWith(coord, stride, 0): acc + it_a * it_b
 
-# 3-arg: the core overload (template so typed macro captures AST)
-func crd2idx*[C, Sh, St: IntOrIntTuple](coord: C, shape: Sh, stride: St): int =
-  crd2IdxImpl(coord, shape, stride)
-
-# 2-arg: col-major flat index (macro for tuple; scalar is identity)
-func crd2idx[C, Sh: IntOrIntTuple](coord: C; shape: Sh): int =
-  macro impl(): untyped =
-    let c = bindSym"coord"; let s = bindSym"shape"
-    let cT = c.getTypeInst(); let sT = s.getTypeInst()
-    if cT.kind != nnkTupleConstr or sT.kind != nnkTupleConstr:
-      result = c  # scalar: identity
-      return
-    result = newLit(0)
-    var stride = 1
-    for i in 0 ..< sT.len:
-      let ci = newTree(nnkBracketExpr, c, newLit(i))
-      let term = newCall(bindSym"*", ci, newLit(stride))
-      result = newCall(bindSym"+", result, term)
-      let siT = sT[i]
-      if siT.kind == nnkBracketExpr and $siT[0] == "Int":
-        stride *= int(siT[1].intVal)
-      # Runtime shapes: stride stays at 1 (approximate)
-  impl()
+# 3-arg: int coord → decompose across modes
+func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
+  ## Decompose coord across shape modes with strides.
+  ## Sequential: result += (cur mod s) * d; cur = cur div s
+  var sum = 0
+  var cur = int(coord)
+  staticFor i, 0, tupleLen(Sh):
+    let s = int(shape[i])
+    let d = int(stride[i])
+    when i < Sh.tupleLen - 1:
+      sum += (cur mod s) * d
+    else:
+      sum += cur * d
+    cur = cur div s
+  sum
 
 # Layout indexing: `layout[i]` and `layout[coord_tuple]`
 macro `[]`*[Sh, St](layout: Layout[Sh, St]; idx: typed): int =
@@ -308,6 +274,32 @@ macro `[]`*[Sh, St](layout: Layout[Sh, St]; idx: typed): int =
 # Convenience: crd2idx on a Layout
 func crd2idx*(coord: IntOrIntTuple; layout: Layout): int =
   layout[coord]
+
+# idx2crd on a Layout — index → coordinate tuple
+#  idx2crd — index to coordinate (stride-based)
+# ═══════════════════════════════════════════════════════════════
+##
+## Convert a linear index into a hierarchical coordinate
+## compatible with the given shape and stride.
+## Each mode: (idx / stride[i]) % shape[i].
+##
+## MoYe: index_to_coord(idx, shape, stride)
+## CuTe: idx2crd(idx, shape)
+
+macro idx2crd*[Sh, St: IntOrIntTuple](idx: int or Int; shape: Sh; stride: St): untyped =
+  ## Convert linear index to coordinate with explicit strides.
+  let sh = shape.getTypeInst()
+  if sh.kind != nnkTupleConstr:
+    result = newCall(bindSym"div", idx, stride)
+  else:
+    var parts: seq[NimNode] = @[]
+    for i in 0 ..< sh.len:
+      let s = newCall(bindSym"[]", stride, newLit(i))
+      let shI = newCall(bindSym"[]", shape, newLit(i))
+      # Each mode: (idx / stride[i]) % shape[i] — independent per-mode
+      parts.add newCall(bindSym"mod",
+        newCall(bindSym"div", idx, s), shI)
+    result = nnkPar.newTree(parts)
 
 # ═══════════════════════════════════════════════════════════════
 #  filter_zeros — replace stride-0 shapes with Int[1]
@@ -713,3 +705,9 @@ template slice_and_offset*(coord: CoordType; layout: Layout): untyped =
   let sub = slice(coord, layout)
   let off = crd2idx(coord, layout.shape, layout.stride)
   (sub, off)
+
+# idx2crd on a Layout — index → coordinate tuple
+macro idx2crd*(idx: int or Int; layout: Layout): untyped =
+  result = newCall(bindSym"idx2crd", idx,
+    newTree(nnkDotExpr, layout, ident"shape"),
+    newTree(nnkDotExpr, layout, ident"stride"))

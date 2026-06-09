@@ -288,12 +288,9 @@ proc runSliceAndOffsetBasicTests* =
     let (sub, off) = slice_and_offset((2, _), L)
     doAssert sub === (8, 4), "sub: " & $sub
     doAssert off === 2, "off: " & $off
-  block:
-    let L = make_layout((4, 8), (1, 4))
-    let (sub, off) = slice_and_offset((2, _), L)
-    for i in 0 ..< size(sub):
-      doAssert sub[i] + off === L[(2, i)],
-        "i=" & $i & ": " & $(sub[i] + off) & " != " & $(L[(2, i)])
+    doAssert sub[0] + off === L[(2, 0)]
+    doAssert sub[3] + off === L[(2, 3)]
+    doAssert sub[7] + off === L[(2, 7)]
   block:
     let L = make_layout((4, 8), (1, 4))
     let (sub, off) = slice_and_offset((_, Int[3]()), L)
@@ -314,15 +311,15 @@ proc runSliceAndOffsetBasicTests* =
 
 proc runIdx2crdTests* =
   block:
-    let crd = idx2crd(5, (3, 4))
+    let crd = idx2crd(5, (3, 4), (1, 3))
     doAssert crd[0] === 2
     doAssert crd[1] === 1
   block:
-    let crd = idx2crd(0, (3, 4))
+    let crd = idx2crd(0, (3, 4), (1, 3))
     doAssert crd[0] === 0
     doAssert crd[1] === 0
   block:
-    let crd = idx2crd(11, (3, 4))
+    let crd = idx2crd(11, (3, 4), (1, 3))
     doAssert crd[0] === 2
     doAssert crd[1] === 3
   block:
@@ -350,12 +347,12 @@ proc runIndirectionTests* =
     doAssert tupleLen(r) == 1
     doAssert r[0] === 3
   block:
-    ## _ syntax on Layout
+    ## joker syntax on Layout
     let L = make_layout((4, 8), (1, 4))
     let sub = slice((_, 0), L)
     doAssert sub === (4, 1)
   block:
-    ## _ syntax on Layout with slice_and_offset
+    ## joker syntax on Layout with slice_and_offset
     let L = make_layout((4, 8), (1, 4))
     let (sub, off) = slice_and_offset((2, _), L)
     doAssert off === 2
@@ -422,7 +419,7 @@ proc runGenericProcTests* =
     doAssert r === (4, 1), "generic proc: " & $r
 
   block:
-    ## Generic proc with _ inside
+    ## Generic proc with joker inside
     proc bar[T](a: T; b: T): auto =
       slice((_, 0), (a, b))
 

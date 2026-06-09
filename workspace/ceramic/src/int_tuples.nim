@@ -23,6 +23,11 @@ type Int*[V: static int] = object
 type IntOrIntTuple* = int | Int | tuple
   ## Shape/stride element type alias for convenience.
 
+converter toInt*[V: static int](x: Int[V]): int = V
+
+func toIntVal*(x: int): int = x
+func toIntVal*[V: static int](x: Int[V]): int = V
+
 func `$`*[V: static int](x: Int[V]): string = $V
 
 # ═══════════════════════════════════════════════════════════════
@@ -113,6 +118,9 @@ genBinOp(`mod`)
 genBinOp(`max`)
 genBinOp(`min`)
 genBinOp(`ceil_div`)
+
+func `+=`*[V: static int](a: var int; b: Int[V]) = a += V
+func `+=`*[V: static int](a: var Int[V]; b: int) = a = Int[V](V + b)
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] compile-time helpers (for macros)
@@ -269,6 +277,27 @@ template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
       startingAcc
     else:
       fold_recurse(0, t, startingAcc, body)
+
+template foldZipWith_recurse*(idx: static int; a, b: tuple; state: typed; body: untyped): auto =
+  static: doAssert tupleLen(a) == tupleLen(b), "foldZipWith: tuples must have same rank"
+  const N = tupleLen(a)
+  let field = foldZipWith(a[idx], b[idx], state, body)
+  when idx == N - 1:
+    field
+  else:
+    foldZipWith_recurse(idx + 1, a, b, field, body)
+
+template foldZipWith*(a, b: typed; startingAcc: typed; body: untyped): auto =
+  ## Fold over paired leaves of a and b.
+  ## Injects `acc`, `it_a`, `it_b`.
+  when a is tuple and b is tuple:
+    foldZipWith_recurse(0, a, b, startingAcc, body)
+  else:
+    block:
+      let acc {.inject.} = startingAcc
+      let it_a {.inject.} = a
+      let it_b {.inject.} = b
+      body
 
 # ═══════════════════════════════════════════════════════════════
 #  prefix_scanIt / suffix_scanIt - scans while preserving constness
@@ -973,55 +1002,3 @@ macro dice*(coord: CoordType; target: IntOrIntTuple): untyped =
   else:
     # Tuple coord -> always tuple result
     result = nnkTupleConstr.newTree(parts)
-
-# ═══════════════════════════════════════════════════════════════
-#  idx2crd — index to coordinate
-# ═══════════════════════════════════════════════════════════════
-##
-## Convert a linear index into a hierarchical coordinate
-## compatible with the given shape (col-major decomposition).
-##
-## MoYe: index_to_coord(idx, shape, stride)
-## CuTe: idx2crd(idx, shape)
-
-macro idx2crd*(idx: int or Int; shape: IntOrIntTuple): untyped =
-  ## Convert linear index to hierarchical coordinate.
-  ## Decomposes idx by col-major product of shape elements.
-  runnableExamples:
-    let crd = idx2crd(5, (3, 4))
-    doAssert crd[0] == 2  # 5 mod 3
-    doAssert crd[1] == 1  # 5 div 3
-  let sh = shape.getTypeInst()
-  if sh.kind != nnkTupleConstr:
-    # Scalar shape: coord = idx
-    result = idx
-  else:
-    var parts: seq[NimNode] = @[]
-    # Build: parts[0] = idx mod sh[0], parts[1] = (idx div sh[0]) mod sh[1], ...
-    for i in 0 ..< sh.len:
-      let shI = newCall(bindSym"[]", shape, newLit(i))
-      var cur = idx
-      for j in 0 ..< i:
-        cur = newCall(bindSym"div", cur,
-          newCall(bindSym"[]", shape, newLit(j)))
-      if i < sh.len - 1:
-        parts.add newCall(bindSym"mod", cur, shI)
-      else:
-        parts.add cur
-    result = nnkPar.newTree(parts)
-
-macro idx2crd*(idx: int or Int; shape: IntOrIntTuple; stride: IntOrIntTuple): untyped =
-  ## Convert linear index to coordinate with explicit strides.
-  ## Finds crd such that sum(crd_i * stride_i) = idx within shape bounds.
-  let sh = shape.getTypeInst()
-  if sh.kind != nnkTupleConstr:
-    result = newCall(bindSym"div", idx, stride)
-  else:
-    var parts: seq[NimNode] = @[]
-    for i in 0 ..< sh.len:
-      let s = newCall(bindSym"[]", stride, newLit(i))
-      let shI = newCall(bindSym"[]", shape, newLit(i))
-      # Each mode: (idx / stride[i]) % shape[i] — independent per-mode
-      parts.add newCall(bindSym"mod",
-        newCall(bindSym"div", idx, s), shI)
-    result = nnkPar.newTree(parts)
