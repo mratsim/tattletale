@@ -774,45 +774,66 @@ proc runZipTests* =
 
 
 # ═══════════════════════════════════════════════════════════════
-#  tile_unzip — unzip logical_divide/product result into tiles+rest
+#  mapLeavesWith — apply body to each leaf (shape, stride) pair
 # ═══════════════════════════════════════════════════════════════
-proc runTileUnzipTests* =
+proc runMapLeavesWithTests* =
   block:
-    ## Rank-1 layout / rank-1 tiler (both Layout terminals)
-    let L = make_layout(8, 1)
-    let tiler = make_layout(2, 1)
-    let divided = logical_divide(L, tiler)
-    let unzipped = tile_unzip(divided, tiler)
-    doAssert rank(unzipped) === 2
+    ## Flat: simple
+    let a = make_layout((2, 3))
+    let b = mapLeavesWith(a): (it_sh * 2, it_st)
+    doAssert b.shape === (4, 6)
+    doAssert b.stride === (1, 2)
   block:
-    ## Rank-2 layout / tuple tiler (2 ints) — Python reference
-    # zipped_divide(Layout((4,8)), (2,4)) -> Layout(((2,4),(2,2)), ((1,4),(2,16)))
-    let L = make_layout((4, 8), (1, 4))
-    let tiler = (2, 4)
-    let divided = logical_divide(L, tiler)
-    let unzipped = tile_unzip(divided, tiler)
-    let m0 = mode(unzipped, 0)
-    let m1 = mode(unzipped, 1)
-    doAssert rank(unzipped) === 2, "rank: " & $rank(unzipped)
-    doAssert m0 === ((2, 4), (1, 4)), "m0: " & $m0
-    doAssert m1 === ((2, 2), (2, 16)), "m1: " & $m1
+    ## Flat: let indirection
+    let factor = 10
+    let a = make_layout((2, 3))
+    let b = mapLeavesWith(a): (it_sh * factor, it_st)
+    doAssert b.shape === (20, 30)
+    doAssert b.stride === (1, 2)
   block:
-    ## Rank-2 layout / rank-2 tuple of Layouts
-    let L = make_layout((4, 8), (1, 4))
-    let tiler = (make_layout(2, 1), make_layout(4, 1))
-    let divided = logical_divide(L, tiler)
-    let unzipped = tile_unzip(divided, tiler)
-    doAssert rank(unzipped) === 2
-    doAssert size(mode(unzipped, 0)) === 8
-    doAssert size(mode(unzipped, 1)) === 4
+    ## Flat: multi-step
+    let a = make_layout((2, 3))
+    let b = mapLeavesWith(a):
+      let x = it_sh * 10
+      let y = it_st + 7
+      (x * y, x div y)
+    doAssert b.shape === (160, 270)
+    doAssert b.stride === (2, 3)
   block:
-    ## Rank-2 layout / rank-1 tiler (partial tiler)
-    let L = make_layout((4, 8), (1, 4))
-    let tiler = (2,)
-    let divided = logical_divide(L, tiler)
-    let unzipped = tile_unzip(divided, tiler)
-    doAssert rank(unzipped) === 2
-  echo "  tile_unzip: 4 cases OK"
+    ## Nested 2-level
+    let a = make_layout(((2, 3), 5), ((1, 2), 6))
+    let b = mapLeavesWith(a): (it_sh * 2, it_st * 2)
+    doAssert b.shape === ((4, 6), 10)
+    doAssert b.stride === ((2, 4), 12)
+  block:
+    ## Nested 3-level
+    let a = make_layout(((7, (8, 9)), 10), ((1, (2, 3)), 4))
+    let b = mapLeavesWith(a): (it_sh * 3, it_st)
+    doAssert b.shape === ((21, (24, 27)), 30)
+    doAssert b.stride === ((1, (2, 3)), 4)
+  block:
+    ## Flat: dynamic shapes (let variables, not literals)
+    let d2 = 2
+    let d3 = 3
+    let d1 = 1
+    let d2st = 2
+    let a = make_layout((d2, d3), (d1, d2st))
+    let b = mapLeavesWith(a): (it_sh * 10, it_st)
+    doAssert b.shape === (20, 30)
+    doAssert b.stride === (1, 2)
+  block:
+    ## Nested 2-level: dynamic shapes
+    let d2 = 2
+    let d3 = 3
+    let d5 = 5
+    let d1 = 1
+    let d2st = 2
+    let d6st = 6
+    let a = make_layout(((d2, d3), d5), ((d1, d2st), d6st))
+    let b = mapLeavesWith(a): (it_sh * 2, it_st * 2)
+    doAssert b.shape === ((4, 6), 10)
+    doAssert b.stride === ((2, 4), 12)
+  echo "    mapLeavesWith: 7 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  Run all
@@ -849,7 +870,6 @@ proc runTests* =
   echo "--- NCHW ---"
   runNCHWTests()
   echo "--- zip ---"
-  runTileUnzipTests()
   echo "--- mapModesWith/zipModesWith ---"
   block:
     # map: double each mode's stride
@@ -994,6 +1014,8 @@ proc runTests* =
     doAssert b.stride === (1, 30)
   echo "    takeModes/selectModes: 6 cases OK"
 
+  echo "--- mapLeavesWith ---"
+  runMapLeavesWithTests()
 
 when isMainModule:
   runTests()

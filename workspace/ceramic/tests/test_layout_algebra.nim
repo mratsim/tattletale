@@ -64,6 +64,7 @@ proc runZippedProductTests*: void
 proc runTiledProductTests*: void
 proc runFlatProductTests*: void
 proc runTileToShapeTests*: void
+proc runTileUnzipTests*: void
 proc runTests* =
   echo "\n── Coalesce [CUTE-C]: 20 cases ──"
   runCoalesceTests()
@@ -97,6 +98,8 @@ proc runTests* =
   runZippedProductTests()
   runTiledProductTests()
   runFlatProductTests()
+  echo "\n── tile_unzip [CUTE] ──"
+  runTileUnzipTests()
   echo "\n── tile_to_shape [CUTE] ──"
   runTileToShapeTests()
   echo "\nALL TESTS PASSED"
@@ -1287,6 +1290,48 @@ proc runFlatProductTests* =
     doAssert size(fp) === 4 * 12
 
   echo "    flat_divide/product: 5 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  tile_unzip — unzip logical_divide/product result into tiles+rest
+# ═══════════════════════════════════════════════════════════════
+proc runTileUnzipTests* =
+  block:
+    ## Rank-1 layout / rank-1 tiler (both Layout terminals)
+    let L = make_layout(8, 1)
+    let tiler = make_layout(2, 1)
+    let divided = logical_divide(L, tiler)
+    let unzipped = tile_unzip(divided, tiler)
+    doAssert rank(unzipped) === 2
+  block:
+    ## Rank-2 layout / tuple tiler (2 ints) — Python reference
+    # zipped_divide(Layout((4,8)), (2,4)) -> Layout(((2,4),(2,2)), ((1,4),(2,16)))
+    let L = make_layout((4, 8), (1, 4))
+    let tiler = (2, 4)
+    let divided = logical_divide(L, tiler)
+    let unzipped = tile_unzip(divided, tiler)
+    let m0 = mode(unzipped, 0)
+    let m1 = mode(unzipped, 1)
+    doAssert rank(unzipped) === 2, "rank: " & $rank(unzipped)
+    doAssert m0 === ((2, 4), (1, 4)), "m0: " & $m0
+    doAssert m1 === ((2, 2), (2, 16)), "m1: " & $m1
+  block:
+    ## Rank-2 layout / rank-2 tuple of Layouts
+    let L = make_layout((4, 8), (1, 4))
+    let tiler = (make_layout(2, 1), make_layout(4, 1))
+    let divided = logical_divide(L, tiler)
+    let unzipped = tile_unzip(divided, tiler)
+    doAssert rank(unzipped) === 2
+    doAssert size(mode(unzipped, 0)) === 8
+    doAssert size(mode(unzipped, 1)) === 4
+  block:
+    ## Rank-2 layout / rank-1 tiler (partial tiler)
+    let L = make_layout((4, 8), (1, 4))
+    let tiler = (2,)
+    let divided = logical_divide(L, tiler)
+    let unzipped = tile_unzip(divided, tiler)
+    doAssert rank(unzipped) === 2
+  echo "  tile_unzip: 4 cases OK"
+
 
 # ═══════════════════════════════════════════════════════════════
 #  tile_to_shape [CUTE]

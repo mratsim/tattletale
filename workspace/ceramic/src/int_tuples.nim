@@ -167,7 +167,7 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
 #  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs
 # ═══════════════════════════════════════════════════════════════
 
-macro evalOnceAs(expAlias: untyped{nkIdent}, exp: typed): untyped =
+macro evalOnceAs*(expAlias: untyped{nkIdent}, exp: typed): untyped =
   ## Injects `expAlias` in caller scope, evaluating `exp` at most once.
   ## `expAlias` becomes a 0-arg template that yields the captured value.
   ##

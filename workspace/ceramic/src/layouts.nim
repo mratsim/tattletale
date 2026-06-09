@@ -441,7 +441,7 @@ func emit*(ct: LayoutCT): NimNode {.compileTime.} =
 
 
 # ═══════════════════════════════════════════════════════════════
-#  getIndicesSortedByStride — sor t permutation by stride
+#  getIndicesSortedByStride — sort permutation by stride
 # ═══════════════════════════════════════════════════════════════
 
 proc getIndicesSortedByStride*(strides: seq[int]): seq[int] {.compileTime.} =
@@ -454,49 +454,6 @@ proc getIndicesSortedByStride*(strides: seq[int]): seq[int] {.compileTime.} =
     for j in i + 1 ..< result.len:
       if strides[result[i]] > strides[result[j]]:
         swap result[i], result[j]
-
-# ═══════════════════════════════════════════════════════════════
-#  zip — interleave corresponding modes of two layouts
-# ═══════════════════════════════════════════════════════════════
-#
-#  Given layouts A with modes (a0, a1, ..., aN) and
-#  B with modes (b0, b1, ..., bN), zip produces a layout
-#  with modes ((a0,b0), (a1,b1), ..., (aN,bN)).
-#
-#  For rank-1 inputs: (a:b, x:y) → ((a,x):(b,y))
-
-macro zip*[A, B: Layout](a: A, b: B): untyped =
-  ## Zip two layouts: interleave corresponding modes pairwise.
-  let aTyp = a.getTypeInst()
-  let bTyp = b.getTypeInst()
-  let aShape = newTree(nnkDotExpr, a, ident"shape")
-  let bShape = newTree(nnkDotExpr, b, ident"shape")
-  let aStride = newTree(nnkDotExpr, a, ident"stride")
-  let bStride = newTree(nnkDotExpr, b, ident"stride")
-  let aShT = aTyp[1]
-  let bShT = bTyp[1]
-  let aStT = aTyp[2]
-  let bStT = bTyp[2]
-
-  proc zipElems(valA, valB, typA, typB: NimNode): NimNode =
-    let aIsTuple = typA.kind == nnkTupleConstr
-    let bIsTuple = typB.kind == nnkTupleConstr
-    if not aIsTuple and not bIsTuple:
-      result = newTree(nnkTupleConstr, valA, valB)
-    elif aIsTuple and bIsTuple:
-      result = newNimNode(nnkTupleConstr)
-      for i in 0 ..< typA.len:
-        let ai = newTree(nnkBracketExpr, valA, newLit i)
-        let bi = newTree(nnkBracketExpr, valB, newLit i)
-        let subA = typA[i].getTypeInst()
-        let subB = typB[i].getTypeInst()
-        result.add zipElems(ai, bi, subA, subB)
-    else:
-      error "zip: mismatched rank"
-
-  let zShape = zipElems(aShape, bShape, aShT, bShT)
-  let zStride = zipElems(aStride, bStride, aStT, bStT)
-  result = newCall(bindSym"make_layout", zShape, zStride)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -566,18 +523,124 @@ macro padLeft*(layout: Layout; rank: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
+#  mapLeavesWith — apply body to each leaf (shape, stride) pair
+# ═══════════════════════════════════════════════════════════════
+
+proc mapLeavesRec(
+      stmts: var NimNode;
+      shExpr, shTyp,
+      stExpr, stTyp,
+      body: NimNode): tuple[shape, stride: NimNode] {.compileTime.} =
+  ## Recursively walks shape and stride in parallel.
+  ## At each leaf pair, substitutes `it_sh` (leaf shape) and `it_st` (leaf stride)
+  ## in `body`, evaluates body via evalOnceAs, and combines results
+  ## into a Layout with the same nesting structure.
+  ##
+  ## Body must return (new_shape, new_stride).
+  ##
+  ## Examples:
+  ##   mapLeavesWith(make_layout((2, 3))): (it_sh * 2, it_st)
+  ##   # → (4, 6):(1, 2)
+  ##
+  ##   mapLeavesWith(make_layout((2, 3))):
+  ##     let x = it_sh * 10
+  ##     let y = it_st + 7
+  ##     (x * y, x div y)
+  ##   # → (160, 270):(2, 3)
+  if shTyp.kind == nnkTupleConstr:
+    var outSh = nnkPar.newNimNode()
+    var outSt = nnkPar.newNimNode()
+    for i in 0 ..< shTyp.len:
+      let subSh = nnkBracketExpr.newTree(shExpr, newLit(i))
+      let subSt = nnkBracketExpr.newTree(stExpr, newLit(i))
+      let (childSh, childSt) =
+        mapLeavesRec(
+          stmts,
+          subSh, shTyp[i],
+          subSt, stTyp[i],
+          body)
+      outSh.add childSh
+      outSt.add childSt
+    return (shape: outSh, stride: outSt)
+  else:
+    proc subst(n: NimNode): NimNode =
+      if n.kind in {nnkIdent, nnkSym} and n.eqIdent("it_sh"):
+        result = shExpr
+      elif n.kind in {nnkIdent, nnkSym} and n.eqIdent("it_st"):
+        result = stExpr
+      else:
+        result = n.copyNimTree()
+        for j in 0 ..< n.len:
+          result[j] = subst(n[j])
+    let blockExpr = nnkBlockExpr.newTree(newEmptyNode(), subst(body))
+    let tmp = ident("pairLeaves_" & $(stmts.len+1))
+    stmts.add quote do:
+      evalOnceAs(`tmp`, `blockExpr`)
+    return (shape: nnkBracketExpr.newTree(tmp, newLit(0)),
+            stride: nnkBracketExpr.newTree(tmp, newLit(1)))
+
+macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
+  ## Apply `body` to each leaf (shape, stride) pair.
+  ## Body receives `it_sh` and `it_st`, must return (new_shape, new_stride).
+  let bodyExpr = if body.kind == nnkStmtList and body.len == 1: body[0] else: body
+  let typ = getTypeInst(layout)
+  let shTyp = typ[1]
+  let stTyp = typ[2]
+  let shExpr = newTree(nnkDotExpr, layout, ident"shape")
+  let stExpr = newTree(nnkDotExpr, layout, ident"stride")
+  var stmts = newStmtList()
+  let (outSh, outSt) = mapLeavesRec(stmts, shExpr, shTyp, stExpr, stTyp, bodyExpr)
+  stmts.add nnkCall.newTree(bindSym"make_layout", outSh, outSt)
+  result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  zip — interleave corresponding modes of two layouts
+# ═══════════════════════════════════════════════════════════════
+
+macro zip*[A, B: Layout](a: A, b: B): untyped =
+  ## Zip two layouts: interleave corresponding modes pairwise.
+  ##
+  ##   Given layouts A with modes (a0, a1, ..., aN) and
+  ##   B with modes (b0, b1, ..., bN), zip produces a layout
+  ##   with modes ((a0,b0), (a1,b1), ..., (aN,bN)).
+  ##
+  ##   For rank-1 inputs: (a:b, x:y) → ((a,x):(b,y))
+
+  let aTyp = a.getTypeInst()
+  let bTyp = b.getTypeInst()
+  let aShape = newTree(nnkDotExpr, a, ident"shape")
+  let bShape = newTree(nnkDotExpr, b, ident"shape")
+  let aStride = newTree(nnkDotExpr, a, ident"stride")
+  let bStride = newTree(nnkDotExpr, b, ident"stride")
+  let aShT = aTyp[1]
+  let bShT = bTyp[1]
+  let aStT = aTyp[2]
+  let bStT = bTyp[2]
+
+  proc zipElems(valA, valB, typA, typB: NimNode): NimNode =
+    let aIsTuple = typA.kind == nnkTupleConstr
+    let bIsTuple = typB.kind == nnkTupleConstr
+    if not aIsTuple and not bIsTuple:
+      result = newTree(nnkTupleConstr, valA, valB)
+    elif aIsTuple and bIsTuple:
+      result = newNimNode(nnkTupleConstr)
+      for i in 0 ..< typA.len:
+        let ai = newTree(nnkBracketExpr, valA, newLit i)
+        let bi = newTree(nnkBracketExpr, valB, newLit i)
+        let subA = typA[i].getTypeInst()
+        let subB = typB[i].getTypeInst()
+        result.add zipElems(ai, bi, subA, subB)
+    else:
+      error "zip: mismatched rank"
+
+  let zShape = zipElems(aShape, bShape, aShT, bShT)
+  let zStride = zipElems(aStride, bStride, aStT, bStT)
+  result = newCall(bindSym"make_layout", zShape, zStride)
+
+# ═══════════════════════════════════════════════════════════════
 #  groupModes — wrap modes [B, E) into a nested sub-Layout
 # ═══════════════════════════════════════════════════════════════
-##
-## Wraps modes at indices [B, E) into a nested sub-tuple in both
-## shape and stride, producing a higher-rank Layout.
-##
-## CuTe: group<B,E>(layout) — layout.hpp:1011
-## Python: group(layout, B, E) — algebra.py:319
-##
-## Examples:
-##   groupModes(make_layout((2, 3, 5, 7)), 0, 2)
-##   # → ((2, 3), 5, 7):((1, 2), 6, 30)
 
 macro groupModes*(layout: Layout; B, E: static int): untyped =
   ## Wraps modes at indices `[B, E)` into a nested sub-tuple in both
@@ -609,18 +672,17 @@ macro groupModes*(layout: Layout; B, E: static int): untyped =
     ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i),
                nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
   result = ct.emit()
+
 #  takeModes — extract modes [B, E) into a new Layout
 # ═══════════════════════════════════════════════════════════════
-##
-## CuTe: take<B,E>(layout) — layout.hpp:511
-##
-## Examples:
-##   takeModes(make_layout((2, 3, 5, 7)), 1, 3)
-##   # → (3, 5):(2, 6)
 
 macro takeModes*(layout: Layout; B, E: static int): untyped =
-  ## Extract modes `[B, E)` into a new Layout.
+  ## Extract modes in range `[B, E)` into a new Layout.
   ## Returns a scalar Layout if only one mode is extracted.
+  ##
+  ## Examples:
+  ##   takeModes(make_layout((2, 3, 5, 7)), 1, 3)
+  ##   # → (3, 5):(2, 6)
   var ct = LayoutCT()
   let lTyp = layout.getTypeInst()
   let shTyp = lTyp[1]
@@ -647,23 +709,6 @@ macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
     ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(idx)),
                nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(idx)))
   result = ct.emit()
-
-# ═══════════════════════════════════════════════════════════════
-#  tile_unzip — unzip a logical_divide/product result into tiles+rest
-# ═══════════════════════════════════════════════════════════════
-##
-## CuTe: tile_unzip(layout, tiler) -> make_layout(zip2_by(shape, tiler), zip2_by(stride, tiler))
-## MoYe: tile_unzip(layout, tile) (same)
-## Python: no direct equivalent — inlined into zipped_divide/product
-
-macro tile_unzip*(layout: Layout; tiler: typed): untyped =
-  ## Unzip a logical_divide/logical_product result according to a tiler.
-  ## Returns a rank-2 Layout: ((tile_modes), (rest_modes)).
-  let zShape = newCall(bindSym"zip2_by",
-    newTree(nnkDotExpr, layout, ident"shape"), tiler)
-  let zStride = newCall(bindSym"zip2_by",
-    newTree(nnkDotExpr, layout, ident"stride"), tiler)
-  result = newCall(bindSym"make_layout", zShape, zStride)
 
 # ═══════════════════════════════════════════════════════════════
 #  map — apply fn to each mode independently

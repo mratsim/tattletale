@@ -478,6 +478,19 @@ func logical_divide*[L: Layout](layout: L; tiler: tuple): auto =
   build(0, (), ())
 
 
+# ═══════════════════════════════════════════════════════════════
+#  tile_unzip — unzip a logical_divide/product result into tiles+rest
+# ═══════════════════════════════════════════════════════════════
+
+macro tile_unzip*(layout: Layout; tiler: typed): untyped =
+  ## Unzip a logical_divide/logical_product result according to a tiler.
+  ## Returns a rank-2 Layout: ((tile_modes), (rest_modes)).
+  let zShape = newCall(bindSym"zip2_by",
+    newTree(nnkDotExpr, layout, ident"shape"), tiler)
+  let zStride = newCall(bindSym"zip2_by",
+    newTree(nnkDotExpr, layout, ident"stride"), tiler)
+  result = newCall(bindSym"make_layout", zShape, zStride)
+
 # ── zipped_divide / tiled_divide / flat_divide ──
 
 func zipped_divide*[L: Layout](layout: L; tiler: auto): auto =
@@ -717,27 +730,25 @@ func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
 # ═══════════════════════════════════════════════════════════════
 #  tile_to_shape — repeat block layout to fill target shape
 # ═══════════════════════════════════════════════════════════════
-##
-## CuTe: tile_to_shape(block, trg_shape, ord_shape) — layout.hpp:1778
-## MoYe: tile_to_shape(layout, trg_shape, ord_shape) — layout.jl:930
-##
-## Recipe:
-##   1. Pad block to rank R
-##   2. Compute block_shape = product_each(block.shape)   — per-mode products
-##   3. Compute target_shape = product_each(trg_shape)    — per-mode products
-##   4. product_shape = ceil_div(target_shape, block_shape) — repeats per mode
-##   5. tiler = make_layout(product_shape, ord_shape)
-##   6. result = blocked_product(padded_block, tiler)
-##
-## Example:
-##   let tile = tile_to_shape(make_layout((2,3), (1,2)), (6, 12))
-##   # block (2,3) repeated to fill (6,12) in 3 columns:
-##   # ((2,3),3):((1,2),6)
-func tile_to_shape*[Sh, St, Trg](blk: Layout[Sh, St]; trg_shape: Trg; ord_shape: static StrideOrder = LayoutLeft): auto =
-  const R = when Trg is tuple: tupleLen(Trg) else: 1
+
+func tile_to_shape*[Sh, St, Target](blk: Layout[Sh, St]; target_shape: Target; ord_shape: static StrideOrder = LayoutLeft): auto =
+  ## Recipe:
+  ##   1. Pad block to rank R
+  ##   2. Compute block_shape = product_each(block.shape)   — per-mode products
+  ##   3. Compute target_shape_flat = product_each(target_shape)    — per-mode products
+  ##   4. product_shape = ceil_div(target_shape, block_shape) — repeats per mode
+  ##   5. tiler = make_layout(product_shape, ord_shape)
+  ##   6. result = blocked_product(padded_block, tiler)
+  ##
+  ## Example:
+  ##   let tile = tile_to_shape(make_layout((2,3), (1,2)), (6, 12))
+  ##   # block (2,3) repeated to fill (6,12) in 3 columns:
+  ##   # ((2,3),3):((1,2),6)
+  const R = when Target is tuple: tupleLen(Target) else: 1
   let padded_blk = padRight(blk, R)
   let blk_shape = product_each(padded_blk.shape)
-  let trg_flat = product_each(trg_shape)
+  let trg_flat = product_each(target_shape)
   let product_shape = zipModesWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
   let tiler = make_layout(product_shape, ord_shape)
   blocked_product(padded_blk, tiler)
+
