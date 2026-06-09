@@ -265,7 +265,10 @@ template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
       let it {.inject.} = t
       body
   else:  # tuple
-    fold_recurse(0, t, startingAcc, body)
+    when tupleLen(t) == 0:
+      startingAcc
+    else:
+      fold_recurse(0, t, startingAcc, body)
 
 # ═══════════════════════════════════════════════════════════════
 #  prefix_scanIt / suffix_scanIt - scans while preserving constness
@@ -807,12 +810,218 @@ macro group*(t: typed; B, E: static int): untyped =
   result = newNimNode(nnkPar)
   # elements before B
   for i in 0 ..< B:
-    result.add nnkBracketExpr.newTree(t, newLit(i))
+    result.add newCall(bindSym"[]", t, newLit(i))
   # grouped elements [B, E) as a nested sub-tuple
   var sub = newNimNode(nnkTupleConstr)
   for i in B ..< E:
-    sub.add nnkBracketExpr.newTree(t, newLit(i))
+    sub.add newCall(bindSym"[]", t, newLit(i))
   result.add sub
   # elements after E
   for i in E ..< N:
-    result.add nnkBracketExpr.newTree(t, newLit(i))
+    result.add newCall(bindSym"[]", t, newLit(i))
+
+# ═══════════════════════════════════════════════════════════════
+#  Joker — CuTe Underscore: keep/slice marker for coordinates
+# ═══════════════════════════════════════════════════════════════
+
+type Joker* = object
+
+type CoordType* = int | Int | Joker | tuple
+  ## Marker type for "keep this dimension" in slice/dice.
+  ## Analogous to CuTe's `Underscore` / `_`.
+  ## Use `_` as marker in macro/template context.
+
+template `_`*: Joker = Joker()
+
+func `$`*(x: Joker): string = "_"
+func crd2idx*(coord: Joker; shape: int): int = 0
+  ## Joker contributes 0 to indexing.
+func crd2idx*[V: static int](coord: Joker; shape: Int[V]): int = 0
+func crd2idx*(coord: Joker; shape, stride: int): int = 0
+func crd2idx*[V: static int](coord: Joker; shape, stride: Int[V]): int = 0
+func `*`*(c: Joker; s: int): int = 0
+func `*`*(s: int; c: Joker): int = 0
+func `*`*[V: static int](c: Joker; s: Int[V]): int = 0
+func `*`*[V: static int](s: Int[V]; c: Joker): int = 0
+func `+`*(c: Joker; s: int): int = s
+func `+`*(s: int; c: Joker): int = s
+func `+`*[V: static int](c: Joker; s: Int[V]): int = V
+func `+`*[V: static int](s: Int[V]; c: Joker): int = V
+
+
+func isJokerNode*(n: NimNode): bool {.compileTime.} =
+  ## True if NimNode represents a Joker value.
+  let t = n.getTypeInst()
+  t.kind == nnkSym and $t == "Joker"
+
+# ═══════════════════════════════════════════════════════════════
+#  slice(coord, target) — keep elements paired with Joker
+#  dice(coord, target)  — keep elements paired with int
+# ═══════════════════════════════════════════════════════════════
+##
+## Both are compile-time tuple filtering operations.
+## CuTe C++: underscore.hpp
+##
+## slice(_, b)           → b        (bare scalar, joker on scalar)
+## slice(0, b)           → ()       (empty tuple)
+## slice((_, 0), (a,b))  → (a,)     (keep a, drop b)
+## dice(_, b)            → ()       (empty tuple)
+## dice(0, b)            → b        (bare scalar, int on scalar)
+## dice((0, _), (a,b))   → a        (keep a, drop b)
+
+macro slice*(coord: CoordType; target: IntOrIntTuple): untyped =
+  ## CuTe-compatible slice: keep elements of target paired with joker/`_`.
+  ## Returns a tuple of kept elements (or bare element for scalar joker case).
+  ##
+  ## Type-constrained: target must be int, Int[N], or tuples thereof.
+  runnableExamples:
+    let r = slice((_, 0), (3, 4))
+    doAssert r[0] == 3
+
+  # Replace `_` identifiers with Joker() so `_` syntax works
+  proc clense(n: NimNode): NimNode =
+    if n.kind == nnkIdent and n.eqIdent("_"):
+      result = newCall(bindSym"Joker")
+    else:
+      result = n.copyNimTree()
+      for i in 0 ..< n.len:
+        result[i] = clense(n[i])
+  let c = clense(coord)
+  let t = target
+
+  # Collect all (coord_leaf, target_leaf_index_path) pairs
+  # where target_leaf_index_path is the sequence of indices needed to access it
+  proc collectLeaves(cNode: NimNode; path: seq[int]): seq[(NimNode, seq[int])] =
+    if cNode.kind == nnkTupleConstr:
+      for i in 0 ..< cNode.len:
+        for pair in collectLeaves(cNode[i], path & i):
+          result.add pair
+    else:
+      result.add (cNode, path)
+
+  let leaves = collectLeaves(c, @[])
+
+  # Build a flat tuple: for each joker leaf, add the target element at the path
+  var parts: seq[NimNode] = @[]
+  for (coordLeaf, path) in leaves:
+    if isJokerNode(coordLeaf):
+      # Keep: construct target path access like t[i][j]...
+      var access = t
+      for idx in path:
+        access = newCall(bindSym"[]", access, newLit(idx))
+      parts.add access
+    # else: int -> drop (don't add)
+
+  if parts.len == 0:
+    result = nnkPar.newTree()  # empty tuple ()
+  elif parts.len == 1 and c.kind != nnkTupleConstr:
+    # Bare joker on scalar: return bare
+    result = parts[0]
+  else:
+    # Tuple coord -> always tuple result
+    result = nnkTupleConstr.newTree(parts)
+
+macro dice*(coord: CoordType; target: IntOrIntTuple): untyped =
+  ## CuTe-compatible dice: keep elements of target paired with ints.
+  ## Returns target element (for scalar int coord) or tuple of kept elements.
+  ##
+  ## Type-constrained: target must be int, Int[N], or tuples thereof.
+  runnableExamples:
+    let r = dice((_, 0), (3, 4))
+    doAssert r == 4
+
+  # Replace `_` identifiers with Joker()
+  proc clense(n: NimNode): NimNode =
+    if n.kind == nnkIdent and n.eqIdent("_"):
+      result = newCall(bindSym"Joker")
+    else:
+      result = n.copyNimTree()
+      for i in 0 ..< n.len:
+        result[i] = clense(n[i])
+  let c = clense(coord)
+  let t = target
+  # Validate: coord must contain Joker, int, Int[N], or tuples thereof
+  # target must contain int, Int[N], or tuples thereof
+  # (Implicitly checked by the fact we only generate valid accesses)
+
+  # Collect all (coord_leaf, target_leaf_index_path) pairs
+  proc collectLeaves(cNode: NimNode; path: seq[int]): seq[(NimNode, seq[int])] =
+    if cNode.kind == nnkTupleConstr:
+      for i in 0 ..< cNode.len:
+        for pair in collectLeaves(cNode[i], path & i):
+          result.add pair
+    else:
+      result.add (cNode, path)
+
+  let leaves = collectLeaves(c, @[])
+
+  # Build result: for each int leaf, add target element; for joker, drop
+  var parts: seq[NimNode] = @[]
+  for (coordLeaf, path) in leaves:
+    if not isJokerNode(coordLeaf):
+      # Keep: construct target path access
+      var access = t
+      for idx in path:
+        access = newCall(bindSym"[]", access, newLit(idx))
+      parts.add access
+
+  if parts.len == 0:
+    result = nnkPar.newTree()  # empty
+  elif parts.len == 1 and c.kind != nnkTupleConstr:
+    # Bare int/joker on scalar: return bare
+    result = parts[0]
+  else:
+    # Tuple coord -> always tuple result
+    result = nnkTupleConstr.newTree(parts)
+
+# ═══════════════════════════════════════════════════════════════
+#  idx2crd — index to coordinate
+# ═══════════════════════════════════════════════════════════════
+##
+## Convert a linear index into a hierarchical coordinate
+## compatible with the given shape (col-major decomposition).
+##
+## MoYe: index_to_coord(idx, shape, stride)
+## CuTe: idx2crd(idx, shape)
+
+macro idx2crd*(idx: int or Int; shape: IntOrIntTuple): untyped =
+  ## Convert linear index to hierarchical coordinate.
+  ## Decomposes idx by col-major product of shape elements.
+  runnableExamples:
+    let crd = idx2crd(5, (3, 4))
+    doAssert crd[0] == 2  # 5 mod 3
+    doAssert crd[1] == 1  # 5 div 3
+  let sh = shape.getTypeInst()
+  if sh.kind != nnkTupleConstr:
+    # Scalar shape: coord = idx
+    result = idx
+  else:
+    var parts: seq[NimNode] = @[]
+    # Build: parts[0] = idx mod sh[0], parts[1] = (idx div sh[0]) mod sh[1], ...
+    for i in 0 ..< sh.len:
+      let shI = newCall(bindSym"[]", shape, newLit(i))
+      var cur = idx
+      for j in 0 ..< i:
+        cur = newCall(bindSym"div", cur,
+          newCall(bindSym"[]", shape, newLit(j)))
+      if i < sh.len - 1:
+        parts.add newCall(bindSym"mod", cur, shI)
+      else:
+        parts.add cur
+    result = nnkPar.newTree(parts)
+
+macro idx2crd*(idx: int or Int; shape: IntOrIntTuple; stride: IntOrIntTuple): untyped =
+  ## Convert linear index to coordinate with explicit strides.
+  ## Finds crd such that sum(crd_i * stride_i) = idx within shape bounds.
+  let sh = shape.getTypeInst()
+  if sh.kind != nnkTupleConstr:
+    result = newCall(bindSym"div", idx, stride)
+  else:
+    var parts: seq[NimNode] = @[]
+    for i in 0 ..< sh.len:
+      let s = newCall(bindSym"[]", stride, newLit(i))
+      let shI = newCall(bindSym"[]", shape, newLit(i))
+      # Each mode: (idx / stride[i]) % shape[i] — independent per-mode
+      parts.add newCall(bindSym"mod",
+        newCall(bindSym"div", idx, s), shI)
+    result = nnkPar.newTree(parts)

@@ -690,3 +690,26 @@ macro zipModesWith*(a, b: typed; body: untyped): untyped =
       ct.append(newTree(nnkDotExpr, mName, ident"shape"),
                  newTree(nnkDotExpr, mName, ident"stride"))
   result.add ct.emit()
+
+# ═══════════════════════════════════════════════════════════════
+#  slice/dice/slice_and_offset on Layout [CUTE layout.hpp]
+# ═══════════════════════════════════════════════════════════════
+##
+## These wrap int_tuples.slice/dice for Layout objects.
+## Templates (not macros) so they participate in normal overload resolution.
+## The `layout: Layout` param ensures precedence over the tuple macros.
+
+template slice*(coord: CoordType; layout: Layout): untyped =
+  ## Slice a layout by coordinate: keep modes paired with joker/`_`.
+  make_layout(slice(coord, layout.shape), slice(coord, layout.stride))
+
+template dice*(coord: CoordType; layout: Layout): untyped =
+  ## Dice a layout by coordinate: keep modes paired with ints.
+  make_layout(dice(coord, layout.shape), dice(coord, layout.stride))
+
+template slice_and_offset*(coord: CoordType; layout: Layout): untyped =
+  ## Slice a layout and compute the offset from fixed dims.
+  ## Returns (sublayout, offset).
+  let sub = slice(coord, layout)
+  let off = crd2idx(coord, layout.shape, layout.stride)
+  (sub, off)

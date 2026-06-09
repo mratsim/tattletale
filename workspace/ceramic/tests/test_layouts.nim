@@ -759,6 +759,7 @@ proc runTileUnzipTests* =
     let unzipped = tile_unzip(divided, tiler)
     doAssert rank(unzipped) === 2
   echo "  tile_unzip: 4 cases OK"
+
 # ═══════════════════════════════════════════════════════════════
 #  Run all
 # ═══════════════════════════════════════════════════════════════
