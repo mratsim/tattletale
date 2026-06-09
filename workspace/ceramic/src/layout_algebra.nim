@@ -738,6 +738,6 @@ func tile_to_shape*[Sh, St, Trg](blk: Layout[Sh, St]; trg_shape: Trg; ord_shape:
   let padded_blk = padRight(blk, R)
   let blk_shape = product_each(padded_blk.shape)
   let trg_flat = product_each(trg_shape)
-  let product_shape = zipWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
+  let product_shape = zipModesWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
   let tiler = make_layout(product_shape, ord_shape)
   blocked_product(padded_blk, tiler)

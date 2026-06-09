@@ -738,8 +738,8 @@ func zip2_by*[T: tuple, G: tuple](t: T; guide: G): auto =
 #  zipWith — zip two tuples element-wise, append leftovers
 # ═══════════════════════════════════════════════════════════════
 
-macro map*(t: typed; body: untyped): untyped =
-  ## Apply `body` to each element of tuple `t`.
+macro mapModesWith*[T: IntOrIntTuple](t: T; body: untyped): untyped =
+  ## Apply `body` to each top-level element of tuple `t` (does NOT recurse into nested tuples).
   ## `it` binds to the current element.
   ##
   ## Example:
@@ -762,8 +762,8 @@ macro map*(t: typed; body: untyped): untyped =
   # Multi-item: construct a tuple like nnkTupleConstr.
   result = nnkPar.newTree(items)
 
-macro zipWith*(a, b: typed; body: untyped): untyped =
-  ## Zip elements of tuples `a` and `b` pairwise via `body`.
+macro zipModesWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untyped =
+  ## Zip top-level elements of tuples `a` and `b` pairwise via `body` (does NOT recurse into nested tuples).
   ## `it_a` / `it_b` bind to corresponding elements.
   ## Leftover elements from the longer tuple are appended unchanged.
   ##
@@ -813,7 +813,7 @@ func product_each*(t: IntOrIntTuple): auto =
   ##   product_each(((2,2), (2,8)))  →  (4, 16)
   ##   product_each(5)                →  5
   ##
-  map(t): product(it)
+  mapModesWith(t): product(it)
 
 # ═══════════════════════════════════════════════════════════════
 #  Joker — CuTe Underscore: keep/slice marker for coordinates

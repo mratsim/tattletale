@@ -422,7 +422,8 @@ type LayoutCT* = object
   shape*, stride*: seq[NimNode]
 
 proc append*(ct: var LayoutCT; sh, st: NimNode) {.compileTime.} =
-  ct.shape.add sh; ct.stride.add st
+  ct.shape.add sh
+  ct.stride.add st
 
 func emit*(ct: LayoutCT): NimNode {.compileTime.} =
   ## Build make_layout from accumulated modes (no coalesce).
@@ -669,8 +670,8 @@ macro tile_unzip*(layout: Layout; tiler: typed): untyped =
 #  zipWith — pairwise fn over modes of two Layouts
 # ═══════════════════════════════════════════════════════════════
 
-macro mapModesWith*(arg: typed; body: untyped): untyped =
-  ## Apply `body` to each mode of `arg`. Within body, `it` is the current mode.
+macro mapModesWith*[L: Layout](arg: L; body: untyped): untyped =
+  ## Apply `body` to each mode of Layout `arg`. Within body, `it` is the current mode.
   ## `body` must evaluate to a Layout.
   ##
   ## Example:
@@ -699,7 +700,7 @@ macro mapModesWith*(arg: typed; body: untyped): untyped =
                newTree(nnkDotExpr, resName, ident"stride"))
   result.add ct.emit()
 
-macro zipModesWith*(a, b: typed; body: untyped): untyped =
+macro zipModesWith*[A: Layout, B: Layout](a: A; b: B; body: untyped): untyped =
   ## Zip modes of `a` and `b` pairwise via body, append leftovers.
   ## Within body, `it_a` / `it_b` are the current modes.
   ##
