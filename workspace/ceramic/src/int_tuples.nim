@@ -781,3 +781,37 @@ func product_each*(t: IntOrIntTuple): auto =
     map(t): product(it)
   else:
     t
+
+# ═══════════════════════════════════════════════════════════════
+#  group — wrap elements [B, E) into a nested sub-tuple
+# ═══════════════════════════════════════════════════════════════
+
+macro group*(t: typed; B, E: static int): untyped =
+  ## Wrap elements `[B, E)` of tuple `t` into a nested sub-tuple.
+  ##
+  ## Examples:
+  ##   group((2, 3, 5, 7), 0, 2)  →  ((2, 3), 5, 7)
+  ##   group((2, 3, 5, 7), 0, 4)  →  ((2, 3, 5, 7),)
+  ##   group((2, 3, 5, 7), 1, 3)  →  (2, (3, 5), 7)
+  ##
+  ## Reference:
+  ##   CuTe: group<B,E>(t) — tuple_algorithms.hpp:747
+  ##   Python: group(layout, B, E) — algebra.py:319
+  let tt = getTypeInst(t)
+  if tt.kind != nnkTupleConstr:
+    return t  # scalar: identity
+  let N = tt.len
+  if B < 0 or E > N or B > E:
+    error("group: invalid range [" & $B & ", " & $E & ") for tuple of rank " & $N)
+  result = newNimNode(nnkPar)
+  # elements before B
+  for i in 0 ..< B:
+    result.add nnkBracketExpr.newTree(t, newLit(i))
+  # grouped elements [B, E) as a nested sub-tuple
+  var sub = newNimNode(nnkTupleConstr)
+  for i in B ..< E:
+    sub.add nnkBracketExpr.newTree(t, newLit(i))
+  result.add sub
+  # elements after E
+  for i in E ..< N:
+    result.add nnkBracketExpr.newTree(t, newLit(i))
