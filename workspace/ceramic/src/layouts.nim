@@ -435,15 +435,14 @@ proc append*(ct: var LayoutCT; sh, st: NimNode) {.compileTime.} =
 func emit*(ct: LayoutCT): NimNode {.compileTime.} =
   ## Build make_layout from accumulated modes (no coalesce).
   ## This auto-constant-folds expressions that can be computed at compile-time.
-  var outSh = newNimNode(nnkTupleConstr)
-  var outSt = newNimNode(nnkTupleConstr)
+  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
+  # Multi-item: construct a tuple like nnkTupleConstr.
+  var outSh = newNimNode(nnkPar)
+  var outSt = newNimNode(nnkPar)
   for i in 0 ..< ct.shape.len:
     outSh.add ct.shape[i]; outSt.add ct.stride[i]
   if ct.shape.len == 0:
     result = newCall(bindSym"make_layout", newLit(1), newLit(0))
-  elif ct.shape.len == 1:
-    outSh = outSh[0]; outSt = outSt[0]
-    result = newCall(bindSym"make_layout", outSh, outSt)
   else:
     result = newCall(bindSym"make_layout", outSh, outSt)
 

@@ -455,10 +455,10 @@ macro flattenImpl(t: IntOrIntTuple): untyped =
     else:
       acc.add e
 
-  result = newNimNode(nnkTupleConstr)
+  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
+  # Multi-item: construct a tuple like nnkTupleConstr.
+  result = newNimNode(nnkPar)
   collect(result, tNode, ttype)
-  if result.len == 1:
-    result = result[0]
 
 proc flatten*(t: IntOrIntTuple): auto =
   ## Recursively collect leaf fields of a (possibly nested) tuple.
@@ -726,7 +726,9 @@ macro map*(t: typed; body: untyped): untyped =
   var items: seq[NimNode]
   for i in 0 ..< n:
     items.add subst(body, i, t)
-  result = nnkTupleConstr.newTree(items)
+  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
+  # Multi-item: construct a tuple like nnkTupleConstr.
+  result = nnkPar.newTree(items)
 
 macro zipWith*(a, b: typed; body: untyped): untyped =
   ## Zip elements of tuples `a` and `b` pairwise via `body`.
@@ -764,7 +766,9 @@ macro zipWith*(a, b: typed; body: untyped): untyped =
       items.add nnkBracketExpr.newTree(a, newLit(i))
     else:
       items.add nnkBracketExpr.newTree(b, newLit(i))
-  result.add nnkTupleConstr.newTree(items)
+  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
+  # Multi-item: construct a tuple like nnkTupleConstr.
+  result.add nnkPar.newTree(items)
 
 # ═══════════════════════════════════════════════════════════════
 #  product_each — product of each top-level tuple element
@@ -777,10 +781,7 @@ func product_each*(t: IntOrIntTuple): auto =
   ##   product_each(((2,2), (2,8)))  →  (4, 16)
   ##   product_each(5)                →  5
   ##
-  when t is tuple:
-    map(t): product(it)
-  else:
-    t
+  map(t): product(it)
 
 # ═══════════════════════════════════════════════════════════════
 #  group — wrap elements [B, E) into a nested sub-tuple

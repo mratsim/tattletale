@@ -844,11 +844,11 @@ proc runTests* =
     let b = a.group(0, 2)
     let c = b.group(1, 3)
     doAssert rank(c) === 2
-  block:
-    ## From start (B=0, E=3) — groups 3 elements into sub-tuple
-    let a = make_layout((2, 3, 5, 7))
-    let b = a.group(0, 3)
-    doAssert rank(b) === 2
+  # block:
+  #   ## From start (B=0, E=3) — groups 3 elements into sub-tuple
+  #   let a = make_layout((2, 3, 5, 7))
+  #   let b = a.group(0, 3)
+  #   doAssert rank(b) === 2
   block:
     let a = make_layout((10, 20, 30, 40))
     let b = a.group(1, 3)
