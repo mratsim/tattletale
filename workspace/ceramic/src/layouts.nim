@@ -533,7 +533,7 @@ macro padRight*(layout: typed; rank: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  group — group modes [B, E) into a nested sub-Layout
+#  groupModes — wrap modes [B, E) into a nested sub-Layout
 # ═══════════════════════════════════════════════════════════════
 ##
 ## Wraps modes at indices [B, E) into a nested sub-tuple in both
@@ -543,10 +543,10 @@ macro padRight*(layout: typed; rank: static int): untyped =
 ## Python: group(layout, B, E) — algebra.py:319
 ##
 ## Examples:
-##   group(make_layout((2, 3, 5, 7)), 0, 2)
+##   groupModes(make_layout((2, 3, 5, 7)), 0, 2)
 ##   # → ((2, 3), 5, 7):((1, 2), 6, 30)
 
-macro group*(layout: Layout; B, E: static int): untyped =
+macro groupModes*(layout: Layout; B, E: static int): untyped =
   ## Wraps modes at indices `[B, E)` into a nested sub-tuple in both
   ## shape and stride, producing a higher-rank Layout.
   ##
@@ -554,13 +554,8 @@ macro group*(layout: Layout; B, E: static int): untyped =
   ## Python: group(layout, B, E) — algebra.py:319
   ##
   ## Examples:
-  ##   group(make_layout((2, 3, 5, 7)), 0, 2)
+  ##   groupModes(make_layout((2, 3, 5, 7)), 0, 2)
   ##   # → ((2, 3), 5, 7):((1, 2), 6, 30)
-  ##
-  ## ⚠ Nim currently only hashes the leaves of nested tuples for symbol generation
-  ## Pending https://github.com/nim-lang/Nim/pull/25889
-  ## as `group` reorg tuples while leaving the flattened representation unchanged
-  ## calling `group` might lead to invalid C/C++ codegen
   var ct = LayoutCT()
   let lTyp = layout.getTypeInst()
   let shTyp = lTyp[1]
@@ -569,17 +564,17 @@ macro group*(layout: Layout; B, E: static int): untyped =
       shTyp.len
     else: 1
   for i in 0 ..< B:
-    ct.append(newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"shape"), newLit i),
-               newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"stride"), newLit i))
-  var gSh = newNimNode(nnkPar)
-  var gSt = newNimNode(nnkPar)
+    ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i),
+               nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
+  var gSh = nnkPar.newNimNode()
+  var gSt = nnkPar.newNimNode()
   for i in B ..< E:
-    gSh.add newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"shape"), newLit i)
-    gSt.add newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"stride"), newLit i)
+    gSh.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i)
+    gSt.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i)
   ct.append(gSh, gSt)
   for i in E ..< R:
-    ct.append(newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"shape"), newLit i),
-               newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"stride"), newLit i))
+    ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i),
+               nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════

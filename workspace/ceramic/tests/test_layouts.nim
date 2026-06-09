@@ -891,30 +891,29 @@ proc runTests* =
     doAssert mode(r, 1).shape === (2, 8)
   echo "  5 checks OK"
 
-  echo "--- group ---"
+  echo "--- groupModes ---"
   block:
+    ## Python test_append_prepend_replace_group: group(Layout((2,3,5,7)), 0, 2)
     let a = make_layout((2, 3, 5, 7))
-    let b = a.group(0, 2)
+    doAssert a.shape === (2, 3, 5, 7)
+    doAssert a.stride === (1, 2, 6, 30)
+    let b = a.groupModes(0, 2)
+    doAssert b.shape === ((2, 3), 5, 7)
+    doAssert b.stride === ((1, 2), 6, 30)
+    let c = b.groupModes(1, 3)
+    doAssert c.shape === ((2, 3), (5, 7))
+    doAssert c.stride === ((1, 2), (6, 30))
+  block:
+    ## group with non-identity strides
+    let a = make_layout((10, 20, 30, 40))
+    let b = a.groupModes(1, 3)
     doAssert rank(b) === 3
-  block:
-    let a = make_layout((2, 3, 5, 7))
-    let b = a.group(0, 2)
-    let c = b.group(1, 3)
-    doAssert rank(c) === 2
   # block: -- blocked by tuple hash collision, pending https://github.com/nim-lang/Nim/pull/25889
   #   ## From start (B=0, E=3) — groups 3 elements into sub-tuple
   #   let a = make_layout((2, 3, 5, 7))
-  #   let b = a.group(0, 3)
+  #   let b = a.groupModes(0, 3)
   #   doAssert rank(b) === 2
-  block:
-    let a = make_layout((10, 20, 30, 40))
-    let b = a.group(1, 3)
-    doAssert rank(b) === 3
-  block:
-    let t = (2, 3, 5, 7)
-    doAssert group(t, 0, 2)[0] === (2, 3)
-    doAssert group(t, 1, 3)[1] === (3, 5)
-  echo "    group: 4 cases OK"
+  echo "    groupModes: 8 checks OK"
 
 when isMainModule:
   runTests()
