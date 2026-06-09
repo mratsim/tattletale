@@ -506,7 +506,7 @@ macro zip*[A, B: Layout](a: A, b: B): untyped =
 #  Used by blocked_product / raked_product to equalize ranks.
 #  Pads on the RIGHT (appends identity modes at the end).
 
-macro padRight*(layout: typed; rank: static int): untyped =
+macro padRight*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by padding with identity modes (1, 0).
   ## Identity modes are appended on the right.
   ## Zero-cost if layout is at least the target rank. The input AST is passed as-is
@@ -539,7 +539,7 @@ macro padRight*(layout: typed; rank: static int): untyped =
 ##  Used by gemm.hpp to lift 2D operands to 3D.
 ##  Pads on the LEFT (prepends identity modes at the front).
 
-macro padLeft*(layout: typed; rank: static int): untyped =
+macro padLeft*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by prepending identity modes (1, 0).
   ## Identity modes are prepended on the left.
   ## Zero-cost if layout is at least the target rank.
@@ -608,6 +608,44 @@ macro groupModes*(layout: Layout; B, E: static int): untyped =
     ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i),
                nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
   result = ct.emit()
+#  takeModes — extract modes [B, E) into a new Layout
+# ═══════════════════════════════════════════════════════════════
+##
+## CuTe: take<B,E>(layout) — layout.hpp:511
+##
+## Examples:
+##   takeModes(make_layout((2, 3, 5, 7)), 1, 3)
+##   # → (3, 5):(2, 6)
+
+macro takeModes*(layout: Layout; B, E: static int): untyped =
+  ## Extract modes `[B, E)` into a new Layout.
+  ## Returns a scalar Layout if only one mode is extracted.
+  var ct = LayoutCT()
+  let lTyp = layout.getTypeInst()
+  let shTyp = lTyp[1]
+  let R = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
+  for i in B ..< min(E, R):
+    ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(i)),
+               nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(i)))
+  result = ct.emit()
+
+#  selectModes — extract specific mode indices into a new Layout
+# ═══════════════════════════════════════════════════════════════
+##
+## CuTe: select<Is...>(layout) — layout.hpp:521
+##
+## Examples:
+##   selectModes(make_layout((2, 3, 5, 7)), 0, 3)
+##   # → (2, 7):(1, 30)
+
+macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
+  ## Extract specific mode indices into a new Layout.
+  var ct = LayoutCT()
+  for i in 0 ..< Is.len:
+    let idx = Is[i].intVal
+    ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(idx)),
+               nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(idx)))
+  result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
 #  tile_unzip — unzip a logical_divide/product result into tiles+rest
@@ -617,7 +655,7 @@ macro groupModes*(layout: Layout; B, E: static int): untyped =
 ## MoYe: tile_unzip(layout, tile) (same)
 ## Python: no direct equivalent — inlined into zipped_divide/product
 
-macro tile_unzip*(layout: typed; tiler: typed): untyped =
+macro tile_unzip*(layout: Layout; tiler: typed): untyped =
   ## Unzip a logical_divide/logical_product result according to a tiler.
   ## Returns a rank-2 Layout: ((tile_modes), (rest_modes)).
   let zShape = newCall(bindSym"zip2_by",

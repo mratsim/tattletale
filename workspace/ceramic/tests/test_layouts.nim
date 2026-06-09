@@ -955,5 +955,45 @@ proc runTests* =
     doAssert b.shape === (1, 1, 5)
     doAssert b.stride === (0, 0, 1)
   echo "    padRight/padLeft: 6 cases OK"
+  echo "--- takeModes/selectModes ---"
+  block:
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.takeModes(1, 3)
+    doAssert b.shape === (3, 5)
+    doAssert b.stride === (2, 6)
+  block:
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.selectModes(0, 3)
+    doAssert b.shape === (2, 7)
+    doAssert b.stride === (1, 30)
+  block:
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.takeModes(0, 1)
+    doAssert b.shape === 2
+    doAssert b.stride === 1
+  block:
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.selectModes(2)
+    doAssert b.shape === 5
+    doAssert b.stride === 6
+  block:
+    ## const indirection for takeModes
+    const B = 1
+    const E = 3
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.takeModes(B, E)
+    doAssert b.shape === (3, 5)
+    doAssert b.stride === (2, 6)
+  block:
+    ## const indirection for selectModes
+    const I0 = 0
+    const I3 = 3
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.selectModes(I0, I3)
+    doAssert b.shape === (2, 7)
+    doAssert b.stride === (1, 30)
+  echo "    takeModes/selectModes: 6 cases OK"
+
+
 when isMainModule:
   runTests()
