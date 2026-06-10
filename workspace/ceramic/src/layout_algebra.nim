@@ -655,6 +655,17 @@ func logical_product*[A, B: Layout](a: A; tiler: B): auto =
   make_layout((a.shape, rest.shape), (a.stride, rest.stride))
 
 
+func nested_product*[A, B: Layout](a: A; b: B): auto =
+  ## Categorical product of two layouts, preserving each argument's mode grouping.
+  ##
+  ## Given:
+  ##   A: (a0, a1, ...):(sa0, sa1, ...)
+  ##   B: (b0, b1, ...):(sb0, sb1, ...)
+  ## Returns:
+  ##   ((a0, a1, ...), (b0, b1, ...)) : ((sa0, sa1, ...), (sb0, sb1, ...))
+  make_layout((a.shape, b.shape), (a.stride, b.stride))
+
+
 # ── zipped_product / tiled_product / flat_product ──
 
 func zipped_product*[A: Layout](blk: A; tiler: auto): auto =
