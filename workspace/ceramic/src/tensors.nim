@@ -68,6 +68,12 @@ template make_view*(data: ptr UncheckedArray; L: Layout): untyped =
 func make_view*[T, Sh, St](data: ptr T; L: Layout[Sh, St]): TensorView[T, Sh, St] =
   make_view(cast[ptr UncheckedArray[T]](data), L)
 
+func make_view*[T, ShA, StA, ShB, StB](
+    tv: TensorView[T, ShA, StA];
+    L: Layout[ShB, StB]): TensorView[T, ShB, StB] =
+  ## Reinterpret a TensorView with a new layout (same data pointer).
+  TensorView[T, ShB, StB](data: tv.data, layout: L)
+
 # ─────────────────────────────────────────────────────────────────────────
 #  make_view(shape, stride tuples) — convenience, delegates to make_view(Layout)
 # ─────────────────────────────────────────────────────────────────────────
@@ -80,6 +86,10 @@ template make_view*[T](data: openArray[T]; shape, stride: IntOrIntTuple): untype
 
 template make_view*[T](data: ptr T; shape, stride: IntOrIntTuple): untyped =
   make_view(data, make_layout(shape, stride))
+
+template make_view*[T, ShA, StA](tv: TensorView[T, ShA, StA]; shape, stride: IntOrIntTuple): untyped =
+  ## Reinterpret a TensorView with new shape and stride (same data pointer).
+  make_view(tv, make_layout(shape, stride))
 
 # shape-only overloads — natural col-major strides
 template make_view*[T](ptr_data: ptr UncheckedArray[T]; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
@@ -185,6 +195,26 @@ template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
   let st = slice(coord, tv.layout.stride)
   make_view(cast[ptr UncheckedArray[T]](cast[int](tv.data) +% off *% sizeof(T).int),
             make_layout(sh, st))
+
+# ═════════════════════════════════════════════════════════════════════════
+#  fill — set every logical element to a constant
+# ═════════════════════════════════════════════════════════════════════════
+##
+##  CuTe: fill(tensor, value) — flat loop over tensor's logical domain.
+##  The layout remaps the flat index to memory, handling strides,
+##  broadcasts (stride-0), and arbitrary nesting.
+##
+template fillWith*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
+  ## Set every logical element of `tv` to `val`.
+  let n = size(tv.layout)
+  for i in 0 ..< n:
+    tv(i) = val
+
+template fillWith*[T, Sh, St](t: var Tensor[T, Sh, St]; val: T) =
+  ## Set every logical element of `t` to `val`.
+  let n = size(t.layout)
+  for i in 0 ..< n:
+    t(i) = val
 
 # ═════════════════════════════════════════════════════════════════════════
 #  copyFrom / copyFromIf — flat-index element copy primitives
