@@ -20,6 +20,7 @@ import std/macros
 import std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
+{.experimental: "callOperator".}
 
 # ..< overload for Int[N] ranges
 func `..<`*[V: static int](a: int; b: Int[V]): Slice[int] = a ..< V
@@ -312,19 +313,19 @@ proc runSliceAndOffsetBasicTests* =
 proc runIdx2crdTests* =
   let L = make_layout((3, 4), (1, 3))
   block:
-    let crd = idx2crd(5, L)
+    let crd = idx2crd(L, 5)
     doAssert crd[0] === 2
     doAssert crd[1] === 1
   block:
-    let crd = idx2crd(0, L)
+    let crd = idx2crd(L, 0)
     doAssert crd[0] === 0
     doAssert crd[1] === 0
   block:
-    let crd = idx2crd(11, L)
+    let crd = idx2crd(L, 11)
     doAssert crd[0] === 2
     doAssert crd[1] === 3
   block:
-    let crd = idx2crd(9, L)
+    let crd = idx2crd(L, 9)
     doAssert crd[0] === 0
     doAssert crd[1] === 3
   echo "  4 cases OK"

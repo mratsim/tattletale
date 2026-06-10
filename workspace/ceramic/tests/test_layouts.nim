@@ -4,6 +4,7 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
+{.experimental: "callOperator".}
 
 ## Tests for CuTe-compatible int_tuples + layouts.
 ##
@@ -665,51 +666,51 @@ proc runIdx2crdTests* =
   block:
     ## Basic 2D flat shape
     let L = make_layout((3, 4), (1, 4))
-    let crd = idx2crd(5, L)
+    let crd = idx2crd(L, 5)
     doAssert crd[0] === 2
     doAssert crd[1] === 1
   block:
     ## Index 0 -> first element
     let L = make_layout((3, 4), (1, 4))
-    let crd = idx2crd(0, L)
+    let crd = idx2crd(L, 0)
     doAssert crd[0] === 0
     doAssert crd[1] === 0
   block:
     ## Last element
     let L = make_layout((3, 4), (1, 4))
-    let crd = idx2crd(11, L)
+    let crd = idx2crd(L, 11)
     doAssert crd[0] === 2
     doAssert crd[1] === 2
   block:
     ## Non-compact stride (MoYe test case, 0-indexed)
     let L = make_layout((3, 4), (1, 3))
-    let crd = idx2crd(9, L)
+    let crd = idx2crd(L, 9)
     doAssert crd[0] === 0
     doAssert crd[1] === 3
   block:
     ## Index at shape boundary
     let L = make_layout((3, 4), (1, 3))
-    let crd = idx2crd(3, L)
+    let crd = idx2crd(L, 3)
     doAssert crd[0] === 0
     doAssert crd[1] === 1
   block:
     ## Single mode layout
     let L = make_layout(8, 1)
-    let crd = idx2crd(5, L)
+    let crd = idx2crd(L, 5)
     doAssert crd === 5
   block:
     ## 3D flat shape
     let L = make_layout((3, 4, 5), (1, 3, 12))
-    let crd = idx2crd(43, L)
+    let crd = idx2crd(L, 43)
     doAssert crd[0] === 1
     doAssert crd[1] === 2
     doAssert crd[2] === 3
   block:
-    ## Roundtrip: crd2idx(idx2crd(i, L), L) == i
+    ## Roundtrip: crd2idx(idx2crd(L, i), L) == i
     let L = make_layout((4, 8), (1, 4))
     for i in 0 ..< size(L):
-      let crd = idx2crd(i, L)
-      let idx = crd2idx(crd, L)
+      let crd = idx2crd(L, i)
+      let idx = crd2idx(L, crd)
       doAssert idx === i, "roundtrip i=" & $i & ": got " & $idx
   echo "  idx2crd: 8 cases OK"
 #  layout[] — call operator

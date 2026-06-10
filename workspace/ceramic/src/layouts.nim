@@ -226,15 +226,15 @@ template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): a
   )
 
 # ═══════════════════════════════════════════════════════════════
-#  crd2idx / layout[] — coordinate to linear index  (private)
+#  crd2idx / layout() — coordinate to linear index  (private)
 #  idx2crd — linear index → coordinate tuple            (private)
 # ═══════════════════════════════════════════════════════════════
 #
 #  Internals. External code must go through Layout overloads:
-#    layout[coord]         — crd2idx via bracket
-#    crd2idx(coord, L)    — crd2idx via Layout arg
-#    idx2crd(idx, L)      — idx2crd via Layout arg
-
+#    layout(coord)         — flat crd2idx via parens
+#    layout[i, j, ...]    — multi crd2idx via varargs bracket
+#    crd2idx(L, coord)    — crd2idx via Layout arg (layout first)
+#    idx2crd(L, idx)      — idx2crd via Layout arg (layout first)
 # Scalar overloads (private)
 
 # Scalar overloads
@@ -272,7 +272,7 @@ func crd2idx[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): aut
 #  Layout coordinate → offset  (public API)
 # ═══════════════════════════════════════════════════════════════
 
-func crd2idx*(coord: IntOrIntTuple; layout: Layout): int =
+func crd2idx*(layout: Layout; coord: IntOrIntTuple): int =
   ## Logical-to-memory offset for a coordinate on a Layout.
   ##
   ## `coord` can be:
@@ -280,26 +280,31 @@ func crd2idx*(coord: IntOrIntTuple; layout: Layout): int =
   ##   • a `tuple`  — inner product `coord·stride` per mode
   ##   • a static `Int[V]` — same, compile-time constant
   ##
-  ## External code must use this (or `layout[coord]`) rather than
+  ## External code must use this (or `layout(coord)`) rather than
   ## calling the raw `crd2idx(coord, shape, stride)` directly,
   ## which is module-private to layouts.nim.
   crd2idx(coord, layout.shape, layout.stride)
 
-func `[]`*[Sh, St](layout: Layout[Sh, St]; idx: IntOrIntTuple): int =
-  ## Bracket-syntax shorthand: `layout[coord]` ≡ `crd2idx(coord, layout)`.
-  crd2idx(idx, layout)
+template `()`*[Sh, St](layout: Layout[Sh, St]; idx: IntOrIntTuple): int =
+  ## Parens-syntax flat indexing: `layout(coord)` ≡ `crd2idx(layout, coord)`.
+  crd2idx(layout, idx)
 
+macro `[]`*(layout: Layout; args: varargs[IntOrIntTuple]): untyped =
+  ## Multi-index via varargs bracket: `layout[i, j]` or `layout[(ri, rj), k]`.
+  var coord = nnkPar.newTree()
+  args.copyChildrenTo(coord)
+  result = newCall(bindSym"()", layout, coord)
 # ═══════════════════════════════════════════════════════════════
 #  idx2crd — linear index → coordinate tuple
 # ═══════════════════════════════════════════════════════════════
 
-macro idx2crd*(idx: int or Int; layout: Layout): untyped =
+macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
   ##
   ## Each mode: `(idx div layout.stride[i]) mod layout.shape[i]`.
   ##
   ## MoYe: `index_to_coord(idx, shape, stride)
-  ## CuTe: `idx2crd(idx, shape)`
+  ## CuTe: `idx2crd(idx, shape)` — CuTe has shape second
   let lTyp = layout.getTypeInst()
   let shT = lTyp[1]
   let sh = newTree(nnkDotExpr, layout, ident"shape")
