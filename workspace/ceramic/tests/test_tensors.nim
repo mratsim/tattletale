@@ -1,8 +1,9 @@
 ## Tests for Tensors: owning Tensor (seq-backed) and TensorView (ptr-backed).
 ##
 ## Reference:
-##   - CuTe C++: tensor_impl.hpp
-##   - Python: tensor-layouts/tests/tensor.py
+##   - CuTe C++: tensor_impl.hpp — operator[] uses layout()(i) for flat indexing
+##   - CuTe C++: layout_operator.cu — layout({m, n}) == layout(m, n) flat-tuple ⇔ multi-index
+##   - Python: tensor-layouts/tests/tensor.py — test_flat_eval_*, test_*_indexing
 
 import std/macros
 import workspace/ceramic/src/int_tuples {.all.}
@@ -10,9 +11,9 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 #  Tensor construction
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 proc runTensorConstructionTests* =
   block:  # Tensor from seq + offset + layout (owning copy of seq)
@@ -55,9 +56,9 @@ proc runTensorConstructionTests* =
     var t = make_tensor(buf, 10, make_layout((2, 3), (1, 2)))
     doAssert t.offset == 10
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 #  TensorView construction
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 proc runTensorViewTests* =
   block:  # View from array
@@ -78,19 +79,48 @@ proc runTensorViewTests* =
     let v = t.view()
     doAssert v.size == 12
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 #  Flat indexing — operator[]
-# ═══════════════════════════════════════════════════════════════
+#  Matches CuTe C++: Tensor::operator[](int i) → data()[layout()(i)]
+#  Matches Python tensor-layouts: test_flat_eval_*
+proc runFlatIndexTests* =
+  # Python/CuTe: t[i] == layout(i) — flat index decomposes via idx2crd,
+  # then computes offset via crd2idx (col-major decomposition).
+  # With data: v[i] == data[layout[i]].
 
-proc runTensorFlatIndexTests* =
-  block:  # Fill + flat readback through Tensor
-    var buf = newSeq[float32](12)
+  block:  # Rank-2 column-major: t[i] == layout(i) for all i
+    let L = make_layout((3, 4), (1, 3))
+    var buf: array[12, float32]
     for i in 0 ..< 12: buf[i] = i.float32
-    var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    let v = make_view(addr(buf[0]), L)
     for i in 0 ..< 12:
-      doAssert t[i] == i.float32
+      doAssert v[i] == L[i].float32
 
-  block:  # Flat write through tensor, verify through t
+  block:  # Rank-2 row-major: t[i] == layout(i) for all i
+    let L = make_layout((3, 4), (4, 1))
+    var buf: array[12, float32]
+    for i in 0 ..< 12: buf[i] = i.float32
+    let v = make_view(addr(buf[0]), L)
+    for i in 0 ..< 12:
+      doAssert v[i] == L[i].float32
+
+  block:  # Rank-3: t[i] == layout(i) for all i
+    let L = make_layout((2, 4, 8), (32, 8, 1))
+    var buf: array[64, float32]
+    for i in 0 ..< 64: buf[i] = i.float32
+    let v = make_view(addr(buf[0]), L)
+    for i in 0 ..< 64:
+      doAssert v[i] == L[i].float32
+
+  block:  # With non-zero offset: t[i] == offset + layout(i)
+    let L = make_layout((4, 8), (8, 1))
+    var buf = newSeq[float32](44)
+    for i in 0 ..< 44: buf[i] = i.float32
+    var t = make_tensor(buf, 12, L)
+    for i in 0 ..< 32:
+      doAssert t[i] == (12 + L[i]).float32
+
+  block:  # Write via t[i] = val, read back through t
     var buf = newSeq[float32](6)
     var t = make_tensor(buf, 0, make_layout((2, 3), (1, 2)))
     for i in 0 ..< 6:
@@ -98,53 +128,76 @@ proc runTensorFlatIndexTests* =
     for i in 0 ..< 6:
       doAssert t[i] == (i * 10).float32
 
-  block:  # Flat index with non-zero offset
-    var buf = newSeq[float32](20)
-    for i in 0 ..< 20: buf[i] = i.float32
-    let t = make_tensor(buf, 10, make_layout((2, 3), (1, 2)))
-    doAssert t[0] == 10.0'f32
-    doAssert t[5] == 15.0'f32
-
-  block:  # Flat indexing on TensorView
-    var buf: array[12, float32]
-    for i in 0 ..< 12: buf[i] = i.float32
-    let p = addr(buf[0])
-    let v = make_view(p, make_layout((3, 4), (1, 3)))
-    for i in 0 ..< 12:
-      doAssert v[i] == i.float32
-
-  block:  # Flat write via TensorView modifies original array
+  block:  # Write via v[i] = val modifies backing storage
     var buf: array[6, float32]
-    let p = addr(buf[0])
-    let v = make_view(p, make_layout((2, 3), (1, 2)))
+    let v = make_view(addr(buf[0]), make_layout((2, 3), (1, 2)))
     for i in 0 ..< 6:
       v[i] = (i * 10).float32
     for i in 0 ..< 6:
       doAssert buf[i] == (i * 10).float32
-    for i in 0 ..< 6:
-      doAssert v[i] == (i * 10).float32
 
-# ═══════════════════════════════════════════════════════════════
-#  Multi-index indexing — operator()
-# ═══════════════════════════════════════════════════════════════
+  block:  # Single-int multi-index matches decomposed multi-index
+    let L = make_layout((3, 4), (1, 3))
+    var buf: array[12, float32]
+    for i in 0 ..< 12: buf[i] = i.float32
+    let v = make_view(addr(buf[0]), L)
+    for i in 0 ..< 12:
+      let coord = idx2crd(i, L.shape, L.stride)
+      doAssert v(i) == v(coord), "t(" & $i & ") should equal t(" & $coord & ")"
+  block:  # t(flat_idx) always equals multi-index that idx2crd produces
+    # Python: test_single_index_flat_eval
+    let lay = make_layout((4, 8), (1, 4))
+    var buf: array[32, float32]
+    for i in 0 ..< 32: buf[i] = i.float32
+    let v = make_view(addr(buf[0]), lay)
+    # Single element: idx2crd(2, (4,8)) = (2, 0) → offset 2
+    doAssert v(2) == 2.0'f32
+    for i in 0 ..< 32:
+      doAssert v(i) == i.float32
 
-proc runTensorMultiIndexTests* =
-  block:  # Col-major Tensor: (i,j) -> data[i + j*M]
+# ═════════════════════════════════════════════════════════════════════════════
+#  Multi-index indexing — operator() with tuple or individual int args
+#  Matches CuTe C++: Tensor::operator()(Coord const&) → data()[layout()(coord)]
+#  Matches Python tensor-layouts: test_*_indexing
+# ═════════════════════════════════════════════════════════════════════════════
+
+proc runMultiIndexTests* =
+  block:  # Col-major Tensor: (i,j) -> data[i + j*M]  (Python: test_column_major_indexing)
     var buf = newSeq[float32](12)
     var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
-    for idx in 0 ..< 12:
-      t[idx] = idx.float32
+    for idx in 0 ..< 12: t[idx] = idx.float32
     doAssert t((0, 0)) == 0.0'f32
     doAssert t((2, 0)) == 2.0'f32
     doAssert t((0, 1)) == 3.0'f32
     doAssert t((1, 2)) == 7.0'f32
     doAssert t((2, 3)) == 11.0'f32
 
-  block:  # 2-arg: t(i, j)
+  block:  # Exhaustive col-major: for all (i,j), t(i,j) == i + j*M
+    let M = 3; let N = 4
+    var buf: array[12, float32]
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        buf[i + j*M] = (i + j*M).float32
+    let v = make_view(addr(buf[0]), make_layout((M, N), (1, M)))
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        doAssert v(i, j) == (i + j*M).float32
+
+  block:  # Exhaustive row-major: for all (i,j), t(i,j) == i*N + j
+    let M = 3; let N = 4
+    var buf: array[12, float32]
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        buf[i*N + j] = (i*N + j).float32
+    let v = make_view(addr(buf[0]), make_layout((M, N), (N, 1)))
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        doAssert v(i, j) == (i*N + j).float32
+
+  block:  # 2-arg: t(i, j) tuple-free syntax
     var buf = newSeq[float32](12)
     var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
-    for idx in 0 ..< 12:
-      t[idx] = idx.float32
+    for idx in 0 ..< 12: t[idx] = idx.float32
     doAssert t(0, 0) == 0.0'f32
     doAssert t(1, 2) == 7.0'f32
 
@@ -178,7 +231,7 @@ proc runTensorMultiIndexTests* =
     doAssert v((1, 1)) == 5.0'f32
     doAssert v((0, 2)) == 9.0'f32
 
-  block:  # Dynamic col-major
+  block:  # Dynamic col-major (M,N not compile-time)
     let M = 5; let N = 4
     var buf: array[20, float32]
     for idx in 0 ..< (M*N): buf[idx] = idx.float32
@@ -196,11 +249,59 @@ proc runTensorMultiIndexTests* =
     doAssert t(0, 0) == 10.0'f32
     doAssert t(1, 2) == 20.0'f32
 
-# ═══════════════════════════════════════════════════════════════
-#  Tensor slicing with Joker (`_`)
-# ═══════════════════════════════════════════════════════════════
+  # ───────────────────────────────────────────────────────────────────────
+  # Rank-3 indexing (Python: test_rank3_tensor)
+  # ───────────────────────────────────────────────────────────────────────
 
-proc runTensorSliceTests* =
+  block:  # 3D col-major: (b, h, w) -> data[b*32 + h*8 + w]
+    var buf: array[64, float32]
+    for i in 0 ..< 64: buf[i] = i.float32
+    let v = make_view(addr(buf[0]), make_layout((2, 4, 8), (32, 8, 1)))
+    doAssert v(0, 0, 0) == 0.0'f32
+    doAssert v(1, 0, 0) == 32.0'f32
+    doAssert v(0, 1, 0) == 8.0'f32
+    doAssert v(0, 0, 1) == 1.0'f32
+    doAssert v(1, 2, 3) == (32 + 16 + 3).float32
+
+  block:  # Exhaustive rank-3
+    var buf: array[64, float32]
+    for i in 0 ..< 64: buf[i] = i.float32
+    let v = make_view(addr(buf[0]), make_layout((2, 4, 8), (32, 8, 1)))
+    for b in 0 ..< 2:
+      for h in 0 ..< 4:
+        for w in 0 ..< 8:
+          let expected = b*32 + h*8 + w
+          doAssert v(b, h, w) == expected.float32
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Offset tensor: tensor(coord) == offset + layout(coord)
+  # (Python: test_with_offset_indexing)
+  # ───────────────────────────────────────────────────────────────────────
+
+  block:  # With non-zero offset, all coordinates shifted
+    let offset = 1000
+    let M = 3; let N = 4
+    var buf = newSeq[float32](1012)
+    for i in 0 ..< 1012: buf[i] = i.float32
+    var t = make_tensor(buf, offset, make_layout((M, N), (1, M)))
+    let base = make_tensor(buf, 0, make_layout((M, N), (1, M)))
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        doAssert t(i, j) == offset.float32 + base(i, j)
+
+  block:  # Tensor(i) single-int multi-index
+    var buf: array[12, float32]
+    for i in 0 ..< 12: buf[i] = i.float32
+    let v = make_view(addr(buf[0]), make_layout((3, 4), (1, 3)))
+    doAssert v(0) == 0.0'f32
+    doAssert v(4) == 4.0'f32
+    doAssert v(11) == 11.0'f32
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Tensor slicing with Joker (`_`)
+# ═════════════════════════════════════════════════════════════════════════════
+
+proc runSliceTests* =
   block:  # Slice row: t.slice((row, _)) returns 1D Tensor
     var buf = newSeq[float32](12)
     var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
@@ -249,11 +350,11 @@ proc runTensorSliceTests* =
     doAssert col(0) == 6.0'f32
     doAssert col(2) == 8.0'f32
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 #  Tensor of different element types
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
-proc runTensorTypeTests* =
+proc runTypeTests* =
   block:  # int32 tensor
     var buf: array[8, int32]
     for i in 0 ..< 8: buf[i] = i.int32 * 10
@@ -276,17 +377,17 @@ proc runTensorTypeTests* =
     let v = make_view(p, make_layout((2, 2), (1, 2)))
     doAssert v((0, 1)) == 42
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 #  Test runner
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 proc runTests* =
   runTensorConstructionTests()
   runTensorViewTests()
-  runTensorFlatIndexTests()
-  runTensorMultiIndexTests()
-  runTensorSliceTests()
-  runTensorTypeTests()
+  runFlatIndexTests()
+  runMultiIndexTests()
+  runSliceTests()
+  runTypeTests()
 
 when isMainModule:
   runTests()

@@ -32,20 +32,20 @@ type
 func make_tensor*[Sh, St, T](L: Layout[Sh, St]; _: typedesc[T]): Tensor[T, Sh, St] =
   Tensor[T, Sh, St](data: newSeq[T](cosize(L).toIntVal()), offset: 0, layout: L)
 
-func make_tensor*[T, Sh, St](d: seq[T]; off: int; L: Layout[Sh, St]): Tensor[T, Sh, St] =
-  Tensor[T, Sh, St](data: d, offset: off, layout: L)
+func make_tensor*[T, Sh, St](data: openArray[T]; off: int; L: Layout[Sh, St]): Tensor[T, Sh, St] =
+  Tensor[T, Sh, St](data: @data, offset: off, layout: L)
 
 template make_tensor*(shape, stride: IntOrIntTuple; T: typedesc): untyped =
   make_tensor(make_layout(shape, stride), T)
 
-template make_tensor*(d: seq; off: int; shape, stride: IntOrIntTuple): untyped =
-  make_tensor(d, off, make_layout(shape, stride))
+template make_tensor*(data: openArray; off: int; shape, stride: IntOrIntTuple): untyped =
+  make_tensor(data, off, make_layout(shape, stride))
 
 template make_tensor*(shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft; T: typedesc): untyped =
   make_tensor(make_layout(shape, order), T)
 
-template make_tensor*(d: seq; off: int; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
-  make_tensor(d, off, make_layout(shape, order))
+template make_tensor*(data: openArray; off: int; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
+  make_tensor(data, off, make_layout(shape, order))
 
 # ─────────────────────────────────────────────────────────────────────────
 #  make_view(Layout)
@@ -54,15 +54,15 @@ template make_tensor*(d: seq; off: int; shape: IntOrIntTuple; order: static Stri
 func make_view*[T, Sh, St](ptr_data: ptr UncheckedArray[T]; L: Layout[Sh, St]): TensorView[T, Sh, St] =
   TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](ptr_data), layout: L)
 
-func make_view*[T, Sh, St](s: var seq[T]; L: Layout[Sh, St]): TensorView[T, Sh, St] =
-  TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](addr s[0]), layout: L)
+func make_view*[T, Sh, St](data: var seq[T]; L: Layout[Sh, St]): TensorView[T, Sh, St] =
+  TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](addr data[0]), layout: L)
 
-template make_view*(d: ptr UncheckedArray; L: Layout): untyped =
-  type ElemType = type(d[])
+template make_view*(data: ptr UncheckedArray; L: Layout): untyped =
+  type ElemType = type(data[])
   type Sh = typeof(L.shape)
   type St = typeof(L.stride)
   TensorView[ElemType, Sh, St](
-    data: cast[ptr UncheckedArray[ElemType]](d),
+    data: cast[ptr UncheckedArray[ElemType]](data),
     layout: L)
 
 func make_view*[T, Sh, St](data: ptr T; L: Layout[Sh, St]): TensorView[T, Sh, St] =
@@ -85,8 +85,8 @@ template make_view*[T](data: ptr T; shape, stride: IntOrIntTuple): untyped =
 template make_view*[T](ptr_data: ptr UncheckedArray[T]; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
   make_view(ptr_data, make_layout(shape, order))
 
-template make_view*[T](s: var seq[T]; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
-  make_view(s, make_layout(shape, order))
+template make_view*[T](data: var seq[T]; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
+  make_view(data, make_layout(shape, order))
 
 template make_view*[T](data: openArray[T]; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
   make_view(addr data[0], make_layout(shape, order))
@@ -129,10 +129,18 @@ template cosize*(t: Tensor): untyped = t.layout.cosize()
 #  Linear indexing — single int
 # ═════════════════════════════════════════════════════════════════════════
 
+
+template `[]`*[T, Sh, St](t: Tensor[T, Sh, St]; idx: int): untyped =
+  t.data[t.offset + t.layout[idx]]
+
+template `[]=`*[T, Sh, St](t: var Tensor[T, Sh, St]; idx: int; val: T) =
+  t.data[t.offset + t.layout[idx]] = val
+
 template `[]`*[T, Sh, St](tv: TensorView[T, Sh, St]; idx: int): untyped =
-  tv.data[idx]
+  tv.data[tv.layout[idx]]
 
 template `[]=`*[T, Sh, St](tv: var TensorView[T, Sh, St]; idx: int; val: T) =
+  tv.data[tv.layout[idx]] = val
   tv.data[idx] = val
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -203,6 +211,14 @@ template `()`*[T, Sh, St](tv: var TensorView[T, Sh, St]; a, b, c, d: int): untyp
 # ═════════════════════════════════════════════════════════════════════════
 #  slice — subtensor via Joker
 # ═════════════════════════════════════════════════════════════════════════
+
+
+template slice*[T, Sh, St](t: Tensor[T, Sh, St]; coord: untyped): untyped =
+  let off = crd2idx(coord, t.layout.shape, t.layout.stride)
+  let sh = slice(coord, t.layout.shape)
+  let st = slice(coord, t.layout.stride)
+  make_view(cast[ptr UncheckedArray[T]](addr(t.data[t.offset + off])),
+            make_layout(sh, st))
 
 template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
   let off = crd2idx(coord, tv.layout.shape, tv.layout.stride)
