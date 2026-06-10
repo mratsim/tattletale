@@ -96,15 +96,13 @@ proc autoTileParams(atom: static MmaAtom; T: typedesc; M, K: int): tuple[mc, kc:
   const kc_atom = atom.kc
 
   # kc: L1 cache — B micro-panel is kc × nr elements
-  let kc_max = int((L1_CACHE_SIZE div 2) div (nr * sizeof(T)))
-  result.kc = min(K, kc_max)
+  let kc_max = min(512, K)   # Laser heuristic: 2048/sizeof(T) for float32
   result.kc = (result.kc div kc_atom) * kc_atom   # round down to atom kc
   if result.kc < kc_atom:
     result.kc = min(K, kc_atom)
 
   # mc: L2 cache — A block is mc × kc elements
-  let mc_max = int((L2_CACHE_SIZE div 2) div (result.kc * sizeof(T)))
-  result.mc = min(M, mc_max)
+  let mc_max = min(192, M)   # Laser heuristic: 768/sizeof(T) for float32
   result.mc = (result.mc div mr) * mr              # round down to mr
   if result.mc < mr:
     result.mc = min(M, mr)
@@ -196,9 +194,9 @@ proc gemm_strided*[T: SomeNumber](
 
   # ── Micro-kernel tile dimensions (register-level) ──
   const
-    mr = 4      # micro-tile height  (rows of C in registers)
-    nr = 4      # micro-tile width   (cols of C in registers)
-    kc_atom = 4 # inner-loop step within micro-kernel
+    mr = 6      # micro-tile height  (rows of C in registers)
+    nr = 16     # micro-tile width   (cols of C in registers)
+    kc_atom = 8 # inner-loop step within micro-kernel
 
   # ── Cache-block dimensions ──
   const atom = MmaAtom(mr: mr, nr: nr, kc: kc_atom)
@@ -233,11 +231,10 @@ proc gemm_strided*[T: SomeNumber](
 
 
   # ── Pack buffer layouts (3D LayoutRight — kc-major, mr/nr minor) ──
-  var packDataA = newSeq[T](int(cosize(packALay)))
-  var packDataB = newSeq[T](int(cosize(packBLay)))
-  
   let packALay = make_layout((num_ir, kc, mr), LayoutRight)
   let packBLay = make_layout((num_jr, kc, nr), LayoutRight)
+  var packDataA = newSeq[T](int(cosize(packALay)))
+  var packDataB = newSeq[T](int(cosize(packBLay)))
   var packA = make_view(packDataA, packALay)
   var packB = make_view(packDataB, packBLay)
 
