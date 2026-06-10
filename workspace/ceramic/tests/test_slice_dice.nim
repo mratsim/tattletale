@@ -310,20 +310,21 @@ proc runSliceAndOffsetBasicTests* =
 #  I. idx2crd
 
 proc runIdx2crdTests* =
+  let L = make_layout((3, 4), (1, 3))
   block:
-    let crd = idx2crd(5, (3, 4), (1, 3))
+    let crd = idx2crd(5, L)
     doAssert crd[0] === 2
     doAssert crd[1] === 1
   block:
-    let crd = idx2crd(0, (3, 4), (1, 3))
+    let crd = idx2crd(0, L)
     doAssert crd[0] === 0
     doAssert crd[1] === 0
   block:
-    let crd = idx2crd(11, (3, 4), (1, 3))
+    let crd = idx2crd(11, L)
     doAssert crd[0] === 2
     doAssert crd[1] === 3
   block:
-    let crd = idx2crd(9, (3, 4), (1, 3))
+    let crd = idx2crd(9, L)
     doAssert crd[0] === 0
     doAssert crd[1] === 3
   echo "  4 cases OK"

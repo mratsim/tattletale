@@ -18,7 +18,7 @@
 
 import std/macros
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
+import workspace/ceramic/src/layouts {.all.}
 import workspace/ceramic/src/layout_algebra
 
 # ═══════════════════════════════════════════════════════════════

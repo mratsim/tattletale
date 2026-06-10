@@ -142,7 +142,7 @@ proc runFlatIndexTests* =
     for i in 0 ..< 12: buf[i] = i.float32
     let v = make_view(addr(buf[0]), L)
     for i in 0 ..< 12:
-      let coord = idx2crd(i, L.shape, L.stride)
+      let coord = idx2crd(i, L)
       doAssert v[i] == v(coord), "t(" & $i & ") should equal t(" & $coord & ")"
   block:  # t(flat_idx) always equals multi-index that idx2crd produces
     # Python: test_single_index_flat_eval

@@ -157,19 +157,15 @@ template `()`*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: tuple): untyped =
 macro `()`*(t: Tensor; args: varargs[int]): untyped =
   let coord = nnkPar.newTree()
   args.copyChildrenTo(coord)
-  let idx = newCall(bindSym"crd2idx", coord,
-    newDotExpr(newDotExpr(t, ident"layout"), ident"shape"),
-    newDotExpr(newDotExpr(t, ident"layout"), ident"stride"))
   result = nnkBracketExpr.newTree(newDotExpr(t, ident"data"),
-    newCall(bindSym"+", newDotExpr(t, ident"offset"), idx))
+    newCall(bindSym"+", newDotExpr(t, ident"offset"),
+      nnkBracketExpr.newTree(newDotExpr(t, ident"layout"), coord)))
 
 macro `()`*(t: TensorView; args: varargs[int]): untyped =
   let coord = nnkPar.newTree()
   args.copyChildrenTo(coord)
-  let idx = newCall(bindSym"crd2idx", coord,
-    newDotExpr(newDotExpr(t, ident"layout"), ident"shape"),
-    newDotExpr(newDotExpr(t, ident"layout"), ident"stride"))
-  result = nnkBracketExpr.newTree(newDotExpr(t, ident"data"), idx)
+  result = nnkBracketExpr.newTree(newDotExpr(t, ident"data"),
+    nnkBracketExpr.newTree(newDotExpr(t, ident"layout"), coord))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  slice — subtensor via Joker
@@ -177,14 +173,14 @@ macro `()`*(t: TensorView; args: varargs[int]): untyped =
 
 
 template slice*[T, Sh, St](t: Tensor[T, Sh, St]; coord: untyped): untyped =
-  let off = crd2idx(coord, t.layout.shape, t.layout.stride)
+  let off = crd2idx(coord, t.layout)
   let sh = slice(coord, t.layout.shape)
   let st = slice(coord, t.layout.stride)
   make_view(cast[ptr UncheckedArray[T]](addr(t.data[t.offset + off])),
             make_layout(sh, st))
 
 template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
-  let off = crd2idx(coord, tv.layout.shape, tv.layout.stride)
+  let off = crd2idx(coord, tv.layout)
   let sh = slice(coord, tv.layout.shape)
   let st = slice(coord, tv.layout.stride)
   make_view(cast[ptr UncheckedArray[T]](cast[int](tv.data) +% off *% sizeof(T).int),

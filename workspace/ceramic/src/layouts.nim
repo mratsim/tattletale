@@ -226,15 +226,16 @@ template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): a
   )
 
 # ═══════════════════════════════════════════════════════════════
-#  crd2idx / layout[] — coordinate to linear index / layout indexing
+#  crd2idx / layout[] — coordinate to linear index  (private)
+#  idx2crd — linear index → coordinate tuple            (private)
 # ═══════════════════════════════════════════════════════════════
 #
-#  Two forms:
-#    crd2idx(coord, shape)         — flat col-major index (crd2flat)
-#    crd2idx(coord, shape, stride) — memory offset (inner product)
-#
-#  When coord is an int and shape/stride are tuples, the int is
-#  decomposed across modes (col-major ordering).
+#  Internals. External code must go through Layout overloads:
+#    layout[coord]         — crd2idx via bracket
+#    crd2idx(coord, L)    — crd2idx via Layout arg
+#    idx2crd(idx, L)      — idx2crd via Layout arg
+
+# Scalar overloads (private)
 
 # Scalar overloads
 func crd2idx(coord, shape: int): int = coord
@@ -245,12 +246,12 @@ func crd2idx[V: static int](coord: Int[V]; shape, stride: int): int = V * stride
 # 3-arg: macro handles tuple coord + tuple stride → inner product
 #         or int coord + tuple shape + tuple stride → decompose
 # 3-arg: tuple coord → inner product (a·b)
-func crd2idx*[C, Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
+func crd2idx[C, Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Inner product: sum coord[i] * stride[i]
   foldZipWith(coord, stride, 0): acc + it_a * it_b
 
 # 3-arg: int coord → decompose across modes
-func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
+func crd2idx[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape modes with strides.
   ## Sequential: result += (cur mod s) * d; cur = cur div s
   var sum = 0
@@ -265,38 +266,49 @@ func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): au
     cur = cur div s
   sum
 
-# Layout indexing: `layout[i]` and `layout[coord_tuple]`
-macro `[]`*[Sh, St](layout: Layout[Sh, St]; idx: typed): int =
-  let sh = newCall(bindSym"flatten", newTree(nnkDotExpr, layout, ident"shape"))
-  let st = newCall(bindSym"flatten", newTree(nnkDotExpr, layout, ident"stride"))
-  result = newCall(bindSym"crd2idx", idx, sh, st)
-
-# Convenience: crd2idx on a Layout
-func crd2idx*(coord: IntOrIntTuple; layout: Layout): int =
-  layout[coord]
-
-# idx2crd on a Layout — index → coordinate tuple
-#  idx2crd — index to coordinate (stride-based)
 # ═══════════════════════════════════════════════════════════════
-##
-## Convert a linear index into a hierarchical coordinate
-## compatible with the given shape and stride.
-## Each mode: (idx / stride[i]) % shape[i].
-##
-## MoYe: index_to_coord(idx, shape, stride)
-## CuTe: idx2crd(idx, shape)
+#  Layout coordinate → offset  (public API)
+# ═══════════════════════════════════════════════════════════════
 
-macro idx2crd*[Sh, St: IntOrIntTuple](idx: int or Int; shape: Sh; stride: St): untyped =
-  ## Convert linear index to coordinate with explicit strides.
-  let sh = shape.getTypeInst()
-  if sh.kind != nnkTupleConstr:
-    result = newCall(bindSym"div", idx, stride)
+func crd2idx*(coord: IntOrIntTuple; layout: Layout): int =
+  ## Logical-to-memory offset for a coordinate on a Layout.
+  ##
+  ## `coord` can be:
+  ##   • an `int`   — decomposed column-major across all modes
+  ##   • a `tuple`  — inner product `coord·stride` per mode
+  ##   • a static `Int[V]` — same, compile-time constant
+  ##
+  ## External code must use this (or `layout[coord]`) rather than
+  ## calling the raw `crd2idx(coord, shape, stride)` directly,
+  ## which is module-private to layouts.nim.
+  crd2idx(coord, layout.shape, layout.stride)
+
+func `[]`*[Sh, St](layout: Layout[Sh, St]; idx: IntOrIntTuple): int =
+  ## Bracket-syntax shorthand: `layout[coord]` ≡ `crd2idx(coord, layout)`.
+  crd2idx(idx, layout)
+
+# ═══════════════════════════════════════════════════════════════
+#  idx2crd — linear index → coordinate tuple
+# ═══════════════════════════════════════════════════════════════
+
+macro idx2crd*(idx: int or Int; layout: Layout): untyped =
+  ## Convert linear index to coordinate using a Layout.
+  ##
+  ## Each mode: `(idx div layout.stride[i]) mod layout.shape[i]`.
+  ##
+  ## MoYe: `index_to_coord(idx, shape, stride)
+  ## CuTe: `idx2crd(idx, shape)`
+  let lTyp = layout.getTypeInst()
+  let shT = lTyp[1]
+  let sh = newTree(nnkDotExpr, layout, ident"shape")
+  let st = newTree(nnkDotExpr, layout, ident"stride")
+  if shT.kind != nnkTupleConstr:
+    result = newCall(bindSym"div", idx, st)
   else:
     var parts: seq[NimNode] = @[]
-    for i in 0 ..< sh.len:
-      let s = newCall(bindSym"[]", stride, newLit(i))
-      let shI = newCall(bindSym"[]", shape, newLit(i))
-      # Each mode: (idx / stride[i]) % shape[i] — independent per-mode
+    for i in 0 ..< shT.len:
+      let s = newCall(bindSym"[]", st, newLit(i))
+      let shI = newCall(bindSym"[]", sh, newLit(i))
       parts.add newCall(bindSym"mod",
         newCall(bindSym"div", idx, s), shI)
     result = nnkPar.newTree(parts)
@@ -901,9 +913,3 @@ template slice_and_offset*(coord: CoordType; layout: Layout): untyped =
   let sub = slice(coord, layout)
   let off = crd2idx(coord, layout.shape, layout.stride)
   (sub, off)
-
-# idx2crd on a Layout — index → coordinate tuple
-macro idx2crd*(idx: int or Int; layout: Layout): untyped =
-  result = newCall(bindSym"idx2crd", idx,
-    newTree(nnkDotExpr, layout, ident"shape"),
-    newTree(nnkDotExpr, layout, ident"stride"))
