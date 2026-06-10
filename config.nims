@@ -179,6 +179,11 @@ task test_toktoktok, "Test workspace/toktoktok":
     for cmd in getTestCommands("workspace/toktoktok/tests"):
       runCmd(cmd)
 
+task test_ceramic, "Test workspace/ceramic":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/ceramic/tests"):
+      runCmd(cmd)
+
 # Per-file ENV variables configuration for PCRE2
 # ---------------------------------------------------
 
