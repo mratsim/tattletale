@@ -565,6 +565,45 @@ proc flatten*(t: static IntOrIntTuple): static auto =
   ## Compile-time overload for full-compile-time input
   flattenImpl(t)
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  zipLeavesWith — element-wise binary op for equal-structure tuples
+# ═══════════════════════════════════════════════════════════════════════════════
+
+template zipLeavesRecur*(a, b: typed; idx: static int; body: untyped): untyped =
+  ## Internal: walk tuple from index `idx`, recurse into nested tuples.
+  when idx < tupleLen(typeof(a)):
+    when a[idx] is tuple:
+      concat((zipLeavesRecur(a[idx], b[idx], 0, body),),
+             zipLeavesRecur(a, b, idx + 1, body))
+    else:
+      block:
+        let it_a {.inject.} = a[idx]
+        let it_b {.inject.} = b[idx]
+        when idx == tupleLen(typeof(a)) - 1:
+          (body,)
+        else:
+          concat((body,), zipLeavesRecur(a, b, idx + 1, body))
+  else:
+    ()
+
+template zipLeavesWith*(a, b: typed; body: untyped): untyped =
+  ## Apply `body` to corresponding leaf pairs of equal-structure tuples.
+  ## Inside `body`, `it` is a 2-tuple `(leaf_a, leaf_b)`.
+  ## Use `it_a` for the leaf from `a` and `it_b` for the leaf from `b`.
+  ##
+  ## runnableExamples:
+  ##   let r = zipLeavesWith((10, 10), (3, 2)): it_a - it_b
+  ##   doAssert r == (7, 8)
+  ##   let r2 = zipLeavesWith(((1, 2), 3), ((4, 5), 6)): it_a - it_b
+  ##   doAssert r2 == ((-3, -3), -3)
+  when a is tuple:
+    zipLeavesRecur(a, b, 0, body)
+  else:
+    let it_a = a
+    let it_b = b
+    body
 # ═══════════════════════════════════════════════════════════════
 #  concat — concatenate two tuples or a scalar and a tuple
 # ═══════════════════════════════════════════════════════════════

@@ -351,6 +351,41 @@ proc runSliceTests* =
     doAssert col[0] == 6.0'f32
     doAssert col[2] == 8.0'f32
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  displace — offset tensor and return sub-view with new shape
+# ═════════════════════════════════════════════════════════════════════════════
+
+proc runDisplaceTests* =
+  block:  # Basic offset: displace((3,2)) on 10x10 -> data pointer advances by 3+2*10=23
+    var buf: array[100, float32]
+    for i in 0 ..< 100: buf[i] = i.float32
+    let v = make_view(addr(buf[0]), make_layout((10, 10), (1, 10)))
+    let sub = displace(v, (3, 2))
+    doAssert $sub.layout == "(7, 8):(1, 10)"
+    doAssert sub[0, 0] == 23.0'f32
+    doAssert sub[1, 0] == 24.0'f32
+    doAssert sub[0, 1] == 33.0'f32
+
+  block:  # No-offset displace: displace((0,0)) -> shape unchanged
+    var buf: array[100, float32]
+    for i in 0 ..< 100: buf[i] = i.float32
+    let v = make_view(addr(buf[0]), make_layout((10, 10), (1, 10)))
+    let sub = displace(v, (0, 0))
+    doAssert $sub.layout == "(10, 10):(1, 10)"
+    doAssert sub[0, 0] == 0.0'f32
+    doAssert sub[9, 9] == 99.0'f32
+
+  block:  # Owned Tensor displace
+    var buf = newSeq[float32](100)
+    for i in 0 ..< 100: buf[i] = i.float32
+    let t = make_tensor(buf, 0, make_layout((10, 10), (1, 10)))
+    let sub = displace(t, (3, 2))
+    doAssert $sub.layout == "(7, 8):(1, 10)"
+    doAssert sub[0, 0] == 23.0'f32
+
+  echo "  displace: 3 cases OK"
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Tensor of different element types
 # ═════════════════════════════════════════════════════════════════════════════
@@ -388,6 +423,7 @@ proc runTests* =
   runFlatIndexTests()
   runMultiIndexTests()
   runSliceTests()
+  runDisplaceTests()
   runTypeTests()
 
 when isMainModule:

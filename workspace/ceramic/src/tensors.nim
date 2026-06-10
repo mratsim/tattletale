@@ -218,14 +218,33 @@ template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
   make_view(cast[ptr UncheckedArray[T]](cast[int](tv.data) +% off *% sizeof(T).int),
             make_layout(sh, st))
 
+
+
+
+
 # ═════════════════════════════════════════════════════════════════════════
-#  fill — set every logical element to a constant
+#  displace — offset a Tensor/TensorView, return sub-view with auto-deduced shape
 # ═════════════════════════════════════════════════════════════════════════
-##
-##  CuTe: fill(tensor, value) — flat loop over tensor's logical domain.
-##  The layout remaps the flat index to memory, handling strides,
-##  broadcasts (stride-0), and arbitrary nesting.
-##
+
+template displace*(t: typed; coord: IntOrIntTuple): untyped =
+  ## Offset tensor by `coord` (logical coords). Returns a sub-view whose shape is
+  ## `original_shape - coord` (element-wise). Data pointer advances by
+  ## `crd2idx(layout, coord)`. Strides preserved.
+  ##
+  ## runnableExamples:
+  ##   let t = make_tensor(make_layout((10, 10), (1, 10)), float32)
+  ##   let sub = displace(t, (3, 2))
+  ##   doAssert $sub.layout == "(7, 8):(1, 10)"
+  let c = coord
+  let off = crd2idx(t.layout, c)
+  let ns = zipLeavesWith(t.layout.shape, c):
+    it_a - it_b
+  when t is TensorView:
+    make_view(addr t.data[off], make_layout(ns, t.layout.stride))
+  else:
+    make_view(addr t.data[t.offset + off], make_layout(ns, t.layout.stride))
+
+
 template fillWith*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
   ## Set every logical element of `tv` to `val`.
   let n = size(tv.layout)
