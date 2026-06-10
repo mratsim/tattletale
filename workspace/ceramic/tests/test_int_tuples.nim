@@ -490,7 +490,21 @@ proc runZip2ByTests* =
     const guide = 0  # terminal
     let r = zip2_by(t, guide)
     doAssert r === (Int[2](), Int[3]())
-  echo "  zip2_by: 7 cases OK"
+  # ── zip2_by doc examples ──
+  block:
+    # Flat scalar guide: each t[i] is a pair, split pair-wise
+    doAssert zip2_by(((Int[2](), Int[3]()), (Int[4](), Int[5]())), (1, 2)) ===
+      ((Int[2](), Int[4]()), (Int[3](), Int[5]()))
+  block:
+    # Mixed guide: scalar splits a pair, tuple recurses into sub-tuple
+    doAssert zip2_by(((Int[2](), Int[3]()), ((Int[4](), Int[5]()), (Int[6](), Int[7]()))), (1, (2, 3))) ===
+      ((Int[2](), (Int[4](), Int[6]())), (Int[3](), (Int[5](), Int[7]())))
+  block:
+    # Guide shorter than t — trailing appended to group 1
+    doAssert zip2_by(((Int[2](), Int[3]()), (Int[4](), Int[5]()), Int[99]()), (1, 2)) ===
+      ((Int[2](), Int[4]()), (Int[3](), Int[5](), Int[99]()))
+
+  echo "  zip2_by: 10 cases OK"
 #  Run all
 # ═══════════════════════════════════════════════════════════════
 

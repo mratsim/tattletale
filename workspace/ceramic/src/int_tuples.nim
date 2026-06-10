@@ -747,25 +747,23 @@ func zip2_by*[V: static int](t: tuple; guide: Int[V]): auto =
   ## Terminal Int[N] guide.
   t
 
-func zip2_by*(t: tuple; guide: auto): auto =
-  ## Terminal guide fallback (Layout, etc.).
-  t
 
 macro zip2_by_impl(t, guide: typed): untyped =
-  ## Compile-time guided zip: splits tuple `t` into (first_parts, second_parts).
-  ## Each `guide` element guides the split: scalar → pair-split, tuple → recurse.
-  let guideLen = guide.getTypeInst().len
+  let guideTyp = guide.getTypeInst()
+  let guideLen = guideTyp.len
   let tLen = t.getTypeInst().len
   var firstParts = newNimNode(nnkTupleConstr)
   var secondParts = newNimNode(nnkTupleConstr)
-  # Guided elements
   for i in 0 ..< guideLen:
     let ti = nnkBracketExpr.newTree(t, newLit(i))
     let gi = nnkBracketExpr.newTree(guide, newLit(i))
-    let splitPair = newCall(bindSym"zip2_by", ti, gi)
-    firstParts.add nnkBracketExpr.newTree(splitPair, newLit(0))
-    secondParts.add nnkBracketExpr.newTree(splitPair, newLit(1))
-  # Unguided tail → second parts
+    if guideTyp[i].kind == nnkTupleConstr:
+      let splitPair = newCall(bindSym"zip2_by_impl", ti, gi)
+      firstParts.add nnkBracketExpr.newTree(splitPair, newLit(0))
+      secondParts.add nnkBracketExpr.newTree(splitPair, newLit(1))
+    else:
+      firstParts.add nnkBracketExpr.newTree(ti, newLit(0))
+      secondParts.add nnkBracketExpr.newTree(ti, newLit(1))
   for i in guideLen ..< tLen:
     secondParts.add nnkBracketExpr.newTree(t, newLit(i))
   result = nnkTupleConstr.newTree(firstParts, secondParts)
