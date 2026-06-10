@@ -914,13 +914,15 @@ func isJokerNode*(n: NimNode): bool {.compileTime.} =
 ## dice((0, _), (a,b))   → a        (keep a, drop b)
 
 macro slice*(coord: CoordType; target: IntOrIntTuple): untyped =
-  ## CuTe-compatible slice: keep elements of target paired with joker/`_`.
-  ## Returns a tuple of kept elements (or bare element for scalar joker case).
+  ## Walk `coord` and `target` in parallel. For each leaf:
+  ##   - if coord is `_` → include that target element in the result
+  ##   - if coord is an int → skip it
   ##
-  ## Type-constrained: target must be int, Int[N], or tuples thereof.
-  runnableExamples:
-    let r = slice((_, 0), (3, 4))
-    doAssert r[0] == 3
+  ## runnableExamples:
+  ##   slice((_, 0), (3, 4))    → keeps 3, drops 4 → (3,)
+  ##   slice(((_, 0), (0, _)), ((2, 3), (4, 5)))
+  ##     → keeps 2, then 5      → ((2,), 5)
+  ##   slice(_, (42,))          → bare joker on 1-tuple → 42
 
   # Replace `_` identifiers with Joker() so `_` syntax works
   proc clense(n: NimNode): NimNode =
@@ -966,13 +968,15 @@ macro slice*(coord: CoordType; target: IntOrIntTuple): untyped =
     result = nnkTupleConstr.newTree(parts)
 
 macro dice*(coord: CoordType; target: IntOrIntTuple): untyped =
-  ## CuTe-compatible dice: keep elements of target paired with ints.
-  ## Returns target element (for scalar int coord) or tuple of kept elements.
+  ## Walk `coord` and `target` in parallel. For each leaf:
+  ##   - if coord is an int → include that target element in the result
+  ##   - if coord is `_` → skip it
   ##
-  ## Type-constrained: target must be int, Int[N], or tuples thereof.
-  runnableExamples:
-    let r = dice((_, 0), (3, 4))
-    doAssert r == 4
+  ## runnableExamples:
+  ##   dice((_, 0), (3, 4))    → drops 3, keeps 4 → 4
+  ##   dice(((0, _), (_, 0)), ((2, 3), (4, 5)))
+  ##     → keeps 2, then 5    → (2, 5)
+  ##   dice(0, (42,))          → bare int on 1-tuple → 42
 
   # Replace `_` identifiers with Joker()
   proc clense(n: NimNode): NimNode =

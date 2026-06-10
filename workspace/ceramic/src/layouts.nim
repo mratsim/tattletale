@@ -918,24 +918,62 @@ macro zipModesWith*[A: Layout, B: Layout](a: A; b: B; body: untyped): untyped =
   result.add ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  slice/dice/slice_and_offset on Layout [CUTE layout.hpp]
-# ═══════════════════════════════════════════════════════════════
+## slice/dice on Layout: apply `int_tuples.slice`/`int_tuples.dice` to
+## both shape and stride in parallel, producing a sub-Layout.
 ##
-## These wrap int_tuples.slice/dice for Layout objects.
-## Templates (not macros) so they participate in normal overload resolution.
-## The `layout: Layout` param ensures precedence over the tuple macros.
+## Reference: CuTe C++ `layout.hpp` — `slice` / `dice`
+##
+## The resulting Layout has the same nesting structure as the filtered
+## shape/stride: modes paired with `_` in the coord are kept for `slice`,
+## modes paired with integers are kept for `dice`.
+##
+## runnableExamples:
+##   let L = make_layout((3, 4), (1, 3))
+##   let s = slice((_, 0), L)           # keep rows, drop cols
+##   doAssert $s == "(3):(1)"
 
 template slice*(coord: CoordType; layout: Layout): untyped =
-  ## Slice a layout by coordinate: keep modes paired with joker/`_`.
+  ## Walk coord and the layout's shape+stride in parallel.
+  ## Modes paired with `_` stay in the result; modes paired with an int are dropped.
+  ## Returns a sub-Layout containing only the kept modes.
+  ##
+  ## runnableExamples:
+  ##   let L = make_layout((3, 4), (1, 3))
+  ##   slice((_, 0), L)    → keep rows, drop cols → (3):(1)
+  ##   slice((1, _), L)    → drop rows, keep cols  → (4):(3)
   make_layout(slice(coord, layout.shape), slice(coord, layout.stride))
 
 template dice*(coord: CoordType; layout: Layout): untyped =
-  ## Dice a layout by coordinate: keep modes paired with ints.
+  ## Walk coord and the layout's shape+stride in parallel.
+  ## Modes paired with an int stay in the result; modes paired with `_` are dropped.
+  ## Returns a sub-Layout containing only the kept modes.
+  ##
+  ## runnableExamples:
+  ##   let L = make_layout((3, 4), (1, 3))
+  ##   dice((_, 0), L)    → drop rows, keep cols → (4):(3)
+  ##   dice((1, _), L)    → keep rows, drop cols  → (3):(1)
   make_layout(dice(coord, layout.shape), dice(coord, layout.stride))
 
 template slice_and_offset*(coord: CoordType; layout: Layout): untyped =
-  ## Slice a layout and compute the offset from fixed dims.
-  ## Returns (sublayout, offset).
+  ## Like `slice`, but also compute the memory offset from the int-paired
+  ## dimensions.  Returns `(sub_layout, offset)`.
+  ##
+  ## The offset is `sum(int_coord[i] * stride[i])` for each dropped mode —
+  ## i.e. how far the data pointer must advance past the fixed coordinates.
+  ##
+  ## runnableExamples:
+  ##   let L = make_layout((3, 4), (1, 3))
+  ##   # Column 0 → offset 0, column 1 → offset 3
+  ##   let (sub0, off0) = slice_and_offset((_, 0), L)
+  ##   doAssert $sub0 == "(3,):(1,)" and off0 == 0
+  ##   let (sub1, off1) = slice_and_offset((_, 1), L)
+  ##   doAssert $sub1 == "(3,):(1,)" and off1 == 3
+  ##   # Row 0 → offset 0, row 1 → offset 1
+  ##   let (sub2, off2) = slice_and_offset((0, _), L)
+  ##   doAssert $sub2 == "(4,):(3,)" and off2 == 0
+  ##   let (sub3, off3) = slice_and_offset((1, _), L)
+  ##   doAssert $sub3 == "(4,):(3,)" and off3 == 1
+
   let sub = slice(coord, layout)
   let off = crd2idx(coord, layout.shape, layout.stride)
   (sub, off)

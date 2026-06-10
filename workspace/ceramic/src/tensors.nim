@@ -183,6 +183,19 @@ macro `[]`*(t: TensorView; args: varargs[IntOrIntTuple]): untyped =
 
 
 template slice*[T, Sh, St](t: Tensor[T, Sh, St]; coord: untyped): untyped =
+  ## Extract a sub-tensor positioned at the given coordinate.
+  ##
+  ## For each mode of the tensor's layout:
+  ##   - coord has `_` → keep that mode in the result
+  ##   - coord has int → collapse that mode (data pointer advances by int×stride)
+  ##
+  ## Internally calls `slice` on shape+stride and offsets the data pointer
+  ## by `crd2idx(layout, coord)`.
+  ##
+  ## runnableExamples:
+  ##   let t = make_tensor(make_layout((3, 4), (1, 3)), float32)
+  ##   let col1 = t.slice((_, 1))   # rows × column-1 → (3):(1)
+  ##   doAssert $col1.layout == "(3,):(1,)"
   let off = crd2idx(t.layout, coord)
   let sh = slice(coord, t.layout.shape)
   let st = slice(coord, t.layout.stride)
@@ -190,6 +203,15 @@ template slice*[T, Sh, St](t: Tensor[T, Sh, St]; coord: untyped): untyped =
             make_layout(sh, st))
 
 template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
+  ## Extract a sub-view positioned at the given coordinate.
+  ## Same semantics as Tensor.slice — offsets the data pointer by the
+  ## int-paired dimensions' contribution.
+  ##
+  ## runnableExamples:
+  ##   var buf: array[12, float32]
+  ##   let v = make_view(addr(buf[0]), make_layout((3, 4), (1, 3)))
+  ##   let col1 = v.slice((_, 1))   # rows × column-1 → (3):(1)
+  ##   doAssert $col1.layout == "(3,):(1,)"
   let off = crd2idx(tv.layout, coord)
   let sh = slice(coord, tv.layout.shape)
   let st = slice(coord, tv.layout.stride)
