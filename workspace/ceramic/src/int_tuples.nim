@@ -309,33 +309,79 @@ template foldZipWith*(a, b: typed; startingAcc: typed; body: untyped): auto =
 #  Returns tuple where each element = `acc` BEFORE that element.
 # ═══════════════════════════════════════════════════════════════
 
+template tail_accumulator(strides, shape: IntOrIntTuple): auto =
+  ## Final accumulator after prefix_scan: walks last-elem chain to the leaf.
+  const L = tupleLen(typeof(shape)) - 1
+  when shape[L] is int or shape[L] is Int:
+    strides[L] * shape[L]
+  else:
+    tail_accumulator(strides[L], shape[L])
+
+template head_accumulator(strides, shape: IntOrIntTuple): auto =
+  ## Final accumulator after suffix_scan: walks first-elem chain to the leaf.
+  when shape[0] is int or shape[0] is Int:
+    strides[0] * shape[0]
+  else:
+    head_accumulator(strides[0], shape[0])
+
 template prefix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: untyped): untyped =
   ## Recursive prefix scan. Each level injects acc/it into a block scope.
   ##
   ## Due to generic sandwich / template symbol resolution issues
   ## this is exported but it really is an internal module
-  block:
-    let it {.inject.} = t[idx]
-    let acc {.inject.} = state
-    let newState = body
+
+  when t[idx] is tuple:
+    let it = t[idx]
+    let acc = state
+    let subStrides = prefix_scanIt(it, acc, body)
+    const L = tupleLen(typeof(it)) - 1
+    let newState =
+      when it[L] is int or it[L] is Int:
+        subStrides[L] * it[L]
+      else:
+        tail_accumulator(subStrides[L], it[L], body)
     when idx == tupleLen(t) - 1:
-      (acc,)
+      (subStrides,)
     else:
-      concat((acc,), prefix_scanIt_recurse(idx + 1, t, newState, body))
+      concat((subStrides,), prefix_scanIt_recurse(idx + 1, t, newState, body))
+  else:
+    block:
+      let it {.inject.} = t[idx]
+      let acc {.inject.} = state
+      let newState = body
+      when idx == tupleLen(t) - 1:
+        (acc,)
+      else:
+        concat((acc,), prefix_scanIt_recurse(idx + 1, t, newState, body))
 
 template suffix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: untyped): untyped =
   ## Recursive suffix scan. Each level injects acc/it into a block scope.
   ##
   ## Due to generic sandwich / template symbol resolution issues
   ## this is exported but it really is an internal module
-  block:
-    let it {.inject.} = t[idx]
-    let acc {.inject.} = state
-    let newState = body
+
+  when t[idx] is tuple:
+    let it = t[idx]
+    let acc = state
+    let subStrides = suffix_scanIt(it, acc, body)
+    let newState =
+      when it[0] is int or it[0] is Int:
+        subStrides[0] * it[0]
+      else:
+        head_accumulator(subStrides[0], it[0], body)
     when idx == 0:
-      (acc,)
+      (subStrides,)
     else:
-      concat(suffix_scanIt_recurse(idx - 1, t, newState, body), (acc,))
+      concat(suffix_scanIt_recurse(idx - 1, t, newState, body), (subStrides,))
+  else:
+    block:
+      let it {.inject.} = t[idx]
+      let acc {.inject.} = state
+      let newState = body
+      when idx == 0:
+        (acc,)
+      else:
+        concat(suffix_scanIt_recurse(idx - 1, t, newState, body), (acc,))
 
 template prefix_scanIt*(t: untyped; startingAcc: auto; body: untyped): untyped =
   ## Left-to-right prefix scan. Injects `acc`, `it`; body → new accumulator.

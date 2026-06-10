@@ -261,7 +261,45 @@ proc runProductScanTests* =
   block:
     let sp = suffix_product((Int[4](), Int[8]()))
     doAssert sp[0] === 8 and sp[1] === 1
-  echo "  Product scan: 8 cases OK"
+  # ── Nested tuple prefix_product ──
+  block:
+    doAssert prefix_product(((4, 1), (8, 8))) === ((1, 4), (4, 32))
+  block:
+    let mr = 4; let mpT = 8; let kc = 8
+    let p = prefix_product(((mr, 1), (mpT, kc)))
+    doAssert p[0][0] == 1 and p[0][1] == mr
+    doAssert p[1][0] == mr and p[1][1] == mr * mpT
+  # ── Nested tuple suffix_product ──
+  block:
+    doAssert suffix_product(((4, 1), (8, 8))) === ((64, 64), (8, 1))
+
+  # ── prefix_scanIt with nested tuples ──
+  block:
+    let s = prefix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
+    doAssert s[0][0] == 1 and s[0][1] == 4
+    doAssert s[1][0] == 4 and s[1][1] == 32
+
+
+  # ── Nested tuple prefix_product ──
+  block:
+    doAssert prefix_product(((4, 1), (8, 8))) === ((1, 4), (4, 32))
+  block:
+    let mr = 4; let mpT = 8; let kc = 8
+    let p = prefix_product(((mr, 1), (mpT, kc)))
+    doAssert p[0][0] == 1 and p[0][1] == mr
+    doAssert p[1][0] == mr and p[1][1] == mr * mpT
+  # ── Nested tuple suffix_product ──
+  block:
+    doAssert suffix_product(((4, 1), (8, 8))) === ((64, 64), (8, 1))
+
+  # ── prefix_scanIt with nested tuples ──
+  block:
+    let s = prefix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
+    doAssert s[0][0] == 1 and s[0][1] == 4
+    doAssert s[1][0] == 4 and s[1][1] == 32
+
+  echo "  Nested tuple scan: 5 cases OK"
+  echo "  Product scan: 13 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  Mixed static/dynamic scans

@@ -282,6 +282,26 @@ proc runMakeLayoutTests* =
 
   echo "  make_layout: 23 cases OK"
 
+  # ── Nested tuple make_layout ──
+  block:
+    let l = make_layout(((4, 1), (8, 8)))
+    doAssert $l == "((4, 1), (8, 8)):((1, 4), (4, 32))"
+  block:
+    let l = make_layout(((1, 4), (8, 4)))
+    doAssert $l == "((1, 4), (8, 4)):((1, 1), (4, 32))"
+  block:
+    let mr = 4; let mpT = 8; let kc = 8
+    let l = make_layout(((mr, 1), (mpT, kc)))
+    doAssert l[((0, 0), (0, 0))] == 0
+    doAssert l[((0, 0), (1, 0))] == mr
+    doAssert l[((0, 0), (0, 1))] == mr * mpT
+    doAssert l[((1, 0), (0, 0))] == 1
+  block:
+    let l = make_layout(((4, 1), (8, 8)), LayoutRight)
+    doAssert $l == "((4, 1), (8, 8)):((64, 64), (8, 1))"
+
+  echo "  Nested make_layout: 4 cases OK"
+
 # ═══════════════════════════════════════════════════════════════
 #  Phase 2: flatten
 # ═══════════════════════════════════════════════════════════════
