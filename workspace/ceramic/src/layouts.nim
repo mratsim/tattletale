@@ -254,19 +254,21 @@ func crd2idx[C, Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
 func crd2idx[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape modes with strides.
   ## Sequential: result += (cur mod s) * d; cur = cur div s
-  var sum = 0
-  var cur = int(coord)
-  staticFor i, 0, tupleLen(Sh):
-    let s = int(shape[i])
-    let d = int(stride[i])
-    when i < Sh.tupleLen - 1:
-      sum += (cur mod s) * d
-    else:
-      sum += cur * d
-    cur = cur div s
-  sum
-
-# ═══════════════════════════════════════════════════════════════
+  ## If shapes are nested (tuple elements), flatten first.
+  when shape[0] is tuple:
+    crd2idx(coord, flatten(shape), flatten(stride))
+  else:
+    var sum = 0
+    var cur = int(coord)
+    staticFor i, 0, tupleLen(Sh):
+      let s = int(shape[i])
+      let d = int(stride[i])
+      when i < Sh.tupleLen - 1:
+        sum += (cur mod s) * d
+      else:
+        sum += cur * d
+      cur = cur div s
+    sum
 #  Layout coordinate → offset  (public API)
 # ═══════════════════════════════════════════════════════════════
 
@@ -790,6 +792,25 @@ macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
     let idx = Is[i].intVal
     ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(idx)),
                nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(idx)))
+  result = ct.emit()
+
+# ═══════════════════════════════════════════════════════════════
+#  replaceMode — replace a mode with a sub-Layout
+# ═══════════════════════════════════════════════════════════════
+
+macro replaceMode*(layout: Layout; x: typed; N: static int): untyped =
+  ## Replace mode N of layout with Layout x.
+  ## CuTe: replace<N>(layout, x) — layout.hpp:1001
+  let shTyp = getTypeInst(layout)[1]
+  let R = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
+  var ct = LayoutCT()
+  for i in 0 ..< R:
+    if i == N:
+      ct.append(newTree(nnkDotExpr, x, ident"shape"),
+                 newTree(nnkDotExpr, x, ident"stride"))
+    else:
+      ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(i)),
+                 nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(i)))
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
