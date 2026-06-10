@@ -9,7 +9,7 @@ import std/macros
 import ./int_tuples
 import ./layouts
 
-export int_tuples, layouts
+{.experimental: "callOperator".}
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Tensor / TensorView
@@ -129,84 +129,47 @@ template cosize*(t: Tensor): untyped = t.layout.cosize()
 #  Linear indexing — single int
 # ═════════════════════════════════════════════════════════════════════════
 
-
 template `[]`*[T, Sh, St](t: Tensor[T, Sh, St]; idx: int): untyped =
   t.data[t.offset + t.layout[idx]]
 
-template `[]=`*[T, Sh, St](t: var Tensor[T, Sh, St]; idx: int; val: T) =
+template `[]=`*[T, Sh, St](t: Tensor[T, Sh, St]; idx: int; val: T) =
   t.data[t.offset + t.layout[idx]] = val
 
 template `[]`*[T, Sh, St](tv: TensorView[T, Sh, St]; idx: int): untyped =
   tv.data[tv.layout[idx]]
 
-template `[]=`*[T, Sh, St](tv: var TensorView[T, Sh, St]; idx: int; val: T) =
+template `[]=`*[T, Sh, St](tv: TensorView[T, Sh, St]; idx: int; val: T) =
   tv.data[tv.layout[idx]] = val
-  tv.data[idx] = val
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Multi-index — operator() with tuple or direct args
-#  Computes offset via crd2idx for strided access
+#  Multi-index — operator()
+#  Matches CuTe: Tensor::operator()(Coord const& coord)
+#  Template: t((i, j)) — tuple coordinate of any arity.
+#  Macro:   t(i, j, k) — individual ints packed into tuple.
 # ═════════════════════════════════════════════════════════════════════════
 
 template `()`*[T, Sh, St](t: Tensor[T, Sh, St]; coord: tuple): untyped =
-  t.data[t.offset + crd2idx(coord, t.layout.shape, t.layout.stride)]
-
-template `()`*[T, Sh, St](t: var Tensor[T, Sh, St]; coord: tuple): untyped =
-  t.data[t.offset + crd2idx(coord, t.layout.shape, t.layout.stride)]
+  t.data[t.offset + t.layout[coord]]
 
 template `()`*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: tuple): untyped =
-  tv.data[crd2idx(coord, tv.layout.shape, tv.layout.stride)]
+  tv.data[tv.layout[coord]]
 
-template `()`*[T, Sh, St](tv: var TensorView[T, Sh, St]; coord: tuple): untyped =
-  tv.data[crd2idx(coord, tv.layout.shape, tv.layout.stride)]
+macro `()`*(t: Tensor; args: varargs[int]): untyped =
+  let coord = nnkPar.newTree()
+  args.copyChildrenTo(coord)
+  let idx = newCall(bindSym"crd2idx", coord,
+    newDotExpr(newDotExpr(t, ident"layout"), ident"shape"),
+    newDotExpr(newDotExpr(t, ident"layout"), ident"stride"))
+  result = nnkBracketExpr.newTree(newDotExpr(t, ident"data"),
+    newCall(bindSym"+", newDotExpr(t, ident"offset"), idx))
 
-template `()`*[T, Sh, St](t: Tensor[T, Sh, St]; a: int): untyped =
-  t.data[t.offset + crd2idx(a, t.layout.shape, t.layout.stride)]
-
-template `()`*[T, Sh, St](t: var Tensor[T, Sh, St]; a: int): untyped =
-  t.data[t.offset + crd2idx(a, t.layout.shape, t.layout.stride)]
-
-template `()`*[T, Sh, St](tv: TensorView[T, Sh, St]; a: int): untyped =
-  tv.data[crd2idx(a, tv.layout.shape, tv.layout.stride)]
-
-template `()`*[T, Sh, St](tv: var TensorView[T, Sh, St]; a: int): untyped =
-  tv.data[crd2idx(a, tv.layout.shape, tv.layout.stride)]
-
-template `()`*[T, Sh, St](t: Tensor[T, Sh, St]; a, b: int): untyped =
-  t.data[t.offset + crd2idx((a, b), t.layout.shape, t.layout.stride)]
-
-template `()`*[T, Sh, St](t: var Tensor[T, Sh, St]; a, b: int): untyped =
-  t.data[t.offset + crd2idx((a, b), t.layout.shape, t.layout.stride)]
-
-template `()`*[T, Sh, St](tv: TensorView[T, Sh, St]; a, b: int): untyped =
-  tv.data[crd2idx((a, b), tv.layout.shape, tv.layout.stride)]
-
-template `()`*[T, Sh, St](tv: var TensorView[T, Sh, St]; a, b: int): untyped =
-  tv.data[crd2idx((a, b), tv.layout.shape, tv.layout.stride)]
-
-template `()`*[T, Sh, St](t: Tensor[T, Sh, St]; a, b, c: int): untyped =
-  t.data[t.offset + crd2idx((a, b, c), t.layout.shape, t.layout.stride)]
-
-template `()`*[T, Sh, St](t: var Tensor[T, Sh, St]; a, b, c: int): untyped =
-  t.data[t.offset + crd2idx((a, b, c), t.layout.shape, t.layout.stride)]
-
-template `()`*[T, Sh, St](tv: TensorView[T, Sh, St]; a, b, c: int): untyped =
-  tv.data[crd2idx((a, b, c), tv.layout.shape, tv.layout.stride)]
-
-template `()`*[T, Sh, St](tv: var TensorView[T, Sh, St]; a, b, c: int): untyped =
-  tv.data[crd2idx((a, b, c), tv.layout.shape, tv.layout.stride)]
-
-template `()`*[T, Sh, St](t: Tensor[T, Sh, St]; a, b, c, d: int): untyped =
-  t.data[t.offset + crd2idx((a, b, c, d), t.layout.shape, t.layout.stride)]
-
-template `()`*[T, Sh, St](t: var Tensor[T, Sh, St]; a, b, c, d: int): untyped =
-  t.data[t.offset + crd2idx((a, b, c, d), t.layout.shape, t.layout.stride)]
-
-template `()`*[T, Sh, St](tv: TensorView[T, Sh, St]; a, b, c, d: int): untyped =
-  tv.data[crd2idx((a, b, c, d), tv.layout.shape, tv.layout.stride)]
-
-template `()`*[T, Sh, St](tv: var TensorView[T, Sh, St]; a, b, c, d: int): untyped =
-  tv.data[crd2idx((a, b, c, d), tv.layout.shape, tv.layout.stride)]
+macro `()`*(t: TensorView; args: varargs[int]): untyped =
+  let coord = nnkPar.newTree()
+  args.copyChildrenTo(coord)
+  let idx = newCall(bindSym"crd2idx", coord,
+    newDotExpr(newDotExpr(t, ident"layout"), ident"shape"),
+    newDotExpr(newDotExpr(t, ident"layout"), ident"stride"))
+  result = nnkBracketExpr.newTree(newDotExpr(t, ident"data"), idx)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  slice — subtensor via Joker
