@@ -122,7 +122,6 @@ genBinOp(`min`)
 genBinOp(`ceil_div`)
 
 func `+=`*[V: static int](a: var int; b: Int[V]) = a += V
-func `+=`*[V: static int](a: var Int[V]; b: int) = a = Int[V](V + b)
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] compile-time helpers (for macros)
@@ -697,12 +696,34 @@ func zip2_by*(t: tuple; guide: int): auto =
   ## CuTe: zip2_by(t, guide) — tuple_algorithms.hpp
   ## Terminal guide: t must be a pair, returned as-is.
   t
+
 func zip2_by*[V: static int](t: tuple; guide: Int[V]): auto =
   ## Terminal Int[N] guide.
   t
+
 func zip2_by*(t: tuple; guide: auto): auto =
   ## Terminal guide fallback (Layout, etc.).
   t
+
+macro zip2_by_impl(t, guide: typed): untyped =
+  ## Compile-time guided zip: splits tuple `t` into (first_parts, second_parts).
+  ## Each `guide` element guides the split: scalar → pair-split, tuple → recurse.
+  let guideLen = guide.getTypeInst().len
+  let tLen = t.getTypeInst().len
+  var firstParts = newNimNode(nnkTupleConstr)
+  var secondParts = newNimNode(nnkTupleConstr)
+  # Guided elements
+  for i in 0 ..< guideLen:
+    let ti = nnkBracketExpr.newTree(t, newLit(i))
+    let gi = nnkBracketExpr.newTree(guide, newLit(i))
+    let splitPair = newCall(bindSym"zip2_by", ti, gi)
+    firstParts.add nnkBracketExpr.newTree(splitPair, newLit(0))
+    secondParts.add nnkBracketExpr.newTree(splitPair, newLit(1))
+  # Unguided tail → second parts
+  for i in guideLen ..< tLen:
+    secondParts.add nnkBracketExpr.newTree(t, newLit(i))
+  result = nnkTupleConstr.newTree(firstParts, secondParts)
+
 func zip2_by*[T: tuple, G: tuple](t: T; guide: G): auto =
   ## Guided zip: split flat tuple `t` into (first_parts, second_parts).
   ##
@@ -715,25 +736,7 @@ func zip2_by*[T: tuple, G: tuple](t: T; guide: G): auto =
   ##
   ## CuTe: zip2_by(t, guide) — tuple_algorithms.hpp line ~739
   ## Used by tile_unzip → zipped_divide/zipped_product.
-  macro impl: untyped =
-    let tNode = bindSym"t"
-    let guideNode = bindSym"guide"
-    let guideLen = guideNode.getTypeInst().len
-    let tLen = tNode.getTypeInst().len
-    var firstParts = newNimNode(nnkTupleConstr)
-    var secondParts = newNimNode(nnkTupleConstr)
-    # Guided elements: each produces (first_elem, second_elem)
-    for i in 0 ..< guideLen:
-      let ti = nnkBracketExpr.newTree(tNode, newLit(i))
-      let gi = nnkBracketExpr.newTree(guideNode, newLit(i))
-      let splitPair = newCall(bindSym"zip2_by", ti, gi)
-      firstParts.add nnkBracketExpr.newTree(splitPair, newLit(0))
-      secondParts.add nnkBracketExpr.newTree(splitPair, newLit(1))
-    # Unguided tail: append to second parts
-    for i in guideLen ..< tLen:
-      secondParts.add nnkBracketExpr.newTree(tNode, newLit(i))
-    result = nnkTupleConstr.newTree(firstParts, secondParts)
-  impl()
+  zip2_by_impl(t, guide)
 
 # ═══════════════════════════════════════════════════════════════
 #  map — apply fn to each tuple element
