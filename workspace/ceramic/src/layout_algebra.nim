@@ -14,11 +14,10 @@ import std/typetraits
 import ./int_tuples
 import ./layouts
 
-# ═══════════════════════════════════════════════════════════════
 #  coalesce — merge contiguous modes where stride matches
 # ═══════════════════════════════════════════════════════════════
 
-macro coalesceBackward(csShape, csStride: typed): untyped =
+macro coalesceBackward(csShape, csStride: typed; preserveTrailing: static bool = false): untyped =
   template at(n, i: untyped): untyped = newTree(nnkBracketExpr, n, newLit(i))
   let stype = csShape.getTypeInst()
   let stype2 = csStride.getTypeInst()
@@ -45,6 +44,16 @@ macro coalesceBackward(csShape, csStride: typed): untyped =
   resStrides.add csStride.at(N - 1)
   resSTypes.add stype[N - 1]
   resSTypes2.add stype2[N - 1]
+
+  if preserveTrailing:
+    # When preserving trailing size-1 modes, seed with `low(int)` (non-1 sentinel)
+    # to prevent the post-loop discard from removing the last mode.
+    # Mirrors CuTe's coalesce_x which seeds bw_coalesce with Int<2>{} sentinel.
+    let lastST = stype[N - 1]
+    if (lastST.kind == nnkBracketExpr and $lastST[0] == "Int" and lastST[1].intVal == 1) or
+       (lastST.kind == nnkIntLit and lastST.intVal == 1):
+      resShapes[0] = IntCT(low(int))
+      resSTypes[0] = newNimNode(nnkBracketExpr).add(ident"Int", newLit(low(int)))
 
   for i in countdown(N - 2, 0):
     let curST = stype[i]
@@ -79,11 +88,12 @@ macro coalesceBackward(csShape, csStride: typed): untyped =
     resSTypes2.insert(curST2, 0)
 
   # Post-loop: discard trailing size-1 modes (the seed might be size-1)
-  while resShapes.len > 0 and isStaticOne(resSTypes[^1]):
-    discard resShapes.pop()
-    discard resStrides.pop()
-    discard resSTypes.pop()
-    discard resSTypes2.pop()
+  if not preserveTrailing:
+    while resShapes.len > 0 and isStaticOne(resSTypes[^1]):
+      discard resShapes.pop()
+      discard resStrides.pop()
+      discard resSTypes.pop()
+      discard resSTypes2.pop()
 
   if resShapes.len == 0:
     result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
@@ -100,16 +110,27 @@ macro coalesceBackward(csShape, csStride: typed): untyped =
 
   result = newCall(bindSym"make_layout", rShape, rStride)
 
-func coalesce*(layout: Layout): auto =
+func coalesce*(layout: Layout): auto {.inline, noInit.} =
   ## Merge contiguous modes. Flatten preserves Int[N] types with getTypeInst.
   coalesceBackward(
     flatten(layout.shape),
     flatten(layout.stride)
   )
 
-func coalesce*(layout: static Layout): static Layout =
+func coalesce*(layout: static Layout): static Layout {.inline, noInit.} =
   ## Static overload: preserves constness for compile-time Layout values.
   coalesce(layout)
+
+func coalesce_preserve_trailing(layout: Layout): auto {.inline, noInit.} =
+  ## Like `coalesce` but preserves trailing size-1 modes (e.g. stride-0 broadcasts).
+  ## Mirrors CuTe's `coalesce_x`: seeds backward coalescence with `low(int)`
+  ## sentinel instead of `Int[1]`, preventing the post-loop discard from
+  ## removing the last mode.
+  coalesceBackward(
+    flatten(layout.shape),
+    flatten(layout.stride),
+    preserveTrailing = true
+  )
 
 # ═══════════════════════════════════════════════════════════════
 #  filter_inactive — remove stride-0 and size-1 modes
@@ -406,9 +427,19 @@ func compose*[A, B: Layout](a: A, b: B): auto =
     else:
       make_layout(b.shape.flatten(), b.stride.flatten() * a.stride)
   elif b.shape isnot tuple:
-    composeImpl(0, (), (), b.shape.flatten(), b.stride.flatten(), a.shape, a.stride)
+    # CuTe: coalesce LHS first (preserving trailing stride-0 modes), then compose with scalar RHS
+    # Uses coalesce_preserve_trailing to match CuTe's coalesce_x in composition.
+    let flatA = coalesce_preserve_trailing(a)
+    when flatA.shape isnot tuple:
+      # flatA is rank-1 scalar: RHS shape is result, strides = b.stride * flatA.stride
+      make_layout(b.shape, b.stride.scaleBy(flatA.stride))
+    else:
+      let aFlatShape = flatA.shape.flatten()
+      let aFlatStride = flatA.stride.flatten()
+      composeImpl(0, (), (), b.shape, b.stride, aFlatShape, aFlatStride)
   else:
-    let flatA = coalesce(a)
+    # CuTe: coalesce LHS first (preserving trailing stride-0 modes), then compose with tuple RHS
+    let flatA = coalesce_preserve_trailing(a)
     when flatA.shape isnot tuple:
       # flatA is rank-1 scalar: preserve B's nesting, scale strides by flatA.stride
       make_layout(b.shape, b.stride.scaleBy(flatA.stride))
@@ -480,23 +511,30 @@ func logical_divide*[L: Layout](layout: L; tiler: tuple): auto =
 # ═══════════════════════════════════════════════════════════════
 #  tile_unzip — unzip a logical_divide/product result into tiles+rest
 # ═══════════════════════════════════════════════════════════════
-
-macro tile_unzip*(layout: Layout; tiler: typed): untyped =
+func tile_unzip*[L: Layout, T](layout: L; tiler: T): auto {.inline, noInit.} =
   ## Unzip a logical_divide/logical_product result according to a tiler.
   ## Returns a rank-2 Layout: ((tile_modes), (rest_modes)).
-  let zShape = newCall(bindSym"zip2_by",
-    newTree(nnkDotExpr, layout, ident"shape"), tiler)
-  let zStride = newCall(bindSym"zip2_by",
-    newTree(nnkDotExpr, layout, ident"stride"), tiler)
-  result = newCall(bindSym"make_layout", zShape, zStride)
+  when tiler is Layout:
+    make_layout(
+      zip2_by(layout.shape, tiler.shape),
+      zip2_by(layout.stride, tiler.shape))
+  else:
+    make_layout(
+      zip2_by(layout.shape, tiler),
+      zip2_by(layout.stride, tiler))
 
 # ── zipped_divide / tiled_divide / flat_divide ──
 
-func zipped_divide*[L: Layout](layout: L; tiler: auto): auto =
+func zipped_divide*[L: Layout](layout: L; tiler: auto): auto {.inline, noInit.} =
   ## Divide layout by tiler and zip tile/rest modes into rank-2 result.
   ##
-  ## CuTe: zipped_divide = tile_unzip(logical_divide(layout, tiler), tiler)
-  tile_unzip(logical_divide(layout, tiler), tiler)
+  ## CuTe: zipped_divide =
+  ##   - Layout tiler: logical_divide(layout, tiler)
+  ##   - tuple/int tiler: tile_unzip(logical_divide(layout, tiler), tiler)
+  when tiler is Layout:
+    logical_divide(layout, tiler)
+  else:
+    tile_unzip(logical_divide(layout, tiler), tiler)
 
 template tiled_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack the second mode into individual modes.
@@ -644,6 +682,51 @@ func left_inverse*(layout: Layout): auto =
   leftInverseImpl(flatten(c.shape), flatten(c.stride))
 
 
+template max_common_layout*(a, b: typed): untyped =
+  ## Return a Layout for the maximum contiguous elements common to both.
+  ## a(R(i)) == i and b(R(i)) == i for all i < size(result).
+  let inv_b = right_inverse(b)
+  let common = coalesce(compose(a, inv_b))
+  type StrideT = typeof(common.stride)
+  when StrideT is tuple:
+    type FirstStride = typeof(common.stride[0])
+    const s0 = FirstStride.V
+    when s0 == 1:
+      type FirstShape = typeof(common.shape[0])
+      coalesce(compose(inv_b, make_layout(FirstShape.V, 1)))
+    else:
+      make_layout(1, 0)
+  else:
+    const s = StrideT.V
+    when s == 1:
+      type Sh = typeof(common.shape)
+      coalesce(compose(inv_b, make_layout(Sh.V, 1)))
+    else:
+      make_layout(1, 0)
+
+template max_common_vector*(a, b: typed): int =
+  ## Return N: for 0 <= i < N, a(R(i)) == i and b(R(i)) == i.
+  let common = coalesce(compose(a, right_inverse(b)))
+  type StrideT = typeof(common.stride)
+  when StrideT is tuple:
+    type FirstStride = typeof(common.stride[0])
+    const s0 = FirstStride.V
+    when s0 == 1:
+      type FirstShape = typeof(common.shape[0])
+      FirstShape.V
+    else:
+      1
+  else:
+    const s = StrideT.V
+    when s == 1:
+      type Sh = typeof(common.shape)
+      Sh.V
+    else:
+      1
+
+# ═══════════════════════════════════════════════════════════════
+#  logical_product — reproduce a block over a tiler
+# ═══════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════
 #  logical_product — reproduce a block over a tiler
 # ═══════════════════════════════════════════════════════════════
@@ -668,11 +751,14 @@ func nested_product*[A, B: Layout](a: A; b: B): auto =
 
 # ── zipped_product / tiled_product / flat_product ──
 
-func zipped_product*[A: Layout](blk: A; tiler: auto): auto =
+func zipped_product*[A: Layout](blk: A; tiler: auto): auto {.inline, noInit.} =
   ## Reproduce block over tiler, zipped into rank-2 result.
   ##
   ## CuTe: zipped_product = tile_unzip(logical_product(block, tiler), tiler)
-  tile_unzip(logical_product(blk, tiler), tiler)
+  when tiler is Layout:
+    logical_product(blk, tiler)
+  else:
+    tile_unzip(logical_product(blk, tiler), tiler)
 
 template tiled_product*(blk: Layout; tiler: auto): auto =
   ## Like zipped_product but unpack the second mode.
@@ -761,4 +847,3 @@ func tile_to_shape*[Sh, St, Target](blk: Layout[Sh, St]; target_shape: Target; o
   let product_shape = zipModesWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
   let tiler = make_layout(product_shape, ord_shape)
   blocked_product(padded_blk, tiler)
-

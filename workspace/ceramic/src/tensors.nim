@@ -51,10 +51,10 @@ template make_tensor*(data: openArray; off: int; shape: IntOrIntTuple; order: st
 #  make_view(Layout)
 # ─────────────────────────────────────────────────────────────────────────
 
-func make_view*[T, Sh, St](ptr_data: ptr UncheckedArray[T]; L: Layout[Sh, St]): TensorView[T, Sh, St] =
+func make_view*[T, Sh, St](ptr_data: ptr UncheckedArray[T]; L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline, noInit.} =
   TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](ptr_data), layout: L)
 
-func make_view*[T, Sh, St](data: var seq[T]; L: Layout[Sh, St]): TensorView[T, Sh, St] =
+func make_view*[T, Sh, St](data: var seq[T]; L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline, noInit.} =
   TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](addr data[0]), layout: L)
 
 template make_view*(data: ptr UncheckedArray; L: Layout): untyped =
@@ -65,7 +65,7 @@ template make_view*(data: ptr UncheckedArray; L: Layout): untyped =
     data: cast[ptr UncheckedArray[ElemType]](data),
     layout: L)
 
-func make_view*[T, Sh, St](data: ptr T; L: Layout[Sh, St]): TensorView[T, Sh, St] =
+func make_view*[T, Sh, St](data: ptr T; L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline, noInit.} =
   make_view(cast[ptr UncheckedArray[T]](data), L)
 
 func make_view*[T, ShA, StA, ShB, StB](
@@ -226,23 +226,15 @@ template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
 #  displace — offset a Tensor/TensorView, return sub-view with auto-deduced shape
 # ═════════════════════════════════════════════════════════════════════════
 
-template displace*(t: typed; coord: IntOrIntTuple): untyped =
-  ## Offset tensor by `coord` (logical coords). Returns a sub-view whose shape is
+func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
+  ## Offset TensorView by `coord` (logical coords). Returns a sub-view whose shape is
   ## `original_shape - coord` (element-wise). Data pointer advances by
   ## `crd2idx(layout, coord)`. Strides preserved.
-  ##
-  ## runnableExamples:
-  ##   let t = make_tensor(make_layout((10, 10), (1, 10)), float32)
-  ##   let sub = displace(t, (3, 2))
-  ##   doAssert $sub.layout == "(7, 8):(1, 10)"
-  let c = coord
-  let off = crd2idx(t.layout, c)
-  let ns = zipLeavesWith(t.layout.shape, c):
+  let off = crd2idx(t.layout, coord)
+  let ns = zipLeavesWith(t.layout.shape, coord):
     it_a - it_b
-  when t is TensorView:
-    make_view(addr t.data[off], make_layout(ns, t.layout.stride))
-  else:
-    make_view(addr t.data[t.offset + off], make_layout(ns, t.layout.stride))
+  make_view(cast[ptr UncheckedArray[T]](addr t.data[off]),
+            make_layout(ns, t.layout.stride))
 
 
 template fillWith*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =

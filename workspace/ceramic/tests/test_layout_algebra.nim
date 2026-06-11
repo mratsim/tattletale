@@ -64,6 +64,8 @@ proc runZippedProductTests*: void
 proc runTiledProductTests*: void
 proc runFlatProductTests*: void
 proc runTileToShapeTests*: void
+proc runMaxCommonVectorTests*: void
+proc runAntiRegressionTests*: void
 proc runTileUnzipTests*: void
 proc runTests* =
   echo "\n── Coalesce [CUTE-C]: 20 cases ──"
@@ -74,6 +76,8 @@ proc runTests* =
   runComplementMultiModeStaticTests()
   runComplementDynamicTests()
   runComplementDisjointnessTests()
+  echo "\n--- Anti-regression: crd2idx + tile_unzip ---"
+  runAntiRegressionTests()
   echo "\n── Composition [CUTE-CM] ──"
   runComposeExactValueTests()
   runComposeSimpleTests()
@@ -84,6 +88,8 @@ proc runTests* =
   runComposeSwizzleTests()
   runComposeEStrideTests()
   runComposeNegStrideTests()
+  echo "\n--- max_common_vector ---"
+  runMaxCommonVectorTests()
   echo "\n── logical_divide [CUTE-LD] ──"
   runDivideTests()
   echo "\n── right_inverse [CUTE-IR] + [PY-E Table 5] ──"
@@ -595,7 +601,17 @@ proc runComposeExactValueTests* =
     let form2 = C === ((5, (2, 2)), (16, (80, 4)))
     doAssert form1 or form2, "compose result " & $C & " matches neither accepted form"
     doAssert chkCompose(make_layout((10, 2), (16, 4)), make_layout((5, 4), (1, 5))), "mapping check failed"
-  echo "    Exact-value: 10/10"
+  # compose tuple LHS + scalar RHS — hits elif b.shape isnot tuple: branch
+  # Previously assertion-failing; verify against Python output
+  doAssert compose(make_layout((4, 8), (1, 4)), make_layout(10, 1)) === (10, 1)
+  doAssert chkCompose(make_layout((4, 8), (1, 4)), make_layout(10, 1))
+  doAssert compose(make_layout((4, 8), (1, 4)), make_layout(8, 1)) === (8, 1)
+  doAssert chkCompose(make_layout((4, 8), (1, 4)), make_layout(8, 1))
+  doAssert compose(make_layout((4, 8), (1, 4)), make_layout(5, 1)) === (5, 1)
+  doAssert chkCompose(make_layout((4, 8), (1, 4)), make_layout(5, 1))
+  # nested tuple LHS + scalar RHS
+  doAssert chkCompose(make_layout(((6, 1), (32, 512)), ((1, 192), (6, 192))), make_layout(200, 1))
+  echo "    Exact-value: 14/14"
 
 proc runComposeSimpleTests* =
   doAssert chkCompose(make_layout(1,0), make_layout(1,0))
@@ -659,7 +675,7 @@ proc runComposeRemainderTests* =
   doAssert chkCompose(make_layout(4,1), make_layout(4,2))
   doAssert chkCompose(make_layout((4,3),(3,1)), make_layout(24,1))
   doAssert chkCompose(make_layout((4,3),(3,1)), make_layout(8,1))
-  doAssert chkCompose(make_layout((4,3,1),(3,1,0)), make_layout(24,1))
+  doAssert chkCompose(make_layout((4,3,1),(3,1,0)), make_layout(24,1)) # This requires coalesce to preserve trailing (shape 1, stride 0)
   doAssert chkCompose(make_layout((4,3,1),(3,1,0)), make_layout(4,1))
   doAssert chkCompose(make_layout((4,6,8,10),(2,3,5,7)), make_layout(6,12))
   doAssert chkCompose(make_layout((8,8),(8,1)), make_layout(2,3))
@@ -707,6 +723,145 @@ proc runComposeNegStrideTests* =
   # [CUTE-CM] #62: (4,4):(-1,1) / (2,4,2):(1,4,2)
   doAssert chkCompose(make_layout((4,4),(-1,1)), make_layout((2,4,2),(1,4,2)))
   echo "    Neg strides: 6/6"
+# ═══════════════════════════════════════════════════════════════
+#  max_common_vector / max_common_layout
+# ═══════════════════════════════════════════════════════════════
+
+proc runAntiRegressionTests* =
+  ## crd2idx with nested shape: layout[coord] on (2, (3,4)):((1,6),3)
+  block:
+    let l = make_layout((2, (3, 4)), (3, (1, 6)))
+    doAssert l(0) == 0
+    doAssert l(6) == 6
+    doAssert l(1) == 3
+    doAssert l(23) == 23
+  ## tile_unzip with Layout tiler
+  block:
+    let A = make_layout((8, 8), (1, 8))
+    let T = make_layout((2, 2), (1, 4))
+    let zd = zipped_divide(A, T)
+    doAssert zd === (((2, 2), (2, 8)), ((1, 4), (2, 8)))
+  echo "    PASS"
+
+# ═══════════════════════════════════════════════════════════════
+
+proc runMaxCommonVectorTests* =
+  # A-packing (both nested)
+  block:
+    let src = make_layout(((6, 1), (32, 512)), ((1, 192), (6, 192)))
+    let dst = make_layout(((6, 1), (32, 512)), ((1, 6), (3072, 6)))
+    doAssert max_common_vector(src, dst) == 6
+    doAssert max_common_layout(src, dst) === (6, 1)
+  block:
+    let src = make_layout(((1, 16), (512, 64)), ((1, 512), (1, 8192)))
+    let dst = make_layout(((1, 16), (512, 64)), ((1, 1), (16, 8192)))
+    doAssert max_common_vector(src, dst) == 1
+  block:
+    let src = make_layout((4000, 2000), (1, 4000))
+    let dst = make_layout((2000, 4000), (2000, 1))
+    doAssert max_common_vector(src, dst) == 1
+  # Identical LayoutRight — entire layout is common
+  block:
+    let a = make_layout((64, 512, 16), (8192, 16, 1))
+    let b = make_layout((64, 512, 16), (8192, 16, 1))
+    doAssert max_common_vector(a, b) == 524288
+    let common = max_common_layout(a, b)
+    for i in 0 ..< size(common):
+      doAssert a(common(i)) == i
+      doAssert b(common(i)) == i
+  block:
+    let src = make_layout((32, 6), (1, 32))
+    let dst = make_layout((32, 6), (1, 32))
+    doAssert max_common_vector(src, dst) == 192
+    let common = max_common_layout(src, dst)
+    doAssert size(common) == 192
+    for i in 0 ..< size(common):
+      doAssert src(common(i)) == i
+      doAssert dst(common(i)) == i
+  block:
+    let src = make_layout(512, 1)
+    let dst = make_layout(512, 1)
+    doAssert max_common_vector(src, dst) == 512
+    let common = max_common_layout(src, dst)
+    doAssert size(common) == 512
+    for i in 0 ..< size(common):
+      doAssert src(common(i)) == i
+      doAssert dst(common(i)) == i
+  # PackA: layout from GEMM benchmark
+  block:
+    let src = make_layout(((6, 1), (32, 512)), ((1, 192), (6, 192)))
+    let dst = make_layout((32, 512, 6), LayoutRight)
+    doAssert max_common_vector(src, dst) == 1
+  # PackB: layout from GEMM benchmark
+  block:
+    let src = make_layout(((1, 16), (512, 64)), ((1, 512), (1, 8192)))
+    let dst = make_layout((64, 512, 16), LayoutRight)
+    doAssert max_common_vector(src, dst) == 1
+  # [PY] test_max_common_vector_identical
+  block:
+    let a = make_layout(8, 1)
+    doAssert max_common_vector(a, a) == 8
+  # [PY] test_max_common_vector_contiguous_prefix: a=8:1, b=(2,4):(1,4) → 2
+  block:
+    let a = make_layout(8, 1)
+    let b = make_layout((2, 4), (1, 4))
+    doAssert max_common_vector(a, b) == 2
+  # [PY] test_max_common_vector_no_common: a=(4,2):(2,1), b=8:1 → 1
+  block:
+    let a = make_layout((4, 2), (2, 1))
+    let b = make_layout(8, 1)
+    doAssert max_common_vector(a, b) == 1
+  # [PY] test_max_common_layout_identical
+  block:
+    let a = make_layout(8, 1)
+    let common = max_common_layout(a, a)
+    doAssert size(common) == 8
+    for i in 0 ..< size(common):
+      doAssert a(common(i)) == i
+  # [PY] test_max_common_layout_partial: a=8:1, b=(2,4):(1,4) → layout size 2
+  block:
+    let a = make_layout(8, 1)
+    let b = make_layout((2, 4), (1, 4))
+    let common = max_common_layout(a, b)
+    doAssert size(common) == 2
+    for i in 0 ..< size(common):
+      doAssert a(common(i)) == i
+      doAssert b(common(i)) == i
+  # [PY] Fig 8a: (4,4):(1,4) vs ((2,2),4):((1,8),2) → mcv=2, mcl=2:1
+  block:
+    let src = make_layout((4, 4), (1, 4))
+    let dst = make_layout(((2, 2), 4), ((1, 8), 2))
+    doAssert max_common_vector(src, dst) == 2
+    doAssert max_common_layout(src, dst) === (2, 1)
+  # [PY] Fig 8b: ((2,2),(2,2)):((8,2),(4,1)) vs ((2,2),(2,2)):((4,2),(8,1)) → mcv=4
+  block:
+    let src = make_layout(((2, 2), (2, 2)), ((8, 2), (4, 1)))
+    let dst = make_layout(((2, 2), (2, 2)), ((4, 2), (8, 1)))
+    doAssert max_common_vector(src, dst) == 4
+    let common = max_common_layout(src, dst)
+    for i in 0 ..< size(common):
+      doAssert src(common(i)) == i
+      doAssert dst(common(i)) == i
+  # [PY-applications] (4,4):(1,4) vs 16:1 → different shapes, same mapping, mcv=16
+  block:
+    let a = make_layout((4, 4), (1, 4))
+    let b = make_layout(16, 1)
+    doAssert max_common_vector(a, b) == 16
+    let common = max_common_layout(a, b)
+    doAssert size(common) == 16
+    for i in 0 ..< size(common):
+      doAssert a(common(i)) == i
+      doAssert b(common(i)) == i
+  # [PY-applications] (4,4):(1,4) vs (4,4):(4,1) → transposed, mcv=1
+  block:
+    let a = make_layout((4, 4), (1, 4))
+    let b = make_layout((4, 4), (4, 1))
+    doAssert max_common_vector(a, b) == 1
+
+  echo "    max_common_vector: 19/19"
+
+# ═══════════════════════════════════════════════════════════════
+#  logical_divide [CUTE-LD]
 # ═══════════════════════════════════════════════════════════════
 #  logical_divide [CUTE-LD]
 # ═══════════════════════════════════════════════════════════════

@@ -246,33 +246,36 @@ func crd2idx[V: static int](coord: Int[V]; shape, stride: int): int = V * stride
 # 3-arg: macro handles tuple coord + tuple stride → inner product
 #         or int coord + tuple shape + tuple stride → decompose
 # 3-arg: tuple coord → inner product (a·b)
-func crd2idx[C, Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
+func crd2idx[C, Sh, St: tuple](coord: C; shape: Sh; stride: St): auto {.inline, noInit.} =
   ## Inner product: sum coord[i] * stride[i]
   foldZipWith(coord, stride, 0): acc + it_a * it_b
 
 # 3-arg: int coord → decompose across modes
-func crd2idx[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
+func crd2idx[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto {.inline, noInit.} =
   ## Decompose coord across shape modes with strides.
   ## Sequential: result += (cur mod s) * d; cur = cur div s
-  ## If shapes are nested (tuple elements), flatten first.
-  when shape[0] is tuple:
-    crd2idx(coord, flatten(shape), flatten(stride))
-  else:
+  ## Flatten shape/stride first (no-op if already flat) to handle nesting.
+  type ShType = typeof(flatten(shape))
+  when ShType is tuple:
     var sum = 0
     var cur = int(coord)
-    staticFor i, 0, tupleLen(Sh):
-      let s = int(shape[i])
-      let d = int(stride[i])
-      when i < Sh.tupleLen - 1:
+    let fshape = flatten(shape)
+    let fstride = flatten(stride)
+    staticFor i, 0, tupleLen(ShType):
+      let s = int(fshape[i])
+      let d = int(fstride[i])
+      when i < ShType.tupleLen - 1:
         sum += (cur mod s) * d
       else:
         sum += cur * d
       cur = cur div s
     sum
-#  Layout coordinate → offset  (public API)
+  else:
+    # Scalar after flatten — single mode
+    int(coord) * int(flatten(stride))
 # ═══════════════════════════════════════════════════════════════
 
-func crd2idx*(layout: Layout; coord: IntOrIntTuple): int =
+func crd2idx*(layout: Layout; coord: IntOrIntTuple): int {.inline, noInit.} =
   ## Logical-to-memory offset for a coordinate on a Layout.
   ##
   ## `coord` can be:

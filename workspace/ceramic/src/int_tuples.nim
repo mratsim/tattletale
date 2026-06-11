@@ -626,7 +626,7 @@ template zipLeavesWith*(a, b: typed; body: untyped): untyped =
 #    concat(a: Int[N]; b: Int[N])         — Int[N] + Int[N]
 # ═══════════════════════════════════════════════════════════════
 
-proc concat*(a: int; b: tuple): auto =
+proc concat*(a: int; b: tuple): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     let bType = bNode.getTypeImpl()
@@ -636,7 +636,7 @@ proc concat*(a: int; b: tuple): auto =
       result.add newTree(nnkBracketExpr, bNode, newLit(idx))
   concatImpl()
 
-proc concat*(a: static int; b: tuple): auto =
+proc concat*(a: static int; b: tuple): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     let bType = bNode.getTypeImpl()
@@ -647,7 +647,7 @@ proc concat*(a: static int; b: tuple): auto =
       result.add newTree(nnkBracketExpr, bNode, newLit(idx))
   concatImpl()
 
-proc concat*[V: static int](a: Int[V]; b: tuple): auto =
+proc concat*[V: static int](a: Int[V]; b: tuple): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     let bType = bNode.getTypeImpl()
@@ -657,7 +657,7 @@ proc concat*[V: static int](a: Int[V]; b: tuple): auto =
       result.add newTree(nnkBracketExpr, bNode, newLit(idx))
   concatImpl()
 
-proc concat*(a: tuple; b: int): auto =
+proc concat*(a: tuple; b: int): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     let aType = aNode.getTypeImpl()
@@ -667,7 +667,7 @@ proc concat*(a: tuple; b: int): auto =
     result.add bNode
   concatImpl()
 
-proc concat*(a: tuple; b: static int): auto =
+proc concat*(a: tuple; b: static int): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     let aType = aNode.getTypeImpl()
@@ -678,7 +678,7 @@ proc concat*(a: tuple; b: static int): auto =
       newNimNode(nnkBracketExpr).add(ident"Int", bNode))
   concatImpl()
 
-proc concat*[V: static int](a: tuple; b: Int[V]): auto =
+proc concat*[V: static int](a: tuple; b: Int[V]): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     let aType = aNode.getTypeImpl()
@@ -688,7 +688,7 @@ proc concat*[V: static int](a: tuple; b: Int[V]): auto =
     result.add bNode
   concatImpl()
 
-proc concat*(a, b: tuple): auto =
+proc concat*(a, b: tuple): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     let aType = aNode.getTypeImpl(); let bType = bNode.getTypeImpl()
@@ -699,7 +699,7 @@ proc concat*(a, b: tuple): auto =
       result.add newTree(nnkBracketExpr, bNode, newLit(idx))
   concatImpl()
 
-proc concat*(a, b: int): auto =
+proc concat*(a, b: int): auto {.inline, noInit.} =
   ## int + int → (int, int) tuple
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
@@ -708,7 +708,7 @@ proc concat*(a, b: int): auto =
     result.add bNode
   concatImpl()
 
-proc concat*(a: int; b: static int): auto =
+proc concat*(a: int; b: static int): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     result = newNimNode(nnkTupleConstr)
@@ -717,7 +717,7 @@ proc concat*(a: int; b: static int): auto =
       newNimNode(nnkBracketExpr).add(ident"Int", bNode))
   concatImpl()
 
-proc concat*(a: static int; b: int): auto =
+proc concat*(a: static int; b: int): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     result = newNimNode(nnkTupleConstr)
@@ -726,7 +726,7 @@ proc concat*(a: static int; b: int): auto =
     result.add bNode
   concatImpl()
 
-proc concat*(a, b: static int): auto =
+proc concat*(a, b: static int): auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     result = newNimNode(nnkTupleConstr)
@@ -736,7 +736,7 @@ proc concat*(a, b: static int): auto =
       newNimNode(nnkBracketExpr).add(ident"Int", bNode))
   concatImpl()
 
-proc concat*[V1, V2: static int](a: Int[V1]; b: Int[V2]): static auto =
+proc concat*[V1, V2: static int](a: Int[V1]; b: Int[V2]): static auto {.inline, noInit.} =
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
     result = newNimNode(nnkTupleConstr)
@@ -744,7 +744,7 @@ proc concat*[V1, V2: static int](a: Int[V1]; b: Int[V2]): static auto =
     result.add bNode
   concatImpl()
 
-proc concat*[V: static int](a: Int[V] or int; b: int or Int[V]): auto =
+proc concat*[V: static int](a: Int[V] or int; b: int or Int[V]): auto {.inline, noInit.} =
   ## Int[N] + int tuple
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
@@ -753,7 +753,7 @@ proc concat*[V: static int](a: Int[V] or int; b: int or Int[V]): auto =
     result.add bNode
   concatImpl()
 
-proc concat*[V: static int](a: Int[V]; b: static int): static auto =
+proc concat*[V: static int](a: Int[V]; b: static int): static auto {.inline, noInit.} =
   ## Int[N] + static int tuple (static int → Int[b])
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
@@ -763,7 +763,7 @@ proc concat*[V: static int](a: Int[V]; b: static int): static auto =
       newNimNode(nnkBracketExpr).add(ident"Int", bNode))
   concatImpl()
 
-proc concat*[V: static int](a: static int; b: Int[V]): static auto =
+proc concat*[V: static int](a: static int; b: Int[V]): static auto {.inline, noInit.} =
   ## static int + Int[N] tuple (static int → Int[a])
   macro concatImpl(): untyped =
     let aNode = bindSym"a"; let bNode = bindSym"b"
