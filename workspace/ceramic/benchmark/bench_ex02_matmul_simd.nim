@@ -9,6 +9,7 @@
 
 import std/[monotimes, times, math, random, strutils]
 import ../examples/ex02_matmul_simd/ex02_matmul_simd
+import ./laser/gemm as laser_gemm
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Naive triple-loop reference (ijk order, column-major)
@@ -90,4 +91,14 @@ when isMainModule:
       gflops(secR, ops).formatFloat(ffDecimal, 2), " GFlop/s  (",
       (secR*1e6).formatFloat(ffDecimal, 1), " us)"
 
+
+    # ── Laser gemm_strided (ptr-based) ──
+    laser_gemm.gemm_strided(N, N, N, alpha, addr A[0], rs, cs, addr B[0], rs, cs, beta, addr C[0], rs, cs)
+    let t0l = getMonoTime()
+    laser_gemm.gemm_strided(N, N, N, alpha, addr A[0], rs, cs, addr B[0], rs, cs, beta, addr C[0], rs, cs)
+    let t1l = getMonoTime()
+    let secL = float64((t1l - t0l).inNanoseconds) / 1e9
+    echo "Laser gemm_strided   ", N, "x", N, ": ",
+      gflops(secL, ops).formatFloat(ffDecimal, 2), " GFlop/s  (",
+      (secL*1e6).formatFloat(ffDecimal, 1), " us)"
   echo "\nDone."
