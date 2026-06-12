@@ -35,7 +35,7 @@ type Activation* = enum
   akIdentity
   akReLU
 
-template genEpilogue*(epilogueName: untyped; activationBody: untyped): untyped =
+template genEpilogue(epilogueName: untyped; activationBody: untyped): untyped =
   ## Generate an epilogue proc with the activation inlined.
   ## Inside `activationBody`, use `x` for the AB accumulator value.
   proc `epilogueName`[T; MR, NR: static int; Sh, St](
@@ -73,7 +73,7 @@ genEpilogue(epilogue_relu):
 #  pack_layout — derive pack-buffer layout from zipped_divide
 # ═══════════════════════════════════════════════════════════════════════════
 
-template pack_layout*(zd: Layout; transposed: static bool): auto =
+template pack_layout(zd: Layout; transposed: static bool): auto =
   let tileCompact = make_layout(zd.shape[0], LayoutLeft)
   let tile_size = product(zd.shape[0])
   let restCompact = make_layout(zd.shape[1],
@@ -87,7 +87,7 @@ template pack_layout*(zd: Layout; transposed: static bool): auto =
 # ═══════════════════════════════════════════════════════════════════════════
 
 type MmaAtom = object
-  mr*, nr*, kc*: int
+  mr, nr, kc: int
 
 const
   L1_CACHE_SIZE = 32 * 1024
@@ -146,8 +146,7 @@ when simdArch != "auto":
   elif resolvedArch == "avx512":
     {.passC: "-mavx512f -mfma".}
 
-proc simdArchString*(): string = resolvedArch
-
+proc simdArchString(): string = resolvedArch
 
 
 template gemm_ukernel(packA, packB, AB, kc: untyped): untyped =
@@ -190,6 +189,8 @@ proc gemm_strided*[T: SomeNumber](
   # ── Cache-block dimensions ──
   const atom = MmaAtom(mr: mr, nr: nr, kc: kc_atom)
   let (mc, kc) = autoTileParams(atom, T, M, K)
+
+  # ── Small matrix ──
   if mc < mr or kc < kc_atom:
     for i in 0 ..< M:
       for j in 0 ..< N:
@@ -257,7 +258,9 @@ proc gemm_strided*[T: SomeNumber](
       # ── Loop 3 (ic): row blocks of A ──
       for ic in 0 ..< num_ic:
         let current_mc = min(M - ic * mc, mc)
-        if current_mc <= 0: continue
+        if current_mc <= 0:
+          continue
+
         let last_m = (current_mc < mc)
         let num_ir_eff = if last_m: ceil_div(current_mc, mr) else: num_ir
 
@@ -279,15 +282,18 @@ proc gemm_strided*[T: SomeNumber](
         # ── Loop 2 (jr): micro-panels of B ──
         for jr in 0 ..< num_jr:
           let cCol = jr * nr
-          if cCol >= N: break
+          if cCol >= N:
+            break
+          
           let bTile = packB.slice((jr, _, _))
 
           # ── Loop 1 (ir): micro-tiles of A (innermost) ──
           for ir in 0 ..< num_ir_eff:
             let cRow = ic * mc + ir * mr
-            if cRow >= M: break
+            if cRow >= M:
+              break
             let aTile = packA.slice((ir, _, _))
-            var AB: array[mr, array[nr, T]]
+            var AB {.noInit.}: array[mr, array[nr, T]]
 
             gemm_ukernel(aTile.data, bTile.data, AB, current_kc)
 
@@ -348,10 +354,14 @@ when isMainModule:
     var B = newSeq[float32](bLen)
     var C_ref = newSeq[float32](cLen)
     var C_tst = newSeq[float32](cLen)
-    for i in 0 ..< A.len:   A[i] = rand(1.0'f32)
-    for i in 0 ..< B.len:   B[i] = rand(1.0'f32)
-    for i in 0 ..< C_ref.len: C_ref[i] = rand(1.0'f32)
-    for i in 0 ..< C_tst.len: C_tst[i] = C_ref[i]
+    for i in 0 ..< A.len:
+      A[i] = rand(1.0'f32)
+    for i in 0 ..< B.len:
+      B[i] = rand(1.0'f32)
+    for i in 0 ..< C_ref.len:
+      C_ref[i] = rand(1.0'f32)
+    for i in 0 ..< C_tst.len:
+      C_tst[i] = C_ref[i]
 
     let alpha = 1.0'f32; let beta = 1.0'f32
     gemm_reference(M, N, K, alpha, A, rsA, csA, B, rsB, csB, beta, C_ref, rsC, csC)

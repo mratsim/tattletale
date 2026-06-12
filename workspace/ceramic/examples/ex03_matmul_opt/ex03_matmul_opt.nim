@@ -305,9 +305,11 @@ proc gemm_strided*[T: SomeNumber](
       # ── Loop 3 (ic): row blocks of A ──
       for ic in 0 ..< num_ic:
         let current_mc = min(M - ic * mc, mc)
-        if current_mc <= 0: continue
+        if current_mc <= 0:
+          continue
         let last_m = (current_mc < mc)
-        let num_ir_eff = if last_m: ceil_div(current_mc, mr) else: num_ir
+        let num_ir_eff = if last_m: ceil_div(current_mc, mr)
+                         else: num_ir
 
         let panelA = local_tile(vA, pA, ic, pc)
 
@@ -350,7 +352,9 @@ proc gemm_strided*[T: SomeNumber](
         let packA_jump = kc * mr   # elements per ir slice
         for jr in 0 ..< num_jr:
           let cCol = jr * nr
-          if cCol >= N: break
+          if cCol >= N:
+            break
+          
           let bTilePtr = cast[ptr UncheckedArray[T]](packB_ptr)
           let bOffset = jr * kc * nr   # jr * kc * nr
 

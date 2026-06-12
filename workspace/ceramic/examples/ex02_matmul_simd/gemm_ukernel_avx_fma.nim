@@ -16,7 +16,7 @@ proc gemm_ukernel_avx_fma*[MR, NR: static int](
   ## MR=6, NR=16 → C lives in 12 AVX registers (mr × (nr/8) vectors).
   const NbVecs = NR div 8   # 2 vectors per row (16 float32 = 2×m256)
   # C register tile: ABv[i][j] = m256 for row i, vector j
-  var ABv: array[MR, array[NbVecs, m256]]
+  var ABv {.noInit.}: array[MR, array[NbVecs, m256]]
   for i in 0 ..< MR:
     for j in 0 ..< NbVecs:
       ABv[i][j] = mm256_setzero_ps()

@@ -12,7 +12,7 @@ proc gemm_ukernel_avx512*[MR, NR: static int](
     AB: var array[MR, array[NR, float32]];
     kc: int) =
   const NbVecs = NR div 16  # 2 vectors per row (32 float32 = 2×m512)
-  var ABv: array[MR, array[NbVecs, m512]]
+  var ABv {.noInit.}: array[MR, array[NbVecs, m512]]
   for i in 0 ..< MR:
     for j in 0 ..< NbVecs:
       ABv[i][j] = mm512_setzero_ps()
