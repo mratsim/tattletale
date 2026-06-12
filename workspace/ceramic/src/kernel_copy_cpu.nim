@@ -5,6 +5,41 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+##
+## Codegen flow (ASCII) — <compile-time> vs [runtime]:
+##
+##   effR = effective rank = number of dims after removing compile-time size-1 dims
+##   bs = blockSize parameter (static int, default -1).
+##        When > 0, genNestedCopy tiles loops into bs-sized blocks for cache efficiency.
+##        genCopyMemLoops ignores bs (single copyMem already optimal).
+##
+##   <copySameShapeImpl> ──► <buildStrideSortedArrays>
+##   <copyPermutedImpl>          │
+##                               │ skip size-1 dims, reorder by stride
+##                               ▼
+##                          effR == 0? ──yes──► dst[0] = src[0]  [single elem copy]
+##                               │
+##                              no
+##                               │
+##                               ▼
+##                          <genContiguityCode>
+##                          walk innermost→outermost
+##                          check srcSt[d]==innerProd && dstSt[d]==innerProd
+##                               │
+##                               ▼
+##                       copyDimStart < effR?
+##                        (contiguous suffix found?)
+##                         /                    \
+##                       yes                    no
+##                        │                      │
+##                        ▼                      ▼
+##   <genCopyMemLoops>              <genNestedCopy>
+##   (outerR, copyCount)            (effR, bs)
+##        │                              │
+##        │ wrap outerR for-loops        │ if bs>0: tile into bs×bs blocks
+##        ▼                              ▼
+##   [for d in 0..<outerR:          [for all dims:
+##      copyMem(copyCount)]           elem-by-elem copy]
 import std/[macros, algorithm]
 import ./int_tuples
 import ./layouts
@@ -50,6 +85,8 @@ proc buildStrideSortedArrays(
     effR, lastOk: int
 ] {.compileTime.} =
   ## Build stride-sorted arrays from compile-time-static shape/stride info.
+  ##
+  ## `effR` = effective rank = number of dims after filtering out size-1 dims.
   ##
   ## Flow:
   ##   1. Walk dims 0..R-1.
@@ -311,69 +348,19 @@ proc genContiguityCode(
     else:
       break
 
-  # ── Compile-time contiguous suffix: fuse into copyMem ──
+  # ── Some suffix was contiguous: fuse into copyMem ──
   if copyDimStart < effR:
-    # Static fusion: outerR loops over non-fused dims,
-    # then a single copyMem for the fused suffix.
     let outerR = copyDimStart
     var copyCount = newLit(1)
     for d in copyDimStart ..< effR:
       let cd = newLit(d)
       copyCount = quote do: `copyCount` * `shSym`[`cd`]
-    let compiledFusion = genCopyMemLoops(dstData, srcData, shSym, dstStSym, srcStSym,
-                                        outerR, copyCount)
-    return compiledFusion
+    result = genCopyMemLoops(dstData, srcData, shSym, dstStSym, srcStSym,
+                             outerR, copyCount)
 
-  # ── Runtime fallback: unrolled cascade of stride checks ──
-  # Walking dims innermost-first, generate a cascade of runtime stride
-  # comparisons. Each matching dim extends the contiguous suffix window.
-  # The cascade produces zero-overhead unrolled checks.
-  #
-  # Structure: if srcSt[last]==1 and dstSt[last]==1:
-  #   if srcSt[last-1]==sh[last] and dstSt[last-1]==sh[last]:
-  #     ... fused copyMem of all matching dims ...
-  #   else: fused copyMem of 1 dim (last)
-  # else: fully strided loops
-  if effR == 0:
-    return genNestedCopy(effR, bs, shSym, srcStSym, dstStSym, dstData, srcData)
-
-  var rInner = newLit(1)
-  var rCascade: NimNode = nil
-  for d in countdown(effR - 1, 0):
-    let dLit = newLit(d)
-    let bothOk = quote do:
-      `srcStSym`[`dLit`] == `rInner` and `dstStSym`[`dLit`] == `rInner`
-    # For fusion at depth d: copyMem count = sh[d] * ... * sh[effR-1]
-    var copyCount = newLit(1)
-    for dd in d ..< effR:
-      let cdd = newLit(dd)
-      copyCount = quote do: `copyCount` * `shSym`[`cdd`]
-    let fusedPath = genCopyMemLoops(dstData, srcData, shSym, dstStSym,
-      srcStSym, d, copyCount)
-    if rCascade.isNil:
-      rCascade = fusedPath  # innermost: fusable dims start here
-    else:
-      # bothOk → stride matches rInner → fuse this dim too (wider fusion)
-      # else   → stride broke         → keep the narrower cascade
-      rCascade = quote do:
-        if `bothOk`:
-          `fusedPath`
-        else:
-          `rCascade`
-    rInner = quote do: `rInner` * `shSym`[`dLit`]
-
-  # Top-level guard: innermost dim must be stride-1 in both src and dst
-  # If not, fall back to fully strided loops.
-  let stridedPath = genNestedCopy(effR, bs, shSym, srcStSym, dstStSym,
-    dstData, srcData)
-  let lastIdx = newLit(effR - 1)
-  let last1 = newLit(1)
-  result = quote do:
-    if `srcStSym`[`lastIdx`] == `last1` and `dstStSym`[`lastIdx`] == `last1`:
-      `rCascade`
-    else:
-      `stridedPath`
-
+  # ── No contiguous suffix: fully strided loops ──
+  else:
+    result = genNestedCopy(effR, bs, shSym, srcStSym, dstStSym, dstData, srcData)
 macro copySameShapeImpl(dst: typed; src: typed; blockSize: static int): untyped =
   let tvDst = dst.getTypeInst()
   let tvSrc = src.getTypeInst()

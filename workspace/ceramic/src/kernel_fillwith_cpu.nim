@@ -5,6 +5,38 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+##
+## Codegen flow (ASCII) — <compile-time> vs [runtime]:
+##
+##   effR = effective rank = number of dims after removing size-1 dims
+##
+##   <fillWithCpuImpl> ──► <buildSortedArrays>
+##                                │ skip size-1 dims, reorder by stride
+##                                ▼
+##                           effR == 0? ──yes──► dst[0] = val  or  zeroMem (isZero)
+##                                │
+##                               no
+##                                │
+##                                ▼
+##                          <genFillContiguityCode>
+##                          walk innermost→outermost
+##                          check st[d] == innerProd
+##                                │
+##                                ▼
+##                        fillDimStart < effR?
+##                         (contiguous suffix found?)
+##                          /                    \
+##                        yes                    no
+##                         │                      │
+##                         ▼                      ▼
+##                    [isZero?]             [strided fill]
+##                    /        \           elem-by-elem loops
+##                  yes        no
+##                   │          │
+##                   ▼          ▼
+##              zeroMem          counted for-loop
+##              (fused suffix)   (fused suffix)
+##
 import std/[macros, algorithm]
 import ./int_tuples
 import ./layouts
@@ -34,6 +66,8 @@ proc buildSortedArrays(
     effR, lastOk: int
 ] {.compileTime.} =
   ## Build stride-sorted arrays for fill (single tensor, no src).
+  ##
+  ## `effR` = effective rank = number of dims after filtering out size-1 dims.
   result.shLit = nnkBracket.newTree()
   result.stLit = nnkBracket.newTree()
   result.effR = 0
@@ -111,7 +145,7 @@ proc genFillContiguityCode(
     isZero: bool
 ): NimNode {.compileTime.} =
   ## Generate fill code with contiguity-fused suffix.
-  ## Fused suffix uses nimSetMem for zero, element loop otherwise.
+  ## Fused suffix uses zeroMem for zero, element loop otherwise.
   var fillDimStart = effR
   var innerProd = 1
   for d in countdown(effR - 1, 0):
@@ -132,14 +166,14 @@ proc genFillContiguityCode(
       copyCount = quote do: `copyCount` * `shSym`[`cd`]
 
     if isZero:
-      # ── Zero fill: use nimSetMem ──
+      # ── Zero fill: use zeroMem ──
       let copySize = quote do: `copyCount` * sizeof(typeof(`dstData`[0]))
       if outerR == 0:
-        # Fully contiguous: single nimSetMem
+        # Fully contiguous: single zeroMem
         result = quote do:
-          nimSetMem(addr `dstData`[0], 0.cint, `copySize`)
+          zeroMem(addr `dstData`[0], `copySize`)
       else:
-        # Partially contiguous: outer loops + nimSetMem per tile
+        # Partially contiguous: outer loops + zeroMem per tile
         var baseDst: NimNode = newLit(0)
         let idxSyms = nnkBracket.newTree()
         for d in 0 ..< outerR:
@@ -260,7 +294,7 @@ macro fillWithCpuImpl(dst: typed; val: typed): untyped =
 
 func fillWith_cpu*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
   ## Fill every logical element of `tv` with `val`.
-  ## Uses nimSetMem for zero-fill of contiguous suffix.
+  ## Uses zeroMem for zero-fill of contiguous suffix.
   fillWithCpuImpl(tv, val)
 
 func fillWith_cpu*[T, Sh, St](t: var Tensor[T, Sh, St]; val: T) =
