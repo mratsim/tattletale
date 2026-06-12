@@ -223,7 +223,7 @@ proc complementGaps(
     let gap = if strides[idx] > cur: strides[idx] div cur else: 1
     if gap > 1:
       result.append(IntCT(gap), IntCT(cur))
-    if shapes[idx] == 0:
+    if shapes[idx] == DynamicSentinel:
       break
     cur = strides[idx] * shapes[idx]
   let rem = newCall(bindSym"ceil_div", boundExpr, IntCT(cur))
@@ -580,7 +580,7 @@ proc rightInverseChain*(
       result.append(
         newTree(nnkBracketExpr, shNode, newLit(idx)),
         IntCT(prefixProd[idx]))
-      if shapes[idx] != 0:
+      if shapes[idx] != DynamicSentinel:
         curr = strides[idx] * shapes[idx]
       else:
         break

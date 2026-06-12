@@ -237,38 +237,6 @@ func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto 
             make_layout(ns, t.layout.stride))
 
 
-template fillWith*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
-  ## Set every logical element of `tv` to `val`.
-  let n = size(tv.layout)
-  for i in 0 ..< n:
-    tv(i) = val
-
-template fillWith*[T, Sh, St](t: var Tensor[T, Sh, St]; val: T) =
-  ## Set every logical element of `t` to `val`.
-  let n = size(t.layout)
-  for i in 0 ..< n:
-    t(i) = val
-
-# ═════════════════════════════════════════════════════════════════════════
-#  copyFrom / copyFromIf — flat-index element copy primitives
-# ═════════════════════════════════════════════════════════════════════════
-
-template copyFrom*[T, ShA, StA, ShB, StB](
-    dst: var TensorView[T, ShB, StB];
-    src: TensorView[T, ShA, StA]) =
-  for i in 0 ..< size(dst):
-    dst(i) = src(i)
-
-template copyFromIf*[T, ShA, StA, ShB, StB](
-    dst: var TensorView[T, ShB, StB];
-    src: TensorView[T, ShA, StA];
-    predicate: typed;
-    defaultVal: T) =
-  for i in 0 ..< size(dst):
-    if predicate(i):
-      dst(i) = src(i)
-    else:
-      dst(i) = defaultVal
 
 # ═════════════════════════════════════════════════════════════════════════
 #  local_tile — extract subtensor from tiled_divide result

@@ -23,17 +23,17 @@ func transpose2D_laser*[T](
 
   const blck = 32
 
+  {.emit: "/*transpose_laser*/".}
   {.emit: """
-    #define min(a,b) (((a)<(b))?(a):(b))
     `T` (* __restrict pd)[`NR`] = (void*)`dst`;
     `T` (* __restrict ps)[`NC`] = (void*)`src`;
 
     #pragma omp parallel for collapse(2)
     for (int j = 0; j < `NC`; j+=`blck`)
       for (int i = 0; i < `NR`; i+=`blck`)
-        for (int jj = j; jj<min(j+`blck`, `NC`); jj++)
+        for (int jj = j; jj<j+`blck` && jj < `NC`; jj++)
           #pragma omp simd
-          for (int ii = i; ii<min(i+`blck`,`NR`); ii++)
+          for (int ii = i; ii<i+`blck` && ii < `NR`; ii++)
             pd[jj][ii] = ps[ii][jj];
   """.}
 
@@ -54,13 +54,13 @@ func transpose2D_cacheBlock*(
   ## 1D cache-blocked transpose (blck=64).
   ## Blocks on the source row dimension for cache efficiency.
   const blck = 64
+  {.emit: "/*cache_block*/".}
   {.emit: """
-    #define min(a,b) (((a)<(b))?(a):(b))
     NF32* __restrict pd = (NF32*)`dst`;
     NF32* __restrict ps = (NF32*)`src`;
     for (int i = 0; i < `NR`; i+=`blck`)
       for (int j = 0; j < `NC`; ++j)
-        for (int ii = i; ii < min(i+`blck`,`NR`); ++ii)
+        for (int ii = i; ii < i+`blck` && ii < `NR`; ++ii)
           pd[ii+j*`NR`] = ps[j+ii*`NC`];
   """.}
 
@@ -70,13 +70,13 @@ func transpose2D_cacheBlockPrefetch*(
   ## 1D cache-blocked transpose with prefetch (blck=32).
   ## Prefetches the next row-block for read.
   const blck = 32
+  {.emit: "/*cache_blk_prefetch*/".}
   {.emit: """
-    #define min(a,b) (((a)<(b))?(a):(b))
     NF32* __restrict pd = (NF32*)`dst`;
     NF32* __restrict ps = (NF32*)`src`;
     for (int i = 0; i < `NR`; i+=`blck`) {
       for (int j = 0; j < `NC`; ++j)
-        for (int ii = i; ii < min(i+`blck`,`NR`); ++ii)
+        for (int ii = i; ii < i+`blck` && ii < `NR`; ++ii)
           pd[ii+j*`NR`] = ps[j+ii*`NC`];
       __builtin_prefetch(&ps[(i+`blck`)*`NC`], 0, 1);
     }

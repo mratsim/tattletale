@@ -18,7 +18,14 @@ type Int*[V: static int] = object
   ## Compile-time integer literal, analogous to CuTe's `Int<N>`.
   ##   Int<4>  ⇔  Int[4]
   ##
-  ## Only `static int` values can inhabit Int[N] — no runtime dispatching.
+
+const DynamicSentinel* = low(int)
+  ## Sentinel value used throughout the library to mark a shape
+  ## or stride as "unknown at compile time" (dynamic/runtime int).
+  ## Returned by `toSeqStaticInts` for non-`Int[N]` elements.
+  ## Code processing compile-time-known shape/stride arrays should
+  ## compare against this sentinel rather than 0, to avoid confusion
+  ## with a stride of literal 0 (Int[0], broadcasting).
 
 type IntOrIntTuple* = int | Int | tuple
   ## Shape/stride element type alias for convenience.
@@ -145,24 +152,31 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
   else: error("getStaticInt on non-static: " & t.repr)
 
 func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
-  ## Extract Int[N] values from a tuple type AST node.
-  ## Returns 0 for non-static (dynamic int) elements.
-  for i in 0 ..< t.len:
-    let node = t[i]
-    if node.kind == nnkBracketExpr and $node[0] == "Int":
-      result.add int(node[1].intVal)
-    else:
-      result.add 0
+  ## Recursively extract Int[N] values from a (possibly nested) tuple type AST node.
+  ## Returns 0 for non-static (dynamic int) elements. Handles:
+  ##   ((Int[1], Int[16]), (Int[512], Int[64]))  → @[1, 16, 512, 64]
+  ##   ((int, int), (int, int))                  → @[0, 0, 0, 0]
+  ##   Int[64]                                   → @[64]
+  if t.kind == nnkBracketExpr and $t[0] == "Int":
+    # Single Int[N] (scalar type, not tuple)
+    result.add int(t[1].intVal)
+  elif t.kind == nnkTupleConstr or t.kind == nnkTupleTy:
+    # Recurse into tuple elements
+    for i in 0 ..< t.len:
+      result.add toSeqStaticInts(t[i])
+  else:
+    # Dynamic int (or other) — mark as unknown (low(int))
+    result.add low(int)
 
 func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
-  ## Prefix product of a flat seq (0 entries treated as 1 for scan,
-  ## but produce 0 in output to mark unknown positions).
+  ## Prefix product of a flat seq (DynamicSentinel treated as 1 for scan,
+  ## but produce DynamicSentinel in output to mark unknown positions).
   result = @[1]
   for i in 0 ..< vals.len:
-    if vals[i] != 0:
+    if vals[i] != DynamicSentinel:
       result.add result[^1] * vals[i]
     else:
-      result.add 0
+      result.add DynamicSentinel
 
 # ═══════════════════════════════════════════════════════════════
 #  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs

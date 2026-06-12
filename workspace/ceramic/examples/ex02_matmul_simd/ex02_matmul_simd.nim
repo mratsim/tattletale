@@ -23,6 +23,8 @@ import ../../src/int_tuples
 import ../../src/layouts
 import ../../src/layout_algebra
 import ../../src/tensors
+import ../../src/kernel_copy_cpu
+import ../../src/kernel_fillwith_cpu
 export int_tuples, layouts, layout_algebra, tensors
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -241,16 +243,16 @@ proc gemm_strided*[T: SomeNumber](
       let panelB = local_tile(vB, pB, pc, jc)
 
       if last_k:
-        packB.fillWith(0.T)
+        packB.fillWith_cpu(0.T)
         let srcB_edge = make_view(panelB,
           make_layout(((1, nr), (current_kc, num_jr)), srcB_zd.stride))
         var dstB_edge = make_view(packB,
           make_layout(((1, nr), (current_kc, num_jr)), dstB_zd.stride))
-        copyFrom(dstB_edge, srcB_edge)
+        copySameShape_cpu(dstB_edge, srcB_edge)
       else:
         let src4B = make_view(panelB, srcB_zd)
         var dst4B = make_view(packB, dstB_zd)
-        copyFrom(dst4B, src4B)
+        copySameShape_cpu(dst4B, src4B)
 
       # ── Loop 3 (ic): row blocks of A ──
       for ic in 0 ..< num_ic:
@@ -263,16 +265,16 @@ proc gemm_strided*[T: SomeNumber](
 
         if last_m or last_k:
           let mr_eff = min(mr, current_mc)
-          packA.fillWith(0.T)
+          packA.fillWith_cpu(0.T)
           let srcA_edge = make_view(panelA,
             make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), srcA_zd.stride))
           var dstA_edge = make_view(packA,
             make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), dstA_zd.stride))
-          copyFrom(dstA_edge, srcA_edge)
+          copySameShape_cpu(dstA_edge, srcA_edge)
         else:
           let src4A = make_view(panelA, srcA_zd)
           var dst4A = make_view(packA, dstA_zd)
-          copyFrom(dst4A, src4A)
+          copySameShape_cpu(dst4A, src4A)
 
         # ── Loop 2 (jr): micro-panels of B ──
         for jr in 0 ..< num_jr:

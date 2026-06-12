@@ -18,6 +18,8 @@ import std/macros
 import std/typetraits
 import ./macros/static_for
 import ./int_tuples
+import ./kernel_indexing_gpu
+export kernel_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St] — typed shape + stride pair
@@ -226,54 +228,11 @@ template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): a
   )
 
 # ═══════════════════════════════════════════════════════════════
-#  crd2idx / layout() — coordinate to linear index  (private)
-#  idx2crd — linear index → coordinate tuple            (private)
+#  crd2idx / layout() / idx2crd — via kernel_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
 #
-#  Internals. External code must go through Layout overloads:
-#    layout(coord)         — flat crd2idx via parens
-#    layout[i, j, ...]    — multi crd2idx via varargs bracket
-#    crd2idx(L, coord)    — crd2idx via Layout arg (layout first)
-#    idx2crd(L, idx)      — idx2crd via Layout arg (layout first)
-# Scalar overloads (private)
-
-# Scalar overloads
-func crd2idx(coord, shape: int): int = coord
-func crd2idx[V: static int](coord: Int[V]; shape: int): int = V
-func crd2idx(coord, shape, stride: int): int = coord * stride
-func crd2idx[V: static int](coord: Int[V]; shape, stride: int): int = V * stride
-
-# 3-arg: macro handles tuple coord + tuple stride → inner product
-#         or int coord + tuple shape + tuple stride → decompose
-# 3-arg: tuple coord → inner product (a·b)
-func crd2idx[C, Sh, St: tuple](coord: C; shape: Sh; stride: St): auto {.inline, noInit.} =
-  ## Inner product: sum coord[i] * stride[i]
-  foldZipWith(coord, stride, 0): acc + it_a * it_b
-
-# 3-arg: int coord → decompose across modes
-func crd2idx[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto {.inline, noInit.} =
-  ## Decompose coord across shape modes with strides.
-  ## Sequential: result += (cur mod s) * d; cur = cur div s
-  ## Flatten shape/stride first (no-op if already flat) to handle nesting.
-  type ShType = typeof(flatten(shape))
-  when ShType is tuple:
-    var sum = 0
-    var cur = int(coord)
-    let fshape = flatten(shape)
-    let fstride = flatten(stride)
-    staticFor i, 0, tupleLen(ShType):
-      let s = int(fshape[i])
-      let d = int(fstride[i])
-      when i < ShType.tupleLen - 1:
-        sum += (cur mod s) * d
-      else:
-        sum += cur * d
-      cur = cur div s
-    sum
-  else:
-    # Scalar after flatten — single mode
-    int(coord) * int(flatten(stride))
-# ═══════════════════════════════════════════════════════════════
+#  The raw 3-arg crd2idx overloads live in kernel_indexing_gpu.nim.
+#  These Layout-consuming wrappers delegate to them.
 
 func crd2idx*(layout: Layout; coord: IntOrIntTuple): int {.inline, noInit.} =
   ## Logical-to-memory offset for a coordinate on a Layout.
@@ -297,17 +256,9 @@ macro `[]`*(layout: Layout; args: varargs[IntOrIntTuple]): untyped =
   var coord = nnkPar.newTree()
   args.copyChildrenTo(coord)
   result = newCall(bindSym"()", layout, coord)
-# ═══════════════════════════════════════════════════════════════
-#  idx2crd — linear index → coordinate tuple
-# ═══════════════════════════════════════════════════════════════
 
 macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
-  ##
-  ## Each mode: `(idx div layout.stride[i]) mod layout.shape[i]`.
-  ##
-  ## MoYe: `index_to_coord(idx, shape, stride)
-  ## CuTe: `idx2crd(idx, shape)` — CuTe has shape second
   let lTyp = layout.getTypeInst()
   let shT = lTyp[1]
   let sh = newTree(nnkDotExpr, layout, ident"shape")
@@ -322,7 +273,6 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
       parts.add newCall(bindSym"mod",
         newCall(bindSym"div", idx, s), shI)
     result = nnkPar.newTree(parts)
-
 # ═══════════════════════════════════════════════════════════════
 #  filter_zeros — replace stride-0 shapes with Int[1]
 # ═══════════════════════════════════════════════════════════════
