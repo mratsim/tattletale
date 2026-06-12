@@ -30,8 +30,6 @@ const DynamicSentinel* = low(int)
 type IntOrIntTuple* = int | Int | tuple
   ## Shape/stride element type alias for convenience.
 
-converter toInt*[V: static int](x: Int[V]): int = V
-
 func toIntVal*(x: int): int = x
 func toIntVal*[V: static int](x: Int[V]): int = V
 
@@ -553,7 +551,7 @@ macro flattenImpl(t: IntOrIntTuple): untyped =
   result = newNimNode(nnkPar)
   collect(result, tNode, ttype)
 
-proc flatten*(t: IntOrIntTuple): auto =
+proc flatten*(t: IntOrIntTuple): auto {.inline, noInit.}=
   ## Recursively collect leaf fields of a (possibly nested) tuple.
   ## Scalars and Int[N] are leaves; tuples are expanded.
   ##
@@ -565,7 +563,7 @@ proc flatten*(t: IntOrIntTuple): auto =
   ##   flatten((1,(2,3)))  → (1,2,3)
   flattenImpl(t)
 
-proc flatten*(t: static IntOrIntTuple): static auto =
+proc flatten*(t: static IntOrIntTuple): static auto {.inline, noInit.} =
   ## Recursively collect leaf fields of a (possibly nested) tuple.
   ## Scalars and Int[N] are leaves; tuples are expanded.
   ##

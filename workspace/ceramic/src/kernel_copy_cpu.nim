@@ -82,8 +82,9 @@ proc buildStrideSortedArrays(
 ): tuple[
     shLit, dstStLit, srcStLit: NimNode;
     shapeVals, srcStVals, dstStVals: seq[int];
-    effR, lastOk: int
-] {.compileTime.} =
+    effR, lastOk: int;
+    preStmts: NimNode
+  ] {.compileTime.} =
   ## Build stride-sorted arrays from compile-time-static shape/stride info.
   ##
   ## `effR` = effective rank = number of dims after filtering out size-1 dims.
@@ -93,20 +94,35 @@ proc buildStrideSortedArrays(
   ##   2. Skip compile-time size-1 dims (trivial loops that would
   ##      iterate once — they clutter the loop nest for no benefit).
   ##   3. For each kept dim, emit shape/dstSt/srcSt into parallel arrays.
-  ##      Unknown (runtime) values get DynamicSentinel in `Vals` seq
-  ##      and a `flattenElem()` call in the `Lit` NimNode (codegen).
+  ##      Unknown (runtime) values get a cached flatten+index expression
+  ##      (flatten is evalOnceAs'd so it's computed once in C++).
   ##   4. Post-loop: reorder so unknown-stride dims come FIRST
   ##      (outermost loops — fewer iterations, conservative placement)
   ##      and known-stride dims are stride-sorted descending (innermost).
   ##
   ## Returns:
   ##   shLit/dstStLit/srcStLit: nnkBracket literals for let-bindings in generated code.
-  ##     Mix of `newLit(Int[N])` for compile-time-known and `flattenElem(...)` for runtime.
+  ##   preStmts: nnkStmtList with evalOnceAs bindings for flatten() of each (lay, field) pair.
   ##   shapeVals/srcStVals/dstStVals: seq[int] of compile-time-known values,
   ##     DynamicSentinel for runtime-unknown (for compile-time analysis like contiguity).
   ##   effR: effective rank after size-1 filtering.
   ##   lastOk: original dim index of the innermost (last) entry after reordering.
-  ##     Used by caller for innermost-stride checks.
+  var flatCache = newSeq[tuple[name: string; lay, field: NimNode]]()
+  var flatIdCounter = 0
+  proc cachedFlatten(lay, field: NimNode; idx: NimNode): NimNode =
+    ## Generate `int(flat_N[idx])` with flatten cached via evalOnceAs.
+    for c in flatCache:
+      if c.lay.repr == lay.repr and c.field.repr == field.repr:
+        let cid = ident(c.name)
+        return quote do: int(`cid`[`idx`])
+    let nstr = "flat_" & $flatIdCounter
+    inc flatIdCounter
+    let nid = ident(nstr)
+    flatCache.add (name: nstr, lay: lay, field: field)
+    return quote do:
+      int(`nid`[`idx`])
+  # preStmts will be built after the main loop populates flatCache
+    
   result.shLit = nnkBracket.newTree()
   result.dstStLit = nnkBracket.newTree()
   result.srcStLit = nnkBracket.newTree()
@@ -126,14 +142,14 @@ proc buildStrideSortedArrays(
       result.shLit.add newLit(rawDstSh[k])
       result.shapeVals.add rawDstSh[k]
     else:
-      result.shLit.add flattenElem(dstLay, ident"shape", newLit(k), R)
+      result.shLit.add cachedFlatten(dstLay, ident"shape", newLit(k))
       result.shapeVals.add DynamicSentinel
     # Dst stride
     if k < rawDstSt.len and rawDstSt[k] != DynamicSentinel:
       result.dstStLit.add newLit(rawDstSt[k])
       result.dstStVals.add rawDstSt[k]
     else:
-      result.dstStLit.add flattenElem(dstLay, ident"stride", newLit(k), R)
+      result.dstStLit.add cachedFlatten(dstLay, ident"stride", newLit(k))
       result.dstStVals.add DynamicSentinel
     # Src stride (with optional permutation)
     let srcPos = if permDtoS.len > 0: permDtoS[k] else: k
@@ -141,7 +157,7 @@ proc buildStrideSortedArrays(
       result.srcStLit.add newLit(rawSrcSt[srcPos])
       result.srcStVals.add rawSrcSt[srcPos]
     else:
-      result.srcStLit.add flattenElem(srcLay, ident"stride", newLit(srcPos), R)
+      result.srcStLit.add cachedFlatten(srcLay, ident"stride", newLit(srcPos))
       result.srcStVals.add DynamicSentinel
   # Reorder: unknown-stride dims outermost, sorted known-stride dims inner
   if result.effR > 1:
@@ -182,7 +198,14 @@ proc buildStrideSortedArrays(
         result.lastOk = okVals[^1]
       else:
         result.lastOk = -1
-
+  # ── Build evalOnceAs let-bindings for cached flatten calls ──
+  result.preStmts = newStmtList()
+  for c in flatCache:
+    let name = ident(c.name)
+    let lay = c.lay
+    let field = c.field
+    result.preStmts.add quote do:
+      evalOnceAs(`name`, flatten(`lay`.`field`))
 proc genCopyMemLoops(
     dstData, srcData, shSym, dstStSym, srcStSym: NimNode;
     loopCount: int; copyCountExpr: NimNode
@@ -392,6 +415,7 @@ macro copySameShapeImpl(dst: typed; src: typed; blockSize: static int): untyped 
   let srcStSym = genSym(nskLet, "srcSt")
   let dstStSym = genSym(nskLet, "dstSt")
   var stmts = newStmtList()
+  stmts.add a.preStmts
   stmts.add newLetStmt(shSym, a.shLit)
   stmts.add newLetStmt(srcStSym, a.srcStLit)
   stmts.add newLetStmt(dstStSym, a.dstStLit)
@@ -437,6 +461,7 @@ macro copyPermutedImpl[Rank: static int](
   let dstStSym = genSym(nskLet, "dstSt")
   let srcStSym = genSym(nskLet, "srcSt")
   var stmts = newStmtList()
+  stmts.add a.preStmts
   stmts.add newLetStmt(shSym, a.shLit)
   stmts.add newLetStmt(dstStSym, a.dstStLit)
   stmts.add newLetStmt(srcStSym, a.srcStLit)
@@ -453,7 +478,7 @@ macro copyPermutedImpl[Rank: static int](
 
 func copySameShape_cpu*[D, S: TensorView](
     dst: D, src: S, blockSize: static int = -1
-) =
+) {.inline.} =
   copySameShapeImpl(dst, src, blockSize)
 
 # ── copyPermuted_cpu: public func ──────────────────────────────────
