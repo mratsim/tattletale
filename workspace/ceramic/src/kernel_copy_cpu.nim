@@ -112,7 +112,9 @@ proc buildStrideSortedArrays(
     for d in 0 ..< result.effR:
       if result.dstStVals[d] == DynamicSentinel: unknown.add d
       else: known.add d
-    if unknown.len > 0 and known.len > 0:
+    # Always sort known strides by descending dst stride even when there
+    # are no unknown strides (innermost loop = smallest stride)
+    if known.len > 0:
       let dstVals = result.dstStVals
       known.sort do (a, b: int) -> int:
         cmp(dstVals[b], dstVals[a])
