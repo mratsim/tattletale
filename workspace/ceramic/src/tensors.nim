@@ -78,16 +78,16 @@ func make_view*[T, ShA, StA, ShB, StB](
 #  make_view(shape, stride tuples) — convenience, delegates to make_view(Layout)
 # ─────────────────────────────────────────────────────────────────────────
 
-template make_view*[T](ptr_data: ptr UncheckedArray[T]; shape, stride: IntOrIntTuple): untyped =
+template make_view*[T; Sh, St: IntOrIntTuple](ptr_data: ptr UncheckedArray[T]; shape: Sh, stride: St): untyped =
   make_view(ptr_data, make_layout(shape, stride))
 
-template make_view*[T](data: openArray[T]; shape, stride: IntOrIntTuple): untyped =
+template make_view*[T; Sh, St: IntOrIntTuple](data: openArray[T]; shape: Sh, stride: St): untyped =
   make_view(addr data[0], make_layout(shape, stride))
 
-template make_view*[T](data: ptr T; shape, stride: IntOrIntTuple): untyped =
+template make_view*[T; Sh, St: IntOrIntTuple](data: ptr T; shape: Sh, stride: St): untyped =
   make_view(data, make_layout(shape, stride))
 
-template make_view*[T, ShA, StA](tv: TensorView[T, ShA, StA]; shape, stride: IntOrIntTuple): untyped =
+template make_view*[T; ShA, StA, Sh, St](tv: TensorView[T, ShA, StA]; shape: Sh, stride: St): untyped =
   ## Reinterpret a TensorView with new shape and stride (same data pointer).
   make_view(tv, make_layout(shape, stride))
 
