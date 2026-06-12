@@ -442,9 +442,9 @@ when isMainModule:
     var err: float32 = 0
     for i in 0 ..< cLen:
       err = max(err, abs(C_ref[i] - C_tst[i]))
-    echo "  simd arch: ", resolvedArch
     echo "  max error: ", err.formatFloat(ffScientific, 2),
-         if err < 1e-4: "  v" else: "  x"
+         if err < 1e-4: " ✅" else: " ❌"
+    doAssert err < 1e-4, "Error tolerance exceeded (got " & $err & ")"
 
   test(16, 16, 16, 1, 16, 1, 16, 1, 16, "Square 16x16 col-major")
   test(16, 16, 16, 16, 1, 16, 1, 16, 1, "Square 16x16 row-major")
