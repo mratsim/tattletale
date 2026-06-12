@@ -67,6 +67,40 @@ genEpilogue(epilogue_identity):
 genEpilogue(epilogue_relu):
   if x > T(0): x else: T(0)
 
+template genEpilogue_raw*(epilogueName: untyped; activationBody: untyped): untyped =
+  ## Generate an epilogue proc taking raw pointer + strides.
+  ## Inside `activationBody`, use `x` for the AB accumulator value.
+  proc `epilogueName`[T; MR, NR: static int](
+      C: ptr UncheckedArray[T];
+      AB: array[MR, array[NR, T]];
+      mr, nr: int;
+      alpha, beta: T;
+      rsC, csC: int) {.inline.} =
+    if beta == T(0):
+      for i in 0 ..< mr:
+        for j in 0 ..< nr:
+          C[i * rsC + j * csC] = T(0)
+    elif beta != T(1):
+      for i in 0 ..< mr:
+        for j in 0 ..< nr:
+          C[i * rsC + j * csC] *= beta
+    if alpha == T(1):
+      for i in 0 ..< mr:
+        for j in 0 ..< nr:
+          let x {.inject.} = AB[i][j]
+          C[i * rsC + j * csC] += activationBody
+    else:
+      for i in 0 ..< mr:
+        for j in 0 ..< nr:
+          let x {.inject.} = AB[i][j]
+          C[i * rsC + j * csC] += alpha * activationBody
+
+# Generate concrete raw epilogue procs
+genEpilogue_raw(epilogue_identity_raw):
+  x
+genEpilogue_raw(epilogue_relu_raw):
+  if x > T(0): x else: T(0)
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  pack_layout — derive pack-buffer layout from zipped_divide
 # ═══════════════════════════════════════════════════════════════════════════
@@ -113,6 +147,7 @@ proc autoTileParams(atom: static MmaAtom; T: typedesc; M, K: int): tuple[mc, kc:
 # ═══════════════════════════════════════════════════════════════════════════
 
 import ./gemm_ukernel_generic
+import ./simd
 
 const simdArch {.strdefine.} = "auto"
 
@@ -144,7 +179,7 @@ when simdArch != "auto":
   elif resolvedArch == "avx512":
     {.passC: "-mavx512f -mfma".}
 
-proc simdArchString*(): string = resolvedArch
+# proc simdArchString*(): string = resolvedArch
 
 
 template gemm_ukernel(packA, packB, AB, kc: untyped): untyped =
@@ -159,17 +194,18 @@ template gemm_ukernel(packA, packB, AB, kc: untyped): untyped =
 #  Epilogue dispatch
 # ═══════════════════════════════════════════════════════════════════════════
 
-template gemm_epilogue(activation: Activation; C, AB, mr, nr, alpha, beta: untyped): untyped =
+template gemm_epilogue(activation: Activation; C, AB, mr, nr, alpha, beta, rsC, csC: untyped): untyped =
+  ## Raw-pointer epilogue dispatch. `C` is ptr UncheckedArray[T].
   if activation == akReLU:
-    epilogue_relu(C, AB, mr, nr, alpha, beta)
+    epilogue_relu_raw(C, AB, mr, nr, alpha, beta, rsC, csC)
   else:
-    epilogue_identity(C, AB, mr, nr, alpha, beta)
+    epilogue_identity_raw(C, AB, mr, nr, alpha, beta, rsC, csC)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  gemm_strided — BLIS 5-loop GEMM
+#  gemm_strided_non_algebra — BLIS 5-loop GEMM
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc gemm_strided*[T: SomeNumber](
+proc gemm_strided_non_algebra*[T: SomeNumber](
     M, N, K: int;
     alpha: T;
     A: ptr UncheckedArray[T]; rowStrideA, colStrideA: int;
@@ -214,14 +250,17 @@ proc gemm_strided*[T: SomeNumber](
   # ── Panel layouts ──
   let panelA_lay = make_layout((mc, kc), (rowStrideA, colStrideA))
   let panelB_lay = make_layout((kc, nc), (rowStrideB, colStrideB))
-
-  # ── Pack buffer layouts ──
+  # ── Pack buffer layouts (aligned to 32 bytes for SIMD) ──
   let packALay = make_layout((num_ir, kc, mr), LayoutRight)
   let packBLay = make_layout((num_jr, kc, nr), LayoutRight)
-  var packDataA = newSeq[T](int(cosize(packALay)))
-  var packDataB = newSeq[T](int(cosize(packBLay)))
-  var packA = make_view(packDataA, packALay)
-  var packB = make_view(packDataB, packBLay)
+  let packSizeA = int(cosize(packALay))
+  let packSizeB = int(cosize(packBLay))
+  var packMemA = newSeq[T](packSizeA + 8)
+  var packMemB = newSeq[T](packSizeB + 8)
+  let alignA = (cast[int](addr packMemA[0]) + 31) and not 31
+  let alignB = (cast[int](addr packMemB[0]) + 31) and not 31
+  var packA = make_view(cast[ptr UncheckedArray[T]](alignA), packALay)
+  var packB = make_view(cast[ptr UncheckedArray[T]](alignB), packBLay)
 
   # ── zipped_divide + pack_layout ──
   let srcA_zd = zipped_divide(panelA_lay, (mr, 1))
@@ -237,64 +276,106 @@ proc gemm_strided*[T: SomeNumber](
     let current_kc = min(K - pc * kc, kc)
     if current_kc <= 0: continue
     let last_k = (pc == num_pc - 1) and (current_kc < kc)
-
     for jc in 0 ..< 1:
       let panelB = local_tile(vB, pB, pc, jc)
+      let pB_ptr = cast[ptr UncheckedArray[T]](panelB.data)
+      let pB_rs = panelB.layout.stride[0]
+      let pB_cs = panelB.layout.stride[1]
+      let packB_ptr = cast[ptr UncheckedArray[T]](alignB)
 
-      let srcB_edge = make_view(panelB, ((1, nr), (current_kc, num_jr)), srcB_zd.stride)
-      var dstB_edge = make_view(packB,  ((1, nr), (current_kc, num_jr)), dstB_zd.stride)
-      copySameShape_cpu(dstB_edge, srcB_edge)
+      # Pack B — explicit copyMem for contiguous rows
+      if pB_cs == 1:
+        for jr in 0 ..< num_jr:
+          for k in 0 ..< current_kc:
+            let dstOff = jr * kc * nr + k * nr
+            let srcOff = k * pB_rs + jr * nr
+            copyMem(addr packB_ptr[dstOff], addr pB_ptr[srcOff], nr * sizeof(T).int)
+      else:
+        for jr in 0 ..< num_jr:
+          for k in 0 ..< current_kc:
+            let dstOff = jr * kc * nr + k * nr
+            let srcOff = k * pB_rs + jr * nr * pB_cs
+            for jj in 0 ..< nr:
+              packB_ptr[dstOff + jj] = pB_ptr[srcOff + jj * pB_cs]
 
       # ── Loop 3 (ic): row blocks of A ──
       for ic in 0 ..< num_ic:
         let current_mc = min(M - ic * mc, mc)
         if current_mc <= 0:
           continue
-
         let last_m = (current_mc < mc)
         let num_ir_eff = if last_m: ceil_div(current_mc, mr) else: num_ir
 
         let panelA = local_tile(vA, pA, ic, pc)
+        let pA_ptr = cast[ptr UncheckedArray[T]](panelA.data)
+        let pA_rs = panelA.layout.stride[0]
+        let pA_cs = panelA.layout.stride[1]
+        let packA_ptr = cast[ptr UncheckedArray[T]](alignA)
 
-        if last_m or last_k:
-          let mr_eff = min(mr, current_mc)
-          packA.fillWith_cpu(0.T)
-          let srcA_edge = make_view(panelA,
-            make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), srcA_zd.stride))
-          var dstA_edge = make_view(packA,
-            make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), dstA_zd.stride))
-          copySameShape_cpu(dstA_edge, srcA_edge)
+        # Pack A — explicit copyMem for contiguous rows
+        # with per-row edge handling (zero-fill partial tails only)
+        if pA_rs == 1:
+          for ir in 0 ..< num_ir_eff:
+            let srcRow = ir * mr
+            let lastTile = last_m and (srcRow + mr > current_mc)
+            for k in 0 ..< current_kc:
+              let dstOff = ir * kc * mr + k * mr
+              let srcOff = srcRow + k * pA_cs
+              if lastTile:
+                let valid = current_mc - srcRow
+                copyMem(addr packA_ptr[dstOff], addr pA_ptr[srcOff], valid * sizeof(T).int)
+                for ii in valid ..< mr:
+                  packA_ptr[dstOff + ii] = T(0)
+              else:
+                copyMem(addr packA_ptr[dstOff], addr pA_ptr[srcOff], mr * sizeof(T).int)
         else:
-          let src4A = make_view(panelA, srcA_zd)
-          var dst4A = make_view(packA, dstA_zd)
-          copySameShape_cpu(dst4A, src4A)
+          for ir in 0 ..< num_ir_eff:
+            let srcRow = ir * mr
+            let lastTile = last_m and (srcRow + mr > current_mc)
+            for k in 0 ..< current_kc:
+              let dstOff = ir * kc * mr + k * mr
+              let srcOff = srcRow * pA_rs + k * pA_cs
+              if lastTile:
+                let valid = current_mc - srcRow
+                for ii in 0 ..< valid:
+                  packA_ptr[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
+                for ii in valid ..< mr:
+                  packA_ptr[dstOff + ii] = T(0)
+              else:
+                for ii in 0 ..< mr:
+                  packA_ptr[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
 
         # ── Loop 2 (jr): micro-panels of B ──
         for jr in 0 ..< num_jr:
           let cCol = jr * nr
           if cCol >= N:
             break
-
-          let bTile = packB.slice((jr, _, _))
+          let bOffset = jr * kc * nr
 
           # ── Loop 1 (ir): micro-tiles of A (innermost) ──
+          let packA_jump = kc * mr
           for ir in 0 ..< num_ir_eff:
             let cRow = ic * mc + ir * mr
             if cRow >= M:
               break
-            let aTile = packA.slice((ir, _, _))
+            let aOffset = ir * packA_jump
             var AB {.noInit.}: array[mr, array[nr, T]]
+            gemm_ukernel(
+              cast[ptr UncheckedArray[T]](cast[int](packA_ptr) +% aOffset *% sizeof(T).int),
+              cast[ptr UncheckedArray[T]](cast[int](packB_ptr) +% bOffset *% sizeof(T).int),
+              AB, current_kc)
 
-            gemm_ukernel(aTile.data, bTile.data, AB, current_kc)
-
-            let cTile = displace(vC, (cRow, cCol))
-            gemm_epilogue(activation, cTile, AB, mr, nr, alpha, beta)
+            # Raw-pointer epilogue (direct pointer arithmetic, no TensorView)
+            let cPtr = cast[ptr UncheckedArray[T]](cast[int](C) +%
+              (cRow * rowStrideC + cCol * colStrideC) *% sizeof(T).int)
+            gemm_epilogue(activation, cPtr,
+                          AB, mr, nr, alpha, beta, rowStrideC, colStrideC)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Convenience overload — openArray[T]
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc gemm_strided*[T: SomeNumber](
+proc gemm_strided_non_algebra*[T: SomeNumber](
     M, N, K: int;
     alpha: T;
     A: openArray[T]; rowStrideA, colStrideA: int;
@@ -302,7 +383,7 @@ proc gemm_strided*[T: SomeNumber](
     beta: T;
     C: var openArray[T]; rowStrideC, colStrideC: int;
     activation: Activation = akIdentity) =
-  gemm_strided[T](
+  gemm_strided_non_algebra[T](
     M, N, K, alpha,
     cast[ptr UncheckedArray[T]](addr A[0]), rowStrideA, colStrideA,
     cast[ptr UncheckedArray[T]](addr B[0]), rowStrideB, colStrideB,
@@ -355,7 +436,7 @@ when isMainModule:
 
     let alpha = 1.0'f32; let beta = 1.0'f32
     gemm_reference(M, N, K, alpha, A, rsA, csA, B, rsB, csB, beta, C_ref, rsC, csC)
-    gemm_strided(M, N, K, alpha, A, rsA, csA, B, rsB, csB, beta, C_tst, rsC, csC, akIdentity)
+    gemm_strided_non_algebra(M, N, K, alpha, A, rsA, csA, B, rsB, csB, beta, C_tst, rsC, csC, akIdentity)
 
     var err: float32 = 0
     for i in 0 ..< cLen:

@@ -9,6 +9,7 @@
 
 import std/[monotimes, times, math, random, strutils]
 import ../examples/ex02_matmul_simd/ex02_matmul_simd
+import ../examples/ex02_matmul_simd/ex02_matmul_simd_nonalgebra
 import ./laser/gemm as laser_gemm
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -73,24 +74,41 @@ when isMainModule:
 
     # ── gemm_strided (identity) ──
     gemm_strided(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs)
-    let t0s = getMonoTime()
-    gemm_strided(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs)
-    let t1s = getMonoTime()
-    let secS = float64((t1s - t0s).inNanoseconds) / 1e9
-    echo "gemm_strided id    ", N, "x", N, ": ",
-      gflops(secS, ops).formatFloat(ffDecimal, 2), " GFlop/s  (",
-      (secS*1e6).formatFloat(ffDecimal, 1), " us)"
+    block:
+      let t0s = getMonoTime()
+      gemm_strided(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs)
+      let t1s = getMonoTime()
+      let secS = float64((t1s - t0s).inNanoseconds) / 1e9
+      echo "gemm_strided id    ", N, "x", N, ": ",
+        gflops(secS, ops).formatFloat(ffDecimal, 2), " GFlop/s  (",
+        (secS*1e6).formatFloat(ffDecimal, 1), " us)"
+    block:
+      let t0s = getMonoTime()
+      gemm_strided_non_algebra(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs)
+      let t1s = getMonoTime()
+      let secS = float64((t1s - t0s).inNanoseconds) / 1e9
+      echo "gemm_non_algebra id    ", N, "x", N, ": ",
+        gflops(secS, ops).formatFloat(ffDecimal, 2), " GFlop/s  (",
+        (secS*1e6).formatFloat(ffDecimal, 1), " us)"
 
     # ── gemm_strided (ReLU) ──
     gemm_strided(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs, akReLU)
-    let t0r = getMonoTime()
-    gemm_strided(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs, akReLU)
-    let t1r = getMonoTime()
-    let secR = float64((t1r - t0r).inNanoseconds) / 1e9
-    echo "gemm_strided relu  ", N, "x", N, ": ",
-      gflops(secR, ops).formatFloat(ffDecimal, 2), " GFlop/s  (",
-      (secR*1e6).formatFloat(ffDecimal, 1), " us)"
-
+    block:
+      let t0r = getMonoTime()
+      gemm_strided(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs, akReLU)
+      let t1r = getMonoTime()
+      let secR = float64((t1r - t0r).inNanoseconds) / 1e9
+      echo "gemm_strided relu  ", N, "x", N, ": ",
+        gflops(secR, ops).formatFloat(ffDecimal, 2), " GFlop/s  (",
+        (secR*1e6).formatFloat(ffDecimal, 1), " us)"
+    block:
+      let t0r = getMonoTime()
+      gemm_strided_non_algebra(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs, akReLU)
+      let t1r = getMonoTime()
+      let secR = float64((t1r - t0r).inNanoseconds) / 1e9
+      echo "gemm_non_algebra relu  ", N, "x", N, ": ",
+        gflops(secR, ops).formatFloat(ffDecimal, 2), " GFlop/s  (",
+        (secR*1e6).formatFloat(ffDecimal, 1), " us)"
 
     # ── Laser gemm_strided (ptr-based) ──
     laser_gemm.gemm_strided(N, N, N, alpha, addr A[0], rs, cs, addr B[0], rs, cs, beta, addr C[0], rs, cs)
