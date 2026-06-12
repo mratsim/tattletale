@@ -146,7 +146,7 @@ when simdArch != "auto":
   elif resolvedArch == "avx512":
     {.passC: "-mavx512f -mfma".}
 
-proc simdArchString(): string = resolvedArch
+proc simdArchString*(): string = resolvedArch
 
 
 template gemm_ukernel(packA, packB, AB, kc: untyped): untyped =
@@ -284,7 +284,7 @@ proc gemm_strided*[T: SomeNumber](
           let cCol = jr * nr
           if cCol >= N:
             break
-          
+
           let bTile = packB.slice((jr, _, _))
 
           # ── Loop 1 (ir): micro-tiles of A (innermost) ──
