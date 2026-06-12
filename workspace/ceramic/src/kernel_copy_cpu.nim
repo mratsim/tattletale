@@ -311,19 +311,68 @@ proc genContiguityCode(
     else:
       break
 
-  # ── Some suffix was contiguous: fuse into copyMem ──
+  # ── Compile-time contiguous suffix: fuse into copyMem ──
   if copyDimStart < effR:
+    # Static fusion: outerR loops over non-fused dims,
+    # then a single copyMem for the fused suffix.
     let outerR = copyDimStart
     var copyCount = newLit(1)
     for d in copyDimStart ..< effR:
       let cd = newLit(d)
       copyCount = quote do: `copyCount` * `shSym`[`cd`]
-    result = genCopyMemLoops(dstData, srcData, shSym, dstStSym, srcStSym,
-                             outerR, copyCount)
+    let compiledFusion = genCopyMemLoops(dstData, srcData, shSym, dstStSym, srcStSym,
+                                        outerR, copyCount)
+    return compiledFusion
 
-  # ── No contiguous suffix: fully strided loops ──
-  else:
-    result = genNestedCopy(effR, bs, shSym, srcStSym, dstStSym, dstData, srcData)
+  # ── Runtime fallback: unrolled cascade of stride checks ──
+  # Walking dims innermost-first, generate a cascade of runtime stride
+  # comparisons. Each matching dim extends the contiguous suffix window.
+  # The cascade produces zero-overhead unrolled checks.
+  #
+  # Structure: if srcSt[last]==1 and dstSt[last]==1:
+  #   if srcSt[last-1]==sh[last] and dstSt[last-1]==sh[last]:
+  #     ... fused copyMem of all matching dims ...
+  #   else: fused copyMem of 1 dim (last)
+  # else: fully strided loops
+  if effR == 0:
+    return genNestedCopy(effR, bs, shSym, srcStSym, dstStSym, dstData, srcData)
+
+  var rInner = newLit(1)
+  var rCascade: NimNode = nil
+  for d in countdown(effR - 1, 0):
+    let dLit = newLit(d)
+    let bothOk = quote do:
+      `srcStSym`[`dLit`] == `rInner` and `dstStSym`[`dLit`] == `rInner`
+    # For fusion at depth d: copyMem count = sh[d] * ... * sh[effR-1]
+    var copyCount = newLit(1)
+    for dd in d ..< effR:
+      let cdd = newLit(dd)
+      copyCount = quote do: `copyCount` * `shSym`[`cdd`]
+    let fusedPath = genCopyMemLoops(dstData, srcData, shSym, dstStSym,
+      srcStSym, d, copyCount)
+    if rCascade.isNil:
+      rCascade = fusedPath  # innermost: fusable dims start here
+    else:
+      # bothOk → stride matches rInner → fuse this dim too (wider fusion)
+      # else   → stride broke         → keep the narrower cascade
+      rCascade = quote do:
+        if `bothOk`:
+          `fusedPath`
+        else:
+          `rCascade`
+    rInner = quote do: `rInner` * `shSym`[`dLit`]
+
+  # Top-level guard: innermost dim must be stride-1 in both src and dst
+  # If not, fall back to fully strided loops.
+  let stridedPath = genNestedCopy(effR, bs, shSym, srcStSym, dstStSym,
+    dstData, srcData)
+  let lastIdx = newLit(effR - 1)
+  let last1 = newLit(1)
+  result = quote do:
+    if `srcStSym`[`lastIdx`] == `last1` and `dstStSym`[`lastIdx`] == `last1`:
+      `rCascade`
+    else:
+      `stridedPath`
 
 macro copySameShapeImpl(dst: typed; src: typed; blockSize: static int): untyped =
   let tvDst = dst.getTypeInst()
@@ -351,7 +400,6 @@ macro copySameShapeImpl(dst: typed; src: typed; blockSize: static int): untyped 
     result.add quote do:
       `dstData`[0] = `srcData`[0]
     return
-
   # ── Bind local arrays, then generate loops via contiguity code ──
   let shSym = genSym(nskLet, "sh")
   let srcStSym = genSym(nskLet, "srcSt")

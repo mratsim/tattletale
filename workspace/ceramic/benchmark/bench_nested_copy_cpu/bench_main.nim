@@ -208,7 +208,6 @@ proc main() =
   bench("copySameShape_16", nb_samples, aElems):
     copySameShape_cpu(dstA_tv, srcA_tv, 16)
   doAssert xorHash(packA_buf) == aHash_ref, "copySameShape_16 A"
-  doAssert xorHash(packA_buf) == aHash_ref, "copySameShape_16 A"
   packA_buf.fill(0)
 
 
