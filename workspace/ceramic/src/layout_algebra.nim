@@ -480,32 +480,32 @@ func logical_divide*[L: Layout](layout: L; tiler: static int): auto =
   ## Compile-time int tiler (const) → preserve via Int[N] wrap → CuTe formula.
   logical_divide_impl(layout, make_layout(Int[tiler]()))
 
-func logical_divide*[L: Layout](layout: L; tiler: tuple): auto =
+template logical_divide_builder*(layout: untyped; tiler: untyped; LayoutRank: static int; idx: static int; accSh, accSt: typed): auto =
+  ## Recursive build helper for logical_divide(tuple tiler).
+  ## Exported (`*`) to avoid generic sandwich / template self-reference issues.
+  when idx >= max(tupleLen(tiler), LayoutRank):
+    make_layout(accSh, accSt)
+  else:
+    when idx < tupleLen(tiler):
+      let d = logical_divide(mode(layout, idx), tiler[idx])
+      logical_divide_builder(layout, tiler, LayoutRank, idx + 1, concat(accSh, (d.shape,)), concat(accSt, (d.stride,)))
+    else:
+      let m = mode(layout, idx)
+      logical_divide_builder(layout, tiler, LayoutRank, idx + 1, concat(accSh, (m.shape,)), concat(accSt, (m.stride,)))
+
+template logical_divide*(layout: Layout; tiler: tuple): auto =
   ## Tuple tiler → per-mode divide (transform_layout).
   ## Each tiler element applies to the corresponding layout mode.
   ## Modes beyond len(tiler) pass through unchanged.
   const LayoutRank =
-    when L.Sh is tuple:
-      L.Sh.tupleLen()
+    when typeof(layout).Sh is tuple:
+      typeof(layout).Sh.tupleLen()
     else:
       1
   static: doAssert tupleLen(tiler) <= LayoutRank,
     "logical_divide: tiler has more modes (" & $tupleLen(tiler) &
     ") than layout (" & $LayoutRank & ")"
-
-  # Recursive template: accumulator types change each iteration
-  # (shape/stride tuples grow via concat), so a flat loop would not work.
-  template build(idx: static int; accSh, accSt: typed): auto =
-    when idx >= max(tupleLen(tiler), LayoutRank):
-      make_layout(accSh, accSt)
-    else:
-      when idx < tupleLen(tiler):
-        let d = logical_divide(mode(layout, idx), tiler[idx])
-        build(idx + 1, concat(accSh, (d.shape,)), concat(accSt, (d.stride,)))
-      else:
-        let m = mode(layout, idx)
-        build(idx + 1, concat(accSh, (m.shape,)), concat(accSt, (m.stride,)))
-  build(0, (), ())
+  logical_divide_builder(layout, tiler, LayoutRank, 0, (), ())
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -525,7 +525,7 @@ func tile_unzip*[L: Layout, T](layout: L; tiler: T): auto {.inline, noInit.} =
 
 # ── zipped_divide / tiled_divide / flat_divide ──
 
-func zipped_divide*[L: Layout](layout: L; tiler: auto): auto {.inline, noInit.} =
+template zipped_divide*(layout: Layout; tiler: auto): auto =
   ## Divide layout by tiler and zip tile/rest modes into rank-2 result.
   ##
   ## CuTe: zipped_divide =

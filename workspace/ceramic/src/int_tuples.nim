@@ -6,8 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 
-import std/macros
-import std/typetraits
+import std/macros, std/typetraits
 import ./macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
@@ -180,60 +179,109 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
 #  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs
 # ═══════════════════════════════════════════════════════════════
 
+func isCompileTime*(node: NimNode): bool {.compileTime.} =
+  ## True if `node` is a compile-time known integer expression.
+  ##
+  ## Branch analysis:
+  ##
+  ## `nnkIntLit`
+  ##   Matches literal integers: `1`, `16`, `1024`.
+  ##   These are always compile-time values.
+  ##   Example: `tiler[0]` when tiler is `(1, nr)` → the `1` is an nnkIntLit.
+  ##
+  ## `Int[N]` (via getTypeInst)
+  ##   Matches expressions whose type is `Int[V]` for some static V.
+  ##   Example: `Int[16]()` — type `Int[16]` — known at compile time.
+  ##   The output of `prefix_product((Int[1], Int[16]))` is `(Int[1], Int[1])` —
+  ##   each element has type `Int[1]`, so this branch catches them.
+  ##
+  ## all-args-CT call
+  ##   Matches function/macro calls where EVERY argument passes
+  ##   `isCompileTime` recursively. Index 0 (the callee) is skipped.
+  ##   Examples: `max(1, Int[1]())`, `ceil_div(1024, 16)`.
+  ##   This handles expressions like `1 + 2` (infix is a call).
+  ##
+  ## `nnkSym` → `nnkConstSection`
+  ##   Matches identifiers (symbols) that resolve to a `const` definition.
+  ##   Example: `const nr = 16; ... nr ...` — the reference `nr` is a sym
+  ##   whose `getImpl()` returns a `nnkConstSection`.
+  ##   Non-const syms (runtime `let` bindings, function parameters) fall through.
+  ##
+  ## `false` (default)
+  ##   Everything else — runtime variables, function calls with runtime args.
+  ##   Examples: `let kc = computeKc(); ... kc ...`, `someRuntimeFn(x)`.
+  if node.kind == nnkIntLit:
+    return true
+  let typ = node.getTypeInst()
+  if typ.kind == nnkBracketExpr and $typ[0] == "Int":
+    return true
+  if node.kind in {nnkCall, nnkHiddenCallConv} and node.len > 1:
+    for i in 1 ..< node.len:
+      if not isCompileTime(node[i]):
+        return false
+    return true
+  if node.kind == nnkSym:
+    let impl = node.getImpl()
+    return impl.kind == nnkConstSection
+  false
+
 macro evalOnceAs*(expAlias: untyped{nkIdent}, exp: typed): untyped =
   ## Injects `expAlias` in caller scope, evaluating `exp` at most once.
   ## `expAlias` becomes a 0-arg template that yields the captured value.
   ##
-  ## - Int[N] / int-literal / all-args-CT function call → `const` + `Int[val]()`
-  ## - Runtime expression → `let` binding (evaluated once)
-  ## - Plain symbol → reused directly
+  ## Branch analysis:
+  ##
+  ## `exp.kind == nnkSym` — Symbol reference (let/const/param).
+  ##   No temporary needed — reuses the sym directly.
+  ##   `evalOnceAs(a, x)` → `a()` yields `x`.
+  ##   `isCompileTime` is NOT called: all syms (const or runtime) are
+  ##   already single-evaluation by language guarantee.
+  ##
+  ## `elif isCompileTime(exp)` — Non-sym expression known at compile time.
+  ##   Creates `const ctEval_... = exp` then wraps in `Int[ctEval_]()`.
+  ##   The value is never materialized at runtime.
+  ##
+  ## `else` — Runtime expression (function calls, complex exprs).
+  ##   Creates `let rtEval_... = exp`. The template forwards to the let.
+  ##
   expectKind(expAlias, nnkIdent)
   var val = exp
   result = newStmtList()
 
   if exp.kind == nnkSym:
     val = exp
+  elif isCompileTime(exp):
+    let tmp = ident("ctEval_" & $exp.lineInfoObj)
+    result.add nnkConstSection.newTree(
+      nnkConstDef.newTree(tmp, newEmptyNode(), exp)
+    )
+    val = nnkCall.newTree(
+      nnkBracketExpr.newTree(bindSym"Int", tmp)
+    )
   else:
-    let typ = exp.getTypeInst()
-    var isCT = typ.kind == nnkBracketExpr and $typ[0] == "Int"
-    if not isCT and (exp.kind == nnkCall or exp.kind == nnkHiddenCallConv):
-      var allArgsCT = true
-      for i in 1 ..< exp.len:
-        let arg = exp[i]
-        if arg.kind != nnkIntLit:
-          if arg.kind == nnkSym:
-            try:
-              let impl = arg.getImpl()
-              if impl.kind != nnkConstSection:
-                allArgsCT = false
-            except:
-              allArgsCT = false
-          else:
-            allArgsCT = false
-      if allArgsCT and exp.len > 1:
-        isCT = true
-    if isCT or exp.kind == nnkIntLit:
-      let tmp = ident("ctEval_" & $exp.repr & $exp.kind.repr)
-      result.add nnkConstSection.newTree(
-        nnkConstDef.newTree(tmp, newEmptyNode(), exp)
-      )
-      val = nnkObjConstr.newTree(
-        nnkBracketExpr.newTree(bindSym"Int", tmp)
-      )
-    else:
-      let tmp = ident("rtEval_" & $exp.repr & $exp.kind.repr)
-      result.add nnkLetSection.newTree(
-        nnkIdentDefs.newTree(tmp, newEmptyNode(), exp)
-      )
-      val = tmp
+    let tmp = genSym(nskLet, "rtEval")
+    result.add nnkLetSection.newTree(
+      nnkIdentDefs.newTree(tmp, newEmptyNode(), exp)
+    )
+    val = tmp
 
   result.add(
     newProc(name = genSym(nskTemplate, $expAlias), params = [getType(untyped)],
       body = val, procType = nnkTemplateDef))
 
-# ═══════════════════════════════════════════════════════════════
-#  scaleBy — element-wise tuple scaling preserving nesting
-# ═══════════════════════════════════════════════════════════════
+#  Convention: use evalOnceAs for ALL `let` bindings inside macros.
+#  This ensures CT-known values become `const` (inlined) and
+#  lvalues are reused directly.  Runtime expressions become `let`.
+
+proc evalOnceField*(name: NimNode; field: string): NimNode {.compileTime.} =
+  ## Build `name().field` — the call syntax for evalOnceAs'd templates.
+  nnkDotExpr.newTree(nnkCall.newTree(name), ident(field))
+
+proc evalOnceCall*(name: NimNode): NimNode {.compileTime.} =
+  ## Build `name()` — call an evalOnceAs'd template.
+  nnkCall.newTree(name)
+
+
 
 macro scaleBy*(t: typed; multiplier: typed): untyped =
   ## Multiply each leaf of a (possibly nested) tuple by scalar m.
@@ -416,15 +464,12 @@ template suffix_scanIt*(t: untyped; startingAcc: auto; body: untyped): untyped =
 #  Leaf procs — dispatch on exact type
 
 template makeIntTupleLeaf*(leaf: int): int =
-  static: echo "[makeIntTupleLeaf] runtime int detected"
   leaf
 
 template makeIntTupleLeaf*(leaf: static int): auto =
-  static: echo "[makeIntTupleLeaf] static int detected (value: ", leaf, ")"
   Int[leaf]()
 
 template makeIntTupleLeaf*[V: static int](x: Int[V]): Int[V] =
-  static: echo "[makeIntTupleLeaf] Int[N] detected (N=", V, ")"
   x
 
 #  Compile-time type helpers for the recursive macro
@@ -451,18 +496,18 @@ macro makeIntTupleRec*(a: IntOrIntTuple): untyped =
   ## - `Int[N]` → passthrough
   ## - tuple → recursively process each field
   if a.isTupleType():
-    let tup = newNimNode(nnkTupleConstr)
     if a.kind == nnkTupleConstr:
       # Literal tuple: iterate children directly (preserves static types)
+      result = newNimNode(nnkTupleConstr)
       for child in a:
-        tup.add newCall(bindSym"makeIntTupleRec", child)
+        result.add newCall(bindSym"makeIntTupleRec", child)
     else:
       # Variable/function tuple: recurse on each element (handles nested tuples)
+      result = newNimNode(nnkTupleConstr)
       let ttype = a.getTypeImpl()
       for i in 0 ..< ttype.len:
-        tup.add newCall(bindSym"makeIntTupleRec",
+        result.add newCall(bindSym"makeIntTupleRec",
             newTree(nnkBracketExpr, a, newLit(i)))
-    result = tup
   else:
     # int, Int[N], or runtime int — makeIntTupleLeaf handles dispatch via template resolution
     result = newCall(bindSym"makeIntTupleLeaf", a)
@@ -491,7 +536,6 @@ template prefix_product*(shape: IntOrIntTuple): untyped =
   ##
   ## See also: suffix_product, prefix_scanIt
   prefix_scanIt(shape, Int[1](), acc * it)
-
 template suffix_product*(shape: IntOrIntTuple): untyped =
   ## Cumulative right-to-left product scan.
   ##
