@@ -496,16 +496,15 @@ template logical_divide_builder*(layout: untyped; tiler: untyped; LayoutRank: st
       let m = mode(layout, idx)
       logical_divide_builder(layout, tiler, LayoutRank, idx + 1, concat(accSh, (m.shape,)), concat(accSt, (m.stride,)))
 
-template logical_divide*(layout: Layout; tiler: tuple): auto =
+func logical_divide*(layout: Layout; tiler: tuple): auto =
   ## Tuple tiler → per-mode divide (transform_layout).
   ## Each tiler element applies to the corresponding layout mode.
   ## Modes beyond len(tiler) pass through unchanged.
-  const LayoutRank = rank(layout)
-  static: doAssert rank(tiler) <= LayoutRank,
+  const R = static(rank(layout)) # For some reason I need static or I get - Error: invalid type: 'static[int literal(2)](2)' for const
+  static: doAssert rank(tiler) <= R,
     "logical_divide: tiler has more modes (" & $rank(tiler) &
-    ") than layout (" & $LayoutRank & ")"
-  logical_divide_builder(layout, tiler, LayoutRank, 0, (), ())
-
+    ") than layout (" & $R & ")"
+  logical_divide_builder(layout, tiler, R, 0, (), ())
 
 # ═══════════════════════════════════════════════════════════════
 #  tile_unzip — unzip a logical_divide/product result into tiles+rest

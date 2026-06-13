@@ -161,14 +161,29 @@ template evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`
   template `alias`(): untyped =
     expression
 
+template evalOnceAs*(alias: untyped{nkIdent}, expression: Int): untyped =
+  ## Create an `alias` for `expression`
+  ## Ensuring it is evaluated only once if it is a `rvalue`
+  ## or passed through if it is an lvalue.
+  ##
+  ## Constant expressions are constant-folded
+  const evalOnceCT_staticInt = expression
+  template `alias`(): untyped =
+    evalOnceCT_staticInt
+
 template evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ## Create an `alias` for `expression`
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
   ##
   ## Constant expressions are constant-folded
-  when compiles(proc() = (const test = expression)):
-    # compiles(const) is better than compiles(static(expr)) as it doesn't crash the nimvm in a `static:` context
+  when expression is static:
+    # compiles(const) is better than compiles(static(expr))
+    # as it doesn't crash the nimvm in a `static:` context
+    #
+    # but then is still crashes in some other context.
+    # Absolutely unsure of how robust "is static" is
+    # ensure you have an extensive testsuite
     const evalOnceCT_tmp = expression
     template `alias`(): untyped =
       evalOnceCT_tmp
