@@ -16,7 +16,7 @@ import workspace/ceramic/src/tensors
 #  Tensor construction
 # ═════════════════════════════════════════════════════════════════════════════
 
-proc runTensorConstructionTests* =
+proc runTensorConstructionTests =
   block:  # Tensor from seq + offset + layout (owning copy of seq)
     let buf = newSeq[float32](16)
     var t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
@@ -61,7 +61,7 @@ proc runTensorConstructionTests* =
 #  TensorView construction
 # ═════════════════════════════════════════════════════════════════════════════
 
-proc runTensorViewTests* =
+proc runTensorViewTests =
   block:  # View from array
     var buf: array[12, float32]
     let p = addr(buf[0])
@@ -84,7 +84,7 @@ proc runTensorViewTests* =
 #  Flat indexing — operator()
 #  Matches CuTe C++: Tensor::operator()(int i) → data()[layout()(i)]
 #  Matches Python tensor-layouts: test_flat_eval_*
-proc runFlatIndexTests* =
+proc runFlatIndexTests =
   # Python/CuTe: t(i) == layout(i) — flat index decomposes via idx2crd,
   # then computes offset via crd2idx (col-major decomposition).
   # With data: v(i) == data[layout(i)].
@@ -162,7 +162,7 @@ proc runFlatIndexTests* =
 #  Matches Python tensor-layouts: test_*_indexing
 # ═════════════════════════════════════════════════════════════════════════════
 
-proc runMultiIndexTests* =
+proc runMultiIndexTests =
   block:  # Col-major Tensor: (i,j) -> data[i + j*M]  (Python: test_column_major_indexing)
     var buf = newSeq[float32](12)
     var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
@@ -302,7 +302,7 @@ proc runMultiIndexTests* =
 #  Tensor slicing with Joker (`_`)
 # ═════════════════════════════════════════════════════════════════════════════
 
-proc runSliceTests* =
+proc runSliceTests =
   block:  # Slice row: t.slice((row, _)) returns 1D Tensor
     var buf = newSeq[float32](12)
     var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
@@ -356,7 +356,7 @@ proc runSliceTests* =
 #  displace — offset tensor and return sub-view with new shape
 # ═════════════════════════════════════════════════════════════════════════════
 
-proc runDisplaceTests* =
+proc runDisplaceTests =
   block:  # Basic offset: displace((3,2)) on 10x10 -> data pointer advances by 3+2*10=23
     var buf: array[100, float32]
     for i in 0 ..< 100: buf[i] = i.float32
@@ -390,7 +390,7 @@ proc runDisplaceTests* =
 #  Tensor of different element types
 # ═════════════════════════════════════════════════════════════════════════════
 
-proc runTypeTests* =
+proc runTypeTests =
   block:  # int32 tensor
     var buf: array[8, int32]
     for i in 0 ..< 8: buf[i] = i.int32 * 10
@@ -417,7 +417,7 @@ proc runTypeTests* =
 #  Test runner
 # ═════════════════════════════════════════════════════════════════════════════
 
-proc runTests* =
+proc runTests =
   runTensorConstructionTests()
   runTensorViewTests()
   runFlatIndexTests()

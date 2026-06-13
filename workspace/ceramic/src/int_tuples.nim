@@ -26,43 +26,36 @@ export int_tuples_zips
 
 #  Leaf procs — dispatch on exact type
 
-template makeIntTupleLeaf*(leaf: int): int =
+template makeIntTupleLeaf(leaf: int): int =
   leaf
 
-template makeIntTupleLeaf*(leaf: static int): auto =
+template makeIntTupleLeaf(leaf: static int): auto =
   Int[leaf]()
 
-template makeIntTupleLeaf*[V: static int](x: Int[V]): Int[V] =
+template makeIntTupleLeaf[V: static int](x: Int[V]): Int[V] =
   x
 
-#  Recursive macro — wraps const ints in Int[N] throughout tuples
+template makeIntTuple*(t: IntOrIntTuple): auto =
+  ## Convert all `int` leaves in `t` (at any nesting depth) to `Int[N]()`.
+  runnableExamples:
+    let t = makeIntTuple((3, 4))
+    doAssert t is (Int[3], Int[4])
 
-macro makeIntTupleRec*(a: IntOrIntTuple): untyped =
-  ## Recursively wrap static ints / Int literals in Int[N].
-  ## - `int` literal/const → `Int[val]()`  (via makeIntTupleLeaf's static overload)
-  ## - `int` runtime → passthrough (via makeIntTupleLeaf's int overload)
-  ## - `Int[N]` → passthrough
-  ## - tuple → recursively process each field
-  if a.isTupleType():
-    if a.kind == nnkTupleConstr:
-      # Literal tuple: iterate children directly (preserves static types)
-      result = newNimNode(nnkTupleConstr)
-      for child in a:
-        result.add newCall(bindSym"makeIntTupleRec", child)
-    else:
-      # Variable/function tuple: recurse on each element (handles nested tuples)
-      result = newNimNode(nnkTupleConstr)
-      let ttype = a.getTypeImpl()
-      for i in 0 ..< ttype.len:
-        result.add newCall(bindSym"makeIntTupleRec",
-            newTree(nnkBracketExpr, a, newLit(i)))
-  else:
-    # int, Int[N], or runtime int — makeIntTupleLeaf handles dispatch via template resolution
-    result = newCall(bindSym"makeIntTupleLeaf", a)
+  bind makeIntTupleLeaf
+  mapLeavesWith(t):
+    makeIntTupleLeaf(it)
 
-template makeIntTuple(a: IntOrIntTuple): untyped =
-  ## Public face: wraps static ints in Int[N] via the recursive macro.
-  makeIntTupleRec(a)
+# ═══════════════════════════════════════════════════════════════
+#  Maps
+# ═══════════════════════════════════════════════════════════════
+
+template scaleBy*(t: IntOrIntTuple, scale: int): auto =
+  t.mapLeavesWith():
+    it * scale
+
+template scaleBy*(t: IntOrIntTuple, scale: Int): auto =
+  t.mapLeavesWith():
+    it * scale
 
 # ═══════════════════════════════════════════════════════════════
 #  Prefix / suffix scans

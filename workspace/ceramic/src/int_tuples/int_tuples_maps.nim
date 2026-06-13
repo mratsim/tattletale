@@ -8,21 +8,44 @@
 import std/macros
 import ./int_tuples_datatypes
 
-macro scaleBy*(t: typed; multiplier: typed): untyped =
-  ## Multiply each leaf of a (possibly nested) tuple by scalar m.
-  ## Preserves nesting structure.
-  # `typed` required: type-class constraints (tuple, int or Int)
-  # fail in generic functions where types aren't concrete yet.
-  proc scaleImpl(nestedExpr, node, mul: NimNode): NimNode =
-    if node.kind == nnkTupleConstr:
-      result = newNimNode(nnkTupleConstr)
-      for i in 0 ..< node.len:
-        result.add scaleImpl(
-          nnkBracketExpr.newTree(nestedExpr, newLit(i)), node[i], mul)
-    else:
-      result = newCall(bindSym"*", nestedExpr, mul)
-  result = scaleImpl(t, t.getTypeImpl(), multiplier)
+# ═══════════════════════════════════════════════════════════════════════
+#  mapLeavesWith — recursive leaf‑wise tuple map
+# ═══════════════════════════════════════════════════════════════════════
 
+macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
+  ## Recursively walk `t` (int | Int[N] | tuple) and apply `body` to
+  ## every leaf.  Returns a value of the same shape with leaves transformed.
+
+  proc replaceNodes(ast, what, by: NimNode): NimNode =
+    proc inspect(node: NimNode): NimNode =
+      case node.kind
+      of {nnkIdent, nnkSym}:
+        if node.eqIdent(what): return by
+        return node
+      of nnkEmpty, nnkLiterals:
+        return node
+      else:
+        result = node.kind.newTree()
+        for child in node:
+          result.add inspect(child)
+    result = inspect(ast)
+
+  let tType = t.getTypeInst()
+
+  if tType.kind in {nnkTupleTy, nnkTupleConstr}:
+    var elems: seq[NimNode]
+    for i in 0 ..< tType.len:
+      let fieldAccess = nnkBracketExpr.newTree(t, newLit i)
+      let recurse = newCall(ident"mapLeavesWith", fieldAccess, body)
+      elems.add recurse
+    result = nnkTupleConstr.newTree(elems)
+    return
+
+  result = body.replaceNodes(ident"it", t)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  mapModesWith — Top-level only tuple map
+# ═══════════════════════════════════════════════════════════════════════
 
 macro mapModesWith*[T: IntOrIntTuple](t: T; body: untyped): untyped =
   ## Apply `body` to each top-level element of tuple `t` (does NOT recurse into nested tuples).

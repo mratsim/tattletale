@@ -22,52 +22,47 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 
-# ..< overload for Int[N] (range expressions with size())
-func `..<`*(a: int; b: Int): Slice[int] = a ..< b.V
-func `..<`*(a: Int; b: int): Slice[int] = a.V ..< b
-func `..<`*(a, b: Int): Slice[int] = a.V ..< b.V
-
 
 
 # ── Forward declarations ──────────────────────────────────
-proc runCoalesceTests*: void
-proc runComplementStaticRank1Tests*: void
-proc runComplementExactValueTests*: void
-proc runComplementMultiModeStaticTests*: void
-proc runComplementDynamicTests*: void
-proc runComplementDisjointnessTests*: void
-proc runComposeExactValueTests*: void
-proc runComposeSimpleTests*: void
-proc runComposeMultiModeTests*: void
-proc runComposeDynamicTests*: void
-proc runComposeRemainderTests*: void
-proc runComposeNestedTests*: void
-proc runComposeSwizzleTests*: void
-proc runComposeEStrideTests*: void
-proc runComposeNegStrideTests*: void
-proc runDivideTests*: void
-proc runRightInvSimpleTests*: void
-proc runRightInvExactValueTests*: void
-proc runRightInvDynamicTests*: void
-proc runRightInvTests*: void
-proc runLeftInvSimpleTests*: void
-proc runLeftInvExactValueTests*: void
-proc runLeftInvTests*: void
-proc runLogicalProductTrivialTests*: void
-proc runLogicalProductMultiTests*: void
-proc runLogicalProductExactValueTests*: void
-proc runLogicalProductTests*: void
+proc runCoalesceTests: void
+proc runComplementStaticRank1Tests: void
+proc runComplementExactValueTests: void
+proc runComplementMultiModeStaticTests: void
+proc runComplementDynamicTests: void
+proc runComplementDisjointnessTests: void
+proc runComposeExactValueTests: void
+proc runComposeSimpleTests: void
+proc runComposeMultiModeTests: void
+proc runComposeDynamicTests: void
+proc runComposeRemainderTests: void
+proc runComposeNestedTests: void
+proc runComposeSwizzleTests: void
+proc runComposeEStrideTests: void
+proc runComposeNegStrideTests: void
+proc runDivideTests: void
+proc runRightInvSimpleTests: void
+proc runRightInvExactValueTests: void
+proc runRightInvDynamicTests: void
+proc runRightInvTests: void
+proc runLeftInvSimpleTests: void
+proc runLeftInvExactValueTests: void
+proc runLeftInvTests: void
+proc runLogicalProductTrivialTests: void
+proc runLogicalProductMultiTests: void
+proc runLogicalProductExactValueTests: void
+proc runLogicalProductTests: void
 
-proc runBlockedProductTests*: void
-proc runRakedProductTests*: void
-proc runZippedProductTests*: void
-proc runTiledProductTests*: void
-proc runFlatProductTests*: void
-proc runTileToShapeTests*: void
-proc runMaxCommonVectorTests*: void
-proc runAntiRegressionTests*: void
-proc runTileUnzipTests*: void
-proc runTests* =
+proc runBlockedProductTests: void
+proc runRakedProductTests: void
+proc runZippedProductTests: void
+proc runTiledProductTests: void
+proc runFlatProductTests: void
+proc runTileToShapeTests: void
+proc runMaxCommonVectorTests: void
+proc runAntiRegressionTests: void
+proc runTileUnzipTests: void
+proc runTests =
   echo "\n── Coalesce [CUTE-C]: 20 cases ──"
   runCoalesceTests()
   echo "\n── Complement [CUTE-CP] + [PY-L] + [PY-E] ──"
@@ -121,7 +116,7 @@ when isMainModule:
 #   size(coalesce(L)) == size(L) and coalesce(L)(i) == L(i)
 # ═══════════════════════════════════════════════════════════════
 
-proc chkCoalesce*(layout: Layout) =
+proc chkCoalesce(layout: Layout) =
   ## Check coalesce preserves size and mapping.
   let c = coalesce(layout)
   doAssert size(c) === size(layout),
@@ -133,7 +128,7 @@ proc chkCoalesce*(layout: Layout) =
 # ═══════════════════════════════════════════════════════════════
 #  Coalesce [CUTE-C]
 # ═══════════════════════════════════════════════════════════════
-proc runCoalesceScalarTests* =
+proc runCoalesceScalarTests =
   block:
     let l = make_layout(1, 0)
     let c = coalesce(l)
@@ -156,7 +151,7 @@ proc runCoalesceScalarTests* =
     doAssert c === (1, 0)
   echo "  Scalar: 4 cases OK"
 
-proc runCoalesceColMajorTests* =
+proc runCoalesceColMajorTests =
   const C2 = 2
   const C4 = 4
   let l1 = make_layout((C2, C4), (1, 2))
@@ -170,7 +165,7 @@ proc runCoalesceColMajorTests* =
   doAssert c2 === (48, 1)
   echo "  Column-major contiguous: 2 cases OK"
 
-proc runCoalesceSize1Tests* =
+proc runCoalesceSize1Tests =
   block:
     let l = make_layout((1, 8), (1, 1))
     let c = coalesce(l)
@@ -188,7 +183,7 @@ proc runCoalesceSize1Tests* =
     doAssert c === (8, 1)
   echo "  Size-1 modes: 3 cases OK"
 
-proc runCoalesceStride0Tests* =
+proc runCoalesceStride0Tests =
   block:
     let l = make_layout((4, 1), (1, 0))
     let c = coalesce(l)
@@ -206,7 +201,7 @@ proc runCoalesceStride0Tests* =
     doAssert c === (2, 3)
   echo "  Stride-0 modes: 3 cases OK"
 
-proc runCoalesceNonContigTests* =
+proc runCoalesceNonContigTests =
   block:
     let l = make_layout((4, 8), (1, 4))
     let c = coalesce(l)
@@ -224,7 +219,7 @@ proc runCoalesceNonContigTests* =
     doAssert c === (60, 1)
   echo "  Non-contiguous strides: 3 cases OK"
 
-proc runCoalesceMixedTests* =
+proc runCoalesceMixedTests =
   block:
     let l = make_layout((6, 7, 4), (1, 6, 42))
     let c = coalesce(l)
@@ -242,7 +237,7 @@ proc runCoalesceMixedTests* =
     doAssert c === ((3, 4, 5), (1, 1, 12))
   echo "  Mixed: 3 cases OK"
 
-proc runCoalesceDynamicTests* =
+proc runCoalesceDynamicTests =
   block:
     let d8 = 8
     let l = make_layout(d8, 1)
@@ -257,7 +252,7 @@ proc runCoalesceDynamicTests* =
     doAssert c === (12, 2)
   echo "  Dynamic shapes: 2 cases OK"
 
-proc runCoalesceCppTests* =
+proc runCoalesceCppTests =
   const C2 = 2
   const C6 = 6
   block:
@@ -272,7 +267,7 @@ proc runCoalesceCppTests* =
     doAssert c === ((3, 4, 5), (1, 1, 12))
   echo "  Additional [CUTE-C]: 2 cases OK"
 
-proc runCoalesceTests* =
+proc runCoalesceTests =
   runCoalesceScalarTests()
   runCoalesceColMajorTests()
   runCoalesceSize1Tests()
@@ -294,7 +289,7 @@ proc runCoalesceTests* =
 #   (4) result[i] != layout[j]   — disjoint (tested separately)
 #   (5) size(result) <= cosize(result)
 #   (9) if static stride, complement(completed) has size 1
-template testComplementProps*(layout, result: typed; cotarget: untyped) =
+template testComplementProps(layout, result: typed; cotarget: untyped) =
   let rSize = size(result)
   let lCosize = cosize(layout)
   let completed = Layout[typeof((layout.shape, result.shape)), typeof((layout.stride, result.stride))](
@@ -321,7 +316,7 @@ proc chkComplement[T](layout: Layout; cotarget: T) =
   let r = complement(layout, cotarget)
   testComplementProps(layout, r, cotarget)
 
-proc chkComplement*(layout: Layout) =
+proc chkComplement(layout: Layout) =
   chkComplement(layout, cosize(layout))
 
 # ═══════════════════════════════════════════════════════════════
@@ -331,7 +326,7 @@ proc chkComplement*(layout: Layout) =
 # References:
 
 # ─── Static rank-1 [CUTE-CP] ───────────────────────────────────
-proc runComplementStaticRank1Tests* =
+proc runComplementStaticRank1Tests =
   # Layout(_1,_0)
   block:
     let l = make_layout(1, 0)
@@ -386,7 +381,7 @@ proc runComplementStaticRank1Tests* =
   echo "  Static rank-1: 28 complement calls OK"
 
 # ─── Python exact-value [PY-L] ─────────────────────────────────
-proc runComplementExactValueTests* =
+proc runComplementExactValueTests =
   block:
     let r = complement(make_layout(1, 0), 8)
     doAssert $r.shape == "8"
@@ -430,7 +425,7 @@ proc runComplementExactValueTests* =
   echo "  Exact-value: 10 Python assertions OK"
 
 # ─── Multi-mode static [CUTE-CP] ───────────────────────────────
-proc runComplementMultiModeStaticTests* =
+proc runComplementMultiModeStaticTests =
   # Shape(_2,_4):(1,2)
   block:
     let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[2]()))
@@ -483,7 +478,7 @@ proc runComplementMultiModeStaticTests* =
   echo "  Multi-mode static: 12 complement calls OK"
 
 # ─── Dynamic shapes/strides [CUTE-CP] ──────────────────────────
-proc runComplementDynamicTests* =
+proc runComplementDynamicTests =
   # Dynamic shape 12, stride 1
   block:
     let l = make_layout(12, 1)
@@ -531,7 +526,7 @@ proc runComplementDynamicTests* =
   echo "  Dynamic: 9 layouts, 40+ complement calls OK"
 
 # ─── Python disjointness checks [PY-E] ─────────────────────────
-proc runComplementDisjointnessTests* =
+proc runComplementDisjointnessTests =
   proc chkDisjoint(layout: Layout) =
     let c = complement(layout)
     for i in 0 ..< size(layout):
@@ -567,7 +562,7 @@ proc chkCompose[Sh1, St1, Sh2, St2](a: Layout[Sh1, St1]; b: Layout[Sh2, St2]): b
       return false
   true
 
-proc runComposeExactValueTests* =
+proc runComposeExactValueTests =
   echo "    Python exact-value assertions:"
   # Python: assert compose(Layout(8, 2), Layout(4, 1)) == Layout(4, 2)
   doAssert compose(make_layout(8, 2), make_layout(4, 1)) === (4, 2)
@@ -613,7 +608,7 @@ proc runComposeExactValueTests* =
   doAssert chkCompose(make_layout(((6, 1), (32, 512)), ((1, 192), (6, 192))), make_layout(200, 1))
   echo "    Exact-value: 14/14"
 
-proc runComposeSimpleTests* =
+proc runComposeSimpleTests =
   doAssert chkCompose(make_layout(1,0), make_layout(1,0))
   doAssert chkCompose(make_layout(1,0), make_layout(1,1))
   doAssert chkCompose(make_layout(1,1), make_layout(1,0))
@@ -631,7 +626,7 @@ proc runComposeSimpleTests* =
   doAssert chkCompose(make_layout(4,2), make_layout(2,2))
   echo "    Simple: 15/15"
 
-proc runComposeMultiModeTests* =
+proc runComposeMultiModeTests =
   doAssert chkCompose(make_layout((4,3),(1,1)), make_layout(12,1))
   doAssert chkCompose(make_layout(12,1), make_layout((4,3),(1,1)))
   doAssert chkCompose(make_layout(12,2), make_layout((4,3),(1,1)))
@@ -647,7 +642,7 @@ proc runComposeMultiModeTests* =
   doAssert chkCompose(make_layout((4,3),(3,1)), make_layout((4,3),(1,4)))
   echo "    Multi-mode: 12/12"
 
-proc runComposeDynamicTests* =
+proc runComposeDynamicTests =
   doAssert chkCompose(make_layout(12, 1), make_layout(4,1))
   doAssert chkCompose(make_layout(12, 1), make_layout(4,1))
   block:
@@ -669,7 +664,7 @@ proc runComposeDynamicTests* =
     doAssert chkCompose(a, make_layout(480, 32))
   echo "    Dynamic: 8/8"
 
-proc runComposeRemainderTests* =
+proc runComposeRemainderTests =
   doAssert chkCompose(make_layout(1,0), make_layout(4,1))
   doAssert chkCompose(make_layout(1,1), make_layout(4,1))
   doAssert chkCompose(make_layout(4,1), make_layout(4,2))
@@ -684,7 +679,7 @@ proc runComposeRemainderTests* =
   doAssert chkCompose(make_layout((48,24,5),(1,128,3072)), make_layout(32,1))
   echo "    Remainder: 12/12"
 
-proc runComposeNestedTests* =
+proc runComposeNestedTests =
   echo "    Nested/3D RHS [CUTE-CM #29-33]:"
   # [CUTE-CM] #29: nested shape ((4,2):(1,16)) / (4,2):(2,1)
   doAssert chkCompose(make_layout(((4,2),), ((1,16),)), make_layout((4,2),(2,1)))
@@ -698,14 +693,14 @@ proc runComposeNestedTests* =
   doAssert chkCompose(make_layout((4,8,2),(2,8,1)), make_layout((4,2,2),(2,8,1)))
   echo "    5/5"
 
-proc runComposeSwizzleTests* =
+proc runComposeSwizzleTests =
   echo "    Swizzle [CUTE-CM #55-56]:"
   # [CUTE-CM] #55: compose(Layout<8,8>:(8,1), Swizzle ∘ Layout<8,8>:(8,1))
   # [CUTE-CM] #56: compose(Swizzle∘..., Swizzle∘...) — double swizzle
   # Swizzle type not yet implemented
   echo "    0/2 (blocked: no Swizzle type)"
 
-proc runComposeEStrideTests* =
+proc runComposeEStrideTests =
   echo "    E stride [CUTE-CM #63-66]:"
   # [CUTE-CM] #63: ((1,(2,4)):(0,(-1,512))) / (2:-1)
   # [CUTE-CM] #64: ((1,(2,4)):(0,(-1,512))) / (4:-1)
@@ -714,7 +709,7 @@ proc runComposeEStrideTests* =
   # ScaledBasis/E-stride not yet implemented
   echo "    0/4 (blocked: no E stride support)"
 
-proc runComposeNegStrideTests* =
+proc runComposeNegStrideTests =
   doAssert chkCompose(make_layout(4,-1), make_layout(4,1))
   doAssert chkCompose(make_layout(4,1), make_layout(4,-1))
   doAssert chkCompose(make_layout(4,-1), make_layout(4,-1))
@@ -727,7 +722,7 @@ proc runComposeNegStrideTests* =
 #  max_common_vector / max_common_layout
 # ═══════════════════════════════════════════════════════════════
 
-proc runAntiRegressionTests* =
+proc runAntiRegressionTests =
   ## crd2idx with nested shape: layout[coord] on (2, (3,4)):((1,6),3)
   block:
     let l = make_layout((2, (3, 4)), (3, (1, 6)))
@@ -745,7 +740,7 @@ proc runAntiRegressionTests* =
 
 # ═══════════════════════════════════════════════════════════════
 
-proc runMaxCommonVectorTests* =
+proc runMaxCommonVectorTests =
   # A-packing (both nested)
   block:
     let src = make_layout(((6, 1), (32, 512)), ((1, 192), (6, 192)))
@@ -871,7 +866,7 @@ proc runMaxCommonVectorTests* =
 #
 # ═══════════════════════════════════════════════════════════════
 
-proc runDivideTests*: void =
+proc runDivideTests: void =
   ## 24 [CUTE-LD] cases + 8 rank-2 tiler extensions
 
   template checkDiv(L, T: typed): untyped =
@@ -967,14 +962,14 @@ proc runDivideTests*: void =
 #  right_inverse, left_inverse, logical_product — helpers
 # ═══════════════════════════════════════════════════════════════
 
-proc chkRightInv*(layout: Layout) =
+proc chkRightInv(layout: Layout) =
   ## Check right_inverse invariant: L(R(i)) == i for all i < size(R)
   let R = right_inverse(layout)
   for i in 0 ..< size(R):
     doAssert layout[R[i]] === i,
       "right_inverse(" & $layout & "): L(R(" & $i & "))=" & $layout[R[i]] & " != " & $i
 
-proc chkLeftInv*(layout: Layout) =
+proc chkLeftInv(layout: Layout) =
   ## Check left_inverse invariant (matches CuTe C++):
   ##   L(Li(L(i))) == L(i) for all i < size(L)
   let Li = left_inverse(layout)
@@ -982,7 +977,7 @@ proc chkLeftInv*(layout: Layout) =
     doAssert layout[Li[layout[i]]] === layout[i],
       "left_inverse(" & $layout & "): L(Li(L(" & $i & ")))=" & $layout[Li[layout[i]]] & " != " & $layout[i]
 
-proc chkLogicalProduct*[A, B: Layout](blk: A; tiler: B) =
+proc chkLogicalProduct[A, B: Layout](blk: A; tiler: B) =
   ## Check logical_product invariants:
   ##   rank(result) == 2
   ##   block == result.mode(0)
@@ -1001,7 +996,7 @@ proc chkLogicalProduct*[A, B: Layout](blk: A; tiler: B) =
 #  right_inverse [CUTE-IR] + [PY-E Table 5]
 # ═══════════════════════════════════════════════════════════════
 
-proc runRightInvSimpleTests* =
+proc runRightInvSimpleTests =
   ## [CUTE-IR] Simple tests (all-static)
   chkRightInv(make_layout(1, 0))
   chkRightInv(make_layout(1, 1))
@@ -1032,7 +1027,7 @@ proc runRightInvSimpleTests* =
   chkRightInv(make_layout((2, 2, 2), (4, 0, 1)))
   echo "  Simple: 22 cases OK"
 
-proc runRightInvExactValueTests* =
+proc runRightInvExactValueTests =
   ## [PY-E Table 5] Exact expected values
   block:
     # Col-major: right_inverse((4,8):(1,4)) = 32:1
@@ -1076,7 +1071,7 @@ proc runRightInvExactValueTests* =
     doAssert R === ((8, 2), (1, 192)), "got " & $R
   echo "  Exact-value [PY-E Table 5]: 10 cases OK"
 
-proc runRightInvDynamicTests* =
+proc runRightInvDynamicTests =
   ## [CUTE-IR] Dynamic shapes/strides
   ## Note: shapes must be static for compile-time preprod. Only strides may be dynamic.
   ## Use `let` indirection so ints stay as runtime `int` (not Int[N]).
@@ -1092,7 +1087,7 @@ proc runRightInvDynamicTests* =
     chkRightInv(layout)
   echo "  Dynamic: 2 cases OK"
 
-proc runRightInvTests* =
+proc runRightInvTests =
   echo "    Simple:"
   runRightInvSimpleTests()
   echo "    Exact-value:"
@@ -1105,7 +1100,7 @@ proc runRightInvTests* =
 #  left_inverse [CUTE-IL] + [PY-E Table 6]
 # ═══════════════════════════════════════════════════════════════
 
-proc runLeftInvSimpleTests* =
+proc runLeftInvSimpleTests =
   ## [CUTE-IL] Simple tests (all-static)
   chkLeftInv(make_layout(1, 0))
   chkLeftInv(make_layout(1, 1))
@@ -1135,7 +1130,7 @@ proc runLeftInvSimpleTests* =
   chkLeftInv(make_layout((2, 2, 2), (4, 0, 1)))
   echo "  Simple: 21 cases OK"
 
-proc runLeftInvExactValueTests* =
+proc runLeftInvExactValueTests =
   ## [PY-E Table 6] Exact expected values
   block:
     # Col-major: left_inverse((4,8):(1,4)) = 32:1
@@ -1172,7 +1167,7 @@ proc runLeftInvExactValueTests* =
   echo "  Exact-value [PY-E Table 6]: 9 cases OK"
 
 
-proc runLeftInvTests* =
+proc runLeftInvTests =
   echo "    Simple:"
   runLeftInvSimpleTests()
   echo "    Exact-value:"
@@ -1183,7 +1178,7 @@ proc runLeftInvTests* =
 #  logical_product [CUTE-LP] + [MOYE]
 # ═══════════════════════════════════════════════════════════════
 
-proc runLogicalProductTrivialTests* =
+proc runLogicalProductTrivialTests =
   ## [CUTE-LP] Trivial layouts
   chkLogicalProduct(make_layout(1, 0), make_layout(1, 0))
   chkLogicalProduct(make_layout(1, 1), make_layout(1, 0))
@@ -1195,7 +1190,7 @@ proc runLogicalProductTrivialTests* =
   chkLogicalProduct(make_layout(3, 2), make_layout(4, 1))
   echo "  Trivial: 8 cases OK"
 
-proc runLogicalProductMultiTests* =
+proc runLogicalProductMultiTests =
   ## [CUTE-LP] Multi-mode layouts
   chkLogicalProduct(make_layout((3,)), make_layout((2, 4)))
   chkLogicalProduct(make_layout((8, (2, 2)), (1, (2, 4))), make_layout(4, 2))
@@ -1213,7 +1208,7 @@ proc runLogicalProductMultiTests* =
   chkLogicalProduct(make_layout(((4, 6),), ((1, 6),)), make_layout(3, 1))
   echo "  Multi-mode: 10 cases OK"
 
-proc runLogicalProductExactValueTests* =
+proc runLogicalProductExactValueTests =
   ## [MOYE] Expected exact values
   block:
     # tile=(2,2):(1,2), matrix=(3,4):(4,1)
@@ -1228,7 +1223,7 @@ proc runLogicalProductExactValueTests* =
     doAssert rank(R) === 2
   echo "  Exact-value: 2 cases OK"
 
-proc runLogicalProductTests* =
+proc runLogicalProductTests =
   echo "    Trivial:"
   runLogicalProductTrivialTests()
   echo "    Multi-mode:"
@@ -1246,7 +1241,7 @@ proc runLogicalProductTests* =
 
 # ── blocked_product ──
 
-proc runBlockedProductTests* =
+proc runBlockedProductTests =
   block:
     # [MOYE] tile=(2,2):(1,2), matrix=(3,4):(4,1)
     const C2 = 2; const C3 = 3; const C4 = 4
@@ -1292,7 +1287,7 @@ proc runBlockedProductTests* =
 
 # ── raked_product ──
 
-proc runRakedProductTests* =
+proc runRakedProductTests =
   block:
     # [MOYE] tile=(2,2):(1,2), matrix=(3,4):(4,1)
     const C2 = 2; const C3 = 3; const C4 = 4
@@ -1344,7 +1339,7 @@ proc runRakedProductTests* =
     doAssert m1 === ((1, 2), (0, 2)), "raked diff-rank m1: " & $m1
   echo "    raked_product: 5 cases OK"
 
-proc runZippedProductTests* =
+proc runZippedProductTests =
   block:
     ## Python ref: zipped_divide(Layout((4,8)), (2,4)) -> ((2,4),(2,2)):((1,4),(2,16))
     let L = make_layout((4, 8), (1, 4))
@@ -1381,7 +1376,7 @@ proc runZippedProductTests* =
 
   echo "    zipped_divide/product: 4 cases OK"
 
-proc runTiledProductTests* =
+proc runTiledProductTests =
   block:
     ## tiled_divide: rank-1, second mode unpacked
     let td = tiled_divide(make_layout(12, 1), 3)
@@ -1413,7 +1408,7 @@ proc runTiledProductTests* =
     doAssert size(tp) === 4 * 12
   echo "    tiled_divide/product: 5 cases OK"
 
-proc runFlatProductTests* =
+proc runFlatProductTests =
   block:
     ## flat_divide: rank-1, both modes unpacked
     let fd = flat_divide(make_layout(12, 1), 3)
@@ -1449,7 +1444,7 @@ proc runFlatProductTests* =
 # ═══════════════════════════════════════════════════════════════
 #  tile_unzip — unzip logical_divide/product result into tiles+rest
 # ═══════════════════════════════════════════════════════════════
-proc runTileUnzipTests* =
+proc runTileUnzipTests =
   block:
     ## Rank-1 layout / rank-1 tiler (both Layout terminals)
     let L = make_layout(8, 1)
@@ -1491,7 +1486,7 @@ proc runTileUnzipTests* =
 # ═══════════════════════════════════════════════════════════════
 #  tile_to_shape [CUTE]
 # ═══════════════════════════════════════════════════════════════
-proc runTileToShapeTests*: void =
+proc runTileToShapeTests: void =
   block:
     ## [tensor-layouts] 2D: block=(2,3):(1,2), target=(8,6)
     # product_shape = (4,2), tiler = make_layout((4,2)): strides (1,4)

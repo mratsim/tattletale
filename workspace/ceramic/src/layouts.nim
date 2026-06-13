@@ -209,8 +209,8 @@ type StrideOrder* = enum
 template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
   ## Create a compact Layout from a shape, computing strides automatically.
   ## Encode compile-time integers into a Int[V] type for constant folding
-  ## NOTE: inline makeIntTupleRec to avoid C++ temp-name collision
-  let convShape = makeIntTupleRec(shapeArg)
+  ## NOTE: inline makeIntTuple to avoid C++ temp-name collision
+  let convShape = makeIntTuple(shapeArg)
   let strideVal = when order == LayoutLeft:
     prefix_product(convShape)
   else:
@@ -223,10 +223,10 @@ template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = Layou
 template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): auto =
   ## Make a Layout from explicit shape and stride.
   ## Encode compile-time integers into a Int[V] type for constant folding
-  ## NOTE: inline makeIntTupleRec to avoid C++ temp-name collision
-  Layout[typeof(makeIntTupleRec(shapeArg)), typeof(makeIntTupleRec(strideArg))](
-    shape: makeIntTupleRec(shapeArg),
-    stride: makeIntTupleRec(strideArg)
+  ## NOTE: inline makeIntTuple to avoid C++ temp-name collision
+  Layout[typeof(makeIntTuple(shapeArg)), typeof(makeIntTuple(strideArg))](
+    shape: makeIntTuple(shapeArg),
+    stride: makeIntTuple(strideArg)
   )
 
 # ═══════════════════════════════════════════════════════════════
@@ -497,76 +497,6 @@ macro padLeft*(layout: Layout; rank: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  upcast / downcast — reinterpret layout at coarser/finer granularity
-# ═══════════════════════════════════════════════════════════════
-#
-#  CuTe: upcast<N>(layout), downcast<N>(layout)
-#
-#  Building block of recast_layout<OldType, NewType>.  upcast by N when
-#  sizeof ratio = N (e.g. int8→int32 is upcast<4>); downcast when ratio < 1.
-
-template upcast*(layout: Layout; N: static int): auto =
-  ## Reinterpret layout from finer to coarser granularity.
-  ##
-  ## Every N consecutive elements become one coarse element.
-  ## shape shrinks, stride adjusts (not simply shape/N, stride*N).
-  ##
-  ## Examples:
-  ##   upcast<4>(make_layout(32, 1))  # → (8, 1)  32 int8 → 8 int32
-  ##   upcast<4>(make_layout(8, 2))   # → (4, 1)  strided int8 → int32
-
-  # ── Why not just shape/N and stride*N? ──
-  # N consecutive elements at stride |d| span N·|d| memory units.
-  # ceil_div(N, |d|) counts how many fit in one coarse slot:
-  #   new_shape = ceil_div(sh, ceil_div(N, |d|))
-  #   new_stride = ceil_div(|d|, N)
-  # Broadcast (stride 0) is unchanged.  Dynamic strides keep shape
-  # unchanged (no compile-time info), stride = ceil_div(st, N).
-  mapLeavesWith(layout):
-    when it_st is Int:
-      when it_st.V == 0:
-        (it_sh, it_st)
-      else:
-        (
-          ceil_div(
-            it_sh,
-            ceil_div(N, abs(it_st))
-          ),
-          sign(it_st) * ceil_div(abs(it_st), N)
-        )
-    else:
-      (it_sh, ceil_div(it_st, N))
-
-template downcast*(layout: Layout; N: static int): auto =
-  ## Reinterpret layout from coarser to finer granularity.
-  ##
-  ## Each coarse element splits into N finer elements.
-  ## shape grows, stride adjusts (not simply shape*N, stride/N).
-  ##
-  ## Examples:
-  ##   downcast<4>(make_layout(8, 1))  # → (32, 1)  8 int32 → 32 int8
-  ##   downcast<4>(make_layout(8, 2))  # → (8, 8)   strided int32 → int8
-
-  # ── Why not just shape*N and stride/N? ──
-  # If |stride| == 1 (contiguous): each coarse slot splits into N,
-  #   shape*N, stride unchanged.
-  # If |stride| > 1: stride was in coarse-element units; after splitting
-  #   each coarse stride d becomes d·N in fine units, stride*N, shape unchanged.
-  # Dynamic strides use a runtime check: if |st|==1 → shape*N else stride*N.
-  # Broadcast (stride 0) is unchanged.
-  mapLeavesWith(layout):
-    when it_st is Int:
-      when abs(it_st.V) == 1:
-        (it_sh * N, it_st)
-      else:
-        (it_sh, it_st * N)
-    else:
-      block:
-        let new_sh = (if abs(it_st) == 1: it_sh * N else: it_sh)
-        let new_st = (if abs(it_st) == 1: it_st else: it_st * N)
-        (new_sh, new_st)
-
-# ═══════════════════════════════════════════════════════════════
 #  mapLeavesWith — apply body to each leaf (shape, stride) pair
 # ═══════════════════════════════════════════════════════════════
 
@@ -637,6 +567,76 @@ macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
   stmts.add nnkCall.newTree(bindSym"make_layout", outSh, outSt)
   result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
 
+
+# ═══════════════════════════════════════════════════════════════
+#  upcast / downcast — reinterpret layout at coarser/finer granularity
+# ═══════════════════════════════════════════════════════════════
+#
+#  CuTe: upcast<N>(layout), downcast<N>(layout)
+#
+#  Building block of recast_layout<OldType, NewType>.  upcast by N when
+#  sizeof ratio = N (e.g. int8→int32 is upcast<4>); downcast when ratio < 1.
+
+template upcast*(layout: Layout; N: static int): auto =
+  ## Reinterpret layout from finer to coarser granularity.
+  ##
+  ## Every N consecutive elements become one coarse element.
+  ## shape shrinks, stride adjusts (not simply shape/N, stride*N).
+  ##
+  ## Examples:
+  ##   upcast<4>(make_layout(32, 1))  # → (8, 1)  32 int8 → 8 int32
+  ##   upcast<4>(make_layout(8, 2))   # → (4, 1)  strided int8 → int32
+
+  # ── Why not just shape/N and stride*N? ──
+  # N consecutive elements at stride |d| span N·|d| memory units.
+  # ceil_div(N, |d|) counts how many fit in one coarse slot:
+  #   new_shape = ceil_div(sh, ceil_div(N, |d|))
+  #   new_stride = ceil_div(|d|, N)
+  # Broadcast (stride 0) is unchanged.  Dynamic strides keep shape
+  # unchanged (no compile-time info), stride = ceil_div(st, N).
+  mapLeavesWith(layout):
+    when it_st is Int:
+      when it_st.V == 0:
+        (it_sh, it_st)
+      else:
+        (
+          ceil_div(
+            it_sh,
+            ceil_div(N, abs(it_st))
+          ),
+          sign(it_st) * ceil_div(abs(it_st), N)
+        )
+    else:
+      (it_sh, ceil_div(it_st, N))
+
+template downcast*(layout: Layout; N: static int): auto =
+  ## Reinterpret layout from coarser to finer granularity.
+  ##
+  ## Each coarse element splits into N finer elements.
+  ## shape grows, stride adjusts (not simply shape*N, stride/N).
+  ##
+  ## Examples:
+  ##   downcast<4>(make_layout(8, 1))  # → (32, 1)  8 int32 → 32 int8
+  ##   downcast<4>(make_layout(8, 2))  # → (8, 8)   strided int32 → int8
+
+  # ── Why not just shape*N and stride/N? ──
+  # If |stride| == 1 (contiguous): each coarse slot splits into N,
+  #   shape*N, stride unchanged.
+  # If |stride| > 1: stride was in coarse-element units; after splitting
+  #   each coarse stride d becomes d·N in fine units, stride*N, shape unchanged.
+  # Dynamic strides use a runtime check: if |st|==1 → shape*N else stride*N.
+  # Broadcast (stride 0) is unchanged.
+  mapLeavesWith(layout):
+    when it_st is Int:
+      when abs(it_st.V) == 1:
+        (it_sh * N, it_st)
+      else:
+        (it_sh, it_st * N)
+    else:
+      block:
+        let new_sh = (if abs(it_st) == 1: it_sh * N else: it_sh)
+        let new_st = (if abs(it_st) == 1: it_st else: it_st * N)
+        (new_sh, new_st)
 
 # ═══════════════════════════════════════════════════════════════
 #  zipModes — interleave corresponding modes of two layouts
