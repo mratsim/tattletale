@@ -5,6 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+import std/macros
+import ./int_tuples_datatypes
+
 const DynamicSentinel* = low(int)
   ## Sentinel value used throughout the library to mark a shape
   ## or stride as "unknown at compile time" (dynamic/runtime int).
@@ -40,7 +43,7 @@ func isIntType(x: NimNode): bool {.compileTime.} =
   ## True if `x` is typed as plain `int`.
   sameType(x, bindSym"int")
 
-func isTupleType(x: NimNode): bool {.compileTime.} =
+func isTupleType*(x: NimNode): bool {.compileTime.} =
   ## True if `x` is typed as a tuple type.
   x.getTypeImpl().kind == nnkTupleConstr
 

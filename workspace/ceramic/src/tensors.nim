@@ -8,6 +8,7 @@
 import std/macros
 import ./int_tuples
 import ./layouts
+import ./ptr_arithmetic
 
 {.experimental: "callOperator".}
 
@@ -215,7 +216,7 @@ template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
   let off = crd2idx(tv.layout, coord)
   let sh = slice(coord, tv.layout.shape)
   let st = slice(coord, tv.layout.stride)
-  make_view(cast[ptr UncheckedArray[T]](cast[int](tv.data) +% off *% sizeof(T).int),
+  make_view(tv.data +% off,
             make_layout(sh, st))
 
 
@@ -233,10 +234,13 @@ func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto 
   let off = crd2idx(t.layout, coord)
   let ns = zipLeavesWith(t.layout.shape, coord):
     it_a - it_b
-  make_view(cast[ptr UncheckedArray[T]](addr t.data[off]),
+  make_view(t.data +% off,
             make_layout(ns, t.layout.stride))
 
-
+func displace*[T, Sh, St](t: Tensor[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
+  ## Offset Tensor by `coord` (logical coords). Returns a sub-view whose shape is
+  ## `original_shape - coord` (element-wise).
+  displace(t.view(), coord)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  local_tile — extract subtensor from tiled_divide result
@@ -249,8 +253,7 @@ func local_tile*[T, Sh, St, Ti, Si](
   ## tiled_divide produces shape ((tileM, tileK), mP, kP) — tile nested, rest flat.
   ## Use nested coordinate ((_, _), a, b) to keep tile and collapse rest.
   let (sub, off) = slice_and_offset(((_, _), a, b), tiled)
-  make_view(cast[ptr UncheckedArray[T]](
-    cast[int](tv.data) +% off *% sizeof(T).int), sub)
+  make_view(tv.data +% off, sub)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Display

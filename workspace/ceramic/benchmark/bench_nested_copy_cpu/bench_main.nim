@@ -16,7 +16,7 @@ func toArray*(t: tuple): auto =
   const N = tupleLen(typeof(t))
   var a: array[N, int]
   staticFor i, 0, N:
-    a[i] = int(t[i])
+    a[i] = t[i].toIntVal()
   a
 
 proc xorHash*(data: openArray[float32]): uint32 =
@@ -73,8 +73,8 @@ proc main() =
   let srcB_zd = zipped_divide(panelB_lay, (1, nr))
   let dstB_zd = make_layout(((1, nr), (kc, npT)), ((1, 1), (nr, nr * kc)))
 
-  var panelA = newSeq[float32](int(cosize(panelA_lay)))
-  var panelB = newSeq[float32](int(cosize(panelB_lay)))
+  var panelA = newSeq[float32](cosize(panelA_lay).toIntVal())
+  var panelB = newSeq[float32](cosize(panelB_lay).toIntVal())
   randomize(42)
   for i in 0 ..< panelA.len: panelA[i] = rand(1.0'f32)
   for i in 0 ..< panelB.len: panelB[i] = rand(1.0'f32)

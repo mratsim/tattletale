@@ -22,12 +22,10 @@ import ./tensors
 template fillWith*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
   ## Set every logical element of `tv` to `val`.
   ## Uses flat-index iteration — acceptable on GPU, slow on CPU.
-  let n = size(tv.layout)
-  for i in 0 ..< n:
+  for i in 0 ..< size(tv.layout):
     tv(i) = val
 
 template fillWith*[T, Sh, St](t: var Tensor[T, Sh, St]; val: T) =
   ## Set every logical element of `t` to `val`.
-  let n = size(t.layout)
-  for i in 0 ..< n:
+  for i in 0 ..< size(t.layout):
     t(i) = val

@@ -774,7 +774,7 @@ proc runMaxCommonVectorTests* =
     let dst = make_layout((32, 6), (1, 32))
     doAssert max_common_vector(src, dst) == 192
     let common = max_common_layout(src, dst)
-    doAssert size(common) == 192
+    doAssert size(common) === 192
     for i in 0 ..< size(common):
       doAssert src(common(i)) == i
       doAssert dst(common(i)) == i
@@ -783,7 +783,7 @@ proc runMaxCommonVectorTests* =
     let dst = make_layout(512, 1)
     doAssert max_common_vector(src, dst) == 512
     let common = max_common_layout(src, dst)
-    doAssert size(common) == 512
+    doAssert size(common) === 512
     for i in 0 ..< size(common):
       doAssert src(common(i)) == i
       doAssert dst(common(i)) == i
@@ -815,7 +815,7 @@ proc runMaxCommonVectorTests* =
   block:
     let a = make_layout(8, 1)
     let common = max_common_layout(a, a)
-    doAssert size(common) == 8
+    doAssert size(common) === 8
     for i in 0 ..< size(common):
       doAssert a(common(i)) == i
   # [PY] test_max_common_layout_partial: a=8:1, b=(2,4):(1,4) → layout size 2
@@ -823,7 +823,7 @@ proc runMaxCommonVectorTests* =
     let a = make_layout(8, 1)
     let b = make_layout((2, 4), (1, 4))
     let common = max_common_layout(a, b)
-    doAssert size(common) == 2
+    doAssert size(common) === 2
     for i in 0 ..< size(common):
       doAssert a(common(i)) == i
       doAssert b(common(i)) == i
@@ -848,7 +848,7 @@ proc runMaxCommonVectorTests* =
     let b = make_layout(16, 1)
     doAssert max_common_vector(a, b) == 16
     let common = max_common_layout(a, b)
-    doAssert size(common) == 16
+    doAssert size(common) === 16
     for i in 0 ..< size(common):
       doAssert a(common(i)) == i
       doAssert b(common(i)) == i

@@ -30,27 +30,27 @@ proc runTensorConstructionTests* =
   block:  # size
     let buf = newSeq[float32](16)
     let t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
-    doAssert t.size == 16
+    doAssert t.size === 16
 
   block:  # cosize
     var buf = newSeq[float32](32)
     var t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
-    doAssert t.cosize == 16
+    doAssert t.cosize === 16
 
   block:  # Tensor from layout (owning, allocates its own seq)
     var t = make_tensor(make_layout((3, 5), (1, 3)), float32)
     doAssert t.rank == 2
-    doAssert t.size == 15
-    doAssert t.cosize == 15
+    doAssert t.size === 15
+    doAssert t.cosize === 15
     doAssert t.data.len == 15
 
   block:  # Tensor from shape only (compact col-major)
     var t = make_tensor(make_layout((2, 3), LayoutLeft), float64)
-    doAssert t.size == 6
+    doAssert t.size === 6
 
   block:  # Tensor with LayoutRight (row-major)
     var t = make_tensor(make_layout((2, 3), LayoutRight), int32)
-    doAssert t.size == 6
+    doAssert t.size === 6
 
   block:  # View with non-zero offset
     var buf = newSeq[float32](32)
@@ -67,18 +67,18 @@ proc runTensorViewTests* =
     let p = addr(buf[0])
     let v = make_view(p, make_layout((3, 4), (1, 3)))
     doAssert v.rank == 2
-    doAssert v.size == 12
+    doAssert v.size === 12
 
   block:  # View from seq
     var buf = newSeq[float32](12)
     let p = addr(buf[0])
     let v = make_view(p, make_layout((3, 4), (1, 3)))
-    doAssert v.size == 12
+    doAssert v.size === 12
 
   block:  # View from Tensor (conversion)
     var t = make_tensor(make_layout((3, 4), (1, 3)), float32)
     let v = t.view()
-    doAssert v.size == 12
+    doAssert v.size === 12
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Flat indexing — operator()
@@ -309,7 +309,7 @@ proc runSliceTests* =
     for i in 0 ..< 12: t(i) = i.float32
     let row1 = t.slice((1, _))
     doAssert row1.rank == 1
-    doAssert row1.size == 4
+    doAssert row1.size === 4
     doAssert row1[0] == 1.0'f32
     doAssert row1[3] == 10.0'f32
 
@@ -319,7 +319,7 @@ proc runSliceTests* =
     for i in 0 ..< 12: t(i) = i.float32
     let col1 = t.slice((_, 1))
     doAssert col1.rank == 1
-    doAssert col1.size == 3
+    doAssert col1.size === 3
     doAssert col1[0] == 3.0'f32
     doAssert col1[1] == 4.0'f32
     doAssert col1[2] == 5.0'f32
@@ -331,7 +331,7 @@ proc runSliceTests* =
     let v = make_view(p, make_layout((3, 4), (1, 3)))
     let row = v.slice((1, _))
     doAssert row.rank == 1
-    doAssert row.size == 4
+    doAssert row.size === 4
     doAssert row[0] == 1.0'f32
     doAssert row[3] == 10.0'f32
 
@@ -362,7 +362,7 @@ proc runDisplaceTests* =
     for i in 0 ..< 100: buf[i] = i.float32
     let v = make_view(addr(buf[0]), make_layout((10, 10), (1, 10)))
     let sub = displace(v, (3, 2))
-    doAssert $sub.layout == "(7, 8):(1, 10)"
+    doAssert sub.layout.shape === (7, 8) and sub.layout.stride === (1, 10)
     doAssert sub[0, 0] == 23.0'f32
     doAssert sub[1, 0] == 24.0'f32
     doAssert sub[0, 1] == 33.0'f32
@@ -372,7 +372,7 @@ proc runDisplaceTests* =
     for i in 0 ..< 100: buf[i] = i.float32
     let v = make_view(addr(buf[0]), make_layout((10, 10), (1, 10)))
     let sub = displace(v, (0, 0))
-    doAssert $sub.layout == "(10, 10):(1, 10)"
+    doAssert sub.layout.shape === (10, 10) and sub.layout.stride === (1, 10)
     doAssert sub[0, 0] == 0.0'f32
     doAssert sub[9, 9] == 99.0'f32
 
@@ -381,7 +381,7 @@ proc runDisplaceTests* =
     for i in 0 ..< 100: buf[i] = i.float32
     let t = make_tensor(buf, 0, make_layout((10, 10), (1, 10)))
     let sub = displace(t, (3, 2))
-    doAssert $sub.layout == "(7, 8):(1, 10)"
+    doAssert sub.layout.shape === (7, 8) and sub.layout.stride === (1, 10)
     doAssert sub[0, 0] == 23.0'f32
 
   echo "  displace: 3 cases OK"

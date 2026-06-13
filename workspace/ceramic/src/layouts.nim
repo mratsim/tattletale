@@ -19,7 +19,9 @@ import std/typetraits
 import ./macros/static_for
 import ./int_tuples
 import ./kernel_indexing_gpu
+import ./layout_coords
 export kernel_indexing_gpu
+export layout_coords
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St] — typed shape + stride pair

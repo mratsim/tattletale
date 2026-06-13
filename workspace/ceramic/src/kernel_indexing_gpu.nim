@@ -25,6 +25,9 @@ func crd2idx*(coord, shape: int): int = coord
 func crd2idx*[V: static int](coord: Int[V]; shape: int): int = V
 func crd2idx*(coord, shape, stride: int): int = coord * stride
 func crd2idx*[V: static int](coord: Int[V]; shape, stride: int): int = V * stride
+func crd2idx*[V, U: static int](coord: int; shape: Int[V]; stride: Int[U]): int = coord * toIntVal(stride)
+func crd2idx*[V: static int](coord: int; shape: Int[V]; stride: int): int = coord * stride
+func crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): int = coord * toIntVal(stride)
 
 # ═══════════════════════════════════════════════════════════════
 #  Tuple overloads
@@ -47,8 +50,8 @@ func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): au
     let fshape = flatten(shape)
     let fstride = flatten(stride)
     staticFor i, 0, tupleLen(ShType):
-      let s = int(fshape[i])
-      let d = int(fstride[i])
+      let s = fshape[i].toIntVal()
+      let d = fstride[i].toIntVal()
       when i < ShType.tupleLen - 1:
         sum += (cur mod s) * d
       else:
@@ -57,4 +60,4 @@ func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): au
     sum
   else:
     # Scalar after flatten — single mode
-    int(coord) * int(flatten(stride))
+    int(coord) * flatten(stride).toIntVal()

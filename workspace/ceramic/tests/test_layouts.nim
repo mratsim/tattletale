@@ -901,8 +901,8 @@ proc runUpcastDowncastTests* =
     ## upcast preserves stride-0 (broadcast) modes unchanged.
     let a = make_layout((4, 8), (0, 1))
     let b = a.upcast(4)
-    doAssert b.stride[0] == 0
-    doAssert b.shape[0] == 4
+    doAssert b.stride[0] === 0
+    doAssert b.shape[0] === 4
   # ── Python: test_downcast_simple ──
   block:
     ## downcast multiplies stride-1 shape by n, other strides by n.

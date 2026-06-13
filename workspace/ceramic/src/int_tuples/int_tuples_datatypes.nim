@@ -7,7 +7,7 @@
 
 
 import std/macros, std/typetraits
-import ./macros/static_for
+import ../macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] — compile-time integer type
@@ -24,6 +24,18 @@ func toIntVal*(x: int): int = x
 func toIntVal*[V: static int](x: Int[V]): int = V
 
 func `$`*[V: static int](x: Int[V]): static string = "Int[" & $V & "]"
+
+func `==`*[V: static int](a: Int[V]; b: int): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
+func `==`*[V: static int](a: int; b: Int[V]): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
+func `==`*[V, U: static int](a: Int[V]; b: Int[U]): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
+
+# ═══════════════════════════════════════════════════════════════
+#  isConst — compile-time detection (runtime via proc dispatch)
+# ═══════════════════════════════════════════════════════════════
+
+proc isConst*(a: static int): static bool = true
+template isConst*(a: int): bool = false
+proc isConst*[V: static int](a: Int[V]): static bool = true
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] == int — global overloads for tuple comparison
@@ -109,3 +121,14 @@ genBinOp(`min`)
 genBinOp(`ceil_div`)
 
 func `+=`*[V: static int](a: var int; b: Int[V]) = a += V
+
+# ═══════════════════════════════════════════════════════════════
+#  Iteration bounds
+# ═══════════════════════════════════════════════════════════════
+
+template `..<`*[V: static int](start: int; bound: Int[V]): Slice[int] =
+  Slice[int](a: start, b: pred(V))
+template `..<`*[V: static int](start: Int[V]; bound: int): Slice[int] =
+  Slice[int](a: V, b: pred(bound))
+template `..<`*[V, U: static int](start: Int[V]; bound: Int[U]): Slice[int] =
+  Slice[int](a: V, b: pred(U))
