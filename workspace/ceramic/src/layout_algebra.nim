@@ -332,11 +332,14 @@ func buildStride(t: tuple; s: int or Int, idx: static int = 0): auto {.inline.} 
   # Broadcast helper: multiply each element of tuple t by scalar s
   # Builds concat(t[0]*s, concat(t[1]*s, ... ())) at compile time
   # via recursive template. No heap, no seq, no macro type introspection.
-  when idx == t.tupleLen() - 1:
+  when idx == rank(t) - 1:
     concat(t[idx] * s, ())
   else:
     concat(t[idx] * s, buildStride(t, s, idx + 1))
 
+func buildStride[T, S: int or Int](t: T; s: S, idx: static int = 0): auto {.inline.} =
+  static: doAssert idx == 0
+  ((t * s))
 
 template divisibilityCheck(remainingShape, clampedShape: untyped) =
   ## Python tensor-layouts compatible divisibility check.
@@ -365,11 +368,11 @@ func composeImpl(
   ## (accShapes, accStrides, remainingShape, remainingStride).
   ## Uses recursion because the accumulator types change each iteration
   ## (shape/stride tuples grow via concat).
-  when modeIdx >= lhsShapes.tupleLen() - 1:
+  when modeIdx >= rank(lhsShapes) - 1:
     ## Last mode (R-1): append remaining RHS as final mode,
     ## but skip when RHS was fully consumed (remaining is an Int[1] artifact).
     const skipLast =
-      when remainingShape is Int and typeof(remainingShape) is Int[1] and accShapes.tupleLen != 0: true
+      when remainingShape is Int and typeof(remainingShape) is Int[1] and rank(accShapes) != 0: true
       else: false
     when skipLast:
       make_layout(accShapes, accStrides)
@@ -418,7 +421,7 @@ func compose*[A, B: Layout](a: A, b: B): auto =
   ## `i` in `0 ..< cosize(B)`.
   when a.shape isnot tuple:
     when b.stride is tuple:
-      when tupleLen(b.shape) != tupleLen(flatten(b.shape)):
+      when rank(b.shape) != rank(flatten(b.shape)):
         composeDistribute((a.shape,), (a.stride,), b.shape, b.stride)
       else:
         let bSh = b.shape.flatten()
@@ -483,10 +486,10 @@ func logical_divide*[L: Layout](layout: L; tiler: static int): auto =
 template logical_divide_builder*(layout: untyped; tiler: untyped; LayoutRank: static int; idx: static int; accSh, accSt: typed): auto =
   ## Recursive build helper for logical_divide(tuple tiler).
   ## Exported (`*`) to avoid generic sandwich / template self-reference issues.
-  when idx >= max(tupleLen(tiler), LayoutRank):
+  when idx >= max(rank(tiler), LayoutRank):
     make_layout(accSh, accSt)
   else:
-    when idx < tupleLen(tiler):
+    when idx < rank(tiler):
       let d = logical_divide(mode(layout, idx), tiler[idx])
       logical_divide_builder(layout, tiler, LayoutRank, idx + 1, concat(accSh, (d.shape,)), concat(accSt, (d.stride,)))
     else:
@@ -497,13 +500,9 @@ template logical_divide*(layout: Layout; tiler: tuple): auto =
   ## Tuple tiler → per-mode divide (transform_layout).
   ## Each tiler element applies to the corresponding layout mode.
   ## Modes beyond len(tiler) pass through unchanged.
-  const LayoutRank =
-    when typeof(layout).Sh is tuple:
-      typeof(layout).Sh.tupleLen()
-    else:
-      1
-  static: doAssert tupleLen(tiler) <= LayoutRank,
-    "logical_divide: tiler has more modes (" & $tupleLen(tiler) &
+  const LayoutRank = rank(layout)
+  static: doAssert rank(tiler) <= LayoutRank,
+    "logical_divide: tiler has more modes (" & $rank(tiler) &
     ") than layout (" & $LayoutRank & ")"
   logical_divide_builder(layout, tiler, LayoutRank, 0, (), ())
 
@@ -511,7 +510,7 @@ template logical_divide*(layout: Layout; tiler: tuple): auto =
 # ═══════════════════════════════════════════════════════════════
 #  tile_unzip — unzip a logical_divide/product result into tiles+rest
 # ═══════════════════════════════════════════════════════════════
-func tile_unzip*[L: Layout, T](layout: L; tiler: T): auto {.inline, noInit.} =
+template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
   ## Unzip a logical_divide/logical_product result according to a tiler.
   ## Returns a rank-2 Layout: ((tile_modes), (rest_modes)).
   when tiler is Layout:
@@ -840,7 +839,7 @@ func tile_to_shape*[Sh, St, Target](blk: Layout[Sh, St]; target_shape: Target; o
   ##   let tile = tile_to_shape(make_layout((2,3), (1,2)), (6, 12))
   ##   # block (2,3) repeated to fill (6,12) in 3 columns:
   ##   # ((2,3),3):((1,2),6)
-  const R = when Target is tuple: tupleLen(Target) else: 1
+  const R = rank(Target)
   let padded_blk = padRight(blk, R)
   let blk_shape = product_each(padded_blk.shape)
   let trg_flat = product_each(target_shape)

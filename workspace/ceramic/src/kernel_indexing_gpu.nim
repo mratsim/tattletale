@@ -49,10 +49,10 @@ func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): au
     var cur = int(coord)
     let fshape = flatten(shape)
     let fstride = flatten(stride)
-    staticFor i, 0, tupleLen(ShType):
+    staticFor i, 0, rank(ShType):
       let s = fshape[i].toIntVal()
       let d = fstride[i].toIntVal()
-      when i < ShType.tupleLen - 1:
+      when i < rank(ShType) - 1:
         sum += (cur mod s) * d
       else:
         sum += cur * d

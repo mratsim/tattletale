@@ -49,19 +49,13 @@ func `$`*(layout: Layout): string =
   ##   ($make_layout((4,8),(1,4)))  →  "((4,8)):((1,4))"
   $layout.shape & ":" & $layout.stride
 
-func rank*(layout: Layout): static int =
+template rank*(layout: Layout): static int =
   ## Number of modes in layout (compile-time constant).
-  when layout.shape is int or layout.shape is Int:
-    1
-  else:
-    layout.shape.tupleLen()
+  rank(layout.shape)
 
-func rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
+template rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
   ## Number of modes in a layout type (compile-time constant).
-  when Sh is int or Sh is Int:
-    1
-  else:
-    tupleLen(Sh)
+  rank(Sh)
 
 func mode*(layout: Layout; idx: static int): auto =
   ## Extract mode `idx` as a standalone rank-1 Layout.
@@ -324,12 +318,12 @@ func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
   elif b is int or b is Int:
     false
   else:
-    when tupleLen(a) != tupleLen(b):
+    when rank(a) != rank(b):
       false
     else:
       block:
         var ok = true
-        staticFor i, 0, tupleLen(a):
+        staticFor i, 0, rank(a):
           if not weakly_congruent(a[i], b[i]):
             ok = false
         ok
@@ -341,7 +335,7 @@ func can_group_a_into_b_impl[A, B](a: A; aStartIdx: int; b: B): int =
   var acc = 1
   var aIdx = aStartIdx
   block accLoop:
-    staticFor i, 0, tupleLen(a):
+    staticFor i, 0, rank(a):
       if i >= aStartIdx:
         if acc < bVal:
           acc *= fold(a[i], 1, acc * it)
@@ -358,11 +352,11 @@ func can_group_a_into_b*[A, B: IntOrIntTuple](a: A; b: B): bool =
     can_group_a_into_b_impl(a, 0, b) != -1
   else:
     var aIdx = 0
-    staticFor j, 0, tupleLen(b):
+    staticFor j, 0, rank(b):
       aIdx = can_group_a_into_b_impl(a, aIdx, b[j])
       if aIdx == -1:
         return false
-    aIdx == tupleLen(a)
+    aIdx == rank(a)
 
 func compatible*[A, B: IntOrIntTuple](a: A; b: B): bool =
   ## True if `a` is structurally compatible with `b`: same total size, and
@@ -376,10 +370,10 @@ func compatible*[A, B: IntOrIntTuple](a: A; b: B): bool =
     true
   elif b is int or b is Int:
     false
-  elif tupleLen(a) == tupleLen(b):
+  elif rank(a) == rank(b):
     block:
       var ok = true
-      staticFor i, 0, tupleLen(a):
+      staticFor i, 0, rank(a):
         if not compatible(a[i], b[i]):
           ok = false
       ok

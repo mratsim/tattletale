@@ -45,7 +45,7 @@ template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
       let it {.inject.} = t
       body
   else:  # tuple
-    when tupleLen(t) == 0:
+    when rank(t) == 0:
       startingAcc
     else:
       fold_recurse(0, t, startingAcc, body)
@@ -61,7 +61,7 @@ template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
 
 template tail_accumulator(strides, shape: IntOrIntTuple): auto =
   ## Final accumulator after prefix_scan: walks last-elem chain to the leaf.
-  const L = tupleLen(typeof(shape)) - 1
+  const L = rank(typeof(shape)) - 1
   when shape[L] is int or shape[L] is Int:
     strides[L] * shape[L]
   else:
@@ -145,4 +145,4 @@ template suffix_scanIt*(t: untyped; startingAcc: auto; body: untyped): untyped =
   when t is int or t is Int:
     startingAcc
   else:
-    suffix_scanIt_recurse(tupleLen(t) - 1, t, startingAcc, body)
+    suffix_scanIt_recurse(rank(t) - 1, t, startingAcc, body)

@@ -29,8 +29,14 @@ func `==`*[V: static int](a: Int[V]; b: int): bool {.error: "`==` is not defined
 func `==`*[V: static int](a: int; b: Int[V]): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
 func `==`*[V, U: static int](a: Int[V]; b: Int[U]): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
 
-template rank*(t: IntOrIntTuple): static int =
-  when t is int or Int:
+func rank*(t: IntOrIntTuple): static int =
+  when t is (int or Int):
+    1
+  else:
+    tupleLen(t)
+
+func rank*(t: typedesc[IntOrIntTuple]): static int =
+  when t is (int or Int):
     1
   else:
     tupleLen(t)

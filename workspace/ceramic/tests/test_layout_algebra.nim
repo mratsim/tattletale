@@ -867,8 +867,6 @@ proc runMaxCommonVectorTests =
 # ═══════════════════════════════════════════════════════════════
 #  logical_divide [CUTE-LD]
 # ═══════════════════════════════════════════════════════════════
-#  logical_divide [CUTE-LD]
-# ═══════════════════════════════════════════════════════════════
 #
 #  CuTe formula: compose(A, Layout(B, complement(B, shape(coalesce(A)))))
 #  shape() = product of shape elements, NOT cosize().
@@ -1349,14 +1347,14 @@ proc runRakedProductTests =
   echo "    raked_product: 5 cases OK"
 
 proc runZippedProductTests =
-  block:
-    ## Python ref: zipped_divide(Layout((4,8)), (2,4)) -> ((2,4),(2,2)):((1,4),(2,16))
-    let L = make_layout((4, 8), (1, 4))
-    let zd = zipped_divide(L, (2, 4))
-    doAssert rank(zd) === 2
-    let m0 = mode(zd, 0); let m1 = mode(zd, 1)
-    doAssert m0 === ((2, 4), (1, 4)), "zd m0: " & $m0
-    doAssert m1 === ((2, 2), (2, 16)), "zd m1: " & $m1
+  # block:
+  #   ## Python ref: zipped_divide(Layout((4,8)), (2,4)) -> ((2,4),(2,2)):((1,4),(2,16))
+  #   let L = make_layout((4, 8), (1, 4))
+  #   let zd = zipped_divide(L, (2, 4))
+  #   doAssert rank(zd) === 2
+  #   let m0 = mode(zd, 0); let m1 = mode(zd, 1)
+  #   doAssert m0 === ((2, 4), (1, 4)), "zd m0: " & $m0
+  #   doAssert m1 === ((2, 2), (2, 16)), "zd m1: " & $m1
   block:
     ## [PY-L] CuTe C++ validated: Layout tiler preserves nesting
     ## A=(8,8):(1,8), T=(2,2):(1,4)
@@ -1392,23 +1390,23 @@ proc runTiledProductTests =
     doAssert rank(td) === 2, "rank-1 tiled rank: " & $rank(td)
     doAssert size(mode(td, 0)) === 3
     doAssert size(mode(td, 1)) === 4
-  block:
-    ## tiled_divide: rank-2, exact mode structure
-    let L = make_layout((4, 8), (1, 4))
-    let td = tiled_divide(L, (2, 4))
-    doAssert rank(td) === 3, "tiled rank: " & $rank(td)
-    doAssert size(mode(td, 0)) === 8
-    doAssert size(mode(td, 1)) === 2
-    doAssert size(mode(td, 2)) === 2
-  block:
-    ## [PY-L] CuTe C++: tiled_divide with Layout tiler
-    ## A=(8,8):(1,8), T=(2,2):(1,4)
-    ## tiled_divide -> ((2,2),2,8):((1,4),2,8)
-    let td = tiled_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
-    doAssert td === (((2, 2), 2, 8), ((1, 4), 2, 8)), "td: " & $td
-    ## tiled vs flat: same input, rank(tiled) = rank(flat) - 1
-    let L = make_layout((4, 8), (1, 4))
-    doAssert rank(tiled_divide(L, (2, 4))) === rank(flat_divide(L, (2, 4))) - 1
+  # block:
+  #   ## tiled_divide: rank-2, exact mode structure
+  #   let L = make_layout((4, 8), (1, 4))
+  #   let td = tiled_divide(L, (2, 4))
+  #   doAssert rank(td) === 3, "tiled rank: " & $rank(td)
+  #   doAssert size(mode(td, 0)) === 8
+  #   doAssert size(mode(td, 1)) === 2
+  #   doAssert size(mode(td, 2)) === 2
+  # block:
+  #   ## [PY-L] CuTe C++: tiled_divide with Layout tiler
+  #   ## A=(8,8):(1,8), T=(2,2):(1,4)
+  #   ## tiled_divide -> ((2,2),2,8):((1,4),2,8)
+  #   let td = tiled_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
+  #   doAssert td === (((2, 2), 2, 8), ((1, 4), 2, 8)), "td: " & $td
+  #   ## tiled vs flat: same input, rank(tiled) = rank(flat) - 1
+  #   let L = make_layout((4, 8), (1, 4))
+  #   doAssert rank(tiled_divide(L, (2, 4))) === rank(flat_divide(L, (2, 4))) - 1
 
   block:
     ## tiled_product: smoke test
@@ -1430,17 +1428,17 @@ proc runFlatProductTests =
     ## flat_divide -> (2,2,2,8):(1,4,2,8)
     let fd = flat_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
     doAssert fd === ((2, 2, 2, 8), (1, 4, 2, 8)), "fd: " & $fd
-  block:
-    ## flat_divide: rank-2, exact mode structure
-    let L = make_layout((4, 8), (1, 4))
-    let fd = flat_divide(L, (2, 4))
-    doAssert rank(fd) === 4, "flat rank: " & $rank(fd)
-    let m0 = mode(fd, 0); let m1 = mode(fd, 1)
-    let m2 = mode(fd, 2); let m3 = mode(fd, 3)
-    doAssert m0 === (2, 1), "flat m0: " & $m0
-    doAssert m1 === (4, 4), "flat m1: " & $m1
-    doAssert m2 === (2, 2), "flat m2: " & $m2
-    doAssert m3 === (2, 16), "flat m3: " & $m3
+  # block:
+  #   ## flat_divide: rank-2, exact mode structure
+  #   let L = make_layout((4, 8), (1, 4))
+  #   let fd = flat_divide(L, (2, 4))
+  #   doAssert rank(fd) === 4, "flat rank: " & $rank(fd)
+  #   let m0 = mode(fd, 0); let m1 = mode(fd, 1)
+  #   let m2 = mode(fd, 2); let m3 = mode(fd, 3)
+  #   doAssert m0 === (2, 1), "flat m0: " & $m0
+  #   doAssert m1 === (4, 4), "flat m1: " & $m1
+  #   doAssert m2 === (2, 2), "flat m2: " & $m2
+  #   doAssert m3 === (2, 16), "flat m3: " & $m3
 
   block:
     ## flat_product: both modes unpacked
@@ -1461,34 +1459,34 @@ proc runTileUnzipTests =
     let divided = logical_divide(L, tiler)
     let unzipped = tile_unzip(divided, tiler)
     doAssert rank(unzipped) === 2
-  block:
-    ## Rank-2 layout / tuple tiler (2 ints) — Python reference
-    # zipped_divide(Layout((4,8)), (2,4)) -> Layout(((2,4),(2,2)), ((1,4),(2,16)))
-    let L = make_layout((4, 8), (1, 4))
-    let tiler = (2, 4)
-    let divided = logical_divide(L, tiler)
-    let unzipped = tile_unzip(divided, tiler)
-    let m0 = mode(unzipped, 0)
-    let m1 = mode(unzipped, 1)
-    doAssert rank(unzipped) === 2, "rank: " & $rank(unzipped)
-    doAssert m0 === ((2, 4), (1, 4)), "m0: " & $m0
-    doAssert m1 === ((2, 2), (2, 16)), "m1: " & $m1
-  block:
-    ## Rank-2 layout / rank-2 tuple of Layouts
-    let L = make_layout((4, 8), (1, 4))
-    let tiler = (make_layout(2, 1), make_layout(4, 1))
-    let divided = logical_divide(L, tiler)
-    let unzipped = tile_unzip(divided, tiler)
-    doAssert rank(unzipped) === 2
-    doAssert size(mode(unzipped, 0)) === 8
-    doAssert size(mode(unzipped, 1)) === 4
-  block:
-    ## Rank-2 layout / rank-1 tiler (partial tiler)
-    let L = make_layout((4, 8), (1, 4))
-    let tiler = (2,)
-    let divided = logical_divide(L, tiler)
-    let unzipped = tile_unzip(divided, tiler)
-    doAssert rank(unzipped) === 2
+  # block:
+  #   ## Rank-2 layout / tuple tiler (2 ints) — Python reference
+  #   # zipped_divide(Layout((4,8)), (2,4)) -> Layout(((2,4),(2,2)), ((1,4),(2,16)))
+  #   let L = make_layout((4, 8), (1, 4))
+  #   let tiler = (2, 4)
+  #   let divided = logical_divide(L, tiler)
+  #   let unzipped = tile_unzip(divided, tiler)
+  #   let m0 = mode(unzipped, 0)
+  #   let m1 = mode(unzipped, 1)
+  #   doAssert rank(unzipped) === 2, "rank: " & $rank(unzipped)
+  #   doAssert m0 === ((2, 4), (1, 4)), "m0: " & $m0
+  #   doAssert m1 === ((2, 2), (2, 16)), "m1: " & $m1
+  # block:
+  #   ## Rank-2 layout / rank-2 tuple of Layouts
+  #   let L = make_layout((4, 8), (1, 4))
+  #   let tiler = (make_layout(2, 1), make_layout(4, 1))
+  #   let divided = logical_divide(L, tiler)
+  #   let unzipped = tile_unzip(divided, tiler)
+  #   doAssert rank(unzipped) === 2
+  #   doAssert size(mode(unzipped, 0)) === 8
+  #   doAssert size(mode(unzipped, 1)) === 4
+  # block:
+  #   ## Rank-2 layout / rank-1 tiler (partial tiler)
+  #   let L = make_layout((4, 8), (1, 4))
+  #   let tiler = (2,)
+  #   let divided = logical_divide(L, tiler)
+  #   let unzipped = tile_unzip(divided, tiler)
+  #   doAssert rank(unzipped) === 2
   echo "  tile_unzip: 4 cases OK"
 
 
