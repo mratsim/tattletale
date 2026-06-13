@@ -152,48 +152,78 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
 #  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs
 # ═══════════════════════════════════════════════════════════════
 
-template evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lit|`const`}): untyped =
+template needAssignment(e: typed{lit|`const`|lvalue|`let`|`var`}): untyped =
+  true
+template needAssignment(e: typed): untyped =
+  false
+
+template evalOnceAs*(alias: untyped{nkIdent}, expression: static int): untyped =
   ## Create an `alias` for `expression`
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
   ##
   ## Constant expressions are constant-folded  const evalOnceVM_tmp = expression
-  when typeof(expression) is int:
-    template `alias`(): untyped =
-      Int[expression]()
-  else:
-    template `alias`(): untyped =
-      expression
-
-template evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|`let`|`var`}): untyped =
-  ## lvalue/let/var: runtime → passthrough directly
+  const evalOnce_intCT = Int[expression]()
   template `alias`(): untyped =
-    expression
+    evalOnce_intCT
 
-template evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
+template evalOnceAs*(alias: untyped{nkIdent}, expression: int{lvalue|`let`|`var`}): untyped =
   ## Create an `alias` for `expression`
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
   ##
-  ## Constant expressions are constant-folded into Int[N] when possible
+  ## Constant expressions are constant-folded  const evalOnceVM_tmp = expression
+  template `alias`(): untyped =
+    expression
 
-  # Ideally we use
-  #    `when compiles(static(makeIntTuple(shapeArg))):`
-  #
-  # to ensure there are no gaps in what can be cosntant-folded (or try/except but that might generate code)
-  # but it's pretty hacky, stresses the compiler
-  # and more importantly crashes if a function is called in a `static: ` context
-  when isConst(expression):
-    # Don't call static(expression) within the compile-time VM
-    const evalOnceVM_tmp = expression
-    when typeof(evalOnceVM_tmp) is int:
-      ## Plain int → wrap as Int[N] to preserve const info
-      template `alias`(): untyped =
-        Int[evalOnceVM_tmp]()
+template evalOnceAs*(alias: untyped{nkIdent}, expression: int): untyped =
+  ## Create an `alias` for `expression`
+  ## Ensuring it is evaluated only once if it is a `rvalue`
+  ## or passed through if it is an lvalue.
+  ##
+  ## Constant expressions are constant-folded  const evalOnceVM_tmp = expression
+  let evalOnce_intRT = expression
+  template `alias`(): untyped =
+    evalOnce_intRT
+
+template evalOnceAs*(alias: untyped{nkIdent}, expression: static tuple): untyped =
+  ## Create an `alias` for `expression`
+  ## Ensuring it is evaluated only once if it is a `rvalue`
+  ## or passed through if it is an lvalue.
+  ##
+  ## Constant expressions are constant-folded  const evalOnceVM_tmp = expression
+  const needAsgn = needAssignment(expression)
+  when needAsgn:
+    const evalOnce_tupCT = expression
+
+  template `alias`(): untyped =
+    when needAsgn:
+      evalOnce_tupleCT
     else:
-      template `alias`(): untyped =
-        evalOnceVM_tmp
-  else:
-    let evalOnceRT_tmp = expression
-    template `alias`(): untyped =
-      evalOnceRT_tmp
+      expression
+
+template evalOnceAs*(alias: untyped{nkIdent}, expression: tuple): untyped =
+  ## Create an `alias` for `expression`
+  ## Ensuring it is evaluated only once if it is a `rvalue`
+  ## or passed through if it is an lvalue.
+  ##
+  ## Constant expressions are constant-folded  const evalOnceVM_tmp = expression
+  const needAsgn = needAssignment(expression)
+  when needAsgn:
+    let evalOnce_tupRT = expression
+
+  template `alias`(): untyped =
+    when needAsgn:
+      evalOnce_tupleRT
+    else:
+      expression
+
+template evalOnceAs*(alias: untyped{nkIdent}, expression: Int): untyped =
+  ## Create an `alias` for `expression`
+  ## Ensuring it is evaluated only once if it is a `rvalue`
+  ## or passed through if it is an lvalue.
+  ##
+  ## Constant expressions are constant-folded  const evalOnceVM_tmp = expression
+  const evalOnce_staticInt = expression
+  template `alias`(): untyped =
+    evalOnce_staticInt
