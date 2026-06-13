@@ -17,6 +17,17 @@ const DynamicSentinel* = low(int)
   ## with a stride of literal 0 (Int[0], broadcasting).
 
 # ═══════════════════════════════════════════════════════════════
+#  isConst — compile-time detection (runtime via proc dispatch)
+# ═══════════════════════════════════════════════════════════════
+
+template isConst*(a: static int): bool = true
+template isConst*(a: int): bool = false
+template isConst*[V: static int](a: Int[V]): bool = true
+
+template isConst*(a: static tuple): bool = true
+template isConst*(a: tuple): bool = false
+
+# ═══════════════════════════════════════════════════════════════
 #  Int[N] compile-time helpers (for macros)
 # ═══════════════════════════════════════════════════════════════
 
@@ -141,12 +152,21 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
 #  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs
 # ═══════════════════════════════════════════════════════════════
 
-template evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`const`|`var`}): untyped =
+template evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lit|`const`}): untyped =
   ## Create an `alias` for `expression`
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
   ##
-  ## Constant expressions are constant-folded
+  ## Constant expressions are constant-folded  const evalOnceVM_tmp = expression
+  when typeof(expression) is int:
+    template `alias`(): untyped =
+      Int[expression]()
+  else:
+    template `alias`(): untyped =
+      expression
+
+template evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|`let`|`var`}): untyped =
+  ## lvalue/let/var: runtime → passthrough directly
   template `alias`(): untyped =
     expression
 
@@ -156,15 +176,23 @@ template evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ## or passed through if it is an lvalue.
   ##
   ## Constant expressions are constant-folded into Int[N] when possible
-  when compiles(static(expression)):
-    const evalOnceCT_tmp = expression
-    when typeof(evalOnceCT_tmp) is int:
+
+  # Ideally we use
+  #    `when compiles(static(makeIntTuple(shapeArg))):`
+  #
+  # to ensure there are no gaps in what can be cosntant-folded (or try/except but that might generate code)
+  # but it's pretty hacky, stresses the compiler
+  # and more importantly crashes if a function is called in a `static: ` context
+  when isConst(expression):
+    # Don't call static(expression) within the compile-time VM
+    const evalOnceVM_tmp = expression
+    when typeof(evalOnceVM_tmp) is int:
       ## Plain int → wrap as Int[N] to preserve const info
       template `alias`(): untyped =
-        Int[evalOnceCT_tmp]()
+        Int[evalOnceVM_tmp]()
     else:
       template `alias`(): untyped =
-        evalOnceCT_tmp
+        evalOnceVM_tmp
   else:
     let evalOnceRT_tmp = expression
     template `alias`(): untyped =

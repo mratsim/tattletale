@@ -30,14 +30,6 @@ func `==`*[V: static int](a: int; b: Int[V]): bool {.error: "`==` is not defined
 func `==`*[V, U: static int](a: Int[V]; b: Int[U]): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
 
 # ═══════════════════════════════════════════════════════════════
-#  isConst — compile-time detection (runtime via proc dispatch)
-# ═══════════════════════════════════════════════════════════════
-
-proc isConst*(a: static int): static bool = true
-template isConst*(a: int): bool = false
-proc isConst*[V: static int](a: Int[V]): static bool = true
-
-# ═══════════════════════════════════════════════════════════════
 #  Int[N] == int — global overloads for tuple comparison
 # ═══════════════════════════════════════════════════════════════
 

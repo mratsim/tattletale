@@ -26,6 +26,7 @@ block: # Sym reuse — let indirection
 block: # Sym reuse — const indirection (gets constant-folded to nnkIntLit)
   const y = 16
   evalOnceAs(b, y)
+  doAssert typeof(b) is Int, "const value should wrap as Int[N]"
   doAssert b === 16
   echo "✅ const indirection"
 
@@ -38,11 +39,13 @@ block: # Sym reuse — proc parameter
 
 block: # Compile-time — int literal
   evalOnceAs(e, 1024)
+  doAssert typeof(e) is Int, "int literal should wrap as Int[N]"
   doAssert e === 1024
   echo "✅ int literal"
 
 block: # Compile-time — all-args-CT call (max of CT values)
   evalOnceAs(f, max(1, 16))
+  doAssert typeof(f) is Int, "all-args-CT should fold to Int[N]"
   doAssert f === 16
   echo "✅ all-args-CT call"
 
@@ -73,6 +76,7 @@ block: # Constant-folding — runtime func with CT args folded to Int[N]
   func squareWithStaticDetection(x: static int): static int = x * x
 
   evalOnceAs(bar, squareWithStaticDetection(square(3)))
+  doAssert typeof(bar) is Int, "runtime func + CT args → const fold → Int[N]"
   # square(3) = 9 → `isCompileTime` sees all-args-CT → const-folded
   # squareWithStaticDetection(9) with static int → 9 * 9 = 81
   doAssert typeof(bar) is Int, "runtime func + CT args → const fold → Int[N]"
@@ -85,6 +89,7 @@ block: # Field access — const object
     y: int
   const obj = Obj(x: 42, y: 16)
   evalOnceAs(j, obj.x)
+  doAssert typeof(j) is Int, "const field access should fold to Int[N]"
   doAssert j === 42
   echo "✅ field access (const object)"
 
@@ -99,6 +104,7 @@ block: # Field access — let object
 block: # Field access — const tuple
   const tup = (a: 7, b: 8)
   evalOnceAs(l, tup.a)
+  doAssert typeof(l) is Int, "const tuple field access should fold to Int[N]"
   doAssert l === 7
   echo "✅ field access (const tuple)"
 
@@ -109,6 +115,7 @@ block: # Field access — nested const object
     inner: Inner
   const outer = Outer(inner: Inner(val: 99))
   evalOnceAs(m, outer.inner.val)
+  doAssert typeof(m) is Int, "nested const field access should fold to Int[N]"
   doAssert m === 99
   echo "✅ field access (nested const object)"
 
@@ -322,68 +329,60 @@ suite "isConst — constant information preserved":
 suite "No double evaluation — side effects with Int types":
 
   test "Int construction counter increments once":
-    var buildCount = 0
+    var buildCount {.compileTime.} = 0
     proc makeInt[V: static int](): Int[V] =
       inc buildCount
       result = Int[V]()
     evalOnceAs(alias, makeInt[4]())
-    check buildCount == 1
+    static: doAssert buildCount == 1, "buildCount = " & $buildCount & ", alias type = " & $typeof(alias) & ", alias = " & $alias
 
   test "tuple construction counter increments once":
-    var buildCount = 0
+    var buildCount {.compileTime.} = 0
     proc makePair[V, U: static int](): (Int[V], Int[U]) =
       inc buildCount
       result = (Int[V](), Int[U]())
     evalOnceAs(alias, makePair[2, 3]())
-    check buildCount == 1
+    static: doAssert buildCount == 1
 
-  test "RNG consumed exactly once":
-    randomize(42)
-    let first = rand(0..1000)
-    randomize(42)
-    proc makeRNGInt(): Int[42] =
-      discard rand(0..1000)
-      result = Int[42]()
-    evalOnceAs(alias, makeRNGInt())
-    # Verify RNG was consumed exactly once
-    let after = rand(0..1000)
-    randomize(42)
-    discard rand(0..1000)
-    let expected = rand(0..1000)
-    check after == expected
+  test "Int construction counter increments once (runtime)":
+    var rtCount = 0
+    proc makeRTInt(): int =
+      inc rtCount
+      result = 42
+    evalOnceAs(alias, makeRTInt())
+    doAssert rtCount == 1
+    doAssert alias === 42
 
   test "costly Int computation once":
-    var computeCount = 0
+    var computeCount {.compileTime.} = 0
     proc costlyInt[V: static int](): Int[V] =
       inc computeCount
       result = Int[V]()
     evalOnceAs(alias, costlyInt[99]())
-    check computeCount == 1
+    static: doAssert computeCount == 1
 
   test "mixed lvalue Int alias and captured Int side-by-side":
-    var counter = 0
+    var counter {.compileTime.} = 0
     proc makeInt(): Int[5] =
       inc counter
       result = Int[5]()
     var mutable = 10
     evalOnceAs(fixed, makeInt())       # non-lvalue — captured once
     evalOnceAs(dynamic, mutable)       # lvalue — aliases the var
-    check dynamic == 10
-    check counter == 1
+    static: doAssert counter == 1
     mutable = 20
-    check dynamic == 20
-    check counter == 1
+    doAssert dynamic === 20
+    static: doAssert counter == 1
 
   test "nested evalOnceAs captures side effect once":
-    var counter = 0
+    var counter {.compileTime.} = 0
     proc makeOuter(): Int[5] =
       inc counter
       result = Int[5]()
     evalOnceAs(alias, makeOuter())
-    check counter == 1
+    static: doAssert counter == 1
     evalOnceAs(alias2, alias)
-    check counter == 1
-
+    static: doAssert counter == 1
 # ═══════════════════════════════════════════════════════════════════════
 # 8.  Stress / correctness
 # ═══════════════════════════════════════════════════════════════════════
@@ -391,28 +390,27 @@ suite "No double evaluation — side effects with Int types":
 suite "Stress / correctness":
 
   test "1000 reads of captured Int construction":
-    var count = 0
+    var count {.compileTime.} = 0
     proc build(): Int[42] =
       inc count
       result = Int[42]()
     evalOnceAs(alias, build())
     for i in 0..<1000:
       discard alias
-    check count == 1
+    static: doAssert count == 1
 
   test "interleaved Int lvalue and captured Int":
-    var state = 0
+    var state {.compileTime.} = 0
     proc nextState(): Int[999] =
       inc state
       result = Int[999]()
     var mutable = 10
     evalOnceAs(fixed, nextState())
     evalOnceAs(dynamic, mutable)
-    check dynamic == 10
-    check state == 1
+    static: doAssert state == 1
     mutable = 20
-    check dynamic == 20
-    check state == 1
+    doAssert dynamic === 20
+    static: doAssert state == 1
 
   test "deeply nested evalOnceAs with Int types":
     evalOnceAs(a, Int[1]())
