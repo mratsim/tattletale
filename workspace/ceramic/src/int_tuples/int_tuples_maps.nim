@@ -34,10 +34,17 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
 
   if tType.kind in {nnkTupleTy, nnkTupleConstr}:
     var elems: seq[NimNode]
-    for i in 0 ..< tType.len:
-      let fieldAccess = nnkBracketExpr.newTree(t, newLit i)
-      let recurse = newCall(ident"mapLeavesWith", fieldAccess, body)
-      elems.add recurse
+    if t.kind == nnkTupleConstr:
+      ## Direct destructure — preserves compile-time info for const elements
+      for child in t:
+        let recurse = newCall(ident"mapLeavesWith", child, body)
+        elems.add recurse
+    else:
+      ## Bracket access for variables / function returns
+      for i in 0 ..< tType.len:
+        let fieldAccess = nnkBracketExpr.newTree(t, newLit i)
+        let recurse = newCall(ident"mapLeavesWith", fieldAccess, body)
+        elems.add recurse
     result = nnkTupleConstr.newTree(elems)
     return
 

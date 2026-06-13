@@ -1,4 +1,17 @@
 import ../src/int_tuples
+import std/unittest
+import std/random
+# ═══════════════════════════════════════════════════════════════
+#  Helper procs/templates used in test suites below
+# ═══════════════════════════════════════════════════════════════
+
+proc idInt[V: static int](x: Int[V]): Int[V] = x
+proc add2[V: static int](x: Int[V]): Int[V + 2] = Int[V + 2]()
+proc composeAddMul[V, U: static int](a: Int[V]; b: Int[U]): Int[V * 2 + U * 3] = Int[V * 2 + U * 3]()
+proc sum[V, U: static int](a: Int[V]; b: Int[U]): Int[V + U] = Int[V + U]()
+template tplIdentity(x: untyped): untyped = x
+template tplAdd2[V: static int](x: Int[V]): Int[V + 2] = Int[V + 2]()
+template tplDouble[V: static int](x: Int[V]): Int[V * 2] = Int[V * 2]()
 
 # ═══════════════════════════════════════════════════════════════
 # evalOnceAs test suite

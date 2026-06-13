@@ -12,6 +12,16 @@ import std/unittest
 #  makeIntTuple constructor tests
 # ═══════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════
+#  Helper procs used in tests below
+# ═══════════════════════════════════════════════════════════════
+
+proc identity[T](x: T): T = x
+template first(t: untyped): untyped = t[0]
+template second(t: untyped): untyped = t[1]
+template tplIdentity(x: untyped): untyped = x
+template tplWrap(x: untyped): untyped = (x,)
+
 proc runTests() =
 
   suite "makeIntTuple — convert int leaves to Int[N]":

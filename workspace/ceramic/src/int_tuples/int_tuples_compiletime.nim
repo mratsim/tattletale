@@ -155,11 +155,16 @@ template evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
   ##
-  ## Constant expressions are constant-folded
+  ## Constant expressions are constant-folded into Int[N] when possible
   when compiles(static(expression)):
     const evalOnceCT_tmp = expression
-    template `alias`(): untyped =
-      evalOnceCT_tmp
+    when typeof(evalOnceCT_tmp) is int:
+      ## Plain int → wrap as Int[N] to preserve const info
+      template `alias`(): untyped =
+        Int[evalOnceCT_tmp]()
+    else:
+      template `alias`(): untyped =
+        evalOnceCT_tmp
   else:
     let evalOnceRT_tmp = expression
     template `alias`(): untyped =
