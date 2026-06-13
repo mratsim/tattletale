@@ -384,44 +384,53 @@ proc runComplementStaticRank1Tests =
 proc runComplementExactValueTests =
   block:
     let r = complement(make_layout(1, 0), 8)
-    doAssert $r.shape == "8"
-    doAssert $r.stride == "1"
+    doAssert r.shape === 8
+    doAssert r.stride === 1
+
   block:
     let r = complement(make_layout(4, 2), 16)
-    doAssert $r.shape == "(2, 2)"
-    doAssert $r.stride == "(1, 8)"
+    doAssert r.shape === (2, 2)
+    doAssert r.stride === (1, 8)
+
   block:
     let r = complement(make_layout(4, 1), 16)
-    doAssert $r.shape == "4"
-    doAssert $r.stride == "4"
+    doAssert r.shape === 4
+    doAssert r.stride === 4
+
   block:
     let r = complement(make_layout(4, 1), 24)
-    doAssert $r.shape == "6"
-    doAssert $r.stride == "4"
+    doAssert r.shape === 6
+    doAssert r.stride === 4
+
   block:
     let r = complement(make_layout((2, 2), (1, 4)), 16)
-    doAssert $r.shape == "(2, 2)"
-    doAssert $r.stride == "(2, 8)"
+    doAssert r.shape === (2, 2)
+    doAssert r.stride === (2, 8)
+
   block:
     let r = complement(make_layout(2, 1), (Int[3](), 4))
-    doAssert $r.shape == "6"
-    doAssert $r.stride == "2"
+    doAssert r.shape === 6
+    doAssert r.stride === 2
+
   block:
     let r = complement(make_layout(6, 1), 24)
-    doAssert $r.shape == "4"
-    doAssert $r.stride == "6"
+    doAssert r.shape === 4
+    doAssert r.stride === 6
+
   block:
     let r = complement(make_layout((4, 2), (1, 16)))
-    doAssert $r.shape == "4"
-    doAssert $r.stride == "4"
+    doAssert r.shape === 4
+    doAssert r.stride === 4
+
   block:
     let r = complement(make_layout(8, 1), 32)
-    doAssert $r.shape == "4"
-    doAssert $r.stride == "8"
+    doAssert r.shape === 4
+    doAssert r.stride === 8
+
   block:
     let r = complement(make_layout(4, 4), 32)
-    doAssert $r.shape == "(4, 2)"
-    doAssert $r.stride == "(1, 16)"
+    doAssert r.shape === (4, 2)
+    doAssert r.stride === (1, 16)
   echo "  Exact-value: 10 Python assertions OK"
 
 # ─── Multi-mode static [CUTE-CP] ───────────────────────────────

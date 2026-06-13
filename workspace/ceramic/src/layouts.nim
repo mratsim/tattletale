@@ -209,17 +209,15 @@ type StrideOrder* = enum
 template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
   ## Create a compact Layout from a shape, computing strides automatically.
   ## Encode compile-time integers into a Int[V] type for constant folding
-  ## NOTE: inline makeIntTuple to avoid C++ temp-name collision
-  let convShape = makeIntTuple(shapeArg)
-  let strideVal = when order == LayoutLeft:
-    prefix_product(convShape)
+  evalOnceAs(convShape, makeIntTuple(shapeArg))
+  when order == LayoutLeft:
+    evalOnceAs(strideVal, prefix_product(convShape))
   else:
-    suffix_product(convShape)
+    evalOnceAs(strideVal, suffix_product(convShape))
   Layout[typeof(convShape), typeof(strideVal)](
     shape: convShape,
     stride: strideVal
   )
-
 template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): auto =
   ## Make a Layout from explicit shape and stride.
   ## Encode compile-time integers into a Int[V] type for constant folding
