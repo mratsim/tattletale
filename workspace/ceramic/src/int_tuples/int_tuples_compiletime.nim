@@ -168,7 +168,7 @@ template evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ##
   ## Constant expressions are constant-folded
   when compiles(proc() = (const test = expression)):
-    # compiles(const) is better than compiles(static(expr)) as it doesn't crash the nimvm
+    # compiles(const) is better than compiles(static(expr)) as it doesn't crash the nimvm in a `static:` context
     const evalOnceCT_tmp = expression
     template `alias`(): untyped =
       evalOnceCT_tmp
