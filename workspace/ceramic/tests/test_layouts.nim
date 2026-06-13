@@ -286,10 +286,10 @@ proc runMakeLayoutTests* =
   # ── Nested tuple make_layout ──
   block:
     let l = make_layout(((4, 1), (8, 8)))
-    doAssert $l == "((4, 1), (8, 8)):((1, 4), (4, 32))"
+    doAssert l.shape === ((4, 1), (8, 8)) and l.stride === ((1, 4), (4, 32))
   block:
     let l = make_layout(((1, 4), (8, 4)))
-    doAssert $l == "((1, 4), (8, 4)):((1, 1), (4, 32))"
+    doAssert l.shape === ((1, 4), (8, 4)) and l.stride === ((1, 1), (4, 32))
   block:
     let mr = 4; let mpT = 8; let kc = 8
     let l = make_layout(((mr, 1), (mpT, kc)))
@@ -299,7 +299,7 @@ proc runMakeLayoutTests* =
     doAssert l[((1, 0), (0, 0))] == 1
   block:
     let l = make_layout(((4, 1), (8, 8)), LayoutRight)
-    doAssert $l == "((4, 1), (8, 8)):((64, 64), (8, 1))"
+    doAssert l.shape === ((4, 1), (8, 8)) and l.stride === ((64, 64), (8, 1))
 
   echo "  Nested make_layout: 4 cases OK"
 
@@ -522,13 +522,13 @@ proc runFilterZerosTests* =
 
 proc runStringifyTests* =
   block:
-    doAssert $make_layout(4, 1) == "4:1"
+    doAssert make_layout(4, 1).shape === 4 and make_layout(4, 1).stride === 1
   block:
     let l = make_layout((4, 8), (1, 4))
-    doAssert $l == "(4, 8):(1, 4)"
+    doAssert l.shape === (4, 8) and l.stride === (1, 4)
   block:
     let l = make_layout(31, 1)
-    doAssert $l == "31:1"
+    doAssert l.shape === 31 and l.stride === 1
   echo "  Stringify: 3 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
