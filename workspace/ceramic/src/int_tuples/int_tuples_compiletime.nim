@@ -102,12 +102,12 @@ func isCompileTime*(node: NimNode): bool {.compileTime.} =
   ##   Examples: `let kc = computeKc(); ... kc ...`, `someRuntimeFn(x)`.
 
   # TODO: doesn't support dotExpr for const field access or method call syntax
-  if node.kind == nnkIntLit:
+  if node.kind in nnkLiterals:
     return true
   let typ = node.getTypeInst()
   if typ.kind == nnkBracketExpr and $typ[0] == "Int":
     return true
-  if node.kind in {nnkCall, nnkHiddenCallConv} and node.len > 1:
+  if node.kind in {nnkCall, nnkHiddenCallConv, nnkDotExpr, nnkBracketExpr, nnkStmtList, nnkBlockExpr, nnkPar, nnkTupleConstr} and node.len > 1:
     for i in 1 ..< node.len:
       if not isCompileTime(node[i]):
         return false
@@ -152,42 +152,89 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
 #  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs
 # ═══════════════════════════════════════════════════════════════
 
-template evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`const`|`var`}): untyped =
+macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`const`|`var`}): untyped =
   ## Create an `alias` for `expression`
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
   ##
   ## Constant expressions are constant-folded
-  template `alias`(): untyped =
-    expression
 
-template evalOnceAs*(alias: untyped{nkIdent}, expression: Int): untyped =
-  ## Create an `alias` for `expression`
-  ## Ensuring it is evaluated only once if it is a `rvalue`
-  ## or passed through if it is an lvalue.
-  ##
-  ## Constant expressions are constant-folded
-  const evalOnceCT_staticInt = expression
-  template `alias`(): untyped =
-    evalOnceCT_staticInt
+  # Generate the following with `genSym` alias to avoid collisions
+  #
+  # template `alias`(): untyped =
+  #   expression
+  result = newProc(
+    name = genSym(nskTemplate, $alias),
+    params = [getType(untyped)],
+    body = expression,
+    procType = nnkTemplateDef
+  )
 
-template evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
+macro evalOnceAs*(alias: untyped{nkIdent}, expression: Int): untyped =
   ## Create an `alias` for `expression`
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
   ##
   ## Constant expressions are constant-folded
-  when expression is static:
-    # compiles(const) is better than compiles(static(expr))
-    # as it doesn't crash the nimvm in a `static:` context
+
+  # const evalOnceCT_staticInt = expression
+  # template `alias`(): untyped =
+  #   evalOnceCT_staticInt
+  result = newStmtList()
+  let evalOnceCT_staticInt = genSym(nskConst, "evalOnceCT_staticInt")
+  result.add newConstStmt(evalOnceCT_staticInt, expression)
+  result.add newProc(
+    name = genSym(nskTemplate, $alias),
+    params = [getType(untyped)],
+    body = evalOnceCT_staticInt,
+    procType = nnkTemplateDef
+  )
+
+macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
+  ## Create an `alias` for `expression`
+  ## Ensuring it is evaluated only once if it is a `rvalue`
+  ## or passed through if it is an lvalue.
+  ##
+  ## Constant expressions are constant-folded
+  echo "Im here"
+  echo expression.treeRepr()
+  echo expression.kind
+  echo expression.getTypeInst().getImpl().treeRepr()
+  if expression.isCompileTime():
+    # This is not that robust but
+    #   when compiles(static(expr))
+    # crashes the nimvm in a `static:` context
+    # unless put with a `when nimvm` guard
     #
-    # but then is still crashes in some other context.
-    # Absolutely unsure of how robust "is static" is
-    # ensure you have an extensive testsuite
-    const evalOnceCT_tmp = expression
-    template `alias`(): untyped =
-      evalOnceCT_tmp
+    #   when compiles(const = expression)
+    # crashes in another context
+    #
+    #   when is static
+    # might seem to work but we need a macro
+    # for gensym for template symbols
+
+    # const evalOnceCT_tmp = expression
+    # template `alias`(): untyped =
+    #   evalOnceCT_tmp
+    result = newStmtList()
+    let evalOnceCT_tmp = genSym(nskConst, "evalOnceCT_tmp")
+    result.add newConstStmt(evalOnceCT_tmp, expression)
+    result.add newProc(
+      name = genSym(nskTemplate, $alias),
+      params = [getType(untyped)],
+      body = evalOnceCT_tmp,
+      procType = nnkTemplateDef
+    )
   else:
-    let evalOnceRT_tmp = expression
-    template `alias`(): untyped =
-      evalOnceRT_tmp
+    # const evalOnceRT_tmp = expression
+    # template `alias`(): untyped =
+    #   evalOnceRT_tmp
+    result = newStmtList()
+    let evalOnceRT_tmp = genSym(nskConst, "evalOnceRT_tmp")
+    result.add newConstStmt(evalOnceRT_tmp, expression)
+    result.add newProc(
+      name = genSym(nskTemplate, $alias),
+      params = [getType(untyped)],
+      body = evalOnceRT_tmp,
+      procType = nnkTemplateDef
+    )
