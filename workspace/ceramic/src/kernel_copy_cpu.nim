@@ -122,7 +122,7 @@ proc buildStrideSortedArrays(
     return quote do:
       int(`nid`[`idx`])
   # preStmts will be built after the main loop populates flatCache
-    
+
   result.shLit = nnkBracket.newTree()
   result.dstStLit = nnkBracket.newTree()
   result.srcStLit = nnkBracket.newTree()
@@ -391,6 +391,11 @@ macro copySameShapeImpl(dst: typed; src: typed; blockSize: static int): untyped 
   let rawSrcSt = toSeqStaticInts(tvSrc[3])
   let rawDstSh = toSeqStaticInts(tvDst[2])
   let rawDstSt = toSeqStaticInts(tvDst[3])
+  debugEcho "[trace] tvDst[2] (shape type) = ", tvDst[2].repr
+  debugEcho "[trace] tvDst[3] (stride type) = ", tvDst[3].repr
+  debugEcho "[trace] rawDstSh = ", rawDstSh
+  debugEcho "[trace] rawDstSt = ", rawDstSt
+  debugEcho "[trace] rawSrcSt = ", rawSrcSt
   let R = max(flatTupleLen(tvSrc[2]), flatTupleLen(tvDst[2]))
   let bs = blockSize
 

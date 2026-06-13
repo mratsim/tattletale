@@ -415,14 +415,17 @@ template suffix_scanIt*(t: untyped; startingAcc: auto; body: untyped): untyped =
 
 #  Leaf procs — dispatch on exact type
 
-func makeIntTupleLeaf(leaf: int): int = leaf
-  ## Dynamic int scalar — passthrough.
+template makeIntTupleLeaf*(leaf: int): int =
+  static: echo "[makeIntTupleLeaf] runtime int detected"
+  leaf
 
-func makeIntTupleLeaf(leaf: static int): auto = Int[leaf]()
-  ## Static int literal — wrap in Int[N].
+template makeIntTupleLeaf*(leaf: static int): auto =
+  static: echo "[makeIntTupleLeaf] static int detected (value: ", leaf, ")"
+  Int[leaf]()
 
-func makeIntTupleLeaf[V: static int](x: Int[V]): Int[V] = x
-  ## Already Int[N] — passthrough.
+template makeIntTupleLeaf*[V: static int](x: Int[V]): Int[V] =
+  static: echo "[makeIntTupleLeaf] Int[N] detected (N=", V, ")"
+  x
 
 #  Compile-time type helpers for the recursive macro
 
@@ -447,28 +450,22 @@ macro makeIntTupleRec*(a: IntOrIntTuple): untyped =
   ## - `int` runtime → passthrough (via makeIntTupleLeaf's int overload)
   ## - `Int[N]` → passthrough
   ## - tuple → recursively process each field
-  if a.isIntType():
-    # Delegate to makeIntTupleLeaf which has both `int` and `static int` overloads.
-    # The compiler picks the right one — no manual CT-detection needed.
-    result = newCall(bindSym"makeIntTupleLeaf", a)
-  elif a.isTupleType():
+  if a.isTupleType():
+    let tup = newNimNode(nnkTupleConstr)
     if a.kind == nnkTupleConstr:
       # Literal tuple: iterate children directly (preserves static types)
-      result = newNimNode(nnkTupleConstr)
       for child in a:
-        result.add newCall(bindSym"makeIntTupleRec", child)
+        tup.add newCall(bindSym"makeIntTupleRec", child)
     else:
-      # Variable/function tuple: use bracket access
+      # Variable/function tuple: recurse on each element (handles nested tuples)
       let ttype = a.getTypeImpl()
-      let tup = newNimNode(nnkTupleConstr)
       for i in 0 ..< ttype.len:
-        tup.add newCall(bindSym"makeIntTupleRec", newTree(nnkBracketExpr, a, newLit(i)))
-      result = tup
-  elif a.isStaticIntType():
-    result = a
+        tup.add newCall(bindSym"makeIntTupleRec",
+            newTree(nnkBracketExpr, a, newLit(i)))
+    result = tup
   else:
-    let msg = "[makeIntTupleRec] invalid type: " & a.repr & " got " & a.getTypeInst().repr
-    error msg
+    # int, Int[N], or runtime int — makeIntTupleLeaf handles dispatch via template resolution
+    result = newCall(bindSym"makeIntTupleLeaf", a)
 
 template makeIntTuple(a: IntOrIntTuple): untyped =
   ## Public face: wraps static ints in Int[N] via the recursive macro.
