@@ -186,7 +186,48 @@ suite "Int[N] — compile-time integer type":
     static: doAssert toIntVal(b) == 3
     static: doAssert toIntVal(c) == 5
 
-# ═══════════════════════════════════════════════════════════════════════
+  test "no shadowing — genSym'd template aliases are independent":
+    ## Regression: multiple evalOnceAs in the same scope used to collide
+    ## on template names (convShape, strideVal), causing the second call
+    ## to overwrite the first's alias. Each alias must be independent.
+    evalOnceAs(sh1, Int[2]())
+    evalOnceAs(sh2, Int[3]())
+    evalOnceAs(sh3, Int[5]())
+    static:
+      doAssert toIntVal(sh1) == 2
+      doAssert toIntVal(sh2) == 3
+      doAssert toIntVal(sh3) == 5
+  test "no shadowing — evalOnceAs collisions":
+    ## Direct evalOnceAs collision test: multiple calls with different
+    ## values in the same scope must produce independent aliases.
+    ## Each evalOnceAs generates a genSym'd template name.
+    evalOnceAs(x1, Int[2]())
+    evalOnceAs(x2, Int[3]())
+    evalOnceAs(x3, Int[5]())
+    static:
+      doAssert toIntVal(x1) == 2
+      doAssert toIntVal(x2) == 3
+      doAssert toIntVal(x3) == 5
+
+  test "no shadowing — static int evalOnceAs collisions":
+    evalOnceAs(a1, 10)
+    evalOnceAs(a2, 20)
+    evalOnceAs(a3, 30)
+    static:
+      doAssert a1 == 10
+      doAssert a2 == 20
+      doAssert a3 == 30
+
+  test "no shadowing — mixed types":
+    evalOnceAs(m1, Int[7]())
+    evalOnceAs(m2, 42)
+    evalOnceAs(m3, (Int[3](), Int[4]()))
+    static:
+      doAssert toIntVal(m1) == 7
+      doAssert m2 == 42
+      doAssert toIntVal(m3[0]) == 3
+      doAssert toIntVal(m3[1]) == 4
+
 # 3.  Proc chains — Int[N] through function calls
 # ═══════════════════════════════════════════════════════════════════════
 

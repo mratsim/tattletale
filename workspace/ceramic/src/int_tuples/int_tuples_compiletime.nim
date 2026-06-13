@@ -100,21 +100,81 @@ func isCompileTime*(node: NimNode): bool {.compileTime.} =
   ## `false` (default)
   ##   Everything else — runtime variables, function calls with runtime args.
   ##   Examples: `let kc = computeKc(); ... kc ...`, `someRuntimeFn(x)`.
-
-  # TODO: doesn't support dotExpr for const field access or method call syntax
+  # Note: unfortunately this is very hard to get right.
   if node.kind in nnkLiterals:
     return true
-  let typ = node.getTypeInst()
-  if typ.kind == nnkBracketExpr and $typ[0] == "Int":
+  # Symbol: resolve to const section — do this before structural recursion
+  # since getTypeInst on a const symbol returns the TYPE which can look like a
+  # data constructor (e.g. nnkBracketExpr tuple type), causing spurious recursion.
+  if node.kind == nnkSym:
+    let impl = node.getImpl()
+    return impl.kind == nnkConstSection
+  # Empty / None: trivially CT (no-op)
+  if node.kind in {nnkEmpty, nnkNone}:
     return true
-  if node.kind in {nnkCall, nnkHiddenCallConv, nnkDotExpr, nnkBracketExpr, nnkStmtList, nnkBlockExpr, nnkPar, nnkTupleConstr} and node.len > 1:
+  # Ident / AccQuoted: unresolved names (e.g. macro-injected it_sh, it_st) — never CT
+  if node.kind in {nnkIdent, nnkAccQuoted}:
+    return false
+  # Postfix / Prefix: declaration modifiers (e.g. `{.inject.} it`) —
+  # child 0 is a pragma annotation, child 1 (last) is the actual identifier
+  if node.kind == nnkPostfix and node.len >= 1:
+    return isCompileTime(node[^1])
+  if node.kind == nnkPrefix and node.len > 0:
+    for i in 0 ..< node.len:
+      if not isCompileTime(node[i]):
+        return false
+    return true
+  # BindStmt: compile-time directive (e.g. `bind makeIntTupleLeaf`) — always CT
+  if node.kind == nnkBindStmt:
+    return true
+  # ExprColonExpr (a: 7 inside named tuples): only the value (child 1) matters
+  if node.kind == nnkExprColonExpr:
+    return isCompileTime(node[1])
+  if node.kind in {nnkCall, nnkHiddenCallConv}:
+    if node.len == 1:
+      # No-arg call (e.g. Int[3]()): compile-time by nature
+      return true
+    if node.len > 1:
+      for i in 1 ..< node.len:
+        if not isCompileTime(node[i]):
+          return false
+    return true
+  # DotExpr: only check the base (child 0), field name (child 1) is an identifier
+  if node.kind == nnkDotExpr and node.len >= 1:
+    return isCompileTime(node[0])
+  # BlockExpr: child 0 is a label/nil, check body from index 1
+  if node.kind == nnkBlockExpr and node.len > 1:
     for i in 1 ..< node.len:
       if not isCompileTime(node[i]):
         return false
     return true
-  if node.kind == nnkSym:
-    let impl = node.getImpl()
-    return impl.kind == nnkConstSection
+  # StmtList / StmtListExpr: all children are statements to check
+  if node.kind in {nnkStmtList, nnkStmtListExpr} and node.len > 0:
+    for i in 0 ..< node.len:
+      if not isCompileTime(node[i]):
+        return false
+    return true
+  # IdentDefs: a single binding (ident, type, value) inside LetSection/VarSection
+  if node.kind == nnkIdentDefs and node.len > 0:
+    for i in 0 ..< node.len:
+      if not isCompileTime(node[i]):
+        return false
+    return true
+  # LetSection / VarSection / ConstSection: recurse into binding children
+  if node.kind in {nnkLetSection, nnkVarSection, nnkConstSection} and node.len > 0:
+    for i in 0 ..< node.len:
+      if not isCompileTime(node[i]):
+        return false
+    return true
+  # Asgn: assignment (a = b) — check the value (child 1)
+  if node.kind in {nnkAsgn, nnkFastAsgn} and node.len > 1:
+    return isCompileTime(node[1])
+  # Tuple / bracket constructors: all children are values
+  if node.kind in {nnkBracketExpr, nnkPar, nnkTupleConstr} and node.len > 0:
+    for i in 0 ..< node.len:
+      if not isCompileTime(node[i]):
+        return false
+    return true
   false
 
 # ═══════════════════════════════════════════════════════════════
@@ -195,46 +255,26 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
   ##
-  ## Constant expressions are constant-folded
-  echo "Im here"
-  echo expression.treeRepr()
-  echo expression.kind
-  echo expression.getTypeInst().getImpl().treeRepr()
-  if expression.isCompileTime():
-    # This is not that robust but
-    #   when compiles(static(expr))
-    # crashes the nimvm in a `static:` context
-    # unless put with a `when nimvm` guard
-    #
-    #   when compiles(const = expression)
-    # crashes in another context
-    #
-    #   when is static
-    # might seem to work but we need a macro
-    # for gensym for template symbols
-
-    # const evalOnceCT_tmp = expression
-    # template `alias`(): untyped =
-    #   evalOnceCT_tmp
-    result = newStmtList()
-    let evalOnceCT_tmp = genSym(nskConst, "evalOnceCT_tmp")
-    result.add newConstStmt(evalOnceCT_tmp, expression)
-    result.add newProc(
-      name = genSym(nskTemplate, $alias),
-      params = [getType(untyped)],
-      body = evalOnceCT_tmp,
-      procType = nnkTemplateDef
-    )
-  else:
-    # const evalOnceRT_tmp = expression
-    # template `alias`(): untyped =
-    #   evalOnceRT_tmp
-    result = newStmtList()
-    let evalOnceRT_tmp = genSym(nskConst, "evalOnceRT_tmp")
-    result.add newConstStmt(evalOnceRT_tmp, expression)
-    result.add newProc(
-      name = genSym(nskTemplate, $alias),
-      params = [getType(untyped)],
-      body = evalOnceRT_tmp,
-      procType = nnkTemplateDef
-    )
+  ## Constant expressions are constant-folded.
+  ##
+  ## Uses a generated `when expression is static:` to choose
+  ## between `const` (compile-time) and `let` (runtime) storage.
+  ## The template name is genSym'd to avoid collisions when multiple
+  ## evalOnceAs calls exist in the same scope.
+  ##
+  ## Implementation note — alternative approaches we tried:
+  ##   when compiles(static(expr)) — crashes the nimvm in a `static:` context
+  ##   when compiles(const = expression) — crashes in another context
+  ##   when is static — seems to work and is what we use here,
+  ##     but we need a macro for gensym of template symbols
+  ##   isCompileTime() macro — fragile, misses many AST node kinds,
+  ##     and getTypeInst() produces hard errors on untyped nodes
+  let aName = genSym(nskTemplate, $alias)
+  result = newStmtList()
+  result.add quote do:
+    when `expression` is static:
+      const ct_tmp {.genSym.} = `expression`
+      template `aName`(): untyped = ct_tmp
+    else:
+      let rt_tmp {.genSym.} = `expression`
+      template `aName`(): untyped = rt_tmp

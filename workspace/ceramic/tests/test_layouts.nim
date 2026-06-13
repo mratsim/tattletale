@@ -1222,5 +1222,21 @@ proc runTests =
   echo "--- upcast/downcast ---"
   runUpcastDowncastTests()
 
+  echo "--- evalOnceAs shadowing (genSym'd aliases) ---"
+  block:
+    let a = make_layout((3,))
+    let b = make_layout((2, 4))
+    doAssert toIntVal(a.shape[0]) == 3, "no shadowing: layout (3,)"
+    doAssert toIntVal(b.shape[0]) == 2, "no shadowing: layout (2,4) shape[0]"
+    doAssert toIntVal(b.shape[1]) == 4, "no shadowing: layout (2,4) shape[1]"
+    echo "    make_layout: 3 cases OK"
+  block:
+    const a = makeIntTuple((3,))
+    const b = makeIntTuple((2, 4))
+    static:
+      doAssert toIntVal(a[0]) == 3
+      doAssert toIntVal(b[0]) == 2
+      doAssert toIntVal(b[1]) == 4
+    echo "    makeIntTuple: 3 cases OK"
 when isMainModule:
   runTests()
