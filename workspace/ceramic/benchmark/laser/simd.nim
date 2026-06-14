@@ -434,8 +434,8 @@ when defined(i386) or defined(amd64):
   func mm512_castsi512_ps*(a: m512i): m512 {.importc: "_mm512_castsi512_ps", x86.}
     ## Cast a 512-bit int vector into a float32x16 vector with the same bit pattern
   func mm512_cvtps_epi32*(a: m512): m512i {.importc: "_mm512_cvtps_epi32", x86.}
-    ## Convert a float32x16 to int32x8
+    ## Convert a float32x16 to int32x16
   func mm512_cvtepi32_ps*(a: m512i): m512 {.importc: "_mm512_cvtepi32_ps", x86.}
-    ## Convert a int32x8 to float32x16
+    ## Convert a int32x16 to float32x16
 
   func cvtmask64_u64*(a: mmask64): uint64 {.importc: "_cvtmask64_u64", x86.}

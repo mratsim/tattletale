@@ -253,8 +253,8 @@ proc gemm_strided*[T: SomeNumber](
   let packBLay = make_layout((num_jr, kc, nr), LayoutRight)
   let packSizeA = int(cosize(packALay))
   let packSizeB = int(cosize(packBLay))
-  var packMemA = newSeq[T](packSizeA + 8)
-  var packMemB = newSeq[T](packSizeB + 8)
+  var packMemA = newSeq[T](packSizeA + (32 div sizeof(T)))
+  var packMemB = newSeq[T](packSizeB + (32 div sizeof(T)))
   # Align to 32 bytes (AVX alignment requirement)
   let alignA = (cast[int](addr packMemA[0]) + 31) and not 31
   let alignB = (cast[int](addr packMemB[0]) + 31) and not 31

@@ -58,16 +58,16 @@ proc gemm_ukernel_avx_fma_fused*[MR, NR: static int](
   elif beta == 1.0'f32:
     let alphaV = mm256_set1_ps(alpha)
     for i in 0 ..< MR:
-      let Cv0 = mm256_load_ps(cast[ptr float32](C[i * cStride + 0].addr))
-      let Cv1 = mm256_load_ps(cast[ptr float32](C[i * cStride + 8].addr))
+      let Cv0 = mm256_loadu_ps(cast[ptr float32](C[i * cStride + 0].addr))
+      let Cv1 = mm256_loadu_ps(cast[ptr float32](C[i * cStride + 8].addr))
       mm256_storeu_ps(cast[ptr float32](C[i * cStride + 0].addr), mm256_fmadd_ps(ABv[i][0], alphaV, Cv0))
       mm256_storeu_ps(cast[ptr float32](C[i * cStride + 8].addr), mm256_fmadd_ps(ABv[i][1], alphaV, Cv1))
   else:
     let alphaV = mm256_set1_ps(alpha)
     let betaV = mm256_set1_ps(beta)
     for i in 0 ..< MR:
-      let Cv0 = mm256_load_ps(cast[ptr float32](C[i * cStride + 0].addr))
-      let Cv1 = mm256_load_ps(cast[ptr float32](C[i * cStride + 8].addr))
+      let Cv0 = mm256_loadu_ps(cast[ptr float32](C[i * cStride + 0].addr))
+      let Cv1 = mm256_loadu_ps(cast[ptr float32](C[i * cStride + 8].addr))
       let Cv0_s = mm256_mul_ps(Cv0, betaV)
       let Cv1_s = mm256_mul_ps(Cv1, betaV)
       mm256_storeu_ps(cast[ptr float32](C[i * cStride + 0].addr), mm256_fmadd_ps(ABv[i][0], alphaV, Cv0_s))

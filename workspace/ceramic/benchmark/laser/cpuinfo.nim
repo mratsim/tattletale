@@ -34,7 +34,7 @@ func cpuinfo_has_x86_avx512dq*(): bool =
 
 func cpuinfo_has_x86_avx512cd*(): bool =
   {.cast(noSideEffect).}:
-    hasAvx512vl()
+    hasAvx512cd()
 
 func cpuinfo_has_x86_avx512vbmi*(): bool =
   {.cast(noSideEffect).}:
