@@ -28,9 +28,11 @@ import workspace/ceramic/examples/ex02b_matmul_layout_algebra as v_b
 import workspace/ceramic/benchmark/laser_matmul/gemm as laser_gemm
 import workspace/ceramic/benchmark/bench_utils
 
-const ProblemSizes = [128, 512, 1024, 1920]
-const NbSamples = 10
-const WarmupSamples = 3
+const
+  ProblemSizes = [128, 512, 1024, 1920]
+  NbSamples = 10
+  WarmupSamples = 3
+  Tol = 5e-4'f32
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Optional cblas/OpenBLAS
@@ -145,7 +147,7 @@ when isMainModule:
       C0 = newSeq[float32]((N-1)*rs + (N-1)*cs + 1)
     for i in 0 ..< A.len: A[i] = rand(1.0'f32)
     for i in 0 ..< B.len: B[i] = rand(1.0'f32)
-
+    var absDiffs, relDiffs: seq[string]
     # ── Correctness check: allClose vs Laser reference ──
     block:
       var C_l = newSeq[float32](C0.len)
@@ -153,25 +155,29 @@ when isMainModule:
       var C_b = newSeq[float32](C0.len)
       for i in 0 ..< C0.len:
         C_l[i] = C0[i]; C_a[i] = C0[i]; C_b[i] = C0[i]
-      # Reference: Laser (battle-tested)
       laser_gemm.gemm_strided(N, N, N, 1.0'f32, addr A[0], rs, cs, addr B[0], rs, cs, 0.0'f32, addr C_l[0], rs, cs)
       v_a.gemm_strided(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C_a, rs, cs)
+      let r_a = allClose(C_a, C_l, atol = Tol, rtol = Tol)
+      doAssert r_a.ok, &"ex02a vs Laser: maxAbsErr={r_a.maxAbsErr:.2e}"
+      absDiffs.add formatFloat(r_a.maxAbsErr, ffScientific, 2)
+      relDiffs.add formatFloat(r_a.maxRelErr, ffScientific, 2)
       v_b.gemm_strided(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C_b, rs, cs)
-      let r_a = allClose(C_a, C_l)  # ex02a must match Laser exactly (same ukernel path)
-      let r_b = allClose(C_b, C_l, atol = 1.0, rtol = 1.0)  # ex02b: different ukernel variant
-      doAssert r_a.ok, &"ex02a vs Laser: maxAbsErr={r_a.maxAbsErr:.2e} maxRelErr={r_a.maxRelErr:.2e}"
-      doAssert r_b.ok, &"ex02b vs Laser: maxAbsErr={r_b.maxAbsErr:.2e} maxRelErr={r_b.maxRelErr:.2e}"
+      let r_b = allClose(C_b, C_l, atol = Tol, rtol = Tol)
+      doAssert r_b.ok, &"ex02b vs Laser: maxAbsErr={r_b.maxAbsErr:.2e}"
+      absDiffs.add formatFloat(r_b.maxAbsErr, ffScientific, 2)
+      relDiffs.add formatFloat(r_b.maxRelErr, ffScientific, 2)
+      absDiffs.add "-"
+      relDiffs.add "-"
       when defined(cblas):
         var C_o = newSeq[float32](C0.len)
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
           cint(N), cint(N), cint(N), 1.0'f32,
           addr A[0], cint(N), addr B[0], cint(N),
           0.0'f32, addr C_o[0], cint(N))
-        let r_o = allClose(C_o, C_l, atol = 1.0, rtol = 1.0)
-        doAssert r_o.ok, &"OpenBLAS vs Laser: maxAbsErr={r_o.maxAbsErr:.2e} maxRelErr={r_o.maxRelErr:.2e}"
-        echo &"  Diff vs Laser ref  a={r_a.maxAbsErr:.2e}/{r_a.maxRelErr:.2e}  b={r_b.maxAbsErr:.2e}/{r_b.maxRelErr:.2e}  o={r_o.maxAbsErr:.2e}/{r_o.maxRelErr:.2e}"
-      else:
-        echo &"  Diff vs Laser ref  a={r_a.maxAbsErr:.2e}/{r_a.maxRelErr:.2e}  b={r_b.maxAbsErr:.2e}/{r_b.maxRelErr:.2e}  o=N/A"
+        let r_o = allClose(C_o, C_l, atol = Tol, rtol = Tol)
+        doAssert r_o.ok, &"OpenBLAS vs Laser: maxAbsErr={r_o.maxAbsErr:.2e}"
+        absDiffs.add formatFloat(r_o.maxAbsErr, ffScientific, 2)
+        relDiffs.add formatFloat(r_o.maxRelErr, ffScientific, 2)
 
     var results: seq[tuple[name, label: string; gflops, medianUs, ai: float64]] = @[]
 
@@ -214,11 +220,11 @@ when isMainModule:
                        theoreticalPeak(archAVX512, 5.5)]
 
     # Header (two-line: freqs below arch label)
-    echo "  Variant" & spaces(19) & "GFLOP/s".align(6) & "        AVX+FMA % @ GHz  " & "      AVX-512 % @ GHz" & "       μs"
+    echo "  Variant" & spaces(19) & "GFLOP/s".align(6) & "        AVX+FMA % @ GHz  " & "      AVX-512 % @ GHz" & "       μs" & "  absdiff reldiff"
     echo spaces(40) & " 4.0  4.5  5.0  5.5" & spaces(4) & " 4.0  4.5  5.0  5.5"
-    echo "  " & "-".repeat(88)
+    echo "  " & "-".repeat(106)
 
-    for r in results:
+    for i, r in results:
       let label = r.name & "/" & r.label
       let p1 = int(r.gflops / peaksAVX[0] * 100)
       let p2 = int(r.gflops / peaksAVX[1] * 100)
@@ -228,7 +234,7 @@ when isMainModule:
       let q2 = int(r.gflops / peaksAVX512[1] * 100)
       let q3 = int(r.gflops / peaksAVX512[2] * 100)
       let q4 = int(r.gflops / peaksAVX512[3] * 100)
-      echo &"  {label:<21} {r.gflops:>8.2f}        {p1:>3d}% {p2:>3d}% {p3:>3d}% {p4:>3d}%    {q1:>3d}% {q2:>3d}% {q3:>3d}% {q4:>3d}%  {int(r.medianUs):>6d}"
+      echo &"  {label:<21} {r.gflops:>8.2f}        {p1:>3d}% {p2:>3d}% {p3:>3d}% {p4:>3d}%    {q1:>3d}% {q2:>3d}% {q3:>3d}% {q4:>3d}%  {int(r.medianUs):>6d}  {absDiffs[i]:>9} {relDiffs[i]:>9}"
 
     echo ""
 
