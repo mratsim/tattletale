@@ -1,4 +1,4 @@
-import workspace/probes/src/[reports, tracer]
+import workspace/bencher/src/[reports, tracer]
 
 export
   resetMetering,

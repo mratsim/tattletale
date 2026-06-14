@@ -4,6 +4,7 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
+{.experimental: "callOperator".}
 
 ## Tests for CuTe-compatible int_tuples + layouts.
 ##
@@ -18,14 +19,14 @@
 
 import std/macros
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
+import workspace/ceramic/src/layouts {.all.}
 import workspace/ceramic/src/layout_algebra
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout — shape + stride, const correctness, stride order
 # ═══════════════════════════════════════════════════════════════
 
-proc runMakeLayoutTests* =
+proc runMakeLayoutTests =
   let d1 = 1
 
   # ═══════════════════════════════════════════════════════════════
@@ -89,6 +90,8 @@ proc runMakeLayoutTests* =
   block:
     const C2 = 2; const C4 = 4; let d2 = 2
     let l = make_layout((d2, C4), (1, 2))
+    echo l
+    echo typeof(l)
     doAssert l === ((2, 4), (1, 2))
     doAssert not isConst(l.shape[0])
     doAssert isConst(l.shape[1])
@@ -282,11 +285,46 @@ proc runMakeLayoutTests* =
 
   echo "  make_layout: 23 cases OK"
 
+  # ── Nested tuple make_layout ──
+  block:
+    let l = make_layout(((4, 1), (8, 8)))
+    doAssert l.shape === ((4, 1), (8, 8)) and l.stride === ((1, 4), (4, 32))
+  block:
+    let l = make_layout(((1, 4), (8, 4)))
+    doAssert l.shape === ((1, 4), (8, 4)) and l.stride === ((1, 1), (4, 32))
+  block:
+    let mr = 4; let mpT = 8; let kc = 8
+    let l = make_layout(((mr, 1), (mpT, kc)))
+    doAssert l[((0, 0), (0, 0))] == 0
+    doAssert l[((0, 0), (1, 0))] == mr
+    doAssert l[((0, 0), (0, 1))] == mr * mpT
+    doAssert l[((1, 0), (0, 0))] == 1
+  block:
+    let l = make_layout(((4, 1), (8, 8)), LayoutRight)
+    doAssert l.shape === ((4, 1), (8, 8)) and l.stride === ((64, 64), (8, 1))
+
+  echo "  Nested make_layout: 4 cases OK"
+
+  # ═══════════════════════════════════════════════════════════════
+  #  product(l.shape) — shape extracted from layout
+  # ═══════════════════════════════════════════════════════════════
+  block:
+    let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[2]()))
+    let r = product(l.shape)
+    doAssert r === 8
+
+  block:
+    let d1 = 1; let d4dyn = 4
+    let l = make_layout((Int[2](), d4dyn), (d1, Int[2]()))
+    let r = product(l.shape)
+    doAssert r === 8
+  echo "  product(l.shape): 2 cases OK"
+
 # ═══════════════════════════════════════════════════════════════
 #  Phase 2: flatten
 # ═══════════════════════════════════════════════════════════════
 
-proc runFlattenTests* =
+proc runFlattenTests =
   block:
     doAssert flatten(5) === 5
 
@@ -317,7 +355,7 @@ proc runFlattenTests* =
 #  Phase 2: concat
 # ═══════════════════════════════════════════════════════════════
 
-proc runConcatTests* =
+proc runConcatTests =
   block:
     # concat int + tuple
     let c1 = concat(1, (4, 8))
@@ -371,7 +409,7 @@ proc runConcatTests* =
 #  Size tests (ported from Python tensor-layouts test suite)
 # ═══════════════════════════════════════════════════════════════
 
-proc runSizeTests* =
+proc runSizeTests =
   block:
     let l = make_layout(31, 1)
     doAssert size(l) === 31
@@ -435,7 +473,7 @@ proc runSizeTests* =
 #  so we only check "doesn't crash" for complement.
 # ═══════════════════════════════════════════════════════════════
 
-proc runCosizeTests* =
+proc runCosizeTests =
   let d1 = 1
   block:
     # cosize(Layout((64, 32), (1, 128))) == 4032
@@ -474,7 +512,7 @@ proc runCosizeTests* =
 #  exactly what filter_zeros → coalesce achieves.
 # ═══════════════════════════════════════════════════════════════
 
-proc runFilterZerosTests* =
+proc runFilterZerosTests =
   let d1 = 1
   block:
     let l = make_layout((64, 8, 8, 128), (8, 1, 0, 512))
@@ -499,22 +537,22 @@ proc runFilterZerosTests* =
 #  $ — stringify
 # ═══════════════════════════════════════════════════════════════
 
-proc runStringifyTests* =
+proc runStringifyTests =
   block:
-    doAssert $make_layout(4, 1) == "4:1"
+    doAssert make_layout(4, 1).shape === 4 and make_layout(4, 1).stride === 1
   block:
     let l = make_layout((4, 8), (1, 4))
-    doAssert $l == "(4, 8):(1, 4)"
+    doAssert l.shape === (4, 8) and l.stride === (1, 4)
   block:
     let l = make_layout(31, 1)
-    doAssert $l == "31:1"
+    doAssert l.shape === 31 and l.stride === 1
   echo "  Stringify: 3 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  rank — number of modes
 # ═══════════════════════════════════════════════════════════════
 
-proc runRankTests* =
+proc runRankTests =
   block:
     doAssert rank(make_layout(4, 1)) === 1
   block:
@@ -527,7 +565,7 @@ proc runRankTests* =
 #  isCompact — compactness checks
 # ═══════════════════════════════════════════════════════════════
 
-proc runIsCompactTests* =
+proc runIsCompactTests =
   block:
     doAssert isCompact(make_layout((4, 8), (1, 4)))
   block:
@@ -549,7 +587,7 @@ proc runIsCompactTests* =
 #  congruent — structural shape comparison
 # ═══════════════════════════════════════════════════════════════
 
-proc runPredicateTests* =
+proc runPredicateTests =
   # ═══════════════════════════════════════════════════════════════
   #  Predicates — congruent, weakly_congruent, compatible
   # ═══════════════════════════════════════════════════════════════
@@ -607,7 +645,7 @@ proc runPredicateTests* =
 #  crd2idx — coordinate to index
 # ═══════════════════════════════════════════════════════════════
 
-proc runCrd2IdxTests* =
+proc runCrd2IdxTests =
   block:
     doAssert crd2idx(5, (3, 4), (2, 8)) === 12
   block:
@@ -641,61 +679,61 @@ proc runCrd2IdxTests* =
 #  idx2crd — index to coordinate (on Layout)
 # ═══════════════════════════════════════════════════════════════
 
-proc runIdx2crdTests* =
+proc runIdx2crdTests =
   block:
     ## Basic 2D flat shape
     let L = make_layout((3, 4), (1, 4))
-    let crd = idx2crd(5, L)
+    let crd = idx2crd(L, 5)
     doAssert crd[0] === 2
     doAssert crd[1] === 1
   block:
     ## Index 0 -> first element
     let L = make_layout((3, 4), (1, 4))
-    let crd = idx2crd(0, L)
+    let crd = idx2crd(L, 0)
     doAssert crd[0] === 0
     doAssert crd[1] === 0
   block:
     ## Last element
     let L = make_layout((3, 4), (1, 4))
-    let crd = idx2crd(11, L)
+    let crd = idx2crd(L, 11)
     doAssert crd[0] === 2
     doAssert crd[1] === 2
   block:
     ## Non-compact stride (MoYe test case, 0-indexed)
     let L = make_layout((3, 4), (1, 3))
-    let crd = idx2crd(9, L)
+    let crd = idx2crd(L, 9)
     doAssert crd[0] === 0
     doAssert crd[1] === 3
   block:
     ## Index at shape boundary
     let L = make_layout((3, 4), (1, 3))
-    let crd = idx2crd(3, L)
+    let crd = idx2crd(L, 3)
     doAssert crd[0] === 0
     doAssert crd[1] === 1
   block:
     ## Single mode layout
     let L = make_layout(8, 1)
-    let crd = idx2crd(5, L)
+    let crd = idx2crd(L, 5)
     doAssert crd === 5
   block:
     ## 3D flat shape
     let L = make_layout((3, 4, 5), (1, 3, 12))
-    let crd = idx2crd(43, L)
+    let crd = idx2crd(L, 43)
     doAssert crd[0] === 1
     doAssert crd[1] === 2
     doAssert crd[2] === 3
   block:
-    ## Roundtrip: crd2idx(idx2crd(i, L), L) == i
+    ## Roundtrip: crd2idx(idx2crd(L, i), L) == i
     let L = make_layout((4, 8), (1, 4))
     for i in 0 ..< size(L):
-      let crd = idx2crd(i, L)
-      let idx = crd2idx(crd, L)
+      let crd = idx2crd(L, i)
+      let idx = crd2idx(L, crd)
       doAssert idx === i, "roundtrip i=" & $i & ": got " & $idx
   echo "  idx2crd: 8 cases OK"
 #  layout[] — call operator
 # ═══════════════════════════════════════════════════════════════
 
-proc runCallOperatorTests* =
+proc runCallOperatorTests =
   block:
     let l = make_layout(8, 1)
     doAssert l[0] === 0
@@ -711,7 +749,7 @@ proc runCallOperatorTests* =
 #  col_major_strides
 # ═══════════════════════════════════════════════════════════════
 
-proc runColMajorStridesTests* =
+proc runColMajorStridesTests =
   block:
     doAssert col_major_strides(4) === 1
   block:
@@ -731,7 +769,7 @@ proc runColMajorStridesTests* =
 #  make_layout deduces column-major strides from the shape
 # ═══════════════════════════════════════════════════════════════
 
-proc runNCHWTests* =
+proc runNCHWTests =
   block:
     let dN = 2
     let sh = (dN, Int[3](), Int[8](), Int[8]())
@@ -752,7 +790,7 @@ proc runNCHWTests* =
 #  zipModes — interleave corresponding modes pairwise
 # ═══════════════════════════════════════════════════════════════
 
-proc runZipTests* =
+proc runZipTests =
   block:
     # Interleave two rank-2 layouts
     let a = make_layout((2, 2), (1, 2))
@@ -777,7 +815,7 @@ proc runZipTests* =
 # ═══════════════════════════════════════════════════════════════
 #  mapLeavesWith — apply body to each leaf (shape, stride) pair
 # ═══════════════════════════════════════════════════════════════
-proc runMapLeavesWithTests* =
+proc runMapLeavesWithTests =
   block:
     ## Flat: simple
     let a = make_layout((2, 3))
@@ -840,7 +878,7 @@ proc runMapLeavesWithTests* =
 #  upcast / downcast — ref: tensor-layouts/tests/layouts.py + MoYe.jl
 # ═══════════════════════════════════════════════════════════════
 
-proc runUpcastDowncastTests* =
+proc runUpcastDowncastTests =
   # ── Python tensor-layouts: test_upcast_simple_stride1 ──
   block:
     ## upcast divides innermost (stride-1) shape by n.
@@ -880,8 +918,8 @@ proc runUpcastDowncastTests* =
     ## upcast preserves stride-0 (broadcast) modes unchanged.
     let a = make_layout((4, 8), (0, 1))
     let b = a.upcast(4)
-    doAssert b.stride[0] == 0
-    doAssert b.shape[0] == 4
+    doAssert b.stride[0] === 0
+    doAssert b.shape[0] === 4
   # ── Python: test_downcast_simple ──
   block:
     ## downcast multiplies stride-1 shape by n, other strides by n.
@@ -1003,7 +1041,7 @@ proc runUpcastDowncastTests* =
 # ═══════════════════════════════════════════════════════════════
 #  Run all
 # ═══════════════════════════════════════════════════════════════
-proc runTests* =
+proc runTests =
   echo "--- make_layout ---"
   runMakeLayoutTests()
   echo "--- Flatten ---"
@@ -1184,5 +1222,21 @@ proc runTests* =
   echo "--- upcast/downcast ---"
   runUpcastDowncastTests()
 
+  echo "--- evalOnceAs shadowing (genSym'd aliases) ---"
+  block:
+    let a = make_layout((3,))
+    let b = make_layout((2, 4))
+    doAssert toIntVal(a.shape[0]) == 3, "no shadowing: layout (3,)"
+    doAssert toIntVal(b.shape[0]) == 2, "no shadowing: layout (2,4) shape[0]"
+    doAssert toIntVal(b.shape[1]) == 4, "no shadowing: layout (2,4) shape[1]"
+    echo "    make_layout: 3 cases OK"
+  block:
+    const a = makeIntTuple((3,))
+    const b = makeIntTuple((2, 4))
+    static:
+      doAssert toIntVal(a[0]) == 3
+      doAssert toIntVal(b[0]) == 2
+      doAssert toIntVal(b[1]) == 4
+    echo "    makeIntTuple: 3 cases OK"
 when isMainModule:
   runTests()

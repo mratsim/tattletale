@@ -20,16 +20,14 @@ import std/macros
 import std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
-
-# ..< overload for Int[N] ranges
-func `..<`*[V: static int](a: int; b: Int[V]): Slice[int] = a ..< V
+{.experimental: "callOperator".}
 
 
 # ═══════════════════════════════════════════════════════════════
 #  Test entry point
 # ═══════════════════════════════════════════════════════════════
 
-proc runSliceDiceTests*: void
+proc runSliceDiceTests: void
 
 when isMainModule:
   runSliceDiceTests()
@@ -38,25 +36,25 @@ when isMainModule:
 #  Forward declarations
 # ═══════════════════════════════════════════════════════════════
 
-proc runJokerTests*
-proc runSliceScalarTests*
-proc runSliceFlatTupleTests*
-proc runSliceNestedTupleTests*
-proc runDiceScalarTests*
-proc runDiceFlatTupleTests*
-proc runDiceNestedTupleTests*
-proc runSliceLayoutBasicTests*
-proc runDiceLayoutBasicTests*
-proc runSliceAndOffsetBasicTests*
-proc runIdx2crdTests*
-proc runIndirectionTests*
-proc runGenericProcTests*
+proc runJokerTests
+proc runSliceScalarTests
+proc runSliceFlatTupleTests
+proc runSliceNestedTupleTests
+proc runDiceScalarTests
+proc runDiceFlatTupleTests
+proc runDiceNestedTupleTests
+proc runSliceLayoutBasicTests
+proc runDiceLayoutBasicTests
+proc runSliceAndOffsetBasicTests
+proc runIdx2crdTests
+proc runIndirectionTests
+proc runGenericProcTests
 
 # ═══════════════════════════════════════════════════════════════
 #  run all
 # ═══════════════════════════════════════════════════════════════
 
-proc runSliceDiceTests* =
+proc runSliceDiceTests =
   echo "\n── Joker type [CUTE] ──"
   runJokerTests()
   echo "\n── slice on scalars [CUTE] ──"
@@ -87,7 +85,7 @@ proc runSliceDiceTests* =
 #  A. Joker type
 # ═══════════════════════════════════════════════════════════════
 
-proc runJokerTests* =
+proc runJokerTests =
   block:
     doAssert Joker isnot int
     doAssert Joker isnot Int
@@ -98,7 +96,7 @@ proc runJokerTests* =
 # ═══════════════════════════════════════════════════════════════
 #  B. slice on scalars [CUTE underscore.hpp]
 
-proc runSliceScalarTests* =
+proc runSliceScalarTests =
   block:
     let r = slice(_, 4)
     doAssert r === 4
@@ -118,7 +116,7 @@ proc runSliceScalarTests* =
 # ═══════════════════════════════════════════════════════════════
 #  C. slice on flat tuples
 
-proc runSliceFlatTupleTests* =
+proc runSliceFlatTupleTests =
   block:
     let r = slice((_, 0), (3, 4))
     doAssert (r is tuple)
@@ -148,7 +146,7 @@ proc runSliceFlatTupleTests* =
 # ═══════════════════════════════════════════════════════════════
 #  D. slice on nested tuples
 
-proc runSliceNestedTupleTests* =
+proc runSliceNestedTupleTests =
   block:
     let r = slice((0, _), (3, 4))
     doAssert tupleLen(r) == 1
@@ -171,7 +169,7 @@ proc runSliceNestedTupleTests* =
 # ═══════════════════════════════════════════════════════════════
 #  E. dice on scalars
 
-proc runDiceScalarTests* =
+proc runDiceScalarTests =
   block:
     let r = dice(_, 4)
     doAssert (r is tuple)
@@ -187,7 +185,7 @@ proc runDiceScalarTests* =
 # ═══════════════════════════════════════════════════════════════
 #  F. dice on flat tuples
 
-proc runDiceFlatTupleTests* =
+proc runDiceFlatTupleTests =
   block:
     let r = dice((0, _), (3, 4))
     doAssert r === 3
@@ -209,7 +207,7 @@ proc runDiceFlatTupleTests* =
 # ═══════════════════════════════════════════════════════════════
 #  G. dice on nested tuples
 
-proc runDiceNestedTupleTests* =
+proc runDiceNestedTupleTests =
   block:
     let r = dice(((0, _), 0), ((3, 4), 5))
     doAssert r === (3, 5)
@@ -224,7 +222,7 @@ proc runDiceNestedTupleTests* =
 # ═══════════════════════════════════════════════════════════════
 #  H. slice/dice/slice_and_offset on Layout
 
-proc runSliceLayoutBasicTests* =
+proc runSliceLayoutBasicTests =
   block:
     let L = make_layout((4, 8), (1, 4))
     let sub = slice((_, 0), L)
@@ -254,7 +252,7 @@ proc runSliceLayoutBasicTests* =
     doAssert sub.stride[1] === 6
   echo "  6 cases OK"
 
-proc runDiceLayoutBasicTests* =
+proc runDiceLayoutBasicTests =
   block:
     let L = make_layout((3, 4), (1, 4))
     let sub = dice((0, _), L)
@@ -277,7 +275,7 @@ proc runDiceLayoutBasicTests* =
     doAssert sub === L
   echo "  5 cases OK"
 
-proc runSliceAndOffsetBasicTests* =
+proc runSliceAndOffsetBasicTests =
   block:
     let L = make_layout((4, 8), (1, 4))
     let (sub, off) = slice_and_offset((_, 3), L)
@@ -309,21 +307,22 @@ proc runSliceAndOffsetBasicTests* =
 # ═══════════════════════════════════════════════════════════════
 #  I. idx2crd
 
-proc runIdx2crdTests* =
+proc runIdx2crdTests =
+  let L = make_layout((3, 4), (1, 3))
   block:
-    let crd = idx2crd(5, (3, 4), (1, 3))
+    let crd = idx2crd(L, 5)
     doAssert crd[0] === 2
     doAssert crd[1] === 1
   block:
-    let crd = idx2crd(0, (3, 4), (1, 3))
+    let crd = idx2crd(L, 0)
     doAssert crd[0] === 0
     doAssert crd[1] === 0
   block:
-    let crd = idx2crd(11, (3, 4), (1, 3))
+    let crd = idx2crd(L, 11)
     doAssert crd[0] === 2
     doAssert crd[1] === 3
   block:
-    let crd = idx2crd(9, (3, 4), (1, 3))
+    let crd = idx2crd(L, 9)
     doAssert crd[0] === 0
     doAssert crd[1] === 3
   echo "  4 cases OK"
@@ -331,7 +330,7 @@ proc runIdx2crdTests* =
 # ═══════════════════════════════════════════════════════════════
 #  J. Indirection: const, let
 
-proc runIndirectionTests* =
+proc runIndirectionTests =
   block:
     ## const indirection: const values -> Int[N]
     const C3 = 3
@@ -408,7 +407,7 @@ proc runIndirectionTests* =
 # ═══════════════════════════════════════════════════════════════
 #  K. Generic proc
 
-proc runGenericProcTests* =
+proc runGenericProcTests =
   block:
     ## Generic proc: slice inside a generic function
     proc foo[T](shape: T; stride: T): auto =

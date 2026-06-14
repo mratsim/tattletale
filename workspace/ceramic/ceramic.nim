@@ -1,10 +1,3 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
-
 ## CuTe-compatible Layout algebra: shapes, strides, Int[N], coalesce.
 ##
 ## Ceramic provides the fundamental tile types (`Layout[Shape, Stride]`,
@@ -18,5 +11,14 @@
 import ./src/int_tuples
 import ./src/layouts
 import ./src/layout_algebra
+import ./src/tensors
+import ./src/kernel_copy_cpu
+import ./src/kernel_copy_gpu
+import ./src/kernel_fillwith_cpu
+import ./src/kernel_fillwith_gpu
+import ./src/kernel_indexing_cpu
+import ./src/kernel_indexing_gpu
 
-export int_tuples, layouts, layout_algebra
+export int_tuples, layouts, layout_algebra, tensors
+export kernel_copy_cpu, kernel_copy_gpu, kernel_fillwith_cpu,
+       kernel_fillwith_gpu, kernel_indexing_cpu, kernel_indexing_gpu
