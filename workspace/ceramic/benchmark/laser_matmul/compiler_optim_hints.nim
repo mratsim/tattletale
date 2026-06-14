@@ -84,7 +84,7 @@ template pragma_ivdep() =
   when defined(gcc):
     {.emit: "#pragma GCC ivdep".}
   else: # Supported on ICC and Cray
-    {.emit: "pragma ivdep".}
+    {.emit: "#pragma ivdep".}
 
 template withCompilerFunctionHints() =
   ## Not exposed, Nim codegen will declare them as normal C function.

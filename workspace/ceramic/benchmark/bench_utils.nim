@@ -35,7 +35,7 @@ proc allClose*(
     let diff = abs(a[i] - b[i])
     result.maxAbsErr = max(result.maxAbsErr, diff)
     result.maxRelErr = max(result.maxRelErr, diff / max(abs(a[i]), max(abs(b[i]), 1e-12'f32)))
-  result.ok = result.maxAbsErr <= atol or result.maxRelErr <= rtol
+  result.ok = result.maxAbsErr <= atol and result.maxRelErr <= rtol
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Median

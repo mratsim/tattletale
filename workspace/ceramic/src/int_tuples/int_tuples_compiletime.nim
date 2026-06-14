@@ -183,9 +183,9 @@ func isCompileTime*(node: NimNode): bool {.compileTime.} =
 
 func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
   ## Recursively extract Int[N] values from a (possibly nested) tuple type AST node.
-  ## Returns 0 for non-static (dynamic int) elements. Handles:
+  ## Returns low(int) (DynamicSentinel) for non-static (dynamic int) elements. Handles:
   ##   ((Int[1], Int[16]), (Int[512], Int[64]))  → @[1, 16, 512, 64]
-  ##   ((int, int), (int, int))                  → @[0, 0, 0, 0]
+  ##   ((int, int), (int, int))                  → @[DynamicSentinel, DynamicSentinel, ...]
   ##   Int[64]                                   → @[64]
   if t.kind == nnkBracketExpr and $t[0] == "Int":
     # Single Int[N] (scalar type, not tuple)

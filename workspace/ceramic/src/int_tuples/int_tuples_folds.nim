@@ -59,20 +59,28 @@ template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
 #  Returns tuple where each element = `acc` BEFORE that element.
 # ═══════════════════════════════════════════════════════════════
 
-template tail_accumulator(strides, shape: IntOrIntTuple): auto =
+template tail_accumulator(strides, shape: IntOrIntTuple; body: untyped): auto =
   ## Final accumulator after prefix_scan: walks last-elem chain to the leaf.
+  ## Applies body(acc, it) at each level.
   const L = rank(typeof(shape)) - 1
   when shape[L] is int or shape[L] is Int:
-    strides[L] * shape[L]
+    block:
+      let acc {.inject.} = strides[L]
+      let it {.inject.} = shape[L]
+      body
   else:
-    tail_accumulator(strides[L], shape[L])
+    tail_accumulator(strides[L], shape[L], body)
 
-template head_accumulator(strides, shape: IntOrIntTuple): auto =
+template head_accumulator(strides, shape: IntOrIntTuple; body: untyped): auto =
   ## Final accumulator after suffix_scan: walks first-elem chain to the leaf.
+  ## Applies body(acc, it) at each level.
   when shape[0] is int or shape[0] is Int:
-    strides[0] * shape[0]
+    block:
+      let acc {.inject.} = strides[0]
+      let it {.inject.} = shape[0]
+      body
   else:
-    head_accumulator(strides[0], shape[0])
+    head_accumulator(strides[0], shape[0], body)
 
 template prefix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: untyped): untyped =
   ## Recursive prefix scan. Each level injects acc/it into a block scope.
@@ -87,7 +95,10 @@ template prefix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: u
     const L = tupleLen(typeof(it)) - 1
     let newState =
       when it[L] is int or it[L] is Int:
-        subStrides[L] * it[L]
+        block:
+          let acc {.inject.} = subStrides[L]
+          let it {.inject.} = it[L]
+          body
       else:
         tail_accumulator(subStrides[L], it[L], body)
     when idx == tupleLen(t) - 1:
@@ -116,7 +127,10 @@ template suffix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: u
     let subStrides = suffix_scanIt(it, acc, body)
     let newState =
       when it[0] is int or it[0] is Int:
-        subStrides[0] * it[0]
+        block:
+          let acc {.inject.} = subStrides[0]
+          let it {.inject.} = it[0]
+          body
       else:
         head_accumulator(subStrides[0], it[0], body)
     when idx == 0:

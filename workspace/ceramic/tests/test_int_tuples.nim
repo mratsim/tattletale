@@ -281,15 +281,26 @@ proc runProductScanTests =
   block:
     doAssert suffix_product(((4, 1), (8, 8))) === ((64, 64), (8, 1))
 
-  # ── prefix_scanIt with nested tuples ──
+  # ── suffix_scanIt with nested tuples ──
   block:
-    let s = prefix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
-    doAssert s[0][0] === 1 and s[0][1] == 4
-    doAssert s[1][0] == 4 and s[1][1] == 32
+    let s = suffix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
+    doAssert s[0][0] === 64 and s[0][1] === 64
+    doAssert s[1][0] === 8 and s[1][1] === 1
 
-  echo "  Nested tuple scan: 5 cases OK"
+  # ── prefix_scanIt with addition (prefix sum) on nested tuples ──
+  block:
+    let s = prefix_scanIt(((1, 2), (3, 4)), 0, acc + it)
+    doAssert s[0][0] === 0 and s[0][1] === 1
+    doAssert s[1][0] === 3 and s[1][1] === 6
+
+  # ── suffix_scanIt with addition (suffix sum) on nested tuples ──
+  block:
+    let s = suffix_scanIt(((1, 2), (3, 4)), 0, acc + it)
+    doAssert s[0][0] === 9 and s[0][1] === 7
+    doAssert s[1][0] === 4 and s[1][1] === 0
+
+  echo "  Nested tuple scan: 8 cases OK"
   echo "  Product scan: 13 cases OK"
-
 # ═══════════════════════════════════════════════════════════════
 #  Mixed static/dynamic scans
 #  (N, C, H, W) — N dynamic, C/H/W are Int[N] (static)

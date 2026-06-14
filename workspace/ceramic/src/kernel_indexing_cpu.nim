@@ -101,6 +101,9 @@ func crd2idx_cpu*(layout: Layout; coord: IntOrIntTuple): int {.inline, noInit.} 
 macro idx2crd_cpu*(layout: Layout; idx: int or Int): untyped =
   ## CPU-suffixed idx2crd: uses same divmod approach.
   ## No wheel-winding alternative for random access.
+  ##
+  ## TODO: nested shape support (e.g. ((2,3), 4)).
+  ##       Currently only handles flat tuple shapes.
   let lTyp = layout.getTypeInst()
   let shT = lTyp[1]
   let sh = newTree(nnkDotExpr, layout, ident"shape")
