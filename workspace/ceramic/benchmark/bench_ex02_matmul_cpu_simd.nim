@@ -5,9 +5,9 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Benchmark: CPU GEMM — hand-tuned vs layout-algebra vs nonalgebra vs Laser vs OpenBLAS
+## Benchmark: CPU GEMM — hand-tuned vs layout-algebra vs Laser vs OpenBLAS
 ##
-## Compares ex02a (hand-tuned), ex02b (layout-algebra), ex02c (nonalgebra),
+## Compares ex02a (hand-tuned), ex02b (layout-algebra),
 ## Laser's reference gemm_strided, and optionally OpenBLAS/cblas
 ## on square float32 matrices at multiple sizes.
 ##
@@ -25,7 +25,6 @@ import std/[monotimes, times, math, random, strutils, strformat, sequtils, os]
 
 import workspace/ceramic/examples/ex02a_matmul_handtuned as v_a
 import workspace/ceramic/examples/ex02b_matmul_layout_algebra as v_b
-import workspace/ceramic/examples/ex02c_matmul_nonalgebra as v_c
 import workspace/ceramic/benchmark/laser/gemm as laser_gemm
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -178,6 +177,18 @@ when isMainModule:
     echo "  OpenBLAS: disabled (pass -d:cblas to enable)"
   echo ""
 
+  # ── CPU frequency warmup ──
+  block:
+    echo "  Warming up CPU..."
+    var foo = 123
+    let tStart = epochTime()
+    for i in 0 ..< 300_000_000:
+      foo += i*i mod 456
+      foo = foo mod 789
+    let tEnd = epochTime()
+    echo &"  Warmup: {tEnd - tStart:>4.3f}s (foo={foo})"
+  echo ""
+
   # ── Results per size ──
   for N in ProblemSizes:
     let
@@ -215,13 +226,6 @@ when isMainModule:
       var C = C0
       proc run() = v_b.gemm_strided(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs)
       results.add bench("ex02b", "layout-algebra", run, ops, ai)
-
-    # ── ex02c — nonalgebra ──
-    block:
-      var C = C0
-      proc run() = v_c.gemm_strided_non_algebra(N, N, N, alpha, A, rs, cs, B, rs, cs, beta, C, rs, cs)
-      results.add bench("ex02c", "nonalgebra", run, ops, ai)
-
     # ── Laser ──
     block:
       var C = C0
