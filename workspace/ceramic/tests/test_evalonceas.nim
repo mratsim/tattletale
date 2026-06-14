@@ -116,6 +116,68 @@ block: # Field access — nested const object
   doAssert m == 99
   echo "✅ field access (nested const object)"
 
+block: # evalOnceAs template → generic proc arg — Nim compiler limitation
+  ## KNOWN LIMITATION: Nim's type inference (both C and C++ backends)
+  ## incorrectly unifies `[A, B: SomeType]` when both arguments are
+  ## inline evalOnceAs-using template calls — both get the first
+  ## argument's type. See test_layout_algebra.nim issue #1202.
+  ##
+  ## Workaround: bind to `let` variables first (forces independent
+  ## type inference) before passing to the generic proc.
+  template makeWrapped(x: static int): auto =
+    evalOnceAs(val, x)
+    Int[val]()
+  proc checkIndep[A, B: Int](a: A; b: B) =
+    doAssert toIntVal(a) == 3
+    doAssert toIntVal(b) == 7
+  # Would fail inline (both args get Int[3]):
+  # checkIndep(makeWrapped(3), makeWrapped(7))
+  
+  # Workaround: bind to let first
+  let aVal = makeWrapped(3)
+  let bVal = makeWrapped(7)
+  checkIndep(aVal, bVal)
+  echo "✅ evalOnceAs generic proc arg (let workaround)"
+
+  # Same with static CT assertion confirming types are independent:
+  template makeWrapped2(x: static int): auto =
+    evalOnceAs(val2, x)
+    Int[val2]()
+  proc checkStatic[A, B: Int](a: A; b: B) =
+    static:
+      static: doAssert typeof(a) isnot typeof(b),
+        "types must be independent, got both " & $typeof(a)
+  let a2 = makeWrapped2(3)
+  let b2 = makeWrapped2(7)
+  checkStatic(a2, b2)
+  checkStatic(a2, b2)
+  echo "✅ static: independent types with let workaround"
+
+  # Same with block: workaround (1 evalOnceAs)
+  template makeWrapped3(x: static int): auto =
+    block:
+      evalOnceAs(val3, x)
+      Int[val3]()
+  checkIndep(makeWrapped3(3), makeWrapped3(7))
+  echo "✅ 1-evalOnceAs: block workaround"
+
+  # And 2-evalOnceAs (like make_layout) with both workarounds
+  template makeWrapped4(x: static int): auto =
+    evalOnceAs(va, x)
+    evalOnceAs(vb, x * 2)
+    Int[va()]()
+  let a3 = makeWrapped4(3); let b3 = makeWrapped4(7)
+  checkIndep(a3, b3)
+  echo "✅ 2-evalOnceAs: let workaround"
+
+  template makeWrapped5(x: static int): auto =
+    block:
+      evalOnceAs(vc, x)
+      evalOnceAs(vd, x * 2)
+      Int[vc()]()
+  checkIndep(makeWrapped5(3), makeWrapped5(7))
+  echo "✅ 2-evalOnceAs: block workaround"
+
 echo "\n✅ All evalOnceAs tests passed!"
 
 

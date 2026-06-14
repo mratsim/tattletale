@@ -211,13 +211,32 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
 # ═══════════════════════════════════════════════════════════════
 #  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs
 # ═══════════════════════════════════════════════════════════════
-
+#
+#  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
+#
+#     Without `block:`, Nim's type inference unifies [A, B: SomeType]
+#     when two inline evalOnceAs-using template calls appear as
+#     arguments to a generic proc — both get the first argument's
+#     concrete type. The `block:` forces independent per-expansion
+#     scope, working around this Nim compiler limitation.
+#
+#     See: test_evalonceas_procarg.nim, layouts.nim:make_layout
+#
+#
 macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`const`|`var`}): untyped =
   ## Create an `alias` for `expression`
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
   ##
   ## Constant expressions are constant-folded
+  ##
+  ##  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
+  ##
+  ##     Without `block:`, Nim's type inference unifies [A, B: SomeType]
+  ##     when two inline evalOnceAs-using template calls appear as
+  ##     arguments to a generic proc — both get the first argument's
+  ##     concrete type. The `block:` forces independent per-expansion
+  ##     scope, working around this Nim compiler limitation.
 
   # Generate the following with `genSym` alias to avoid collisions
   #
@@ -236,6 +255,14 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: Int): untyped =
   ## or passed through if it is an lvalue.
   ##
   ## Constant expressions are constant-folded
+  ##
+  ##  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
+  ##
+  ##     Without `block:`, Nim's type inference unifies [A, B: SomeType]
+  ##     when two inline evalOnceAs-using template calls appear as
+  ##     arguments to a generic proc — both get the first argument's
+  ##     concrete type. The `block:` forces independent per-expansion
+  ##     scope, working around this Nim compiler limitation.
 
   # const evalOnceCT_staticInt = expression
   # template `alias`(): untyped =
@@ -257,18 +284,26 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ##
   ## Constant expressions are constant-folded.
   ##
-  ## Uses a generated `when expression is static:` to choose
-  ## between `const` (compile-time) and `let` (runtime) storage.
-  ## The template name is genSym'd to avoid collisions when multiple
-  ## evalOnceAs calls exist in the same scope.
+  ##  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
   ##
-  ## Implementation note — alternative approaches we tried:
-  ##   when compiles(static(expr)) — crashes the nimvm in a `static:` context
-  ##   when compiles(const = expression) — crashes in another context
-  ##   when is static — seems to work and is what we use here,
-  ##     but we need a macro for gensym of template symbols
-  ##   isCompileTime() macro — fragile, misses many AST node kinds,
-  ##     and getTypeInst() produces hard errors on untyped nodes
+  ##     Without `block:`, Nim's type inference unifies [A, B: SomeType]
+  ##     when two inline evalOnceAs-using template calls appear as
+  ##     arguments to a generic proc — both get the first argument's
+  ##     concrete type. The `block:` forces independent per-expansion
+  ##     scope, working around this Nim compiler limitation.
+  
+  # Uses a generated `when expression is static:` to choose
+  # between `const` (compile-time) and `let` (runtime) storage.
+  # The template name is genSym'd to avoid collisions when multiple
+  # evalOnceAs calls exist in the same scope.
+  #
+  # Implementation note — alternative approaches we tried:
+  #   when compiles(static(expr)) — crashes the nimvm in a `static:` context
+  #   when compiles(const = expression) — crashes in another context
+  #   when is static — seems to work and is what we use here,
+  #     but we need a macro for gensym of template symbols
+  #   isCompileTime() macro — fragile, misses many AST node kinds,
+  #     and getTypeInst() produces hard errors on untyped nodes
   let aName = genSym(nskTemplate, $alias)
   result = newStmtList()
   result.add quote do:
