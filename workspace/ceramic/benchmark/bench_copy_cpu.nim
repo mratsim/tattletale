@@ -2,27 +2,13 @@
 ## Benchmark: all iteration methods for nested-layout copy on CPU
 ## Layout setup matches gemm_cute_v20.nim production.
 
-import std/[monotimes, times, math, random, strutils, stats, algorithm, typetraits]
+import std/[monotimes, times, math, random, strutils, stats, algorithm]
 import ../src/int_tuples, ../src/layouts, ../src/layout_algebra, ../src/tensors
-export int_tuples, layouts, layout_algebra, tensors
-import ../src/macros/static_for
 
 import ./bench_copy_cpu/laser01_global, ./bench_copy_cpu/laser02_pertensor, ./bench_copy_cpu/laser03_nested_forloops, ./bench_copy_cpu/laser05_fusedpertensor, ./bench_copy_cpu/gemm_packing_loop_explicit
 import ../src/kernel_copy_cpu
 import ./bench_copy_cpu/transpose2d
-
-func toArray*(t: tuple): auto =
-  ## Convert a tuple to array[tupleLen, int].
-  const N = tupleLen(typeof(t))
-  var a: array[N, int]
-  staticFor i, 0, N:
-    a[i] = t[i].toIntVal()
-  a
-
-proc xorHash*(data: openArray[float32]): uint32 =
-  result = 0
-  for i in 0 ..< data.len:
-    result = result xor cast[uint32](data[i])
+import ./bench_utils
 
 template copy_flatIndex(dst, src: typed) =
   let N = size(dst)

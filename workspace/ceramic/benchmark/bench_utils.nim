@@ -1,6 +1,7 @@
 ## Shared benchmark utilities for tattletale/ceramic CPU benchmarks.
 
-import std/[math, strformat, strutils]
+import std/[math, strformat, strutils, typetraits]
+import workspace/ceramic/src/macros/static_for
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  XOR hash — exact bit-level fingerprint
@@ -81,6 +82,18 @@ proc printPeakTable*() =
   echo &"    AVX+FMA: 8 floats  — peak = freq × 32"
   echo &"    AVX-512: 16 floats — peak = freq × 64"
   echo ""
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  toArray — convert tuple to array
+# ═══════════════════════════════════════════════════════════════════════════
+
+func toArray*(t: tuple): auto =
+  ## Convert a tuple to array[tupleLen, int].
+  const N = tupleLen(typeof(t))
+  var a: array[N, int]
+  staticFor i, 0, N:
+    a[i] = t[i].toIntVal()
+  a
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Matrix shape helpers (Laser convention)
