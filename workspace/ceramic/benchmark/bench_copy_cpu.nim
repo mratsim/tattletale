@@ -3,13 +3,13 @@
 ## Layout setup matches gemm_cute_v20.nim production.
 
 import std/[monotimes, times, math, random, strutils, stats, algorithm, typetraits]
-import ../../src/int_tuples, ../../src/layouts, ../../src/layout_algebra, ../../src/tensors
+import ../src/int_tuples, ../src/layouts, ../src/layout_algebra, ../src/tensors
 export int_tuples, layouts, layout_algebra, tensors
-import ../../src/macros/static_for
+import ../src/macros/static_for
 
-import ./laser01_global, ./laser02_pertensor, ./laser03_nested_forloops, ./laser05_fusedpertensor, ./gemm_packing_loop_explicit
-import ../../src/kernel_copy_cpu
-import ./transpose2d
+import ./bench_copy_cpu/laser01_global, ./bench_copy_cpu/laser02_pertensor, ./bench_copy_cpu/laser03_nested_forloops, ./bench_copy_cpu/laser05_fusedpertensor, ./bench_copy_cpu/gemm_packing_loop_explicit
+import ../src/kernel_copy_cpu
+import ./bench_copy_cpu/transpose2d
 
 func toArray*(t: tuple): auto =
   ## Convert a tuple to array[tupleLen, int].

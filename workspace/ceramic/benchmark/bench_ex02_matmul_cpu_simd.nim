@@ -25,7 +25,7 @@ import std/[monotimes, times, math, random, strutils, strformat, sequtils, os]
 
 import workspace/ceramic/examples/ex02a_matmul_handtuned as v_a
 import workspace/ceramic/examples/ex02b_matmul_layout_algebra as v_b
-import workspace/ceramic/benchmark/laser/gemm as laser_gemm
+import workspace/ceramic/benchmark/laser_matmul/gemm as laser_gemm
 import workspace/ceramic/benchmark/bench_utils
 
 const ProblemSizes = [128, 512, 1024, 1920]
