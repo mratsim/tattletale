@@ -6,7 +6,7 @@
 import
   ./cpuinfo,
   ./gemm_ukernel_generator, ./gemm_tiling,
-  ./simd
+  workspace/cpuplatforms/x86/simd_x86
 
 
 {.localpassC: "-msse2".}

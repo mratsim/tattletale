@@ -7,7 +7,7 @@ import
 
     ./gemm_ukernel_generator, ./gemm_tiling,
   ./cpuinfo,
-    ./simd
+    workspace/cpuplatforms/x86/simd_x86
   
 
 {.localpassC: "-mavx512f -mfma".}

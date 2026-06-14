@@ -5,7 +5,7 @@
 
 import
   ./cpuinfo, ./compiler_optim_hints,
-  ./simd,
+  workspace/cpuplatforms/x86/simd_x86,
   ./gemm_tiling, ./gemm_utils,
   ./gemm_ukernel_generic,
   macros

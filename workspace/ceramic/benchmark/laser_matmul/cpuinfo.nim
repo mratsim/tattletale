@@ -1,7 +1,7 @@
 ## CPU feature detection using Constantine's cpudetect_x86.
 ## Calls detectCpuFeaturesX86() once at module init, then wraps Constantine's has*() procs.
 
-import ./cpudetect_x86
+import workspace/cpuplatforms/x86/cpudetect_x86
 
 detectCpuFeaturesX86()
 
@@ -20,67 +20,67 @@ proc x86_cpu_name*(): string = cpuName_x86()
 # Direct wrappers to Constantine's has*() procs.
 # Called inside {.cast(noSideEffect).} blocks where used.
 
-func cpuinfo_has_x86_avx512f*(): bool =
+func cpuinfo_has_x86_avx512f*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAvx512f()
 
-func cpuinfo_has_x86_avx512bw*(): bool =
+func cpuinfo_has_x86_avx512bw*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAvx512bw()
 
-func cpuinfo_has_x86_avx512dq*(): bool =
+func cpuinfo_has_x86_avx512dq*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAvx512dq()
 
-func cpuinfo_has_x86_avx512cd*(): bool =
+func cpuinfo_has_x86_avx512cd*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAvx512cd()
 
-func cpuinfo_has_x86_avx512vbmi*(): bool =
+func cpuinfo_has_x86_avx512vbmi*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAvx512vbmi()
 
-func cpuinfo_has_x86_avx512vbmi2*(): bool =
+func cpuinfo_has_x86_avx512vbmi2*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAvx512vbmi2()
 
-func cpuinfo_has_x86_avx512vl*(): bool =
+func cpuinfo_has_x86_avx512vl*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAvx512vl()
 
-func cpuinfo_has_x86_fma3*(): bool =
+func cpuinfo_has_x86_fma3*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasFma3()
 
-func cpuinfo_has_x86_avx*(): bool =
+func cpuinfo_has_x86_avx*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAvx()
 
-func cpuinfo_has_x86_avx2*(): bool =
+func cpuinfo_has_x86_avx2*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAvx2()
 
-func cpuinfo_has_x86_sse*(): bool =
+func cpuinfo_has_x86_sse*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasSse()
 
-func cpuinfo_has_x86_sse2*(): bool =
+func cpuinfo_has_x86_sse2*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasSse2()
 
-func cpuinfo_has_x86_sse41*(): bool =
+func cpuinfo_has_x86_sse41*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasSse41()
 
-func cpuinfo_has_x86_sse42*(): bool =
+func cpuinfo_has_x86_sse42*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasSse42()
 
-func cpuinfo_has_x86_aes_ni*(): bool =
+func cpuinfo_has_x86_aes_ni*(): bool {.inline.} =
   {.cast(noSideEffect).}:
     hasAes()
 
-proc simd_supported_hw*(cpu: CPUFeatureX86): bool =
+proc simd_supported_hw*(cpu: CPUFeatureX86): bool {.inline.} =
   case cpu:
     of x86_Generic: true
     of x86_SSE:     hasSse()

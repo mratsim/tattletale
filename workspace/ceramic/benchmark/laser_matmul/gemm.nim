@@ -4,7 +4,7 @@
 # This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  ./cpudetect_x86,
+  workspace/cpuplatforms/x86/cpudetect_x86,
   ./cpuinfo, ./compiler_optim_hints, ./openmp,
   ./gemm_tiling, ./gemm_utils, ./gemm_packing,
   ./gemm_ukernel_dispatch

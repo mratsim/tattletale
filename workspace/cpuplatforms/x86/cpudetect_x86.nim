@@ -105,6 +105,7 @@ var
   hasAvx512bwImpl: bool        # AVX512 Byte and Word
   hasAvx512dqImpl: bool        # AVX512 DoubleWord and QuadWord
   hasAvx512vlImpl: bool        # AVX512 Vector Length Extension (AVX512 instructions ported to SSE and AVX)
+  hasAvx512cdImpl: bool        # AVX512 Conflict Detection
   # 2019 - Ice-Lake & Core iX-10XXX Comet Lake
   hasShaImpl: bool             #                           AMD: Zen 1st gen - 2017
   hasGfniImpl: bool            # Galois Field New Instruction (SSE, AVX, AVX512)
@@ -161,6 +162,7 @@ proc detectCpuFeaturesX86() {.loadTime.} =
   hasRdseedImpl     = leaf7.ebx.test(18)
   hasAdxImpl        = leaf7.ebx.test(19)
   hasAvx512ifmaImpl = leaf7.ebx.test(21)
+  hasAvx512cdImpl   = leaf7.ebx.test(28)  # AVX512-CD (Conflict Detection)
   hasShaImpl        = leaf7.ebx.test(29)
   hasAvx512bwImpl   = leaf7.ebx.test(30)
   hasAvx512vlImpl   = leaf7.ebx.test(31)
@@ -268,7 +270,11 @@ proc hasAvx512dq*(): bool {.inline.} =
   return hasAvx512dqImpl
 proc hasAvx512vl*(): bool {.inline.} =
   ## AVX512  Vector Length Extension (AVX512 instructions ported to SSE and AVX)
-  return hasAvx512dqImpl
+  return hasAvx512vlImpl
+
+proc hasAvx512cd*(): bool {.inline.} =
+  ## AVX512  Conflict Detection (AVX512-CD)
+  return hasAvx512cdImpl
 
 # 2019 - Ice-Lake & Core iX-10XXX Comet Lake
 # ------------------------------------------
