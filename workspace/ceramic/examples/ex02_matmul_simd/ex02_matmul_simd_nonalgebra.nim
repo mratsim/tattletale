@@ -255,10 +255,10 @@ proc gemm_strided_non_algebra*[T: SomeNumber](
   let packBLay = make_layout((num_jr, kc, nr), LayoutRight)
   let packSizeA = int(cosize(packALay))
   let packSizeB = int(cosize(packBLay))
-  var packMemA = newSeq[T](packSizeA + 8)
-  var packMemB = newSeq[T](packSizeB + 8)
-  let alignA = (cast[int](addr packMemA[0]) + 31) and not 31
-  let alignB = (cast[int](addr packMemB[0]) + 31) and not 31
+  var packMemA = newSeq[T](packSizeA + 64)
+  var packMemB = newSeq[T](packSizeB + 64)
+  let alignA = (cast[int](addr packMemA[0]) + 63) and not 63
+  let alignB = (cast[int](addr packMemB[0]) + 63) and not 63
   var packA = make_view(cast[ptr UncheckedArray[T]](alignA), packALay)
   var packB = make_view(cast[ptr UncheckedArray[T]](alignB), packBLay)
 

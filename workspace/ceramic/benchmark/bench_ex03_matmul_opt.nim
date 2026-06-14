@@ -1,8 +1,11 @@
-{.experimental: "callOperator".}
-## Benchmark: SIMD matmul — tattletale/ceramic GEMM vs naive triple-loop
-##
+## Tattletale
 ## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed under MIT and Apache 2.0 (see LICENSE).
+## Licensed and distributed under either of
+##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+## at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Benchmark: SIMD matmul
 ##
 ## Measures GFlops on 128×128, 512×512, and 1024×1024 square matrices
 ## with column-major (Fortran) layout.

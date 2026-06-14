@@ -43,6 +43,16 @@ proc gflops(elapsed: float64; ops: float64): float64 =
 when isMainModule:
   randomize(42)
 
+  # ── CPU frequency warmup: ramp turbo before measurements ──
+  block:
+    var wA, wB, wC: seq[float32]
+    let wN = 512
+    newSeq(wA, wN * wN); newSeq(wB, wN * wN); newSeq(wC, wN * wN)
+    for i in 0 ..< wA.len:
+      wA[i] = rand(1.0'f32); wB[i] = rand(1.0'f32); wC[i] = rand(1.0'f32)
+    gemm_strided(wN, wN, wN, 1.0'f32, wA, 1, wN, wB, 1, wN, 1.0'f32, wC, 1, wN)
+    gemm_strided(wN, wN, wN, 1.0'f32, wA, 1, wN, wB, 1, wN, 1.0'f32, wC, 1, wN, akReLU)
+
   echo "SIMD: ", simdArchString(), "\n"
   for N in [128, 512, 1024]:
     let

@@ -270,6 +270,7 @@ when defined(i386) or defined(amd64):
   func mm256_set1_epi16*(a: int16 or uint16): m256i {.importc: "_mm256_set1_epi16", x86.}
   func mm256_set1_epi32*(a: int32 or uint32): m256i {.importc: "_mm256_set1_epi32", x86.}
   func mm256_set1_epi64x*(a: int64 or uint64): m256i {.importc: "_mm256_set1_epi64x", x86.}
+  func mm256_set_epi32*(e7, e6, e5, e4, e3, e2, e1, e0: int32): m256i {.importc: "_mm256_set_epi32", x86.}
   func mm256_load_si256*(mem_addr: ptr m256i): m256i {.importc: "_mm256_load_si256", x86.}
   func mm256_loadu_si256*(mem_addr: ptr m256i): m256i {.importc: "_mm256_loadu_si256", x86.}
   func mm256_storeu_si256*(mem_addr: ptr m256i, a: m256i) {.importc: "_mm256_storeu_si256", x86.}
