@@ -221,13 +221,14 @@ macro ukernel_simd_impl*(
         `a0` = `simd_broadcast_value`(`A`[`k`*`MR`])
 
     for i in 0 ..< MR:
-      # broadcast next iteration
-      let next_register_idx = (i+1) mod NbVecs
-      let a_next = rA[next_register_idx]
-      bcast_fma.add quote do:
-        # At the edge: `i`+1 = MR so equivalent to loading A[(k+1)*MR]
-        `a_next` = `simd_broadcast_value`(`A`[`k`*`MR`+(`i`+1)])
-      
+      # broadcast next iteration (guarded: i=MR-1 would read one-past)
+      if i+1 < MR:
+        let next_register_idx = (i+1) mod NbVecs
+        let a_next = rA[next_register_idx]
+        bcast_fma.add quote do:
+          # At the edge: `i`+1 = MR so equivalent to loading A[(k+1)*MR]
+          `a_next` = `simd_broadcast_value`(`A`[`k`*`MR`+(`i`+1)])
+
       # load current
       let a = rA[i mod NbVecs]
 
