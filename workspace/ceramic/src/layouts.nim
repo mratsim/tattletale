@@ -18,6 +18,10 @@ import std/macros
 import std/typetraits
 import ./macros/static_for
 import ./int_tuples
+import ./kernel_indexing_gpu
+import ./layout_coords
+export kernel_indexing_gpu
+export layout_coords
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St] — typed shape + stride pair
@@ -45,21 +49,15 @@ func `$`*(layout: Layout): string =
   ##   ($make_layout((4,8),(1,4)))  →  "((4,8)):((1,4))"
   $layout.shape & ":" & $layout.stride
 
-func rank*(layout: Layout): static int =
+template rank*(layout: Layout): static int =
   ## Number of modes in layout (compile-time constant).
-  when layout.shape is int or layout.shape is Int:
-    1
-  else:
-    layout.shape.tupleLen()
+  rank(layout.shape)
 
-func rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
+template rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
   ## Number of modes in a layout type (compile-time constant).
-  when Sh is int or Sh is Int:
-    1
-  else:
-    tupleLen(Sh)
+  rank(Sh)
 
-func mode*(layout: Layout; idx: static int): auto =
+template mode*(layout: Layout; idx: static int): auto =
   ## Extract mode `idx` as a standalone rank-1 Layout.
   ## For scalar layouts (rank-1), only idx=0 is valid.
   when layout.shape is tuple:
@@ -205,100 +203,88 @@ type StrideOrder* = enum
 template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
   ## Create a compact Layout from a shape, computing strides automatically.
   ## Encode compile-time integers into a Int[V] type for constant folding
-  ## NOTE: inline makeIntTupleRec to avoid C++ temp-name collision
-  let convShape = makeIntTupleRec(shapeArg)
-  let strideVal = when order == LayoutLeft:
-    prefix_product(convShape)
-  else:
-    suffix_product(convShape)
-  Layout[typeof(convShape), typeof(strideVal)](
-    shape: convShape,
-    stride: strideVal
-  )
+  block:
+    evalOnceAs(convShape, makeIntTuple(shapeArg))
+    when order == LayoutLeft:
+      evalOnceAs(strideVal, prefix_product(convShape))
+      Layout[typeof(convShape), typeof(strideVal)](
+        shape: convShape,
+        stride: strideVal
+      )
+    else:
+      evalOnceAs(strideVal, suffix_product(convShape))
+      Layout[typeof(convShape), typeof(strideVal)](
+        shape: convShape,
+        stride: strideVal
+      )
 
 template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): auto =
   ## Make a Layout from explicit shape and stride.
   ## Encode compile-time integers into a Int[V] type for constant folding
-  ## NOTE: inline makeIntTupleRec to avoid C++ temp-name collision
-  Layout[typeof(makeIntTupleRec(shapeArg)), typeof(makeIntTupleRec(strideArg))](
-    shape: makeIntTupleRec(shapeArg),
-    stride: makeIntTupleRec(strideArg)
+  ## NOTE: inline makeIntTuple to avoid C++ temp-name collision
+  Layout[typeof(makeIntTuple(shapeArg)), typeof(makeIntTuple(strideArg))](
+    shape: makeIntTuple(shapeArg),
+    stride: makeIntTuple(strideArg)
   )
 
 # ═══════════════════════════════════════════════════════════════
-#  crd2idx / layout[] — coordinate to linear index / layout indexing
+#  crd2idx / layout() / idx2crd — via kernel_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
 #
-#  Two forms:
-#    crd2idx(coord, shape)         — flat col-major index (crd2flat)
-#    crd2idx(coord, shape, stride) — memory offset (inner product)
-#
-#  When coord is an int and shape/stride are tuples, the int is
-#  decomposed across modes (col-major ordering).
+#  The raw 3-arg crd2idx overloads live in kernel_indexing_gpu.nim.
+#  These Layout-consuming wrappers delegate to them.
 
-# Scalar overloads
-func crd2idx(coord, shape: int): int = coord
-func crd2idx[V: static int](coord: Int[V]; shape: int): int = V
-func crd2idx(coord, shape, stride: int): int = coord * stride
-func crd2idx[V: static int](coord: Int[V]; shape, stride: int): int = V * stride
+template crd2idx*(layout: Layout; coord: IntOrIntTuple): int =
+  ## Logical-to-memory offset for a coordinate on a Layout.
+  ##
+  ## `coord` can be:
+  ##   • an `int`   — decomposed column-major across all modes
+  ##   • a `tuple`  — inner product `coord·stride` per mode
+  ##   • a static `Int[V]` — same, compile-time constant
+  ##
+  ## External code must use this (or `layout(coord)`) rather than
+  ## calling the raw `crd2idx(coord, shape, stride)` directly,
+  ## which is module-private to layouts.nim.
+  crd2idx(coord, layout.shape, layout.stride)
 
-# 3-arg: macro handles tuple coord + tuple stride → inner product
-#         or int coord + tuple shape + tuple stride → decompose
-# 3-arg: tuple coord → inner product (a·b)
-func crd2idx*[C, Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
-  ## Inner product: sum coord[i] * stride[i]
-  foldZipWith(coord, stride, 0): acc + it_a * it_b
+template `()`*[Sh, St](layout: Layout[Sh, St]; idx: IntOrIntTuple): int =
+  ## Parens-syntax flat indexing: `layout(coord)` ≡ `crd2idx(layout, coord)`.
+  crd2idx(layout, idx)
 
-# 3-arg: int coord → decompose across modes
-func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
-  ## Decompose coord across shape modes with strides.
-  ## Sequential: result += (cur mod s) * d; cur = cur div s
-  var sum = 0
-  var cur = int(coord)
-  staticFor i, 0, tupleLen(Sh):
-    let s = int(shape[i])
-    let d = int(stride[i])
-    when i < Sh.tupleLen - 1:
-      sum += (cur mod s) * d
-    else:
-      sum += cur * d
-    cur = cur div s
-  sum
+macro `[]`*(layout: Layout; args: varargs[IntOrIntTuple]): untyped =
+  ## Multi-index via varargs bracket: `layout[i, j]` or `layout[(ri, rj), k]`.
+  var coord = nnkPar.newTree()
+  args.copyChildrenTo(coord)
+  result = newCall(bindSym"()", layout, coord)
 
-# Layout indexing: `layout[i]` and `layout[coord_tuple]`
-macro `[]`*[Sh, St](layout: Layout[Sh, St]; idx: typed): int =
-  let sh = newCall(bindSym"flatten", newTree(nnkDotExpr, layout, ident"shape"))
-  let st = newCall(bindSym"flatten", newTree(nnkDotExpr, layout, ident"stride"))
-  result = newCall(bindSym"crd2idx", idx, sh, st)
-
-# Convenience: crd2idx on a Layout
-func crd2idx*(coord: IntOrIntTuple; layout: Layout): int =
-  layout[coord]
-
-# idx2crd on a Layout — index → coordinate tuple
-#  idx2crd — index to coordinate (stride-based)
-# ═══════════════════════════════════════════════════════════════
-##
-## Convert a linear index into a hierarchical coordinate
-## compatible with the given shape and stride.
-## Each mode: (idx / stride[i]) % shape[i].
-##
-## MoYe: index_to_coord(idx, shape, stride)
-## CuTe: idx2crd(idx, shape)
-
-macro idx2crd*[Sh, St: IntOrIntTuple](idx: int or Int; shape: Sh; stride: St): untyped =
-  ## Convert linear index to coordinate with explicit strides.
-  let sh = shape.getTypeInst()
-  if sh.kind != nnkTupleConstr:
-    result = newCall(bindSym"div", idx, stride)
+macro idx2crd*(layout: Layout; idx: int or Int): untyped =
+  ## Convert linear index to coordinate using a Layout.
+  ##
+  ##   Cases for `(idx, shape, stride)`:
+  ##     shape == 1, stride == 0   →   0  (broadcast — skip division)
+  ##     shape == 1, stride != 0   →   0  (size-1 — result always 0)
+  ##     shape != 1, stride == 0   ─── invalid layout (unreachable)
+  ##     shape != 1, stride != 0   →   (idx div stride) mod shape
+  ##
+  ## The guard on `shape == 1` matches CuTe's `is_constant<1, Shape>`
+  ## check and handles both broadcast modes and trivial dimensions,
+  ## avoiding potential division-by-zero on stride-0.
+  let lTyp = layout.getTypeInst()
+  let shT = lTyp[1]
+  let sh = newTree(nnkDotExpr, layout, ident"shape")
+  let st = newTree(nnkDotExpr, layout, ident"stride")
+  if shT.kind != nnkTupleConstr:
+    # Scalar shape: `if shape == 1: 0 else: idx div stride`
+    result = quote do:
+      (if `sh` == 1: 0 else: `idx` div `st`)
   else:
+    # Tuple shape: each mode gets its own guard
     var parts: seq[NimNode] = @[]
-    for i in 0 ..< sh.len:
-      let s = newCall(bindSym"[]", stride, newLit(i))
-      let shI = newCall(bindSym"[]", shape, newLit(i))
-      # Each mode: (idx / stride[i]) % shape[i] — independent per-mode
-      parts.add newCall(bindSym"mod",
-        newCall(bindSym"div", idx, s), shI)
+    for i in 0 ..< shT.len:
+      let s = newCall(bindSym"[]", st, newLit(i))
+      let shI = newCall(bindSym"[]", sh, newLit(i))
+      parts.add quote do:
+        (if `shI` == 1: 0 else: (`idx` div `s`) mod `shI`)
     result = nnkPar.newTree(parts)
 
 # ═══════════════════════════════════════════════════════════════
@@ -325,7 +311,7 @@ macro filterZerosFlat(sh, st: typed): untyped =
     else:
       result.add newTree(nnkBracketExpr, sh, newLit(i))
 
-func filter_zeros*(layout: Layout): auto =
+template filter_zeros*(layout: Layout): auto =
   ## Replace stride-0 shapes with 1; returns flat (both shape and stride flattened).
   let st = flatten(layout.stride)
   let sh = filterZerosFlat(flatten(layout.shape), st)
@@ -352,12 +338,12 @@ func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
   elif b is int or b is Int:
     false
   else:
-    when tupleLen(a) != tupleLen(b):
+    when rank(a) != rank(b):
       false
     else:
       block:
         var ok = true
-        staticFor i, 0, tupleLen(a):
+        staticFor i, 0, rank(a):
           if not weakly_congruent(a[i], b[i]):
             ok = false
         ok
@@ -369,7 +355,7 @@ func can_group_a_into_b_impl[A, B](a: A; aStartIdx: int; b: B): int =
   var acc = 1
   var aIdx = aStartIdx
   block accLoop:
-    staticFor i, 0, tupleLen(a):
+    staticFor i, 0, rank(a):
       if i >= aStartIdx:
         if acc < bVal:
           acc *= fold(a[i], 1, acc * it)
@@ -386,11 +372,11 @@ func can_group_a_into_b*[A, B: IntOrIntTuple](a: A; b: B): bool =
     can_group_a_into_b_impl(a, 0, b) != -1
   else:
     var aIdx = 0
-    staticFor j, 0, tupleLen(b):
+    staticFor j, 0, rank(b):
       aIdx = can_group_a_into_b_impl(a, aIdx, b[j])
       if aIdx == -1:
         return false
-    aIdx == tupleLen(a)
+    aIdx == rank(a)
 
 func compatible*[A, B: IntOrIntTuple](a: A; b: B): bool =
   ## True if `a` is structurally compatible with `b`: same total size, and
@@ -404,10 +390,10 @@ func compatible*[A, B: IntOrIntTuple](a: A; b: B): bool =
     true
   elif b is int or b is Int:
     false
-  elif tupleLen(a) == tupleLen(b):
+  elif rank(a) == rank(b):
     block:
       var ok = true
-      staticFor i, 0, tupleLen(a):
+      staticFor i, 0, rank(a):
         if not compatible(a[i], b[i]):
           ok = false
       ok
@@ -523,76 +509,6 @@ macro padLeft*(layout: Layout; rank: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  upcast / downcast — reinterpret layout at coarser/finer granularity
-# ═══════════════════════════════════════════════════════════════
-#
-#  CuTe: upcast<N>(layout), downcast<N>(layout)
-#
-#  Building block of recast_layout<OldType, NewType>.  upcast by N when
-#  sizeof ratio = N (e.g. int8→int32 is upcast<4>); downcast when ratio < 1.
-
-template upcast*(layout: Layout; N: static int): auto =
-  ## Reinterpret layout from finer to coarser granularity.
-  ##
-  ## Every N consecutive elements become one coarse element.
-  ## shape shrinks, stride adjusts (not simply shape/N, stride*N).
-  ##
-  ## Examples:
-  ##   upcast<4>(make_layout(32, 1))  # → (8, 1)  32 int8 → 8 int32
-  ##   upcast<4>(make_layout(8, 2))   # → (4, 1)  strided int8 → int32
-
-  # ── Why not just shape/N and stride*N? ──
-  # N consecutive elements at stride |d| span N·|d| memory units.
-  # ceil_div(N, |d|) counts how many fit in one coarse slot:
-  #   new_shape = ceil_div(sh, ceil_div(N, |d|))
-  #   new_stride = ceil_div(|d|, N)
-  # Broadcast (stride 0) is unchanged.  Dynamic strides keep shape
-  # unchanged (no compile-time info), stride = ceil_div(st, N).
-  mapLeavesWith(layout):
-    when it_st is Int:
-      when it_st.V == 0:
-        (it_sh, it_st)
-      else:
-        (
-          ceil_div(
-            it_sh,
-            ceil_div(N, abs(it_st))
-          ),
-          sign(it_st) * ceil_div(abs(it_st), N)
-        )
-    else:
-      (it_sh, ceil_div(it_st, N))
-
-template downcast*(layout: Layout; N: static int): auto =
-  ## Reinterpret layout from coarser to finer granularity.
-  ##
-  ## Each coarse element splits into N finer elements.
-  ## shape grows, stride adjusts (not simply shape*N, stride/N).
-  ##
-  ## Examples:
-  ##   downcast<4>(make_layout(8, 1))  # → (32, 1)  8 int32 → 32 int8
-  ##   downcast<4>(make_layout(8, 2))  # → (8, 8)   strided int32 → int8
-
-  # ── Why not just shape*N and stride/N? ──
-  # If |stride| == 1 (contiguous): each coarse slot splits into N,
-  #   shape*N, stride unchanged.
-  # If |stride| > 1: stride was in coarse-element units; after splitting
-  #   each coarse stride d becomes d·N in fine units, stride*N, shape unchanged.
-  # Dynamic strides use a runtime check: if |st|==1 → shape*N else stride*N.
-  # Broadcast (stride 0) is unchanged.
-  mapLeavesWith(layout):
-    when it_st is Int:
-      when abs(it_st.V) == 1:
-        (it_sh * N, it_st)
-      else:
-        (it_sh, it_st * N)
-    else:
-      block:
-        let new_sh = (if abs(it_st) == 1: it_sh * N else: it_sh)
-        let new_st = (if abs(it_st) == 1: it_st else: it_st * N)
-        (new_sh, new_st)
-
-# ═══════════════════════════════════════════════════════════════
 #  mapLeavesWith — apply body to each leaf (shape, stride) pair
 # ═══════════════════════════════════════════════════════════════
 
@@ -663,6 +579,76 @@ macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
   stmts.add nnkCall.newTree(bindSym"make_layout", outSh, outSt)
   result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
 
+
+# ═══════════════════════════════════════════════════════════════
+#  upcast / downcast — reinterpret layout at coarser/finer granularity
+# ═══════════════════════════════════════════════════════════════
+#
+#  CuTe: upcast<N>(layout), downcast<N>(layout)
+#
+#  Building block of recast_layout<OldType, NewType>.  upcast by N when
+#  sizeof ratio = N (e.g. int8→int32 is upcast<4>); downcast when ratio < 1.
+
+template upcast*(layout: Layout; N: static int): auto =
+  ## Reinterpret layout from finer to coarser granularity.
+  ##
+  ## Every N consecutive elements become one coarse element.
+  ## shape shrinks, stride adjusts (not simply shape/N, stride*N).
+  ##
+  ## Examples:
+  ##   upcast<4>(make_layout(32, 1))  # → (8, 1)  32 int8 → 8 int32
+  ##   upcast<4>(make_layout(8, 2))   # → (4, 1)  strided int8 → int32
+
+  # ── Why not just shape/N and stride*N? ──
+  # N consecutive elements at stride |d| span N·|d| memory units.
+  # ceil_div(N, |d|) counts how many fit in one coarse slot:
+  #   new_shape = ceil_div(sh, ceil_div(N, |d|))
+  #   new_stride = ceil_div(|d|, N)
+  # Broadcast (stride 0) is unchanged.  Dynamic strides keep shape
+  # unchanged (no compile-time info), stride = ceil_div(st, N).
+  mapLeavesWith(layout):
+    when it_st is Int:
+      when it_st.V == 0:
+        (it_sh, it_st)
+      else:
+        (
+          ceil_div(
+            it_sh,
+            ceil_div(N, abs(it_st))
+          ),
+          sign(it_st) * ceil_div(abs(it_st), N)
+        )
+    else:
+      (it_sh, ceil_div(it_st, N))
+
+template downcast*(layout: Layout; N: static int): auto =
+  ## Reinterpret layout from coarser to finer granularity.
+  ##
+  ## Each coarse element splits into N finer elements.
+  ## shape grows, stride adjusts (not simply shape*N, stride/N).
+  ##
+  ## Examples:
+  ##   downcast<4>(make_layout(8, 1))  # → (32, 1)  8 int32 → 32 int8
+  ##   downcast<4>(make_layout(8, 2))  # → (8, 8)   strided int32 → int8
+
+  # ── Why not just shape*N and stride/N? ──
+  # If |stride| == 1 (contiguous): each coarse slot splits into N,
+  #   shape*N, stride unchanged.
+  # If |stride| > 1: stride was in coarse-element units; after splitting
+  #   each coarse stride d becomes d·N in fine units, stride*N, shape unchanged.
+  # Dynamic strides use a runtime check: if |st|==1 → shape*N else stride*N.
+  # Broadcast (stride 0) is unchanged.
+  mapLeavesWith(layout):
+    when it_st is Int:
+      when abs(it_st.V) == 1:
+        (it_sh * N, it_st)
+      else:
+        (it_sh, it_st * N)
+    else:
+      block:
+        let new_sh = (if abs(it_st) == 1: it_sh * N else: it_sh)
+        let new_st = (if abs(it_st) == 1: it_st else: it_st * N)
+        (new_sh, new_st)
 
 # ═══════════════════════════════════════════════════════════════
 #  zipModes — interleave corresponding modes of two layouts
@@ -781,6 +767,25 @@ macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
+#  replaceMode — replace a mode with a sub-Layout
+# ═══════════════════════════════════════════════════════════════
+
+macro replaceMode*(layout: Layout; x: typed; N: static int): untyped =
+  ## Replace mode N of layout with Layout x.
+  ## CuTe: replace<N>(layout, x) — layout.hpp:1001
+  let shTyp = getTypeInst(layout)[1]
+  let R = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
+  var ct = LayoutCT()
+  for i in 0 ..< R:
+    if i == N:
+      ct.append(newTree(nnkDotExpr, x, ident"shape"),
+                 newTree(nnkDotExpr, x, ident"stride"))
+    else:
+      ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(i)),
+                 nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(i)))
+  result = ct.emit()
+
+# ═══════════════════════════════════════════════════════════════
 #  map — apply fn to each mode independently
 #  zipWith — pairwise fn over modes of two Layouts
 # ═══════════════════════════════════════════════════════════════
@@ -880,30 +885,62 @@ macro zipModesWith*[A: Layout, B: Layout](a: A; b: B; body: untyped): untyped =
   result.add ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  slice/dice/slice_and_offset on Layout [CUTE layout.hpp]
-# ═══════════════════════════════════════════════════════════════
+## slice/dice on Layout: apply `int_tuples.slice`/`int_tuples.dice` to
+## both shape and stride in parallel, producing a sub-Layout.
 ##
-## These wrap int_tuples.slice/dice for Layout objects.
-## Templates (not macros) so they participate in normal overload resolution.
-## The `layout: Layout` param ensures precedence over the tuple macros.
+## Reference: CuTe C++ `layout.hpp` — `slice` / `dice`
+##
+## The resulting Layout has the same nesting structure as the filtered
+## shape/stride: modes paired with `_` in the coord are kept for `slice`,
+## modes paired with integers are kept for `dice`.
+##
+## runnableExamples:
+##   let L = make_layout((3, 4), (1, 3))
+##   let s = slice((_, 0), L)           # keep rows, drop cols
+##   doAssert $s == "(3):(1)"
 
 template slice*(coord: CoordType; layout: Layout): untyped =
-  ## Slice a layout by coordinate: keep modes paired with joker/`_`.
+  ## Walk coord and the layout's shape+stride in parallel.
+  ## Modes paired with `_` stay in the result; modes paired with an int are dropped.
+  ## Returns a sub-Layout containing only the kept modes.
+  ##
+  ## runnableExamples:
+  ##   let L = make_layout((3, 4), (1, 3))
+  ##   slice((_, 0), L)    → keep rows, drop cols → (3):(1)
+  ##   slice((1, _), L)    → drop rows, keep cols  → (4):(3)
   make_layout(slice(coord, layout.shape), slice(coord, layout.stride))
 
 template dice*(coord: CoordType; layout: Layout): untyped =
-  ## Dice a layout by coordinate: keep modes paired with ints.
+  ## Walk coord and the layout's shape+stride in parallel.
+  ## Modes paired with an int stay in the result; modes paired with `_` are dropped.
+  ## Returns a sub-Layout containing only the kept modes.
+  ##
+  ## runnableExamples:
+  ##   let L = make_layout((3, 4), (1, 3))
+  ##   dice((_, 0), L)    → drop rows, keep cols → (4):(3)
+  ##   dice((1, _), L)    → keep rows, drop cols  → (3):(1)
   make_layout(dice(coord, layout.shape), dice(coord, layout.stride))
 
 template slice_and_offset*(coord: CoordType; layout: Layout): untyped =
-  ## Slice a layout and compute the offset from fixed dims.
-  ## Returns (sublayout, offset).
+  ## Like `slice`, but also compute the memory offset from the int-paired
+  ## dimensions.  Returns `(sub_layout, offset)`.
+  ##
+  ## The offset is `sum(int_coord[i] * stride[i])` for each dropped mode —
+  ## i.e. how far the data pointer must advance past the fixed coordinates.
+  ##
+  ## runnableExamples:
+  ##   let L = make_layout((3, 4), (1, 3))
+  ##   # Column 0 → offset 0, column 1 → offset 3
+  ##   let (sub0, off0) = slice_and_offset((_, 0), L)
+  ##   doAssert $sub0 == "(3,):(1,)" and off0 == 0
+  ##   let (sub1, off1) = slice_and_offset((_, 1), L)
+  ##   doAssert $sub1 == "(3,):(1,)" and off1 == 3
+  ##   # Row 0 → offset 0, row 1 → offset 1
+  ##   let (sub2, off2) = slice_and_offset((0, _), L)
+  ##   doAssert $sub2 == "(4,):(3,)" and off2 == 0
+  ##   let (sub3, off3) = slice_and_offset((1, _), L)
+  ##   doAssert $sub3 == "(4,):(3,)" and off3 == 1
+
   let sub = slice(coord, layout)
   let off = crd2idx(coord, layout.shape, layout.stride)
   (sub, off)
-
-# idx2crd on a Layout — index → coordinate tuple
-macro idx2crd*(idx: int or Int; layout: Layout): untyped =
-  result = newCall(bindSym"idx2crd", idx,
-    newTree(nnkDotExpr, layout, ident"shape"),
-    newTree(nnkDotExpr, layout, ident"stride"))

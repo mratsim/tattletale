@@ -33,7 +33,7 @@ macro staticFor*(idx: untyped{nkIdent}, start, stopEx: static int, body: untyped
   ##
   ## Examples:
   ##   var r: typeof(shape)
-  ##   staticFor i, 0, shape.tupleLen:
+  ##   staticFor i, 0, rank(shape):
   ##     r[i] = 1
   result = newStmtList()
   for i in start ..< stopEx:
@@ -49,7 +49,7 @@ macro staticForCountdown*(idx: untyped{nkIdent}, start, stopIncl: static int, bo
   ##
   ## Examples:
   ##   var r: typeof(shape)
-  ##   staticForCountdown i, tupleLen(shape)-1, 0:
+  ##   staticForCountdown i, rank(shape)-1, 0:
   ##     r[i] = 1
   result = newStmtList()
   for i in countdown(start, stopIncl):
