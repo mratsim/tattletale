@@ -152,7 +152,7 @@ proc main() =
   packA_buf.fill(0)
 
   bench("autoresearch", nb_samples, aElems):
-    copy_autoresearch_A(packA_buf, packA_buf, panelA, 1, mc, mpT, kc, mr, mc)
+    copy_autoresearch_A(packA_buf, panelA, 1, mc, mpT, kc, mr, mc)
   doAssert xorHash(packA_buf) == aHash_ref, "autoresearch A"
   packA_buf.fill(0)
 

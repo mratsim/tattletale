@@ -185,7 +185,7 @@ proc gemm_prepackA_impl[T; ukernel: static MicroKernel](
     let kc = min(K - pc, KC)
 
     for icb in 0 ..< ic_num_iter:
-      let packA = dst + pc*pc_num_iter + icb*upanelA_size
+      let packA = dst + (pcb * ic_num_iter + icb) * upanelA_size
       prefetch(packA, Write, LowTemporalLocality)
       let ic = icb * MC
       let mc = min(M-ic, MC)

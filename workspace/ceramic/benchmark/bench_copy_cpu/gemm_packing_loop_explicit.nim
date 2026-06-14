@@ -28,7 +28,7 @@ proc copy_autoresearch_B*(
           pB_aligned[dstOff + jj] = panel[srcOff + jj * pB_cs]
 
 proc copy_autoresearch_A*(
-    packBuf: var openArray[float32]; pA_aligned: var openArray[float32];
+    pA_aligned: var openArray[float32];
     panel: openArray[float32]; pA_rs, pA_cs: int;
     num_ir, kc, mr, current_mc: int) =
   ## A-packing: from column-major panel to LayoutRight pack buffer,

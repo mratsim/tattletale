@@ -98,13 +98,13 @@ proc autoTileParams(atom: static MmaAtom; T: typedesc; M, K: int): tuple[mc, kc:
   const kc_atom = atom.kc
 
   # kc: L1 cache — B micro-panel is kc × nr elements
-  let kc_max = min(512, K)   # Laser heuristic: 2048/sizeof(T) for float32
+  result.kc = min(512, K)   # Laser heuristic: 2048/sizeof(T) for float32
   result.kc = (result.kc div kc_atom) * kc_atom   # round down to atom kc
   if result.kc < kc_atom:
     result.kc = min(K, kc_atom)
 
   # mc: L2 cache — A block is mc × kc elements
-  let mc_max = min(192, M)   # Laser heuristic: 768/sizeof(T) for float32
+  result.mc = min(192, M)   # Laser heuristic: 768/sizeof(T) for float32
   result.mc = (result.mc div mr) * mr              # round down to mr
   if result.mc < mr:
     result.mc = min(M, mr)
