@@ -57,7 +57,7 @@ template rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
   ## Number of modes in a layout type (compile-time constant).
   rank(Sh)
 
-func mode*(layout: Layout; idx: static int): auto =
+template mode*(layout: Layout; idx: static int): auto =
   ## Extract mode `idx` as a standalone rank-1 Layout.
   ## For scalar layouts (rank-1), only idx=0 is valid.
   when layout.shape is tuple:
@@ -234,7 +234,7 @@ template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): a
 #  The raw 3-arg crd2idx overloads live in kernel_indexing_gpu.nim.
 #  These Layout-consuming wrappers delegate to them.
 
-func crd2idx*(layout: Layout; coord: IntOrIntTuple): int {.inline, noInit.} =
+template crd2idx*(layout: Layout; coord: IntOrIntTuple): int =
   ## Logical-to-memory offset for a coordinate on a Layout.
   ##
   ## `coord` can be:
@@ -273,6 +273,7 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
       parts.add newCall(bindSym"mod",
         newCall(bindSym"div", idx, s), shI)
     result = nnkPar.newTree(parts)
+
 # ═══════════════════════════════════════════════════════════════
 #  filter_zeros — replace stride-0 shapes with Int[1]
 # ═══════════════════════════════════════════════════════════════
@@ -297,7 +298,7 @@ macro filterZerosFlat(sh, st: typed): untyped =
     else:
       result.add newTree(nnkBracketExpr, sh, newLit(i))
 
-func filter_zeros*(layout: Layout): auto =
+template filter_zeros*(layout: Layout): auto =
   ## Replace stride-0 shapes with 1; returns flat (both shape and stride flattened).
   let st = flatten(layout.stride)
   let sh = filterZerosFlat(flatten(layout.shape), st)

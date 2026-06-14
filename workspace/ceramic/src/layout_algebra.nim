@@ -471,15 +471,18 @@ func logical_divide*[L, T: Layout](layout: L; tiler: T): auto =
   ## Layout tiler → CuTe formula directly.
   logical_divide_impl(layout, tiler)
 
-func logical_divide*[L: Layout](layout: L; tiler: int): auto =
+template logical_divide*[L: Layout](layout: L; tiler: int): auto =
   ## Dynamic int tiler → wrap in Layout → CuTe formula.
-  logical_divide_impl(layout, make_layout(tiler))
+  block:
+    evalOnceAs(lyt, layout)
+    evalOnceAs(tl, tiler)
+    logical_divide_impl(lyt, make_layout(tl))
 
-func logical_divide*[L: Layout; V: static int](layout: L; tiler: Int[V]): auto =
+template logical_divide*[L: Layout; V: static int](layout: L; tiler: Int[V]): auto =
   ## Static int tiler (Int[N]) → wrap in Layout → CuTe formula.
   logical_divide_impl(layout, make_layout(tiler))
 
-func logical_divide*[L: Layout](layout: L; tiler: static int): auto =
+template logical_divide*[L: Layout](layout: L; tiler: static int): auto =
   ## Compile-time int tiler (const) → preserve via Int[N] wrap → CuTe formula.
   logical_divide_impl(layout, make_layout(Int[tiler]()))
 
@@ -496,11 +499,11 @@ template logical_divide_builder*(layout: untyped; tiler: untyped; LayoutRank: st
       let m = mode(layout, idx)
       logical_divide_builder(layout, tiler, LayoutRank, idx + 1, concat(accSh, (m.shape,)), concat(accSt, (m.stride,)))
 
-func logical_divide*(layout: Layout; tiler: tuple): auto =
+template logical_divide*(layout: Layout; tiler: tuple): auto =
   ## Tuple tiler → per-mode divide (transform_layout).
   ## Each tiler element applies to the corresponding layout mode.
   ## Modes beyond len(tiler) pass through unchanged.
-  const R = static(rank(layout)) # For some reason I need static or I get - Error: invalid type: 'static[int literal(2)](2)' for const
+  const R = static(rank(layout))
   static: doAssert rank(tiler) <= R,
     "logical_divide: tiler has more modes (" & $rank(tiler) &
     ") than layout (" & $R & ")"
@@ -512,14 +515,17 @@ func logical_divide*(layout: Layout; tiler: tuple): auto =
 template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
   ## Unzip a logical_divide/logical_product result according to a tiler.
   ## Returns a rank-2 Layout: ((tile_modes), (rest_modes)).
-  when tiler is Layout:
-    make_layout(
-      zip2_by(layout.shape, tiler.shape),
-      zip2_by(layout.stride, tiler.shape))
-  else:
-    make_layout(
-      zip2_by(layout.shape, tiler),
-      zip2_by(layout.stride, tiler))
+  block:
+    evalOnceAs(lyt, layout)
+    evalOnceAs(tlr, tiler)
+    when tiler is Layout:
+      make_layout(
+        zip2_by(lyt.shape, tlr.shape),
+        zip2_by(lyt.stride, tlr.shape))
+    else:
+      make_layout(
+        zip2_by(lyt.shape, tlr),
+        zip2_by(lyt.stride, tlr))
 
 # ── zipped_divide / tiled_divide / flat_divide ──
 
@@ -529,40 +535,49 @@ template zipped_divide*(layout: Layout; tiler: auto): auto =
   ## CuTe: zipped_divide =
   ##   - Layout tiler: logical_divide(layout, tiler)
   ##   - tuple/int tiler: tile_unzip(logical_divide(layout, tiler), tiler)
-  when tiler is Layout:
-    logical_divide(layout, tiler)
-  else:
-    tile_unzip(logical_divide(layout, tiler), tiler)
+  block:
+    evalOnceAs(lyt, layout)
+    evalOnceAs(tlr, tiler)
+    when tiler is Layout:
+      logical_divide(lyt, tlr)
+    else:
+      tile_unzip(logical_divide(lyt, tlr), tlr)
 
 template tiled_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack the second mode into individual modes.
   ## Keeps mode-0 grouped (the tile).
-  let zd = zipped_divide(layout, tiler)
-  make_layout(
-    concat(
-      (flatten(mode(zd, 0).shape),),
-      flatten(mode(zd, 1).shape)
-    ),
-    concat(
-      (flatten(mode(zd, 0).stride),),
-      flatten(mode(zd, 1).stride)
+  block:
+    evalOnceAs(lyt, layout)
+    evalOnceAs(tlr, tiler)
+    evalOnceAs(zd, zipped_divide(lyt, tlr))
+    make_layout(
+      concat(
+        (flatten(mode(zd, 0).shape),),
+        flatten(mode(zd, 1).shape)
+      ),
+      concat(
+        (flatten(mode(zd, 0).stride),),
+        flatten(mode(zd, 1).stride)
+      )
     )
-  )
 
 template flat_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack BOTH modes into a flat layout.
   ## Difference from tiled_divide: tile modes are also unpacked.
-  let zd = zipped_divide(layout, tiler)
-  make_layout(
-    concat(
-      flatten(mode(zd, 0).shape),
-      flatten(mode(zd, 1).shape),
-    ),
-    concat(
-      flatten(mode(zd, 0).stride),
-      flatten(mode(zd, 1).stride),
-    ),
-  )
+  block:
+    evalOnceAs(lyt, layout)
+    evalOnceAs(tlr, tiler)
+    evalOnceAs(zd, zipped_divide(lyt, tlr))
+    make_layout(
+      concat(
+        flatten(mode(zd, 0).shape),
+        flatten(mode(zd, 1).shape),
+      ),
+      concat(
+        flatten(mode(zd, 0).stride),
+        flatten(mode(zd, 1).stride),
+      ),
+    )
 
 # ═══════════════════════════════════════════════════════════════
 #  right_inverse — quasi-inverse sorted by stride
@@ -683,44 +698,50 @@ func left_inverse*(layout: Layout): auto =
 template max_common_layout*(a, b: typed): untyped =
   ## Return a Layout for the maximum contiguous elements common to both.
   ## a(R(i)) == i and b(R(i)) == i for all i < size(result).
-  let inv_b = right_inverse(b)
-  let common = coalesce(compose(a, inv_b))
-  type StrideT = typeof(common.stride)
-  when StrideT is tuple:
-    type FirstStride = typeof(common.stride[0])
-    const s0 = FirstStride.V
-    when s0 == 1:
-      type FirstShape = typeof(common.shape[0])
-      coalesce(compose(inv_b, make_layout(FirstShape.V, 1)))
+  block:
+    evalOnceAs(va, a)
+    evalOnceAs(vb, b)
+    let inv_b = right_inverse(vb)
+    let common = coalesce(compose(va, inv_b))
+    type StrideT = typeof(common.stride)
+    when StrideT is tuple:
+      type FirstStride = typeof(common.stride[0])
+      const s0 = FirstStride.V
+      when s0 == 1:
+        type FirstShape = typeof(common.shape[0])
+        coalesce(compose(inv_b, make_layout(FirstShape.V, 1)))
+      else:
+        make_layout(1, 0)
     else:
-      make_layout(1, 0)
-  else:
-    const s = StrideT.V
-    when s == 1:
-      type Sh = typeof(common.shape)
-      coalesce(compose(inv_b, make_layout(Sh.V, 1)))
-    else:
-      make_layout(1, 0)
+      const s = StrideT.V
+      when s == 1:
+        type Sh = typeof(common.shape)
+        coalesce(compose(inv_b, make_layout(Sh.V, 1)))
+      else:
+        make_layout(1, 0)
 
 template max_common_vector*(a, b: typed): int =
   ## Return N: for 0 <= i < N, a(R(i)) == i and b(R(i)) == i.
-  let common = coalesce(compose(a, right_inverse(b)))
-  type StrideT = typeof(common.stride)
-  when StrideT is tuple:
-    type FirstStride = typeof(common.stride[0])
-    const s0 = FirstStride.V
-    when s0 == 1:
-      type FirstShape = typeof(common.shape[0])
-      FirstShape.V
+  block:
+    evalOnceAs(va, a)
+    evalOnceAs(vb, b)
+    let common = coalesce(compose(va, right_inverse(vb)))
+    type StrideT = typeof(common.stride)
+    when StrideT is tuple:
+      type FirstStride = typeof(common.stride[0])
+      const s0 = FirstStride.V
+      when s0 == 1:
+        type FirstShape = typeof(common.shape[0])
+        FirstShape.V
+      else:
+        1
     else:
-      1
-  else:
-    const s = StrideT.V
-    when s == 1:
-      type Sh = typeof(common.shape)
-      Sh.V
-    else:
-      1
+      const s = StrideT.V
+      when s == 1:
+        type Sh = typeof(common.shape)
+        Sh.V
+      else:
+        1
 
 # ═══════════════════════════════════════════════════════════════
 #  logical_product — reproduce a block over a tiler
@@ -749,44 +770,53 @@ func nested_product*[A, B: Layout](a: A; b: B): auto =
 
 # ── zipped_product / tiled_product / flat_product ──
 
-func zipped_product*[A: Layout](blk: A; tiler: auto): auto {.inline, noInit.} =
+template zipped_product*(blk: Layout; tiler: auto): auto =
   ## Reproduce block over tiler, zipped into rank-2 result.
   ##
   ## CuTe: zipped_product = tile_unzip(logical_product(block, tiler), tiler)
-  when tiler is Layout:
-    logical_product(blk, tiler)
-  else:
-    tile_unzip(logical_product(blk, tiler), tiler)
+  block:
+    evalOnceAs(bk, blk)
+    evalOnceAs(tlr, tiler)
+    when tiler is Layout:
+      logical_product(bk, tlr)
+    else:
+      tile_unzip(logical_product(bk, tlr), tlr)
 
 template tiled_product*(blk: Layout; tiler: auto): auto =
   ## Like zipped_product but unpack the second mode.
   ## Keeps mode-0 grouped (the block).
-  let zp = zipped_product(blk, tiler)
-  make_layout(
-    concat(
-      (flatten(mode(zp, 0).shape),),
-      flatten(mode(zp, 1).shape),
-    ),
-    concat(
-      (flatten(mode(zp, 0).stride),),
-      flatten(mode(zp, 1).stride),
-    ),
-  )
+  block:
+    evalOnceAs(bk, blk)
+    evalOnceAs(tlr, tiler)
+    evalOnceAs(zp, zipped_product(bk, tlr))
+    make_layout(
+      concat(
+        (flatten(mode(zp, 0).shape),),
+        flatten(mode(zp, 1).shape),
+      ),
+      concat(
+        (flatten(mode(zp, 0).stride),),
+        flatten(mode(zp, 1).stride),
+      ),
+    )
 
 template flat_product*(blk: Layout; tiler: auto): auto =
   ## Like zipped_product but unpack BOTH modes into a flat layout.
   ## Difference from tiled_product: block modes are also unpacked.
-  let zp = zipped_product(blk, tiler)
-  make_layout(
-    concat(
-      flatten(mode(zp, 0).shape),
-      flatten(mode(zp, 1).shape),
-    ),
-    concat(
-      flatten(mode(zp, 0).stride),
-      flatten(mode(zp, 1).stride),
-    ),
-  )
+  block:
+    evalOnceAs(bk, blk)
+    evalOnceAs(tlr, tiler)
+    evalOnceAs(zp, zipped_product(bk, tlr))
+    make_layout(
+      concat(
+        flatten(mode(zp, 0).shape),
+        flatten(mode(zp, 1).shape),
+      ),
+      concat(
+        flatten(mode(zp, 0).stride),
+        flatten(mode(zp, 1).stride),
+      ),
+    )
 
 # ═══════════════════════════════════════════════════════════════
 #  blocked_product — blocks laid out contiguously
@@ -825,7 +855,7 @@ func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
 #  tile_to_shape — repeat block layout to fill target shape
 # ═══════════════════════════════════════════════════════════════
 
-func tile_to_shape*[Sh, St, Target](blk: Layout[Sh, St]; target_shape: Target; ord_shape: static StrideOrder = LayoutLeft): auto =
+template tile_to_shape*(blk: Layout; target_shape: typed; ord_shape: static StrideOrder = LayoutLeft): auto =
   ## Recipe:
   ##   1. Pad block to rank R
   ##   2. Compute block_shape = product_each(block.shape)   — per-mode products
@@ -838,10 +868,13 @@ func tile_to_shape*[Sh, St, Target](blk: Layout[Sh, St]; target_shape: Target; o
   ##   let tile = tile_to_shape(make_layout((2,3), (1,2)), (6, 12))
   ##   # block (2,3) repeated to fill (6,12) in 3 columns:
   ##   # ((2,3),3):((1,2),6)
-  const R = rank(Target)
-  let padded_blk = padRight(blk, R)
-  let blk_shape = product_each(padded_blk.shape)
-  let trg_flat = product_each(target_shape)
-  let product_shape = zipModesWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
-  let tiler = make_layout(product_shape, ord_shape)
-  blocked_product(padded_blk, tiler)
+  const R = static(rank(target_shape))
+  block:
+    evalOnceAs(bk, blk)
+    evalOnceAs(ts, target_shape)
+    let padded_blk = padRight(bk, R)
+    let blk_shape = product_each(padded_blk.shape)
+    let trg_flat = product_each(ts)
+    let product_shape = zipModesWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
+    let tiler = make_layout(product_shape, ord_shape)
+    blocked_product(padded_blk, tiler)
