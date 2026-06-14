@@ -140,9 +140,20 @@ proc gemm_impl[T; ukernel: static MicroKernel](
 
   const PT = ukernel.extract_pt
   let parallelize = M*N*K > PT*PT*PT
-  # let nb_threads = cpuinfo_get_cores_count() # get physical cores
+  # Fast-path: K == 0 or alpha == 0 — just apply beta to C
+  if K == 0 or alpha == 0.T:
+    if beta == 0.T:
+      for i in 0 ..< M:
+        for j in 0 ..< N:
+          vC[i, j] = 0.T
+    elif beta != 1.T:
+      for i in 0 ..< M:
+        for j in 0 ..< N:
+          vC[i, j] = beta * vC[i, j]
+    return
 
   # ####################################################################
+  # 1. for jc = 0,...,n−1 in steps of nc
   # 1. for jc = 0,...,n−1 in steps of nc
   let nc = N                                          # B[0:K, jc:jc+nc]
                                                       # C[0:M, jc:jc+nc]

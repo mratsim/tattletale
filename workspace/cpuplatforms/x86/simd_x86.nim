@@ -441,7 +441,7 @@ when defined(i386) or defined(amd64):
 
   func cvtmask64_u64*(a: mmask64): uint64 {.importc: "_cvtmask64_u64", x86.}
 
-# Prefetch intrinsic (GCC builtin)
-{.pragma: gcc_builtin, noDecl, header: "<x86intrin.h>".}
-proc builtin_prefetch*(p: pointer, rw: cint, locality: cint) {.importc: "__builtin_prefetch", nodecl.}
-proc builtin_assume_aligned*(p: pointer, alignment: csize): pointer {.importc: "__builtin_assume_aligned", nodecl.}
+  # Prefetch intrinsic (GCC builtin)
+  {.pragma: gcc_builtin, noDecl, header: "<x86intrin.h>".}
+  proc builtin_prefetch*(p: pointer, rw: cint, locality: cint) {.importc: "__builtin_prefetch", nodecl.}
+  proc builtin_assume_aligned*(p: pointer, alignment: csize): pointer {.importc: "__builtin_assume_aligned", nodecl.}

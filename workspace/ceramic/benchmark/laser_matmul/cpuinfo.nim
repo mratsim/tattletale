@@ -1,9 +1,7 @@
-## CPU feature detection using Constantine's cpudetect_x86.
-## Calls detectCpuFeaturesX86() once at module init, then wraps Constantine's has*() procs.
+## CPU feature detection via workspace/cpuplatforms/x86/cpudetect_x86.
+## The module auto-runs detectCpuFeaturesX86() at load time ({.loadTime.}).
 
 import workspace/cpuplatforms/x86/cpudetect_x86
-
-detectCpuFeaturesX86()
 
 type CPUFeatureX86* = enum
   x86_Generic

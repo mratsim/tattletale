@@ -299,4 +299,10 @@ func fillWith_cpu*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
 
 func fillWith_cpu*[T, Sh, St](t: var Tensor[T, Sh, St]; val: T) =
   ## Fill every logical element of `t` with `val`.
-  fillWithCpuImpl(t, val)
+  ##
+  ## Routes through `view()` rather than calling `fillWithCpuImpl(t, val)`
+  ## directly because `fillWithCpuImpl` operates on the underlying `data` seq
+  ## at index 0, but `Tensor` may have a non-zero `offset`. By converting to
+  ## a `TensorView` first, the offset is baked into the data pointer and
+  ## the layout iteration writes to the correct logical region.
+  fillWith_cpu(t.view(), val)

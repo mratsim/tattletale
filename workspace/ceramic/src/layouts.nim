@@ -259,19 +259,32 @@ macro `[]`*(layout: Layout; args: varargs[IntOrIntTuple]): untyped =
 
 macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
+  ##
+  ##   Cases for `(idx, shape, stride)`:
+  ##     shape == 1, stride == 0   →   0  (broadcast — skip division)
+  ##     shape == 1, stride != 0   →   0  (size-1 — result always 0)
+  ##     shape != 1, stride == 0   ─── invalid layout (unreachable)
+  ##     shape != 1, stride != 0   →   (idx div stride) mod shape
+  ##
+  ## The guard on `shape == 1` matches CuTe's `is_constant<1, Shape>`
+  ## check and handles both broadcast modes and trivial dimensions,
+  ## avoiding potential division-by-zero on stride-0.
   let lTyp = layout.getTypeInst()
   let shT = lTyp[1]
   let sh = newTree(nnkDotExpr, layout, ident"shape")
   let st = newTree(nnkDotExpr, layout, ident"stride")
   if shT.kind != nnkTupleConstr:
-    result = newCall(bindSym"div", idx, st)
+    # Scalar shape: `if shape == 1: 0 else: idx div stride`
+    result = quote do:
+      (if `sh` == 1: 0 else: `idx` div `st`)
   else:
+    # Tuple shape: each mode gets its own guard
     var parts: seq[NimNode] = @[]
     for i in 0 ..< shT.len:
       let s = newCall(bindSym"[]", st, newLit(i))
       let shI = newCall(bindSym"[]", sh, newLit(i))
-      parts.add newCall(bindSym"mod",
-        newCall(bindSym"div", idx, s), shI)
+      parts.add quote do:
+        (if `shI` == 1: 0 else: (`idx` div `s`) mod `shI`)
     result = nnkPar.newTree(parts)
 
 # ═══════════════════════════════════════════════════════════════

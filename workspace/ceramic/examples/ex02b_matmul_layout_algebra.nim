@@ -337,7 +337,11 @@ when isMainModule:
           for i in 0 ..< M:
             C[i * rsC + j * csC] += alpha * A[i * rsA + k * csA] * bv
 
-  proc test(M, N, K: int; rsA, csA, rsB, csB, rsC, csC: int; label: string; tol: float32 = 1e-4'f32) =
+  proc test(M, N, K: int; rsA, csA, rsB, csB, rsC, csC: int; label: string; tol = 1e-4'f32;
+      alpha = 1.0'f32; beta = 1.0'f32) =
+    ## Run a GEMM test: compare example's gemm_strided against a naive reference.
+    ## Tests default to alpha=1, beta=1. Pass different values to exercise
+    ## K==0 / alpha==0 fast-path and general alpha/beta correctness.
     echo "\n### ", label
     randomize(42)
     let aLen = max((M-1)*rsA + (K-1)*csA + 1, 0)
@@ -356,7 +360,6 @@ when isMainModule:
     for i in 0 ..< C_tst.len:
       C_tst[i] = C_ref[i]
 
-    let alpha = 1.0'f32; let beta = 1.0'f32
     gemm_reference(M, N, K, alpha, A, rsA, csA, B, rsB, csB, beta, C_ref, rsC, csC)
     gemm_strided(M, N, K, alpha, A, rsA, csA, B, rsB, csB, beta, C_tst, rsC, csC, akIdentity)
 
@@ -377,4 +380,12 @@ when isMainModule:
   test(6, 32, 64,  1, 32, 1, 32, 1, 32, "UKernel 6x32")
   test(14, 32, 64, 1, 32, 1, 32, 1, 32, "UKernel 14x32")
   test(2, 2, 2, 1, 2, 1, 2, 1, 2, "Tiny 2x2 (triple-loop path)")
+
+  # Edge cases: K==0 / alpha==0 should still apply beta to C
+  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=1")
+  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=2", beta = 2.0'f32)
+  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=0", beta = 0.0'f32)
+  test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=1", alpha = 0.0'f32)
+  test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=2", alpha = 0.0'f32, beta = 2.0'f32)
+  test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=0", alpha = 0.0'f32, beta = 0.0'f32)
   echo "\nDone."

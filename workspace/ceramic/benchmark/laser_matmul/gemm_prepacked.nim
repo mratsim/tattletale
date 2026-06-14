@@ -249,8 +249,20 @@ proc gemm_packed_impl[T](
     upanelB_size = KC * round_step_up(NC, NR)
     upanelA_size = KC * round_step_up(MC, MR)
 
+  # Fast-path: K == 0 or alpha == 0 — just apply beta to C
+  if K == 0 or alpha == 0.T:
+    if beta == 0.T:
+      for i in 0 ..< M:
+        for j in 0 ..< N:
+          vC[i, j] = 0.T
+    elif beta != 1.T:
+      for i in 0 ..< M:
+        for j in 0 ..< N:
+          vC[i, j] = beta * vC[i, j]
+    return
 
   # ######################################
+  # 2.   for pc = 0,...,k−1 in steps of kc
   # 2.   for pc = 0,...,k−1 in steps of kc
   for pcb in 0 ..< pc_num_iter:
     let packedB{.restrict.} = cast[ptr UncheckedArray[T]](packedB + pcb * upanelB_size)
