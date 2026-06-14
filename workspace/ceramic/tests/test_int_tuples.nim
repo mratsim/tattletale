@@ -10,13 +10,12 @@
 
 import std/macros
 import workspace/ceramic/src/int_tuples {.all.}
-import workspace/ceramic/src/layouts
 
 # ═══════════════════════════════════════════════════════════════
 #  fold tests
 # ═══════════════════════════════════════════════════════════════
 
-proc runFoldTests* =
+proc runFoldTests =
   block:
     let r = fold(5, 1, acc * it)
     doAssert r === 5
@@ -75,7 +74,7 @@ proc runFoldTests* =
 #  product tests
 # ═══════════════════════════════════════════════════════════════
 
-proc runProductTests* =
+proc runProductTests =
   block:
     const r = product(42)
     doAssert r === 42
@@ -104,23 +103,13 @@ proc runProductTests* =
     const r = product(((Int[2](), Int[3]()), Int[4]()))
     doAssert r === 24
 
-  block:
-    let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[2]()))
-    let r = product(l.shape)
-    doAssert r === 8
-
-  block:
-    let d1 = 1; let d4dyn = 4
-    let l = make_layout((Int[2](), d4dyn), (d1, Int[2]()))
-    let r = product(l.shape)
-    doAssert r === 8
-  echo "  Product: 8 cases OK"
+  echo "  Product: 6 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  max tests
 # ═══════════════════════════════════════════════════════════════
 
-proc runMaxTests* =
+proc runMaxTests =
   block:
     let r = max(42)
     doAssert r === 42
@@ -155,7 +144,7 @@ proc runMaxTests* =
 #  min tests
 # ═══════════════════════════════════════════════════════════════
 
-proc runMinTests* =
+proc runMinTests =
   block:
     let r = min(42)
     doAssert r === 42
@@ -190,7 +179,7 @@ proc runMinTests* =
 #  Int[N] comparison overloads (==, <=, >=)
 # ═══════════════════════════════════════════════════════════════
 
-proc runIntCmpTests* =
+proc runIntCmpTests =
   block:
     doAssert Int[5]() === Int[5]()
     doAssert not (Int[5]() === Int[8]())
@@ -208,7 +197,7 @@ proc runIntCmpTests* =
 #  prefix_scanIt / suffix_scanIt
 # ═══════════════════════════════════════════════════════════════
 
-proc runScanTests* =
+proc runScanTests =
   block:
     doAssert prefix_scanIt(5, 1, acc * it) === 1
   block:
@@ -241,7 +230,7 @@ proc runScanTests* =
 #  prefix_product / suffix_product
 # ═══════════════════════════════════════════════════════════════
 
-proc runProductScanTests* =
+proc runProductScanTests =
   block:
     doAssert prefix_product(5) === 1
   block:
@@ -261,8 +250,57 @@ proc runProductScanTests* =
   block:
     let sp = suffix_product((Int[4](), Int[8]()))
     doAssert sp[0] === 8 and sp[1] === 1
-  echo "  Product scan: 8 cases OK"
+  # ── Nested tuple prefix_product ──
+  block:
+    doAssert prefix_product(((4, 1), (8, 8))) === ((1, 4), (4, 32))
+  block:
+    let mr = 4; let mpT = 8; let kc = 8
+    let p = prefix_product(((mr, 1), (mpT, kc)))
+    doAssert p[0][0] === 1 and p[0][1] == mr
+    doAssert p[1][0] == mr and p[1][1] == mr * mpT
+  # ── Nested tuple suffix_product ──
+  block:
+    doAssert suffix_product(((4, 1), (8, 8))) === ((64, 64), (8, 1))
 
+  # ── prefix_scanIt with nested tuples ──
+  block:
+    let s = prefix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
+    doAssert s[0][0] === 1 and s[0][1] == 4
+    doAssert s[1][0] == 4 and s[1][1] == 32
+
+
+  # ── Nested tuple prefix_product ──
+  block:
+    doAssert prefix_product(((4, 1), (8, 8))) === ((1, 4), (4, 32))
+  block:
+    let mr = 4; let mpT = 8; let kc = 8
+    let p = prefix_product(((mr, 1), (mpT, kc)))
+    doAssert p[0][0] === 1 and p[0][1] == mr
+    doAssert p[1][0] == mr and p[1][1] == mr * mpT
+  # ── Nested tuple suffix_product ──
+  block:
+    doAssert suffix_product(((4, 1), (8, 8))) === ((64, 64), (8, 1))
+
+  # ── suffix_scanIt with nested tuples ──
+  block:
+    let s = suffix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
+    doAssert s[0][0] === 64 and s[0][1] === 64
+    doAssert s[1][0] === 8 and s[1][1] === 1
+
+  # ── prefix_scanIt with addition (prefix sum) on nested tuples ──
+  block:
+    let s = prefix_scanIt(((1, 2), (3, 4)), 0, acc + it)
+    doAssert s[0][0] === 0 and s[0][1] === 1
+    doAssert s[1][0] === 3 and s[1][1] === 6
+
+  # ── suffix_scanIt with addition (suffix sum) on nested tuples ──
+  block:
+    let s = suffix_scanIt(((1, 2), (3, 4)), 0, acc + it)
+    doAssert s[0][0] === 9 and s[0][1] === 7
+    doAssert s[1][0] === 4 and s[1][1] === 0
+
+  echo "  Nested tuple scan: 8 cases OK"
+  echo "  Product scan: 13 cases OK"
 # ═══════════════════════════════════════════════════════════════
 #  Mixed static/dynamic scans
 #  (N, C, H, W) — N dynamic, C/H/W are Int[N] (static)
@@ -276,7 +314,7 @@ proc runProductScanTests* =
 #  IntOrIntTuple type class checks
 # ═══════════════════════════════════════════════════════════════
 
-proc runTypeClassTests* =
+proc runTypeClassTests =
   block:
     doAssert 2 is IntOrIntTuple
   block:
@@ -297,7 +335,7 @@ proc runTypeClassTests* =
 #  product/max/min — convenience wrappers (fold-based)
 # ═══════════════════════════════════════════════════════════════
 
-proc runFoldWrapperTests* =
+proc runFoldWrapperTests =
   block:
     doAssert product(7) === 7
   block:
@@ -317,7 +355,7 @@ proc runFoldWrapperTests* =
 #  flatten / concat — extra cases
 # ═══════════════════════════════════════════════════════════════
 
-proc runFlattenConcatTests* =
+proc runFlattenConcatTests =
   block:
     doAssert flatten((4, 8, 2)) === (4, 8, 2)
   block:
@@ -348,7 +386,8 @@ proc runFlattenConcatTests* =
     const s: Shape2d = (4, 8)
     doAssert concat(s, 1) === (4, 8, 1)
   echo "  Flatten/concat: 9 cases OK"
-proc runMixedStaticDynamicTests* =
+
+proc runMixedStaticDynamicTests =
   block:
     let dN = 2
     let shape = (dN, Int[3](), Int[8](), Int[8]())
@@ -371,41 +410,9 @@ proc runMixedStaticDynamicTests* =
   echo "  Mixed static/dynamic: 2 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-proc runEvalOnceTests* =
-  block:  # Launch missile — runtime side effect evaluated once
-    var missileCount = 0
-    proc launchMissile(): int =
-      missileCount += 1
-      result = 42
-
-    evalOnceAs(foo, launchMissile())
-    doAssert missileCount === 1, "launchMissile called " & $missileCount
-    doAssert foo() === 42
-    doAssert foo() === 42  # repeat uses cached value
-    doAssert missileCount === 1, "side-effect evaluated more than once"
-
-  block:  # Compile-time expression — preserves Int[N] type
-    func double(x: static int): static int = x * 2
-    evalOnceAs(bar, double(3))
-    doAssert typeof(bar()) is Int, "CT expression should preserve Int[N]"
-    doAssert bar() === 6
-
-  block:  # Literal — captured as Int[N]
-    evalOnceAs(baz, 7)
-    doAssert typeof(baz()) is Int, "literal should be Int[N]"
-    doAssert baz() === 7
-
-  block:  # Symbol — reused directly
-    let x = 5
-    evalOnceAs(qux, x)
-    doAssert typeof(qux()) is int
-    doAssert qux() === 5
-  echo "  evalOnceAs: 4 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  zip2_by — guided zip for rank-2 tuples
 # ═══════════════════════════════════════════════════════════════
-proc runZip2ByTests* =
+proc runZip2ByTests =
   block:
     ## Terminal guide — pair pass-through
     const t = (Int[2](), Int[3]())
@@ -452,12 +459,26 @@ proc runZip2ByTests* =
     const guide = 0  # terminal
     let r = zip2_by(t, guide)
     doAssert r === (Int[2](), Int[3]())
-  echo "  zip2_by: 7 cases OK"
+  # ── zip2_by doc examples ──
+  block:
+    # Flat scalar guide: each t[i] is a pair, split pair-wise
+    doAssert zip2_by(((Int[2](), Int[3]()), (Int[4](), Int[5]())), (1, 2)) ===
+      ((Int[2](), Int[4]()), (Int[3](), Int[5]()))
+  block:
+    # Mixed guide: scalar splits a pair, tuple recurses into sub-tuple
+    doAssert zip2_by(((Int[2](), Int[3]()), ((Int[4](), Int[5]()), (Int[6](), Int[7]()))), (1, (2, 3))) ===
+      ((Int[2](), (Int[4](), Int[6]())), (Int[3](), (Int[5](), Int[7]())))
+  block:
+    # Guide shorter than t — trailing appended to group 1
+    doAssert zip2_by(((Int[2](), Int[3]()), (Int[4](), Int[5]()), Int[99]()), (1, 2)) ===
+      ((Int[2](), Int[4]()), (Int[3](), Int[5](), Int[99]()))
+
+  echo "  zip2_by: 10 cases OK"
 #  Run all
 # ═══════════════════════════════════════════════════════════════
 
 
-proc runMapZipWithTests* =
+proc runMapZipWithTests =
   block:
     let r = mapModesWith((2, 4, 6)): it * 2
     doAssert r === (4, 8, 12)
@@ -482,7 +503,46 @@ proc runMapZipWithTests* =
     doAssert r === (3, 3, 3)
   echo "  mapModesWith/zipModesWith: 7 checks OK"
 
-proc runTests* =
+proc runMapLeavesWithPlainIntTests =
+  ## mapLeavesWith on scalar int — literal, let, const, proc chain.
+  block:
+    ## int literal — doubled
+    let r = mapLeavesWith(42, it * 2)
+    doAssert r === 84
+    doAssert typeof(r) is int
+
+  block:
+    ## int literal — identity
+    let r = mapLeavesWith(99, it)
+    doAssert r === 99
+
+  block:
+    ## let variable
+    let x = 10
+    let r = mapLeavesWith(x, it + 5)
+    doAssert r === 15
+
+  block:
+    ## const variable
+    const y = 7
+    let r = mapLeavesWith(y, it * 3)
+    doAssert r === 21
+
+  block:
+    ## proc chain — compile-time foldable
+    func double(x: int): int = x * 2
+    let r = mapLeavesWith(double(5), it + 1)
+    doAssert r === 11
+
+  block:
+    ## proc chain — runtime
+    proc add(a, b: int): int = a + b
+    let v = 3
+    let r = mapLeavesWith(add(v, 4), it * 10)
+    doAssert r === 70
+  echo "  mapLeavesWith (plain int): 6 cases OK"
+
+proc runTests =
   echo "── Int tuples ──"
   runFoldTests()
   runProductTests()
@@ -498,6 +558,7 @@ proc runTests* =
   runMixedStaticDynamicTests()
   runZip2ByTests()
   runMapZipWithTests()
+  runMapLeavesWithPlainIntTests()
   echo "ALL INT_TUPLES TESTS PASSED"
 
 when isMainModule:

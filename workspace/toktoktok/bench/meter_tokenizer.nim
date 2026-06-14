@@ -8,7 +8,7 @@
 # Compile with
 # nim c -r --hints:off --warnings:off --verbosity:0 -d:danger -d:TTT_METER --outdir:build workspace/toktoktok/bench/meter_tokenizer.nim
 
-import workspace/probes # probes MUST be imported before measured import
+import workspace/bencher # bencher MUST be imported before measured import
 
 import std/os
 import std/strutils
