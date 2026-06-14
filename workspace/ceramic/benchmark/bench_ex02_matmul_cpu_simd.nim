@@ -220,7 +220,7 @@ when isMainModule:
                        theoreticalPeak(archAVX512, 5.5)]
 
     # Header (two-line: freqs below arch label)
-    echo "  Variant" & spaces(19) & "GFLOP/s".align(6) & "        AVX+FMA % @ GHz  " & "      AVX-512 % @ GHz" & "       μs" & "  absdiff reldiff"
+    echo "  Variant" & spaces(17) & "GFLOP/s" & "          AVX+FMA % @ GHz  " & "      AVX-512 % @ GHz" & "       μs" & "   absdiff    reldiff"
     echo spaces(40) & " 4.0  4.5  5.0  5.5" & spaces(4) & " 4.0  4.5  5.0  5.5"
     echo "  " & "-".repeat(106)
 
