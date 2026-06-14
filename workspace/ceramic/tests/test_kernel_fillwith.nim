@@ -104,7 +104,7 @@ block:
     doAssert buf[r * ld + cols] == 0.0'f32, "dynamic stride gap @ " & $r
 
 # ═══════════════════════════════════════════════════════════════
-#  fillWith_cpu — Tensor (not TensorView)
+#  fillWith_cpu — TensorView (from seq)
 # ═══════════════════════════════════════════════════════════════
 
 block:

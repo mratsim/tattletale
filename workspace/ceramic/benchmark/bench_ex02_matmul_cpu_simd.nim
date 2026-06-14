@@ -136,7 +136,7 @@ when isMainModule:
       bytes  = float64(gemm_required_data(aShape, bShape) * 4)  # float32 = 4 bytes
       ai     = ops / bytes
       alpha  = 1.0'f32
-      beta   = 1.0'f32
+      beta   = 0.0'f32
       rs     = N
       cs     = 1
 
