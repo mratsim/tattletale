@@ -26,58 +26,11 @@ import std/[monotimes, times, math, random, strutils, strformat, sequtils, os]
 import workspace/ceramic/examples/ex02a_matmul_handtuned as v_a
 import workspace/ceramic/examples/ex02b_matmul_layout_algebra as v_b
 import workspace/ceramic/benchmark/laser/gemm as laser_gemm
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  Matrix shape helpers (Laser convention)
-# ═══════════════════════════════════════════════════════════════════════════
-
-type
-  MatrixShape* = tuple[M, N: int]
-  Matrix*[T] = seq[T]
-
-func gemm_out_shape*(a, b: MatrixShape): MatrixShape =
-  doAssert a.N == b.M
-  result.M = a.M
-  result.N = b.N
-
-func gemm_required_ops*(a, b: MatrixShape): int =
-  doAssert a.N == b.M
-  result = a.M * a.N * b.N * 2   # 1 mul + 1 add per element
-
-func gemm_required_data*(a, b: MatrixShape): int =
-  doAssert a.N == b.M
-  result = a.M * a.N + b.M * b.N
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  Problem sizes
-# ═══════════════════════════════════════════════════════════════════════════
+import workspace/ceramic/benchmark/bench_utils
 
 const ProblemSizes = [128, 512, 1024, 1920]
 const NbSamples = 10
 const WarmupSamples = 3
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  Theoretical peak (float32, single-core)
-# ═══════════════════════════════════════════════════════════════════════════
-#
-#  Formula: freq(GHz) × vectorWidth × instrPerCycle × FLOP/instr
-#
-#  AVX+FMA: 8 floats × 2 FMA/cycle × 2 FLOP/FMA = 32 FLOP/cycle
-#  AVX-512: 16 floats × 2 FMA/cycle × 2 FLOP/FMA = 64 FLOP/cycle
-
-type CpuArch = enum
-  archAVX_FMA
-  archAVX512
-
-const AnchorFreqs = [4.0, 4.5, 5.0, 5.5]
-
-func theoreticalPeak(arch: CpuArch; freq: float64): float64 =
-  let vecWidth = case arch
-    of archAVX_FMA:  8.0
-    of archAVX512:  16.0
-  let instrCycle = 2.0    # 2 FMAs per cycle (Intel: ports 0 & 1)
-  let flopInstr  = 2.0    # FMA = 1 mul + 1 add
-  freq * vecWidth * instrCycle * flopInstr
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Optional cblas/OpenBLAS
@@ -111,11 +64,6 @@ when defined(cblas):
 proc gflops(elapsed: float64; ops: float64): float64 =
   (ops / 1e9) / elapsed
 
-proc median(v: openArray[float64]): float64 =
-  let n = v.len
-  if n == 0: return 0.0
-  if n mod 2 == 1: v[n div 2]
-  else: (v[n div 2 - 1] + v[n div 2]) * 0.5
 
 proc bench(name, label: string;
            run: proc();
@@ -143,25 +91,13 @@ when isMainModule:
 
   # ── Header ──
   echo "=".repeat(72)
-  echo &"  GEMM benchmark — float32, column-major, single-threaded"
+  echo &"  GEMM benchmark — float32, row-major, single-threaded"
   echo &"  SIMD arch: {v_a.simdArchString()}"
   echo "=".repeat(72)
   echo ""
-
   # ── Theoretical peak table ──
-  echo "  Theoretical peak (float32, single-core):"
-  echo "  " & spaces(7) & "4.0 GHz".align(9) & "4.5 GHz".align(9) & "5.0 GHz".align(9) & "5.5 GHz".align(9)
-  echo "  " & "-".repeat(46)
-  proc showPeak(arch: CpuArch) =
-    let name = if arch == archAVX_FMA: "AVX+FMA" else: "AVX-512"
-    echo &"  {name:<8} {int(theoreticalPeak(arch, 4.0)):>5d}    {int(theoreticalPeak(arch, 4.5)):>5d}    {int(theoreticalPeak(arch, 5.0)):>5d}    {int(theoreticalPeak(arch, 5.5)):>5d}    GFLOP/s"
-  showPeak(archAVX_FMA)
-  showPeak(archAVX512)
-  echo ""
-  echo &"  Formula: freq × vecWidth × 2 FMA/cycle × 2 FLOP/FMA"
-  echo &"    AVX+FMA: 8 floats  — peak = freq × 32"
-  echo &"    AVX-512: 16 floats — peak = freq × 64"
-  echo ""
+  printPeakTable()
+
   when defined(cblas):
     let ompOK = getEnv("OMP_NUM_THREADS") == "1"
     let openblasOK = getEnv("OPENBLAS_NUM_THREADS") == "1"
@@ -199,8 +135,8 @@ when isMainModule:
       ai     = ops / bytes
       alpha  = 1.0'f32
       beta   = 1.0'f32
-      rs     = 1
-      cs     = N
+      rs     = N
+      cs     = 1
 
     # Allocate
     var
@@ -210,8 +146,32 @@ when isMainModule:
     for i in 0 ..< A.len: A[i] = rand(1.0'f32)
     for i in 0 ..< B.len: B[i] = rand(1.0'f32)
 
-    echo &"--- {N}x{N} (col-major) | AI = {ai:>6.2f} FLOP/byte | {ops/1e9:>8.3f} GFLOP ---"
-    echo ""
+    # ── Correctness check: allClose vs Laser reference ──
+    block:
+      var C_l = newSeq[float32](C0.len)
+      var C_a = newSeq[float32](C0.len)
+      var C_b = newSeq[float32](C0.len)
+      for i in 0 ..< C0.len:
+        C_l[i] = C0[i]; C_a[i] = C0[i]; C_b[i] = C0[i]
+      # Reference: Laser (battle-tested)
+      laser_gemm.gemm_strided(N, N, N, 1.0'f32, addr A[0], rs, cs, addr B[0], rs, cs, 0.0'f32, addr C_l[0], rs, cs)
+      v_a.gemm_strided(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C_a, rs, cs)
+      v_b.gemm_strided(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C_b, rs, cs)
+      let r_a = allClose(C_a, C_l)  # ex02a must match Laser exactly (same ukernel path)
+      let r_b = allClose(C_b, C_l, atol = 1.0, rtol = 1.0)  # ex02b: different ukernel variant
+      doAssert r_a.ok, &"ex02a vs Laser: maxAbsErr={r_a.maxAbsErr:.2e} maxRelErr={r_a.maxRelErr:.2e}"
+      doAssert r_b.ok, &"ex02b vs Laser: maxAbsErr={r_b.maxAbsErr:.2e} maxRelErr={r_b.maxRelErr:.2e}"
+      when defined(cblas):
+        var C_o = newSeq[float32](C0.len)
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+          cint(N), cint(N), cint(N), 1.0'f32,
+          addr A[0], cint(N), addr B[0], cint(N),
+          0.0'f32, addr C_o[0], cint(N))
+        let r_o = allClose(C_o, C_l, atol = 1.0, rtol = 1.0)
+        doAssert r_o.ok, &"OpenBLAS vs Laser: maxAbsErr={r_o.maxAbsErr:.2e} maxRelErr={r_o.maxRelErr:.2e}"
+        echo &"  Diff vs Laser ref  a={r_a.maxAbsErr:.2e}/{r_a.maxRelErr:.2e}  b={r_b.maxAbsErr:.2e}/{r_b.maxRelErr:.2e}  o={r_o.maxAbsErr:.2e}/{r_o.maxRelErr:.2e}"
+      else:
+        echo &"  Diff vs Laser ref  a={r_a.maxAbsErr:.2e}/{r_a.maxRelErr:.2e}  b={r_b.maxAbsErr:.2e}/{r_b.maxRelErr:.2e}  o=N/A"
 
     var results: seq[tuple[name, label: string; gflops, medianUs, ai: float64]] = @[]
 
@@ -237,7 +197,7 @@ when isMainModule:
       block:
         var C = C0
         proc run() =
-          cblas_sgemm(CblasColMajor, CblasNoTrans, CblasNoTrans,
+          cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
             cint(N), cint(N), cint(N), 1.0'f32,
             addr A[0], cint(N), addr B[0], cint(N),
             0.0'f32, addr C[0], cint(N))
