@@ -372,9 +372,11 @@ proc gemm_strided*[T: SomeNumber](
               AB, current_kc)
 
             # Epilogue: displace (layout algebra) for view, raw-pointer dispatch
+            let eff_mr = min(mr, M - cRow)
+            let eff_nr = min(nr, N - cCol)
             let cTile {.noInit.} = displace(vC, (cRow, cCol))
             gemm_epilogue(activation, cast[ptr UncheckedArray[T]](cTile.data),
-                          AB, mr, nr, alpha, effective_beta, rowStrideC, colStrideC)
+                          AB, eff_mr, eff_nr, alpha, effective_beta, rowStrideC, colStrideC)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Convenience overload — openArray[T]
@@ -420,7 +422,7 @@ when isMainModule:
           for i in 0 ..< M:
             C[i * rsC + j * csC] += alpha * A[i * rsA + k * csA] * bv
 
-  proc test(M, N, K: int; rsA, csA, rsB, csB, rsC, csC: int; label: string) =
+  proc test(M, N, K: int; rsA, csA, rsB, csB, rsC, csC: int; label: string; tol: float32 = 1e-4'f32) =
     echo "\n### ", label
     randomize(42)
     let aLen = max((M-1)*rsA + (K-1)*csA + 1, 0)
@@ -443,14 +445,15 @@ when isMainModule:
     for i in 0 ..< cLen:
       err = max(err, abs(C_ref[i] - C_tst[i]))
     echo "  max error: ", err.formatFloat(ffScientific, 2),
-         if err < 1e-4: " ✅" else: " ❌"
-    doAssert err < 1e-4, "Error tolerance exceeded (got " & $err & ")"
+         if err < tol: " ✅" else: " ❌"
+    doAssert err < tol, "Error tolerance exceeded (got " & $err & ")"
 
   test(16, 16, 16, 1, 16, 1, 16, 1, 16, "Square 16x16 col-major")
   test(16, 16, 16, 16, 1, 16, 1, 16, 1, "Square 16x16 row-major")
   test(8, 8, 4, 1, 10, 1, 10, 1, 10, "Non-square (8x4)")
   test(10, 10, 5, 1, 12, 1, 12, 1, 12, "Non-power-of-2 (10x5)")
   test(128, 128, 128, 1, 128, 1, 128, 1, 128, "Large 128x128 col-major")
+  test(1024, 1024, 1024, 1024, 1, 1024, 1, 1024, 1, "Large 1024x1024 row-major", tol = 1e-3'f32)
   test(6, 16, 64,  1, 16, 1, 16, 1, 16, "UKernel 6x16")
   test(6, 32, 64,  1, 32, 1, 32, 1, 32, "UKernel 6x32")
   test(14, 32, 64, 1, 32, 1, 32, 1, 32, "UKernel 14x32")
