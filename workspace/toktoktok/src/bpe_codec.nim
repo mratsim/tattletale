@@ -13,7 +13,7 @@ import std/strformat
 import std/math
 
 import workspace/pcre2
-import workspace/probes
+import workspace/bencher
 
 import ./serialization
 import ./tokenizers_regexps

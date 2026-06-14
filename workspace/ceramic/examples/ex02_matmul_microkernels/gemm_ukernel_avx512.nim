@@ -4,8 +4,7 @@
 
 {.push localpassC: "-mavx512f".}
 
-import std/math
-import ./simd
+import workspace/cpuplatforms/x86/simd_x86
 
 proc gemm_ukernel_avx512*[MR, NR: static int](
     packA, packB: ptr UncheckedArray[float32];

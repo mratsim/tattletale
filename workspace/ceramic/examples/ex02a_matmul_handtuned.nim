@@ -1,12 +1,9 @@
-## ex02_matmul_simd — SIMD-accelerated serial GEMM
+## ex02a_matmul_handtuned — Hand-tuned SIMD-accelerated serial GEMM
 ##
-## Extends ex01 with:
-##   - Per-architecture SIMD micro-kernels (AVX+FMA, AVX-512)
-##   - Runtime CPU feature dispatch
-##   - Activation function as enum with `genEpilogue` macro
-##     (inlines the activation body, zero dispatch overhead)
+## The "low-level" contrast point: manual pack loops, raw pointer arithmetic,
+## aligned loads, k-loop unrolling, prefetch, effective_beta.
 ##
-## BLIS 5-loop structure (same as ex01):
+## BLIS 5-loop structure:
 ##
 ##   Loop 5 (jc): column panels of C/B
 ##   Loop 4 (pc): rank-k updates over K
@@ -16,13 +13,13 @@
 ##
 ##   C[M, N] += α · f(A[M, K] × B[K, N]) + β · C[M, N]
 
+{.experimental: "callOperator".}
+
 import std/math
-import ../../src/int_tuples
-import ../../src/layouts
-import ../../src/layout_algebra
-import ../../src/tensors
-import ../../src/kernel_copy_cpu
-import ../../src/kernel_fillwith_cpu
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layouts
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
 export int_tuples, layouts, layout_algebra, tensors
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -33,7 +30,7 @@ type Activation* = enum
   akIdentity
   akReLU
 
-template genEpilogue(epilogueName: untyped; activationBody: untyped): untyped =
+template genEpilogue*(epilogueName: untyped; activationBody: untyped): untyped =
   ## Generate an epilogue proc with the activation inlined.
   ## Inside `activationBody`, use `x` for the AB accumulator value.
   proc `epilogueName`[T; MR, NR: static int; Sh, St](
@@ -60,18 +57,51 @@ template genEpilogue(epilogueName: untyped; activationBody: untyped): untyped =
           let x {.inject.} = AB[i][j]
           C[i, j] += alpha * activationBody
 
+template genEpilogue_raw*(epilogueName: untyped; activationBody: untyped): untyped =
+  ## Generate an epilogue proc taking raw pointer + strides.
+  ## Inside `activationBody`, use `x` for the AB accumulator value.
+  proc `epilogueName`[T; MR, NR: static int](
+      C: ptr UncheckedArray[T];
+      AB: array[MR, array[NR, T]];
+      mr, nr: int;
+      alpha, beta: T;
+      rsC, csC: int) {.inline.} =
+    if beta == T(0):
+      for i in 0 ..< mr:
+        for j in 0 ..< nr:
+          C[i * rsC + j * csC] = T(0)
+    elif beta != T(1):
+      for i in 0 ..< mr:
+        for j in 0 ..< nr:
+          C[i * rsC + j * csC] *= beta
+    if alpha == T(1):
+      for i in 0 ..< mr:
+        for j in 0 ..< nr:
+          let x {.inject.} = AB[i][j]
+          C[i * rsC + j * csC] += activationBody
+    else:
+      for i in 0 ..< mr:
+        for j in 0 ..< nr:
+          let x {.inject.} = AB[i][j]
+          C[i * rsC + j * csC] += alpha * activationBody
+
 # Generate concrete epilogue procs (zero dispatch overhead)
 genEpilogue(epilogue_identity):
   x
-
 genEpilogue(epilogue_relu):
+  if x > T(0): x else: T(0)
+
+# Raw-pointer epilogue procs
+genEpilogue_raw(epilogue_identity_raw):
+  x
+genEpilogue_raw(epilogue_relu_raw):
   if x > T(0): x else: T(0)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  pack_layout — derive pack-buffer layout from zipped_divide
 # ═══════════════════════════════════════════════════════════════════════════
 
-template pack_layout(zd: Layout; transposed: static bool): auto =
+template pack_layout*(zd: Layout; transposed: static bool): auto =
   let tileCompact = make_layout(zd.shape[0], LayoutLeft)
   let tile_size = product(zd.shape[0])
   let restCompact = make_layout(zd.shape[1],
@@ -85,7 +115,7 @@ template pack_layout(zd: Layout; transposed: static bool): auto =
 # ═══════════════════════════════════════════════════════════════════════════
 
 type MmaAtom = object
-  mr, nr, kc: int
+  mr*, nr*, kc*: int
 
 const
   L1_CACHE_SIZE = 32 * 1024
@@ -112,30 +142,34 @@ proc autoTileParams(atom: static MmaAtom; T: typedesc; M, K: int): tuple[mc, kc:
 #  Micro-kernel dispatch
 # ═══════════════════════════════════════════════════════════════════════════
 
-import ./gemm_ukernel_generic
+import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
+import workspace/cpuplatforms/x86/simd_x86
 
 const simdArch {.strdefine.} = "auto"
 
 when simdArch == "auto":
   when defined(amd64):
     when defined(avx512f):
-      import ./gemm_ukernel_avx512
+      import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx512
       const resolvedArch = "avx512"
     elif defined(avx):
-      import ./gemm_ukernel_avx_fma
+      import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx_fma_ex02a
       const resolvedArch = "avx_fma"
     else:
       const resolvedArch = "generic"
   else:
     const resolvedArch = "generic"
 elif simdArch == "avx512":
-  import ./gemm_ukernel_avx512
+  import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx512
   const resolvedArch = "avx512"
 elif simdArch == "avx_fma":
-  import ./gemm_ukernel_avx_fma
+  import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx_fma_ex02a
   const resolvedArch = "avx_fma"
 else:
   const resolvedArch = "generic"
+
+when resolvedArch == "generic":
+  {.warning: "SIMD arch is 'generic'. For SIMD acceleration compile with -d:simdArch=avx_fma or -d:simdArch=avx512.".}
 
 when simdArch != "auto":
   # Manual SIMD arch override — ensure C++ compiler gets the right flags
@@ -159,11 +193,12 @@ template gemm_ukernel(packA, packB, AB, kc: untyped): untyped =
 #  Epilogue dispatch
 # ═══════════════════════════════════════════════════════════════════════════
 
-template gemm_epilogue(activation: Activation; C, AB, mr, nr, alpha, beta: untyped): untyped =
+template gemm_epilogue(activation: Activation; C, AB, mr, nr, alpha, beta, rsC, csC: untyped): untyped =
+  ## Raw-pointer epilogue dispatch. `C` is ptr UncheckedArray[T] (from displace).
   if activation == akReLU:
-    epilogue_relu(C, AB, mr, nr, alpha, beta)
+    epilogue_relu_raw(C, AB, mr, nr, alpha, beta, rsC, csC)
   else:
-    epilogue_identity(C, AB, mr, nr, alpha, beta)
+    epilogue_identity_raw(C, AB, mr, nr, alpha, beta, rsC, csC)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  gemm_strided — BLIS 5-loop GEMM
@@ -187,8 +222,6 @@ proc gemm_strided*[T: SomeNumber](
   # ── Cache-block dimensions ──
   const atom = MmaAtom(mr: mr, nr: nr, kc: kc_atom)
   let (mc, kc) = autoTileParams(atom, T, M, K)
-
-  # ── Small matrix ──
   if mc < mr or kc < kc_atom:
     for i in 0 ..< M:
       for j in 0 ..< N:
@@ -218,10 +251,15 @@ proc gemm_strided*[T: SomeNumber](
   # ── Pack buffer layouts ──
   let packALay = make_layout((num_ir, kc, mr), LayoutRight)
   let packBLay = make_layout((num_jr, kc, nr), LayoutRight)
-  var packDataA = newSeq[T](int(cosize(packALay)))
-  var packDataB = newSeq[T](int(cosize(packBLay)))
-  var packA = make_view(packDataA, packALay)
-  var packB = make_view(packDataB, packBLay)
+  let packSizeA = int(cosize(packALay))
+  let packSizeB = int(cosize(packBLay))
+  var packMemA = newSeq[T](packSizeA + 8)
+  var packMemB = newSeq[T](packSizeB + 8)
+  # Align to 32 bytes (AVX alignment requirement)
+  let alignA = (cast[int](addr packMemA[0]) + 31) and not 31
+  let alignB = (cast[int](addr packMemB[0]) + 31) and not 31
+  var packA = make_view(cast[ptr UncheckedArray[T]](alignA), packALay)
+  var packB = make_view(cast[ptr UncheckedArray[T]](alignB), packBLay)
 
   # ── zipped_divide + pack_layout ──
   let srcA_zd = zipped_divide(panelA_lay, (mr, 1))
@@ -231,64 +269,112 @@ proc gemm_strided*[T: SomeNumber](
 
   let pA = tiled_divide(vA.layout, (mc, kc))
   let pB = tiled_divide(vB.layout, (kc, nc))
+  var packA_ptr = cast[ptr UncheckedArray[T]](alignA)
+  var packB_ptr = cast[ptr UncheckedArray[T]](alignB)
 
   # ── Loop 4 (pc): rank-k updates ──
   for pc in 0 ..< num_pc:
     let current_kc = min(K - pc * kc, kc)
     if current_kc <= 0: continue
     let last_k = (pc == num_pc - 1) and (current_kc < kc)
+    let effective_beta = if pc == 0: beta else: T(1)
 
     for jc in 0 ..< 1:
       let panelB = local_tile(vB, pB, pc, jc)
+      let pB_ptr = cast[ptr UncheckedArray[T]](panelB.data)
+      let pB_rs = panelB.layout.stride[0]  # row stride of panel
+      let pB_cs = panelB.layout.stride[1]  # col stride of panel
 
-      let srcB_edge = make_view(panelB, ((1, nr), (current_kc, num_jr)), srcB_zd.stride)
-      var dstB_edge = make_view(packB,  ((1, nr), (current_kc, num_jr)), dstB_zd.stride)
-      copySameShape_cpu(dstB_edge, srcB_edge)
+      # Pack B — explicit triple loop (copyMem-compatible stride, SIMD-friendly)
+      let packB_aligned = cast[ptr UncheckedArray[T]](builtin_assume_aligned(cast[pointer](packB_ptr), 32))
+      if pB_cs == 1:
+        # B rows are contiguous — use copyMem
+        for jr in 0 ..< num_jr:
+          for k in 0 ..< current_kc:
+            let dstOff = jr * kc * nr + k * nr
+            let srcOff = k * pB_rs + jr * nr
+            copyMem(addr packB_aligned[dstOff], addr pB_ptr[srcOff], nr * sizeof(T).int)
+      else:
+        for jr in 0 ..< num_jr:
+          for k in 0 ..< current_kc:
+            let dstOff = jr * kc * nr + k * nr
+            let srcOff = k * pB_rs + jr * nr * pB_cs
+            for jj in 0 ..< nr:
+              packB_aligned[dstOff + jj] = pB_ptr[srcOff + jj * pB_cs]
 
       # ── Loop 3 (ic): row blocks of A ──
       for ic in 0 ..< num_ic:
         let current_mc = min(M - ic * mc, mc)
         if current_mc <= 0:
           continue
-
         let last_m = (current_mc < mc)
-        let num_ir_eff = if last_m: ceil_div(current_mc, mr) else: num_ir
+        let num_ir_eff = if last_m: ceil_div(current_mc, mr)
+                         else: num_ir
 
         let panelA = local_tile(vA, pA, ic, pc)
 
-        if last_m or last_k:
-          let mr_eff = min(mr, current_mc)
-          packA.fillWith_cpu(0.T)
-          let srcA_edge = make_view(panelA,
-            make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), srcA_zd.stride))
-          var dstA_edge = make_view(packA,
-            make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), dstA_zd.stride))
-          copySameShape_cpu(dstA_edge, srcA_edge)
+        let pA_ptr = cast[ptr UncheckedArray[T]](panelA.data)
+        let pA_rs = panelA.layout.stride[0]
+        let pA_cs = panelA.layout.stride[1]
+
+        # Pack A — explicit triple loop (with copyMem for contiguous rows)
+        let packA_aligned = cast[ptr UncheckedArray[T]](builtin_assume_aligned(cast[pointer](packA_ptr), 32))
+        if pA_rs == 1:
+          # Rows are contiguous in memory (column-major) — use copyMem
+          for ir in 0 ..< num_ir_eff:
+            let srcRow = ir * mr
+            let lastTile = (srcRow + mr) > current_mc
+            for k in 0 ..< current_kc:
+              let dstOff = ir * kc * mr + k * mr
+              let srcOff = srcRow + k * pA_cs
+              if lastTile:
+                let valid = current_mc - srcRow
+                copyMem(addr packA_aligned[dstOff], addr pA_ptr[srcOff], valid * sizeof(T).int)
+                for ii in valid ..< mr:
+                  packA_aligned[dstOff + ii] = T(0)
+              else:
+                copyMem(addr packA_aligned[dstOff], addr pA_ptr[srcOff], mr * sizeof(T).int)
         else:
-          let src4A = make_view(panelA, srcA_zd)
-          var dst4A = make_view(packA, dstA_zd)
-          copySameShape_cpu(dst4A, src4A)
+          for ir in 0 ..< num_ir_eff:
+            let srcRow = ir * mr
+            for k in 0 ..< current_kc:
+              let dstOff = ir * kc * mr + k * mr
+              let srcOff = srcRow * pA_rs + k * pA_cs
+              for ii in 0 ..< mr:
+                if (srcRow + ii) < current_mc:
+                  packA_aligned[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
+                else:
+                  packA_aligned[dstOff + ii] = T(0)
 
         # ── Loop 2 (jr): micro-panels of B ──
+        let packB_ptr = cast[ptr UncheckedArray[T]](alignB)
+        let packA_ptr = cast[ptr UncheckedArray[T]](alignA)
+        let packA_jump = kc * mr   # elements per ir slice
         for jr in 0 ..< num_jr:
           let cCol = jr * nr
           if cCol >= N:
             break
-
-          let bTile = packB.slice((jr, _, _))
+          
+          let bTilePtr = cast[ptr UncheckedArray[T]](packB_ptr)
+          let bOffset = jr * kc * nr   # jr * kc * nr
 
           # ── Loop 1 (ir): micro-tiles of A (innermost) ──
           for ir in 0 ..< num_ir_eff:
             let cRow = ic * mc + ir * mr
-            if cRow >= M:
-              break
-            let aTile = packA.slice((ir, _, _))
+            let aOffset = ir * packA_jump
             var AB {.noInit.}: array[mr, array[nr, T]]
+            # Prefetch next B and A panels (matching Laser's gebp_mkernel pattern)
+            builtin_prefetch(cast[pointer](cast[int](bTilePtr) +% bOffset *% sizeof(T).int), 0, 1)
+            builtin_prefetch(cast[pointer](cast[int](packA_ptr) +% aOffset *% sizeof(T).int), 0, 1)
+            gemm_ukernel(
+              cast[ptr UncheckedArray[T]](cast[int](packA_ptr) +% aOffset *% sizeof(T).int),
+              cast[ptr UncheckedArray[T]](cast[int](bTilePtr) +% bOffset *% sizeof(T).int),
+              AB, current_kc)
 
-            gemm_ukernel(aTile.data, bTile.data, AB, current_kc)
-
-            let cTile = displace(vC, (cRow, cCol))
-            gemm_epilogue(activation, cTile, AB, mr, nr, alpha, beta)
+            # Epilogue: displace (layout algebra) for view, raw-pointer dispatch
+            let cTile {.noInit.} = displace(vC, (cRow, cCol))
+            gemm_epilogue(activation, cast[ptr UncheckedArray[T]](cTile.data),
+                          AB, mr, nr, alpha, effective_beta, rowStrideC, colStrideC)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Convenience overload — openArray[T]
@@ -344,14 +430,10 @@ when isMainModule:
     var B = newSeq[float32](bLen)
     var C_ref = newSeq[float32](cLen)
     var C_tst = newSeq[float32](cLen)
-    for i in 0 ..< A.len:
-      A[i] = rand(1.0'f32)
-    for i in 0 ..< B.len:
-      B[i] = rand(1.0'f32)
-    for i in 0 ..< C_ref.len:
-      C_ref[i] = rand(1.0'f32)
-    for i in 0 ..< C_tst.len:
-      C_tst[i] = C_ref[i]
+    for i in 0 ..< A.len:   A[i] = rand(1.0'f32)
+    for i in 0 ..< B.len:   B[i] = rand(1.0'f32)
+    for i in 0 ..< C_ref.len: C_ref[i] = rand(1.0'f32)
+    for i in 0 ..< C_tst.len: C_tst[i] = C_ref[i]
 
     let alpha = 1.0'f32; let beta = 1.0'f32
     gemm_reference(M, N, K, alpha, A, rsA, csA, B, rsB, csB, beta, C_ref, rsC, csC)

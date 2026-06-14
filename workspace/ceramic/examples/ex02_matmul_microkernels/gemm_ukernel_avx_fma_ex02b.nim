@@ -1,21 +1,20 @@
-## SIMD micro-kernel — AVX+FMA (float32)
+## SIMD micro-kernel — AVX+FMA (float32) — ex02b layout-algebra variant
 ##
 ## Uses the `localpassC` pragma to enable AVX+FMA only in this file.
 ## Tile: mr=6, nr=16 (two AVX vectors per k-step)
+## Simple k-loop, no unrolling, unaligned loads.
 
 {.push localpassC: "-mavx -mfma".}
 
-import std/math
-import ./simd
+import workspace/cpuplatforms/x86/simd_x86
 
 proc gemm_ukernel_avx_fma*[MR, NR: static int](
     packA, packB: ptr UncheckedArray[float32];
     AB: var array[MR, array[NR, float32]];
     kc: int) =
   ## AVX+FMA micro-kernel for float32.
-  ## MR=6, NR=16 → C lives in 12 AVX registers (mr × (nr/8) vectors).
+  ## Simple k-loop, unaligned loads.
   const NbVecs = NR div 8   # 2 vectors per row (16 float32 = 2×m256)
-  # C register tile: ABv[i][j] = m256 for row i, vector j
   var ABv {.noInit.}: array[MR, array[NbVecs, m256]]
   for i in 0 ..< MR:
     for j in 0 ..< NbVecs:
@@ -30,7 +29,6 @@ proc gemm_ukernel_avx_fma*[MR, NR: static int](
       ABv[i][0] = mm256_fmadd_ps(ai, Bv0, ABv[i][0])
       ABv[i][1] = mm256_fmadd_ps(ai, Bv1, ABv[i][1])
 
-  # Write back to AB array
   for i in 0 ..< MR:
     mm256_storeu_ps(cast[ptr float32](AB[i][0].addr), ABv[i][0])
     mm256_storeu_ps(cast[ptr float32](AB[i][8].addr), ABv[i][1])

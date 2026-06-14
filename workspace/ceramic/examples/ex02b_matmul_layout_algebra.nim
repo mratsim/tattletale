@@ -1,12 +1,9 @@
-## ex02_matmul_simd — SIMD-accelerated serial GEMM
+## ex02b_matmul_layout_algebra — SIMD-accelerated serial GEMM (layout-algebra version)
 ##
-## Extends ex01 with:
-##   - Per-architecture SIMD micro-kernels (AVX+FMA, AVX-512)
-##   - Runtime CPU feature dispatch
-##   - Activation function as enum with `genEpilogue` macro
-##     (inlines the activation body, zero dispatch overhead)
+## The "high-level" baseline: pack/unpack via layout-generic `copySameShape_cpu`,
+## micro-tile views via `slice`, epilogue via TensorView.
 ##
-## BLIS 5-loop structure (same as ex01):
+## BLIS 5-loop structure:
 ##
 ##   Loop 5 (jc): column panels of C/B
 ##   Loop 4 (pc): rank-k updates over K
@@ -17,12 +14,12 @@
 ##   C[M, N] += α · f(A[M, K] × B[K, N]) + β · C[M, N]
 
 import std/math
-import ../../src/int_tuples
-import ../../src/layouts
-import ../../src/layout_algebra
-import ../../src/tensors
-import ../../src/kernel_copy_cpu
-import ../../src/kernel_fillwith_cpu
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layouts
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/kernel_copy_cpu
+import workspace/ceramic/src/kernel_fillwith_cpu
 export int_tuples, layouts, layout_algebra, tensors
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -65,40 +62,6 @@ genEpilogue(epilogue_identity):
   x
 
 genEpilogue(epilogue_relu):
-  if x > T(0): x else: T(0)
-
-template genEpilogue_raw*(epilogueName: untyped; activationBody: untyped): untyped =
-  ## Generate an epilogue proc taking raw pointer + strides.
-  ## Inside `activationBody`, use `x` for the AB accumulator value.
-  proc `epilogueName`[T; MR, NR: static int](
-      C: ptr UncheckedArray[T];
-      AB: array[MR, array[NR, T]];
-      mr, nr: int;
-      alpha, beta: T;
-      rsC, csC: int) {.inline.} =
-    if beta == T(0):
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          C[i * rsC + j * csC] = T(0)
-    elif beta != T(1):
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          C[i * rsC + j * csC] *= beta
-    if alpha == T(1):
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          let x {.inject.} = AB[i][j]
-          C[i * rsC + j * csC] += activationBody
-    else:
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          let x {.inject.} = AB[i][j]
-          C[i * rsC + j * csC] += alpha * activationBody
-
-# Generate concrete raw epilogue procs
-genEpilogue_raw(epilogue_identity_raw):
-  x
-genEpilogue_raw(epilogue_relu_raw):
   if x > T(0): x else: T(0)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -146,30 +109,33 @@ proc autoTileParams(atom: static MmaAtom; T: typedesc; M, K: int): tuple[mc, kc:
 #  Micro-kernel dispatch
 # ═══════════════════════════════════════════════════════════════════════════
 
-import ./gemm_ukernel_generic
+import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
 
 const simdArch {.strdefine.} = "auto"
 
 when simdArch == "auto":
   when defined(amd64):
     when defined(avx512f):
-      import ./gemm_ukernel_avx512
+      import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx512
       const resolvedArch = "avx512"
     elif defined(avx):
-      import ./gemm_ukernel_avx_fma
+      import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx_fma_ex02b
       const resolvedArch = "avx_fma"
     else:
       const resolvedArch = "generic"
   else:
     const resolvedArch = "generic"
 elif simdArch == "avx512":
-  import ./gemm_ukernel_avx512
+  import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx512
   const resolvedArch = "avx512"
 elif simdArch == "avx_fma":
-  import ./gemm_ukernel_avx_fma
+  import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx_fma_ex02b
   const resolvedArch = "avx_fma"
 else:
   const resolvedArch = "generic"
+
+when resolvedArch == "generic":
+  {.warning: "SIMD arch is 'generic'. For SIMD acceleration compile with -d:simdArch=avx_fma or -d:simdArch=avx512.".}
 
 when simdArch != "auto":
   # Manual SIMD arch override — ensure C++ compiler gets the right flags
@@ -190,11 +156,10 @@ template gemm_ukernel(packA, packB, AB, kc: untyped): untyped =
     gemm_ukernel_generic(packA, packB, AB, kc)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Epilogue dispatch
+#  Epilogue dispatch (TensorView-based)
 # ═══════════════════════════════════════════════════════════════════════════
 
 template gemm_epilogue(activation: Activation; C, AB, mr, nr, alpha, beta: untyped): untyped =
-  ## TensorView-based epilogue dispatch.
   if activation == akReLU:
     epilogue_relu(C, AB, mr, nr, alpha, beta)
   else:
@@ -276,7 +241,6 @@ proc gemm_strided*[T: SomeNumber](
     for jc in 0 ..< 1:
       let panelB = local_tile(vB, pB, pc, jc)
 
-      # Pack B — copySameShape_cpu (well-tuned, contiguous-friendly)
       let srcB_edge = make_view(panelB, ((1, nr), (current_kc, num_jr)), srcB_zd.stride)
       var dstB_edge = make_view(packB,  ((1, nr), (current_kc, num_jr)), dstB_zd.stride)
       copySameShape_cpu(dstB_edge, srcB_edge)
@@ -292,46 +256,15 @@ proc gemm_strided*[T: SomeNumber](
 
         let panelA = local_tile(vA, pA, ic, pc)
 
-        # Pack A — edge case uses manual loop (avoids fillWith_cpu(0) full-buffer memset)
-        # Normal case uses copySameShape_cpu (well-tuned for full tiles)
         if last_m or last_k:
-          # Manual inline loop — only zeros partial tile tails, not the full buffer
-          let pA_ptr = cast[ptr UncheckedArray[T]](panelA.data)
-          let pA_rs = panelA.layout.stride[0]
-          let pA_cs = panelA.layout.stride[1]
-          let packA_ptr = cast[ptr UncheckedArray[T]](packA.data)
-          if pA_rs == 1:
-            for ir in 0 ..< num_ir_eff:
-              let srcRow = ir * mr
-              let lastTile = last_m and (srcRow + mr > current_mc)
-              for k in 0 ..< current_kc:
-                let dstOff = ir * kc * mr + k * mr
-                let srcOff = srcRow + k * pA_cs
-                if lastTile:
-                  let valid = current_mc - srcRow
-                  copyMem(addr packA_ptr[dstOff], addr pA_ptr[srcOff], valid * sizeof(T).int)
-                  for ii in valid ..< mr:
-                    packA_ptr[dstOff + ii] = T(0)
-                else:
-                  copyMem(addr packA_ptr[dstOff], addr pA_ptr[srcOff], mr * sizeof(T).int)
-          else:
-            for ir in 0 ..< num_ir_eff:
-              let srcRow = ir * mr
-              let lastTile = last_m and (srcRow + mr > current_mc)
-              for k in 0 ..< current_kc:
-                let dstOff = ir * kc * mr + k * mr
-                let srcOff = srcRow * pA_rs + k * pA_cs
-                if lastTile:
-                  let valid = current_mc - srcRow
-                  for ii in 0 ..< valid:
-                    packA_ptr[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
-                  for ii in valid ..< mr:
-                    packA_ptr[dstOff + ii] = T(0)
-                else:
-                  for ii in 0 ..< mr:
-                    packA_ptr[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
+          let mr_eff = min(mr, current_mc)
+          packA.fillWith_cpu(0.T)
+          let srcA_edge = make_view(panelA,
+            make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), srcA_zd.stride))
+          var dstA_edge = make_view(packA,
+            make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), dstA_zd.stride))
+          copySameShape_cpu(dstA_edge, srcA_edge)
         else:
-          # Normal case — use the well-tuned copySameShape_cpu
           let src4A = make_view(panelA, srcA_zd)
           var dst4A = make_view(packA, dstA_zd)
           copySameShape_cpu(dst4A, src4A)
@@ -341,6 +274,7 @@ proc gemm_strided*[T: SomeNumber](
           let cCol = jr * nr
           if cCol >= N:
             break
+
           let bTile = packB.slice((jr, _, _))
 
           # ── Loop 1 (ir): micro-tiles of A (innermost) ──
