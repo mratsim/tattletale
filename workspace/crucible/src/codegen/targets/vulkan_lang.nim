@@ -80,6 +80,7 @@ proc gpuTypeToShortString*(t: GpuType): string =
     result = $t.sValue
   else:
     result = $t.kind # fallback — safe but verbose
+
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
                     ): string =

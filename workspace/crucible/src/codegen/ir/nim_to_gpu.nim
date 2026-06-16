@@ -268,17 +268,23 @@ proc constructTupleTypeName(n: NimNode): string =
       if i < n.len - 1:
         result.add "_"
     of nnkExprColonExpr:
-      # ExprColonExpr
+      # ExprColonExpr — two sub-cases:
+      # ── Static tuple literal (value embedded in name):
+      #   Sym "s0"
+      #   IntLit 4
+      # ── Type expression (type name embedded):
       #   Sym "hi"
       #   Infix
       #     Sym "shr"
       #     Sym "n"
       #     IntLit 16
-      # -> these are tuple types that are constructed in place using `(foo: bar, ar: br)`
-      #    give them a slightly different name
-      let typName = ch[0].getTypeName() ## XXX
       doAssert ch[0].kind == nnkSym, "Not a symbol, but: " & $ch.treerepr
-      result.add ch[0].strVal & "_" & typName
+      if ch[1].kind in {nnkIntLit, nnkUIntLit}:
+        # Use the actual integer value in the name
+        result.add ch[0].strVal & "_" & $ch[1].intVal
+      else:
+        let typName = ch[1].getTypeName()
+        result.add ch[0].strVal & "_" & typName
       if i < n.len - 1:
         result.add "_"
     of nnkSym:
