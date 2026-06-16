@@ -66,84 +66,79 @@ echo ""
 
 # ── Optional execution via Vulkan runtime ───────────────────────────────────
 
-when defined(vulkan):
-  echo "=== Vulkan execution ===\n"
+echo "=== Vulkan execution ===\n"
 
-  block: # addKernel
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
+block: # addKernel
+  var ctx = initVulkan()
+  defer: ctx.shutdown()
 
-    var a: array[2, uint32] = [10'u32, 20'u32]
-    var b: array[2, uint32] = [1'u32, 2'u32]
+  var a: array[2, uint32] = [10'u32, 20'u32]
+  var b: array[2, uint32] = [1'u32, 2'u32]
 
-    let result = execVulkan(
-      ctx,
-      addVk,
-      "main",
-      outputBytes = 8,  # 2 x uint32
-      inputs = [
-        (cast[pointer](a[0].addr), 8),
-        (cast[pointer](b[0].addr), 8)
-      ]
-    )
+  let result = execVulkan(
+    ctx,
+    addVk,
+    "main",
+    outputBytes = 8,  # 2 x uint32
+    inputs = [
+      (cast[pointer](a[0].addr), 8),
+      (cast[pointer](b[0].addr), 8)
+    ]
+  )
 
-    doAssert result.len == 8
-    let out32 = cast[ptr array[2, uint32]](result[0].addr)
-    echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
-    doAssert out32[0] == 11
-    doAssert out32[1] == 22
-    echo "  OK"
+  doAssert result.len == 8
+  let out32 = cast[ptr array[2, uint32]](result[0].addr)
+  echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
+  doAssert out32[0] == 11
+  doAssert out32[1] == 22
+  echo "  OK"
 
-  block: # vec2AddKernel (external type + fn)
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
+block: # vec2AddKernel (external type + fn)
+  var ctx = initVulkan()
+  defer: ctx.shutdown()
 
-    var a: array[2, uint32] = [100'u32, 200'u32]
-    var b: array[2, uint32] = [3'u32, 4'u32]
+  var a: array[2, uint32] = [100'u32, 200'u32]
+  var b: array[2, uint32] = [3'u32, 4'u32]
 
-    let result = execVulkan(
-      ctx,
-      vec2Vk,
-      "main",
-      outputBytes = 8,
-      inputs = [
-        (cast[pointer](a[0].addr), 8),
-        (cast[pointer](b[0].addr), 8)
-      ]
-    )
+  let result = execVulkan(
+    ctx,
+    vec2Vk,
+    "main",
+    outputBytes = 8,
+    inputs = [
+      (cast[pointer](a[0].addr), 8),
+      (cast[pointer](b[0].addr), 8)
+    ]
+  )
 
-    let out32 = cast[ptr array[2, uint32]](result[0].addr)
-    echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
-    doAssert out32[0] == 103
-    doAssert out32[1] == 204
-    echo "  OK"
+  let out32 = cast[ptr array[2, uint32]](result[0].addr)
+  echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
+  doAssert out32[0] == 103
+  doAssert out32[1] == 204
+  echo "  OK"
 
-  block: # maxKernel (generic instantiation)
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
+block: # maxKernel (generic instantiation)
+  var ctx = initVulkan()
+  defer: ctx.shutdown()
 
-    var a: array[1, uint32] = [42'u32]
-    var b: array[1, uint32] = [17'u32]
+  var a: array[1, uint32] = [42'u32]
+  var b: array[1, uint32] = [17'u32]
 
-    let result = execVulkan(
-      ctx,
-      maxVk,
-      "main",
-      outputBytes = 4,
-      inputs = [
-        (cast[pointer](a[0].addr), 4),
-        (cast[pointer](b[0].addr), 4)
-      ]
-    )
+  let result = execVulkan(
+    ctx,
+    maxVk,
+    "main",
+    outputBytes = 4,
+    inputs = [
+      (cast[pointer](a[0].addr), 4),
+      (cast[pointer](b[0].addr), 4)
+    ]
+  )
 
-    let outVal = cast[ptr uint32](result[0].addr)[]
-    echo "  maxKernel: max(42, 17) = ", outVal
-    doAssert outVal == 42
-    echo "  OK"
+  let outVal = cast[ptr uint32](result[0].addr)[]
+  echo "  maxKernel: max(42, 17) = ", outVal
+  doAssert outVal == 42
+  echo "  OK"
 
-  echo "All execution tests passed ✅"
+echo "All execution tests passed ✅"
 
-else:
-  echo "---"
-  echo "To run execution tests, recompile with -d:vulkan"
-  echo "Requires libvulkan.so.1 + libshaderc_shared.so (or glslangValidator on PATH)"
