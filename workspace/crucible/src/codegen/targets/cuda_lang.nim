@@ -295,8 +295,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
-      result.add ctx.genCuda(el, indent)
-      if el.kind != gpuBlock and not ctx.skipSemicolon: # nested block ⇒ ; already added
+      let code = ctx.genCuda(el, indent)
+      if code.len == 0:
+        continue # skip gpuVoid and empty statements
+      result.add code
+      if el.kind != gpuBlock and not ctx.skipSemicolon:
         result.add ';'
       if i < ast.statements.high:
         result.add '\n'
@@ -404,12 +407,18 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuTypeDef:
     result = "struct " & gpuTypeToString(ast.tTyp) & "{\n"
-    for el in ast.tFields:
-      result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+    if ast.tFields.len == 0:
+      # CUDA requires at least one field in a struct.
+      result.add "  char _;\n"
+    else:
+      for el in ast.tFields:
+        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
     result.add '}'
 
   of gpuObjConstr:
-    result = "{"
+    # Compound literal: (TypeName){val1, val2, ...}
+    let typName = gpuTypeToString(ast.ocType, allowEmptyIdent = true)
+    result = '(' & typName & "){"
     for i, el in ast.ocFields:
       result.add ctx.genCuda(el.value)
       if i < ast.ocFields.len - 1:

@@ -59,6 +59,8 @@ proc initNvrtc*(cuda: string, name = "sample.cu"): NVRTC =
     check cudaGetDeviceProperties(prop, 0);
     echo "Compute capability: ", prop.major, " ", prop.minor
 
+    when defined(debugCuda):
+      writeFile("/tmp/tattletale/generated_kernel.cu", cuda)
 
   ## TODO: consider in-memory and on-disk caching option for compiled PTX.
   ## (Compile once, reuse PTX or CUmodule for subsequent runs.)
@@ -93,7 +95,8 @@ proc compile*(nvrtc: var NVRTC) =
   # Compile the program with fmad disabled.
   # Note: Can specify GPU target architecture explicitly with '-arch' flag.
   var options = @[
-    cstring "--gpu-architecture=compute_75", # or whatever your GPU arch is
+    cstring "--gpu-architecture=sm_120", # Blackwell (sm_120)
+    cstring "-default-device",           # namespace-scope vars default to __device__
     # "--fmad=false", # and whatever other options for example
   ]
   when defined(debugCuda):
@@ -103,12 +106,12 @@ proc compile*(nvrtc: var NVRTC) =
   let numberOfOptions = cint options.len
   let compileResult =  nvrtcCompileProgram(nvrtc.prog, numberOfOptions,
                                            cast[cstringArray](addr options[0]))
-
-  nvrtc.log()
   ## XXX: only in `DebugCuda`?
-  echo "Compilation log:\n------------------------------"
-  echo nvrtc.log
-  echo "------------------------------"
+  if compileResult != NVRTC_SUCCESS:
+    nvrtc.log()
+    echo "Compilation log:\n------------------------------"
+    echo nvrtc.log
+    echo "------------------------------"
   check compileResult
 
 proc getPtx*(nvrtc: var NVRTC) =

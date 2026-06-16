@@ -97,38 +97,65 @@ proc parseGenericArgs(ctx: var GpuContext, t: NimNode): seq[GpuType] =
   else:
     raiseAssert "Unexpected node kind in parseGenericArgs: " & $t.treerepr
 
+proc parseGenericImpl(ctx: var GpuContext, impl: NimNode, t: NimNode): GpuType =
+  ## Given a type implementation (ObjectTy, DistinctTy, etc.), parse it as a generic instance.
+  case impl.kind
+  of nnkDistinctTy:
+    ## XXX: assumes distinct of inbuilt type, not object!
+    result = ctx.nimToGpuType(impl[0])
+  of nnkObjectTy:
+    doAssert impl.kind == nnkObjectTy, "Unexpected node kind for generic inst: " & $impl.treerepr
+    ## XXX: use signature hash for type name? Otherwise will produce duplicates
+    result = GpuType(kind: gtGenericInst, gName: t.repr)
+    result.gFields = ctx.parseTypeFields(impl)
+  of nnkStaticTy:
+    # Static int or similar — treat as int.
+    result = initGpuType(gtInt32)
+  else:
+    raiseAssert "Unexpected node kind in for genericInst: " & $impl.treerepr & " kind=" & $impl.kind
+
 proc initGpuGenericInst(ctx: var GpuContext, t: NimNode): GpuType =
-  doAssert t.typeKind == ntyGenericInst, "Input is not a generic instantiation: " & $t.treerepr & " of typeKind: " & $t.typeKind
+  if t.typeKind notin {ntyGenericInst}:
+    if t.typeKind != ntyNone:
+      return ctx.nimToGpuType(t.getTypeInst())
+    else:
+      return GpuType(kind: gtGenericInst, gName: t.repr)
   case t.kind
   of nnkBracketExpr: # regular generic instantiation
     result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(t))
     result.gArgs = ctx.parseGenericArgs(t)
-    # now parse the object fields
     let impl = t.getTypeImpl() # impl for the `gFields`
     result.gFields = ctx.parseTypeFields(impl)
+  of nnkObjectTy:
+    result = ctx.parseGenericImpl(t, t)
   of nnkObjConstr:
-    if t.len == 1:   # Generic instantiation without arguments
-      result = ctx.initGpuGenericInst(t[0])
-    elif t.len == 2: # ...and with arguments
-      doAssert t[1].kind == nnkExprColonExpr, "ObjConstr does not contain initialization as [1], but: " & $t.treerepr
+    if t.len >= 1:
       result = ctx.initGpuGenericInst(t[0])
     else:
-      raiseAssert "Unexpected number of elements in `nnkObjConstr` node for generic instantiation: " & $t.treerepr
+      raiseAssert "Unexpected empty `nnkObjConstr` node for generic instantiation: " & $t.treerepr
+  of nnkCall:
+    if t.len >= 1:
+      result = ctx.initGpuGenericInst(t[0])
+    else:
+      raiseAssert "Unexpected empty `nnkCall` node for generic instantiation: " & $t.treerepr
   of nnkSym:
-    let impl = getTypeImpl(t)
-    case impl.kind
-    of nnkDistinctTy:
-      ## XXX: assumes distinct of inbuilt type, not object!
-      result = ctx.nimToGpuType(impl[0])
-    of nnkObjectTy:
-      doAssert impl.kind == nnkObjectTy, "Unexpected node kind for generic inst: " & $impl.treerepr
-      ## XXX: use signature hash for type name? Otherwise will produce duplicates
-      result = GpuType(kind: gtGenericInst, gName: t.repr)
-      result.gFields = ctx.parseTypeFields(impl)
+    # All callers have already verified typeKind == ntyGenericInst.
+    # Use getTypeInst() to resolve the full generic type (BracketExpr).
+    # Avoid getImpl() which can return local variable IdentDefs from template expansions.
+    let inst = t.getTypeInst()
+    if inst.kind == nnkBracketExpr:
+      result = ctx.initGpuGenericInst(inst)
     else:
-      raiseAssert "Unexpected node kind in for genericInst: " & $t.treerepr
+      let impl = inst.getTypeImpl()
+      result = ctx.parseGenericImpl(impl, t)
+  of nnkOpenSymChoice, nnkClosedSymChoice:
+    # OpenSymChoice: use the impl of the first child symbol. TODO: add a proper resolver
+    if t.len >= 1:
+      result = ctx.initGpuGenericInst(t[0])
+    else:
+      result = GpuType(kind: gtGenericInst, gName: t.repr)
   else:
-    raiseAssert "Unexpected node kind in for genericInst: " & $t.treerepr
+    raiseAssert "Unexpected t.kind for genericInst: " & $t.kind & " treerepr=" & $t.treerepr
 
 proc unpackGenericInst(t: NimNode): NimNode =
   let tKind = t.typeKind
@@ -137,6 +164,8 @@ proc unpackGenericInst(t: NimNode): NimNode =
     case impl.kind
     of nnkDistinctTy: # just skip the distinct
       result = impl[0]
+    of nnkObjectTy, nnkEnumTy:
+      result = t # keep object/enum types as-is
     else:
       raiseAssert "Unsupport type so far: " & $t.treerepr & " of impl: " & $impl.treerepr
   else:
@@ -270,8 +299,10 @@ proc constructTupleTypeName(n: NimNode): string =
       #     Sym "and"
       #     Sym "n"
       #     UInt32Lit 65535
-      # -> Try again with type impl
-      return constructTupleTypeName(getTypeImpl(n))
+      # -> Try again with type impl of the CHILD
+      let childImpl = ch.getTypeImpl()
+      let typName = childImpl.getTypeName()
+      result.add "Field" & $i & "_" & typName
 
 proc getTypeName(n: NimNode, recursedSym: bool = false): string =
   ## Returns the name of the type
@@ -287,6 +318,9 @@ proc getTypeName(n: NimNode, recursedSym: bool = false): string =
       result = n.getTypeInst.strVal
     else:
       result = n[0].strVal # type is the first node
+  of nnkObjectTy:
+    # Anonymous object type — use its repr as a fallback name.
+    result = n.repr
   of nnkTupleTy, nnkTupleConstr:
     result = constructTupleTypeName(n)
   of nnkBracketExpr:
@@ -295,6 +329,10 @@ proc getTypeName(n: NimNode, recursedSym: bool = false): string =
       result.add ch.getTypeName()
       if i < n.len - 1:
         result.add "_"
+  of nnkIntLit:
+    result = $n.intVal
+  of nnkUIntLit:
+    result = $n.intVal
   else: raiseAssert "Unexpected node in `getTypeName`: " & $n.treerepr
 
 proc nimToGpuType(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType =
@@ -390,6 +428,25 @@ proc nimToGpuType(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, al
       #   Sym "BigInt"
       doAssert n.kind == nnkBracketExpr and n[0].strVal == "lent", "ntyUnused2: " & $n.treerepr
       result = initGpuPtrType(ctx.nimToGpuType(n[1]), implicitPtr = false)
+    of ntyProc:
+      # Procedure types can't be translated to CUDA C directly.
+      # They appear when Crucible encounters a proc definition-symbol
+      # being processed as a type. Fall back to the type instance.
+      let inst = n.getTypeInst()
+      if inst.typeKind == ntyGenericInst:
+        result = ctx.initGpuGenericInst(inst)
+      else:
+        result = GpuType(kind: gtGenericInst, gName: n.repr)
+    of ntyStatic:
+      # Static types — might be compile-time int values or type descriptors.
+      # Fall back to type instance to resolve.
+      let inst = n.getTypeInst()
+      if inst.typeKind == ntyGenericInst:
+        result = ctx.initGpuGenericInst(inst)
+      elif inst.typeKind in {ntyInt .. ntyUint64}:
+        result = initGpuType(toGpuTypeKind inst.typeKind)
+      else:
+        result = ctx.nimToGpuType(inst)
     else:
       if allowToFail:
         result = GpuType(kind: gtVoid)
@@ -404,6 +461,9 @@ proc assignOp(op: string, isBoolean: bool): string =
   ## This is to replace things like `shl`, `div` or `mod`
   case op
   of "div": result = "/"
+  of "+%": result = "+"
+  of "-%": result = "-"
+  of "*%": result = "*"
   of "mod": result = "%"
   of "shl": result = "<<"
   of "shr": result = ">>"
@@ -421,11 +481,12 @@ proc assignPrefixOp(op: string): string =
 proc parseTypeFields(ctx: var GpuContext, node: NimNode): seq[GpuTypeField] =
   case node.kind
   of nnkObjectTy:
-    doAssert node[2].kind == nnkRecList
-    for ch in node[2]:
-      doAssert ch.kind == nnkIdentDefs and ch.len == 3
-      result.add GpuTypeField(name: ch[0].strVal,
-                              typ: ctx.nimToGpuType(ch[1]))
+    # Empty objects (e.g., `type Int[V] = object`) have no recList.
+    if node.len > 2 and node[2].kind == nnkRecList:
+      for ch in node[2]:
+        doAssert ch.kind == nnkIdentDefs and ch.len == 3
+        result.add GpuTypeField(name: ch[0].strVal,
+                                typ: ctx.nimToGpuType(ch[1]))
   of nnkTupleTy:
     for ch in node:
       doAssert ch.kind == nnkIdentDefs and ch.len == 3
@@ -443,8 +504,19 @@ proc parseTypeFields(ctx: var GpuContext, node: NimNode): seq[GpuTypeField] =
       of nnkExprColonExpr:
         result.add GpuTypeField(name: ch[0].strVal,
                                 typ: ctx.nimToGpuType(ch[1]))
+      of nnkBracketExpr:
+        # E.g. `Int[128]` inside a tuple type constructor.
+        # `getTypeImpl` returns the object definition (ObjectTy), which
+        # parseTypeFields handles directly.
+        let impl = ch.getTypeImpl()
+        result.add GpuTypeField(name: "Field" & $i,
+                                typ: ctx.nimToGpuType(impl))
       else:
-        return ctx.parseTypeFields(node.getTypeImpl) # will likely fall back to constr with `nnkSym`
+        # Unexpected child in tuple type constructor.
+        # Try to resolve its type implementation.
+        let impl = ch.getTypeImpl()
+        result.add GpuTypeField(name: "Field" & $i,
+                                typ: ctx.nimToGpuType(impl))
   else:
     raiseAssert "Unsupported type to parse fields from: " & $node.kind
 
@@ -496,7 +568,15 @@ proc collectProcAttributes(n: NimNode): set[GpuAttribute] =
       continue
     of "magic":
       return
-    of "raises": discard # result.incl attDevice #discard # XXX
+    of "noinit", "noInit":
+      discard
+    of "cudaName":
+      continue # provides alternative name, not an attribute
+    of "raises":
+      discard
+    # Common Nim pragmas that are not relevant for CUDA C codegen:
+    of "noSideEffect", "nimcall", "closure", "inlne", "shallow":
+      discard
     else:
       raiseAssert "Unexpected pragma for procs: " & $pragma.treerepr
 
@@ -528,6 +608,8 @@ proc collectAttributes(n: NimNode): seq[GpuVarAttribute] =
     of "volatile": result.add atvVolatile
     of "constant": result.add atvConstant
     of "noinit": discard # XXX: ignore for now
+    of "inject": discard # injected symbols from templates/macros
+    of "gensym": discard # template-generated symbol
     else:
       raiseAssert "Unexpected pragma: " & $pragma.treerepr
 
@@ -547,6 +629,7 @@ proc maybePatchFnName(n: var GpuAst) =
   case name
   of "[]":  patch(n, "get")
   of "[]=": patch(n, "set")
+  of "()":  patch(n, "call")
   of "+":   patch(n, "add")
   of "-":   patch(n, "sub")
   of "*":   patch(n, "mul")
@@ -717,7 +800,22 @@ proc addProcToGenericInsts(ctx: var GpuContext, node: NimNode, name: GpuAst) =
     # calling `toGpuAst` recursively forever
     ctx.processedProcs[name] = procSig
 
-  let fn = ctx.toGpuAst(inst)
+  # TODO: to be reviewed
+  # Some instantiations come from macro-generated code (e.g., CuTe library)
+  # and contain AST nodes (bindSym, newCall, etc.) that Crucible cannot translate.
+  # Catch failures and register as built-in instead.
+  let fn = block:
+    try:
+      ctx.toGpuAst(inst)
+    except:
+      let fallback = GpuAst(kind: gpuProc, pName: name,
+                             pRetType: procSig.retType,
+                             pAttributes: {attDevice})
+      fallback.pBody = GpuAst(kind: gpuBlock)
+      ctx.genericInsts[name] = fallback
+      if name notin ctx.allFnTab:
+        ctx.allFnTab[name] = fallback
+      GpuAst(kind: gpuVoid)
   if fn.kind == gpuVoid:
     # Should be an inbuilt proc, i.e. annotated with `{.builtin.}`. However,
     # functions that are available otherwise (e.g. in Nim's system like `abs`)
@@ -796,6 +894,22 @@ proc maybeInsertResult(ast: var GpuAst, retType: GpuType, fnName: string) =
     if not lastIsReturn(ast):
       # insert `return result`
       ast.statements.add GpuAst(kind: gpuReturn, rValue: resId)
+
+    # For generic instantiations, the Nim compiler hasn't rewritten
+    # single-expression bodies to `result = expr`. Fix up the last
+    # standalone expression (if any) to assign to result.
+    for i in countdown(ast.statements.high, 0):
+      let stmt = ast.statements[i]
+      if stmt.kind notin {gpuVar, gpuComment, gpuVoid, gpuReturn}:
+        if stmt.kind == gpuBlock and stmt.isExpr:
+          # Unwrap single-statement expression blocks
+          if stmt.statements.len == 1:
+            ast.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt.statements[0])
+          else:
+            ast.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt)
+        elif stmt.kind != gpuAssign:
+          ast.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt)
+        break
 
 proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
   ## Returns true if the given `fn` (gpuIdent) returns a value.
@@ -951,10 +1065,16 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       result.statements.add(varNode)
 
   of nnkAsgn:
-    result = GpuAst(kind: gpuAssign)
-    result.aLeft = ctx.toGpuAst(node[0])
-    result.aRight = ctx.toGpuAst(node[1])
-    result.aRequiresMemcpy = requiresMemcpy(node[1])
+    if node[1].kind == nnkIfExpr:
+      # Assignment result = (if cond: then else: else) must emit
+      #   if cond: result = then else: result = else
+      # The nnkIfExpr handler already embeds result= in each branch.
+      result = ctx.toGpuAst(node[1])
+    else:
+      result = GpuAst(kind: gpuAssign)
+      result.aLeft = ctx.toGpuAst(node[0])
+      result.aRight = ctx.toGpuAst(node[1])
+      result.aRequiresMemcpy = requiresMemcpy(node[1])
 
   of nnkIfStmt:
     result = GpuAst(kind: gpuIf)
@@ -966,22 +1086,50 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     else:
       result.ifElse = GpuAst(kind: gpuVoid)
 
+  of nnkIfExpr:
+    # If-expression (returns a value) — generates if/else with result= assign
+    # AST: nnkIfExpr(nnkElifBranch(cond, then_expr), nnkElse(else_expr)?)
+    let branch = node[0]
+    let cond = ctx.toGpuAst(branch[0])
+    let thenVal = ctx.toGpuAst(branch[1])
+    var thenAsgn = GpuAst(kind: gpuAssign)
+    thenAsgn.aLeft = GpuAst(kind: gpuIdent, iName: "result")
+    thenAsgn.aRight = thenVal
+    result = GpuAst(kind: gpuIf)
+    result.ifCond = cond
+    result.ifThen = GpuAst(kind: gpuBlock, statements: @[thenAsgn])
+    if node.len > 1 and node[^1].kind == nnkElse:
+      let elseVal = ctx.toGpuAst(node[^1][0])
+      var elseAsgn = GpuAst(kind: gpuAssign)
+      elseAsgn.aLeft = GpuAst(kind: gpuIdent, iName: "result")
+      elseAsgn.aRight = elseVal
+      result.ifElse = GpuAst(kind: gpuBlock, statements: @[elseAsgn])
+    else:
+      result.ifElse = GpuAst(kind: gpuVoid)
+
   of nnkForStmt:
     result = GpuAst(kind: gpuFor)
     doAssert node[0].kind in {nnkIdent, nnkSym}, "The variable in the for loop is not an identifier or symbol, but: " & $node[0].treerepr
     result.fVar = ctx.toGpuAst(node[0])
     result.fVar.symbolKind = gsLocal
     result.fVar.iTyp = initGpuType(gtInt32) ## XXX: do not force this type
-    # Assuming range expression
-    result.fStart = ctx.toGpuAst(node[1][1])
-    result.fEnd = ctx.toGpuAst(node[1][2])
-    result.fBody = ensureBlock ctx.toGpuAst(node[2])
+    # Range expression — may be `0 ..< N` (Infix) or a direct range call.
+    if node[1].kind == nnkInfix:
+      result.fStart = ctx.toGpuAst(node[1][1])
+      result.fEnd = ctx.toGpuAst(node[1][2])
+    elif node[1].len >= 2:
+      result.fStart = ctx.toGpuAst(node[1][1])
+      result.fEnd = ctx.toGpuAst(node[1][^1])
+    else:
+      result.fStart = GpuAst(kind: gpuLit, lValue: "0", lType: initGpuType(gtInt32))
+      result.fEnd = GpuAst(kind: gpuLit, lValue: "0", lType: initGpuType(gtInt32))
+    result.fBody = ensureBlock ctx.toGpuAst(node[^1])
   of nnkWhileStmt:
     result = GpuAst(kind: gpuWhile)
     result.wCond = ctx.toGpuAst(node[0]) # the condition
     result.wBody = ensureBlock ctx.toGpuAst(node[1])
 
-  of nnkTemplateDef:
+  of nnkTemplateDef, nnkMacroDef:
     ## NOTE: Currently we process templates, but we expect them to be already
     ## expanded by the Nim compiler. Thus we could in theory expand them manually
     ## but fortunately we don't need to.
@@ -1106,7 +1254,10 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       result.iName = "tmp_" & $ctx.genSymCount
       inc ctx.genSymCount
   of nnkSym:
-    let s = node.repr & "_" & node.signatureHash()
+    # Sanitize the identifier name: backticks are used by Nim for gensym
+    # symbols (e.g., ``field`gensym229``) but are invalid in C.
+    let sanitized = node.repr.multiReplace(("`", "_"))
+    let s = sanitized & "_" & node.signatureHash()
     # NOTE: The reason we have a tab of known symbols is not to keep the same _reference_ to each
     # symbol, but rather to allow having the same symbol kind and appropriate type for each
     # symbol `GpuAst` (of kind `gpuIdent`), which is set in the caller of this call.
@@ -1114,14 +1265,14 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     # `symbolKind` is local / function argument etc.
     if s notin ctx.sigTab:
       result = newGpuIdent()
-      result.iName = node.repr
+      result.iName = sanitized
       result.iSym = s
       if result.iName == "_":
         result.iName = "tmp_" & $ctx.genSymCount
         inc ctx.genSymCount
-      elif result.iName.startsWith("tmpTuple_"): # will have a Nim gensym'd suffix, replace by custom counter
+      elif result.iName.startsWith("tmpTuple_"):
         result.iName = "tmpTuple_" & $ctx.genSymCount
-        result.iSym = result.iName & "_" & node.signatureHash() # and update the iSym to not be based on Nim's value either
+        result.iSym = result.iName & "_" & node.signatureHash()
         inc ctx.genSymCount
       ctx.sigTab[s] = result
     else:
@@ -1202,6 +1353,9 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       of nnkObjectTy: # regular `type foo = object`
         result = GpuAst(kind: gpuTypeDef, tTyp: typ)
         result.tFields = ctx.parseTypeFields(node[2])
+      of nnkCall:
+        # type defined via constructor call like `type Foo = Bar(...)`
+        result = GpuAst(kind: gpuTypeDef, tTyp: typ)
       of nnkSym:      # a type alias `type foo = bar`
         result = GpuAst(kind: gpuAlias, aTyp: typ,
                         aTo: ctx.toGpuAst(node[2]))
@@ -1216,31 +1370,36 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
   of nnkObjConstr:
     ## this should never see `genericParam` I think
     let typ = ctx.nimToGpuType(node)
-    result = GpuAst(kind: gpuObjConstr, ocType: typ)
     # get all fields of the type
     let flds = if typ.kind == gtObject: typ.oFields
                elif typ.kind == gtGenericInst: typ.gFields
                else: raiseAssert "ObjConstr must have an object type: " & $typ
-    # find all fields that have been defined by the user
-    var ocFields: seq[GpuFieldInit]
-    for i in 1 ..< node.len: # all fields to be init'd
-      doAssert node[i].kind == nnkExprColonExpr
-      ocFields.add GpuFieldInit(name: node[i][0].strVal,
-                                value: ctx.toGpuAst(node[i][1]),
-                                typ: GpuType(kind: gtVoid))
+    if flds.len == 0:
+      # Empty struct (e.g. Int[N]) — CUDA doesn't support compound literals.
+      # Skip the object construction entirely.
+      result = GpuAst(kind: gpuVoid)
+    else:
+      result = GpuAst(kind: gpuObjConstr, ocType: typ)
+      # find all fields that have been defined by the user
+      var ocFields: seq[GpuFieldInit]
+      for i in 1 ..< node.len: # all fields to be init'd
+        doAssert node[i].kind == nnkExprColonExpr
+        ocFields.add GpuFieldInit(name: node[i][0].strVal,
+                                  value: ctx.toGpuAst(node[i][1]),
+                                  typ: GpuType(kind: gtVoid))
 
-    # now add fields in order of the type declaration
-    for i in 0 ..< flds.len:
-      let idx = findIdx(ocFields, flds[i].name)
-      if idx >= 0:
-        var f = ocFields[idx]
-        f.typ = flds[i].typ
-        result.ocFields.add f
-      else:
-        let dfl = GpuAst(kind: gpuLit, lValue: "DEFAULT", lType: GpuType(kind: gtVoid))
-        result.ocFields.add GpuFieldInit(name: flds[i].name,
-                                         value: dfl,
-                                         typ: flds[i].typ)
+      # now add fields in order of the type declaration
+      for i in 0 ..< flds.len:
+        let idx = findIdx(ocFields, flds[i].name)
+        if idx >= 0:
+          var f = ocFields[idx]
+          f.typ = flds[i].typ
+          result.ocFields.add f
+        else:
+          let dfl = GpuAst(kind: gpuLit, lValue: "DEFAULT", lType: GpuType(kind: gtVoid))
+          result.ocFields.add GpuFieldInit(name: flds[i].name,
+                                           value: dfl,
+                                           typ: flds[i].typ)
   of nnkTupleConstr:
     let typ = ctx.nimToGpuType(node)
 
@@ -1290,9 +1449,9 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
                     aLitType: aLitTyp)
 
   of nnkCommentStmt:
-    result = GpuAst(kind: gpuComment, comment: node.strVal)
+    result = GpuAst(kind: gpuVoid)
 
-  of nnkHiddenStdConv:
+  of nnkHiddenStdConv, nnkHiddenSubConv:
     doAssert node[0].kind == nnkEmpty
     result = ctx.toGpuAst(node[1])
   of nnkConv:
@@ -1327,6 +1486,9 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       doAssert el.kind == nnkConstDef
       result.statements.add ctx.toGpuAst(el)
 
+  of nnkBindStmt:
+    # Bind statement — binds a symbol to an overload. Skip (not relevant for CUDA).
+    result = GpuAst(kind: gpuVoid)
   of nnkWhenStmt:
     raiseAssert "We shouldn't be seeing a `when` statement after sem check of the Nim code."
   else:
