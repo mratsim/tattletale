@@ -47,6 +47,34 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   else:
     raiseAssert "Invalid type : " & $t
 
+proc gpuTypeToShortString*(t: GpuType): string =
+  ## Short, space-free type name for use in generic struct identifiers.
+  case t.kind
+  of gtUint8:   result = "u8"
+  of gtUint16:  result = "u16"
+  of gtUint32:  result = "u32"
+  of gtUint64:  result = "u64"
+  of gtInt16:   result = "i16"
+  of gtInt32:   result = "i32"
+  of gtInt64:   result = "i64"
+  of gtFloat32: result = "f32"
+  of gtFloat64: result = "f64"
+  of gtBool:    result = "bool"
+  of gtObject:
+    result = $t.name
+  of gtGenericInst:
+    result = t.gName
+    if t.gArgs.len > 0:
+      result.add '_'
+      for i, g in t.gArgs:
+        if i > 0: result.add '_'
+        result.add gpuTypeToShortString(g)
+  of gtVoidPtr: result = "void_ptr"
+  of gtPtr:
+    result = "ptr_" & gpuTypeToShortString(t.to)
+  else:
+    result = $t.kind # fallback — safe but verbose
+
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
                     ): string =
@@ -98,11 +126,12 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
   of gtGenericInst:
     # NOTE: WGSL does not support actual custom generic types. And as we only anyway deal with generic instantiations
     # we simply turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
+    # use short names (uint32, int64) for generic args, not C names (unsigned int, long long)
     result = t.gName
     if t.gArgs.len > 0:
       result.add '_'
     for i, g in t.gArgs:
-      result.add gpuTypeToString(g)
+      result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:
         result.add '_'
   of gtObject: result = t.name
