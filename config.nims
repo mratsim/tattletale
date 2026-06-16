@@ -61,11 +61,11 @@ proc runCmd(cmd: string) =
   echo "=============================================================================================="
   exec cmd
 
-func testerCmd(path: string): string =
+func testerCmd(path: string; extraFlags = ""): string =
   let filename = path.extractFilename()
   return
     "nim cpp -r" &
-    # " -d:release --stackTrace:on --lineTrace:on " &
+    (if extraFlags.len > 0: " " & extraFlags else: "") &
     " --debugger:native " &
     " --hints:off --warnings:off " &
     &" --outdir:build/tests/{filename} --nimcache:nimcache/tests/{filename} " &
@@ -133,15 +133,14 @@ task make_pytttransformers, "Build pytttransformers.so for Python import":
 # --------------------------------------------------
 # Compile with: nim cpp --outdir:build/tests --nimcache:nimcache/tests --hints:off --warnings:off
 
-iterator getTestCommands(path: string): string =
+iterator getTestCommands(path: string; extraFlags = ""): string =
   ## Convention: tests start with test_ or t_
   for filepath in listFiles(path):
     let filename = filepath.extractFilename()
     if filename.endsWith(".nim") and (
       filename.startsWith("test_") or filename.startsWith("t_")
     ):
-      yield testerCmd(filepath)
-
+      yield testerCmd(filepath, extraFlags = extraFlags)
 task test_libtorch, "Test workspace/libtorch":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/libtorch/tests/raw_torch_tensors"):
@@ -182,6 +181,11 @@ task test_toktoktok, "Test workspace/toktoktok":
 task test_ceramic, "Test workspace/ceramic":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/ceramic/tests"):
+      runCmd(cmd)
+
+task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/nvrtc", extraFlags = "-d:cuda"):
       runCmd(cmd)
 
 # Per-file ENV variables configuration for PCRE2
