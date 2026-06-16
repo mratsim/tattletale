@@ -119,7 +119,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
         result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & '[' & $t.aLen & ']'
     skipIdent = true
   of gtGenericInst:
-    result = t.gName
+    result = "struct " & t.gName
     if t.gArgs.len > 0:
       result.add '_'
     for i, g in t.gArgs:

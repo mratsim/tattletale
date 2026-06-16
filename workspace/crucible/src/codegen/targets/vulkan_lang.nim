@@ -462,7 +462,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuArrayLit:
     result = "{"
     for i, el in ast.aValues:
-      result.add '(' & gpuTypeToString(ast.aLitType) & ')' & ctx.genVulkan(el)
+      result.add gpuTypeToString(ast.aLitType) & '(' & ctx.genVulkan(el) & ')'
       if i < ast.aValues.high:
         result.add ", "
     result.add '}'
@@ -494,10 +494,10 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = indentStr & "/* " & ast.comment & " */"
 
   of gpuConv:
-    result = '(' & gpuTypeToString(ast.convTo, allowEmptyIdent = true) & ')' & ctx.genVulkan(ast.convExpr)
+    result = gpuTypeToString(ast.convTo, allowEmptyIdent = true) & '(' & ctx.genVulkan(ast.convExpr) & ')'
 
   of gpuCast:
-    result = '(' & gpuTypeToString(ast.cTo, allowEmptyIdent = true) & ')' & ctx.genVulkan(ast.cExpr)
+    result = gpuTypeToString(ast.cTo, allowEmptyIdent = true) & '(' & ctx.genVulkan(ast.cExpr) & ')'
 
   of gpuAddr:
     raiseAssert "Vulkan GLSL does not support addr — lower to SSBO/indexing first"

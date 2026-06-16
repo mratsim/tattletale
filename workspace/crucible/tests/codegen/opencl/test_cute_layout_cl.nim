@@ -31,7 +31,7 @@ block:
   var ctx = initOpenCL()
   defer: ctx.shutdown()
   var d: array[1, uint32]
-  let r = execOpenCL(ctx, kernelCl, "cuteKernel", outputBytes=24, inputs=[(d[0].addr, 4)])
+  let r = execOpenCL(ctx, kernelCl, "cuteKernel", outputBytes=24, inputs = [(cast[pointer](d[0].addr), 4)])
   let res = cast[ptr array[6, uint32]](r[0].addr)
   doAssert res[0]==10 and res[1]==20 and res[2]==60
   doAssert res[4]==21 and res[5]==61
