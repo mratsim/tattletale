@@ -44,6 +44,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtObject: "struct"
   of gtString: "const char*"
   of gtUA: "" # `UncheckedArray` by itself is nothing in CUDA
+  of gtStatic: "int"
   else:
     raiseAssert "Invalid type : " & $t
 
@@ -67,11 +68,13 @@ proc gpuTypeToShortString*(t: GpuType): string =
     if t.gArgs.len > 0:
       result.add '_'
       for i, g in t.gArgs:
-        if i > 0: result.add '_'
+        if i > 0: result.add 'x'
         result.add gpuTypeToShortString(g)
   of gtVoidPtr: result = "void_ptr"
   of gtPtr:
     result = "ptr_" & gpuTypeToShortString(t.to)
+  of gtStatic:
+    result = $t.sValue
   else:
     result = $t.kind # fallback — safe but verbose
 
@@ -133,9 +136,10 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     for i, g in t.gArgs:
       result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:
-        result.add '_'
+        result.add 'x'
   of gtObject: result = t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## XXX: unchecked array just T?
+  of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 
   if ident.len > 0 and not skipIdent: # still need to add ident

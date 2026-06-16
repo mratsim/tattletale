@@ -49,6 +49,7 @@ type
   GpuTypeKind* = enum
     gtVoid,
     gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64, gtSize_t, # atomics
+    gtStatic,      # Static integer value (used for generic params)
     gtArray,       # Static array `array[N, dtype]` -> `dtype[N]`
     gtString,
     gtObject,      # Struct types
@@ -83,6 +84,8 @@ type
       aLen*: int     # The length of the array. If `aLen == -1` we look at a generic (static) array. Will be given at instantiation time
                     # On both CUDA and WebGPU a length of `0` is also used to generate `int foo[]` (CUDA)
                     # `array<foo>` (WebGPU) (runtime sized arrays), which are generated from `ptr UncheckedArray[float32]` for example.
+    of gtStatic:
+      sValue*: int  # The actual static integer value
     of gtGenericInst:
       gName*: string # name of the generic type
       gArgs*: seq[GpuType] # list of the instantiated generic arguments e.g. `vec3<f32>` on WGSL backend
@@ -347,6 +350,8 @@ proc clone*(typ: GpuType): GpuType =
   of gtArray:
     result.aTyp = typ.aTyp.clone()
     result.aLen = typ.aLen
+  of gtStatic:
+    result.sValue = typ.sValue
   of gtGenericInst:
     result.gName = typ.gName
     for g in typ.gArgs:
@@ -524,6 +529,8 @@ proc hash*(t: GpuType): Hash =
   of gtArray:
     h = h !& hash(t.aTyp)
     h = h !& hash(t.aLen)
+  of gtStatic:
+    h = h !& hash(t.sValue)
   of gtGenericInst:
     h = h !& hash(t.gName)
     for g in t.gArgs:
@@ -568,6 +575,7 @@ proc `==`*(a, b: GpuType): bool =
         for i in 0 ..< a.gFields.len:
           result = result and (a.gFields[i] == b.gFields[i])
     of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen
+    of gtStatic: result = a.sValue == b.sValue
     else: discard
 
 proc `==`*(a, b: GpuAst): bool =
@@ -646,9 +654,10 @@ proc pretty*(t: GpuType): string =
         if i < t.gArgs.high:
           result.add ", "
       result.add "]"
+    of gtStatic:
+      result = "static(" & $t.sValue & ")"
     else:
       result = ($t.kind).removePrefix("gt")
-
 proc pretty*(n: GpuAst, indent: int = 0): string =
   template id(): untyped = repeat(" ", indent)
   template idn(x): untyped = repeat(" ", indent) & $x

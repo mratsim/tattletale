@@ -109,8 +109,8 @@ proc parseGenericImpl(ctx: var GpuContext, impl: NimNode, t: NimNode): GpuType =
     result = GpuType(kind: gtGenericInst, gName: t.repr)
     result.gFields = ctx.parseTypeFields(impl)
   of nnkStaticTy:
-    # Static int or similar — treat as int.
-    result = initGpuType(gtInt32)
+    # Static int — preserve the value for struct naming.
+    result = GpuType(kind: gtStatic, builtin: true, sValue: int(impl[0].intVal))
   else:
     raiseAssert "Unexpected node kind in for genericInst: " & $impl.treerepr & " kind=" & $impl.kind
 
@@ -359,6 +359,10 @@ proc nimToGpuType(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, al
       result = ctx.nimToGpuType(n[1], allowToFail, allowArrayIdent)
     else:
       result = ctx.nimToGpuType(n[2], allowToFail, allowArrayIdent) # derive from the RHS literal
+  of nnkIntLit, nnkUIntLit:
+    result = GpuType(kind: gtStatic, builtin: true, sValue: int(n.intVal))
+    ctx.maybeAddType(result)
+    return result
   else:
     if n.kind == nnkEmpty: return initGpuType(gtVoid)
     case n.typeKind
