@@ -290,19 +290,22 @@ proc constructTupleTypeName(n: NimNode): string =
       if i < n.len - 1:
         result.add "_"
     else:
-      # TupleConstr      e.g. a tuple constr like this
-      #   Infix
-      #     Sym "shr"
-      #     Sym "n"
-      #     IntLit 16
-      #   Infix
-      #     Sym "and"
-      #     Sym "n"
-      #     UInt32Lit 65535
-      # -> Try again with type impl of the CHILD
-      let childImpl = ch.getTypeImpl()
-      let typName = childImpl.getTypeName()
+      # An object constructor child inside the tuple — e.g.
+      #   ObjConstr
+      #     BracketExpr
+      #       Sym "MyInt"
+      #       IntLit 4
+      #     ExprColonExpr
+      #       Sym "data"
+      #       Bracket
+      #         ...
+      # -> resolve via getTypeInst() instead of getTypeImpl()
+      #    to avoid leaking the ObjectTy repr into the C struct name.
+      let childInst = ch.getTypeInst()
+      let typName = childInst.getTypeName()
       result.add "Field" & $i & "_" & typName
+      if i < n.len - 1:
+        result.add "_"
 
 proc getTypeName(n: NimNode, recursedSym: bool = false): string =
   ## Returns the name of the type
@@ -506,17 +509,14 @@ proc parseTypeFields(ctx: var GpuContext, node: NimNode): seq[GpuTypeField] =
                                 typ: ctx.nimToGpuType(ch[1]))
       of nnkBracketExpr:
         # E.g. `Int[128]` inside a tuple type constructor.
-        # `getTypeImpl` returns the object definition (ObjectTy), which
-        # parseTypeFields handles directly.
-        let impl = ch.getTypeImpl()
+        # Resolve the type directly from the bracket expression.
         result.add GpuTypeField(name: "Field" & $i,
-                                typ: ctx.nimToGpuType(impl))
+                                typ: ctx.nimToGpuType(ch))
       else:
         # Unexpected child in tuple type constructor.
-        # Try to resolve its type implementation.
-        let impl = ch.getTypeImpl()
+        # Resolve the type directly from the child node.
         result.add GpuTypeField(name: "Field" & $i,
-                                typ: ctx.nimToGpuType(impl))
+                                typ: ctx.nimToGpuType(ch))
   else:
     raiseAssert "Unsupported type to parse fields from: " & $node.kind
 
