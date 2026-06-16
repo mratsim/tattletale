@@ -746,9 +746,6 @@ template max_common_vector*(a, b: typed): int =
 # ═══════════════════════════════════════════════════════════════
 #  logical_product — reproduce a block over a tiler
 # ═══════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════
-#  logical_product — reproduce a block over a tiler
-# ═══════════════════════════════════════════════════════════════
 
 func logical_product*[A, B: Layout](a: A; tiler: B): auto =
   ## Reproduce block over tiler: rank-2 result ((BLOCK), (TILE)).
