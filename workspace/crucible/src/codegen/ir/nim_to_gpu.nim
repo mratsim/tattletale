@@ -900,7 +900,9 @@ proc maybeInsertResult(ast: var GpuAst, retType: GpuType, fnName: string) =
     # standalone expression (if any) to assign to result.
     for i in countdown(ast.statements.high, 0):
       let stmt = ast.statements[i]
-      if stmt.kind notin {gpuVar, gpuComment, gpuVoid, gpuReturn}:
+      if stmt.kind notin {gpuVar, gpuComment, gpuVoid, gpuReturn, gpuIf}:
+        # gpuIf guarded — branches already assign to result, wrapping
+        # in `result = if...` would produce invalid C.
         if stmt.kind == gpuBlock and stmt.isExpr:
           # Unwrap single-statement expression blocks
           if stmt.statements.len == 1:

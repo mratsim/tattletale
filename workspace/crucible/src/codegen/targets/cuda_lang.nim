@@ -422,9 +422,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result.add '}'
 
   of gpuObjConstr:
-    # Compound literal: (TypeName){val1, val2, ...}
-    let typName = gpuTypeToString(ast.ocType, allowEmptyIdent = true)
-    result = '(' & typName & "){"
+    # Braced init list: {val1, val2, ...}
+    # Note: bare `{val, ...}` is used instead of `(TypeName){val}`
+    # because NVRTC compiles in C++ mode where C99 compound literals
+    # are not valid.
+    result = "{"
     for i, el in ast.ocFields:
       result.add ctx.genCuda(el.value)
       if i < ast.ocFields.len - 1:
