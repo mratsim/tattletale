@@ -287,10 +287,10 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let isKernel = attGlobal in ast.pAttributes
     var params: seq[string]
     for p in ast.pParams:
-      # For kernel parameters that are pointers and not marked as local,
-      # emit __global T* restrict
-      let typStr = gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
-      if p.addressSpace == asWorkspace:
+      if p.passByRef and not isKernel:
+        # const Type* _p_name — pointer to const for large structs (no C++ references)
+        params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "* _p_" & p.ident.ident()
+      elif p.addressSpace == asWorkspace:
         # __local T* — shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__local {inner}* {p.ident.ident()}"
@@ -299,7 +299,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__global {inner}* restrict {p.ident.ident()}"
       else:
-        params.add typStr
+        params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
@@ -314,6 +314,11 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add ';'
     else:
       result.add " {\n"
+      # Local copies for byref params — const pointer is dereferenced into local
+      for p in ast.pParams:
+        if p.passByRef and not isKernel:
+          let innerIndent = "  ".repeat(indent + 1)
+          result.add innerIndent & gpuTypeToString(p.typ, p.ident.ident()) & " = *_p_" & p.ident.ident() & ";\n"
       result &= ctx.genOpenCL(ast.pBody, indent + 1)
       result &= '\n' & indentStr & '}'
 
@@ -393,8 +398,15 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genOpenCL(ast.iArr) & '[' & ctx.genOpenCL(ast.iIndex) & ']'
 
   of gpuCall:
-    result = indentStr & ast.cName.ident() & '(' &
-             ast.cArgs.mapIt(ctx.genOpenCL(it)).join(", ") & ')'
+    let fnName = ast.cName
+    let fnParams = ctx.getFnParams(fnName)
+    var clArgs: seq[string]
+    for i, arg in ast.cArgs:
+      if i < fnParams.len and fnParams[i].passByRef:
+        clArgs.add "&" & ctx.genOpenCL(arg)
+      else:
+        clArgs.add ctx.genOpenCL(arg)
+    result = indentStr & fnName.ident() & '(' & clArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:

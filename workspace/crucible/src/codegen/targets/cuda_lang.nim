@@ -309,7 +309,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # Parameters
     var params: seq[string]
     for p in ast.pParams:
-      params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+      if p.passByRef:
+        # const Type& name — C++ reference, no body changes needed
+        params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
+      else:
+        params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
@@ -395,8 +399,13 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genCuda(ast.iArr) & '[' & ctx.genCuda(ast.iIndex) & ']'
 
   of gpuCall:
-    result = indentStr & ast.cName.ident() & '(' &
-             ast.cArgs.mapIt(ctx.genCuda(it)).join(", ") & ')'
+    let fnName = ast.cName
+    let fnParams = ctx.getFnParams(fnName)
+    var cudaArgs: seq[string]
+    for i, arg in ast.cArgs:
+      # C++ const& binds implicitly — no & needed at call site
+      cudaArgs.add ctx.genCuda(arg)
+    result = indentStr & fnName.ident() & '(' & cudaArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:

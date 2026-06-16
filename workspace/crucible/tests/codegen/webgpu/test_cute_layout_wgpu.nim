@@ -34,4 +34,4 @@ block:
   let res = cast[ptr array[6, uint32]](r[0].addr)
   doAssert res[0]==10 and res[1]==20 and res[2]==60
   doAssert res[4]==21 and res[5]==61
-  echo "  OK — CuTe Layout (descriptor) + Tile  (WebGPU)"
+  echo "  OK — CuTe Layout + Tile  (WebGPU)"

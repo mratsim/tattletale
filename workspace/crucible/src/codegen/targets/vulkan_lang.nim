@@ -335,6 +335,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       if isKernel and p.typ.kind == gtPtr:
         # Skip — these will be emitted as SSBO declarations at the top level
         discard
+      elif p.passByRef and not isKernel:
+        # const Type* _p_name — pointer for large structs (GLSL has no references)
+        params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "* _p_" & p.ident.ident()
       elif p.addressSpace == asWorkspace:
         # shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
@@ -354,6 +357,11 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add ';'
     else:
       result.add " {\n"
+      # Local copies for byref params — const pointer is dereferenced into local
+      for p in ast.pParams:
+        if p.passByRef and not isKernel:
+          let innerIndent = "  ".repeat(indent + 1)
+          result.add innerIndent & gpuTypeToString(p.typ, p.ident.ident()) & " = *_p_" & p.ident.ident() & ";\n"
       result &= ctx.genVulkan(ast.pBody, indent + 1)
       result &= '\n' & indentStr & '}'
 
@@ -432,8 +440,15 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genVulkan(ast.iArr) & '[' & ctx.genVulkan(ast.iIndex) & ']'
 
   of gpuCall:
-    result = indentStr & ast.cName.ident() & '(' &
-             ast.cArgs.mapIt(ctx.genVulkan(it)).join(", ") & ')'
+    let fnName = ast.cName
+    let fnParams = ctx.getFnParams(fnName)
+    var vkArgs: seq[string]
+    for i, arg in ast.cArgs:
+      if i < fnParams.len and fnParams[i].passByRef:
+        vkArgs.add "&" & ctx.genVulkan(arg)
+      else:
+        vkArgs.add ctx.genVulkan(arg)
+    result = indentStr & fnName.ident() & '(' & vkArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:

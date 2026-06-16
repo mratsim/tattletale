@@ -237,6 +237,7 @@ type
     ident*: GpuAst ## The actual parameter symbol, `GpuIdent`
     typ*: GpuType
     addressSpace*: AddressSpace
+    passByRef*: bool   ## Pass by hidden const reference (large structs > 24 bytes)
 
   GpuFieldInit* = object
     name*: string
@@ -372,7 +373,8 @@ proc clone*(ast: GpuAst): GpuAst =
       let clonedParam = GpuParam(
         ident: p.ident.clone(),
         typ: p.typ.clone(),
-        addressSpace: p.addressSpace
+        addressSpace: p.addressSpace,
+        passByRef: p.passByRef
       )
       result.pParams.add(clonedParam)
     result.pBody = ast.pBody.clone()
@@ -886,6 +888,62 @@ iterator pairs*(ast: GpuAst): (int, GpuAst) =
     inc i
 
 
+
+func size*(t: GpuType): int =
+  ## Compute the byte size of a GpuType.
+  case t.kind
+  of gtVoid:
+    result = 0
+  of gtBool, gtUint8:
+    result = 1
+  of gtUint16, gtInt16:
+    result = 2
+  of gtUint32, gtInt32, gtFloat32:
+    result = 4
+  of gtUint64, gtInt64, gtFloat64:
+    result = 8
+  of gtSize_t:
+    result = 8
+  of gtPtr, gtUA, gtVoidPtr:
+    result = 8  # pointer size on 64-bit
+  of gtString:
+    result = 8  # pointer
+  of gtStatic:
+    result = 0  # compile-time value, no runtime size
+  of gtArray:
+    result = t.aLen * size(t.aTyp)
+  of gtObject:
+    for f in t.oFields:
+      result += size(f.typ)
+  of gtGenericInst:
+    for f in t.gFields:
+      result += size(f.typ)
+  else:
+    result = 4  # default fallback
+
+func isLargeStruct*(t: GpuType): bool =
+  ## Returns true if the type should be passed by hidden const reference.
+  ## Uses Nim's C backend 3-pointer threshold. For GPU, also catch structs
+  ## with embedded arrays (some Vulkan impls reject struct-by-value with arrays).
+  const threshold = 24
+  case t.kind
+  of gtObject, gtGenericInst:
+    result = size(t) >= threshold
+  else:
+    result = false
+
+proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
+  ## Look up the parameters of a function by its identifier.
+  if fn in ctx.allFnTab:
+    result = ctx.allFnTab[fn].pParams
+  elif fn in ctx.fnTab:
+    result = ctx.fnTab[fn].pParams
+  elif fn in ctx.genericInsts:
+    result = ctx.genericInsts[fn].pParams
+  elif fn in ctx.builtins:
+    result = ctx.builtins[fn].pParams
+  elif fn in ctx.processedProcs:
+    result = ctx.processedProcs[fn].params
 ## General utility helpers
 
 proc ident*(n: GpuAst): string =

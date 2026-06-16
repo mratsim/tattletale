@@ -1,4 +1,4 @@
-## CuTe Layout  tile — OpenCL backend
+## CuTe Layout + Tile dot products — OpenCL backend
 ## Run with: nim c -r workspace/crucible/tests/codegen/opencl/test_cute_layout_cl.nim
 import std/strformat
 import workspace/crucible/src/codegen/cl
@@ -30,9 +30,8 @@ echo "=== OpenCL execution ===\n"
 block:
   var ctx = initOpenCL()
   defer: ctx.shutdown()
-  var d: array[1, uint32]
-  let r = execOpenCL(ctx, kernelCl, "cuteKernel", outputBytes=24, inputs = [(cast[pointer](d[0].addr), 4)])
+  let r = execOpenCL(ctx, kernelCl, "cuteKernel", outputBytes=24, inputs = @[])
   let res = cast[ptr array[6, uint32]](r[0].addr)
   doAssert res[0]==10 and res[1]==20 and res[2]==60
   doAssert res[4]==21 and res[5]==61
-  echo "  OK — CuTe Layout (descriptor) + Tile  (OpenCL)"
+  echo "  OK — CuTe Layout + Tile  (OpenCL)"

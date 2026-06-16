@@ -759,7 +759,8 @@ proc parseProcParameters(ctx: var GpuContext, params: NimNode, attrs: set[GpuAtt
                     else: gsDeviceKernelParam
       p.iTyp = paramType     ## Update the type of the symbol
       p.symbolKind = symKind ## and the symbol kind
-      let param = GpuParam(ident: p, typ: paramType)
+      let byref = isLargeStruct(paramType)
+      let param = GpuParam(ident: p, typ: paramType, passByRef: byref)
       result.add(param)
 
 proc parseProcReturnType(ctx: var GpuContext, params: NimNode): GpuType =
