@@ -100,10 +100,11 @@ proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32]
   let spvPath = tmpDir / "vk_shader_comp_" & id & ".spv"
 
   writeFile(srcPath, glsl)
-  let exitCode = execCmd("glslangValidator -V --source-entrypoint " & entryPoint & " -e " & entryPoint & " -o " & spvPath & " " & srcPath)
+  let cmd = "glslangValidator -V -e " & entryPoint & " --source-entrypoint main -o " & spvPath & " " & srcPath
+  let (compOut, exitCode) = execCmdEx(cmd)
   if exitCode != 0:
     removeFile(srcPath)
-    raise VulkanError(msg: "glslangValidator failed: exit=" & $exitCode)
+    raise VulkanError(msg: "glslangValidator failed (exit=" & $exitCode & "):\n" & compOut)
 
   let raw = readFile(spvPath)
   result = newSeq[uint32](raw.len div 4)

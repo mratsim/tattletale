@@ -35,7 +35,7 @@ echo kernelCode
 block:
   var ctx = initVulkan()
   defer: ctx.shutdown()
-  let r = execVulkan(ctx, kernelCode, "main", outputBytes = 16, inputs = @[])
+  let r = execVulkan(ctx, kernelCode, "gemmKernel", outputBytes = 16, inputs = @[])
   let res = cast[ptr array[4, uint32]](r[0].addr)
   let expected = [58'u32, 64, 139, 154]
   for i in 0 ..< 4:
