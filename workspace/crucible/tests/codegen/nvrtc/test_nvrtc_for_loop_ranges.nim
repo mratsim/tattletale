@@ -35,7 +35,7 @@ const kBodyAccess = cuda:
     for i in 0 .. 2:
       output[i] = uint32(i) + 200'u32
 
-var buf2: array[2, uint32]
+var buf2: array[3, uint32]
 block:
   var nv = initNvrtc(kBodyAccess)
   nv.compile()

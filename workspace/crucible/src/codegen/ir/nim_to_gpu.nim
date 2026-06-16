@@ -900,9 +900,9 @@ proc maybeInsertResult(ast: var GpuAst, retType: GpuType, fnName: string) =
     # standalone expression (if any) to assign to result.
     for i in countdown(ast.statements.high, 0):
       let stmt = ast.statements[i]
-      if stmt.kind notin {gpuVar, gpuComment, gpuVoid, gpuReturn, gpuIf}:
-        # gpuIf guarded — branches already assign to result, wrapping
-        # in `result = if...` would produce invalid C.
+      if stmt.kind notin {gpuVar, gpuComment, gpuVoid, gpuReturn, gpuIf, gpuFor, gpuWhile}:
+        # gpuIf/gpuFor/gpuWhile guarded — these are statements, not values;
+        # wrapping in `result = ...` would produce invalid C.
         if stmt.kind == gpuBlock and stmt.isExpr:
           # Unwrap single-statement expression blocks
           if stmt.statements.len == 1:
@@ -1124,10 +1124,20 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     result.fVar = ctx.toGpuAst(node[0])
     result.fVar.symbolKind = gsLocal
     result.fVar.iTyp = initGpuType(gtInt32) ## XXX: do not force this type
-    # Range expression — may be `0 ..< N` (Infix) or a direct range call.
+    # Range expression — may be `0 .. N` (Infix inclusive) or `0 ..< N` (Infix exclusive)
+    # or a direct range call.
     if node[1].kind == nnkInfix:
       result.fStart = ctx.toGpuAst(node[1][1])
       result.fEnd = ctx.toGpuAst(node[1][2])
+      # Inclusive `..` — codegen uses `i < end`, but Nim's `..` is
+      # inclusive `[a, b]` (b+1 values). Add 1 so C's `<` matches.
+      if node[1][0].repr == "..":
+        let typ = initGpuType(gtInt32)
+        let one = GpuAst(kind: gpuLit, lValue: "1", lType: typ)
+        var addOp = GpuAst(kind: gpuIdent, iName: "+")
+        result.fEnd = GpuAst(kind: gpuBinOp, bOp: addOp,
+                             bLeft: result.fEnd, bRight: one,
+                             bLeftTyp: typ, bRightTyp: typ)
     elif node[1].len >= 2:
       result.fStart = ctx.toGpuAst(node[1][1])
       result.fEnd = ctx.toGpuAst(node[1][^1])
