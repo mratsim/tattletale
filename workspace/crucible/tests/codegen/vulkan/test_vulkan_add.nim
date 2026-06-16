@@ -78,7 +78,7 @@ block: # addKernel
   let result = execVulkan(
     ctx,
     addVk,
-    "main",
+    "addKernel",
     outputBytes = 8,  # 2 x uint32
     inputs = [
       (cast[pointer](a[0].addr), 8),
@@ -103,7 +103,7 @@ block: # vec2AddKernel (external type + fn)
   let result = execVulkan(
     ctx,
     vec2Vk,
-    "main",
+    "vec2AddKernel",
     outputBytes = 8,
     inputs = [
       (cast[pointer](a[0].addr), 8),
@@ -127,7 +127,7 @@ block: # maxKernel (generic instantiation)
   let result = execVulkan(
     ctx,
     maxVk,
-    "main",
+    "maxKernel",
     outputBytes = 4,
     inputs = [
       (cast[pointer](a[0].addr), 4),

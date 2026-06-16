@@ -1083,19 +1083,27 @@ proc codegen*(ctx: var GpuContext): string =
     result.add gpuTypeToString(typ, p.ident.ident(), allowEmptyIdent = false, symbolKind = p.ident.symbolKind) & ";\n"
     inc bindingCounter
 
-  # 1. Generate the header for all global variables
+  # 1. Generate the header for all global variables (deduped by param name)
+  var emitted: seq[string]
   for id, g in ctx.globals:
-    result.add genGlobal(g)
+    if g.ident.ident() notin emitted:
+      emitted.add g.ident.ident()
+      result.add genGlobal(g)
   result.add '\n'
 
   # 2. generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:
     result.add ctx.genWebGpu(blk) & "\n\n"
 
-  # 3. generate all regular functions
+  # 3. Workgroup size constant (single definition for all kernels)
+  for fnIdent, fn in ctx.fnTab:
+    if fn.isGlobal():
+      result.add "const WORKGROUP_SIZE = 64u;\n"
+      break
+
+  # 4. Kernel + device functions
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
       ## XXX: make adjustable!
-      result.add "const WORKGROUP_SIZE = 64u;\n"
       result.add "@compute @workgroup_size(WORKGROUP_SIZE)\n"
     result.add ctx.genWebGpu(fn) & "\n\n"

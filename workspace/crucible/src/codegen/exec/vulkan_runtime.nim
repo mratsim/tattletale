@@ -90,7 +90,7 @@ proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
 # SPIR-V compilation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc compileGlslToSpirV*(glsl: string): seq[uint32] =
+proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32] =
   ## Compiles GLSL to SPIR-V via ``glslangValidator``.
   ## (``libshaderc_shared`` does not support compute shaders on this platform.)
 
@@ -100,7 +100,7 @@ proc compileGlslToSpirV*(glsl: string): seq[uint32] =
   let spvPath = tmpDir / "vk_shader_comp_" & id & ".spv"
 
   writeFile(srcPath, glsl)
-  let exitCode = execCmd("glslangValidator -V -o " & spvPath & " " & srcPath)
+  let exitCode = execCmd("glslangValidator -V --source-entrypoint " & entryPoint & " -e " & entryPoint & " -o " & spvPath & " " & srcPath)
   if exitCode != 0:
     removeFile(srcPath)
     raise VulkanError(msg: "glslangValidator failed: exit=" & $exitCode)
@@ -659,7 +659,7 @@ proc execVulkan*(
 ): seq[byte] =
   let numInputs = inputs.len
   let totalSsboCount = numInputs + 1
-  let spirv = compileGlslToSpirV(source)
+  let spirv = compileGlslToSpirV(source, entryPoint)
   # Replace inline gpa calls with ctx.gpaAddr(ctx.instance, ...) below
   let vkCreateShaderModule = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,

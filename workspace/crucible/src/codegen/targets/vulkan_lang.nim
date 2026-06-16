@@ -335,9 +335,6 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       if isKernel and p.typ.kind == gtPtr:
         # Skip — these will be emitted as SSBO declarations at the top level
         discard
-      elif p.passByRef and not isKernel:
-        # const Type* _p_name — pointer for large structs (GLSL has no references)
-        params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "* _p_" & p.ident.ident()
       elif p.addressSpace == asWorkspace:
         # shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
@@ -347,8 +344,8 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let fnArgs = params.join(", ")
 
     if isKernel:
-      # Global kernel entry point → `layout(local_size_x = X, ...) in; void main()`
-      result = indentStr & "void main()"
+      # Global kernel entry point → uses actual kernel name (supports multiple kernels per module)
+      result = indentStr & "void " & ast.pName.ident() & "()"
     else:
       # Device function → `retType fnName(...)` (GLSL doesn't have static/inline)
       result = indentStr & genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
@@ -357,11 +354,6 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add ';'
     else:
       result.add " {\n"
-      # Local copies for byref params — const pointer is dereferenced into local
-      for p in ast.pParams:
-        if p.passByRef and not isKernel:
-          let innerIndent = "  ".repeat(indent + 1)
-          result.add innerIndent & gpuTypeToString(p.typ, p.ident.ident()) & " = *_p_" & p.ident.ident() & ";\n"
       result &= ctx.genVulkan(ast.pBody, indent + 1)
       result &= '\n' & indentStr & '}'
 
@@ -441,13 +433,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuCall:
     let fnName = ast.cName
-    let fnParams = ctx.getFnParams(fnName)
     var vkArgs: seq[string]
-    for i, arg in ast.cArgs:
-      if i < fnParams.len and fnParams[i].passByRef:
-        vkArgs.add "&" & ctx.genVulkan(arg)
-      else:
-        vkArgs.add ctx.genVulkan(arg)
+    for arg in ast.cArgs:
+      vkArgs.add ctx.genVulkan(arg)
     result = indentStr & fnName.ident() & '(' & vkArgs.join(", ") & ')'
 
   of gpuTemplateCall:
@@ -552,19 +540,19 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
   result.add "\n"
 
-  # Enforce exactly one global kernel — GLSL compute shader must have a single `void main()`.
-  let globalCount = ctx.fnTab.values.countIt(it.isGlobal())
-  doAssert globalCount == 1, "Vulkan codegen requires selecting exactly one {.global.} kernel (found " & $globalCount & ")"
-
-  # 1. Generate SSBO declarations from kernel pointer parameters
+  # Support multiple kernels — GLSL allows multiple entry points, each gets a layout qualifier.
   var ssboBinding = 0
+  var emittedSsbo: seq[string]  # dedup SSBO declarations across kernels (by param name + type)
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
       for p in fn.pParams:
         if p.typ.kind == gtPtr:
           let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
-          result.add genSsboDeclaration(p.ident.ident(), inner, ssboBinding)
-          inc ssboBinding
+          let key = p.ident.ident() & ":" & inner
+          if key notin emittedSsbo:
+            emittedSsbo.add key
+            result.add genSsboDeclaration(p.ident.ident(), inner, ssboBinding)
+            inc ssboBinding
 
   # 2. Generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:
@@ -576,13 +564,9 @@ proc codegen*(ctx: var GpuContext): string =
       result.add "\n"
 
   # 3. Workgroup layout for kernel entry points
-  # Default workgroup size (256, 1, 1). The kernel macro emits `void main()`,
-  # so we place the layout qualifier just before the kernel function body.
-  # We identify kernels as global functions and add the layout qualifier.
-  # The layout is handled per-kernel in the forward declaration / definition.
+  # Each kernel function gets the layout qualifier.
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
-      # remove forward declaration and replace with layout + void main
       discard
 
   # 4. Forward declarations (only for device functions, not kernels)
@@ -598,6 +582,6 @@ proc codegen*(ctx: var GpuContext): string =
   # 5. Full function definitions
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
-      # Kernel functions: place layout qualifier before void main()
+      # Kernel functions: place layout qualifier before entry point
       result.add "layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;\n"
     result.add ctx.genVulkan(fn) & "\n\n"
