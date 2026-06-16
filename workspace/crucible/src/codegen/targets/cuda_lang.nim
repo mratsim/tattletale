@@ -336,6 +336,12 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= ctx.genCuda(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
 
+  of gpuTernary:
+    ctx.withoutSemicolon:
+      result = '(' & ctx.genCuda(ast.tCond) & " ? " &
+               ctx.genCuda(ast.tThen) & " : " &
+               ctx.genCuda(ast.tElse) & ')'
+
   of gpuFor:
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genCuda(ast.fStart) & "; " &

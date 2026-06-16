@@ -373,6 +373,12 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= ctx.genVulkan(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
 
+  of gpuTernary:
+    ctx.withoutSemicolon:
+      result = '(' & ctx.genVulkan(ast.tCond) & " ? " &
+               ctx.genVulkan(ast.tThen) & " : " &
+               ctx.genVulkan(ast.tElse) & ')'
+
   of gpuFor:
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genVulkan(ast.fStart) & "; " &

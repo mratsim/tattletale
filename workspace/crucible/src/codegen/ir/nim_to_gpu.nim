@@ -1060,21 +1060,16 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       if declaration.len > 2 and declaration[2].kind != nnkEmpty:  # Has initialization
         varNode.vInit = ctx.toGpuAst(declaration[2])
         varNode.vRequiresMemcpy = requiresMemcpy(declaration[2])
+        result.statements.add(varNode)
       else:
-        varNode.vInit = ctx.toGpuAst(declaration[2])
-      result.statements.add(varNode)
+        varNode.vInit = GpuAst(kind: gpuVoid)
+        result.statements.add(varNode)
 
   of nnkAsgn:
-    if node[1].kind == nnkIfExpr:
-      # Assignment result = (if cond: then else: else) must emit
-      #   if cond: result = then else: result = else
-      # The nnkIfExpr handler already embeds result= in each branch.
-      result = ctx.toGpuAst(node[1])
-    else:
-      result = GpuAst(kind: gpuAssign)
-      result.aLeft = ctx.toGpuAst(node[0])
-      result.aRight = ctx.toGpuAst(node[1])
-      result.aRequiresMemcpy = requiresMemcpy(node[1])
+    result = GpuAst(kind: gpuAssign)
+    result.aLeft = ctx.toGpuAst(node[0])
+    result.aRight = ctx.toGpuAst(node[1])
+    result.aRequiresMemcpy = requiresMemcpy(node[1])
 
   of nnkIfStmt:
     result = GpuAst(kind: gpuIf)
@@ -1087,25 +1082,39 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       result.ifElse = GpuAst(kind: gpuVoid)
 
   of nnkIfExpr:
-    # If-expression (returns a value) — generates if/else with result= assign
-    # AST: nnkIfExpr(nnkElifBranch(cond, then_expr), nnkElse(else_expr)?)
-    let branch = node[0]
-    let cond = ctx.toGpuAst(branch[0])
-    let thenVal = ctx.toGpuAst(branch[1])
-    var thenAsgn = GpuAst(kind: gpuAssign)
-    thenAsgn.aLeft = GpuAst(kind: gpuIdent, iName: "result")
-    thenAsgn.aRight = thenVal
-    result = GpuAst(kind: gpuIf)
-    result.ifCond = cond
-    result.ifThen = GpuAst(kind: gpuBlock, statements: @[thenAsgn])
-    if node.len > 1 and node[^1].kind == nnkElse:
-      let elseVal = ctx.toGpuAst(node[^1][0])
-      var elseAsgn = GpuAst(kind: gpuAssign)
-      elseAsgn.aLeft = GpuAst(kind: gpuIdent, iName: "result")
-      elseAsgn.aRight = elseVal
-      result.ifElse = GpuAst(kind: gpuBlock, statements: @[elseAsgn])
-    else:
-      result.ifElse = GpuAst(kind: gpuVoid)
+    # If-expression — produces a conditional value (ternary in C).
+    # AST: nnkIfExpr(nnkElifExpr(cond, expr), ..., nnkElseExpr(expr)?)
+    #
+    # GPU constraint: all branch bodies must be single expressions.
+    # Multi-statement branches like `let tmp = a; tmp + b` are rejected.
+    # If-expr without else is rejected (no value when false).
+    proc requireSimpleBranch(n: NimNode) =
+      ## GPU kernels must avoid register pressure from multi-statement branches.
+      let ok = n.kind != nnkStmtList or n.len == 1
+      doAssert ok, "GPU if-expression branches must be single expressions, " &
+        "not blocks with statements (would hurt performance)"
+    doAssert node.len >= 1
+    doAssert node.len == 1 or node[^1].kind == nnkElseExpr,
+      "GPU if-expression must have an else branch"
+    # Helper to build nested ternary
+    proc buildTernary(ctx: var GpuContext; branches: NimNode; idx: int): GpuAst =
+      let child = branches[idx]
+      case child.kind
+      of nnkElifExpr:
+        requireSimpleBranch(child[1])
+        result = GpuAst(kind: gpuTernary)
+        result.tCond = ctx.toGpuAst(child[0])
+        result.tThen = ctx.toGpuAst(child[1])
+        if idx + 1 < branches.len:
+          result.tElse = buildTernary(ctx, branches, idx + 1)
+        else:
+          result.tElse = GpuAst(kind: gpuVoid)
+      of nnkElseExpr:
+        requireSimpleBranch(child[0])
+        result = ctx.toGpuAst(child[0])
+      else:
+        raiseAssert "Unexpected child in nnkIfExpr: " & $child.kind
+    result = buildTernary(ctx, node, 0)
 
   of nnkForStmt:
     result = GpuAst(kind: gpuFor)

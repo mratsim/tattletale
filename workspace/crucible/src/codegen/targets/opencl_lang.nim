@@ -334,6 +334,12 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= ctx.genOpenCL(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
 
+  of gpuTernary:
+    ctx.withoutSemicolon:
+      result = '(' & ctx.genOpenCL(ast.tCond) & " ? " &
+               ctx.genOpenCL(ast.tThen) & " : " &
+               ctx.genOpenCL(ast.tElse) & ')'
+
   of gpuFor:
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genOpenCL(ast.fStart) & "; " &

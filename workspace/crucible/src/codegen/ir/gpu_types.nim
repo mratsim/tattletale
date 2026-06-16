@@ -21,6 +21,7 @@ type
     gpuCall         # Function call
     gpuTemplateCall # Call to a Nim template
     gpuIf           # If statement
+    gpuTernary      # Ternary expression (cond ? then : else)
     gpuFor          # For loop
     gpuWhile        # While loop
     gpuBinOp        # Binary operation
@@ -121,6 +122,10 @@ type
       ifCond*: GpuAst
       ifThen*: GpuAst
       ifElse*: GpuAst # will be `GpuAst(kind*: gpuVoid)` if no else branch
+    of gpuTernary:
+      tCond*: GpuAst  # condition
+      tThen*: GpuAst  # then-expression
+      tElse*: GpuAst  # else-expression
     of gpuFor:
       fVar*: GpuAst ## Will be a `GpuIdent`
       fStart*, fEnd*: GpuAst
@@ -305,8 +310,9 @@ type
     ## the function name. This is to avoid overload issues in backends that don't
     ## allow overloading by function signatures.
     symChoices*: HashSet[string]
-
-  ## We rely on being able to compute a `newLit` from the result of `toGpuAst`. Currently we
+    ## When non-nil, nnkIfExpr handler assigns to this target ident name
+    ## instead of the hardcoded "result".
+    curIfExprTarget*: string
   ## only need the `genericInsts` field data (the values). Trying to `newLit` the full `GpuContext`
   ## causes trouble.
   GpuGenericsInfo* = object
@@ -383,6 +389,11 @@ proc clone*(ast: GpuAst): GpuAst =
     result.ifCond = ast.ifCond.clone()
     result.ifThen = ast.ifThen.clone()
     result.ifElse = ast.ifElse.clone()
+  of gpuTernary:
+    result = GpuAst(kind: gpuTernary)
+    result.tCond = ast.tCond.clone()
+    result.tThen = ast.tThen.clone()
+    result.tElse = ast.tElse.clone()
   of gpuFor:
     result = GpuAst(kind: gpuFor)
     result.fVar = ast.fVar.clone()
@@ -585,6 +596,7 @@ proc len*(ast: GpuAst): int =
   of gpuIf:
     if ast.ifElse.kind != gpuVoid: 3
     else:          2
+  of gpuTernary:   3
   of gpuFor:       3
   of gpuWhile:     2
   of gpuBinOp:     2
@@ -677,6 +689,13 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     if n.ifElse.kind != gpuVoid:
       result.add idd("IfElse")
       result.add pretty(n.ifElse, indent + 4)
+  of gpuTernary:
+    result.add idd("TCond")
+    result.add pretty(n.tCond, indent + 4)
+    result.add idd("TThen")
+    result.add pretty(n.tThen, indent + 4)
+    result.add idd("TElse")
+    result.add pretty(n.tElse, indent + 4)
   of gpuFor:
     result.add pretty(n.fVar, indent + 2)
     result.add pretty(n.fStart, indent + 2)
@@ -780,6 +799,10 @@ template iterImpl(ast: untyped, mutable: static bool): untyped =
     ya(ifThen)
     if ast.ifElse.kind != gpuVoid:
       yield ast.ifElse
+  of gpuTernary:
+    ya(tCond)
+    ya(tThen)
+    ya(tElse)
   of gpuFor:
     ya(fStart)
     ya(fEnd)
