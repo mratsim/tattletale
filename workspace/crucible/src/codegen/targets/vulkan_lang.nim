@@ -492,6 +492,16 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 # Top-level codegen
 # ═══════════════════════════════════════════════════════════════════════
 
+proc renameIdentRefs(n: var GpuAst, symToRename: Table[string, string]) =
+  ## Rename `gpuIdent` nodes whose `iSym` is in the rename table.
+  case n.kind
+  of gpuIdent:
+    if n.iSym in symToRename:
+      n.iName = symToRename[n.iSym]
+  else:
+    for ch in mitems(n):
+      renameIdentRefs(ch, symToRename)
+
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle.
 
@@ -510,21 +520,47 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
   result.add "\n"
 
-  # Support multiple kernels — GLSL allows multiple entry points, each gets a layout qualifier.
-  var ssboBinding = 0
-  var emittedSsbo: seq[string]  # dedup SSBO declarations across kernels (by param name + type)
-  for fnIdent, fn in ctx.fnTab:
+# ── Step 1: Pre-scan kernels — build SSBO dedup and collect push-const params ──
+  # canonicalSsbo[i] = (name, innerType) for the i-th pointer param (dense index)
+  var canonicalSsbo: seq[tuple[name: string, inner: string]]
+  # Push-constant params for non-pointer, non-workspace kernel params
+  var pushConstDecls: seq[string]
+
+  for (fnIdent, fn) in mpairs(ctx.fnTab):
     if fn.isGlobal():
+      var ssboIdx = 0  # dense index across pointer params only
       for p in fn.pParams:
         if p.typ.kind == gtPtr:
           let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
-          let key = p.ident.ident() & ":" & inner
-          if key notin emittedSsbo:
-            emittedSsbo.add key
-            result.add genSsboDeclaration(p.ident.ident(), inner, ssboBinding)
-            inc ssboBinding
+          if ssboIdx < canonicalSsbo.len:
+            let (canonName, canonInner) = canonicalSsbo[ssboIdx]
+            if canonInner != inner:
+              raiseAssert &"Type mismatch at SSBO position {ssboIdx}: {canonInner} vs {inner}"
+            if p.ident.ident() != canonName:
+              var renames = initTable[string, string]()
+              renames[p.ident.iSym] = canonName
+              renameIdentRefs(fn.pBody, renames)
+              p.ident.iName = canonName
+          else:
+            canonicalSsbo.add (p.ident.ident(), inner)
+          inc ssboIdx
+        elif p.addressSpace != asWorkspace:
+          pushConstDecls.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
 
-  # 2. Generate code for the global blocks (types, global vars etc)
+  # ── Step 2: Emit push-constant block (if any) ──
+  if pushConstDecls.len > 0:
+    result.add "layout(push_constant) uniform KernelParams {\n"
+    for decl in pushConstDecls:
+      result.add "  " & decl & ";\n"
+    result.add "};\n\n"
+
+  # ── Step 3: Emit SSBO declarations by position ──
+  for idx, (name, inner) in canonicalSsbo.pairs:
+    result.add genSsboDeclaration(name, inner, idx)
+  if canonicalSsbo.len > 0:
+    result.add "\n"
+
+  # ── Generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:
     let blkStr = ctx.genVulkan(blk)
     if blkStr.len > 0:
