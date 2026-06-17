@@ -100,22 +100,20 @@ proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32]
   let spvPath = tmpDir / (sanitizePath(entryPoint) & "_" & id & ".spv")
 
   writeFile(srcPath, glsl)
+  defer:
+    if fileExists(srcPath): removeFile(srcPath)
+    if fileExists(spvPath): removeFile(spvPath)
   let p = startProcess("glslangValidator", args = @["-V", "-e", entryPoint, "--source-entrypoint", "main", "-o", spvPath, srcPath],
     options = {poUsePath, poStdErrToStdOut})
   let compOut = p.outputStream.readAll()
   let exitCode = p.waitForExit()
-  p.close()
+  defer: p.close()
   if exitCode != 0:
-    removeFile(srcPath)
     raise VulkanError(msg: "glslangValidator failed (exit=" & $exitCode & "):\n" & compOut)
 
   let raw = readFile(spvPath)
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
-
-  removeFile(srcPath)
-  removeFile(spvPath)
-
 # ═══════════════════════════════════════════════════════════════════════
 # Vulkan initialization
 # ═══════════════════════════════════════════════════════════════════════

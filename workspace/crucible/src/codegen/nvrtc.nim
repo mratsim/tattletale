@@ -212,8 +212,8 @@ proc link*(nvrtc: var NVRTC) =
     echo "[INFO]: Writing CUBIN data to file ", cubinDump
     echo "Cubin size: ", cubinSize
     var f = open(cubinDump, fmWrite)
+    defer: f.close()
     discard f.writeBuffer(cubn, cubinSize)
-    f.close()
 
   # Assign the cubin
   nvrtc.cubin = cubn

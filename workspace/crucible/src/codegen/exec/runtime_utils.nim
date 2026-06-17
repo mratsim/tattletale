@@ -11,7 +11,7 @@ proc sanitizePath*(name: string): string =
   ## Strip all directory components, returning only the final filename component.
   ## Raises if the result differs from the input (path traversal attempt detected).
   result = extractFilename(name)
-  if result != name:
+  if result != name or result in [".", ".."]:
     raiseAssert "Path traversal detected — name contains directory separators: \"" & name & "\""
 
 proc getDebugDir*(): string =

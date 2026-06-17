@@ -457,7 +457,7 @@ proc clone*(ast: GpuAst): GpuAst =
   of gpuMaterialize:
     result = GpuAst(kind: gpuMaterialize)
     result.mExpr = ast.mExpr.clone()
-    result.mType = ast.mType
+    result.mType = ast.mType.clone()
   of gpuArrayLit:
     result = GpuAst(kind: gpuArrayLit)
     for a in ast.aValues:

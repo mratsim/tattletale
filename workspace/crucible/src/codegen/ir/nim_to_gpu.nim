@@ -407,7 +407,6 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     result.fVar.symbolKind = gsLocal
     result.fVar.iTyp = initGpuType(gtInt32) ## XXX: do not force this type
     # Range expression — may be `0 .. N` (Infix inclusive) or `0 ..< N` (Infix exclusive)
-    # or a direct range call.
     if node[1].kind == nnkInfix:
       result.fStart = ctx.toGpuAst(node[1][1])
       result.fEnd = ctx.toGpuAst(node[1][2])
@@ -420,6 +419,8 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
             result.fEnd.lType
           elif result.fEnd.kind == gpuIdent and result.fEnd.iTyp.kind notin {gtVoid}:
             result.fEnd.iTyp
+          elif result.fEnd.kind == gpuBinOp and result.fEnd.bLeftTyp.kind notin {gtVoid}:
+            result.fEnd.bLeftTyp
           else:
             initGpuType(gtInt32)  # fallback
         let one = GpuAst(kind: gpuLit, lValue: "1", lType: endTyp)
