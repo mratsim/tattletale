@@ -133,11 +133,6 @@ proc initGpuGenericInst(ctx: var GpuContext, t: NimNode): GpuType =
       result = ctx.initGpuGenericInst(t[0])
     else:
       raiseAssert "Unexpected empty `nnkObjConstr` node for generic instantiation: " & $t.treerepr
-  of nnkCall:
-    if t.len >= 1:
-      result = ctx.initGpuGenericInst(t[0])
-    else:
-      raiseAssert "Unexpected empty `nnkCall` node for generic instantiation: " & $t.treerepr
   of nnkSym:
     # All callers have already verified typeKind == ntyGenericInst.
     # Use getTypeInst() to resolve the full generic type (BracketExpr).
@@ -148,12 +143,6 @@ proc initGpuGenericInst(ctx: var GpuContext, t: NimNode): GpuType =
     else:
       let impl = inst.getTypeImpl()
       result = ctx.parseGenericImpl(impl, t)
-  of nnkOpenSymChoice, nnkClosedSymChoice:
-    # OpenSymChoice: use the impl of the first child symbol. TODO: add a proper resolver
-    if t.len >= 1:
-      result = ctx.initGpuGenericInst(t[0])
-    else:
-      result = GpuType(kind: gtGenericInst, gName: t.repr)
   else:
     raiseAssert "Unexpected t.kind for genericInst: " & $t.kind & " treerepr=" & $t.treerepr
 
