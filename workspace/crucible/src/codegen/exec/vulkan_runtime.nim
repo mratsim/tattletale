@@ -23,9 +23,10 @@
 ##                        inputs = [([10'u32, 20'u32], 8u)])
 ##   ctx.shutdown()
 
-import std/[dynlib, os, osproc, hashes]
+import std/[dynlib, os, osproc, hashes, streams]
 import workspace/crucible/src/abis/vulkan_abi as vk
 import workspace/crucible/src/abis/shaderc_abi
+import ./runtime_utils
 type
   VulkanError* = ref object of CatchableError
 
@@ -93,15 +94,17 @@ proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
 proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32] =
   ## Compiles GLSL to SPIR-V via ``glslangValidator``.
   ## (``libshaderc_shared`` does not support compute shaders on this platform.)
-
-  let tmpDir = getTempDir()
+  let tmpDir = getKernelDir("vulkan")
   let id = $glsl.hash
-  let srcPath = tmpDir / "vk_shader_comp_" & id & ".comp"
-  let spvPath = tmpDir / "vk_shader_comp_" & id & ".spv"
+  let srcPath = tmpDir / (sanitizePath(entryPoint) & "_" & id & ".comp")
+  let spvPath = tmpDir / (sanitizePath(entryPoint) & "_" & id & ".spv")
 
   writeFile(srcPath, glsl)
-  let cmd = "glslangValidator -V -e " & entryPoint & " --source-entrypoint main -o " & spvPath & " " & srcPath
-  let (compOut, exitCode) = execCmdEx(cmd)
+  let p = startProcess("glslangValidator", args = @["-V", "-e", entryPoint, "--source-entrypoint", "main", "-o", spvPath, srcPath],
+    options = {poUsePath, poStdErrToStdOut})
+  let compOut = p.outputStream.readAll()
+  let exitCode = p.waitForExit()
+  p.close()
   if exitCode != 0:
     removeFile(srcPath)
     raise VulkanError(msg: "glslangValidator failed (exit=" & $exitCode & "):\n" & compOut)
