@@ -10,14 +10,16 @@
 # Once we change the code to make single backends importable on their own,
 # this will be changed and these builtins will be imported/exported in the
 # corresponding CUDA/WGSL etc module the user needs to import.
-import ./common_builtins
+import ./builtins_pragmas
 import ./cuda_builtins
 import ./wgsl_builtins
 import ./opencl_builtins
 import ./vulkan_builtins
+import ./multigpu_builtins
 
-export common_builtins
+export builtins_pragmas
 export cuda_builtins
 export wgsl_builtins
 export opencl_builtins
 export vulkan_builtins
+export multigpu_builtins

@@ -789,16 +789,6 @@ proc addProcToGenericInsts(ctx: var GpuContext, node: NimNode, name: GpuAst) =
   ##
   ## Mutates the `name` of the given function to match its generic name.
 
-  # Known backend builtins — emit as-is without parsing Nim's system module body.
-  let fnName = node[0].repr
-  if fnName in ["min", "max", "abs"]:
-    let retType = ctx.nimToGpuType(node[0].getTypeInst()[0])
-    let name = ctx.getFnName(node[0])
-    let builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
-    ctx.builtins[name] = builtinFn
-    ctx.processedProcs[name] = GpuProcSignature(retType: retType)
-    return
-
   let inst = node[0].getImpl()
   let sig = node[0].getTypeInst()
   inst.params = sig.params # copy over the parameters
