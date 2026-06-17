@@ -1,5 +1,5 @@
 ## CuTe scaling: codegen patterns (B15-B21)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_codegen.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_codegen.nim
 ##
 ## Real GPU kernel patterns: grid-stride loops, pointer stride,
 ## shared memory, syncthreads, computed indexing.

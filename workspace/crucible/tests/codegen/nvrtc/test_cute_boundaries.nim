@@ -1,5 +1,5 @@
 ## CuTe scaling: failure boundaries (B22-B26)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_boundaries.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_boundaries.nim
 ##
 ## Graceful handling at the edges: nested generics,
 ## static array sizing, compile-time dispatch.

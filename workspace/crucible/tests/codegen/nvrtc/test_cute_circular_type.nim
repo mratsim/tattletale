@@ -1,5 +1,5 @@
 ## CuTe: forward-referenced types (B23)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_circular_type.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_circular_type.nim
 ##
 ## Tests that types referencing each other (defined in order at Nim level)
 ## resolve correctly in GPU codegen. True circular types (A contains B

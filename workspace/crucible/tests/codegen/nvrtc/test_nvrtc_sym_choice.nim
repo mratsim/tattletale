@@ -1,5 +1,5 @@
 ## NVRTC: ClosedSymChoice overload resolution via bind
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_sym_choice.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_sym_choice.nim
 ##
 ## Tests overload resolution with `bind` creating a ClosedSymChoice.
 ## The symchoice handler in initGpuGenericInst is currently dead code

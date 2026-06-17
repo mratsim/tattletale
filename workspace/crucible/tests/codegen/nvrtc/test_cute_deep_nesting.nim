@@ -1,5 +1,5 @@
 ## CuTe: deep generic nesting (B22)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_deep_nesting.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_deep_nesting.nim
 ##
 ## Tests that moderately deep generic type nesting (10+ levels) resolves
 ## without stack overflow. Real CuTe layouts rarely exceed 3-4 levels.

@@ -1,5 +1,5 @@
 ## CuTe: generic proc returning a composed generic type (B10)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_tuple_return.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_tuple_return.nim
 ##
 ## In CuTe, factory procs like make_layout() return composed types.
 ## This tests that a generic proc returning another generic type works.

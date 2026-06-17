@@ -1,5 +1,5 @@
 ## CuTe scaling: static-int arithmetic (+ *, complex)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_static_arith.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_static_arith.nim
 ##
 ## CuTe types are parameterized by compile-time integers:
 ##   Layout<Shape<Int<M>, Int<N>>, Stride<Int<N>, Int<1>>>

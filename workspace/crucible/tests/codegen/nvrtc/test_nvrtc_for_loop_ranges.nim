@@ -1,5 +1,5 @@
 ## NVRTC: for-loop range parsing (nnkForStmt)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_for_loop_ranges.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_for_loop_ranges.nim
 ##
 ## Exercises the range parsing at nim_to_gpu.nim ~line 1116:
 ##   - Infix range: `0 .. N`

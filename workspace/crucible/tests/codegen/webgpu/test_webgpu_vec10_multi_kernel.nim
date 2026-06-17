@@ -1,6 +1,6 @@
 ## Multi-kernel Vec10 add/mul — WebGPU (WGSL) backend
 ## Run with:
-##   nim c -r workspace/crucible/tests/codegen/webgpu/test_vec10_multi_kernel.nim
+##   nim c -r workspace/crucible/tests/codegen/webgpu/test_webgpu_vec10_multi_kernel.nim
 import workspace/crucible/src/codegen/wgpu
 
 const code = webgpu:

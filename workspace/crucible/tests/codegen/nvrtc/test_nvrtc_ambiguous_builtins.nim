@@ -3,7 +3,7 @@
 ##   2. Called from a pure Nim host function (outside cuda block)
 ##   3. Called from the SAME function used in both host and device contexts
 ##
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_ambiguous_builtins.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_ambiguous_builtins.nim
 import std/strformat
 import workspace/crucible/src/codegen/builtins/ambiguous_builtins
 import workspace/crucible/src/codegen/nvrtc

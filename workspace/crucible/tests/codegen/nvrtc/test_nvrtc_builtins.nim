@@ -1,5 +1,5 @@
 ## NVRTC: cross-platform GPU builtins (min, max, abs)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_builtins.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_builtins.nim
 ##
 ## min, max, abs are available on all 4 backends (CUDA, OpenCL, GLSL, WGSL).
 ## Registered as known builtins in addProcToGenericInsts to avoid parsing

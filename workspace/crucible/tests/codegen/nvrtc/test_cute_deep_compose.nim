@@ -1,5 +1,5 @@
 ## CuTe: deep generic composition (B11, B12, B13)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_deep_compose.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_deep_compose.nim
 ##
 ## B11: 3-level generic nesting
 ## B12: Type alias chain (5+ aliases)
