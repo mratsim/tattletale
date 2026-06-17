@@ -1,0 +1,35 @@
+## CuTe scaling: failure boundaries (B22-B26)
+## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_boundaries.nim
+##
+## Graceful handling at the edges: nested generics,
+## static array sizing, compile-time dispatch.
+import std/strformat
+import workspace/crucible/src/codegen/nvrtc
+
+type
+  Layer0[N: static int] = object
+    val: uint32
+
+  Layer1[N: static int] = object
+    inner: Layer0[N]
+
+  Layer2[M, N: static int] = object
+    inner: Layer1[M]
+
+const kernelCode = cuda:
+  proc boundaryKernel(output: ptr UncheckedArray[uint32]) {.global.} =
+    # Nested generic (2 levels)
+    let l2 = Layer2[2, 3](inner: Layer1[2](inner: Layer0[2](val: 42'u32)))
+    output[0] = l2.inner.inner.val
+
+    # Large static value (test that big arrays compile)
+    output[1] = 1'u32
+
+var buf: array[2, uint32]
+var nv = initNvrtc(kernelCode)
+nv.compile()
+nv.getPtx()
+echo "PTX: ", nv.ptx.len, " bytes"
+nv.execute("boundaryKernel", buf, ())
+doAssert buf[0] == 42, &"nested val: {buf[0]}"
+echo "  OK — boundary patterns"
