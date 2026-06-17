@@ -370,7 +370,6 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuCall:
     let fnName = ast.cName
-    let fnParams = ctx.getFnParams(fnName)
     var cudaArgs: seq[string]
     for i, arg in ast.cArgs:
       # C++ const& binds implicitly — no & needed at call site

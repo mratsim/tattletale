@@ -897,9 +897,11 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= indentStr & '}'
 
   of gpuTernary:
-    # WGSL (WebGPU) doesn't have a ternary operator.
-    # TODO: lower to let + if/else for WGSL.
-    raiseAssert "gpuTernary not yet supported on WGSL backend"
+    # WGSL has no ternary ?: operator, but supports select(f, t, cond).
+    # select returns t when cond is true, f when cond is false.
+    result = "select(" & ctx.genWebGpu(ast.tElse) & ", " &
+        ctx.genWebGpu(ast.tThen) & ", " &
+        ctx.genWebGpu(ast.tCond) & ")"
 
   of gpuFor:
     let i = ast.fVar.ident()

@@ -314,9 +314,6 @@ type
     ## the function name. This is to avoid overload issues in backends that don't
     ## allow overloading by function signatures.
     symChoices*: HashSet[string]
-    ## When non-nil, nnkIfExpr handler assigns to this target ident name
-    ## instead of the hardcoded "result".
-    curIfExprTarget*: string
   ## only need the `genericInsts` field data (the values). Trying to `newLit` the full `GpuContext`
   ## causes trouble.
   GpuGenericsInfo* = object

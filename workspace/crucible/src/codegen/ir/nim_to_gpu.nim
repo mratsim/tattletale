@@ -414,12 +414,19 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       # Inclusive `..` — codegen uses `i < end`, but Nim's `..` is
       # inclusive `[a, b]` (b+1 values). Add 1 so C's `<` matches.
       if node[1][0].repr == "..":
-        let typ = initGpuType(gtInt32)
-        let one = GpuAst(kind: gpuLit, lValue: "1", lType: typ)
+        # Derive type from range end expression
+        let endTyp =
+          if result.fEnd.kind == gpuLit:
+            result.fEnd.lType
+          elif result.fEnd.kind == gpuIdent and result.fEnd.iTyp.kind notin {gtVoid}:
+            result.fEnd.iTyp
+          else:
+            initGpuType(gtInt32)  # fallback
+        let one = GpuAst(kind: gpuLit, lValue: "1", lType: endTyp)
         var addOp = GpuAst(kind: gpuIdent, iName: "+")
         result.fEnd = GpuAst(kind: gpuBinOp, bOp: addOp,
                              bLeft: result.fEnd, bRight: one,
-                             bLeftTyp: typ, bRightTyp: typ)
+                             bLeftTyp: endTyp, bRightTyp: endTyp)
     elif node[1].len >= 2:
       result.fStart = ctx.toGpuAst(node[1][1])
       result.fEnd = ctx.toGpuAst(node[1][^1])
