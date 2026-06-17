@@ -484,7 +484,6 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     else:
       result = indentStr & "const " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genVulkan(ast.cIdent) & " = " & ctx.genVulkan(ast.cValue)
   of gpuMaterialize:
-    # Should not reach Vulkan (passByRef not used)
     raiseAssert "gpuMaterialize should not reach Vulkan backend — passByRef is not used"
 
   else:
