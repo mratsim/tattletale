@@ -845,26 +845,33 @@ proc maybeInsertResult(ast: var GpuAst, retType: GpuType, fnName: string) =
   ## - there is no `return` statement as the _last_ statement in the proc
   if retType.kind == gtVoid: return # nothing to do if the proc returns nothing
 
-  proc hasCustomResult(n: GpuAst): bool =
-    doAssert n.kind == gpuBlock
-    for ch in n: # iterate all top level statements in the proc body
-      case ch.kind
-      of gpuVar:
-        if ch.vName.ident() == "result":
-          ## XXX: could maybe consider to emit a CT warning that `result` shadows the implicit
-          ## result variable
-          echo "[WARNING] ", fnName, " has a custom `result` variable, which shadows the implicit `result`."
-          return true
-      of gpuBlock: # need to look at `gpuBlock` from top level, because variables are defined in a block
-        result = result or hasCustomResult(ch)
-      else:
-        discard
+  proc ensureNoCustomResult(n: GpuAst) =
+    ## Raise a compile-time error if a `gpuVar` named `result` exists
+    ## at any nesting depth (including inside gpuIf/gpuFor/gpuWhile).
+    case n.kind
+    of gpuBlock:
+      for ch in n:
+        ensureNoCustomResult(ch)
+    of gpuVar:
+      if n.vName.ident() == "result":
+        error fnName & " has a custom `result` variable which shadows the implicit `result` (not allowed in GPU code)"
+    of gpuIf:
+      ensureNoCustomResult(n.ifThen)
+      if n.ifElse.kind != gpuVoid:
+        ensureNoCustomResult(n.ifElse)
+    of gpuFor:
+      ensureNoCustomResult(n.fBody)
+    of gpuWhile:
+      ensureNoCustomResult(n.wBody)
+    else:
+      discard
 
   proc lastIsReturn(n: GpuAst): bool =
     doAssert n.kind == gpuBlock
     if n.statements[^1].kind == gpuReturn: return true
 
-  if not hasCustomResult(ast) and not lastIsReturn(ast):
+  ensureNoCustomResult(ast)
+  if not lastIsReturn(ast):
     # insert `gpuVar` as the *first* statement
     let resId = GpuAst(kind: gpuIdent, iName: "result",
                        iSym: "result",
