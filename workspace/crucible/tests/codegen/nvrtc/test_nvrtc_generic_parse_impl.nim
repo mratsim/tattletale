@@ -1,5 +1,5 @@
 ## NVRTC: parseGenericImpl — ObjectTy, StaticTy, distinct code paths
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_generic_parse_impl.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_parse_impl.nim
 ##
 ## Coverage: nim_to_gpu.nim:100-115
 import std/strformat

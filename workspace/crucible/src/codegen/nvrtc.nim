@@ -18,6 +18,7 @@ export gpu_compiler
 export nvidia_abi
 import workspace/crucible/src/abis/c_abi
 export c_abi
+import ./exec/runtime_utils
 
 ## Debug output (driver version, PTX size, files) — controlled by -d:debug
 
@@ -58,8 +59,6 @@ proc initNvrtc*(cuda: string, name = "sample.cu"): NVRTC =
     check cudaGetDeviceProperties(prop, 0);
     echo "Compute capability: ", prop.major, " ", prop.minor
 
-    let dumpPath = getTempDir() / "tattletale" / "crucible" / "kernels" / name
-    createDir(dumpPath.parentDir())
     writeFile(dumpPath, cuda)
     echo "Kernel dump: ", dumpPath
 
@@ -127,9 +126,8 @@ proc getPtx*(nvrtc: var NVRTC) =
   nvrtc.ptx = ptx
 
   when defined(debug):
-    echo "PTX size: ", ptxSize
+    writeFile(getDebugPath("kernel.ptx"), nvrtc.ptx)
     #echo "-------------------- PTX --------------------\n", nvrtc.ptx
-    writeFile("/tmp/kernel.ptx", nvrtc.ptx)
 
 proc load*(nvrtc: var NVRTC) =
   # After getting the PTX...
@@ -210,11 +208,12 @@ proc link*(nvrtc: var NVRTC) =
     quit(1)
 
   when defined(debug):
-    echo "[INFO]: Writing CUBIN data to file /tmp/test.cubin"
+    let cubinDump = getDebugPath("test.cubin")
+    echo "[INFO]: Writing CUBIN data to file ", cubinDump
     echo "Cubin size: ", cubinSize
-    var f = open("/tmp/test.cubin", fmWrite)
+    var f = open(cubinDump, fmWrite)
+    defer: f.close()
     discard f.writeBuffer(cubn, cubinSize)
-    f.close()
 
   # Assign the cubin
   nvrtc.cubin = cubn

@@ -1,5 +1,5 @@
 ## NVRTC: try/except fallback in addProcToGenericInsts
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_except_fallback.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_except_fallback.nim
 ##
 ## Coverage: nim_to_gpu.nim:807-818
 ##

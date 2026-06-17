@@ -51,36 +51,6 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   else:
     raiseAssert "Invalid type : " & $t
 
-proc gpuTypeToShortString*(t: GpuType): string =
-  ## Short, space-free type name for use in generic struct identifiers.
-  case t.kind
-  of gtUint8:   result = "u8"
-  of gtUint16:  result = "u16"
-  of gtUint32:  result = "u32"
-  of gtUint64:  result = "u64"
-  of gtInt16:   result = "i16"
-  of gtInt32:   result = "i32"
-  of gtInt64:   result = "i64"
-  of gtFloat32: result = "f32"
-  of gtFloat64: result = "f64"
-  of gtBool:    result = "bool"
-  of gtObject:
-    result = $t.name
-  of gtGenericInst:
-    result = t.gName
-    if t.gArgs.len > 0:
-      result.add '_'
-      for i, g in t.gArgs:
-        if i > 0: result.add 'x'
-        result.add gpuTypeToShortString(g)
-  of gtVoidPtr: result = "void_ptr"
-  of gtPtr:
-    result = "ptr_" & gpuTypeToShortString(t.to)
-  of gtStatic:
-    result = $t.sValue
-  else:
-    result = $t.kind # fallback — safe but verbose
-
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
                     ): string =
@@ -403,7 +373,13 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     var clArgs: seq[string]
     for i, arg in ast.cArgs:
       if i < fnParams.len and fnParams[i].passByRef:
-        clArgs.add "&" & ctx.genOpenCL(arg)
+        if arg.kind == gpuMaterialize:
+          clArgs.add ctx.genOpenCL(arg)  # already wrapped by pass
+        elif arg.kind in {gpuIdent, gpuIndex, gpuDeref}:
+          clArgs.add "&" & ctx.genOpenCL(arg)
+        else:
+          let typ = gpuTypeToString(fnParams[i].typ, allowEmptyIdent = true)
+          clArgs.add "&(" & typ & "){" & ctx.genOpenCL(arg) & "}"
       else:
         clArgs.add ctx.genOpenCL(arg)
     result = indentStr & fnName.ident() & '(' & clArgs.join(", ") & ')'
@@ -483,6 +459,9 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "const " & gpuTypeToString(ast.cType, ctx.genOpenCL(ast.cIdent)) & " = " & ctx.genOpenCL(ast.cValue)
     else:
       result = indentStr & "const " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genOpenCL(ast.cIdent) & " = " & ctx.genOpenCL(ast.cValue)
+  of gpuMaterialize:
+    let typ = gpuTypeToString(ast.mType, allowEmptyIdent = true)
+    result = "&(" & typ & "){" & ctx.genOpenCL(ast.mExpr) & "}"
 
   else:
     echo "Unhandled node kind in genOpenCL: ", ast.kind

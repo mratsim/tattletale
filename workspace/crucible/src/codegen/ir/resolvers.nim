@@ -112,8 +112,8 @@ proc determineArrayLength*(n: NimNode, allowArrayIdent: bool): int =
   case n[1].kind
   of nnkSym:
     # resolved symbol — get the constant int value from its implementation
-    result = n[1].getImpl.intVal
     if not allowArrayIdent:
+      result = n[1].getImpl.intVal
       let msg = """Found array with length given by identifier: $#!
   You might want to create a typed template taking a typed parameter for this
   constant to force the Nim compiler to bind the symbol. In theory though this
@@ -216,7 +216,7 @@ proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
     of "raises":
       discard
     # Common Nim pragmas that are not relevant for CUDA C codegen:
-    of "noSideEffect", "nimcall", "closure", "inlne", "shallow":
+    of "noSideEffect", "nimcall", "closure", "shallow":
       discard
     else:
       raiseAssert "Unexpected pragma for procs: " & $pragma.treerepr

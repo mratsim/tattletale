@@ -5,7 +5,7 @@
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_add.nim
 ##
 ## For full execution (requires libwgpu_native.so):
-##   nim c -r -d:webgpu --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_add.nim
 
 import workspace/crucible/src/codegen/wgpu

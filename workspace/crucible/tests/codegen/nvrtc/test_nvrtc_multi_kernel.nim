@@ -1,6 +1,6 @@
 ## NVRTC: multiple kernels via codegen pipeline
 ## Run with:
-##   nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_multi_kernel.nim
+##   nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_multi_kernel.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
 import workspace/crucible/src/codegen/nvrtc
 

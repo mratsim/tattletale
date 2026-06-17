@@ -1,5 +1,5 @@
 ## CuTe: factory functions returning composed types (B14)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_factory.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_factory.nim
 ##
 ## CuTe composes layouts through generic factory functions.
 ## Note: for-loop bounds use 0..N to compensate for C's i<N.

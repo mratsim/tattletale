@@ -1,5 +1,5 @@
 ## NVRTC: ptr array + device func chaining via codegen pipeline
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_ptr_unchecked.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_ptr_unchecked.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
 import workspace/crucible/src/codegen/nvrtc
 

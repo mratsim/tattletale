@@ -48,36 +48,6 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   else:
     raiseAssert "Invalid type : " & $t
 
-proc gpuTypeToShortString*(t: GpuType): string =
-  ## Short, space-free type name for use in generic struct identifiers.
-  case t.kind
-  of gtUint8:   result = "u8"
-  of gtUint16:  result = "u16"
-  of gtUint32:  result = "u32"
-  of gtUint64:  result = "u64"
-  of gtInt16:   result = "i16"
-  of gtInt32:   result = "i32"
-  of gtInt64:   result = "i64"
-  of gtFloat32: result = "f32"
-  of gtFloat64: result = "f64"
-  of gtBool:    result = "bool"
-  of gtObject:
-    result = $t.name
-  of gtGenericInst:
-    result = t.gName
-    if t.gArgs.len > 0:
-      result.add '_'
-      for i, g in t.gArgs:
-        if i > 0: result.add 'x'
-        result.add gpuTypeToShortString(g)
-  of gtVoidPtr: result = "void_ptr"
-  of gtPtr:
-    result = "ptr_" & gpuTypeToShortString(t.to)
-  of gtStatic:
-    result = $t.sValue
-  else:
-    result = $t.kind # fallback — safe but verbose
-
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
                     ): string =
@@ -400,7 +370,6 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuCall:
     let fnName = ast.cName
-    let fnParams = ctx.getFnParams(fnName)
     var cudaArgs: seq[string]
     for i, arg in ast.cArgs:
       # C++ const& binds implicitly — no & needed at call site
@@ -502,6 +471,8 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genCuda(ast.cIdent)) & " = " & ctx.genCuda(ast.cValue)
     else:
       result = indentStr & "constexpr " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genCuda(ast.cIdent) & " = " & ctx.genCuda(ast.cValue)
+  of gpuMaterialize:
+    result = ctx.genCuda(ast.mExpr)  # C++ const& binds implicitly to temporaries
 
   else:
     echo "Unhandled node kind in genCuda: ", ast.kind

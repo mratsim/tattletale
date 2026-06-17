@@ -1,5 +1,5 @@
 ## NVRTC: -default-device NVRTC flag (global vars default to __device__)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_default_device.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_default_device.nim
 ##
 ## Coverage: nvrtc.nim:99
 import std/strformat

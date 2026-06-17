@@ -11,9 +11,11 @@ import std/[macros, sequtils, tables]
 import ./ir/gpu_types
 import ./targets/targets_lang
 import ./ir/nim_to_gpu
+import ./passes/pass_datatypes
 import ./passes/pass_registry
-
-export gpu_types
+import ./passes/passes_legalizations
+import ./passes/passes_validations
+import ./passes/passes_optimizations
 
 import ./builtins/builtins # all the builtins for the backend to make the Nim compiler happy
 export builtins
@@ -31,9 +33,15 @@ macro toGpuAst*(body: typed): (GpuGenericsInfo, GpuAst) =
 macro cuda*(body: typed): string =
   ## Converts the body of this macro into CUDA code.
   var ctx = GpuContext()
-  var reg = newDefaultRegistry()
+  var reg = PassRegistry.new()
+  reg.registerValidationPasses()
+  reg.registerLegalizationPasses()
+  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
+    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
+    dependsOn = @["ensureBlock"],
+    run = materializePassByRefArgs
+  )
   let gpuAst = ctx.toGpuAst(body)
-  # TODO: pass AST explicitly (runPasses is coupled to ctx.allFnTab)
   runPasses(ctx, reg)
   let body = ctx.codegenCuda(gpuAst)
   result = newLit(body)
@@ -41,9 +49,10 @@ macro cuda*(body: typed): string =
 macro webgpu*(body: typed): string =
   ## Converts the body of this macro into WebGPU WGSL code.
   var ctx = GpuContext()
-  var reg = newDefaultRegistry()
+  var reg = PassRegistry.new()
+  reg.registerValidationPasses()
+  reg.registerLegalizationPasses()
   let gpuAst = ctx.toGpuAst(body)
-  # TODO: pass AST explicitly (runPasses is coupled to ctx.allFnTab)
   runPasses(ctx, reg)
   let body = ctx.codegenWebGpu(gpuAst)
   result = newLit(body)
@@ -51,9 +60,15 @@ macro webgpu*(body: typed): string =
 macro opencl*(body: typed): string =
   ## Converts the body of this macro into OpenCL C code.
   var ctx = GpuContext()
-  var reg = newDefaultRegistry()
+  var reg = PassRegistry.new()
+  reg.registerValidationPasses()
+  reg.registerLegalizationPasses()
+  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
+    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
+    dependsOn = @["ensureBlock"],
+    run = materializePassByRefArgs
+  )
   let gpuAst = ctx.toGpuAst(body)
-  # TODO: pass AST explicitly (runPasses is coupled to ctx.allFnTab)
   runPasses(ctx, reg)
   let body = ctx.codegenOpenCL(gpuAst)
   result = newLit(body)
@@ -61,9 +76,10 @@ macro opencl*(body: typed): string =
 macro vulkan*(body: typed): string =
   ## Converts the body of this macro into GLSL compute shader code.
   var ctx = GpuContext()
-  var reg = newDefaultRegistry()
+  var reg = PassRegistry.new()
+  reg.registerValidationPasses()
+  reg.registerLegalizationPasses()
   let gpuAst = ctx.toGpuAst(body)
-  # TODO: pass AST explicitly (runPasses is coupled to ctx.allFnTab)
   runPasses(ctx, reg)
   let body = ctx.codegenVulkan(gpuAst)
   result = newLit(body)

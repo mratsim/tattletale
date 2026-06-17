@@ -1,5 +1,5 @@
 ## CuTe: pointer stride + computed indexing (B15, B20)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_ptr_stride.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_ptr_stride.nim
 ##
 ## CuTe kernels compute offsets from thread/block IDs and strides.
 import std/strformat

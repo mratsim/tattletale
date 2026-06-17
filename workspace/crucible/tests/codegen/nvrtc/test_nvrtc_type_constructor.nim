@@ -1,5 +1,5 @@
 ## NVRTC: nnkCall in nnkTypeDef (constructor type definitions)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_type_constructor.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_type_constructor.nim
 ##
 ## Coverage: nim_to_gpu.nim:1356-1358
 import std/strformat

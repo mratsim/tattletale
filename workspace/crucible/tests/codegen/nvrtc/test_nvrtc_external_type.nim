@@ -1,5 +1,5 @@
 ## NVRTC: external types pulled from outside the `cuda` block
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_external_type.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_type.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
 ##
 ## Tests the PR #565 feature: types defined outside the `cuda` block

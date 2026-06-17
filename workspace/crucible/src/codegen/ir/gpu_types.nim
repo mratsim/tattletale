@@ -45,6 +45,7 @@ type
     gpuCast         # Cast expression
     gpuComment      # Just a comment
     gpuConstexpr    # A `constexpr`, i.e. compile time constant (Nim `const`)
+    gpuMaterialize  # Force materialization of a non-lvalue expr for pass-by-ref
 
   GpuTypeKind* = enum
     gtVoid,
@@ -164,6 +165,9 @@ type
       cIdent*: GpuAst # the identifier
       cValue*: GpuAst # not just a string to support different types easily
       cType*: GpuType
+    of gpuMaterialize:
+      mExpr*: GpuAst      # the non-lvalue expression to materialize
+      mType*: GpuType     # the type to materialize as
     of gpuArrayLit:
       aValues*: seq[GpuAst]
       aLitType*: GpuType # type of first element
@@ -314,9 +318,6 @@ type
     ## the function name. This is to avoid overload issues in backends that don't
     ## allow overloading by function signatures.
     symChoices*: HashSet[string]
-    ## When non-nil, nnkIfExpr handler assigns to this target ident name
-    ## instead of the hardcoded "result".
-    curIfExprTarget*: string
   ## only need the `genericInsts` field data (the values). Trying to `newLit` the full `GpuContext`
   ## causes trouble.
   GpuGenericsInfo* = object
@@ -453,6 +454,10 @@ proc clone*(ast: GpuAst): GpuAst =
     result.cIdent = ast.cIdent.clone()
     result.cValue = ast.cValue.clone()
     result.cType = ast.cType.clone()
+  of gpuMaterialize:
+    result = GpuAst(kind: gpuMaterialize)
+    result.mExpr = ast.mExpr.clone()
+    result.mType = ast.mType.clone()
   of gpuArrayLit:
     result = GpuAst(kind: gpuArrayLit)
     for a in ast.aValues:
@@ -628,6 +633,7 @@ proc len*(ast: GpuAst): int =
   of gpuConv:      1
   of gpuCast:      1
   of gpuConstexpr: 2
+  of gpuMaterialize: 1
   else: 0
 
 proc `$`*(x: GpuType): string =
@@ -743,6 +749,8 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
   of gpuConstexpr:
     result.add pretty(n.cIdent, indent + 2)
     result.add pretty(n.cValue, indent + 2)
+  of gpuMaterialize:
+    result.add pretty(n.mExpr, indent + 2)
   of gpuArrayLit:
     for el in n.aValues:
       result.add pretty(el, indent + 2)
@@ -870,6 +878,8 @@ template iterImpl(ast: untyped, mutable: static bool): untyped =
   of gpuConstexpr:
     ya(cIdent)
     ya(cValue)
+  of gpuMaterialize:
+    ya(mExpr)
   else:
     discard # nothing to yield
 
@@ -917,6 +927,8 @@ func size*(t: GpuType): int =
   of gtStatic:
     result = 0  # compile-time value, no runtime size
   of gtArray:
+    # TODO: for generic/unresolved array, size is set to -1, but can that happen in practice?
+    # Due to constant folding I would expect array length to always be resolved.
     result = t.aLen * size(t.aTyp)
   of gtObject:
     for f in t.oFields:
@@ -976,3 +988,33 @@ proc getInnerArrayLengths*(t: GpuType): string =
       result.add &"{inner}"
   else:
     result = ""
+
+proc gpuTypeToShortString*(t: GpuType): string =
+  ## Short, space-free type name for use in generic struct identifiers.
+  case t.kind
+  of gtUint8:   result = "u8"
+  of gtUint16:  result = "u16"
+  of gtUint32:  result = "u32"
+  of gtUint64:  result = "u64"
+  of gtInt16:   result = "i16"
+  of gtInt32:   result = "i32"
+  of gtInt64:   result = "i64"
+  of gtFloat32: result = "f32"
+  of gtFloat64: result = "f64"
+  of gtBool:    result = "bool"
+  of gtObject:
+    result = $t.name
+  of gtGenericInst:
+    result = t.gName
+    if t.gArgs.len > 0:
+      result.add '_'
+      for i, g in t.gArgs:
+        if i > 0: result.add 'x'
+        result.add gpuTypeToShortString(g)
+  of gtVoidPtr: result = "void_ptr"
+  of gtPtr:
+    result = "ptr_" & gpuTypeToShortString(t.to)
+  of gtStatic:
+    result = $t.sValue
+  else:
+    result = $t.kind # fallback — safe but verbose

@@ -1,5 +1,5 @@
 ## NVRTC: if-expressions (nnkIfExpr) in GPU code
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_if_expr.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_if_expr.nim
 ##
 ## Tests the nnkIfExpr handler (nim_to_gpu.nim ~line 1089).
 ## Catches:

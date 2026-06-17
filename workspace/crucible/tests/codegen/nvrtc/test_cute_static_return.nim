@@ -1,5 +1,5 @@
 ## CuTe: generic proc with when dispatch (B07, B26)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_static_return.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_static_return.nim
 ##
 ## CuTe dispatches tile sizes per GPU arch at compile time.
 ## Uses `when` for compile-time branching on static params.
