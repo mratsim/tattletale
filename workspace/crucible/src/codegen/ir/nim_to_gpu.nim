@@ -193,22 +193,26 @@ proc determineArrayLength(n: NimNode, allowArrayIdent: bool): int =
   ##  `proc mdsRowShfNaive(r: int, v: array[SPONGE_WIDTH, BigInt]): BigInt {.device.} =`
   case n[1].kind
   of nnkSym:
-    # likely a constant, try to get its value
-    # In typed macros, integer values are constant-folded into nnkIntLit — this
-    # nnkSym branch is only hit for non-constant symbols (generics, forward refs).
-    # Calling .intVal on nil (missing impl) or a ConstDef node will crash the compiler
-    # right here, which is preferable fpr debugging
+    # resolved symbol — get the constant int value from its implementation
     result = n[1].getImpl.intVal
     if not allowArrayIdent:
       let msg = """Found array with length given by identifier: $#!
-You might want to create a typed template taking a typed parameter for this
-constant to force the Nim compiler to bind the symbol. In theory though this
-error should not appear anymore though, as we don't try to parse generic
-functions.
-""" % n[1].strVal
+  You might want to create a typed template taking a typed parameter for this
+  constant to force the Nim compiler to bind the symbol. In theory though this
+  error should not appear anymore though, as we don't try to parse generic
+  functions.""" % n[1].strVal
       raiseAssert msg
     else:
-      result = -1 # return -1 to indicate caller should look at symbol
+      result = -1
+  of nnkIdent:
+    # constant from outside the macro — let Nim inline at generation time
+    if not allowArrayIdent:
+      let msg = """Found array with length given by identifier: $#!
+  You might want to create a typed template taking a typed parameter for this
+  constant to force the Nim compiler to bind the symbol.""" % n[1].strVal
+      raiseAssert msg
+    else:
+      result = -1
   else:
     case n[1].kind
     of nnkIntLit: result = n[1].intVal

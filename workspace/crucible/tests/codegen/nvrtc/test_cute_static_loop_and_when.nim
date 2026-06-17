@@ -10,14 +10,18 @@ type
   Tile[M, N: static int] = object
     data: array[M * N, uint32]
 
+const L = 3
+
 const kernelCode = cuda:
-  proc staticLoopKernel(output: ptr UncheckedArray[uint32]) {.global.} =
-    # B04: loop with static-int bound
-    let t = Tile[2, 3](data: [10'u32, 20'u32, 30'u32, 40'u32, 50'u32, 60'u32])
-    for i in 0 .. 2:
+  proc staticLoopKernel(output: ptr array[L, uint32]) {.global.} =
+    # B04: loop with static-int bound — const L pulled from outside cuda block
+    var t: Tile[L, 3]
+    for idx in 0 ..< L * 3:
+      t.data[idx] = uint32(idx + 1) * 10
+    for i in 0 ..< L:
       output[i] = t.data[i]
 
-var buf: array[2, uint32]
+var buf: array[L, uint32]
 var nv = initNvrtc(kernelCode)
 nv.compile()
 nv.getPtx()
@@ -25,4 +29,5 @@ echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("staticLoopKernel", buf, ())
 doAssert buf[0] == 10, &"loop[0]: {buf[0]}"
 doAssert buf[1] == 20, &"loop[1]: {buf[1]}"
+doAssert buf[2] == 30, &"loop[2]: {buf[2]}"
 echo "  OK — static loop + when"
