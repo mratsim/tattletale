@@ -331,6 +331,12 @@ type
     args*: seq[GenericArg] # kind of symbols passed in at the call site. To determine ptr types, if args are ptrs
     # types are not stored in the instantiation, because we look up the types from the original function when generating the code
 
+
+const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
+                         gtUint32, gtInt32, gtUint64, gtInt64,
+                         gtFloat32, gtFloat64, gtSize_t}
+  ## Set of numeric (scalar) GpuTypeKind variants.
+
 proc newGpuIdent*(ident: string = "", symKind: GpuSymbolKind = gsNone): GpuAst =
   result = GpuAst(kind: gpuIdent, iName: ident, symbolKind: symKind)
 

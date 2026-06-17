@@ -835,78 +835,7 @@ proc isExpression(n: GpuAst): bool =
   else:
     result = false
 
-proc maybeInsertResult(ast: var GpuAst, retType: GpuType, fnName: string) =
-  ## Will insert a `gpuVar` for the implicit `result` variable, unless there
-  ## is a user defined `var result` that shadows it at the top level of the proc
-  ## body.
-  ##
-  ## Finally adds a `return result` statement if
-  ## - we add a `result` variable
-  ## - there is no `return` statement as the _last_ statement in the proc
-  if retType.kind == gtVoid: return # nothing to do if the proc returns nothing
-
-  proc ensureNoCustomResult(n: GpuAst) =
-    ## Raise a compile-time error if a `gpuVar` named `result` exists
-    ## at any nesting depth (including inside gpuIf/gpuFor/gpuWhile).
-    case n.kind
-    of gpuBlock:
-      for ch in n:
-        ensureNoCustomResult(ch)
-    of gpuVar:
-      if n.vName.ident() == "result":
-        error fnName & " has a custom `result` variable which shadows the implicit `result` (not allowed in GPU code)"
-    of gpuIf:
-      ensureNoCustomResult(n.ifThen)
-      if n.ifElse.kind != gpuVoid:
-        ensureNoCustomResult(n.ifElse)
-    of gpuFor:
-      ensureNoCustomResult(n.fBody)
-    of gpuWhile:
-      ensureNoCustomResult(n.wBody)
-    else:
-      discard
-
-  proc lastIsReturn(n: GpuAst): bool =
-    doAssert n.kind == gpuBlock
-    if n.statements[^1].kind == gpuReturn: return true
-
-  ensureNoCustomResult(ast)
-  if not lastIsReturn(ast):
-    # insert `gpuVar` as the *first* statement
-    let resId = GpuAst(kind: gpuIdent, iName: "result",
-                       iSym: "result",
-                       iTyp: retType,
-                       symbolKind: gsLocal)
-    let res = GpuAst(kind: gpuVar, vName: resId,
-                     vType: retType,
-                     vInit: GpuAst(kind: gpuVoid), # no initialization
-                     vRequiresMemcpy: false,
-                     vMutable: true)
-    ast.statements.insert(res, 0)
-    # NOTE: The compiler rewrites expressions at the end of a `proc` into
-    # an assignment to `block: result = <expression>` for us.
-    if not lastIsReturn(ast):
-      # insert `return result`
-      ast.statements.add GpuAst(kind: gpuReturn, rValue: resId)
-
-    # For generic instantiations, the Nim compiler hasn't rewritten
-    # single-expression bodies to `result = expr`. Fix up the last
-    # standalone expression (if any) to assign to result.
-    for i in countdown(ast.statements.high, 0):
-      let stmt = ast.statements[i]
-      if stmt.kind notin {gpuVar, gpuComment, gpuVoid, gpuReturn, gpuIf, gpuFor, gpuWhile}:
-        # gpuIf/gpuFor/gpuWhile guarded — these are statements, not values;
-        # wrapping in `result = ...` would produce invalid C.
-        if stmt.kind == gpuBlock and stmt.isExpr:
-          # Unwrap single-statement expression blocks
-          if stmt.statements.len == 1:
-            ast.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt.statements[0])
-          else:
-            ast.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt)
-        elif stmt.kind != gpuAssign:
-          ast.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt)
-        break
-
+import ../passes/pass_implicit_result
 proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
   ## Returns true if the given `fn` (gpuIdent) returns a value.
   ## The function can either be:
@@ -1001,6 +930,11 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       result.pParams = ctx.parseProcParameters(params, result.pAttributes)
       result.pBody = ctx.toGpuAst(node.body)
         .ensureBlock() # single line procs should be a block to generate `;`
+            # Pre-condition validation
+      result.pBody.ensureNoCustomResult(result.pName.ident())
+      discard result.pBody.ensureResultAssignedBeforeRead(result.pName.ident())
+      
+      # Transformation
       result.pBody.maybeInsertResult(result.pRetType, result.pName.ident())
 
       # Add to table of known functions

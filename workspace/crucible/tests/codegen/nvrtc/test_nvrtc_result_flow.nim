@@ -1,12 +1,17 @@
 ## NVRTC: result variable insertion in control flow contexts — implicit return
 ##
 ## Tests procs that rely on the implicit `result` variable (no explicit `var result`
-## or `return result`). maybeInsertResult must insert both.
+## or `return result`). maybeInsertResult must insert the declaration.
+##
+## NOTE: `result` is declared but NOT zero-initialized. Patterns that read `result`
+## before writing (e.g. `result = result + expr`) depend on undefined behavior.
+## Use explicit `result = 0` or assign before reading.
 ##
 ## Run with: nim cpp -d:cuda -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_result_flow.nim
 import std/strformat
 import workspace/crucible/src/codegen/nvrtc
 
+# All procs assign to `result` before reading — safe without zero-init.
 proc plain(x: uint32): uint32 =
   result = x * 2
 
@@ -15,15 +20,18 @@ proc ifElse(cond: bool; a, b: uint32): uint32 =
   else:    result = b
 
 proc forLoop(start: uint32): uint32 =
+  result = 0
   for i in 0 ..< 5:
     result = result + start + uint32(i)
 
 proc forWithIf(n: uint32): uint32 =
+  result = 0
   for i in 0 ..< n:
     if i mod 2 == 0: result = result + i
     else:            result = result + (i * 2)
 
 proc ifWithFor(cond: bool; n: uint32): uint32 =
+  result = 0
   if cond:
     for i in 0 ..< n: result = result + i
   else:
