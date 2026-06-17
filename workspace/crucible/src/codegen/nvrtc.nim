@@ -6,7 +6,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/strformat
+import std/[strformat, os]
 
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/nvidia_paths
@@ -19,8 +19,7 @@ export nvidia_abi
 import workspace/crucible/src/abis/c_abi
 export c_abi
 
-## Set to true, if you want some extra output (driver & runtime version for example)
-const DebugCuda {.booldefine.} = true
+## Debug output (driver version, PTX size, files) — controlled by -d:debug
 
 type
   NVRTC* = object
@@ -46,7 +45,7 @@ proc `=destroy`(nvrtc: NVRTC) =
 
 proc initNvrtc*(cuda: string, name = "sample.cu"): NVRTC =
   ## Initializes an NVRTC object for the given program `cuda`
-  when DebugCuda:
+  when defined(debug):
     var x: cint
     check cuDriverGetVersion(x)
     echo "Driver version: ", x
@@ -59,8 +58,10 @@ proc initNvrtc*(cuda: string, name = "sample.cu"): NVRTC =
     check cudaGetDeviceProperties(prop, 0);
     echo "Compute capability: ", prop.major, " ", prop.minor
 
-    when defined(debugCuda):
-      writeFile("/tmp/tattletale/generated_kernel.cu", cuda)
+    let dumpPath = getTempDir() / "tattletale" / "crucible" / "kernels" / name
+    createDir(dumpPath.parentDir())
+    writeFile(dumpPath, cuda)
+    echo "Kernel dump: ", dumpPath
 
   ## TODO: consider in-memory and on-disk caching option for compiled PTX.
   ## (Compile once, reuse PTX or CUmodule for subsequent runs.)
@@ -99,7 +100,7 @@ proc compile*(nvrtc: var NVRTC) =
     cstring "-default-device",           # namespace-scope vars default to __device__
     # "--fmad=false", # and whatever other options for example
   ]
-  when defined(debugCuda):
+  when defined(debug):
     options.add cstring "--device-debug"       # Equivalent to -g
     options.add cstring "--generate-line-info" # Equivalent to -lineinfo
 
@@ -125,7 +126,7 @@ proc getPtx*(nvrtc: var NVRTC) =
   check nvrtcDestroyProgram(nvrtc.prog) # Destroy the program.
   nvrtc.ptx = ptx
 
-  when DebugCuda:
+  when defined(debug):
     echo "PTX size: ", ptxSize
     #echo "-------------------- PTX --------------------\n", nvrtc.ptx
     writeFile("/tmp/kernel.ptx", nvrtc.ptx)
@@ -208,7 +209,7 @@ proc link*(nvrtc: var NVRTC) =
     echo "Error log: ", errorLog
     quit(1)
 
-  when DebugCuda:
+  when defined(debug):
     echo "[INFO]: Writing CUBIN data to file /tmp/test.cubin"
     echo "Cubin size: ", cubinSize
     var f = open("/tmp/test.cubin", fmWrite)

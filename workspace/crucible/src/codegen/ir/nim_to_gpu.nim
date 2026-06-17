@@ -788,8 +788,17 @@ proc addProcToGenericInsts(ctx: var GpuContext, node: NimNode, name: GpuAst) =
   ## For any looked up procedure, we attach the `{.device.}` pragma.
   ##
   ## Mutates the `name` of the given function to match its generic name.
-  # We need both `getImpl` for the *body* and `getTypeInst` for the actual signature
-  # Only the latter contains e.g. correct instantiation of static array sizes
+
+  # Known backend builtins — emit as-is without parsing Nim's system module body.
+  let fnName = node[0].repr
+  if fnName in ["min", "max", "abs"]:
+    let retType = ctx.nimToGpuType(node[0].getTypeInst()[0])
+    let name = ctx.getFnName(node[0])
+    let builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
+    ctx.builtins[name] = builtinFn
+    ctx.processedProcs[name] = GpuProcSignature(retType: retType)
+    return
+
   let inst = node[0].getImpl()
   let sig = node[0].getTypeInst()
   inst.params = sig.params # copy over the parameters
@@ -804,42 +813,17 @@ proc addProcToGenericInsts(ctx: var GpuContext, node: NimNode, name: GpuAst) =
     # calling `toGpuAst` recursively forever
     ctx.processedProcs[name] = procSig
 
-  # TODO: to be reviewed
-  # Some instantiations come from macro-generated code (e.g., CuTe library)
-  # and contain AST nodes (bindSym, newCall, etc.) that Crucible cannot translate.
-  # Catch failures and register as built-in instead.
-  let fn = block:
-    try:
-      ctx.toGpuAst(inst)
-    except:
-      let fallback = GpuAst(kind: gpuProc, pName: name,
-                             pRetType: procSig.retType,
-                             pAttributes: {attDevice})
-      fallback.pBody = GpuAst(kind: gpuBlock)
-      ctx.genericInsts[name] = fallback
-      if name notin ctx.allFnTab:
-        ctx.allFnTab[name] = fallback
-      GpuAst(kind: gpuVoid)
+  let fn = ctx.toGpuAst(inst)
   if fn.kind == gpuVoid:
-    # Should be an inbuilt proc, i.e. annotated with `{.builtin.}`. However,
-    # functions that are available otherwise (e.g. in Nim's system like `abs`)
-    # in Nim _and_ backends will also show up here. Unless we wanted to manually
-    # wrap all of these, we can just skip the `isBuiltin` check here.
-    # If the user uses something not available in the backend, they'll get a
-    # compiler error from that compiler.
-    # It's mostly a matter of usability: For common procs like `abs` we cannot
-    # so easily define a custom overload `proc abs(...): ... {.builtin.}`, because
-    # that would overwrite the Nim version.
-    # doAssert inst.isBuiltIn()
+    doAssert inst.isBuiltIn()
     return
-  else:
-    fn.pAttributes.incl attDevice # make sure this is interpreted as a device function
-    doAssert fn.pName.iSym == name.iSym, "Not matching"
-    # now overwrite the identifier's `iName` field by its `iSym` so that different
-    # generic insts have different
-    fn.pName.iName = fn.pName.iSym
-    name.iName = fn.pName.iSym ## update the name of the called function
-    ctx.genericInsts[fn.pName] = fn
+  fn.pAttributes.incl attDevice # make sure this is interpreted as a device function
+  doAssert fn.pName.iSym == name.iSym, "Not matching"
+  # now overwrite the identifier's `iName` field by its `iSym` so that different
+  # generic insts have different
+  fn.pName.iName = fn.pName.iSym
+  name.iName = fn.pName.iSym ## update the name of the called function
+  ctx.genericInsts[fn.pName] = fn
 
 proc isExpression(n: GpuAst): bool =
   ## Returns whether the given AST node is an expression
