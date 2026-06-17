@@ -61,11 +61,11 @@ proc runCmd(cmd: string) =
   echo "=============================================================================================="
   exec cmd
 
-func testerCmd(path: string): string =
+func testerCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
   let filename = path.extractFilename()
   return
-    "nim cpp -r" &
-    # " -d:release --stackTrace:on --lineTrace:on " &
+    compiler & " -r" &
+    (if extraFlags.len > 0: " " & extraFlags else: "") &
     " --debugger:native " &
     " --hints:off --warnings:off " &
     &" --outdir:build/tests/{filename} --nimcache:nimcache/tests/{filename} " &
@@ -133,14 +133,14 @@ task make_pytttransformers, "Build pytttransformers.so for Python import":
 # --------------------------------------------------
 # Compile with: nim cpp --outdir:build/tests --nimcache:nimcache/tests --hints:off --warnings:off
 
-iterator getTestCommands(path: string): string =
+iterator getTestCommands(path: string; extraFlags = ""; compiler = "nim c"): string =
   ## Convention: tests start with test_ or t_
   for filepath in listFiles(path):
     let filename = filepath.extractFilename()
     if filename.endsWith(".nim") and (
       filename.startsWith("test_") or filename.startsWith("t_")
     ):
-      yield testerCmd(filepath)
+      yield testerCmd(filepath, extraFlags = extraFlags, compiler = compiler)
 
 task test_libtorch, "Test workspace/libtorch":
   withDir(ProjectRoot):
@@ -184,7 +184,28 @@ task test_ceramic, "Test workspace/ceramic":
     for cmd in getTestCommands("workspace/ceramic/tests"):
       runCmd(cmd)
 
+task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/nvrtc"):
+      runCmd(cmd)
+
 # Per-file ENV variables configuration for PCRE2
+
+task test_crucible_opencl, "Test workspace/crucible OpenCL codegen":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/opencl"):
+      runCmd(cmd)
+
+task test_crucible_vulkan, "Test workspace/crucible Vulkan codegen":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/vulkan"):
+      runCmd(cmd)
+
+task test_crucible_webgpu, "Test workspace/crucible WebGPU codegen":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/webgpu"):
+      runCmd(cmd)
+
 # ---------------------------------------------------
 
 const Pcre2Dir = ProjectRoot/"workspace/pcre2"

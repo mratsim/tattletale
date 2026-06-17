@@ -21,6 +21,7 @@ type
     gpuCall         # Function call
     gpuTemplateCall # Call to a Nim template
     gpuIf           # If statement
+    gpuTernary      # Ternary expression (cond ? then : else)
     gpuFor          # For loop
     gpuWhile        # While loop
     gpuBinOp        # Binary operation
@@ -48,6 +49,7 @@ type
   GpuTypeKind* = enum
     gtVoid,
     gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64, gtSize_t, # atomics
+    gtStatic       # Static integer value (used for generic params)
     gtArray,       # Static array `array[N, dtype]` -> `dtype[N]`
     gtString,
     gtObject,      # Struct types
@@ -82,6 +84,8 @@ type
       aLen*: int     # The length of the array. If `aLen == -1` we look at a generic (static) array. Will be given at instantiation time
                     # On both CUDA and WebGPU a length of `0` is also used to generate `int foo[]` (CUDA)
                     # `array<foo>` (WebGPU) (runtime sized arrays), which are generated from `ptr UncheckedArray[float32]` for example.
+    of gtStatic:
+      sValue*: int  # The actual static integer value
     of gtGenericInst:
       gName*: string # name of the generic type
       gArgs*: seq[GpuType] # list of the instantiated generic arguments e.g. `vec3<f32>` on WGSL backend
@@ -121,6 +125,10 @@ type
       ifCond*: GpuAst
       ifThen*: GpuAst
       ifElse*: GpuAst # will be `GpuAst(kind*: gpuVoid)` if no else branch
+    of gpuTernary:
+      tCond*: GpuAst  # condition
+      tThen*: GpuAst  # then-expression
+      tElse*: GpuAst  # else-expression
     of gpuFor:
       fVar*: GpuAst ## Will be a `GpuIdent`
       fStart*, fEnd*: GpuAst
@@ -229,6 +237,7 @@ type
     ident*: GpuAst ## The actual parameter symbol, `GpuIdent`
     typ*: GpuType
     addressSpace*: AddressSpace
+    passByRef*: bool   ## Pass by hidden const reference (large structs > 24 bytes)
 
   GpuFieldInit* = object
     name*: string
@@ -305,8 +314,9 @@ type
     ## the function name. This is to avoid overload issues in backends that don't
     ## allow overloading by function signatures.
     symChoices*: HashSet[string]
-
-  ## We rely on being able to compute a `newLit` from the result of `toGpuAst`. Currently we
+    ## When non-nil, nnkIfExpr handler assigns to this target ident name
+    ## instead of the hardcoded "result".
+    curIfExprTarget*: string
   ## only need the `genericInsts` field data (the values). Trying to `newLit` the full `GpuContext`
   ## causes trouble.
   GpuGenericsInfo* = object
@@ -320,6 +330,12 @@ type
     name*: string # unique name of this generic variant
     args*: seq[GenericArg] # kind of symbols passed in at the call site. To determine ptr types, if args are ptrs
     # types are not stored in the instantiation, because we look up the types from the original function when generating the code
+
+
+const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
+                         gtUint32, gtInt32, gtUint64, gtInt64,
+                         gtFloat32, gtFloat64, gtSize_t}
+  ## Set of numeric (scalar) GpuTypeKind variants.
 
 proc newGpuIdent*(ident: string = "", symKind: GpuSymbolKind = gsNone): GpuAst =
   result = GpuAst(kind: gpuIdent, iName: ident, symbolKind: symKind)
@@ -341,6 +357,8 @@ proc clone*(typ: GpuType): GpuType =
   of gtArray:
     result.aTyp = typ.aTyp.clone()
     result.aLen = typ.aLen
+  of gtStatic:
+    result.sValue = typ.sValue
   of gtGenericInst:
     result.gName = typ.gName
     for g in typ.gArgs:
@@ -361,7 +379,8 @@ proc clone*(ast: GpuAst): GpuAst =
       let clonedParam = GpuParam(
         ident: p.ident.clone(),
         typ: p.typ.clone(),
-        addressSpace: p.addressSpace
+        addressSpace: p.addressSpace,
+        passByRef: p.passByRef
       )
       result.pParams.add(clonedParam)
     result.pBody = ast.pBody.clone()
@@ -383,6 +402,11 @@ proc clone*(ast: GpuAst): GpuAst =
     result.ifCond = ast.ifCond.clone()
     result.ifThen = ast.ifThen.clone()
     result.ifElse = ast.ifElse.clone()
+  of gpuTernary:
+    result = GpuAst(kind: gpuTernary)
+    result.tCond = ast.tCond.clone()
+    result.tThen = ast.tThen.clone()
+    result.tElse = ast.tElse.clone()
   of gpuFor:
     result = GpuAst(kind: gpuFor)
     result.fVar = ast.fVar.clone()
@@ -513,6 +537,8 @@ proc hash*(t: GpuType): Hash =
   of gtArray:
     h = h !& hash(t.aTyp)
     h = h !& hash(t.aLen)
+  of gtStatic:
+    h = h !& hash(t.sValue)
   of gtGenericInst:
     h = h !& hash(t.gName)
     for g in t.gArgs:
@@ -557,6 +583,7 @@ proc `==`*(a, b: GpuType): bool =
         for i in 0 ..< a.gFields.len:
           result = result and (a.gFields[i] == b.gFields[i])
     of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen
+    of gtStatic: result = a.sValue == b.sValue
     else: discard
 
 proc `==`*(a, b: GpuAst): bool =
@@ -585,6 +612,7 @@ proc len*(ast: GpuAst): int =
   of gpuIf:
     if ast.ifElse.kind != gpuVoid: 3
     else:          2
+  of gpuTernary:   3
   of gpuFor:       3
   of gpuWhile:     2
   of gpuBinOp:     2
@@ -634,9 +662,10 @@ proc pretty*(t: GpuType): string =
         if i < t.gArgs.high:
           result.add ", "
       result.add "]"
+    of gtStatic:
+      result = "static(" & $t.sValue & ")"
     else:
       result = ($t.kind).removePrefix("gt")
-
 proc pretty*(n: GpuAst, indent: int = 0): string =
   template id(): untyped = repeat(" ", indent)
   template idn(x): untyped = repeat(" ", indent) & $x
@@ -677,6 +706,13 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     if n.ifElse.kind != gpuVoid:
       result.add idd("IfElse")
       result.add pretty(n.ifElse, indent + 4)
+  of gpuTernary:
+    result.add idd("TCond")
+    result.add pretty(n.tCond, indent + 4)
+    result.add idd("TThen")
+    result.add pretty(n.tThen, indent + 4)
+    result.add idd("TElse")
+    result.add pretty(n.tElse, indent + 4)
   of gpuFor:
     result.add pretty(n.fVar, indent + 2)
     result.add pretty(n.fStart, indent + 2)
@@ -780,6 +816,10 @@ template iterImpl(ast: untyped, mutable: static bool): untyped =
     ya(ifThen)
     if ast.ifElse.kind != gpuVoid:
       yield ast.ifElse
+  of gpuTernary:
+    ya(tCond)
+    ya(tThen)
+    ya(tElse)
   of gpuFor:
     ya(fStart)
     ya(fEnd)
@@ -854,6 +894,62 @@ iterator pairs*(ast: GpuAst): (int, GpuAst) =
     inc i
 
 
+
+func size*(t: GpuType): int =
+  ## Compute the byte size of a GpuType.
+  case t.kind
+  of gtVoid:
+    result = 0
+  of gtBool, gtUint8:
+    result = 1
+  of gtUint16, gtInt16:
+    result = 2
+  of gtUint32, gtInt32, gtFloat32:
+    result = 4
+  of gtUint64, gtInt64, gtFloat64:
+    result = 8
+  of gtSize_t:
+    result = 8
+  of gtPtr, gtUA, gtVoidPtr:
+    result = 8  # pointer size on 64-bit
+  of gtString:
+    result = 8  # pointer
+  of gtStatic:
+    result = 0  # compile-time value, no runtime size
+  of gtArray:
+    result = t.aLen * size(t.aTyp)
+  of gtObject:
+    for f in t.oFields:
+      result += size(f.typ)
+  of gtGenericInst:
+    for f in t.gFields:
+      result += size(f.typ)
+  else:
+    result = 4  # default fallback
+
+func isLargeStruct*(t: GpuType): bool =
+  ## Returns true if the type should be passed by hidden const reference.
+  ## Uses Nim's C backend 3-pointer threshold. For GPU, also catch structs
+  ## with embedded arrays (some Vulkan impls reject struct-by-value with arrays).
+  const threshold = 24
+  case t.kind
+  of gtObject, gtGenericInst:
+    result = size(t) >= threshold
+  else:
+    result = false
+
+proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
+  ## Look up the parameters of a function by its identifier.
+  if fn in ctx.allFnTab:
+    result = ctx.allFnTab[fn].pParams
+  elif fn in ctx.fnTab:
+    result = ctx.fnTab[fn].pParams
+  elif fn in ctx.genericInsts:
+    result = ctx.genericInsts[fn].pParams
+  elif fn in ctx.builtins:
+    result = ctx.builtins[fn].pParams
+  elif fn in ctx.processedProcs:
+    result = ctx.processedProcs[fn].params
 ## General utility helpers
 
 proc ident*(n: GpuAst): string =

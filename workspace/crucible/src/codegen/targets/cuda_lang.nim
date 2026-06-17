@@ -44,8 +44,39 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtObject: "struct"
   of gtString: "const char*"
   of gtUA: "" # `UncheckedArray` by itself is nothing in CUDA
+  of gtStatic: "int"
   else:
     raiseAssert "Invalid type : " & $t
+
+proc gpuTypeToShortString*(t: GpuType): string =
+  ## Short, space-free type name for use in generic struct identifiers.
+  case t.kind
+  of gtUint8:   result = "u8"
+  of gtUint16:  result = "u16"
+  of gtUint32:  result = "u32"
+  of gtUint64:  result = "u64"
+  of gtInt16:   result = "i16"
+  of gtInt32:   result = "i32"
+  of gtInt64:   result = "i64"
+  of gtFloat32: result = "f32"
+  of gtFloat64: result = "f64"
+  of gtBool:    result = "bool"
+  of gtObject:
+    result = $t.name
+  of gtGenericInst:
+    result = t.gName
+    if t.gArgs.len > 0:
+      result.add '_'
+      for i, g in t.gArgs:
+        if i > 0: result.add 'x'
+        result.add gpuTypeToShortString(g)
+  of gtVoidPtr: result = "void_ptr"
+  of gtPtr:
+    result = "ptr_" & gpuTypeToShortString(t.to)
+  of gtStatic:
+    result = $t.sValue
+  else:
+    result = $t.kind # fallback — safe but verbose
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
@@ -98,15 +129,17 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
   of gtGenericInst:
     # NOTE: WGSL does not support actual custom generic types. And as we only anyway deal with generic instantiations
     # we simply turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
+    # use short names (uint32, int64) for generic args, not C names (unsigned int, long long)
     result = t.gName
     if t.gArgs.len > 0:
       result.add '_'
     for i, g in t.gArgs:
-      result.add gpuTypeToString(g)
+      result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:
-        result.add '_'
+        result.add 'x'
   of gtObject: result = t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## XXX: unchecked array just T?
+  of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 
   if ident.len > 0 and not skipIdent: # still need to add ident
@@ -276,7 +309,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # Parameters
     var params: seq[string]
     for p in ast.pParams:
-      params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+      if p.passByRef:
+        # const Type& name — C++ reference, no body changes needed
+        params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
+      else:
+        params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
@@ -295,8 +332,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
-      result.add ctx.genCuda(el, indent)
-      if el.kind != gpuBlock and not ctx.skipSemicolon: # nested block ⇒ ; already added
+      let code = ctx.genCuda(el, indent)
+      if code.len == 0:
+        continue # skip gpuVoid and empty statements
+      result.add code
+      if el.kind != gpuBlock and not ctx.skipSemicolon:
         result.add ';'
       if i < ast.statements.high:
         result.add '\n'
@@ -333,6 +373,12 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= ctx.genCuda(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
 
+  of gpuTernary:
+    ctx.withoutSemicolon:
+      result = '(' & ctx.genCuda(ast.tCond) & " ? " &
+               ctx.genCuda(ast.tThen) & " : " &
+               ctx.genCuda(ast.tElse) & ')'
+
   of gpuFor:
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genCuda(ast.fStart) & "; " &
@@ -353,8 +399,13 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genCuda(ast.iArr) & '[' & ctx.genCuda(ast.iIndex) & ']'
 
   of gpuCall:
-    result = indentStr & ast.cName.ident() & '(' &
-             ast.cArgs.mapIt(ctx.genCuda(it)).join(", ") & ')'
+    let fnName = ast.cName
+    let fnParams = ctx.getFnParams(fnName)
+    var cudaArgs: seq[string]
+    for i, arg in ast.cArgs:
+      # C++ const& binds implicitly — no & needed at call site
+      cudaArgs.add ctx.genCuda(arg)
+    result = indentStr & fnName.ident() & '(' & cudaArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:
@@ -404,11 +455,19 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuTypeDef:
     result = "struct " & gpuTypeToString(ast.tTyp) & "{\n"
-    for el in ast.tFields:
-      result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+    if ast.tFields.len == 0:
+      # CUDA requires at least one field in a struct.
+      result.add "  char _;\n"
+    else:
+      for el in ast.tFields:
+        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
     result.add '}'
 
   of gpuObjConstr:
+    # Braced init list: {val1, val2, ...}
+    # Note: bare `{val, ...}` is used instead of `(TypeName){val}`
+    # because NVRTC compiles in C++ mode where C99 compound literals
+    # are not valid.
     result = "{"
     for i, el in ast.ocFields:
       result.add ctx.genCuda(el.value)

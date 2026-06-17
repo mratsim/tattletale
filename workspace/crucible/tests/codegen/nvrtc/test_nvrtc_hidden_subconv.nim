@@ -1,0 +1,20 @@
+## NVRTC: hidden subtype conversions (nnkHiddenSubConv)
+## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_hidden_subconv.nim
+##
+## Coverage: nim_to_gpu.nim:1454-1456
+import std/strformat
+import workspace/crucible/src/codegen/nvrtc
+
+const kernelCode = cuda:
+  proc hiddenSubConvKernel(output: ptr UncheckedArray[int64]) {.global.} =
+    let a: uint32 = 42
+    output[0] = int64(a)   # may produce HiddenSubConv
+
+var buf: array[1, int64]
+var nv = initNvrtc(kernelCode)
+nv.compile()
+nv.getPtx()
+echo "PTX: ", nv.ptx.len, " bytes"
+nv.execute("hiddenSubConvKernel", buf, ())
+doAssert buf[0] == 42, &"hiddenSubConv: got {buf[0]}"
+echo "  OK"

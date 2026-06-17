@@ -76,8 +76,39 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtObject: "struct"
   of gtUint8, gtUint16, gtUint64, gtInt16, gtInt64, gtFloat64, gtVoidPtr, gtString:
     raiseAssert "The type " & $t & " does not exist on the WebGPU target."
+  of gtStatic: "i32"
   else:
     raiseAssert "Invalid type : " & $t
+
+proc gpuTypeToShortString*(t: GpuType): string =
+  ## Short, space-free type name for use in generic struct identifiers.
+  case t.kind
+  of gtUint8:   result = "u8"
+  of gtUint16:  result = "u16"
+  of gtUint32:  result = "u32"
+  of gtUint64:  result = "u64"
+  of gtInt16:   result = "i16"
+  of gtInt32:   result = "i32"
+  of gtInt64:   result = "i64"
+  of gtFloat32: result = "f32"
+  of gtFloat64: result = "f64"
+  of gtBool:    result = "bool"
+  of gtObject:
+    result = $t.name
+  of gtGenericInst:
+    result = t.gName
+    if t.gArgs.len > 0:
+      result.add '_'
+      for i, g in t.gArgs:
+        if i > 0: result.add 'x'
+        result.add gpuTypeToShortString(g)
+  of gtVoidPtr: result = "void_ptr"
+  of gtPtr:
+    result = "ptr_" & gpuTypeToShortString(t.to)
+  of gtStatic:
+    result = $t.sValue
+  else:
+    result = $t.kind # fallback — safe but verbose
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                            allowEmptyIdent = false,
@@ -120,11 +151,12 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     if t.gArgs.len > 0:
       result.add '_'
     for i, g in t.gArgs:
-      result.add gpuTypeToString(g)
+      result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:
-        result.add '_'
+        result.add 'x'
   of gtObject: result = t.name
   of gtUA:     result = gpuTypeToString(t.kind) & '<' & gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) & '>'
+  of gtStatic: result = $t.sValue
   else:        result = gpuTypeToString(t.kind)
 
   if ident.len > 0 and not skipIdent: # still need to add ident
@@ -894,6 +926,11 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= ctx.genWebGpu(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
 
+  of gpuTernary:
+    # WGSL (WebGPU) doesn't have a ternary operator.
+    # TODO: lower to let + if/else for WGSL.
+    raiseAssert "gpuTernary not yet supported on WGSL backend"
+
   of gpuFor:
     let i = ast.fVar.ident()
     result = indentStr & "for(var " & i & ": i32 = " &
@@ -1046,19 +1083,27 @@ proc codegen*(ctx: var GpuContext): string =
     result.add gpuTypeToString(typ, p.ident.ident(), allowEmptyIdent = false, symbolKind = p.ident.symbolKind) & ";\n"
     inc bindingCounter
 
-  # 1. Generate the header for all global variables
+  # 1. Generate the header for all global variables (deduped by param name)
+  var emitted: seq[string]
   for id, g in ctx.globals:
-    result.add genGlobal(g)
+    if g.ident.ident() notin emitted:
+      emitted.add g.ident.ident()
+      result.add genGlobal(g)
   result.add '\n'
 
   # 2. generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:
     result.add ctx.genWebGpu(blk) & "\n\n"
 
-  # 3. generate all regular functions
+  # 3. Workgroup size constant (single definition for all kernels)
+  for fnIdent, fn in ctx.fnTab:
+    if fn.isGlobal():
+      result.add "const WORKGROUP_SIZE = 64u;\n"
+      break
+
+  # 4. Kernel + device functions
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
       ## XXX: make adjustable!
-      result.add "const WORKGROUP_SIZE = 64u;\n"
       result.add "@compute @workgroup_size(WORKGROUP_SIZE)\n"
     result.add ctx.genWebGpu(fn) & "\n\n"
