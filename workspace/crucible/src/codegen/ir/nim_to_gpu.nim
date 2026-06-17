@@ -9,6 +9,7 @@
 import std / [macros, strutils, sequtils, options, tables, sets]
 
 import ./gpu_types
+import ../builtins/ambiguous_builtins
 
 proc nimToGpuType(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType
 proc maybeAddType*(ctx: var GpuContext, typ: GpuType)
@@ -802,6 +803,14 @@ proc addProcToGenericInsts(ctx: var GpuContext, node: NimNode, name: GpuAst) =
     # Need to add isym here so that if we have recursive calls, we don't end up
     # calling `toGpuAst` recursively forever
     ctx.processedProcs[name] = procSig
+
+  # Ambiguous builtins (system.min/max/abs) have only `{.inline.}` in getImpl(),
+  # not `{.magic.}`. Parse their bodies would crash on the if-expr assertion.
+  if node[0].repr in NimGpuAmbiguousBuiltins:
+    let retType = ctx.nimToGpuType(sig.params[0])
+    var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
+    ctx.builtins[name] = builtinFn
+    return
 
   let fn = ctx.toGpuAst(inst)
   if fn.kind == gpuVoid:
