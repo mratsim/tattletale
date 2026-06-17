@@ -4,7 +4,7 @@
 ##   shadowPlain has a custom `result` variable which shadows
 ##   the implicit `result` (not allowed in GPU code)
 ##
-## Run with: nim cpp -d:cuda workspace/crucible/tests/codegen/nvrtc/manual_nvrtc_reject_result_shadow.nim
+## Run with: nim cpp workspace/crucible/tests/codegen/nvrtc/manual_nvrtc_reject_result_shadow.nim
 import workspace/crucible/src/codegen/nvrtc
 
 const k = cuda:

@@ -1,5 +1,5 @@
 ## NVRTC: thread/block identifiers via codegen pipeline
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_thread_id.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_thread_id.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
 import workspace/crucible/src/codegen/nvrtc
 

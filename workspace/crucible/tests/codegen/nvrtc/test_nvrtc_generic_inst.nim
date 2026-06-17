@@ -1,5 +1,5 @@
 ## NVRTC: generic function instantiation for GPU code
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_generic_inst.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_inst.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
 ##
 ## Tests the PR #565 feature: Nim generic functions defined outside the `cuda`

@@ -1,5 +1,5 @@
 ## NVRTC: external functions + external types + kernel chaining
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_external_fn_type.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_fn_type.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
 ##
 ## Tests the PR #565 feature end-to-end: functions AND types defined

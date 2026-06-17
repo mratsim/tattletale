@@ -7,7 +7,7 @@
 ## before writing (e.g. `result = result + expr`) depend on undefined behavior.
 ## Use explicit `result = 0` or assign before reading.
 ##
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_result_flow.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_result_flow.nim
 import std/strformat
 import workspace/crucible/src/codegen/nvrtc
 

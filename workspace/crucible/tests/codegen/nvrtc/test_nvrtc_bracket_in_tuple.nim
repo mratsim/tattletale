@@ -1,5 +1,5 @@
 ## NVRTC: tuple with generic types (key CuTe pattern)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_bracket_in_tuple.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bracket_in_tuple.nim
 ##
 ## Coverage: nim_to_gpu.nim:507-519 — nnkBracketExpr + else branch
 ## in parseTypeFields for tuple constructors.

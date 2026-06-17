@@ -9,7 +9,7 @@
 ## at the outer scope. Results happen to be 0 on Blackwell but are
 ## technically UB and may differ on other hardware.
 ##
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_result_shadow_ifelse.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_result_shadow_ifelse.nim
 import std/strformat
 import workspace/crucible/src/codegen/nvrtc
 

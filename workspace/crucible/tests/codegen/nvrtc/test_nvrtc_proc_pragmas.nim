@@ -1,5 +1,5 @@
 ## NVRTC: proc pragma handlers (collectProcAttributes)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_proc_pragmas.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_proc_pragmas.nim
 ##
 ## Coverage: nim_to_gpu.nim:571-579
 import std/strformat

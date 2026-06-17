@@ -1,5 +1,5 @@
 ## NVRTC: test Int[N] generic struct inside cuda: block
-## Run: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_int_generic.nim
+## Run: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_int_generic.nim
 import workspace/crucible/src/codegen/nvrtc
 
 type

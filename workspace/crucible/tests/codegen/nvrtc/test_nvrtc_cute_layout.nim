@@ -1,5 +1,5 @@
 ## CuTe Layout + Tile dot products — NVRTC (CUDA) backend
-## Run with: nim c -r workspace/crucible/tests/codegen/nvrtc/test_cute_layout_cuda.nim
+## Run with: nim c -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_cute_layout.nim
 import std/strformat
 import workspace/crucible/src/codegen/nvrtc
 

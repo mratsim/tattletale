@@ -1,5 +1,5 @@
 ## CuTe scaling: static int in loops + compile-time branching
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_static_loop_and_when.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_static_loop_and_when.nim
 ##
 ## CuTe dispatches tile sizes at compile time: different
 ## unroll factors, loop bounds, and type selection per GPU arch.

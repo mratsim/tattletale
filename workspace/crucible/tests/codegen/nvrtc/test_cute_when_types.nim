@@ -1,5 +1,5 @@
 ## CuTe: when branches producing different types (B26)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_when_types.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_when_types.nim
 ##
 ## CuTe dispatches tile types per GPU arch via compile-time branching.
 ## `when` is evaluated by Nim at compile time during generic instantiation.

@@ -1,5 +1,5 @@
 ## CuTe: static division for tile sizing (B06)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_static_div.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_static_div.nim
 ##
 ## Note: uses separate type names because gtObject struct naming
 ## doesn't yet differentiate generic params.
