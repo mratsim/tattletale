@@ -1,5 +1,5 @@
 ## NVRTC: hidden subtype conversions (nnkHiddenSubConv)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_hidden_subconv.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hidden_subconv.nim
 ##
 ## Coverage: nim_to_gpu.nim:1454-1456
 import std/strformat

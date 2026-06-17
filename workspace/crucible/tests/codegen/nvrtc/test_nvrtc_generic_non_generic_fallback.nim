@@ -1,5 +1,5 @@
 ## NVRTC: generic → non-generic fallback in initGpuGenericInst
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_generic_non_generic_fallback.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_non_generic_fallback.nim
 ##
 ## Exercises the early return guard at nim_to_gpu.nim ~line 118:
 ##   if t.typeKind notin {ntyGenericInst}:

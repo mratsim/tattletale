@@ -1,5 +1,5 @@
 ## CuTe: complex macro-generated code hitting except path (B25)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_macro_complex.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_macro_complex.nim
 ##
 ## Tests multiple generic instantiations with varying params
 ## to exercise the generic resolution machinery.

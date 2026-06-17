@@ -1,6 +1,6 @@
 ## Multi-kernel Vec10 add/mul — NVRTC (CUDA) backend
 ## Run with:
-##   nim c -d:cuda -r workspace/crucible/tests/codegen/nvrtc/test_vec10_multi_kernel.nim
+##   nim c -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_vec10_multi_kernel.nim
 import workspace/crucible/src/codegen/nvrtc
 
 const kernelCode = cuda:

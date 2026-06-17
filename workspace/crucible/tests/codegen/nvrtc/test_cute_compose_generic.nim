@@ -1,5 +1,5 @@
 ## CuTe scaling: generic composition (B08-B14)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_compose_generic.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_compose_generic.nim
 ##
 ## CuTe composes layouts through generic functions that return
 ## complex types. This tests generic proc chains, nested generics,

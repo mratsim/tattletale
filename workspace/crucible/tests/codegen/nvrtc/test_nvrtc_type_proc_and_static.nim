@@ -1,5 +1,5 @@
 ## NVRTC: ntyProc / ntyStatic branches in nimToGpuType
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_type_proc_and_static.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_type_proc_and_static.nim
 ##
 ## Coverage: nim_to_gpu.nim:431-449
 import std/strformat

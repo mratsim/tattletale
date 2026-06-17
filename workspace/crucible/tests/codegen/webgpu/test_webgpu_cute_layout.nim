@@ -1,5 +1,5 @@
 ## CuTe Layout + Tile dot products — WebGPU (WGSL) backend
-## Run with: nim c -r workspace/crucible/tests/codegen/webgpu/test_cute_layout_wgpu.nim
+## Run with: nim c -r workspace/crucible/tests/codegen/webgpu/test_webgpu_cute_layout.nim
 import std/strformat
 import workspace/crucible/src/codegen/wgpu
 

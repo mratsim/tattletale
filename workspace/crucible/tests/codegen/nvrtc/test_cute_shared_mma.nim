@@ -1,5 +1,5 @@
 ## CuTe: tile loops + inline PTX (B17, B21)
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_cute_shared_mma.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_shared_mma.nim
 ##
 ## Tile loop pattern and inline PTX for tensor core MMA.
 ## The asm {} block uses Crucible's gpuInlineAsm support.

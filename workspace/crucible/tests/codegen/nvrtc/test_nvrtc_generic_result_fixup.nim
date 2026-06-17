@@ -1,5 +1,5 @@
 ## NVRTC: maybeInsertResult generic fixup loop
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_generic_result_fixup.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_result_fixup.nim
 ##
 ## Coverage: nim_to_gpu.nim:898-912
 ##

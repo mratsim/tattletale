@@ -1,5 +1,5 @@
 ## NVRTC: getTypeName with nnkIntLit/nnkUIntLit
-## Run with: nim cpp -d:cuda -r workspace/crucible/tests/nvrtc/test_nvrtc_type_names_int_lit.nim
+## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_type_names_int_lit.nim
 ##
 ## Coverage: nim_to_gpu.nim:332-335
 import std/strformat

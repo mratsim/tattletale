@@ -407,19 +407,27 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     result.fVar.symbolKind = gsLocal
     result.fVar.iTyp = initGpuType(gtInt32) ## XXX: do not force this type
     # Range expression — may be `0 .. N` (Infix inclusive) or `0 ..< N` (Infix exclusive)
-    # or a direct range call.
     if node[1].kind == nnkInfix:
       result.fStart = ctx.toGpuAst(node[1][1])
       result.fEnd = ctx.toGpuAst(node[1][2])
       # Inclusive `..` — codegen uses `i < end`, but Nim's `..` is
       # inclusive `[a, b]` (b+1 values). Add 1 so C's `<` matches.
       if node[1][0].repr == "..":
-        let typ = initGpuType(gtInt32)
-        let one = GpuAst(kind: gpuLit, lValue: "1", lType: typ)
+        # Derive type from range end expression
+        let endTyp =
+          if result.fEnd.kind == gpuLit:
+            result.fEnd.lType
+          elif result.fEnd.kind == gpuIdent and result.fEnd.iTyp.kind notin {gtVoid}:
+            result.fEnd.iTyp
+          elif result.fEnd.kind == gpuBinOp and result.fEnd.bLeftTyp.kind notin {gtVoid}:
+            result.fEnd.bLeftTyp
+          else:
+            initGpuType(gtInt32)  # fallback
+        let one = GpuAst(kind: gpuLit, lValue: "1", lType: endTyp)
         var addOp = GpuAst(kind: gpuIdent, iName: "+")
         result.fEnd = GpuAst(kind: gpuBinOp, bOp: addOp,
                              bLeft: result.fEnd, bRight: one,
-                             bLeftTyp: typ, bRightTyp: typ)
+                             bLeftTyp: endTyp, bRightTyp: endTyp)
     elif node[1].len >= 2:
       result.fStart = ctx.toGpuAst(node[1][1])
       result.fEnd = ctx.toGpuAst(node[1][^1])
