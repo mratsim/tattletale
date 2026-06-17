@@ -47,8 +47,39 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtObject: "struct"
   of gtString: "const char*"
   of gtUA: ""       # UncheckedArray used as buffer pointer
+  of gtStatic: "int"
   else:
     raiseAssert "Invalid type : " & $t
+
+proc gpuTypeToShortString*(t: GpuType): string =
+  ## Short, space-free type name for use in generic struct identifiers.
+  case t.kind
+  of gtUint8:   result = "u8"
+  of gtUint16:  result = "u16"
+  of gtUint32:  result = "u32"
+  of gtUint64:  result = "u64"
+  of gtInt16:   result = "i16"
+  of gtInt32:   result = "i32"
+  of gtInt64:   result = "i64"
+  of gtFloat32: result = "f32"
+  of gtFloat64: result = "f64"
+  of gtBool:    result = "bool"
+  of gtObject:
+    result = $t.name
+  of gtGenericInst:
+    result = t.gName
+    if t.gArgs.len > 0:
+      result.add '_'
+      for i, g in t.gArgs:
+        if i > 0: result.add 'x'
+        result.add gpuTypeToShortString(g)
+  of gtVoidPtr: result = "void_ptr"
+  of gtPtr:
+    result = "ptr_" & gpuTypeToShortString(t.to)
+  of gtStatic:
+    result = $t.sValue
+  else:
+    result = $t.kind # fallback — safe but verbose
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
@@ -92,11 +123,12 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     if t.gArgs.len > 0:
       result.add '_'
     for i, g in t.gArgs:
-      result.add gpuTypeToString(g)
+      result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:
-        result.add '_'
+        result.add 'x'
   of gtObject: result = t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
+  of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 
   if ident.len > 0 and not skipIdent:
@@ -312,8 +344,8 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let fnArgs = params.join(", ")
 
     if isKernel:
-      # Global kernel entry point → `layout(local_size_x = X, ...) in; void main()`
-      result = indentStr & "void main()"
+      # Global kernel entry point → uses actual kernel name (supports multiple kernels per module)
+      result = indentStr & "void " & ast.pName.ident() & "()"
     else:
       # Device function → `retType fnName(...)` (GLSL doesn't have static/inline)
       result = indentStr & genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
@@ -373,6 +405,12 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= ctx.genVulkan(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
 
+  of gpuTernary:
+    ctx.withoutSemicolon:
+      result = '(' & ctx.genVulkan(ast.tCond) & " ? " &
+               ctx.genVulkan(ast.tThen) & " : " &
+               ctx.genVulkan(ast.tElse) & ')'
+
   of gpuFor:
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genVulkan(ast.fStart) & "; " &
@@ -394,8 +432,11 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genVulkan(ast.iArr) & '[' & ctx.genVulkan(ast.iIndex) & ']'
 
   of gpuCall:
-    result = indentStr & ast.cName.ident() & '(' &
-             ast.cArgs.mapIt(ctx.genVulkan(it)).join(", ") & ')'
+    let fnName = ast.cName
+    var vkArgs: seq[string]
+    for arg in ast.cArgs:
+      vkArgs.add ctx.genVulkan(arg)
+    result = indentStr & fnName.ident() & '(' & vkArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:
@@ -424,7 +465,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuArrayLit:
     result = "{"
     for i, el in ast.aValues:
-      result.add '(' & gpuTypeToString(ast.aLitType) & ')' & ctx.genVulkan(el)
+      result.add gpuTypeToString(ast.aLitType) & '(' & ctx.genVulkan(el) & ')'
       if i < ast.aValues.high:
         result.add ", "
     result.add '}'
@@ -456,10 +497,10 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = indentStr & "/* " & ast.comment & " */"
 
   of gpuConv:
-    result = '(' & gpuTypeToString(ast.convTo, allowEmptyIdent = true) & ')' & ctx.genVulkan(ast.convExpr)
+    result = gpuTypeToString(ast.convTo, allowEmptyIdent = true) & '(' & ctx.genVulkan(ast.convExpr) & ')'
 
   of gpuCast:
-    result = '(' & gpuTypeToString(ast.cTo, allowEmptyIdent = true) & ')' & ctx.genVulkan(ast.cExpr)
+    result = gpuTypeToString(ast.cTo, allowEmptyIdent = true) & '(' & ctx.genVulkan(ast.cExpr) & ')'
 
   of gpuAddr:
     raiseAssert "Vulkan GLSL does not support addr — lower to SSBO/indexing first"
@@ -499,19 +540,19 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
   result.add "\n"
 
-  # Enforce exactly one global kernel — GLSL compute shader must have a single `void main()`.
-  let globalCount = ctx.fnTab.values.countIt(it.isGlobal())
-  doAssert globalCount == 1, "Vulkan codegen requires selecting exactly one {.global.} kernel (found " & $globalCount & ")"
-
-  # 1. Generate SSBO declarations from kernel pointer parameters
+  # Support multiple kernels — GLSL allows multiple entry points, each gets a layout qualifier.
   var ssboBinding = 0
+  var emittedSsbo: seq[string]  # dedup SSBO declarations across kernels (by param name + type)
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
       for p in fn.pParams:
         if p.typ.kind == gtPtr:
           let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
-          result.add genSsboDeclaration(p.ident.ident(), inner, ssboBinding)
-          inc ssboBinding
+          let key = p.ident.ident() & ":" & inner
+          if key notin emittedSsbo:
+            emittedSsbo.add key
+            result.add genSsboDeclaration(p.ident.ident(), inner, ssboBinding)
+            inc ssboBinding
 
   # 2. Generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:
@@ -523,13 +564,9 @@ proc codegen*(ctx: var GpuContext): string =
       result.add "\n"
 
   # 3. Workgroup layout for kernel entry points
-  # Default workgroup size (256, 1, 1). The kernel macro emits `void main()`,
-  # so we place the layout qualifier just before the kernel function body.
-  # We identify kernels as global functions and add the layout qualifier.
-  # The layout is handled per-kernel in the forward declaration / definition.
+  # Each kernel function gets the layout qualifier.
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
-      # remove forward declaration and replace with layout + void main
       discard
 
   # 4. Forward declarations (only for device functions, not kernels)
@@ -545,6 +582,6 @@ proc codegen*(ctx: var GpuContext): string =
   # 5. Full function definitions
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
-      # Kernel functions: place layout qualifier before void main()
+      # Kernel functions: place layout qualifier before entry point
       result.add "layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;\n"
     result.add ctx.genVulkan(fn) & "\n\n"

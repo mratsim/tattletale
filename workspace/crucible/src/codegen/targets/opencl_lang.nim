@@ -47,8 +47,39 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtObject: "struct"
   of gtString: "const char*"
   of gtUA: ""       # UncheckedArray used as buffer pointer
+  of gtStatic: "int"
   else:
     raiseAssert "Invalid type : " & $t
+
+proc gpuTypeToShortString*(t: GpuType): string =
+  ## Short, space-free type name for use in generic struct identifiers.
+  case t.kind
+  of gtUint8:   result = "u8"
+  of gtUint16:  result = "u16"
+  of gtUint32:  result = "u32"
+  of gtUint64:  result = "u64"
+  of gtInt16:   result = "i16"
+  of gtInt32:   result = "i32"
+  of gtInt64:   result = "i64"
+  of gtFloat32: result = "f32"
+  of gtFloat64: result = "f64"
+  of gtBool:    result = "bool"
+  of gtObject:
+    result = $t.name
+  of gtGenericInst:
+    result = t.gName
+    if t.gArgs.len > 0:
+      result.add '_'
+      for i, g in t.gArgs:
+        if i > 0: result.add 'x'
+        result.add gpuTypeToShortString(g)
+  of gtVoidPtr: result = "void_ptr"
+  of gtPtr:
+    result = "ptr_" & gpuTypeToShortString(t.to)
+  of gtStatic:
+    result = $t.sValue
+  else:
+    result = $t.kind # fallback — safe but verbose
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
@@ -88,15 +119,16 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
         result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & '[' & $t.aLen & ']'
     skipIdent = true
   of gtGenericInst:
-    result = t.gName
+    result = "struct " & t.gName
     if t.gArgs.len > 0:
       result.add '_'
     for i, g in t.gArgs:
-      result.add gpuTypeToString(g)
+      result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:
-        result.add '_'
+        result.add 'x'
   of gtObject: result = "struct " & t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
+  of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 
   if ident.len > 0 and not skipIdent:
@@ -255,10 +287,10 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let isKernel = attGlobal in ast.pAttributes
     var params: seq[string]
     for p in ast.pParams:
-      # For kernel parameters that are pointers and not marked as local,
-      # emit __global T* restrict
-      let typStr = gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
-      if p.addressSpace == asWorkspace:
+      if p.passByRef and not isKernel:
+        # const Type* _p_name — pointer to const for large structs (no C++ references)
+        params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "* _p_" & p.ident.ident()
+      elif p.addressSpace == asWorkspace:
         # __local T* — shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__local {inner}* {p.ident.ident()}"
@@ -267,7 +299,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__global {inner}* restrict {p.ident.ident()}"
       else:
-        params.add typStr
+        params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
@@ -282,6 +314,11 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add ';'
     else:
       result.add " {\n"
+      # Local copies for byref params — const pointer is dereferenced into local
+      for p in ast.pParams:
+        if p.passByRef and not isKernel:
+          let innerIndent = "  ".repeat(indent + 1)
+          result.add innerIndent & gpuTypeToString(p.typ, p.ident.ident()) & " = *_p_" & p.ident.ident() & ";\n"
       result &= ctx.genOpenCL(ast.pBody, indent + 1)
       result &= '\n' & indentStr & '}'
 
@@ -334,6 +371,12 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= ctx.genOpenCL(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
 
+  of gpuTernary:
+    ctx.withoutSemicolon:
+      result = '(' & ctx.genOpenCL(ast.tCond) & " ? " &
+               ctx.genOpenCL(ast.tThen) & " : " &
+               ctx.genOpenCL(ast.tElse) & ')'
+
   of gpuFor:
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genOpenCL(ast.fStart) & "; " &
@@ -355,8 +398,15 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genOpenCL(ast.iArr) & '[' & ctx.genOpenCL(ast.iIndex) & ']'
 
   of gpuCall:
-    result = indentStr & ast.cName.ident() & '(' &
-             ast.cArgs.mapIt(ctx.genOpenCL(it)).join(", ") & ')'
+    let fnName = ast.cName
+    let fnParams = ctx.getFnParams(fnName)
+    var clArgs: seq[string]
+    for i, arg in ast.cArgs:
+      if i < fnParams.len and fnParams[i].passByRef:
+        clArgs.add "&" & ctx.genOpenCL(arg)
+      else:
+        clArgs.add ctx.genOpenCL(arg)
+    result = indentStr & fnName.ident() & '(' & clArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:
