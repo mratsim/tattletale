@@ -1027,7 +1027,9 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuConstexpr:
     result = indentStr & "const " & ctx.genWebGpu(ast.cIdent) & ": " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & " = " & ctx.genWebGpu(ast.cValue)
-
+  of gpuMaterialize:
+    # Should not reach WGSL (passByRef not used)
+    raiseAssert "gpuMaterialize should not reach WGSL backend — passByRef is not used"
 
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle

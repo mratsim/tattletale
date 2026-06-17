@@ -142,6 +142,39 @@ proc insertResult*(ctx: var GpuContext; fn: GpuAst) =
 # Default pipeline
 # ═══════════════════════════════════════════════════════════════════
 
+proc walkNonLvalueArgs(n: var GpuAst; ctx: var GpuContext)  # forward decl
+
+proc isLvalue*(n: GpuAst): bool =
+  ## Returns true if the AST node is an lvalue (can have its address taken).
+  case n.kind
+  of gpuIdent: true
+  of gpuIndex: true
+  of gpuDeref: true
+  else: false
+
+proc materializePassByRefArgs*(ctx: var GpuContext) =
+  ## Transforms non-lvalue arguments to passByRef parameters into
+  ## gpuMaterialize nodes that backends can handle appropriately.
+  for fnKey in ctx.allFnTab.keys:
+    var fn = ctx.allFnTab[fnKey]
+    walkNonLvalueArgs(fn.pBody, ctx)
+
+proc walkNonLvalueArgs(n: var GpuAst; ctx: var GpuContext) =
+  case n.kind
+  of gpuCall:
+    let fnParams = ctx.getFnParams(n.cName)
+    for i, arg in n.cArgs:
+      if i < fnParams.len and fnParams[i].passByRef and not arg.isLvalue():
+        n.cArgs[i] = GpuAst(kind: gpuMaterialize,
+          mExpr: arg,
+          mType: fnParams[i].typ)
+    for ch in n.mitems:
+      walkNonLvalueArgs(ch, ctx)
+  else:
+    for ch in n.mitems:
+      walkNonLvalueArgs(ch, ctx)
+      walkNonLvalueArgs(ch, ctx)
+
 proc newDefaultRegistry*(): PassRegistry =
   result = PassRegistry(passes: @[], donePasses: initHashSet[string]())
 
@@ -197,3 +230,8 @@ proc newDefaultRegistry*(): PassRegistry =
         insertResult(ctx, fn)
     )
 
+  result.register("materializePassByRefArgs", pkTransform, phaseMain,
+    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
+    dependsOn = @["ensureBlock"],
+    run = materializePassByRefArgs
+    )

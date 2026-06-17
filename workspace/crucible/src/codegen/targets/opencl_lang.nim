@@ -373,7 +373,13 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     var clArgs: seq[string]
     for i, arg in ast.cArgs:
       if i < fnParams.len and fnParams[i].passByRef:
-        clArgs.add "&" & ctx.genOpenCL(arg)
+        if arg.kind == gpuMaterialize:
+          clArgs.add ctx.genOpenCL(arg)  # already wrapped by pass
+        elif arg.kind in {gpuIdent, gpuIndex, gpuDeref}:
+          clArgs.add "&" & ctx.genOpenCL(arg)
+        else:
+          let typ = gpuTypeToString(fnParams[i].typ, allowEmptyIdent = true)
+          clArgs.add "&(" & typ & "){" & ctx.genOpenCL(arg) & "}"
       else:
         clArgs.add ctx.genOpenCL(arg)
     result = indentStr & fnName.ident() & '(' & clArgs.join(", ") & ')'
@@ -453,6 +459,9 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "const " & gpuTypeToString(ast.cType, ctx.genOpenCL(ast.cIdent)) & " = " & ctx.genOpenCL(ast.cValue)
     else:
       result = indentStr & "const " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genOpenCL(ast.cIdent) & " = " & ctx.genOpenCL(ast.cValue)
+  of gpuMaterialize:
+    let typ = gpuTypeToString(ast.mType, allowEmptyIdent = true)
+    result = "&(" & typ & "){" & ctx.genOpenCL(ast.mExpr) & "}"
 
   else:
     echo "Unhandled node kind in genOpenCL: ", ast.kind

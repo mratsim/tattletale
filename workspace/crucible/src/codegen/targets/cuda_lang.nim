@@ -471,6 +471,8 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genCuda(ast.cIdent)) & " = " & ctx.genCuda(ast.cValue)
     else:
       result = indentStr & "constexpr " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genCuda(ast.cIdent) & " = " & ctx.genCuda(ast.cValue)
+  of gpuMaterialize:
+    result = ctx.genCuda(ast.mExpr)  # C++ const& binds implicitly to temporaries
 
   else:
     echo "Unhandled node kind in genCuda: ", ast.kind

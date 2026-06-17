@@ -483,6 +483,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "const " & gpuTypeToString(ast.cType, ctx.genVulkan(ast.cIdent)) & " = " & ctx.genVulkan(ast.cValue)
     else:
       result = indentStr & "const " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genVulkan(ast.cIdent) & " = " & ctx.genVulkan(ast.cValue)
+  of gpuMaterialize:
+    # Should not reach Vulkan (passByRef not used)
+    raiseAssert "gpuMaterialize should not reach Vulkan backend — passByRef is not used"
 
   else:
     echo "Unhandled node kind in genVulkan: ", ast.kind

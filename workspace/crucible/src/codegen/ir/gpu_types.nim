@@ -45,6 +45,7 @@ type
     gpuCast         # Cast expression
     gpuComment      # Just a comment
     gpuConstexpr    # A `constexpr`, i.e. compile time constant (Nim `const`)
+    gpuMaterialize  # Force materialization of a non-lvalue expr for pass-by-ref
 
   GpuTypeKind* = enum
     gtVoid,
@@ -164,6 +165,9 @@ type
       cIdent*: GpuAst # the identifier
       cValue*: GpuAst # not just a string to support different types easily
       cType*: GpuType
+    of gpuMaterialize:
+      mExpr*: GpuAst      # the non-lvalue expression to materialize
+      mType*: GpuType     # the type to materialize as
     of gpuArrayLit:
       aValues*: seq[GpuAst]
       aLitType*: GpuType # type of first element
@@ -450,6 +454,10 @@ proc clone*(ast: GpuAst): GpuAst =
     result.cIdent = ast.cIdent.clone()
     result.cValue = ast.cValue.clone()
     result.cType = ast.cType.clone()
+  of gpuMaterialize:
+    result = GpuAst(kind: gpuMaterialize)
+    result.mExpr = ast.mExpr.clone()
+    result.mType = ast.mType
   of gpuArrayLit:
     result = GpuAst(kind: gpuArrayLit)
     for a in ast.aValues:
@@ -625,6 +633,7 @@ proc len*(ast: GpuAst): int =
   of gpuConv:      1
   of gpuCast:      1
   of gpuConstexpr: 2
+  of gpuMaterialize: 1
   else: 0
 
 proc `$`*(x: GpuType): string =
@@ -740,6 +749,8 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
   of gpuConstexpr:
     result.add pretty(n.cIdent, indent + 2)
     result.add pretty(n.cValue, indent + 2)
+  of gpuMaterialize:
+    result.add pretty(n.mExpr, indent + 2)
   of gpuArrayLit:
     for el in n.aValues:
       result.add pretty(el, indent + 2)
@@ -867,6 +878,8 @@ template iterImpl(ast: untyped, mutable: static bool): untyped =
   of gpuConstexpr:
     ya(cIdent)
     ya(cValue)
+  of gpuMaterialize:
+    ya(mExpr)
   else:
     discard # nothing to yield
 
