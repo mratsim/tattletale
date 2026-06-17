@@ -51,36 +51,6 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   else:
     raiseAssert "Invalid type : " & $t
 
-proc gpuTypeToShortString*(t: GpuType): string =
-  ## Short, space-free type name for use in generic struct identifiers.
-  case t.kind
-  of gtUint8:   result = "u8"
-  of gtUint16:  result = "u16"
-  of gtUint32:  result = "u32"
-  of gtUint64:  result = "u64"
-  of gtInt16:   result = "i16"
-  of gtInt32:   result = "i32"
-  of gtInt64:   result = "i64"
-  of gtFloat32: result = "f32"
-  of gtFloat64: result = "f64"
-  of gtBool:    result = "bool"
-  of gtObject:
-    result = $t.name
-  of gtGenericInst:
-    result = t.gName
-    if t.gArgs.len > 0:
-      result.add '_'
-      for i, g in t.gArgs:
-        if i > 0: result.add 'x'
-        result.add gpuTypeToShortString(g)
-  of gtVoidPtr: result = "void_ptr"
-  of gtPtr:
-    result = "ptr_" & gpuTypeToShortString(t.to)
-  of gtStatic:
-    result = $t.sValue
-  else:
-    result = $t.kind # fallback — safe but verbose
-
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
                     ): string =

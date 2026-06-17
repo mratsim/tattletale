@@ -88,8 +88,16 @@ proc assigned*(n: GpuAst; fnName: string): bool =
         discard
       else:
         if not assigned:
-          warning "result may be used before being initialized in " & fnName & ". " &
-            "Assign to `result = ...` before reading it."
+          # Walk a copy to check if this statement actually reads `result`
+          var readsResult = false
+          var tmp = ch.clone()
+          tmp.walk(proc(m: var GpuAst): void =
+            if m.kind == gpuIdent and m.ident() == "result":
+              readsResult = true
+          )
+          if readsResult:
+            warning "result may be used before being initialized in " & fnName & ". " &
+              "Assign to `result = ...` before reading it."
     result = assigned
   of gpuAssign:
     result = n.aLeft.kind == gpuIdent and n.aLeft.ident() == "result"
