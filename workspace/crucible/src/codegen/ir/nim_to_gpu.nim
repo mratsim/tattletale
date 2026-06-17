@@ -10,6 +10,7 @@ import std / [macros, strutils, sequtils, options, tables, sets]
 import ./gpu_types
 import ../builtins/ambiguous_builtins
 import ./resolvers
+import ../passes/pass_registry
 
 
 proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst
@@ -59,12 +60,6 @@ template findIdx(col, el): untyped =
       res = i
       break
   res
-
-proc ensureBlock*(ast: GpuAst): GpuAst =
-  ## Ensures the body is a block, e.g. if single statement in a for loop, we want the
-  ## body to be a block regardless.
-  if ast.kind == gpuBlock: ast
-  else: GpuAst(kind: gpuBlock, statements: @[ast])
 
 proc maybePatchFnName(n: var GpuAst) =
   ## Patches the function name for names that are not allowed on most backends, but appear
@@ -202,7 +197,6 @@ proc isExpression(n: GpuAst): bool =
   else:
     result = false
 
-import ../passes/pass_implicit_result
 proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
   ## Returns true if the given `fn` (gpuIdent) returns a value.
   ## The function can either be:
@@ -296,14 +290,7 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       # Process parameters
       result.pParams = ctx.parseProcParameters(params, result.pAttributes)
       result.pBody = ctx.toGpuAst(node.body)
-        .ensureBlock() # single line procs should be a block to generate `;`
-            # Pre-condition validation
-      result.pBody.ensureNoCustomResult(result.pName.ident())
-      discard result.pBody.ensureResultAssignedBeforeRead(result.pName.ident())
-
-      # Transformation
-      result.pBody.maybeInsertResult(result.pRetType, result.pName.ident())
-
+      # Validation and transform passes run via ctx.runPasses()
       # Add to table of known functions
       if result.pName notin ctx.allFnTab:
         ctx.allFnTab[result.pName] = result
@@ -372,9 +359,9 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     result = GpuAst(kind: gpuIf)
     let branch = node[0]  # First branch
     result.ifCond = ctx.toGpuAst(branch[0])
-    result.ifThen = ensureBlock ctx.toGpuAst(branch[1])
+    result.ifThen = ctx.toGpuAst(branch[1])
     if node.len > 1 and node[^1].kind == nnkElse:
-      result.ifElse = ensureBlock ctx.toGpuAst(node[^1][0])
+      result.ifElse = ctx.toGpuAst(node[^1][0])
     else:
       result.ifElse = GpuAst(kind: gpuVoid)
 
@@ -439,11 +426,11 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     else:
       result.fStart = GpuAst(kind: gpuLit, lValue: "0", lType: initGpuType(gtInt32))
       result.fEnd = GpuAst(kind: gpuLit, lValue: "0", lType: initGpuType(gtInt32))
-    result.fBody = ensureBlock ctx.toGpuAst(node[^1])
+    result.fBody = ctx.toGpuAst(node[^1])
   of nnkWhileStmt:
     result = GpuAst(kind: gpuWhile)
     result.wCond = ctx.toGpuAst(node[0]) # the condition
-    result.wBody = ensureBlock ctx.toGpuAst(node[1])
+    result.wBody = ctx.toGpuAst(node[1])
 
   of nnkTemplateDef, nnkMacroDef:
     ## NOTE: Currently we process templates, but we expect them to be already

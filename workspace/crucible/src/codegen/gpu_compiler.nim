@@ -11,6 +11,7 @@ import std/[macros, sequtils, tables]
 import ./ir/gpu_types
 import ./targets/targets_lang
 import ./ir/nim_to_gpu
+import ./passes/pass_registry
 
 export gpu_types
 
@@ -30,28 +31,40 @@ macro toGpuAst*(body: typed): (GpuGenericsInfo, GpuAst) =
 macro cuda*(body: typed): string =
   ## Converts the body of this macro into CUDA code.
   var ctx = GpuContext()
+  var reg = newDefaultRegistry()
   let gpuAst = ctx.toGpuAst(body)
+  # TODO: pass AST explicitly (runPasses is coupled to ctx.allFnTab)
+  runPasses(ctx, reg)
   let body = ctx.codegenCuda(gpuAst)
   result = newLit(body)
 
 macro webgpu*(body: typed): string =
   ## Converts the body of this macro into WebGPU WGSL code.
   var ctx = GpuContext()
+  var reg = newDefaultRegistry()
   let gpuAst = ctx.toGpuAst(body)
+  # TODO: pass AST explicitly (runPasses is coupled to ctx.allFnTab)
+  runPasses(ctx, reg)
   let body = ctx.codegenWebGpu(gpuAst)
   result = newLit(body)
 
 macro opencl*(body: typed): string =
   ## Converts the body of this macro into OpenCL C code.
   var ctx = GpuContext()
+  var reg = newDefaultRegistry()
   let gpuAst = ctx.toGpuAst(body)
+  # TODO: pass AST explicitly (runPasses is coupled to ctx.allFnTab)
+  runPasses(ctx, reg)
   let body = ctx.codegenOpenCL(gpuAst)
   result = newLit(body)
 
 macro vulkan*(body: typed): string =
   ## Converts the body of this macro into GLSL compute shader code.
   var ctx = GpuContext()
+  var reg = newDefaultRegistry()
   let gpuAst = ctx.toGpuAst(body)
+  # TODO: pass AST explicitly (runPasses is coupled to ctx.allFnTab)
+  runPasses(ctx, reg)
   let body = ctx.codegenVulkan(gpuAst)
   result = newLit(body)
 
