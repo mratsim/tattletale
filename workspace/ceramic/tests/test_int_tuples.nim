@@ -11,6 +11,7 @@
 import std/macros
 import workspace/ceramic/src/int_tuples {.all.}
 
+
 # ═══════════════════════════════════════════════════════════════
 #  fold tests
 # ═══════════════════════════════════════════════════════════════
@@ -542,7 +543,109 @@ proc runMapLeavesWithPlainIntTests =
     doAssert r === 70
   echo "  mapLeavesWith (plain int): 6 cases OK"
 
-proc runTests =
+# ═══════════════════════════════════════════════════════════════
+#  filterZipWith — tuple zip + conditional concat
+# ═══════════════════════════════════════════════════════════════
+
+type
+  X* = object  ## keep/slice marker
+  Y* = object  ## drop/dice marker
+  Z* = object  ## another marker
+  W* = object  ## yet another marker
+
+proc runFilterZipWithTests =
+  # ── type-based filtering ──
+  block:  # keep X-marked dims, drop Y-marked
+    const r = filterZipWith((X, Y), (3, 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (3,)
+  block:  # keep Y-marked dims, drop X-marked
+    const r = filterZipWith((X, Y), (3, 4)):
+      (when it_a is X: () else: (it_b,))
+    doAssert r === (4,)
+  block:  # only keep Y-marked, drop everything else
+    const r = filterZipWith((X, Y, Z), (1, 2, 3)):
+      (when it_a is Y: (it_b,) else: ())
+    doAssert r === (2,)
+  block:  # multiple markers - keep X and Z, drop Y and W
+    const r = filterZipWith((X, Y, Z, W), (10, 20, 30, 40)):
+      (when it_a is X or it_a is Z: (it_b,) else: ())
+    doAssert r === (10, 30)
+
+  # ── value-based filtering ──
+  block:  # keep only even values from coord
+    const r = filterZipWith((1, 2, 3, 4), (10, 20, 30, 40)):
+      (when (it_a mod 2) == 0: (it_b,) else: ())
+    doAssert r === (20, 40)
+  block:  # keep only elements where coord > target
+    const r = filterZipWith((10, 5), (5, 10)):
+      (when it_a > it_b: (it_b,) else: ())
+    doAssert r === (5,)
+  block:  # keep elements that satisfy a static predicate
+    const r = filterZipWith((1, -2, 3, -4), (5, 6, 7, 8)):
+      (when it_a > 0: (it_b,) else: ())
+    doAssert r === (5, 7)
+
+  # ── structural: nested tuples ──
+  block:  # nested: keep sub-elements where inner coord matches
+    const r = filterZipWith(((X, Y), X), ((2, 3), 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (2, 4)
+  block:  # nested: keep all
+    const r = filterZipWith(((X, X), X), ((2, 3), 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (2, 3, 4)
+  block:  # deeply nested
+    const r = filterZipWith(((X, (Y, X)), X), (((1, 2), (3, 4)), 5)):
+      (when it_a is X: (it_b,) else: ())
+    echo "  deeply nested: ", r
+
+  # ── scalar coord ──
+  block:  # scalar keep
+    const r = filterZipWith(X, 42):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (42,)
+  block:  # scalar drop
+    const r = filterZipWith(0, 42):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === ()
+  block:  # scalar keep with value test
+    const r = filterZipWith(7, 42):
+      (when it_a > 5: (it_b,) else: ())
+    doAssert r === (42,)
+  block:  # scalar drop with value test
+    const r = filterZipWith(3, 42):
+      (when it_a > 5: (it_b,) else: ())
+    doAssert r === ()
+
+  # ── all-keep vs all-drop ──
+  block:  # keep all (X everywhere)
+    const r = filterZipWith((X, X, X), (1, 2, 3)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (1, 2, 3)
+  block:  # drop all (no X)
+    const r = filterZipWith((0, 1, 2), (1, 2, 3)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === ()
+
+  # ── empty tuple ──
+  block:
+    const r = filterZipWith((), ()):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === ()
+
+  # ── transform on keep ──
+  block:  # keep and double the value
+    const r = filterZipWith((X, Y, X), (3, 4, 5)):
+      (when it_a is X: (it_b * 2,) else: ())
+    doAssert r === (6, 10)
+  block:  # keep and convert type
+    const r = filterZipWith((X, Y), (3, 4)):
+      (when it_a is X: ("val:" & $it_b,) else: ())
+    doAssert r == ("val:3",)
+  echo "  filterZipWith: 25 cases OK"
+
+proc runTests* =
   echo "── Int tuples ──"
   runFoldTests()
   runProductTests()
@@ -559,6 +662,7 @@ proc runTests =
   runZip2ByTests()
   runMapZipWithTests()
   runMapLeavesWithPlainIntTests()
+  runFilterZipWithTests()
   echo "ALL INT_TUPLES TESTS PASSED"
 
 when isMainModule:
