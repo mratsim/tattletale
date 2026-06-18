@@ -64,77 +64,102 @@ proc allClose[T](testC: Tensor[T, _, _], refC: Tensor[T, _, _];
         &"FAIL at [{m},{n}]: got {testVal}, expected {refVal}, absErr={absErr}, relErr={relErr}"
   echo &"    PASS (maxRelErr={maxRelErr:.2e}, maxAbsErr={maxAbsErr:.2e})"
 
-proc make_test_matrix(rows, cols: int; seed: int32 = 1): seq[float32] =
-  ## Create rows×cols matrix with predictable values in (0, 1].
+proc make_test_matrix(rng: var Rand; rows, cols: int): seq[float32] =
+  ## Create rows×cols matrix with values in [0, 1] from seeded RNG.
   result = newSeq[float32](rows * cols)
-  let total = float32(rows * cols)
-  var s = seed
-  for i in 0 ..< rows:
-    for j in 0 ..< cols:
-      result[i * cols + j] = float32(s) / total
-      s = s + 1
+  for i in 0 ..< result.len:
+    result[i] = rng.rand(1.0'f32)
 
 proc run_gemm_and_validate_colmajor*(
     kernelSource: string;
-    kernelName: string;
-    M, N, K: int;
-    blockSizeM: int = 128;
-    blockSizeN: int = 128;
-    threadsPerBlock: int = 256;
-    alpha: float32 = 1.0'f32;
-    beta: float32 = 0.0'f32;
-    relTol: float32 = 1e-4'f32;
-    absTol: float32 = 1e-4'f32) =
-  ## Validate a GEMM kernel using column-major reference.
-  let A = make_test_matrix(M, K, 1)
-  let B = make_test_matrix(N, K, 100)  # CuTe: (N,K) — N rows, K cols
-  var refC = newSeq[float32](M * N)
-  refC.naive_matmul(A, B, M, N, K)
-  var hCinit = newSeq[float32](M * N)
-  if beta != 0.0'f32:
-    hCinit = make_test_matrix(M, N, 200)
-  for i in 0 ..< M * N:
-    refC[i] = alpha * refC[i] + beta * hCinit[i]
-  var gpuC = newSeq[float32](M * N)
-  for i in 0 ..< M * N:
-    gpuC[i] = beta * hCinit[i]
+    kernelName: string) =
+  ## Validate a GEMM kernel using column-major reference (CuTe convention).
+  ##
+  ## Test parameters are deterministically derived from the kernel identity:
+  ##   seed = hash(source + name + 0x9e3779b97f4a7c15)
+  ##
+  ## Same kernel source + name always produces the same test suite.
+  ## M, N, K, tile sizes, and threadsPerBlock are all randomized to ensure genericity
+
+  const numConfigs = 10
+  const relTol = 1e-4'f32
+  const absTol = 1e-4'f32
+
+  # ── 1. Deterministic seed from kernel identity ──────────────────────
+  const magic = 0x9e3779b97f4a7c15'u64
+  const prime = 0x100000001b3'u64    # FNV-1a prime
+  var h = magic
+  for c in kernelSource:
+    h = h xor uint64(c)
+    h = h * prime
+  for c in kernelName:
+    h = h xor uint64(c)
+    h = h * prime
+
+  var rng = initRand(int64(h and 0x7FFFFFFFFFFFFFFF'u64))
+  echo &"  seed=0x{h:016x}"
+
+  # ── 2. Generate test configs ──────────────────────────────────────
+  type TestConfig = tuple[M, N, K, bsM, bsN, tpb: int; alpha: float32]
+  var configs = newSeq[TestConfig](numConfigs)
+  for i in 0 ..< numConfigs:
+    let M = rng.rand(64..1024)
+    let N = rng.rand(64..1024)
+    let K = rng.rand(64..1024)
+    let bsM = rng.rand(8..128)
+    let bsN = rng.rand(8..128)
+    let tpb = rng.rand(2..16) * 32
+    let alpha = rng.rand(0.25'f32..4.0'f32)
+    configs[i] = (M, N, K, bsM, bsN, tpb, alpha)
+
+  echo &"  Testing {numConfigs} configs (MxNxK  bsMxbsN  tpb  α):"
+  for i, c in configs:
+    echo &"    [{i+1:>2}/{numConfigs}]  {c.M:>4}x{c.N:>4}x{c.K:<4}  " &
+      &"bs={c.bsM:>3}x{c.bsN:<3}  tpb={c.tpb}  α={c.alpha:.3f}"
+
+  # ── 3. Compile kernel (once) ──────────────────────────────────────
   var nv = initNvrtc(kernelSource)
-  let num_cta_m = (M + blockSizeM - 1) div blockSizeM
-  let num_cta_n = (N + blockSizeN - 1) div blockSizeN
-  nv.numBlocks = int32(num_cta_m * num_cta_n)
-  nv.threadsPerBlock = int32(threadsPerBlock)
   nv.compile()
   nv.getPtx()
-  let m32 = int32(M)
-  let n32 = int32(N)
-  let k32 = int32(K)
-  nv.execute(kernelName, gpuC, (A, B, m32, n32, k32, alpha, beta))
-  var maxAbsErr: float32 = 0.0'f32
-  for i in 0 ..< M * N:
-    let absErr = abs(gpuC[i] - refC[i])
-    let relErr = absErr / max(1.0'f32, abs(refC[i]))
-    if absErr > maxAbsErr: maxAbsErr = absErr
-    doAssert relErr <= relTol and absErr <= absTol,
-      "Element [" & $(i mod M) & "," & $(i div M) & "] FAIL: " &
-      "gpu=" & $gpuC[i] & " ref=" & $refC[i] & " " &
-      "absErr=" & $absErr & " relErr=" & $relErr
-  echo "  PASS: " & $M & "x" & $N & "x" & $K & " maxAbsErr=" & $maxAbsErr
-  # Print random 3x3 patch seeded from xor-hash of computed data
-  let seed = xorHash(gpuC) xor xorHash(refC)
-  var rng = initRand(int64(seed))
-  let pr = rng.rand(max(0, M - 3))
-  let pc = rng.rand(max(0, N - 3))
-  echo "  3x3 patch @(" & $pr & "," & $pc & ")  hash=" & $seed & ":"
-  echo "  " & repeat('-', 74)
-  for dr in 0 ..< 3:
-    let row = pr + dr
-    stdout.write "  row " & align($row, 3) & " GPU:"
-    for dc in 0 ..< 3:
-      let col = pc + dc
-      stdout.write &" {gpuC[row + col * M]:12.6f}"
-    stdout.write "\n"
-    stdout.write "          REF:"
-    for dc in 0 ..< 3:
-      let col = pc + dc
-      stdout.write &" {refC[row + col * M]:12.6f}"
-    stdout.write "\n"
+
+  var overallMaxAbsErr: float32 = 0.0'f32
+
+  # ── 4. Run each config ─────────────────────────────────────────────
+  for i, (M, N, K, bsM, bsN, tpb, alpha) in configs:
+    # 4a. Create fresh test data for this config
+    let A = rng.make_test_matrix(M, K)
+    let B = rng.make_test_matrix(N, K)
+
+    # 4b. Compute reference result (scaled by alpha)
+    var refC = newSeq[float32](M * N)
+    refC.naive_matmul(A, B, M, N, K)
+    if alpha != 1.0'f32:
+      for j in 0 ..< M * N:
+        refC[j] = alpha * refC[j]
+
+    # 4c. Launch kernel (gpuC starts zeroed, beta=0)
+    var gpuC = newSeq[float32](M * N)
+    let num_cta_m = (M + bsM - 1) div bsM
+    let num_cta_n = (N + bsN - 1) div bsN
+    nv.numBlocks = int32(num_cta_m * num_cta_n)
+    nv.threadsPerBlock = int32(tpb)
+    let m32 = int32(M)
+    let n32 = int32(N)
+    let k32 = int32(K)
+    nv.execute(kernelName, gpuC, (A, B, m32, n32, k32, alpha, 0.0'f32))
+
+    # 4d. Validate against reference
+    var cfgMaxAbs: float32 = 0.0'f32
+    for j in 0 ..< M * N:
+      let absErr = abs(gpuC[j] - refC[j])
+      let relErr = absErr / max(1.0'f32, abs(refC[j]))
+      if absErr > cfgMaxAbs: cfgMaxAbs = absErr
+      doAssert relErr <= relTol and absErr <= absTol,
+        &"Config [{i+1}/{numConfigs}] Element [{j mod M},{j div M}] FAIL: " &
+        "gpu=" & $gpuC[j] & " ref=" & $refC[j] & " " &
+        "absErr=" & $absErr & " relErr=" & $relErr
+
+    if cfgMaxAbs > overallMaxAbsErr: overallMaxAbsErr = cfgMaxAbs
+    echo &"  [{i+1:>2}/{numConfigs}]  PASS  maxAbsErr={cfgMaxAbs:.2e}"
+
+  echo &"  ALL {numConfigs} PASS  worst maxAbsErr={overallMaxAbsErr:.2e}"
