@@ -45,7 +45,8 @@ macro filterZipWith*(a: typed; b: typed; body: untyped): untyped =
   ##     (when it_a is X: (it_b,) elif it_a is Y: (it_a,) else: ())
   if a.kind in {nnkTupleConstr, nnkPar}:
     let n = a.len
-    doAssert n == b.len, "filterZipWith: rank mismatch (" & $n & " vs " & $b.len & ")"
+    let bType = b.getTypeInst()
+    doAssert n == bType.len, "filterZipWith: rank mismatch (" & $n & " vs " & $bType.len & ")"
     var parts: seq[NimNode] = @[]
     for i in 0 ..< n:
       let subA = a[i]

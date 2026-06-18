@@ -19,9 +19,7 @@ import std/typetraits
 import ./macros/static_for
 import ./int_tuples
 import ./kernel_indexing_gpu
-import ./layout_coords
 export kernel_indexing_gpu
-export layout_coords
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St] — typed shape + stride pair
@@ -283,8 +281,9 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
     for i in 0 ..< shT.len:
       let s = newCall(bindSym"[]", st, newLit(i))
       let shI = newCall(bindSym"[]", sh, newLit(i))
+
       parts.add quote do:
-        (if `shI` == 1: 0 else: (`idx` div `s`) mod `shI`)
+        (if (when `shI` is Int: `shI` === Int[1]() else: `shI` == 1): 0 else: (`idx` div `s`) mod `shI`)
     result = nnkPar.newTree(parts)
 
 # ═══════════════════════════════════════════════════════════════
@@ -894,53 +893,38 @@ macro zipModesWith*[A: Layout, B: Layout](a: A; b: B; body: untyped): untyped =
 ## shape/stride: modes paired with `_` in the coord are kept for `slice`,
 ## modes paired with integers are kept for `dice`.
 ##
-## runnableExamples:
-##   let L = make_layout((3, 4), (1, 3))
-##   let s = slice((_, 0), L)           # keep rows, drop cols
-##   doAssert $s == "(3):(1)"
 
-template slice*(coord: CoordType; layout: Layout): untyped =
-  ## Walk coord and the layout's shape+stride in parallel.
-  ## Modes paired with `_` stay in the result; modes paired with an int are dropped.
-  ## Returns a sub-Layout containing only the kept modes.
-  ##
-  ## runnableExamples:
-  ##   let L = make_layout((3, 4), (1, 3))
-  ##   slice((_, 0), L)    → keep rows, drop cols → (3):(1)
-  ##   slice((1, _), L)    → drop rows, keep cols  → (4):(3)
-  make_layout(slice(coord, layout.shape), slice(coord, layout.stride))
 
-template dice*(coord: CoordType; layout: Layout): untyped =
-  ## Walk coord and the layout's shape+stride in parallel.
-  ## Modes paired with an int stay in the result; modes paired with `_` are dropped.
-  ## Returns a sub-Layout containing only the kept modes.
-  ##
-  ## runnableExamples:
-  ##   let L = make_layout((3, 4), (1, 3))
-  ##   dice((_, 0), L)    → drop rows, keep cols → (4):(3)
-  ##   dice((1, _), L)    → keep rows, drop cols  → (3):(1)
-  make_layout(dice(coord, layout.shape), dice(coord, layout.stride))
+# ═══════════════════════════════════════════════════════════════
+#  Slice and dice — marker-based dimension selection
+# ═══════════════════════════════════════════════════════════════
 
-template slice_and_offset*(coord: CoordType; layout: Layout): untyped =
-  ## Like `slice`, but also compute the memory offset from the int-paired
-  ## dimensions.  Returns `(sub_layout, offset)`.
-  ##
-  ## The offset is `sum(int_coord[i] * stride[i])` for each dropped mode —
-  ## i.e. how far the data pointer must advance past the fixed coordinates.
-  ##
-  ## runnableExamples:
-  ##   let L = make_layout((3, 4), (1, 3))
-  ##   # Column 0 → offset 0, column 1 → offset 3
-  ##   let (sub0, off0) = slice_and_offset((_, 0), L)
-  ##   doAssert $sub0 == "(3,):(1,)" and off0 == 0
-  ##   let (sub1, off1) = slice_and_offset((_, 1), L)
-  ##   doAssert $sub1 == "(3,):(1,)" and off1 == 3
-  ##   # Row 0 → offset 0, row 1 → offset 1
-  ##   let (sub2, off2) = slice_and_offset((0, _), L)
-  ##   doAssert $sub2 == "(4,):(3,)" and off2 == 0
-  ##   let (sub3, off3) = slice_and_offset((1, _), L)
-  ##   doAssert $sub3 == "(4,):(3,)" and off3 == 1
+type
+  X* = object  ## slice: keep this dimension
+  Y* = object  ## dice: keep this dimension
 
-  let sub = slice(coord, layout)
-  let off = crd2idx(coord, layout.shape, layout.stride)
-  (sub, off)
+template filterSlice(selector: typed; target: tuple): auto =
+  filterZipWith(selector, target):
+    (when it_a is X: (it_b,)
+     elif it_a is Y: ()
+     else: {.error: "filterSlice: selector must contain X or Y".})
+
+template filterDice(selector: typed; target: tuple): auto =
+  filterZipWith(selector, target):
+    (when it_a is Y: (it_b,)
+     elif it_a is X: ()
+     else: {.error: "filterDice: selector must contain X or Y".})
+
+template slice*(target: Layout; selector: typed): untyped =
+  ## Extract a sub-Layout by keeping dimensions marked with X
+  ## and dropping dimensions marked with Y.
+  make_layout(
+    filterSlice(selector, target.shape),
+    filterSlice(selector, target.stride))
+
+template dice*(target: Layout; selector: typed): untyped =
+  ## Extract a sub-Layout by keeping dimensions marked with Y
+  ## and dropping dimensions marked with X.
+  make_layout(
+    filterDice(selector, target.shape),
+    filterDice(selector, target.stride))
