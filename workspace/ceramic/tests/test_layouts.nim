@@ -21,6 +21,7 @@ import std/macros, std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts {.all.}
 import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_indexing {.all.}
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout — shape + stride, const correctness, stride order

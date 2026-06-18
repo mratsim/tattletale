@@ -81,7 +81,7 @@ func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int
 #  CPU wrappers (for useGpuIndexing dispatch)
 # ═══════════════════════════════════════════════════════════════
 #
-#  These delegate to the kernel_indexing_gpu 3-arg functions for
+#  These delegate to the layout_indexing_gpu 3-arg functions for
 #  tuple-coord crd2idx (which is already multiply-add, no divmod).
 #  They exist so callers can do a uniform `crd2idx_cpu` call
 #  regardless of whether the underlying impl differs.
@@ -90,7 +90,7 @@ func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int
 #  dispatch with `useGpuIndexing` parameter. The `_cpu` suffix
 #  here is for code that explicitly wants CPU-optimized semantics.
 
-import ./kernel_indexing_gpu
+import ./layout_indexing_gpu
 import std/macros
 
 func crd2idx_cpu*(layout: Layout; coord: IntOrIntTuple): int {.inline, noInit.} =

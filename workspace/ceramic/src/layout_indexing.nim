@@ -1,0 +1,129 @@
+## Tattletale
+## Copyright (c) 2026 Mamy André-Ratsimbazafy
+## Licensed and distributed under either of
+##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+## at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## CuTe-compatible Layout indexing: crd2idx, idx2crd, slice, dice.
+##
+## These are the Layout-consuming wrappers. The raw 3-arg crd2idx
+## overloads live in `layout_indexing_gpu.nim`.
+
+import std/macros
+import std/typetraits
+import ./int_tuples
+import ./layout_indexing_gpu
+import ./layouts
+export layout_indexing_gpu
+
+
+# ═══════════════════════════════════════════════════════════════
+#  crd2idx / layout() / idx2crd — via layout_indexing_gpu
+# ═══════════════════════════════════════════════════════════════
+#
+#  The raw 3-arg crd2idx overloads live in layout_indexing_gpu.nim.
+#  These Layout-consuming wrappers delegate to them.
+
+template crd2idx*(layout: Layout; coord: IntOrIntTuple): int =
+  ## Logical-to-memory offset for a coordinate on a Layout.
+  ##
+  ## `coord` can be:
+  ##   • an `int`   — decomposed column-major across all modes
+  ##   • a `tuple`  — inner product `coord·stride` per mode
+  ##   • a static `Int[V]` — same, compile-time constant
+  ##
+  ## External code must use this (or `layout(coord)`) rather than
+  ## calling the raw `crd2idx(coord, shape, stride)` directly,
+  ## which is module-private to layouts.nim.
+  crd2idx(coord, layout.shape, layout.stride)
+
+template `()`*[Sh, St](layout: Layout[Sh, St]; idx: IntOrIntTuple): int =
+  ## Parens-syntax flat indexing: `layout(coord)` ≡ `crd2idx(layout, coord)`.
+  crd2idx(layout, idx)
+
+macro `[]`*(layout: Layout; args: varargs[IntOrIntTuple]): untyped =
+  ## Multi-index via varargs bracket: `layout[i, j]` or `layout[(ri, rj), k]`.
+  var coord = nnkPar.newTree()
+  args.copyChildrenTo(coord)
+  result = newCall(bindSym"()", layout, coord)
+
+macro idx2crd*(layout: Layout; idx: int or Int): untyped =
+  ## Convert linear index to coordinate using a Layout.
+  ##
+  ##   Cases for `(idx, shape, stride)`:
+  ##     shape == 1, stride == 0   →   0  (broadcast — skip division)
+  ##     shape == 1, stride != 0   →   0  (size-1 — result always 0)
+  ##     shape != 1, stride == 0   ─── invalid layout (unreachable)
+  ##     shape != 1, stride != 0   →   (idx div stride) mod shape
+  ##
+  ## The guard on `shape == 1` matches CuTe's `is_constant<1, Shape>`
+  ## check and handles both broadcast modes and trivial dimensions,
+  ## avoiding potential division-by-zero on stride-0.
+  let lTyp = layout.getTypeInst()
+  let shT = lTyp[1]
+  let sh = newTree(nnkDotExpr, layout, ident"shape")
+  let st = newTree(nnkDotExpr, layout, ident"stride")
+  if shT.kind != nnkTupleConstr:
+    # Scalar shape: `if shape == 1: 0 else: idx div stride`
+    result = quote do:
+      (if `sh` == 1: 0 else: `idx` div `st`)
+  else:
+    # Tuple shape: each mode gets its own guard
+    var parts: seq[NimNode] = @[]
+    for i in 0 ..< shT.len:
+      let s = newCall(bindSym"[]", st, newLit(i))
+      let shI = newCall(bindSym"[]", sh, newLit(i))
+
+      parts.add quote do:
+        (if (when `shI` is Int: `shI` === Int[1]() else: `shI` == 1): 0 else: (`idx` div `s`) mod `shI`)
+    result = nnkPar.newTree(parts)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Slice and dice — marker-based dimension selection
+# ═══════════════════════════════════════════════════════════════
+#
+#  Reference: CuTe C++ `layout.hpp` — `slice` / `dice`
+#
+#  The resulting Layout has the same nesting structure as the filtered
+#  shape/stride: modes paired with X / _ are kept for slice,
+#  modes paired with Y or ints are kept for dice.
+
+type
+  X* = object  ## slice: keep this dimension
+  Y* = object  ## dice: keep this dimension
+
+const _* = X()  ## value-level marker for free/slice dimensions
+
+template filterSlice(selector: typed; target: tuple): auto =
+  filterZipWith(selector, target):
+    (when it_a is X: (it_b,)
+     elif it_a is Y or it_a is int or it_a is Int: ()
+     else: {.error: "filterSlice: selector items must be X, Y, or ints".})
+
+template filterDice(selector: typed; target: tuple): auto =
+  filterZipWith(selector, target):
+    (when it_a is Y or it_a is int or it_a is Int: (it_b,)
+     elif it_a is X: ()
+     else: {.error: "filterDice: selector items must be X, Y, or ints".})
+
+template slice*(target: Layout; selector: typed): untyped =
+  ## Extract a sub-Layout by keeping dimensions marked with X
+  ## and dropping dimensions marked with Y.
+  make_layout(
+    filterSlice(selector, target.shape),
+    filterSlice(selector, target.stride))
+
+template dice*(target: Layout; selector: typed): untyped =
+  ## Extract a sub-Layout by keeping dimensions marked with Y
+  ## and dropping dimensions marked with X.
+  make_layout(
+    filterDice(selector, target.shape),
+    filterDice(selector, target.stride))
+
+template slice_and_offset*(coord: typed; target: Layout): untyped =
+  ## CuTe-compatible slice_and_offset.
+  ## `coord` mixes _ (free dims) and ints (fixed dims).
+  ## Returns (sub_layout, base_offset).
+  (slice(target, coord), crd2idx(coord, target.shape, target.stride))

@@ -9,6 +9,7 @@ import std/macros
 import ./int_tuples
 import ./layouts
 import ./ptr_arithmetic
+import ./layout_indexing
 
 {.experimental: "callOperator".}
 
@@ -140,18 +141,19 @@ template cosize*(t: Tensor): untyped = t.layout.cosize()
 #  Flat indexing — single int via parens (macro enables call from templates)
 # ═════════════════════════════════════════════════════════════════════════
 
-macro `()`*(t: Tensor; args: varargs[int]): untyped =
-  var coord = nnkPar.newTree()
-  args.copyChildrenTo(coord)
-  result = nnkBracketExpr.newTree(newDotExpr(t, ident"data"),
-    newCall(bindSym"+", newDotExpr(t, ident"offset"),
-      newCall(bindSym"crd2idx", newDotExpr(t, ident"layout"), coord)))
+template `()`*(t: Tensor; args: varargs[untyped]): untyped =
+  static: echo "Tensor: ", astToStr(t)
+  when hasJoker(args):
+    t.slice(varargs_to_par(args))
+  else:
+    t.data[t.offset + crd2idx(t.layout, varargs_to_par(args))]
 
-macro `()`*(tv: TensorView; args: varargs[int]): untyped =
-  var coord = nnkPar.newTree()
-  args.copyChildrenTo(coord)
-  result = nnkBracketExpr.newTree(newDotExpr(tv, ident"data"),
-    newCall(bindSym"crd2idx", newDotExpr(tv, ident"layout"), coord))
+template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
+  static: echo "TensorView: ", astToStr(tv)
+  when hasJoker(args):
+    tv.slice(varargs_to_par(args))
+  else:
+    tv.data[crd2idx(tv.layout, varargs_to_par(args))]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Multi-index — operator[]
@@ -159,24 +161,19 @@ macro `()`*(tv: TensorView; args: varargs[int]): untyped =
 #  Also accepts tuple coordinates: t[(i, j), (k, l)]
 # ═════════════════════════════════════════════════════════════════════════
 
-template `[]`*[T, Sh, St](t: Tensor[T, Sh, St]; coord: tuple): untyped =
-  t.data[t.offset + t.layout(coord)]
+template `[]`*(t: Tensor; args: varargs[untyped]): untyped =
+  static: echo astToStr(t)
+  when hasJoker(args):
+    {.fatal: "Joker (_) not allowed in operator[] — use operator() for sub-Views".}
+  else:
+    t.data[t.offset + crd2idx(t.layout, varargs_to_par(args))]
 
-template `[]`*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: tuple): untyped =
-  tv.data[tv.layout(coord)]
-
-macro `[]`*(t: Tensor; args: varargs[IntOrIntTuple]): untyped =
-  var coord = nnkPar.newTree()
-  args.copyChildrenTo(coord)
-  result = nnkBracketExpr.newTree(newDotExpr(t, ident"data"),
-    newCall(bindSym"+", newDotExpr(t, ident"offset"),
-      newCall(bindSym"crd2idx", newDotExpr(t, ident"layout"), coord)))
-
-macro `[]`*(t: TensorView; args: varargs[IntOrIntTuple]): untyped =
-  var coord = nnkPar.newTree()
-  args.copyChildrenTo(coord)
-  result = nnkBracketExpr.newTree(newDotExpr(t, ident"data"),
-    newCall(bindSym"crd2idx", newDotExpr(t, ident"layout"), coord))
+template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
+  static: echo astToStr(tv)
+  when hasJoker(args):
+    {.fatal: "Joker (_) not allowed in operator[] — use operator() for sub-Views".}
+  else:
+    tv.data[crd2idx(tv.layout, varargs_to_par(args))]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  slice — subtensor via Joker
@@ -243,17 +240,25 @@ func displace*[T, Sh, St](t: Tensor[T, Sh, St]; coord: IntOrIntTuple): auto {.in
   displace(t.view(), coord)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  local_tile — extract subtensor from tiled_divide result
+#  inner_partition / outer_partition — BROKEN (uses deleted slice_and_offset)
+#  To fix: rewrite using zipped_divide + slice/dice + crd2idx directly
 # ═════════════════════════════════════════════════════════════════════════
+#
+#  These were TEMPLATE-level TensorView functions:
+#    inner_partition(tv, tiler, coord)  — keep tile, slice rest with coord
+#    outer_partition(tv, tiler, coord)  — slice tile with coord, keep rest
+#
+#  Both called slice_and_offset which was deleted with the old underscore API.
+#  CuTe C++ equivalent routes through Tensor::operator() → has_underscore → slice_and_offset.
+#  Our fix: work at zipped_divide layout level directly:
+#    inner_partition → slice(interspersed(_, coord), zd) + crd2idx(...)
+#    outer_partition → slice(interspersed(coord, _), zd) + crd2idx(...)
 
-func local_tile*[T, Sh, St, Ti, Si](
-    tv: TensorView[T, Sh, St];
-    tiled: Layout[Ti, Si];
-    a, b: int): auto =
-  ## tiled_divide produces shape ((tileM, tileK), mP, kP) — tile nested, rest flat.
-  ## Use nested coordinate ((_, _), a, b) to keep tile and collapse rest.
-  let (sub, off) = slice_and_offset(((_, _), a, b), tiled)
-  make_view(tv.data +% off, sub)
+#  Callers to fix later:
+#    - test_layout_operators.nim: inner_partition/outer_partition tests
+#    - ex01_matmul_cpu_serial.nim: local_tile calls
+#    - ex02a_matmul_handtuned.nim: local_tile calls
+#    - ex02b_matmul_layout_algebra.nim: local_tile calls
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Display

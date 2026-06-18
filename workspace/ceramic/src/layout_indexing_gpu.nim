@@ -33,10 +33,11 @@ func crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): int = coor
 #  Tuple overloads
 # ═══════════════════════════════════════════════════════════════
 
-# 3-arg: tuple coord → inner product (a·b)
-func crd2idx*[C, Sh, St: tuple](coord: C; shape: Sh; stride: St): auto {.inline, noInit.} =
-  ## Inner product: sum coord[i] * stride[i]
-  foldZipWith(coord, stride, 0): acc + it_a * it_b
+# 3-arg: tuple coord (int or X) × tuple stride → inner product
+template crd2idx*[Sh, St: tuple](coord: typed; shape: Sh; stride: St): auto =
+  ## Mixed coord: X contributes 0, int contributes coord * stride.
+  foldZipWith(coord, stride, 0):
+    acc + (when it_a is X: 0 else: it_a * it_b)
 
 # 3-arg: int coord → decompose across modes
 func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto {.inline, noInit.} =

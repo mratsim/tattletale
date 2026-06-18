@@ -1,11 +1,11 @@
-## Test: kernel_indexing — crd2idx, idx2crd, CoordWheel
+## Test: layout_indexing — crd2idx, idx2crd, CoordWheel
 ##
 ## Tests both GPU (divmod) and CPU (wheel-winding) indexing paths.
 
 import ../src/int_tuples
 import ../src/layouts
-import ../src/kernel_indexing_cpu
-import ../src/kernel_indexing_gpu
+import ../src/layout_indexing_cpu
+import ../src/layout_indexing_gpu
 
 {.experimental: "callOperator".}
 
@@ -188,5 +188,5 @@ block:
 
 echo "  [OK] CoordWheel: LayoutRight vs LayoutLeft"
 
-echo "\n--- kernel_indexing tests ---"
+echo "\n--- layout_indexing tests ---"
 echo "  All tests passed."
