@@ -147,16 +147,24 @@ template cosize*(t: Tensor): untyped = t.layout.cosize()
 template `()`*(t: Tensor; args: varargs[untyped]): untyped =
   let coord = varargs_to_par(args)
   when hasUnderscoreImpl(coord):
-    let (sub, off) = slice_and_offset(t.layout, coord)
-    make_view(cast[ptr UncheckedArray[T]](addr(t.data[t.offset + off])), sub)
+    block:
+      evalOnceAs(lyt, t.layout)
+      evalOnceAs(crd, coord)
+      evalOnceAs(sub, slice(lyt, crd))
+      evalOnceAs(off, crd2idx(lyt, crd))
+      make_view(t.data +% t.offset +% off, sub)
   else:
     t.data[t.offset + crd2idx(t.layout, coord)]
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
   let coord = varargs_to_par(args)
   when hasUnderscoreImpl(coord):
-    let (sub, off) = slice_and_offset(tv.layout, coord)
-    make_view(tv.data +% toIntVal(off), sub)
+    block:
+      evalOnceAs(lyt, tv.layout)
+      evalOnceAs(crd, coord)
+      evalOnceAs(sub, slice(lyt, crd))
+      evalOnceAs(off, crd2idx(lyt, crd))
+      make_view(tv.data +% toIntVal(off), sub)
   else:
     tv.data[crd2idx(tv.layout, coord)]
 
@@ -183,12 +191,18 @@ template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
 # ═════════════════════════════════════════════════════════════════════════
 
 template slice*[T, Sh, St](t: Tensor[T, Sh, St]; coord: untyped): untyped =
-  let (sub, off) = slice_and_offset(t.layout, coord)
-  make_view(cast[ptr UncheckedArray[T]](addr(t.data[t.offset + off])), sub)
+  block:
+    evalOnceAs(lyt, t.layout)
+    evalOnceAs(sub, slice(lyt, coord))
+    evalOnceAs(off, crd2idx(lyt, coord))
+    make_view(t.data +% t.offset +% off, sub)
 
 template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
-  let (sub, off) = slice_and_offset(tv.layout, coord)
-  make_view(tv.data +% toIntVal(off), sub)
+  block:
+    evalOnceAs(lyt, tv.layout)
+    evalOnceAs(sub, slice(lyt, coord))
+    evalOnceAs(off, crd2idx(lyt, coord))
+    make_view(tv.data +% toIntVal(off), sub())
 
 # ═════════════════════════════════════════════════════════════════════════
 #  repeatX — tuple of X markers for partition selectors
@@ -211,18 +225,24 @@ template repeatX*(n: static int): untyped =
 template inner_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Keep tile modes, slice rest modes with coord.
   ## CuTe: zipped_divide(tensor, tiler)(repeat<R0>(_), coord)
-  let zd = zipped_divide(tv.layout, tiler)
-  const R0 = rank(tiler)
-  let (sub, off) = slice_and_offset(zd, (repeatX(R0), coord))
-  make_view(tv.data +% off, sub)
+  block:
+    evalOnceAs(zd, zipped_divide(tv.layout, tiler))
+    const R0 = rank(tiler)
+    let sel = (repeatX(R0), coord)
+    evalOnceAs(sub, slice(zd, sel))
+    evalOnceAs(off, crd2idx(zd, sel))
+    make_view(tv.data +% toIntVal(off), sub)
 
 template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Slice tile modes with coord, keep rest modes.
   ## CuTe: zipped_divide(tensor, tiler)(coord, repeat<R1>(_))
-  let zd = zipped_divide(tv.layout, tiler)
-  const R1 = rank(tiler)
-  let (sub, off) = slice_and_offset(zd, (coord, repeatX(R1)))
-  make_view(tv.data +% off, sub)
+  block:
+    evalOnceAs(zd, zipped_divide(tv.layout, tiler))
+    const R1 = rank(tiler)
+    let sel = (coord, repeatX(R1))
+    evalOnceAs(sub, slice(zd, sel))
+    evalOnceAs(off, crd2idx(zd, sel))
+    make_view(tv.data +% toIntVal(off), sub)
 
 template local_tile*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Alias for inner_partition — select a single tile.
