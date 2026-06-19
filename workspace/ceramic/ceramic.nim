@@ -1,4 +1,4 @@
-## CuTe-compatible Layout algebra: shapes, strides, Int[N], coalesce.
+## Layout algebra: shapes, strides, Int[N], coalesce.
 ##
 ## Ceramic provides the fundamental tile types (`Layout[Shape, Stride]`,
 ## `Int[N]`) and layout transformations (`coalesce`, `complement`, `compose`,

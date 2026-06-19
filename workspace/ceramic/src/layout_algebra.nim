@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## CuTe-compatible layout algebra: coalesce, filter_zeros, filter, sort.
+## Layout algebra: coalesce, filter_zeros, filter, sort.
 
 import std/macros
 import std/sequtils
@@ -280,7 +280,7 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
   complementImpl(flatten(f.shape), flatten(f.stride), cosizeBound)
 
 # ═══════════════════════════════════════════════════════════════
-#  compose — CuTe-compatible layout composition
+#  compose — layout composition
 # ═══════════════════════════════════════════════════════════════
 ##
 ## `compose(A, B)` produces a layout `R` such that `R(i) = A(B(i))`

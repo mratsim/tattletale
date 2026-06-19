@@ -5,21 +5,24 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## CuTe-compatible Layout indexing: crd2idx, idx2crd, slice, dice.
+## Layout indexing: crd2idx, idx2crd, slice, dice.
 ##
 ## These are the Layout-consuming wrappers. The raw 3-arg crd2idx
 ## overloads live in `layout_indexing_gpu.nim`.
+{.experimental: "callOperator".}
 
 import std/macros
 import std/typetraits
+
 import ./int_tuples
 import ./layout_indexing_gpu
 import ./layouts
+import ./macros/varargs_to_par
+
 export layout_indexing_gpu
 
-
 # ═══════════════════════════════════════════════════════════════
-#  crd2idx / layout() / idx2crd — via layout_indexing_gpu
+#  crd2idx / idx2crd — via layout_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
 #
 #  The raw 3-arg crd2idx overloads live in layout_indexing_gpu.nim.
@@ -37,16 +40,6 @@ template crd2idx*(layout: Layout; coord: IntOrIntTuple): int =
   ## calling the raw `crd2idx(coord, shape, stride)` directly,
   ## which is module-private to layouts.nim.
   crd2idx(coord, layout.shape, layout.stride)
-
-template `()`*[Sh, St](layout: Layout[Sh, St]; idx: IntOrIntTuple): int =
-  ## Parens-syntax flat indexing: `layout(coord)` ≡ `crd2idx(layout, coord)`.
-  crd2idx(layout, idx)
-
-macro `[]`*(layout: Layout; args: varargs[IntOrIntTuple]): untyped =
-  ## Multi-index via varargs bracket: `layout[i, j]` or `layout[(ri, rj), k]`.
-  var coord = nnkPar.newTree()
-  args.copyChildrenTo(coord)
-  result = newCall(bindSym"()", layout, coord)
 
 macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
@@ -123,7 +116,52 @@ template dice*(target: Layout; selector: typed): untyped =
     filterDice(selector, target.stride))
 
 template slice_and_offset*(coord: typed; target: Layout): untyped =
-  ## CuTe-compatible slice_and_offset.
+  ## Layout slice + offset: (sub_layout, base_offset).
   ## `coord` mixes _ (free dims) and ints (fixed dims).
   ## Returns (sub_layout, base_offset).
   (slice(target, coord), crd2idx(coord, target.shape, target.stride))
+
+# ═══════════════════════════════════════════════════════════════
+#  layout() call syntax
+# ═══════════════════════════════════════════════════════════════
+
+func hasUnderscoreImpl(coord: auto): bool =
+  when coord is tuple:
+    for c in fields(coord):
+      when c.hasUnderscore():
+        return true
+    return false
+  elif coord is int:
+    return false
+  elif coord is Int:
+    return false
+  elif coord is X:
+    return true
+  else:
+    {.error: "[ttt] unsupported type: " & typeof(coord).}
+
+macro hasUnderscore(Cs: varargs[untyped]): bool =
+  let r = ident"r"
+  result = newStmtList()
+  result.add quote do:
+    var `r` = false
+  for i in 0 ..< Cs.len:
+    let Ci = Cs[i]
+    result.add quote do:
+      `r` = `r` or hasUnderscoreImpl(`Ci`)
+  result.add quote do:
+    `r`
+  result = newBlockStmt(result)
+
+template callImpl(layout: Layout; coord: typed): auto =
+  ## Layout indexing:
+  ##   • coord has _ / X → slice (returns sub-Layout)
+  ##   • coord is all ints → crd2idx (returns int)
+  when hasUnderscore(coord):
+    slice(layout, coord)
+  else:
+    crd2idx(layout, coord)
+
+template `()`*(layout: Layout; args: varargs[typed]): untyped =
+  ## Multi-argument: `L(i, j)` ≡ `L((i, j))`.
+  callImpl(varargs_to_par(args))

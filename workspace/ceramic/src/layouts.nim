@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## CuTe-compatible Layout construction: make_layout.
+## Layout construction: make_layout.
 ##
 ## Reference:
 ##   - CuTe C++: layout.hpp
@@ -756,7 +756,7 @@ macro mapModesWith*[L: Layout](arg: L; body: untyped): untyped =
                newTree(nnkDotExpr, resName, ident"stride"))
   result.add ct.emit()
 
-macro zipModesWith*[A: Layout, B: Layout](a: A; b: B; body: untyped): untyped =
+macro zipModesWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
   ## Zip modes of two layouts pairwise via body, appending leftovers from the longer one.
   ##
   ## Within body, `it_a` is the current mode of `a` and `it_b` the current mode of `b`.
@@ -819,4 +819,3 @@ macro zipModesWith*[A: Layout, B: Layout](a: A; b: B; body: untyped): untyped =
       ct.append(newTree(nnkDotExpr, mName, ident"shape"),
                  newTree(nnkDotExpr, mName, ident"stride"))
   result.add ct.emit()
-
