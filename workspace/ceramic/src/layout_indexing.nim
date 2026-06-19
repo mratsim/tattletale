@@ -104,19 +104,17 @@ template filterDice(selector: typed; target: tuple): auto =
      elif it_a is X: ()
      else: {.error: "filterDice: selector items must be X, Y, or ints".})
 
-template slice*(target: Layout; selector: typed): untyped =
-  ## Extract a sub-Layout by keeping dimensions marked with X
-  ## and dropping dimensions marked with Y.
+template slice*(target: Layout; selectors: varargs[untyped]): untyped =
+  ## Extract a sub-Layout: dimensions marked with X / _ are kept.
   make_layout(
-    filterSlice(selector, target.shape),
-    filterSlice(selector, target.stride))
+    filterSlice(varargs_to_par(selectors), target.shape),
+    filterSlice(varargs_to_par(selectors), target.stride))
 
-template dice*(target: Layout; selector: typed): untyped =
-  ## Extract a sub-Layout by keeping dimensions marked with Y
-  ## and dropping dimensions marked with X.
+template dice*(target: Layout; selectors: varargs[untyped]): untyped =
+  ## Extract a sub-Layout: dimensions marked with Y are kept.
   make_layout(
-    filterDice(selector, target.shape),
-    filterDice(selector, target.stride))
+    filterDice(varargs_to_par(selectors), target.shape),
+    filterDice(varargs_to_par(selectors), target.stride))
 
 template slice_and_offset*(target: Layout; coord: typed): untyped =
   ## Layout slice + offset: (sub_layout, base_offset).

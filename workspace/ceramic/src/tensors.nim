@@ -153,10 +153,9 @@ template `()`*(t: Tensor; args: varargs[untyped]): untyped =
   let coord = varargs_to_par(args)
   when hasUnderscoreImpl(coord):
     block:
-      evalOnceAs(lyt, t.layout)
       evalOnceAs(crd, coord)
-      evalOnceAs(sub, slice(lyt, crd))
-      evalOnceAs(off, crd2idx(lyt, crd))
+      evalOnceAs(sub, slice(t.layout, crd))
+      evalOnceAs(off, crd2idx(t.layout, crd))
       make_view(t.data +% t.offset +% off, sub)
   else:
     t.data[t.offset + crd2idx(t.layout, coord)]
@@ -165,10 +164,9 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
   let coord = varargs_to_par(args)
   when hasUnderscoreImpl(coord):
     block:
-      evalOnceAs(lyt, tv.layout)
       evalOnceAs(crd, coord)
-      evalOnceAs(sub, slice(lyt, crd))
-      evalOnceAs(off, crd2idx(lyt, crd))
+      evalOnceAs(sub, slice(tv.layout, crd))
+      evalOnceAs(off, crd2idx(tv.layout, crd))
       make_view(tv.data +% toIntVal(off), sub)
   else:
     tv.data[crd2idx(tv.layout, coord)]
@@ -195,18 +193,18 @@ template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
 #  slice — subtensor via underscore dispatch
 # ═════════════════════════════════════════════════════════════════════════
 
-template slice*(t: Tensor; coord: untyped): untyped =
+template slice*(t: Tensor; coords: varargs[untyped]): untyped =
   block:
-    evalOnceAs(lyt, t.layout)
-    evalOnceAs(sub, slice(lyt, coord))
-    let off = crd2idx(lyt, coord)
+    evalOnceAs(crd, varargs_to_par(coords))
+    evalOnceAs(sub, slice(t.layout, crd))
+    let off = crd2idx(t.layout, crd)
     make_view(t.data[0].addr +% t.offset +% off.toIntVal(), sub)
 
-template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
+template slice*(tv: TensorView; coords: varargs[untyped]): untyped =
   block:
-    evalOnceAs(lyt, tv.layout)
-    evalOnceAs(sub, slice(lyt, coord))
-    let off = crd2idx(lyt, coord)
+    evalOnceAs(crd, varargs_to_par(coords))
+    evalOnceAs(sub, slice(tv.layout, crd))
+    let off = crd2idx(tv.layout, crd)
     make_view(tv.data +% off.toIntVal(), sub)
 
 # ═════════════════════════════════════════════════════════════════════════
