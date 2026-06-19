@@ -8,6 +8,7 @@ import ../src/layout_indexing_cpu
 import ../src/layout_indexing_gpu
 import ../src/layout_indexing
 import std/typetraits
+import testutils
 
 {.experimental: "callOperator".}
 
@@ -60,10 +61,10 @@ echo "  [OK] crd2idx: tuple coord (6 cases)"
 
 block:
   let L = make_layout((3, 4), (1, 3))
-  doAssert crd2idx(L, (2, 2)) == 2*1 + 2*3
-  doAssert crd2idx(L, (0, 0)) == 0
-  doAssert L((1, 2)) == 1*1 + 2*3
-  doAssert L(1, 2) == 1*1 + 2*3
+  check crd2idx(L, (2, 2)), 2*1 + 2*3, Int
+  check crd2idx(L, (0, 0)), 0, Int
+  check crd2idx(L, (1, 2)), 1*1 + 2*3, Int
+  check crd2idx(L, (1, 2)), 1*1 + 2*3, Int
 
 echo "  [OK] crd2idx: via Layout (3 cases)"
 
@@ -270,13 +271,13 @@ echo "    dice on Layout: 4 cases OK"
 
 block:
   let l = make_layout(8, 1)
-  doAssert l(0) === 0
-  doAssert l(3) === 3
-  doAssert l(7) === 7
+  check crd2idx(l, 0), 0, int
+  check crd2idx(l, 3), 3, int
+  check crd2idx(l, 7), 7, int
 block:
   let l = make_layout((4, 8), (1, 4))
-  doAssert l(0) === 0
-  doAssert l(10) === 10
+  check crd2idx(l, 0), 0, int
+  check crd2idx(l, 10), 10, int
 echo "    layout(): 2 checks OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -285,20 +286,20 @@ echo "    layout(): 2 checks OK"
 
 block:
   let L = make_layout((3, 4), (1, 4))
-  doAssert L((0, 0)) == 0
-  doAssert L((1, 2)) == 9
-  doAssert L((2, 3)) == 14
+  check crd2idx(L, (0, 0)), 0, Int
+  check crd2idx(L, (1, 2)), 9, Int
+  check crd2idx(L, (2, 3)), 14, Int
 block:
   let L = make_layout((3, 4), (1, 4))
-  doAssert L(0, 0) == 0
-  doAssert L(1, 2) == 9
-  doAssert L(2, 3) == 14
+  check crd2idx(L, (0, 0)), 0, Int
+  check crd2idx(L, (1, 2)), 9, Int
+  check crd2idx(L, (2, 3)), 14, Int
 block:
   let L = make_layout((3, 4), (1, 4))
-  doAssert L(_, 0) === make_layout((3,), (1,))
-  doAssert L(0, _) === make_layout((4,), (4,))
-  doAssert L(_, _) === L
-echo "    dual dispatch: 6 cases OK"
+  doAssert slice(L, (_, 0)) === make_layout((3,), (1,))
+  doAssert slice(L, (0, _)) === make_layout((4,), (4,))
+  doAssert slice(L, (_, _)) === L
+echo "    slice via () syntax: 3 cases OK"
 
 echo "\n--- layout_indexing tests ---"
 echo "  All tests passed."

@@ -21,6 +21,7 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts {.all.}
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_indexing {.all.}
+import workspace/ceramic/tests/testutils
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout — shape + stride, const correctness, stride order
@@ -295,10 +296,10 @@ proc runMakeLayoutTests =
   block:
     let mr = 4; let mpT = 8; let kc = 8
     let l = make_layout(((mr, 1), (mpT, kc)))
-    doAssert l(((0, 0), (0, 0))) == 0
-    doAssert l(((0, 0), (1, 0))) == mr
-    doAssert l(((0, 0), (0, 1))) == mr * mpT
-    doAssert l(((1, 0), (0, 0))) == 1
+    check crd2idx(l, ((0, 0), (0, 0))), 0, int
+    check crd2idx(l, ((0, 0), (1, 0))), mr, int
+    check crd2idx(l, ((0, 0), (0, 1))), mr * mpT, int
+    check crd2idx(l, ((1, 0), (0, 0))), 1, int
   block:
     let l = make_layout(((4, 1), (8, 8)), LayoutRight)
     doAssert l.shape === ((4, 1), (8, 8)) and l.stride === ((64, 64), (8, 1))

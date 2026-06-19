@@ -36,8 +36,10 @@ func crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): int = coor
 # 3-arg: tuple coord (int or X) × tuple stride → inner product
 template crd2idx*[Sh, St: tuple](coord: typed; shape: Sh; stride: St): auto =
   ## Mixed coord: X contributes 0, int contributes coord * stride.
-  foldZipWith(coord, stride, 0):
-    acc + (when it_a is X: 0 else: it_a * it_b)
+  ## Wrap coord via makeIntTuple so compile-time ints become Int[N]
+  ## and stay in the Int[V] * Int[U] (→ Int[VU]) operator space.
+  foldZipWith(makeIntTuple(coord), stride, Int[0]()):
+    acc + (when it_a is X: Int[0]() else: it_a * it_b)
 
 # 3-arg: int coord → decompose across modes
 func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto {.inline, noInit.} =

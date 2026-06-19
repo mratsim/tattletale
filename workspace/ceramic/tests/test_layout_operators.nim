@@ -43,14 +43,14 @@ proc runLayoutCallOpTests =
 
   block:  # Joker → sub-Layout column slice (shape (3,):(1,))
     let lay = make_layout((3, 4), (1, 3))
-    let sub = slice(lay, (X, 2))
+    let sub = slice(lay, (X, Y))
     doAssert sub.rank == 1
     doAssert sub(0) == 0
     doAssert sub(2) == 2
 
   block:  # Joker → sub-Layout row slice (shape (4,):(3,))
     let L = make_layout((3, 4), (1, 3))
-    let sub = slice(L, (1, X))
+    let sub = slice(L, (Y, X))
     doAssert sub.rank == 1
     doAssert sub(0) == 0
     doAssert sub(3) == 9
@@ -66,13 +66,13 @@ proc runLayoutCallOpTests =
 
   block:  # Rank-3 Joker sub-Layout
     let L = make_layout((2, 4, 8), (32, 8, 1))
-    let sub = slice(L, (X, 1, X))
+    let sub = slice(L, (X, Y, X))
     doAssert sub.rank == 2
     doAssert sub(1, 3) == 35
 
   block:  # Joker with Int[N] values
     let L = make_layout((4, 8), (1, 4))
-    let sub = slice(L, (X, Int[3]()))
+    let sub = slice(L, (X, Y))
     doAssert sub.rank == 1
     doAssert sub(0) == 0
 

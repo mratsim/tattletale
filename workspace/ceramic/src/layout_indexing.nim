@@ -28,7 +28,7 @@ export layout_indexing_gpu
 #  The raw 3-arg crd2idx overloads live in layout_indexing_gpu.nim.
 #  These Layout-consuming wrappers delegate to them.
 
-template crd2idx*(layout: Layout; coord: IntOrIntTuple): int =
+template crd2idx*(layout: Layout; coord: IntOrIntTuple): auto =
   ## Logical-to-memory offset for a coordinate on a Layout.
   ##
   ## `coord` can be:
