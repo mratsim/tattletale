@@ -21,13 +21,14 @@ import ./macros/static_for
 #  Scalar overloads
 # ═══════════════════════════════════════════════════════════════
 
-func crd2idx*(coord, shape: int): int = coord
-func crd2idx*[V: static int](coord: Int[V]; shape: int): int = V
-func crd2idx*(coord, shape, stride: int): int = coord * stride
-func crd2idx*[V: static int](coord: Int[V]; shape, stride: int): int = V * stride
-func crd2idx*[V, U: static int](coord: int; shape: Int[V]; stride: Int[U]): int = coord * toIntVal(stride)
-func crd2idx*[V: static int](coord: int; shape: Int[V]; stride: int): int = coord * stride
-func crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): int = coord * toIntVal(stride)
+template crd2idx*(coord, shape: int): int = coord
+template crd2idx*[V: static int](coord: Int[V]; shape: int): Int[V] = V
+template crd2idx*(coord, shape, stride: int): int = coord * stride
+template crd2idx*[V: static int](coord: Int[V]; shape, stride: int): int = coord * stride
+template crd2idx*[V, U: static int](coord: int; shape: Int[V]; stride: Int[U]): int = coord * stride
+template crd2idx*[V: static int](coord: int; shape: Int[V]; stride: int): int = coord * stride
+template crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): int = coord * stride
+template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int[W]): auto = coord * stride
 
 # ═══════════════════════════════════════════════════════════════
 #  Tuple overloads
@@ -38,7 +39,10 @@ template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
   ## Mixed coord: X contributes 0, int contributes coord * stride.
   ## Assumes that coord, shape and stride are pre-wrapped via makeIntTuple
   ## crd2idx propages constness
-  foldZipWith(coord, stride, Int[0]()):
+
+  evalOnceAs(P, makeIntTuple(coord))
+  evalOnceAs(D, makeIntTuple(stride))
+  foldZipWith(P, D, Int[0]()):
     acc + (when it_a is X: Int[0]() else: it_a * it_b)
 
 template foldDim*(co, sh, st: typed; i: static int): auto =
@@ -50,15 +54,12 @@ template foldDim*(co, sh, st: typed; i: static int): auto =
 # 3-arg: int coord → decompose across modes
 template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape modes with strides.
-  ## Assumes that coord, shape and stride are pre-wrapped via makeIntTuple
-  ## crd2idx propages constness
-  type ShType = typeof(flatten(shape))
-  const R = rank(ShType)
-  when ShType is tuple and R > 1:
-    let fshape = flatten(shape)
-    let fstride = flatten(stride)
-    foldDim(coord, fshape, fstride, static(0))
+  evalOnceAs(S, flatten(makeIntTuple(shape)))
+  evalOnceAs(D, flatten(makeIntTuple(stride)))
+  evalOnceAs(P, makeIntTuple(coord))
+  const R = static(rank(S))
+  when S is tuple and R > 1:
+    foldDim(P, S, D, 0)
   else:
     # Single mode after flatten — no decomposition needed
-    let d = flatten(stride)
-    coord * d
+    P * D

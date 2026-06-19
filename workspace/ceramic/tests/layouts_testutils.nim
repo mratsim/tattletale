@@ -11,6 +11,5 @@ template check*(got: untyped; expected: typed; expectedType: typedesc): untyped 
     when TmpType is expectedType:
       doAssert tmp === expected
     else:
-      static:
-        doAssert false, "[ttt] Please check constant-folding: type is " &
-          $TmpType & ", expected " & $expectedType
+      {.error: "[ttt] Please check constant-folding: type is " &
+          $TmpType & ", expected " & $expectedType.}

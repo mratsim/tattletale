@@ -210,17 +210,13 @@ template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
     make_view(tv.data +% off.toIntVal(), sub)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  repeatX — tuple of X markers for partition selectors
+#  repeatTuple
 # ═════════════════════════════════════════════════════════════════════════
 
-template repeatX*(n: static int): untyped =
-  ## Produce a tuple of `n` `X` markers for slice coord selectors.
-  when n == 0: ()
-  elif n == 1: (X,)
-  elif n == 2: (X, X)
-  elif n == 3: (X, X, X)
-  elif n == 4: (X, X, X, X)
-  else: static: error "repeatX: unhandled rank " & $n
+macro repeat(elem: typed, n: static int): untyped =
+  result = nnkTupleConstr.newTree()
+  for i in 0 ..< n:
+    result.add elem
 
 # ═════════════════════════════════════════════════════════════════════════
 #  inner_partition / outer_partition / local_tile
@@ -233,7 +229,7 @@ template inner_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed):
   block:
     evalOnceAs(zd, zipped_divide(tv.layout, tiler))
     const R0 = rank(tiler)
-    let sel = (repeatX(R0), coord)
+    let sel = (repeat(X, R0), coord)
     evalOnceAs(sub, slice(zd, sel))
     evalOnceAs(off, crd2idx(zd, sel))
     make_view(tv.data +% toIntVal(off), sub)
@@ -244,7 +240,7 @@ template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed):
   block:
     evalOnceAs(zd, zipped_divide(tv.layout, tiler))
     const R1 = rank(tiler)
-    let sel = (coord, repeatX(R1))
+    let sel = (coord, repeat(X, R1))
     evalOnceAs(sub, slice(zd, sel))
     evalOnceAs(off, crd2idx(zd, sel))
     make_view(tv.data +% toIntVal(off), sub)
@@ -265,8 +261,7 @@ func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto 
   let off = crd2idx(t.layout, coord)
   let ns = zipLeavesWith(t.layout.shape, coord):
     it_a - it_b
-  make_view(t.data +% off,
-            make_layout(ns, t.layout.stride))
+  make_view(t.data +% off, make_layout(ns, t.layout.stride))
 
 func displace*[T, Sh, St](t: Tensor[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
   ## Offset Tensor by `coord` (logical coords). Returns a sub-view whose shape is

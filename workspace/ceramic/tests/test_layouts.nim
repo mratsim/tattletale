@@ -21,7 +21,7 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts {.all.}
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_indexing {.all.}
-import workspace/ceramic/tests/testutils
+import workspace/ceramic/tests/layouts_testutils
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout — shape + stride, const correctness, stride order

@@ -8,7 +8,7 @@ import ../src/layout_indexing_cpu
 import ../src/layout_indexing_gpu
 import ../src/layout_indexing
 import std/typetraits
-import testutils
+import ./layouts_testutils
 
 {.experimental: "callOperator".}
 
@@ -268,9 +268,9 @@ echo "    dice on Layout: 4 cases OK"
 
 block:
   let l = make_layout(8, 1)
-  check crd2idx(l, 0), 0, int
-  check crd2idx(l, 3), 3, int
-  check crd2idx(l, 7), 7, int
+  check crd2idx(l, 0), 0, Int
+  check crd2idx(l, 3), 3, Int
+  check crd2idx(l, 7), 7, Int
 block:
   let l = make_layout((4, 8), (1, 4))
   check crd2idx(l, 0), 0, Int
