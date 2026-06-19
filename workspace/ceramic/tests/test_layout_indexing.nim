@@ -17,41 +17,38 @@ import testutils
 # ═══════════════════════════════════════════════════════════════
 
 block:
-  doAssert crd2idx(5, 10) == 5
-  doAssert crd2idx(3, 5, 2) == 6
+  check crd2idx(5, 10), 5, int
+  check crd2idx(3, 5, 2), 6, int
 
 # ═══════════════════════════════════════════════════════════════
 #  crd2idx — tuple coord → inner product
 # ═══════════════════════════════════════════════════════════════
 
 block:
-  # From test_layouts.nim: crd2idx with (coord, shape, stride)
-  doAssert crd2idx(5, (3, 4), (2, 8)) == 12  # 5 = (1,1): (1*2 + 1*8) wrong... let me think
-  # Actually 5 as int coord decomposed over (3,4),(2,8):
-  #   5 mod 3 = 2, 5 div 3 = 1
-  #   2*2 + 1*8 = 4 + 8 = 12 ✓
-  doAssert crd2idx(0, (3, 4), (2, 8)) == 0
-  doAssert crd2idx(3, (3, 4), (2, 8)) == 8
+  # Scalar coord decomposed over shape/stride
+  check crd2idx(5, (3, 4), (2, 8)), 12, Int
+  check crd2idx(0, (3, 4), (2, 8)), 0, Int
+  check crd2idx(3, (3, 4), (2, 8)), 8, Int
   # Tuple coord
-  doAssert crd2idx((2, 2), (3, 4), (2, 8)) == 20
-  doAssert crd2idx((1, 3), (3, 4), (2, 8)) == 26
-  doAssert crd2idx((3, 4), (3, 4), (2, 8)) == 38
+  check crd2idx((2, 2), (3, 4), (2, 8)), 20, Int
+  check crd2idx((1, 3), (3, 4), (2, 8)), 26, Int
+  check crd2idx((3, 4), (3, 4), (2, 8)), 38, Int
 
 block:
   # 3D
-  doAssert crd2idx((1, 2, 3), (3, 4, 5), (1, 3, 12)) == 43
+  check crd2idx((1, 2, 3), (3, 4, 5), (1, 3, 12)), 43, Int
 
 block:
   # Negative strides
-  doAssert crd2idx((2, 1), (4, 8), (-1, -4)) == -6
+  check crd2idx((2, 1), (4, 8), (-1, -4)), -6, Int
 
 block:
   # Dynamic strides (runtime value, not compile-time Int)
   let st = (1, 3)
-  doAssert crd2idx((1, 2), (3, 4), st) == 7
+  check crd2idx((1, 2), (3, 4), st), 7, int
   let st2 = (1, 3)
-  doAssert crd2idx((2, 3), (3, 4), st2) == 11
-  doAssert crd2idx((3, 4), (3, 4), st2) == 15
+  check crd2idx((2, 3), (3, 4), st2), 11, int
+  check crd2idx((3, 4), (3, 4), st2), 15, int
 
 echo "  [OK] crd2idx: tuple coord (6 cases)"
 
@@ -276,8 +273,8 @@ block:
   check crd2idx(l, 7), 7, int
 block:
   let l = make_layout((4, 8), (1, 4))
-  check crd2idx(l, 0), 0, int
-  check crd2idx(l, 10), 10, int
+  check crd2idx(l, 0), 0, Int
+  check crd2idx(l, 10), 10, Int
 echo "    layout(): 2 checks OK"
 
 # ═══════════════════════════════════════════════════════════════

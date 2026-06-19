@@ -36,31 +36,30 @@ func crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): int = coor
 # 3-arg: tuple coord (int or X) × tuple stride → inner product
 template crd2idx*[Sh, St: tuple](coord: typed; shape: Sh; stride: St): auto =
   ## Mixed coord: X contributes 0, int contributes coord * stride.
-  ## Wrap coord via makeIntTuple so compile-time ints become Int[N]
-  ## and stay in the Int[V] * Int[U] (→ Int[VU]) operator space.
-  foldZipWith(makeIntTuple(coord), stride, Int[0]()):
+  ## Wrap coord and stride via makeIntTuple so compile-time ints
+  ## become Int[N] and stay in the Int[V] * Int[U] (→ Int[VU])
+  ## operator space.
+  foldZipWith(makeIntTuple(coord), makeIntTuple(stride), Int[0]()):
     acc + (when it_a is X: Int[0]() else: it_a * it_b)
 
-# 3-arg: int coord → decompose across modes
-func crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto {.inline, noInit.} =
-  ## Decompose coord across shape modes with strides.
-  ## Sequential: result += (cur mod s) * d; cur = cur div s
-  ## Flatten shape/stride first (no-op if already flat) to handle nesting.
-  type ShType = typeof(flatten(shape))
-  when ShType is tuple:
-    var sum = 0
-    var cur = int(coord)
-    let fshape = flatten(shape)
-    let fstride = flatten(stride)
-    staticFor i, 0, rank(ShType):
-      let s = fshape[i].toIntVal()
-      let d = fstride[i].toIntVal()
-      when i < rank(ShType) - 1:
-        sum += (cur mod s) * d
-      else:
-        sum += cur * d
-      cur = cur div s
-    sum
+template foldDim*(co, sh, st: typed; i: static int): auto =
+  when i == rank(sh) - 1:
+    co * st[i]
   else:
-    # Scalar after flatten — single mode
-    int(coord) * flatten(stride).toIntVal()
+    (co mod sh[i]) * st[i] + foldDim(co div sh[i], sh, st, i + 1)
+
+# 3-arg: int coord → decompose across modes
+template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
+  ## Decompose coord across shape modes with strides.
+  ## Recursive expression-fold (no var) so Int[N] propagates.
+  ## Wrap in makeIntTuple so plain int literals become Int[N].
+  type ShType = typeof(flatten(shape))
+  const R = rank(ShType)
+  when ShType is tuple and R > 1:
+    let fshape = flatten(makeIntTuple(shape))
+    let fstride = flatten(makeIntTuple(stride))
+    foldDim(makeIntTuple(coord), fshape, fstride, static(0))
+  else:
+    # Single mode after flatten — no decomposition needed
+    let sv = flatten(makeIntTuple(stride))
+    int(coord) * toIntVal(sv)
