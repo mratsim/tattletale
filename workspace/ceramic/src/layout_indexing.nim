@@ -106,24 +106,20 @@ template filterDice(selector: typed; target: tuple): auto =
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout: dimensions marked with X / _ are kept.
-  make_layout(
-    filterSlice(varargs_to_par(selectors), target.shape),
-    filterSlice(varargs_to_par(selectors), target.stride))
+  block:
+    evalOnceAs(t, target)
+    make_layout(
+      filterSlice(varargs_to_par(selectors), t.shape),
+      filterSlice(varargs_to_par(selectors), t.stride))
 
 template dice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout: dimensions marked with Y are kept.
-  make_layout(
-    filterDice(varargs_to_par(selectors), target.shape),
-    filterDice(varargs_to_par(selectors), target.stride))
-
-template slice_and_offset*(target: Layout; coord: typed): untyped =
-  ## Layout slice + offset: (sub_layout, base_offset).
-  ## `coord` mixes _ (free dims) and ints (fixed dims).
-  ## Returns (sub_layout, base_offset).
   block:
     evalOnceAs(t, target)
-    evalOnceAs(c, coord)
-    (slice(t, c), crd2idx(t, c))
+    make_layout(
+      filterDice(varargs_to_par(selectors), t.shape),
+      filterDice(varargs_to_par(selectors), t.stride))
+
 
 # ═══════════════════════════════════════════════════════════════
 #  layout() call syntax

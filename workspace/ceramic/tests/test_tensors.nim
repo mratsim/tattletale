@@ -143,8 +143,8 @@ proc runFlatIndexTests =
     for i in 0 ..< 12: buf[i] = i.float32
     let v = make_view(addr(buf[0]), L)
     for i in 0 ..< 12:
-      let coord = idx2crd(L, i)
-      doAssert v(i) == v[coord], "t(" & $i & ") should equal t(" & $coord & ")"
+      let (c0, c1) = idx2crd(L, i)
+      doAssert v(i) == v[c0, c1], "t(" & $i & ") should equal t(" & $(c0,c1) & ")"
   block:  # t(flat_idx) always equals multi-index that idx2crd produces
     # Python: test_single_index_flat_eval
     let lay = make_layout((4, 8), (1, 4))
