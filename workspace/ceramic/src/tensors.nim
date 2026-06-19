@@ -202,7 +202,7 @@ template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
     evalOnceAs(lyt, tv.layout)
     evalOnceAs(sub, slice(lyt, coord))
     evalOnceAs(off, crd2idx(lyt, coord))
-    make_view(tv.data +% toIntVal(off), sub())
+    make_view(tv.data +% toIntVal(off), sub)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  repeatX — tuple of X markers for partition selectors

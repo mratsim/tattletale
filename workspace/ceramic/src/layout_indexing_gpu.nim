@@ -62,4 +62,4 @@ template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St)
   else:
     # Single mode after flatten — no decomposition needed
     let sv = flatten(makeIntTuple(stride))
-    int(coord) * toIntVal(sv)
+    coord * v

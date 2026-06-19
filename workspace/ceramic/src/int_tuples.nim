@@ -28,13 +28,13 @@ export int_tuples_zips
 
 #  Leaf procs — dispatch on exact type
 
-template makeIntTupleLeaf(leaf: int): int =
+template makeIntTupleLeaf*(leaf: int): int =
   leaf
 
-template makeIntTupleLeaf(leaf: static int): auto =
+template makeIntTupleLeaf*(leaf: static int): auto =
   Int[leaf]()
 
-template makeIntTupleLeaf[V: static int](x: Int[V]): Int[V] =
+template makeIntTupleLeaf*[V: static int](x: Int[V]): Int[V] =
   x
 
 template makeIntTuple*(t: IntOrIntTuple): auto =
@@ -43,7 +43,6 @@ template makeIntTuple*(t: IntOrIntTuple): auto =
     let t = makeIntTuple((3, 4))
     doAssert t is (Int[3], Int[4])
 
-  bind makeIntTupleLeaf
   mapLeavesWith(t):
     makeIntTupleLeaf(it)
 

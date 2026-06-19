@@ -90,7 +90,7 @@ type
 const _* = X()  ## value-level marker for free/slice dimensions
 
 # makeIntTupleLeaf overload: pass X markers through unchanged
-template makeIntTupleLeaf(leaf: X): X = leaf
+template makeIntTupleLeaf*(leaf: X): X = leaf
 
 template filterSlice(selector: typed; target: tuple): auto =
   filterZipWith(selector, target):
