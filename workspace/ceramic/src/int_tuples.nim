@@ -43,8 +43,8 @@ template makeIntTuple*(t: IntOrIntTuple): auto =
     let t = makeIntTuple((3, 4))
     doAssert t is (Int[3], Int[4])
 
-  mapLeavesWith(t):
-    makeIntTupleLeaf(it)
+  mixin makeIntTupleLeaf # Keep symbol open for X / Y markers defined in layout_indexing
+  mapLeavesWith(t, makeIntTupleLeaf(it))
 
 # ═══════════════════════════════════════════════════════════════
 #  Maps

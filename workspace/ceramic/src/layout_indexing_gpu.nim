@@ -34,12 +34,11 @@ func crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): int = coor
 # ═══════════════════════════════════════════════════════════════
 
 # 3-arg: tuple coord (int or X) × tuple stride → inner product
-template crd2idx*[Sh, St: tuple](coord: typed; shape: Sh; stride: St): auto =
+template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
   ## Mixed coord: X contributes 0, int contributes coord * stride.
-  ## Wrap coord and stride via makeIntTuple so compile-time ints
-  ## become Int[N] and stay in the Int[V] * Int[U] (→ Int[VU])
-  ## operator space.
-  foldZipWith(makeIntTuple(coord), makeIntTuple(stride), Int[0]()):
+  ## Assumes that coord, shape and stride are pre-wrapped via makeIntTuple
+  ## crd2idx propages constness
+  foldZipWith(coord, stride, Int[0]()):
     acc + (when it_a is X: Int[0]() else: it_a * it_b)
 
 template foldDim*(co, sh, st: typed; i: static int): auto =
@@ -51,15 +50,15 @@ template foldDim*(co, sh, st: typed; i: static int): auto =
 # 3-arg: int coord → decompose across modes
 template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape modes with strides.
-  ## Recursive expression-fold (no var) so Int[N] propagates.
-  ## Wrap in makeIntTuple so plain int literals become Int[N].
+  ## Assumes that coord, shape and stride are pre-wrapped via makeIntTuple
+  ## crd2idx propages constness
   type ShType = typeof(flatten(shape))
   const R = rank(ShType)
   when ShType is tuple and R > 1:
-    let fshape = flatten(makeIntTuple(shape))
-    let fstride = flatten(makeIntTuple(stride))
-    foldDim(makeIntTuple(coord), fshape, fstride, static(0))
+    let fshape = flatten(shape)
+    let fstride = flatten(stride)
+    foldDim(coord, fshape, fstride, static(0))
   else:
     # Single mode after flatten — no decomposition needed
-    let sv = flatten(makeIntTuple(stride))
-    coord * v
+    let d = flatten(stride)
+    coord * d

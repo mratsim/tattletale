@@ -22,6 +22,22 @@ import ./macros/varargs_to_par
 export layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
+#  Markers for slice and dice
+# ═══════════════════════════════════════════════════════════════
+
+type
+  X* = object  ## slice: keep this dimension, dice: drop this dimension
+  Y* = object  ## dice: keep this dimension, slice: drop this dimension
+
+const _* = X()  ## value-level marker for free/slice dimensions
+
+template makeIntTupleLeaf*(leaf: X): X =
+  leaf
+
+template mapLeavesWith*(singleton: X, body: untyped): X =
+  singleton
+
+# ═══════════════════════════════════════════════════════════════
 #  crd2idx / idx2crd — via layout_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
 #
@@ -39,7 +55,7 @@ template crd2idx*(layout: Layout; coord: IntOrIntTuple): auto =
   ## External code must use this (or `layout(coord)`) rather than
   ## calling the raw `crd2idx(coord, shape, stride)` directly,
   ## which is module-private to layouts.nim.
-  crd2idx(coord, layout.shape, layout.stride)
+  crd2idx(makeIntTuple(coord), layout.shape, layout.stride)
 
 macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
@@ -72,25 +88,9 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
         (if (when `shI` is Int: `shI` === Int[1]() else: `shI` == 1): 0 else: (`idx` div `s`) mod `shI`)
     result = nnkPar.newTree(parts)
 
-
 # ═══════════════════════════════════════════════════════════════
 #  Slice and dice — marker-based dimension selection
 # ═══════════════════════════════════════════════════════════════
-#
-#  Reference: CuTe C++ `layout.hpp` — `slice` / `dice`
-#
-#  The resulting Layout has the same nesting structure as the filtered
-#  shape/stride: modes paired with X / _ are kept for slice,
-#  modes paired with Y or ints are kept for dice.
-
-type
-  X* = object  ## slice: keep this dimension
-  Y* = object  ## dice: keep this dimension
-
-const _* = X()  ## value-level marker for free/slice dimensions
-
-# makeIntTupleLeaf overload: pass X markers through unchanged
-template makeIntTupleLeaf*(leaf: X): X = leaf
 
 template filterSlice(selector: typed; target: tuple): auto =
   filterZipWith(selector, target):

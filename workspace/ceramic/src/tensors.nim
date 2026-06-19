@@ -6,13 +6,18 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
+
+import ./macros/varargs_to_par
+import ./ptr_arithmetic
+
 import ./int_tuples
 import ./layouts
-import ./ptr_arithmetic
 import ./layout_indexing_gpu
 import ./layout_indexing
+
+export layout_indexing_gpu
 export layout_indexing
-import ./macros/varargs_to_par
+
 
 {.experimental: "callOperator".}
 
@@ -190,19 +195,19 @@ template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
 #  slice — subtensor via underscore dispatch
 # ═════════════════════════════════════════════════════════════════════════
 
-template slice*[T, Sh, St](t: Tensor[T, Sh, St]; coord: untyped): untyped =
+template slice*(t: Tensor; coord: untyped): untyped =
   block:
     evalOnceAs(lyt, t.layout)
     evalOnceAs(sub, slice(lyt, coord))
-    evalOnceAs(off, crd2idx(lyt, coord))
-    make_view(t.data +% t.offset +% off, sub)
+    let off = crd2idx(lyt, coord)
+    make_view(t.data[0].addr +% t.offset +% off.toIntVal(), sub)
 
 template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
   block:
     evalOnceAs(lyt, tv.layout)
     evalOnceAs(sub, slice(lyt, coord))
-    evalOnceAs(off, crd2idx(lyt, coord))
-    make_view(tv.data +% toIntVal(off), sub)
+    let off = crd2idx(lyt, coord)
+    make_view(tv.data +% off.toIntVal(), sub)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  repeatX — tuple of X markers for partition selectors

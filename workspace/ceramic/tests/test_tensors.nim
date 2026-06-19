@@ -307,6 +307,7 @@ proc runSliceTests =
     var buf = newSeq[float32](12)
     var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
     for i in 0 ..< 12: t(i) = i.float32
+    static: doAssert (1, _) is IntOrIntTuple
     let row1 = t.slice((1, _))
     doAssert row1.rank == 1
     doAssert row1.size === 4
