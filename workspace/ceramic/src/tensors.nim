@@ -9,7 +9,10 @@ import std/macros
 import ./int_tuples
 import ./layouts
 import ./ptr_arithmetic
+import ./layout_indexing_gpu
 import ./layout_indexing
+export layout_indexing
+import ./macros/varargs_to_par
 
 {.experimental: "callOperator".}
 
@@ -138,87 +141,93 @@ template cosize*(tv: TensorView): untyped = tv.layout.cosize()
 template cosize*(t: Tensor): untyped = t.layout.cosize()
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Flat indexing — single int via parens (macro enables call from templates)
+#  `()` — dual dispatch: all-int → element, has _ → sub-View
 # ═════════════════════════════════════════════════════════════════════════
 
 template `()`*(t: Tensor; args: varargs[untyped]): untyped =
-  static: echo "Tensor: ", astToStr(t)
-  when hasJoker(args):
-    t.slice(varargs_to_par(args))
+  let coord = varargs_to_par(args)
+  when hasUnderscoreImpl(coord):
+    let (sub, off) = slice_and_offset(t.layout, coord)
+    make_view(cast[ptr UncheckedArray[T]](addr(t.data[t.offset + off])), sub)
   else:
-    t.data[t.offset + crd2idx(t.layout, varargs_to_par(args))]
+    t.data[t.offset + crd2idx(t.layout, coord)]
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
-  static: echo "TensorView: ", astToStr(tv)
-  when hasJoker(args):
-    tv.slice(varargs_to_par(args))
+  let coord = varargs_to_par(args)
+  when hasUnderscoreImpl(coord):
+    let (sub, off) = slice_and_offset(tv.layout, coord)
+    make_view(tv.data +% toIntVal(off), sub)
   else:
-    tv.data[crd2idx(tv.layout, varargs_to_par(args))]
+    tv.data[crd2idx(tv.layout, coord)]
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Multi-index — operator[]
-#  Matches numpy/PyTorch: t[i, j] — varargs in brackets.
-#  Also accepts tuple coordinates: t[(i, j), (k, l)]
+#  `[]` — element access only (underscore rejected)
 # ═════════════════════════════════════════════════════════════════════════
 
 template `[]`*(t: Tensor; args: varargs[untyped]): untyped =
-  static: echo astToStr(t)
-  when hasJoker(args):
-    {.fatal: "Joker (_) not allowed in operator[] — use operator() for sub-Views".}
+  let coord = varargs_to_par(args)
+  when hasUnderscoreImpl(coord):
+    {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
   else:
-    t.data[t.offset + crd2idx(t.layout, varargs_to_par(args))]
+    t.data[t.offset + crd2idx(t.layout, coord)]
 
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
-  static: echo astToStr(tv)
-  when hasJoker(args):
-    {.fatal: "Joker (_) not allowed in operator[] — use operator() for sub-Views".}
+  let coord = varargs_to_par(args)
+  when hasUnderscoreImpl(coord):
+    {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
   else:
-    tv.data[crd2idx(tv.layout, varargs_to_par(args))]
+    tv.data[crd2idx(tv.layout, coord)]
 
 # ═════════════════════════════════════════════════════════════════════════
-#  slice — subtensor via Joker
+#  slice — subtensor via underscore dispatch
 # ═════════════════════════════════════════════════════════════════════════
-
 
 template slice*[T, Sh, St](t: Tensor[T, Sh, St]; coord: untyped): untyped =
-  ## Extract a sub-tensor positioned at the given coordinate.
-  ##
-  ## For each mode of the tensor's layout:
-  ##   - coord has `_` → keep that mode in the result
-  ##   - coord has int → collapse that mode (data pointer advances by int×stride)
-  ##
-  ## Internally calls `slice` on shape+stride and offsets the data pointer
-  ## by `crd2idx(layout, coord)`.
-  ##
-  ## runnableExamples:
-  ##   let t = make_tensor(make_layout((3, 4), (1, 3)), float32)
-  ##   let col1 = t.slice((_, 1))   # rows × column-1 → (3):(1)
-  ##   doAssert $col1.layout == "(3,):(1,)"
-  let off = crd2idx(t.layout, coord)
-  let sh = slice(coord, t.layout.shape)
-  let st = slice(coord, t.layout.stride)
-  make_view(cast[ptr UncheckedArray[T]](addr(t.data[t.offset + off])),
-            make_layout(sh, st))
+  let (sub, off) = slice_and_offset(t.layout, coord)
+  make_view(cast[ptr UncheckedArray[T]](addr(t.data[t.offset + off])), sub)
 
 template slice*[T, Sh, St](tv: TensorView[T, Sh, St]; coord: untyped): untyped =
-  ## Extract a sub-view positioned at the given coordinate.
-  ## Same semantics as Tensor.slice — offsets the data pointer by the
-  ## int-paired dimensions' contribution.
-  ##
-  ## runnableExamples:
-  ##   var buf: array[12, float32]
-  ##   let v = make_view(addr(buf[0]), make_layout((3, 4), (1, 3)))
-  ##   let col1 = v.slice((_, 1))   # rows × column-1 → (3):(1)
-  ##   doAssert $col1.layout == "(3,):(1,)"
-  let off = crd2idx(tv.layout, coord)
-  let sh = slice(coord, tv.layout.shape)
-  let st = slice(coord, tv.layout.stride)
-  make_view(tv.data +% off,
-            make_layout(sh, st))
+  let (sub, off) = slice_and_offset(tv.layout, coord)
+  make_view(tv.data +% toIntVal(off), sub)
 
+# ═════════════════════════════════════════════════════════════════════════
+#  repeatX — tuple of X markers for partition selectors
+# ═════════════════════════════════════════════════════════════════════════
 
+template repeatX*(n: static int): untyped =
+  ## Produce a tuple of `n` `X` markers for slice coord selectors.
+  when n == 0: ()
+  elif n == 1: (X,)
+  elif n == 2: (X, X)
+  elif n == 3: (X, X, X)
+  elif n == 4: (X, X, X, X)
+  else: static: error "repeatX: unhandled rank " & $n
 
+# ═════════════════════════════════════════════════════════════════════════
+#  inner_partition / outer_partition / local_tile
+#  CuTe: tensor_impl.hpp — zipped_divide + slice_and_offset
+# ═════════════════════════════════════════════════════════════════════════
 
+template inner_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
+  ## Keep tile modes, slice rest modes with coord.
+  ## CuTe: zipped_divide(tensor, tiler)(repeat<R0>(_), coord)
+  let zd = zipped_divide(tv.layout, tiler)
+  const R0 = rank(tiler)
+  let (sub, off) = slice_and_offset(zd, (repeatX(R0), coord))
+  make_view(tv.data +% off, sub)
+
+template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
+  ## Slice tile modes with coord, keep rest modes.
+  ## CuTe: zipped_divide(tensor, tiler)(coord, repeat<R1>(_))
+  let zd = zipped_divide(tv.layout, tiler)
+  const R1 = rank(tiler)
+  let (sub, off) = slice_and_offset(zd, (coord, repeatX(R1)))
+  make_view(tv.data +% off, sub)
+
+template local_tile*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
+  ## Alias for inner_partition — select a single tile.
+  ## CuTe: local_tile = inner_partition
+  inner_partition(tv, tiler, coord)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  displace — offset a Tensor/TensorView, return sub-view with auto-deduced shape
@@ -238,27 +247,6 @@ func displace*[T, Sh, St](t: Tensor[T, Sh, St]; coord: IntOrIntTuple): auto {.in
   ## Offset Tensor by `coord` (logical coords). Returns a sub-view whose shape is
   ## `original_shape - coord` (element-wise).
   displace(t.view(), coord)
-
-# ═════════════════════════════════════════════════════════════════════════
-#  inner_partition / outer_partition — BROKEN (uses deleted slice_and_offset)
-#  To fix: rewrite using zipped_divide + slice/dice + crd2idx directly
-# ═════════════════════════════════════════════════════════════════════════
-#
-#  These were TEMPLATE-level TensorView functions:
-#    inner_partition(tv, tiler, coord)  — keep tile, slice rest with coord
-#    outer_partition(tv, tiler, coord)  — slice tile with coord, keep rest
-#
-#  Both called slice_and_offset which was deleted with the old underscore API.
-#  CuTe C++ equivalent routes through Tensor::operator() → has_underscore → slice_and_offset.
-#  Our fix: work at zipped_divide layout level directly:
-#    inner_partition → slice(interspersed(_, coord), zd) + crd2idx(...)
-#    outer_partition → slice(interspersed(coord, _), zd) + crd2idx(...)
-
-#  Callers to fix later:
-#    - test_layout_operators.nim: inner_partition/outer_partition tests
-#    - ex01_matmul_cpu_serial.nim: local_tile calls
-#    - ex02a_matmul_handtuned.nim: local_tile calls
-#    - ex02b_matmul_layout_algebra.nim: local_tile calls
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Display

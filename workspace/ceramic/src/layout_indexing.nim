@@ -89,6 +89,9 @@ type
 
 const _* = X()  ## value-level marker for free/slice dimensions
 
+# makeIntTupleLeaf overload: pass X markers through unchanged
+template makeIntTupleLeaf(leaf: X): X = leaf
+
 template filterSlice(selector: typed; target: tuple): auto =
   filterZipWith(selector, target):
     (when it_a is X: (it_b,)
@@ -115,32 +118,37 @@ template dice*(target: Layout; selector: typed): untyped =
     filterDice(selector, target.shape),
     filterDice(selector, target.stride))
 
-template slice_and_offset*(coord: typed; target: Layout): untyped =
+template slice_and_offset*(target: Layout; coord: typed): untyped =
   ## Layout slice + offset: (sub_layout, base_offset).
   ## `coord` mixes _ (free dims) and ints (fixed dims).
   ## Returns (sub_layout, base_offset).
-  (slice(target, coord), crd2idx(coord, target.shape, target.stride))
+  block:
+    evalOnceAs(t, target)
+    evalOnceAs(c, coord)
+    (slice(t, c), crd2idx(t, c))
 
 # ═══════════════════════════════════════════════════════════════
 #  layout() call syntax
 # ═══════════════════════════════════════════════════════════════
 
-func hasUnderscoreImpl(coord: auto): bool =
+template hasUnderscoreImpl*(coord: typed): bool =
   when coord is tuple:
-    for c in fields(coord):
-      when c.hasUnderscore():
-        return true
-    return false
+    block:
+      var found = false
+      for c in fields(coord):
+        when c.hasUnderscore():
+          found = true
+      found
   elif coord is int:
-    return false
+    false
   elif coord is Int:
-    return false
+    false
   elif coord is X:
-    return true
+    true
   else:
     {.error: "[ttt] unsupported type: " & typeof(coord).}
 
-macro hasUnderscore(Cs: varargs[untyped]): bool =
+macro hasUnderscore*(Cs: varargs[untyped]): bool =
   let r = ident"r"
   result = newStmtList()
   result.add quote do:
@@ -162,6 +170,11 @@ template callImpl(layout: Layout; coord: typed): auto =
   else:
     crd2idx(layout, coord)
 
-template `()`*(layout: Layout; args: varargs[typed]): untyped =
+template `()`*(layout: Layout; args: varargs[typed]): auto =
   ## Multi-argument: `L(i, j)` ≡ `L((i, j))`.
-  callImpl(varargs_to_par(args))
+  block:
+    evalOnceAs(coord, varargs_to_par(args))
+    when hasUnderscoreImpl(coord):
+      slice(layout, coord)
+    else:
+      crd2idx(layout, coord)

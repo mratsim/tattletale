@@ -351,12 +351,12 @@ proc runEdgeCaseTests =
 
   block:  # slice_and_offset with single int
     let L = make_layout((4, 8), (1, 4))
-    let (sub, off) = slice_and_offset((2, X), L)
+    let (sub, off) = slice_and_offset(L, (2, X))
     doAssert off == 2
 
   block:  # slice_and_offset rank-3
     let L = make_layout((2, 3, 4), (1, 2, 6))
-    let (sub, off) = slice_and_offset((X, 1, X), L)
+    let (sub, off) = slice_and_offset(L, (X, 1, X))
     doAssert off == 2
     doAssert sub.rank == 2
     doAssert sub(1, 3) + off == L(1, 1, 3)
@@ -427,7 +427,7 @@ proc runPropertyTests =
   block:  # slice_and_offset round-trip
     let L = make_layout((4, 8), (1, 4))
     let col = 3
-    let (sub, off) = slice_and_offset((X, col), L)
+    let (sub, off) = slice_and_offset(L, (X, col))
     for i in 0 ..< 4:
       doAssert sub(i) + off == L((i, col))
   runProperty_roundtrip()
