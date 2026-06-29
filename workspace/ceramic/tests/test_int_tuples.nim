@@ -643,7 +643,30 @@ proc runFilterZipWithTests =
     const r = filterZipWith((X, Y), (3, 4)):
       (when it_a is X: ("val:" & $it_b,) else: ())
     doAssert r == ("val:3",)
-  echo "  filterZipWith: 25 cases OK"
+
+  # ── via const/type indirection ──
+  block:  # const values
+    const Vals = (10, 20, 30)
+    const r = filterZipWith((X, X, Y), Vals):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (10, 20)
+  block:  # type alias for markers
+    const Sel = (X(), Y())
+    const r = filterZipWith(Sel, (3, 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (3,)
+  block:  # const values + type markers
+    const MK = (X(), Y(), X())
+    const V = (1, 2, 3)
+    const r = filterZipWith(MK, V):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (1, 3)
+  block:  # type alias
+    type Sel = (X, Y)
+    const r = filterZipWith(Sel, (3, 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (3,)
+  echo "  filterZipWith: 29 cases OK"
 
 proc runTests* =
   echo "── Int tuples ──"

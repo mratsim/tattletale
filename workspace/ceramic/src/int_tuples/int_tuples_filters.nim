@@ -24,6 +24,31 @@ proc substIt(ast, aElem, bElem: NimNode): NimNode =
       result.add inspect(child)
   result = inspect(ast)
 
+func tupleType(n: NimNode): NimNode {.compileTime.} =
+  ## Resolve to the underlying TupleConstr node, handling values, consts,
+  ## and type aliases uniformly.
+  let t = n.getType()
+  let inner =
+    if t.kind == nnkBracketExpr and t[0].eqIdent("typeDesc"):
+      t[1]
+    else:
+      t
+  inner.getTypeImpl()
+
+func isTuple(n: NimNode): bool {.compileTime.} =
+  n.kind in {nnkTupleConstr, nnkPar} or n.tupleType().kind in {nnkTupleConstr, nnkTupleTy}
+
+func tupleTypeLen(n: NimNode): int {.compileTime.} =
+  n.tupleType().len
+
+func tupleElement(n: NimNode; i: int): NimNode {.compileTime.} =
+  ## For literal tuples return the raw AST child (value or type symbol),
+  ## for indirected tuples return the type symbol from the resolved type.
+  if n.kind in {nnkTupleConstr, nnkPar}:
+    n[i]
+  else:
+    n.tupleType()[i]
+
 macro filterZipWith*(a: typed; b: typed; body: untyped): untyped =
   ## Zip two tuples element-wise, apply `body` to each pair, and
   ## concatenate the kept elements into a flat result tuple.
@@ -43,19 +68,16 @@ macro filterZipWith*(a: typed; b: typed; body: untyped): untyped =
   ##   type Y = object
   ##   filterZipWith((X, Y), (10, 20)):
   ##     (when it_a is X: (it_b,) elif it_a is Y: (it_a,) else: ())
-  if a.kind in {nnkTupleConstr, nnkPar}:
-    let n = a.len
-    let bType = b.getTypeInst()
-    doAssert n == bType.len, "filterZipWith: rank mismatch (" & $n & " vs " & $bType.len & ")"
+  if a.isTuple():
+    let n = a.tupleTypeLen()
+    let bLen = b.tupleTypeLen()
+    doAssert n == bLen, "filterZipWith: rank mismatch (" & $n & " vs " & $bLen & ")"
     var parts: seq[NimNode] = @[]
     for i in 0 ..< n:
-      let subA = a[i]
-      let subB =
-        if b.kind in {nnkTupleConstr, nnkPar}:
-          b[i]
-        else:
-          nnkBracketExpr.newTree(b, newLit(i))
-      if subA.kind in {nnkTupleConstr, nnkPar}:
+      let subA = a.tupleElement(i)
+      let subB = if b.kind in {nnkTupleConstr, nnkPar}: b[i] else: nnkBracketExpr.newTree(b, newLit(i))
+      let subIsTuple = subA.isTuple()
+      if subIsTuple:
         parts.add newCall(bindSym"filterZipWith", subA, subB, body)
       else:
         parts.add substIt(body, subA, subB)
