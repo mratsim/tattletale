@@ -39,11 +39,11 @@ template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
   ## Mixed coord: X contributes 0, int contributes coord * stride.
   ## Assumes that coord, shape and stride are pre-wrapped via makeIntTuple
   ## crd2idx propages constness
-
-  evalOnceAs(P, makeIntTuple(coord))
-  evalOnceAs(D, makeIntTuple(stride))
-  foldZipWith(P, D, Int[0]()):
-    acc + (when it_a is X: Int[0]() else: it_a * it_b)
+  block:
+    evalOnceAs(P, makeIntTuple(coord))
+    evalOnceAs(D, makeIntTuple(stride))
+    foldZipWith(P(), D(), Int[0]()):
+      acc + (when it_a is X: Int[0]() else: it_a * it_b)
 
 template foldDim*(co, sh, st: typed; i: static int): auto =
   when i == rank(sh) - 1:
@@ -51,15 +51,15 @@ template foldDim*(co, sh, st: typed; i: static int): auto =
   else:
     (co mod sh[i]) * st[i] + foldDim(co div sh[i], sh, st, i + 1)
 
-# 3-arg: int coord → decompose across modes
 template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape modes with strides.
-  evalOnceAs(S, flatten(makeIntTuple(shape)))
-  evalOnceAs(D, flatten(makeIntTuple(stride)))
-  evalOnceAs(P, makeIntTuple(coord))
-  const R = static(rank(S))
-  when S is tuple and R > 1:
-    foldDim(P, S, D, 0)
-  else:
-    # Single mode after flatten — no decomposition needed
-    P * D
+  block:
+    evalOnceAs(S, flatten(makeIntTuple(shape)))
+    evalOnceAs(D, flatten(makeIntTuple(stride)))
+    evalOnceAs(P, makeIntTuple(coord))
+    const R = toIntVal rank(S)
+    when S is tuple and R > 1:
+      foldDim(P, S, D, 0)
+    else:
+      # Single mode after flatten — no decomposition needed
+      P * D

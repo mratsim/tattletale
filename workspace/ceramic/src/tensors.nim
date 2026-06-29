@@ -18,6 +18,11 @@ import ./layout_indexing
 export layout_indexing_gpu
 export layout_indexing
 
+proc pop(tree: var NimNode): NimNode {.compileTime.} =
+  ## varargs[untyped] consumes all arguments, so []= pops the val
+  ## https://github.com/nim-lang/Nim/issues/5855
+  result = tree[tree.len-1]
+  tree.del(tree.len-1)
 
 {.experimental: "callOperator".}
 
@@ -150,7 +155,7 @@ template cosize*(t: Tensor): untyped = t.layout.cosize()
 # ═════════════════════════════════════════════════════════════════════════
 
 template `()`*(t: Tensor; args: varargs[untyped]): untyped =
-  let coord = varargs_to_par(args)
+  evalOnceAs(coord, varargs_to_par(args))
   when hasUnderscoreImpl(coord):
     block:
       evalOnceAs(crd, coord)
@@ -161,7 +166,7 @@ template `()`*(t: Tensor; args: varargs[untyped]): untyped =
     t.data[t.offset + crd2idx(t.layout, coord)]
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
-  let coord = varargs_to_par(args)
+  evalOnceAs(coord, varargs_to_par(args))
   when hasUnderscoreImpl(coord):
     block:
       evalOnceAs(crd, coord)
@@ -176,18 +181,40 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
 # ═════════════════════════════════════════════════════════════════════════
 
 template `[]`*(t: Tensor; args: varargs[untyped]): untyped =
-  let coord = varargs_to_par(args)
-  when hasUnderscoreImpl(coord):
-    {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-  else:
-    t.data[t.offset + crd2idx(t.layout, coord)]
+  block:
+    evalOnceAs(coord, varargs_to_par(args))
+    when hasUnderscoreImpl(coord):
+      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+    else:
+      t.data[t.offset + crd2idx(t.layout, coord)]
+
+macro `[]=`*(t: Tensor; args: varargs[untyped]): untyped =
+  var a = args
+  let val = pop(a)
+  let coord = varargs_to_par(a)
+  result = quote do:
+    when hasUnderscoreImpl(`coord`):
+      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+    else:
+      `t`.data[`t`.offset + crd2idx(`t`.layout, `coord`)] = `val`
 
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
-  let coord = varargs_to_par(args)
-  when hasUnderscoreImpl(coord):
-    {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-  else:
-    tv.data[crd2idx(tv.layout, coord)]
+  block:
+    evalOnceAs(coord, varargs_to_par(args))
+    when hasUnderscoreImpl(coord):
+      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+    else:
+      tv.data[toIntVal crd2idx(tv.layout, coord)]
+
+macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
+  var a = args
+  let val = pop(a)
+  let coord = varargs_to_par(a)
+  result = quote do:
+    when hasUnderscoreImpl(`coord`):
+      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+    else:
+      `tv`.data[toIntVal crd2idx(`tv`.layout, `coord`)] = `val`
 
 # ═════════════════════════════════════════════════════════════════════════
 #  slice — subtensor via underscore dispatch
@@ -275,3 +302,4 @@ proc `$`*[T, Sh, St](t: Tensor[T, Sh, St]): string =
 
 proc `$`*[T, Sh, St](tv: TensorView[T, Sh, St]): string =
   "TensorView o (" & $tv.layout.shape & "):(" & $tv.layout.stride & ")"
+

@@ -107,7 +107,7 @@ template foldZipWith_recurse*(idx: static int; a, b: tuple; state: typed; body: 
 template foldZipWith*(a, b: typed; startingAcc: typed; body: untyped): auto =
   ## Fold over paired leaves of a and b.
   ## Injects `acc`, `it_a`, `it_b`.
-  when a is tuple and b is tuple:
+  when typeof(a) is tuple and typeof(b) is tuple:
     foldZipWith_recurse(0, a, b, startingAcc, body)
   else:
     block:
