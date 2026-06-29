@@ -25,25 +25,24 @@ template crd2idx*(coord, shape: int): int = coord
 template crd2idx*[V: static int](coord: Int[V]; shape: int): Int[V] = V
 template crd2idx*(coord, shape, stride: int): int = coord * stride
 template crd2idx*[V: static int](coord: Int[V]; shape, stride: int): int = coord * stride
-template crd2idx*[V, U: static int](coord: int; shape: Int[V]; stride: Int[U]): int = coord * stride
-template crd2idx*[V: static int](coord: int; shape: Int[V]; stride: int): int = coord * stride
-template crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): int = coord * stride
+template crd2idx*[V, U: static int](coord: int; shape: Int[V]; stride: Int[U]): auto = coord * stride
+template crd2idx*[V: static int](coord: int; shape: Int[V]; stride: int): auto = coord * stride
+template crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): auto = coord * stride
 template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int[W]): auto = coord * stride
 
 # ═══════════════════════════════════════════════════════════════
 #  Tuple overloads
 # ═══════════════════════════════════════════════════════════════
 
-# 3-arg: tuple coord (int or X) × tuple stride → inner product
 template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
-  ## Mixed coord: X contributes 0, int contributes coord * stride.
-  ## Assumes that coord, shape and stride are pre-wrapped via makeIntTuple
-  ## crd2idx propages constness
+  ## Inner product: sum coord[i] * stride[i]
+  ## X markers contribute 0 via operator overloads.
+  ## makeIntTuple wraps static ints as Int[V] for compile-time constant folding.
   block:
     evalOnceAs(P, makeIntTuple(coord))
     evalOnceAs(D, makeIntTuple(stride))
     foldZipWith(P(), D(), Int[0]()):
-      acc + (when it_a is X: Int[0]() else: it_a * it_b)
+      acc + it_a * it_b
 
 template foldDim*(co, sh, st: typed; i: static int): auto =
   when i == rank(sh) - 1:
@@ -57,7 +56,7 @@ template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St)
     evalOnceAs(S, flatten(makeIntTuple(shape)))
     evalOnceAs(D, flatten(makeIntTuple(stride)))
     evalOnceAs(P, makeIntTuple(coord))
-    const R = toIntVal rank(S)
+    const R = int rank(S)
     when S is tuple and R > 1:
       foldDim(P, S, D, 0)
     else:

@@ -31,6 +31,14 @@ type
 
 const _* = X()  ## value-level marker for free/slice dimensions
 
+# X marker arithmetic: X contributes 0 in inner products
+# X*Int[V] returns Int[0] (not plain int) so compile-time constant folding
+# preserves the Int type system. X*int is plain int for runtime values.
+template `*`*(c: X; s: int): Int[0] = Int[0]()
+template `*`*[V: static int](c: X; s: Int[V]): Int[0] = Int[0]()
+template `*`*(s: int; c: X): Int[0] = Int[0]()
+template `*`*[V: static int](s: Int[V]; c: X): Int[0] = Int[0]()
+
 template makeIntTupleLeaf*(leaf: X): X =
   leaf
 

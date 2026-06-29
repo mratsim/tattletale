@@ -20,8 +20,8 @@ type Int*[V: static int] = object
 type IntOrIntTuple* = int | Int | tuple
   ## Shape/stride element type alias for convenience.
 
-func toIntVal*(x: int): int = x
-func toIntVal*[V: static int](x: Int[V]): int = V
+template toIntVal*(x: int): int = x
+template toIntVal*[V: static int](x: Int[V]): int = V
 
 func `$`*[V: static int](x: Int[V]): static string = "Int[" & $V & "]"
 
@@ -108,11 +108,11 @@ func abs*[V: static int](x: Int[V]): Int[abs(V)] = Int[abs(V)]()
 func sign*[V: static int](x: Int[V]): Int[if V > 0: 1 elif V < 0: -1 else: 0] = discard
 
 template genBinOp(op: untyped): untyped =
-  func op*[V, U: static int](a: Int[V]; b: Int[U]): Int[op(V, U)] = Int[op(V, U)]()
-  func op*[V: static int](a: Int[V]; b: static int): Int[op(V, b)] = Int[op(V, b)]()
-  func op*[V: static int](a: static int; b: Int[V]): Int[op(a, V)] = Int[op(a, V)]()
-  func op*[V: static int](a: Int[V]; b: int): int = op(V, b)
-  func op*[V: static int](a: int; b: Int[V]): int = op(a, V)
+  func op*[V, U: static int](a: Int[V]; b: Int[U]): Int[op(V, U)] {.inline.} = Int[op(V, U)]()
+  func op*[V: static int](a: Int[V]; b: static int): Int[op(V, b)] {.inline.} = Int[op(V, b)]()
+  func op*[V: static int](a: static int; b: Int[V]): Int[op(a, V)] {.inline.} = Int[op(a, V)]()
+  template op*[V: static int](a: Int[V]; b: int): int = op(V, b)
+  template op*[V: static int](a: int; b: Int[V]): int = op(a, V)
 
 genBinOp(`+`)
 genBinOp(`-`)
