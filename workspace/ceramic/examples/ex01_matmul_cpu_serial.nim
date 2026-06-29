@@ -254,9 +254,6 @@ proc gemm_strided*[T: SomeNumber](
   let srcB_zd = zipped_divide(panelB_lay, (1, nr))
   let dstB_zd = pack_layout(srcB_zd, transposed = false)
 
-  let pA = tiled_divide(vA.layout, (mc, kc))
-  let pB = tiled_divide(vB.layout, (kc, nc))
-
   # ═══════════════════════════════════════════════════════════════════════
   #  Loop 5 (jc):  Column-panel loop over N
   #                (not partitioned — nc = N for now)
@@ -281,7 +278,7 @@ proc gemm_strided*[T: SomeNumber](
     #
 
     for jc in 0 ..< 1:      # placeholder: single jc panel (nc = N)
-      let panelB = local_tile(vB, pB, pc, jc)
+      let panelB = local_tile(vB, (kc, nc), (pc, jc))
 
       if last_k:
         # Edge: kc dimension is smaller than full kc
@@ -310,7 +307,7 @@ proc gemm_strided*[T: SomeNumber](
           else:
             num_ir
 
-        let panelA = local_tile(vA, pA, ic, pc)
+        let panelA = local_tile(vA, (mc, kc), (ic, pc))
 
         # ── Pack block A[mc × kc] into contiguous pack buffer ──
         #  (keeps A block in L2 cache)

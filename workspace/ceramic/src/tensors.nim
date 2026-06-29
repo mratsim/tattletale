@@ -193,17 +193,18 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
 # ═════════════════════════════════════════════════════════════════════════
 
 template `[]`*(t: Tensor; args: varargs[untyped]): untyped =
-  block:
+  let pos = block:
     evalOnceAs(coord, varargs_to_par(args))
     when hasUnderscoreImpl(coord):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-    else:
-      t.data[t.offset + crd2idx(t.layout, coord)]
+    toIntVal crd2idx(t.layout, coord)
+  t.data[t.offset + pos]
 
 macro `[]=`*(t: Tensor; args: varargs[untyped]): untyped =
   var a = args
   let val = pop(a)
-  let coord = varargs_to_par(a)
+  # getAST evaluates varargs_to_par at compile-time with `a`'s actual NimNode value
+  let coord = getAST(varargs_to_par(a))
   result = quote do:
     when hasUnderscoreImpl(`coord`):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
@@ -211,17 +212,17 @@ macro `[]=`*(t: Tensor; args: varargs[untyped]): untyped =
       `t`.data[`t`.offset + crd2idx(`t`.layout, `coord`)] = `val`
 
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
-  block:
+  let pos = block:
     evalOnceAs(coord, varargs_to_par(args))
     when hasUnderscoreImpl(coord):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-    else:
-      tv.data[toIntVal crd2idx(tv.layout, coord)]
+    toIntVal crd2idx(tv.layout, coord)
+  tv.data[pos]
 
 macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
   var a = args
   let val = pop(a)
-  let coord = varargs_to_par(a)
+  let coord = getAST(varargs_to_par(a))
   result = quote do:
     when hasUnderscoreImpl(`coord`):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
@@ -285,16 +286,6 @@ template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed):
     evalOnceAs(offset, crd2idx(coord, zd.shape[0], zd.stride[0]))  # flat offset into tile
     make_view(tv.data +% toIntVal(offset), sub)
 
-template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
-  ## Slice tile modes with coord, keep rest modes.
-  ## CuTe: zipped_divide(tensor, tiler)(coord, repeat<R1>(_))
-  block:
-    evalOnceAs(zd, zipped_divide(tv.layout, tiler))
-    const R = int(rank(tiler))
-    let sel = (coord, repeat(_, R))
-    evalOnceAs(sub, slice(zd, sel))
-    evalOnceAs(offset, crd2idx(coord, zd.shape[0], zd.stride[0]))
-    make_view(tv.data +% toIntVal(offset), sub)
 
 template local_tile*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Alias for inner_partition — select a single tile.
