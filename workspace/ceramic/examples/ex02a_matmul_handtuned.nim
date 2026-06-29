@@ -280,7 +280,7 @@ proc gemm_strided*[T: SomeNumber](
     let effective_beta = if pc == 0: beta else: T(1)
 
     for jc in 0 ..< 1:
-      let panelB = local_tile(vB, pB, pc, jc)
+      let panelB = local_tile(vB, (kc, nc), (pc, jc))
       let pB_ptr = cast[ptr UncheckedArray[T]](panelB.data)
       let pB_rs = panelB.layout.stride[0]  # row stride of panel
       let pB_cs = panelB.layout.stride[1]  # col stride of panel
@@ -311,7 +311,7 @@ proc gemm_strided*[T: SomeNumber](
         let num_ir_eff = if last_m: ceil_div(current_mc, mr)
                          else: num_ir
 
-        let panelA = local_tile(vA, pA, ic, pc)
+        let panelA = local_tile(vA, (mc, kc), (ic, pc))
 
         let pA_ptr = cast[ptr UncheckedArray[T]](panelA.data)
         let pA_rs = panelA.layout.stride[0]

@@ -229,9 +229,6 @@ proc gemm_strided*[T: SomeNumber](
   let srcB_zd = zipped_divide(panelB_lay, (1, nr))
   let dstB_zd = pack_layout(srcB_zd, transposed = false)
 
-  let pA = tiled_divide(vA.layout, (mc, kc))
-  let pB = tiled_divide(vB.layout, (kc, nc))
-
   # ── Loop 4 (pc): rank-k updates ──
   for pc in 0 ..< num_pc:
     let current_kc = min(K - pc * kc, kc)
@@ -240,7 +237,7 @@ proc gemm_strided*[T: SomeNumber](
     let effective_beta = if pc == 0: beta else: T(1)
 
     for jc in 0 ..< 1:
-      let panelB = local_tile(vB, pB, pc, jc)
+      let panelB = local_tile(vB, (kc, nc), (pc, jc))
 
       let srcB_edge = make_view(panelB, ((1, nr), (current_kc, num_jr)), srcB_zd.stride)
       var dstB_edge = make_view(packB,  ((1, nr), (current_kc, num_jr)), dstB_zd.stride)
@@ -255,7 +252,7 @@ proc gemm_strided*[T: SomeNumber](
         let last_m = (current_mc < mc)
         let num_ir_eff = if last_m: ceil_div(current_mc, mr) else: num_ir
 
-        let panelA = local_tile(vA, pA, ic, pc)
+        let panelA = local_tile(vA, (mc, kc), (ic, pc))
 
         if last_m or last_k:
           let mr_eff = min(mr, current_mc)
