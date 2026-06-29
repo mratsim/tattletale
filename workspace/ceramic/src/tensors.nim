@@ -155,26 +155,38 @@ template cosize*(t: Tensor): untyped = t.layout.cosize()
 # ═════════════════════════════════════════════════════════════════════════
 
 template `()`*(t: Tensor; args: varargs[untyped]): untyped =
-  evalOnceAs(coord, varargs_to_par(args))
-  when hasUnderscoreImpl(coord):
+  when hasUnderscore(args):
     block:
-      evalOnceAs(crd, coord)
-      evalOnceAs(sub, slice(t.layout, crd))
-      evalOnceAs(off, crd2idx(t.layout, crd))
-      make_view(t.data +% t.offset +% off, sub)
+      evalOnceAs(coord, varargs_to_par(args))
+      evalOnceAs(sub, slice(t.layout, coord))
+      evalOnceAs(offset, crd2idx(t.layout, coord))
+      make_view(t.data[0].addr +% t.offset +% toIntVal(offset), sub)
   else:
-    t.data[t.offset + crd2idx(t.layout, coord)]
+    # We can't wrap the whole expression into a block or it isn't a lvalue
+    # and so can't be assigned to.
+    # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
+    {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
+    let pos = block:
+      evalOnceAs(coord, varargs_to_par(args))
+      t.offset + crd2idx(t.layout, coord)
+    t.data[pos]
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
-  evalOnceAs(coord, varargs_to_par(args))
-  when hasUnderscoreImpl(coord):
+  when hasUnderscore(args):
     block:
-      evalOnceAs(crd, coord)
-      evalOnceAs(sub, slice(tv.layout, crd))
-      evalOnceAs(off, crd2idx(tv.layout, crd))
-      make_view(tv.data +% toIntVal(off), sub)
+      evalOnceAs(coord, varargs_to_par(args))
+      evalOnceAs(sub, slice(tv.layout, coord))
+      evalOnceAs(offset, crd2idx(tv.layout, coord))
+      make_view(tv.data +% toIntVal(offset), sub)
   else:
-    tv.data[crd2idx(tv.layout, coord)]
+    # We can't wrap the whole expression into a block or it isn't a lvalue
+    # and so can't be assigned to.
+    # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
+    {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
+    let pos = block:
+      evalOnceAs(coord, varargs_to_par(args))
+      crd2idx(tv.layout, coord)
+    tv.data[toIntVal pos]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  `[]` — element access only (underscore rejected)
@@ -256,8 +268,8 @@ template inner_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed):
     const R0 = rank(tiler)
     let sel = (repeat(X, R0), coord)
     evalOnceAs(sub, slice(zd, sel))
-    evalOnceAs(off, crd2idx(zd, sel))
-    make_view(tv.data +% toIntVal(off), sub)
+    evalOnceAs(offset, crd2idx(zd, sel))
+    make_view(tv.data +% toIntVal(offset), sub)
 
 template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Slice tile modes with coord, keep rest modes.
@@ -267,8 +279,8 @@ template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed):
     const R1 = rank(tiler)
     let sel = (coord, repeat(X, R1))
     evalOnceAs(sub, slice(zd, sel))
-    evalOnceAs(off, crd2idx(zd, sel))
-    make_view(tv.data +% toIntVal(off), sub)
+    evalOnceAs(offset, crd2idx(zd, sel))
+    make_view(tv.data +% toIntVal(offset), sub)
 
 template local_tile*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Alias for inner_partition — select a single tile.
@@ -302,4 +314,3 @@ proc `$`*[T, Sh, St](t: Tensor[T, Sh, St]): string =
 
 proc `$`*[T, Sh, St](tv: TensorView[T, Sh, St]): string =
   "TensorView o (" & $tv.layout.shape & "):(" & $tv.layout.stride & ")"
-
