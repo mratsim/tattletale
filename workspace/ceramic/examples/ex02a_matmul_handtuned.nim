@@ -57,44 +57,10 @@ template genEpilogue*(epilogueName: untyped; activationBody: untyped): untyped =
           let x {.inject.} = AB[i][j]
           C[i, j] += alpha * activationBody
 
-template genEpilogue_raw*(epilogueName: untyped; activationBody: untyped): untyped =
-  ## Generate an epilogue proc taking raw pointer + strides.
-  ## Inside `activationBody`, use `x` for the AB accumulator value.
-  proc `epilogueName`[T; MR, NR: static int](
-      C: ptr UncheckedArray[T];
-      AB: array[MR, array[NR, T]];
-      mr, nr: int;
-      alpha, beta: T;
-      rsC, csC: int) {.inline.} =
-    if beta == T(0):
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          C[i * rsC + j * csC] = T(0)
-    elif beta != T(1):
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          C[i * rsC + j * csC] *= beta
-    if alpha == T(1):
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          let x {.inject.} = AB[i][j]
-          C[i * rsC + j * csC] += activationBody
-    else:
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          let x {.inject.} = AB[i][j]
-          C[i * rsC + j * csC] += alpha * activationBody
-
 # Generate concrete epilogue procs (zero dispatch overhead)
 genEpilogue(epilogue_identity):
   x
 genEpilogue(epilogue_relu):
-  if x > T(0): x else: T(0)
-
-# Raw-pointer epilogue procs
-genEpilogue_raw(epilogue_identity_raw):
-  x
-genEpilogue_raw(epilogue_relu_raw):
   if x > T(0): x else: T(0)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -193,12 +159,12 @@ template gemm_ukernel(packA, packB, AB, kc: untyped): untyped =
 #  Epilogue dispatch
 # ═══════════════════════════════════════════════════════════════════════════
 
-template gemm_epilogue(activation: Activation; C, AB, mr, nr, alpha, beta, rsC, csC: untyped): untyped =
-  ## Raw-pointer epilogue dispatch. `C` is ptr UncheckedArray[T] (from displace).
+template gemm_epilogue(activation: Activation; C, AB, mr, nr, alpha, beta: untyped): untyped =
+  ## TensorView epilogue dispatch.
   if activation == akReLU:
-    epilogue_relu_raw(C, AB, mr, nr, alpha, beta, rsC, csC)
+    epilogue_relu(C, AB, mr, nr, alpha, beta)
   else:
-    epilogue_identity_raw(C, AB, mr, nr, alpha, beta, rsC, csC)
+    epilogue_identity(C, AB, mr, nr, alpha, beta)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  gemm_strided — BLIS 5-loop GEMM
@@ -375,8 +341,7 @@ proc gemm_strided*[T: SomeNumber](
             let eff_mr = min(mr, M - cRow)
             let eff_nr = min(nr, N - cCol)
             let cTile {.noInit.} = displace(vC, (cRow, cCol))
-            gemm_epilogue(activation, cast[ptr UncheckedArray[T]](cTile.data),
-                          AB, eff_mr, eff_nr, alpha, effective_beta, rowStrideC, colStrideC)
+            gemm_epilogue(activation, cTile, AB, eff_mr, eff_nr, alpha, effective_beta)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Convenience overload — openArray[T]
