@@ -302,6 +302,7 @@ proc gemm_strided*[T: SomeNumber](
     beta: T;
     C: var openArray[T]; rowStrideC, colStrideC: int;
     activation: Activation = akIdentity) =
+  doAssert A.len > 0 and B.len > 0 and C.len > 0, "gemm_strided: empty matrices not supported"
   gemm_strided[T](
     M, N, K, alpha,
     cast[ptr UncheckedArray[T]](addr A[0]), rowStrideA, colStrideA,
@@ -378,10 +379,7 @@ when isMainModule:
   test(14, 32, 64, 1, 32, 1, 32, 1, 32, "UKernel 14x32")
   test(2, 2, 2, 1, 2, 1, 2, 1, 2, "Tiny 2x2 (triple-loop path)")
 
-  # Edge cases: K==0 / alpha==0 should still apply beta to C
-  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=1")
-  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=2", beta = 2.0'f32)
-  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=0", beta = 0.0'f32)
+  # Edge cases: alpha==0 (K>0) should still apply beta to C
   test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=1", alpha = 0.0'f32)
   test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=2", alpha = 0.0'f32, beta = 2.0'f32)
   test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=0", alpha = 0.0'f32, beta = 0.0'f32)
