@@ -262,9 +262,32 @@ template filter_zeros*(layout: Layout): auto =
 #    - Meta tensor-layouts: core.py type predicates
 # ═══════════════════════════════════════════════════════════════
 
-func congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
-  ## True if `a` and `b` have the same rank and nesting structure.
-  a is typeof(b)
+template congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
+  ## True if `a` and `b` have the same hierarchical rank structure.
+  ##
+  ## CuTe: `repeat_like(shape(a), _0{})` same type as `repeat_like(shape(b), _0{}})
+  ## Returns a bool typedesc, usable in both `static` and runtime contexts.
+  when a is (int or Int):
+    when b is (int or Int):
+      true
+    else:
+      false
+  elif a is tuple:
+    when b is tuple:
+      when rank(a) != rank(b):
+        false
+      else:
+        block:
+          var ok = true
+          staticFor i, 0, rank(a):
+            if not congruent(a[i], b[i]):
+              ok = false
+          ok
+    else:
+      false
+  else:
+    false
+
 
 func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
   ## True if A's nesting is contained in B's structure.

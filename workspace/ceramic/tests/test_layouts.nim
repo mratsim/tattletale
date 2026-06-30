@@ -584,9 +584,65 @@ proc runIsCompactTests =
     doAssert make_layout(double(3)) === (6, 1)
     doAssert isConst(make_layout(double(3)).shape)
     doAssert isConst(make_layout(double(3)).stride)
+
 # ═══════════════════════════════════════════════════════════════
 #  congruent — structural shape comparison
 # ═══════════════════════════════════════════════════════════════
+
+proc runCongruentTests* =
+  block:
+    ## N1: Same rank flat, different types — should be congruent
+    doAssert congruent(1, 2) == true, "N1: int literals"
+  block:
+    ## N2: int vs Int[N]
+    doAssert congruent(1, Int[2]()) == true, "N2: int vs Int[N]"
+  block:
+    ## N3: Int[N] vs Int[N]
+    doAssert congruent(Int[3](), Int[3]()) == true, "N3: Int[N] vs Int[N]"
+  block:
+    ## N4: tuple of ints
+    doAssert congruent((1, 2), (3, 4)) == true, "N4: tuple of ints"
+  block:
+    ## N5: tuple with mixed int/Int
+    doAssert congruent((1, 2), (Int[3](), Int[4]())) == true, "N5: tuple with mixed int/Int"
+  block:
+    ## N6: Int tuple vs int tuple
+    doAssert congruent((Int[5](), Int[6]()), (7, 8)) == true, "N6: Int tuple vs int tuple"
+  block:
+    ## N7: nested tuples
+    doAssert congruent(((1, 2), 3), ((4, 5), 6)) == true, "N7: nested tuples"
+  block:
+    ## N8: nested mixed
+    doAssert congruent(((Int[1](), Int[2]()), Int[3]()), ((4, 5), 6)) == true, "N8: nested mixed"
+  block:
+    ## N9: scalar vs tuple
+    doAssert congruent(1, (1, 2)) == false, "N9: scalar vs tuple"
+  block:
+    ## N10: tuple vs scalar
+    doAssert congruent((1, 2), 3) == false, "N10: tuple vs scalar"
+  block:
+    ## N11: different tuple length
+    doAssert congruent((1, 2), (3, 4, 5)) == false, "N11: different tuple length"
+  block:
+    ## N12: different nesting depth
+    doAssert congruent(((1, 2), 3), (4, 5, 6)) == false, "N12: different nesting depth"
+  block:
+    ## N13: static int literals
+    static:
+      doAssert congruent(1, 2) == true, "N13: static int literals"
+  block:
+    ## N14: static tuple of ints
+    static:
+      doAssert congruent((1, 2), (3, 4)) == true, "N14: static tuple of ints"
+  block:
+    ## N15: static scalar vs tuple
+    static:
+      doAssert congruent(1, (1, 2)) == false, "N15: static scalar vs tuple"
+  block:
+    ## N16: static diff lengths
+    static:
+      doAssert congruent((1, 2), (3, 4, 5)) == false, "N16: static diff lengths"
+  echo "  Congruent: 16 cases OK"
 
 proc runPredicateTests =
   # ═══════════════════════════════════════════════════════════════
@@ -1133,3 +1189,4 @@ proc runTests =
 
 when isMainModule:
   runTests()
+  runCongruentTests()
