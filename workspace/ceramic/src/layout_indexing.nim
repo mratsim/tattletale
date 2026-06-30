@@ -114,6 +114,11 @@ template filterDice(selector: typed; target: tuple): auto =
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout: dimensions marked with X / _ are kept.
+  ## Accepts both varargs and a single tuple argument:
+  ##   slice(L, X, Y)          — two separate args
+  ##   slice(L, (X, Y))        — single tuple arg (equivalent)
+  ## The selectors are forwarded to filterSlice which iterates over them:
+  ## X → keep dimension, Y or int/Int → drop.
   block:
     evalOnceAs(t, target)
     make_layout(
@@ -122,6 +127,11 @@ template slice*(target: Layout; selectors: varargs[untyped]): untyped =
 
 template dice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout: dimensions marked with Y are kept.
+  ## Accepts both varargs and a single tuple argument:
+  ##   dice(L, Y, X)          — two separate args
+  ##   dice(L, (Y, X))        — single tuple arg (equivalent)
+  ## The selectors are forwarded to filterDice which iterates over them:
+  ## Y or int/Int → keep dimension, X → drop.
   block:
     evalOnceAs(t, target)
     make_layout(
