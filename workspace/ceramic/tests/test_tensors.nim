@@ -130,16 +130,18 @@ proc runFlatIndexTests =
       doAssert t(i) == (i * 10).float32
 
   block:  # Tensor `()` with underscore (sub-view)
-    var t = make_tensor(float32, (4, 6), (2, 12))
-    for i in 0..<24: t(i) = float32(i * 10)
-    let sub = t(_, 0)  # all rows, col 0
+    const shape = (4, 6)
+    const stride = (1, 4)
+    var t = make_tensor(float32, shape, stride)
+    for i in 0..<24: t(i) = float32(i)
+    let sub = t(_, 2)  # all rows, col 2
     doAssert sub.layout.shape === (4,), "shape should be (4,)"
-    doAssert sub(0) == 0.0'f32, "first row, col 0"
-    doAssert sub(3) == 30.0'f32, "last row, col 0"
+    doAssert sub(0) == 8.0'f32, "first row, col 2"
+    doAssert sub(3) == 11.0'f32, "last row, col 2"
     let sub2 = t(0, _)  # row 0, all cols
     doAssert sub2.layout.shape === (6,), "shape should be (6,)"
     doAssert sub2(0) == 0.0'f32, "row 0, first col"
-    doAssert sub2(5) == 50.0'f32, "row 0, last col"
+    doAssert sub2(5) == 20.0'f32, "row 0, last col"
     echo "  ok"
 
   block:  # Write via v(i) = val modifies backing storage
