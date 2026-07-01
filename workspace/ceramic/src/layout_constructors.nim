@@ -270,7 +270,7 @@ macro make_layout_like*(layout: Layout): untyped =
       strides[i] = 0
 
   # Emit result
-  var strideTuple = nnkPar.newTree()
+  var strideTuple = nnkTupleConstr.newTree()
   for s in strides:
     strideTuple.add newLit(s)
 
