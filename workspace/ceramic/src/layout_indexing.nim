@@ -100,43 +100,41 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
 #  Slice and dice — marker-based dimension selection
 # ═══════════════════════════════════════════════════════════════
 
-template filterSlice(selector: typed; target: tuple): auto =
+template slice*(target: tuple; selector: typed): auto =
+  ## Slice a tuple: keep elements where selector entry is X; drop where it's Y, int, or Int.
   filterZipWith(selector, target):
     (when it_a is X: (it_b,)
      elif it_a is Y or it_a is int or it_a is Int: ()
-     else: {.error: "filterSlice: selector items must be X, Y, or ints".})
+     else: {.error: "slice: selector items must be X, Y, or ints".})
 
-template filterDice(selector: typed; target: tuple): auto =
+template dice*(target: tuple; selector: typed): auto =
+  ## Dice a tuple: keep elements where selector entry is Y, int, or Int; drop where it's X.
   filterZipWith(selector, target):
     (when it_a is Y or it_a is int or it_a is Int: (it_b,)
      elif it_a is X: ()
-     else: {.error: "filterDice: selector items must be X, Y, or ints".})
+     else: {.error: "dice: selector items must be X, Y, or ints".})
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
-  ## Extract a sub-Layout: dimensions marked with X / _ are kept.
+  ## Extract a sub-Layout: dimensions marked with X / _ are kept; Y, int, Int are dropped.
   ## Accepts both varargs and a single tuple argument:
   ##   slice(L, X, Y)          — two separate args
   ##   slice(L, (X, Y))        — single tuple arg (equivalent)
-  ## The selectors are forwarded to filterSlice which iterates over them:
-  ## X → keep dimension, Y or int/Int → drop.
   block:
     evalOnceAs(t, target)
     make_layout(
-      filterSlice(varargs_to_par(selectors), t.shape),
-      filterSlice(varargs_to_par(selectors), t.stride))
+      slice(t.shape, varargs_to_par(selectors)),
+      slice(t.stride, varargs_to_par(selectors)))
 
 template dice*(target: Layout; selectors: varargs[untyped]): untyped =
-  ## Extract a sub-Layout: dimensions marked with Y are kept.
+  ## Extract a sub-Layout: dimensions marked with Y / int / Int are kept, X are dropped.
   ## Accepts both varargs and a single tuple argument:
   ##   dice(L, Y, X)          — two separate args
   ##   dice(L, (Y, X))        — single tuple arg (equivalent)
-  ## The selectors are forwarded to filterDice which iterates over them:
-  ## Y or int/Int → keep dimension, X → drop.
   block:
     evalOnceAs(t, target)
     make_layout(
-      filterDice(varargs_to_par(selectors), t.shape),
-      filterDice(varargs_to_par(selectors), t.stride))
+      dice(t.shape, varargs_to_par(selectors)),
+      dice(t.stride, varargs_to_par(selectors)))
 
 
 # ═══════════════════════════════════════════════════════════════
