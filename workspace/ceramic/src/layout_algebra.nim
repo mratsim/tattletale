@@ -542,7 +542,36 @@ template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
         zip2_by(lyt.shape, tlr),
         zip2_by(lyt.stride, tlr))
 
-# ── zipped_divide / tiled_divide / flat_divide ──
+# ═══════════════════════════════════════════════════════════════
+#  zipped_divide_builder — one-pass build for tuple tiler
+# ═══════════════════════════════════════════════════════════════
+
+template zipped_divide_builder*(layout, tiler: typed; LayoutRank: static int; idx: static;
+                                 tileSh, tileSt, restSh, restSt: typed): auto =
+  ## Recursive build helper for zipped_divide(tuple tiler).
+  ## One-pass: builds (tile, rest) groups directly without intermediate
+  ## logical_divide + tile_unzip.
+  ## Avoids Nim tuple hash collision
+  ## (see https://github.com/nim-lang/Nim/issues/25883#issuecomment-4658908569).
+  when idx >= LayoutRank:
+    make_layout(
+      (tileSh, restSh),
+      (tileSt, restSt)
+    )
+  else:
+    when idx < rank(tiler):
+      evalOnceAs d, logical_divide(mode(layout, idx), tiler[idx])
+      zipped_divide_builder(layout, tiler, LayoutRank, idx + 1,
+        concat(tileSh, (mode(d, 0).shape,)),
+        concat(tileSt, (mode(d, 0).stride,)),
+        concat(restSh, (mode(d, 1).shape,)),
+        concat(restSt, (mode(d, 1).stride,)))
+    else:
+      evalOnceAs m, mode(layout, idx)
+      zipped_divide_builder(layout, tiler, LayoutRank, idx + 1,
+        tileSh, tileSt,
+        concat(restSh, (m.shape,)),
+        concat(restSt, (m.stride,)))
 
 template zipped_divide*(layout: Layout; tiler: auto): auto =
   ## Divide layout by tiler and zip tile/rest modes into rank-2 result.
@@ -555,8 +584,21 @@ template zipped_divide*(layout: Layout; tiler: auto): auto =
     evalOnceAs(tlr, tiler)
     when tiler is Layout:
       logical_divide(lyt, tlr)
+    elif tiler is int or tiler is Int:
+      # Scalar tiler
+      logical_divide(lyt, tlr)
     else:
-      tile_unzip(logical_divide(lyt, tlr), tlr)
+      # Tuple tiler — one-pass builder avoids intermediate concat types
+      # that trigger Nim C++ backend struct hash collision
+      # (see https://github.com/nim-lang/Nim/issues/25883#issuecomment-4658908569)
+      block:
+        evalOnceAs lyt, layout
+        evalOnceAs tlr, tiler
+        const R = static(rank(lyt))
+        const Tr = static(rank(tlr))
+        static: doAssert Tr <= R,
+          "zipped_divide: tiler has more modes (" & $Tr & ") than layout (" & $R & ")"
+        zipped_divide_builder(lyt, tlr, R, 0, (), (), (), ())
 
 template tiled_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack the second mode into individual modes.
