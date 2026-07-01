@@ -20,9 +20,9 @@ import ./tensors
 
 template axpby*[T, ShX, StX, ShY, StY](
     alpha: T,
-    X: TensorView[T, ShX, StX],
+    X: TensorView[T, ShX, StX] or Tensor[T, ShX, StX],
     beta: T,
-    Y: var TensorView[T, ShY, StY]) =
+    Y: var (TensorView[T, ShY, StY] or Tensor[T, ShY, StY])) =
   ## Y = α·X + β·Y   (element-wise)
   ## Parameter order: `axpby` → alpha, X, beta, Y
   ## CuTe: axpby(alpha, x, beta, y)

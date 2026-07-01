@@ -20,9 +20,9 @@ import ./layouts
 import ./tensors
 
 template gemm*[T, ShA, StA, ShB, StB, ShC, StC](
-    C: var TensorView[T, ShC, StC],
-    A: TensorView[T, ShA, StA],
-    B: TensorView[T, ShB, StB]) =
+    C: var (TensorView[T, ShC, StC] or Tensor[T, ShC, StC]),
+    A: TensorView[T, ShA, StA] or Tensor[T, ShA, StA],
+    B: TensorView[T, ShB, StB] or Tensor[T, ShB, StB]) =
   ## Outer product: C[m,n] += A[m,k] * B[n,k]
   ## CuTe dispatch [3] net effect: (M,K) × (N,K) ⇒ (M,N)
   ## Acceptable on GPU, slow on CPU.
