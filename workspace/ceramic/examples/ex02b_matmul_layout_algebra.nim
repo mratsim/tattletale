@@ -239,8 +239,8 @@ proc gemm_strided*[T: SomeNumber](
     for jc in 0 ..< 1:
       let panelB = local_tile(vB, (kc, nc), (pc, jc))
 
-      let srcB_edge = make_view(panelB, ((1, nr), (current_kc, num_jr)), srcB_zd.stride)
-      var dstB_edge = make_view(packB,  ((1, nr), (current_kc, num_jr)), dstB_zd.stride)
+      let srcB_edge = make_view(panelB, make_layout(((1, nr), (current_kc, num_jr)), srcB_zd.stride))
+      var dstB_edge = make_view(packB, make_layout(((1, nr), (current_kc, num_jr)), dstB_zd.stride))
       copySameShape_cpu(dstB_edge, srcB_edge)
 
       # ── Loop 3 (ic): row blocks of A ──
