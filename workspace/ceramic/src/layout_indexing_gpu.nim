@@ -12,6 +12,27 @@
 ##
 ## The public `crd2idx(layout, coord)` and `layout()`/`idx2crd` wrappers
 ## live in `layouts.nim` (they import this file).
+##
+## ── PERFORMANCE WARNING ──
+## ALL crd2idx overloads in this file MUST be `template`, NOT `func`.
+##
+## Reason: a non-`{.inline.}` `func` lands in a separate C++ compilation unit
+## (its own .cpp file), which prevents cross-module inlining at the C++ level.
+## Even `{.inline.}` generates a standalone C++ function definition that the
+## C++ inliner must process — and when arguments involve `Int` types
+## (which become C structs in Nim's C++ backend), the struct-wrapped
+## parameters add complexity that hinders optimization.
+##
+## A `template` produces zero C++ function definitions. The expression
+## appears directly at the call site, giving the cleanest C++ output:
+## bare arithmetic like `i * 16 + j * 1` with no struct wrappers around
+## the Int[V] stride values.
+##
+## History: commit b93bb95 ('Recover 20GFlops on layout algebra CPU GEMM')
+## changed crd2idx from func→template, recovering ~12× on flat-index copies
+## (6ms → 0.5ms for 524k B-packing elements). The nested `toIntVal` and
+## `Int[V] × int` operators must also be templates (see int_tuples_datatypes).
+## ─────────────────────────
 
 import std/[macros, typetraits]
 import ./int_tuples
@@ -36,11 +57,17 @@ template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int
 
 template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
   ## Inner product: sum coord[i] * stride[i]
-  ## X markers contribute 0 via operator overloads.
+  ## X markers contribute 0 via operator overloads (layout_indexing.nim).
   ## makeIntTuple wraps static ints as Int[V] for compile-time constant folding.
+  ##
+  ## PERF: Must stay template (not func). The `it_a * it_b` delegates to
+  ## Int[V]*int operator overloads which are ALSO templates (see genBinOp
+  ## in int_tuples_datatypes.nim). A func chain here would prevent C++ inlining.
   block:
     evalOnceAs(P, makeIntTuple(coord))
     evalOnceAs(D, makeIntTuple(stride))
+    # Int[0]() accumulator + uniform `acc + it_a * it_b` works because
+    # X*int→Int[0]() operator overloads neutralize markers.
     foldZipWith(P(), D(), Int[0]()):
       acc + it_a * it_b
 
@@ -52,11 +79,14 @@ template foldDim*(co, sh, st: typed; i: static int): auto =
 
 template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape modes with strides.
+  ##
+  ## PERF: Must stay template. Uses `int rank(S)` instead of `toIntVal rank(S)`
+  ## to avoid a toIntVal call (even at compile time — it's a func).
   block:
     evalOnceAs(S, flatten(makeIntTuple(shape)))
     evalOnceAs(D, flatten(makeIntTuple(stride)))
     evalOnceAs(P, makeIntTuple(coord))
-    const R = int rank(S)
+    const R = int rank(S)  # int() avoids toIntVal func call
     when S is tuple and R > 1:
       foldDim(P, S, D, 0)
     else:

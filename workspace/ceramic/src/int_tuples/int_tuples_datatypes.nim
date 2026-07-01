@@ -20,8 +20,18 @@ type Int*[V: static int] = object
 type IntOrIntTuple* = int | Int | tuple
   ## Shape/stride element type alias for convenience.
 
+## ── PERF CRITICAL: templates, not funcs ──
+## toIntVal(int) is called on EVERY element access (via []/() operators).
+## As a non-`{.inline.}` `func`, it lands in its own C++ compilation unit,
+## blocking cross-module inlining. Even `{.inline.}` generates a C++ function
+## definition the inliner must process; `template` produces zero C++ definitions.
+## When extracting Int[V] → int, a template extracts V directly in the generated
+## C++ expression; a func wraps it in a C struct parameter that is noisy for no gain.
+## History: commit b93bb95 changed func→template, recovering ~12× on flat-index copies.
+
 template toIntVal*(x: int): int = x
 template toIntVal*[V: static int](x: Int[V]): int = V
+
 
 func `$`*[V: static int](x: Int[V]): static string = "Int[" & $V & "]"
 
@@ -108,6 +118,14 @@ func abs*[V: static int](x: Int[V]): Int[abs(V)] = Int[abs(V)]()
 func sign*[V: static int](x: Int[V]): Int[if V > 0: 1 elif V < 0: -1 else: 0] = discard
 
 template genBinOp(op: untyped): untyped =
+  ## Generate arithmetic operators for Int[V] vs int/Int.
+  ##
+  ## PERF CRITICAL: `Int[V] * int` and `int * Int[V]` MUST be `template`, not `func`.
+  ## These are called inside crd2idx's foldZipWith inner product loop.
+  ## A `func` with `Int[V]` arguments generates C struct-object parameters
+  ## that the C++ inliner must unravel. A `template` collapses
+  ## `Int[16]() * i` to the bare constant `16 * i` at the Nim codegen level.
+
   func op*[V, U: static int](a: Int[V]; b: Int[U]): Int[op(V, U)] {.inline.} = Int[op(V, U)]()
   func op*[V: static int](a: Int[V]; b: static int): Int[op(V, b)] {.inline.} = Int[op(V, b)]()
   func op*[V: static int](a: static int; b: Int[V]): Int[op(a, V)] {.inline.} = Int[op(a, V)]()
