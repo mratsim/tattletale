@@ -11,6 +11,7 @@ import workspace/ceramic/src/int_tuples {.all.}
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import workspace/ceramic/src/ptr_arithmetic
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Tensor construction
@@ -19,43 +20,42 @@ import workspace/ceramic/src/tensors
 proc runTensorConstructionTests =
   block:  # Tensor from seq + offset + layout (owning copy of seq)
     let buf = newSeq[float32](16)
-    var t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
-    doAssert t.offset == 0
+    var t = make_view(buf +% 0, make_layout((4, 4), (1, 4)))
 
   block:  # rank
     var buf = newSeq[float32](16)
-    var t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
+    var t = make_view(buf +% 0, make_layout((4, 4), (1, 4)))
     doAssert t.rank == 2
 
   block:  # size
     let buf = newSeq[float32](16)
-    let t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
+    let t = make_view(buf +% 0, make_layout((4, 4), (1, 4)))
     doAssert t.size === 16
 
   block:  # cosize
     var buf = newSeq[float32](32)
-    var t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
+    var t = make_view(buf +% 0, make_layout((4, 4), (1, 4)))
     doAssert t.cosize === 16
 
   block:  # Tensor from layout (owning, allocates its own seq)
-    var t = make_tensor(make_layout((3, 5), (1, 3)), float32)
+    var t = make_tensor(float32, make_layout((3, 5), (1, 3)))
     doAssert t.rank == 2
     doAssert t.size === 15
     doAssert t.cosize === 15
     doAssert t.data.len == 15
 
   block:  # Tensor from shape only (compact col-major)
-    var t = make_tensor(make_layout((2, 3), LayoutLeft), float64)
+    var t = make_tensor(float64, (2, 3), LayoutLeft)
     doAssert t.size === 6
 
   block:  # Tensor with LayoutRight (row-major)
-    var t = make_tensor(make_layout((2, 3), LayoutRight), int32)
+    var t = make_tensor(int32, (2, 3), LayoutRight)
     doAssert t.size === 6
 
   block:  # View with non-zero offset
     var buf = newSeq[float32](32)
-    var t = make_tensor(buf, 10, make_layout((2, 3), (1, 2)))
-    doAssert t.offset == 10
+    var t = make_view(buf +% 10, make_layout((2, 3), (1, 2)))
+    doAssert t.data == addr(buf[10])
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  TensorView construction
@@ -76,7 +76,7 @@ proc runTensorViewTests =
     doAssert v.size === 12
 
   block:  # View from Tensor (conversion)
-    var t = make_tensor(make_layout((3, 4), (1, 3)), float32)
+    var t = make_tensor(float32, make_layout((3, 4), (1, 3)))
     let v = t.view()
     doAssert v.size === 12
 
@@ -117,17 +117,30 @@ proc runFlatIndexTests =
     let L = make_layout((4, 8), (8, 1))
     var buf = newSeq[float32](44)
     for i in 0 ..< 44: buf[i] = i.float32
-    var t = make_tensor(buf, 12, L)
+    var t = make_view(buf +% 12, L)
     for i in 0 ..< 32:
       doAssert t(i) == (12 + L(i)).float32
 
   block:  # Write via t(i) = val, read back through t
     var buf = newSeq[float32](6)
-    var t = make_tensor(buf, 0, make_layout((2, 3), (1, 2)))
+    var t = make_view(buf +% 0, make_layout((2, 3), (1, 2)))
     for i in 0 ..< 6:
       t(i) = (i * 10).float32
     for i in 0 ..< 6:
       doAssert t(i) == (i * 10).float32
+
+  block:  # Tensor `()` with underscore (sub-view)
+    var t = make_tensor(float32, (4, 6), (2, 12))
+    for i in 0..<24: t(i) = float32(i * 10)
+    let sub = t(_, 0)  # all rows, col 0
+    doAssert sub.layout.shape === (4,), "shape should be (4,)"
+    doAssert sub(0) == 0.0'f32, "first row, col 0"
+    doAssert sub(3) == 30.0'f32, "last row, col 0"
+    let sub2 = t(0, _)  # row 0, all cols
+    doAssert sub2.layout.shape === (6,), "shape should be (6,)"
+    doAssert sub2(0) == 0.0'f32, "row 0, first col"
+    doAssert sub2(5) == 50.0'f32, "row 0, last col"
+    echo "  ok"
 
   block:  # Write via v(i) = val modifies backing storage
     var buf: array[6, float32]
@@ -165,7 +178,7 @@ proc runFlatIndexTests =
 proc runMultiIndexTests =
   block:  # Col-major Tensor: (i,j) -> data[i + j*M]  (Python: test_column_major_indexing)
     var buf = newSeq[float32](12)
-    var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    var t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     for idx in 0 ..< 12: t(idx) = idx.float32
     doAssert t[(0, 0)] == 0.0'f32
     doAssert t[(2, 0)] == 2.0'f32
@@ -197,7 +210,7 @@ proc runMultiIndexTests =
 
   block:  # 2-arg: t[i, j] tuple-free syntax
     var buf = newSeq[float32](12)
-    var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    var t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     for idx in 0 ..< 12: t(idx) = idx.float32
     doAssert t[(0, 0)] == 0.0'f32
     doAssert t[(1, 2)] == 7.0'f32
@@ -244,7 +257,7 @@ proc runMultiIndexTests =
     doAssert v[(3, 2)] == 13.0'f32
 
   block:  # Write via owning tensor
-    var t = make_tensor(make_layout((2, 3), (1, 2)), float32)
+    var t = make_tensor(float32, make_layout((2, 3), (1, 2)))
     t[(0, 0)] = 10.0'f32
     t[(1, 2)] = 20.0'f32
     doAssert t[(0, 0)] == 10.0'f32
@@ -284,8 +297,8 @@ proc runMultiIndexTests =
     let M = 3; let N = 4
     var buf = newSeq[float32](1012)
     for i in 0 ..< 1012: buf[i] = i.float32
-    var t = make_tensor(buf, offset, make_layout((M, N), (1, M)))
-    let base = make_tensor(buf, 0, make_layout((M, N), (1, M)))
+    var t = make_view(buf +% offset, make_layout((M, N), (1, M)))
+    let base = make_view(buf +% 0, make_layout((M, N), (1, M)))
     for i in 0 ..< M:
       for j in 0 ..< N:
         doAssert t[(i, j)] == offset.float32 + base[(i, j)]
@@ -305,7 +318,7 @@ proc runMultiIndexTests =
 proc runSliceTests =
   block:  # Slice row: t.slice((row, _)) returns 1D Tensor
     var buf = newSeq[float32](12)
-    var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    var t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     for i in 0 ..< 12: t(i) = i.float32
     static: doAssert (1, _) is IntOrIntTuple
     let row1 = t.slice(1, _)
@@ -316,7 +329,7 @@ proc runSliceTests =
 
   block:  # Slice column: t.slice((_, col)) returns 1D Tensor
     var buf = newSeq[float32](12)
-    var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    var t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     for i in 0 ..< 12: t(i) = i.float32
     let col1 = t.slice(_, 1)
     doAssert col1.rank == 1
@@ -346,7 +359,7 @@ proc runSliceTests =
     doAssert col[2] == 8.0'f32
 
   block:  # Slice from owning tensor
-    var t = make_tensor(make_layout((3, 4), (1, 3)), float32)
+    var t = make_tensor(float32, make_layout((3, 4), (1, 3)))
     for i in 0 ..< 12: t(i) = i.float32
     let col = t.slice((_, 2))
     doAssert col[0] == 6.0'f32
@@ -380,7 +393,7 @@ proc runDisplaceTests =
   block:  # Owned Tensor displace
     var buf = newSeq[float32](100)
     for i in 0 ..< 100: buf[i] = i.float32
-    let t = make_tensor(buf, 0, make_layout((10, 10), (1, 10)))
+    let t = make_view(buf +% 0, make_layout((10, 10), (1, 10)))
     let sub = displace(t, (3, 2))
     doAssert sub.layout.shape === (7, 8) and sub.layout.stride === (1, 10)
     doAssert sub[0, 0] == 23.0'f32

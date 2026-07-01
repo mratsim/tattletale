@@ -10,6 +10,7 @@ import workspace/ceramic/src/int_tuples {.all.}
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import workspace/ceramic/src/ptr_arithmetic
 
 # ═════════════════════════════════════════════════════════════════════════
 #  1. outer_partition — 2D, tuple coord
@@ -20,9 +21,9 @@ import workspace/ceramic/src/tensors
 proc runOuter2dTupleCoord(errors: var int) =
   echo "--- 1. outer 2D tuple coord (8x8) tiler (4,4) coord (1,0) ---"
   var buf = newSeq[float32](64)
-  var t = make_tensor(buf, 0, make_layout((8,8)))
+  var t = make_view(buf +% 0, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
-  let v = t.view()
+  let v = t
   let p = outer_partition(v, (4,4), (1,0))
   doAssert p.layout.shape === (2,2), "shape=(2,2)"
   doAssert p(0,0) == 1.0'f32, "(0,0)==1"
@@ -40,9 +41,9 @@ proc runOuter2dTupleCoord(errors: var int) =
 proc runOuter2dScalarCoord(errors: var int) =
   echo "--- 2. outer 2D scalar coord (8x8) tiler (4,4) coord=5 ---"
   var buf = newSeq[float32](64)
-  var t = make_tensor(buf, 0, make_layout((8,8)))
+  var t = make_view(buf +% 0, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
-  let v = t.view()
+  let v = t
   let p = outer_partition(v, (4,4), 5)
   doAssert p.layout.shape === (2,2), "shape=(2,2)"
   doAssert p(0,0) == 9.0'f32, "(0,0)==9"
@@ -58,9 +59,9 @@ proc runOuter2dScalarCoord(errors: var int) =
 proc runInner2dTupleCoord(errors: var int) =
   echo "--- 3. inner 2D tuple coord (8x8) tiler (4,4) coord (1,0) ---"
   var buf = newSeq[float32](64)
-  var t = make_tensor(buf, 0, make_layout((8,8)))
+  var t = make_view(buf +% 0, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
-  let v = t.view()
+  let v = t
   let p = inner_partition(v, (4,4), (1,0))
   doAssert p.layout.shape === (4,4), "shape=(4,4)"
   doAssert p(0,0) == 4.0'f32, "(0,0)==4"
@@ -79,9 +80,9 @@ proc runInner2dTupleCoord(errors: var int) =
 proc runOuter3dScalarCoord(errors: var int) =
   echo "--- 4. outer 3D scalar (8,4,3) tiler (4,2) coord=0 ---"
   var buf = newSeq[float32](96)
-  var t = make_tensor(buf, 0, make_layout((8,4,3)))
+  var t = make_view(buf +% 0, make_layout((8,4,3)))
   for i in 0..<96: t(i) = float32(i)
-  let v = t.view()
+  let v = t
   let p = outer_partition(v, (4,2), 0)
   # rest group (2,2,3):(4,16,32), all modes at coord 0
   doAssert p.layout.shape === (2,2,3), "shape=(2,2,3)"
@@ -102,9 +103,9 @@ proc runOuter3dScalarCoord(errors: var int) =
 proc runInner3dScalarCoord(errors: var int) =
   echo "--- 5. inner 3D scalar (8,4,3) tiler (4,2) coord=0 ---"
   var buf = newSeq[float32](96)
-  var t = make_tensor(buf, 0, make_layout((8,4,3)))
+  var t = make_view(buf +% 0, make_layout((8,4,3)))
   for i in 0..<96: t(i) = float32(i)
-  let v = t.view()
+  let v = t
   let p = inner_partition(v, (4,2), 0)
   # tile part (4,2):(1,8)
   doAssert p.size === 8, "size=8"
@@ -126,9 +127,9 @@ proc runInner3dScalarCoord(errors: var int) =
 proc runInner2dUnderscore(errors: var int) =
   echo "--- 6. inner 2D _ coord (9x9) tiler (3,3) coord (1,X) ---"
   var buf = newSeq[float32](81)
-  var t = make_tensor(buf, 0, make_layout((9,9)))
+  var t = make_view(buf +% 0, make_layout((9,9)))
   for i in 0..<81: t(i) = float32(i)
-  let v = t.view()
+  let v = t
   let p = inner_partition(v, (3,3), (1, X()))
   # rest m0 fixed→1 (offset=3), rest m1 kept (3)
   doAssert p.layout.shape === (3,3,3), "shape=(3,3,3)"
@@ -149,9 +150,9 @@ proc runInner2dUnderscore(errors: var int) =
 proc runOuter2dUnderscore(errors: var int) =
   echo "--- 7. outer 2D _ coord (9x9) tiler (3,3) coord (1,X) ---"
   var buf = newSeq[float32](81)
-  var t = make_tensor(buf, 0, make_layout((9,9)))
+  var t = make_view(buf +% 0, make_layout((9,9)))
   for i in 0..<81: t(i) = float32(i)
-  let v = t.view()
+  let v = t
   let p = outer_partition(v, (3,3), (1, X()))
   # tile m0 fixed→1 (offset=1), tile m1 kept (3), rest kept (3,3)
   doAssert p.layout.shape === (3,3,3), "shape=(3,3,3)"
@@ -172,9 +173,9 @@ proc runOuter2dUnderscore(errors: var int) =
 proc runInner2dUnderscore3d(errors: var int) =
   echo "--- 8. inner 2D _ coord (3D result) (9x9) tiler (3,3) coord (0,X) ---"
   var buf = newSeq[float32](81)
-  var t = make_tensor(buf, 0, make_layout((9,9)))
+  var t = make_view(buf +% 0, make_layout((9,9)))
   for i in 0..<81: t(i) = float32(i)
-  let v = t.view()
+  let v = t
   let p = inner_partition(v, (3,3), (0, X()))
   # rest m0 fixed→0 (offset=0), rest m1 kept (3)
   doAssert p.layout.shape === (3,3,3), "shape=(3,3,3)"
@@ -199,9 +200,9 @@ proc runLocalTileCtaExtraction(errors: var int) =
   # mA: (M,K) strides (1, M) = (1, 512), proj = (Y, X, Y)
   block:
     var buf = newSeq[float32](M * K)
-    var mA = make_tensor(buf, 0, make_layout((M, K)))
+    var mA = make_view(buf +% 0, make_layout((M, K)))
     for i in 0..<M*K: mA(i) = float32(i)
-    let v = mA.view()
+    let v = mA
     let gA = local_tile(v, tiler, coord0, (Y, X, Y))
     # dice(proj, tiler)  → (128, 8)
     # dice(proj, coord0) → (0, _)
@@ -217,9 +218,9 @@ proc runLocalTileCtaExtraction(errors: var int) =
   # mB: (N,K) = (512,64), proj = (X, Y, Y)
   block:
     var buf = newSeq[float32](N * K)
-    var mB = make_tensor(buf, 0, make_layout((N, K)))
+    var mB = make_view(buf +% 0, make_layout((N, K)))
     for i in 0..<N*K: mB(i) = float32(i)
-    let v = mB.view()
+    let v = mB
     let gB = local_tile(v, tiler, coord0, (X, Y, Y))
     doAssert gB.layout.shape === (bN, bK, K div bK), "shape=(" & $bN & "," & $bK & "," & $(K div bK) & ")"
     doAssert gB(0,0,0) == 0.0'f32, "(0,0,0)==0"
@@ -228,9 +229,9 @@ proc runLocalTileCtaExtraction(errors: var int) =
   # mC: (M,N) = (512,512), proj = (Y, Y, X)
   block:
     var buf = newSeq[float32](M * N)
-    var mC = make_tensor(buf, 0, make_layout((M, N)))
+    var mC = make_view(buf +% 0, make_layout((M, N)))
     for i in 0..<M*N: mC(i) = float32(i)
-    let v = mC.view()
+    let v = mC
     let gC = local_tile(v, tiler, coord0, (Y, Y, X))
     # dice: keep modes 0,1 → (128, 128)
     # local_tile(mC, (128,128), (0,0)):
@@ -253,10 +254,10 @@ proc runLocalTileCtaExtraction(errors: var int) =
 proc runLocalPartition3Arg2d(errors: var int) =
   echo "--- 10. local_partition 3-arg 2D (8x8) thrLayout (4x4) ---"
   var buf = newSeq[float32](64)
-  var t = make_tensor(buf, 0, make_layout((8,8)))
+  var t = make_view(buf +% 0, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
   let L = make_layout((4,4))
-  let v = t.view()
+  let v = t
   block:
     let idx = 0; let p = local_partition(v, L, idx)
     doAssert p(0,0) == 0.0'f32
@@ -280,10 +281,10 @@ proc runLocalPartition3Arg2d(errors: var int) =
 proc runLocalPartition3Arg1d(errors: var int) =
   echo "--- 11. local_partition 3-arg 1D (32,) thrLayout (16,) ---"
   var buf = newSeq[float32](32)
-  var t = make_tensor(buf, 0, make_layout((32,)))
+  var t = make_view(buf +% 0, make_layout((32,)))
   for i in 0..<32: t(i) = float32(i)
   let L = make_layout((16,))
-  let v = t.view()
+  let v = t
   block:
     let p = local_partition(v, L, 0)
     doAssert p(0) == 0.0'f32
@@ -297,10 +298,10 @@ proc runLocalPartition3Arg1d(errors: var int) =
 proc runLocalPartition3Arg3d(errors: var int) =
   echo "--- 12. local_partition 3-arg 3D (8x4x2) thrLayout (4x2) ---"
   var buf = newSeq[float32](64)
-  var t = make_tensor(buf, 0, make_layout((8,4,2)))
+  var t = make_view(buf +% 0, make_layout((8,4,2)))
   for i in 0..<64: t(i) = float32(i)
   let L = make_layout((4,2))
-  let v = t.view()
+  let v = t
   let p = local_partition(v, L, 0)
   doAssert p.layout.shape === (2,2,2)
   doAssert p(0,0,0) == 0.0'f32
@@ -312,10 +313,10 @@ proc runLocalPartition3Arg3d(errors: var int) =
 proc runLocalPartition3ArgLarge(errors: var int) =
   echo "--- 13. local_partition 3-arg large (32x32) thrLayout (16x16) ---"
   var buf = newSeq[float32](1024)
-  var t = make_tensor(buf, 0, make_layout((32,32)))
+  var t = make_view(buf +% 0, make_layout((32,32)))
   for i in 0..<1024: t(i) = float32(i)
   let L = make_layout((16,16))
-  let v = t.view()
+  let v = t
   let p = local_partition(v, L, 0)
   doAssert p.layout.shape === (2,2)
   doAssert p(0,0) == 0.0'f32
@@ -326,10 +327,10 @@ proc runLocalPartition3ArgLarge(errors: var int) =
 proc runLocalPartition3ArgConst(errors: var int) =
   echo "--- 14. local_partition 3-arg const indirection ---"
   var buf = newSeq[float32](64)
-  var t = make_tensor(buf, 0, make_layout((8,8)))
+  var t = make_view(buf +% 0, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
   let L = make_layout((4,4))
-  let v = t.view()
+  let v = t
   block:
     doAssert local_partition(v, L, 0)(0,0) == 0.0'f32
     doAssert local_partition(v, L, 1)(0,0) == 1.0'f32
@@ -340,10 +341,10 @@ proc runLocalPartition3ArgConst(errors: var int) =
 proc runLocalPartition4ArgStep1X(errors: var int) =
   echo "--- 15. local_partition 4-arg Step<_1,X> (128x8) tC(16,16) ---"
   var buf = newSeq[float32](1024)
-  var t = make_tensor(buf, 0, make_layout((128,8)))
+  var t = make_view(buf +% 0, make_layout((128,8)))
   for i in 0..<1024: t(i) = float32(i)
   let tC = make_layout((16,16))
-  let v = t.view()
+  let v = t
   block:
     let p = local_partition(v, tC, 0, (Y, X))
     doAssert p.layout.shape === (8,8)
@@ -358,10 +359,10 @@ proc runLocalPartition4ArgStep1X(errors: var int) =
 proc runLocalPartition4ArgStepX1(errors: var int) =
   echo "--- 16. local_partition 4-arg Step<X,_1> (128x8) tC(16,16) ---"
   var buf = newSeq[float32](1024)
-  var t = make_tensor(buf, 0, make_layout((128,8)))
+  var t = make_view(buf +% 0, make_layout((128,8)))
   for i in 0..<1024: t(i) = float32(i)
   let tC = make_layout((16,16))
-  let v = t.view()
+  let v = t
   block:
     doAssert local_partition(v, tC, 0,   (X, Y))(0,0) == 0.0'f32
     doAssert local_partition(v, tC, 15,  (X, Y))(0,0) == 0.0'f32
@@ -372,10 +373,10 @@ proc runLocalPartition4ArgStepX1(errors: var int) =
 proc runLocalPartition4ArgStep11(errors: var int) =
   echo "--- 17. local_partition 4-arg Step<_1,_1> (128x128) tC(16,16) ---"
   var buf = newSeq[float32](16384)
-  var t = make_tensor(buf, 0, make_layout((128,128)))
+  var t = make_view(buf +% 0, make_layout((128,128)))
   for i in 0..<16384: t(i) = float32(i)
   let tC = make_layout((16,16))
-  let v = t.view()
+  let v = t
   block:
     let p = local_partition(v, tC, 0,   (Y, Y))
     doAssert p.layout.shape === (8,8)

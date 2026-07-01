@@ -15,6 +15,7 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/tests/layouts_testutils
+import workspace/ceramic/src/ptr_arithmetic
 
 {.experimental: "callOperator".}
 
@@ -113,14 +114,14 @@ proc runTensorCallOpTests =
   block:  # Tensor all-int → element reference
     var buf: array[12, float32]
     for i in 0 ..< 12: buf[i] = float32(i)
-    let t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    let t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     doAssert t(0, 0) == 0.0'f32
     doAssert t(1, 2) == 7.0'f32
 
   block:  # Tensor Joker → sub-View
     var buf: array[12, float32]
     for i in 0 ..< 12: buf[i] = float32(i)
-    let t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    let t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     let sub = t(_, 2)
     doAssert sub(0) == 6.0'f32
     doAssert sub(2) == 8.0'f32
@@ -136,7 +137,7 @@ proc runTensorCallOpTests =
   block:  # Tensor with non-zero offset
     var buf = newSeq[float32](20)
     for i in 0 ..< 20: buf[i] = float32(i)
-    let t = make_tensor(buf, 8, make_layout((3, 4), (1, 3)))
+    let t = make_view(buf +% 8, make_layout((3, 4), (1, 3)))
     doAssert t(0, 0) == 8.0'f32
     doAssert t(1, 2) == 15.0'f32
 
@@ -170,7 +171,7 @@ proc runBracketJokerGuardTests =
       doAssert false, "v[X, 0] should be a compile-time error"
 
   block:  # Joker in Tensor [] is compile-time error
-    let t = make_tensor(make_layout((3, 4), (1, 3)), float32)
+    let t = make_tensor(float32, make_layout((3, 4), (1, 3)))
     when compiles(t[X, 0]):
       doAssert false, "t[X, 0] should be a compile-time error"
 

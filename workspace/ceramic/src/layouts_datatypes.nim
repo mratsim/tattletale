@@ -136,6 +136,14 @@ func cosize*(layout: Layout): auto =
         result = newCall(bindSym"+", result, term)
   cosizeFlat(flatten(layout.shape), flatten(layout.stride))
 
+func cosize*[A, B](_: typedesc[Layout[A, B]]): static int =
+  ## Compile-time cosize from Layout type alone.
+  ## Requires static shape/stride (all Int[N], no runtime int).
+  ## Dynamic layouts produce a compile error — matching CuTe's
+  ## `static_assert("Dynamic owning tensors not supported")`.
+  var tmp {.noInit.}: Layout[A, B]
+  cosize(tmp).toIntVal()
+
 # ═══════════════════════════════════════════════════════════════
 #  StrideOrder — layout-left (col-major) / layout-right (row-major)
 # ═══════════════════════════════════════════════════════════════

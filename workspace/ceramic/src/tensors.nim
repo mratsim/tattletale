@@ -9,14 +9,15 @@ import std/macros
 
 import ./macros/varargs_to_par
 import ./ptr_arithmetic
-
 import ./int_tuples
 import ./layouts
 import ./layout_indexing_gpu
 import ./layout_indexing
+import ./tensor_datatypes
 
 export layout_indexing_gpu
 export layout_indexing
+export tensor_datatypes
 
 proc pop(tree: var NimNode): NimNode {.compileTime.} =
   ## varargs[untyped] consumes all arguments, so []= pops the val
@@ -25,130 +26,6 @@ proc pop(tree: var NimNode): NimNode {.compileTime.} =
   tree.del(tree.len-1)
 
 {.experimental: "callOperator".}
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Tensor / TensorView
-# ═════════════════════════════════════════════════════════════════════════
-
-type
-  Tensor*[T, Sh, St] = object
-    data*: seq[T]
-    offset*: int
-    layout*: Layout[Sh, St]
-
-  TensorView*[T, Sh, St] = object
-    data*: ptr UncheckedArray[T]
-    layout*: Layout[Sh, St]
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Constructors
-# ═════════════════════════════════════════════════════════════════════════
-
-func make_tensor*[Sh, St, T](L: Layout[Sh, St]; _: typedesc[T]): Tensor[T, Sh, St] =
-  Tensor[T, Sh, St](data: newSeq[T](cosize(L).toIntVal()), offset: 0, layout: L)
-
-func make_tensor*[T, Sh, St](data: openArray[T]; off: int; L: Layout[Sh, St]): Tensor[T, Sh, St] =
-  Tensor[T, Sh, St](data: @data, offset: off, layout: L)
-
-template make_tensor*(shape, stride: IntOrIntTuple; T: typedesc): untyped =
-  make_tensor(make_layout(shape, stride), T)
-
-template make_tensor*(data: openArray; off: int; shape, stride: IntOrIntTuple): untyped =
-  make_tensor(data, off, make_layout(shape, stride))
-
-template make_tensor*(shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft; T: typedesc): untyped =
-  make_tensor(make_layout(shape, order), T)
-
-template make_tensor*(data: openArray; off: int; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
-  make_tensor(data, off, make_layout(shape, order))
-
-# ─────────────────────────────────────────────────────────────────────────
-#  make_view(Layout)
-# ─────────────────────────────────────────────────────────────────────────
-
-func make_view*[T, Sh, St](ptr_data: ptr UncheckedArray[T]; L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline, noInit.} =
-  TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](ptr_data), layout: L)
-
-func make_view*[T, Sh, St](data: var seq[T]; L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline, noInit.} =
-  TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](addr data[0]), layout: L)
-
-template make_view*(data: ptr UncheckedArray; L: Layout): untyped =
-  type ElemType = type(data[])
-  type Sh = typeof(L.shape)
-  type St = typeof(L.stride)
-  TensorView[ElemType, Sh, St](
-    data: cast[ptr UncheckedArray[ElemType]](data),
-    layout: L)
-
-func make_view*[T, Sh, St](data: ptr T; L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline, noInit.} =
-  make_view(cast[ptr UncheckedArray[T]](data), L)
-
-func make_view*[T, ShA, StA, ShB, StB](
-    tv: TensorView[T, ShA, StA];
-    L: Layout[ShB, StB]): TensorView[T, ShB, StB] =
-  ## Reinterpret a TensorView with a new layout (same data pointer).
-  TensorView[T, ShB, StB](data: tv.data, layout: L)
-
-# ─────────────────────────────────────────────────────────────────────────
-#  make_view(shape, stride tuples) — convenience, delegates to make_view(Layout)
-# ─────────────────────────────────────────────────────────────────────────
-
-template make_view*[T; Sh, St: IntOrIntTuple](ptr_data: ptr UncheckedArray[T]; shape: Sh, stride: St): untyped =
-  make_view(ptr_data, make_layout(shape, stride))
-
-template make_view*[T; Sh, St: IntOrIntTuple](data: openArray[T]; shape: Sh, stride: St): untyped =
-  make_view(addr data[0], make_layout(shape, stride))
-
-template make_view*[T; Sh, St: IntOrIntTuple](data: ptr T; shape: Sh, stride: St): untyped =
-  make_view(data, make_layout(shape, stride))
-
-template make_view*[T; ShA, StA, Sh, St](tv: TensorView[T, ShA, StA]; shape: Sh, stride: St): untyped =
-  ## Reinterpret a TensorView with new shape and stride (same data pointer).
-  make_view(tv, make_layout(shape, stride))
-
-# shape-only overloads — natural col-major strides
-template make_view*[T](ptr_data: ptr UncheckedArray[T]; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
-  make_view(ptr_data, make_layout(shape, order))
-
-template make_view*[T](data: var seq[T]; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
-  make_view(data, make_layout(shape, order))
-
-template make_view*[T](data: openArray[T]; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
-  make_view(addr data[0], make_layout(shape, order))
-
-template make_view*[T](data: ptr T; shape: IntOrIntTuple; order: static StrideOrder = LayoutLeft): untyped =
-  make_view(data, make_layout(shape, order))
-
-# ─────────────────────────────────────────────────────────────────────────
-#  view(owning Tensor → TensorView)
-# ─────────────────────────────────────────────────────────────────────────
-
-func view*[T, Sh, St](t: Tensor[T, Sh, St]): TensorView[T, Sh, St] =
-  TensorView[T, Sh, St](
-    data: cast[ptr UncheckedArray[T]](addr(t.data[t.offset])),
-    layout: t.layout)
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Accessors
-# ═════════════════════════════════════════════════════════════════════════
-
-template layout*(t: Tensor): untyped = t.layout
-template layout*(tv: TensorView): untyped = tv.layout
-
-template shape*(t: Tensor): untyped = t.layout.shape
-template shape*(tv: TensorView): untyped = tv.layout.shape
-
-template stride*(t: Tensor): untyped = t.layout.stride
-template stride*(tv: TensorView): untyped = tv.layout.stride
-
-template rank*(tv: TensorView): untyped = tv.layout.rank()
-template rank*(t: Tensor): untyped = t.layout.rank()
-
-template size*(tv: TensorView): untyped = tv.layout.size()
-template size*(t: Tensor): untyped = t.layout.size()
-
-template cosize*(tv: TensorView): untyped = tv.layout.cosize()
-template cosize*(t: Tensor): untyped = t.layout.cosize()
 
 # ═════════════════════════════════════════════════════════════════════════
 #  `()` — dual dispatch: all-int → element, has _ → sub-View
@@ -160,7 +37,7 @@ template `()`*(t: Tensor; args: varargs[untyped]): untyped =
       evalOnceAs(coord, varargs_to_par(args))
       evalOnceAs(sub, slice(t.layout, coord))
       evalOnceAs(offset, crd2idx(t.layout, coord))
-      make_view(t.data[0].addr +% t.offset +% toIntVal(offset), sub)
+      make_view(t.data[0].addr +% toIntVal(offset), sub)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
     # and so can't be assigned to.
@@ -168,8 +45,8 @@ template `()`*(t: Tensor; args: varargs[untyped]): untyped =
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
     let pos = block:
       evalOnceAs(coord, varargs_to_par(args))
-      t.offset + crd2idx(t.layout, coord)
-    t.data[pos]
+      crd2idx(t.layout, coord)
+    t.data[toIntVal pos]
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
   when hasUnderscore(args):
@@ -198,18 +75,7 @@ template `[]`*(t: Tensor; args: varargs[untyped]): untyped =
     when hasUnderscoreImpl(coord):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
     toIntVal crd2idx(t.layout, coord)
-  t.data[t.offset + pos]
-
-macro `[]=`*(t: Tensor; args: varargs[untyped]): untyped =
-  var a = args
-  let val = pop(a)
-  # getAST evaluates varargs_to_par at compile-time with `a`'s actual NimNode value
-  let coord = getAST(varargs_to_par(a))
-  result = quote do:
-    when hasUnderscoreImpl(`coord`):
-      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-    else:
-      `t`.data[`t`.offset + crd2idx(`t`.layout, `coord`)] = `val`
+  t.data[pos]
 
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
   let pos = block:
@@ -218,6 +84,16 @@ template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
     toIntVal crd2idx(tv.layout, coord)
   tv.data[pos]
+
+macro `[]=`*(t: Tensor; args: varargs[untyped]): untyped =
+  var a = args
+  let val = pop(a)
+  let coord = getAST(varargs_to_par(a))
+  result = quote do:
+    when hasUnderscoreImpl(`coord`):
+      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+    else:
+      `t`.data[toIntVal crd2idx(`t`.layout, `coord`)] = `val`
 
 macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
   var a = args
@@ -238,7 +114,7 @@ template slice*(t: Tensor; coords: varargs[untyped]): untyped =
     evalOnceAs(crd, varargs_to_par(coords))
     evalOnceAs(sub, slice(t.layout, crd))
     let off = crd2idx(t.layout, crd)
-    make_view(t.data[0].addr +% t.offset +% off.toIntVal(), sub)
+    make_view(t.data[0].addr +% off.toIntVal(), sub)
 
 template slice*(tv: TensorView; coords: varargs[untyped]): untyped =
   block:
@@ -257,7 +133,7 @@ macro repeat(elem: typed, n: static int): untyped =
     result.add elem
 
 # ═════════════════════════════════════════════════════════════════════════
-#  inner_partition / outer_partition / local_tile
+#  inner_partition / outer_partition / local_tile / local_partition
 #  CuTe: tensor_impl.hpp — zipped_divide + slice_and_offset
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -327,6 +203,10 @@ template local_partition*(tv: TensorView or Tensor; tile: Layout; idx: int or In
     evalOnceAs projected, dice(thrLayout, proj)
     local_partition(tv, projected, idx)
 
+# ═════════════════════════════════════════════════════════════════════════
+#  displace
+# ═════════════════════════════════════════════════════════════════════════
+
 func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
   ## Offset TensorView by `coord` (logical coords). Returns a sub-view whose shape is
   ## `original_shape - coord` (element-wise). Data pointer advances by
@@ -340,13 +220,3 @@ func displace*[T, Sh, St](t: Tensor[T, Sh, St]; coord: IntOrIntTuple): auto {.in
   ## Offset Tensor by `coord` (logical coords). Returns a sub-view whose shape is
   ## `original_shape - coord` (element-wise).
   displace(t.view(), coord)
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Display
-# ═════════════════════════════════════════════════════════════════════════
-
-proc `$`*[T, Sh, St](t: Tensor[T, Sh, St]): string =
-  "Tensor[offset=" & $t.offset & "] o (" & $t.layout.shape & "):(" & $t.layout.stride & ")"
-
-proc `$`*[T, Sh, St](tv: TensorView[T, Sh, St]): string =
-  "TensorView o (" & $tv.layout.shape & "):(" & $tv.layout.stride & ")"

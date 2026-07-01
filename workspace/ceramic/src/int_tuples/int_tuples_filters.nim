@@ -82,9 +82,9 @@ macro filterZipWith*(a: typed; b: typed; body: untyped): untyped =
       else:
         parts.add substIt(body, subA, subB)
     if parts.len == 0:
-      result = nnkPar.newTree()
+      result = nnkTupleConstr.newTree()
     else:
-      result = nnkPar.newTree()
+      result = nnkTupleConstr.newTree()
       for i in countdown(parts.len - 1, 0):
         result = newCall(bindSym"concat", parts[i], result)
   else:
