@@ -223,9 +223,9 @@ proc gemm_strided*[T: SomeNumber](
   let num_pc = ceil_div(K, kc)      # rank-k panel steps
 
   # ── Input matrix views (logical layouts, stride-aware) ──
-  let vA = make_view(A, make_layout((M, K), (rowStrideA, colStrideA)))
-  let vB = make_view(B, make_layout((K, N), (rowStrideB, colStrideB)))
-  var vC = make_view(C, make_layout((M, N), (rowStrideC, colStrideC)))
+  let vA = make_view(A, (M, K), (rowStrideA, colStrideA))
+  let vB = make_view(B, (K, N), (rowStrideB, colStrideB))
+  var vC = make_view(C, (M, N), (rowStrideC, colStrideC))
 
   # ── Panel / block layouts (for zipped_divide + pack) ──
   let panelA_lay = make_layout((mc, kc), (rowStrideA, colStrideA))

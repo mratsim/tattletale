@@ -59,24 +59,18 @@ func make_tensor_like*[T, Sh, St, NewT](t: Tensor[T, Sh, St]; _: typedesc[NewT])
 
 # ── Non-owning: make_view(ptr, Layout) ─────────────────────────────────
 
-func make_view*[T, Sh, St](data: ptr UncheckedArray[T];
+func make_view*[T, Sh, St](data: ptr UncheckedArray[T] or ptr T;
                            L: Layout[Sh, St]): TensorView[T, Sh, St] =
-  TensorView[T, Sh, St](data: data, layout: L)
+  TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](data), layout: L)
 
-template make_view*[T](data: ptr UncheckedArray[T];
+template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
                        shape: IntOrIntTuple;
                        order: static StrideOrder = LayoutLeft): untyped =
   make_view(data, make_layout(shape, order))
 
-template make_view*[T](data: ptr UncheckedArray[T];
+template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
                        shape, stride: IntOrIntTuple): untyped =
   make_view(data, make_layout(shape, stride))
-
-# ── Non-owning: make_view(ptr T, Layout) ──────────────────────────────
-
-func make_view*[T, Sh, St](data: ptr T;
-                           L: Layout[Sh, St]): TensorView[T, Sh, St] =
-  make_view(cast[ptr UncheckedArray[T]](data), L)
 
 
 # ── Non-owning: make_view(openArray, Layout) — zero-copy ───────────────
@@ -101,6 +95,15 @@ func make_view*[T, ShA, StA, ShB, StB](
     L: Layout[ShB, StB]): TensorView[T, ShB, StB] =
   ## Reinterpret a view with a new layout (same data pointer).
   TensorView[T, ShB, StB](data: tv.data, layout: L)
+
+template make_view*(tv: TensorView;
+                       shape: IntOrIntTuple;
+                       order: static StrideOrder = LayoutLeft): untyped =
+  make_view(tv, make_layout(shape, order))
+
+template make_view*(tv: TensorView;
+                       shape, stride: IntOrIntTuple): untyped =
+  make_view(tv, make_layout(shape, stride))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  view() — Tensor → TensorView
