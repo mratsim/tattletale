@@ -42,6 +42,21 @@ template make_tensor*[T](_: typedesc[T]; shape: IntOrIntTuple;
 template make_tensor*[T](_: typedesc[T]; shape, stride: IntOrIntTuple): untyped =
   make_tensor(T, make_layout(shape, stride))
 
+# ── make_tensor_like — create owning tensor with compact strides ──────
+
+func make_tensor_like*[T, Sh, St](t: TensorView[T, Sh, St]): auto =
+  make_tensor(T, make_layout_like(t.layout))
+
+func make_tensor_like*[T, Sh, St](t: Tensor[T, Sh, St]): auto =
+  make_tensor(T, make_layout_like(t.layout))
+
+func make_tensor_like*[T, Sh, St, NewT](t: TensorView[T, Sh, St]; _: typedesc[NewT]): auto =
+  make_tensor(NewT, make_layout_like(t.layout))
+
+func make_tensor_like*[T, Sh, St, NewT](t: Tensor[T, Sh, St]; _: typedesc[NewT]): auto =
+  make_tensor(NewT, make_layout_like(t.layout))
+
+
 # ── Non-owning: make_view(ptr, Layout) ─────────────────────────────────
 
 func make_view*[T, Sh, St](data: ptr UncheckedArray[T];
