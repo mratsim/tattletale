@@ -298,6 +298,35 @@ template local_tile*(tv: TensorView or Tensor; tiler: typed; coord: typed): unty
   ## CuTe: local_tile = inner_partition
   inner_partition(tv, tiler, coord)
 
+template local_tile*(tv: TensorView or Tensor; tiler, coord, proj: typed): untyped =
+  ## 4-arg local_tile with projection — strips unwanted modes before partitioning.
+  ## CuTe: local_tile(tensor, tiler, coord, proj) =
+  ##   local_tile(tensor, dice(proj, tiler), dice(proj, coord))
+  block:
+    evalOnceAs t, tiler
+    evalOnceAs c, coord
+    evalOnceAs pt, dice(t, proj)
+    evalOnceAs pc, dice(c, proj)
+    local_tile(tv, pt, pc)
+
+template local_partition*(tv: TensorView or Tensor; tile: Layout; idx: int or Int): untyped =
+  ## 3-arg local_partition — select tile by index within a thread layout.
+  ## CuTe: local_partition = outer_partition with product_each(tile.shape)
+  block:
+    evalOnceAs thrLayout, tile
+    evalOnceAs tiler, product_each(thrLayout.shape)
+    evalOnceAs coord, idx2crd(thrLayout, idx)
+    outer_partition(tv, tiler, coord)
+
+template local_partition*(tv: TensorView or Tensor; tile: Layout; idx: int or Int; proj: typed): untyped =
+  ## 4-arg local_partition with projection — strip unwanted modes before partitioning.
+  ## CuTe: local_partition(tensor, tile, index, proj) =
+  ##   local_partition(tensor, dice(proj, tile), index)
+  block:
+    evalOnceAs thrLayout, tile
+    evalOnceAs projected, dice(thrLayout, proj)
+    local_partition(tv, projected, idx)
+
 func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
   ## Offset TensorView by `coord` (logical coords). Returns a sub-view whose shape is
   ## `original_shape - coord` (element-wise). Data pointer advances by

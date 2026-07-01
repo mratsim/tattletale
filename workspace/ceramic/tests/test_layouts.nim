@@ -1239,7 +1239,7 @@ proc runTests =
     doAssert toIntVal(b.shape[0]) == 2, "no shadowing: layout (2,4) shape[0]"
     doAssert toIntVal(b.shape[1]) == 4, "no shadowing: layout (2,4) shape[1]"
     echo "    make_layout: 3 cases OK"
-  echo "--- slice/dice ---"
+  echo "--- makeIntTuple ---"
   block:
     const a = makeIntTuple((3,))
     const b = makeIntTuple((2, 4))
