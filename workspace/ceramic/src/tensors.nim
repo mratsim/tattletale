@@ -263,37 +263,40 @@ macro repeat(elem: typed, n: static int): untyped =
 
 template inner_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Keep tile modes, slice rest modes with coord.
-  ## CuTe: zipped_divide(tensor, tiler)(repeat<R0>(_), coord)
+  ## CuTe: zipped_divide(tensor, tiler)(repeat<R0>(_), append<R1>(coord, _))
   block:
-    evalOnceAs(zd, zipped_divide(tv.layout, tiler))
-    # zipped_divide returns rank-2 Layout: ((tile_modes), (rest_modes))
-    # Result layout = tile group (shape[0], stride[0])
-    # Offset = crd2idx(coord, rest group shape, rest group stride)
-    evalOnceAs(offset, crd2idx(coord, zd.shape[1], zd.stride[1]))
-    evalOnceAs(subLayout, make_layout(zd.shape[0], zd.stride[0]))
-    make_view(tv.data +% toIntVal(offset), subLayout)
+    evalOnceAs zd, zipped_divide(tv.layout, tiler)
+    when coord is tuple:
+      evalOnceAs c, coord
+      evalOnceAs keptRest, make_layout(slice(zd.shape[1], c), slice(zd.stride[1], c))
+      evalOnceAs offset, crd2idx(c, zd.shape[1], zd.stride[1])
+      evalOnceAs subLayout, make_layout(concat(zd.shape[0], keptRest.shape), concat(zd.stride[0], keptRest.stride))
+      make_view(tv.data +% toIntVal(offset), subLayout)
+    else:
+      evalOnceAs offset, crd2idx(coord, zd.shape[1], zd.stride[1])
+      evalOnceAs subLayout, make_layout(zd.shape[0], zd.stride[0])
+      make_view(tv.data +% toIntVal(offset), subLayout)
 
 template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Slice tile modes with coord, keep rest modes.
-  ## CuTe: zipped_divide(tensor, tiler)(coord, repeat<R1>(_))
+  ## CuTe: zipped_divide(tensor, tiler)(append<R0>(coord, _), repeat<R1>(_))
   block:
-    evalOnceAs(zd, zipped_divide(tv.layout, tiler))
-    # zipped_divide returns rank-2 Layout: ((tile_modes), (rest_modes))
-    # Result layout = rest group (shape[1], stride[1])
-    # Offset = crd2idx(coord, tile group shape, tile group stride)
-    evalOnceAs(offset, crd2idx(coord, zd.shape[0], zd.stride[0]))
-    evalOnceAs(subLayout, make_layout(zd.shape[1], zd.stride[1]))
-    make_view(tv.data +% toIntVal(offset), subLayout)
-
+    evalOnceAs zd, zipped_divide(tv.layout, tiler)
+    when coord is tuple:
+      evalOnceAs c, coord
+      evalOnceAs keptTile, make_layout(slice(zd.shape[0], c), slice(zd.stride[0], c))
+      evalOnceAs offset, crd2idx(c, zd.shape[0], zd.stride[0])
+      evalOnceAs subLayout, make_layout(concat(keptTile.shape, zd.shape[1]), concat(keptTile.stride, zd.stride[1]))
+      make_view(tv.data +% toIntVal(offset), subLayout)
+    else:
+      evalOnceAs offset, crd2idx(coord, zd.shape[0], zd.stride[0])
+      evalOnceAs subLayout, make_layout(zd.shape[1], zd.stride[1])
+      make_view(tv.data +% toIntVal(offset), subLayout)
 
 template local_tile*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Alias for inner_partition — select a single tile.
   ## CuTe: local_tile = inner_partition
   inner_partition(tv, tiler, coord)
-
-# ═════════════════════════════════════════════════════════════════════════
-#  displace — offset a Tensor/TensorView, return sub-view with auto-deduced shape
-# ═════════════════════════════════════════════════════════════════════════
 
 func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
   ## Offset TensorView by `coord` (logical coords). Returns a sub-view whose shape is
