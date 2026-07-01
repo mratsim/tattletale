@@ -496,6 +496,18 @@ proc runMapZipWithTests =
     let r = mapModesWith(((2,2), (2,8))): product(it)
     doAssert r === (4, 16)
   block:
+    # product_each: product of each top-level element
+    let r = product_each(((2,2), (2,8)))
+    doAssert r === (4, 16)
+  block:
+    # product_each: single-element tuple remains tuple (CuTe compat)
+    let r = product_each((16,))
+    doAssert r === (16,)
+  block:
+    # product_each: nested single-element
+    let r = product_each(((4,4),))
+    doAssert r === (16,)
+  block:
     let r = zipModesWith((2, 4), (10, 20)): it_a + it_b
     doAssert r === (12, 24)
   block:
