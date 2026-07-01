@@ -82,18 +82,33 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   let sh = newTree(nnkDotExpr, layout, ident"shape")
   let st = newTree(nnkDotExpr, layout, ident"stride")
   if shT.kind != nnkTupleConstr:
-    # Scalar shape: `if shape == 1: 0 else: idx div stride`
+    # `block:` wrapper forces expression context for `when`
     result = quote do:
-      (if `sh` == 1: 0 else: `idx` div `st`)
+      when `sh` is Int[1]:
+        Int[0]()
+      elif `sh` is int:
+        if `sh` == 1:
+          0
+        else:
+          `idx` div `st`
+      else:
+        `idx` div `st`
   else:
     # Tuple shape: each mode gets its own guard
     var parts: seq[NimNode] = @[]
     for i in 0 ..< shT.len:
       let s = newCall(bindSym"[]", st, newLit(i))
       let shI = newCall(bindSym"[]", sh, newLit(i))
-
       parts.add quote do:
-        (if (when `shI` is Int: `shI` === Int[1]() else: `shI` == 1): 0 else: (`idx` div `s`) mod `shI`)
+        when `sh` is Int[1]:
+          Int[0]()
+        elif `sh` is int:
+          if `shI` == 1:
+            0
+          else:
+            (`idx` div `s`) mod `shI`
+        else:
+          (`idx` div `s`) mod `shI`
     result = nnkPar.newTree(parts)
 
 # ═══════════════════════════════════════════════════════════════
