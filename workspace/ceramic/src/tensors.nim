@@ -266,25 +266,24 @@ template inner_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed):
   ## CuTe: zipped_divide(tensor, tiler)(repeat<R0>(_), coord)
   block:
     evalOnceAs(zd, zipped_divide(tv.layout, tiler))
-    # zipped_divide returns rank-2 Layout: ((tile_modes), (rest_modes))  →  shape[0]/stride[0] = tile, shape[1]/stride[1] = rest
-    # rank(tiler) ≈ rank of tile part (mode 0). int() casts `static int`→plain int for const storage.
-    const R = int(rank(tiler)) # Workaround Error: invalid type: 'static[int literal(2)](2)' for const
-    let sel = (repeat(_, R), coord)          # underscore tile modes, fix rest modes
-    evalOnceAs(sub, slice(zd, sel))
-    evalOnceAs(offset, crd2idx(coord, zd.shape[1], zd.stride[1]))  # flat offset into rest
-    make_view(tv.data +% toIntVal(offset), sub)
+    # zipped_divide returns rank-2 Layout: ((tile_modes), (rest_modes))
+    # Result layout = tile group (shape[0], stride[0])
+    # Offset = crd2idx(coord, rest group shape, rest group stride)
+    evalOnceAs(offset, crd2idx(coord, zd.shape[1], zd.stride[1]))
+    evalOnceAs(subLayout, make_layout(zd.shape[0], zd.stride[0]))
+    make_view(tv.data +% toIntVal(offset), subLayout)
 
 template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
   ## Slice tile modes with coord, keep rest modes.
   ## CuTe: zipped_divide(tensor, tiler)(coord, repeat<R1>(_))
   block:
     evalOnceAs(zd, zipped_divide(tv.layout, tiler))
-    # rank-2 Layout: shape[0]/stride[0] = tile, shape[1]/stride[1] = rest
-    const R = int(rank(tiler)) # Workaround Error: invalid type: 'static[int literal(2)](2)' for const
-    let sel = (coord, repeat(_, R))          # fix tile modes, underscore rest modes
-    evalOnceAs(sub, slice(zd, sel))
-    evalOnceAs(offset, crd2idx(coord, zd.shape[0], zd.stride[0]))  # flat offset into tile
-    make_view(tv.data +% toIntVal(offset), sub)
+    # zipped_divide returns rank-2 Layout: ((tile_modes), (rest_modes))
+    # Result layout = rest group (shape[1], stride[1])
+    # Offset = crd2idx(coord, tile group shape, tile group stride)
+    evalOnceAs(offset, crd2idx(coord, zd.shape[0], zd.stride[0]))
+    evalOnceAs(subLayout, make_layout(zd.shape[1], zd.stride[1]))
+    make_view(tv.data +% toIntVal(offset), subLayout)
 
 
 template local_tile*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
