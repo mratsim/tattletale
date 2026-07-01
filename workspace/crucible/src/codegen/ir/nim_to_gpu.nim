@@ -782,8 +782,9 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     result = GpuAst(kind: gpuDeref, dOf: ctx.toGpuAst(node[0]))
 
   of nnkConstDef:
+    let identNode = if node[0].kind == nnkPragmaExpr: node[0][0] else: node[0]
     result = GpuAst(kind: gpuConstexpr,
-                    cIdent: ctx.toGpuAst(node[0]),
+                    cIdent: ctx.toGpuAst(identNode),
                     cValue: ctx.toGpuAst(node[2]),
                     cType: ctx.nimToGpuType(node))
     result.cIdent.iTyp = result.cType # also store the type in the symbol, for easier lookup later
@@ -797,6 +798,10 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       doAssert el.kind == nnkConstDef
       result.statements.add ctx.toGpuAst(el)
 
+  of nnkPragmaExpr:
+    ## {.genSym.}, {.inject.}, etc. — strip pragma, process inner node.
+    ## The pragma has no meaning for CUDA/C++ output.
+    result = ctx.toGpuAst(node[0])
   of nnkBindStmt:
     # Bind statement — binds a symbol to an overload. Skip (not relevant for CUDA).
     result = GpuAst(kind: gpuVoid)
