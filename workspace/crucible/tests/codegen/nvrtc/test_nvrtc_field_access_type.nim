@@ -3,6 +3,10 @@
 ## When tracing the TensorView `()` operator, several gaps were found
 ## in how crucible handles type expressions involving field access.
 ##
+## The exact DotExpr crash requires the full ceramic template chain
+## (see ceramic_crucible_issues.nim Issue 3). The cases below cover
+## the simpler patterns we confirmed along the way.
+##
 ## Run:
 ##   cd tattletale
 ##   CUDA_HOME=... PATH=... nim cpp -r \
@@ -22,8 +26,7 @@ type
     data: T
 
 # ── Case 1: generic call with DotExpr arg ──
-# rank(tv.layout.stride) — generic template where arg is a field access.
-# This currently works but let's keep the test for regression.
+# Simulates rank(tv.layout.stride) — generic template where arg is a field access.
 template rank(x: typed): int = 1
 
 const kernelRank = cuda:
