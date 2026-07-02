@@ -60,20 +60,22 @@ suite "Crucible - TensorView codegen repro":
 
   test "Pattern B — const + let":
     let code = kernelConstLet
-    echo code
+    var output: array[1, uint32]
     var nv = initNvrtc(code)
     nv.numBlocks = 1
     nv.threadsPerBlock = 1
     nv.compile()
     nv.getPtx()
-    check true
+    nv.execute("kernel", output, ())
+    check output[0] == 1
 
   test "Pattern C — block with const then yield":
     let code = kernelBlock
-    echo code
+    var output: array[1, uint32]
     var nv = initNvrtc(code)
     nv.numBlocks = 1
     nv.threadsPerBlock = 1
     nv.compile()
     nv.getPtx()
-    check true
+    nv.execute("kernel", output, ())
+    check output[0] == 1

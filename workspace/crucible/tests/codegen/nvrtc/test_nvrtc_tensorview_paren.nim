@@ -54,10 +54,11 @@ const kernel = cuda:
 suite "Crucible - DotExpr in generic type resolution":
   test "crd2idx with DotExpr arg inside cuda:":
     let code = kernel
-    echo code
+    var output: array[1, float32]
     var nv = initNvrtc(code)
     nv.numBlocks = 1
     nv.threadsPerBlock = 1
     nv.compile()
     nv.getPtx()
-    check true
+    nv.execute("kernel", output, ())
+    check output[0] == 0.0

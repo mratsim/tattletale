@@ -47,20 +47,22 @@ const kernelTypeof = cuda:
 suite "Crucible - type resolver edge cases":
   test "Case 1 — generic call with DotExpr arg":
     let code = kernelRank
-    echo code
+    var output: array[1, uint32]
     var nv = initNvrtc(code)
     nv.numBlocks = 1
     nv.threadsPerBlock = 1
     nv.compile()
     nv.getPtx()
-    check true
+    nv.execute("kernel", output, ())
+    check output[0] == 1
 
   test "Case 2 — typeof field access in type definition":
     let code = kernelTypeof
-    echo code
+    var output: array[1, uint32]
     var nv = initNvrtc(code)
     nv.numBlocks = 1
     nv.threadsPerBlock = 1
     nv.compile()
     nv.getPtx()
-    check true
+    nv.execute("kernel", output, ())
+    check output[0] == 1
