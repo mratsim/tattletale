@@ -439,7 +439,10 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # are not valid.
     result = "{"
     for i, el in ast.ocFields:
-      result.add ctx.genCuda(el.value)
+      if el.value.kind == gpuVoid:
+        result.add "{}"
+      else:
+        result.add ctx.genCuda(el.value)
       if i < ast.ocFields.len - 1:
         result.add ", "
     result.add '}'
@@ -463,14 +466,15 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuConstexpr:
     ## TODO: We need to change the code such that we emit `constexpr` inside of procs and
-    ## `__constant__` outside of procs. The point is we want to support mapping to `__constant__`
+    ## `__constant__` outside of procs. The point is we want to support mapping to `__constant__
     ## for `const foo = bar` Nim declarations to evaluate values at Nim's compile time.
     ## Alternatively, make user write `const foo {.constant.} = bar` to produce a global
     ## `__constant__` value.
+    let cInit = if ast.cValue.kind == gpuVoid: "{}" else: ctx.genCuda(ast.cValue)
     if ast.cType.kind == gtArray:
-      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genCuda(ast.cIdent)) & " = " & ctx.genCuda(ast.cValue)
+      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genCuda(ast.cIdent)) & " = " & cInit
     else:
-      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genCuda(ast.cIdent) & " = " & ctx.genCuda(ast.cValue)
+      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genCuda(ast.cIdent) & " = " & cInit
   of gpuMaterialize:
     result = ctx.genCuda(ast.mExpr)  # C++ const& binds implicitly to temporaries
 
