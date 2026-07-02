@@ -79,3 +79,47 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
         var fn = ctx.allFnTab[fnKey]
         insertResult(ctx, fn)
     )
+
+  reg.register("unnestBlockInits", pkTransform, phaseMain,
+    "Lifts preceding stmts out of var/let block-inits",
+    dependsOn = @["ensureBlock"],
+    run = proc(ctx: var GpuContext): void =
+      proc firstNonBlock(n: GpuAst): GpuAst =
+        result = n
+        while result.kind == gpuBlock and result.statements.len == 1:
+          result = result.statements[0]
+
+      proc unnest(n: var GpuAst) =
+        case n.kind
+        of gpuBlock:
+          var newStmts: seq[GpuAst]
+          for stmt in n.statements:
+            let inner = firstNonBlock(stmt)
+            if inner.kind in {gpuVar}:
+              let vInitInner = firstNonBlock(inner.vInit)
+              if vInitInner.kind == gpuBlock and vInitInner.statements.len > 1:
+                for j in 0 ..< vInitInner.statements.len - 1:
+                  newStmts.add vInitInner.statements[j]
+                inner.vInit = vInitInner.statements[^1]
+                newStmts.add stmt
+              else:
+                newStmts.add stmt
+            else:
+              newStmts.add stmt
+          n.statements = newStmts
+          for i in 0 ..< n.statements.len:
+            unnest(n.statements[i])
+        of gpuIf:
+          unnest(n.ifThen)
+          if n.ifElse.kind != gpuVoid:
+            unnest(n.ifElse)
+        of gpuFor:
+          unnest(n.fBody)
+        of gpuWhile:
+          unnest(n.wBody)
+        else:
+          discard
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        unnest(fn.pBody)
+    )
