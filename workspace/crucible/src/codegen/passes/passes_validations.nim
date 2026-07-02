@@ -39,6 +39,13 @@ proc warnUnassigned(n: GpuAst; fnName: string): void =
   else:
     discard
 
+proc checkReservedKeywords*(ctx: var GpuContext; reserved: openArray[string]; backendName: string) =
+  for fnKey in ctx.allFnTab.keys:
+    let fn = ctx.allFnTab[fnKey]
+    if fn.pName.ident() in reserved:
+      error "'" & fn.pName.ident() & "' is a reserved keyword in " & backendName &
+            ". Rename the function."
+  
 proc registerValidationPasses*(reg: var PassRegistry) =
   ## Register passes that check IR invariants.
 

@@ -465,7 +465,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = gpuTypeToString(ast.ocType) & "("
       for i, el in ast.ocFields:
         if el.value.kind == gpuVoid:
-          result.add gpuTypeToString(el.typ, allowEmptyIdent = true) & "()"
+          result.add gpuTypeToString(el.typ, allowEmptyIdent = true) & "(0)"
+        elif el.value.kind == gpuLit and el.value.lValue == "DEFAULT":
+          result.add gpuTypeToString(el.typ, allowEmptyIdent = true) & "(0)"
         else:
           result.add ctx.genVulkan(el.value)
         if i < ast.ocFields.len - 1:
