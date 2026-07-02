@@ -514,6 +514,18 @@ proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, a
     return result
   else:
     if n.kind == nnkEmpty: return initGpuType(gtVoid)
+    # ── Type canonicalization ──
+    # If n is a value expression (not a type node) that has a recognizable type,
+    # resolve it to its actual type node. This prevents crashes when e.g.
+    # w.layout.stride[0] (BracketExpr with DotExpr base) leaks into type resolution;
+    # getTypeInst() returns Int[1], a clean type node.
+    let n = block:
+      if n.kind notin {nnkSym, nnkIdent, nnkTupleTy, nnkObjectTy, nnkPtrTy, nnkTupleConstr} and
+         n.typeKind != ntyNone:
+        n.getTypeInst()
+      else:
+        n
+    # ── end canonicalization ──
     case n.typeKind
     of ntyBool, ntyInt .. ntyUint64: # includes all float types
       result = initGpuType(toGpuTypeKind n.typeKind)
@@ -643,12 +655,15 @@ proc parseTypeFields*(ctx: var GpuContext, node: NimNode): seq[GpuTypeField] =
         # Resolve the type directly from the bracket expression.
         result.add GpuTypeField(name: "Field" & $i,
                                 typ: ctx.nimToGpuType(ch))
+        result.add GpuTypeField(name: "Field" & $i,
+                                typ: ctx.nimToGpuType(ch))
       else:
         # Unexpected child in tuple type constructor.
         # Resolve the type directly from the child node.
         result.add GpuTypeField(name: "Field" & $i,
                                 typ: ctx.nimToGpuType(ch))
   else:
+    raiseAssert "Unsupported type to parse fields from: " & $node.kind
     raiseAssert "Unsupported type to parse fields from: " & $node.kind
 
 template findIdx(col, el): untyped =
