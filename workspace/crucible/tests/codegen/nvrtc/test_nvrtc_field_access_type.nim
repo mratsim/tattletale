@@ -3,9 +3,9 @@
 ## When tracing the TensorView `()` operator, several gaps were found
 ## in how crucible handles type expressions involving field access.
 ##
-## The exact DotExpr crash requires the full ceramic template chain
-## (see ceramic_crucible_issues.nim Issue 3). The cases below cover
-## the simpler patterns we confirmed along the way.
+## Cases:
+##   1. generic call with DotExpr arg — works (regression guard)
+##   2. typeof field access in typedef — crashes parseTypeFields
 ##
 ## Run:
 ##   cd tattletale
