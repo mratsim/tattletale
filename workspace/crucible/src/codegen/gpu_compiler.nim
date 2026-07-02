@@ -35,6 +35,11 @@ macro cuda*(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerValidationPasses()
+  reg.register("rejectCUDAKeywords", pkValidation, phaseEarly,
+    "Rejects identifiers that are reserved CUDA keywords",
+    proc(ctx: var GpuContext): void =
+      ctx.checkReservedKeywords(["__global__", "__device__", "__shared__", "__constant__"], "CUDA")
+  )
   reg.registerLegalizationPasses()
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
     "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
@@ -51,6 +56,11 @@ macro webgpu*(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerValidationPasses()
+  reg.register("rejectWGSLKeywords", pkValidation, phaseEarly,
+    "Rejects identifiers that are reserved WGSL keywords",
+    proc(ctx: var GpuContext): void =
+      ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
+  )
   reg.registerLegalizationPasses()
   let gpuAst = ctx.toGpuAst(body)
   runPasses(ctx, reg)
@@ -62,6 +72,13 @@ macro opencl*(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerValidationPasses()
+  reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
+    "Rejects identifiers that are reserved OpenCL C keywords",
+    proc(ctx: var GpuContext): void =
+      ctx.checkReservedKeywords(["kernel", "__kernel", "global", "__global",
+        "local", "__local", "constant", "__constant",
+        "read_only", "write_only", "read_write"], "OpenCL C")
+  )
   reg.registerLegalizationPasses()
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
     "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
@@ -78,6 +95,11 @@ macro vulkan*(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerValidationPasses()
+  reg.register("rejectVulkanKeywords", pkValidation, phaseEarly,
+    "Rejects identifiers that are reserved GLSL keywords",
+    proc(ctx: var GpuContext): void =
+      ctx.checkReservedKeywords(["extern", "interface", "buffer"], "GLSL")
+  )
   reg.registerLegalizationPasses()
   let gpuAst = ctx.toGpuAst(body)
   runPasses(ctx, reg)
