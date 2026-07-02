@@ -14,12 +14,12 @@ type
   FixMe*[V: static int] = object
 
 const kernelCode = opencl:
-  proc kernel(C: ptr UncheckedArray[uint32]) {.global.} =
+  proc dummyKernel(C: ptr UncheckedArray[uint32]) {.global.} =
     const x {.genSym.} = FixMe[8]()
     C[0] = 1'u32
 
 const kernelCode2 = opencl:
-  proc kernel(C: ptr UncheckedArray[uint32]) {.global.} =
+  proc dummyKernel(C: ptr UncheckedArray[uint32]) {.global.} =
     const tup {.genSym.} = (FixMe[1](), FixMe[8]())
     C[0] = 1'u32
 
@@ -28,16 +28,22 @@ suite "OpenCL - dummy-field initializers":
     var buf: array[1, uint32]
     var ctx = initOpenCL()
     defer: ctx.shutdown()
-    let result = execOpenCL(ctx, kernelCode, "kernel",
-    outputBytes = 4,
-      inputs = [(cast[pointer](buf[0].addr), 4)])
+    echo "===="
+    echo kernelCode
+    echo "===="
+    let result = execOpenCL(ctx, kernelCode, "dummyKernel",
+      outputBytes = 4,
+      inputs = [])
     check cast[ptr uint32](result[0].addr)[] == 1
 
   test "tuple of dummy structs const":
     var buf: array[1, uint32]
     var ctx = initOpenCL()
     defer: ctx.shutdown()
-    let result = execOpenCL(ctx, kernelCode2, "kernel",
-    outputBytes = 4,
-      inputs = [(cast[pointer](buf[0].addr), 4)])
+    echo "===="
+    echo kernelCode2
+    echo "===="
+    let result = execOpenCL(ctx, kernelCode2, "dummyKernel",
+      outputBytes = 4,
+      inputs = [])
     check cast[ptr uint32](result[0].addr)[] == 1

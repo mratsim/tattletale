@@ -305,6 +305,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
 
+
   of gpuVar:
     let attrs = if ast.vAttributes.len > 0: ast.vAttributes.join(" ") & ' '
                 else: ""
@@ -424,8 +425,12 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuTypeDef:
     result = gpuTypeToString(ast.tTyp) & " {\n"
-    for el in ast.tFields:
-      result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+    if ast.tFields.len == 0:
+      # OpenCL C requires at least one field in a struct.
+      result.add "  char _;\n"
+    else:
+      for el in ast.tFields:
+        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
     result.add '}'
 
   of gpuObjConstr:

@@ -686,9 +686,9 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
                elif typ.kind == gtGenericInst: typ.gFields
                else: raiseAssert "ObjConstr must have an object type: " & $typ
     if flds.len == 0:
-      # Empty struct (e.g. Int[N]) — CUDA doesn't support compound literals.
-      # Skip the object construction entirely.
-      result = GpuAst(kind: gpuVoid)
+      # Empty struct (e.g. Int[N]) — produce empty-ocFields gpuObjConstr
+      # so each backend emits language-appropriate init ({} / TypeName())
+      result = GpuAst(kind: gpuObjConstr, ocType: typ)
     else:
       result = GpuAst(kind: gpuObjConstr, ocType: typ)
       # find all fields that have been defined by the user
