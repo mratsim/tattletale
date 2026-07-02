@@ -802,8 +802,13 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     ## {.genSym.}, {.inject.}, etc. — strip pragma, process inner node.
     ## The pragma has no meaning for CUDA/C++ output.
     result = ctx.toGpuAst(node[0])
-  of nnkBindStmt:
-    # Bind statement — binds a symbol to an overload. Skip (not relevant for CUDA).
+  of nnkBindStmt, nnkMixinStmt:
+    ## Bind/mixin statements are compile-time directives for template resolution.
+    ## Irrelevant for GPU codegen — skip them.
+    result = GpuAst(kind: gpuVoid)
+  of nnkPragma:
+    ## Pragmas are compile-time annotations (e.g. {.warning.} on operators).
+    ## They are irrelevant for GPU codegen — skip them.
     result = GpuAst(kind: gpuVoid)
   of nnkWhenStmt:
     raiseAssert "We shouldn't be seeing a `when` statement after sem check of the Nim code."
