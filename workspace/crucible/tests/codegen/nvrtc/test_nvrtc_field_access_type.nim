@@ -1,9 +1,7 @@
-## Minimal repro: DotExpr crashes getGenericTypeName
+## Crucible type resolver edge cases
 ##
-## Crucible's getGenericTypeName (resolvers.nim:84) only handles
-## nnkSym and nnkBracketExpr. A DotExpr in generic type position
-## (like when a template expansion produces `tv.layout.stride`
-## as a type argument) crashes.
+## When tracing the TensorView `()` operator, several gaps were found
+## in how crucible handles type expressions involving field access.
 ##
 ## Run:
 ##   cd tattletale
@@ -23,21 +21,39 @@ type
   Wrapper*[T] = object
     data: T
 
-# Template that expands to a DotExpr in type position —
-# simulating what the TensorView `()` operator does.
-template getFieldType(obj: typed): typedesc =
-  type(obj.val)
+# ── Case 1: generic call with DotExpr arg ──
+# rank(tv.layout.stride) — generic template where arg is a field access.
+# This currently works but let's keep the test for regression.
+template rank(x: typed): int = 1
 
-const kernel = cuda:
+const kernelRank = cuda:
+  proc kernel(C: ptr UncheckedArray[uint32]) {.global.} =
+    var x: Outer[uint32]
+    let r = rank(x.inner.val)
+    C[0] = uint32(r)
+
+# ── Case 2: type definition from typeof with field access ──
+# type F = type(x.inner.val) — crashes "Unsupported type to parse fields from: nnkSym"
+const kernelTypeof = cuda:
   proc kernel(C: ptr UncheckedArray[uint32]) {.global.} =
     var x: Outer[uint32]
     type F = type(x.inner.val)
     let w = Wrapper[F]()
     C[0] = 1'u32
 
-suite "Crucible - nested field access in type context":
-  test "Generic with field-access type param inside cuda: compiles":
-    let code = kernel
+suite "Crucible - type resolver edge cases":
+  test "Case 1 — generic call with DotExpr arg":
+    let code = kernelRank
+    echo code
+    var nv = initNvrtc(code)
+    nv.numBlocks = 1
+    nv.threadsPerBlock = 1
+    nv.compile()
+    nv.getPtx()
+    check true
+
+  test "Case 2 — typeof field access in type definition":
+    let code = kernelTypeof
     echo code
     var nv = initNvrtc(code)
     nv.numBlocks = 1
