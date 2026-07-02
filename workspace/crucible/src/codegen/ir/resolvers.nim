@@ -318,15 +318,9 @@ proc initGpuGenericInst*(ctx: var GpuContext, t: NimNode): GpuType =
       return ctx.nimToGpuType(t.getTypeInst())
     else:
       return GpuType(kind: gtGenericInst, gName: t.repr)
+  # Note: nnkCall and nnkObjConstr branches were removed —
+  # value expressions are now canonicalized at the nimToGpuType entry.
   case t.kind
-  of nnkCall:
-    # Generic instantiations sometimes appear as Call(Sym "[]", Sym "Layout", ...)
-    # instead of BracketExpr. Use getTypeInst() to get the resolved concrete type.
-    let inst = t.getTypeInst()
-    if inst.kind == nnkBracketExpr:
-      result = ctx.initGpuGenericInst(inst)
-    else:
-      raiseAssert "Expected BracketExpr from getTypeInst for nnkCall: " & $inst.treerepr
   of nnkBracketExpr:
     result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(t))
     result.gArgs = ctx.parseGenericArgs(t)
@@ -334,19 +328,6 @@ proc initGpuGenericInst*(ctx: var GpuContext, t: NimNode): GpuType =
     result.gFields = ctx.parseTypeFields(impl)
   of nnkObjectTy:
     result = ctx.parseGenericImpl(t, t)
-  of nnkObjConstr:
-    if t.len >= 1 and t[0].kind != nnkEmpty:
-      result = ctx.initGpuGenericInst(t[0])
-    elif t.typeKind == ntyGenericInst:
-      # t[0] is nnkEmpty — Int[N]() in const context loses the type child.
-      # Recover via getTypeInst() which returns Int[N] as BracketExpr.
-      let inst = t.getTypeInst()
-      if inst.kind == nnkBracketExpr:
-        result = ctx.initGpuGenericInst(inst)
-      else:
-        result = ctx.parseGenericImpl(inst.getTypeImpl(), t)
-    else:
-      raiseAssert "Unexpected empty nnkObjConstr node: " & $t.treerepr
   of nnkSym:
     # All callers have already verified typeKind == ntyGenericInst.
     # Use getTypeInst() to resolve the full generic type (BracketExpr).
