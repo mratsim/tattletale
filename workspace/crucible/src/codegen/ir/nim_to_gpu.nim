@@ -608,7 +608,7 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
     result.lType = initGpuType(gtUInt32) ## XXX: base on target platform!
   of nnkFloat64Lit, nnkFloatLit:
     result = GpuAst(kind: gpuLit)
-    result.lValue = $node.floatVal & "f64"
+    result.lValue = $node.floatVal # no suffix needed for double (C/C++ CUDA)
     result.lType = initGpuType(gtFloat64)
   of nnkFloat32Lit:
     result = GpuAst(kind: gpuLit)
