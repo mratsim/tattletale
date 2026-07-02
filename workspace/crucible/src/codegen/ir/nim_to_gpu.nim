@@ -8,6 +8,7 @@
 import std / [macros, strutils, sequtils, options, tables, sets]
 
 import ./gpu_types
+import ./gpu_type_constructors
 import ../builtins/ambiguous_builtins
 import ./resolvers
 import ../passes/pass_registry
@@ -144,6 +145,7 @@ proc getFnName(ctx: var GpuContext, n: NimNode): GpuAst =
     # If it's not a symbol, there is no signature associated
     # ctx.sigTab[sig] = result
   result.symbolKind = gsProc # make sure it's a proc
+
 proc addProcToGenericInsts(ctx: var GpuContext, node: NimNode, name: GpuAst) =
   ## Looks up the implementation of the given function and stores it in our table
   ## of generic instantiations.
