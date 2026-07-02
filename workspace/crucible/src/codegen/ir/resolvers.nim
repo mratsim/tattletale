@@ -501,7 +501,12 @@ proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, a
     # w.layout.stride[0] (BracketExpr with DotExpr base) leaks into type resolution;
     # getTypeInst() returns Int[1], a clean type node.
     let n = block:
+      # Canonicalize value expressions to their actual type nodes.
+      # nnkBracketExpr with a Sym/BracketExpr base (e.g. Int[8], tuple types)
+      # are legitimate type expressions — only DotExpr-base bracket expressions
+      # are value expressions that need resolution.
       if n.kind notin {nnkSym, nnkIdent, nnkTupleTy, nnkObjectTy, nnkPtrTy, nnkTupleConstr} and
+         (n.kind != nnkBracketExpr or n[0].kind notin {nnkSym, nnkBracketExpr}) and
          n.typeKind != ntyNone:
         n.getTypeInst()
       else:
@@ -523,12 +528,10 @@ proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, a
       ## `ptr UncheckedArray[T]`. We simply remove the `UncheckedArray` part.
       result = initGpuUAType(ctx.getInnerPointerType(n, allowToFail, allowArrayIdent))
     of ntyObject, ntyAlias, ntyTuple:
-      # for aliases, treat them identical to regular object types, but
-      # `getTypeName` returns the alias!
-      let impl = if n.kind == nnkTupleConstr: n # might actually _lose_ information if used getTypeImpl
+      let impl = if n.kind == nnkTupleConstr: n
                  else: n.getTypeImpl
       let flds = ctx.parseTypeFields(impl)
-      let typName = getTypeName(n) # might be an object construction
+      let typName = getTypeName(n)
       result = initGpuObjectType(typName, flds)
     of ntyArray:
       # For a generic, static array type, e.g.:
@@ -636,15 +639,12 @@ proc parseTypeFields*(ctx: var GpuContext, node: NimNode): seq[GpuTypeField] =
         # Resolve the type directly from the bracket expression.
         result.add GpuTypeField(name: "Field" & $i,
                                 typ: ctx.nimToGpuType(ch))
-        result.add GpuTypeField(name: "Field" & $i,
-                                typ: ctx.nimToGpuType(ch))
       else:
         # Unexpected child in tuple type constructor.
         # Resolve the type directly from the child node.
         result.add GpuTypeField(name: "Field" & $i,
                                 typ: ctx.nimToGpuType(ch))
   else:
-    raiseAssert "Unsupported type to parse fields from: " & $node.kind
     raiseAssert "Unsupported type to parse fields from: " & $node.kind
 
 template findIdx(col, el): untyped =
