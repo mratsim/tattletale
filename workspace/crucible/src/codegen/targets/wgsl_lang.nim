@@ -986,8 +986,12 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuTypeDef:
     result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
-    for el in ast.tFields:
-      result.add "  " & gpuTypeToString(el.typ, el.name) & ",\n"
+    if ast.tFields.len == 0:
+      # WGSL requires at least one member in a struct.
+      result.add "  _padding: u32,\n"
+    else:
+      for el in ast.tFields:
+        result.add "  " & gpuTypeToString(el.typ, el.name) & ",\n"
     result.add '}'
 
   of gpuAlias:

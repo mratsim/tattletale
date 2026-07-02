@@ -18,12 +18,12 @@ type
   FixMe*[V: static int] = object
 
 const kernelCode = webgpu:
-  proc kernel(C: ptr UncheckedArray[uint32]) {.global.} =
+  proc dummyKernel(C: ptr UncheckedArray[uint32]) {.global.} =
     const x {.genSym.} = FixMe[8]()
     C[0] = 1'u32
 
 const kernelCode2 = webgpu:
-  proc kernel(C: ptr UncheckedArray[uint32]) {.global.} =
+  proc dummyKernel(C: ptr UncheckedArray[uint32]) {.global.} =
     const tup {.genSym.} = (FixMe[1](), FixMe[8]())
     C[0] = 1'u32
 
@@ -32,12 +32,15 @@ suite "WebGPU - dummy-field initializers":
     var buf: array[1, uint32]
     var ctx = initWgpu()
     defer: ctx.shutdown()
-    let result = execWgpu(ctx, kernelCode, "kernel", 4, inputs = [(cast[pointer](buf[0].addr), 4)])
+    echo kernelCode
+    let result = execWgpu(ctx, kernelCode, "dummyKernel", 4, inputs = [])
     check cast[ptr uint32](result[0].addr)[] == 1
+
 
   test "tuple of dummy structs const":
     var buf: array[1, uint32]
     var ctx = initWgpu()
     defer: ctx.shutdown()
-    let result = execWgpu(ctx, kernelCode2, "kernel", 4, inputs = [(cast[pointer](buf[0].addr), 4)])
+    echo kernelCode2
+    let result = execWgpu(ctx, kernelCode2, "dummyKernel", 4, inputs = [])
     check cast[ptr uint32](result[0].addr)[] == 1

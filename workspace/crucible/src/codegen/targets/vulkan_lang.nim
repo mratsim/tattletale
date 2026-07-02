@@ -448,17 +448,29 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuTypeDef:
     result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
-    for el in ast.tFields:
-      result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+    if ast.tFields.len == 0:
+      # GLSL requires at least one field in a struct.
+      result.add "  uint _padding;\n"
+    else:
+      for el in ast.tFields:
+        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
     result.add '}'
 
   of gpuObjConstr:
-    result = "{"
-    for i, el in ast.ocFields:
-      result.add ctx.genVulkan(el.value)
-      if i < ast.ocFields.len - 1:
-        result.add ", "
-    result.add '}'
+    if ast.ocFields.len == 0:
+      # Empty ocFields — struct has backend-added padding, use {0} for zero-init
+      result = gpuTypeToString(ast.ocType) & "(0)"
+    else:
+      # GLSL uses constructor syntax TypeName(val1, val2), not C-style {val1, val2}
+      result = gpuTypeToString(ast.ocType) & "("
+      for i, el in ast.ocFields:
+        if el.value.kind == gpuVoid:
+          result.add gpuTypeToString(el.typ, allowEmptyIdent = true) & "()"
+        else:
+          result.add ctx.genVulkan(el.value)
+        if i < ast.ocFields.len - 1:
+          result.add ", "
+      result.add ')'
 
   of gpuInlineAsm:
     result = indentStr & "asm(" & ast.stmt.strip & ");"
