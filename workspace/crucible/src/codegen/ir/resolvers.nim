@@ -528,6 +528,10 @@ proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, a
       ## `ptr UncheckedArray[T]`. We simply remove the `UncheckedArray` part.
       result = initGpuUAType(ctx.getInnerPointerType(n, allowToFail, allowArrayIdent))
     of ntyObject, ntyAlias, ntyTuple:
+      # For aliases (type F = int), resolve to the underlying type.
+      # Don't call parseTypeFields on aliases of primitive types.
+      if n.typeKind == ntyAlias and n.kind == nnkSym:
+        return ctx.nimToGpuType(n.getTypeImpl())
       let impl = if n.kind == nnkTupleConstr: n
                  else: n.getTypeImpl
       let flds = ctx.parseTypeFields(impl)

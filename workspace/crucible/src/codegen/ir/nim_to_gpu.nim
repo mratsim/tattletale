@@ -660,16 +660,22 @@ proc toGpuAst*(ctx: var GpuContext, node: NimNode): GpuAst =
       result = GpuAst(kind: gpuVoid)
     else:
       let typ = ctx.nimToGpuType(node[0])
+      # For type aliases resolved to primitives (e.g. type F = type(x.val) → uint32),
+      # don't emit a typedef — the target already knows the type.
+      let isBuiltin = typ.kind notin {gtObject, gtGenericInst}
       case node[2].kind
-      of nnkObjectTy: # regular `type foo = object`
+      of nnkObjectTy:
         result = GpuAst(kind: gpuTypeDef, tTyp: typ)
         result.tFields = ctx.parseTypeFields(node[2])
       of nnkCall:
-        # type defined via constructor call like `type Foo = Bar(...)`
-        result = GpuAst(kind: gpuTypeDef, tTyp: typ)
+        result = if isBuiltin: GpuAst(kind: gpuVoid)
+                 else: GpuAst(kind: gpuTypeDef, tTyp: typ)
       of nnkSym:      # a type alias `type foo = bar`
-        result = GpuAst(kind: gpuAlias, aTyp: typ,
-                        aTo: ctx.toGpuAst(node[2]))
+        if node[2].typeKind in {ntyObject, ntyTuple, ntyGenericInst}:
+          result = GpuAst(kind: gpuAlias, aTyp: typ,
+                          aTo: ctx.toGpuAst(node[2]))
+        else:
+          result = GpuAst(kind: gpuVoid)
       else:
         raiseAssert "Unexpected node kind in TypeDef: " & $node[2].kind
 
