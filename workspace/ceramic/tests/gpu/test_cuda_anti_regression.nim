@@ -8,13 +8,12 @@ import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/src/kernel_fillwith_gpu
 
 # ═════════════════════════════════════════════════════════════════════════
-# Issue 1 (FIXED): PragmaExpr / genSym
+# Issue 1 (FIXED): make_layout crashes cuda: with "expected an expression"
 #
-# make_layout expands with evalOnceAs → {.genSym.} pragma.
-# Crucible now strips PragmaExpr inside nnkConstDef and nnkCall.
-# Also fixed: nnkObjConstr with Empty type child (Int[N]() in const).
+# make_layout uses evalOnceAs which wraps temporaries in {.genSym.}.
+# Crucible couldn't handle nnkPragmaExpr — the genSym pragma crashed
+# codegen with "expected an expression" at the constexpr declaration.
 # ═════════════════════════════════════════════════════════════════════════
-
 const kernelLayout = cuda:
   proc kernel1(output: ptr UncheckedArray[uint32]) {.global.} =
     let L = make_layout((8, 16))
@@ -22,13 +21,12 @@ const kernelLayout = cuda:
     output[1] = uint32(size(L.mode(1)).toIntVal)
 
 # ═════════════════════════════════════════════════════════════════════════
-# Issue 2 (FIXED): nnkObjConstr with Empty type child
+# Issue 2 (FIXED): Int[N]() in const produces "= ;" in generated code
 #
-# The const x {.genSym.} = Int[N]() pattern generates nnkObjConstr where
-# the type child is optimized away to Empty. Crucible now returns a proper
-# gpuObjConstr with empty ocFields instead of gpuVoid.
+# const x = Int[8]() generates nnkObjConstr where Nim's const-folder
+# replaces the type child with Empty. Crucible returned gpuVoid, causing
+# the backend to emit "constexpr Type x = ;" — missing initializer.
 # ═════════════════════════════════════════════════════════════════════════
-
 const kernelObjConstr = cuda:
   proc kernel2(C: ptr UncheckedArray[uint32]) {.global.} =
     const x {.genSym.} = Int[8]()
@@ -36,13 +34,12 @@ const kernelObjConstr = cuda:
     C[0] = 1'u32
 
 # ═════════════════════════════════════════════════════════════════════════
-# Issue 3 (FIXED): let-block-RHS with evalOnceAs pattern
+# Issue 3 (FIXED): let L = block: const tmp; tmp leaks constexpr into RHS
 #
-# Inside a kernel, let L = block: const tmp; tmp  must not leak the
-# constexpr into the assignment RHS. The unnestBlockInits pass lifts
-# preceding statements before the variable declaration.
+# let L = block: const tmp = ...; tmp  generates "Type L = constexpr Type tmp = ...;"
+# which fails NVRTC with "expected an expression" because the constexpr
+# declaration is embedded in the middle of the assignment.
 # ═════════════════════════════════════════════════════════════════════════
-
 const kernelLetBlock = cuda:
   proc kernel3(C: ptr UncheckedArray[uint32]) {.global.} =
     let L = block:
@@ -50,7 +47,21 @@ const kernelLetBlock = cuda:
       tmp
     C[0] = 1'u32
 
+# ═════════════════════════════════════════════════════════════════════════
+# Issue 4 (FIXED): make_layout inside cuda: fails NVRTC
+#
+# make_layout expands with evalOnceAs-generated constexpr in a let block.
+# The constexpr leaked into the assignment RHS, producing the same
+# "expected an expression" error from Issue 3. Fixed by the same pass.
+# ═════════════════════════════════════════════════════════════════════════
+const kernelTensorView = cuda:
+  proc kernel4(C: ptr UncheckedArray[float32]) {.global.} =
+    let L = make_layout((8, 16))
+    let tv = make_view(C, L)
+    tv[0, 0] = 42.0'f32
+
 suite "Ceramic × Crucible anti-regression":
+
   test "Issue 1 — make_layout with genSym":
     var output: array[2, uint32]
     var nv = initNvrtc(kernelLayout)
@@ -81,3 +92,14 @@ suite "Ceramic × Crucible anti-regression":
     nv.getPtx()
     nv.execute("kernel3", output, ())
     check output[0] == 1
+
+  test "Issue 4 — make_layout + make_view + tv[]=":
+    var buf: array[16, float32]
+    var nv = initNvrtc(kernelTensorView)
+    nv.numBlocks = 1
+    nv.threadsPerBlock = 1
+    nv.compile()
+    nv.getPtx()
+    for i in 0 ..< buf.len: buf[i] = -1.0'f32
+    nv.execute("kernel4", buf, ())
+    check buf[0] == 42.0'f32
