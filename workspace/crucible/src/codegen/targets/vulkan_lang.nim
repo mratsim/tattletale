@@ -433,12 +433,13 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     else: result = ast.lValue
 
   of gpuArrayLit:
-    result = "{"
+    # GLSL uses array constructor syntax Type[](val1, val2), not C-style {val1, val2}
+    result = gpuTypeToString(ast.aLitType) & "[]("
     for i, el in ast.aValues:
       result.add gpuTypeToString(ast.aLitType) & '(' & ctx.genVulkan(el) & ')'
       if i < ast.aValues.high:
         result.add ", "
-    result.add '}'
+    result.add ')'
 
   of gpuReturn:
     result = indentStr & "return " & ctx.genVulkan(ast.rValue)
