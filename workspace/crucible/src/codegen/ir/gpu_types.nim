@@ -333,6 +333,10 @@ type
     # types are not stored in the instantiation, because we look up the types from the original function when generating the code
 
 
+type
+  TypeRegistry* = object
+    types*: OrderedTable[GpuType, GpuAst]  ## type definition dedup
+
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,
                          gtFloat32, gtFloat64, gtSize_t}

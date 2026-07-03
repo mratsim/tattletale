@@ -96,13 +96,13 @@ proc determineArrayLength*(n: NimNode, allowArrayIdent: bool): int =
 #  Forward declarations (defined below)
 # ═══════════════════════════════════════════════════════════════════════
 
-proc initGpuArrayType*(ctx: var GpuContext, aTyp: NimNode, len: int): GpuType
-proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType
-proc getInnerPointerType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType
-proc parseGenericImpl*(ctx: var GpuContext, impl: NimNode, t: NimNode): GpuType
-proc initGpuGenericInst*(ctx: var GpuContext, t: NimNode): GpuType
-proc gpuTypeMaybeFromSymbol*(ctx: var GpuContext, t: NimNode, n: NimNode): GpuType
-proc parseTypeFields*(ctx: var GpuContext, node: NimNode): seq[GpuTypeField]
+proc initGpuArrayType*(ctx: var GpuContext, reg: var TypeRegistry, aTyp: NimNode, len: int): GpuType
+proc nimToGpuType*(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType
+proc getInnerPointerType*(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType
+proc parseGenericImpl*(ctx: var GpuContext, reg: var TypeRegistry, impl: NimNode, t: NimNode): GpuType
+proc initGpuGenericInst*(ctx: var GpuContext, reg: var TypeRegistry, t: NimNode): GpuType
+proc gpuTypeMaybeFromSymbol*(ctx: var GpuContext, reg: var TypeRegistry, t: NimNode, n: NimNode): GpuType
+proc parseTypeFields*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): seq[GpuTypeField]
 proc getTypeName*(n: NimNode, recursedSym: bool = false): string
 proc constructTupleTypeName*(n: NimNode): string
 
@@ -110,36 +110,36 @@ proc constructTupleTypeName*(n: NimNode): string
 #  Generic type argument / implementation resolution
 # ═══════════════════════════════════════════════════════════════════════
 
-proc parseGenericArgs*(ctx: var GpuContext, t: NimNode): seq[GpuType] =
+proc parseGenericArgs*(ctx: var GpuContext, reg: var TypeRegistry, t: NimNode): seq[GpuType] =
   case t.kind
   of nnkSym: return # no generic arguments
   of nnkBracketExpr:
     for i in 1 ..< t.len:
-      result.add ctx.nimToGpuType(t[i])
+      result.add ctx.nimToGpuType(reg, t[i])
   else:
     raiseAssert "Unexpected node kind in parseGenericArgs: " & $t.treerepr
 
-proc parseGenericImpl*(ctx: var GpuContext, impl: NimNode, t: NimNode): GpuType =
+proc parseGenericImpl*(ctx: var GpuContext, reg: var TypeRegistry, impl: NimNode, t: NimNode): GpuType =
   ## Given a type implementation (ObjectTy, DistinctTy, etc.), parse it as a generic instance.
   case impl.kind
   of nnkDistinctTy:
     ## XXX: assumes distinct of inbuilt type, not object!
-    result = ctx.nimToGpuType(impl[0])
+    result = ctx.nimToGpuType(reg, impl[0])
   of nnkObjectTy:
     doAssert impl.kind == nnkObjectTy, "Unexpected node kind for generic inst: " & $impl.treerepr
     ## XXX: use signature hash for type name? Otherwise will produce duplicates
     result = GpuType(kind: gtGenericInst, gName: t.repr)
-    result.gFields = ctx.parseTypeFields(impl)
+    result.gFields = ctx.parseTypeFields(reg, impl)
   of nnkStaticTy:
     # Static int — preserve the value for struct naming.
     result = GpuType(kind: gtStatic, builtin: true, sValue: int(impl[0].intVal))
   else:
     raiseAssert "Unexpected node kind in for genericInst: " & $impl.treerepr & " kind=" & $impl.kind
 
-proc initGpuGenericInst*(ctx: var GpuContext, t: NimNode): GpuType =
+proc initGpuGenericInst*(ctx: var GpuContext, reg: var TypeRegistry, t: NimNode): GpuType =
   if t.typeKind notin {ntyGenericInst}:
     if t.typeKind != ntyNone:
-      return ctx.nimToGpuType(t.getTypeInst())
+      return ctx.nimToGpuType(reg, t.getTypeInst())
     else:
       return GpuType(kind: gtGenericInst, gName: t.repr)
   # Note: nnkCall and nnkObjConstr branches were removed —
@@ -147,21 +147,21 @@ proc initGpuGenericInst*(ctx: var GpuContext, t: NimNode): GpuType =
   case t.kind
   of nnkBracketExpr:
     result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(t))
-    result.gArgs = ctx.parseGenericArgs(t)
+    result.gArgs = ctx.parseGenericArgs(reg, t)
     let impl = t.getTypeImpl() # impl for the `gFields`
-    result.gFields = ctx.parseTypeFields(impl)
+    result.gFields = ctx.parseTypeFields(reg, impl)
   of nnkObjectTy:
-    result = ctx.parseGenericImpl(t, t)
+    result = ctx.parseGenericImpl(reg, t, t)
   of nnkSym:
     # All callers have already verified typeKind == ntyGenericInst.
     # Use getTypeInst() to resolve the full generic type (BracketExpr).
     # Avoid getImpl() which can return local variable IdentDefs from template expansions.
     let inst = t.getTypeInst()
     if inst.kind == nnkBracketExpr:
-      result = ctx.initGpuGenericInst(inst)
+      result = ctx.initGpuGenericInst(reg, inst)
     else:
       let impl = inst.getTypeImpl()
-      result = ctx.parseGenericImpl(impl, t)
+      result = ctx.parseGenericImpl(reg, impl, t)
   else:
     raiseAssert "Unexpected t.kind for genericInst: " & $t.kind & " treerepr=" & $t.treerepr
 
@@ -169,25 +169,25 @@ proc initGpuGenericInst*(ctx: var GpuContext, t: NimNode): GpuType =
 #  Pointer / inner type resolution
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getInnerPointerType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType =
+proc getInnerPointerType*(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType =
   doAssert n.typeKind in {ntyPtr, ntyPointer, ntyUncheckedArray, ntyVar} or n.kind == nnkPtrTy, "But was: " & $n.treerepr & " of typeKind " & $n.typeKind
   if n.typeKind in {ntyPointer, ntyUncheckedArray}:
     let typ = n.getTypeInst()
     doAssert typ.kind == nnkBracketExpr, "No, was: " & $typ.treerepr
     doAssert typ[0].kind in {nnkIdent, nnkSym}
     doAssert typ[0].strVal in ["ptr", "UncheckedArray"]
-    result = ctx.nimToGpuType(typ[1], allowToFail, allowArrayIdent)
+    result = ctx.nimToGpuType(reg, typ[1], allowToFail, allowArrayIdent)
   elif n.kind == nnkPtrTy:
-    result = ctx.nimToGpuType(n[0], allowToFail, allowArrayIdent)
+    result = ctx.nimToGpuType(reg, n[0], allowToFail, allowArrayIdent)
   elif n.kind == nnkAddr:
     let typ = n.getTypeInst()
-    result = ctx.getInnerPointerType(typ, allowToFail, allowArrayIdent)
+    result = ctx.getInnerPointerType(reg, typ, allowToFail, allowArrayIdent)
   elif n.kind == nnkVarTy:
     # VarTy
     #   Sym "BigInt"
-    result = ctx.nimToGpuType(n[0], allowToFail, allowArrayIdent)
+    result = ctx.nimToGpuType(reg, n[0], allowToFail, allowArrayIdent)
   elif n.kind == nnkSym: # symbol of e.g. `ntyVar`
-    result = ctx.nimToGpuType(n.getTypeInst(), allowToFail, allowArrayIdent)
+    result = ctx.nimToGpuType(reg, n.getTypeInst(), allowToFail, allowArrayIdent)
   else:
     raiseAssert "Found what: " & $n.treerepr
 
@@ -304,30 +304,30 @@ proc getTypeName*(n: NimNode, recursedSym: bool = false): string =
 #  Main type resolver
 # ═══════════════════════════════════════════════════════════════════════
 
-proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType =
+proc nimToGpuType*(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode, allowToFail: bool = false, allowArrayIdent: bool = false): GpuType =
   ## Maps a Nim type to a type on the GPU
   ##
   ## If `allowToFail` is `true`, we return `GpuType(kind: gtVoid)` in cases
   ## where we would otherwise raise. This is so that in some cases where
   ## we only _attempt_ to determine a type, we can do so safely.
   template addAndReturn(arg: untyped): untyped =
-    ctx.maybeAddType(arg)
+    reg.registerObjectType(arg)
     return arg
 
   case n.kind
   of nnkIdentDefs: # extract type for let / var based on explicit or implicit type
     if n[n.len - 2].kind != nnkEmpty: # explicit type
-      result = ctx.nimToGpuType(n[n.len - 2], allowToFail, allowArrayIdent)
+      result = ctx.nimToGpuType(reg, n[n.len - 2], allowToFail, allowArrayIdent)
     else: # take from last element
-      result = ctx.nimToGpuType(n[n.len - 1].getTypeInst(), allowToFail, allowArrayIdent)
+      result = ctx.nimToGpuType(reg, n[n.len - 1].getTypeInst(), allowToFail, allowArrayIdent)
   of nnkConstDef:
     if n[1].kind != nnkEmpty: # has an explicit type
-      result = ctx.nimToGpuType(n[1], allowToFail, allowArrayIdent)
+      result = ctx.nimToGpuType(reg, n[1], allowToFail, allowArrayIdent)
     else:
-      result = ctx.nimToGpuType(n[2], allowToFail, allowArrayIdent) # derive from the RHS literal
+      result = ctx.nimToGpuType(reg, n[2], allowToFail, allowArrayIdent) # derive from the RHS literal
   of nnkIntLit, nnkUIntLit:
     result = GpuType(kind: gtStatic, builtin: true, sValue: int(n.intVal))
-    ctx.maybeAddType(result)
+    reg.registerObjectType(result)
     return result
   else:
     if n.kind == nnkEmpty: return initGpuType(gtVoid)
@@ -354,29 +354,29 @@ proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, a
     of ntyString: # only supported on some backends!
       result = initGpuType(toGpuTypeKind n.typeKind)
     of ntyPtr:
-      result = initGpuPtrType(ctx.getInnerPointerType(n, allowToFail, allowArrayIdent), implicitPtr = false)
+      result = initGpuPtrType(ctx.getInnerPointerType(reg, n, allowToFail, allowArrayIdent), implicitPtr = false)
     of ntyVar:
-      result = initGpuPtrType(ctx.getInnerPointerType(n, allowToFail, allowArrayIdent), implicitPtr = true)
+      result = initGpuPtrType(ctx.getInnerPointerType(reg, n, allowToFail, allowArrayIdent), implicitPtr = true)
     of ntyPointer:
       result = initGpuVoidPtr()
     of ntyUncheckedArray:
       ## Note: this is just the internal type of the array. It is only a pointer due to
       ## `ptr UncheckedArray[T]`. We simply remove the `UncheckedArray` part.
-      result = initGpuUAType(ctx.getInnerPointerType(n, allowToFail, allowArrayIdent))
+      result = initGpuUAType(ctx.getInnerPointerType(reg, n, allowToFail, allowArrayIdent))
     of ntyObject, ntyAlias, ntyTuple:
       # For aliases (type F = int), resolve to the underlying type.
       # Don't call parseTypeFields on aliases of primitive types.
       if n.typeKind == ntyAlias and n.kind == nnkSym:
-        return ctx.nimToGpuType(n.getTypeImpl())
+        return ctx.nimToGpuType(reg, n.getTypeImpl())
       let impl = if n.kind == nnkTupleConstr: n # might actually _lose_ information if used getTypeImpl
                  else: n.getTypeImpl
-      let flds = ctx.parseTypeFields(impl)
+      let flds = ctx.parseTypeFields(reg, impl)
       let typName = getTypeName(n) # might be an object construction
       result = initGpuObjectType(typName, flds)
     of ntyArray:
       # For a generic, static array type, e.g.:
       if n.kind == nnkSym:
-        addAndReturn ctx.nimToGpuType(getTypeImpl(n), allowToFail, allowArrayIdent)
+        addAndReturn ctx.nimToGpuType(reg, getTypeImpl(n), allowToFail, allowArrayIdent)
       if n.len == 3:
         # BracketExpr
         #   Sym "array"
@@ -393,37 +393,37 @@ proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, a
           #   Sym "BigInt"
           return GpuType(kind: gtInvalid)
         else:
-          result = ctx.initGpuArrayType(n[2], len)
+          result = ctx.initGpuArrayType(reg, n[2], len)
       else:
         # just an array literal
         # Bracket
         #   UIntLit 2013265921
         let len = n.len
-        result = ctx.initGpuArrayType(n[0], len)
+        result = ctx.initGpuArrayType(reg, n[0], len)
     of ntyGenericInvocation:
       result = initGpuType(gtInvalid)
       error("Generic invocations are not supported in the GPU compiler")
     of ntyGenericInst:
-      result = ctx.initGpuGenericInst(n)
+      result = ctx.initGpuGenericInst(reg, n)
     of ntyTypeDesc:
       # `getType` returns a `BracketExpr` of eg:
       # BracketExpr
       #   Sym "typeDesc"
       #   Sym "float32"
-      result = ctx.nimToGpuType(n.getType[1], allowToFail, allowArrayIdent) # for a type desc we need to recurse using the type of it
+      result = ctx.nimToGpuType(reg, n.getType[1], allowToFail, allowArrayIdent) # for a type desc we need to recurse using the type of it
     of ntyUnused2:
       # BracketExpr
       #   Sym "lent"
       #   Sym "BigInt"
       doAssert n.kind == nnkBracketExpr and n[0].strVal == "lent", "ntyUnused2: " & $n.treerepr
-      result = initGpuPtrType(ctx.nimToGpuType(n[1]), implicitPtr = false)
+      result = initGpuPtrType(ctx.nimToGpuType(reg, n[1]), implicitPtr = false)
     of ntyProc:
       # Procedure types can't be translated to CUDA C directly.
       # They appear when Crucible encounters a proc definition-symbol
       # being processed as a type. Fall back to the type instance.
       let inst = n.getTypeInst()
       if inst.typeKind == ntyGenericInst:
-        result = ctx.initGpuGenericInst(inst)
+        result = ctx.initGpuGenericInst(reg, inst)
       else:
         result = GpuType(kind: gtGenericInst, gName: n.repr)
     of ntyStatic:
@@ -431,11 +431,11 @@ proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, a
       # Fall back to type instance to resolve.
       let inst = n.getTypeInst()
       if inst.typeKind == ntyGenericInst:
-        result = ctx.initGpuGenericInst(inst)
+        result = ctx.initGpuGenericInst(reg, inst)
       elif inst.typeKind in {ntyInt .. ntyUint64}:
         result = initGpuType(toGpuTypeKind inst.typeKind)
       else:
-        result = ctx.nimToGpuType(inst)
+        result = ctx.nimToGpuType(reg, inst)
     else:
       if allowToFail:
         result = GpuType(kind: gtVoid)
@@ -443,13 +443,13 @@ proc nimToGpuType*(ctx: var GpuContext, n: NimNode, allowToFail: bool = false, a
         raiseAssert "Type : " & $n.typeKind & " not supported yet: " & $n.treerepr
 
   # now add this type if not known
-  ctx.maybeAddType(result)
+  reg.registerObjectType(result)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Type field resolution
 # ═══════════════════════════════════════════════════════════════════════
 
-proc parseTypeFields*(ctx: var GpuContext, node: NimNode): seq[GpuTypeField] =
+proc parseTypeFields*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): seq[GpuTypeField] =
   case node.kind
   of nnkObjectTy:
     # Empty objects (e.g., `type Int[V] = object`) have no recList.
@@ -457,12 +457,12 @@ proc parseTypeFields*(ctx: var GpuContext, node: NimNode): seq[GpuTypeField] =
       for ch in node[2]:
         doAssert ch.kind == nnkIdentDefs and ch.len == 3
         result.add GpuTypeField(name: ch[0].strVal,
-                                typ: ctx.nimToGpuType(ch[1]))
+                                typ: ctx.nimToGpuType(reg, ch[1]))
   of nnkTupleTy:
     for ch in node:
       doAssert ch.kind == nnkIdentDefs and ch.len == 3
       result.add GpuTypeField(name: ch[0].strVal,
-                              typ: ctx.nimToGpuType(ch[1]))
+                              typ: ctx.nimToGpuType(reg, ch[1]))
   of nnkTupleConstr:
     # TupleConstr
     #   Sym "BaseType"
@@ -471,20 +471,20 @@ proc parseTypeFields*(ctx: var GpuContext, node: NimNode): seq[GpuTypeField] =
       case ch.kind
       of nnkSym:
         result.add GpuTypeField(name: "Field" & $i,
-                                typ: ctx.nimToGpuType(ch))
+                                typ: ctx.nimToGpuType(reg, ch))
       of nnkExprColonExpr:
         result.add GpuTypeField(name: ch[0].strVal,
-                                typ: ctx.nimToGpuType(ch[1]))
+                                typ: ctx.nimToGpuType(reg, ch[1]))
       of nnkBracketExpr:
         # E.g. `Int[128]` inside a tuple type constructor.
         # Resolve the type directly from the bracket expression.
         result.add GpuTypeField(name: "Field" & $i,
-                                typ: ctx.nimToGpuType(ch))
+                                typ: ctx.nimToGpuType(reg, ch))
       else:
         # Unexpected child in tuple type constructor.
         # Resolve the type directly from the child node.
         result.add GpuTypeField(name: "Field" & $i,
-                                typ: ctx.nimToGpuType(ch))
+                                typ: ctx.nimToGpuType(reg, ch))
   else:
     raiseAssert "Unsupported type to parse fields from: " & $node.kind
 
@@ -492,17 +492,17 @@ proc parseTypeFields*(ctx: var GpuContext, node: NimNode): seq[GpuTypeField] =
 #  Symbol-based type resolution helpers
 # ═══════════════════════════════════════════════════════════════════════
 
-proc gpuTypeMaybeFromSymbol*(ctx: var GpuContext, t: NimNode, n: NimNode): GpuType =
+proc gpuTypeMaybeFromSymbol*(ctx: var GpuContext, reg: var TypeRegistry, t: NimNode, n: NimNode): GpuType =
   ## Returns the type from a given Nim node `t` representing a type.
   ## If that fails due to an identifier in the type, we instead try
   ## to look up the type from the associated symbol, `n`.
-  result = ctx.nimToGpuType(t, allowArrayIdent = true)
+  result = ctx.nimToGpuType(reg, t, allowArrayIdent = true)
   if result.kind == gtInvalid:
     # an existing symbol cannot be `void` by definition, then it wouldn't be a symbol. Means
     # `allowArrayIdent` triggered due to an ident in the type. Use symbol for type instead
-    result = ctx.nimToGpuType(n.getTypeInst)
+    result = ctx.nimToGpuType(reg, n.getTypeInst)
 
-proc parseProcReturnType*(ctx: var GpuContext, params: NimNode): GpuType =
+proc parseProcReturnType*(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode): GpuType =
   ## Returns the return type of the given procedure from the `params` node
   ## of type `nnkFormalParams`.
   doAssert params.kind == nnkFormalParams, "Argument is not FormalParams, but: " & $params.treerepr
@@ -513,7 +513,7 @@ proc parseProcReturnType*(ctx: var GpuContext, params: NimNode): GpuType =
     # attempt to get type. If fails, we need to wait for a caller to this function to get types
     # (e.g. returns something like `array[FOO, BigInt]` where `FOO` is a constant defined outside
     # the macro. We then rely on our generics logic to later look this up when called
-    result = ctx.nimToGpuType(retType, allowArrayIdent = true)
+    result = ctx.nimToGpuType(reg, retType, allowArrayIdent = true)
     if result.kind == gtVoid:
       result = GpuType(kind: gtInvalid)
 
@@ -521,6 +521,6 @@ proc parseProcReturnType*(ctx: var GpuContext, params: NimNode): GpuType =
 #  Array type constructor (needs nimToGpuType, stays here)
 # ═══════════════════════════════════════════════════════════════════════
 
-proc initGpuArrayType*(ctx: var GpuContext, aTyp: NimNode, len: int): GpuType =
+proc initGpuArrayType*(ctx: var GpuContext, reg: var TypeRegistry, aTyp: NimNode, len: int): GpuType =
   ## Construct an statically sized array type
-  result = GpuType(kind: gtArray, aTyp: ctx.nimToGpuType(aTyp), aLen: len)
+  result = GpuType(kind: gtArray, aTyp: ctx.nimToGpuType(reg, aTyp), aLen: len)

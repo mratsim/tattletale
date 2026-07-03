@@ -24,7 +24,9 @@ macro toGpuAst*(body: typed): (GpuGenericsInfo, GpuAst) =
   ## Converts the body of this macro into a `GpuAst` from where it can be converted
   ## into CUDA or WGSL code at runtime.
   var ctx = GpuContext()
-  let ast = ctx.toGpuAst(body)
+  var typeReg = TypeRegistry(types: ctx.types)
+  let ast = ctx.toGpuAst(typeReg, body)
+  ctx.types = typeReg.types
   let genProcs = toSeq(ctx.genericInsts.values)
   let genTypes = toSeq(ctx.types.values)
   let g = GpuGenericsInfo(procs: genProcs, types: genTypes)
@@ -46,7 +48,9 @@ macro cuda*(body: typed): string =
     dependsOn = @["ensureBlock"],
     run = materializePassByRefArgs
   )
-  let gpuAst = ctx.toGpuAst(body)
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toGpuAst(typeReg, body)
+  ctx.types = typeReg.types
   runPasses(ctx, reg)
   let body = ctx.codegenCuda(gpuAst)
   result = newLit(body)
@@ -62,7 +66,9 @@ macro webgpu*(body: typed): string =
       ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
   )
   reg.registerLegalizationPasses()
-  let gpuAst = ctx.toGpuAst(body)
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toGpuAst(typeReg, body)
+  ctx.types = typeReg.types
   runPasses(ctx, reg)
   let body = ctx.codegenWebGpu(gpuAst)
   result = newLit(body)
@@ -85,7 +91,9 @@ macro opencl*(body: typed): string =
     dependsOn = @["ensureBlock"],
     run = materializePassByRefArgs
   )
-  let gpuAst = ctx.toGpuAst(body)
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toGpuAst(typeReg, body)
+  ctx.types = typeReg.types
   runPasses(ctx, reg)
   let body = ctx.codegenOpenCL(gpuAst)
   result = newLit(body)
@@ -101,7 +109,9 @@ macro vulkan*(body: typed): string =
       ctx.checkReservedKeywords(["extern", "interface", "buffer"], "GLSL")
   )
   reg.registerLegalizationPasses()
-  let gpuAst = ctx.toGpuAst(body)
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toGpuAst(typeReg, body)
+  ctx.types = typeReg.types
   runPasses(ctx, reg)
   let body = ctx.codegenVulkan(gpuAst)
   result = newLit(body)

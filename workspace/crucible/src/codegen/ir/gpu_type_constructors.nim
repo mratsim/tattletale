@@ -98,6 +98,15 @@ proc maybeAddType*(ctx: var GpuContext, typ: GpuType) =
   if typ.kind in [gtObject, gtGenericInst] and typ notin ctx.types:
     ctx.types[typ] = toTypeDef(typ)
 
+proc registerObjectType*(reg: var TypeRegistry, typ: GpuType) =
+  ## Adds the given type to the table of known types, if it is some kind of
+  ## object type.
+  ##
+  ## XXX: What about aliases and distincts?
+  let typ = typ.stripPtrOrArrayType() # get any underlying type
+  if typ.kind in [gtObject, gtGenericInst] and typ notin reg.types:
+    reg.types[typ] = toTypeDef(typ)
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Nim AST utilities
 # ═══════════════════════════════════════════════════════════════════════
