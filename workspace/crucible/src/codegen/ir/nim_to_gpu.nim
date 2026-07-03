@@ -31,7 +31,7 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
     #   PtrTy
     #     Ident "float32"   # `param.len - 2`
     #   Empty               # `param.len - 1`
-    let paramType = ctx.gpuTypeMaybeFromSymbol(reg, param[typIdx], param[typIdx-1])
+    let paramType = gpuTypeMaybeFromSymbol(reg, param[typIdx], param[typIdx-1])
     for i in 0 ..< numParams:
       var p = ctx.toGpuAst(reg, param[i])
       let symKind = if attGlobal in attrs: gsGlobalKernelParam
@@ -51,7 +51,7 @@ proc toGpuProcSignature(ctx: var GpuContext, reg: var TypeRegistry, params: NimN
   ## we shouldn't need to worry about getting `gtInvalid` return types here.
   doAssert params.kind == nnkFormalParams, "Argument is not FormalParams, but: " & $params.treerepr
   result = GpuProcSignature(params: ctx.parseProcParameters(reg, params, attrs),
-                            retType: ctx.parseProcReturnType(reg, params))
+                            retType: parseProcReturnType(reg, params))
 
 
 template findIdx(col, el): untyped =
@@ -171,7 +171,7 @@ proc addProcToGenericInsts(ctx: var GpuContext, reg: var TypeRegistry, node: Nim
   # Ambiguous builtins (system.min/max/abs) have only `{.inline.}` in getImpl(),
   # not `{.magic.}`. Parse their bodies would crash on the if-expr assertion.
   if node[0].repr in NimGpuAmbiguousBuiltins:
-    let retType = ctx.nimToGpuType(reg, sig.params[0])
+    let retType = nimToGpuType(reg, sig.params[0])
     var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
     ctx.builtins[name] = builtinFn
     return
@@ -277,7 +277,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       result.pName.symbolKind = gsProc ## This is a procedure identifier
       let params = node[3]
       doAssert params.kind == nnkFormalParams
-      result.pRetType = ctx.parseProcReturnType(reg, params)
+      result.pRetType = parseProcReturnType(reg, params)
       if result.pRetType.kind == gtInvalid:
         ctx.generics.incl name.iName # need to use raw name, *not* symbol
         return GpuAst(kind: gpuVoid)
@@ -322,7 +322,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         doAssert declaration[0][1].kind == nnkPragma
         varNode.vAttributes = collectAttributes(declaration[0][1])
       else: raiseAssert "Unexpected node kind for variable: " & $declaration.treeRepr
-      varNode.vType = ctx.gpuTypeMaybeFromSymbol(reg, declaration, declaration[0])
+      varNode.vType = gpuTypeMaybeFromSymbol(reg, declaration, declaration[0])
       varNode.vName.iTyp = varNode.vType # also store the type in the symbol, for easier lookup later
       # This is a *local* variable (i.e. `function` address space on WGSL) unless it is
       # annotated with `{.shared.}` (-> `workspace` in WGSL)
@@ -497,8 +497,8 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     #   Sym "int"  <- return type
     #   Sym "int"  <- left op type
     #   Sym "int"  <- right op type
-    result.bLeftTyp = ctx.nimToGpuType(reg, typ[0][1])
-    result.bRightTyp = ctx.nimToGpuType(reg, typ[0][2])
+    result.bLeftTyp = nimToGpuType(reg, typ[0][1])
+    result.bRightTyp = nimToGpuType(reg, typ[0][2])
     # if either is not a base type (`gtBool .. gtSize_t`) we actually deal with a _function call_
     # instead of an binary operation. Will thus rewrite.
     proc ofBasicType(t: GpuType, allowPtrLhs: bool): bool =
@@ -548,7 +548,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     case node[0].typeKind
     of ntyTuple:
       # need to replace `[idx]` by field access
-      let typ = ctx.nimToGpuType(reg, node[0].getTypeImpl)
+      let typ = nimToGpuType(reg, node[0].getTypeImpl)
       doAssert node[1].kind == nnkIntLit
       let idx = node[1].intVal
       let field = typ.oFields[idx].name
@@ -661,14 +661,14 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
                                          # will store the instantiatons in `nnkObjConstr`
       result = GpuAst(kind: gpuVoid)
     else:
-      let typ = ctx.nimToGpuType(reg, node[0])
+      let typ = nimToGpuType(reg, node[0])
       # For type aliases resolved to primitives (e.g. type F = type(x.val) → uint32),
       # don't emit a typedef — the target already knows the type.
       let isBuiltin = typ.kind notin {gtObject, gtGenericInst}
       case node[2].kind
       of nnkObjectTy:
         result = GpuAst(kind: gpuTypeDef, tTyp: typ)
-        result.tFields = ctx.parseTypeFields(reg, node[2])
+        result.tFields = parseTypeFields(reg, node[2])
       of nnkCall:
         result = if isBuiltin: GpuAst(kind: gpuVoid)
                  else: GpuAst(kind: gpuTypeDef, tTyp: typ)
@@ -688,7 +688,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       result = GpuAst(kind: gpuVoid)
   of nnkObjConstr:
     ## this should never see `genericParam` I think
-    let typ = ctx.nimToGpuType(reg, node)
+    let typ = nimToGpuType(reg, node)
     # get all fields of the type
     let flds = if typ.kind == gtObject: typ.oFields
                elif typ.kind == gtGenericInst: typ.gFields
@@ -720,7 +720,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
                                            value: dfl,
                                            typ: flds[i].typ)
   of nnkTupleConstr:
-    let typ = ctx.nimToGpuType(reg, node)
+    let typ = nimToGpuType(reg, node)
 
     result = GpuAst(kind: gpuObjConstr, ocType: typ)
     # get all fields of the type
@@ -759,7 +759,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
                     stmt: node[1].strVal)
 
   of nnkBracket:
-    let aLitTyp = ctx.nimToGpuType(reg, node[0])
+    let aLitTyp = nimToGpuType(reg, node[0])
     var aValues = newSeq[GpuAst]()
     for el in node:
       aValues.add ctx.toGpuAst(reg, el)
@@ -775,10 +775,10 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     result = ctx.toGpuAst(reg, node[1])
   of nnkConv:
     # maps type conversion, e.g. `let i: int = 5; i.uint32`
-    result = GpuAst(kind: gpuConv, convTo: ctx.nimToGpuType(reg, node[0]), convExpr: ctx.toGpuAst(reg, node[1]))
+    result = GpuAst(kind: gpuConv, convTo: nimToGpuType(reg, node[0]), convExpr: ctx.toGpuAst(reg, node[1]))
   of nnkCast:
     # only maps real bit casts
-    result = GpuAst(kind: gpuCast, cTo: ctx.nimToGpuType(reg, node[0]), cExpr: ctx.toGpuAst(reg, node[1]))
+    result = GpuAst(kind: gpuCast, cTo: nimToGpuType(reg, node[0]), cExpr: ctx.toGpuAst(reg, node[1]))
 
   of nnkAddr, nnkHiddenAddr:
     # `HiddenAddr` appears for accesses to `var` passed arguments
@@ -794,7 +794,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     result = GpuAst(kind: gpuConstexpr,
                     cIdent: ctx.toGpuAst(reg, identNode),
                     cValue: ctx.toGpuAst(reg, node[2]),
-                    cType: ctx.nimToGpuType(reg, node))
+                    cType: nimToGpuType(reg, node))
     result.cIdent.iTyp = result.cType # also store the type in the symbol, for easier lookup later
     result.cIdent.symbolKind = gsLocal #if atvShared in result.vAttributes: gsShared
                                #elif atvPrivate in varNode.vAttributes: gsPrivate
