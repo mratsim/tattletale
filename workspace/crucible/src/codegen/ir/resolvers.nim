@@ -47,34 +47,16 @@ proc toGpuTypeKind*(t: NimNode): GpuTypeKind =
 #  Array length resolution
 # ═══════════════════════════════════════════════════════════════════════
 
-proc determineArrayLength*(n: NimNode, allowArrayIdent: bool): int =
-  ## If `allowArrayIdent` is true, we do not emit the error message when
-  ## encountering an ident. This is the case for procs taking arrays
-  ## with a static array where the constant comes from outside the
-  ## macro. In that case we return `-1` indicating
-  ##  `proc mdsRowShfNaive(r: int, v: array[SPONGE_WIDTH, BigInt]): BigInt {.device.} =`
+proc resolveArrayLength*(n: NimNode): int =
+  ## Returns the length of a static array type.
+  ## Callers must pass `getTypeInst()` output — idents are never expected.
   case n[1].kind
   of nnkSym:
     # resolved symbol — get the constant int value from its implementation
-    if not allowArrayIdent:
-      result = n[1].getImpl.intVal
-      let msg = """Found array with length given by identifier: $#!
-  You might want to create a typed template taking a typed parameter for this
-  constant to force the Nim compiler to bind the symbol. In theory though this
-  error should not appear anymore though, as we don't try to parse generic
-  functions.""" % n[1].strVal
-      raiseAssert msg
-    else:
-      result = -1
+    result = n[1].getImpl.intVal
   of nnkIdent:
-    # constant from outside the macro — let Nim inline at generation time
-    if not allowArrayIdent:
-      let msg = """Found array with length given by identifier: $#!
-  You might want to create a typed template taking a typed parameter for this
-  constant to force the Nim compiler to bind the symbol.""" % n[1].strVal
-      raiseAssert msg
-    else:
-      result = -1
+    # Should never happen with getTypeInst() output
+    raiseAssert "Unresolved ident in array length: " & $n[1].strVal
   else:
     case n[1].kind
     of nnkIntLit: result = n[1].intVal
@@ -97,11 +79,10 @@ proc determineArrayLength*(n: NimNode, allowArrayIdent: bool): int =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc initGpuArrayType*(reg: var TypeRegistry, aTyp: NimNode, len: int): GpuType
-proc nimToGpuType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = false): GpuType
-proc getInnerPointerType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = false): GpuType
+proc nimToGpuType*(reg: var TypeRegistry, n: NimNode): GpuType
+proc getInnerPointerType*(reg: var TypeRegistry, n: NimNode): GpuType
 proc parseGenericImpl*(reg: var TypeRegistry, impl: NimNode, t: NimNode): GpuType
 proc initGpuGenericInst*(reg: var TypeRegistry, t: NimNode): GpuType
-proc gpuTypeMaybeFromSymbol*(reg: var TypeRegistry, t: NimNode, n: NimNode): GpuType
 proc parseTypeFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeField]
 proc getTypeName*(n: NimNode, recursedSym: bool = false): string
 proc constructTupleTypeName*(n: NimNode): string
@@ -162,25 +143,25 @@ proc initGpuGenericInst*(reg: var TypeRegistry, t: NimNode): GpuType =
 #  Pointer / inner type resolution
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getInnerPointerType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = false): GpuType =
+proc getInnerPointerType*(reg: var TypeRegistry, n: NimNode): GpuType =
   doAssert n.typeKind in {ntyPtr, ntyPointer, ntyUncheckedArray, ntyVar} or n.kind == nnkPtrTy, "But was: " & $n.treerepr & " of typeKind " & $n.typeKind
   if n.typeKind in {ntyPointer, ntyUncheckedArray}:
     let typ = n.getTypeInst()
     doAssert typ.kind == nnkBracketExpr, "No, was: " & $typ.treerepr
     doAssert typ[0].kind in {nnkIdent, nnkSym}
     doAssert typ[0].strVal in ["ptr", "UncheckedArray"]
-    result = nimToGpuType(reg, typ[1], allowArrayIdent)
+    result = nimToGpuType(reg, typ[1])
   elif n.kind == nnkPtrTy:
-    result = nimToGpuType(reg, n[0], allowArrayIdent)
+    result = nimToGpuType(reg, n[0])
   elif n.kind == nnkAddr:
     let typ = n.getTypeInst()
-    result = getInnerPointerType(reg, typ, allowArrayIdent)
+    result = getInnerPointerType(reg, typ)
   elif n.kind == nnkVarTy:
     # VarTy
     #   Sym "BigInt"
-    result = nimToGpuType(reg, n[0], allowArrayIdent)
+    result = nimToGpuType(reg, n[0])
   elif n.kind == nnkSym: # symbol of e.g. `ntyVar`
-    result = nimToGpuType(reg, n.getTypeInst(), allowArrayIdent)
+    result = nimToGpuType(reg, n.getTypeInst())
   else:
     raiseAssert "Found what: " & $n.treerepr
 
@@ -297,20 +278,20 @@ proc getTypeName*(n: NimNode, recursedSym: bool = false): string =
 #  Main type resolver
 # ═══════════════════════════════════════════════════════════════════════
 
-proc nimToGpuType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = false): GpuType =
+proc nimToGpuType*(reg: var TypeRegistry, n: NimNode): GpuType =
   ## Maps a Nim type to a type on the GPU
 
   case n.kind
   of nnkIdentDefs: # extract type for let / var based on explicit or implicit type
     if n[n.len - 2].kind != nnkEmpty: # explicit type
-      result = nimToGpuType(reg, n[n.len - 2], allowArrayIdent)
+      result = nimToGpuType(reg, n[n.len - 2])
     else: # take from last element
-      result = nimToGpuType(reg, n[n.len - 1].getTypeInst(), allowArrayIdent)
+      result = nimToGpuType(reg, n[n.len - 1].getTypeInst())
   of nnkConstDef:
     if n[1].kind != nnkEmpty: # has an explicit type
-      result = nimToGpuType(reg, n[1], allowArrayIdent)
+      result = nimToGpuType(reg, n[1])
     else:
-      result = nimToGpuType(reg, n[2], allowArrayIdent) # derive from the RHS literal
+      result = nimToGpuType(reg, n[2]) # derive from the RHS literal
   of nnkIntLit, nnkUIntLit:
     result = GpuType(kind: gtStatic, builtin: true, sValue: int(n.intVal))
     reg.registerObjectType(result)
@@ -340,15 +321,15 @@ proc nimToGpuType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = fa
     of ntyString: # only supported on some backends!
       result = initGpuType(toGpuTypeKind n.typeKind)
     of ntyPtr:
-      result = initGpuPtrType(getInnerPointerType(reg, n, allowArrayIdent), implicitPtr = false)
+      result = initGpuPtrType(getInnerPointerType(reg, n), implicitPtr = false)
     of ntyVar:
-      result = initGpuPtrType(getInnerPointerType(reg, n, allowArrayIdent), implicitPtr = true)
+      result = initGpuPtrType(getInnerPointerType(reg, n), implicitPtr = true)
     of ntyPointer:
       result = initGpuVoidPtr()
     of ntyUncheckedArray:
       ## Note: this is just the internal type of the array. It is only a pointer due to
       ## `ptr UncheckedArray[T]`. We simply remove the `UncheckedArray` part.
-      result = initGpuUAType(getInnerPointerType(reg, n, allowArrayIdent))
+      result = initGpuUAType(getInnerPointerType(reg, n))
     of ntyObject, ntyAlias, ntyTuple:
       # For aliases (type F = int), resolve to the underlying type.
       # Don't call parseTypeFields on aliases of primitive types.
@@ -362,7 +343,7 @@ proc nimToGpuType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = fa
     of ntyArray:
       # For a generic, static array type, e.g.:
       if n.kind == nnkSym:
-        let typ = nimToGpuType(reg, getTypeImpl(n), allowArrayIdent)
+        let typ = nimToGpuType(reg, getTypeImpl(n))
         reg.registerObjectType(typ)
         return typ
       if n.len == 3:
@@ -372,16 +353,8 @@ proc nimToGpuType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = fa
         #   Sym "uint32"
         doAssert n.len == 3, "Length was not 3, but: " & $n.len & " for node: " & n.treerepr
         doAssert n[0].strVal == "array"
-        let len = determineArrayLength(n, allowArrayIdent)
-        if len < 0:
-          # indicates we found an array with an ident, e.g.
-          # BracketExpr
-          #   Sym "array"
-          #   Ident "SPONGE_WIDTH"
-          #   Sym "BigInt"
-          return GpuType(kind: gtInvalid)
-        else:
-          result = initGpuArrayType(reg, n[2], len)
+        let len = resolveArrayLength(n)
+        result = initGpuArrayType(reg, n[2], len)
       else:
         # just an array literal
         # Bracket
@@ -398,7 +371,7 @@ proc nimToGpuType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = fa
       # BracketExpr
       #   Sym "typeDesc"
       #   Sym "float32"
-      result = nimToGpuType(reg, n.getType[1], allowArrayIdent) # for a type desc we need to recurse using the type of it
+      result = nimToGpuType(reg, n.getType[1]) # for a type desc we need to recurse using the type of it
     of ntyUnused2:
       # BracketExpr
       #   Sym "lent"
@@ -474,18 +447,8 @@ proc parseTypeFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeField] =
     raiseAssert "Unsupported type to parse fields from: " & $node.kind
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Symbol-based type resolution helpers
+#  Return type resolution
 # ═══════════════════════════════════════════════════════════════════════
-
-proc gpuTypeMaybeFromSymbol*(reg: var TypeRegistry, t: NimNode, n: NimNode): GpuType =
-  ## Returns the type from a given Nim node `t` representing a type.
-  ## If that fails due to an identifier in the type, we instead try
-  ## to look up the type from the associated symbol, `n`.
-  result = nimToGpuType(reg, t, allowArrayIdent = true)
-  if result.kind == gtInvalid:
-    # an existing symbol cannot be `void` by definition, then it wouldn't be a symbol. Means
-    # `allowArrayIdent` triggered due to an ident in the type. Use symbol for type instead
-    result = nimToGpuType(reg, n.getTypeInst)
 
 proc parseProcReturnType*(reg: var TypeRegistry, params: NimNode): GpuType =
   ## Returns the return type of the given procedure from the `params` node
@@ -498,7 +461,7 @@ proc parseProcReturnType*(reg: var TypeRegistry, params: NimNode): GpuType =
     # attempt to get type. If fails, we need to wait for a caller to this function to get types
     # (e.g. returns something like `array[FOO, BigInt]` where `FOO` is a constant defined outside
     # the macro. We then rely on our generics logic to later look this up when called
-    result = nimToGpuType(reg, retType, allowArrayIdent = true)
+    result = nimToGpuType(reg, retType)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Array type constructor (needs nimToGpuType, stays here)

@@ -31,7 +31,7 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
     #   PtrTy
     #     Ident "float32"   # `param.len - 2`
     #   Empty               # `param.len - 1`
-    let paramType = gpuTypeMaybeFromSymbol(reg, param[typIdx], param[typIdx-1])
+    let paramType = nimToGpuType(reg, param[typIdx-1].getTypeInst())
     for i in 0 ..< numParams:
       var p = ctx.toGpuAst(reg, param[i])
       let symKind = if attGlobal in attrs: gsGlobalKernelParam
@@ -322,7 +322,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         doAssert declaration[0][1].kind == nnkPragma
         varNode.vAttributes = collectAttributes(declaration[0][1])
       else: raiseAssert "Unexpected node kind for variable: " & $declaration.treeRepr
-      varNode.vType = gpuTypeMaybeFromSymbol(reg, declaration, declaration[0])
+      varNode.vType = nimToGpuType(reg, declaration)
       varNode.vName.iTyp = varNode.vType # also store the type in the symbol, for easier lookup later
       # This is a *local* variable (i.e. `function` address space on WGSL) unless it is
       # annotated with `{.shared.}` (-> `workspace` in WGSL)
