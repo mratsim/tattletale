@@ -306,11 +306,6 @@ proc getTypeName*(n: NimNode, recursedSym: bool = false): string =
 
 proc nimToGpuType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = false): GpuType =
   ## Maps a Nim type to a type on the GPU
-  ## where we would otherwise raise. This is so that in some cases where
-  ## we only _attempt_ to determine a type, we can do so safely.
-  template addAndReturn(arg: untyped): untyped =
-    reg.registerObjectType(arg)
-    return arg
 
   case n.kind
   of nnkIdentDefs: # extract type for let / var based on explicit or implicit type
@@ -374,7 +369,9 @@ proc nimToGpuType*(reg: var TypeRegistry, n: NimNode, allowArrayIdent: bool = fa
     of ntyArray:
       # For a generic, static array type, e.g.:
       if n.kind == nnkSym:
-        addAndReturn nimToGpuType(reg, getTypeImpl(n), allowArrayIdent)
+        let typ = nimToGpuType(reg, getTypeImpl(n), allowArrayIdent)
+        reg.registerObjectType(typ)
+        return typ
       if n.len == 3:
         # BracketExpr
         #   Sym "array"
