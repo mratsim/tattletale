@@ -532,10 +532,10 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       # `lType` field will just be `gtVoid`, like the default.
       if result.bLeft.kind == gpuLit: # and result.bRight.kind != gpuLit:
         # determine literal type based on `bRight`
-        result.bLeft.lType = result.bLeftTyp # nimToGpuType(node[2], allowToFail = true)
+        result.bLeft.lType = result.bLeftTyp
       elif result.bRight.kind == gpuLit: # and result.bLeft.kind != gpuLit:
         # determine literal type based on `bLeft`
-        result.bRight.lType = result.bRightTyp #nimToGpuType(node[1], allowToFail = true)
+        result.bRight.lType = result.bRightTyp
 
   of nnkDotExpr:
     ## NOTE: As we use a typed macro, we only encounter `DotExpr` for *actual* field accesses and NOT
