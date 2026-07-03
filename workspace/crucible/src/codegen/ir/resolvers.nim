@@ -110,14 +110,6 @@ proc constructTupleTypeName*(n: NimNode): string
 #  Generic type argument / implementation resolution
 # ═══════════════════════════════════════════════════════════════════════
 
-proc parseGenericArgs*(reg: var TypeRegistry, t: NimNode): seq[GpuType] =
-  case t.kind
-  of nnkSym: return # no generic arguments
-  of nnkBracketExpr:
-    for i in 1 ..< t.len:
-      result.add nimToGpuType(reg, t[i])
-  else:
-    raiseAssert "Unexpected node kind in parseGenericArgs: " & $t.treerepr
 
 proc parseGenericImpl*(reg: var TypeRegistry, impl: NimNode, t: NimNode): GpuType =
   ## Given a type implementation (ObjectTy, DistinctTy, etc.), parse it as a generic instance.
@@ -147,7 +139,8 @@ proc initGpuGenericInst*(reg: var TypeRegistry, t: NimNode): GpuType =
   case t.kind
   of nnkBracketExpr:
     result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(t))
-    result.gArgs = parseGenericArgs(reg, t)
+    for i in 1 ..< t.len:
+      result.gArgs.add nimToGpuType(reg, t[i])
     let impl = t.getTypeImpl() # impl for the `gFields`
     result.gFields = parseTypeFields(reg, impl)
   of nnkObjectTy:
