@@ -5,7 +5,7 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [macros, sequtils, tables]
+import std / [macros, sequtils, tables, sets]
 import ../ir/gpu_types
 import ./pass_datatypes
 
@@ -148,7 +148,7 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
         else:
           discard
 
-      proc unnest(n: var GpuAst) =
+      proc unnest(n: var GpuAst; usedNames: var HashSet[string]) =
         case n.kind
         of gpuBlock:
           var newStmts: seq[GpuAst]
@@ -195,21 +195,33 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
               liftConstexprFrom(stmt, lifts)
               for l in lifts:
                 newStmts.add l
+            if stmt.kind == gpuVar:
+              let name = stmt.vName.ident()
+              if name in usedNames:
+                var uniqueName = name & "_0"
+                var counter = 0
+                while uniqueName in usedNames:
+                  counter += 1
+                  uniqueName = name & "_" & $counter
+                stmt.vName.iName = uniqueName
+                stmt.vName.iSym = uniqueName
+              usedNames.incl stmt.vName.ident()
             newStmts.add stmt
           n.statements = newStmts
           for i in 0 ..< n.statements.len:
-            unnest(n.statements[i])
+            unnest(n.statements[i], usedNames)
         of gpuIf:
-          unnest(n.ifThen)
+          unnest(n.ifThen, usedNames)
           if n.ifElse.kind != gpuVoid:
-            unnest(n.ifElse)
+            unnest(n.ifElse, usedNames)
         of gpuFor:
-          unnest(n.fBody)
+          unnest(n.fBody, usedNames)
         of gpuWhile:
-          unnest(n.wBody)
+          unnest(n.wBody, usedNames)
         else:
           discard
       for fnKey in ctx.allFnTab.keys:
         var fn = ctx.allFnTab[fnKey]
-        unnest(fn.pBody)
+        var usedNames: HashSet[string]
+        unnest(fn.pBody, usedNames)
     )
