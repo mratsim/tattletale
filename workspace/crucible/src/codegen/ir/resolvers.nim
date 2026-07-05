@@ -317,8 +317,7 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
         let len = n.len
         result = resolveGpuArrayType(reg, n[0], len)
     of ntyGenericInvocation:
-      result = initGpuType(gtInvalid)
-      error("Generic invocations are not supported in the GPU compiler")
+      error "Generic invocations are not supported in the GPU compiler"
     of ntyGenericInst:
       result = resolveInstantiatedType(reg, n)
     of ntyTypeDesc:
