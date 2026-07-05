@@ -63,6 +63,24 @@ template findIdx(col, el): untyped =
       break
   res
 
+proc maybePatchFnName(n: var GpuAst) =
+  ## Renames operator function names whose symbols are not valid C++
+  ## identifier characters (e.g. `+`→`add`, `-`→`sub`).
+  ## Nim-textual operators like `div`, `and` pass through since they
+  ## are valid identifier starters and get disambiguated by the
+  ## signature hash suffix from registerGenericInstOrExternalProc.
+  doAssert n.kind == gpuIdent
+  template patch(arg, by: untyped): untyped =
+    arg.iSym = arg.iSym.replace(arg.iName, by)
+    arg.iName = by
+  let name = n.iName
+  case name
+  of "+": patch(n, "add")
+  of "-": patch(n, "sub")
+  of "*": patch(n, "mul")
+  of "/": patch(n, "div")
+  else: discard
+
 proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
   ## Returns the name for the function. Either the symbol name _or_
   ## the `{.cudaName.}` pragma argument.
@@ -103,6 +121,7 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
       else:
         result = ctx.toGpuAst(reg, n) # if not proc or func
 
+      result.maybePatchFnName()
 
       # handle overloads with different signatures
       if n.strVal in ctx.symChoices:
@@ -121,7 +140,7 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
     # ctx.sigTab[sig] = result
   result.symbolKind = gsProc # make sure it's a proc
 
-proc addProcToGenericInsts(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, name: GpuAst) =
+proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, name: GpuAst) =
   ## Looks up the implementation of the given function and stores it in our table
   ## of generic instantiations.
   ##
@@ -447,7 +466,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       # process the generic instantiaton and store *or* pull in a proc defined outside
       # the `cuda` macro by its implementation.
       ## XXX: for CUDA backend need to annotate all pulled in procs with `{.device.}`!
-      ctx.addProcToGenericInsts(reg, node, name)
+      ctx.registerGenericInstOrExternalProc(reg, node, name)
 
     let args = node[1..^1].mapIt(ctx.toGpuAst(reg, it))
     # Producing a template call something like this (but problematic due to overloads etc)
@@ -490,17 +509,12 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         result = result or ((t.kind == gtPtr) and t.implicit and t.to.kind in gtBool .. gtSize_t)
 
     if not result.bLeftTyp.ofBasicType(true) or not result.bRightTyp.ofBasicType(false):
-      let opName = node[0].repr
-      if opName in ["+", "-", "*", "/", "div", "mod", "shl", "shr", "and", "or", "xor"]:
-        var op = GpuAst(kind: gpuIdent, iName: assignOp(opName, false))
-        op.iSym = opName
-        result.bOp = op
-        result.bLeft = ctx.toGpuAst(reg, node[1])
-        result.bRight = ctx.toGpuAst(reg, node[2])
-      else:
-        result = GpuAst(kind: gpuCall)
-        result.cName = ctx.getFnName(reg, node[0])
-        result.cArgs = @[ctx.toGpuAst(reg, node[1]), ctx.toGpuAst(reg, node[2])]
+      let name = ctx.getFnName(reg, node[0])
+      result = GpuAst(kind: gpuCall)
+      result.cName = name
+      result.cArgs = @[ctx.toGpuAst(reg, node[1]), ctx.toGpuAst(reg, node[2])]
+      if node[0].repr in ctx.generics or name notin ctx.allFnTab:
+        ctx.registerGenericInstOrExternalProc(reg, node, name)
     else:
       # if left/right is boolean we need logical AND/OR, otherwise bitwise
       let isBoolean = result.bLeftTyp.kind == gtBool
