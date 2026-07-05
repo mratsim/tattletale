@@ -90,8 +90,6 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     skipIdent = true
   of gtGenericInst:
     result = t.gName
-    if t.gArgs.len > 0:
-      result.add '_'
     for i, g in t.gArgs:
       result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:

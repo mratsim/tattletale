@@ -93,15 +93,15 @@ proc resolveTupleFields(node: NimNode): seq[FieldInfo] =
       for j in 0 ..< ch.len - 2:
         result.add FieldInfo(name: ch[j].strVal, typeNode: ch[ch.len - 2])
     of nnkSym:
-      result.add FieldInfo(name: "Field" & $i, typeNode: ch)
+      result.add FieldInfo(name: "F" & $i, typeNode: ch)
     of nnkExprColonExpr:
       result.add FieldInfo(name: ch[0].strVal, typeNode: ch[1])
     of nnkBracketExpr:
       # resolve via getTypeInst() to avoid leaking ObjectTy repr into struct name
-      result.add FieldInfo(name: "Field" & $i, typeNode: ch.getTypeInst())
+      result.add FieldInfo(name: "F" & $i, typeNode: ch.getTypeInst())
     else:
       # resolve via getTypeInst() to avoid leaking ObjectTy repr into struct name
-      result.add FieldInfo(name: "Field" & $i, typeNode: ch.getTypeInst())
+      result.add FieldInfo(name: "F" & $i, typeNode: ch.getTypeInst())
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Generic type argument / implementation resolution
@@ -213,8 +213,6 @@ proc assignTypeName*(n: NimNode, recursedSym: bool = false): string =
     # construct a type name `Foo_Bar_Baz`
     for i, ch in n:
       result.add ch.assignTypeName()
-      if i < n.len - 1:
-        result.add "_"
   of nnkIntLit:
     result = $n.intVal
   of nnkUIntLit:

@@ -101,8 +101,6 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     # we simply turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
     # use short names (uint32, int64) for generic args, not C names (unsigned int, long long)
     result = t.gName
-    if t.gArgs.len > 0:
-      result.add '_'
     for i, g in t.gArgs:
       result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:

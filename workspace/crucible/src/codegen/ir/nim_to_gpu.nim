@@ -731,7 +731,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
                                   value: ctx.toGpuAst(reg, node[i][1]),
                                   typ: GpuType(kind: gtVoid))
       else:
-        ocFields.add GpuFieldInit(name: "Field" & $i,
+        ocFields.add GpuFieldInit(name: "F" & $i,
                                   value: ctx.toGpuAst(reg, node[i]),
                                   typ: GpuType(kind: gtVoid))
 
