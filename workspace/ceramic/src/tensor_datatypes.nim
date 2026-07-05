@@ -31,7 +31,7 @@ type
 
 # ── Owning: make_tensor(T, Layout) ─────────────────────────────────────
 
-func make_tensor*[Sh, St, T](_: typedesc[T]; L: Layout[Sh, St]): Tensor[T, Sh, St] =
+func make_tensor*[Sh, St, T](_: typedesc[T]; L: Layout[Sh, St]): Tensor[T, Sh, St] {.inline.} =
   ## Owning tensor — stack array, no heap. Requires static cosize.
   Tensor[T, Sh, St](layout: L)
 
@@ -44,23 +44,23 @@ template make_tensor*[T](_: typedesc[T]; shape, stride: IntOrIntTuple): untyped 
 
 # ── make_tensor_like — create owning tensor with compact strides ──────
 
-func make_tensor_like*[T, Sh, St](t: TensorView[T, Sh, St]): auto =
+func make_tensor_like*[T, Sh, St](t: TensorView[T, Sh, St]): auto {.inline.} =
   make_tensor(T, make_layout_like(t.layout))
 
-func make_tensor_like*[T, Sh, St](t: Tensor[T, Sh, St]): auto =
+func make_tensor_like*[T, Sh, St](t: Tensor[T, Sh, St]): auto {.inline.} =
   make_tensor(T, make_layout_like(t.layout))
 
-func make_tensor_like*[T, Sh, St, NewT](t: TensorView[T, Sh, St]; _: typedesc[NewT]): auto =
+func make_tensor_like*[T, Sh, St, NewT](t: TensorView[T, Sh, St]; _: typedesc[NewT]): auto {.inline.} =
   make_tensor(NewT, make_layout_like(t.layout))
 
-func make_tensor_like*[T, Sh, St, NewT](t: Tensor[T, Sh, St]; _: typedesc[NewT]): auto =
+func make_tensor_like*[T, Sh, St, NewT](t: Tensor[T, Sh, St]; _: typedesc[NewT]): auto {.inline.} =
   make_tensor(NewT, make_layout_like(t.layout))
 
 
 # ── Non-owning: make_view(ptr, Layout) ─────────────────────────────────
 
 func make_view*[T, Sh, St](data: ptr UncheckedArray[T] or ptr T;
-                           L: Layout[Sh, St]): TensorView[T, Sh, St] =
+                           L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline.} =
   TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](data), layout: L)
 
 template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
@@ -76,7 +76,7 @@ template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
 # ── Non-owning: make_view(openArray, Layout) — zero-copy ───────────────
 
 func make_view*[T, Sh, St](data: openArray[T];
-                           L: Layout[Sh, St]): TensorView[T, Sh, St] =
+                           L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline.} =
   make_view(cast[ptr UncheckedArray[T]](addr data[0]), L)
 
 template make_view*[T](data: openArray[T];
@@ -92,7 +92,7 @@ template make_view*[T](data: openArray[T];
 
 func make_view*[T, ShA, StA, ShB, StB](
     tv: TensorView[T, ShA, StA];
-    L: Layout[ShB, StB]): TensorView[T, ShB, StB] =
+    L: Layout[ShB, StB]): TensorView[T, ShB, StB] {.inline.} =
   ## Reinterpret a view with a new layout (same data pointer).
   TensorView[T, ShB, StB](data: tv.data, layout: L)
 
@@ -109,7 +109,7 @@ template make_view*(tv: TensorView;
 #  view() — Tensor → TensorView
 # ═════════════════════════════════════════════════════════════════════════
 
-func view*[T, Sh, St](t: Tensor[T, Sh, St]): TensorView[T, Sh, St] =
+func view*[T, Sh, St](t: Tensor[T, Sh, St]): TensorView[T, Sh, St] {.inline.} =
   TensorView[T, Sh, St](
     data: cast[ptr UncheckedArray[T]](addr t.data[0]),
     layout: t.layout)
