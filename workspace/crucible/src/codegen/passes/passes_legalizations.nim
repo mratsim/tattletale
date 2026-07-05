@@ -137,6 +137,14 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
         of gpuArrayLit:
           for i in 0 ..< n.aValues.len:
             liftConstexprFrom(n.aValues[i], lifts)
+        of gpuBlock:
+          # Walk into expression blocks to find constexprs in their statements.
+          for i in 0 ..< n.statements.len:
+            if n.statements[i].kind == gpuConstexpr:
+              lifts.add n.statements[i]
+              n.statements[i] = GpuAst(kind: gpuVoid)
+            else:
+              liftConstexprFrom(n.statements[i], lifts)
         else:
           discard
 
@@ -149,11 +157,38 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
             let inner = firstNonBlock(stmt)
             # First: lift block inits
             if inner.kind in {gpuVar}:
-              let vInitInner = firstNonBlock(inner.vInit)
-              if vInitInner.kind == gpuBlock and vInitInner.statements.len > 1:
-                for j in 0 ..< vInitInner.statements.len - 1:
-                  newStmts.add vInitInner.statements[j]
-                inner.vInit = vInitInner.statements[^1]
+              # Repeatedly unwrap nested blocks in vInit.
+              # Deduplicate let/var names — recursive template expansion
+              # (foldZipWith_recurse) reuses {.inject.} names (acc, it_a,
+              # it_b) across iterations. Nim's C backend assigns each a
+              # unique mangled name; crucible must do the same.
+              while true:
+                let vInitInner = firstNonBlock(inner.vInit)
+                if vInitInner.kind == gpuBlock and vInitInner.statements.len > 1:
+                  for j in 0 ..< vInitInner.statements.len - 1:
+                    let stmt = vInitInner.statements[j]
+                    # Unwrap single-var gpuBlock (from nnkLetSection wrapper)
+                    var innerStmt = stmt
+                    while innerStmt.kind == gpuBlock and innerStmt.statements.len == 1:
+                      innerStmt = innerStmt.statements[0]
+                    if innerStmt.kind == gpuVar:
+                      let name = innerStmt.vName.ident()
+                      var dup = false
+                      for ex in newStmts:
+                        var exInner = ex
+                        while exInner.kind == gpuBlock and exInner.statements.len == 1:
+                          exInner = exInner.statements[0]
+                        if exInner.kind == gpuVar and exInner.vName.ident() == name:
+                          dup = true
+                          break
+                      if dup:
+                        let uniqueName = name & "_" & $newStmts.len
+                        innerStmt.vName.iName = uniqueName
+                        innerStmt.vName.iSym = uniqueName & "_" & $newStmts.len
+                    newStmts.add stmt
+                  inner.vInit = vInitInner.statements[^1]
+                else:
+                  break
             # Second: lift any gpuConstexpr from expression children
             if stmt.kind != gpuConstexpr:
               var lifts: seq[GpuAst]
