@@ -25,6 +25,10 @@ const kernel = cuda:
 
 suite "Ceramic - TensorView parentheses access":
   test "tv(0, 0) inside cuda: compiles via NVRTC":
+    echo "════ kernel ═══════════════════════════════════════════════════════════"
+    echo kernel
+    echo "═══════════════════════════════════════════════════════════════════════"
+
     var buf: array[1, float32]
     var nv = initNvrtc(kernel)
     nv.numBlocks = 1

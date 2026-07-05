@@ -148,7 +148,15 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
   ##
   ## Mutates the `name` of the given function to match its generic name.
 
-  let inst = node[0].getImpl()
+  # Check if the implementation is a template — templates must be fully
+  # expanded by Nim before reaching crucible.
+  let rawImpl = node[0].getImpl()
+  echo "  [crucible] operator: ", node[0].repr, " impl.kind: ", rawImpl.kind
+  if rawImpl.kind in [nnkTemplateDef, nnkMacroDef]:
+    error("Unresolved " & $rawImpl.kind & " encountered in GPU code: " & node[0].repr &
+          ". Template/macro expansion must complete before the cuda: block.")
+
+  let inst = rawImpl
   let sig = node[0].getTypeInst()
   inst.params = sig.params # copy over the parameters
 

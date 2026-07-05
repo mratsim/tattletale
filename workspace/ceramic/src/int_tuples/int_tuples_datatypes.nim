@@ -126,7 +126,7 @@ template genBinOp(op: untyped): untyped =
   ## that the C++ inliner must unravel. A `template` collapses
   ## `Int[16]() * i` to the bare constant `16 * i` at the Nim codegen level.
 
-  func op*[V, U: static int](a: Int[V]; b: Int[U]): Int[op(V, U)] {.inline.} = Int[op(V, U)]()
+  template op*[V, U: static int](a: Int[V]; b: Int[U]): Int[op(V, U)] = Int[op(V, U)]()
   func op*[V: static int](a: Int[V]; b: static int): Int[op(V, b)] {.inline.} = Int[op(V, b)]()
   func op*[V: static int](a: static int; b: Int[V]): Int[op(a, V)] {.inline.} = Int[op(a, V)]()
   template op*[V: static int](a: Int[V]; b: int): int = op(V, b)
