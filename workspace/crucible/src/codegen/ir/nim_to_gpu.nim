@@ -142,7 +142,7 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
   else:
     # else we use the str representation (repr for open / closed sym choice nodes)
     result = toAst n.repr
-    #raiseAssert "This fn identifier is not a symbol?! " & $n.repr
+    #error "This fn identifier is not a symbol?! " & $n.repr
     # If it's not a symbol, there is no signature associated
     # ctx.sigTab[sig] = result
   result.symbolKind = gsProc # make sure it's a proc
@@ -215,7 +215,7 @@ proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
   elif fn in ctx.processedProcs:
     result = ctx.processedProcs[fn].retType.kind != gtVoid
   else:
-    raiseAssert "The function: " & $fn & " is not known anywhere."
+    error "The function: " & $fn & " is not known anywhere."
 
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAst =
   ## XXX: things still left to do:
@@ -237,7 +237,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     #     IntLit 0
     let blockLabel = if node[0].kind in {nnkSym, nnkIdent}: node[0].strVal
                      elif node[0].kind == nnkEmpty: ""
-                     else: raiseAssert "Unexpected node in block label field: " & $node.treerepr
+                     else: error "Unexpected node in block label field: " & $node.treerepr
     result = GpuAst(kind: gpuBlock,
                     blockLabel: blockLabel)
     for i in 1 ..< node.len: # index 0 is the block label
@@ -246,7 +246,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     ## XXX: For CUDA just a block?
     let blockLabel = if node[0].kind in {nnkSym, nnkIdent}: node[0].strVal
                      elif node[0].kind == nnkEmpty: ""
-                     else: raiseAssert "Unexpected node in block label field: " & $node.treerepr
+                     else: error "Unexpected node in block label field: " & $node.treerepr
     result = GpuAst(kind: gpuBlock, blockLabel: blockLabel, isExpr: true)
     for el in node:
       if el.kind != nnkEmpty:
@@ -322,7 +322,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         varNode.vName = ctx.toGpuAst(reg, declaration[0][0])
         doAssert declaration[0][1].kind == nnkPragma
         varNode.vAttributes = collectAttributes(declaration[0][1])
-      else: raiseAssert "Unexpected node kind for variable: " & $declaration.treeRepr
+      else: error "Unexpected node kind for variable: " & $declaration.treeRepr
       varNode.vType = resolveType(reg, declaration)
       varNode.vName.iTyp = varNode.vType # also store the type in the symbol, for easier lookup later
       # This is a *local* variable (i.e. `function` address space on WGSL) unless it is
@@ -400,7 +400,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         requireSimpleBranch(child[0])
         result = ctx.toGpuAst(reg, child[0])
       else:
-        raiseAssert "Unexpected child in nnkIfExpr: " & $child.kind
+        error "Unexpected child in nnkIfExpr: " & $child.kind
     result = buildTernary(ctx, reg, node, 0)
 
   of nnkForStmt:
@@ -680,7 +680,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         else:
           result = GpuAst(kind: gpuVoid)
       else:
-        raiseAssert "Unexpected node kind in TypeDef: " & $node[2].kind
+        error "Unexpected node kind in TypeDef: " & $node[2].kind
 
       # include this the set of known types to not generate duplicates
       ctx.types[typ] = result
@@ -693,7 +693,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     # get all fields of the type
     let flds = if typ.kind == gtObject: typ.oFields
                elif typ.kind == gtGenericInst: typ.gFields
-               else: raiseAssert "ObjConstr must have an object type: " & $typ
+               else: error "ObjConstr must have an object type: " & $typ
     if flds.len == 0:
       # Empty struct (e.g. Int[N]) — produce empty-ocFields gpuObjConstr
       # so each backend emits language-appropriate init ({} / TypeName())
@@ -820,8 +820,8 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     ## They are irrelevant for GPU codegen — skip them.
     result = GpuAst(kind: gpuVoid)
   of nnkWhenStmt:
-    raiseAssert "We shouldn't be seeing a `when` statement after sem check of the Nim code."
+    error "We shouldn't be seeing a `when` statement after sem check of the Nim code."
   else:
     echo "Unhandled node kind in toGpuAst: ", node.kind
-    raiseAssert "Unhandled node kind in toGpuAst: " & $node.treerepr
+    error "Unhandled node kind in toGpuAst: " & $node.treerepr
     result = GpuAst(kind: gpuBlock)

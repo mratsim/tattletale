@@ -28,7 +28,7 @@ proc unpackGenericInst*(t: NimNode): NimNode =
     of nnkObjectTy, nnkEnumTy:
       result = t # keep object/enum types as-is
     else:
-      raiseAssert "Unsupport type so far: " & $t.treerepr & " of impl: " & $impl.treerepr
+      error "Unsupport type so far: " & $t.treerepr & " of impl: " & $impl.treerepr
   else:
     result = t
 
@@ -48,7 +48,7 @@ proc resolveArrayLength*(n: NimNode): int =
     result = n[1].getImpl.intVal
   of nnkIdent:
     # Should never happen with getTypeInst() output
-    raiseAssert "Unresolved ident in array length: " & $n[1].strVal
+    error "Unresolved ident in array length: " & $n[1].strVal
   else:
     case n[1].kind
     of nnkIntLit: result = n[1].intVal
@@ -123,7 +123,7 @@ proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): G
     # Static int — preserve the value for struct naming.
     result = GpuType(kind: gtStatic, builtin: true, sValue: int(impl[0].intVal))
   else:
-    raiseAssert "Unexpected node kind in for genericInst: " & $impl.treerepr & " kind=" & $impl.kind
+    error "Unexpected node kind in for genericInst: " & $impl.treerepr & " kind=" & $impl.kind
 
 proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType =
   if t.typeKind notin {ntyGenericInst}:
@@ -153,7 +153,7 @@ proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType =
       let impl = inst.getTypeImpl()
       result = resolveStructuralType(reg, impl, t)
   else:
-    raiseAssert "Unexpected t.kind for genericInst: " & $t.kind & " treerepr=" & $t.treerepr
+    error "Unexpected t.kind for genericInst: " & $t.kind & " treerepr=" & $t.treerepr
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Pointer / inner type resolution
@@ -179,7 +179,7 @@ proc resolveInnerPointerType*(reg: var TypeRegistry, n: NimNode): GpuType =
   elif n.kind == nnkSym: # symbol of e.g. `ntyVar`
     result = resolveType(reg, n.getTypeInst())
   else:
-    raiseAssert "Found what: " & $n.treerepr
+    error "Found what: " & $n.treerepr
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Tuple type naming
@@ -219,7 +219,7 @@ proc assignTypeName*(n: NimNode, recursedSym: bool = false): string =
     result = $n.intVal
   of nnkUIntLit:
     result = $n.intVal
-  else: raiseAssert "Unexpected node in `assignTypeName`: " & $n.treerepr
+  else: error "Unexpected node in `assignTypeName`: " & $n.treerepr
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Main type resolver
@@ -344,7 +344,7 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
       else:
         result = resolveType(reg, inst)
     else:
-      raiseAssert "Type : " & $n.typeKind & " not supported yet: " & $n.treerepr
+      error "Type : " & $n.typeKind & " not supported yet: " & $n.treerepr
 
   # now add this type if not known
   reg.registerObjectType(result)
@@ -367,7 +367,7 @@ proc resolveRecordFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeFiel
     for fi in resolveTupleFields(node):
       result.add GpuTypeField(name: fi.name, typ: resolveType(reg, fi.typeNode))
   else:
-    raiseAssert "Unsupported type to parse fields from: " & $node.kind
+    error "Unsupported type to parse fields from: " & $node.kind
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Return type resolution
