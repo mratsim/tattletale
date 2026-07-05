@@ -668,7 +668,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       case node[2].kind
       of nnkObjectTy:
         result = GpuAst(kind: gpuTypeDef, tTyp: typ)
-        result.tFields = resolveTypeFields(reg, node[2])
+        result.tFields = resolveRecordFields(reg, node[2])
       of nnkCall:
         result = if isBuiltin: GpuAst(kind: gpuVoid)
                  else: GpuAst(kind: gpuTypeDef, tTyp: typ)

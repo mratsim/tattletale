@@ -83,9 +83,33 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType
 proc resolveInnerPointerType*(reg: var TypeRegistry, n: NimNode): GpuType
 proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): GpuType
 proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType
-proc resolveTypeFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeField]
-proc getTypeName*(n: NimNode, recursedSym: bool = false): string
-proc constructTupleTypeName*(n: NimNode): string
+proc resolveRecordFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeField]
+proc assignTypeName*(n: NimNode, recursedSym: bool = false): string
+
+type
+  FieldInfo = object
+    name: string
+    typeNode: NimNode
+
+proc resolveTupleFields(node: NimNode): seq[FieldInfo] =
+  ## Shared traversal of nnkTupleTy / nnkTupleConstr.
+  ## Called by both resolveRecordFields and assignTypeName.
+  doAssert node.kind in {nnkTupleTy, nnkTupleConstr}
+  for i, ch in node:
+    case ch.kind
+    of nnkIdentDefs:
+      for j in 0 ..< ch.len - 2:
+        result.add FieldInfo(name: ch[j].strVal, typeNode: ch[ch.len - 2])
+    of nnkSym:
+      result.add FieldInfo(name: "Field" & $i, typeNode: ch)
+    of nnkExprColonExpr:
+      result.add FieldInfo(name: ch[0].strVal, typeNode: ch[1])
+    of nnkBracketExpr:
+      # resolve via getTypeInst() to avoid leaking ObjectTy repr into struct name
+      result.add FieldInfo(name: "Field" & $i, typeNode: ch.getTypeInst())
+    else:
+      # resolve via getTypeInst() to avoid leaking ObjectTy repr into struct name
+      result.add FieldInfo(name: "Field" & $i, typeNode: ch.getTypeInst())
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Generic type argument / implementation resolution
@@ -102,7 +126,7 @@ proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): G
     doAssert impl.kind == nnkObjectTy, "Unexpected node kind for generic inst: " & $impl.treerepr
     ## XXX: use signature hash for type name? Otherwise will produce duplicates
     result = GpuType(kind: gtGenericInst, gName: t.repr)
-    result.gFields = resolveTypeFields(reg, impl)
+    result.gFields = resolveRecordFields(reg, impl)
   of nnkStaticTy:
     # Static int — preserve the value for struct naming.
     result = GpuType(kind: gtStatic, builtin: true, sValue: int(impl[0].intVal))
@@ -123,7 +147,7 @@ proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType =
     for i in 1 ..< t.len:
       result.gArgs.add resolveType(reg, t[i])
     let impl = t.getTypeImpl() # impl for the `gFields`
-    result.gFields = resolveTypeFields(reg, impl)
+    result.gFields = resolveRecordFields(reg, impl)
   of nnkObjectTy:
     result = resolveStructuralType(reg, t, t)
   of nnkSym:
@@ -169,81 +193,8 @@ proc resolveInnerPointerType*(reg: var TypeRegistry, n: NimNode): GpuType =
 #  Tuple type naming
 # ═══════════════════════════════════════════════════════════════════════
 
-proc constructTupleTypeName*(n: NimNode): string =
-  ## XXX: overthink if this should really be here and not somewhere else
-  ##
-  ## Given a tuple, generate a name from the field names and types, e.g.
-  ## `Tuple_lo_BaseType_hi_BaseType`
-  ##
-  ## XXX: `getTypeImpl.repr` is a hacky way to get a string name of the underlying
-  ## type, e.g. for `BaseType`. Aliases would lead to duplicate tuple types.
-  ## UPDATE: I changed the implementation to recurse into `getTypeName`
-  ## TODO: verify that this did not break the tuple test & specifically check for aliases
-  result = "Tuple_"
-  doAssert n.kind in [nnkTupleTy, nnkTupleConstr]
-  for i, ch in n:
-    case ch.kind
-    of nnkIdentDefs:
-      let typName = ch[ch.len - 2].getTypeName() # second to last is type name of field(s)
-      for j in 0 ..< ch.len - 2:
-        # Example:
-        # IdentDefs
-        #   Ident "hi"
-        #   Ident "lo"      `..< ch.len - 2 `
-        #   Sym "BaseType"  `..< ch.len - 1`
-        #   Empty           `..< ch.len`
-        result.add ch[j].strVal & "_" & typName
-        if j < ch.len - 3:
-          result.add "_"
-      if i < n.len - 1:
-        result.add "_"
-    of nnkExprColonExpr:
-      # ExprColonExpr — two sub-cases:
-      # ── Static tuple literal (value embedded in name):
-      #   Sym "s0"
-      #   IntLit 4
-      # ── Type expression (type name embedded):
-      #   Sym "hi"
-      #   Infix
-      #     Sym "shr"
-      #     Sym "n"
-      #     IntLit 16
-      doAssert ch[0].kind == nnkSym, "Not a symbol, but: " & $ch.treerepr
-      if ch[1].kind in {nnkIntLit, nnkUIntLit}:
-        # Use the actual integer value in the name
-        result.add ch[0].strVal & "_" & $ch[1].intVal
-      else:
-        let typName = ch[1].getTypeName()
-        result.add ch[0].strVal & "_" & typName
-      if i < n.len - 1:
-        result.add "_"
-    of nnkSym:
-      # TupleConstr
-      #   Sym "BaseType" <-- e.g. here
-      #   Sym "BaseType"
-      let typName = ch.getTypeName()
-      result.add "Field" & $i & "_" & typName
-      if i < n.len - 1:
-        result.add "_"
-    else:
-      # An object constructor child inside the tuple — e.g.
-      #   ObjConstr
-      #     BracketExpr
-      #       Sym "MyInt"
-      #       IntLit 4
-      #     ExprColonExpr
-      #       Sym "data"
-      #       Bracket
-      #         ...
-      # -> resolve via getTypeInst() instead of getTypeImpl()
-      #    to avoid leaking the ObjectTy repr into the C struct name.
-      let childInst = ch.getTypeInst()
-      let typName = childInst.getTypeName()
-      result.add "Field" & $i & "_" & typName
-      if i < n.len - 1:
-        result.add "_"
 
-proc getTypeName*(n: NimNode, recursedSym: bool = false): string =
+proc assignTypeName*(n: NimNode, recursedSym: bool = false): string =
   ## Returns the name of the type
   case n.kind
   of nnkIdent: result = n.strVal
@@ -251,7 +202,7 @@ proc getTypeName*(n: NimNode, recursedSym: bool = false): string =
     if recursedSym:
       result = n.strVal
     else:
-      result = n.getTypeInst.getTypeName(true)
+      result = n.getTypeInst.assignTypeName(true)
   of nnkObjConstr:
     if n[0].kind == nnkEmpty:
       result = n.getTypeInst.strVal
@@ -261,18 +212,22 @@ proc getTypeName*(n: NimNode, recursedSym: bool = false): string =
     # Anonymous object type — use its repr as a fallback name.
     result = n.repr
   of nnkTupleTy, nnkTupleConstr:
-    result = constructTupleTypeName(n)
+    result = "Tuple_"
+    for i, fi in resolveTupleFields(n):
+      if i > 0: result.add "_"
+      let typName = fi.typeNode.assignTypeName()
+      result.add fi.name & "_" & typName
   of nnkBracketExpr:
     # construct a type name `Foo_Bar_Baz`
     for i, ch in n:
-      result.add ch.getTypeName()
+      result.add ch.assignTypeName()
       if i < n.len - 1:
         result.add "_"
   of nnkIntLit:
     result = $n.intVal
   of nnkUIntLit:
     result = $n.intVal
-  else: raiseAssert "Unexpected node in `getTypeName`: " & $n.treerepr
+  else: raiseAssert "Unexpected node in `assignTypeName`: " & $n.treerepr
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Main type resolver
@@ -332,13 +287,13 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
       result = initGpuUAType(resolveInnerPointerType(reg, n))
     of ntyObject, ntyAlias, ntyTuple:
       # For aliases (type F = int), resolve to the underlying type.
-      # Don't call resolveTypeFields on aliases of primitive types.
+      # Don't call resolveRecordFields on aliases of primitive types.
       if n.typeKind == ntyAlias and n.kind == nnkSym:
         return resolveType(reg, n.getTypeImpl())
       let impl = if n.kind == nnkTupleConstr: n # might actually _lose_ information if used getTypeImpl
                  else: n.getTypeImpl
-      let flds = resolveTypeFields(reg, impl)
-      let typName = getTypeName(n) # might be an object construction
+      let flds = resolveRecordFields(reg, impl)
+      let typName = assignTypeName(n) # might be an object construction
       result = initGpuObjectType(typName, flds)
     of ntyArray:
       # For a generic, static array type, e.g.:
@@ -407,7 +362,7 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
 #  Type field resolution
 # ═══════════════════════════════════════════════════════════════════════
 
-proc resolveTypeFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeField] =
+proc resolveRecordFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeField] =
   case node.kind
   of nnkObjectTy:
     # Empty objects (e.g., `type Int[V] = object`) have no recList.
@@ -416,33 +371,9 @@ proc resolveTypeFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeField]
         doAssert ch.kind == nnkIdentDefs and ch.len == 3
         result.add GpuTypeField(name: ch[0].strVal,
                                 typ: resolveType(reg, ch[1]))
-  of nnkTupleTy:
-    for ch in node:
-      doAssert ch.kind == nnkIdentDefs and ch.len == 3
-      result.add GpuTypeField(name: ch[0].strVal,
-                              typ: resolveType(reg, ch[1]))
-  of nnkTupleConstr:
-    # TupleConstr
-    #   Sym "BaseType"
-    #   Sym "BaseType"
-    for i, ch in node:
-      case ch.kind
-      of nnkSym:
-        result.add GpuTypeField(name: "Field" & $i,
-                                typ: resolveType(reg, ch))
-      of nnkExprColonExpr:
-        result.add GpuTypeField(name: ch[0].strVal,
-                                typ: resolveType(reg, ch[1]))
-      of nnkBracketExpr:
-        # E.g. `Int[128]` inside a tuple type constructor.
-        # Resolve the type directly from the bracket expression.
-        result.add GpuTypeField(name: "Field" & $i,
-                                typ: resolveType(reg, ch))
-      else:
-        # Unexpected child in tuple type constructor.
-        # Resolve the type directly from the child node.
-        result.add GpuTypeField(name: "Field" & $i,
-                                typ: resolveType(reg, ch))
+  of nnkTupleTy, nnkTupleConstr:
+    for fi in resolveTupleFields(node):
+      result.add GpuTypeField(name: fi.name, typ: resolveType(reg, fi.typeNode))
   else:
     raiseAssert "Unsupported type to parse fields from: " & $node.kind
 
