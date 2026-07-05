@@ -18,14 +18,6 @@ import ./gpu_type_constructors
 #  Generic type name utilities
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getGenericTypeName*(t: NimNode): string =
-  ## Returns the base name of the generic type, i.e. for
-  ## `Foo[Bar, Baz]` returns `Foo`.
-  case t.kind
-  of nnkSym: result = t.strVal
-  of nnkBracketExpr: result = t[0].getGenericTypeName()
-  else: raiseAssert "Unexpected node kind for generic instantiation type: " & $t.treerepr
-
 proc unpackGenericInst*(t: NimNode): NimNode =
   let tKind = t.typeKind
   if tKind == ntyGenericInst:
@@ -362,6 +354,7 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc resolveRecordFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeField] =
+  node.expectKind({nnkObjectTy, nnkTupleTy, nnkTupleConstr})
   case node.kind
   of nnkObjectTy:
     # Empty objects (e.g., `type Int[V] = object`) have no recList.

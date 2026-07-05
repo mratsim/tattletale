@@ -125,6 +125,23 @@ proc assignPrefixOp*(op: string): string =
   of "not": result = "!"
   else: result = op
 
+proc getGenericTypeName*(t: NimNode): string =
+  ## Returns the base name of the generic type, i.e. for
+  ## `Foo[Bar, Baz]` returns `Foo`.
+  # Recursion handles nested bracket expressions by peeling outer layers
+  # until it hits the root Sym, e.g.:
+  # ```
+  # BracketExpr         # Foo[Bar][Baz]
+  #   BracketExpr       #   Foo[Bar]
+  #     Sym "Foo"
+  #     Sym "Bar"
+  #   Sym "Baz"
+  # ```
+  case t.kind
+  of nnkSym: result = t.strVal
+  of nnkBracketExpr: result = t[0].getGenericTypeName()
+  else: raiseAssert "Unexpected node kind for generic instantiation type: " & $t.treerepr
+
 proc requiresMemcpy*(n: NimNode): bool =
   ## At the moment we only emit a `memcpy` statement for array types
   result = n.typeKind == ntyArray and n.kind != nnkBracket # need to emit a memcpy
