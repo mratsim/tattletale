@@ -434,13 +434,20 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result.add '}'
 
   of gpuObjConstr:
-    result = "{"
+    # C99 compound literal: (TypeName){val1, val2, ...}
+    # Using compound literal syntax ensures the result is a valid expression
+    # (bare braced-init-lists cannot be used with member access).
+    # OpenCL C is C99-based, so we use the C99 `(type){init}` syntax,
+    # NOT C++ functional-style cast `Type{init}`.
+    result = "(" & gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "){"
     for i, el in ast.ocFields:
-      result.add ctx.genOpenCL(el.value)
+      if el.value.kind == gpuVoid:
+        result.add "{}"
+      else:
+        result.add ctx.genOpenCL(el.value)
       if i < ast.ocFields.len - 1:
         result.add ", "
-    result.add '}'
-
+    result.add "}"
   of gpuInlineAsm:
     result = indentStr & "asm(" & ast.stmt.strip & ");"
 

@@ -584,17 +584,23 @@ proc makeCodeValid(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
         inc i
   of gpuDot: # replace `foo.bar` by storage pointer recorded in `scanGenerics`, i.e. `foo.bar` -> `&res`
     var p = n.dParent
-    let id = getStructType(p)
-    doAssert n.dField.kind == gpuIdent, "Dot expression must contain an ident as field: " & $n.dField.kind
-    let field = n.dField.ident()
-    if id.kind != gtVoid and (id, field) in ctx.structsWithPtrs: # this is in the struct with pointer
-      let v = ctx.structsWithPtrs[(id, field)]
-      ## XXX: only need `addr` if we are in a global function, not otherwise, because in device functions,
-      ## we will have passed the parameter
-      if inGlobal:
-        n = GpuAst(kind: gpuAddr, aOf: v) # overwrite with the address of value passed in to the object constructor
-      else:
-        n = v
+    if p.kind notin [gpuIdent, gpuDeref]:
+      # Value expressions (e.g. gpuObjConstr from constexpr tuple field access)
+      # can't have pointer field replacements — they are temporaries.
+      for ch in mitems(n):
+        ctx.makeCodeValid(ch, inGlobal)
+    else:
+      let id = getStructType(p)
+      doAssert n.dField.kind == gpuIdent, "Dot expression must contain an ident as field: " & $n.dField.kind
+      let field = n.dField.ident()
+      if id.kind != gtVoid and (id, field) in ctx.structsWithPtrs: # this is in the struct with pointer
+        let v = ctx.structsWithPtrs[(id, field)]
+        ## XXX: only need `addr` if we are in a global function, not otherwise, because in device functions,
+        ## we will have passed the parameter
+        if inGlobal:
+          n = GpuAst(kind: gpuAddr, aOf: v) # overwrite with the address of value passed in to the object constructor
+        else:
+          n = v
   of gpuAssign: # checks we don't have `foo.x = res` for `x` a pointer field
     if n.aLeft.kind == gpuDot and n.aLeft.dParent.kind in [gpuIdent, gpuDeref]:
       let dot = n.aLeft

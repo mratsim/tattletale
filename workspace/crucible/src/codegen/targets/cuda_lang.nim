@@ -437,7 +437,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # Note: bare `{val, ...}` is used instead of `(TypeName){val}`
     # because NVRTC compiles in C++ mode where C99 compound literals
     # are not valid.
-    result = "{"
+    # Braced init list: TypeName{val1, val2, ...}
+    # Using `TypeName{...}` (functional-style cast) instead of bare `{val}`
+    # ensures the result is a valid C++ expression — bare braced-init-lists
+    # are not expressions and cannot be used with member access (gpuDot).
+    result = gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "{"
     for i, el in ast.ocFields:
       if el.value.kind == gpuVoid:
         result.add "{}"

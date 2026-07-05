@@ -81,7 +81,7 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
     )
 
   reg.register("unnestBlockInits", pkTransform, phaseMain,
-    "Lifts preceding stmts out of var/let block-inits",
+    "Lifts preceding stmts out of var/let block-inits and constexpr from expression slots",
     dependsOn = @["ensureBlock"],
     run = proc(ctx: var GpuContext): void =
       proc firstNonBlock(n: GpuAst): GpuAst =
@@ -89,23 +89,78 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
         while result.kind == gpuBlock and result.statements.len == 1:
           result = result.statements[0]
 
+      # Lifts any gpuConstexpr found in expression children of `n`,
+      # adding them to `lifts` and replacing them with their cIdent.
+      proc liftConstexprFrom(n: var GpuAst; lifts: var seq[GpuAst]) =
+        case n.kind
+        of gpuConstexpr:
+          lifts.add n
+          n = n.cIdent
+        of gpuVar:
+          liftConstexprFrom(n.vInit, lifts)
+        of gpuAssign:
+          liftConstexprFrom(n.aRight, lifts)
+        of gpuDot:
+          liftConstexprFrom(n.dParent, lifts)
+          liftConstexprFrom(n.dField, lifts)
+        of gpuIndex:
+          liftConstexprFrom(n.iArr, lifts)
+          liftConstexprFrom(n.iIndex, lifts)
+        of gpuCall:
+          for i in 0 ..< n.cArgs.len:
+            liftConstexprFrom(n.cArgs[i], lifts)
+        of gpuObjConstr:
+          for i in 0 ..< n.ocFields.len:
+            liftConstexprFrom(n.ocFields[i].value, lifts)
+        of gpuReturn:
+          liftConstexprFrom(n.rValue, lifts)
+        of gpuAddr:
+          liftConstexprFrom(n.aOf, lifts)
+        of gpuDeref:
+          liftConstexprFrom(n.dOf, lifts)
+        of gpuConv:
+          liftConstexprFrom(n.convExpr, lifts)
+        of gpuCast:
+          liftConstexprFrom(n.cExpr, lifts)
+        of gpuBinOp:
+          liftConstexprFrom(n.bLeft, lifts)
+          liftConstexprFrom(n.bRight, lifts)
+        of gpuPrefix:
+          liftConstexprFrom(n.pVal, lifts)
+        of gpuIf:
+          liftConstexprFrom(n.ifCond, lifts)
+        of gpuFor:
+          liftConstexprFrom(n.fStart, lifts)
+          liftConstexprFrom(n.fEnd, lifts)
+        of gpuWhile:
+          liftConstexprFrom(n.wCond, lifts)
+        of gpuArrayLit:
+          for i in 0 ..< n.aValues.len:
+            liftConstexprFrom(n.aValues[i], lifts)
+        else:
+          discard
+
       proc unnest(n: var GpuAst) =
         case n.kind
         of gpuBlock:
           var newStmts: seq[GpuAst]
-          for stmt in n.statements:
+          for stmtIdx in 0 ..< n.statements.len:
+            var stmt = n.statements[stmtIdx]
             let inner = firstNonBlock(stmt)
+            # First: lift block inits
             if inner.kind in {gpuVar}:
               let vInitInner = firstNonBlock(inner.vInit)
               if vInitInner.kind == gpuBlock and vInitInner.statements.len > 1:
                 for j in 0 ..< vInitInner.statements.len - 1:
                   newStmts.add vInitInner.statements[j]
                 inner.vInit = vInitInner.statements[^1]
-                newStmts.add stmt
-              else:
-                newStmts.add stmt
-            else:
-              newStmts.add stmt
+            # Second: lift any gpuConstexpr from expression children
+            if stmt.kind != gpuConstexpr:
+              var lifts: seq[GpuAst]
+              liftConstexprFrom(stmt, lifts)
+              for l in lifts:
+                newStmts.add l
+            newStmts.add stmt
           n.statements = newStmts
           for i in 0 ..< n.statements.len:
             unnest(n.statements[i])
