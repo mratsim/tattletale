@@ -63,29 +63,6 @@ template findIdx(col, el): untyped =
       break
   res
 
-proc maybePatchFnName(n: var GpuAst) =
-  ## Patches the function name for names that are not allowed on most backends, but appear
-  ## commonly in Nim (custom operators).
-  ##
-  ## NOTE: I think that the binary operators don't actually appear as a `gpuCall`, but still
-  ## as an infix node, even after sem checking by the Nim compiler.
-  doAssert n.kind == gpuIdent
-  template patch(arg, by: untyped): untyped =
-    arg.iSym = arg.iSym.replace(arg.iName, by)
-    arg.iName = by
-  let name = n.iName
-  case name
-  of "[]":  patch(n, "get")
-  of "[]=": patch(n, "set")
-  of "()":  patch(n, "call")
-  of "+":   patch(n, "add")
-  of "-":   patch(n, "sub")
-  of "*":   patch(n, "mul")
-  of "/":   patch(n, "div")
-  else:
-    # leave as is
-    discard
-
 proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
   ## Returns the name for the function. Either the symbol name _or_
   ## the `{.cudaName.}` pragma argument.
@@ -126,9 +103,6 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
       else:
         result = ctx.toGpuAst(reg, n) # if not proc or func
 
-      # possibly patch function names, e.g. custom `[]`, `[]=`, `+` etc operators
-      # (inbuilt won't show up as a function name, but rather as a specific node kind, eg `nnkIndex`
-      result.maybePatchFnName()
 
       # handle overloads with different signatures
       if n.strVal in ctx.symChoices:
@@ -516,9 +490,17 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         result = result or ((t.kind == gtPtr) and t.implicit and t.to.kind in gtBool .. gtSize_t)
 
     if not result.bLeftTyp.ofBasicType(true) or not result.bRightTyp.ofBasicType(false):
-      result = GpuAst(kind: gpuCall)
-      result.cName = ctx.getFnName(reg, node[0])
-      result.cArgs = @[ctx.toGpuAst(reg, node[1]), ctx.toGpuAst(reg, node[2])]
+      let opName = node[0].repr
+      if opName in ["+", "-", "*", "/", "div", "mod", "shl", "shr", "and", "or", "xor"]:
+        var op = GpuAst(kind: gpuIdent, iName: assignOp(opName, false))
+        op.iSym = opName
+        result.bOp = op
+        result.bLeft = ctx.toGpuAst(reg, node[1])
+        result.bRight = ctx.toGpuAst(reg, node[2])
+      else:
+        result = GpuAst(kind: gpuCall)
+        result.cName = ctx.getFnName(reg, node[0])
+        result.cArgs = @[ctx.toGpuAst(reg, node[1]), ctx.toGpuAst(reg, node[2])]
     else:
       # if left/right is boolean we need logical AND/OR, otherwise bitwise
       let isBoolean = result.bLeftTyp.kind == gtBool
