@@ -91,3 +91,28 @@ If running on a machine without CUDA (and thus can't NVRTC):
 1. Compile the test up to `nvrtc.compile()` or inspect the codegen output
 2. Print the generated code with `echo kernel` or inspect `nv.getPtx()`
 3. Pass the exact run command to the user for manual execution
+
+## Coding Style
+
+**One statement per line.**
+Never put multiple statements on the same line with `;`.
+Every `let`, `var`, `const`, `if`, `for`, `while`, assignment, expression statement
+must be on its own line.
+
+Wrong:
+```nim
+let a = 1; let b = 2
+C[0] = a; C[1] = b
+```
+
+Right:
+```nim
+let a = 1
+let b = 2
+C[0] = a
+C[1] = b
+```
+
+Rationale: `;` kills debuggability — you can't set breakpoints per-statement,
+stack traces lose line-level precision, and generated CUDA errors are harder
+to map back to source.
