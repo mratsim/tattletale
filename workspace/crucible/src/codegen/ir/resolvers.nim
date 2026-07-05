@@ -94,7 +94,7 @@ type
 proc resolveTupleFields(node: NimNode): seq[FieldInfo] =
   ## Shared traversal of nnkTupleTy / nnkTupleConstr.
   ## Called by both resolveRecordFields and assignTypeName.
-  doAssert node.kind in {nnkTupleTy, nnkTupleConstr}
+  node.expectKind({nnkTupleTy, nnkTupleConstr})
   for i, ch in node:
     case ch.kind
     of nnkIdentDefs:
@@ -383,7 +383,7 @@ proc resolveRecordFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeFiel
 proc resolveProcReturnType*(reg: var TypeRegistry, params: NimNode): GpuType =
   ## Returns the return type of the given procedure from the `params` node
   ## of type `nnkFormalParams`.
-  doAssert params.kind == nnkFormalParams, "Argument is not FormalParams, but: " & $params.treerepr
+  params.expectKind(nnkFormalParams)
   let retType = params[0] # arg 0 is return type
   if retType.kind == nnkEmpty:
     result = GpuType(kind: gtVoid) # actual void return

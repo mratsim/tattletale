@@ -43,16 +43,17 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
       result.add(param)
 
 
-proc toGpuProcSignature(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute]): GpuProcSignature =
+proc toInstantiatedProcSignature(ctx: var GpuContext, reg: var TypeRegistry,
+    params: NimNode, attrs: set[GpuAttribute]): GpuProcSignature =
   ## Creates a `GpuProcSignature` from the given `params` node of type `nnkFormalParams`
-
   ##
   ## NOTE: This procedure is only called from generically instantiated procs. Therefore,
   ## we shouldn't need to worry about getting `gtInvalid` return types here.
-  doAssert params.kind == nnkFormalParams, "Argument is not FormalParams, but: " & $params.treerepr
-  result = GpuProcSignature(params: ctx.parseProcParameters(reg, params, attrs),
-                            retType: resolveProcReturnType(reg, params))
 
+  GpuProcSignature(
+    params: ctx.parseProcParameters(reg, params, attrs),
+    retType: resolveProcReturnType(reg, params)
+  )
 
 template findIdx(col, el): untyped =
   var res = -1
@@ -160,7 +161,7 @@ proc addProcToGenericInsts(ctx: var GpuContext, reg: var TypeRegistry, node: Nim
 
   # turn the signature into a `GpuProcSignature`
   let attrs = collectProcAttributes(inst.pragma)
-  let procSig = ctx.toGpuProcSignature(reg, sig.params, attrs)
+  let procSig = ctx.toInstantiatedProcSignature(reg, sig.params, attrs)
   if name in ctx.processedProcs:
     return
   else:
