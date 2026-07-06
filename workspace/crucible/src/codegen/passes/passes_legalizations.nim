@@ -44,6 +44,47 @@ proc insertResult(ctx: var GpuContext; fn: GpuAst) =
           fn.pBody.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt)
         break
 
+proc flattenAssignLhs(n: var GpuAst) =
+  ## When a gpuAssign's LHS is a gpuBlock(isExpr: true), hoist the block's
+  ## preamble statements into the parent block and keep only the last
+  ## statement as the assignment target. This prevents the backend from
+  ## emitting a spurious `;` after the value-producing statement of an
+  ## expression block used as an assignment lvalue.
+  case n.kind
+  of gpuBlock:
+    var newStmts: seq[GpuAst]
+    for stmt in n.statements.mitems:
+      if stmt.kind == gpuAssign and
+         stmt.aLeft.kind == gpuBlock and
+         stmt.aLeft.isExpr:
+        let lhsBlock = stmt.aLeft
+        if lhsBlock.statements.len == 1:
+          # Single statement: unwrap directly
+          stmt.aLeft = lhsBlock.statements[0]
+          newStmts.add stmt
+        else:
+          # Multi-statement: hoist preamble, last stmt becomes LHS
+          for j in 0 ..< lhsBlock.statements.len - 1:
+            newStmts.add lhsBlock.statements[j]
+          stmt.aLeft = lhsBlock.statements[^1]
+          newStmts.add stmt
+      else:
+        newStmts.add stmt
+    n.statements = newStmts
+    # Recurse into children
+    for i in 0 ..< n.statements.len:
+      flattenAssignLhs(n.statements[i])
+  of gpuIf:
+    flattenAssignLhs(n.ifThen)
+    if n.ifElse.kind != gpuDiscard:
+      flattenAssignLhs(n.ifElse)
+  of gpuFor:
+    flattenAssignLhs(n.fBody)
+  of gpuWhile:
+    flattenAssignLhs(n.wBody)
+  else:
+    discard
+
 proc registerLegalizationPasses*(reg: var PassRegistry) =
   ## Register passes that make the IR well-formed.
 
@@ -78,6 +119,15 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
       for fnKey in ctx.allFnTab.keys:
         var fn = ctx.allFnTab[fnKey]
         insertResult(ctx, fn)
+    )
+
+  reg.register("flattenAssignLhs", pkTransform, phaseMain,
+    "Hoists preamble stmts out of block-valued LHS in assignments",
+    dependsOn = @["ensureBlock"],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        flattenAssignLhs(fn.pBody)
     )
 
   reg.register("unnestBlockInits", pkTransform, phaseMain,
