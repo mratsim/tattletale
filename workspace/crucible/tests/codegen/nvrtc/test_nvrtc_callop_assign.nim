@@ -17,10 +17,6 @@
 import std/[unittest, macros]
 import workspace/crucible/src/codegen/nvrtc
 
-# ═══════════════════════════════════════════════════════════════
-# Minimal types — no ceramic imports
-# ═══════════════════════════════════════════════════════════════
-
 type Int*[V: static int] = object
   discard
 
@@ -35,7 +31,6 @@ type TensorView*[T, Sh, St] = object
   data*: ptr UncheckedArray[T]
   layout*: Layout[Sh, St]
 
-# evalOnceAs — same pattern as ceramic's int_tuples_compiletime
 macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   result = newProc(
     name = genSym(nskTemplate, $alias),
@@ -44,18 +39,12 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
     procType = nnkTemplateDef
   )
 
-# crd2idx for flat int coord decomposed over shape/stride tuple
 template crd2idx*(coord: int; shape, stride: typed): untyped =
   (coord mod toIntVal(shape[0])) * toIntVal(stride[0]) +
   (coord div toIntVal(shape[0])) * toIntVal(stride[1])
 
 {.experimental: "callOperator".}
 
-# `()` operator following ceramic pattern:
-#   let pos = block: ...crd2idx...
-#   tv.data[toIntVal pos]
-# The template body is a stmt-list-expr with tv.data[pos] as final expression.
-# THIS triggers the codegen bug (let statements emitted with ; before = val).
 template `()`*[T, Sh, St](tv: var TensorView[T, Sh, St]; coord: int): var T =
   let pos = block:
     evalOnceAs(s, tv.layout.shape)
@@ -79,7 +68,7 @@ const kernel = cuda:
     var tv = TensorView[float32, (Int[8], Int[16]), (Int[1], Int[8])](data: C, layout: L)
     fillWith(tv, 42.0'f32)
 
-suite "NVRTC - call operator `()` assignment:"
+suite "NVRTC callop assign":
   test "fillWith via NVRTC":
     var buf: array[128, float32]
     var nv = initNvrtc(kernel)
