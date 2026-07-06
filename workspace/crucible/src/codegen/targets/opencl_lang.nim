@@ -241,6 +241,23 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
 
 # ── genOpenCL ─────────────────────────────────────────────────────────
 
+proc genLit*(ast: GpuAst): string =
+  ## Lower a literal node for the OpenCL backend.
+  if ast.lType.kind == gtString:
+    result = '"' & ast.lValue & '"'
+  elif ast.lValue == "DEFAULT":
+    result = "{}"
+  else:
+    case ast.lType.kind
+    of gtFloat32: result = ast.lValue & "f"
+    of gtUint32: result = ast.lValue & "U"
+    of gtUint64: result = ast.lValue & "ULL"
+    of gtInt64:  result = ast.lValue & "LL"
+    of gtInt16, gtUint16, gtUint8, gtBool:
+      result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
+    else:
+      result = ast.lValue
+
 proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual OpenCL C code generator.
   let indentStr = "  ".repeat(indent)
@@ -403,9 +420,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ast.ident()
 
   of gpuLit:
-    if ast.lType.kind == gtString: result = '"' & ast.lValue & '"'
-    elif ast.lValue == "DEFAULT": result = "{}"
-    else: result = ast.lValue
+      result = genLit(ast)
 
   of gpuArrayLit:
     result = "{"

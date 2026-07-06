@@ -20,14 +20,16 @@ proc gpuTypeToString*(t: GpuType,
 
 proc size*(ctx: var GpuContext, a: GpuType): string = size(gpuTypeToString(a, allowEmptyIdent = true))
 
-proc literalSuffix(t: GpuType): string =
+proc literalSuffix*(t: GpuType): string =
   ## Returns the correct literal suffix for the given literal value for the WebGPU target
   case t.kind
-  of gtUint32: "u"
-  of gtInt32: "" # NOTE: We DON'T give as suffix to `i32` literals so that we can rely on more cases
-                 # where WebGPU allows literals to be converted automatically!
-  of gtFloat32: "" # NOTE: float suffixes _already_ come with an `f` suffix in Nim!
-  else: ""
+  of gtUint32: result = "u"
+  of gtInt32: result = "i"
+  of gtFloat32: result = "f"
+  of gtFloat64: result = "lf"
+  of gtUint16: result = "u"
+  of gtInt16: result = "i"
+  else: discard
 
 proc toAddressSpace(symKind: GpuSymbolKind): AddressSpace =
   case symKind
@@ -809,6 +811,19 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
 proc size(ctx: var GpuContext, a: GpuAst): string = size(ctx.genWebGpu(a))
 proc address(ctx: var GpuContext, a: GpuAst): string = address(ctx.genWebGpu(a))
 
+proc genLit*(ast: GpuAst): string =
+  ## Lower a literal node for the WebGPU (WGSL) backend.
+  if ast.lType.kind == gtString:
+    result = '"' & ast.lValue & '"'
+  elif ast.lValue == "DEFAULT":
+    result = ""
+  else:
+    let suf = literalSuffix(ast.lType)
+    if suf.len > 0:
+      result = ast.lValue & suf
+    else:
+      result = ast.lValue
+
 proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   #echo "AST: ", $ast
   let indentStr = "  ".repeat(indent)
@@ -964,16 +979,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ast.ident()
 
   of gpuLit:
-    if ast.lType.kind == gtString: result = '"' & ast.lValue & '"'
-    elif ast.lValue == "DEFAULT":
-      ## TODO: We could "manually" construct a zero version!
-      ## NOTE: There *are* default initializations to zero. Just not for fields that
-      ## are either pointers or runtime arrays!
-      #raiseAssert "There is no way to default initialize a variable on the WebGPU target."
-      result = ""
-    else:
-      result = ast.lValue & literalSuffix(ast.lType)
-
+      result = genLit(ast)
   of gpuArrayLit:
     result = "array("
     for i, el in ast.aValues:

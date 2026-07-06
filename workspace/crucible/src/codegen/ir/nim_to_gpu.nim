@@ -433,18 +433,17 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         # Derive type from range end expression
         let endTyp =
           if result.fEnd.kind == gpuLit:
-            result.fEnd.lType
+            result.fEnd.lType   # literal like `0 ..< 128` — use float/int literal's own type
           elif result.fEnd.kind == gpuIdent and result.fEnd.iTyp.kind notin {gtVoid}:
-            result.fEnd.iTyp
-          elif result.fEnd.kind == gpuBinOp and result.fEnd.bLeftTyp.kind notin {gtVoid}:
-            result.fEnd.bLeftTyp
+            result.fEnd.iTyp   # variable like `0 ..< n` — use the variable's declared type
+          elif result.fEnd.kind == gpuBinOp:
+            initGpuType(gtInt32)  # expression like `0 ..< (a + b)` — determine binop type from operands? Or just default to int32
           else:
-            initGpuType(gtInt32)  # fallback
+            initGpuType(gtInt32)  # call/other expression — fallback
         let one = GpuAst(kind: gpuLit, lValue: "1", lType: endTyp)
         var addOp = GpuAst(kind: gpuIdent, iName: "+")
         result.fEnd = GpuAst(kind: gpuBinOp, bOp: addOp,
-                             bLeft: result.fEnd, bRight: one,
-                             bLeftTyp: endTyp, bRightTyp: endTyp)
+                             bLeft: result.fEnd, bRight: one)
     elif node[1].len >= 2:
       result.fStart = ctx.toGpuAst(reg, node[1][1])
       result.fEnd = ctx.toGpuAst(reg, node[1][^1])
@@ -493,15 +492,11 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     if name in ctx.builtins and node[0].repr in NimGpuNumericOperators:
       var op = GpuAst(kind: gpuIdent, iName: NimGpuNumericOperators[node[0].repr])
       op.iSym = op.iName
-      result = GpuAst(kind: gpuBinOp, bOp: op,
-                      bLeft: args[0], bRight: args[1],
-                      bLeftTyp: initGpuType(gtInt32), bRightTyp: initGpuType(gtInt32))
+      result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1])
     elif name in ctx.builtins and node[0].repr in NimGpuBooleanOperators:
       var op = GpuAst(kind: gpuIdent, iName: NimGpuBooleanOperators[node[0].repr])
       op.iSym = op.iName
-      result = GpuAst(kind: gpuBinOp, bOp: op,
-                      bLeft: args[0], bRight: args[1],
-                      bLeftTyp: initGpuType(gtBool), bRightTyp: initGpuType(gtBool))
+      result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1])
     else:
       let fnIsExpr = ctx.fnReturnsValue(name)
       result = GpuAst(kind: gpuCall, cIsExpr: fnIsExpr)
@@ -518,8 +513,8 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     #   Sym "int"  <- return type
     #   Sym "int"  <- left op type
     #   Sym "int"  <- right op type
-    result.bLeftTyp = resolveType(reg, typ[0][1])
-    result.bRightTyp = resolveType(reg, typ[0][2])
+    let leftTyp = resolveType(reg, typ[0][1])
+    let rightTyp = resolveType(reg, typ[0][2])
     # if either is not a base type (`gtBool .. gtSize_t`) we actually deal with a _function call_
     # instead of an binary operation. Will thus rewrite.
     proc ofBasicType(t: GpuType, allowPtrLhs: bool): bool =
@@ -535,7 +530,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       if allowPtrLhs:
         result = result or ((t.kind == gtPtr) and t.implicit and t.to.kind in gtBool .. gtSize_t)
 
-    if not result.bLeftTyp.ofBasicType(true) or not result.bRightTyp.ofBasicType(false):
+    if not leftTyp.ofBasicType(true) or not rightTyp.ofBasicType(false):
       let name = ctx.getFnName(reg, node[0])
       result = GpuAst(kind: gpuCall)
       result.cName = name
@@ -544,7 +539,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         ctx.registerGenericInstOrExternalProc(reg, node, name)
     else:
       # if left/right is boolean we need logical AND/OR, otherwise bitwise
-      let isBoolean = result.bLeftTyp.kind == gtBool
+      let isBoolean = leftTyp.kind == gtBool
       let tbl = if isBoolean: NimGpuBooleanOperators else: NimGpuNumericOperators
       var op = GpuAst(kind: gpuIdent, iName: tbl.getOrDefault(node[0].repr, node[0].repr)) # repr so that open sym choice gets correct name
       op.iSym = op.iName
@@ -557,10 +552,10 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       # `lType` field will just be `gtVoid`, like the default.
       if result.bLeft.kind == gpuLit: # and result.bRight.kind != gpuLit:
         # determine literal type based on `bRight`
-        result.bLeft.lType = result.bLeftTyp
+        result.bLeft.lType = leftTyp
       elif result.bRight.kind == gpuLit: # and result.bLeft.kind != gpuLit:
         # determine literal type based on `bLeft`
-        result.bRight.lType = result.bRightTyp
+        result.bRight.lType = rightTyp
 
   of nnkDotExpr:
     ## NOTE: As we use a typed macro, we only encounter `DotExpr` for *actual* field accesses and NOT
@@ -639,7 +634,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     result.lType = initGpuType(gtFloat64)
   of nnkFloat32Lit:
     result = GpuAst(kind: gpuLit)
-    result.lValue = $node.floatVal & "f"
+    result.lValue = $node.floatVal
     result.lType = initGpuType(gtFloat32)
   of nnkRStrLit:
     result = GpuAst(kind: gpuLit)

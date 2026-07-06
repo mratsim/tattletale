@@ -140,8 +140,6 @@ type
     of gpuBinOp:
       bOp*: GpuAst # `gpuIdent` of the binary operation
       bLeft*, bRight*: GpuAst
-      # types of left and right nodes. Determined from Nim symbol associated with `bOp`
-      bLeftTyp*, bRightTyp*: GpuType
     of gpuVar:
       vName*: GpuAst ## Will be a `GpuIdent`
       vType*: GpuType
@@ -427,8 +425,6 @@ proc clone*(ast: GpuAst): GpuAst =
     result.bOp = ast.bOp.clone()
     result.bLeft = ast.bLeft.clone()
     result.bRight = ast.bRight.clone()
-    result.bLeftTyp = ast.bLeftTyp.clone()
-    result.bRightTyp = ast.bRightTyp.clone()
   of gpuVar:
     result = GpuAst(kind: gpuVar)
     result.vName = ast.vName.clone()
