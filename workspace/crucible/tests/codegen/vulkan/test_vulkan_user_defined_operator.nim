@@ -167,9 +167,9 @@ block:
   doAssert out32b[4] == 1
   doAssert out32b[5] == 7 shl 3
   doAssert out32b[6] == 7 shr 3
-  doAssert out32b[7] == 7 and 3
-  doAssert out32b[8] == 7 or 3
-  doAssert out32b[9] == 7 xor 3
+  doAssert out32b[7] == (7 and 3)
+  doAssert out32b[8] == (7 or 3)
+  doAssert out32b[9] == (7 xor 3)
   echo "  OK"
 
   echo "--- structKernel2 ---"
@@ -196,9 +196,9 @@ block:
   doAssert out32c[4] == 2
   doAssert out32c[5] == 14 shl 3
   doAssert out32c[6] == 14 shr 3
-  doAssert out32c[7] == 14 and 3
-  doAssert out32c[8] == 14 or 3
-  doAssert out32c[9] == 14 xor 3
+  doAssert out32c[7] == (14 and 3)
+  doAssert out32c[8] == (14 or 3)
+  doAssert out32c[9] == (14 xor 3)
   echo "  OK"
 
 echo "All execution tests passed ✅"
