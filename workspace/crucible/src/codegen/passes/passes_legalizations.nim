@@ -5,7 +5,7 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [macros, sequtils, tables, sets]
+import std / [macros, sequtils, tables]
 import ../ir/gpu_types
 import ./pass_datatypes
 
@@ -148,65 +148,69 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
         else:
           discard
 
-      proc unnest(n: var GpuAst; usedNames: var HashSet[string]) =
+      proc dedupVar(stmt: var GpuAst; usedNames: var CountTable[string]) =
+        ## If stmt is a variable declaration whose name is already used,
+        ## assign a unique name with a numeric suffix.
+        if stmt.kind == gpuVar:
+          let name = stmt.vName.ident()
+          if name in usedNames:
+            var uniqueName = name & "_0"
+            var counter = 0
+            while uniqueName in usedNames:
+              counter += 1
+              uniqueName = name & "_" & $counter
+            stmt.vName.iName = uniqueName
+            stmt.vName.iSym = uniqueName
+          usedNames.inc stmt.vName.ident()
+
+      proc collectStmt(stmt: var GpuAst; usedNames: var CountTable[string]; newStmts: var seq[GpuAst]) =
+        ## Add a statement to the flat block, lifting constexpr children first
+        ## and deduplicating variable names.
+        if stmt.kind != gpuConstexpr:
+          var lifts: seq[GpuAst]
+          liftConstexprFrom(stmt, lifts)
+          for i in 0 ..< lifts.len:
+            dedupVar(lifts[i], usedNames)
+            newStmts.add lifts[i]
+        dedupVar(stmt, usedNames)
+        newStmts.add stmt
+
+      proc unnest(n: var GpuAst; usedNames: var CountTable[string]) =
+        ## Flatten nested gpuBlock scopes into a single flat statement list.
+        ## Three cases of gpuBlock must be handled:
+        ##
+        ## 1. Single-stmt gpuBlock wrapper (from nnkConstSection, nnkLetSection):
+        ##    Unwrapped by firstNonBlock — the inner statement replaces the block.
+        ##
+        ## 2. gpuVar with block-valued vInit (from liftConstexpr hoisting):
+        ##    vInit is a gpuBlock containing temps + a final expression.
+        ##    The temps become separate statements; the last expr becomes vInit.
+        ##    Repeated via while loop for multi-level nesting.
+        ##
+        ## 3. Multi-stmt gpuBlock as a regular statement (from template expansion):
+        ##    Handled by collectStmt like any other statement type.
+        ##    collectStmt lifts gpuConstexpr from expressions and deduplicates
+        ##    {.inject.} variable names across unrolled iterations.
         case n.kind
         of gpuBlock:
           var newStmts: seq[GpuAst]
           for stmtIdx in 0 ..< n.statements.len:
             var stmt = n.statements[stmtIdx]
             let inner = firstNonBlock(stmt)
-            # First: lift block inits
-            if inner.kind in {gpuVar}:
-              # Repeatedly unwrap nested blocks in vInit.
-              # Deduplicate let/var names — recursive template expansion
-              # (foldZipWith_recurse) reuses {.inject.} names (acc, it_a,
-              # it_b) across iterations. Nim's C backend assigns each a
-              # unique mangled name; crucible must do the same.
+            # Unwrap block-valued vInit — extract inner declarations
+            if inner.kind == gpuVar:
               while true:
-                let vInitInner = firstNonBlock(inner.vInit)
-                if vInitInner.kind == gpuBlock and vInitInner.statements.len > 1:
-                  for j in 0 ..< vInitInner.statements.len - 1:
-                    let stmt = vInitInner.statements[j]
-                    # Unwrap single-var gpuBlock (from nnkLetSection wrapper)
-                    var innerStmt = stmt
-                    while innerStmt.kind == gpuBlock and innerStmt.statements.len == 1:
-                      innerStmt = innerStmt.statements[0]
-                    if innerStmt.kind == gpuVar:
-                      let name = innerStmt.vName.ident()
-                      var dup = false
-                      for ex in newStmts:
-                        var exInner = ex
-                        while exInner.kind == gpuBlock and exInner.statements.len == 1:
-                          exInner = exInner.statements[0]
-                        if exInner.kind == gpuVar and exInner.vName.ident() == name:
-                          dup = true
-                          break
-                      if dup:
-                        let uniqueName = name & "_" & $newStmts.len
-                        innerStmt.vName.iName = uniqueName
-                        innerStmt.vName.iSym = uniqueName & "_" & $newStmts.len
-                    newStmts.add stmt
-                  inner.vInit = vInitInner.statements[^1]
+                let blockVal = firstNonBlock(inner.vInit)
+                if blockVal.kind == gpuBlock and blockVal.statements.len > 1:
+                  for j in 0 ..< blockVal.statements.len - 1:
+                    var innerStmt = blockVal.statements[j]
+                    collectStmt(innerStmt, usedNames, newStmts)
+                  inner.vInit = blockVal.statements[^1]
                 else:
                   break
-            # Second: lift any gpuConstexpr from expression children
-            if stmt.kind != gpuConstexpr:
-              var lifts: seq[GpuAst]
-              liftConstexprFrom(stmt, lifts)
-              for l in lifts:
-                newStmts.add l
-            if stmt.kind == gpuVar:
-              let name = stmt.vName.ident()
-              if name in usedNames:
-                var uniqueName = name & "_0"
-                var counter = 0
-                while uniqueName in usedNames:
-                  counter += 1
-                  uniqueName = name & "_" & $counter
-                stmt.vName.iName = uniqueName
-                stmt.vName.iSym = uniqueName
-              usedNames.incl stmt.vName.ident()
-            newStmts.add stmt
+              collectStmt(stmt, usedNames, newStmts)
+            else:
+              collectStmt(stmt, usedNames, newStmts)
           n.statements = newStmts
           for i in 0 ..< n.statements.len:
             unnest(n.statements[i], usedNames)
@@ -222,6 +226,6 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
           discard
       for fnKey in ctx.allFnTab.keys:
         var fn = ctx.allFnTab[fnKey]
-        var usedNames: HashSet[string]
+        var usedNames: CountTable[string]
         unnest(fn.pBody, usedNames)
     )
