@@ -437,7 +437,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
           elif result.fEnd.kind == gpuIdent and result.fEnd.iTyp.kind notin {gtVoid}:
             result.fEnd.iTyp   # variable like `0 ..< n` — use the variable's declared type
           elif result.fEnd.kind == gpuBinOp:
-            initGpuType(gtInt32)  # expression like `0 ..< (a + b)` — determine binop type from operands? Or just default to int32
+            initGpuType(gtInt32)  # expression like `0 ..< (a + b)` — default to int32 (implicit integer promotion)
           else:
             initGpuType(gtInt32)  # call/other expression — fallback
         let one = GpuAst(kind: gpuLit, lValue: "1", lType: endTyp)

@@ -283,7 +283,6 @@ proc genLit*(ast: GpuAst): string =
 
 proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual CUDA code generator.
-  ## The actual CUDA code generator.
   let indentStr = "  ".repeat(indent)
   case ast.kind
   of gpuDiscard: return # nothing to emit
