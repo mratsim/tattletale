@@ -444,6 +444,22 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         var addOp = GpuAst(kind: gpuIdent, iName: "+")
         result.fEnd = GpuAst(kind: gpuBinOp, bOp: addOp,
                              bLeft: result.fEnd, bRight: one)
+    elif node[1].kind == nnkCall and node[1].len >= 2 and node[1][1].kind == nnkObjConstr:
+      let objConstr = node[1][1]
+      for i in 1 ..< objConstr.len:
+        let field = objConstr[i]
+        if field.kind == nnkExprColonExpr:
+          let fieldName = field[0].strVal
+          if fieldName == "a":
+            result.fStart = ctx.toGpuAst(reg, field[1])
+          elif fieldName == "b":
+            # Slice.b is inclusive but codegen uses `<`, so increment the
+            # Nim AST literal before converting to GpuAst.
+            if field[1].kind in {nnkIntLit, nnkInt32Lit, nnkUIntLit}:
+              let modified = newLit(int32(field[1].intVal + 1))
+              result.fEnd = ctx.toGpuAst(reg, modified)
+            else:
+              result.fEnd = ctx.toGpuAst(reg, field[1])
     elif node[1].len >= 2:
       result.fStart = ctx.toGpuAst(reg, node[1][1])
       result.fEnd = ctx.toGpuAst(reg, node[1][^1])
