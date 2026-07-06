@@ -16,7 +16,7 @@ type
     bkVulkan  ## Vulkan (SPIR-V) backend
 
   GpuNodeKind* = enum
-    gpuVoid         # Just an empty statement. Useful to not emit anything
+    gpuDiscard         # Just an empty statement. Useful to not emit anything
     gpuProc         # Function definition (both device and global)
     gpuCall         # Function call
     gpuTemplateCall # Call to a Nim template
@@ -107,7 +107,7 @@ type
 
   GpuAst* = ref object
     case kind*: GpuNodeKind
-    of gpuVoid: discard
+    of gpuDiscard: discard
     of gpuProc:
       pName*: GpuAst ## Will be a `GpuIdent`
       pRetType*: GpuType
@@ -125,7 +125,7 @@ type
     of gpuIf:
       ifCond*: GpuAst
       ifThen*: GpuAst
-      ifElse*: GpuAst # will be `GpuAst(kind*: gpuVoid)` if no else branch
+      ifElse*: GpuAst # will be `GpuAst(kind*: gpuDiscard)` if no else branch
     of gpuTernary:
       tCond*: GpuAst  # condition
       tThen*: GpuAst  # then-expression
@@ -375,7 +375,7 @@ proc clone*(typ: GpuType): GpuType =
 proc clone*(ast: GpuAst): GpuAst =
   if ast.isNil: return nil
   case ast.kind
-  of gpuVoid: result = GpuAst(kind: gpuVoid)
+  of gpuDiscard: result = GpuAst(kind: gpuDiscard)
   of gpuProc:
     result = GpuAst(kind: gpuProc)
     result.pName = ast.pName.clone()
@@ -619,7 +619,7 @@ proc len*(ast: GpuAst): int =
   of gpuCall:      1 + ast.cArgs.len
   of gpuBlock:     ast.statements.len
   of gpuIf:
-    if ast.ifElse.kind != gpuVoid: 3
+    if ast.ifElse.kind != gpuDiscard: 3
     else:          2
   of gpuTernary:   3
   of gpuFor:       3
@@ -690,7 +690,7 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
   result = idn(($n.kind).removePrefix("gpu"))
   if n.len > 0: result.add "\n"
   case n.kind
-  of gpuVoid: result.add "\n"
+  of gpuDiscard: result.add "\n"
   of gpuProc:
     result.add pretty(n.pName, indent + 2)
     result.add idd("RetType", n.pRetType)
@@ -713,7 +713,7 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     result.add pretty(n.ifCond, indent + 4)
     result.add idd("IfThen")
     result.add pretty(n.ifThen, indent + 4)
-    if n.ifElse.kind != gpuVoid:
+    if n.ifElse.kind != gpuDiscard:
       result.add idd("IfElse")
       result.add pretty(n.ifElse, indent + 4)
   of gpuTernary:
@@ -826,7 +826,7 @@ template iterImpl(ast: untyped, mutable: static bool): untyped =
   of gpuIf:
     ya(ifCond)
     ya(ifThen)
-    if ast.ifElse.kind != gpuVoid:
+    if ast.ifElse.kind != gpuDiscard:
       yield ast.ifElse
   of gpuTernary:
     ya(tCond)

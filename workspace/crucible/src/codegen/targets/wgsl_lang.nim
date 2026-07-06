@@ -218,11 +218,11 @@ proc determineIdent(arg: GpuAst): GpuAst =
   ## The issue is the argument to a `gpuCall` can be a complicated expression.
   ## Depending on the node it may be possible to extract a simple identifier,
   ## e.g. for `addr(foo)` (`gpuAddr` of `gpuIdent` node) we can get the ident.
-  ## If this fails, we return a `gpuVoid` node.
+  ## If this fails, we return a `gpuDiscard` node.
   ##
   ## TODO: Think about if it ever makes sense to extract the ident underlying
   ## e.g. `deref` and use _that_ to determine mutability & address space.
-  template dfl(): untyped = GpuAst(kind: gpuVoid)
+  template dfl(): untyped = GpuAst(kind: gpuDiscard)
   case arg.kind
   of gpuIdent: arg
   of gpuAddr: arg.aOf.determineIdent()
@@ -262,7 +262,7 @@ proc getGenericArguments(args: seq[GpuAst], params: seq[GpuParam], callerParams:
     else:
       let argIdent = arg.determineIdent()
       var lArg: GpuAst = arg
-      if argIdent.kind != gpuVoid and argIdent.iSym in callerParams: # if it exists, we look up information based on _that_ argument instead
+      if argIdent.kind != gpuDiscard and argIdent.iSym in callerParams: # if it exists, we look up information based on _that_ argument instead
         lArg = callerParams[argIdent.iSym].ident
 
       let addrSpace = determineSymKind(lArg).toAddressSpace()
@@ -307,7 +307,7 @@ proc genGenericName(n: GpuAst, params: seq[GpuParam], callerParams: Table[string
     else:
       let argIdent = arg.determineIdent()
       var lArg: GpuAst = arg
-      if argIdent.kind != gpuVoid and argIdent.iSym in callerParams: # if it exists, we look up information based on _that_ argument instead
+      if argIdent.kind != gpuDiscard and argIdent.iSym in callerParams: # if it exists, we look up information based on _that_ argument instead
         lArg = callerParams[argIdent.iSym].ident
       let addrSpace = lArg.determineSymKind().toAddressSpace()
       let mutable = lArg.determineMutability()
@@ -628,7 +628,7 @@ proc makeCodeValid(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
       let params = fn.pParams
       for i, arg in n: # walk the parameters again and compare
         let argId = arg.determineIdent()
-        if argId.kind != gpuVoid and argId.ident().len > 0:
+        if argId.kind != gpuDiscard and argId.ident().len > 0:
           var p = params[i]
           ## XXX: update anything else? We mostly care about the address space here, because
           ## the rest _should_ be the same anyway.
@@ -697,7 +697,7 @@ proc pullConstantPragmaVars(ctx: var GpuContext, blk: var GpuAst) =
     let g = blk.statements[i]
     if g.kind == gpuVar and atvConstant in g.vAttributes:
       # remove this from `globalBlocks` and add to `globals`
-      doAssert g.vInit.kind == gpuVoid, "A variable annotated with `{.constant.}` must not have an initialization!"
+      doAssert g.vInit.kind == gpuDiscard, "A variable annotated with `{.constant.}` must not have an initialization!"
       # we construct a fake parameter from it
       ## XXX: `storage` address space is probably what we want, but think more about it
       let param = GpuParam(ident: g.vName, typ: g.vType, addressSpace: asStorage)
@@ -813,7 +813,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   #echo "AST: ", $ast
   let indentStr = "  ".repeat(indent)
   case ast.kind
-  of gpuVoid: return # nothing to emit
+  of gpuDiscard: return # nothing to emit
   of gpuProc:
     let attrs = collect:
       for att in ast.pAttributes:
@@ -854,9 +854,9 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = &"{indentStr}{letOrVar}{attrs} {gpuTypeToString(ast.vType, ast.vName.ident(), symbolKind = ast.vName.symbolKind)}"
     # If there is an initialization, the type might require a memcpy
     doAssert not ast.vInit.isNil, "Variable initialization is nil. Should not happen."
-    if ast.vInit.kind != gpuVoid and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
       result &= " = " & ctx.genWebGpu(ast.vInit)
-    elif ast.vInit.kind != gpuVoid:
+    elif ast.vInit.kind != gpuDiscard:
       when nimvm:
         error("Types that require memcpy not supported on WGSL. Probably a better solution.")
       else:
@@ -877,7 +877,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                                        ctx.size(ast.aLeft))
     else:
       let leftId = ast.aLeft.determineIdent()
-      if leftId.kind != gpuVoid and leftId.iTyp.kind == gtPtr and leftId.iTyp.to.kind == gtInt32:
+      if leftId.kind != gpuDiscard and leftId.iTyp.kind == gtPtr and leftId.iTyp.to.kind == gtInt32:
         # If the LHS is `i32` then a conversion to `i32` is either a no-op, if the left always was
         # `i32` (and the Nim compiler type checked it for us) *OR* the RHS is a boolean expression and
         # we patched the `bool -> i32` and thus need to convert it.
@@ -897,7 +897,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         result = indentStr & "if (" & ctx.genWebGpu(ast.ifCond) & ") {\n"
     result &= ctx.genWebGpu(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
-    if ast.ifElse.kind != gpuVoid:
+    if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genWebGpu(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'

@@ -178,7 +178,9 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     return
 
   let fn = ctx.toGpuAst(reg, inst)
-  if fn.kind == gpuVoid:
+  if fn.kind == gpuDiscard:
+    echo "[registerGenericInstOrExternalProc] node[0].repr = ", node[0].repr, " impl.kind = ", inst.kind, " isBuiltIn = ", inst.isBuiltIn()
+    echo "  impl treerepr: ", inst.treerepr
     doAssert inst.isBuiltIn()
     return
   fn.pAttributes.incl attDevice # make sure this is interpreted as a device function
@@ -223,7 +225,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
 
   #echo node.treerepr
   case node.kind
-  of nnkEmpty: result = GpuAst(kind: gpuVoid) # nothing to do
+  of nnkEmpty: result = GpuAst(kind: gpuDiscard) # nothing to do
   of nnkStmtList:
     result = GpuAst(kind: gpuBlock)
     for el in node:
@@ -269,9 +271,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     let name = ctx.getFnName(reg, node.name)
     if node[2].kind == nnkGenericParams: # is a generic
       ctx.generics.incl name.iName # need to use raw name, *not* symbol
-      result = GpuAst(kind: gpuVoid)
+      result = GpuAst(kind: gpuDiscard)
     elif node.body.kind == nnkEmpty: # just a forward declaration
-      result = GpuAst(kind: gpuVoid)
+      result = GpuAst(kind: gpuDiscard)
     else:
       result = GpuAst(kind: gpuProc)
       result.pName = name
@@ -281,7 +283,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       result.pRetType = resolveProcReturnType(reg, params)
       if result.pRetType.kind == gtInvalid:
         ctx.generics.incl name.iName # need to use raw name, *not* symbol
-        return GpuAst(kind: gpuVoid)
+        return GpuAst(kind: gpuDiscard)
 
       # Process pragmas
       if node.pragma.kind != nnkEmpty:
@@ -289,7 +291,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         result.pAttributes = collectProcAttributes(node.pragma)
         if result.pAttributes.len == 0: # means `nimonly` was applied / is a `builtin`
           ctx.builtins[name] = result # store in builtins, so that we know if it returns a value when called
-          return GpuAst(kind: gpuVoid)
+          return GpuAst(kind: gpuDiscard)
       # Process parameters
       result.pParams = ctx.parseProcParameters(reg, params, result.pAttributes)
       result.pBody = ctx.toGpuAst(reg, node.body)
@@ -349,7 +351,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         varNode.vRequiresMemcpy = requiresMemcpy(declaration[2])
         result.statements.add(varNode)
       else:
-        varNode.vInit = GpuAst(kind: gpuVoid)
+        varNode.vInit = GpuAst(kind: gpuDiscard)
         result.statements.add(varNode)
 
   of nnkAsgn:
@@ -366,7 +368,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     if node.len > 1 and node[^1].kind == nnkElse:
       result.ifElse = ctx.toGpuAst(reg, node[^1][0])
     else:
-      result.ifElse = GpuAst(kind: gpuVoid)
+      result.ifElse = GpuAst(kind: gpuDiscard)
 
   of nnkIfExpr:
     # If-expression — produces a conditional value (ternary in C).
@@ -395,7 +397,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         if idx + 1 < branches.len:
           result.tElse = buildTernary(ctx, reg, branches, idx + 1)
         else:
-          result.tElse = GpuAst(kind: gpuVoid)
+          result.tElse = GpuAst(kind: gpuDiscard)
       of nnkElseExpr:
         requireSimpleBranch(child[0])
         result = ctx.toGpuAst(reg, child[0])
@@ -447,7 +449,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     ## NOTE: Currently we process templates, but we expect them to be already
     ## expanded by the Nim compiler. Thus we could in theory expand them manually
     ## but fortunately we don't need to.
-    return GpuAst(kind: gpuVoid)
+    return GpuAst(kind: gpuDiscard)
     let tName = node[0].strVal
 
     # Extract parameters
@@ -464,7 +466,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       body: tBody
     )
 
-    result = GpuAst(kind: gpuVoid)
+    result = GpuAst(kind: gpuDiscard)
 
   of nnkCall, nnkCommand:
     # `name` below is name + signature hash. Check if this is a generic based on node repr
@@ -663,7 +665,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     doAssert node.len == 3, "TypeDef node does not have 3 children: " & $node.len
     if node[1].kind == nnkGenericParams: # if this is a generic, only store existence of it
                                          # will store the instantiatons in `nnkObjConstr`
-      result = GpuAst(kind: gpuVoid)
+      result = GpuAst(kind: gpuDiscard)
     else:
       let typ = resolveType(reg, node[0])
       # For type aliases resolved to primitives (e.g. type F = type(x.val) → uint32),
@@ -674,14 +676,14 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         result = GpuAst(kind: gpuTypeDef, tTyp: typ)
         result.tFields = resolveRecordFields(reg, node[2])
       of nnkCall:
-        result = if isBuiltin: GpuAst(kind: gpuVoid)
+        result = if isBuiltin: GpuAst(kind: gpuDiscard)
                  else: GpuAst(kind: gpuTypeDef, tTyp: typ)
       of nnkSym:      # a type alias `type foo = bar`
         if node[2].typeKind in {ntyObject, ntyTuple, ntyGenericInst}:
           result = GpuAst(kind: gpuAlias, aTyp: typ,
                           aTo: ctx.toGpuAst(reg, node[2]))
         else:
-          result = GpuAst(kind: gpuVoid)
+          result = GpuAst(kind: gpuDiscard)
       else:
         error "Unexpected node kind in TypeDef: " & $node[2].kind
 
@@ -689,7 +691,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       ctx.types[typ] = result
       # Reset the type we return to void. We now generate _all_ types from the
       # `types`.
-      result = GpuAst(kind: gpuVoid)
+      result = GpuAst(kind: gpuDiscard)
   of nnkObjConstr:
     ## this should never see `genericParam` I think
     let typ = resolveType(reg, node)
@@ -772,7 +774,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
                     aLitType: aLitTyp)
 
   of nnkCommentStmt:
-    result = GpuAst(kind: gpuVoid)
+    result = GpuAst(kind: gpuDiscard)
 
   of nnkHiddenStdConv, nnkHiddenSubConv:
     doAssert node[0].kind == nnkEmpty
@@ -817,11 +819,11 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
   of nnkBindStmt, nnkMixinStmt:
     ## Bind/mixin statements are compile-time directives for template resolution.
     ## Irrelevant for GPU codegen — skip them.
-    result = GpuAst(kind: gpuVoid)
+    result = GpuAst(kind: gpuDiscard)
   of nnkPragma:
     ## Pragmas are compile-time annotations (e.g. {.warning.} on operators).
     ## They are irrelevant for GPU codegen — skip them.
-    result = GpuAst(kind: gpuVoid)
+    result = GpuAst(kind: gpuDiscard)
   of nnkWhenStmt:
     error "We shouldn't be seeing a `when` statement after sem check of the Nim code."
   else:

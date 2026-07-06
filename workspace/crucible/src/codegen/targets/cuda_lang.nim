@@ -268,7 +268,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual CUDA code generator.
   let indentStr = "  ".repeat(indent)
   case ast.kind
-  of gpuVoid: return # nothing to emit
+  of gpuDiscard: return # nothing to emit
   of gpuProc:
     let attrs = collect:
       for att in ast.pAttributes:
@@ -302,7 +302,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     for i, el in ast.statements:
       let code = ctx.genCuda(el, indent)
       if code.len == 0:
-        continue # skip gpuVoid and empty statements
+        continue # skip gpuDiscard and empty statements
       result.add code
       if el.kind != gpuBlock and not ctx.skipSemicolon:
         result.add ';'
@@ -316,9 +316,9 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                 else: ""
     result = indentStr & attrs & gpuTypeToString(ast.vType, ast.vName.ident())
     # If there is an initialization, the type might require a memcpy
-    if ast.vInit.kind != gpuVoid and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
       result &= " = " & ctx.genCuda(ast.vInit)
-    elif ast.vInit.kind != gpuVoid:
+    elif ast.vInit.kind != gpuDiscard:
       result.add ";\n"
       result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
                                        size(ast.vName.ident()))
@@ -336,7 +336,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "if (" & ctx.genCuda(ast.ifCond) & ") {\n"
     result &= ctx.genCuda(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
-    if ast.ifElse.kind != gpuVoid:
+    if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genCuda(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
@@ -441,7 +441,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # are not expressions and cannot be used with member access (gpuDot).
     result = gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "{"
     for i, el in ast.ocFields:
-      if el.value.kind == gpuVoid:
+      if el.value.kind == gpuDiscard:
         result.add "{}"
       else:
         result.add ctx.genCuda(el.value)
@@ -472,7 +472,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     ## for `const foo = bar` Nim declarations to evaluate values at Nim's compile time.
     ## Alternatively, make user write `const foo {.constant.} = bar` to produce a global
     ## `__constant__` value.
-    let cInit = if ast.cValue.kind == gpuVoid: "{}" else: ctx.genCuda(ast.cValue)
+    let cInit = if ast.cValue.kind == gpuDiscard: "{}" else: ctx.genCuda(ast.cValue)
     if ast.cType.kind == gtArray:
       result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genCuda(ast.cIdent)) & " = " & cInit
     else:

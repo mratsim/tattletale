@@ -289,7 +289,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual GLSL compute shader code generator.
   let indentStr = "  ".repeat(indent)
   case ast.kind
-  of gpuVoid: return
+  of gpuDiscard: return
 
   of gpuProc:
     let attrs = collect:
@@ -349,9 +349,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
-    if ast.vInit.kind != gpuVoid and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
       result &= " = " & ctx.genVulkan(ast.vInit)
-    elif ast.vInit.kind != gpuVoid:
+    elif ast.vInit.kind != gpuDiscard:
       result.add ";\n"
       result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
                                        size(ast.vName.ident()))
@@ -368,7 +368,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "if (" & ctx.genVulkan(ast.ifCond) & ") {\n"
     result &= ctx.genVulkan(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
-    if ast.ifElse.kind != gpuVoid:
+    if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genVulkan(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
@@ -463,7 +463,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # GLSL uses constructor syntax TypeName(val1, val2), not C-style {val1, val2}
       result = gpuTypeToString(ast.ocType) & "("
       for i, el in ast.ocFields:
-        if el.value.kind == gpuVoid:
+        if el.value.kind == gpuDiscard:
           result.add gpuTypeToString(el.typ, allowEmptyIdent = true) & "(0)"
         elif el.value.kind == gpuLit and el.value.lValue == "DEFAULT":
           result.add gpuTypeToString(el.typ, allowEmptyIdent = true) & "(0)"

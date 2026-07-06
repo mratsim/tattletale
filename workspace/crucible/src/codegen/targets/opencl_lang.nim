@@ -245,7 +245,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual OpenCL C code generator.
   let indentStr = "  ".repeat(indent)
   case ast.kind
-  of gpuVoid: return
+  of gpuDiscard: return
 
   of gpuProc:
     let attrs = collect:
@@ -316,9 +316,9 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
-    if ast.vInit.kind != gpuVoid and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
       result &= " = " & ctx.genOpenCL(ast.vInit)
-    elif ast.vInit.kind != gpuVoid:
+    elif ast.vInit.kind != gpuDiscard:
       result.add ";\n"
       result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
                                        size(ast.vName.ident()))
@@ -335,7 +335,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "if (" & ctx.genOpenCL(ast.ifCond) & ") {\n"
     result &= ctx.genOpenCL(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
-    if ast.ifElse.kind != gpuVoid:
+    if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genOpenCL(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
@@ -439,7 +439,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # NOT C++ functional-style cast `Type{init}`.
     result = "(" & gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "){"
     for i, el in ast.ocFields:
-      if el.value.kind == gpuVoid:
+      if el.value.kind == gpuDiscard:
         result.add "{}"
       else:
         result.add ctx.genOpenCL(el.value)

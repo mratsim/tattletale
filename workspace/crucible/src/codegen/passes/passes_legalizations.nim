@@ -24,7 +24,7 @@ proc insertResult(ctx: var GpuContext; fn: GpuAst) =
                        symbolKind: gsLocal)
     let res = GpuAst(kind: gpuVar, vName: resId,
                      vType: fn.pRetType,
-                     vInit: GpuAst(kind: gpuVoid),
+                     vInit: GpuAst(kind: gpuDiscard),
                      vRequiresMemcpy: false,
                      vMutable: true)
     fn.pBody.statements.insert(res, 0)
@@ -34,7 +34,7 @@ proc insertResult(ctx: var GpuContext; fn: GpuAst) =
 
     for i in countdown(fn.pBody.statements.high, 0):
       let stmt = fn.pBody.statements[i]
-      if stmt.kind notin {gpuVar, gpuComment, gpuVoid, gpuReturn, gpuIf, gpuFor, gpuWhile}:
+      if stmt.kind notin {gpuVar, gpuComment, gpuDiscard, gpuReturn, gpuIf, gpuFor, gpuWhile}:
         if stmt.kind == gpuBlock and stmt.isExpr:
           if stmt.statements.len == 1:
             fn.pBody.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt.statements[0])
@@ -59,7 +59,7 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
           of gpuIf:
             if n.ifThen.kind != gpuBlock:
               n.ifThen = GpuAst(kind: gpuBlock, statements: @[n.ifThen])
-            if n.ifElse.kind != gpuVoid and n.ifElse.kind != gpuBlock:
+            if n.ifElse.kind != gpuDiscard and n.ifElse.kind != gpuBlock:
               n.ifElse = GpuAst(kind: gpuBlock, statements: @[n.ifElse])
           of gpuFor:
             if n.fBody.kind != gpuBlock:
@@ -142,7 +142,7 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
           for i in 0 ..< n.statements.len:
             if n.statements[i].kind == gpuConstexpr:
               lifts.add n.statements[i]
-              n.statements[i] = GpuAst(kind: gpuVoid)
+              n.statements[i] = GpuAst(kind: gpuDiscard)
             else:
               liftConstexprFrom(n.statements[i], lifts)
         else:
@@ -216,7 +216,7 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
             unnest(n.statements[i], usedNames)
         of gpuIf:
           unnest(n.ifThen, usedNames)
-          if n.ifElse.kind != gpuVoid:
+          if n.ifElse.kind != gpuDiscard:
             unnest(n.ifElse, usedNames)
         of gpuFor:
           unnest(n.fBody, usedNames)
