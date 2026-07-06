@@ -20,16 +20,6 @@ proc gpuTypeToString*(t: GpuType,
 
 proc size*(ctx: var GpuContext, a: GpuType): string = size(gpuTypeToString(a, allowEmptyIdent = true))
 
-proc literalSuffix*(t: GpuType): string =
-  ## Returns the correct literal suffix for the given literal value for the WebGPU target
-  case t.kind
-  of gtUint32: result = "u"
-  of gtInt32: result = "i"
-  of gtFloat32: result = "f"
-  of gtFloat64: result = "lf"
-  of gtUint16: result = "u"
-  of gtInt16: result = "i"
-  else: discard
 
 proc toAddressSpace(symKind: GpuSymbolKind): AddressSpace =
   case symKind
@@ -812,15 +802,19 @@ proc size(ctx: var GpuContext, a: GpuAst): string = size(ctx.genWebGpu(a))
 proc address(ctx: var GpuContext, a: GpuAst): string = address(ctx.genWebGpu(a))
 
 proc genLit*(ast: GpuAst): string =
-  ## Lower a literal node for the WebGPU (WGSL) backend.
+  ## Lower a literal node for the WGSL backend.
+  ## Bare literals (no suffix) are abstract in WGSL and work in any typed context.
+  ## Type constructors like `u32(x)` or suffixes like `lf` are used for non-default types.
   if ast.lType.kind == gtString:
     result = '"' & ast.lValue & '"'
   elif ast.lValue == "DEFAULT":
     result = ""
   else:
-    let suf = literalSuffix(ast.lType)
-    if suf.len > 0:
-      result = ast.lValue & suf
+    case ast.lType.kind
+    of gtUint32: result = ast.lValue & "u"
+    of gtFloat64: result = ast.lValue & "lf"
+    of gtInt16, gtUint16, gtUint8, gtBool:
+      result = gpuTypeToString(ast.lType, allowEmptyIdent = true) & '(' & ast.lValue & ')'
     else:
       result = ast.lValue
 
