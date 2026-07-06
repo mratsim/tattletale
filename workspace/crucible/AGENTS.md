@@ -92,12 +92,52 @@ If running on a machine without CUDA (and thus can't NVRTC):
 2. Print the generated code with `echo kernel` or inspect `nv.getPtx()`
 3. Pass the exact run command to the user for manual execution
 
+## Debugging
+
+### Inspecting Nim AST during macro execution
+
+Inside `toGpuAst` (or any function called from a macro), you have access to
+NimNode objects from the typed AST. Use `std/macros` procs to inspect them:
+
+```nim
+# .repr — prints the Nim source representation
+echo node.repr
+# "for i in items(Slice[int](a: 0, b: 127)):"
+
+# .treeRepr — prints the AST tree structure (kind, children, leaf values)
+echo node.treeRepr
+# ForStmt
+#   Sym "i"
+#   Call
+#     Sym "items"
+#     ObjConstr ...
+```
+
+Add these directly inside `toGpuAst`, `resolveType`, or any other macro-
+context function. The output appears during compilation.
+
+### Stack trace navigation
+
+During macro execution (the common case for Crucible bugs), the crash is
+pure Nim — no C++ code involved. The stack trace line numbers come from
+the Nim source as the compiler sees it. If the reported line seems off,
+the file probably changed between compilations (edits shift lines).
+
+To keep traces precise:
+
+- **One statement per line.** Never `;` on the same line that contains other
+  code.
+
+- **Loop bodies on separate lines.** A for-loop with a body on the same line
+  crashes trace to the `for` line, hiding which iteration or expression
+  triggered the failure.
+
 ## Coding Style
 
 **One statement per line.**
 Never put multiple statements on the same line with `;`.
-Every `let`, `var`, `const`, `if`, `for`, `while`, assignment, expression statement
-must be on its own line.
+Every `let`, `var`, `const`, `if`, `for`, `while`, assignment, expression
+statement must be on its own line.
 
 Wrong:
 ```nim
