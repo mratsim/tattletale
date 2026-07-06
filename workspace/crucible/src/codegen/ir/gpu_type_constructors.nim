@@ -103,27 +103,6 @@ proc registerObjectType*(reg: var TypeRegistry, typ: GpuType) =
 #  Nim AST utilities
 # ═══════════════════════════════════════════════════════════════════════
 
-proc assignOp*(op: string, isBoolean: bool): string =
-  ## Returns the correct CUDA operation given the Nim operator.
-  ## This is to replace things like `shl`, `div` or `mod`
-  case op
-  of "div": result = "/"
-  of "+%": result = "+"
-  of "-%": result = "-"
-  of "*%": result = "*"
-  of "mod": result = "%"
-  of "shl": result = "<<"
-  of "shr": result = ">>"
-  of "and": result = if isBoolean: "&&" else: "&" # bitwise OR
-  of "or":  result = if isBoolean: "||" else: "|" # bitwise OR
-  of "xor": result = "^"
-  else: result = op
-
-proc assignPrefixOp*(op: string): string =
-  ## Returns the correct CUDA operation given the Nim operator.
-  case op
-  of "not": result = "!"
-  else: result = op
 
 proc getGenericTypeName*(t: NimNode): string =
   ## Returns the base name of the generic type, i.e. for
@@ -187,6 +166,17 @@ proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
       discard
     else:
       raiseAssert "Unexpected pragma for procs: " & $pragma.treerepr
+
+proc hasMagicPragma*(n: NimNode): bool =
+  ## Check if a procdef has `{.magic.}` pragma (compiler intrinsic).
+  doAssert n.kind in {nnkProcDef, nnkFuncDef}, "hasMagicPragma: not a procdef: " & $n.treerepr
+  if n.pragma.kind == nnkEmpty:
+    return false
+  for p in n.pragma:
+    let key = if p.kind in {nnkCall, nnkExprColonExpr}: p[0] else: p
+    if key.strVal == "magic":
+      return true
+    return false
 
 proc collectAttributes*(n: NimNode): seq[GpuVarAttribute] =
   ## Collects all pragmas associated with the given variable.

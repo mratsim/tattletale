@@ -5,7 +5,6 @@
 ##
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_ambiguous_builtins.nim
 import std/strformat
-import workspace/crucible/src/codegen/builtins/ambiguous_builtins
 import workspace/crucible/src/codegen/nvrtc
 
 # ═════════════════════════════════════════════════════════════════════

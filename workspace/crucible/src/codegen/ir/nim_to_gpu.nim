@@ -9,7 +9,7 @@ import std / [macros, strutils, sequtils, options, tables, sets]
 
 import ./gpu_types
 import ./gpu_type_constructors
-import ../builtins/ambiguous_builtins
+import ../builtins/nim_builtins
 import ./resolvers
 import ../passes/pass_registry
 
@@ -176,6 +176,18 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
     ctx.builtins[name] = builtinFn
     return
+
+  # Operator builtins (system.* with magic: MulI etc.) — detect by name
+  # and register as builtin before reaching toGpuAst (which can't translate
+  # magic bodies and triggers a false isBuiltIn() assertion).
+  if node[0].repr in NimGpuNumericOperators or
+     node[0].repr in NimGpuBooleanOperators:
+    # Only for magic/builtin operators — skip user-defined overloads
+    if inst.hasMagicPragma:
+      let retType = resolveType(reg, sig.params[0])
+      var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
+      ctx.builtins[name] = builtinFn
+      return
 
   let fn = ctx.toGpuAst(reg, inst)
   if fn.kind == gpuDiscard:
@@ -478,12 +490,18 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       ctx.registerGenericInstOrExternalProc(reg, node, name)
 
     let args = node[1..^1].mapIt(ctx.toGpuAst(reg, it))
-    # Producing a template call something like this (but problematic due to overloads etc)
-    # we could then perform manual replacement of the template in the CUDA generation pass.
-    if false: #  name in ctx.templates: #
-      result = GpuAst(kind: gpuTemplateCall)
-      result.tcName = name
-      result.tcArgs = args
+    if name in ctx.builtins and node[0].repr in NimGpuNumericOperators:
+      var op = GpuAst(kind: gpuIdent, iName: NimGpuNumericOperators[node[0].repr])
+      op.iSym = op.iName
+      result = GpuAst(kind: gpuBinOp, bOp: op,
+                      bLeft: args[0], bRight: args[1],
+                      bLeftTyp: initGpuType(gtInt32), bRightTyp: initGpuType(gtInt32))
+    elif name in ctx.builtins and node[0].repr in NimGpuBooleanOperators:
+      var op = GpuAst(kind: gpuIdent, iName: NimGpuBooleanOperators[node[0].repr])
+      op.iSym = op.iName
+      result = GpuAst(kind: gpuBinOp, bOp: op,
+                      bLeft: args[0], bRight: args[1],
+                      bLeftTyp: initGpuType(gtBool), bRightTyp: initGpuType(gtBool))
     else:
       let fnIsExpr = ctx.fnReturnsValue(name)
       result = GpuAst(kind: gpuCall, cIsExpr: fnIsExpr)
@@ -527,7 +545,8 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     else:
       # if left/right is boolean we need logical AND/OR, otherwise bitwise
       let isBoolean = result.bLeftTyp.kind == gtBool
-      var op = GpuAst(kind: gpuIdent, iName: assignOp(node[0].repr, isBoolean)) # repr so that open sym choice gets correct name
+      let tbl = if isBoolean: NimGpuBooleanOperators else: NimGpuNumericOperators
+      var op = GpuAst(kind: gpuIdent, iName: tbl.getOrDefault(node[0].repr, node[0].repr)) # repr so that open sym choice gets correct name
       op.iSym = op.iName
       result.bOp = op
       result.bLeft = ctx.toGpuAst(reg, node[1])
@@ -654,7 +673,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
   of nnkPrefix:
     result = GpuAst(kind: gpuPrefix,
                     pVal: ctx.toGpuAst(reg, node[1]))
-    result.pOp = assignPrefixOp(node[0].strVal)
+    result.pOp = NimGpuBooleanOperators.getOrDefault(node[0].strVal, node[0].strVal)
 
   of nnkTypeSection:
     result = GpuAst(kind: gpuBlock)
