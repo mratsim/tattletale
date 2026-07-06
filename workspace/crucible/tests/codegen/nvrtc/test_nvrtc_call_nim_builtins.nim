@@ -1,17 +1,9 @@
-## Reproduces the `inst.isBuiltIn()` assertion: Nim's getImpl() for
-## magic builtins (system.* with magic: MulI) returns a procdef where
-## isBuiltIn() == false, crashing registerGenericInstOrExternalProc.
+## Tests that registerGenericInstOrExternalProc handles:
+##   1. system.* called as nnkCall (inside for-loop) — magic builtin
+##   2. User-defined `*` on struct called as nnkCall — non-magic pull-in
 ##
-## Triggered by fillWith inside cuda: — the for-loop index decomposition
-## (foldDim) produces nnkCall to system.* that reaches the codegen's
-## generic-proc registration path. The 3-arg crd2idx overload
-## (scalar coord + tuple shape/stride) is the critical ingredient.
-##
-## Without ceramic imports this compiles (templates expand math away).
-## With ceramic's int_tuples + layouts + tensors template chain the
-## isBuiltIn() assertion fires.
-##
-## This test uses actual ceramic modules to reproduce identically.
+## Both must go through the same codegen path and not assert.
+## Self-contained — no ceramic dependency.
 ##
 ## Run:
 ##   cd tattletale
@@ -20,25 +12,57 @@
 
 import std/[unittest]
 import workspace/crucible/src/codegen/nvrtc
-import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/tensor_datatypes
-import workspace/ceramic/src/tensors
-import workspace/ceramic/src/kernel_fillwith_gpu
 
-const kernel = cuda:
+# ── system.* as nnkCall with runtime args ──
+# system.* has magic: MulI → collectProcAttributes returns empty
+# → toGpuAst returns gpuDiscard (stored in ctx.builtins)
+# → assert inst.isBuiltIn() fails because the custom isBuiltIn
+#   only checks for "builtin"/"importc", not "magic"
+# → fix: check NimGpuNumericOperators before reaching the assert
+
+const callOpKernel = cuda:
   proc kernel(C: ptr UncheckedArray[float32]) {.global.} =
-    let L = make_layout((8, 16))
-    var tv = make_view(C, L)
-    fillWith(tv, 42.0'f32)
+    for i in 0 ..< 2:
+      let x = `*`(i + 2, 3)
+      C[i] = float32(x)
 
-suite "NVRTC - builtin isBuiltIn assertion":
-  test "fillWith inside cuda: triggers isBuiltIn() assertion":
-    var buf: array[128, float32]
-    var nv = initNvrtc(kernel)
+# ── Non-magic user-defined `*` called as nnkCall ──
+# Must go through the same codegen path and succeed.
+
+type Wrapper = object
+  val: int
+
+proc `*`(a, b: Wrapper): Wrapper =
+  Wrapper(val: a.val * b.val)
+
+const wrapperKernel = cuda:
+  proc kernel(C: ptr UncheckedArray[float32]) {.global.} =
+    for i in 0 ..< 2:
+      let a = Wrapper(val: i + 3)
+      let b = Wrapper(val: 4)
+      let c = `*`(a, b)
+      C[i] = float32(c.val)
+
+suite "NVRTC - call nim builtins":
+
+  test "system.`*` as nnkCall compiles and runs":
+    var buf: array[2, float32]
+    var nv = initNvrtc(callOpKernel)
     nv.numBlocks = 1
     nv.threadsPerBlock = 1
     nv.compile()
     nv.getPtx()
     nv.execute("kernel", buf, ())
-    check buf[0] == 42.0'f32
+    check buf[0] == 6.0'f32
+    check buf[1] == 9.0'f32
+
+  test "user-defined `*` on struct as nnkCall compiles and runs":
+    var buf: array[2, float32]
+    var nv = initNvrtc(wrapperKernel)
+    nv.numBlocks = 1
+    nv.threadsPerBlock = 1
+    nv.compile()
+    nv.getPtx()
+    nv.execute("kernel", buf, ())
+    check buf[0] == 12.0'f32
+    check buf[1] == 16.0'f32
