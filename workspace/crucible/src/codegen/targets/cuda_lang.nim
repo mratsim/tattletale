@@ -312,9 +312,13 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
-    # extern "C" is needed to avoid name mangling
-    result = indentStr & "extern \"C\" " & attrs.join(" ") & ' ' &
-             fnSig
+    # extern "C" is needed on __global__ kernels so the host-side CUDA
+    # runtime can look them up by unmangled name (e.g. nv.execute("foo", ...)).
+    # __device__ functions are only called within the compilation unit and
+    # don't need it — C++ name mangling is invisible inside a single
+    # translation unit, and omitting it avoids interfering with overloads.
+    let linkage = if attGlobal in ast.pAttributes: "extern \"C\" " else: ""
+    result = indentStr & linkage & attrs.join(" ") & ' ' & fnSig
     if ast.forwardDeclare:
       result.add ';'
     else:
