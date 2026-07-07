@@ -190,7 +190,13 @@ proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
     let argTyp = ctx.getType(arg.dOf)
     doAssert argTyp.kind == gtPtr
     argTyp.to
-  of gpuCall: dfl()
+  of gpuCall:
+    (block:
+      let fn = arg.cName
+      if fn in ctx.genericInsts: ctx.genericInsts[fn].pRetType
+      elif fn in ctx.allFnTab: ctx.allFnTab[fn].pRetType
+      elif fn in ctx.builtins: ctx.builtins[fn].pRetType
+      else: dfl())
   of gpuIndex:
     let arrType = ctx.getType(arg.iArr)
     if typeOfIndex:
