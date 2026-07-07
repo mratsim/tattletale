@@ -202,7 +202,11 @@ proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
     parentTyp.getFieldType(arg.dField)
   of gpuLit: arg.lType
   of gpuBinOp: dfl() ## XXX: store resulting type of `gpuBinOp`!
-  #of gpuBlock: arg.statements[^1].getType()
+  of gpuBlock:
+    (if arg.isExpr and arg.statements.len > 0:
+      ctx.getType(arg.statements[^1])
+    else:
+      dfl())
   of gpuPrefix: ctx.getType(arg.pVal)
   of gpuConv: arg.convTo
   of gpuCast: arg.cTo # ident of the thing we cast
