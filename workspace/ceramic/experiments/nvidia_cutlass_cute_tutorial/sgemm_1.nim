@@ -113,5 +113,10 @@ const sgemmKernel = cuda:
 
 when isMainModule:
   echo &"Testing sgemm_1 via run_gemm_and_validate_colmajor..."
+
+  echo "════════ kernel ═══════════════════════════════════════════════════════"
+  echo sgemmKernel
+  echo "═══════════════════════════════════════════════════════════════════════"
+
   run_gemm_and_validate_colmajor(sgemmKernel, "gemmKernel")
   echo &"  OK — sgemm_1 GPU correctness test passed"

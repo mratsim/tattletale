@@ -36,7 +36,9 @@ const kernel = cuda:
     deviceFn(v, output)
 
 when isMainModule:
+  echo "════════ kernel ═══════════════════════════════════════════════════════"
   echo kernel
+  echo "═══════════════════════════════════════════════════════════════════════"
 
   var data = [1.0'f32, 2.0, 3.0, 4.0]
   var outBuf: array[1, float32]
