@@ -109,15 +109,19 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
   
   case n.kind
   of gpuIdent:
-    # Span-typed ident → ptr ident (handled if name in current span context)
-    discard  # actual replacement needs body/local scope tracking
+    # Span-typed ident → ptr ident (same name, ptr type)
+    if n.iTyp != nil and n.iTyp.kind == gtSpan:
+      n = GpuAst(kind: gpuIdent, iName: n.iName,
+                 iTyp: initGpuPtrType(n.iTyp.sElemTyp, implicitPtr = false),
+                 symbolKind: n.symbolKind)
   of gpuDot:
     # span.len → len ident
-    if n.dField.kind == gpuIdent and n.dField.iName == "len":
-      if n.dParent.kind == gpuIdent:
-        # The parent ident will be rewritten separately
-        for child in mitems(n):
-          child.rewriteNode(sigMap)
+    if n.dField.kind == gpuIdent and n.dField.iName == "len" and
+       n.dParent.iTyp != nil and n.dParent.iTyp.kind == gtSpan:
+      n = GpuAst(kind: gpuIdent,
+                 iName: n.dParent.iName & "_len",
+                 iTyp: initGpuType(gtInt32))
+      return
     else:
       for child in mitems(n):
         child.rewriteNode(sigMap)
@@ -135,7 +139,7 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
                      iName: n.cArgs[0].iName & "_len",
                      iTyp: initGpuType(gtInt32))
           return
-        # len(toOpenArray_lowered_block) → statments[1] (the len expr)
+        # len(toOpenArray_lowered_block) → statements[1] (the len expr)
         if n.cArgs[0].kind == gpuBlock and n.cArgs[0].isExpr and
            n.cArgs[0].statements.len >= 2:
           n = n.cArgs[0].statements[1].clone()

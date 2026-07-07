@@ -218,14 +218,8 @@ proc makeCodeValid(ctx: var GpuContext, n: var GpuAst) =
   ##   (unless the argument is a pointer to a static array)
   case n.kind
   of gpuIndex:
-    # If indexing into an OpenArray_* object, unwrap to .data[idx]
-    let baseTyp = ctx.getType(n.iArr)
-    if baseTyp.kind == gtObject and baseTyp.name.startsWith("OpenArray_"):
-      n = GpuAst(kind: gpuIndex,
-                  iArr: GpuAst(kind: gpuDot, dParent: n.iArr,
-                               dField: GpuAst(kind: gpuIdent, iName: "data")),
-                  iIndex: n.iIndex)
-    elif n.iArr.kind == gpuDeref:
+    if n.iArr.kind == gpuDeref:
+      # get type of deref'd node, but do not fold `gpuIndex` (i.e. get type of collection)
       let typ = ctx.getType(n, typeOfIndex = false)
       if typ.kind != gtArray:
         n = GpuAst(kind: gpuIndex, iArr: n.iArr.dOf, iIndex: n.iIndex)
