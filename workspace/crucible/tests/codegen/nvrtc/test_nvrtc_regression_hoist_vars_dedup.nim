@@ -3,11 +3,8 @@
 import std/macros
 import workspace/crucible/src/codegen/nvrtc
 
-type
-  Layout = object
-    shapeStride: (int32, int32, int32, int32)
-  X2 = object
-  Y2 = object
+type X2 = object
+type Y2 = object
 
 macro evalOnceAs(alias: untyped{nkIdent}, expression: typed): untyped =
   let aName = genSym(nskTemplate, $alias)
@@ -24,39 +21,35 @@ macro varargs_to_par(args: varargs[untyped]): untyped =
   result = nnkPar.newTree()
   args.copyChildrenTo(result)
 
-template slice(target: Layout; args: varargs[untyped]): Layout =
+template slice(target: auto; args: varargs[untyped]): auto =
   block:
     evalOnceAs(t, target)
     target
 
-template crd2idx(layout: Layout; coord: auto): int =
+template crd2idx(layout: auto; coord: auto): int =
   block:
     evalOnceAs(t, layout)
     0
 
 type TensorView*[T] = object
   data*: ptr UncheckedArray[T]
-  layout*: Layout
-
-func make_view[T](data: ptr UncheckedArray[T] or ptr T;
-                  L: Layout): TensorView[T] =
-  TensorView[T](data: cast[ptr UncheckedArray[T]](data), layout: L)
+  layout*: (int32, int32, int32, int32)
 
 {.experimental: "callOperator".}
 
-template `()`[T](tv: TensorView[T]; args: varargs[untyped]): untyped =
+template `()`[T](tv: TensorView[T]; args: varargs[untyped]): TensorView[T] =
   block:
     evalOnceAs(coord, varargs_to_par(args))
     evalOnceAs(sub, slice(tv.layout, coord))
     evalOnceAs(offset, crd2idx(tv.layout, coord))
-    make_view(tv.data, sub)
+    tv
 
 const kernel = cuda:
-  proc gemmKernel(A: ptr UncheckedArray[float32], M, K: int32) {.global.} =
-    let L = Layout(shapeStride: (M, K, 1, M))
-    let v = make_view(A, L)
+  proc gemmKernel(M, K: int32) {.global.} =
+    let v = TensorView[float32](data: nil, layout: (M, K, int32(1), M))
+    var tmp: array[1, TensorView[float32]]
     for i in 0 ..< 3:
-      discard v(X2(), Y2())(i)
+      tmp[0] = v(X2(), Y2())(i)
 
 when isMainModule:
   var nv = initNvrtc(kernel)
