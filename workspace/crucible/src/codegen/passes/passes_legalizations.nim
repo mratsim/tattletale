@@ -158,6 +158,19 @@ proc hoistFromExprs(n: var GpuAst; usedNames: var CountTable[string]; newStmts: 
     if n.isExpr and n.statements.len > 1:
       hoistBlockPreamble(n, usedNames, newStmts)
       hoistFromExprs(n, usedNames, newStmts)
+    else:
+      # Recurse into children even when we can't hoist this block:
+      # a gpuBlock(isExpr=true) with 1 statement may wrap another
+      # gpuBlock (e.g. from nnkStmtListExpr nested in nnkBlockExpr)
+      # that itself qualifies for hoisting.
+      for stmt in n.statements.mitems:
+        hoistFromExprs(stmt, usedNames, newStmts)
+      # After recursing, unwrap a single-stmt wrapper block so
+      # codegen doesn't emit a semicolon when used in gpuDot context.
+      if n.isExpr and n.statements.len == 1:
+        let onlyStmt = n.statements[0]
+        if onlyStmt.kind != gpuBlock:
+          n = onlyStmt
   of gpuCall:
     for arg in n.cArgs.mitems:
       hoistFromExprs(arg, usedNames, newStmts)
