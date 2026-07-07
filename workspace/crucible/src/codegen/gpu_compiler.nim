@@ -16,6 +16,7 @@ import ./passes/pass_registry
 import ./passes/passes_legalizations
 import ./passes/passes_validations
 import ./passes/passes_optimizations
+import ./passes/passes_lowering
 
 import ./builtins/builtins # all the builtins for the backend to make the Nim compiler happy
 export builtins
@@ -48,6 +49,7 @@ macro cuda*(body: typed): string =
     dependsOn = @["ensureBlock"],
     run = materializePassByRefArgs
   )
+  reg.registerLoweringPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types

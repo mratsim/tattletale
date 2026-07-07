@@ -189,6 +189,14 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
       ctx.builtins[name] = builtinFn
       return
 
+  # Function-style magic builtins (toOpenArray, etc.)
+  # Named in NimGpuFnBuiltins — register without parsing bodies.
+  if node[0].repr in NimGpuFnBuiltins:
+    let retType = resolveType(reg, sig.params[0])
+    var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
+    ctx.builtins[name] = builtinFn
+    return
+
   let fn = ctx.toGpuAst(reg, inst)
   if fn.kind == gpuDiscard:
     echo "[registerGenericInstOrExternalProc] node[0].repr = ", node[0].repr, " impl.kind = ", inst.kind, " isBuiltIn = ", inst.isBuiltIn()

@@ -56,6 +56,7 @@ type
     gtObject,      # Struct types
     gtPtr,         # Pointer type, carries inner type
     gtUA,          # UncheckedArray (UA) mapped to runtime sized arrays
+    gtSpan,         # Runtime-length array view (openArray/varargs)
     gtGenericInst, # Instantiated generic type with one or more generic arguments (instantiated!)
     gtVoidPtr      # Opaque void pointer
     gtInvalid      # Can be returned to indicate a call to `nimToGpuType` failed to determine a type
@@ -87,11 +88,18 @@ type
                     # `array<foo>` (WebGPU) (runtime sized arrays), which are generated from `ptr UncheckedArray[float32]` for example.
     of gtStatic:
       sValue*: int  # The actual static integer value
+    of gtSpan:
+      sKind*: GpuSpanKind  # kOpenArray or kVarargs
+      sElemTyp*: GpuType   # element type T
     of gtGenericInst:
       gName*: string # name of the generic type
       gArgs*: seq[GpuType] # list of the instantiated generic arguments e.g. `vec3<f32>` on WGSL backend
       gFields*: seq[GpuTypeField] # same as `oFields` for `gtObject`
     else: discard
+
+  GpuSpanKind* = enum
+    kOpenArray   # Nim openArray[T] — ptr + runtime length
+    kVarargs     # Unsupported at th moment
 
   GpuAttribute* = enum
     attDevice = "__device__"
@@ -592,6 +600,7 @@ proc `==`*(a, b: GpuType): bool =
     else: discard
 
 proc `==`*(a, b: GpuAst): bool =
+  if a.isNil or b.isNil: return false
   if a.kind != b.kind: result = false
   elif a.kind != gpuIdent:
     raiseAssert "Unsupported equality for GpuAst that are not idents"

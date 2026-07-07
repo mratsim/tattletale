@@ -18,7 +18,8 @@ import ./gpu_types
 
 proc initGpuType*(kind: GpuTypeKind): GpuType =
   ## If `kind` is `gtPtr` `to` must be the type we point to
-  if kind in [gtObject, gtPtr, gtArray]: raiseAssert "Objects/Pointers/Arrays must be constructed using `initGpuPtr/Object/ArrayType` "
+  if kind in [gtObject, gtPtr, gtArray, gtSpan]:
+    raiseAssert "Objects/Pointers/Arrays/Spans must be constructed using dedicated constructors"
   result = GpuType(kind: kind)
 
 proc initGpuPtrType*(to: GpuType, implicitPtr: bool): GpuType =
@@ -39,8 +40,15 @@ proc initGpuVoidPtr*(): GpuType =
   result = GpuType(kind: gtVoidPtr)
 
 proc initGpuObjectType*(name: string, flds: seq[GpuTypeField]): GpuType =
-  ## If `kind` is `gtPtr` `to` must be the type we point to
+  ## Initializes an object/struct type
   result = GpuType(kind: gtObject, name: name, oFields: flds)
+
+proc initGpuSpanType*(kind: GpuSpanKind, elemTyp: GpuType): GpuType =
+  ## Initializes a span type (openArray/varargs) with the given element type
+  if elemTyp.kind == gtInvalid:
+    result = GpuType(kind: gtInvalid)
+  else:
+    result = GpuType(kind: gtSpan, sKind: kind, sElemTyp: elemTyp)
 
 proc toTypeDef*(typ: GpuType): GpuAst =
   ## Converts a given object or generic instantiation type into an AST of a
@@ -87,6 +95,7 @@ proc stripPtrOrArrayType*(t: GpuType): GpuType =
   of gtPtr:    result = stripPtrOrArrayType t.to
   of gtUA:     result = stripPtrOrArrayType t.uaTo
   of gtArray:  result = stripPtrOrArrayType t.aTyp
+  of gtSpan:   result = stripPtrOrArrayType t.sElemTyp
   else:        result = t
 
 

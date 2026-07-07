@@ -67,7 +67,7 @@ nv1.numBlocks = 1
 nv1.threadsPerBlock = 1
 nv1.compile()
 nv1.getPtx()
-nv1.execute("kernelFull", fullBuf, fullIn, 4'i32)
+nv1.execute("kernelFull", fullBuf, (fullIn, 4'i32))
 for i in 0 .. 3:
   let expected = float32(i + 1) * 2.0'f32
   echo &"full[{i}]: {fullBuf[i]} (expected {expected})"
@@ -81,7 +81,7 @@ nv2.numBlocks = 1
 nv2.threadsPerBlock = 1
 nv2.compile()
 nv2.getPtx()
-nv2.execute("kernelHalf", halfBuf, halfIn, 4'i32)
+nv2.execute("kernelHalf", halfBuf, (halfIn, 4'i32))
 for i in 0 .. 1:
   let expected = float32(i + 3) * 2.0'f32
   echo &"half[{i}]: {halfBuf[i]} (expected {expected})"

@@ -36,7 +36,7 @@ let NimGpuBooleanOperators* {.compileTime.} = {
   ## Boolean operator mappings. Set apart from numeric operators because
   ## `and`/`or`/`not` differ between boolean (&&/||/!) and bitwise (&/|/~).
 
-# NimGpuFnBuiltins* = ["swap", "addr", "sizeof"]
-#   ## Function-style builtins with `{.magic.}` that are called as function
-#   ## calls (not operators). TODO: handling these might be necessary if
-#   ## they reach registerGenericInstOrExternalProc with non-basic arg types.
+let NimGpuFnBuiltins* {.compileTime.} = ["toOpenArray", "len"]
+  ## Function-style builtins with `{.magic.}` that are called as function
+  ## calls (not operators). When these reach registerGenericInstOrExternalProc
+  ## they must be registered as builtins without parsing their bodies.
