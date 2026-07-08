@@ -76,6 +76,10 @@ const kernelRec = cuda:
       acc + it_a * it_b
     C[0] = float32(toIntVal x)
 
+echo "═══════════════════════════════════════════════════════════════════"
+echo kernelRec
+echo "═══════════════════════════════════════════════════════════════════"
+
 suite "Operator rename via do-block":
   test "do-block body +/*":
     var output: array[1, float32]

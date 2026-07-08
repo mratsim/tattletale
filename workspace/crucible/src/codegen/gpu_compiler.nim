@@ -37,8 +37,8 @@ macro cuda*(body: typed): string =
   ## Converts the body of this macro into CUDA code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
-  reg.registerValidationPasses()
-  reg.register("rejectCUDAKeywords", pkValidation, phaseEarly,
+  reg.registerValidationPrePasses()
+  reg.register("rejectCUDAKeywords", pkValidation, phaseMain,
     "Rejects identifiers that are reserved CUDA keywords",
     proc(ctx: var GpuContext): void =
       ctx.checkReservedKeywords(["__global__", "__device__", "__shared__", "__constant__"], "CUDA")
@@ -50,6 +50,7 @@ macro cuda*(body: typed): string =
     run = materializePassByRefArgs
   )
   reg.registerLoweringPasses()
+  reg.registerValidationPostPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -57,55 +58,14 @@ macro cuda*(body: typed): string =
   let body = ctx.codegenCuda(gpuAst)
   result = newLit(body)
 
-macro webgpu*(body: typed): string =
-  ## Converts the body of this macro into WebGPU WGSL code.
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerValidationPasses()
-  reg.register("rejectWGSLKeywords", pkValidation, phaseEarly,
-    "Rejects identifiers that are reserved WGSL keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
-  )
-  reg.registerLegalizationPasses()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toGpuAst(typeReg, body)
-  ctx.types = typeReg.types
-  runPasses(ctx, reg)
-  let body = ctx.codegenWebGpu(gpuAst)
-  result = newLit(body)
-
-macro opencl*(body: typed): string =
-  ## Converts the body of this macro into OpenCL C code.
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerValidationPasses()
-  reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
-    "Rejects identifiers that are reserved OpenCL C keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["kernel", "__kernel", "global", "__global",
-        "local", "__local", "constant", "__constant",
-        "read_only", "write_only", "read_write"], "OpenCL C")
-  )
-  reg.registerLegalizationPasses()
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
-  )
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toGpuAst(typeReg, body)
-  ctx.types = typeReg.types
-  runPasses(ctx, reg)
-  let body = ctx.codegenOpenCL(gpuAst)
-  result = newLit(body)
-
 macro vulkan*(body: typed): string =
   ## Converts the body of this macro into GLSL compute shader code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
-  reg.registerValidationPasses()
-  reg.register("rejectVulkanKeywords", pkValidation, phaseEarly,
+  reg.registerValidationPrePasses()
+  reg.registerLegalizationPasses()
+  reg.registerValidationPostPasses()
+  reg.register("rejectVulkanKeywords", pkValidation, phaseMain,
     "Rejects identifiers that are reserved GLSL keywords",
     proc(ctx: var GpuContext): void =
       ctx.checkReservedKeywords(["extern", "interface", "buffer"], "GLSL")

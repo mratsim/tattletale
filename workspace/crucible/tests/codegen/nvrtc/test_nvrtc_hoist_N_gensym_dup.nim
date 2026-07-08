@@ -72,6 +72,11 @@ const kernel = cuda:
     output[0] = 42.0f
 
 when isMainModule:
+
+  echo "═══════════════════════════════════════════════════════════════════"
+  echo kernel
+  echo "═══════════════════════════════════════════════════════════════════"
+
   var outBuf: array[1, float32]
   var nv = initNvrtc(kernel)
   nv.numBlocks = 1

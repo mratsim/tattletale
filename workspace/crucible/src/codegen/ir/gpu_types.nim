@@ -971,6 +971,23 @@ proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
     result = ctx.builtins[fn].pParams
   elif fn in ctx.processedProcs:
     result = ctx.processedProcs[fn].params
+
+proc getFnReturnType*(ctx: GpuContext, fn: GpuAst): GpuType =
+  ## Look up the return type of a function by its identifier.
+  ## Errors if the function is not found in any function table.
+  if fn in ctx.allFnTab:
+    result = ctx.allFnTab[fn].pRetType
+  elif fn in ctx.fnTab:
+    result = ctx.fnTab[fn].pRetType
+  elif fn in ctx.genericInsts:
+    result = ctx.genericInsts[fn].pRetType
+  elif fn in ctx.builtins:
+    result = ctx.builtins[fn].pRetType
+  elif fn in ctx.processedProcs:
+    result = ctx.processedProcs[fn].retType
+  else:
+    raiseAssert "Function not found: " & $fn & " (iName=" & fn.iName & ")"
+
 ## General utility helpers
 
 proc ident*(n: GpuAst): string =
