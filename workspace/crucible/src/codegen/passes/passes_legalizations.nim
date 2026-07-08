@@ -5,7 +5,7 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [macros, sequtils, tables]
+import std / [macros, sequtils, sets, tables]
 import ../ir/gpu_types
 import ./pass_datatypes
 
@@ -130,12 +130,16 @@ proc liftConstexpr(pbody: var GpuAst) =
   case pbody.kind
   of gpuBlock:
     var newStmts: seq[GpuAst]
+    var liftedSyms: HashSet[string]  # dedup by cIdent.iSym
     for stmt in pbody.statements.mitems:
       if stmt.kind != gpuConstexpr:
         var lifts: seq[GpuAst]
         liftConstexprFrom(stmt, lifts)
         for i in 0 ..< lifts.len:
-          newStmts.add lifts[i]
+          let csym = lifts[i].cIdent.iSym
+          if csym notin liftedSyms:
+            liftedSyms.incl csym
+            newStmts.add lifts[i]
       newStmts.add stmt
     pbody.statements = newStmts
     for i in 0 ..< pbody.statements.len:
@@ -339,8 +343,6 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
         elif stmt.blockLabel.len == 0:
           if stmt.statements.len == 1:
             stmt = stmt.statements[0]
-          else:
-            stmt.blockLabel = "_scope"
       of gpuIf:
         preamble.add blitExprSlot(stmt.ifCond, ctx, GpuType(kind: gtVoid), fnRetType)
       of gpuFor:
