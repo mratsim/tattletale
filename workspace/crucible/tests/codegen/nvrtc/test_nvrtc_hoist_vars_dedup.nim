@@ -53,7 +53,7 @@ template `()`[T](tv: TensorView[T]; args: varargs[untyped]): TensorView[T] =
     tv
 
 const kernel = cuda:
-  proc gemmKernel(M, K: int32; output: ptr UncheckedArray[float32]) {.global.} =
+  proc gemmKernel(output: ptr UncheckedArray[float32]; M, K: int32) {.global.} =
     let v = TensorView[float32](data: nil, layout: (M, K, int32(1), M))
     var tmp: array[1, TensorView[float32]]
     for i in 0 ..< 3:
