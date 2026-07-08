@@ -174,6 +174,28 @@ proc getExprType(n: GpuAst; ctx: GpuContext): GpuType =
       result = getExprType(n.statements[^1], ctx)
     else:
       error "Empty block expression"
+  of gpuIndex:
+    let arrType = getExprType(n.iArr, ctx)
+    if arrType != nil:
+      case arrType.kind
+      of gtPtr: result = arrType.to
+      of gtArray: result = arrType.aTyp
+      of gtUA: result = arrType.uaTo
+      else:
+        error "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
+  of gpuDeref:
+    result = getExprType(n.dOf, ctx)
+  of gpuDot:
+    let parentType = getExprType(n.dParent, ctx)
+    if parentType != nil and parentType.kind in {gtObject, gtGenericInst}:
+      let fields = if parentType.kind == gtObject: parentType.oFields else: parentType.gFields
+      for f in fields:
+        if f.name == n.dField.iName:
+          result = f.typ; break
+    if result.isNil:
+      error "getExprType(gpuDot): field '" & n.dField.iName & "' not found in " & $n.dParent.kind
+  of gpuAddr:
+    result = getExprType(n.aOf, ctx)
   else:
     error "getExprType: unhandled node kind " & $n.kind & ". Caller must provide type from context."
 
@@ -243,6 +265,27 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
           of gtArray: lhsType = arrTyp.aTyp
           of gtUA: lhsType = arrTyp.uaTo
           else: discard
+    # Expression block as lvalue: hoist intermediate stmts, keep last as lvalue
+    if slot.aLeft.kind == gpuBlock and slot.aLeft.isExpr:
+      if slot.aLeft.statements.len == 1:
+        slot.aLeft = slot.aLeft.statements[0]
+        result = blitExprSlot(slot.aLeft, ctx, GpuType(kind: gtVoid), fnRetType)
+      elif slot.aLeft.statements.len > 1:
+        let lastIdx = slot.aLeft.statements.high
+        let lastStmt = slot.aLeft.statements[lastIdx]
+        slot.aLeft.statements.setLen(lastIdx)
+        slot.aLeft.isExpr = false
+        slot.aLeft.blockLabel = ""
+        result = @[slot.aLeft]
+        slot.aLeft = lastStmt
+        # Recompute lhsType from the actual lvalue
+        if slot.aLeft.kind == gpuIdent:
+          lhsType = slot.aLeft.iTyp
+      else:
+        error "Empty block expression as lvalue"
+      result.add blitExprSlot(slot.aRight, ctx, lhsType, fnRetType)
+      return
+    result.add blitExprSlot(slot.aLeft, ctx, GpuType(kind: gtVoid), fnRetType)
     result = blitExprSlot(slot.aRight, ctx, lhsType, fnRetType)
   of gpuBinOp:
     result.add blitExprSlot(slot.bLeft, ctx, GpuType(kind: gtVoid), fnRetType)
@@ -336,7 +379,7 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
                 of gtArray: lhsType = arrTyp.aTyp
                 of gtUA: lhsType = arrTyp.uaTo
                 else: discard
-          preamble = blitExprSlot(stmt.aRight, ctx, lhsType, fnRetType)
+          preamble = blitExprSlot(stmt, ctx, lhsType, fnRetType)
       of gpuBlock:
         if stmt.isExpr:
           preamble = blitExprSlot(stmt, ctx, GpuType(kind: gtVoid), fnRetType)
@@ -351,7 +394,8 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
       of gpuWhile:
         preamble = blitExprSlot(stmt.wCond, ctx, GpuType(kind: gtVoid), fnRetType)
       else:
-        discard
+        if preamble.len == 0:
+          preamble = blitExprSlot(stmt, ctx, GpuType(kind: gtVoid), fnRetType)
       newStmts.add preamble
       newStmts.add stmt
     body.statements = newStmts
