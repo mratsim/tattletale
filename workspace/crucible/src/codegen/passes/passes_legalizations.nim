@@ -191,7 +191,8 @@ proc getExprType(n: GpuAst; ctx: GpuContext): GpuType =
       let fields = if parentType.kind == gtObject: parentType.oFields else: parentType.gFields
       for f in fields:
         if f.name == n.dField.iName:
-          result = f.typ; break
+          result = f.typ
+          break
     if result.isNil:
       error "getExprType(gpuDot): field '" & n.dField.iName & "' not found in " & $n.dParent.kind
   of gpuAddr:
@@ -274,9 +275,15 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
         let lastIdx = slot.aLeft.statements.high
         let lastStmt = slot.aLeft.statements[lastIdx]
         slot.aLeft.statements.setLen(lastIdx)
-        slot.aLeft.isExpr = false
-        slot.aLeft.blockLabel = ""
-        result = @[slot.aLeft]
+        # Blit the vInit of any gpuVar in intermediate stmts immediately
+        # so blitFnBody doesn't need to re-process them
+        var inlined: seq[GpuAst]
+        for s in slot.aLeft.statements:
+          if s.kind == gpuVar:
+            let vBlit = blitExprSlot(s.vInit, ctx, s.vType, fnRetType)
+            for p in vBlit: inlined.add p
+          inlined.add s
+        result = inlined
         slot.aLeft = lastStmt
         # Recompute lhsType from the actual lvalue
         if slot.aLeft.kind == gpuIdent:
@@ -325,6 +332,11 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
     result = blitExprSlot(slot.cValue, ctx, GpuType(kind: gtVoid), fnRetType)
   else:
     discard
+
+proc collectSyms(n: GpuAst; syms: var HashSet[string])
+proc renameSymsInTree(n: var GpuAst; oldName, newName: string)
+proc hoistLvalueVars(stmts: var seq[GpuAst])
+proc dedupVarNames(stmts: var seq[GpuAst])
 
 proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
   ## Walk a function body tree, blitting all gpuBlock(isExpr: true) nodes.
@@ -399,6 +411,8 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
       newStmts.add preamble
       newStmts.add stmt
     body.statements = newStmts
+    hoistLvalueVars(body.statements)
+    dedupVarNames(body.statements)
     # Recursively process newly created statements (e.g. scope blocks from blitting)
     for i in 0 ..< body.statements.len:
       blitFnBody(body.statements[i], ctx, fnRetType)
@@ -412,6 +426,132 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
     blitFnBody(body.wBody, ctx, fnRetType)
   else:
     discard
+
+proc collectSyms(n: GpuAst; syms: var HashSet[string]) =
+  ## Collect all iSym values referenced via gpuIdent in an AST subtree.
+  if n == nil: return
+  case n.kind
+  of gpuIdent:
+    syms.incl n.iSym
+  else:
+    for child in n.items:
+      collectSyms(child, syms)
+
+proc renameSymsInTree(n: var GpuAst; oldName, newName: string) =
+  ## Rename all gpuIdent references with iName == oldName to newName,
+  ## including gpuVar.vName (which is not yielded by mitems).
+  if n == nil: return
+  case n.kind
+  of gpuIdent:
+    if n.iName == oldName:
+      n.iName = newName
+      n.iSym = newName
+  of gpuVar:
+    # vName not yielded by mitems — handle explicitly
+    if n.vName.iName == oldName:
+      n.vName.iName = newName
+      n.vName.iSym = newName
+    renameSymsInTree(n.vInit, oldName, newName)
+  else:
+    for child in n.mitems:
+      renameSymsInTree(child, oldName, newName)
+
+proc hoistLvalueVars(stmts: var seq[GpuAst]) =
+  ## Hoist gpuVar declarations out of `_lvalue`-labeled gpuBlock siblings
+  ## that are referenced by sibling statements. Variables declared inside
+  ## the `_lvalue` block but needed outside are moved above the block.
+
+  proc declaredVars(scope: GpuAst): OrderedTable[string, int] =
+    ## Collect variable names declared at top level of a scope block.
+    for j, s in scope.statements:
+      if s.kind == gpuVar:
+        result[s.vName.iName] = j
+
+  proc referencedBySiblings(stmts: seq[GpuAst]; scopeIdx: int;
+                           varNames: seq[string]): HashSet[string] =
+    ## Find vars declared in scope that are referenced by any sibling statement.
+    for j in 0 ..< stmts.len:
+      if j != scopeIdx:
+        var refs: HashSet[string]
+        collectSyms(stmts[j], refs)
+        for v in varNames:
+          if v in refs:
+            result.incl v
+
+  proc expandTransitives(scope: GpuAst; varIdx: OrderedTable[string, int];
+                         toHoist: var HashSet[string]) =
+    ## Add vars that hoisted vars depend on via their vInit.
+    var changed = true
+    while changed:
+      changed = false
+      for vname, idx in varIdx.pairs:
+        if vname in toHoist:
+          var refd: HashSet[string]
+          if scope.statements[idx].kind == gpuVar:
+            collectSyms(scope.statements[idx].vInit, refd)
+          for r in refd:
+            if r in varIdx and r notin toHoist:
+              toHoist.incl r
+              changed = true
+
+  proc splitScope(scope: GpuAst; toHoist: HashSet[string]):
+      tuple[hoisted: seq[GpuAst], remaining: seq[GpuAst]] =
+    ## Partition scope statements into those being hoisted vs kept.
+    for s in scope.statements:
+      if s.kind == gpuVar and s.vName.iName in toHoist:
+        result.hoisted.add s
+      else:
+        result.remaining.add s
+
+  proc spliceBefore[T](xs: var seq[T]; idx: int; prefix: seq[T]) =
+    ## Insert `prefix` elements before position `idx` in `xs`.
+    var outSeq: seq[T]
+    for i in 0 ..< idx:
+      outSeq.add xs[i]
+    outSeq.add prefix
+    for i in idx ..< xs.len:
+      outSeq.add xs[i]
+    xs = outSeq
+
+  var i = 0
+  while i < stmts.len:
+    if stmts[i].kind == gpuBlock and stmts[i].blockLabel == "_lvalue":
+      let scope = stmts[i]
+      let varIdx = declaredVars(scope)
+      if varIdx.len > 0:
+        var hoistedSet = referencedBySiblings(stmts, i, toSeq(varIdx.keys))
+        if hoistedSet.len > 0:
+          expandTransitives(scope, varIdx, hoistedSet)
+          let (hoistedStmts, remaining) = splitScope(scope, hoistedSet)
+          scope.statements = remaining
+          spliceBefore(stmts, i, hoistedStmts)
+          i += hoistedStmts.len
+    inc i
+
+proc dedupVarNames(stmts: var seq[GpuAst]) =
+  ## Rename duplicate gpuVar declarations across sibling gpuBlock statements.
+  ## Handles `{.inject.}` variables from sequential block: template expansions
+  ## that would collide without C++ scope isolation.
+  ## Uses iName (the short, codegen-facing name) for collision detection.
+  var seenNames: Table[string, int]
+  for i in 0 ..< stmts.len:
+    if stmts[i].kind == gpuBlock:
+      var localRenames: seq[(string, string)]
+      for s in stmts[i].statements:
+        if s.kind == gpuVar:
+          let name = s.vName.iName
+          if name in seenNames:
+            seenNames[name] += 1
+            let newName = name & "_" & $seenNames[name]
+            localRenames.add (name, newName)
+          else:
+            seenNames[name] = 0
+      for (oldName, newName) in localRenames:
+        renameSymsInTree(stmts[i], oldName, newName)
+    elif stmts[i].kind == gpuVar:
+      let name = stmts[i].vName.iName
+      if name notin seenNames:
+        seenNames[name] = 0
 
 proc unwrapBlockInDot(n: var GpuAst) =
   ## Unwrap single-stmt gpuBlock(isExpr) when used as gpuDot's dParent.
