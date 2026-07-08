@@ -1,9 +1,16 @@
-## Class C: "tmp_N is undefined" after hoistFromExprs renames.
-## Minimal repro — zero ceramic imports.
+## Verifies that `_` (underscore) used as a marker in layout indexing
+## is properly handled: the `const _ = X_marker()` is resolved inline
+## rather than creating an undefined `tmp_N` reference.
+##
+## Run:
+##   cd tattletale
+##   nim cpp -r --hints:off --warnings:off \
+##     --outdir:build/wip --nimcache:nimcache/wip \
+##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_undefined_tmp.nim
 
 import std/macros
 import workspace/crucible/src/codegen/nvrtc
-import ./test_nvrtc_regression_hoist_undefined_tmp_helper
+import ./test_nvrtc_underscore_undefined_tmp_helper
 
 type TensorView*[T] = object
   data*: ptr UncheckedArray[T]
@@ -32,11 +39,20 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
     coord
 
 const kernel = cuda:
-  proc reproKernel(A: ptr UncheckedArray[float32]) {.global.} =
+  proc reproKernel(output: ptr UncheckedArray[float32]; A: ptr UncheckedArray[float32]) {.global.} =
     let mA = make_view(A)
     for kTile in 0 ..< 3:
       let _ = mA(_, kTile)
+    output[0] = 42.0f
 
 when isMainModule:
+  var data: array[4, float32] = [1.0'f32, 2.0, 3.0, 4.0]
+  var outBuf: array[1, float32]
   var nv = initNvrtc(kernel)
+  nv.numBlocks = 1
+  nv.threadsPerBlock = 1
   nv.compile()
+  nv.getPtx()
+  nv.execute("reproKernel", outBuf, (data,))
+  doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
+  echo "  OK (test_nvrtc_underscore_undefined_tmp)"

@@ -31,4 +31,4 @@ echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("genericImplKernel", buf, ())
 doAssert buf[0] == 30, &"objectTy: got {buf[0]}"
 doAssert buf[1] == 42, &"staticTy: got {buf[1]}"
-echo "  OK"
+echo "  OK (test_nvrtc_generic_parse_impl)"

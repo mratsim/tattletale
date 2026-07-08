@@ -32,4 +32,4 @@ for i in 0..7: a[i] = uint32(i); b[i] = uint32(i * 10)
 nv.execute("addKernel", buf, (a, b))
 echo "  add: ", buf
 for i in 0..7: doAssert buf[i] == uint32(i + i*10)
-echo "  OK"
+echo "  OK (test_nvrtc_multi_kernel)"

@@ -24,4 +24,4 @@ doAssert buf[0] == 0
 doAssert buf[1] == 0
 doAssert buf[2] == 0
 doAssert buf[3] == 1
-echo "  OK"
+echo "  OK (test_nvrtc_thread_id)"

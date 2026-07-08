@@ -20,4 +20,4 @@ nv.getPtx()
 echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("emptyStructKernel", buf, ())
 doAssert buf[0] == 42
-echo "  OK"
+echo "  OK (test_nvrtc_empty_struct_gpu)"

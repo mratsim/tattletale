@@ -31,4 +31,4 @@ echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("typeBranchesKernel", buf, ())
 doAssert buf[0] == 1, &"ntyStatic buf[0]: got {buf[0]}"
 doAssert buf[1] == 4, &"ntyStatic buf[1]: got {buf[1]}"
-echo "  OK"
+echo "  OK (test_nvrtc_type_proc_and_static)"

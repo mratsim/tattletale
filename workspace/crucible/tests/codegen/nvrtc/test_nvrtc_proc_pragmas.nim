@@ -19,4 +19,4 @@ nv.getPtx()
 echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("pragmaKernel", buf, ())
 doAssert buf[0] == 42, &"proc pragmas: got {buf[0]}"
-echo "  OK"
+echo "  OK (test_nvrtc_proc_pragmas)"

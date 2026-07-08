@@ -21,4 +21,4 @@ nv.getPtx()
 echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("intLitTypeNameKernel", buf, ())
 doAssert buf[0] == 1
-echo "  OK"
+echo "  OK (test_nvrtc_type_names_int_lit)"

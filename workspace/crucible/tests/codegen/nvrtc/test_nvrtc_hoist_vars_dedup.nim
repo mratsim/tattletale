@@ -1,4 +1,12 @@
-## hoistFromExprs else-branch hoists preambles from expression blocks.
+## Verifies that hoistFromExprs correctly hoists preambles from expression
+## blocks without producing duplicate variable declarations.
+## Chained `()` calls: v(X2(), Y2())(i) in a for-loop.
+##
+## Run:
+##   cd tattletale
+##   nim cpp -r --hints:off --warnings:off \
+##     --outdir:build/wip --nimcache:nimcache/wip \
+##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_vars_dedup.nim
 
 import std/macros
 import workspace/crucible/src/codegen/nvrtc
@@ -45,12 +53,20 @@ template `()`[T](tv: TensorView[T]; args: varargs[untyped]): TensorView[T] =
     tv
 
 const kernel = cuda:
-  proc gemmKernel(M, K: int32) {.global.} =
+  proc gemmKernel(M, K: int32; output: ptr UncheckedArray[float32]) {.global.} =
     let v = TensorView[float32](data: nil, layout: (M, K, int32(1), M))
     var tmp: array[1, TensorView[float32]]
     for i in 0 ..< 3:
       tmp[0] = v(X2(), Y2())(i)
+    output[0] = 42.0f
 
 when isMainModule:
+  var outBuf: array[1, float32]
   var nv = initNvrtc(kernel)
+  nv.numBlocks = 1
+  nv.threadsPerBlock = 1
   nv.compile()
+  nv.getPtx()
+  nv.execute("gemmKernel", outBuf, (128'i32, 64'i32))
+  doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
+  echo "  OK (test_nvrtc_hoist_vars_dedup)"

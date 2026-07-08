@@ -17,4 +17,4 @@ nv.getPtx()
 echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("hiddenSubConvKernel", buf, ())
 doAssert buf[0] == 42, &"hiddenSubConv: got {buf[0]}"
-echo "  OK"
+echo "  OK (test_nvrtc_hidden_subconv)"

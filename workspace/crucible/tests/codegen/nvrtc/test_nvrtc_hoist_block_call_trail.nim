@@ -45,17 +45,8 @@ when isMainModule:
   var nv = initNvrtc(kernel)
   nv.numBlocks = 1
   nv.threadsPerBlock = 1
-  try:
-    nv.compile()
-    nv.getPtx()
-    nv.execute("reproKernel", outBuf, (data, 4'i32))
-    echo &"output[0] = {outBuf[0]} (expected {data[0]})"
-    if abs(outBuf[0] - data[0]) < 1e-5:
-      echo "  OK"
-      quit(0)
-    else:
-      echo "  FAIL"
-      quit(1)
-  except:
-    echo "  FAIL"
-    quit(1)
+  nv.compile()
+  nv.getPtx()
+  nv.execute("reproKernel", outBuf, (data, 4'i32))
+  doAssert abs(outBuf[0] - data[0]) < 1e-5, "output[0] = " & $outBuf[0] & " (expected " & $data[0] & ")"
+  echo "  OK (test_nvrtc_hoist_block_call_trail)"
