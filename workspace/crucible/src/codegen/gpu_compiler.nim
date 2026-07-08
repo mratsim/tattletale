@@ -54,6 +54,32 @@ macro cuda*(body: typed): string =
   let body = ctx.codegenCuda(gpuAst)
   result = newLit(body)
 
+
+macro opencl*(body: typed): string =
+  ## Converts the body of this macro into OpenCL C code.
+  var ctx = GpuContext()
+  var reg = PassRegistry.new()
+  reg.registerValidationPrePasses()
+  reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
+    "Rejects identifiers that are reserved OpenCL C keywords",
+    proc(ctx: var GpuContext): void =
+      ctx.checkReservedKeywords(["kernel", "__kernel", "global", "__global",
+        "local", "__local", "constant", "__constant",
+        "read_only", "write_only", "read_write"], "OpenCL C")
+  )
+  reg.registerLegalizationPasses()
+  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
+    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
+    dependsOn = @["ensureBlock"],
+    run = materializePassByRefArgs
+  )
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toGpuAst(typeReg, body)
+  ctx.types = typeReg.types
+  runPasses(ctx, reg)
+  let body = ctx.codegenOpenCL(gpuAst)
+  result = newLit(body)
+
 macro vulkan*(body: typed): string =
   ## Converts the body of this macro into GLSL compute shader code.
   var ctx = GpuContext()
@@ -72,6 +98,24 @@ macro vulkan*(body: typed): string =
   ctx.types = typeReg.types
   runPasses(ctx, reg)
   let body = ctx.codegenVulkan(gpuAst)
+  result = newLit(body)
+
+macro webgpu*(body: typed): string =
+  ## Converts the body of this macro into WebGPU WGSL code.
+  var ctx = GpuContext()
+  var reg = PassRegistry.new()
+  reg.registerValidationPrePasses()
+  reg.register("rejectWGSLKeywords", pkValidation, phaseEarly,
+    "Rejects identifiers that are reserved WGSL keywords",
+    proc(ctx: var GpuContext): void =
+      ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
+  )
+  reg.registerLegalizationPasses()
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toGpuAst(typeReg, body)
+  ctx.types = typeReg.types
+  runPasses(ctx, reg)
+  let body = ctx.codegenWebGpu(gpuAst)
   result = newLit(body)
 
 proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
@@ -104,26 +148,3 @@ proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
     result = ctx.codegenOpenCL(astCopy, kernel)
   of bkVulkan:
     result = ctx.codegenVulkan(astCopy, kernel)
-
-when isMainModule:
-  # Mini example
-  let kernel = cuda:
-    proc square(x: float32): float32 {.device.} =
-      if x < 0.0'f32:
-        result = 0.0'f32
-      else:
-        result = x * x
-
-    proc computeSquares(
-      output: ptr float32,
-      input: ptr float32,
-      n: int32
-    ) {.global.} =
-      let idx: uint32 = blockIdx.x * blockDim.x + threadIdx.x
-      if idx < n:
-        var temp: float32 = 0.0'f32
-        for i in 0..<4:
-          temp += square(input[idx + i * n])
-        output[idx] = temp
-
-  echo kernel
