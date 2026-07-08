@@ -331,7 +331,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
-      let code = ctx.genCuda(el, indent)
+      let code = ctx.genCuda(el, indent + (if ast.blockLabel.len > 0: 1 else: 0))
       if code.len == 0:
         continue # skip gpuDiscard and empty statements
       result.add code

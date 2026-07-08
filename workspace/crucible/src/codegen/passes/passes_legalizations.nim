@@ -203,7 +203,7 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
                                    aLeft: blitIdent.clone(),
                                    aRight: lastStmt)
       slot.isExpr = false
-      slot.blockLabel = "_blit_scope"
+      slot.blockLabel = blitName
       let scopeBlock = slot
       let blitRef = GpuAst(kind: gpuIdent, iName: blitName, iSym: blitName,
                            iTyp: t, symbolKind: gsLocal)
