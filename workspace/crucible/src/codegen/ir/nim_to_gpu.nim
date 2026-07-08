@@ -608,8 +608,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     result = newGpuIdent()
     result.iName = node.repr # for sym choices
     if result.iName == "_":
-      result.iName = "tmp_" & $ctx.genSymCount
-      inc ctx.genSymCount
+      result.iName = "underscore"
   of nnkSym:
     # Sanitize the identifier name: backticks are used by Nim for gensym
     # symbols (e.g., ``field`gensym229``) but are invalid in C.
@@ -620,13 +619,18 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     # symbol `GpuAst` (of kind `gpuIdent`), which is set in the caller of this call.
     # For example in `nnkCall` nodes returning the value from the table automatically means the
     # `symbolKind` is local / function argument etc.
+    # Resolve `const _ = X()` inline: the constant value lives outside the cuda: block
+    # so emitting a GPU identifier would reference an undeclared name.
+    if sanitized == "_" and symKind(node) == nskConst:
+      # getImpl returns nnkConstDef; [2] is the value expression (e.g. X_marker())
+      # Using the whole def would recurse since the name child is also `_`.
+      return ctx.toGpuAst(reg, getImpl(node)[2])
     if s notin ctx.sigTab:
       result = newGpuIdent()
       result.iName = sanitized
       result.iSym = s
       if result.iName == "_":
-        result.iName = "tmp_" & $ctx.genSymCount
-        inc ctx.genSymCount
+        result.iName = "underscore"
       elif result.iName.startsWith("tmpTuple_"):
         result.iName = "tmpTuple_" & $ctx.genSymCount
         result.iSym = result.iName & "_" & node.signatureHash()

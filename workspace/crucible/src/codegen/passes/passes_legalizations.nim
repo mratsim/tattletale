@@ -121,6 +121,17 @@ proc dedupVar(stmt: var GpuAst; usedNames: var CountTable[string]) =
       stmt.vName.iName = uniqueName
       stmt.vName.iSym = uniqueName
     usedNames.inc stmt.vName.ident()
+  elif stmt.kind == gpuConstexpr:
+    let name = stmt.cIdent.ident()
+    if name in usedNames:
+      var uniqueName = name & "_0"
+      var counter = 0
+      while uniqueName in usedNames:
+        counter += 1
+        uniqueName = name & "_" & $counter
+      stmt.cIdent.iName = uniqueName
+      stmt.cIdent.iSym = uniqueName
+    usedNames.inc stmt.cIdent.ident()
 
 proc collectStmt(stmt: var GpuAst; usedNames: var CountTable[string]; newStmts: var seq[GpuAst]) =
   ## Add a statement to the flat block, lifting constexpr children first
@@ -158,19 +169,6 @@ proc hoistFromExprs(n: var GpuAst; usedNames: var CountTable[string]; newStmts: 
     if n.isExpr and n.statements.len > 1:
       hoistBlockPreamble(n, usedNames, newStmts)
       hoistFromExprs(n, usedNames, newStmts)
-    else:
-      # Recurse into children even when we can't hoist this block:
-      # a gpuBlock(isExpr=true) with 1 statement may wrap another
-      # gpuBlock (e.g. from nnkStmtListExpr nested in nnkBlockExpr)
-      # that itself qualifies for hoisting.
-      for stmt in n.statements.mitems:
-        hoistFromExprs(stmt, usedNames, newStmts)
-      # After recursing, unwrap a single-stmt wrapper block so
-      # codegen doesn't emit a semicolon when used in gpuDot context.
-      if n.isExpr and n.statements.len == 1:
-        let onlyStmt = n.statements[0]
-        if onlyStmt.kind != gpuBlock:
-          n = onlyStmt
   of gpuCall:
     for arg in n.cArgs.mitems:
       hoistFromExprs(arg, usedNames, newStmts)
@@ -253,16 +251,17 @@ proc unnest(n: var GpuAst; usedNames: var CountTable[string]) =
         # gpuVar vInit blocks (from nnkBlockStmt) may lack isExpr=true,
         # so hoistBlockPreamble's firstNonBlock handles them regardless.
         hoistBlockPreamble(inner.vInit, usedNames, newStmts)
-        # Also hoist expression-position blocks deeper in the vInit tree
-        # (e.g. gpuCall arguments that are gpuBlock(isExpr: true))
-        hoistFromExprs(inner, usedNames, newStmts)
+        # Swap: collectStmt first to register outer var name in usedNames,
+        # then hoistFromExprs for nested blocks (dedup'd against outer names).
         collectStmt(stmt, usedNames, newStmts)
+        hoistFromExprs(inner, usedNames, newStmts)
       else:
         hoistFromExprs(inner, usedNames, newStmts)
         collectStmt(stmt, usedNames, newStmts)
     n.statements = newStmts
     for i in 0 ..< n.statements.len:
-      unnest(n.statements[i], usedNames)
+      if n.statements[i].kind != gpuConstexpr:
+        unnest(n.statements[i], usedNames)
   of gpuIf:
     unnest(n.ifThen, usedNames)
     if n.ifElse.kind != gpuDiscard:
@@ -271,10 +270,48 @@ proc unnest(n: var GpuAst; usedNames: var CountTable[string]) =
     unnest(n.fBody, usedNames)
   of gpuWhile:
     unnest(n.wBody, usedNames)
+  of gpuVar:
+    discard
   else:
     discard
 
-
+proc unwrapBlockInDot(n: var GpuAst) =
+  ## Unwrap single-stmt gpuBlock(isExpr) when used as gpuDot's dParent.
+  ## The block is an expression wrapper that would cause codegen to
+  ## emit a semicolon in gpuDot context. Targeted replacement that
+  ## preserves scoping elsewhere.
+  case n.kind
+  of gpuDot:
+    if n.dParent.kind == gpuBlock and n.dParent.isExpr and n.dParent.statements.len == 1:
+      n.dParent = n.dParent.statements[0]
+    else:
+      unwrapBlockInDot(n.dParent)
+    unwrapBlockInDot(n.dField)
+  of gpuIndex:
+    unwrapBlockInDot(n.iArr)
+    unwrapBlockInDot(n.iIndex)
+  of gpuDeref:
+    unwrapBlockInDot(n.dOf)
+  of gpuAddr:
+    unwrapBlockInDot(n.aOf)
+  of gpuCall:
+    for arg in n.cArgs.mitems:
+      unwrapBlockInDot(arg)
+  of gpuObjConstr:
+    for f in n.ocFields.mitems:
+      unwrapBlockInDot(f.value)
+  of gpuArrayLit:
+    for v in n.aValues.mitems:
+      unwrapBlockInDot(v)
+  of gpuReturn:
+    unwrapBlockInDot(n.rValue)
+  of gpuAssign:
+    unwrapBlockInDot(n.aLeft)
+    unwrapBlockInDot(n.aRight)
+  of gpuVar:
+    unwrapBlockInDot(n.vInit)
+  else:
+    discard
 proc registerLegalizationPasses*(reg: var PassRegistry) =
   ## Register passes that make the IR well-formed.
 
@@ -320,4 +357,15 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
         var fn = ctx.allFnTab[fnKey]
         var usedNames: CountTable[string]
         unnest(fn.pBody, usedNames)
+    )
+
+  reg.register("unwrapBlockInDot", pkTransform, phaseMain,
+    "Unwraps single-stmt gpuBlock(isExpr) inside gpuDot dParent chains",
+    dependsOn = @["ensureBlock"],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        fn.pBody.walk(proc(n: var GpuAst): void =
+          unwrapBlockInDot(n)
+        )
     )
