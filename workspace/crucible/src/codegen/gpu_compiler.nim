@@ -21,17 +21,13 @@ import ./passes/passes_lowering
 import ./builtins/builtins # all the builtins for the backend to make the Nim compiler happy
 export builtins
 
-macro toGpuAst*(body: typed): (GpuGenericsInfo, GpuAst) =
-  ## Converts the body of this macro into a `GpuAst` from where it can be converted
-  ## into CUDA or WGSL code at runtime.
+macro toGpuAst*(body: typed): GpuAst =
+  ## Converts GPU code to IR (GpuAst) without running any passes.
   var ctx = GpuContext()
   var typeReg = TypeRegistry(types: ctx.types)
-  let ast = ctx.toGpuAst(typeReg, body)
+  let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
-  let genProcs = toSeq(ctx.genericInsts.values)
-  let genTypes = toSeq(ctx.types.values)
-  let g = GpuGenericsInfo(procs: genProcs, types: genTypes)
-  newLit((g, ast))
+  newLit(gpuAst)
 
 macro cuda*(body: typed): string =
   ## Converts the body of this macro into CUDA code.
