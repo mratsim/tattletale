@@ -90,8 +90,6 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     skipIdent = true
   of gtGenericInst:
     result = t.gName
-    if t.gArgs.len > 0:
-      result.add '_'
     for i, g in t.gArgs:
       result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:
@@ -192,7 +190,13 @@ proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
     let argTyp = ctx.getType(arg.dOf)
     doAssert argTyp.kind == gtPtr
     argTyp.to
-  of gpuCall: dfl()
+  of gpuCall:
+    (block:
+      let fn = arg.cName
+      if fn in ctx.genericInsts: ctx.genericInsts[fn].pRetType
+      elif fn in ctx.allFnTab: ctx.allFnTab[fn].pRetType
+      elif fn in ctx.builtins: ctx.builtins[fn].pRetType
+      else: dfl())
   of gpuIndex:
     let arrType = ctx.getType(arg.iArr)
     if typeOfIndex:
@@ -208,6 +212,11 @@ proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
     parentTyp.getFieldType(arg.dField)
   of gpuLit: arg.lType
   of gpuBinOp: dfl()
+  of gpuBlock:
+    (if arg.isExpr and arg.statements.len > 0:
+      ctx.getType(arg.statements[^1])
+    else:
+      dfl())
   of gpuPrefix: ctx.getType(arg.pVal)
   of gpuConv: arg.convTo
   of gpuCast: arg.cTo
@@ -287,11 +296,28 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
 
 # ── genVulkan ─────────────────────────────────────────────────────────
 
+proc genLit*(ast: GpuAst): string =
+  ## Lower a literal node for the Vulkan (GLSL) backend.
+  if ast.lType.kind == gtString:
+    result = '"' & ast.lValue & '"'
+  elif ast.lValue == "DEFAULT":
+    result = "{}"
+  else:
+    case ast.lType.kind
+    of gtFloat32: result = ast.lValue & "f"
+    of gtUint32: result = ast.lValue & "U"
+    of gtUint64: result = ast.lValue & "ULL"
+    of gtInt64:  result = ast.lValue & "LL"
+    of gtInt16, gtUint16, gtUint8, gtBool:
+      result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
+    else:
+      result = ast.lValue
+
 proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual GLSL compute shader code generator.
   let indentStr = "  ".repeat(indent)
   case ast.kind
-  of gpuVoid: return
+  of gpuDiscard: return
 
   of gpuProc:
     let attrs = collect:
@@ -351,9 +377,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
-    if ast.vInit.kind != gpuVoid and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
       result &= " = " & ctx.genVulkan(ast.vInit)
-    elif ast.vInit.kind != gpuVoid:
+    elif ast.vInit.kind != gpuDiscard:
       result.add ";\n"
       result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
                                        size(ast.vName.ident()))
@@ -370,7 +396,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "if (" & ctx.genVulkan(ast.ifCond) & ") {\n"
     result &= ctx.genVulkan(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
-    if ast.ifElse.kind != gpuVoid:
+    if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genVulkan(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
@@ -428,17 +454,16 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ast.ident()
 
   of gpuLit:
-    if ast.lType.kind == gtString: result = '"' & ast.lValue & '"'
-    elif ast.lValue == "DEFAULT": result = "{}"
-    else: result = ast.lValue
+      result = genLit(ast)
 
   of gpuArrayLit:
-    result = "{"
+    # GLSL uses array constructor syntax Type[](val1, val2), not C-style {val1, val2}
+    result = gpuTypeToString(ast.aLitType) & "[]("
     for i, el in ast.aValues:
       result.add gpuTypeToString(ast.aLitType) & '(' & ctx.genVulkan(el) & ')'
       if i < ast.aValues.high:
         result.add ", "
-    result.add '}'
+    result.add ')'
 
   of gpuReturn:
     result = indentStr & "return " & ctx.genVulkan(ast.rValue)
@@ -448,17 +473,31 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuTypeDef:
     result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
-    for el in ast.tFields:
-      result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+    if ast.tFields.len == 0:
+      # GLSL requires at least one field in a struct.
+      result.add "  uint _padding;\n"
+    else:
+      for el in ast.tFields:
+        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
     result.add '}'
 
   of gpuObjConstr:
-    result = "{"
-    for i, el in ast.ocFields:
-      result.add ctx.genVulkan(el.value)
-      if i < ast.ocFields.len - 1:
-        result.add ", "
-    result.add '}'
+    if ast.ocFields.len == 0:
+      # Empty ocFields — struct has backend-added padding, use {0} for zero-init
+      result = gpuTypeToString(ast.ocType) & "(0)"
+    else:
+      # GLSL uses constructor syntax TypeName(val1, val2), not C-style {val1, val2}
+      result = gpuTypeToString(ast.ocType) & "("
+      for i, el in ast.ocFields:
+        if el.value.kind == gpuDiscard:
+          result.add gpuTypeToString(el.typ, allowEmptyIdent = true) & "(0)"
+        elif el.value.kind == gpuLit and el.value.lValue == "DEFAULT":
+          result.add gpuTypeToString(el.typ, allowEmptyIdent = true) & "(0)"
+        else:
+          result.add ctx.genVulkan(el.value)
+        if i < ast.ocFields.len - 1:
+          result.add ", "
+      result.add ')'
 
   of gpuInlineAsm:
     result = indentStr & "asm(" & ast.stmt.strip & ");"

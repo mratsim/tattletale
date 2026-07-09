@@ -26,4 +26,4 @@ nv.getPtx()
 echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("exceptFallbackKernel", buf, ())
 doAssert buf[0] == 30, &"addEm fallback: got {buf[0]}, expected 30"
-echo "  OK"
+echo "  OK (test_nvrtc_except_fallback)"

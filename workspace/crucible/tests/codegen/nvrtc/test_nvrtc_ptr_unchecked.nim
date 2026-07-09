@@ -33,4 +33,4 @@ var c: array[8, uint32]
 nv.execute("addKernel", c, (a, b))
 echo "  add:  ", c
 for i in 0..7: doAssert c[i] == uint32(i + i*10)
-echo "  OK"
+echo "  OK (test_nvrtc_ptr_unchecked)"

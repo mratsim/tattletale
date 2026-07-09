@@ -268,7 +268,6 @@ proc runProductScanTests =
     doAssert s[0][0] === 1 and s[0][1] == 4
     doAssert s[1][0] == 4 and s[1][1] == 32
 
-
   # ── Nested tuple prefix_product ──
   block:
     doAssert prefix_product(((4, 1), (8, 8))) === ((1, 4), (4, 32))
@@ -301,6 +300,7 @@ proc runProductScanTests =
 
   echo "  Nested tuple scan: 8 cases OK"
   echo "  Product scan: 13 cases OK"
+
 # ═══════════════════════════════════════════════════════════════
 #  Mixed static/dynamic scans
 #  (N, C, H, W) — N dynamic, C/H/W are Int[N] (static)
@@ -308,7 +308,6 @@ proc runProductScanTests =
 #  Int[N], the starting accumulator (int literal 1) stays
 #  compile-time throughout, making ALL outputs Int[N].
 # ═══════════════════════════════════════════════════════════════
-
 
 # ═══════════════════════════════════════════════════════════════
 #  IntOrIntTuple type class checks
@@ -351,6 +350,7 @@ proc runFoldWrapperTests =
   block:
     doAssert min((5, 3, 8)) === 3
   echo "  Fold wrappers: 7 cases OK"
+
 # ═══════════════════════════════════════════════════════════════
 #  flatten / concat — extra cases
 # ═══════════════════════════════════════════════════════════════
@@ -387,6 +387,10 @@ proc runFlattenConcatTests =
     doAssert concat(s, 1) === (4, 8, 1)
   echo "  Flatten/concat: 9 cases OK"
 
+# ═══════════════════════════════════════════════════════════════
+#  Mixed static/dynamic
+# ═══════════════════════════════════════════════════════════════
+
 proc runMixedStaticDynamicTests =
   block:
     let dN = 2
@@ -412,6 +416,7 @@ proc runMixedStaticDynamicTests =
 # ═══════════════════════════════════════════════════════════════
 #  zip2_by — guided zip for rank-2 tuples
 # ═══════════════════════════════════════════════════════════════
+
 proc runZip2ByTests =
   block:
     ## Terminal guide — pair pass-through
@@ -474,9 +479,10 @@ proc runZip2ByTests =
       ((Int[2](), Int[4]()), (Int[3](), Int[5](), Int[99]()))
 
   echo "  zip2_by: 10 cases OK"
-#  Run all
-# ═══════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════
+#  mapModesWith / zipModesWith
+# ═══════════════════════════════════════════════════════════════
 
 proc runMapZipWithTests =
   block:
@@ -490,6 +496,18 @@ proc runMapZipWithTests =
     let r = mapModesWith(((2,2), (2,8))): product(it)
     doAssert r === (4, 16)
   block:
+    # product_each: product of each top-level element
+    let r = product_each(((2,2), (2,8)))
+    doAssert r === (4, 16)
+  block:
+    # product_each: single-element tuple remains tuple (CuTe compat)
+    let r = product_each((16,))
+    doAssert r === (16,)
+  block:
+    # product_each: nested single-element
+    let r = product_each(((4,4),))
+    doAssert r === (16,)
+  block:
     let r = zipModesWith((2, 4), (10, 20)): it_a + it_b
     doAssert r === (12, 24)
   block:
@@ -502,6 +520,10 @@ proc runMapZipWithTests =
     let r = zipModesWith((7, 10, 15), (3, 4, 6)): ceil_div(it_a, it_b)
     doAssert r === (3, 3, 3)
   echo "  mapModesWith/zipModesWith: 7 checks OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  mapLeavesWith — plain int
+# ═══════════════════════════════════════════════════════════════
 
 proc runMapLeavesWithPlainIntTests =
   ## mapLeavesWith on scalar int — literal, let, const, proc chain.
@@ -542,7 +564,244 @@ proc runMapLeavesWithPlainIntTests =
     doAssert r === 70
   echo "  mapLeavesWith (plain int): 6 cases OK"
 
-proc runTests =
+# ═══════════════════════════════════════════════════════════════
+#  filterZipWith — tuple zip + conditional concat
+# ═══════════════════════════════════════════════════════════════
+
+type
+  X* = object  ## keep/slice marker
+  Y* = object  ## drop/dice marker
+  Z* = object  ## another marker
+  W* = object  ## yet another marker
+
+proc runFilterZipWithTests =
+  # ── type-based filtering ──
+  block:  # keep X-marked dims, drop Y-marked
+    const r = filterZipWith((X, Y), (3, 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (3,)
+  block:  # keep Y-marked dims, drop X-marked
+    const r = filterZipWith((X, Y), (3, 4)):
+      (when it_a is X: () else: (it_b,))
+    doAssert r === (4,)
+  block:  # only keep Y-marked, drop everything else
+    const r = filterZipWith((X, Y, Z), (1, 2, 3)):
+      (when it_a is Y: (it_b,) else: ())
+    doAssert r === (2,)
+  block:  # multiple markers - keep X and Z, drop Y and W
+    const r = filterZipWith((X, Y, Z, W), (10, 20, 30, 40)):
+      (when it_a is X or it_a is Z: (it_b,) else: ())
+    doAssert r === (10, 30)
+
+  # ── value-based filtering ──
+  block:  # keep only even values from coord
+    const r = filterZipWith((1, 2, 3, 4), (10, 20, 30, 40)):
+      (when (it_a mod 2) == 0: (it_b,) else: ())
+    doAssert r === (20, 40)
+  block:  # keep only elements where coord > target
+    const r = filterZipWith((10, 5), (5, 10)):
+      (when it_a > it_b: (it_b,) else: ())
+    doAssert r === (5,)
+  block:  # keep elements that satisfy a static predicate
+    const r = filterZipWith((1, -2, 3, -4), (5, 6, 7, 8)):
+      (when it_a > 0: (it_b,) else: ())
+    doAssert r === (5, 7)
+
+  # ── structural: nested tuples ──
+  block:  # nested: keep sub-elements where inner coord matches
+    const r = filterZipWith(((X, Y), X), ((2, 3), 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (2, 4)
+  block:  # nested: keep all
+    const r = filterZipWith(((X, X), X), ((2, 3), 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (2, 3, 4)
+  block:  # deeply nested
+    const r = filterZipWith(((X, (Y, X)), X), (((1, 2), (3, 4)), 5)):
+      (when it_a is X: (it_b,) else: ())
+    echo "  deeply nested: ", r
+
+  # ── scalar coord ──
+  block:  # scalar keep
+    const r = filterZipWith(X, 42):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (42,)
+  block:  # scalar drop
+    const r = filterZipWith(0, 42):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === ()
+  block:  # scalar keep with value test
+    const r = filterZipWith(7, 42):
+      (when it_a > 5: (it_b,) else: ())
+    doAssert r === (42,)
+  block:  # scalar drop with value test
+    const r = filterZipWith(3, 42):
+      (when it_a > 5: (it_b,) else: ())
+    doAssert r === ()
+
+  # ── all-keep vs all-drop ──
+  block:  # keep all (X everywhere)
+    const r = filterZipWith((X, X, X), (1, 2, 3)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (1, 2, 3)
+  block:  # drop all (no X)
+    const r = filterZipWith((0, 1, 2), (1, 2, 3)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === ()
+
+  # ── empty tuple ──
+  block:
+    const r = filterZipWith((), ()):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === ()
+
+  # ── transform on keep ──
+  block:  # keep and double the value
+    const r = filterZipWith((X, Y, X), (3, 4, 5)):
+      (when it_a is X: (it_b * 2,) else: ())
+    doAssert r === (6, 10)
+  block:  # keep and convert type
+    const r = filterZipWith((X, Y), (3, 4)):
+      (when it_a is X: ("val:" & $it_b,) else: ())
+    doAssert r == ("val:3",)
+
+  # ── via const/type indirection ──
+  block:  # const values
+    const Vals = (10, 20, 30)
+    const r = filterZipWith((X, X, Y), Vals):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (10, 20)
+  block:  # type alias for markers
+    const Sel = (X(), Y())
+    const r = filterZipWith(Sel, (3, 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (3,)
+  block:  # const values + type markers
+    const MK = (X(), Y(), X())
+    const V = (1, 2, 3)
+    const r = filterZipWith(MK, V):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (1, 3)
+  block:  # type alias
+    type Sel = (X, Y)
+    const r = filterZipWith(Sel, (3, 4)):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === (3,)
+  echo "  filterZipWith: 29 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  select macro
+# ═══════════════════════════════════════════════════════════════
+
+proc runSelectTests* =
+  block:
+    ## N1: Extract non-adjacent modes
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select(0, 2)
+    doAssert result === (M, K), "N1: expected (M, K) got " & $result
+
+  block:
+    ## N2: Extract adjacent modes
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select(1, 2)
+    doAssert result === (N, K), "N2: expected (N, K) got " & $result
+
+  block:
+    ## N3: First two modes
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select(0, 1)
+    doAssert result === (M, N), "N3: expected (M, N) got " & $result
+
+  block:
+    ## N4: Single element — returns one-element tuple
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select(0)
+    doAssert result === (M,), "N4: expected (M,) got " & $result
+
+  block:
+    ## N5: Last element — returns one-element tuple
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select(2)
+    doAssert result === (K,), "N5: expected (K,) got " & $result
+
+  block:
+    ## N6: Single-element tuple — returns same
+    let x = Int[42]()
+    let result = (x,).select(0)
+    doAssert result === (x,), "N6: expected (Int[42](),) got " & $result
+
+  block:
+    ## N7: Static context — compile-time tuple-of-types
+    static:
+      let result = (Int[3](), Int[5](), Int[7]()).select(0, 2)
+      doAssert result === (Int[3](), Int[7]()), "N7: static select failed"
+
+  block:
+    ## N8: Method-call syntax
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select(0, 2)
+    doAssert result === (M, K), "N8: method-call select failed"
+
+  block:
+    ## N9: Method-call single index
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select(1)
+    doAssert result === (N,), "N9: method-call single index failed"
+
+  block:
+    ## N10: select with runtime tuple (int values, not Int types)
+    let t = (1, 2, 3)  # runtime tuple
+    let result = t.select(0, 2)
+    doAssert result === (1, 3), "N10: runtime tuple select failed"
+
+  block:
+    ## N11: Select with mixed types in tuple
+    let mode = Int[3]()
+    let result = (mode, 1, 2.5).select(0, 2)
+    # Int[3] -> Int[V], 2.5 is float, so result should be (Int[3](), 2.5)
+    doAssert result[0] === mode, "N11: first element is Int[3]"
+    doAssert typeof(result[1]) is float, "N11: second element is float"
+    doAssert result[1] == 2.5, "N11: float value correct"
+
+  block:
+    ## N12: select with reordered indices
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select(2, 0)
+    doAssert result === (K, M), "N12: reordered indices failed"
+
+  # Edge cases
+
+  block:
+    ## E1: Index out of bounds — compile error
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let t = (M, N, K)
+    doAssert(not compiles(t.select(5)), "E1: out of bounds index compiled")
+
+  block:
+    ## E2: Empty indices — returns empty tuple
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select()
+    doAssert result == (), "E2: empty indices should return empty tuple"
+
+  block:
+    ## E3: Scalar input (not a tuple) — compile error
+    doAssert(not compiles(42.select(0)), "E3: scalar input compiled")
+
+  block:
+    ## E4: Single-element tuple with index 0
+    let a = Int[10]()
+    let result = (a,).select(0)
+    doAssert result === (a,), "E4: single element failed"
+
+  block:
+    ## E5: Reverse order has correct types
+    let M = Int[128](); let N = Int[64](); let K = Int[32]()
+    let result = (M, N, K).select(2, 1, 0)
+    doAssert result === (K, N, M), "E5: reverse order failed"
+
+  echo "  Select: 17 cases OK"
+
+proc runTests* =
   echo "── Int tuples ──"
   runFoldTests()
   runProductTests()
@@ -559,6 +818,8 @@ proc runTests =
   runZip2ByTests()
   runMapZipWithTests()
   runMapLeavesWithPlainIntTests()
+  runFilterZipWithTests()
+  runSelectTests()
   echo "ALL INT_TUPLES TESTS PASSED"
 
 when isMainModule:

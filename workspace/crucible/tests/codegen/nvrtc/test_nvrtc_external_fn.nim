@@ -50,4 +50,4 @@ doAssert buf[0] == 60  # 10 + 20 + 30
 doAssert buf[1] == 17   # 5*3 + 2
 doAssert buf[2] == 100  # 42 is even, so true branch
 
-echo "  OK"
+echo "  OK (test_nvrtc_external_fn)"

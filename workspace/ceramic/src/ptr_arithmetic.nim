@@ -12,3 +12,7 @@ template `+%`*[T](p: ptr T, offset: SomeInteger): ptr T =
 
 template `+%`*[T](p: ptr UncheckedArray[T], offset: SomeInteger): ptr UncheckedArray[T] =
   cast[ptr UncheckedArray[T]](cast[uint](p) + cast[uint](offset)*uint(sizeof(T)))
+
+template `+%`*[E](data: openArray[E]; off: int): auto =
+  ## Slice an openArray from `off` to end (for make_view ergonomics).
+  toOpenArray(data, off, data.len - 1)

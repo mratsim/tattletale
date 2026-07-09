@@ -54,26 +54,24 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
 #  mapModesWith — Top-level only tuple map
 # ═══════════════════════════════════════════════════════════════════════
 
-macro mapModesWith*[T: IntOrIntTuple](t: T; body: untyped): untyped =
+macro mapModesWith*(t: tuple; body: untyped): untyped =
   ## Apply `body` to each top-level element of tuple `t` (does NOT recurse into nested tuples).
   ## `it` binds to the current element.
   ##
   ## Example:
-  ##   map((2, 4, 6)): it * 2  →  (4, 8, 12)
+  ##   mapModesWith((2, 4, 6)): it * 2  →  (4, 8, 12)
   let tt = getTypeInst(t)
-  let n = if tt.kind == nnkTupleConstr: tt.len else: 1
+  let n = tt.len
 
   proc subst(x: NimNode; i: int; ttup: NimNode): NimNode =
     if x.kind in {nnkIdent, nnkSym} and x.eqIdent("it"):
       result = nnkBracketExpr.newTree(ttup, newLit(i))
     else:
       result = x.copyNimTree()
-      for j in 0 ..< x.len:
-        result[j] = subst(x[j], i, ttup)
+      for j in 0 ..< x.len: result[j] = subst(x[j], i, ttup)
 
   var items: seq[NimNode]
   for i in 0 ..< n:
     items.add subst(body, i, t)
-  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
-  # Multi-item: construct a tuple like nnkTupleConstr.
-  result = nnkPar.newTree(items)
+  # nnkTupleConstr: always preserve tuple structure (even for single-element results)
+  result = nnkTupleConstr.newTree(items)

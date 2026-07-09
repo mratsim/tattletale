@@ -27,7 +27,8 @@ block:
   nv.execute("infixRangeKernel", buf1, ())
 doAssert buf1[0] == 10, &"range [0]: got {buf1[0]}"
 doAssert buf1[1] == 11, &"range [1]: got {buf1[1]}"
-
+doAssert buf1[2] == 12, &"range [2]: got {buf1[2]}"
+doAssert buf1[3] == 13, &"range [3]: got {buf1[3]}"
 # ── Test 2: Loop with body access via node[^1] ──
 
 const kBodyAccess = cuda:
@@ -45,7 +46,7 @@ block:
   nv.execute("bodyAccessKernel", buf2, ())
 doAssert buf2[0] == 200, &"body access [0]: got {buf2[0]}"
 doAssert buf2[1] == 201, &"body access [1]: got {buf2[1]}"
-
+doAssert buf2[2] == 202, &"body access [2]: got {buf2[2]}"
 # ── Test 3: Loop where range uses a variable
 
 const kVarBound = cuda:
@@ -64,5 +65,6 @@ block:
   nv.threadsPerBlock = 2
   nv.execute("varBoundKernel", buf3, ())
 doAssert buf3[0] == 300, &"var bound [0]: got {buf3[0]}"
+doAssert buf3[1] == 300, &"var bound [1]: got {buf3[1]}"
 
 echo "  OK — all for-loop range tests pass"

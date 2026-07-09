@@ -101,8 +101,6 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     # we simply turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
     # use short names (uint32, int64) for generic args, not C names (unsigned int, long long)
     result = t.gName
-    if t.gArgs.len > 0:
-      result.add '_'
     for i, g in t.gArgs:
       result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:
@@ -188,7 +186,13 @@ proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
     let argTyp = ctx.getType(arg.dOf)
     doAssert argTyp.kind == gtPtr
     argTyp.to
-  of gpuCall: dfl()
+  of gpuCall:
+    (block:
+      let fn = arg.cName
+      if fn in ctx.genericInsts: ctx.genericInsts[fn].pRetType
+      elif fn in ctx.allFnTab: ctx.allFnTab[fn].pRetType
+      elif fn in ctx.builtins: ctx.builtins[fn].pRetType
+      else: dfl())
   of gpuIndex:
     let arrType = ctx.getType(arg.iArr)
     if typeOfIndex:
@@ -204,7 +208,11 @@ proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
     parentTyp.getFieldType(arg.dField)
   of gpuLit: arg.lType
   of gpuBinOp: dfl() ## XXX: store resulting type of `gpuBinOp`!
-  #of gpuBlock: arg.statements[^1].getType()
+  of gpuBlock:
+    (if arg.isExpr and arg.statements.len > 0:
+      ctx.getType(arg.statements[^1])
+    else:
+      dfl())
   of gpuPrefix: ctx.getType(arg.pVal)
   of gpuConv: arg.convTo
   of gpuCast: arg.cTo # ident of the thing we cast
@@ -266,11 +274,28 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   for (fnIdent, fn) in mpairs(ctx.fnTab):
     ctx.makeCodeValid(fn)
 
+proc genLit*(ast: GpuAst): string =
+  ## Lower a literal node for the CUDA backend.
+  if ast.lType.kind == gtString:
+    result = '"' & ast.lValue & '"'
+  elif ast.lValue == "DEFAULT":
+    result = "{}"
+  else:
+    case ast.lType.kind
+    of gtFloat32: result = ast.lValue & "f"
+    of gtUint32: result = ast.lValue & "U"
+    of gtUint64: result = ast.lValue & "ULL"
+    of gtInt64:  result = ast.lValue & "LL"
+    of gtInt16, gtUint16, gtUint8, gtBool:
+      result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
+    else:
+      result = ast.lValue
+
 proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual CUDA code generator.
   let indentStr = "  ".repeat(indent)
   case ast.kind
-  of gpuVoid: return # nothing to emit
+  of gpuDiscard: return # nothing to emit
   of gpuProc:
     let attrs = collect:
       for att in ast.pAttributes:
@@ -287,9 +312,13 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
-    # extern "C" is needed to avoid name mangling
-    result = indentStr & "extern \"C\" " & attrs.join(" ") & ' ' &
-             fnSig
+    # extern "C" is needed on __global__ kernels so the host-side CUDA
+    # runtime can look them up by unmangled name (e.g. nv.execute("foo", ...)).
+    # __device__ functions are only called within the compilation unit and
+    # don't need it — C++ name mangling is invisible inside a single
+    # translation unit, and omitting it avoids interfering with overloads.
+    let linkage = if attGlobal in ast.pAttributes: "extern \"C\" " else: ""
+    result = indentStr & linkage & attrs.join(" ") & ' ' & fnSig
     if ast.forwardDeclare:
       result.add ';'
     else:
@@ -302,9 +331,9 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
-      let code = ctx.genCuda(el, indent)
+      let code = ctx.genCuda(el, indent + (if ast.blockLabel.len > 0: 1 else: 0))
       if code.len == 0:
-        continue # skip gpuVoid and empty statements
+        continue # skip gpuDiscard and empty statements
       result.add code
       if el.kind != gpuBlock and not ctx.skipSemicolon:
         result.add ';'
@@ -318,9 +347,9 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                 else: ""
     result = indentStr & attrs & gpuTypeToString(ast.vType, ast.vName.ident())
     # If there is an initialization, the type might require a memcpy
-    if ast.vInit.kind != gpuVoid and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
       result &= " = " & ctx.genCuda(ast.vInit)
-    elif ast.vInit.kind != gpuVoid:
+    elif ast.vInit.kind != gpuDiscard:
       result.add ";\n"
       result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
                                        size(ast.vName.ident()))
@@ -338,7 +367,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "if (" & ctx.genCuda(ast.ifCond) & ") {\n"
     result &= ctx.genCuda(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
-    if ast.ifElse.kind != gpuVoid:
+    if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genCuda(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
@@ -369,13 +398,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genCuda(ast.iArr) & '[' & ctx.genCuda(ast.iIndex) & ']'
 
   of gpuCall:
-    let fnName = ast.cName
+    let fnName = ast.cName.ident()
     var cudaArgs: seq[string]
     for i, arg in ast.cArgs:
-      # C++ const& binds implicitly — no & needed at call site
       cudaArgs.add ctx.genCuda(arg)
-    result = indentStr & fnName.ident() & '(' & cudaArgs.join(", ") & ')'
-
+    result = indentStr & fnName & '(' & cudaArgs.join(", ") & ')'
   of gpuTemplateCall:
     when nimvm:
       error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
@@ -404,9 +431,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ast.ident()
 
   of gpuLit:
-    if ast.lType.kind == gtString: result = '"' & ast.lValue & '"'
-    elif ast.lValue == "DEFAULT": result = "{}" # default initialization, `DEFAULT` placeholder
-    else: result = ast.lValue
+      result = genLit(ast)
 
   of gpuArrayLit:
     result = "{"
@@ -437,9 +462,16 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # Note: bare `{val, ...}` is used instead of `(TypeName){val}`
     # because NVRTC compiles in C++ mode where C99 compound literals
     # are not valid.
-    result = "{"
+    # Braced init list: TypeName{val1, val2, ...}
+    # Using `TypeName{...}` (functional-style cast) instead of bare `{val}`
+    # ensures the result is a valid C++ expression — bare braced-init-lists
+    # are not expressions and cannot be used with member access (gpuDot).
+    result = gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "{"
     for i, el in ast.ocFields:
-      result.add ctx.genCuda(el.value)
+      if el.value.kind == gpuDiscard:
+        result.add "{}"
+      else:
+        result.add ctx.genCuda(el.value)
       if i < ast.ocFields.len - 1:
         result.add ", "
     result.add '}'
@@ -463,14 +495,15 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuConstexpr:
     ## TODO: We need to change the code such that we emit `constexpr` inside of procs and
-    ## `__constant__` outside of procs. The point is we want to support mapping to `__constant__`
+    ## `__constant__` outside of procs. The point is we want to support mapping to `__constant__
     ## for `const foo = bar` Nim declarations to evaluate values at Nim's compile time.
     ## Alternatively, make user write `const foo {.constant.} = bar` to produce a global
     ## `__constant__` value.
+    let cInit = if ast.cValue.kind == gpuDiscard: "{}" else: ctx.genCuda(ast.cValue)
     if ast.cType.kind == gtArray:
-      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genCuda(ast.cIdent)) & " = " & ctx.genCuda(ast.cValue)
+      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genCuda(ast.cIdent)) & " = " & cInit
     else:
-      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genCuda(ast.cIdent) & " = " & ctx.genCuda(ast.cValue)
+      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genCuda(ast.cIdent) & " = " & cInit
   of gpuMaterialize:
     result = ctx.genCuda(ast.mExpr)  # C++ const& binds implicitly to temporaries
 

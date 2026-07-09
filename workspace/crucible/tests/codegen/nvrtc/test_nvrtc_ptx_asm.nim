@@ -29,4 +29,4 @@ nv.execute("ptxAsmKernel", buf, ())
 echo "  [0]=", buf[0], " [1]=", buf[1]
 doAssert buf[0] == 8
 doAssert buf[1] == 30
-echo "  OK"
+echo "  OK (test_nvrtc_ptx_asm)"

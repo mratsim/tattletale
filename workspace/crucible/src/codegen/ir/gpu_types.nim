@@ -16,7 +16,7 @@ type
     bkVulkan  ## Vulkan (SPIR-V) backend
 
   GpuNodeKind* = enum
-    gpuVoid         # Just an empty statement. Useful to not emit anything
+    gpuDiscard         # Just an empty statement. Useful to not emit anything
     gpuProc         # Function definition (both device and global)
     gpuCall         # Function call
     gpuTemplateCall # Call to a Nim template
@@ -56,6 +56,7 @@ type
     gtObject,      # Struct types
     gtPtr,         # Pointer type, carries inner type
     gtUA,          # UncheckedArray (UA) mapped to runtime sized arrays
+    gtSpan,         # Runtime-length array view (openArray/varargs)
     gtGenericInst, # Instantiated generic type with one or more generic arguments (instantiated!)
     gtVoidPtr      # Opaque void pointer
     gtInvalid      # Can be returned to indicate a call to `nimToGpuType` failed to determine a type
@@ -87,11 +88,18 @@ type
                     # `array<foo>` (WebGPU) (runtime sized arrays), which are generated from `ptr UncheckedArray[float32]` for example.
     of gtStatic:
       sValue*: int  # The actual static integer value
+    of gtSpan:
+      sKind*: GpuSpanKind  # kOpenArray or kVarargs
+      sElemTyp*: GpuType   # element type T
     of gtGenericInst:
       gName*: string # name of the generic type
       gArgs*: seq[GpuType] # list of the instantiated generic arguments e.g. `vec3<f32>` on WGSL backend
       gFields*: seq[GpuTypeField] # same as `oFields` for `gtObject`
     else: discard
+
+  GpuSpanKind* = enum
+    kOpenArray   # Nim openArray[T] — ptr + runtime length
+    kVarargs     # Unsupported at th moment
 
   GpuAttribute* = enum
     attDevice = "__device__"
@@ -107,7 +115,7 @@ type
 
   GpuAst* = ref object
     case kind*: GpuNodeKind
-    of gpuVoid: discard
+    of gpuDiscard: discard
     of gpuProc:
       pName*: GpuAst ## Will be a `GpuIdent`
       pRetType*: GpuType
@@ -125,7 +133,7 @@ type
     of gpuIf:
       ifCond*: GpuAst
       ifThen*: GpuAst
-      ifElse*: GpuAst # will be `GpuAst(kind*: gpuVoid)` if no else branch
+      ifElse*: GpuAst # will be `GpuAst(kind*: gpuDiscard)` if no else branch
     of gpuTernary:
       tCond*: GpuAst  # condition
       tThen*: GpuAst  # then-expression
@@ -140,8 +148,6 @@ type
     of gpuBinOp:
       bOp*: GpuAst # `gpuIdent` of the binary operation
       bLeft*, bRight*: GpuAst
-      # types of left and right nodes. Determined from Nim symbol associated with `bOp`
-      bLeftTyp*, bRightTyp*: GpuType
     of gpuVar:
       vName*: GpuAst ## Will be a `GpuIdent`
       vType*: GpuType
@@ -333,6 +339,10 @@ type
     # types are not stored in the instantiation, because we look up the types from the original function when generating the code
 
 
+type
+  TypeRegistry* = object
+    types*: OrderedTable[GpuType, GpuAst]  ## type definition dedup
+
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,
                          gtFloat32, gtFloat64, gtSize_t}
@@ -371,7 +381,7 @@ proc clone*(typ: GpuType): GpuType =
 proc clone*(ast: GpuAst): GpuAst =
   if ast.isNil: return nil
   case ast.kind
-  of gpuVoid: result = GpuAst(kind: gpuVoid)
+  of gpuDiscard: result = GpuAst(kind: gpuDiscard)
   of gpuProc:
     result = GpuAst(kind: gpuProc)
     result.pName = ast.pName.clone()
@@ -423,8 +433,6 @@ proc clone*(ast: GpuAst): GpuAst =
     result.bOp = ast.bOp.clone()
     result.bLeft = ast.bLeft.clone()
     result.bRight = ast.bRight.clone()
-    result.bLeftTyp = ast.bLeftTyp.clone()
-    result.bRightTyp = ast.bRightTyp.clone()
   of gpuVar:
     result = GpuAst(kind: gpuVar)
     result.vName = ast.vName.clone()
@@ -592,6 +600,7 @@ proc `==`*(a, b: GpuType): bool =
     else: discard
 
 proc `==`*(a, b: GpuAst): bool =
+  if a.isNil or b.isNil: return false
   if a.kind != b.kind: result = false
   elif a.kind != gpuIdent:
     raiseAssert "Unsupported equality for GpuAst that are not idents"
@@ -615,7 +624,7 @@ proc len*(ast: GpuAst): int =
   of gpuCall:      1 + ast.cArgs.len
   of gpuBlock:     ast.statements.len
   of gpuIf:
-    if ast.ifElse.kind != gpuVoid: 3
+    if ast.ifElse.kind != gpuDiscard: 3
     else:          2
   of gpuTernary:   3
   of gpuFor:       3
@@ -686,7 +695,7 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
   result = idn(($n.kind).removePrefix("gpu"))
   if n.len > 0: result.add "\n"
   case n.kind
-  of gpuVoid: result.add "\n"
+  of gpuDiscard: result.add "\n"
   of gpuProc:
     result.add pretty(n.pName, indent + 2)
     result.add idd("RetType", n.pRetType)
@@ -709,7 +718,7 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     result.add pretty(n.ifCond, indent + 4)
     result.add idd("IfThen")
     result.add pretty(n.ifThen, indent + 4)
-    if n.ifElse.kind != gpuVoid:
+    if n.ifElse.kind != gpuDiscard:
       result.add idd("IfElse")
       result.add pretty(n.ifElse, indent + 4)
   of gpuTernary:
@@ -822,7 +831,7 @@ template iterImpl(ast: untyped, mutable: static bool): untyped =
   of gpuIf:
     ya(ifCond)
     ya(ifThen)
-    if ast.ifElse.kind != gpuVoid:
+    if ast.ifElse.kind != gpuDiscard:
       yield ast.ifElse
   of gpuTernary:
     ya(tCond)
@@ -962,6 +971,23 @@ proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
     result = ctx.builtins[fn].pParams
   elif fn in ctx.processedProcs:
     result = ctx.processedProcs[fn].params
+
+proc getFnReturnType*(ctx: GpuContext, fn: GpuAst): GpuType =
+  ## Look up the return type of a function by its identifier.
+  ## Errors if the function is not found in any function table.
+  if fn in ctx.allFnTab:
+    result = ctx.allFnTab[fn].pRetType
+  elif fn in ctx.fnTab:
+    result = ctx.fnTab[fn].pRetType
+  elif fn in ctx.genericInsts:
+    result = ctx.genericInsts[fn].pRetType
+  elif fn in ctx.builtins:
+    result = ctx.builtins[fn].pRetType
+  elif fn in ctx.processedProcs:
+    result = ctx.processedProcs[fn].retType
+  else:
+    raiseAssert "Function not found: " & $fn & " (iName=" & fn.iName & ")"
+
 ## General utility helpers
 
 proc ident*(n: GpuAst): string =

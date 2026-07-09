@@ -231,3 +231,21 @@ proc concat*[V: static int](a: static int; b: Int[V]): static auto {.inline, noI
       newNimNode(nnkBracketExpr).add(ident"Int", aNode))
     result.add bNode
   concatImpl()
+
+# ═══════════════════════════════════════════════════════════════
+#  select — extract multiple elements from a tuple at compile-time indices
+# ═══════════════════════════════════════════════════════════════
+
+macro select*(t: IntOrIntTuple; indices: varargs[int]{lit|`const`}): untyped =
+  ## Tuple-level selectModes: extract elements by compile-time index.
+  ##
+  ## Examples:
+  ##   t.select(0, 2)  → (M,K)  (method-call syntax)
+  ##   select(t, 0, 2) → (M,K)  (free-function syntax, same thing)
+  ##   t.select(1)     → (N,)   (always returns a tuple, even for single index)
+  ##
+  ## Note: varargs[int]{lit|`const`} accepts literal integers or const symbols.
+  var elems = newNimNode(nnkTupleConstr)
+  for idx in indices:
+    elems.add newTree(nnkBracketExpr, t, newLit(idx.intVal))
+  result = elems

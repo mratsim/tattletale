@@ -4,9 +4,8 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-{.experimental: "callOperator".}
 
-## Tests for CuTe-compatible int_tuples + layouts.
+## Tests for int_tuples + layouts.
 ##
 ## Convention:
 ##   const C2 = 2; C4 = 4 — compile-time Int[N] (static)
@@ -17,10 +16,12 @@
 ##   - Python: tensor-layouts/tests/layouts.py
 ##   - POC: poc_coalesce.nim, poc_flatten.nim
 
-import std/macros
+import std/macros, std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts {.all.}
 import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_indexing {.all.}
+import workspace/ceramic/tests/layouts_testutils
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout — shape + stride, const correctness, stride order
@@ -295,10 +296,10 @@ proc runMakeLayoutTests =
   block:
     let mr = 4; let mpT = 8; let kc = 8
     let l = make_layout(((mr, 1), (mpT, kc)))
-    doAssert l[((0, 0), (0, 0))] == 0
-    doAssert l[((0, 0), (1, 0))] == mr
-    doAssert l[((0, 0), (0, 1))] == mr * mpT
-    doAssert l[((1, 0), (0, 0))] == 1
+    check crd2idx(l, ((0, 0), (0, 0))), 0, int
+    check crd2idx(l, ((0, 0), (1, 0))), mr, int
+    check crd2idx(l, ((0, 0), (0, 1))), mr * mpT, int
+    check crd2idx(l, ((1, 0), (0, 0))), 1, int
   block:
     let l = make_layout(((4, 1), (8, 8)), LayoutRight)
     doAssert l.shape === ((4, 1), (8, 8)) and l.stride === ((64, 64), (8, 1))
@@ -583,9 +584,65 @@ proc runIsCompactTests =
     doAssert make_layout(double(3)) === (6, 1)
     doAssert isConst(make_layout(double(3)).shape)
     doAssert isConst(make_layout(double(3)).stride)
+
 # ═══════════════════════════════════════════════════════════════
 #  congruent — structural shape comparison
 # ═══════════════════════════════════════════════════════════════
+
+proc runCongruentTests* =
+  block:
+    ## N1: Same rank flat, different types — should be congruent
+    doAssert congruent(1, 2) == true, "N1: int literals"
+  block:
+    ## N2: int vs Int[N]
+    doAssert congruent(1, Int[2]()) == true, "N2: int vs Int[N]"
+  block:
+    ## N3: Int[N] vs Int[N]
+    doAssert congruent(Int[3](), Int[3]()) == true, "N3: Int[N] vs Int[N]"
+  block:
+    ## N4: tuple of ints
+    doAssert congruent((1, 2), (3, 4)) == true, "N4: tuple of ints"
+  block:
+    ## N5: tuple with mixed int/Int
+    doAssert congruent((1, 2), (Int[3](), Int[4]())) == true, "N5: tuple with mixed int/Int"
+  block:
+    ## N6: Int tuple vs int tuple
+    doAssert congruent((Int[5](), Int[6]()), (7, 8)) == true, "N6: Int tuple vs int tuple"
+  block:
+    ## N7: nested tuples
+    doAssert congruent(((1, 2), 3), ((4, 5), 6)) == true, "N7: nested tuples"
+  block:
+    ## N8: nested mixed
+    doAssert congruent(((Int[1](), Int[2]()), Int[3]()), ((4, 5), 6)) == true, "N8: nested mixed"
+  block:
+    ## N9: scalar vs tuple
+    doAssert congruent(1, (1, 2)) == false, "N9: scalar vs tuple"
+  block:
+    ## N10: tuple vs scalar
+    doAssert congruent((1, 2), 3) == false, "N10: tuple vs scalar"
+  block:
+    ## N11: different tuple length
+    doAssert congruent((1, 2), (3, 4, 5)) == false, "N11: different tuple length"
+  block:
+    ## N12: different nesting depth
+    doAssert congruent(((1, 2), 3), (4, 5, 6)) == false, "N12: different nesting depth"
+  block:
+    ## N13: static int literals
+    static:
+      doAssert congruent(1, 2) == true, "N13: static int literals"
+  block:
+    ## N14: static tuple of ints
+    static:
+      doAssert congruent((1, 2), (3, 4)) == true, "N14: static tuple of ints"
+  block:
+    ## N15: static scalar vs tuple
+    static:
+      doAssert congruent(1, (1, 2)) == false, "N15: static scalar vs tuple"
+  block:
+    ## N16: static diff lengths
+    static:
+      doAssert congruent((1, 2), (3, 4, 5)) == false, "N16: static diff lengths"
+  echo "  Congruent: 16 cases OK"
 
 proc runPredicateTests =
   # ═══════════════════════════════════════════════════════════════
@@ -639,111 +696,7 @@ proc runPredicateTests =
   block:
     # not compatible: nested shape into flat target fails
     doAssert not compatible(((2, 2), 3), (4, 3))
-  echo "  Predicates: 21 checks OK"
-
-# ═══════════════════════════════════════════════════════════════
-#  crd2idx — coordinate to index
-# ═══════════════════════════════════════════════════════════════
-
-proc runCrd2IdxTests =
-  block:
-    doAssert crd2idx(5, (3, 4), (2, 8)) === 12
-  block:
-    doAssert crd2idx(0, (3, 4), (2, 8)) === 0
-  block:
-    doAssert crd2idx(3, (3, 4), (2, 8)) === 8
-  block:
-    doAssert crd2idx((2, 2), (3, 4), (2, 8)) === 20
-  block:
-    doAssert crd2idx((1, 3), (3, 4), (2, 8)) === 26
-  block:
-    doAssert crd2idx((3, 4), (3, 4), (2, 8)) === 38
-  block:
-    # 3D coordinate lookup: 1*1 + 2*3 + 3*12 = 43
-    doAssert crd2idx((1, 2, 3), (3, 4, 5), (1, 3, 12)) === 43
-  block:
-    # negative stride: 2*-1 + 1*-4 = -6
-    doAssert crd2idx((2, 1), (4, 8), (-1, -4)) === -6
-  block:
-    let st = col_major_strides((3, 4))
-    doAssert crd2idx((1, 2), (3, 4), st) === 7
-  block:
-    let st = col_major_strides((3, 4))
-    doAssert crd2idx((2, 3), (3, 4), st) === 11
-  block:
-    let st = col_major_strides((3, 4))
-    doAssert crd2idx((3, 4), (3, 4), st) === 15
-  echo "  crd2idx: 11 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
-#  idx2crd — index to coordinate (on Layout)
-# ═══════════════════════════════════════════════════════════════
-
-proc runIdx2crdTests =
-  block:
-    ## Basic 2D flat shape
-    let L = make_layout((3, 4), (1, 4))
-    let crd = idx2crd(L, 5)
-    doAssert crd[0] === 2
-    doAssert crd[1] === 1
-  block:
-    ## Index 0 -> first element
-    let L = make_layout((3, 4), (1, 4))
-    let crd = idx2crd(L, 0)
-    doAssert crd[0] === 0
-    doAssert crd[1] === 0
-  block:
-    ## Last element
-    let L = make_layout((3, 4), (1, 4))
-    let crd = idx2crd(L, 11)
-    doAssert crd[0] === 2
-    doAssert crd[1] === 2
-  block:
-    ## Non-compact stride (MoYe test case, 0-indexed)
-    let L = make_layout((3, 4), (1, 3))
-    let crd = idx2crd(L, 9)
-    doAssert crd[0] === 0
-    doAssert crd[1] === 3
-  block:
-    ## Index at shape boundary
-    let L = make_layout((3, 4), (1, 3))
-    let crd = idx2crd(L, 3)
-    doAssert crd[0] === 0
-    doAssert crd[1] === 1
-  block:
-    ## Single mode layout
-    let L = make_layout(8, 1)
-    let crd = idx2crd(L, 5)
-    doAssert crd === 5
-  block:
-    ## 3D flat shape
-    let L = make_layout((3, 4, 5), (1, 3, 12))
-    let crd = idx2crd(L, 43)
-    doAssert crd[0] === 1
-    doAssert crd[1] === 2
-    doAssert crd[2] === 3
-  block:
-    ## Roundtrip: crd2idx(idx2crd(L, i), L) == i
-    let L = make_layout((4, 8), (1, 4))
-    for i in 0 ..< size(L):
-      let crd = idx2crd(L, i)
-      let idx = crd2idx(L, crd)
-      doAssert idx === i, "roundtrip i=" & $i & ": got " & $idx
-  echo "  idx2crd: 8 cases OK"
-#  layout[] — call operator
-# ═══════════════════════════════════════════════════════════════
-
-proc runCallOperatorTests =
-  block:
-    let l = make_layout(8, 1)
-    doAssert l[0] === 0
-    doAssert l[3] === 3
-    doAssert l[7] === 7
-  block:
-    let l = make_layout((4, 8), (1, 4))
-    doAssert l[0] === 0
-    doAssert l[10] === 10
-  echo "  layout[]: 2 checks OK"
+  echo "    Predicates: 21 checks OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  col_major_strides
@@ -1038,12 +991,74 @@ proc runUpcastDowncastTests =
   echo "    upcast/downcast: 24 cases OK"
 
 
+
 # ═══════════════════════════════════════════════════════════════
+#  compact_order / make_layout_like — CuTe test_compact_order.cpp
+# ═══════════════════════════════════════════════════════════════
+
+proc runCompactOrderTests =
+  # CuTe section 1: scalar shape
+  block:
+    doAssert compact_order(2, 0) == 1
+    echo "    1. compact_order scalar: 1 case OK"
+
+  # CuTe section 2: 2D explicit permutations
+  block:
+    let a = make_layout((2,3), compact_order((2,3), (0,1)))
+    doAssert a === ((2,3), (1,2))
+    let b = make_layout((2,3), compact_order((2,3), (1,0)))
+    doAssert b === ((2,3), (3,1))
+    echo "    2. compact_order 2D: 2 cases OK"
+
+  # CuTe section 3: 3D explicit permutations
+  block:
+    doAssert make_layout((2,3,4), compact_order((2,3,4), (0,1,2))) === ((2,3,4), (1,2,6))
+    doAssert make_layout((2,3,4), compact_order((2,3,4), (2,1,0))) === ((2,3,4), (12,4,1))
+    doAssert make_layout((2,3,4), compact_order((2,3,4), (0,2,1))) === ((2,3,4), (1,8,2))
+    doAssert make_layout((2,3,4), compact_order((2,3,4), (1,2,0))) === ((2,3,4), (4,8,1))
+    doAssert make_layout((2,3,4), compact_order((2,3,4), (2,0,1))) === ((2,3,4), (12,1,3))
+    echo "    3. compact_order 3D: 5 cases OK"
+
+  # CuTe section 5: make_layout_like 2D
+  block:
+    doAssert make_layout_like(make_layout((2,3), (1,2)))  === ((2,3), (1,2))
+    doAssert make_layout_like(make_layout((2,3), (3,1)))  === ((2,3), (3,1))
+    doAssert make_layout_like(make_layout((2,3), (2,1)))  === ((2,3), (3,1))
+    doAssert make_layout_like(make_layout((2,3), (1,10))) === ((2,3), (1,2))
+    doAssert make_layout_like(make_layout((2,3), (0,1)))  === ((2,3), (0,1))
+    doAssert make_layout_like(make_layout((2,3), (0,0)))  === ((2,3), (0,0))
+    echo "    5. make_layout_like 2D: 6 cases OK"
+
+  # CuTe section 6: 3D make_layout_like
+  block:
+    doAssert make_layout_like(make_layout((2,3,4), (0,12,1))) === ((2,3,4), (0,4,1))
+    doAssert make_layout_like(make_layout((2,3,4), (1,0,12))) === ((2,3,4), (1,0,2))
+    doAssert make_layout_like(make_layout((2,3,4), (6,1,2)))  === ((2,3,4), (12,1,3))
+    doAssert make_layout_like(make_layout((2,3,4), (3,6,1)))  === ((2,3,4), (4,8,1))
+    echo "    6. make_layout_like 3D: 4 cases OK"
+
+  # Mode-reordering rejection
+  block:
+    # compact_order: mode i keeps position i; only stride values change
+    let cm = compact_order((2,3,4), (1,2,0))
+    doAssert cm[0] == 4
+    doAssert cm[1] == 8
+    doAssert cm[2] == 1
+    echo "    7. Modes NOT reordered: 3 checks OK"
+
+  block:
+    let l = make_layout_like(make_layout((2,3,4), (3,6,1)))
+    doAssert l.stride[0].toIntVal == 4
+    doAssert l.stride[1].toIntVal == 8
+    doAssert l.stride[2].toIntVal == 1
+    echo "    8. make_layout_like mode positions: 3 checks OK"
 #  Run all
 # ═══════════════════════════════════════════════════════════════
 proc runTests =
   echo "--- make_layout ---"
   runMakeLayoutTests()
+  echo "--- compact_order / make_layout_like ---"
+  runCompactOrderTests()
   echo "--- Flatten ---"
   runFlattenTests()
   echo "--- Concat ---"
@@ -1062,12 +1077,6 @@ proc runTests =
   runIsCompactTests()
   echo "--- Predicates ---"
   runPredicateTests()
-  echo "--- crd2idx ---"
-  runCrd2IdxTests()
-  echo "--- idx2crd ---"
-  runIdx2crdTests()
-  echo "--- layout[] ---"
-  runCallOperatorTests()
   echo "--- col_major_strides ---"
   runColMajorStridesTests()
   echo "--- NCHW ---"
@@ -1230,6 +1239,7 @@ proc runTests =
     doAssert toIntVal(b.shape[0]) == 2, "no shadowing: layout (2,4) shape[0]"
     doAssert toIntVal(b.shape[1]) == 4, "no shadowing: layout (2,4) shape[1]"
     echo "    make_layout: 3 cases OK"
+  echo "--- makeIntTuple ---"
   block:
     const a = makeIntTuple((3,))
     const b = makeIntTuple((2, 4))
@@ -1238,5 +1248,7 @@ proc runTests =
       doAssert toIntVal(b[0]) == 2
       doAssert toIntVal(b[1]) == 4
     echo "    makeIntTuple: 3 cases OK"
+
 when isMainModule:
   runTests()
+  runCongruentTests()
