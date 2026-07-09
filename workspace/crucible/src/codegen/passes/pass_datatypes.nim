@@ -18,6 +18,7 @@ type
 
   PassPhase* = enum
     phaseEarly       ## Right after IR construction (normalization)
+    phasePreprocessing  ## Preprocessing stage (after legalization, before lowering)
     phaseMain        ## Before lowering (optimizations, analysis, validation)
 
   GpuPass* = ref object of RootObj

@@ -18,10 +18,8 @@ proc insertResult(ctx: var GpuContext; fn: GpuAst) =
     if n.statements[^1].kind == gpuReturn: return true
 
   if not lastIsReturn(fn.pBody):
-    let resId = GpuAst(kind: gpuIdent, iName: "result",
-                       iSym: "result",
-                       iTyp: fn.pRetType,
-                       symbolKind: gsLocal)
+    let resSym = newSymbol("result", iSym = "result", typ = fn.pRetType, symKind = gsLocal)
+    let resId = GpuAst(kind: gpuIdent, symbol: resSym)
     let res = GpuAst(kind: gpuVar, vName: resId,
                      vType: fn.pRetType,
                      vInit: GpuAst(kind: gpuDiscard),
@@ -130,13 +128,13 @@ proc liftConstexpr(pbody: var GpuAst) =
   case pbody.kind
   of gpuBlock:
     var newStmts: seq[GpuAst]
-    var liftedSyms: HashSet[string]  # dedup by cIdent.iSym
+    var liftedSyms: HashSet[string]  # dedup by cIdent.symbol.iSym
     for stmt in pbody.statements.mitems:
       if stmt.kind != gpuConstexpr:
         var lifts: seq[GpuAst]
         liftConstexprFrom(stmt, lifts)
         for i in 0 ..< lifts.len:
-          let csym = lifts[i].cIdent.iSym
+          let csym = lifts[i].cIdent.symbol.iSym
           if csym notin liftedSyms:
             liftedSyms.incl csym
             newStmts.add lifts[i]
@@ -161,7 +159,7 @@ proc getExprType(n: GpuAst; ctx: GpuContext): GpuType =
   ## Those cases require the caller to provide the type from context instead.
   if n == nil: error "Cannot get type of nil node"
   case n.kind
-  of gpuIdent: result = n.iTyp
+  of gpuIdent: result = n.symbol.typ
   of gpuLit: result = n.lType
   of gpuCall: result = ctx.getFnReturnType(n.cName)
   of gpuObjConstr: result = n.ocType
@@ -190,11 +188,11 @@ proc getExprType(n: GpuAst; ctx: GpuContext): GpuType =
     if parentType != nil and parentType.kind in {gtObject, gtGenericInst}:
       let fields = if parentType.kind == gtObject: parentType.oFields else: parentType.gFields
       for f in fields:
-        if f.name == n.dField.iName:
+        if f.name == n.dField.symbol.name:
           result = f.typ
           break
     if result.isNil:
-      error "getExprType(gpuDot): field '" & n.dField.iName & "' not found in " & $n.dParent.kind
+      error "getExprType(gpuDot): field '" & n.dField.symbol.name & "' not found in " & $n.dParent.kind
   of gpuAddr:
     result = getExprType(n.aOf, ctx)
   else:
@@ -217,8 +215,8 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
         error "Cannot determine type for blit temp in block expression"
       let blitName = "_blit_" & $ctx.genSymCount
       inc ctx.genSymCount
-      let blitIdent = GpuAst(kind: gpuIdent, iName: blitName, iSym: blitName,
-                             iTyp: t, symbolKind: gsLocal)
+      let blitSym = newSymbol(blitName, iSym = blitName, typ = t, symKind = gsLocal)
+      let blitIdent = GpuAst(kind: gpuIdent, symbol: blitSym)
       let blitDecl = GpuAst(kind: gpuVar, vName: blitIdent, vType: t,
                             vInit: GpuAst(kind: gpuDiscard), vMutable: true)
       let lastStmt = slot.statements[^1]
@@ -228,8 +226,7 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
       slot.isExpr = false
       slot.blockLabel = blitName
       let scopeBlock = slot
-      let blitRef = GpuAst(kind: gpuIdent, iName: blitName, iSym: blitName,
-                           iTyp: t, symbolKind: gsLocal)
+      let blitRef = GpuAst(kind: gpuIdent, symbol: newSymbol(blitName, iSym = blitName, typ = t, symKind = gsLocal))
       slot = blitRef
       result = @[blitDecl, scopeBlock]
     else:
@@ -256,9 +253,9 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
     # For gpuIndex LHS (e.g. arr[i] = block: ...): extract element type
     var lhsType = GpuType(kind: gtVoid)
     if slot.aLeft.kind == gpuIdent:
-      lhsType = slot.aLeft.iTyp
+      lhsType = slot.aLeft.symbol.typ
     elif slot.aLeft.kind == gpuIndex and slot.aLeft.iArr.kind == gpuIdent:
-      let arrTyp = slot.aLeft.iArr.iTyp
+      let arrTyp = slot.aLeft.iArr.symbol.typ
       if arrTyp != nil:
         if arrTyp != nil:
           case arrTyp.kind
@@ -287,7 +284,7 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
         slot.aLeft = lastStmt
         # Recompute lhsType from the actual lvalue
         if slot.aLeft.kind == gpuIdent:
-          lhsType = slot.aLeft.iTyp
+          lhsType = slot.aLeft.symbol.typ
       else:
         error "Empty block expression as lvalue"
       result.add blitExprSlot(slot.aRight, ctx, lhsType, fnRetType)
@@ -336,13 +333,15 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
 proc collectSyms(n: GpuAst; syms: var HashSet[string])
 proc renameSymsInTree(n: var GpuAst; oldName, newName: string)
 proc hoistLvalueVars(stmts: var seq[GpuAst])
-proc dedupVarNames(stmts: var seq[GpuAst])
+proc dedupVarNames*(stmts: var seq[GpuAst])
 
 proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
   ## Walk a function body tree, blitting all gpuBlock(isExpr: true) nodes.
   case body.kind
   of gpuBlock:
     # RE loop: blit standalone expression blocks, recurse into nested blocks
+    ctx.scopeSymsStack.add(ctx.currentScopeSyms)
+    ctx.currentScopeSyms = @[]
     var blockPreambles: seq[seq[GpuAst]]
     for i in 0 ..< body.statements.len:
       if body.statements[i].kind == gpuBlock and body.statements[i].isExpr:
@@ -376,7 +375,7 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
         if preamble.len == 0:
           var lhsType = GpuType(kind: gtVoid)
           if stmt.aLeft.kind == gpuIdent:
-            lhsType = stmt.aLeft.iTyp
+            lhsType = stmt.aLeft.symbol.typ
             if lhsType.isNil or lhsType.kind == gtVoid:
               lhsType = fnRetType
           elif stmt.aLeft.kind == gpuIndex:
@@ -384,7 +383,7 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
             if base.kind == gpuDeref:
               base = base.dOf
             if base.kind == gpuIdent:
-              let arrTyp = base.iTyp
+              let arrTyp = base.symbol.typ
               if arrTyp != nil:
                 case arrTyp.kind
                 of gtPtr: lhsType = arrTyp.to
@@ -411,11 +410,16 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
       newStmts.add preamble
       newStmts.add stmt
     body.statements = newStmts
-    hoistLvalueVars(body.statements)
-    dedupVarNames(body.statements)
+    # Register all gpuVar symbols in this block's scope table
+    for stmt in body.statements:
+      if stmt.kind == gpuVar:
+        let sym = stmt.vName.symbol
+        scopeAdd(ctx.currentScopeSyms, sym.name, sym)
+    # Also ensure gpuBlock children at this level have their scope tables initialized
     # Recursively process newly created statements (e.g. scope blocks from blitting)
     for i in 0 ..< body.statements.len:
       blitFnBody(body.statements[i], ctx, fnRetType)
+    ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
   of gpuIf:
     blitFnBody(body.ifThen, ctx, fnRetType)
     if body.ifElse.kind != gpuDiscard:
@@ -432,7 +436,7 @@ proc collectSyms(n: GpuAst; syms: var HashSet[string]) =
   if n == nil: return
   case n.kind
   of gpuIdent:
-    syms.incl n.iSym
+    syms.incl n.symbol.iSym
   else:
     for child in n.items:
       collectSyms(child, syms)
@@ -443,14 +447,14 @@ proc renameSymsInTree(n: var GpuAst; oldName, newName: string) =
   if n == nil: return
   case n.kind
   of gpuIdent:
-    if n.iName == oldName:
-      n.iName = newName
-      n.iSym = newName
+    if n.symbol.name == oldName:
+      n.symbol.name = newName
+      n.symbol.iSym = newName
   of gpuVar:
     # vName not yielded by mitems — handle explicitly
-    if n.vName.iName == oldName:
-      n.vName.iName = newName
-      n.vName.iSym = newName
+    if n.vName.symbol.name == oldName:
+      n.vName.symbol.name = newName
+      n.vName.symbol.iSym = newName
     renameSymsInTree(n.vInit, oldName, newName)
   else:
     for child in n.mitems:
@@ -465,7 +469,7 @@ proc hoistLvalueVars(stmts: var seq[GpuAst]) =
     ## Collect variable names declared at top level of a scope block.
     for j, s in scope.statements:
       if s.kind == gpuVar:
-        result[s.vName.iName] = j
+        result[s.vName.symbol.name] = j
 
   proc referencedBySiblings(stmts: seq[GpuAst]; scopeIdx: int;
                            varNames: seq[string]): HashSet[string] =
@@ -498,7 +502,7 @@ proc hoistLvalueVars(stmts: var seq[GpuAst]) =
       tuple[hoisted: seq[GpuAst], remaining: seq[GpuAst]] =
     ## Partition scope statements into those being hoisted vs kept.
     for s in scope.statements:
-      if s.kind == gpuVar and s.vName.iName in toHoist:
+      if s.kind == gpuVar and s.vName.symbol.name in toHoist:
         result.hoisted.add s
       else:
         result.remaining.add s
@@ -528,7 +532,7 @@ proc hoistLvalueVars(stmts: var seq[GpuAst]) =
           i += hoistedStmts.len
     inc i
 
-proc dedupVarNames(stmts: var seq[GpuAst]) =
+proc dedupVarNames*(stmts: var seq[GpuAst]) =
   ## Rename duplicate gpuVar declarations across sibling gpuBlock statements.
   ## Handles `{.inject.}` variables from sequential block: template expansions
   ## that would collide without C++ scope isolation.
@@ -539,7 +543,7 @@ proc dedupVarNames(stmts: var seq[GpuAst]) =
       var localRenames: seq[(string, string)]
       for s in stmts[i].statements:
         if s.kind == gpuVar:
-          let name = s.vName.iName
+          let name = s.vName.symbol.name
           if name in seenNames:
             seenNames[name] += 1
             let newName = name & "_" & $seenNames[name]
@@ -549,8 +553,12 @@ proc dedupVarNames(stmts: var seq[GpuAst]) =
       for (oldName, newName) in localRenames:
         renameSymsInTree(stmts[i], oldName, newName)
     elif stmts[i].kind == gpuVar:
-      let name = stmts[i].vName.iName
-      if name notin seenNames:
+      let name = stmts[i].vName.symbol.name
+      if name in seenNames:
+        seenNames[name] += 1
+        let newName = name & "_" & $seenNames[name]
+        renameSymsInTree(stmts[i], name, newName)
+      else:
         seenNames[name] = 0
 
 proc unwrapBlockInDot(n: var GpuAst) =

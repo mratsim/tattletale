@@ -68,6 +68,43 @@ proc registerValidationPrePasses*(reg: var PassRegistry) =
         var fn = ctx.allFnTab[fnKey]
         warnUnassigned(fn.pBody, fn.pName.ident())
     )
+    
+  reg.register("validateScopeResolution", pkValidation, phaseMain,
+    "Verifies every gpuIdent has a non-nil Symbol",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        let fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          fn.pBody.walk(proc(n: var GpuAst): void =
+            if n.kind == gpuIdent and n.symbol.isNil:
+              error "gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n)
+      for fnKey in ctx.genericInsts.keys:
+        let fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          fn.pBody.walk(proc(n: var GpuAst): void =
+            if n.kind == gpuIdent and n.symbol.isNil:
+              error "gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n)
+    )
+
+  reg.register("validateFnTable", pkValidation, phaseMain,
+    "Verifies fnTable has valid entries (no nil idents, consistent kinds)",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for key, entry in ctx.fnTable:
+        if entry.ident.isNil:
+          error "fnTable entry '" & key & "' has nil ident"
+        if entry.ident.kind != gpuIdent:
+          error "fnTable entry '" & key & "' ident is not a gpuIdent, got " & $entry.ident.kind
+        if card(entry.kind) == 0:
+          error "fnTable entry '" & key & "' has empty kind set"
+        if fkDefined in entry.kind or fkGenericInst in entry.kind:
+          if entry.body.isNil:
+            error "fnTable entry '" & key & "' marked as defined/generic but has nil body"
+        if fkBuiltin in entry.kind:
+          if entry.namePolicy != npUnassigned:
+            error "fnTable entry '" & key & "' builtin should not have namePolicy assigned"
+    )
 
 proc registerValidationPostPasses*(reg: var PassRegistry) =
   ## Register passes that check IR invariants AFTER all transforms.

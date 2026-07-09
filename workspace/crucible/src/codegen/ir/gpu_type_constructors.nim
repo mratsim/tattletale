@@ -145,6 +145,16 @@ proc isBuiltIn*(n: NimNode): bool =
     if pragma.strVal in ["builtin", "importc"]:
       return true
 
+proc collectRawPragmas*(n: NimNode): seq[string] =
+  ## Collect ALL pragma names from a pragma node as raw strings.
+  ## Preserves Nim-specific pragmas that are filtered out by `filterPragmas` pass.
+  if n.kind == nnkEmpty: return
+  for pragma in n:
+    doAssert pragma.kind in [nnkIdent, nnkSym, nnkCall, nnkExprColonExpr], "Unexpected node kind: " & $pragma.treerepr
+    let key = if pragma.kind in [nnkCall, nnkExprColonExpr]: pragma[0] else: pragma
+    result.add key.strVal
+
+
 proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
   doAssert n.kind in [nnkPragma, nnkEmpty]
   if n.kind == nnkEmpty: return # no pragmas
@@ -185,7 +195,7 @@ proc hasMagicPragma*(n: NimNode): bool =
     let key = if p.kind in {nnkCall, nnkExprColonExpr}: p[0] else: p
     if key.strVal == "magic":
       return true
-    return false
+  return false
 
 proc collectAttributes*(n: NimNode): seq[GpuVarAttribute] =
   ## Collects all pragmas associated with the given variable.
