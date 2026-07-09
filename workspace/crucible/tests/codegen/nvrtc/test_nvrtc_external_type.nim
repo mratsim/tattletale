@@ -63,4 +63,4 @@ doAssert buf[1] == 22  # 20 + 2
 doAssert buf[2] == 50  # 10*1 + 20*2
 doAssert buf[3] == 10  # 1+2+3+4
 
-echo "  OK"
+echo "  OK (test_nvrtc_external_type)"

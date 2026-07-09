@@ -1,12 +1,10 @@
-## Compile-time loop unrolling for int tuples.
-##
-## Provides the `staticFor` macro which unrolls a loop at compile time,
-## binding a given ident to each integer in range. Eliminates the rank-8
-## unrolling boilerplate found in cutedsl/int_tuple.nim.
-##
-## Reference:
-##   - experimental/layouts/layout.nim (original Nim impl)
-##   - CuTe C++: CUTE_UNROLL + compile-time for loops
+# Constantine
+# Copyright (c) 2018-2019    Status Research & Development GmbH
+# Copyright (c) 2020-Present Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
 

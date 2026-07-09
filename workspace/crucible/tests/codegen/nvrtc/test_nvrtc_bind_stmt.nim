@@ -16,4 +16,4 @@ nv.getPtx()
 echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("bindStmtKernel", buf, ())
 doAssert buf[0] == 42
-echo "  OK"
+echo "  OK (test_nvrtc_bind_stmt)"

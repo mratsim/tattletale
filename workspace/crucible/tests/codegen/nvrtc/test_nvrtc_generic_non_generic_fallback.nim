@@ -32,4 +32,4 @@ nv.execute("sizedKernel", buf, ())
 doAssert buf[0] == 1, &"Sized[4].data[0]: got {buf[0]}, expected 1"
 doAssert buf[1] == 4, &"Sized[4].data[3]: got {buf[1]}, expected 4"
 
-echo "  OK"
+echo "  OK (test_nvrtc_generic_non_generic_fallback)"

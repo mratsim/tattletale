@@ -11,6 +11,7 @@ import workspace/ceramic/src/int_tuples {.all.}
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import workspace/ceramic/src/ptr_arithmetic
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Tensor construction
@@ -19,43 +20,42 @@ import workspace/ceramic/src/tensors
 proc runTensorConstructionTests =
   block:  # Tensor from seq + offset + layout (owning copy of seq)
     let buf = newSeq[float32](16)
-    var t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
-    doAssert t.offset == 0
+    var t = make_view(buf +% 0, make_layout((4, 4), (1, 4)))
 
   block:  # rank
     var buf = newSeq[float32](16)
-    var t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
+    var t = make_view(buf +% 0, make_layout((4, 4), (1, 4)))
     doAssert t.rank == 2
 
   block:  # size
     let buf = newSeq[float32](16)
-    let t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
+    let t = make_view(buf +% 0, make_layout((4, 4), (1, 4)))
     doAssert t.size === 16
 
   block:  # cosize
     var buf = newSeq[float32](32)
-    var t = make_tensor(buf, 0, make_layout((4, 4), (1, 4)))
+    var t = make_view(buf +% 0, make_layout((4, 4), (1, 4)))
     doAssert t.cosize === 16
 
   block:  # Tensor from layout (owning, allocates its own seq)
-    var t = make_tensor(make_layout((3, 5), (1, 3)), float32)
+    var t = make_tensor(float32, make_layout((3, 5), (1, 3)))
     doAssert t.rank == 2
     doAssert t.size === 15
     doAssert t.cosize === 15
     doAssert t.data.len == 15
 
   block:  # Tensor from shape only (compact col-major)
-    var t = make_tensor(make_layout((2, 3), LayoutLeft), float64)
+    var t = make_tensor(float64, (2, 3), LayoutLeft)
     doAssert t.size === 6
 
   block:  # Tensor with LayoutRight (row-major)
-    var t = make_tensor(make_layout((2, 3), LayoutRight), int32)
+    var t = make_tensor(int32, (2, 3), LayoutRight)
     doAssert t.size === 6
 
   block:  # View with non-zero offset
     var buf = newSeq[float32](32)
-    var t = make_tensor(buf, 10, make_layout((2, 3), (1, 2)))
-    doAssert t.offset == 10
+    var t = make_view(buf +% 10, make_layout((2, 3), (1, 2)))
+    doAssert t.data == addr(buf[10])
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  TensorView construction
@@ -76,7 +76,7 @@ proc runTensorViewTests =
     doAssert v.size === 12
 
   block:  # View from Tensor (conversion)
-    var t = make_tensor(make_layout((3, 4), (1, 3)), float32)
+    var t = make_tensor(float32, make_layout((3, 4), (1, 3)))
     let v = t.view()
     doAssert v.size === 12
 
@@ -117,17 +117,32 @@ proc runFlatIndexTests =
     let L = make_layout((4, 8), (8, 1))
     var buf = newSeq[float32](44)
     for i in 0 ..< 44: buf[i] = i.float32
-    var t = make_tensor(buf, 12, L)
+    var t = make_view(buf +% 12, L)
     for i in 0 ..< 32:
       doAssert t(i) == (12 + L(i)).float32
 
   block:  # Write via t(i) = val, read back through t
     var buf = newSeq[float32](6)
-    var t = make_tensor(buf, 0, make_layout((2, 3), (1, 2)))
+    var t = make_view(buf +% 0, make_layout((2, 3), (1, 2)))
     for i in 0 ..< 6:
       t(i) = (i * 10).float32
     for i in 0 ..< 6:
       doAssert t(i) == (i * 10).float32
+
+  block:  # Tensor `()` with underscore (sub-view)
+    const shape = (4, 6)
+    const stride = (1, 4)
+    var t = make_tensor(float32, shape, stride)
+    for i in 0..<24: t(i) = float32(i)
+    let sub = t(_, 2)  # all rows, col 2
+    doAssert sub.layout.shape === (4,), "shape should be (4,)"
+    doAssert sub(0) == 8.0'f32, "first row, col 2"
+    doAssert sub(3) == 11.0'f32, "last row, col 2"
+    let sub2 = t(0, _)  # row 0, all cols
+    doAssert sub2.layout.shape === (6,), "shape should be (6,)"
+    doAssert sub2(0) == 0.0'f32, "row 0, first col"
+    doAssert sub2(5) == 20.0'f32, "row 0, last col"
+    echo "  ok"
 
   block:  # Write via v(i) = val modifies backing storage
     var buf: array[6, float32]
@@ -143,8 +158,8 @@ proc runFlatIndexTests =
     for i in 0 ..< 12: buf[i] = i.float32
     let v = make_view(addr(buf[0]), L)
     for i in 0 ..< 12:
-      let coord = idx2crd(L, i)
-      doAssert v(i) == v[coord], "t(" & $i & ") should equal t(" & $coord & ")"
+      let (c0, c1) = idx2crd(L, i)
+      doAssert v(i) == v[c0, c1], "t(" & $i & ") should equal t(" & $(c0,c1) & ")"
   block:  # t(flat_idx) always equals multi-index that idx2crd produces
     # Python: test_single_index_flat_eval
     let lay = make_layout((4, 8), (1, 4))
@@ -165,7 +180,7 @@ proc runFlatIndexTests =
 proc runMultiIndexTests =
   block:  # Col-major Tensor: (i,j) -> data[i + j*M]  (Python: test_column_major_indexing)
     var buf = newSeq[float32](12)
-    var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    var t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     for idx in 0 ..< 12: t(idx) = idx.float32
     doAssert t[(0, 0)] == 0.0'f32
     doAssert t[(2, 0)] == 2.0'f32
@@ -197,7 +212,7 @@ proc runMultiIndexTests =
 
   block:  # 2-arg: t[i, j] tuple-free syntax
     var buf = newSeq[float32](12)
-    var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    var t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     for idx in 0 ..< 12: t(idx) = idx.float32
     doAssert t[(0, 0)] == 0.0'f32
     doAssert t[(1, 2)] == 7.0'f32
@@ -244,7 +259,7 @@ proc runMultiIndexTests =
     doAssert v[(3, 2)] == 13.0'f32
 
   block:  # Write via owning tensor
-    var t = make_tensor(make_layout((2, 3), (1, 2)), float32)
+    var t = make_tensor(float32, make_layout((2, 3), (1, 2)))
     t[(0, 0)] = 10.0'f32
     t[(1, 2)] = 20.0'f32
     doAssert t[(0, 0)] == 10.0'f32
@@ -284,8 +299,8 @@ proc runMultiIndexTests =
     let M = 3; let N = 4
     var buf = newSeq[float32](1012)
     for i in 0 ..< 1012: buf[i] = i.float32
-    var t = make_tensor(buf, offset, make_layout((M, N), (1, M)))
-    let base = make_tensor(buf, 0, make_layout((M, N), (1, M)))
+    var t = make_view(buf +% offset, make_layout((M, N), (1, M)))
+    let base = make_view(buf +% 0, make_layout((M, N), (1, M)))
     for i in 0 ..< M:
       for j in 0 ..< N:
         doAssert t[(i, j)] == offset.float32 + base[(i, j)]
@@ -305,9 +320,10 @@ proc runMultiIndexTests =
 proc runSliceTests =
   block:  # Slice row: t.slice((row, _)) returns 1D Tensor
     var buf = newSeq[float32](12)
-    var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    var t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     for i in 0 ..< 12: t(i) = i.float32
-    let row1 = t.slice((1, _))
+    static: doAssert (1, _) is IntOrIntTuple
+    let row1 = t.slice(1, _)
     doAssert row1.rank == 1
     doAssert row1.size === 4
     doAssert row1[0] == 1.0'f32
@@ -315,9 +331,9 @@ proc runSliceTests =
 
   block:  # Slice column: t.slice((_, col)) returns 1D Tensor
     var buf = newSeq[float32](12)
-    var t = make_tensor(buf, 0, make_layout((3, 4), (1, 3)))
+    var t = make_view(buf +% 0, make_layout((3, 4), (1, 3)))
     for i in 0 ..< 12: t(i) = i.float32
-    let col1 = t.slice((_, 1))
+    let col1 = t.slice(_, 1)
     doAssert col1.rank == 1
     doAssert col1.size === 3
     doAssert col1[0] == 3.0'f32
@@ -345,7 +361,7 @@ proc runSliceTests =
     doAssert col[2] == 8.0'f32
 
   block:  # Slice from owning tensor
-    var t = make_tensor(make_layout((3, 4), (1, 3)), float32)
+    var t = make_tensor(float32, make_layout((3, 4), (1, 3)))
     for i in 0 ..< 12: t(i) = i.float32
     let col = t.slice((_, 2))
     doAssert col[0] == 6.0'f32
@@ -379,7 +395,7 @@ proc runDisplaceTests =
   block:  # Owned Tensor displace
     var buf = newSeq[float32](100)
     for i in 0 ..< 100: buf[i] = i.float32
-    let t = make_tensor(buf, 0, make_layout((10, 10), (1, 10)))
+    let t = make_view(buf +% 0, make_layout((10, 10), (1, 10)))
     let sub = displace(t, (3, 2))
     doAssert sub.layout.shape === (7, 8) and sub.layout.stride === (1, 10)
     doAssert sub[0, 0] == 23.0'f32
@@ -414,10 +430,216 @@ proc runTypeTests =
     doAssert v[(0, 1)] == 42
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  make_tensor_like tests (ported from poc_make_tensor_like.nim)
+# ═════════════════════════════════════════════════════════════════════════════
+
+proc testColMajor2D =
+  echo "--- 1. make_tensor_like col-major 2D (8,8):(1,8) ---"
+  let layout = make_layout((8, 8))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<64: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc testRowMajor2D =
+  echo "--- 2. make_tensor_like row-major 2D (8,8):(8,1) ---"
+  let layout = make_layout((8, 8), (8, 1))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<64: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc testNonUnitStrides =
+  echo "--- 3. make_tensor_like non-unit strides (4,6):(2,12) ---"
+  let layout = make_layout((4, 6), (2, 12))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<24: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  # (2,12) → col-major order → compact (1,4): mode 0 stride 1, mode 1 stride 4
+  let expected = make_layout((4, 6), (1, 4))
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === expected.stride, "compact stride (1,4) vs orig (2,12)"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(expected)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc testRank1 =
+  echo "--- 4. make_tensor_like rank-1 (32,):(1,) ---"
+  let layout = make_layout((32,))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<32: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc testRank3ColMajor =
+  echo "--- 5. make_tensor_like rank-3 col-major (4,4,4):(1,4,16) ---"
+  let layout = make_layout((4, 4, 4))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<64: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc testRank3RowMajor =
+  echo "--- 6. make_tensor_like rank-3 row-major (4,4,4):(16,4,1) ---"
+  let layout = make_layout((4, 4, 4), (16, 4, 1))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<64: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc testRank3MixedOrder =
+  echo "--- 7. make_tensor_like rank-3 mixed strides (4,4,4):(4,1,16) ---"
+  let layout = make_layout((4, 4, 4), (4, 1, 16))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<64: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  # (4,1,16) → order (1,0,2) → compact (4,1,16) — already compact!
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc test3D_MidMajor =
+  echo "--- 7b. make_tensor_like 3D middle-major (3,4,5):(2,20,5) ---"
+  let layout = make_layout((3, 4, 5), (2, 20, 5))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<60: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  # (2,20,5) → order (0,2,1) → compact (1,15,3)
+  let expected = make_layout((3, 4, 5), (1, 15, 3))
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === expected.stride, "compact stride (1,15,3) vs orig (2,20,5)"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(expected)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc test4DColMajor =
+  echo "--- 8. make_tensor_like 4D (2,3,4,5):(1,2,6,24) ---"
+  let layout = make_layout((2, 3, 4, 5))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<120: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc test4DRowMajor =
+  echo "--- 9. make_tensor_like 4D (2,3,4,5):(24,12,4,1) ---"
+  let layout = make_layout((2, 3, 4, 5), (24, 12, 4, 1))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<120: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  # (24,12,4,1) → row-major order → compact (60,20,5,1)
+  let expected = make_layout((2, 3, 4, 5), (60, 20, 5, 1))
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === expected.stride, "compact stride (60,20,5,1) vs orig (24,12,4,1)"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(expected)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc test4DSparseStrides =
+  echo "--- 10. make_tensor_like 4D (2,3,4,5):(5,1,15,3) ---"
+  let layout = make_layout((2, 3, 4, 5), (5, 1, 15, 3))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<120: t(i) = float32(i)
+
+  let like = make_tensor_like(t)
+  # (5,1,15,3) → order (1,3,0,2) → compact (15,1,30,3)
+  let expected = make_layout((2, 3, 4, 5), (15, 1, 30, 3))
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert like.layout.stride === expected.stride, "compact stride (15,1,30,3) vs orig (5,1,15,3)"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(expected)), "size match"
+  doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
+  doAssert like.data[0] == 0.0'f32, "zero-init"
+  echo "  ok"
+
+proc testExplicitType =
+  echo "--- 11. make_tensor_like with explicit float64 ---"
+  let layout = make_layout((8, 8))
+  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var t = make_view(buf +% 0, layout)
+  for i in 0..<64: t(i) = float32(i)
+
+  let like = make_tensor_like(t, float64)
+  doAssert like.layout.shape === layout.shape, "shape match"
+  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert sizeof(like.data[0]) == sizeof(float64), "is double"
+  echo "  ok"
+
+proc runMakeTensorLikeTests =
+  testColMajor2D()
+  testRowMajor2D()
+  testNonUnitStrides()
+  testRank1()
+  testRank3ColMajor()
+  testRank3RowMajor()
+  testRank3MixedOrder()
+  test3D_MidMajor()
+  test4DColMajor()
+  test4DRowMajor()
+  test4DSparseStrides()
+  testExplicitType()
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  Test runner
 # ═════════════════════════════════════════════════════════════════════════════
 
 proc runTests =
+  runMakeTensorLikeTests()
   runTensorConstructionTests()
   runTensorViewTests()
   runFlatIndexTests()

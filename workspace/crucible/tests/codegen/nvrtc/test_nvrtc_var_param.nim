@@ -36,4 +36,4 @@ doAssert buf[0] == 10
 doAssert buf[1] == 20
 doAssert buf[2] == 2
 doAssert buf[3] == 1
-echo "  OK"
+echo "  OK (test_nvrtc_var_param)"

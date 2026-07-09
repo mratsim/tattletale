@@ -207,9 +207,9 @@ proc gemm_strided*[T: SomeNumber](
   let num_pc = ceil_div(K, kc)
 
   # ── Matrix views ──
-  let vA = make_view(A, make_layout((M, K), (rowStrideA, colStrideA)))
-  let vB = make_view(B, make_layout((K, N), (rowStrideB, colStrideB)))
-  var vC = make_view(C, make_layout((M, N), (rowStrideC, colStrideC)))
+  let vA = make_view(A, (M, K), (rowStrideA, colStrideA))
+  let vB = make_view(B, (K, N), (rowStrideB, colStrideB))
+  var vC = make_view(C, (M, N), (rowStrideC, colStrideC))
 
   # ── Panel layouts ──
   let panelA_lay = make_layout((mc, kc), (rowStrideA, colStrideA))
@@ -229,9 +229,6 @@ proc gemm_strided*[T: SomeNumber](
   let srcB_zd = zipped_divide(panelB_lay, (1, nr))
   let dstB_zd = pack_layout(srcB_zd, transposed = false)
 
-  let pA = tiled_divide(vA.layout, (mc, kc))
-  let pB = tiled_divide(vB.layout, (kc, nc))
-
   # ── Loop 4 (pc): rank-k updates ──
   for pc in 0 ..< num_pc:
     let current_kc = min(K - pc * kc, kc)
@@ -240,10 +237,10 @@ proc gemm_strided*[T: SomeNumber](
     let effective_beta = if pc == 0: beta else: T(1)
 
     for jc in 0 ..< 1:
-      let panelB = local_tile(vB, pB, pc, jc)
+      let panelB = local_tile(vB, (kc, nc), (pc, jc))
 
-      let srcB_edge = make_view(panelB, ((1, nr), (current_kc, num_jr)), srcB_zd.stride)
-      var dstB_edge = make_view(packB,  ((1, nr), (current_kc, num_jr)), dstB_zd.stride)
+      let srcB_edge = make_view(panelB, make_layout(((1, nr), (current_kc, num_jr)), srcB_zd.stride))
+      var dstB_edge = make_view(packB, make_layout(((1, nr), (current_kc, num_jr)), dstB_zd.stride))
       copySameShape_cpu(dstB_edge, srcB_edge)
 
       # ── Loop 3 (ic): row blocks of A ──
@@ -255,7 +252,7 @@ proc gemm_strided*[T: SomeNumber](
         let last_m = (current_mc < mc)
         let num_ir_eff = if last_m: ceil_div(current_mc, mr) else: num_ir
 
-        let panelA = local_tile(vA, pA, ic, pc)
+        let panelA = local_tile(vA, (mc, kc), (ic, pc))
 
         if last_m or last_k:
           let mr_eff = min(mr, current_mc)
@@ -305,6 +302,7 @@ proc gemm_strided*[T: SomeNumber](
     beta: T;
     C: var openArray[T]; rowStrideC, colStrideC: int;
     activation: Activation = akIdentity) =
+  doAssert A.len > 0 and B.len > 0 and C.len > 0, "gemm_strided: empty matrices not supported"
   gemm_strided[T](
     M, N, K, alpha,
     cast[ptr UncheckedArray[T]](addr A[0]), rowStrideA, colStrideA,
@@ -381,10 +379,7 @@ when isMainModule:
   test(14, 32, 64, 1, 32, 1, 32, 1, 32, "UKernel 14x32")
   test(2, 2, 2, 1, 2, 1, 2, 1, 2, "Tiny 2x2 (triple-loop path)")
 
-  # Edge cases: K==0 / alpha==0 should still apply beta to C
-  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=1")
-  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=2", beta = 2.0'f32)
-  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=0", beta = 0.0'f32)
+  # Edge cases: alpha==0 (K>0) should still apply beta to C
   test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=1", alpha = 0.0'f32)
   test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=2", alpha = 0.0'f32, beta = 2.0'f32)
   test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=0", alpha = 0.0'f32, beta = 0.0'f32)

@@ -32,4 +32,5 @@ nv.getPtx()
 echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("boundaryKernel", buf, ())
 doAssert buf[0] == 42, &"nested val: {buf[0]}"
+doAssert buf[1] == 1, &"boundary static marker: {buf[1]}"
 echo "  OK — boundary patterns"

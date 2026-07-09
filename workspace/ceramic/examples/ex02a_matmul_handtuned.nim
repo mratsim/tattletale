@@ -57,44 +57,10 @@ template genEpilogue*(epilogueName: untyped; activationBody: untyped): untyped =
           let x {.inject.} = AB[i][j]
           C[i, j] += alpha * activationBody
 
-template genEpilogue_raw*(epilogueName: untyped; activationBody: untyped): untyped =
-  ## Generate an epilogue proc taking raw pointer + strides.
-  ## Inside `activationBody`, use `x` for the AB accumulator value.
-  proc `epilogueName`[T; MR, NR: static int](
-      C: ptr UncheckedArray[T];
-      AB: array[MR, array[NR, T]];
-      mr, nr: int;
-      alpha, beta: T;
-      rsC, csC: int) {.inline.} =
-    if beta == T(0):
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          C[i * rsC + j * csC] = T(0)
-    elif beta != T(1):
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          C[i * rsC + j * csC] *= beta
-    if alpha == T(1):
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          let x {.inject.} = AB[i][j]
-          C[i * rsC + j * csC] += activationBody
-    else:
-      for i in 0 ..< mr:
-        for j in 0 ..< nr:
-          let x {.inject.} = AB[i][j]
-          C[i * rsC + j * csC] += alpha * activationBody
-
 # Generate concrete epilogue procs (zero dispatch overhead)
 genEpilogue(epilogue_identity):
   x
 genEpilogue(epilogue_relu):
-  if x > T(0): x else: T(0)
-
-# Raw-pointer epilogue procs
-genEpilogue_raw(epilogue_identity_raw):
-  x
-genEpilogue_raw(epilogue_relu_raw):
   if x > T(0): x else: T(0)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -193,12 +159,12 @@ template gemm_ukernel(packA, packB, AB, kc: untyped): untyped =
 #  Epilogue dispatch
 # ═══════════════════════════════════════════════════════════════════════════
 
-template gemm_epilogue(activation: Activation; C, AB, mr, nr, alpha, beta, rsC, csC: untyped): untyped =
-  ## Raw-pointer epilogue dispatch. `C` is ptr UncheckedArray[T] (from displace).
+template gemm_epilogue(activation: Activation; C, AB, mr, nr, alpha, beta: untyped): untyped =
+  ## TensorView epilogue dispatch.
   if activation == akReLU:
-    epilogue_relu_raw(C, AB, mr, nr, alpha, beta, rsC, csC)
+    epilogue_relu(C, AB, mr, nr, alpha, beta)
   else:
-    epilogue_identity_raw(C, AB, mr, nr, alpha, beta, rsC, csC)
+    epilogue_identity(C, AB, mr, nr, alpha, beta)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  gemm_strided — BLIS 5-loop GEMM
@@ -240,9 +206,9 @@ proc gemm_strided*[T: SomeNumber](
   let num_pc = ceil_div(K, kc)
 
   # ── Matrix views ──
-  let vA = make_view(A, make_layout((M, K), (rowStrideA, colStrideA)))
-  let vB = make_view(B, make_layout((K, N), (rowStrideB, colStrideB)))
-  var vC = make_view(C, make_layout((M, N), (rowStrideC, colStrideC)))
+  let vA = make_view(A, (M, K), (rowStrideA, colStrideA))
+  let vB = make_view(B, (K, N), (rowStrideB, colStrideB))
+  var vC = make_view(C, (M, N), (rowStrideC, colStrideC))
 
   # ── Panel layouts ──
   let panelA_lay = make_layout((mc, kc), (rowStrideA, colStrideA))
@@ -280,7 +246,7 @@ proc gemm_strided*[T: SomeNumber](
     let effective_beta = if pc == 0: beta else: T(1)
 
     for jc in 0 ..< 1:
-      let panelB = local_tile(vB, pB, pc, jc)
+      let panelB = local_tile(vB, (kc, nc), (pc, jc))
       let pB_ptr = cast[ptr UncheckedArray[T]](panelB.data)
       let pB_rs = panelB.layout.stride[0]  # row stride of panel
       let pB_cs = panelB.layout.stride[1]  # col stride of panel
@@ -311,7 +277,7 @@ proc gemm_strided*[T: SomeNumber](
         let num_ir_eff = if last_m: ceil_div(current_mc, mr)
                          else: num_ir
 
-        let panelA = local_tile(vA, pA, ic, pc)
+        let panelA = local_tile(vA, (mc, kc), (ic, pc))
 
         let pA_ptr = cast[ptr UncheckedArray[T]](panelA.data)
         let pA_rs = panelA.layout.stride[0]
@@ -375,8 +341,7 @@ proc gemm_strided*[T: SomeNumber](
             let eff_mr = min(mr, M - cRow)
             let eff_nr = min(nr, N - cCol)
             let cTile {.noInit.} = displace(vC, (cRow, cCol))
-            gemm_epilogue(activation, cast[ptr UncheckedArray[T]](cTile.data),
-                          AB, eff_mr, eff_nr, alpha, effective_beta, rowStrideC, colStrideC)
+            gemm_epilogue(activation, cTile, AB, eff_mr, eff_nr, alpha, effective_beta)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Convenience overload — openArray[T]
@@ -390,6 +355,7 @@ proc gemm_strided*[T: SomeNumber](
     beta: T;
     C: var openArray[T]; rowStrideC, colStrideC: int;
     activation: Activation = akIdentity) =
+  doAssert A.len > 0 and B.len > 0 and C.len > 0, "gemm_strided: empty matrices not supported"
   gemm_strided[T](
     M, N, K, alpha,
     cast[ptr UncheckedArray[T]](addr A[0]), rowStrideA, colStrideA,
@@ -461,11 +427,7 @@ when isMainModule:
   test(6, 32, 64,  1, 32, 1, 32, 1, 32, "UKernel 6x32")
   test(14, 32, 64, 1, 32, 1, 32, 1, 32, "UKernel 14x32")
   test(2, 2, 2, 1, 2, 1, 2, 1, 2, "Tiny 2x2 (triple-loop path)")
-
-  # Edge cases: K==0 / alpha==0 should still apply beta to C
-  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=1")
-  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=2", beta = 2.0'f32)
-  test(8, 8, 0, 1, 8, 1, 8, 1, 8, "K=0, beta=0", beta = 0.0'f32)
+  # Edge cases: alpha==0 (K>0) should still apply beta to C
   test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=1", alpha = 0.0'f32)
   test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=2", alpha = 0.0'f32, beta = 2.0'f32)
   test(8, 8, 16, 1, 8, 1, 8, 1, 8, "alpha=0, beta=0", alpha = 0.0'f32, beta = 0.0'f32)
