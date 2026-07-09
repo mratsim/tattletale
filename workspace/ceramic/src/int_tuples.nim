@@ -5,6 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+import ./int_tuples/int_tuples_filters
 import std/macros, std/typetraits
 import ./int_tuples/int_tuples_datatypes
 import ./int_tuples/int_tuples_compiletime
@@ -14,6 +15,7 @@ import ./int_tuples/int_tuples_transforms
 import ./int_tuples/int_tuples_zips
 
 export int_tuples_datatypes
+export int_tuples_filters
 export int_tuples_compiletime
 export int_tuples_folds
 export int_tuples_maps
@@ -26,13 +28,13 @@ export int_tuples_zips
 
 #  Leaf procs — dispatch on exact type
 
-template makeIntTupleLeaf(leaf: int): int =
+template makeIntTupleLeaf*(leaf: int): int =
   leaf
 
-template makeIntTupleLeaf(leaf: static int): auto =
+template makeIntTupleLeaf*(leaf: static int): auto =
   Int[leaf]()
 
-template makeIntTupleLeaf[V: static int](x: Int[V]): Int[V] =
+template makeIntTupleLeaf*[V: static int](x: Int[V]): Int[V] =
   x
 
 template makeIntTuple*(t: IntOrIntTuple): auto =
@@ -41,9 +43,8 @@ template makeIntTuple*(t: IntOrIntTuple): auto =
     let t = makeIntTuple((3, 4))
     doAssert t is (Int[3], Int[4])
 
-  bind makeIntTupleLeaf
-  mapLeavesWith(t):
-    makeIntTupleLeaf(it)
+  mixin makeIntTupleLeaf # Keep symbol open for X / Y markers defined in layout_indexing
+  mapLeavesWith(t, makeIntTupleLeaf(it))
 
 # ═══════════════════════════════════════════════════════════════
 #  Maps
@@ -118,6 +119,6 @@ func product_each*(t: IntOrIntTuple): auto =
   ##
   ## Examples:
   ##   product_each(((2,2), (2,8)))  →  (4, 16)
-  ##   product_each(5)                →  5
+
   ##
   mapModesWith(t): product(it)

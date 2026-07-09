@@ -71,4 +71,4 @@ doAssert buf2[0] == 6    # 1+2+3
 doAssert buf2[1] == 60   # 10+20+30
 doAssert buf2[2] == 42   # max(42, 17)
 
-echo "  OK"
+echo "  OK (test_nvrtc_external_fn_type)"

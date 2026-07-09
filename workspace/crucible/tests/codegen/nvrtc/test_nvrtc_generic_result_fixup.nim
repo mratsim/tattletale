@@ -22,4 +22,4 @@ nv.getPtx()
 echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("resultFixupKernel", buf, ())
 doAssert buf[0] == 42, &"result fixup: got {buf[0]}"
-echo "  OK"
+echo "  OK (test_nvrtc_generic_result_fixup)"

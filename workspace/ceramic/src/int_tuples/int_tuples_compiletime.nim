@@ -249,7 +249,7 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`c
     procType = nnkTemplateDef
   )
 
-macro evalOnceAs*(alias: untyped{nkIdent}, expression: Int): untyped =
+macro evalOnceAs*[V: static int](alias: untyped{nkIdent}, expression: Int[V]): untyped =
   ## Create an `alias` for `expression`
   ## Ensuring it is evaluated only once if it is a `rvalue`
   ## or passed through if it is an lvalue.
@@ -269,7 +269,11 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: Int): untyped =
   #   evalOnceCT_staticInt
   result = newStmtList()
   let evalOnceCT_staticInt = genSym(nskConst, "evalOnceCT_staticInt")
-  result.add newConstStmt(evalOnceCT_staticInt, expression)
+
+  # The expression may be a `let` binding which would lead to "cannot evaluate at compile-time"
+  # So we rebuild a constant from the type. As a side-benefit, the C++ compiler should
+  # dead-code eliminate the unused `let` expression.
+  result.add newConstStmt(evalOnceCT_staticInt, IntCT(V))
   result.add newProc(
     name = genSym(nskTemplate, $alias),
     params = [getType(untyped)],
@@ -291,7 +295,7 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ##     arguments to a generic proc — both get the first argument's
   ##     concrete type. The `block:` forces independent per-expansion
   ##     scope, working around this Nim compiler limitation.
-  
+
   # Uses a generated `when expression is static:` to choose
   # between `const` (compile-time) and `let` (runtime) storage.
   # The template name is genSym'd to avoid collisions when multiple

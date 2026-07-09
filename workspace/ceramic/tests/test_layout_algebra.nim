@@ -17,9 +17,12 @@
 ##   [PY-L]   = tensor-layouts/tests/layouts.py
 ##   [PY-E]   = tensor-layouts/tests/external.py
 
+{.experimental: "callOperator".}
+
 import std/algorithm
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
+import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
 
 
@@ -122,8 +125,8 @@ proc chkCoalesce(layout: Layout) =
   doAssert size(c) === size(layout),
     "coalesce size mismatch: " & $size(c) & " != " & $size(layout)
   for i in 0 ..< size(layout):
-    doAssert c[i] === layout[i],
-      "coalesce mapping mismatch at " & $i & ": " & $c[i] & " != " & $layout[i]
+    doAssert c(i) === layout(i),
+      "coalesce mapping mismatch at " & $i & ": " & $c(i) & " != " & $layout(i)
 
 # ═══════════════════════════════════════════════════════════════
 #  Coalesce [CUTE-C]
@@ -304,7 +307,7 @@ template testComplementProps(layout, result: typed; cotarget: untyped) =
     "(2) cosize(result)=" & $cosize(result) & " > upper=" & $upper & " layout=" & $layout & " cotarget=" & $cotarget
   # (3) Strictly increasing
   for i in 1 ..< rSize:
-    doAssert result[i-1] < result[i]
+    doAssert result(i-1) < result(i)
   # (5) size <= cosize
   doAssert rSize <= cosize(result)
   # (9) If static stride, complement(completed) has size 1
@@ -540,8 +543,8 @@ proc runComplementDisjointnessTests =
     let c = complement(layout)
     for i in 0 ..< size(layout):
       for j in 0 ..< size(c):
-        if layout[i] != 0 and c[j] != 0:
-          doAssert layout[i] != c[j],
+        if layout(i) != 0 and c(j) != 0:
+          doAssert layout(i) != c(j),
             "complement overlaps at " & $i & "," & $j
 
   chkDisjoint(make_layout(1, 0))
@@ -566,8 +569,8 @@ proc chkCompose[Sh1, St1, Sh2, St2](a: Layout[Sh1, St1]; b: Layout[Sh2, St2]): b
     return false
   # [CUTE-CM] r[c] == a[b[c]] for all c
   for c in 0 ..< size(b):
-    if r[c] != a[b[c]]:
-      echo "    FAIL: r[",c,"]=",r[c]," a[b[",c,"]]=",a[b[c]]
+    if r(c) != a(b(c)):
+      echo "    FAIL: r[",c,"]=",r(c)," a[b[",c,"]]=",a(b(c))
       return false
   true
 
@@ -735,10 +738,10 @@ proc runAntiRegressionTests =
   ## crd2idx with nested shape: layout[coord] on (2, (3,4)):((1,6),3)
   block:
     let l = make_layout((2, (3, 4)), (3, (1, 6)))
-    doAssert l(0) == 0
-    doAssert l(6) == 6
-    doAssert l(1) == 3
-    doAssert l(23) == 23
+    doAssert l(0) === 0
+    doAssert l(6) === 6
+    doAssert l(1) === 3
+    doAssert l(23) === 23
   ## tile_unzip with Layout tiler
   block:
     let A = make_layout((8, 8), (1, 8))
@@ -922,7 +925,7 @@ proc runDivideTests: void =
     doAssert rank(R) === 2, "rank not 2 for " & $L & " / " & $T
     doAssert size(R) === size(L)
     for i in 0 ..< size(L):
-      doAssert R[i] === L[i], "mapping fail at " & $i & " for " & $L & " / " & $T
+      doAssert R(i) === L(i), "mapping fail at " & $i & " for " & $L & " / " & $T
 
   echo "  Python port: test_logical_divide_basic + test_logical_divide_strided:"
   checkDivMap(make_layout((8,)), 2)
@@ -973,16 +976,16 @@ proc chkRightInv(layout: Layout) =
   ## Check right_inverse invariant: L(R(i)) == i for all i < size(R)
   let R = right_inverse(layout)
   for i in 0 ..< size(R):
-    doAssert layout[R[i]] === i,
-      "right_inverse(" & $layout & "): L(R(" & $i & "))=" & $layout[R[i]] & " != " & $i
+    doAssert layout(R(i)) === i,
+      "right_inverse(" & $layout & "): L(R(" & $i & "))=" & $layout(R(i)) & " != " & $i
 
 proc chkLeftInv(layout: Layout) =
   ## Check left_inverse invariant (matches CuTe C++):
   ##   L(Li(L(i))) == L(i) for all i < size(L)
   let Li = left_inverse(layout)
   for i in 0 ..< size(layout):
-    doAssert layout[Li[layout[i]]] === layout[i],
-      "left_inverse(" & $layout & "): L(Li(L(" & $i & ")))=" & $layout[Li[layout[i]]] & " != " & $layout[i]
+    doAssert layout(Li(layout(i))) === layout(i),
+      "left_inverse(" & $layout & "): L(Li(L(" & $i & ")))=" & $layout(Li(layout(i))) & " != " & $layout(i)
 
 proc chkLogicalProduct[A, B: Layout](blk: A; tiler: B) =
   ## Check logical_product invariants:
@@ -1275,7 +1278,7 @@ proc runBlockedProductTests =
     let rR = raked_product(blk, til)
     doAssert size(bR) === size(rR)
     var bSet, rSet: seq[int]
-    for i in 0 ..< size(bR): bSet.add bR[i]; rSet.add rR[i]
+    for i in 0 ..< size(bR): bSet.add bR(i); rSet.add rR(i)
     doAssert bSet.len === rSet.len
     for x in bSet:
       doAssert x in rSet, "blocked/raked offset mismatch: " & $x & " not in raked"
@@ -1287,7 +1290,7 @@ proc runBlockedProductTests =
     doAssert size(R) === 16, "blocked diff-rank size: " & $size(R)
     # offset sanity: blocked covers [0, cosize)
     var offsets: seq[int]
-    for i in 0 ..< size(R): offsets.add R[i]
+    for i in 0 ..< size(R): offsets.add R(i)
     for o in offsets:
       doAssert o in 0 ..< 16, "blocked diff-rank offset out of range: " & $o
   echo "    blocked_product: 6 cases OK"
@@ -1313,7 +1316,7 @@ proc runRakedProductTests =
     let rR = raked_product(blk, til)
     doAssert size(bR) === size(rR)
     var bSet, rSet: seq[int]
-    for i in 0 ..< size(bR): bSet.add bR[i]; rSet.add rR[i]
+    for i in 0 ..< size(bR): bSet.add bR(i); rSet.add rR(i)
     doAssert bSet.len === rSet.len
     for x in bSet:
       doAssert x in rSet, "blocked/raked offset mismatch: " & $x & " not in raked"
@@ -1328,7 +1331,7 @@ proc runRakedProductTests =
     doAssert m1 === (4, 1), "raked 1d m1: " & $m1
     # Exact offset enumeration: tiler varies fastest
     var offsets: seq[int]
-    for i in 0 ..< size(R): offsets.add R[i]
+    for i in 0 ..< size(R): offsets.add R(i)
     doAssert offsets == [0, 4, 1, 5, 2, 6, 3, 7],
       "raked offsets: " & $offsets
   block:
@@ -1337,7 +1340,7 @@ proc runRakedProductTests =
     doAssert rank(R) === 2
     doAssert size(R) === 16, "raked diff-rank size: " & $size(R)
     var offsets: seq[int]
-    for i in 0 ..< size(R): offsets.add R[i]
+    for i in 0 ..< size(R): offsets.add R(i)
     for o in offsets:
       doAssert o in 0 ..< 16, "raked diff-rank offset out of range: " & $o
     # Verify exact structure from Python reference

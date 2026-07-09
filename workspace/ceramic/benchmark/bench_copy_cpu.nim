@@ -221,8 +221,8 @@ proc main() =
     var pSrc = newSeq[float32](bufN)
     var pDst = newSeq[float32](N_4d)
     for i in 0 ..< bufN: pSrc[i] = rand(1.0'f32)
-    let psv = make_view(pSrc, make_layout((6,8,4,5), (200,30,5,1)))
-    let pdv = make_view(pDst, make_layout((6,8,4,5), LayoutRight))
+    let psv = make_view(pSrc, (6,8,4,5), (200,30,5,1))
+    let pdv = make_view(pDst, (6,8,4,5), LayoutRight)
     copy_flatIndex(pdv, psv)
     let refH = xorHash(pDst)
     pDst.fill(0)
@@ -250,8 +250,8 @@ proc main() =
     var pSrc2 = newSeq[float32](bufN2)
     var pDst2 = newSeq[float32](N_4d2)
     for i in 0 ..< bufN2: pSrc2[i] = rand(1.0'f32)
-    let psv2 = make_view(pSrc2, make_layout((6,8,4,5), (200,20,5,1)))
-    let pdv2 = make_view(pDst2, make_layout((6,8,4,5), LayoutRight))
+    let psv2 = make_view(pSrc2, (6,8,4,5), (200,20,5,1))
+    let pdv2 = make_view(pDst2, (6,8,4,5), LayoutRight)
     copy_flatIndex(pdv2, psv2)
     let refH2 = xorHash(pDst2)
     pDst2.fill(0)
@@ -267,8 +267,8 @@ proc main() =
     var src3 = newSeq[float32](N3)
     var dst3 = newSeq[float32](N3)
     for i in 0 ..< N3: src3[i] = rand(1.0'f32)
-    let sv3 = make_view(src3, make_layout((40,80,160), LayoutRight))
-    let dv3 = make_view(dst3, make_layout((40,80,160), LayoutRight))
+    let sv3 = make_view(src3, (40,80,160), LayoutRight)
+    let dv3 = make_view(dst3, (40,80,160), LayoutRight)
     copy_flatIndex(dv3, sv3)
     let refH3 = xorHash(dst3)
     dst3.fill(0)
@@ -289,8 +289,8 @@ proc main() =
     var sl3 = newSeq[float32](N3l)
     var dl3 = newSeq[float32](N3l)
     for i in 0 ..< N3l: sl3[i] = rand(1.0'f32)
-    let sv3l = make_view(sl3, make_layout((40,80,160), LayoutLeft))
-    let dv3l = make_view(dl3, make_layout((40,80,160), LayoutLeft))
+    let sv3l = make_view(sl3, (40,80,160), LayoutLeft)
+    let dv3l = make_view(dl3, (40,80,160), LayoutLeft)
     copy_flatIndex(dv3l, sv3l)
     let refH3l = xorHash(dl3)
     dl3.fill(0)
@@ -310,8 +310,8 @@ proc main() =
     var ncHW_src = newSeq[float32](ncHW_N)
     var ncHW_dst = newSeq[float32](ncHW_N)
     for i in 0 ..< ncHW_N: ncHW_src[i] = rand(1.0'f32)
-    let ncHW_sv = make_view(ncHW_src, make_layout((4,8,16,32), LayoutRight))
-    let ncHW_dv = make_view(ncHW_dst, make_layout((8,4,16,32), LayoutRight))
+    let ncHW_sv = make_view(ncHW_src, (4,8,16,32), LayoutRight)
+    let ncHW_dv = make_view(ncHW_dst, (8,4,16,32), LayoutRight)
     copy_flatIndex(ncHW_dv, ncHW_sv)
     let ncHW_ref = xorHash(ncHW_dst)
     ncHW_dst.fill(0)
@@ -335,8 +335,8 @@ proc main() =
     var ncll_src = newSeq[float32](ncHW_ll_N)
     var ncll_dst = newSeq[float32](ncHW_ll_N)
     for i in 0 ..< ncHW_ll_N: ncll_src[i] = rand(1.0'f32)
-    let ncll_sv = make_view(ncll_src, make_layout((4,8,16,32), LayoutLeft))
-    let ncll_dv = make_view(ncll_dst, make_layout((8,4,16,32), LayoutLeft))
+    let ncll_sv = make_view(ncll_src, (4,8,16,32), LayoutLeft)
+    let ncll_dv = make_view(ncll_dst, (8,4,16,32), LayoutLeft)
     copy_flatIndex(ncll_dv, ncll_sv)
     let ncll_ref = xorHash(ncll_dst)
     ncll_dst.fill(0)
@@ -356,8 +356,8 @@ proc main() =
     var ll2_src = newSeq[float32](ll2_N)
     var ll2_dst = newSeq[float32](ll2_N)
     for i in 0 ..< ll2_N: ll2_src[i] = rand(1.0'f32)
-    let ll2_sv = make_view(ll2_src, make_layout((32,16,8,4), LayoutLeft))
-    let ll2_dv = make_view(ll2_dst, make_layout((32,16,4,8), LayoutLeft))
+    let ll2_sv = make_view(ll2_src, (32,16,8,4), LayoutLeft)
+    let ll2_dv = make_view(ll2_dst, (32,16,4,8), LayoutLeft)
     copy_flatIndex(ll2_dv, ll2_sv)
     let ll2_ref = xorHash(ll2_dst)
     ll2_dst.fill(0)
@@ -377,18 +377,18 @@ proc main() =
       var buf = newSeq[float32](elems)
       bench("copyMem (raw)", nb_samples, elems):
         copyMem(addr buf[0], addr src[0], elems * sizeof(float32))
-    let sv = make_view(src, make_layout((NR, NC), (1, NR)))
+    let sv = make_view(src, (NR, NC), (1, NR))
 
     var refH: uint32
     block:
       var dst = newSeq[float32](elems)
-      let dv = make_view(dst, make_layout((NC, NR), (1, NC)))
+      let dv = make_view(dst, (NC, NR), (1, NC))
       copy_flatIndex(dv, sv)
       refH = xorHash(dst)
 
     block:
       var buf = newSeq[float32](elems)
-      let dv = make_view(buf, make_layout((NC, NR), (1, NC)))
+      let dv = make_view(buf, (NC, NR), (1, NC))
       bench("crd2idx flat", nb_samples, elems):
         copy_flatIndex(dv, sv)
       doAssert xorHash(buf) == refH
@@ -414,13 +414,13 @@ proc main() =
       doAssert xorHash(buf) == refH
     block:
       var buf = newSeq[float32](elems)
-      let dv = make_view(buf, make_layout((NC, NR), (1, NC)))
+      let dv = make_view(buf, (NC, NR), (1, NC))
       bench("copyPermuted_cpu", nb_samples, elems):
         copyPermuted_cpu(dv, sv, [1, 0])
       doAssert xorHash(buf) == refH
     block:
       var buf = newSeq[float32](elems)
-      let dv = make_view(buf, make_layout((NC, NR), (1, NC)))
+      let dv = make_view(buf, (NC, NR), (1, NC))
       bench("copyPermuted_16", nb_samples, elems):
         copyPermuted_cpu(dv, sv, [1, 0], 16)
       doAssert xorHash(buf) == refH

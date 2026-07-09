@@ -27,4 +27,4 @@ nv.getPtx()
 echo "PTX: ", nv.ptx.len, " bytes"
 nv.execute("testIntGeneric", buf, ())
 doAssert buf[0] == 1
-echo "  OK"
+echo "  OK (test_nvrtc_int_generic)"

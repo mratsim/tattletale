@@ -2,7 +2,8 @@
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_factory.nim
 ##
 ## CuTe composes layouts through generic factory functions.
-## Note: for-loop bounds use 0..N to compensate for C's i<N.
+## Note: for-loop bounds use 0 .. M-1 / 0 .. N-1 (Nim inclusive range)
+##       which generates i<M / i<N in C codegen.
 import std/strformat
 import workspace/crucible/src/codegen/nvrtc
 
@@ -12,7 +13,7 @@ type
 
 proc makeLayout[M, N: static int](val: uint32): Layout[M, N] {.device.} =
   # CuTe-style factory: fill entire layout with val.
-  # Loop bound = M (not M-1) due to C codegen using i<N.
+  # Loop bound = M-1 (Nim inclusive .. generates i<M in C).
   for i in 0 .. M-1:
     for j in 0 .. N-1:
       result.data[i * N + j] = val

@@ -90,8 +90,6 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     skipIdent = true
   of gtGenericInst:
     result = "struct " & t.gName
-    if t.gArgs.len > 0:
-      result.add '_'
     for i, g in t.gArgs:
       result.add gpuTypeToShortString(g)
       if i < t.gArgs.high:
@@ -171,7 +169,13 @@ proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
     let argTyp = ctx.getType(arg.dOf)
     doAssert argTyp.kind == gtPtr
     argTyp.to
-  of gpuCall: dfl()
+  of gpuCall:
+    (block:
+      let fn = arg.cName
+      if fn in ctx.genericInsts: ctx.genericInsts[fn].pRetType
+      elif fn in ctx.allFnTab: ctx.allFnTab[fn].pRetType
+      elif fn in ctx.builtins: ctx.builtins[fn].pRetType
+      else: dfl())
   of gpuIndex:
     let arrType = ctx.getType(arg.iArr)
     if typeOfIndex:
@@ -187,6 +191,11 @@ proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
     parentTyp.getFieldType(arg.dField)
   of gpuLit: arg.lType
   of gpuBinOp: dfl()
+  of gpuBlock:
+    (if arg.isExpr and arg.statements.len > 0:
+      ctx.getType(arg.statements[^1])
+    else:
+      dfl())
   of gpuPrefix: ctx.getType(arg.pVal)
   of gpuConv: arg.convTo
   of gpuCast: arg.cTo
@@ -243,11 +252,28 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
 
 # ── genOpenCL ─────────────────────────────────────────────────────────
 
+proc genLit*(ast: GpuAst): string =
+  ## Lower a literal node for the OpenCL backend.
+  if ast.lType.kind == gtString:
+    result = '"' & ast.lValue & '"'
+  elif ast.lValue == "DEFAULT":
+    result = "{}"
+  else:
+    case ast.lType.kind
+    of gtFloat32: result = ast.lValue & "f"
+    of gtUint32: result = ast.lValue & "U"
+    of gtUint64: result = ast.lValue & "ULL"
+    of gtInt64:  result = ast.lValue & "LL"
+    of gtInt16, gtUint16, gtUint8, gtBool:
+      result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
+    else:
+      result = ast.lValue
+
 proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual OpenCL C code generator.
   let indentStr = "  ".repeat(indent)
   case ast.kind
-  of gpuVoid: return
+  of gpuDiscard: return
 
   of gpuProc:
     let attrs = collect:
@@ -305,6 +331,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
 
+
   of gpuVar:
     let attrs = if ast.vAttributes.len > 0: ast.vAttributes.join(" ") & ' '
                 else: ""
@@ -317,9 +344,9 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
-    if ast.vInit.kind != gpuVoid and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
       result &= " = " & ctx.genOpenCL(ast.vInit)
-    elif ast.vInit.kind != gpuVoid:
+    elif ast.vInit.kind != gpuDiscard:
       result.add ";\n"
       result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
                                        size(ast.vName.ident()))
@@ -336,7 +363,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "if (" & ctx.genOpenCL(ast.ifCond) & ") {\n"
     result &= ctx.genOpenCL(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
-    if ast.ifElse.kind != gpuVoid:
+    if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genOpenCL(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
@@ -404,9 +431,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ast.ident()
 
   of gpuLit:
-    if ast.lType.kind == gtString: result = '"' & ast.lValue & '"'
-    elif ast.lValue == "DEFAULT": result = "{}"
-    else: result = ast.lValue
+      result = genLit(ast)
 
   of gpuArrayLit:
     result = "{"
@@ -424,18 +449,29 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuTypeDef:
     result = gpuTypeToString(ast.tTyp) & " {\n"
-    for el in ast.tFields:
-      result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+    if ast.tFields.len == 0:
+      # OpenCL C requires at least one field in a struct.
+      result.add "  char _;\n"
+    else:
+      for el in ast.tFields:
+        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
     result.add '}'
 
   of gpuObjConstr:
-    result = "{"
+    # C99 compound literal: (TypeName){val1, val2, ...}
+    # Using compound literal syntax ensures the result is a valid expression
+    # (bare braced-init-lists cannot be used with member access).
+    # OpenCL C is C99-based, so we use the C99 `(type){init}` syntax,
+    # NOT C++ functional-style cast `Type{init}`.
+    result = "(" & gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "){"
     for i, el in ast.ocFields:
-      result.add ctx.genOpenCL(el.value)
+      if el.value.kind == gpuDiscard:
+        result.add "{}"
+      else:
+        result.add ctx.genOpenCL(el.value)
       if i < ast.ocFields.len - 1:
         result.add ", "
-    result.add '}'
-
+    result.add "}"
   of gpuInlineAsm:
     result = indentStr & "asm(" & ast.stmt.strip & ");"
 

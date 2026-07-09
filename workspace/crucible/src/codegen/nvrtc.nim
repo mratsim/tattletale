@@ -92,7 +92,7 @@ proc log*(nvrtc: var NVRTC) =
   nvrtc.log = $log # usually empty if no issues found by the compiler
 
 proc compile*(nvrtc: var NVRTC) =
-  # Compile the program with fmad disabled.
+  # Compile the program
   # Note: Can specify GPU target architecture explicitly with '-arch' flag.
   var options = @[
     cstring "--gpu-architecture=sm_120", # Blackwell (sm_120)

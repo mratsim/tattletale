@@ -5,57 +5,27 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## CuTe-compatible Layout construction: make_layout.
+## Layout transforms and selectors: mode, filter_zeros, padRight/Left,
+## mapLeavesWith, zipModes, groupModes, upcast/downcast, etc.
+##
+## Re-exports `layouts_datatypes` (Layout type, predicates) and
+## `layout_constructors` (make_layout, col_major_strides, LayoutCT).
 ##
 ## Reference:
 ##   - CuTe C++: layout.hpp
-##   - POC: poc_coalesce.nim
-##
-## Code style:
-##   - make_int_tuple_rec (in int_tuples.nim) handles const->Int[N] wrapping
 
 import std/macros
-import std/typetraits
-import ./macros/static_for
 import ./int_tuples
-import ./kernel_indexing_gpu
-import ./layout_coords
-export kernel_indexing_gpu
-export layout_coords
+import ./macros/static_for
+import ./layouts_datatypes
+import ./layout_constructors
+
+export layouts_datatypes
+export layout_constructors
 
 # ═══════════════════════════════════════════════════════════════
-#  Layout[Sh, St] — typed shape + stride pair
+#  mode — extract mode as rank-1 Layout
 # ═══════════════════════════════════════════════════════════════
-
-type Layout*[Sh, St] = object
-  ## A compile-time-typed layout: `Layout[Shape, Stride]`.
-  ## Both Sh and St can be int, Int[N], or tuples thereof.
-  shape*: Sh
-  stride*: St
-
-func `===`*(a: Layout; b: tuple): bool =
-  ## Deep comparison against a (shape, stride) tuple.
-  ## This handles static Int checks against int checks
-  ## and also size-1 tuples against int/Int
-  (a.shape === b[0]) and (a.stride === b[1])
-
-func `===`*[A, B: Layout](a: A; b: B): bool =
-  ## Deep comparison between two Layouts.
-  a.shape === b.shape and a.stride === b.stride
-
-func `$`*(layout: Layout): string =
-  ## CuTe-style representation: "(shape):(stride)".
-  ##   ($make_layout(4,1))  →  "(4):(1)"
-  ##   ($make_layout((4,8),(1,4)))  →  "((4,8)):((1,4))"
-  $layout.shape & ":" & $layout.stride
-
-template rank*(layout: Layout): static int =
-  ## Number of modes in layout (compile-time constant).
-  rank(layout.shape)
-
-template rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
-  ## Number of modes in a layout type (compile-time constant).
-  rank(Sh)
 
 template mode*(layout: Layout; idx: static int): auto =
   ## Extract mode `idx` as a standalone rank-1 Layout.
@@ -66,10 +36,9 @@ template mode*(layout: Layout; idx: static int): auto =
     static: doAssert idx == 0
     layout
 
-func col_major_strides*(shape: IntOrIntTuple): auto =
-  ## Canonical column-major strides: prefix_product(shape).
-  ## For shape (2,4): strides (1,4).
-  prefix_product(shape)
+# ═══════════════════════════════════════════════════════════════
+#  isCompact — check if strides match canonical col-major ordering
+# ═══════════════════════════════════════════════════════════════
 
 func isCompact*(layout: Layout): bool =
   ## True when strides match canonical column-major ordering.
@@ -80,212 +49,6 @@ func isCompact*(layout: static Layout): static bool =
   ## True when strides match canonical column-major ordering.
   ## Note: does NOT coalesce first — size-1 modes may cause false negatives.
   layout === (layout.shape, col_major_strides(layout.shape))
-
-func size*(layout: Layout): auto =
-  ## Number of logical elements: fold over all shape leaves.
-  ## Returns Int[N] for all-static shapes, int otherwise.
-  fold(flatten(layout.shape), Int[1](), acc * it)
-
-# ═══════════════════════════════════════════════════════════════
-#  cosize — max offset + 1 of a layout
-# ═══════════════════════════════════════════════════════════════
-#
-#  CuTe: cosize(L) = size(coshape(L))
-#  coshape[i] = (sh[i]-1)*|st[i]| + 1, then size(product).
-#  For a compact layout: cosize = size = product(shape).
-#  For a gapped layout: cosize > size.
-#
-#  Returns Int[N] when all-static, int otherwise.
-# ═══════════════════════════════════════════════════════════════
-
-#  ⚠ Known discrepancies between implementations of cosize on
-#  COMPOSED layouts (make_layout(l1, l2)):
-#
-#  1. CuTe C++ — uses hierarchical (nested) cosize. For a composed
-#     layout Layout<A,B>, cosize ≈ cosize(A) * cosize(B) effectively,
-#     which is incorrect when the outer layout has non-trivial stride.
-#
-#  2. Meta tensor-layouts (Python) — enumerates ALL offsets to compute
-#     max(L(i)) + 1.  This is O(size(L)) but is the only correct
-#     definition for composed layouts.  CuTe's cosize(ComposedLayout)
-#     bug is explicitly documented in the Python source:
-#       "CuTe C++'s cosize(ComposedLayout) = cosize(layout_b()) is
-#        wrong (it ignores the outer and the offset)."
-#
-#  3. Our Nim (flat affine) — uses the closed-form
-#     1 + sum((sh_i - 1) * |st_i|) for pure affine layouts, which
-#     matches Python's affine fast-path and CuTe's rank-1 cosize.
-#     We DO NOT support ComposedLayout / Swizzle — our layouts are
-#     always flat/affine, so the sum formula is correct.
-#
-#  Example cosize values for composed layouts:
-#
-#   Layout                    Affine sum   Cute hier   Python enum (correct)
-#   ───────────────────────   ──────────   ──────────   ─────────────────────
-#   make_layout(4:1,          (4-1)*1 +    cosize(4:1)  enumerate:
-#               (2,2):(1,2))   (2-1)*1 +    ×             0+0=0, 2+0=2,
-#                              (2-1)*2 +    cosize(       4+0=4, 6+0=6,
-#                              1 = 6        (2,2):(1,2)   0+1=1, 2+1=3,
-#                                          = 4 * 4 = 16   4+1=5, 6+1=7,
-#                                                         0+2=2, ...
-#                                                         → max=9, cosize=10
-#
-#   The sum formula (ours and Python's affine) gives cosize=6,
-#   CuTe hierarchical product gives 16, Python enumeration gives 10.
-#   All three disagree.  CuTe's product is WRONG per the Python docs;
-#   enumeration is the only universally correct method.
-#
-#  For our pure affine layouts the sum formula IS correct —
-#  we never create ComposedLayout.  The complement post-condition
-#  check (1) from CuTe test_complement cannot be replicated without
-#  either hierarchical product (wrong) or enumeration (expensive),
-#  so we only check "doesn't crash" for complement.
-# ═══════════════════════════════════════════════════════════════
-
-func cosize*(layout: Layout): auto =
-  ## Compute cosize = sum_i ((sh_i - 1) * |st_i|) + 1.
-  ## CuTe: cosize(L) = size(coshape(L)).
-  macro cosizeFlat(sh, st: typed): untyped =
-    let shT = sh.getTypeInst()
-    let one = IntCT(1)
-    if shT.kind != nnkTupleConstr:
-      # Scalar: (sh-1)*|st| + 1
-      result = newCall(bindSym"+",
-        newCall(bindSym"*",
-          newCall(bindSym"-", sh, one),
-          newCall(bindSym"abs", st)),
-        one)
-    else:
-      # Flat tuple: sum over elements
-      result = one
-      for i in 0 ..< shT.len:
-        let s = newTree(nnkBracketExpr, sh, newLit(i))
-        let d = newTree(nnkBracketExpr, st, newLit(i))
-        let term = newCall(bindSym"*",
-          newCall(bindSym"-", s, one),
-          newCall(bindSym"abs", d))
-        result = newCall(bindSym"+", result, term)
-  cosizeFlat(flatten(layout.shape), flatten(layout.stride))
-
-# ═══════════════════════════════════════════════════════════════
-#  Public templates
-# ═══════════════════════════════════════════════════════════════
-
-type StrideOrder* = enum
-  LayoutLeft
-    ## Leftmost mode is contiguous (stride 1).
-    ##
-    ## `LayoutLeft` means the **first** (index 0) mode of the shape tuple
-    ## has stride 1. This is CuTe's **column-major** convention when
-    ## the first mode represents rows and the second columns.
-    ##
-    ## The name refers to which end of the shape tuple gets stride 1:
-    ## the "left" (first / index 0) element. Equivalent to `prefix_product`.
-    ##
-    ## Example:
-    ##   make_layout((M, N), LayoutLeft) -> (M, N) : (1, M)
-    ##   make_layout((3, 4, 5), LayoutLeft) -> (3, 4, 5) : (1, 3, 12)
-
-  LayoutRight
-    ## Rightmost mode is contiguous (stride 1).
-    ##
-    ## `LayoutRight` means the **last** (highest-index) mode of the shape
-    ## tuple has stride 1. This is CuTe's **row-major** convention when
-    ## the first mode represents rows and the second columns.
-    ##
-    ## The name refers to which end of the shape tuple gets stride 1:
-    ## the "right" (last / highest-index) element. Equivalent to `suffix_product`.
-    ##
-    ## Example:
-    ##   make_layout((M, N), LayoutRight) -> (M, N) : (N, 1)
-    ##   make_layout((3, 4, 5), LayoutRight) -> (3, 4, 5) : (20, 5, 1)
-
-template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
-  ## Create a compact Layout from a shape, computing strides automatically.
-  ## Encode compile-time integers into a Int[V] type for constant folding
-  block:
-    evalOnceAs(convShape, makeIntTuple(shapeArg))
-    when order == LayoutLeft:
-      evalOnceAs(strideVal, prefix_product(convShape))
-      Layout[typeof(convShape), typeof(strideVal)](
-        shape: convShape,
-        stride: strideVal
-      )
-    else:
-      evalOnceAs(strideVal, suffix_product(convShape))
-      Layout[typeof(convShape), typeof(strideVal)](
-        shape: convShape,
-        stride: strideVal
-      )
-
-template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): auto =
-  ## Make a Layout from explicit shape and stride.
-  ## Encode compile-time integers into a Int[V] type for constant folding
-  ## NOTE: inline makeIntTuple to avoid C++ temp-name collision
-  Layout[typeof(makeIntTuple(shapeArg)), typeof(makeIntTuple(strideArg))](
-    shape: makeIntTuple(shapeArg),
-    stride: makeIntTuple(strideArg)
-  )
-
-# ═══════════════════════════════════════════════════════════════
-#  crd2idx / layout() / idx2crd — via kernel_indexing_gpu
-# ═══════════════════════════════════════════════════════════════
-#
-#  The raw 3-arg crd2idx overloads live in kernel_indexing_gpu.nim.
-#  These Layout-consuming wrappers delegate to them.
-
-template crd2idx*(layout: Layout; coord: IntOrIntTuple): int =
-  ## Logical-to-memory offset for a coordinate on a Layout.
-  ##
-  ## `coord` can be:
-  ##   • an `int`   — decomposed column-major across all modes
-  ##   • a `tuple`  — inner product `coord·stride` per mode
-  ##   • a static `Int[V]` — same, compile-time constant
-  ##
-  ## External code must use this (or `layout(coord)`) rather than
-  ## calling the raw `crd2idx(coord, shape, stride)` directly,
-  ## which is module-private to layouts.nim.
-  crd2idx(coord, layout.shape, layout.stride)
-
-template `()`*[Sh, St](layout: Layout[Sh, St]; idx: IntOrIntTuple): int =
-  ## Parens-syntax flat indexing: `layout(coord)` ≡ `crd2idx(layout, coord)`.
-  crd2idx(layout, idx)
-
-macro `[]`*(layout: Layout; args: varargs[IntOrIntTuple]): untyped =
-  ## Multi-index via varargs bracket: `layout[i, j]` or `layout[(ri, rj), k]`.
-  var coord = nnkPar.newTree()
-  args.copyChildrenTo(coord)
-  result = newCall(bindSym"()", layout, coord)
-
-macro idx2crd*(layout: Layout; idx: int or Int): untyped =
-  ## Convert linear index to coordinate using a Layout.
-  ##
-  ##   Cases for `(idx, shape, stride)`:
-  ##     shape == 1, stride == 0   →   0  (broadcast — skip division)
-  ##     shape == 1, stride != 0   →   0  (size-1 — result always 0)
-  ##     shape != 1, stride == 0   ─── invalid layout (unreachable)
-  ##     shape != 1, stride != 0   →   (idx div stride) mod shape
-  ##
-  ## The guard on `shape == 1` matches CuTe's `is_constant<1, Shape>`
-  ## check and handles both broadcast modes and trivial dimensions,
-  ## avoiding potential division-by-zero on stride-0.
-  let lTyp = layout.getTypeInst()
-  let shT = lTyp[1]
-  let sh = newTree(nnkDotExpr, layout, ident"shape")
-  let st = newTree(nnkDotExpr, layout, ident"stride")
-  if shT.kind != nnkTupleConstr:
-    # Scalar shape: `if shape == 1: 0 else: idx div stride`
-    result = quote do:
-      (if `sh` == 1: 0 else: `idx` div `st`)
-  else:
-    # Tuple shape: each mode gets its own guard
-    var parts: seq[NimNode] = @[]
-    for i in 0 ..< shT.len:
-      let s = newCall(bindSym"[]", st, newLit(i))
-      let shI = newCall(bindSym"[]", sh, newLit(i))
-      parts.add quote do:
-        (if `shI` == 1: 0 else: (`idx` div `s`) mod `shI`)
-    result = nnkPar.newTree(parts)
 
 # ═══════════════════════════════════════════════════════════════
 #  filter_zeros — replace stride-0 shapes with Int[1]
@@ -318,134 +81,9 @@ template filter_zeros*(layout: Layout): auto =
   make_layout(sh, st)
 
 # ═══════════════════════════════════════════════════════════════
-#  Shape-structure predicates (operate on IntOrIntTuple)
-# ═══════════════════════════════════════════════════════════════
-#
-#  Reference:
-#    - CuTe C++: layout_algebra.hpp (compatible, congruent)
-#    - Meta tensor-layouts: core.py type predicates
-# ═══════════════════════════════════════════════════════════════
-
-func congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
-  ## True if `a` and `b` have the same rank and nesting structure.
-  a is typeof(b)
-
-func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
-  ## True if A's nesting is contained in B's structure.
-  ## Scalar matches anything; tuple must have at least as much structure.
-  when a is int or a is Int:
-    true
-  elif b is int or b is Int:
-    false
-  else:
-    when rank(a) != rank(b):
-      false
-    else:
-      block:
-        var ok = true
-        staticFor i, 0, rank(a):
-          if not weakly_congruent(a[i], b[i]):
-            ok = false
-        ok
-
-func can_group_a_into_b_impl[A, B](a: A; aStartIdx: int; b: B): int =
-  ## Find consecutive modes in `a` from `aStartIdx` whose product equals `b`.
-  static: doAssert a isnot int, "scalar a should be handled by caller"
-  let bVal = fold(b, 1, acc * it)
-  var acc = 1
-  var aIdx = aStartIdx
-  block accLoop:
-    staticFor i, 0, rank(a):
-      if i >= aStartIdx:
-        if acc < bVal:
-          acc *= fold(a[i], 1, acc * it)
-          aIdx = i + 1
-        else:
-          aIdx = i
-          break accLoop
-  if acc == bVal: aIdx else: -1
-
-func can_group_a_into_b*[A, B: IntOrIntTuple](a: A; b: B): bool =
-  ## Check if shape `a` (flat) can be grouped into shape `b` (nested).
-  static: doAssert a isnot int, "scalar a should be handled by caller"
-  when b is int or b is Int:
-    can_group_a_into_b_impl(a, 0, b) != -1
-  else:
-    var aIdx = 0
-    staticFor j, 0, rank(b):
-      aIdx = can_group_a_into_b_impl(a, aIdx, b[j])
-      if aIdx == -1:
-        return false
-    aIdx == rank(a)
-
-func compatible*[A, B: IntOrIntTuple](a: A; b: B): bool =
-  ## True if `a` is structurally compatible with `b`: same total size, and
-  ## a's nesting can address into b's structure.
-  ## Supports grouping: (2,2,3) is compatible with (4,3).
-  let aSize = fold(a, 1, acc * it)
-  let bSize = fold(b, 1, acc * it)
-  if aSize != bSize:
-    return false
-  when a is int or a is Int:
-    true
-  elif b is int or b is Int:
-    false
-  elif rank(a) == rank(b):
-    block:
-      var ok = true
-      staticFor i, 0, rank(a):
-        if not compatible(a[i], b[i]):
-          ok = false
-      ok
-  else:
-    can_group_a_into_b(a, b)
-
-# ═══════════════════════════════════════════════════════════════
-#  LayoutCT — compile-time Layout accumulator for macros
-# ═══════════════════════════════════════════════════════════════
-
-type LayoutCT* = object
-  shape*, stride*: seq[NimNode]
-
-proc append*(ct: var LayoutCT; sh, st: NimNode) {.compileTime.} =
-  ct.shape.add sh
-  ct.stride.add st
-
-func emit*(ct: LayoutCT): NimNode {.compileTime.} =
-  ## Build make_layout from accumulated modes (no coalesce).
-  ## This auto-constant-folds expressions that can be computed at compile-time.
-  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
-  # Multi-item: construct a tuple like nnkTupleConstr.
-  var outSh = newNimNode(nnkPar)
-  var outSt = newNimNode(nnkPar)
-  for i in 0 ..< ct.shape.len:
-    outSh.add ct.shape[i]; outSt.add ct.stride[i]
-  if ct.shape.len == 0:
-    result = newCall(bindSym"make_layout", newLit(1), newLit(0))
-  else:
-    result = newCall(bindSym"make_layout", outSh, outSt)
-
-
-# ═══════════════════════════════════════════════════════════════
-#  getIndicesSortedByStride — sort permutation by stride
-# ═══════════════════════════════════════════════════════════════
-
-proc getIndicesSortedByStride*(strides: seq[int]): seq[int] {.compileTime.} =
-  ## Return indices sorted by stride ascending.
-  ## Data stays in original arrays — just iterate this permutation.
-  result = newSeq[int](strides.len)
-  for i in 0 ..< result.len:
-    result[i] = i
-  for i in 0 ..< result.len:
-    for j in i + 1 ..< result.len:
-      if strides[result[i]] > strides[result[j]]:
-        swap result[i], result[j]
-
-
-# ═══════════════════════════════════════════════════════════════
 #  padRight — extend layout rank by padding with identity modes
 # ═══════════════════════════════════════════════════════════════
-#
+
 #  CuTe: append<R>(layout) pads to rank R with (1, 0) modes.
 #  Used by blocked_product / raked_product to equalize ranks.
 #  Pads on the RIGHT (appends identity modes at the end).
@@ -477,11 +115,10 @@ macro padRight*(layout: Layout; rank: static int): untyped =
   result = ct.emit()
 
 #  padLeft — extend layout rank by prepending identity modes
-# ═══════════════════════════════════════════════════════════════
-##
-##  CuTe: prepend<R>(layout) pads to rank R with (1, 0) modes.
-##  Used by gemm.hpp to lift 2D operands to 3D.
-##  Pads on the LEFT (prepends identity modes at the front).
+
+#  CuTe: prepend<R>(layout) pads to rank R with (1, 0) modes.
+#  Used by gemm.hpp to lift 2D operands to 3D.
+#  Pads on the LEFT (prepends identity modes at the front).
 
 macro padLeft*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by prepending identity modes (1, 0).
@@ -748,14 +385,9 @@ macro takeModes*(layout: Layout; B, E: static int): untyped =
                nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(i)))
   result = ct.emit()
 
+# ═══════════════════════════════════════════════════════════════
 #  selectModes — extract specific mode indices into a new Layout
 # ═══════════════════════════════════════════════════════════════
-##
-## CuTe: select<Is...>(layout) — layout.hpp:521
-##
-## Examples:
-##   selectModes(make_layout((2, 3, 5, 7)), 0, 3)
-##   # → (2, 7):(1, 30)
 
 macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
   ## Extract specific mode indices into a new Layout.
@@ -820,7 +452,7 @@ macro mapModesWith*[L: Layout](arg: L; body: untyped): untyped =
                newTree(nnkDotExpr, resName, ident"stride"))
   result.add ct.emit()
 
-macro zipModesWith*[A: Layout, B: Layout](a: A; b: B; body: untyped): untyped =
+macro zipModesWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
   ## Zip modes of two layouts pairwise via body, appending leftovers from the longer one.
   ##
   ## Within body, `it_a` is the current mode of `a` and `it_b` the current mode of `b`.
@@ -883,64 +515,3 @@ macro zipModesWith*[A: Layout, B: Layout](a: A; b: B; body: untyped): untyped =
       ct.append(newTree(nnkDotExpr, mName, ident"shape"),
                  newTree(nnkDotExpr, mName, ident"stride"))
   result.add ct.emit()
-
-# ═══════════════════════════════════════════════════════════════
-## slice/dice on Layout: apply `int_tuples.slice`/`int_tuples.dice` to
-## both shape and stride in parallel, producing a sub-Layout.
-##
-## Reference: CuTe C++ `layout.hpp` — `slice` / `dice`
-##
-## The resulting Layout has the same nesting structure as the filtered
-## shape/stride: modes paired with `_` in the coord are kept for `slice`,
-## modes paired with integers are kept for `dice`.
-##
-## runnableExamples:
-##   let L = make_layout((3, 4), (1, 3))
-##   let s = slice((_, 0), L)           # keep rows, drop cols
-##   doAssert $s == "(3):(1)"
-
-template slice*(coord: CoordType; layout: Layout): untyped =
-  ## Walk coord and the layout's shape+stride in parallel.
-  ## Modes paired with `_` stay in the result; modes paired with an int are dropped.
-  ## Returns a sub-Layout containing only the kept modes.
-  ##
-  ## runnableExamples:
-  ##   let L = make_layout((3, 4), (1, 3))
-  ##   slice((_, 0), L)    → keep rows, drop cols → (3):(1)
-  ##   slice((1, _), L)    → drop rows, keep cols  → (4):(3)
-  make_layout(slice(coord, layout.shape), slice(coord, layout.stride))
-
-template dice*(coord: CoordType; layout: Layout): untyped =
-  ## Walk coord and the layout's shape+stride in parallel.
-  ## Modes paired with an int stay in the result; modes paired with `_` are dropped.
-  ## Returns a sub-Layout containing only the kept modes.
-  ##
-  ## runnableExamples:
-  ##   let L = make_layout((3, 4), (1, 3))
-  ##   dice((_, 0), L)    → drop rows, keep cols → (4):(3)
-  ##   dice((1, _), L)    → keep rows, drop cols  → (3):(1)
-  make_layout(dice(coord, layout.shape), dice(coord, layout.stride))
-
-template slice_and_offset*(coord: CoordType; layout: Layout): untyped =
-  ## Like `slice`, but also compute the memory offset from the int-paired
-  ## dimensions.  Returns `(sub_layout, offset)`.
-  ##
-  ## The offset is `sum(int_coord[i] * stride[i])` for each dropped mode —
-  ## i.e. how far the data pointer must advance past the fixed coordinates.
-  ##
-  ## runnableExamples:
-  ##   let L = make_layout((3, 4), (1, 3))
-  ##   # Column 0 → offset 0, column 1 → offset 3
-  ##   let (sub0, off0) = slice_and_offset((_, 0), L)
-  ##   doAssert $sub0 == "(3,):(1,)" and off0 == 0
-  ##   let (sub1, off1) = slice_and_offset((_, 1), L)
-  ##   doAssert $sub1 == "(3,):(1,)" and off1 == 3
-  ##   # Row 0 → offset 0, row 1 → offset 1
-  ##   let (sub2, off2) = slice_and_offset((0, _), L)
-  ##   doAssert $sub2 == "(4,):(3,)" and off2 == 0
-  ##   let (sub3, off3) = slice_and_offset((1, _), L)
-  ##   doAssert $sub3 == "(4,):(3,)" and off3 == 1
-
-  let sub = slice(coord, layout)
-  let off = crd2idx(coord, layout.shape, layout.stride)
-  (sub, off)

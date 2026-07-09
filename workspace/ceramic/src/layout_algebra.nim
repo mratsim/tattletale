@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## CuTe-compatible layout algebra: coalesce, filter_zeros, filter, sort.
+## Layout algebra: coalesce, filter_zeros, filter, sort.
 
 import std/macros
 import std/sequtils
@@ -13,6 +13,21 @@ import std/algorithm
 import std/typetraits
 import ./int_tuples
 import ./layouts
+
+# ═══════════════════════════════════════════════════════════════
+#  getIndicesSortedByStride — sort permutation by stride
+# ═══════════════════════════════════════════════════════════════
+
+proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
+  ## Return indices sorted by stride ascending.
+  ## Data stays in original arrays — just iterate this permutation.
+  result = newSeq[int](strides.len)
+  for i in 0 ..< result.len:
+    result[i] = i
+  for i in 0 ..< result.len:
+    for j in i + 1 ..< result.len:
+      if strides[result[i]] > strides[result[j]]:
+        swap result[i], result[j]
 
 #  coalesce — merge contiguous modes where stride matches
 # ═══════════════════════════════════════════════════════════════
@@ -280,7 +295,7 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
   complementImpl(flatten(f.shape), flatten(f.stride), cosizeBound)
 
 # ═══════════════════════════════════════════════════════════════
-#  compose — CuTe-compatible layout composition
+#  compose — layout composition
 # ═══════════════════════════════════════════════════════════════
 ##
 ## `compose(A, B)` produces a layout `R` such that `R(i) = A(B(i))`
@@ -527,7 +542,36 @@ template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
         zip2_by(lyt.shape, tlr),
         zip2_by(lyt.stride, tlr))
 
-# ── zipped_divide / tiled_divide / flat_divide ──
+# ═══════════════════════════════════════════════════════════════
+#  zipped_divide_builder — one-pass build for tuple tiler
+# ═══════════════════════════════════════════════════════════════
+
+template zipped_divide_builder*(layout, tiler: typed; LayoutRank: static int; idx: static;
+                                 tileSh, tileSt, restSh, restSt: typed): auto =
+  ## Recursive build helper for zipped_divide(tuple tiler).
+  ## One-pass: builds (tile, rest) groups directly without intermediate
+  ## logical_divide + tile_unzip.
+  ## Avoids Nim tuple hash collision
+  ## (see https://github.com/nim-lang/Nim/issues/25883#issuecomment-4658908569).
+  when idx >= LayoutRank:
+    make_layout(
+      (tileSh, restSh),
+      (tileSt, restSt)
+    )
+  else:
+    when idx < rank(tiler):
+      evalOnceAs d, logical_divide(mode(layout, idx), tiler[idx])
+      zipped_divide_builder(layout, tiler, LayoutRank, idx + 1,
+        concat(tileSh, (mode(d, 0).shape,)),
+        concat(tileSt, (mode(d, 0).stride,)),
+        concat(restSh, (mode(d, 1).shape,)),
+        concat(restSt, (mode(d, 1).stride,)))
+    else:
+      evalOnceAs m, mode(layout, idx)
+      zipped_divide_builder(layout, tiler, LayoutRank, idx + 1,
+        tileSh, tileSt,
+        concat(restSh, (m.shape,)),
+        concat(restSt, (m.stride,)))
 
 template zipped_divide*(layout: Layout; tiler: auto): auto =
   ## Divide layout by tiler and zip tile/rest modes into rank-2 result.
@@ -540,8 +584,21 @@ template zipped_divide*(layout: Layout; tiler: auto): auto =
     evalOnceAs(tlr, tiler)
     when tiler is Layout:
       logical_divide(lyt, tlr)
+    elif tiler is int or tiler is Int:
+      # Scalar tiler
+      logical_divide(lyt, tlr)
     else:
-      tile_unzip(logical_divide(lyt, tlr), tlr)
+      # Tuple tiler — one-pass builder avoids intermediate concat types
+      # that trigger Nim C++ backend struct hash collision
+      # (see https://github.com/nim-lang/Nim/issues/25883#issuecomment-4658908569)
+      block:
+        evalOnceAs lyt, layout
+        evalOnceAs tlr, tiler
+        const R = static(rank(lyt))
+        const Tr = static(rank(tlr))
+        static: doAssert Tr <= R,
+          "zipped_divide: tiler has more modes (" & $Tr & ") than layout (" & $R & ")"
+        zipped_divide_builder(lyt, tlr, R, 0, (), (), (), ())
 
 template tiled_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack the second mode into individual modes.

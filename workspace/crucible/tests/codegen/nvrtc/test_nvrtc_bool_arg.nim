@@ -45,4 +45,4 @@ nv.execute("scale", r, (a, 3'i32, true))
 echo "  scale(3, true): ", r
 for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3 - 1)
 
-echo "  OK"
+echo "  OK (test_nvrtc_bool_arg)"

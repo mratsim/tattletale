@@ -85,4 +85,4 @@ doAssert bufI32[0] == 1
 doAssert bufI32[1] == -10
 doAssert bufI32[2] == 600
 
-echo "  OK"
+echo "  OK (test_nvrtc_generic_inst)"
