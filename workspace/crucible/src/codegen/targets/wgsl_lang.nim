@@ -11,6 +11,7 @@ import std / [macros, strformat, strutils, sugar, sequtils, tables, options]
 import ../ir/gpu_types
 
 import ./lang_utils
+import ../passes/passes_preprocessing as pp
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -154,8 +155,8 @@ proc patchSymbol(n: GpuAst): GpuAst =
   ## Applies patches needed for WGSL support. E.g. `bool` cannot be a storage variable.
   doAssert n.kind == gpuIdent, "Must be an ident, is: " & $n.kind
   result = n
-  if n.symbolKind == gsGlobalKernelParam:
-    result.iTyp = patchType(result.iTyp)
+  if n.symbol != nil and n.symbol.symKind == gsGlobalKernelParam:
+    result.symbol.typ = patchType(result.symbol.typ)
 
 proc shortAddrSpace(addrSpace: AddressSpace): string =
   ## Shortens the address space to a single letter
@@ -169,7 +170,8 @@ proc shortAddrSpace(addrSpace: AddressSpace): string =
 proc determineSymKind(arg: GpuAst): GpuSymbolKind =
   ## Tries to determine the symbol kind of the argument.
   case arg.kind
-  of gpuIdent: arg.symbolKind
+  of gpuIdent:
+    if arg.symbol != nil: arg.symbol.symKind else: gsNone
   of gpuAddr: arg.aOf.determineSymKind()
   of gpuDeref: arg.dOf.determineSymKind()
   of gpuCall: gsLocal ## return value will be in local function scope?
@@ -190,7 +192,7 @@ proc determineMutability(arg: GpuAst): bool =
   ## it is a `let` or `var` symbol)
   case arg.kind # XXX: Consider to extend notion of mutable to `var` variables in Nim? I.e. assign `mutable`
                 # if we construct a `var` instead of a let?
-  of gpuIdent: (not arg.iTyp.isNil) and arg.iTyp.kind == gtPtr
+  of gpuIdent: (not arg.symbol.isNil) and arg.symbol.typ != nil and arg.symbol.typ.kind == gtPtr
   of gpuAddr: true # If we can take an address from it, it is mutable. E.g. `var t = BigInt(); t.add(r, a)` contains `addr t` in `add` call
   of gpuDeref: true # Similar to `addr`, if we can deref it must be mutable? Or it's explicitly _not_ mutable? arg.dOf.determineMutability() ## XXX: Or just mutable because it can be derefed?
   of gpuCall: false # can't return a mutable value from a function in WGSL
@@ -254,8 +256,8 @@ proc getGenericArguments(args: seq[GpuAst], params: seq[GpuParam], callerParams:
     else:
       let argIdent = arg.determineIdent()
       var lArg: GpuAst = arg
-      if argIdent.kind != gpuDiscard and argIdent.iSym in callerParams: # if it exists, we look up information based on _that_ argument instead
-        lArg = callerParams[argIdent.iSym].ident
+      if argIdent.kind != gpuDiscard and argIdent.symbol.iSym in callerParams: # if it exists, we look up information based on _that_ argument instead
+        lArg = callerParams[argIdent.symbol.iSym].ident
 
       let addrSpace = determineSymKind(lArg).toAddressSpace()
       let mutable = determineMutability(lArg)
@@ -299,8 +301,8 @@ proc genGenericName(n: GpuAst, params: seq[GpuParam], callerParams: Table[string
     else:
       let argIdent = arg.determineIdent()
       var lArg: GpuAst = arg
-      if argIdent.kind != gpuDiscard and argIdent.iSym in callerParams: # if it exists, we look up information based on _that_ argument instead
-        lArg = callerParams[argIdent.iSym].ident
+      if argIdent.kind != gpuDiscard and argIdent.symbol.iSym in callerParams: # if it exists, we look up information based on _that_ argument instead
+        lArg = callerParams[argIdent.symbol.iSym].ident
       let addrSpace = lArg.determineSymKind().toAddressSpace()
       let mutable = lArg.determineMutability()
       let m = if mutable: "mut" else: ""
@@ -319,25 +321,26 @@ proc makeFnGeneric(fn: GpuAst, gi: GenericInst): GpuAst =
   ## to also update the information for every occurrence of the parameters in
   ## its function body.
   result = fn
-  result.pName = GpuAst(kind: gpuIdent, iName: gi.name, symbolKind: gsProc)
+  let pnSym = newSymbol(gi.name, symKind = gsProc)
+  result.pName = GpuAst(kind: gpuIdent, symbol: pnSym)
   for i, p in mpairs(result.pParams):
     let arg = gi.args[i]
     # update the symbol kind and address space!
-    p.ident.symbolKind = arg.addrSpace.fromAddressSpace()
+    p.ident.symbol.symKind = arg.addrSpace.fromAddressSpace()
     p.addressSpace = arg.addrSpace
-    if p.ident.iTyp.kind == gtPtr:
-      p.ident.iTyp.mutable = arg.mutable
+    if p.ident.symbol.typ.kind == gtPtr:
+      p.ident.symbol.typ.mutable = arg.mutable
     # now update the type to potentially replace e.g. bool -> i32
     p.ident = patchSymbol(p.ident)
     # overwrite GpuParam `typ` field
-    p.typ = p.ident.iTyp
+    p.typ = p.ident.symbol.typ
 
   proc getIf(params: seq[GpuParam], n: GpuAst): Option[GpuParam] =
     ## Returns the parameter if `n` is a `gpuIdent` and its `iSym` is one of the
     ## parameter's symbol
     doAssert n.kind == gpuIdent, "Must be an ident, but is: " & $n.kind
     for p in params:
-      if p.ident.iSym == n.iSym: return some(p)
+      if p.ident.symbol.iSym == n.symbol.iSym: return some(p)
 
   proc updateSyms(n: var GpuAst, params: seq[GpuParam]) =
     ## Now update all occurences of the symbols corresponding to the parameters
@@ -349,8 +352,8 @@ proc makeFnGeneric(fn: GpuAst, gi: GenericInst): GpuAst =
       let pOpt = params.getIf(n)
       if pOpt.isSome:
         let p = pOpt.get
-        n.symbolKind = p.ident.symbolKind
-        n.iTyp = p.typ
+        n.symbol.symKind = p.ident.symbol.symKind
+        n.symbol.typ = p.typ
     else:
       for ch in mitems(n):
         updateSyms(ch, params)
@@ -383,9 +386,7 @@ proc scanGenerics(ctx: var GpuContext, n: GpuAst, callerParams: Table[string, Gp
       if anyPointers:
         # replace the call node by the new name
         n.cName = GpuAst(kind: gpuIdent,
-                         iName: gi.name,
-                         symbolKind: gsProc,
-                         iSym: gi.name) # for generics the `iSym` == `iName`. Already unique
+                         symbol: newSymbol(gi.name, symKind = gsProc, iSym = gi.name)) # for generics the iSym == name. Already unique
         # now scan generics of the function we call, recursing, unless we already processed
         # this exact generic inst
         let gName = n.cName
@@ -405,7 +406,7 @@ proc scanGenerics(ctx: var GpuContext, n: GpuAst, callerParams: Table[string, Gp
           # based on the identifier.
           var callParams = initTable[string, GpuParam]()
           for p in fnGen.pParams: # use the symbol as key. Makes sure it is _that_ symbol and not a local of same name
-            callParams[p.ident.iSym] = p
+            callParams[p.ident.symbol.iSym] = p
           ctx.scanGenerics(fnGen, callParams)
       elif fn notin ctx.fnTab:
         # If the function does not have pointers in arguments _and_ it is not yet known in `fnTab`,
@@ -429,7 +430,7 @@ proc scanGenerics(ctx: var GpuContext, n: GpuAst, callerParams: Table[string, Gp
           "from a more complex expression than an ident or an address-of operation " &
           "is currently not supported."
         let id = f.value.determineIdent()
-        doAssert id.symbolKind == gsGlobalKernelParam, "Assigning a pointer to a non storage address space " &
+        doAssert id.symbol.symKind == gsGlobalKernelParam, "Assigning a pointer to a non storage address space " &
           "variable (i.e. an argument to a global kernel) is not supported: " & $f
         ctx.structsWithPtrs[(n.ocType, f.name)] = id
   else:
@@ -474,10 +475,10 @@ proc injectAddressOf(ctx: var GpuContext, n: var GpuAst) =
   ## to simple `T` globals.
   case n.kind
   of gpuIdent:
-    if n.iSym in ctx.globals and (let p = ctx.globals[n.iSym]; p.typ.kind == gtPtr):
+    if n.symbol.iSym in ctx.globals and (let p = ctx.globals[n.symbol.iSym]; p.typ.kind == gtPtr):
       # replace by address of
       n = GpuAst(kind: gpuAddr, aOf: n)
-    elif n.iSym in ctx.globals and (let p = ctx.globals[n.iSym]; p.typ.kind == gtBool):
+    elif n.symbol.iSym in ctx.globals and (let p = ctx.globals[n.symbol.iSym]; p.typ.kind == gtBool):
       # NOTE: Important that this branch is *after* the above. This implies that we only replace
       # `foo` by `bool(foo)` if this is *NOT* a `ptr bool` type being used somewhere as a pointer!
       # Replace boolean by _conversion to_ boolean, because we need to replace the type we emit
@@ -485,7 +486,7 @@ proc injectAddressOf(ctx: var GpuContext, n: var GpuAst) =
       n = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtBool), convExpr: n)
   of gpuDeref:
     # XXX: Don't really need to check if type is pointer if we already have `deref`
-    if n.dOf.kind == gpuIdent and n.dOf.iSym in ctx.globals and (let p = ctx.globals[n.dOf.iSym]; p.typ.kind == gtPtr):
+    if n.dOf.kind == gpuIdent and n.dOf.symbol.iSym in ctx.globals and (let p = ctx.globals[n.dOf.symbol.iSym]; p.typ.kind == gtPtr):
       # replace deref by access to itself
       n = n.dOf
   else:
@@ -502,8 +503,8 @@ proc rewriteCompoundAssignment(n: GpuAst): GpuAst =
 
   let op = n.bOp.ident()
   if op.len >= 2 and op[^1] == '=':
-    var opAst = GpuAst(kind: gpuIdent, iName: op[0 .. ^2])
-    opAst.iSym = opAst.iName
+    var opAst = GpuAst(kind: gpuIdent, symbol: newSymbol(op[0 .. ^2]))
+    opAst.symbol.iSym = opAst.symbol.name
     result = genAssign(n.bLeft, n.bRight, opAst) # all but last
   else:
     # leave untouched
@@ -517,10 +518,10 @@ proc getStructType(n: GpuAst): GpuType =
   var p = n
   if p.kind == gpuDeref:
     p = n.dOf
-  result = if p.iTyp.kind == gtPtr and p.iTyp.to.kind == gtObject:
-             p.iTyp.to
-           elif p.iTyp.kind == gtObject:
-             p.iTyp
+  result = if p.symbol.typ.kind == gtPtr and p.symbol.typ.to.kind == gtObject:
+             p.symbol.typ.to
+           elif p.symbol.typ.kind == gtObject:
+             p.symbol.typ
            else: GpuType(kind: gtVoid)
 
 proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
@@ -624,9 +625,9 @@ proc makeCodeValid(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
           var p = params[i]
           ## XXX: update anything else? We mostly care about the address space here, because
           ## the rest _should_ be the same anyway.
-          if p.addressSpace != argId.symbolKind.toAddressSpace():
-            p.addressSpace = argId.symbolKind.toAddressSpace()
-            p.ident.symbolKind = argId.symbolKind
+          if p.addressSpace != argId.symbol.symKind.toAddressSpace():
+            p.addressSpace = argId.symbol.symKind.toAddressSpace()
+            p.ident.symbol.symKind = argId.symbol.symKind
             fn.pParams[i] = p # write back, not a ref type!
   of gpuVar:
     # first recurse on the `gpuVar` to get possible replacements
@@ -636,9 +637,9 @@ proc makeCodeValid(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
     # possible after replacements of `gpuDot` nodes above.
     if n.vType.kind == gtPtr:
       let rightId = n.vInit.determineIdent()
-      n.vName.symbolKind = rightId.symbolKind
-      n.vType.mutable = rightId.iTyp.mutable
-      n.vName.iTyp.mutable = rightId.iTyp.mutable
+      n.vName.symbol.symKind = rightId.symbol.symKind
+      n.vType.mutable = rightId.symbol.typ.mutable
+      n.vName.symbol.typ.mutable = rightId.symbol.typ.mutable
   else:
     for ch in mitems(n):
       ctx.makeCodeValid(ch, inGlobal)
@@ -648,11 +649,11 @@ proc updateSymsInGlobals(ctx: var GpuContext, n: GpuAst) =
   ## parameters
   case n.kind
   of gpuIdent:
-    if n.iSym in ctx.globals:
-      n.symbolKind = gsGlobalKernelParam
-      if n.iTyp.kind == gtPtr:
-        let g = ctx.globals[n.iSym]
-        n.iTyp.mutable = g.typ.kind == gtPtr # arguments as pointers == mutable
+    if n.symbol.iSym in ctx.globals:
+      n.symbol.symKind = gsGlobalKernelParam
+      if n.symbol.typ.kind == gtPtr:
+        let g = ctx.globals[n.symbol.iSym]
+        n.symbol.typ.mutable = g.typ.kind == gtPtr # arguments as pointers == mutable
   else:
     for ch in n:
       ctx.updateSymsInGlobals(ch)
@@ -693,7 +694,7 @@ proc pullConstantPragmaVars(ctx: var GpuContext, blk: var GpuAst) =
       # we construct a fake parameter from it
       ## XXX: `storage` address space is probably what we want, but think more about it
       let param = GpuParam(ident: g.vName, typ: g.vType, addressSpace: asStorage)
-      ctx.globals[param.ident.iSym] = param
+      ctx.globals[param.ident.symbol.iSym] = param
       blk.statements.delete(i)
       # no need to increase `i`
     else:
@@ -735,8 +736,6 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   var varBlock = GpuAst(kind: gpuBlock)
   ctx.farmTopLevel(ast, kernel, varBlock)
   ctx.globalBlocks.add varBlock
-  ## XXX: `typBlock` should now always be empty, as we pass all
-  ## found types into `ctx.types`
 
   # Now add the generics to the `allFnTab`
   for k, v in pairs(ctx.genericInsts):
@@ -747,56 +746,47 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     typBlock.statements.add typ
   ctx.globalBlocks.add typBlock
 
+  # Delegate to passes_preprocessing passes
+
   # 2. Remove all arguments from global functions, as none are allowed in WGSL
-  for (fnIdent, fn) in mpairs(ctx.fnTab): # mutating the function in the table
+  for (fnIdent, fn) in mpairs(ctx.fnTab):
     if (fn.isGlobal() and kernel.len > 0 and fn.pName.ident() == kernel) or
         (kernel.len == 0 and fn.isGlobal()):
       for p in fn.pParams:
-        ctx.globals[p.ident.iSym] = p # copy all parameters over to globals
-      fn.pParams.setLen(0) # delete function's parameters
-      # now update all appearances of the parameters, now globals, such that they reflect
-      # the correct symbol kind and mutability
-      ctx.updateSymsInGlobals(fn)
+        ctx.globals[p.ident.symbol.iSym] = p
+      fn.pParams.setLen(0)
+      pp.updateSymsInGlobalsImpl(ctx, fn)
     else:
       discard
 
-  # 2.b filter out all `var foo {.constant.}: dtype` from the `globalBlocks` and add them to
-  #    the `globals`
-  # `globalBlocks` has two entries:
-  # 0: variables
-  # 1: types
-  ctx.pullConstantPragmaVars(ctx.globalBlocks[0])
+  # 2.b filter out all `var foo {.constant.}: dtype`
+  if ctx.globalBlocks.len > 0:
+    pp.pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
   # 2.c remove all fields of structs, which have pointer type
-  removeStructPointerFields(ctx.globalBlocks[1])
+  if ctx.globalBlocks.len > 1:
+    pp.removeStructPointerFieldsImpl(ctx.globalBlocks[1])
 
-  # 3. Using all global functions, we traverse their AST for any `gpuCall` node. We inspect
-  #    the functions called and record them in `fnTab`. If they have pointer arguments we
-  #    generate a generic instantiation for the exact pointer types used.
-  #    We start with a seq of all globals, because we need to modify `fnTab` during the iteration.
+  # 3. Scan generics
   let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns: # everything in `fnTab` at this point is a global function
-    # Get the original arguments (before lifting them) of this function. Needed in scan
-    # to check if `gpuCall` argument is a parameter.
+  for (fnIdent, fn) in fns:
     let fnOrig = ctx.allFnTab[fnIdent]
     var callParams = initTable[string, GpuParam]()
-    for p in fnOrig.pParams: # use the symbol as key. Makes sure it is _that_ symbol and not a local of same name
-      callParams[p.ident.iSym] = p
-    ctx.scanGenerics(fn, callParams)
+    for p in fnOrig.pParams:
+      callParams[p.ident.symbol.iSym] = p
+    pp.scanGenericsImpl(ctx, fn, callParams)
 
-  # 4. Finally, make all updates to the global functions that are necessary due to different
-  #    pointer semantics and disallowance of e.g. `bool` arguments.
+  # 4. injectAddressOf for globals
   for (fnIdent, fn) in mpairs(ctx.fnTab):
-    if fn.isGlobal(): # non global functions don't need to be mutated
-      ctx.injectAddressOf(fn)
+    if fn.isGlobal():
+      pp.injectAddressOfImpl(ctx, fn)
 
-  # 5. (Actually finally) patch all additional things invalid in WGSL, e.g. `x += 5` -> `x = x + 5`
+  # 5. makeCodeValid
   for (fnIdent, fn) in mpairs(ctx.fnTab):
-    ctx.makeCodeValid(fn, inGlobal = fn.isGlobal())
+    pp.makeCodeValidImpl(ctx, fn, inGlobal = fn.isGlobal())
 
-  # 6. finally raise error if we find anything that is not allowed in WGSL after our transformations
+  # 6. checkCodeValid
   for (fnIdent, fn) in pairs(ctx.fnTab):
-    ctx.checkCodeValid(fn)
-
+    pp.checkCodeValidImpl(ctx, fn)
 
 proc size(ctx: var GpuContext, a: GpuAst): string = size(ctx.genWebGpu(a))
 proc address(ctx: var GpuContext, a: GpuAst): string = address(ctx.genWebGpu(a))
@@ -830,7 +820,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
     var params: seq[string]
     for p in ast.pParams:
-      params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false, symbolKind = p.ident.symbolKind)
+      params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false, symbolKind = p.ident.symbol.symKind)
     var fnArgs = params.join(", ")
     if $attGlobal in attrs:
       doAssert fnArgs.len == 0, "Global function `" & $ast.pName.ident() & "` still has arguments!"
@@ -860,7 +850,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let letOrVar = if ast.vMutable: "var" else: "let"
     var attrs = ast.vAttributes.join(", ")
     if attrs.len > 0: attrs = &"<{attrs}>"
-    result = &"{indentStr}{letOrVar}{attrs} {gpuTypeToString(ast.vType, ast.vName.ident(), symbolKind = ast.vName.symbolKind)}"
+    result = &"{indentStr}{letOrVar}{attrs} {gpuTypeToString(ast.vType, ast.vName.ident(), symbolKind = ast.vName.symbol.symKind)}"
     # If there is an initialization, the type might require a memcpy
     doAssert not ast.vInit.isNil, "Variable initialization is nil. Should not happen."
     if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
@@ -886,7 +876,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                                        ctx.size(ast.aLeft))
     else:
       let leftId = ast.aLeft.determineIdent()
-      if leftId.kind != gpuDiscard and leftId.iTyp.kind == gtPtr and leftId.iTyp.to.kind == gtInt32:
+      if leftId.kind != gpuDiscard and leftId.symbol.typ.kind == gtPtr and leftId.symbol.typ.to.kind == gtInt32:
         # If the LHS is `i32` then a conversion to `i32` is either a no-op, if the left always was
         # `i32` (and the Nim compiler type checked it for us) *OR* the RHS is a boolean expression and
         # we patched the `bool -> i32` and thus need to convert it.
@@ -920,9 +910,10 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuFor:
     let i = ast.fVar.ident()
+    let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
     result = indentStr & "for(var " & i & ": i32 = " &
              ctx.genWebGpu(ast.fStart) & "; " &
-             i & " < " & ctx.genWebGpu(ast.fEnd) & "; " &
+             i & cmp & ctx.genWebGpu(ast.fEnd) & "; " &
              i & " = " & i & " + 1) {\n"
     result &= ctx.genWebGpu(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
@@ -952,14 +943,6 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       raise newException(ValueError, "Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
         "calls in the expanded body of the `webgpu` macro.")
 
-    when false: # Template replacement would look something like this:
-      let templ = ctx.templates[ast.tcName]
-      let expandedBody = substituteTemplateArgs(
-        templ.body,
-        templ.params,
-        ast.tcArgs
-      )
-      result = ctx.genWebGpu(expandedBody, indent)
 
   of gpuBinOp:
     ctx.withoutSemicolon:
@@ -1063,7 +1046,7 @@ proc codegen*(ctx: var GpuContext): string =
     let rw = if p.typ.kind == gtPtr: "read_write" else: "read"
     result = &"@group(0) @binding({bindingCounter}) var<storage, " & rw & "> "
     let typ = mutateToAllowedTypes(p.typ)
-    result.add gpuTypeToString(typ, p.ident.ident(), allowEmptyIdent = false, symbolKind = p.ident.symbolKind) & ";\n"
+    result.add gpuTypeToString(typ, p.ident.ident(), allowEmptyIdent = false, symbolKind = p.ident.symbol.symKind) & ";\n"
     inc bindingCounter
 
   # 1. Generate the header for all global variables (deduped by param name)

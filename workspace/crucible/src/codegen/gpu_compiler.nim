@@ -17,36 +17,46 @@ import ./passes/passes_legalizations
 import ./passes/passes_validations
 import ./passes/passes_optimizations
 import ./passes/passes_lowering
+import ./passes/passes_normalizations
+import ./passes/passes_preprocessing
 
 import ./builtins/builtins # all the builtins for the backend to make the Nim compiler happy
 export builtins
+
+template registerCommonPasses*(reg: var PassRegistry) =
+  ## Register passes common to all backends.
+  reg.registerValidationPrePasses()
+  reg.registerNormalizationPasses()
+  reg.registerLegalizationPasses()
+  reg.registerPreprocessingPasses()
+  reg.registerLoweringPasses()
+  reg.registerValidationPostPasses()
 
 macro toGpuAst*(body: typed): GpuAst =
   ## Converts GPU code to IR (GpuAst) without running any passes.
   var ctx = GpuContext()
   var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toGpuAst(typeReg, body)
+  var gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
+  # Clear scope tables before newLit (can't serialize seq/Symbol refs)
+  # Scope syms are stored on GpuContext, not gpuBlock, so no walk needed.
   newLit(gpuAst)
 
 macro cuda*(body: typed): string =
   ## Converts the body of this macro into CUDA code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
-  reg.registerValidationPrePasses()
-  reg.register("rejectCUDAKeywords", pkValidation, phaseMain,
-    "Rejects identifiers that are reserved CUDA keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["__global__", "__device__", "__shared__", "__constant__"], "CUDA")
-  )
-  reg.registerLegalizationPasses()
+  reg.registerCommonPasses()
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
     "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
     dependsOn = @["ensureBlock"],
     run = materializePassByRefArgs
   )
-  reg.registerLoweringPasses()
-  reg.registerValidationPostPasses()
+  reg.register("rejectCUDAKeywords", pkValidation, phaseMain,
+    "Rejects identifiers that are reserved CUDA keywords",
+    proc(ctx: var GpuContext): void =
+      ctx.checkReservedKeywords(["__global__", "__device__", "__shared__", "__constant__"], "CUDA")
+  )
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -59,19 +69,18 @@ macro opencl*(body: typed): string =
   ## Converts the body of this macro into OpenCL C code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
-  reg.registerValidationPrePasses()
+  reg.registerCommonPasses()
+  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
+    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
+    dependsOn = @["ensureBlock"],
+    run = materializePassByRefArgs
+  )
   reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
     "Rejects identifiers that are reserved OpenCL C keywords",
     proc(ctx: var GpuContext): void =
       ctx.checkReservedKeywords(["kernel", "__kernel", "global", "__global",
         "local", "__local", "constant", "__constant",
         "read_only", "write_only", "read_write"], "OpenCL C")
-  )
-  reg.registerLegalizationPasses()
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
   )
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
@@ -84,15 +93,12 @@ macro vulkan*(body: typed): string =
   ## Converts the body of this macro into GLSL compute shader code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
-  reg.registerValidationPrePasses()
-  reg.registerLegalizationPasses()
-  reg.registerValidationPostPasses()
+  reg.registerCommonPasses()
   reg.register("rejectVulkanKeywords", pkValidation, phaseMain,
     "Rejects identifiers that are reserved GLSL keywords",
     proc(ctx: var GpuContext): void =
       ctx.checkReservedKeywords(["extern", "interface", "buffer"], "GLSL")
   )
-  reg.registerLegalizationPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -104,13 +110,13 @@ macro webgpu*(body: typed): string =
   ## Converts the body of this macro into WebGPU WGSL code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
-  reg.registerValidationPrePasses()
+  reg.registerCommonPasses()
   reg.register("rejectWGSLKeywords", pkValidation, phaseEarly,
     "Rejects identifiers that are reserved WGSL keywords",
     proc(ctx: var GpuContext): void =
       ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
   )
-  reg.registerLegalizationPasses()
+  reg.registerWgslPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -124,9 +130,48 @@ proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
   ## it to a single global kernel (WebGPU) if any given.
   ## Default backend is CUDA.
   var ctx = GpuContext()
-  # Clone IR before backend preprocessing — backend preprocessors mutate in place,
-  # so without cloning, one call to codegen(..., backend=A) contaminates later calls for backend=B.
-  # TODO: Make codegen idempotent
+  var reg = PassRegistry.new()
+  reg.registerCommonPasses()
+  case backend
+  of bkCuda:
+    reg.register("materializePassByRefArgs", pkTransform, phaseMain,
+      "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
+      dependsOn = @["ensureBlock"],
+      run = materializePassByRefArgs
+    )
+    reg.register("rejectCUDAKeywords", pkValidation, phaseMain,
+      "Rejects identifiers that are reserved CUDA keywords",
+      proc(ctx: var GpuContext): void =
+        ctx.checkReservedKeywords(["__global__", "__device__", "__shared__", "__constant__"], "CUDA")
+    )
+  of bkWGSL:
+    reg.register("rejectWGSLKeywords", pkValidation, phaseEarly,
+      "Rejects identifiers that are reserved WGSL keywords",
+      proc(ctx: var GpuContext): void =
+        ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
+    )
+    reg.registerWgslPasses()
+  of bkOpenCL:
+    reg.register("materializePassByRefArgs", pkTransform, phaseMain,
+      "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
+      dependsOn = @["ensureBlock"],
+      run = materializePassByRefArgs
+    )
+    reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
+      "Rejects identifiers that are reserved OpenCL C keywords",
+      proc(ctx: var GpuContext): void =
+        ctx.checkReservedKeywords(["kernel", "__kernel", "global", "__global",
+          "local", "__local", "constant", "__constant",
+          "read_only", "write_only", "read_write"], "OpenCL C")
+    )
+  of bkVulkan:
+    reg.register("rejectVulkanKeywords", pkValidation, phaseMain,
+      "Rejects identifiers that are reserved GLSL keywords",
+      proc(ctx: var GpuContext): void =
+        ctx.checkReservedKeywords(["extern", "interface", "buffer"], "GLSL")
+    )
+  # Clone IR before running passes — passes mutate in place,
+  # so without cloning, one call contaminates later calls for a different backend.
   let astCopy = ast.clone()
   for fn in gen.procs:
     let fnCopy = fn.clone()
@@ -139,6 +184,7 @@ proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
     of gpuAlias:
       ctx.types[typCopy.aTyp] = typCopy
     else: raiseAssert "Unexpected node kind assigning to `types`: " & $typ
+  runPasses(ctx, reg)
   case backend
   of bkCuda:
     result = ctx.codegenCuda(astCopy, kernel)

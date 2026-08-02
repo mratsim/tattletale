@@ -36,12 +36,11 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
       var p = ctx.toGpuAst(reg, param[i])
       let symKind = if attGlobal in attrs: gsGlobalKernelParam
                     else: gsDeviceKernelParam
-      p.iTyp = paramType     ## Update the type of the symbol
-      p.symbolKind = symKind ## and the symbol kind
+      p.symbol.typ = paramType     ## Update the type of the symbol
+      p.symbol.symKind = symKind ## and the symbol kind
       let byref = isLargeStruct(paramType)
       let param = GpuParam(ident: p, typ: paramType, passByRef: byref)
       result.add(param)
-
 
 proc toInstantiatedProcSignature(ctx: var GpuContext, reg: var TypeRegistry,
     params: NimNode, attrs: set[GpuAttribute]): GpuProcSignature =
@@ -49,59 +48,18 @@ proc toInstantiatedProcSignature(ctx: var GpuContext, reg: var TypeRegistry,
   ##
   ## NOTE: This procedure is only called from generically instantiated procs. Therefore,
   ## we shouldn't need to worry about getting `gtInvalid` return types here.
-
   GpuProcSignature(
     params: ctx.parseProcParameters(reg, params, attrs),
     retType: resolveProcReturnType(reg, params)
   )
 
-template findIdx(col, el): untyped =
-  var res = -1
-  for i, it in col:
-    if it.name == el:
-      res = i
-      break
-  res
-
-proc maybePatchFnName(n: var GpuAst) =
-  ## Renames operator function names whose symbols are not valid C++
-  ## identifier characters (e.g. `+`→`add`, `-`→`sub`).
-  ## Nim-textual operators like `div`, `and` pass through since they
-  ## are valid identifier starters and get disambiguated by the
-  ## signature hash suffix from registerGenericInstOrExternalProc.
-  doAssert n.kind == gpuIdent
-  template patch(arg, by: untyped): untyped =
-    arg.iSym = arg.iSym.replace(arg.iName, by)
-    arg.iName = by
-  let name = n.iName
-  case name
-  of "+": patch(n, "add")
-  of "-": patch(n, "sub")
-  of "*": patch(n, "mul")
-  of "/": patch(n, "div")
-  else: discard
-
 proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
   ## Returns the name for the function. Either the symbol name _or_
   ## the `{.cudaName.}` pragma argument.
-  template toAst(fn): untyped = GpuAst(kind: gpuIdent, iName: fn, symbolKind: gsProc)
+  template toAst(fn): untyped = GpuAst(kind: gpuIdent, symbol: newSymbol(fn, symKind = gsProc))
   # check if the implementation has a pragma
 
   if n.kind == nnkSym:
-    # Check if `cudaName` pragma used:
-    # ProcDef
-    #   Sym "syncthreads"
-    #   Empty
-    #   Empty
-    #   FormalParams
-    #     Empty
-    #   Pragma
-    #     ExprColonExpr
-    #       Sym "cudaName"           <- if this exists
-    #       StrLit "__syncthreads"   <- use this name
-    #   Empty
-    #   DiscardStmt
-    #     Empty
     let sig = n.repr & "_" & n.signatureHash()
     if sig in ctx.sigTab:
       result = ctx.sigTab[sig]
@@ -111,34 +69,45 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
         let pragma = impl.pragma
         if pragma.kind != nnkEmpty and pragma[0].kind == nnkExprColonExpr:
           if pragma[0][0].kind in [nnkIdent, nnkSym] and pragma[0][0].strVal == "cudaName":
-            # want to replace fn name
             result = toAst pragma[0][1].strVal
             ctx.sigTab[sig] = result
           else:
-            result = ctx.toGpuAst(reg, n) # if no `cudaName` pragma
+            result = ctx.toGpuAst(reg, n)
         else:
-          result = ctx.toGpuAst(reg, n) # if _no_ pragma
+          result = ctx.toGpuAst(reg, n)
       else:
-        result = ctx.toGpuAst(reg, n) # if not proc or func
-
-      result.maybePatchFnName()
-
+        result = ctx.toGpuAst(reg, n)
+      # Patch operator names in the symbol name AND iSym so that iSym generation uses
+      # the patched name. E.g. `+` -> `add` to produce valid C++ identifier `add___hash`.
+      # This must happen BEFORE registerGenericInstOrExternalProc overwrites name with iSym.
+      if result.symbol.name in ["+", "-", "*", "/"]:
+        let oldName = result.symbol.name
+        case result.symbol.name
+        of "+": result.symbol.name = "add"
+        of "-": result.symbol.name = "sub"
+        of "*": result.symbol.name = "mul"
+        of "/": result.symbol.name = "div"
+        else: discard
+        result.symbol.iSym = result.symbol.iSym.replace(oldName, result.symbol.name)
       # handle overloads with different signatures
       if n.strVal in ctx.symChoices:
-        # this is an overload of another function with different signature (not a generic, but
-        # overloads are not allowed in CUDA/WGSL/...). Update `sigTab` entry by using `iSym`
-        # for `iName` field for unique name
         let id = ctx.sigTab[sig]
-        id.iName = id.iSym
+        id.symbol.name = id.symbol.iSym
       else:
-        ctx.symChoices.incl result.iName # store this name in `symChoices`
+        ctx.symChoices.incl result.symbol.name
   else:
-    # else we use the str representation (repr for open / closed sym choice nodes)
     result = toAst n.repr
-    #error "This fn identifier is not a symbol?! " & $n.repr
-    # If it's not a symbol, there is no signature associated
-    # ctx.sigTab[sig] = result
-  result.symbolKind = gsProc # make sure it's a proc
+  result.symbol.symKind = gsProc # make sure it's a proc
+proc addToFnTable(ctx: var GpuContext, ident: GpuAst, body: GpuAst, kind: set[FunctionKind]) =
+  ## Add an entry to the unified function table.
+  let key = ident.symbol.iSym
+  # Always add/replace — last writer wins (consistent with old behavior)
+  ctx.fnTable[key] = FnTableEntry(
+    ident: ident,
+    body: body,
+    kind: kind,
+    namePolicy: npUnassigned
+  )
 
 proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, name: GpuAst) =
   ## Looks up the implementation of the given function and stores it in our table
@@ -195,6 +164,7 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     let retType = resolveType(reg, sig.params[0])
     var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
     ctx.builtins[name] = builtinFn
+    ctx.addToFnTable(name, builtinFn, {fkBuiltin})
     return
 
   let fn = ctx.toGpuAst(reg, inst)
@@ -204,11 +174,11 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     doAssert inst.isBuiltIn()
     return
   fn.pAttributes.incl attDevice # make sure this is interpreted as a device function
-  doAssert fn.pName.iSym == name.iSym, "Not matching"
+  doAssert fn.pName.symbol.iSym == name.symbol.iSym, "Not matching"
   # now overwrite the identifier's `iName` field by its `iSym` so that different
   # generic insts have different
-  fn.pName.iName = fn.pName.iSym
-  name.iName = fn.pName.iSym ## update the name of the called function
+  fn.pName.symbol.name = fn.pName.symbol.iSym
+  name.symbol.name = fn.pName.symbol.iSym ## update the name of the called function
   ctx.genericInsts[fn.pName] = fn
 
 proc isExpression(n: GpuAst): bool =
@@ -225,10 +195,18 @@ proc isExpression(n: GpuAst): bool =
 proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
   ## Returns true if the given `fn` (gpuIdent) returns a value.
   ## The function can either be:
+  ## - in the new fnTable
   ## - an inbuilt function
   ## - a generic instantiation
   ## - contained in `allFnTab`
-  if fn in ctx.allFnTab:
+  let key = fn.symbol.iSym
+  if key in ctx.fnTable:
+    let entry = ctx.fnTable[key]
+    if not entry.body.isNil and entry.body.kind == gpuProc:
+      result = entry.body.pRetType.kind != gtVoid
+    else:
+      result = false
+  elif fn in ctx.allFnTab:
     result = ctx.allFnTab[fn].pRetType.kind != gtVoid
   elif fn in ctx.genericInsts:
     result = ctx.genericInsts[fn].pRetType.kind != gtVoid
@@ -238,7 +216,6 @@ proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
     result = ctx.processedProcs[fn].retType.kind != gtVoid
   else:
     error "The function: " & $fn & " is not known anywhere."
-
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAst =
   ## XXX: things still left to do:
   ## - support `result` variable? Currently not supported. Maybe we will won't
@@ -248,8 +225,14 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
   of nnkEmpty: result = GpuAst(kind: gpuDiscard) # nothing to do
   of nnkStmtList:
     result = GpuAst(kind: gpuBlock)
+    let prevScope = ctx.currentScope
+    ctx.scopeSymsStack.add(ctx.currentScopeSyms)
+    ctx.currentScopeSyms = @[]
+    ctx.currentScope = result
     for el in node:
       result.statements.add ctx.toGpuAst(reg, el)
+    ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
+    ctx.currentScope = prevScope
   of nnkBlockStmt:
     # BlockStmt
     #   Sym "unrolledIter_i0"  <- ignore the block label for now!
@@ -261,24 +244,49 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
                      elif node[0].kind == nnkEmpty: ""
                      else: error "Unexpected node in block label field: " & $node.treerepr
     result = GpuAst(kind: gpuBlock,
-                    blockLabel: blockLabel)
+                    blockLabel: blockLabel,
+                    )
+    let prevScopeBlk = ctx.currentScope
+    ctx.scopeSymsStack.add(ctx.currentScopeSyms)
+    ctx.currentScopeSyms = @[]
+    ctx.currentScope = result
     for i in 1 ..< node.len: # index 0 is the block label
       result.statements.add ctx.toGpuAst(reg, node[i])
+    ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
+    ctx.currentScope = prevScopeBlk
   of nnkBlockExpr:
     ## XXX: For CUDA just a block?
     let blockLabel = if node[0].kind in {nnkSym, nnkIdent}: node[0].strVal
                      elif node[0].kind == nnkEmpty: ""
                      else: error "Unexpected node in block label field: " & $node.treerepr
-    result = GpuAst(kind: gpuBlock, blockLabel: blockLabel, isExpr: true)
+    result = GpuAst(kind: gpuBlock, blockLabel: blockLabel, isExpr: true,
+                    )
+    let prevScopeBlkExpr = ctx.currentScope
+    ctx.scopeSymsStack.add(ctx.currentScopeSyms)
+    ctx.currentScopeSyms = @[]
+    ctx.currentScope = result
     for el in node:
       if el.kind != nnkEmpty:
         result.statements.add ctx.toGpuAst(reg, el)
+    ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
+    ctx.currentScope = prevScopeBlkExpr
+    # Capture type available via Nim AST for blitting (C2): type is on node[^1]
+    # Blitting's getExprType will use this via context scope lookups
   of nnkStmtListExpr: # for statements that return a value.
     ## XXX: For CUDA just a block?
-    result = GpuAst(kind: gpuBlock, isExpr: true)
+    result = GpuAst(kind: gpuBlock, isExpr: true,
+                    )
+    let prevScopeStmtListExpr = ctx.currentScope
+    ctx.scopeSymsStack.add(ctx.currentScopeSyms)
+    ctx.currentScopeSyms = @[]
+    ctx.currentScope = result
     for el in node:
       if el.kind != nnkEmpty:
         result.statements.add ctx.toGpuAst(reg, el)
+    ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
+    ctx.currentScope = prevScopeStmtListExpr
+    # Capture type available via Nim AST for blitting (C2): type is on node[^1]
+    # Blitting's getExprType will use this via context scope lookups
   of nnkDiscardStmt:
     # just process the child node if any
     result = ctx.toGpuAst(reg, node[0])
@@ -290,35 +298,38 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     # to parse it. The parsed generics are stored in the `genericInsts` table.
     let name = ctx.getFnName(reg, node.name)
     if node[2].kind == nnkGenericParams: # is a generic
-      ctx.generics.incl name.iName # need to use raw name, *not* symbol
+      ctx.generics.incl name.symbol.name # need to use raw name, *not* symbol
       result = GpuAst(kind: gpuDiscard)
     elif node.body.kind == nnkEmpty: # just a forward declaration
       result = GpuAst(kind: gpuDiscard)
     else:
       result = GpuAst(kind: gpuProc)
       result.pName = name
-      result.pName.symbolKind = gsProc ## This is a procedure identifier
+      result.pName.symbol.symKind = gsProc ## This is a procedure identifier
       let params = node[3]
       doAssert params.kind == nnkFormalParams
       result.pRetType = resolveProcReturnType(reg, params)
       if result.pRetType.kind == gtInvalid:
-        ctx.generics.incl name.iName # need to use raw name, *not* symbol
+        ctx.generics.incl name.symbol.name # need to use raw name, *not* symbol
         return GpuAst(kind: gpuDiscard)
 
       # Process pragmas
       if node.pragma.kind != nnkEmpty:
         doAssert node.pragma.len > 0, "Pragma kind non empty, but no pragma?"
+        result.pRawPragmas = collectRawPragmas(node.pragma)
         result.pAttributes = collectProcAttributes(node.pragma)
         if result.pAttributes.len == 0: # means `nimonly` was applied / is a `builtin`
           ctx.builtins[name] = result # store in builtins, so that we know if it returns a value when called
+          ctx.addToFnTable(name, result, {fkBuiltin})
           return GpuAst(kind: gpuDiscard)
       # Process parameters
       result.pParams = ctx.parseProcParameters(reg, params, result.pAttributes)
       result.pBody = ctx.toGpuAst(reg, node.body)
       # Validation and transform passes run via ctx.runPasses()
-      # Add to table of known functions
+      # Add to table of known functions (both old and new)
       if result.pName notin ctx.allFnTab:
         ctx.allFnTab[result.pName] = result
+        ctx.addToFnTable(name, result, {fkDefined})
 
   of nnkLetSection, nnkVarSection:
     # For a section with multiple declarations, create a block
@@ -346,10 +357,10 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         varNode.vAttributes = collectAttributes(declaration[0][1])
       else: error "Unexpected node kind for variable: " & $declaration.treeRepr
       varNode.vType = resolveType(reg, declaration)
-      varNode.vName.iTyp = varNode.vType # also store the type in the symbol, for easier lookup later
+      varNode.vName.symbol.typ = varNode.vType # also store the type in the symbol, for easier lookup later
       # This is a *local* variable (i.e. `function` address space on WGSL) unless it is
       # annotated with `{.shared.}` (-> `workspace` in WGSL)
-      varNode.vName.symbolKind = if atvShared in varNode.vAttributes: gsShared
+      varNode.vName.symbol.symKind = if atvShared in varNode.vAttributes: gsShared
                                  elif atvPrivate in varNode.vAttributes: gsPrivate
                                  else: gsLocal
       varNode.vMutable = node.kind == nnkVarSection
@@ -373,6 +384,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       else:
         varNode.vInit = GpuAst(kind: gpuDiscard)
         result.statements.add(varNode)
+      # Register variable in current scope's symbol table
+      if ctx.currentScope != nil:
+        scopeAdd(ctx.currentScopeSyms, varNode.vName.symbol.name, varNode.vName.symbol)
 
   of nnkAsgn:
     result = GpuAst(kind: gpuAssign)
@@ -381,7 +395,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     result.aRequiresMemcpy = requiresMemcpy(node[1])
 
   of nnkIfStmt:
-    result = GpuAst(kind: gpuIf)
+    result = GpuAst(kind: gpuIf, ifIsExpr: false)
     let branch = node[0]  # First branch
     result.ifCond = ctx.toGpuAst(reg, branch[0])
     result.ifThen = ctx.toGpuAst(reg, branch[1])
@@ -405,53 +419,49 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     doAssert node.len >= 1
     doAssert node.len == 1 or node[^1].kind == nnkElseExpr,
       "GPU if-expression must have an else branch"
-    # Helper to build nested ternary
-    proc buildTernary(ctx: var GpuContext, reg: var TypeRegistry, branches: NimNode, idx: int): GpuAst =
+    # Build a gpuIf(isExpr: true) — the lowerIfExpr pass converts to gpuTernary
+    result = GpuAst(kind: gpuIf, ifIsExpr: true)
+    # Build nested gpuIf(isExpr: true) for the if-expr chain.
+    # The lowerIfExpr pass converts these to gpuTernary nodes.
+    proc buildIfExpr(ctx: var GpuContext, reg: var TypeRegistry, branches: NimNode, idx: int): GpuAst =
       let child = branches[idx]
       case child.kind
       of nnkElifExpr:
         requireSimpleBranch(child[1])
-        result = GpuAst(kind: gpuTernary)
-        result.tCond = ctx.toGpuAst(reg, child[0])
-        result.tThen = ctx.toGpuAst(reg, child[1])
+        result = GpuAst(kind: gpuIf, ifIsExpr: true)
+        result.ifCond = ctx.toGpuAst(reg, child[0])
+        result.ifThen = ctx.toGpuAst(reg, child[1])
         if idx + 1 < branches.len:
-          result.tElse = buildTernary(ctx, reg, branches, idx + 1)
+          result.ifElse = buildIfExpr(ctx, reg, branches, idx + 1)
         else:
-          result.tElse = GpuAst(kind: gpuDiscard)
+          result.ifElse = GpuAst(kind: gpuDiscard)
       of nnkElseExpr:
         requireSimpleBranch(child[0])
         result = ctx.toGpuAst(reg, child[0])
       else:
         error "Unexpected child in nnkIfExpr: " & $child.kind
-    result = buildTernary(ctx, reg, node, 0)
+    result = buildIfExpr(ctx, reg, node, 0)
 
   of nnkForStmt:
     result = GpuAst(kind: gpuFor)
     doAssert node[0].kind in {nnkIdent, nnkSym}, "The variable in the for loop is not an identifier or symbol, but: " & $node[0].treerepr
     result.fVar = ctx.toGpuAst(reg, node[0])
-    result.fVar.symbolKind = gsLocal
-    result.fVar.iTyp = initGpuType(gtInt32) ## XXX: do not force this type
-    # Range expression — may be `0 .. N` (Infix inclusive) or `0 ..< N` (Infix exclusive)
+    if result.fVar.isNil or result.fVar.symbol.isNil:
+      result.fVar.symbol = newSymbol($node[0].repr)
+    result.fVar.symbol.symKind = gsLocal
+    result.fVar.symbol.typ = initGpuType(gtInt32) ## XXX: do not force this type
+    # Register loop variable in current scope
+    if ctx.currentScope != nil:
+      scopeAdd(ctx.currentScopeSyms, result.fVar.symbol.name, result.fVar.symbol)
+    # Range expression — Phase 3: use fRangeKind instead of +1 patching
+    result.fRangeKind = rkInclusive # default (safe for C-style < loops)
     if node[1].kind == nnkInfix:
       result.fStart = ctx.toGpuAst(reg, node[1][1])
       result.fEnd = ctx.toGpuAst(reg, node[1][2])
-      # Inclusive `..` — codegen uses `i < end`, but Nim's `..` is
-      # inclusive `[a, b]` (b+1 values). Add 1 so C's `<` matches.
-      if node[1][0].repr == "..":
-        # Derive type from range end expression
-        let endTyp =
-          if result.fEnd.kind == gpuLit:
-            result.fEnd.lType   # literal like `0 ..< 128` — use float/int literal's own type
-          elif result.fEnd.kind == gpuIdent and result.fEnd.iTyp.kind notin {gtVoid}:
-            result.fEnd.iTyp   # variable like `0 ..< n` — use the variable's declared type
-          elif result.fEnd.kind == gpuBinOp:
-            initGpuType(gtInt32)  # expression like `0 ..< (a + b)` — default to int32 (implicit integer promotion)
-          else:
-            initGpuType(gtInt32)  # call/other expression — fallback
-        let one = GpuAst(kind: gpuLit, lValue: "1", lType: endTyp)
-        var addOp = GpuAst(kind: gpuIdent, iName: "+")
-        result.fEnd = GpuAst(kind: gpuBinOp, bOp: addOp,
-                             bLeft: result.fEnd, bRight: one)
+      # Set range kind based on operator
+      if node[1][0].repr == "..<":
+        result.fRangeKind = rkExclusive
+      # else `..` stays rkInclusive (default) — backends emit <= or equivalent
     elif node[1].kind == nnkCall and node[1].len >= 2 and node[1][1].kind == nnkObjConstr:
       let objConstr = node[1][1]
       for i in 1 ..< objConstr.len:
@@ -461,13 +471,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
           if fieldName == "a":
             result.fStart = ctx.toGpuAst(reg, field[1])
           elif fieldName == "b":
-            # Slice.b is inclusive but codegen uses `<`, so increment the
-            # Nim AST literal before converting to GpuAst.
-            if field[1].kind in {nnkIntLit, nnkInt32Lit, nnkUIntLit}:
-              let modified = newLit(int32(field[1].intVal + 1))
-              result.fEnd = ctx.toGpuAst(reg, modified)
-            else:
-              result.fEnd = ctx.toGpuAst(reg, field[1])
+            # Slice.b is inclusive — store literal as-is, backend uses fRangeKind
+            result.fEnd = ctx.toGpuAst(reg, field[1])
+            result.fRangeKind = rkInclusive
     elif node[1].len >= 2:
       result.fStart = ctx.toGpuAst(reg, node[1][1])
       result.fEnd = ctx.toGpuAst(reg, node[1][^1])
@@ -485,23 +491,6 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     ## expanded by the Nim compiler. Thus we could in theory expand them manually
     ## but fortunately we don't need to.
     return GpuAst(kind: gpuDiscard)
-    let tName = node[0].strVal
-
-    # Extract parameters
-    var tParams = newSeq[string]()
-    for i in 1 ..< node[3].len:
-      let param = node[3][i]
-      tParams.add param[0].strVal
-    # and the body
-    let tBody = ctx.toGpuAst(reg, node.body)
-
-    # Store template in context
-    ctx.templates[tName] = TemplateInfo(
-      params: tParams,
-      body: tBody
-    )
-
-    result = GpuAst(kind: gpuDiscard)
 
   of nnkCall, nnkCommand:
     # `name` below is name + signature hash. Check if this is a generic based on node repr
@@ -514,13 +503,13 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
 
     let args = node[1..^1].mapIt(ctx.toGpuAst(reg, it))
     if name in ctx.builtins and node[0].repr in NimGpuNumericOperators:
-      var op = GpuAst(kind: gpuIdent, iName: NimGpuNumericOperators[node[0].repr])
-      op.iSym = op.iName
-      result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1])
+      var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuNumericOperators[node[0].repr]))
+      op.symbol.iSym = op.symbol.name
+      result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
     elif name in ctx.builtins and node[0].repr in NimGpuBooleanOperators:
-      var op = GpuAst(kind: gpuIdent, iName: NimGpuBooleanOperators[node[0].repr])
-      op.iSym = op.iName
-      result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1])
+      var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuBooleanOperators[node[0].repr]))
+      op.symbol.iSym = op.symbol.name
+      result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
     else:
       let fnIsExpr = ctx.fnReturnsValue(name)
       result = GpuAst(kind: gpuCall, cIsExpr: fnIsExpr)
@@ -528,59 +517,42 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       result.cArgs = args
 
   of nnkInfix:
-    result = GpuAst(kind: gpuBinOp)
-    # Using `getType` to get the types of the arguuments
-    let typ = node[0].getTypeImpl() # e.g.
+    # Always emit gpuBinOp — resolveOverloadedOperators pass converts
+    # to gpuCall for non-primitive types.
+    result = GpuAst(kind: gpuBinOp,
+                    bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("")),
+                    bLeft: ctx.toGpuAst(reg, node[1]),
+                    bRight: ctx.toGpuAst(reg, node[2]))
+    # Still register generic instantiations (needs Nim AST access at toGpuAst time)
+    let typ = node[0].getTypeImpl()
     doAssert typ.kind == nnkProcTy, "Infix node is not a proc but: " & $typ.treerepr
-    # BracketExpr
-    #   Sym "proc"
-    #   Sym "int"  <- return type
-    #   Sym "int"  <- left op type
-    #   Sym "int"  <- right op type
     let leftTyp = resolveType(reg, typ[0][1])
     let rightTyp = resolveType(reg, typ[0][2])
-    # if either is not a base type (`gtBool .. gtSize_t`) we actually deal with a _function call_
-    # instead of an binary operation. Will thus rewrite.
     proc ofBasicType(t: GpuType, allowPtrLhs: bool): bool =
-      ## Determines if the given type is a basic POD type *or* a simple pointer to it.
-      ## This is because some infix nodes, e.g. `x += y` will have LHS arguments that are
-      ## `var T`, which appear as an implicit pointer here.
-      ##
-      ## TODO: Handle the case of backend inbuilt special types (like `vec3`), which may indeed
-      ## have inbuilt infix operators. Either by checking if the type has a `{.builtin.}` pragma
-      ## _or_ if there is a wrapped proc for this operator and if so do not rewrite as `gpuCall`
-      ## if that exists.
       result = (t.kind in gtBool .. gtSize_t)
       if allowPtrLhs:
         result = result or ((t.kind == gtPtr) and t.implicit and t.to.kind in gtBool .. gtSize_t)
-
     if not leftTyp.ofBasicType(true) or not rightTyp.ofBasicType(false):
+      # Non-primitive types — register the operator as a function
+      result.bIsOverloaded = true
       let name = ctx.getFnName(reg, node[0])
-      result = GpuAst(kind: gpuCall)
-      result.cName = name
-      result.cArgs = @[ctx.toGpuAst(reg, node[1]), ctx.toGpuAst(reg, node[2])]
+      result.bOp.symbol = newSymbol(name.symbol.name, symKind = gsProc)
+      result.bOp.symbol.iSym = name.symbol.iSym
       if node[0].repr in ctx.generics or name notin ctx.allFnTab:
         ctx.registerGenericInstOrExternalProc(reg, node, name)
     else:
-      # if left/right is boolean we need logical AND/OR, otherwise bitwise
+      # Primitive types: map operator name for C/C++ compatibility
+      result.bIsOverloaded = false
       let isBoolean = leftTyp.kind == gtBool
       let tbl = if isBoolean: NimGpuBooleanOperators else: NimGpuNumericOperators
-      var op = GpuAst(kind: gpuIdent, iName: tbl.getOrDefault(node[0].repr, node[0].repr)) # repr so that open sym choice gets correct name
-      op.iSym = op.iName
-      result.bOp = op
-      result.bLeft = ctx.toGpuAst(reg, node[1])
-      result.bRight = ctx.toGpuAst(reg, node[2])
-
-      # We patch the types of int / float literals. WGSL does not automatically convert literals
-      # to the target type. Determining the type here _can_ fail. In that case the
-      # `lType` field will just be `gtVoid`, like the default.
-      if result.bLeft.kind == gpuLit: # and result.bRight.kind != gpuLit:
-        # determine literal type based on `bRight`
+      let mappedOp = tbl.getOrDefault(node[0].repr, node[0].repr)
+      result.bOp.symbol = newSymbol(mappedOp)
+      result.bOp.symbol.iSym = result.bOp.symbol.name
+      # Patch literal types
+      if result.bLeft.kind == gpuLit:
         result.bLeft.lType = leftTyp
-      elif result.bRight.kind == gpuLit: # and result.bLeft.kind != gpuLit:
-        # determine literal type based on `bLeft`
+      elif result.bRight.kind == gpuLit:
         result.bRight.lType = rightTyp
-
   of nnkDotExpr:
     ## NOTE: As we use a typed macro, we only encounter `DotExpr` for *actual* field accesses and NOT
     ## for calls using method call syntax without parens
@@ -606,9 +578,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
 
   of nnkIdent, nnkOpenSymChoice:
     result = newGpuIdent()
-    result.iName = node.repr # for sym choices
-    if result.iName == "_":
-      result.iName = "underscore"
+    result.symbol.name = node.repr # for sym choices
+    if result.symbol.name == "_":
+      result.symbol.name = "underscore"
   of nnkSym:
     # Sanitize the identifier name: backticks are used by Nim for gensym
     # symbols (e.g., ``field`gensym229``) but are invalid in C.
@@ -627,13 +599,13 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       return ctx.toGpuAst(reg, getImpl(node)[2])
     if s notin ctx.sigTab:
       result = newGpuIdent()
-      result.iName = sanitized
-      result.iSym = s
-      if result.iName == "_":
-        result.iName = "underscore"
-      elif result.iName.startsWith("tmpTuple_"):
-        result.iName = "tmpTuple_" & $ctx.genSymCount
-        result.iSym = result.iName & "_" & node.signatureHash()
+      result.symbol.name = sanitized
+      result.symbol.iSym = s
+      if result.symbol.name == "_":
+        result.symbol.name = "underscore"
+      elif result.symbol.name.startsWith("tmpTuple_"):
+        result.symbol.name = "tmpTuple_" & $ctx.genSymCount
+        result.symbol.iSym = result.symbol.name & "_" & node.signatureHash()
         inc ctx.genSymCount
       ctx.sigTab[s] = result
     else:
@@ -843,8 +815,8 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
                     cIdent: ctx.toGpuAst(reg, identNode),
                     cValue: ctx.toGpuAst(reg, node[2]),
                     cType: resolveType(reg, node))
-    result.cIdent.iTyp = result.cType # also store the type in the symbol, for easier lookup later
-    result.cIdent.symbolKind = gsLocal #if atvShared in result.vAttributes: gsShared
+    result.cIdent.symbol.typ = result.cType # also store the type in the symbol, for easier lookup later
+    result.cIdent.symbol.symKind = gsLocal #if atvShared in result.vAttributes: gsShared
                                #elif atvPrivate in varNode.vAttributes: gsPrivate
                                #else: gsLocal
 

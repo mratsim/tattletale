@@ -9,6 +9,7 @@ import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
 import ../ir/gpu_types
 import ./lang_utils
+import ../passes/passes_preprocessing as pp
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -112,8 +113,6 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
   else:
     result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
 
-proc genMemcpy(lhs, rhs, size: string): string =
-  result = &"memcpy({lhs}, {rhs}, {size})"
 
 proc containsFloat64(t: GpuType): bool =
   ## Returns true if the type tree contains float64 (double) somewhere.
@@ -150,73 +149,6 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
     for ch in n:
       ctx.scanFunctions(ch)
 
-proc getFieldType(t: GpuType, field: GpuAst): GpuType =
-  doAssert field.kind == gpuIdent, "Field is not an ident: " & $field
-  doAssert t.kind in [gtObject, gtGenericInst]
-  let flds = if t.kind == gtObject: t.oFields
-               else: t.gFields
-  result = GpuType(kind: gtInvalid)
-  for f in flds:
-    if f.name == field.ident():
-      return f.typ
-
-proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
-  template dfl(): untyped = GpuType(kind: gtInvalid)
-  case arg.kind
-  of gpuIdent: arg.iTyp
-  of gpuAddr: GpuType(kind: gtPtr, to: ctx.getType(arg.aOf))
-  of gpuDeref:
-    let argTyp = ctx.getType(arg.dOf)
-    doAssert argTyp.kind == gtPtr
-    argTyp.to
-  of gpuCall:
-    (block:
-      let fn = arg.cName
-      if fn in ctx.genericInsts: ctx.genericInsts[fn].pRetType
-      elif fn in ctx.allFnTab: ctx.allFnTab[fn].pRetType
-      elif fn in ctx.builtins: ctx.builtins[fn].pRetType
-      else: dfl())
-  of gpuIndex:
-    let arrType = ctx.getType(arg.iArr)
-    if typeOfIndex:
-      case arrType.kind
-      of gtPtr:   arrType.to
-      of gtUA:    arrType.uaTo
-      of gtArray: arrType.aTyp
-      else: raiseAssert "`gpuIndex` cannot be of a non pointer / array type: " & $arrType
-    else:
-      arrType
-  of gpuDot:
-    let parentTyp = ctx.getType(arg.dParent)
-    parentTyp.getFieldType(arg.dField)
-  of gpuLit: arg.lType
-  of gpuBinOp: dfl()
-  of gpuBlock:
-    (if arg.isExpr and arg.statements.len > 0:
-      ctx.getType(arg.statements[^1])
-    else:
-      dfl())
-  of gpuPrefix: ctx.getType(arg.pVal)
-  of gpuConv: arg.convTo
-  of gpuCast: arg.cTo
-  else:
-    raiseAssert "Not implemented to determine type from node: " & $arg
-
-proc makeCodeValid(ctx: var GpuContext, n: var GpuAst) =
-  ## Addresses AST patterns that need to be rewritten for OpenCL C.
-  ## Similar to CUDA – `Index(Deref(Ident))` → `Index(Ident)` for pointer types.
-  case n.kind
-  of gpuIndex:
-    if n.iArr.kind == gpuDeref:
-      let typ = ctx.getType(n, typeOfIndex = false)
-      if typ.kind != gtArray:
-        n = GpuAst(kind: gpuIndex, iArr: n.iArr.dOf, iIndex: n.iIndex)
-    else:
-      for ch in mitems(n):
-        ctx.makeCodeValid(ch)
-  else:
-    for ch in mitems(n):
-      ctx.makeCodeValid(ch)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Code generation
@@ -246,9 +178,26 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     let fnOrig = ctx.allFnTab[fnIdent]
     ctx.scanFunctions(fn)
 
-  # 4. Finalize AST transformations
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
-    ctx.makeCodeValid(fn)
+  # 4. Apply Phase 6 byref lowering passes
+  # NOTE: genericInsts entries were already copied to allFnTab in step 1,
+  # so we only iterate allFnTab (not genericInsts separately) to avoid
+  # double-processing the same ref object.
+  # lowerByrefParamsImpl: process allFnTab.
+  # fnTab shares references with allFnTab for called functions (scanFunctions),
+  # and kernels are skipped, so no separate fnTab loop needed.
+  for fnKey in ctx.allFnTab.keys:
+    var fn = ctx.allFnTab[fnKey]
+    if fn.kind == gpuProc:
+      pp.lowerByrefParamsImpl(ctx, fn)
+  # insertByrefAddrsImpl: needs to visit call sites in fnTab entries too,
+  # because fnTab has clones of top-level kernels from farmTopLevel.
+  for fnKey in ctx.allFnTab.keys:
+    var fn = ctx.allFnTab[fnKey]
+    if fn.kind == gpuProc:
+      pp.insertByrefAddrsImpl(ctx, fn)
+  for fnIdent, fn in ctx.fnTab.mpairs:
+    if fn.kind == gpuProc:
+      pp.insertByrefAddrsImpl(ctx, fn)
 
 # ── genOpenCL ─────────────────────────────────────────────────────────
 
@@ -285,7 +234,8 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     for p in ast.pParams:
       if p.passByRef and not isKernel:
         # const Type* _p_name — pointer to const for large structs (no C++ references)
-        params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "* _p_" & p.ident.ident()
+        # Note: lowerByrefParamsImpl already renamed the param to _p_
+        params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "* " & p.ident.ident()
       elif p.addressSpace == asWorkspace:
         # __local T* — shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
@@ -310,11 +260,8 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add ';'
     else:
       result.add " {\n"
-      # Local copies for byref params — const pointer is dereferenced into local
-      for p in ast.pParams:
-        if p.passByRef and not isKernel:
-          let innerIndent = "  ".repeat(indent + 1)
-          result.add innerIndent & gpuTypeToString(p.typ, p.ident.ident()) & " = *_p_" & p.ident.ident() & ";\n"
+      # Local copies for byref params are emitted as gpuVar nodes in the body
+      # by lowerByrefParamsImpl — no additional codegen needed here
       result &= ctx.genOpenCL(ast.pBody, indent + 1)
       result &= '\n' & indentStr & '}'
 
@@ -344,20 +291,11 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
-    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard:
       result &= " = " & ctx.genOpenCL(ast.vInit)
-    elif ast.vInit.kind != gpuDiscard:
-      result.add ";\n"
-      result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
-                                       size(ast.vName.ident()))
 
   of gpuAssign:
-    if ast.aRequiresMemcpy:
-      result = indentStr & genMemcpy(ctx.address(ast.aLeft), ctx.address(ast.aRight),
-                                     ctx.size(ast.aLeft))
-    else:
-      result = indentStr & ctx.genOpenCL(ast.aLeft) & " = " & ctx.genOpenCL(ast.aRight)
-
+    result = indentStr & ctx.genOpenCL(ast.aLeft) & " = " & ctx.genOpenCL(ast.aRight)
   of gpuIf:
     ctx.withoutSemicolon:
       result = indentStr & "if (" & ctx.genOpenCL(ast.ifCond) & ") {\n"
@@ -375,9 +313,10 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                ctx.genOpenCL(ast.tElse) & ')'
 
   of gpuFor:
+    let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genOpenCL(ast.fStart) & "; " &
-             ast.fVar.ident() & " < " & ctx.genOpenCL(ast.fEnd) & "; " &
+             ast.fVar.ident() & cmp & ctx.genOpenCL(ast.fEnd) & "; " &
              ast.fVar.ident() & "++) {\n"
     result &= ctx.genOpenCL(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
@@ -396,19 +335,9 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuCall:
     let fnName = ast.cName
-    let fnParams = ctx.getFnParams(fnName)
     var clArgs: seq[string]
-    for i, arg in ast.cArgs:
-      if i < fnParams.len and fnParams[i].passByRef:
-        if arg.kind == gpuMaterialize:
-          clArgs.add ctx.genOpenCL(arg)  # already wrapped by pass
-        elif arg.kind in {gpuIdent, gpuIndex, gpuDeref}:
-          clArgs.add "&" & ctx.genOpenCL(arg)
-        else:
-          let typ = gpuTypeToString(fnParams[i].typ, allowEmptyIdent = true)
-          clArgs.add "&(" & typ & "){" & ctx.genOpenCL(arg) & "}"
-      else:
-        clArgs.add ctx.genOpenCL(arg)
+    for arg in ast.cArgs:
+      clArgs.add ctx.genOpenCL(arg)
     result = indentStr & fnName.ident() & '(' & clArgs.join(", ") & ')'
 
   of gpuTemplateCall:
