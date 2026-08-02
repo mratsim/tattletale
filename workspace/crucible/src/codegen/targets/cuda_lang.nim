@@ -114,7 +114,8 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     result.add ' ' & ident
 
 proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
-  ## Returns the correct function with its return type
+  ## Returns the correct function with its return type. Kept for backward compat
+  ## during Phase 5; will be removed when codegen reads sigString from FnTableEntry.
   if typ.kind == gtPtr and typ.to.kind == gtArray:
     # crazy stuff. Syntax to return a pointer to a statically sized array:
     # `Foo (*fnName(fnArgs))[ArrayLen]`
@@ -127,10 +128,6 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
   else:
     # normal stuff
     result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
-
-proc genMemcpy(lhs, rhs, size: string): string =
-  result = &"memcpy({lhs}, {rhs}, {size})"
-
 proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
   ## Iterates over the given function and checks for all `gpuCall` nodes. Any function
   ## called in the scope is added to `fnTab`. This is a form of dead code elimination.
@@ -153,92 +150,6 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
     for ch in n:
       ctx.scanFunctions(ch)
 
-proc getFieldType(t: GpuType, field: GpuAst): GpuType =
-  ## Returns the type of the field. `t` must be an object or generic instantiation.
-  ## `field` must be an ident.
-  doAssert field.kind == gpuIdent, "Field is not an ident: " & $field
-  doAssert t.kind in [gtObject, gtGenericInst]
-  let flds = if t.kind == gtObject: t.oFields
-               else: t.gFields
-  result = GpuType(kind: gtInvalid)
-  for f in flds:
-    if f.name == field.ident():
-      return f.typ
-
-proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
-  ## Tries to determine the underlying type of the AST.
-  ##
-  ## If `typeOfIndex` is `true`, in case of a `gpuIndex` node, we return the type of the
-  ## element behind the index access `[]`. Otherwise we return the type of the array / pointer.
-  ##
-  ## Let `foo` be an array `let foo = [1'f32, 2, 3]`.
-  ## Let `n` be a `GpuAst` node of kind `gpuIndex` corresponding to `foo[1]`.
-  ## Then `ctx.getType(n, typeOfIndex = true)` returns `float32` while
-  ## `ctx.getType(n, typeOfIndex = false)` returns `array[3, float32]` (as
-  ## a `GpuType`).
-  ##
-  ## NOTE: Do *not* rely on this for `mutable` or `implicit` fields of pointer types!
-  template dfl(): untyped = GpuType(kind: gtInvalid)
-  case arg.kind
-  of gpuIdent: arg.iTyp
-  of gpuAddr: GpuType(kind: gtPtr, to: ctx.getType(arg.aOf))
-  of gpuDeref:
-    let argTyp = ctx.getType(arg.dOf)
-    doAssert argTyp.kind == gtPtr
-    argTyp.to
-  of gpuCall:
-    (block:
-      let fn = arg.cName
-      if fn in ctx.genericInsts: ctx.genericInsts[fn].pRetType
-      elif fn in ctx.allFnTab: ctx.allFnTab[fn].pRetType
-      elif fn in ctx.builtins: ctx.builtins[fn].pRetType
-      else: dfl())
-  of gpuIndex:
-    let arrType = ctx.getType(arg.iArr)
-    if typeOfIndex:
-      case arrType.kind
-      of gtPtr:   arrType.to
-      of gtUA:    arrType.uaTo
-      of gtArray: arrType.aTyp
-      else: raiseAssert "`gpuIndex` cannot be of a non pointer / array type: " & $arrType
-    else:
-      arrType
-  of gpuDot:
-    let parentTyp = ctx.getType(arg.dParent)
-    parentTyp.getFieldType(arg.dField)
-  of gpuLit: arg.lType
-  of gpuBinOp: dfl() ## XXX: store resulting type of `gpuBinOp`!
-  of gpuBlock:
-    (if arg.isExpr and arg.statements.len > 0:
-      ctx.getType(arg.statements[^1])
-    else:
-      dfl())
-  of gpuPrefix: ctx.getType(arg.pVal)
-  of gpuConv: arg.convTo
-  of gpuCast: arg.cTo # ident of the thing we cast
-  else:
-    raiseAssert "Not implemented to determine type from node: " & $arg
-
-proc makeCodeValid(ctx: var GpuContext, n: var GpuAst) =
-  ## Addresses other AST patterns that need to be rewritten on CUDA. Aspects
-  ## that are rewritten include:
-  ##
-  ## - `Index` of `Deref` of `Ident` needs to be rewritten to `Index` of `Ident` if the
-  ##   ident is a pointer type, because `[]` is syntactic sugar for pointer arithmetic
-  ##   (unless the argument is a pointer to a static array)
-  case n.kind
-  of gpuIndex:
-    if n.iArr.kind == gpuDeref:
-      # get type of deref'd node, but do not fold `gpuIndex` (i.e. get type of collection)
-      let typ = ctx.getType(n, typeOfIndex = false)
-      if typ.kind != gtArray:
-        n = GpuAst(kind: gpuIndex, iArr: n.iArr.dOf, iIndex: n.iIndex)
-    else:
-      for ch in mitems(n):
-        ctx.makeCodeValid(ch)
-  else:
-    for ch in mitems(n):
-      ctx.makeCodeValid(ch)
 
 proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 proc size(ctx: var GpuContext, a: GpuAst): string = size(ctx.genCuda(a))
@@ -270,9 +181,6 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     let fnOrig = ctx.allFnTab[fnIdent]
     ctx.scanFunctions(fn)
 
-  # 4. Finalize the code by performing some required AST transformations to make the code valid.
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
-    ctx.makeCodeValid(fn)
 
 proc genLit*(ast: GpuAst): string =
   ## Lower a literal node for the CUDA backend.
@@ -346,21 +254,10 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let attrs = if ast.vAttributes.len > 0: ast.vAttributes.join(" ") & ' '
                 else: ""
     result = indentStr & attrs & gpuTypeToString(ast.vType, ast.vName.ident())
-    # If there is an initialization, the type might require a memcpy
-    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard:
       result &= " = " & ctx.genCuda(ast.vInit)
-    elif ast.vInit.kind != gpuDiscard:
-      result.add ";\n"
-      result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
-                                       size(ast.vName.ident()))
-
   of gpuAssign:
-    if ast.aRequiresMemcpy:
-      result = indentStr & genMemcpy(ctx.address(ast.aLeft), ctx.address(ast.aRight),
-                                     ctx.size(ast.aLeft))
-    else:
-      result = indentStr & ctx.genCuda(ast.aLeft) & " = " & ctx.genCuda(ast.aRight)
-
+    result = indentStr & ctx.genCuda(ast.aLeft) & " = " & ctx.genCuda(ast.aRight)
   of gpuIf:
     # skip semicolon in the condition. Otherwise can lead to problematic code
     ctx.withoutSemicolon: # skip semicolon for if bodies
@@ -379,9 +276,10 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                ctx.genCuda(ast.tElse) & ')'
 
   of gpuFor:
+    let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genCuda(ast.fStart) & "; " &
-             ast.fVar.ident() & " < " & ctx.genCuda(ast.fEnd) & "; " &
+             ast.fVar.ident() & cmp & ctx.genCuda(ast.fEnd) & "; " &
              ast.fVar.ident() & "++) {\n"
     result &= ctx.genCuda(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
@@ -410,14 +308,6 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     else:
       raise newException(ValueError, "Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
         "calls in the expanded body of the `cuda` macro.")
-    when false: # Template replacement would look something like this:
-      let templ = ctx.templates[ast.tcName]
-      let expandedBody = substituteTemplateArgs(
-        templ.body,
-        templ.params,
-        ast.tcArgs
-      )
-      result = ctx.genCuda(expandedBody, indent)
 
   of gpuBinOp:
     ctx.withoutSemicolon:

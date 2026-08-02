@@ -101,6 +101,29 @@ type
     kOpenArray   # Nim openArray[T] — ptr + runtime length
     kVarargs     # Unsupported at th moment
 
+  GpuRangeKind* = enum
+    rkInclusive    # Nim `a..b` — emitted as `i <= end` or equivalent
+    rkExclusive    # Nim `a..<b` — emitted as `i < end`
+
+  FunctionKind* = enum
+    fkGenericInst    # Generic instantiation (body from Nim AST)
+    fkExternal       # External/imported function (ident only, body nil)
+    fkBuiltin        # Magic builtin (toOpenArray, etc.)
+    fkDefined        # Defined in GPU block (body available)
+    fkInstantiated   # Generic that has been instantiated
+
+  NamePolicy* = enum
+    npUnassigned    # Not yet processed
+    npClean         # Emit plain name (C++ mangling handles disambiguation)
+    npHashSuffix    # Append base58 short hash
+    npPatch         # Operator rename (+ → add, etc.)
+
+  FnTableEntry* = object
+    ident*: GpuAst        # call-site identifier (iSym)
+    body*: GpuAst          # function definition AST (nil for externals/builtins)
+    kind*: set[FunctionKind]
+    namePolicy*: NamePolicy  # set by mangleNames pass later
+    sigString*: string       # pre-computed function signature (set by emitFunctionSignatures pass)
   GpuAttribute* = enum
     attDevice = "__device__"
     attGlobal = "__global__"
@@ -122,6 +145,7 @@ type
       pParams*: seq[GpuParam]
       pBody*: GpuAst
       pAttributes*: set[GpuAttribute] # order not important, hence set
+      pRawPragmas*: seq[string]  ## Raw pragma names from Nim AST (preserved for filterPragmas pass)
       forwardDeclare*: bool ## can be set to true to _only_ generate a forward declaration
     of gpuCall:
       cIsExpr*: bool ## If the call returns a value
@@ -133,6 +157,7 @@ type
     of gpuIf:
       ifCond*: GpuAst
       ifThen*: GpuAst
+      ifIsExpr*: bool     ## True if from nnkIfExpr (expression-if), False if from nnkIfStmt
       ifElse*: GpuAst # will be `GpuAst(kind*: gpuDiscard)` if no else branch
     of gpuTernary:
       tCond*: GpuAst  # condition
@@ -142,12 +167,14 @@ type
       fVar*: GpuAst ## Will be a `GpuIdent`
       fStart*, fEnd*: GpuAst
       fBody*: GpuAst
+      fRangeKind*: GpuRangeKind
     of gpuWhile:
       wCond*: GpuAst
       wBody*: GpuAst
     of gpuBinOp:
       bOp*: GpuAst # `gpuIdent` of the binary operation
       bLeft*, bRight*: GpuAst
+      bIsOverloaded*: bool  ## True if operands are non-primitive types (pass converts to gpuCall)
     of gpuVar:
       vName*: GpuAst ## Will be a `GpuIdent`
       vType*: GpuType
@@ -159,11 +186,7 @@ type
       aLeft*, aRight*: GpuAst
       aRequiresMemcpy*: bool
     of gpuIdent:
-      iName*: string
-      iSym*: string ## The actual unique identifier of the symbol
-      iTyp*: GpuType = GpuType(kind: gtVoid) ## The type of this symbol. Might be empty for some types, but is guaranteed to be
-                    ## correct for variables & function parameters.
-      symbolKind*: GpuSymbolKind
+      symbol*: Symbol
     of gpuLit:
       lValue*: string
       lType*: GpuType
@@ -181,7 +204,6 @@ type
       isExpr*: bool ## Whether this block represents an expression, i.e. it returns something
       blockLabel*: string # optional name of the block. If any given, will open a `{ }` scope in CUDA
       statements*: seq[GpuAst]
-      ## XXX: we could add a `locals` argument here, which would refer to all local variables
     of gpuReturn:
       rValue*: GpuAst
     of gpuDot:
@@ -228,6 +250,13 @@ type
     gsShared,            ## A shared variable (`{.shared.}` / `workspace`)
     gsPrivate,           ## A private variable (to each thread)
 
+  Symbol* = ref object
+    name*: string       ## Display name -- may be mangled for collision safety
+    iSym*: string       ## IMMUTABLE fingerprint -- used as FnTable key (stays forever)
+    typ*: GpuType       ## Type of the symbol
+    symKind*: GpuSymbolKind ## Symbol kind
+    module*: string     ## Module provenance (optional)
+
   ## WebGPU only: Address space of a variable.
   ## - storage: Storage buffer allocated on host and passed to device
   ## - function: Local variable within a function
@@ -254,11 +283,6 @@ type
     value*: GpuAst
     typ*: GpuType
 
-  ## XXX: UNUSED
-  TemplateInfo* = object
-    params*: seq[string]
-    body*: GpuAst
-
   GpuProcSignature* = object
     params*: seq[GpuParam]
     retType*: GpuType
@@ -269,8 +293,6 @@ type
     ## However, also need to keep every *generic procedure*. In their bodies the types are
     ## only defined once they are called after all.
     skipSemicolon*: bool # whether we *currently* add semicolons at the end of a block or not
-    ## XXX: UNUSED
-    templates*: Table[string, TemplateInfo]  # Maps template names to their info
     allFnTab*: OrderedTable[GpuAst, GpuAst] ## map of all function definitions. For easy lookup by identifier
                                  ## Key is the `GpuAst` of the functions identifier / symbol
     fnTab*: OrderedTable[GpuAst, GpuAst] ## Map only of those function we generate code for. Includes
@@ -286,9 +308,9 @@ type
     globals*: OrderedTable[string, GpuParam] #Table[GpuAst, GpuAst] ## Maps global symbols (`{.shared.}` lifted to global, manually defined in global,
                          ## or `storage` buffer identifiers to the type? XXX to what?
     sigTab*: Table[string, GpuAst] ## Map the `nnkSym.signatureHash` to a `GpuAst` of kind `GpuIdent`
-    #scopeStack: seq[Locals] ## Stack of all local variables. When we descend into processing a block, we push to the stack
-    #                        ## when we finish, we pop. Before we pop, we assign the variable definitions to the `gpuBlock`
-    #                        ## `locals`
+    currentScope*: GpuAst  ## Current scope block for variable registration during toGpuAst
+    currentScopeSyms*: seq[(string, Symbol)]  ## Current scope's symbol table (parallel to currentScope)
+    scopeSymsStack*: seq[seq[(string, Symbol)]]  ## Stack of parent scope symbol tables for push/pop
     genSymCount*: int ## increases for every generated identifier (currently only underscore `_`), hence the basic solution
     ## Maps a struct type and field name, which is of pointer type to the value the user assigns
     ## in the constructor. Allows us to later replace `foo.ptrField` by the assignment in the `Foo()`
@@ -298,6 +320,10 @@ type
     ## we see an `nnkCall` we check if we call a generic function. If so, look up
     ## the instantiated generic, parse it and store in `genericInsts` below.
     generics*: HashSet[string]
+
+    ## Phase 3: Unified function table. Keyed by iSym string.
+    ## Contains ALL known functions (defined, generic-inst, external, builtin).
+    fnTable*: OrderedTable[string, FnTableEntry]
 
     ## Stores the unique identifiers (keys) and the implementations of the
     ## precise generic instantiations that are called.
@@ -324,6 +350,11 @@ type
     ## the function name. This is to avoid overload issues in backends that don't
     ## allow overloading by function signatures.
     symChoices*: HashSet[string]
+
+    ## Phase 6: Vulkan SSBO canonical slots (name, inner type) per indexed position
+    ssboCanonicalInfo*: seq[tuple[name: string, innerType: GpuType]]
+    ## Phase 6: Vulkan push-constant param info (type, name strings stored as comments
+    ## in globalBlocks for codegen to read)
   ## only need the `genericInsts` field data (the values). Trying to `newLit` the full `GpuContext`
   ## causes trouble.
   GpuGenericsInfo* = object
@@ -348,8 +379,40 @@ const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtFloat32, gtFloat64, gtSize_t}
   ## Set of numeric (scalar) GpuTypeKind variants.
 
+proc newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone, module: string = ""): Symbol =
+  new(result)
+  result.name = name
+  result.iSym = if iSym == "": name else: iSym
+  result.typ = typ
+  result.symKind = symKind
+  result.module = module
+
 proc newGpuIdent*(ident: string = "", symKind: GpuSymbolKind = gsNone): GpuAst =
-  result = GpuAst(kind: gpuIdent, iName: ident, symbolKind: symKind)
+  var sym = newSymbol(ident, symKind = symKind)
+  result = GpuAst(kind: gpuIdent, symbol: sym)
+
+proc scopeAdd*(scope: var seq[(string, Symbol)]; name: string; sym: Symbol) =
+  ## Add a name->Symbol mapping to a scope table (seq-based for newLit compat).
+  scope.add((name, sym))
+
+proc scopeHas*(scope: seq[(string, Symbol)]; name: string): bool =
+  ## Check if a name exists in a scope table.
+  for (n, _) in scope:
+    if n == name:
+      return true
+
+proc scopeGet*(scope: seq[(string, Symbol)]; name: string): Symbol =
+  ## Look up a name in a scope table. Raises if not found.
+  for (n, s) in scope:
+    if n == name:
+      return s
+  raiseAssert "Scope lookup failed: '" & name & "' not found"
+
+proc scopeGetOrDefault*(scope: seq[(string, Symbol)]; name: string): Symbol =
+  ## Look up a name in a scope table. Returns nil if not found.
+  for (n, s) in scope:
+    if n == name:
+      return s
 
 proc clone*(typ: GpuType): GpuType =
   ## Returns a clone of the input type
@@ -396,6 +459,7 @@ proc clone*(ast: GpuAst): GpuAst =
       result.pParams.add(clonedParam)
     result.pBody = ast.pBody.clone()
     result.pAttributes = ast.pAttributes
+    result.pRawPragmas = ast.pRawPragmas
     result.forwardDeclare = ast.forwardDeclare
   of gpuCall:
     result = GpuAst(kind: gpuCall)
@@ -412,6 +476,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result = GpuAst(kind: gpuIf)
     result.ifCond = ast.ifCond.clone()
     result.ifThen = ast.ifThen.clone()
+    result.ifIsExpr = ast.ifIsExpr
     result.ifElse = ast.ifElse.clone()
   of gpuTernary:
     result = GpuAst(kind: gpuTernary)
@@ -424,6 +489,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result.fStart = ast.fStart.clone()
     result.fEnd = ast.fEnd.clone()
     result.fBody = ast.fBody.clone()
+    result.fRangeKind = ast.fRangeKind
   of gpuWhile:
     result = GpuAst(kind: gpuWhile)
     result.wCond = ast.wCond.clone()
@@ -433,6 +499,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result.bOp = ast.bOp.clone()
     result.bLeft = ast.bLeft.clone()
     result.bRight = ast.bRight.clone()
+    result.bIsOverloaded = ast.bIsOverloaded
   of gpuVar:
     result = GpuAst(kind: gpuVar)
     result.vName = ast.vName.clone()
@@ -447,12 +514,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result.aRight = ast.aRight.clone()
     result.aRequiresMemcpy = ast.aRequiresMemcpy
   of gpuIdent:
-    result = GpuAst(kind: gpuIdent)
-    result.iName = ast.iName
-    result.iSym = ast.iSym
-    if ast.iTyp != nil:
-      result.iTyp = ast.iTyp.clone()
-    result.symbolKind = ast.symbolKind
+    result = GpuAst(kind: gpuIdent, symbol: ast.symbol) ## Share the Symbol ref!
   of gpuLit:
     result = GpuAst(kind: gpuLit)
     result.lValue = ast.lValue
@@ -541,6 +603,7 @@ proc hash*(t: GpuType): Hash =
   of gtPtr:
     h = h !& hash(t.to)
     h = h !& hash(t.implicit)
+    h = h !& hash(t.mutable)
   of gtUA:
     h = h !& hash(t.uaTo)
   of gtObject:
@@ -558,17 +621,19 @@ proc hash*(t: GpuType): Hash =
       h = h !& hash(g)
     for f in t.gFields:
       h = h !& hash(f)
+  of gtInvalid: h = h !& hash("gtInvalid")
   else: discard
   result = !$ h
 
 proc hash*(n: GpuAst): Hash =
   doAssert n.kind == gpuIdent, "Cannot hash a value other than `gpuIdents`! Input is: " & $n.kind
   var h = 0
-  h = h !& hash(n.iSym) # In theory the only thing relevant is the `iSym`, as it is unique per Nim symbol
-                        # but if we fail to update a type or symbolkind, we'd produce a different hash, which is good
-  if n.iTyp != nil: # can be nil, e.g. `gpuProc` symbols don't define it
-    h = h !& hash(n.iTyp)
-  h = h !& hash(n.symbolKind)
+  if n.symbol != nil:
+    h = h !& hash(n.symbol.iSym) # In theory the only thing relevant is the `iSym`, as it is unique per Nim symbol
+                                 # but if we fail to update a type or symbolkind, we'd produce a different hash, which is good
+    if n.symbol.typ != nil: # can be nil, e.g. `gpuProc` symbols don't define it
+      h = h !& hash(n.symbol.typ)
+    h = h !& hash(n.symbol.symKind)
   result = !$ h
 
 proc `==`*(a, b: GpuType): bool =
@@ -578,7 +643,7 @@ proc `==`*(a, b: GpuType): bool =
   else:
     result = true
     case a.kind
-    of gtPtr: result = a.to == b.to and a.implicit == b.implicit
+    of gtPtr: result = a.to == b.to and a.implicit == b.implicit and a.mutable == b.mutable
     of gtUA:  result = a.uaTo == b.uaTo
     of gtObject:
       result = a.name == b.name
@@ -597,6 +662,7 @@ proc `==`*(a, b: GpuType): bool =
           result = result and (a.gFields[i] == b.gFields[i])
     of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen
     of gtStatic: result = a.sValue == b.sValue
+    of gtInvalid: result = false
     else: discard
 
 proc `==`*(a, b: GpuAst): bool =
@@ -605,7 +671,19 @@ proc `==`*(a, b: GpuAst): bool =
   elif a.kind != gpuIdent:
     raiseAssert "Unsupported equality for GpuAst that are not idents"
   else:
-    result = a.iSym == b.iSym and a.iTyp == b.iTyp and a.symbolKind == b.symbolKind
+    result = a.symbol == b.symbol and a.symbol.iSym == b.symbol.iSym
+
+proc `==`*(a, b: GpuParam): bool =
+  ## Value equality for GpuParam: compares ident (via Symbol ref),
+  ## typ (structural), addressSpace, and passByRef.
+  if a.ident.isNil or b.ident.isNil:
+    result = a.ident.isNil and b.ident.isNil
+  else:
+    result = a.ident.symbol == b.ident.symbol
+  result = result and
+    a.typ == b.typ and
+    a.addressSpace == b.addressSpace and
+    a.passByRef == b.passByRef
 
 proc `==`*(a, b: GpuProcSignature): bool =
   if a.retType != b.retType: result = false
@@ -679,6 +757,8 @@ proc pretty*(t: GpuType): string =
       result.add "]"
     of gtStatic:
       result = "static(" & $t.sValue & ")"
+    of gtInvalid:
+      result = "Invalid"
     else:
       result = ($t.kind).removePrefix("gt")
 proc pretty*(n: GpuAst, indent: int = 0): string =
@@ -733,6 +813,7 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     result.add pretty(n.fStart, indent + 2)
     result.add pretty(n.fEnd, indent + 2)
     result.add pretty(n.fBody, indent + 2)
+    result.add id("RangeKind", n.fRangeKind)
   of gpuWhile:
     result.add pretty(n.wCond, indent + 2)
     result.add pretty(n.wBody, indent + 2)
@@ -752,7 +833,7 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     result.add pretty(n.aLeft, indent + 2)
     result.add pretty(n.aRight, indent + 2)
   of gpuIdent:
-    result.add spl(n.iName & "(" & n.iSym & ")")
+    result.add spl(n.symbol.name & "(" & n.symbol.iSym & ")")
   of gpuLit:
     result.add spl(n.lValue)
   of gpuConstexpr:
@@ -945,6 +1026,8 @@ func size*(t: GpuType): int =
   of gtGenericInst:
     for f in t.gFields:
       result += size(f.typ)
+  of gtInvalid:
+    result = 0
   else:
     result = 4  # default fallback
 
@@ -961,7 +1044,15 @@ func isLargeStruct*(t: GpuType): bool =
 
 proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
   ## Look up the parameters of a function by its identifier.
-  if fn in ctx.allFnTab:
+  ## Phase 3: checks fnTable first, then falls back to old tables.
+  let key = fn.symbol.iSym
+  if key in ctx.fnTable:
+    let entry = ctx.fnTable[key]
+    if not entry.body.isNil and entry.body.kind == gpuProc:
+      result = entry.body.pParams
+    else:
+      result = @[]
+  elif fn in ctx.allFnTab:
     result = ctx.allFnTab[fn].pParams
   elif fn in ctx.fnTab:
     result = ctx.fnTab[fn].pParams
@@ -971,11 +1062,23 @@ proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
     result = ctx.builtins[fn].pParams
   elif fn in ctx.processedProcs:
     result = ctx.processedProcs[fn].params
+proc ident*(n: GpuAst): string =
+  ## Returns the associated identifier (string) of the given symbol. The input
+  ## must be a `gpuIdent`
+  doAssert n.kind == gpuIdent, "The input is not a `gpuIdent`, but a " & $n.kind
+  result = n.symbol.name
 
 proc getFnReturnType*(ctx: GpuContext, fn: GpuAst): GpuType =
   ## Look up the return type of a function by its identifier.
-  ## Errors if the function is not found in any function table.
-  if fn in ctx.allFnTab:
+  ## Phase 3: checks fnTable first, then falls back to old tables.
+  let key = fn.symbol.iSym
+  if key in ctx.fnTable:
+    let entry = ctx.fnTable[key]
+    if not entry.body.isNil and entry.body.kind == gpuProc:
+      result = entry.body.pRetType
+    else:
+      result = GpuType(kind: gtVoid)
+  elif fn in ctx.allFnTab:
     result = ctx.allFnTab[fn].pRetType
   elif fn in ctx.fnTab:
     result = ctx.fnTab[fn].pRetType
@@ -986,15 +1089,7 @@ proc getFnReturnType*(ctx: GpuContext, fn: GpuAst): GpuType =
   elif fn in ctx.processedProcs:
     result = ctx.processedProcs[fn].retType
   else:
-    raiseAssert "Function not found: " & $fn & " (iName=" & fn.iName & ")"
-
-## General utility helpers
-
-proc ident*(n: GpuAst): string =
-  ## Returns the associated identifier (string) of the given symbol. The input
-  ## must be a `gpuIdent`
-  doAssert n.kind == gpuIdent, "The input is not a `gpuIdent`, but a " & $n.kind
-  result = n.iName
+    raiseAssert "Function not found: " & $fn & " (name=" & fn.ident() & ")"
 
 template withoutSemicolon*(ctx: var GpuContext, body: untyped): untyped =
   if not ctx.skipSemicolon: # if we are already skipping, leave true
@@ -1043,4 +1138,27 @@ proc gpuTypeToShortString*(t: GpuType): string =
   of gtStatic:
     result = $t.sValue
   else:
-    result = $t.kind # fallback — safe but verbose
+    result = $t.kind # fallback M-bM-^@M-^T safe but verbose
+
+const Base58* = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+  ## Base58 alphabet (no 0, O, I, l for readability and ambiguity avoidance).
+
+func shortHash*(sigHash: int64): string =
+  ## Encode a 64-bit signature hash as a 7-character base58 string.
+  ## 58^7 = 2,204,715,403,072 (~2.2T namespace), sufficient for collision
+  ## avoidance across all symbols in a GPU compilation unit.
+  var n = uint64(sigHash)
+  if n == 0:
+    return "1111111"
+  var chars: array[7, char]
+  for i in countdown(6, 0):
+    let rem = int(n mod 58)
+    chars[i] = Base58[rem]
+    n = n div 58
+    if n == 0 and i == 0:
+      break
+    if n == 0:
+      for j in 0 ..< i:
+        chars[j] = '1'
+      break
+  result = cast[string](@chars)

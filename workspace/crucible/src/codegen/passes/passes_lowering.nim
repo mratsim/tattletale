@@ -32,7 +32,7 @@ proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
       continue
     if fn.pName.isNil or fn.pName.kind != gpuIdent:
       continue
-    let fnName = fn.pName.iName
+    let fnName = fn.pName.symbol.name
     if fnName.len == 0:
       continue
     var spans: seq[SpanParam]
@@ -40,8 +40,8 @@ proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
       if p.typ.kind == gtSpan:
         spans.add SpanParam(
           paramIdx: idx,
-          ptrName: p.ident.iName,
-          lenName: p.ident.iName & "_len",
+          ptrName: p.ident.symbol.name,
+          lenName: p.ident.symbol.name & "_len",
           ptrTyp: initGpuPtrType(p.typ.sElemTyp, implicitPtr = false),
           lenTyp: initGpuType(gtInt32)
         )
@@ -55,7 +55,7 @@ proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
         continue
       if fn.pName.isNil or fn.pName.kind != gpuIdent:
         continue
-      let nm = fn.pName.iName
+      let nm = fn.pName.symbol.name
       if nm notin seen:
         seen.incl nm
         scanFn(fn)
@@ -69,7 +69,7 @@ proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
     return
   if fn.pName.isNil or fn.pName.kind != gpuIdent:
     return
-  let fnName = fn.pName.iName
+  let fnName = fn.pName.symbol.name
   if fnName.len == 0: return
   let spans = sigMap.getOrDefault(fnName)
   if spans.len == 0: return
@@ -87,15 +87,13 @@ proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
       for s in spans:
         if s.paramIdx == idx:
           newParams.add GpuParam(
-            ident: GpuAst(kind: gpuIdent, iName: s.ptrName,
-                          iTyp: s.ptrTyp, symbolKind: p.ident.symbolKind),
+            ident: GpuAst(kind: gpuIdent, symbol: newSymbol(s.ptrName, typ = s.ptrTyp, symKind = p.ident.symbol.symKind)),
             typ: s.ptrTyp,
             addressSpace: p.addressSpace,
             passByRef: false
           )
           newParams.add GpuParam(
-            ident: GpuAst(kind: gpuIdent, iName: s.lenName,
-                          iTyp: s.lenTyp, symbolKind: p.ident.symbolKind),
+            ident: GpuAst(kind: gpuIdent, symbol: newSymbol(s.lenName, typ = s.lenTyp, symKind = p.ident.symbol.symKind)),
             typ: s.lenTyp,
             addressSpace: p.addressSpace,
             passByRef: false
@@ -110,17 +108,14 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
   case n.kind
   of gpuIdent:
     # Span-typed ident → ptr ident (same name, ptr type)
-    if n.iTyp != nil and n.iTyp.kind == gtSpan:
-      n = GpuAst(kind: gpuIdent, iName: n.iName,
-                 iTyp: initGpuPtrType(n.iTyp.sElemTyp, implicitPtr = false),
-                 symbolKind: n.symbolKind)
+    if n.symbol.typ != nil and n.symbol.typ.kind == gtSpan:
+      n = GpuAst(kind: gpuIdent, symbol: newSymbol(n.symbol.name, typ = initGpuPtrType(n.symbol.typ.sElemTyp, implicitPtr = false), symKind = n.symbol.symKind))
   of gpuDot:
     # span.len → len ident
-    if n.dField.kind == gpuIdent and n.dField.iName == "len" and
-       n.dParent.iTyp != nil and n.dParent.iTyp.kind == gtSpan:
+    if n.dField.kind == gpuIdent and n.dField.symbol.name == "len" and
+       n.dParent.symbol.typ != nil and n.dParent.symbol.typ.kind == gtSpan:
       n = GpuAst(kind: gpuIdent,
-                 iName: n.dParent.iName & "_len",
-                 iTyp: initGpuType(gtInt32))
+                 symbol: newSymbol(n.dParent.symbol.name & "_len", typ = initGpuType(gtInt32)))
       return
     else:
       for child in mitems(n):
@@ -128,16 +123,15 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
   of gpuCall:
     var fnName: string
     if n.cName.kind == gpuIdent:
-      fnName = n.cName.iName
+      fnName = n.cName.symbol.name
     
     # Handle builtin calls: len(span) → span_len
     if fnName == "len" or fnName.startsWith("len_"):
       if n.cArgs.len >= 1:
         if n.cArgs[0].kind == gpuIdent and
-           n.cArgs[0].iTyp != nil and n.cArgs[0].iTyp.kind == gtSpan:
+           n.cArgs[0].symbol.typ != nil and n.cArgs[0].symbol.typ.kind == gtSpan:
           n = GpuAst(kind: gpuIdent,
-                     iName: n.cArgs[0].iName & "_len",
-                     iTyp: initGpuType(gtInt32))
+                     symbol: newSymbol(n.cArgs[0].symbol.name & "_len", typ = initGpuType(gtInt32)))
           return
         # len(toOpenArray_lowered_block) → statements[1] (the len expr)
         if n.cArgs[0].kind == gpuBlock and n.cArgs[0].isExpr and
@@ -147,13 +141,13 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
         # len(toOpenArray(ptr, first, last)) → last - first + 1
         if n.cArgs[0].kind == gpuCall and
            n.cArgs[0].cName.kind == gpuIdent and
-           (n.cArgs[0].cName.iName == "toOpenArray" or n.cArgs[0].cName.iName.startsWith("toOpenArray_")) and
+           (n.cArgs[0].cName.symbol.name == "toOpenArray" or n.cArgs[0].cName.symbol.name.startsWith("toOpenArray_")) and
            n.cArgs[0].cArgs.len >= 3:
           let tc = n.cArgs[0]
           n = GpuAst(kind: gpuBinOp,
-                     bOp: GpuAst(kind: gpuIdent, iName: "+"),
+                     bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
                      bLeft: GpuAst(kind: gpuBinOp,
-                                   bOp: GpuAst(kind: gpuIdent, iName: "-"),
+                                   bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
                                    bLeft: tc.cArgs[2],
                                    bRight: tc.cArgs[1]),
                      bRight: GpuAst(kind: gpuLit, lValue: "1",
@@ -175,13 +169,13 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
                      else:
                        n.cArgs[0]
       let ptrPlus = GpuAst(kind: gpuBinOp,
-                           bOp: GpuAst(kind: gpuIdent, iName: "+"),
+                           bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
                            bLeft: dataExpr,
                            bRight: n.cArgs[1])
       let lenExpr = GpuAst(kind: gpuBinOp,
-                           bOp: GpuAst(kind: gpuIdent, iName: "+"),
+                           bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
                            bLeft: GpuAst(kind: gpuBinOp,
-                                         bOp: GpuAst(kind: gpuIdent, iName: "-"),
+                                         bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
                                          bLeft: n.cArgs[2],
                                          bRight: n.cArgs[1]),
                            bRight: GpuAst(kind: gpuLit, lValue: "1",
@@ -213,11 +207,9 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
           if spanArg.kind == gpuBlock and spanArg.isExpr and spanArg.statements.len >= 2:
             newArgs.add spanArg.statements[0]
             newArgs.add spanArg.statements[1]
-          elif spanArg.kind == gpuIdent and spanArg.iTyp != nil and spanArg.iTyp.kind == gtSpan:
-            newArgs.add GpuAst(kind: gpuIdent, iName: spanArg.iName,
-                               iTyp: calleeSpans[spanIdx].ptrTyp)
-            newArgs.add GpuAst(kind: gpuIdent, iName: spanArg.iName & "_len",
-                               iTyp: calleeSpans[spanIdx].lenTyp)
+          elif spanArg.kind == gpuIdent and spanArg.symbol.typ != nil and spanArg.symbol.typ.kind == gtSpan:
+            newArgs.add GpuAst(kind: gpuIdent, symbol: newSymbol(spanArg.symbol.name, typ = calleeSpans[spanIdx].ptrTyp))
+            newArgs.add GpuAst(kind: gpuIdent, symbol: newSymbol(spanArg.symbol.name & "_len", typ = calleeSpans[spanIdx].lenTyp))
           else:
             newArgs.add spanArg
           spanIdx += 1
@@ -249,7 +241,7 @@ proc lowerSpans*(ctx: var GpuContext) =
         continue
       if fn.pName.isNil or fn.pName.kind != gpuIdent:
         continue
-      let nm = fn.pName.iName
+      let nm = fn.pName.symbol.name
       if nm notin rewritten:
         rewritten.incl nm
         rewriteFnSig(fn, sigMap)

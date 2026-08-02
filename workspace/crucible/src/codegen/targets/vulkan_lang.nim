@@ -112,8 +112,6 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
   else:
     result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
 
-proc genMemcpy(lhs, rhs, size: string): string =
-  result = &"memcpy({lhs}, {rhs}, {size})"
 
 proc containsFloat64(t: GpuType): bool =
   ## Returns true if the type tree contains float64 (double) somewhere.
@@ -171,73 +169,6 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
     for ch in n:
       ctx.scanFunctions(ch)
 
-proc getFieldType(t: GpuType, field: GpuAst): GpuType =
-  doAssert field.kind == gpuIdent, "Field is not an ident: " & $field
-  doAssert t.kind in [gtObject, gtGenericInst]
-  let flds = if t.kind == gtObject: t.oFields
-               else: t.gFields
-  result = GpuType(kind: gtInvalid)
-  for f in flds:
-    if f.name == field.ident():
-      return f.typ
-
-proc getType(ctx: var GpuContext, arg: GpuAst, typeOfIndex = true): GpuType =
-  template dfl(): untyped = GpuType(kind: gtInvalid)
-  case arg.kind
-  of gpuIdent: arg.iTyp
-  of gpuAddr: GpuType(kind: gtPtr, to: ctx.getType(arg.aOf))
-  of gpuDeref:
-    let argTyp = ctx.getType(arg.dOf)
-    doAssert argTyp.kind == gtPtr
-    argTyp.to
-  of gpuCall:
-    (block:
-      let fn = arg.cName
-      if fn in ctx.genericInsts: ctx.genericInsts[fn].pRetType
-      elif fn in ctx.allFnTab: ctx.allFnTab[fn].pRetType
-      elif fn in ctx.builtins: ctx.builtins[fn].pRetType
-      else: dfl())
-  of gpuIndex:
-    let arrType = ctx.getType(arg.iArr)
-    if typeOfIndex:
-      case arrType.kind
-      of gtPtr:   arrType.to
-      of gtUA:    arrType.uaTo
-      of gtArray: arrType.aTyp
-      else: raiseAssert "`gpuIndex` cannot be of a non pointer / array type: " & $arrType
-    else:
-      arrType
-  of gpuDot:
-    let parentTyp = ctx.getType(arg.dParent)
-    parentTyp.getFieldType(arg.dField)
-  of gpuLit: arg.lType
-  of gpuBinOp: dfl()
-  of gpuBlock:
-    (if arg.isExpr and arg.statements.len > 0:
-      ctx.getType(arg.statements[^1])
-    else:
-      dfl())
-  of gpuPrefix: ctx.getType(arg.pVal)
-  of gpuConv: arg.convTo
-  of gpuCast: arg.cTo
-  else:
-    raiseAssert "Not implemented to determine type from node: " & $arg
-
-proc makeCodeValid(ctx: var GpuContext, n: var GpuAst) =
-  ## Addresses AST patterns that need to be rewritten for GLSL.
-  ## Similar to CUDA – `Index(Deref(Ident))` → `Index(Ident)` for pointer types.
-  case n.kind
-  of gpuIndex:
-    if n.iArr.kind == gpuDeref:
-      let typ = ctx.getType(n, typeOfIndex = false)
-      if typ.kind != gtArray:
-        n = GpuAst(kind: gpuIndex, iArr: n.iArr.dOf, iIndex: n.iIndex)
-    else:
-      for ch in mitems(n):
-        ctx.makeCodeValid(ch)
-  else:
-    for ch in mitems(n):
-      ctx.makeCodeValid(ch)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Code generation
@@ -267,17 +198,14 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     let fnOrig = ctx.allFnTab[fnIdent]
     ctx.scanFunctions(fn)
 
-  # 4. Finalize AST transformations
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
-    ctx.makeCodeValid(fn)
   # 5. (No SSBO counter reset needed — handled in codegen())
 
   # 5. Rename kernel parameters that clash with GLSL reserved words
   proc renameGlslReserved(n: var GpuAst, symToRename: Table[string, string]) =
     case n.kind
     of gpuIdent:
-      if n.iSym in symToRename:
-        n.iName = symToRename[n.iSym]
+      if n.symbol != nil and n.symbol.iSym in symToRename:
+        n.symbol.name = symToRename[n.symbol.iSym]
     else:
       for ch in mitems(n):
         renameGlslReserved(ch, symToRename)
@@ -289,8 +217,8 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
         let oldName = p.ident.ident()
         let safeName = glslSafeName(oldName)
         if oldName != safeName:
-          renames[p.ident.iSym] = safeName
-          p.ident.iName = safeName
+          renames[p.ident.symbol.iSym] = safeName
+          p.ident.symbol.name = safeName
       if renames.len > 0:
         renameGlslReserved(fn.pBody, renames)
 
@@ -377,20 +305,11 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
-    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
+    if ast.vInit.kind != gpuDiscard:
       result &= " = " & ctx.genVulkan(ast.vInit)
-    elif ast.vInit.kind != gpuDiscard:
-      result.add ";\n"
-      result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
-                                       size(ast.vName.ident()))
 
   of gpuAssign:
-    if ast.aRequiresMemcpy:
-      result = indentStr & genMemcpy(ctx.address(ast.aLeft), ctx.address(ast.aRight),
-                                     ctx.size(ast.aLeft))
-    else:
-      result = indentStr & ctx.genVulkan(ast.aLeft) & " = " & ctx.genVulkan(ast.aRight)
-
+    result = indentStr & ctx.genVulkan(ast.aLeft) & " = " & ctx.genVulkan(ast.aRight)
   of gpuIf:
     ctx.withoutSemicolon:
       result = indentStr & "if (" & ctx.genVulkan(ast.ifCond) & ") {\n"
@@ -408,9 +327,10 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                ctx.genVulkan(ast.tElse) & ')'
 
   of gpuFor:
+    let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genVulkan(ast.fStart) & "; " &
-             ast.fVar.ident() & " < " & ctx.genVulkan(ast.fEnd) & "; " &
+             ast.fVar.ident() & cmp & ctx.genVulkan(ast.fEnd) & "; " &
              ast.fVar.ident() & "++) {\n"
     result &= ctx.genVulkan(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
@@ -457,8 +377,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = genLit(ast)
 
   of gpuArrayLit:
-    # GLSL uses array constructor syntax Type[](val1, val2), not C-style {val1, val2}
-    result = gpuTypeToString(ast.aLitType) & "[]("
+    # GLSL uses array constructor syntax Type[N](val1, val2, ...), not C-style {val1, val2}
+    # Explicit size required for proper struct field initialization in GLSL
+    result = gpuTypeToString(ast.aLitType) & "[" & $ast.aValues.len & "]("
     for i, el in ast.aValues:
       result.add gpuTypeToString(ast.aLitType) & '(' & ctx.genVulkan(el) & ')'
       if i < ast.aValues.high:
@@ -537,8 +458,8 @@ proc renameIdentRefs(n: var GpuAst, symToRename: Table[string, string]) =
   ## Rename `gpuIdent` nodes whose `iSym` is in the rename table.
   case n.kind
   of gpuIdent:
-    if n.iSym in symToRename:
-      n.iName = symToRename[n.iSym]
+    if n.symbol != nil and n.symbol.iSym in symToRename:
+      n.symbol.name = symToRename[n.symbol.iSym]
   else:
     for ch in mitems(n):
       renameIdentRefs(ch, symToRename)
@@ -561,28 +482,18 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
   result.add "\n"
 
-# ── Step 1: Pre-scan kernels — build SSBO dedup and collect push-const params ──
-  # canonicalSsbo[i] = (name, innerType) for the i-th pointer param (dense index)
-  var canonicalSsbo: seq[tuple[name: string, inner: string]]
-  # Push-constant params for non-pointer, non-workspace kernel params
-  var pushConstDecls: seq[string]
+  # Note: SSBO name normalization and type validation is done by lowerSsboParams pass.
 
+  # ── Step 1: Build SSBO and push-const info from IR (after pass normalization) ──
+  var canonicalSsbo: seq[tuple[name: string, inner: string]]
+  var pushConstDecls: seq[string]
   for (fnIdent, fn) in mpairs(ctx.fnTab):
     if fn.isGlobal():
-      var ssboIdx = 0  # dense index across pointer params only
+      var ssboIdx = 0
       for p in fn.pParams:
         if p.typ.kind == gtPtr:
           let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
-          if ssboIdx < canonicalSsbo.len:
-            let (canonName, canonInner) = canonicalSsbo[ssboIdx]
-            if canonInner != inner:
-              raiseAssert &"Type mismatch at SSBO position {ssboIdx}: {canonInner} vs {inner}"
-            if p.ident.ident() != canonName:
-              var renames = initTable[string, string]()
-              renames[p.ident.iSym] = canonName
-              renameIdentRefs(fn.pBody, renames)
-              p.ident.iName = canonName
-          else:
+          if ssboIdx >= canonicalSsbo.len:
             canonicalSsbo.add (p.ident.ident(), inner)
           inc ssboIdx
         elif p.addressSpace != asWorkspace:
