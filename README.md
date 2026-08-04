@@ -11,6 +11,11 @@ TL;DR of goals (README-driven development):
 - Multi-modality: Audio and Image input AND generation
 - Maintainable and easy to extend
 - Cryptography-inspired engineering practices: Lean4 formalization of complex state management
+- First class support of EXL3 quantization, the SOTA quantization in 2026 with random Welsh-Hadamard transforms, trellis and lattice codebooks.
+
+Killer apps:
+- Being an engine embeddable in a game that can handle parallel NPC dialogs and actions
+- Text + Audio + Video assistant on desktop and phone with concurrent agents handling
 
 ## Highlights
 
@@ -38,7 +43,7 @@ _At the moment the project is still in its infancy, we present key differentiato
 
 - EXL3 quant support, currently the highest quality quantization scheme
   using random Hadamard rotations, trellis and lattice codebooks.
-  
+
 ## Future highlights
 
 - [WIP] Porting CuteDSL/Cutlass/TileLang to Nim and enabling them across hardware vendors
@@ -46,3 +51,8 @@ _At the moment the project is still in its infancy, we present key differentiato
   - Previous large: https://github.com/mratsim/Arraymancer
   - Previous mini: https://github.com/mratsim/nim-julia-challenge/blob/master/src/tensor.nim
   - Previous compiler-based: https://github.com/mratsim/laser/blob/master/laser/lux_compiler/lux_dsl.nim
+
+## Documentation
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — layer stack, data flow, repo layout, extension points.
+- [`workspace/README.md`](workspace/README.md) — per-project catalog of the sub-projects.
