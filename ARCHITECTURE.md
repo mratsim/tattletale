@@ -14,10 +14,10 @@ and the development conventions live in [`AGENTS.md`](AGENTS.md). See
 
 ## Layer stack
 
-The codebase is layered so that each layer depends only on the one below it.
-The inference engine (top) consumes a tokenizer, a tensor layer, and model I/O,
-all of which ultimately run kernels produced by the GPU code-generation stack
-(bottom).
+The codebase is layered top-down; a layer may depend on one or more layers
+below it, but never upward. The inference engine (top) consumes a tokenizer,
+a tensor layer, model I/O, and portable kernels, all of which ultimately run
+code produced by the GPU code-generation stack (bottom).
 
 ```mermaid
 flowchart TB
@@ -47,6 +47,7 @@ flowchart TB
     TR --> SF
     TR --> LT
     TR --> CE
+    TR --> PO
     CE --> CR
     PO --> CR
     CR --> H

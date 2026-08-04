@@ -16,7 +16,7 @@ An intrusive, index-based, `seq`-backed WAVL tree. Self-balancing BST with rank 
 
 ### Longest-prefix-match via signed comparator
 
-`wavlFindBestMatch` exploits a comparator returning the *signed position of first divergence* rather than just `-1/0/+1`: the sign drives BST navigation while the magnitude is the shared-prefix length. On a miss it returns the neighbor with the longest shared prefix in pure `O(log N)` — no linear scan. Per the source comment, this is claimed as the first use of a self-balancing BST as a longest-prefix-match index, targeting radix-trie KV caches keyed by 256-token page.
+`wavlFindBestMatch` exploits a comparator returning the *signed position of first divergence* rather than just `-1/0/+1`: the sign drives BST navigation while the magnitude is the shared-prefix length. On a miss it returns the neighbor with the longest shared prefix in pure `O(log N)` — no linear scan. The implementation uses a self-balancing BST as a longest-prefix-match index for radix-trie KV caches keyed by 256-token pages.
 
 ## Formal verification
 

@@ -13,8 +13,8 @@ Entry point: [`toktoktok.nim`](toktoktok.nim) re-exports [`src/bpe_codec.nim`](s
   - In-place encoding with `var seq[int]` accumulation (see the metering notes in the header); PCRE2 matching via `workspace/pcre2`.
 - **Serialization** (`src/serialization.nim`)
   - `TiktokenFormat` and `HFTokenizer` deserialization (JSON via `jsony`), including mergeable ranks, special tokens, and base64-encoded byte decoding.
-- **Regex tokenizers** (`src/tokenizers_regexps.nim`)
-  - Pre-tokenizer regexps for `R50k`/`Gpt2`/`P50k`, `Cl100k`, `O200k`, and `KimiK25`.
+- **Regular-expression tokenizers** (`src/tokenizers_regexps.nim`)
+  - Pre-tokenizer regular expressions for `R50k`/`Gpt2`/`P50k`, `Cl100k`, `O200k`, and `KimiK25`.
 
 ## Tests
 

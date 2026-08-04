@@ -101,20 +101,25 @@ Single-file tests (per `AGENTS.md`):
 ```bash
 nim cpp -r --verbosity:0 --hints:off --warnings:off \
   --outdir:build/tests/test_name --nimcache:nimcache/tests/test_name \
-  workspace/transformers/tests/.../test_file.nim
+  workspace/transformers/tests/test_sampler.nim
 ```
 
 EXL3 tests must run on CUDA; inject the CUDA runtime at link time via
 `LD_PRELOAD` of `libtorch_cuda.so` (see `AGENTS.md`). Example:
 
 ```bash
-nim cpp -r --hints:off --warnings:off \
-  --outdir:build/wip --nimcache:nimcache/wip \
-  workspace/transformers/tests/q_exl3/test_*.nim
+# Compile one EXL3 test at a time (no -r), then run the binary under CUDA preload.
+SITE_PKGS="$(.venv/bin/python -c 'import site; print(site.getsitepackages()[0])')"
+TORCH_LIB="$SITE_PKGS/torch/lib"
+CUDA_LIB="$(dirname "$(find "$SITE_PKGS/nvidia" -maxdepth 1 -type d -name 'cu*' | head -n1)")/lib"
 
-LD_PRELOAD="$(pwd)/.venv/lib/python3.14/site-packages/torch/lib/libtorch_cuda.so" \
-LD_LIBRARY_PATH="$(pwd)/.venv/lib:$(pwd)/.venv/lib/python3.14/site-packages/torch/lib:$(pwd)/.venv/lib/python3.14/site-packages/nvidia/cu13/lib" \
-build/wip/test_*.nim
+nim cpp --hints:off --warnings:off \
+  --outdir:build/wip --nimcache:nimcache/wip \
+  workspace/transformers/tests/q_exl3/test_exl3_hadamard.nim
+
+LD_PRELOAD="$TORCH_LIB/libtorch_cuda.so" \
+LD_LIBRARY_PATH="$(pwd)/.venv/lib:$TORCH_LIB:$CUDA_LIB" \
+build/wip/test_exl3_hadamard
 ```
 
 ## Related docs
