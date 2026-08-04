@@ -9,6 +9,35 @@ a high-level inference goal down to emitted GPU code. Agent guidelines live in
 [`AGENTS.md`](../AGENTS.md), [`crucible/AGENTS.md`](crucible/AGENTS.md), and
 [`ceramic/AGENTS.md`](ceramic/AGENTS.md).
 
+## Importing the packages
+
+Each project exposes a `<name>.nim` shim at the workspace root that imports
+the project's public entry module and re-exports its API:
+
+```nim
+# workspace/crucible.nim
+import workspace/crucible/crucible
+export crucible
+```
+
+Import the shim to pull in a project's core modules under one name, instead
+of reaching into individual `src/` paths:
+
+```nim
+import workspace/ceramic        # Layout, Int[N], layout algebra, tensors, fill/copy/gemm kernels
+import workspace/crucible       # GPU code generator (CUDA / OpenCL / Vulkan / WebGPU)
+import workspace/transformers   # inference engine (models, generate, KV cache)
+import workspace/libtorch       # tensor layer
+import workspace/toktoktok      # BPE tokenizer
+import workspace/safetensors    # model I/O
+import workspace/data_structures # WAVL tree / longest-prefix-match
+import workspace/positron       # portable kernels
+```
+
+The entry `src/<name>/<name>.nim` is the project's public API; the workspace
+shim re-exports it verbatim. See `ARCHITECTURE.md` for how the projects
+connect.
+
 ## Showcase
 
 These are the differentiating projects, each with a dedicated README and
