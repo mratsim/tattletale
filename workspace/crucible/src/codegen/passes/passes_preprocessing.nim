@@ -478,16 +478,30 @@ proc removeStructPointerFieldsImpl*(blk: var GpuAst) =
 
 proc rewriteCompoundAssignmentImpl*(n: GpuAst): GpuAst =
   ## Rewrites `x += y` → `x = x + y`.
+  ##
+  ## The LHS of a compound assignment can arrive from the frontend wrapped in a
+  ## `gpuAddr` (Nim's `HiddenAddr` read-modify-write sugar for non-simple
+  ## lvalues, e.g. macro-expanded statement-list expressions like ceramic's
+  ## `tv[m,n]`). After the rewrite the lvalue must be used directly on both
+  ## sides: an `&`-wrapped LHS is not a modifiable lvalue on any backend and
+  ## `(&x) + y` is not a valid read. The RHS operand is a CLONE of the LHS
+  ## because legalization mutates the assignment LHS in place (hoisting
+  ## block-expression intermediates) — the two sides must not alias the same
+  ## node.
   doAssert n.kind == gpuBinOp
   if n.bOp.ident() in ["<=", "==", ">=", "!="]: return n
   template genAssign(left, rnode, op: typed): untyped =
-    let right = GpuAst(kind: gpuBinOp, bType: n.bType, bOp: op, bLeft: left, bRight: rnode)
+    let right = GpuAst(kind: gpuBinOp, bType: n.bType, bOp: op,
+                       bLeft: left.clone(), bRight: rnode)
     GpuAst(kind: gpuAssign, aLeft: left, aRight: right, aRequiresMemcpy: false)
   let op = n.bOp.ident()
   if op.len >= 2 and op[^1] == '=':
     var opAst = GpuAst(kind: gpuIdent, symbol: newSymbol(op[0 .. ^2]))
     opAst.symbol.iSym = opAst.symbol.name
-    result = genAssign(n.bLeft, n.bRight, opAst)
+    var lhs = n.bLeft
+    if lhs.kind == gpuAddr:
+      lhs = lhs.aOf
+    result = genAssign(lhs, n.bRight, opAst)
   else:
     result = n
 
