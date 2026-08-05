@@ -25,13 +25,7 @@ proc isTypeDescNode(n: NimNode): bool =
   ## matching `typedesc` param is dropped in `parseProcParameters`.
   ## A genuine value symbol (var/let/param/result/const of a value type)
   ## never has `ntyTypeDesc` type, so it is never erased (INV-C3).
-  ## If the type cannot be determined, treat as a value (do not erase):
-  ## the node keeps its previous behavior rather than being silently dropped.
-  try:
-    let typ = n.getTypeInst()
-    result = typ.typeKind == ntyTypeDesc
-  except CatchableError:
-    result = false
+  result = n.getTypeInst().typeKind == ntyTypeDesc
 
 proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute]): seq[GpuParam] =
   ## Returns all parameters of the given procedure from the `params` node
