@@ -16,9 +16,30 @@ import ../passes/pass_registry
 
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAst
 
+proc isTypeDescNode(n: NimNode): bool =
+  ## True when the node is a TYPE used as a value: a generic type parameter
+  ## or a `typedesc` literal (e.g. `T` in `make_tensor(T, L)`). In the typed
+  ## AST such an argument is a type symbol whose type is `typedesc[T]`
+  ## (`typeKind == ntyTypeDesc`). CUDA has no type values, so these cannot be
+  ## lowered to a runtime value and are erased at gpuCall construction; the
+  ## matching `typedesc` param is dropped in `parseProcParameters`.
+  ## A genuine value symbol (var/let/param/result/const of a value type)
+  ## never has `ntyTypeDesc` type, so it is never erased (INV-C3).
+  ## If the type cannot be determined, treat as a value (do not erase):
+  ## the node keeps its previous behavior rather than being silently dropped.
+  try:
+    let typ = n.getTypeInst()
+    result = typ.typeKind == ntyTypeDesc
+  except CatchableError:
+    result = false
+
 proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute]): seq[GpuParam] =
   ## Returns all parameters of the given procedure from the `params` node
   ## of type `nnkFormalParams`.
+  ## `typedesc`/type-param params (`_: typedesc[T]`) are dropped: they carry
+  ## no runtime value in the emitted GPU source and the caller side erases the
+  ## matching argument (see the nnkCall handler), keeping call/callee arity
+  ## consistent.
   doAssert params.kind == nnkFormalParams, "Argument is not FormalParams, but: " & $params.treerepr
   for i in 1 ..< params.len:
     let param = params[i]
@@ -31,6 +52,8 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
     #   PtrTy
     #     Ident "float32"   # `param.len - 2`
     #   Empty               # `param.len - 1`
+    if isTypeDescNode(param[typIdx-1]):
+      continue # typedesc[T] param — no CUDA value; skip whole IdentDefs (multi-name too)
     let paramType = resolveType(reg, param[typIdx-1].getTypeInst())
     for i in 0 ..< numParams:
       var p = ctx.toGpuAst(reg, param[i])
@@ -499,7 +522,13 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       ## XXX: for CUDA backend need to annotate all pulled in procs with `{.device.}`!
       ctx.registerGenericInstOrExternalProc(reg, node, name)
 
-    let args = node[1..^1].mapIt(ctx.toGpuAst(reg, it))
+    # Erase typedesc-typed arguments (types passed as values, e.g. `T` in
+    # make_tensor(T, L)): they have no CUDA value representation and are never
+    # converted. The callee's matching typedesc param is dropped in
+    # parseProcParameters, keeping call/callee arity consistent. Non-typedesc
+    # args keep their exact position/order. Operator builtins never receive
+    # typedesc operands in valid Nim, so this is safe for those branches too.
+    let args = node[1..^1].filterIt(not isTypeDescNode(it)).mapIt(ctx.toGpuAst(reg, it))
     if name in ctx.builtins and node[0].repr in NimGpuNumericOperators:
       var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuNumericOperators[node[0].repr]))
       op.symbol.iSym = op.symbol.name
