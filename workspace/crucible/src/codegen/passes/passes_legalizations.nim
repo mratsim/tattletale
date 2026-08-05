@@ -153,16 +153,35 @@ proc liftConstexpr(pbody: var GpuAst) =
     liftConstexpr(pbody.wBody)
   else:
     discard
+
 proc getExprType(ctx: GpuContext; n: GpuAst): GpuType =
   ## Read the type of an expression from existing node fields.
   ## Errors if the node kind doesn't carry its own type (e.g. gpuDot, gpuIndex).
   ## Those cases require the caller to provide the type from context instead.
   if n == nil: error "Cannot get type of nil node"
   case n.kind
-  of gpuIdent: result = n.symbol.typ
+  of gpuIdent:
+    result = n.symbol.typ
+    # Ident analogue of the gpuBinOp read-site policy (SLOP-009): a gpuIdent
+    # whose symbol carries no type must not silently fall through to the
+    # blitExprSlot fnRetType rung (which absorbs it in value-returning
+    # procs) — the same silent wrong-type class. Error at the read site.
+    if result.isNil or result.kind == gtVoid:
+      error "gpuIdent with nil or void symbol type: Cannot determine type for blit temp in " &
+        "block expression (nil/void symbol.typ on a gpuIdent is a defect — idents reaching getExprType must carry a type)"
   of gpuLit: result = n.lType
   of gpuCall: result = ctx.getFnReturnType(n.cName)
   of gpuObjConstr: result = n.ocType
+  of gpuBinOp:
+    # Presence-only check by design: verifies bType is non-nil/non-void, never its
+    # value correctness — that is the construction sites' + literal oracles' job.
+    # A nil/void bType must not silently fall through to the blitExprSlot fnRetType
+    # rung (or raise a misleading "blit temp" error on a perfectly typed binop), so
+    # it is surfaced as a defect at the read site instead of returning nil.
+    result = n.bType
+    if result.isNil or result.kind == gtVoid:
+      error "gpuBinOp with nil or void bType: Cannot determine type for blit temp in " &
+        "block expression (nil/void bType on a gpuBinOp is a defect — all construction sites must populate bType)"
   of gpuConstexpr: result = n.cType
   of gpuMaterialize: result = n.mType
   of gpuConv: result = n.convTo
@@ -212,7 +231,13 @@ proc blitExprSlot(ctx: var GpuContext; slot: var GpuAst; blitType: GpuType; fnRe
       if t.isNil or t.kind == gtVoid:
         t = fnRetType
       if t.isNil or t.kind == gtVoid:
-        error "Cannot determine type for blit temp in block expression"
+        # bType is a gpuBinOp-variant field — only read it when the tail IS a
+        # gpuBinOp, otherwise the case-object access raises a FieldDefect.
+        var msg = "Cannot determine type for blit temp in block expression" &
+          " (tail kind: " & $slot.statements[^1].kind & ")"
+        if slot.statements[^1].kind == gpuBinOp:
+          msg.add ", nil bType: " & $slot.statements[^1].bType.isNil
+        error msg
       let blitName = "_blit_" & $ctx.genSymCount
       inc ctx.genSymCount
       let blitSym = newSymbol(blitName, iSym = blitName, typ = t, symKind = gsLocal)
@@ -335,7 +360,7 @@ proc renameSymsInTree(n: var GpuAst; oldName, newName: string)
 proc hoistLvalueVars(stmts: var seq[GpuAst])
 proc dedupVarNames*(stmts: var seq[GpuAst])
 
-proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
+proc blitFnBody(ctx: var GpuContext; body: var GpuAst; fnRetType: GpuType) =
   ## Walk a function body tree, blitting all gpuBlock(isExpr: true) nodes.
   case body.kind
   of gpuBlock:
@@ -350,8 +375,10 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
         blockPreambles.add @[]
         let sk = body.statements[i].kind
         if sk in {gpuBlock, gpuIf, gpuFor, gpuWhile}:
-          blitFnBody(body.statements[i], ctx, fnRetType)
+          blitFnBody(ctx, body.statements[i], fnRetType)
     var newStmts: seq[GpuAst]
+    var fullPreambles: seq[seq[GpuAst]]
+    fullPreambles.setLen(body.statements.len)
     for i, stmt in body.statements.mpairs:
       var preamble = blockPreambles[i]
       case stmt.kind
@@ -409,25 +436,34 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
           preamble = ctx.blitExprSlot(stmt, GpuType(kind: gtVoid), fnRetType)
       newStmts.add preamble
       newStmts.add stmt
+      fullPreambles[i] = preamble
     body.statements = newStmts
     # Register all gpuVar symbols in this block's scope table
     for stmt in body.statements:
       if stmt.kind == gpuVar:
         let sym = stmt.vName.symbol
         scopeAdd(ctx.currentScopeSyms, sym.name, sym)
-    # Also ensure gpuBlock children at this level have their scope tables initialized
-    # Recursively process newly created statements (e.g. scope blocks from blitting)
-    for i in 0 ..< body.statements.len:
-      blitFnBody(body.statements[i], ctx, fnRetType)
+    # Recursively process the NEW content produced by blitting. The original
+    # statements were already fully processed (nested blocks via PASS 1,
+    # nested expressions via PASS 2); the preamble statements — blit scope
+    # blocks and hoisted lvalue wrappers — are freshly created and must be
+    # walked once. Re-walking the whole statement list here would make the
+    # pass O(N x blit-depth): a blowup on deeply-nested expression blocks
+    # (e.g. ceramic evalOnceAs / crd2idx, 2k+ blits => 100M+ visits).
+    for i in 0 ..< fullPreambles.len:
+      for j in 0 ..< fullPreambles[i].len:
+        var pre = fullPreambles[i][j]
+        if pre.kind in {gpuBlock, gpuIf, gpuFor, gpuWhile}:
+          blitFnBody(ctx, pre, fnRetType)
     ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
   of gpuIf:
-    blitFnBody(body.ifThen, ctx, fnRetType)
+    blitFnBody(ctx, body.ifThen, fnRetType)
     if body.ifElse.kind != gpuDiscard:
-      blitFnBody(body.ifElse, ctx, fnRetType)
+      blitFnBody(ctx, body.ifElse, fnRetType)
   of gpuFor:
-    blitFnBody(body.fBody, ctx, fnRetType)
+    blitFnBody(ctx, body.fBody, fnRetType)
   of gpuWhile:
-    blitFnBody(body.wBody, ctx, fnRetType)
+    blitFnBody(ctx, body.wBody, fnRetType)
   else:
     discard
 
@@ -652,11 +688,11 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
       for fnKey in ctx.allFnTab.keys:
         let fn = ctx.allFnTab[fnKey]
         if fn.kind == gpuProc:
-          blitFnBody(fn.pBody, ctx, fn.pRetType)
+          blitFnBody(ctx, fn.pBody, fn.pRetType)
       for fnKey in ctx.genericInsts.keys:
         let fn = ctx.genericInsts[fnKey]
         if fn.kind == gpuProc:
-          blitFnBody(fn.pBody, ctx, fn.pRetType)
+          blitFnBody(ctx, fn.pBody, fn.pRetType)
     )
 
 

@@ -49,7 +49,7 @@ block:
   # BinOp with gsNone operator symbol — should NOT be patched
   let opSym = newSymbol("+", iSym = "+_h3", symKind = gsNone)
   let opIdent = GpuAst(kind: gpuIdent, symbol: opSym)
-  var binOp = GpuAst(kind: gpuBinOp, bOp: opIdent,
+  var binOp = GpuAst(kind: gpuBinOp, bType: nil, bOp: opIdent,
                      bLeft: GpuAst(kind: gpuLit, lValue: "1"),
                      bRight: GpuAst(kind: gpuLit, lValue: "2"))
 

@@ -504,10 +504,12 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuNumericOperators[node[0].repr]))
       op.symbol.iSym = op.symbol.name
       result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
+      result.bType = resolveType(reg, node.getTypeInst())
     elif name in ctx.builtins and node[0].repr in NimGpuBooleanOperators:
       var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuBooleanOperators[node[0].repr]))
       op.symbol.iSym = op.symbol.name
       result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
+      result.bType = resolveType(reg, node.getTypeInst())
     else:
       let fnIsExpr = ctx.fnReturnsValue(name)
       result = GpuAst(kind: gpuCall, cIsExpr: fnIsExpr)
@@ -551,6 +553,21 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         result.bLeft.lType = leftTyp
       elif result.bRight.kind == gpuLit:
         result.bRight.lType = rightTyp
+      # Carry the operator's true return type: typ = node[0].getTypeImpl() is
+      # the ProcTy; typ[0] is the FormalParams; typ[0][0] is the return type
+      # node. Compound-assign operators (`+=`, `-=`, ...) declare no return
+      # type in their ProcTy (nnkEmpty), so the result type is the LHS operand
+      # type (stripping the `var` wrapper Nim puts on var params).
+      # Scoped to the primitive branch only — eager resolution on overloaded
+      # operands would crash resolveType (resolvers.nim:316/351).
+      let retTypNode = typ[0][0]
+      if retTypNode.kind == nnkEmpty:
+        var lhsTyp = node[1].getTypeInst()
+        if lhsTyp.kind == nnkVarTy:
+          lhsTyp = lhsTyp[0]
+        result.bType = resolveType(reg, lhsTyp)
+      else:
+        result.bType = resolveType(reg, retTypNode)
   of nnkDotExpr:
     ## NOTE: As we use a typed macro, we only encounter `DotExpr` for *actual* field accesses and NOT
     ## for calls using method call syntax without parens

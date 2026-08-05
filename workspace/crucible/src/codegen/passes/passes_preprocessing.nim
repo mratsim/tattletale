@@ -481,7 +481,7 @@ proc rewriteCompoundAssignmentImpl*(n: GpuAst): GpuAst =
   doAssert n.kind == gpuBinOp
   if n.bOp.ident() in ["<=", "==", ">=", "!="]: return n
   template genAssign(left, rnode, op: typed): untyped =
-    let right = GpuAst(kind: gpuBinOp, bOp: op, bLeft: left, bRight: rnode)
+    let right = GpuAst(kind: gpuBinOp, bType: n.bType, bOp: op, bLeft: left, bRight: rnode)
     GpuAst(kind: gpuAssign, aLeft: left, aRight: right, aRequiresMemcpy: false)
   let op = n.bOp.ident()
   if op.len >= 2 and op[^1] == '=':
