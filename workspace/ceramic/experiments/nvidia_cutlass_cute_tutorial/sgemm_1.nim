@@ -81,8 +81,10 @@ proc sgemm_1_kernel(
     # Copy gmem → smem (via thread-partitioned tiles)
     copyFrom(tAsA, tAgA(_, _, kTile))  # A (THR_M, THR_K) -> (THR_M, THR_K)
     copyFrom(tBsB, tBgB(_, _, kTile))  # B (THR_N, THR_K) -> (THR_N, THR_K)
+    syncthreads()                      # CuTe: wait for all threads to write smem
     # Compute: C += A * B
     gemm(tCrC, tCsA, tCsB)             # (THR_M, THR_N) += (THR_M, BLK_K) × (THR_N, BLK_K)
+    syncthreads()                      # CuTe: wait for all threads to read smem
 
   # ── Epilogue ──
   axpby(float32(1), tCrC, float32(0), tCgC)       # C = 1·acc + 0·C

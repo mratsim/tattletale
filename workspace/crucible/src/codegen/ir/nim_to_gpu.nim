@@ -169,8 +169,6 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
 
   let fn = ctx.toGpuAst(reg, inst)
   if fn.kind == gpuDiscard:
-    echo "[registerGenericInstOrExternalProc] node[0].repr = ", node[0].repr, " impl.kind = ", inst.kind, " isBuiltIn = ", inst.isBuiltIn()
-    echo "  impl treerepr: ", inst.treerepr
     doAssert inst.isBuiltIn()
     return
   fn.pAttributes.incl attDevice # make sure this is interpreted as a device function
