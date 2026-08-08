@@ -18,7 +18,7 @@ import workspace/crucible/src/codegen/passes/passes_normalizations
 # 1. bIsOverloaded=false remains gpuBinOp
 # ═══════════════════════════════════════════════════════════════════════
 block:
-  var binOp = GpuAst(kind: gpuBinOp, bIsOverloaded: false,
+  var binOp = GpuAst(kind: gpuBinOp, bType: nil, bIsOverloaded: false,
                      bLeft: GpuAst(kind: gpuLit, lValue: "1"),
                      bRight: GpuAst(kind: gpuLit, lValue: "2"))
 
@@ -34,7 +34,7 @@ block:
 block:
   let opSym = newSymbol("+", iSym = "+_h2", symKind = gsProc)
   let opPlus = GpuAst(kind: gpuIdent, symbol: opSym)
-  var binOp = GpuAst(kind: gpuBinOp, bOp: opPlus, bIsOverloaded: true,
+  var binOp = GpuAst(kind: gpuBinOp, bType: nil, bOp: opPlus, bIsOverloaded: true,
                      bLeft: GpuAst(kind: gpuLit, lValue: "1"),
                      bRight: GpuAst(kind: gpuLit, lValue: "2"))
 

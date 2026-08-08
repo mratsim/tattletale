@@ -29,6 +29,7 @@ template registerCommonPasses*(reg: var PassRegistry) =
   reg.registerNormalizationPasses()
   reg.registerLegalizationPasses()
   reg.registerPreprocessingPasses()
+  reg.registerOptimizationPasses()
   reg.registerLoweringPasses()
   reg.registerValidationPostPasses()
 

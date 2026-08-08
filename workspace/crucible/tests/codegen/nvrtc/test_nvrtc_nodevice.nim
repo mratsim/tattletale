@@ -19,7 +19,7 @@ proc addScaled*(a, b, scale: int32): int32 =  # no {.device.}
 
 const kernelCode = cuda:
   proc nodeviceKernel(output: ptr UncheckedArray[int32]) {.global.} =
-    let tid = blockIdx.x * blockDim.x + threadIdx.x
+    let tid = int32(blockIdx.x * blockDim.x + threadIdx.x)
     if tid < 4:
       output[tid] = doubleIt(tid + 1)
 

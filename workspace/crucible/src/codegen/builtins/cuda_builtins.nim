@@ -9,23 +9,28 @@
 import ./builtins_pragmas
 
 type
-  Dim* = cint ## dummy to have access to math
+  ## Dummy objects to make CUDA block/thread index access possible in the
+  ## *typed* `cuda` macro. Fields are plain `int` (Nim int64) so
+  ## threadIdx.x/blockIdx.x match the layout templates' `int or Int` params
+  ## without casts. NOTE: do NOT introduce a named alias here — the codegen
+  ## resolves field types by name and emits C++ tuple struct names from it
+  ## (Tuple_F0_Dim vs Tuple_F0_int mismatch broke tuple-concat emission).
+  ## The codegen emits these by name, so the width only affects Nim-side
+  ## typing — at emission `int` maps to int32 anyway
+  ## (toGpuTypeKind: ntyInt -> gtInt32, gpu_type_constructors.nim), so this
+  ## is emission-neutral (verified: emitted PTX is all-32-bit index math).
+  ## The int32/SomeInteger idea remains only to make the Nim-side typing
+  ## match the emitted width — the IR currently types these int64 while
+  ## the generated CUDA is 32-bit (benign at harness sizes; latent for
+  ## grids >= 2^32 threads). NOT a GPU perf issue.
   NvBlockIdx* = object
-    x*: Dim
-    y*: Dim
-    z*: Dim
+    x*, y*, z*: int
   NvBlockDim = object
-    x*: Dim
-    y*: Dim
-    z*: Dim
+    x*, y*, z*: int
   NvThreadIdx* = object
-    x*: Dim
-    y*: Dim
-    z*: Dim
+    x*, y*, z*: int
   NvGridDim = object
-    x*: Dim
-    y*: Dim
-    z*: Dim
+    x*, y*, z*: int
 
 
 ## These are dummy elements to make CUDA block / thread index / dim
