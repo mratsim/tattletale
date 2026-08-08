@@ -25,7 +25,8 @@ import workspace/crucible/src/codegen/nvrtc
 proc sgemm_1_kernel(
        mA, mB, mC: distinct TensorView,
        cta_tiler: auto,
-       tA, tB, tC: distinct Layout) =
+       tA, tB, tC: distinct Layout,
+       alpha, beta: float32) =
   ## sgemm_1 device kernel — identical algorithm to CuTe sgemm_1.cu.
   ##
   ## Setup:
@@ -39,7 +40,10 @@ proc sgemm_1_kernel(
   ##   axpby
 
   # ── CTA coordinate ──
-  let cta_coord = (0, 0, X())  # blockIdx.x, blockIdx.y, _ on GPU
+  # CuTe: make_coord(blockIdx.x, blockIdx.y, _)
+  # (int(...) casts: the builtin stub types blockIdx.x as cint; the layout
+  #  templates require int/Int)
+  let cta_coord = (blockIdx.x, blockIdx.y, X())
 
   # ── CTA tile extraction (with Step) ──
   #   mA: (M,K)  cta_tiler: (BLK_M, BLK_N, BLK_K)
@@ -51,25 +55,31 @@ proc sgemm_1_kernel(
   let gC = local_tile(mC, cta_tiler, cta_coord, (Y, Y, X))  # (BLK_M, BLK_N)
 
   # ── Shared memory tiles ──
-  let sA = make_tensor_like(gA(_, _, 0))  # (BLK_M, BLK_K)
-  let sB = make_tensor_like(gB(_, _, 0))  # (BLK_N, BLK_K)
+  # CuTe: __shared__ smemA/smemB + make_tensor(make_smem_ptr(...)).
+  # make_tensor_like would allocate a PER-THREAD local array (each thread
+  # would only ever see its own rake) — real GEMM smem must be block-shared.
+  var smemA {.shared.}: array[128 * 8, float32]  # (BLK_M, BLK_K)
+  var smemB {.shared.}: array[128 * 8, float32]  # (BLK_N, BLK_K)
+  let sA = make_view(addr smemA[0], make_layout((128, 8)))  # (BLK_M, BLK_K)
+  let sB = make_view(addr smemB[0], make_layout((128, 8)))  # (BLK_N, BLK_K)
 
   # ── A/B thread partitioning (3-arg) ──
-  let tAgA = local_partition(gA, tA, 0)  # (THR_M, THR_K, k) — threadIdx.x on GPU
-  var tAsA = local_partition(sA, tA, 0)  # (THR_M, THR_K)
-  let tBgB = local_partition(gB, tB, 0)  # (THR_N, THR_K, k)
-  var tBsB = local_partition(sB, tB, 0)  # (THR_N, THR_K)
+  # CuTe: local_partition(gA, tA, threadIdx.x)
+  let tAgA = local_partition(gA, tA, threadIdx.x)  # (THR_M, THR_K, k)
+  var tAsA = local_partition(sA, tA, threadIdx.x)  # (THR_M, THR_K)
+  let tBgB = local_partition(gB, tB, threadIdx.x)  # (THR_N, THR_K, k)
+  var tBsB = local_partition(sB, tB, threadIdx.x)  # (THR_N, THR_K)
 
   # ── C thread partitioning (4-arg with Step) ──
   #   sA: (BLK_M, BLK_K), tC: (THR_M, THR_N)
   #   Step (_1, X): partition M by tC mode 0, keep K whole
-  let tCsA = local_partition(sA, tC, 0, (Y, X))  # (THR_M, BLK_K)
+  let tCsA = local_partition(sA, tC, threadIdx.x, (Y, X))  # (THR_M, BLK_K)
   #   sB: (BLK_N, BLK_K)
   #   Step (X, _1): keep N whole, partition K by tC mode 1
-  let tCsB = local_partition(sB, tC, 0, (X, Y))  # (THR_N, BLK_K)
+  let tCsB = local_partition(sB, tC, threadIdx.x, (X, Y))  # (THR_N, BLK_K)
   #   gC: (BLK_M, BLK_N)
   #   Step (_1, _1): partition both modes
-  var tCgC = local_partition(gC, tC, 0, (Y, Y))  # (THR_M, THR_N)
+  var tCgC = local_partition(gC, tC, threadIdx.x, (Y, Y))  # (THR_M, THR_N)
 
   # ── Accumulators ──
   var tCrC = make_tensor_like(tCgC)  # (THR_M, THR_N)
@@ -87,7 +97,10 @@ proc sgemm_1_kernel(
     syncthreads()                      # CuTe: wait for all threads to read smem
 
   # ── Epilogue ──
-  axpby(float32(1), tCrC, float32(0), tCgC)       # C = 1·acc + 0·C
+  # C = alpha·acc + beta·C — matches CuTe sgemm_1's gemm_device, which
+  # takes alpha/beta as kernel params and does axpby(alpha, tCrC, beta, tCgC)
+  # (the tutorial's main() happens to pass alpha=1, beta=0).
+  axpby(alpha, tCrC, beta, tCgC)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  GPU kernel (cuda: block for NVRTC)
@@ -98,16 +111,19 @@ const sgemmKernel = cuda:
     C: ptr UncheckedArray[float32],
     A: ptr UncheckedArray[float32],
     B: ptr UncheckedArray[float32],
-    M, N, K: int32
+    M, N, K: int32,
+    alpha, beta: float32
   ) {.global.} =
-    let mA = make_view(A, make_layout((int(M), int(K)), (Int[1](), int(M))))
-    let mB = make_view(B, make_layout((int(N), int(K)), (Int[1](), int(N))))
-    var mC = make_view(C, make_layout((int(M), int(N)), (Int[1](), int(M))))
-    let cta_tiler = (Int[128](), Int[128](), Int[8]())
-    let tA = make_layout((Int[32](), Int[8]()))
-    let tB = make_layout((Int[32](), Int[8]()))
-    let tC = make_layout((Int[16](), Int[16]()))
-    sgemm_1_kernel(mA, mB, mC, cta_tiler, tA, tB, tC)
+    # alpha/beta: generic GEMM contract C = alpha·(A@B) + beta·C — same
+    # signature as CuTe gemm_device(..., Alpha alpha, Beta beta).
+    let mA = make_view(A, make_layout((int(M), int(K)), (1, int(M))))
+    let mB = make_view(B, make_layout((int(N), int(K)), (1, int(N))))
+    var mC = make_view(C, make_layout((int(M), int(N)), (1, int(M))))
+    let cta_tiler = makeIntTuple((128, 128, 8))
+    let tA = make_layout((32, 8))
+    let tB = make_layout((32, 8))
+    let tC = make_layout((16, 16))
+    sgemm_1_kernel(mA, mB, mC, cta_tiler, tA, tB, tC, alpha, beta)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Test
@@ -116,9 +132,9 @@ const sgemmKernel = cuda:
 when isMainModule:
   echo &"Testing sgemm_1 via run_gemm_and_validate_colmajor..."
 
-  echo "════════ kernel ═══════════════════════════════════════════════════════"
-  echo sgemmKernel
-  echo "═══════════════════════════════════════════════════════════════════════"
+  # echo "════════ kernel ═══════════════════════════════════════════════════════"
+  # echo sgemmKernel
+  # echo "═══════════════════════════════════════════════════════════════════════"
 
   run_gemm_and_validate_colmajor(sgemmKernel, "gemmKernel")
   echo &"  OK — sgemm_1 GPU correctness test passed"
