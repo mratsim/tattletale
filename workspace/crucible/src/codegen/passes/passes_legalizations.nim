@@ -214,6 +214,15 @@ proc getExprType(ctx: GpuContext; n: GpuAst): GpuType =
       error "getExprType(gpuDot): field '" & n.dField.symbol.name & "' not found in " & $n.dParent.kind
   of gpuAddr:
     result = ctx.getExprType(n.aOf)
+  of gpuTernary:
+    # Presence-only check by design (same convention as gpuBinOp): the if-expr
+    # construction guarantees both branches carry the same single-expression
+    # type; this only verifies the then-branch is typed, never its value.
+    result = ctx.getExprType(n.tThen)
+    if result.isNil or result.kind == gtVoid:
+      error "gpuTernary with nil or void type: Cannot determine type for blit temp in " &
+        "block expression (gpuTernary with an untyped then-branch is a defect — " &
+        "if-expr branches are single typed expressions)"
   else:
     error "getExprType: unhandled node kind " & $n.kind & ". Caller must provide type from context."
 
