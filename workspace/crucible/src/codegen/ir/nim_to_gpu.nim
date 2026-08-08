@@ -172,7 +172,7 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
   # WebGPU support natively). User-defined overloads (no magic pragma) fall
   # through to body-parsing exactly like +/*, so library overloads (e.g.
   # ceramic's genBinOp) are allowed.
-  if node[0].repr in NimGpuAmbiguousBuiltins:
+  if node[0].repr in NimGpuNumericBuiltinsFunctions:
     if inst.hasMagicPragma:
       let retType = resolveType(reg, sig.params[0])
       var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
@@ -182,7 +182,7 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
   # Operator builtins (system.* with magic: MulI etc.) — detect by name
   # and register as builtin before reaching toGpuAst (which can't translate
   # magic bodies and triggers a false isBuiltIn() assertion).
-  if node[0].repr in NimGpuNumericOperators or
+  if node[0].repr in NimGpuNumericBuiltinsOperators or
      node[0].repr in NimGpuBooleanOperators:
     # Only for magic/builtin operators — skip user-defined overloads
     if inst.hasMagicPragma:
@@ -554,8 +554,8 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     # args keep their exact position/order. Operator builtins never receive
     # typedesc operands in valid Nim, so this is safe for those branches too.
     let args = node[1..^1].filterIt(not isTypeDescNode(it)).mapIt(ctx.toGpuAst(reg, it))
-    if name in ctx.builtins and node[0].repr in NimGpuNumericOperators:
-      var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuNumericOperators[node[0].repr]))
+    if name in ctx.builtins and node[0].repr in NimGpuNumericBuiltinsOperators:
+      var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuNumericBuiltinsOperators[node[0].repr]))
       op.symbol.iSym = op.symbol.name
       result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
       result.bType = resolveType(reg, node.getTypeInst())
@@ -598,7 +598,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       # Primitive types: map operator name for C/C++ compatibility
       result.bIsOverloaded = false
       let isBoolean = leftTyp.kind == gtBool
-      let tbl = if isBoolean: NimGpuBooleanOperators else: NimGpuNumericOperators
+      let tbl = if isBoolean: NimGpuBooleanOperators else: NimGpuNumericBuiltinsOperators
       let mappedOp = tbl.getOrDefault(node[0].repr, node[0].repr)
       result.bOp.symbol = newSymbol(mappedOp)
       result.bOp.symbol.iSym = result.bOp.symbol.name
