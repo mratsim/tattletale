@@ -7,7 +7,7 @@ Crucible is the GPU code generator in the tattletale monorepo. This document des
 Crucible sits between the higher-level layers that describe computation and the native GPU toolchains that run it:
 
 - **Consumes** the layout algebra from [`workspace/ceramic/`](../ceramic/) and kernel specifications from [`workspace/positron/`](../positron/) (per the header in [`workspace/crucible/crucible.nim`](crucible.nim)).
-- **Produces** native GPU source strings handed to external toolchains: NVRTC (CUDA → PTX), shaderc (GLSL → SPIR-V), and the host ABI bindings under [`src/abis/`](src/abis/) / runtimes under [`src/codegen/exec/`](src/codegen/exec/) for execution.
+- **Produces** native GPU source strings handed to external toolchains: NVRTC (CUDA → PTX), glslangValidator (GLSL → SPIR-V), and the host ABI bindings under [`src/abis/`](src/abis/) / runtimes under [`src/codegen/exec/`](src/codegen/exec/) for execution.
 
 Crucible itself is a compiler pipeline, not a runtime.
 
@@ -112,7 +112,7 @@ src/codegen/
 
 4. **Backend printing (`targets/`).** `codegenCuda/OpenCL/Vulkan/WebGPU` (in `targets_lang.nim`) call a printer's `preprocess` then `codegen`, which walks the now-annotated IR and emits native text. The printers are deliberately "dumb": they format the IR, not reason about it.
 
-5. **Runtime path.** `codegen(gen, ast, backend)` in `gpu_compiler.nim` clones the IR before running passes (passes mutate in place, so cloning keeps one compilation from contaminating another) and emits for the chosen backend. The `nvrtc`/`shaderc` wrappers and `exec/` runtimes compile and launch the result.
+5. **Runtime path.** `codegen(gen, ast, backend)` in `gpu_compiler.nim` clones the IR before running passes (passes mutate in place, so cloning keeps one compilation from contaminating another) and emits for the chosen backend. The `nvrtc`/`cl`/`vk`/`wgpu` wrappers and `exec/` runtimes compile and launch the result.
 
 ## Extension points
 

@@ -65,7 +65,7 @@ workspace/crucible/
 
 ## Build and run
 
-Run from the repo root (`tattletale`). Requires a working Nim and the relevant toolchains (NVRTC/shaderc for compilation, or a CUDA/OpenCL/Vulkan/WebGPU device for `execute()`).
+Run from the repo root (`tattletale`). Requires a working Nim and the relevant toolchains (NVRTC/glslangValidator for compilation, or a CUDA/OpenCL/Vulkan/WebGPU device for `execute()`).
 
 ```bash
 # NVRTC (primary target)
