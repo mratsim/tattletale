@@ -217,8 +217,8 @@ type
 
   VkPhysicalDeviceMemoryProperties* = object
     memoryTypeCount*: uint32
-    memoryHeapCount*: uint32
     memoryTypes*: array[32, VkMemoryType]
+    memoryHeapCount*: uint32
     memoryHeaps*: array[16, VkMemoryHeap]
 
   VkMemoryType* = object
