@@ -334,11 +334,10 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genOpenCL(ast.iArr) & '[' & ctx.genOpenCL(ast.iIndex) & ']'
 
   of gpuCall:
-    let fnName = ast.cName
     var clArgs: seq[string]
     for arg in ast.cArgs:
       clArgs.add ctx.genOpenCL(arg)
-    result = indentStr & fnName.ident() & '(' & clArgs.join(", ") & ')'
+    result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:

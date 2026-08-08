@@ -931,7 +931,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuCall:
     ctx.withoutSemicolon:
-      result = indentStr & ast.cName.ident() & '(' &
+      result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
                ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
 
   of gpuTemplateCall:

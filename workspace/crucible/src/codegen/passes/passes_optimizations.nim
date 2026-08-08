@@ -53,7 +53,7 @@ const
 proc isBasicNumeric*(t: GpuType): bool =
   not t.isNil and t.kind in BasicNumericKinds
 
-proc operandType(ctx: GpuContext; n: GpuAst): GpuType =
+proc operandType*(ctx: GpuContext; n: GpuAst): GpuType =
   ## Best-effort type of a pattern operand. Returns nil when the pass
   ## cannot determine it — the fold then conservatively skips.
   case n.kind

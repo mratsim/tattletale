@@ -296,11 +296,10 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genCuda(ast.iArr) & '[' & ctx.genCuda(ast.iIndex) & ']'
 
   of gpuCall:
-    let fnName = ast.cName.ident()
     var cudaArgs: seq[string]
     for i, arg in ast.cArgs:
       cudaArgs.add ctx.genCuda(arg)
-    result = indentStr & fnName & '(' & cudaArgs.join(", ") & ')'
+    result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
   of gpuTemplateCall:
     when nimvm:
       error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
