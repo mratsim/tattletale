@@ -203,11 +203,16 @@ proc initVulkan*(): VulkanContext =
         if f.queueCount > 0 and (f.queueFlags and VK_QUEUE_COMPUTE_BIT.uint32) != 0:
           hasCompute = true
           break
+    if not hasCompute:
+      # Compute dispatches require a queue family with VK_QUEUE_COMPUTE_BIT.
+      # Selecting a graphics-only device would leave queueFamilyIndex at 0 and
+      # fail at dispatch time, so reject such devices outright.
+      return (-1, name)
     let typeScore = case props.deviceType
       of VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: 100
       of VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: 50
       else: 0
-    result = ((if hasCompute: typeScore + 10 else: typeScore), name)
+    result = (typeScore + 10, name)
 
   var bestIdx = 0
   var bestScore = -1
@@ -216,6 +221,8 @@ proc initVulkan*(): VulkanContext =
     if score > bestScore:
       bestScore = score
       bestIdx = i
+  if bestScore < 0:
+    raise VulkanError(msg: "No Vulkan device with a compute-capable queue family found")
   result.physicalDevice = devices[bestIdx]
   echo "  Vulkan device: ", deviceScore(result.physicalDevice).name
 
