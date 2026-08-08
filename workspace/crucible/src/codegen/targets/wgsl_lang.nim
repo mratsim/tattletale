@@ -117,7 +117,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
         result.add 'x'
   of gtObject: result = t.name
   of gtUA:     result = gpuTypeToString(t.kind) & '<' & gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) & '>'
-  of gtStatic: result = $t.sValue
+  of gtStatic: result = "i32"
   else:        result = gpuTypeToString(t.kind)
 
   if ident.len > 0 and not skipIdent: # still need to add ident
