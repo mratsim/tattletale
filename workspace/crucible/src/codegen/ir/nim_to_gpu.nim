@@ -14,11 +14,34 @@ import ./resolvers
 import ../passes/pass_registry
 
 
+proc unwrapSingleStmt(n: NimNode): NimNode =
+  ## Unwrap a single-statement StmtList body (statement-kind branches may
+  ## carry one); callers keep their own multi-statement constraints.
+  if n.kind == nnkStmtList and n.len == 1:
+    n[0]
+  else:
+    n
+
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAst
+
+proc isTypeDescNode(n: NimNode): bool =
+  ## True when the node is a TYPE used as a value: a generic type parameter
+  ## or a `typedesc` literal (e.g. `T` in `make_tensor(T, L)`). In the typed
+  ## AST such an argument is a type symbol whose type is `typedesc[T]`
+  ## (`typeKind == ntyTypeDesc`). CUDA has no type values, so these cannot be
+  ## lowered to a runtime value and are erased at gpuCall construction; the
+  ## matching `typedesc` param is dropped in `parseProcParameters`.
+  ## A genuine value symbol (var/let/param/result/const of a value type)
+  ## never has `ntyTypeDesc` type, so it is never erased.
+  result = n.getTypeInst().typeKind == ntyTypeDesc
 
 proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute]): seq[GpuParam] =
   ## Returns all parameters of the given procedure from the `params` node
   ## of type `nnkFormalParams`.
+  ## `typedesc`/type-param params (`_: typedesc[T]`) are dropped: they carry
+  ## no runtime value in the emitted GPU source and the caller side erases the
+  ## matching argument (see the nnkCall handler), keeping call/callee arity
+  ## consistent.
   doAssert params.kind == nnkFormalParams, "Argument is not FormalParams, but: " & $params.treerepr
   for i in 1 ..< params.len:
     let param = params[i]
@@ -31,6 +54,8 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
     #   PtrTy
     #     Ident "float32"   # `param.len - 2`
     #   Empty               # `param.len - 1`
+    if isTypeDescNode(param[typIdx-1]):
+      continue # typedesc[T] param — no CUDA value; skip whole IdentDefs (multi-name too)
     let paramType = resolveType(reg, param[typIdx-1].getTypeInst())
     for i in 0 ..< numParams:
       var p = ctx.toGpuAst(reg, param[i])
@@ -91,8 +116,11 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
         result.symbol.iSym = result.symbol.iSym.replace(oldName, result.symbol.name)
       # handle overloads with different signatures
       if n.strVal in ctx.symChoices:
-        let id = ctx.sigTab[sig]
-        id.symbol.name = id.symbol.iSym
+        # Magic builtins keep their plain name: they are forwarded to the
+        # backend's native function (e.g. CUDA's max), which knows no hash.
+        if not n.getImpl().hasMagicPragma:
+          let id = ctx.sigTab[sig]
+          id.symbol.name = id.symbol.iSym
       else:
         ctx.symChoices.incl result.symbol.name
   else:
@@ -138,18 +166,23 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     # calling `toGpuAst` recursively forever
     ctx.processedProcs[name] = procSig
 
-  # Ambiguous builtins (system.min/max/abs) have only `{.inline.}` in getImpl(),
-  # not `{.magic.}`. Parse their bodies would crash on the if-expr assertion.
-  if node[0].repr in NimGpuAmbiguousBuiltins:
-    let retType = resolveType(reg, sig.params[0])
-    var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
-    ctx.builtins[name] = builtinFn
-    return
+  # Ambiguous builtins (system.min/max/abs): register the compiler-magic
+  # versions name-only so calls forward to the backend's native min/max/abs
+  # (which must keep their plain name — the base case CUDA/OpenCL/Vulkan/
+  # WebGPU support natively). User-defined overloads (no magic pragma) fall
+  # through to body-parsing exactly like +/*, so library overloads (e.g.
+  # ceramic's genBinOp) are allowed.
+  if node[0].repr in NimGpuNumericBuiltinsFunctions:
+    if inst.hasMagicPragma:
+      let retType = resolveType(reg, sig.params[0])
+      var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
+      ctx.builtins[name] = builtinFn
+      return
 
   # Operator builtins (system.* with magic: MulI etc.) — detect by name
   # and register as builtin before reaching toGpuAst (which can't translate
   # magic bodies and triggers a false isBuiltIn() assertion).
-  if node[0].repr in NimGpuNumericOperators or
+  if node[0].repr in NimGpuNumericBuiltinsOperators or
      node[0].repr in NimGpuBooleanOperators:
     # Only for magic/builtin operators — skip user-defined overloads
     if inst.hasMagicPragma:
@@ -169,8 +202,6 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
 
   let fn = ctx.toGpuAst(reg, inst)
   if fn.kind == gpuDiscard:
-    echo "[registerGenericInstOrExternalProc] node[0].repr = ", node[0].repr, " impl.kind = ", inst.kind, " isBuiltIn = ", inst.isBuiltIn()
-    echo "  impl treerepr: ", inst.treerepr
     doAssert inst.isBuiltIn()
     return
   fn.pAttributes.incl attDevice # make sure this is interpreted as a device function
@@ -273,20 +304,29 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     # Capture type available via Nim AST for blitting (C2): type is on node[^1]
     # Blitting's getExprType will use this via context scope lookups
   of nnkStmtListExpr: # for statements that return a value.
-    ## XXX: For CUDA just a block?
-    result = GpuAst(kind: gpuBlock, isExpr: true,
-                    )
-    let prevScopeStmtListExpr = ctx.currentScope
-    ctx.scopeSymsStack.add(ctx.currentScopeSyms)
-    ctx.currentScopeSyms = @[]
-    ctx.currentScope = result
-    for el in node:
-      if el.kind != nnkEmpty:
-        result.statements.add ctx.toGpuAst(reg, el)
-    ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
-    ctx.currentScope = prevScopeStmtListExpr
-    # Capture type available via Nim AST for blitting (C2): type is on node[^1]
-    # Blitting's getExprType will use this via context scope lookups
+    # A single-expression StmtListExpr (e.g. `not (y == y)` from `y != y` in
+    # sem output) IS that expression — unwrap it instead of building a block
+    # that would survive inside nested expression slots (e.g. a ternary
+    # condition). Multi-statement forms still build a block expression, which
+    # the blit pass lowers.
+    let exprs = node.filterIt(it.kind != nnkEmpty)
+    if exprs.len == 1:
+      result = ctx.toGpuAst(reg, exprs[0])
+    else:
+      ## XXX: For CUDA just a block?
+      result = GpuAst(kind: gpuBlock, isExpr: true,
+                      )
+      let prevScopeStmtListExpr = ctx.currentScope
+      ctx.scopeSymsStack.add(ctx.currentScopeSyms)
+      ctx.currentScopeSyms = @[]
+      ctx.currentScope = result
+      for el in node:
+        if el.kind != nnkEmpty:
+          result.statements.add ctx.toGpuAst(reg, el)
+      ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
+      ctx.currentScope = prevScopeStmtListExpr
+      # Capture type available via Nim AST for blitting (C2): type is on node[^1]
+      # Blitting's getExprType will use this via context scope lookups
   of nnkDiscardStmt:
     # just process the child node if any
     result = ctx.toGpuAst(reg, node[0])
@@ -406,7 +446,11 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
 
   of nnkIfExpr:
     # If-expression — produces a conditional value (ternary in C).
-    # AST: nnkIfExpr(nnkElifExpr(cond, expr), ..., nnkElseExpr(expr)?)
+    # Accepts both branch-node forms: the expression kinds (nnkElifExpr /
+    # nnkElseExpr, from parse output) and the statement kinds (nnkElifBranch /
+    # nnkElse, which Nim's sem keeps for return-expression ifs `= if cond: a else: b`
+    # in proc bodies). Both share the same child layout: branch = [cond, body],
+    # else = [body].
     #
     # GPU constraint: all branch bodies must be single expressions.
     # Multi-statement branches like `let tmp = a; tmp + b` are rejected.
@@ -417,7 +461,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       doAssert ok, "GPU if-expression branches must be single expressions, " &
         "not blocks with statements (would hurt performance)"
     doAssert node.len >= 1
-    doAssert node.len == 1 or node[^1].kind == nnkElseExpr,
+    doAssert node.len == 1 or node[^1].kind in {nnkElseExpr, nnkElse},
       "GPU if-expression must have an else branch"
     # Build a gpuIf(isExpr: true) — the lowerIfExpr pass converts to gpuTernary
     result = GpuAst(kind: gpuIf, ifIsExpr: true)
@@ -426,18 +470,20 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     proc buildIfExpr(ctx: var GpuContext, reg: var TypeRegistry, branches: NimNode, idx: int): GpuAst =
       let child = branches[idx]
       case child.kind
-      of nnkElifExpr:
-        requireSimpleBranch(child[1])
+      of nnkElifExpr, nnkElifBranch:
+        let body = unwrapSingleStmt(child[1])
+        requireSimpleBranch(body)
         result = GpuAst(kind: gpuIf, ifIsExpr: true)
         result.ifCond = ctx.toGpuAst(reg, child[0])
-        result.ifThen = ctx.toGpuAst(reg, child[1])
+        result.ifThen = ctx.toGpuAst(reg, body)
         if idx + 1 < branches.len:
           result.ifElse = buildIfExpr(ctx, reg, branches, idx + 1)
         else:
           result.ifElse = GpuAst(kind: gpuDiscard)
-      of nnkElseExpr:
-        requireSimpleBranch(child[0])
-        result = ctx.toGpuAst(reg, child[0])
+      of nnkElseExpr, nnkElse:
+        let body = unwrapSingleStmt(child[0])
+        requireSimpleBranch(body)
+        result = ctx.toGpuAst(reg, body)
       else:
         error "Unexpected child in nnkIfExpr: " & $child.kind
     result = buildIfExpr(ctx, reg, node, 0)
@@ -501,15 +547,23 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       ## XXX: for CUDA backend need to annotate all pulled in procs with `{.device.}`!
       ctx.registerGenericInstOrExternalProc(reg, node, name)
 
-    let args = node[1..^1].mapIt(ctx.toGpuAst(reg, it))
-    if name in ctx.builtins and node[0].repr in NimGpuNumericOperators:
-      var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuNumericOperators[node[0].repr]))
+    # Erase typedesc-typed arguments (types passed as values, e.g. `T` in
+    # make_tensor(T, L)): they have no CUDA value representation and are never
+    # converted. The callee's matching typedesc param is dropped in
+    # parseProcParameters, keeping call/callee arity consistent. Non-typedesc
+    # args keep their exact position/order. Operator builtins never receive
+    # typedesc operands in valid Nim, so this is safe for those branches too.
+    let args = node[1..^1].filterIt(not isTypeDescNode(it)).mapIt(ctx.toGpuAst(reg, it))
+    if name in ctx.builtins and node[0].repr in NimGpuNumericBuiltinsOperators:
+      var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuNumericBuiltinsOperators[node[0].repr]))
       op.symbol.iSym = op.symbol.name
       result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
+      result.bType = resolveType(reg, node.getTypeInst())
     elif name in ctx.builtins and node[0].repr in NimGpuBooleanOperators:
       var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuBooleanOperators[node[0].repr]))
       op.symbol.iSym = op.symbol.name
       result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
+      result.bType = resolveType(reg, node.getTypeInst())
     else:
       let fnIsExpr = ctx.fnReturnsValue(name)
       result = GpuAst(kind: gpuCall, cIsExpr: fnIsExpr)
@@ -544,7 +598,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
       # Primitive types: map operator name for C/C++ compatibility
       result.bIsOverloaded = false
       let isBoolean = leftTyp.kind == gtBool
-      let tbl = if isBoolean: NimGpuBooleanOperators else: NimGpuNumericOperators
+      let tbl = if isBoolean: NimGpuBooleanOperators else: NimGpuNumericBuiltinsOperators
       let mappedOp = tbl.getOrDefault(node[0].repr, node[0].repr)
       result.bOp.symbol = newSymbol(mappedOp)
       result.bOp.symbol.iSym = result.bOp.symbol.name
@@ -553,6 +607,21 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
         result.bLeft.lType = leftTyp
       elif result.bRight.kind == gpuLit:
         result.bRight.lType = rightTyp
+      # Carry the operator's true return type: typ = node[0].getTypeImpl() is
+      # the ProcTy; typ[0] is the FormalParams; typ[0][0] is the return type
+      # node. Compound-assign operators (`+=`, `-=`, ...) declare no return
+      # type in their ProcTy (nnkEmpty), so the result type is the LHS operand
+      # type (stripping the `var` wrapper Nim puts on var params).
+      # Scoped to the primitive branch only — eager resolution on overloaded
+      # operands would crash resolveType (resolvers.nim:316/351).
+      let retTypNode = typ[0][0]
+      if retTypNode.kind == nnkEmpty:
+        var lhsTyp = node[1].getTypeInst()
+        if lhsTyp.kind == nnkVarTy:
+          lhsTyp = lhsTyp[0]
+        result.bType = resolveType(reg, lhsTyp)
+      else:
+        result.bType = resolveType(reg, retTypNode)
   of nnkDotExpr:
     ## NOTE: As we use a typed macro, we only encounter `DotExpr` for *actual* field accesses and NOT
     ## for calls using method call syntax without parens

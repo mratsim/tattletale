@@ -117,7 +117,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
         result.add 'x'
   of gtObject: result = t.name
   of gtUA:     result = gpuTypeToString(t.kind) & '<' & gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) & '>'
-  of gtStatic: result = $t.sValue
+  of gtStatic: result = "i32"
   else:        result = gpuTypeToString(t.kind)
 
   if ident.len > 0 and not skipIdent: # still need to add ident
@@ -498,7 +498,7 @@ proc rewriteCompoundAssignment(n: GpuAst): GpuAst =
   if n.bOp.ident() in ["<=", "==", ">=", "!="]: return n
 
   template genAssign(left, rnode, op: typed): untyped =
-    let right = GpuAst(kind: gpuBinOp, bOp: op, bLeft: left, bRight: rnode)
+    let right = GpuAst(kind: gpuBinOp, bType: n.bType, bOp: op, bLeft: left, bRight: rnode)
     GpuAst(kind: gpuAssign, aLeft: left, aRight: right, aRequiresMemcpy: false)
 
   let op = n.bOp.ident()
@@ -931,7 +931,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuCall:
     ctx.withoutSemicolon:
-      result = indentStr & ast.cName.ident() & '(' &
+      result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
                ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
 
   of gpuTemplateCall:

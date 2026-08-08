@@ -175,6 +175,7 @@ type
       bOp*: GpuAst # `gpuIdent` of the binary operation
       bLeft*, bRight*: GpuAst
       bIsOverloaded*: bool  ## True if operands are non-primitive types (pass converts to gpuCall)
+      bType*: GpuType ## result type of this binop, derived at construction; MUST be non-nil on any gpuBinOp that can be the tail of a block-expression.
     of gpuVar:
       vName*: GpuAst ## Will be a `GpuIdent`
       vType*: GpuType
@@ -500,6 +501,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result.bLeft = ast.bLeft.clone()
     result.bRight = ast.bRight.clone()
     result.bIsOverloaded = ast.bIsOverloaded
+    result.bType = ast.bType # clone fidelity: keep the self-carried result type
   of gpuVar:
     result = GpuAst(kind: gpuVar)
     result.vName = ast.vName.clone()

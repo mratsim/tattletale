@@ -10,7 +10,7 @@
 
 import std/macros
 import workspace/crucible/src/codegen/nvrtc
-import ./test_nvrtc_underscore_undefined_tmp_helper
+import ./helper_nvrtc_underscore_undefined_tmp
 
 type TensorView*[T] = object
   data*: ptr UncheckedArray[T]
