@@ -1,29 +1,24 @@
 # Crucible
 
-GPU kernel code generator: translates a GPU DSL written in Nim into native GPU source for four backends — CUDA, OpenCL, Vulkan (GLSL), and WebGPU (WGSL).
+GPU kernel code generator: translates a subset of Nim (everything allowed except `string`, `seq`, memory allocations, and IO/syscalls) into native GPU source for four backends — CUDA, OpenCL, Vulkan (GLSL), and WebGPU (WGSL).
 
 ## What it is / what it isn't
 
-Crucible is a **compile-time code generator**, not a runtime. Its entry points are Nim macros (`cuda`, `opencl`, `vulkan`, `webgpu`) that consume a GPU DSL body and emit a string of native GPU source code. It does not ship a device runtime, a scheduler, or a host-side execution model of its own.
+Crucible is primarily a **compile-time code generator**: its entry points are Nim macros (`cuda`, `opencl`, `vulkan`, `webgpu`) that consume a kernel body written in that subset of Nim and emit a string of native GPU source code. It does not ship a device runtime or a scheduler, but it does include minimal host-side runtimes under [`src/codegen/exec/`](src/codegen/exec/) that compile, load, and launch the generated code on each backend (NVRTC, OpenCL, Vulkan, WebGPU).
 
 It sits on top of the rest of the tattletale stack:
 
 - It **consumes** the layout algebra produced by `workspace/ceramic/` and the kernel specifications produced by `workspace/positron/`. Per the header in [`workspace/crucible/crucible.nim`](crucible.nim): "takes Ceramic layout algebra and Positron kernel specifications and emits native GPU code (CUDA, OpenCL, Vulkan, WebGPU)".
-- The generated source is handed to an external toolchain to run: NVRTC compiles CUDA to PTX, shaderc compiles GLSL to SPIR-V, and the host-side ABIs under [`src/abis/`](src/abis/) load and launch the results (see `NvrtcContext`, `ShadercContext`, `VulkanContext`).
+- The generated source is handed to an external toolchain to run: NVRTC compiles CUDA to PTX, glslangValidator compiles GLSL to SPIR-V, and the host-side runtimes under [`src/codegen/exec/`](src/codegen/exec/) (backed by the ABIs under [`src/abis/`](src/abis/)) load and launch the results.
 
 Because it is a code generator, "correctness" of a feature means the emitted code compiles *and* computes the right result — which is why every test must call `execute()`, not just `compile()` (see [`AGENTS.md`](AGENTS.md)).
 
-## Capability proof
+## Architecture in brief
 
-All claims below are source-linked.
-
-- **Four backends from one IR.** The frontend [`src/codegen/ir/nim_to_gpu.nim`](src/codegen/ir/nim_to_gpu.nim) lowers Nim AST to a backend-neutral IR once; each backend is a "dumb syntax printer" under [`src/codegen/targets/`](src/codegen/targets/) (`cuda_lang.nim`, `opencl_lang.nim`, `vulkan_lang.nim`, `wgsl_lang.nim`). The four macros in [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim) share a common pass pipeline (`registerCommonPasses`) and diverge only in backend-specific passes and keyword checks.
-- **A real pass pipeline.** The frontend is a pure 1:1 AST translator; semantic work lives in named, testable passes under [`src/codegen/passes/`](src/codegen/passes/) (normalizations, legalizations, preprocessing, lowering, validations). Passes are declared with a name, kind, phase, and dependency list and run through a [`PassRegistry`](src/codegen/passes/pass_registry.nim). This refactor landed in commit `a076641` ("feat(crucible): Complete pass-architecture refactoring (#43)").
-- **Single `FnTable`, Symbol ref identity.** `GpuContext` carries one unified function table keyed by immutable symbol fingerprint (`fnTable` in [`src/codegen/ir/gpu_types.nim`](src/codegen/ir/gpu_types.nim), replacing five separate function tables). Symbols are `ref` objects with a stable `iSym` fingerprint and a mutatable `name` (see `Symbol` in the same file).
-- **Explicit range semantics.** `GpuRangeKind` distinguishes `rkInclusive` (`a..b`, emitted `i <= end`) from `rkExclusive` (`a..<b`, emitted `i < end`), replacing a `+1` hack in the backend printers.
-- **Collision-safe name mangling.** `mangleNames` applies a `NamePolicy`; `npHashSuffix` appends a 7-character base58 hash of the 64-bit signature (58^7 ≈ 2.2e12 namespace) so distinct signatures survive mangling. See `mangleNamesImpl` in [`src/codegen/passes/passes_preprocessing.nim`](src/codegen/passes/passes_preprocessing.nim) and the encoder in [`src/codegen/ir/gpu_types.nim`](src/codegen/ir/gpu_types.nim).
-- **IR and backend test suites.** 22 IR-level tests under [`tests/codegen/ir/`](tests/codegen/ir/) (roundtrip, scope, symbols, fntable, base58, per-pass tests), plus auto-runnable suites per backend under [`tests/codegen/`](tests/codegen/): `nvrtc/`, `opencl/`, `vulkan/`, `webgpu/`. See [`AGENTS.md`](AGENTS.md) for the naming convention and the `manual_*` exception.
-- **Compile-time and runtime codegen.** `cuda`/`opencl`/`vulkan`/`webgpu` macros emit code at compile time; the runtime `codegen(gen, ast, ...)` proc in [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim) clones the IR and regenerates for a chosen backend at runtime.
+- **One IR, four backends.** [`src/codegen/ir/nim_to_gpu.nim`](src/codegen/ir/nim_to_gpu.nim) lowers Nim AST to a backend-neutral IR; each target under [`src/codegen/targets/`](src/codegen/targets/) (`cuda_lang.nim`, `opencl_lang.nim`, `vulkan_lang.nim`, `wgsl_lang.nim`) prints it.
+- **A pass pipeline.** Semantic work lives in named passes under [`src/codegen/passes/`](src/codegen/passes/) (normalizations, legalizations, preprocessing, lowering, validations), run through a [`PassRegistry`](src/codegen/passes/pass_registry.nim).
+- **Compile-time and runtime codegen.** The `cuda`/`opencl`/`vulkan`/`webgpu` macros emit source at compile time; `codegen(gen, ast, ...)` in [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim) clones the IR and regenerates for a backend at runtime.
+- **Tests.** IR-level tests under [`tests/codegen/ir/`](tests/codegen/ir/) plus auto-runnable suites per backend (`nvrtc/`, `opencl/`, `vulkan/`, `webgpu/`). Tests must call `execute()`, not just compile (see [`AGENTS.md`](AGENTS.md)).
 
 ## Status
 
@@ -59,7 +54,7 @@ workspace/crucible/
         lang_utils.nim            Shared printer helpers
       builtins/                   Per-backend and Nim builtins
       exec/                       Host-side runtimes (cuda/opencl/vulkan/wgpu)
-    abis/                         C/OpenCL/NVIDIA/shaderc/Vulkan ABI bindings
+    abis/                         C/OpenCL/NVIDIA/Vulkan ABI bindings
     macros/ast_rebuilder.nim
   tests/codegen/
     ir/                           IR-level tests (22 files)
@@ -70,7 +65,7 @@ workspace/crucible/
 
 ## Build and run
 
-Run from the repo root (`tattletale`). Requires a working Nim and the relevant toolchains (NVRTC/shaderc for compilation, or a CUDA/OpenCL/Vulkan/WebGPU device for `execute()`).
+Run from the repo root (`tattletale`). Requires a working Nim and the relevant toolchains (NVRTC/glslangValidator for compilation, or a CUDA/OpenCL/Vulkan/WebGPU device for `execute()`).
 
 ```bash
 # NVRTC (primary target)

@@ -25,7 +25,6 @@
 
 import std/[dynlib, os, osproc, hashes, streams]
 import workspace/crucible/src/abis/vulkan_abi as vk
-import workspace/crucible/src/abis/shaderc_abi
 import ./runtime_utils
 type
   VulkanError* = ref object of CatchableError
@@ -35,6 +34,8 @@ type
     handle: VkBuffer
     memory: VkDeviceMemory
     device: VkDevice
+    memTypeIndex: uint32
+    memTypeFlags: uint32
 
   VulkanPipeline* = object
     device: VkDevice
@@ -164,7 +165,6 @@ proc initVulkan*(): VulkanContext =
     raise VulkanError(msg: "No Vulkan devices found")
   var devices = newSeq[VkPhysicalDevice](devCount.int)
   check ep(result.instance, devCount.addr, devices[0].addr)
-  result.physicalDevice = devices[0]
 
   # Queue families
   var gpqfp = cast[
@@ -172,6 +172,60 @@ proc initVulkan*(): VulkanContext =
          pQueueFamilyPropertyCount: ptr uint32,
          pQueueFamilyProperties: pointer) {.cdecl.}
   ](gpa("vkGetPhysicalDeviceQueueFamilyProperties"))
+  var vkgpd = cast[
+    proc(physicalDevice: VkPhysicalDevice,
+         pProperties: ptr VkPhysicalDeviceProperties) {.cdecl.}
+  ](gpa("vkGetPhysicalDeviceProperties"))
+
+  # Pick the best physical device instead of blindly taking the first one:
+  # a software/experimental renderer (e.g. Mesa Xe KMD) can be enumerated
+  # before the real GPU, and its vkMapMemory fails at runtime with
+  # VK_ERROR_OBJECT_TYPE. Prefer a discrete GPU with a compute queue, then an
+  # integrated one; fall back to the first enumerated device otherwise.
+  proc deviceScore(dev: VkPhysicalDevice): tuple[score: int, name: string] =
+    # The abi's VkPhysicalDeviceProperties is truncated to the fields we read
+    # (apiVersion..deviceName), but the driver writes the FULL struct including
+    # the ~3KB `limits`/`sparseProperties` — so read into a padded buffer.
+    var propsBuf: array[4096, byte]
+    vkgpd(dev, cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr))
+    let props = cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr)[]
+    var name = ""
+    for c in props.deviceName:
+      if c == '\0': break
+      name.add c
+    var qfCount: uint32 = 0
+    gpqfp(dev, qfCount.addr, nil)
+    var hasCompute = false
+    if qfCount > 0:
+      var qfProps = newSeq[VkQueueFamilyProperties](qfCount.int)
+      gpqfp(dev, qfCount.addr, qfProps[0].addr)
+      for f in qfProps:
+        if f.queueCount > 0 and (f.queueFlags and VK_QUEUE_COMPUTE_BIT.uint32) != 0:
+          hasCompute = true
+          break
+    if not hasCompute:
+      # Compute dispatches require a queue family with VK_QUEUE_COMPUTE_BIT.
+      # Selecting a graphics-only device would leave queueFamilyIndex at 0 and
+      # fail at dispatch time, so reject such devices outright.
+      return (-1, name)
+    let typeScore = case props.deviceType
+      of VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: 100
+      of VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: 50
+      else: 0
+    result = (typeScore + 10, name)
+
+  var bestIdx = 0
+  var bestScore = -1
+  for i, dev in devices:
+    let (score, _) = deviceScore(dev)
+    if score > bestScore:
+      bestScore = score
+      bestIdx = i
+  if bestScore < 0:
+    raise VulkanError(msg: "No Vulkan device with a compute-capable queue family found")
+  result.physicalDevice = devices[bestIdx]
+  echo "  Vulkan device: ", deviceScore(result.physicalDevice).name
+
   var qfCount: uint32 = 0
   gpqfp(result.physicalDevice, qfCount.addr, nil)
   if qfCount == 0:
@@ -309,14 +363,14 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
   # Preference:
   #  1. DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT (integrated/ReBAR)
   #  2. HOST_VISIBLE | HOST_COHERENT (discrete via PCIe BAR)
-  #  3. DEVICE_LOCAL only (VRAM)
-  #  4. Any compatible (last resort)
+  #  3. HOST_VISIBLE only
+  #  4. Unspecified flags (driver-declared host-accessible, e.g. llvmpipe)
+  #  5. DEVICE_LOCAL only (VRAM) — cannot be vkMapMemory'd; last resort
   var memTypeIdx = high(uint32)
+  var devLocalOnly = high(uint32)
   for i in 0'u32 ..< memProps.memoryTypeCount:
     if (memReq.memoryTypeBits and (1'u32 shl i)) == 0:
       continue
-    if memTypeIdx == high(uint32):
-      memTypeIdx = i  # fallback: any compatible
     let flags = cast[uint32](memProps.memoryTypes[i].propertyFlags)
     let best = cast[uint32](
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT or
@@ -324,17 +378,42 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
     if (flags and best) == best:
       memTypeIdx = i; break
-    let std = cast[uint32](
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or
-      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
-    if (flags and std) == std:
-      memTypeIdx = i
+    if (flags and cast[uint32](VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) != 0:
+      if memTypeIdx == high(uint32):
+        memTypeIdx = i
+      continue
+    if (flags and cast[uint32](VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) == 0:
+      if memTypeIdx == high(uint32):
+        memTypeIdx = i
+    else:
+      if devLocalOnly == high(uint32):
+        devLocalOnly = i
+  if memTypeIdx == high(uint32):
+    memTypeIdx = devLocalOnly
   if memTypeIdx == high(uint32):
     var details = "memoryTypeBits=" & $memReq.memoryTypeBits & " memTypeCount=" & $memProps.memoryTypeCount
     for i in 0'u32 ..< memProps.memoryTypeCount:
       details &= " [" & $i & ": flags=" & $(cast[int](memProps.memoryTypes[i].propertyFlags)) & " heap=" & $memProps.memoryTypes[i].heapIndex & "]"
     raise VulkanError(msg: "No suitable memory type found — " & details)
+  if (cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags) and
+      cast[uint32](VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) == 0 and
+     (cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags) and
+      cast[uint32](VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) != 0:
+    # Only a DEVICE_LOCAL-only type matched: vkMapMemory (used by
+    # writeBuffer/readBuffer) fails on it with VK_ERROR_MEMORY_MAP_FAILED.
+    # Some drivers (e.g. broken/experimental Vulkan in containers, Mesa Xe KMD)
+    # report only DEVICE_LOCAL types.
+    var details = "memoryTypeBits=" & $memReq.memoryTypeBits & " memTypeCount=" & $memProps.memoryTypeCount
+    for i in 0'u32 ..< memProps.memoryTypeCount:
+      details &= " [" & $i & ": flags=" & $(cast[int](memProps.memoryTypes[i].propertyFlags)) & " heap=" & $memProps.memoryTypes[i].heapIndex & "]"
+    raise VulkanError(msg: "No host-visible memory type available (vkMapMemory would fail) — " & details)
 
+  result.memTypeIndex = memTypeIdx
+  result.memTypeFlags = cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags)
+  when defined(debugVk):
+    echo "  [allocBuffer] size=", size, " memTypeBits=", memReq.memoryTypeBits,
+         " chosen type ", memTypeIdx, " flags=", result.memTypeFlags,
+         " heap=", memProps.memoryTypes[memTypeIdx].heapIndex
   var allocInfo = VkMemoryAllocateInfo(
     sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
     allocationSize: memReq.size,
@@ -370,7 +449,10 @@ proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size
     proc(device: VkDevice, memory: VkDeviceMemory) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkUnmapMemory"))
   var mapped: pointer
-  check vkMapMemory(buf.device, buf.memory, 0, VkDeviceSize(size), 0, mapped.addr)
+  let mres = vkMapMemory(buf.device, buf.memory, 0, VkDeviceSize(size), 0, mapped.addr)
+  if mres != VK_SUCCESS:
+    raise VulkanError(msg: "vkMapMemory failed (" & $mres &
+      ") on memory type " & $buf.memTypeIndex & " (flags=" & $buf.memTypeFlags & ")")
   copyMem(mapped, data, size)
   vkUnmapMemory(buf.device, buf.memory)
 
