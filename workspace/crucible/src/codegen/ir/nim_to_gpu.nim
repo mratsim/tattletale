@@ -32,7 +32,7 @@ proc isTypeDescNode(n: NimNode): bool =
   ## lowered to a runtime value and are erased at gpuCall construction; the
   ## matching `typedesc` param is dropped in `parseProcParameters`.
   ## A genuine value symbol (var/let/param/result/const of a value type)
-  ## never has `ntyTypeDesc` type, so it is never erased (INV-C3).
+  ## never has `ntyTypeDesc` type, so it is never erased.
   result = n.getTypeInst().typeKind == ntyTypeDesc
 
 proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute]): seq[GpuParam] =

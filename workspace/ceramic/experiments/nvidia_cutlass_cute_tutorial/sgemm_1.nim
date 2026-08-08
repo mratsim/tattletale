@@ -41,8 +41,8 @@ proc sgemm_1_kernel(
 
   # ── CTA coordinate ──
   # CuTe: make_coord(blockIdx.x, blockIdx.y, _)
-  # (int(...) casts: the builtin stub types blockIdx.x as cint; the layout
-  #  templates require int/Int)
+  # blockIdx.x/y are plain int by the CUDA stub, matching the layout
+  # templates' int/Int params without casts.
   let cta_coord = (blockIdx.x, blockIdx.y, X())
 
   # ── CTA tile extraction (with Step) ──

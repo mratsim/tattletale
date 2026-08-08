@@ -40,7 +40,7 @@ proc naive_matmul[T](
   doAssert C.len == M*N
   for m in 0 ..< M:
     for n in 0 ..< N:
-      var sum = 0'f32
+      var sum: T = 0   # accumulator follows T (fmaf only for float32)
       for k in 0 ..< K:
         when T is float32:
           sum = fmaf(A[m + k * M], B[n + k * N], sum)
