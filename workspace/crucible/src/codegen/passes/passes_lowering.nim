@@ -9,6 +9,7 @@
 ##    - Call sites: split gtSpan args into (ptr_arg, len_arg)
 
 import std / [tables, sequtils, sets, strutils]
+import std/macros # for the `warning` builtin (compile-time diagnostics)
 import ../ir/gpu_types
 import ../ir/gpu_type_constructors
 import ./pass_datatypes
@@ -22,6 +23,30 @@ type
     lenTyp: GpuType      # int32
 
   SpanSigMap = TableRef[string, seq[SpanParam]]
+
+proc exprGpuType(n: GpuAst): GpuType =
+  ## Best-effort GpuType of a lowering expression (span ptr/len args).
+  ## The lowering sites build fresh gpuBinOps whose bType must be non-nil:
+  ## the tail of the gpuBlock(isExpr: true) built in rewriteNode below is
+  ## read by getExprType (the lenExpr binop), so it must carry a real type.
+  ## A nil/void derivation is as unusable as an unknown shape: the constructed
+  ## `+ 1` literal's lType is this type (genLit derefs it at emission — a nil
+  ## GpuType there raises a FieldDefect) and the lenExpr binop's bType is read
+  ## by getExprType. Route everything through the one loud gtInt32 fallback so
+  ## exprGpuType can never hand back nil to the lowering sites.
+  case n.kind
+  of gpuIdent: result = n.symbol.typ
+  of gpuLit: result = n.lType
+  of gpuBinOp: result = n.bType
+  of gpuConv: result = n.convTo
+  else:
+    discard
+  if result.isNil or result.kind == gtVoid:
+    # Span ptr/len args are ints in practice, but a silent wrong-width
+    # assumption must not pass unnoticed — surface it when this fires.
+    result = initGpuType(gtInt32)
+    warning "[lowerSpans] WARNING: exprGpuType could not derive a type for " & $n.kind &
+      "; assuming gtInt32 for span index/pointer arithmetic"
 
 proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
   ## Build a map of function name → span params to split
@@ -144,14 +169,20 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
            (n.cArgs[0].cName.symbol.name == "toOpenArray" or n.cArgs[0].cName.symbol.name.startsWith("toOpenArray_")) and
            n.cArgs[0].cArgs.len >= 3:
           let tc = n.cArgs[0]
+          let idxTyp = tc.cArgs[1].exprGpuType()
+          let lenSub = GpuAst(kind: gpuBinOp,
+                              bType: idxTyp,
+                              bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
+                              bLeft: tc.cArgs[2],
+                              bRight: tc.cArgs[1])
           n = GpuAst(kind: gpuBinOp,
+                     bType: idxTyp,
                      bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
-                     bLeft: GpuAst(kind: gpuBinOp,
-                                   bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
-                                   bLeft: tc.cArgs[2],
-                                   bRight: tc.cArgs[1]),
+                     bLeft: lenSub,
                      bRight: GpuAst(kind: gpuLit, lValue: "1",
-                                    lType: initGpuType(gtInt32)))
+                                    lType: (if idxTyp.isNil: initGpuType(gtInt32) else: idxTyp)))
+          # exprGpuType never returns nil, so idxTyp is taken above; the gtInt32
+          # arm is a defensive guard against genLit's nil-lType FieldDefect
           return
       return
 
@@ -169,17 +200,24 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
                      else:
                        n.cArgs[0]
       let ptrPlus = GpuAst(kind: gpuBinOp,
+                           bType: dataExpr.exprGpuType(),
                            bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
                            bLeft: dataExpr,
                            bRight: n.cArgs[1])
+      let idxTyp = n.cArgs[1].exprGpuType()
+      let lenSub = GpuAst(kind: gpuBinOp,
+                          bType: idxTyp,
+                          bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
+                          bLeft: n.cArgs[2],
+                          bRight: n.cArgs[1])
       let lenExpr = GpuAst(kind: gpuBinOp,
+                           bType: idxTyp,
                            bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
-                           bLeft: GpuAst(kind: gpuBinOp,
-                                         bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
-                                         bLeft: n.cArgs[2],
-                                         bRight: n.cArgs[1]),
+                           bLeft: lenSub,
                            bRight: GpuAst(kind: gpuLit, lValue: "1",
-                                          lType: initGpuType(gtInt32)))
+                                          lType: (if idxTyp.isNil: initGpuType(gtInt32) else: idxTyp)))
+      # exprGpuType never returns nil, so idxTyp is taken above; the gtInt32
+      # arm is a defensive guard against genLit's nil-lType FieldDefect
       # Return as block containing both expressions
       n = GpuAst(kind: gpuBlock, isExpr: true, statements: @[ptrPlus, lenExpr])
       return

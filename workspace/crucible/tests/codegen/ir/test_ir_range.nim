@@ -56,7 +56,7 @@ block:
   let nSym = newSymbol("n", iSym = "n_h4", typ = intTyp)
   let nVal = GpuAst(kind: gpuIdent, symbol: nSym)
   let lit2 = GpuAst(kind: gpuLit, lValue: "2", lType: intTyp)
-  let adjustedEnd = GpuAst(kind: gpuBinOp, bOp: opMult, bLeft: nVal, bRight: lit2)
+  let adjustedEnd = GpuAst(kind: gpuBinOp, bType: nil, bOp: opMult, bLeft: nVal, bRight: lit2)
   var forLoop = GpuAst(kind: gpuFor, fVar: fVar, fStart: fStart, fEnd: adjustedEnd,
                        fRangeKind: rkInclusive, fBody: GpuAst(kind: gpuBlock))
 

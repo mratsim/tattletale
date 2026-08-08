@@ -153,27 +153,46 @@ proc liftConstexpr(pbody: var GpuAst) =
     liftConstexpr(pbody.wBody)
   else:
     discard
-proc getExprType(n: GpuAst; ctx: GpuContext): GpuType =
+
+proc getExprType(ctx: GpuContext; n: GpuAst): GpuType =
   ## Read the type of an expression from existing node fields.
   ## Errors if the node kind doesn't carry its own type (e.g. gpuDot, gpuIndex).
   ## Those cases require the caller to provide the type from context instead.
   if n == nil: error "Cannot get type of nil node"
   case n.kind
-  of gpuIdent: result = n.symbol.typ
+  of gpuIdent:
+    result = n.symbol.typ
+    # Ident analogue of the gpuBinOp read-site policy (SLOP-009): a gpuIdent
+    # whose symbol carries no type must not silently fall through to the
+    # blitExprSlot fnRetType rung (which absorbs it in value-returning
+    # procs) — the same silent wrong-type class. Error at the read site.
+    if result.isNil or result.kind == gtVoid:
+      error "gpuIdent with nil or void symbol type: Cannot determine type for blit temp in " &
+        "block expression (nil/void symbol.typ on a gpuIdent is a defect — idents reaching getExprType must carry a type)"
   of gpuLit: result = n.lType
   of gpuCall: result = ctx.getFnReturnType(n.cName)
   of gpuObjConstr: result = n.ocType
+  of gpuBinOp:
+    # Presence-only check by design: verifies bType is non-nil/non-void, never its
+    # value correctness — that is the construction sites' + literal oracles' job.
+    # A nil/void bType must not silently fall through to the blitExprSlot fnRetType
+    # rung (or raise a misleading "blit temp" error on a perfectly typed binop), so
+    # it is surfaced as a defect at the read site instead of returning nil.
+    result = n.bType
+    if result.isNil or result.kind == gtVoid:
+      error "gpuBinOp with nil or void bType: Cannot determine type for blit temp in " &
+        "block expression (nil/void bType on a gpuBinOp is a defect — all construction sites must populate bType)"
   of gpuConstexpr: result = n.cType
   of gpuMaterialize: result = n.mType
   of gpuConv: result = n.convTo
   of gpuCast: result = n.cTo
   of gpuBlock:
     if n.statements.len > 0:
-      result = getExprType(n.statements[^1], ctx)
+      result = ctx.getExprType(n.statements[^1])
     else:
       error "Empty block expression"
   of gpuIndex:
-    let arrType = getExprType(n.iArr, ctx)
+    let arrType = ctx.getExprType(n.iArr)
     if arrType != nil:
       case arrType.kind
       of gtPtr: result = arrType.to
@@ -182,9 +201,9 @@ proc getExprType(n: GpuAst; ctx: GpuContext): GpuType =
       else:
         error "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
   of gpuDeref:
-    result = getExprType(n.dOf, ctx)
+    result = ctx.getExprType(n.dOf)
   of gpuDot:
-    let parentType = getExprType(n.dParent, ctx)
+    let parentType = ctx.getExprType(n.dParent)
     if parentType != nil and parentType.kind in {gtObject, gtGenericInst}:
       let fields = if parentType.kind == gtObject: parentType.oFields else: parentType.gFields
       for f in fields:
@@ -194,25 +213,40 @@ proc getExprType(n: GpuAst; ctx: GpuContext): GpuType =
     if result.isNil:
       error "getExprType(gpuDot): field '" & n.dField.symbol.name & "' not found in " & $n.dParent.kind
   of gpuAddr:
-    result = getExprType(n.aOf, ctx)
+    result = ctx.getExprType(n.aOf)
+  of gpuTernary:
+    # Presence-only check by design (same convention as gpuBinOp): the if-expr
+    # construction guarantees both branches carry the same single-expression
+    # type; this only verifies the then-branch is typed, never its value.
+    result = ctx.getExprType(n.tThen)
+    if result.isNil or result.kind == gtVoid:
+      error "gpuTernary with nil or void type: Cannot determine type for blit temp in " &
+        "block expression (gpuTernary with an untyped then-branch is a defect — " &
+        "if-expr branches are single typed expressions)"
   else:
     error "getExprType: unhandled node kind " & $n.kind & ". Caller must provide type from context."
 
-proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRetType: GpuType): seq[GpuAst] =
+proc blitExprSlot(ctx: var GpuContext; slot: var GpuAst; blitType: GpuType; fnRetType: GpuType): seq[GpuAst] =
   ## Process an expression slot. If `slot` is a gpuBlock(isExpr: true),
   ## replace it with a blit temp reference and return preamble statements.
   if slot.kind == gpuBlock and slot.isExpr:
     if slot.statements.len == 1:
       slot = slot.statements[0]
-      result = blitExprSlot(slot, ctx, blitType, fnRetType)
+      result = ctx.blitExprSlot(slot, blitType, fnRetType)
     elif slot.statements.len > 1:
       var t = blitType
       if t.isNil or t.kind == gtVoid:
-        t = getExprType(slot.statements[^1], ctx)
+        t = ctx.getExprType(slot.statements[^1])
       if t.isNil or t.kind == gtVoid:
         t = fnRetType
       if t.isNil or t.kind == gtVoid:
-        error "Cannot determine type for blit temp in block expression"
+        # bType is a gpuBinOp-variant field — only read it when the tail IS a
+        # gpuBinOp, otherwise the case-object access raises a FieldDefect.
+        var msg = "Cannot determine type for blit temp in block expression" &
+          " (tail kind: " & $slot.statements[^1].kind & ")"
+        if slot.statements[^1].kind == gpuBinOp:
+          msg.add ", nil bType: " & $slot.statements[^1].bType.isNil
+        error msg
       let blitName = "_blit_" & $ctx.genSymCount
       inc ctx.genSymCount
       let blitSym = newSymbol(blitName, iSym = blitName, typ = t, symKind = gsLocal)
@@ -235,19 +269,19 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
   result = @[]
   case slot.kind
   of gpuVar:
-    result = blitExprSlot(slot.vInit, ctx, slot.vType, fnRetType)
+    result = ctx.blitExprSlot(slot.vInit, slot.vType, fnRetType)
   of gpuCall:
     let params = ctx.getFnParams(slot.cName)
     for i in 0 ..< slot.cArgs.len:
       let pt = if i < params.len: params[i].typ else: GpuType(kind: gtVoid)
-      let p = blitExprSlot(slot.cArgs[i], ctx, pt, fnRetType)
+      let p = ctx.blitExprSlot(slot.cArgs[i], pt, fnRetType)
       result.add p
   of gpuTemplateCall:
     for i in 0 ..< slot.tcArgs.len:
-      let p = blitExprSlot(slot.tcArgs[i], ctx, GpuType(kind: gtVoid), fnRetType)
+      let p = ctx.blitExprSlot(slot.tcArgs[i], GpuType(kind: gtVoid), fnRetType)
       result.add p
   of gpuReturn:
-    result = blitExprSlot(slot.rValue, ctx, fnRetType, fnRetType)
+    result = ctx.blitExprSlot(slot.rValue, fnRetType, fnRetType)
   of gpuAssign:
     # For gpuIdent LHS: use its iTyp directly
     # For gpuIndex LHS (e.g. arr[i] = block: ...): extract element type
@@ -267,7 +301,7 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
     if slot.aLeft.kind == gpuBlock and slot.aLeft.isExpr:
       if slot.aLeft.statements.len == 1:
         slot.aLeft = slot.aLeft.statements[0]
-        result = blitExprSlot(slot.aLeft, ctx, GpuType(kind: gtVoid), fnRetType)
+        result = ctx.blitExprSlot(slot.aLeft, GpuType(kind: gtVoid), fnRetType)
       elif slot.aLeft.statements.len > 1:
         let lastIdx = slot.aLeft.statements.high
         let lastStmt = slot.aLeft.statements[lastIdx]
@@ -277,7 +311,7 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
         var inlined: seq[GpuAst]
         for s in slot.aLeft.statements:
           if s.kind == gpuVar:
-            let vBlit = blitExprSlot(s.vInit, ctx, s.vType, fnRetType)
+            let vBlit = ctx.blitExprSlot(s.vInit, s.vType, fnRetType)
             for p in vBlit: inlined.add p
           inlined.add s
         result = inlined
@@ -287,46 +321,46 @@ proc blitExprSlot(slot: var GpuAst; ctx: var GpuContext; blitType: GpuType; fnRe
           lhsType = slot.aLeft.symbol.typ
       else:
         error "Empty block expression as lvalue"
-      result.add blitExprSlot(slot.aRight, ctx, lhsType, fnRetType)
+      result.add ctx.blitExprSlot(slot.aRight, lhsType, fnRetType)
       return
-    result.add blitExprSlot(slot.aLeft, ctx, GpuType(kind: gtVoid), fnRetType)
-    result = blitExprSlot(slot.aRight, ctx, lhsType, fnRetType)
+    result.add ctx.blitExprSlot(slot.aLeft, GpuType(kind: gtVoid), fnRetType)
+    result = ctx.blitExprSlot(slot.aRight, lhsType, fnRetType)
   of gpuBinOp:
-    result.add blitExprSlot(slot.bLeft, ctx, GpuType(kind: gtVoid), fnRetType)
-    result.add blitExprSlot(slot.bRight, ctx, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.bLeft, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.bRight, GpuType(kind: gtVoid), fnRetType)
   of gpuDot:
-    result.add blitExprSlot(slot.dParent, ctx, GpuType(kind: gtVoid), fnRetType)
-    result.add blitExprSlot(slot.dField, ctx, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.dParent, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.dField, GpuType(kind: gtVoid), fnRetType)
   of gpuIndex:
-    result.add blitExprSlot(slot.iArr, ctx, GpuType(kind: gtVoid), fnRetType)
-    result.add blitExprSlot(slot.iIndex, ctx, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.iArr, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.iIndex, GpuType(kind: gtVoid), fnRetType)
   of gpuPrefix:
-    result = blitExprSlot(slot.pVal, ctx, GpuType(kind: gtVoid), fnRetType)
+    result = ctx.blitExprSlot(slot.pVal, GpuType(kind: gtVoid), fnRetType)
   of gpuAddr:
-    result = blitExprSlot(slot.aOf, ctx, GpuType(kind: gtVoid), fnRetType)
+    result = ctx.blitExprSlot(slot.aOf, GpuType(kind: gtVoid), fnRetType)
   of gpuDeref:
-    result = blitExprSlot(slot.dOf, ctx, GpuType(kind: gtVoid), fnRetType)
+    result = ctx.blitExprSlot(slot.dOf, GpuType(kind: gtVoid), fnRetType)
   of gpuConv:
-    result = blitExprSlot(slot.convExpr, ctx, GpuType(kind: gtVoid), fnRetType)
+    result = ctx.blitExprSlot(slot.convExpr, GpuType(kind: gtVoid), fnRetType)
   of gpuCast:
-    result = blitExprSlot(slot.cExpr, ctx, GpuType(kind: gtVoid), fnRetType)
+    result = ctx.blitExprSlot(slot.cExpr, GpuType(kind: gtVoid), fnRetType)
   of gpuIf:
-    result.add blitExprSlot(slot.ifCond, ctx, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.ifCond, GpuType(kind: gtVoid), fnRetType)
   of gpuFor:
-    result.add blitExprSlot(slot.fStart, ctx, GpuType(kind: gtVoid), fnRetType)
-    result.add blitExprSlot(slot.fEnd, ctx, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.fStart, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.fEnd, GpuType(kind: gtVoid), fnRetType)
   of gpuWhile:
-    result = blitExprSlot(slot.wCond, ctx, GpuType(kind: gtVoid), fnRetType)
+    result = ctx.blitExprSlot(slot.wCond, GpuType(kind: gtVoid), fnRetType)
   of gpuObjConstr:
     for f in slot.ocFields.mitems:
-      result.add blitExprSlot(f.value, ctx, GpuType(kind: gtVoid), fnRetType)
+      result.add ctx.blitExprSlot(f.value, GpuType(kind: gtVoid), fnRetType)
   of gpuArrayLit:
     for v in slot.aValues.mitems:
-      result.add blitExprSlot(v, ctx, GpuType(kind: gtVoid), fnRetType)
+      result.add ctx.blitExprSlot(v, GpuType(kind: gtVoid), fnRetType)
   of gpuMaterialize:
-    result = blitExprSlot(slot.mExpr, ctx, GpuType(kind: gtVoid), fnRetType)
+    result = ctx.blitExprSlot(slot.mExpr, GpuType(kind: gtVoid), fnRetType)
   of gpuConstexpr:
-    result = blitExprSlot(slot.cValue, ctx, GpuType(kind: gtVoid), fnRetType)
+    result = ctx.blitExprSlot(slot.cValue, GpuType(kind: gtVoid), fnRetType)
   else:
     discard
 
@@ -335,7 +369,7 @@ proc renameSymsInTree(n: var GpuAst; oldName, newName: string)
 proc hoistLvalueVars(stmts: var seq[GpuAst])
 proc dedupVarNames*(stmts: var seq[GpuAst])
 
-proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
+proc blitFnBody(ctx: var GpuContext; body: var GpuAst; fnRetType: GpuType) =
   ## Walk a function body tree, blitting all gpuBlock(isExpr: true) nodes.
   case body.kind
   of gpuBlock:
@@ -345,32 +379,34 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
     var blockPreambles: seq[seq[GpuAst]]
     for i in 0 ..< body.statements.len:
       if body.statements[i].kind == gpuBlock and body.statements[i].isExpr:
-        blockPreambles.add blitExprSlot(body.statements[i], ctx, GpuType(kind: gtVoid), fnRetType)
+        blockPreambles.add ctx.blitExprSlot(body.statements[i], GpuType(kind: gtVoid), fnRetType)
       else:
         blockPreambles.add @[]
         let sk = body.statements[i].kind
         if sk in {gpuBlock, gpuIf, gpuFor, gpuWhile}:
-          blitFnBody(body.statements[i], ctx, fnRetType)
+          blitFnBody(ctx, body.statements[i], fnRetType)
     var newStmts: seq[GpuAst]
+    var fullPreambles: seq[seq[GpuAst]]
+    fullPreambles.setLen(body.statements.len)
     for i, stmt in body.statements.mpairs:
       var preamble = blockPreambles[i]
       case stmt.kind
       of gpuVar:
         if preamble.len == 0:
-          preamble = blitExprSlot(stmt.vInit, ctx, stmt.vType, fnRetType)
+          preamble = ctx.blitExprSlot(stmt.vInit, stmt.vType, fnRetType)
       of gpuCall:
         let params = ctx.getFnParams(stmt.cName)
         for j in 0 ..< stmt.cArgs.len:
           let pt = if j < params.len: params[j].typ else: GpuType(kind: gtVoid)
-          let p = blitExprSlot(stmt.cArgs[j], ctx, pt, fnRetType)
+          let p = ctx.blitExprSlot(stmt.cArgs[j], pt, fnRetType)
           preamble.add p
       of gpuTemplateCall:
         for j in 0 ..< stmt.tcArgs.len:
-          let p = blitExprSlot(stmt.tcArgs[j], ctx, GpuType(kind: gtVoid), fnRetType)
+          let p = ctx.blitExprSlot(stmt.tcArgs[j], GpuType(kind: gtVoid), fnRetType)
           preamble.add p
       of gpuReturn:
         if preamble.len == 0:
-          preamble = blitExprSlot(stmt.rValue, ctx, fnRetType, fnRetType)
+          preamble = ctx.blitExprSlot(stmt.rValue, fnRetType, fnRetType)
       of gpuAssign:
         if preamble.len == 0:
           var lhsType = GpuType(kind: gtVoid)
@@ -390,44 +426,53 @@ proc blitFnBody(body: var GpuAst; ctx: var GpuContext; fnRetType: GpuType) =
                 of gtArray: lhsType = arrTyp.aTyp
                 of gtUA: lhsType = arrTyp.uaTo
                 else: discard
-          preamble = blitExprSlot(stmt, ctx, lhsType, fnRetType)
+          preamble = ctx.blitExprSlot(stmt, lhsType, fnRetType)
       of gpuBlock:
         if stmt.isExpr:
-          preamble = blitExprSlot(stmt, ctx, GpuType(kind: gtVoid), fnRetType)
+          preamble = ctx.blitExprSlot(stmt, GpuType(kind: gtVoid), fnRetType)
         elif stmt.blockLabel.len == 0:
           if stmt.statements.len == 1:
             stmt = stmt.statements[0]
       of gpuIf:
-        preamble.add blitExprSlot(stmt.ifCond, ctx, GpuType(kind: gtVoid), fnRetType)
+        preamble.add ctx.blitExprSlot(stmt.ifCond, GpuType(kind: gtVoid), fnRetType)
       of gpuFor:
-        preamble.add blitExprSlot(stmt.fStart, ctx, GpuType(kind: gtVoid), fnRetType)
-        preamble.add blitExprSlot(stmt.fEnd, ctx, GpuType(kind: gtVoid), fnRetType)
+        preamble.add ctx.blitExprSlot(stmt.fStart, GpuType(kind: gtVoid), fnRetType)
+        preamble.add ctx.blitExprSlot(stmt.fEnd, GpuType(kind: gtVoid), fnRetType)
       of gpuWhile:
-        preamble = blitExprSlot(stmt.wCond, ctx, GpuType(kind: gtVoid), fnRetType)
+        preamble = ctx.blitExprSlot(stmt.wCond, GpuType(kind: gtVoid), fnRetType)
       else:
         if preamble.len == 0:
-          preamble = blitExprSlot(stmt, ctx, GpuType(kind: gtVoid), fnRetType)
+          preamble = ctx.blitExprSlot(stmt, GpuType(kind: gtVoid), fnRetType)
       newStmts.add preamble
       newStmts.add stmt
+      fullPreambles[i] = preamble
     body.statements = newStmts
     # Register all gpuVar symbols in this block's scope table
     for stmt in body.statements:
       if stmt.kind == gpuVar:
         let sym = stmt.vName.symbol
         scopeAdd(ctx.currentScopeSyms, sym.name, sym)
-    # Also ensure gpuBlock children at this level have their scope tables initialized
-    # Recursively process newly created statements (e.g. scope blocks from blitting)
-    for i in 0 ..< body.statements.len:
-      blitFnBody(body.statements[i], ctx, fnRetType)
+    # Recursively process the NEW content produced by blitting. The original
+    # statements were already fully processed (nested blocks via PASS 1,
+    # nested expressions via PASS 2); the preamble statements — blit scope
+    # blocks and hoisted lvalue wrappers — are freshly created and must be
+    # walked once. Re-walking the whole statement list here would make the
+    # pass O(N x blit-depth): a blowup on deeply-nested expression blocks
+    # (e.g. ceramic evalOnceAs / crd2idx, 2k+ blits => 100M+ visits).
+    for i in 0 ..< fullPreambles.len:
+      for j in 0 ..< fullPreambles[i].len:
+        var pre = fullPreambles[i][j]
+        if pre.kind in {gpuBlock, gpuIf, gpuFor, gpuWhile}:
+          blitFnBody(ctx, pre, fnRetType)
     ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
   of gpuIf:
-    blitFnBody(body.ifThen, ctx, fnRetType)
+    blitFnBody(ctx, body.ifThen, fnRetType)
     if body.ifElse.kind != gpuDiscard:
-      blitFnBody(body.ifElse, ctx, fnRetType)
+      blitFnBody(ctx, body.ifElse, fnRetType)
   of gpuFor:
-    blitFnBody(body.fBody, ctx, fnRetType)
+    blitFnBody(ctx, body.fBody, fnRetType)
   of gpuWhile:
-    blitFnBody(body.wBody, ctx, fnRetType)
+    blitFnBody(ctx, body.wBody, fnRetType)
   else:
     discard
 
@@ -652,11 +697,11 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
       for fnKey in ctx.allFnTab.keys:
         let fn = ctx.allFnTab[fnKey]
         if fn.kind == gpuProc:
-          blitFnBody(fn.pBody, ctx, fn.pRetType)
+          blitFnBody(ctx, fn.pBody, fn.pRetType)
       for fnKey in ctx.genericInsts.keys:
         let fn = ctx.genericInsts[fnKey]
         if fn.kind == gpuProc:
-          blitFnBody(fn.pBody, ctx, fn.pRetType)
+          blitFnBody(ctx, fn.pBody, fn.pRetType)
     )
 
 

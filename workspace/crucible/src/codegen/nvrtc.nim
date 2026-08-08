@@ -26,6 +26,12 @@ type
   NVRTC* = object
     numBlocks* = 32
     threadsPerBlock* = 128
+    # NOTE: there are intentionally NO per-launch `gridDim`/`blockDim` fields on
+    # this object. 2D/3D launch extents are passed explicitly to the `execute`
+    # template overload that accepts them (see below), so the NVRTC object carries
+    # no cross-call launch state: a later scalar `execute` on a reused object can
+    # never inherit stale 2D/3D extents, and an incomplete extent is rejected at
+    # the call site instead of silently collapsing to 1D.
     name*: string # Name of the program (of the generated in memory CUDA file)
     prog*: nvrtcProgram
     log*: string # The compilation log
@@ -257,18 +263,65 @@ proc copyToSymbol*[T](nvrtc: NVRTC, symbol: string, data: T, offset = 0) =
   check cuMemcpyHtoD(devPtr + csize_t(offset), srcPtr, csize_t(totSize))
 
 template execute*(nvrtc: var NVRTC, fn: string, res, inputs: typed, sharedMemSize: typed) =
-  ## Load the generated PTX, get the target kernel `fn` and execute it with the `res` and `inputs`
+  ## Load the generated PTX, get the target kernel `fn` and execute it with the
+  ## `res` and `inputs`.
+  ##
+  ## The launch configuration is resolved afresh from the scalar `numBlocks` and
+  ## `threadsPerBlock` fields on every call: a 1D `(numBlocks, 1, 1)` grid with a
+  ## `(threadsPerBlock, 1, 1)` block. Because the NVRTC object stores no 2D/3D
+  ## launch state, a scalar launch can never inherit stale extents from an earlier
+  ## explicit-dims launch on the same object. For 2D/3D launches pass explicit
+  ## `gridDim`/`blockDim` extents to the dedicated overload below.
 
   if not nvrtc.moduleLoaded:
     nvrtc.load()
 
   check cuModuleGetFunction(nvrtc.kernel, nvrtc.module, fn)
 
+  # 1D launch from the scalar fields; y/z default to 1.
+  let grid = dim3(nvrtc.numBlocks)
+  let blk = dim3(nvrtc.threadsPerBlock)
+
   # now execute the kernel
-  execCuda(nvrtc.kernel, nvrtc.numBlocks, nvrtc.threadsPerBlock, res, inputs, sharedMemSize)
+  execCuda(nvrtc.kernel, grid, blk, res, inputs, sharedMemSize)
 
   # synchronize so that e.g. `printf` statements will be printed before we (possibly) quit
   check cuCtxSynchronize() #
 
 template execute*(nvrtc: var NVRTC, fn: string, res, inputs: typed) =
+  ## 1D convenience overload: see the shared-memory variant above.
   nvrtc.execute(fn, res, inputs, 0)
+
+template execute*(nvrtc: var NVRTC, fn: string,
+                  gridDim, blockDim: CudaDim3,
+                  res, inputs: typed, sharedMemSize: typed) =
+  ## Load the generated PTX, get the target kernel `fn` and execute it with the
+  ## `res` and `inputs`, using `gridDim`/`blockDim` as the explicit 2D/3D launch
+  ## extents. The extents are passed per call -- nothing is stored on `nvrtc` --
+  ## so a later scalar launch on the same object is unaffected. Every axis of both
+  ## extents must be >= 1 (CUDA's valid range); an incomplete extent such as a
+  ## y/z-only entry is rejected here rather than silently collapsing to 1D.
+
+  if not nvrtc.moduleLoaded:
+    nvrtc.load()
+
+  check cuModuleGetFunction(nvrtc.kernel, nvrtc.module, fn)
+
+  doAssert gridDim.x > 0 and gridDim.y > 0 and gridDim.z > 0,
+    "explicit grid extent must have every axis >= 1, got " &
+    $gridDim.x & ", " & $gridDim.y & ", " & $gridDim.z
+  doAssert blockDim.x > 0 and blockDim.y > 0 and blockDim.z > 0,
+    "explicit block extent must have every axis >= 1, got " &
+    $blockDim.x & ", " & $blockDim.y & ", " & $blockDim.z
+
+  # now execute the kernel
+  execCuda(nvrtc.kernel, gridDim, blockDim, res, inputs, sharedMemSize)
+
+  # synchronize so that e.g. `printf` statements will be printed before we (possibly) quit
+  check cuCtxSynchronize() #
+
+template execute*(nvrtc: var NVRTC, fn: string,
+                  gridDim, blockDim: CudaDim3,
+                  res, inputs: typed) =
+  ## 2D/3D convenience overload: see the shared-memory variant above.
+  nvrtc.execute(fn, gridDim, blockDim, res, inputs, 0)

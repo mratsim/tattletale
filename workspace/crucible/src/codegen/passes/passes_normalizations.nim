@@ -16,6 +16,7 @@ import std / [sequtils, tables, sets, strutils]
 import ../ir/gpu_types
 import ../builtins/nim_builtins
 import ./pass_datatypes
+import ./passes_preprocessing
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -534,4 +535,33 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
         var fn = ctx.genericInsts[fnKey]
         if fn.kind == gpuProc:
           deEmbedForRangeAdjustmentImpl(fn.pBody)
+  )
+
+  # ── Pass: rewriteCompoundAssignment (common, ALL backends) ──
+  # Registered here — NOT in registerPreprocessingPasses — because runPasses
+  # executes passes in registration order and legalization (blitBlockExprs)
+  # must see the desugared gpuAssign: blitting a compound-assign binop LHS
+  # would by-value-blit the addressed block into a discarded temp
+  # (`((&_blit_N) += (...))` — not a modifiable lvalue on CUDA, and the
+  # accumulation would be silently lost). Runs after resolveOverloadedOperators
+  # so non-primitive `+=` (already gpuCall) is never touched.
+  reg.register("rewriteCompoundAssignment", pkTransform, phaseEarly,
+    "Rewrites compound-assign binops (x += y) into plain assignments (x = x + y) " &
+      "so the LHS is a real modifiable lvalue on all backends",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          fn.pBody.walk(proc(n: var GpuAst): void =
+            if n.kind == gpuBinOp:
+              n = rewriteCompoundAssignmentImpl(n)
+          )
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          fn.pBody.walk(proc(n: var GpuAst): void =
+            if n.kind == gpuBinOp:
+              n = rewriteCompoundAssignmentImpl(n)
+          )
   )

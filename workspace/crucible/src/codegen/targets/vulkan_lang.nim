@@ -348,11 +348,10 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genVulkan(ast.iArr) & '[' & ctx.genVulkan(ast.iIndex) & ']'
 
   of gpuCall:
-    let fnName = ast.cName
     var vkArgs: seq[string]
     for arg in ast.cArgs:
       vkArgs.add ctx.genVulkan(arg)
-    result = indentStr & fnName.ident() & '(' & vkArgs.join(", ") & ')'
+    result = indentStr & ctx.getFnName(bkVulkan, ast) & '(' & vkArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:

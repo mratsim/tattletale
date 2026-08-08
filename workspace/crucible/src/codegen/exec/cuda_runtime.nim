@@ -208,8 +208,26 @@ proc endianCheck(): NimNode =
       "Most CPUs (x86-64, ARM) are little-endian, as are Nvidia GPUs, which allows naive copying of parameters.\n" &
       "Your architecture '" & $hostCPU & "' is big-endian and GPU offloading is unsupported on it."
 
-proc execCudaImpl*(jitFn, numBlocks, threadsPerBlock, res, inputs, sharedMemSize: NimNode,
+type
+  CudaDim3* = object
+    ## Host-side representation of a CUDA `dim3` launch configuration — either a
+    ## grid or a block extent. Components are `uint32`, the width used by the
+    ## CUDA driver API's `cuLaunchKernel`, which every generated launch passes.
+    x*, y*, z*: uint32
+
+proc dim3*(x: int, y = 1, z = 1): CudaDim3 =
+  ## Build a `CudaDim3` from scalar extents. `y` and `z` default to 1, so a
+  ## 1D caller can pass a plain block/grid count and still obtain a valid 3D
+  ## launch configuration with unit extents on the remaining axes.
+  CudaDim3(x: x.uint32, y: y.uint32, z: z.uint32)
+
+proc execCudaImpl*(jitFn, gridDim, blockDim, res, inputs, sharedMemSize: NimNode,
                    passStructByPointer: static bool): NimNode =
+  ## Generates the statements that execute a CUDA kernel on `jitFn`. `gridDim`
+  ## and `blockDim` are NimNodes that must evaluate to `CudaDim3` values giving
+  ## the grid and block extent on all three axes. The scalar `numBlocks` /
+  ## `threadsPerBlock` convenience overloads below simply wrap those scalars in
+  ## `dim3(x)` so that the y/z axes default to 1.
   # Maybe wrap individually given arguments in a `[]` bracket, e.g.
   # `execCuda(res = foo, inputs = bar)`
   let res = maybeWrap res
@@ -273,9 +291,9 @@ proc execCudaImpl*(jitFn, numBlocks, threadsPerBlock, res, inputs, sharedMemSize
 
     check cuEventRecord(start, CUstream(nil))
     check cuLaunchKernel(
-            CUfunction(`jitFn`),     # dummy conversion on NVRTC, required on LLVM
-            `numBlocks`.uint32, 1'u32, 1'u32,       # grid(x, y, z)
-            `threadsPerBlock`.uint32, 1'u32, 1'u32, # block(x, y, z)
+            CUfunction(`jitFn`),               # dummy conversion on NVRTC, required on LLVM
+            `gridDim`.x, `gridDim`.y, `gridDim`.z,   # grid(x, y, z)
+            `blockDim`.x, `blockDim`.y, `blockDim`.z, # block(x, y, z)
             sharedMemBytes = `sharedMemSize`.uint32,
             CUstream(nil),
             pAr, nil)
@@ -346,14 +364,21 @@ macro execCuda*(jitFn: CUfunction,
   ## as an input.
   ##
   ## NOTE: This function is mainly intended for convenient execution of a single kernel
-  result = execCudaImpl(jitFn, newLit 1, newLit 1, res, inputs, newLit 0, passStructByPointer = true)
+  result = execCudaImpl(jitFn,
+                        newCall(bindSym"dim3", newLit 1), newCall(bindSym"dim3", newLit 1),
+                        res, inputs, newLit 0,
+                        passStructByPointer = true)
 
 macro execCuda*(jitFn: CUfunction,
                 numBlocks, threadsPerBlock: int,
                 res: typed,
                 inputs: typed): untyped =
-  ## Overload which takes a target number of threads and blocks
-  result = execCudaImpl(jitFn, numBlocks, threadsPerBlock, res, inputs, newLit 0, passStructByPointer = true)
+  ## Overload which takes a target number of threads and blocks (1D: y/z axes default to 1)
+  result = execCudaImpl(jitFn,
+                        newCall(bindSym"dim3", numBlocks),
+                        newCall(bindSym"dim3", threadsPerBlock),
+                        res, inputs, newLit 0,
+                        passStructByPointer = true)
 
 macro execCuda*(jitFn: CUfunction,
                 numBlocks, threadsPerBlock: int,
@@ -361,9 +386,31 @@ macro execCuda*(jitFn: CUfunction,
                 inputs: typed,
                 sharedMemSize: typed): untyped =
   ## Overload which takes a target number of threads and blocks and a shared memory size
-  result = execCudaImpl(jitFn, numBlocks, threadsPerBlock, res, inputs, sharedMemSize, passStructByPointer = true)
+  result = execCudaImpl(jitFn,
+                        newCall(bindSym"dim3", numBlocks),
+                        newCall(bindSym"dim3", threadsPerBlock),
+                        res, inputs, sharedMemSize,
+                        passStructByPointer = true)
+
+macro execCuda*(jitFn: CUfunction,
+                gridDim, blockDim: CudaDim3,
+                res: typed,
+                inputs: typed): untyped =
+  ## Overload which takes explicit 2D/3D grid and block extents
+  result = execCudaImpl(jitFn, gridDim, blockDim, res, inputs, newLit 0, passStructByPointer = true)
+
+macro execCuda*(jitFn: CUfunction,
+                gridDim, blockDim: CudaDim3,
+                res: typed,
+                inputs: typed,
+                sharedMemSize: typed): untyped =
+  ## Overload which takes explicit 2D/3D grid and block extents and a shared memory size
+  result = execCudaImpl(jitFn, gridDim, blockDim, res, inputs, sharedMemSize, passStructByPointer = true)
 
 macro execCuda*(jitFn: CUfunction,
                 res: typed): untyped =
   ## Overload of the above for empty `inputs`
-  result = execCudaImpl(jitFn, newLit 1, newLit 1, res, nnkBracket.newTree(), newLit 0, passStructByPointer = true)
+  result = execCudaImpl(jitFn,
+                        newCall(bindSym"dim3", newLit 1), newCall(bindSym"dim3", newLit 1),
+                        res, nnkBracket.newTree(), newLit 0,
+                        passStructByPointer = true)

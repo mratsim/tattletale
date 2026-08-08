@@ -19,6 +19,7 @@ import std/macros
 import workspace/crucible/src/codegen/gpu_compiler
 import workspace/crucible/src/codegen/ir/gpu_types
 
+import workspace/crucible/src/codegen/ir/gpu_type_constructors
 # Helper: count nodes matching a predicate (avoid sequtils generics)
 proc countPred(n: GpuAst; pred: proc(n: GpuAst): bool): int =
   if n == nil: return 0
@@ -35,6 +36,16 @@ proc getProc(ir: GpuAst): GpuAst =
   result = ir.statements[0]
   doAssert result.kind == gpuProc,
     "Expected gpuProc as first statement, got " & $result.kind
+
+# Helper: find the first gpuBinOp with a given operator name in a subtree
+proc findBinOpOp(n: GpuAst; op: string): GpuAst =
+  if n == nil: return nil
+  if n.kind == gpuBinOp and n.bOp.ident() == op:
+    return n
+  for ch in n.items:
+    let r = findBinOpOp(ch, op)
+    if not r.isNil: return r
+  return nil
 
 # ── Test: Top-level is gpuBlock ──
 block:
@@ -155,6 +166,78 @@ block:
   doAssert fn.pBody.kind == gpuBlock,
     "Expected gpuBlock for multi-statement body, got " & $fn.pBody.kind
 echo "  OK — multi-statement body produces gpuBlock"
+
+# ── Test: primitive nnkInfix gpuBinOp carries its numeric bType ──
+block:
+  let ir = toGpuAst:
+    proc binOpTypeKernel(x: int32) {.device.} =
+      let y = x + 1
+  let fn = ir.getProc()
+  let body = fn.pBody
+  doAssert body.statements[0].vInit.kind == gpuBinOp,
+    "Expected gpuBinOp for x+1, got " & $body.statements[0].vInit.kind
+  let binop = body.statements[0].vInit
+  doAssert not binop.bType.isNil, "crash-path nnkInfix gpuBinOp must carry non-nil bType"
+  doAssert binop.bType == initGpuType(gtInt32),
+    "x + 1 must carry gtInt32 bType, got " & $binop.bType
+echo "  OK — primitive nnkInfix gpuBinOp carries numeric bType"
+
+# ── Test: comparison gpuBinOp carries its gtBool bType ──
+block:
+  let ir = toGpuAst:
+    proc cmpTypeKernel(x: int32) {.device.} =
+      let b = x == 1
+  let fn = ir.getProc()
+  let body = fn.pBody
+  doAssert body.statements[0].vInit.kind == gpuBinOp,
+    "Expected gpuBinOp for x==1, got " & $body.statements[0].vInit.kind
+  let binop = body.statements[0].vInit
+  doAssert not binop.bType.isNil, "comparison gpuBinOp must carry non-nil bType"
+  doAssert binop.bType.kind == gtBool,
+    "comparison must carry gtBool bType, got " & $binop.bType.kind
+echo "  OK — comparison gpuBinOp carries gtBool bType"
+
+# ── Test: compound-assign (+=) derives its bType from the LHS operand ──
+block:
+  let ir = toGpuAst:
+    proc compoundKernel(x: int32) {.device.} =
+      var y = x
+      y += 1
+  let fn = ir.getProc()
+  let binop = fn.pBody.findBinOpOp("+=")
+  doAssert not binop.isNil, "Expected a += gpuBinOp in the body"
+  doAssert not binop.bType.isNil, "compound-assign gpuBinOp must carry non-nil bType"
+  doAssert binop.bType == initGpuType(gtInt32),
+    "y += 1 must carry gtInt32 bType (derived from the LHS operand), got " & $binop.bType
+echo "  OK — compound-assign gpuBinOp derives bType from the LHS operand"
+
+# ── Test: compound-assign (+=) on float derives gtFloat32 from the LHS ──
+block:
+  let ir = toGpuAst:
+    proc compoundFloatKernel(w: float32) {.device.} =
+      var z = w
+      z += 2.0
+  let fn = ir.getProc()
+  let binop = fn.pBody.findBinOpOp("+=")
+  doAssert not binop.isNil, "Expected a += gpuBinOp in the body"
+  doAssert not binop.bType.isNil, "compound-assign gpuBinOp must carry non-nil bType"
+  doAssert binop.bType == initGpuType(gtFloat32),
+    "z += 2.0 must carry gtFloat32 bType (derived from the LHS operand), got " & $binop.bType
+echo "  OK — float compound-assign gpuBinOp derives gtFloat32 from the LHS"
+
+# ── Test: gpuBinOp clone preserves bType ──
+block:
+  # Fixture with a known result type — clone must carry it over.
+  let f = GpuAst(kind: gpuBinOp,
+                 bType: initGpuType(gtInt32),
+                 bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("*", iSym = "*")),
+                 bLeft: GpuAst(kind: gpuLit, lValue: "1", lType: initGpuType(gtInt32)),
+                 bRight: GpuAst(kind: gpuLit, lValue: "2", lType: initGpuType(gtInt32)))
+  let c = f.clone()
+  doAssert c.kind == gpuBinOp, "clone of gpuBinOp must stay gpuBinOp"
+  doAssert not c.bType.isNil, "clone must copy bType (got nil)"
+  doAssert c.bType == f.bType, "clone must preserve bType value"
+echo "  OK — gpuBinOp clone preserves bType"
 
 echo ""
 echo "  All roundtrip tests passed."
