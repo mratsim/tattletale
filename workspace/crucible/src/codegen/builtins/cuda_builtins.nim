@@ -16,8 +16,13 @@ type
   ## resolves field types by name and emits C++ tuple struct names from it
   ## (Tuple_F0_Dim vs Tuple_F0_int mismatch broke tuple-concat emission).
   ## The codegen emits these by name, so the width only affects Nim-side
-  ## typing. (Perf note: int64 index math is slow on GPU — revisit with
-  ## int32 indices + SomeInteger template params if it matters.)
+  ## typing — at emission `int` maps to int32 anyway
+  ## (toGpuTypeKind: ntyInt -> gtInt32, gpu_type_constructors.nim), so this
+  ## is emission-neutral (verified: emitted PTX is all-32-bit index math).
+  ## The int32/SomeInteger idea remains only to make the Nim-side typing
+  ## match the emitted width — the IR currently types these int64 while
+  ## the generated CUDA is 32-bit (benign at harness sizes; latent for
+  ## grids >= 2^32 threads). NOT a GPU perf issue.
   NvBlockIdx* = object
     x*, y*, z*: int
   NvBlockDim = object
