@@ -98,12 +98,11 @@ macro gemm_fragment*[VD: static int, VA: static int, VB: static int, VC: static 
 #  gemm_ukernel(mma, ...) — the GEBB microkernel (loop over K)
 # ═════════════════════════════════════════════════════════════════════════
 
-func gemm_ukernel*[K: static int, VA: static int, VB: static int, VC: static int,
-               LA, LB, LC, TA, TB, TC](
+func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
     mma: static MmaAtom[LA, LB, LC];
     cFrag: var array[VC, TC];
-    aFrag: array[K, array[VA, TA]];
-    bFrag: array[K, array[VB, TB]]) {.inline.} =
+    aFrag: Tensor[TA, ShA, StA];
+    bFrag: Tensor[TB, ShB, StB]) {.inline.} =
   ## GEBB microkernel: cFrag += Σ_k aFrag[k]·bFrag[k], one gemm_fragment
   ## per k-slice, accumulated in cFrag. The loop over K is the layer above
   ## the single-instruction gemm_fragment (CuTe dispatch [5] analog).
@@ -113,17 +112,35 @@ func gemm_ukernel*[K: static int, VA: static int, VB: static int, VC: static int
   ##        `instr`), passed `static`: the atom is data that monomorphizes
   ##        the kernel (CuTe passes the atom as a type for the same reason)
   ##   cFrag: var register array — the accumulator across all k-slices
-  ##   aFrag: array[K, array[VA, TA]] — the K k-slices of A fragments
-  ##   bFrag: array[K, array[VB, TB]] — the K k-slices of B fragments
+  ##   aFrag: owning tensor, shape (K, VA), row-major strides (VA, 1) —
+  ##        the K k-slices of A fragments (k as the outer mode, CuTe's
+  ##        (V, K) register fragment); the make_tensor staging — no
+  ##        raw-addr views at the call site
+  ##   bFrag: owning tensor, shape (K, VB), row-major strides (VB, 1) —
+  ##        the K k-slices of B fragments
   ##
-  ## K = number of k-slices (each of the atom's K depth). The loop is
-  ## unrolled with staticFor so every gemm_fragment sees constant fragment
-  ## indices — the asm operands stay register-resident (a runtime k would
-  ## spill aFrag[k][i] to local memory and break the "f"/"r" constraints).
+  ## K = number of k-slices (each of the atom's K depth), read from the
+  ## tensor shape along with VA/VB. Each k-slice is copied into a local
+  ## register array before gemm_fragment — the unrolled (staticFor) copy
+  ## uses constant indices so the asm operands stay register-resident (a
+  ## runtime k would spill aFrag[k][i] to local memory and break the "f"/
+  ## "r" constraints). The data array is read physically (data[k·VA+i]),
+  ## so the fragment tensors must be row-major compact — make_tensor(T,
+  ## (K, VA), (VA, 1)), which pairs with copyFrom's linear data fill.
   ## Atom-parametric: the same signature serves GPU tensor-core atoms and
   ## CPU FMA/AMX atoms (the atom decides the per-slice instruction).
+  const
+    K = toIntVal(ShA.default[0])
+    VA = toIntVal(ShA.default[1])
+    VB = toIntVal(ShB.default[1])
   staticFor k, 0, K:
-    gemm_fragment(mma.instr, cFrag, aFrag[k], bFrag[k])
+    var aSlice: array[VA, TA]
+    var bSlice: array[VB, TB]
+    staticFor i, 0, VA:
+      aSlice[i] = aFrag.data[k * VA + i]
+    staticFor i, 0, VB:
+      bSlice[i] = bFrag.data[k * VB + i]
+    gemm_fragment(mma.instr, cFrag, aSlice, bSlice)
 
 
 #  gemm_fragment(C, A, B) — reference (whole-tile outer product)
@@ -272,16 +289,16 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   fillWith(cFragView, 0.0'f32)
 
   for kb in 0 ..< K div BLK_K:
-    var aFragBlock: array[slicesPerBlock, array[VA, TA]]
+    var aFragBlock = make_tensor(TA, (slicesPerBlock, VA), (VA, 1))
     for s in 0 ..< slicesPerBlock:
       for v in 0 ..< VA:
         # (v0, v1, 0, kb·slicesPerBlock+s) — the decomposed V coord +
         # (RestM, RestK) coords against the flat (V·, RestM, RestK) view
-        aFragBlock[s][v] = tAv(concat(idx2crd(tma.atom.aLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
-    var bFragBlock: array[slicesPerBlock, array[VB, TB]]
+        aFragBlock.data[s * VA + v] = tAv(concat(idx2crd(tma.atom.aLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
+    var bFragBlock = make_tensor(TB, (slicesPerBlock, VB), (VB, 1))
     for s in 0 ..< slicesPerBlock:
       for v in 0 ..< VB:
-        bFragBlock[s][v] = tBv(concat(idx2crd(tma.atom.bLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
+        bFragBlock.data[s * VB + v] = tBv(concat(idx2crd(tma.atom.bLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
     gemm_ukernel(tma.atom, cFrag, aFragBlock, bFragBlock)
 
   # Epilogue — CuTe gemm_device: axpby(alpha, tCrC, beta, tCgC). The

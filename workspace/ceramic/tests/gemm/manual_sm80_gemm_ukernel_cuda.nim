@@ -41,8 +41,8 @@ func gemmUkernelMicrotile(tma: static TiledMma; t: int;
                           A, B: ptr UncheckedArray[uint32]) {.inline.} =
   ## C(16×8) = A(16×16)·B(16×8) — two m16n8k8 k-slices via gemm_ukernel.
   ## Staging: partition_A/B of the full (M, 2K)/(N, 2K) views, the
-  ## fragment blocks as owning tensors (make_tensor_like), one
-  ## copyFrom gathers all slices — no loops, no offsets.
+  ## fragment blocks as owning tensors (make_tensor), one copyFrom
+  ## gathers all slices — no loops, no offsets, no raw-addr views.
   const
     kSlices = 2
     M = tma.atom.mnk.m
@@ -55,15 +55,14 @@ func gemmUkernelMicrotile(tma: static TiledMma; t: int;
   let tAv = tma.partition_A(thr, make_view(A, make_layout((M, kSlices * K), (1, M))))
   let tBv = tma.partition_B(thr, make_view(B, make_layout((N, kSlices * K), (1, N))))
   var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
-  # the fragment blocks as 2D arrays — k as the outer mode (CuTe's (V,K)
-  # register fragment); the k-slices are the partition's RestK mode, one
-  # copyFrom gathers the whole block through the identity view
-  var aFrag: array[kSlices, array[VA, uint32]]
-  var aFragView = make_view(addr aFrag[0][0], make_layout((kSlices * VA,)))
-  aFragView.copyFrom(tAv)
-  var bFrag: array[kSlices, array[VB, uint32]]
-  var bFragView = make_view(addr bFrag[0][0], make_layout((kSlices * VB,)))
-  bFragView.copyFrom(tBv)
+  # the fragment blocks as owning tensors — k as the outer mode (CuTe's
+  # (V, K) register fragment); the k-slices are the partition's RestK
+  # mode, one copyFrom gathers the whole block through the tensor's
+  # row-major data layout
+  var aFrag = make_tensor(uint32, (kSlices, VA), (VA, 1))
+  aFrag.copyFrom(tAv)
+  var bFrag = make_tensor(uint32, (kSlices, VB), (VB, 1))
+  bFrag.copyFrom(tBv)
   # the accumulator: make_tensor, passed as .data (the crucible var-array
   # field fix makes the bare field C-decay to T*)
   var cFrag = make_tensor(float32, (VC,))
