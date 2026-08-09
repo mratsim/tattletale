@@ -13,26 +13,26 @@
 ## T=1 layouts: the whole tile is one "thread" (the core).
 ## Reference: ktransformers amx.hpp (GemmKernel224BF) + Intel AMX spec.
 
-import ./int_tuples
-import ./layouts
-import ./layout_constructors
-import ./atoms
+import ../int_tuples
+import ../layouts
+import ../layout_constructors
+import ../atoms
 
 # ═════════════════════════════════════════════════════════════════════════
 #  AMX tile layouts — T=1, V = tile size
 # ═════════════════════════════════════════════════════════════════════════
 
-type
-  AMX_1x256* = typeof(make_layout((1, 256), (0, 1)))
+const
+  AMX_1x256* = make_layout((1, 256), (0, 1))
     ## (T1,V256) → flat 256-element tile (16×16), single thread
-  AMX_1x128* = typeof(make_layout((1, 128), (0, 1)))
+  AMX_1x128* = make_layout((1, 128), (0, 1))
     ## (T1,V128) → 128-element panel (16×8)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Atoms
 # ═════════════════════════════════════════════════════════════════════════
 
-const AMX_16x16x16_TDPBF16PS* = MmaAtom[AMX_1x256, AMX_1x256, AMX_1x256](
+const AMX_16x16x16_TDPBF16PS* = MmaAtom[typeof(AMX_1x256), typeof(AMX_1x256), typeof(AMX_1x256)](
     name: "AMX_16x16x16_TDPBF16PS",
     mnk: (m: 16, n: 16, k: 16),          # tdpbf16ps: 16×16 tile, K=2 per instr
     aType: mdtBF16, bType: mdtBF16, cType: mdtF32,
@@ -40,13 +40,13 @@ const AMX_16x16x16_TDPBF16PS* = MmaAtom[AMX_1x256, AMX_1x256, AMX_1x256](
     sfaType: mdtF32, sfbType: mdtF32,
     kind: bkCPU_X86_AMX,
     instr: "tdpbf16ps",
-    aLayout: make_layout((1, 256), (0, 1)),
-    bLayout: make_layout((1, 256), (0, 1)),
-    cLayout: make_layout((1, 256), (0, 1)),
+    aLayout: AMX_1x256,
+    bLayout: AMX_1x256,
+    cLayout: AMX_1x256,
     scaleVec: sv1X,                       # unused — AMX scale is smSoftware
   )
 
-const AMX_16x16x16_TDPBSSD* = MmaAtom[AMX_1x256, AMX_1x256, AMX_1x256](
+const AMX_16x16x16_TDPBSSD* = MmaAtom[typeof(AMX_1x256), typeof(AMX_1x256), typeof(AMX_1x256)](
     name: "AMX_16x16x16_TDPBSSD",
     mnk: (m: 16, n: 16, k: 16),
     aType: mdtInt8, bType: mdtInt8, cType: mdtInt32,
@@ -54,8 +54,8 @@ const AMX_16x16x16_TDPBSSD* = MmaAtom[AMX_1x256, AMX_1x256, AMX_1x256](
     sfaType: mdtF32, sfbType: mdtF32,
     kind: bkCPU_X86_AMX,
     instr: "tdpbssd",
-    aLayout: make_layout((1, 256), (0, 1)),
-    bLayout: make_layout((1, 256), (0, 1)),
-    cLayout: make_layout((1, 256), (0, 1)),
+    aLayout: AMX_1x256,
+    bLayout: AMX_1x256,
+    cLayout: AMX_1x256,
     scaleVec: sv1X,
   )

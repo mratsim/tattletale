@@ -11,23 +11,23 @@
 ## `src/tensor_layouts/atoms_nv.py` (which are themselves validated by oracle
 ## tests against CUTLASS C++). (T, V) → col-major offset in the operand tile.
 
-import ./int_tuples
-import ./layouts
-import ./layout_constructors
-import ./atoms
+import ../int_tuples
+import ../layouts
+import ../layout_constructors
+import ../atoms
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Reusable layout aliases (from atoms_nv.py:210-216 / mma_traits_sm80.hpp)
 # ═════════════════════════════════════════════════════════════════════════
 
-type
-  SM80_16x8_Row* = typeof(make_layout(((4, 8), (2, 2)), ((32, 1), (16, 8))))
+const
+  SM80_16x8_Row* = make_layout(((4, 8), (2, 2)), ((32, 1), (16, 8)))
     ## (T32,V4) → (M16,N8) — C fragment of m16n8k8/m16n8k16 f16·bf16·tf32
-  SM80_8x8_Row* = typeof(make_layout(((4, 8), 2), ((16, 1), 8)))
+  SM80_8x8_Row* = make_layout(((4, 8), 2), ((16, 1), 8))
     ## (T32,V2) → (M8,K8) — B fragment of m16n8k8
-  SM80_16x8x8_A_TF32* = typeof(make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64))))
+  SM80_16x8x8_A_TF32* = make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64)))
     ## (T32,V4) → (M16,K8) — A fragment of m16n8k8 tf32
-  SM80_16x8x8_B_TF32* = typeof(make_layout(((4, 8), 2), ((8, 1), 32)))
+  SM80_16x8x8_B_TF32* = make_layout(((4, 8), 2), ((8, 1), 32))
     ## (T32,V2) → (N8,K8) — B fragment of m16n8k8 tf32
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -35,7 +35,7 @@ type
 # ═════════════════════════════════════════════════════════════════════════
 
 const SM80_16x8x8_F32TF32TF32F32_TN* = MmaAtom[
-    SM80_16x8x8_A_TF32, SM80_16x8x8_B_TF32, SM80_16x8_Row
+    typeof(SM80_16x8x8_A_TF32), typeof(SM80_16x8x8_B_TF32), typeof(SM80_16x8_Row)
   ](
     name: "SM80_16x8x8_F32TF32TF32F32_TN",
     mnk: (m: 16, n: 8, k: 8),
@@ -44,8 +44,8 @@ const SM80_16x8x8_F32TF32TF32F32_TN* = MmaAtom[
     sfaType: mdtF32, sfbType: mdtF32,
     kind: bkGPU_TensorCore,
     instr: "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32",
-    aLayout: make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64))),
-    bLayout: make_layout(((4, 8), 2), ((8, 1), 32)),
-    cLayout: make_layout(((4, 8), (2, 2)), ((32, 1), (16, 8))),
+    aLayout: SM80_16x8x8_A_TF32,
+    bLayout: SM80_16x8x8_B_TF32,
+    cLayout: SM80_16x8_Row,
     scaleVec: sv1X,
   )

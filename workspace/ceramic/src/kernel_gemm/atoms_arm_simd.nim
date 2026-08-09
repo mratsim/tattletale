@@ -8,7 +8,7 @@
 ## ARM SIMD ukernel atom instantiations (bkCPU_SIMD).
 ## NEON SDOT / i8mm integer kernels (llama.cpp vec_dot paths).
 
-import ./atoms
+import ../atoms
 
 const ARM_NEON_SDOT_8x8x4* = MmaAtom[NoLayout, NoLayout, NoLayout](
     name: "ARM_NEON_SDOT_8x8x4",

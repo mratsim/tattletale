@@ -10,7 +10,7 @@
 ## laser-style microkernels: isa + nbScalars + nbVecsNr + conversionPoint.
 ## AVX512 sgemm (laser): mr=14, nb_vecs_nr=2, nb_scalars=16 → 14×32 f32.
 
-import ./atoms
+import ../atoms
 
 const X86_AVX512_SGEMM_14x32* = MmaAtom[NoLayout, NoLayout, NoLayout](
     name: "X86_AVX512_SGEMM_14x32",
