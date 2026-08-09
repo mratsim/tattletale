@@ -1,5 +1,36 @@
 # Ceramic Agents Guidelines
 
+## Running tests
+
+Ceramic tests are run through `tattletale/config.nims` tasks — from the
+`tattletale/` dir (NOT this dir):
+
+```bash
+nim test_ceramic          # all tests in workspace/ceramic/tests
+```
+
+Mechanics (see `config.nims`):
+- The task scans `tests/` for files named `test_*` or `t_*` and compiles
+  each with `nim c` (C backend) via `testerCmd` into
+  `build/tests/<file>` — a new `test_*.nim` in `tests/` is picked up
+  automatically, no registration needed.
+- **Non-recursive**: `tests/gpu/` is NOT included (run those directly,
+  e.g. `nim cpp -r tests/gpu/test_*.nim`).
+- The task aborts at the first failure.
+
+> ⚠️ Known red: `tests/test_layout_algebra.nim(409, 23)` —
+> `complement(make_layout((2, 2), (1, 4)), 16)` fails to compile (literal
+> `16` ambiguous between the `Int or int` and `static int` overloads).
+> Pre-existing since the EPIC commit; blocks everything after it
+> alphabetically.
+
+Single file (C backend, mirrors `testerCmd`):
+```bash
+nim c -r --hints:off --warnings:off \
+  --outdir:build/tests/test_name --nimcache:nimcache/tests/test_name \
+  workspace/ceramic/tests/test_file.nim
+```
+
 ## Tensor access: `[]` vs `()`
 
 - `<tensor>(<args>)` — dual dispatch:

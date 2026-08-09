@@ -19,14 +19,31 @@ nim install_deps_dev      # dev: zip (vendor libtorch), chronos (download test t
 
 ### Tests
 
+All test tasks come from `config.nims` (`nim <task>` from this dir).
+Each task scans a `tests/` dir for files named `test_*` or `t_*` and compiles
+them with `nim c` (C backend) into `build/tests/<file>` — non-recursive,
+so GPU tests in `tests/gpu/` subdirs are NOT picked up (run those directly).
+
 ```bash
 nim test_libtorch
 nim test_safetensors
 nim test_transformers
 nim test_toktoktok
+nim test_ceramic
+nim test_crucible_nvrtc
+nim test_crucible_opencl
+nim test_crucible_vulkan
+nim test_crucible_webgpu
 ```
 
+> ⚠️ `nim test_ceramic` is currently RED: `tests/test_layout_algebra.nim(409,
+> 23)` fails to compile (`complement(make_layout((2, 2), (1, 4)), 16)` — literal
+> `16` is ambiguous between the `Int or int` and `static int` overloads).
+> Pre-existing (present since the EPIC commit 0e64309); the task aborts at the
+> first failure, so files after it alphabetically don't run until it's fixed.
+
 Single file:
+
 ```bash
 nim cpp -r --verbosity:0 --hints:off --warnings:off \
   --outdir:build/tests/test_name --nimcache:nimcache/tests/test_name \
