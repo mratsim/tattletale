@@ -629,6 +629,13 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
     result.dParent = ctx.toGpuAst(reg, node[0])
     result.dField = ctx.toGpuAst(reg, node[1])
 
+  of nnkCheckedFieldExpr:
+    ## Case-object field access: Nim wraps it in a discriminant check
+    ## (`contains(kind, {...})`). The DSL's compile-time const records
+    ## fold the discriminant, and the check has no C representation, so
+    ## emit the field access directly.
+    result = ctx.toGpuAst(reg, node[0])
+
   of nnkBracketExpr:
     case node[0].typeKind
     of ntyTuple:

@@ -2,14 +2,19 @@
 ##
 ## C(16×8) = A(16×8) · B(8×8) — one m16n8k8 tf32 atom, 32 threads, no
 ## smem, no copies: direct gmem→register fragment fills, one mma.sync,
-## direct register→gmem stores. The fragment coords come from the atom's
-## (T,V) layouts via crd2idx — the same math partition_A/B/C computes
-## host-side (validated in test_partition_host + test_fragment_dump_gpu).
+## direct register→gmem stores.
+##
+## REWRITE (uses the blessed primitives): the fragment offsets come from
+## partition_A/B/C over the TiledMma (atom + thread layout), flattened
+## host-side to constant shape/stride tuples that the kernel folds via
+## make_layout + crd2idx. The thread decomposition is idx2crd on the
+## thread layout. What stays hand-written: the (T,V) flat register index
+## (t + T·v), the mma.sync asm, and the epilogue.
 ##
 ## tf32 path: input buffers are uint32 holding tf32 bit patterns
 ## (host-side f32 → tf32 truncation of the low 13 mantissa bits). The
-## DSL's cast emission is a value conversion, not a bitcast.
-## entry 14), so bit patterns travel as u32, not via cast.
+## DSL's cast emission is a value conversion, not a bitcast, so bit
+## patterns travel as u32, not via cast.
 ##
 ## Reference: exact for small-integer inputs (products and partial sums
 ## fit f32's 24-bit mantissa), so the test is bit-exact.
@@ -20,10 +25,40 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/atoms
 import workspace/ceramic/src/atoms_nvidia
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/crucible/src/codegen/nvrtc
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Blessed derivation — atom + tiling + partitions, flattened to constants
+# ═════════════════════════════════════════════════════════════════════════
+
+const atom = SM80_16x8x8_F32TF32TF32F32_TN
+const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
+  atom: atom, threadLayout: make_layout((1, 1, 1)))
+
+const pA = partition_A(tiled, 16, 8)
+const pB = partition_B(tiled, 8, 8)
+const pC = partition_C(tiled, 16, 8)
+const pAFlatShape  = flatten(pA.shape)
+const pAFlatStride = flatten(pA.stride)
+const pBFlatShape  = flatten(pB.shape)
+const pBFlatStride = flatten(pB.stride)
+const pCFlatShape  = flatten(pC.shape)
+const pCFlatStride = flatten(pC.stride)
+
+const T  = toIntVal(atom.threadCount(opA))       # threads per atom
+const VA = toIntVal(atom.valuesPerThread(opA))   # A registers per thread
+const VB = toIntVal(atom.valuesPerThread(opB))   # B registers per thread
+const VC = toIntVal(atom.valuesPerThread(opC))   # C registers per thread
+
+# The DSL cannot size arrays from host consts (the kernel sees only
+# literals), so the register-array sizes are written inline below and
+# pinned to the atom here — drift fails the build.
+static:
+  doAssert VA == 4 and VB == 2 and VC == 4, "kernel register arrays must match the atom's V counts"
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Kernel
@@ -35,36 +70,28 @@ const kernelCode = cuda:
       A, B: ptr UncheckedArray[uint32]) {.global.} =
     ## C(16×8) = A(16×8) · B(8×8), tf32, one m16n8k8 atom, 32 threads.
     ## gmem is col-major (CuTe convention): A[m + k·16], B[n + k·8].
+    ## 1×1 tiled: the fragment offset IS the gmem index.
     let t = int(threadIdx.x)
 
-    # ── fragment coords from the atom's (T,V) layouts ──
-    #   A layout ((4,8),(2,2)):((16,1),(8,64)): off → (lm = off mod 16, lk = off div 16)
-    #   B layout ((4,8),2):((8,1),32):          off → (ln = off mod 8,  lk = off div 8)
-    #   C layout ((4,8),(2,2)):((32,1),(16,8)): off → (lm = off mod 16, ln = off div 16)
-    let aLayout = make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64)))
-    let bLayout = make_layout(((4, 8), 2), ((8, 1), 32))
-    let cLayout = make_layout(((4, 8), (2, 2)), ((32, 1), (16, 8)))
-
     # ── fragments: direct gmem → registers ──
+    #   flat (T,V) index = t + T·v — the atom's register order.
     var aFrag: array[4, uint32]
+    for v in 0 ..< VA:
+      aFrag[v] = A[crd2idx(make_layout(pAFlatShape, pAFlatStride), t + T * v)]
     var bFrag: array[2, uint32]
+    for v in 0 ..< VB:
+      bFrag[v] = B[crd2idx(make_layout(pBFlatShape, pBFlatStride), t + T * v)]
     var cFrag: array[4, float32]
-    for v in 0 .. 3:
-      let off = crd2idx(aLayout, t + 32 * v)
-      aFrag[v] = A[(off mod 16) + (off div 16) * 16]
-    for v in 0 .. 1:
-      let off = crd2idx(bLayout, t + 32 * v)
-      bFrag[v] = B[(off mod 8) + (off div 8) * 8]
-    for v in 0 .. 3:
+    for v in 0 ..< VC:
       cFrag[v] = 0.0'f32
 
     # ── one mma.sync ──
     asm "\"mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\" : \"+f\"(cFrag[0]), \"+f\"(cFrag[1]), \"+f\"(cFrag[2]), \"+f\"(cFrag[3]) : \"r\"(aFrag[0]), \"r\"(aFrag[1]), \"r\"(aFrag[2]), \"r\"(aFrag[3]), \"r\"(bFrag[0]), \"r\"(bFrag[1])"
 
     # ── epilogue: registers → gmem ──
-    for v in 0 .. 3:
-      let off = crd2idx(cLayout, t + 32 * v)
-      C[(off mod 16) + (off div 16) * 16] = cFrag[v]
+    for v in 0 ..< VC:
+      let cOff = crd2idx(make_layout(pCFlatShape, pCFlatStride), t + T * v)
+      C[cOff] = cFrag[v]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Host side

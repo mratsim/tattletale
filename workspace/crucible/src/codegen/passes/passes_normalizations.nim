@@ -282,13 +282,6 @@ proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext; n: var GpuAst) =
       # Recurse into children (overloaded flag already set at construction time)
       resolveOverloadedOperatorsImpl(ctx, n.bLeft)
       resolveOverloadedOperatorsImpl(ctx, n.bRight)
-      # Recurse into children (overloaded flag already set at construction time)
-      resolveOverloadedOperatorsImpl(ctx, n.bLeft)
-      resolveOverloadedOperatorsImpl(ctx, n.bRight)
-
-    # Recurse into children
-    resolveOverloadedOperatorsImpl(ctx, n.bLeft)
-    resolveOverloadedOperatorsImpl(ctx, n.bRight)
 
   of gpuBlock:
     for i in 0 ..< n.statements.len:
