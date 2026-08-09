@@ -81,6 +81,32 @@ template filter_zeros*(layout: Layout): auto =
   make_layout(sh, st)
 
 # ═══════════════════════════════════════════════════════════════
+#  layoutTypeArgs — shape/stride TYPE extraction, nnkSym-safe
+# ═══════════════════════════════════════════════════════════════
+
+func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
+  ## Shape/stride TYPE nodes of a Layout-typed expression, nnkSym-safe.
+  ## A module-scope `type A = typeof(make_layout(...))` alias (atoms_nvidia
+  ## declares SM80_* exactly this way) makes getTypeInst return the alias
+  ## symbol (nnkSym — no children), so `typ[1]` crashes. Recover the args
+  ## from the alias's definition instead; kind-structure equivalent
+  ## (tuple/scalar, nesting, .len) to the non-aliased case. Design:
+  ## .SPEC_DESIGN/layout-typeargs-helper-20260809.md (MMA_LOG 23/24).
+  let typ = layout.getTypeInst()
+  if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
+    return (typ[1], typ[2])
+  if typ.kind == nnkSym:
+    let rhs = typ.getImpl()[2]          # typedef RHS: A = <type expr>
+    let inner =                         # unwrap typeof(...)
+      if rhs.kind in {nnkCall, nnkCommand} and rhs[0].eqIdent("typeof"): rhs[1]
+      else: rhs
+    if inner.kind in {nnkCall, nnkCommand} and inner[0].eqIdent("make_layout"):
+      return (inner[1].getTypeInst(), inner[2].getTypeInst())
+    if inner.kind == nnkBracketExpr and inner[0].eqIdent("Layout"):
+      return (inner[1], inner[2])
+  error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
+
+# ═══════════════════════════════════════════════════════════════
 #  padRight — extend layout rank by padding with identity modes
 # ═══════════════════════════════════════════════════════════════
 
@@ -93,8 +119,7 @@ macro padRight*(layout: Layout; rank: static int): untyped =
   ## Identity modes are appended on the right.
   ## Zero-cost if layout is at least the target rank. The input AST is passed as-is
   ## No intermediate value is materialized.
-  let lTyp = layout.getTypeInst()
-  let shTyp = lTyp[1]
+  let shTyp = layoutTypeArgs(layout).shapeTy
   let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
 
   if curRank >= rank:
@@ -124,8 +149,7 @@ macro padLeft*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by prepending identity modes (1, 0).
   ## Identity modes are prepended on the left.
   ## Zero-cost if layout is at least the target rank.
-  let lTyp = layout.getTypeInst()
-  let shTyp = lTyp[1]
+  let shTyp = layoutTypeArgs(layout).shapeTy
   let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
 
   if curRank >= rank:
@@ -206,9 +230,7 @@ macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
   ## Apply `body` to each leaf (shape, stride) pair.
   ## Body receives `it_sh` and `it_st`, must return (new_shape, new_stride).
   let bodyExpr = if body.kind == nnkStmtList and body.len == 1: body[0] else: body
-  let typ = getTypeInst(layout)
-  let shTyp = typ[1]
-  let stTyp = typ[2]
+  let (shTyp, stTyp) = layoutTypeArgs(layout)
   let shExpr = newTree(nnkDotExpr, layout, ident"shape")
   let stExpr = newTree(nnkDotExpr, layout, ident"stride")
   var stmts = newStmtList()
@@ -300,16 +322,12 @@ macro zipModes*[A, B: Layout](a: A, b: B): untyped =
   ##
   ##   For rank-1 inputs: (a:b, x:y) → ((a,x):(b,y))
 
-  let aTyp = a.getTypeInst()
-  let bTyp = b.getTypeInst()
+  let (aShT, aStT) = layoutTypeArgs(a)
+  let (bShT, bStT) = layoutTypeArgs(b)
   let aShape = newTree(nnkDotExpr, a, ident"shape")
   let bShape = newTree(nnkDotExpr, b, ident"shape")
   let aStride = newTree(nnkDotExpr, a, ident"stride")
   let bStride = newTree(nnkDotExpr, b, ident"stride")
-  let aShT = aTyp[1]
-  let bShT = bTyp[1]
-  let aStT = aTyp[2]
-  let bStT = bTyp[2]
 
   proc zipElems(valA, valB, typA, typB: NimNode): NimNode =
     let aIsTuple = typA.kind == nnkTupleConstr
@@ -346,8 +364,7 @@ macro groupModes*(layout: Layout; B, E: static int): untyped =
   ##   groupModes(make_layout((2, 3, 5, 7)), 0, 2)
   ##   # → ((2, 3), 5, 7):((1, 2), 6, 30)
   var ct = LayoutCT()
-  let lTyp = layout.getTypeInst()
-  let shTyp = lTyp[1]
+  let shTyp = layoutTypeArgs(layout).shapeTy
   let R =
     if shTyp.kind == nnkTupleConstr:
       shTyp.len
@@ -377,8 +394,7 @@ macro takeModes*(layout: Layout; B, E: static int): untyped =
   ##   takeModes(make_layout((2, 3, 5, 7)), 1, 3)
   ##   # → (3, 5):(2, 6)
   var ct = LayoutCT()
-  let lTyp = layout.getTypeInst()
-  let shTyp = lTyp[1]
+  let shTyp = layoutTypeArgs(layout).shapeTy
   let R = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
   for i in B ..< min(E, R):
     ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(i)),
@@ -405,7 +421,7 @@ macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
 macro replaceMode*(layout: Layout; x: typed; N: static int): untyped =
   ## Replace mode N of layout with Layout x.
   ## CuTe: replace<N>(layout, x) — layout.hpp:1001
-  let shTyp = getTypeInst(layout)[1]
+  let shTyp = layoutTypeArgs(layout).shapeTy
   let R = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
   var ct = LayoutCT()
   for i in 0 ..< R:
@@ -430,8 +446,7 @@ macro mapModesWith*[L: Layout](arg: L; body: untyped): untyped =
   ##   mapModesWith(make_layout((2, 4), (1, 2))):
   ##     make_layout(it.shape, it.stride * 2)
   ##   # → (2, 4):(2, 4)
-  let typ = getTypeInst(arg)
-  let shTy = typ[1]
+  let shTy = layoutTypeArgs(arg).shapeTy
   let R = if shTy.kind == nnkTupleConstr: shTy.len else: 1
 
   result = newStmtList()
@@ -476,10 +491,8 @@ macro zipModesWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
   ##   let r = zipModesWith(a, b):
   ##     make_layout(it_a.shape, it_b.stride)   # take shape from a, stride from b
   ##   # r == (2, 4):(10, 20)
-  let ta = getTypeInst(a)
-  let tb = getTypeInst(b)
-  let shA = ta[1]
-  let shB = tb[1]
+  let (shA, _) = layoutTypeArgs(a)
+  let (shB, _) = layoutTypeArgs(b)
   let RA = if shA.kind == nnkTupleConstr: shA.len else: 1
   let RB = if shB.kind == nnkTupleConstr: shB.len else: 1
   let rMin = min(RA, RB)

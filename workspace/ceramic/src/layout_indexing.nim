@@ -84,8 +84,7 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## The guard on `shape == 1` matches CuTe's `is_constant<1, Shape>`
   ## check and handles both broadcast modes and trivial dimensions,
   ## avoiding potential division-by-zero on stride-0.
-  let lTyp = layout.getTypeInst()
-  let shT = lTyp[1]
+  let shT = layoutTypeArgs(layout).shapeTy
   let sh = newTree(nnkDotExpr, layout, ident"shape")
   let st = newTree(nnkDotExpr, layout, ident"stride")
   if shT.kind != nnkTupleConstr:

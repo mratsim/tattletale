@@ -104,8 +104,7 @@ macro idx2crd_cpu*(layout: Layout; idx: int or Int): untyped =
   ##
   ## TODO: nested shape support (e.g. ((2,3), 4)).
   ##       Currently only handles flat tuple shapes.
-  let lTyp = layout.getTypeInst()
-  let shT = lTyp[1]
+  let shT = layoutTypeArgs(layout).shapeTy
   let sh = newTree(nnkDotExpr, layout, ident"shape")
   let st = newTree(nnkDotExpr, layout, ident"stride")
   if shT.kind != nnkTupleConstr:
