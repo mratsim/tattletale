@@ -10,7 +10,7 @@
 
 import ./atoms
 
-const ARM_NEON_SDOT_8x8x4* = MmaAtom[DefaultLayout2, DefaultLayout2, DefaultLayout2](
+const ARM_NEON_SDOT_8x8x4* = MmaAtom[NoLayout, NoLayout, NoLayout](
     name: "ARM_NEON_SDOT_8x8x4",
     mnk: (m: 8, n: 8, k: 4),
     aType: mdtInt8, bType: mdtInt8, cType: mdtInt32,
@@ -21,7 +21,7 @@ const ARM_NEON_SDOT_8x8x4* = MmaAtom[DefaultLayout2, DefaultLayout2, DefaultLayo
     conversionPoint: cpPerBlock,
   )
 
-const ARM_I8MM_16x16x8* = MmaAtom[DefaultLayout2, DefaultLayout2, DefaultLayout2](
+const ARM_I8MM_16x16x8* = MmaAtom[NoLayout, NoLayout, NoLayout](
     name: "ARM_I8MM_16x16x8",
     mnk: (m: 16, n: 16, k: 8),
     aType: mdtInt8, bType: mdtInt8, cType: mdtInt32,

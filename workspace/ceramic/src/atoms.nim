@@ -70,10 +70,11 @@ type
   MmaOperand* = enum
     opA, opB, opC
 
-  DefaultLayout2* = Layout[(int, int), (int, int)]
-    ## Default layout type for kinds that do not carry fragment layouts
-    ## (SIMD, FMA). Unused fields — SIMD/FMA atoms instantiate
-    ## `MmaAtom[DefaultLayout2, DefaultLayout2, DefaultLayout2]`.
+  NoLayout* = Int[-1]
+    ## Sentinel layout type for kinds that do not carry fragment layouts
+    ## (SIMD, FMA): they instantiate `MmaAtom[NoLayout, NoLayout, NoLayout]`.
+    ## Calling a layout-derived accessor (threadCount, valuesPerThread) on
+    ## such an atom fails to compile — a SIMD atom has no fragments.
 
   ## NOTE: generic params are intentionally unconstrained. A concept
   ## constraint (`LA: AnyLayout`) hits a Nim compiler limitation: it accepts
@@ -81,9 +82,9 @@ type
   ## Layout misuse fails at the
   ## layout-algebra call sites anyway.
   MmaAtom*[
-      LA = DefaultLayout2,
-      LB = DefaultLayout2,
-      LC = DefaultLayout2] = object
+      LA = NoLayout,
+      LB = NoLayout,
+      LC = NoLayout] = object
     ## One MMA hardware primitive, as data.
     ##
     ## Common spine — present for every kind.
@@ -114,7 +115,7 @@ type
     of bk_FMA:
       discard                              ## no payload — universal (1,1,1) atom
 
-  TiledMma*[A, TL] = object
+  TiledMma*[A: MmaAtom, TL: Layout] = object
     ## The seam: atom + thread tiling.
     ## Everything above (partition, fragments, loop) derives from this record.
     atom*: A

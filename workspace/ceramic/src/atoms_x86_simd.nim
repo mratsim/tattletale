@@ -12,7 +12,7 @@
 
 import ./atoms
 
-const X86_AVX512_SGEMM_14x32* = MmaAtom[DefaultLayout2, DefaultLayout2, DefaultLayout2](
+const X86_AVX512_SGEMM_14x32* = MmaAtom[NoLayout, NoLayout, NoLayout](
     name: "X86_AVX512_SGEMM_14x32",
     mnk: (m: 14, n: 32, k: 1),
     aType: mdtF32, bType: mdtF32, cType: mdtF32,
@@ -23,7 +23,7 @@ const X86_AVX512_SGEMM_14x32* = MmaAtom[DefaultLayout2, DefaultLayout2, DefaultL
     conversionPoint: cpEndOfK,
   )
 
-const X86_AVX512_VNNI_DPBSSD* = MmaAtom[DefaultLayout2, DefaultLayout2, DefaultLayout2](
+const X86_AVX512_VNNI_DPBSSD* = MmaAtom[NoLayout, NoLayout, NoLayout](
     name: "X86_AVX512_VNNI_DPBSSD",
     mnk: (m: 16, n: 16, k: 4),
     aType: mdtInt8, bType: mdtInt8, cType: mdtInt32,
