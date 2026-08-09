@@ -5,168 +5,132 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## MMA fragment partitioning — partition_A/B/C and fragment derivation.
+## MMA fragment partitioning — partition_A / partition_B / partition_C.
 ##
-## Given a TiledMma (atom + thread layout) and a tile shape, compute the
-## per-thread fragment: which elements of A/B/C each thread holds in
-## registers, and in what order (the V order IS the register order the
-## hardware expects).
+## A TiledMma (atom + thread layout) tiles an operand tile of shape
+## (tileM, tileK) for A, (tileN, tileK) for B, (tileM, tileN) for C. Each
+## thread holds a FRAGMENT: the elements of the tile it reads into
+## registers / accumulates, in the register order the hardware expects.
 ##
-## Model: tensor-layouts `tile_mma_grid` (layout_utils.py:193) — enumerate
-## atom positions × (T, V) → offset, via the atom's own fragment layouts.
-## The CuTe thrfrg chain (logical_divide → zipped_divide → compose →
-## zipped_divide) computes the same mapping in layout-composition form;
-## the direct enumeration is used here because it is the form emission
-## consumes (per-thread register addresses). Coverage/disjointness is a
-## test-only concern and lives in the tests (verifyFragments).
+## A fragment ELEMENT is one such tile element: its (row, col) coordinate
+## in the operand tile. Examples (m16n8k8 tf32 atom, SM80_16x8x8_...):
+##   - single atom (1×1 tiled), A tile (16, 8), thread 0 holds
+##       (0,0) (8,0) (0,4) (8,4)   — v = 0..3, register order
+##   - 2×2 tiled, A tile (32, 8), thread 32 (atom position (1,0)) holds
+##       (16,0) (24,0) (16,4) (24,4) — the same v pattern shifted by 16
+## The partition layout maps the fragment coordinates to the element's
+## col-major OFFSET in the tile (row + col·tileRows), which is what the
+## kernel indexes shared/gmem with.
 ##
-## Offsets are col-major in the operand tile: A (m + k·M), B (n + k·N),
-## C (m + n·M). Flat (T,V) index for crd2idx: t + T·v (mode 0 fastest).
+## Construction — CuTe thrfrg chain (mma_atom.hpp:288-314), with ceramic
+## layout algebra, no loops, no seq, no runtime div/mod, all Int[N]:
+##   zipped_divide(tileLayout, (unitM, unitK))        # unit | rest
+##   zipped_divide(unit, (atomM, atomK))              # atom | positions
+##   fragment (T, V) part: the atom's (T, V) layout re-strided from the
+##   atom's col-major to the tile's col-major (k-stride atomM → tileM):
+##     leaf stride s → (s mod atomM) + (s div atomM)·tileM
+##   (compile-time Int arithmetic; valid because standard atom layouts
+##   have pure-M strides < atomM and pure-K strides ≡ 0 mod atomM —
+##   the same structure CuTe assumes. CuTe expresses this re-stride as a
+##   compose of the atom layout into the tile; ceramic's compose macro
+##   cannot express it here — its composeDistribute path (nested RHS)
+##   breaks once atoms_nvidia.nim is in the import graph (mapModesWith's
+##   getTypeInst returns nnkSym — module-graph sensitivity, MMA_LOG
+##   entries 9/20/23; NOT record- or type-distinctness-related), so the
+##   re-stride is a static leaf map here.)
+##
+## Result: a rank-3 layout ((T, V), (ThrM, ThrK), (RestM, RestK)) → tile
+## offset. The per-thread fragment (CuTe partition_A on a thread index) is
+## two indexings: the thread's base = layout(threadCoords, zeros) and the
+## per-v offsets = layout(threadCoords, (v, rest)) — no div/mod anywhere,
+## the thread coordinate decomposition (tv, tm, tn, tk) is the caller's
+## (kernel threadIdx / idx2crd of the thread layout).
+##
+## Reference semantics: tensor-layouts `tile_mma_grid` (layout_utils.py)
+## enumerates the same (thread, v, rest) → offset grid; the values here
+## are cross-checked against CuTe's own partition output (host-extracted).
 
 import ./int_tuples
 import ./layouts
 import ./layout_constructors
 import ./layout_indexing
+import ./layout_algebra
 import ./atoms
 
 # ═════════════════════════════════════════════════════════════════════════
-#  FragmentElement
-# ═════════════════════════════════════════════════════════════════════════
-
-type
-  FragmentElement* = object
-    ## One register-held element of a fragment.
-    atomIdx*: array[3, int]   ## (am, an, ak) atom position in the thread tiling
-    row*, col*: int           ## global (m, k)/(n, k)/(m, n) coord in the tile
-    valIdx*: int              ## v index — the register order within the atom
-    offset*: int              ## layout offset within the atom tile
-
-  Fragment* = seq[FragmentElement]
-    ## A thread's fragment: ordered by atom position, then by v.
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Partition — get_slice mapping
+#  Partition — full layout per operand
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  The global thread id maps to ONE atom position (CuTe get_slice):
-#    flat = tv + T·(tm + ThrM·(tn + ThrN·tk))   — tiled_product(ThrID, AtomLayout)
-#  so atom position = thread div T, decomposed col-major over the operand's
-#  atom tiling (A: (ThrM, ThrK), B: (ThrN, ThrK), C: (ThrM, ThrN)),
-#  and the local thread = thread mod T.
+#  CuTe: thrfrg_A (mma_atom.hpp:288-314) then slice at the thread:
+#    logical_divide(tile, tiled-unit) → zipped_divide(unit, atom) →
+#    compose(atom (T,V) layout, _) → zipped_divide(_, (ThrM, ThrK))
+#  Ceramic (tuple tilers, quotient-first zipped_divide):
+#    zipped_divide(tile, unit) → mode 0 = unit at tile strides,
+#                                mode 1 = rest at unit strides
+#    zipped_divide(unit, atom) → mode 0 = atom at tile strides,
+#                                mode 1 = atom positions at atom strides
+#  The (T, V) fragment layout is the atom's (T, V) layout re-strided into
+#  the tile's col-major (see module doc).
 
-func partitionA*[A, TL](mma: TiledMma[A, TL];
-                        tileShape: (int, int);  # (M, K) of the tile
-                        thread: int): Fragment =
-  ## Per-thread A fragment: (m, k) coords, register order.
-  let
-    mAtoms = mma.threadLayout.shape[0].toIntVal()  # ThrM
-    kAtoms = mma.threadLayout.shape[2].toIntVal()  # ThrK
-    mAtom  = mma.atom.mnk.m
-    kAtom  = mma.atom.mnk.k
-    tCount = mma.atom.threadCount(opA).toIntVal()
-    vCount = mma.atom.fragmentValsPerThread(opA).toIntVal()
-  let
-    tileM = mAtoms * mAtom
-    tileK = kAtoms * kAtom
-  doAssert tileShape[0] mod tileM == 0 and tileShape[1] mod tileK == 0,
-    "tile shape must be a multiple of the tiled-mma unit"
-  let
-    restM = tileShape[0] div tileM
-    restK = tileShape[1] div tileK
-    atomIdx = thread div tCount
-    tm = atomIdx mod mAtoms
-    tn = (atomIdx div mAtoms) mod mma.threadLayout.shape[1].toIntVal()
-    tk = atomIdx div (mAtoms * mma.threadLayout.shape[1].toIntVal())
-    am = tm
-    ak = tk
-    localT = thread mod tCount
-  ## Rest positions (value tiling beyond the tiled-mma unit) are ordered
-  ## mma-position-outer, col-major over (RestM, RestK) — the CuTe fragment
-  ## shape (MMA, M, K) with MMA the slowest mode; v (register order) inner.
-  for rk in 0 ..< restK:
-    for rm in 0 ..< restM:
-      for v in 0 ..< vCount:
-        let off = crd2idx(mma.atom.aLayout, localT + tCount * v).toIntVal()
-        let lm = off mod mAtom
-        let lk = off div mAtom
-        result.add FragmentElement(
-          atomIdx: [am, 0, ak],
-          row: rm * tileM + am * mAtom + lm,
-          col: rk * tileK + ak * kAtom + lk,
-          valIdx: v,
-          offset: off)
+template partition_A*(mma: untyped; tileM, tileK: static int): auto =
+  ## A partition layout: ((T, V), (ThrM, ThrK), (RestM, RestK)) → tile
+  ## offset (m + k·tileM). T = threads per atom, V = registers per thread.
+  ## Thread coordinate for the (ThrM, ThrK) group: (tm, tk).
+  block:
+    const atomM = mma.atom.mnk.m
+    const atomK = mma.atom.mnk.k
+    const thrM  = mma.threadLayout.shape[0]
+    const thrK  = mma.threadLayout.shape[2]
+    const unitM = thrM * atomM
+    const unitK = thrK * atomK
+    let tileL = make_layout((tileM, tileK))
+    let ur = zipped_divide(tileL, (unitM, unitK))
+    let ap = zipped_divide(mode(ur, 0), (atomM, atomK))
+    let aL = mma.atom.aLayout
+    let fragStrides = mapLeavesWith(aL.stride):
+      (it mod atomM) + (it div atomM) * tileM
+    let fragPart = make_layout(aL.shape, fragStrides)
+    make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
+                (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))
 
-func partitionB*[A, TL](mma: TiledMma[A, TL];
-                        tileShape: (int, int);  # (N, K) of the tile
-                        thread: int): Fragment =
-  ## Per-thread B fragment: (n, k) coords, register order. See partitionA.
-  let
-    nAtoms = mma.threadLayout.shape[1].toIntVal()  # ThrN
-    kAtoms = mma.threadLayout.shape[2].toIntVal()  # ThrK
-    nAtom  = mma.atom.mnk.n
-    kAtom  = mma.atom.mnk.k
-    tCount = mma.atom.threadCount(opB).toIntVal()
-    vCount = mma.atom.fragmentValsPerThread(opB).toIntVal()
-  let
-    tileN = nAtoms * nAtom
-    tileK = kAtoms * kAtom
-  doAssert tileShape[0] mod tileN == 0 and tileShape[1] mod tileK == 0,
-    "tile shape must be a multiple of the tiled-mma unit"
-  let
-    restN = tileShape[0] div tileN
-    restK = tileShape[1] div tileK
-    atomIdx = thread div tCount
-    tm = atomIdx mod mma.threadLayout.shape[0].toIntVal()
-    tn = (atomIdx div mma.threadLayout.shape[0].toIntVal()) mod nAtoms
-    tk = atomIdx div (mma.threadLayout.shape[0].toIntVal() * nAtoms)
-    an = tn
-    ak = tk
-    localT = thread mod tCount
-  for rk in 0 ..< restK:
-    for rn in 0 ..< restN:
-      for v in 0 ..< vCount:
-        let off = crd2idx(mma.atom.bLayout, localT + tCount * v).toIntVal()
-        let ln = off mod nAtom
-        let lk = off div nAtom
-        result.add FragmentElement(
-          atomIdx: [0, an, ak],
-          row: rn * tileN + an * nAtom + ln,
-          col: rk * tileK + ak * kAtom + lk,
-          valIdx: v,
-          offset: off)
+template partition_B*(mma: untyped; tileN, tileK: static int): auto =
+  ## B partition layout: ((T, V), (ThrN, ThrK), (RestN, RestK)) → tile
+  ## offset (n + k·tileN). Thread coordinate for the (ThrN, ThrK) group:
+  ## (tn, tk).
+  block:
+    const atomN = mma.atom.mnk.n
+    const atomK = mma.atom.mnk.k
+    const thrN  = mma.threadLayout.shape[1]
+    const thrK  = mma.threadLayout.shape[2]
+    const unitN = thrN * atomN
+    const unitK = thrK * atomK
+    let tileL = make_layout((tileN, tileK))
+    let ur = zipped_divide(tileL, (unitN, unitK))
+    let ap = zipped_divide(mode(ur, 0), (atomN, atomK))
+    let bL = mma.atom.bLayout
+    let fragStrides = mapLeavesWith(bL.stride):
+      (it mod atomN) + (it div atomN) * tileN
+    let fragPart = make_layout(bL.shape, fragStrides)
+    make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
+                (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))
 
-func partitionC*[A, TL](mma: TiledMma[A, TL];
-                        tileShape: (int, int);  # (M, N) of the tile
-                        thread: int): Fragment =
-  ## Per-thread C fragment: (m, n) coords, register order. See partitionA.
-  let
-    mAtoms = mma.threadLayout.shape[0].toIntVal()  # ThrM
-    nAtoms = mma.threadLayout.shape[1].toIntVal()  # ThrN
-    mAtom  = mma.atom.mnk.m
-    nAtom  = mma.atom.mnk.n
-    tCount = mma.atom.threadCount(opC).toIntVal()
-    vCount = mma.atom.fragmentValsPerThread(opC).toIntVal()
-  let
-    tileM = mAtoms * mAtom
-    tileN = nAtoms * nAtom
-  doAssert tileShape[0] mod tileM == 0 and tileShape[1] mod tileN == 0,
-    "tile shape must be a multiple of the tiled-mma unit"
-  let
-    restM = tileShape[0] div tileM
-    restN = tileShape[1] div tileN
-    atomIdx = thread div tCount
-    am = atomIdx mod mAtoms
-    an = (atomIdx div mAtoms) mod nAtoms
-    localT = thread mod tCount
-  for rn in 0 ..< restN:
-    for rm in 0 ..< restM:
-      for v in 0 ..< vCount:
-        let off = crd2idx(mma.atom.cLayout, localT + tCount * v).toIntVal()
-        let lm = off mod mAtom
-        let ln = off div mAtom
-        result.add FragmentElement(
-          atomIdx: [am, an, 0],
-          row: rm * tileM + am * mAtom + lm,
-          col: rn * tileN + an * nAtom + ln,
-          valIdx: v,
-          offset: off)
+template partition_C*(mma: untyped; tileM, tileN: static int): auto =
+  ## C partition layout: ((T, V), (ThrM, ThrN), (RestM, RestN)) → tile
+  ## offset (m + n·tileM). Thread coordinate for the (ThrM, ThrN) group:
+  ## (tm, tn).
+  block:
+    const atomM = mma.atom.mnk.m
+    const atomN = mma.atom.mnk.n
+    const thrM  = mma.threadLayout.shape[0]
+    const thrN  = mma.threadLayout.shape[1]
+    const unitM = thrM * atomM
+    const unitN = thrN * atomN
+    let tileL = make_layout((tileM, tileN))
+    let ur = zipped_divide(tileL, (unitM, unitN))
+    let ap = zipped_divide(mode(ur, 0), (atomM, atomN))
+    let cL = mma.atom.cLayout
+    let fragStrides = mapLeavesWith(cL.stride):
+      (it mod atomM) + (it div atomM) * tileM
+    let fragPart = make_layout(cL.shape, fragStrides)
+    make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
+                (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))

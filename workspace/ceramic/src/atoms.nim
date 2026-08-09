@@ -122,12 +122,8 @@ type
     threadLayout*: TL                      ## (ThrM, ThrN, ThrK) — atoms tiled across threads
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Accessors
+#  Derived metadata (layout queries — no stored fields behind these)
 # ═════════════════════════════════════════════════════════════════════════
-
-func m*(atom: MmaAtom): int = atom.mnk.m
-func n*(atom: MmaAtom): int = atom.mnk.n
-func k*(atom: MmaAtom): int = atom.mnk.k
 
 func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto =
   ## Number of threads cooperating on the atom (the T-mode size of the
@@ -141,9 +137,10 @@ func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOper
   elif operand == opB: fold(flatten(atom.bLayout.shape[0]), Int[1](), acc * it)
   else:                fold(flatten(atom.cLayout.shape[0]), Int[1](), acc * it)
 
-func fragmentValsPerThread*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto =
+func valuesPerThread*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto =
   ## Number of elements of one operand this thread holds in registers:
-  ## tile size / thread count, per the (T, V) layouts.
+  ## the V-mode size of the (T, V) layout — tensor-layouts' "values per
+  ## thread" (value_id in tile_mma_grid); CuTe calls the same mode FrgV.
   ## COMPILE-TIME: Int[N] for static layouts (CuTe: the V-mode of the
   ## fragment layout, checked against the arch op's register-array extent
   ## by CUTE_STATIC_ASSERT_V — mma_traits.hpp:141-144).

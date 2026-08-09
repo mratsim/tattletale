@@ -16,9 +16,11 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/atoms
 import workspace/ceramic/src/atoms_nvidia
 import workspace/ceramic/src/atoms_mma_partitioning
+import workspace/ceramic/tests/test_atoms_mma_partitioning
 import workspace/crucible/src/codegen/nvrtc
 
 const kernelCode = cuda:
@@ -87,21 +89,20 @@ when isMainModule:
   # must be res, not inputs)
   nv.execute("dumpFragments", dim3(1), dim3(128), (bufA, bufB, bufC), ())
 
-  # host-side expectation
+  # host-side expectation: the shared fragCoords helper (partition layout
+  # indexed with shape-based coordinate decomposition)
   for t in 0 ..< 128:
-    let fA = tiled2.partitionA((32, 8), t)
+    let fA = fragCoords(tiled2, opA, 32, 8, t)
     for v in 0 ..< 4:
-      let gRow = bufA[t * 8 + v * 2 + 0]
-      let gCol = bufA[t * 8 + v * 2 + 1]
-      doAssert gRow == int32(fA[v].row), &"A t{t} v{v}: GPU row {gRow} != host {fA[v].row}"
-      doAssert gCol == int32(fA[v].col), &"A t{t} v{v}: GPU col {gCol} != host {fA[v].col}"
-    let fB = tiled2.partitionB((16, 8), t)
+      doAssert bufA[t * 8 + v * 2 + 0] == int32(fA[v][0]), &"A t{t} v{v}"
+      doAssert bufA[t * 8 + v * 2 + 1] == int32(fA[v][1]), &"A t{t} v{v}"
+    let fB = fragCoords(tiled2, opB, 16, 8, t)
     for v in 0 ..< 2:
-      doAssert bufB[t * 4 + v * 2 + 0] == int32(fB[v].row), &"B t{t} v{v}"
-      doAssert bufB[t * 4 + v * 2 + 1] == int32(fB[v].col), &"B t{t} v{v}"
-    let fC = tiled2.partitionC((32, 16), t)
+      doAssert bufB[t * 4 + v * 2 + 0] == int32(fB[v][0]), &"B t{t} v{v}"
+      doAssert bufB[t * 4 + v * 2 + 1] == int32(fB[v][1]), &"B t{t} v{v}"
+    let fC = fragCoords(tiled2, opC, 32, 16, t)
     for v in 0 ..< 4:
-      doAssert bufC[t * 8 + v * 2 + 0] == int32(fC[v].row), &"C t{t} v{v}"
-      doAssert bufC[t * 8 + v * 2 + 1] == int32(fC[v].col), &"C t{t} v{v}"
+      doAssert bufC[t * 8 + v * 2 + 0] == int32(fC[v][0]), &"C t{t} v{v}"
+      doAssert bufC[t * 8 + v * 2 + 1] == int32(fC[v][1]), &"C t{t} v{v}"
 
   echo "  OK — on-GPU fragment dump matches host partition (2×2 tiled, 128 threads)"

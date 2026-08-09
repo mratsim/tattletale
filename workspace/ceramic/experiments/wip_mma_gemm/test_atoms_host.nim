@@ -20,9 +20,9 @@ doAssert atom.scaleMode == smNone
 
 # cosize checks: (T,V) layouts must tile the operand tile exactly
 #   A: (16·8)/32 = 4 values/thread, B: (8·8)/32 = 2, C: (16·8)/32 = 4
-let vA = atom.fragmentValsPerThread(opA).toIntVal()
-let vB = atom.fragmentValsPerThread(opB).toIntVal()
-let vC = atom.fragmentValsPerThread(opC).toIntVal()
+let vA = atom.valuesPerThread(opA).toIntVal()
+let vB = atom.valuesPerThread(opB).toIntVal()
+let vC = atom.valuesPerThread(opC).toIntVal()
 doAssert vA == 4, &"A vals: {vA}"
 doAssert vB == 2, &"B vals: {vB}"
 doAssert vC == 4, &"C vals: {vC}"
@@ -48,7 +48,7 @@ const amx = AMX_16x16x16_TDPBF16PS
 doAssert amx.kind == bkCPU_X86_AMX
 doAssert amx.instr == "tdpbf16ps"
 doAssert amx.threadCount(opA).toIntVal() == 1, &"AMX T: {amx.threadCount(opA)}"   # T=1
-doAssert amx.fragmentValsPerThread(opC).toIntVal() == 256
+doAssert amx.valuesPerThread(opC).toIntVal() == 256
 
 const simd = X86_AVX512_SGEMM_14x32
 doAssert simd.kind == bkCPU_SIMD
