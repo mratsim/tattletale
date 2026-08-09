@@ -129,27 +129,26 @@ func m*(atom: MmaAtom): int = atom.mnk.m
 func n*(atom: MmaAtom): int = atom.mnk.n
 func k*(atom: MmaAtom): int = atom.mnk.k
 
-func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: MmaOperand): int =
+func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto =
   ## Number of threads cooperating on the atom (the T-mode size of the
   ## fragment layout). All three operand layouts share the same T.
+  ## COMPILE-TIME: Int[N] for static layouts (CuTe: size(ThrID{}) → Int<32>);
+  ## callers needing a runtime int convert with toIntVal() explicitly.
   ## (fold/flatten on the shape tuple avoids the makeIntTuple macro quirk
   ## that `mode`/`size` hit on generic-typed const fields — MMA_LOG entry 9.)
-  let tShape = case operand
-               of opA: atom.aLayout.shape[0]
-               of opB: atom.bLayout.shape[0]
-               of opC: atom.cLayout.shape[0]
   mixin fold, flatten
-  fold(flatten(tShape), Int[1](), acc * it).toIntVal()
+  when operand == opA: fold(flatten(atom.aLayout.shape[0]), Int[1](), acc * it)
+  elif operand == opB: fold(flatten(atom.bLayout.shape[0]), Int[1](), acc * it)
+  else:                fold(flatten(atom.cLayout.shape[0]), Int[1](), acc * it)
 
-func fragmentValsPerThread*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: MmaOperand): int =
+func fragmentValsPerThread*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto =
   ## Number of elements of one operand this thread holds in registers:
   ## tile size / thread count, per the (T, V) layouts.
-  ## Operands: A: (M·K)/T, B: (N·K)/T, C: (M·N)/T.
-  let
-    m = atom.mnk.m
-    n = atom.mnk.n
-    k = atom.mnk.k
-  case operand
-  of opA: (m * k) div atom.threadCount(opA)
-  of opB: (n * k) div atom.threadCount(opB)
-  of opC: (m * n) div atom.threadCount(opC)
+  ## COMPILE-TIME: Int[N] for static layouts (CuTe: the V-mode of the
+  ## fragment layout, checked against the arch op's register-array extent
+  ## by CUTE_STATIC_ASSERT_V — mma_traits.hpp:141-144).
+  ## Derives from the LAYOUTS (which must tile the operand exactly), not
+  ## from mnk — the (T, V) layout is the source of truth.
+  when operand == opA: cosize(atom.aLayout) div atom.threadCount(opA)
+  elif operand == opB: cosize(atom.bLayout) div atom.threadCount(opB)
+  else:                cosize(atom.cLayout) div atom.threadCount(opC)

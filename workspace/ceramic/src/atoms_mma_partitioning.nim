@@ -17,13 +17,12 @@
 ## The CuTe thrfrg chain (logical_divide → zipped_divide → compose →
 ## zipped_divide) computes the same mapping in layout-composition form;
 ## the direct enumeration is used here because it is the form emission
-## consumes (per-thread register addresses) and the form the verification
-## layer checks (disjointness, coverage).
+## consumes (per-thread register addresses). Coverage/disjointness is a
+## test-only concern and lives in the tests (verifyFragments).
 ##
 ## Offsets are col-major in the operand tile: A (m + k·M), B (n + k·N),
 ## C (m + n·M). Flat (T,V) index for crd2idx: t + T·v (mode 0 fastest).
 
-import std/strformat
 import ./int_tuples
 import ./layouts
 import ./layout_constructors
@@ -64,10 +63,16 @@ func partitionA*[A, TL](mma: TiledMma[A, TL];
     kAtoms = mma.threadLayout.shape[2].toIntVal()  # ThrK
     mAtom  = mma.atom.mnk.m
     kAtom  = mma.atom.mnk.k
-    tCount = mma.atom.threadCount(opA)
-    vCount = mma.atom.fragmentValsPerThread(opA)
-  doAssert tileShape == (mAtoms * mAtom, kAtoms * kAtom), "tile shape vs tiling"
+    tCount = mma.atom.threadCount(opA).toIntVal()
+    vCount = mma.atom.fragmentValsPerThread(opA).toIntVal()
   let
+    tileM = mAtoms * mAtom
+    tileK = kAtoms * kAtom
+  doAssert tileShape[0] mod tileM == 0 and tileShape[1] mod tileK == 0,
+    "tile shape must be a multiple of the tiled-mma unit"
+  let
+    restM = tileShape[0] div tileM
+    restK = tileShape[1] div tileK
     atomIdx = thread div tCount
     tm = atomIdx mod mAtoms
     tn = (atomIdx div mAtoms) mod mma.threadLayout.shape[1].toIntVal()
@@ -75,16 +80,21 @@ func partitionA*[A, TL](mma: TiledMma[A, TL];
     am = tm
     ak = tk
     localT = thread mod tCount
-  for v in 0 ..< vCount:
-    let off = crd2idx(mma.atom.aLayout, localT + tCount * v).toIntVal()
-    let lm = off mod mAtom
-    let lk = off div mAtom
-    result.add FragmentElement(
-      atomIdx: [am, 0, ak],
-      row: am * mAtom + lm,
-      col: ak * kAtom + lk,
-      valIdx: v,
-      offset: off)
+  ## Rest positions (value tiling beyond the tiled-mma unit) are ordered
+  ## mma-position-outer, col-major over (RestM, RestK) — the CuTe fragment
+  ## shape (MMA, M, K) with MMA the slowest mode; v (register order) inner.
+  for rk in 0 ..< restK:
+    for rm in 0 ..< restM:
+      for v in 0 ..< vCount:
+        let off = crd2idx(mma.atom.aLayout, localT + tCount * v).toIntVal()
+        let lm = off mod mAtom
+        let lk = off div mAtom
+        result.add FragmentElement(
+          atomIdx: [am, 0, ak],
+          row: rm * tileM + am * mAtom + lm,
+          col: rk * tileK + ak * kAtom + lk,
+          valIdx: v,
+          offset: off)
 
 func partitionB*[A, TL](mma: TiledMma[A, TL];
                         tileShape: (int, int);  # (N, K) of the tile
@@ -95,10 +105,16 @@ func partitionB*[A, TL](mma: TiledMma[A, TL];
     kAtoms = mma.threadLayout.shape[2].toIntVal()  # ThrK
     nAtom  = mma.atom.mnk.n
     kAtom  = mma.atom.mnk.k
-    tCount = mma.atom.threadCount(opB)
-    vCount = mma.atom.fragmentValsPerThread(opB)
-  doAssert tileShape == (nAtoms * nAtom, kAtoms * kAtom), "tile shape vs tiling"
+    tCount = mma.atom.threadCount(opB).toIntVal()
+    vCount = mma.atom.fragmentValsPerThread(opB).toIntVal()
   let
+    tileN = nAtoms * nAtom
+    tileK = kAtoms * kAtom
+  doAssert tileShape[0] mod tileN == 0 and tileShape[1] mod tileK == 0,
+    "tile shape must be a multiple of the tiled-mma unit"
+  let
+    restN = tileShape[0] div tileN
+    restK = tileShape[1] div tileK
     atomIdx = thread div tCount
     tm = atomIdx mod mma.threadLayout.shape[0].toIntVal()
     tn = (atomIdx div mma.threadLayout.shape[0].toIntVal()) mod nAtoms
@@ -106,16 +122,18 @@ func partitionB*[A, TL](mma: TiledMma[A, TL];
     an = tn
     ak = tk
     localT = thread mod tCount
-  for v in 0 ..< vCount:
-    let off = crd2idx(mma.atom.bLayout, localT + tCount * v).toIntVal()
-    let ln = off mod nAtom
-    let lk = off div nAtom
-    result.add FragmentElement(
-      atomIdx: [0, an, ak],
-      row: an * nAtom + ln,
-      col: ak * kAtom + lk,
-      valIdx: v,
-      offset: off)
+  for rk in 0 ..< restK:
+    for rn in 0 ..< restN:
+      for v in 0 ..< vCount:
+        let off = crd2idx(mma.atom.bLayout, localT + tCount * v).toIntVal()
+        let ln = off mod nAtom
+        let lk = off div nAtom
+        result.add FragmentElement(
+          atomIdx: [0, an, ak],
+          row: rn * tileN + an * nAtom + ln,
+          col: rk * tileK + ak * kAtom + lk,
+          valIdx: v,
+          offset: off)
 
 func partitionC*[A, TL](mma: TiledMma[A, TL];
                         tileShape: (int, int);  # (M, N) of the tile
@@ -126,58 +144,29 @@ func partitionC*[A, TL](mma: TiledMma[A, TL];
     nAtoms = mma.threadLayout.shape[1].toIntVal()  # ThrN
     mAtom  = mma.atom.mnk.m
     nAtom  = mma.atom.mnk.n
-    tCount = mma.atom.threadCount(opC)
-    vCount = mma.atom.fragmentValsPerThread(opC)
-  doAssert tileShape == (mAtoms * mAtom, nAtoms * nAtom), "tile shape vs tiling"
+    tCount = mma.atom.threadCount(opC).toIntVal()
+    vCount = mma.atom.fragmentValsPerThread(opC).toIntVal()
   let
+    tileM = mAtoms * mAtom
+    tileN = nAtoms * nAtom
+  doAssert tileShape[0] mod tileM == 0 and tileShape[1] mod tileN == 0,
+    "tile shape must be a multiple of the tiled-mma unit"
+  let
+    restM = tileShape[0] div tileM
+    restN = tileShape[1] div tileN
     atomIdx = thread div tCount
     am = atomIdx mod mAtoms
     an = (atomIdx div mAtoms) mod nAtoms
     localT = thread mod tCount
-  for v in 0 ..< vCount:
-    let off = crd2idx(mma.atom.cLayout, localT + tCount * v).toIntVal()
-    let lm = off mod mAtom
-    let ln = off div mAtom
-    result.add FragmentElement(
-      atomIdx: [am, an, 0],
-      row: am * mAtom + lm,
-      col: an * nAtom + ln,
-      valIdx: v,
-      offset: off)
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Verification — disjointness + coverage
-# ═════════════════════════════════════════════════════════════════════════
-
-proc verifyFragments*[A, TL](mma: TiledMma[A, TL];
-                             tileShape: (int, int);
-                             operand: MmaOperand) =
-  ## Every tile element appears in EXACTLY the expected number of threads'
-  ## fragments, with no duplicates within one thread group:
-  ##   A: ThrN copies (A is shared across N-atoms)
-  ##   B: ThrM copies (B is shared across M-atoms)
-  ##   C: 1 copy (C atoms tile (ThrM, ThrN) — all distinct)
-  ## Checks: per-thread count == vCount; per-element multiplicity == expected.
-  let
-    tCount = mma.atom.threadCount(operand)
-    vCount = mma.atom.fragmentValsPerThread(operand)
-    tileSize = tileShape[0] * tileShape[1]
-    thrM = mma.threadLayout.shape[0].toIntVal()
-    thrN = mma.threadLayout.shape[1].toIntVal()
-    expected = case operand
-               of opA: thrN
-               of opB: thrM
-               of opC: 1
-  var counts = newSeq[int](tileSize)
-  for thread in 0 ..< tCount * thrM * thrN:
-    let frag = case operand
-               of opA: mma.partitionA(tileShape, thread)
-               of opB: mma.partitionB(tileShape, thread)
-               of opC: mma.partitionC(tileShape, thread)
-    doAssert frag.len == vCount, &"per-thread fragment count (thread {thread})"
-    for el in frag:
-      doAssert el.row >= 0 and el.row < tileShape[0]
-      doAssert el.col >= 0 and el.col < tileShape[1]
-      counts[el.row + el.col * tileShape[0]].inc
-  for i, c in counts:
-    doAssert c == expected, &"element {i}: multiplicity {c}, expected {expected}"
+  for rn in 0 ..< restN:
+    for rm in 0 ..< restM:
+      for v in 0 ..< vCount:
+        let off = crd2idx(mma.atom.cLayout, localT + tCount * v).toIntVal()
+        let lm = off mod mAtom
+        let ln = off div mAtom
+        result.add FragmentElement(
+          atomIdx: [am, an, 0],
+          row: rm * tileM + am * mAtom + lm,
+          col: rn * tileN + an * nAtom + ln,
+          valIdx: v,
+          offset: off)
