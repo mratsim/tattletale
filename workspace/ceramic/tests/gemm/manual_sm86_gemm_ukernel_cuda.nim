@@ -1,4 +1,4 @@
-## Manual GPU test: the sm80 GEBB microkernel via NVRTC/CUDA — the loop over K.
+## Manual GPU test: the sm86 GEBB microkernel via NVRTC/CUDA — the loop over K.
 ##
 ## C(16×8) = A(16×16)·B(16×8) — two m16n8k8 k-slices through gemm_ukernel
 ## (one gemm_fragment per slice, accumulated in cFrag — CuTe dispatch [5]
@@ -7,13 +7,13 @@
 ## RestK mode; the register blocks are identity views and copyFrom does the
 ## whole gather — no for loops, no offset arithmetic. The epilogue is axpby.
 ##
-## The atom is the parameter — SM80_16x8x8_F32TF32TF32F32_TN; the tiling is
+## The atom is the parameter — SM86_16x8x8_F32TF32TF32F32_TN; the tiling is
 ## 1×1×1 (single atom); geometry is derived inside the driver func. The
 ## oracle harness lives in gemm_test_lib.
 ##
 ## Requires an sm_80+ GPU. Run with:
 ##   CUDA_HOME=/usr/local/cuda-12 LD_LIBRARY_PATH=/usr/local/cuda-12/lib64 \
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_sm80_gemm_ukernel_cuda.nim
+##   nim cpp -r workspace/ceramic/tests/gemm/manual_sm86_gemm_ukernel_cuda.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -32,7 +32,7 @@ import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible/src/codegen/nvrtc
 
-const atom = SM80_16x8x8_F32TF32TF32F32_TN
+const atom = SM86_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
   atom: atom, threadLayout: make_layout((1, 1, 1)))
 
@@ -82,4 +82,4 @@ when isMainModule:
   var nv = initNvrtc(kernelCode)
   nv.compile()
   nv.getPtx()
-  testUkernel(nv, atom, "SM80")
+  testUkernel(nv, atom, "SM86")

@@ -9,14 +9,14 @@
 ## branch must skip the C read, so a spurious read (or a dropped store)
 ## produces NaN != expected.
 ##
-## The atom is the parameter — SM80_16x8x8_F32TF32TF32F32_TN; the tiling
+## The atom is the parameter — SM86_16x8x8_F32TF32TF32F32_TN; the tiling
 ## (2×2×1 atoms) and tile geometry are derived inside the driver func
 ## (gemm_tiled convention); the cuda: kernel is a thin wrapper. The oracle
 ## harness lives in gemm_test_lib.
 ##
 ## Requires an sm_80+ GPU. Run with:
 ##   CUDA_HOME=/usr/local/cuda-12 LD_LIBRARY_PATH=/usr/local/cuda-12/lib64 \
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_sm80_gemm_tiled_cuda.nim
+##   nim cpp -r workspace/ceramic/tests/gemm/manual_sm86_gemm_tiled_cuda.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -32,7 +32,7 @@ import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible/src/codegen/nvrtc
 
-const atom = SM80_16x8x8_F32TF32TF32F32_TN
+const atom = SM86_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((2, 2, 1)))](
   atom: atom, threadLayout: make_layout((2, 2, 1)))
 
@@ -68,4 +68,4 @@ when isMainModule:
   var nv = initNvrtc(kernelCode)
   nv.compile()
   nv.getPtx()
-  testTiled(nv, tiled, "SM80")
+  testTiled(nv, tiled, "SM86")

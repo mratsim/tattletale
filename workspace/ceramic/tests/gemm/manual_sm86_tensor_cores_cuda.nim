@@ -1,4 +1,4 @@
-## Manual GPU test: the sm80 tensor-core microtile via NVRTC/CUDA — one register-level MMA.
+## Manual GPU test: the sm86 tensor-core microtile via NVRTC/CUDA — one register-level MMA.
 ##
 ## gemm_fragment(atom.instr, cFrag, aFrag, bFrag) replaces the hand-written mma.sync asm:
 ## one m16n8k8 tf32 atom, 32 threads. Staging is CuTe layout algebra
@@ -8,13 +8,13 @@
 ## convention). Plus the explicit-output 5-arg form:
 ## gemm_fragment(atom.instr, dFrag, aFrag, bFrag, cFrag).
 ##
-## The atom is the parameter — SM80_16x8x8_F32TF32TF32F32_TN; the tiling is
+## The atom is the parameter — SM86_16x8x8_F32TF32TF32F32_TN; the tiling is
 ## 1×1×1 (single atom); geometry is derived inside the driver func. The
 ## oracle harness lives in gemm_test_lib.
 ##
 ## Requires an sm_80+ GPU. Run with:
 ##   CUDA_HOME=/usr/local/cuda-12 LD_LIBRARY_PATH=/usr/local/cuda-12/lib64 \
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_sm80_tensor_cores_cuda.nim
+##   nim cpp -r workspace/ceramic/tests/gemm/manual_sm86_tensor_cores_cuda.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -33,7 +33,7 @@ import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible/src/codegen/nvrtc
 
-const atom = SM80_16x8x8_F32TF32TF32F32_TN
+const atom = SM86_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
   atom: atom, threadLayout: make_layout((1, 1, 1)))
 
@@ -110,4 +110,4 @@ when isMainModule:
   var nv = initNvrtc(kernelCode)
   nv.compile()
   nv.getPtx()
-  testMicrotile(nv, atom, "SM80")
+  testMicrotile(nv, atom, "SM86")

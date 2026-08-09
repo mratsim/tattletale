@@ -88,13 +88,23 @@ proc normalizeArraySpanBody(body: var GpuAst; calleeKinds: Table[string, seq[Arr
           for i, arg in n.cArgs.mpairs:
             if i >= kinds.len: break
             if kinds[i] == aspNone: continue
-            if arg.kind == gpuAddr and arg.aOf.kind == gpuIdent:
-              let t = arg.aOf.symbol.typ
-              if t != nil and t.kind == gtArray:
-                if kinds[i] == aspArrayPtr:
-                  arg = arg.aOf                  # bare array — C decays to T*
-                elif kinds[i] == aspSpan:
-                  arg = makeToOpenArray(arg.aOf, t.aLen)
+            if arg.kind == gpuAddr:
+              if arg.aOf.kind == gpuIdent:
+                let t = arg.aOf.symbol.typ
+                if t != nil and t.kind == gtArray:
+                  if kinds[i] == aspArrayPtr:
+                    arg = arg.aOf                # bare array — C decays to T*
+                  elif kinds[i] == aspSpan:
+                    arg = makeToOpenArray(arg.aOf, t.aLen)
+              elif arg.aOf.kind == gpuDot:
+                # var-array param passed a tensor's data field — same
+                # rewrite: the bare field access C-decays to T*
+                let t = arg.aOf.dField.symbol.typ
+                if t != nil and t.kind == gtArray:
+                  if kinds[i] == aspArrayPtr:
+                    arg = arg.aOf
+                  elif kinds[i] == aspSpan:
+                    arg = makeToOpenArray(arg.aOf, t.aLen)
     else: discard
   )
 

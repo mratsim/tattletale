@@ -94,7 +94,6 @@ macro gemm_fragment*[VD: static int, VA: static int, VB: static int, VC: static 
                                  dElem, aElem, bElem, cElem)
   result = newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
 
-
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_ukernel(mma, ...) — the GEBB microkernel (loop over K)
 # ═════════════════════════════════════════════════════════════════════════
@@ -125,6 +124,7 @@ func gemm_ukernel*[K: static int, VA: static int, VB: static int, VC: static int
   ## CPU FMA/AMX atoms (the atom decides the per-slice instruction).
   staticFor k, 0, K:
     gemm_fragment(mma.instr, cFrag, aFrag[k], bFrag[k])
+
 
 #  gemm_fragment(C, A, B) — reference (whole-tile outer product)
 # ═════════════════════════════════════════════════════════════════════════

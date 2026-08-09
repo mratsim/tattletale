@@ -36,8 +36,8 @@ func regList(first, count: int): string =
 func operandClause(name, letter: string; count: int): string =
   ## `"letter"(name[0]), "letter"(name[1]), ...` — the constraint clause
   ## for `count` registers. The operand C++ names are the fragment array
-  ## identifiers (name[i]) — crucible emits the asm string verbatim,
-  ## so these must be the C++ variable names.
+  ## identifiers (name[i]) — crucible emits the asm string verbatim, so
+  ## these must be the C++ variable names.
   result = ""
   for i in 0 ..< count:
     if result.len > 0: result.add ", "

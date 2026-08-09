@@ -692,6 +692,14 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     result = GpuAst(kind: gpuDot)
     result.dParent = ctx.toGpuAst(reg, node[0])
     result.dField = ctx.toGpuAst(reg, node[1])
+    # Carry the field's type when it is an array — normalizeArraySpanBody
+    # rewrites var-array params passed as a tensor's data field
+    # (gpuAddr(gpuDot) -> the bare field, C array decay) and needs the
+    # field type to know it IS an array. The tensor's data field is the
+    # only array field the DSL passes by addr.
+    if result.dField.kind == gpuIdent and
+       node[1].getTypeInst().typeKind == ntyArray:
+      result.dField.symbol.typ = resolveType(reg, node[1].getTypeInst())
 
   of nnkCheckedFieldExpr:
     ## Case-object field access: Nim wraps it in a discriminant check

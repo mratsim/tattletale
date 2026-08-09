@@ -30,6 +30,13 @@ template copyFrom*[T, ShA, StA, ShB, StB](
   for i in 0 ..< size(dst):
     dst(i) = src(i)
 
+template copyFrom*[T, ShA, StA, ShB, StB](
+    dst: var Tensor[T, ShB, StB];
+    src: TensorView[T, ShA, StA] or Tensor[T, ShA, StA]) =
+  ## Owning-tensor dst form — the fragment tensors (make_tensor_like).
+  for i in 0 ..< size(dst):
+    dst(i) = src(i)
+
 template copyFromIf*[T, ShA, StA, ShB, StB](
     dst: var TensorView[T, ShB, StB];
     src: TensorView[T, ShA, StA];
