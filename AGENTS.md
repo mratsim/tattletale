@@ -36,12 +36,6 @@ nim test_crucible_vulkan
 nim test_crucible_webgpu
 ```
 
-> ⚠️ `nim test_ceramic` is currently RED: `tests/test_layout_algebra.nim(409,
-> 23)` fails to compile (`complement(make_layout((2, 2), (1, 4)), 16)` — literal
-> `16` is ambiguous between the `Int or int` and `static int` overloads).
-> Pre-existing (present since the EPIC commit 0e64309); the task aborts at the
-> first failure, so files after it alphabetically don't run until it's fixed.
-
 Single file:
 
 ```bash

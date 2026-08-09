@@ -26,18 +26,12 @@
 ## layout algebra, no loops, no seq, no runtime div/mod, all Int[N]:
 ##   zipped_divide(tileLayout, (unitM, unitK))        # unit | rest
 ##   zipped_divide(unit, (atomM, atomK))              # atom | positions
-##   fragment (T, V) part: the atom's (T, V) layout re-strided from the
-##   atom's col-major to the tile's col-major (k-stride atomM → tileM):
-##     leaf stride s → (s mod atomM) + (s div atomM)·tileM
-##   (compile-time Int arithmetic; valid because standard atom layouts
-##   have pure-M strides < atomM and pure-K strides ≡ 0 mod atomM —
-##   the same structure CuTe assumes. CuTe expresses this re-stride as a
-##   compose of the atom layout into the tile; ceramic's compose macro
-##   cannot express it here — its composeDistribute path (nested RHS)
-##   breaks once atoms_nvidia.nim is in the import graph (mapModesWith's
-##   getTypeInst returns nnkSym — module-graph sensitivity, MMA_LOG
-##   entries 9/20/23; NOT record- or type-distinctness-related), so the
-##   re-stride is a static leaf map here.)
+##   fragment (T, V) part: compose(mode(ap, 0), atom.aLayout) — CuTe's
+##   `a_tensor.compose(AtomLayoutA_TV{}, _)`: the atom mode (AtomM, AtomK)
+##   at tile strides composed with the atom's (T, V) layout. compose's
+##   unwrap (CuTe `composition_impl`'s `unwrap`) merges the composed
+##   leaves flat, so the fragment comes out in the tile's col-major
+##   (k-stride atomM → tileM) with the same nesting CuTe produces.
 ##
 ## Result: a rank-3 layout ((T, V), (ThrM, ThrK), (RestM, RestK)) → tile
 ## offset. The per-thread fragment (CuTe partition_A on a thread index) is
@@ -86,10 +80,9 @@ template partition_A*(mma: untyped; tileM, tileK: static int): auto =
     let tileL = make_layout((tileM, tileK))
     let ur = zipped_divide(tileL, (unitM, unitK))
     let ap = zipped_divide(mode(ur, 0), (atomM, atomK))
-    let aL = mma.atom.aLayout
-    let fragStrides = mapLeavesWith(aL.stride):
-      (it mod atomM) + (it div atomM) * tileM
-    let fragPart = make_layout(aL.shape, fragStrides)
+    # CuTe: a_tensor.compose(AtomLayoutA_TV, _) — the (T, V) layout
+    # composed into the atom mode at tile strides.
+    let fragPart = compose(mode(ap, 0), mma.atom.aLayout)
     make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
                 (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))
 
@@ -107,10 +100,8 @@ template partition_B*(mma: untyped; tileN, tileK: static int): auto =
     let tileL = make_layout((tileN, tileK))
     let ur = zipped_divide(tileL, (unitN, unitK))
     let ap = zipped_divide(mode(ur, 0), (atomN, atomK))
-    let bL = mma.atom.bLayout
-    let fragStrides = mapLeavesWith(bL.stride):
-      (it mod atomN) + (it div atomN) * tileN
-    let fragPart = make_layout(bL.shape, fragStrides)
+    # CuTe: b_tensor.compose(AtomLayoutB_TV, _)
+    let fragPart = compose(mode(ap, 0), mma.atom.bLayout)
     make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
                 (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))
 
@@ -128,9 +119,7 @@ template partition_C*(mma: untyped; tileM, tileN: static int): auto =
     let tileL = make_layout((tileM, tileN))
     let ur = zipped_divide(tileL, (unitM, unitN))
     let ap = zipped_divide(mode(ur, 0), (atomM, atomN))
-    let cL = mma.atom.cLayout
-    let fragStrides = mapLeavesWith(cL.stride):
-      (it mod atomM) + (it div atomM) * tileM
-    let fragPart = make_layout(cL.shape, fragStrides)
+    # CuTe: c_tensor.compose(AtomLayoutC_TV, _)
+    let fragPart = compose(mode(ap, 0), mma.atom.cLayout)
     make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
                 (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))

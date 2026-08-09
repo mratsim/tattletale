@@ -1,7 +1,7 @@
 ## Phase 1 host test — partition math (thrfrg equivalent) + reference checks.
 ##
 ## Validates partition_A/B/C against:
-##   1. Known CUTLASS fragment numbers (12-cutlass-layers.md §3):
+##   1. Known CUTLASS fragment numbers:
 ##      single atom 4/2/4 regs per thread; 2×2 tiled → 64/64/64 for a
 ##      (128,32)×(128,32)→(128,64) problem.
 ##   2. tensor-layouts reference values: the tf32 A layout offset map
@@ -67,7 +67,7 @@ single.verifyFragments(16, 8, opC)
 echo "  OK — single atom partition + reference offsets"
 
 # ── 2×2 tiled: (128,32)×(128,32) → (128,64), 128 threads ──
-#   12-cutlass-layers.md §3c: tiled 2×2 over (128,32) → 64/64/64 per thread
+#   Tiled 2×2 over (128,32) → 64/64/64 per thread
 #   C tile (128, 64) = 8192 / 128 threads = 64 per thread ✓
 const tiled2 = TiledMma[typeof(atom), typeof(make_layout((2, 2, 1)))](
   atom: atom, threadLayout: make_layout((2, 2, 1)))
@@ -107,7 +107,7 @@ doAssert fragCoords(tiled2, opB, 16, 8, 5).sorted == @[(1,1),(1,5)]
 echo "  OK — cross-check vs tensor-layouts tile_mma_grid"
 
 # ── 4×4 tiled over a (128,32)×(128,32) → (128,64) problem ──
-#   12-cutlass-layers.md §3c verified numbers: 64/64/64 per thread, 2048 FMA
+#   Verified numbers: 64/64/64 per thread, 2048 FMA
 const tiled4 = TiledMma[typeof(atom), typeof(make_layout((4, 4, 1)))](
   atom: atom, threadLayout: make_layout((4, 4, 1)))
 doAssert fragCoords(tiled4, opA, 64, 8, 3).len == 4

@@ -8,7 +8,7 @@
 ##
 ## tf32 path: input buffers are uint32 holding tf32 bit patterns
 ## (host-side f32 → tf32 truncation of the low 13 mantissa bits). The
-## DSL's cast emission is a value conversion, not a bitcast (MMA_LOG
+## DSL's cast emission is a value conversion, not a bitcast.
 ## entry 14), so bit patterns travel as u32, not via cast.
 ##
 ## Reference: exact for small-integer inputs (products and partial sums

@@ -18,12 +18,6 @@ Mechanics (see `config.nims`):
   e.g. `nim cpp -r tests/gpu/test_*.nim`).
 - The task aborts at the first failure.
 
-> ⚠️ Known red: `tests/test_layout_algebra.nim(409, 23)` —
-> `complement(make_layout((2, 2), (1, 4)), 16)` fails to compile (literal
-> `16` ambiguous between the `Int or int` and `static int` overloads).
-> Pre-existing since the EPIC commit; blocks everything after it
-> alphabetically.
-
 Single file (C backend, mirrors `testerCmd`):
 ```bash
 nim c -r --hints:off --warnings:off \

@@ -91,7 +91,8 @@ func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compi
   ## symbol (nnkSym — no children), so `typ[1]` crashes. Recover the args
   ## from the alias's definition instead; kind-structure equivalent
   ## (tuple/scalar, nesting, .len) to the non-aliased case. Design:
-  ## .SPEC_DESIGN/layout-typeargs-helper-20260809.md (MMA_LOG 23/24).
+  ## layoutTypeArgs recovers the Layout type arguments from an alias's
+  ## typedef (nnkSym-safe), so compose sees the actual shape/stride types.
   let typ = layout.getTypeInst()
   if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
     return (typ[1], typ[2])

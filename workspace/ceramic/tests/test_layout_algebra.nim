@@ -601,12 +601,15 @@ proc runComposeExactValueTests =
   doAssert compose(make_layout((4, 4), (1, 4)), make_layout((2, 2), (1, 2))) === ((2, 2), (1, 2))
   # Python: assert C == Layout(((2, 2), 3), ((24, 2), 8))
   doAssert compose(make_layout((6, 2), (8, 2)), make_layout((4, 3), (3, 1))) === (((2, 2), 3), ((24, 2), 8))
-  # Python: assert C == Layout(((5, 1), (2, 2)), ((16, 4), (80, 4))) or Layout((5, (2, 2)), (16, (80, 4)))
+  # Python: assert C == Layout((5, (2, 2)), (16, (80, 4))) — the flat form.
+  # (CuTe-style unwrap merges composed leaves, so the old
+  # ((5, 1), (2, 2)) alternative is gone. The Layout `===` is a
+  # compile-time structural comparison — a mismatched alternative
+  # hard-errors instead of returning false — so only the actual form
+  # is asserted; chkCompose guards the mapping.)
   block:
     let C = compose(make_layout((10, 2), (16, 4)), make_layout((5, 4), (1, 5)))
-    let form1 = C === (((5, 1), (2, 2)), ((16, 4), (80, 4)))
-    let form2 = C === ((5, (2, 2)), (16, (80, 4)))
-    doAssert form1 or form2, "compose result " & $C & " matches neither accepted form"
+    doAssert C === ((5, (2, 2)), (16, (80, 4)))
     doAssert chkCompose(make_layout((10, 2), (16, 4)), make_layout((5, 4), (1, 5))), "mapping check failed"
   # compose tuple LHS + scalar RHS — hits elif b.shape isnot tuple: branch
   # Previously assertion-failing; verify against Python output

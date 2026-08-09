@@ -13,8 +13,7 @@
 ## of this record — it is backend-agnostic. dtype → emitted C++ type mapping
 ## happens at emission time.
 ##
-## Design record: SCRATCHPAD §3l (D30 data-record + 4 kinds), POC outline
-## `.SPEC_DESIGN/mma-reduced-scope-20260808.md`, lab notebook `MMA_LOG.md`.
+## Design record: D30 data-record + 4 kinds (MMA POC outline).
 
 import ./int_tuples
 import ./layouts_datatypes
@@ -50,7 +49,7 @@ type
   ConversionPoint* = enum
     ## Where an integer accumulator converts to f32 × scale.
     ## Atom-level accumulation property; llama.cpp uses both perBlock and
-    ## endOfK, they differ in the last ulps (.ANALYSIS/08-llamacpp.md:271,276,293).
+    ## endOfK, they differ in the last ulps.
     cpPerBlock, cpEndOfK
 
   SimdIsa* = enum
@@ -79,7 +78,7 @@ type
   ## NOTE: generic params are intentionally unconstrained. A concept
   ## constraint (`LA: AnyLayout`) hits a Nim compiler limitation: it accepts
   ## several identical layout types but rejects three DISTINCT layout types
-  ## (verified 2026-08-08, MMA_LOG entry 9). Layout misuse fails at the
+  ## Layout misuse fails at the
   ## layout-algebra call sites anyway.
   MmaAtom*[
       LA = DefaultLayout2,
@@ -116,7 +115,7 @@ type
       discard                              ## no payload — universal (1,1,1) atom
 
   TiledMma*[A, TL] = object
-    ## The seam (12-cutlass-layers.md §4): atom + thread tiling.
+    ## The seam: atom + thread tiling.
     ## Everything above (partition, fragments, loop) derives from this record.
     atom*: A
     threadLayout*: TL                      ## (ThrM, ThrN, ThrK) — atoms tiled across threads
@@ -131,7 +130,7 @@ func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOper
   ## COMPILE-TIME: Int[N] for static layouts (CuTe: size(ThrID{}) → Int<32>);
   ## callers needing a runtime int convert with toIntVal() explicitly.
   ## (fold/flatten on the shape tuple avoids the makeIntTuple macro quirk
-  ## that `mode`/`size` hit on generic-typed const fields — MMA_LOG entry 9.)
+  ## that `mode`/`size` hit on generic-typed const fields.)
   mixin fold, flatten
   when operand == opA: fold(flatten(atom.aLayout.shape[0]), Int[1](), acc * it)
   elif operand == opB: fold(flatten(atom.bLayout.shape[0]), Int[1](), acc * it)
