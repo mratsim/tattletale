@@ -27,5 +27,25 @@ template axpby*[T, ShX, StX, ShY, StY](
   ## Parameter order: `axpby` → alpha, X, beta, Y
   ## CuTe: axpby(alpha, x, beta, y)
   ## Acceptable on GPU, slow on CPU.
+  ##
+  ## X and Y are zipped by their common logical size — each is indexed
+  ## through its own layout (CuTe: zip(x, y) then elementwise). This is
+  ## what makes the epilogue axpby(alpha, cFrag, beta, C) work: the
+  ## register fragment and the gmem fragment have different layouts but
+  ## equal size.
+  ##
+  ## Specializations (runtime branches, same op order α·X + β·Y — two
+  ## multiplies then one add, no fma):
+  ##   beta == 0 → the Y read is skipped entirely (Y(i) never evaluated —
+  ##     a NaN-prefilled C stays untouched, mirroring the β=0 skip-read)
+  ##   alpha == 1 → the α multiply is skipped
+  ##   beta == 1 → the β multiply is skipped
   for i in 0 ..< size(Y.layout):
-    Y(i) = alpha * X(i) + beta * Y(i)
+    if beta == 0.0'f32:
+      Y(i) = alpha * X(i)
+    elif alpha == 1.0'f32:
+      Y(i) = X(i) + beta * Y(i)
+    elif beta == 1.0'f32:
+      Y(i) = alpha * X(i) + Y(i)
+    else:
+      Y(i) = alpha * X(i) + beta * Y(i)

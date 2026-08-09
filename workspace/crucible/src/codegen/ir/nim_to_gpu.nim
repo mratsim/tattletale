@@ -22,7 +22,8 @@ proc unwrapSingleStmt(n: NimNode): NimNode =
   else:
     n
 
-proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAst
+proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
+               staticValueMask: seq[int] = @[]): GpuAst
 
 proc isTypeDescNode(n: NimNode): bool =
   ## True when the node is a TYPE used as a value: a generic type parameter
@@ -35,7 +36,8 @@ proc isTypeDescNode(n: NimNode): bool =
   ## never has `ntyTypeDesc` type, so it is never erased.
   result = n.getTypeInst().typeKind == ntyTypeDesc
 
-proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute], staticParamPositions: var seq[int]): seq[GpuParam] =
+proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute], staticParamPositions: var seq[int],
+                         staticValueMask: seq[int] = @[]): seq[GpuParam] =
   ## Returns all parameters of the given procedure from the `params` node
   ## of type `nnkFormalParams`.
   ## `typedesc`/type-param params (`_: typedesc[T]`) are dropped: they carry
@@ -64,8 +66,12 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
     # `MiniAtom(dtype: ..., k: ...)`), which resolveType cannot lower (record
     # fields may hold enums). Scalar statics (`static int` etc.) lower as
     # literals and are NOT dropped — they may be referenced in the body.
-    if param[typIdx].kind in {nnkObjConstr, nnkTupleConstr, nnkBracket}:
-      # static record/tuple/array VALUE param — compile-time only, no CUDA value
+    if curIdx in staticValueMask and param[typIdx].kind in {nnkObjConstr, nnkTupleConstr, nnkBracket}:
+      # static record/tuple/array VALUE param — compile-time only, no CUDA value.
+      # The mask comes from the ORIGINAL proc definition (nnkStaticTy): the
+      # instantiated type node of a RUNTIME tuple-typed param is also an
+      # nnkTupleConstr, so the node kind alone cannot discriminate (flatten's
+      # `t: IntOrIntTuple` was wrongly dropped, emitting a parameterless def).
       for j in 0 ..< numParams:
         staticParamPositions.add(curIdx + j)
       curIdx += numParams
@@ -83,14 +89,15 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
     curIdx += numParams
 
 proc toInstantiatedProcSignature(ctx: var GpuContext, reg: var TypeRegistry,
-    params: NimNode, attrs: set[GpuAttribute]): GpuProcSignature =
+    params: NimNode, attrs: set[GpuAttribute],
+    staticValueMask: seq[int] = @[]): GpuProcSignature =
   ## Creates a `GpuProcSignature` from the given `params` node of type `nnkFormalParams`
   ##
   ## NOTE: This procedure is only called from generically instantiated procs. Therefore,
   ## we shouldn't need to worry about getting `gtInvalid` return types here.
   var staticParamPositions: seq[int]
   GpuProcSignature(
-    params: ctx.parseProcParameters(reg, params, attrs, staticParamPositions),
+    params: ctx.parseProcParameters(reg, params, attrs, staticParamPositions, staticValueMask),
     retType: resolveProcReturnType(reg, params),
     staticParamPositions: staticParamPositions
   )
@@ -171,11 +178,29 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
 
   let inst = rawImpl
   let sig = node[0].getTypeInst()
+
+  # Which params were declared `static T` in the ORIGINAL definition? The
+  # instantiated signature's type node for a static VALUE param IS the value
+  # (nnkObjConstr/nnkTupleConstr/nnkBracket), but a RUNTIME tuple-typed param
+  # also instantiates to nnkTupleConstr — the declaration is the only reliable
+  # discriminator, so capture it before the params are replaced below.
+  var staticValueMask: seq[int]
+  block:
+    var curIdx = 0
+    for i in 1 ..< inst.params.len:
+      let p = inst.params[i]
+      let numParams = p.len - 2
+      let typIdx = p.len - 2
+      if p[typIdx].kind == nnkCommand and p[typIdx].len > 0 and p[typIdx][0].repr == "static":
+        for j in 0 ..< numParams:
+          staticValueMask.add(curIdx + j)
+      curIdx += numParams
+
   inst.params = sig.params # copy over the parameters
 
   # turn the signature into a `GpuProcSignature`
   let attrs = collectProcAttributes(inst.pragma)
-  let procSig = ctx.toInstantiatedProcSignature(reg, sig.params, attrs)
+  let procSig = ctx.toInstantiatedProcSignature(reg, sig.params, attrs, staticValueMask)
   if name in ctx.processedProcs:
     return
   else:
@@ -217,7 +242,7 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     ctx.addToFnTable(name, builtinFn, {fkBuiltin})
     return
 
-  let fn = ctx.toGpuAst(reg, inst)
+  let fn = ctx.toGpuAst(reg, inst, staticValueMask)
   if fn.kind == gpuDiscard:
     doAssert inst.isBuiltIn()
     return
@@ -264,7 +289,8 @@ proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
     result = ctx.processedProcs[fn].retType.kind != gtVoid
   else:
     error "The function: " & $fn & " is not known anywhere."
-proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAst =
+proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
+               staticValueMask: seq[int] = @[]): GpuAst =
   ## XXX: things still left to do:
   ## - support `result` variable? Currently not supported. Maybe we will won't
 
@@ -381,7 +407,8 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode): GpuAs
           return GpuAst(kind: gpuDiscard)
       # Process parameters
       var staticParamPositions: seq[int]
-      result.pParams = ctx.parseProcParameters(reg, params, result.pAttributes, staticParamPositions)
+      result.pParams = ctx.parseProcParameters(reg, params, result.pAttributes, staticParamPositions,
+                                               staticValueMask)
       result.pBody = ctx.toGpuAst(reg, node.body)
       # Validation and transform passes run via ctx.runPasses()
       # Add to table of known functions (both old and new)

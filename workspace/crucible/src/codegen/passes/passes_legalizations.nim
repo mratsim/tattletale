@@ -201,7 +201,11 @@ proc getExprType(ctx: GpuContext; n: GpuAst): GpuType =
       else:
         error "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
   of gpuDeref:
-    result = ctx.getExprType(n.dOf)
+    let dType = ctx.getExprType(n.dOf)
+    if dType != nil and dType.kind == gtPtr:
+      result = dType.to       # by-ref params: ident typed as ptr, deref is the pointee
+    else:
+      result = dType
   of gpuDot:
     let parentType = ctx.getExprType(n.dParent)
     if parentType != nil and parentType.kind in {gtObject, gtGenericInst}:

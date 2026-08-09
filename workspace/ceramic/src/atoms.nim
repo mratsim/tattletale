@@ -125,7 +125,7 @@ type
 #  Derived metadata (layout queries — no stored fields behind these)
 # ═════════════════════════════════════════════════════════════════════════
 
-func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto =
+func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto {.inline.} =
   ## Number of threads cooperating on the atom (the T-mode size of the
   ## fragment layout). All three operand layouts share the same T.
   ## COMPILE-TIME: Int[N] for static layouts (CuTe: size(ThrID{}) → Int<32>);
@@ -137,7 +137,7 @@ func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOper
   elif operand == opB: fold(flatten(atom.bLayout.shape[0]), Int[1](), acc * it)
   else:                fold(flatten(atom.cLayout.shape[0]), Int[1](), acc * it)
 
-func valuesPerThread*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto =
+func valuesPerThread*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto {.inline.} =
   ## Number of elements of one operand this thread holds in registers:
   ## the V-mode size of the (T, V) layout — tensor-layouts' "values per
   ## thread" (value_id in tile_mma_grid); CuTe calls the same mode FrgV.
