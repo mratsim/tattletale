@@ -75,6 +75,10 @@ func partition_A*(mma: static TiledMma; tileM, tileK: static int): auto {.inline
   const atomK = mma.atom.mnk.k
   const thrM  = mma.threadLayout.shape[0]
   const thrK  = mma.threadLayout.shape[2]
+  static:
+    doAssert toIntVal(cosize(mma.atom.aLayout)) == atomM * atomK,
+      "partition_A: A fragment layout cosize (" & $toIntVal(cosize(mma.atom.aLayout)) &
+      ") != atom M·K (" & $atomM & "·" & $atomK & ") — the (T, V) layout must tile the operand"
   const unitM = thrM * atomM
   const unitK = thrK * atomK
   let tileL = make_layout((tileM, tileK))
@@ -94,6 +98,10 @@ func partition_B*(mma: static TiledMma; tileN, tileK: static int): auto {.inline
   const atomK = mma.atom.mnk.k
   const thrN  = mma.threadLayout.shape[1]
   const thrK  = mma.threadLayout.shape[2]
+  static:
+    doAssert toIntVal(cosize(mma.atom.bLayout)) == atomN * atomK,
+      "partition_B: B fragment layout cosize (" & $toIntVal(cosize(mma.atom.bLayout)) &
+      ") != atom N·K (" & $atomN & "·" & $atomK & ") — the (T, V) layout must tile the operand"
   const unitN = thrN * atomN
   const unitK = thrK * atomK
   let tileL = make_layout((tileN, tileK))
@@ -112,6 +120,10 @@ func partition_C*(mma: static TiledMma; tileM, tileN: static int): auto {.inline
   const atomN = mma.atom.mnk.n
   const thrM  = mma.threadLayout.shape[0]
   const thrN  = mma.threadLayout.shape[1]
+  static:
+    doAssert toIntVal(cosize(mma.atom.cLayout)) == atomM * atomN,
+      "partition_C: C fragment layout cosize (" & $toIntVal(cosize(mma.atom.cLayout)) &
+      ") != atom M·N (" & $atomM & "·" & $atomN & ") — the (T, V) layout must tile the operand"
   const unitM = thrM * atomM
   const unitN = thrN * atomN
   let tileL = make_layout((tileM, tileN))
