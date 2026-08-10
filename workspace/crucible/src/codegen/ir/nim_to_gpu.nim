@@ -693,10 +693,11 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     result.dParent = ctx.toGpuAst(reg, node[0])
     result.dField = ctx.toGpuAst(reg, node[1])
     # Carry the field's type when it is an array — normalizeArraySpanBody
-    # rewrites var-array params passed as a tensor's data field
+    # rewrites var-array params passed as an array-typed field
     # (gpuAddr(gpuDot) -> the bare field, C array decay) and needs the
-    # field type to know it IS an array. The tensor's data field is the
-    # only array field the DSL passes by addr.
+    # field type to know it IS an array. The keying is the TYPE (ntyArray),
+    # not the field name — the only in-tree consumer today is ceramic's
+    # tensor `data` field (see normalizeArraySpanParams' doc-block).
     if result.dField.kind == gpuIdent and
        node[1].getTypeInst().typeKind == ntyArray:
       result.dField.symbol.typ = resolveType(reg, node[1].getTypeInst())

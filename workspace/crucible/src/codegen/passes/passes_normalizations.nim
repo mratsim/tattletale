@@ -32,6 +32,15 @@ import ./passes_preprocessing
 #   3. call args `gpuAddr(array)` become the bare array (C decays) for
 #      array-ptr params, or a `toOpenArray(array, 0, len-1)` call for span
 #      params (the lowerSpans pass inlines that into ptr + len).
+#
+#   The `gpuAddr(gpuDot)` case (array-typed FIELD passed by addr) relies on
+#   the nnkDotExpr lowering in nim_to_gpu carrying the field's element type
+#   when the field is an array — see the NOTE there. The rewrite here is
+#   keyed on the TYPE (gtArray), not the field name: any array-typed field
+#   passed by addr is handled identically to a bare array ident. The only
+#   in-tree consumer today is ceramic's tensor `data` field; a second
+#   array-field pattern (AMX tile buffer, tcgen05 descriptor array) needs
+#   no change here.
 
 type
   ArraySpanParamKind = enum
