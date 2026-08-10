@@ -230,13 +230,35 @@ macro make_layout_like*(layout: Layout): untyped =
   ##   # mode 0 (stride 3) middle   → stride 1*4   = 4
   ##   # mode 1 (stride 6) slowest  → stride 1*4*2 = 8
 
+  # Shape/stride TYPE extraction with aliased-type support.
+  # layoutTypeArgs alone is not enough here: its aliased branch returns
+  # the RAW literal arg types (plain int tuples) — fine for structure-
+  # only consumers (compose, padRight) but wrong for typeIntVal, which
+  # needs the makeIntTuple'd Int[N] leaves. Recover the make_layout
+  # OUTPUT type (Int[N]-ified) from the alias's typedef RHS instead;
+  # in this macro's context the RHS is always typed (const or typedef).
   let lTyp = layout.getTypeInst()
-
-  if lTyp.kind != nnkBracketExpr or $lTyp[0] != "Layout":
+  var shTyp, stTyp: NimNode
+  if lTyp.kind == nnkBracketExpr and $lTyp[0] == "Layout":
+    shTyp = lTyp[1]
+    stTyp = lTyp[2]
+  elif lTyp.kind == nnkSym:
+    # Aliased layout type (module-scope `typeof(make_layout(...))`).
+    # getTypeInst normalizes back to the alias symbol; getTypeImpl yields
+    # the full Layout object definition with makeIntTuple'd Int[N] args.
+    let objTy = lTyp.getTypeImpl()
+    if objTy.kind == nnkObjectTy:
+      for field in objTy[2]:
+        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
+          shTyp = field[2]
+        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
+          stTyp = field[2]
+      if shTyp == nil or stTyp == nil:
+        error "make_layout_like: Layout object type missing shape/stride fields"
+    else:
+      error "make_layout_like: aliased layout did not yield an object type"
+  else:
     error "make_layout_like: compile-time Layout expression required"
-
-  let shTyp = lTyp[1]
-  let stTyp = lTyp[2]
 
   let shLeaves = flattenType(shTyp)
   let stLeaves = flattenType(stTyp)

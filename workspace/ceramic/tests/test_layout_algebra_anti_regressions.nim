@@ -165,6 +165,33 @@ proc runComplementDynamicShapeTests =
 
   echo "    complement dynamic-shape fixture: 2 guarded cases OK"
 
+# ═══════════════════════════════════════════════════════════════
+#  Section 5 — make_layout_like / make_tensor_like under the alias
+#  fixture (RID CONS-B-008): the alias path would crash with
+#  "cannot get child of node kind: nnkSym" before layoutTypeArgs
+#  migration — getTypeInst on an aliased typeof(make_layout(...))
+#  returns an nnkSym with no children.
+# ═══════════════════════════════════════════════════════════════
+
+proc runMakeLayoutLikeAliasTests =
+  block:
+    ## alias fixture present → getTypeInst resolves direct make_layout
+    ## calls to the aliased symbol (nnkSym); must agree with the const
+    ## path and must not crash
+    let viaAlias  = make_layout_like(make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64))))
+    let viaDirect = make_layout_like(nested)
+    doAssert viaAlias.shape === viaDirect.shape,
+      "make_layout_like: aliased-module path shape != const path shape"
+    doAssert viaAlias.stride === viaDirect.stride,
+      "make_layout_like: aliased-module path stride != const path stride"
+  block:
+    ## the remaining alias fixtures must also survive make_layout_like
+    let b = make_layout_like(make_layout(((4, 8), 2), ((8, 1), 32)))
+    let c = make_layout_like(make_layout(((4, 8), (2, 2)), ((32, 1), (16, 8))))
+    doAssert toIntVal(size(b)) > 0
+    doAssert toIntVal(size(c)) > 0
+  echo "    make_layout_like under alias fixture: 2 guarded cases OK"
+
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
@@ -175,6 +202,8 @@ proc runTests =
   runComplementFixtureTests()
   echo "── Section 4: complement runtime shape = static twin ──"
   runComplementDynamicShapeTests()
+  echo "── Section 5: make_layout_like under typeof-alias fixture ──"
+  runMakeLayoutLikeAliasTests()
   echo "  All tests passed."
 
 when isMainModule:
