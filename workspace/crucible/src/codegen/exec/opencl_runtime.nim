@@ -207,7 +207,9 @@ proc execOpenCL*(
   source: string,
   entryPoint: string,
   outputBytes: int,
-  inputs: openArray[tuple[data: pointer, size: int]]
+  inputs: openArray[tuple[data: pointer, size: int]],
+  globalSize: openArray[cl_size_t] = [cl_size_t(1)],
+  localSize: openArray[cl_size_t] = [cl_size_t(1)]
 ): seq[byte] =
   ## Compiles and executes an OpenCL C compute kernel, returning the
   ## output buffer contents as `seq[byte]`.
@@ -216,6 +218,8 @@ proc execOpenCL*(
   ## - `entryPoint`: name of the kernel entry point
   ## - `outputBytes`: number of bytes to read back as result
   ## - `inputs`:     sequence of (pointer, size) tuples for input buffers
+  ## - `globalSize` / `localSize`: work-group geometry (default 1×1×1 —
+  ##   a single work-item, matching the simple add-kernel tests)
   ##
   ## Bindings follow OpenCL kernel parameter order:
   ##   arg 0..N-1 = inputs (in order), arg N = output.
@@ -244,9 +248,7 @@ proc execOpenCL*(
     kernel.setArg(i, inputBuffers[i])
   kernel.setArg(numInputs, outBuf)
 
-  let gs = [cl_size_t(1)]
-  let ls = [cl_size_t(1)]
-  kernel.runKernel(gs, ls)
+  kernel.runKernel(globalSize, localSize)
 
   # Read output
   result = newSeq[byte](outputBytes)

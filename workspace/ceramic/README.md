@@ -79,7 +79,7 @@ tested. GPU code generation is done by Crucible.
 (`experiments/nvidia_cutlass_cute_tutorial/sgemm_1.nim`) is not fully
 working. Individual NVRTC kernel tests pass, but the full `sgemm_1` kernel
 does not. See `experiments/nvidia_cutlass_cute_tutorial/sgemm_1.nim` and
-`tests/test_kernel_gemm.nim`. Do not treat the GPU batch-GEMM path as
+`tests/gemm/test_kernel_gemm.nim`. Do not treat the GPU batch-GEMM path as
 production-ready.
 
 ## Source layout

@@ -77,68 +77,66 @@ func mmaMicrotile(tma: static TiledMma; t: int;
   var cFrag = make_tensor(float32, (VC,))
   cFrag.fillWith(0.0'f32)
 
-  gemm_fragment(tma.atom.instr, cFrag.data, aFrag.data, bFrag.data)   # one mma.sync — in-place accumulate
+  gemm_atom(tma.atom.instr, cFrag.data, aFrag.data, bFrag.data)   # one mma.sync — in-place accumulate
 
   axpby(1.0'f32, cFrag, 0.0'f32, tCv)
 
+func mmaMicrotileExplicit(tma: static TiledMma; t: int;
+                          C: ptr UncheckedArray[float32];
+                          A, B: ptr UncheckedArray[uint32]) {.inline.} =
+  ## C(16×8) = A(16×8)·B(8×8) + 1 — the 5-arg form: dFrag out, cFrag in
+  ## (port of the CUDA twin; added with the backend-engine rework so the
+  ## OpenCL path exercises both MMA forms like the _cuda file).
+  const
+    M = tma.atom.mnk.m
+    N = tma.atom.mnk.n
+    K = tma.atom.mnk.k
+    VA = toIntVal(tma.atom.valuesPerThread(opA))
+    VB = toIntVal(tma.atom.valuesPerThread(opB))
+    VC = toIntVal(tma.atom.valuesPerThread(opC))
+  let thr = tma.get_slice(t)
+  let tAv = tma.partition_A(thr, make_view(A, make_layout((M, K), (1, M))))
+  let tBv = tma.partition_B(thr, make_view(B, make_layout((N, K), (1, N))))
+  var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
+  var aFrag = make_fragment_A(tma.atom, tAv)
+  aFrag.copyFrom(tAv)
+  var bFrag = make_fragment_B(tma.atom, tBv)
+  bFrag.copyFrom(tBv)
+  var cFrag = make_tensor(float32, (VC,))
+  cFrag.fillWith(1.0'f32)                        # nonzero accumulator input
+  var dFrag = make_tensor(float32, (VC,))
+
+  gemm_atom(tma.atom.instr, dFrag.data, aFrag.data, bFrag.data, cFrag.data)   # dFrag = aFrag·bFrag + cFrag
+
+  axpby(1.0'f32, dFrag, 0.0'f32, tCv)
+
 const kernelCode = opencl:
-  proc mmaMicrotileKernel(C: ptr UncheckedArray[float32],
-                          A, B: ptr UncheckedArray[uint32]) {.global.} =
+  proc mmaMicrotileKernel(A, B: ptr UncheckedArray[uint32];
+                          C: ptr UncheckedArray[float32]) {.global.} =
     ## C(16×8) = A(16×8)·B(8×8) — one m16n8k8 tf32 atom, 32 work-items.
-    ## Output-first (C, A, B), matching the CUDA twins and CONVENTIONS.md
-    ## §1 (Context → Out → InOut → In); setArg binds positionally.
+    ## Inputs-first (A, B, C): the engine's OpenCL `run` uses execOpenCL,
+    ## which binds args 0..N-1 = inputs, arg N = output (vs the CUDA twins'
+    ## output-first, which match execCuda's res-first convention).
     mmaMicrotile(tiled, int(get_local_id(0)), C, A, B)
 
+  proc mmaMicrotileExplicitKernel(A, B: ptr UncheckedArray[uint32];
+                                  C: ptr UncheckedArray[float32]) {.global.} =
+    ## C(16×8) = A(16×8)·B(8×8) + 1 — the 5-arg form.
+    mmaMicrotileExplicit(tiled, int(get_local_id(0)), C, A, B)
+
 # ═════════════════════════════════════════════════════════════════════════
-#  Host side
+#  Host side — thin shell: the oracle + trial loop + report live in
+#  gemm_test_lib (testMicrotile); the engine's `run` dispatches to
+#  execOpenCL. No buffer management here.
 # ═════════════════════════════════════════════════════════════════════════
 
-proc runMicrotile(ctx: var OpenCLContext; kernel: var OpenCLKernel;
-                  A, B: openArray[uint32]): seq[float32] =
-  ## One launch of the precompiled microtile kernel with one 32-work-item
-  ## work-group (exactly one warp) and read-back of the 16×8 C fragment.
-  ## The context and the compiled kernel are owned by the caller and reused
-  ## across trials — only the buffers are per-launch.
-  var aBuf = ctx.allocBuffer(A.len * 4)
-  var bBuf = ctx.allocBuffer(B.len * 4)
-  var cBuf = ctx.allocBuffer(16 * 8 * 4)
-  defer:
-    aBuf.dealloc()
-    bBuf.dealloc()
-    cBuf.dealloc()
-  aBuf.writeBuffer(A)
-  bBuf.writeBuffer(B)
-  kernel.setArg(0, cBuf)
-  kernel.setArg(1, aBuf)
-  kernel.setArg(2, bBuf)
-  kernel.runKernel([csize_t(WORK_GROUP)], [csize_t(WORK_GROUP)])
-  # the seq-returning readBuffer overload cannot be instantiated from the
-  # same module (pre-existing; "cannot instantiate: T") — use the pointer form
-  result = newSeq[float32](16 * 8)
-  cBuf.readBuffer(cast[ptr UncheckedArray[float32]](result[0].addr))
+proc main() =
+  var engine = "opencl".getEngine(kernelCode)
+  doAssert engine.ctx.device.vendor().contains("NVIDIA"),
+    "this kernel embeds NVIDIA inline PTX (asm mma.sync) — only NVIDIA's " &
+    "OpenCL compiler accepts it; got device vendor: " & engine.ctx.device.vendor()
+  testMicrotile(engine, atom, "SM80")
+  echo "  OK — m16n8k8 tf32 microtile matches reference via OpenCL (tf32-exact fixture, 16 trials)"
 
 when isMainModule:
-  var ctx = initOpenCL()
-  doAssert ctx.device.vendor().contains("NVIDIA"),
-    "this kernel embeds NVIDIA inline PTX (asm mma.sync) — only NVIDIA's " &
-    "OpenCL compiler accepts it; got device vendor: " & ctx.device.vendor()
-  var kernel = ctx.compileKernel("mmaMicrotileKernel", kernelCode)
-
-  var rng = initRand(0xC0FFEE)
-  for trial in 0 ..< 16:
-    let A = tf32Fixture(rng, 16, 8)
-    let B = tf32Fixture(rng, 8, 8)
-
-    var refC = newSeq[float32](16 * 8)
-    refC.tf32Reference(A, B, 16, 8, 8, 0.0'f32)
-
-    let gpuC = runMicrotile(ctx, kernel, A, B)
-    # exact == (not allClose): the fixture domain is exact-representable, so
-    # the OpenCL path must match the reference bit-for-bit
-    for j in 0 ..< 16 * 8:
-      doAssert gpuC[j] == refC[j],
-        &"trial {trial} [{j mod 16},{j div 16}]: gpu {gpuC[j]} != ref {refC[j]}"
-
-  kernel.destroyKernel()
-  ctx.shutdown()
-  echo "  OK — m16n8k8 tf32 microtile bit-exact vs reference via OpenCL (tf32-exact fixture, 16 trials)"
+  main()

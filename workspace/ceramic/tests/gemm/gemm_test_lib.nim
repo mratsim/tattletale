@@ -11,6 +11,7 @@
 ##   ukernel:   gemmUkernelKernel
 ##   tiled:     gemmTiledKernel
 
+
 import std/[random, strformat, math]
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -18,8 +19,71 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/atoms
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/cl
 
-func tf32ify*(x: float32): uint32 =
+# ═════════════════════════════════════════════════════════════════════════
+#  Low-level primitives — the elementwise/compare helpers the oracles and
+#  drivers build on (kept at the top: no forward-declaration dance).
+# ═════════════════════════════════════════════════════════════════════════
+
+proc fmaf(a, b, c: float32): float32 {.importc: "fmaf", header: "<math.h>".}
+proc allClose(testC, refC: openArray[float32];
+               M, N: int;
+               context: string;
+               relTol = 1e-4'f32; absTol = 1e-4'f32) =
+  ## Element-wise numpy.allclose check: |test - ref| <= absTol + relTol·|ref|
+  ## (single condition, NaN never equal) — loud doAssert on the first
+  ## failure. Defaults are loose for the tf32 oracle domain; the current
+  ## gemm tests pass with maxAbsErr = 0 (fixture-exact), but the assertion
+  ## is a tolerance — tighten per test if needed.
+  var maxAbsErr: float32 = 0.0'f32
+  for m in 0 ..< M:
+    for n in 0 ..< N:
+      let refVal = refC[m + n * M]
+      let testVal = testC[m + n * M]
+      let absErr = abs(testVal - refVal)
+      if absErr > maxAbsErr: maxAbsErr = absErr
+      doAssert absErr <= absTol + relTol * abs(refVal),
+        &"{context} [{m},{n}]: got {testVal}, expected {refVal}, absErr={absErr}"
+  echo &"    PASS (maxAbsErr={maxAbsErr:.2e})"
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Reference oracles — the naive whole-tile GEMMs the GPU kernels are
+#  tested against. gemm_ref is the layout-generic outer product over
+#  TensorViews; gemm_tf32_ref is the flat-array tf32-exact oracle
+#  (experiment_testutils convention).
+# ═════════════════════════════════════════════════════════════════════════
+#  gemm_ref(C, A, B) — whole-tile reference (outer product)
+# ═════════════════════════════════════════════════════════════════════════
+
+proc gemm_ref*[T, ShA, StA, ShB, StB, ShC, StC](
+    C: var (TensorView[T, ShC, StC] or Tensor[T, ShC, StC]),
+    A: TensorView[T, ShA, StA] or Tensor[T, ShA, StA],
+    B: TensorView[T, ShB, StB] or Tensor[T, ShB, StB]) =
+  ## Reference fragment gemm: C[m,n] += A[m,k] * B[n,k] (outer product).
+  ## Correctness oracle for the GPU kernels — not a performance kernel.
+  ## (Moved here from kernel_gemm_gpu.nim 2026-08-10 with the
+  ## gemm_fragment → gemm_atom rename; now a proc, not a template.)
+  const
+    M = ShC.default[0]
+    N = ShC.default[1]
+    K = ShA.default[1]
+  when typeof(ShA.default[0]) isnot typeof(M):
+    {.error: "gemm_ref: A mode 0 (M) != C mode 0".}
+  when typeof(ShB.default[0]) isnot typeof(N):
+    {.error: "gemm_ref: B mode 0 (N) != C mode 1".}
+  when typeof(ShA.default[1]) isnot typeof(K):
+    {.error: "gemm_ref: A mode 1 (K) != B mode 1".}
+  for k in 0 ..< K:
+    for m in 0 ..< M:
+      for n in 0 ..< N:
+        C[m, n] += A[m, k] * B[n, k]
+
+# ═════════════════════════════════════════════════════════════════════════
+#  tf32 fixture machinery — the bit-exact test domain (0..15, tf32ified)
+# ═════════════════════════════════════════════════════════════════════════
+
+func tf32ify(x: float32): uint32 =
   ## f32 → tf32 bit pattern: truncate the low 13 mantissa bits (round-toward-zero).
   ## Deliberately NOT cvt.rna (round-to-nearest-away, CUTLASS' f32→tf32
   ## conversion): the two agree on the small-integer fixture domain, and RZ
@@ -27,12 +91,12 @@ func tf32ify*(x: float32): uint32 =
   ## f32→tf32 conversion path is added.
   (cast[uint32](x)) and 0xFFFFE000'u32
 
-proc tf32Fixture*(rng: var Rand; M, K: int): seq[uint32] =
+proc tf32Fixture(rng: var Rand; M, K: int): seq[uint32] =
   ## A random (M, K) col-major tf32 fixture in the f32 domain 0..15.
   ## The domain is pinned so every product (≤ 15·15 = 225), partial sum
   ## (≤ K·225) and epilogue is exactly representable in f32's 24-bit
   ## mantissa — this is what makes the gemm tests bit-exact regardless of
-  ## the mma pipe's internal accumulation order (see tf32Reference).
+  ## the mma pipe's internal accumulation order (see gemm_tf32_ref).
   doAssert K * 15 * 15 < 1 shl 24,
     "tf32Fixture: K·15² ≥ 2^24 — partial sums leave the f32 exact-representable" &
     " domain; the oracle would no longer be bit-exact"
@@ -40,9 +104,7 @@ proc tf32Fixture*(rng: var Rand; M, K: int): seq[uint32] =
   for i in 0 ..< result.len:
     result[i] = tf32ify(float32(rng.rand(0 .. 15)))
 
-proc fmaf(a, b, c: float32): float32 {.importc: "fmaf", header: "<math.h>".}
-
-proc tf32Reference*(C: var openArray[float32];
+proc gemm_tf32_ref*(C: var openArray[float32];
                     A, B: openArray[uint32];
                     M, N, K: int;
                     cInit: float32) =
@@ -66,60 +128,131 @@ proc tf32Reference*(C: var openArray[float32];
         sum = fmaf(av, bv, sum)
       C[m + n * M] = sum
 
-proc allClose*(testC, refC: openArray[float32];
-               M, N: int;
-               context: string;
-               relTol = 1e-4'f32; absTol = 1e-4'f32) =
-  ## Element-wise numpy.allclose check: |test - ref| <= absTol + relTol·|ref|
-  ## (single condition, NaN never equal) — loud doAssert on the first
-  ## failure. Defaults are loose for the tf32 oracle domain; the current
-  ## gemm tests pass with maxAbsErr = 0 (fixture-exact), but the assertion
-  ## is a tolerance — tighten per test if needed.
-  var maxAbsErr: float32 = 0.0'f32
-  for m in 0 ..< M:
-    for n in 0 ..< N:
-      let refVal = refC[m + n * M]
-      let testVal = testC[m + n * M]
-      let absErr = abs(testVal - refVal)
-      if absErr > maxAbsErr: maxAbsErr = absErr
-      doAssert absErr <= absTol + relTol * abs(refVal),
-        &"{context} [{m},{n}]: got {testVal}, expected {refVal}, absErr={absErr}"
-  echo &"    PASS (maxAbsErr={maxAbsErr:.2e})"
+# ═════════════════════════════════════════════════════════════════════════
+#  Backend engines — one `run` per backend, tests are backend-agnostic
+#
+#  TODO: Refactor crucible to have a proper multi-backend engine abstraction
+#  (the getEngine/run pair here is the test-side stopgap — the real thing
+#  belongs in crucible so kernels compile/launch uniformly across CUDA,
+#  OpenCL, and future AMD/Xe backends).
+# ═════════════════════════════════════════════════════════════════════════
 
+type OpenCLGemmEngine = object
+  ctx*: OpenCLContext
+  source*: string    # the OpenCL C kernel source (compiled per launch)
+
+proc initOpenCLGemmEngine(kernelCode: string): OpenCLGemmEngine =
+  ## OpenCL backend engine: context + kernel source. `run` uses the simple
+  ## execOpenCL primitive (test_opencl_add pattern) — no manual buffer
+  ## management in the tests.
+  result.ctx = initOpenCL()
+  result.source = kernelCode
+
+proc `=destroy`(engine: var OpenCLGemmEngine) =
+  ## Release the OpenCL context at scope exit. Same discipline as the NVRTC
+  ## path: engines must be LOCALS (proc-main wrapped) — Nim never runs
+  ## destructors on globals, and a leaked CUDA context costs ~550 MB (the
+  ## original NVRTC bug). This destructor fires when the engine goes out of
+  ## scope in the test's `proc main`.
+  ## Guard: a moved-from engine has source == "" (OpenCLContext fields are
+  ## private, and shutdown on a zeroed context would release nil handles).
+  if engine.source != "":
+    engine.ctx.shutdown()
+
+proc getEngine*(backend: static string; kernelCode: string): auto =
+  ## Instantiates the backend engine — call as `var engine = getEngine(...)`:
+  ##   "cuda"   → NVRTC (kernelCode compiled → PTX); `engine.run` → CUDA launch
+  ##   "opencl" → OpenCL context + source; `engine.run` → execOpenCL
+  ## The static string appears ONLY here — the tests just call
+  ## `engine.run(kernelName, grid, blk, output, inputs)`.
+  ## (Proc + `var x =` so the return is a move — no copy, no double
+  ## module-unload from the NVRTC destructor.)
+  when backend == "cuda":
+    result = initNvrtc(kernelCode)
+    result.compile()
+    result.getPtx()
+  elif backend == "opencl":
+    result = initOpenCLGemmEngine(kernelCode)
+  else:
+    {.error: "getEngine: unknown backend '" & backend & "'".}
+
+template run(engine: var NVRTC; kernelName: string; grid, blk: CudaDim3;
+              output: var openArray[float32]; args: typed) =
+  ## CUDA backend: thin wrapper over the NVRTC execute template.
+  engine.execute(kernelName, grid, blk, output, args)
+
+template run(engine: var OpenCLGemmEngine; kernelName: string; grid, blk: CudaDim3;
+              output: var openArray[float32]; args: typed) =
+  ## OpenCL backend: execOpenCL (source + entryPoint + raw inputs → bytes),
+  ## result copied into `out`. Kernel params must be (inputs..., output) —
+  ## execOpenCL's binding convention (vs CUDA's res-first).
+  var raw: seq[tuple[data: pointer, size: int]]
+  for v in fields(args):
+    var vv = v                 # var copy: seqs share their buffer (shallow);
+                               # scalars are read before execOpenCL returns
+    when compiles(vv.len):
+      raw.add((cast[pointer](vv[0].unsafeAddr), vv.len * sizeof(typeof(vv[0]))))
+    else:
+      raw.add((cast[pointer](vv.unsafeAddr), sizeof(typeof(vv))))
+  let bytes = execOpenCL(engine.ctx, engine.source, kernelName,
+                         outputBytes = output.len * sizeof(float32), inputs = raw,
+                         globalSize = [csize_t(blk.x)],
+                         localSize = [csize_t(blk.x)])
+  for i in 0 ..< output.len:
+    copyMem(addr output[i], addr bytes[i * 4], 4)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Per-kernel test drivers
 # ═════════════════════════════════════════════════════════════════════════
 
-proc testMicrotile*(nv: var NVRTC; atom: static MmaAtom; label: string) =
+proc microtileFixtures(atom: static MmaAtom; rng: var Rand): tuple[A, B: seq[uint32]] =
+  ## One microtile trial's tf32 fixtures — the shared oracle. The NVRTC and
+  ## OpenCL drivers both call this (and verifyMicrotile); they differ ONLY
+  ## in the launch. The _cuda/_opencl files must not touch tf32Fixture or
+  ## gemm_tf32_ref directly.
+  const M = atom.mnk.m
+  const N = atom.mnk.n
+  const K = atom.mnk.k
+  result.A = tf32Fixture(rng, M, K)
+  result.B = tf32Fixture(rng, N, K)
+
+proc verifyMicrotile(atom: static MmaAtom; trial: int;
+                      gpuC: openArray[float32]; A, B: openArray[uint32];
+                      cInit: float32; context: string) =
+  ## One microtile trial's reference + comparison — the shared oracle.
+  ## gpuC vs gemm_tf32_ref via allClose (bit-exact in practice: the fixture
+  ## domain is exact-representable).
+  const M = atom.mnk.m
+  const N = atom.mnk.n
+  const K = atom.mnk.k
+  var refC = newSeq[float32](M * N)
+  refC.gemm_tf32_ref(A, B, M, N, K, cInit)
+  allClose(gpuC, refC, M, N, context)
+
+proc testMicrotile*[E](engine: var E; atom: static MmaAtom; label: string) =
   ## One register-level MMA on the atom's own tile: C(M×N) = A(M×K)·B(N×K).
   ## Runs both the 4-arg (in-place) and 5-arg (explicit, cFrag = 1.0) forms,
   ## 16 trials each, bit-exact vs the tf32 reference.
   const
     M = atom.mnk.m
     N = atom.mnk.n
-    K = atom.mnk.k
   var rng = initRand(0xC0FFEE)
   for trial in 0 ..< 16:
-    let A = tf32Fixture(rng, M, K)
-    let B = tf32Fixture(rng, N, K)
+    let (A, B) = microtileFixtures(atom, rng)
 
     # in-place (4-arg)
-    var refC = newSeq[float32](M * N)
-    refC.tf32Reference(A, B, M, N, K, 0.0'f32)
     var gpuC = newSeq[float32](M * N)
-    nv.execute("mmaMicrotileKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuC, (A, B))
-    allClose(gpuC, refC, M, N, "in-place trial " & $trial)
+    engine.run("mmaMicrotileKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuC, (A, B))
+    verifyMicrotile(atom, trial, gpuC, A, B, 0.0'f32, "in-place trial " & $trial)
 
     # explicit-output (5-arg), cFrag = 1.0
-    refC.tf32Reference(A, B, M, N, K, 1.0'f32)
     var gpuD = newSeq[float32](M * N)
-    nv.execute("mmaMicrotileExplicitKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuD, (A, B))
-    allClose(gpuD, refC, M, N, "explicit trial " & $trial)
+    engine.run("mmaMicrotileExplicitKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuD, (A, B))
+    verifyMicrotile(atom, trial, gpuD, A, B, 1.0'f32, "explicit trial " & $trial)
 
   echo "  OK — m16n8k8 tf32 microtile matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, in-place + explicit)"
 
-proc testUkernel*(nv: var NVRTC; atom: static MmaAtom; label: string) =
+proc testUkernel*[E](engine: var E; atom: static MmaAtom; label: string) =
   ## The k-loop microkernel: C(M×N) = A(M, 2·K)·B(N, 2·K) — two k_blocks,
   ## 16 trials vs the tf32 reference (exact on the tf32-exact fixture).
   const
@@ -132,14 +265,14 @@ proc testUkernel*(nv: var NVRTC; atom: static MmaAtom; label: string) =
     let B = tf32Fixture(rng, N, Ktotal)
 
     var refC = newSeq[float32](M * N)
-    refC.tf32Reference(A, B, M, N, Ktotal, 0.0'f32)
+    refC.gemm_tf32_ref(A, B, M, N, Ktotal, 0.0'f32)
     var gpuC = newSeq[float32](M * N)
-    nv.execute("gemmUkernelKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuC, (A, B))
+    engine.run("gemmUkernelKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuC, (A, B))
     allClose(gpuC, refC, M, N, "trial " & $trial)
 
   echo "  OK — m16n8k8 tf32 gemm_ukernel matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2 k_blocks, 16 trials)"
 
-proc testTiled*(nv: var NVRTC; tiled: static TiledMma; label: string) =
+proc testTiled*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## The tiled GEMM on the (2,2,1)-tiled atom: 1×1 grid, single k-tile
   ## (TILE_K = 16), config (α, β) = (1, 0). C is NaN-prefilled: the β=0
   ## branch must skip the C read, so a spurious read fails the check.
@@ -160,7 +293,7 @@ proc testTiled*(nv: var NVRTC; tiled: static TiledMma; label: string) =
     # (α, β) = (1, 0): the β term drops — the kernel's β=0 branch must skip
     # the C read, so the NaN-prefilled gpuC stays untouched on success.
     var acc = newSeq[float32](TILE_M * TILE_N)
-    acc.tf32Reference(A_gpu, B_gpu, TILE_M, TILE_N, TILE_K, 0.0'f32)
+    acc.gemm_tf32_ref(A_gpu, B_gpu, TILE_M, TILE_N, TILE_K, 0.0'f32)
     const alpha = 1.0'f32
     const beta = 0.0'f32
     var C_ref = newSeq[float32](TILE_M * TILE_N)
@@ -170,13 +303,13 @@ proc testTiled*(nv: var NVRTC; tiled: static TiledMma; label: string) =
     var gpuC = newSeq[float32](TILE_M * TILE_N)
     for i in 0 ..< TILE_M * TILE_N:
       gpuC[i] = 0x7FC00000'f32    # NaN sentinel — a spurious C read fails
-    nv.execute("gemmTiledKernel", dim3(1), dim3(blockSize), gpuC,
+    engine.run("gemmTiledKernel", dim3(1), dim3(blockSize), gpuC,
                (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 
   echo "  OK — gemm_tiled 1×1 single-k-tile matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
 
-proc testTiledMultiBlock*(nv: var NVRTC; tiled: static TiledMma; label: string) =
+proc testTiledMultiBlock*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## The tiled GEMM with TWO k-tiles (K=32, BLK_K=16): the k_tile loop runs
   ## twice, each block accumulating its own 16-deep slice into cFrag. This
   ## pins F1 — a fragment shaped from the full-K partition would make
@@ -196,7 +329,7 @@ proc testTiledMultiBlock*(nv: var NVRTC; tiled: static TiledMma; label: string) 
     let B_gpu = tf32Fixture(rng, TILE_N, TILE_K)
 
     var acc = newSeq[float32](TILE_M * TILE_N)
-    acc.tf32Reference(A_gpu, B_gpu, TILE_M, TILE_N, TILE_K, 0.0'f32)
+    acc.gemm_tf32_ref(A_gpu, B_gpu, TILE_M, TILE_N, TILE_K, 0.0'f32)
     const alpha = 1.0'f32
     const beta = 0.0'f32
     var C_ref = newSeq[float32](TILE_M * TILE_N)
@@ -206,7 +339,7 @@ proc testTiledMultiBlock*(nv: var NVRTC; tiled: static TiledMma; label: string) 
     var gpuC = newSeq[float32](TILE_M * TILE_N)
     for i in 0 ..< TILE_M * TILE_N:
       gpuC[i] = 0x7FC00000'f32    # NaN sentinel — a spurious C read fails
-    nv.execute("gemmTiledKernelK32", dim3(1), dim3(blockSize), gpuC,
+    engine.run("gemmTiledKernelK32", dim3(1), dim3(blockSize), gpuC,
                (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 

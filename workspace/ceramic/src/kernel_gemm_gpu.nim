@@ -7,7 +7,7 @@
 
 ## GEMM fragment operations, the GEBB microkernel, and the tiled GEMM.
 ##
-## `gemm_fragment` — the fragment-level GEMM, three forms:
+## `gemm_atom` — the MMA (fragment-level) GEMM, two forms:
 ##   * the MMA (4-arg): one instruction on the thread's register fragments,
 ##     in-place accumulate; the atom's `instr` + fragment counts + register
 ##     types produce the inline-asm statement (NVIDIA mma.sync via
@@ -15,11 +15,11 @@
 ##     their instructions differently). No kc loop, no epilogue — the
 ##     caller owns those.
 ##   * the MMA (5-arg): same, with an explicit destination
-##   * the reference (3-arg): the naive whole-tile outer product, the
-##     correctness oracle the GPU kernels are tested against
+##   (the naive whole-tile outer-product reference oracle lives in the
+##   tests — `gemm_ref` in tests/gemm/gemm_test_lib.nim)
 ##
 ## `gemm_ukernel` — the GEBB microkernel: the loop over K on top of
-##   `gemm_fragment` (one atom instruction per k_block, accumulated in
+##   `gemm_atom` (one atom instruction per k_block, accumulated in
 ##   cFrag). Atom-parametric — the same signature serves GPU tensor cores
 ##   and CPU FMA/AMX atoms.
 ##
@@ -43,7 +43,7 @@
 ##                          ▼
 ##              gemm_ukernel: cFrag += Σ_k_block aFragTile[k_block]·bFragTile[k_block]
 ##                          │   per k_block: copy slice → aSlice/bSlice
-##                          │     └─► gemm_fragment(instr, cFrag, aSlice, bSlice)
+##                          │     └─► gemm_atom(instr, cFrag, aSlice, bSlice)
 ##                          ▼
 ##                    cFrag (VC registers, zero-cleared)
 ##                          │
@@ -59,7 +59,7 @@
 ##                gemm_ukernel: for k_block in 0 ..< kBlocksPerTile # k_block loop
 ##                  copy aFragTile[_, k_block] → aSlice  # fragment slice → operands
 ##                  copy bFragTile[_, k_block] → bSlice
-##                  gemm_fragment(instr, cFrag, aSlice, bSlice)  # one mma.sync
+##                  gemm_atom(instr, cFrag, aSlice, bSlice)  # one mma.sync
 ## ```
 ##
 ## Tile/block hierarchy (CUTLASS terms):
@@ -68,7 +68,7 @@
 ## problem (M, N, K)                                gmem          the whole GEMM
 ## └─ threadblock tile (BLK_M, BLK_N, BLK_K)        1 CTA         ← gemm_tiled's "tile"
 ##    ├─ k-tile (BLK_K)                             1 CTA         ← the k_tile loop
-##    │   └─ k_block (atomK)                        1 warp        ← one gemm_fragment
+##    │   └─ k_block (atomK)                        1 warp        ← one gemm_atom
 ##    ├─ warp tile (BLK_M/nW, BLK_N/nW)             1 warp
 ##    │   └─ thread tile / fragment                 1 thread      ← rmem (aFragTile/cFrag)
 ##    └─ smem stage: one k-tile per pipeline stage
@@ -98,10 +98,10 @@ import ./kernel_axpby_gpu
 import ./macros/static_for
 import ./kernel_gemm/nvidia_tensor_cores
 
-#  gemm_fragment(instr, ...) — register-level MMA
+#  gemm_atom(instr, ...) — register-level MMA
 # ═════════════════════════════════════════════════════════════════════════
 
-macro gemm_fragment*[VA: static int, VB: static int, VC: static int, TA, TB, TC](
+macro gemm_atom*[VA: static int, VB: static int, VC: static int, TA, TB, TC](
     instr: static string;
     cFrag: var array[VC, TC];
     aFrag: array[VA, TA];
@@ -110,7 +110,7 @@ macro gemm_fragment*[VA: static int, VB: static int, VC: static int, TA, TB, TC]
   ##
   ## Args:
   ##   instr: the atom's mnemonic, read by field at the call site:
-  ##     gemm_fragment(atom.instr, cFrag, aFrag, bFrag)
+  ##     gemm_atom(atom.instr, cFrag, aFrag, bFrag)
   ##   cFrag: var register array (the accumulator, also the asm output)
   ##   aFrag, bFrag: register arrays (the operands)
   ##
@@ -125,7 +125,7 @@ macro gemm_fragment*[VA: static int, VB: static int, VC: static int, TA, TB, TC]
                                  cElem, aElem, bElem, cElem)
   result = newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
 
-macro gemm_fragment*[VD: static int, VA: static int, VB: static int, VC: static int, TD, TA, TB, TC](
+macro gemm_atom*[VD: static int, VA: static int, VB: static int, VC: static int, TD, TA, TB, TC](
     instr: static string;
     dFrag: var array[VD, TD];
     aFrag: array[VA, TA];
@@ -135,7 +135,7 @@ macro gemm_fragment*[VD: static int, VA: static int, VB: static int, VC: static 
   ##
   ## Args:
   ##   instr: the atom's mnemonic, read by field at the call site:
-  ##     gemm_fragment(atom.instr, dFrag, aFrag, bFrag, cFrag)
+  ##     gemm_atom(atom.instr, dFrag, aFrag, bFrag, cFrag)
   ##   dFrag: var register array — the destination (output first, per
   ##     CONVENTIONS.md §1 — Context → Out → InOut → In)
   ##   aFrag, bFrag: register arrays (the operands)
@@ -144,7 +144,7 @@ macro gemm_fragment*[VD: static int, VA: static int, VB: static int, VC: static 
   ## dFrag and cFrag may be the same array (passing the same name aliases
   ## them in the asm — equivalent to the 4-arg in-place form).
   if VD != VC:
-    error("gemm_fragment: D and C fragment arrays must have the same length (" & $VD & " vs " & $VC & ")", dFrag)
+    error("gemm_atom: D and C fragment arrays must have the same length (" & $VD & " vs " & $VC & ")", dFrag)
   let dElem = dFrag.getTypeInst()[2].repr
   let aElem = aFrag.getTypeInst()[2].repr
   let bElem = bFrag.getTypeInst()[2].repr
@@ -163,9 +163,9 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
     cFrag: var array[VC, TC];
     aFrag: Tensor[TA, ShA, StA];
     bFrag: Tensor[TB, ShB, StB]) {.inline.} =
-  ## GEBB microkernel: cFrag += Σ_k aFrag[k]·bFrag[k], one gemm_fragment
+  ## GEBB microkernel: cFrag += Σ_k aFrag[k]·bFrag[k], one gemm_atom
   ## per k_block, accumulated in cFrag. The loop over K is the layer above
-  ## the single-instruction gemm_fragment — the K-loop dispatch of CuTe's
+  ## the single-instruction gemm_atom — the K-loop dispatch of CuTe's
   ## sgemm_2.cu ukernel.
   ##
   ## Args:
@@ -175,13 +175,13 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
   ##   cFrag: var register array — the accumulator across all k_blocks
   ##   aFrag: owning tensor, shape (VA, RestM, RestK), strides (1, VA, VA)
   ##        (make_fragment_A) — V flattened to the atom register order;
-  ##        RestM·RestK = the k_blocks; gemm_fragment reads data[k_block·VA+i]
+  ##        RestM·RestK = the k_blocks; gemm_atom reads data[k_block·VA+i]
   ##        with k_block the flat rest-mode index.
   ##   bFrag: owning tensor, same shape convention (VB, RestN, RestK)
   ##
   ## K = number of k_blocks (each of the atom's K depth), read from the
   ## tensor shape along with VA/VB. Each k_block is copied into a local
-  ## register array before gemm_fragment — the unrolled (staticFor) copy
+  ## register array before gemm_atom — the unrolled (staticFor) copy
   ## uses constant indices so the asm operands stay register-resident (a
   ## runtime k would spill aFrag[k][i] to local memory and break the "f"/
   ## "r" constraints). The data array is read physically (data[k·VA+i]),
@@ -212,32 +212,7 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
       aSlice[i] = aFrag.data[k_block * VA + i]
     staticFor i, 0, VB:
       bSlice[i] = bFrag.data[k_block * VB + i]
-    gemm_fragment(mma.instr, cFrag, aSlice, bSlice)
-
-
-#  gemm_fragment(C, A, B) — reference (whole-tile outer product)
-# ═════════════════════════════════════════════════════════════════════════
-
-template gemm_fragment*[T, ShA, StA, ShB, StB, ShC, StC](
-    C: var (TensorView[T, ShC, StC] or Tensor[T, ShC, StC]),
-    A: TensorView[T, ShA, StA] or Tensor[T, ShA, StA],
-    B: TensorView[T, ShB, StB] or Tensor[T, ShB, StB]) =
-  ## Reference fragment gemm: C[m,n] += A[m,k] * B[n,k] (outer product).
-  ## Correctness oracle for the GPU kernels — not a performance kernel.
-  const
-    M = ShC.default[0]
-    N = ShC.default[1]
-    K = ShA.default[1]
-  when typeof(ShA.default[0]) isnot typeof(M):
-    {.error: "gemm_fragment: A mode 0 (M) != C mode 0".}
-  when typeof(ShB.default[0]) isnot typeof(N):
-    {.error: "gemm_fragment: B mode 0 (N) != C mode 1".}
-  when typeof(ShA.default[1]) isnot typeof(K):
-    {.error: "gemm_fragment: A mode 1 (K) != B mode 1".}
-  for k in 0 ..< K:
-    for m in 0 ..< M:
-      for n in 0 ..< N:
-        C[m, n] += A[m, k] * B[n, k]
+    gemm_atom(mma.instr, cFrag, aSlice, bSlice)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_tiled(tma, threadIdx, alpha, A, B, beta, C) — the tiled GEMM

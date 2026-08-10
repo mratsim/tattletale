@@ -1,7 +1,7 @@
 ## Manual GPU test: the sm86 GEBB microkernel via NVRTC/CUDA — the loop over K.
 ##
 ## C(16×8) = A(16×16)·B(16×8) — two m16n8k8 k_blocks through gemm_ukernel
-## (one gemm_fragment per slice, accumulated in cFrag — CuTe sgemm_2.cu's ukernel K-loop
+## (one gemm_atom per slice, accumulated in cFrag — CuTe sgemm_2.cu's ukernel K-loop
 ## analog). 32 threads. Fragment gathering is CuTe layout algebra (sgemm_2.cu): the
 ## partition of the full (M, 2K)/(N, 2K) views carries the k_blocks in its
 ## RestK mode; the register blocks are identity views and copyFrom does the
@@ -79,8 +79,9 @@ const kernelCode = cuda:
                          A, B: ptr UncheckedArray[uint32]) {.global.} =
     gemmUkernelMicrotile(tiled, int(threadIdx.x), C, A, B)
 
+proc main() =
+  var engine = "cuda".getEngine(kernelCode)
+  testUkernel(engine, atom, "SM86")
+
 when isMainModule:
-  var nv = initNvrtc(kernelCode)
-  nv.compile()
-  nv.getPtx()
-  testUkernel(nv, atom, "SM86")
+  main()

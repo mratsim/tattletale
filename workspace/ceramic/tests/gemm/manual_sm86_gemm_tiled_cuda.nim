@@ -64,8 +64,9 @@ const kernelCode = cuda:
       alpha, beta: float32) {.global.} =
     gemmTiledMicrotile(tiled, int(threadIdx.x), alpha, C, A, B, beta)
 
+proc main() =
+  var engine = "cuda".getEngine(kernelCode)
+  testTiled(engine, tiled, "SM86")
+
 when isMainModule:
-  var nv = initNvrtc(kernelCode)
-  nv.compile()
-  nv.getPtx()
-  testTiled(nv, tiled, "SM86")
+  main()

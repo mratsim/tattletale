@@ -40,7 +40,7 @@ template copyFrom*[T, ShA, StA, ShB, StB](
   ## fragment (V = atom register order, stride-1) receives the element at
   ## the same logical coordinate as src, whatever src's layout (row-major
   ## included). The fragment's physical order follows the fragment's
-  ## layout: V fastest, matching gemm_fragment's data[k·VA+i] read.
+  ## layout: V fastest, matching gemm_atom's data[k·VA+i] read.
   for i in 0 ..< size(dst):
     dst(i) = src(i)
 

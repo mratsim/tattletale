@@ -12,6 +12,7 @@ import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_fillwith_gpu
 import workspace/ceramic/src/kernel_copy_gpu
 import workspace/ceramic/src/kernel_gemm_gpu
+import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/ceramic/src/kernel_axpby_gpu
 import workspace/ceramic/experiments/experiment_testutils
 import workspace/crucible/src/codegen/nvrtc
@@ -93,7 +94,7 @@ proc sgemm_1_kernel(
     copyFrom(tBsB, tBgB(_, _, kTile))  # B (THR_N, THR_K) -> (THR_N, THR_K)
     syncthreads()                      # CuTe: wait for all threads to write smem
     # Compute: C += A * B
-    gemm_fragment(tCrC, tCsA, tCsB)   # (THR_M, THR_N) += (THR_M, BLK_K) × (THR_N, BLK_K)
+    gemm_ref(tCrC, tCsA, tCsB)   # (THR_M, THR_N) += (THR_M, BLK_K) × (THR_N, BLK_K)
     syncthreads()                      # CuTe: wait for all threads to read smem
 
   # ── Epilogue ──
