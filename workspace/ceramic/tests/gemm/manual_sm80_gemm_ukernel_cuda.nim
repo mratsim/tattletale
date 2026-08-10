@@ -58,10 +58,11 @@ func gemmUkernelMicrotile(tma: static TiledMma; t: int;
   # the fragment blocks as owning tensors — k as the outer mode (CuTe's
   # (V, K) register fragment); the k-slices are the partition's RestK
   # mode, one copyFrom gathers the whole block through the tensor's
-  # row-major data layout
-  var aFrag = make_tensor(uint32, (kSlices, VA), (VA, 1))
+  # default column-major layout (dst(i) is identity there — physical
+  # linear, matching gemm_ukernel's flat data[k·VA+i] read)
+  var aFrag = make_tensor(uint32, (kSlices, VA))
   aFrag.copyFrom(tAv)
-  var bFrag = make_tensor(uint32, (kSlices, VB), (VB, 1))
+  var bFrag = make_tensor(uint32, (kSlices, VB))
   bFrag.copyFrom(tBv)
   # the accumulator: make_tensor, passed as .data (the crucible var-array
   # field fix makes the bare field C-decay to T*)

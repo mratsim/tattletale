@@ -34,13 +34,12 @@ template copyFrom*[T, ShA, StA, ShB, StB](
     dst: var Tensor[T, ShB, StB];
     src: TensorView[T, ShA, StA] or Tensor[T, ShA, StA]) =
   ## Owning-tensor dst form — the fragment tensors (make_tensor/
-  ## make_tensor_like). Fills the data array in LINEAR order (compact
-  ## layouts): `dst.data[i] = src(i)`. The owning tensor is a flat
-  ## register block — its layout only indexes it (gemm_fragment reads
-  ## data[k·VA+i]); a `dst(i)` walk would interleave the copy (the
-  ## single-int crd2idx decomposes column-major, mode 0 fastest).
+  ## make_tensor_like). Copies src's column-major linear order into dst's
+  ## (layout-aware `dst(i)` — for the default compact column-major
+  ## fragment layout this is the physical linear order, matching
+  ## gemm_ukernel's flat data[k·VA+i] read).
   for i in 0 ..< size(dst):
-    dst.data[i] = src(i)
+    dst(i) = src(i)
 
 template copyFromIf*[T, ShA, StA, ShB, StB](
     dst: var TensorView[T, ShB, StB];

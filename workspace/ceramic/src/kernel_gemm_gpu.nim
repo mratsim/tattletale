@@ -127,8 +127,9 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
   ## uses constant indices so the asm operands stay register-resident (a
   ## runtime k would spill aFrag[k][i] to local memory and break the "f"/
   ## "r" constraints). The data array is read physically (data[k·VA+i]),
-  ## so the fragment tensors must be row-major compact — make_tensor(T,
-  ## (K, VA), (VA, 1)), which pairs with copyFrom's linear data fill.
+  ## which matches the default column-major fragment layout:
+  ## make_tensor(T, (K, VA)) — copyFrom's layout-aware dst(i) is the
+  ## identity there, so it fills data linearly in k-slice order.
   ## Atom-parametric: the same signature serves GPU tensor-core atoms and
   ## CPU FMA/AMX atoms (the atom decides the per-slice instruction).
   const
@@ -296,13 +297,13 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   fillWith(cFragView, 0.0'f32)
 
   for kb in 0 ..< K div BLK_K:
-    var aFragBlock = make_tensor(TA, (slicesPerBlock, VA), (VA, 1))
+    var aFragBlock = make_tensor(TA, (slicesPerBlock, VA))
     for s in 0 ..< slicesPerBlock:
       for v in 0 ..< VA:
         # (v0, v1, 0, kb·slicesPerBlock+s) — the decomposed V coord +
         # (RestM, RestK) coords against the flat (V·, RestM, RestK) view
         aFragBlock.data[s * VA + v] = tAv(concat(idx2crd(tma.atom.aLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
-    var bFragBlock = make_tensor(TB, (slicesPerBlock, VB), (VB, 1))
+    var bFragBlock = make_tensor(TB, (slicesPerBlock, VB))
     for s in 0 ..< slicesPerBlock:
       for v in 0 ..< VB:
         bFragBlock.data[s * VB + v] = tBv(concat(idx2crd(tma.atom.bLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
