@@ -36,7 +36,7 @@ const atom = SM80_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((2, 2, 1)))](
   atom: atom, threadLayout: make_layout((2, 2, 1)))
 
-func gemmTiledKernel(tma: static TiledMma; threadIdx: int;
+func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
                      alpha: float32;
                      C: ptr UncheckedArray[float32];
                      A, B: ptr UncheckedArray[uint32];
@@ -62,7 +62,7 @@ const kernelCode = cuda:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    gemmTiledKernel(tiled, int(threadIdx.x), alpha, C, A, B, beta)
+    gemmTiledMicrotile(tiled, int(threadIdx.x), alpha, C, A, B, beta)
 
 when isMainModule:
   var nv = initNvrtc(kernelCode)

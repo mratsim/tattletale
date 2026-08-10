@@ -141,7 +141,7 @@ proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
   else:
     idxExpr  # scalar leaf: the mod was applied by the parent
 
-macro idx2crd*(shape: typed; idx: int or Int): untyped =
+macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
   ## Decompose a flat index into a coordinate over SHAPE — colexicographic
   ## over the shape's leaf sizes (first mode fastest):
   ##   c0 = (idx div 1)        mod s0

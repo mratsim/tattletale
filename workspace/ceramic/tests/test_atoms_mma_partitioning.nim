@@ -94,21 +94,21 @@ template verifyFragments*(mma: untyped; tileM, tileK: static int;
             for v in 0 ..< vCount:
               let vc = idx2crd(mode(atomLayout, 1).shape, v)
               let off = crd2idx(p, ((tc, vc), (tm, tk), (rm, rk))).toIntVal()
-              counts[(off mod tileRows) + (off div tileRows) * tileRows].inc
+              counts[off].inc
       elif operand == opB:
         for rk in 0 ..< restK:
           for rn in 0 ..< restN:
             for v in 0 ..< vCount:
               let vc = idx2crd(mode(atomLayout, 1).shape, v)
               let off = crd2idx(p, ((tc, vc), (tn, tk), (rn, rk))).toIntVal()
-              counts[(off mod tileRows) + (off div tileRows) * tileRows].inc
+              counts[off].inc
       else:
         for rn in 0 ..< restN:
           for rm in 0 ..< restM:
             for v in 0 ..< vCount:
               let vc = idx2crd(mode(atomLayout, 1).shape, v)
               let off = crd2idx(p, ((tc, vc), (tm, tn), (rm, rn))).toIntVal()
-              counts[(off mod tileRows) + (off div tileRows) * tileRows].inc
+              counts[off].inc
     checkMultiplicity(counts, expected, $operand)
 
 template fragCoords*(mma: untyped; operand: static MmaOperand;
