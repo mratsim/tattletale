@@ -108,7 +108,8 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
     bFrag: Tensor[TB, ShB, StB]) {.inline.} =
   ## GEBB microkernel: cFrag += Σ_k aFrag[k]·bFrag[k], one gemm_fragment
   ## per k-slice, accumulated in cFrag. The loop over K is the layer above
-  ## the single-instruction gemm_fragment (CuTe dispatch [5] analog).
+  ## the single-instruction gemm_fragment — the K-loop dispatch of CuTe's
+  ## sgemm_2.cu ukernel.
   ##
   ## Args:
   ##   mma: a compile-time MmaAtom (bkGPU_TensorCore / bkCPU_X86_AMX — has

@@ -28,7 +28,12 @@ import ./passes_preprocessing
 # `HiddenDeref` on access and `HiddenAddr` on call args — so this pass
 # normalizes:
 #   1. param types:  gtPtr(gtArray[N, T]) -> gtPtr(T);  gtPtr(gtSpan) -> gtSpan
-#   2. body derefs on array/span pointers are removed (folded into the index)
+#   2. index-context derefs on array/span pointers are folded into the index:
+#      `gpuIndex(gpuDeref(p), i)` -> `gpuIndex(p, i)` (element-pointer
+#      semantics — `(*p)[i]` ≡ `p[i]`). Context-sensitive: a deref under
+#      `gpuAddr` or in a non-index position is preserved — `&(*p)` is the
+#      array's address (T*), stripping it to `&p` would take the pointer
+#      variable's address (T**).
 #   3. call args `gpuAddr(array)` become the bare array (C decays) for
 #      array-ptr params, or a `toOpenArray(array, 0, len-1)` call for span
 #      params (the lowerSpans pass inlines that into ptr + len).
@@ -43,7 +48,7 @@ import ./passes_preprocessing
 #   no change here.
 
 type
-  ArraySpanParamKind = enum
+  ArraySpanParamKind* = enum
     aspNone       ## not an array/span param
     aspArrayPtr   ## `var array[N, T]` — element pointer after normalization
     aspSpan       ## `var openArray[T]` — span (ptr + len) after normalization
@@ -80,16 +85,23 @@ proc makeToOpenArray(arr: GpuAst, aLen: int): GpuAst =
     ]
   )
 
-proc normalizeArraySpanBody(body: var GpuAst; calleeKinds: Table[string, seq[ArraySpanParamKind]]) =
+proc normalizeArraySpanBody*(body: var GpuAst; calleeKinds: Table[string, seq[ArraySpanParamKind]]) =
   ## Walk a proc body:
-  ##  - remove `gpuDeref` on array/span pointers (folded into the index),
+  ##  - fold `gpuDeref` on array/span pointers into the INDEX that consumes
+  ##    it (`(*p)[i]` ≡ `p[i]` in C, element-pointer semantics). The fold is
+  ##    index-context-only: a deref under `gpuAddr` is left alone — `&(*p)`
+  ##    is the array's address (T*), while stripping to `&p` would take the
+  ##    pointer variable's address (T**) — and an explicit non-index deref
+  ##    keeps its element semantics.
   ##  - rewrite `gpuAddr(array)` call args per the callee's param kind.
   body.walk(proc(n: var GpuAst): void =
     case n.kind
-    of gpuDeref:
-      let op = n.dOf
-      if op.kind == gpuIdent and isArrayOrSpanPtr(op.symbol.typ):
-        n = op
+    of gpuIndex:
+      # index context: (*p)[i] ≡ p[i] when p is an array/span pointer
+      if n.iArr.kind == gpuDeref and
+         n.iArr.dOf.kind == gpuIdent and
+         isArrayOrSpanPtr(n.iArr.dOf.symbol.typ):
+        n.iArr = n.iArr.dOf
     of gpuCall:
       if n.cName.kind == gpuIdent:
         let kinds = calleeKinds.getOrDefault(n.cName.symbol.name)

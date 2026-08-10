@@ -1,7 +1,7 @@
 ## Manual GPU test: the sm80 GEBB microkernel via NVRTC/CUDA — the loop over K.
 ##
 ## C(16×8) = A(16×16)·B(16×8) — two m16n8k8 k-slices through gemm_ukernel
-## (one gemm_fragment per slice, accumulated in cFrag — CuTe dispatch [5]
+## (one gemm_fragment per slice, accumulated in cFrag — CuTe sgemm_2.cu's ukernel K-loop
 ## analog). 32 threads. Staging is CuTe layout algebra (sgemm_2.cu): the
 ## partition of the full (M, 2K)/(N, 2K) views carries the k-slices in its
 ## RestK mode; the register blocks are identity views and copyFrom does the

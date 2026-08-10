@@ -154,7 +154,7 @@ proc liftConstexpr(pbody: var GpuAst) =
   else:
     discard
 
-proc getExprType(ctx: GpuContext; n: GpuAst): GpuType =
+proc getExprType*(ctx: GpuContext; n: GpuAst): GpuType =
   ## Read the type of an expression from existing node fields.
   ## Errors if the node kind doesn't carry its own type (e.g. gpuDot, gpuIndex).
   ## Those cases require the caller to provide the type from context instead.
@@ -192,7 +192,12 @@ proc getExprType(ctx: GpuContext; n: GpuAst): GpuType =
     else:
       error "Empty block expression"
   of gpuIndex:
-    let arrType = ctx.getExprType(n.iArr)
+    # `iArr` may be `gpuDeref(p)` (ptr-to-scalar indexing `p[i]`, or a by-ref
+    # var-array access). getExprType(gpuDeref) already unwraps gtPtr, so peek
+    # at the deref's operand to recover the pointer type for the dispatch
+    # below — without this, the unwrap would double-fire and hit the error.
+    let arrNode = if n.iArr.kind == gpuDeref: n.iArr.dOf else: n.iArr
+    let arrType = ctx.getExprType(arrNode)
     if arrType != nil:
       case arrType.kind
       of gtPtr: result = arrType.to
