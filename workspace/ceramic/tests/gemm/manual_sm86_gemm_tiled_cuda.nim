@@ -1,10 +1,10 @@
 ## Manual GPU test: the tiled GEMM (gemm_tiled) via NVRTC/CUDA.
 ##
-## C(32×16) = α·A(32×16)·B(16×16) + β·C — 1×1 grid, single k-block
+## C(32×16) = α·A(32×16)·B(16×16) + β·C — 1×1 grid, single k-tile
 ## (K = TILE_K = 16), config (α, β) = (1.0, 0.0), 128 threads.
 ##
 ## gemm_tiled(tma, threadIdx, alpha, A, B, beta, C) = tiling + thread
-## decomposition + k-block loop over gemm_ukernel, with a fused
+## decomposition + k-tile loop over gemm_ukernel, with a fused
 ## α·(A·B) + β·C epilogue. The C buffer is pre-filled with NaN: the β=0
 ## branch must skip the C read, so a spurious read (or a dropped store)
 ## produces NaN != expected.
@@ -42,10 +42,10 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
                      A, B: ptr UncheckedArray[uint32];
                      beta: float32) {.inline.} =
   ## C(32×16) = α·A(32×16)·B(16×16) + β·C — 1×1 tiled m16n8k8 tf32,
-  ## 128 threads, single k-block (K = TILE_K = 16), fused epilogue.
+  ## 128 threads, single k-tile (K = TILE_K = 16), fused epilogue.
   ## Tile geometry: 2×2×1 atoms over the (2,2,1) thread layout.
   const
-    TILE_K = 16                  # k-block size in elements
+    TILE_K = 16                  # k-tile size in elements
     thrM = toIntVal(tma.threadLayout.shape[0])
     thrN = toIntVal(tma.threadLayout.shape[1])
     thrK = toIntVal(tma.threadLayout.shape[2])

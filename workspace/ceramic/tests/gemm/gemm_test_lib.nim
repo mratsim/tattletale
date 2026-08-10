@@ -120,7 +120,7 @@ proc testMicrotile*(nv: var NVRTC; atom: static MmaAtom; label: string) =
   echo "  OK — m16n8k8 tf32 microtile matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, in-place + explicit)"
 
 proc testUkernel*(nv: var NVRTC; atom: static MmaAtom; label: string) =
-  ## The k-loop microkernel: C(M×N) = A(M, 2·K)·B(N, 2·K) — two k-slices,
+  ## The k-loop microkernel: C(M×N) = A(M, 2·K)·B(N, 2·K) — two k_blocks,
   ## 16 trials vs the tf32 reference (exact on the tf32-exact fixture).
   const
     M = atom.mnk.m
@@ -137,10 +137,10 @@ proc testUkernel*(nv: var NVRTC; atom: static MmaAtom; label: string) =
     nv.execute("gemmUkernelKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuC, (A, B))
     allClose(gpuC, refC, M, N, "trial " & $trial)
 
-  echo "  OK — m16n8k8 tf32 gemm_ukernel matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2 k-slices, 16 trials)"
+  echo "  OK — m16n8k8 tf32 gemm_ukernel matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2 k_blocks, 16 trials)"
 
 proc testTiled*(nv: var NVRTC; tiled: static TiledMma; label: string) =
-  ## The tiled GEMM on the (2,2,1)-tiled atom: 1×1 grid, single k-block
+  ## The tiled GEMM on the (2,2,1)-tiled atom: 1×1 grid, single k-tile
   ## (TILE_K = 16), config (α, β) = (1, 0). C is NaN-prefilled: the β=0
   ## branch must skip the C read, so a spurious read fails the check.
   const
@@ -174,10 +174,10 @@ proc testTiled*(nv: var NVRTC; tiled: static TiledMma; label: string) =
                (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 
-  echo "  OK — gemm_tiled 1×1 single-k-block matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
+  echo "  OK — gemm_tiled 1×1 single-k-tile matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
 
 proc testTiledMultiBlock*(nv: var NVRTC; tiled: static TiledMma; label: string) =
-  ## The tiled GEMM with TWO k-blocks (K=32, BLK_K=16): the kb loop runs
+  ## The tiled GEMM with TWO k-tiles (K=32, BLK_K=16): the k_tile loop runs
   ## twice, each block accumulating its own 16-deep slice into cFrag. This
   ## pins F1 — a fragment shaped from the full-K partition would make
   ## gemm_ukernel read uninitialized registers on the second block.
@@ -210,4 +210,4 @@ proc testTiledMultiBlock*(nv: var NVRTC; tiled: static TiledMma; label: string) 
                (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 
-  echo "  OK — gemm_tiled 2 k-blocks (K=32, BLK_K=16) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
+  echo "  OK — gemm_tiled 2 k-tiles (K=32, BLK_K=16) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
