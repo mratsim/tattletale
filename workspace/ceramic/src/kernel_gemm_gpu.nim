@@ -79,7 +79,8 @@ macro gemm_fragment*[VD: static int, VA: static int, VB: static int, VC: static 
   ## Args:
   ##   instr: the atom's mnemonic, read by field at the call site:
   ##     gemm_fragment(atom.instr, dFrag, aFrag, bFrag, cFrag)
-  ##   dFrag: var register array — the destination (output first, per §1)
+  ##   dFrag: var register array — the destination (output first, per
+  ##     CONVENTIONS.md §1 — Context → Out → InOut → In)
   ##   aFrag, bFrag: register arrays (the operands)
   ##   cFrag: register array — the accumulator input (read-only here)
   ##
@@ -294,9 +295,16 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   var cFrag: array[VC, TC]
   # crucible emits bare `float cFrag[4];` (no auto-zero) — explicit zeroing
   var cFragView = make_view(addr cFrag[0], make_layout((Int[VC](),)))
-  fillWith(cFragView, 0.0'f32)
+  cFragView.fillWith(0.0'f32)
 
   for kb in 0 ..< K div BLK_K:
+    # TODO: this staging is manual flat-index arithmetic —
+    # data[s·VA+v] plus hand-built idx2crd+concat coordinates. Layout
+    # algebra exists to absorb exactly this (CuTe: copy(A(_,_,k),
+    # rA(_,_,k)) into a fragment shaped like the partition view).
+    # Semantically correct today (V-enumeration order matches the atom's
+    # register order), but it bypasses the compose/copyFrom abstraction
+    # and re-derives the offsets by hand.
     var aFragBlock = make_tensor(TA, (slicesPerBlock, VA))
     for s in 0 ..< slicesPerBlock:
       for v in 0 ..< VA:
@@ -312,5 +320,7 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   # Epilogue — CuTe gemm_device: axpby(alpha, tCrC, beta, tCgC). The
   # register fragment (identity view) and the thread's C view are zipped
   # by size; axpby's β=0 branch skips the C read (a NaN-prefilled C stays
-  # untouched).
+  # untouched). Free-func call: axpby's parameter order is alpha, X, beta,
+  # Y (CuTe mnemonic), so X is not the first arg — UFCS method syntax
+  # cannot apply.
   axpby(alpha, cFragView, beta, tCv)
