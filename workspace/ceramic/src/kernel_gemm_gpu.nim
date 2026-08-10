@@ -296,7 +296,7 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   var cFrag: array[VC, TC]
   # crucible emits bare `float cFrag[4];` (no auto-zero) — explicit zeroing
   var cFragView = make_view(addr cFrag[0], make_layout((Int[VC](),)))
-  cFragView.fillWith(0.0'f32)
+  cFragView.fillWith(TC(0))  # TC(0) not 0.0'f32 — the accumulator dtype derives from the atom's cType
 
   for kb in 0 ..< K div BLK_K:
     # Fragment gathering through the layout algebra (CuTe make_fragment_A

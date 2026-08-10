@@ -384,9 +384,9 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
 
   # ── V part: first vLeafCount leaves — flattened to (VA,):(1|0,) ──
   # vShape is the V shape value (e.g. mma.aLayout.shape[1]) — its static
-  # type tells the macro how many leading leaves are V. untyped keeps the
-  # argument unevaluated: the macro expands at compile time, so crucible
-  # only ever sees the emitted layout.
+  # type tells the macro how many leading leaves are V. The argument is
+  # `typed`: only its static type is read, the macro expands at compile
+  # time, so crucible only ever sees the emitted layout.
   let vShapeTy = vShape.getTypeInst()
   let vShapeInner = if vShapeTy.kind == nnkBracketExpr and $vShapeTy[0] == "typeDesc":
                       vShapeTy[1]

@@ -192,19 +192,30 @@ proc getExprType*(ctx: GpuContext; n: GpuAst): GpuType =
     else:
       error "Empty block expression"
   of gpuIndex:
-    # `iArr` may be `gpuDeref(p)` (ptr-to-scalar indexing `p[i]`, or a by-ref
-    # var-array access). getExprType(gpuDeref) already unwraps gtPtr, so peek
-    # at the deref's operand to recover the pointer type for the dispatch
-    # below — without this, the unwrap would double-fire and hit the error.
-    let arrNode = if n.iArr.kind == gpuDeref: n.iArr.dOf else: n.iArr
-    let arrType = ctx.getExprType(arrNode)
+    # `iArr` may be `gpuDeref(p)` — a by-ref var-array access `(*p)[i]`, or a
+    # pointer-to-scalar `p[i]`. getExprType(gpuDeref) unwraps gtPtr to the
+    # POINTEE, so dispatch on the pointee: a pointer-to-array pointee is
+    # gtArray and indexing yields the ELEMENT type (aTyp); a scalar pointee
+    # passes through (`p[i]` is the pointee itself, pointer arithmetic).
+    # Direct array-ident indexing (`gpuIndex(arr, i)`) dispatches gtArray the
+    # same way. (Peeking at the deref's operand instead would return the
+    # pointer — and with it the array type for ptr-to-array, not the element.)
+    let arrType = ctx.getExprType(n.iArr)
     if arrType != nil:
-      case arrType.kind
-      of gtPtr: result = arrType.to
-      of gtArray: result = arrType.aTyp
-      of gtUA: result = arrType.uaTo
+      if n.iArr.kind == gpuDeref:
+        # pointee already unwrapped — index it
+        case arrType.kind
+        of gtPtr: result = arrType.to      # ptr-to-ptr: (*p) is ptr T
+        of gtArray: result = arrType.aTyp  # (*p)[i] → element type
+        of gtUA: result = arrType.uaTo
+        else: result = arrType             # scalar pointee: p[i] is the pointee
       else:
-        error "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
+        case arrType.kind
+        of gtPtr: result = arrType.to
+        of gtArray: result = arrType.aTyp
+        of gtUA: result = arrType.uaTo
+        else:
+          error "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
   of gpuDeref:
     let dType = ctx.getExprType(n.dOf)
     if dType != nil and dType.kind == gtPtr:

@@ -72,4 +72,22 @@ static:
       "gpuIndex(gpuDeref(p)) must agree with the gpuDeref unwrap, got " & $t.kind
     echo "  OK — gpuIndex(gpuDeref(p)) consistent with the unwrap (gtFloat32)"
 
+  block: # 5. F3: gpuIndex(gpuDeref(p)) with p: ptr array[N, T] returns T, not the array
+    let int32 = GpuType(kind: gtInt32)
+    let arr4 = GpuType(kind: gtArray, aTyp: int32, aLen: 4)
+    let ptrArr = GpuType(kind: gtPtr, to: arr4)
+    let sym = newSymbol("p", iSym = "p_arr", typ = ptrArr)
+    let ident = GpuAst(kind: gpuIdent, symbol: sym)
+    let deref = GpuAst(kind: gpuDeref, dOf: ident)
+    let lit0 = GpuAst(kind: gpuLit, lValue: "0", lType: GpuType(kind: gtInt32))
+    let idx = GpuAst(kind: gpuIndex, iArr: deref, iIndex: lit0)
+    var ctx = GpuContext()
+
+    let t = ctx.getExprType(idx)
+
+    doAssert t != nil and t.kind == gtInt32,
+      "gpuIndex(gpuDeref(p: ptr array)) must return the ELEMENT type, got " & $t.kind
+    echo "  OK — gpuIndex(gpuDeref(ptr array)) returns element type (gtInt32)"
+
+
 echo "  ALL PASS — getExprType gpuDeref unwrap pinned (compile-time)"
