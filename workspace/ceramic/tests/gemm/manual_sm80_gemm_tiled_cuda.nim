@@ -57,6 +57,28 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   var tC = make_view(C, make_layout((TILE_M, TILE_N), (1, TILE_M)))
   tma.gemm_tiled(threadIdx, alpha, tA, tB, beta, tC, TILE_K)
 
+func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
+                         alpha: float32;
+                         C: ptr UncheckedArray[float32];
+                         A, B: ptr UncheckedArray[uint32];
+                         beta: float32) {.inline.} =
+  ## C(32×16) = α·A(32×32)·B(16×32) + β·C — 1×1 tiled m16n8k8 tf32,
+  ## 128 threads, TWO k-blocks of 16 (K=32, BLK_K=16) — exercises the kb
+  ## loop (F1: each block's fragment must span only its slicesPerBlock).
+  const
+    TILE_K = 32                  # full K extent
+    BLK_K = 16                   # k-block size passed to gemm_tiled
+    thrM = toIntVal(tma.threadLayout.shape[0])
+    thrN = toIntVal(tma.threadLayout.shape[1])
+    thrK = toIntVal(tma.threadLayout.shape[2])
+    TILE_M = thrM * tma.atom.mnk.m   # 2·16 = 32
+    TILE_N = thrN * tma.atom.mnk.n   # 2·8  = 16
+  # gmem col-major: A[m + k·32], B[n + k·32]
+  let tA = make_view(A, make_layout((TILE_M, TILE_K), (1, TILE_M)))
+  let tB = make_view(B, make_layout((TILE_N, TILE_K), (1, TILE_N)))
+  var tC = make_view(C, make_layout((TILE_M, TILE_N), (1, TILE_M)))
+  tma.gemm_tiled(threadIdx, alpha, tA, tB, beta, tC, BLK_K)
+
 const kernelCode = cuda:
   proc gemmTiledKernel(
       C: ptr UncheckedArray[float32],
@@ -64,8 +86,19 @@ const kernelCode = cuda:
       alpha, beta: float32) {.global.} =
     gemmTiledMicrotile(tiled, int(threadIdx.x), alpha, C, A, B, beta)
 
+const kernelCodeK32 = cuda:
+  proc gemmTiledKernelK32(
+      C: ptr UncheckedArray[float32],
+      A, B: ptr UncheckedArray[uint32],
+      alpha, beta: float32) {.global.} =
+    gemmTiledMicrotileK32(tiled, int(threadIdx.x), alpha, C, A, B, beta)
+
 when isMainModule:
   var nv = initNvrtc(kernelCode)
   nv.compile()
   nv.getPtx()
   testTiled(nv, tiled, "SM80")
+  var nv2 = initNvrtc(kernelCodeK32)
+  nv2.compile()
+  nv2.getPtx()
+  testTiledMultiBlock(nv2, tiled, "SM80")

@@ -303,19 +303,35 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
     # + copy(A(_,_,k), rA(_,_,k))): the fragment is shaped from the
     # partition view — V flattened to atom register order (stride-1), rest
     # modes compact by the view's order — so the data layout is the
-    # hardware register enumeration, decoupled from the operand's strides. The
-    # k-slice coordinate (0, kb·slicesPerBlock+s) indexes the (V, RestM,
+    # hardware register enumeration, decoupled from the operand's strides.
+    # The k-slice coordinate (0, kb·slicesPerBlock+s) indexes the (V, RestM,
     # RestK) view; the flat V index decomposes via the atom's (V0, V1)
     # layout. No bare data[] writes — the fragment's layout is real and
     # coordinate-accessed.
-    var aFragBlock = make_fragment_A(tma.atom, tAv)
+    #
+    # The fragment spans THIS k-block only: the view's last mode (RestK)
+    # is restricted to slicesPerBlock, keeping its stride so the fragment's
+    # rest-mode order is unchanged. A full-K fragment (shaped from tAv
+    # directly) would make gemm_ukernel — which accumulates every slice of
+    # the fragment — read uninitialized registers beyond this block's fill.
+    # (CUTLASS sm80_mma_multistage: partition_fragment_A(sA(_,_,0)) — the
+    # fragment is partitioned from the k-block-sliced view, never the full K.)
+    let aBlockLayout = replaceMode(tAv.layout,
+      make_layout(Int[slicesPerBlock](), Int[toIntVal(mode(tAv.layout, tAv.layout.rank - 1).stride)]()),
+      tAv.layout.rank - 1)
+    let tAvBlock = make_view(tAv.data, aBlockLayout)
+    var aFragBlock = make_fragment_A(tma.atom, tAvBlock)
     for s in 0 ..< slicesPerBlock:
       for v in 0 ..< VA:
         # (v0, v1, 0, s) — the decomposed V coord + (RestM, RestK) coords
         # against the (V·, RestM, RestK) fragment and partition views
         aFragBlock(v, 0, s) =
           tAv(concat(idx2crd(tma.atom.aLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
-    var bFragBlock = make_fragment_B(tma.atom, tBv)
+    let bBlockLayout = replaceMode(tBv.layout,
+      make_layout(Int[slicesPerBlock](), Int[toIntVal(mode(tBv.layout, tBv.layout.rank - 1).stride)]()),
+      tBv.layout.rank - 1)
+    let tBvBlock = make_view(tBv.data, bBlockLayout)
+    var bFragBlock = make_fragment_B(tma.atom, tBvBlock)
     for s in 0 ..< slicesPerBlock:
       for v in 0 ..< VB:
         bFragBlock(v, 0, s) =

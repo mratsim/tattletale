@@ -175,3 +175,39 @@ proc testTiled*(nv: var NVRTC; tiled: static TiledMma; label: string) =
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 
   echo "  OK — gemm_tiled 1×1 single-k-block matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
+
+proc testTiledMultiBlock*(nv: var NVRTC; tiled: static TiledMma; label: string) =
+  ## The tiled GEMM with TWO k-blocks (K=32, BLK_K=16): the kb loop runs
+  ## twice, each block accumulating its own 16-deep slice into cFrag. This
+  ## pins F1 — a fragment shaped from the full-K partition would make
+  ## gemm_ukernel read uninitialized registers on the second block.
+  const
+    TILE_K = 32
+    BLK_K = 16
+    thrM = toIntVal(tiled.threadLayout.shape[0])
+    thrN = toIntVal(tiled.threadLayout.shape[1])
+    thrK = toIntVal(tiled.threadLayout.shape[2])
+    TILE_M = thrM * tiled.atom.mnk.m
+    TILE_N = thrN * tiled.atom.mnk.n
+    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+  var rng = initRand(0xF1F1)
+  for trial in 0 ..< 16:
+    let A_gpu = tf32Fixture(rng, TILE_M, TILE_K)
+    let B_gpu = tf32Fixture(rng, TILE_N, TILE_K)
+
+    var acc = newSeq[float32](TILE_M * TILE_N)
+    acc.tf32Reference(A_gpu, B_gpu, TILE_M, TILE_N, TILE_K, 0.0'f32)
+    const alpha = 1.0'f32
+    const beta = 0.0'f32
+    var C_ref = newSeq[float32](TILE_M * TILE_N)
+    for i in 0 ..< TILE_M * TILE_N:
+      C_ref[i] = alpha * acc[i]
+
+    var gpuC = newSeq[float32](TILE_M * TILE_N)
+    for i in 0 ..< TILE_M * TILE_N:
+      gpuC[i] = 0x7FC00000'f32    # NaN sentinel — a spurious C read fails
+    nv.execute("gemmTiledKernelK32", dim3(1), dim3(blockSize), gpuC,
+               (A_gpu, B_gpu, alpha, beta))
+    allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
+
+  echo "  OK — gemm_tiled 2 k-blocks (K=32, BLK_K=16) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
