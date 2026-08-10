@@ -9,7 +9,7 @@
 ##
 ## AMX is the CPU tensor core: TILECFG + tmm tile registers (16×16 bf16 per
 ## tile), tdpbf16ps/tdpbssd instructions, operands loaded from PLAIN memory
-## via _tile_loadd (no smem staging). The kind discriminates MEMORY CLASS.
+## via _tile_loadd (no smem round-trip). The kind discriminates MEMORY CLASS.
 ## T=1 layouts: the whole tile is one "thread" (the core).
 ## Reference: ktransformers amx.hpp (GemmKernel224BF) + Intel AMX spec.
 
@@ -73,7 +73,7 @@ const AMX_16x16x16_TDPBSSD* = MmaAtom[typeof(AMX_1x1024), typeof(AMX_1x1024), ty
   )
 
 static:
-  # Fragment-tile cross-checks (RID HPC-B-004/HIDN-B-009): the operand
+  # Fragment-tile cross-checks: the operand
   # layouts must match the mnk tile geometry — aLayout/bLayout hold one
   # full (M,K)/(N,K) tile per instruction, cLayout the (M,N) accumulator.
   doAssert cosize(AMX_16x16x16_TDPBF16PS.aLayout) === 16 * 16,

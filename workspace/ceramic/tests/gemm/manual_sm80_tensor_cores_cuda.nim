@@ -1,7 +1,7 @@
 ## Manual GPU test: the sm80 tensor-core microtile via NVRTC/CUDA — one register-level MMA.
 ##
 ## gemm_fragment(atom.instr, cFrag, aFrag, bFrag) replaces the hand-written mma.sync asm:
-## one m16n8k8 tf32 atom, 32 threads. Staging is CuTe layout algebra
+## one m16n8k8 tf32 atom, 32 threads. Fragment gathering is CuTe layout algebra
 ## (sgemm_2.cu): partition_A/B/C once (thr_mma.partition), the fragment
 ## registers as identity views, and copyFrom/fillWith do the gather/clear —
 ## no for loops, no offset arithmetic. The epilogue is axpby (gemm_device
@@ -41,7 +41,7 @@ func mmaMicrotile(tma: static TiledMma; t: int;
                   C: ptr UncheckedArray[float32];
                   A, B: ptr UncheckedArray[uint32]) {.inline.} =
   ## C(16×8) = A(16×8)·B(8×8) — one m16n8k8 tf32 atom, 32 threads, in-place.
-  ## Staging: thr_mma.partition_A/B/C, fragment registers as owning
+  ## Fragment gathering: thr_mma.partition_A/B/C, fragment registers as owning
   ## tensors (make_tensor_like), copyFrom/fillWith/axpby — all layout
   ## algebra, no loops, no offsets, no raw-addr views.
   const
@@ -57,9 +57,9 @@ func mmaMicrotile(tma: static TiledMma; t: int;
   var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
   # the fragment registers as owning tensors shaped like the partitions
   # (CuTe make_fragment_A/B/C) — one declaration, no raw-addr views
-  var aFrag = make_tensor_like(tAv)
+  var aFrag = make_fragment_A(tma.atom, tAv)
   aFrag.copyFrom(tAv)
-  var bFrag = make_tensor_like(tBv)
+  var bFrag = make_fragment_B(tma.atom, tBv)
   bFrag.copyFrom(tBv)
   # the accumulator is identity-shaped (the register order — a compact
   # make_tensor_like would scramble it: 0,2,1,3)
@@ -85,9 +85,9 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
   let tAv = tma.partition_A(thr, make_view(A, make_layout((M, K), (1, M))))
   let tBv = tma.partition_B(thr, make_view(B, make_layout((N, K), (1, N))))
   var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
-  var aFrag = make_tensor_like(tAv)
+  var aFrag = make_fragment_A(tma.atom, tAv)
   aFrag.copyFrom(tAv)
-  var bFrag = make_tensor_like(tBv)
+  var bFrag = make_fragment_B(tma.atom, tBv)
   bFrag.copyFrom(tBv)
   var cFrag = make_tensor(float32, (VC,))
   cFrag.fillWith(1.0'f32)                        # nonzero accumulator input
@@ -111,3 +111,10 @@ when isMainModule:
   nv.compile()
   nv.getPtx()
   testMicrotile(nv, atom, "SM80")
+  # Row-major operands are not exercised here: partition_A/B/C's thread
+  # (T-mode) offsets collapse for row-major views (col-major thread-1
+  # offset 16 vs row-major 1 — all threads read nearly the same data), a
+  # pre-existing bug in the partition's coordinate composition. The
+  # fragment layer itself is correct (GPU dumps match A[m·8+k]); the
+  # partition fix and the row-major acceptance test are tracked as a
+  # follow-up.

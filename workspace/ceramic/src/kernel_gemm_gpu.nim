@@ -116,12 +116,11 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
   ##        `instr`), passed `static`: the atom is data that monomorphizes
   ##        the kernel (CuTe passes the atom as a type for the same reason)
   ##   cFrag: var register array — the accumulator across all k-slices
-  ##   aFrag: owning tensor, shape (K, VA), row-major strides (VA, 1) —
-  ##        the K k-slices of A fragments (k as the outer mode, CuTe's
-  ##        (V, K) register fragment); the make_tensor staging — no
-  ##        raw-addr views at the call site
-  ##   bFrag: owning tensor, shape (K, VB), row-major strides (VB, 1) —
-  ##        the K k-slices of B fragments
+  ##   aFrag: owning tensor, shape (VA, RestM, RestK), strides (1, VA, VA)
+  ##        (make_fragment_A) — V flattened to the atom register order;
+  ##        RestM·RestK = the k-slices; gemm_fragment reads data[k·VA+i]
+  ##        with k the rest-block index.
+  ##   bFrag: owning tensor, same shape convention (VB, RestM, RestK)
   ##
   ## K = number of k-slices (each of the atom's K depth), read from the
   ## tensor shape along with VA/VB. Each k-slice is copied into a local
@@ -129,19 +128,20 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
   ## uses constant indices so the asm operands stay register-resident (a
   ## runtime k would spill aFrag[k][i] to local memory and break the "f"/
   ## "r" constraints). The data array is read physically (data[k·VA+i]),
-  ## which matches the default column-major fragment layout:
-  ## make_tensor(T, (K, VA)) — copyFrom's layout-aware dst(i) is the
-  ## identity there, so it fills data linearly in k-slice order.
+  ## which matches the fragment layout's V-first enumeration.
   ## Atom-parametric: the same signature serves GPU tensor-core atoms and
   ## CPU FMA/AMX atoms (the atom decides the per-slice instruction).
   const
-    K = toIntVal(ShA.default[0])
-    VA = toIntVal(ShA.default[1])
-    VB = toIntVal(ShB.default[1])
+    K = toIntVal(ShA.default[1]) * toIntVal(ShA.default[2])
+    VA = toIntVal(ShA.default[0])
+    VB = toIntVal(ShB.default[0])
   static:
-    doAssert ShB.default[0] === K,
-      "gemm_ukernel: B k-slice count (" & $ShB.default[0] &
-        ") != A k-slice count (" & $K & ")"
+    doAssert toIntVal(cosize(aFrag.layout)) div VA === K,
+      "gemm_ukernel: A rest-block size (" & $(toIntVal(cosize(aFrag.layout)) div VA) &
+        ") != k-slice count (" & $K & ")"
+    doAssert toIntVal(cosize(bFrag.layout)) div VB === K,
+      "gemm_ukernel: B rest-block size (" & $(toIntVal(cosize(bFrag.layout)) div VB) &
+        ") != k-slice count (" & $K & ")"
     doAssert VA === mma.valuesPerThread(opA),
       "gemm_ukernel: A fragment width (" & $VA & ") != atom valuesPerThread(opA)"
     doAssert VB === mma.valuesPerThread(opB),
@@ -299,23 +299,27 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   cFragView.fillWith(0.0'f32)
 
   for kb in 0 ..< K div BLK_K:
-    # TODO: this staging is manual flat-index arithmetic —
-    # data[s·VA+v] plus hand-built idx2crd+concat coordinates. Layout
-    # algebra exists to absorb exactly this (CuTe: copy(A(_,_,k),
-    # rA(_,_,k)) into a fragment shaped like the partition view).
-    # Semantically correct today (V-enumeration order matches the atom's
-    # register order), but it bypasses the compose/copyFrom abstraction
-    # and re-derives the offsets by hand.
-    var aFragBlock = make_tensor(TA, (slicesPerBlock, VA))
+    # Fragment gathering through the layout algebra (CuTe make_fragment_A
+    # + copy(A(_,_,k), rA(_,_,k))): the fragment is shaped from the
+    # partition view — V flattened to atom register order (stride-1), rest
+    # modes compact by the view's order — so the data layout is the
+    # hardware register enumeration, decoupled from the operand's strides. The
+    # k-slice coordinate (0, kb·slicesPerBlock+s) indexes the (V, RestM,
+    # RestK) view; the flat V index decomposes via the atom's (V0, V1)
+    # layout. No bare data[] writes — the fragment's layout is real and
+    # coordinate-accessed.
+    var aFragBlock = make_fragment_A(tma.atom, tAv)
     for s in 0 ..< slicesPerBlock:
       for v in 0 ..< VA:
-        # (v0, v1, 0, kb·slicesPerBlock+s) — the decomposed V coord +
-        # (RestM, RestK) coords against the flat (V·, RestM, RestK) view
-        aFragBlock.data[s * VA + v] = tAv(concat(idx2crd(tma.atom.aLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
-    var bFragBlock = make_tensor(TB, (slicesPerBlock, VB))
+        # (v0, v1, 0, s) — the decomposed V coord + (RestM, RestK) coords
+        # against the (V·, RestM, RestK) fragment and partition views
+        aFragBlock(v, 0, s) =
+          tAv(concat(idx2crd(tma.atom.aLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
+    var bFragBlock = make_fragment_B(tma.atom, tBv)
     for s in 0 ..< slicesPerBlock:
       for v in 0 ..< VB:
-        bFragBlock.data[s * VB + v] = tBv(concat(idx2crd(tma.atom.bLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
+        bFragBlock(v, 0, s) =
+          tBv(concat(idx2crd(tma.atom.bLayout.shape[1], v), (0, kb * slicesPerBlock + s)))
     gemm_ukernel(tma.atom, cFrag, aFragBlock, bFragBlock)
 
   # Epilogue — CuTe gemm_device: axpby(alpha, tCrC, beta, tCgC). The

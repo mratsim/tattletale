@@ -4,7 +4,7 @@
 ## Same microtile as manual_sm80_tensor_cores_cuda.nim (one m16n8k8 tf32
 ## atom, 32 work-items), emitted by the `opencl:` macro and executed on the
 ## OpenCL device. The kernel body is the CUDA twin's verbatim: partition
-## staging (partition_A/B/C, make_tensor_like, copyFrom, fillWith), one
+## views (partition_A/B/C, make_fragment_A/B, copyFrom, fillWith), one
 ## mma.sync, axpby epilogue — no flattened consts, no hand-rolled gathers.
 ##
 ## NVIDIA-OpenCL only: the mma.sync inline PTX travels inside the OpenCL C
@@ -52,7 +52,7 @@ func mmaMicrotile(tma: static TiledMma; t: int;
                   C: ptr UncheckedArray[float32];
                   A, B: ptr UncheckedArray[uint32]) {.inline.} =
   ## C(16×8) = A(16×8)·B(8×8) — one m16n8k8 tf32 atom, 32 work-items, in-place.
-  ## Staging: thr_mma.partition_A/B/C, fragment registers as owning
+  ## Fragment gathering: thr_mma.partition_A/B/C, fragment registers as owning
   ## tensors (make_tensor_like), copyFrom/fillWith/axpby — all layout
   ## algebra, no loops, no offsets, no raw-addr views.
   const
@@ -68,9 +68,9 @@ func mmaMicrotile(tma: static TiledMma; t: int;
   var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
   # the fragment registers as owning tensors shaped like the partitions
   # (CuTe make_fragment_A/B/C) — one declaration, no raw-addr views
-  var aFrag = make_tensor_like(tAv)
+  var aFrag = make_fragment_A(tma.atom, tAv)
   aFrag.copyFrom(tAv)
-  var bFrag = make_tensor_like(tBv)
+  var bFrag = make_fragment_B(tma.atom, tBv)
   bFrag.copyFrom(tBv)
   # the accumulator is identity-shaped (the register order — a compact
   # make_tensor_like would scramble it: 0,2,1,3)
