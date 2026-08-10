@@ -950,6 +950,9 @@ proc nvrtcCreateProgram*(prog: var nvrtcProgram; src: cstring; name: cstring;
                         includeNames: cstringArray): nvrtcResult {.discardable, cdecl,
     importc: "nvrtcCreateProgram", dynlib: libNvrtc.}
 
+proc nvrtcVersion*(major, minor: var cint): nvrtcResult {.discardable, cdecl,
+    importc: "nvrtcVersion", dynlib: libNvrtc.}
+
 proc nvrtcDestroyProgram*(prog: var nvrtcProgram): nvrtcResult {.discardable, cdecl,
     importc: "nvrtcDestroyProgram", dynlib: libNvrtc.}
 

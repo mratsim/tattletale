@@ -1,5 +1,47 @@
 # Ceramic Agents Guidelines
 
+## Running tests
+
+Ceramic tests are run through `tattletale/config.nims` tasks — from the
+`tattletale/` dir (NOT this dir):
+
+```bash
+nim test_ceramic          # all tests in workspace/ceramic/tests
+```
+
+Mechanics (see `config.nims`):
+- The task scans `tests/` for files named `test_*` or `t_*` and compiles
+  each with `nim c` (C backend) via `testerCmd` into
+  `build/tests/<file>` — a new `test_*.nim` in `tests/` is picked up
+  automatically, no registration needed.
+- **Non-recursive**: `tests/gpu/` is NOT included (run those directly,
+  e.g. `nim cpp -r tests/gpu/test_*.nim`).
+- The task aborts at the first failure.
+
+## Test structure: run sections inside procs
+
+- Wrap each test section in a `proc` (e.g. `proc sec1() = ...`) and call it at
+  module scope — never run test logic at module scope directly. Blocks may
+  separate sections *inside* a proc, but a test made of only module-level
+  `block`s (no proc) is a no-go: a proc is what scopes locals (and frees
+  resources) when it returns.
+- Module-scope `var`/objects live until **program exit** (Nim templates do NOT
+  scope `var` either). For CPU-only tests this is mostly harmless, but any
+  object holding a backend resource (CUDA context, NVRTC program, OpenCL/Vulkan
+  handles, GPU buffers) must be function-local — contexts hold a large
+  device-memory reservation that is only returned on destruction, so N
+  module-scope contexts can exhaust the GPU (`CUDA_ERROR_OUT_OF_MEMORY` on
+  tiny allocs).
+- `const` fixtures and `const` kernel sources at module scope are fine — only
+  runtime resource-holding objects need the proc scope.
+
+Single file (C backend, mirrors `testerCmd`):
+```bash
+nim c -r --hints:off --warnings:off \
+  --outdir:build/tests/test_name --nimcache:nimcache/tests/test_name \
+  workspace/ceramic/tests/test_file.nim
+```
+
 ## Tensor access: `[]` vs `()`
 
 - `<tensor>(<args>)` — dual dispatch:

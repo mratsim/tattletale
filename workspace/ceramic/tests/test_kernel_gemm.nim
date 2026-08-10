@@ -1,6 +1,6 @@
-## Test: kernel_gemm — gemm outer product (GPU path)
+## Test: kernel_gemm — gemm_fragment reference
 ##
-## Tests gemm(A, B, C) = C[m,n] += A[m,k] * B[n,k]
+## Tests gemm_fragment(C, A, B) = C[m,n] += A[m,k] * B[n,k]
 ## against a naive reference implementation.
 
 import ../src/int_tuples
@@ -45,7 +45,7 @@ proc runGemmTests =
     let A = make_view(bufA +% 0, make_layout((M, K), (1, M)))
     let B = make_view(bufB +% 0, make_layout((N, K), (1, N)))
     var C = make_view(bufC +% 0, make_layout((M, N), (1, M)))
-    gemm(C, A, B)
+    gemm_fragment(C, A, B)
 
     doAssert C[0, 0] == K.float32
     doAssert C[1, 0] == K.float32
@@ -60,7 +60,7 @@ proc runGemmTests =
     let A = make_view(bufA +% 0, make_layout((1, 1)))
     let B = make_view(bufB +% 0, make_layout((1, 1)))
     var C = make_view(bufC +% 0, make_layout((1, 1)))
-    gemm(C, A, B)
+    gemm_fragment(C, A, B)
 
     doAssert C[0, 0] == 35.0'f32
 
@@ -76,7 +76,7 @@ proc runGemmTests =
     let A = make_view(bufA +% 0, make_layout((M, K), (1, M)))
     let B = make_view(bufB +% 0, make_layout((N, K), (1, N)))
     var C = make_view(bufC +% 0, make_layout((M, N), (1, M)))
-    gemm(C, A, B)
+    gemm_fragment(C, A, B)
 
     # C was pre-filled with 1, so result = 1 + 2*3 = 7
     for m in 0 ..< M:
@@ -96,7 +96,7 @@ proc runGemmTests =
     let A = make_view(bufA +% 0, make_layout((M, K), (1, M)))
     let B = make_view(bufB +% 0, make_layout((N, K), (1, N)))
     var C = make_view(bufC +% 0, make_layout((M, N), (1, M)))
-    gemm(C, A, B)
+    gemm_fragment(C, A, B)
 
     ref_gemm(refC, bufA, bufB, M, N, K)
     for m in 0 ..< M:
@@ -115,7 +115,7 @@ proc runGemmTests =
     let A = make_view(bufA +% 0, make_layout((M, K), (1, M)))
     let B = make_view(bufB +% 0, make_layout((N, K), (1, N)))
     var C = make_view(bufC +% 0, make_layout((M, N), (1, M)))
-    gemm(C, A, B)
+    gemm_fragment(C, A, B)
 
     # C was pre-filled with 10, K=2, A=2, B=3 → C = 10 + 2*2*3 = 22
     for m in 0 ..< M:
@@ -136,7 +136,7 @@ proc runGemmTests =
     let A = make_view(bufA +% 0, make_layout((M, K), (K, 1)))
     let B = make_view(bufB +% 0, make_layout((N, K), (K, 1)))
     var C = make_view(bufC +% 0, make_layout((M, N), (N, 1)))
-    gemm(C, A, B)
+    gemm_fragment(C, A, B)
 
     for m in 0 ..< M:
       for n in 0 ..< N:

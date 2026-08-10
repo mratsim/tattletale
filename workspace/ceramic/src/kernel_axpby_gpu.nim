@@ -18,14 +18,54 @@ import ./int_tuples
 import ./layouts
 import ./tensors
 
-template axpby*[T, ShX, StX, ShY, StY](
+func axpby*[T, ShX, StX, ShY, StY](
     alpha: T,
     X: TensorView[T, ShX, StX] or Tensor[T, ShX, StX],
     beta: T,
-    Y: var (TensorView[T, ShY, StY] or Tensor[T, ShY, StY])) =
+    Y: var (TensorView[T, ShY, StY] or Tensor[T, ShY, StY])) {.inline.} =
   ## Y = α·X + β·Y   (element-wise)
   ## Parameter order: `axpby` → alpha, X, beta, Y
   ## CuTe: axpby(alpha, x, beta, y)
-  ## Acceptable on GPU, slow on CPU.
-  for i in 0 ..< size(Y.layout):
-    Y(i) = alpha * X(i) + beta * Y(i)
+  ##
+  ## A func (not a template): alpha/beta are evaluated once, and the
+  ## element loop is branch-free per call (the scale-factor dispatch is
+  ## hoisted out — ex02a_matmul_handtuned's genEpilogue pattern).
+  ##
+  ## X and Y are zipped by their common logical size — each is indexed
+  ## through its own layout (CuTe: zip(x, y) then elementwise). This is
+  ## what makes the epilogue axpby(alpha, cFrag, beta, C) work: the
+  ## register fragment and the gmem fragment have different layouts but
+  ## equal size.
+  ##
+  ## Specializations (runtime branches, same op order α·X + β·Y — two
+  ## multiplies then one add, no fma):
+  ##   beta == 0 → the Y read is skipped entirely (Y(i) never evaluated —
+  ##     a NaN-prefilled C stays untouched, mirroring the β=0 skip-read)
+  ##   alpha == 1 → the α multiply is skipped
+  ##   beta == 1 → the β multiply is skipped
+  ##   (when alpha == 1 and beta == 1 both hold, the alpha == 1 branch
+  ##   wins — the result is identical)
+  when typeof(size(X.layout)) is int:
+    # Runtime shapes (host-side tensors) — same contract, runtime check.
+    doAssert size(X.layout) == size(Y.layout),
+      "axpby: X and Y must have the same logical size (epilogue zip contract)"
+  else:
+    # All-static shapes — enforce the zip contract at compile time.
+    static:
+      doAssert toIntVal(size(X.layout)) == toIntVal(size(Y.layout)),
+        "axpby: X and Y must have the same logical size — the zip loop iterates" &
+        " size(Y.layout) and indexes X(i) with the same i, so an X smaller than Y" &
+        " reads out of bounds past X's register array (epilogue zip contract —" &
+        " RID HIDN-A-003/HIDN-B-004/HPC-A-003)"
+  if beta == T(0):
+    for i in 0 ..< size(Y.layout):
+      Y(i) = alpha * X(i)
+  elif alpha == T(1):
+    for i in 0 ..< size(Y.layout):
+      Y(i) = X(i) + beta * Y(i)
+  elif beta == T(1):
+    for i in 0 ..< size(Y.layout):
+      Y(i) = alpha * X(i) + Y(i)
+  else:
+    for i in 0 ..< size(Y.layout):
+      Y(i) = alpha * X(i) + beta * Y(i)

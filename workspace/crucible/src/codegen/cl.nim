@@ -11,6 +11,16 @@
 ## OpenCL runtime execution, analogous to how `wgpu.nim` ties together
 ## the `webgpu:` macro with wgpu-native execution.
 ##
+## Backend constraint — NVIDIA-OpenCL only: the OpenCL codegen emits Nim
+## `asm(...)` statements as GCC-style inline asm in the OpenCL C kernel.
+## Only NVIDIA's OpenCL compiler (nvopencl, LLVM-based) accepts inline PTX
+## asm; Intel/AMD/POCL implementations reject such kernels at build time.
+## Kernels that embed PTX (e.g. tensor-core mma.sync) must also run with a
+## work-group of exactly one warp (32 work-items) — mma.sync is
+## warp-synchronous. See
+## workspace/ceramic/tests/gemm/manual_sm80_tensor_cores_opencl.nim
+## for a full example with both the vendor check and the warp guard.
+##
 ## Usage:
 ##
 ##   import workspace/crucible/src/codegen/cl

@@ -13,12 +13,16 @@ import ./builtins_pragmas
 
 when not declaredInScope(opencl):
   ## Work-item dimension helpers
-  template get_global_id*(dim: uint32): uint32 = discard
-  template get_local_id*(dim: uint32): uint32 = discard
-  template get_group_id*(dim: uint32): uint32 = discard
-  template get_local_size*(dim: uint32): uint32 = discard
-  template get_global_size*(dim: uint32): uint32 = discard
-  template get_num_groups*(dim: uint32): uint32 = discard
+  ## Procs (not templates): a template body would be expanded away by the
+  ## typed `opencl:` body sem and the call would never reach codegen. The
+  ## names are registered in NimGpuFnBuiltins so calls forward to the
+  ## OpenCL C builtins by name (the bodies below are never emitted).
+  proc get_global_id*(dim: uint32): uint32 = discard
+  proc get_local_id*(dim: uint32): uint32 = discard
+  proc get_group_id*(dim: uint32): uint32 = discard
+  proc get_local_size*(dim: uint32): uint32 = discard
+  proc get_global_size*(dim: uint32): uint32 = discard
+  proc get_num_groups*(dim: uint32): uint32 = discard
 
   ## Synchronization
   template barrier*(flags: uint32): void = discard
