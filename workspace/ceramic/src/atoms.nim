@@ -30,7 +30,9 @@ type
     ## backend-agnostic data; the mapping to emitted C++ types happens at
     ## emission time per backend.
     mdtF32, mdtF64,
-    mdtTF32,          ## f32 storage, 10-bit mantissa; input of mma.sync tf32
+    mdtTF32,          ## 32-bit storage (f32 width), 10-bit mantissa; carried as a
+                      ## uint32 BLOB in kernel staging — deliberately NOT float32-
+                      ## interpreted (the mma.sync "r" operand is the raw bit pattern)
     mdtF16, mdtBF16,  ## 16-bit, packed 2-per-u32 in registers
     mdtFP8E4M3, mdtFP8E5M2,
     mdtInt8, mdtUint8, mdtInt16, mdtInt32 ## signedness is a plain field — never derived

@@ -36,6 +36,10 @@ nim test_crucible_vulkan
 nim test_crucible_webgpu
 ```
 
+GPU-backed tasks (test_crucible_nvrtc / _opencl and the
+workspace/ceramic/tests/gemm manual_* tests) require a CUDA GPU with
+compute capability ≥ 12.0 (sm_120) and fail loudly (quit(1)) without one.
+
 Single file:
 
 ```bash
