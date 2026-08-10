@@ -81,8 +81,9 @@ type
   ## NOTE: generic params are intentionally unconstrained. A concept
   ## constraint (`LA: AnyLayout`) hits a Nim compiler limitation: it accepts
   ## several identical layout types but rejects three DISTINCT layout types
-  ## Layout misuse fails at the
-  ## layout-algebra call sites anyway.
+  ## (e.g. the AMX atoms, whose three operand layouts differ). The params
+  ## are left unconstrained — layout misuse fails at the layout-algebra
+  ## call sites anyway.
   MmaAtom*[
       LA = NoLayout,
       LB = NoLayout,
