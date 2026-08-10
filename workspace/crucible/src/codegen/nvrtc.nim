@@ -61,12 +61,18 @@ proc initNvrtc*(cuda: string, name = "sample.cu"): NVRTC =
     check cudaRuntimeGetVersion(rtVer)
     echo "Runtime ver: ", rtVer
 
+    var nvrtcMajor, nvrtcMinor: cint
+    check nvrtcVersion(nvrtcMajor, nvrtcMinor)
+    echo "NVRTC ver: ", nvrtcMajor, ".", nvrtcMinor
+    echo "CUDA toolkit (CudaHome): ", CudaHome
+    echo "CUDA device runtime (libcudadevrt.a): ", findCudaDevrt()
+
     var prop: cudaDeviceProp
     check cudaGetDeviceProperties(prop, 0);
     echo "Compute capability: ", prop.major, " ", prop.minor
 
-    writeFile(dumpPath, cuda)
-    echo "Kernel dump: ", dumpPath
+    writeFile(getDebugPath("kernel.cu"), cuda)
+    echo "Kernel dump: ", getDebugPath("kernel.cu")
 
   ## TODO: consider in-memory and on-disk caching option for compiled PTX.
   ## (Compile once, reuse PTX or CUmodule for subsequent runs.)
