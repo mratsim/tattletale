@@ -30,6 +30,6 @@ const X86_AVX512_VNNI_DPBSSD* = MmaAtom[NoLayout, NoLayout, NoLayout](
     scaleMode: smSoftware, blockSize: 32,   # llama.cpp per-32-block quant scale
     sfaType: mdtF32, sfbType: mdtF32,
     kind: bkCPU_SIMD,
-    isa: siVNNI, nbScalars: 16, nbVecsNr: 4,
+    isa: siVNNI, nbScalars: 16, nbVecsNr: 1,  # C is int32 — 16 lanes/zmm, so N=16 is one vector per row (nr = nbVecsNr·nbScalars)
     conversionPoint: cpPerBlock,
   )

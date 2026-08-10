@@ -34,7 +34,7 @@ const
 
 const AMX_16x16x16_TDPBF16PS* = MmaAtom[typeof(AMX_1x256), typeof(AMX_1x256), typeof(AMX_1x256)](
     name: "AMX_16x16x16_TDPBF16PS",
-    mnk: (m: 16, n: 16, k: 16),          # tdpbf16ps: 16×16 tile, K=2 per instr
+    mnk: (m: 16, n: 16, k: 16),          # tdpbf16ps: 16×16×16 tile — the instruction covers the full K=16 depth per step
     aType: mdtBF16, bType: mdtBF16, cType: mdtF32,
     scaleMode: smSoftware, blockSize: 32, # per-32-block software scale
     sfaType: mdtF32, sfbType: mdtF32,

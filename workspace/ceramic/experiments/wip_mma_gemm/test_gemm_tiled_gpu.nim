@@ -61,18 +61,20 @@ static:
   doAssert VA == 4 and VB == 2 and VC == 4, "kernel register arrays must match the atom's V counts"
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Kernel — 2×2 tiled, K-parameterized
+#  Kernel — 2×2 tiled, fixed 32×16×32 geometry
 # ═════════════════════════════════════════════════════════════════════════
 
 const kernelCode = cuda:
   proc mmaGemmTiled(
       C: ptr UncheckedArray[float32],
-      A, B: ptr UncheckedArray[uint32],
-      M, N, K: int32) {.global.} =
-    ## C(32×16) = A(32×K) · B(16×K), 2×2 tiled m16n8k8 tf32, 128 threads.
-    ## gmem col-major: A[m + k·M], B[n + k·N], C[m + n·M].
-    ## Single-block POC: the tile origin is 0, so the partition's tile
-    ## offset is the gmem index (tileM = M = 32, tileN = N = 16).
+      A, B: ptr UncheckedArray[uint32]) {.global.} =
+    ## C(32×16) = A(32×32) · B(16×32), 2×2 tiled m16n8k8 tf32, 128 threads.
+    ## gmem col-major: A[m + k·32], B[n + k·16], C[m + n·32].
+    ## Single-block POC with FIXED 32×16×32 geometry: the partition
+    ## constants (pAFlat*/pBFlat*/pCFlat*) are baked host-side for
+    ## partition_A/B/C(tiled2, 32, 32 / 16, 32 / 32, 16) — the kernel
+    ## takes no geometry parameters (a runtime K would grow kTiles past
+    ## the precomputed partition bounds).
     let t = int(threadIdx.x)
 
     # thread decomposition: atom index via idx2crd on the thread layout,
@@ -89,9 +91,8 @@ const kernelCode = cuda:
     for v in 0 ..< VC:
       cFrag[v] = 0.0'f32
 
-    # k-loop over the partition's (RestM, RestK) mode
-    let kTiles = int(K) div kAtom
-    for rk in 0 ..< kTiles:
+    # k-loop over the partition's (RestM, RestK) mode — K fixed at 32
+    for rk in 0 ..< 32 div kAtom:
       # A fragment: flat (T,V) index + thread/rest coords
       var aFrag: array[4, uint32]
       for v in 0 ..< VA:
@@ -138,10 +139,7 @@ when isMainModule:
   const N = 16
   const K = 32
   var rng = initRand(0xBEEF)
-  # kernel source + launch geometry are loop-invariant — compile once
-  let m32 = int32(M)
-  let n32 = int32(N)
-  let k32 = int32(K)
+  # kernel source is a module-level const — compile once, execute per trial
   var nv = initNvrtc(kernelCode)
   nv.compile()
   nv.getPtx()
@@ -155,7 +153,7 @@ when isMainModule:
     refC.tf32Reference(A, B, M, N, K)
 
     var gpuC = newSeq[float32](M * N)
-    nv.execute("mmaGemmTiled", dim3(1), dim3(128), gpuC, (A, B, m32, n32, k32))
+    nv.execute("mmaGemmTiled", dim3(1), dim3(128), gpuC, (A, B))
 
     for j in 0 ..< M * N:
       doAssert gpuC[j] == refC[j],

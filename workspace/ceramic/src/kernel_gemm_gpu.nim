@@ -23,9 +23,11 @@
 ##   cFrag). Atom-parametric — the same signature serves GPU tensor cores
 ##   and CPU FMA/AMX atoms.
 ##
-## The general (tiled) gemm entry is not written yet.
+## `gemm_tiled` — one tile of C = α·(A·B) + β·C: thread partitioning,
+##   the k-block loop over `gemm_ukernel`, and the fused axpby epilogue.
 ##
-## Macro support (atom/array extraction) lives in kernel_gemm/gemm_support.nim.
+## NVIDIA mma.sync assembly construction lives in
+## kernel_gemm/nvidia_tensor_cores.nim.
 
 import std/macros
 import ./int_tuples
@@ -133,6 +135,16 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
     K = toIntVal(ShA.default[0])
     VA = toIntVal(ShA.default[1])
     VB = toIntVal(ShB.default[1])
+  static:
+    doAssert toIntVal(ShB.default[0]) == K,
+      "gemm_ukernel: B k-slice count (" & $toIntVal(ShB.default[0]) &
+        ") != A k-slice count (" & $K & ")"
+    doAssert VA == toIntVal(mma.valuesPerThread(opA)),
+      "gemm_ukernel: A fragment width (" & $VA & ") != atom valuesPerThread(opA)"
+    doAssert VB == toIntVal(mma.valuesPerThread(opB)),
+      "gemm_ukernel: B fragment width (" & $VB & ") != atom valuesPerThread(opB)"
+    doAssert VC == toIntVal(mma.valuesPerThread(opC)),
+      "gemm_ukernel: C fragment width (" & $VC & ") != atom valuesPerThread(opC)"
   staticFor k, 0, K:
     var aSlice: array[VA, TA]
     var bSlice: array[VB, TB]
@@ -217,8 +229,9 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   ##   - A and B are unmodified
   ##
   ## Panic-if (expansion-time rejections):
-  ##   - BLK_M != ThrM·atomM or BLK_N != ThrN·atomN — the thread tiling
-  ##     does not multiply to the tile; fix the TiledMma thread layout
+  ##   - the A/B/C view shapes do not match the derived tile
+  ##     (BLK_M = ThrM·atomM, BLK_N = ThrN·atomN); fix the views or the
+  ##     TiledMma thread layout
   ##   - K mod BLK_K != 0 — k-blocks do not divide K; use a BLK_K that
   ##     divides K
   ##   - BLK_K mod (thrK·atomK) != 0 — the k-block is not a multiple of
@@ -242,12 +255,6 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
     slicesPerBlock = BLK_K div atomK
 
   static:
-    doAssert BLK_M == thrM * atomM,
-      "gemm_tiled: BLK_M (" & $BLK_M & ") != ThrM·atomM (" & $thrM & "·" & $atomM &
-        ") — fix the TiledMma thread layout"
-    doAssert BLK_N == thrN * atomN,
-      "gemm_tiled: BLK_N (" & $BLK_N & ") != ThrN·atomN (" & $thrN & "·" & $atomN &
-        ") — fix the TiledMma thread layout"
     doAssert BLK_K mod (thrK * atomK) == 0,
       "gemm_tiled: BLK_K (" & $BLK_K & ") mod (thrK·atomK) (" & $thrK & "·" & $atomK &
         ") != 0 — use a BLK_K multiple of thrK·atomK"
