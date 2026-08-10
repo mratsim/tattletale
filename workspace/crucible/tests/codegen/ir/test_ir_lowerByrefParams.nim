@@ -30,25 +30,38 @@ block:
   echo "  OK — passByRef param renamed to _p_data"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 2. lowerByrefParamsImpl inserts deref-init statement in function body
+# 2. lowerByrefParamsImpl deref-wraps body idents (no deref-init prepend)
 # ═══════════════════════════════════════════════════════════════════════════
 block:
   let int32 = GpuType(kind: gtInt32)
   let sym = newSymbol("val", iSym = "val_byref2", typ = int32)
-  let ident = GpuAst(kind: gpuIdent, symbol: sym)
-  let param = GpuParam(ident: ident, typ: int32, addressSpace: asFunction, passByRef: true)
-  var body = GpuAst(kind: gpuBlock, statements: @[])
-  var procNode = GpuAst(kind: gpuProc, pName: ident, pParams: @[param], pBody: body)
+  # two DISTINCT ident nodes sharing the byref param's symbol — the body is
+  # `val = val` (both sides reference the byref param)
+  let identL = GpuAst(kind: gpuIdent, symbol: sym)
+  let identR = GpuAst(kind: gpuIdent, symbol: sym)
+  let param = GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym), typ: int32,
+                       addressSpace: asFunction, passByRef: true)
+  var body = GpuAst(kind: gpuBlock)
+  body.statements.add GpuAst(kind: gpuAssign, aLeft: identL, aRight: identR)
+  var procNode = GpuAst(kind: gpuProc, pName: GpuAst(kind: gpuIdent, symbol: sym),
+                        pParams: @[param], pBody: body)
   var ctx = GpuContext()
 
   ctx.lowerByrefParamsImpl(procNode)
 
-  doAssert procNode.pBody.statements.len >= 1, "Body should have at least 1 statement (deref-init), got: " & $procNode.pBody.statements.len
-  let firstStmt = procNode.pBody.statements[0]
-  doAssert firstStmt.kind == gpuAssign, "First body stmt should be gpuAssign (deref-init), got: " & $firstStmt.kind
-  doAssert firstStmt.aLeft.kind == gpuIdent, "LHS of deref-init should be ident"
-  doAssert firstStmt.aRight.kind == gpuDeref, "RHS of deref-init should be deref"
-  echo "  OK — deref-init statement inserted in function body"
+  # the body keeps its original statements — NO deref-init is prepended
+  doAssert procNode.pBody.statements.len == 1,
+    "Body must keep its original statements (no deref-init prepend), got: " &
+    $procNode.pBody.statements.len
+  let stmt = procNode.pBody.statements[0]
+  doAssert stmt.kind == gpuAssign,
+    "Body stmt must remain the original gpuAssign, got: " & $stmt.kind
+  # idents referencing the byref param are wrapped in gpuDeref: t → (*_p_t)
+  doAssert stmt.aLeft.kind == gpuDeref and stmt.aLeft.dOf.kind == gpuIdent,
+    "LHS ident must be deref-wrapped (t → (*_p_t)), got: " & $stmt.aLeft.kind
+  doAssert stmt.aRight.kind == gpuDeref and stmt.aRight.dOf.kind == gpuIdent,
+    "RHS ident must be deref-wrapped (t → (*_p_t)), got: " & $stmt.aRight.kind
+  echo "  OK — body idents deref-wrapped (no deref-init prepend)"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Kernel functions are not modified by lowerByrefParamsImpl

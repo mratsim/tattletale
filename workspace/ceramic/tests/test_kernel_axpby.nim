@@ -2,7 +2,12 @@
 ##
 ## Tests axpby(alpha, X, beta, Y) = Y = α·X + β·Y
 ## against manual computation.
+##
+## Also pins the zip size contract (RID HIDN-A-003 / HIDN-B-004 /
+## HPC-A-003): size-mismatched zips are rejected at compile time, and
+## the β=0 branch skips the Y read (NaN-prefilled Y stays NaN-free).
 
+import std/math
 import ../src/int_tuples
 import ../src/layouts
 import ../src/tensors
@@ -20,6 +25,22 @@ template test(label: string; body: untyped) =
 #  Tests
 # ═══════════════════════════════════════════════════════════════
 
+# ── Zip size contract — compile-time rejection of mismatched zips ──
+# The positive compiles() guard runs first: it proves the call environment
+# is sound (imports, callOperator, var-Y lvalue), so the negative asserts
+# fail for the right reason — the size doAssert — and not because the call
+# could never type-check in the first place.
+var X4 = make_tensor(float32, (4,))
+var Y4 = make_tensor(float32, (4,))
+var Y8 = make_tensor(float32, (8,))
+
+static:
+  doAssert compiles(axpby(2.0'f32, X4, 3.0'f32, Y4)),
+    "axpby: an equal-size zip must compile"
+  doAssert not compiles(axpby(2.0'f32, X4, 3.0'f32, Y8)),
+    "axpby: X smaller than Y must be rejected at compile time (zip OOB guard)"
+  doAssert not compiles(axpby(2.0'f32, Y8, 3.0'f32, Y4)),
+    "axpby: X larger than Y must be rejected at compile time (zip size contract)"
 proc runAxpbyTests =
   test "axpby identity: α=1, β=1, Y=0":
     var xBuf = newSeq[float32](4)
@@ -94,6 +115,21 @@ proc runAxpbyTests =
     doAssert Y[0] == 2.0'f32
     doAssert Y[1] == 4.0'f32
     doAssert Y[2] == 6.0'f32
+
+  test "axpby β=0 skips the Y read (NaN-prefilled Y stays NaN-free)":
+    var xBuf = newSeq[float32](4)
+    var yBuf = newSeq[float32](4)
+    for i in 0 ..< 4: xBuf[i] = float32(i + 1)      # [1, 2, 3, 4]
+    for i in 0 ..< 4: yBuf[i] = float32(NaN)        # NaN-prefilled C
+
+    let X = make_view(xBuf +% 0, make_layout((4,)))
+    var Y = make_view(yBuf +% 0, make_layout((4,)))
+    axpby(2.0'f32, X, 0.0'f32, Y)
+    # Y = 2*X + 0*Y = [2, 4, 6, 8] — a spurious Y read would leak NaN
+
+    for i in 0 ..< 4:
+      doAssert Y[i] == float32(2 * (i + 1)),
+        "beta==0: Y[" & $i & "] = " & $Y[i] & " — NaN leaked into the output"
 
   test "axpby 2D tensor":
     var xBuf = newSeq[float32](6)

@@ -230,13 +230,35 @@ macro make_layout_like*(layout: Layout): untyped =
   ##   # mode 0 (stride 3) middle   → stride 1*4   = 4
   ##   # mode 1 (stride 6) slowest  → stride 1*4*2 = 8
 
+  # Shape/stride TYPE extraction with aliased-type support.
+  # layoutTypeArgs alone is not enough here: its aliased branch returns
+  # the RAW literal arg types (plain int tuples) — fine for structure-
+  # only consumers (compose, padRight) but wrong for typeIntVal, which
+  # needs the makeIntTuple'd Int[N] leaves. Recover the make_layout
+  # OUTPUT type (Int[N]-ified) from the alias's typedef RHS instead;
+  # in this macro's context the RHS is always typed (const or typedef).
   let lTyp = layout.getTypeInst()
-
-  if lTyp.kind != nnkBracketExpr or $lTyp[0] != "Layout":
+  var shTyp, stTyp: NimNode
+  if lTyp.kind == nnkBracketExpr and $lTyp[0] == "Layout":
+    shTyp = lTyp[1]
+    stTyp = lTyp[2]
+  elif lTyp.kind == nnkSym:
+    # Aliased layout type (module-scope `typeof(make_layout(...))`).
+    # getTypeInst normalizes back to the alias symbol; getTypeImpl yields
+    # the full Layout object definition with makeIntTuple'd Int[N] args.
+    let objTy = lTyp.getTypeImpl()
+    if objTy.kind == nnkObjectTy:
+      for field in objTy[2]:
+        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
+          shTyp = field[2]
+        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
+          stTyp = field[2]
+      if shTyp == nil or stTyp == nil:
+        error "make_layout_like: Layout object type missing shape/stride fields"
+    else:
+      error "make_layout_like: aliased layout did not yield an object type"
+  else:
     error "make_layout_like: compile-time Layout expression required"
-
-  let shTyp = lTyp[1]
-  let stTyp = lTyp[2]
 
   let shLeaves = flattenType(shTyp)
   let stLeaves = flattenType(stTyp)
@@ -276,3 +298,174 @@ macro make_layout_like*(layout: Layout): untyped =
 
   result = quote do:
     make_layout(`layout`.shape, `strideTuple`)
+
+macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
+  ## Build a fragment layout from a partition view: the V leaves (the
+  ## register-enumeration modes, the first `flattenType(typeof(vShape))`
+  ## leaves of the shape) flatten to a single `(VA,):(1|0,)` mode — stride-1
+  ## (hardware register order), stride-0 kept for broadcast V — regardless
+  ## of the operand's strides. The remaining leaves keep the view's order,
+  ## compacted by stride value (CuTe make_ordered_layout) and scaled after
+  ## the V registers so the rest block does not collide with them.
+  ##
+  ## This is CuTe's make_fragment_like (layout.hpp). The point of the
+  ## function: make_layout_like compacts by stride value across all modes,
+  ## so a row-major operand view would reorder the V modes away from the
+  ## mma hardware register order (a1/a2 swap). make_fragment_like pins the
+  ## V modes to the hardware V enumeration regardless of the operand
+  ## strides, and only the remaining modes follow the view's order.
+  ##
+  ## vShape: the atom's V shape value (atom.aLayout.shape[1]). Its flat
+  ## leaf count tells the macro how many leading leaves are V — tattletale
+  ## partitions flatten the atom's (T,V) V part into consecutive modes, so
+  ## the boundary must be stated (CuTe's make_fragment_like needs no such
+  ## argument because its V mode is a single nested mode-0).
+  ##
+  ## The output keeps the input's leaf structure, so the fragment is
+  ## coordinate-compatible with the partition view (same shape, copyFrom
+  ## flat-index alignment preserved). The V block is flattened (CuTe keeps
+  ## the nested structure) because gemm_fragment reads the fragment data
+  ## array in flat V-enumeration order — the flat enumeration is identical
+  ## to the nested col-major one (v = v0 + V0·v1 + …), so copyFrom's
+  ## coordinate alignment is unaffected.
+  ##
+  ## Examples:
+  ##   (V0,V1,RestM,RestK) view  →  V flattened stride-1, rest compact
+  ##   row-major operand          →  same V order (make_layout_like would
+  ##     reorder V after a fast rest mode and scramble the registers)
+  ##   broadcast V (stride-0)     →  (VA,):(0,)
+  # Shape/stride type extraction with aliased-type support — same
+  # getTypeInst → nnkObjectTy path as make_layout_like (layoutTypeArgs'
+  # aliased branch returns raw literal arg types, wrong for typeIntVal).
+  let lTyp = layout.getTypeInst()
+  var shTyp, stTyp: NimNode
+  if lTyp.kind == nnkBracketExpr and $lTyp[0] == "Layout":
+    shTyp = lTyp[1]
+    stTyp = lTyp[2]
+  elif lTyp.kind == nnkSym:
+    let objTy = lTyp.getTypeImpl()
+    if objTy.kind == nnkObjectTy:
+      for field in objTy[2]:
+        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
+          shTyp = field[2]
+        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
+          stTyp = field[2]
+      if shTyp == nil or stTyp == nil:
+        error "make_fragment_like: Layout object type missing shape/stride fields"
+    else:
+      error "make_fragment_like: aliased layout did not yield an object type"
+  else:
+    error "make_fragment_like: compile-time Layout expression required"
+
+  let shLeaves = flattenType(shTyp)
+  let stLeaves = flattenType(stTyp)
+  let n = shLeaves.len
+
+  if stLeaves.len != n:
+    error "make_fragment_like: shape/stride rank mismatch"
+
+  for i in 0 ..< n:
+    if typeIntVal(shLeaves[i]) == DynamicSentinel:
+      error "make_fragment_like: dynamic shapes unsupported — static layout required"
+
+  if n == 1:
+    # CuTe: rank-1 → plain compact (stride-1); broadcast (stride-0) keeps
+    # stride-0. Note: emit as Int[N]() — a single-element tuple literal
+    # (4,) flattens to the scalar 4 in typed argument position, breaking
+    # makeIntTuple.
+    let shNode = newLit(typeIntVal(shLeaves[0]))
+    if typeIntVal(stLeaves[0]) == 0:
+      result = quote do:
+        make_layout(Int[`shNode`](), Int[0]())
+    else:
+      result = quote do:
+        make_layout(Int[`shNode`]())
+    return
+
+  # ── V part: first vLeafCount leaves — flattened to (VA,):(1|0,) ──
+  # vShape is the V shape value (e.g. mma.aLayout.shape[1]) — its static
+  # type tells the macro how many leading leaves are V. The argument is
+  # `typed`: only its static type is read, the macro expands at compile
+  # time, so crucible only ever sees the emitted layout.
+  let vShapeTy = vShape.getTypeInst()
+  let vShapeInner = if vShapeTy.kind == nnkBracketExpr and $vShapeTy[0] == "typeDesc":
+                      vShapeTy[1]
+                    else:
+                      vShapeTy
+  let vLeafCount = flattenType(vShapeInner).len
+  doAssert vLeafCount >= 1 and vLeafCount <= n,
+    "make_fragment_like: V leaf count (" & $vLeafCount & ") out of range for rank " & $n
+  var vShapeVals = newSeq[int](vLeafCount)
+  var vStrideVals = newSeq[int](vLeafCount)
+  var va = 1
+  var vAllZero = true
+  var vAllNonZero = true
+  for i in 0 ..< vLeafCount:
+    vShapeVals[i] = typeIntVal(shLeaves[i])
+    vStrideVals[i] = typeIntVal(stLeaves[i])
+    va *= vShapeVals[i]
+    if vStrideVals[i] == 0:
+      vAllNonZero = false
+    else:
+      vAllZero = false
+  # vShape value check: the vShape argument's leaf values must match the
+  # layout's leading V leaves — a wrong-but-in-range vShape (e.g. a sibling
+  # operand's V shape) would otherwise silently misbuild the fragment.
+  let vShapeLeafTys = flattenType(vShapeInner)
+  for i in 0 ..< vLeafCount:
+    let vsv = typeIntVal(vShapeLeafTys[i])
+    if vsv != DynamicSentinel:
+      doAssert vsv == vShapeVals[i],
+        "make_fragment_like: vShape leaf " & $i & " value " & $vsv &
+        " != layout V leaf " & $vShapeVals[i]
+  doAssert vAllZero or vAllNonZero,
+    "make_fragment_like: mixed broadcast/non-broadcast V leaves unsupported —" &
+    " a flattened (VA,):(1,) V block cannot represent a partially broadcast" &
+    " register group without stride collisions"
+  let vStride = if vAllZero: 0 else: 1
+  # V cosize (broadcast shapes count 1) — scales the rest strides so the
+  # rest block starts after the V registers (no stride collision).
+  var vCosize = 1
+  for i in 0 ..< vLeafCount:
+    if vStrideVals[i] != 0:
+      vCosize *= vShapeVals[i]
+
+  # ── remaining leaves: compact by stride value (CuTe make_ordered_layout) ──
+  var rsh = newSeq[int](n - vLeafCount)
+  var rst = newSeq[int](n - vLeafCount)
+  for i in vLeafCount ..< n:
+    rsh[i - vLeafCount] = typeIntVal(shLeaves[i])
+    rst[i - vLeafCount] = typeIntVal(stLeaves[i])
+
+  # Step 1: filter_zeros — replace stride-0 shapes with 1
+  var fsh = rsh
+  for i in 0 ..< rsh.len:
+    if rst[i] != DynamicSentinel and rst[i] == 0:
+      fsh[i] = 1
+
+  # Step 2: CuTe max-order-substitution for dynamic strides
+  let resolvedOrder = compactOrderDynamicSubstitution(rst)
+
+  # Step 3: compact_order(filtered_shape, resolved_order)
+  var restStrides = compactOrderStridesImpl(fsh, resolvedOrder)
+
+  # Step 4: restore broadcast strides; scale the rest after the V registers
+  for i in 0 ..< rsh.len:
+    if rst[i] != DynamicSentinel and rst[i] == 0:
+      restStrides[i] = 0
+    else:
+      restStrides[i] *= vCosize
+
+  # ── emit: (VA, rest…) : (1|0, restStrides…) — V flattened to one mode ──
+  var outSh = nnkTupleConstr.newTree()
+  outSh.add newLit(va)
+  for i in vLeafCount ..< n:
+    outSh.add newLit(typeIntVal(shLeaves[i]))
+
+  var outSt = nnkTupleConstr.newTree()
+  outSt.add newLit(vStride)
+  for s in restStrides:
+    outSt.add newLit(s)
+
+  result = quote do:
+    make_layout(`outSh`, `outSt`)

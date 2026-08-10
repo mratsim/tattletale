@@ -53,24 +53,22 @@ proc naive_matmul[T](
 # ═════════════════════════════════════════════════════════════════════════
 
 proc allClose[T](testC: Tensor[T, _, _], refC: Tensor[T, _, _];
-                    rel_tol: T = T(1e-5); abs_tol: T = T(1e-5)) =
-  ## Compare two tensors element-wise with both relative and absolute tolerance.
-  ## Equivalent to numpy.allclose. Uses doAssert for immediate loud breakage.
+                    rel_tol: T = T(1e-5); abs_tol: T = T(1e-8)) =
+  ## Compare two tensors element-wise with numpy.allclose semantics:
+  ## |test - ref| <= abs_tol + rel_tol·|ref| (single condition, NaN never
+  ## equal). Uses doAssert for immediate loud breakage.
   let M = testC.shape[0].toIntVal()
   let N = testC.shape[1].toIntVal()
-  var maxRelErr: T = T(0)
   var maxAbsErr: T = T(0)
   for m in 0 ..< M:
     for n in 0 ..< N:
       let refVal = refC[m, n]
       let testVal = testC[m, n]
       let absErr = abs(testVal - refVal)
-      let relErr = absErr / max(T(1), abs(refVal))
-      if relErr > maxRelErr: maxRelErr = relErr
       if absErr > maxAbsErr: maxAbsErr = absErr
-      doAssert relErr <= rel_tol and absErr <= abs_tol,
-        &"FAIL at [{m},{n}]: got {testVal}, expected {refVal}, absErr={absErr}, relErr={relErr}"
-  echo &"    PASS (maxRelErr={maxRelErr:.2e}, maxAbsErr={maxAbsErr:.2e})"
+      doAssert absErr <= abs_tol + rel_tol * abs(refVal),
+        &"FAIL at [{m},{n}]: got {testVal}, expected {refVal}, absErr={absErr}"
+  echo &"    PASS (maxAbsErr={maxAbsErr:.2e})"
 
 proc make_test_matrix(rng: var Rand; rows, cols: int): seq[float32] =
   ## Create rows×cols matrix with values in [0, 1] from seeded RNG.

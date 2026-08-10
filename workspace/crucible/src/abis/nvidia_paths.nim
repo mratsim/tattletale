@@ -11,18 +11,25 @@ import std/os, std/strutils
 
 ## Resolves the root CUDA toolkit directory at compile time.
 ##
-## Priority:
-##   1. Derive from ``nvcc`` on PATH (must be on PATH to build ``.cu`` files)
-##   2. ``CUDA_HOME`` env var (user may set explicitly)
+## Priority (explicit beats derived):
+##   1. ``CUDA_HOME`` env var — the user's explicit choice, wins
+##   2. Derive from ``nvcc`` on PATH (convenience when CUDA_HOME is unset)
 ##   3. Known standard locations: ``/usr/local/cuda``, ``/opt/cuda``
 ##   4. ``""`` — caller must handle gracefully
+##
+## Note: NVRTC compiles ``.cu`` at runtime through ``libnvrtc.so`` (dynlib)
+## and never invokes the ``nvcc`` executable. ``CudaHome`` only drives the
+## link-time pieces: ``libcudadevrt.a`` (cuLinkAddFile) and ``-lcudart``
+## (positron static lib). nvcc-on-PATH is thus a fallback, never an
+## override of an explicit ``CUDA_HOME``.
 const CudaHome* = block:
-  let nvccPath = staticExec("command -v nvcc 2>/dev/null || true").strip()
-  if nvccPath.len > 0:
-    nvccPath.parentDir().parentDir()
+  let envHome = getEnv("CUDA_HOME")
+  if envHome.len > 0:
+    envHome
   else:
-    let envHome = getEnv("CUDA_HOME")
-    if envHome.len > 0: envHome
+    let nvccPath = staticExec("command -v nvcc 2>/dev/null || true").strip()
+    if nvccPath.len > 0:
+      nvccPath.parentDir().parentDir()
     elif dirExists("/usr/local/cuda"): "/usr/local/cuda"
     elif dirExists("/opt/cuda"): "/opt/cuda"
     else: ""

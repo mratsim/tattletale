@@ -93,7 +93,7 @@ proc sgemm_1_kernel(
     copyFrom(tBsB, tBgB(_, _, kTile))  # B (THR_N, THR_K) -> (THR_N, THR_K)
     syncthreads()                      # CuTe: wait for all threads to write smem
     # Compute: C += A * B
-    gemm(tCrC, tCsA, tCsB)             # (THR_M, THR_N) += (THR_M, BLK_K) × (THR_N, BLK_K)
+    gemm_fragment(tCrC, tCsA, tCsB)   # (THR_M, THR_N) += (THR_M, BLK_K) × (THR_N, BLK_K)
     syncthreads()                      # CuTe: wait for all threads to read smem
 
   # ── Epilogue ──

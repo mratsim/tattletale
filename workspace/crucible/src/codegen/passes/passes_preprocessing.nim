@@ -1001,16 +1001,20 @@ proc lowerPushConstantsImpl*(ctx: var GpuContext) =
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc lowerByrefParamsImpl*(ctx: var GpuContext; n: var GpuAst) =
-  ## Transforms passByRef parameters into ptr param + deref-init local.
-  ## For device functions: `const Type* _p_name` param + `Type name = *_p_name;` body init.
+  ## Transforms passByRef parameters into `const Type*` ptr params for OpenCL
+  ## (CUDA emits `const Type&` C++ references natively — no body changes there).
+  ## The large-struct optimization: structs >= 24 bytes are passed by hidden
+  ## const reference instead of by value (isLargeStruct), avoiding the call-site
+  ## copy.
   ##
   ## Symbol is a ref type shared between param and body idents. When we rename
   ## the param symbol from "t" to "_p_t", body idents also see "_p_t". Since
   ## _p_t is a pointer, we wrap each body ident in gpuDeref so `t.data[...]`
   ## becomes `(*_p_t).data[...]` (valid C for pointer-to-struct member access).
   ##
-  ## Then we prepend a local copy: `Type t = *_p_t;` so the original name "t"
-  ## is available as a local (though body refs already resolve through _p_t).
+  ## No local copy is prepended: body refs resolve through the pointer
+  ## (deref-wrap strategy) — a `Type t = *_p_t;` init would be dead code, since
+  ## every body ref is already deref-wrapped.
   proc wrapInDeref(body: var GpuAst; renamedSym: Symbol) =
     case body.kind
     of gpuIdent:
@@ -1196,7 +1200,7 @@ proc registerVulkanPasses*(reg: var PassRegistry) =
 proc registerOpenclPasses*(reg: var PassRegistry) =
   ## Register OpenCL-specific preprocessing passes.
   reg.register("lowerByrefParams", pkTransform, phaseMain,
-    "Transforms passByRef params to ptr+init-local pattern",
+    "Transforms passByRef params to const Type* ptrs (deref-wrapped body idents)",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       for fnKey in ctx.allFnTab.keys:

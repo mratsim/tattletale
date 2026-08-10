@@ -56,10 +56,10 @@ const
   DEVICE_TYPE_ALL*   = TDeviceType(0xFFFFFFFF)
   DEVICE_TYPE_GPU*   = TDeviceType(1 shl 2)
 
-  # Device info
-  DEVICE_NAME*             = Tdevice_info(0x102D)
-  DEVICE_VENDOR*           = Tdevice_info(0x102F)
-  DEVICE_VERSION*          = Tdevice_info(0x102C)
+  # Device info (values per /usr/include/CL/cl.h)
+  DEVICE_NAME*             = Tdevice_info(0x102B)
+  DEVICE_VENDOR*           = Tdevice_info(0x102C)
+  DEVICE_VERSION*          = Tdevice_info(0x102F)
   DEVICE_TYPE*             = Tdevice_info(0x1000)
 
   # Memory flags
