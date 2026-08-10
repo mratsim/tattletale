@@ -35,6 +35,12 @@ tests/codegen/
 
 **All tests MUST call `execute()`**, not just `getPtx()`/`compile()`. A compile check is not enough — it can produce valid CUDA that computes wrong results.
 
+**Run each test inside a `proc`** — blocks may separate sections within a proc, but a test made of only module-level `block`s (no proc) is a no-go. Never declare backend-resource objects (`NVRTC`, contexts, modules, OpenCL/Vulkan handles) at module scope via template helpers:
+- Nim templates do **NOT** scope `var` declarations — a `template runKernel(...) = var nv = initNvrtc(...)` expanded at module level keeps every `nv` alive until program exit.
+- CUDA contexts are expensive: one live context holds a large device-memory reservation that is only returned on destruction. N module-scope contexts can exhaust the GPU (`CUDA_ERROR_OUT_OF_MEMORY` on tiny allocs — see the `test_nvrtc_if_expr` fix).
+- A `proc` scopes its locals naturally: resources are released when the proc returns, so N kernels in one test file use one context at a time.
+- Module-scope `const` kernel sources are fine — only runtime objects (created via `initNvrtc`/`execOpenCL`/etc.) must be function-local.
+
 Exception: tests for backends not supported in the current environment. For those:
 1. Do a **sanity check** by inspecting the generated code text
 2. Report the run command to the user so they can execute it manually
