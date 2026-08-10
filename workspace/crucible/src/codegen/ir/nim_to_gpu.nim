@@ -703,10 +703,14 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
 
   of nnkCheckedFieldExpr:
     ## Case-object field access: Nim wraps it in a discriminant check
-    ## (`contains(kind, {...})`). The DSL's compile-time const records
-    ## fold the discriminant, and the check has no C representation, so
-    ## emit the field access directly.
-    result = ctx.toGpuAst(reg, node[0])
+    ## (`contains(kind, {...})`) which has no C representation. Case
+    ## objects have no place on the GPU — the atom records are
+    ## compile-time (const/static) and fold before reaching here; a
+    ## runtime case object would silently lose its memory-safety check.
+    ## Reject loudly.
+    error("nnkCheckedFieldExpr: case-object field access is not supported on GPU — " &
+          "the discriminant check cannot be emitted; only compile-time " &
+          "(const/static) case objects are supported", node)
 
   of nnkBracketExpr:
     case node[0].typeKind
