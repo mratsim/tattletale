@@ -67,10 +67,14 @@ import ./atoms
 #  The (T, V) fragment layout is the atom's (T, V) layout re-strided into
 #  the tile's col-major (see module doc).
 
-func partition_A*(mma: static TiledMma; tileM, tileK: static int): auto {.inline.} =
+func partition_A*(mma: static TiledMma; tileM, tileK: static int;
+                strideM: static int = 1, strideK: static int = -1): auto {.inline.} =
   ## A partition layout: ((T, V), (ThrM, ThrK), (RestM, RestK)) → tile
-  ## offset (m + k·tileM). T = threads per atom, V = registers per thread.
-  ## Thread coordinate for the (ThrM, ThrK) group: (tm, tk).
+  ## offset (m·strideM + k·strideK). T = threads per atom, V = registers
+  ## per thread. strideM/strideK are the OPERAND's strides — the default
+  ## (1, tileM) is col-major compact (strideK = -1 → tileM); pass the
+  ## operand's real strides to get layout-aware offsets (row-major etc.).
+  const sK = (if strideK == -1: tileM else: strideK)
   const atomM = mma.atom.mnk.m
   const atomK = mma.atom.mnk.k
   const thrM  = mma.threadLayout.shape[0]
@@ -81,7 +85,7 @@ func partition_A*(mma: static TiledMma; tileM, tileK: static int): auto {.inline
       ") != atom M·K (" & $atomM & "·" & $atomK & ") — the (T, V) layout must tile the operand"
   const unitM = thrM * atomM
   const unitK = thrK * atomK
-  let tileL = make_layout((tileM, tileK))
+  let tileL = make_layout((tileM, tileK), (strideM, sK))
   let ur = zipped_divide(tileL, (unitM, unitK))
   let ap = zipped_divide(mode(ur, 0), (atomM, atomK))
   # CuTe: a_tensor.compose(AtomLayoutA_TV, _) — the (T, V) layout
@@ -90,10 +94,13 @@ func partition_A*(mma: static TiledMma; tileM, tileK: static int): auto {.inline
   make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
               (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))
 
-func partition_B*(mma: static TiledMma; tileN, tileK: static int): auto {.inline.} =
+func partition_B*(mma: static TiledMma; tileN, tileK: static int;
+                strideN: static int = 1, strideK: static int = -1): auto {.inline.} =
   ## B partition layout: ((T, V), (ThrN, ThrK), (RestN, RestK)) → tile
-  ## offset (n + k·tileN). Thread coordinate for the (ThrN, ThrK) group:
-  ## (tn, tk).
+  ## offset (n·strideN + k·strideK). Thread coordinate for the (ThrN, ThrK)
+  ## group: (tn, tk). strideN/strideK are the OPERAND's strides (default
+  ## (1, tileN) = col-major compact, strideK = -1 → tileN).
+  const sK = (if strideK == -1: tileN else: strideK)
   const atomN = mma.atom.mnk.n
   const atomK = mma.atom.mnk.k
   const thrN  = mma.threadLayout.shape[1]
@@ -104,7 +111,7 @@ func partition_B*(mma: static TiledMma; tileN, tileK: static int): auto {.inline
       ") != atom N·K (" & $atomN & "·" & $atomK & ") — the (T, V) layout must tile the operand"
   const unitN = thrN * atomN
   const unitK = thrK * atomK
-  let tileL = make_layout((tileN, tileK))
+  let tileL = make_layout((tileN, tileK), (strideN, sK))
   let ur = zipped_divide(tileL, (unitN, unitK))
   let ap = zipped_divide(mode(ur, 0), (atomN, atomK))
   # CuTe: b_tensor.compose(AtomLayoutB_TV, _)
@@ -112,10 +119,13 @@ func partition_B*(mma: static TiledMma; tileN, tileK: static int): auto {.inline
   make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
               (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))
 
-func partition_C*(mma: static TiledMma; tileM, tileN: static int): auto {.inline.} =
+func partition_C*(mma: static TiledMma; tileM, tileN: static int;
+                strideM: static int = 1, strideN: static int = -1): auto {.inline.} =
   ## C partition layout: ((T, V), (ThrM, ThrN), (RestM, RestN)) → tile
-  ## offset (m + n·tileM). Thread coordinate for the (ThrM, ThrN) group:
-  ## (tm, tn).
+  ## offset (m·strideM + n·strideN). Thread coordinate for the (ThrM, ThrN)
+  ## group: (tm, tn). strideM/strideN are the OPERAND's strides (default
+  ## (1, tileM) = col-major compact, strideN = -1 → tileM).
+  const sN = (if strideN == -1: tileM else: strideN)
   const atomM = mma.atom.mnk.m
   const atomN = mma.atom.mnk.n
   const thrM  = mma.threadLayout.shape[0]
@@ -126,7 +136,7 @@ func partition_C*(mma: static TiledMma; tileM, tileN: static int): auto {.inline
       ") != atom M·N (" & $atomM & "·" & $atomN & ") — the (T, V) layout must tile the operand"
   const unitM = thrM * atomM
   const unitN = thrN * atomN
-  let tileL = make_layout((tileM, tileN))
+  let tileL = make_layout((tileM, tileN), (strideM, sN))
   let ur = zipped_divide(tileL, (unitM, unitN))
   let ap = zipped_divide(mode(ur, 0), (atomM, atomN))
   # CuTe: c_tensor.compose(AtomLayoutC_TV, _)
@@ -178,13 +188,35 @@ func get_slice*(tma: static TiledMma; threadIdx: int): ThrSlice {.inline.} =
 #  kept whole. The result is the thread's fragment view
 #  (V·, RestM, RestK) — offset inside the view, no linearization.
 
+
+template isStaticStride(st: typedesc): bool =
+  ## True iff the stride type is fully static (every leaf an Int[N]
+  ## compile-time constant). Dynamic (runtime-int) strides are rejected:
+  ## partition offsets are baked at compile time, so a runtime stride
+  ## cannot be honored.
+  when st is Int:
+    true
+  elif st is tuple:
+    typeof(default(st)[0]) is Int and typeof(default(st)[1]) is Int
+  else:
+    false
 func partition_A*[T, Sh, St](
     tma: static TiledMma; thr: ThrSlice;
     A: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
   ## The thread's A-fragment view (CuTe: thr_mma.partition_A(atensor)) —
   ## method-call syntax: `tma.partition_A(thr, A)`.
+  static:
+    doAssert isStaticStride(St),
+      "partition_A: dynamic strides unsupported — pass a static-layout view (the operand's" &
+      " strides are baked into the partition offsets at compile time)"
+    doAssert toIntVal(St.default[0]) == 1 and
+             toIntVal(St.default[1]) == toIntVal(Sh.default[0]),
+      "partition_A: operand must be col-major compact (stride (1, rows)) — row-major" &
+      " staging is not supported yet (fragment register order follows the atom layout;" &
+      " see the row-major staging GitHub issue)"
   const
-    pA = partition_A(tma, toIntVal(Sh.default[0]), toIntVal(Sh.default[1]))
+    pA = partition_A(tma, toIntVal(Sh.default[0]), toIntVal(Sh.default[1]),
+                     toIntVal(A.layout.stride[0]), toIntVal(A.layout.stride[1]))
     tshape = pA.shape[0][0]      # the atom's T-mode
     vshape = pA.shape[0][1]      # the atom's V-mode
     rshape = pA.shape[2]         # the (RestM, RestK) mode
@@ -199,8 +231,18 @@ func partition_B*[T, Sh, St](
     B: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
   ## The thread's B-fragment view (CuTe: thr_mma.partition_B(btensor)) —
   ## method-call syntax: `tma.partition_B(thr, B)`.
+  static:
+    doAssert isStaticStride(St),
+      "partition_B: dynamic strides unsupported — pass a static-layout view (the operand's" &
+      " strides are baked into the partition offsets at compile time)"
+    doAssert toIntVal(St.default[0]) == 1 and
+             toIntVal(St.default[1]) == toIntVal(Sh.default[0]),
+      "partition_B: operand must be col-major compact (stride (1, rows)) — row-major" &
+      " staging is not supported yet (fragment register order follows the atom layout;" &
+      " see the row-major staging GitHub issue)"
   const
-    pB = partition_B(tma, toIntVal(Sh.default[0]), toIntVal(Sh.default[1]))
+    pB = partition_B(tma, toIntVal(Sh.default[0]), toIntVal(Sh.default[1]),
+                     toIntVal(B.layout.stride[0]), toIntVal(B.layout.stride[1]))
     tshape = pB.shape[0][0]      # the atom's T-mode
     vshape = pB.shape[0][1]      # the atom's V-mode
     rshape = pB.shape[2]         # the (RestN, RestK) mode
@@ -215,8 +257,18 @@ func partition_C*[T, Sh, St](
     C: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
   ## The thread's C view (CuTe: thr_mma.partition_C(ctensor)) — method-call
   ## syntax: `tma.partition_C(thr, C)`.
+  static:
+    doAssert isStaticStride(St),
+      "partition_C: dynamic strides unsupported — pass a static-layout view (the operand's" &
+      " strides are baked into the partition offsets at compile time)"
+    doAssert toIntVal(St.default[0]) == 1 and
+             toIntVal(St.default[1]) == toIntVal(Sh.default[0]),
+      "partition_C: operand must be col-major compact (stride (1, rows)) — row-major" &
+      " staging is not supported yet (fragment register order follows the atom layout;" &
+      " see the row-major staging GitHub issue)"
   const
-    pC = partition_C(tma, toIntVal(Sh.default[0]), toIntVal(Sh.default[1]))
+    pC = partition_C(tma, toIntVal(Sh.default[0]), toIntVal(Sh.default[1]),
+                     toIntVal(C.layout.stride[0]), toIntVal(C.layout.stride[1]))
     tshape = pC.shape[0][0]      # the atom's T-mode
     vshape = pC.shape[0][1]      # the atom's V-mode
     rshape = pC.shape[2]         # the (RestM, RestN) mode
