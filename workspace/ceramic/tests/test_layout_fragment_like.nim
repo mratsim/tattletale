@@ -1,8 +1,8 @@
 ## make_fragment_like / make_fragment_A/B/C — layout-level tests
 ##
 ## Fragment construction (make_fragment_like/A/B) pins the V modes to the
-## atom's
-## register enumeration regardless of the operand's strides (make_layout_like
+## atom's register enumeration regardless of the operand's strides
+## (make_layout_like
 ## compacts by stride value across all modes, so a row-major operand would
 ## reorder V away from the hardware order — a1/a2 swap). make_fragment_like
 ## flattens the V leaves to (VA,):(1|0,) and compacts the rest modes by the
@@ -83,7 +83,7 @@ proc sec4() =
   doAssert size(aFrag) === size(fakeAv)
 
   # register-order pin: fill the partition view with a row-major A tile's
-  # values and check copyFrom lands them in ATOM register order.
+  # values and check copyFrom lands them in atom register order.
   # A[m·8+k] with A row-major (K=8, 1): element (m,k) = m*8 + k.
   # V enumeration for m16n8k8 tf32: (V0,V1) = (m/8, k/4) → regs
   # (0,0),(8,0),(0,4),(8,4) — flat v = v0 + 2·v1.
@@ -141,10 +141,33 @@ proc sec4b() =
   let cFrag = make_fragment_C(atom, fakeCv)
   doAssert mode(cFrag.layout, 0).stride === 1
 
+  # nested-V vShape (4 leaves ((2,2),(2,2))) — flattened to (16,):(1,)
+  const nestedV = ((2, 2), (2, 2))
+  let nestedLayout = make_layout((2, 2, 2, 2, 1, 2), (1, 2, 4, 8, 16, 32))
+  let nestedFrag = make_fragment_like(nestedLayout, nestedV)
+  doAssert mode(nestedFrag, 0).stride === 1
+  doAssert size(nestedFrag) === size(nestedLayout)
+
 # ── SECTION 5: rank-1 passthrough ──────────────────────────────────────────
 proc sec5() =
+  # compact rank-1 passthrough
   let r1 = make_fragment_like(make_layout(Int[4]()), Int[4])
   doAssert r1 === make_layout(Int[4]())
+  # broadcast rank-1 keeps stride-0 (SPEC-004)
+  let r1b = make_fragment_like(make_layout(Int[4](), Int[0]()), Int[4])
+  doAssert mode(r1b, 0).stride === 0
+  doAssert r1b === make_layout(Int[4](), Int[0]())
+
+# ── SECTION 5b: compile-time rejections (TEST-005) ─────────────────────────
+proc sec5b() =
+  # shape/stride rank mismatch
+  doAssert not compiles(make_fragment_like(make_layout((2, 2, 2), (1, 2)), Int[2]))
+  # V leaf count exceeds layout rank
+  const threeV = (2, 2, 2)
+  doAssert not compiles(make_fragment_like(make_layout((2, 2), (1, 2)), threeV))
+  # mixed broadcast/non-broadcast V leaves
+  const twoV = (2, 2)
+  doAssert not compiles(make_fragment_like(make_layout((2, 2, 2), (0, 2, 8)), twoV))
 
 sec1()
 sec2()
@@ -152,5 +175,6 @@ sec3()
 sec4()
 sec4b()
 sec5()
+sec5b()
 
 echo "OK: make_fragment_like / make_fragment_A/B tests passed"

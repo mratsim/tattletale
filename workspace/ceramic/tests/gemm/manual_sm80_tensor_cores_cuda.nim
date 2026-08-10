@@ -113,8 +113,5 @@ when isMainModule:
   testMicrotile(nv, atom, "SM80")
   # Row-major operands are not exercised here: partition_A/B/C's thread
   # (T-mode) offsets collapse for row-major views (col-major thread-1
-  # offset 16 vs row-major 1 — all threads read nearly the same data), a
-  # pre-existing bug in the partition's coordinate composition. The
-  # fragment layer itself is correct (GPU dumps match A[m·8+k]); the
-  # partition fix and the row-major acceptance test are tracked as a
-  # follow-up.
+  # offset 16 vs row-major 1 — all threads read nearly the same data).
+  # The row-major acceptance test is tracked as a follow-up.

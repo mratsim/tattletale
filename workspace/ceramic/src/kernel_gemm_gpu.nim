@@ -120,7 +120,7 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
   ##        (make_fragment_A) — V flattened to the atom register order;
   ##        RestM·RestK = the k-slices; gemm_fragment reads data[k·VA+i]
   ##        with k the rest-block index.
-  ##   bFrag: owning tensor, same shape convention (VB, RestM, RestK)
+  ##   bFrag: owning tensor, same shape convention (VB, RestN, RestK)
   ##
   ## K = number of k-slices (each of the atom's K depth), read from the
   ## tensor shape along with VA/VB. Each k-slice is copied into a local
@@ -209,7 +209,7 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   ##
   ## Computes the tile C = α·(A·B) + β·C with BLK_M = ThrM·atomM and
   ## BLK_N = ThrN·atomN. The K dimension is split into BLK_K-element
-  ## k-blocks; each block is staged gmem → registers (aFragBlock /
+  ## k-blocks; each block is gathered gmem → registers (aFragBlock /
   ## bFragBlock) and accumulated into a zero-cleared internal cFrag via
   ## gemm_ukernel. A fused epilogue applies α·cFrag + β·C. No smem, no
   ## TMA, no tile-origin logic — the caller bakes the origin into the

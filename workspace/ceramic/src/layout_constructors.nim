@@ -334,7 +334,7 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
   ##   row-major operand          →  same V order (make_layout_like would
   ##     reorder V after a fast rest mode and scramble the registers)
   ##   broadcast V (stride-0)     →  (VA,):(0,)
-  # Shape/stride TYPE extraction with aliased-type support — same
+  # Shape/stride type extraction with aliased-type support — same
   # getTypeInst → nnkObjectTy path as make_layout_like (layoutTypeArgs'
   # aliased branch returns raw literal arg types, wrong for typeIntVal).
   let lTyp = layout.getTypeInst()
@@ -369,16 +369,21 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
       error "make_fragment_like: dynamic shapes unsupported — static layout required"
 
   if n == 1:
-    # CuTe: rank-1 → plain compact (stride-1). Note: emit as Int[N]() —
-    # a single-element tuple literal (4,) flattens to the scalar 4 in
-    # typed argument position, breaking makeIntTuple.
+    # CuTe: rank-1 → plain compact (stride-1); broadcast (stride-0) keeps
+    # stride-0. Note: emit as Int[N]() — a single-element tuple literal
+    # (4,) flattens to the scalar 4 in typed argument position, breaking
+    # makeIntTuple.
     let shNode = newLit(typeIntVal(shLeaves[0]))
-    result = quote do:
-      make_layout(Int[`shNode`]())
+    if typeIntVal(stLeaves[0]) == 0:
+      result = quote do:
+        make_layout(Int[`shNode`](), Int[0]())
+    else:
+      result = quote do:
+        make_layout(Int[`shNode`]())
     return
 
   # ── V part: first vLeafCount leaves — flattened to (VA,):(1|0,) ──
-  # vShape is the V shape VALUE (e.g. mma.aLayout.shape[1]) — its static
+  # vShape is the V shape value (e.g. mma.aLayout.shape[1]) — its static
   # type tells the macro how many leading leaves are V. untyped keeps the
   # argument unevaluated: the macro expands at compile time, so crucible
   # only ever sees the emitted layout.
@@ -403,6 +408,16 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
       vAllNonZero = false
     else:
       vAllZero = false
+  # vShape value check: the vShape argument's leaf values must match the
+  # layout's leading V leaves — a wrong-but-in-range vShape (e.g. a sibling
+  # operand's V shape) would otherwise silently misbuild the fragment.
+  let vShapeLeafTys = flattenType(vShapeInner)
+  for i in 0 ..< vLeafCount:
+    let vsv = typeIntVal(vShapeLeafTys[i])
+    if vsv != DynamicSentinel:
+      doAssert vsv == vShapeVals[i],
+        "make_fragment_like: vShape leaf " & $i & " value " & $vsv &
+        " != layout V leaf " & $vShapeVals[i]
   doAssert vAllZero or vAllNonZero,
     "make_fragment_like: mixed broadcast/non-broadcast V leaves unsupported —" &
     " a flattened (VA,):(1,) V block cannot represent a partially broadcast" &
@@ -454,7 +469,3 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
 
   result = quote do:
     make_layout(`outSh`, `outSt`)
-
-
-
-
