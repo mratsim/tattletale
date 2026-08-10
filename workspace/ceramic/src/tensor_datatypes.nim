@@ -25,6 +25,12 @@ type
     data*: ptr UncheckedArray[T]
     layout*: Layout[Sh, St]
 
+type AnyTensor*[T, Sh, St] = TensorView[T, Sh, St] or Tensor[T, Sh, St]
+  ## Any tensor — owning `Tensor` or non-owning `TensorView` with matching
+  ## element type and shape/stride tuple types. Shorthand for the
+  ## `TensorView[...] or Tensor[...]` union used throughout the kernel
+  ## signatures (fragments and gmem operands arrive as either).
+
 # ═════════════════════════════════════════════════════════════════════════
 #  Constructors
 # ═════════════════════════════════════════════════════════════════════════

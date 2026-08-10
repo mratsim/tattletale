@@ -137,7 +137,7 @@ macro repeat(elem: typed, n: static int): untyped =
 #  CuTe: tensor_impl.hpp — zipped_divide + slice_and_offset
 # ═════════════════════════════════════════════════════════════════════════
 
-template inner_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
+template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Keep tile modes, slice rest modes with coord.
   ## CuTe: zipped_divide(tensor, tiler)(repeat<R0>(_), append<R1>(coord, _))
   block:
@@ -153,7 +153,7 @@ template inner_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed):
       evalOnceAs subLayout, make_layout(zd.shape[0], zd.stride[0])
       make_view(tv.data +% toIntVal(offset), subLayout)
 
-template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
+template outer_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Slice tile modes with coord, keep rest modes.
   ## CuTe: zipped_divide(tensor, tiler)(append<R0>(coord, _), repeat<R1>(_))
   block:
@@ -169,12 +169,12 @@ template outer_partition*(tv: TensorView or Tensor; tiler: typed; coord: typed):
       evalOnceAs subLayout, make_layout(zd.shape[1], zd.stride[1])
       make_view(tv.data +% toIntVal(offset), subLayout)
 
-template local_tile*(tv: TensorView or Tensor; tiler: typed; coord: typed): untyped =
+template local_tile*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Alias for inner_partition — select a single tile.
   ## CuTe: local_tile = inner_partition
   inner_partition(tv, tiler, coord)
 
-template local_tile*(tv: TensorView or Tensor; tiler, coord, proj: typed): untyped =
+template local_tile*(tv: AnyTensor; tiler, coord, proj: typed): untyped =
   ## 4-arg local_tile with projection — strips unwanted modes before partitioning.
   ## CuTe: local_tile(tensor, tiler, coord, proj) =
   ##   local_tile(tensor, dice(proj, tiler), dice(proj, coord))
@@ -185,7 +185,7 @@ template local_tile*(tv: TensorView or Tensor; tiler, coord, proj: typed): untyp
     evalOnceAs pc, dice(c, proj)
     local_tile(tv, pt, pc)
 
-template local_partition*(tv: TensorView or Tensor; tile: Layout; idx: int or Int): untyped =
+template local_partition*(tv: AnyTensor; tile: Layout; idx: int or Int): untyped =
   ## 3-arg local_partition — select tile by index within a thread layout.
   ## CuTe: local_partition = outer_partition with product_each(tile.shape)
   block:
@@ -194,7 +194,7 @@ template local_partition*(tv: TensorView or Tensor; tile: Layout; idx: int or In
     evalOnceAs coord, idx2crd(thrLayout, idx)
     outer_partition(tv, tiler, coord)
 
-template local_partition*(tv: TensorView or Tensor; tile: Layout; idx: int or Int; proj: typed): untyped =
+template local_partition*(tv: AnyTensor; tile: Layout; idx: int or Int; proj: typed): untyped =
   ## 4-arg local_partition with projection — strip unwanted modes before partitioning.
   ## CuTe: local_partition(tensor, tile, index, proj) =
   ##   local_partition(tensor, dice(proj, tile), index)

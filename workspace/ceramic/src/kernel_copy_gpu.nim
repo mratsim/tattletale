@@ -32,7 +32,7 @@ template copyFrom*[T, ShA, StA, ShB, StB](
 
 template copyFrom*[T, ShA, StA, ShB, StB](
     dst: var Tensor[T, ShB, StB];
-    src: TensorView[T, ShA, StA] or Tensor[T, ShA, StA]) =
+    src: AnyTensor[T, ShA, StA]) =
   ## Owning-tensor dst form — the fragment tensors (make_fragment_A/B,
   ## make_tensor/make_tensor_like). The flat-index `dst(i) = src(i)` is
   ## coordinate semantics: crd2idx decodes `i` through each tensor's own
