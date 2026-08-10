@@ -89,6 +89,39 @@ block:
 echo "  [OK] idx2crd: 24 elements roundtrip"
 
 # ═══════════════════════════════════════════════════════════════
+#  idx2crd(shape, idx) — shape-based (valid for non-compact shapes)
+# ═══════════════════════════════════════════════════════════════
+
+block:
+  # flat index → coord over the SHAPE (first mode fastest), no stride use
+  doAssert idx2crd((4, 8), 31) === (3, 7)
+  doAssert idx2crd((4, 8), 5) === (1, 1)
+  doAssert idx2crd((2, 2), 3) === (1, 1)
+  doAssert idx2crd(2, 1) === 1
+  # nested shape: recursive per-mode split
+  doAssert idx2crd(((4, 8), (2, 2)), 31) === ((3, 7), (0, 0))
+  # roundtrip with crd2idx over the shape (compact basis)
+  let sh = (3, 4)
+  for i in 0 ..< 12:
+    let crd = idx2crd(sh, i)
+    doAssert crd2idx(crd, sh, (1, 3)) == i, "shape idx2crd roundtrip " & $i
+
+echo "  [OK] idx2crd(shape, idx): shape-based decomposition"
+
+# ═══════════════════════════════════════════════════════════════
+#  idx2crd(layout, idx) — stride-based: NON-compact layouts are NOT the
+#  inverse of crd2idx (CuTe documents the same restriction on its 3-arg
+#  idx2crd(i, shape, stride)) — documented, so use the shape overload.
+# ═══════════════════════════════════════════════════════════════
+
+block:
+  let n = make_layout((4, 8), (16, 1))   # atom T-mode structure, gaps
+  # flat 31 over the shape is (3, 7); the stride-based decomposition
+  # gives (1, 7) and does not roundtrip — the documented compact-only case
+  doAssert idx2crd(n, 31) === (1, 7)
+  doAssert crd2idx(n, idx2crd(n, 31)).toIntVal() != 31
+
+# ═══════════════════════════════════════════════════════════════
 #  idx2crd — specific coordinate tests (commented: == on Int[N] blocked)
 # ═══════════════════════════════════════════════════════════════
 

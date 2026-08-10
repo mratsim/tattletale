@@ -68,6 +68,13 @@ template crd2idx*(layout: Layout; coord: IntOrIntTuple): auto =
 macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
   ##
+  ## STRIDE-BASED: `(idx div stride) mod shape` per mode — only valid for
+  ## COMPACT (contiguous) layouts, matching CuTe's 3-arg
+  ## `idx2crd(i, shape, stride)` which documents the same restriction
+  ## ("This only works for compact shape+stride layouts"). For
+  ## non-compact shapes (e.g. the atom fragment (T, V) modes) use the
+  ## shape-based overload `idx2crd(shape, idx)`.
+  ##
   ##   Cases for `(idx, shape, stride)`:
   ##     shape == 1, stride == 0   →   0  (broadcast — skip division)
   ##     shape == 1, stride != 0   →   0  (size-1 — result always 0)
@@ -77,8 +84,7 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## The guard on `shape == 1` matches CuTe's `is_constant<1, Shape>`
   ## check and handles both broadcast modes and trivial dimensions,
   ## avoiding potential division-by-zero on stride-0.
-  let lTyp = layout.getTypeInst()
-  let shT = lTyp[1]
+  let shT = layoutTypeArgs(layout).shapeTy
   let sh = newTree(nnkDotExpr, layout, ident"shape")
   let st = newTree(nnkDotExpr, layout, ident"stride")
   if shT.kind != nnkTupleConstr:
@@ -110,6 +116,55 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
         else:
           (`idx` div `s`) mod `shI`
     result = nnkPar.newTree(parts)
+
+# ═══════════════════════════════════════════════════════════════
+#  idx2crd(shape, idx) — shape-based decomposition
+# ═══════════════════════════════════════════════════════════════
+
+proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
+                     prefix: NimNode): NimNode =
+  ## Decompose `idxExpr` over the shape type `shTy`; `prefix` is the
+  ## product of the preceding sibling modes' sizes. `value` is the shape
+  ## value expression at the current nesting depth (shape[i0][i1]…).
+  ## Module-level (not nested in the macro): a nested proc breaks
+  ## macro-time emission.
+  if shTy.kind in {nnkTupleTy, nnkTupleConstr}:
+    var parts: seq[NimNode] = @[]
+    var p = prefix
+    for i in 0 ..< shTy.len:
+      let subValue = newCall(bindSym"[]", value, newLit(i))
+      let mSize = newCall(bindSym"product", subValue)
+      let mIdx = newCall(bindSym"mod", newCall(bindSym"div", idxExpr, p), mSize)
+      parts.add emitShapeDecomp(subValue, shTy[i], mIdx, newLit(1))
+      p = newCall(bindSym"*", p, mSize)
+    nnkPar.newTree(parts)
+  else:
+    idxExpr  # scalar leaf: the mod was applied by the parent
+
+macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
+  ## Decompose a flat index into a coordinate over SHAPE — colexicographic
+  ## over the shape's leaf sizes (first mode fastest):
+  ##   c0 = (idx div 1)        mod s0
+  ##   c1 = (idx div s0)       mod s1
+  ##   c2 = (idx div (s0·s1))  mod s2
+  ## ...
+  ## Nested shapes decompose recursively: each mode's flat index is split
+  ## by that mode's own sub-shape.
+  ##
+  ## Valid for ANY shape (compact or not) — unlike `idx2crd(layout, idx)`,
+  ## which is stride-based and compact-only. Matches CuTe's 2-arg
+  ## `idx2crd(i, shape)` and tensor-layouts' `idx2crd(coord, shape)`.
+  ##
+  ## Examples:
+  ##   idx2crd((4, 8), 31)            == (3, 7)
+  ##   idx2crd(((4, 8), (2, 2)), 31)  == ((3, 7), (0, 0))
+  ##   idx2crd(2, 1)                  == 1
+  let shT = shape.getTypeInst()
+  if shT.kind in {nnkTupleTy, nnkTupleConstr}:
+    result = emitShapeDecomp(shape, shT, idx, newLit(1))
+  else:
+    # scalar shape: idx mod shape
+    result = newCall(bindSym"mod", idx, shape)
 
 # ═══════════════════════════════════════════════════════════════
 #  Slice and dice — marker-based dimension selection

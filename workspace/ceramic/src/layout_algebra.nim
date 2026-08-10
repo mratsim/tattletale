@@ -132,10 +132,6 @@ func coalesce*(layout: Layout): auto {.inline, noInit.} =
     flatten(layout.stride)
   )
 
-func coalesce*(layout: static Layout): static Layout {.inline, noInit.} =
-  ## Static overload: preserves constness for compile-time Layout values.
-  coalesce(layout)
-
 func coalesce_preserve_trailing(layout: Layout): auto {.inline, noInit.} =
   ## Like `coalesce` but preserves trailing size-1 modes (e.g. stride-0 broadcasts).
   ## Mirrors CuTe's `coalesce_x`: seeds backward coalescence with `low(int)`
@@ -230,19 +226,38 @@ proc complementScalar(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
 # ═══════════════════════════════════════════════════════════════
 
 proc complementGaps(
-    strides, shapes: seq[int]; boundExpr: NimNode): LayoutCT {.compileTime.} =
-  ## Build full complement LayoutCT (gap modes + remainder).
+    strides, shapes: seq[int]; shNode, boundExpr: NimNode): LayoutCT {.compileTime.} =
+  ## Build full complement LayoutCT (gap modes + remainder), folding over
+  ## modes in ascending-stride order: each mode contributes a gap mode
+  ## (stride div cur, cur) and advances cur = stride * shape. Runtime
+  ## shapes advance cur with a runtime expression — the fold continues
+  ## past them. Statically-1 modes are skipped; runtime modes are
+  ## appended unconditionally.
   var cur = 1
+  var curNode: NimNode = IntCT(1)
+  var curStatic = true
   result = LayoutCT()
   for idx in getIndicesSortedByStride(strides):
-    let gap = if strides[idx] > cur: strides[idx] div cur else: 1
-    if gap > 1:
-      result.append(IntCT(gap), IntCT(cur))
+    if curStatic:
+      let gap = if strides[idx] > cur: strides[idx] div cur else: 1
+      if gap > 1:
+        result.append(IntCT(gap), IntCT(cur))
+    else:
+      # cur is a runtime expression — the gap cannot be proven statically,
+      # so it is emitted unconditionally.
+      result.append(newCall(bindSym"div", IntCT(strides[idx]), curNode), curNode)
     if shapes[idx] == DynamicSentinel:
-      break
-    cur = strides[idx] * shapes[idx]
-  let rem = newCall(bindSym"ceil_div", boundExpr, IntCT(cur))
-  result.append(rem, IntCT(cur))
+      # runtime shape: cur becomes a runtime expression
+      curNode = newCall(bindSym"*", IntCT(strides[idx]),
+                        newTree(nnkBracketExpr, shNode, newLit(idx)))
+      curStatic = false
+    else:
+      # static shape: cur folds back to Int[N]
+      cur = strides[idx] * shapes[idx]
+      curNode = IntCT(cur)
+      curStatic = true
+  let rem = newCall(bindSym"ceil_div", boundExpr, curNode)
+  result.append(rem, curNode)
 
 proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
   ## Multi-mode complement: sort by stride, fold to fill gaps.
@@ -259,7 +274,7 @@ proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
 
   let strides = toSeqStaticInts(stTyp)
   let shapes  = toSeqStaticInts(shTyp)
-  let acc = complementGaps(strides, shapes, boundExpr)
+  let acc = complementGaps(strides, shapes, sh, boundExpr)
   newCall(bindSym"coalesce", acc.emit())
 
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
@@ -343,6 +358,19 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 ##
 ##            (fold(make_seq<R-1>{}, ...) + append remainder)
 
+func unwrap(t: tuple): auto {.inline.} =
+  ## CuTe's `unwrap`: collapse a single-element tuple to its scalar so a
+  ## composed single-mode result stays scalar (CuTe's composition_impl
+  ## does `Layout{unwrap(result_shape), unwrap(result_stride)}`);
+  ## multi-element tuples pass through unchanged. Without this, every
+  ## composed leaf comes out as a rank-1 1-tuple `(4,)` and mode
+  ## collection nests them as `((4,), (8,))` instead of CuTe's flat
+  ## `(4, 8)`.
+  when rank(t) == 1:
+    t[0]
+  else:
+    t
+
 func buildStride(t: tuple; s: int or Int, idx: static int = 0): auto {.inline.} =
   # Broadcast helper: multiply each element of tuple t by scalar s
   # Builds concat(t[0]*s, concat(t[1]*s, ... ())) at compile time
@@ -390,10 +418,10 @@ func composeImpl(
       when remainingShape is Int and typeof(remainingShape) is Int[1] and rank(accShapes) != 0: true
       else: false
     when skipLast:
-      make_layout(accShapes, accStrides)
+      make_layout(unwrap(accShapes), unwrap(accStrides))
     else:
-      make_layout(concat(accShapes, remainingShape),
-                  concat(accStrides, remainingStride * lhsStrides[modeIdx]))
+      make_layout(unwrap(concat(accShapes, remainingShape)),
+                  unwrap(concat(accStrides, remainingStride * lhsStrides[modeIdx])))
   else:
     ## Fold step for mode `modeIdx` (0 ≤ modeIdx < R-1).
     let currShape  = lhsShapes[modeIdx]

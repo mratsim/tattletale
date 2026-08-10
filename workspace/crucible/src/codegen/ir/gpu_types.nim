@@ -7,6 +7,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std / [tables, sets, hashes, strutils, strformat]
+import std/macros
 
 type
   BackendKind* = enum
@@ -287,6 +288,9 @@ type
   GpuProcSignature* = object
     params*: seq[GpuParam]
     retType*: GpuType
+    staticParamPositions*: seq[int] = @[] ## original arg-order positions of dropped
+                                        ## static VALUE params (compile-time only,
+                                        ## no CUDA value — see parseProcParameters)
 
   GpuContext* = object
     ## XXX: need table for generic invocations. Then when we encounter a type, need to map to

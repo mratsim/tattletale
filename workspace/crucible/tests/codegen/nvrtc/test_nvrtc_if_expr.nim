@@ -15,7 +15,10 @@ import workspace/crucible/src/codegen/nvrtc
 
 # ── Helper: compile kernel and run ──────────────────────────────────
 
-template runKernel(kernelCode: string; buf: var auto; kernelName: string) =
+proc runKernel(kernelCode: string; buf: var auto; kernelName: string) =
+  ## Compile + run one kernel. A proc so the NVRTC object (CUDA context +
+  ## module) is released per call — templates do not scope `var` at module
+  ## level, which would keep every context alive until program exit.
   var nv = initNvrtc(kernelCode)
   nv.compile()
   nv.getPtx()

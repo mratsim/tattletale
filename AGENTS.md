@@ -19,14 +19,29 @@ nim install_deps_dev      # dev: zip (vendor libtorch), chronos (download test t
 
 ### Tests
 
+All test tasks come from `config.nims` (`nim <task>` from this dir).
+Each task scans a `tests/` dir for files named `test_*` or `t_*` and compiles
+them with `nim c` (C backend) into `build/tests/<file>` — non-recursive,
+so GPU tests in `tests/gpu/` subdirs are NOT picked up (run those directly).
+
 ```bash
 nim test_libtorch
 nim test_safetensors
 nim test_transformers
 nim test_toktoktok
+nim test_ceramic
+nim test_crucible_nvrtc
+nim test_crucible_opencl
+nim test_crucible_vulkan
+nim test_crucible_webgpu
 ```
 
+GPU-backed tasks (test_crucible_nvrtc / _opencl and the
+workspace/ceramic/tests/gemm manual_* tests) require a CUDA GPU with
+compute capability ≥ 12.0 (sm_120) and fail loudly (quit(1)) without one.
+
 Single file:
+
 ```bash
 nim cpp -r --verbosity:0 --hints:off --warnings:off \
   --outdir:build/tests/test_name --nimcache:nimcache/tests/test_name \
