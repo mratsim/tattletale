@@ -20,6 +20,7 @@ import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/atoms
 import workspace/ceramic/src/kernel_gemm/atoms_nvidia
 import workspace/ceramic/src/kernel_gemm_gpu
+import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible/src/codegen/cl
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -100,39 +101,20 @@ proc runMicrotile(A, B: openArray[uint32]): seq[float32] =
   bBuf.dealloc()
   cBuf.dealloc()
 
-func tf32ify(x: float32): uint32 =
-  ## f32 → tf32 bit pattern: truncate the low 13 mantissa bits.
-  ## For small-integer inputs the mantissa is zero → exact.
-  (cast[uint32](x)) and 0xFFFFE000'u32
-
-proc tf32Reference(C: var openArray[float32],
-                   A: openArray[uint32], B: openArray[uint32]) =
-  ## C[m,n] = Σ_k tf32(A[m,k]) · tf32(B[n,k]) — exact for small ints.
-  for m in 0 ..< 16:
-    for n in 0 ..< 8:
-      var sum = 0.0'f32
-      for k in 0 ..< 8:
-        let av = cast[float32](A[m + k * 16])
-        let bv = cast[float32](B[n + k * 8])
-        sum = sum + av * bv
-      C[m + n * 16] = sum
-
 when isMainModule:
   var rng = initRand(0xC0FFEE)
   for trial in 0 ..< 16:
-    var A = newSeq[uint32](16 * 8)
-    var B = newSeq[uint32](8 * 8)
-    for i in 0 ..< A.len:
-      A[i] = tf32ify(float32(rng.rand(0 .. 15)))
-    for i in 0 ..< B.len:
-      B[i] = tf32ify(float32(rng.rand(0 .. 15)))
+    let A = tf32Fixture(rng, 16, 8)
+    let B = tf32Fixture(rng, 8, 8)
 
     var refC = newSeq[float32](16 * 8)
-    refC.tf32Reference(A, B)
+    tf32Reference(refC, A, B, 16, 8, 8, 0.0'f32)
 
     let gpuC = runMicrotile(A, B)
+    # exact == (not allClose): the fixture domain is exact-representable, so
+    # the OpenCL path must match the reference bit-for-bit
     for j in 0 ..< 16 * 8:
       doAssert gpuC[j] == refC[j],
         &"trial {trial} [{j mod 16},{j div 16}]: gpu {gpuC[j]} != ref {refC[j]}"
 
-  echo "  OK — m16n8k8 tf32 microtile bit-exact via OpenCL (16 trials)"
+  echo "  OK — m16n8k8 tf32 microtile bit-exact vs reference via OpenCL (tf32-exact fixture, 16 trials)"
