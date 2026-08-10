@@ -54,22 +54,20 @@ proc allClose*(testC, refC: openArray[float32];
                M, N: int;
                context: string;
                relTol = 1e-4'f32; absTol = 1e-4'f32) =
-  ## Element-wise comparison with relative + absolute tolerance (numpy
-  ## allclose semantics, experiment_testutils convention) — loud doAssert on
-  ## the first failure, max errors echoed at the end.
-  var maxRelErr: float32 = 0.0'f32
+  ## Element-wise numpy.allclose check: |test - ref| <= absTol + relTol·|ref|
+  ## (single condition, NaN never equal) — loud doAssert on the first
+  ## failure. Defaults are loose for the tf32/fmaf oracle domain; the gemm
+  ## tests are bit-exact, tighten per test if needed.
   var maxAbsErr: float32 = 0.0'f32
   for m in 0 ..< M:
     for n in 0 ..< N:
       let refVal = refC[m + n * M]
       let testVal = testC[m + n * M]
       let absErr = abs(testVal - refVal)
-      let relErr = absErr / max(1.0'f32, abs(refVal))
-      if relErr > maxRelErr: maxRelErr = relErr
       if absErr > maxAbsErr: maxAbsErr = absErr
-      doAssert relErr <= relTol and absErr <= absTol,
-        &"{context} [{m},{n}]: got {testVal}, expected {refVal}, absErr={absErr}, relErr={relErr}"
-  echo &"    PASS (maxRelErr={maxRelErr:.2e}, maxAbsErr={maxAbsErr:.2e})"
+      doAssert absErr <= absTol + relTol * abs(refVal),
+        &"{context} [{m},{n}]: got {testVal}, expected {refVal}, absErr={absErr}"
+  echo &"    PASS (maxAbsErr={maxAbsErr:.2e})"
 
 
 # ═════════════════════════════════════════════════════════════════════════

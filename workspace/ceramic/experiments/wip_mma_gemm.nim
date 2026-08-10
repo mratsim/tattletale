@@ -116,6 +116,10 @@ proc tf32Reference(C: var openArray[float32],
 
 when isMainModule:
   var rng = initRand(0xC0FFEE)
+  # the kernel source is a module-level const — compile once, execute per trial
+  var nv = initNvrtc(kernelCode)
+  nv.compile()
+  nv.getPtx()
   for trial in 0 ..< 16:
     var A = newSeq[uint32](16 * 8)
     var B = newSeq[uint32](8 * 8)
@@ -128,9 +132,6 @@ when isMainModule:
     refC.tf32Reference(A, B)
 
     var gpuC = newSeq[float32](16 * 8)
-    var nv = initNvrtc(kernelCode)
-    nv.compile()
-    nv.getPtx()
     nv.execute("mmaGemm16x8x8", dim3(1), dim3(32), gpuC, (A, B))
 
     for j in 0 ..< 16 * 8:

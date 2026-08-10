@@ -138,6 +138,13 @@ when isMainModule:
   const N = 16
   const K = 32
   var rng = initRand(0xBEEF)
+  # kernel source + launch geometry are loop-invariant — compile once
+  let m32 = int32(M)
+  let n32 = int32(N)
+  let k32 = int32(K)
+  var nv = initNvrtc(kernelCode)
+  nv.compile()
+  nv.getPtx()
   for trial in 0 ..< 16:
     var A = newSeq[uint32](M * K)
     var B = newSeq[uint32](N * K)
@@ -148,12 +155,6 @@ when isMainModule:
     refC.tf32Reference(A, B, M, N, K)
 
     var gpuC = newSeq[float32](M * N)
-    let m32 = int32(M)
-    let n32 = int32(N)
-    let k32 = int32(K)
-    var nv = initNvrtc(kernelCode)
-    nv.compile()
-    nv.getPtx()
     nv.execute("mmaGemmTiled", dim3(1), dim3(128), gpuC, (A, B, m32, n32, k32))
 
     for j in 0 ..< M * N:

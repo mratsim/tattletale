@@ -18,15 +18,18 @@ import ./int_tuples
 import ./layouts
 import ./tensors
 
-template axpby*[T, ShX, StX, ShY, StY](
+func axpby*[T, ShX, StX, ShY, StY](
     alpha: T,
     X: TensorView[T, ShX, StX] or Tensor[T, ShX, StX],
     beta: T,
-    Y: var (TensorView[T, ShY, StY] or Tensor[T, ShY, StY])) =
+    Y: var (TensorView[T, ShY, StY] or Tensor[T, ShY, StY])) {.inline.} =
   ## Y = α·X + β·Y   (element-wise)
   ## Parameter order: `axpby` → alpha, X, beta, Y
   ## CuTe: axpby(alpha, x, beta, y)
-  ## Acceptable on GPU, slow on CPU.
+  ##
+  ## A func (not a template): alpha/beta are evaluated once, and the
+  ## element loop is branch-free per call (the scale-factor dispatch is
+  ## hoisted out — ex02a_matmul_handtuned's genEpilogue pattern).
   ##
   ## X and Y are zipped by their common logical size — each is indexed
   ## through its own layout (CuTe: zip(x, y) then elementwise). This is
@@ -40,12 +43,17 @@ template axpby*[T, ShX, StX, ShY, StY](
   ##     a NaN-prefilled C stays untouched, mirroring the β=0 skip-read)
   ##   alpha == 1 → the α multiply is skipped
   ##   beta == 1 → the β multiply is skipped
-  for i in 0 ..< size(Y.layout):
-    if beta == 0.0'f32:
+  ##   (when alpha == 1 and beta == 1 both hold, the alpha == 1 branch
+  ##   wins — the result is identical)
+  if beta == T(0):
+    for i in 0 ..< size(Y.layout):
       Y(i) = alpha * X(i)
-    elif alpha == 1.0'f32:
+  elif alpha == T(1):
+    for i in 0 ..< size(Y.layout):
       Y(i) = X(i) + beta * Y(i)
-    elif beta == 1.0'f32:
+  elif beta == T(1):
+    for i in 0 ..< size(Y.layout):
       Y(i) = alpha * X(i) + Y(i)
-    else:
+  else:
+    for i in 0 ..< size(Y.layout):
       Y(i) = alpha * X(i) + beta * Y(i)
