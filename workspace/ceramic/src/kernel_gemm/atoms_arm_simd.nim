@@ -21,6 +21,15 @@ const ARM_NEON_SDOT_8x8x4* = MmaAtom[NoLayout, NoLayout, NoLayout](
     conversionPoint: cpPerBlock,
   )
 
+static:
+  # Accumulator-lane cross-check (RID HPC-A-006): the C tile holds
+  # m·n i32 accumulators; each NEON q-register holds 4 lanes, so the
+  # per-row vector-register count must be n div 4. (nbScalars is a
+  # preparation field for the SIMD emitter — meaning varies per ISA,
+  # not asserted.)
+  doAssert ARM_NEON_SDOT_8x8x4.nbVecsNr == ARM_NEON_SDOT_8x8x4.mnk.n div 4,
+    "SDOT: nbVecsNr != n div 4 (NEON lanes)"
+
 const ARM_I8MM_16x16x8* = MmaAtom[NoLayout, NoLayout, NoLayout](
     name: "ARM_I8MM_16x16x8",
     mnk: (m: 16, n: 16, k: 8),
@@ -31,3 +40,7 @@ const ARM_I8MM_16x16x8* = MmaAtom[NoLayout, NoLayout, NoLayout](
     isa: siI8MM, nbScalars: 16, nbVecsNr: 4,
     conversionPoint: cpPerBlock,
   )
+
+static:
+  doAssert ARM_I8MM_16x16x8.nbVecsNr == ARM_I8MM_16x16x8.mnk.n div 4,
+    "I8MM: nbVecsNr != n div 4 (NEON lanes)"

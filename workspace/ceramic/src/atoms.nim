@@ -66,7 +66,7 @@ type
   MmaAtomKind* = enum
     bkGPU_TensorCore ## NVIDIA mma.sync / AMD MFMA+WMMA / Intel Xe DPAS — register-resident
     bkCPU_X86_AMX    ## Intel AMX: CPU tensor core — TILECFG + tmm tile registers
-    bkCPU_SIMD       ## SIMD ukernels (laser-style): dpbusd/dpbssd, SDOT/i8mm, FMA
+    bkCPU_SIMD       ## SIMD ukernels: dpbusd/dpbssd, SDOT/i8mm, FMA
     bk_FMA           ## universal scalar FMA — the (1,1,1) atom; every multiply goes through it
 
   MmaOperand* = enum
@@ -111,8 +111,14 @@ type
       scaleVec*: ScaleVec                  ## GPU-only operand packing; AMX sets smNone/smSoftware
     of bkCPU_SIMD:
       isa*: SimdIsa
-      nbScalars*: int                      ## scalar registers per thread (laser: mr×nr for f32)
-      nbVecsNr*: int                       ## vector registers per thread along N
+      nbScalars*: int                      ## scalar count per vector register row —
+                                        ## semantics vary per ISA (AVX512/VNNI: 16 =
+                                        ## one zmm; NEON: 8/16 = one row of i32).
+                                        ## Prepared for the SIMD microkernel emitter;
+                                        ## not derived from mnk.
+      nbVecsNr*: int                       ## vector registers per thread along N = mnk.n div
+                                        ## lanes (lanes: NEON=4, AVX512/VNNI=16) — checked
+                                        ## by static asserts in the atom files
       conversionPoint*: ConversionPoint
     of bk_FMA:
       discard                              ## no payload — universal (1,1,1) atom

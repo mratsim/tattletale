@@ -137,14 +137,14 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
     VA = toIntVal(ShA.default[1])
     VB = toIntVal(ShB.default[1])
   static:
-    doAssert toIntVal(ShB.default[0]) == K,
-      "gemm_ukernel: B k-slice count (" & $toIntVal(ShB.default[0]) &
+    doAssert ShB.default[0] === K,
+      "gemm_ukernel: B k-slice count (" & $ShB.default[0] &
         ") != A k-slice count (" & $K & ")"
-    doAssert VA == toIntVal(mma.valuesPerThread(opA)),
+    doAssert VA === mma.valuesPerThread(opA),
       "gemm_ukernel: A fragment width (" & $VA & ") != atom valuesPerThread(opA)"
-    doAssert VB == toIntVal(mma.valuesPerThread(opB)),
+    doAssert VB === mma.valuesPerThread(opB),
       "gemm_ukernel: B fragment width (" & $VB & ") != atom valuesPerThread(opB)"
-    doAssert VC == toIntVal(mma.valuesPerThread(opC)),
+    doAssert VC === mma.valuesPerThread(opC),
       "gemm_ukernel: C fragment width (" & $VC & ") != atom valuesPerThread(opC)"
   staticFor k, 0, K:
     var aSlice: array[VA, TA]
@@ -264,23 +264,23 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
         ") != 0 — use a BLK_K that divides K"
     doAssert thrK == 1,
       "gemm_tiled: ThrK (" & $thrK & ") != 1 — v1 does not distribute threads along K"
-    doAssert toIntVal(ShA.default[0]) == BLK_M,
-      "gemm_tiled: A shape M (" & $toIntVal(ShA.default[0]) & ") != BLK_M (" & $BLK_M &
+    doAssert ShA.default[0] === BLK_M,
+      "gemm_tiled: A shape M (" & $ShA.default[0] & ") != BLK_M (" & $BLK_M &
         ") — pass a (BLK_M, K) view"
-    doAssert toIntVal(ShA.default[1]) == K,
-      "gemm_tiled: A shape K (" & $toIntVal(ShA.default[1]) & ") != K (" & $K &
+    doAssert ShA.default[1] === K,
+      "gemm_tiled: A shape K (" & $ShA.default[1] & ") != K (" & $K &
         ") — pass a (BLK_M, K) view"
-    doAssert toIntVal(ShB.default[0]) == BLK_N,
-      "gemm_tiled: B shape N (" & $toIntVal(ShB.default[0]) & ") != BLK_N (" & $BLK_N &
+    doAssert ShB.default[0] === BLK_N,
+      "gemm_tiled: B shape N (" & $ShB.default[0] & ") != BLK_N (" & $BLK_N &
         ") — pass a (BLK_N, K) view"
-    doAssert toIntVal(ShB.default[1]) == K,
-      "gemm_tiled: B shape K (" & $toIntVal(ShB.default[1]) & ") != K (" & $K &
+    doAssert ShB.default[1] === K,
+      "gemm_tiled: B shape K (" & $ShB.default[1] & ") != K (" & $K &
         ") — pass a (BLK_N, K) view"
-    doAssert toIntVal(ShC.default[0]) == BLK_M,
-      "gemm_tiled: C shape M (" & $toIntVal(ShC.default[0]) & ") != BLK_M (" & $BLK_M &
+    doAssert ShC.default[0] === BLK_M,
+      "gemm_tiled: C shape M (" & $ShC.default[0] & ") != BLK_M (" & $BLK_M &
         ") — pass a (BLK_M, BLK_N) view"
-    doAssert toIntVal(ShC.default[1]) == BLK_N,
-      "gemm_tiled: C shape N (" & $toIntVal(ShC.default[1]) & ") != BLK_N (" & $BLK_N &
+    doAssert ShC.default[1] === BLK_N,
+      "gemm_tiled: C shape N (" & $ShC.default[1] & ") != BLK_N (" & $BLK_N &
         ") — pass a (BLK_M, BLK_N) view"
   let thr = tma.get_slice(threadIdx)
   # The thread's operand views (CuTe: thr_mma.partition_A/B/C):

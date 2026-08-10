@@ -80,8 +80,8 @@ func partition_A*(mma: static TiledMma; tileM, tileK: static int;
   const thrM  = mma.threadLayout.shape[0]
   const thrK  = mma.threadLayout.shape[2]
   static:
-    doAssert toIntVal(cosize(mma.atom.aLayout)) == atomM * atomK,
-      "partition_A: A fragment layout cosize (" & $toIntVal(cosize(mma.atom.aLayout)) &
+    doAssert cosize(mma.atom.aLayout) === atomM * atomK,
+      "partition_A: A fragment layout cosize (" & $cosize(mma.atom.aLayout) &
       ") != atom M·K (" & $atomM & "·" & $atomK & ") — the (T, V) layout must tile the operand"
   const unitM = thrM * atomM
   const unitK = thrK * atomK
@@ -106,8 +106,8 @@ func partition_B*(mma: static TiledMma; tileN, tileK: static int;
   const thrN  = mma.threadLayout.shape[1]
   const thrK  = mma.threadLayout.shape[2]
   static:
-    doAssert toIntVal(cosize(mma.atom.bLayout)) == atomN * atomK,
-      "partition_B: B fragment layout cosize (" & $toIntVal(cosize(mma.atom.bLayout)) &
+    doAssert cosize(mma.atom.bLayout) === atomN * atomK,
+      "partition_B: B fragment layout cosize (" & $cosize(mma.atom.bLayout) &
       ") != atom N·K (" & $atomN & "·" & $atomK & ") — the (T, V) layout must tile the operand"
   const unitN = thrN * atomN
   const unitK = thrK * atomK
@@ -131,8 +131,8 @@ func partition_C*(mma: static TiledMma; tileM, tileN: static int;
   const thrM  = mma.threadLayout.shape[0]
   const thrN  = mma.threadLayout.shape[1]
   static:
-    doAssert toIntVal(cosize(mma.atom.cLayout)) == atomM * atomN,
-      "partition_C: C fragment layout cosize (" & $toIntVal(cosize(mma.atom.cLayout)) &
+    doAssert cosize(mma.atom.cLayout) === atomM * atomN,
+      "partition_C: C fragment layout cosize (" & $cosize(mma.atom.cLayout) &
       ") != atom M·N (" & $atomM & "·" & $atomN & ") — the (T, V) layout must tile the operand"
   const unitM = thrM * atomM
   const unitN = thrN * atomN
@@ -209,8 +209,8 @@ func partition_A*[T, Sh, St](
     doAssert isStaticStride(St),
       "partition_A: dynamic strides unsupported — pass a static-layout view (the operand's" &
       " strides are baked into the partition offsets at compile time)"
-    doAssert toIntVal(St.default[0]) == 1 and
-             toIntVal(St.default[1]) == toIntVal(Sh.default[0]),
+    doAssert St.default[0] === 1 and
+             St.default[1] === Sh.default[0],
       "partition_A: operand must be col-major compact (stride (1, rows)) — row-major" &
       " staging is not supported yet (fragment register order follows the atom layout;" &
       " see the row-major staging GitHub issue)"
@@ -235,8 +235,8 @@ func partition_B*[T, Sh, St](
     doAssert isStaticStride(St),
       "partition_B: dynamic strides unsupported — pass a static-layout view (the operand's" &
       " strides are baked into the partition offsets at compile time)"
-    doAssert toIntVal(St.default[0]) == 1 and
-             toIntVal(St.default[1]) == toIntVal(Sh.default[0]),
+    doAssert St.default[0] === 1 and
+             St.default[1] === Sh.default[0],
       "partition_B: operand must be col-major compact (stride (1, rows)) — row-major" &
       " staging is not supported yet (fragment register order follows the atom layout;" &
       " see the row-major staging GitHub issue)"
@@ -261,8 +261,8 @@ func partition_C*[T, Sh, St](
     doAssert isStaticStride(St),
       "partition_C: dynamic strides unsupported — pass a static-layout view (the operand's" &
       " strides are baked into the partition offsets at compile time)"
-    doAssert toIntVal(St.default[0]) == 1 and
-             toIntVal(St.default[1]) == toIntVal(Sh.default[0]),
+    doAssert St.default[0] === 1 and
+             St.default[1] === Sh.default[0],
       "partition_C: operand must be col-major compact (stride (1, rows)) — row-major" &
       " staging is not supported yet (fragment register order follows the atom layout;" &
       " see the row-major staging GitHub issue)"

@@ -7,8 +7,8 @@
 
 ## x86 SIMD ukernel atom instantiations (bkCPU_SIMD).
 ##
-## laser-style microkernels: isa + nbScalars + nbVecsNr + conversionPoint.
-## AVX512 sgemm (laser): mr=14, nb_vecs_nr=2, nb_scalars=16 → 14×32 f32.
+## Microkernel style: isa + nbScalars + nbVecsNr + conversionPoint.
+## AVX512 sgemm: mr=14, nb_vecs_nr=2, nb_scalars=16 → 14×32 f32.
 
 import ../atoms
 
@@ -23,6 +23,14 @@ const X86_AVX512_SGEMM_14x32* = MmaAtom[NoLayout, NoLayout, NoLayout](
     conversionPoint: cpEndOfK,
   )
 
+static:
+  # Accumulator-lane cross-check (RID HPC-A-006): the C tile holds
+  # m·n f32 accumulators; each zmm holds 16 lanes, so the per-row
+  # vector-register count must be n div 16. (nbScalars is the
+  # zmm width, 16 — not asserted.)
+  doAssert X86_AVX512_SGEMM_14x32.nbVecsNr == X86_AVX512_SGEMM_14x32.mnk.n div 16,
+    "AVX512 sgemm: nbVecsNr != n div 16 (zmm lanes)"
+
 const X86_AVX512_VNNI_DPBSSD* = MmaAtom[NoLayout, NoLayout, NoLayout](
     name: "X86_AVX512_VNNI_DPBSSD",
     mnk: (m: 16, n: 16, k: 4),
@@ -33,3 +41,7 @@ const X86_AVX512_VNNI_DPBSSD* = MmaAtom[NoLayout, NoLayout, NoLayout](
     isa: siVNNI, nbScalars: 16, nbVecsNr: 1,  # C is int32 — 16 lanes/zmm, so N=16 is one vector per row (nr = nbVecsNr·nbScalars)
     conversionPoint: cpPerBlock,
   )
+
+static:
+  doAssert X86_AVX512_VNNI_DPBSSD.nbVecsNr == X86_AVX512_VNNI_DPBSSD.mnk.n div 16,
+    "VNNI: nbVecsNr != n div 16 (zmm lanes)"
