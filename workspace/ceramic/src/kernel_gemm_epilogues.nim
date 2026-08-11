@@ -7,49 +7,49 @@
 ##
 ## Epilogue fusion operations for the tiled GEMM.
 ##
-## One concept, one walk: `apply(D, AB)` computes the output tile
+## An Epilogue computes the output tile
 ##   D = f(AB)
 ## where
-##   D   is the destination (var; the output tile in registers or gmem)
+##   D   is the destination (var, the output tile in registers or gmem)
 ##   AB  is the accumulated GEMM result (the accumulator fragment)
 ##
-## Every other input is OP STATE: the op object is the complete epilogue
-## configuration, carrying its operands as fields (EpiAXPBY's C,
-## EpiAddBias's bias). The concept's `preflight()` stages those fields
-## into smem (async memcpy / TMA in the full design; a stub here). It
-## subsumes the getLoads declaration: the fields and the staging body
-## ARE the load spec. See GEMM-ARCHITECTURE §4 Level 3.
+## The op object is the epilogue configuration.
+## It carries its operands as fields (EpiAXPBY's C, EpiAddBias's bias).
+## `apply` reads them through the op-held smem pointers, filled by `preflight`.
 ##
-## The math is zipped by SIZE, not by dimension. The loop iterates
-## `size(D)` and indexes D(i), AB(i) each through its own layout.
+## `apply` iterates `size(D)`, the destination's logical size.
+## For each flat index i it computes D(i) from AB(i) and the staged operands.
+## Each tensor is indexed through its own layout, so operand ranks and
+## strides are unconstrained and need not match D's.
 ##
-## No rank or stride assumption on any operand. Rank-2 gmem tiles,
-## rank-3 accumulator fragments (V, RestM, RestN), nested layouts and
-## broadcast (stride-0) layouts all resolve through the layout algebra.
-## That includes an AMD MFMA fragment with irregular rows, the nested
-## AMX layout (1,(16,16)):(0,(1,16)), and a stride-0 bias broadcast view.
+## alpha and beta are runtime values.
+## The `apply` branches on them once, before the element loop, so the
+## element loop has no branches on op state.
 ##
-## A 2D (i, j) loop over the tile's (M, N) would break on every
-## non-col-major fragment.
+## ── Contract ──
+## Each op must provide:
+##   `preflight(op: var Self)`  a TEMPLATE that injects the staging buffer
+##                            into the caller scope ({.inject.}, shared memory via {.shared.} on GPU)
+##                            and stages the op's gmem operands into it
+##                            (async memcpy / TMA in the full design).
+##                            EpiAXPBY skips C when beta == 0.
 ##
-## The op is a compile-time functor: static dispatch, runtime fields
-## (alpha/beta as data), `func` bodies. Each op's `apply` hoists its
-## dispatch out of the element loop (the ex02a genEpilogue pattern).
-## No per-element branches on op state.
+##   `apply(op, D, AB)`         The actual epilogue function
 ##
-## The concept is Nim concepts V2 (bare `concept`, `Self` = the matched
-## type). Two matching gotchas, both probe-verified:
-##   1. the concept signature must mirror the ops' type-class structure
-##      exactly. An op taking `var (TensorView or Tensor)` needs the
-##      same union in the concept, or the match fails;
-##   2. the ops' apply signatures must use the EXPLICIT union, not the
-##      `AnyTensor` alias. V2 matching cannot infer the shape params
-##      (ShAB, StAB, ...) through the alias (probe 9, "cannot
-##      instantiate"). The alias is fine for plain procs and templates
-##      (tensors.nim, axpby, partition_A/B/C), just not here.
+## D and AB share the shape type Sh: the compiler enforces equal shapes,
+## a mismatched shape is a type error. They do not have to have the same types
+## hence epilogue can do type conversions.
 ##
-## Loads (getLoads, LoadKind, ikBroadcast) and capability flags are the
-## NEXT step per the design. This file ships the math-only PoC.
+## gemm_tiled calls, in order:
+##   `op.preflight()`           injects the buffer, fills `op.C_smem`
+##   `op.apply(D, AB)`          consumes the staged data
+##
+## The concept is Nim concepts V2 (bare `concept`, `Self` = the matched type).
+## V2 concepts only accept proc requirements, so `preflight` cannot be a concept member.
+## It still is a compile-time error not to have `preflight`, just that the message won't be as nice.
+##
+## Note: currently we need to use the verbose `TensorView[T, Sh, St] or Tensor[T, Sh, St]`
+##       instead of AnyTensor[T, Sh, St] or the concept don't match.
 
 import ./int_tuples
 import ./layouts
@@ -62,33 +62,52 @@ import ./tensors
 # ═════════════════════════════════════════════════════════════════════════
 
 type Epilogue* = concept
-  proc preflight(op: var Self)
-  proc apply(op: Self; D: var (TensorView or Tensor);
-             AB: TensorView or Tensor)
+  ## The concept: an Epilogue computes the output tile with the 2-arg
+  ## `apply(D, AB)`. D and AB share the shape type Sh.
+  ## This is the only compiler-enforced member.
+  ##
+  ## Contract (structural, see the module header):
+  ##   `template preflight(op: var Self): untyped`
+  ##     A template that injects the staging buffer into the caller scope
+  ##     ({.inject.}, shared on GPU) and stages the op's gmem operands.
+  ##   gemm_tiled calls `op.preflight()` before `op.apply(D, AB)`
+  ##   a missing `preflight` is a compile error at that call site.
+  proc apply(op: Self, D: var (TensorView or Tensor), AB: TensorView or Tensor)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiAXPBY: D = α·AB + β·C
 # ═════════════════════════════════════════════════════════════════════════
 
 type EpiAXPBY*[T, Sh, StC] = object
-  ## Linear combination of the accumulator and the C operand. C is op
-  ## state, carried in the object as part of the epilogue configuration
-  ## (the same mechanism as EpiAddBias's bias). preflight stages it into
-  ## smem in the full design.
-  alpha*, beta*: T
-  C*: TensorView[T, Sh, StC]
+  ## Linear combination of the accumulator and the C operand.
+  ## D = α·AB + β·C
+  alpha, beta: T
+  C_gmem: TensorView[T, Sh, StC]
+  C_smem: ptr UncheckedArray[T]
 
 func initEpiAXPBY*[T, Sh, StC](
-    alpha: T; beta: T; C: TensorView[T, Sh, StC]): EpiAXPBY[T, Sh, StC] =
+    alpha: T;
+    beta: T;
+    C: TensorView[T, Sh, StC]): EpiAXPBY[T, Sh, StC] =
   ## Build the op with its C operand. The C view is the same shape as
   ## the output tile (shared Sh, enforced by the compiler).
-  result = EpiAXPBY[T, Sh, StC](alpha: alpha, beta: beta, C: C)
+  result = EpiAXPBY[T, Sh, StC](alpha: alpha, beta: beta, C_gmem: C)
 
-proc preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]) {.inline.} =
-  ## Stub. In the full design this stages op.C into smem with an async
-  ## copy (TMA / cp.async), and skips it entirely when beta == 0 (the
-  ## load-level bandwidth win of the C-skip guarantee, §8o).
-  discard
+template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
+  ## Injects a SMEM buffer for C into the caller scope
+  ## and copy C into it.
+  ## Skipped when beta == 0 to avoid extra memory bandwith stress.
+
+  # Define a dummy shared pragma for CPU.
+  {.pragma: shared.}
+
+  var epiSmemC {.inject, shared.}: array[toIntVal(size(op.C_gmem.layout)), T]
+  op.C_smem = cast[ptr UncheckedArray[T]](addr epiSmemC[0])
+
+  if op.beta != T(0):
+    # TODO: replace by TMA / cp.async
+    for i in 0 ..< size(op.C_gmem.layout):
+      op.C_smem[i] = op.C_gmem(i)
 
 func apply*[T, Sh, StD, StAB, StC](
     op: EpiAXPBY[T, Sh, StC];
@@ -101,22 +120,22 @@ func apply*[T, Sh, StD, StAB, StC](
   ## On GPU the branches are uniform
   ##   α/β are identical for every thread
   ##   no warp divergence, the cost is on instruction cache / code size
-  let n = toIntVal(size(D.layout))
+  let S = size(D.layout)
   if op.beta == T(0):
     if op.alpha == T(1):
-      for i in 0 ..< n:
+      for i in 0 ..< S:
         D(i) = AB(i)
     else:
-      for i in 0 ..< n:
+      for i in 0 ..< S:
         D(i) = op.alpha * AB(i)
   elif op.alpha == T(1):
-    for i in 0 ..< n:
+    for i in 0 ..< S:
       # This is a single FMA instruction,
       # specializing for β == doesn't gain performance
-      D(i) = AB(i) + op.beta * op.C(i)
+      D(i) = AB(i) + op.beta * op.C_smem[i]
   else:
-    for i in 0 ..< n:
-      D(i) = op.alpha * AB(i) + op.beta * op.C(i)
+    for i in 0 ..< S:
+      D(i) = op.alpha * AB(i) + op.beta * op.C_smem[i]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiIdentity: D = AB (α=1, β=0, compile-time constants)
@@ -127,15 +146,15 @@ type EpiIdentity* = object
   ## operand. C stays in the signature (the concept is uniform) but is
   ## never read.
 
-proc preflight*(op: var EpiIdentity) {.inline.} =
-  ## Stub. Nothing to stage: the identity epilogue has no inputs.
+template preflight*(op: var EpiIdentity): untyped =
+  ## EpiIdentity `preflight` is a no-op
+  discard
 
 func apply*[T, Sh, StD, StAB](
     op: EpiIdentity;
     D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
-  let n = toIntVal(size(D.layout))
-  for i in 0 ..< n:
+  for i in 0 ..< size(D.layout):
     D(i) = AB(i)
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -143,31 +162,33 @@ func apply*[T, Sh, StD, StAB](
 # ═════════════════════════════════════════════════════════════════════════
 
 type EpiAddBias*[T, Sh, St] = object
-  ## D = AB + bias. The bias is op state, carried in the object as part
-  ## of the epilogue configuration, not a per-call operand. The load
-  ## side produces a same-size broadcast view of the bias column
-  ## (stride-0 row mode, LoadKind ikBroadcast in the full design). The
-  ## math is a plain same-size add.
-  bias*: TensorView[T, Sh, St]
+  ## D = AB + bias.
+  ## Bias is a column vector broadcasted onto AB
+  bias: TensorView[T, Sh, St]
+  bias_smem: ptr UncheckedArray[T]
 
 func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, St] =
-  ## Build the op from the broadcast bias view (the load side produces
-  ## it: a stride-0 row-mode view of the bias column, same shape as the
-  ## output tile).
   result.bias = bias
 
-proc preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]) {.inline.} =
-  ## Stub. In the full design this stages op.bias into smem (the
-  ## broadcast column, stride-0 view) with an async copy.
-  discard
+template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
+  ## Injects a SMEM buffer for bias and copy bias into it
+  # TODO: Given that bias is broadcasted, we can probably save on memory size and traffic
+  # by only saving the real physical data.
+
+  # Define a dummy shared pragma for CPU.
+  {.pragma: shared.}
+
+  var epiSmemBias {.inject, shared.}: array[toIntVal(size(op.bias.layout)), T]
+  op.bias_smem = cast[ptr UncheckedArray[T]](addr epiSmemBias[0])
+  for i in 0 ..< size(op.bias.layout):
+    op.bias_smem[i] = op.bias(i)
 
 func apply*[T, Sh, StD, StAB, StB](
     op: EpiAddBias[T, Sh, StB];
     D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
-  let n = toIntVal(size(D.layout))
-  for i in 0 ..< n:
-    D(i) = AB(i) + op.bias(i)
+  for i in 0 ..< size(D.layout):
+    D(i) = AB(i) + op.bias_smem[i]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiReLU: D = max(0, AB)
@@ -176,13 +197,13 @@ func apply*[T, Sh, StD, StAB, StB](
 type EpiReLU* = object
   ## Rectified linear unit: D = max(0, AB)
 
-proc preflight*(op: var EpiReLU) {.inline.} =
-  ## Stub. Nothing to stage: ReLU has no inputs.
+template preflight*(op: var EpiReLU): untyped =
+  ## Nothing to stage: ReLU has no inputs.
+  discard
 
 func apply*[T, Sh, StD, StAB](
     op: EpiReLU;
     D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
-  let n = toIntVal(size(D.layout))
-  for i in 0 ..< n:
+  for i in 0 ..< size(D.layout):
     D(i) = if AB(i) > T(0): AB(i) else: T(0)

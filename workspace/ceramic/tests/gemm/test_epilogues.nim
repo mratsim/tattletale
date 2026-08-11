@@ -1,6 +1,6 @@
 ## Test: the Epilogue concept + the four shipped epilogues.
 ##
-## Validates the design from GEMM-ARCHITECTURE §4 Level 3 (Epilogue concept):
+## Validates the Epilogue concept:
 ##   * concept conformance: each shipped op satisfies Epilogue
 ##     (compile-time, via `is Epilogue`)
 ##   * generic dispatch: `applyEpilogue(op: Epilogue, ...)` binds each op
@@ -8,17 +8,18 @@
 ##   * the math: D = α·AB + β·C, identity, bias column broadcast, ReLU
 ##   * dispatch hoisting: EpiAXPBY β=0 never reads C (NaN-prefilled C
 ##     proves it), α=1 skips the multiply
-##   * uniform 2-arg apply: inputs are op state (EpiAXPBY's c field,
-##     EpiAddBias's bias field) — the concept takes D and AB only
+##   * uniform 2-arg `apply`: inputs are op state (EpiAXPBY's C_gmem,
+##     EpiAddBias's bias) — the concept takes D and AB only
 ##   * layout robustness: row-major D/AB/C, strided C (row padding),
 ##     mixed layouts, sliced tensors (in / out / in+out), inverted
 ##     (negative) strides, the sm80 m16n8k8 C-fragment layout, rank-3
 ##     and nested+broadcast layouts. All operands share the shape type
-##     Sh (the compiler enforces equal shapes); the size-zip apply
-##     addresses each through its own layout (CuTe zip-by-size)
+##     Sh (the compiler enforces equal shapes). `apply` iterates `size(D)`
+##     and indexes each operand through its own layout
 ##
-## Loads (getLoads / LoadKind, or the preflight staging) and capability
-## flags are the NEXT step. This file pins the math-only PoC.
+## `preflight` copies the operands into the staged buffers. Async staging
+## (TMA / cp.async) and capability flags are future work. This file pins
+## the math.
 
 import std/math
 import workspace/ceramic/src/int_tuples
@@ -39,9 +40,14 @@ template test(label: string; body: untyped) =
 # params bind to ONE fixed instantiation (Nim V2 "first acceptable
 # candidate"). `auto` views + a concept-constrained op re-check
 # conformance per call site with the actual shapes. gemm_tiled will call
-# op.apply directly, statically, the same way.
+# `op.preflight()` then `op.apply(D, AB)`, statically, the same way: the
+# staging template injects the smem buffer, `apply` consumes it through
+# the op's C_smem / bias_smem fields.
 template applyEpilogue(op: Epilogue; D, AB: auto): untyped =
-  op.apply(D, AB)
+  block:
+    var o = op
+    o.preflight()
+    o.apply(D, AB)
 
 proc runEpilogueTests =
 
@@ -88,7 +94,8 @@ proc runEpilogueTests =
     let C = make_view(bufC +% 0, make_layout((M, N), (1, M)))
     var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
     var D2 = make_view(bufD2 +% 0, make_layout((M, N), (1, M)))
-    let op = initEpiAXPBY(0.5'f32, 2.0'f32, C)
+    var op = initEpiAXPBY(0.5'f32, 2.0'f32, C)
+    op.preflight()
     op.apply(D, AB)
     applyEpilogue(op, D2, AB)
     for i in 0 ..< M:
@@ -145,7 +152,7 @@ proc runEpilogueTests =
   # ── EpiAddBias ──
   test "EpiAddBias D = AB + bias column broadcast over rows":
     ## The bias is op state: a same-size stride-0 broadcast view of the
-    ## column, built by the load side (ikBroadcast).
+    ## column.
     const M = 3; const N = 4
     var bufAB = newSeq[float32](M * N)
     var bufBias = newSeq[float32](N)
@@ -176,10 +183,10 @@ proc runEpilogueTests =
         doAssert D[i, j] == max(AB[i, j], 0.0'f32)
 
   # ── layout robustness I: row-major / strided / mixed layouts ──
-  # The apply procs index D and AB each through their own layout (zip by
+  # The `apply` procs index D and AB each through their own layout
   # size). These pin that the epilogues are not col-major only. The GPU
   # gemm path feeds the accumulator fragment (atom layout) and the gmem
-  # C tile (arbitrary stride, as op state) into the same apply.
+  # C tile (arbitrary stride, as op state) into the same `apply`.
 
   test "EpiAXPBY row-major D/AB with row-major C (α=2 β=3)":
     const M = 3; const N = 4
@@ -250,10 +257,9 @@ proc runEpilogueTests =
   # may arrive reshaped from an implicit convolution, a sliced tensor, a
   # permutation, etc. AB comes from the MMA accumulator fragment, whose
   # layout is the atom's register map (never assumed col-major).
-  # The apply zips by SIZE (CuTe zip-by-size). Each tensor is indexed
-  # through its own layout, so rank-3 fragments, nested layouts and
-  # broadcast (stride-0) views all work. The AMX nested layout is
-  # exercised below.
+  # The `apply` iterates `size(D)` and indexes each operand through its own
+  # layout, so rank-3 fragments, nested layouts and broadcast (stride-0)
+  # views all work. The AMX nested layout is exercised below.
 
   test "EpiAXPBY sliced tensors — in (view at buffer start, slack after)":
     const M = 3; const N = 4
@@ -443,10 +449,10 @@ proc runEpilogueTests =
     for i in 0 ..< M*N:
       doAssert D(i) == AB(i)
 
-  test "preflight is callable on every op (stub no-ops)":
-    ## The concept requires preflight(op: var Self). Stubs today; in the
-    ## full design preflight stages the op's fields into smem before
-    ## apply. Here: call it on each op, then apply still works.
+  test "preflight is callable on every op":
+    ## `preflight` is a structural contract (not a concept member).
+    ## It injects the staging buffer and copies the op's operands into
+    ## it. Here: call it on each op, then `apply` still works.
     const M = 2; const N = 3
     var bufAB = newSeq[float32](M * N)
     var bufC = newSeq[float32](M * N)
