@@ -124,7 +124,7 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
     aV = toIntVal(mma.valuesPerThread(opA))
     bV = toIntVal(mma.valuesPerThread(opB))
     dV = toIntVal(mma.valuesPerThread(opC))
-  gemm_mma(mma.instr, aV, bV, dV, dFrag, aFrag, bFrag)
+  gemm_mma(mma.instr, dV, aV, bV, dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_ukernel(mma, ...) — the GEBB microkernel (loop over K)

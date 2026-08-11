@@ -92,9 +92,16 @@ func buildNvidiaMmaAsm*(instr: string; va, vb, vc: int;
 #  gemm_mma: one register-level MMA call
 # ═════════════════════════════════════════════════════════════════════════
 
-macro gemm_mma*(instr: static string; aV, bV, dV: static int;
+macro gemm_mma*(instr: static string; dV, aV, bV: static int;
                 dFrag, aFrag, bFrag: untyped): untyped =
   ## Tensor-core-level Matrix-Multiplication
+  ##
+  ## Args:
+  ##   instr: the mma.sync mnemonic
+  ##   dV, aV, bV: per-operand register counts (V per thread)
+  ##   dFrag: the accumulator fragment tensor, seeded to the asm output
+  ##     and written back (in-place accumulate)
+  ##   aFrag, bFrag: the operand fragment tensors, read-only
   ##
   ## TODO:
   ##   Hardcoded element types:
@@ -107,8 +114,8 @@ macro gemm_mma*(instr: static string; aV, bV, dV: static int;
                                  dElem, aElem, bElem, dElem)
 
   # scalar register locals, one per fragment element:
-  #   d0..d(dV-1): float32, seeded from the accumulator, written back after
-  #   a0..a(aV-1), b0..b(bV-1): uint32, read from the operand tensors
+  #   d0..d(dV-1): var float32, seeded from the accumulator, written back after
+  #   a0..a(aV-1), b0..b(bV-1): let uint32, read from the operand tensors
   # The asm is a single literal string whose backtick identifiers Nim
   # resolves to these locals (the backtick scalar-register format). A
   # block scopes the locals so repeated expansions (the ukernel K loop)
@@ -117,9 +124,9 @@ macro gemm_mma*(instr: static string; aV, bV, dV: static int;
   for i in 0 ..< dV:
     result.add newVarStmt(ident("d" & $i), newCall(dFrag, newLit(i)))
   for i in 0 ..< aV:
-    result.add newVarStmt(ident("a" & $i), newCall(aFrag, newLit(i)))
+    result.add newLetStmt(ident("a" & $i), newCall(aFrag, newLit(i)))
   for i in 0 ..< bV:
-    result.add newVarStmt(ident("b" & $i), newCall(bFrag, newLit(i)))
+    result.add newLetStmt(ident("b" & $i), newCall(bFrag, newLit(i)))
   result.add newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
   for i in 0 ..< dV:
     result.add newAssignment(newCall(dFrag, newLit(i)), ident("d" & $i))
