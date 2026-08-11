@@ -25,6 +25,12 @@ type
     data*: ptr UncheckedArray[T]
     layout*: Layout[Sh, St]
 
+type AnyTensor*[T, Sh, St] = TensorView[T, Sh, St] or Tensor[T, Sh, St]
+  ## Any tensor — owning `Tensor` or non-owning `TensorView` with matching
+  ## element type and shape/stride tuple types. Shorthand for the
+  ## `TensorView[...] or Tensor[...]` union used throughout the kernel
+  ## signatures (fragments and gmem operands arrive as either).
+
 # ═════════════════════════════════════════════════════════════════════════
 #  Constructors
 # ═════════════════════════════════════════════════════════════════════════
@@ -68,8 +74,8 @@ template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
                        order: static StrideOrder = LayoutLeft): untyped =
   make_view(data, make_layout(shape, order))
 
-template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
-                       shape, stride: IntOrIntTuple): untyped =
+template make_view*[P: ptr | ptr UncheckedArray, ShT, StT: IntOrIntTuple](
+    data: P; shape: ShT; stride: StT): untyped =
   make_view(data, make_layout(shape, stride))
 
 

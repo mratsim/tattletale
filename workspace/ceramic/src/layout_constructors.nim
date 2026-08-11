@@ -324,7 +324,7 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
   ## The output keeps the input's leaf structure, so the fragment is
   ## coordinate-compatible with the partition view (same shape, copyFrom
   ## flat-index alignment preserved). The V block is flattened (CuTe keeps
-  ## the nested structure) because gemm_fragment reads the fragment data
+  ## the nested structure) because gemm_atom reads the fragment data
   ## array in flat V-enumeration order — the flat enumeration is identical
   ## to the nested col-major one (v = v0 + V0·v1 + …), so copyFrom's
   ## coordinate alignment is unaffected.
