@@ -230,6 +230,7 @@ type
       ocFields*: seq[GpuFieldInit] # the fields we initialize
     of gpuInlineAsm:
       stmt*: string
+      ops*: seq[GpuAst] ## Operand symbols (gpuIdent) for backtick names
     of gpuComment:
       comment*: string
     of gpuConv:
@@ -383,6 +384,13 @@ const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,
                          gtFloat32, gtFloat64, gtSize_t}
   ## Set of numeric (scalar) GpuTypeKind variants.
+
+const TAG_IDENT_IN_ASM* = "\x01"
+  ## Marker byte for a backtick identifier inside an inline-asm statement.
+  ## The frontend stores the operand symbol (gpuIdent) in `ops` and emits
+  ## this byte + index into `stmt`.
+  ## The printers substitute the symbol's (mangled) display name at codegen time.
+  ## A control byte is used so the marker can never collide with valid asm text.
 
 proc newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone, module: string = ""): Symbol =
   new(result)
@@ -584,6 +592,8 @@ proc clone*(ast: GpuAst): GpuAst =
   of gpuInlineAsm:
     result = GpuAst(kind: gpuInlineAsm)
     result.stmt = ast.stmt
+    for op in ast.ops:
+      result.ops.add op.clone()
   of gpuAddr:
     result = GpuAst(kind: gpuAddr)
     result.aOf = ast.aOf.clone()

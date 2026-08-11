@@ -206,7 +206,11 @@ proc genLit*(ast: GpuAst): string =
   if ast.lType.kind == gtString:
     result = '"' & ast.lValue & '"'
   elif ast.lValue == "DEFAULT":
-    result = "{}"
+    # A missing object-constructor field (e.g. a nil smem pointer that
+    # preflight fills later). OpenCL C is C99: `{}` is invalid for a scalar
+    # ("scalar initializer cannot be empty"). `0` zero-initializes scalars,
+    # pointers and aggregates (remaining members initialize implicitly).
+    result = "0"
   else:
     case ast.lType.kind
     of gtFloat32: result = ast.lValue & "f"
@@ -392,16 +396,28 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # OpenCL C is C99-based, so we use the C99 `(type){init}` syntax,
     # NOT C++ functional-style cast `Type{init}`.
     result = "(" & gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "){"
-    for i, el in ast.ocFields:
-      if el.value.kind == gpuDiscard:
-        result.add "{}"
-      else:
-        result.add ctx.genOpenCL(el.value)
-      if i < ast.ocFields.len - 1:
-        result.add ", "
+    if ast.ocFields.len == 0:
+      # Empty struct (e.g. EpiIdentity/EpiReLU): C99 rejects `{}` (empty
+      # initializer list), `{0}` zero-initializes the single member.
+      result.add "0"
+    else:
+      for i, el in ast.ocFields:
+        if el.value.kind == gpuDiscard or
+           (el.value.kind == gpuLit and el.value.lValue == "DEFAULT"):
+          # Missing constructor field (e.g. a nil smem pointer that preflight
+          # fills later). C99 forbids `{}` for scalars, and a bare `0` would
+          # be absorbed by a leading array member, so brace aggregates.
+          if el.typ.kind in {gtArray, gtObject, gtGenericInst}:
+            result.add "{0}"
+          else:
+            result.add "0"
+        else:
+          result.add ctx.genOpenCL(el.value)
+        if i < ast.ocFields.len - 1:
+          result.add ", "
     result.add "}"
   of gpuInlineAsm:
-    result = indentStr & "asm(" & ast.stmt.strip & ");"
+    result = indentStr & "asm(" & genAsmStmt(ast).strip & ");"
 
   of gpuComment:
     result = indentStr & "/* " & ast.comment & " */"

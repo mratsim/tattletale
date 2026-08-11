@@ -49,7 +49,7 @@ described by a layout can be run on either path:
 | fill | `src/kernel_fillwith_cpu.nim` | `src/kernel_fillwith_gpu.nim` |
 | copy | `src/kernel_copy_cpu.nim` | `src/kernel_copy_gpu.nim` |
 | GEMM | (see microkernels below) | `src/kernel_gemm_gpu.nim` |
-| AXPBY | — | `src/kernel_axpby_gpu.nim` |
+| epilogue (D = α·AB + β·C) | fused into the GEMM | `src/kernel_gemm_epilogues.nim` |
 
 CPU kernels fuse contiguous suffixes into `copyMem`/`zeroMem` and use
 stride-sorted nested loops otherwise; GPU kernels use flat-index `crd2idx`
@@ -79,7 +79,7 @@ tested. GPU code generation is done by Crucible.
 (`experiments/nvidia_cutlass_cute_tutorial/sgemm_1.nim`) is not fully
 working. Individual NVRTC kernel tests pass, but the full `sgemm_1` kernel
 does not. See `experiments/nvidia_cutlass_cute_tutorial/sgemm_1.nim` and
-`tests/test_kernel_gemm.nim`. Do not treat the GPU batch-GEMM path as
+`tests/gemm/test_kernel_gemm.nim`. Do not treat the GPU batch-GEMM path as
 production-ready.
 
 ## Source layout

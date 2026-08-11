@@ -183,6 +183,8 @@ task test_ceramic, "Test workspace/ceramic":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/ceramic/tests"):
       runCmd(cmd)
+    for cmd in getTestCommands("workspace/ceramic/tests/gemm"):
+      runCmd(cmd)
 
 task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
   withDir(ProjectRoot):

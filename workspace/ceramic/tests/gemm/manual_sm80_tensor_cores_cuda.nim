@@ -1,12 +1,12 @@
 ## Manual GPU test: the sm80 tensor-core microtile via NVRTC/CUDA — one register-level MMA.
 ##
-## gemm_fragment(atom.instr, cFrag, aFrag, bFrag) replaces the hand-written mma.sync asm:
+## gemm_atom(tma.atom, cFrag, aFrag, bFrag) replaces the hand-written mma.sync asm:
 ## one m16n8k8 tf32 atom, 32 threads. Fragment gathering is CuTe layout algebra
 ## (sgemm_2.cu): partition_A/B/C once (thr_mma.partition), the fragment
 ## registers as identity views, and copyFrom/fillWith do the gather/clear —
-## no for loops, no offset arithmetic. The epilogue is axpby (gemm_device
-## convention). Plus the explicit-output 5-arg form:
-## gemm_fragment(atom.instr, dFrag, aFrag, bFrag, cFrag).
+## no offset arithmetic. The epilogue is a direct identity copy to C (gemm_device
+## convention). Plus the explicit-destination form: dFrag = cFrag copy then
+## in-place accumulate.
 ##
 ## The atom is the parameter — SM80_16x8x8_F32TF32TF32F32_TN; the tiling is
 ## 1×1×1 (single atom); geometry is derived inside the driver func. The
@@ -28,7 +28,7 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_copy_gpu
 import workspace/ceramic/src/kernel_fillwith_gpu
-import workspace/ceramic/src/kernel_axpby_gpu
+import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible/src/codegen/nvrtc
@@ -42,7 +42,7 @@ func mmaMicrotile(tma: static TiledMma; t: int;
                   A, B: ptr UncheckedArray[uint32]) {.inline.} =
   ## C(16×8) = A(16×8)·B(8×8) — one m16n8k8 tf32 atom, 32 threads, in-place.
   ## Fragment gathering: thr_mma.partition_A/B/C, fragment registers as owning
-  ## tensors (make_tensor_like), copyFrom/fillWith/axpby — all layout
+  ## tensors (make_tensor_like), copyFrom/fillWith — all layout
   ## algebra, no loops, no offsets, no raw-addr views.
   const
     M = tma.atom.mnk.m
@@ -66,14 +66,17 @@ func mmaMicrotile(tma: static TiledMma; t: int;
   var cFrag = make_tensor(float32, (VC,))
   cFrag.fillWith(0.0'f32)
 
-  gemm_fragment(tma.atom.instr, cFrag.data, aFrag.data, bFrag.data)   # one mma.sync — in-place accumulate
+  gemm_atom(tma.atom, cFrag, aFrag, bFrag)   # one mma.sync — in-place accumulate
 
-  axpby(1.0'f32, cFrag, 0.0'f32, tCv)
+  # identity epilogue: the register fragment is written straight to C
+  for i in 0 ..< size(tCv.layout):
+    tCv(i) = cFrag(i)
 
 func mmaMicrotileExplicit(tma: static TiledMma; t: int;
                           C: ptr UncheckedArray[float32];
                           A, B: ptr UncheckedArray[uint32]) {.inline.} =
-  ## C(16×8) = A(16×8)·B(8×8) + 1 — the 5-arg form: dFrag out, cFrag in.
+  ## C(16×8) = A(16×8)·B(8×8) + 1 — explicit destination: dFrag starts as a
+  ## copy of cFrag, then accumulates in place.
   const
     M = tma.atom.mnk.m
     N = tma.atom.mnk.n
@@ -93,9 +96,12 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
   cFrag.fillWith(1.0'f32)                        # nonzero accumulator input
   var dFrag = make_tensor(float32, (VC,))
 
-  gemm_fragment(tma.atom.instr, dFrag.data, aFrag.data, bFrag.data, cFrag.data)   # dFrag = aFrag·bFrag + cFrag
+  dFrag.copyFrom(cFrag)                        # seed the accumulator input
+  gemm_atom(tma.atom, dFrag, aFrag, bFrag)   # dFrag = aFrag·bFrag + cFrag
 
-  axpby(1.0'f32, dFrag, 0.0'f32, tCv)
+  # identity epilogue: the register fragment is written straight to C
+  for i in 0 ..< size(tCv.layout):
+    tCv(i) = dFrag(i)
 
 const kernelCode = cuda:
   proc mmaMicrotileKernel(C: ptr UncheckedArray[float32],
@@ -106,12 +112,13 @@ const kernelCode = cuda:
                                   A, B: ptr UncheckedArray[uint32]) {.global.} =
     mmaMicrotileExplicit(tiled, int(threadIdx.x), C, A, B)
 
-when isMainModule:
-  var nv = initNvrtc(kernelCode)
-  nv.compile()
-  nv.getPtx()
-  testMicrotile(nv, atom, "SM80")
+proc main() =
+  var engine = "cuda".getEngine(kernelCode)
+  testMicrotile(engine, atom, "SM80")
   # Row-major operands are not exercised here: partition_A/B/C's thread
   # (T-mode) offsets collapse for row-major views (col-major thread-1
   # offset 16 vs row-major 1 — all threads read nearly the same data).
   # The row-major acceptance test is tracked as a follow-up.
+
+when isMainModule:
+  main()

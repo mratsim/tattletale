@@ -202,12 +202,20 @@ proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[c
 # High-level helper: execOpenCL
 # ═══════════════════════════════════════════════════════════════════════
 
+proc setArg*(kernel: var OpenCLKernel, index: int, size: int, data: pointer) =
+  ## Bind a scalar kernel argument by value (e.g. alpha/beta coefficients).
+  check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(size), data)
+
 proc execOpenCL*(
   ctx: OpenCLContext,
   source: string,
   entryPoint: string,
   outputBytes: int,
-  inputs: openArray[tuple[data: pointer, size: int]]
+  taggedArgs: openArray[tuple[data: pointer, size: int, isValue: bool]],
+  outputInit: pointer = nil,
+  outputInitSize: int = 0,
+  globalSize: openArray[cl_size_t] = [cl_size_t(1)],
+  localSize: openArray[cl_size_t] = [cl_size_t(1)]
 ): seq[byte] =
   ## Compiles and executes an OpenCL C compute kernel, returning the
   ## output buffer contents as `seq[byte]`.
@@ -215,44 +223,74 @@ proc execOpenCL*(
   ## - `source`:     OpenCL C source code
   ## - `entryPoint`: name of the kernel entry point
   ## - `outputBytes`: number of bytes to read back as result
-  ## - `inputs`:     sequence of (pointer, size) tuples for input buffers
+  ## - `taggedArgs`: ordered kernel arguments, each either a device buffer
+  ##                 (isValue == false) or a scalar passed by value
+  ##                 (isValue == true, e.g. alpha/beta coefficients)
+  ## - `outputInit` / `outputInitSize`: initial contents for the output
+  ##                 buffer, for in-place kernels (e.g. β·C reads C from the
+  ##                 output before it is overwritten). Skipped when nil.
+  ## - `globalSize` / `localSize`: work-group geometry (default 1×1×1 —
+  ##   a single work-item, matching the simple add-kernel tests)
   ##
   ## Bindings follow OpenCL kernel parameter order:
-  ##   arg 0..N-1 = inputs (in order), arg N = output.
-  let numInputs = inputs.len
+  ##   arg 0..N-1 = taggedArgs (in order), arg N = output.
+  let numInputs = taggedArgs.len
 
   # Allocate input buffers + output buffer
   var inputBuffers = newSeq[OpenCLBuffer](numInputs)
-  for i in 0 ..< numInputs:
-    inputBuffers[i] = ctx.allocBuffer(inputs[i].size)
   defer:
-    for buf in inputBuffers.mitems:
-      buf.dealloc()
+    for i in 0 ..< numInputs:
+      if not taggedArgs[i].isValue:
+        inputBuffers[i].dealloc()
+  for i in 0 ..< numInputs:
+    if not taggedArgs[i].isValue:
+      inputBuffers[i] = ctx.allocBuffer(taggedArgs[i].size)
   var outBuf = ctx.allocBuffer(outputBytes)
   defer:
     outBuf.dealloc()
+  if outputInit != nil:
+    outBuf.writeBuffer(outputInit, outputInitSize)
   var kernel = ctx.compileKernel(entryPoint, source)
   defer:
     kernel.destroyKernel()
 
   # Write input data
   for i in 0 ..< numInputs:
-    inputBuffers[i].writeBuffer(inputs[i].data, inputs[i].size)
+    if not taggedArgs[i].isValue:
+      inputBuffers[i].writeBuffer(taggedArgs[i].data, taggedArgs[i].size)
 
-  # Set kernel args: inputs first, then output
+  # Set kernel args: inputs first (buffers as cl_mem, scalars by value),
+  # then output
   for i in 0 ..< numInputs:
-    kernel.setArg(i, inputBuffers[i])
+    if taggedArgs[i].isValue:
+      kernel.setArg(i, taggedArgs[i].size, taggedArgs[i].data)
+    else:
+      kernel.setArg(i, inputBuffers[i])
   kernel.setArg(numInputs, outBuf)
 
-  let gs = [cl_size_t(1)]
-  let ls = [cl_size_t(1)]
-  kernel.runKernel(gs, ls)
+  kernel.runKernel(globalSize, localSize)
 
   # Read output
   result = newSeq[byte](outputBytes)
   check outBuf.ctx.commands.enqueueReadBuffer(
     outBuf.mem, CL_TRUE, 0, cl_size_t(outputBytes), result[0].addr, 0, nil, nil
   )
+
+proc execOpenCL*(
+  ctx: OpenCLContext,
+  source: string,
+  entryPoint: string,
+  outputBytes: int,
+  inputs: openArray[tuple[data: pointer, size: int]],
+  globalSize: openArray[cl_size_t] = [cl_size_t(1)],
+  localSize: openArray[cl_size_t] = [cl_size_t(1)]
+): seq[byte] =
+  ## Buffer-only convenience overload: every input is a device buffer.
+  var tagged = newSeq[tuple[data: pointer, size: int, isValue: bool]](inputs.len)
+  for i, t in inputs:
+    tagged[i] = (t.data, t.size, false)
+  result = ctx.execOpenCL(source, entryPoint, outputBytes, tagged, globalSize = globalSize, localSize = localSize)
+
 # ═══════════════════════════════════════════════════════════════════════
 # Even higher-level combined: create context + exec + shutdown
 # ═══════════════════════════════════════════════════════════════════════
