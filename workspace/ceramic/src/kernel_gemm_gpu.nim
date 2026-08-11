@@ -159,7 +159,10 @@ func gemm_ukernel*[TC, ShC, StC, TA, ShA, StA, TB, ShB, StB](
   ##        (VA, RestM, RestK) / (VB, RestN, RestK). V flattened to the
   ##        atom register order. RestK counts k_blocks, each mma.k elements
   ##        deep. A k_block slice is a (VA, RestM) view at data offset
-  ##        k·VA·RestM.
+  ##        k·VA·RestM. v1 requires RestM == RestN == 1: each k_block
+  ##        slice must be exactly one atom fragment (the static block
+  ##        below asserts it; TODO there tracks relaxing this to
+  ##        multi-rest fragments).
   ##
   ## The unrolled staticFor binds k_block to each k-block index. The
   ## constant indices keep the asm operands register-resident: a runtime
@@ -170,18 +173,25 @@ func gemm_ukernel*[TC, ShC, StC, TA, ShA, StA, TB, ShB, StB](
   const
     VA = toIntVal(mma.valuesPerThread(opA))
     VB = toIntVal(mma.valuesPerThread(opB))
-    kBlocks = toIntVal(ShA.default[1]) * toIntVal(ShA.default[2])
+    kBlocks = toIntVal(ShA.default[2])
   static:
     doAssert toIntVal(ShA.default[0]) === VA,
       "gemm_ukernel: A fragment width (" & $toIntVal(ShA.default[0]) & ") != atom valuesPerThread(opA) (" & $VA & ")"
     doAssert toIntVal(ShB.default[0]) === VB,
       "gemm_ukernel: B fragment width (" & $toIntVal(ShB.default[0]) & ") != atom valuesPerThread(opB) (" & $VB & ")"
-    doAssert toIntVal(ShA.default[2]) === kBlocks,
-      "gemm_ukernel: A k dimension (" & $toIntVal(ShA.default[2]) & ") != k_block count (" & $kBlocks &
-        "). The k dimension must be the last fragment mode"
+    # TODO: relax the Rest == 1 restriction when the GEMM generalizes to
+    # multi-rest fragments (CUTLASS MmaIterations::kRow/kColumn pattern):
+    # the fragment becomes (V, RestM, RestN) per k_block and the k_block
+    # loop issues one gemm_atom per (m, n) rest pair. The gemm_tiled
+    # C-fragment size check below already uses the full (V, RestM, RestN)
+    # product and needs no change.
+    doAssert toIntVal(ShA.default[1]) === 1,
+      "gemm_ukernel: A RestM (" & $toIntVal(ShA.default[1]) & ") != 1. A k_block slice must be exactly one atom A fragment (V, 1)"
+    doAssert toIntVal(ShB.default[1]) === 1,
+      "gemm_ukernel: B RestN (" & $toIntVal(ShB.default[1]) & ") != 1. B k_block slice must be exactly one atom B fragment (V, 1)"
     doAssert toIntVal(ShB.default[2]) === kBlocks,
-      "gemm_ukernel: B k dimension (" & $toIntVal(ShB.default[2]) & ") != k_block count (" & $kBlocks &
-        "). The k dimension must be the last fragment mode"
+      "gemm_ukernel: B k dimension (" & $toIntVal(ShB.default[2]) & ") != A k dimension (" & $kBlocks &
+        "). A and B must agree on the k_block count"
     doAssert toIntVal(cosize(dFrag.layout)) === toIntVal(mma.valuesPerThread(opC)),
       "gemm_ukernel: accumulator size (" & $(toIntVal(cosize(dFrag.layout))) &
         ") != atom valuesPerThread(opC) (" & $(toIntVal(mma.valuesPerThread(opC))) & ")"
@@ -288,8 +298,8 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
     doAssert ShB.default[1] === tileK,
       "gemm_tiled: B shape K (" & $ShB.default[1] & ") != tile K (" & $tileK &
         "). Pass a (tileN, tileK) view"
-    doAssert toIntVal(ShC.default[0]) * toIntVal(ShC.default[1]) === tileM * tileN div blockSize,
-      "gemm_tiled: epilogue C fragment size (" & $(toIntVal(ShC.default[0]) * toIntVal(ShC.default[1])) &
+    doAssert toIntVal(ShC.default[0]) * toIntVal(ShC.default[1]) * toIntVal(ShC.default[2]) === tileM * tileN div blockSize,
+      "gemm_tiled: epilogue C fragment size (" & $(toIntVal(ShC.default[0]) * toIntVal(ShC.default[1]) * toIntVal(ShC.default[2])) &
         ") != tile elements per thread (" & $(tileM * tileN div blockSize) & ")"
     doAssert Epi is Epilogue,
       "gemm_tiled: the epilogue op must satisfy the Epilogue concept (preflight + 2-arg apply)"
