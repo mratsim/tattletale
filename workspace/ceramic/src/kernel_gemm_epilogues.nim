@@ -104,8 +104,9 @@ template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
   ## and copy C into it.
   ## Skipped when beta == 0 to avoid extra memory bandwith stress.
 
-  # Define a dummy shared pragma for CPU.
-  {.pragma: shared.}
+  when not declared(shared):
+    # Define a dummy shared pragma for CPU.
+    {.pragma: shared.}
 
   var epiSmemC {.inject, shared.}: array[toIntVal(size(op.C_gmem.layout)), T]
   op.C_smem = cast[ptr UncheckedArray[T]](addr epiSmemC[0])
@@ -181,8 +182,9 @@ template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
   # TODO: Given that bias is broadcasted, we can probably save on memory size and traffic
   # by only saving the real physical data.
 
-  # Define a dummy shared pragma for CPU.
-  {.pragma: shared.}
+  when not declared(shared):
+    # Define a dummy shared pragma for CPU.
+    {.pragma: shared.}
 
   var epiSmemBias {.inject, shared.}: array[toIntVal(size(op.bias.layout)), T]
   op.bias_smem = cast[ptr UncheckedArray[T]](addr epiSmemBias[0])
