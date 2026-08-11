@@ -555,8 +555,10 @@ proc testGemmGridReLU*[E](engine: var E; tiled: static TiledMma; label: string) 
 
 proc testGemmGridBias*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## The EpiAddBias grid epilogue: D = AB + bias over the same 2×2 CTA
-  ## grid. The bias is a per-element (M, N) col-major buffer staged like
-  ## C; the fixture domain keeps D exact-representable.
+  ## grid. The bias is a (N,) column vector; the kernel builds a stride-0
+  ## broadcast view over the output fragment's shape, so every row of a
+  ## column reads the same bias element. The fixture domain keeps D
+  ## exact-representable.
   const
     M = 64
     N = 32
@@ -572,15 +574,15 @@ proc testGemmGridBias*[E](engine: var E; tiled: static TiledMma; label: string) 
   for trial in 0 ..< 16:
     let A_gpu = tf32Fixture(rng, M, K)
     let B_gpu = tf32Fixture(rng, N, K)
-    var bias = newSeq[float32](M * N)
-    for i in 0 ..< M * N:
-      bias[i] = float32(rng.rand(0 .. 15))
+    var bias = newSeq[float32](N)
+    for j in 0 ..< N:
+      bias[j] = float32(rng.rand(0 .. 15))
 
     var acc = newSeq[float32](M * N)
     acc.gemm_tf32_ref(A_gpu, B_gpu, M, N, K, 0.0'f32)
     var C_ref = newSeq[float32](M * N)
     for i in 0 ..< M * N:
-      C_ref[i] = acc[i] + bias[i]
+      C_ref[i] = acc[i] + bias[i div M]   # col-major: column of flat i
 
     var gpuC = newSeq[float32](M * N)
     for i in 0 ..< M * N:
@@ -589,4 +591,4 @@ proc testGemmGridBias*[E](engine: var E; tiled: static TiledMma; label: string) 
                dim3(blockSize), gpuC, (A_gpu, B_gpu, bias))
     allClose(gpuC, C_ref, M, N, "gemm_grid bias trial " & $trial)
 
-  echo "  OK: gemm_grid bias (EpiAddBias, D = AB + bias) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, per-element bias, NaN D)"
+  echo "  OK: gemm_grid bias (EpiAddBias, D = AB + bias) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, column broadcast, NaN D)"

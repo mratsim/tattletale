@@ -5,7 +5,7 @@
 ##   gemmGridKernel       EpiAXPBY,   D = α·AB + β·C
 ##   gemmGridIdentityKernel  EpiIdentity, D = AB
 ##   gemmGridReLUKernel   EpiReLU,    D = max(0, AB)
-##   gemmGridBiasKernel   EpiAddBias, D = AB + bias (per-column)
+##   gemmGridBiasKernel   EpiAddBias, D = AB + bias (column broadcast)
 ## The C buffer is pre-filled with NaN: a dropped store leaves NaN !=
 ## expected, and the β=0 branch must skip the C read (a spurious read
 ## also fails).
@@ -18,6 +18,11 @@
 ##
 ## The atom is the parameter, SM80_16x8x8_F32TF32TF32F32_TN tiled
 ## (2,2,1). Requires an sm_80+ GPU. Run with:
+##
+## TODO (file-level slop): M=64, N=32, tile (32,16), strides (1,64) and
+## the m0/n0 tile origins are hardcoded in every kernel below — the dims
+## must flow from the problem views and the origins from local_tile, per
+## the gemm_grid view migration.
 ##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_grid_cuda.nim
 
 import workspace/ceramic/src/int_tuples
@@ -97,9 +102,17 @@ const kernelCode = cuda:
     var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
-    var tBias = make_view(bias +% (m0 + n0 * 64), (32, 16), (1, 64))
-    let biasCv = tiled.partition_C(thr, tBias)
-    var epi = initEpiAddBias(biasCv)
+    # The bias is a (N,) column vector: the tile's view has stride-0 rows
+    # (every row of a column reads the same bias element) and the same
+    # partition as C, which bakes each thread's column base into the
+    # fragment's data pointer.
+    # TODO: the tile origin (n0) and the hardcoded M/N/tile/strides in
+    # this file are manual slop — the tile view must be auto-derived via
+    # local_tile on the problem views (make_view(bias, (M, N), (0, 1)))
+    # with the dims flowing from the views, per the gemm_grid view
+    # migration.
+    var biasView = tiled.partition_C(thr, make_view(bias +% n0, (32, 16), (0, 1)))
+    var epi = initEpiAddBias(biasView)
     gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
 const kernelCodeSingle = cuda:

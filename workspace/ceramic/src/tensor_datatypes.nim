@@ -74,8 +74,8 @@ template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
                        order: static StrideOrder = LayoutLeft): untyped =
   make_view(data, make_layout(shape, order))
 
-template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
-                       shape, stride: IntOrIntTuple): untyped =
+template make_view*[P: ptr | ptr UncheckedArray, ShT, StT: IntOrIntTuple](
+    data: P; shape: ShT; stride: StT): untyped =
   make_view(data, make_layout(shape, stride))
 
 

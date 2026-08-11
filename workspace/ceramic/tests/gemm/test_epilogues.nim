@@ -162,7 +162,9 @@ proc runEpilogueTests =
     for j in 0 ..< N: bufBias[j] = float32(100 + j)
     let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
     var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
-    let bias = make_view(bufBias +% 0, make_layout((M, N), (0, 1)))   # stride-0 rows
+    # TODO: remove the pointer-offset arithmetic — the bias view must
+    # come from the (N,) buffer's own layout, not `+%` offsets
+    let bias = make_view(bufBias +% 0, (M, N), (0, 1))   # stride-0 rows
     let op = initEpiAddBias(bias)
     applyEpilogue(op, D, AB)
     for i in 0 ..< M:
@@ -246,12 +248,110 @@ proc runEpilogueTests =
     for j in 0 ..< N: bufBias[j] = float32(100 + j)
     let AB = make_view(bufAB +% 0, make_layout((M, N), (N, 1)))   # row-major
     var D = make_view(bufD +% 0, make_layout((M, N), (N, 1)))
-    let bias = make_view(bufBias +% 0, make_layout((M, N), (0, 1)))   # stride-0 rows
+    # TODO: remove the pointer-offset arithmetic — the bias view must
+    # come from the (N,) buffer's own layout, not `+%` offsets
+    let bias = make_view(bufBias +% 0, (M, N), (0, 1))   # stride-0 rows
     let op = initEpiAddBias(bias)
     applyEpilogue(op, D, AB)
     for i in 0 ..< M:
       for j in 0 ..< N:
         doAssert D[i, j] == AB[i, j] + bufBias[j]
+
+  test "EpiAddBias strided bias (stride-2 column, holes never read)":
+    ## The bias's own layout carries the stride: a (N,) column stored at
+    ## even offsets. The NaN holes prove the epilogue addresses through
+    ## the view, not a packed scan.
+    const M = 3; const N = 4
+    var bufAB = newSeq[float32](M * N)
+    var bufBias = newSeq[float32](2 * N)
+    var bufD = newSeq[float32](M * N)
+    for i in 0 ..< M*N:
+      bufAB[i] = float32(i)
+    for j in 0 ..< N:
+      bufBias[2 * j] = float32(100 + j)
+      bufBias[2 * j + 1] = NaN
+    let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
+    var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
+    # TODO: remove the pointer-offset arithmetic — the bias view must
+    # come from the (N,) buffer's own layout, not `+%` offsets
+    let bias = make_view(bufBias +% 0, (M, N), (0, 2))   # stride-0 rows, stride-2 columns
+    let op = initEpiAddBias(bias)
+    applyEpilogue(op, D, AB)
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        doAssert D[i, j] == AB[i, j] + bufBias[2 * j]
+        doAssert not D[i, j].isNaN, "stride-2 holes must never be read"
+
+  test "EpiAddBias reversed bias (negative stride, natural order restored)":
+    ## The column stored in reverse order (bufBias[N-1-j] = 100 + j) is
+    ## viewed with stride -1: element (i, j) reads bufBias[N-1-j].
+    const M = 3; const N = 4
+    var bufAB = newSeq[float32](M * N)
+    var bufBias = newSeq[float32](N)
+    var bufD = newSeq[float32](M * N)
+    for i in 0 ..< M*N:
+      bufAB[i] = float32(i)
+    for j in 0 ..< N:
+      bufBias[j] = float32(100 + (N - 1 - j))
+    let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
+    var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
+    # TODO: remove the pointer-offset arithmetic — the bias view must
+    # come from the (N,) buffer's own layout, not `+%` offsets
+    let bias = make_view(bufBias +% (N - 1), (M, N), (0, -1))   # reversed column
+    let op = initEpiAddBias(bias)
+    applyEpilogue(op, D, AB)
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        doAssert D[i, j] == AB[i, j] + bufBias[N - 1 - j]
+
+  test "EpiAddBias bias sliced from a larger buffer (in+out)":
+    ## The bias view may start mid-buffer: the data pointer carries the
+    ## offset, the layout the stride.
+    const M = 3; const N = 4
+    var bufAB = newSeq[float32](M * N)
+    var bufBig = newSeq[float32](2 + N + 2)   # [slack | bias | slack]
+    var bufD = newSeq[float32](M * N)
+    for i in 0 ..< M*N:
+      bufAB[i] = float32(i)
+    for j in 0 ..< N:
+      bufBig[2 + j] = float32(100 + j)
+    let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
+    var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
+    # TODO: remove the pointer-offset arithmetic — the bias view must
+    # come from the (N,) buffer's own layout, not `+%` offsets
+    let bias = make_view(bufBig +% 2, (M, N), (0, 1))
+    let op = initEpiAddBias(bias)
+    applyEpilogue(op, D, AB)
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        doAssert D[i, j] == AB[i, j] + bufBig[2 + j]
+
+  test "EpiAddBias fragment-shaped bias (m16n8k8 C-fragment layout, column-cyclic)":
+    ## The GPU path: the bias view mirrors the accumulator fragment shape
+    ## (rows {0,8} × cols {0,1}), with the ROW mode stride-0 — the
+    ## broadcast over the fragment's column-cyclic order.
+    const M = 2; const N = 2
+    var bufTile = newSeq[float32](16 * 8)   # the full 16×8 accumulator tile
+    var bufBias = newSeq[float32](2)        # the 2 columns
+    var bufD = newSeq[float32](M * N)
+    for i in 0 ..< 16*8:
+      bufTile[i] = float32(i + 1)
+    for j in 0 ..< 2:
+      bufBias[j] = float32(100 + j)
+    let AB = make_view(bufTile +% 0, (2, 2), (8, 1))          # fragment: rows {0,8} × cols {0,1}
+    var D = make_view(bufD +% 0, (M, N), (1, M))
+    # TODO: remove the pointer-offset arithmetic — the bias view must
+    # come from the (N,) buffer's own layout, not `+%` offsets
+    let bias = make_view(bufBias +% 0, (2, 2), (0, 1))        # rows broadcast, cols stride 1
+    let op = initEpiAddBias(bias)
+    applyEpilogue(op, D, AB)
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        doAssert D[i, j] == AB[i, j] + bufBias[j]
+    doAssert D[0, 0] == bufTile[0] + bufBias[0]   # fragment (0,0) = tile[0], col 0
+    doAssert D[1, 0] == bufTile[8] + bufBias[0]   # fragment row 1 = tile[8], col 0
+    doAssert D[0, 1] == bufTile[1] + bufBias[1]   # fragment (0,1) = tile[1], col 1
+    doAssert D[1, 1] == bufTile[9] + bufBias[1]   # fragment (1,1) = tile[9], col 1
 
   # ── layout robustness II: slices, inverted strides, real atom shapes ──
   # C and D live in gmem and their strides are NOT ours to choose. They
@@ -370,7 +470,8 @@ proc runEpilogueTests =
     var bufTile = newSeq[float32](16 * 8)   # the full 16×8 accumulator tile
     var bufC = newSeq[float32](M * N)
     var bufD = newSeq[float32](M * N)
-    for i in 0 ..< 16*8: bufTile[i] = float32(i + 1)
+    for i in 0 ..< 16*8:
+      bufTile[i] = float32(i + 1)
     for i in 0 ..< M*N: bufC[i] = float32(10 + i)
     let AB = make_view(bufTile +% 0, make_layout((2, 2), (8, 1)))
     let C = make_view(bufC +% 0, make_layout((M, N), (1, M)))
@@ -442,7 +543,8 @@ proc runEpilogueTests =
     const M = 16; const N = 16
     var bufAB = newSeq[float32](M * N)
     var bufD = newSeq[float32](M * N)
-    for i in 0 ..< M*N: bufAB[i] = float32(i)
+    for i in 0 ..< M*N:
+      bufAB[i] = float32(i)
     let AB = make_view(bufAB +% 0, make_layout((1, (16, 16)), (0, (1, 16))))
     var D = make_view(bufD +% 0, make_layout((1, (16, 16)), (0, (1, 16))))
     let op = EpiIdentity()
@@ -461,10 +563,11 @@ proc runEpilogueTests =
     var bufD = newSeq[float32](M * N)
     for i in 0 ..< M*N: bufAB[i] = float32(i + 1)
     for i in 0 ..< M*N: bufC[i] = float32(10 + i)
-    for j in 0 ..< N: bufBias[j] = float32(100 + j)
+    for j in 0 ..< N:
+      bufBias[j] = float32(100 + j)
     let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
     let C = make_view(bufC +% 0, make_layout((M, N), (1, M)))
-    let bias = make_view(bufBias +% 0, make_layout((M, N), (0, 1)))
+    let bias = make_view(bufBias +% 0, (M, N), (0, 1))
     var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
     var opAX = initEpiAXPBY(2.0'f32, 3.0'f32, C)
     var opId = EpiIdentity()
