@@ -31,8 +31,10 @@
 ##   `preflight(op: var Self)`  a TEMPLATE that injects the staging buffer
 ##                            into the caller scope ({.inject.}, shared memory via {.shared.} on GPU)
 ##                            and stages the op's gmem operands into it
-##                            (async memcpy / TMA in the full design).
-##                            EpiAXPBY skips C when beta == 0.
+##                            (cp.async / TMA pending). EpiAXPBY's is a
+##                            no-op stub: C is read per-thread from gmem in
+##                            `apply` (direct register→gmem is the default;
+##                            smem staging is future LoadKind work).
 ##
 ##   `apply(op, D, AB)`         The actual epilogue function
 ##
@@ -41,8 +43,8 @@
 ## hence epilogue can do type conversions.
 ##
 ## gemm_tiled calls, in order:
-##   `op.preflight()`           injects the buffer, fills `op.C_smem`
-##   `op.apply(D, AB)`          consumes the staged data
+##   `op.preflight()`           stages gmem operands (EpiAXPBY: no-op stub today)
+##   `op.apply(D, AB)`          the epilogue math (EpiAXPBY reads C via op.C_gmem)
 ##
 ## The concept is Nim concepts V2 (bare `concept`, `Self` = the matched type).
 ## V2 concepts only accept proc requirements, so `preflight` cannot be a concept member.
@@ -85,7 +87,10 @@ type EpiAXPBY*[T, Sh, StC] = object
   ## D = α·AB + β·C
   alpha, beta: T
   C_gmem: TensorView[T, Sh, StC]
-  C_smem: ptr UncheckedArray[T]
+  # C_smem: ptr UncheckedArray[T]
+  #   Future: cp.async / TMA smem staging of C (LoadKind ikTMAStaged,
+  #   GEMM-ARCHITECTURE.md §4). For now C is read per-thread from gmem in
+  #   `apply`, the CUTLASS LinearCombination default: no staging, no race.
 
 func initEpiAXPBY*[T, Sh, StC](
     alpha: T;
@@ -100,21 +105,12 @@ func cView*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): var TensorView[T, Sh, StC
   op.C_gmem
 
 template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
-  ## Injects a SMEM buffer for C into the caller scope
-  ## and copy C into it.
-  ## Skipped when beta == 0 to avoid extra memory bandwith stress.
-
-  when not declared(shared):
-    # Define a dummy shared pragma for CPU.
-    {.pragma: shared.}
-
-  var epiSmemC {.inject, shared.}: array[toIntVal(size(op.C_gmem.layout)), T]
-  op.C_smem = cast[ptr UncheckedArray[T]](addr epiSmemC[0])
-
-  if op.beta != T(0):
-    # TODO: replace by TMA / cp.async
-    for i in 0 ..< size(op.C_gmem.layout):
-      op.C_smem[i] = op.C_gmem(i)
+  ## No-op: C is read per-thread from gmem in `apply` (CUTLASS
+  ## LinearCombination default: direct register→gmem, see
+  ## GEMM-ARCHITECTURE.md §4). cp.async / TMA smem staging is pending;
+  ## when it lands, this template injects the {.shared.} staging buffer
+  ## into the caller scope and fills it here.
+  discard
 
 func apply*[T, Sh, StD, StAB, StC](
     op: EpiAXPBY[T, Sh, StC];
@@ -139,10 +135,10 @@ func apply*[T, Sh, StD, StAB, StC](
     for i in 0 ..< S:
       # This is a single FMA instruction,
       # specializing for β == doesn't gain performance
-      D(i) = AB(i) + op.beta * op.C_smem[i]
+      D(i) = AB(i) + op.beta * op.C_gmem(i)
   else:
     for i in 0 ..< S:
-      D(i) = op.alpha * AB(i) + op.beta * op.C_smem[i]
+      D(i) = op.alpha * AB(i) + op.beta * op.C_gmem(i)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiIdentity: D = AB (α=1, β=0, compile-time constants)
@@ -171,32 +167,29 @@ func apply*[T, Sh, StD, StAB](
 type EpiAddBias*[T, Sh, St] = object
   ## D = AB + bias.
   ## Bias is a column vector broadcasted onto AB
-  bias: TensorView[T, Sh, St]
-  bias_smem: ptr UncheckedArray[T]
+  bias_gmem: TensorView[T, Sh, St]
+  # bias_smem: ptr UncheckedArray[T]
+  #   Future: cp.async / TMA smem staging of the bias (LoadKind ikTMAStaged,
+  #   GEMM-ARCHITECTURE.md §4). For now bias is read per-thread from gmem in
+  #   `apply`, the CUTLASS EpilogueWithBroadcast default: no staging, no race.
 
 func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, St] =
-  result.bias = bias
+  result.bias_gmem = bias
 
 template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
-  ## Injects a SMEM buffer for bias and copy bias into it
-  # TODO: Given that bias is broadcasted, we can probably save on memory size and traffic
-  # by only saving the real physical data.
-
-  when not declared(shared):
-    # Define a dummy shared pragma for CPU.
-    {.pragma: shared.}
-
-  var epiSmemBias {.inject, shared.}: array[toIntVal(size(op.bias.layout)), T]
-  op.bias_smem = cast[ptr UncheckedArray[T]](addr epiSmemBias[0])
-  for i in 0 ..< size(op.bias.layout):
-    op.bias_smem[i] = op.bias(i)
+  ## No-op: bias is read per-thread from gmem in `apply` (CUTLASS
+  ## EpilogueWithBroadcast default: direct register→gmem, see
+  ## GEMM-ARCHITECTURE.md §4). cp.async / TMA smem staging is pending;
+  ## when it lands, this template injects the {.shared.} staging buffer
+  ## into the caller scope and fills it here.
+  discard
 
 func apply*[T, Sh, StD, StAB, StB](
     op: EpiAddBias[T, Sh, StB];
     D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
   for i in 0 ..< size(D.layout):
-    D(i) = AB(i) + op.bias_smem[i]
+    D(i) = AB(i) + op.bias_gmem(i)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiReLU: D = max(0, AB)

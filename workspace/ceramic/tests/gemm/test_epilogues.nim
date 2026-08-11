@@ -17,9 +17,10 @@
 ##     Sh (the compiler enforces equal shapes). `apply` iterates `size(D)`
 ##     and indexes each operand through its own layout
 ##
-## `preflight` copies the operands into the staged buffers. Async staging
-## (TMA / cp.async) and capability flags are future work. This file pins
-## the math.
+## `preflight` stages the op's gmem operands into smem buffers (EpiAddBias's
+## bias today; EpiAXPBY's C is read per-thread from gmem in `apply` — direct
+## register→gmem, cp.async/TMA staging pending). Async staging and capability
+## flags are future work. This file pins the math.
 
 import std/math
 import workspace/ceramic/src/int_tuples
@@ -42,7 +43,7 @@ template test(label: string; body: untyped) =
 # conformance per call site with the actual shapes. gemm_tiled will call
 # `op.preflight()` then `op.apply(D, AB)`, statically, the same way: the
 # staging template injects the smem buffer, `apply` consumes it through
-# the op's C_smem / bias_smem fields.
+# the op's fields (bias_smem today; EpiAXPBY reads C via C_gmem directly).
 template applyEpilogue(op: Epilogue; D, AB: auto): untyped =
   block:
     var o = op
