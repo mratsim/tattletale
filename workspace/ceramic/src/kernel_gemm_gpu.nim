@@ -130,63 +130,55 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
 
 func gemm_ukernel*[TC, ShC, StC, TA, ShA, StA, TB, ShB, StB](
     mma: static MmaAtom;
-    cFrag: var Tensor[TC, ShC, StC];
-    aFrag: Tensor[TA, ShA, StA];
-    bFrag: Tensor[TB, ShB, StB]) {.inline.} =
-  ## GEBB microkernel: cFrag += Σ_k aFrag[k]·bFrag[k], one gemm_atom
-  ## per k_block, accumulated in cFrag. The loop over K is the layer above
-  ## the single-instruction gemm_atom — the K-loop dispatch of CuTe's
-  ## sgemm_2.cu ukernel.
+    dFrag: var Tensor[TC, ShC, StC];
+    aFrag: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA];
+    bFrag: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB]) {.inline.} =
+  ## GEBB microkernel: dFrag += Σ_k aFrag(_,_,k)·bFrag(_,_,k), one gemm_atom
+  ## per k_block, accumulated in dFrag. The loop over K lives here, not in
+  ## gemm_tiled — the K-loop dispatch of CuTe's sgemm_2.cu ukernel.
+  ##
+  ## Naming follows the epilogue: D = the destination/accumulator fragment,
+  ## AB = the operand fragments.
   ##
   ## Args:
   ##   mma: a compile-time MmaAtom (bkGPU_TensorCore / bkCPU_X86_AMX — has
   ##        `instr`), passed `static`: the atom is data that monomorphizes
   ##        the kernel (CuTe passes the atom as a type for the same reason)
-  ##   cFrag: var register fragment tensor — the accumulator across all
+  ##   dFrag: var register fragment tensor — the accumulator across all
   ##        k_blocks (the asm D operand, in-place accumulate)
-  ##   aFrag: owning tensor, shape (VA, RestM, RestK), strides (1, VA, VA)
-  ##        (make_fragment_A) — V flattened to the atom register order;
-  ##        RestM·RestK = the k_blocks; gemm_atom reads data[k_block·VA+i]
-  ##        with k_block the flat rest-mode index.
-  ##   bFrag: owning tensor, same shape convention (VB, RestN, RestK)
+  ##   aFrag, bFrag: operand fragments (make_fragment_A/B), shape
+  ##        (VA, RestM, RestK) / (VB, RestN, RestK) — V flattened to the
+  ##        atom register order. RestK counts k_blocks, each mma.k elements
+  ##        deep; a k_block slice is a (VA, RestM) view at data offset
+  ##        k·VA·RestM.
   ##
-  ## K = number of k_blocks (each of the atom's K depth), read from the
-  ## tensor shape along with VA/VB. Each k_block is copied into a local
-  ## register array before gemm_atom — the unrolled (staticFor) copy
-  ## uses constant indices so the asm operands stay register-resident (a
-  ## runtime k would spill aFrag[k][i] to local memory and break the "f"/
-  ## "r" constraints). The data array is read physically (data[k·VA+i]),
-  ## which matches the fragment layout's V-first enumeration.
+  ## The unrolled staticFor binds k_block to each k-block index, and the
+  ## coordinate slices aFrag(_, _, k) feed gemm_atom directly — no copy
+  ## loops. The constant indices keep the asm operands register-resident
+  ## (a runtime k would spill the fragment data to local memory and break
+  ## the "f"/"r" constraints).
   ## Atom-parametric: the same signature serves GPU tensor-core atoms and
   ## CPU FMA/AMX atoms (the atom decides the per-k_block instruction).
   const
-    K = toIntVal(ShA.default[1]) * toIntVal(ShA.default[2])
-    VA = toIntVal(ShA.default[0])
-    VB = toIntVal(ShB.default[0])
-    VC = toIntVal(ShC.default[0])
+    VA = toIntVal(mma.valuesPerThread(opA))
+    VB = toIntVal(mma.valuesPerThread(opB))
+    kBlocks = toIntVal(ShA.default[1]) * toIntVal(ShA.default[2])
   static:
-    doAssert toIntVal(cosize(aFrag.layout)) div VA === K,
+    doAssert toIntVal(ShA.default[0]) === VA,
+      "gemm_ukernel: A fragment width (" & $toIntVal(ShA.default[0]) & ") != atom valuesPerThread(opA) (" & $VA & ")"
+    doAssert toIntVal(ShB.default[0]) === VB,
+      "gemm_ukernel: B fragment width (" & $toIntVal(ShB.default[0]) & ") != atom valuesPerThread(opB) (" & $VB & ")"
+    doAssert toIntVal(cosize(aFrag.layout)) div VA === kBlocks,
       "gemm_ukernel: A rest-mode size (" & $(toIntVal(cosize(aFrag.layout)) div VA) &
-        ") != k_block count (" & $K & ")"
-    doAssert toIntVal(cosize(bFrag.layout)) div VB === K,
+        ") != k_block count (" & $kBlocks & ")"
+    doAssert toIntVal(cosize(bFrag.layout)) div VB === kBlocks,
       "gemm_ukernel: B rest-mode size (" & $(toIntVal(cosize(bFrag.layout)) div VB) &
-        ") != k_block count (" & $K & ")"
-    doAssert VA === mma.valuesPerThread(opA),
-      "gemm_ukernel: A fragment width (" & $VA & ") != atom valuesPerThread(opA)"
-    doAssert VB === mma.valuesPerThread(opB),
-      "gemm_ukernel: B fragment width (" & $VB & ") != atom valuesPerThread(opB)"
-    doAssert VC === mma.valuesPerThread(opC),
-      "gemm_ukernel: C fragment width (" & $VC & ") != atom valuesPerThread(opC)"
-  staticFor k_block, 0, K:
-    var aSlice: array[VA, TA]
-    var bSlice: array[VB, TB]
-    staticFor i, 0, VA:
-      aSlice[i] = aFrag.data[k_block * VA + i]
-    staticFor i, 0, VB:
-      bSlice[i] = bFrag.data[k_block * VB + i]
-    gemm_atom(mma, cFrag,
-              make_view(addr aSlice[0], make_layout((VA,), (1,))),
-              make_view(addr bSlice[0], make_layout((VB,), (1,))))
+        ") != k_block count (" & $kBlocks & ")"
+    doAssert toIntVal(cosize(dFrag.layout)) === toIntVal(mma.valuesPerThread(opC)),
+      "gemm_ukernel: accumulator size (" & $(toIntVal(cosize(dFrag.layout))) &
+        ") != atom valuesPerThread(opC) (" & $(toIntVal(mma.valuesPerThread(opC))) & ")"
+  staticFor k_block, 0, kBlocks:
+    gemm_atom(mma, dFrag, aFrag(_, _, k_block), bFrag(_, _, k_block))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_tiled(tma, threadIdx, alpha, A, B, beta, C) — the tiled GEMM
