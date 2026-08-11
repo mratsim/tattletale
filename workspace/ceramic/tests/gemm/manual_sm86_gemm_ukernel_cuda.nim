@@ -70,7 +70,7 @@ func gemmUkernelMicrotile(tma: static TiledMma; t: int;
   var cFrag = make_tensor(float32, (VC,))
   cFrag.fillWith(0.0'f32)
 
-  gemm_ukernel(tma.atom, cFrag.data, aFrag, bFrag)   # two mma.sync, accumulating
+  gemm_ukernel(tma.atom, cFrag, aFrag, bFrag)   # two mma.sync, accumulating
 
   axpby(1.0'f32, cFrag, 0.0'f32, tCv)
 

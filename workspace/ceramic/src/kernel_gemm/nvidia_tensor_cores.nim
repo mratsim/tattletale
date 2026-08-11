@@ -112,29 +112,21 @@ macro gemm_mma*(instr: static string; aV, bV, dV: static int;
                                  dElem, aElem, bElem, dElem,
                                  backtick = true)
 
-  # the asm proc: scalar register params
-  #   d0..d(dV-1): var float32 (in-place accumulate, + constraint)
-  #   a0..a(aV-1), b0..b(bV-1): uint32
-  var formals = @[newEmptyNode()]
+  # scalar register locals, one per fragment element:
+  #   d0..d(dV-1): float32, seeded from the accumulator, written back after
+  #   a0..a(aV-1), b0..b(bV-1): uint32, read from the operand tensors
+  # The asm is a single literal string whose backtick identifiers Nim
+  # resolves to these locals (the backtick scalar-register format). A
+  # block scopes the locals so repeated expansions (the ukernel K loop)
+  # do not collide.
+  result = newStmtList()
   for i in 0 ..< dV:
-    formals.add newIdentDefs(ident("d" & $i), newTree(nnkVarTy, ident(dElem)), newEmptyNode())
+    result.add newVarStmt(ident("d" & $i), newCall(dFrag, newLit(i)))
   for i in 0 ..< aV:
-    formals.add newIdentDefs(ident("a" & $i), ident(aElem), newEmptyNode())
+    result.add newVarStmt(ident("a" & $i), newCall(aFrag, newLit(i)))
   for i in 0 ..< bV:
-    formals.add newIdentDefs(ident("b" & $i), ident(bElem), newEmptyNode())
-  let asmStmt = newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
-  let body = newStmtList(asmStmt)
-  let procDef = newProc(ident"gemm_mma_impl", formals, body,
-                        pragmas = nnkPragma.newTree(ident"inline"))
-
-  # the call: element accesses on the passed tensors
-  proc elemArgs(base: NimNode; v: int): seq[NimNode] =
-    for i in 0 ..< v:
-      result.add newCall(base, newLit(i))
-  var args: seq[NimNode] = @[]
-  args.add elemArgs(dFrag, dV)
-  args.add elemArgs(aFrag, aV)
-  args.add elemArgs(bFrag, bV)
-  let call = newCall(ident"gemm_mma_impl", args)
-
-  result = newTree(nnkBlockStmt, newEmptyNode(), newStmtList(procDef, call))
+    result.add newVarStmt(ident("b" & $i), newCall(bFrag, newLit(i)))
+  result.add newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
+  for i in 0 ..< dV:
+    result.add newAssignment(newCall(dFrag, newLit(i)), ident("d" & $i))
+  result = newTree(nnkBlockStmt, newEmptyNode(), result)

@@ -7,16 +7,14 @@
 
 ## GEMM fragment operations, the GEBB microkernel, and the tiled GEMM.
 ##
-## `gemm_atom` — the MMA (fragment-level) GEMM, two forms:
-##   * the MMA (4-arg): one instruction on the thread's register fragments,
-##     in-place accumulate; the atom's `instr` + fragment counts + register
-##     types produce the inline-asm statement (NVIDIA mma.sync via
-##     kernel_gemm/nvidia_tensor_cores.nim; AMD MFMA and Intel AMX construct
-##     their instructions differently). No kc loop, no epilogue — the
-##     caller owns those.
-##   * the MMA (5-arg): same, with an explicit destination
-##   (the naive whole-tile outer-product reference oracle lives in the
-##   tests — `gemm_ref` in tests/gemm/gemm_test_lib.nim)
+## `gemm_atom` — the MMA (fragment-level) GEMM: one instruction on the
+## thread's register fragments, in-place accumulate. The atom's `instr` +
+## fragment counts + register types produce the inline-asm statement
+## (NVIDIA mma.sync via kernel_gemm/nvidia_tensor_cores.nim; AMD MFMA and
+## Intel AMX construct their instructions differently). No kc loop, no
+## epilogue — the caller owns those.
+## (the naive whole-tile outer-product reference oracle lives in the
+## tests — `gemm_ref` in tests/gemm/gemm_test_lib.nim)
 ##
 ## `gemm_ukernel` — the GEBB microkernel: the loop over K on top of
 ##   `gemm_atom` (one atom instruction per k_block, accumulated in
@@ -41,9 +39,9 @@
 ##                    │           │
 ##                    └─────┬─────┘
 ##                          ▼
-##              gemm_ukernel: cFrag += Σ_k_block aFragTile[k_block]·bFragTile[k_block]
+##              gemm_ukernel: cFrag += Σ_k aFragTile[k_block]·bFragTile[k_block]
 ##                          │   per k_block: copy slice → aSlice/bSlice
-##                          │     └─► gemm_atom(instr, cFrag, aSlice, bSlice)
+##                          │     └─► gemm_atom(mma, cFrag, aSlice, bSlice)
 ##                          ▼
 ##                    cFrag (VC registers, zero-cleared)
 ##                          │
@@ -59,7 +57,7 @@
 ##                gemm_ukernel: for k_block in 0 ..< kBlocksPerTile # k_block loop
 ##                  copy aFragTile[_, k_block] → aSlice  # fragment slice → operands
 ##                  copy bFragTile[_, k_block] → bSlice
-##                  gemm_atom(instr, cFrag, aSlice, bSlice)  # one mma.sync
+##                  gemm_atom(mma, cFrag, aSlice, bSlice)  # one mma.sync
 ## ```
 ##
 ## Tile/block hierarchy (CUTLASS terms):
@@ -98,69 +96,41 @@ import ./kernel_axpby_gpu
 import ./macros/static_for
 import ./kernel_gemm/nvidia_tensor_cores
 
-#  gemm_atom(instr, ...) — register-level MMA
+#  gemm_atom(mma, ...) — register-level MMA
 # ═════════════════════════════════════════════════════════════════════════
 
-macro gemm_atom*[VA: static int, VB: static int, VC: static int, TA, TB, TC](
-    instr: static string;
-    cFrag: var array[VC, TC];
-    aFrag: array[VA, TA];
-    bFrag: array[VB, TB]): untyped =
-  ## Register-level MMA, in-place accumulate: cFrag += aFrag·bFrag.
+func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
+    mma: static MmaAtom;
+    dFrag: var Tensor[TD, ShD, StD];
+    aFrag: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA];
+    bFrag: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB]) {.inline.} =
+  ## Register-level MMA, in-place accumulate: dFrag += aFrag·bFrag.
   ##
   ## Args:
-  ##   instr: the atom's mnemonic, read by field at the call site:
-  ##     gemm_atom(atom.instr, cFrag, aFrag, bFrag)
-  ##   cFrag: var register array (the accumulator, also the asm output)
-  ##   aFrag, bFrag: register arrays (the operands)
+  ##   mma: the atom, passed static. Its instr + per-operand register
+  ##        counts (V) produce the inline-asm statement
+  ##   dFrag: var register fragment tensor, the accumulator (also the asm
+  ##        output — hardware in-place accumulate, D and C alias in the
+  ##        asm)
+  ##   aFrag, bFrag: register fragment tensors, the operands
   ##
-  ## The inline-asm statement is built here from `instr` + the fragment
-  ## counts + register types; D and C alias in the asm (the output registers
-  ## ARE the C operand — hardware in-place accumulate).
-  let cElem = cFrag.getTypeInst()[2].repr
-  let aElem = aFrag.getTypeInst()[2].repr
-  let bElem = bFrag.getTypeInst()[2].repr
-  let asmStr = buildNvidiaMmaAsm(instr, VA, VB, VC,
-                                 cFrag.repr, aFrag.repr, bFrag.repr, cFrag.repr,
-                                 cElem, aElem, bElem, cElem)
-  result = newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
-
-macro gemm_atom*[VD: static int, VA: static int, VB: static int, VC: static int, TD, TA, TB, TC](
-    instr: static string;
-    dFrag: var array[VD, TD];
-    aFrag: array[VA, TA];
-    bFrag: array[VB, TB];
-    cFrag: array[VC, TC]): untyped =
-  ## Register-level MMA with explicit output: dFrag = aFrag·bFrag + cFrag.
-  ##
-  ## Args:
-  ##   instr: the atom's mnemonic, read by field at the call site:
-  ##     gemm_atom(atom.instr, dFrag, aFrag, bFrag, cFrag)
-  ##   dFrag: var register array — the destination (output first, per
-  ##     CONVENTIONS.md §1 — Context → Out → InOut → In)
-  ##   aFrag, bFrag: register arrays (the operands)
-  ##   cFrag: register array — the accumulator input (read-only here)
-  ##
-  ## dFrag and cFrag may be the same array (passing the same name aliases
-  ## them in the asm — equivalent to the 4-arg in-place form).
-  if VD != VC:
-    error("gemm_atom: D and C fragment arrays must have the same length (" & $VD & " vs " & $VC & ")", dFrag)
-  let dElem = dFrag.getTypeInst()[2].repr
-  let aElem = aFrag.getTypeInst()[2].repr
-  let bElem = bFrag.getTypeInst()[2].repr
-  let cElem = cFrag.getTypeInst()[2].repr
-  let asmStr = buildNvidiaMmaAsm(instr, VA, VB, VC,
-                                 dFrag.repr, aFrag.repr, bFrag.repr, cFrag.repr,
-                                 dElem, aElem, bElem, cElem)
-  result = newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
+  ## The language evaluates the tensor arguments once at the call
+  ## boundary, so slices like `aFrag(_, _, k)` are passed ergonomically.
+  ## gemm_mma (kernel_gemm/nvidia_tensor_cores.nim) builds the asm and
+  ## hardcodes float32/uint32 (TF32) — see the TODO there.
+  const
+    aV = toIntVal(mma.valuesPerThread(opA))
+    bV = toIntVal(mma.valuesPerThread(opB))
+    dV = toIntVal(mma.valuesPerThread(opC))
+  gemm_mma(mma.instr, aV, bV, dV, dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_ukernel(mma, ...) — the GEBB microkernel (loop over K)
 # ═════════════════════════════════════════════════════════════════════════
 
-func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
-    mma: static MmaAtom[LA, LB, LC];
-    cFrag: var array[VC, TC];
+func gemm_ukernel*[TC, ShC, StC, TA, ShA, StA, TB, ShB, StB](
+    mma: static MmaAtom;
+    cFrag: var Tensor[TC, ShC, StC];
     aFrag: Tensor[TA, ShA, StA];
     bFrag: Tensor[TB, ShB, StB]) {.inline.} =
   ## GEBB microkernel: cFrag += Σ_k aFrag[k]·bFrag[k], one gemm_atom
@@ -172,7 +142,8 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
   ##   mma: a compile-time MmaAtom (bkGPU_TensorCore / bkCPU_X86_AMX — has
   ##        `instr`), passed `static`: the atom is data that monomorphizes
   ##        the kernel (CuTe passes the atom as a type for the same reason)
-  ##   cFrag: var register array — the accumulator across all k_blocks
+  ##   cFrag: var register fragment tensor — the accumulator across all
+  ##        k_blocks (the asm D operand, in-place accumulate)
   ##   aFrag: owning tensor, shape (VA, RestM, RestK), strides (1, VA, VA)
   ##        (make_fragment_A) — V flattened to the atom register order;
   ##        RestM·RestK = the k_blocks; gemm_atom reads data[k_block·VA+i]
@@ -192,6 +163,7 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
     K = toIntVal(ShA.default[1]) * toIntVal(ShA.default[2])
     VA = toIntVal(ShA.default[0])
     VB = toIntVal(ShB.default[0])
+    VC = toIntVal(ShC.default[0])
   static:
     doAssert toIntVal(cosize(aFrag.layout)) div VA === K,
       "gemm_ukernel: A rest-mode size (" & $(toIntVal(cosize(aFrag.layout)) div VA) &
@@ -212,7 +184,9 @@ func gemm_ukernel*[VC: static int, TA, TB, TC, ShA, StA, ShB, StB, LA, LB, LC](
       aSlice[i] = aFrag.data[k_block * VA + i]
     staticFor i, 0, VB:
       bSlice[i] = bFrag.data[k_block * VB + i]
-    gemm_atom(mma.instr, cFrag, aSlice, bSlice)
+    gemm_atom(mma, cFrag,
+              make_view(addr aSlice[0], make_layout((VA,), (1,))),
+              make_view(addr bSlice[0], make_layout((VB,), (1,))))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_tiled(tma, threadIdx, alpha, A, B, beta, C) — the tiled GEMM
@@ -325,10 +299,8 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   let tBv = tma.partition_B(thr, B)
   var tCv = tma.partition_C(thr, C)
 
-  var cFrag: array[VC, TC]
-  # crucible emits bare `float cFrag[4];` (no auto-zero) — explicit zeroing
-  var cFragView = make_view(addr cFrag[0], make_layout((Int[VC](),)))
-  cFragView.fillWith(TC(0))  # TC(0) not 0.0'f32 — the accumulator dtype derives from the atom's cType
+  var cFrag = make_tensor(TC, (VC,))
+  cFrag.fillWith(TC(0))  # TC(0) not 0.0'f32 — the accumulator dtype derives from the atom's cType
 
   for k_tile in 0 ..< K div BLK_K:
     # Fragment gathering through the layout algebra (CuTe make_fragment_A
@@ -376,4 +348,4 @@ func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
   # untouched). Free-func call: axpby's parameter order is alpha, X, beta,
   # Y (CuTe mnemonic), so X is not the first arg — UFCS method syntax
   # cannot apply.
-  axpby(alpha, cFragView, beta, tCv)
+  axpby(alpha, cFrag, beta, tCv)
