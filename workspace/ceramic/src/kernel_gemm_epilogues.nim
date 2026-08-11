@@ -93,6 +93,10 @@ func initEpiAXPBY*[T, Sh, StC](
   ## the output tile (shared Sh, enforced by the compiler).
   result = EpiAXPBY[T, Sh, StC](alpha: alpha, beta: beta, C_gmem: C)
 
+func cView*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): var TensorView[T, Sh, StC] =
+  ## The C operand view in gmem (the destination D), writable by apply.
+  op.C_gmem
+
 template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
   ## Injects a SMEM buffer for C into the caller scope
   ## and copy C into it.

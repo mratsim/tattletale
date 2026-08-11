@@ -55,22 +55,21 @@ func gemmUkernelMicrotile(tma: static TiledMma; t: int;
   let tAv = tma.partition_A(thr, make_view(A, make_layout((M, kSlices * K), (1, M))))
   let tBv = tma.partition_B(thr, make_view(B, make_layout((N, kSlices * K), (1, N))))
   var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
-  # the fragment blocks as owning tensors shaped like the partitions
-  # (CuTe make_fragment_A/B/C): V flattened to atom register order, the
-  # k_blocks are the partition's RestK mode — one copyFrom gathers the
-  # whole block through each tensor's layout (coordinate semantics:
-  # dst(i)/src(i) decode i through their own shapes — identical flat
-  # enumeration, matching gemm_ukernel's data[k·VA+i] read)
+  # the fragment blocks as owning tensors shaped like the partitions:
+  # V flattened to atom register order, the k_blocks are the partition's
+  # RestK mode. One copyFrom gathers the whole block through each
+  # tensor's layout (coordinate semantics: dst(i)/src(i) decode i through
+  # their own shapes, identical flat enumeration, matching gemm_ukernel's
+  # coordinate slices)
   var aFrag = make_fragment_A(tma.atom, tAv)
   aFrag.copyFrom(tAv)
   var bFrag = make_fragment_B(tma.atom, tBv)
   bFrag.copyFrom(tBv)
-  # the accumulator: make_tensor, passed as .data (the crucible var-array
-  # field fix makes the bare field C-decay to T*)
+  # the accumulator: make_tensor, passed directly to gemm_ukernel
   var cFrag = make_tensor(float32, (VC,))
   cFrag.fillWith(0.0'f32)
 
-  gemm_ukernel(tma.atom, cFrag.data, aFrag, bFrag)   # two mma.sync, accumulating
+  gemm_ukernel(tma.atom, cFrag, aFrag, bFrag)   # two mma.sync, accumulating
 
   axpby(1.0'f32, cFrag, 0.0'f32, tCv)
 

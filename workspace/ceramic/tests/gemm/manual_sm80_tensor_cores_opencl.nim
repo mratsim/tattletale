@@ -77,14 +77,15 @@ func mmaMicrotile(tma: static TiledMma; t: int;
   var cFrag = make_tensor(float32, (VC,))
   cFrag.fillWith(0.0'f32)
 
-  gemm_atom(tma.atom.instr, cFrag.data, aFrag.data, bFrag.data)   # one mma.sync — in-place accumulate
+  gemm_atom(tma.atom, cFrag, aFrag, bFrag)   # one mma.sync — in-place accumulate
 
   axpby(1.0'f32, cFrag, 0.0'f32, tCv)
 
 func mmaMicrotileExplicit(tma: static TiledMma; t: int;
                           C: ptr UncheckedArray[float32];
                           A, B: ptr UncheckedArray[uint32]) {.inline.} =
-  ## C(16×8) = A(16×8)·B(8×8) + 1 — the 5-arg form: dFrag out, cFrag in
+  ## C(16×8) = A(16×8)·B(8×8) + 1 — explicit destination: dFrag starts as a
+  ## copy of cFrag, then accumulates in place.
   ## (port of the CUDA twin; added with the backend-engine rework so the
   ## OpenCL path exercises both MMA forms like the _cuda file).
   const
@@ -106,7 +107,8 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
   cFrag.fillWith(1.0'f32)                        # nonzero accumulator input
   var dFrag = make_tensor(float32, (VC,))
 
-  gemm_atom(tma.atom.instr, dFrag.data, aFrag.data, bFrag.data, cFrag.data)   # dFrag = aFrag·bFrag + cFrag
+  dFrag.copyFrom(cFrag)                        # seed the accumulator input
+  gemm_atom(tma.atom, dFrag, aFrag, bFrag)   # dFrag = aFrag·bFrag + cFrag
 
   axpby(1.0'f32, dFrag, 0.0'f32, tCv)
 
@@ -121,7 +123,7 @@ const kernelCode = opencl:
 
   proc mmaMicrotileExplicitKernel(A, B: ptr UncheckedArray[uint32];
                                   C: ptr UncheckedArray[float32]) {.global.} =
-    ## C(16×8) = A(16×8)·B(8×8) + 1 — the 5-arg form.
+    ## C(16×8) = A(16×8)·B(8×8) + 1 — the explicit-destination form.
     mmaMicrotileExplicit(tiled, int(get_local_id(0)), C, A, B)
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -136,7 +138,7 @@ proc main() =
     "this kernel embeds NVIDIA inline PTX (asm mma.sync) — only NVIDIA's " &
     "OpenCL compiler accepts it; got device vendor: " & engine.ctx.device.vendor()
   testMicrotile(engine, atom, "SM80")
-  echo "  OK — m16n8k8 tf32 microtile matches reference via OpenCL (tf32-exact fixture, 16 trials)"
+  echo "  OK: m16n8k8 tf32 microtile matches reference via OpenCL (tf32-exact fixture, 16 trials)"
 
 when isMainModule:
   main()

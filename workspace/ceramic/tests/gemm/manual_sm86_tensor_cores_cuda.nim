@@ -1,12 +1,12 @@
 ## Manual GPU test: the sm86 tensor-core microtile via NVRTC/CUDA — one register-level MMA.
 ##
-## gemm_atom(atom.instr, cFrag, aFrag, bFrag) replaces the hand-written mma.sync asm:
+## gemm_atom(tma.atom, cFrag, aFrag, bFrag) replaces the hand-written mma.sync asm:
 ## one m16n8k8 tf32 atom, 32 threads. Fragment gathering is CuTe layout algebra
 ## (sgemm_2.cu): partition_A/B/C once (thr_mma.partition), the fragment
 ## registers as identity views, and copyFrom/fillWith do the gather/clear —
 ## no for loops, no offset arithmetic. The epilogue is axpby (gemm_device
-## convention). Plus the explicit-output 5-arg form:
-## gemm_atom(atom.instr, dFrag, aFrag, bFrag, cFrag).
+## convention). Plus the explicit-destination form: dFrag = cFrag copy then
+## in-place accumulate.
 ##
 ## The atom is the parameter — SM86_16x8x8_F32TF32TF32F32_TN; the tiling is
 ## 1×1×1 (single atom); geometry is derived inside the driver func. The
@@ -66,14 +66,15 @@ func mmaMicrotile(tma: static TiledMma; t: int;
   var cFrag = make_tensor(float32, (VC,))
   cFrag.fillWith(0.0'f32)
 
-  gemm_atom(tma.atom.instr, cFrag.data, aFrag.data, bFrag.data)   # one mma.sync — in-place accumulate
+  gemm_atom(tma.atom, cFrag, aFrag, bFrag)   # one mma.sync — in-place accumulate
 
   axpby(1.0'f32, cFrag, 0.0'f32, tCv)
 
 func mmaMicrotileExplicit(tma: static TiledMma; t: int;
                           C: ptr UncheckedArray[float32];
                           A, B: ptr UncheckedArray[uint32]) {.inline.} =
-  ## C(16×8) = A(16×8)·B(8×8) + 1 — the 5-arg form: dFrag out, cFrag in.
+  ## C(16×8) = A(16×8)·B(8×8) + 1 — explicit destination: dFrag starts as a
+  ## copy of cFrag, then accumulates in place.
   const
     M = tma.atom.mnk.m
     N = tma.atom.mnk.n
@@ -93,7 +94,8 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
   cFrag.fillWith(1.0'f32)                        # nonzero accumulator input
   var dFrag = make_tensor(float32, (VC,))
 
-  gemm_atom(tma.atom.instr, dFrag.data, aFrag.data, bFrag.data, cFrag.data)   # dFrag = aFrag·bFrag + cFrag
+  dFrag.copyFrom(cFrag)                        # seed the accumulator input
+  gemm_atom(tma.atom, dFrag, aFrag, bFrag)   # dFrag = aFrag·bFrag + cFrag
 
   axpby(1.0'f32, dFrag, 0.0'f32, tCv)
 
