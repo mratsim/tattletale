@@ -5,10 +5,11 @@
 ## 32×16, K = 32), 128 work-items per CTA. The kernel body is the CUDA
 ## twin's verbatim; the launch geometry is linearized: the engine launches
 ## grid.x·grid.y·blockSize work-items and the kernel decomposes the linear
-## work-item id into (mCTA, nCTA, threadIdx). Work-groups are pinned to
-## one warp: the mma.sync epilogue path miscomputes in multi-warp groups
-## on NVIDIA's OpenCL. The oracle, trial loop and report live in
-## gemm_test_lib (testGemmGrid*), shared with the CUDA twin.
+## work-item id into (mCTA, nCTA, threadIdx). Work-groups span the full
+## CTA (blk.x = 128): mma.sync works in multi-warp groups on NVIDIA's
+## OpenCL (verified by experiment, the old one-warp pin was over-cautious).
+## The oracle, trial loop and report live in gemm_test_lib
+## (testGemmGrid*), shared with the CUDA twin.
 ##
 ## NVIDIA-OpenCL only: the mma.sync inline PTX travels inside the OpenCL C
 ## kernel as asm(...), which only NVIDIA's OpenCL compiler accepts. The
@@ -44,8 +45,8 @@ const atom = SM80_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((2, 2, 1)))](
   atom: atom, threadLayout: make_layout((2, 2, 1)))
 
-# Work-group pinned to one warp multiple: mma.sync is warp-synchronous,
-# each 32-lane warp must execute it convergently. 128 = 4 warps.
+# Work-group spans the full CTA: mma.sync is warp-synchronous, each
+# 32-lane warp must execute it convergently, and 128 = 4 warps.
 const blockSize = 128
 static:
   doAssert blockSize == toIntVal(tiled.atom.threadCount(opA)) * 2 * 2 * 1

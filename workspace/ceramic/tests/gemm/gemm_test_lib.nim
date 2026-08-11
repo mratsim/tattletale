@@ -218,12 +218,11 @@ template run(engine: var OpenCLGemmEngine; kernelName: string; grid, blk: CudaDi
                          outputInit = (if output.len > 0: addr output[0] else: nil),
                          outputInitSize = output.len * sizeof(float32),
                          globalSize = [csize_t(grid.x * grid.y * blk.x)],
-                         # Work-group pinned to one warp: mma.sync and the
-                         # epilogue smem staging miscompute in multi-warp
-                         # groups on NVIDIA's OpenCL. The kernel linearizes
-                         # the CTA as gid = ctaId·blockSize + threadIdx, so
-                         # blk.x/32 single-warp groups cover one CTA.
-                         localSize = [csize_t(32)])
+                         # Work-group spans the full CTA (blk.x): mma.sync works in
+                         # multi-warp groups on NVIDIA's OpenCL. The kernel linearizes
+                         # the CTA as gid = ctaId·blockSize + threadIdx, so a single
+                         # blk.x-sized work-group covers one CTA.
+                         localSize = [csize_t(blk.x)])
   for i in 0 ..< output.len:
     copyMem(addr output[i], addr bytes[i * 4], 4)
 
