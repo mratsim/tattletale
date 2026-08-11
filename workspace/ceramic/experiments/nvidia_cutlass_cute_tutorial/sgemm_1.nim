@@ -13,7 +13,7 @@ import workspace/ceramic/src/kernel_fillwith_gpu
 import workspace/ceramic/src/kernel_copy_gpu
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
-import workspace/ceramic/src/kernel_axpby_gpu
+import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/experiments/experiment_testutils
 import workspace/crucible/src/codegen/nvrtc
 
@@ -101,7 +101,9 @@ proc sgemm_1_kernel(
   # C = alpha·acc + beta·C — matches CuTe sgemm_1's gemm_device, which
   # takes alpha/beta as kernel params and does axpby(alpha, tCrC, beta, tCgC)
   # (the tutorial's main() happens to pass alpha=1, beta=0).
-  axpby(alpha, tCrC, beta, tCgC)
+  var epi = initEpiAXPBY(alpha, beta, tCgC)
+  epi.preflight()
+  epi.apply(tCgC, tCrC)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  GPU kernel (cuda: block for NVRTC)

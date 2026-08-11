@@ -5,7 +5,7 @@
 ## analog). 32 threads. Fragment gathering is CuTe layout algebra (sgemm_2.cu): the
 ## partition of the full (M, 2K)/(N, 2K) views carries the k_blocks in its
 ## RestK mode; the register blocks are identity views and copyFrom does the
-## whole gather — no for loops, no offset arithmetic. The epilogue is axpby.
+## whole gather — no offset arithmetic. The epilogue is a direct identity copy to C.
 ##
 ## The atom is the parameter — SM86_16x8x8_F32TF32TF32F32_TN; the tiling is
 ## 1×1×1 (single atom); geometry is derived inside the driver func. The
@@ -27,7 +27,7 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_copy_gpu
 import workspace/ceramic/src/kernel_fillwith_gpu
-import workspace/ceramic/src/kernel_axpby_gpu
+import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible/src/codegen/nvrtc
@@ -71,7 +71,9 @@ func gemmUkernelMicrotile(tma: static TiledMma; t: int;
 
   gemm_ukernel(tma.atom, cFrag, aFrag, bFrag)   # two mma.sync, accumulating
 
-  axpby(1.0'f32, cFrag, 0.0'f32, tCv)
+  # identity epilogue: the register fragment is written straight to C
+  for i in 0 ..< size(tCv.layout):
+    tCv(i) = cFrag(i)
 
 const kernelCode = cuda:
   proc gemmUkernelKernel(C: ptr UncheckedArray[float32],

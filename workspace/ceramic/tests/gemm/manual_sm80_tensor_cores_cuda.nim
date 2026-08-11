@@ -4,7 +4,7 @@
 ## one m16n8k8 tf32 atom, 32 threads. Fragment gathering is CuTe layout algebra
 ## (sgemm_2.cu): partition_A/B/C once (thr_mma.partition), the fragment
 ## registers as identity views, and copyFrom/fillWith do the gather/clear —
-## no for loops, no offset arithmetic. The epilogue is axpby (gemm_device
+## no offset arithmetic. The epilogue is a direct identity copy to C (gemm_device
 ## convention). Plus the explicit-destination form: dFrag = cFrag copy then
 ## in-place accumulate.
 ##
@@ -28,7 +28,7 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_copy_gpu
 import workspace/ceramic/src/kernel_fillwith_gpu
-import workspace/ceramic/src/kernel_axpby_gpu
+import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible/src/codegen/nvrtc
@@ -42,7 +42,7 @@ func mmaMicrotile(tma: static TiledMma; t: int;
                   A, B: ptr UncheckedArray[uint32]) {.inline.} =
   ## C(16×8) = A(16×8)·B(8×8) — one m16n8k8 tf32 atom, 32 threads, in-place.
   ## Fragment gathering: thr_mma.partition_A/B/C, fragment registers as owning
-  ## tensors (make_tensor_like), copyFrom/fillWith/axpby — all layout
+  ## tensors (make_tensor_like), copyFrom/fillWith — all layout
   ## algebra, no loops, no offsets, no raw-addr views.
   const
     M = tma.atom.mnk.m
@@ -68,7 +68,9 @@ func mmaMicrotile(tma: static TiledMma; t: int;
 
   gemm_atom(tma.atom, cFrag, aFrag, bFrag)   # one mma.sync — in-place accumulate
 
-  axpby(1.0'f32, cFrag, 0.0'f32, tCv)
+  # identity epilogue: the register fragment is written straight to C
+  for i in 0 ..< size(tCv.layout):
+    tCv(i) = cFrag(i)
 
 func mmaMicrotileExplicit(tma: static TiledMma; t: int;
                           C: ptr UncheckedArray[float32];
@@ -97,7 +99,9 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
   dFrag.copyFrom(cFrag)                        # seed the accumulator input
   gemm_atom(tma.atom, dFrag, aFrag, bFrag)   # dFrag = aFrag·bFrag + cFrag
 
-  axpby(1.0'f32, dFrag, 0.0'f32, tCv)
+  # identity epilogue: the register fragment is written straight to C
+  for i in 0 ..< size(tCv.layout):
+    tCv(i) = dFrag(i)
 
 const kernelCode = cuda:
   proc mmaMicrotileKernel(C: ptr UncheckedArray[float32],

@@ -5,7 +5,7 @@
 ## atom, 32 work-items), emitted by the `opencl:` macro and executed on the
 ## OpenCL device. The kernel body is the CUDA twin's verbatim: partition
 ## views (partition_A/B/C, make_fragment_A/B, copyFrom, fillWith), one
-## mma.sync, axpby epilogue — no flattened consts, no hand-rolled gathers.
+## mma.sync, identity epilogue — no flattened consts, no hand-rolled gathers.
 ##
 ## NVIDIA-OpenCL only: the mma.sync inline PTX travels inside the OpenCL C
 ## kernel as `asm(...)` with GCC-style constraints, which only NVIDIA's
@@ -30,7 +30,7 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_copy_gpu
 import workspace/ceramic/src/kernel_fillwith_gpu
-import workspace/ceramic/src/kernel_axpby_gpu
+import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible/src/codegen/cl
@@ -53,7 +53,7 @@ func mmaMicrotile(tma: static TiledMma; t: int;
                   A, B: ptr UncheckedArray[uint32]) {.inline.} =
   ## C(16×8) = A(16×8)·B(8×8) — one m16n8k8 tf32 atom, 32 work-items, in-place.
   ## Fragment gathering: thr_mma.partition_A/B/C, fragment registers as owning
-  ## tensors (make_tensor_like), copyFrom/fillWith/axpby — all layout
+  ## tensors (make_tensor_like), copyFrom/fillWith — all layout
   ## algebra, no loops, no offsets, no raw-addr views.
   const
     M = tma.atom.mnk.m
@@ -79,7 +79,9 @@ func mmaMicrotile(tma: static TiledMma; t: int;
 
   gemm_atom(tma.atom, cFrag, aFrag, bFrag)   # one mma.sync — in-place accumulate
 
-  axpby(1.0'f32, cFrag, 0.0'f32, tCv)
+  # identity epilogue: the register fragment is written straight to C
+  for i in 0 ..< size(tCv.layout):
+    tCv(i) = cFrag(i)
 
 func mmaMicrotileExplicit(tma: static TiledMma; t: int;
                           C: ptr UncheckedArray[float32];
@@ -110,7 +112,9 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
   dFrag.copyFrom(cFrag)                        # seed the accumulator input
   gemm_atom(tma.atom, dFrag, aFrag, bFrag)   # dFrag = aFrag·bFrag + cFrag
 
-  axpby(1.0'f32, dFrag, 0.0'f32, tCv)
+  # identity epilogue: the register fragment is written straight to C
+  for i in 0 ..< size(tCv.layout):
+    tCv(i) = dFrag(i)
 
 const kernelCode = opencl:
   proc mmaMicrotileKernel(A, B: ptr UncheckedArray[uint32];
