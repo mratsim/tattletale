@@ -18,46 +18,44 @@
 ##
 ## `gemm_ukernel` — the GEBB microkernel: the loop over K on top of
 ##   `gemm_atom` (one atom instruction per k_block, accumulated in
-##   cFrag). Atom-parametric — the same signature serves GPU tensor cores
+##   dFrag). Atom-parametric — the same signature serves GPU tensor cores
 ##   and CPU FMA/AMX atoms.
 ##
 ## `gemm_tiled` — one tile of C = α·(A·B) + β·C: thread partitioning,
-##   the k-tile loop over `gemm_ukernel`, and the fused axpby epilogue.
+##   fragment gathering, the k_block loop in `gemm_ukernel`, and the
+##   fused epilogue (EpiAXPBY).
 ##
-## Data flow — one CTA tile (BLK_M×BLK_N, K split into BLK_K k-tiles):
+## Data flow — one CTA tile (tileM×tileN, K = the tile K):
 ##
 ## ```
-##   A (BLK_M, K) gmem          B (BLK_N, K) gmem
+##   A (tileM, K) gmem          B (tileN, K) gmem
 ##        │ partition_A              │ partition_B
 ##        ▼                          ▼
-##   tAv (V,RestM,RestK)      tBv (V,RestN,RestK)        tCv (V,RestM,RestN)
-##        │                          │                     (partition_C of C)
-##        └───────────┬──────────────┘
-##                    ▼  per k-tile k_tile: view last mode restricted to
-##              aFragTile     bFragTile   kBlocksPerTile — the fragment
-##              (registers, make_fragment_A/B)  spans THIS k-tile only
+##   tAv (V,RestM,RestK)      tBv (V,RestN,RestK)        C (V,RestM,RestN)
+##        │                          │          (partition_C of the tile,
+##        └───────────┬──────────────┘           the epilogue destination)
+##                    ▼
+##              aFragTile     bFragTile     — full-K fragments
+##              (registers, make_fragment_A/B)  (one copyFrom each)
 ##                    │           │
 ##                    └─────┬─────┘
 ##                          ▼
-##              gemm_ukernel: cFrag += Σ_k aFragTile[k_block]·bFragTile[k_block]
-##                          │   per k_block: copy slice → aSlice/bSlice
-##                          │     └─► gemm_atom(mma, cFrag, aSlice, bSlice)
+##              gemm_ukernel: dFrag += Σ_k aFrag(_,_,k)·bFrag(_,_,k)
+##                          │   one gemm_atom per k_block
 ##                          ▼
-##                    cFrag (VC registers, zero-cleared)
+##                    dFrag (register fragment, zero-cleared)
 ##                          │
-##                          ▼  fused epilogue: C := α·cFrag + β·C (axpby)
-##                    C (BLK_M, BLK_N) gmem
+##                          ▼  fused epilogue (EpiAXPBY):
+##                    D = α·AB + β·C_smem        (preflight stages C,
+##                    C (tileM, tileN) gmem       β==0 skips the load)
 ## ```
 ##
 ## Loop nesting:
 ##
 ## ```
-## gemm_tiled:  for k_tile in 0 ..< K div BLK_K          # k-tile loop
-##                gather aFragTile/bFragTile         # gmem → registers
-##                gemm_ukernel: for k_block in 0 ..< kBlocksPerTile # k_block loop
-##                  copy aFragTile[_, k_block] → aSlice  # fragment slice → operands
-##                  copy bFragTile[_, k_block] → bSlice
-##                  gemm_atom(mma, cFrag, aSlice, bSlice)  # one mma.sync
+## gemm_tiled:  gather aFragTile/bFragTile         # gmem → registers (full K)
+##                gemm_ukernel: for k_block in 0 ..< kBlocks  # k_block loop
+##                  gemm_atom(mma, dFrag, aFrag(_,_,k), bFrag(_,_,k))  # one mma.sync
 ## ```
 ##
 ## Tile/block hierarchy (CUTLASS terms):
@@ -91,10 +89,14 @@ import ./tensors
 import ./atoms
 import ./atoms_mma_partitioning
 import ./layout_algebra
+import ./kernel_copy_gpu
 import ./kernel_fillwith_gpu
 import ./kernel_axpby_gpu
+import ./kernel_gemm_epilogues
 import ./macros/static_for
 import ./kernel_gemm/nvidia_tensor_cores
+
+{.experimental: "callOperator".}
 
 #  gemm_atom(mma, ...) — register-level MMA
 # ═════════════════════════════════════════════════════════════════════════
@@ -184,160 +186,129 @@ func gemm_ukernel*[TC, ShC, StC, TA, ShA, StA, TB, ShB, StB](
 #  gemm_tiled(tma, threadIdx, alpha, A, B, beta, C) — the tiled GEMM
 # ═════════════════════════════════════════════════════════════════════════
 
-func gemm_tiled*[TA, TB, TC, T, ShA, StA, ShB, StB, ShC, StC](
+func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
     tma: static TiledMma;
     threadIdx: int;
-    alpha: T;
+    epi: Epi;
     A: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA];
     B: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB];
-    beta: T;
     C: var (TensorView[TC, ShC, StC] or Tensor[TC, ShC, StC]);
-    BLK_K: static int) {.inline.} =
+    TileShape: static tuple[M: int, N: int, K: int]) {.inline.} =
   ## One tile of C = α·(A·B) + β·C — order follows the formula.
   ##
   ## Args:
   ##   tma: the TiledMma — atom plus (ThrM, ThrN, ThrK) thread tiling
   ##   threadIdx: the flat linear thread id in 0 ..< blockSize (a
   ##        multi-dimensional block must be linearized by the caller)
-  ##   alpha, beta: runtime scale factors (float32 in v1)
-  ##   A: col-major (BLK_M, K) view, element type TA (tf32 uint32 in v1)
-  ##   B: col-major (BLK_N, K) view, element type TB (tf32 uint32 in v1)
-  ##   C: col-major (BLK_M, BLK_N) view, element type TC (float32 in v1),
-  ##        read and written in place
+  ##   epi: the fused epilogue op (EpiAXPBY in v1), built by the caller
+  ##        with the thread's C fragment view — carries alpha/beta and the
+  ##        C operand
+  ##   A: col-major (tileM, tileK) view, element type TA (tf32 uint32 in v1)
+  ##   B: col-major (tileN, tileK) view, element type TB (tf32 uint32 in v1)
+  ##   C: the thread's C fragment view (partition_C of the tile), element
+  ##        type TC (float32 in v1) — the epilogue destination, the same
+  ##        view the op was built with
+  ##   TileShape: static (tileM, tileN, tileK) — the tile dims; tileM and
+  ##        tileN must be exactly the thread layout's coverage
+  ##        (thrM·atomM, thrN·atomN), tileK the views' K
   ##
-  ## Computes the tile C = α·(A·B) + β·C with BLK_M = ThrM·atomM and
-  ## BLK_N = ThrN·atomN. The K dimension is split into BLK_K-element
-  ## k-tiles; each k-tile is gathered gmem → registers (aFragTile /
-  ## bFragTile) and accumulated into a zero-cleared internal cFrag via
-  ## gemm_ukernel. A fused epilogue applies α·cFrag + β·C. No smem, no
-  ## TMA, no tile-origin logic — the caller bakes the origin into the
-  ## view pointers.
+  ## Computes the tile C = α·(A·B) + β·C. The operand fragments span the
+  ## full tile K and are gathered gmem → registers once; gemm_ukernel
+  ## loops the k_blocks into a zero-cleared accumulator (dFrag, the
+  ## epilogue's AB). The fused epilogue stages its C operand into smem
+  ## (preflight, skipped when beta == 0) and applies D = α·AB + β·C
+  ## (apply). No TMA, no tile-origin logic — the caller bakes the origin
+  ## into the view pointers.
   ##
   ## Preconditions:
-  ##   - A/B/C are col-major views whose static shapes match the derived
-  ##     tile: ShA == (BLK_M, K), ShB == (BLK_N, K), ShC == (BLK_M, BLK_N)
-  ##   - K mod BLK_K == 0 and BLK_K mod (thrK·atomK) == 0
-  ##   - ThrK == 1 — threads are never distributed along K in v1
+  ##   - A/B are col-major views with shapes (tileM, tileK), (tileN, tileK)
+  ##   - C is the thread's partition_C view of the tile
+  ##   - tileK mod (thrK·atomK) == 0, ThrK == 1
   ##   - threadIdx < blockSize
   ##   - the backing buffers must address the tile — the ragged underlying
   ##     allocation is the caller's contract, not checked in v1
-  ##   - C's initial contents are read iff beta != 0 — the caller must
+  ##   - the epilogue's C is read iff beta != 0 — the caller must
   ##     initialize C for beta != 0; C is never read when beta == 0
   ##
   ## Postconditions:
-  ##   - C := α·(A·B) + β·C_old elementwise, exact op order α·cFrag + β·C
-  ##     (two multiplies then one add — no fma)
+  ##   - the tile's C := α·(A·B) + β·C_old elementwise, exact op order
+  ##     α·AB + β·C (two multiplies then one add — no fma)
   ##   - A and B are unmodified
   ##
   ## Panic-if (expansion-time rejections):
-  ##   - the A/B/C view shapes do not match the derived tile
-  ##     (BLK_M = ThrM·atomM, BLK_N = ThrN·atomN); fix the views or the
-  ##     TiledMma thread layout
-  ##   - K mod BLK_K != 0 — k-tiles do not divide K; use a BLK_K that
-  ##     divides K
-  ##   - BLK_K mod (thrK·atomK) != 0 — the k-tile is not a multiple of
-  ##     the thread k-depth; use a BLK_K multiple of thrK·atomK
+  ##   - TileShape.M/N != thrM·atomM / thrN·atomN — the thread layout must
+  ##     exactly cover the tile (the partition contract); fix the TiledMma
+  ##     thread layout or the tile
+  ##   - tileK mod (thrK·atomK) != 0 — the tile K is not a multiple of the
+  ##     thread k-depth; use a tile K multiple of thrK·atomK
   ##   - ThrK != 1 — v1 does not distribute threads along K
-  ##   - view shape mismatch — pass (BLK_M, K), (BLK_N, K), (BLK_M, BLK_N)
+  ##   - view shape mismatch — pass (tileM, tileK), (tileN, tileK)
   ##     col-major views
   const
-    VA = toIntVal(tma.atom.valuesPerThread(opA))
-    VB = toIntVal(tma.atom.valuesPerThread(opB))
-    VC = toIntVal(tma.atom.valuesPerThread(opC))
+    tileM = TileShape[0]
+    tileN = TileShape[1]
+    tileK = TileShape[2]
     atomM = tma.atom.mnk.m
     atomN = tma.atom.mnk.n
     atomK = tma.atom.mnk.k
     thrM  = toIntVal(tma.threadLayout.shape[0])
     thrN  = toIntVal(tma.threadLayout.shape[1])
     thrK  = toIntVal(tma.threadLayout.shape[2])
-    BLK_M = thrM * atomM
-    BLK_N = thrN * atomN
-    K = toIntVal(ShA.default[1])
-    kBlocksPerTile = BLK_K div atomK
+    blockSize = toIntVal(tma.atom.threadCount(opA)) * thrM * thrN * thrK
 
   static:
-    doAssert BLK_K mod (thrK * atomK) == 0,
-      "gemm_tiled: BLK_K (" & $BLK_K & ") mod (thrK·atomK) (" & $thrK & "·" & $atomK &
-        ") != 0 — use a BLK_K multiple of thrK·atomK"
-    doAssert K mod BLK_K == 0,
-      "gemm_tiled: K (" & $K & ") mod BLK_K (" & $BLK_K &
-        ") != 0 — use a BLK_K that divides K"
+    doAssert tileM === thrM * atomM,
+      "gemm_tiled: TileShape.M (" & $tileM & ") != thrM·atomM (" & $thrM & "·" & $atomM &
+        ") — the thread layout must exactly cover the tile (partition contract)"
+    doAssert tileN === thrN * atomN,
+      "gemm_tiled: TileShape.N (" & $tileN & ") != thrN·atomN (" & $thrN & "·" & $atomN &
+        ") — the thread layout must exactly cover the tile (partition contract)"
+    doAssert tileK mod (thrK * atomK) == 0,
+      "gemm_tiled: TileShape.K (" & $tileK & ") mod (thrK·atomK) (" & $thrK & "·" & $atomK &
+        ") != 0 — use a tile K multiple of thrK·atomK"
     doAssert thrK == 1,
       "gemm_tiled: ThrK (" & $thrK & ") != 1 — v1 does not distribute threads along K"
-    doAssert ShA.default[0] === BLK_M,
-      "gemm_tiled: A shape M (" & $ShA.default[0] & ") != BLK_M (" & $BLK_M &
-        ") — pass a (BLK_M, K) view"
-    doAssert ShA.default[1] === K,
-      "gemm_tiled: A shape K (" & $ShA.default[1] & ") != K (" & $K &
-        ") — pass a (BLK_M, K) view"
-    doAssert ShB.default[0] === BLK_N,
-      "gemm_tiled: B shape N (" & $ShB.default[0] & ") != BLK_N (" & $BLK_N &
-        ") — pass a (BLK_N, K) view"
-    doAssert ShB.default[1] === K,
-      "gemm_tiled: B shape K (" & $ShB.default[1] & ") != K (" & $K &
-        ") — pass a (BLK_N, K) view"
-    doAssert ShC.default[0] === BLK_M,
-      "gemm_tiled: C shape M (" & $ShC.default[0] & ") != BLK_M (" & $BLK_M &
-        ") — pass a (BLK_M, BLK_N) view"
-    doAssert ShC.default[1] === BLK_N,
-      "gemm_tiled: C shape N (" & $ShC.default[1] & ") != BLK_N (" & $BLK_N &
-        ") — pass a (BLK_M, BLK_N) view"
+    doAssert ShA.default[0] === tileM,
+      "gemm_tiled: A shape M (" & $ShA.default[0] & ") != tile M (" & $tileM &
+        ") — pass a (tileM, tileK) view"
+    doAssert ShA.default[1] === tileK,
+      "gemm_tiled: A shape K (" & $ShA.default[1] & ") != tile K (" & $tileK &
+        ") — pass a (tileM, tileK) view"
+    doAssert ShB.default[0] === tileN,
+      "gemm_tiled: B shape N (" & $ShB.default[0] & ") != tile N (" & $tileN &
+        ") — pass a (tileN, tileK) view"
+    doAssert ShB.default[1] === tileK,
+      "gemm_tiled: B shape K (" & $ShB.default[1] & ") != tile K (" & $tileK &
+        ") — pass a (tileN, tileK) view"
+    doAssert toIntVal(size(C.layout)) === tileM * tileN div blockSize,
+      "gemm_tiled: C fragment size (" & $(toIntVal(size(C.layout))) & ") != tile elements per thread (" &
+        $(tileM * tileN div blockSize) & ") — pass the thread's partition_C view"
+
   let thr = tma.get_slice(threadIdx)
-  # The thread's operand views (CuTe: thr_mma.partition_A/B/C):
-  #   tAv = (V, RestM, RestK) — my A fragment in gmem, offset inside
+  # The thread's operand views (CuTe: thr_mma.partition_A/B):
+  #   tAv = (V, RestM, RestK) — my A fragment in gmem
   #   tBv = (V, RestN, RestK) — my B fragment in gmem
-  #   tCv = (V, RestM, RestN) — my C in gmem (epilogue)
   let tAv = tma.partition_A(thr, A)
   let tBv = tma.partition_B(thr, B)
-  var tCv = tma.partition_C(thr, C)
 
-  var cFrag = make_tensor(TC, (VC,))
-  cFrag.fillWith(TC(0))  # TC(0) not 0.0'f32 — the accumulator dtype derives from the atom's cType
+  # D/AB naming follows the epilogue: D = the thread's C fragment (the
+  # destination, C here), AB = the accumulator dFrag. dFrag is shaped
+  # like the partition view (same shape type) with column-major compact
+  # strides, so its flat enumeration is the register order and the
+  # epilogue's shared-Sh contract holds.
+  var dFrag = make_tensor(TC, C.layout.shape)
+  dFrag.fillWith(TC(0))  # TC(0) not 0.0'f32 — the accumulator dtype derives from the atom's cType
 
-  for k_tile in 0 ..< K div BLK_K:
-    # Fragment gathering through the layout algebra (CuTe make_fragment_A
-    # + copy(A(_,_,k), rA(_,_,k))): the fragment is shaped from the
-    # partition view — V flattened to atom register order (stride-1), rest
-    # modes compact by the view's order — so the data layout is the
-    # hardware register enumeration, decoupled from the operand's strides.
-    # The k_block coordinate (0, k_tile·kBlocksPerTile+k_block) indexes the (V, RestM,
-    # RestK) view; the flat V index decomposes via the atom's (V0, V1)
-    # layout. No bare data[] writes — the fragment's layout is real and
-    # coordinate-accessed.
-    #
-    # The fragment spans THIS k-tile only: the view's last mode (RestK)
-    # is restricted to kBlocksPerTile, keeping its stride so the fragment's
-    # rest-mode order is unchanged. A full-K fragment (shaped from tAv
-    # directly) would make gemm_ukernel — which accumulates every slice of
-    # the fragment — read uninitialized registers beyond this k-tile's fill.
-    # (CUTLASS sm80_mma_multistage: partition_fragment_A(sA(_,_,0)) — the
-    # fragment is partitioned from the k-tile-sliced view, never the full K.)
-    let aTileLayout = replaceMode(tAv.layout,
-      make_layout(Int[kBlocksPerTile](), Int[toIntVal(mode(tAv.layout, tAv.layout.rank - 1).stride)]()),
-      tAv.layout.rank - 1)
-    let tAvTile = make_view(tAv.data, aTileLayout)
-    var aFragTile = make_fragment_A(tma.atom, tAvTile)
-    for k_block in 0 ..< kBlocksPerTile:
-      for v in 0 ..< VA:
-        # (v0, v1, 0, k_block) — the decomposed V coord + (RestM, RestK) coords
-        # against the (V·, RestM, RestK) fragment and partition views
-        aFragTile(v, 0, k_block) =
-          tAv(concat(idx2crd(tma.atom.aLayout.shape[1], v), (0, k_tile * kBlocksPerTile + k_block)))
-    let bTileLayout = replaceMode(tBv.layout,
-      make_layout(Int[kBlocksPerTile](), Int[toIntVal(mode(tBv.layout, tBv.layout.rank - 1).stride)]()),
-      tBv.layout.rank - 1)
-    let tBvTile = make_view(tBv.data, bTileLayout)
-    var bFragTile = make_fragment_B(tma.atom, tBvTile)
-    for k_block in 0 ..< kBlocksPerTile:
-      for v in 0 ..< VB:
-        bFragTile(v, 0, k_block) =
-          tBv(concat(idx2crd(tma.atom.bLayout.shape[1], v), (0, k_tile * kBlocksPerTile + k_block)))
-    gemm_ukernel(tma.atom, cFrag, aFragTile, bFragTile)
+  # the operand fragments span the full tile K — the k_block loop lives
+  # in gemm_ukernel
+  var aFragTile = make_fragment_A(tma.atom, tAv)
+  aFragTile.copyFrom(tAv)
+  var bFragTile = make_fragment_B(tma.atom, tBv)
+  bFragTile.copyFrom(tBv)
+  gemm_ukernel(tma.atom, dFrag, aFragTile, bFragTile)
 
-  # Epilogue — CuTe gemm_device: axpby(alpha, tCrC, beta, tCgC). The
-  # register fragment (identity view) and the thread's C view are zipped
-  # by size; axpby's β=0 branch skips the C read (a NaN-prefilled C stays
-  # untouched). Free-func call: axpby's parameter order is alpha, X, beta,
-  # Y (CuTe mnemonic), so X is not the first arg — UFCS method syntax
-  # cannot apply.
-  axpby(alpha, cFrag, beta, tCv)
+  # fused epilogue: preflight stages the op's C operand into smem
+  # (skipped when beta == 0), apply writes D = α·AB + β·C_smem
+  var o = epi
+  o.preflight()
+  o.apply(C, dFrag)
