@@ -26,6 +26,27 @@ proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
 proc address*(a: string): string = "&" & a
 proc size*(a: string): string = "sizeof(" & a & ")"
 
+proc genAsmStmt*(ast: GpuAst): string =
+  ## Substitute the TAG_IDENT_IN_ASM<n> placeholders with the operand
+  ## symbols' display names.
+  ## Backtick identifiers in `asm` resolve to Nim symbols.
+  ## The IR stores them as gpuIdent ops and the printers substitute the
+  ## (possibly mangled) name at codegen time.
+  var s = ast.stmt
+  var i = 0
+  while i < s.len:
+    if s[i] == TAG_IDENT_IN_ASM[0]:
+      var j = i + 1
+      var idx = 0
+      while j < s.len and s[j] in {'0' .. '9'}:
+        idx = idx * 10 + (ord(s[j]) - ord('0'))
+        inc j
+      result.add ast.ops[idx].symbol.name
+      i = j
+    else:
+      result.add s[i]
+      inc i
+
 proc isGlobal*(fn: GpuAst): bool =
   doAssert fn.kind == gpuProc, "Not a function, but: " & $fn.kind
   result = attGlobal in fn.pAttributes

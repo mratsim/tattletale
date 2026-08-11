@@ -926,10 +926,27 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
 
 
   of nnkAsmStmt:
-    doAssert node.len == 2
     doAssert node[0].kind == nnkEmpty
-    result = GpuAst(kind: gpuInlineAsm,
-                    stmt: node[1].strVal)
+    result = GpuAst(kind: gpuInlineAsm)
+    var s = ""
+    var ops = newSeq[GpuAst]()
+    for i in 1 ..< node.len:
+      case node[i].kind
+      of nnkStrLit:
+        s.add node[i].strVal
+      of nnkSym:
+        # Backtick identifier:
+        #   Nim's asm semantics resolve it to a Sym node.
+        # Emit a placeholder (TAG_IDENT_IN_ASM + index)
+        # and record the symbol as a gpuIdent.
+        # Printers substitute the (possibly mangled) display name at
+        # codegen time.
+        ops.add ctx.toGpuAst(reg, node[i])
+        s.add TAG_IDENT_IN_ASM & $(ops.len - 1)
+      else:
+        doAssert false, "unexpected asm node: " & $node[i].kind & " in " & node.repr
+    result.stmt = s
+    result.ops = ops
 
   of nnkBracket:
     let aLitTyp = resolveType(reg, node[0])

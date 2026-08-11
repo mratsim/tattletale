@@ -401,7 +401,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         result.add ", "
     result.add "}"
   of gpuInlineAsm:
-    result = indentStr & "asm(" & ast.stmt.strip & ");"
+    result = indentStr & "asm(" & genAsmStmt(ast).strip & ");"
 
   of gpuComment:
     result = indentStr & "/* " & ast.comment & " */"
