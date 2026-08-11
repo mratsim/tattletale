@@ -42,8 +42,8 @@ func regList(first, count: int): string =
 
 func operandClause(name, letter: string; count: int): string =
   ## The constraint clause for `count` scalar registers,
-  ## `"letter"(`name0`), "letter"(`name1`), ...` — the backtick
-  ## scalar-register format. Nim resolves the backticked name to the
+  ## `"letter"(`name0`), "letter"(`name1`), ...`. The backtick
+  ## scalar-register format: Nim resolves the backticked name to the
   ## symbol (a gemm_mma-declared local).
   result = ""
   for i in 0 ..< count:
@@ -63,7 +63,7 @@ func buildNvidiaMmaAsm*(instr: string; va, vb, vc: int;
   ## Args:
   ##   instr: atom mnemonic, e.g. "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"
   ##   va, vb, vc: fragment register counts (V per thread per operand)
-  ##   dName/aName/bName/cName: scalar register name stems — the asm
+  ##   dName/aName/bName/cName: scalar register name stems. The asm
   ##     operands are `name0`, `name1`, ... (backtick identifiers)
   ##   dElem/aElem/bElem/cElem: fragment element type names, mapped to
   ##     constraint letters ("r" for integer regs, "f" for float acc)
@@ -89,7 +89,7 @@ func buildNvidiaMmaAsm*(instr: string; va, vb, vc: int;
     result.add ", " & operandClause(cName, constraintLetter(cElem), vc)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  gemm_mma: the explode equivalent, one register-level MMA call
+#  gemm_mma: one register-level MMA call
 # ═════════════════════════════════════════════════════════════════════════
 
 macro gemm_mma*(instr: static string; aV, bV, dV: static int;

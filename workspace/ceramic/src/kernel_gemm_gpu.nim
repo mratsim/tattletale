@@ -151,7 +151,7 @@ func gemm_ukernel*[TC, ShC, StC, TA, ShA, StA, TB, ShB, StB](
   ##   aFrag, bFrag: operand fragments (make_fragment_A/B), shape
   ##        (VA, RestM, RestK) / (VB, RestN, RestK) — V flattened to the
   ##        atom register order. RestK counts k_blocks, each mma.k elements
-  ##        deep; a k_block slice is a (VA, RestM) view at data offset
+  ##        deep. A k_block slice is a (VA, RestM) view at data offset
   ##        k·VA·RestM.
   ##
   ## The unrolled staticFor binds k_block to each k-block index, and the
@@ -208,12 +208,12 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
   ##   C: the thread's C fragment view (partition_C of the tile), element
   ##        type TC (float32 in v1) — the epilogue destination, the same
   ##        view the op was built with
-  ##   TileShape: static (tileM, tileN, tileK) — the tile dims; tileM and
+  ##   TileShape: static (tileM, tileN, tileK), the tile dims. tileM and
   ##        tileN must be exactly the thread layout's coverage
-  ##        (thrM·atomM, thrN·atomN), tileK the views' K
+  ##        (thrM·atomM, thrN·atomN). tileK is the views' K
   ##
   ## Computes the tile C = α·(A·B) + β·C. The operand fragments span the
-  ## full tile K and are gathered gmem → registers once; gemm_ukernel
+  ## full tile K and are gathered gmem → registers once. gemm_ukernel
   ## loops the k_blocks into a zero-cleared accumulator (dFrag, the
   ## epilogue's AB). The fused epilogue stages its C operand into smem
   ## (preflight, skipped when beta == 0) and applies D = α·AB + β·C
@@ -237,7 +237,7 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
   ##
   ## Panic-if (expansion-time rejections):
   ##   - TileShape.M/N != thrM·atomM / thrN·atomN — the thread layout must
-  ##     exactly cover the tile (the partition contract); fix the TiledMma
+  ##     exactly cover the tile (the partition contract). Fix the TiledMma
   ##     thread layout or the tile
   ##   - tileK mod (thrK·atomK) != 0 — the tile K is not a multiple of the
   ##     thread k-depth; use a tile K multiple of thrK·atomK
