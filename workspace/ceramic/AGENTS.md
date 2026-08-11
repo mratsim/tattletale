@@ -59,7 +59,7 @@ Output/mutable parameters come first, except where the function name itself enco
 |-----------|---------|------|------|
 | copy | `copyFrom(dst, src)` | `copy(src, dst)` | output first |
 | gemm | `gemm(C, A, B)` | `gemm(A, B, C)` | output first |
-| axpby | `axpby(alpha, X, beta, Y)` | `axpby(alpha, x, beta, y)` | **exception**: name `axpby` = ordering |
+| epilogue | `apply(op, D, AB)` | (fused; no CuTe twin) | output first |
 
 ## Kernel file structure
 
@@ -72,4 +72,4 @@ GPU-suitable kernels use flat-index iteration (`for i: tv(i) = ...`), acceptable
 | Copy (GPU) | `kernel_copy_gpu.nim` |
 | Copy (CPU) | `kernel_copy_cpu.nim` |
 | GEMM | `kernel_gemm_gpu.nim` |
-| AXPBY | `kernel_axpby_gpu.nim` |
+| Epilogue | `kernel_gemm_epilogues.nim` |

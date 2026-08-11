@@ -36,7 +36,7 @@ flowchart TB
 
   subgraph Kernels
     CPU["CPU kernels<br/>kernel_fillwith_cpu.nim<br/>kernel_copy_cpu.nim"]
-    GPU["GPU kernels<br/>kernel_fillwith_gpu.nim<br/>kernel_copy_gpu.nim<br/>kernel_gemm_gpu.nim<br/>kernel_axpby_gpu.nim"]
+    GPU["GPU kernels<br/>kernel_fillwith_gpu.nim<br/>kernel_copy_gpu.nim<br/>kernel_gemm_gpu.nim"]
   end
 
   TV --> CPU
@@ -78,8 +78,7 @@ workspace/ceramic/
 │   ├── kernel_copy_cpu.nim      # copy: copyMem-fused + permuted variants
 │   ├── kernel_fillwith_gpu.nim  # fill: flat-index iteration
 │   ├── kernel_copy_gpu.nim      # copy: flat-index iteration
-│   ├── kernel_gemm_gpu.nim      # gemm: outer product, flat-index
-│   └── kernel_axpby_gpu.nim     # axpby
+│   └── kernel_gemm_gpu.nim      # gemm: outer product, flat-index (epilogue fused, src/kernel_gemm_epilogues.nim)
 ├── benchmark/
 │   ├── bench_ex02_matmul_cpu_simd.nim  # CPU GEMM vs OpenBLAS/Laser
 │   └── laser_matmul/                   # Laser strided-GEMM reimplementation
@@ -126,7 +125,7 @@ In the `sgemm_1` port (`experiments/nvidia_cutlass_cute_tutorial/sgemm_1.nim`),
 steps 1–5 match CuTe `sgemm_1.cu` statement-by-statement: CTA coordinate,
 `local_tile` with `Step` projection for A/B/C, `make_tensor_like` shared-memory
 tiles, `local_partition` for thread data, `fillWith` to clear the accumulator,
-main loop of `copyFrom` + `gemm`, epilogue `axpby`.
+main loop of `copyFrom` + `gemm`, epilogue `axpby` (CuTe tutorial naming; the ceramic epilogue is `EpiAXPBY`, `src/kernel_gemm_epilogues.nim`).
 
 ## Extension points
 
