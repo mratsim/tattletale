@@ -92,17 +92,19 @@ func tf32ify(x: float32): uint32 =
   (cast[uint32](x)) and 0xFFFFE000'u32
 
 proc tf32Fixture(rng: var Rand; M, K: int): seq[uint32] =
-  ## A random (M, K) col-major tf32 fixture in the f32 domain 0..15.
-  ## The domain is pinned so every product (≤ 15·15 = 225), partial sum
-  ## (≤ K·225) and epilogue is exactly representable in f32's 24-bit
-  ## mantissa — this is what makes the gemm tests bit-exact regardless of
-  ## the mma pipe's internal accumulation order (see gemm_tf32_ref).
+  ## A random (M, K) col-major tf32 fixture in the f32 domain -15..15.
+  ## The symmetric domain is pinned so every |product| (≤ 15·15 = 225),
+  ## |partial sum| (≤ K·225) and epilogue is exactly representable in f32's
+  ## 24-bit mantissa — this is what makes the gemm tests bit-exact regardless
+  ## of the mma pipe's internal accumulation order (see gemm_tf32_ref).
+  ## Negatives are required so epilogues with a clamp (EpiReLU) see both
+  ## signs of the accumulator; a dropped clamp would then fail the test.
   doAssert K * 15 * 15 < 1 shl 24,
     "tf32Fixture: K·15² ≥ 2^24 — partial sums leave the f32 exact-representable" &
     " domain; the oracle would no longer be bit-exact"
   result = newSeq[uint32](M * K)
   for i in 0 ..< result.len:
-    result[i] = tf32ify(float32(rng.rand(0 .. 15)))
+    result[i] = tf32ify(float32(rng.rand(-15 .. 15)))
 
 proc gemm_tf32_ref*(C: var openArray[float32];
                     A, B: openArray[uint32];
@@ -518,8 +520,8 @@ proc testGemmGridIdentity*[E](engine: var E; tiled: static TiledMma; label: stri
 
 proc testGemmGridReLU*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## The EpiReLU grid epilogue: D = max(0, AB) over the same 2×2 CTA grid.
-  ## The fixture domain 0..15 makes AB non-negative, so ReLU is the
-  ## identity here; the NaN-prefilled D still catches dropped stores.
+  ## The fixture domain -15..15 makes AB span negative values, so the clamp
+  ## is exercised; the NaN-prefilled D still catches dropped stores.
   const
     M = 64
     N = 32
