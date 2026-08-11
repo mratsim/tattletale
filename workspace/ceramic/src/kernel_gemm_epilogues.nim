@@ -46,6 +46,20 @@
 ##   `op.preflight()`           stages gmem operands (EpiAXPBY: no-op stub today)
 ##   `op.apply(D, AB)`          the epilogue math (EpiAXPBY reads C via op.C_gmem)
 ##
+## Target contract:
+##   `shard(op, D, tD, tDv)`    partition the captured operands by thread, projecting
+##                              onto the output fragment the kernel already partitioned
+##   `preflight(op)`            initiate async data movement (no-op stub today)
+##   `apply(op, AB, ...)`       the epilogue math, pure — reads the accumulator and the
+##                              shard's operand fragments, produces the output fragment.
+##                              `apply` STAYS a concept member
+##   `finalStore(op, out, D)`   the STORE — writes the output fragment to the gmem
+##                              destination. A separate responsibility from the math:
+##                              it is where ragged-tile predication and
+##                              flash-attention-style delayed stores live
+##   Today's fused `apply(D, AB)` (compute + store in one, D = the gmem destination
+##   written directly) is the v1 form, the target splits it into apply + finalStore.
+##
 ## The concept is Nim concepts V2 (bare `concept`, `Self` = the matched type).
 ## V2 concepts only accept proc requirements, so `preflight` cannot be a concept member.
 ## It still is a compile-time error not to have `preflight`, just that the message won't be as nice.
@@ -65,7 +79,8 @@ import ./tensors
 
 type Epilogue* = concept
   ## The concept: an Epilogue computes the output tile with the 2-arg
-  ## `apply(D, AB)`. D and AB share the shape type Sh.
+  ## `apply(D, AB)` (the target name is `finalStore`, see the module
+  ## header). D and AB share the shape type Sh.
   ## This is the only compiler-enforced member. Any user-defined type
   ## with a matching apply is an epilogue; the shipped ops are examples,
   ## not a closed zoo.
@@ -76,6 +91,14 @@ type Epilogue* = concept
   ##     ({.inject.}, shared on GPU) and stages the op's gmem operands.
   ##   gemm_tiled calls `op.preflight()` before `op.apply(D, AB)`
   ##   a missing `preflight` is a compile error at that call site.
+  ##
+  ## Target contract (design doc, CUTLASS correspondence in the scratchpad):
+  ##   `shard(op, D, tD, tDv)`   partition the captured operands by thread,
+  ##                             projecting onto the output fragment the
+  ##                             kernel already partitioned
+  ##   `preflight(op)`           initiate async data movement (no-op today)
+  ##   `apply(op, AB, ...)`      the math — STAYS a concept member
+  ##   `finalStore(op, out, D)`  the store, separate from the math
   proc apply(op: Self, D: var (TensorView or Tensor), AB: TensorView or Tensor)
 
 # ═════════════════════════════════════════════════════════════════════════
