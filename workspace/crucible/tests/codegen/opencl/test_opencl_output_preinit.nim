@@ -7,11 +7,11 @@
 ##
 ## OpenCL: output buffer pre-init for in-place kernels.
 ## execOpenCL uploads outputInit / outputInitSize into the output buffer
-## before running the kernel. Previously the output buffer was fresh-zeroed,
-## which broke in-place kernels that read their own output, such as
-## out[i] = out[i] + 1. This test runs the same in-place kernel twice on
-## the same buffer, carrying the previous contents forward via outputInit,
-## and checks the accumulation.
+## before running the kernel. clCreateBuffer leaves buffer contents
+## spec-undefined, so in-place kernels that read their own output, such
+## as out[i] = out[i] + 1, must seed the buffer via outputInit. This test
+## runs the same in-place kernel twice on the same buffer, carrying the
+## previous contents forward via outputInit, and checks the accumulation.
 ##
 ## Run:
 ##   cd tattletale
@@ -30,10 +30,13 @@ block:
   var ctx = initOpenCL()
   defer: ctx.shutdown()
 
-  # First run: the output buffer starts zeroed, so 0 + 1 = 1.
+  var zeroed: uint32 = 0
+  # First run: seed the output buffer with zero via outputInit, because
+  # clCreateBuffer contents are spec-undefined, so 0 + 1 = 1.
   let r1 = execOpenCL(
     ctx, kernelCode, "incInPlace", outputBytes = 4,
-    taggedArgs = newSeq[tuple[data: pointer, size: int, isValue: bool]]()
+    taggedArgs = newSeq[tuple[data: pointer, size: int, isValue: bool]](),
+    outputInit = addr zeroed, outputInitSize = 4
   )
   let v1 = cast[ptr uint32](r1[0].addr)[]
   doAssert v1 == 1, "first run must see a zeroed output buffer"
