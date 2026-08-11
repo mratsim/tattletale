@@ -325,7 +325,7 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
   o.apply(D, dFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  gemm_grid(tma, mCTA, nCTA, threadIdx, epi, D, A, ldA, B, ldB, M, N, TileShape)
+#  gemm_grid(tma, D, A, ldA, B, ldB, epi, M, N, K, TileShape, mCTA, nCTA, threadIdx)
 # ═════════════════════════════════════════════════════════════════════════
 
 func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
@@ -334,7 +334,7 @@ func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
     A: ptr UncheckedArray[TA]; ldA: static int;   # (M, K) col-major gmem, ldA the leading dim
     B: ptr UncheckedArray[TB]; ldB: static int;   # (N, K) col-major gmem, ldB the leading dim
     epi: Epi;                           # the fused epilogue op (concept), built by the caller
-    M, N: static int;                   # problem dims, compile-time in v1
+    M, N, K: static int;                # problem dims, compile-time in v1
     TileShape: static tuple[M: int, N: int, K: int];
     mCTA, nCTA, threadIdx: int) {.inline.} =   # CTA grid coords + thread id (blockIdx.x/y + threadIdx.x)
   ## One CTA tile of the problem GEMM: the (mCTA, nCTA) tile of
@@ -358,8 +358,9 @@ func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
   ##        problem buffers)
   ##   epi: the fused epilogue op (EpiAXPBY, EpiIdentity, EpiReLU,
   ##        EpiAddBias or a user op), built by the caller with its state
-  ##   M, N: the problem dims, compile-time in v1 (partition offsets are
-  ##        baked at compile time)
+  ##   M, N, K: the problem dims, compile-time in v1 (partition offsets are
+  ##        baked at compile time). K is the problem's K extent (the A/B
+  ##        buffers' K)
   ##   TileShape: static (tileM, tileN, tileK), see gemm_tiled. The
   ##        problem K equals tileK in v1 (gemm_tiled has no k-tile loop)
   ##   mCTA, nCTA: the CTA grid coordinates, blockIdx.x/y. The tile
@@ -369,6 +370,8 @@ func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
   ## Preconditions:
   ##   - M mod tileM == 0 and N mod tileN == 0, the v1 divisibility
   ##     contract. Ragged tiles are a documented TODO
+  ##   - K == tileK: the CTA tile spans the whole problem K in v1 (no
+  ##     k-tile loop; the k-tile loop later slices K per tile)
   ##   - the CTA grid covers 0 ..< M div tileM by 0 ..< N div tileN, so
   ##     m0 + tileM <= M and n0 + tileN <= N (the launcher's contract)
   ##   - ldA = M, ldB = N. The epilogue's C leading dim is M
@@ -389,6 +392,10 @@ func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
     doAssert N mod tileN == 0,
       "gemm_grid: N (" & $N & ") mod tileN (" & $tileN & ") != 0. v1 requires tile-aligned" &
       " problem dims, ragged tiles are a documented TODO"
+    doAssert tileK == K,
+      "gemm_grid: TileShape.K (" & $tileK & ") != problem K (" & $K & "). v1 has no" &
+      " k-tile loop — the CTA tile spans the whole problem K, so pass TileShape.K == K" &
+      " (the k-tile loop later relaxes this)"
     doAssert ldA == M,
       "gemm_grid: ldA (" & $ldA & ") != M (" & $M & "). v1 requires compact (M, K) buffers"
     doAssert ldB == N,

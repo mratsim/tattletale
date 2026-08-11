@@ -68,7 +68,7 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmGridIdentityKernel(
       A, B: ptr UncheckedArray[uint32];
@@ -84,7 +84,7 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiIdentity()
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmGridReLUKernel(
       A, B: ptr UncheckedArray[uint32];
@@ -100,7 +100,7 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiReLU()
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmGridBiasKernel(
       A, B: ptr UncheckedArray[uint32];
@@ -119,7 +119,7 @@ const kernelCode = opencl:
     var tBias = make_view(bias +% (m0 + n0 * 64), (32, 16), (1, 64))
     let biasCv = tiled.partition_C(thr, tBias)
     var epi = initEpiAddBias(biasCv)
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmGridKernelSingle(
       A, B: ptr UncheckedArray[uint32];
@@ -132,7 +132,7 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_grid(tiled, tCv, A, 32, B, 16, epi, 32, 16, (32, 16, 32), 0, 0, threadIdx)
+    gemm_grid(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, threadIdx)
 
 proc main() =
   var engine = "opencl".getEngine(kernelCode)
