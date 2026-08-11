@@ -12,7 +12,7 @@
 ##   tiled:     gemmTiledKernel
 
 
-import std/[random, strformat, math]
+import std/[random, strformat, math, typetraits]
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/tensors
@@ -184,20 +184,44 @@ template run(engine: var NVRTC; kernelName: string; grid, blk: CudaDim3;
 template run(engine: var OpenCLGemmEngine; kernelName: string; grid, blk: CudaDim3;
               output: var openArray[float32]; args: typed) =
   ## OpenCL backend: execOpenCL (source + entryPoint + raw inputs → bytes),
-  ## result copied into `out`. Kernel params must be (inputs..., output) —
+  ## result copied into `out`. Kernel params must be (inputs..., output)
   ## execOpenCL's binding convention (vs CUDA's res-first).
-  var raw: seq[tuple[data: pointer, size: int]]
-  for v in fields(args):
-    var vv = v                 # var copy: seqs share their buffer (shallow);
-                               # scalars are read before execOpenCL returns
-    when compiles(vv.len):
-      raw.add((cast[pointer](vv[0].unsafeAddr), vv.len * sizeof(typeof(vv[0]))))
+  ## Seq args bind as device buffers, scalars (alpha/beta) bind by value.
+  ##
+  ## TODO: unified engine API for all backends.
+  var raw: seq[tuple[data: pointer, size: int, isValue: bool]]
+  var t = args
+  var total = 0
+  for v in fields(t):
+    when v is seq or v is array:
+      discard
     else:
-      raw.add((cast[pointer](vv.unsafeAddr), sizeof(typeof(vv))))
+      total += sizeof(typeof(v))
+  var storage = newSeq[byte](total)
+  var offset = 0
+  for v in fields(t):
+    when v is seq or v is array:
+      raw.add((cast[pointer](addr v[0]), v.len * sizeof(typeof(v[0])), false))
+    else:
+      let sz = sizeof(typeof(v))
+      copyMem(addr storage[offset], addr v, sz)
+      raw.add((cast[pointer](addr storage[offset]), sz, true))
+      offset += sz
+
   let bytes = execOpenCL(engine.ctx, engine.source, kernelName,
-                         outputBytes = output.len * sizeof(float32), inputs = raw,
-                         globalSize = [csize_t(blk.x)],
-                         localSize = [csize_t(blk.x)])
+                         outputBytes = output.len * sizeof(float32), taggedArgs = raw,
+                         # In-place kernels (β·C) read the output's initial
+                         # contents; upload them so the C-skip and C-read
+                         # sentinels work like on CUDA.
+                         outputInit = (if output.len > 0: addr output[0] else: nil),
+                         outputInitSize = output.len * sizeof(float32),
+                         globalSize = [csize_t(grid.x * grid.y * blk.x)],
+                         # Work-group pinned to one warp: mma.sync and the
+                         # epilogue smem staging miscompute in multi-warp
+                         # groups on NVIDIA's OpenCL. The kernel linearizes
+                         # the CTA as gid = ctaId·blockSize + threadIdx, so
+                         # blk.x/32 single-warp groups cover one CTA.
+                         localSize = [csize_t(32)])
   for i in 0 ..< output.len:
     copyMem(addr output[i], addr bytes[i * 4], 4)
 
@@ -343,3 +367,224 @@ proc testTiledMultiBlock*[E](engine: var E; tiled: static TiledMma; label: strin
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 
   echo "  OK: gemm_tiled K=32 (4 k_blocks) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
+
+proc testGemmGrid*[E](engine: var E; tiled: static TiledMma; label: string) =
+  ## C(64×32) = α·A(64×32)·B(32×32) + β·C over a 2×2 CTA grid: each CTA
+  ## computes its (mCTA, nCTA) tile of the problem GEMM. (α, β) = (1, 0),
+  ## C NaN-prefilled (a spurious C read fails), 16 trials, bit-exact vs
+  ## the tf32 reference.
+  const
+    M = 64
+    N = 32
+    K = 32
+    TILE_M = 32
+    TILE_N = 16
+    TILE_K = 32
+    thrM = toIntVal(tiled.threadLayout.shape[0])
+    thrN = toIntVal(tiled.threadLayout.shape[1])
+    thrK = toIntVal(tiled.threadLayout.shape[2])
+    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+  const alpha = 1.0'f32
+  const beta = 0.0'f32
+  var rng = initRand(0xC0FFEE)
+
+  for trial in 0 ..< 16:
+    let A_gpu = tf32Fixture(rng, M, K)
+    let B_gpu = tf32Fixture(rng, N, K)
+
+    var acc = newSeq[float32](M * N)
+    acc.gemm_tf32_ref(A_gpu, B_gpu, M, N, K, 0.0'f32)
+    var C_ref = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      C_ref[i] = alpha * acc[i]
+
+    var gpuC = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      gpuC[i] = 0x7FC00000'f32    # NaN sentinel, a spurious C read fails
+    engine.run("gemmGridKernel", dim3(M div TILE_M, N div TILE_N),
+               dim3(blockSize), gpuC, (A_gpu, B_gpu, alpha, beta))
+    allClose(gpuC, C_ref, M, N, "gemm_grid trial " & $trial)
+
+  echo "  OK: gemm_grid M=64 N=32 K=32 tile (32,16,32) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, (1,0), NaN C)"
+
+proc testGemmGridBeta*[E](engine: var E; tiled: static TiledMma; label: string) =
+  ## Same 2×2 grid with (α, β) = (1, 1): C is pre-loaded from the fixture
+  ## domain, verify D = α·AB + β·C_old elementwise.
+  const
+    M = 64
+    N = 32
+    K = 32
+    TILE_M = 32
+    TILE_N = 16
+    TILE_K = 32
+    thrM = toIntVal(tiled.threadLayout.shape[0])
+    thrN = toIntVal(tiled.threadLayout.shape[1])
+    thrK = toIntVal(tiled.threadLayout.shape[2])
+    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+  const alpha = 1.0'f32
+  const beta = 1.0'f32
+  var rng = initRand(0xBEEF)
+
+  for trial in 0 ..< 16:
+    let A_gpu = tf32Fixture(rng, M, K)
+    let B_gpu = tf32Fixture(rng, N, K)
+    var C_init = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      C_init[i] = float32(rng.rand(0 .. 15))   # exact-representable domain
+
+    var acc = newSeq[float32](M * N)
+    acc.gemm_tf32_ref(A_gpu, B_gpu, M, N, K, 0.0'f32)
+    var C_ref = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      C_ref[i] = alpha * acc[i] + beta * C_init[i]
+
+    var gpuC = C_init
+    engine.run("gemmGridKernel", dim3(M div TILE_M, N div TILE_N),
+               dim3(blockSize), gpuC, (A_gpu, B_gpu, alpha, beta))
+    allClose(gpuC, C_ref, M, N, "gemm_grid beta trial " & $trial)
+
+  echo "  OK: gemm_grid (1,1) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, C pre-loaded, 16 trials)"
+
+proc testGemmGridSingle*[E](engine: var E; tiled: static TiledMma; label: string) =
+  ## M=32, N=16, K=32, tile (32, 16, 32): a 1×1 CTA grid for variety.
+  ## (α, β) = (1, 0), NaN-prefilled C.
+  const
+    M = 32
+    N = 16
+    K = 32
+    TILE_M = 32
+    TILE_N = 16
+    TILE_K = 32
+    thrM = toIntVal(tiled.threadLayout.shape[0])
+    thrN = toIntVal(tiled.threadLayout.shape[1])
+    thrK = toIntVal(tiled.threadLayout.shape[2])
+    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+  const alpha = 1.0'f32
+  const beta = 0.0'f32
+  var rng = initRand(0xF1F1)
+
+  for trial in 0 ..< 16:
+    let A_gpu = tf32Fixture(rng, M, K)
+    let B_gpu = tf32Fixture(rng, N, K)
+
+    var acc = newSeq[float32](M * N)
+    acc.gemm_tf32_ref(A_gpu, B_gpu, M, N, K, 0.0'f32)
+    var C_ref = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      C_ref[i] = alpha * acc[i]
+
+    var gpuC = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      gpuC[i] = 0x7FC00000'f32
+    engine.run("gemmGridKernelSingle", dim3(M div TILE_M, N div TILE_N),
+               dim3(blockSize), gpuC, (A_gpu, B_gpu, alpha, beta))
+    allClose(gpuC, C_ref, M, N, "gemm_grid single trial " & $trial)
+
+  echo "  OK: gemm_grid M=32 N=16 K=32 tile (32,16,32) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 1x1 CTA grid, 128 threads, 16 trials, (1,0), NaN C)"
+
+proc testGemmGridIdentity*[E](engine: var E; tiled: static TiledMma; label: string) =
+  ## The EpiIdentity grid epilogue: D = AB over the same 2×2 CTA grid.
+  ## D is NaN-prefilled, a dropped store leaves NaN and fails the check.
+  const
+    M = 64
+    N = 32
+    K = 32
+    TILE_M = 32
+    TILE_N = 16
+    TILE_K = 32
+    thrM = toIntVal(tiled.threadLayout.shape[0])
+    thrN = toIntVal(tiled.threadLayout.shape[1])
+    thrK = toIntVal(tiled.threadLayout.shape[2])
+    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+  var rng = initRand(0x10EA)
+  for trial in 0 ..< 16:
+    let A_gpu = tf32Fixture(rng, M, K)
+    let B_gpu = tf32Fixture(rng, N, K)
+
+    var acc = newSeq[float32](M * N)
+    acc.gemm_tf32_ref(A_gpu, B_gpu, M, N, K, 0.0'f32)
+    var C_ref = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      C_ref[i] = acc[i]
+
+    var gpuC = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      gpuC[i] = 0x7FC00000'f32
+    engine.run("gemmGridIdentityKernel", dim3(M div TILE_M, N div TILE_N),
+               dim3(blockSize), gpuC, (A_gpu, B_gpu))
+    allClose(gpuC, C_ref, M, N, "gemm_grid identity trial " & $trial)
+
+  echo "  OK: gemm_grid identity (EpiIdentity, D = AB) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, NaN D)"
+
+proc testGemmGridReLU*[E](engine: var E; tiled: static TiledMma; label: string) =
+  ## The EpiReLU grid epilogue: D = max(0, AB) over the same 2×2 CTA grid.
+  ## The fixture domain 0..15 makes AB non-negative, so ReLU is the
+  ## identity here; the NaN-prefilled D still catches dropped stores.
+  const
+    M = 64
+    N = 32
+    K = 32
+    TILE_M = 32
+    TILE_N = 16
+    TILE_K = 32
+    thrM = toIntVal(tiled.threadLayout.shape[0])
+    thrN = toIntVal(tiled.threadLayout.shape[1])
+    thrK = toIntVal(tiled.threadLayout.shape[2])
+    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+  var rng = initRand(0x2E4A)
+  for trial in 0 ..< 16:
+    let A_gpu = tf32Fixture(rng, M, K)
+    let B_gpu = tf32Fixture(rng, N, K)
+
+    var acc = newSeq[float32](M * N)
+    acc.gemm_tf32_ref(A_gpu, B_gpu, M, N, K, 0.0'f32)
+    var C_ref = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      C_ref[i] = max(acc[i], 0.0'f32)
+
+    var gpuC = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      gpuC[i] = 0x7FC00000'f32
+    engine.run("gemmGridReLUKernel", dim3(M div TILE_M, N div TILE_N),
+               dim3(blockSize), gpuC, (A_gpu, B_gpu))
+    allClose(gpuC, C_ref, M, N, "gemm_grid relu trial " & $trial)
+
+  echo "  OK: gemm_grid relu (EpiReLU, D = max(0, AB)) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, NaN D)"
+
+proc testGemmGridBias*[E](engine: var E; tiled: static TiledMma; label: string) =
+  ## The EpiAddBias grid epilogue: D = AB + bias over the same 2×2 CTA
+  ## grid. The bias is a per-element (M, N) col-major buffer staged like
+  ## C; the fixture domain keeps D exact-representable.
+  const
+    M = 64
+    N = 32
+    K = 32
+    TILE_M = 32
+    TILE_N = 16
+    TILE_K = 32
+    thrM = toIntVal(tiled.threadLayout.shape[0])
+    thrN = toIntVal(tiled.threadLayout.shape[1])
+    thrK = toIntVal(tiled.threadLayout.shape[2])
+    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+  var rng = initRand(0x4B1A5E)
+  for trial in 0 ..< 16:
+    let A_gpu = tf32Fixture(rng, M, K)
+    let B_gpu = tf32Fixture(rng, N, K)
+    var bias = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      bias[i] = float32(rng.rand(0 .. 15))
+
+    var acc = newSeq[float32](M * N)
+    acc.gemm_tf32_ref(A_gpu, B_gpu, M, N, K, 0.0'f32)
+    var C_ref = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      C_ref[i] = acc[i] + bias[i]
+
+    var gpuC = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      gpuC[i] = 0x7FC00000'f32
+    engine.run("gemmGridBiasKernel", dim3(M div TILE_M, N div TILE_N),
+               dim3(blockSize), gpuC, (A_gpu, B_gpu, bias))
+    allClose(gpuC, C_ref, M, N, "gemm_grid bias trial " & $trial)
+
+  echo "  OK: gemm_grid bias (EpiAddBias, D = AB + bias) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, per-element bias, NaN D)"

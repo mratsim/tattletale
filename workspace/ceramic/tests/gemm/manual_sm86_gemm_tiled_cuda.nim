@@ -63,7 +63,7 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   let thr = tma.get_slice(threadIdx)
   var tCv = tma.partition_C(thr, tC)
   var epi = initEpiAXPBY(alpha, beta, tCv)
-  tma.gemm_tiled(threadIdx, epi, tA, tB, (TILE_M, TILE_N, TILE_K))
+  tma.gemm_tiled(tCv, tA, tB, epi, (TILE_M, TILE_N, TILE_K), threadIdx)
 
 const kernelCode = cuda:
   proc gemmTiledKernel(

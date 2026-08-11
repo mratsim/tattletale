@@ -59,11 +59,12 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   let tA = make_view(A, make_layout((TILE_M, TILE_K), (1, TILE_M)))
   let tB = make_view(B, make_layout((TILE_N, TILE_K), (1, TILE_N)))
   var tC = make_view(C, make_layout((TILE_M, TILE_N), (1, TILE_M)))
-  # the epilogue op carries alpha/beta and the thread's C fragment view
+  # the epilogue op carries alpha/beta and the thread's C fragment view.
+  # gemm_tiled receives the destination (tCv) separately
   let thr = tma.get_slice(threadIdx)
   var tCv = tma.partition_C(thr, tC)
   var epi = initEpiAXPBY(alpha, beta, tCv)
-  tma.gemm_tiled(threadIdx, epi, tA, tB, (TILE_M, TILE_N, TILE_K))
+  tma.gemm_tiled(tCv, tA, tB, epi, (TILE_M, TILE_N, TILE_K), threadIdx)
 
 func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
                          alpha: float32;
@@ -86,7 +87,7 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
   let thr = tma.get_slice(threadIdx)
   var tCv = tma.partition_C(thr, tC)
   var epi = initEpiAXPBY(alpha, beta, tCv)
-  tma.gemm_tiled(threadIdx, epi, tA, tB, (TILE_M, TILE_N, TILE_K))
+  tma.gemm_tiled(tCv, tA, tB, epi, (TILE_M, TILE_N, TILE_K), threadIdx)
 
 const kernelCode = cuda:
   proc gemmTiledKernel(

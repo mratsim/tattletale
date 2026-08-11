@@ -209,11 +209,10 @@ func partition_A*[T, Sh, St](
     doAssert isStaticStride(St),
       "partition_A: dynamic strides unsupported — pass a static-layout view (the operand's" &
       " strides are baked into the partition offsets at compile time)"
-    doAssert St.default[0] === 1 and
-             St.default[1] === Sh.default[0],
-      "partition_A: operand must be col-major compact (stride (1, rows)) — row-major" &
-      " thread offsets in the partition are not layout-correct yet (fragment" &
-      " construction is, but the partition's T-mode strides are not)"
+    doAssert St.default[0] === 1,
+      "partition_A: operand must be col-major (stride (1, k-stride)), row-major thread" &
+      " offsets in the partition are not layout-correct yet (fragment construction is," &
+      " but the partition's T-mode strides are not)"
   const
     pA = partition_A(tma, toIntVal(Sh.default[0]), toIntVal(Sh.default[1]),
                      toIntVal(A.layout.stride[0]), toIntVal(A.layout.stride[1]))
@@ -235,11 +234,10 @@ func partition_B*[T, Sh, St](
     doAssert isStaticStride(St),
       "partition_B: dynamic strides unsupported — pass a static-layout view (the operand's" &
       " strides are baked into the partition offsets at compile time)"
-    doAssert St.default[0] === 1 and
-             St.default[1] === Sh.default[0],
-      "partition_B: operand must be col-major compact (stride (1, rows)) — row-major" &
-      " thread offsets in the partition are not layout-correct yet (fragment" &
-      " construction is, but the partition's T-mode strides are not)"
+    doAssert St.default[0] === 1,
+      "partition_B: operand must be col-major (stride (1, k-stride)), row-major thread" &
+      " offsets in the partition are not layout-correct yet (fragment construction is," &
+      " but the partition's T-mode strides are not)"
   const
     pB = partition_B(tma, toIntVal(Sh.default[0]), toIntVal(Sh.default[1]),
                      toIntVal(B.layout.stride[0]), toIntVal(B.layout.stride[1]))
@@ -261,11 +259,10 @@ func partition_C*[T, Sh, St](
     doAssert isStaticStride(St),
       "partition_C: dynamic strides unsupported — pass a static-layout view (the operand's" &
       " strides are baked into the partition offsets at compile time)"
-    doAssert St.default[0] === 1 and
-             St.default[1] === Sh.default[0],
-      "partition_C: operand must be col-major compact (stride (1, rows)) — row-major" &
-      " thread offsets in the partition are not layout-correct yet (fragment" &
-      " construction is, but the partition's T-mode strides are not)"
+    doAssert St.default[0] === 1,
+      "partition_C: operand must be col-major (stride (1, n-stride)), row-major thread" &
+      " offsets in the partition are not layout-correct yet (fragment construction is," &
+      " but the partition's T-mode strides are not)"
   const
     pC = partition_C(tma, toIntVal(Sh.default[0]), toIntVal(Sh.default[1]),
                      toIntVal(C.layout.stride[0]), toIntVal(C.layout.stride[1]))

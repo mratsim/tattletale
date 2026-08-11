@@ -64,7 +64,9 @@ import ./tensors
 type Epilogue* = concept
   ## The concept: an Epilogue computes the output tile with the 2-arg
   ## `apply(D, AB)`. D and AB share the shape type Sh.
-  ## This is the only compiler-enforced member.
+  ## This is the only compiler-enforced member. Any user-defined type
+  ## with a matching apply is an epilogue; the shipped ops are examples,
+  ## not a closed zoo.
   ##
   ## Contract (structural, see the module header):
   ##   `template preflight(op: var Self): untyped`
@@ -210,4 +212,4 @@ func apply*[T, Sh, StD, StAB](
     D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
   for i in 0 ..< size(D.layout):
-    D(i) = if AB(i) > T(0): AB(i) else: T(0)
+    D(i) = max(AB(i), T(0))
