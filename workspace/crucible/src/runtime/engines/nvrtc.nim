@@ -210,19 +210,26 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
   # Allocate + upload device buffers for every non-scalar arg
   var devPtrs = newSeq[CUdeviceptr](blobs.len + 1)
   var di = 0
+  var allocated = 0
   for b in blobs:
     if b.size >= 0:
       if b.size > 0:
         check cuMemAlloc(devPtrs[di], csize_t(b.size))
         check cuMemcpyHtoD(devPtrs[di], b.data, csize_t(b.size))
+        inc allocated
       inc di
   if outSize > 0:
     check cuMemAlloc(devPtrs[di], csize_t(outSize))
     check cuMemcpyHtoD(devPtrs[di], output.data, csize_t(outSize))
   let outDev = devPtrs[di]
   defer:
-    for i in 0 ..< di + (if outSize > 0: 1 else: 0):
+    # Free exactly the slots that were allocated (the shared run layer
+    # rejects size-0 blobs, so allocated == di here; tracking separately
+    # keeps the defer safe even if that invariant is ever relaxed).
+    for i in 0 ..< allocated:
       check cuMemFree(devPtrs[i])
+    if outSize > 0:
+      check cuMemFree(devPtrs[di])
 
   # Assemble the kernel param array: output first (binding 0), then each
   # blob — device ptr value for buffers, host data ptr for scalars.

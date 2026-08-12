@@ -134,4 +134,13 @@ proc run*[T, A](engine: HwEngine, kernel: string, output: var T, args: A,
     blobStorage.setLen(0)
     blobStorage.setLen(sizeof(A))
     blobs.add blobOf(args, blobStorage)
-  runImpl(engine, kernel, outBlob(output), blobs, cfg)
+  # Zero-size blobs are rejected here, at the shared layer, so the four
+  # engines cannot diverge on empty seq/string args. Empty arrays are
+  # caught at compile time in `blobOf` (static doAssert).
+  let outArg = outBlob(output)
+  doAssert outArg.size != 0, "run: output must not be empty (size 0)"
+  for i, b in blobs:
+    doAssert b.size != 0,
+      "run: arg " & $i & " of " & kernel & " is empty (size 0), " &
+      "empty seq/string args are not supported"
+  runImpl(engine, kernel, outArg, blobs, cfg)

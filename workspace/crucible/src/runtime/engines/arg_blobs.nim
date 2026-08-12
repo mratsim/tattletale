@@ -38,6 +38,7 @@ template blobOf*[N, T](x: array[N, T], storage: var seq[byte]): ArgBlob =
   # Must stay a template: a by-value array param copies to the callee
   # stack and the blob would dangle after return, while literal-array
   # args (e.g. `[1'u32]`) are rvalues a `var` param cannot accept.
+  static: doAssert(sizeof(x) > 0, "empty array args are not supported (array[0, T])")
   (data: cast[pointer](addr x[0]), size: sizeof(x))
 
 func blobOf*(x: string, storage: var seq[byte]): ArgBlob {.inline.} =
