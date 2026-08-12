@@ -45,7 +45,7 @@ type
     ## Fields directly (no Obj indirection); resources in the RAII value field.
     source: string
     ctx: WgpuCtx
-    bakedBlk: int    # workgroup size baked into the shader at ingest
+    bakedBlk: Dim3   # workgroup size baked into the shader at ingest
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
@@ -87,27 +87,41 @@ template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untype
 
 template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped): untyped =
   run(engine, kernel, output, args,
-      LaunchConfig(blk: Dim3(x: engine.bakedBlk)))
+      LaunchConfig(blk: engine.bakedBlk))
 
 # ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────
 
-proc parseBakedBlk(wgsl: string): int =
+proc parseBakedBlk(wgsl: string): Dim3 =
   ## Extract the shader-baked workgroup size from the WGSL preamble:
-  ## `const WORKGROUP_SIZE = 64u;` / `@compute @workgroup_size(WORKGROUP_SIZE)`
-  ## Returns 0 when absent (run will then fail blk validation loudly).
-  const marker = "WORKGROUP_SIZE = "
+  ## `@compute @workgroup_size(64, 8, 1)` — 1..3 literal args, missing
+  ## default to 1. Returns (0, 0, 0) when absent or non-literal, so run
+  ## fails blk validation loudly.
+  const marker = "@workgroup_size("
   let i = wgsl.find(marker)
   if i < 0:
-    return 0
+    return Dim3(x: 0, y: 0, z: 0)
   var j = i + marker.len
-  var n = 0
-  while j < wgsl.len and wgsl[j] in {'0' .. '9'}:
-    n = n * 10 + (ord(wgsl[j]) - ord('0'))
-    inc j
-  n
+  var dim = 0
+  while j < wgsl.len and wgsl[j] != ')':
+    if wgsl[j] in {'0' .. '9'}:
+      var n = 0
+      while j < wgsl.len and wgsl[j] in {'0' .. '9'}:
+        n = n * 10 + (ord(wgsl[j]) - ord('0'))
+        inc j
+      case dim
+      of 0: result.x = n
+      of 1: result.y = n
+      else: result.z = n
+      inc dim
+    else:
+      inc j
+  if result.x == 0:
+    return Dim3(x: 0, y: 0, z: 0)   # absent or non-literal
+  if result.y == 0: result.y = 1
+  if result.z == 0: result.z = 1
 
 proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
@@ -119,11 +133,13 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   let outSize = abs(output.size)
 
   # blk is shader-baked (@workgroup_size): validate loudly (relax later)
-  if engine.bakedBlk == 0 or cfg.blk.x != engine.bakedBlk:
-    quit("WebGPU run blk=" & $cfg.blk.x & " != baked workgroup size " & $engine.bakedBlk &
+  if engine.bakedBlk.x == 0 or
+     cfg.blk.x != engine.bakedBlk.x or cfg.blk.y != engine.bakedBlk.y or
+     cfg.blk.z != engine.bakedBlk.z:
+    quit("WebGPU run blk=" & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z &
+         " != baked workgroup size " & $engine.bakedBlk.x & "x" & $engine.bakedBlk.y &
+         "x" & $engine.bakedBlk.z &
          " — launch config mismatch (blk is shader-baked on WebGPU)")
-  if cfg.blk.y != 1 or cfg.blk.z != 1:
-    quit("WebGPU blk y/z must be 1 (shader-baked 1D workgroup)")
 
   # 1. Create shader module (chained WGPUShaderSourceWGSL)
   var wgslView = WGPUStringView(data: cstring(engine.source), length: engine.source.len.csize_t)
@@ -282,8 +298,9 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   let pass = wgpuCommandEncoderBeginComputePass(encoder, nil)
   wgpuComputePassEncoderSetPipeline(pass, pipeline)
   wgpuComputePassEncoderSetBindGroup(pass, 0, bg, 0, nil)
-  # grid = dispatchWorkgroups count
-  wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid.x), 1'u32, 1'u32)
+  # grid = dispatchWorkgroups count (per axis)
+  wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid.x),
+                                           uint32(cfg.grid.y), uint32(cfg.grid.z))
   wgpuComputePassEncoderEnd(pass)
   wgpuCommandEncoderCopyBufferToBuffer(encoder, outBuf, 0, stagingBuf, 0, outSize.csize_t)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)

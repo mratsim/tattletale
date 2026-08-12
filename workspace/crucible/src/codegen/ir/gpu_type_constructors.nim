@@ -155,6 +155,27 @@ proc collectRawPragmas*(n: NimNode): seq[string] =
     result.add key.strVal
 
 
+proc parseWorkgroupSize*(n: NimNode): tuple[x, y, z: int] =
+  ## Extract the `{.workgroup: (X, Y, Z).}` / `{.workgroup: N.}` annotation
+  ## from a proc pragma node. Returns (0, 0, 0) when absent — targets then
+  ## fall back to their per-backend default workgroup size.
+  if n.kind == nnkEmpty: return
+  for pragma in n:
+    if pragma.kind != nnkExprColonExpr: continue
+    if pragma[0].strVal != "workgroup": continue
+    let v = pragma[1]
+    if v.kind == nnkIntLit:
+      result.x = v.intVal.int
+    elif v.kind == nnkTupleConstr:
+      for i, e in v.pairs:
+        if e.kind != nnkIntLit: continue
+        case i
+        of 0: result.x = e.intVal.int
+        of 1: result.y = e.intVal.int
+        of 2: result.z = e.intVal.int
+        else: discard
+    break
+
 proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
   doAssert n.kind in [nnkPragma, nnkEmpty]
   if n.kind == nnkEmpty: return # no pragmas
@@ -178,6 +199,8 @@ proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
       discard
     of "cudaName":
       continue # provides alternative name, not an attribute
+    of "workgroup": # workgroup size annotation, handled by parseWorkgroupSize
+      discard
     of "raises":
       discard
     # Common Nim pragmas that are not relevant for CUDA C codegen:

@@ -30,19 +30,21 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   for i in 0..7: a[i] = uint32(i + 1); b[i] = uint32((i + 1) * 2)
 
   # res=r → kernel gets (c=r, a, b, useAdd=true)
-  engine.run("condAdd", r, (a, b, true))
+  # chevrons: plain run is 1×1 since the engine carries no grid/blk.
+  # The kernel is tid-dependent, so launch 8 threads explicitly.
+  engine.run<<(1, 8)>>("condAdd", r, (a, b, true))
   echo "  condAdd(true): ", r
   for i in 0..7: doAssert r[i] == a[i] + b[i]
 
-  engine.run("condAdd", r, (a, b, false))
+  engine.run<<(1, 8)>>("condAdd", r, (a, b, false))
   echo "  condAdd(false): ", r
   for i in 0..7: doAssert r[i] == a[i] - b[i]
 
-  engine.run("scale", r, (a, 3'i32, false))
+  engine.run<<(1, 8)>>("scale", r, (a, 3'i32, false))
   echo "  scale(3, false): ", r
   for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3)
 
-  engine.run("scale", r, (a, 3'i32, true))
+  engine.run<<(1, 8)>>("scale", r, (a, 3'i32, true))
   echo "  scale(3, true): ", r
   for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3 - 1)
 

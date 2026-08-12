@@ -48,7 +48,7 @@ type
     spirv: seq[uint32]
     entryPoint: string  # GLSL entry point name, baked at ingest
     ctx: VulkanCtx
-    bakedBlk: int    # workgroup size baked into the shader at ingest
+    bakedBlk: Dim3   # workgroup size baked into the shader at ingest
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
@@ -87,27 +87,31 @@ template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: unty
 
 template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped): untyped =
   run(engine, kernel, output, args,
-      LaunchConfig(blk: Dim3(x: engine.bakedBlk)))
+      LaunchConfig(blk: engine.bakedBlk))
 
 # ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────
 
-proc parseBakedBlk(glsl: string): int =
+proc parseBakedBlk(glsl: string): Dim3 =
   ## Extract the shader-baked workgroup size from the GLSL preamble:
-  ## `layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;`
-  ## Returns 0 when absent (run will then fail blk validation loudly).
-  const marker = "local_size_x = "
-  let i = glsl.find(marker)
-  if i < 0:
-    return 0
-  var j = i + marker.len
-  var n = 0
-  while j < glsl.len and glsl[j] in {'0' .. '9'}:
-    n = n * 10 + (ord(glsl[j]) - ord('0'))
-    inc j
-  n
+  ## `layout(local_size_x = 256, local_size_y = 8, local_size_z = 1) in;`
+  ## Returns (0, 0, 0) when absent (run will then fail blk validation loudly).
+  const markers = ["local_size_x = ", "local_size_y = ", "local_size_z = "]
+  for i, marker in markers:
+    let j = glsl.find(marker)
+    if j < 0:
+      return Dim3(x: 0, y: 0, z: 0)
+    var k = j + marker.len
+    var n = 0
+    while k < glsl.len and glsl[k] in {'0' .. '9'}:
+      n = n * 10 + (ord(glsl[k]) - ord('0'))
+      inc k
+    case i
+    of 0: result.x = n
+    of 1: result.y = n
+    else: result.z = n
 
 proc parseEntryPoint(glsl: string): string =
   ## Extract the entry point name from the GLSL: `void <name>() { ... }`.
@@ -132,12 +136,14 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
   ## KernelParams`).
   var vctx = engine.ctx.ctx
 
-  # blk is shader-baked (local_size_x): validate loudly (relax later)
-  if engine.bakedBlk == 0 or cfg.blk.x != engine.bakedBlk:
-    quit("Vulkan run blk=" & $cfg.blk.x & " != baked workgroup size " & $engine.bakedBlk &
+  # blk is shader-baked (local_size_xyz): validate loudly (relax later)
+  if engine.bakedBlk.x == 0 or
+     cfg.blk.x != engine.bakedBlk.x or cfg.blk.y != engine.bakedBlk.y or
+     cfg.blk.z != engine.bakedBlk.z:
+    quit("Vulkan run blk=" & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z &
+         " != baked workgroup size " & $engine.bakedBlk.x & "x" & $engine.bakedBlk.y &
+         "x" & $engine.bakedBlk.z &
          " — launch config mismatch (blk is shader-baked on Vulkan)")
-  if cfg.blk.y != 1 or cfg.blk.z != 1:
-    quit("Vulkan blk y/z must be 1 (shader-baked 1D workgroup)")
 
   # Entry point: reuse the ingested SPIR-V when the run kernel matches the
   # baked entry; multi-kernel GLSL recompiles on demand with the kernel name.
@@ -216,7 +222,11 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
     pipeline.setArg(i + 1, inputBuffers[i], vctx)
 
   # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
-  vctx.runKernel(pipeline, [uint32(cfg.grid.x * cfg.blk.x)], [uint32(cfg.blk.x), 1'u32, 1'u32],
+  vctx.runKernel(pipeline,
+                 [uint32(cfg.grid.x * cfg.blk.x),
+                  uint32(cfg.grid.y * cfg.blk.y),
+                  uint32(cfg.grid.z * cfg.blk.z)],
+                 [uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z)],
                  if pushConstBytes.len > 0: pushConstBytes[0].addr else: nil,
                  pushConstBytes.len)
 

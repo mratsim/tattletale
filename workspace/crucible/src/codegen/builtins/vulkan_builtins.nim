@@ -17,13 +17,14 @@ type
 
 
 when not declaredInScope(vulkan):
-  ## Work-item builtins
-  template gl_GlobalInvocationID*: uvec3 = discard
-  template gl_LocalInvocationID*: uvec3 = discard
-  template gl_WorkGroupID*: uvec3 = discard
-  template gl_WorkGroupSize*: uvec3 = discard
-  template gl_NumWorkGroups*: uvec3 = discard
-  template gl_LocalInvocationIndex*: uint = discard
+  # Work-item builtins. `let {.builtin.}` rather than value templates,
+  # since a discard-body template has no type in the typed `vulkan` macro.
+  let gl_GlobalInvocationID* {.builtin.} = default(uvec3)
+  let gl_LocalInvocationID* {.builtin.} = default(uvec3)
+  let gl_WorkGroupID* {.builtin.} = default(uvec3)
+  let gl_WorkGroupSize* {.builtin.} = default(uvec3)
+  let gl_NumWorkGroups* {.builtin.} = default(uvec3)
+  let gl_LocalInvocationIndex* {.builtin.} = 0'u32
 
   ## Synchronization
   template barrier*(): void = discard

@@ -35,7 +35,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
   var buf: array[8, int32]
-  engine.run("nodeviceKernel", buf, ())
+  # chevrons: plain run is 1×1 since the engine carries no grid/blk.
+  # The kernel is tid-dependent, so launch 4 threads explicitly.
+  engine.run<<(1, 4)>>("nodeviceKernel", buf, ())
 
   doAssert buf[0] == 2,  &"doubleIt(1) (no .device.): got {buf[0]}"
   doAssert buf[1] == 4,  &"doubleIt(2) (no .device.): got {buf[1]}"

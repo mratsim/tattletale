@@ -9,8 +9,8 @@
 ## codegen/cl.nim, decoupled from the compile-time DSL: no gpu_compiler import).
 ##
 ## ingest = store source; getArtifact = source; run = build program +
-## enqueueNDRangeKernel with grid/blk → global/local sizes (global = grid·blk,
-## local = blk). The output's current bytes are uploaded before launch
+## enqueueNDRangeKernel with grid/blk → global/local sizes per axis
+## (global = grid·blk, local = blk, 3D NDRange). The output's current bytes are uploaded before launch
 ## (in-place β·C works on all backends). Scalars bind by value via ArgBlob
 ## (negative size).
 ##
@@ -137,9 +137,11 @@ proc runImpl(engine: OpenCLEngine, kernel: string, output: ArgBlob,
     else:
       kern.setArg(i + 1, -blobs[i].size, blobs[i].data)
 
-  # global = grid.x·blk.x work-items, local = blk.x (x axis only — y/z land in a follow-up)
-  let globalSize = [cl_size_t(cfg.grid.x * cfg.blk.x)]
-  let localSize = [cl_size_t(cfg.blk.x)]
+  # global = grid·blk work-items, local = blk (per axis, 3D NDRange)
+  let globalSize = [cl_size_t(cfg.grid.x * cfg.blk.x),
+                    cl_size_t(cfg.grid.y * cfg.blk.y),
+                    cl_size_t(cfg.grid.z * cfg.blk.z)]
+  let localSize = [cl_size_t(cfg.blk.x), cl_size_t(cfg.blk.y), cl_size_t(cfg.blk.z)]
   kern.runKernel(globalSize, localSize)
 
   # Read output

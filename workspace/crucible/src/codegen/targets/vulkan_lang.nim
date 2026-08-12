@@ -539,6 +539,13 @@ proc codegen*(ctx: var GpuContext): string =
   # 5. Full function definitions
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
-      # Kernel functions: place layout qualifier before entry point
-      result.add "layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;\n"
+      # Kernel functions: place layout qualifier before entry point.
+      # Workgroup size from the `{.workgroup: (X, Y, Z).}` annotation.
+      # Default 256×1×1.
+      let wg = fn.pWorkgroupSize
+      let wx = if wg.x > 0: wg.x else: 256
+      let wy = if wg.y > 0: wg.y else: 1
+      let wz = if wg.z > 0: wg.z else: 1
+      result.add "layout(local_size_x = " & $wx & ", local_size_y = " & $wy &
+                 ", local_size_z = " & $wz & ") in;\n"
     result.add ctx.genVulkan(fn) & "\n\n"
