@@ -84,15 +84,6 @@ proc deviceName*(engine: VulkanEngine): string {.inline.} =
   ## The physical device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
   engine.ctx.ctx.deviceName(engine.ctx.ctx.physicalDevice)
 
-template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped,
-              cfg: LaunchConfig): untyped =
-  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
-  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
-
-template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args,
-      LaunchConfig(blk: engine.bakedBlk))
-
 # ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
@@ -140,11 +131,16 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
   ## KernelParams`).
   var vctx = engine.ctx.ctx
 
-  # blk is shader-baked (local_size_xyz): validate loudly (relax later)
+  # blk is shader-baked (local_size_xyz). A default cfg (plain run) dispatches
+  # with the baked size; an explicit blk must match it exactly.
+  let blk = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
+              engine.bakedBlk
+            else:
+              cfg.blk
   if engine.bakedBlk.x == 0 or
-     cfg.blk.x != engine.bakedBlk.x or cfg.blk.y != engine.bakedBlk.y or
-     cfg.blk.z != engine.bakedBlk.z:
-    quit("Vulkan run blk=" & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z &
+     blk.x != engine.bakedBlk.x or blk.y != engine.bakedBlk.y or
+     blk.z != engine.bakedBlk.z:
+    quit("Vulkan run blk=" & $blk.x & "x" & $blk.y & "x" & $blk.z &
          " != baked workgroup size " & $engine.bakedBlk.x & "x" & $engine.bakedBlk.y &
          "x" & $engine.bakedBlk.z &
          " — launch config mismatch (blk is shader-baked on Vulkan)")
@@ -227,10 +223,10 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
 
   # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
   vctx.runKernel(pipeline,
-                 [uint32(cfg.grid.x * cfg.blk.x),
-                  uint32(cfg.grid.y * cfg.blk.y),
-                  uint32(cfg.grid.z * cfg.blk.z)],
-                 [uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z)],
+                 [uint32(cfg.grid.x * blk.x),
+                  uint32(cfg.grid.y * blk.y),
+                  uint32(cfg.grid.z * blk.z)],
+                 [uint32(blk.x), uint32(blk.y), uint32(blk.z)],
                  if pushConstBytes.len > 0: pushConstBytes[0].addr else: nil,
                  pushConstBytes.len)
 

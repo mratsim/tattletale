@@ -92,13 +92,6 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
   check cuDeviceGetName(addr name[0], cint(name.len), engine.nvrtc.device)
   $cast[cstring](addr name[0])
 
-template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped,
-              cfg: LaunchConfig): untyped =
-  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
-  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
-
-template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args, LaunchConfig())
 
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE

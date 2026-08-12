@@ -47,6 +47,7 @@
 
 import ../codegen/ir/gpu_types
 import ./chevrons
+import ./engines/arg_blobs
 import ./engines/nvrtc {.all.}
 import ./engines/cl {.all.}
 import ./engines/vk {.all.}
@@ -66,14 +67,17 @@ export ingest, getArtifact, run, check, deviceName
 # ═════════════════════════════════════════════════════════════════════════
 
 type
-  HwEngine* = concept engine, type E, type T
-    ## Any engine satisfying ingest/getArtifact/run and the `run` accessor.
+  HwEngine* = concept engine, type E
+    ## Any engine satisfying the per-engine primitives `run` dispatches to:
+    ## ingest/getArtifact/runImpl/deviceName plus the `run` accessor. The
+    ## launch proc `run` itself is generic here and only requires these.
     ## Concept procs cannot use `auto` returns — bare signatures only.
     proc ingest(engine: E, source: string)
     proc getArtifact(engine: E)
-    proc run(engine: E, kernel: string, output: var T, args: tuple)
-    proc run(engine: E): RunSugar[E]
+    proc runImpl(engine: E, kernel: string, output: ArgBlob,
+                 blobs: seq[ArgBlob], cfg: LaunchConfig)
     proc deviceName(engine: E): string
+    proc run(engine: E): RunSugar[E]
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -99,3 +103,35 @@ proc init*(backend: static BackendKind, source: string): auto =
   ## One-shot convenience: init + ingest.
   result = init(backend)
   result.ingest(source)
+
+proc run*[T, A](engine: HwEngine, kernel: string, output: var T, args: A,
+                cfg = LaunchConfig()) =
+  ## Launch `kernel` with the output as binding 0 and the args in order
+  ## (output first, per CONVENTIONS.md). The output's current bytes are
+  ## uploaded before launch and read back after (in-place β·C works).
+  ## Scalars bind by value (ArgBlob negative size). `cfg` carries the launch
+  ## geometry — normally built by the chevrons (`run<<(grid, blk)>>`); the
+  ## default is grid=blk=1 (Vulkan/WebGPU dispatch with the shader-baked
+  ## workgroup size instead, see runImpl).
+  ##
+  ## Args are flattened here, not in a helper: the tuple is value-copied into
+  ## THIS frame, so array fields live for the whole launch and the blob
+  ## pointers stay valid until `runImpl` consumes them.
+  var blobStorage: seq[byte]   # backing store for by-value scalars
+  var blobs: seq[ArgBlob]
+  when A is tuple:
+    var size = 0
+    for f in fields(args):
+      when (typeof(f) is seq) or (typeof(f) is array) or (typeof(f) is string):
+        discard
+      else:
+        size += sizeof(f)
+    blobStorage.setLen(0)
+    blobStorage.setLen(size)
+    for f in fields(args):
+      blobs.add blobOf(f, blobStorage)
+  else:
+    blobStorage.setLen(0)
+    blobStorage.setLen(sizeof(A))
+    blobs.add blobOf(args, blobStorage)
+  runImpl(engine, kernel, outBlob(output), blobs, cfg)

@@ -84,15 +84,6 @@ proc deviceName*(engine: WgpuEngine): string {.inline.} =
   ## The WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").
   engine.ctx.ctx.deviceName()
 
-template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped,
-              cfg: LaunchConfig): untyped =
-  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
-  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
-
-template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args,
-      LaunchConfig(blk: engine.bakedBlk))
-
 # ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
@@ -136,11 +127,16 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   let queue  = engine.ctx.ctx.queue
   let outSize = abs(output.size)
 
-  # blk is shader-baked (@workgroup_size): validate loudly (relax later)
+  # blk is shader-baked (@workgroup_size). A default cfg (plain run) dispatches
+  # with the baked size; an explicit blk must match it exactly.
+  let blk = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
+              engine.bakedBlk
+            else:
+              cfg.blk
   if engine.bakedBlk.x == 0 or
-     cfg.blk.x != engine.bakedBlk.x or cfg.blk.y != engine.bakedBlk.y or
-     cfg.blk.z != engine.bakedBlk.z:
-    quit("WebGPU run blk=" & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z &
+     blk.x != engine.bakedBlk.x or blk.y != engine.bakedBlk.y or
+     blk.z != engine.bakedBlk.z:
+    quit("WebGPU run blk=" & $blk.x & "x" & $blk.y & "x" & $blk.z &
          " != baked workgroup size " & $engine.bakedBlk.x & "x" & $engine.bakedBlk.y &
          "x" & $engine.bakedBlk.z &
          " — launch config mismatch (blk is shader-baked on WebGPU)")

@@ -14,7 +14,6 @@
 ## Containers (seq/array/string) → `(addr, len·sizeof(T))` device buffers;
 ## scalars (incl. raw pointer values) → `(addr, -sizeof(T))` by-value.
 
-import std/macros
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
@@ -64,42 +63,3 @@ func outBlob*(x: var string): ArgBlob {.inline.} =
 func outBlob*[T](x: var T): ArgBlob {.inline.} =
   (data: cast[pointer](addr x), size: sizeof(T))
 
-macro flattenBlobs*(args: untyped, storage: var seq[byte]): untyped =
-  ## Flatten a tuple of typed kernel args into ArgBlobs, in tuple order.
-  ## By-value scalars are memcpy'd into `storage` (pre-sized — no realloc, so
-  ## the blobs' data pointers stay stable). A bare scalar (e.g. `(42'u32)` — a
-  ## parenthesized expr, not a 1-tuple) is accepted as a single by-value blob.
-  ##
-  ## Implemented as a macro that emits `blobOf(el, storage)` for each original
-  ## argument expression. A template that copies the tuple first (`var t =
-  ## args`) is broken on this Nim 2.2.10 build: seq fields in a copied tuple
-  ## go through `eqcopy` and lose their buffer identity (the blob data pointer
-  ## no longer points at the caller's seq), silently corrupting the upload.
-  ##
-  ## The blobs reference the caller's buffers and `storage`: keep the args
-  ## tuple live for the whole launch so the addresses stay valid until
-  ## `runImpl` consumes them.
-  let els =
-    if args.kind in {nnkPar, nnkTupleConstr, nnkBracket}: args
-    else: newTree(nnkPar, args)   # bare scalar/parenthesized expr
-  let sizeVar = genSym(nskVar, "scalarBytes")
-  let blobsVar = genSym(nskVar, "blobs")
-  let prep = newStmtList()   # per-element scalar-size `when` statements
-  let append = newStmtList() # per-element blob construction
-  for el in els:
-    prep.add quote do:
-      when (`el` is seq) or (`el` is array) or (`el` is string):
-        discard
-      else:
-        `sizeVar` += sizeof(`el`)
-    append.add quote do:
-      `blobsVar`.add blobOf(`el`, `storage`)
-  result = quote do:
-    block:
-      `storage`.setLen(0)
-      var `sizeVar` = 0
-      `prep`
-      `storage`.setLen(`sizeVar`)
-      var `blobsVar`: seq[ArgBlob]
-      `append`
-      `blobsVar`

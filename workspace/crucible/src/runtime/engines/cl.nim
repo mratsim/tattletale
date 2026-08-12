@@ -79,13 +79,6 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
   ## The OpenCL device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
   engine.ctx.ctx.device.name()
 
-template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: untyped,
-              cfg: LaunchConfig): untyped =
-  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
-  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
-
-template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args, LaunchConfig())
 
 # ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
