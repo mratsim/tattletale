@@ -23,6 +23,9 @@
 ##   engine.run("addKernel", out, ([1'u32], [2'u32]))
 
 ## Types and procs follow the standard webgpu.h conventions.
+import std/monotimes
+import std/times
+import std/os
 import workspace/crucible/vendor/wgpu
 
 # ###########################################################
@@ -126,6 +129,19 @@ proc takeUncapturedError*(): UncapturedErrorData =
   result = gUncapturedError
   gUncapturedError = UncapturedErrorData(errType: wgpuErrorTypeNoError)
 
+# Waits for an instance-level request callback to fire.
+# wgpu-native stubs WGPUFuture/WaitAnyOnly so wgpuInstanceWaitAny is
+# unavailable, and wgpuDevicePoll needs a device handle that only exists
+# after the callback fires. Poll the non-blocking wgpuInstanceProcessEvents
+# with a deadline and a short sleep instead of spinning at 100% CPU.
+proc waitForRequest(instance: WGPUInstance, done: var bool, what: string) =
+  let deadline = getMonoTime() + initDuration(seconds = 5)
+  while not done:
+    wgpuInstanceProcessEvents(instance)
+    if deadline <= getMonoTime():
+      quit("WebGPU: timed out waiting for " & what & " request")
+    sleep(2)
+
 proc initWgpu*(): WgpuContext =
   ## Initializes wgpu-native: creates instance, picks adapter, opens device.
   let instance = wgpuCreateInstance(nil)
@@ -138,9 +154,7 @@ proc initWgpu*(): WgpuContext =
     userdata2: nil
   )
   discard wgpuInstanceRequestAdapter(instance, nil, cbInfo)
-  # Poll until adapter request completes (wgpu-native stubs WGPUFuture/WaitAnyOnly)
-  while not ad.done:
-    wgpuInstanceProcessEvents(instance)
+  waitForRequest(instance, ad.done, "adapter")
   doAssert ad.adapter != nil, "No suitable WebGPU adapter found"
   var dd = DeviceCallbackData(done: false)
   var devCbInfo = WGPURequestDeviceCallbackInfo(
@@ -159,9 +173,7 @@ proc initWgpu*(): WgpuContext =
     )
   )
   discard wgpuAdapterRequestDevice(ad.adapter, addr deviceDesc, devCbInfo)
-  # Poll until device request completes
-  while not dd.done:
-    wgpuInstanceProcessEvents(instance)
+  waitForRequest(instance, dd.done, "device")
   doAssert dd.device != nil, "Failed to get WebGPU device"
   let queue = wgpuDeviceGetQueue(dd.device)
   doAssert queue != nil, "wgpuDeviceGetQueue failed"
