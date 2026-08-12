@@ -71,6 +71,16 @@ proc ingest*(engine: VulkanEngine, source: string) =
   if engine.spirv.len > 0:
     when defined(debug):
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
+  # Multi-kernel sources with by-value scalars misalign every kernel after
+  # the first: the codegen unions all kernels' scalar params into one
+  # file-scope push-constant block, but the runtime packs only the invoked
+  # kernel's scalars contiguously from offset 0. Enforce the documented
+  # contract (one kernel per source when using scalars) loudly; pointer-only
+  # multi-kernel sources are unaffected.
+  if countKernels(source) > 1 and
+     "layout(push_constant) uniform KernelParams" in source:
+    quit("Vulkan: multi-kernel source with scalar params is unsupported, " &
+         "use one kernel per source when passing by-value scalars")
   engine.source = source
   engine.entryPoint = parseEntryPoint(source)
   engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
@@ -106,6 +116,15 @@ proc parseBakedBlk(glsl: string): Dim3 =
     of 0: result.x = n
     of 1: result.y = n
     else: result.z = n
+
+proc countKernels(glsl: string): int =
+  ## Count kernel entry points: each kernel gets its own
+  ## `layout(local_size_x = ...) in;` preamble (vulkan_lang.nim).
+  const marker = "layout(local_size_x"
+  var i = glsl.find(marker)
+  while i >= 0:
+    inc result
+    i = glsl.find(marker, i + marker.len)
 
 proc parseEntryPoint(glsl: string): string =
   ## Extract the entry point name from the GLSL: `void <name>() { ... }`.
