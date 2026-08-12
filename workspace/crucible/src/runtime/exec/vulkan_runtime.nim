@@ -25,7 +25,7 @@
 ## Used by the VulkanEngine (engines/vk.nim) — this module is internal; the
 ## public surface is the engine's run/ingest/getArtifact.
 
-import std/[dynlib, os, osproc, hashes, streams]
+import std/[dynlib, os, osproc, hashes, streams, tempfiles]
 import workspace/crucible/src/abis/vulkan_abi as vk
 import ./runtime_utils
 type
@@ -108,9 +108,12 @@ proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32]
   ## Compiles GLSL to SPIR-V via ``glslangValidator``.
   ## (``libshaderc_shared`` does not support compute shaders on this platform.)
   let tmpDir = getKernelDir("vulkan")
-  let id = $glsl.hash
-  let srcPath = tmpDir / (sanitizePath(entryPoint) & "_" & id & ".comp")
-  let spvPath = tmpDir / (sanitizePath(entryPoint) & "_" & id & ".spv")
+  # Private temp dir: 0700 so other local users cannot plant symlinks at
+  # deterministic paths (TOCTOU), and unique names so concurrent compiles
+  # never collide on the same file.
+  setFilePermissions(tmpDir, {fpUserExec, fpUserWrite, fpUserRead})
+  let srcPath = genTempPath(sanitizePath(entryPoint) & "_", ".comp", tmpDir)
+  let spvPath = genTempPath(sanitizePath(entryPoint) & "_", ".spv", tmpDir)
 
   writeFile(srcPath, glsl)
   defer:
