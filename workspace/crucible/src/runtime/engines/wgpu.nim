@@ -8,7 +8,7 @@
 ## WgpuEngine — WebGPU (wgpu-native) execution (moved from codegen/wgpu.nim,
 ## decoupled from the compile-time DSL: no gpu_compiler import).
 ##
-## ingest = store WGSL; getArtifact = WGSL; run = pipeline +
+## ingest = build shader module from WGSL; getArtifact = WGSL; run = pipeline +
 ## dispatchWorkgroups where grid = dispatchWorkgroups count. blk is
 ## shader-baked (@workgroup_size): run's blk is validated loudly. The
 ## staging-buffer map pattern captures the map status in
@@ -24,7 +24,7 @@
 ## public surface that calls them.
 {.experimental: "codeReordering".}
 
-import std/[monotimes, os, strutils, times]
+import std/[monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
 import ../exec/wgpu_runtime
@@ -40,10 +40,24 @@ type
     ## RAII value wrapper — `=destroy` fires when the engine ref dies.
     ctx: WgpuContext
 
+  WgpuPipelineCache = object
+    ## Per-(kernel, arg-shape) pipeline artifacts: bind group layout, pipeline
+    ## layout and compute pipeline. Created together on a cache miss, released
+    ## together at re-ingest or engine destruction.
+    pipeline: WGPUComputePipeline
+    pipelineLayout: WGPUPipelineLayout
+    bindGroupLayout: WGPUBindGroupLayout
+
+  WgpuCache = object
+    ## RAII value wrapper — `=destroy` fires when the engine ref dies.
+    module: WGPUShaderModule
+    pipelines: Table[(string, seq[int]), WgpuPipelineCache]
+
   WgpuEngine* = ref object
-    ## Fields directly (no Obj indirection); resources in the RAII value field.
+    ## Fields directly (no Obj indirection); resources in the RAII value fields.
     source: string
     ctx: WgpuCtx
+    cache: WgpuCache   # after ctx: released before ctx shutdown
     bakedBlk: Dim3   # workgroup size baked into the shader at ingest
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -53,9 +67,23 @@ proc `=destroy`(c: var WgpuCtx) =
   if c.ctx.instance != nil:
     c.ctx.shutdown()
 
+proc `=destroy`(cache: var WgpuCache) =
+  ## Release the shader module and cached pipelines while the device context
+  ## is still alive: this field is declared after `ctx`, so reverse-order
+  ## field destruction runs it before `ctx`'s `=destroy` shuts the device.
+  if cache.module != nil:
+    wgpuShaderModuleRelease(cache.module)
+  for c in cache.pipelines.mvalues:
+    wgpuComputePipelineRelease(c.pipeline)
+    wgpuPipelineLayoutRelease(c.pipelineLayout)
+    wgpuBindGroupLayoutRelease(c.bindGroupLayout)
+
 proc newWgpuEngine(): WgpuEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
-  WgpuEngine(ctx: WgpuCtx(ctx: initWgpu()))
+  WgpuEngine(
+    ctx: WgpuCtx(ctx: initWgpu()),
+    cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
+  )
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -72,8 +100,31 @@ template check*(status: WGPUBufferMapAsyncStatus, quitOnFailure = true) =
       quit 1
 
 proc ingest*(engine: WgpuEngine, source: string) =
-  ## Store the WGSL source. Re-entrant: replaces the previous artifact
-  ## (the device context persists — only the artifact is replaced).
+  ## Store the WGSL source and build the shader module. Re-entrant: replaces
+  ## the previous artifact (the device context persists — only the artifact
+  ## is replaced) and invalidates cached pipelines.
+  if engine.cache.module != nil:
+    wgpuShaderModuleRelease(engine.cache.module)
+    engine.cache.module = nil
+  for c in engine.cache.pipelines.mvalues:
+    wgpuComputePipelineRelease(c.pipeline)
+    wgpuPipelineLayoutRelease(c.pipelineLayout)
+    wgpuBindGroupLayoutRelease(c.bindGroupLayout)
+  engine.cache.pipelines.clear()
+  var wgslView = WGPUStringView(data: cstring(source), length: source.len.csize_t)
+  var wgslSource = WGPUShaderSourceWGSL(
+    chain: WGPUChainedStruct(
+      sType: WGPUSType_ShaderSourceWGSL,
+      next: nil
+    ),
+    code: wgslView
+  )
+  var shaderDesc = WGPUShaderModuleDescriptor(
+    nextInChain: addr wgslSource
+  )
+  engine.cache.module = wgpuDeviceCreateShaderModule(engine.ctx.ctx.device, addr shaderDesc)
+  if engine.cache.module == nil:
+    quit("WebGPU: failed to create shader module")
   engine.source = source
   engine.bakedBlk = parseBakedBlk(source)
 
@@ -148,23 +199,8 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
          "x" & $engine.bakedBlk.z &
          " — launch config mismatch (blk is shader-baked on WebGPU)")
 
-  # 1. Create shader module (chained WGPUShaderSourceWGSL)
-  var wgslView = WGPUStringView(data: cstring(engine.source), length: engine.source.len.csize_t)
-  var wgslSource = WGPUShaderSourceWGSL(
-    chain: WGPUChainedStruct(
-      sType: WGPUSType_ShaderSourceWGSL,
-      next: nil
-    ),
-    code: wgslView
-  )
-  var shaderDesc = WGPUShaderModuleDescriptor(
-    nextInChain: addr wgslSource
-  )
-  let shader = wgpuDeviceCreateShaderModule(device, addr shaderDesc)
-  if shader == nil:
-    quit("WebGPU: failed to create shader module")
-  defer:
-    wgpuShaderModuleRelease(shader)
+  # 1. Shader module: created once at ingest (engine.module) and reused by
+  # every run, per the ingest-once / run-many contract.
 
   # 2. Create buffers via the staging pattern (no Map usage on storage buffers)
   let numInputs = blobs.len
@@ -209,49 +245,78 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   defer:
     wgpuBufferRelease(stagingBuf)
 
-  # 3. Bind group layout: output at 0, then inputs
-  var entries = newSeq[WGPUBindGroupLayoutEntry](totalBindings)
-  entries[0] = WGPUBindGroupLayoutEntry(
-    binding: 0.cuint,
-    visibility: WGPUShaderStageCompute,
-    buffer: WGPUBufferBindingLayout(
-      `type`: WGPUBufferBindingTypeStorage,
-      minBindingSize: outSize.csize_t
-    )
-  )
+  # 3. Bind group layout, pipeline layout and compute pipeline: cached per
+  # (kernel, arg shape), per the ingest-once / run-many contract. Rebuilt
+  # only on a cache miss; the bind group (section 4) and the buffers stay
+  # per-run.
+  var argSizes = newSeq[int](numInputs)
   for i in 0 ..< numInputs:
-    # Scalar (by-value) inputs map to `var<storage, read>` in the WGSL the
-    # backend emits, so they bind read-only; ptr inputs map to
-    # `var<storage, read_write>` and keep the read-write Storage binding.
-    let isScalar = blobs[i].size < 0
-    entries[i + 1] = WGPUBindGroupLayoutEntry(
-      binding: (i + 1).cuint,
+    argSizes[i] = blobs[i].size   # signed: negative = scalar (read-only binding)
+  let cacheKey = (kernel, argSizes)
+  var cache: WgpuPipelineCache
+  if engine.cache.pipelines.hasKey(cacheKey):
+    cache = engine.cache.pipelines[cacheKey]
+  else:
+    # Bind group layout: output at 0, then inputs
+    var entries = newSeq[WGPUBindGroupLayoutEntry](totalBindings)
+    entries[0] = WGPUBindGroupLayoutEntry(
+      binding: 0.cuint,
       visibility: WGPUShaderStageCompute,
       buffer: WGPUBufferBindingLayout(
-        `type`: if isScalar: WGPUBufferBindingTypeReadOnlyStorage
-                else: WGPUBufferBindingTypeStorage,
-        minBindingSize: inputSizes[i].csize_t
+        `type`: WGPUBufferBindingTypeStorage,
+        minBindingSize: outSize.csize_t
       )
     )
-  var bglDesc = WGPUBindGroupLayoutDescriptor(
-    entryCount: totalBindings.csize_t,
-    entries: entries[0].addr
-  )
-  let bgl = wgpuDeviceCreateBindGroupLayout(device, addr bglDesc)
-  if bgl == nil:
-    quit("WebGPU: failed to create bind group layout")
-  defer:
-    wgpuBindGroupLayoutRelease(bgl)
-
-  var plDesc = WGPUPipelineLayoutDescriptor(
-    bindGroupLayoutCount: 1,
-    bindGroupLayouts: bgl.addr
-  )
-  let pl = wgpuDeviceCreatePipelineLayout(device, addr plDesc)
-  if pl == nil:
-    quit("WebGPU: failed to create pipeline layout")
-  defer:
-    wgpuPipelineLayoutRelease(pl)
+    for i in 0 ..< numInputs:
+      # Scalar (by-value) inputs map to `var<storage, read>` in the WGSL the
+      # backend emits, so they bind read-only; ptr inputs map to
+      # `var<storage, read_write>` and keep the read-write Storage binding.
+      let isScalar = blobs[i].size < 0
+      entries[i + 1] = WGPUBindGroupLayoutEntry(
+        binding: (i + 1).cuint,
+        visibility: WGPUShaderStageCompute,
+        buffer: WGPUBufferBindingLayout(
+          `type`: if isScalar: WGPUBufferBindingTypeReadOnlyStorage
+                  else: WGPUBufferBindingTypeStorage,
+          minBindingSize: inputSizes[i].csize_t
+        )
+      )
+    var bglDesc = WGPUBindGroupLayoutDescriptor(
+      entryCount: totalBindings.csize_t,
+      entries: entries[0].addr
+    )
+    let bgl = wgpuDeviceCreateBindGroupLayout(device, addr bglDesc)
+    if bgl == nil:
+      quit("WebGPU: failed to create bind group layout")
+    var plDesc = WGPUPipelineLayoutDescriptor(
+      bindGroupLayoutCount: 1,
+      bindGroupLayouts: bgl.addr
+    )
+    let pl = wgpuDeviceCreatePipelineLayout(device, addr plDesc)
+    if pl == nil:
+      quit("WebGPU: failed to create pipeline layout")
+    # Compute pipeline: entry point is the kernel name, module from ingest
+    var entryPtView = WGPUStringView(data: cstring(kernel), length: kernel.len.csize_t)
+    var computeState = WGPUComputeState(
+      module: engine.cache.module,
+      entryPoint: entryPtView
+    )
+    var cpDesc = WGPUComputePipelineDescriptor(
+      layout: pl,
+      compute: computeState
+    )
+    let pipeline = wgpuDeviceCreateComputePipeline(device, addr cpDesc)
+    if pipeline == nil:
+      quit("WebGPU: failed to create compute pipeline")
+    cache = WgpuPipelineCache(
+      pipeline: pipeline,
+      pipelineLayout: pl,
+      bindGroupLayout: bgl
+    )
+    engine.cache.pipelines[cacheKey] = cache
+  let bgl = cache.bindGroupLayout
+  let pl = cache.pipelineLayout
+  let pipeline = cache.pipeline
 
   # 4. Bind group entries (output at 0, then inputs)
   var bgEntries = newSeq[WGPUBindGroupEntry](totalBindings)
@@ -277,21 +342,7 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   defer:
     wgpuBindGroupRelease(bg)
 
-  # 5. Compute pipeline
-  var entryPtView = WGPUStringView(data: cstring(kernel), length: kernel.len.csize_t)
-  var computeState = WGPUComputeState(
-    module: shader,
-    entryPoint: entryPtView
-  )
-  var cpDesc = WGPUComputePipelineDescriptor(
-    layout: pl,
-    compute: computeState
-  )
-  let pipeline = wgpuDeviceCreateComputePipeline(device, addr cpDesc)
-  if pipeline == nil:
-    quit("WebGPU: failed to create compute pipeline")
-  defer:
-    wgpuComputePipelineRelease(pipeline)
+  # 5. Compute pipeline: cached in section 3, released at re-ingest / destroy.
 
   # 6. Write input data + the output's current contents (in-place β·C)
   for i in 0 ..< numInputs:
