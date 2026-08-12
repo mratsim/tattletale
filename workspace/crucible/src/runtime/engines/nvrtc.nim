@@ -25,10 +25,7 @@
 ## public surface that calls them.
 {.experimental: "codeReordering".}
 
-import std/os
-
 import workspace/crucible/src/abis/nvidia_abi
-import workspace/crucible/src/abis/nvidia_paths
 import workspace/crucible/src/abis/c_abi
 
 import ../exec/cuda_runtime
@@ -80,9 +77,6 @@ proc newCudaEngine(grid, blk: int): CudaEngine =
 proc ingest*(engine: CudaEngine, source: string) =
   ## NVRTC-compile `source` → PTX. Re-entrant: replaces the previous artifact
   ## and NVRTC context/module (the old RAII field is destroyed).
-  if engine.ptx.len > 0:
-    when defined(debug):
-      echo "[INFO]: cuda ingest: invalidating previous artifact"
   engine.source = source
   engine.nvrtc = initNvrtc(source)
   engine.nvrtc.compile()
@@ -103,36 +97,12 @@ template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untype
       LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
 
 # ─────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────
 
-## Debug output (driver version, PTX size, files) — controlled by -d:debug
 
 proc initNvrtc(cuda: string, name = "sample.cu"): NVRTC =
   ## Initializes an NVRTC object for the given program `cuda`
-  when defined(debug):
-    var x: cint
-    check cuDriverGetVersion(x)
-    echo "Driver version: ", x
-
-    var rtVer: cint
-    check cudaRuntimeGetVersion(rtVer)
-    echo "Runtime ver: ", rtVer
-
-    var nvrtcMajor, nvrtcMinor: cint
-    check nvrtcVersion(nvrtcMajor, nvrtcMinor)
-    echo "NVRTC ver: ", nvrtcMajor, ".", nvrtcMinor
-    echo "CUDA toolkit (CudaHome): ", CudaHome
-    echo "CUDA device runtime (libcudadevrt.a): ", findCudaDevrt()
-
-    var prop: cudaDeviceProp
-    check cudaGetDeviceProperties(prop, 0);
-    echo "Compute capability: ", prop.major, " ", prop.minor
-
-    writeFile(getDebugPath("kernel.cu"), cuda)
-    echo "Kernel dump: ", getDebugPath("kernel.cu")
-
   ## TODO: consider in-memory and on-disk caching option for compiled PTX.
   ## (Compile once, reuse PTX or CUmodule for subsequent runs.)
   var
@@ -169,14 +139,9 @@ proc compile(nvrtc: var NVRTC) =
     cstring "-default-device",           # namespace-scope vars default to __device__
     # "--fmad=false", # and whatever other options for example
   ]
-  when defined(debug):
-    options.add cstring "--device-debug"       # Equivalent to -g
-    options.add cstring "--generate-line-info" # Equivalent to -lineinfo
-
   let numberOfOptions = cint options.len
   let compileResult =  nvrtcCompileProgram(nvrtc.prog, numberOfOptions,
                                            cast[cstringArray](addr options[0]))
-  ## XXX: only in `DebugCuda`?
   if compileResult != NVRTC_SUCCESS:
     nvrtc.log()
     echo "Compilation log:\n------------------------------"
@@ -194,10 +159,6 @@ proc getPtx(nvrtc: var NVRTC) =
 
   check nvrtcDestroyProgram(nvrtc.prog) # Destroy the program.
   nvrtc.ptx = ptx
-
-  when defined(debug):
-    writeFile(getDebugPath("kernel.ptx"), nvrtc.ptx)
-    #echo "-------------------- PTX --------------------\n", nvrtc.ptx
 
 proc load(nvrtc: var NVRTC) =
   # After getting the PTX...
@@ -270,12 +231,6 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
 
   let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
 
-  when defined(debug):
-    var start, stop: CUevent
-    check cuEventCreate(start)
-    check cuEventCreate(stop)
-    check cuEventRecord(start, CUstream(nil))
-
   check cuLaunchKernel(
     engine.nvrtc.kernel,
     uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z),
@@ -285,15 +240,6 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
     params[0].addr, nil)
 
   check cuCtxSynchronize()
-
-  when defined(debug):
-    check cuEventRecord(stop, CUstream(nil))
-    check cuEventSynchronize(stop)
-    var elapsedTime: cfloat
-    check cuEventElapsedTime(elapsedTime, start, stop)
-    echo "[INFO]: Kernel execution took: ", elapsedTime, " ms"
-    check cuEventDestroy(start)
-    check cuEventDestroy(stop)
 
   # Read the output back
   if outSize > 0:
