@@ -8,7 +8,8 @@
 ## OpenCLEngine — OpenCL runtime compilation and execution (moved from
 ## codegen/cl.nim, decoupled from the compile-time DSL: no gpu_compiler import).
 ##
-## ingest = store source; getArtifact = source; run = build program +
+## ingest = store source (invalidates cached kernels); getArtifact = source;
+## run = get-or-build the program once per kernel name, then
 ## enqueueNDRangeKernel with grid/blk → global/local sizes per axis
 ## (global = grid·blk, local = blk, 3D NDRange). The output's current bytes are uploaded before launch
 ## (in-place β·C works on all backends). Scalars bind by value via ArgBlob
@@ -30,6 +31,7 @@
 ## public surface that calls them.
 {.experimental: "codeReordering".}
 
+import std/tables
 import workspace/crucible/src/abis/cl_abi
 
 import ../exec/opencl_runtime
@@ -45,16 +47,26 @@ type
     ## RAII value wrapper — `=destroy` fires when the engine ref dies.
     ctx: OpenCLContext
 
+  OpenCLKernelCache = object
+    ## RAII value wrapper — cached kernels released when the engine ref dies.
+    kernels: Table[string, OpenCLKernel]
+
   OpenCLEngine* = ref object
-    ## Fields directly (no Obj indirection); resources in the RAII value field.
+    ## Fields directly (no Obj indirection); resources in the RAII value fields.
     source: string
     ctx: OpenCLCtx
+    kernelCache: OpenCLKernelCache   # after ctx: released before ctx shutdown
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var OpenCLCtx) =
   c.ctx.shutdown()   # shutdown is idempotent (nil-guarded)
+
+proc `=destroy`(cache: var OpenCLKernelCache) =
+  ## Release cached kernels while the context is still alive.
+  for _, kern in cache.kernels.mpairs:
+    kern.destroyKernel()
 
 proc newOpenCLEngine(): OpenCLEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
@@ -65,10 +77,14 @@ proc newOpenCLEngine(): OpenCLEngine =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: OpenCLEngine, source: string) =
-  ## Store the OpenCL C source. Re-entrant: replaces the previous artifact.
+  ## Store the OpenCL C source. Re-entrant: replaces the previous artifact
+  ## and releases cached kernels, which are rebuilt lazily on the next run.
   if engine.source.len > 0:
     when defined(debug):
       echo "[INFO]: opencl ingest: invalidating previous artifact"
+  for _, kern in engine.kernelCache.kernels.mpairs:
+    kern.destroyKernel()
+  engine.kernelCache.kernels.clear()
   engine.source = source
 
 proc getArtifact*(engine: OpenCLEngine): string =
@@ -86,7 +102,7 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 
 proc runImpl(engine: OpenCLEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
-  ## Build program + enqueueNDRangeKernel. The output is the kernel's
+  ## Get-or-build program + enqueueNDRangeKernel. The output is the kernel's
   ## first parameter (binding 0), then the input args in order
   ## (output first, per CONVENTIONS.md).
   let ctx = engine.ctx.ctx
@@ -110,9 +126,10 @@ proc runImpl(engine: OpenCLEngine, kernel: string, output: ArgBlob,
   if outSize > 0:
     outBuf.writeBuffer(output.data, outSize)
 
-  var kern = ctx.compileKernel(kernel, engine.source)
-  defer:
-    kern.destroyKernel()
+  # Get-or-create the compiled kernel, cached per name until re-ingest
+  if kernel notin engine.kernelCache.kernels:
+    engine.kernelCache.kernels[kernel] = ctx.compileKernel(kernel, engine.source)
+  var kern = engine.kernelCache.kernels[kernel]
 
   # Write input data
   for i in 0 ..< numInputs:
