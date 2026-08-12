@@ -22,13 +22,13 @@
 ##   ceramic's `complementScalar` (a `max(int, Int[V]) -> int` overload so Nim
 ##   accepts `max(1, Int[1])`, plus an untyped binder `max(1, stride)` spliced
 ##   into a plain proc that crucible pulls in). If crucible stops lowering the
-##   static value, engine.compile() fails with the NVRTC error above. When the value
+##   static value, engine.ingest() fails with the NVRTC error above. When the value
 ##   is lowered the kernel compiles and runs.
 ##
 ## Anti-regression contract: the kernel must compile and run with a concrete
 ## `max(1, stride) = 1`, i.e. crucible must lower the static `Int[N]` value at
 ## max emission. A regression that forwards `max(1, <empty struct>)` makes
-## engine.compile() fail with the NVRTC error above.
+## engine.ingest() fail with the NVRTC error above.
 ##
 ## Run:
 ##   cd tattletale
@@ -71,7 +71,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "NVRTC compiles and runs a complement with a static Int stride":
       # The static value must be lowered so max(1, stride) resolves to 1 and the
-      # kernel compiles; a regression causes engine.compile() to abort below.
+      # kernel compiles. A regression causes engine.ingest() to abort below.
       var Buf: array[1, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelComplement)

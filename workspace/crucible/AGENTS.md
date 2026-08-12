@@ -42,7 +42,7 @@ imports. Only engine/runtime tests use the public API (below).
 **One import for everything:** `import workspace/crucible` re-exports the DSL
 macros (`cuda:`/`opencl:`/`vulkan:`/`webgpu:`) and the engine API (`bkCuda`/
 `bkOpenCL`/`bkVulkan`/`bkWGSL`, `init`, `ingest`, `getArtifact`, `run`, `check`,
-`deviceVendor`). IR tests are the exception — they keep deep internal imports.
+`deviceName`). IR tests are the exception — they keep deep internal imports.
 
 **All tests must call `engine.run()`** (or the chevron form `engine.run<<(grid, blk)>>(...)` — no space around `<<`/`>>`), not just `getArtifact()`/`ingest()`. A compile check is not enough — it can produce valid CUDA that computes wrong results.
 

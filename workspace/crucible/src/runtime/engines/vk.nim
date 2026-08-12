@@ -9,11 +9,11 @@
 ## from codegen/vk.nim, decoupled from the compile-time DSL: no gpu_compiler
 ## import).
 ##
-## ingest = glslangValidator subprocess → SPIR-V (keep the existing
-## mechanism) + parse the shader-baked workgroup size. getArtifact = SPIR-V.
+## ingest = glslangValidator subprocess → SPIR-V + parse the shader-baked
+## workgroup size. getArtifact = SPIR-V.
 ## run = pipeline + vkCmdDispatch; blk is shader-baked (local_size_x):
 ## run's blk is validated against the baked workgroup size and fails loudly
-## via check. grid = vkCmdDispatch group count. By-value scalars (ArgBlob
+## on mismatch. grid = vkCmdDispatch group count. By-value scalars (ArgBlob
 ## size < 0) are packed into the push-constant range (4-byte only, see
 ## runImpl); pointer args get SSBO bindings 1..N, output at binding 0
 ## (output first, per CONVENTIONS.md).
@@ -84,7 +84,6 @@ proc deviceName*(engine: VulkanEngine): string {.inline.} =
   ## The physical device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
   engine.ctx.ctx.deviceName(engine.ctx.ctx.physicalDevice)
 
-# ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────

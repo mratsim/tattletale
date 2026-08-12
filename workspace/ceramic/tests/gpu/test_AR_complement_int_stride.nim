@@ -54,7 +54,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "NVRTC compiles and runs a local_partition with an Int[1] stride":
       # The complement must emit concrete ints (static Int value lowered) so the
-      # kernel compiles and executes; a regression causes engine.compile() to abort.
+      # kernel compiles and executes. A regression causes engine.ingest() to abort.
       var Buf: array[64, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelPartition)

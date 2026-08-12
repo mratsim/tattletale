@@ -40,7 +40,6 @@ const kernelBlock = webgpu:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   suite "WebGPU - let-block-RHS":
     test "Pattern A — direct tuple let":
-      var buf: array[1, uint32]
       var engine = bkWGSL.init()
       engine.ingest(kernelDirect)
       echo kernelDirect
@@ -49,7 +48,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       check res[0] == 1
 
     test "Pattern B — const + let":
-      var buf: array[1, uint32]
       var engine = bkWGSL.init()
       engine.ingest(kernelConstLet)
       echo kernelConstLet
@@ -58,7 +56,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       check res[0] == 1
 
     test "Pattern C — block with const then yield":
-      var buf: array[1, uint32]
       var engine = bkWGSL.init()
       engine.ingest(kernelBlock)
       echo kernelBlock

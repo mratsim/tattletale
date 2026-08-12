@@ -11,16 +11,12 @@
 ## (see test_vulkan_kernel_pushconst.nim, codegen-only). The runtime must
 ## populate that push-constant range and only bind pointer args as SSBOs.
 ##
-## REGRESSION (03-vulkan-engine-techdebt.md #1, empirically reproduced): the
-## runtime never called vkCmdPushConstants and instead allocated an SSBO
-## fallback for the scalar at binding 0, shifting the output to binding 1 —
-## while the shader expects the output at binding 0 and a push-constant block
-## that was never written. Result: the kernel returned the output's
-## pre-initialized garbage with NO error.
-##
-## The runtime must call vkCmdPushConstants for by-value scalars: the shader
-## expects the output at binding 0 and a written push-constant block. A missing
-## push-constants call returns the output's pre-initialized garbage with no error.
+## Failure mode this test prevents: a runtime that skips vkCmdPushConstants and
+## allocates an SSBO fallback for the scalar leaves the shader's push-constant
+## block unwritten and shifts the output off binding 0, so the kernel returns the
+## output's pre-initialized bytes with no error. The runtime must pack by-value
+## scalars into the push-constant range and bind only pointer args as SSBOs,
+## with the output at binding 0.
 
 import std/strformat
 import workspace/crucible

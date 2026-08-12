@@ -11,14 +11,14 @@ It sits on top of the rest of the tattletale stack:
 - It **consumes** the layout algebra produced by `workspace/ceramic/` and the kernel specifications produced by `workspace/positron/`. Per the header in [`workspace/crucible/crucible.nim`](crucible.nim): "takes Ceramic layout algebra and Positron kernel specifications and emits native GPU code (CUDA, OpenCL, Vulkan, WebGPU)".
 - The generated source is handed to an external toolchain to run: NVRTC compiles CUDA to PTX, glslangValidator compiles GLSL to SPIR-V, and the host-side runtimes under [`src/runtime/exec/`](src/runtime/exec/) (backed by the ABIs under [`src/abis/`](src/abis/)) load and launch the results.
 
-Because it is a code generator, "correctness" of a feature means the emitted code compiles *and* computes the right result — which is why every test must call `execute()`, not just `compile()` (see [`AGENTS.md`](AGENTS.md)).
+Because it is a code generator, "correctness" of a feature means the emitted code compiles *and* computes the right result — which is why every test must call `engine.run()`, not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
 
 ## Architecture in brief
 
 - **One IR, four backends.** [`src/codegen/ir/nim_to_gpu.nim`](src/codegen/ir/nim_to_gpu.nim) lowers Nim AST to a backend-neutral IR; each target under [`src/codegen/targets/`](src/codegen/targets/) (`cuda_lang.nim`, `opencl_lang.nim`, `vulkan_lang.nim`, `wgsl_lang.nim`) prints it.
 - **A pass pipeline.** Semantic work lives in named passes under [`src/codegen/passes/`](src/codegen/passes/) (normalizations, legalizations, preprocessing, lowering, validations), run through a [`PassRegistry`](src/codegen/passes/pass_registry.nim).
 - **Compile-time and runtime codegen.** The `cuda`/`opencl`/`vulkan`/`webgpu` macros emit source at compile time; `codegen(gen, ast, ...)` in [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim) clones the IR and regenerates for a backend at runtime.
-- **Tests.** IR-level tests under [`tests/codegen/ir/`](tests/codegen/ir/) plus auto-runnable suites per backend (`nvrtc/`, `opencl/`, `vulkan/`, `webgpu/`). Tests must call `execute()`, not just compile (see [`AGENTS.md`](AGENTS.md)).
+- **Tests.** IR-level tests under [`tests/codegen/ir/`](tests/codegen/ir/) plus auto-runnable suites per backend (`nvrtc/`, `opencl/`, `vulkan/`, `webgpu/`). Tests must call `engine.run()`, not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
 
 ## Status
 
@@ -100,7 +100,7 @@ nim c -r --hints:off --warnings:off \
 ## Related docs
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — pipeline, data-flow walkthrough, extension points.
-- [`AGENTS.md`](AGENTS.md) — test naming, `execute()` requirement, minimal reproductions, debugging.
+- [`AGENTS.md`](AGENTS.md) — test naming, `engine.run()` requirement, minimal reproductions, debugging.
 - [`workspace/ceramic/`](../ceramic/) — layout algebra consumed by Crucible.
 - [`workspace/positron/`](../positron/) — kernel specifications consumed by Crucible.
 

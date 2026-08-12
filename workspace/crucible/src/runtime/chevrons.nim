@@ -40,8 +40,8 @@ type
     ##               (validated loudly) on Vulkan/WebGPU
     ##   sharedMem → CUDA dynamic smem / OpenCL __local (ignored elsewhere)
     ##   stream    → CUDA-only for now
-    ## y/z are CUDA-only for now; OpenCL/Vulkan/WebGPU consume the x axis
-    ## (multi-axis work sizes land in a follow-up).
+    ## y/z are consumed by all backends: OpenCL/Vulkan/WebGPU NDRange and
+    ## dispatch are full 3D (see the *_ndrange2d tests).
     grid*, blk* = default(Dim3)
     sharedMem*, stream* = 0
 

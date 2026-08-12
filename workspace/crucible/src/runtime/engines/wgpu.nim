@@ -1,6 +1,5 @@
-# Constantine
-# Copyright (c) 2018-2019    Status Research & Development GmbH
-# Copyright (c) 2020-Present Mamy André-Ratsimbazafy
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
@@ -12,7 +11,7 @@
 ## ingest = store WGSL; getArtifact = WGSL; run = pipeline +
 ## dispatchWorkgroups where grid = dispatchWorkgroups count. blk is
 ## shader-baked (@workgroup_size): run's blk is validated loudly. The
-## staging-buffer map pattern is kept, with the map status captured in
+## staging-buffer map pattern captures the map status in
 ## `check`. Scalars (ArgBlob size < 0) use a storage-buffer fallback
 ## (future: uniform).
 ##
@@ -63,6 +62,8 @@ proc newWgpuEngine(): WgpuEngine =
 # ═════════════════════════════════════════════════════════════════════════
 
 template check*(status: WGPUBufferMapAsyncStatus, quitOnFailure = true) =
+  ## Unified error policy: stacktrace + stderr + quit(1) unless `quitOnFailure = false`.
+  ## A template so instantiationInfo() reports the caller's location.
   let code = status
   if code != wgpuBufferMapAsyncStatusSuccess:
     writeStackTrace()
@@ -84,7 +85,6 @@ proc deviceName*(engine: WgpuEngine): string {.inline.} =
   ## The WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").
   engine.ctx.ctx.deviceName()
 
-# ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────

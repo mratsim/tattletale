@@ -62,39 +62,40 @@ All four backends share the same IR and the same common pass set (`registerCommo
 ## Annotated tree
 
 ```
-src/codegen/
-  gpu_compiler.nim          Entry point. `cuda`/`opencl`/`vulkan`/`webgpu`
-                            macros build a GpuContext + PassRegistry, run passes,
-                            and call codegenCuda/OpenCL/Vulkan/WebGPU. Also a
-                            runtime `codegen(gen, ast, backend)` proc.
-  ir/
-    gpu_types.nim           IR core: GpuAst node kinds, GpuType, GpuContext.
-                            FnTableEntry + unified fnTable; Symbol (ref) with
-                            immutable iSym fingerprint + mutatable name;
-                            GpuRangeKind (rkInclusive/rkExclusive); base58 encoder.
-    gpu_type_constructors.nim  GpuType constructors / helpers.
-    nim_to_gpu.nim          Frontend: walks typed Nim AST, emits GpuAst 1:1.
-                            Pure translator — no semantic decisions here.
-    resolvers.nim           Type / overload resolution during construction.
-  passes/
-    pass_datatypes.nim      GpuPass, PassKind, PassPhase, PassRegistry types;
-                            `walk` traversal; `runPasses` (checks dependsOn).
-    pass_registry.nim       PassRegistry.new().
-    passes_normalizations.nim  Extracted from the old frontend monolith
-                            (e.g. lowerIfExpr, patchBoolToI32, mapOperators).
-    passes_legalizations.nim   Legalization transforms (result insertion, etc.).
-    passes_preprocessing.nim   Preprocessing: rewriteIndexDeref, decomposeMemcpy,
-                            emitFunctionSignatures, mangleNames, plus per-backend
-                            registrations (WGSL/Vulkan/OpenCL passes).
-    passes_lowering.nim     Lowering: gtSpan -> ptr + len, byref params, etc.
-    passes_validations.nim  Pre/post validation passes (e.g. warnUnassigned).
-    passes_optimizations.nim   Optimizations (stub scope).
-  targets/
-    targets_lang.nim        Dispatches codegenCuda/OpenCL/Vulkan/WebGPU to printers.
-    cuda_lang.nim opencl_lang.nim vulkan_lang.nim wgsl_lang.nim
-                            "Dumb syntax printers": walk IR, emit native text.
-    lang_utils.nim          Shared printer helpers.
-  builtins/                 Per-backend + Nim builtins.
+src/
+  codegen/
+    gpu_compiler.nim          Entry point. `cuda`/`opencl`/`vulkan`/`webgpu`
+                              macros build a GpuContext + PassRegistry, run passes,
+                              and call codegenCuda/OpenCL/Vulkan/WebGPU. Also a
+                              runtime `codegen(gen, ast, backend)` proc.
+    ir/
+      gpu_types.nim           IR core: GpuAst node kinds, GpuType, GpuContext.
+                              FnTableEntry + unified fnTable; Symbol (ref) with
+                              immutable iSym fingerprint + mutatable name;
+                              GpuRangeKind (rkInclusive/rkExclusive); base58 encoder.
+      gpu_type_constructors.nim  GpuType constructors / helpers.
+      nim_to_gpu.nim          Frontend: walks typed Nim AST, emits GpuAst 1:1.
+                              Pure translator — no semantic decisions here.
+      resolvers.nim           Type / overload resolution during construction.
+    passes/
+      pass_datatypes.nim      GpuPass, PassKind, PassPhase, PassRegistry types;
+                              `walk` traversal; `runPasses` (checks dependsOn).
+      pass_registry.nim       PassRegistry.new().
+      passes_normalizations.nim  Extracted from the old frontend monolith
+                              (e.g. lowerIfExpr, patchBoolToI32, mapOperators).
+      passes_legalizations.nim   Legalization transforms (result insertion, etc.).
+      passes_preprocessing.nim   Preprocessing: rewriteIndexDeref, decomposeMemcpy,
+                              emitFunctionSignatures, mangleNames, plus per-backend
+                              registrations (WGSL/Vulkan/OpenCL passes).
+      passes_lowering.nim     Lowering: gtSpan -> ptr + len, byref params, etc.
+      passes_validations.nim  Pre/post validation passes (e.g. warnUnassigned).
+      passes_optimizations.nim   Optimizations (stub scope).
+    targets/
+      targets_lang.nim        Dispatches codegenCuda/OpenCL/Vulkan/WebGPU to printers.
+      cuda_lang.nim opencl_lang.nim vulkan_lang.nim wgsl_lang.nim
+                              "Dumb syntax printers": walk IR, emit native text.
+      lang_utils.nim          Shared printer helpers.
+    builtins/                 Per-backend + Nim builtins.
   runtime/
     engines.nim             HwEngine — sole public runtime API (init/ingest/
                             getArtifact/run + run<<(G,B)>> chevrons).
@@ -132,7 +133,7 @@ src/codegen/
 
 1. Add a printer file under `src/codegen/targets/` exposing `preprocess` and `codegen`.
 2. Wire it into `targets_lang.nim` (`codegen<Backend>` proc) and add a `BackendKind` case in `gpu_compiler.nim`, registering any backend-specific passes and reserved-keyword checks.
-3. Add a `tests/codegen/<backend>/` suite following the naming convention and `execute()` requirement in [`AGENTS.md`](AGENTS.md) (or a `manual_*` test if the backend cannot auto-run).
+3. Add a `tests/codegen/<backend>/` suite following the naming convention and `engine.run()` requirement in [`AGENTS.md`](AGENTS.md) (or a `manual_*` test if the backend cannot auto-run).
 
 ## Related docs
 

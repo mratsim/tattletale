@@ -1,6 +1,5 @@
-# Constantine
-# Copyright (c) 2018-2019    Status Research & Development GmbH
-# Copyright (c) 2020-Present Mamy André-Ratsimbazafy
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
@@ -9,10 +8,11 @@
 ## CudaEngine — NVRTC JIT + CUDA driver execution (moved from codegen/nvrtc.nim).
 ##
 ## The NVRTC JIT driver helpers (initNvrtc/compile/getPtx/load) are private
-## engine internals now: `ingest` compiles via NVRTC and `runImpl` loads the
+## engine internals: `ingest` compiles via NVRTC and `runImpl` loads the
 ## module and launches. Launch extents come from the chevron `LaunchConfig`
 ## (grid/blk are full 3D Dim3) — there is no public low-level `execute`
-## entry point. This module no longer imports `codegen/gpu_compiler`.
+## entry point. This module imports no codegen modules. Kernels travel as
+## source strings.
 ##
 ## The engine is a `ref object` with fields directly (no XxxObj indirection).
 ## Resources live in RAII value fields (`NVRTC` carries its own `=destroy`)
@@ -164,7 +164,7 @@ proc load(nvrtc: var NVRTC) =
 
   let status = cuModuleLoadData(nvrtc.module, cstring nvrtc.ptx)
   if status != CUDA_SUCCESS:
-    var error_str: cstring #const char* error_str;
+    var error_str: cstring
     check cuGetErrorString(status, (error_str));
     echo "Module load failed: ", error_str
     echo "JIT Error log: ", error_log
