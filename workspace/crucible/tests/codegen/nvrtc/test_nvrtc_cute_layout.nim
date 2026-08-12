@@ -23,14 +23,18 @@ const kernelCode = cuda:
     output[4] = a00 * tileAt(gemmB, 0'u32, 0'u32) + a01 * tileAt(gemmB, 1'u32, 0'u32)
     output[5] = a10 * tileAt(gemmB, 0'u32, 2'u32) + a11 * tileAt(gemmB, 1'u32, 2'u32)
 
-var buf: array[6, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run<<(1, 1)>>("cuteKernel", buf, ())
-doAssert buf[0] == 10, &"tile[0,0]: {buf[0]}"
-doAssert buf[1] == 20, &"tile[0,1]: {buf[1]}"
-doAssert buf[2] == 60, &"tile[1,2]: {buf[2]}"
-doAssert buf[4] == 21, &"dot[0,0]: {buf[4]}"
-doAssert buf[5] == 61, &"dot[1,2]: {buf[5]}"
-echo "  OK — CuTe Layout + Tile  (CUDA)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[6, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run<<(1, 1)>>("cuteKernel", buf, ())
+  doAssert buf[0] == 10, &"tile[0,0]: {buf[0]}"
+  doAssert buf[1] == 20, &"tile[0,1]: {buf[1]}"
+  doAssert buf[2] == 60, &"tile[1,2]: {buf[2]}"
+  doAssert buf[4] == 21, &"dot[0,0]: {buf[4]}"
+  doAssert buf[5] == 61, &"dot[1,2]: {buf[5]}"
+  echo "  OK — CuTe Layout + Tile  (CUDA)"
+
+when isMainModule:
+  runTest()

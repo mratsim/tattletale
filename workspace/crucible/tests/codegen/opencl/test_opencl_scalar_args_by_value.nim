@@ -27,15 +27,19 @@ const kernelCode = opencl:
                    output: ptr UncheckedArray[float32]) {.global.} =
     output[0] = a[0] * alpha + float32(beta)
 
-echo kernelCode
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo kernelCode
 
-block:
-  var engine = bkOpenCL.init()
-  engine.ingest(kernelCode)
-  var a: array[1, float32] = [2.5'f32]
-  var alpha = 3.0'f32
-  var beta = 4'i32
-  var output: array[1, float32]
-  engine.run("scaleKernel", output, (a, alpha, beta))
-  doAssert output[0] == 11.5'f32, "expected 2.5 * 3.0 + 4.0 = 11.5"
-  echo "  OK"
+  block:
+    var engine = bkOpenCL.init()
+    engine.ingest(kernelCode)
+    var a: array[1, float32] = [2.5'f32]
+    var alpha = 3.0'f32
+    var beta = 4'i32
+    var output: array[1, float32]
+    engine.run("scaleKernel", output, (a, alpha, beta))
+    doAssert output[0] == 11.5'f32, "expected 2.5 * 3.0 + 4.0 = 11.5"
+    echo "  OK"
+
+when isMainModule:
+  runTest()

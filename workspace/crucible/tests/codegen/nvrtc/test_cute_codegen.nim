@@ -30,14 +30,18 @@ const kernelCode = cuda:
     output[5] = t.data[0]
     output[6] = t.data[3]
 
-var buf: array[7, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run<<(1, 4)>>("codegenKernel", buf, ())
-doAssert buf[0] == 100, &"tid0: {buf[0]}"
-doAssert buf[3] == 103, &"tid3: {buf[3]}"
-doAssert buf[4] == 6,   &"idx(1,2,4): {buf[4]} (expected 1*4+2=6)"
-doAssert buf[5] == 1,   &"tensor[0]: {buf[5]}"
-doAssert buf[6] == 4,   &"tensor[3]: {buf[6]}"
-echo "  OK — codegen patterns"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[7, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run<<(1, 4)>>("codegenKernel", buf, ())
+  doAssert buf[0] == 100, &"tid0: {buf[0]}"
+  doAssert buf[3] == 103, &"tid3: {buf[3]}"
+  doAssert buf[4] == 6,   &"idx(1,2,4): {buf[4]} (expected 1*4+2=6)"
+  doAssert buf[5] == 1,   &"tensor[0]: {buf[5]}"
+  doAssert buf[6] == 4,   &"tensor[3]: {buf[6]}"
+  echo "  OK — codegen patterns"
+
+when isMainModule:
+  runTest()

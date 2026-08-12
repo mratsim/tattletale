@@ -35,18 +35,22 @@ const kernelCode = cuda:
 
 # ── Host code ───────────────────────────────────────────────────────────────
 
-var buf: array[3, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[3, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
 
-engine.run("externalFnKernel", buf, ())
-echo "  addThree(10,20,30)  = ", buf[0]
-echo "  scaleAndAdd(5,2,3)  = ", buf[1]
-echo "  selectValue(isEven(42), 100, 200) = ", buf[2]
+  engine.run("externalFnKernel", buf, ())
+  echo "  addThree(10,20,30)  = ", buf[0]
+  echo "  scaleAndAdd(5,2,3)  = ", buf[1]
+  echo "  selectValue(isEven(42), 100, 200) = ", buf[2]
 
-doAssert buf[0] == 60  # 10 + 20 + 30
-doAssert buf[1] == 17   # 5*3 + 2
-doAssert buf[2] == 100  # 42 is even, so true branch
+  doAssert buf[0] == 60  # 10 + 20 + 30
+  doAssert buf[1] == 17   # 5*3 + 2
+  doAssert buf[2] == 100  # 42 is even, so true branch
 
-echo "  OK (test_nvrtc_external_fn)"
+  echo "  OK (test_nvrtc_external_fn)"
+
+when isMainModule:
+  runTest()

@@ -13,10 +13,14 @@ const kernelCode = cuda:
   proc emptyStructKernel(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = 42'u32
 
-var buf: array[1, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("emptyStructKernel", buf, ())
-doAssert buf[0] == 42
-echo "  OK (test_nvrtc_empty_struct_gpu)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[1, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("emptyStructKernel", buf, ())
+  doAssert buf[0] == 42
+  echo "  OK (test_nvrtc_empty_struct_gpu)"
+
+when isMainModule:
+  runTest()

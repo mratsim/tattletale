@@ -23,11 +23,15 @@ const kernelCode = cuda:
     output[0] = b.data[0]
     output[1] = b.data[3]
 
-var buf: array[2, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("typeBranchesKernel", buf, ())
-doAssert buf[0] == 1, &"ntyStatic buf[0]: got {buf[0]}"
-doAssert buf[1] == 4, &"ntyStatic buf[1]: got {buf[1]}"
-echo "  OK (test_nvrtc_type_proc_and_static)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[2, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("typeBranchesKernel", buf, ())
+  doAssert buf[0] == 1, &"ntyStatic buf[0]: got {buf[0]}"
+  doAssert buf[1] == 4, &"ntyStatic buf[1]: got {buf[1]}"
+  echo "  OK (test_nvrtc_type_proc_and_static)"
+
+when isMainModule:
+  runTest()

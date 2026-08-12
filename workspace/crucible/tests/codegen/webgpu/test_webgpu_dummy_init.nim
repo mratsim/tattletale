@@ -27,22 +27,26 @@ const kernelCode2 = webgpu:
     const tup {.genSym.} = (FixMe[1](), FixMe[8]())
     C[0] = 1'u32
 
-suite "WebGPU - dummy-field initializers":
-  test "single dummy struct const":
-    var buf: array[1, uint32]
-    var engine = bkWGSL.init()
-    engine.ingest(kernelCode)
-    echo kernelCode
-    var res: array[1, uint32]
-    engine.run("dummyKernel", res, ())
-    check res[0] == 1
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "WebGPU - dummy-field initializers":
+    test "single dummy struct const":
+      var buf: array[1, uint32]
+      var engine = bkWGSL.init()
+      engine.ingest(kernelCode)
+      echo kernelCode
+      var res: array[1, uint32]
+      engine.run("dummyKernel", res, ())
+      check res[0] == 1
 
 
-  test "tuple of dummy structs const":
-    var buf: array[1, uint32]
-    var engine = bkWGSL.init()
-    engine.ingest(kernelCode2)
-    echo kernelCode2
-    var res: array[1, uint32]
-    engine.run("dummyKernel", res, ())
-    check res[0] == 1
+    test "tuple of dummy structs const":
+      var buf: array[1, uint32]
+      var engine = bkWGSL.init()
+      engine.ingest(kernelCode2)
+      echo kernelCode2
+      var res: array[1, uint32]
+      engine.run("dummyKernel", res, ())
+      check res[0] == 1
+
+when isMainModule:
+  runTest()

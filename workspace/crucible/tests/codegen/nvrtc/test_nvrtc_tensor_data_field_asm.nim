@@ -41,16 +41,20 @@ const kernelCode = cuda:
     output[4] = o.data[0]
     output[5] = o.data[1]
 
-var buf: array[6, float32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("tensorDataAsmKernel", buf, ())
-echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2], " [3]=", buf[3], " [4]=", buf[4], " [5]=", buf[5]
-doAssert buf[0] == 6.0'f32   # 1 + 5
-doAssert buf[1] == 7.0'f32   # 2 + 5
-doAssert buf[2] == 8.0'f32   # 3 + 5
-doAssert buf[3] == 9.0'f32   # 4 + 5
-doAssert buf[4] == 11.0'f32  # 10 + 1
-doAssert buf[5] == 21.0'f32  # 20 + 1
-echo "  OK (test_nvrtc_tensor_data_field_asm)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[6, float32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("tensorDataAsmKernel", buf, ())
+  echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2], " [3]=", buf[3], " [4]=", buf[4], " [5]=", buf[5]
+  doAssert buf[0] == 6.0'f32   # 1 + 5
+  doAssert buf[1] == 7.0'f32   # 2 + 5
+  doAssert buf[2] == 8.0'f32   # 3 + 5
+  doAssert buf[3] == 9.0'f32   # 4 + 5
+  doAssert buf[4] == 11.0'f32  # 10 + 1
+  doAssert buf[5] == 21.0'f32  # 20 + 1
+  echo "  OK (test_nvrtc_tensor_data_field_asm)"
+
+when isMainModule:
+  runTest()

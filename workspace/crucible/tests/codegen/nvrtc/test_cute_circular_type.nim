@@ -20,10 +20,14 @@ const kernelCode = cuda:
     let x = Node[4](val: 42'u32)
     output[0] = x.val
 
-var buf: array[1, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("fwdRefKernel", buf, ())
-doAssert buf[0] == 42, &"fwd ref: {buf[0]}"
-echo "  OK — forward-referenced types (B23)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[1, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("fwdRefKernel", buf, ())
+  doAssert buf[0] == 42, &"fwd ref: {buf[0]}"
+  echo "  OK — forward-referenced types (B23)"
+
+when isMainModule:
+  runTest()

@@ -32,8 +32,12 @@ const kernelCode = cuda:
 
 # If compilation succeeds, the nnkSym+allowArrayIdent=true path
 # did not crash (getImpl.intVal was not called unconditionally).
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
 
-echo "  OK — external array length resolution (nnkSym + allowArrayIdent=true) compiles without crash"
+  echo "  OK — external array length resolution (nnkSym + allowArrayIdent=true) compiles without crash"
+
+when isMainModule:
+  runTest()

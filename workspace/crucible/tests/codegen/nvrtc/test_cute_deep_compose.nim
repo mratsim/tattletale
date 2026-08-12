@@ -51,13 +51,17 @@ const kernelCode = cuda:
                                               99'u32, 99'u32, 99'u32, 99'u32])
     output[3] = gemm.data[0]
 
-var buf: array[4, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("deepComposeKernel", buf, ())
-doAssert buf[0] == 0,   &"alias[0]: {buf[0]}"
-doAssert buf[1] == 15,  &"alias[15]: {buf[1]}"
-doAssert buf[2] == 42,  &"nested val: {buf[2]}"
-doAssert buf[3] == 99,  &"gemm[0]: {buf[3]}"
-echo "  OK — deep composition (B11, B12, B13)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[4, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("deepComposeKernel", buf, ())
+  doAssert buf[0] == 0,   &"alias[0]: {buf[0]}"
+  doAssert buf[1] == 15,  &"alias[15]: {buf[1]}"
+  doAssert buf[2] == 42,  &"nested val: {buf[2]}"
+  doAssert buf[3] == 99,  &"gemm[0]: {buf[3]}"
+  echo "  OK — deep composition (B11, B12, B13)"
+
+when isMainModule:
+  runTest()

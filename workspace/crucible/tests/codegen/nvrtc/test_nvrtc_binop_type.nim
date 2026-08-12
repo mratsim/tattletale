@@ -46,34 +46,38 @@ const kernel = cuda:
     C[1] = foldedFma(C[1] + 2)
 
 # ── Fold-tail-kind + bType oracle on the raw IR ──
-block:
-  let ir = toGpuAst:
-    proc probeKernel(x: int32) {.device.} =
-      let y = foldDo:
-        acc * it_a
-  doAssert ir.kind == gpuBlock, "Expected gpuBlock at top level, got " & $ir.kind
-  let fn = ir.statements[0]
-  doAssert fn.kind == gpuProc, "Expected gpuProc first, got " & $fn.kind
-  var tail: GpuAst = nil
-  proc findBinOp(n: GpuAst) =
-    if n == nil or not tail.isNil: return
-    if n.kind == gpuBinOp:
-      tail = n
-      return
-    for ch in n.items:
-      findBinOp(ch)
-  findBinOp(fn.pBody)
-  doAssert not tail.isNil, "Expected a gpuBinOp in the fold body"
-  doAssert not tail.bIsOverloaded, "Primitive fold must stay a gpuBinOp (not gpuCall)"
-  doAssert not tail.bType.isNil, "Fold-tail gpuBinOp must carry non-nil bType"
-  doAssert tail.bType == initGpuType(gtInt32),
-    "acc * it_a must carry gtInt32 bType, got " & $tail.bType
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  block:
+    let ir = toGpuAst:
+      proc probeKernel(x: int32) {.device.} =
+        let y = foldDo:
+          acc * it_a
+    doAssert ir.kind == gpuBlock, "Expected gpuBlock at top level, got " & $ir.kind
+    let fn = ir.statements[0]
+    doAssert fn.kind == gpuProc, "Expected gpuProc first, got " & $fn.kind
+    var tail: GpuAst = nil
+    proc findBinOp(n: GpuAst) =
+      if n == nil or not tail.isNil: return
+      if n.kind == gpuBinOp:
+        tail = n
+        return
+      for ch in n.items:
+        findBinOp(ch)
+    findBinOp(fn.pBody)
+    doAssert not tail.isNil, "Expected a gpuBinOp in the fold body"
+    doAssert not tail.bIsOverloaded, "Primitive fold must stay a gpuBinOp (not gpuCall)"
+    doAssert not tail.bType.isNil, "Fold-tail gpuBinOp must carry non-nil bType"
+    doAssert tail.bType == initGpuType(gtInt32),
+      "acc * it_a must carry gtInt32 bType, got " & $tail.bType
 
-suite "gpuBinOp self-carried bType":
-  test "fold do-block pulled into device procs compiles and executes":
-    var output: array[2, int32]
-    var engine = bkCuda.init()
-    engine.ingest(kernel)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 8  # foldedMul(C[0]+8) = 1 * (0 + 8)
-    check output[1] == 5  # foldedFma(C[1]+2) = 1 + (0 + 2) * 2
+  suite "gpuBinOp self-carried bType":
+    test "fold do-block pulled into device procs compiles and executes":
+      var output: array[2, int32]
+      var engine = bkCuda.init()
+      engine.ingest(kernel)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 8  # foldedMul(C[0]+8) = 1 * (0 + 8)
+      check output[1] == 5  # foldedFma(C[1]+2) = 1 + (0 + 2) * 2
+
+when isMainModule:
+  runTest()

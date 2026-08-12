@@ -29,130 +29,134 @@ const kernelBasic = cuda:
     C[8] = a or b
     C[9] = a xor b
 
-suite "Operator codegen":
-  test "basic types (int32) — all operators on GPU":
-    var output: array[10, int32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelBasic)
-    engine.run<<(1, 1)>>("kernelBasic", output, ())
-    check output[0] == 18
-    check output[1] == 8
-    check output[2] == 65
-    check output[3] == 2
-    check output[4] == 3
-    check output[5] == 416
-    check output[6] == 0
-    check output[7] == 5
-    check output[8] == 13
-    check output[9] == 8
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Operator codegen":
+    test "basic types (int32) — all operators on GPU":
+      var output: array[10, int32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelBasic)
+      engine.run<<(1, 1)>>("kernelBasic", output, ())
+      check output[0] == 18
+      check output[1] == 8
+      check output[2] == 65
+      check output[3] == 2
+      check output[4] == 3
+      check output[5] == 416
+      check output[6] == 0
+      check output[7] == 5
+      check output[8] == 13
+      check output[9] == 8
 
-# ── Struct types — operator syntax ──────────────────────────────────────────
+  # ── Struct types — operator syntax ──────────────────────────────────────────
 
-type
-  Wrapper* = object
-    val*: int32
+  type
+    Wrapper = object
+      val: int32
 
-  Wrapper2* = object
-    val*: int32
+    Wrapper2 = object
+      val: int32
 
-proc `+`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val + b.val)
-proc `-`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val - b.val)
-proc `*`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val * b.val)
-proc `div`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val div b.val)
-proc `mod`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val mod b.val)
-proc `shl`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val shl b.val)
-proc `shr`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val shr b.val)
-proc `and`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val and b.val)
-proc `or`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val or b.val)
-proc `xor`*(a, b: Wrapper): Wrapper = Wrapper(val: a.val xor b.val)
+  proc `+`(a, b: Wrapper): Wrapper = Wrapper(val: a.val + b.val)
+  proc `-`(a, b: Wrapper): Wrapper = Wrapper(val: a.val - b.val)
+  proc `*`(a, b: Wrapper): Wrapper = Wrapper(val: a.val * b.val)
+  proc `div`(a, b: Wrapper): Wrapper = Wrapper(val: a.val div b.val)
+  proc `mod`(a, b: Wrapper): Wrapper = Wrapper(val: a.val mod b.val)
+  proc `shl`(a, b: Wrapper): Wrapper = Wrapper(val: a.val shl b.val)
+  proc `shr`(a, b: Wrapper): Wrapper = Wrapper(val: a.val shr b.val)
+  proc `and`(a, b: Wrapper): Wrapper = Wrapper(val: a.val and b.val)
+  proc `or`(a, b: Wrapper): Wrapper = Wrapper(val: a.val or b.val)
+  proc `xor`(a, b: Wrapper): Wrapper = Wrapper(val: a.val xor b.val)
 
-proc `+`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val + b.val)
-proc `-`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val - b.val)
-proc `*`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val * b.val)
-proc `div`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val div b.val)
-proc `mod`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val mod b.val)
-proc `shl`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val shl b.val)
-proc `shr`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val shr b.val)
-proc `and`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val and b.val)
-proc `or`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val or b.val)
-proc `xor`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val xor b.val)
+  proc `+`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val + b.val)
+  proc `-`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val - b.val)
+  proc `*`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val * b.val)
+  proc `div`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val div b.val)
+  proc `mod`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val mod b.val)
+  proc `shl`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val shl b.val)
+  proc `shr`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val shr b.val)
+  proc `and`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val and b.val)
+  proc `or`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val or b.val)
+  proc `xor`(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val xor b.val)
 
-const kernelStruct = cuda:
-  proc kernelStruct(C: ptr UncheckedArray[int32]) {.global.} =
-    let a = Wrapper(val: 7)
-    let b = Wrapper(val: 3)
-    C[0] = (a + b).val
-    C[1] = (a - b).val
-    C[2] = (a * b).val
-    C[3] = (a div b).val
-    C[4] = (a mod b).val
-    C[5] = (a shl b).val
-    C[6] = (a shr b).val
-    C[7] = (a and b).val
-    C[8] = (a or b).val
-    C[9] = (a xor b).val
+  const kernelStruct = cuda:
+    proc kernelStruct(C: ptr UncheckedArray[int32]) {.global.} =
+      let a = Wrapper(val: 7)
+      let b = Wrapper(val: 3)
+      C[0] = (a + b).val
+      C[1] = (a - b).val
+      C[2] = (a * b).val
+      C[3] = (a div b).val
+      C[4] = (a mod b).val
+      C[5] = (a shl b).val
+      C[6] = (a shr b).val
+      C[7] = (a and b).val
+      C[8] = (a or b).val
+      C[9] = (a xor b).val
 
-const kernelStruct2 = cuda:
-  proc kernelStruct2(C: ptr UncheckedArray[int32]) {.global.} =
-    let a = Wrapper2(val: 14)
-    let b = Wrapper2(val: 3)
-    C[0] = (a + b).val
-    C[1] = (a - b).val
-    C[2] = (a * b).val
-    C[3] = (a div b).val
-    C[4] = (a mod b).val
-    C[5] = (a shl b).val
-    C[6] = (a shr b).val
-    C[7] = (a and b).val
-    C[8] = (a or b).val
-    C[9] = (a xor b).val
+  const kernelStruct2 = cuda:
+    proc kernelStruct2(C: ptr UncheckedArray[int32]) {.global.} =
+      let a = Wrapper2(val: 14)
+      let b = Wrapper2(val: 3)
+      C[0] = (a + b).val
+      C[1] = (a - b).val
+      C[2] = (a * b).val
+      C[3] = (a div b).val
+      C[4] = (a mod b).val
+      C[5] = (a shl b).val
+      C[6] = (a shr b).val
+      C[7] = (a and b).val
+      C[8] = (a or b).val
+      C[9] = (a xor b).val
 
-const kernelBoth = cuda:
-  proc kernelBoth(C: ptr UncheckedArray[int32]) {.global.} =
-    let a = Wrapper(val: 7)
-    let b = Wrapper(val: 3)
-    let c = Wrapper2(val: 14)
-    let d = Wrapper2(val: 3)
-    C[0] = (a + b).val
-    C[1] = (c + d).val
+  const kernelBoth = cuda:
+    proc kernelBoth(C: ptr UncheckedArray[int32]) {.global.} =
+      let a = Wrapper(val: 7)
+      let b = Wrapper(val: 3)
+      let c = Wrapper2(val: 14)
+      let d = Wrapper2(val: 3)
+      C[0] = (a + b).val
+      C[1] = (c + d).val
 
-suite "User-defined operators":
-  test "struct types (Wrapper) — operator syntax on GPU":
-    var output: array[10, int32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelStruct)
-    engine.run<<(1, 1)>>("kernelStruct", output, ())
-    check output[0] == 10
-    check output[1] == 4
-    check output[2] == 21
-    check output[3] == 2
-    check output[4] == 1
-    check output[5] == 56
-    check output[6] == 0
-    check output[7] == 3
-    check output[8] == 7
-    check output[9] == 4
+  suite "User-defined operators":
+    test "struct types (Wrapper) — operator syntax on GPU":
+      var output: array[10, int32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelStruct)
+      engine.run<<(1, 1)>>("kernelStruct", output, ())
+      check output[0] == 10
+      check output[1] == 4
+      check output[2] == 21
+      check output[3] == 2
+      check output[4] == 1
+      check output[5] == 56
+      check output[6] == 0
+      check output[7] == 3
+      check output[8] == 7
+      check output[9] == 4
 
-  test "struct types (Wrapper2) — operator syntax on GPU":
-    var output: array[10, int32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelStruct2)
-    engine.run<<(1, 1)>>("kernelStruct2", output, ())
-    check output[0] == 17
-    check output[1] == 11
-    check output[2] == 42
-    check output[3] == 4
-    check output[4] == 2
-    check output[5] == 112
-    check output[6] == 1
-    check output[7] == 2
-    check output[8] == 15
-    check output[9] == 13
+    test "struct types (Wrapper2) — operator syntax on GPU":
+      var output: array[10, int32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelStruct2)
+      engine.run<<(1, 1)>>("kernelStruct2", output, ())
+      check output[0] == 17
+      check output[1] == 11
+      check output[2] == 42
+      check output[3] == 4
+      check output[4] == 2
+      check output[5] == 112
+      check output[6] == 1
+      check output[7] == 2
+      check output[8] == 15
+      check output[9] == 13
 
-  test "struct types (both Wrapper + Wrapper2) — name collision":
-    var output: array[2, int32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelBoth)
-    engine.run<<(1, 1)>>("kernelBoth", output, ())
-    check output[0] == 10
-    check output[1] == 17
+    test "struct types (both Wrapper + Wrapper2) — name collision":
+      var output: array[2, int32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelBoth)
+      engine.run<<(1, 1)>>("kernelBoth", output, ())
+      check output[0] == 10
+      check output[1] == 17
+
+when isMainModule:
+  runTest()

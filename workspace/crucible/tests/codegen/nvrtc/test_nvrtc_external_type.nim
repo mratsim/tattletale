@@ -47,19 +47,23 @@ const kernelCode = cuda:
 
 # ── Host code ───────────────────────────────────────────────────────────────
 
-var buf: array[4, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[4, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
 
-engine.run("externalTypeKernel", buf, ())
-echo "  Vec2(10,20)+Vec2(1,2) = (", buf[0], ", ", buf[1], ")"
-echo "  dot(Vec2(10,20), Vec2(1,2)) = ", buf[2]
-echo "  sum(Vec4(1,2,3,4))  = ", buf[3]
+  engine.run("externalTypeKernel", buf, ())
+  echo "  Vec2(10,20)+Vec2(1,2) = (", buf[0], ", ", buf[1], ")"
+  echo "  dot(Vec2(10,20), Vec2(1,2)) = ", buf[2]
+  echo "  sum(Vec4(1,2,3,4))  = ", buf[3]
 
-doAssert buf[0] == 11  # 10 + 1
-doAssert buf[1] == 22  # 20 + 2
-doAssert buf[2] == 50  # 10*1 + 20*2
-doAssert buf[3] == 10  # 1+2+3+4
+  doAssert buf[0] == 11  # 10 + 1
+  doAssert buf[1] == 22  # 20 + 2
+  doAssert buf[2] == 50  # 10*1 + 20*2
+  doAssert buf[3] == 10  # 1+2+3+4
 
-echo "  OK (test_nvrtc_external_type)"
+  echo "  OK (test_nvrtc_external_type)"
+
+when isMainModule:
+  runTest()

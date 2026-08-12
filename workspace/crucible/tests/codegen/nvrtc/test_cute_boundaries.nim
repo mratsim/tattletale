@@ -25,11 +25,15 @@ const kernelCode = cuda:
     # Large static value (test that big arrays compile)
     output[1] = 1'u32
 
-var buf: array[2, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("boundaryKernel", buf, ())
-doAssert buf[0] == 42, &"nested val: {buf[0]}"
-doAssert buf[1] == 1, &"boundary static marker: {buf[1]}"
-echo "  OK — boundary patterns"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[2, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("boundaryKernel", buf, ())
+  doAssert buf[0] == 42, &"nested val: {buf[0]}"
+  doAssert buf[1] == 1, &"boundary static marker: {buf[1]}"
+  echo "  OK — boundary patterns"
+
+when isMainModule:
+  runTest()

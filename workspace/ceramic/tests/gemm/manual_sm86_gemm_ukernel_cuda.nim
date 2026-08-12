@@ -80,9 +80,9 @@ const kernelCode = cuda:
                          A, B: ptr UncheckedArray[uint32]) {.global.} =
     gemmUkernelMicrotile(tiled, int(threadIdx.x), C, A, B)
 
-proc main() =
+proc runTest() =
   var engine = bkCuda.init(kernelCode)
   testUkernel(engine, atom, "SM86")
 
 when isMainModule:
-  main()
+  runTest()

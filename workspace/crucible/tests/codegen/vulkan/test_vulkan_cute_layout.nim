@@ -23,15 +23,19 @@ const kernelVk = vulkan:
     output[4] = a00 * tileAt(gemmB, 0'u32, 0'u32) + a01 * tileAt(gemmB, 1'u32, 0'u32)
     output[5] = a10 * tileAt(gemmB, 0'u32, 2'u32) + a11 * tileAt(gemmB, 1'u32, 2'u32)
 
-echo "=== Vulkan CuTe Layout generation ===\n"
-echo kernelVk; echo ""
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo "=== Vulkan CuTe Layout generation ===\n"
+  echo kernelVk; echo ""
 
-echo "=== Vulkan execution ===\n"
-block:
-  var engine = bkVulkan.init()
-  engine.ingest(kernelVk)
-  var res: array[6, uint32]
-  engine.run("cuteKernel", res, ())
-  doAssert res[0]==10 and res[1]==20 and res[2]==60
-  doAssert res[4]==21 and res[5]==61
-  echo "  OK — CuTe Layout + Tile  (Vulkan)"
+  echo "=== Vulkan execution ===\n"
+  block:
+    var engine = bkVulkan.init()
+    engine.ingest(kernelVk)
+    var res: array[6, uint32]
+    engine.run("cuteKernel", res, ())
+    doAssert res[0]==10 and res[1]==20 and res[2]==60
+    doAssert res[4]==21 and res[5]==61
+    echo "  OK — CuTe Layout + Tile  (Vulkan)"
+
+when isMainModule:
+  runTest()

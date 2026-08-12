@@ -66,13 +66,17 @@ const kernelComplement = cuda:
     let r = complementLike(l)   # crucible pulls body -> max(1, IntN1{})
     Buf[0] = int32(r)           # concrete value when the static Int is lowered
 
-suite "crucible — complement via a static Int stride (max emission)":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "crucible — complement via a static Int stride (max emission)":
 
-  test "NVRTC compiles and runs a complement with a static Int stride":
-    # The static value must be lowered so max(1, stride) resolves to 1 and the
-    # kernel compiles; a regression causes engine.compile() to abort below.
-    var Buf: array[1, int32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelComplement)
-    engine.run<<(1, 1)>>("kComplement", Buf, ())
-    check Buf[0] == 1
+    test "NVRTC compiles and runs a complement with a static Int stride":
+      # The static value must be lowered so max(1, stride) resolves to 1 and the
+      # kernel compiles; a regression causes engine.compile() to abort below.
+      var Buf: array[1, int32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelComplement)
+      engine.run<<(1, 1)>>("kComplement", Buf, ())
+      check Buf[0] == 1
+
+when isMainModule:
+  runTest()

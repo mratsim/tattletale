@@ -71,7 +71,7 @@ const kernel = cuda:
       let _ = tv(0, 0, kTile)(0)
     output[0] = 42.0f
 
-when isMainModule:
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
 
   echo "═══════════════════════════════════════════════════════════════════"
   echo kernel
@@ -83,3 +83,6 @@ when isMainModule:
   engine.run<<(1, 1)>>("reproKernel", outBuf, ())
   doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
   echo "  OK (test_nvrtc_hoist_N_gensym_dup)"
+
+when isMainModule:
+  runTest()

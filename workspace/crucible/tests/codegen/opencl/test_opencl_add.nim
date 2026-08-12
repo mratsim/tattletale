@@ -50,64 +50,67 @@ const maxCl = opencl:
 
 # ── Codegen tests (always runs) ─────────────────────────────────────────────
 
-echo "=== OpenCL generation tests ===\n"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo "=== OpenCL generation tests ===\n"
 
-echo "--- addKernel ---"
-echo addCl
-echo ""
+  echo "--- addKernel ---"
+  echo addCl
+  echo ""
 
-echo "--- vec2AddKernel (external type Vec2 + external fn vec2Add) ---"
-echo vec2Cl
-echo ""
+  echo "--- vec2AddKernel (external type Vec2 + external fn vec2Add) ---"
+  echo vec2Cl
+  echo ""
 
-echo "--- maxKernel (generic T -> uint32 instantiation) ---"
-echo maxCl
-echo ""
+  echo "--- maxKernel (generic T -> uint32 instantiation) ---"
+  echo maxCl
+  echo ""
 
-# ── Optional execution via OpenCL runtime ───────────────────────────────────
+  # ── Optional execution via OpenCL runtime ───────────────────────────────────
 
-echo "=== OpenCL execution ===\n"
+  echo "=== OpenCL execution ===\n"
 
-block: # addKernel
-  var engine = bkOpenCL.init()
-  engine.ingest(addCl)
+  block: # addKernel
+    var engine = bkOpenCL.init()
+    engine.ingest(addCl)
 
-  var a: array[2, uint32] = [10'u32, 20'u32]
-  var b: array[2, uint32] = [1'u32, 2'u32]
-  var out32: array[2, uint32]
+    var a: array[2, uint32] = [10'u32, 20'u32]
+    var b: array[2, uint32] = [1'u32, 2'u32]
+    var out32: array[2, uint32]
 
-  engine.run("addKernel", out32, (a, b))
-  echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
-  doAssert out32[0] == 11
-  doAssert out32[1] == 22
-  echo "  OK"
+    engine.run("addKernel", out32, (a, b))
+    echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
+    doAssert out32[0] == 11
+    doAssert out32[1] == 22
+    echo "  OK"
 
-block: # vec2AddKernel (external type + fn)
-  var engine = bkOpenCL.init()
-  engine.ingest(vec2Cl)
+  block: # vec2AddKernel (external type + fn)
+    var engine = bkOpenCL.init()
+    engine.ingest(vec2Cl)
 
-  var a: array[2, uint32] = [100'u32, 200'u32]
-  var b: array[2, uint32] = [3'u32, 4'u32]
-  var out32: array[2, uint32]
+    var a: array[2, uint32] = [100'u32, 200'u32]
+    var b: array[2, uint32] = [3'u32, 4'u32]
+    var out32: array[2, uint32]
 
-  engine.run("vec2AddKernel", out32, (a, b))
-  echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
-  doAssert out32[0] == 103
-  doAssert out32[1] == 204
-  echo "  OK"
+    engine.run("vec2AddKernel", out32, (a, b))
+    echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
+    doAssert out32[0] == 103
+    doAssert out32[1] == 204
+    echo "  OK"
 
-block: # maxKernel (generic instantiation)
-  var engine = bkOpenCL.init()
-  engine.ingest(maxCl)
+  block: # maxKernel (generic instantiation)
+    var engine = bkOpenCL.init()
+    engine.ingest(maxCl)
 
-  var a: array[1, uint32] = [42'u32]
-  var b: array[1, uint32] = [17'u32]
-  var outVal: array[1, uint32]
+    var a: array[1, uint32] = [42'u32]
+    var b: array[1, uint32] = [17'u32]
+    var outVal: array[1, uint32]
 
-  engine.run("maxKernel", outVal, (a, b))
-  echo "  maxKernel: max(42, 17) = ", outVal[0]
-  doAssert outVal[0] == 42
-  echo "  OK"
+    engine.run("maxKernel", outVal, (a, b))
+    echo "  maxKernel: max(42, 17) = ", outVal[0]
+    doAssert outVal[0] == 42
+    echo "  OK"
 
-echo "All execution tests passed ✅"
+  echo "All execution tests passed ✅"
 
+when isMainModule:
+  runTest()

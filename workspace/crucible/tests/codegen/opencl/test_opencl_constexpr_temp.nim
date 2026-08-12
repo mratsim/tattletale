@@ -96,45 +96,49 @@ const kernelF = opencl:
     let first = tup[0]
     C[0] = uint32(toIntVal first)
 
-suite "OpenCL - constexpr tuple init":
-  test "Pattern A — constexpr tuple in let RHS":
-    var engine = bkOpenCL.init()
-    engine.ingest(kernelA)
-    var res: array[1, uint32]
-    engine.run("testA", res, ())
-    check res[0] == 1
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "OpenCL - constexpr tuple init":
+    test "Pattern A — constexpr tuple in let RHS":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelA)
+      var res: array[1, uint32]
+      engine.run("testA", res, ())
+      check res[0] == 1
 
-  test "Pattern B — constexpr in arithmetic":
-    var engine = bkOpenCL.init()
-    engine.ingest(kernelB)
-    var res: array[1, uint32]
-    engine.run("testB", res, ())
-    check res[0] == 128
+    test "Pattern B — constexpr in arithmetic":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelB)
+      var res: array[1, uint32]
+      engine.run("testB", res, ())
+      check res[0] == 128
 
-  test "Pattern C — template wrapConst":
-    var engine = bkOpenCL.init()
-    engine.ingest(kernelC)
-    var res: array[1, uint32]
-    engine.run("testC", res, ())
-    check res[0] == 1
+    test "Pattern C — template wrapConst":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelC)
+      var res: array[1, uint32]
+      engine.run("testC", res, ())
+      check res[0] == 1
 
-  test "Pattern D — tuple bracket access":
-    var engine = bkOpenCL.init()
-    engine.ingest(kernelD)
-    var res: array[1, uint32]
-    engine.run("testD", res, ())
-    check res[0] == 0
+    test "Pattern D — tuple bracket access":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelD)
+      var res: array[1, uint32]
+      engine.run("testD", res, ())
+      check res[0] == 0
 
-  test "Pattern E — block with constexpr temp":
-    var engine = bkOpenCL.init()
-    engine.ingest(kernelE)
-    var res: array[1, uint32]
-    engine.run("testE", res, ())
-    check res[0] == 0
+    test "Pattern E — block with constexpr temp":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelE)
+      var res: array[1, uint32]
+      engine.run("testE", res, ())
+      check res[0] == 0
 
-  test "Pattern F — constexpr tuple field access":
-    var engine = bkOpenCL.init()
-    engine.ingest(kernelF)
-    var res: array[1, uint32]
-    engine.run("testF", res, ())
-    check res[0] == 8
+    test "Pattern F — constexpr tuple field access":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelF)
+      var res: array[1, uint32]
+      engine.run("testF", res, ())
+      check res[0] == 8
+
+when isMainModule:
+  runTest()

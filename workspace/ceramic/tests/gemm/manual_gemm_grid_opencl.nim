@@ -148,7 +148,7 @@ const kernelCode = opencl:
     var epi = initEpiAXPBY(alpha, beta, tCv)
     gemm_grid(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, threadIdx)
 
-proc main() =
+proc runTest() =
   var engine = bkOpenCL.init(kernelCode)
   doAssert engine.deviceVendor().contains("NVIDIA"),
     "gemm_grid OpenCL needs NVIDIA's OpenCL compiler for the mma.sync asm; got: " &
@@ -161,4 +161,4 @@ proc main() =
   testGemmGridSingle(engine, tiled, "SM80")
 
 when isMainModule:
-  main()
+  runTest()

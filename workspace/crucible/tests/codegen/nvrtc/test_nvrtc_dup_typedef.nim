@@ -20,11 +20,15 @@ const kernel = cuda:
     let t = (Int[8](), Int[16]())
     C[0] = 1.0
 
-suite "Crucible - duplicate type definitions":
-  test "tuple constructor generates single definition":
-    let code = kernel
-    var output: array[1, float32]
-    var engine = bkCuda.init()
-    engine.ingest(code)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 1.0
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Crucible - duplicate type definitions":
+    test "tuple constructor generates single definition":
+      let code = kernel
+      var output: array[1, float32]
+      var engine = bkCuda.init()
+      engine.ingest(code)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 1.0
+
+when isMainModule:
+  runTest()

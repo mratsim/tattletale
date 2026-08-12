@@ -44,19 +44,23 @@ const kernelTypeof = cuda:
     let w = Wrapper[F]()
     C[0] = 1'u32
 
-suite "Crucible - type resolver edge cases":
-  test "Case 1 — generic call with DotExpr arg":
-    let code = kernelRank
-    var output: array[1, uint32]
-    var engine = bkCuda.init()
-    engine.ingest(code)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 1
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Crucible - type resolver edge cases":
+    test "Case 1 — generic call with DotExpr arg":
+      let code = kernelRank
+      var output: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(code)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 1
 
-  test "Case 2 — typeof field access in type definition":
-    let code = kernelTypeof
-    var output: array[1, uint32]
-    var engine = bkCuda.init()
-    engine.ingest(code)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 1
+    test "Case 2 — typeof field access in type definition":
+      let code = kernelTypeof
+      var output: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(code)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 1
+
+when isMainModule:
+  runTest()

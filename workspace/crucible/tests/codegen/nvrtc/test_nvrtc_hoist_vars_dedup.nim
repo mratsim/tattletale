@@ -60,7 +60,7 @@ const kernel = cuda:
       tmp[0] = v(X2(), Y2())(i)
     output[0] = 42.0f
 
-when isMainModule:
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
 
   echo "═══════════════════════════════════════════════════════════════════"
   echo kernel
@@ -72,3 +72,6 @@ when isMainModule:
   engine.run<<(1, 1)>>("gemmKernel", outBuf, (128'i32, 64'i32))
   doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
   echo "  OK (test_nvrtc_hoist_vars_dedup)"
+
+when isMainModule:
+  runTest()

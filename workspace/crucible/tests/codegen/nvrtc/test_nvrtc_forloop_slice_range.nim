@@ -28,11 +28,15 @@ const kernel = cuda:
     for i in 0 ..< n:
       C[i] = 1.0'f32
 
-suite "For-loop with Slice[int] range":
-  test "compiles and runs via NVRTC":
-    var buf: array[128, float32]
-    var engine = bkCuda.init()
-    engine.ingest(kernel)
-    engine.run<<(1, 1)>>("kernel", buf, ())
-    check buf[0] == 1.0'f32
-    check buf[127] == 1.0'f32
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "For-loop with Slice[int] range":
+    test "compiles and runs via NVRTC":
+      var buf: array[128, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernel)
+      engine.run<<(1, 1)>>("kernel", buf, ())
+      check buf[0] == 1.0'f32
+      check buf[127] == 1.0'f32
+
+when isMainModule:
+  runTest()

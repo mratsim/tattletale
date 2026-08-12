@@ -60,25 +60,29 @@ const kernel2 = cuda:
 # ─────────────────────────────────────────────────────────────────
 
 # Kernel 1
-var fullIn = [1.0'f32, 2.0, 3.0, 4.0]
-var fullBuf: array[4, float32]
-var engine1 = bkCuda.init()
-engine1.ingest(kernel1)
-engine1.run<<(1, 1)>>("kernelFull", fullBuf, (fullIn, 4'i32))
-for i in 0 .. 3:
-  let expected = float32(i + 1) * 2.0'f32
-  echo &"full[{i}]: {fullBuf[i]} (expected {expected})"
-  doAssert abs(fullBuf[i] - expected) < 1e-5
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var fullIn = [1.0'f32, 2.0, 3.0, 4.0]
+  var fullBuf: array[4, float32]
+  var engine1 = bkCuda.init()
+  engine1.ingest(kernel1)
+  engine1.run<<(1, 1)>>("kernelFull", fullBuf, (fullIn, 4'i32))
+  for i in 0 .. 3:
+    let expected = float32(i + 1) * 2.0'f32
+    echo &"full[{i}]: {fullBuf[i]} (expected {expected})"
+    doAssert abs(fullBuf[i] - expected) < 1e-5
 
-# Kernel 2
-var halfIn = [1.0'f32, 2.0, 3.0, 4.0]
-var halfBuf: array[2, float32]
-var engine2 = bkCuda.init()
-engine2.ingest(kernel2)
-engine2.run<<(1, 1)>>("kernelHalf", halfBuf, (halfIn, 4'i32))
-for i in 0 .. 1:
-  let expected = float32(i + 3) * 2.0'f32
-  echo &"half[{i}]: {halfBuf[i]} (expected {expected})"
-  doAssert abs(halfBuf[i] - expected) < 1e-5
+  # Kernel 2
+  var halfIn = [1.0'f32, 2.0, 3.0, 4.0]
+  var halfBuf: array[2, float32]
+  var engine2 = bkCuda.init()
+  engine2.ingest(kernel2)
+  engine2.run<<(1, 1)>>("kernelHalf", halfBuf, (halfIn, 4'i32))
+  for i in 0 .. 1:
+    let expected = float32(i + 3) * 2.0'f32
+    echo &"half[{i}]: {halfBuf[i]} (expected {expected})"
+    doAssert abs(halfBuf[i] - expected) < 1e-5
 
-echo "  OK — openArray type regression test"
+  echo "  OK — openArray type regression test"
+
+when isMainModule:
+  runTest()

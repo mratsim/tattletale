@@ -59,10 +59,14 @@ extra: [10'u32])
     # Chain of `.inner` through all 10 layers to reach L0.val
     output[0] = l.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.val
 
-var buf: array[1, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("deepNestedKernel", buf, ())
-doAssert buf[0] == 42, &"deep: {buf[0]}"
-echo "  OK — deep nesting (B22)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[1, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("deepNestedKernel", buf, ())
+  doAssert buf[0] == 42, &"deep: {buf[0]}"
+  echo "  OK — deep nesting (B22)"
+
+when isMainModule:
+  runTest()

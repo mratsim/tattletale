@@ -27,13 +27,17 @@ const kernelCode = cuda:
     let v = Vec2[uint32](x: 5'u32, y: 6'u32)
     output[3] = v.x + v.y
 
-var buf: array[4, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("tupleGenericKernel", buf, ())
-doAssert buf[0] == 10, &"tuple[0].data[0]: got {buf[0]}"
-doAssert buf[1] == 40, &"tuple[0].data[3]: got {buf[1]}"
-doAssert buf[2] == 99, &"tuple[1]: got {buf[2]}"
-doAssert buf[3] == 11, &"Vec2[u32]: got {buf[3]}"
-echo "  OK (test_nvrtc_bracket_in_tuple)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[4, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("tupleGenericKernel", buf, ())
+  doAssert buf[0] == 10, &"tuple[0].data[0]: got {buf[0]}"
+  doAssert buf[1] == 40, &"tuple[0].data[3]: got {buf[1]}"
+  doAssert buf[2] == 99, &"tuple[1]: got {buf[2]}"
+  doAssert buf[3] == 11, &"Vec2[u32]: got {buf[3]}"
+  echo "  OK (test_nvrtc_bracket_in_tuple)"
+
+when isMainModule:
+  runTest()

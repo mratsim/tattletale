@@ -24,11 +24,15 @@ const kernelCode = cuda:
     output[0] = l.data[0]
     output[1] = l.data[5]
 
-var buf: array[2, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("factoryKernel", buf, ())
-doAssert buf[0] == 42, &"factory[0]: {buf[0]}"
-doAssert buf[1] == 42, &"factory[5]: {buf[1]}"
-echo "  OK — factory pattern"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[2, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("factoryKernel", buf, ())
+  doAssert buf[0] == 42, &"factory[0]: {buf[0]}"
+  doAssert buf[1] == 42, &"factory[5]: {buf[1]}"
+  echo "  OK — factory pattern"
+
+when isMainModule:
+  runTest()

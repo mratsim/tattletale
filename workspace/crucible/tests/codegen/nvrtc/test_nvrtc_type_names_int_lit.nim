@@ -14,10 +14,14 @@ const kernelCode = cuda:
     let x = Sized[128]()
     output[0] = 1'u32
 
-var buf: array[1, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("intLitTypeNameKernel", buf, ())
-doAssert buf[0] == 1
-echo "  OK (test_nvrtc_type_names_int_lit)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[1, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("intLitTypeNameKernel", buf, ())
+  doAssert buf[0] == 1
+  echo "  OK (test_nvrtc_type_names_int_lit)"
+
+when isMainModule:
+  runTest()

@@ -31,12 +31,16 @@ const kernelCode = cuda:
     output[2] = mixArgs(2.0'f32, float32, 2.5'f32, 1.5'f32)
     output[3] = mixArgs(0.0'f32, float32, 3.0'f32, 2.0'f32)
 
-var buf: array[4, float32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-engine.run<<(1, 1)>>("typedescKernel", buf, ())
-doAssert buf[0] == 10.0, &"scaleType(float32, 2.5, 4.0): {buf[0]}"
-doAssert buf[1] == 6.0, &"scaleType(float32, 3.0, 2.0): {buf[1]}"
-doAssert buf[2] == 5.75, &"mixArgs(2.0, float32, 2.5, 1.5): {buf[2]}"
-doAssert buf[3] == 6.0, &"mixArgs(0.0, float32, 3.0, 2.0): {buf[3]}"
-echo "  OK — typedesc-arg erasure compiles and executes correctly"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[4, float32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  engine.run<<(1, 1)>>("typedescKernel", buf, ())
+  doAssert buf[0] == 10.0, &"scaleType(float32, 2.5, 4.0): {buf[0]}"
+  doAssert buf[1] == 6.0, &"scaleType(float32, 3.0, 2.0): {buf[1]}"
+  doAssert buf[2] == 5.75, &"mixArgs(2.0, float32, 2.5, 1.5): {buf[2]}"
+  doAssert buf[3] == 6.0, &"mixArgs(0.0, float32, 3.0, 2.0): {buf[3]}"
+  echo "  OK — typedesc-arg erasure compiles and executes correctly"
+
+when isMainModule:
+  runTest()

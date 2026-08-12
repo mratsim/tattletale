@@ -21,12 +21,16 @@ const kernelCode = cuda:
     for i in 0 ..< L:
       output[i] = t.data[i]
 
-var buf: array[L, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("staticLoopKernel", buf, ())
-doAssert buf[0] == 10, &"loop[0]: {buf[0]}"
-doAssert buf[1] == 20, &"loop[1]: {buf[1]}"
-doAssert buf[2] == 30, &"loop[2]: {buf[2]}"
-echo "  OK — static loop + when"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[L, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("staticLoopKernel", buf, ())
+  doAssert buf[0] == 10, &"loop[0]: {buf[0]}"
+  doAssert buf[1] == 20, &"loop[1]: {buf[1]}"
+  doAssert buf[2] == 30, &"loop[2]: {buf[2]}"
+  echo "  OK — static loop + when"
+
+when isMainModule:
+  runTest()

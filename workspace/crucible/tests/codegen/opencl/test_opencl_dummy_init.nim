@@ -23,23 +23,27 @@ const kernelCode2 = opencl:
     const tup {.genSym.} = (FixMe[1](), FixMe[8]())
     C[0] = 1'u32
 
-suite "OpenCL - dummy-field initializers":
-  test "single dummy struct const":
-    var engine = bkOpenCL.init()
-    engine.ingest(kernelCode)
-    echo "===="
-    echo kernelCode
-    echo "===="
-    var buf: array[1, uint32]
-    engine.run("dummyKernel", buf, ())
-    check buf[0] == 1
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "OpenCL - dummy-field initializers":
+    test "single dummy struct const":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelCode)
+      echo "===="
+      echo kernelCode
+      echo "===="
+      var buf: array[1, uint32]
+      engine.run("dummyKernel", buf, ())
+      check buf[0] == 1
 
-  test "tuple of dummy structs const":
-    var engine = bkOpenCL.init()
-    engine.ingest(kernelCode2)
-    echo "===="
-    echo kernelCode2
-    echo "===="
-    var buf: array[1, uint32]
-    engine.run("dummyKernel", buf, ())
-    check buf[0] == 1
+    test "tuple of dummy structs const":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelCode2)
+      echo "===="
+      echo kernelCode2
+      echo "===="
+      var buf: array[1, uint32]
+      engine.run("dummyKernel", buf, ())
+      check buf[0] == 1
+
+when isMainModule:
+  runTest()

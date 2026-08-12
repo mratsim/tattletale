@@ -88,7 +88,7 @@ const kernelF = vulkan:
     const tup {.genSym.} = (Int[8](), Int[16]())
     let first = tup[0]; C[0] = uint32(toIntVal first)
 
-when isMainModule:
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo kernelA
   echo "\n---"
   echo kernelB
@@ -138,3 +138,6 @@ suite "Vulkan - constexpr tuple init":
     var res: array[1, uint32]
     engine.run("testF", res, ())
     check res[0] == 8
+
+when isMainModule:
+  runTest()

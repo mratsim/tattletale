@@ -31,11 +31,15 @@ const kernelCode = cuda:
     mini_ukernel(MiniAtom(dtype: mdtTF32, k: 8), c)
     output[0] = c[0]
 
-var buf: array[1, float32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("staticParamKernel", buf, ())
-echo "  [0]=", buf[0]
-doAssert buf[0] == 8.0'f32
-echo "  OK (test_nvrtc_static_record_param)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[1, float32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("staticParamKernel", buf, ())
+  echo "  [0]=", buf[0]
+  doAssert buf[0] == 8.0'f32
+  echo "  OK (test_nvrtc_static_record_param)"
+
+when isMainModule:
+  runTest()

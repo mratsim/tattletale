@@ -103,11 +103,11 @@ const kernelCodeK32 = cuda:
       alpha, beta: float32) {.global.} =
     gemmTiledMicrotileK32(tiled, int(threadIdx.x), alpha, C, A, B, beta)
 
-proc main() =
+proc runTest() =
   var engine = bkCuda.init(kernelCode)
   testTiled(engine, tiled, "SM80")
   var engineK32 = bkCuda.init(kernelCodeK32)
   testTiledMultiBlock(engineK32, tiled, "SM80")
 
 when isMainModule:
-  main()
+  runTest()

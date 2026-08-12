@@ -30,14 +30,18 @@ const kernelCode = opencl:
     C[2] = Ct.data[2]
     C[3] = Ct.data[3]
 
-echo kernelCode
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo kernelCode
 
-block:
-  var engine = bkOpenCL.init()
-  engine.ingest(kernelCode)
-  var res: array[4, uint32]
-  engine.run("gemmKernel", res, ())
-  let expected = [58'u32, 64, 139, 154]
-  for i in 0 ..< 4:
-    doAssert res[i] == expected[i], &"C[{i}]: {res[i]} != {expected[i]}"
-  echo "  OK — CuTe GEMM (OpenCL)"
+  block:
+    var engine = bkOpenCL.init()
+    engine.ingest(kernelCode)
+    var res: array[4, uint32]
+    engine.run("gemmKernel", res, ())
+    let expected = [58'u32, 64, 139, 154]
+    for i in 0 ..< 4:
+      doAssert res[i] == expected[i], &"C[{i}]: {res[i]} != {expected[i]}"
+    echo "  OK — CuTe GEMM (OpenCL)"
+
+when isMainModule:
+  runTest()

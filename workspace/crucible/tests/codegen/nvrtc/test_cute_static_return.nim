@@ -18,11 +18,15 @@ const kernelCode = cuda:
     let b = Tile[32, 16](val: 32'u32)
     output[1] = b.val
 
-var buf: array[4, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("staticWhenKernel", buf, ())
-doAssert buf[0] == 16, &"Tile[16,8]: {buf[0]}"
-doAssert buf[1] == 32, &"Tile[32,16]: {buf[1]}"
-echo "  OK — static dispatch"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[4, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("staticWhenKernel", buf, ())
+  doAssert buf[0] == 16, &"Tile[16,8]: {buf[0]}"
+  doAssert buf[1] == 32, &"Tile[32,16]: {buf[1]}"
+  echo "  OK — static dispatch"
+
+when isMainModule:
+  runTest()

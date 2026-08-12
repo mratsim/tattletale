@@ -23,11 +23,15 @@ const kernelCode = cuda:
     let s = Sized[64](val: 42'u32)
     output[1] = s.val
 
-var buf: array[2, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("genericImplKernel", buf, ())
-doAssert buf[0] == 30, &"objectTy: got {buf[0]}"
-doAssert buf[1] == 42, &"staticTy: got {buf[1]}"
-echo "  OK (test_nvrtc_generic_parse_impl)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[2, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("genericImplKernel", buf, ())
+  doAssert buf[0] == 30, &"objectTy: got {buf[0]}"
+  doAssert buf[1] == 42, &"staticTy: got {buf[1]}"
+  echo "  OK (test_nvrtc_generic_parse_impl)"
+
+when isMainModule:
+  runTest()

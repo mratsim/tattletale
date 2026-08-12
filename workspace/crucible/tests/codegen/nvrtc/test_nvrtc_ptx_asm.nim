@@ -20,12 +20,16 @@ const kernelCode = cuda:
     output[0] = add_co(3'u32, 5'u32)
     output[1] = add_ci(10'u32, 20'u32)
 
-var buf: array[2, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("ptxAsmKernel", buf, ())
-echo "  [0]=", buf[0], " [1]=", buf[1]
-doAssert buf[0] == 8
-doAssert buf[1] == 30
-echo "  OK (test_nvrtc_ptx_asm)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[2, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("ptxAsmKernel", buf, ())
+  echo "  [0]=", buf[0], " [1]=", buf[1]
+  doAssert buf[0] == 8
+  doAssert buf[1] == 30
+  echo "  OK (test_nvrtc_ptx_asm)"
+
+when isMainModule:
+  runTest()

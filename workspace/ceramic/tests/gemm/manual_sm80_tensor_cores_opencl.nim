@@ -136,7 +136,7 @@ const kernelCode = opencl:
 #  execOpenCL. No buffer management here.
 # ═════════════════════════════════════════════════════════════════════════
 
-proc main() =
+proc runTest() =
   var engine = bkOpenCL.init(kernelCode)
   doAssert engine.deviceVendor().contains("NVIDIA"),
     "this kernel embeds NVIDIA inline PTX (asm mma.sync) — only NVIDIA's " &
@@ -145,4 +145,4 @@ proc main() =
   echo "  OK: m16n8k8 tf32 microtile matches reference via OpenCL (tf32-exact fixture, 16 trials)"
 
 when isMainModule:
-  main()
+  runTest()

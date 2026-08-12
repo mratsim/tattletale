@@ -26,16 +26,20 @@ const kernelCode = opencl:
     output[0] = a[0] * b[0]
     output[1] = a[1] * b[1]
 
-echo kernelCode
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo kernelCode
 
-block:
-  var engine = bkOpenCL.init()
-  engine.ingest(kernelCode)
+  block:
+    var engine = bkOpenCL.init()
+    engine.ingest(kernelCode)
 
-  var a: array[2, uint32] = [3'u32, 5'u32]
-  var b: array[2, uint32] = [7'u32, 11'u32]
-  var output: array[2, uint32]
-  engine.run("mulKernel", output, (a, b))
-  doAssert output[0] == 21, "3 * 7 must be 21"
-  doAssert output[1] == 55, "5 * 11 must be 55"
-  echo "  OK"
+    var a: array[2, uint32] = [3'u32, 5'u32]
+    var b: array[2, uint32] = [7'u32, 11'u32]
+    var output: array[2, uint32]
+    engine.run("mulKernel", output, (a, b))
+    doAssert output[0] == 21, "3 * 7 must be 21"
+    doAssert output[1] == 55, "5 * 11 must be 55"
+    echo "  OK"
+
+when isMainModule:
+  runTest()

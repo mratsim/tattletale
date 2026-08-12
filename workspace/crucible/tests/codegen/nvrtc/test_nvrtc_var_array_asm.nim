@@ -30,13 +30,17 @@ const kernelCode = cuda:
     addAsmOpenArray(o, 1.0'f32)
     output[2] = o[0]
 
-var buf: array[3, float32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("varArrayAsmKernel", buf, ())
-echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2]
-doAssert buf[0] == 6.0'f32   # 1 + 5
-doAssert buf[1] == 7.0'f32   # 2 + 5
-doAssert buf[2] == 11.0'f32  # 10 + 1
-echo "  OK (test_nvrtc_var_array_asm)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[3, float32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("varArrayAsmKernel", buf, ())
+  echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2]
+  doAssert buf[0] == 6.0'f32   # 1 + 5
+  doAssert buf[1] == 7.0'f32   # 2 + 5
+  doAssert buf[2] == 11.0'f32  # 10 + 1
+  echo "  OK (test_nvrtc_var_array_asm)"
+
+when isMainModule:
+  runTest()

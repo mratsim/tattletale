@@ -22,30 +22,34 @@ const kernelInline = cuda:
   proc kernelMain(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = takeLarge(LargeStruct(data: [10'u32, 20, 30, 40, 50, 60, 70, 80]))
 
-block:
-  var buf: array[1, uint32]
-  var engine = bkCuda.init()
-  engine.ingest(kernelInline)
-  engine.run("kernelMain", buf, ())
-  doAssert buf[0] == 30, &"inline constructor: expected 30, got {buf[0]}"
-  echo "  ✅ Test 1 — inline constructor arg: ", buf[0]
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  block:
+    var buf: array[1, uint32]
+    var engine = bkCuda.init()
+    engine.ingest(kernelInline)
+    engine.run("kernelMain", buf, ())
+    doAssert buf[0] == 30, &"inline constructor: expected 30, got {buf[0]}"
+    echo "  ✅ Test 1 — inline constructor arg: ", buf[0]
 
-# Test 2: function return value arg
-const kernelFnRet = cuda:
-  proc makeLarge(val: uint32): LargeStruct {.device.} =
-    result.data[0] = val
-  proc takeLarge(s: LargeStruct): uint32 {.device.} =
-    result = s.data[0]
-  proc kernelMain(output: ptr UncheckedArray[uint32]) {.global.} =
-    output[0] = takeLarge(makeLarge(42'u32))
+  # Test 2: function return value arg
+  const kernelFnRet = cuda:
+    proc makeLarge(val: uint32): LargeStruct {.device.} =
+      result.data[0] = val
+    proc takeLarge(s: LargeStruct): uint32 {.device.} =
+      result = s.data[0]
+    proc kernelMain(output: ptr UncheckedArray[uint32]) {.global.} =
+      output[0] = takeLarge(makeLarge(42'u32))
 
-block:
-  var buf: array[1, uint32]
-  var engine = bkCuda.init()
-  engine.ingest(kernelFnRet)
-  engine.run("kernelMain", buf, ())
-  doAssert buf[0] == 42, &"fn return: expected 42, got {buf[0]}"
-  echo "  ✅ Test 2 — function return arg: ", buf[0]
+  block:
+    var buf: array[1, uint32]
+    var engine = bkCuda.init()
+    engine.ingest(kernelFnRet)
+    engine.run("kernelMain", buf, ())
+    doAssert buf[0] == 42, &"fn return: expected 42, got {buf[0]}"
+    echo "  ✅ Test 2 — function return arg: ", buf[0]
 
-echo ""
-echo "  OK — all NVRTC passByRef non-lvalue execution tests pass"
+  echo ""
+  echo "  OK — all NVRTC passByRef non-lvalue execution tests pass"
+
+when isMainModule:
+  runTest()

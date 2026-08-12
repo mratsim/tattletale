@@ -112,9 +112,9 @@ const kernelCode = cuda:
                                   A, B: ptr UncheckedArray[uint32]) {.global.} =
     mmaMicrotileExplicit(tiled, int(threadIdx.x), C, A, B)
 
-proc main() =
+proc runTest() =
   var engine = bkCuda.init(kernelCode)
   testMicrotile(engine, atom, "SM86")
 
 when isMainModule:
-  main()
+  runTest()

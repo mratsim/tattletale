@@ -13,11 +13,15 @@ const kernelCode = cuda:
     output[1] = max(30'u32, 7'u32)
     output[2] = abs(int32(-5)).uint32
 
-var buf: array[3, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-engine.run<<(1, 1)>>("builtinKernel", buf, ())
-doAssert buf[0] == 10, &"min: {buf[0]}"
-doAssert buf[1] == 30, &"max: {buf[1]}"
-doAssert buf[2] == 5, &"abs: {buf[2]}"
-echo "  OK — builtins"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[3, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  engine.run<<(1, 1)>>("builtinKernel", buf, ())
+  doAssert buf[0] == 10, &"min: {buf[0]}"
+  doAssert buf[1] == 30, &"max: {buf[1]}"
+  doAssert buf[2] == 5, &"abs: {buf[2]}"
+  echo "  OK — builtins"
+
+when isMainModule:
+  runTest()

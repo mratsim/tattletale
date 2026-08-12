@@ -64,30 +64,34 @@ const wrapperKernel = cuda:
       let c = `*`(a, b)
       C[i] = float32(c.val)
 
-suite "NVRTC - call nim builtins":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "NVRTC - call nim builtins":
 
-  test "system.`*` (int32) as nnkCall":
-    runIntKernel(int32, 6'f32, 9'f32)
+    test "system.`*` (int32) as nnkCall":
+      runIntKernel(int32, 6'f32, 9'f32)
 
-  test "system.`*` (int64) as nnkCall":
-    runIntKernel(int64, 6'f32, 9'f32)
+    test "system.`*` (int64) as nnkCall":
+      runIntKernel(int64, 6'f32, 9'f32)
 
-  test "system.`*` (int16) as nnkCall":
-    runIntKernel(int16, 6'f32, 9'f32)
+    test "system.`*` (int16) as nnkCall":
+      runIntKernel(int16, 6'f32, 9'f32)
 
-  test "system.`*` (float32) as nnkCall":
-    runFloatKernel(float32, 0.5'f32, 1.0'f32)
+    test "system.`*` (float32) as nnkCall":
+      runFloatKernel(float32, 0.5'f32, 1.0'f32)
 
-  test "system.`*` (float64) as nnkCall":
-    runFloatKernel(float64, 0.5'f32, 1.0'f32)
+    test "system.`*` (float64) as nnkCall":
+      runFloatKernel(float64, 0.5'f32, 1.0'f32)
 
-  test "system.`*` (uint32) as nnkCall":
-    runIntKernel(uint32, 6'f32, 9'f32)
+    test "system.`*` (uint32) as nnkCall":
+      runIntKernel(uint32, 6'f32, 9'f32)
 
-  test "user-defined `*` on struct as nnkCall":
-    var buf: array[2, float32]
-    var engine = bkCuda.init()
-    engine.ingest(wrapperKernel)
-    engine.run<<(1, 1)>>("kernel", buf, ())
-    check buf[0] == 12'f32
-    check buf[1] == 16'f32
+    test "user-defined `*` on struct as nnkCall":
+      var buf: array[2, float32]
+      var engine = bkCuda.init()
+      engine.ingest(wrapperKernel)
+      engine.run<<(1, 1)>>("kernel", buf, ())
+      check buf[0] == 12'f32
+      check buf[1] == 16'f32
+
+when isMainModule:
+  runTest()

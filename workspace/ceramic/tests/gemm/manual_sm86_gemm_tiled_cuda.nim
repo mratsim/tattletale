@@ -72,9 +72,9 @@ const kernelCode = cuda:
       alpha, beta: float32) {.global.} =
     gemmTiledMicrotile(tiled, int(threadIdx.x), alpha, C, A, B, beta)
 
-proc main() =
+proc runTest() =
   var engine = bkCuda.init(kernelCode)
   testTiled(engine, tiled, "SM86")
 
 when isMainModule:
-  main()
+  runTest()

@@ -49,13 +49,17 @@ const kernelPartition = cuda:
     let t = local_partition(a, tl, int(threadIdx.x))
     Buf[0] = 1.0'f32   # written only if the kernel compiles and runs
 
-suite "Ceramic × Crucible — complement with a static Int stride":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Ceramic × Crucible — complement with a static Int stride":
 
-  test "NVRTC compiles and runs a local_partition with an Int[1] stride":
-    # The complement must emit concrete ints (static Int value lowered) so the
-    # kernel compiles and executes; a regression causes engine.compile() to abort.
-    var Buf: array[64, float32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelPartition)
-    engine.run<<(1, 8)>>("partKernel", Buf, ())
-    check Buf[0] == 1.0'f32
+    test "NVRTC compiles and runs a local_partition with an Int[1] stride":
+      # The complement must emit concrete ints (static Int value lowered) so the
+      # kernel compiles and executes; a regression causes engine.compile() to abort.
+      var Buf: array[64, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelPartition)
+      engine.run<<(1, 8)>>("partKernel", Buf, ())
+      check Buf[0] == 1.0'f32
+
+when isMainModule:
+  runTest()

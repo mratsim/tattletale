@@ -112,7 +112,7 @@ const kernelCode = cuda:
                                   A, B: ptr UncheckedArray[uint32]) {.global.} =
     mmaMicrotileExplicit(tiled, int(threadIdx.x), C, A, B)
 
-proc main() =
+proc runTest() =
   var engine = bkCuda.init(kernelCode)
   testMicrotile(engine, atom, "SM80")
   # Row-major operands are not exercised here: partition_A/B/C's thread
@@ -121,4 +121,4 @@ proc main() =
   # The row-major acceptance test is tracked as a follow-up.
 
 when isMainModule:
-  main()
+  runTest()

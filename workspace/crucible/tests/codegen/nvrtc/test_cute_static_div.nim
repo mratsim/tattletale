@@ -37,12 +37,16 @@ const kernelCode = cuda:
                                 104'u32, 105'u32, 106'u32, 107'u32])
     output[2] = perWarp.data[0]
 
-var buf: array[3, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("divTileKernel", buf, ())
-doAssert buf[0] == 1,   &"tile[0]: {buf[0]}"
-doAssert buf[1] == 64,  &"tile[63]: {buf[1]}"
-doAssert buf[2] == 100, &"perWarp[0]: {buf[2]}"
-echo "  OK — static division (B06)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[3, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("divTileKernel", buf, ())
+  doAssert buf[0] == 1,   &"tile[0]: {buf[0]}"
+  doAssert buf[1] == 64,  &"tile[63]: {buf[1]}"
+  doAssert buf[2] == 100, &"perWarp[0]: {buf[2]}"
+  echo "  OK — static division (B06)"
+
+when isMainModule:
+  runTest()

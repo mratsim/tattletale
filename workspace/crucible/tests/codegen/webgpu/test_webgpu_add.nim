@@ -51,64 +51,67 @@ const maxWgsl = webgpu:
 
 # ── Host code ───────────────────────────────────────────────────────────────
 
-echo "=== WebGPU WGSL generation tests ===\n"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo "=== WebGPU WGSL generation tests ===\n"
 
-echo "--- addWgsl ---"
-echo addWgsl
-echo ""
+  echo "--- addWgsl ---"
+  echo addWgsl
+  echo ""
 
-echo "--- vec2Wgsl (external type Vec2 + external fn vec2Add) ---"
-echo vec2Wgsl
-echo ""
+  echo "--- vec2Wgsl (external type Vec2 + external fn vec2Add) ---"
+  echo vec2Wgsl
+  echo ""
 
-echo "--- maxWgsl (generic T -> uint32 instantiation) ---"
-echo maxWgsl
-echo ""
+  echo "--- maxWgsl (generic T -> uint32 instantiation) ---"
+  echo maxWgsl
+  echo ""
 
-# ── Optional execution via wgpu-native ─────────────────────────────────────
+  # ── Optional execution via wgpu-native ─────────────────────────────────────
 
-echo "=== wgpu-native execution ===\n"
+  echo "=== wgpu-native execution ===\n"
 
-block: # addKernel
-  var engine = bkWGSL.init()
-  engine.ingest(addWgsl)
+  block: # addKernel
+    var engine = bkWGSL.init()
+    engine.ingest(addWgsl)
 
-  var a: array[2, uint32] = [10'u32, 20'u32]
-  var b: array[2, uint32] = [1'u32, 2'u32]
-  var out32: array[2, uint32]
+    var a: array[2, uint32] = [10'u32, 20'u32]
+    var b: array[2, uint32] = [1'u32, 2'u32]
+    var out32: array[2, uint32]
 
-  engine.run("addKernel", out32, (a, b))
-  echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
-  doAssert out32[0] == 11
-  doAssert out32[1] == 22
-  echo "  OK"
+    engine.run("addKernel", out32, (a, b))
+    echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
+    doAssert out32[0] == 11
+    doAssert out32[1] == 22
+    echo "  OK"
 
-block: # vec2AddKernel (external type + fn)
-  var engine = bkWGSL.init()
-  engine.ingest(vec2Wgsl)
+  block: # vec2AddKernel (external type + fn)
+    var engine = bkWGSL.init()
+    engine.ingest(vec2Wgsl)
 
-  var a: array[2, uint32] = [100'u32, 200'u32]
-  var b: array[2, uint32] = [3'u32, 4'u32]
-  var out32: array[2, uint32]
+    var a: array[2, uint32] = [100'u32, 200'u32]
+    var b: array[2, uint32] = [3'u32, 4'u32]
+    var out32: array[2, uint32]
 
-  engine.run("vec2AddKernel", out32, (a, b))
-  echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
-  doAssert out32[0] == 103
-  doAssert out32[1] == 204
-  echo "  OK"
+    engine.run("vec2AddKernel", out32, (a, b))
+    echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
+    doAssert out32[0] == 103
+    doAssert out32[1] == 204
+    echo "  OK"
 
-block: # maxKernel (generic instantiation)
-  var engine = bkWGSL.init()
-  engine.ingest(maxWgsl)
+  block: # maxKernel (generic instantiation)
+    var engine = bkWGSL.init()
+    engine.ingest(maxWgsl)
 
-  var a: array[1, uint32] = [42'u32]
-  var b: array[1, uint32] = [17'u32]
-  var outVal: array[1, uint32]
+    var a: array[1, uint32] = [42'u32]
+    var b: array[1, uint32] = [17'u32]
+    var outVal: array[1, uint32]
 
-  engine.run("maxKernel", outVal, (a, b))
-  echo "  maxKernel: max(42, 17) = ", outVal[0]
-  doAssert outVal[0] == 42
-  echo "  OK"
+    engine.run("maxKernel", outVal, (a, b))
+    echo "  maxKernel: max(42, 17) = ", outVal[0]
+    doAssert outVal[0] == 42
+    echo "  OK"
 
-echo "All execution tests passed ✅"
+  echo "All execution tests passed ✅"
 
+when isMainModule:
+  runTest()

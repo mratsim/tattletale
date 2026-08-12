@@ -51,11 +51,15 @@ const kernel = cuda:
     let pos = Int[0]() + D[0] * P[0] + D[1] * P[1]
     C[0] = float32(toIntVal pos)
 
-suite "Crucible - DotExpr in generic type resolution":
-  test "crd2idx with DotExpr arg inside cuda:":
-    let code = kernel
-    var output: array[1, float32]
-    var engine = bkCuda.init()
-    engine.ingest(code)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 0.0
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Crucible - DotExpr in generic type resolution":
+    test "crd2idx with DotExpr arg inside cuda:":
+      let code = kernel
+      var output: array[1, float32]
+      var engine = bkCuda.init()
+      engine.ingest(code)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 0.0
+
+when isMainModule:
+  runTest()

@@ -22,12 +22,16 @@ const kernel = cuda:
     var tv = make_view(C, L)
     fillWith(tv, 42.0'f32)
 
-suite "Ceramic - fillWith on TensorView":
-  test "fillWith inside cuda: compiles via NVRTC":
-    var buf: array[128, float32]
-    var engine = bkCuda.init()
-    engine.ingest(kernel)
-    engine.run<<(1, 1)>>("kernel", buf, ())
-    # fillWith writes 42.0 to every element
-    check buf[0] == 42.0'f32
-    check buf[127] == 42.0'f32
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Ceramic - fillWith on TensorView":
+    test "fillWith inside cuda: compiles via NVRTC":
+      var buf: array[128, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernel)
+      engine.run<<(1, 1)>>("kernel", buf, ())
+      # fillWith writes 42.0 to every element
+      check buf[0] == 42.0'f32
+      check buf[127] == 42.0'f32
+
+when isMainModule:
+  runTest()

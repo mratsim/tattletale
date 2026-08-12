@@ -22,13 +22,17 @@ const kernelCode = cuda:
     output[0] = x.data[0]
     output[1] = x.data[3]
 
-var buf: array[2, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[2, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
 
-engine.run("sizedKernel", buf, ())
-doAssert buf[0] == 1, &"Sized[4].data[0]: got {buf[0]}, expected 1"
-doAssert buf[1] == 4, &"Sized[4].data[3]: got {buf[1]}, expected 4"
+  engine.run("sizedKernel", buf, ())
+  doAssert buf[0] == 1, &"Sized[4].data[0]: got {buf[0]}, expected 1"
+  doAssert buf[1] == 4, &"Sized[4].data[3]: got {buf[1]}, expected 4"
 
-echo "  OK (test_nvrtc_generic_non_generic_fallback)"
+  echo "  OK (test_nvrtc_generic_non_generic_fallback)"
+
+when isMainModule:
+  runTest()

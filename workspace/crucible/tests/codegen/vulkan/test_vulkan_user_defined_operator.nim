@@ -93,84 +93,88 @@ const structVk2 = vulkan:
     output[8] = (x or y).val
     output[9] = (x xor y).val
 
-echo "=== Vulkan generation tests ===\n"
-
-echo "--- basicKernel ---"
-echo basicVk
-echo ""
-
-echo "--- structKernel ---"
-echo structVk
-echo ""
-
-echo "--- structKernel2 ---"
-echo structVk2
-echo ""
-
-echo "=== Vulkan execution ===\n"
-
-block:
-  var engine = bkVulkan.init()
-  engine.ingest(basicVk)
-
-  var a: array[1, int32] = [13'i32]
-  var b: array[1, int32] = [5'i32]
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo "=== Vulkan generation tests ===\n"
 
   echo "--- basicKernel ---"
-  var out32: array[10, int32]
-  engine.run("basicKernel", out32, (a, b))
-  echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
-       ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
-  doAssert out32[0] == 18
-  doAssert out32[1] == 8
-  doAssert out32[2] == 65
-  doAssert out32[3] == 2
-  doAssert out32[4] == 3
-  doAssert out32[5] == 416
-  doAssert out32[6] == 0
-  doAssert out32[7] == 5
-  doAssert out32[8] == 13
-  doAssert out32[9] == 8
-  echo "  OK"
+  echo basicVk
+  echo ""
 
   echo "--- structKernel ---"
-  engine.ingest(structVk)
-  a[0] = 7
-  b[0] = 3
-  var out32b: array[10, int32]
-  engine.run("structKernel", out32b, (a, b))
-  echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
-       ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
-  doAssert out32b[0] == 10
-  doAssert out32b[1] == 4
-  doAssert out32b[2] == 21
-  doAssert out32b[3] == 2
-  doAssert out32b[4] == 1
-  doAssert out32b[5] == 7 shl 3
-  doAssert out32b[6] == 7 shr 3
-  doAssert out32b[7] == (7 and 3)
-  doAssert out32b[8] == (7 or 3)
-  doAssert out32b[9] == (7 xor 3)
-  echo "  OK"
+  echo structVk
+  echo ""
 
   echo "--- structKernel2 ---"
-  engine.ingest(structVk2)
-  a[0] = 14
-  b[0] = 3
-  var out32c: array[10, int32]
-  engine.run("structKernel2", out32c, (a, b))
-  echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
-       ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
-  doAssert out32c[0] == 17
-  doAssert out32c[1] == 11
-  doAssert out32c[2] == 42
-  doAssert out32c[3] == 4
-  doAssert out32c[4] == 2
-  doAssert out32c[5] == 14 shl 3
-  doAssert out32c[6] == 14 shr 3
-  doAssert out32c[7] == (14 and 3)
-  doAssert out32c[8] == (14 or 3)
-  doAssert out32c[9] == (14 xor 3)
-  echo "  OK"
+  echo structVk2
+  echo ""
 
-echo "All execution tests passed ✅"
+  echo "=== Vulkan execution ===\n"
+
+  block:
+    var engine = bkVulkan.init()
+    engine.ingest(basicVk)
+
+    var a: array[1, int32] = [13'i32]
+    var b: array[1, int32] = [5'i32]
+
+    echo "--- basicKernel ---"
+    var out32: array[10, int32]
+    engine.run("basicKernel", out32, (a, b))
+    echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
+         ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
+    doAssert out32[0] == 18
+    doAssert out32[1] == 8
+    doAssert out32[2] == 65
+    doAssert out32[3] == 2
+    doAssert out32[4] == 3
+    doAssert out32[5] == 416
+    doAssert out32[6] == 0
+    doAssert out32[7] == 5
+    doAssert out32[8] == 13
+    doAssert out32[9] == 8
+    echo "  OK"
+
+    echo "--- structKernel ---"
+    engine.ingest(structVk)
+    a[0] = 7
+    b[0] = 3
+    var out32b: array[10, int32]
+    engine.run("structKernel", out32b, (a, b))
+    echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
+         ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
+    doAssert out32b[0] == 10
+    doAssert out32b[1] == 4
+    doAssert out32b[2] == 21
+    doAssert out32b[3] == 2
+    doAssert out32b[4] == 1
+    doAssert out32b[5] == 7 shl 3
+    doAssert out32b[6] == 7 shr 3
+    doAssert out32b[7] == (7 and 3)
+    doAssert out32b[8] == (7 or 3)
+    doAssert out32b[9] == (7 xor 3)
+    echo "  OK"
+
+    echo "--- structKernel2 ---"
+    engine.ingest(structVk2)
+    a[0] = 14
+    b[0] = 3
+    var out32c: array[10, int32]
+    engine.run("structKernel2", out32c, (a, b))
+    echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
+         ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
+    doAssert out32c[0] == 17
+    doAssert out32c[1] == 11
+    doAssert out32c[2] == 42
+    doAssert out32c[3] == 4
+    doAssert out32c[4] == 2
+    doAssert out32c[5] == 14 shl 3
+    doAssert out32c[6] == 14 shr 3
+    doAssert out32c[7] == (14 and 3)
+    doAssert out32c[8] == (14 or 3)
+    doAssert out32c[9] == (14 xor 3)
+    echo "  OK"
+
+  echo "All execution tests passed ✅"
+
+when isMainModule:
+  runTest()

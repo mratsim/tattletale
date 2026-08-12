@@ -20,10 +20,14 @@ const kernelCode = cuda:
     let y = MyInt[64]()
     output[0] = 1'u32
 
-var buf: array[1, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("testIntGeneric", buf, ())
-doAssert buf[0] == 1
-echo "  OK (test_nvrtc_int_generic)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[1, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("testIntGeneric", buf, ())
+  doAssert buf[0] == 1
+  echo "  OK (test_nvrtc_int_generic)"
+
+when isMainModule:
+  runTest()

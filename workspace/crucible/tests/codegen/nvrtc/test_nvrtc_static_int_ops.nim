@@ -76,21 +76,25 @@ const kernelCode = cuda:
     res[8] = int32(j)            # 1000
     res[9] = int32(k)            # 1000
 
-suite "NVRTC — static-int +/* overload set":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "NVRTC — static-int +/* overload set":
 
-  test "all five overload shapes compile, run, and produce the right values":
-    var buf: array[10, int32]
-    var dynArr: array[1, int32] = [100'i32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelCode)
-    engine.run<<(1, 1)>>("staticIntOps", buf, (dynArr,))
-    check buf[0] == 11    # Int[10]() + 1
-    check buf[1] == 12    # 2 + Int[10]()
-    check buf[2] == 30    # Int[10]() * 3
-    check buf[3] == 40    # 4 * Int[10]()
-    check buf[4] == 5     # Int[2]() + Int[3]()
-    check buf[5] == 6     # Int[2]() * Int[3]()
-    check buf[6] == 110   # Int[10]() + 100
-    check buf[7] == 110   # 100 + Int[10]()
-    check buf[8] == 1000  # Int[10]() * 100
-    check buf[9] == 1000  # 100 * Int[10]()
+    test "all five overload shapes compile, run, and produce the right values":
+      var buf: array[10, int32]
+      var dynArr: array[1, int32] = [100'i32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelCode)
+      engine.run<<(1, 1)>>("staticIntOps", buf, (dynArr,))
+      check buf[0] == 11    # Int[10]() + 1
+      check buf[1] == 12    # 2 + Int[10]()
+      check buf[2] == 30    # Int[10]() * 3
+      check buf[3] == 40    # 4 * Int[10]()
+      check buf[4] == 5     # Int[2]() + Int[3]()
+      check buf[5] == 6     # Int[2]() * Int[3]()
+      check buf[6] == 110   # Int[10]() + 100
+      check buf[7] == 110   # 100 + Int[10]()
+      check buf[8] == 1000  # Int[10]() * 100
+      check buf[9] == 1000  # 100 * Int[10]()
+
+when isMainModule:
+  runTest()

@@ -35,7 +35,7 @@ const kernel = cuda:
     let v = makeView(input, n)
     deviceFn(v, output)
 
-when isMainModule:
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo "════════ kernel ═══════════════════════════════════════════════════════"
   echo kernel
   echo "═══════════════════════════════════════════════════════════════════════"
@@ -47,3 +47,6 @@ when isMainModule:
   engine.run<<(1, 1)>>("reproKernel", outBuf, (data, 4'i32))
   doAssert abs(outBuf[0] - data[0]) < 1e-5, "output[0] = " & $outBuf[0] & " (expected " & $data[0] & ")"
   echo "  OK (test_nvrtc_hoist_block_call_trail)"
+
+when isMainModule:
+  runTest()

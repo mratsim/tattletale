@@ -45,7 +45,7 @@ const kernel = cuda:
       let _ = mA(_, kTile)
     output[0] = 42.0f
 
-when isMainModule:
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   var data: array[4, float32] = [1.0'f32, 2.0, 3.0, 4.0]
   var outBuf: array[1, float32]
   var engine = bkCuda.init()
@@ -53,3 +53,6 @@ when isMainModule:
   engine.run<<(1, 1)>>("reproKernel", outBuf, (data,))
   doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
   echo "  OK (test_nvrtc_underscore_undefined_tmp)"
+
+when isMainModule:
+  runTest()

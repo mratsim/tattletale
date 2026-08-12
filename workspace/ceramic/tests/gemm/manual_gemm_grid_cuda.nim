@@ -150,7 +150,7 @@ const kernelCodeSingle = cuda:
     var epi = initEpiAXPBY(alpha, beta, tCv)
     gemm_grid(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, int(threadIdx.x))
 
-proc main() =
+proc runTest() =
   var engine = bkCuda.init(kernelCode)
   testGemmGrid(engine, tiled, "SM80")
   testGemmGridBeta(engine, tiled, "SM80")
@@ -161,4 +161,4 @@ proc main() =
   testGemmGridSingle(engineSingle, tiled, "SM80")
 
 when isMainModule:
-  main()
+  runTest()

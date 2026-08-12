@@ -96,52 +96,56 @@ const kernelF = webgpu:
     const tup {.genSym.} = (Int[8](), Int[16]())
     let first = tup[0]; C[0] = uint32(toIntVal first)
 
-echo kernelA
-echo "\n---\n"
-echo kernelB
-echo "\n---\n"
-echo kernelC
-echo "\n---\n"
-echo kernelD
-echo "\n---\n"
-echo kernelE
-echo "\n---\n"
-echo kernelF
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo kernelA
+  echo "\n---\n"
+  echo kernelB
+  echo "\n---\n"
+  echo kernelC
+  echo "\n---\n"
+  echo kernelD
+  echo "\n---\n"
+  echo kernelE
+  echo "\n---\n"
+  echo kernelF
 
-suite "WebGPU - constexpr tuple init":
-  test "Pattern A — constexpr tuple in let RHS":
-    var engine = bkWGSL.init()
-    engine.ingest(kernelA)
-    var res: array[1, uint32]
-    engine.run("testA", res, ())
-    check res[0] == 1
-  test "Pattern B — constexpr in arithmetic":
-    var engine = bkWGSL.init()
-    engine.ingest(kernelB)
-    var res: array[1, uint32]
-    engine.run("testB", res, ())
-    check res[0] == 128
-  test "Pattern C — template wrapConst":
-    var engine = bkWGSL.init()
-    engine.ingest(kernelC)
-    var res: array[1, uint32]
-    engine.run("testC", res, ())
-    check res[0] == 1
-  test "Pattern D — tuple bracket access":
-    var engine = bkWGSL.init()
-    engine.ingest(kernelD)
-    var res: array[1, uint32]
-    engine.run("testD", res, ())
-    check res[0] == 0
-  test "Pattern E — block with constexpr temp":
-    var engine = bkWGSL.init()
-    engine.ingest(kernelE)
-    var res: array[1, uint32]
-    engine.run("testE", res, ())
-    check res[0] == 0
-  test "Pattern F — constexpr tuple field access":
-    var engine = bkWGSL.init()
-    engine.ingest(kernelF)
-    var res: array[1, uint32]
-    engine.run("testF", res, ())
-    check res[0] == 8
+  suite "WebGPU - constexpr tuple init":
+    test "Pattern A — constexpr tuple in let RHS":
+      var engine = bkWGSL.init()
+      engine.ingest(kernelA)
+      var res: array[1, uint32]
+      engine.run("testA", res, ())
+      check res[0] == 1
+    test "Pattern B — constexpr in arithmetic":
+      var engine = bkWGSL.init()
+      engine.ingest(kernelB)
+      var res: array[1, uint32]
+      engine.run("testB", res, ())
+      check res[0] == 128
+    test "Pattern C — template wrapConst":
+      var engine = bkWGSL.init()
+      engine.ingest(kernelC)
+      var res: array[1, uint32]
+      engine.run("testC", res, ())
+      check res[0] == 1
+    test "Pattern D — tuple bracket access":
+      var engine = bkWGSL.init()
+      engine.ingest(kernelD)
+      var res: array[1, uint32]
+      engine.run("testD", res, ())
+      check res[0] == 0
+    test "Pattern E — block with constexpr temp":
+      var engine = bkWGSL.init()
+      engine.ingest(kernelE)
+      var res: array[1, uint32]
+      engine.run("testE", res, ())
+      check res[0] == 0
+    test "Pattern F — constexpr tuple field access":
+      var engine = bkWGSL.init()
+      engine.ingest(kernelF)
+      var res: array[1, uint32]
+      engine.run("testF", res, ())
+      check res[0] == 8
+
+when isMainModule:
+  runTest()

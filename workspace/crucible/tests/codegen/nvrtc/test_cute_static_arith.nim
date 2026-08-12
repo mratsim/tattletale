@@ -37,15 +37,19 @@ const kernelCode = cuda:
     output[4] = c.data[0]
     output[5] = c.data[6]
 
-var buf: array[6, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
-engine.run("staticArithKernel", buf, ())
-doAssert buf[0] == 1,   &"summed[0]: {buf[0]}"
-doAssert buf[1] == 5,   &"summed[4]: {buf[1]}"
-doAssert buf[2] == 10,  &"mult[0]: {buf[2]}"
-doAssert buf[3] == 60,  &"mult[5]: {buf[3]}"
-doAssert buf[4] == 100, &"complex[0]: {buf[4]}"
-doAssert buf[5] == 700, &"complex[6]: {buf[5]}"
-echo "  OK — static-int arithmetic (+, *, +*)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[6, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("staticArithKernel", buf, ())
+  doAssert buf[0] == 1,   &"summed[0]: {buf[0]}"
+  doAssert buf[1] == 5,   &"summed[4]: {buf[1]}"
+  doAssert buf[2] == 10,  &"mult[0]: {buf[2]}"
+  doAssert buf[3] == 60,  &"mult[5]: {buf[3]}"
+  doAssert buf[4] == 100, &"complex[0]: {buf[4]}"
+  doAssert buf[5] == 700, &"complex[6]: {buf[5]}"
+  echo "  OK — static-int arithmetic (+, *, +*)"
+
+when isMainModule:
+  runTest()

@@ -108,45 +108,49 @@ const kernelF = cuda:
     let first = tup[0]
     C[0] = float32(toIntVal first)
 
-suite "Crucible - constexpr tuple init in expression slots":
-  test "Pattern A — constexpr tuple in let RHS (block-unwrapped)":
-    var output: array[1, float32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelA)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 1.0'f32
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Crucible - constexpr tuple init in expression slots":
+    test "Pattern A — constexpr tuple in let RHS (block-unwrapped)":
+      var output: array[1, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelA)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 1.0'f32
 
-  test "Pattern B — constexpr in arithmetic expression":
-    var output: array[1, float32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelB)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 128.0'f32
+    test "Pattern B — constexpr in arithmetic expression":
+      var output: array[1, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelB)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 128.0'f32
 
-  test "Pattern C — template wrapConst (block with constexpr)":
-    var output: array[1, float32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelC)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 1.0'f32
+    test "Pattern C — template wrapConst (block with constexpr)":
+      var output: array[1, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelC)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 1.0'f32
 
-  test "Pattern D — tuple bracket access on let":
-    var output: array[1, float32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelD)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 0.0'f32
+    test "Pattern D — tuple bracket access on let":
+      var output: array[1, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelD)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 0.0'f32
 
-  test "Pattern E — block with constexpr temp (evalOnceAs sim)":
-    var output: array[1, float32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelE)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 0.0'f32
+    test "Pattern E — block with constexpr temp (evalOnceAs sim)":
+      var output: array[1, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelE)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 0.0'f32
 
-  test "Pattern F — constexpr tuple field access":
-    var output: array[1, float32]
-    var engine = bkCuda.init()
-    engine.ingest(kernelF)
-    engine.run<<(1, 1)>>("kernel", output, ())
-    check output[0] == 8.0'f32
+    test "Pattern F — constexpr tuple field access":
+      var output: array[1, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelF)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 8.0'f32
+
+when isMainModule:
+  runTest()

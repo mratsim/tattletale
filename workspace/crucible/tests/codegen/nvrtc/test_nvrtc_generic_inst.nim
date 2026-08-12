@@ -56,32 +56,36 @@ const kernelCode = cuda:
 
 # ── Host code: uint32 generic ───────────────────────────────────────────────
 
-var buf32: array[4, uint32]
-var engine = bkCuda.init()
-engine.ingest(kernelCode)
-echo "PTX: ", engine.getArtifact().len, " bytes"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf32: array[4, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
 
-engine.run("genericInstUint32", buf32, ())
-echo "  maxGeneric[uint32](10,20)       = ", buf32[0]
-echo "  minGeneric[uint32](30,5)        = ", buf32[1]
-echo "  clampGeneric[uint32](50,0,25)   = ", buf32[2]
-echo "  sumThree[uint32](1,2,3)         = ", buf32[3]
+  engine.run("genericInstUint32", buf32, ())
+  echo "  maxGeneric[uint32](10,20)       = ", buf32[0]
+  echo "  minGeneric[uint32](30,5)        = ", buf32[1]
+  echo "  clampGeneric[uint32](50,0,25)   = ", buf32[2]
+  echo "  sumThree[uint32](1,2,3)         = ", buf32[3]
 
-doAssert buf32[0] == 20
-doAssert buf32[1] == 5
-doAssert buf32[2] == 25
-doAssert buf32[3] == 6
+  doAssert buf32[0] == 20
+  doAssert buf32[1] == 5
+  doAssert buf32[2] == 25
+  doAssert buf32[3] == 6
 
-# ── Host code: int32 generic ────────────────────────────────────────────────
+  # ── Host code: int32 generic ────────────────────────────────────────────────
 
-var bufI32: array[3, int32]
-engine.run("genericInstInt32", bufI32, ())
-echo "  maxGeneric[int32](1,-5)         = ", bufI32[0]
-echo "  minGeneric[int32](-10,20)       = ", bufI32[1]
-echo "  sumThree[int32](100,200,300)    = ", bufI32[2]
+  var bufI32: array[3, int32]
+  engine.run("genericInstInt32", bufI32, ())
+  echo "  maxGeneric[int32](1,-5)         = ", bufI32[0]
+  echo "  minGeneric[int32](-10,20)       = ", bufI32[1]
+  echo "  sumThree[int32](100,200,300)    = ", bufI32[2]
 
-doAssert bufI32[0] == 1
-doAssert bufI32[1] == -10
-doAssert bufI32[2] == 600
+  doAssert bufI32[0] == 1
+  doAssert bufI32[1] == -10
+  doAssert bufI32[2] == 600
 
-echo "  OK (test_nvrtc_generic_inst)"
+  echo "  OK (test_nvrtc_generic_inst)"
+
+when isMainModule:
+  runTest()

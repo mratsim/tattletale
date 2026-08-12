@@ -28,7 +28,7 @@ const kernelCode = cuda:
     output[1] = asmAdd(100'u32, 200'u32)
     output[2] = cast[uint32](asmMul(1.5'f32, 4.0'f32))
 
-proc main() =
+proc runTest() =
   var buf: array[3, uint32]
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
@@ -40,4 +40,5 @@ proc main() =
   doAssert buf[2] == 6
   echo "  OK (test_nvrtc_asm_backtick)"
 
-main()
+when isMainModule:
+  runTest()
