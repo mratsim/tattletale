@@ -23,15 +23,23 @@
 ## warp-synchronous. See
 ## workspace/ceramic/tests/gemm/manual_sm80_tensor_cores_opencl.nim
 ## for a full example with both the vendor check and the warp guard.
-
+##
+## Structure: PUBLIC API block first (exported `*`); PRIVATE machinery below
+## (no `*`). `{.experimental: "codeReordering".}` lifts Nim's
+## declaration-before-use rule so the private types/helpers may follow the
+## public surface that calls them.
+{.experimental: "codeReordering".}
 
 import workspace/crucible/src/abis/cl_abi
 
 import ../exec/opencl_runtime
-import ../engines
+import ./arg_blobs
+import ../chevrons
 
 export opencl_runtime
-
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Types
+# ═════════════════════════════════════════════════════════════════════════
 type
   OpenCLCtx = object
     ## RAII value wrapper — `=destroy` fires when the engine ref dies.
@@ -43,12 +51,19 @@ type
     ctx: OpenCLCtx
     grid, blk: int   # engine-default geometry for the plain `run`
 
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Constructors/destructors
+# ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var OpenCLCtx) =
   c.ctx.shutdown()   # shutdown is idempotent (nil-guarded)
 
 proc newOpenCLEngine(grid, blk: int): OpenCLEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
   OpenCLEngine(ctx: OpenCLCtx(ctx: initOpenCL()), grid: grid, blk: blk)
+
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ PUBLIC API
+# ═════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: OpenCLEngine, source: string) =
   ## Store the OpenCL C source. Re-entrant: replaces the previous artifact.
@@ -65,6 +80,20 @@ proc deviceVendor*(engine: OpenCLEngine): string =
   ## The OpenCL device vendor (e.g. NVIDIA) — used by tests that require
   ## NVIDIA's OpenCL compiler for inline-PTX asm kernels.
   engine.ctx.ctx.device.vendor()
+
+template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: untyped,
+              cfg: LaunchConfig): untyped =
+  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
+  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
+
+template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: untyped): untyped =
+  run(engine, kernel, output, args,
+      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
+
+# ─────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
+# ▸ PRIVATE
+# ─────────────────────────────────────────────────────────────────────────
 
 proc runImpl(engine: OpenCLEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
@@ -118,12 +147,3 @@ proc runImpl(engine: OpenCLEngine, kernel: string, output: ArgBlob,
   # Read output
   if outSize > 0:
     outBuf.readBuffer(output.data, outSize)
-
-template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: untyped,
-              cfg: LaunchConfig): untyped =
-  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
-  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
-
-template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args,
-      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))

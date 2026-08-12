@@ -18,31 +18,24 @@
 ##
 ## The device context (initWgpu) and its callbacks live in `exec/wgpu_runtime`
 ## (imported below); this module owns the engine and its RAII `=destroy` hook.
+##
+## Structure: PUBLIC API block first (exported `*`); PRIVATE machinery below
+## (no `*`). `{.experimental: "codeReordering".}` lifts Nim's
+## declaration-before-use rule so the private types/helpers may follow the
+## public surface that calls them.
+{.experimental: "codeReordering".}
 
 import std/strutils
 
 import workspace/crucible/vendor/wgpu
 import ../exec/wgpu_runtime
-import ../engines
+import ./arg_blobs
+import ../chevrons
 
 export wgpu_runtime
-
 # ═════════════════════════════════════════════════════════════════════════
-# check — unified error policy: stacktrace + stderr + quit(1)
+# ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
-
-template check*(status: WGPUBufferMapAsyncStatus, quitOnFailure = true) =
-  let code = status
-  if code != wgpuBufferMapAsyncStatusSuccess:
-    writeStackTrace()
-    stderr.write($instantiationInfo() & " exited with error: WGPUBufferMapAsyncStatus " & $code & '\n')
-    if quitOnFailure:
-      quit 1
-
-# ═════════════════════════════════════════════════════════════════════════
-# WgpuEngine
-# ═════════════════════════════════════════════════════════════════════════
-
 type
   WgpuCtx = object
     ## RAII value wrapper — `=destroy` fires when the engine ref dies.
@@ -55,6 +48,9 @@ type
     grid, blk: int   # engine-default geometry for the plain `run`
     bakedBlk: int    # workgroup size baked into the shader at ingest
 
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Constructors/destructors
+# ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var WgpuCtx) =
   if c.ctx.instance != nil:
     c.ctx.shutdown()
@@ -62,6 +58,42 @@ proc `=destroy`(c: var WgpuCtx) =
 proc newWgpuEngine(grid, blk: int): WgpuEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
   WgpuEngine(ctx: WgpuCtx(ctx: initWgpu()), grid: grid, blk: blk)
+
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ PUBLIC API
+# ═════════════════════════════════════════════════════════════════════════
+
+template check*(status: WGPUBufferMapAsyncStatus, quitOnFailure = true) =
+  let code = status
+  if code != wgpuBufferMapAsyncStatusSuccess:
+    writeStackTrace()
+    stderr.write($instantiationInfo() & " exited with error: WGPUBufferMapAsyncStatus " & $code & '\n')
+    if quitOnFailure:
+      quit 1
+
+proc ingest*(engine: WgpuEngine, source: string) =
+  ## Store the WGSL source. Re-entrant: replaces the previous artifact
+  ## (the device context persists — only the artifact is replaced).
+  engine.source = source
+  engine.bakedBlk = parseBakedBlk(source)
+
+proc getArtifact*(engine: WgpuEngine): string =
+  ## The WGSL kernel source.
+  engine.source
+
+template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped,
+              cfg: LaunchConfig): untyped =
+  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
+  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
+
+template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped): untyped =
+  run(engine, kernel, output, args,
+      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
+
+# ─────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
+# ▸ PRIVATE
+# ─────────────────────────────────────────────────────────────────────────
 
 proc parseBakedBlk(wgsl: string): int =
   ## Extract the shader-baked workgroup size from the WGSL preamble:
@@ -77,16 +109,6 @@ proc parseBakedBlk(wgsl: string): int =
     n = n * 10 + (ord(wgsl[j]) - ord('0'))
     inc j
   n
-
-proc ingest*(engine: WgpuEngine, source: string) =
-  ## Store the WGSL source. Re-entrant: replaces the previous artifact
-  ## (the device context persists — only the artifact is replaced).
-  engine.source = source
-  engine.bakedBlk = parseBakedBlk(source)
-
-proc getArtifact*(engine: WgpuEngine): string =
-  ## The WGSL kernel source.
-  engine.source
 
 proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
@@ -293,12 +315,3 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   if mappedPtr != nil and outSize > 0:
     copyMem(output.data, mappedPtr, outSize)
   wgpuBufferUnmap(stagingBuf)
-
-template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped,
-              cfg: LaunchConfig): untyped =
-  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
-  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
-
-template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args,
-      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))

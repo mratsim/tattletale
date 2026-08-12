@@ -18,6 +18,12 @@
 ## Resources live in RAII value fields (`NVRTC` carries its own `=destroy`)
 ## because Nim 2.2.10 refuses `=destroy` on ref types. Re-ingest replaces the
 ## RAII field → the old NVRTC context/module are auto-released.
+##
+## Structure: PUBLIC API block first (exported `*`); PRIVATE machinery below
+## (no `*`). `{.experimental: "codeReordering".}` lifts Nim's
+## declaration-before-use rule so the private types/helpers may follow the
+## public surface that calls them.
+{.experimental: "codeReordering".}
 
 import std/os
 
@@ -27,11 +33,11 @@ import workspace/crucible/src/abis/c_abi
 
 import ../exec/cuda_runtime
 import ../exec/runtime_utils
-import ../engines
-
-
-## Debug output (driver version, PTX size, files) — controlled by -d:debug
-
+import ./arg_blobs
+import ../chevrons
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Types
+# ═════════════════════════════════════════════════════════════════════════
 type
   NVRTC = object
     name*: string # Name of the program (of the generated in memory CUDA file)
@@ -44,6 +50,17 @@ type
     context*: CUcontext
     moduleLoaded*: bool
 
+  CudaEngine* = ref object
+    ## Fields directly (no Obj indirection); resources in the RAII `NVRTC`
+    ## value field (fires `=destroy` when the ref dies or is re-ingested).
+    source: string
+    ptx: string
+    nvrtc: NVRTC
+    grid, blk: int   # engine-default geometry for the plain `run`
+
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Constructors/destructors
+# ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(nvrtc: NVRTC) =
   if nvrtc.module.pointer != nil:
     check cuCtxSetCurrent(nvrtc.context)
@@ -51,6 +68,46 @@ proc `=destroy`(nvrtc: NVRTC) =
   if nvrtc.context.pointer != nil:
     check cuCtxSetCurrent(nvrtc.context)
     check cuCtxDestroy nvrtc.context
+
+proc newCudaEngine(grid, blk: int): CudaEngine =
+  ## Private factory — engines.nim reaches it via `import {.all.}`.
+  CudaEngine(grid: grid, blk: blk)
+
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ PUBLIC API
+# ═════════════════════════════════════════════════════════════════════════
+
+proc ingest*(engine: CudaEngine, source: string) =
+  ## NVRTC-compile `source` → PTX. Re-entrant: replaces the previous artifact
+  ## and NVRTC context/module (the old RAII field is destroyed).
+  if engine.ptx.len > 0:
+    when defined(debug):
+      echo "[INFO]: cuda ingest: invalidating previous artifact"
+  engine.source = source
+  engine.nvrtc = initNvrtc(source)
+  engine.nvrtc.compile()
+  engine.nvrtc.getPtx()
+  engine.ptx = engine.nvrtc.ptx
+
+proc getArtifact*(engine: CudaEngine): string =
+  ## The compiled PTX.
+  engine.ptx
+
+template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped,
+              cfg: LaunchConfig): untyped =
+  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
+  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
+
+template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped): untyped =
+  run(engine, kernel, output, args,
+      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
+
+# ─────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
+# ▸ PRIVATE
+# ─────────────────────────────────────────────────────────────────────────
+
+## Debug output (driver version, PTX size, files) — controlled by -d:debug
 
 proc initNvrtc(cuda: string, name = "sample.cu"): NVRTC =
   ## Initializes an NVRTC object for the given program `cuda`
@@ -93,7 +150,6 @@ proc initNvrtc(cuda: string, name = "sample.cu"): NVRTC =
   result = NVRTC(prog: prog, name: name,
                  device: device,
                  context: context)
-
 
 proc log(nvrtc: var NVRTC) =
   ## Retrieve the compilation log.
@@ -158,37 +214,6 @@ proc load(nvrtc: var NVRTC) =
     quit(1)
 
   nvrtc.moduleLoaded = true
-
-# CudaEngine — the HwEngine implementation
-# ═════════════════════════════════════════════════════════════════════════
-
-type
-  CudaEngine* = ref object
-    ## Fields directly (no Obj indirection); resources in the RAII `NVRTC`
-    ## value field (fires `=destroy` when the ref dies or is re-ingested).
-    source: string
-    ptx: string
-    nvrtc: NVRTC
-    grid, blk: int   # engine-default geometry for the plain `run`
-
-proc newCudaEngine(grid, blk: int): CudaEngine =
-  ## Private factory — engines.nim reaches it via `import {.all.}`.
-  CudaEngine(grid: grid, blk: blk)
-proc ingest*(engine: CudaEngine, source: string) =
-  ## NVRTC-compile `source` → PTX. Re-entrant: replaces the previous artifact
-  ## and NVRTC context/module (the old RAII field is destroyed).
-  if engine.ptx.len > 0:
-    when defined(debug):
-      echo "[INFO]: cuda ingest: invalidating previous artifact"
-  engine.source = source
-  engine.nvrtc = initNvrtc(source)
-  engine.nvrtc.compile()
-  engine.nvrtc.getPtx()
-  engine.ptx = engine.nvrtc.ptx
-
-proc getArtifact*(engine: CudaEngine): string =
-  ## The compiled PTX.
-  engine.ptx
 
 proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
@@ -273,12 +298,3 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
   # Read the output back
   if outSize > 0:
     check cuMemcpyDtoH(output.data, outDev, csize_t(outSize))
-
-template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped,
-              cfg: LaunchConfig): untyped =
-  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
-  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
-
-template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args,
-      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))

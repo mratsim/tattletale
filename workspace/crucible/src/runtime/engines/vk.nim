@@ -17,6 +17,12 @@
 ## size < 0) are packed into the push-constant range (4-byte only, see
 ## runImpl); pointer args get SSBO bindings 1..N, output at binding 0
 ## (output first, per CONVENTIONS.md).
+##
+## Structure: PUBLIC API block first (exported `*`); PRIVATE machinery below
+## (no `*`). `{.experimental: "codeReordering".}` lifts Nim's
+## declaration-before-use rule so the private types/helpers may follow the
+## public surface that calls them.
+{.experimental: "codeReordering".}
 
 import std/strutils
 
@@ -24,10 +30,13 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 
 import ../exec/vulkan_runtime
 import ../exec/runtime_utils
-import ../engines
+import ./arg_blobs
+import ../chevrons
 
 export vulkan_runtime
-
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Types
+# ═════════════════════════════════════════════════════════════════════════
 type
   VulkanCtx = object
     ## RAII value wrapper — `=destroy` fires when the engine ref dies.
@@ -42,6 +51,9 @@ type
     grid, blk: int   # engine-default geometry for the plain `run`
     bakedBlk: int    # workgroup size baked into the shader at ingest
 
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Constructors/destructors
+# ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var VulkanCtx) =
   if c.ctx.instance != nil:
     c.ctx.shutdown()
@@ -49,6 +61,39 @@ proc `=destroy`(c: var VulkanCtx) =
 proc newVulkanEngine(grid, blk: int): VulkanEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
   VulkanEngine(ctx: VulkanCtx(ctx: initVulkan()), grid: grid, blk: blk)
+
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ PUBLIC API
+# ═════════════════════════════════════════════════════════════════════════
+
+proc ingest*(engine: VulkanEngine, source: string) =
+  ## glslangValidator → SPIR-V. Re-entrant: replaces the previous artifact
+  ## (the device context persists — only the compiled artifact is replaced).
+  if engine.spirv.len > 0:
+    when defined(debug):
+      echo "[INFO]: vulkan ingest: invalidating previous artifact"
+  engine.source = source
+  engine.entryPoint = parseEntryPoint(source)
+  engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
+  engine.bakedBlk = parseBakedBlk(source)
+
+proc getArtifact*(engine: VulkanEngine): seq[uint32] =
+  ## The compiled SPIR-V.
+  engine.spirv
+
+template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped,
+              cfg: LaunchConfig): untyped =
+  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
+  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
+
+template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped): untyped =
+  run(engine, kernel, output, args,
+      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
+
+# ─────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
+# ▸ PRIVATE
+# ─────────────────────────────────────────────────────────────────────────
 
 proc parseBakedBlk(glsl: string): int =
   ## Extract the shader-baked workgroup size from the GLSL preamble:
@@ -78,21 +123,6 @@ proc parseEntryPoint(glsl: string): string =
     name.add glsl[j]
     inc j
   name
-
-proc ingest*(engine: VulkanEngine, source: string) =
-  ## glslangValidator → SPIR-V. Re-entrant: replaces the previous artifact
-  ## (the device context persists — only the compiled artifact is replaced).
-  if engine.spirv.len > 0:
-    when defined(debug):
-      echo "[INFO]: vulkan ingest: invalidating previous artifact"
-  engine.source = source
-  engine.entryPoint = parseEntryPoint(source)
-  engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
-  engine.bakedBlk = parseBakedBlk(source)
-
-proc getArtifact*(engine: VulkanEngine): seq[uint32] =
-  ## The compiled SPIR-V.
-  engine.spirv
 
 proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
@@ -195,12 +225,3 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
   if outSize > 0:
     let res = readBuffer[byte](vctx, outBuf)
     copyMem(output.data, res[0].addr, outSize)
-
-template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped,
-              cfg: LaunchConfig): untyped =
-  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
-  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
-
-template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args,
-      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
