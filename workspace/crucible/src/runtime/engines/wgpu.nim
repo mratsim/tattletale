@@ -45,7 +45,6 @@ type
     ## Fields directly (no Obj indirection); resources in the RAII value field.
     source: string
     ctx: WgpuCtx
-    grid, blk: int   # engine-default geometry for the plain `run`
     bakedBlk: int    # workgroup size baked into the shader at ingest
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -55,9 +54,9 @@ proc `=destroy`(c: var WgpuCtx) =
   if c.ctx.instance != nil:
     c.ctx.shutdown()
 
-proc newWgpuEngine(grid, blk: int): WgpuEngine =
+proc newWgpuEngine(): WgpuEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
-  WgpuEngine(ctx: WgpuCtx(ctx: initWgpu()), grid: grid, blk: blk)
+  WgpuEngine(ctx: WgpuCtx(ctx: initWgpu()))
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -88,7 +87,7 @@ template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untype
 
 template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped): untyped =
   run(engine, kernel, output, args,
-      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
+      LaunchConfig(blk: Dim3(x: engine.bakedBlk)))
 
 # ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
@@ -120,7 +119,7 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   let outSize = abs(output.size)
 
   # blk is shader-baked (@workgroup_size): validate loudly (relax later)
-  if cfg.blk.x != engine.bakedBlk:
+  if engine.bakedBlk == 0 or cfg.blk.x != engine.bakedBlk:
     quit("WebGPU run blk=" & $cfg.blk.x & " != baked workgroup size " & $engine.bakedBlk &
          " — launch config mismatch (blk is shader-baked on WebGPU)")
   if cfg.blk.y != 1 or cfg.blk.z != 1:

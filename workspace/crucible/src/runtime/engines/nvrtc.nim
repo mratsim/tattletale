@@ -53,7 +53,6 @@ type
     source: string
     ptx: string
     nvrtc: NVRTC
-    grid, blk: int   # engine-default geometry for the plain `run`
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
@@ -66,9 +65,9 @@ proc `=destroy`(nvrtc: NVRTC) =
     check cuCtxSetCurrent(nvrtc.context)
     check cuCtxDestroy nvrtc.context
 
-proc newCudaEngine(grid, blk: int): CudaEngine =
+proc newCudaEngine(): CudaEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
-  CudaEngine(grid: grid, blk: blk)
+  CudaEngine()
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -93,8 +92,7 @@ template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untype
   runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
 
 template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args,
-      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
+  run(engine, kernel, output, args, LaunchConfig())
 
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE

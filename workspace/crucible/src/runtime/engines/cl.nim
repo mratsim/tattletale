@@ -49,7 +49,6 @@ type
     ## Fields directly (no Obj indirection); resources in the RAII value field.
     source: string
     ctx: OpenCLCtx
-    grid, blk: int   # engine-default geometry for the plain `run`
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
@@ -57,9 +56,9 @@ type
 proc `=destroy`(c: var OpenCLCtx) =
   c.ctx.shutdown()   # shutdown is idempotent (nil-guarded)
 
-proc newOpenCLEngine(grid, blk: int): OpenCLEngine =
+proc newOpenCLEngine(): OpenCLEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
-  OpenCLEngine(ctx: OpenCLCtx(ctx: initOpenCL()), grid: grid, blk: blk)
+  OpenCLEngine(ctx: OpenCLCtx(ctx: initOpenCL()))
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -87,8 +86,7 @@ template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: unty
   runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
 
 template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: untyped): untyped =
-  run(engine, kernel, output, args,
-      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
+  run(engine, kernel, output, args, LaunchConfig())
 
 # ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────

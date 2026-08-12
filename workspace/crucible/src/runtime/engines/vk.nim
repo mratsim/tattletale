@@ -48,7 +48,6 @@ type
     spirv: seq[uint32]
     entryPoint: string  # GLSL entry point name, baked at ingest
     ctx: VulkanCtx
-    grid, blk: int   # engine-default geometry for the plain `run`
     bakedBlk: int    # workgroup size baked into the shader at ingest
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -58,9 +57,9 @@ proc `=destroy`(c: var VulkanCtx) =
   if c.ctx.instance != nil:
     c.ctx.shutdown()
 
-proc newVulkanEngine(grid, blk: int): VulkanEngine =
+proc newVulkanEngine(): VulkanEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
-  VulkanEngine(ctx: VulkanCtx(ctx: initVulkan()), grid: grid, blk: blk)
+  VulkanEngine(ctx: VulkanCtx(ctx: initVulkan()))
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -88,7 +87,7 @@ template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: unty
 
 template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped): untyped =
   run(engine, kernel, output, args,
-      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))
+      LaunchConfig(blk: Dim3(x: engine.bakedBlk)))
 
 # ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
@@ -134,7 +133,7 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
   var vctx = engine.ctx.ctx
 
   # blk is shader-baked (local_size_x): validate loudly (relax later)
-  if cfg.blk.x != engine.bakedBlk:
+  if engine.bakedBlk == 0 or cfg.blk.x != engine.bakedBlk:
     quit("Vulkan run blk=" & $cfg.blk.x & " != baked workgroup size " & $engine.bakedBlk &
          " — launch config mismatch (blk is shader-baked on Vulkan)")
   if cfg.blk.y != 1 or cfg.blk.z != 1:
