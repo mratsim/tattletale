@@ -39,7 +39,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   # RMSNorm layer fixtures
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "RMSNorm layer fixtures":
+  runCppTest "RMSNorm layer fixtures":
     proc(): bool =
       # Load weights from main model (space-saving approach)
       var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
@@ -82,7 +82,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   # MLP layer fixtures
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "MLP layer fixtures":
+  runCppTest "MLP layer fixtures":
     proc(): bool =
       # Load weights from main model (space-saving approach)
       var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
@@ -131,7 +131,7 @@ proc main() =
   # Proper batching requires allocating KV cache for max(batch_size) and
   # running all items together. For now, process sequentially.
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "Attention layer fixtures":
+  runCppTest "Attention layer fixtures":
     proc(): bool =
       # Load weights from main model (space-saving approach)
       var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
@@ -225,7 +225,7 @@ proc main() =
   # Embedding + LMHead fixtures
   # No changes needed — stateless, no RoPE/KV cache involved
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "Embedding + LMHead fixtures":
+  runCppTest "Embedding + LMHead fixtures":
     proc(): bool =
       # Load embed_tokens.weight from main model
       var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
@@ -280,7 +280,7 @@ proc main() =
   # Proper batching requires allocating KV cache for max(batch_size) and
   # running all items together. For now, process sequentially.
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "TransformerBlock fixtures":
+  runCppTest "TransformerBlock fixtures":
     proc(): bool =
       # Load weights from main model (space-saving approach)
       var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)

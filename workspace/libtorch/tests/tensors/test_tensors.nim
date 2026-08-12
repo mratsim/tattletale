@@ -18,7 +18,7 @@ proc runTests*() =
   # -----------------------------------------------------------------------
   # Factory / creation
 
-  runTest "zeros":
+  runCppTest "zeros":
     proc(): bool =
       let t = zeros(2, 3, kFloat32)
       doAssert t.dim() == 2
@@ -28,19 +28,19 @@ proc runTests*() =
       doAssert t[0, 0].item(float32) == 0.0
       true
 
-  runTest "ones":
+  runCppTest "ones":
     proc(): bool =
       let t = ones(2, 3, kFloat32)
       doAssert t[0, 0].item(float32) == 1.0
       true
 
-  runTest "full":
+  runCppTest "full":
     proc(): bool =
       let t = full(2, 3, 42.0'f32, kFloat32)
       doAssert t[0, 0].item(float32) == 42.0'f32
       true
 
-  runTest "eye":
+  runCppTest "eye":
     proc(): bool =
       let t = eye(2, kInt64)
       doAssert t[0, 0].item(int64) == 1
@@ -49,7 +49,7 @@ proc runTests*() =
       doAssert t[1, 1].item(int64) == 1
       true
 
-  runTest "linspace":
+  runCppTest "linspace":
     proc(): bool =
       let steps = 120'i64
       let t = linspace(0.0, 1.0, steps, kFloat64)
@@ -58,7 +58,7 @@ proc runTests*() =
       doAssert rel_error.item(float64) <= 1e-12
       true
 
-  runTest "arange":
+  runCppTest "arange":
     proc(): bool =
       let steps = 130'i64
       let step = 1.0 / float64(steps)
@@ -69,7 +69,7 @@ proc runTests*() =
         doAssert (val - refval).abs <= 1e-12
       true
 
-  runTest "from_blob":
+  runCppTest "from_blob":
     proc(): bool =
       var data: array[4, float32] = [1.0, 2.0, 3.0, 4.0]
       let t = from_blob(data[0].unsafeAddr, [2, 2], kFloat32)
@@ -77,7 +77,7 @@ proc runTests*() =
       doAssert t[1, 1].item(float32) == 4.0
       true
 
-  runTest "clone":
+  runCppTest "clone":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = clone(a)
@@ -87,7 +87,7 @@ proc runTests*() =
   # -----------------------------------------------------------------------
   # Operator precedence
 
-  runTest "+ and *":
+  runCppTest "+ and *":
     proc(): bool =
       let a = toTensor([[1, 2], [3, 4]]).to(kFloat64)
       let b = -a
@@ -95,7 +95,7 @@ proc runTests*() =
       doAssert (b * (a + b)).equal(zeros(2, 2).to(kFloat64))
       true
 
-  runTest "+ and abs":
+  runCppTest "+ and abs":
     proc(): bool =
       let a = toTensor([[1, 2], [3, 4]]).to(kFloat64)
       let b = -a
@@ -106,21 +106,21 @@ proc runTests*() =
   # -----------------------------------------------------------------------
   # Math unary
 
-  runTest "exp / log":
+  runCppTest "exp / log":
     proc(): bool =
       let a = toTensor(@[1.0, 2.0, 3.0]).to(kFloat64)
       let b = log(exp(a))
       doAssert a.allClose(b)
       true
 
-  runTest "sin / cos":
+  runCppTest "sin / cos":
     proc(): bool =
       let t = toTensor(@[0.0]).to(kFloat64)
       doAssert sin(t)[0].item(float64) == 0.0
       doAssert cos(t)[0].item(float64) == 1.0
       true
 
-  runTest "sqrt":
+  runCppTest "sqrt":
     proc(): bool =
       let t = toTensor(@[4.0, 9.0, 16.0]).to(kFloat64)
       doAssert sqrt(t)[0].item(float64) == 2.0
@@ -130,7 +130,7 @@ proc runTests*() =
   # -----------------------------------------------------------------------
   # Binary / Linear Algebra
 
-  runTest "add":
+  runCppTest "add":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(2, 3, kFloat32) * 2.0
@@ -138,7 +138,7 @@ proc runTests*() =
       doAssert c[0, 0].item(float32) == 3.0
       true
 
-  runTest "mm":
+  runCppTest "mm":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(3, 4, kFloat32)
@@ -149,7 +149,7 @@ proc runTests*() =
       doAssert c[0, 0].item(float32) == 3.0  # each row of a * each col of b = 3
       true
 
-  runTest "matmul":
+  runCppTest "matmul":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(3, 4, kFloat32)
@@ -158,7 +158,7 @@ proc runTests*() =
       doAssert c.size(1) == 4
       true
 
-  runTest "dot":
+  runCppTest "dot":
     proc(): bool =
       let a = toTensor(@[1.0, 2.0, 3.0]).to(kFloat64)
       let b = toTensor(@[4.0, 5.0, 6.0]).to(kFloat64)
@@ -169,7 +169,7 @@ proc runTests*() =
   # -----------------------------------------------------------------------
   # Comparison
 
-  runTest "equal (bool)":
+  runCppTest "equal (bool)":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(2, 3, kFloat32)
@@ -178,7 +178,7 @@ proc runTests*() =
       doAssert not equal(a, c)
       true
 
-  runTest "eq (tensor)":
+  runCppTest "eq (tensor)":
     proc(): bool =
       let a = toTensor(@[1.0, 2.0]).to(kFloat64)
       let b = toTensor(@[1.0, 3.0]).to(kFloat64)
@@ -187,7 +187,7 @@ proc runTests*() =
       doAssert eq_result[1].item(float64) == 0.0
       true
 
-  runTest "element-wise <. >. <=. >=. !=.":
+  runCppTest "element-wise <. >. <=. >=. !=.":
     proc(): bool =
       let a = toTensor(@[1.0, 2.0, 3.0]).to(kFloat64)
       let b = toTensor(@[1.0, 1.0, 4.0]).to(kFloat64)
@@ -198,7 +198,7 @@ proc runTests*() =
       doAssert (a !=. b)[1].item(float64) == 1.0 # 2 != 1 -> true
       true
 
-  runTest "allClose":
+  runCppTest "allClose":
     proc(): bool =
       let a = toTensor(@[1.0, 2.0, 3.0]).to(kFloat64)
       let b = toTensor(@[1.00001, 2.00001, 3.00001]).to(kFloat64)
@@ -208,37 +208,37 @@ proc runTests*() =
   # -----------------------------------------------------------------------
   # Reductions
 
-  runTest "sum":
+  runCppTest "sum":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       doAssert sum(a).item(float32) == 6.0
       true
 
-  runTest "mean":
+  runCppTest "mean":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       doAssert mean(a).item(float32) == 1.0
       true
 
-  runTest "max":
+  runCppTest "max":
     proc(): bool =
       let a = toTensor([[1, 3], [2, 4]]).to(kFloat64)
       doAssert max(a).item(float64) == 4.0
       true
 
-  runTest "min":
+  runCppTest "min":
     proc(): bool =
       let a = toTensor([[1, 3], [2, 4]]).to(kFloat64)
       doAssert min(a).item(float64) == 1.0
       true
 
-  runTest "argmax":
+  runCppTest "argmax":
     proc(): bool =
       let a = toTensor(@[1.0, 5.0, 3.0]).to(kFloat64)
       doAssert argmax(a).item(int64) == 1
       true
 
-  runTest "sum with axis":
+  runCppTest "sum with axis":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let s = sum(a, axis = 1)
@@ -246,7 +246,7 @@ proc runTests*() =
       doAssert s[0].item(float32) == 3.0
       true
 
-  runTest "min with axis (tuple)":
+  runCppTest "min with axis (tuple)":
     proc(): bool =
       let a = toTensor([[1, 3], [2, 4]]).to(kFloat64)
       let (vals, idx) = min(a, axis = 1)
@@ -254,7 +254,7 @@ proc runTests*() =
       doAssert vals[1].item(float64) == 2.0
       true
 
-  runTest "sort":
+  runCppTest "sort":
     proc(): bool =
       let t = toTensor(@[2, 3, 4, 1, 5, 6]).to(kInt64)
       let (s, args) = sort(t)
@@ -267,7 +267,7 @@ proc runTests*() =
   # -----------------------------------------------------------------------
   # Shape manipulation
 
-  runTest "reshape":
+  runCppTest "reshape":
     proc(): bool =
       let a = arange(12, kFloat64)
       let b = reshape(a, 3, 4)
@@ -275,7 +275,7 @@ proc runTests*() =
       doAssert b.size(1) == 4
       true
 
-  runTest "view":
+  runCppTest "view":
     proc(): bool =
       let a = arange(12, kFloat64)
       let b = view(a, 3, 4)
@@ -283,7 +283,7 @@ proc runTests*() =
       doAssert b.size(1) == 4
       true
 
-  runTest "permute":
+  runCppTest "permute":
     proc(): bool =
       let a = zeros(2, 3, 4, kFloat32)
       let b = permute(a, 2, 1, 0)
@@ -292,7 +292,7 @@ proc runTests*() =
       doAssert b.size(2) == 2
       true
 
-  runTest "transpose":
+  runCppTest "transpose":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = transpose(a, 0, 1)
@@ -300,7 +300,7 @@ proc runTests*() =
       doAssert b.size(1) == 2
       true
 
-  runTest "t":
+  runCppTest "t":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = t(a)
@@ -308,7 +308,7 @@ proc runTests*() =
       doAssert b.size(1) == 2
       true
 
-  runTest "squeeze / unsqueeze":
+  runCppTest "squeeze / unsqueeze":
     proc(): bool =
       let a = ones(1, 3, 1, kFloat32)
       let b = squeeze(a)
@@ -322,7 +322,7 @@ proc runTests*() =
   # -----------------------------------------------------------------------
   # Arithmetic operators
 
-  runTest "+":
+  runCppTest "+":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = ones(2, 3, kFloat32)
@@ -330,7 +330,7 @@ proc runTests*() =
       doAssert c[0, 0].item(float32) == 2.0
       true
 
-  runTest "-":
+  runCppTest "-":
     proc(): bool =
       let a = full(2, 3, 5.0'f32, kFloat32)
       let b = ones(2, 3, kFloat32)
@@ -338,7 +338,7 @@ proc runTests*() =
       doAssert c[0, 0].item(float32) == 4.0
       true
 
-  runTest "*":
+  runCppTest "*":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = full(2, 3, 3.0'f32, kFloat32)
@@ -346,7 +346,7 @@ proc runTests*() =
       doAssert c[0, 0].item(float32) == 3.0
       true
 
-  runTest "/":
+  runCppTest "/":
     proc(): bool =
       let a = full(2, 3, 6.0'f32, kFloat32)
       let b = full(2, 3, 2.0'f32, kFloat32)
@@ -354,7 +354,7 @@ proc runTests*() =
       doAssert c[0, 0].item(float32) == 3.0
       true
 
-  runTest "scalar mixed":
+  runCppTest "scalar mixed":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = a + 2.0
@@ -363,14 +363,14 @@ proc runTests*() =
       doAssert c[0, 0].item(float32) == 2.0
       true
 
-  runTest "in-place +=":
+  runCppTest "in-place +=":
     proc(): bool =
       var a = ones(2, 3, kFloat32)
       a += ones(2, 3, kFloat32)
       doAssert a[0, 0].item(float32) == 2.0
       true
 
-  runTest "in-place scalar *=":
+  runCppTest "in-place scalar *=":
     proc(): bool =
       var a = ones(2, 3, kFloat32)
       a *= 5.0
@@ -380,7 +380,7 @@ proc runTests*() =
   # -----------------------------------------------------------------------
   # FFT
 
-  runTest "fft / ifft":
+  runCppTest "fft / ifft":
     proc(): bool =
       let shape = @[8]
       let c64input = randn(shape, kComplexF64)
@@ -392,7 +392,7 @@ proc runTests*() =
       doAssert mean(rel_diff).item(float64) < 1e-12
       true
 
-  runTest "rfft / irfft":
+  runCppTest "rfft / irfft":
     proc(): bool =
       let shape = @[8]
       let f64input = randn(shape, kFloat64)
@@ -404,7 +404,7 @@ proc runTests*() =
       doAssert mean(rel_diff).item(float64) < 1e-12
       true
 
-  runTest "fft2 / ifft2":
+  runCppTest "fft2 / ifft2":
     proc(): bool =
       let shape = @[3, 5]
       let c64input = randn(shape, kComplexF64)
@@ -416,7 +416,7 @@ proc runTests*() =
       doAssert mean(rel_diff).item(float64) < 1e-12
       true
 
-  runTest "fftn / ifftn":
+  runCppTest "fftn / ifftn":
     proc(): bool =
       let shape = @[3, 4, 5]
       let c64input = randn(shape, kComplexF64)

@@ -52,7 +52,7 @@ proc loadLayerFixture(layerIdx: int): Table[string, Tensor] =
     result[name] = st.getTensorOwned(name, kCPU)
 
 proc main() =
-  runTest "Qwen3-0.6B full inference - long residual stream vs HF":
+  runCppTest "Qwen3-0.6B full inference - long residual stream vs HF":
     proc(): bool =
       ## Strategy:
       ## - layer_input: should match exactly (same embedding)

@@ -38,14 +38,14 @@ type
 
 proc main() =
   # TensorWrapper Tests
-  runTest "init":
+  runCppTest "init":
     proc(): bool =
       let wrapper = TensorWrapper(data: ones(2, 3, kFloat32))
       result = wrapper.data.isDefined() and
                wrapper.data.size(0) == 2 and
                wrapper.data.size(1) == 3
 
-  runTest "copy":
+  runCppTest "copy":
     proc(): bool =
       var wrapper1 = TensorWrapper(data: ones(2, 3, kFloat32) * 2.0'f32)
       var wrapper2 = wrapper1  # Should call =copy
@@ -65,7 +65,7 @@ proc main() =
       let expected = ones(2, 3, kFloat32) * 2.0'f32
       result = wrapper1.data.allClose(expected)
 
-  runTest "return from proc":
+  runCppTest "return from proc":
     proc(): bool =
       proc createWrapper(): TensorWrapper =
         TensorWrapper(data: ones(2, 3, kFloat32) * 5.0'f32)
@@ -74,7 +74,7 @@ proc main() =
       let expected = ones(2, 3, kFloat32) * 5.0'f32
       result = wrapper.data.isDefined() and wrapper.data.allClose(expected)
 
-  runTest "assignment":
+  runCppTest "assignment":
     proc(): bool =
       var wrapper1 = TensorWrapper(data: ones(2, 3, kFloat32))
       var wrapper2 = TensorWrapper(data: zeros(2, 3, kFloat32))
@@ -90,7 +90,7 @@ proc main() =
   # TensorPair Tests
   # =============================================================================
 
-  runTest "init":
+  runCppTest "init":
     proc(): bool =
       let pair = TensorPair(
         first: ones(2, kFloat32),
@@ -101,7 +101,7 @@ proc main() =
                pair.first.size(0) == 2 and
                pair.second.size(0) == 2
 
-  runTest "copy":
+  runCppTest "copy":
     proc(): bool =
       var pair1 = TensorPair(
         first: ones(2, kFloat32) * 3.0'f32,
@@ -121,7 +121,7 @@ proc main() =
       let expected = ones(2, kFloat32) * 3.0'f32
       result = pair1.first.allClose(expected)
 
-  runTest "return from proc":
+  runCppTest "return from proc":
     proc(): bool =
       proc createPair(): TensorPair =
         TensorPair(
@@ -142,7 +142,7 @@ proc main() =
   # NestedObject Tests
   # =============================================================================
 
-  runTest "init":
+  runCppTest "init":
     proc(): bool =
       let obj = NestedObject(
         id: 42'i32,
@@ -155,7 +155,7 @@ proc main() =
                obj.bias.isDefined() and
                obj.scale == 1.5'f32
 
-  runTest "copy":
+  runCppTest "copy":
     proc(): bool =
       var obj1 = NestedObject(
         id: 100'i32,
@@ -181,7 +181,7 @@ proc main() =
       let expected = ones(2, 2, kFloat32) * 4.0'f32
       result = obj1.weight.allClose(expected)
 
-  runTest "return from proc":
+  runCppTest "return from proc":
     proc(): bool =
       proc createNested(): NestedObject =
         NestedObject(
@@ -206,7 +206,7 @@ proc main() =
   # Refcount Tests
   # =============================================================================
 
-  runTest "refcount after copy":
+  runCppTest "refcount after copy":
     proc(): bool =
       # Verify that copy increments refcount
       var wrapper1 = TensorWrapper(data: ones(2, 3, kFloat32))
@@ -228,7 +228,7 @@ proc main() =
                wrapper3.data.isDefined() and
                wrapper2.data.is_same(wrapper3.data)
 
-  runTest "refcount after move":
+  runCppTest "refcount after move":
     proc(): bool =
       var wrapper1 = TensorWrapper(data: ones(2, 3, kFloat32))
       let originalData = wrapper1.data
@@ -249,7 +249,7 @@ proc main() =
       result = wrapper2.data.isDefined() and
                wrapper2.data.is_same(originalData)
 
-  runTest "multiple copies":
+  runCppTest "multiple copies":
     proc(): bool =
       let original = ones(2, 3, kFloat32)
 

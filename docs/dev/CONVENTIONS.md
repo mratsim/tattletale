@@ -330,11 +330,20 @@ Examples:
 
 ### 3.2 Test Structure
 
+Two distinct test wrappers share a similar name — do not conflate them:
+
+- **`runCppTest "name": proc(): bool`** (libtorch FFI tests) — wraps the body
+  in C++ exception handling and captures the C++ stacktrace. Used by
+  libtorch/transformers tests via `workspace/libtorch_testutils`.
+- **`proc runTest()`** (crucible engine tests) — a **private** proc wrapper for
+  scope discipline: engines are destroyed at return, which is what exercises
+  their RAII lifecycle. No exception capture. See `workspace/crucible/AGENTS.md`.
+
 ```nim
 import workspace/libtorch_testutils
 
 proc main() =
-  runTest "Test name — what it verifies":
+  runCppTest "Test name — what it verifies":
     proc(): bool =
       # Setup
       let fixture = loadFixture("...")
