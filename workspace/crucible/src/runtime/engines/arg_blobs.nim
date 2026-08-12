@@ -13,6 +13,7 @@
 ##
 ## Containers (seq/array/string) → `(addr, len·sizeof(T))` device buffers;
 ## scalars (incl. raw pointer values) → `(addr, -sizeof(T))` by-value.
+## `bool` is the exception: it marshals as a 4-byte i32 (see `blobOf`).
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
@@ -45,10 +46,20 @@ func blobOf*(x: string, storage: var seq[byte]): ArgBlob {.inline.} =
 
 func blobOf*[T](x: T, storage: var seq[byte]): ArgBlob {.inline.} =
   let off = storage.len
-  storage.setLen(off + sizeof(T))
-  var tmp = x   # make literals/consts addressable
-  copyMem(addr storage[off], addr tmp, sizeof(T))
-  (data: cast[pointer](addr storage[off]), size: -sizeof(T))
+  when T is bool:
+    # Bool marshals as a 4-byte i32, the width every shader backend declares:
+    # WGSL cannot use bool storage variables and emits i32, OpenCL C has no
+    # bool and emits int. The value is 0 or 1, so the i32 read is exact and
+    # CUDA/GLSL 1-byte `bool` kernels still see the right value in byte 0.
+    storage.setLen(off + 4)
+    var tmp = int32(x)
+    copyMem(addr storage[off], addr tmp, 4)
+    (data: cast[pointer](addr storage[off]), size: -4)
+  else:
+    storage.setLen(off + sizeof(T))
+    var tmp = x   # make literals/consts addressable
+    copyMem(addr storage[off], addr tmp, sizeof(T))
+    (data: cast[pointer](addr storage[off]), size: -sizeof(T))
 
 func outBlob*[T](x: var seq[T]): ArgBlob {.inline.} =
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil),

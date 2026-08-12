@@ -88,6 +88,7 @@ const  # WGPUShaderStage (WGPUFlags = uint64)
 
 const  # WGPUBufferBindingType
   WGPUBufferBindingTypeStorage* = 3'u32
+  WGPUBufferBindingTypeReadOnlyStorage* = 4'u32
 
 const  # WGPUMapMode (WGPUFlags = uint64)
   wgpuMapModeRead*: uint64 = 0x0000000000000001'u64

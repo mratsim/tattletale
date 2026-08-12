@@ -220,11 +220,16 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
     )
   )
   for i in 0 ..< numInputs:
+    # Scalar (by-value) inputs map to `var<storage, read>` in the WGSL the
+    # backend emits, so they bind read-only; ptr inputs map to
+    # `var<storage, read_write>` and keep the read-write Storage binding.
+    let isScalar = blobs[i].size < 0
     entries[i + 1] = WGPUBindGroupLayoutEntry(
       binding: (i + 1).cuint,
       visibility: WGPUShaderStageCompute,
       buffer: WGPUBufferBindingLayout(
-        `type`: WGPUBufferBindingTypeStorage,
+        `type`: if isScalar: WGPUBufferBindingTypeReadOnlyStorage
+                else: WGPUBufferBindingTypeStorage,
         minBindingSize: inputSizes[i].csize_t
       )
     )
