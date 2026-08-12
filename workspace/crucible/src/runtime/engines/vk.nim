@@ -11,7 +11,9 @@
 ##
 ## ingest = glslangValidator subprocess → SPIR-V + parse the shader-baked
 ## workgroup size. getArtifact = SPIR-V.
-## run = pipeline + vkCmdDispatch; blk is shader-baked (local_size_x):
+## run = pipeline + vkCmdDispatch; pipelines and per-kernel SPIR-V are
+## cached on the engine (ingest-once / run-many); blk is shader-baked
+## (local_size_x):
 ## run's blk is validated against the baked workgroup size and fails loudly
 ## on mismatch. grid = vkCmdDispatch group count. By-value scalars (ArgBlob
 ## size < 0) are packed into the push-constant range (4-byte only, see
@@ -24,7 +26,7 @@
 ## public surface that calls them.
 {.experimental: "codeReordering".}
 
-import std/strutils
+import std/[strutils, tables]
 
 import workspace/crucible/src/abis/vulkan_abi as vk
 
@@ -41,6 +43,16 @@ type
     ## RAII value wrapper — `=destroy` fires when the engine ref dies.
     ctx: VulkanContext
 
+  VulkanCaches = object
+    ## RAII value wrapper for the ingest-once / run-many caches. Holds a
+    ## copy of the device ctx so `=destroy` can release the cached
+    ## pipelines; declared after `ctx` in VulkanEngine so this hook runs
+    ## before the ctx's shutdown (ref fields are destroyed in reverse
+    ## declaration order, device still alive here).
+    ctx: VulkanContext
+    spirvCache: Table[string, seq[uint32]]
+    pipelineCache: Table[(string, int, int), VulkanPipeline]
+
   VulkanEngine* = ref object
     ## Fields directly (no Obj indirection); resources in the RAII value field.
     source: string
@@ -48,6 +60,7 @@ type
     entryPoint: string  # GLSL entry point name, baked at ingest
     ctx: VulkanCtx
     bakedBlk: Dim3   # workgroup size baked into the shader at ingest
+    caches: VulkanCaches
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
@@ -56,9 +69,22 @@ proc `=destroy`(c: var VulkanCtx) =
   if c.ctx.instance != nil:
     c.ctx.shutdown()
 
+proc `=destroy`(c: var VulkanCaches) =
+  ## Release the cached pipelines (driver-side shader compile) before the
+  ## engine's ctx field is shut down: reverse declaration order runs this
+  ## hook first. A custom `=destroy` replaces field destruction, so the
+  ## tables are released explicitly.
+  for p in c.pipelineCache.mvalues:
+    p.destroyPipeline(c.ctx)
+  `=destroy`(c.pipelineCache)
+  `=destroy`(c.spirvCache)
+
 proc newVulkanEngine(): VulkanEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
-  VulkanEngine(ctx: VulkanCtx(ctx: initVulkan()))
+  let vctx = initVulkan()
+  VulkanEngine(
+    ctx: VulkanCtx(ctx: vctx),
+    caches: VulkanCaches(ctx: vctx))
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -80,6 +106,13 @@ proc ingest*(engine: VulkanEngine, source: string) =
      "layout(push_constant) uniform KernelParams" in source:
     quit("Vulkan: multi-kernel source with scalar params is unsupported, " &
          "use one kernel per source when passing by-value scalars")
+  # Cached pipelines and per-kernel SPIR-V were built from the previous
+  # source: release the pipelines (driver shader-compile objects) and drop
+  # both caches before replacing the artifact.
+  for p in engine.caches.pipelineCache.mvalues:
+    p.destroyPipeline(engine.ctx.ctx)
+  engine.caches.pipelineCache.clear()
+  engine.caches.spirvCache.clear()
   engine.source = source
   engine.entryPoint = parseEntryPoint(source)
   engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
@@ -159,6 +192,11 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
   ## pointer args in order. By-value scalar args (size < 0) are packed into
   ## the push-constant range (codegen emits `layout(push_constant) uniform
   ## KernelParams`).
+  ##
+  ## The pipeline and per-kernel SPIR-V are cached on the engine (keyed by
+  ## kernel + arg shape); only the per-run buffers and push constants are
+  ## rebuilt, so ingest-once / run-many pays the driver shader-compile cost
+  ## once.
   var vctx = engine.ctx.ctx
 
   # blk is shader-baked (local_size_xyz). A default cfg (plain run) dispatches
@@ -176,35 +214,18 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
          " — launch config mismatch (blk is shader-baked on Vulkan)")
 
   # Entry point: reuse the ingested SPIR-V when the run kernel matches the
-  # baked entry; multi-kernel GLSL recompiles on demand with the kernel name.
-  var spirv = engine.spirv
+  # baked entry; multi-kernel GLSL compiles once per kernel and is cached.
   var entry = engine.entryPoint
-  if kernel != engine.entryPoint:
-    spirv = compileGlslToSpirV(engine.source, kernel)
+  var spirv: seq[uint32]
+  if kernel == engine.entryPoint:
+    spirv = engine.spirv
+  else:
+    if not engine.caches.spirvCache.hasKey(kernel):
+      engine.caches.spirvCache[kernel] = compileGlslToSpirV(engine.source, kernel)
+    spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 
   let outSize = abs(output.size)
-
-  # Create shader module from the ingested SPIR-V
-  let vkCreateShaderModule = cast[
-    proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
-         pAllocator: pointer,
-         pShaderModule: ptr VkShaderModule): VkResult {.cdecl.}
-  ](vctx.gpaAddr(vctx.instance, "vkCreateShaderModule"))
-  var smCI = VkShaderModuleCreateInfo(
-    sType: VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-    codeSize: csize_t(spirv.len * sizeof(uint32)),
-    pCode: spirv[0].addr
-  )
-  var shaderModule: VkShaderModule
-  check vkCreateShaderModule(vctx.device, smCI.addr, nil, shaderModule.addr)
-  defer:
-    let vkDestroyShaderModule = cast[
-      proc(device: VkDevice, shaderModule: VkShaderModule,
-           pAllocator: pointer) {.cdecl.}
-    ](vctx.gpaAddr(vctx.instance, "vkDestroyShaderModule"))
-    if shaderModule != nil and vkDestroyShaderModule != nil:
-      vkDestroyShaderModule(vctx.device, shaderModule, nil)
 
   # Inputs: by-value scalars (size < 0) → push constants; pointers → SSBOs.
   # Scalars never occupy a descriptor binding — they go in the push-constant
@@ -240,19 +261,45 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
       buf.dealloc(vctx)
     outBuf.dealloc(vctx)
 
-  # Entry point is baked at ingest (the GLSL has one compute entry)
-  var pipeline = vctx.createPipeline(shaderModule, inputBuffers.len + 1, entry,
-                                   pushConstBytes.len)
-  defer:
-    pipeline.destroyPipeline(vctx)
+  # The pipeline layout depends only on the shader module, the SSBO count
+  # (output at binding 0 + pointer inputs) and the push-constant size, so
+  # the fully-created pipeline is cached by (kernel, ssboCount,
+  # pushConstSize) and reused across runs: setArg rewrites the same
+  # descriptor set with each run's buffers.
+  let pipelineKey = (kernel, inputBuffers.len + 1, pushConstBytes.len)
+  if not engine.caches.pipelineCache.hasKey(pipelineKey):
+    # Create the shader module only when building a new pipeline; it is
+    # not needed on cache hits.
+    let vkCreateShaderModule = cast[
+      proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
+           pAllocator: pointer,
+           pShaderModule: ptr VkShaderModule): VkResult {.cdecl.}
+    ](vctx.gpaAddr(vctx.instance, "vkCreateShaderModule"))
+    var smCI = VkShaderModuleCreateInfo(
+      sType: VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      codeSize: csize_t(spirv.len * sizeof(uint32)),
+      pCode: spirv[0].addr
+    )
+    var shaderModule: VkShaderModule
+    check vkCreateShaderModule(vctx.device, smCI.addr, nil, shaderModule.addr)
+    defer:
+      let vkDestroyShaderModule = cast[
+        proc(device: VkDevice, shaderModule: VkShaderModule,
+             pAllocator: pointer) {.cdecl.}
+      ](vctx.gpaAddr(vctx.instance, "vkDestroyShaderModule"))
+      if shaderModule != nil and vkDestroyShaderModule != nil:
+        vkDestroyShaderModule(vctx.device, shaderModule, nil)
+    var pipeline = vctx.createPipeline(shaderModule, inputBuffers.len + 1, entry,
+                                     pushConstBytes.len)
+    engine.caches.pipelineCache[pipelineKey] = pipeline
 
   # Output first (binding 0), then pointer inputs
-  pipeline.setArg(0, outBuf, vctx)
+  engine.caches.pipelineCache[pipelineKey].setArg(0, outBuf, vctx)
   for i in 0 ..< inputBuffers.len:
-    pipeline.setArg(i + 1, inputBuffers[i], vctx)
+    engine.caches.pipelineCache[pipelineKey].setArg(i + 1, inputBuffers[i], vctx)
 
   # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
-  vctx.runKernel(pipeline,
+  vctx.runKernel(engine.caches.pipelineCache[pipelineKey],
                  [uint32(cfg.grid.x * blk.x),
                   uint32(cfg.grid.y * blk.y),
                   uint32(cfg.grid.z * blk.z)],
