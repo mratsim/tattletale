@@ -18,7 +18,7 @@ proc main() =
   # =============================================================================
   # Test 1: cat with varargs
   # =============================================================================
-  runTest "cat with varargs":
+  runCppTest "cat with varargs":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -31,7 +31,7 @@ proc main() =
   # =============================================================================
   # Test 2: cat with lvalue array + lvalue ArrayRef[Tensor]
   # =============================================================================
-  runTest "cat with lvalue array + lvalue ArrayRef":
+  runCppTest "cat with lvalue array + lvalue ArrayRef":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -45,7 +45,7 @@ proc main() =
   # =============================================================================
   # Test 3: cat with lvalue array + rvalue ArrayRef[Tensor]
   # =============================================================================
-  runTest "cat with lvalue array + rvalue ArrayRef":
+  runCppTest "cat with lvalue array + rvalue ArrayRef":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -59,7 +59,7 @@ proc main() =
   # =============================================================================
   # Test 4: cat with rvalue array + rvalue ArrayRef[Tensor]
   # =============================================================================
-  runTest "cat with rvalue array + rvalue ArrayRef":
+  runCppTest "cat with rvalue array + rvalue ArrayRef":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -72,7 +72,7 @@ proc main() =
   # =============================================================================
   # Test 5: cat with rvalue array + [sugar] implicit conversion ArrayRef[Tensor]
   # =============================================================================
-  runTest "cat with rvalue array + implicit conversion":
+  runCppTest "cat with rvalue array + implicit conversion":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -85,7 +85,7 @@ proc main() =
   # =============================================================================
   # Test 6: cat with lvalue seq + lvalue ArrayRef[Tensor]
   # =============================================================================
-  runTest "cat with lvalue seq + lvalue ArrayRef":
+  runCppTest "cat with lvalue seq + lvalue ArrayRef":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -99,7 +99,7 @@ proc main() =
   # =============================================================================
   # Test 7: cat with lvalue seq + rvalue ArrayRef[Tensor]
   # =============================================================================
-  runTest "cat with lvalue seq + rvalue ArrayRef":
+  runCppTest "cat with lvalue seq + rvalue ArrayRef":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -113,7 +113,7 @@ proc main() =
   # =============================================================================
   # Test 8: cat with rvalue seq + rvalue ArrayRef[Tensor]
   # =============================================================================
-  runTest "cat with rvalue seq + rvalue ArrayRef":
+  runCppTest "cat with rvalue seq + rvalue ArrayRef":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -126,7 +126,7 @@ proc main() =
   # =============================================================================
   # Test 9: cat with rvalue seq + [sugar] implicit conversion ArrayRef[Tensor]
   # =============================================================================
-  runTest "cat with @[a, b] syntax (implicit seq)":
+  runCppTest "cat with @[a, b] syntax (implicit seq)":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -140,7 +140,7 @@ proc main() =
   # Test stack with Tensor
   # =============================================================================
 
-  runTest "stack two tensors":
+  runCppTest "stack two tensors":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -151,7 +151,7 @@ proc main() =
       doAssert c.size(2) == 3
       true
 
-  runTest "stack many tensors":
+  runCppTest "stack many tensors":
     proc(): bool =
       let a = randn(2, 3, kFloat32)
       let b = randn(2, 3, kFloat32)
@@ -166,7 +166,7 @@ proc main() =
   # Test chunk with Tensor
   # =============================================================================
 
-  runTest "chunk tensor":
+  runCppTest "chunk tensor":
     proc(): bool =
       let a = ones(4, 3, kFloat32)
       let chunks = chunk(a, 2, dim = 0)
@@ -175,7 +175,7 @@ proc main() =
       doAssert chunks[1].size(0) == 2
       true
 
-  runTest "chunk single element":
+  runCppTest "chunk single element":
     proc(): bool =
       let a = ones(3, 4, kFloat32)
       let chunks = chunk(a, 3, dim = 0)
@@ -189,7 +189,7 @@ proc main() =
   # Test unbind with Tensor
   # =============================================================================
 
-  runTest "unbind along dim 0":
+  runCppTest "unbind along dim 0":
     proc(): bool =
       let a = ones(3, 4, 5, kFloat32)
       let parts = unbind(a, dim = 0)
@@ -199,7 +199,7 @@ proc main() =
       doAssert parts[0].size(1) == 5
       true
 
-  runTest "unbind along dim 1":
+  runCppTest "unbind along dim 1":
     proc(): bool =
       let a = ones(2, 3, 4, kFloat32)
       let parts = unbind(a, dim = 1)
@@ -208,7 +208,7 @@ proc main() =
       doAssert parts[0].size(1) == 4
       true
 
-  runTest "unbind default dim":
+  runCppTest "unbind default dim":
     proc(): bool =
       let a = ones(3, 4, 5, kFloat32)
       let parts = unbind(a)

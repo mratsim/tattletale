@@ -17,9 +17,14 @@
 template nimonly*(): untyped {.pragma.}
 template cudaName*(s: string): untyped {.pragma.}
 
-## Dummy data for the typed nature of the `cuda` macro. These define commonly used
-## CUDA specific names so that they produce valid Nim code in the context of a typed macro.
+# Dummy data for the typed nature of the `cuda` macro. These define commonly used
+# CUDA specific names so that they produce valid Nim code in the context of a typed macro.
 template global*() {.pragma.}
+template workgroup*(size: untyped): untyped {.pragma.}
+  ## `{.workgroup: (X, Y, Z).}` on a kernel proc bakes the workgroup size
+  ## into the generated shader, local_size_xyz on Vulkan or @workgroup_size
+  ## on WebGPU. Absent → per-backend default, Vulkan 256 or WebGPU 64,
+  ## both 1D.
 template device*() {.pragma.}
 template forceinline*() {.pragma.}
 

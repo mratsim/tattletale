@@ -16,7 +16,7 @@ proc main() =
   # Tensor basic lifetime
   # =============================================================================
 
-  runTest "stack-to-stack copy":
+  runCppTest "stack-to-stack copy":
     proc(): bool =
       let a = zeros(2, 3, kFloat32)
       let b = a
@@ -24,7 +24,7 @@ proc main() =
       doAssert a.equal(b)
       true
 
-  runTest "stack-to-stack move":
+  runCppTest "stack-to-stack move":
     proc(): bool =
       var a = zeros(2, 3, kFloat32)
       var b = move a
@@ -32,7 +32,7 @@ proc main() =
       doAssert b.isDefined()
       true
 
-  runTest "sink parameter":
+  runCppTest "sink parameter":
     proc(): bool =
       proc takeTensor(t: sink Tensor): Tensor =
         t
@@ -41,7 +41,7 @@ proc main() =
       doAssert b.dim() == 2 and b.size(0) == 2 and b.size(1) == 3
       true
 
-  runTest "seq[Tensor] add (copy)":
+  runCppTest "seq[Tensor] add (copy)":
     proc(): bool =
       var s: seq[Tensor] = @[]
       let a = zeros(2, 3, kFloat32)
@@ -49,7 +49,7 @@ proc main() =
       doAssert s[0].dim() == 2 and s[0].size(0) == 2 and s[0].size(1) == 3
       true
 
-  runTest "seq[Tensor] add (move)":
+  runCppTest "seq[Tensor] add (move)":
     proc(): bool =
       var s: seq[Tensor] = @[]
       var a = zeros(2, 3, kFloat32)
@@ -57,7 +57,7 @@ proc main() =
       doAssert s[0].dim() == 2 and s[0].size(0) == 2 and s[0].size(1) == 3
       true
 
-  runTest "seq[Tensor] indexed access after add":
+  runCppTest "seq[Tensor] indexed access after add":
     proc(): bool =
       var s: seq[Tensor] = @[]
       let a = zeros(2, 3, kFloat32)
@@ -66,7 +66,7 @@ proc main() =
       doAssert b.dim() == 2 and b.size(0) == 2 and b.size(1) == 3
       true
 
-  runTest "seq[Tensor] multiple elements":
+  runCppTest "seq[Tensor] multiple elements":
     proc(): bool =
       var s: seq[Tensor] = @[]
       for i in 0 ..< 10:
@@ -76,7 +76,7 @@ proc main() =
         doAssert s[i][0].item(float32) == float32(i)
       true
 
-  runTest "seq[Tensor] pre-alloc and assign":
+  runCppTest "seq[Tensor] pre-alloc and assign":
     proc(): bool =
       var s: seq[Tensor] = newSeq[Tensor](3)
       s[0] = zeros(2, kFloat32)
@@ -86,7 +86,7 @@ proc main() =
       doAssert s[1][0].item(float32) == 1.0
       true
 
-  runTest "seq[Tensor] with grow-in-place (realloc)":
+  runCppTest "seq[Tensor] with grow-in-place (realloc)":
     proc(): bool =
       var s: seq[Tensor] = @[]
       for i in 0 ..< 100:
@@ -100,7 +100,7 @@ proc main() =
   # Tensor in embedded objects
   # =============================================================================
 
-  runTest "object with Tensor field - stack copy":
+  runCppTest "object with Tensor field - stack copy":
     proc(): bool =
       type MyObj = object
         t: Tensor
@@ -111,7 +111,7 @@ proc main() =
       doAssert b.n == 42
       true
 
-  runTest "object with Tensor field - seq add (copy)":
+  runCppTest "object with Tensor field - seq add (copy)":
     proc(): bool =
       type MyObj = object
         t: Tensor
@@ -123,7 +123,7 @@ proc main() =
       doAssert s[0].n == 42
       true
 
-  runTest "object with Tensor field - seq add (move)":
+  runCppTest "object with Tensor field - seq add (move)":
     proc(): bool =
       type MyObj = object
         t: Tensor
@@ -135,7 +135,7 @@ proc main() =
       doAssert s[0].n == 42
       true
 
-  runTest "nested objects with Tensor":
+  runCppTest "nested objects with Tensor":
     proc(): bool =
       type Inner = object
         t: Tensor
@@ -148,7 +148,7 @@ proc main() =
       doAssert s[0].inner.t.dim() == 1 and s[0].inner.t.size(0) == 2
       true
 
-  runTest "ptr[T] containing Tensor":
+  runCppTest "ptr[T] containing Tensor":
     proc(): bool =
       type MyObj = object
         t: Tensor
@@ -158,7 +158,7 @@ proc main() =
       dealloc(p)
       true
 
-  runTest "ref object containing Tensor":
+  runCppTest "ref object containing Tensor":
     proc(): bool =
       type MyRef = ref object
         t: Tensor
@@ -172,7 +172,7 @@ proc main() =
   # Tensor refcount correctness
   # =============================================================================
 
-  runTest "multiple copies all valid":
+  runCppTest "multiple copies all valid":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = a
@@ -187,7 +187,7 @@ proc main() =
       doAssert c.equal(d)
       true
 
-  runTest "scope exit of copies":
+  runCppTest "scope exit of copies":
     proc(): bool =
       proc inner(): Tensor =
         ones(2, kFloat32)
@@ -196,7 +196,7 @@ proc main() =
       doAssert result[0].item(float32) == 1.0
       true
 
-  runTest "scope exit of seq[Tensor]":
+  runCppTest "scope exit of seq[Tensor]":
     proc(): bool =
       proc inner(): seq[Tensor] =
         var s: seq[Tensor] = @[]
@@ -211,7 +211,7 @@ proc main() =
       doAssert t1[0].item(float32) == 0.0
       true
 
-  runTest "seq element assignment after scope exit":
+  runCppTest "seq element assignment after scope exit":
     proc(): bool =
       type Wrapper = object
         t: Tensor
@@ -226,7 +226,7 @@ proc main() =
   # Tensor clone (deep copy)
   # =============================================================================
 
-  runTest "clone creates independent tensor":
+  runCppTest "clone creates independent tensor":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = clone(a)
@@ -235,7 +235,7 @@ proc main() =
       doAssert c[0, 0].item(float32) == 2.0
       true
 
-  runTest "clone vs copy share no memory":
+  runCppTest "clone vs copy share no memory":
     proc(): bool =
       let a = ones(2, 3, kFloat32)
       let b = clone(a)

@@ -1,7 +1,7 @@
 ## NVRTC: bool/uint32 kernel args via codegen pipeline
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bool_arg.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 # NOTE: res gets prepended → output MUST be first kernel param
 const kernelCode = cuda:
@@ -20,29 +20,35 @@ const kernelCode = cuda:
       else:
         output[tid] = uint32(int32(input[tid]) * factor)
 
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var engine = bkCuda.init()
 
-var a, b, r: array[8, uint32]
-for i in 0..7: a[i] = uint32(i + 1); b[i] = uint32((i + 1) * 2)
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
 
-# res=r → kernel gets (c=r, a, b, useAdd=true)
-nv.execute("condAdd", r, (a, b, true))
-echo "  condAdd(true): ", r
-for i in 0..7: doAssert r[i] == a[i] + b[i]
+  var a, b, r: array[8, uint32]
+  for i in 0..7: a[i] = uint32(i + 1); b[i] = uint32((i + 1) * 2)
 
-nv.execute("condAdd", r, (a, b, false))
-echo "  condAdd(false): ", r
-for i in 0..7: doAssert r[i] == a[i] - b[i]
+  # res=r → kernel gets (c=r, a, b, useAdd=true)
+  # chevrons: plain run is 1×1 since the engine carries no grid/blk.
+  # The kernel is tid-dependent, so launch 8 threads explicitly.
+  engine.run<<(1, 8)>>("condAdd", r, (a, b, true))
+  echo "  condAdd(true): ", r
+  for i in 0..7: doAssert r[i] == a[i] + b[i]
 
-nv.execute("scale", r, (a, 3'i32, false))
-echo "  scale(3, false): ", r
-for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3)
+  engine.run<<(1, 8)>>("condAdd", r, (a, b, false))
+  echo "  condAdd(false): ", r
+  for i in 0..7: doAssert r[i] == a[i] - b[i]
 
-nv.execute("scale", r, (a, 3'i32, true))
-echo "  scale(3, true): ", r
-for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3 - 1)
+  engine.run<<(1, 8)>>("scale", r, (a, 3'i32, false))
+  echo "  scale(3, false): ", r
+  for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3)
 
-echo "  OK (test_nvrtc_bool_arg)"
+  engine.run<<(1, 8)>>("scale", r, (a, 3'i32, true))
+  echo "  scale(3, true): ", r
+  for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3 - 1)
+
+  echo "  OK (test_nvrtc_bool_arg)"
+
+when isMainModule:
+  runTest()

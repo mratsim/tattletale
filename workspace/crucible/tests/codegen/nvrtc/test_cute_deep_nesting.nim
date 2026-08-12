@@ -4,7 +4,7 @@
 ## Tests that moderately deep generic type nesting (10+ levels) resolves
 ## without stack overflow. Real CuTe layouts rarely exceed 3-4 levels.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 type
   L0 = object
@@ -59,11 +59,14 @@ extra: [10'u32])
     # Chain of `.inner` through all 10 layers to reach L0.val
     output[0] = l.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.val
 
-var buf: array[1, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("deepNestedKernel", buf, ())
-doAssert buf[0] == 42, &"deep: {buf[0]}"
-echo "  OK — deep nesting (B22)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[1, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("deepNestedKernel", buf, ())
+  doAssert buf[0] == 42, &"deep: {buf[0]}"
+  echo "  OK — deep nesting (B22)"
+
+when isMainModule:
+  runTest()

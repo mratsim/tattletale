@@ -34,7 +34,7 @@ proc runTests*() =
   if total == 0:
     raise newException(AssertionDefect, "[ttt] No EXL3 codec fixtures found at " & FixtureDir)
 
-  runTest &"EXL3 decoder: {total} layers (K=5, cb=0) match production CUDA kernel":
+  runCppTest &"EXL3 decoder: {total} layers (K=5, cb=0) match production CUDA kernel":
     proc(): bool =
       var passed = 0
       var failed = 0

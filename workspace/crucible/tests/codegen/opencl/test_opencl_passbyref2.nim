@@ -10,7 +10,7 @@
 
 import std/strformat
 import std/strutils
-import workspace/crucible/src/codegen/cl
+import workspace/crucible
 
 type
   LargeStruct = object

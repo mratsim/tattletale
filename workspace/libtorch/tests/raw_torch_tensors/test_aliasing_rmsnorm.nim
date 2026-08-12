@@ -10,7 +10,7 @@ import
   ./utils/[torch_tensors_overloads, raw_libtorch_testutils]
 
 proc main() =
-  runTest "rms_norm weight aliasing":
+  runCppTest "rms_norm weight aliasing":
     proc(): bool =
       echo "=== Test: Does rms_norm modify weight tensor? ==="
       echo ""

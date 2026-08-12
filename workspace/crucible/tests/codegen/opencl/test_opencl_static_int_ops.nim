@@ -24,7 +24,7 @@
 ##   --outdir:build/tests/opencl --nimcache:nimcache/tests/opencl \
 ##   workspace/crucible/tests/codegen/opencl/test_opencl_static_int_ops.nim
 import std/[unittest]
-import workspace/crucible/src/codegen/cl
+import workspace/crucible
 
 # ── static-int type + genBinOp overload set (mirrors ceramic) ────────────
 type Int*[V: static int] = object
@@ -43,11 +43,11 @@ genBinOp(`+`)
 genBinOp(`*`)
 
 # ── kernel ───────────────────────────────────────────────────────────────
-# This backend binds kernel args in order: inputs first, output LAST.
+# This backend binds kernel args in order: output first (binding 0), then inputs.
 # The dynamic value comes from an input buffer (same shape as CUDA's).
 const kernelCode = opencl:
-  proc staticIntOps(dyn: ptr UncheckedArray[int32];
-                    res: ptr UncheckedArray[int32]) {.global.} =
+  proc staticIntOps(res: ptr UncheckedArray[int32];
+                    dyn: ptr UncheckedArray[int32]) {.global.} =
     let h = int(dyn[0])
     # func overloads (literal operand) — empty Int[N] tags, contained device fns
     let a = Int[10]() + 1        # Int[11]
@@ -73,23 +73,25 @@ const kernelCode = opencl:
     res[8] = int32(j)            # 1000
     res[9] = int32(k)            # 1000
 
-suite "OpenCL — static-int +/* overload set":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "OpenCL — static-int +/* overload set":
 
-  test "all five overload shapes compile, run, and produce the right values":
-    var dynArr: array[1, int32] = [100'i32]
-    var ctx = initOpenCL()
-    defer: ctx.shutdown()
-    let r = execOpenCL(ctx, kernelCode, "staticIntOps", outputBytes = 40,
-                     inputs = [(cast[pointer](dynArr[0].addr), 4)])
-    check r.len == 40
-    let out32 = cast[ptr array[10, int32]](r[0].addr)
-    check out32[0] == 11    # Int[10]() + 1
-    check out32[1] == 12    # 2 + Int[10]()
-    check out32[2] == 30    # Int[10]() * 3
-    check out32[3] == 40    # 4 * Int[10]()
-    check out32[4] == 5     # Int[2]() + Int[3]()
-    check out32[5] == 6     # Int[2]() * Int[3]()
-    check out32[6] == 110   # Int[10]() + 100
-    check out32[7] == 110   # 100 + Int[10]()
-    check out32[8] == 1000  # Int[10]() * 100
-    check out32[9] == 1000  # 100 * Int[10]()
+    test "all five overload shapes compile, run, and produce the right values":
+      var dynArr: array[1, int32] = [100'i32]
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelCode)
+      var out32: array[10, int32]
+      engine.run("staticIntOps", out32, (dynArr))
+      check out32[0] == 11    # Int[10]() + 1
+      check out32[1] == 12    # 2 + Int[10]()
+      check out32[2] == 30    # Int[10]() * 3
+      check out32[3] == 40    # 4 * Int[10]()
+      check out32[4] == 5     # Int[2]() + Int[3]()
+      check out32[5] == 6     # Int[2]() * Int[3]()
+      check out32[6] == 110   # Int[10]() + 100
+      check out32[7] == 110   # 100 + Int[10]()
+      check out32[8] == 1000  # Int[10]() * 100
+      check out32[9] == 1000  # 100 * Int[10]()
+
+when isMainModule:
+  runTest()

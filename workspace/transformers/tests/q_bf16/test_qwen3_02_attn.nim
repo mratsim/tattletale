@@ -87,7 +87,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   # Invariant: KV cache stores rotated keys
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "KV cache stores rotated keys":
+  runCppTest "KV cache stores rotated keys":
     proc(): bool =
       let attn = setupAttn()
       let rotary = attn.rotary
@@ -145,7 +145,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   # Invariant: KV cache stores unrotated values
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "KV cache stores unrotated values":
+  runCppTest "KV cache stores unrotated values":
     proc(): bool =
       let attn = setupAttn()
       var ctx = InferenceContext.init(
@@ -193,7 +193,7 @@ proc main() =
   # ────────────────────────────────────────────────────────────────────────
   # Multi-page attention write loop + gather
   # ────────────────────────────────────────────────────────────────────────
-  runTest "Multi-page write loop + gather (300 tokens = 1 full + 44 partial)":
+  runCppTest "Multi-page write loop + gather (300 tokens = 1 full + 44 partial)":
     proc(): bool =
       let attn = setupAttn()
       var ctx = InferenceContext.init(

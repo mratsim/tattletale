@@ -16,7 +16,7 @@ proc main() =
   # -----------------------------------------------------------------------
   # Operator precedence
 
-  runTest "Operator precedence: + and *":
+  runCppTest "Operator precedence: + and *":
     proc(): bool =
       let a = [[1, 2], [3, 4]].toTorchTensor()
       let b = -a
@@ -24,7 +24,7 @@ proc main() =
       doAssert b * (a + b) == [[0, 0], [0, 0]].toTorchTensor()
       true
 
-  runTest "Operator precedence: + and .abs":
+  runCppTest "Operator precedence: + and .abs":
     proc(): bool =
       let a = [[1, 2], [3, 4]].toTorchTensor()
       let b = -a
@@ -35,20 +35,20 @@ proc main() =
   # -----------------------------------------------------------------------
   # Tensor creation
 
-  runTest "Tensor creation: eye":
+  runCppTest "Tensor creation: eye":
     proc(): bool =
       let t = eye(2, kInt64)
       doAssert t == [[1, 0], [0, 1]].toTorchTensor()
       true
 
-  runTest "Tensor creation: zeros":
+  runCppTest "Tensor creation: zeros":
     proc(): bool =
       let shape = [2, 3]
       let t = zeros(shape, kFloat32)
       doAssert t == [[0.0'f32, 0.0, 0.0], [0.0'f32, 0.0, 0.0]].toTorchTensor()
       true
 
-  runTest "Tensor creation: linspace":
+  runCppTest "Tensor creation: linspace":
     proc(): bool =
       let steps = 120'i64
       let reft = toSeq(0..<120).map(x => float64(x)/float64(steps-1)).toTorchTensor()
@@ -57,7 +57,7 @@ proc main() =
       doAssert rel_error.item(float64) <= 1e-12
       true
 
-  runTest "Tensor creation: arange":
+  runCppTest "Tensor creation: arange":
     proc(): bool =
       let steps = 130'i64
       let step = 1.0/float64(steps)
@@ -71,14 +71,14 @@ proc main() =
   # -----------------------------------------------------------------------
   # Tensor utils
 
-  runTest "Tensor utils: Print":
+  runCppTest "Tensor utils: Print":
     proc(): bool =
       let shape = [2, 3, 4]
       let t = rand(shape, kfloat64)
       echo t
       true
 
-  runTest "Tensor utils: sort, argsort":
+  runCppTest "Tensor utils: sort, argsort":
     proc(): bool =
       let t = [2, 3, 4, 1, 5, 6].toTorchTensor()
       let
@@ -89,29 +89,29 @@ proc main() =
       doAssert args == [3, 0, 1, 2, 4, 5].toTorchTensor()
       true
 
-  runTest "Tensor utils: all, any":
+  runCppTest "Tensor utils: all, any":
     proc(): bool =
       true
 
-  runTest "Tensor utils: squeeze, unsqueeze":
+  runCppTest "Tensor utils: squeeze, unsqueeze":
     proc(): bool =
       true
 
   # -----------------------------------------------------------------------
   # Operations
 
-  runTest "Operations: add, addmv, addmm":
+  runCppTest "Operations: add, addmv, addmm":
     proc(): bool =
       true
 
-  runTest "Operations: matmul, mm, bmm":
+  runCppTest "Operations: matmul, mm, bmm":
     proc(): bool =
       true
 
   # -----------------------------------------------------------------------
   # FFT1D
 
-  runTest "FFT1D: item(Complex64)":
+  runCppTest "FFT1D: item(Complex64)":
     proc(): bool =
       let shape = [8]
       let c64input = rand(shape, kComplexF64)
@@ -120,7 +120,7 @@ proc main() =
       doAssert m.imag is float64
       true
 
-  runTest "FFT1D: fft, ifft":
+  runCppTest "FFT1D: fft, ifft":
     proc(): bool =
       let shape = [8]
       let c64input = rand(shape, kComplexF64)
@@ -132,7 +132,7 @@ proc main() =
       doAssert mean(rel_diff).item(float64) < 1e-12
       true
 
-  runTest "FFT1D: rfft, irfft":
+  runCppTest "FFT1D: rfft, irfft":
     proc(): bool =
       let shape = [8]
       let f64input = rand(shape, kfloat64)
@@ -147,7 +147,7 @@ proc main() =
   # -----------------------------------------------------------------------
   # FFT2D
 
-  runTest "FFT2D: fft2, ifft2":
+  runCppTest "FFT2D: fft2, ifft2":
     proc(): bool =
       let shape = [3, 5]
       let c64input = rand(shape, kComplexF64)
@@ -162,7 +162,7 @@ proc main() =
   # -----------------------------------------------------------------------
   # FFTND
 
-  runTest "FFTND: fftn, ifftn":
+  runCppTest "FFTND: fftn, ifftn":
     proc(): bool =
       let shape = [3, 4, 5]
       let c64input = rand(shape, kComplexF64)

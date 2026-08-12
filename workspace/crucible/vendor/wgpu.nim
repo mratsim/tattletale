@@ -12,15 +12,14 @@
 ##   - Low-level WGPU types, enums, descriptor structs
 ##   - Function imports from `libwgpu_native.so`
 ##
-## Public re-exports are consumed by `exec/wgpu_runtime.nim`.
+## Public re-exports are consumed by `engines/wgpu.nim`.
 ##
 ## Vendor directory layout:
 ##   vendor/wgpu/
 ##     lib/libwgpu_native.so
 ##     include/webgpu/webgpu.h
 
-import std/[macros, os]
-from std/strutils import normalize
+import std/os
 
 # ═══════════════════════════════════════════════════════════════════════
 # Path configuration
@@ -84,38 +83,21 @@ type
 const
   WGPUSType_ShaderSourceWGSL* = 0x00000002'u32
 
+const  # WGPUShaderStage (WGPUFlags = uint64)
+  WGPUShaderStageCompute* = 4'u64
+
+const  # WGPUBufferBindingType
+  WGPUBufferBindingTypeStorage* = 3'u32
+  WGPUBufferBindingTypeReadOnlyStorage* = 4'u32
+
 const  # WGPUMapMode (WGPUFlags = uint64)
-  wgpuMapModeNone*: uint64 = 0x0000000000000000'u64
   wgpuMapModeRead*: uint64 = 0x0000000000000001'u64
-  wgpuMapModeWrite*: uint64 = 0x0000000000000002'u64
 
   # WGPUBufferUsage (WGPUFlags = uint64)
-  wgpuBufferUsageNone*: uint64 = 0x0000000000000000'u64
   wgpuBufferUsageMapRead*: uint64 = 0x0000000000000001'u64
-  wgpuBufferUsageMapWrite*: uint64 = 0x0000000000000002'u64
   wgpuBufferUsageCopySrc*: uint64 = 0x0000000000000004'u64
   wgpuBufferUsageCopyDst*: uint64 = 0x0000000000000008'u64
-  wgpuBufferUsageIndex*: uint64 = 0x0000000000000010'u64
-  wgpuBufferUsageVertex*: uint64 = 0x0000000000000020'u64
-  wgpuBufferUsageUniform*: uint64 = 0x0000000000000040'u64
   wgpuBufferUsageStorage*: uint64 = 0x0000000000000080'u64
-  wgpuBufferUsageIndirect*: uint64 = 0x0000000000000100'u64
-  wgpuBufferUsageQueryResolve*: uint64 = 0x0000000000000200'u64
-
-type
-  WGPUMapMode* = uint64
-  WGPUBufferUsage* = uint64
-  WGPUStatus* {.size: sizeof(cuint).} = enum
-    wgpuStatusSuccess = 0
-    wgpuStatusError   = 1
-  WGPUBackendType* {.size: sizeof(cuint).} = enum
-    wgpuBackendNull        = 0
-    wgpuBackendVulkan      = 1
-    wgpuBackendMetal       = 2
-    wgpuBackendD3D12       = 3
-    wgpuBackendD3D11       = 4
-    wgpuBackendOpenGL      = 5
-    wgpuBackendOpenGLES    = 6
 
 # ═══════════════════════════════════════════════════════════════════════
 # Descriptor structs
@@ -132,10 +114,31 @@ type
     label*: WGPUStringView
     requiredFeatureCount*: csize_t
     requiredFeatures*: pointer
+    requiredLimits*: pointer
+    defaultQueue*: WGPUQueueDescriptor
+    deviceLostCallbackInfo*: WGPUDeviceLostCallbackInfo
+    uncapturedErrorCallbackInfo*: WGPUUncapturedErrorCallbackInfo
+
+  WGPUQueueDescriptor* {.bycopy.} = object
+    nextInChain*: pointer
+    label*: WGPUStringView
 
   WGPUStringView* {.bycopy.} = object
     data*: cstring
     length*: csize_t
+
+  WGPUAdapterInfo* {.bycopy.} = object
+    nextInChain*: ptr WGPUChainedStruct
+    vendor*: WGPUStringView
+    architecture*: WGPUStringView
+    device*: WGPUStringView
+    description*: WGPUStringView
+    backendType*: cuint
+    adapterType*: cuint
+    vendorID*: uint32
+    deviceID*: uint32
+    subgroupMinSize*: uint32
+    subgroupMaxSize*: uint32
 
   WGPUShaderModuleDescriptor* {.bycopy.} = object
     nextInChain*: pointer
@@ -248,10 +251,6 @@ type
     wgpuCallbackModeAllowProcessEvents = 2
     wgpuCallbackModeAllowSpontaneous   = 3
 
-  WGPUWaitStatus* {.size: sizeof(cuint).} = enum
-    wgpuWaitStatusSuccess  = 1
-    wgpuWaitStatusTimedOut = 2
-    wgpuWaitStatusError    = 3
 
   WGPURequestAdapterStatus* {.size: sizeof(cuint).} = enum
     wgpuRequestAdapterStatusSuccess          = 1
@@ -264,10 +263,6 @@ type
     wgpuRequestDeviceStatusCallbackCancelled = 2
     wgpuRequestDeviceStatusError             = 3
 
-  WGPUQueueWorkDoneStatus* {.size: sizeof(cuint).} = enum
-    wgpuQueueWorkDoneStatusSuccess          = 1
-    wgpuQueueWorkDoneStatusCallbackCancelled = 2
-    wgpuQueueWorkDoneStatusError             = 3
 
   WGPUBufferMapAsyncStatus* {.size: sizeof(cuint).} = enum
     wgpuBufferMapAsyncStatusSuccess                   = 1
@@ -280,6 +275,23 @@ type
     wgpuBufferMapAsyncStatusDeviceLost                  = 8
     wgpuBufferMapAsyncStatusDestroyedBeforeCallback     = 9
     wgpuBufferMapAsyncStatusUnknown                     = 10
+
+  WGPUErrorFilter* {.size: sizeof(cuint).} = enum
+    wgpuErrorFilterValidation  = 1
+    wgpuErrorFilterOutOfMemory = 2
+    wgpuErrorFilterInternal    = 3
+
+  WGPUErrorType* {.size: sizeof(cuint).} = enum
+    wgpuErrorTypeNoError       = 1
+    wgpuErrorTypeValidation    = 2
+    wgpuErrorTypeOutOfMemory   = 3
+    wgpuErrorTypeInternal      = 4
+    wgpuErrorTypeUnknown       = 5
+
+  WGPUPopErrorScopeStatus* {.size: sizeof(cuint).} = enum
+    wgpuPopErrorScopeStatusSuccess           = 1
+    wgpuPopErrorScopeStatusCallbackCancelled = 2
+    wgpuPopErrorScopeStatusError             = 3
 
   WGPURequestAdapterCallbackInfo* {.bycopy.} = object
     nextInChain*: pointer
@@ -295,10 +307,6 @@ type
     userdata1*: pointer
     userdata2*: pointer
 
-  WGPUFutureWaitInfo* {.bycopy.} = object
-    future*: WGPUFuture
-    completed*: bool
-
   WGPUBufferMapCallbackInfo* {.bycopy.} = object
     nextInChain*: pointer
     mode*: WGPUCallbackMode
@@ -306,7 +314,20 @@ type
     userdata1*: pointer
     userdata2*: pointer
 
-  WGPUQueueWorkDoneCallbackInfo* {.bycopy.} = object
+  WGPUDeviceLostCallbackInfo* {.bycopy.} = object
+    nextInChain*: pointer
+    mode*: WGPUCallbackMode
+    callback*: pointer
+    userdata1*: pointer
+    userdata2*: pointer
+
+  WGPUUncapturedErrorCallbackInfo* {.bycopy.} = object
+    nextInChain*: pointer
+    callback*: pointer
+    userdata1*: pointer
+    userdata2*: pointer
+
+  WGPUPopErrorScopeCallbackInfo* {.bycopy.} = object
     nextInChain*: pointer
     mode*: WGPUCallbackMode
     callback*: pointer
@@ -339,17 +360,22 @@ proc wgpuAdapterRequestDevice*(
     callbackInfo: WGPURequestDeviceCallbackInfo): WGPUFuture
   {.importc: "wgpuAdapterRequestDevice", dynlib: libWgpu.}
 
+proc wgpuAdapterGetInfo*(adapter: WGPUAdapter, info: ptr WGPUAdapterInfo)
+  {.importc: "wgpuAdapterGetInfo", dynlib: libWgpu.}
+
 proc wgpuInstanceProcessEvents*(instance: WGPUInstance)
   {.importc: "wgpuInstanceProcessEvents", dynlib: libWgpu.}
-proc wgpuInstanceWaitAny*(
-    instance: WGPUInstance,
-    futureCount: csize_t,
-    futures: ptr WGPUFutureWaitInfo,
-    timeoutNs: uint64): WGPUWaitStatus
-  {.importc: "wgpuInstanceWaitAny", dynlib: libWgpu.}
 
 proc wgpuDeviceGetQueue*(device: WGPUDevice): WGPUQueue
   {.importc: "wgpuDeviceGetQueue", dynlib: libWgpu.}
+
+# --- Error scopes ---
+proc wgpuDevicePushErrorScope*(device: WGPUDevice, filter: WGPUErrorFilter)
+  {.importc: "wgpuDevicePushErrorScope", dynlib: libWgpu.}
+
+proc wgpuDevicePopErrorScope*(device: WGPUDevice,
+                              callbackInfo: WGPUPopErrorScopeCallbackInfo): WGPUFuture
+  {.importc: "wgpuDevicePopErrorScope", dynlib: libWgpu.}
 
 # --- Shader & Pipeline ---
 proc wgpuDeviceCreateShaderModule*(device: WGPUDevice,
@@ -365,8 +391,6 @@ proc wgpuDeviceCreateBuffer*(device: WGPUDevice,
                               desc: ptr WGPUBufferDescriptor): WGPUBuffer
   {.importc: "wgpuDeviceCreateBuffer", dynlib: libWgpu.}
 
-proc wgpuBufferDestroy*(buffer: WGPUBuffer)
-  {.importc: "wgpuBufferDestroy", dynlib: libWgpu.}
 
 # --- Bind groups ---
 proc wgpuDeviceCreateBindGroupLayout*(device: WGPUDevice,
@@ -413,10 +437,6 @@ proc wgpuCommandEncoderFinish*(encoder: WGPUCommandEncoder,
   {.importc: "wgpuCommandEncoderFinish", dynlib: libWgpu.}
 
 # --- Queue submission ---
-proc wgpuQueueOnSubmittedWorkDone*(
-    queue: WGPUQueue,
-    callbackInfo: WGPUQueueWorkDoneCallbackInfo): WGPUFuture
-  {.importc: "wgpuQueueOnSubmittedWorkDone", dynlib: libWgpu.}
 
 proc wgpuQueueSubmit*(queue: WGPUQueue,
                        commandCount: csize_t,
@@ -434,7 +454,7 @@ proc wgpuQueueWriteBuffer*(
 
 proc wgpuBufferMapAsync*(
     buffer: WGPUBuffer,
-    mode: WGPUMapMode,
+    mode: uint64,
     offset: csize_t,
     size: csize_t,
     callbackInfo: WGPUBufferMapCallbackInfo): WGPUFuture
@@ -449,12 +469,9 @@ proc wgpuBufferUnmap*(buffer: WGPUBuffer)
   {.importc: "wgpuBufferUnmap", dynlib: libWgpu.}
 
 # --- Polling ---
-type
-  WGPUSubmissionIndex* = distinct uint64
-
 proc wgpuDevicePoll*(device: WGPUDevice,
                       wait: bool,
-                      submissionIndex: ptr WGPUSubmissionIndex): bool
+                      submissionIndex: ptr uint64): bool
   {.importc: "wgpuDevicePoll", dynlib: libWgpu.}
 
 proc wgpuCommandEncoderCopyBufferToBuffer*(

@@ -4,7 +4,7 @@
 ## In CuTe, factory procs like make_layout() return composed types.
 ## This tests that a generic proc returning another generic type works.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 const kernelCode = cuda:
   type
@@ -20,12 +20,15 @@ const kernelCode = cuda:
     output[0] = a.data[0]
     output[1] = a.data[3]
 
-var buf: array[2, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("pairReturnKernel", buf, ())
-doAssert buf[0] == 42, &"a[0]: {buf[0]}"
-doAssert buf[1] == 42, &"a[3]: {buf[1]}"
-echo "  OK — generic return type (B10)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[2, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("pairReturnKernel", buf, ())
+  doAssert buf[0] == 42, &"a[0]: {buf[0]}"
+  doAssert buf[1] == 42, &"a[3]: {buf[1]}"
+  echo "  OK — generic return type (B10)"
+
+when isMainModule:
+  runTest()

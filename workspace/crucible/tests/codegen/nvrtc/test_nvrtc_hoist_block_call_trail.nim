@@ -7,7 +7,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_block_call_trail.nim 2>&1
 
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 type
   MyView = object
@@ -35,18 +35,18 @@ const kernel = cuda:
     let v = makeView(input, n)
     deviceFn(v, output)
 
-when isMainModule:
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo "════════ kernel ═══════════════════════════════════════════════════════"
   echo kernel
   echo "═══════════════════════════════════════════════════════════════════════"
 
   var data = [1.0'f32, 2.0, 3.0, 4.0]
   var outBuf: array[1, float32]
-  var nv = initNvrtc(kernel)
-  nv.numBlocks = 1
-  nv.threadsPerBlock = 1
-  nv.compile()
-  nv.getPtx()
-  nv.execute("reproKernel", outBuf, (data, 4'i32))
+  var engine = bkCuda.init()
+  engine.ingest(kernel)
+  engine.run<<(1, 1)>>("reproKernel", outBuf, (data, 4'i32))
   doAssert abs(outBuf[0] - data[0]) < 1e-5, "output[0] = " & $outBuf[0] & " (expected " & $data[0] & ")"
   echo "  OK (test_nvrtc_hoist_block_call_trail)"
+
+when isMainModule:
+  runTest()

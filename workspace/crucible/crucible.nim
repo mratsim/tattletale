@@ -7,3 +7,22 @@
 
 ## GPU kernel code generator — takes Ceramic layout algebra and Positron kernel
 ## specifications and emits native GPU code (CUDA, OpenCL, Vulkan, WebGPU).
+##
+## Public API — a single import gives everything:
+##   import workspace/crucible
+##
+##   const kernelCode = cuda:                 # opencl: / vulkan: / webgpu:
+##     proc addKernel(a: ptr UncheckedArray[uint32]; ...) {.global.} = ...
+##
+##   var engine = bkCuda.init()               # the HwEngine concept + backends
+##   engine.ingest(kernelCode)
+##   engine.run<<(1, 128)>>("addKernel", out, (a, b))
+##
+## Re-exports: gpu_compiler (the `cuda:`/`opencl:`/`vulkan:`/`webgpu:` DSL
+## macros + builtins) and runtime/engines (HwEngine, init, ingest, getArtifact,
+## run, check, deviceName, BackendKind/bk*). Internal layers (passes, exec/,
+## engines/nvrtc legacy driver) stay deep by design.
+
+import ./src/codegen/gpu_compiler
+import ./src/runtime/engines
+export gpu_compiler, engines

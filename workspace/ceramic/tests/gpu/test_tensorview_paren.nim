@@ -7,7 +7,7 @@
 ##     workspace/ceramic/tests/gpu/test_issue_tensorview_paren.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/tensor_datatypes
@@ -26,16 +26,17 @@ const kernel = cuda:
     # ── Write the value to C[0] so the host can verify it ──
     C[0] = x
 
-suite "Ceramic - TensorView parentheses access":
-  test "tv(0, 5) computes linear index from coordinates":
-    var buf: array[64, float32]
-    buf[0] = -1.0'f32
-    buf[40] = 99.0'f32   # 0*1 + 5*8 = 40
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
-    # tv(0, 5) with LayoutLeft stride (1, 8) → linear index 0*1 + 5*8 = 40
-    check buf[0] == 99.0'f32
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Ceramic - TensorView parentheses access":
+    test "tv(0, 5) computes linear index from coordinates":
+      var buf: array[64, float32]
+      buf[0] = -1.0'f32
+      buf[40] = 99.0'f32   # 0*1 + 5*8 = 40
+      var engine = bkCuda.init()
+      engine.ingest(kernel)
+      engine.run<<(1, 1)>>("kernel", buf, ())
+      # tv(0, 5) with LayoutLeft stride (1, 8) → linear index 0*1 + 5*8 = 40
+      check buf[0] == 99.0'f32
+
+when isMainModule:
+  runTest()

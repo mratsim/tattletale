@@ -11,7 +11,7 @@ import
   workspace/libtorch/libtorch_testutils
 
 proc main() =
-  runTest "Tensor.shape returns openArray view":
+  runCppTest "Tensor.shape returns openArray view":
     proc(): bool =
       # This may crash with GCC v15.2.0 in the very first line `let t1 = zeros(64, 128, 256, kFloat32)`
       # but not with GCC v15.2.1 or Clang v22.1.x
@@ -71,7 +71,7 @@ proc main() =
       echo ""
       true
 
-  runTest "Tensor.data_ptr()":
+  runCppTest "Tensor.data_ptr()":
     proc(): bool =
       # Create a tensor
       let tensor = randn(2, 3, 4, kFloat32)
@@ -91,7 +91,7 @@ proc main() =
       echo ""
       true
 
-  runTest "from_blob preserves addresses":
+  runCppTest "from_blob preserves addresses":
     proc(): bool =
       # Create source data
       var sourceData: array[4, float32] = [1.0, 2.0, 3.0, 4.0]

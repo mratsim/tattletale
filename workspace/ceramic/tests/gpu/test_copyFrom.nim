@@ -6,7 +6,7 @@
 ##     workspace/ceramic/tests/gpu/test_copyFrom.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/tensor_datatypes

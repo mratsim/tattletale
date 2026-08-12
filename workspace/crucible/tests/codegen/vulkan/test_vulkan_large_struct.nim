@@ -11,7 +11,7 @@
 
 import std/strformat
 import std/strutils
-import workspace/crucible/src/codegen/vk
+import workspace/crucible
 
 type
   LargeStruct = object

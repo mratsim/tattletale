@@ -34,8 +34,7 @@
 ##       workspace/ceramic/tests/gpu/test_AR_complement_int_stride.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 import workspace/ceramic/src/int_tuples {.all.}
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
@@ -50,16 +49,17 @@ const kernelPartition = cuda:
     let t = local_partition(a, tl, int(threadIdx.x))
     Buf[0] = 1.0'f32   # written only if the kernel compiles and runs
 
-suite "Ceramic × Crucible — complement with a static Int stride":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Ceramic × Crucible — complement with a static Int stride":
 
-  test "NVRTC compiles and runs a local_partition with an Int[1] stride":
-    # The complement must emit concrete ints (static Int value lowered) so the
-    # kernel compiles and executes; a regression causes nv.compile() to abort.
-    var Buf: array[64, float32]
-    var nv = initNvrtc(kernelPartition)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 8
-    nv.compile()                 # aborts with NVRTC_ERROR_COMPILATION on a max(1, <empty struct>) regression
-    nv.getPtx()
-    nv.execute("partKernel", Buf, ())
-    check Buf[0] == 1.0'f32
+    test "NVRTC compiles and runs a local_partition with an Int[1] stride":
+      # The complement must emit concrete ints (static Int value lowered) so the
+      # kernel compiles and executes. A regression causes engine.ingest() to abort.
+      var Buf: array[64, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelPartition)
+      engine.run<<(1, 8)>>("partKernel", Buf, ())
+      check Buf[0] == 1.0'f32
+
+when isMainModule:
+  runTest()

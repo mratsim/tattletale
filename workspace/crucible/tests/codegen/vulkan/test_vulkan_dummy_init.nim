@@ -8,7 +8,7 @@
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_dummy_init.nim
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/vk
+import workspace/crucible
 
 type
   FixMe*[V: static int] = object
@@ -23,19 +23,23 @@ const kernelCode2 = vulkan:
     const tup {.genSym.} = (FixMe[1](), FixMe[8]())
     C[0] = 1'u32
 
-suite "Vulkan - dummy-field initializers":
-  test "single dummy struct const":
-    var buf: array[1, uint32]
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
-    echo kernelCode
-    let result = execVulkan(ctx, kernelCode, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Vulkan - dummy-field initializers":
+    test "single dummy struct const":
+      var engine = bkVulkan.init()
+      engine.ingest(kernelCode)
+      echo kernelCode
+      var buf: array[1, uint32]
+      engine.run("dummyKernel", buf, ())
+      check buf[0] == 1
 
-  test "tuple of dummy structs const":
-    var buf: array[1, uint32]
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
-    echo kernelCode2
-    let result = execVulkan(ctx, kernelCode2, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    test "tuple of dummy structs const":
+      var engine = bkVulkan.init()
+      engine.ingest(kernelCode2)
+      echo kernelCode2
+      var buf: array[1, uint32]
+      engine.run("dummyKernel", buf, ())
+      check buf[0] == 1
+
+when isMainModule:
+  runTest()

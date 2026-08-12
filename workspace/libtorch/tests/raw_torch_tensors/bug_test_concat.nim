@@ -17,7 +17,7 @@ proc main() =
   # =============================================================================
   # Test 1: cat with lvalue CppVector
   # =============================================================================
-  runTest "cat with lvalue CppVector":
+  runCppTest "cat with lvalue CppVector":
     proc(): bool =
       echo "Test 1: cat with lvalue CppVector"
       let a = randn(2, 3, kFloat32)
@@ -37,7 +37,7 @@ proc main() =
   # =============================================================================
   # Test 2: cat with lvalue array + lvalue ArrayRef[TorchTensor]
   # =============================================================================
-  runTest "cat with lvalue array + lvalue ArrayRef[TorchTensor]":
+  runCppTest "cat with lvalue array + lvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 2: cat with lvalue array + lvalue ArrayRef[TorchTensor]"
       let a = randn(2, 3, kFloat32)
@@ -56,7 +56,7 @@ proc main() =
   # =============================================================================
   # Test 3: cat with lvalue array + rvalue ArrayRef[TorchTensor]
   # =============================================================================
-  runTest "cat with lvalue array + rvalue ArrayRef[TorchTensor]":
+  runCppTest "cat with lvalue array + rvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 3: cat with lvalue array + rvalue ArrayRef[TorchTensor]"
       let a = randn(2, 3, kFloat32)
@@ -73,7 +73,7 @@ proc main() =
   # =============================================================================
   # Test 4: cat with rvalue array + rvalue ArrayRef[TorchTensor]
   # =============================================================================
-  runTest "cat with rvalue array + rvalue ArrayRef[TorchTensor]":
+  runCppTest "cat with rvalue array + rvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 4: cat with rvalue array + rvalue ArrayRef[TorchTensor]"
       let a = randn(2, 3, kFloat32)
@@ -89,7 +89,7 @@ proc main() =
   # =============================================================================
   # Test 5: cat with rvalue array + [sugar] implicit conversion ArrayRef[TorchTensor]
   # =============================================================================
-  runTest "cat with rvalue array + [sugar] implicit conversion ArrayRef[TorchTensor]":
+  runCppTest "cat with rvalue array + [sugar] implicit conversion ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 5: cat with rvalue array + [sugar] implicit conversion ArrayRef[TorchTensor]"
       let a = randn(2, 3, kFloat32)
@@ -105,7 +105,7 @@ proc main() =
   # =============================================================================
   # Test 6: cat with lvalue seq + lvalue ArrayRef[TorchTensor]
   # =============================================================================
-  runTest "cat with lvalue seq + lvalue ArrayRef[TorchTensor]":
+  runCppTest "cat with lvalue seq + lvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 6: cat with lvalue seq + lvalue ArrayRef[TorchTensor]"
       let a = randn(2, 3, kFloat32)
@@ -128,7 +128,7 @@ proc main() =
   # =============================================================================
   # Test 7: cat with lvalue seq + rvalue ArrayRef[TorchTensor]
   # =============================================================================
-  runTest "cat with lvalue seq + rvalue ArrayRef[TorchTensor]":
+  runCppTest "cat with lvalue seq + rvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 7: cat with lvalue seq + rvalue ArrayRef[TorchTensor]"
       let a = randn(2, 3, kFloat32)
@@ -149,7 +149,7 @@ proc main() =
   # =============================================================================
   # Test 8: cat with rvalue seq + rvalue ArrayRef[TorchTensor]
   # =============================================================================
-  runTest "cat with rvalue seq + rvalue ArrayRef[TorchTensor]":
+  runCppTest "cat with rvalue seq + rvalue ArrayRef[TorchTensor]":
     proc(): bool =
       echo "Test 8: cat with rvalue seq + rvalue ArrayRef[TorchTensor]"
       let a = randn(2, 3, kFloat32)
@@ -165,7 +165,7 @@ proc main() =
   # =============================================================================
   # Test 9: cat with rvalue seq + [sugar] implicit conversion ArrayRef[TorchTensor]
   # =============================================================================
-  runTest "cat with @[a, b] syntax (implicit seq)":
+  runCppTest "cat with @[a, b] syntax (implicit seq)":
     proc(): bool =
       echo "Test 9: cat with @[a, b] syntax (implicit seq)"
       let a = randn(2, 3, kFloat32)

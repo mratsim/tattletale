@@ -17,7 +17,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/nvrtc/repro_block_in_type.nim 2>&1
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 # ── Types (standalone — no ceramic dependency) ──────────────────────
 type

@@ -5,7 +5,7 @@
 ## This test verifies the mechanism works for externally-pulled functions.
 
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 # ── Functions defined OUTSIDE the cuda block (no {.device.}) ──
 
@@ -28,23 +28,29 @@ const kernelCode = cuda:
 
 # ── Test ──────────────────────────────────────────────────────────────
 
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var engine = bkCuda.init()
 
-var buf: array[8, int32]
-nv.execute("nodeviceKernel", buf, ())
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
 
-doAssert buf[0] == 2,  &"doubleIt(1) (no .device.): got {buf[0]}"
-doAssert buf[1] == 4,  &"doubleIt(2) (no .device.): got {buf[1]}"
-doAssert buf[2] == 6,  &"doubleIt(3) (no .device.): got {buf[2]}"
-doAssert buf[3] == 8,  &"doubleIt(4) (no .device.): got {buf[3]}"
+  var buf: array[8, int32]
+  # chevrons: plain run is 1×1 since the engine carries no grid/blk.
+  # The kernel is tid-dependent, so launch 4 threads explicitly.
+  engine.run<<(1, 4)>>("nodeviceKernel", buf, ())
 
-# addScaled(10, tid, 3): 10 + tid*3 -> 10, 13, 16, 19
-doAssert buf[4] == 10, &"addScaled(tid=0) (no .device.): got {buf[4]}"
-doAssert buf[5] == 13, &"addScaled(tid=1) (no .device.): got {buf[5]}"
-doAssert buf[6] == 16, &"addScaled(tid=2) (no .device.): got {buf[6]}"
-doAssert buf[7] == 19, &"addScaled(tid=3) (no .device.): got {buf[7]}"
+  doAssert buf[0] == 2,  &"doubleIt(1) (no .device.): got {buf[0]}"
+  doAssert buf[1] == 4,  &"doubleIt(2) (no .device.): got {buf[1]}"
+  doAssert buf[2] == 6,  &"doubleIt(3) (no .device.): got {buf[2]}"
+  doAssert buf[3] == 8,  &"doubleIt(4) (no .device.): got {buf[3]}"
 
-echo "  OK — functions WITHOUT {.device.} work (auto-annotated when pulled in)"
+  # addScaled(10, tid, 3): 10 + tid*3 -> 10, 13, 16, 19
+  doAssert buf[4] == 10, &"addScaled(tid=0) (no .device.): got {buf[4]}"
+  doAssert buf[5] == 13, &"addScaled(tid=1) (no .device.): got {buf[5]}"
+  doAssert buf[6] == 16, &"addScaled(tid=2) (no .device.): got {buf[6]}"
+  doAssert buf[7] == 19, &"addScaled(tid=3) (no .device.): got {buf[7]}"
+
+  echo "  OK — functions WITHOUT {.device.} work (auto-annotated when pulled in)"
+
+when isMainModule:
+  runTest()

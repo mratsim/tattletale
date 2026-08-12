@@ -22,13 +22,13 @@
 ##   ceramic's `complementScalar` (a `max(int, Int[V]) -> int` overload so Nim
 ##   accepts `max(1, Int[1])`, plus an untyped binder `max(1, stride)` spliced
 ##   into a plain proc that crucible pulls in). If crucible stops lowering the
-##   static value, nv.compile() fails with the NVRTC error above. When the value
+##   static value, engine.ingest() fails with the NVRTC error above. When the value
 ##   is lowered the kernel compiles and runs.
 ##
 ## Anti-regression contract: the kernel must compile and run with a concrete
 ## `max(1, stride) = 1`, i.e. crucible must lower the static `Int[N]` value at
 ## max emission. A regression that forwards `max(1, <empty struct>)` makes
-## nv.compile() fail with the NVRTC error above.
+## engine.ingest() fail with the NVRTC error above.
 ##
 ## Run:
 ##   cd tattletale
@@ -38,8 +38,7 @@
 ##       workspace/crucible/tests/codegen/nvrtc/test_nvrtc_complement_int_stride.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/nvrtc
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 
 # Int[N]-style empty object: value lives only in the static type parameter.
 type StaticInt[N: static int] = object
@@ -67,16 +66,17 @@ const kernelComplement = cuda:
     let r = complementLike(l)   # crucible pulls body -> max(1, IntN1{})
     Buf[0] = int32(r)           # concrete value when the static Int is lowered
 
-suite "crucible — complement via a static Int stride (max emission)":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "crucible — complement via a static Int stride (max emission)":
 
-  test "NVRTC compiles and runs a complement with a static Int stride":
-    # The static value must be lowered so max(1, stride) resolves to 1 and the
-    # kernel compiles; a regression causes nv.compile() to abort below.
-    var Buf: array[1, int32]
-    var nv = initNvrtc(kernelComplement)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()                 # aborts with NVRTC_ERROR_COMPILATION on a max(1, <empty struct>) regression
-    nv.getPtx()
-    nv.execute("kComplement", Buf, ())
-    check Buf[0] == 1
+    test "NVRTC compiles and runs a complement with a static Int stride":
+      # The static value must be lowered so max(1, stride) resolves to 1 and the
+      # kernel compiles. A regression causes engine.ingest() to abort below.
+      var Buf: array[1, int32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelComplement)
+      engine.run<<(1, 1)>>("kComplement", Buf, ())
+      check Buf[0] == 1
+
+when isMainModule:
+  runTest()

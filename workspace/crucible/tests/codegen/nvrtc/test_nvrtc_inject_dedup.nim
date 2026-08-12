@@ -14,7 +14,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_inject_dedup.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 type
   Wrapper* = object
@@ -41,14 +41,15 @@ const kernel = cuda:
       acc = acc + it_a.val * it_b.val
     C[0] = acc
 
-suite "Inject variable dedup":
-  test "no duplicate declarations after block flattening":
-    var output: array[1, int32]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", output, ())
-    # 10*1 + 20*2 + 30*3 = 10 + 40 + 90 = 140
-    check output[0] == 140
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Inject variable dedup":
+    test "no duplicate declarations after block flattening":
+      var output: array[1, int32]
+      var engine = bkCuda.init()
+      engine.ingest(kernel)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      # 10*1 + 20*2 + 30*3 = 10 + 40 + 90 = 140
+      check output[0] == 140
+
+when isMainModule:
+  runTest()
