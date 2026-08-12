@@ -104,9 +104,11 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
   var vctx = engine.ctx.ctx
 
   # blk is shader-baked (local_size_x): validate loudly (relax later)
-  if cfg.blk != engine.bakedBlk:
-    quit("Vulkan run blk=" & $cfg.blk & " != baked workgroup size " & $engine.bakedBlk &
+  if cfg.blk.x != engine.bakedBlk:
+    quit("Vulkan run blk=" & $cfg.blk.x & " != baked workgroup size " & $engine.bakedBlk &
          " — launch config mismatch (blk is shader-baked on Vulkan)")
+  if cfg.blk.y != 1 or cfg.blk.z != 1:
+    quit("Vulkan blk y/z must be 1 (shader-baked 1D workgroup)")
 
   # Entry point: reuse the ingested SPIR-V when the run kernel matches the
   # baked entry; multi-kernel GLSL recompiles on demand with the kernel name.
@@ -185,7 +187,7 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
     pipeline.setArg(i + 1, inputBuffers[i], vctx)
 
   # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
-  vctx.runKernel(pipeline, [uint32(cfg.grid * cfg.blk)], [uint32(cfg.blk), 1'u32, 1'u32],
+  vctx.runKernel(pipeline, [uint32(cfg.grid.x * cfg.blk.x)], [uint32(cfg.blk.x), 1'u32, 1'u32],
                  if pushConstBytes.len > 0: pushConstBytes[0].addr else: nil,
                  pushConstBytes.len)
 
@@ -201,4 +203,4 @@ template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: unty
 
 template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped): untyped =
   run(engine, kernel, output, args,
-      (grid: engine.grid, blk: engine.blk, sharedMem: 0, stream: 0))
+      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))

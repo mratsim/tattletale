@@ -98,9 +98,11 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   let outSize = abs(output.size)
 
   # blk is shader-baked (@workgroup_size): validate loudly (relax later)
-  if cfg.blk != engine.bakedBlk:
-    quit("WebGPU run blk=" & $cfg.blk & " != baked workgroup size " & $engine.bakedBlk &
+  if cfg.blk.x != engine.bakedBlk:
+    quit("WebGPU run blk=" & $cfg.blk.x & " != baked workgroup size " & $engine.bakedBlk &
          " — launch config mismatch (blk is shader-baked on WebGPU)")
+  if cfg.blk.y != 1 or cfg.blk.z != 1:
+    quit("WebGPU blk y/z must be 1 (shader-baked 1D workgroup)")
 
   # 1. Create shader module (chained WGPUShaderSourceWGSL)
   var wgslView = WGPUStringView(data: cstring(engine.source), length: engine.source.len.csize_t)
@@ -260,7 +262,7 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   wgpuComputePassEncoderSetPipeline(pass, pipeline)
   wgpuComputePassEncoderSetBindGroup(pass, 0, bg, 0, nil)
   # grid = dispatchWorkgroups count
-  wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid), 1'u32, 1'u32)
+  wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid.x), 1'u32, 1'u32)
   wgpuComputePassEncoderEnd(pass)
   wgpuCommandEncoderCopyBufferToBuffer(encoder, outBuf, 0, stagingBuf, 0, outSize.csize_t)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
@@ -299,4 +301,4 @@ template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untype
 
 template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped): untyped =
   run(engine, kernel, output, args,
-      (grid: engine.grid, blk: engine.blk, sharedMem: 0, stream: 0))
+      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))

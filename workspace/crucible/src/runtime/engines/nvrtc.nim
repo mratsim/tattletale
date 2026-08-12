@@ -8,10 +8,11 @@
 
 ## CudaEngine — NVRTC JIT + CUDA driver execution (moved from codegen/nvrtc.nim).
 ##
-## The NVRTC JIT driver (initNvrtc/compile/getPtx/load and the low-level
-## `execute` templates for explicit 2D/3D extents) is runtime code and lives
-## on here, decoupled from the compile-time DSL: this module no longer
-## imports `codegen/gpu_compiler`.
+## The NVRTC JIT driver helpers (initNvrtc/compile/getPtx/load) are private
+## engine internals now: `ingest` compiles via NVRTC and `runImpl` loads the
+## module and launches. Launch extents come from the chevron `LaunchConfig`
+## (grid/blk are full 3D Dim3) — there is no public low-level `execute`
+## entry point. This module no longer imports `codegen/gpu_compiler`.
 ##
 ## The engine is a `ref object` with fields directly (no XxxObj indirection).
 ## Resources live in RAII value fields (`NVRTC` carries its own `=destroy`)
@@ -32,15 +33,7 @@ import ../engines
 ## Debug output (driver version, PTX size, files) — controlled by -d:debug
 
 type
-  NVRTC* = object
-    numBlocks* = 32
-    threadsPerBlock* = 128
-    # NOTE: there are intentionally NO per-launch `gridDim`/`blockDim` fields on
-    # this object. 2D/3D launch extents are passed explicitly to the `execute`
-    # template overload that accepts them (see below), so the NVRTC object carries
-    # no cross-call launch state: a later scalar `execute` on a reused object can
-    # never inherit stale 2D/3D extents, and an incomplete extent is rejected at
-    # the call site instead of silently collapsing to 1D.
+  NVRTC = object
     name*: string # Name of the program (of the generated in memory CUDA file)
     prog*: nvrtcProgram
     log*: string # The compilation log
@@ -53,11 +46,13 @@ type
 
 proc `=destroy`(nvrtc: NVRTC) =
   if nvrtc.module.pointer != nil:
+    check cuCtxSetCurrent(nvrtc.context)
     check cuModuleUnload nvrtc.module
   if nvrtc.context.pointer != nil:
+    check cuCtxSetCurrent(nvrtc.context)
     check cuCtxDestroy nvrtc.context
 
-proc initNvrtc*(cuda: string, name = "sample.cu"): NVRTC =
+proc initNvrtc(cuda: string, name = "sample.cu"): NVRTC =
   ## Initializes an NVRTC object for the given program `cuda`
   when defined(debug):
     var x: cint
@@ -100,7 +95,7 @@ proc initNvrtc*(cuda: string, name = "sample.cu"): NVRTC =
                  context: context)
 
 
-proc log*(nvrtc: var NVRTC) =
+proc log(nvrtc: var NVRTC) =
   ## Retrieve the compilation log.
   var logSize: csize_t
   check nvrtcGetProgramLogSize(nvrtc.prog, logSize)
@@ -110,7 +105,7 @@ proc log*(nvrtc: var NVRTC) =
   check nvrtcGetProgramLog(nvrtc.prog, log)
   nvrtc.log = $log # usually empty if no issues found by the compiler
 
-proc compile*(nvrtc: var NVRTC) =
+proc compile(nvrtc: var NVRTC) =
   # Compile the program
   # Note: Can specify GPU target architecture explicitly with '-arch' flag.
   var options = @[
@@ -133,7 +128,7 @@ proc compile*(nvrtc: var NVRTC) =
     echo "------------------------------"
   check compileResult
 
-proc getPtx*(nvrtc: var NVRTC) =
+proc getPtx(nvrtc: var NVRTC) =
   ## Obtain PTX from the program.
   var ptxSize: csize_t
   check nvrtcGetPTXSize(nvrtc.prog, ptxSize)
@@ -148,7 +143,7 @@ proc getPtx*(nvrtc: var NVRTC) =
     writeFile(getDebugPath("kernel.ptx"), nvrtc.ptx)
     #echo "-------------------- PTX --------------------\n", nvrtc.ptx
 
-proc load*(nvrtc: var NVRTC) =
+proc load(nvrtc: var NVRTC) =
   # After getting the PTX...
   var error_log = newString(8192)
   var info_log = newString(8192)
@@ -203,6 +198,16 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
   ## The output is always a device buffer, uploaded before launch and read
   ## back after (in-place β·C works). The output is the kernel's first
   ## parameter (binding 0 — output first, per CONVENTIONS.md).
+  ## The driver API operates on the thread-local current context, so the
+  ## engine's context is made current explicitly on every launch (with 2+
+  ## engines alive the wrong context could otherwise be targeted).
+  check cuCtxSetCurrent(engine.nvrtc.context)
+  doAssert cfg.grid.x > 0 and cfg.grid.y > 0 and cfg.grid.z > 0,
+    "CUDA grid extent must have every axis > 0, got " &
+    $cfg.grid.x & ", " & $cfg.grid.y & ", " & $cfg.grid.z
+  doAssert cfg.blk.x > 0 and cfg.blk.y > 0 and cfg.blk.z > 0,
+    "CUDA block extent must have every axis > 0, got " &
+    $cfg.blk.x & ", " & $cfg.blk.y & ", " & $cfg.blk.z
   if not engine.nvrtc.moduleLoaded:
     engine.nvrtc.load()
   check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
@@ -248,8 +253,8 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
 
   check cuLaunchKernel(
     engine.nvrtc.kernel,
-    uint32(cfg.grid), 1'u32, 1'u32,
-    uint32(cfg.blk), 1'u32, 1'u32,
+    uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z),
+    uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z),
     uint32(cfg.sharedMem),
     stream,
     params[0].addr, nil)
@@ -276,72 +281,4 @@ template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untype
 
 template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped): untyped =
   run(engine, kernel, output, args,
-      (grid: engine.grid, blk: engine.blk, sharedMem: 0, stream: 0))
-
-# ═════════════════════════════════════════════════════════════════════════
-# Low-level NVRTC execute templates (kept for explicit 2D/3D launch extents)
-# ═════════════════════════════════════════════════════════════════════════
-
-template execute*(nvrtc: var NVRTC, fn: string, res, inputs: typed, sharedMemSize: typed) =
-  ## Load the generated PTX, get the target kernel `fn` and execute it with the
-  ## `res` and `inputs`.
-  ##
-  ## The launch configuration is resolved afresh from the scalar `numBlocks` and
-  ## `threadsPerBlock` fields on every call: a 1D `(numBlocks, 1, 1)` grid with a
-  ## `(threadsPerBlock, 1, 1)` block. Because the NVRTC object stores no 2D/3D
-  ## launch state, a scalar launch can never inherit stale extents from an earlier
-  ## explicit-dims launch on the same object. For 2D/3D launches pass explicit
-  ## `gridDim`/`blockDim` extents to the dedicated overload below.
-
-  if not nvrtc.moduleLoaded:
-    nvrtc.load()
-
-  check cuModuleGetFunction(nvrtc.kernel, nvrtc.module, fn)
-
-  # 1D launch from the scalar fields; y/z default to 1.
-  let grid = dim3(nvrtc.numBlocks)
-  let blk = dim3(nvrtc.threadsPerBlock)
-
-  # now execute the kernel
-  execCuda(nvrtc.kernel, grid, blk, res, inputs, sharedMemSize)
-
-  # synchronize so that e.g. `printf` statements will be printed before we (possibly) quit
-  check cuCtxSynchronize() #
-
-template execute*(nvrtc: var NVRTC, fn: string, res, inputs: typed) =
-  ## 1D convenience overload: see the shared-memory variant above.
-  nvrtc.execute(fn, res, inputs, 0)
-
-template execute*(nvrtc: var NVRTC, fn: string,
-                  gridDim, blockDim: CudaDim3,
-                  res, inputs: typed, sharedMemSize: typed) =
-  ## Load the generated PTX, get the target kernel `fn` and execute it with the
-  ## `res` and `inputs`, using `gridDim`/`blockDim` as the explicit 2D/3D launch
-  ## extents. The extents are passed per call -- nothing is stored on `nvrtc` --
-  ## so a later scalar launch on the same object is unaffected. Every axis of both
-  ## extents must be >= 1 (CUDA's valid range); an incomplete extent such as a
-  ## y/z-only entry is rejected here rather than silently collapsing to 1D.
-
-  if not nvrtc.moduleLoaded:
-    nvrtc.load()
-
-  check cuModuleGetFunction(nvrtc.kernel, nvrtc.module, fn)
-
-  doAssert gridDim.x > 0 and gridDim.y > 0 and gridDim.z > 0,
-    "explicit grid extent must have every axis >= 1, got " &
-    $gridDim.x & ", " & $gridDim.y & ", " & $gridDim.z
-  doAssert blockDim.x > 0 and blockDim.y > 0 and blockDim.z > 0,
-    "explicit block extent must have every axis >= 1, got " &
-    $blockDim.x & ", " & $blockDim.y & ", " & $blockDim.z
-
-  # now execute the kernel
-  execCuda(nvrtc.kernel, gridDim, blockDim, res, inputs, sharedMemSize)
-
-  # synchronize so that e.g. `printf` statements will be printed before we (possibly) quit
-  check cuCtxSynchronize() #
-
-template execute*(nvrtc: var NVRTC, fn: string,
-                  gridDim, blockDim: CudaDim3,
-                  res, inputs: typed) =
-  ## 2D/3D convenience overload: see the shared-memory variant above.
-  nvrtc.execute(fn, gridDim, blockDim, res, inputs, 0)
+      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))

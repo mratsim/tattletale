@@ -11,9 +11,10 @@
 ##   engine.ingest(source)                               # compile; drops previous artifact
 ##   let artifact = engine.getArtifact()                 # PTX / OpenCL src / SPIR-V / WGSL
 ##   engine.run("kernel", output, (alpha, A, beta, B))   # plain: engine-default geometry (grid/blk fields)
-##   engine.run<<(2, 128)>>("kernel", output, args)  # chevrons: explicit 2-slot
-##   engine.run<<(2, 128, 4096)>>(...)               # + sharedMem
-##   engine.run<<(grid: 2, blk: 128, sharedMem: 4096, stream: 0)>>(...)  # named (colon syntax)
+##   engine.run<<(2, 128)>>("kernel", output, args)              # 1D unchanged: (grid, blk)
+##   engine.run<<((2,3), (128,2))>>(...)                         # 2D: tuple extents, padded to 3D
+##   engine.run<<(grid: (cta_m, cta_n), blk: 256)>>(...)         # named, mixed tuple/int
+##   engine.run<<(blk: 128)>>(...)                               # named subset (grid=1, sharedMem=0, stream=0 defaults)
 ##   engine.ingest(otherSource)                          # reuse: invalidate + recompile
 ##   # =destroy via RAII resource fields at ref death
 ##
@@ -28,6 +29,8 @@
 ## Chevron gotchas (verified Nim 2.2.10):
 ##   - `run<<` as a single identifier is a parser minefield — always write
 ##     `engine.run<<(cfg)>>(...)`.
+##   - `<<` is a macro now (was 3 proc overloads): it normalizes the untyped
+##     config AST — int or tuple per axis, positional 2..4 or named subset.
 ##   - The `run` accessor is a proc (never a template — templates hijack
 ##     `engine.run("kernel", ...)` before overload resolution).
 ##   - RunSugar is transient: created per `engine.run` access, holds the ref
@@ -46,14 +49,25 @@ export gpu_types
 # ═════════════════════════════════════════════════════════════════════════
 
 type
-  LaunchConfig* = tuple[grid, blk, sharedMem, stream: int]
+  Dim3* = object
+    ## A 3D launch extent — used for both the grid and the block axes of a
+    ## launch. Nominal object (no structural collision with user tuples);
+    ## field defaults make `Dim3(x: n)` → (n, 1, 1).
+    x*, y*, z* = 1
+
+  LaunchConfig* = object
     ## Launch geometry — per-backend interpretation:
-    ##   grid      → CUDA gridDim / OpenCL global (= grid·blk) / Vulkan
-    ##               vkCmdDispatch group count / WebGPU dispatchWorkgroups
+    ##   grid      → CUDA gridDim / OpenCL global-per-axis (= grid·blk) /
+    ##               Vulkan vkCmdDispatch group count / WebGPU
+    ##               dispatchWorkgroups
     ##   blk       → CUDA blockDim / OpenCL local_work_size / shader-baked
     ##               (validated loudly) on Vulkan/WebGPU
     ##   sharedMem → CUDA dynamic smem / OpenCL __local (ignored elsewhere)
     ##   stream    → CUDA-only for now
+    ## y/z are CUDA-only for now; OpenCL/Vulkan/WebGPU consume the x axis
+    ## (multi-axis work sizes land in a follow-up).
+    grid*, blk* = default(Dim3)
+    sharedMem*, stream* = 0
 
   ArgBlob* = tuple[data: pointer, size: int]
     ## Type-erased internal layer:
@@ -158,17 +172,58 @@ proc run*[E](engine: E): RunSugar[E] =
   ## `engine.run` → this accessor. No clash.
   RunSugar[E](engine: engine)
 
-proc `<<`*[E](r: RunSugar[E], cfg: tuple[grid, blk: int]): LaunchProxy[E] =
-  LaunchProxy[E](engine: r.engine,
-                 cfg: (grid: cfg[0], blk: cfg[1], sharedMem: 0, stream: 0))
+proc makeProxy[E](engine: E, cfg: LaunchConfig): LaunchProxy[E] {.inline.} =
+  ## E is inferred from `engine` — the `<<` macro emits a clean call without
+  ## spelling the generic explicitly (Nim object constructors cannot infer
+  ## generic params, so the inference lives in this helper instead).
+  LaunchProxy[E](engine: engine, cfg: cfg)
 
-proc `<<`*[E](r: RunSugar[E], cfg: tuple[grid, blk, sharedMem: int]): LaunchProxy[E] =
-  LaunchProxy[E](engine: r.engine,
-                 cfg: (grid: cfg[0], blk: cfg[1], sharedMem: cfg[2], stream: 0))
+# Extent conversion — the 4 inline overloads are the whole surface. Private:
+# the `<<` macro reaches them via bindSym, so they stay off the public API.
+proc dim3(x: int): Dim3 {.inline.} = Dim3(x: x)
+proc dim3(t: tuple[a: int]): Dim3 {.inline.} = Dim3(x: t.a)
+proc dim3(t: tuple[a, b: int]): Dim3 {.inline.} = Dim3(x: t.a, y: t.b)
+proc dim3(t: tuple[a, b, c: int]): Dim3 {.inline.} = Dim3(x: t.a, y: t.b, z: t.c)
 
-proc `<<`*[E](r: RunSugar[E], cfg: tuple[grid, blk, sharedMem, stream: int]): LaunchProxy[E] =
-  LaunchProxy[E](engine: r.engine,
-                 cfg: (grid: cfg[0], blk: cfg[1], sharedMem: cfg[2], stream: cfg[3]))
+macro `<<`*[E](r: RunSugar[E], cfg: untyped): untyped =
+  ## Chevron launch-config sugar — field mapping only: named fields are read
+  ## by name (any order; defaults grid=blk=1, sharedMem=stream=0); positional
+  ## forms take 2..4 args in (grid, blk, sharedMem, stream) order. Each extent
+  ## is emitted as `dim3(<raw expr>)` — the overloads convert int / 1-tuple /
+  ## 2-tuple / 3-tuple (extents are positional tuples).
+  ## Mixed named/positional, unknown named fields and positional counts outside
+  ## 2..4 are rejected loudly at compile time.
+  let cfgAst = cfg
+  var gridN, blkN, smN, stN: NimNode
+  let named = cfgAst.kind in {nnkPar, nnkTupleConstr} and
+              cfgAst.len > 0 and cfgAst[0].kind == nnkExprColonExpr
+  if named:
+    for ch in cfgAst:
+      doAssert ch.kind == nnkExprColonExpr,
+        "chevron: mixing named and positional fields is not allowed: " & cfgAst.repr
+      let key = ch[0].strVal
+      case key
+      of "grid": gridN = ch[1]
+      of "blk":  blkN  = ch[1]
+      of "sharedMem": smN = ch[1]
+      of "stream":    stN = ch[1]
+      else: doAssert false, "chevron: unknown field '" & ch[0].repr & "'"
+    if gridN.isNil: gridN = newLit(1)
+    if blkN.isNil:  blkN  = newLit(1)
+    if smN.isNil:   smN   = newLit(0)
+    if stN.isNil:   stN   = newLit(0)
+  else:
+    doAssert cfgAst.len in 2..4,
+      "chevron positional form needs 2..4 args, got: " & cfgAst.repr
+    gridN = cfgAst[0]
+    blkN  = cfgAst[1]
+    smN   = if cfgAst.len >= 3: cfgAst[2] else: newLit(0)
+    stN   = if cfgAst.len >= 4: cfgAst[3] else: newLit(0)
+  let dim3Sym = bindSym"dim3"
+  result = quote do:
+    makeProxy(`r`.engine, LaunchConfig(
+      grid: `dim3Sym`(`gridN`), blk: `dim3Sym`(`blkN`),
+      sharedMem: `smN`, stream: `stN`))
 
 macro `>>`*(proxy: typed, call: untyped): untyped =
   ## Builds the actual run call: `engine.run(kernel, output, args, cfg)`.

@@ -110,9 +110,9 @@ proc runImpl(engine: OpenCLEngine, kernel: string, output: ArgBlob,
     else:
       kern.setArg(i + 1, -blobs[i].size, blobs[i].data)
 
-  # global = grid·blk work-items, local = blk
-  let globalSize = [cl_size_t(cfg.grid * cfg.blk)]
-  let localSize = [cl_size_t(cfg.blk)]
+  # global = grid.x·blk.x work-items, local = blk.x (x axis only — y/z land in a follow-up)
+  let globalSize = [cl_size_t(cfg.grid.x * cfg.blk.x)]
+  let localSize = [cl_size_t(cfg.blk.x)]
   kern.runKernel(globalSize, localSize)
 
   # Read output
@@ -126,4 +126,4 @@ template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: unty
 
 template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: untyped): untyped =
   run(engine, kernel, output, args,
-      (grid: engine.grid, blk: engine.blk, sharedMem: 0, stream: 0))
+      LaunchConfig(grid: Dim3(x: engine.grid), blk: Dim3(x: engine.blk)))

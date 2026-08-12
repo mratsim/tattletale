@@ -8,16 +8,6 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/crucible
-# The legacy NVRTC driver (initNvrtc/execute) is not re-exported by engines.nim
-# anymore (clean engine API only) — import it directly; order matters:
-# engines must be processed first so its `import ./engines/nvrtc {.all.}`
-# sees a fully-processed nvrtc module (the engines ↔ nvrtc circular import
-# only compiles in that direction); the direct import below is then cached.
-import workspace/crucible/src/runtime/engines/nvrtc
-# TODO(engine): this benchmark harness launches with a 2D grid
-# (dim3(num_cta_m, num_cta_n)) — the 1D engine LaunchConfig cannot express
-# it, so it stays on the internal NVRTC execute path on purpose.
-import workspace/crucible/src/runtime/exec/cuda_runtime
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  XOR hash — exact bit-level fingerprint
@@ -146,9 +136,7 @@ proc run_gemm_and_validate_colmajor*(
     echo &"    [{i+1:>2}/{numConfigs}]  {c.M:>4}x{c.N:>4}x{c.K:<4}  α={c.alpha:.3f}"
 
   # ── 3. Compile kernel (once) ──────────────────────────────────────
-  var nv = initNvrtc(kernelSource)
-  nv.compile()
-  nv.getPtx()
+  var engine = bkCuda.init(kernelSource)
 
   var overallMaxAbsErr: float32 = 0.0'f32
 
@@ -175,8 +163,8 @@ proc run_gemm_and_validate_colmajor*(
     # 2D grid (cta_m, cta_n) x 256 threads — the launch contract the
     # kernel expresses via blockIdx.x/blockIdx.y and its 256-thread
     # layouts (shared by the sgemm_1/sgemm_2 ports).
-    nv.execute(kernelName, dim3(num_cta_m, num_cta_n), dim3(threadsPerBlock),
-               gpuC, (A, B, m32, n32, k32, alpha, 0.0'f32))
+    engine.run<<((num_cta_m, num_cta_n), threadsPerBlock)>>(
+               kernelName, gpuC, (A, B, m32, n32, k32, alpha, 0.0'f32))
 
     # 4d. Validate against reference
     var cfgMaxAbs: float32 = 0.0'f32
