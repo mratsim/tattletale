@@ -24,7 +24,7 @@
 ## public surface that calls them.
 {.experimental: "codeReordering".}
 
-import std/strutils
+import std/[monotimes, os, strutils, times]
 
 import workspace/crucible/vendor/wgpu
 import ../exec/wgpu_runtime
@@ -345,20 +345,37 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   defer:
     wgpuCommandBufferRelease(cmdBuf)
 
-  # 9. Request map + poll to process callback — capture the map status
-  var mapData = MapDoneData(done: false, resultBytes: outSize,
-                            status: wgpuBufferMapAsyncStatusUnknown)
+  # 9. Request map + poll to process callback, capture the map status.
+  # mapData is heap-allocated: wgpu-native may defer the callback past the
+  # poll, so it must never write into dead stack memory. The caller owns the
+  # block: it polls, reads, then frees. The callback never frees it.
+  let mapData = create(MapDoneData)
+  mapData[] = MapDoneData(done: false, resultBytes: outSize,
+                          status: wgpuBufferMapAsyncStatusUnknown)
+  defer:
+    dealloc(mapData)
   var mapCbInfo = WGPUBufferMapCallbackInfo(
     mode: wgpuCallbackModeAllowProcessEvents,
     callback: bufferMapCb,
-    userdata1: mapData.addr,
+    userdata1: mapData,
     userdata2: nil
   )
   discard wgpuBufferMapAsync(stagingBuf, wgpuMapModeRead, 0, outSize.csize_t, mapCbInfo)
+  # Bounded wait with a deadline (mirrors waitForRequest): the callback may
+  # be deferred past the blocking poll, so keep processing events until it
+  # fires and quit loudly if it never does.
   if not wgpuDevicePoll(device, true, nil):
+    dealloc(mapData)
     quit("WebGPU: wgpuDevicePoll failed")
-  if not mapData.done:
-    quit("WebGPU: wgpuBufferMapAsync callback never fired")
+  let deadline = getMonoTime() + initDuration(seconds = 5)
+  while not mapData.done:
+    if not wgpuDevicePoll(device, false, nil):
+      dealloc(mapData)
+      quit("WebGPU: wgpuDevicePoll failed")
+    if deadline <= getMonoTime():
+      dealloc(mapData)
+      quit("WebGPU: timed out waiting for wgpuBufferMapAsync callback")
+    sleep(2)
   check mapData.status
 
   # 10. Read mapped data
