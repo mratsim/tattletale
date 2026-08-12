@@ -18,7 +18,7 @@
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_empty_object_init.nim
 
 import std/strutils
-import workspace/crucible/src/codegen/cl
+import workspace/crucible
 
 type
   Stateless = object
@@ -31,19 +31,20 @@ const kernelCode = opencl:
     var s = makeStateless()
     output[0] = 42'u32
 
-echo kernelCode
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo kernelCode
 
-# The empty struct initializer must be `{0}`: `{}` is invalid C99.
-doAssert kernelCode.contains("{0}"), "expected a {0} zero-initializer for the empty object"
-doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
+  # The empty struct initializer must be `{0}`: `{}` is invalid C99.
+  doAssert kernelCode.contains("{0}"), "expected a {0} zero-initializer for the empty object"
+  doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
 
-block:
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
-  let r = execOpenCL(
-    ctx, kernelCode, "kernelMain", outputBytes = 4,
-    taggedArgs = newSeq[tuple[data: pointer, size: int, isValue: bool]]()
-  )
-  let outVal = cast[ptr uint32](r[0].addr)[]
-  doAssert outVal == 42
-  echo "  OK"
+  block:
+    var engine = bkOpenCL.init()
+    engine.ingest(kernelCode)
+    var outVal: array[1, uint32]
+    engine.run("kernelMain", outVal, ())
+    doAssert outVal[0] == 42
+    echo "  OK"
+
+when isMainModule:
+  runTest()

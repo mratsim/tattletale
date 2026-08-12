@@ -59,7 +59,7 @@ proc checkTensor(name: string, actual, expected: Tensor, tol: float): float {.di
   diff
 
 proc main() =
-  runTest "Qwen3 long residual stream - intermediate verification (3 blocks)":
+  runCppTest "Qwen3 long residual stream - intermediate verification (3 blocks)":
     proc(): bool =
       const tol = 1e-5
       let model = loadQwen3ModelRaw(ModelPath, kCPU)

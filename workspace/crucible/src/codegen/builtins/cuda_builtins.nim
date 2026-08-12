@@ -37,10 +37,10 @@ type
 ## access possible in the *typed* `cuda` macro. It cannot be `const`,
 ## because then the typed code would evaluate the values before we
 ## can work with it from the typed macro.
-let blockIdx* {.builtin.} = NvBlockIdx()
-let blockDim* {.builtin.} = NvBlockDim()
-let gridDim* {.builtin.} = NvGridDim()
-let threadIdx* {.builtin.} = NvThreadIdx()
+let blockIdx* {.builtin, compileTime.} = NvBlockIdx()
+let blockDim* {.builtin, compileTime.} = NvBlockDim()
+let gridDim* {.builtin, compileTime.} = NvGridDim()
+let threadIdx* {.builtin, compileTime.} = NvThreadIdx()
 
 ## Similar for procs. They don't need any implementation, as they won't ever be actually called.
 proc printf*(fmt: string) {.varargs, builtin.} = discard

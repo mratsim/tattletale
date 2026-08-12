@@ -1,7 +1,7 @@
 ## CuTe Layout + Tile dot products — OpenCL backend
 ## Run with: nim c -r workspace/crucible/tests/codegen/opencl/test_cute_layout_cl.nim
 import std/strformat
-import workspace/crucible/src/codegen/cl
+import workspace/crucible
 
 type
   Layout[S: static tuple, D: static tuple] = object
@@ -23,15 +23,19 @@ const kernelCl = opencl:
     output[4] = a00 * tileAt(gemmB, 0'u32, 0'u32) + a01 * tileAt(gemmB, 1'u32, 0'u32)
     output[5] = a10 * tileAt(gemmB, 0'u32, 2'u32) + a11 * tileAt(gemmB, 1'u32, 2'u32)
 
-echo "=== OpenCL CuTe Layout generation ===\n"
-echo kernelCl; echo ""
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo "=== OpenCL CuTe Layout generation ===\n"
+  echo kernelCl; echo ""
 
-echo "=== OpenCL execution ===\n"
-block:
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
-  let r = execOpenCL(ctx, kernelCl, "cuteKernel", outputBytes=24, inputs = @[])
-  let res = cast[ptr array[6, uint32]](r[0].addr)
-  doAssert res[0]==10 and res[1]==20 and res[2]==60
-  doAssert res[4]==21 and res[5]==61
-  echo "  OK — CuTe Layout + Tile  (OpenCL)"
+  echo "=== OpenCL execution ===\n"
+  block:
+    var engine = bkOpenCL.init()
+    engine.ingest(kernelCl)
+    var res: array[6, uint32]
+    engine.run("cuteKernel", res, ())
+    doAssert res[0]==10 and res[1]==20 and res[2]==60
+    doAssert res[4]==21 and res[5]==61
+    echo "  OK — CuTe Layout + Tile  (OpenCL)"
+
+when isMainModule:
+  runTest()

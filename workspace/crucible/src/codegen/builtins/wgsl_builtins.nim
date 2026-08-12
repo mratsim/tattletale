@@ -16,8 +16,8 @@ type
     z*: DimWgsl
 
 ## WebGPU specific
-let global_id* {.builtin.} = WgslGridDim()
-let num_workgroups* {.builtin.} = WgslGridDim()
+let global_id* {.builtin, compileTime.} = WgslGridDim()
+let num_workgroups* {.builtin, compileTime.} = WgslGridDim()
 
 ## WebGPU select
 proc select*[T](f, t: T, cond: bool): T {.builtin.} =

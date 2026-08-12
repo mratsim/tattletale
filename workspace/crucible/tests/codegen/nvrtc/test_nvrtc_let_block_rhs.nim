@@ -14,7 +14,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_repro_tensorview_codegen.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 type
   Int*[V: static int] = object
@@ -47,35 +47,30 @@ const kernelBlock = cuda:
       tmp
     C[0] = 1'u32
 
-suite "Crucible - TensorView codegen repro":
-  test "Pattern A — direct tuple let":
-    var output: array[1, uint32]
-    var nv = initNvrtc(kernelDirect)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", output, ())
-    check output[0] == 1
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Crucible - TensorView codegen repro":
+    test "Pattern A — direct tuple let":
+      var output: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelDirect)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 1
 
-  test "Pattern B — const + let":
-    let code = kernelConstLet
-    var output: array[1, uint32]
-    var nv = initNvrtc(code)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", output, ())
-    check output[0] == 1
+    test "Pattern B — const + let":
+      let code = kernelConstLet
+      var output: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(code)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 1
 
-  test "Pattern C — block with const then yield":
-    let code = kernelBlock
-    var output: array[1, uint32]
-    var nv = initNvrtc(code)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", output, ())
-    check output[0] == 1
+    test "Pattern C — block with const then yield":
+      let code = kernelBlock
+      var output: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(code)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 1
+
+when isMainModule:
+  runTest()

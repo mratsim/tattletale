@@ -25,28 +25,28 @@ proc main() =
   # -----------------------------------------------------------------------
   # Python → Nim
 
-  runTest "Python → Nim: basic float32 tensor":
+  runCppTest "Python → Nim: basic float32 tensor":
     proc(): bool =
       let torch = pyImport("torch")
       let pyTensor = callMethod(torch, "tensor", @[1.0, 2.0, 3.0])
       let nim = tensorFromPyObject(pyTensor)
       nim.isDefined() and nim.shape == @[3]
 
-  runTest "Python → Nim: int64 tensor (batch input shape)":
+  runCppTest "Python → Nim: int64 tensor (batch input shape)":
     proc(): bool =
       let torch = pyImport("torch")
       let pyTensor = callMethod(torch, "tensor", @[@[1'i64, 2, 3, 4, 5]])
       let nim = tensorFromPyObject(pyTensor)
       nim.isDefined() and nim.shape == @[1, 5]
 
-  runTest "Python → Nim: multi-dimensional shape preservation":
+  runCppTest "Python → Nim: multi-dimensional shape preservation":
     proc(): bool =
       let torch = pyImport("torch")
       let py = callMethod(torch, "rand", @[2, 3, 4])
       let nim = tensorFromPyObject(py)
       nim.shape == @[2, 3, 4]
 
-  runTest "Python → Nim: non-torch object raises ValueError":
+  runCppTest "Python → Nim: non-torch object raises ValueError":
     proc(): bool =
       let listFn = pyImport("builtins").getAttr("list")
       let pyList = callMethod(listFn, "__call__", @[@[1, 2, 3]])
@@ -59,7 +59,7 @@ proc main() =
   # -----------------------------------------------------------------------
   # Nim → Python
 
-  runTest "Nim → Python: basic int64 tensor":
+  runCppTest "Nim → Python: basic int64 tensor":
     proc(): bool =
       let ids = @[1'i64, 2, 3]
       let nim = ids.toTensor().unsqueeze(0)
@@ -67,7 +67,7 @@ proc main() =
       let pyInt = callMethod(py, "tolist")
       pyInt.to(seq[seq[int]]) == @[@[1, 2, 3]]
 
-  runTest "Nim → Python: float32 tensor":
+  runCppTest "Nim → Python: float32 tensor":
     proc(): bool =
       let t = @[1.0'f32, 2.0, 3.0].toTensor()
       let py = tensorToPyObject(t)
@@ -77,7 +77,7 @@ proc main() =
       abs(values[1] - 2.0) < 1e-6 and
       abs(values[2] - 3.0) < 1e-6
 
-  runTest "Nim nil tensor → Python None":
+  runCppTest "Nim nil tensor → Python None":
     proc(): bool =
       let t: Tensor = nil
       let py = tensorToPyObject(t)
@@ -87,14 +87,14 @@ proc main() =
   # -----------------------------------------------------------------------
   # Roundtrip
 
-  runTest "Roundtrip preserves values (float32)":
+  runCppTest "Roundtrip preserves values (float32)":
     proc(): bool =
       let torch = pyImport("torch")
       let py = callMethod(torch, "tensor", @[@[1.5, 2.7, 3.1]])
       let roundTrip = tensorToPyObject(tensorFromPyObject(py))
       callMethod(torch, "allclose", py, roundTrip).to(bool)
 
-  runTest "Roundtrip preserves values (int64)":
+  runCppTest "Roundtrip preserves values (int64)":
     proc(): bool =
       let torch = pyImport("torch")
       let py = callMethod(torch, "tensor", @[@[151643'i64, 42, 9876]])
@@ -104,7 +104,7 @@ proc main() =
   # -----------------------------------------------------------------------
   # Capsule helpers
 
-  runTest "capsuleNew + capsuleGetPointer roundtrip":
+  runCppTest "capsuleNew + capsuleGetPointer roundtrip":
     proc(): bool =
       var stored: int = 42
       let c = capsuleNew(addr stored, "test".cstring)

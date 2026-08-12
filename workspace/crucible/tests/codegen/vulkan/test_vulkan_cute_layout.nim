@@ -1,7 +1,7 @@
 ## CuTe Layout + Tile dot products — Vulkan (GLSL/SPIR-V) backend
 ## Run with: nim c -r workspace/crucible/tests/codegen/vulkan/test_cute_layout_vk.nim
 import std/strformat
-import workspace/crucible/src/codegen/vk
+import workspace/crucible
 
 type
   Layout[S: static tuple, D: static tuple] = object
@@ -23,15 +23,19 @@ const kernelVk = vulkan:
     output[4] = a00 * tileAt(gemmB, 0'u32, 0'u32) + a01 * tileAt(gemmB, 1'u32, 0'u32)
     output[5] = a10 * tileAt(gemmB, 0'u32, 2'u32) + a11 * tileAt(gemmB, 1'u32, 2'u32)
 
-echo "=== Vulkan CuTe Layout generation ===\n"
-echo kernelVk; echo ""
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo "=== Vulkan CuTe Layout generation ===\n"
+  echo kernelVk; echo ""
 
-echo "=== Vulkan execution ===\n"
-block:
-  var ctx = initVulkan()
-  defer: ctx.shutdown()
-  let r = execVulkan(ctx, kernelVk, "cuteKernel", outputBytes=24, inputs = @[])
-  let res = cast[ptr array[6, uint32]](r[0].addr)
-  doAssert res[0]==10 and res[1]==20 and res[2]==60
-  doAssert res[4]==21 and res[5]==61
-  echo "  OK — CuTe Layout + Tile  (Vulkan)"
+  echo "=== Vulkan execution ===\n"
+  block:
+    var engine = bkVulkan.init()
+    engine.ingest(kernelVk)
+    var res: array[6, uint32]
+    engine.run("cuteKernel", res, ())
+    doAssert res[0]==10 and res[1]==20 and res[2]==60
+    doAssert res[4]==21 and res[5]==61
+    echo "  OK — CuTe Layout + Tile  (Vulkan)"
+
+when isMainModule:
+  runTest()

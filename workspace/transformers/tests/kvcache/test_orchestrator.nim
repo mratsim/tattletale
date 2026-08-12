@@ -699,52 +699,52 @@ proc testComputePageSizeBytes(): bool =
   result = true
 
 proc runTests*() =
-  runTest("BUG-B-001: kv_position tracking through startSequence and decodeStep",
+  runCppTest("BUG-B-001: kv_position tracking through startSequence and decodeStep",
     testBugB001KvPositionTracking)
 
-  runTest("BUG-B-002: LPM 300 tokens (256 full + 44 partial) → correct page order",
+  runCppTest("BUG-B-002: LPM 300 tokens (256 full + 44 partial) → correct page order",
     testBugB002CowPageOrdering)
 
-  runTest("kv_position increments through decode steps",
+  runCppTest("kv_position increments through decode steps",
     testOrchestratorDecodeTracking)
 
-  runTest("lifecycle: startSequence → endSequence → startSequence reuse",
+  runCppTest("lifecycle: startSequence → endSequence → startSequence reuse",
     testOrchestratorLifecycleRoundtrip)
 
-  runTest("writeStart=0 for first prefill (no LPM match)",
+  runCppTest("writeStart=0 for first prefill (no LPM match)",
     testWriteStartFirstPrefill)
 
-  runTest("writeStart skips cached prefix after LPM match",
+  runCppTest("writeStart skips cached prefix after LPM match",
     testWriteStartCachedPrefix)
 
-  runTest("field independence: kv_position set independently of cached_tokens",
+  runCppTest("field independence: kv_position set independently of cached_tokens",
     testFieldIndependencePrefillDecode)
 
-  runTest("field independence: cached_tokens stable through setKvPosition",
+  runCppTest("field independence: cached_tokens stable through setKvPosition",
     testFieldIndependenceCOWMatch)
 
-  runTest("COV-A-004: OOM ValueError on pool exhaustion",
+  runCppTest("COV-A-004: OOM ValueError on pool exhaustion",
     testOOMError)
 
-  runTest("COV-A-005: cowPartialPage copy verification",
+  runCppTest("COV-A-005: cowPartialPage copy verification",
     testCowPartialPageIsolated)
 
-  runTest("COV-B-005: page boundary crossing during decodeStep",
+  runCppTest("COV-B-005: page boundary crossing during decodeStep",
     testDecodePageBoundary)
 
-  runTest("COV-B-009: partial-page gather structure (300 tokens, non-aligned)",
+  runCppTest("COV-B-009: partial-page gather structure (300 tokens, non-aligned)",
     testPartialPageStructure)
 
-  runTest("COV-B-010: endSequence round-trip through multiple sequences",
+  runCppTest("COV-B-010: endSequence round-trip through multiple sequences",
     testEndSequenceRoundTrip)
 
-  runTest("COV-B-008: InferenceContext ref semantic aliasing",
+  runCppTest("COV-B-008: InferenceContext ref semantic aliasing",
     testInferenceContextRefSemantic)
 
-  runTest("COV-A-007: computeNumPages pure function",
+  runCppTest("COV-A-007: computeNumPages pure function",
     testComputeNumPages)
 
-  runTest("COV-A-007: computePageSizeBytes pure function",
+  runCppTest("COV-A-007: computePageSizeBytes pure function",
     testComputePageSizeBytes)
 
 when isMainModule:

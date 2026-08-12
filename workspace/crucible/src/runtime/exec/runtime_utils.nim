@@ -14,7 +14,7 @@ proc sanitizePath*(name: string): string =
   if result != name or result in [".", ".."]:
     raiseAssert "Path traversal detected — name contains directory separators: \"" & name & "\""
 
-proc getDebugDir*(): string =
+proc getDebugDir(): string =
   ## Returns getTempDir() / "tattletale" / "debug" — all debug-only writes go here.
   result = getTempDir() / "tattletale" / "debug"
   createDir(result)

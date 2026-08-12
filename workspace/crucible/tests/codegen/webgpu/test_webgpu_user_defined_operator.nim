@@ -11,14 +11,14 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_user_defined_operator.nim
 
-import workspace/crucible/src/codegen/wgpu
+import workspace/crucible
 
 # ── Basic types — gpuBinOp ──────────────────────────────────────────────────
 
 const basicWgsl = webgpu:
-  proc basicKernel(a: ptr UncheckedArray[uint32];
-                   b: ptr UncheckedArray[uint32];
-                   output: ptr UncheckedArray[uint32]) {.global.} =
+  proc basicKernel(output: ptr UncheckedArray[uint32];
+                   a: ptr UncheckedArray[uint32];
+                   b: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = a[0] + b[0]
     output[1] = a[0] - b[0]
     output[2] = a[0] * b[0]
@@ -62,9 +62,9 @@ proc `or`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val or b.val)
 proc `xor`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val xor b.val)
 
 const structWgsl = webgpu:
-  proc structKernel(a: ptr UncheckedArray[uint32];
-                    b: ptr UncheckedArray[uint32];
-                    output: ptr UncheckedArray[uint32]) {.global.} =
+  proc structKernel(output: ptr UncheckedArray[uint32];
+                    a: ptr UncheckedArray[uint32];
+                    b: ptr UncheckedArray[uint32]) {.global.} =
     let x = Wrapper(val: a[0])
     let y = Wrapper(val: b[0])
     output[0] = (x + y).val
@@ -79,9 +79,9 @@ const structWgsl = webgpu:
     output[9] = (x xor y).val
 
 const structWgsl2 = webgpu:
-  proc structKernel2(a: ptr UncheckedArray[uint32];
-                     b: ptr UncheckedArray[uint32];
-                     output: ptr UncheckedArray[uint32]) {.global.} =
+  proc structKernel2(output: ptr UncheckedArray[uint32];
+                     a: ptr UncheckedArray[uint32];
+                     b: ptr UncheckedArray[uint32]) {.global.} =
     let x = Wrapper2(val: a[0])
     let y = Wrapper2(val: b[0])
     output[0] = (x + y).val
@@ -95,112 +95,88 @@ const structWgsl2 = webgpu:
     output[8] = (x or y).val
     output[9] = (x xor y).val
 
-echo "=== WebGPU generation tests ===\n"
-
-echo "--- basicKernel ---"
-echo basicWgsl
-echo ""
-
-echo "--- structKernel ---"
-echo structWgsl
-echo ""
-
-echo "--- structKernel2 ---"
-echo structWgsl2
-echo ""
-
-echo "=== WebGPU execution ===\n"
-
-block:
-  var ctx = initWgpu()
-  defer: ctx.shutdown()
-
-  var a: array[1, uint32] = [13'u32]
-  var b: array[1, uint32] = [5'u32]
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo "=== WebGPU generation tests ===\n"
 
   echo "--- basicKernel ---"
-  let result = execWgpu(
-    ctx,
-    basicWgsl,
-    "basicKernel",
-    outputBytes = 40,
-    inputs = [
-      (cast[pointer](a[0].addr), 4),
-      (cast[pointer](b[0].addr), 4)
-    ]
-  )
-  doAssert result.len == 40
-  let out32 = cast[ptr array[10, uint32]](result[0].addr)
-  echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
-       ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
-  doAssert out32[0] == 18
-  doAssert out32[1] == 8
-  doAssert out32[2] == 65
-  doAssert out32[3] == 2
-  doAssert out32[4] == 3
-  doAssert out32[5] == 416
-  doAssert out32[6] == 0
-  doAssert out32[7] == 5
-  doAssert out32[8] == 13
-  doAssert out32[9] == 8
-  echo "  OK"
+  echo basicWgsl
+  echo ""
 
   echo "--- structKernel ---"
-  a[0] = 7
-  b[0] = 3
-  let result2 = execWgpu(
-    ctx,
-    structWgsl,
-    "structKernel",
-    outputBytes = 40,
-    inputs = [
-      (cast[pointer](a[0].addr), 4),
-      (cast[pointer](b[0].addr), 4)
-    ]
-  )
-  doAssert result2.len == 40
-  let out32b = cast[ptr array[10, uint32]](result2[0].addr)
-  echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
-       ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
-  doAssert out32b[0] == 10
-  doAssert out32b[1] == 4
-  doAssert out32b[2] == 21
-  doAssert out32b[3] == 2
-  doAssert out32b[4] == 1
-  doAssert out32b[5] == 7'u32 shl 3
-  doAssert out32b[6] == 7'u32 shr 3
-  doAssert out32b[7] == (7'u32 and 3)
-  doAssert out32b[8] == (7'u32 or 3)
-  doAssert out32b[9] == (7'u32 xor 3)
-  echo "  OK"
+  echo structWgsl
+  echo ""
 
   echo "--- structKernel2 ---"
-  a[0] = 14
-  b[0] = 3
-  let result3 = execWgpu(
-    ctx,
-    structWgsl2,
-    "structKernel2",
-    outputBytes = 40,
-    inputs = [
-      (cast[pointer](a[0].addr), 4),
-      (cast[pointer](b[0].addr), 4)
-    ]
-  )
-  doAssert result3.len == 40
-  let out32c = cast[ptr array[10, uint32]](result3[0].addr)
-  echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
-       ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
-  doAssert out32c[0] == 17
-  doAssert out32c[1] == 11
-  doAssert out32c[2] == 42
-  doAssert out32c[3] == 4
-  doAssert out32c[4] == 2
-  doAssert out32c[5] == 14'u32 shl 3
-  doAssert out32c[6] == 14'u32 shr 3
-  doAssert out32c[7] == (14'u32 and 3)
-  doAssert out32c[8] == (14'u32 or 3)
-  doAssert out32c[9] == (14'u32 xor 3)
-  echo "  OK"
+  echo structWgsl2
+  echo ""
 
-echo "All execution tests passed ✅"
+  echo "=== WebGPU execution ===\n"
+
+  block:
+    var engine = bkWGSL.init()
+    engine.ingest(basicWgsl)
+
+    var a: array[1, uint32] = [13'u32]
+    var b: array[1, uint32] = [5'u32]
+
+    echo "--- basicKernel ---"
+    var out32: array[10, uint32]
+    engine.run("basicKernel", out32, (a, b))
+    echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
+         ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
+    doAssert out32[0] == 18
+    doAssert out32[1] == 8
+    doAssert out32[2] == 65
+    doAssert out32[3] == 2
+    doAssert out32[4] == 3
+    doAssert out32[5] == 416
+    doAssert out32[6] == 0
+    doAssert out32[7] == 5
+    doAssert out32[8] == 13
+    doAssert out32[9] == 8
+    echo "  OK"
+
+    echo "--- structKernel ---"
+    engine.ingest(structWgsl)
+    a[0] = 7
+    b[0] = 3
+    var out32b: array[10, uint32]
+    engine.run("structKernel", out32b, (a, b))
+    echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
+         ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
+    doAssert out32b[0] == 10
+    doAssert out32b[1] == 4
+    doAssert out32b[2] == 21
+    doAssert out32b[3] == 2
+    doAssert out32b[4] == 1
+    doAssert out32b[5] == 7'u32 shl 3
+    doAssert out32b[6] == 7'u32 shr 3
+    doAssert out32b[7] == (7'u32 and 3)
+    doAssert out32b[8] == (7'u32 or 3)
+    doAssert out32b[9] == (7'u32 xor 3)
+    echo "  OK"
+
+    echo "--- structKernel2 ---"
+    engine.ingest(structWgsl2)
+    a[0] = 14
+    b[0] = 3
+    var out32c: array[10, uint32]
+    engine.run("structKernel2", out32c, (a, b))
+    echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
+         ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
+    doAssert out32c[0] == 17
+    doAssert out32c[1] == 11
+    doAssert out32c[2] == 42
+    doAssert out32c[3] == 4
+    doAssert out32c[4] == 2
+    doAssert out32c[5] == 14'u32 shl 3
+    doAssert out32c[6] == 14'u32 shr 3
+    doAssert out32c[7] == (14'u32 and 3)
+    doAssert out32c[8] == (14'u32 or 3)
+    doAssert out32c[9] == (14'u32 xor 3)
+    echo "  OK"
+
+  echo "All execution tests passed ✅"
+
+when isMainModule:
+  runTest()

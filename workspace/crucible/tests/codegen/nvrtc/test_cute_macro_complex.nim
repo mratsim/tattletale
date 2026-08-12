@@ -4,7 +4,7 @@
 ## Tests multiple generic instantiations with varying params
 ## to exercise the generic resolution machinery.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 const kernelCode = cuda:
   type
@@ -21,13 +21,16 @@ const kernelCode = cuda:
     let b = Tensor3(data: [42'u32, 43'u32, 44'u32])
     output[2] = b.data[0]
 
-var buf: array[3, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("complexKernel", buf, ())
-doAssert buf[0] == 1,   &"a[0]: {buf[0]}"
-doAssert buf[1] == 2,   &"a[1]: {buf[1]}"
-doAssert buf[2] == 42,  &"b[0]: {buf[2]}"
-echo "  OK — macro complex path (B25)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[3, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("complexKernel", buf, ())
+  doAssert buf[0] == 1,   &"a[0]: {buf[0]}"
+  doAssert buf[1] == 2,   &"a[1]: {buf[1]}"
+  doAssert buf[2] == 42,  &"b[0]: {buf[2]}"
+  echo "  OK — macro complex path (B25)"
+
+when isMainModule:
+  runTest()

@@ -33,7 +33,7 @@ proc main() =
   # warp-shuffle reduction, the tests cannot match on CPU
   # and tests against EXL3 fixtures MUST be done with Cuda backend.
 
-  runTest "Qwen3-0.6B-EXL3-5bpw: 3-block long residual chain":
+  runCppTest "Qwen3-0.6B-EXL3-5bpw: 3-block long residual chain":
     proc(): bool =
       let model = loadQwen3ModelRaw($ModelPath, kCuda)
 

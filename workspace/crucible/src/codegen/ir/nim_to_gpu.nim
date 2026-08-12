@@ -401,6 +401,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
         doAssert node.pragma.len > 0, "Pragma kind non empty, but no pragma?"
         result.pRawPragmas = collectRawPragmas(node.pragma)
         result.pAttributes = collectProcAttributes(node.pragma)
+        result.pWorkgroupSize = parseWorkgroupSize(node.pragma)
         if result.pAttributes.len == 0: # means `nimonly` was applied / is a `builtin`
           ctx.builtins[name] = result # store in builtins, so that we know if it returns a value when called
           ctx.addToFnTable(name, result, {fkBuiltin})

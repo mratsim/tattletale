@@ -3,7 +3,7 @@
 ## Run with:
 ##   nim c -r workspace/crucible/tests/codegen/opencl/test_opencl_gemm.nim
 import std/strformat
-import workspace/crucible/src/codegen/cl
+import workspace/crucible
 
 type
   Layout[S: static tuple, D: static tuple] = object
@@ -30,14 +30,18 @@ const kernelCode = opencl:
     C[2] = Ct.data[2]
     C[3] = Ct.data[3]
 
-echo kernelCode
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo kernelCode
 
-block:
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
-  let r = execOpenCL(ctx, kernelCode, "gemmKernel", outputBytes = 16, inputs = @[])
-  let res = cast[ptr array[4, uint32]](r[0].addr)
-  let expected = [58'u32, 64, 139, 154]
-  for i in 0 ..< 4:
-    doAssert res[i] == expected[i], &"C[{i}]: {res[i]} != {expected[i]}"
-  echo "  OK — CuTe GEMM (OpenCL)"
+  block:
+    var engine = bkOpenCL.init()
+    engine.ingest(kernelCode)
+    var res: array[4, uint32]
+    engine.run("gemmKernel", res, ())
+    let expected = [58'u32, 64, 139, 154]
+    for i in 0 ..< 4:
+      doAssert res[i] == expected[i], &"C[{i}]: {res[i]} != {expected[i]}"
+    echo "  OK — CuTe GEMM (OpenCL)"
+
+when isMainModule:
+  runTest()

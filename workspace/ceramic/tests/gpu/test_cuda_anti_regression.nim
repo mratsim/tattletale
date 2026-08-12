@@ -1,5 +1,5 @@
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/tensor_datatypes
@@ -60,46 +60,38 @@ const kernelTensorView = cuda:
     let tv = make_view(C, L)
     tv[0, 0] = 42.0'f32
 
-suite "Ceramic × Crucible anti-regression":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Ceramic × Crucible anti-regression":
 
-  test "Issue 1 — make_layout with genSym":
-    var output: array[2, uint32]
-    var nv = initNvrtc(kernelLayout)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel1", output, ())
-    check output[0] == 8
-    check output[1] == 16
+    test "Issue 1 — make_layout with genSym":
+      var output: array[2, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelLayout)
+      engine.run<<(1, 1)>>("kernel1", output, ())
+      check output[0] == 8
+      check output[1] == 16
 
-  test "Issue 2 — nnkObjConstr Empty child":
-    var output: array[1, uint32]
-    var nv = initNvrtc(kernelObjConstr)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel2", output, ())
-    check output[0] == 1
+    test "Issue 2 — nnkObjConstr Empty child":
+      var output: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelObjConstr)
+      engine.run<<(1, 1)>>("kernel2", output, ())
+      check output[0] == 1
 
-  test "Issue 3 — let-block-RHS":
-    var output: array[1, uint32]
-    var nv = initNvrtc(kernelLetBlock)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel3", output, ())
-    check output[0] == 1
+    test "Issue 3 — let-block-RHS":
+      var output: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelLetBlock)
+      engine.run<<(1, 1)>>("kernel3", output, ())
+      check output[0] == 1
 
-  test "Issue 4 — make_layout + make_view + tv[]=":
-    var buf: array[16, float32]
-    var nv = initNvrtc(kernelTensorView)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    for i in 0 ..< buf.len: buf[i] = -1.0'f32
-    nv.execute("kernel4", buf, ())
-    check buf[0] == 42.0'f32
+    test "Issue 4 — make_layout + make_view + tv[]=":
+      var buf: array[16, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelTensorView)
+      for i in 0 ..< buf.len: buf[i] = -1.0'f32
+      engine.run<<(1, 1)>>("kernel4", buf, ())
+      check buf[0] == 42.0'f32
+
+when isMainModule:
+  runTest()

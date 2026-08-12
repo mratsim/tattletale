@@ -11,7 +11,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_semicolon_arg.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 {.experimental: "callOperator".}
 
@@ -36,12 +36,13 @@ const kernel = cuda:
     # Passing it as a call arg leaks `;` into the parens.
     let a = passthrough(obj(0))
 
-suite "Call-op argument semicolon":
-  test "compiles via NVRTC":
-    var buf: array[8, float32]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Call-op argument semicolon":
+    test "compiles via NVRTC":
+      var buf: array[8, float32]
+      var engine = bkCuda.init()
+      engine.ingest(kernel)
+      engine.run<<(1, 1)>>("kernel", buf, ())
+
+when isMainModule:
+  runTest()

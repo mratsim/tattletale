@@ -9,7 +9,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_N_gensym_dup.nim
 
 import std/macros
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 {.experimental: "callOperator".}
 
@@ -71,18 +71,18 @@ const kernel = cuda:
       let _ = tv(0, 0, kTile)(0)
     output[0] = 42.0f
 
-when isMainModule:
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
 
   echo "═══════════════════════════════════════════════════════════════════"
   echo kernel
   echo "═══════════════════════════════════════════════════════════════════"
 
   var outBuf: array[1, float32]
-  var nv = initNvrtc(kernel)
-  nv.numBlocks = 1
-  nv.threadsPerBlock = 1
-  nv.compile()
-  nv.getPtx()
-  nv.execute("reproKernel", outBuf, ())
+  var engine = bkCuda.init()
+  engine.ingest(kernel)
+  engine.run<<(1, 1)>>("reproKernel", outBuf, ())
   doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
   echo "  OK (test_nvrtc_hoist_N_gensym_dup)"
+
+when isMainModule:
+  runTest()

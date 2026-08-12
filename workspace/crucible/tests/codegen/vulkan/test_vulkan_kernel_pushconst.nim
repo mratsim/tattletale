@@ -15,10 +15,10 @@
 import std/strformat
 import std/strformat
 import std/strutils
-import workspace/crucible/src/codegen/vk
+import workspace/crucible
 const code = vulkan:
-  proc kernelWithVal(val: uint32;
-                     output: ptr UncheckedArray[uint32]) {.global.} =
+  proc kernelWithVal(output: ptr UncheckedArray[uint32];
+                     val: uint32) {.global.} =
     output[0] = val
 
 # The kernel should only have SSBO + push constants, no function params

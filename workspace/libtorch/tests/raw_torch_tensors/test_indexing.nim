@@ -24,7 +24,7 @@ func formatName*(desc, indexingExample: string): string =
   fmt"{desc:<40}  {indexingExample}"
 
 proc main() =
-  ## IMPORTANT: Tensors must be created INSIDE each runTest body.
+  ## IMPORTANT: Tensors must be created INSIDE each runCppTest body.
   ## Capturing TorchTensor in a closure corrupts the C++ object
   ## because TorchTensor has cppNonPod and Nim's closure capture
   ## doesn't handle it correctly (destructor/copy semantics).
@@ -33,7 +33,7 @@ proc main() =
   ## Reference: https://pytorch.org/cppdocs/notes/tensor_indexing.html
   ## All tests include equivalent PyTorch and libtorch syntax for documentation
 
-  runTest formatName("Integer indexing", "a[1, 2]"):
+  runCppTest formatName("Integer indexing", "a[1, 2]"):
     proc(): bool =
       ## Nim libtorch: a[1, 2]
       ## Python: a[1, 2]
@@ -43,7 +43,7 @@ proc main() =
       doAssert val.item(float64) == 8.0  # 2^3 = 8
       true
 
-  runTest formatName("Strided monodimensional indexing", "a[1..|2]"):
+  runCppTest formatName("Strided monodimensional indexing", "a[1..|2]"):
     proc(): bool =
       ## Nim libtorch: a[1..|2]
       ## Python: a[1::2]
@@ -59,7 +59,7 @@ proc main() =
   ## Slice Types (Python ':' equivalent to libtorch Slice)
   ## Python `:` / `::` maps to `torch::indexing::Slice()`
 
-  runTest formatName("Full slice", "a[_, _]"):
+  runCppTest formatName("Full slice", "a[_, _]"):
     proc(): bool =
       ## Nim libtorch: a[_, _]
       ## Python: a[:, :]
@@ -70,7 +70,7 @@ proc main() =
       doAssert full.shape[1] == 5
       true
 
-  runTest formatName("Slice from start", "a[_..<3, _]"):
+  runCppTest formatName("Slice from start", "a[_..<3, _]"):
     proc(): bool =
       ## Nim libtorch: a[_..<3, _]
       ## Python: a[:3]
@@ -82,7 +82,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Slice to end", "a[1..<_]"):
+  runCppTest formatName("Slice to end", "a[1..<_]"):
     proc(): bool =
       ## Nim libtorch: a[1..<_]
       ## Python: a[1:]
@@ -93,7 +93,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Slice with step only", "a[|2]"):
+  runCppTest formatName("Slice with step only", "a[|2]"):
     proc(): bool =
       ## Nim libtorch: a[|2]
       ## Python: a[::2]
@@ -104,7 +104,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Slice with start, stop, step", "a[1..<3|2]"):
+  runCppTest formatName("Slice with start, stop, step", "a[1..<3|2]"):
     proc(): bool =
       ## Nim libtorch: a[1..<3|2]
       ## Python: a[1:3:2]
@@ -141,7 +141,7 @@ proc main() =
   ## Nim:    a[1..<5|2]     -> elements 1, 3
   ## Python: a[1:5:2]       -> elements 1, 3 (start=1, stop=5, step=2)
 
-  runTest formatName("Python a[:2] -> Nim a[_..<2]", "a[:2]"):
+  runCppTest formatName("Python a[:2] -> Nim a[_..<2]", "a[:2]"):
     proc(): bool =
       ## Nim: a[_..<2] gets indices 0, 1 (exclusive)
       ## Python: a[:2] gets indices 0, 1
@@ -152,7 +152,7 @@ proc main() =
          [   2,    4,    8,   16,   32]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Python a[3:] -> Nim a[3.._]", "a[3:]"):
+  runCppTest formatName("Python a[3:] -> Nim a[3.._]", "a[3:]"):
     proc(): bool =
       ## Nim: a[3.._] gets indices 3, 4 (use _ for "to the end")
       ## Python: a[3:] gets indices 3, 4
@@ -163,7 +163,7 @@ proc main() =
          [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Python a[:] -> Nim a[_.._]", "a[:]"):
+  runCppTest formatName("Python a[:] -> Nim a[_.._]", "a[:]"):
     proc(): bool =
       ## Nim: a[_.._] gets all elements
       ## Python: a[:] gets all elements
@@ -172,7 +172,7 @@ proc main() =
       doAssert sliced == t
       true
 
-  runTest formatName("Python a[::2] -> Nim a[_.._|2]", "a[::2]"):
+  runCppTest formatName("Python a[::2] -> Nim a[_.._|2]", "a[::2]"):
     proc(): bool =
       ## Nim: a[_.._|2] or a[|2] (cleaner!) gets every 2nd element
       ## Python: a[::2] gets every 2nd element
@@ -186,7 +186,7 @@ proc main() =
          [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Unary pipe step", "a[|3]"):
+  runCppTest formatName("Unary pipe step", "a[|3]"):
     proc(): bool =
       ## The unary `|step` syntax is cleaner than `_.._|step`
       ## Nim: a[|3] -> Slice(None, None, 3)
@@ -197,7 +197,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Stepped span with index", "a[|2, 0]"):
+  runCppTest formatName("Stepped span with index", "a[|2, 0]"):
     proc(): bool =
       ## Nim: a[|2, 0] -> every 2nd element of dim 0, index 0 of dim 1
       ## Note: Indexing with a scalar (like 0) squeezes that axis since size is 1
@@ -208,7 +208,7 @@ proc main() =
       doAssert sliced == [1, 3, 5].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Mixed indexing with stepped span", "a[1, |2, _]"):
+  runCppTest formatName("Mixed indexing with stepped span", "a[1, |2, _]"):
     proc(): bool =
       ## Nim: a[1, |2, _] -> index 1, every 2nd of dim 1, all of dim 2
       ## numpy equivalent: t[1, ::2, :]
@@ -219,7 +219,7 @@ proc main() =
          [  20,  21,  22,  23]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Python a[1:4] -> Nim a[1..<4]", "a[1:4]"):
+  runCppTest formatName("Python a[1:4] -> Nim a[1..<4]", "a[1:4]"):
     proc(): bool =
       ## Nim: a[1..<4] gets indices 1, 2, 3 (exclusive)
       ## Python: a[1:4] gets indices 1, 2, 3
@@ -231,7 +231,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Python a[1:4:2] -> Nim a[1..<4|2]", "a[1:4:2]"):
+  runCppTest formatName("Python a[1:4:2] -> Nim a[1..<4|2]", "a[1:4:2]"):
     proc(): bool =
       ## Nim: a[1..<4|2] gets indices 1, 3
       ## Python: a[1:4:2] gets indices 1, 3
@@ -242,7 +242,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Python a[:-1] -> Nim a[_..-1]", "a[:-1]"):
+  runCppTest formatName("Python a[:-1] -> Nim a[_..-1]", "a[:-1]"):
     proc(): bool =
       ## Nim: a[_..-1] gets all but last (stop=-1 is exclusive)
       ## Python: a[:-1] gets all but last element
@@ -255,7 +255,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Python a[-3:] -> Nim a[-3.._]", "a[-3:]"):
+  runCppTest formatName("Python a[-3:] -> Nim a[-3.._]", "a[-3:]"):
     proc(): bool =
       ## Nim: a[-3.._] gets last 3 (start at -3, go to end with _)
       ## Python: a[-3:] gets last 3 indices (2, 3, 4)
@@ -267,7 +267,7 @@ proc main() =
          [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Python a[-3:-1] -> Nim a[-3..-1]", "a[-3:-1]"):
+  runCppTest formatName("Python a[-3:-1] -> Nim a[-3..-1]", "a[-3:-1]"):
     proc(): bool =
       ## Nim: a[-3..-1] gets indices 2, 3 (3rd-from-end to before last)
       ## Python: a[-3:-1] gets indices 2, 3 (exclusive upper bound)
@@ -278,7 +278,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Python a[::-1] -> Use flip()", "a[::-1]"):
+  runCppTest formatName("Python a[::-1] -> Use flip()", "a[::-1]"):
     proc(): bool =
       ## Nim: Negative steps are NOT supported in Slice()
       ##            Use flip() instead
@@ -297,7 +297,7 @@ proc main() =
       doAssert reversed == expected
       true
 
-  runTest formatName("Negative steps not supported", "a[|-2]"):
+  runCppTest formatName("Negative steps not supported", "a[|-2]"):
     proc(): bool =
       ## libtorch's Slice() does NOT support negative steps
       ## Python: a[::2] would work, a[::-2] would reverse with step 2
@@ -320,7 +320,7 @@ proc main() =
   ## Tests that negative indices work with variables and runtime expressions
   ## The key insight is that handleNegativeIndex normalizes at runtime
 
-  runTest formatName("Negative index via variable", "a[_..negOne]"):
+  runCppTest formatName("Negative index via variable", "a[_..negOne]"):
     proc(): bool =
       ## Python equivalent: a[:-1] (all but last)
       ## Using a variable to hold the negative index
@@ -334,7 +334,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Negative index via variable (different value)", "a[_..negTwo]"):
+  runCppTest formatName("Negative index via variable (different value)", "a[_..negTwo]"):
     proc(): bool =
       ## Python equivalent: a[:-2] (all but last 2)
       ## Using a variable for -2
@@ -347,7 +347,7 @@ proc main() =
          [   3,    9,   27,   81,  243]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Negative start via variable", "a[negThree.._]"):
+  runCppTest formatName("Negative start via variable", "a[negThree.._]"):
     proc(): bool =
       ## Python equivalent: a[-3:] (last 3 elements)
       ## Using a variable for the start index
@@ -360,7 +360,7 @@ proc main() =
          [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Both bounds via variables", "a[negTwo..negOne]"):
+  runCppTest formatName("Both bounds via variables", "a[negTwo..negOne]"):
     proc(): bool =
       ## Python equivalent: a[-2:-1] (second-to-last element only)
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -371,7 +371,7 @@ proc main() =
       doAssert sliced == [[4, 16, 64, 256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Negative index via expression", "a[0..-(n-1)]"):
+  runCppTest formatName("Negative index via expression", "a[0..-(n-1)]"):
     proc(): bool =
       ## Python equivalent: a[:-(n-1)] where n is tensor size
       ## For a 5x5 tensor, -(n-1) = -(5-1) = -4, stop at index 1 (exclusive)
@@ -382,7 +382,7 @@ proc main() =
       doAssert sliced == [[1, 1, 1, 1, 1]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Negative index via expression (2*n)", "a[_..-(2*n)]"):
+  runCppTest formatName("Negative index via expression (2*n)", "a[_..-(2*n)]"):
     proc(): bool =
       ## Python equivalent: a[:-(2*n)]
       ## For m=2, -(2*m) = -4, stop at index 1 (exclusive)
@@ -393,7 +393,7 @@ proc main() =
       doAssert sliced == [[1, 1, 1, 1, 1]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Negative start via expression", "a[-(n-3).._]"):
+  runCppTest formatName("Negative start via expression", "a[-(n-3).._]"):
     proc(): bool =
       ## Python equivalent: a[-(n-3):] for n=5 gives a[-2:] = indices 3, 4
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -415,7 +415,7 @@ proc main() =
   #       [[3,  9, 27,  81,  243]
   #        [4, 16, 64, 256, 1024]].toTorchTensor.to(kFloat64)
 
-  runTest formatName("Negative index with step", "a[_..-1|2]"):
+  runCppTest formatName("Negative index with step", "a[_..-1|2]"):
     proc(): bool =
       ## Python equivalent: a[:-1:2] - every 2nd element excluding last
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -436,7 +436,7 @@ proc main() =
   #       [[   2,    4,    8,   16,   32],
   #        [   3,    9,   27,   81,  243]].toTorchTensor.to(kFloat64)
 
-  runTest formatName("Mixed: literal start, variable stop", "a[1..negOne]"):
+  runCppTest formatName("Mixed: literal start, variable stop", "a[1..negOne]"):
     proc(): bool =
       ## Python equivalent: a[1:-1] (from index 1 to before last)
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -543,7 +543,7 @@ proc main() =
   #   check: sliced.shape[0] == 5
   #   check: sliced[0].item(float64) == 2.0  # Row 1 (base 2), column 0 = 2^1 = 2
 
-  runTest formatName("Single span", "a[_]"):
+  runCppTest formatName("Single span", "a[_]"):
     proc(): bool =
       ## Nim: a[_] / a[_, _] maps to Slice() / Slice(None, None)
       ## Python: a[:] / a[:, :]
@@ -552,7 +552,7 @@ proc main() =
       doAssert sliced == t
       true
 
-  runTest formatName("Span on first dimension only", "a[_, 2]"):
+  runCppTest formatName("Span on first dimension only", "a[_, 2]"):
     proc(): bool =
       ## Nim: a[_, 2] - all rows, column 2 (squeezed to 1D since size 1)
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -562,7 +562,7 @@ proc main() =
       doAssert sliced == [1, 8, 27, 64, 125].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Span with slice", "a[1..3, _]"):
+  runCppTest formatName("Span with slice", "a[1..3, _]"):
     proc(): bool =
       ## Nim: a[1..<3, _] - rows 1, 2, all columns
       ## Python: a[1:3, :]
@@ -573,7 +573,7 @@ proc main() =
          [   3,    9,   27,   81,  243]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Span with partial", "a[_..2, 2]"):
+  runCppTest formatName("Span with partial", "a[_..2, 2]"):
     proc(): bool =
       ## Nim: a[_..<2, 2] - rows 0, 1, column 2 (squeezed)
       ## Python: a[:2, 2]
@@ -584,7 +584,7 @@ proc main() =
       doAssert sliced == [1, 8].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Full span shorthand", "a[_.._]"):
+  runCppTest formatName("Full span shorthand", "a[_.._]"):
     proc(): bool =
       ## Nim: a[_.._, _] - all rows, all columns
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -592,7 +592,7 @@ proc main() =
       doAssert sliced == t
       true
 
-  runTest formatName("Span with step", "a[_.._|2]"):
+  runCppTest formatName("Span with step", "a[_.._|2]"):
     proc(): bool =
       ## Nim: a[_.._|2] - rows 0, 2, 4, all columns
       ## Python: a[::2]
@@ -604,7 +604,7 @@ proc main() =
          [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest "Span on first dimension only - a[_, 2]":
+  runCppTest "Span on first dimension only - a[_, 2]":
     proc(): bool =
       ## Nim: a[_, 2]
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -614,7 +614,7 @@ proc main() =
       doAssert sliced == [1, 8, 27, 64, 125].toTorchTensor.to(kFloat64)
       true
 
-  runTest "Span with slice - a[1..3, _]":
+  runCppTest "Span with slice - a[1..3, _]":
     proc(): bool =
       ## Nim: a[1..<3, _]
       ## Python: a[1:3, :]
@@ -625,7 +625,7 @@ proc main() =
          [   3,    9,   27,   81,  243]].toTorchTensor.to(kFloat64)
       true
 
-  runTest "Span with partial - a[_..2, 2]":
+  runCppTest "Span with partial - a[_..2, 2]":
     proc(): bool =
       ## Nim: a[_..<2, 2]
       ## Python: a[:2, 2]
@@ -636,7 +636,7 @@ proc main() =
       doAssert sliced == [1, 8].toTorchTensor.to(kFloat64)
       true
 
-  runTest "Full span shorthand - a[_.._]":
+  runCppTest "Full span shorthand - a[_.._]":
     proc(): bool =
       ## Nim: a[_.._, _]
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -644,7 +644,7 @@ proc main() =
       doAssert sliced == t
       true
 
-  runTest "Span with step - a[_.._|2]":
+  runCppTest "Span with step - a[_.._|2]":
     proc(): bool =
       ## Nim: a[_.._|2]
       ## Python: a[::2]
@@ -667,7 +667,7 @@ proc main() =
   ## This is equivalent to Python's negative indexing: a[-1]
   ## For slices, use `..-N` for end-relative slicing (exclusive)
 
-  runTest formatName("Single negative index", "a[-1]"):
+  runCppTest formatName("Single negative index", "a[-1]"):
     proc(): bool =
       ## Nim: -1 = last element at both dims
       ## Python: a[-1, -1]
@@ -676,7 +676,7 @@ proc main() =
       doAssert val.item(float64) == 3125.0  # 5^5 = 3125
       true
 
-  runTest formatName("Second-to-last", "a[-2, -2]"):
+  runCppTest formatName("Second-to-last", "a[-2, -2]"):
     proc(): bool =
       ## Nim: -2 = second-to-last element
       ## Python: a[-2, -2]
@@ -685,7 +685,7 @@ proc main() =
       doAssert val.item(float64) == 256.0  # 4^4 = 256
       true
 
-  runTest formatName("Third-to-last", "a[-3, -3]"):
+  runCppTest formatName("Third-to-last", "a[-3, -3]"):
     proc(): bool =
       ## Nim: -3 = third-to-last element
       ## Python: a[-3, -3]
@@ -694,7 +694,7 @@ proc main() =
       doAssert val.item(float64) == 27.0  # 3^3 = 27
       true
 
-  runTest formatName("Inclusive slice to end", "a[0..-1]"):
+  runCppTest formatName("Inclusive slice to end", "a[0..-1]"):
     proc(): bool =
       ## Nim: 0..-1 from 0 to before last (exclusive via ..-)
       ## Python: a[0:-1]
@@ -707,7 +707,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Negative slice", "a[-3..-1]"):
+  runCppTest formatName("Negative slice", "a[-3..-1]"):
     proc(): bool =
       ## Nim: -3..-1 from third-to-last to before last
       ## Python: a[-3:-1]
@@ -718,7 +718,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Span with negative index", "a[_..-2]"):
+  runCppTest formatName("Span with negative index", "a[_..-2]"):
     proc(): bool =
       ## Nim: _..-2 from start to before second-to-last
       ## Python: a[:-2]
@@ -730,7 +730,7 @@ proc main() =
          [   3,    9,   27,   81,  243]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Negative span with step", "a[-4.._|2]"):
+  runCppTest formatName("Negative span with step", "a[-4.._|2]"):
     proc(): bool =
       ## Nim: -4.._|2 from fourth-from-end to end, step 2
       ## Python: a[-4::2]
@@ -746,7 +746,7 @@ proc main() =
   ## Reference: https://pytorch.org/cppdocs/notes/tensor_indexing.html
   ## For 3D tensor: a[0:3] is equivalent to a[0:3, ...] / a[0:3, :, :]
 
-  runTest formatName("Partial slice on 3D tensor", "a[0..<2]"):
+  runCppTest formatName("Partial slice on 3D tensor", "a[0..<2]"):
     proc(): bool =
       ## Nim: a[0..<2] on 3D tensor is equivalent to a[0..<2, ...]
       ## Python: a[0:3] equivalent to a[0:3, ...] on 3D tensor
@@ -763,7 +763,7 @@ proc main() =
       doAssert sliced == expected
       true
 
-  runTest formatName("Slice equivalent to explicit spans", "a[0..<3] vs a[0..<3, _, :]"):
+  runCppTest formatName("Slice equivalent to explicit spans", "a[0..<3] vs a[0..<3, _, :]"):
     proc(): bool =
       let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
       let implicit = t3d[0..<2]
@@ -784,7 +784,7 @@ proc main() =
   ## -----------------------------------------------------------------------
   ## Assignment Operations (index_put_)
 
-  runTest formatName("Point assignment", "a[0, 0] = 999"):
+  runCppTest formatName("Point assignment", "a[0, 0] = 999"):
     proc(): bool =
       ## Nim: a[0, 0] = 999
       ## Python: a[0, 0] = 999
@@ -800,7 +800,7 @@ proc main() =
          [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Slice assignment", "a[0..2, 0..2] = 0"):
+  runCppTest formatName("Slice assignment", "a[0..2, 0..2] = 0"):
     proc(): bool =
       ## Nim: a[0..<2, 0..<2] = 0
       ## Python: a[0:2, 0:2] = 0
@@ -818,7 +818,7 @@ proc main() =
          [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Assignment with step", "a[::2, ::2] = 999"):
+  runCppTest formatName("Assignment with step", "a[::2, ::2] = 999"):
     proc(): bool =
       ## Nim: a[_..<5|2, _..<5|2] = 999
       ## Python: a[::2, ::2] = 999
@@ -844,7 +844,7 @@ proc main() =
   #   check: t[4, 4].item(float64) == 0.0
   #   check: t.numel() == 25
 
-  runTest formatName("Assignment with step (repeat)", "a[::2, ::2] = 999"):
+  runCppTest formatName("Assignment with step (repeat)", "a[::2, ::2] = 999"):
     proc(): bool =
       ## Nim: a[_..<5|2, _..<5|2] = 999
       ## Python: a[::2, ::2] = 999
@@ -865,7 +865,7 @@ proc main() =
   ## General Edge Cases
   ## General indexing edge cases and miscellaneous tests
 
-  runTest formatName("Empty slice", "a[0..0]"):
+  runCppTest formatName("Empty slice", "a[0..0]"):
     proc(): bool =
       ## Python: a[0:0] returns empty tensor
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -875,7 +875,7 @@ proc main() =
       # Cannot use full matrix comparison for empty tensor
       true
 
-  runTest formatName("Full range slice", "a[0..<5]"):
+  runCppTest formatName("Full range slice", "a[0..<5]"):
     proc(): bool =
       ## Slice covering entire dimension
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -883,7 +883,7 @@ proc main() =
       doAssert sliced == t
       true
 
-  runTest formatName("Single element slice", "a[2..<3]"):
+  runCppTest formatName("Single element slice", "a[2..<3]"):
     proc(): bool =
       ## Slice producing single element
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -894,7 +894,7 @@ proc main() =
       doAssert sliced == expected
       true
 
-  runTest formatName("Large step", "a[::100] with small tensor"):
+  runCppTest formatName("Large step", "a[::100] with small tensor"):
     proc(): bool =
       ## Step larger than dimension size
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -905,7 +905,7 @@ proc main() =
       doAssert sliced == expected
       true
 
-  runTest formatName("Reverse with negative step", "Use flip() not a[::-1]"):
+  runCppTest formatName("Reverse with negative step", "Use flip() not a[::-1]"):
     proc(): bool =
       ## Python: a[::-1] reverses along a dimension
       ## Nim: Negative step syntax `|_` is NOT supported
@@ -919,7 +919,7 @@ proc main() =
       doAssert first_col == expected_col
       true
 
-  runTest formatName("Integer and slice mix", "a[0, 1:4]"):
+  runCppTest formatName("Integer and slice mix", "a[0, 1:4]"):
     proc(): bool =
       ## Python: a[0, 1:4]
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -936,7 +936,7 @@ proc main() =
   #   check: sliced.shape[0] == 2
   #   check: sliced.shape[1] == 10
 
-  runTest formatName("Integer array indexing", "a[[0, 2, 4]]"):
+  runCppTest formatName("Integer array indexing", "a[[0, 2, 4]]"):
     proc(): bool =
       ## Python: a[[0, 2, 4]] - fancy indexing
       let t = genShiftedVandermonde5x5(kFloat64)
@@ -962,7 +962,7 @@ proc main() =
   ## Full Matrix Comparison Tests (Python Validated)
   ## These tests verify exact matrix equality against Python-validated results
 
-  runTest formatName("First 2 rows", "t[_..<2, _]"):
+  runCppTest formatName("First 2 rows", "t[_..<2, _]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_..<2, _]
@@ -971,7 +971,7 @@ proc main() =
          [ 2,  4,  8, 16, 32]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Rows 1 to 3", "t[1..<4, _]"):
+  runCppTest formatName("Rows 1 to 3", "t[1..<4, _]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[1..<4, _]
@@ -981,7 +981,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Last 2 rows", "t[-2.._, _]"):
+  runCppTest formatName("Last 2 rows", "t[-2.._, _]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[-2.._, _]
@@ -990,7 +990,7 @@ proc main() =
          [   5,   25,  125,  625, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("All but last row", "t[0..-1, _]"):
+  runCppTest formatName("All but last row", "t[0..-1, _]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[0..-1, _]
@@ -1001,7 +1001,7 @@ proc main() =
          [   4,   16,   64,  256, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Every 2nd row", "t[0..<4|2, _]"):
+  runCppTest formatName("Every 2nd row", "t[0..<4|2, _]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[0..<4|2, _]
@@ -1010,7 +1010,7 @@ proc main() =
          [  3,   9,  27,  81, 243]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("First 2 columns", "t[_, 0..<2]"):
+  runCppTest formatName("First 2 columns", "t[_, 0..<2]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_, 0..<2]
@@ -1022,7 +1022,7 @@ proc main() =
          [ 5, 25]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Last 2 columns", "t[_, -2.._]"):
+  runCppTest formatName("Last 2 columns", "t[_, -2.._]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_, -2.._]
@@ -1034,7 +1034,7 @@ proc main() =
          [ 625, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Submatrix 2x2", "t[1..<3, 1..<3]"):
+  runCppTest formatName("Submatrix 2x2", "t[1..<3, 1..<3]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[1..<3, 1..<3]
@@ -1043,7 +1043,7 @@ proc main() =
          [ 9, 27]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Every 2nd column", "t[_, |2]"):
+  runCppTest formatName("Every 2nd column", "t[_, |2]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[_, |2]
@@ -1055,7 +1055,7 @@ proc main() =
          [   5,  125, 3125]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Rows 1,3 cols 0,2,4", "t[1..<4|2, 0..<5|2]"):
+  runCppTest formatName("Rows 1,3 cols 0,2,4", "t[1..<4|2, 0..<5|2]"):
     proc(): bool =
       let t = genShiftedVandermonde5x5(kFloat64)
       let sliced = t[1..<4|2, 0..<5|2]
@@ -1064,7 +1064,7 @@ proc main() =
          [   4,   64, 1024]].toTorchTensor.to(kFloat64)
       true
 
-  runTest formatName("Single slice on 3D", "a3d[0:2]"):
+  runCppTest formatName("Single slice on 3D", "a3d[0:2]"):
     proc(): bool =
       ## Python: a3d[0:2] equivalent to a3d[0:2, :, :]
       let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
@@ -1080,7 +1080,7 @@ proc main() =
       doAssert sliced == expected
       true
 
-  runTest formatName("Slice middle dimension", "a3d[:, 0:2, :]"):
+  runCppTest formatName("Slice middle dimension", "a3d[:, 0:2, :]"):
     proc(): bool =
       ## Python: a3d[:, 0:2, :]
       let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
@@ -1094,7 +1094,7 @@ proc main() =
       doAssert sliced == expected
       true
 
-  runTest formatName("Slice last dimension", "a3d[:, :, 0:2]"):
+  runCppTest formatName("Slice last dimension", "a3d[:, :, 0:2]"):
     proc(): bool =
       ## Python: a3d[:, :, 0:2]
       let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
@@ -1125,7 +1125,7 @@ proc main() =
   #   check: sliced.shape[1] == 3
   #   check: sliced.shape[2] == 4
 
-  runTest formatName("Multiple indices with slice", "a3d[0, 0:2, 1:3]"):
+  runCppTest formatName("Multiple indices with slice", "a3d[0, 0:2, 1:3]"):
     proc(): bool =
       ## Python: a3d[0, 0:2, 1:3]
       let t3d = torch.arange(24, kFloat64).reshape(2, 3, 4)
@@ -1137,7 +1137,7 @@ proc main() =
       doAssert sliced == expected
       true
 
-  runTest formatName("Single slice on 4D", "a4d[0..<2]"):
+  runCppTest formatName("Single slice on 4D", "a4d[0..<2]"):
     proc(): bool =
       let t4d = torch.arange(120, kFloat64).reshape(2, 3, 4, 5)
       let sliced = t4d[0..<2]
@@ -1175,37 +1175,37 @@ proc main() =
   ##
   ## This is equivalent to Python's -1, -2, -3, etc. negative indexing.
 
-  runTest formatName("-1 is the last element", "arr5[-1]"):
+  runCppTest formatName("-1 is the last element", "arr5[-1]"):
     proc(): bool =
       let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTorchTensor()
       doAssert arr5[-1].item(float64) == 50.0
       true
 
-  runTest formatName("-2 is second-to-last", "arr5[-2]"):
+  runCppTest formatName("-2 is second-to-last", "arr5[-2]"):
     proc(): bool =
       let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTorchTensor()
       doAssert arr5[-2].item(float64) == 40.0
       true
 
-  runTest formatName("-3 is third-to-last", "arr5[-3]"):
+  runCppTest formatName("-3 is third-to-last", "arr5[-3]"):
     proc(): bool =
       let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTorchTensor()
       doAssert arr5[-3].item(float64) == 30.0
       true
 
-  runTest formatName("-4 is fourth-to-last", "arr5[-4]"):
+  runCppTest formatName("-4 is fourth-to-last", "arr5[-4]"):
     proc(): bool =
       let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTorchTensor()
       doAssert arr5[-4].item(float64) == 20.0
       true
 
-  runTest formatName("-5 equals 0", "arr5[-5]"):
+  runCppTest formatName("-5 equals 0", "arr5[-5]"):
     proc(): bool =
       let arr5 = @[10.0, 20.0, 30.0, 40.0, 50.0].toTorchTensor()
       doAssert arr5[-5].item(float64) == 10.0
       true
 
-  runTest formatName("Slice from -3 to -1 (inclusive)", "arr5[-3..-1]"):
+  runCppTest formatName("Slice from -3 to -1 (inclusive)", "arr5[-3..-1]"):
     proc(): bool =
       ## arr5[-3:-1] -> Python equivalent: arr5[-3:-1] -> indices 2, 3
       ## Note: -1 as STOP is exclusive in Python, so -3:-1 gives 2 elements
@@ -1215,7 +1215,7 @@ proc main() =
       doAssert sliced == expected
       true
 
-  runTest formatName("Slice from 0 to -1", "arr5[0..-1]"):
+  runCppTest formatName("Slice from 0 to -1", "arr5[0..-1]"):
     proc(): bool =
       ## arr5[0:-1] -> Python equivalent: arr5[0:-1] -> all but last
       ## Note: -1 as STOP is exclusive in Python
@@ -1226,7 +1226,7 @@ proc main() =
       true
 
   # TODO: exclusive with negative (a[<..-2]) not yet supported
-  runTest formatName("Slice from -4 to -2", "arr5[-4..-2]"):
+  runCppTest formatName("Slice from -4 to -2", "arr5[-4..-2]"):
     proc(): bool =
       ## arr5[-4:-2] -> Python equivalent: arr5[-4:-2] -> indices 1, 2
       ## Note: -2 as STOP is exclusive in Python

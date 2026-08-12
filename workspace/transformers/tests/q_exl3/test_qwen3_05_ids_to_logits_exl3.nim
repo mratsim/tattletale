@@ -48,7 +48,7 @@ proc loadLayerFixture(layerIdx: int): Table[string, Tensor] =
     result[name] = st.getTensorOwned(name, kCuda)
 
 proc main() =
-  runTest "Qwen3-0.6B-EXL3-5bpw: ids-to-logits — long residual stream vs EXL3 fixtures":
+  runCppTest "Qwen3-0.6B-EXL3-5bpw: ids-to-logits — long residual stream vs EXL3 fixtures":
     proc(): bool =
       ## Strategy:
       ## - layer_input: should match (same embedding)

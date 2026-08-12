@@ -5,7 +5,7 @@
 ## complex types. This tests generic proc chains, nested generics,
 ## type aliases, and many-parameter types.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 type
   # Basic shape type (like CuTe's Shape)
@@ -45,12 +45,15 @@ const kernelCode = cuda:
     let t = GemmTile[2, 2, 2, 1, 1]()
     output[2] = 1'u32
 
-var buf: array[3, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("composeKernel", buf, ())
-doAssert buf[0] == 1, &"layout[0]: {buf[0]}"
-doAssert buf[1] == 6, &"layout[5]: {buf[1]}"
-echo "  OK — generic composition"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[3, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("composeKernel", buf, ())
+  doAssert buf[0] == 1, &"layout[0]: {buf[0]}"
+  doAssert buf[1] == 6, &"layout[5]: {buf[1]}"
+  echo "  OK — generic composition"
+
+when isMainModule:
+  runTest()

@@ -5,7 +5,7 @@
 ## The NVRTC compiler validates the generated code.
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 type
   FixMe*[V: static int] = object
@@ -20,23 +20,21 @@ const kernelCode2 = cuda:
     const tup {.genSym.} = (FixMe[1](), FixMe[8]())
     C[0] = 1'u32
 
-suite "CUDA - dummy-field initializers":
-  test "single dummy struct const":
-    var buf: array[1, uint32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
-    check buf[0] == 1
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "CUDA - dummy-field initializers":
+    test "single dummy struct const":
+      var buf: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelCode)
+      engine.run<<(1, 1)>>("kernel", buf, ())
+      check buf[0] == 1
 
-  test "tuple of dummy structs const":
-    var buf: array[1, uint32]
-    var nv = initNvrtc(kernelCode2)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
-    check buf[0] == 1
+    test "tuple of dummy structs const":
+      var buf: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelCode2)
+      engine.run<<(1, 1)>>("kernel", buf, ())
+      check buf[0] == 1
+
+when isMainModule:
+  runTest()

@@ -21,8 +21,7 @@
 ##     tests/codegen/nvrtc/test_nvrtc_compound_assign.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 
 const kernel = cuda:
   proc compoundKernel(C: ptr UncheckedArray[int32]) {.global.} =
@@ -30,19 +29,20 @@ const kernel = cuda:
       C[i] += 5
       C[i] *= 2
 
-suite "compound assignment (a[i] += v)":
-  test "accumulates and stores back (read-modify-write)":
-    # Host-initialized values are copied H->D before launch: the kernel's `+=`
-    # must READ the stored value and write the accumulation back, otherwise
-    # the result would not depend on the initialization at all.
-    var output: array[4, int32] = [10'i32, 11, 12, 13]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("compoundKernel", output, ())
-    check output[0] == 30  # (10 + 5) * 2
-    check output[1] == 32  # (11 + 5) * 2
-    check output[2] == 34  # (12 + 5) * 2
-    check output[3] == 36  # (13 + 5) * 2
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "compound assignment (a[i] += v)":
+    test "accumulates and stores back (read-modify-write)":
+      # Host-initialized values are copied H->D before launch: the kernel's `+=`
+      # must READ the stored value and write the accumulation back, otherwise
+      # the result would not depend on the initialization at all.
+      var output: array[4, int32] = [10'i32, 11, 12, 13]
+      var engine = bkCuda.init()
+      engine.ingest(kernel)
+      engine.run<<(1, 1)>>("compoundKernel", output, ())
+      check output[0] == 30  # (10 + 5) * 2
+      check output[1] == 32  # (11 + 5) * 2
+      check output[2] == 34  # (12 + 5) * 2
+      check output[3] == 36  # (13 + 5) * 2
+
+when isMainModule:
+  runTest()

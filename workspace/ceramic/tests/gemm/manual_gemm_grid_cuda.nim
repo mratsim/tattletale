@@ -38,7 +38,7 @@ import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/tests/gemm/gemm_test_lib
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 {.experimental: "callOperator".}
 
@@ -55,8 +55,12 @@ const kernelCode = cuda:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    let mCTA = int(blockIdx.x)
-    let nCTA = int(blockIdx.y)
+    # 1D grid linearization (engine LaunchConfig.grid is a single int):
+    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2
+    # (same decomposition as the OpenCL twin's get_global_id path).
+    let blk = int(blockIdx.x)
+    let mCTA = blk mod 2
+    let nCTA = blk div 2
     let m0 = mCTA * 32
     let n0 = nCTA * 16
     var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
@@ -68,8 +72,12 @@ const kernelCode = cuda:
   proc gemmGridIdentityKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
-    let mCTA = int(blockIdx.x)
-    let nCTA = int(blockIdx.y)
+    # 1D grid linearization (engine LaunchConfig.grid is a single int):
+    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2
+    # (same decomposition as the OpenCL twin's get_global_id path).
+    let blk = int(blockIdx.x)
+    let mCTA = blk mod 2
+    let nCTA = blk div 2
     let m0 = mCTA * 32
     let n0 = nCTA * 16
     var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
@@ -81,8 +89,12 @@ const kernelCode = cuda:
   proc gemmGridReLUKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
-    let mCTA = int(blockIdx.x)
-    let nCTA = int(blockIdx.y)
+    # 1D grid linearization (engine LaunchConfig.grid is a single int):
+    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2
+    # (same decomposition as the OpenCL twin's get_global_id path).
+    let blk = int(blockIdx.x)
+    let mCTA = blk mod 2
+    let nCTA = blk div 2
     let m0 = mCTA * 32
     let n0 = nCTA * 16
     var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
@@ -95,8 +107,12 @@ const kernelCode = cuda:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       bias: ptr UncheckedArray[float32]) {.global.} =
-    let mCTA = int(blockIdx.x)
-    let nCTA = int(blockIdx.y)
+    # 1D grid linearization (engine LaunchConfig.grid is a single int):
+    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2
+    # (same decomposition as the OpenCL twin's get_global_id path).
+    let blk = int(blockIdx.x)
+    let mCTA = blk mod 2
+    let nCTA = blk div 2
     let m0 = mCTA * 32
     let n0 = nCTA * 16
     var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
@@ -120,8 +136,12 @@ const kernelCodeSingle = cuda:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    let mCTA = int(blockIdx.x)
-    let nCTA = int(blockIdx.y)
+    # 1D grid linearization (engine LaunchConfig.grid is a single int):
+    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2
+    # (same decomposition as the OpenCL twin's get_global_id path).
+    let blk = int(blockIdx.x)
+    let mCTA = blk mod 2
+    let nCTA = blk div 2
     let m0 = mCTA * 32
     let n0 = nCTA * 16
     var tC = make_view(C +% (m0 + n0 * 32), (32, 16), (1, 32))
@@ -130,15 +150,15 @@ const kernelCodeSingle = cuda:
     var epi = initEpiAXPBY(alpha, beta, tCv)
     gemm_grid(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, int(threadIdx.x))
 
-proc main() =
-  var engine = "cuda".getEngine(kernelCode)
+proc runTest() =
+  var engine = bkCuda.init(kernelCode)
   testGemmGrid(engine, tiled, "SM80")
   testGemmGridBeta(engine, tiled, "SM80")
   testGemmGridIdentity(engine, tiled, "SM80")
   testGemmGridReLU(engine, tiled, "SM80")
   testGemmGridBias(engine, tiled, "SM80")
-  var engineSingle = "cuda".getEngine(kernelCodeSingle)
+  var engineSingle = bkCuda.init(kernelCodeSingle)
   testGemmGridSingle(engineSingle, tiled, "SM80")
 
 when isMainModule:
-  main()
+  runTest()

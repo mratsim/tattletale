@@ -20,13 +20,13 @@
 ## the kernel and verifies the values.
 
 import std/[unittest, strutils]
-import workspace/crucible/src/codegen/cl
+import workspace/crucible
 
 # ── kernel ───────────────────────────────────────────────────────────────
-# OpenCL binds kernel args in order: inputs first, output LAST.
+# OpenCL binds kernel args in order: output first (binding 0), then inputs.
 const kernelCode = opencl:
-  proc maxBasic(dyn: ptr UncheckedArray[float32];
-                res: ptr UncheckedArray[float32]) {.global.} =
+  proc maxBasic(res: ptr UncheckedArray[float32];
+                dyn: ptr UncheckedArray[float32]) {.global.} =
     let x = dyn[0]
     let y = dyn[1]
     # float32 — inline (non-magic) overload -> body-parsed device fn
@@ -44,29 +44,31 @@ const kernelCode = opencl:
     # uint32 min — generic not-SomeFloat overload
     res[8] = float32(min(uint32(x), uint32(y)))
 
-echo kernelCode   # show the emitted OpenCL C
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo kernelCode   # show the emitted OpenCL C
 
-suite "OpenCL — max on basic types":
+  suite "OpenCL — max on basic types":
 
-  test "float32/uint32/int max compile, run, and produce the right values":
-    # The fold must emit fmax/fmin for OpenCL floats — max/min are
-    # integer-only there and silently compute wrong values on float args.
-    check kernelCode.contains("fmax")
-    check kernelCode.contains("fmin")
+    test "float32/uint32/int max compile, run, and produce the right values":
+      # The fold must emit fmax/fmin for OpenCL floats — max/min are
+      # integer-only there and silently compute wrong values on float args.
+      check kernelCode.contains("fmax")
+      check kernelCode.contains("fmin")
 
-    var dynArr: array[2, float32] = [2.5'f32, 9.0'f32]
-    var ctx = initOpenCL()
-    defer: ctx.shutdown()
-    let r = ctx.execOpenCL(kernelCode, "maxBasic", outputBytes = 36,
-                     inputs = [(cast[pointer](dynArr[0].addr), 8)])
-    check r.len == 36
-    let out32 = cast[ptr array[9, float32]](r[0].addr)
-    check out32[0] == 9.0    # max(2.5, 9.0)
-    check out32[1] == 7.25   # max(3.5, 7.25)
-    check out32[2] == 9.0    # max(9.0, 2.5)
-    check out32[3] == 9.0    # max(2, 9)
-    check out32[4] == 7.0    # max(3, 7)
-    check out32[5] == 9.0    # max(2, 9)
-    check out32[6] == 2.5    # min(2.5, 9.0)
-    check out32[7] == 3.5    # min(3.5, 7.25)
-    check out32[8] == 2.0    # min(2, 9)
+      var dynArr: array[2, float32] = [2.5'f32, 9.0'f32]
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelCode)
+      var out32: array[9, float32]
+      engine.run("maxBasic", out32, (dynArr))
+      check out32[0] == 9.0    # max(2.5, 9.0)
+      check out32[1] == 7.25   # max(3.5, 7.25)
+      check out32[2] == 9.0    # max(9.0, 2.5)
+      check out32[3] == 9.0    # max(2, 9)
+      check out32[4] == 7.0    # max(3, 7)
+      check out32[5] == 9.0    # max(2, 9)
+      check out32[6] == 2.5    # min(2.5, 9.0)
+      check out32[7] == 3.5    # min(3.5, 7.25)
+      check out32[8] == 2.0    # min(2, 9)
+
+when isMainModule:
+  runTest()

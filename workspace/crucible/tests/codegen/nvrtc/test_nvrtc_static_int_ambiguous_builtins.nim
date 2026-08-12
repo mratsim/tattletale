@@ -46,7 +46,7 @@
 ##       workspace/crucible/tests/codegen/nvrtc/test_nvrtc_static_int_ambiguous_builtins.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 # ── static-int type + max overload set (mirrors ceramic) ────────────────
 type Int*[V: static int] = object
@@ -91,22 +91,23 @@ const kernelCode = cuda:
     res[6] = int32(g)           # 100
     res[7] = int32(i)           # 100
 
-suite "NVRTC — static-int ambiguous-builtin (max) overload set":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "NVRTC — static-int ambiguous-builtin (max) overload set":
 
-  test "all five overload shapes compile, run, and produce the right values":
-    var buf: array[8, int32]
-    var dynArr: array[1, int32] = [100'i32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()  # currently aborts: NVRTC rejects the empty-Int[N] max calls (see header)
-    nv.getPtx()
-    nv.execute("staticIntMax", buf, (dynArr,))
-    check buf[0] == 7    # max(Int[5](), 7)
-    check buf[1] == 7    # max(7, Int[5]())
-    check buf[2] == 5    # max(Int[5](), 3)
-    check buf[3] == 5    # max(3, Int[5]())
-    check buf[4] == 3    # max(Int[2](), Int[3]())
-    check buf[5] == 3    # max(Int[3](), Int[2]())
-    check buf[6] == 100  # max(Int[5](), 100)
-    check buf[7] == 100  # max(100, Int[5]())
+    test "all five overload shapes compile, run, and produce the right values":
+      var buf: array[8, int32]
+      var dynArr: array[1, int32] = [100'i32]
+      var engine = bkCuda.init()
+      engine.ingest(kernelCode)
+      engine.run<<(1, 1)>>("staticIntMax", buf, (dynArr,))
+      check buf[0] == 7    # max(Int[5](), 7)
+      check buf[1] == 7    # max(7, Int[5]())
+      check buf[2] == 5    # max(Int[5](), 3)
+      check buf[3] == 5    # max(3, Int[5]())
+      check buf[4] == 3    # max(Int[2](), Int[3]())
+      check buf[5] == 3    # max(Int[3](), Int[2]())
+      check buf[6] == 100  # max(Int[5](), 100)
+      check buf[7] == 100  # max(100, Int[5]())
+
+when isMainModule:
+  runTest()

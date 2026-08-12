@@ -147,6 +147,7 @@ type
       pBody*: GpuAst
       pAttributes*: set[GpuAttribute] # order not important, hence set
       pRawPragmas*: seq[string]  ## Raw pragma names from Nim AST (preserved for filterPragmas pass)
+      pWorkgroupSize*: tuple[x, y, z: int]  ## `{.workgroup: (X, Y, Z).}` annotation, (0,0,0) = unset
       forwardDeclare*: bool ## can be set to true to _only_ generate a forward declaration
     of gpuCall:
       cIsExpr*: bool ## If the call returns a value
@@ -473,6 +474,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result.pBody = ast.pBody.clone()
     result.pAttributes = ast.pAttributes
     result.pRawPragmas = ast.pRawPragmas
+    result.pWorkgroupSize = ast.pWorkgroupSize
     result.forwardDeclare = ast.forwardDeclare
   of gpuCall:
     result = GpuAst(kind: gpuCall)
