@@ -17,3 +17,14 @@
 ## and the `check` template) from the NVIDIA ABI binding.
 
 import workspace/crucible/src/abis/nvidia_abi
+
+proc cudaGetComputeCapability*(): int =
+  ## Compute capability of device 0 packed as one int (120 for 12.0),
+  ## used to pick the NVRTC `--gpu-architecture` target at compile time.
+  check cuInit(0)
+  var device: CUdevice
+  check cuDeviceGet(device, 0)
+  var major, minor: int32
+  check cuDeviceGetAttribute(major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device)
+  check cuDeviceGetAttribute(minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device)
+  result = int(major) * 10 + int(minor)

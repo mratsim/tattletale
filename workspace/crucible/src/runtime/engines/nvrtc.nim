@@ -16,8 +16,9 @@
 ##
 ## The engine is a `ref object` with fields directly (no XxxObj indirection).
 ## Resources live in RAII value fields (`NVRTC` carries its own `=destroy`)
-## because Nim 2.2.10 refuses `=destroy` on ref types. Re-ingest replaces the
-## RAII field → the old NVRTC context/module are auto-released.
+## because Nim 2.2.10 refuses `=destroy` on ref types. `init` creates the
+## CUDA context once. Re-ingest replaces only the program and module. The
+## context is released by `=destroy` when the engine dies.
 ##
 ## Structure: PUBLIC API block first (exported `*`); PRIVATE machinery below
 ## (no `*`). `{.experimental: "codeReordering".}` lifts Nim's
@@ -37,7 +38,6 @@ import ../chevrons
 # ═════════════════════════════════════════════════════════════════════════
 type
   NVRTC = object
-    name*: string # Name of the program (of the generated in memory CUDA file)
     prog*: nvrtcProgram
     log*: string # The compilation log
     ptx*: string # PTX of the program
@@ -67,7 +67,9 @@ proc `=destroy`(nvrtc: NVRTC) =
 
 proc newCudaEngine(): CudaEngine =
   ## Private factory — engines.nim reaches it via `import {.all.}`.
-  CudaEngine()
+  ## `init` semantics: live CUDA context, no kernel yet.
+  result = CudaEngine()
+  result.nvrtc = initNvrtc()
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -75,9 +77,9 @@ proc newCudaEngine(): CudaEngine =
 
 proc ingest*(engine: CudaEngine, source: string) =
   ## NVRTC-compile `source` → PTX. Re-entrant: replaces the previous artifact
-  ## and NVRTC context/module (the old RAII field is destroyed).
+  ## and program, while the CUDA context stays alive (created once at init).
   engine.source = source
-  engine.nvrtc = initNvrtc(source)
+  engine.nvrtc.createProgram(source)
   engine.nvrtc.compile()
   engine.nvrtc.getPtx()
   engine.ptx = engine.nvrtc.ptx
@@ -98,10 +100,9 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
 # ─────────────────────────────────────────────────────────────────────────
 
 
-proc initNvrtc(cuda: string, name = "sample.cu"): NVRTC =
-  ## Initializes an NVRTC object for the given program `cuda`
-  ## TODO: consider in-memory and on-disk caching option for compiled PTX.
-  ## (Compile once, reuse PTX or CUmodule for subsequent runs.)
+proc initNvrtc(): NVRTC =
+  ## CUDA context + device handle, no program yet. `ingest` builds the
+  ## NVRTC program from the source (createProgram) and compiles it.
   var
     context: CUcontext
     device: CUdevice
@@ -110,13 +111,19 @@ proc initNvrtc(cuda: string, name = "sample.cu"): NVRTC =
   check cuDeviceGet(device, 0)
   check cuCtxCreate(context, 0, device)
 
-  # Create an instance of nvrtcProgram based on the passed code
-  var prog: nvrtcProgram
-  check nvrtcCreateProgram(prog, cstring cuda, cstring name, 0, nil, nil)
+  result = NVRTC(device: device, context: context)
 
-  result = NVRTC(prog: prog, name: name,
-                 device: device,
-                 context: context)
+proc createProgram(nvrtc: var NVRTC, source: string) =
+  ## Build the NVRTC program from `source`, replacing any previous program.
+  ## Re-ingest unloads the previous module (the context stays alive).
+  if nvrtc.module.pointer != nil:
+    check cuCtxSetCurrent(nvrtc.context)
+    check cuModuleUnload nvrtc.module
+    nvrtc.module = CUmodule(nil)
+    nvrtc.moduleLoaded = false
+
+  # The program name only prefixes NVRTC compile-error lines
+  check nvrtcCreateProgram(nvrtc.prog, cstring source, "kernel.cu", 0, nil, nil)
 
 proc log(nvrtc: var NVRTC) =
   ## Retrieve the compilation log.
@@ -128,11 +135,14 @@ proc log(nvrtc: var NVRTC) =
   check nvrtcGetProgramLog(nvrtc.prog, log)
   nvrtc.log = $log # usually empty if no issues found by the compiler
 
-proc compile(nvrtc: var NVRTC) =
-  # Compile the program
-  # Note: Can specify GPU target architecture explicitly with '-arch' flag.
+proc compile(nvrtc: var NVRTC, compute_capability = cudaGetComputeCapability()) =
+  # Compile the program. The arch defaults to the queried device capability
+  # (compute_120 on a 12.0 GPU) so pre-sm_120 hardware still JIT-lowers the
+  # PTX. NVRTC rejects archs below compute_75 with a loud compile error
+  # listing the valid targets.
+  let arch = "--gpu-architecture=compute_" & $compute_capability
   var options = @[
-    cstring "--gpu-architecture=sm_120", # Blackwell (sm_120)
+    cstring arch,
     cstring "-default-device",           # namespace-scope vars default to __device__
     # "--fmad=false", # and whatever other options for example
   ]
