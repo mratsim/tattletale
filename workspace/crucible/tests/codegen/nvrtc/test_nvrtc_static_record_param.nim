@@ -9,7 +9,8 @@
 ## the signature and the matching argument at the call site, like typedesc
 ## params. Regression test: without the fix this file fails to compile inside
 ## the `cuda:` macro ("Type: ntyEnum not supported yet").
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   MiniDType = enum
@@ -32,11 +33,10 @@ const kernelCode = cuda:
     output[0] = c[0]
 
 var buf: array[1, float32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("staticParamKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("staticParamKernel", buf, ())
 echo "  [0]=", buf[0]
 doAssert buf[0] == 8.0'f32
 echo "  OK (test_nvrtc_static_record_param)"

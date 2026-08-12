@@ -18,7 +18,8 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_scalar_args_by_value.nim
 
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const kernelCode = opencl:
   proc scaleKernel(a: ptr UncheckedArray[float32];
@@ -30,23 +31,12 @@ const kernelCode = opencl:
 echo kernelCode
 
 block:
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
-
-  # Scalars must be copied into live vars: the taggedArgs entry points at
-  # their address, and the pointer must stay valid for the whole call.
+  var engine = bkOpenCL.init()
+  engine.ingest(kernelCode)
   var a: array[1, float32] = [2.5'f32]
   var alpha = 3.0'f32
   var beta = 4'i32
-
-  let r = execOpenCL(
-    ctx, kernelCode, "scaleKernel", outputBytes = 4,
-    taggedArgs = @[
-      (cast[pointer](a[0].addr), 4, false),
-      (cast[pointer](alpha.addr), 4, true),
-      (cast[pointer](beta.addr), 4, true)
-    ]
-  )
-  let outVal = cast[ptr float32](r[0].addr)[]
-  doAssert outVal == 11.5'f32, "expected 2.5 * 3.0 + 4.0 = 11.5"
+  var output: array[1, float32]
+  engine.run("scaleKernel", output, (a, alpha, beta))
+  doAssert output[0] == 11.5'f32, "expected 2.5 * 3.0 + 4.0 = 11.5"
   echo "  OK"

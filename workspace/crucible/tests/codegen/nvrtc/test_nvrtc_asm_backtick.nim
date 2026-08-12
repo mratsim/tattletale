@@ -8,7 +8,8 @@
 ##   nim cpp -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_asm_backtick.nim
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const kernelCode = cuda:
   proc asmAdd(a, b: uint32): uint32 {.device, forceinline.} =
@@ -30,11 +31,10 @@ const kernelCode = cuda:
 
 proc main() =
   var buf: array[3, uint32]
-  var nv = initNvrtc(kernelCode)
-  nv.compile()
-  nv.getPtx()
-  echo "PTX: ", nv.ptx.len, " bytes"
-  nv.execute("asmBacktickKernel", buf, ())
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("asmBacktickKernel", buf, ())
   echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2]
   doAssert buf[0] == 8
   doAssert buf[1] == 300

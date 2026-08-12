@@ -20,7 +20,18 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_thread_id.nim
 ##
 import std/strutils
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
+# The legacy NVRTC driver (initNvrtc/execute) is not re-exported by engines.nim
+# anymore (clean engine API only) — import it directly; order matters:
+# engines must be processed first so its `import ./engines/nvrtc {.all.}`
+# sees a fully-processed nvrtc module (the engines ↔ nvrtc circular import
+# only compiles in that direction); the direct import below is then cached.
+import workspace/crucible/src/runtime/engines/nvrtc
+# TODO(engine): this test exercises 2D/3D launch extents (dim3 grid/block) which
+# are not expressible via the 1D engine LaunchConfig — kept on the internal
+# NVRTC execute path on purpose.
+import workspace/crucible/src/runtime/exec/cuda_runtime
 
 const recordLen = 10 # per-thread record: gid, blockIdx.x/y/z, threadIdx.x/y/z, blockDim.x/y/z
 

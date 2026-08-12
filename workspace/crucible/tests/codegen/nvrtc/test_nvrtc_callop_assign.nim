@@ -15,7 +15,8 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_assign.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type Int*[V: static int] = object
   discard
@@ -71,11 +72,8 @@ const kernel = cuda:
 suite "NVRTC callop assign":
   test "fillWith via NVRTC":
     var buf: array[128, float32]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernel)
+    engine.run<<(1, 1)>>("kernel", buf, ())
     check buf[0] == 42.0'f32
     check buf[127] == 42.0'f32

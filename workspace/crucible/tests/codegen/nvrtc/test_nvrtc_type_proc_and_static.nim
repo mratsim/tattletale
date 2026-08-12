@@ -3,7 +3,8 @@
 ##
 ## Coverage: nim_to_gpu.nim:431-449
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   ## ntyStatic: array sized by static int
@@ -24,11 +25,10 @@ const kernelCode = cuda:
     output[1] = b.data[3]
 
 var buf: array[2, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("typeBranchesKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("typeBranchesKernel", buf, ())
 doAssert buf[0] == 1, &"ntyStatic buf[0]: got {buf[0]}"
 doAssert buf[1] == 4, &"ntyStatic buf[1]: got {buf[1]}"
 echo "  OK (test_nvrtc_type_proc_and_static)"

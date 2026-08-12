@@ -7,7 +7,18 @@ import std/[math, strformat, strutils, random]
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
+# The legacy NVRTC driver (initNvrtc/execute) is not re-exported by engines.nim
+# anymore (clean engine API only) — import it directly; order matters:
+# engines must be processed first so its `import ./engines/nvrtc {.all.}`
+# sees a fully-processed nvrtc module (the engines ↔ nvrtc circular import
+# only compiles in that direction); the direct import below is then cached.
+import workspace/crucible/src/runtime/engines/nvrtc
+# TODO(engine): this benchmark harness launches with a 2D grid
+# (dim3(num_cta_m, num_cta_n)) — the 1D engine LaunchConfig cannot express
+# it, so it stays on the internal NVRTC execute path on purpose.
+import workspace/crucible/src/runtime/exec/cuda_runtime
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  XOR hash — exact bit-level fingerprint

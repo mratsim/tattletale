@@ -12,7 +12,8 @@
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_dummy_init.nim
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/wgpu
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   FixMe*[V: static int] = object
@@ -30,17 +31,19 @@ const kernelCode2 = webgpu:
 suite "WebGPU - dummy-field initializers":
   test "single dummy struct const":
     var buf: array[1, uint32]
-    var ctx = initWgpu()
-    defer: ctx.shutdown()
+    var engine = bkWGSL.init()
+    engine.ingest(kernelCode)
     echo kernelCode
-    let result = execWgpu(ctx, kernelCode, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var res: array[1, uint32]
+    engine.run("dummyKernel", res, ())
+    check res[0] == 1
 
 
   test "tuple of dummy structs const":
     var buf: array[1, uint32]
-    var ctx = initWgpu()
-    defer: ctx.shutdown()
+    var engine = bkWGSL.init()
+    engine.ingest(kernelCode2)
     echo kernelCode2
-    let result = execWgpu(ctx, kernelCode2, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var res: array[1, uint32]
+    engine.run("dummyKernel", res, ())
+    check res[0] == 1

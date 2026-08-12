@@ -37,7 +37,8 @@ import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/tests/gemm/gemm_test_lib
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 {.experimental: "callOperator".}
 
@@ -149,10 +150,10 @@ const kernelCode = opencl:
     gemm_grid(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, threadIdx)
 
 proc main() =
-  var engine = "opencl".getEngine(kernelCode)
-  doAssert engine.ctx.device.vendor().contains("NVIDIA"),
+  var engine = bkOpenCL.init(kernelCode)
+  doAssert engine.deviceVendor().contains("NVIDIA"),
     "gemm_grid OpenCL needs NVIDIA's OpenCL compiler for the mma.sync asm; got: " &
-    engine.ctx.device.vendor()
+    engine.deviceVendor()
   testGemmGrid(engine, tiled, "SM80")
   testGemmGridBeta(engine, tiled, "SM80")
   testGemmGridIdentity(engine, tiled, "SM80")

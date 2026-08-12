@@ -1,7 +1,8 @@
 ## CuTe Layout + Tile dot products — WebGPU (WGSL) backend
 ## Run with: nim c -r workspace/crucible/tests/codegen/webgpu/test_webgpu_cute_layout.nim
 import std/strformat
-import workspace/crucible/src/codegen/wgpu
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Layout[S: static tuple, D: static tuple] = object
@@ -28,10 +29,10 @@ echo kernelWgsl; echo ""
 
 echo "=== wgpu-native execution ===\n"
 block:
-  var ctx = initWgpu()
-  defer: ctx.shutdown()
-  let r = execWgpu(ctx, kernelWgsl, "cuteKernel", outputBytes=24, inputs = @[])
-  let res = cast[ptr array[6, uint32]](r[0].addr)
+  var engine = bkWGSL.init()
+  engine.ingest(kernelWgsl)
+  var res: array[6, uint32]
+  engine.run("cuteKernel", res, ())
   doAssert res[0]==10 and res[1]==20 and res[2]==60
   doAssert res[4]==21 and res[5]==61
   echo "  OK — CuTe Layout + Tile  (WebGPU)"

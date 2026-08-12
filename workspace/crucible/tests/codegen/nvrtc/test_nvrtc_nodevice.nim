@@ -5,7 +5,8 @@
 ## This test verifies the mechanism works for externally-pulled functions.
 
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── Functions defined OUTSIDE the cuda block (no {.device.}) ──
 
@@ -28,13 +29,13 @@ const kernelCode = cuda:
 
 # ── Test ──────────────────────────────────────────────────────────────
 
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
+var engine = bkCuda.init()
+
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
 
 var buf: array[8, int32]
-nv.execute("nodeviceKernel", buf, ())
+engine.run("nodeviceKernel", buf, ())
 
 doAssert buf[0] == 2,  &"doubleIt(1) (no .device.): got {buf[0]}"
 doAssert buf[1] == 4,  &"doubleIt(2) (no .device.): got {buf[1]}"

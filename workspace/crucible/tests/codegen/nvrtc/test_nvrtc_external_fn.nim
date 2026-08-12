@@ -4,7 +4,8 @@
 ##
 ## Tests the PR #565 feature: functions defined outside the `cuda` block
 ## are pulled in automatically when called from GPU code.
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── External device functions (defined outside the `cuda` block) ────────────
 
@@ -36,12 +37,11 @@ const kernelCode = cuda:
 # ── Host code ───────────────────────────────────────────────────────────────
 
 var buf: array[3, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
 
-nv.execute("externalFnKernel", buf, ())
+engine.run("externalFnKernel", buf, ())
 echo "  addThree(10,20,30)  = ", buf[0]
 echo "  scaleAndAdd(5,2,3)  = ", buf[1]
 echo "  selectValue(isEven(42), 100, 200) = ", buf[2]

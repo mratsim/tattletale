@@ -6,19 +6,30 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+## CudaEngine — NVRTC JIT + CUDA driver execution (moved from codegen/nvrtc.nim).
+##
+## The NVRTC JIT driver (initNvrtc/compile/getPtx/load/link/copyToSymbol and
+## the low-level `execute` templates for explicit 2D/3D extents) is runtime
+## code and lives on here, decoupled from the compile-time DSL: this module
+## no longer imports `codegen/gpu_compiler`.
+##
+## The engine is a `ref object` with fields directly (no XxxObj indirection).
+## Resources live in RAII value fields (`NVRTC` carries its own `=destroy`)
+## because Nim 2.2.10 refuses `=destroy` on ref types. Re-ingest replaces the
+## RAII field → the old NVRTC context/module are auto-released.
+
 import std/[strformat, os]
 
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/nvidia_paths
-
-import ./gpu_compiler
-import ./exec/cuda_runtime
-export cuda_runtime
-export gpu_compiler
-export nvidia_abi
 import workspace/crucible/src/abis/c_abi
+
+import ../exec/cuda_runtime
+import ../exec/runtime_utils
+import ../engines
+
+export nvidia_abi
 export c_abi
-import ./exec/runtime_utils
 
 ## Debug output (driver version, PTX size, files) — controlled by -d:debug
 
@@ -267,6 +278,125 @@ proc copyToSymbol*[T](nvrtc: NVRTC, symbol: string, data: T, offset = 0) =
     srcPtr = data.addr
   doAssert csize_t(totSize) <= size, "Input data size does not fit target: " & $totSize & " vs. " & $size
   check cuMemcpyHtoD(devPtr + csize_t(offset), srcPtr, csize_t(totSize))
+
+# ═════════════════════════════════════════════════════════════════════════
+# CudaEngine — the HwEngine implementation
+# ═════════════════════════════════════════════════════════════════════════
+
+type
+  CudaEngine* = ref object
+    ## Fields directly (no Obj indirection); resources in the RAII `NVRTC`
+    ## value field (fires `=destroy` when the ref dies or is re-ingested).
+    source: string
+    ptx: string
+    nvrtc: NVRTC
+    grid, blk: int   # engine-default geometry for the plain `run`
+
+proc newCudaEngine(grid, blk: int): CudaEngine =
+  ## Private factory — engines.nim reaches it via `import {.all.}`.
+  CudaEngine(grid: grid, blk: blk)
+proc ingest*(engine: CudaEngine, source: string) =
+  ## NVRTC-compile `source` → PTX. Re-entrant: replaces the previous artifact
+  ## and NVRTC context/module (the old RAII field is destroyed).
+  if engine.ptx.len > 0:
+    when defined(debug):
+      echo "[INFO]: cuda ingest: invalidating previous artifact"
+  engine.source = source
+  engine.nvrtc = initNvrtc(source)
+  engine.nvrtc.compile()
+  engine.nvrtc.getPtx()
+  engine.ptx = engine.nvrtc.ptx
+
+proc getArtifact*(engine: CudaEngine): string =
+  ## The compiled PTX.
+  engine.ptx
+
+proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
+             blobs: seq[ArgBlob], cfg: LaunchConfig) =
+  ## Lazy cuModuleLoadData + cuLaunchKernel with ArgBlob marshalling:
+  ##   size >= 0 → device buffer (cuMemAlloc + H2D, param = CUdeviceptr)
+  ##   size <  0 → by-value scalar (param = host pointer, CUDA reads -size bytes)
+  ## The output is always a device buffer, uploaded before launch and read
+  ## back after (in-place β·C works). CUDA is res-first: the output is the
+  ## kernel's first parameter (res-first; param-order unification across backends is pending).
+  if not engine.nvrtc.moduleLoaded:
+    engine.nvrtc.load()
+  check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
+
+  let outSize = abs(output.size)
+
+  # Allocate + upload device buffers for every non-scalar arg
+  var devPtrs = newSeq[CUdeviceptr](blobs.len + 1)
+  var di = 0
+  for b in blobs:
+    if b.size >= 0:
+      if b.size > 0:
+        check cuMemAlloc(devPtrs[di], csize_t(b.size))
+        check cuMemcpyHtoD(devPtrs[di], b.data, csize_t(b.size))
+      inc di
+  if outSize > 0:
+    check cuMemAlloc(devPtrs[di], csize_t(outSize))
+    check cuMemcpyHtoD(devPtrs[di], output.data, csize_t(outSize))
+  let outDev = devPtrs[di]
+  defer:
+    for i in 0 ..< di + (if outSize > 0: 1 else: 0):
+      check cuMemFree(devPtrs[i])
+
+  # Assemble the kernel param array: output first (res-first convention),
+  # then each blob — device ptr value for buffers, host data ptr for scalars.
+  var params = newSeq[pointer](blobs.len + 1)
+  params[0] = addr outDev
+  var bi = 0   # buffer index into devPtrs
+  for i, b in blobs:
+    if b.size >= 0:
+      params[i + 1] = addr devPtrs[bi]
+      inc bi
+    else:
+      params[i + 1] = b.data
+
+  let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
+
+  when defined(debug):
+    var start, stop: CUevent
+    check cuEventCreate(start)
+    check cuEventCreate(stop)
+    check cuEventRecord(start, CUstream(nil))
+
+  check cuLaunchKernel(
+    engine.nvrtc.kernel,
+    uint32(cfg.grid), 1'u32, 1'u32,
+    uint32(cfg.blk), 1'u32, 1'u32,
+    uint32(cfg.sharedMem),
+    stream,
+    params[0].addr, nil)
+
+  check cuCtxSynchronize()
+
+  when defined(debug):
+    check cuEventRecord(stop, CUstream(nil))
+    check cuEventSynchronize(stop)
+    var elapsedTime: cfloat
+    check cuEventElapsedTime(elapsedTime, start, stop)
+    echo "[INFO]: Kernel execution took: ", elapsedTime, " ms"
+    check cuEventDestroy(start)
+    check cuEventDestroy(stop)
+
+  # Read the output back
+  if outSize > 0:
+    check cuMemcpyDtoH(output.data, outDev, csize_t(outSize))
+
+template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped,
+              cfg: LaunchConfig): untyped =
+  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
+  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
+
+template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped): untyped =
+  run(engine, kernel, output, args,
+      (grid: engine.grid, blk: engine.blk, sharedMem: 0, stream: 0))
+
+# ═════════════════════════════════════════════════════════════════════════
+# Low-level NVRTC execute templates (kept for explicit 2D/3D launch extents)
+# ═════════════════════════════════════════════════════════════════════════
 
 template execute*(nvrtc: var NVRTC, fn: string, res, inputs: typed, sharedMemSize: typed) =
   ## Load the generated PTX, get the target kernel `fn` and execute it with the

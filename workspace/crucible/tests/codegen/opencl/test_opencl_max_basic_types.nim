@@ -20,7 +20,8 @@
 ## the kernel and verifies the values.
 
 import std/[unittest, strutils]
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── kernel ───────────────────────────────────────────────────────────────
 # OpenCL binds kernel args in order: inputs first, output LAST.
@@ -55,12 +56,10 @@ suite "OpenCL — max on basic types":
     check kernelCode.contains("fmin")
 
     var dynArr: array[2, float32] = [2.5'f32, 9.0'f32]
-    var ctx = initOpenCL()
-    defer: ctx.shutdown()
-    let r = ctx.execOpenCL(kernelCode, "maxBasic", outputBytes = 36,
-                     inputs = [(cast[pointer](dynArr[0].addr), 8)])
-    check r.len == 36
-    let out32 = cast[ptr array[9, float32]](r[0].addr)
+    var engine = bkOpenCL.init()
+    engine.ingest(kernelCode)
+    var out32: array[9, float32]
+    engine.run("maxBasic", out32, (dynArr))
     check out32[0] == 9.0    # max(2.5, 9.0)
     check out32[1] == 7.25   # max(3.5, 7.25)
     check out32[2] == 9.0    # max(9.0, 2.5)

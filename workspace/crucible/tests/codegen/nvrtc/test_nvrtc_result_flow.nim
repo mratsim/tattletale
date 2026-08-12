@@ -9,7 +9,8 @@
 ##
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_result_flow.nim
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # All procs assign to `result` before reading — safe without zero-init.
 proc plain(x: uint32): uint32 =
@@ -60,12 +61,9 @@ const kernelCode = cuda:
     output[6] = ifWithFor(false, 9'u32)
 
 var buf: array[7, uint32]
-var nv = initNvrtc(kernelCode)
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.compile()
-nv.getPtx()
-nv.execute("resultFlowKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+engine.run<<(1, 1)>>("resultFlowKernel", buf, ())
 doAssert buf[0] == 10,  &"plain(5): {buf[0]}"
 doAssert buf[1] == 10,  &"ifElse(true): {buf[1]}"
 doAssert buf[2] == 20,  &"ifElse(false): {buf[2]}"

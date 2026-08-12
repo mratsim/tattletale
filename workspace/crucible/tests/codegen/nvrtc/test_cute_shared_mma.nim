@@ -4,7 +4,8 @@
 ## Tile loop pattern and inline PTX for tensor core MMA.
 ## The asm {} block uses Crucible's gpuInlineAsm support.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const kernelCode = cuda:
   proc tileMmaKernel(output: ptr UncheckedArray[uint32]) {.global.} =
@@ -20,13 +21,10 @@ const kernelCode = cuda:
     output[1] = 42'u32
 
 var buf: array[2, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.execute("tileMmaKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run<<(1, 1)>>("tileMmaKernel", buf, ())
 doAssert buf[0] == 4,  &"tile loop: {buf[0]} (expected 2x2=4)"
 doAssert buf[1] == 42, &"output: {buf[1]}"
 echo "  OK — tile loop + PTX patterns"

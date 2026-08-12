@@ -5,7 +5,8 @@
 ## Note: for-loop bounds use 0 .. M-1 / 0 .. N-1 (Nim inclusive range)
 ##       which generates i<M / i<N in C codegen.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Layout[M, N: static int] = object
@@ -25,11 +26,10 @@ const kernelCode = cuda:
     output[1] = l.data[5]
 
 var buf: array[2, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("factoryKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("factoryKernel", buf, ())
 doAssert buf[0] == 42, &"factory[0]: {buf[0]}"
 doAssert buf[1] == 42, &"factory[5]: {buf[1]}"
 echo "  OK — factory pattern"

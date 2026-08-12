@@ -3,17 +3,17 @@
 ##
 ## Coverage: nvrtc.nim:99
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const kernelCode = cuda:
   proc defaultDeviceKernel(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = 42'u32
 
 var buf: array[1, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("defaultDeviceKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("defaultDeviceKernel", buf, ())
 doAssert buf[0] == 42
 echo "  OK (test_nvrtc_default_device)"

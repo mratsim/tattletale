@@ -33,7 +33,8 @@ import workspace/ceramic/src/kernel_fillwith_gpu
 import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const atom = SM80_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
@@ -137,10 +138,10 @@ const kernelCode = opencl:
 # ═════════════════════════════════════════════════════════════════════════
 
 proc main() =
-  var engine = "opencl".getEngine(kernelCode)
-  doAssert engine.ctx.device.vendor().contains("NVIDIA"),
+  var engine = bkOpenCL.init(kernelCode)
+  doAssert engine.deviceVendor().contains("NVIDIA"),
     "this kernel embeds NVIDIA inline PTX (asm mma.sync) — only NVIDIA's " &
-    "OpenCL compiler accepts it; got device vendor: " & engine.ctx.device.vendor()
+    "OpenCL compiler accepts it; got device vendor: " & engine.deviceVendor()
   testMicrotile(engine, atom, "SM80")
   echo "  OK: m16n8k8 tf32 microtile matches reference via OpenCL (tf32-exact fixture, 16 trials)"
 

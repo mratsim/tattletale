@@ -9,7 +9,8 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_tensorview_paren.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # Int[V] and operators — no ceramic imports
 type Int*[V: static int] = object
@@ -55,10 +56,7 @@ suite "Crucible - DotExpr in generic type resolution":
   test "crd2idx with DotExpr arg inside cuda:":
     let code = kernel
     var output: array[1, float32]
-    var nv = initNvrtc(code)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(code)
+    engine.run<<(1, 1)>>("kernel", output, ())
     check output[0] == 0.0

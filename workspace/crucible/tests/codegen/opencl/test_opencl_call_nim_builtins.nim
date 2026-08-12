@@ -7,7 +7,8 @@
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_call_nim_builtins.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 template runMulKernel(t: typedesc; expected0, expected1: float32) =
   const k = opencl:
@@ -18,14 +19,10 @@ template runMulKernel(t: typedesc; expected0, expected1: float32) =
         let x = `*`(a, b)
         C[i] = float32(x)
   block:
-    var ctx = initOpenCL()
-    defer: ctx.shutdown()
-    let result = execOpenCL(
-      ctx, k, "mulKernel",
-      outputBytes = 8,
-      inputs = []
-    )
-    let res = cast[ptr array[2, float32]](result[0].addr)
+    var engine = bkOpenCL.init()
+    engine.ingest(k)
+    var res: array[2, float32]
+    engine.run("mulKernel", res, ())
     check res[0] == expected0
     check res[1] == expected1
 
@@ -38,14 +35,10 @@ template runFloatMulKernel(t: typedesc; expected0, expected1: float32) =
         let x = `*`(a, b)
         C[i] = float32(x)
   block:
-    var ctx = initOpenCL()
-    defer: ctx.shutdown()
-    let result = execOpenCL(
-      ctx, k, "mulKernel",
-      outputBytes = 8,
-      inputs = []
-    )
-    let res = cast[ptr array[2, float32]](result[0].addr)
+    var engine = bkOpenCL.init()
+    engine.ingest(k)
+    var res: array[2, float32]
+    engine.run("mulKernel", res, ())
     check res[0] == expected0
     check res[1] == expected1
 

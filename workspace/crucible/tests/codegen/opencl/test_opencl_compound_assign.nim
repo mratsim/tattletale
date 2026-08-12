@@ -22,7 +22,8 @@
 ##     tests/codegen/opencl/test_opencl_compound_assign.nim
 
 import std/strutils
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── OpenCL C generation via `opencl:` macro ────────────────────────────────
 
@@ -50,23 +51,13 @@ doAssert not accCl.contains("+="), "compound assignment must be desugared, got: 
 echo "=== OpenCL execution ===\n"
 
 block: # accKernel: output[i] = a[i] + acc(0..3) + 1, acc(k) = 0+1+2+3 = 6
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
+  var engine = bkOpenCL.init()
+  engine.ingest(accCl)
 
   var a: array[2, uint32] = [10'u32, 20'u32]
+  var out32: array[2, uint32]
 
-  let result = execOpenCL(
-    ctx,
-    accCl,
-    "accKernel",
-    outputBytes = 8,  # 2 x uint32
-    inputs = [
-      (cast[pointer](a[0].addr), 8)
-    ]
-  )
-
-  doAssert result.len == 8
-  let out32 = cast[ptr array[2, uint32]](result[0].addr)
+  engine.run("accKernel", out32, (a))
   echo "  accKernel: output = [", out32[0], ", ", out32[1], "]"
   doAssert out32[0] == 17  # 10 + 6 + 1
   doAssert out32[1] == 27  # 20 + 6 + 1

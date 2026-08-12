@@ -4,7 +4,8 @@
 ## Note: uses separate type names because gtObject struct naming
 ## doesn't yet differentiate generic params.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   TileA = object
@@ -38,11 +39,10 @@ const kernelCode = cuda:
     output[2] = perWarp.data[0]
 
 var buf: array[3, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("divTileKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("divTileKernel", buf, ())
 doAssert buf[0] == 1,   &"tile[0]: {buf[0]}"
 doAssert buf[1] == 64,  &"tile[63]: {buf[1]}"
 doAssert buf[2] == 100, &"perWarp[0]: {buf[2]}"

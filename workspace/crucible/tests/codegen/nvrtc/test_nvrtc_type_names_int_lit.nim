@@ -3,7 +3,8 @@
 ##
 ## Coverage: nim_to_gpu.nim:332-335
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Sized[N: static int] = object
@@ -15,10 +16,9 @@ const kernelCode = cuda:
     output[0] = 1'u32
 
 var buf: array[1, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("intLitTypeNameKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("intLitTypeNameKernel", buf, ())
 doAssert buf[0] == 1
 echo "  OK (test_nvrtc_type_names_int_lit)"

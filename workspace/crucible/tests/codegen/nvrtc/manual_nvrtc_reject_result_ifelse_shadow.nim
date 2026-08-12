@@ -11,7 +11,8 @@
 ##
 ## Run with: nim c -r workspace/crucible/tests/codegen/nvrtc/manual_nvrtc_reject_result_ifelse_shadow.nim
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const kernelCode = cuda:
   proc shadowIfElse(cond: bool; a, b: uint32): uint32 {.device.} =
@@ -26,12 +27,9 @@ const kernelCode = cuda:
     output[1] = shadowIfElse(false, 10'u32, 20'u32)
 
 var buf: array[2, uint32]
-var nv = initNvrtc(kernelCode)
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.compile()
-nv.getPtx()
-nv.execute("shadowKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+engine.run<<(1, 1)>>("shadowKernel", buf, ())
 # Expected: 0 (outer implicit result, never assigned).
 # Currently works on Blackwell but relies on `return ;` UB.
 doAssert buf[0] == 0, &"shadowIfElse(true): {buf[0]} (expected 0)"

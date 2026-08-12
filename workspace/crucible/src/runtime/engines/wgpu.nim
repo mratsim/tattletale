@@ -1,0 +1,328 @@
+# Constantine
+# Copyright (c) 2018-2019    Status Research & Development GmbH
+# Copyright (c) 2020-Present Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## WgpuEngine — WebGPU (wgpu-native) execution (moved from codegen/wgpu.nim,
+## decoupled from the compile-time DSL: no gpu_compiler import).
+##
+## ingest = store WGSL; getArtifact = WGSL; run = pipeline +
+## dispatchWorkgroups where grid = dispatchWorkgroups count (replacing the
+## output-bytes-derived dispatch wart). blk is shader-baked (@workgroup_size):
+## run's blk is validated loudly. The staging-buffer map pattern is kept;
+## WGPUBufferMapAsyncStatus is now captured in `check` (the old execWgpu
+## dropped it). Scalars (ArgBlob size < 0) use a storage-buffer fallback
+## (future: uniform).
+
+import std/[macros, os, strutils]
+
+import workspace/crucible/vendor/wgpu
+
+import ../exec/wgpu_runtime
+import ../engines
+
+export wgpu_runtime
+
+# ═════════════════════════════════════════════════════════════════════════
+# check — unified error policy: stacktrace + stderr + quit(1)
+# ═════════════════════════════════════════════════════════════════════════
+
+template check*(status: WGPUBufferMapAsyncStatus, quitOnFailure = true) =
+  let code = status
+  if code != wgpuBufferMapAsyncStatusSuccess:
+    writeStackTrace()
+    stderr.write($instantiationInfo() & " exited with error: WGPUBufferMapAsyncStatus " & $code & '\n')
+    if quitOnFailure:
+      quit 1
+
+template check*(status: WGPURequestAdapterStatus, quitOnFailure = true) =
+  let code = status
+  if code != wgpuRequestAdapterStatusSuccess:
+    writeStackTrace()
+    stderr.write($instantiationInfo() & " exited with error: WGPURequestAdapterStatus " & $code & '\n')
+    if quitOnFailure:
+      quit 1
+
+template check*(status: WGPURequestDeviceStatus, quitOnFailure = true) =
+  let code = status
+  if code != wgpuRequestDeviceStatusSuccess:
+    writeStackTrace()
+    stderr.write($instantiationInfo() & " exited with error: WGPURequestDeviceStatus " & $code & '\n')
+    if quitOnFailure:
+      quit 1
+
+template check*(status: WGPUQueueWorkDoneStatus, quitOnFailure = true) =
+  let code = status
+  if code != wgpuQueueWorkDoneStatusSuccess:
+    writeStackTrace()
+    stderr.write($instantiationInfo() & " exited with error: WGPUQueueWorkDoneStatus " & $code & '\n')
+    if quitOnFailure:
+      quit 1
+
+# ═════════════════════════════════════════════════════════════════════════
+# WgpuEngine
+# ═════════════════════════════════════════════════════════════════════════
+
+type
+  WgpuCtx = object
+    ## RAII value wrapper — `=destroy` fires when the engine ref dies.
+    ctx: WgpuContext
+
+  WgpuEngine* = ref object
+    ## Fields directly (no Obj indirection); resources in the RAII value field.
+    source: string
+    ctx: WgpuCtx
+    grid, blk: int   # engine-default geometry for the plain `run`
+    bakedBlk: int    # workgroup size baked into the shader at ingest
+
+proc `=destroy`(c: var WgpuCtx) =
+  if c.ctx.instance != nil:
+    c.ctx.shutdown()
+
+proc newWgpuEngine(grid, blk: int): WgpuEngine =
+  ## Private factory — engines.nim reaches it via `import {.all.}`.
+  WgpuEngine(ctx: WgpuCtx(ctx: initWgpu()), grid: grid, blk: blk)
+
+proc parseBakedBlk(wgsl: string): int =
+  ## Extract the shader-baked workgroup size from the WGSL preamble:
+  ## `const WORKGROUP_SIZE = 64u;` / `@compute @workgroup_size(WORKGROUP_SIZE)`
+  ## Returns 0 when absent (run will then fail blk validation loudly).
+  const marker = "WORKGROUP_SIZE = "
+  let i = wgsl.find(marker)
+  if i < 0:
+    return 0
+  var j = i + marker.len
+  var n = 0
+  while j < wgsl.len and wgsl[j] in {'0' .. '9'}:
+    n = n * 10 + (ord(wgsl[j]) - ord('0'))
+    inc j
+  n
+
+proc ingest*(engine: WgpuEngine, source: string) =
+  ## Store the WGSL source. Re-entrant: replaces the previous artifact
+  ## (the device context persists — only the artifact is replaced).
+  if engine.source.len > 0:
+    when defined(debug):
+      echo "[INFO]: wgpu ingest: invalidating previous artifact"
+  engine.source = source
+  engine.bakedBlk = parseBakedBlk(source)
+
+proc getArtifact*(engine: WgpuEngine): string =
+  ## The WGSL kernel source.
+  engine.source
+
+proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
+             blobs: seq[ArgBlob], cfg: LaunchConfig) =
+  ## Pipeline + dispatchWorkgroups(cfg.grid). Bindings follow WGSL parameter
+  ## order: args 0..N-1 (all as storage buffers — scalars via the buffer
+  ## arg N = output (output-last convention; param-order unification across backends is pending).
+  let device = engine.ctx.ctx.device
+  let queue  = engine.ctx.ctx.queue
+  let outSize = abs(output.size)
+
+  # blk is shader-baked (@workgroup_size): validate loudly (relax later)
+  if cfg.blk != engine.bakedBlk:
+    quit("WebGPU run blk=" & $cfg.blk & " != baked workgroup size " & $engine.bakedBlk &
+         " — launch config mismatch (blk is shader-baked on WebGPU)")
+
+  # 1. Create shader module (chained WGPUShaderSourceWGSL)
+  var wgslView = WGPUStringView(data: cstring(engine.source), length: engine.source.len.csize_t)
+  var wgslSource = WGPUShaderSourceWGSL(
+    chain: WGPUChainedStruct(
+      sType: WGPUSType_ShaderSourceWGSL,
+      next: nil
+    ),
+    code: wgslView
+  )
+  var shaderDesc = WGPUShaderModuleDescriptor(
+    nextInChain: addr wgslSource
+  )
+  let shader = wgpuDeviceCreateShaderModule(device, addr shaderDesc)
+  if shader == nil:
+    quit("WebGPU: failed to create shader module")
+  defer:
+    wgpuShaderModuleRelease(shader)
+
+  # 2. Create buffers via the staging pattern (no Map usage on storage buffers)
+  let numInputs = blobs.len
+  let totalBindings = numInputs + 1
+  var inputBuffers = newSeq[WGPUBuffer](numInputs)
+  var inputSizes = newSeq[int](numInputs)
+  for i in 0 ..< numInputs:
+    let sz = abs(blobs[i].size)   # scalars → small storage buffer fallback
+    inputSizes[i] = sz
+    let desc = WGPUBufferDescriptor(
+      usage: wgpuBufferUsageStorage or wgpuBufferUsageCopyDst,
+      size: sz.csize_t,
+      mappedAtCreation: false
+    )
+    inputBuffers[i] = wgpuDeviceCreateBuffer(device, addr desc)
+    if inputBuffers[i] == nil:
+      quit("WebGPU: failed to create input buffer")
+  defer:
+    for buf in inputBuffers:
+      wgpuBufferRelease(buf)
+
+  # Output buffer: shader writes here, then we copy to staging.
+  # COPY_DST is required for the in-place output upload (β·C).
+  var outBufDesc = WGPUBufferDescriptor(
+    usage: wgpuBufferUsageStorage or wgpuBufferUsageCopySrc or wgpuBufferUsageCopyDst,
+    size: outSize.csize_t,
+    mappedAtCreation: false)
+  let outBuf = wgpuDeviceCreateBuffer(device, addr outBufDesc)
+  if outBuf == nil:
+    quit("WebGPU: failed to create output buffer")
+  defer:
+    wgpuBufferRelease(outBuf)
+
+  # Staging buffer: copy output here, then map for CPU reading
+  var stagingDesc = WGPUBufferDescriptor(
+    usage: wgpuBufferUsageMapRead or wgpuBufferUsageCopyDst,
+    size: outSize.csize_t,
+    mappedAtCreation: false)
+  let stagingBuf = wgpuDeviceCreateBuffer(device, addr stagingDesc)
+  if stagingBuf == nil:
+    quit("WebGPU: failed to create staging buffer")
+  defer:
+    wgpuBufferRelease(stagingBuf)
+
+  # 3. Bind group layout: inputs 0..N-1, output N
+  var entries = newSeq[WGPUBindGroupLayoutEntry](totalBindings)
+  for i in 0 ..< numInputs:
+    entries[i] = WGPUBindGroupLayoutEntry(
+      binding: i.cuint,
+      visibility: 4,  # WGPUShaderStage::Compute
+      buffer: WGPUBufferBindingLayout(
+        `type`: 3,  # WGPUBufferBindingType_Storage
+        minBindingSize: inputSizes[i].csize_t
+      )
+    )
+  entries[numInputs] = WGPUBindGroupLayoutEntry(
+    binding: numInputs.cuint,
+    visibility: 4,
+    buffer: WGPUBufferBindingLayout(
+      `type`: 3,  # Storage
+      minBindingSize: outSize.csize_t
+    )
+  )
+  var bglDesc = WGPUBindGroupLayoutDescriptor(
+    entryCount: totalBindings.csize_t,
+    entries: entries[0].addr
+  )
+  let bgl = wgpuDeviceCreateBindGroupLayout(device, addr bglDesc)
+  if bgl == nil:
+    quit("WebGPU: failed to create bind group layout")
+  defer:
+    wgpuBindGroupLayoutRelease(bgl)
+
+  var plDesc = WGPUPipelineLayoutDescriptor(
+    bindGroupLayoutCount: 1,
+    bindGroupLayouts: bgl.addr
+  )
+  let pl = wgpuDeviceCreatePipelineLayout(device, addr plDesc)
+  if pl == nil:
+    quit("WebGPU: failed to create pipeline layout")
+  defer:
+    wgpuPipelineLayoutRelease(pl)
+
+  # 4. Bind group entries (same order: inputs then output)
+  var bgEntries = newSeq[WGPUBindGroupEntry](totalBindings)
+  for i in 0 ..< numInputs:
+    bgEntries[i] = WGPUBindGroupEntry(
+      binding: i.cuint,
+      buffer: inputBuffers[i],
+      size: inputSizes[i].csize_t
+    )
+  bgEntries[numInputs] = WGPUBindGroupEntry(
+    binding: numInputs.cuint,
+    buffer: outBuf,
+    size: outSize.csize_t
+  )
+  var bgDesc = WGPUBindGroupDescriptor(
+    layout: bgl,
+    entryCount: totalBindings.csize_t,
+    entries: bgEntries[0].addr
+  )
+  let bg = wgpuDeviceCreateBindGroup(device, addr bgDesc)
+  if bg == nil:
+    quit("WebGPU: failed to create bind group")
+  defer:
+    wgpuBindGroupRelease(bg)
+
+  # 5. Compute pipeline
+  var entryPtView = WGPUStringView(data: cstring(kernel), length: kernel.len.csize_t)
+  var computeState = WGPUComputeState(
+    module: shader,
+    entryPoint: entryPtView
+  )
+  var cpDesc = WGPUComputePipelineDescriptor(
+    layout: pl,
+    compute: computeState
+  )
+  let pipeline = wgpuDeviceCreateComputePipeline(device, addr cpDesc)
+  if pipeline == nil:
+    quit("WebGPU: failed to create compute pipeline")
+  defer:
+    wgpuComputePipelineRelease(pipeline)
+
+  # 6. Write input data + the output's current contents (in-place β·C)
+  for i in 0 ..< numInputs:
+    if inputSizes[i] > 0:
+      wgpuQueueWriteBuffer(queue, inputBuffers[i], 0, blobs[i].data, inputSizes[i].csize_t)
+  if outSize > 0:
+    wgpuQueueWriteBuffer(queue, outBuf, 0, output.data, outSize.csize_t)
+
+  # 7. Record commands: compute pass + copy output → staging
+  let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
+  if encoder == nil:
+    quit("WebGPU: failed to create command encoder")
+  defer:
+    wgpuCommandEncoderRelease(encoder)
+
+  let pass = wgpuCommandEncoderBeginComputePass(encoder, nil)
+  wgpuComputePassEncoderSetPipeline(pass, pipeline)
+  wgpuComputePassEncoderSetBindGroup(pass, 0, bg, 0, nil)
+  # grid = dispatchWorkgroups count (replaces the output-bytes-derived wart)
+  wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid), 1'u32, 1'u32)
+  wgpuComputePassEncoderEnd(pass)
+  wgpuCommandEncoderCopyBufferToBuffer(encoder, outBuf, 0, stagingBuf, 0, outSize.csize_t)
+  let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
+
+  # 8. Submit
+  wgpuQueueSubmit(queue, 1, cmdBuf.addr)
+  defer:
+    wgpuCommandBufferRelease(cmdBuf)
+
+  # 9. Request map + poll to process callback — capture the map status
+  var mapData = MapDoneData(done: false, resultBytes: outSize,
+                            status: wgpuBufferMapAsyncStatusUnknown)
+  var mapCbInfo = WGPUBufferMapCallbackInfo(
+    mode: wgpuCallbackModeAllowProcessEvents,
+    callback: bufferMapCb,
+    userdata1: mapData.addr,
+    userdata2: nil
+  )
+  discard wgpuBufferMapAsync(stagingBuf, wgpuMapModeRead, 0, outSize.csize_t, mapCbInfo)
+  if not wgpuDevicePoll(device, true, nil):
+    quit("WebGPU: wgpuDevicePoll failed")
+  if not mapData.done:
+    quit("WebGPU: wgpuBufferMapAsync callback never fired")
+  check mapData.status
+
+  # 10. Read mapped data
+  let mappedPtr = wgpuBufferGetMappedRange(stagingBuf, 0, mapData.resultBytes.csize_t)
+  if mappedPtr != nil and outSize > 0:
+    copyMem(output.data, mappedPtr, outSize)
+  wgpuBufferUnmap(stagingBuf)
+
+template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped,
+              cfg: LaunchConfig): untyped =
+  var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit
+  runImpl(engine, kernel, outBlob(output), flattenBlobs(args, blobStorage), cfg)
+
+template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped): untyped =
+  run(engine, kernel, output, args,
+      (grid: engine.grid, blk: engine.blk, sharedMem: 0, stream: 0))

@@ -1,6 +1,7 @@
 ## NVRTC: test Int[N] generic struct inside cuda: block
 ## Run: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_int_generic.nim
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   MyInt*[V: static int] = object
@@ -21,10 +22,9 @@ const kernelCode = cuda:
     output[0] = 1'u32
 
 var buf: array[1, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("testIntGeneric", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("testIntGeneric", buf, ())
 doAssert buf[0] == 1
 echo "  OK (test_nvrtc_int_generic)"

@@ -6,7 +6,8 @@
 ##   - Generic bound
 ##   - Body access via node[^1]
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── Test 1: Basic infix range (0 .. N) ──
 # Note: codegen uses `i < N`, so Nim's inclusive `..` is off by one.
@@ -19,12 +20,9 @@ const kInfix = cuda:
 
 var buf1: array[4, uint32]
 block:
-  var nv = initNvrtc(kInfix)
-  nv.compile()
-  nv.getPtx()
-  nv.numBlocks = 1
-  nv.threadsPerBlock = 4
-  nv.execute("infixRangeKernel", buf1, ())
+  var engine = bkCuda.init()
+  engine.ingest(kInfix)
+  engine.run<<(1, 4)>>("infixRangeKernel", buf1, ())
 doAssert buf1[0] == 10, &"range [0]: got {buf1[0]}"
 doAssert buf1[1] == 11, &"range [1]: got {buf1[1]}"
 doAssert buf1[2] == 12, &"range [2]: got {buf1[2]}"
@@ -38,12 +36,9 @@ const kBodyAccess = cuda:
 
 var buf2: array[3, uint32]
 block:
-  var nv = initNvrtc(kBodyAccess)
-  nv.compile()
-  nv.getPtx()
-  nv.numBlocks = 1
-  nv.threadsPerBlock = 2
-  nv.execute("bodyAccessKernel", buf2, ())
+  var engine = bkCuda.init()
+  engine.ingest(kBodyAccess)
+  engine.run<<(1, 2)>>("bodyAccessKernel", buf2, ())
 doAssert buf2[0] == 200, &"body access [0]: got {buf2[0]}"
 doAssert buf2[1] == 201, &"body access [1]: got {buf2[1]}"
 doAssert buf2[2] == 202, &"body access [2]: got {buf2[2]}"
@@ -58,12 +53,9 @@ const kVarBound = cuda:
 
 var buf3: array[2, uint32]
 block:
-  var nv = initNvrtc(kVarBound)
-  nv.compile()
-  nv.getPtx()
-  nv.numBlocks = 1
-  nv.threadsPerBlock = 2
-  nv.execute("varBoundKernel", buf3, ())
+  var engine = bkCuda.init()
+  engine.ingest(kVarBound)
+  engine.run<<(1, 2)>>("varBoundKernel", buf3, ())
 doAssert buf3[0] == 300, &"var bound [0]: got {buf3[0]}"
 doAssert buf3[1] == 300, &"var bound [1]: got {buf3[1]}"
 

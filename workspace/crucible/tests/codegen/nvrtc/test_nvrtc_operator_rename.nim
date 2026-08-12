@@ -14,7 +14,8 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_operator_rename.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Int*[V: static int] = object
@@ -83,26 +84,23 @@ echo "════════════════════════�
 suite "Operator rename via do-block":
   test "do-block body +/*":
     var output: array[1, float32]
-    var nv = initNvrtc(kernelDo)
-    nv.numBlocks = 1; nv.threadsPerBlock = 1
-    nv.compile(); nv.getPtx()
-    nv.execute("kernel", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelDo)
+    engine.run<<(1, 1)>>("kernel", output, ())
     check output[0] == 16.0'f32
 
   test "chained template with state":
     var output: array[1, float32]
-    var nv = initNvrtc(kernelChain)
-    nv.numBlocks = 1; nv.threadsPerBlock = 1
-    nv.compile(); nv.getPtx()
-    nv.execute("kernel", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelChain)
+    engine.run<<(1, 1)>>("kernel", output, ())
     check output[0] == 16.0'f32
 
   test "recursive fold (2 iterations)":
     var output: array[1, float32]
-    var nv = initNvrtc(kernelRec)
-    nv.numBlocks = 1; nv.threadsPerBlock = 1
-    nv.compile(); nv.getPtx()
-    nv.execute("kernel", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelRec)
+    engine.run<<(1, 1)>>("kernel", output, ())
     # iter0: 0 + 8*2 = 16
     # iter1: 16 + 3*4 = 28
     check output[0] == 28.0'f32

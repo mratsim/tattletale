@@ -18,8 +18,8 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/atoms
 import workspace/ceramic/src/kernel_gemm_gpu
-import workspace/crucible/src/codegen/nvrtc
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Low-level primitives — the elementwise/compare helpers the oracles and
@@ -131,101 +131,13 @@ proc gemm_tf32_ref*(C: var openArray[float32];
       C[m + n * M] = sum
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Backend engines — one `run` per backend, tests are backend-agnostic
+#  Backend engines — the HwEngine API
 #
-#  TODO: Refactor crucible to have a proper multi-backend engine abstraction
-#  (the getEngine/run pair here is the test-side stopgap — the real thing
-#  belongs in crucible so kernels compile/launch uniformly across CUDA,
-#  OpenCL, and future AMD/Xe backends).
-# ═════════════════════════════════════════════════════════════════════════
-
-type OpenCLGemmEngine = object
-  ctx*: OpenCLContext
-  source*: string    # the OpenCL C kernel source (compiled per launch)
-
-proc initOpenCLGemmEngine(kernelCode: string): OpenCLGemmEngine =
-  ## OpenCL backend engine: context + kernel source. `run` uses the simple
-  ## execOpenCL primitive (test_opencl_add pattern) — no manual buffer
-  ## management in the tests.
-  result.ctx = initOpenCL()
-  result.source = kernelCode
-
-proc `=destroy`(engine: var OpenCLGemmEngine) =
-  ## Release the OpenCL context at scope exit. Same discipline as the NVRTC
-  ## path: engines must be LOCALS (proc-main wrapped) — Nim never runs
-  ## destructors on globals, and a leaked CUDA context costs ~550 MB (the
-  ## original NVRTC bug). This destructor fires when the engine goes out of
-  ## scope in the test's `proc main`.
-  ## Guard: a moved-from engine has source == "" (OpenCLContext fields are
-  ## private, and shutdown on a zeroed context would release nil handles).
-  if engine.source != "":
-    engine.ctx.shutdown()
-
-proc getEngine*(backend: static string; kernelCode: string): auto =
-  ## Instantiates the backend engine — call as `var engine = getEngine(...)`:
-  ##   "cuda"   → NVRTC (kernelCode compiled → PTX); `engine.run` → CUDA launch
-  ##   "opencl" → OpenCL context + source; `engine.run` → execOpenCL
-  ## The static string appears ONLY here — the tests just call
-  ## `engine.run(kernelName, grid, blk, output, inputs)`.
-  ## (Proc + `var x =` so the return is a move — no copy, no double
-  ## module-unload from the NVRTC destructor.)
-  when backend == "cuda":
-    result = initNvrtc(kernelCode)
-    result.compile()
-    result.getPtx()
-  elif backend == "opencl":
-    result = initOpenCLGemmEngine(kernelCode)
-  else:
-    {.error: "getEngine: unknown backend '" & backend & "'".}
-
-template run(engine: var NVRTC; kernelName: string; grid, blk: CudaDim3;
-              output: var openArray[float32]; args: typed) =
-  ## CUDA backend: thin wrapper over the NVRTC execute template.
-  engine.execute(kernelName, grid, blk, output, args)
-
-template run(engine: var OpenCLGemmEngine; kernelName: string; grid, blk: CudaDim3;
-              output: var openArray[float32]; args: typed) =
-  ## OpenCL backend: execOpenCL (source + entryPoint + raw inputs → bytes),
-  ## result copied into `out`. Kernel params must be (inputs..., output)
-  ## execOpenCL's binding convention (vs CUDA's res-first).
-  ## Seq args bind as device buffers, scalars (alpha/beta) bind by value.
-  ##
-  ## TODO: unified engine API for all backends.
-  var raw: seq[tuple[data: pointer, size: int, isValue: bool]]
-  var t = args
-  var total = 0
-  for v in fields(t):
-    when v is seq or v is array:
-      discard
-    else:
-      total += sizeof(typeof(v))
-  var storage = newSeq[byte](total)
-  var offset = 0
-  for v in fields(t):
-    when v is seq or v is array:
-      raw.add((cast[pointer](addr v[0]), v.len * sizeof(typeof(v[0])), false))
-    else:
-      let sz = sizeof(typeof(v))
-      copyMem(addr storage[offset], addr v, sz)
-      raw.add((cast[pointer](addr storage[offset]), sz, true))
-      offset += sz
-
-  let bytes = execOpenCL(engine.ctx, engine.source, kernelName,
-                         outputBytes = output.len * sizeof(float32), taggedArgs = raw,
-                         # In-place kernels (β·C) read the output's initial
-                         # contents; upload them so the C-skip and C-read
-                         # sentinels work like on CUDA.
-                         outputInit = (if output.len > 0: addr output[0] else: nil),
-                         outputInitSize = output.len * sizeof(float32),
-                         globalSize = [csize_t(grid.x * grid.y * blk.x)],
-                         # Work-group spans the full CTA (blk.x): mma.sync works in
-                         # multi-warp groups on NVIDIA's OpenCL. The kernel linearizes
-                         # the CTA as gid = ctaId·blockSize + threadIdx, so a single
-                         # blk.x-sized work-group covers one CTA.
-                         localSize = [csize_t(blk.x)])
-  for i in 0 ..< output.len:
-    copyMem(addr output[i], addr bytes[i * 4], 4)
-
+# Kernel-name conventions (the test files' cuda/opencl blocks must name them so):
+#   microtile: mmaMicrotileKernel / mmaMicrotileExplicitKernel (one module)
+#   ukernel:   gemmUkernelKernel
+#   tiled:     gemmTiledKernel
+#
 # ═════════════════════════════════════════════════════════════════════════
 #  Per-kernel test drivers
 # ═════════════════════════════════════════════════════════════════════════
@@ -267,12 +179,12 @@ proc testMicrotile*[E](engine: var E; atom: static MmaAtom; label: string) =
 
     # in-place (4-arg)
     var gpuC = newSeq[float32](M * N)
-    engine.run("mmaMicrotileKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuC, (A, B))
+    engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("mmaMicrotileKernel", gpuC, (A, B))
     verifyMicrotile(atom, trial, gpuC, A, B, 0.0'f32, "in-place trial " & $trial)
 
     # explicit-output (5-arg), cFrag = 1.0
     var gpuD = newSeq[float32](M * N)
-    engine.run("mmaMicrotileExplicitKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuD, (A, B))
+    engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("mmaMicrotileExplicitKernel", gpuD, (A, B))
     verifyMicrotile(atom, trial, gpuD, A, B, 1.0'f32, "explicit trial " & $trial)
 
   echo "  OK: m16n8k8 tf32 microtile matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, in-place + explicit)"
@@ -292,7 +204,7 @@ proc testUkernel*[E](engine: var E; atom: static MmaAtom; label: string) =
     var refC = newSeq[float32](M * N)
     refC.gemm_tf32_ref(A, B, M, N, Ktotal, 0.0'f32)
     var gpuC = newSeq[float32](M * N)
-    engine.run("gemmUkernelKernel", dim3(1), dim3(toIntVal(atom.threadCount(opA))), gpuC, (A, B))
+    engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("gemmUkernelKernel", gpuC, (A, B))
     allClose(gpuC, refC, M, N, "trial " & $trial)
 
   echo "  OK: m16n8k8 tf32 gemm_ukernel matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2 k_blocks, 16 trials)"
@@ -329,7 +241,7 @@ proc testTiled*[E](engine: var E; tiled: static TiledMma; label: string) =
     var gpuC = newSeq[float32](TILE_M * TILE_N)
     for i in 0 ..< TILE_M * TILE_N:
       gpuC[i] = 0x7FC00000'f32    # NaN sentinel — a spurious C read fails
-    engine.run("gemmTiledKernel", dim3(1), dim3(blockSize), gpuC,
+    engine.run<<(1, blockSize)>>("gemmTiledKernel", gpuC,
                (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 
@@ -363,7 +275,7 @@ proc testTiledMultiBlock*[E](engine: var E; tiled: static TiledMma; label: strin
     var gpuC = newSeq[float32](TILE_M * TILE_N)
     for i in 0 ..< TILE_M * TILE_N:
       gpuC[i] = 0x7FC00000'f32    # NaN sentinel — a spurious C read fails
-    engine.run("gemmTiledKernelK32", dim3(1), dim3(blockSize), gpuC,
+    engine.run<<(1, blockSize)>>("gemmTiledKernelK32", gpuC,
                (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 
@@ -402,8 +314,8 @@ proc testGemmGrid*[E](engine: var E; tiled: static TiledMma; label: string) =
     var gpuC = newSeq[float32](M * N)
     for i in 0 ..< M * N:
       gpuC[i] = 0x7FC00000'f32    # NaN sentinel, a spurious C read fails
-    engine.run("gemmGridKernel", dim3(M div TILE_M, N div TILE_N),
-               dim3(blockSize), gpuC, (A_gpu, B_gpu, alpha, beta))
+    engine.run<<((M div TILE_M) * (N div TILE_N), blockSize)>>("gemmGridKernel", gpuC,
+               (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, M, N, "gemm_grid trial " & $trial)
 
   echo "  OK: gemm_grid M=64 N=32 K=32 tile (32,16,32) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, (1,0), NaN C)"
@@ -440,8 +352,8 @@ proc testGemmGridBeta*[E](engine: var E; tiled: static TiledMma; label: string) 
       C_ref[i] = alpha * acc[i] + beta * C_init[i]
 
     var gpuC = C_init
-    engine.run("gemmGridKernel", dim3(M div TILE_M, N div TILE_N),
-               dim3(blockSize), gpuC, (A_gpu, B_gpu, alpha, beta))
+    engine.run<<((M div TILE_M) * (N div TILE_N), blockSize)>>("gemmGridKernel", gpuC,
+               (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, M, N, "gemm_grid beta trial " & $trial)
 
   echo "  OK: gemm_grid (1,1) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, C pre-loaded, 16 trials)"
@@ -477,8 +389,8 @@ proc testGemmGridSingle*[E](engine: var E; tiled: static TiledMma; label: string
     var gpuC = newSeq[float32](M * N)
     for i in 0 ..< M * N:
       gpuC[i] = 0x7FC00000'f32
-    engine.run("gemmGridKernelSingle", dim3(M div TILE_M, N div TILE_N),
-               dim3(blockSize), gpuC, (A_gpu, B_gpu, alpha, beta))
+    engine.run<<(1, blockSize)>>("gemmGridKernelSingle", gpuC,
+               (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, M, N, "gemm_grid single trial " & $trial)
 
   echo "  OK: gemm_grid M=32 N=16 K=32 tile (32,16,32) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 1x1 CTA grid, 128 threads, 16 trials, (1,0), NaN C)"
@@ -511,8 +423,8 @@ proc testGemmGridIdentity*[E](engine: var E; tiled: static TiledMma; label: stri
     var gpuC = newSeq[float32](M * N)
     for i in 0 ..< M * N:
       gpuC[i] = 0x7FC00000'f32
-    engine.run("gemmGridIdentityKernel", dim3(M div TILE_M, N div TILE_N),
-               dim3(blockSize), gpuC, (A_gpu, B_gpu))
+    engine.run<<((M div TILE_M) * (N div TILE_N), blockSize)>>("gemmGridIdentityKernel", gpuC,
+               (A_gpu, B_gpu))
     allClose(gpuC, C_ref, M, N, "gemm_grid identity trial " & $trial)
 
   echo "  OK: gemm_grid identity (EpiIdentity, D = AB) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, NaN D)"
@@ -546,8 +458,8 @@ proc testGemmGridReLU*[E](engine: var E; tiled: static TiledMma; label: string) 
     var gpuC = newSeq[float32](M * N)
     for i in 0 ..< M * N:
       gpuC[i] = 0x7FC00000'f32
-    engine.run("gemmGridReLUKernel", dim3(M div TILE_M, N div TILE_N),
-               dim3(blockSize), gpuC, (A_gpu, B_gpu))
+    engine.run<<((M div TILE_M) * (N div TILE_N), blockSize)>>("gemmGridReLUKernel", gpuC,
+               (A_gpu, B_gpu))
     allClose(gpuC, C_ref, M, N, "gemm_grid relu trial " & $trial)
 
   echo "  OK: gemm_grid relu (EpiReLU, D = max(0, AB)) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, NaN D)"
@@ -586,8 +498,8 @@ proc testGemmGridBias*[E](engine: var E; tiled: static TiledMma; label: string) 
     var gpuC = newSeq[float32](M * N)
     for i in 0 ..< M * N:
       gpuC[i] = 0x7FC00000'f32
-    engine.run("gemmGridBiasKernel", dim3(M div TILE_M, N div TILE_N),
-               dim3(blockSize), gpuC, (A_gpu, B_gpu, bias))
+    engine.run<<((M div TILE_M) * (N div TILE_N), blockSize)>>("gemmGridBiasKernel", gpuC,
+               (A_gpu, B_gpu, bias))
     allClose(gpuC, C_ref, M, N, "gemm_grid bias trial " & $trial)
 
   echo "  OK: gemm_grid bias (EpiAddBias, D = AB + bias) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, column broadcast, NaN D)"

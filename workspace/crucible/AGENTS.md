@@ -25,21 +25,21 @@ tests/codegen/
 
 | Prefix | When to use |
 |--------|-------------|
-| `test_nvrtc_<desc>.nim` | Auto-runnable on CUDA — uses `nvrtc.compile()` + `nvrtc.execute()` |
-| `test_opencl_<desc>.nim` | Auto-runnable on OpenCL — uses `execOpenCL()` |
-| `test_vulkan_<desc>.nim` | Auto-runnable on Vulkan |
-| `test_webgpu_<desc>.nim` | Auto-runnable on WebGPU |
+| `test_nvrtc_<desc>.nim` | Auto-runnable on CUDA — uses `bkCuda.init()` + `engine.ingest()` + `engine.run()` |
+| `test_opencl_<desc>.nim` | Auto-runnable on OpenCL — uses `bkOpenCL.init()` + `engine.ingest()` + `engine.run()` |
+| `test_vulkan_<desc>.nim` | Auto-runnable on Vulkan — uses `bkVulkan.init()` + `engine.run()` |
+| `test_webgpu_<desc>.nim` | Auto-runnable on WebGPU — uses `bkWGSL.init()` + `engine.run()` |
 | `manual_<backend>_<desc>.nim` | **Manual only** — tests that expect a compile-time error (e.g., `proc that won't compile`). These cannot auto-run. |
 
 ### Test Requirements
 
-**All tests MUST call `execute()`**, not just `getPtx()`/`compile()`. A compile check is not enough — it can produce valid CUDA that computes wrong results.
+**All tests must call `engine.run()`** (or the chevron form `engine.run<<(grid, blk)>>(...)`), not just `getArtifact()`/`ingest()`. A compile check is not enough — it can produce valid CUDA that computes wrong results.
 
-**Run each test inside a `proc`** — blocks may separate sections within a proc, but a test made of only module-level `block`s (no proc) is a no-go. Never declare backend-resource objects (`NVRTC`, contexts, modules, OpenCL/Vulkan handles) at module scope via template helpers:
-- Nim templates do **NOT** scope `var` declarations — a `template runKernel(...) = var nv = initNvrtc(...)` expanded at module level keeps every `nv` alive until program exit.
+**Run each test inside a `proc`** — blocks may separate sections within a proc, but a test made of only module-level `block`s (no proc) is a no-go. Never declare backend-resource objects (engines, contexts, modules, OpenCL/Vulkan handles) at module scope via template helpers:
+- Nim templates do **not** scope `var` declarations — a `template runKernel(...) = var engine = bkCuda.init()` expanded at module level keeps every `engine` alive until program exit.
 - CUDA contexts are expensive: one live context holds a large device-memory reservation that is only returned on destruction. N module-scope contexts can exhaust the GPU (`CUDA_ERROR_OUT_OF_MEMORY` on tiny allocs — see the `test_nvrtc_if_expr` fix).
 - A `proc` scopes its locals naturally: resources are released when the proc returns, so N kernels in one test file use one context at a time.
-- Module-scope `const` kernel sources are fine — only runtime objects (created via `initNvrtc`/`execOpenCL`/etc.) must be function-local.
+- Module-scope `const` kernel sources are fine — only runtime objects (engines created via `bkCuda.init()`/`bkOpenCL.init()` etc. from `runtime/engines`) must be function-local.
 
 Exception: tests for backends not supported in the current environment. For those:
 1. Do a **sanity check** by inspecting the generated code text
@@ -89,13 +89,13 @@ A "minimal repro" for a crucible bug:
 - Uses ONLY types defined in the test file (no ceramic, no external lib)
 - Has a `cuda:` / `opencl:` / `vulkan:` / `webgpu:` block
 - Demonstrates the failing pattern in the simplest possible way
-- Uses `execute()` to verify correctness
+- Runs the kernel via `engine.run()` to verify correctness
 
 ## When the environment lacks a backend
 
 If running on a machine without CUDA (and thus can't NVRTC):
-1. Compile the test up to `nvrtc.compile()` or inspect the codegen output
-2. Print the generated code with `echo kernel` or inspect `nv.getPtx()`
+1. Compile the test up to `engine.ingest()` or inspect the codegen output
+2. Print the generated code with `echo kernel` or inspect `engine.getArtifact()`
 3. Pass the exact run command to the user for manual execution
 
 ## Debugging

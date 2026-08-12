@@ -10,7 +10,8 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_forloop_slice_range.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type StaticInt*[V: static int] = object
 
@@ -31,11 +32,8 @@ const kernel = cuda:
 suite "For-loop with Slice[int] range":
   test "compiles and runs via NVRTC":
     var buf: array[128, float32]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernel)
+    engine.run<<(1, 1)>>("kernel", buf, ())
     check buf[0] == 1.0'f32
     check buf[127] == 1.0'f32

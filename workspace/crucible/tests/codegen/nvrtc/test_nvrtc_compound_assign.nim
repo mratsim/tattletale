@@ -21,7 +21,8 @@
 ##     tests/codegen/nvrtc/test_nvrtc_compound_assign.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 import workspace/crucible/src/codegen/gpu_compiler
 
 const kernel = cuda:
@@ -36,12 +37,9 @@ suite "compound assignment (a[i] += v)":
     # must READ the stored value and write the accumulation back, otherwise
     # the result would not depend on the initialization at all.
     var output: array[4, int32] = [10'i32, 11, 12, 13]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("compoundKernel", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernel)
+    engine.run<<(1, 1)>>("compoundKernel", output, ())
     check output[0] == 30  # (10 + 5) * 2
     check output[1] == 32  # (11 + 5) * 2
     check output[2] == 34  # (12 + 5) * 2

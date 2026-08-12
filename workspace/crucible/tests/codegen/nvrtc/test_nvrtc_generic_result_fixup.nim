@@ -6,7 +6,8 @@
 ## Generic proc with single-expression body (no explicit `result =`)
 ## to trigger the fixup loop that converts `x * 2` into `result = x * 2`.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 proc double[T](x: T): T {.device.} =
   x * 2
@@ -16,10 +17,9 @@ const kernelCode = cuda:
     output[0] = double(21'u32)
 
 var buf: array[1, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("resultFixupKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("resultFixupKernel", buf, ())
 doAssert buf[0] == 42, &"result fixup: got {buf[0]}"
 echo "  OK (test_nvrtc_generic_result_fixup)"

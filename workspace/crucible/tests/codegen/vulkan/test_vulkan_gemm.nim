@@ -3,7 +3,8 @@
 ## Run with:
 ##   nim c -r workspace/crucible/tests/codegen/vulkan/test_vulkan_gemm.nim
 import std/strformat
-import workspace/crucible/src/codegen/vk
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Layout[S: static tuple, D: static tuple] = object
@@ -33,10 +34,10 @@ const kernelCode = vulkan:
 echo kernelCode
 
 block:
-  var ctx = initVulkan()
-  defer: ctx.shutdown()
-  let r = execVulkan(ctx, kernelCode, "gemmKernel", outputBytes = 16, inputs = @[])
-  let res = cast[ptr array[4, uint32]](r[0].addr)
+  var engine = bkVulkan.init()
+  engine.ingest(kernelCode)
+  var res: array[4, uint32]
+  engine.run("gemmKernel", res, ())
   let expected = [58'u32, 64, 139, 154]
   for i in 0 ..< 4:
     doAssert res[i] == expected[i], &"C[{i}]: {res[i]} != {expected[i]}"

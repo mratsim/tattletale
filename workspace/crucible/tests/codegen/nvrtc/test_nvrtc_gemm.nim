@@ -3,7 +3,8 @@
 ## Run with:
 ##   nim c -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_gemm.nim
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Layout[S: static tuple, D: static tuple] = object
@@ -31,13 +32,10 @@ const kernelCode = cuda:
     C[3] = Ct.data[3]
 
 var buf: array[4, uint32]
-var nv = initNvrtc(kernelCode)
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("gemmKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run<<(1, 1)>>("gemmKernel", buf, ())
 let expected = [58'u32, 64, 139, 154]
 for i in 0 ..< 4:
   doAssert buf[i] == expected[i], &"C[{i}]: {buf[i]} != {expected[i]}"

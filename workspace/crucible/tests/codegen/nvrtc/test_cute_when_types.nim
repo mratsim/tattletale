@@ -6,7 +6,8 @@
 ## Inside `cuda:`, generic procs with `when` are instantiated by Crucible,
 ## which receives the AST with when already resolved by Nim.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   TileSmall = object
@@ -33,11 +34,10 @@ const kernelCode = cuda:
       output[1] = t2.val + 1'u32
 
 var buf: array[2, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("whenTypesKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("whenTypesKernel", buf, ())
 doAssert buf[0] == 42, &"small tile: {buf[0]}"
 doAssert buf[1] == 43, &"large tile: {buf[1]}"
 echo "  OK — when dispatch types (B26)"

@@ -8,7 +8,8 @@
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_let_block_rhs.nim
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/wgpu
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Int*[V: static int] = object
@@ -40,24 +41,27 @@ const kernelBlock = webgpu:
 suite "WebGPU - let-block-RHS":
   test "Pattern A — direct tuple let":
     var buf: array[1, uint32]
-    var ctx = initWgpu()
-    defer: ctx.shutdown()
+    var engine = bkWGSL.init()
+    engine.ingest(kernelDirect)
     echo kernelDirect
-    let result = execWgpu(ctx, kernelDirect, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var res: array[1, uint32]
+    engine.run("dummyKernel", res, ())
+    check res[0] == 1
 
   test "Pattern B — const + let":
     var buf: array[1, uint32]
-    var ctx = initWgpu()
-    defer: ctx.shutdown()
+    var engine = bkWGSL.init()
+    engine.ingest(kernelConstLet)
     echo kernelConstLet
-    let result = execWgpu(ctx, kernelConstLet, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var res: array[1, uint32]
+    engine.run("dummyKernel", res, ())
+    check res[0] == 1
 
   test "Pattern C — block with const then yield":
     var buf: array[1, uint32]
-    var ctx = initWgpu()
-    defer: ctx.shutdown()
+    var engine = bkWGSL.init()
+    engine.ingest(kernelBlock)
     echo kernelBlock
-    let result = execWgpu(ctx, kernelBlock, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var res: array[1, uint32]
+    engine.run("dummyKernel", res, ())
+    check res[0] == 1

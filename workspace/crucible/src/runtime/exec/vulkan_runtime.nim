@@ -12,7 +12,8 @@
 ## ICD loaded directly (bypasses Vulkan loader) to work around NVIDIA 595 + loader 1.4.
 ##
 ## Usage:
-##   import workspace/crucible/src/codegen/vk
+##   import workspace/crucible/src/codegen/gpu_compiler
+##   import workspace/crucible/src/runtime/engines
 ##   const code = vulkan:
 ##     proc add(a: ptr UncheckedArray[uint32];
 ##              b: ptr UncheckedArray[uint32];
@@ -47,19 +48,25 @@ type
     ssboCount: int
 
   VulkanContext* = object
-    instance: VkInstance
-    physicalDevice: VkPhysicalDevice
-    device: VkDevice
-    queue: VkQueue
-    queueFamilyIndex: uint32
-    commandPool: VkCommandPool
-    pipelineCache: VkPipelineCache
-    vkLib: LibHandle
+    instance*: VkInstance
+    physicalDevice*: VkPhysicalDevice
+    device*: VkDevice
+    queue*: VkQueue
+    queueFamilyIndex*: uint32
+    commandPool*: VkCommandPool
+    pipelineCache*: VkPipelineCache
+    vkLib*: LibHandle
     getProcAddr*: pointer  ## vkGetInstanceProcAddr
 
-proc check(res: VkResult) =
-  if res != VK_SUCCESS:
-    raise VulkanError(msg: "Vulkan error: " & $res)
+proc check*(res: VkResult, quitOnFailure = true) =
+  ## Unified error policy: stacktrace + stderr + quit(1).
+  ## No exceptions as the public contract.
+  let code = res
+  if code != VK_SUCCESS:
+    writeStackTrace()
+    stderr.write($instantiationInfo() & " exited with error: Vulkan error " & $code & '\n')
+    if quitOnFailure:
+      quit 1
 
 proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer =
   ## Call vkGetInstanceProcAddr to load a Vulkan function pointer.
@@ -82,10 +89,10 @@ proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer 
 proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
   result.lib = loadLib(vk.VulkanLib)
   if result.lib == nil:
-    raise VulkanError(msg: "Cannot load " & vk.VulkanLib & " — install a Vulkan loader (e.g. libvulkan1)")
+    quit("Cannot load " & vk.VulkanLib & " — install a Vulkan loader (e.g. libvulkan1)")
   result.gpa = result.lib.symAddr("vkGetInstanceProcAddr")
   if result.gpa == nil:
-    raise VulkanError(msg: vk.VulkanLib & " missing vkGetInstanceProcAddr")
+    quit(vk.VulkanLib & " missing vkGetInstanceProcAddr")
 
 # ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
@@ -110,7 +117,7 @@ proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32]
   let exitCode = p.waitForExit()
   defer: p.close()
   if exitCode != 0:
-    raise VulkanError(msg: "glslangValidator failed (exit=" & $exitCode & "):\n" & compOut)
+    quit("glslangValidator failed (exit=" & $exitCode & "):\n" & compOut)
 
   let raw = readFile(spvPath)
   result = newSeq[uint32](raw.len div 4)
@@ -135,7 +142,7 @@ proc initVulkan*(): VulkanContext =
          pInstance: ptr VkInstance): VkResult {.cdecl.}
   ](gpaFn(nil, "vkCreateInstance"))
   if vkCreateInstance == nil:
-    raise VulkanError(msg: "Cannot load vkCreateInstance")
+    quit("Cannot load vkCreateInstance")
 
   var appInfo = VkApplicationInfo(
     sType: VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -162,7 +169,7 @@ proc initVulkan*(): VulkanContext =
   var devCount: uint32 = 0
   check ep(result.instance, devCount.addr, nil)
   if devCount == 0:
-    raise VulkanError(msg: "No Vulkan devices found")
+    quit("No Vulkan devices found")
   var devices = newSeq[VkPhysicalDevice](devCount.int)
   check ep(result.instance, devCount.addr, devices[0].addr)
 
@@ -222,14 +229,14 @@ proc initVulkan*(): VulkanContext =
       bestScore = score
       bestIdx = i
   if bestScore < 0:
-    raise VulkanError(msg: "No Vulkan device with a compute-capable queue family found")
+    quit("No Vulkan device with a compute-capable queue family found")
   result.physicalDevice = devices[bestIdx]
   echo "  Vulkan device: ", deviceScore(result.physicalDevice).name
 
   var qfCount: uint32 = 0
   gpqfp(result.physicalDevice, qfCount.addr, nil)
   if qfCount == 0:
-    raise VulkanError(msg: "No queue families found")
+    quit("No queue families found")
   var qfProps = newSeq[VkQueueFamilyProperties](qfCount.int)
   gpqfp(result.physicalDevice, qfCount.addr, qfProps[0].addr)
   result.queueFamilyIndex = 0
@@ -290,6 +297,9 @@ proc initVulkan*(): VulkanContext =
   check cpcache(result.device, pcc.addr, nil, result.pipelineCache.addr)
 
 proc shutdown*(ctx: var VulkanContext) =
+  ## Idempotent: safe to call multiple times (manual shutdown + =destroy).
+  if ctx.instance == nil:
+    return
   let L = ctx.vkLib
   let vkDestroyPipelineCachePtr = cast[
     proc(device: VkDevice, pipelineCache: VkPipelineCache,
@@ -307,12 +317,16 @@ proc shutdown*(ctx: var VulkanContext) =
   ](ctx.gpaAddr(ctx.instance, "vkDestroyInstance"))
   if ctx.pipelineCache != nil and vkDestroyPipelineCachePtr != nil:
     vkDestroyPipelineCachePtr(ctx.device, ctx.pipelineCache, nil)
+    ctx.pipelineCache = nil
   if ctx.commandPool != nil and vkDestroyCommandPoolPtr != nil:
     vkDestroyCommandPoolPtr(ctx.device, ctx.commandPool, nil)
+    ctx.commandPool = nil
   if ctx.device != nil and vkDestroyDevicePtr != nil:
     vkDestroyDevicePtr(ctx.device, nil)
+    ctx.device = nil
   if ctx.instance != nil and vkDestroyInstancePtr != nil:
     vkDestroyInstancePtr(ctx.instance, nil)
+    ctx.instance = nil
 
 # ═══════════════════════════════════════════════════════════════════════
 # Buffer management
@@ -394,7 +408,7 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
     var details = "memoryTypeBits=" & $memReq.memoryTypeBits & " memTypeCount=" & $memProps.memoryTypeCount
     for i in 0'u32 ..< memProps.memoryTypeCount:
       details &= " [" & $i & ": flags=" & $(cast[int](memProps.memoryTypes[i].propertyFlags)) & " heap=" & $memProps.memoryTypes[i].heapIndex & "]"
-    raise VulkanError(msg: "No suitable memory type found — " & details)
+    quit("No suitable memory type found — " & details)
   if (cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags) and
       cast[uint32](VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) == 0 and
      (cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags) and
@@ -406,7 +420,7 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
     var details = "memoryTypeBits=" & $memReq.memoryTypeBits & " memTypeCount=" & $memProps.memoryTypeCount
     for i in 0'u32 ..< memProps.memoryTypeCount:
       details &= " [" & $i & ": flags=" & $(cast[int](memProps.memoryTypes[i].propertyFlags)) & " heap=" & $memProps.memoryTypes[i].heapIndex & "]"
-    raise VulkanError(msg: "No host-visible memory type available (vkMapMemory would fail) — " & details)
+    quit("No host-visible memory type available (vkMapMemory would fail) — " & details)
 
   result.memTypeIndex = memTypeIdx
   result.memTypeFlags = cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags)
@@ -439,7 +453,7 @@ proc dealloc*(buffer: var VulkanBuffer, ctx: VulkanContext) =
     buffer.memory = nil
 proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size: int) =
   if size > buf.size:
-    raise VulkanError(msg: "writeBuffer overflow")
+    quit("writeBuffer overflow")
   let vkMapMemory = cast[
     proc(device: VkDevice, memory: VkDeviceMemory,
          offset: VkDeviceSize, size: VkDeviceSize,
@@ -451,14 +465,14 @@ proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size
   var mapped: pointer
   let mres = vkMapMemory(buf.device, buf.memory, 0, VkDeviceSize(size), 0, mapped.addr)
   if mres != VK_SUCCESS:
-    raise VulkanError(msg: "vkMapMemory failed (" & $mres &
+    quit("vkMapMemory failed (" & $mres &
       ") on memory type " & $buf.memTypeIndex & " (flags=" & $buf.memTypeFlags & ")")
   copyMem(mapped, data, size)
   vkUnmapMemory(buf.device, buf.memory)
 
 proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
   if buf.size mod sizeof(T) != 0:
-    raise VulkanError(msg: "Buffer size not divisible by type size")
+    quit("Buffer size not divisible by type size")
   if buf.size > 0:
     let vkMapMemory = cast[
       proc(device: VkDevice, memory: VkDeviceMemory,

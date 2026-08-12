@@ -5,7 +5,8 @@
 ##
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_ambiguous_builtins.nim
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ═════════════════════════════════════════════════════════════════════
 # Shared function using min/max
@@ -42,12 +43,9 @@ const kernelCode = cuda:
     output[5] = clampU32(15'u32, 10'u32, 20'u32)
 
 var buf: array[6, uint32]
-var nv = initNvrtc(kernelCode)
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.compile()
-nv.getPtx()
-nv.execute("builtinKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+engine.run<<(1, 1)>>("builtinKernel", buf, ())
 doAssert buf[0] == 10, &"direct min: {buf[0]}"
 doAssert buf[1] == 30, &"direct max: {buf[1]}"
 doAssert buf[2] == 5, &"direct abs: {buf[2]}"

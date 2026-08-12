@@ -4,7 +4,8 @@
 ##
 ## Tests the PR #565 feature: types defined outside the `cuda` block
 ## are pulled in automatically when used by GPU code.
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── External types (defined outside the `cuda` block) ───────────────────────
 
@@ -48,12 +49,11 @@ const kernelCode = cuda:
 # ── Host code ───────────────────────────────────────────────────────────────
 
 var buf: array[4, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
 
-nv.execute("externalTypeKernel", buf, ())
+engine.run("externalTypeKernel", buf, ())
 echo "  Vec2(10,20)+Vec2(1,2) = (", buf[0], ", ", buf[1], ")"
 echo "  dot(Vec2(10,20), Vec2(1,2)) = ", buf[2]
 echo "  sum(Vec4(1,2,3,4))  = ", buf[3]

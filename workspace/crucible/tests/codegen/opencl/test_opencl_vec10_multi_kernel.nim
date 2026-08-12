@@ -1,7 +1,8 @@
 ## Multi-kernel Vec10 add/mul — OpenCL backend
 ## Run with:
 ##   nim c -r workspace/crucible/tests/codegen/opencl/test_vec10_multi_kernel.nim
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const kernelCode = opencl:
   proc vec10_add(a: ptr UncheckedArray[uint32];
@@ -22,26 +23,20 @@ var b: array[10, uint32] = [10'u32, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
 echo "=== Running vec10_add ===\n"
 block:
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
-  let r = execOpenCL(ctx, kernelCode, "vec10_add", outputBytes=40, inputs = [
-    (cast[pointer](a[0].addr), 40),
-    (cast[pointer](b[0].addr), 40)
-  ])
-  let res = cast[ptr array[10, uint32]](r[0].addr)
+  var engine = bkOpenCL.init()
+  engine.ingest(kernelCode)
+  var res: array[10, uint32]
+  engine.run("vec10_add", res, (a, b))
   for i in 0 ..< 10:
     doAssert res[i] == a[i] + b[i]
   echo "  OK — vec10_add"
 
 echo "=== Running vec10_mul ===\n"
 block:
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
-  let r = execOpenCL(ctx, kernelCode, "vec10_mul", outputBytes=40, inputs = [
-    (cast[pointer](a[0].addr), 40),
-    (cast[pointer](b[0].addr), 40)
-  ])
-  let res = cast[ptr array[10, uint32]](r[0].addr)
+  var engine = bkOpenCL.init()
+  engine.ingest(kernelCode)
+  var res: array[10, uint32]
+  engine.run("vec10_mul", res, (a, b))
   for i in 0 ..< 10:
     doAssert res[i] == a[i] * b[i]
   echo "  OK — vec10_mul"

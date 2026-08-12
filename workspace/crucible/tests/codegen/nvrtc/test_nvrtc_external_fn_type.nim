@@ -5,7 +5,8 @@
 ## Tests the PR #565 feature end-to-end: functions AND types defined
 ## entirely outside the `cuda` block, only called/used from within.
 ## Also tests that multiple kernels sharing the same external code work.
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── External types ──────────────────────────────────────────────────────────
 
@@ -50,20 +51,20 @@ const kernelCode = cuda:
 
 # ── Host code ───────────────────────────────────────────────────────────────
 
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
+var engine = bkCuda.init()
+
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
 
 # Kernel 1: tripletSum
 var buf1: array[1, uint32]
-nv.execute("sumKernel", buf1, ())
+engine.run("sumKernel", buf1, ())
 echo "  sumKernel (100+200+300) = ", buf1[0]
 doAssert buf1[0] == 600
 
 # Kernel 2: compose + reduce
 var buf2: array[3, uint32]
-nv.execute("maxKernel", buf2, ())
+engine.run("maxKernel", buf2, ())
 echo "  maxKernel compose(1,2,3) = ", buf2[0]
 echo "  maxKernel t.a+b+c        = ", buf2[1]
 echo "  maxKernel reduceMax      = ", buf2[2]

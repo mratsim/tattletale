@@ -4,12 +4,12 @@ GPU kernel code generator: translates a subset of Nim (everything allowed except
 
 ## What it is / what it isn't
 
-Crucible is primarily a **compile-time code generator**: its entry points are Nim macros (`cuda`, `opencl`, `vulkan`, `webgpu`) that consume a kernel body written in that subset of Nim and emit a string of native GPU source code. It does not ship a device runtime or a scheduler, but it does include minimal host-side runtimes under [`src/codegen/exec/`](src/codegen/exec/) that compile, load, and launch the generated code on each backend (NVRTC, OpenCL, Vulkan, WebGPU).
+Crucible is primarily a **compile-time code generator**: its entry points are Nim macros (`cuda`, `opencl`, `vulkan`, `webgpu`) that consume a kernel body written in that subset of Nim and emit a string of native GPU source code. It does not ship a device runtime or a scheduler, but it does include minimal host-side runtimes under [`src/runtime/exec/`](src/runtime/exec/) that compile, load, and launch the generated code on each backend (NVRTC, OpenCL, Vulkan, WebGPU).
 
 It sits on top of the rest of the tattletale stack:
 
 - It **consumes** the layout algebra produced by `workspace/ceramic/` and the kernel specifications produced by `workspace/positron/`. Per the header in [`workspace/crucible/crucible.nim`](crucible.nim): "takes Ceramic layout algebra and Positron kernel specifications and emits native GPU code (CUDA, OpenCL, Vulkan, WebGPU)".
-- The generated source is handed to an external toolchain to run: NVRTC compiles CUDA to PTX, glslangValidator compiles GLSL to SPIR-V, and the host-side runtimes under [`src/codegen/exec/`](src/codegen/exec/) (backed by the ABIs under [`src/abis/`](src/abis/)) load and launch the results.
+- The generated source is handed to an external toolchain to run: NVRTC compiles CUDA to PTX, glslangValidator compiles GLSL to SPIR-V, and the host-side runtimes under [`src/runtime/exec/`](src/runtime/exec/) (backed by the ABIs under [`src/abis/`](src/abis/)) load and launch the results.
 
 Because it is a code generator, "correctness" of a feature means the emitted code compiles *and* computes the right result — which is why every test must call `execute()`, not just `compile()` (see [`AGENTS.md`](AGENTS.md)).
 
@@ -32,8 +32,7 @@ workspace/crucible/
   AGENTS.md                       Test conventions and run commands
   src/
     codegen/
-      gpu_compiler.nim            Compiler entry point: macros + runtime codegen
-      nvrtc.nim cl.nim vk.nim wgpu.nim   Toolchain wrappers
+      gpu_compiler.nim            Compiler entry point: the `cuda:`/`opencl:`/`vulkan:`/`webgpu:` macros
       ir/
         gpu_types.nim             IR types: GpuAst, GpuType, GpuContext, Symbol, FnTable
         gpu_type_constructors.nim Type constructors
@@ -53,7 +52,10 @@ workspace/crucible/
         cuda_lang.nim opencl_lang.nim vulkan_lang.nim wgsl_lang.nim   Printers
         lang_utils.nim            Shared printer helpers
       builtins/                   Per-backend and Nim builtins
-      exec/                       Host-side runtimes (cuda/opencl/vulkan/wgpu)
+    runtime/
+      engines.nim                HwEngine — the sole public runtime API (init/ingest/getArtifact/run/chevrons)
+      engines/                   CudaEngine (nvrtc.nim), OpenCLEngine (cl.nim), VulkanEngine (vk.nim), WgpuEngine (wgpu.nim)
+      exec/                      Low-level drivers (cuda/opencl/vulkan/wgpu runtimes)
     abis/                         C/OpenCL/NVIDIA/Vulkan ABI bindings
     macros/ast_rebuilder.nim
   tests/codegen/
@@ -65,7 +67,7 @@ workspace/crucible/
 
 ## Build and run
 
-Run from the repo root (`tattletale`). Requires a working Nim and the relevant toolchains (NVRTC/glslangValidator for compilation, or a CUDA/OpenCL/Vulkan/WebGPU device for `execute()`).
+Run from the repo root (`tattletale`). Requires a working Nim and the relevant toolchains (NVRTC/glslangValidator for compilation, or a CUDA/OpenCL/Vulkan/WebGPU device for `engine.run()`).
 
 ```bash
 # NVRTC (primary target)

@@ -4,7 +4,8 @@
 ## Real GPU kernel patterns: grid-stride loops, pointer stride,
 ## shared memory, syncthreads, computed indexing.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Tensor[M, N: static int] = object
@@ -31,13 +32,10 @@ const kernelCode = cuda:
     output[6] = t.data[3]
 
 var buf: array[7, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.numBlocks = 1
-nv.threadsPerBlock = 4
-nv.execute("codegenKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run<<(1, 4)>>("codegenKernel", buf, ())
 doAssert buf[0] == 100, &"tid0: {buf[0]}"
 doAssert buf[3] == 103, &"tid3: {buf[3]}"
 doAssert buf[4] == 6,   &"idx(1,2,4): {buf[4]} (expected 1*4+2=6)"

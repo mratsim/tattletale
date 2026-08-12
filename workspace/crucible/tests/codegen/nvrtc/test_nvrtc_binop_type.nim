@@ -17,7 +17,8 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_binop_type.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 import workspace/crucible/src/codegen/gpu_compiler
 import workspace/crucible/src/codegen/ir/gpu_types
 import workspace/crucible/src/codegen/ir/gpu_type_constructors
@@ -74,11 +75,8 @@ block:
 suite "gpuBinOp self-carried bType":
   test "fold do-block pulled into device procs compiles and executes":
     var output: array[2, int32]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernel)
+    engine.run<<(1, 1)>>("kernel", output, ())
     check output[0] == 8  # foldedMul(C[0]+8) = 1 * (0 + 8)
     check output[1] == 5  # foldedFma(C[1]+2) = 1 + (0 + 2) * 2

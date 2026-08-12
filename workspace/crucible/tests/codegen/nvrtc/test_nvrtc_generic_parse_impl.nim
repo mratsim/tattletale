@@ -3,7 +3,8 @@
 ##
 ## Coverage: nim_to_gpu.nim:100-115
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   ## ObjectTy — generic object with fields
@@ -24,11 +25,10 @@ const kernelCode = cuda:
     output[1] = s.val
 
 var buf: array[2, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("genericImplKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("genericImplKernel", buf, ())
 doAssert buf[0] == 30, &"objectTy: got {buf[0]}"
 doAssert buf[1] == 42, &"staticTy: got {buf[1]}"
 echo "  OK (test_nvrtc_generic_parse_impl)"

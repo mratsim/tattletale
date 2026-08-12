@@ -5,7 +5,7 @@
 ##   the implicit `result` (not allowed in GPU code)
 ##
 ## Run with: nim cpp workspace/crucible/tests/codegen/nvrtc/manual_nvrtc_reject_result_shadow.nim
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
 
 const k = cuda:
   proc shadowPlain(x: uint32): uint32 {.device.} =

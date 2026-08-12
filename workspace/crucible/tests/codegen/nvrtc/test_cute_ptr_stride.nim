@@ -3,7 +3,8 @@
 ##
 ## CuTe kernels compute offsets from thread/block IDs and strides.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Strided[M, N: static int] = object
@@ -27,13 +28,10 @@ const kernelCode = cuda:
     output[7] = s.data[offset]    # indexed via computed offset: s.data[6] = 70
 
 var buf: array[8, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.execute("stridedKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run<<(1, 1)>>("stridedKernel", buf, ())
 doAssert buf[0] == 10,  &"s.data[0]: {buf[0]}"
 doAssert buf[5] == 70,  &"s.data[1*4+2]: {buf[5]}"
 doAssert buf[6] == 6,   &"offset calc: {buf[6]}"

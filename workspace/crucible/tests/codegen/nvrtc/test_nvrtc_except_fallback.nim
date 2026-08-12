@@ -7,7 +7,8 @@
 ## contains AST nodes Crucible cannot translate. The fallback registers
 ## an empty function stub so compilation continues.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # A function that Crucible can translate (happy path)
 proc addEm[T](a, b: T): T {.device.} =
@@ -20,10 +21,9 @@ const kernelCode = cuda:
     output[0] = addEm(10'u32, 20'u32)
 
 var buf: array[1, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("exceptFallbackKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("exceptFallbackKernel", buf, ())
 doAssert buf[0] == 30, &"addEm fallback: got {buf[0]}, expected 30"
 echo "  OK (test_nvrtc_except_fallback)"

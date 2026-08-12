@@ -7,7 +7,8 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_add.nim
 
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── External types (defined outside the `opencl` block) ─────────────────────
 
@@ -69,75 +70,44 @@ echo ""
 echo "=== OpenCL execution ===\n"
 
 block: # addKernel
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
+  var engine = bkOpenCL.init()
+  engine.ingest(addCl)
 
   var a: array[2, uint32] = [10'u32, 20'u32]
   var b: array[2, uint32] = [1'u32, 2'u32]
+  var out32: array[2, uint32]
 
-  let result = execOpenCL(
-    ctx,
-    addCl,
-    "addKernel",
-    outputBytes = 8,  # 2 x uint32
-    inputs = [
-      (cast[pointer](a[0].addr), 8),
-      (cast[pointer](b[0].addr), 8)
-    ]
-  )
-
-  doAssert result.len == 8
-  let out32 = cast[ptr array[2, uint32]](result[0].addr)
+  engine.run("addKernel", out32, (a, b))
   echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
   doAssert out32[0] == 11
   doAssert out32[1] == 22
   echo "  OK"
 
 block: # vec2AddKernel (external type + fn)
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
+  var engine = bkOpenCL.init()
+  engine.ingest(vec2Cl)
 
   var a: array[2, uint32] = [100'u32, 200'u32]
   var b: array[2, uint32] = [3'u32, 4'u32]
+  var out32: array[2, uint32]
 
-  let result = execOpenCL(
-    ctx,
-    vec2Cl,
-    "vec2AddKernel",
-    outputBytes = 8,
-    inputs = [
-      (cast[pointer](a[0].addr), 8),
-      (cast[pointer](b[0].addr), 8)
-    ]
-  )
-
-  let out32 = cast[ptr array[2, uint32]](result[0].addr)
+  engine.run("vec2AddKernel", out32, (a, b))
   echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
   doAssert out32[0] == 103
   doAssert out32[1] == 204
   echo "  OK"
 
 block: # maxKernel (generic instantiation)
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
+  var engine = bkOpenCL.init()
+  engine.ingest(maxCl)
 
   var a: array[1, uint32] = [42'u32]
   var b: array[1, uint32] = [17'u32]
+  var outVal: array[1, uint32]
 
-  let result = execOpenCL(
-    ctx,
-    maxCl,
-    "maxKernel",
-    outputBytes = 4,
-    inputs = [
-      (cast[pointer](a[0].addr), 4),
-      (cast[pointer](b[0].addr), 4)
-    ]
-  )
-
-  let outVal = cast[ptr uint32](result[0].addr)[]
-  echo "  maxKernel: max(42, 17) = ", outVal
-  doAssert outVal == 42
+  engine.run("maxKernel", outVal, (a, b))
+  echo "  maxKernel: max(42, 17) = ", outVal[0]
+  doAssert outVal[0] == 42
   echo "  OK"
 
 echo "All execution tests passed ✅"

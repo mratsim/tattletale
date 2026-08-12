@@ -19,7 +19,8 @@
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_missing_field_init.nim
 
 import std/strutils
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   WorkItem = object
@@ -46,13 +47,10 @@ doAssert kernelCode.contains("{0}"), "expected a {0} zero-initializer for the om
 doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
 
 block:
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
-  let r = execOpenCL(
-    ctx, kernelCode, "kernelMain", outputBytes = 16,
-    taggedArgs = newSeq[tuple[data: pointer, size: int, isValue: bool]]()
-  )
-  let out32 = cast[ptr array[4, uint32]](r[0].addr)
+  var engine = bkOpenCL.init()
+  engine.ingest(kernelCode)
+  var out32: array[4, uint32]
+  engine.run("kernelMain", out32, ())
   doAssert out32[0] == 7, "set field must keep its value"
   doAssert out32[1] == 0, "omitted array field must be zeroed"
   doAssert out32[2] == 0, "omitted array field must be zeroed"

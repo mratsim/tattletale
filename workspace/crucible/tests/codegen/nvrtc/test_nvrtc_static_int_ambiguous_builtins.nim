@@ -46,7 +46,8 @@
 ##       workspace/crucible/tests/codegen/nvrtc/test_nvrtc_static_int_ambiguous_builtins.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── static-int type + max overload set (mirrors ceramic) ────────────────
 type Int*[V: static int] = object
@@ -96,12 +97,9 @@ suite "NVRTC — static-int ambiguous-builtin (max) overload set":
   test "all five overload shapes compile, run, and produce the right values":
     var buf: array[8, int32]
     var dynArr: array[1, int32] = [100'i32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()  # currently aborts: NVRTC rejects the empty-Int[N] max calls (see header)
-    nv.getPtx()
-    nv.execute("staticIntMax", buf, (dynArr,))
+    var engine = bkCuda.init()
+    engine.ingest(kernelCode)
+    engine.run<<(1, 1)>>("staticIntMax", buf, (dynArr,))
     check buf[0] == 7    # max(Int[5](), 7)
     check buf[1] == 7    # max(7, Int[5]())
     check buf[2] == 5    # max(Int[5](), 3)

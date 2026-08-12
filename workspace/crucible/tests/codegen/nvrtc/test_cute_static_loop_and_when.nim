@@ -4,7 +4,8 @@
 ## CuTe dispatches tile sizes at compile time: different
 ## unroll factors, loop bounds, and type selection per GPU arch.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Tile[M, N: static int] = object
@@ -22,11 +23,10 @@ const kernelCode = cuda:
       output[i] = t.data[i]
 
 var buf: array[L, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("staticLoopKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("staticLoopKernel", buf, ())
 doAssert buf[0] == 10, &"loop[0]: {buf[0]}"
 doAssert buf[1] == 20, &"loop[1]: {buf[1]}"
 doAssert buf[2] == 30, &"loop[2]: {buf[2]}"

@@ -34,7 +34,8 @@
 ##       workspace/ceramic/tests/gpu/test_AR_complement_int_stride.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 import workspace/crucible/src/codegen/gpu_compiler
 import workspace/ceramic/src/int_tuples {.all.}
 import workspace/ceramic/src/layouts
@@ -54,12 +55,9 @@ suite "Ceramic × Crucible — complement with a static Int stride":
 
   test "NVRTC compiles and runs a local_partition with an Int[1] stride":
     # The complement must emit concrete ints (static Int value lowered) so the
-    # kernel compiles and executes; a regression causes nv.compile() to abort.
+    # kernel compiles and executes; a regression causes engine.compile() to abort.
     var Buf: array[64, float32]
-    var nv = initNvrtc(kernelPartition)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 8
-    nv.compile()                 # aborts with NVRTC_ERROR_COMPILATION on a max(1, <empty struct>) regression
-    nv.getPtx()
-    nv.execute("partKernel", Buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelPartition)
+    engine.run<<(1, 8)>>("partKernel", Buf, ())
     check Buf[0] == 1.0'f32

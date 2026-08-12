@@ -11,7 +11,8 @@
 ##   nnkIfStmt  → statement (not tested here)
 ##   nnkIfExpr  → expression (tested here)
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── Helper: compile kernel and run ──────────────────────────────────
 
@@ -19,10 +20,9 @@ proc runKernel(kernelCode: string; buf: var auto; kernelName: string) =
   ## Compile + run one kernel. A proc so the NVRTC object (CUDA context +
   ## module) is released per call — templates do not scope `var` at module
   ## level, which would keep every context alive until program exit.
-  var nv = initNvrtc(kernelCode)
-  nv.compile()
-  nv.getPtx()
-  nv.execute(kernelName, buf, ())
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  engine.run(kernelName, buf, ())
 
 # ═════════════════════════════════════════════════════════════════════
 # Test 1: Basic if-else expression via let binding
@@ -86,12 +86,9 @@ const kIfExprCond = cuda:
 
 var buf5: array[4, uint32]
 block:
-  var nv = initNvrtc(kIfExprCond)
-  nv.compile()
-  nv.getPtx()
-  nv.numBlocks = 1
-  nv.threadsPerBlock = 4
-  nv.execute("ifExprCondKernel", buf5, ())
+  var engine = bkCuda.init()
+  engine.ingest(kIfExprCond)
+  engine.run<<(1, 4)>>("ifExprCondKernel", buf5, ())
 doAssert buf5[0] == 100, &"if-expr cond (tid=0): got {buf5[0]}, expected 100"
 doAssert buf5[1] == 100, &"if-expr cond (tid=1): got {buf5[1]}, expected 100"
 doAssert buf5[2] == 200, &"if-expr cond (tid=2): got {buf5[2]}, expected 200"
@@ -126,12 +123,9 @@ const kIfElifElse = cuda:
 
 var buf7: array[4, uint32]
 block:
-  var nv = initNvrtc(kIfElifElse)
-  nv.compile()
-  nv.getPtx()
-  nv.numBlocks = 1
-  nv.threadsPerBlock = 4
-  nv.execute("ifElifElseKernel", buf7, ())
+  var engine = bkCuda.init()
+  engine.ingest(kIfElifElse)
+  engine.run<<(1, 4)>>("ifElifElseKernel", buf7, ())
 doAssert buf7[0] == 100, &"if-elif-else (tid=0): got {buf7[0]}, expected 100"
 doAssert buf7[1] == 200, &"if-elif-else (tid=1): got {buf7[1]}, expected 200"
 doAssert buf7[2] == 300, &"if-elif-else (tid=2): got {buf7[2]}, expected 300"

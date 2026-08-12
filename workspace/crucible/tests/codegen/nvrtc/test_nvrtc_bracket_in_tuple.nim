@@ -7,7 +7,8 @@
 ## Important for CuTe: shapes, strides, and coordinates are tuples
 ## of generic types like `(Int<M>, Int<N>)` or `(float32, float32)`.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   MyInt[V: static int] = object
@@ -28,11 +29,10 @@ const kernelCode = cuda:
     output[3] = v.x + v.y
 
 var buf: array[4, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("tupleGenericKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("tupleGenericKernel", buf, ())
 doAssert buf[0] == 10, &"tuple[0].data[0]: got {buf[0]}"
 doAssert buf[1] == 40, &"tuple[0].data[3]: got {buf[1]}"
 doAssert buf[2] == 99, &"tuple[1]: got {buf[2]}"

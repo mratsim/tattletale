@@ -8,7 +8,8 @@
 ## Related: https://github.com/nim-lang/Nim/blob/version-2-2/lib/system/macros.nim#L747
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 suite "Crucible - gensym temporaries":
   ## gensym'd constant with {.genSym.} pragma — core pattern from evalOnceAs
@@ -20,12 +21,9 @@ suite "Crucible - gensym temporaries":
         C[0] = ct_tmp
 
     var buf: array[1, uint32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel_const", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelCode)
+    engine.run<<(1, 1)>>("kernel_const", buf, ())
     check buf[0] == 42
 
   ## gensym'd let with {.genSym.} pragma — runtime branch of evalOnceAs
@@ -36,12 +34,9 @@ suite "Crucible - gensym temporaries":
         C[0] = rt_tmp
 
     var buf: array[1, uint32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel_let", buf, (7'u32,))
+    var engine = bkCuda.init()
+    engine.ingest(kernelCode)
+    engine.run<<(1, 1)>>("kernel_let", buf, (7'u32,))
     check buf[0] == 7
 
   ## genSym'd var in a for loop — pattern from fillWith / gemm kernels
@@ -53,12 +48,9 @@ suite "Crucible - gensym temporaries":
           C[i] = inner_tmp
 
     var buf: array[5, uint32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 5
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel_var", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelCode)
+    engine.run<<(1, 5)>>("kernel_var", buf, ())
     for i in 0 ..< 5:
       check buf[i] == uint32(i * 3)
 
@@ -71,12 +63,9 @@ suite "Crucible - gensym temporaries":
         C[0] = v() + 1'u32
 
     var buf: array[1, uint32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel_eoa", buf, (41'u32,))
+    var engine = bkCuda.init()
+    engine.ingest(kernelCode)
+    engine.run<<(1, 1)>>("kernel_eoa", buf, (41'u32,))
     check buf[0] == 42
 
   ## Multiple gensym consts working together in arithmetic
@@ -89,10 +78,7 @@ suite "Crucible - gensym temporaries":
         C[0] = uint32(idx)
 
     var buf: array[1, uint32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel_multi", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelCode)
+    engine.run<<(1, 1)>>("kernel_multi", buf, ())
     check buf[0] == 53

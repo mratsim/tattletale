@@ -11,7 +11,8 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_user_defined_operator.nim
 
-import workspace/crucible/src/codegen/wgpu
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── Basic types — gpuBinOp ──────────────────────────────────────────────────
 
@@ -112,25 +113,15 @@ echo ""
 echo "=== WebGPU execution ===\n"
 
 block:
-  var ctx = initWgpu()
-  defer: ctx.shutdown()
+  var engine = bkWGSL.init()
+  engine.ingest(basicWgsl)
 
   var a: array[1, uint32] = [13'u32]
   var b: array[1, uint32] = [5'u32]
 
   echo "--- basicKernel ---"
-  let result = execWgpu(
-    ctx,
-    basicWgsl,
-    "basicKernel",
-    outputBytes = 40,
-    inputs = [
-      (cast[pointer](a[0].addr), 4),
-      (cast[pointer](b[0].addr), 4)
-    ]
-  )
-  doAssert result.len == 40
-  let out32 = cast[ptr array[10, uint32]](result[0].addr)
+  var out32: array[10, uint32]
+  engine.run("basicKernel", out32, (a, b))
   echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
        ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
   doAssert out32[0] == 18
@@ -146,20 +137,11 @@ block:
   echo "  OK"
 
   echo "--- structKernel ---"
+  engine.ingest(structWgsl)
   a[0] = 7
   b[0] = 3
-  let result2 = execWgpu(
-    ctx,
-    structWgsl,
-    "structKernel",
-    outputBytes = 40,
-    inputs = [
-      (cast[pointer](a[0].addr), 4),
-      (cast[pointer](b[0].addr), 4)
-    ]
-  )
-  doAssert result2.len == 40
-  let out32b = cast[ptr array[10, uint32]](result2[0].addr)
+  var out32b: array[10, uint32]
+  engine.run("structKernel", out32b, (a, b))
   echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
        ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
   doAssert out32b[0] == 10
@@ -175,20 +157,11 @@ block:
   echo "  OK"
 
   echo "--- structKernel2 ---"
+  engine.ingest(structWgsl2)
   a[0] = 14
   b[0] = 3
-  let result3 = execWgpu(
-    ctx,
-    structWgsl2,
-    "structKernel2",
-    outputBytes = 40,
-    inputs = [
-      (cast[pointer](a[0].addr), 4),
-      (cast[pointer](b[0].addr), 4)
-    ]
-  )
-  doAssert result3.len == 40
-  let out32c = cast[ptr array[10, uint32]](result3[0].addr)
+  var out32c: array[10, uint32]
+  engine.run("structKernel2", out32c, (a, b))
   echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
        ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
   doAssert out32c[0] == 17

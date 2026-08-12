@@ -10,7 +10,8 @@
 ## The rewrite must also handle `gpuAddr(gpuDot)`: the bare field access
 ## C-decays to `T*`. Companion to test_nvrtc_var_array_asm (the ident
 ## case). Fails without the fix, bit-exact with it.
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type MiniTensor = object
   data: array[4, float32]
@@ -42,11 +43,10 @@ const kernelCode = cuda:
     output[5] = o.data[1]
 
 var buf: array[6, float32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("tensorDataAsmKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("tensorDataAsmKernel", buf, ())
 echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2], " [3]=", buf[3], " [4]=", buf[4], " [5]=", buf[5]
 doAssert buf[0] == 6.0'f32   # 1 + 5
 doAssert buf[1] == 7.0'f32   # 2 + 5

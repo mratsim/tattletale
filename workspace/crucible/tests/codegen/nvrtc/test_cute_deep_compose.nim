@@ -5,7 +5,8 @@
 ## B12: Type alias chain (5+ aliases)
 ## B13: 8+ generic params (GEMM config)
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # B12: type alias chain
 type
@@ -52,11 +53,10 @@ const kernelCode = cuda:
     output[3] = gemm.data[0]
 
 var buf: array[4, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("deepComposeKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("deepComposeKernel", buf, ())
 doAssert buf[0] == 0,   &"alias[0]: {buf[0]}"
 doAssert buf[1] == 15,  &"alias[15]: {buf[1]}"
 doAssert buf[2] == 42,  &"nested val: {buf[2]}"

@@ -24,7 +24,8 @@
 ##   --outdir:build/tests/webgpu --nimcache:nimcache/tests/webgpu \
 ##   workspace/crucible/tests/codegen/webgpu/test_webgpu_static_int_ops.nim
 import std/[unittest]
-import workspace/crucible/src/codegen/wgpu
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── static-int type + genBinOp overload set (mirrors ceramic) ────────────
 type Int*[V: static int] = object
@@ -77,12 +78,10 @@ suite "WebGPU — static-int +/* overload set":
 
   test "all five overload shapes compile, run, and produce the right values":
     var dynArr: array[1, int32] = [100'i32]
-    var ctx = initWgpu()
-    defer: ctx.shutdown()
-    let r = execWgpu(ctx, kernelCode, "staticIntOps", outputBytes = 40,
-                     inputs = [(cast[pointer](dynArr[0].addr), 4)])
-    check r.len == 40
-    let out32 = cast[ptr array[10, int32]](r[0].addr)
+    var engine = bkWGSL.init()
+    engine.ingest(kernelCode)
+    var out32: array[10, int32]
+    engine.run("staticIntOps", out32, (dynArr))
     check out32[0] == 11    # Int[10]() + 1
     check out32[1] == 12    # 2 + Int[10]()
     check out32[2] == 30    # Int[10]() * 3

@@ -8,7 +8,8 @@
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_dummy_init.nim
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/vk
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   FixMe*[V: static int] = object
@@ -25,17 +26,17 @@ const kernelCode2 = vulkan:
 
 suite "Vulkan - dummy-field initializers":
   test "single dummy struct const":
-    var buf: array[1, uint32]
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
+    var engine = bkVulkan.init()
+    engine.ingest(kernelCode)
     echo kernelCode
-    let result = execVulkan(ctx, kernelCode, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var buf: array[1, uint32]
+    engine.run("dummyKernel", buf, ())
+    check buf[0] == 1
 
   test "tuple of dummy structs const":
-    var buf: array[1, uint32]
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
+    var engine = bkVulkan.init()
+    engine.ingest(kernelCode2)
     echo kernelCode2
-    let result = execVulkan(ctx, kernelCode2, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var buf: array[1, uint32]
+    engine.run("dummyKernel", buf, ())
+    check buf[0] == 1

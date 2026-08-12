@@ -5,7 +5,8 @@
 ##   Layout<Shape<Int<M>, Int<N>>, Stride<Int<N>, Int<1>>>
 ## The array sizes involve compile-time arithmetic on those ints.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   # B01: static addition
@@ -38,11 +39,10 @@ const kernelCode = cuda:
     output[5] = c.data[6]
 
 var buf: array[6, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("staticArithKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("staticArithKernel", buf, ())
 doAssert buf[0] == 1,   &"summed[0]: {buf[0]}"
 doAssert buf[1] == 5,   &"summed[4]: {buf[1]}"
 doAssert buf[2] == 10,  &"mult[0]: {buf[2]}"

@@ -8,7 +8,8 @@
 ##     (resolvers.nim:initGpuGenericInst, nnkObjConstr branch)
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   MyBox*[V: static int] = object
@@ -22,10 +23,7 @@ suite "Crucible - type resolution edge cases":
         C[0] = x.val + 1'u32
 
     var buf: array[1, uint32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelCode)
+    engine.run<<(1, 1)>>("kernel", buf, ())
     check buf[0] == 1

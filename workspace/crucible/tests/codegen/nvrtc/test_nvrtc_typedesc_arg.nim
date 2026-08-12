@@ -9,7 +9,8 @@
 ##
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_typedesc_arg.nim
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # Generic helper mirroring the make_tensor typedesc-param shape:
 #   func make_tensor*[Sh, St, T](_: typedesc[T]; L: Layout[Sh, St]) = ...
@@ -32,12 +33,9 @@ const kernelCode = cuda:
     output[3] = mixArgs(0.0'f32, float32, 3.0'f32, 2.0'f32)
 
 var buf: array[4, float32]
-var nv = initNvrtc(kernelCode)
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.compile()
-nv.getPtx()
-nv.execute("typedescKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+engine.run<<(1, 1)>>("typedescKernel", buf, ())
 doAssert buf[0] == 10.0, &"scaleType(float32, 2.5, 4.0): {buf[0]}"
 doAssert buf[1] == 6.0, &"scaleType(float32, 3.0, 2.0): {buf[1]}"
 doAssert buf[2] == 5.75, &"mixArgs(2.0, float32, 2.5, 1.5): {buf[2]}"

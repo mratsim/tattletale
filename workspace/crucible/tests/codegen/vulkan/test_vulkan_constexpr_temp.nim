@@ -31,7 +31,8 @@
 ##   nim c -r --hints:off --warnings:off \
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/vk
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Int*[V: static int] = object
@@ -103,26 +104,38 @@ when isMainModule:
 
 suite "Vulkan - constexpr tuple init":
   test "Pattern A — constexpr tuple in let RHS":
-    var ctx = initVulkan(); defer: ctx.shutdown()
-    let r = execVulkan(ctx, kernelA, "testA", outputBytes = 4, inputs = [])
-    check cast[ptr uint32](r[0].addr)[] == 1
+    var engine = bkVulkan.init()
+    engine.ingest(kernelA)
+    var res: array[1, uint32]
+    engine.run("testA", res, ())
+    check res[0] == 1
   test "Pattern B — constexpr in arithmetic":
-    var ctx = initVulkan(); defer: ctx.shutdown()
-    let r = execVulkan(ctx, kernelB, "testB", outputBytes = 4, inputs = [])
-    check cast[ptr uint32](r[0].addr)[] == 128
+    var engine = bkVulkan.init()
+    engine.ingest(kernelB)
+    var res: array[1, uint32]
+    engine.run("testB", res, ())
+    check res[0] == 128
   test "Pattern C — template wrapConst":
-    var ctx = initVulkan(); defer: ctx.shutdown()
-    let r = execVulkan(ctx, kernelC, "testC", outputBytes = 4, inputs = [])
-    check cast[ptr uint32](r[0].addr)[] == 1
+    var engine = bkVulkan.init()
+    engine.ingest(kernelC)
+    var res: array[1, uint32]
+    engine.run("testC", res, ())
+    check res[0] == 1
   test "Pattern D — tuple bracket access":
-    var ctx = initVulkan(); defer: ctx.shutdown()
-    let r = execVulkan(ctx, kernelD, "testD", outputBytes = 4, inputs = [])
-    check cast[ptr uint32](r[0].addr)[] == 0
+    var engine = bkVulkan.init()
+    engine.ingest(kernelD)
+    var res: array[1, uint32]
+    engine.run("testD", res, ())
+    check res[0] == 0
   test "Pattern E — block with constexpr temp":
-    var ctx = initVulkan(); defer: ctx.shutdown()
-    let r = execVulkan(ctx, kernelE, "testE", outputBytes = 4, inputs = [])
-    check cast[ptr uint32](r[0].addr)[] == 0
+    var engine = bkVulkan.init()
+    engine.ingest(kernelE)
+    var res: array[1, uint32]
+    engine.run("testE", res, ())
+    check res[0] == 0
   test "Pattern F — constexpr tuple field access":
-    var ctx = initVulkan(); defer: ctx.shutdown()
-    let r = execVulkan(ctx, kernelF, "testF", outputBytes = 4, inputs = [])
-    check cast[ptr uint32](r[0].addr)[] == 8
+    var engine = bkVulkan.init()
+    engine.ingest(kernelF)
+    var res: array[1, uint32]
+    engine.run("testF", res, ())
+    check res[0] == 8

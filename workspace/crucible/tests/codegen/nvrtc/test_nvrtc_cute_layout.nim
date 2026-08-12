@@ -1,7 +1,8 @@
 ## CuTe Layout + Tile dot products — NVRTC (CUDA) backend
 ## Run with: nim c -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_cute_layout.nim
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Layout[S: static tuple, D: static tuple] = object
@@ -24,13 +25,10 @@ const kernelCode = cuda:
     output[5] = a10 * tileAt(gemmB, 0'u32, 2'u32) + a11 * tileAt(gemmB, 1'u32, 2'u32)
 
 var buf: array[6, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.execute("cuteKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run<<(1, 1)>>("cuteKernel", buf, ())
 doAssert buf[0] == 10, &"tile[0,0]: {buf[0]}"
 doAssert buf[1] == 20, &"tile[0,1]: {buf[1]}"
 doAssert buf[2] == 60, &"tile[1,2]: {buf[2]}"

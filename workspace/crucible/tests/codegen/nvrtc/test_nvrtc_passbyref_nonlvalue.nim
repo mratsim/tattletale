@@ -9,7 +9,8 @@
 ## Large struct passed by const& — tests that temporaries work at call sites.
 
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   LargeStruct = object
@@ -24,10 +25,9 @@ const kernelInline = cuda:
 
 block:
   var buf: array[1, uint32]
-  var nv = initNvrtc(kernelInline)
-  nv.compile()
-  nv.getPtx()
-  nv.execute("kernelMain", buf, ())
+  var engine = bkCuda.init()
+  engine.ingest(kernelInline)
+  engine.run("kernelMain", buf, ())
   doAssert buf[0] == 30, &"inline constructor: expected 30, got {buf[0]}"
   echo "  ✅ Test 1 — inline constructor arg: ", buf[0]
 
@@ -42,10 +42,9 @@ const kernelFnRet = cuda:
 
 block:
   var buf: array[1, uint32]
-  var nv = initNvrtc(kernelFnRet)
-  nv.compile()
-  nv.getPtx()
-  nv.execute("kernelMain", buf, ())
+  var engine = bkCuda.init()
+  engine.ingest(kernelFnRet)
+  engine.run("kernelMain", buf, ())
   doAssert buf[0] == 42, &"fn return: expected 42, got {buf[0]}"
   echo "  ✅ Test 2 — function return arg: ", buf[0]
 

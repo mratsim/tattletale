@@ -13,7 +13,8 @@
 ## kernel and verifies the values.
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── kernel ───────────────────────────────────────────────────────────────
 # Output buffer MUST be the first kernel param (the harness prepends res).
@@ -39,12 +40,9 @@ suite "NVRTC — max on basic types":
   test "float32/uint32/int max compile, run, and produce the right values":
     var buf: array[6, float32]
     var dynArr: array[2, float32] = [2.5'f32, 9.0'f32]
-    var nv = initNvrtc(kernelCode)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("maxBasic", buf, (dynArr,))
+    var engine = bkCuda.init()
+    engine.ingest(kernelCode)
+    engine.run<<(1, 1)>>("maxBasic", buf, (dynArr,))
     check buf[0] == 9.0    # max(2.5, 9.0)
     check buf[1] == 7.25   # max(3.5, 7.25)
     check buf[2] == 9.0    # max(9.0, 2.5)

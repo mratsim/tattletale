@@ -3,7 +3,8 @@
 ##
 ## Coverage: nim_to_gpu.nim:1356-1358
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Point = object
@@ -16,11 +17,10 @@ const kernelCode = cuda:
     output[1] = p.y
 
 var buf: array[2, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("typeConstructorKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("typeConstructorKernel", buf, ())
 doAssert buf[0] == 10
 doAssert buf[1] == 20
 echo "  OK (test_nvrtc_type_constructor)"

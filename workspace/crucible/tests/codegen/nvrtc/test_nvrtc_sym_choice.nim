@@ -5,7 +5,8 @@
 ## The symchoice handler in initGpuGenericInst is currently dead code
 ## but this test ensures it stays harmless if the code path activates.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const kernelCode = cuda:
   proc addOne(x: uint32): uint32 {.device.} = x + 1
@@ -20,12 +21,9 @@ const kernelCode = cuda:
     output[1] = uint32(addOne(b))
 
 var buf: array[2, uint32]
-var nv = initNvrtc(kernelCode)
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.compile()
-nv.getPtx()
-nv.execute("symChoiceKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+engine.run<<(1, 1)>>("symChoiceKernel", buf, ())
 echo "  output: [", buf[0], ", ", buf[1], "]"
 doAssert buf[0] == 11, &"uint32 addOne: {buf[0]} != 11"
 doAssert buf[1] == 22, &"uint64 addOne: {buf[1]} != 22"

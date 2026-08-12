@@ -33,8 +33,9 @@ type
   WorkDoneData* = object
     done: bool
   MapDoneData* = object
-    done: bool
-    resultBytes: int
+    done*: bool
+    resultBytes*: int
+    status*: WGPUBufferMapAsyncStatus  ## captured — the old execWgpu dropped it
   WgpuContext* = object
     instance*: WGPUInstance
     adapter*: WGPUAdapter
@@ -64,10 +65,11 @@ proc workDoneCb(status: WGPUQueueWorkDoneStatus,
                  userdata1: pointer,
                  userdata2: pointer) {.cdecl.} =
   cast[ptr WorkDoneData](userdata1).done = true
-proc bufferMapCb(status: WGPUBufferMapAsyncStatus,
-                  message: WGPUStringView,
-                  userdata1: pointer,
-                  userdata2: pointer) {.cdecl.} =
+proc bufferMapCb*(status: WGPUBufferMapAsyncStatus,
+                   message: WGPUStringView,
+                   userdata1: pointer,
+                   userdata2: pointer) {.cdecl.} =
+  cast[ptr MapDoneData](userdata1).status = status
   cast[ptr MapDoneData](userdata1).done = true
 
 {.pop.}
@@ -109,10 +111,14 @@ proc initWgpu*(): WgpuContext =
     queue: queue
   )
 proc shutdown*(ctx: var WgpuContext) =
-  ## Releases all wgpu resources.
-  wgpuDeviceRelease(ctx.device)
-  wgpuAdapterRelease(ctx.adapter)
-  wgpuInstanceRelease(ctx.instance)
+  ## Releases all wgpu resources. Idempotent (safe with =destroy hooks).
+  if ctx.instance != nil:
+    wgpuDeviceRelease(ctx.device)
+    wgpuAdapterRelease(ctx.adapter)
+    wgpuInstanceRelease(ctx.instance)
+    ctx.device = nil
+    ctx.adapter = nil
+    ctx.instance = nil
 # ###########################################################
 #
 #    execWgpu — run a WGSL compute shader with input/output buffers

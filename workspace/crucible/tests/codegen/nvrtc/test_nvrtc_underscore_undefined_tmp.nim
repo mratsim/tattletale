@@ -9,7 +9,8 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_undefined_tmp.nim
 
 import std/macros
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 import ./helper_nvrtc_underscore_undefined_tmp
 
 type TensorView*[T] = object
@@ -48,11 +49,8 @@ const kernel = cuda:
 when isMainModule:
   var data: array[4, float32] = [1.0'f32, 2.0, 3.0, 4.0]
   var outBuf: array[1, float32]
-  var nv = initNvrtc(kernel)
-  nv.numBlocks = 1
-  nv.threadsPerBlock = 1
-  nv.compile()
-  nv.getPtx()
-  nv.execute("reproKernel", outBuf, (data,))
+  var engine = bkCuda.init()
+  engine.ingest(kernel)
+  engine.run<<(1, 1)>>("reproKernel", outBuf, (data,))
   doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
   echo "  OK (test_nvrtc_underscore_undefined_tmp)"

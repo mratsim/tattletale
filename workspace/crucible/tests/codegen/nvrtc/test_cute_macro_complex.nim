@@ -4,7 +4,8 @@
 ## Tests multiple generic instantiations with varying params
 ## to exercise the generic resolution machinery.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const kernelCode = cuda:
   type
@@ -22,11 +23,10 @@ const kernelCode = cuda:
     output[2] = b.data[0]
 
 var buf: array[3, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("complexKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("complexKernel", buf, ())
 doAssert buf[0] == 1,   &"a[0]: {buf[0]}"
 doAssert buf[1] == 2,   &"a[1]: {buf[1]}"
 doAssert buf[2] == 42,  &"b[0]: {buf[2]}"

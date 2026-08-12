@@ -10,7 +10,8 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_call_nim_builtins.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 template runIntKernel(t: typedesc; expected0, expected1: float32) =
   const k = cuda:
@@ -22,12 +23,9 @@ template runIntKernel(t: typedesc; expected0, expected1: float32) =
         C[i] = float32(x)
   block:
     var buf: array[2, float32]
-    var nv = initNvrtc(k)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(k)
+    engine.run<<(1, 1)>>("kernel", buf, ())
     check buf[0] == expected0
     check buf[1] == expected1
 
@@ -47,12 +45,9 @@ template runFloatKernel(t: typedesc; expected0, expected1: float32) =
 
   block:
     var buf: array[2, float32]
-    var nv = initNvrtc(k)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(k)
+    engine.run<<(1, 1)>>("kernel", buf, ())
     check buf[0] == expected0
     check buf[1] == expected1
 
@@ -92,11 +87,8 @@ suite "NVRTC - call nim builtins":
 
   test "user-defined `*` on struct as nnkCall":
     var buf: array[2, float32]
-    var nv = initNvrtc(wrapperKernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(wrapperKernel)
+    engine.run<<(1, 1)>>("kernel", buf, ())
     check buf[0] == 12'f32
     check buf[1] == 16'f32

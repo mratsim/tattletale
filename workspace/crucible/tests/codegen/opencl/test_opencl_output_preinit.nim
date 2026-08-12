@@ -18,7 +18,8 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_output_preinit.nim
 
-import workspace/crucible/src/codegen/cl
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 const kernelCode = opencl:
   proc incInPlace(output: ptr UncheckedArray[uint32]) {.global.} =
@@ -27,27 +28,18 @@ const kernelCode = opencl:
 echo kernelCode
 
 block:
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
+  var engine = bkOpenCL.init()
+  engine.ingest(kernelCode)
 
-  var zeroed: uint32 = 0
-  # First run: seed the output buffer with zero via outputInit, because
-  # clCreateBuffer contents are spec-undefined, so 0 + 1 = 1.
-  let r1 = execOpenCL(
-    ctx, kernelCode, "incInPlace", outputBytes = 4,
-    taggedArgs = newSeq[tuple[data: pointer, size: int, isValue: bool]](),
-    outputInit = addr zeroed, outputInitSize = 4
-  )
-  let v1 = cast[ptr uint32](r1[0].addr)[]
-  doAssert v1 == 1, "first run must see a zeroed output buffer"
+  # The engine uploads the output's current bytes before launch (replaces
+  # execOpenCL's outputInit): seed the output var and run in place twice.
+  var outBuf: array[1, uint32]
+  outBuf[0] = 0
+  engine.run("incInPlace", outBuf, ())
+  doAssert outBuf[0] == 1, "first run must see a zeroed output buffer"
 
-  # Second run: seed the output buffer with the previous contents. The
-  # in-place kernel then reads 1 and writes 2.
-  let r2 = execOpenCL(
-    ctx, kernelCode, "incInPlace", outputBytes = 4,
-    taggedArgs = newSeq[tuple[data: pointer, size: int, isValue: bool]](),
-    outputInit = cast[pointer](r1[0].addr), outputInitSize = 4
-  )
-  let v2 = cast[ptr uint32](r2[0].addr)[]
-  doAssert v2 == 2, "second run must see the previous output contents"
+  # Second run: the engine uploads outBuf's current contents (1) and the
+  # in-place kernel reads 1 and writes 2.
+  engine.run("incInPlace", outBuf, ())
+  doAssert outBuf[0] == 2, "second run must see the previous output contents"
   echo "  OK"

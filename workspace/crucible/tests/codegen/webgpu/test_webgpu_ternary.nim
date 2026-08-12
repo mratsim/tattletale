@@ -10,7 +10,7 @@
 
 import std/strformat
 import std/strutils
-import workspace/crucible/src/codegen/wgpu
+import workspace/crucible/src/codegen/gpu_compiler
 
 const code = webgpu:
   proc ternaryKernel(output: ptr UncheckedArray[uint32]) {.global.} =

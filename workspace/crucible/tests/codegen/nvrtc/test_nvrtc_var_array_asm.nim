@@ -9,7 +9,8 @@
 ## Normal Nim emits `T*` (the deref is folded into the index); this test pins
 ## that representation for asm operands, for both var array and var openArray.
 ## Fails without the fix, bit-exact with it.
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 func addAsmVarArray(cFrag: var array[4, float32], v: float32) {.inline.} =
   ## asm operands must be ELEMENTS: `cFrag[0]` = first float, not the array
@@ -31,11 +32,10 @@ const kernelCode = cuda:
     output[2] = o[0]
 
 var buf: array[3, float32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("varArrayAsmKernel", buf, ())
+var engine = bkCuda.init()
+engine.ingest(kernelCode)
+echo "PTX: ", engine.getArtifact().len, " bytes"
+engine.run("varArrayAsmKernel", buf, ())
 echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2]
 doAssert buf[0] == 6.0'f32   # 1 + 5
 doAssert buf[1] == 7.0'f32   # 2 + 5

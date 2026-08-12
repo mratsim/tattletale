@@ -14,7 +14,7 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_block_in_type.nim
 
-import workspace/crucible/src/codegen/wgpu
+import workspace/crucible/src/codegen/gpu_compiler
 
 # ── Types ──────────────────────────────────────────────────────────
 type

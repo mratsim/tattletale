@@ -35,9 +35,15 @@ type
     kernel: Pkernel
     program: Pprogram
 
-proc check(res: TClResult) =
-  if res != SUCCESS:
-    raise OpenCLError(msg: "OpenCL error: " & $res)
+proc check*(res: TClResult, quitOnFailure = true) =
+  ## Unified error policy: stacktrace + stderr + quit(1).
+  ## No exceptions as the public contract.
+  let code = res
+  if code != SUCCESS:
+    writeStackTrace()
+    stderr.write($instantiationInfo() & " exited with error: OpenCL error " & $code & '\n')
+    if quitOnFailure:
+      quit 1
 
 proc listPlatforms(): seq[Pplatform_id] =
   var platformCount: cl_uint
@@ -92,7 +98,7 @@ proc initOpenCL*(device: OpenCLDevice): OpenCLContext =
 proc initOpenCL*(): OpenCLContext =
   let devices = listDevices()
   if devices.len == 0:
-    raise OpenCLError(msg: "No OpenCL devices found")
+    quit("OpenCL: no devices found")
   # Pick first GPU; fall back to first device
   var dev = devices[0]
   for d in devices:
@@ -102,8 +108,12 @@ proc initOpenCL*(): OpenCLContext =
   result = initOpenCL(dev)
 
 proc shutdown*(ctx: var OpenCLContext) =
-  discard releaseCommandQueue(ctx.commands)
-  discard releaseContext(ctx.context)
+  ## Idempotent: safe to call multiple times (manual shutdown + =destroy).
+  if ctx.context != nil:
+    discard releaseCommandQueue(ctx.commands)
+    discard releaseContext(ctx.context)
+    ctx.commands = nil
+    ctx.context = nil
 
 proc allocBuffer*(ctx: OpenCLContext, size: int): OpenCLBuffer =
   var status: TClResult
@@ -117,7 +127,7 @@ proc dealloc*(buffer: var OpenCLBuffer) =
 
 proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   if size != buffer.size:
-    raise OpenCLError(msg: "Attempted to write " & $size & " bytes, but buffer size is " & $buffer.size)
+    quit("OpenCL writeBuffer: attempted to write " & $size & " bytes, but buffer size is " & $buffer.size)
   check buffer.ctx.commands.enqueueWriteBuffer(
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
@@ -131,9 +141,17 @@ proc readBuffer*[T](buffer: OpenCLBuffer, data: ptr UncheckedArray[T]) =
     buffer.mem, CL_TRUE, 0, cl_size_t(buffer.size), data[0].addr, 0, nil, nil
   )
 
+proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
+  ## Raw readback into a caller-provided buffer (used by the engines).
+  if size > buffer.size:
+    quit("OpenCL readBuffer: read of " & $size & " bytes exceeds buffer size " & $buffer.size)
+  check buffer.ctx.commands.enqueueReadBuffer(
+    buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
+  )
+
 proc readBuffer*[T](buffer: OpenCLBuffer): seq[T] =
   if buffer.size mod sizeof(T) != 0:
-    raise OpenCLError(msg: "Buffer size is not divisible by item type size")
+    quit("OpenCL readBuffer: buffer size is not divisible by item type size")
   if buffer.size > 0:
     result = newSeq[T](buffer.size div sizeof(T))
     check buffer.ctx.commands.enqueueReadBuffer(
@@ -161,9 +179,9 @@ proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKer
       var log = newString(logLength.int)
       check getProgramBuildInfo(program, ctx.device.id, PROGRAM_BUILD_LOG,
                                 logLength, log[0].addr, nil)
-      raise OpenCLError(msg: "Failed to build program '" & name & "': " & log)
+      quit("OpenCL failed to build program '" & name & "': " & log)
     else:
-      raise OpenCLError(msg: "Failed to build program '" & name & "'")
+      quit("OpenCL failed to build program '" & name & "'")
   else:
     check status
 
@@ -183,9 +201,9 @@ proc setArg*[T](kernel: var OpenCLKernel, index: int, value: T) =
 
 proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[cl_size_t]) =
   if globalWorkSize.len == 0:
-    raise OpenCLError(msg: "Global work size must have at least one dimension")
+    quit("OpenCL runKernel: global work size must have at least one dimension")
   if globalWorkSize.len != localWorkSize.len:
-    raise OpenCLError(msg: "Dimension of global work size must equal dimension of local work size")
+    quit("OpenCL runKernel: dimension of global work size must equal dimension of local work size")
 
   check enqueueNDRangeKernel(
     kernel.ctx.commands,

@@ -10,7 +10,8 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_user_defined_operator.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 # ── Basic types — gpuBinOp ──────────────────────────────────────────────────
 
@@ -32,12 +33,9 @@ const kernelBasic = cuda:
 suite "Operator codegen":
   test "basic types (int32) — all operators on GPU":
     var output: array[10, int32]
-    var nv = initNvrtc(kernelBasic)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernelBasic", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelBasic)
+    engine.run<<(1, 1)>>("kernelBasic", output, ())
     check output[0] == 18
     check output[1] == 8
     check output[2] == 65
@@ -122,12 +120,9 @@ const kernelBoth = cuda:
 suite "User-defined operators":
   test "struct types (Wrapper) — operator syntax on GPU":
     var output: array[10, int32]
-    var nv = initNvrtc(kernelStruct)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernelStruct", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelStruct)
+    engine.run<<(1, 1)>>("kernelStruct", output, ())
     check output[0] == 10
     check output[1] == 4
     check output[2] == 21
@@ -141,12 +136,9 @@ suite "User-defined operators":
 
   test "struct types (Wrapper2) — operator syntax on GPU":
     var output: array[10, int32]
-    var nv = initNvrtc(kernelStruct2)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernelStruct2", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelStruct2)
+    engine.run<<(1, 1)>>("kernelStruct2", output, ())
     check output[0] == 17
     check output[1] == 11
     check output[2] == 42
@@ -160,11 +152,8 @@ suite "User-defined operators":
 
   test "struct types (both Wrapper + Wrapper2) — name collision":
     var output: array[2, int32]
-    var nv = initNvrtc(kernelBoth)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernelBoth", output, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernelBoth)
+    engine.run<<(1, 1)>>("kernelBoth", output, ())
     check output[0] == 10
     check output[1] == 17

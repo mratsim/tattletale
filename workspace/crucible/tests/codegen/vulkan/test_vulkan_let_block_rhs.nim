@@ -8,7 +8,8 @@
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_let_block_rhs.nim
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/vk
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 type
   Int*[V: static int] = object
@@ -39,25 +40,25 @@ const kernelBlock = vulkan:
 
 suite "Vulkan - let-block-RHS":
   test "Pattern A — direct tuple let":
-    var buf: array[1, uint32]
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
+    var engine = bkVulkan.init()
+    engine.ingest(kernelDirect)
     echo kernelDirect
-    let result = execVulkan(ctx, kernelDirect, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var buf: array[1, uint32]
+    engine.run("dummyKernel", buf, ())
+    check buf[0] == 1
 
   test "Pattern B — const + let":
-    var buf: array[1, uint32]
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
+    var engine = bkVulkan.init()
+    engine.ingest(kernelConstLet)
     echo kernelConstLet
-    let result = execVulkan(ctx, kernelConstLet, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var buf: array[1, uint32]
+    engine.run("dummyKernel", buf, ())
+    check buf[0] == 1
 
   test "Pattern C — block with const then yield":
-    var buf: array[1, uint32]
-    var ctx = initVulkan()
-    defer: ctx.shutdown()
+    var engine = bkVulkan.init()
+    engine.ingest(kernelBlock)
     echo kernelBlock
-    let result = execVulkan(ctx, kernelBlock, "dummyKernel", 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    var buf: array[1, uint32]
+    engine.run("dummyKernel", buf, ())
+    check buf[0] == 1

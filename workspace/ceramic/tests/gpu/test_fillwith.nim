@@ -9,7 +9,8 @@
 ##     workspace/ceramic/tests/gpu/test_ceramic_issue4_fillwith.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/tensor_datatypes
@@ -25,12 +26,9 @@ const kernel = cuda:
 suite "Ceramic - fillWith on TensorView":
   test "fillWith inside cuda: compiles via NVRTC":
     var buf: array[128, float32]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernel)
+    engine.run<<(1, 1)>>("kernel", buf, ())
     # fillWith writes 42.0 to every element
     check buf[0] == 42.0'f32
     check buf[127] == 42.0'f32

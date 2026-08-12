@@ -11,7 +11,8 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_semicolon_arg.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines
 
 {.experimental: "callOperator".}
 
@@ -39,9 +40,6 @@ const kernel = cuda:
 suite "Call-op argument semicolon":
   test "compiles via NVRTC":
     var buf: array[8, float32]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(kernel)
+    engine.run<<(1, 1)>>("kernel", buf, ())
