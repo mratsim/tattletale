@@ -57,12 +57,12 @@ const kernelCode = opencl:
   # from the grid coords), partitions it to the per-thread destination
   # fragment (D), constructs the epilogue op with its state, and hands
   # both to gemm_grid. The grid never sees alpha/beta/C/bias: they are
-  # op state. Inputs-first (A, B, ...), output last (C): the OpenCL
-  # engine's execOpenCL binding convention.
+  # op state. Output-first (C): the OpenCL engine's run binds the output
+  # at binding 0, inputs at 1..N in signature order.
   proc gemmGridKernel(
-      A, B: ptr UncheckedArray[uint32];
-      alpha, beta: float32;
-      C: ptr UncheckedArray[float32]) {.global.} =
+      C: ptr UncheckedArray[float32],
+      A, B: ptr UncheckedArray[uint32],
+      alpha, beta: float32) {.global.} =
     let gid = int(get_global_id(0))
     let threadIdx = gid mod 128
     let blk = gid div 128
@@ -77,8 +77,8 @@ const kernelCode = opencl:
     gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmGridIdentityKernel(
-      A, B: ptr UncheckedArray[uint32];
-      C: ptr UncheckedArray[float32]) {.global.} =
+      C: ptr UncheckedArray[float32],
+      A, B: ptr UncheckedArray[uint32]) {.global.} =
     let gid = int(get_global_id(0))
     let threadIdx = gid mod 128
     let blk = gid div 128
@@ -93,8 +93,8 @@ const kernelCode = opencl:
     gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmGridReLUKernel(
-      A, B: ptr UncheckedArray[uint32];
-      C: ptr UncheckedArray[float32]) {.global.} =
+      C: ptr UncheckedArray[float32],
+      A, B: ptr UncheckedArray[uint32]) {.global.} =
     let gid = int(get_global_id(0))
     let threadIdx = gid mod 128
     let blk = gid div 128
@@ -109,9 +109,9 @@ const kernelCode = opencl:
     gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmGridBiasKernel(
-      A, B: ptr UncheckedArray[uint32];
-      bias: ptr UncheckedArray[float32];
-      C: ptr UncheckedArray[float32]) {.global.} =
+      C: ptr UncheckedArray[float32],
+      A, B: ptr UncheckedArray[uint32],
+      bias: ptr UncheckedArray[float32]) {.global.} =
     let gid = int(get_global_id(0))
     let threadIdx = gid mod 128
     let blk = gid div 128
@@ -136,9 +136,9 @@ const kernelCode = opencl:
     gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmGridKernelSingle(
-      A, B: ptr UncheckedArray[uint32];
-      alpha, beta: float32;
-      C: ptr UncheckedArray[float32]) {.global.} =
+      C: ptr UncheckedArray[float32],
+      A, B: ptr UncheckedArray[uint32],
+      alpha, beta: float32) {.global.} =
     ## 1×1 CTA grid: only the thread id varies.
     let gid = int(get_global_id(0))
     let threadIdx = gid mod 128

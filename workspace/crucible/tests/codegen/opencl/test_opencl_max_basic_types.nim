@@ -23,10 +23,10 @@ import std/[unittest, strutils]
 import workspace/crucible
 
 # ── kernel ───────────────────────────────────────────────────────────────
-# OpenCL binds kernel args in order: inputs first, output LAST.
+# OpenCL binds kernel args in order: output first (binding 0), then inputs.
 const kernelCode = opencl:
-  proc maxBasic(dyn: ptr UncheckedArray[float32];
-                res: ptr UncheckedArray[float32]) {.global.} =
+  proc maxBasic(res: ptr UncheckedArray[float32];
+                dyn: ptr UncheckedArray[float32]) {.global.} =
     let x = dyn[0]
     let y = dyn[1]
     # float32 — inline (non-magic) overload -> body-parsed device fn

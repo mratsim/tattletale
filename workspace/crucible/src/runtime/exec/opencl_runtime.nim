@@ -9,15 +9,24 @@
 ##
 ## Provides a high-level wrapper around the OpenCL C API for compiling
 ## and executing OpenCL C compute kernels.
+##
+## Example (engine API):
+##   import workspace/crucible
+##   const code = opencl:
+##     proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+##       output[0] = a[0] + b[0]
+##   var engine = bkOpenCL.init()
+##   engine.ingest(code)
+##   var out: array[1, uint32]
+##   engine.run("addKernel", out, ([1'u32], [2'u32]))
 
-import std/[os, strutils]
+
 import workspace/crucible/src/abis/cl_abi
 
 type
-  OpenCLError* = ref object of CatchableError
 
   OpenCLDevice* = object
-    id*: Pdevice_id
+    id: Pdevice_id
 
   OpenCLContext* = object
     device*: OpenCLDevice
@@ -26,8 +35,8 @@ type
     commands: Pcommand_queue
 
   OpenCLBuffer* = object
-    ctx*: OpenCLContext
-    size*: int
+    ctx: OpenCLContext
+    size: int
     mem: Pmem
 
   OpenCLKernel* = object
@@ -35,15 +44,14 @@ type
     kernel: Pkernel
     program: Pprogram
 
-proc check*(res: TClResult, quitOnFailure = true) =
+proc check*(res: TClResult) =
   ## Unified error policy: stacktrace + stderr + quit(1).
   ## No exceptions as the public contract.
   let code = res
   if code != SUCCESS:
     writeStackTrace()
     stderr.write($instantiationInfo() & " exited with error: OpenCL error " & $code & '\n')
-    if quitOnFailure:
-      quit 1
+    quit 1
 
 proc listPlatforms(): seq[Pplatform_id] =
   var platformCount: cl_uint
@@ -53,19 +61,19 @@ proc listPlatforms(): seq[Pplatform_id] =
     result = newSeq[Pplatform_id](platformCount.int)
     check getPlatformIDs(platformCount, result[0].addr, nil)
 
-proc listDevices(platform: Pplatform_id, typ: TDeviceType = DEVICE_TYPE_ALL): seq[OpenCLDevice] =
+proc listDevices(platform: Pplatform_id): seq[OpenCLDevice] =
   var deviceCount: cl_uint
-  let res = getDeviceIDs(platform, typ, 0, nil, deviceCount.addr)
+  let res = getDeviceIDs(platform, DEVICE_TYPE_ALL, 0, nil, deviceCount.addr)
   if res == DEVICE_NOT_FOUND:
     return
   check res
   if deviceCount > 0:
     var ids = newSeq[Pdevice_id](deviceCount.int)
-    check getDeviceIDs(platform, typ, deviceCount, ids[0].addr, nil)
+    check getDeviceIDs(platform, DEVICE_TYPE_ALL, deviceCount, ids[0].addr, nil)
     for id in ids:
       result.add(OpenCLDevice(id: id))
 
-proc listDevices*(): seq[OpenCLDevice] =
+proc listDevices(): seq[OpenCLDevice] =
   for platform in listPlatforms():
     result.add(platform.listDevices())
 
@@ -76,11 +84,9 @@ proc queryString(device: OpenCLDevice, info: Tdevice_info): string =
     result = newString(size.int)
     check getDeviceInfo(device.id, info, size, result[0].addr, nil)
 
-proc name*(device: OpenCLDevice): string = device.queryString(DEVICE_NAME)
 proc vendor*(device: OpenCLDevice): string = device.queryString(DEVICE_VENDOR)
-proc version*(device: OpenCLDevice): string = device.queryString(DEVICE_VERSION)
 
-proc isGpu*(device: OpenCLDevice): bool =
+proc isGpu(device: OpenCLDevice): bool =
   var deviceType: TDeviceType
   check getDeviceInfo(device.id, DEVICE_TYPE, cl_size_t(sizeof(deviceType)), deviceType.addr, nil)
   result = (deviceType.int64 and DEVICE_TYPE_GPU.int64) != 0
@@ -132,14 +138,7 @@ proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
 
-proc writeBuffer*[T](buffer: OpenCLBuffer, data: openArray[T]) =
-  if data.len > 0:
-    buffer.writeBuffer(data[0].unsafeAddr, sizeof(T) * data.len)
 
-proc readBuffer*[T](buffer: OpenCLBuffer, data: ptr UncheckedArray[T]) =
-  check buffer.ctx.commands.enqueueReadBuffer(
-    buffer.mem, CL_TRUE, 0, cl_size_t(buffer.size), data[0].addr, 0, nil, nil
-  )
 
 proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   ## Raw readback into a caller-provided buffer (used by the engines).
@@ -149,14 +148,6 @@ proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
 
-proc readBuffer*[T](buffer: OpenCLBuffer): seq[T] =
-  if buffer.size mod sizeof(T) != 0:
-    quit("OpenCL readBuffer: buffer size is not divisible by item type size")
-  if buffer.size > 0:
-    result = newSeq[T](buffer.size div sizeof(T))
-    check buffer.ctx.commands.enqueueReadBuffer(
-      buffer.mem, CL_TRUE, 0, cl_size_t(buffer.size), result[0].addr, 0, nil, nil
-    )
 
 proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKernel =
   result.ctx = ctx
@@ -195,9 +186,6 @@ proc destroyKernel*(kernel: var OpenCLKernel) =
 proc setArg*(kernel: var OpenCLKernel, index: int, buffer: OpenCLBuffer) =
   check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(sizeof(Pmem)), buffer.mem.unsafeAddr)
 
-proc setArg*[T](kernel: var OpenCLKernel, index: int, value: T) =
-  var data = value
-  check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(sizeof(T)), data.addr)
 
 proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[cl_size_t]) =
   if globalWorkSize.len == 0:
@@ -216,110 +204,6 @@ proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[c
   )
   check finish(kernel.ctx.commands)
 
-# ═══════════════════════════════════════════════════════════════════════
-# High-level helper: execOpenCL
-# ═══════════════════════════════════════════════════════════════════════
-
 proc setArg*(kernel: var OpenCLKernel, index: int, size: int, data: pointer) =
   ## Bind a scalar kernel argument by value (e.g. alpha/beta coefficients).
   check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(size), data)
-
-proc execOpenCL*(
-  ctx: OpenCLContext,
-  source: string,
-  entryPoint: string,
-  outputBytes: int,
-  taggedArgs: openArray[tuple[data: pointer, size: int, isValue: bool]],
-  outputInit: pointer = nil,
-  outputInitSize: int = 0,
-  globalSize: openArray[cl_size_t] = [cl_size_t(1)],
-  localSize: openArray[cl_size_t] = [cl_size_t(1)]
-): seq[byte] =
-  ## Compiles and executes an OpenCL C compute kernel, returning the
-  ## output buffer contents as `seq[byte]`.
-  ##
-  ## - `source`:     OpenCL C source code
-  ## - `entryPoint`: name of the kernel entry point
-  ## - `outputBytes`: number of bytes to read back as result
-  ## - `taggedArgs`: ordered kernel arguments, each either a device buffer
-  ##                 (isValue == false) or a scalar passed by value
-  ##                 (isValue == true, e.g. alpha/beta coefficients)
-  ## - `outputInit` / `outputInitSize`: initial contents for the output
-  ##                 buffer, for in-place kernels (e.g. β·C reads C from the
-  ##                 output before it is overwritten). Skipped when nil.
-  ## - `globalSize` / `localSize`: work-group geometry (default 1×1×1 —
-  ##   a single work-item, matching the simple add-kernel tests)
-  ##
-  ## Bindings follow OpenCL kernel parameter order:
-  ##   arg 0..N-1 = taggedArgs (in order), arg N = output.
-  let numInputs = taggedArgs.len
-
-  # Allocate input buffers + output buffer
-  var inputBuffers = newSeq[OpenCLBuffer](numInputs)
-  defer:
-    for i in 0 ..< numInputs:
-      if not taggedArgs[i].isValue:
-        inputBuffers[i].dealloc()
-  for i in 0 ..< numInputs:
-    if not taggedArgs[i].isValue:
-      inputBuffers[i] = ctx.allocBuffer(taggedArgs[i].size)
-  var outBuf = ctx.allocBuffer(outputBytes)
-  defer:
-    outBuf.dealloc()
-  if outputInit != nil:
-    outBuf.writeBuffer(outputInit, outputInitSize)
-  var kernel = ctx.compileKernel(entryPoint, source)
-  defer:
-    kernel.destroyKernel()
-
-  # Write input data
-  for i in 0 ..< numInputs:
-    if not taggedArgs[i].isValue:
-      inputBuffers[i].writeBuffer(taggedArgs[i].data, taggedArgs[i].size)
-
-  # Set kernel args: inputs first (buffers as cl_mem, scalars by value),
-  # then output
-  for i in 0 ..< numInputs:
-    if taggedArgs[i].isValue:
-      kernel.setArg(i, taggedArgs[i].size, taggedArgs[i].data)
-    else:
-      kernel.setArg(i, inputBuffers[i])
-  kernel.setArg(numInputs, outBuf)
-
-  kernel.runKernel(globalSize, localSize)
-
-  # Read output
-  result = newSeq[byte](outputBytes)
-  check outBuf.ctx.commands.enqueueReadBuffer(
-    outBuf.mem, CL_TRUE, 0, cl_size_t(outputBytes), result[0].addr, 0, nil, nil
-  )
-
-proc execOpenCL*(
-  ctx: OpenCLContext,
-  source: string,
-  entryPoint: string,
-  outputBytes: int,
-  inputs: openArray[tuple[data: pointer, size: int]],
-  globalSize: openArray[cl_size_t] = [cl_size_t(1)],
-  localSize: openArray[cl_size_t] = [cl_size_t(1)]
-): seq[byte] =
-  ## Buffer-only convenience overload: every input is a device buffer.
-  var tagged = newSeq[tuple[data: pointer, size: int, isValue: bool]](inputs.len)
-  for i, t in inputs:
-    tagged[i] = (t.data, t.size, false)
-  result = ctx.execOpenCL(source, entryPoint, outputBytes, tagged, globalSize = globalSize, localSize = localSize)
-
-# ═══════════════════════════════════════════════════════════════════════
-# Even higher-level combined: create context + exec + shutdown
-# ═══════════════════════════════════════════════════════════════════════
-
-proc execOpenCL*(
-  source: string,
-  entryPoint: string,
-  outputBytes: int,
-  inputs: openArray[tuple[data: pointer, size: int]]
-): seq[byte] =
-  ## Convenience overload that creates a temporary OpenCL context.
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
-  result = ctx.execOpenCL(source, entryPoint, outputBytes, inputs)

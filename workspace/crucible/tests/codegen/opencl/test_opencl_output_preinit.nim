@@ -6,12 +6,12 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 ##
 ## OpenCL: output buffer pre-init for in-place kernels.
-## execOpenCL uploads outputInit / outputInitSize into the output buffer
-## before running the kernel. clCreateBuffer leaves buffer contents
-## spec-undefined, so in-place kernels that read their own output, such
-## as out[i] = out[i] + 1, must seed the buffer via outputInit. This test
-## runs the same in-place kernel twice on the same buffer, carrying the
-## previous contents forward via outputInit, and checks the accumulation.
+## The engine uploads the output var's current bytes before launch
+## (clCreateBuffer leaves buffer contents spec-undefined, so in-place
+## kernels that read their own output, such as out[i] = out[i] + 1, must
+## be seeded on the host). This test runs the same in-place kernel twice
+## on the same output var, carrying the previous contents forward via the
+## pre-launch upload, and checks the accumulation.
 ##
 ## Run:
 ##   cd tattletale
@@ -31,8 +31,8 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkOpenCL.init()
     engine.ingest(kernelCode)
 
-    # The engine uploads the output's current bytes before launch (replaces
-    # execOpenCL's outputInit): seed the output var and run in place twice.
+    # The engine uploads the output var's current bytes before launch:
+    # seed the output var and run in place twice.
     var outBuf: array[1, uint32]
     outBuf[0] = 0
     engine.run("incInPlace", outBuf, ())

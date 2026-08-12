@@ -27,8 +27,8 @@ import workspace/crucible
 # ── OpenCL C generation via `opencl:` macro ────────────────────────────────
 
 const accCl = opencl:
-  proc accKernel(a: ptr UncheckedArray[uint32];
-                 output: ptr UncheckedArray[uint32]) {.global.} =
+  proc accKernel(output: ptr UncheckedArray[uint32];
+                 a: ptr UncheckedArray[uint32]) {.global.} =
     for i in 0 ..< 2:
       var acc = uint32(0)
       for k in 0 ..< 4:

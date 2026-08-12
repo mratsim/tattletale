@@ -14,9 +14,9 @@ import workspace/crucible
 # ── Basic types — gpuBinOp ──────────────────────────────────────────────────
 
 const basicVk = vulkan:
-  proc basicKernel(a: ptr UncheckedArray[int32];
-                   b: ptr UncheckedArray[int32];
-                   output: ptr UncheckedArray[int32]) {.global.} =
+  proc basicKernel(output: ptr UncheckedArray[int32];
+                   a: ptr UncheckedArray[int32];
+                   b: ptr UncheckedArray[int32]) {.global.} =
     output[0] = a[0] + b[0]
     output[1] = a[0] - b[0]
     output[2] = a[0] * b[0]
@@ -60,9 +60,9 @@ proc `or`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val or b.val)
 proc `xor`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val xor b.val)
 
 const structVk = vulkan:
-  proc structKernel(a: ptr UncheckedArray[int32];
-                    b: ptr UncheckedArray[int32];
-                    output: ptr UncheckedArray[int32]) {.global.} =
+  proc structKernel(output: ptr UncheckedArray[int32];
+                    a: ptr UncheckedArray[int32];
+                    b: ptr UncheckedArray[int32]) {.global.} =
     let x = Wrapper(val: a[0])
     let y = Wrapper(val: b[0])
     output[0] = (x + y).val
@@ -77,9 +77,9 @@ const structVk = vulkan:
     output[9] = (x xor y).val
 
 const structVk2 = vulkan:
-  proc structKernel2(a: ptr UncheckedArray[int32];
-                     b: ptr UncheckedArray[int32];
-                     output: ptr UncheckedArray[int32]) {.global.} =
+  proc structKernel2(output: ptr UncheckedArray[int32];
+                     a: ptr UncheckedArray[int32];
+                     b: ptr UncheckedArray[int32]) {.global.} =
     let x = Wrapper2(val: a[0])
     let y = Wrapper2(val: b[0])
     output[0] = (x + y).val

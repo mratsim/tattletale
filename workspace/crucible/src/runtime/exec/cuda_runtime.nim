@@ -26,7 +26,7 @@ proc getTypes(n: NimNode): seq[NimNode] =
     else:
       error("Arguments to `execCuda` must be given as a bracket, tuple or typed expression. Instead: " & $n.treerepr)
 
-proc requiresCopy(n: NimNode, passStructByPointer: bool): bool =
+proc requiresCopy(n: NimNode): bool =
   ## Returns `true` if the given type is not a trivial data type, which implies
   ## it will require copying its value manually.
   ##
@@ -34,28 +34,20 @@ proc requiresCopy(n: NimNode, passStructByPointer: bool): bool =
   ## based on whether it is an object or ref type. That means *DO NOT* nest ref
   ## types in your objects. They *WILL NOT* be deep copied!
   ##
-  ## If `passStructByPointer` is `true` we do *not* copy trivial struct types, e.g. a big int
-  ## or finite field element. If it is false, we always copy for those. The distinction
-  ## is needed, because for the CUDA target via LLVM, the array type definitions cause
-  ## `cudaErrorIllegalAddress` if we directly pass the host pointer of the struct.
+  ## Structs are always passed by value: regular objects are copied directly,
+  ## arrays/refs are copied element-wise or via their reference.
   case n.typeKind
   of ntyBool, ntyChar, ntyInt .. ntyUint64: # range includes all floats
     result = false
   of ntyObject:
-    if passStructByPointer:
-      result = false # regular objects can just be copied!
-    else:
-      result = true # struct passing by pointer forbidden
+    result = false # regular objects can just be copied!
     ## NOTE: strictly speaking this is not the case of course! If the object
     ## contains refs, it won't hold!
   of ntyArray: # statically sized arrays are passed by pointer in CUDA / C++ / C!
     result = true
   of ntyGenericInst:
-    if passStructByPointer:
-      let impl = n.getTypeImpl()
-      result = impl.kind == nnkRefTy # if a ref, needs to be copied
-    else:
-      result = true # for now assume it needs to be copied
+    let impl = n.getTypeImpl()
+    result = impl.kind == nnkRefTy # if a ref, needs to be copied
   of ntyDistinct:
     let impl = n.getTypeInst()
     if impl.kind in [nnkIdent, nnkSym] and impl.strVal.normalize == "cudeviceptr":
@@ -71,10 +63,10 @@ proc requiresCopy(n: NimNode, passStructByPointer: bool): bool =
   else:
     result = true
 
-proc allowsCopy(n: NimNode, passStructByPointer: bool): bool =
+proc allowsCopy(n: NimNode): bool =
   ## Returns `true` if the given type is allowed to be copied. That means it is
   ## either `requiresCopy` or a `var` symbol.
-  result = n.requiresCopy(passStructByPointer) or n.symKind == nskVar
+  result = n.requiresCopy or n.symKind == nskVar
 
 proc getIdent(n: NimNode): NimNode =
   ## Generate a `GPU` suffixed ident
@@ -84,11 +76,10 @@ proc getIdent(n: NimNode): NimNode =
   of nnkIdent, nnkSym: result = ident(n.strVal & "GPU")
   else: result = ident("`" & n.repr & "`GPU")
 
-proc determineDevicePtrs(r, i: NimNode, iTypes: seq[NimNode],
-                         passStructByPointer: bool): seq[(NimNode, NimNode)] =
+proc determineDevicePtrs(r, i: NimNode, iTypes: seq[NimNode]): seq[(NimNode, NimNode)] =
   ## Returns the device pointer ident and its associated original symbol.
   for el in r:
-    if not el.allowsCopy(passStructByPointer):
+    if not el.allowsCopy:
       error("The argument for `res`: " & $el.repr & " of type: " & $el.getTypeImpl().treerepr &
         " does not allow copying. Copying to the address of all result variables is required." &
         " It is a `" & $el.symKind & "` variable, but needs to be a `var`.")
@@ -96,14 +87,14 @@ proc determineDevicePtrs(r, i: NimNode, iTypes: seq[NimNode],
   for idx in 0 ..< i.len:
     let input = i[idx]
     let t = iTypes[idx]
-    if t.requiresCopy(passStructByPointer):
+    if t.requiresCopy:
       result.add (getIdent(input), input)
   # Deduplicate the pointers. If one passes in the same argument twice, we don't generate a duplicate
   # device ptr, e.g.
   # `nvrtc.execute("testAdd", (hOut), (inFp, inFp))`
   result = deduplicate(result)
 
-proc assembleParams(r, i: NimNode, iTypes: seq[NimNode], passStructByPointer: bool): seq[NimNode] =
+proc assembleParams(r, i: NimNode, iTypes: seq[NimNode]): seq[NimNode] =
   ## Returns all parameters. Depending on whether they require copies or
   ## are `res` parameters, either the input parameter or the `GPU` parameter.
   for el in r: # for `res` we always copy!
@@ -111,13 +102,13 @@ proc assembleParams(r, i: NimNode, iTypes: seq[NimNode], passStructByPointer: bo
   for idx in 0 ..< i.len:
     let input = i[idx]
     let t = iTypes[idx]
-    if t.requiresCopy(passStructByPointer):
+    if t.requiresCopy:
       result.add getIdent(input)
     else:
       result.add input
 
 # little helper macro constructors
-template check(arg): untyped = nnkCall.newTree(ident"check", arg)
+template checkCall(arg): untyped = nnkCall.newTree(bindSym"check", arg)
 template size(arg): untyped = nnkCall.newTree(ident"sizeof", arg)
 template address(arg): untyped = nnkCall.newTree(ident"addr", arg)
 template csize_t(arg): untyped = nnkCall.newTree(ident"csize_t", arg)
@@ -144,9 +135,9 @@ proc maybeAddress(n: NimNode): NimNode =
   of ntySequence: result = address( nnkBracketExpr.newTree(n, newLit 0) )
   else: result = address(n)
 
-proc genParams(pId, r, i: NimNode, iTypes: seq[NimNode], passStructByPointer: bool): NimNode =
+proc genParams(pId, r, i: NimNode, iTypes: seq[NimNode]): NimNode =
   ## Generates the parameter `params` variable
-  let ps = assembleParams(r, i, iTypes, passStructByPointer)
+  let ps = assembleParams(r, i, iTypes)
   result = nnkBracket.newTree()
   for p in ps:
     result.add pointer(maybeAddress p)
@@ -221,13 +212,10 @@ proc dim3*(x: int, y = 1, z = 1): CudaDim3 =
   ## launch configuration with unit extents on the remaining axes.
   CudaDim3(x: x.uint32, y: y.uint32, z: z.uint32)
 
-proc execCudaImpl*(jitFn, gridDim, blockDim, res, inputs, sharedMemSize: NimNode,
-                   passStructByPointer: static bool): NimNode =
+proc execCudaImpl(jitFn, gridDim, blockDim, res, inputs, sharedMemSize: NimNode): NimNode =
   ## Generates the statements that execute a CUDA kernel on `jitFn`. `gridDim`
   ## and `blockDim` are NimNodes that must evaluate to `CudaDim3` values giving
-  ## the grid and block extent on all three axes. The scalar `numBlocks` /
-  ## `threadsPerBlock` convenience overloads below simply wrap those scalars in
-  ## `dim3(x)` so that the y/z axes default to 1.
+  ## the grid and block extent on all three axes.
   # Maybe wrap individually given arguments in a `[]` bracket, e.g.
   # `execCuda(res = foo, inputs = bar)`
   let res = maybeWrap res
@@ -238,7 +226,7 @@ proc execCudaImpl*(jitFn, gridDim, blockDim, res, inputs, sharedMemSize: NimNode
 
   # determine all required `CUdeviceptr`
   let iTypes = getTypes(inputs)
-  let devPtrs = determineDevicePtrs(res, inputs, iTypes, passStructByPointer)
+  let devPtrs = determineDevicePtrs(res, inputs, iTypes)
 
   # generate device pointers, allocate memory and copy data
   for x in devPtrs:
@@ -246,23 +234,23 @@ proc execCudaImpl*(jitFn, gridDim, blockDim, res, inputs, sharedMemSize: NimNode
     result.add nnkVarSection.newTree(
       nnkIdentDefs.newTree(
         x[0],
-        ident"CUdeviceptr",
+        bindSym"CUdeviceptr",
         newEmptyNode()
       )
     )
 
     # `check cuMemAlloc(rGPU, csize_t sizeof(r))`
     result.add(
-      check nnkCall.newTree(
-        ident"cuMemAlloc",
+      checkCall nnkCall.newTree(
+        bindSym"cuMemAlloc",
         x[0],
         csize_t getSizeOf(x[1])
       )
     )
     # `check cuMemcpyHtoD(aGPU, a.addr, csize_t sizeof(a))`
     result.add(
-      check nnkCall.newTree(
-        ident"cuMemcpyHtoD",
+      checkCall nnkCall.newTree(
+        bindSym"cuMemcpyHtoD",
         x[0],
         maybeAddress x[1],
         csize_t getSizeOf(x[1])
@@ -275,21 +263,13 @@ proc execCudaImpl*(jitFn, gridDim, blockDim, res, inputs, sharedMemSize: NimNode
 
   # assemble the parameters
   let pId = ident"params"
-  let params = genParams(pId, res, vars, iTypes, passStructByPointer)
+  let params = genParams(pId, res, vars, iTypes)
   result.add params
 
   # launch the kernel
   result.add quote do:
     let pAr = if `pId`.len > 0: `pId`[0].unsafeAddr
               else: nil
-
-    # Create timing events
-    var start, stop: CUevent
-
-    check cuEventCreate(start)
-    check cuEventCreate(stop)
-
-    check cuEventRecord(start, CUstream(nil))
     check cuLaunchKernel(
             CUfunction(`jitFn`),               # dummy conversion on NVRTC, required on LLVM
             `gridDim`.x, `gridDim`.y, `gridDim`.z,   # grid(x, y, z)
@@ -298,23 +278,13 @@ proc execCudaImpl*(jitFn, gridDim, blockDim, res, inputs, sharedMemSize: NimNode
             CUstream(nil),
             pAr, nil)
     check cuCtxSynchronize()
-    check cuEventRecord(stop, CUstream(nil))
-    check cuEventSynchronize(stop)
-
-    var elapsedTime: float32
-    check cuEventElapsedTime(elapsedTime, start, stop)
-    echo "[INFO]: Kernel execution took: ", elapsedTime, " ms"
-
-    check cuEventDestroy(start)
-    check cuEventDestroy(stop)
-
 
   # copy back results
-  let devPtrsRes = determineDevicePtrs(res, nnkBracket.newTree(), @[], passStructByPointer)
+  let devPtrsRes = determineDevicePtrs(res, nnkBracket.newTree(), @[])
   for x in devPtrsRes:
     result.add(
-      check nnkCall.newTree(
-        ident"cuMemcpyDtoH",
+      checkCall nnkCall.newTree(
+        bindSym"cuMemcpyDtoH",
         maybeAddress x[1],
         x[0],
         csize_t getSizeOf(x[1])
@@ -324,8 +294,8 @@ proc execCudaImpl*(jitFn, gridDim, blockDim, res, inputs, sharedMemSize: NimNode
   # free memory
   for x in devPtrs:
     result.add(
-      check nnkCall.newTree(
-        ident"cuMemFree",
+      checkCall nnkCall.newTree(
+        bindSym"cuMemFree",
         x[0]
       )
     )
@@ -334,25 +304,18 @@ proc execCudaImpl*(jitFn, gridDim, blockDim, res, inputs, sharedMemSize: NimNode
       `result`
 
 macro execCuda*(jitFn: CUfunction,
+                gridDim, blockDim: CudaDim3,
                 res: typed,
-                inputs: typed): untyped =
-  ## Given a CUDA function, execute the kernel. Copies all non trivial data types to
-  ## to the GPU via `cuMemcpyHtoD`. Any argument given as `res` will be copied back
-  ## from the GPU after kernel execution finishes.
+                inputs: typed,
+                sharedMemSize: typed): untyped =
+  ## Given a CUDA function, execute the kernel. Copies all non-trivial data types to
+  ## the GPU via `cuMemcpyHtoD`. Arguments given as `res` are copied back from the
+  ## GPU after kernel execution finishes. `gridDim`/`blockDim` are the explicit
+  ## 2D/3D launch extents; `sharedMemSize` is the dynamic shared memory in bytes.
   ##
   ## IMPORTANT:
   ## The arguments passed to the CUDA kernel will be in the order in which they are
   ## given to the macro. This especially means `res` arguments will be passed first.
-  ##
-  ## Example:
-  ## ```nim
-  ## execCuda(fn, res = [r, s], inputs = [a, b, c]) # if all arguments have the same type
-  ## # or
-  ## execCuda(fn, res = (r, s), inputs = (a, b, c)) # if different types
-  ## ```
-  ## will pass the parameters as `[r, s, a, b, c]`.
-  ##
-  ## For more examples see the test case `tests/gpu/t_exec_literals_consts.nim`.
   ##
   ## We do not perform any checks on whether the given types are valid as arguments to
   ## the CUDA target! Also, all arguments given as `res` are expected to be copied.
@@ -362,55 +325,4 @@ macro execCuda*(jitFn: CUfunction,
   ##
   ## We also copy all `res` data to the GPU, so that a return value can also be used
   ## as an input.
-  ##
-  ## NOTE: This function is mainly intended for convenient execution of a single kernel
-  result = execCudaImpl(jitFn,
-                        newCall(bindSym"dim3", newLit 1), newCall(bindSym"dim3", newLit 1),
-                        res, inputs, newLit 0,
-                        passStructByPointer = true)
-
-macro execCuda*(jitFn: CUfunction,
-                numBlocks, threadsPerBlock: int,
-                res: typed,
-                inputs: typed): untyped =
-  ## Overload which takes a target number of threads and blocks (1D: y/z axes default to 1)
-  result = execCudaImpl(jitFn,
-                        newCall(bindSym"dim3", numBlocks),
-                        newCall(bindSym"dim3", threadsPerBlock),
-                        res, inputs, newLit 0,
-                        passStructByPointer = true)
-
-macro execCuda*(jitFn: CUfunction,
-                numBlocks, threadsPerBlock: int,
-                res: typed,
-                inputs: typed,
-                sharedMemSize: typed): untyped =
-  ## Overload which takes a target number of threads and blocks and a shared memory size
-  result = execCudaImpl(jitFn,
-                        newCall(bindSym"dim3", numBlocks),
-                        newCall(bindSym"dim3", threadsPerBlock),
-                        res, inputs, sharedMemSize,
-                        passStructByPointer = true)
-
-macro execCuda*(jitFn: CUfunction,
-                gridDim, blockDim: CudaDim3,
-                res: typed,
-                inputs: typed): untyped =
-  ## Overload which takes explicit 2D/3D grid and block extents
-  result = execCudaImpl(jitFn, gridDim, blockDim, res, inputs, newLit 0, passStructByPointer = true)
-
-macro execCuda*(jitFn: CUfunction,
-                gridDim, blockDim: CudaDim3,
-                res: typed,
-                inputs: typed,
-                sharedMemSize: typed): untyped =
-  ## Overload which takes explicit 2D/3D grid and block extents and a shared memory size
-  result = execCudaImpl(jitFn, gridDim, blockDim, res, inputs, sharedMemSize, passStructByPointer = true)
-
-macro execCuda*(jitFn: CUfunction,
-                res: typed): untyped =
-  ## Overload of the above for empty `inputs`
-  result = execCudaImpl(jitFn,
-                        newCall(bindSym"dim3", newLit 1), newCall(bindSym"dim3", newLit 1),
-                        res, nnkBracket.newTree(), newLit 0,
-                        passStructByPointer = true)
+  result = execCudaImpl(jitFn, gridDim, blockDim, res, inputs, sharedMemSize)

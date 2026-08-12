@@ -23,16 +23,16 @@ proc vec2Add(a, b: Vec2): Vec2 {.device.} =
 # ── GLSL generation via `vulkan:` macro ─────────────────────────────────────
 
 const addVk = vulkan:
-  proc addKernel(a: ptr UncheckedArray[uint32];
-                 b: ptr UncheckedArray[uint32];
-                 output: ptr UncheckedArray[uint32]) {.global.} =
+  proc addKernel(output: ptr UncheckedArray[uint32];
+                 a: ptr UncheckedArray[uint32];
+                 b: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = a[0] + b[0]
     output[1] = a[1] + b[1]
 
 const vec2Vk = vulkan:
-  proc vec2AddKernel(a: ptr UncheckedArray[uint32];
-                     b: ptr UncheckedArray[uint32];
-                     output: ptr UncheckedArray[uint32]) {.global.} =
+  proc vec2AddKernel(output: ptr UncheckedArray[uint32];
+                     a: ptr UncheckedArray[uint32];
+                     b: ptr UncheckedArray[uint32]) {.global.} =
     let va = Vec2(x: a[0], y: a[1])
     let vb = Vec2(x: b[0], y: b[1])
     let vr = vec2Add(va, vb)
@@ -43,9 +43,9 @@ const maxVk = vulkan:
   proc maxGeneric[T](a, b: T): T {.device.} =
     if a > b: result = a else: result = b
 
-  proc maxKernel(a: ptr UncheckedArray[uint32];
-                 b: ptr UncheckedArray[uint32];
-                 output: ptr UncheckedArray[uint32]) {.global.} =
+  proc maxKernel(output: ptr UncheckedArray[uint32];
+                 a: ptr UncheckedArray[uint32];
+                 b: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = maxGeneric(a[0], b[0])
 
 # ── Codegen tests (always runs) ─────────────────────────────────────────────

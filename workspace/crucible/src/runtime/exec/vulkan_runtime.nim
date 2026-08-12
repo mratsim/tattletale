@@ -9,33 +9,32 @@
 ##
 ## Provides a high-level wrapper over the Vulkan compute API.
 ## SPIR-V compilation via glslangValidator.
-## ICD loaded directly (bypasses Vulkan loader) to work around NVIDIA 595 + loader 1.4.
+## Uses the standard Vulkan loader (libvulkan.so.1) — ICD discovery and
+## dispatch are delegated to the loader, same as ash/vulkano.
 ##
-## Usage:
+## Example (engine API):
 ##   import workspace/crucible
 ##   const code = vulkan:
-##     proc add(a: ptr UncheckedArray[uint32];
-##              b: ptr UncheckedArray[uint32];
-##              output: ptr UncheckedArray[uint32]) {.global.} =
+##     proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
 ##       output[0] = a[0] + b[0]
-##   var ctx = initVulkan()
-##   let res = execVulkan(ctx, code, "main", 8,
-##                        inputs = [([10'u32, 20'u32], 8u)])
-##   ctx.shutdown()
+##   var engine = bkVulkan.init()
+##   engine.ingest(code)
+##   var out: array[1, uint32]
+##   engine.run("addKernel", out, ([1'u32], [2'u32]))
+
+## Used by the VulkanEngine (engines/vk.nim) — this module is internal; the
+## public surface is the engine's run/ingest/getArtifact.
 
 import std/[dynlib, os, osproc, hashes, streams]
 import workspace/crucible/src/abis/vulkan_abi as vk
 import ./runtime_utils
 type
-  VulkanError* = ref object of CatchableError
 
   VulkanBuffer* = object
     size*: int
     handle: VkBuffer
     memory: VkDeviceMemory
     device: VkDevice
-    memTypeIndex: uint32
-    memTypeFlags: uint32
 
   # Not in the vendored ABI — the C struct is {stageFlags: uint32, offset, size}
   VkPushConstantRange = object
@@ -64,15 +63,14 @@ type
     vkLib*: LibHandle
     getProcAddr*: pointer  ## vkGetInstanceProcAddr
 
-proc check*(res: VkResult, quitOnFailure = true) =
+proc check*(res: VkResult) =
   ## Unified error policy: stacktrace + stderr + quit(1).
   ## No exceptions as the public contract.
   let code = res
   if code != VK_SUCCESS:
     writeStackTrace()
     stderr.write($instantiationInfo() & " exited with error: Vulkan error " & $code & '\n')
-    if quitOnFailure:
-      quit 1
+    quit 1
 
 proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer =
   ## Call vkGetInstanceProcAddr to load a Vulkan function pointer.
@@ -428,11 +426,9 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
       details &= " [" & $i & ": flags=" & $(cast[int](memProps.memoryTypes[i].propertyFlags)) & " heap=" & $memProps.memoryTypes[i].heapIndex & "]"
     quit("No host-visible memory type available (vkMapMemory would fail) — " & details)
 
-  result.memTypeIndex = memTypeIdx
-  result.memTypeFlags = cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags)
-  when defined(debugVk):
+  when defined(debug):
     echo "  [allocBuffer] size=", size, " memTypeBits=", memReq.memoryTypeBits,
-         " chosen type ", memTypeIdx, " flags=", result.memTypeFlags,
+         " chosen type ", memTypeIdx,
          " heap=", memProps.memoryTypes[memTypeIdx].heapIndex
   var allocInfo = VkMemoryAllocateInfo(
     sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
@@ -471,8 +467,7 @@ proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size
   var mapped: pointer
   let mres = vkMapMemory(buf.device, buf.memory, 0, VkDeviceSize(size), 0, mapped.addr)
   if mres != VK_SUCCESS:
-    quit("vkMapMemory failed (" & $mres &
-      ") on memory type " & $buf.memTypeIndex & " (flags=" & $buf.memTypeFlags & ")")
+    quit("vkMapMemory failed (" & $mres & ")")
   copyMem(mapped, data, size)
   vkUnmapMemory(buf.device, buf.memory)
 
@@ -770,62 +765,3 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
   check vkWaitForFences(ctx.device, 1, fence.addr, VK_TRUE, uint64.high)
   vkDestroyFence(ctx.device, fence, nil)
   vkFreeCommandBuffers(ctx.device, ctx.commandPool, 1, cmdBuf.addr)
-
-# ═══════════════════════════════════════════════════════════════════════
-# High-level helper: execVulkan
-# ═══════════════════════════════════════════════════════════════════════
-
-proc execVulkan*(
-  ctx: var VulkanContext,
-  source: string,
-  entryPoint: string,
-  outputBytes: int,
-  inputs: openArray[tuple[data: pointer, size: int]]
-): seq[byte] =
-  let numInputs = inputs.len
-  let totalSsboCount = numInputs + 1
-  let spirv = compileGlslToSpirV(source, entryPoint)
-  # Replace inline gpa calls with ctx.gpaAddr(ctx.instance, ...) below
-  let vkCreateShaderModule = cast[
-    proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
-         pAllocator: pointer,
-         pShaderModule: ptr VkShaderModule): VkResult {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkCreateShaderModule"))
-  var smCI = VkShaderModuleCreateInfo(
-    sType: VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-    codeSize: csize_t(spirv.len * sizeof(uint32)),
-    pCode: spirv[0].addr
-  )
-  var shaderModule: VkShaderModule
-  check vkCreateShaderModule(ctx.device, smCI.addr, nil, shaderModule.addr)
-  defer:
-    let vkDestroyShaderModule = cast[
-      proc(device: VkDevice, shaderModule: VkShaderModule,
-           pAllocator: pointer) {.cdecl.}
-    ](ctx.gpaAddr(ctx.instance, "vkDestroyShaderModule"))
-    if shaderModule != nil and vkDestroyShaderModule != nil:
-      vkDestroyShaderModule(ctx.device, shaderModule, nil)
-  var inputBuffers = newSeq[VulkanBuffer](numInputs)
-  for i in 0 ..< numInputs:
-    inputBuffers[i] = ctx.allocBuffer(inputs[i].size)
-    ctx.writeBuffer(inputBuffers[i], inputs[i].data, inputs[i].size)
-  var outBuf = ctx.allocBuffer(outputBytes)
-
-  # Deferred cleanup: always free resources even if an exception occurs later
-  defer:
-    for buf in inputBuffers.mitems:
-      buf.dealloc(ctx)
-    outBuf.dealloc(ctx)
-
-  var pipeline = ctx.createPipeline(shaderModule, totalSsboCount, entryPoint)
-  defer:
-    pipeline.destroyPipeline(ctx)
-
-  for i in 0 ..< numInputs:
-    pipeline.setArg(i, inputBuffers[i], ctx)
-  pipeline.setArg(numInputs, outBuf, ctx)
-  let wgs: uint32 = 256
-  let nwg = ((outputBytes div 4).uint32 + wgs - 1) div wgs
-  ctx.runKernel(pipeline, [nwg * wgs], [wgs, 1'u32, 1'u32])
-
-  result = readBuffer[byte](ctx, outBuf)

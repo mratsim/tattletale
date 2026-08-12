@@ -22,7 +22,7 @@
 ## importing both `codegen/gpu_compiler` and `runtime/engines` get one enum
 ## (no ambiguous `bkCuda`).
 ##
-## Error policy: `check(status, quitOnFailure = true)` — stacktrace + stderr +
+## Error policy: `check(status)` — stacktrace + stderr +
 ## quit(1). No exceptions as the public contract.
 ##
 ## Chevron gotchas (verified Nim 2.2.10):
@@ -209,7 +209,6 @@ import ./engines/wgpu {.all.}
 # grant access to the engine modules' private factories (newCudaEngine,
 # newOpenCLEngine, newVulkanEngine, newWgpuEngine) without leaking them:
 # `export module` after `import {.all.}` would re-export the privates too.
-export CudaEngine, OpenCLEngine, VulkanEngine, WgpuEngine
 export ingest, getArtifact, run, check, deviceVendor
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -219,7 +218,7 @@ export ingest, getArtifact, run, check, deviceVendor
 proc init*(backend: static BackendKind): auto =
   ## Live context, no kernel yet. `ingest` compiles the source.
   ## Defaults: CUDA 32×128 (the historical NVRTC launch default),
-  ## OpenCL 1×1 (single work-item, the historical execOpenCL default),
+  ## OpenCL 1×1 (single work-item),
   ## Vulkan/WebGPU blk = the shader-baked workgroup size (validated at run).
   when backend == bkCuda:
     result = newCudaEngine(32, 128)

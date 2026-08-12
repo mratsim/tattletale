@@ -6,12 +6,12 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 ##
 ## OpenCL: scalar kernel arguments must be bound by value.
-## execOpenCL takes taggedArgs where entries with isValue == true are bound
-## via setKernelArg(index, size, data) instead of being treated as cl_mem
-## buffers. Previously scalar coefficients (alpha/beta) were passed as
-## cl_mem, which fails with CL_INVALID_ARG_SIZE. This test passes a float32
-## and an int32 scalar through taggedArgs with isValue == true alongside a
-## buffer argument, and checks the computed result.
+## The engine's run API flattens non-buffer args via ArgBlob (negative
+## size = by-value scalar) and binds them with setKernelArg(index, size,
+## data) instead of treating them as cl_mem buffers. Previously scalar
+## coefficients (alpha/beta) were passed as cl_mem, which fails with
+## CL_INVALID_ARG_SIZE. This test passes a float32 and an int32 scalar by
+## value alongside a buffer argument, and checks the computed result.
 ##
 ## Run:
 ##   cd tattletale
@@ -21,10 +21,10 @@
 import workspace/crucible
 
 const kernelCode = opencl:
-  proc scaleKernel(a: ptr UncheckedArray[float32];
+  proc scaleKernel(output: ptr UncheckedArray[float32];
+                   a: ptr UncheckedArray[float32];
                    alpha: float32;
-                   beta: int32;
-                   output: ptr UncheckedArray[float32]) {.global.} =
+                   beta: int32) {.global.} =
     output[0] = a[0] * alpha + float32(beta)
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return

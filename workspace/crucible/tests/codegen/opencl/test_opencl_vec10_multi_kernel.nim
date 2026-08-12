@@ -4,14 +4,14 @@
 import workspace/crucible
 
 const kernelCode = opencl:
-  proc vec10_add(a: ptr UncheckedArray[uint32];
-                 b: ptr UncheckedArray[uint32];
-                 output: ptr UncheckedArray[uint32]) {.global.} =
+  proc vec10_add(output: ptr UncheckedArray[uint32];
+                 a: ptr UncheckedArray[uint32];
+                 b: ptr UncheckedArray[uint32]) {.global.} =
     for i in 0 ..< 10:
       output[i] = a[i] + b[i]
-  proc vec10_mul(a: ptr UncheckedArray[uint32];
-                 b: ptr UncheckedArray[uint32];
-                 output: ptr UncheckedArray[uint32]) {.global.} =
+  proc vec10_mul(output: ptr UncheckedArray[uint32];
+                 a: ptr UncheckedArray[uint32];
+                 b: ptr UncheckedArray[uint32]) {.global.} =
     for i in 0 ..< 10:
       output[i] = a[i] * b[i]
 

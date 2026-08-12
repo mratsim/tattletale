@@ -8,17 +8,17 @@
 
 ## CudaEngine — NVRTC JIT + CUDA driver execution (moved from codegen/nvrtc.nim).
 ##
-## The NVRTC JIT driver (initNvrtc/compile/getPtx/load/link/copyToSymbol and
-## the low-level `execute` templates for explicit 2D/3D extents) is runtime
-## code and lives on here, decoupled from the compile-time DSL: this module
-## no longer imports `codegen/gpu_compiler`.
+## The NVRTC JIT driver (initNvrtc/compile/getPtx/load and the low-level
+## `execute` templates for explicit 2D/3D extents) is runtime code and lives
+## on here, decoupled from the compile-time DSL: this module no longer
+## imports `codegen/gpu_compiler`.
 ##
 ## The engine is a `ref object` with fields directly (no XxxObj indirection).
 ## Resources live in RAII value fields (`NVRTC` carries its own `=destroy`)
 ## because Nim 2.2.10 refuses `=destroy` on ref types. Re-ingest replaces the
 ## RAII field → the old NVRTC context/module are auto-released.
 
-import std/[strformat, os]
+import std/os
 
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/nvidia_paths
@@ -28,8 +28,6 @@ import ../exec/cuda_runtime
 import ../exec/runtime_utils
 import ../engines
 
-export nvidia_abi
-export c_abi
 
 ## Debug output (driver version, PTX size, files) — controlled by -d:debug
 
@@ -47,8 +45,6 @@ type
     prog*: nvrtcProgram
     log*: string # The compilation log
     ptx*: string # PTX of the program
-    cubin*: pointer
-    cubinSize*: csize_t
     device*: CUdevice
     kernel*: CUfunction
     module*: CUmodule
@@ -157,8 +153,6 @@ proc load*(nvrtc: var NVRTC) =
   var error_log = newString(8192)
   var info_log = newString(8192)
 
-  ## NOTE: if you wish to use the `link` approach, pass `nvrtc.cubin` instead of `PTX`
-  #let status = cuModuleLoadData(addr nvrtc.module, nvrtc.cubin)
   let status = cuModuleLoadData(nvrtc.module, cstring nvrtc.ptx)
   if status != CUDA_SUCCESS:
     var error_str: cstring #const char* error_str;
@@ -170,116 +164,6 @@ proc load*(nvrtc: var NVRTC) =
 
   nvrtc.moduleLoaded = true
 
-proc link*(nvrtc: var NVRTC) =
-  ## OPTIONAL STEP. Alternative to passing the PTX to `cuModuleLoadData`.
-  # Create linker
-  var linkState: CUlinkState
-  var linkOptions: array[4, CUjit_option]
-  var linkOptionValues: array[4, pointer]
-  var errorLog = newString(4096)
-  var infoLog = newString(4096)
-  var walltime: float32
-
-  linkOptions[0] = CU_JIT_WALL_TIME
-  linkOptionValues[0] = addr walltime
-  linkOptions[1] = CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES
-  linkOptionValues[1] = cast[pointer](4096)
-  linkOptions[2] = CU_JIT_ERROR_LOG_BUFFER
-  linkOptionValues[2] = addr errorLog[0]
-  linkOptions[3] = CU_JIT_INFO_LOG_BUFFER
-  linkOptionValues[3] = addr infoLog[0]
-
-  check cuLinkCreate(3, addr linkOptions[0], addr linkOptionValues[0], addr linkState)
-
-  # Add PTX
-  var res = cuLinkAddData(linkState, CU_JIT_INPUT_PTX,
-                          cast[pointer](cstring nvrtc.ptx),
-                          csize_t nvrtc.ptx.len,
-                          "kernel.ptx", 0, nil, nil)
-
-  var status: CUresult
-  if res != CUDA_SUCCESS:
-    var error_str: cstring
-    check cuGetErrorString(res, error_str)
-    echo "Link add PTX failed: ", error_str
-    echo "Error log: ", errorLog
-    quit(1)
-
-  # Add the device runtime (provides printf support)
-  ## NOTE: Linking requires you to pass the path to `libcudadevrt.a` at CT
-  let devrtPath = findCudaDevrt()
-  if devrtPath.len > 0:
-    res = cuLinkAddFile(linkState, CU_JIT_INPUT_LIBRARY,
-                        cstring devrtPath, 0, nil, nil)
-    if res != CUDA_SUCCESS:
-      var error_str: cstring
-      check cuGetErrorString(res, error_str)
-      echo "Link add device runtime failed: ", error_str
-      echo "Error log: ", errorLog
-      quit(1)
-
-  # Complete linking
-  var cubn: pointer
-  var cubinSize: csize_t
-  res = cuLinkComplete(linkState, cubn.addr, cubinSize.addr)
-  nvrtc.cubinSize = cubinSize
-  if res != CUDA_SUCCESS:
-    var error_str: cstring
-    check cuGetErrorString(res, error_str);
-    echo "Link complete failed: ", error_str
-    echo "Error log: ", errorLog
-    quit(1)
-
-  when defined(debug):
-    let cubinDump = getDebugPath("test.cubin")
-    echo "[INFO]: Writing CUBIN data to file ", cubinDump
-    echo "Cubin size: ", cubinSize
-    var f = open(cubinDump, fmWrite)
-    defer: f.close()
-    discard f.writeBuffer(cubn, cubinSize)
-
-  # Assign the cubin
-  nvrtc.cubin = cubn
-
-proc copyToSymbol*[T](nvrtc: NVRTC, symbol: string, data: T, offset = 0) =
-  ## Copies `data` to the symbol in the current CUDA kernel.
-  ## There is NO type safety involved here. We only check that the amount of
-  ## data you wish to copy to the global matches the size of the global storage.
-  ## This function does help you with automatically copying `seq[T]` for example.
-  ##
-  ## `offset` is an optional offset of the number of bytes at the target we want
-  ## to copy to. Useful to copy only individual elements of a constant array for example.
-  ##
-  ## Say you define in a kernel:
-  ##
-  ## ```nim
-  ## let foo = cuda:
-  ##   var data {.constant.}: array[1024, uint32]
-  ## # ...
-  ## # later in host code after getting the kernel from the `nvrtc` object:
-  ## let data = calcSomeArray1024() # runtime calculation
-  ## copyToSymbols("data", # name of the variable in CUDA code
-  ##               data)
-  ## ```
-  var devPtr: CUdeviceptr
-  var size: csize_t
-  check cuModuleGetGlobal(devPtr, size.addr, nvrtc.module, symbol.cstring)
-  var totSize: int
-  var srcPtr: pointer
-  when T is seq: # copy len * sizeof(element)
-    doAssert data.len > 0, "Input data is empty!"
-    let elSize = sizeof(data[0])
-    totSize = data.len * elSize
-    srcPtr = data[0].addr
-
-  else:
-    # For now just copy by `sizeof`!
-    totSize = sizeof(data)
-    srcPtr = data.addr
-  doAssert csize_t(totSize) <= size, "Input data size does not fit target: " & $totSize & " vs. " & $size
-  check cuMemcpyHtoD(devPtr + csize_t(offset), srcPtr, csize_t(totSize))
-
-# ═════════════════════════════════════════════════════════════════════════
 # CudaEngine — the HwEngine implementation
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -317,8 +201,8 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
   ##   size >= 0 → device buffer (cuMemAlloc + H2D, param = CUdeviceptr)
   ##   size <  0 → by-value scalar (param = host pointer, CUDA reads -size bytes)
   ## The output is always a device buffer, uploaded before launch and read
-  ## back after (in-place β·C works). CUDA is res-first: the output is the
-  ## kernel's first parameter (res-first; param-order unification across backends is pending).
+  ## back after (in-place β·C works). The output is the kernel's first
+  ## parameter (binding 0 — output first, per CONVENTIONS.md).
   if not engine.nvrtc.moduleLoaded:
     engine.nvrtc.load()
   check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
@@ -342,8 +226,8 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
     for i in 0 ..< di + (if outSize > 0: 1 else: 0):
       check cuMemFree(devPtrs[i])
 
-  # Assemble the kernel param array: output first (res-first convention),
-  # then each blob — device ptr value for buffers, host data ptr for scalars.
+  # Assemble the kernel param array: output first (binding 0), then each
+  # blob — device ptr value for buffers, host data ptr for scalars.
   var params = newSeq[pointer](blobs.len + 1)
   params[0] = addr outDev
   var bi = 0   # buffer index into devPtrs

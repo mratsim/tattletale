@@ -16,9 +16,9 @@ import workspace/crucible
 # ── Basic types — gpuBinOp ──────────────────────────────────────────────────
 
 const basicWgsl = webgpu:
-  proc basicKernel(a: ptr UncheckedArray[uint32];
-                   b: ptr UncheckedArray[uint32];
-                   output: ptr UncheckedArray[uint32]) {.global.} =
+  proc basicKernel(output: ptr UncheckedArray[uint32];
+                   a: ptr UncheckedArray[uint32];
+                   b: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = a[0] + b[0]
     output[1] = a[0] - b[0]
     output[2] = a[0] * b[0]
@@ -62,9 +62,9 @@ proc `or`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val or b.val)
 proc `xor`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val xor b.val)
 
 const structWgsl = webgpu:
-  proc structKernel(a: ptr UncheckedArray[uint32];
-                    b: ptr UncheckedArray[uint32];
-                    output: ptr UncheckedArray[uint32]) {.global.} =
+  proc structKernel(output: ptr UncheckedArray[uint32];
+                    a: ptr UncheckedArray[uint32];
+                    b: ptr UncheckedArray[uint32]) {.global.} =
     let x = Wrapper(val: a[0])
     let y = Wrapper(val: b[0])
     output[0] = (x + y).val
@@ -79,9 +79,9 @@ const structWgsl = webgpu:
     output[9] = (x xor y).val
 
 const structWgsl2 = webgpu:
-  proc structKernel2(a: ptr UncheckedArray[uint32];
-                     b: ptr UncheckedArray[uint32];
-                     output: ptr UncheckedArray[uint32]) {.global.} =
+  proc structKernel2(output: ptr UncheckedArray[uint32];
+                     a: ptr UncheckedArray[uint32];
+                     b: ptr UncheckedArray[uint32]) {.global.} =
     let x = Wrapper2(val: a[0])
     let y = Wrapper2(val: b[0])
     output[0] = (x + y).val

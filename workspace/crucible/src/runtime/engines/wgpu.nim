@@ -10,17 +10,18 @@
 ## decoupled from the compile-time DSL: no gpu_compiler import).
 ##
 ## ingest = store WGSL; getArtifact = WGSL; run = pipeline +
-## dispatchWorkgroups where grid = dispatchWorkgroups count (replacing the
-## output-bytes-derived dispatch wart). blk is shader-baked (@workgroup_size):
-## run's blk is validated loudly. The staging-buffer map pattern is kept;
-## WGPUBufferMapAsyncStatus is now captured in `check` (the old execWgpu
-## dropped it). Scalars (ArgBlob size < 0) use a storage-buffer fallback
+## dispatchWorkgroups where grid = dispatchWorkgroups count. blk is
+## shader-baked (@workgroup_size): run's blk is validated loudly. The
+## staging-buffer map pattern is kept, with the map status captured in
+## `check`. Scalars (ArgBlob size < 0) use a storage-buffer fallback
 ## (future: uniform).
+##
+## The device context (initWgpu) and its callbacks live in `exec/wgpu_runtime`
+## (imported below); this module owns the engine and its RAII `=destroy` hook.
 
-import std/[macros, os, strutils]
+import std/strutils
 
 import workspace/crucible/vendor/wgpu
-
 import ../exec/wgpu_runtime
 import ../engines
 
@@ -35,30 +36,6 @@ template check*(status: WGPUBufferMapAsyncStatus, quitOnFailure = true) =
   if code != wgpuBufferMapAsyncStatusSuccess:
     writeStackTrace()
     stderr.write($instantiationInfo() & " exited with error: WGPUBufferMapAsyncStatus " & $code & '\n')
-    if quitOnFailure:
-      quit 1
-
-template check*(status: WGPURequestAdapterStatus, quitOnFailure = true) =
-  let code = status
-  if code != wgpuRequestAdapterStatusSuccess:
-    writeStackTrace()
-    stderr.write($instantiationInfo() & " exited with error: WGPURequestAdapterStatus " & $code & '\n')
-    if quitOnFailure:
-      quit 1
-
-template check*(status: WGPURequestDeviceStatus, quitOnFailure = true) =
-  let code = status
-  if code != wgpuRequestDeviceStatusSuccess:
-    writeStackTrace()
-    stderr.write($instantiationInfo() & " exited with error: WGPURequestDeviceStatus " & $code & '\n')
-    if quitOnFailure:
-      quit 1
-
-template check*(status: WGPUQueueWorkDoneStatus, quitOnFailure = true) =
-  let code = status
-  if code != wgpuQueueWorkDoneStatusSuccess:
-    writeStackTrace()
-    stderr.write($instantiationInfo() & " exited with error: WGPUQueueWorkDoneStatus " & $code & '\n')
     if quitOnFailure:
       quit 1
 
@@ -104,9 +81,6 @@ proc parseBakedBlk(wgsl: string): int =
 proc ingest*(engine: WgpuEngine, source: string) =
   ## Store the WGSL source. Re-entrant: replaces the previous artifact
   ## (the device context persists — only the artifact is replaced).
-  if engine.source.len > 0:
-    when defined(debug):
-      echo "[INFO]: wgpu ingest: invalidating previous artifact"
   engine.source = source
   engine.bakedBlk = parseBakedBlk(source)
 
@@ -116,9 +90,9 @@ proc getArtifact*(engine: WgpuEngine): string =
 
 proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
-  ## Pipeline + dispatchWorkgroups(cfg.grid). Bindings follow WGSL parameter
-  ## order: args 0..N-1 (all as storage buffers — scalars via the buffer
-  ## arg N = output (output-last convention; param-order unification across backends is pending).
+  ## Pipeline + dispatchWorkgroups(cfg.grid). The output is binding 0
+  ## (output first, per CONVENTIONS.md), then the input args in order
+  ## (all as storage buffers — scalars via the buffer fallback).
   let device = engine.ctx.ctx.device
   let queue  = engine.ctx.ctx.queue
   let outSize = abs(output.size)
@@ -189,25 +163,25 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   defer:
     wgpuBufferRelease(stagingBuf)
 
-  # 3. Bind group layout: inputs 0..N-1, output N
+  # 3. Bind group layout: output at 0, then inputs
   var entries = newSeq[WGPUBindGroupLayoutEntry](totalBindings)
-  for i in 0 ..< numInputs:
-    entries[i] = WGPUBindGroupLayoutEntry(
-      binding: i.cuint,
-      visibility: 4,  # WGPUShaderStage::Compute
-      buffer: WGPUBufferBindingLayout(
-        `type`: 3,  # WGPUBufferBindingType_Storage
-        minBindingSize: inputSizes[i].csize_t
-      )
-    )
-  entries[numInputs] = WGPUBindGroupLayoutEntry(
-    binding: numInputs.cuint,
-    visibility: 4,
+  entries[0] = WGPUBindGroupLayoutEntry(
+    binding: 0.cuint,
+    visibility: WGPUShaderStageCompute,
     buffer: WGPUBufferBindingLayout(
-      `type`: 3,  # Storage
+      `type`: WGPUBufferBindingTypeStorage,
       minBindingSize: outSize.csize_t
     )
   )
+  for i in 0 ..< numInputs:
+    entries[i + 1] = WGPUBindGroupLayoutEntry(
+      binding: (i + 1).cuint,
+      visibility: WGPUShaderStageCompute,
+      buffer: WGPUBufferBindingLayout(
+        `type`: WGPUBufferBindingTypeStorage,
+        minBindingSize: inputSizes[i].csize_t
+      )
+    )
   var bglDesc = WGPUBindGroupLayoutDescriptor(
     entryCount: totalBindings.csize_t,
     entries: entries[0].addr
@@ -228,19 +202,19 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   defer:
     wgpuPipelineLayoutRelease(pl)
 
-  # 4. Bind group entries (same order: inputs then output)
+  # 4. Bind group entries (output at 0, then inputs)
   var bgEntries = newSeq[WGPUBindGroupEntry](totalBindings)
-  for i in 0 ..< numInputs:
-    bgEntries[i] = WGPUBindGroupEntry(
-      binding: i.cuint,
-      buffer: inputBuffers[i],
-      size: inputSizes[i].csize_t
-    )
-  bgEntries[numInputs] = WGPUBindGroupEntry(
-    binding: numInputs.cuint,
+  bgEntries[0] = WGPUBindGroupEntry(
+    binding: 0.cuint,
     buffer: outBuf,
     size: outSize.csize_t
   )
+  for i in 0 ..< numInputs:
+    bgEntries[i + 1] = WGPUBindGroupEntry(
+      binding: (i + 1).cuint,
+      buffer: inputBuffers[i],
+      size: inputSizes[i].csize_t
+    )
   var bgDesc = WGPUBindGroupDescriptor(
     layout: bgl,
     entryCount: totalBindings.csize_t,
@@ -285,7 +259,7 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   let pass = wgpuCommandEncoderBeginComputePass(encoder, nil)
   wgpuComputePassEncoderSetPipeline(pass, pipeline)
   wgpuComputePassEncoderSetBindGroup(pass, 0, bg, 0, nil)
-  # grid = dispatchWorkgroups count (replaces the output-bytes-derived wart)
+  # grid = dispatchWorkgroups count
   wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid), 1'u32, 1'u32)
   wgpuComputePassEncoderEnd(pass)
   wgpuCommandEncoderCopyBufferToBuffer(encoder, outBuf, 0, stagingBuf, 0, outSize.csize_t)

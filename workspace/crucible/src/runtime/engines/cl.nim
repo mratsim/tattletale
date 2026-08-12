@@ -11,9 +11,8 @@
 ## ingest = store source; getArtifact = source; run = build program +
 ## enqueueNDRangeKernel with grid/blk → global/local sizes (global = grid·blk,
 ## local = blk). The output's current bytes are uploaded before launch
-## (replaces opencl_runtime's `outputInit` hack — in-place β·C works on all
-## backends). Scalars bind by value via the taggedArgs isValue semantics
-## (ArgBlob size < 0).
+## (in-place β·C works on all backends). Scalars bind by value via ArgBlob
+## (negative size).
 ##
 ## Backend constraint — NVIDIA-OpenCL only: the OpenCL codegen emits Nim
 ## `asm(...)` statements as GCC-style inline asm in the OpenCL C kernel.
@@ -25,7 +24,6 @@
 ## workspace/ceramic/tests/gemm/manual_sm80_tensor_cores_opencl.nim
 ## for a full example with both the vendor check and the warp guard.
 
-import std/strformat
 
 import workspace/crucible/src/abis/cl_abi
 
@@ -70,12 +68,12 @@ proc deviceVendor*(engine: OpenCLEngine): string =
 
 proc runImpl(engine: OpenCLEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
-  ## Build program + enqueueNDRangeKernel. Bindings follow OpenCL kernel
-  ## parameter order: args 0..N-1 (buffers as cl_mem, scalars by value),
-  ## arg N = output (output-last convention; param-order unification across backends is pending).
+  ## Build program + enqueueNDRangeKernel. The output is the kernel's
+  ## first parameter (binding 0), then the input args in order
+  ## (output first, per CONVENTIONS.md).
   let ctx = engine.ctx.ctx
   let numInputs = blobs.len
-  let outSize = abs(output.size)
+  let outSize = output.size
 
   # Allocate input buffers + output buffer
   var inputBuffers = newSeq[OpenCLBuffer](numInputs)
@@ -103,14 +101,14 @@ proc runImpl(engine: OpenCLEngine, kernel: string, output: ArgBlob,
     if blobs[i].size >= 0:
       inputBuffers[i].writeBuffer(blobs[i].data, blobs[i].size)
 
-  # Set kernel args: inputs first (buffers as cl_mem, scalars by value),
-  # then output
+  # Set kernel args: output at binding 0, then inputs
+  # (buffers as cl_mem, scalars by value)
+  kern.setArg(0, outBuf)
   for i in 0 ..< numInputs:
     if blobs[i].size >= 0:
-      kern.setArg(i, inputBuffers[i])
+      kern.setArg(i + 1, inputBuffers[i])
     else:
-      kern.setArg(i, -blobs[i].size, blobs[i].data)
-  kern.setArg(numInputs, outBuf)
+      kern.setArg(i + 1, -blobs[i].size, blobs[i].data)
 
   # global = grid·blk work-items, local = blk
   let globalSize = [cl_size_t(cfg.grid * cfg.blk)]

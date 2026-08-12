@@ -13,11 +13,12 @@
 ## mechanism) + parse the shader-baked workgroup size. getArtifact = SPIR-V.
 ## run = pipeline + vkCmdDispatch; blk is shader-baked (local_size_x):
 ## run's blk is validated against the baked workgroup size and fails loudly
-## via check. grid =
-## vkCmdDispatch group count. Scalars (ArgBlob size < 0) use the buffer
-## fallback (future: push constants / uniform).
+## via check. grid = vkCmdDispatch group count. By-value scalars (ArgBlob
+## size < 0) are packed into the push-constant range (4-byte only, see
+## runImpl); pointer args get SSBO bindings 1..N, output at binding 0
+## (output first, per CONVENTIONS.md).
 
-import std/[dynlib, os, osproc, hashes, streams, strutils]
+import std/strutils
 
 import workspace/crucible/src/abis/vulkan_abi as vk
 
@@ -95,11 +96,11 @@ proc getArtifact*(engine: VulkanEngine): seq[uint32] =
 
 proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
-  ## Pipeline + vkCmdDispatch. Bindings follow the shader: by-value scalar
-  ## args (size < 0) are packed into the push-constant range (codegen emits
-  ## `layout(push_constant) uniform KernelParams`), pointer args get SSBO
-  ## bindings 0..N-1, the output gets the last binding (output-last
-  ## convention; param-order unification across backends is pending).
+  ## Pipeline + vkCmdDispatch. Bindings follow the shader: the output is
+  ## the first SSBO binding (output first, per CONVENTIONS.md), then the
+  ## pointer args in order. By-value scalar args (size < 0) are packed into
+  ## the push-constant range (codegen emits `layout(push_constant) uniform
+  ## KernelParams`).
   var vctx = engine.ctx.ctx
 
   # blk is shader-baked (local_size_x): validate loudly (relax later)
@@ -139,8 +140,8 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
       vkDestroyShaderModule(vctx.device, shaderModule, nil)
 
   # Inputs: by-value scalars (size < 0) → push constants; pointers → SSBOs.
-  # Scalars never occupy a descriptor binding (the old buffer fallback
-  # misbound them: the shader expects the output at binding 0).
+  # Scalars never occupy a descriptor binding — they go in the push-constant
+  # block (binding 0 is the output).
   var pushConstBytes = newSeq[byte]()
   var inputBuffers = newSeq[VulkanBuffer]()
   for i in 0 ..< blobs.len:
@@ -178,9 +179,10 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
   defer:
     pipeline.destroyPipeline(vctx)
 
+  # Output first (binding 0), then pointer inputs
+  pipeline.setArg(0, outBuf, vctx)
   for i in 0 ..< inputBuffers.len:
-    pipeline.setArg(i, inputBuffers[i], vctx)
-  pipeline.setArg(inputBuffers.len, outBuf, vctx)
+    pipeline.setArg(i + 1, inputBuffers[i], vctx)
 
   # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
   vctx.runKernel(pipeline, [uint32(cfg.grid * cfg.blk)], [uint32(cfg.blk), 1'u32, 1'u32],

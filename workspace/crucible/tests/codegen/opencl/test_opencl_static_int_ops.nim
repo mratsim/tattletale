@@ -43,11 +43,11 @@ genBinOp(`+`)
 genBinOp(`*`)
 
 # ── kernel ───────────────────────────────────────────────────────────────
-# This backend binds kernel args in order: inputs first, output LAST.
+# This backend binds kernel args in order: output first (binding 0), then inputs.
 # The dynamic value comes from an input buffer (same shape as CUDA's).
 const kernelCode = opencl:
-  proc staticIntOps(dyn: ptr UncheckedArray[int32];
-                    res: ptr UncheckedArray[int32]) {.global.} =
+  proc staticIntOps(res: ptr UncheckedArray[int32];
+                    dyn: ptr UncheckedArray[int32]) {.global.} =
     let h = int(dyn[0])
     # func overloads (literal operand) — empty Int[N] tags, contained device fns
     let a = Int[10]() + 1        # Int[11]

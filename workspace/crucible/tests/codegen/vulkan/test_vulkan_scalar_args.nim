@@ -18,8 +18,9 @@
 ## that was never written. Result: the kernel returned the output's
 ## pre-initialized garbage with NO error.
 ##
-## This test asserts the correct result and must stay RED until the
-## push-constant path lands.
+## The runtime must call vkCmdPushConstants for by-value scalars: the shader
+## expects the output at binding 0 and a written push-constant block. A missing
+## push-constants call returns the output's pre-initialized garbage with no error.
 
 import std/strformat
 import workspace/crucible
@@ -27,16 +28,16 @@ import workspace/crucible
 # One kernel per source: the codegen emits a single file-scope KernelParams
 # push-constant block per source = the union of every kernel's by-value params.
 # Mixing kernels with different scalar signatures in one source misaligns the
-# block (kernel 2's params land after kernel 1's) — a codegen contract caveat,
-# noted in TECHDEBT_LOG. One kernel per ingest is the supported pattern.
+# block (kernel 2's params land after kernel 1's) — a codegen contract caveat;
+# one kernel per ingest is the supported pattern.
 const code1 = vulkan:
-  proc kernelWithVal(val: uint32;
-                     output: ptr UncheckedArray[uint32]) {.global.} =
+  proc kernelWithVal(output: ptr UncheckedArray[uint32];
+                     val: uint32) {.global.} =
     output[0] = val
 
 const code2 = vulkan:
-  proc kernelWithTwoVals(a: uint32; b: uint32;
-                         output: ptr UncheckedArray[uint32]) {.global.} =
+  proc kernelWithTwoVals(output: ptr UncheckedArray[uint32];
+                         a: uint32; b: uint32) {.global.} =
     output[0] = a + b
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
