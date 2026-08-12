@@ -5,8 +5,7 @@
 ## Tests the PR #565 feature end-to-end: functions AND types defined
 ## entirely outside the `cuda` block, only called/used from within.
 ## Also tests that multiple kernels sharing the same external code work.
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── External types ──────────────────────────────────────────────────────────
 

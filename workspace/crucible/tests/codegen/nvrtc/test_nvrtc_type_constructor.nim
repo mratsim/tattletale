@@ -3,8 +3,7 @@
 ##
 ## Coverage: nim_to_gpu.nim:1356-1358
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Point = object

@@ -4,8 +4,7 @@
 ## CuTe dispatches tile sizes per GPU arch at compile time.
 ## Uses `when` for compile-time branching on static params.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Tile[M, N: static int] = object

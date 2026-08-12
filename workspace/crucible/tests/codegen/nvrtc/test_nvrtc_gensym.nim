@@ -8,8 +8,7 @@
 ## Related: https://github.com/nim-lang/Nim/blob/version-2-2/lib/system/macros.nim#L747
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 suite "Crucible - gensym temporaries":
   ## gensym'd constant with {.genSym.} pragma — core pattern from evalOnceAs

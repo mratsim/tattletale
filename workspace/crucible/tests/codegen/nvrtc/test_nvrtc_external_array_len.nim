@@ -9,8 +9,7 @@
 ## Run with:
 ##   nim c -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_array_len.nim
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const SPONGE_WIDTH = 16
 

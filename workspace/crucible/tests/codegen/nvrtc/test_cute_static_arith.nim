@@ -5,8 +5,7 @@
 ##   Layout<Shape<Int<M>, Int<N>>, Stride<Int<N>, Int<1>>>
 ## The array sizes involve compile-time arithmetic on those ints.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   # B01: static addition

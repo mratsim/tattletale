@@ -5,8 +5,7 @@
 ## Tests the PR #565 feature: Nim generic functions defined outside the `cuda`
 ## block are automatically instantiated for use inside GPU code. One function
 ## is emitted for each generic instantiation.
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── Generic functions (defined outside the `cuda` block) ────────────────────
 

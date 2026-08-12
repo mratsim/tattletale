@@ -10,8 +10,7 @@
 ## The rewrite must also handle `gpuAddr(gpuDot)`: the bare field access
 ## C-decays to `T*`. Companion to test_nvrtc_var_array_asm (the ident
 ## case). Fails without the fix, bit-exact with it.
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type MiniTensor = object
   data: array[4, float32]

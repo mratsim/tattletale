@@ -11,8 +11,7 @@
 ##
 ## Run with: nim c -r workspace/crucible/tests/codegen/nvrtc/manual_nvrtc_reject_result_ifelse_shadow.nim
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = cuda:
   proc shadowIfElse(cond: bool; a, b: uint32): uint32 {.device.} =

@@ -4,8 +4,7 @@
 ## In CuTe, factory procs like make_layout() return composed types.
 ## This tests that a generic proc returning another generic type works.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = cuda:
   type

@@ -4,8 +4,7 @@
 ##
 ## Tests the PR #565 feature: types defined outside the `cuda` block
 ## are pulled in automatically when used by GPU code.
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── External types (defined outside the `cuda` block) ───────────────────────
 

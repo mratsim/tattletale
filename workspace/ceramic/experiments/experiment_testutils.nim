@@ -7,8 +7,7 @@ import std/[math, strformat, strutils, random]
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 # The legacy NVRTC driver (initNvrtc/execute) is not re-exported by engines.nim
 # anymore (clean engine API only) — import it directly; order matters:
 # engines must be processed first so its `import ./engines/nvrtc {.all.}`

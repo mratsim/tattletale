@@ -21,9 +21,7 @@
 ##     tests/codegen/nvrtc/test_nvrtc_compound_assign.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 
 const kernel = cuda:
   proc compoundKernel(C: ptr UncheckedArray[int32]) {.global.} =

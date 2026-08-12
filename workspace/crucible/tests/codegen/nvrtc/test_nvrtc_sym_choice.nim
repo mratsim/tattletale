@@ -5,8 +5,7 @@
 ## The symchoice handler in initGpuGenericInst is currently dead code
 ## but this test ensures it stays harmless if the code path activates.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = cuda:
   proc addOne(x: uint32): uint32 {.device.} = x + 1

@@ -3,8 +3,7 @@
 ## Run with:
 ##   nim c -r workspace/crucible/tests/codegen/webgpu/test_webgpu_gemm.nim
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Layout[S: static tuple, D: static tuple] = object

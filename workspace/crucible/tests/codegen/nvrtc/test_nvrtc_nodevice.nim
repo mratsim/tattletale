@@ -5,8 +5,7 @@
 ## This test verifies the mechanism works for externally-pulled functions.
 
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── Functions defined OUTSIDE the cuda block (no {.device.}) ──
 

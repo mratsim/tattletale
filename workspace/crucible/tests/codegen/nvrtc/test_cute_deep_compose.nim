@@ -5,8 +5,7 @@
 ## B12: Type alias chain (5+ aliases)
 ## B13: 8+ generic params (GEMM config)
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # B12: type alias chain
 type

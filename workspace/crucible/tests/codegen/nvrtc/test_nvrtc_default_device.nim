@@ -3,8 +3,7 @@
 ##
 ## Coverage: nvrtc.nim:99
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = cuda:
   proc defaultDeviceKernel(output: ptr UncheckedArray[uint32]) {.global.} =

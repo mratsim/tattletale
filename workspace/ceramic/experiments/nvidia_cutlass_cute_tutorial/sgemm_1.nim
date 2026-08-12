@@ -15,8 +15,7 @@ import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/experiments/experiment_testutils
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 {.experimental: "callOperator".}
 

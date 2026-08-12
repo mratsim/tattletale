@@ -1,8 +1,7 @@
 ## Multi-kernel Vec10 add/mul — WebGPU (WGSL) backend
 ## Run with:
 ##   nim c -r workspace/crucible/tests/codegen/webgpu/test_webgpu_vec10_multi_kernel.nim
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const code = webgpu:
   proc vec10_add(a: ptr UncheckedArray[uint32];

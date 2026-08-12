@@ -11,7 +11,7 @@
 
 import std/strformat
 import std/strutils
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 
 type
   LargeStruct = object

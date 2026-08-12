@@ -4,8 +4,7 @@
 ## Real GPU kernel patterns: grid-stride loops, pointer stride,
 ## shared memory, syncthreads, computed indexing.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Tensor[M, N: static int] = object

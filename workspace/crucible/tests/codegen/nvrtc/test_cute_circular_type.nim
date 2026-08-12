@@ -8,8 +8,7 @@
 ## Note: `ref` and GC types don't exist on GPU, so pointer-based cycles
 ## use `ptr` (raw CUDA pointer) instead.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # Forward-referenced types (defined at Nim level, adjacent in scope)
 type

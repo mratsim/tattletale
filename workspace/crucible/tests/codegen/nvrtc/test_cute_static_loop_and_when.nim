@@ -4,8 +4,7 @@
 ## CuTe dispatches tile sizes at compile time: different
 ## unroll factors, loop bounds, and type selection per GPU arch.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Tile[M, N: static int] = object

@@ -1,8 +1,7 @@
 ## CuTe Layout + Tile dot products — WebGPU (WGSL) backend
 ## Run with: nim c -r workspace/crucible/tests/codegen/webgpu/test_webgpu_cute_layout.nim
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Layout[S: static tuple, D: static tuple] = object

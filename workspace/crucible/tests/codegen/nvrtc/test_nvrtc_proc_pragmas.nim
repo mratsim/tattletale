@@ -3,8 +3,7 @@
 ##
 ## Coverage: nim_to_gpu.nim:571-579
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 proc withPragmas(x: uint32): uint32 {.noinit, noSideEffect, inline.} =
   x * 2

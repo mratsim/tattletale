@@ -6,8 +6,7 @@
 ## Generic proc with single-expression body (no explicit `result =`)
 ## to trigger the fixup loop that converts `x * 2` into `result = x * 2`.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 proc double[T](x: T): T {.device.} =
   x * 2

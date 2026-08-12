@@ -5,8 +5,7 @@
 ## The NVRTC compiler validates the generated code.
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   FixMe*[V: static int] = object

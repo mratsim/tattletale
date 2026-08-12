@@ -5,8 +5,7 @@
 ## Note: for-loop bounds use 0 .. M-1 / 0 .. N-1 (Nim inclusive range)
 ##       which generates i<M / i<N in C codegen.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Layout[M, N: static int] = object

@@ -9,8 +9,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_tensorview_paren.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # Int[V] and operators — no ceramic imports
 type Int*[V: static int] = object

@@ -15,7 +15,7 @@
 import std/strformat
 import std/strformat
 import std/strutils
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 const code = vulkan:
   proc kernelWithVal(val: uint32;
                      output: ptr UncheckedArray[uint32]) {.global.} =

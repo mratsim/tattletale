@@ -14,8 +14,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_inject_dedup.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Wrapper* = object

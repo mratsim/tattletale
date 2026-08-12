@@ -3,8 +3,7 @@
 ##
 ## CuTe kernels compute offsets from thread/block IDs and strides.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Strided[M, N: static int] = object

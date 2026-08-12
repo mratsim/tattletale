@@ -5,8 +5,7 @@
 ## complex types. This tests generic proc chains, nested generics,
 ## type aliases, and many-parameter types.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   # Basic shape type (like CuTe's Shape)

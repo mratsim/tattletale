@@ -9,8 +9,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_undefined_tmp.nim
 
 import std/macros
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 import ./helper_nvrtc_underscore_undefined_tmp
 
 type TensorView*[T] = object

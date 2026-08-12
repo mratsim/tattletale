@@ -9,8 +9,7 @@
 ## Normal Nim emits `T*` (the deref is folded into the index); this test pins
 ## that representation for asm operands, for both var array and var openArray.
 ## Fails without the fix, bit-exact with it.
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 func addAsmVarArray(cFrag: var array[4, float32], v: float32) {.inline.} =
   ## asm operands must be ELEMENTS: `cFrag[0]` = first float, not the array

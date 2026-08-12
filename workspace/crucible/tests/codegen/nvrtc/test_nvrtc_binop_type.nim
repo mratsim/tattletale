@@ -17,10 +17,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_binop_type.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible
 import workspace/crucible/src/codegen/ir/gpu_type_constructors
 
 # ── Fold do-block (ceramic foldZipWith style, primitive int32) ──

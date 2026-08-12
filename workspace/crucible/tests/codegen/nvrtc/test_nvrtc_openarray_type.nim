@@ -15,8 +15,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_openarray_type.nim
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ─────────────────────────────────────────────────────────────────
 #  Func that doubles every element of an openArray

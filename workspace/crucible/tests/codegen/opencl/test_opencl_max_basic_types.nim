@@ -20,8 +20,7 @@
 ## the kernel and verifies the values.
 
 import std/[unittest, strutils]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── kernel ───────────────────────────────────────────────────────────────
 # OpenCL binds kernel args in order: inputs first, output LAST.

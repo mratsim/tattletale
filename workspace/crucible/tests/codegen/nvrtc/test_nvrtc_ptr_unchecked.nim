@@ -1,8 +1,7 @@
 ## NVRTC: ptr array + device func chaining via codegen pipeline
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_ptr_unchecked.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = cuda:
   proc fillArray(p: ptr UncheckedArray[uint32]; n: uint32) {.device.} =

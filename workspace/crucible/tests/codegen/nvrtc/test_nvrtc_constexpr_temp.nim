@@ -36,8 +36,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_constexpr_temp.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── Minimal types (no ceramic deps) ──
 

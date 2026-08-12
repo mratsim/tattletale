@@ -1,8 +1,7 @@
 ## Multi-kernel Vec10 add/mul — OpenCL backend
 ## Run with:
 ##   nim c -r workspace/crucible/tests/codegen/opencl/test_vec10_multi_kernel.nim
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = opencl:
   proc vec10_add(a: ptr UncheckedArray[uint32];

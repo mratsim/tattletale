@@ -4,8 +4,7 @@
 ## Tests that moderately deep generic type nesting (10+ levels) resolves
 ## without stack overflow. Real CuTe layouts rarely exceed 3-4 levels.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   L0 = object

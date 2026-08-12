@@ -38,9 +38,7 @@
 ##       workspace/crucible/tests/codegen/nvrtc/test_nvrtc_complement_int_stride.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 
 # Int[N]-style empty object: value lives only in the static type parameter.
 type StaticInt[N: static int] = object

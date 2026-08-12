@@ -9,8 +9,7 @@
 ##
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_typedesc_arg.nim
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # Generic helper mirroring the make_tensor typedesc-param shape:
 #   func make_tensor*[Sh, St, T](_: typedesc[T]; L: Layout[Sh, St]) = ...

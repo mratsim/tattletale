@@ -15,7 +15,7 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_block_in_type.nim
 
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 
 # ── Types ──────────────────────────────────────────────────────────
 type

@@ -9,8 +9,7 @@
 ## Large struct passed by const& — tests that temporaries work at call sites.
 
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   LargeStruct = object

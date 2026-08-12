@@ -19,8 +19,7 @@
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_missing_field_init.nim
 
 import std/strutils
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   WorkItem = object

@@ -32,8 +32,7 @@ import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/tests/gemm/gemm_test_lib
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 {.experimental: "callOperator".}
 

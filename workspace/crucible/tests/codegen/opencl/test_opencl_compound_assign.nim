@@ -22,8 +22,7 @@
 ##     tests/codegen/opencl/test_opencl_compound_assign.nim
 
 import std/strutils
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── OpenCL C generation via `opencl:` macro ────────────────────────────────
 

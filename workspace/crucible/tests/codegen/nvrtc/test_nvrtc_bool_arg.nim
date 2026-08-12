@@ -1,8 +1,7 @@
 ## NVRTC: bool/uint32 kernel args via codegen pipeline
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bool_arg.nim
 ##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # NOTE: res gets prepended → output MUST be first kernel param
 const kernelCode = cuda:

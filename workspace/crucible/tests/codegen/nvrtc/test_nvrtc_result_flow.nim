@@ -9,8 +9,7 @@
 ##
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_result_flow.nim
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # All procs assign to `result` before reading — safe without zero-init.
 proc plain(x: uint32): uint32 =

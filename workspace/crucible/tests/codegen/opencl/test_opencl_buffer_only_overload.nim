@@ -17,8 +17,7 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_buffer_only_overload.nim
 
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = opencl:
   proc mulKernel(a: ptr UncheckedArray[uint32];

@@ -8,8 +8,7 @@
 ##   nim cpp -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_asm_backtick.nim
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = cuda:
   proc asmAdd(a, b: uint32): uint32 {.device, forceinline.} =

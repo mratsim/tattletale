@@ -18,8 +18,7 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_output_preinit.nim
 
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = opencl:
   proc incInPlace(output: ptr UncheckedArray[uint32]) {.global.} =

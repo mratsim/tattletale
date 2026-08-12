@@ -8,8 +8,7 @@
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_let_block_rhs.nim
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Int*[V: static int] = object

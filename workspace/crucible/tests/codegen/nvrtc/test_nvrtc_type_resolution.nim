@@ -8,8 +8,7 @@
 ##     (resolvers.nim:initGpuGenericInst, nnkObjConstr branch)
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   MyBox*[V: static int] = object

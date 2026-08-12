@@ -7,8 +7,7 @@
 ## Important for CuTe: shapes, strides, and coordinates are tuples
 ## of generic types like `(Int<M>, Int<N>)` or `(float32, float32)`.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   MyInt[V: static int] = object

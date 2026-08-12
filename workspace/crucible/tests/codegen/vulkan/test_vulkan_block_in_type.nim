@@ -18,7 +18,7 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_block_in_type.nim
 
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 
 # ── Types ──────────────────────────────────────────────────────────
 type

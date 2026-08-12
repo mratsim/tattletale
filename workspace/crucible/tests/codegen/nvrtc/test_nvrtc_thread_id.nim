@@ -20,8 +20,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_thread_id.nim
 ##
 import std/strutils
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 # The legacy NVRTC driver (initNvrtc/execute) is not re-exported by engines.nim
 # anymore (clean engine API only) — import it directly; order matters:
 # engines must be processed first so its `import ./engines/nvrtc {.all.}`

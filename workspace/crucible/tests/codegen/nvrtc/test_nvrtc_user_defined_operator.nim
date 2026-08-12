@@ -10,8 +10,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_user_defined_operator.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── Basic types — gpuBinOp ──────────────────────────────────────────────────
 

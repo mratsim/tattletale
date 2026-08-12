@@ -5,8 +5,7 @@
 ## Registered as known builtins in addProcToGenericInsts to avoid parsing
 ## Nim's system module body (which has if-expressions the codegen can't handle).
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = cuda:
   proc builtinKernel(output: ptr UncheckedArray[uint32]) {.global.} =

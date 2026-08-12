@@ -6,8 +6,7 @@
 ## Inside `cuda:`, generic procs with `when` are instantiated by Crucible,
 ## which receives the AST with when already resolved by Nim.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   TileSmall = object

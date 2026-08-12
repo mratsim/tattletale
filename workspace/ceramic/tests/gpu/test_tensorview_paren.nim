@@ -7,8 +7,7 @@
 ##     workspace/ceramic/tests/gpu/test_issue_tensorview_paren.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/tensor_datatypes

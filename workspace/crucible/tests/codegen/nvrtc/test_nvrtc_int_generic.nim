@@ -1,7 +1,6 @@
 ## NVRTC: test Int[N] generic struct inside cuda: block
 ## Run: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_int_generic.nim
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   MyInt*[V: static int] = object

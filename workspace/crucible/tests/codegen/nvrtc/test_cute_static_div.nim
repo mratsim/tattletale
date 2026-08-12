@@ -4,8 +4,7 @@
 ## Note: uses separate type names because gtObject struct naming
 ## doesn't yet differentiate generic params.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   TileA = object

@@ -18,8 +18,7 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_scalar_args_by_value.nim
 
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = opencl:
   proc scaleKernel(a: ptr UncheckedArray[float32];

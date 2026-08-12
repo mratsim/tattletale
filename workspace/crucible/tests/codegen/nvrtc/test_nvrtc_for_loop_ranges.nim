@@ -6,8 +6,7 @@
 ##   - Generic bound
 ##   - Body access via node[^1]
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── Test 1: Basic infix range (0 .. N) ──
 # Note: codegen uses `i < N`, so Nim's inclusive `..` is off by one.

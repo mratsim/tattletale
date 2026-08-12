@@ -3,8 +3,7 @@
 ##
 ## Coverage: nim_to_gpu.nim:1489-1491
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = cuda:
   proc bindStmtKernel(output: ptr UncheckedArray[uint32]) {.global.} =

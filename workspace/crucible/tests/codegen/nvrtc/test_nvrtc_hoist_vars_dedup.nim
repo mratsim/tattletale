@@ -9,8 +9,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_vars_dedup.nim
 
 import std/macros
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type X2 = object
 type Y2 = object

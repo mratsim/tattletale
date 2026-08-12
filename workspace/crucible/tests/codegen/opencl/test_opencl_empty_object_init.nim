@@ -18,8 +18,7 @@
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_empty_object_init.nim
 
 import std/strutils
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Stateless = object

@@ -18,8 +18,7 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/atoms
 import workspace/ceramic/src/kernel_gemm_gpu
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Low-level primitives — the elementwise/compare helpers the oracles and

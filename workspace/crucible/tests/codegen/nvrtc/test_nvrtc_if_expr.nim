@@ -11,8 +11,7 @@
 ##   nnkIfStmt  → statement (not tested here)
 ##   nnkIfExpr  → expression (tested here)
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── Helper: compile kernel and run ──────────────────────────────────
 

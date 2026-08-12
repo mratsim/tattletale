@@ -13,8 +13,7 @@
 ## kernel and verifies the values.
 
 import std/[unittest]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 # ── kernel ───────────────────────────────────────────────────────────────
 # Output buffer MUST be the first kernel param (the harness prepends res).

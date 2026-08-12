@@ -9,8 +9,7 @@
 ## the signature and the matching argument at the call site, like typedesc
 ## params. Regression test: without the fix this file fails to compile inside
 ## the `cuda:` macro ("Type: ntyEnum not supported yet").
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   MiniDType = enum

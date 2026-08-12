@@ -4,8 +4,7 @@
 ## Tile loop pattern and inline PTX for tensor core MMA.
 ## The asm {} block uses Crucible's gpuInlineAsm support.
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 const kernelCode = cuda:
   proc tileMmaKernel(output: ptr UncheckedArray[uint32]) {.global.} =

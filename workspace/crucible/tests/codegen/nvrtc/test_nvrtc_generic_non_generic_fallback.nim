@@ -10,8 +10,7 @@
 ## resolves to a non-generic type. Uses a generic object with a
 ## static-int-sized array (triggers non-trivial type resolution).
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Sized[N: static int] = object

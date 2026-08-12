@@ -3,8 +3,7 @@
 ##
 ## Coverage: cuda_lang.nim:410-412
 import std/strformat
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   EmptyObj* = object

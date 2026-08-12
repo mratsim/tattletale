@@ -34,9 +34,7 @@
 ##       workspace/ceramic/tests/gpu/test_AR_complement_int_stride.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible
 import workspace/ceramic/src/int_tuples {.all.}
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra

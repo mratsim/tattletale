@@ -33,8 +33,7 @@
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_constexpr_temp.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 type
   Int*[V: static int] = object

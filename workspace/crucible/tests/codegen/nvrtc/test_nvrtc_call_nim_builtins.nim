@@ -10,8 +10,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_call_nim_builtins.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 template runIntKernel(t: typedesc; expected0, expected1: float32) =
   const k = cuda:

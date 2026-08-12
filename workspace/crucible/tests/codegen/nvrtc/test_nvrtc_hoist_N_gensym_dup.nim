@@ -9,8 +9,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_N_gensym_dup.nim
 
 import std/macros
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/runtime/engines
+import workspace/crucible
 
 {.experimental: "callOperator".}
 
