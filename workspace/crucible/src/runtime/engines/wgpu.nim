@@ -80,6 +80,10 @@ proc getArtifact*(engine: WgpuEngine): string =
   ## The WGSL kernel source.
   engine.source
 
+proc deviceName*(engine: WgpuEngine): string {.inline.} =
+  ## The WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").
+  engine.ctx.ctx.deviceName()
+
 template run*[T](engine: WgpuEngine, kernel: string, output: var T, args: untyped,
               cfg: LaunchConfig): untyped =
   var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit

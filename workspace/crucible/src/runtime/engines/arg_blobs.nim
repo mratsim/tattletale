@@ -27,34 +27,41 @@ type
     ## The output of `run` is always treated as a device buffer (uploaded
     ## before launch, read back after) regardless of the sign of its size.
 
-template blobOf*[T](x: seq[T], storage: var seq[byte]): ArgBlob =
+func blobOf*[T](x: seq[T], storage: var seq[byte]): ArgBlob {.inline.} =
+  # A seq param is a shallow copy sharing the caller's refcounted buffer,
+  # so addr x[0] stays valid for the whole launch (the args tuple holds
+  # the caller's seq alive).
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil),
           size: x.len * sizeof(T))
 
 template blobOf*[N, T](x: array[N, T], storage: var seq[byte]): ArgBlob =
+  # Must stay a template: a by-value array param copies to the callee
+  # stack and the blob would dangle after return, while literal-array
+  # args (e.g. `[1'u32]`) are rvalues a `var` param cannot accept.
   (data: cast[pointer](addr x[0]), size: sizeof(x))
 
-template blobOf*(x: string, storage: var seq[byte]): ArgBlob =
+func blobOf*(x: string, storage: var seq[byte]): ArgBlob {.inline.} =
+  # Same refcounted-buffer reasoning as the seq overload.
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil), size: x.len)
 
-template blobOf*[T](x: T, storage: var seq[byte]): ArgBlob =
+func blobOf*[T](x: T, storage: var seq[byte]): ArgBlob {.inline.} =
   let off = storage.len
   storage.setLen(off + sizeof(T))
   var tmp = x   # make literals/consts addressable
   copyMem(addr storage[off], addr tmp, sizeof(T))
   (data: cast[pointer](addr storage[off]), size: -sizeof(T))
 
-template outBlob*[T](x: var seq[T]): ArgBlob =
+func outBlob*[T](x: var seq[T]): ArgBlob {.inline.} =
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil),
           size: x.len * sizeof(T))
 
-template outBlob*[N, T](x: var array[N, T]): ArgBlob =
+func outBlob*[N, T](x: var array[N, T]): ArgBlob {.inline.} =
   (data: cast[pointer](addr x[0]), size: sizeof(x))
 
-template outBlob*(x: var string): ArgBlob =
+func outBlob*(x: var string): ArgBlob {.inline.} =
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil), size: x.len)
 
-template outBlob*[T](x: var T): ArgBlob =
+func outBlob*[T](x: var T): ArgBlob {.inline.} =
   (data: cast[pointer](addr x), size: sizeof(T))
 
 macro flattenBlobs*(args: untyped, storage: var seq[byte]): untyped =

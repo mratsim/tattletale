@@ -118,6 +118,19 @@ type
     data*: cstring
     length*: csize_t
 
+  WGPUAdapterInfo* {.bycopy.} = object
+    nextInChain*: ptr WGPUChainedStruct
+    vendor*: WGPUStringView
+    architecture*: WGPUStringView
+    device*: WGPUStringView
+    description*: WGPUStringView
+    backendType*: cuint
+    adapterType*: cuint
+    vendorID*: uint32
+    deviceID*: uint32
+    subgroupMinSize*: uint32
+    subgroupMaxSize*: uint32
+
   WGPUShaderModuleDescriptor* {.bycopy.} = object
     nextInChain*: pointer
     label*: WGPUStringView
@@ -301,6 +314,9 @@ proc wgpuAdapterRequestDevice*(
     descriptor: ptr WGPUDeviceDescriptor,
     callbackInfo: WGPURequestDeviceCallbackInfo): WGPUFuture
   {.importc: "wgpuAdapterRequestDevice", dynlib: libWgpu.}
+
+proc wgpuAdapterGetInfo*(adapter: WGPUAdapter, info: ptr WGPUAdapterInfo)
+  {.importc: "wgpuAdapterGetInfo", dynlib: libWgpu.}
 
 proc wgpuInstanceProcessEvents*(instance: WGPUInstance)
   {.importc: "wgpuInstanceProcessEvents", dynlib: libWgpu.}

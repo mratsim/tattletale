@@ -75,10 +75,9 @@ proc getArtifact*(engine: OpenCLEngine): string =
   ## The OpenCL C kernel source.
   engine.source
 
-proc deviceVendor*(engine: OpenCLEngine): string =
-  ## The OpenCL device vendor (e.g. NVIDIA) — used by tests that require
-  ## NVIDIA's OpenCL compiler for inline-PTX asm kernels.
-  engine.ctx.ctx.device.vendor()
+proc deviceName*(engine: OpenCLEngine): string {.inline.} =
+  ## The OpenCL device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
+  engine.ctx.ctx.device.name()
 
 template run*[T](engine: OpenCLEngine, kernel: string, output: var T, args: untyped,
               cfg: LaunchConfig): untyped =

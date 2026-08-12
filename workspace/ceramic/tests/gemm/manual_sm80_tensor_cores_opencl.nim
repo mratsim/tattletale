@@ -138,9 +138,9 @@ const kernelCode = opencl:
 
 proc runTest() =
   var engine = bkOpenCL.init(kernelCode)
-  doAssert engine.deviceVendor().contains("NVIDIA"),
+  doAssert engine.deviceName().contains("NVIDIA"),
     "this kernel embeds NVIDIA inline PTX (asm mma.sync) — only NVIDIA's " &
-    "OpenCL compiler accepts it; got device vendor: " & engine.deviceVendor()
+    "OpenCL compiler accepts it; got device name: " & engine.deviceName()
   testMicrotile(engine, atom, "SM80")
   echo "  OK: m16n8k8 tf32 microtile matches reference via OpenCL (tf32-exact fixture, 16 trials)"
 

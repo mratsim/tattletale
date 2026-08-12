@@ -44,9 +44,10 @@ type
     kernel: Pkernel
     program: Pprogram
 
-proc check*(res: TClResult) =
+template check*(res: TClResult) =
   ## Unified error policy: stacktrace + stderr + quit(1).
   ## No exceptions as the public contract.
+  ## A template so instantiationInfo() reports the caller's location.
   let code = res
   if code != SUCCESS:
     writeStackTrace()
@@ -83,8 +84,10 @@ proc queryString(device: OpenCLDevice, info: Tdevice_info): string =
   if size > 0:
     result = newString(size.int)
     check getDeviceInfo(device.id, info, size, result[0].addr, nil)
+    if result[^1] == '\0':   # clGetDeviceInfo strings are NUL-terminated
+      result.setLen(result.len - 1)
 
-proc vendor*(device: OpenCLDevice): string = device.queryString(DEVICE_VENDOR)
+proc name*(device: OpenCLDevice): string = device.queryString(DEVICE_NAME)
 
 proc isGpu(device: OpenCLDevice): bool =
   var deviceType: TDeviceType

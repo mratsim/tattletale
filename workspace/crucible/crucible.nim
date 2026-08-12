@@ -20,7 +20,7 @@
 ##
 ## Re-exports: gpu_compiler (the `cuda:`/`opencl:`/`vulkan:`/`webgpu:` DSL
 ## macros + builtins) and runtime/engines (HwEngine, init, ingest, getArtifact,
-## run, check, deviceVendor, BackendKind/bk*). Internal layers (passes, exec/,
+## run, check, deviceName, BackendKind/bk*). Internal layers (passes, exec/,
 ## engines/nvrtc legacy driver) stay deep by design.
 
 import ./src/codegen/gpu_compiler

@@ -63,9 +63,10 @@ type
     vkLib*: LibHandle
     getProcAddr*: pointer  ## vkGetInstanceProcAddr
 
-proc check*(res: VkResult) =
+template check*(res: VkResult) =
   ## Unified error policy: stacktrace + stderr + quit(1).
   ## No exceptions as the public contract.
+  ## A template so instantiationInfo() reports the caller's location.
   let code = res
   if code != VK_SUCCESS:
     writeStackTrace()
@@ -127,6 +128,29 @@ proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32]
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
 # ═══════════════════════════════════════════════════════════════════════
+# Physical device queries
+# ═══════════════════════════════════════════════════════════════════════
+
+proc deviceProps(ctx: VulkanContext, dev: VkPhysicalDevice): VkPhysicalDeviceProperties =
+  ## Read VkPhysicalDeviceProperties via a padded buffer. The ABI struct is
+  ## truncated to the fields we read (apiVersion..deviceName), but the driver
+  ## writes the FULL struct including the ~3KB limits/sparseProperties.
+  let vkgpd = cast[
+    proc(physicalDevice: VkPhysicalDevice,
+         pProperties: ptr VkPhysicalDeviceProperties) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkGetPhysicalDeviceProperties"))
+  if vkgpd != nil:
+    var propsBuf: array[4096, byte]
+    vkgpd(dev, cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr))
+    result = cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr)[]
+
+proc deviceName*(ctx: VulkanContext, dev: VkPhysicalDevice): string =
+  ## The physical device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
+  for c in deviceProps(ctx, dev).deviceName:
+    if c == '\0': break
+    result.add c
+
+# ═══════════════════════════════════════════════════════════════════════
 # Vulkan initialization
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -183,27 +207,15 @@ proc initVulkan*(): VulkanContext =
          pQueueFamilyPropertyCount: ptr uint32,
          pQueueFamilyProperties: pointer) {.cdecl.}
   ](gpa("vkGetPhysicalDeviceQueueFamilyProperties"))
-  var vkgpd = cast[
-    proc(physicalDevice: VkPhysicalDevice,
-         pProperties: ptr VkPhysicalDeviceProperties) {.cdecl.}
-  ](gpa("vkGetPhysicalDeviceProperties"))
-
   # Pick the best physical device instead of blindly taking the first one:
   # a software/experimental renderer (e.g. Mesa Xe KMD) can be enumerated
   # before the real GPU, and its vkMapMemory fails at runtime with
   # VK_ERROR_OBJECT_TYPE. Prefer a discrete GPU with a compute queue, then an
   # integrated one; fall back to the first enumerated device otherwise.
+  let initCtx = result   # nested proc shadows `result` — capture the ctx
   proc deviceScore(dev: VkPhysicalDevice): tuple[score: int, name: string] =
-    # The abi's VkPhysicalDeviceProperties is truncated to the fields we read
-    # (apiVersion..deviceName), but the driver writes the FULL struct including
-    # the ~3KB `limits`/`sparseProperties` — so read into a padded buffer.
-    var propsBuf: array[4096, byte]
-    vkgpd(dev, cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr))
-    let props = cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr)[]
-    var name = ""
-    for c in props.deviceName:
-      if c == '\0': break
-      name.add c
+    let props = deviceProps(initCtx, dev)
+    let name = deviceName(initCtx, dev)
     var qfCount: uint32 = 0
     gpqfp(dev, qfCount.addr, nil)
     var hasCompute = false

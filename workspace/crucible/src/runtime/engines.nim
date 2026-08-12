@@ -59,7 +59,7 @@ export chevrons
 # grant access to the engine modules' private factories (newCudaEngine,
 # newOpenCLEngine, newVulkanEngine, newWgpuEngine) without leaking them:
 # `export module` after `import {.all.}` would re-export the privates too.
-export ingest, getArtifact, run, check, deviceVendor
+export ingest, getArtifact, run, check, deviceName
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
@@ -73,6 +73,7 @@ type
     proc getArtifact(engine: E)
     proc run(engine: E, kernel: string, output: var T, args: tuple)
     proc run(engine: E): RunSugar[E]
+    proc deviceName(engine: E): string
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API

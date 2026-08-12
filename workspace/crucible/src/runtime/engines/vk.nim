@@ -80,6 +80,10 @@ proc getArtifact*(engine: VulkanEngine): seq[uint32] =
   ## The compiled SPIR-V.
   engine.spirv
 
+proc deviceName*(engine: VulkanEngine): string {.inline.} =
+  ## The physical device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
+  engine.ctx.ctx.deviceName(engine.ctx.ctx.physicalDevice)
+
 template run*[T](engine: VulkanEngine, kernel: string, output: var T, args: untyped,
               cfg: LaunchConfig): untyped =
   var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit

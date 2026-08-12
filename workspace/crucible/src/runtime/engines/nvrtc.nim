@@ -86,6 +86,12 @@ proc getArtifact*(engine: CudaEngine): string =
   ## The compiled PTX.
   engine.ptx
 
+proc deviceName*(engine: CudaEngine): string {.inline.} =
+  ## The CUDA device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
+  var name = newString(256)
+  check cuDeviceGetName(addr name[0], cint(name.len), engine.nvrtc.device)
+  $cast[cstring](addr name[0])
+
 template run*[T](engine: CudaEngine, kernel: string, output: var T, args: untyped,
               cfg: LaunchConfig): untyped =
   var blobStorage: seq[byte]   # backing store for by-value scalars; lives until scope exit

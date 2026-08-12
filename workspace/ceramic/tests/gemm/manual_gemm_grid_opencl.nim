@@ -150,9 +150,9 @@ const kernelCode = opencl:
 
 proc runTest() =
   var engine = bkOpenCL.init(kernelCode)
-  doAssert engine.deviceVendor().contains("NVIDIA"),
+  doAssert engine.deviceName().contains("NVIDIA"),
     "gemm_grid OpenCL needs NVIDIA's OpenCL compiler for the mma.sync asm; got: " &
-    engine.deviceVendor()
+    engine.deviceName()
   testGemmGrid(engine, tiled, "SM80")
   testGemmGridBeta(engine, tiled, "SM80")
   testGemmGridIdentity(engine, tiled, "SM80")

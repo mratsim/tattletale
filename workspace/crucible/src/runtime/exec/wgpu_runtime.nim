@@ -50,6 +50,14 @@ type
     device*: WGPUDevice
     queue*: WGPUQueue
 
+proc deviceName*(ctx: WgpuContext): string =
+  ## The WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").
+  var info: WGPUAdapterInfo
+  wgpuAdapterGetInfo(ctx.adapter, addr info)
+  if info.device.data != nil and info.device.length > 0:
+    result = newString(info.device.length.int)
+    copyMem(result[0].addr, info.device.data, info.device.length)
+
 {.push stackTrace: off.}
 
 proc adapterCb(status: WGPURequestAdapterStatus,
