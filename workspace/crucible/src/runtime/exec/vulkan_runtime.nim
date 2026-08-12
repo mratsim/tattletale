@@ -12,8 +12,7 @@
 ## ICD loaded directly (bypasses Vulkan loader) to work around NVIDIA 595 + loader 1.4.
 ##
 ## Usage:
-##   import workspace/crucible/src/codegen/gpu_compiler
-##   import workspace/crucible/src/runtime/engines
+##   import workspace/crucible
 ##   const code = vulkan:
 ##     proc add(a: ptr UncheckedArray[uint32];
 ##              b: ptr UncheckedArray[uint32];
@@ -38,6 +37,12 @@ type
     memTypeIndex: uint32
     memTypeFlags: uint32
 
+  # Not in the vendored ABI — the C struct is {stageFlags: uint32, offset, size}
+  VkPushConstantRange = object
+    stageFlags: uint32
+    offset: uint32
+    size: uint32
+
   VulkanPipeline* = object
     device: VkDevice
     handle: VkPipeline
@@ -46,6 +51,7 @@ type
     descriptorPool: VkDescriptorPool
     descriptorSet: VkDescriptorSet
     ssboCount: int
+    pushConstSize: int
 
   VulkanContext* = object
     instance*: VkInstance
@@ -493,9 +499,11 @@ proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
-                     ssboCount: int, entryPoint: string = "main"): VulkanPipeline =
+                     ssboCount: int, entryPoint: string = "main",
+                     pushConstSize: int = 0): VulkanPipeline =
   result.device = ctx.device
   result.ssboCount = ssboCount
+  result.pushConstSize = pushConstSize
 
   let vkCreateDescriptorSetLayout = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkDescriptorSetLayoutCreateInfo,
@@ -544,6 +552,15 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
     setLayoutCount: 1,
     pSetLayouts: result.descriptorSetLayout.addr
   )
+  var pushConstRange: VkPushConstantRange
+  if pushConstSize > 0:
+    pushConstRange = VkPushConstantRange(
+      stageFlags: uint32(VK_SHADER_STAGE_COMPUTE_BIT),
+      offset: 0,
+      size: uint32(pushConstSize)
+    )
+    plCI.pushConstantRangeCount = 1
+    plCI.pPushConstantRanges = pushConstRange.addr
   check vkCreatePipelineLayout(ctx.device, plCI.addr, nil, result.layout.addr)
 
   var poolSize = VkDescriptorPoolSize(
@@ -639,7 +656,8 @@ proc setArg*(pipeline: var VulkanPipeline, index: int, buf: VulkanBuffer,
 # ═══════════════════════════════════════════════════════════════════════
 
 proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
-                globalWorkSize, localWorkSize: openArray[uint32]) =
+                globalWorkSize, localWorkSize: openArray[uint32],
+                pushConstData: pointer = nil, pushConstSize: int = 0) =
   let vkAllocateCommandBuffers = cast[
     proc(device: VkDevice, pAllocateInfo: ptr VkCommandBufferAllocateInfo,
          pCommandBuffers: ptr VkCommandBuffer): VkResult {.cdecl.}
@@ -713,6 +731,15 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
   vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.handle)
   vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout,
                           0, 1, pipeline.descriptorSet.addr, 0, nil)
+
+  if pushConstSize > 0:
+    let vkCmdPushConstants = cast[
+      proc(commandBuffer: VkCommandBuffer, layout: VkPipelineLayout,
+           stageFlags: uint32, offset: uint32, size: uint32,
+           pValues: pointer) {.cdecl.}
+    ](ctx.gpaAddr(ctx.instance, "vkCmdPushConstants"))
+    vkCmdPushConstants(cmdBuf, pipeline.layout, uint32(VK_SHADER_STAGE_COMPUTE_BIT),
+                       0, uint32(pushConstSize), pushConstData)
 
   var gx = 1'u32; var gy = 1'u32; var gz = 1'u32
   var lx = 1'u32; var ly = 1'u32; var lz = 1'u32

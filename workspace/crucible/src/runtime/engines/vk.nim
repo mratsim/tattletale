@@ -95,9 +95,11 @@ proc getArtifact*(engine: VulkanEngine): seq[uint32] =
 
 proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
              blobs: seq[ArgBlob], cfg: LaunchConfig) =
-  ## Pipeline + vkCmdDispatch. Bindings follow Vulkan kernel parameter order:
-  ## args 0..N-1 (all as SSBOs — scalars via the buffer fallback), arg N =
-  ## output (output-last convention; param-order unification across backends is pending).
+  ## Pipeline + vkCmdDispatch. Bindings follow the shader: by-value scalar
+  ## args (size < 0) are packed into the push-constant range (codegen emits
+  ## `layout(push_constant) uniform KernelParams`), pointer args get SSBO
+  ## bindings 0..N-1, the output gets the last binding (output-last
+  ## convention; param-order unification across backends is pending).
   var vctx = engine.ctx.ctx
 
   # blk is shader-baked (local_size_x): validate loudly (relax later)
@@ -113,8 +115,6 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
     spirv = compileGlslToSpirV(engine.source, kernel)
     entry = kernel
 
-  let numInputs = blobs.len
-  let totalSsboCount = numInputs + 1
   let outSize = abs(output.size)
 
   # Create shader module from the ingested SPIR-V
@@ -138,13 +138,30 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
     if shaderModule != nil and vkDestroyShaderModule != nil:
       vkDestroyShaderModule(vctx.device, shaderModule, nil)
 
-  # Input buffers — scalars (size < 0) get a small device buffer fallback
-  var inputBuffers = newSeq[VulkanBuffer](numInputs)
-  for i in 0 ..< numInputs:
-    let sz = abs(blobs[i].size)
-    inputBuffers[i] = vctx.allocBuffer(sz)
-    if sz > 0:
-      vctx.writeBuffer(inputBuffers[i], blobs[i].data, sz)
+  # Inputs: by-value scalars (size < 0) → push constants; pointers → SSBOs.
+  # Scalars never occupy a descriptor binding (the old buffer fallback
+  # misbound them: the shader expects the output at binding 0).
+  var pushConstBytes = newSeq[byte]()
+  var inputBuffers = newSeq[VulkanBuffer]()
+  for i in 0 ..< blobs.len:
+    if blobs[i].size < 0:
+      let sz = -blobs[i].size
+      # Strict contract: 4-byte scalars only (std430 push-constant block
+      # members are 4-byte aligned). Vec/struct by-value args would need a
+      # real std430 layout computation — fail loudly rather than misalign.
+      if sz != 4:
+        quit("Vulkan by-value (push-constant) args must be 4-byte scalars, got " &
+             $sz & " bytes")
+      for j in 0 ..< 4:
+        pushConstBytes.add cast[ptr UncheckedArray[byte]](blobs[i].data)[j]
+    else:
+      var buf = vctx.allocBuffer(blobs[i].size)
+      if blobs[i].size > 0:
+        vctx.writeBuffer(buf, blobs[i].data, blobs[i].size)
+      inputBuffers.add buf
+  if pushConstBytes.len > 128:
+    quit("Vulkan push constants exceed the spec-guaranteed 128-byte max (got " &
+         $pushConstBytes.len & " bytes)")
   var outBuf = vctx.allocBuffer(outSize)
   # Upload the output's current contents before launch (in-place β·C)
   if outSize > 0:
@@ -156,16 +173,19 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
     outBuf.dealloc(vctx)
 
   # Entry point is baked at ingest (the GLSL has one compute entry)
-  var pipeline = vctx.createPipeline(shaderModule, totalSsboCount, entry)
+  var pipeline = vctx.createPipeline(shaderModule, inputBuffers.len + 1, entry,
+                                   pushConstBytes.len)
   defer:
     pipeline.destroyPipeline(vctx)
 
-  for i in 0 ..< numInputs:
+  for i in 0 ..< inputBuffers.len:
     pipeline.setArg(i, inputBuffers[i], vctx)
-  pipeline.setArg(numInputs, outBuf, vctx)
+  pipeline.setArg(inputBuffers.len, outBuf, vctx)
 
   # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
-  vctx.runKernel(pipeline, [uint32(cfg.grid * cfg.blk)], [uint32(cfg.blk), 1'u32, 1'u32])
+  vctx.runKernel(pipeline, [uint32(cfg.grid * cfg.blk)], [uint32(cfg.blk), 1'u32, 1'u32],
+                 if pushConstBytes.len > 0: pushConstBytes[0].addr else: nil,
+                 pushConstBytes.len)
 
   # Read output
   if outSize > 0:
