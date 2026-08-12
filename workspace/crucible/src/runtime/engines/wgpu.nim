@@ -89,6 +89,13 @@ proc deviceName*(engine: WgpuEngine): string {.inline.} =
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────
 
+template failLoud(msg: string) =
+  ## Unified error policy: stacktrace + stderr + quit(1) with the caller's
+  ## location. A template so instantiationInfo() reports the call site.
+  writeStackTrace()
+  stderr.write($instantiationInfo() & " exited with error: " & msg & '\n')
+  quit 1
+
 proc parseBakedBlk(wgsl: string): Dim3 =
   ## Extract the shader-baked workgroup size from the WGSL preamble:
   ## `@compute @workgroup_size(64, 8, 1)` — 1..3 literal args, missing
@@ -299,11 +306,34 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   wgpuComputePassEncoderSetPipeline(pass, pipeline)
   wgpuComputePassEncoderSetBindGroup(pass, 0, bg, 0, nil)
   # grid = dispatchWorkgroups count (per axis)
+  # Dispatch-level validation failures (e.g. grid.x > 65535, the per-axis max
+  # in webgpu.h) are only reported through the error scope: the staging copy
+  # and readback would otherwise succeed and return stale output. Push a
+  # validation scope around the launch and check the popped result below.
+  wgpuDevicePushErrorScope(device, wgpuErrorFilterValidation)
   wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid.x),
                                            uint32(cfg.grid.y), uint32(cfg.grid.z))
   wgpuComputePassEncoderEnd(pass)
   wgpuCommandEncoderCopyBufferToBuffer(encoder, outBuf, 0, stagingBuf, 0, outSize.csize_t)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
+
+  # Pop the error scope before submitting: wgpu-native reports dispatch
+  # validation failures at finish, and an invalid command buffer would
+  # otherwise abort at submit. Fail loudly per the unified error policy
+  # instead of copying back stale output.
+  var scopeData = PopErrorScopeData(done: false)
+  var popCbInfo = WGPUPopErrorScopeCallbackInfo(
+    mode: wgpuCallbackModeAllowProcessEvents,
+    callback: popErrorScopeCb,
+    userdata1: scopeData.addr,
+    userdata2: nil
+  )
+  discard wgpuDevicePopErrorScope(device, popCbInfo)
+  while not scopeData.done:
+    if not wgpuDevicePoll(device, true, nil):
+      quit("WebGPU: wgpuDevicePoll failed")
+  if scopeData.errType != wgpuErrorTypeNoError:
+    failLoud("WebGPU dispatch failed: " & scopeData.message)
 
   # 8. Submit
   wgpuQueueSubmit(queue, 1, cmdBuf.addr)
@@ -331,3 +361,10 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
   if mappedPtr != nil and outSize > 0:
     copyMem(output.data, mappedPtr, outSize)
   wgpuBufferUnmap(stagingBuf)
+
+  # 11. Safety net: errors outside the dispatch scope (buffer creation, queue
+  # writes, submit) surface via the uncaptured-error callback installed at
+  # device creation. Surface them with the same loud policy.
+  let uncaptured = takeUncapturedError()
+  if uncaptured.errType != wgpuErrorTypeNoError:
+    failLoud("WebGPU uncaptured error: " & uncaptured.message)

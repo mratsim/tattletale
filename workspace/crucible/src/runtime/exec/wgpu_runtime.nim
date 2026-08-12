@@ -42,6 +42,16 @@ type
     done*: bool
     resultBytes*: int
     status*: WGPUBufferMapAsyncStatus
+  PopErrorScopeData* = object
+    ## Pop-error-scope callback state — captured by `popErrorScopeCb`.
+    done*: bool
+    errType*: WGPUErrorType
+    message*: string
+  UncapturedErrorData* = object
+    ## Uncaptured device error — recorded by `uncapturedErrorCb`;
+    ## `errType` is `wgpuErrorTypeNoError` when nothing was recorded.
+    errType*: WGPUErrorType
+    message*: string
   WgpuContext* = object
     ## The live wgpu handles (instance → adapter → device → queue).
     instance*: WGPUInstance
@@ -58,6 +68,8 @@ proc deviceName*(ctx: WgpuContext): string =
     copyMem(result[0].addr, info.device.data, info.device.length)
 
 {.push stackTrace: off.}
+
+var gUncapturedError = UncapturedErrorData(errType: wgpuErrorTypeNoError)
 
 proc adapterCb(status: WGPURequestAdapterStatus,
                adapter: WGPUAdapter,
@@ -82,8 +94,37 @@ proc bufferMapCb*(status: WGPUBufferMapAsyncStatus,
   ## Records the map result into the caller's MapDoneData (userdata1).
   cast[ptr MapDoneData](userdata1).status = status
   cast[ptr MapDoneData](userdata1).done = true
+proc popErrorScopeCb*(status: WGPUPopErrorScopeStatus,
+                      errType: WGPUErrorType,
+                      message: WGPUStringView,
+                      userdata1: pointer,
+                      userdata2: pointer) {.cdecl.} =
+  ## Records the popped error scope result into the caller's PopErrorScopeData.
+  let data = cast[ptr PopErrorScopeData](userdata1)
+  data.errType = errType
+  if message.data != nil and message.length > 0:
+    data.message = newString(message.length.int)
+    copyMem(data.message[0].addr, message.data, message.length)
+  data.done = true
+proc uncapturedErrorCb*(device: ptr WGPUDevice, errType: WGPUErrorType,
+                        message: WGPUStringView,
+                        userdata1: pointer,
+                        userdata2: pointer) {.cdecl.} =
+  ## Records an uncaptured device error (fires outside any error scope).
+  gUncapturedError.errType = errType
+  gUncapturedError.message.setLen(0)
+  if message.data != nil and message.length > 0:
+    gUncapturedError.message = newString(message.length.int)
+    copyMem(gUncapturedError.message[0].addr, message.data, message.length)
 
 {.pop.}
+
+
+proc takeUncapturedError*(): UncapturedErrorData =
+  ## Returns and clears the recorded uncaptured device error.
+  ## `errType` is `wgpuErrorTypeNoError` when none was recorded.
+  result = gUncapturedError
+  gUncapturedError = UncapturedErrorData(errType: wgpuErrorTypeNoError)
 
 proc initWgpu*(): WgpuContext =
   ## Initializes wgpu-native: creates instance, picks adapter, opens device.
@@ -108,7 +149,16 @@ proc initWgpu*(): WgpuContext =
     userdata1: dd.addr,
     userdata2: nil
   )
-  discard wgpuAdapterRequestDevice(ad.adapter, nil, devCbInfo)
+  # Install the uncaptured-error callback (safety net for errors outside
+  # any error scope, e.g. dispatch validation reported at submit time).
+  var deviceDesc = WGPUDeviceDescriptor(
+    uncapturedErrorCallbackInfo: WGPUUncapturedErrorCallbackInfo(
+      callback: uncapturedErrorCb,
+      userdata1: nil,
+      userdata2: nil
+    )
+  )
+  discard wgpuAdapterRequestDevice(ad.adapter, addr deviceDesc, devCbInfo)
   # Poll until device request completes
   while not dd.done:
     wgpuInstanceProcessEvents(instance)

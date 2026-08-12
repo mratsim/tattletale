@@ -113,6 +113,14 @@ type
     label*: WGPUStringView
     requiredFeatureCount*: csize_t
     requiredFeatures*: pointer
+    requiredLimits*: pointer
+    defaultQueue*: WGPUQueueDescriptor
+    deviceLostCallbackInfo*: WGPUDeviceLostCallbackInfo
+    uncapturedErrorCallbackInfo*: WGPUUncapturedErrorCallbackInfo
+
+  WGPUQueueDescriptor* {.bycopy.} = object
+    nextInChain*: pointer
+    label*: WGPUStringView
 
   WGPUStringView* {.bycopy.} = object
     data*: cstring
@@ -267,6 +275,23 @@ type
     wgpuBufferMapAsyncStatusDestroyedBeforeCallback     = 9
     wgpuBufferMapAsyncStatusUnknown                     = 10
 
+  WGPUErrorFilter* {.size: sizeof(cuint).} = enum
+    wgpuErrorFilterValidation  = 1
+    wgpuErrorFilterOutOfMemory = 2
+    wgpuErrorFilterInternal    = 3
+
+  WGPUErrorType* {.size: sizeof(cuint).} = enum
+    wgpuErrorTypeNoError       = 1
+    wgpuErrorTypeValidation    = 2
+    wgpuErrorTypeOutOfMemory   = 3
+    wgpuErrorTypeInternal      = 4
+    wgpuErrorTypeUnknown       = 5
+
+  WGPUPopErrorScopeStatus* {.size: sizeof(cuint).} = enum
+    wgpuPopErrorScopeStatusSuccess           = 1
+    wgpuPopErrorScopeStatusCallbackCancelled = 2
+    wgpuPopErrorScopeStatusError             = 3
+
   WGPURequestAdapterCallbackInfo* {.bycopy.} = object
     nextInChain*: pointer
     mode*: WGPUCallbackMode
@@ -288,6 +313,25 @@ type
     userdata1*: pointer
     userdata2*: pointer
 
+  WGPUDeviceLostCallbackInfo* {.bycopy.} = object
+    nextInChain*: pointer
+    mode*: WGPUCallbackMode
+    callback*: pointer
+    userdata1*: pointer
+    userdata2*: pointer
+
+  WGPUUncapturedErrorCallbackInfo* {.bycopy.} = object
+    nextInChain*: pointer
+    callback*: pointer
+    userdata1*: pointer
+    userdata2*: pointer
+
+  WGPUPopErrorScopeCallbackInfo* {.bycopy.} = object
+    nextInChain*: pointer
+    mode*: WGPUCallbackMode
+    callback*: pointer
+    userdata1*: pointer
+    userdata2*: pointer
 
 # ═══════════════════════════════════════════════════════════════════════
 # Function imports from libwgpu_native.so
@@ -323,6 +367,14 @@ proc wgpuInstanceProcessEvents*(instance: WGPUInstance)
 
 proc wgpuDeviceGetQueue*(device: WGPUDevice): WGPUQueue
   {.importc: "wgpuDeviceGetQueue", dynlib: libWgpu.}
+
+# --- Error scopes ---
+proc wgpuDevicePushErrorScope*(device: WGPUDevice, filter: WGPUErrorFilter)
+  {.importc: "wgpuDevicePushErrorScope", dynlib: libWgpu.}
+
+proc wgpuDevicePopErrorScope*(device: WGPUDevice,
+                              callbackInfo: WGPUPopErrorScopeCallbackInfo): WGPUFuture
+  {.importc: "wgpuDevicePopErrorScope", dynlib: libWgpu.}
 
 # --- Shader & Pipeline ---
 proc wgpuDeviceCreateShaderModule*(device: WGPUDevice,
