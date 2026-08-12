@@ -67,8 +67,10 @@ template catchExceptions*(body: bool): bool =
 # Test Runner
 # =============================================================================
 
-proc runTest*(name: string, body: proc(): bool) =
-  ## Run a test with C++ exception handling.
+proc runCppTest*(name: string, body: proc(): bool) =
+  ## Run a test with C++ exception handling — captures the C++ stacktrace.
+  ## (Named `runCppTest`, not `runTest`: the crucible convention reserves
+  ## `runTest` for a private scope-discipline wrapper without exception capture.)
   ## Prints PASS/FAIL status with formatted output.
   ## Exits with code 1 on first failure.
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -92,7 +94,7 @@ template assertAllClose*(
           rtol = 1e-4'f64, abstol = 1e-4'f64,
           msg = "") =
   ## Assert that two tensors are close within tolerance.
-  ## Returns false if they differ (for use in runTest).
+  ## Returns false if they differ (for use in runCppTest).
   ##
   ## Args:
   ##   actual: The tensor produced by the test
@@ -129,7 +131,7 @@ template assertAllClose*(
 
 template assertShape*(tensor: untyped, expectedShape: openArray[int], msg = ""): bool =
   ## Assert that a tensor has the expected shape.
-  ## Returns false if shape doesn't match (for use in runTest).
+  ## Returns false if shape doesn't match (for use in runCppTest).
   ##
   ## Args:
   ##   tensor: The tensor to check

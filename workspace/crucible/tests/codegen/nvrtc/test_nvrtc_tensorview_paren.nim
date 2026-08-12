@@ -9,7 +9,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_tensorview_paren.nim
 
 import std/[unittest, macros]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 # Int[V] and operators — no ceramic imports
 type Int*[V: static int] = object
@@ -51,14 +51,15 @@ const kernel = cuda:
     let pos = Int[0]() + D[0] * P[0] + D[1] * P[1]
     C[0] = float32(toIntVal pos)
 
-suite "Crucible - DotExpr in generic type resolution":
-  test "crd2idx with DotExpr arg inside cuda:":
-    let code = kernel
-    var output: array[1, float32]
-    var nv = initNvrtc(code)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", output, ())
-    check output[0] == 0.0
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Crucible - DotExpr in generic type resolution":
+    test "crd2idx with DotExpr arg inside cuda:":
+      let code = kernel
+      var output: array[1, float32]
+      var engine = bkCuda.init()
+      engine.ingest(code)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 0.0
+
+when isMainModule:
+  runTest()

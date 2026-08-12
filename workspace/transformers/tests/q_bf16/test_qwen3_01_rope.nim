@@ -68,7 +68,7 @@ proc main() =
   # What: Verifies rotateHalf produces [-x2, x1] for each dimension pair
   # Why: Core RoPE operation — if this is wrong, everything is wrong
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "RoPE rotateHalf — mathematical property":
+  runCppTest "RoPE rotateHalf — mathematical property":
     proc(): bool =
       var fixtureMemFile = memFiles.open(FixtureDir_Layers / "rope-Qwen3-0.6B-02.safetensor", mode = fmRead)
       defer: close(fixtureMemFile)
@@ -87,7 +87,7 @@ proc main() =
   # Why: Core RoPE formula — must match HF exactly for correctness
   # Note: Tests GQA (q_heads != k_heads) which is Qwen3's architecture
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "RoPE applyRopeImpl (batch=2, seq=8, GQA) — mathematical property":
+  runCppTest "RoPE applyRopeImpl (batch=2, seq=8, GQA) — mathematical property":
     proc(): bool =
       var fixtureMemFile = memFiles.open(FixtureDir_Layers / "rope-Qwen3-0.6B-00.safetensor", mode = fmRead)
       defer: close(fixtureMemFile)
@@ -111,7 +111,7 @@ proc main() =
   # What: Verifies applyRopeImpl works for seq_len=1 (decode mode)
   # Why: Decode mode is the common case in production — must work correctly
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "RoPE applyRopeImpl (batch=1, seq=1) — mathematical property":
+  runCppTest "RoPE applyRopeImpl (batch=1, seq=1) — mathematical property":
     proc(): bool =
       var fixtureMemFile = memFiles.open(FixtureDir_Layers / "rope-Qwen3-0.6B-01.safetensor", mode = fmRead)
       defer: close(fixtureMemFile)
@@ -135,7 +135,7 @@ proc main() =
   # What: Verifies inv_freq[i] = 1/theta^(i/head_dim) computed correctly
   # Why: Foundation of RoPE frequencies — if wrong, all positions are wrong
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "Qwen3 RoPE inv_freq computation — mathematical property":
+  runCppTest "Qwen3 RoPE inv_freq computation — mathematical property":
     proc(): bool =
       let head_dim = 128
       let rope_theta = 1000000.0
@@ -154,7 +154,7 @@ proc main() =
   # What: Verifies cos[0, :] = 1 and sin[0, :] = 0 (no rotation at origin)
   # Why: Fundamental property — position 0 should be identity transformation
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "RoPE position 0 identity — mathematical property":
+  runCppTest "RoPE position 0 identity — mathematical property":
     proc(): bool =
       let model = loadQwen3ModelRaw(ModelPath, kCPU)
       privateAccess(Qwen3Model)
@@ -180,7 +180,7 @@ proc main() =
   # What: Verifies rotary embedding is accessible via model.rotary (and per-layer)
   # Why: Memory efficiency — one 20 MB cache shared across all 28 layers
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "RoPE owned by Model level — architectural decision":
+  runCppTest "RoPE owned by Model level — architectural decision":
     proc(): bool =
       let model = loadQwen3ModelRaw(ModelPath, kCPU)
       privateAccess(Qwen3Model)
@@ -208,7 +208,7 @@ proc main() =
   # What: Verifies full RoPE forward (compute → applyRope) works correctly
   # Why: This is the production path — model.forward calls ropeByPositions, layers call applyRope
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "RoPE applyRope via ropeByPositions() (batch=2, seq=8, GQA) — architectural integration":
+  runCppTest "RoPE applyRope via ropeByPositions() (batch=2, seq=8, GQA) — architectural integration":
     proc(): bool =
       var fixtureMemFile = memFiles.open(FixtureDir_Layers / "rope-Qwen3-0.6B-00.safetensor", mode = fmRead)
       defer: close(fixtureMemFile)
@@ -249,7 +249,7 @@ proc main() =
   # Why: Ensures we compute RoPE frequencies identically to HF reference
   # Note: This is the ultimate correctness test — if this passes, RoPE is correct
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "Qwen3 RoPE cos/sin cache vs HF — end-to-end correctness":
+  runCppTest "Qwen3 RoPE cos/sin cache vs HF — end-to-end correctness":
     proc(): bool =
       const tol = 1e-5  # BF16 precision — valid once fixtures use f32 inv_freq
       # Load HF cos/sin from fixture (computed by HF's RotaryEmbedding)
@@ -288,7 +288,7 @@ proc main() =
   # What: Verifies applyRope(q, k) produces same output as HF's RotaryEmbedding
   # Why: Ultimate integration test — verifies entire RoPE pipeline
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "Qwen3 RoPE apply output vs HF — end-to-end correctness":
+  runCppTest "Qwen3 RoPE apply output vs HF — end-to-end correctness":
     proc(): bool =
       const tol = Tol  # Uses global Tol (1e-5)
 

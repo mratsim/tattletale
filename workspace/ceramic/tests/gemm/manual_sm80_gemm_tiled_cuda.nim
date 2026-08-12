@@ -32,7 +32,7 @@ import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/tests/gemm/gemm_test_lib
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 {.experimental: "callOperator".}
 
@@ -103,11 +103,11 @@ const kernelCodeK32 = cuda:
       alpha, beta: float32) {.global.} =
     gemmTiledMicrotileK32(tiled, int(threadIdx.x), alpha, C, A, B, beta)
 
-proc main() =
-  var engine = "cuda".getEngine(kernelCode)
+proc runTest() =
+  var engine = bkCuda.init(kernelCode)
   testTiled(engine, tiled, "SM80")
-  var engineK32 = "cuda".getEngine(kernelCodeK32)
+  var engineK32 = bkCuda.init(kernelCodeK32)
   testTiledMultiBlock(engineK32, tiled, "SM80")
 
 when isMainModule:
-  main()
+  runTest()

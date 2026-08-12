@@ -9,7 +9,7 @@
 ## Run with:
 ##   nim c -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_array_len.nim
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 const SPONGE_WIDTH = 16
 
@@ -32,11 +32,12 @@ const kernelCode = cuda:
 
 # If compilation succeeds, the nnkSym+allowArrayIdent=true path
 # did not crash (getImpl.intVal was not called unconditionally).
-var nv = initNvrtc(kernelCode)
-nv.numBlocks = 1
-nv.threadsPerBlock = 1
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
 
-echo "  OK — external array length resolution (nnkSym + allowArrayIdent=true) compiles without crash"
+  echo "  OK — external array length resolution (nnkSym + allowArrayIdent=true) compiles without crash"
+
+when isMainModule:
+  runTest()

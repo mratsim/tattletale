@@ -10,7 +10,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_call_nim_builtins.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 template runIntKernel(t: typedesc; expected0, expected1: float32) =
   const k = cuda:
@@ -22,12 +22,9 @@ template runIntKernel(t: typedesc; expected0, expected1: float32) =
         C[i] = float32(x)
   block:
     var buf: array[2, float32]
-    var nv = initNvrtc(k)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(k)
+    engine.run<<(1, 1)>>("kernel", buf, ())
     check buf[0] == expected0
     check buf[1] == expected1
 
@@ -47,12 +44,9 @@ template runFloatKernel(t: typedesc; expected0, expected1: float32) =
 
   block:
     var buf: array[2, float32]
-    var nv = initNvrtc(k)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
+    var engine = bkCuda.init()
+    engine.ingest(k)
+    engine.run<<(1, 1)>>("kernel", buf, ())
     check buf[0] == expected0
     check buf[1] == expected1
 
@@ -70,33 +64,34 @@ const wrapperKernel = cuda:
       let c = `*`(a, b)
       C[i] = float32(c.val)
 
-suite "NVRTC - call nim builtins":
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "NVRTC - call nim builtins":
 
-  test "system.`*` (int32) as nnkCall":
-    runIntKernel(int32, 6'f32, 9'f32)
+    test "system.`*` (int32) as nnkCall":
+      runIntKernel(int32, 6'f32, 9'f32)
 
-  test "system.`*` (int64) as nnkCall":
-    runIntKernel(int64, 6'f32, 9'f32)
+    test "system.`*` (int64) as nnkCall":
+      runIntKernel(int64, 6'f32, 9'f32)
 
-  test "system.`*` (int16) as nnkCall":
-    runIntKernel(int16, 6'f32, 9'f32)
+    test "system.`*` (int16) as nnkCall":
+      runIntKernel(int16, 6'f32, 9'f32)
 
-  test "system.`*` (float32) as nnkCall":
-    runFloatKernel(float32, 0.5'f32, 1.0'f32)
+    test "system.`*` (float32) as nnkCall":
+      runFloatKernel(float32, 0.5'f32, 1.0'f32)
 
-  test "system.`*` (float64) as nnkCall":
-    runFloatKernel(float64, 0.5'f32, 1.0'f32)
+    test "system.`*` (float64) as nnkCall":
+      runFloatKernel(float64, 0.5'f32, 1.0'f32)
 
-  test "system.`*` (uint32) as nnkCall":
-    runIntKernel(uint32, 6'f32, 9'f32)
+    test "system.`*` (uint32) as nnkCall":
+      runIntKernel(uint32, 6'f32, 9'f32)
 
-  test "user-defined `*` on struct as nnkCall":
-    var buf: array[2, float32]
-    var nv = initNvrtc(wrapperKernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", buf, ())
-    check buf[0] == 12'f32
-    check buf[1] == 16'f32
+    test "user-defined `*` on struct as nnkCall":
+      var buf: array[2, float32]
+      var engine = bkCuda.init()
+      engine.ingest(wrapperKernel)
+      engine.run<<(1, 1)>>("kernel", buf, ())
+      check buf[0] == 12'f32
+      check buf[1] == 16'f32
+
+when isMainModule:
+  runTest()

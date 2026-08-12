@@ -31,7 +31,7 @@ import workspace/ceramic/src/kernel_fillwith_gpu
 import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 const atom = SM86_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
@@ -112,9 +112,9 @@ const kernelCode = cuda:
                                   A, B: ptr UncheckedArray[uint32]) {.global.} =
     mmaMicrotileExplicit(tiled, int(threadIdx.x), C, A, B)
 
-proc main() =
-  var engine = "cuda".getEngine(kernelCode)
+proc runTest() =
+  var engine = bkCuda.init(kernelCode)
   testMicrotile(engine, atom, "SM86")
 
 when isMainModule:
-  main()
+  runTest()

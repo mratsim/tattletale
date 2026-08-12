@@ -8,7 +8,7 @@
 ## Note: `ref` and GC types don't exist on GPU, so pointer-based cycles
 ## use `ptr` (raw CUDA pointer) instead.
 import std/strformat
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 # Forward-referenced types (defined at Nim level, adjacent in scope)
 type
@@ -20,11 +20,14 @@ const kernelCode = cuda:
     let x = Node[4](val: 42'u32)
     output[0] = x.val
 
-var buf: array[1, uint32]
-var nv = initNvrtc(kernelCode)
-nv.compile()
-nv.getPtx()
-echo "PTX: ", nv.ptx.len, " bytes"
-nv.execute("fwdRefKernel", buf, ())
-doAssert buf[0] == 42, &"fwd ref: {buf[0]}"
-echo "  OK — forward-referenced types (B23)"
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[1, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  engine.run("fwdRefKernel", buf, ())
+  doAssert buf[0] == 42, &"fwd ref: {buf[0]}"
+  echo "  OK — forward-referenced types (B23)"
+
+when isMainModule:
+  runTest()

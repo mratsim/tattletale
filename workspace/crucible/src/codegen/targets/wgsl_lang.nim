@@ -1061,15 +1061,14 @@ proc codegen*(ctx: var GpuContext): string =
   for blk in ctx.globalBlocks:
     result.add ctx.genWebGpu(blk) & "\n\n"
 
-  # 3. Workgroup size constant (single definition for all kernels)
+  # 3. Kernel + device functions.
+  # Workgroup size from the `{.workgroup: (X, Y, Z).}` annotation.
+  # Default 64×1×1.
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
-      result.add "const WORKGROUP_SIZE = 64u;\n"
-      break
-
-  # 4. Kernel + device functions
-  for fnIdent, fn in ctx.fnTab:
-    if fn.isGlobal():
-      ## XXX: make adjustable!
-      result.add "@compute @workgroup_size(WORKGROUP_SIZE)\n"
+      let wg = fn.pWorkgroupSize
+      let wx = if wg.x > 0: wg.x else: 64
+      let wy = if wg.y > 0: wg.y else: 1
+      let wz = if wg.z > 0: wg.z else: 1
+      result.add "@compute @workgroup_size(" & $wx & ", " & $wy & ", " & $wz & ")\n"
     result.add ctx.genWebGpu(fn) & "\n\n"

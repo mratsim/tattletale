@@ -15,35 +15,76 @@ AI coding tool guidelines for the Crucible codegen backend.
 
 ```
 tests/codegen/
+  ir/           — IR-level tests (INTERNAL codegen API — deep imports, no engine)
   nvrtc/        — CUDA via NVRTC (primary target)
   opencl/       — OpenCL
   vulkan/       — Vulkan
   webgpu/       — WebGPU
 ```
 
+**IR tests are the exception to the public import:** they test compiler internals
+(passes, IR, type constructors) and keep deep `workspace/crucible/src/codegen/...`
+imports. Only engine/runtime tests use the public API (below).
+
 ### Naming Convention
 
 | Prefix | When to use |
 |--------|-------------|
-| `test_nvrtc_<desc>.nim` | Auto-runnable on CUDA — uses `nvrtc.compile()` + `nvrtc.execute()` |
-| `test_opencl_<desc>.nim` | Auto-runnable on OpenCL — uses `execOpenCL()` |
-| `test_vulkan_<desc>.nim` | Auto-runnable on Vulkan |
-| `test_webgpu_<desc>.nim` | Auto-runnable on WebGPU |
+| `test_ir_<desc>.nim` | IR-level tests — INTERNAL codegen API (deep imports), no engine |
+| `test_nvrtc_<desc>.nim` | Auto-runnable on CUDA — `import workspace/crucible`; `bkCuda.init()` + `engine.ingest()` + `engine.run()` (or `engine.run<<(grid, blk)>>(...)`) |
+| `test_opencl_<desc>.nim` | Auto-runnable on OpenCL — `import workspace/crucible`; `bkOpenCL.init()` + `engine.ingest()` + `engine.run()` |
+| `test_vulkan_<desc>.nim` | Auto-runnable on Vulkan — `import workspace/crucible`; `bkVulkan.init()` + `engine.ingest()` + `engine.run()` |
+| `test_webgpu_<desc>.nim` | Auto-runnable on WebGPU — `import workspace/crucible`; `bkWGSL.init()` + `engine.ingest()` + `engine.run()` |
 | `manual_<backend>_<desc>.nim` | **Manual only** — tests that expect a compile-time error (e.g., `proc that won't compile`). These cannot auto-run. |
 
 ### Test Requirements
 
-**All tests MUST call `execute()`**, not just `getPtx()`/`compile()`. A compile check is not enough — it can produce valid CUDA that computes wrong results.
+**One import for everything:** `import workspace/crucible` re-exports the DSL
+macros (`cuda:`/`opencl:`/`vulkan:`/`webgpu:`) and the engine API (`bkCuda`/
+`bkOpenCL`/`bkVulkan`/`bkWGSL`, `init`, `ingest`, `getArtifact`, `run`, `check`,
+`deviceName`). IR tests are the exception — they keep deep internal imports.
 
-**Run each test inside a `proc`** — blocks may separate sections within a proc, but a test made of only module-level `block`s (no proc) is a no-go. Never declare backend-resource objects (`NVRTC`, contexts, modules, OpenCL/Vulkan handles) at module scope via template helpers:
-- Nim templates do **NOT** scope `var` declarations — a `template runKernel(...) = var nv = initNvrtc(...)` expanded at module level keeps every `nv` alive until program exit.
+**All tests must call `engine.run()`** (or the chevron form `engine.run<<(grid, blk)>>(...)` — no space around `<<`/`>>`), not just `getArtifact()`/`ingest()`. A compile check is not enough — it can produce valid CUDA that computes wrong results.
+
+**Wrap the engine-execution section in a private `proc runTest()`** and call it
+from `when isMainModule: runTest()`. The uniform name makes tests grep-able, and
+proc scope deterministically destroys the engine at return — which is what tests
+the RAII lifecycle (`=destroy` never runs on module-scope engines). See
+`tests/codegen/vulkan/test_vulkan_scalar_args.nim` for the pattern.
+
+**Never declare backend-resource objects at module scope** — blocks may separate
+sections within a proc, but a test made of only module-level `block`s (no proc)
+is a no-go. Never declare backend-resource objects (engines, contexts, modules,
+OpenCL/Vulkan handles) at module scope via template helpers:
+- Nim templates do **not** scope `var` declarations — a `template runKernel(...) = var engine = bkCuda.init()` expanded at module level keeps every `engine` alive until program exit.
 - CUDA contexts are expensive: one live context holds a large device-memory reservation that is only returned on destruction. N module-scope contexts can exhaust the GPU (`CUDA_ERROR_OUT_OF_MEMORY` on tiny allocs — see the `test_nvrtc_if_expr` fix).
 - A `proc` scopes its locals naturally: resources are released when the proc returns, so N kernels in one test file use one context at a time.
-- Module-scope `const` kernel sources are fine — only runtime objects (created via `initNvrtc`/`execOpenCL`/etc.) must be function-local.
+- Module-scope `const` kernel sources are fine — only runtime objects (engines created via `bkCuda.init()`/`bkOpenCL.init()` etc. from `runtime/engines`) must be function-local.
 
 Exception: tests for backends not supported in the current environment. For those:
 1. Do a **sanity check** by inspecting the generated code text
 2. Report the run command to the user so they can execute it manually
+
+## Engine API — per-target notes
+
+The engine lifecycle: `init()` → `ingest(source)` → `getArtifact()` →
+`run` (re-ingest replaces the context; RAII releases the old one). Args tuple
+follows kernel-param order minus the output; scalars are by-value (4-byte),
+pointers become device buffers.
+
+- **CUDA / OpenCL** — `grid`/`blk` are host-side launch config; `blk` is free
+  (not shader-baked).
+- **Vulkan / WebGPU** — the workgroup size is baked into the shader at codegen
+  time; the engine validates the run `blk` against the baked size and quits
+  loudly on mismatch.
+- **Vulkan scalar args** — by-value params are emitted as push constants
+  (`layout(push_constant) uniform KernelParams`); the engine packs 4-byte
+  scalars into the push-constant range. Only 4-byte scalars are supported
+  (loud quit otherwise; vec/struct by-value args need a real std430 layout).
+- **One kernel per `vulkan:` source when using scalars** — a multi-kernel
+  source unions all kernels' scalar params into one file-scope block and
+  misaligns them (kernel 2's params land after kernel 1's). Pointer-only
+  multi-kernel sources are fine.
 
 ### Run commands
 
@@ -89,13 +130,13 @@ A "minimal repro" for a crucible bug:
 - Uses ONLY types defined in the test file (no ceramic, no external lib)
 - Has a `cuda:` / `opencl:` / `vulkan:` / `webgpu:` block
 - Demonstrates the failing pattern in the simplest possible way
-- Uses `execute()` to verify correctness
+- Runs the kernel via `engine.run()` to verify correctness
 
 ## When the environment lacks a backend
 
 If running on a machine without CUDA (and thus can't NVRTC):
-1. Compile the test up to `nvrtc.compile()` or inspect the codegen output
-2. Print the generated code with `echo kernel` or inspect `nv.getPtx()`
+1. Compile the test up to `engine.ingest()` or inspect the codegen output
+2. Print the generated code with `echo kernel` or inspect `engine.getArtifact()`
 3. Pass the exact run command to the user for manual execution
 
 ## Debugging

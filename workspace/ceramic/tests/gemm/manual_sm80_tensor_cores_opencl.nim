@@ -33,7 +33,7 @@ import workspace/ceramic/src/kernel_fillwith_gpu
 import workspace/ceramic/src/kernel_gemm_epilogues
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
-import workspace/crucible/src/codegen/cl
+import workspace/crucible
 
 const atom = SM80_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
@@ -117,32 +117,32 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
     tCv(i) = dFrag(i)
 
 const kernelCode = opencl:
-  proc mmaMicrotileKernel(A, B: ptr UncheckedArray[uint32];
-                          C: ptr UncheckedArray[float32]) {.global.} =
+  proc mmaMicrotileKernel(C: ptr UncheckedArray[float32],
+                          A, B: ptr UncheckedArray[uint32]) {.global.} =
     ## C(16×8) = A(16×8)·B(8×8) — one m16n8k8 tf32 atom, 32 work-items.
-    ## Inputs-first (A, B, C): the engine's OpenCL `run` uses execOpenCL,
-    ## which binds args 0..N-1 = inputs, arg N = output (vs the CUDA twins'
-    ## output-first, which match execCuda's res-first convention).
+    ## Output-first (C): the engine's OpenCL `run` binds the output at
+    ## binding 0, inputs at 1..N in signature order (matching the CUDA
+    ## twins' output-first convention).
     mmaMicrotile(tiled, int(get_local_id(0)), C, A, B)
 
-  proc mmaMicrotileExplicitKernel(A, B: ptr UncheckedArray[uint32];
-                                  C: ptr UncheckedArray[float32]) {.global.} =
+  proc mmaMicrotileExplicitKernel(C: ptr UncheckedArray[float32],
+                                  A, B: ptr UncheckedArray[uint32]) {.global.} =
     ## C(16×8) = A(16×8)·B(8×8) + 1 — the explicit-destination form.
     mmaMicrotileExplicit(tiled, int(get_local_id(0)), C, A, B)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Host side — thin shell: the oracle + trial loop + report live in
-#  gemm_test_lib (testMicrotile); the engine's `run` dispatches to
-#  execOpenCL. No buffer management here.
+#  gemm_test_lib (testMicrotile); the engine's `run` dispatches to the
+#  OpenCL runtime. No buffer management here.
 # ═════════════════════════════════════════════════════════════════════════
 
-proc main() =
-  var engine = "opencl".getEngine(kernelCode)
-  doAssert engine.ctx.device.vendor().contains("NVIDIA"),
+proc runTest() =
+  var engine = bkOpenCL.init(kernelCode)
+  doAssert engine.deviceName().contains("NVIDIA"),
     "this kernel embeds NVIDIA inline PTX (asm mma.sync) — only NVIDIA's " &
-    "OpenCL compiler accepts it; got device vendor: " & engine.ctx.device.vendor()
+    "OpenCL compiler accepts it; got device name: " & engine.deviceName()
   testMicrotile(engine, atom, "SM80")
   echo "  OK: m16n8k8 tf32 microtile matches reference via OpenCL (tf32-exact fixture, 16 trials)"
 
 when isMainModule:
-  main()
+  runTest()

@@ -26,7 +26,7 @@ privateAccess(GroupedQueryAttention)
 
 proc main() =
 
-  runTest "forward with batch=2 raises ValueError":
+  runCppTest "forward with batch=2 raises ValueError":
     proc(): bool =
       # Create dummy weights for projections
       let headDim = 64

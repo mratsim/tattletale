@@ -22,13 +22,13 @@ func formatName*(desc, indexingExample: string): string =
   fmt"{desc:<40}  {indexingExample}"
 
 proc main() =
-  # IMPORTANT: Tensors AND launchMissile must be INSIDE each runTest body.
+  # IMPORTANT: Tensors AND launchMissile must be INSIDE each runCppTest body.
   # Capturing Tensor in a closure corrupts the C++ object.
 
   # -----------------------------------------------------------------------
   # Single evaluation - integer indexing (isAllInt path)
 
-  runTest formatName("Point indexing", "launchMissile(t)[1, 2]"):
+  runCppTest formatName("Point indexing", "launchMissile(t)[1, 2]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -40,7 +40,7 @@ proc main() =
       doAssert val.item(float64) == 8.0
       true
 
-  runTest formatName("Negative point indexing", "launchMissile(t)[-1, -1]"):
+  runCppTest formatName("Negative point indexing", "launchMissile(t)[-1, -1]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -52,7 +52,7 @@ proc main() =
       doAssert val.item(float64) == 3125.0
       true
 
-  runTest formatName("Expression indices", "launchMissile(t)[1+1, 2*2]"):
+  runCppTest formatName("Expression indices", "launchMissile(t)[1+1, 2*2]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -67,7 +67,7 @@ proc main() =
   # -----------------------------------------------------------------------
   # Single evaluation - full slice (sliceSpan path)
 
-  runTest formatName("Full span", "launchMissile(t)[_, _]"):
+  runCppTest formatName("Full span", "launchMissile(t)[_, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -80,7 +80,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Full span shorthand _.._", "launchMissile(t)[_.._, _]"):
+  runCppTest formatName("Full span shorthand _.._", "launchMissile(t)[_.._, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -95,7 +95,7 @@ proc main() =
   # -----------------------------------------------------------------------
   # Single evaluation - slice indexing (normalizedSlice path)
 
-  runTest formatName("Slice from start", "launchMissile(t)[_..<3, _]"):
+  runCppTest formatName("Slice from start", "launchMissile(t)[_..<3, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -108,7 +108,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Slice to end", "launchMissile(t)[1..<_]"):
+  runCppTest formatName("Slice to end", "launchMissile(t)[1..<_]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -121,7 +121,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Stepped slice with ..|", "launchMissile(t)[1..|2]"):
+  runCppTest formatName("Stepped slice with ..|", "launchMissile(t)[1..|2]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -134,7 +134,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Span with step _.._|N", "launchMissile(t)[_.._|2, _]"):
+  runCppTest formatName("Span with step _.._|N", "launchMissile(t)[_.._|2, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -147,7 +147,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Slice with start, stop, step", "launchMissile(t)[1..<4|2, _]"):
+  runCppTest formatName("Slice with start, stop, step", "launchMissile(t)[1..<4|2, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -160,7 +160,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Negative end-relative slice", "launchMissile(t)[_..-1, _]"):
+  runCppTest formatName("Negative end-relative slice", "launchMissile(t)[_..-1, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -173,7 +173,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Negative start slice", "launchMissile(t)[-3.._, _]"):
+  runCppTest formatName("Negative start slice", "launchMissile(t)[-3.._, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -186,7 +186,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Negative slice with step", "launchMissile(t)[_..-1|2, _]"):
+  runCppTest formatName("Negative slice with step", "launchMissile(t)[_..-1|2, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -202,7 +202,7 @@ proc main() =
   # -----------------------------------------------------------------------
   # Single evaluation - mixed indexing
 
-  runTest formatName("Span on first dim, int on second", "launchMissile(t)[_, 2]"):
+  runCppTest formatName("Span on first dim, int on second", "launchMissile(t)[_, 2]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -215,7 +215,7 @@ proc main() =
       doAssert sliced.equal(toTensor([1, 8, 27, 64, 125]).to(kFloat64))
       true
 
-  runTest formatName("Slice on first dim, span on second", "launchMissile(t)[1..3, _]"):
+  runCppTest formatName("Slice on first dim, span on second", "launchMissile(t)[1..3, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -228,7 +228,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Two slices", "launchMissile(t)[1:3, 1:3]"):
+  runCppTest formatName("Two slices", "launchMissile(t)[1:3, 1:3]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -240,7 +240,7 @@ proc main() =
       doAssert sliced.equal(toTensor([[4, 8], [9, 27]]).to(kFloat64))
       true
 
-  runTest formatName("Unary pipe step with span", "launchMissile(t)[|2, _]"):
+  runCppTest formatName("Unary pipe step with span", "launchMissile(t)[|2, _]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -253,7 +253,7 @@ proc main() =
       doAssert sliced.shape[1] == 5
       true
 
-  runTest formatName("Stepped span with index", "launchMissile(t)[|2, 0]"):
+  runCppTest formatName("Stepped span with index", "launchMissile(t)[|2, 0]"):
     proc(): bool =
       var i = 0
       proc launchMissile(a: Tensor): Tensor =
@@ -273,7 +273,7 @@ proc main() =
   #   - t.shape[0], t.shape[1], ... for each normalizedSlice axisLen
   # Without the `let tmp = t` guard, launchMissile would fire 3+ times.
 
-  runTest formatName("Two slices on same tensor", "launchMissile(t)[_..<3, _..<2]"):
+  runCppTest formatName("Two slices on same tensor", "launchMissile(t)[_..<3, _..<2]"):
     proc(): bool =
       ## normalizedSlice accesses t.shape[0] AND t.shape[1] inside the macro
       ## t is referenced 3 times total: index(t), t.shape[0], t.shape[1]
@@ -288,7 +288,7 @@ proc main() =
       doAssert sliced.shape[1] == 2
       true
 
-  runTest formatName("Three slices (3D tensor)", "launchMissile(t3d)[_..<2, _..<2, _..<2]"):
+  runCppTest formatName("Three slices (3D tensor)", "launchMissile(t3d)[_..<2, _..<2, _..<2]"):
     proc(): bool =
       ## normalizedSlice on 3 axes: t.shape[0], t.shape[1], t.shape[2]
       ## t is referenced 4 times: index(t) + 3x t.shape[i]
@@ -304,7 +304,7 @@ proc main() =
       doAssert sliced.shape[2] == 2
       true
 
-  runTest formatName("Negative index slice (runtime normalization)", "launchMissile(t)[_..-1, _..-1]"):
+  runCppTest formatName("Negative index slice (runtime normalization)", "launchMissile(t)[_..-1, _..-1]"):
     proc(): bool =
       ## Negative indices require normalizedSlice which accesses t.shape[i]
       ## Two negative-indexed slices: t.shape[0] and t.shape[1] accessed
@@ -319,7 +319,7 @@ proc main() =
       doAssert sliced.shape[1] == 4
       true
 
-  runTest formatName("Slice with mixed int + slice", "launchMissile(t)[_..<3, 2]"):
+  runCppTest formatName("Slice with mixed int + slice", "launchMissile(t)[_..<3, 2]"):
     proc(): bool =
       ## Only the first dim is a slice, so t.shape[0] is accessed once
       ## t referenced 2 times: index(t) + t.shape[0]
@@ -340,14 +340,14 @@ proc main() =
   #   - t passed to masked_select / index_select
   # Without the guard, launchMissile would fire 2+ times.
 
-  runTest "Boolean mask full (masked_select) [SKIPPED]":
+  runCppTest "Boolean mask full (masked_select) [SKIPPED]":
     proc(): bool =
       ## FancyUnknownFull path: quote block accesses t.scalarType then masked_select(t, ...)
       ## t referenced 2 times inside the quote block
       ## TODO: Re-enable when Tensor comparison operators are implemented
       true  # skip: no comparison operators on Tensor yet
 
-  runTest "Integer fancy index via [] [SKIPPED: macro generates raw array, ABI needs Tensor]":
+  runCppTest "Integer fancy index via [] [SKIPPED: macro generates raw array, ABI needs Tensor]":
     proc(): bool =
       ## FancyIndex path via [] macro: index_select(t, axis, [0, 2])
       ## TODO: Re-enable when the macro converts [0, 2] to toTensor().to(kInt64)

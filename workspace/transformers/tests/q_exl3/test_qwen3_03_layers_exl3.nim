@@ -55,7 +55,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   # EXL3 Linear layer fixtures
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "EXL3 Linear layer fixtures":
+  runCppTest "EXL3 Linear layer fixtures":
     proc(): bool =
       let layer = model.layers[0]
       let projNames = @[
@@ -93,7 +93,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   # EXL3 Attention layer fixtures (RopeGQAttention)
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "EXL3 Attention layer fixtures":
+  runCppTest "EXL3 Attention layer fixtures":
     proc(): bool =
       let attn = model.layers[0].self_attn
       let rotary = model.rotary
@@ -163,7 +163,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   # EXL3 TransformerBlock fixtures (long residual stream)
   # ──────────────────────────────────────────────────────────────────────────
-  runTest "EXL3 TransformerBlock fixtures":
+  runCppTest "EXL3 TransformerBlock fixtures":
     proc(): bool =
       let layer = model.layers[0]
       let rotary = model.rotary

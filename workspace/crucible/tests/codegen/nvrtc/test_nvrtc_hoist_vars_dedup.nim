@@ -9,7 +9,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_vars_dedup.nim
 
 import std/macros
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 type X2 = object
 type Y2 = object
@@ -60,18 +60,18 @@ const kernel = cuda:
       tmp[0] = v(X2(), Y2())(i)
     output[0] = 42.0f
 
-when isMainModule:
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
 
   echo "═══════════════════════════════════════════════════════════════════"
   echo kernel
   echo "═══════════════════════════════════════════════════════════════════"
 
   var outBuf: array[1, float32]
-  var nv = initNvrtc(kernel)
-  nv.numBlocks = 1
-  nv.threadsPerBlock = 1
-  nv.compile()
-  nv.getPtx()
-  nv.execute("gemmKernel", outBuf, (128'i32, 64'i32))
+  var engine = bkCuda.init()
+  engine.ingest(kernel)
+  engine.run<<(1, 1)>>("gemmKernel", outBuf, (128'i32, 64'i32))
   doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
   echo "  OK (test_nvrtc_hoist_vars_dedup)"
+
+when isMainModule:
+  runTest()

@@ -8,7 +8,7 @@
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_let_block_rhs.nim
 
 import std/[unittest, strformat]
-import workspace/crucible/src/codegen/cl
+import workspace/crucible
 
 type
   Int*[V: static int] = object
@@ -37,30 +37,31 @@ const kernelBlock = opencl:
       tmp
     C[0] = 1'u32
 
-suite "OpenCL - let-block-RHS":
-  test "Pattern A — direct tuple let":
-    var buf: array[1, uint32]
-    var ctx = initOpenCL()
-    defer: ctx.shutdown()
-    echo kernelDirect
-    let result = execOpenCL(ctx, kernelDirect, "dummyKernel",
-      outputBytes = 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "OpenCL - let-block-RHS":
+    test "Pattern A — direct tuple let":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelDirect)
+      echo kernelDirect
+      var buf: array[1, uint32]
+      engine.run("dummyKernel", buf, ())
+      check buf[0] == 1
 
-  test "Pattern B — const + let":
-    var buf: array[1, uint32]
-    var ctx = initOpenCL()
-    defer: ctx.shutdown()
-    echo kernelConstLet
-    let result = execOpenCL(ctx, kernelConstLet, "dummyKernel",
-      outputBytes = 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    test "Pattern B — const + let":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelConstLet)
+      echo kernelConstLet
+      var buf: array[1, uint32]
+      engine.run("dummyKernel", buf, ())
+      check buf[0] == 1
 
-  test "Pattern C — block with const then yield":
-    var buf: array[1, uint32]
-    var ctx = initOpenCL()
-    defer: ctx.shutdown()
-    echo kernelBlock
-    let result = execOpenCL(ctx, kernelBlock, "dummyKernel",
-      outputBytes = 4, inputs = [])
-    check cast[ptr uint32](result[0].addr)[] == 1
+    test "Pattern C — block with const then yield":
+      var engine = bkOpenCL.init()
+      engine.ingest(kernelBlock)
+      echo kernelBlock
+      var buf: array[1, uint32]
+      engine.run("dummyKernel", buf, ())
+      check buf[0] == 1
+
+when isMainModule:
+  runTest()

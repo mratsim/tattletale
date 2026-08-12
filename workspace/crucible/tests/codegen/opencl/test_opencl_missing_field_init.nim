@@ -19,7 +19,7 @@
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_missing_field_init.nim
 
 import std/strutils
-import workspace/crucible/src/codegen/cl
+import workspace/crucible
 
 type
   WorkItem = object
@@ -38,23 +38,24 @@ const kernelCode = opencl:
     else:
       output[3] = 0'u32
 
-echo kernelCode
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo kernelCode
 
-# The omitted array field must be braced ({0}), the omitted pointer field
-# must be a plain 0. The empty initializer `{}` is invalid OpenCL C.
-doAssert kernelCode.contains("{0}"), "expected a {0} zero-initializer for the omitted array field"
-doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
+  # The omitted array field must be braced ({0}), the omitted pointer field
+  # must be a plain 0. The empty initializer `{}` is invalid OpenCL C.
+  doAssert kernelCode.contains("{0}"), "expected a {0} zero-initializer for the omitted array field"
+  doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
 
-block:
-  var ctx = initOpenCL()
-  defer: ctx.shutdown()
-  let r = execOpenCL(
-    ctx, kernelCode, "kernelMain", outputBytes = 16,
-    taggedArgs = newSeq[tuple[data: pointer, size: int, isValue: bool]]()
-  )
-  let out32 = cast[ptr array[4, uint32]](r[0].addr)
-  doAssert out32[0] == 7, "set field must keep its value"
-  doAssert out32[1] == 0, "omitted array field must be zeroed"
-  doAssert out32[2] == 0, "omitted array field must be zeroed"
-  doAssert out32[3] == 1, "omitted pointer field must be nil"
-  echo "  OK"
+  block:
+    var engine = bkOpenCL.init()
+    engine.ingest(kernelCode)
+    var out32: array[4, uint32]
+    engine.run("kernelMain", out32, ())
+    doAssert out32[0] == 7, "set field must keep its value"
+    doAssert out32[1] == 0, "omitted array field must be zeroed"
+    doAssert out32[2] == 0, "omitted array field must be zeroed"
+    doAssert out32[3] == 1, "omitted pointer field must be nil"
+    echo "  OK"
+
+when isMainModule:
+  runTest()

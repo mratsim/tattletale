@@ -1,7 +1,7 @@
 ## CuTe Layout + Tile dot products — WebGPU (WGSL) backend
 ## Run with: nim c -r workspace/crucible/tests/codegen/webgpu/test_webgpu_cute_layout.nim
 import std/strformat
-import workspace/crucible/src/codegen/wgpu
+import workspace/crucible
 
 type
   Layout[S: static tuple, D: static tuple] = object
@@ -23,15 +23,19 @@ const kernelWgsl = webgpu:
     output[4] = a00 * tileAt(gemmB, 0'u32, 0'u32) + a01 * tileAt(gemmB, 1'u32, 0'u32)
     output[5] = a10 * tileAt(gemmB, 0'u32, 2'u32) + a11 * tileAt(gemmB, 1'u32, 2'u32)
 
-echo "=== WebGPU CuTe Layout generation ===\n"
-echo kernelWgsl; echo ""
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo "=== WebGPU CuTe Layout generation ===\n"
+  echo kernelWgsl; echo ""
 
-echo "=== wgpu-native execution ===\n"
-block:
-  var ctx = initWgpu()
-  defer: ctx.shutdown()
-  let r = execWgpu(ctx, kernelWgsl, "cuteKernel", outputBytes=24, inputs = @[])
-  let res = cast[ptr array[6, uint32]](r[0].addr)
-  doAssert res[0]==10 and res[1]==20 and res[2]==60
-  doAssert res[4]==21 and res[5]==61
-  echo "  OK — CuTe Layout + Tile  (WebGPU)"
+  echo "=== wgpu-native execution ===\n"
+  block:
+    var engine = bkWGSL.init()
+    engine.ingest(kernelWgsl)
+    var res: array[6, uint32]
+    engine.run("cuteKernel", res, ())
+    doAssert res[0]==10 and res[1]==20 and res[2]==60
+    doAssert res[4]==21 and res[5]==61
+    echo "  OK — CuTe Layout + Tile  (WebGPU)"
+
+when isMainModule:
+  runTest()

@@ -10,7 +10,7 @@
 ##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_mixin_bind.nim
 
 import std/[unittest]
-import workspace/crucible/src/codegen/nvrtc
+import workspace/crucible
 
 # A template that uses `mixin` to bring a proc into scope
 template callMixin(body: untyped): untyped =
@@ -29,13 +29,14 @@ const kernel = cuda:
       let x = Int[8]()
     C[0] = 1'u32
 
-suite "Crucible - mixin/bind statements":
-  test "template with mixin inside cuda: compiles":
-    var output: array[1, uint32]
-    var nv = initNvrtc(kernel)
-    nv.numBlocks = 1
-    nv.threadsPerBlock = 1
-    nv.compile()
-    nv.getPtx()
-    nv.execute("kernel", output, ())
-    check output[0] == 1
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  suite "Crucible - mixin/bind statements":
+    test "template with mixin inside cuda: compiles":
+      var output: array[1, uint32]
+      var engine = bkCuda.init()
+      engine.ingest(kernel)
+      engine.run<<(1, 1)>>("kernel", output, ())
+      check output[0] == 1
+
+when isMainModule:
+  runTest()

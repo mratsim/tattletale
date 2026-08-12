@@ -369,7 +369,7 @@ proc testTensorOps(): bool =
   result = c.isDefined()
 
 when isMainModule:
-  runTest("tensor operations", testTensorOps)  # Handles exceptions automatically
+  runCppTest("tensor operations", testTensorOps)  # Handles exceptions automatically
 ```
 
 Or use the template directly:
@@ -488,14 +488,16 @@ proc testEdgeCase(): bool =
   result = true
 
 when isMainModule:
-  runTest("basic functionality", testBasicFunctionality)
-  runTest("edge case", testEdgeCase)
+  runCppTest("basic functionality", testBasicFunctionality)
+  runCppTest("edge case", testEdgeCase)
 ```
 
 ### Key points
 
 - Always import `workspace/libtorch_testutils` for tests with TorchTensor
-- Use `runTest` for formatted output with automatic exception handling
+- Use `runCppTest` for formatted output with automatic exception handling
+  (captures the C++ stacktrace; do NOT confuse it with crucible's private
+  `proc runTest()` scope wrapper — see `workspace/crucible/AGENTS.md`)
 - Use `catchCppExceptions` when integrating with `std/unittest` `check`
 - Use assertion helpers (`assertDefined`, `assertShape`, etc.) for clear error messages
 - Use `printTensor` and `printTensorShape` for debugging failures

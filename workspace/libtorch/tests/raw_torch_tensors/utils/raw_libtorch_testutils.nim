@@ -60,7 +60,7 @@ template catchExceptions*(body: bool): bool =
 # Test Runner
 # =============================================================================
 
-proc runTest*(name: string, body: proc(): bool) =
+proc runCppTest*(name: string, body: proc(): bool) =
   ## Run a test with C++ exception handling.
   ## Prints PASS/FAIL status with formatted output.
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
