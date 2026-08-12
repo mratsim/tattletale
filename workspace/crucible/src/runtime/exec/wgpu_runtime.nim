@@ -14,7 +14,7 @@
 ##
 ## Example (engine API):
 ##   import workspace/crucible
-##   const code = wgsl:
+##   const code = webgpu:
 ##     proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
 ##       output[0] = a[0] + b[0]
 ##   var engine = bkWGSL.init()
