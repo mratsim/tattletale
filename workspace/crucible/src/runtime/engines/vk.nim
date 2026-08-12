@@ -29,7 +29,6 @@ import std/strutils
 import workspace/crucible/src/abis/vulkan_abi as vk
 
 import ../exec/vulkan_runtime
-import ../exec/runtime_utils
 import ./arg_blobs
 import ../chevrons
 

@@ -30,7 +30,6 @@ import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/c_abi
 
 import ../exec/cuda_runtime
-import ../exec/runtime_utils
 import ./arg_blobs
 import ../chevrons
 # ═════════════════════════════════════════════════════════════════════════
@@ -38,19 +37,18 @@ import ../chevrons
 # ═════════════════════════════════════════════════════════════════════════
 type
   NVRTC = object
-    prog*: nvrtcProgram
-    log*: string # The compilation log
-    ptx*: string # PTX of the program
-    device*: CUdevice
-    kernel*: CUfunction
-    module*: CUmodule
-    context*: CUcontext
-    moduleLoaded*: bool
+    prog: nvrtcProgram
+    log: string # The compilation log
+    ptx: string # PTX of the program
+    device: CUdevice
+    kernel: CUfunction
+    module: CUmodule
+    context: CUcontext
+    moduleLoaded: bool
 
   CudaEngine* = ref object
     ## Fields directly (no Obj indirection); resources in the RAII `NVRTC`
     ## value field (fires `=destroy` when the ref dies or is re-ingested).
-    source: string
     ptx: string
     nvrtc: NVRTC
 
@@ -78,7 +76,6 @@ proc newCudaEngine(): CudaEngine =
 proc ingest*(engine: CudaEngine, source: string) =
   ## NVRTC-compile `source` → PTX. Re-entrant: replaces the previous artifact
   ## and program, while the CUDA context stays alive (created once at init).
-  engine.source = source
   engine.nvrtc.createProgram(source)
   engine.nvrtc.compile()
   engine.nvrtc.getPtx()
@@ -168,17 +165,11 @@ proc getPtx(nvrtc: var NVRTC) =
   nvrtc.ptx = ptx
 
 proc load(nvrtc: var NVRTC) =
-  # After getting the PTX...
-  var error_log = newString(8192)
-  var info_log = newString(8192)
-
   let status = cuModuleLoadData(nvrtc.module, cstring nvrtc.ptx)
   if status != CUDA_SUCCESS:
     var error_str: cstring
-    check cuGetErrorString(status, (error_str));
+    check cuGetErrorString(status, error_str)
     echo "Module load failed: ", error_str
-    echo "JIT Error log: ", error_log
-    echo "JIT Info log: ", info_log
     quit(1)
 
   nvrtc.moduleLoaded = true

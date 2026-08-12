@@ -94,7 +94,7 @@ proc isGpu(device: OpenCLDevice): bool =
   check getDeviceInfo(device.id, DEVICE_TYPE, cl_size_t(sizeof(deviceType)), deviceType.addr, nil)
   result = (deviceType.int64 and DEVICE_TYPE_GPU.int64) != 0
 
-proc initOpenCL*(device: OpenCLDevice): OpenCLContext =
+proc initOpenCL(device: OpenCLDevice): OpenCLContext =
   var
     id = device.id
     status: TClResult
