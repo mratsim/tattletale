@@ -126,17 +126,30 @@ proc countKernels(glsl: string): int =
     i = glsl.find(marker, i + marker.len)
 
 proc parseEntryPoint(glsl: string): string =
-  ## Extract the entry point name from the GLSL: `void <name>() { ... }`.
-  ## The vulkan codegen emits exactly one compute entry per kernel.
+  ## Extract the first kernel's entry point name from the GLSL. The codegen
+  ## emits `layout(local_size_x ...) in;` immediately before each kernel's
+  ## `void <name>() { ... }` and forward-declares device helpers
+  ## (`void helper(params);`) before all kernels, so the first bare `void `
+  ## may be a helper name. Fall back to the first `void ` when no kernel
+  ## preamble is present, then to "main".
+  const preamble = "layout(local_size_x"
   const marker = "void "
-  let i = glsl.find(marker)
+  var startPos = 0
+  let p = glsl.find(preamble)
+  if p >= 0:
+    startPos = p
+  let i = glsl.find(marker, startPos)
   if i < 0:
     return "main"
   var j = i + marker.len
+  while j < glsl.len and glsl[j] in {' ', '\t', '\n', '\r'}:
+    inc j
   var name = ""
-  while j < glsl.len and glsl[j] notin {'(', ' ', '\t', '\n'}:
+  while j < glsl.len and glsl[j] in {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}:
     name.add glsl[j]
     inc j
+  if name.len == 0:
+    name = "main"
   name
 
 proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
