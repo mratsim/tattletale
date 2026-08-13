@@ -1,12 +1,12 @@
 ## Compile-time guard: gemm_cta requires problem K to be a multiple of
-## TileShape.K (the k-tile depth BLK_K).
+## TileShape.K (the k-tile depth tileK).
 ##
 ## gemm_cta slices the CTA tile (which spans the whole problem K) into
-## K div BLK_K k-tiles (K as a tiled mode, the local_tile pattern) and
-## loops them, so a problem K that is not a multiple of BLK_K cannot be
+## K div tileK k-tiles (the K dimension chunked into tileK-deep tiles) and
+## loops them, so a problem K that is not a multiple of tileK cannot be
 ## tiled: the static `doAssert K mod tileK == 0` rejects it loudly.
 ##
-## Positive cases must compile (K == BLK_K: one k-tile, and K = 2·BLK_K:
+## Positive cases must compile (K == tileK: one k-tile, and K = 2·tileK:
 ## two k-tiles); the non-multiple case must not. CPU-runnable: the guard
 ## is a static doAssert (the gemm_mma asm body is never invoked here).
 
@@ -30,7 +30,7 @@ const tiled = TiledMma[typeof(atom), typeof(make_layout((2, 2, 1)))](
   atom: atom, threadLayout: make_layout((2, 2, 1)))
 
 proc main() =
-  # Concrete problem (M, N) = (64, 32), tile (32, 16), BLK_K = 32, 128 threads.
+  # Concrete problem (M, N) = (64, 32), tile (32, 16), tileK = 32, 128 threads.
   var bufA = newSeq[uint32](64 * 64)
   var bufB = newSeq[uint32](32 * 64)
   var bufC = newSeq[float32](64 * 32)
@@ -41,12 +41,14 @@ proc main() =
   var tCv = tiled.partition_C(thr, tC)
   var epi = initEpiAXPBY(1.0'f32, 0.0'f32, tCv)
 
-  doAssert compiles(gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), 0, 0, 0)),
+  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 32), (1, 64)), make_view(B, (32, 32), (1, 32)), epi, (32, 16, 32), 0, 0, 0)),
     "gemm_cta with problem K == TileShape.K (one k-tile) must compile"
-  doAssert compiles(gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 64, (32, 16, 32), 0, 0, 0)),
+  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 64), (1, 64)), make_view(B, (32, 64), (1, 32)), epi, (32, 16, 32), 0, 0, 0)),
     "gemm_cta with problem K = 2·TileShape.K (two k-tiles) must compile"
-  doAssert not compiles(gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 48, (32, 16, 32), 0, 0, 0)),
-    "gemm_cta must reject problem K (48) not a multiple of TileShape.K (32). The k-tile loop needs K = kTiles·BLK_K"
-  echo "  [OK] gemm_cta K guard: K == BLK_K and K = 2·BLK_K compile, K not a multiple of BLK_K rejected"
+  doAssert not compiles(gemm_cta(tiled, tCv, make_view(A, (64, 48), (1, 64)), make_view(B, (32, 48), (1, 32)), epi, (32, 16, 32), 0, 0, 0)),
+    "gemm_cta must reject problem K (48) not a multiple of TileShape.K (32). The k-tile loop needs K = kTiles·tileK"
+  doAssert not compiles(gemm_cta(tiled, tCv, make_view(A, (64, 64), (1, 64)), make_view(B, (32, 32), (1, 32)), epi, (32, 16, 32), 0, 0, 0)),
+    "gemm_cta must reject A and B views that disagree on K (A K = 64, B K = 32). The k-tile grid is sliced with K from the A view only"
+  echo "  [OK] gemm_cta K guard: K == tileK and K = 2·tileK compile, K not a multiple of tileK rejected, A/B K mismatch rejected"
 
 main()

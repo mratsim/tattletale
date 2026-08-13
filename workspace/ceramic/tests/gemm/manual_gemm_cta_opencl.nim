@@ -17,11 +17,6 @@
 ##
 ## Requires an sm_80+ GPU with NVIDIA's OpenCL. Run with:
 ##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_cta_opencl.nim
-##
-## TODO (file-level slop): M=64, N=32, tile (32,16), strides (1,64) and
-## the m0/n0 tile origins are hardcoded in every kernel below — the dims
-## must flow from the problem views and the origins from local_tile, per
-## the gemm_cta view migration.
 
 import std/[strformat, strutils]
 import workspace/ceramic/src/int_tuples
@@ -53,12 +48,13 @@ static:
 
 const kernelCode = opencl:
   # Each kernel wrapper decomposes the linear work-item id into
-  # (mCTA, nCTA, threadIdx), builds the thread's C tile view (tile origin
-  # from the grid coords), partitions it to the per-thread destination
-  # fragment (D), constructs the epilogue op with its state, and hands
-  # both to gemm_cta. The grid never sees alpha/beta/C/bias: they are
-  # op state. Output-first (C): the OpenCL engine's run binds the output
-  # at binding 0, inputs at 1..N in signature order.
+  # (mCTA, nCTA, threadIdx), builds the problem views, derives the CTA's
+  # C tile by local_tile over the C problem layout (the origin comes from
+  # the grid coords, baked by crd2idx), partitions it to the per-thread
+  # destination fragment (D), constructs the epilogue op with its state,
+  # and hands both to gemm_cta. The grid never sees alpha/beta/C/bias:
+  # they are op state. Output-first (C): the OpenCL engine's run binds
+  # the output at binding 0, inputs at 1..N in signature order.
   proc gemmCtaKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
@@ -68,13 +64,14 @@ const kernelCode = opencl:
     let blk = gid div 128
     let mCTA = blk mod 2
     let nCTA = blk div 2
-    let m0 = mCTA * 32
-    let n0 = nCTA * 16
-    var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
+    let pA = make_view(A, (64, 32), (1, 64))
+    let pB = make_view(B, (32, 32), (1, 32))
+    let pC = make_view(C, (64, 32), (1, 64))
+    let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmCtaIdentityKernel(
       C: ptr UncheckedArray[float32],
@@ -84,13 +81,14 @@ const kernelCode = opencl:
     let blk = gid div 128
     let mCTA = blk mod 2
     let nCTA = blk div 2
-    let m0 = mCTA * 32
-    let n0 = nCTA * 16
-    var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
+    let pA = make_view(A, (64, 32), (1, 64))
+    let pB = make_view(B, (32, 32), (1, 32))
+    let pC = make_view(C, (64, 32), (1, 64))
+    let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiIdentity()
-    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmCtaReLUKernel(
       C: ptr UncheckedArray[float32],
@@ -100,13 +98,14 @@ const kernelCode = opencl:
     let blk = gid div 128
     let mCTA = blk mod 2
     let nCTA = blk div 2
-    let m0 = mCTA * 32
-    let n0 = nCTA * 16
-    var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
+    let pA = make_view(A, (64, 32), (1, 64))
+    let pB = make_view(B, (32, 32), (1, 32))
+    let pC = make_view(C, (64, 32), (1, 64))
+    let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiReLU()
-    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmCtaBiasKernel(
       C: ptr UncheckedArray[float32],
@@ -117,36 +116,43 @@ const kernelCode = opencl:
     let blk = gid div 128
     let mCTA = blk mod 2
     let nCTA = blk div 2
-    let m0 = mCTA * 32
-    let n0 = nCTA * 16
-    var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
+    let pA = make_view(A, (64, 32), (1, 64))
+    let pB = make_view(B, (32, 32), (1, 32))
+    let pC = make_view(C, (64, 32), (1, 64))
+    let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
-    # The bias is a (N,) column vector: the tile's view has stride-0 rows
+    # The bias is a (N,) column vector: the problem view has stride-0 rows
     # (every row of a column reads the same bias element) and the same
     # partition as C, which bakes each thread's column base into the
-    # fragment's data pointer.
-    # TODO: the tile origin (n0) and the hardcoded M/N/tile/strides in
-    # this file are manual slop — the tile view must be auto-derived via
-    # local_tile on the problem views (make_view(bias, (M, N), (0, 1)))
-    # with the dims flowing from the views, per the gemm_cta view
-    # migration.
-    var biasView = tiled.partition_C(thr, make_view(bias +% n0, (32, 16), (0, 1)))
+    # fragment's data pointer. The tile grid over the (64, 32) bias
+    # problem layout and the (mCTA, nCTA) slice derive the tile origin by
+    # layout algebra, no +% pointer math.
+    let pBias = make_view(bias, (64, 32), (0, 1))
+    var biasView = tiled.partition_C(thr, local_tile(pBias, (32, 16), (mCTA, nCTA)))
     var epi = initEpiAddBias(biasView)
-    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
+# The single-tile kernel lives in its own opencl block: five
+# view-heavy inlined kernels in one block exceed the OpenCL codegen's
+# compile-time VM-loop budget (maxLoopIterationsVM); the CUDA twin has
+# the same split.
+const kernelCodeSingle = opencl:
   proc gemmCtaKernelSingle(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    ## 1×1 CTA grid: only the thread id varies.
+    # 1×1 CTA grid: only the thread id varies.
     let gid = int(get_global_id(0))
     let threadIdx = gid mod 128
-    var tC = make_view(C +% 0, (32, 16), (1, 32))
+    let pA = make_view(A, (32, 32), (1, 32))
+    let pB = make_view(B, (16, 32), (1, 16))
+    let pC = make_view(C, (32, 16), (1, 32))
+    let tC = local_tile(pC, (32, 16), (0, 0))
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, epi, (32, 16, 32), 0, 0, threadIdx)
 
 proc runTest() =
   var engine = bkOpenCL.init(kernelCode)
@@ -158,7 +164,8 @@ proc runTest() =
   testGemmCtaIdentity(engine, tiled, "SM80")
   testGemmCtaReLU(engine, tiled, "SM80")
   testGemmCtaBias(engine, tiled, "SM80")
-  testGemmCtaSingle(engine, tiled, "SM80")
+  var engineSingle = bkOpenCL.init(kernelCodeSingle)
+  testGemmCtaSingle(engineSingle, tiled, "SM80")
 
 when isMainModule:
   runTest()

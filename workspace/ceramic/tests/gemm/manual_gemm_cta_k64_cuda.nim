@@ -1,7 +1,7 @@
 ## Manual GPU test: the k-tile loop through gemm_cta via NVRTC/CUDA.
 ##
 ## C(64×32) = α·A(64×64)·B(32×64) + β·C over a 2×2 CTA grid with TWO
-## k-tiles: K = 64 = 2·BLK_K with BLK_K = 32, 128 threads. gemm_cta
+## k-tiles: K = 64 = 2·tileK with tileK = 32, 128 threads. gemm_cta
 ## hands each CTA a full-K (32, 64) / (16, 64) tile view; gemm_cta
 ## loops the two k-tiles into the persistent accumulator and runs the
 ## fused epilogue once (gemm_tiled computes one k-tile each). The
@@ -13,11 +13,6 @@
 ## full gemm_tiled machinery into the OpenCL twin's module, and one
 ## module per kernel keeps the OpenCL codegen's compile-time AST walk
 ## within budget.
-##
-## TODO (file-level slop): M=64, N=32, tile (32,16), strides (1,64) and
-## the m0/n0 tile origins are hardcoded in the kernel below, as in
-## manual_gemm_cta_cuda. The dims must flow from the problem views and
-## the origins from local_tile, per the gemm_cta view migration.
 ## The atom is the parameter, SM80_16x8x8_F32TF32TF32F32_TN tiled
 ## (2,2,1). Requires an sm_80+ GPU. Run with:
 ##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_cta_k64_cuda.nim
@@ -54,13 +49,14 @@ const kernelCode = cuda:
     let blk = int(blockIdx.x)
     let mCTA = blk mod 2
     let nCTA = blk div 2
-    let m0 = mCTA * 32
-    let n0 = nCTA * 16
-    var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
+    let pA = make_view(A, (64, 64), (1, 64))
+    let pB = make_view(B, (32, 64), (1, 32))
+    let pC = make_view(C, (64, 32), (1, 64))
+    let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 64, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

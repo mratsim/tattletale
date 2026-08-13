@@ -5,7 +5,7 @@
 ## 128 threads.
 ##
 ## gemm_tiled(tma, dFrag, A, B, TileShape, threadIdx) = tiling + thread
-## decomposition + fragment gathering (one k-tile: K == BLK_K) + the
+## decomposition + fragment gathering (one k-tile: K == tileK) + the
 ## k_block loop in gemm_ukernel, accumulating into the caller's dFrag.
 ## The fused epilogue (EpiAXPBY: preflight + apply, D = α·AB + β·C) runs
 ## after the call (gemm_cta owns the accumulator + epilogue in the
@@ -50,10 +50,10 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
                      A, B: ptr UncheckedArray[uint32];
                      beta: float32) {.inline.} =
   ## C(32×16) = α·A(32×16)·B(16×16) + β·C — 1×1 tiled m16n8k8 tf32,
-  ## 128 threads, K = TILE_K = BLK_K = 16, fused epilogue.
+  ## 128 threads, K = TILE_K = tileK = 16, fused epilogue.
   ## Tile geometry: 2×2×1 atoms over the (2,2,1) thread layout.
   const
-    TILE_K = 16                  # the full K and the k-tile depth (BLK_K == K)
+    TILE_K = 16                  # the full K and the k-tile depth (tileK == K)
     thrM = toIntVal(tma.threadLayout.shape[0])
     thrN = toIntVal(tma.threadLayout.shape[1])
     thrK = toIntVal(tma.threadLayout.shape[2])
@@ -81,10 +81,10 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
                          A, B: ptr UncheckedArray[uint32];
                          beta: float32) {.inline.} =
   ## C(32×16) = α·A(32×32)·B(16×32) + β·C — 1×1 tiled m16n8k8 tf32,
-  ## 128 threads, K = 32 = BLK_K (four k_blocks through one gemm_ukernel
+  ## 128 threads, K = 32 = tileK (four k_blocks through one gemm_ukernel
   ## call in the single k-tile pass.
   const
-    TILE_K = 32                  # the full K and the k-tile depth (BLK_K == K)
+    TILE_K = 32                  # the full K and the k-tile depth (tileK == K)
     thrM = toIntVal(tma.threadLayout.shape[0])
     thrN = toIntVal(tma.threadLayout.shape[1])
     thrK = toIntVal(tma.threadLayout.shape[2])

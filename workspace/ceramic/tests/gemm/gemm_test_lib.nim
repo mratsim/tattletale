@@ -359,7 +359,7 @@ proc testGemmCtaBeta*[E](engine: var E; tiled: static TiledMma; label: string) =
 
 proc testGemmCtaK64*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## C(64×32) = α·A(64×64)·B(32×64) + β·C over a 2×2 CTA grid with
-  ## TWO k-tiles: K = 64 = 2·BLK_K with BLK_K = 32, so gemm_cta slices
+  ## TWO k-tiles: K = 64 = 2·tileK with tileK = 32, so gemm_cta slices
   ## each full-K CTA tile into two gemm_tiled k-tile passes accumulated
   ## into the same dFrag, then runs the epilogue once. (α, β) = (1, 0),
   ## C NaN-prefilled (a spurious C read fails), 16 trials, bit-exact vs
@@ -370,7 +370,7 @@ proc testGemmCtaK64*[E](engine: var E; tiled: static TiledMma; label: string) =
     K = 64
     TILE_M = 32
     TILE_N = 16
-    BLK_K = 32
+    tileK = 32
     thrM = toIntVal(tiled.threadLayout.shape[0])
     thrN = toIntVal(tiled.threadLayout.shape[1])
     thrK = toIntVal(tiled.threadLayout.shape[2])
@@ -396,7 +396,7 @@ proc testGemmCtaK64*[E](engine: var E; tiled: static TiledMma; label: string) =
                (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, M, N, "gemm_cta K=64 trial " & $trial)
 
-  echo "  OK: gemm_cta M=64 N=32 K=64 (2 k-tiles, BLK_K=32) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, (1,0), NaN C)"
+  echo "  OK: gemm_cta M=64 N=32 K=64 (2 k-tiles, tileK=32) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, (1,0), NaN C)"
 
 proc testGemmCtaSingle*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## M=32, N=16, K=32, tile (32, 16, 32): a 1×1 CTA grid for variety.

@@ -92,7 +92,7 @@ type Epilogue* = concept
   ##   gemm_tiled calls `op.preflight()` before `op.apply(D, AB)`
   ##   a missing `preflight` is a compile error at that call site.
   ##
-  ## Target contract (design doc, CUTLASS correspondence in the scratchpad):
+  ## Target contract:
   ##   `shard(op, D, tD, tDv)`   partition the captured operands by thread,
   ##                             projecting onto the output fragment the
   ##                             kernel already partitioned
@@ -111,9 +111,8 @@ type EpiAXPBY*[T, Sh, StC] = object
   alpha, beta: T
   C_gmem: TensorView[T, Sh, StC]
   # C_smem: ptr UncheckedArray[T]
-  #   Future: cp.async / TMA smem staging of C (LoadKind ikTMAStaged,
-  #   GEMM-ARCHITECTURE.md §4). For now C is read per-thread from gmem in
-  #   `apply`, the CUTLASS LinearCombination default: no staging, no race.
+  #   Future: cp.async / TMA smem staging of C. For now C is read
+  #   per-thread from gmem in `apply`: no staging, no race.
 
 func initEpiAXPBY*[T, Sh, StC](
     alpha: T;
@@ -128,9 +127,8 @@ func cView*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): var TensorView[T, Sh, StC
   op.C_gmem
 
 template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
-  ## No-op: C is read per-thread from gmem in `apply` (CUTLASS
-  ## LinearCombination default: direct register→gmem, see
-  ## GEMM-ARCHITECTURE.md §4). cp.async / TMA smem staging is pending;
+  ## No-op: C is read per-thread from gmem in `apply` (direct
+  ## register→gmem). cp.async / TMA smem staging is pending;
   ## when it lands, this template injects the {.shared.} staging buffer
   ## into the caller scope and fills it here.
   discard
@@ -192,17 +190,15 @@ type EpiAddBias*[T, Sh, St] = object
   ## Bias is a column vector broadcasted onto AB
   bias_gmem: TensorView[T, Sh, St]
   # bias_smem: ptr UncheckedArray[T]
-  #   Future: cp.async / TMA smem staging of the bias (LoadKind ikTMAStaged,
-  #   GEMM-ARCHITECTURE.md §4). For now bias is read per-thread from gmem in
-  #   `apply`, the CUTLASS EpilogueWithBroadcast default: no staging, no race.
+  #   Future: cp.async / TMA smem staging of the bias. For now bias is
+  #   read per-thread from gmem in `apply`: no staging, no race.
 
 func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, St] =
   result.bias_gmem = bias
 
 template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
-  ## No-op: bias is read per-thread from gmem in `apply` (CUTLASS
-  ## EpilogueWithBroadcast default: direct register→gmem, see
-  ## GEMM-ARCHITECTURE.md §4). cp.async / TMA smem staging is pending;
+  ## No-op: bias is read per-thread from gmem in `apply` (direct
+  ## register→gmem). cp.async / TMA smem staging is pending;
   ## when it lands, this template injects the {.shared.} staging buffer
   ## into the caller scope and fills it here.
   discard

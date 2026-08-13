@@ -3,7 +3,7 @@
 ##
 ## Same problem as manual_gemm_cta_k64_cuda.nim: C(64×32) = α·A(64×64)·
 ## B(32×64) + β·C over a 2×2 CTA grid with TWO k-tiles (K = 64 =
-## 2·BLK_K, BLK_K = 32), 128 work-items per CTA. The kernel body is the
+## 2·tileK, tileK = 32), 128 work-items per CTA. The kernel body is the
 ## CUDA twin's verbatim; the launch geometry is linearized: the engine
 ## launches grid.x·grid.y·blockSize work-items and the kernel decomposes
 ## the linear work-item id into (mCTA, nCTA, threadIdx). The oracle,
@@ -50,7 +50,7 @@ const kernelCode = opencl:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    ## Same 2×2 CTA grid decomposition with K = 64 = 2·BLK_K: gemm_cta
+    ## Same 2×2 CTA grid decomposition with K = 64 = 2·tileK: gemm_cta
     ## hands each CTA a full-K (32, 64) / (16, 64) tile view and loops
     ## the two k-tiles into the persistent accumulator (gemm_tiled
     ## computes one k-tile each).
@@ -59,13 +59,14 @@ const kernelCode = opencl:
     let blk = gid div 128
     let mCTA = blk mod 2
     let nCTA = blk div 2
-    let m0 = mCTA * 32
-    let n0 = nCTA * 16
-    var tC = make_view(C +% (m0 + n0 * 64), (32, 16), (1, 64))
+    let pA = make_view(A, (64, 64), (1, 64))
+    let pB = make_view(B, (32, 64), (1, 32))
+    let pC = make_view(C, (64, 32), (1, 64))
+    let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 64, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
 proc runTest() =
   var engine = bkOpenCL.init(kernelCode)
