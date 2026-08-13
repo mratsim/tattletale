@@ -77,7 +77,7 @@ proc main() =
         let n = off div TILE_M
         if m < validM and n < validN:
           expected = expected or (1 shl i)
-      let got = cStoreMask(tiled, thr, TILE_M, TILE_N, validM, validN)
+      let got = cStoreMask(tiled, tid, TILE_M, TILE_N, validM, validN)
       doAssert got == expected,
         "cStoreMask: thread " & $tid & " valid (" & $validM & ", " & $validN &
         "): got " & $got & ", reference " & $expected

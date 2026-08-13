@@ -590,6 +590,5 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   o.preflight()
   var res = make_tensor(TD, D.layout.shape)
   o.apply(res, dFrag)
-  let thr = tma.get_slice(threadIdx)
-  o.storeMask = cStoreMask(tma, thr, tileM, tileN, validM, validN)
+  o.storeMask = cStoreMask(tma, threadIdx, tileM, tileN, validM, validN)
   o.finalStore(res, D)

@@ -52,18 +52,6 @@ template copyFrom*[T, ShA, StA, ShB, StB](
   for i in 0 ..< size(dst):
     dst(i) = src(i)
 
-template copyFromIf*[T, ShA, StA, ShB, StB](
-    dst: var TensorView[T, ShB, StB];
-    src: TensorView[T, ShA, StA];
-    predicate: typed;
-    defaultVal: T) =
-  ## Copy elements where predicate(i) is true, fill rest with defaultVal.
-  for i in 0 ..< size(dst):
-    if predicate(i):
-      dst(i) = src(i)
-    else:
-      dst(i) = defaultVal
-
 # ═════════════════════════════════════════════════════════════════════════
 #  The copy partition and the predicated tiled copy
 # ═════════════════════════════════════════════════════════════════════════
@@ -152,22 +140,16 @@ func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
   ## The thread's copy units of the smem stage. See partition_S.
   let thrTensor = make_view(dst.data, thrfrg_copy(dst.layout, atom, blockSize))
   thrTensor(thrIdx, _, _)
-template copyFromIf*[T, ShA, StA, ShB, StB, ShP, StP](
-    dst: var TensorView[T, ShB, StB];
-    src: TensorView[T, ShA, StA];
-    predicate: AnyTensor[bool, ShP, StP]) =
-  ## The predicated tiled copy: one 16-byte cp.async per predicate
-  ## element, from the src view to the dst view. The predicate is
-  ## sliced with the underscore, the copy atom reading the (0)
-  ## element of the (1,) slice. The predicate is the copy size
-  ## (ZFILL): a false element makes the copy size 0, so the smem
-  ## destination is zero-filled, no branch in the loop. Each unit's
-  ## addresses are the sliced views' data pointers, the copy atom's
-  ## &dst(0) / &src(0). The shape asserts mirror the static_asserts
-  ## of the source, the destination and the predicate sharing one
-  ## shape.
-  static:
-    doAssert ShA.default === ShB.default and ShB.default === ShP.default,
-      "copyFromIf: the dst, src and predicate views must share the shape"
-  for i in 0 ..< size(predicate):
-    cp.async.cg_shared_global_16B(dst(_, i), src(_, i), predicate(_, i))
+
+template copyFromIf*[T, Sh, StA, StB, StP](
+    dst: var TensorView[T, Sh, StB];
+    src: TensorView[T, Sh, StA];
+    predicate: AnyTensor[bool, Sh, StP]) =
+  ## Predicated tiled copy: one 16-byte cp.async per predicate
+  ## element, from the src view to the dst view.
+
+  when Sh.rank == 1:
+    cp.async.cg_shared_global_16B(dst, src, predicate)
+  else:
+    for i in 0 ..< size(predicate):
+      cp.async.cg_shared_global_16B(dst(_, i), src(_, i), predicate(_, i))
