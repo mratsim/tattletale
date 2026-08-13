@@ -71,7 +71,7 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmCtaIdentityKernel(
       C: ptr UncheckedArray[float32],
@@ -88,7 +88,7 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiIdentity()
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
 const kernelCodeBias = opencl:
   proc gemmCtaReLUKernel(
@@ -106,7 +106,7 @@ const kernelCodeBias = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiReLU()
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
   proc gemmCtaBiasKernel(
       C: ptr UncheckedArray[float32],
@@ -132,7 +132,7 @@ const kernelCodeBias = opencl:
     let pBias = make_view(bias, (64, 32), (0, 1))
     var biasView = tiled.partition_C(thr, local_tile(pBias, (32, 16), (mCTA, nCTA)))
     var epi = initEpiAddBias(biasView)
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
 # The single-tile kernel lives in its own opencl block: five
 # view-heavy inlined kernels in one block exceed the OpenCL codegen's
@@ -153,7 +153,7 @@ const kernelCodeSingle = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, 32, 16, epi, (32, 16, 32), 0, 0, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, 32, 16, 32, epi, (32, 16, 32), 0, 0, threadIdx)
 
 proc runTest() =
   var engine = bkOpenCL.init(kernelCode)

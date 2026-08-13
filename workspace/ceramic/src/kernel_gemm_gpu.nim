@@ -27,33 +27,38 @@
 ##   persistent accumulator). No accumulator zeroing, no k-tile
 ##   loop, no epilogue (gemm_cta owns all three). The gather reads zeros
 ##   for fragment elements whose tile row/column falls outside the valid
-##   (M, N) extent of the CTA tile (ragged boundary tiles).
+##   (M, N) extent of the CTA tile, or whose tile k falls outside the
+##   valid K extent of the k-tile (ragged boundary tiles and the
+##   ragged-K residue k-tile).
 ##
 ## `gemm_cta`: one CTA tile of the problem GEMM, selected by grid
-##   coordinates (blockIdx.x/y) and the problem shape (M, N) passed by
-##   the launcher. local_tile over the (M, K) / (N, K) problem views
-##   yields each k-tile as a static (tileM, tileK) / (tileN, tileK) view
-##   (K chunked into tileK-deep tiles). It loops them (the
-##   gemm_k_iterations loop), zeroes the accumulator once, and runs
-##   the fused epilogue once after the loop. Ragged M/N (problem dims not
-##   multiples of the tile dims) are handled: boundary tiles compute the
-##   full static tile with zeros outside the problem and store only the
-##   valid elements (the launcher must cover the ceil(M/tileM) ×
-##   ceil(N/tileN) tile grid).
+##   coordinates (blockIdx.x/y) and the problem shape (M, N, K) passed
+##   by the launcher. local_tile over the (M, kView) / (N, kView)
+##   problem views yields each k-tile as a static (tileM, tileK) /
+##   (tileN, tileK) view (the view K is the allocated extent; the
+##   runtime K is the problem K, at most kView). It loops them (the
+##   gemm_k_iterations loop, ceil(K/tileK) iterations, the last possibly
+##   partial), zeroes the accumulator once, and runs the fused epilogue
+##   once after the loop. Ragged M/N (problem dims not multiples of the
+##   tile dims) are handled: boundary tiles compute the full static tile
+##   with zeros outside the problem and store only the valid elements
+##   (the launcher must cover the ceil(M/tileM) × ceil(N/tileN) tile
+##   grid). Ragged K (K not a multiple of tileK) is handled the same
+##   way: the residue k-tile gathers zeros for k >= validK.
 ##
 ## Data flow: one CTA tile (tileM×tileN) over the full problem K:
 ##
 ## ```
 ## gemm_cta:  init dFrag := 0 before the k-tile loop
-##              |  for kCTA in 0 ..< kTiles:          # k-tile loop, static bound
+##              |  for kCTA in 0 ..< kTiles:          # k-tile loop, runtime bound
 ##              |    tA_k = local_tile(A, (tileM, tileK), (mCTA, kCTA))  # static (tileM, tileK) view
-##              |    tB_k = local_tile(B, (tileN, tileK), (nCTA, kCTA))  #   (K chunked into tileK-deep tiles)
+##              |    tB_k = local_tile(B, (tileN, tileK), (nCTA, kCTA))  #   (kView chunked into tileK-deep tiles)
 ##              ▼
 ## gemm_tiled: partition_A/B of one k-tile
 ##              ▼
 ##        tAv (V,RestM,tileK div atomK)   tBv (V,RestN,tileK div atomK)
 ##              │ gather gmem → registers (make_fragment_A/B + copyFrom,
-##              │   zeros outside the valid M/N extent)
+##              │   zeros outside the valid M/N/K extent)
 ##              └──────────────┬───────────────┘
 ##                             ▼
 ##              gemm_ukernel: dFrag += Σ_k aFrag(_,_,k)·bFrag(_,_,k)
@@ -73,7 +78,7 @@
 ## ```
 ## gemm_cta:   tile + k-tile origins from blockIdx and the loop var
 ##              init dFrag := 0 before the k-tile loop
-##              for kCTA in 0 ..< kTiles:              # k-tile loop, static bound
+##              for kCTA in 0 ..< kTiles:              # k-tile loop, runtime bound
 ##                gemm_tiled: partition + gather (tileK)    # gmem → registers
 ##                gemm_ukernel: for k_block in 0 ..< kBlocks  # k_block loop
 ##                  gemm_atom(mma, dFrag, aFrag(_,_,k), bFrag(_,_,k))  # one mma.sync
@@ -89,6 +94,8 @@
 ##    │   ├─ warp tile (tileM/nW, tileN/nW)          1 warp
 ##    │   │   └─ thread tile / fragment              1 thread   ← rmem (aFragTile/dFrag)
 ##    │   └─ k_block (atomK)                         1 warp     ← one gemm_atom
+##    └─ (the ragged-K tail k-tile is partial: the gather zero-fills
+##        k >= validK)
 ## ```
 ##
 ## Memory spaces:
@@ -96,7 +103,7 @@
 ##   smem = shared memory (per-CTA staging: the epilogue's C operand)
 ##   rmem = register memory (the per-thread fragments)
 ##
-## 1 threadblock tile = K/atomK k_blocks, looped in kTiles = K/tileK
+## 1 threadblock tile = K/atomK k_blocks, looped in kTiles = ceil(K/tileK)
 ## k-tiles of tileK/atomK k_blocks each (tileK, the k-tile
 ## depth). Split-K is not used.
 ##
@@ -229,7 +236,7 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
     B: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB];
     TileShape: static tuple[M: int, N: int, K: int];
     threadIdx: int;
-    validM, validN: int) {.inline.} =
+    validM, validN, validK: int) {.inline.} =
   ## One k-tile of the problem GEMM: partition, gather, k_block microkernel.
   ##
   ## This is the per-k-tile compute:
@@ -260,17 +267,25 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
   ##        inside the problem. Fragment elements outside read 0 from the
   ##        gather (boundary tiles). Pass tileM/tileN for a full tile (no
   ##        predication).
+  ##   validK: the valid K extent of this k-tile, the part inside the
+  ##        problem K. Fragment elements with tile k >= validK read 0
+  ##        from the gather (the ragged-K residue of the last k-tile).
+  ##        Pass tileK for a full k-tile (no predication).
   ##
   ## Preconditions:
   ##   - A/B are col-major views with shapes (tileM, tileK), (tileN, tileK)
   ##   - dFrag is the caller's accumulator, zeroed before the loop
+  ##   - validM in 1 .. tileM, validN in 1 .. tileN, validK in 1 .. tileK
+  ##     (the valid extents of the CTA tile / k-tile; an empty extent
+  ##     means the caller should not have launched this tile)
   ##   - tileK mod (thrK·atomK) == 0, ThrK == 1
   ##   - threadIdx < blockSize
   ##   - the backing buffers must address the tile. The ragged underlying
   ##     allocation is the caller's contract, not checked in v1
   ##
   ## Postconditions:
-  ##   - dFrag += A·B over the k-tile's K
+  ##   - dFrag += A·B over the k-tile's valid K (the k < validK part;
+  ##     the residue reads zeros)
   ##   - A and B are unmodified
   ##
   ## Panic-if (expansion-time rejections):
@@ -325,19 +340,24 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
   let tBv = tma.partition_B(thr, B)
 
   # gather the k-tile's fragments gmem → registers, tileK deep.
-  # A ragged boundary tile (validM < tileM or validN < tileN) gathers
-  # zeros for the elements outside the problem so the accumulator never
-  # sees OOB gmem values.
+  # A ragged boundary tile (validM < tileM or validN < tileN) or the
+  # ragged-K residue k-tile (validK < tileK) gathers zeros for the
+  # elements outside the problem so the accumulator never sees OOB gmem
+  # values. The K predicate is the tile k of the element: one combined
+  # decode per element per operand returns the (row, k) / (col, k) pair
+  # (aFragmentTileCoord / bFragmentTileCoord).
   var aFragTile = make_fragment_A(tma.atom, tAv)
   var bFragTile = make_fragment_B(tma.atom, tBv)
-  if validM < tileM or validN < tileN:
+  if validM < tileM or validN < tileN or validK < tileK:
     for i in 0 ..< size(aFragTile):
-      if aFragmentTileRow(tma, thr, tileM, i) < validM:
+      let (r, k) = aFragmentTileCoord(tma, thr, tileM, tileK, i)
+      if r < validM and k < validK:
         aFragTile(i) = tAv(i)
       else:
         aFragTile(i) = TA(0)
     for i in 0 ..< size(bFragTile):
-      if bFragmentTileCol(tma, thr, tileN, i) < validN:
+      let (c, k) = bFragmentTileCoord(tma, thr, tileN, tileK, i)
+      if c < validN and k < validK:
         bFragTile(i) = tBv(i)
       else:
         bFragTile(i) = TB(0)
@@ -349,34 +369,41 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
   gemm_ukernel(tma.atom, dFrag, aFragTile, bFragTile)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  gemm_cta(tma, D, A, B, M, N, epi, TileShape, mCTA, nCTA, threadIdx)
+#  gemm_cta(tma, D, A, B, M, N, K, epi, TileShape, mCTA, nCTA, threadIdx)
 # ═════════════════════════════════════════════════════════════════════════
 
 func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     tma: static TiledMma;
     D: var (TensorView[TD, ShD, StD] or Tensor[TD, ShD, StD]);  # the thread's destination fragment view
-    A: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA];  # (M, K) problem view, col-major
-    B: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB];  # (N, K) problem view, col-major
-    M, N: int;                          # the problem shape, runtime (the launcher's contract)
+    A: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA];  # (M, kView) problem view, col-major
+    B: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB];  # (N, kView) problem view, col-major
+    M, N, K: int;                       # the problem shape, runtime (the launcher's contract)
     epi: Epi;                           # the fused epilogue op (concept), built by the caller
     TileShape: static tuple[M: int, N: int, K: int];
     mCTA, nCTA, threadIdx: int) {.inline.} =   # CTA grid coords + thread id (blockIdx.x/y + threadIdx.x)
   ## One CTA tile of the problem GEMM: the (mCTA, nCTA) tile of
   ## C = f(A·B) over the full (M, N, K) problem.
   ##
-  ## The problem shape M/N arrives as runtime values (the launcher's
-  ## problem shape). K stays static on the view types. The leading
-  ## strides live on the view types (runtime int leaves for a padded
-  ## launcher layout). Each CTA tile is a local_tile over the problem
-  ## views:
+  ## The problem shape M/N/K arrives as runtime values (the launcher's
+  ## problem shape). The view K is the allocated extent (kView): the
+  ## views are built on a buffer holding kView K-columns, and the runtime
+  ## K must not exceed it (the launcher's contract, not checked here,
+  ## like the ragged underlying allocation for the M/N strides). Each
+  ## CTA tile is a local_tile over the problem views:
   ##
-  ##   (M, K) view ── local_tile((tileM, tileK), (mCTA, kCTA)) ──▶ (tileM, tileK)
-  ##   (N, K) view ── local_tile((tileN, tileK), (nCTA, kCTA)) ──▶ (tileN, tileK)
+  ##   (M, kView) view ── local_tile((tileM, tileK), (mCTA, kCTA)) ──▶ (tileM, tileK)
+  ##   (N, kView) view ── local_tile((tileN, tileK), (nCTA, kCTA)) ──▶ (tileN, tileK)
   ##
   ##   The K dimension is chunked into tileK-deep tiles:
   ##   the problem layout becomes a grid of (tileM × tileK) tiles.
   ##   The coord slices one tile; the offset comes from crd2idx
-  ##   (no manual pointer math).
+  ##   (no manual pointer math). kView must be a multiple of tileK
+  ##   (local_tile needs an even tile grid); the runtime K is free.
+  ##
+  ## The k-tile count is runtime: kTiles = ceil(K/tileK). A ragged-K
+  ## tail (K not a multiple of tileK) computes the full static k-tile
+  ## with zeros for the k >= validK coordinates: gemm_tiled's
+  ## predicated gather zero-fills them.
   ## Ragged M/N (problem dims not a multiple of the tile dims) work: a
   ## boundary tile computes the full static tile with zeros outside the
   ## problem (gemm_tiled's predicated gather) and the epilogue stores
@@ -390,24 +417,31 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   ##   D: the thread's destination fragment view (partition_C of the C
   ##        tile), written by the epilogue. Same view the op was built
   ##        with
-  ##   A: the (M, K) problem view (col-major gmem, M runtime, K static).
-  ##        The launcher's leading stride may differ from M (padded)
-  ##   B: the (N, K) problem view (col-major gmem, N runtime, K static)
-  ##   M, N: the problem dims, runtime. The launcher's problem shape.
-  ##        The tile grid must cover ceil(M/tileM) × ceil(N/tileN) CTAs
+  ##   A: the (M, kView) problem view (col-major gmem, M runtime,
+  ##        kView static from the view type). The launcher's leading
+  ##        stride may differ from M (padded)
+  ##   B: the (N, kView) problem view (col-major gmem, N runtime,
+  ##        kView static from the view type)
+  ##   M, N, K: the problem dims, runtime. The launcher's problem shape.
+  ##        The tile grid must cover ceil(M/tileM) × ceil(N/tileN) CTAs.
+  ##        K is the problem K (the K actually multiplied); the views
+  ##        hold the allocated kView >= K columns
   ##   epi: the fused epilogue op (EpiAXPBY, EpiIdentity, EpiReLU,
   ##        EpiAddBias or a user op), built by the caller with its state
   ##   TileShape: static (tileM, tileN, tileK), see gemm_tiled. tileK is
-  ##        the k-tile depth; the problem K is a multiple of it
-  ##        (gemm_cta loops K div tileK k-tiles)
+  ##        the k-tile depth; the allocated K is a multiple of it
+  ##        (gemm_cta loops ceil(K/tileK) k-tiles, the last possibly
+  ##        partial)
   ##   mCTA, nCTA: the CTA grid coordinates, blockIdx.x/y. The tile
   ##        origin is m0 = mCTA·tileM, n0 = nCTA·tileN
   ##   threadIdx: the flat linear thread id in 0 ..< blockSize
   ##
   ## Preconditions:
-  ##   - K mod tileK == 0: the problem K is a multiple of the k-tile
-  ##     depth, so the CTA tile (which spans the full K) splits into an
-  ##     integer number of k-tiles
+  ##   - K <= kView: the problem K does not exceed the allocated K the
+  ##     views were built on (the launcher's contract; a runtime K above
+  ##     kView would read past the buffer)
+  ##   - the view K (ShA.default[1]) is a multiple of tileK, enforced by
+  ##     the static assert below (local_tile needs an even tile grid)
   ##   - the CTA grid covers 0 ..< ceil(M/tileM) by 0 ..< ceil(N/tileN),
   ##     so m0 < M and n0 < N for every launched CTA (the launcher's
   ##     contract)
@@ -418,22 +452,22 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   ##     accumulated tile. Only the elements inside the valid (M, N)
   ##     range of the tile are stored
   ##   - A and B are unmodified
-  const K = toIntVal(ShA.default[1])
+  ##
+  ## K = 0 runs zero k-tiles: the accumulator stays zero and the
+  ## epilogue stores β·C, which is the semantically correct result (no
+  ## guard needed).
+  const kView = toIntVal(ShA.default[1])   # the allocated K extent, from the view types
   const
     tileM = TileShape[0]
     tileN = TileShape[1]
     tileK = TileShape[2]      # the k-tile depth
-    kTiles = K div tileK      # the k-tile count
   static:
-    doAssert K mod tileK == 0,
-      "gemm_cta: problem K (" & $K & ") mod k-tile depth (" & $tileK & ") != 0. The CTA" &
-      " tile spans the whole problem K; gemm_cta slices it into K div tileK k-tiles," &
-      " so the problem K must be a multiple of tileK"
     doAssert ShA.default[1] === ShB.default[1],
-      "gemm_cta: the A and B problem views must agree on K (" & $K & " vs " &
-      $toIntVal(ShB.default[1]) & "). The k-tile grid is sliced with K from the A view"
-    doAssert K > 0,
-      "gemm_cta: problem K (" & $K & ") must be positive. K = 0 would give zero k-tiles"
+      "gemm_cta: the A and B problem views must agree on the allocated K (" & $kView & " vs " &
+      $toIntVal(ShB.default[1]) & "). The k-tile grid is sliced with the A view's K"
+    doAssert kView mod tileK == 0,
+      "gemm_cta: the allocated K (" & $kView & ") mod k-tile depth (" & $tileK & ") != 0." &
+      " local_tile needs the view K to tile evenly into tileK-deep tiles"
     doAssert Epi is Epilogue,
       "gemm_cta: the epilogue op must satisfy the Epilogue concept (preflight + 2-arg apply)"
 
@@ -462,20 +496,27 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   # ------------
   # Each iteration pulls one k-tile view out of the problem views:
   #
-  #   (M, K) view ── local_tile((tileM, tileK), (mCTA, kCTA)) ──▶ (tileM, tileK)
-  #   (N, K) view ── local_tile((tileN, tileK), (nCTA, kCTA)) ──▶ (tileN, tileK)
+  #   (M, kView) view ── local_tile((tileM, tileK), (mCTA, kCTA)) ──▶ (tileM, tileK)
+  #   (N, kView) view ── local_tile((tileN, tileK), (nCTA, kCTA)) ──▶ (tileN, tileK)
   #                              │                                       │
   #                              ▼                                       ▼
-  #              K chunked into tileK-deep tiles              gemm_tiled(dFrag, ...)
-  #                  (a grid of tiles over M × K)
+  #              kView chunked into tileK-deep tiles            gemm_tiled(dFrag, ...)
+  #                  (a grid of tiles over M × kView)
   #
   #   The coord slices one tile, the offset comes from crd2idx.
-  #   The divide is compile-time,
-  #   so only the tile offset is computed per iteration.
+  #   The k-tile count is runtime: ceil(K/tileK). Under the
+  #   K <= kView contract the loop never slices past the view's even
+  #   tile grid, so the local_tile coords stay in range.
+  #
+  #   The last k-tile may be partial (ragged K): validK = K - kCTA·tileK
+  #   < tileK, and gemm_tiled's predicated gather zero-fills the
+  #   k >= validK coordinates.
+  let kTiles = (K + tileK - 1) div tileK
   for kCTA in 0 ..< kTiles:
     let tA = local_tile(A, (tileM, tileK), (mCTA, kCTA))
     let tB = local_tile(B, (tileN, tileK), (nCTA, kCTA))
-    tma.gemm_tiled(dFrag, tA, tB, TileShape, threadIdx, validM, validN)
+    let validK = min(tileK, K - kCTA * tileK)
+    tma.gemm_tiled(dFrag, tA, tB, TileShape, threadIdx, validM, validN, validK)
 
   # Fused epilogue
   # --------------

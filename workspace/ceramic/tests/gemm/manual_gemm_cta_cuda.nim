@@ -66,7 +66,7 @@ const kernelCode = cuda:
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
   proc gemmCtaIdentityKernel(
       C: ptr UncheckedArray[float32],
@@ -84,7 +84,7 @@ const kernelCode = cuda:
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiIdentity()
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
 const kernelCodeBias = cuda:
   proc gemmCtaReLUKernel(
@@ -103,7 +103,7 @@ const kernelCodeBias = cuda:
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiReLU()
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
   proc gemmCtaBiasKernel(
       C: ptr UncheckedArray[float32],
@@ -130,7 +130,7 @@ const kernelCodeBias = cuda:
     let pBias = make_view(bias, (64, 32), (0, 1))
     var biasView = tiled.partition_C(thr, local_tile(pBias, (32, 16), (mCTA, nCTA)))
     var epi = initEpiAddBias(biasView)
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
 const kernelCodeSingle = cuda:
   proc gemmCtaKernelSingle(
@@ -145,7 +145,7 @@ const kernelCodeSingle = cuda:
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, 32, 16, epi, (32, 16, 32), 0, 0, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 32, 16, 32, epi, (32, 16, 32), 0, 0, int(threadIdx.x))
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

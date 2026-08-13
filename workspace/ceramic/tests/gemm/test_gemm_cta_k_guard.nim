@@ -1,17 +1,24 @@
-## Compile-time guard: gemm_cta requires problem K to be a multiple of
-## TileShape.K (the k-tile depth tileK).
+## Compile-time guard: gemm_cta's K contract: the VIEW K (kView, the
+## allocated extent) must be a multiple of TileShape.K (the k-tile depth
+## tileK); the PROBLEM K is runtime.
 ##
 ## gemm_cta slices the CTA tile (which spans the whole problem K) into
-## K div tileK k-tiles (the K dimension chunked into tileK-deep tiles) and
-## loops them, so a problem K that is not a multiple of tileK cannot be
-## tiled: the static `doAssert K mod tileK == 0` rejects it loudly.
+## ceil(K/tileK) k-tiles (the K dimension chunked into tileK-deep tiles)
+## and loops them; the last k-tile may be partial (ragged K), its
+## k >= validK coordinates gather zeros (the residue, runtime
+## predication). The view K must still tile evenly: local_tile needs an
+## even (M, kView) tile grid, so the static `doAssert kView mod tileK
+## == 0` rejects a mis-allocated view K loudly. A problem K that is not
+## a multiple of tileK is legal: the residue k-tile is predicated at
+## runtime.
 ##
-## Positive cases must compile (K == tileK: one k-tile, and K = 2·tileK:
-## two k-tiles. The non-multiple case must not. Ragged M/N (problem dims
-## not multiples of the tile dims) and padded (non-compact) leading
-## strides must also compile: phase 3 moved those from static rejections
-## to runtime predication. CPU-runnable: the guard is a static doAssert
-## (the gemm_mma asm body is never invoked here).
+## Positive cases must compile: kView == tileK (one k-tile, K = kView),
+## kView = 2·tileK with K = kView (two exact k-tiles), kView = 2·tileK
+## with K = tileK + 16 (two k-tiles, ragged residue), and ragged
+## M/N + padded (non-compact) leading
+## strides with a runtime K. The non-multiple view K and the A/B view K
+## mismatch must not compile. CPU-runnable: the guard is a static
+## doAssert (the gemm_mma asm body is never invoked here).
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -44,24 +51,31 @@ proc main() =
   var tCv = tiled.partition_C(thr, tC)
   var epi = initEpiAXPBY(1.0'f32, 0.0'f32, tCv)
 
-  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 32), (1, 64)), make_view(B, (32, 32), (1, 32)), 64, 32, epi, (32, 16, 32), 0, 0, 0)),
-    "gemm_cta with problem K == TileShape.K (one k-tile) must compile"
-  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 64), (1, 64)), make_view(B, (32, 64), (1, 32)), 64, 32, epi, (32, 16, 32), 0, 0, 0)),
-    "gemm_cta with problem K = 2·TileShape.K (two k-tiles) must compile"
-  doAssert not compiles(gemm_cta(tiled, tCv, make_view(A, (64, 48), (1, 64)), make_view(B, (32, 48), (1, 32)), 64, 32, epi, (32, 16, 32), 0, 0, 0)),
-    "gemm_cta must reject problem K (48) not a multiple of TileShape.K (32). The k-tile loop needs K = kTiles·tileK"
-  doAssert not compiles(gemm_cta(tiled, tCv, make_view(A, (64, 64), (1, 64)), make_view(B, (32, 32), (1, 32)), 64, 32, epi, (32, 16, 32), 0, 0, 0)),
-    "gemm_cta must reject A and B views that disagree on K (A K = 64, B K = 32). The k-tile grid is sliced with K from the A view only"
+  # kView == tileK with problem K == kView: one k-tile
+  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 32), (1, 64)), make_view(B, (32, 32), (1, 32)), 64, 32, 32, epi, (32, 16, 32), 0, 0, 0)),
+    "gemm_cta with kView == TileShape.K and problem K == kView (one k-tile) must compile"
+  # kView = 2·tileK with problem K == kView: two exact k-tiles
+  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 64), (1, 64)), make_view(B, (32, 64), (1, 32)), 64, 32, 64, epi, (32, 16, 32), 0, 0, 0)),
+    "gemm_cta with kView = 2·TileShape.K and problem K == kView (two k-tiles) must compile"
+  # kView = 2·tileK with problem K = 48: two k-tiles, the second partial
+  # (ragged K, residue 16): runtime predication
+  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 64), (1, 64)), make_view(B, (32, 64), (1, 32)), 64, 32, 48, epi, (32, 16, 32), 0, 0, 0)),
+    "gemm_cta with a problem K (48) not a multiple of TileShape.K must compile: the residue is runtime predication"
+  # kView not a multiple of tileK: local_tile cannot tile the view K
+  doAssert not compiles(gemm_cta(tiled, tCv, make_view(A, (64, 48), (1, 64)), make_view(B, (32, 48), (1, 32)), 64, 32, 48, epi, (32, 16, 32), 0, 0, 0)),
+    "gemm_cta must reject a view K (48) not a multiple of TileShape.K (32). local_tile needs the allocated K to tile evenly"
+  doAssert not compiles(gemm_cta(tiled, tCv, make_view(A, (64, 64), (1, 64)), make_view(B, (32, 32), (1, 32)), 64, 32, 64, epi, (32, 16, 32), 0, 0, 0)),
+    "gemm_cta must reject A and B views that disagree on the allocated K (A kView = 64, B kView = 32). The k-tile grid is sliced with the A view's K"
 
-  # Phase 3: ragged M/N and padded leading strides are runtime predication,
-  # not compile-time rejections.
-  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (48, 32), (1, 48)), make_view(B, (32, 32), (1, 32)), 48, 32, epi, (32, 16, 32), 0, 0, 0)),
+  # Ragged M/N and padded leading strides with a runtime K are runtime
+  # predication, not compile-time rejections.
+  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (48, 32), (1, 48)), make_view(B, (32, 32), (1, 32)), 48, 32, 32, epi, (32, 16, 32), 0, 0, 0)),
     "gemm_cta with ragged M (48, tileM 32) must compile: boundary tiles are predicated at runtime"
-  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 32), (1, 64)), make_view(B, (48, 32), (1, 48)), 64, 48, epi, (32, 16, 32), 0, 0, 0)),
+  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 32), (1, 64)), make_view(B, (48, 32), (1, 48)), 64, 48, 32, epi, (32, 16, 32), 0, 0, 0)),
     "gemm_cta with ragged N (48, tileN 16) must compile: boundary tiles are predicated at runtime"
-  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 32), (1, 80)), make_view(B, (32, 32), (1, 48)), 64, 32, epi, (32, 16, 32), 0, 0, 0)),
-    "gemm_cta with padded leading strides (ldA 80, ldB 48) must compile: compactness is a runtime launcher property"
+  doAssert compiles(gemm_cta(tiled, tCv, make_view(A, (64, 64), (1, 80)), make_view(B, (32, 64), (1, 48)), 64, 32, 48, epi, (32, 16, 32), 0, 0, 0)),
+    "gemm_cta with padded leading strides (ldA 80, ldB 48) and a ragged runtime K must compile: compactness and the K residue are runtime properties"
 
-  echo "  [OK] gemm_cta K guard: K == tileK and K = 2·tileK compile, K not a multiple of tileK rejected, A/B K mismatch rejected, ragged M/N and padded strides compile"
+  echo "  [OK] gemm_cta K guard: kView == tileK and kView = 2·tileK compile, ragged runtime K (residue) compiles, view K not a multiple of tileK rejected, A/B kView mismatch rejected, ragged M/N and padded strides compile"
 
 main()

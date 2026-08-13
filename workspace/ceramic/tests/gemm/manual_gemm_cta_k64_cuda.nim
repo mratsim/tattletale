@@ -56,7 +56,7 @@ const kernelCode = cuda:
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 64, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

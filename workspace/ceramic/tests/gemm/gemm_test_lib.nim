@@ -546,27 +546,32 @@ proc testGemmCtaBias*[E](engine: var E; tiled: static TiledMma; label: string) =
 
 proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
                             label, kernelName: string;
-                            M, N, ldA, ldB, ldC: int;
+                            M, N, K, ldA, ldB, ldC, kView: static int;
                             alpha = 1.0'f32, beta = 0.0'f32) =
-  ## C(M×N) = α·A(M×K)·B(N×K) + β·C with runtime M/N and runtime leading
-  ## strides: the kernel receives M, N, ldA, ldB, ldC as arguments and
-  ## builds the problem views from them. gemm_cta covers the
-  ## ceil(M/tileM) × ceil(N/tileN) CTA grid. The buffers are padded to the
-  ## leading strides (the fixture at the compact m + k·ldA offsets), so the
-  ## views are non-compact when a stride exceeds the problem dim. A shape
-  ## with M mod tileM != 0 or N mod tileN != 0 exercises the ragged
-  ## boundary predication (zeros gathered outside the problem, only the
-  ## valid elements stored). Two checks guard the predication itself:
-  ## the pad region of C (rows m >= M, the guard columns n >= N) must stay
-  ## NaN after the run, so a store-mask false positive fails the test
-  ## instead of landing invisibly.
+  ## C(M×N) = α·A(M×K)·B(N×K) + β·C with runtime M/N/K and runtime
+  ## leading strides: the kernel receives M, N, K, ldA, ldB, ldC as
+  ## arguments and builds the problem views from them. gemm_cta covers
+  ## the ceil(M/tileM) × ceil(N/tileN) CTA grid. The buffers are padded
+  ## to the leading strides and to the ALLOCATED K (kView): the fixture
+  ## fills the K problem columns at the strided offsets, and the columns
+  ## K ..< kView are NaN-padded (0x7FC00000): a false-positive gather
+  ## in the ragged-K residue reads NaN into the accumulator and allClose
+  ## fails. The view K is kView (the kernel literal), the problem K is
+  ## runtime (at most kView).
+  ## A shape with M mod tileM != 0 or N mod tileN != 0 exercises the
+  ## ragged boundary predication (zeros gathered outside the problem,
+  ## only the valid elements stored); K mod tileK != 0 exercises the
+  ## ragged-K residue (the last k-tile is partial, its k >= validK
+  ## coordinates gather zeros). Two checks guard the predication itself:
+  ## the pad region of C (rows m >= M, the guard columns n >= N) must
+  ## stay NaN after the run, so a store-mask false positive fails the
+  ## test instead of landing invisibly.
   ##   - beta == 0: C is NaN-prefilled, a spurious C read fails
   ##   - beta != 0: C's valid region is prefilled with exact small ints,
   ##     the reference adds β·C, and the masked-off C reads are skipped
   ##     (the mask wraps the read)
   ## Bit-exact vs the tf32 reference.
   const
-    K = 32                          # the problem K, one k-tile deep
     TILE_K = 32                     # the k-tile depth
     thrM = toIntVal(tiled.threadLayout.shape[0])
     thrN = toIntVal(tiled.threadLayout.shape[1])
@@ -581,17 +586,32 @@ proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
     doAssert TILE_K mod (thrK * toIntVal(tiled.atom.mnk.k)) == 0,
       "testGemmCtaDynamic: the k-tile depth (" & $TILE_K &
       ") must be a multiple of thrK·atomK"
+  # kView and K are runtime params: their contract is checked at runtime
+  # (the kernel literal is pinned by the manual tests' static asserts)
+  doAssert kView mod TILE_K == 0,
+    "testGemmCtaDynamic: the allocated K (" & $kView &
+    ") must be a multiple of the k-tile depth (" & $TILE_K &
+    ") (the view K must tile evenly, gemm_cta's static contract)"
+  doAssert K <= kView,
+    "testGemmCtaDynamic: the problem K (" & $K &
+    ") must not exceed the allocated K (" & $kView & ")"
   let gridM = (M + TILE_M - 1) div TILE_M
   let gridN = (N + TILE_N - 1) div TILE_N
-  var rng = initRand(0xC0FFEE + M * 131 + N * 17 + ldA * 7)
+  var rng = initRand(0xC0FFEE + M * 131 + N * 17 + K * 11 + ldA * 7)
   for trial in 0 ..< 16:
     let A_fixture = tf32Fixture(rng, M, K)
     let B_fixture = tf32Fixture(rng, N, K)
 
     # padded buffers: the fixture at the strided offsets, the pad rows
-    # never read (the views cover only the problem M/N)
-    var A_gpu = newSeq[uint32](ldA * K)
-    var B_gpu = newSeq[uint32](ldB * K)
+    # never read (the views cover only the problem M/N), the K-pad
+    # columns K ..< kView NaN: a ragged-K false positive reads NaN
+    # into the accumulator
+    var A_gpu = newSeq[uint32](ldA * kView)
+    var B_gpu = newSeq[uint32](ldB * kView)
+    for m in 0 ..< ldA * kView:
+      A_gpu[m] = 0x7FC00000'u32
+    for m in 0 ..< ldB * kView:
+      B_gpu[m] = 0x7FC00000'u32
     for k in 0 ..< K:
       for m in 0 ..< M:
         A_gpu[m + k * ldA] = A_fixture[m + k * M]
@@ -620,7 +640,7 @@ proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
         for m in 0 ..< M:
           gpuC[m + n * ldC] = C_fixture[m + n * M]
     engine.run<<(gridM * gridN, blockSize)>>(kernelName, gpuC,
-               (A_gpu, B_gpu, int32(M), int32(N), int32(ldA), int32(ldB), int32(ldC),
+               (A_gpu, B_gpu, int32(M), int32(N), int32(K), int32(ldA), int32(ldB), int32(ldC),
                 alpha, beta))
 
     # repack the ldC-strided result into a compact (M, N) array
@@ -629,7 +649,7 @@ proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
       for m in 0 ..< M:
         compact[m + n * M] = gpuC[m + n * ldC]
     allClose(compact, C_ref, M, N,
-             "gemm_cta dynamic M=" & $M & " N=" & $N & " trial " & $trial)
+             "gemm_cta dynamic M=" & $M & " N=" & $N & " K=" & $K & " trial " & $trial)
 
     # the pad region must be untouched: any element outside the valid
     # (M, N) range still holding the NaN sentinel proves the store mask
@@ -641,8 +661,9 @@ proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
             "gemm_cta dynamic: a store wrote past the valid (M, N) range" &
             " (m=" & $m & ", n=" & $n & "), the store mask has a false positive"
 
-  echo "  OK: gemm_cta dynamic M=" & $M & " N=" & $N &
+  echo "  OK: gemm_cta dynamic M=" & $M & " N=" & $N & " K=" & $K &
+    " kView=" & $kView &
     " ldA=" & $ldA & " ldB=" & $ldB & " ldC=" & $ldC &
     " (α=" & $alpha & ", β=" & $beta & ") matches reference within 1e-4" &
     " (tf32-exact fixture, ", label, " atom, " & $gridM & "x" & $gridN &
-    " CTA grid, 16 trials, pad region verified NaN)"
+    " CTA grid, 16 trials, K-pad + pad region verified NaN)"

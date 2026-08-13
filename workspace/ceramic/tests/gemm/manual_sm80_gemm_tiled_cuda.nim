@@ -4,7 +4,7 @@
 ## (two k_blocks through gemm_ukernel), config (α, β) = (1.0, 0.0),
 ## 128 threads.
 ##
-## gemm_tiled(tma, dFrag, A, B, TileShape, threadIdx, validM, validN) =
+## gemm_tiled(tma, dFrag, A, B, TileShape, threadIdx, validM, validN, validK) =
 ## tiling + thread decomposition + fragment gathering (one k-tile:
 ## K == tileK) + the k_block loop in gemm_ukernel, accumulating into the
 ## caller's dFrag. Here validM/validN are the full tile dims (TILE_M,
@@ -74,7 +74,7 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   # epilogue runs once after (gemm_cta owns this in the production path)
   var dFrag = make_tensor(float32, tCv.layout.shape)
   dFrag.fillWith(float32(0))
-  tma.gemm_tiled(dFrag, tA, tB, (TILE_M, TILE_N, TILE_K), threadIdx, TILE_M, TILE_N)
+  tma.gemm_tiled(dFrag, tA, tB, (TILE_M, TILE_N, TILE_K), threadIdx, TILE_M, TILE_N, TILE_K)
   epi.preflight()
   var res = make_tensor(float32, dFrag.layout.shape)
   epi.apply(res, dFrag)
@@ -106,7 +106,7 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
   # epilogue runs once after (gemm_cta owns this in the production path)
   var dFrag = make_tensor(float32, tCv.layout.shape)
   dFrag.fillWith(float32(0))
-  tma.gemm_tiled(dFrag, tA, tB, (TILE_M, TILE_N, TILE_K), threadIdx, TILE_M, TILE_N)
+  tma.gemm_tiled(dFrag, tA, tB, (TILE_M, TILE_N, TILE_K), threadIdx, TILE_M, TILE_N, TILE_K)
   epi.preflight()
   var res = make_tensor(float32, dFrag.layout.shape)
   epi.apply(res, dFrag)
