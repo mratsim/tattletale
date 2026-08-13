@@ -46,7 +46,7 @@
 ## skips the masked-off elements, so the padding outside the problem is
 ## never written. The math is never predicated: the elements outside the
 ## valid extent are computed like any other (their A/B operands were
-## zero-filled by the ragged gather) but not stored.
+## zero-filled at the gmem → smem load) but not stored.
 ##
 ## ── Contract ──
 ## Each op must provide:
@@ -56,7 +56,7 @@
 ##                            (cp.async / TMA pending). All shipped ops
 ##                            have no-op stubs: operands are read
 ##                            per-thread from gmem in `apply` (direct
-##                            register→gmem is the default; smem staging
+##                            register→gmem is the default. smem staging
 ##                            is future LoadKind work).
 ##
 ##   `apply(op, res, AB)`     The epilogue math, pure: writes the result
@@ -73,7 +73,7 @@
 ##   `storeMask*: int`, bit i set = fragment element i is inside the
 ##   valid (M, N) range of the tile and may be stored. Defaults to all
 ##   bits set (no predication). gemm_cta overwrites it on ragged
-##   boundary tiles; `finalStore` skips the masked-off stores.
+##   boundary tiles. `finalStore` skips the masked-off stores.
 ##
 ## res and AB share the shape type Sh: the compiler enforces equal shapes,
 ## a mismatched shape is a type error. They do not have to have the same types
@@ -106,7 +106,7 @@ type Epilogue* = concept
   ## The concept: an Epilogue computes the output tile with the two
   ## members `apply(res, AB)` (the math) and `finalStore(res, D)` (the
   ## store). res and AB share the shape type Sh.
-  ## Any user-defined type with both members is an epilogue; the shipped
+  ## Any user-defined type with both members is an epilogue. The shipped
   ## ops are examples, not a closed zoo. `finalStore` is satisfied by a
   ## single generic implementation shared by every op (see below).
   ##
@@ -121,7 +121,7 @@ type Epilogue* = concept
   ##   `storeMask*: int`, bit i set = fragment element i is inside the
   ##   valid (M, N) range of the tile and may be stored. Defaults to all
   ##   bits set (no predication). gemm_cta overwrites it on ragged
-  ##   boundary tiles; `finalStore` skips the masked-off stores.
+  ##   boundary tiles. `finalStore` skips the masked-off stores.
   proc apply(op: Self, res: var (TensorView or Tensor), AB: TensorView or Tensor)
   proc finalStore(op: Self, res: (TensorView or Tensor), D: var (TensorView or Tensor))
 
@@ -165,7 +165,7 @@ type EpiAXPBY*[T, Sh, StC] = object
     ## Store predication: bit i set = fragment element i is inside the
     ## valid (M, N) range of the tile and may be stored. All bits set by
     ## default (no predication). gemm_cta computes it for ragged boundary
-    ## tiles; `finalStore` skips the masked-off stores.
+    ## tiles. `finalStore` skips the masked-off stores.
   # C_smem: ptr UncheckedArray[T]
   #   Future: cp.async / TMA smem staging of C. For now C is read
   #   per-thread from gmem in `apply`: no staging, no race.
@@ -182,7 +182,7 @@ func initEpiAXPBY*[T, Sh, StC](
 
 template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
   ## No-op: C is read per-thread from gmem in `apply` (direct
-  ## register→gmem). cp.async / TMA smem staging is pending;
+  ## register→gmem). cp.async / TMA smem staging is pending.
   ## when it lands, this template injects the {.shared.} staging buffer
   ## into the caller scope and fills it here.
   discard
@@ -260,7 +260,7 @@ func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, 
 
 template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
   ## No-op: bias is read per-thread from gmem in `apply` (direct
-  ## register→gmem). cp.async / TMA smem staging is pending;
+  ## register→gmem). cp.async / TMA smem staging is pending.
   ## when it lands, this template injects the {.shared.} staging buffer
   ## into the caller scope and fills it here.
   discard

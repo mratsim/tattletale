@@ -51,3 +51,4 @@ proc memcpy*(dst, src: pointer, size: int) {.builtin.} = discard
 proc malloc*(size: csize_t): pointer {.builtin.}  = discard
 proc free*(p: pointer) {.builtin.} = discard
 proc syncthreads*() {.cudaName: "__syncthreads", builtin.} = discard
+proc cvtaGenericToShared*(p: pointer): uint32 {.cudaName: "__cvta_generic_to_shared", builtin.} = discard

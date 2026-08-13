@@ -48,7 +48,7 @@
 ## no static/runtime branch (NVRTC folds the static leaves).
 ##
 ## Reference semantics: tensor-layouts `tile_mma_grid` (layout_utils.py)
-## enumerates the same (thread, v, rest) → offset grid; the values here
+## enumerates the same (thread, v, rest) → offset grid. The values
 ## are cross-checked against CuTe's own partition output (host-extracted).
 
 import ./int_tuples
@@ -170,8 +170,9 @@ func thrfrg_C*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
 #  get_slice — the per-thread decomposition (CuTe: ThrMMA)
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  CuTe: thr_mma = mma.get_slice(threadIdx.x);  tCsA = thr_mma.partition_A(sA)
-#  The partition layouts above are the (T,V),(Thr,Rest) grid; the kernel
+#  CuTe: thr_mma = mma.get_slice(threadIdx.x)
+#        tCsA = thr_mma.partition_A(sA)
+#  The partition layouts above are the (T,V),(Thr,Rest) grid. The kernel
 #  needs the THREAD'S slice of that grid. get_slice decomposes the flat
 #  thread index ONCE (CuTe: thr_layout_vmnk.get_flat_coord), the
 #  partition_* overloads below cut the partition at the decomposed
@@ -188,7 +189,7 @@ type ThrSlice* = object
 
 func get_slice*(tma: static TiledMma; threadIdx: int): ThrSlice {.inline.} =
   ## Decompose the flat thread index once per thread (CuTe: mma.get_slice(
-  ## threadIdx.x)). threadIdx in 0 ..< T·ThrM·ThrN·ThrK; the decomposition
+  ## threadIdx.x)). threadIdx in 0 ..< T·ThrM·ThrN·ThrK. The decomposition
   ## order matches CuTe's (ThrV fastest):
   ##   threadIdx = tv + T·(tm + ThrM·(tn + ThrN·tk))
   const T = tma.atom.threadCount(opA)
@@ -214,7 +215,7 @@ func partition_A*[T, Sh, St](
     A: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
   ## The thread's A-fragment view (CuTe: thr_mma.partition_A(atensor)) —
   ## method-call syntax: `tma.partition_A(thr, A)`.
-  ## The partition layout is thrfrg_A; this slices it at the thread's
+  ## The partition layout is thrfrg_A. This slices it at the thread's
   ## (T, (ThrM, ThrK)) coordinate, keeping every value mode. The result's
   ## flat order is the register-fragment order the gather copies straight
   ## into the mma fragment.
@@ -269,52 +270,18 @@ func partition_C*[T, Sh, St](
   thrTensor(((tsel, vsel), (thr.tm, thr.tn), rsel))
 
 
-# ═══════════════════════════════════════════════════════════════
-#  make_fragment_A/B/C — fragment tensors from partition views
-# ═══════════════════════════════════════════════════════════════
-#  The fragment is a tensor shaped like the partition view, with the V
-#  mode in the atom's register order (stride-1, the hardware enumeration
-#  of the atom's registers) and the rest modes kept in the view's order.
-#  The partition view's mode-0 is the atom's (T, V) layout composed in
-#  partition_A/B/C above, so make_fragment_like(view.layout, V shape)
-#  pins V to stride-1 and keeps the rest modes' order, decoupling the
-#  fragment from the operand's strides (row-major included).
-#
-#  API: make_fragment_A(mma, partitionView). The V boundary comes from
-#  the atom's aLayout (mma.aLayout.shape[1] is passed to
-#  make_fragment_like internally).
-
-template make_fragment_A*[T, Sh, St](
-    mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
-  ## The thread's A fragment: V flattened to atom register order
-  ## (stride-1), rest modes compact by the view's order. The V boundary
-  ## comes from the atom's aLayout (V shape value).
-  make_tensor(T, make_fragment_like(t.layout, mma.aLayout.shape[1]))
-
-template make_fragment_B*[T, Sh, St](
-    mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
-  ## The thread's B fragment (see make_fragment_A).
-  make_tensor(T, make_fragment_like(t.layout, mma.bLayout.shape[1]))
-
-template make_fragment_C*[T, Sh, St](
-    mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
-  ## The thread's C fragment: the compact (V, RestM, RestN) fragment
-  ## derived from the partition view with V = atom cLayout order.
-  make_tensor(T, make_fragment_like(t.layout, mma.cLayout.shape[1]))
-
 # ═════════════════════════════════════════════════════════════════════════
-#  Fragment tile coordinates — the ragged-tile predication
+#  cStoreMask: the store predication
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  A boundary tile (problem M, N or K not a multiple of the tile dims)
-#  computes the full static tile with zeros outside the problem, and only
-#  the elements inside the problem are stored. The gather and the store
-#  predicate each fragment element on its coordinate in the tile. The
-#  coordinate of the fragment element at flat index i comes from the
-#  layouts, never from hand-rolled register-pattern math:
+#  cStoreMask predicates the store on each C-fragment element's
+#  coordinate in the tile. The coordinate of the element at flat index i
+#  comes from the layouts, never from hand-rolled register-pattern math.
+#  CUTLASS has no decode function: the store derives each element's
+#  tile coordinate by partitioning the tile's identity layout,
+#  PredicatedTileIterator-style, with no data strides.
 #
-#    v = i mod V                        the register position (the V-mode
-#                                       is the innermost fragment mode)
+#    v = i mod V                        the register position (V-mode)
 #    off = crd2idx(p, coords)           the tile offset from the partition
 #                                       layout at the thread's coordinates
 #    (row, col) = idx2crd(tileL, off)   the tile coordinate from the tile
@@ -322,147 +289,9 @@ template make_fragment_C*[T, Sh, St](
 #
 #  The partition layout is built with compact strides: the tile
 #  coordinates are stride-independent. The exact-coverage contract
-#  (tileM === thrM·atomM, tileN === thrN·atomN, asserted below and in
-#  gemm_tiled) makes the fragment rest modes empty (RestM == RestN == 1),
-#  so the M/N helpers pass the rest coordinates (0, 0).
-#
-#  The ragged-K helpers (aFragmentTileCoord / bFragmentTileCoord) decode
-#  the full tile K as well. The fragment flat order is (V, RestM, RestK)
-#  with V innermost, so the RestK coordinate of element i is i div V. The
-#  partition is built from the full (tileM, tileK) / (tileN, tileK) tile
-#  and the rest coordinate (0, i div V) is passed through the partition's
-#  rest modes, so the second returned coordinate is the tile K
-#  (0 ..< tileK), not the within-unitK K the compact (tileM, unitK) tile
-#  of the row/col helpers would produce.
-
-func fragmentTileCoord*[A, P, TL](atomLayout: A; tsel: auto;
-                        thrCoords: (int, int); p: P; tileL: TL;
-                        i: int; rest: (int, int) = (0, 0)): (int, int) =
-  ## The tile (row, col) of fragment element i, decoded through the
-  ## layouts (see the section doc). `atomLayout` is the atom's (T, V)
-  ## fragment layout, `p` the partition layout, `tileL` the tile layout.
-  ## `rest` is the element's rest-mode coordinate: (0, 0) for the M/N
-  ## helpers (the exact-coverage contract leaves no rest modes), or
-  ## (0, restK) for the ragged-K helpers (restK = i div V, V the atom's
-  ## values-per-thread), which makes the returned column the full tile K.
-  let V = product(atomLayout.shape[1])
-  let vcoords = idx2crd(atomLayout.shape[1], i mod V)
-  let off = crd2idx(p, ((tsel, vcoords), thrCoords, rest))
-  idx2crd(tileL, off)
-
-func aFragmentTileRow*(tma: static TiledMma; thr: ThrSlice;
-                       tileM: static int; i: int): int =
-  ## The tile row of the A-fragment element at flat index i. This is the
-  ## ragged-M gather predicate: the element reads gmem only when its row
-  ## is inside the problem (row < validM), otherwise it gathers 0.
-  ## See fragmentTileCoord for the decode.
-  const
-    aLayout = tma.atom.aLayout
-    atomM = tma.atom.mnk.m
-    atomK = tma.atom.mnk.k
-    thrM = tma.threadLayout.shape[0]
-    thrK = tma.threadLayout.shape[2]
-    unitK = thrK * atomK
-  static:
-    doAssert tileM === thrM * atomM,
-      "aFragmentTileRow: tileM (" & $tileM & ") != thrM·atomM (" & $thrM & "·" & $atomM &
-        "). The partition contract gives the fragment no rest modes"
-  const tileL = make_layout((tileM, unitK), (1, tileM))
-  const pA = thrfrg_A(tma, tileL)
-  let tsel = idx2crd(aLayout.shape[0], thr.tv)
-  fragmentTileCoord(aLayout, tsel, (thr.tm, thr.tk), pA, tileL, i)[0]
-
-func bFragmentTileCol*(tma: static TiledMma; thr: ThrSlice;
-                       tileN: static int; i: int): int =
-  ## The tile column of the B-fragment element at flat index i. This is
-  ## the ragged-N gather predicate: the element reads gmem only when its
-  ## column is inside the problem (col < validN), otherwise it gathers 0.
-  ## See fragmentTileCoord for the decode.
-  const
-    bLayout = tma.atom.bLayout
-    atomN = tma.atom.mnk.n
-    atomK = tma.atom.mnk.k
-    thrN = tma.threadLayout.shape[1]
-    thrK = tma.threadLayout.shape[2]
-    unitK = thrK * atomK
-  static:
-    doAssert tileN === thrN * atomN,
-      "bFragmentTileCol: tileN (" & $tileN & ") != thrN·atomN (" & $thrN & "·" & $atomN &
-        "). The partition contract gives the fragment no rest modes"
-  const tileL = make_layout((tileN, unitK), (1, tileN))
-  const pB = thrfrg_B(tma, tileL)
-  let tsel = idx2crd(bLayout.shape[0], thr.tv)
-  fragmentTileCoord(bLayout, tsel, (thr.tn, thr.tk), pB, tileL, i)[0]
-
-func aFragmentTileCoord*(tma: static TiledMma; thr: ThrSlice;
-                         tileM, tileK: static int; i: int): (int, int) =
-  ## The tile (row, k) of the A-fragment element at flat index i, one
-  ## decode for both ragged predicates: the ragged-M gather predicate
-  ## (row < validM) and the ragged-K gather predicate (k < validK). The
-  ## element reads gmem only when both hold, otherwise the gather
-  ## zero-fills it. gemm_tiled uses this in the ragged path of the k-tile
-  ## gather; see fragmentTileCoord for the decode.
-  ##
-  ## The returned k is the full tile K (0 ..< tileK), not the
-  ## within-unitK K of the row-only helpers: the partition is built from
-  ## the full (tileM, tileK) tile and the fragment's RestK coordinate
-  ## (restK = i div V, V = the atom's values-per-thread, the fragment
-  ## flat order is (V, RestM, RestK) with V innermost and RestM == 1
-  ## under the exact-coverage contract) is passed through the partition's
-  ## rest modes.
-  const
-    aLayout = tma.atom.aLayout
-    atomM = tma.atom.mnk.m
-    atomK = tma.atom.mnk.k
-    thrM = tma.threadLayout.shape[0]
-    thrK = tma.threadLayout.shape[2]
-    V = product(aLayout.shape[1])
-  static:
-    doAssert tileM === thrM * atomM,
-      "aFragmentTileCoord: tileM (" & $tileM & ") != thrM·atomM (" & $thrM & "·" & $atomM &
-        "). The partition contract gives the fragment no RestM modes"
-    doAssert tileK mod (thrK * atomK) === 0,
-      "aFragmentTileCoord: tileK (" & $tileK & ") mod (thrK·atomK) (" & $thrK & "·" & $atomK &
-        ") != 0. The rest-K decode needs an even k_block grid"
-  const tileL = make_layout((tileM, tileK), (1, tileM))
-  const pA = thrfrg_A(tma, tileL)
-  let tsel = idx2crd(aLayout.shape[0], thr.tv)
-  fragmentTileCoord(aLayout, tsel, (thr.tm, thr.tk), pA, tileL, i, (0, i div V))
-
-func bFragmentTileCoord*(tma: static TiledMma; thr: ThrSlice;
-                         tileN, tileK: static int; i: int): (int, int) =
-  ## The tile (col, k) of the B-fragment element at flat index i, one
-  ## decode for both ragged predicates: the ragged-N gather predicate
-  ## (col < validN) and the ragged-K gather predicate (k < validK). The
-  ## element reads gmem only when both hold, otherwise the gather
-  ## zero-fills it. gemm_tiled uses this in the ragged path of the k-tile
-  ## gather; see fragmentTileCoord for the decode.
-  ##
-  ## The returned k is the FULL tile K (0 ..< tileK), not the
-  ## within-unitK K of the column-only helpers: the partition is built
-  ## from the full (tileN, tileK) tile and the fragment's RestK
-  ## coordinate (restK = i div V, V = the atom's values-per-thread, the
-  ## fragment flat order is (V, RestN, RestK) with V innermost and
-  ## RestN == 1 under the exact-coverage contract) is passed through the
-  ## partition's rest modes.
-  const
-    bLayout = tma.atom.bLayout
-    atomN = tma.atom.mnk.n
-    atomK = tma.atom.mnk.k
-    thrN = tma.threadLayout.shape[1]
-    thrK = tma.threadLayout.shape[2]
-    V = product(bLayout.shape[1])
-  static:
-    doAssert tileN === thrN * atomN,
-      "bFragmentTileCoord: tileN (" & $tileN & ") != thrN·atomN (" & $thrN & "·" & $atomN &
-        "). The partition contract gives the fragment no RestN modes"
-    doAssert tileK mod (thrK * atomK) === 0,
-      "bFragmentTileCoord: tileK (" & $tileK & ") mod (thrK·atomK) (" & $thrK & "·" & $atomK &
-        ") != 0. The rest-K decode needs an even k_block grid"
-  const tileL = make_layout((tileN, tileK), (1, tileN))
-  const pB = thrfrg_B(tma, tileL)
-  let tsel = idx2crd(bLayout.shape[0], thr.tv)
-  fragmentTileCoord(bLayout, tsel, (thr.tn, thr.tk), pB, tileL, i, (0, i div V))
+#  (tileM === thrM·atomM, tileN === thrN·atomN, asserted in cStoreMask)
+#  leaves the fragment rest modes empty (RestM == RestN == 1), so the
+#  rest coordinates are (0, 0).
 
 func cStoreMask*(tma: static TiledMma; thr: ThrSlice;
                  tileM, tileN: static int; validM, validN: int): int =
@@ -472,31 +301,27 @@ func cStoreMask*(tma: static TiledMma; thr: ThrSlice;
   ## extents (the min of the tile dim and the remaining problem extent)
   ## and stores it on the op, whose finalStore skips the masked-off
   ## stores (see kernel_gemm_epilogues). All bits set (no
-  ## predication) when the tile is fully inside the problem. See
-  ## fragmentTileCoord for the coordinate decode.
-  const
-    cLayout = tma.atom.cLayout
-    atomM = tma.atom.mnk.m
-    atomN = tma.atom.mnk.n
-    thrM = tma.threadLayout.shape[0]
-    thrN = tma.threadLayout.shape[1]
-    thrK = tma.threadLayout.shape[2]
-    blockSize = tma.atom.threadCount(opA) * thrM * thrN * thrK
-    fragSize = tileM * tileN div blockSize
+  ## predication) when the tile is fully inside the problem. The
+  ## coordinate derivation is inlined from the identity-layout
+  ## partition (see the section doc).
+  const cLayout = tma.atom.cLayout   # const: the codegen folds atom field access (case object)
+  const fragSize = tileM * tileN div tma.threadCount()
   static:
     doAssert fragSize <= 63,
       "cStoreMask: the C fragment (" & $fragSize &
       " elements per thread) exceeds the 63-bit store mask"
-    doAssert tileM === thrM * atomM and tileN === thrN * atomN,
+    doAssert tileM === tma.thrM * tma.atom.mnk.m and tileN === tma.thrN * tma.atom.mnk.n,
       "cStoreMask: the tile dims must be the thread layout's exact coverage" &
       " (the partition contract gives the fragment no rest modes)"
   const tileL = make_layout((tileM, tileN), (1, tileM))
   const pC = thrfrg_C(tma, tileL)
+  const V = product(cLayout.shape[1])
   let tsel = idx2crd(cLayout.shape[0], thr.tv)
   result = 0
   for i in 0 ..< fragSize:
-    let (m, n) = fragmentTileCoord(cLayout, tsel, (thr.tm, thr.tn),
-                                   pC, tileL, i)
+    let vcoords = idx2crd(cLayout.shape[1], i mod V)
+    let off = crd2idx(pC, ((tsel, vcoords), (thr.tm, thr.tn), (0, 0)))
+    let (m, n) = idx2crd(tileL, off)
     if m <= validM - 1 and n <= validN - 1:
       result = result or (1 shl i)
 

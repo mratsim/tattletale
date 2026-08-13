@@ -1,16 +1,14 @@
 ## Compile-time guard: gemm_cta's K contract: the VIEW K (kView, the
-## allocated extent) must be a multiple of TileShape.K (the k-tile depth
-## tileK); the PROBLEM K is runtime.
+## allocated extent) must be a multiple of TileShape.K, the k-tile depth
+## tileK. The PROBLEM K is runtime.
 ##
 ## gemm_cta slices the CTA tile (which spans the whole problem K) into
 ## ceil(K/tileK) k-tiles (the K dimension chunked into tileK-deep tiles)
-## and loops them; the last k-tile may be partial (ragged K), its
-## k >= validK coordinates gather zeros (the residue, runtime
-## predication). The view K must still tile evenly: local_tile needs an
-## even (M, kView) tile grid, so the static `doAssert kView mod tileK
-## == 0` rejects a mis-allocated view K loudly. A problem K that is not
-## a multiple of tileK is legal: the residue k-tile is predicated at
-## runtime.
+## and loops them. The last k-tile may be partial (ragged K), its
+## k >= validK coordinates zero-filled at the load. The view K
+## must tile evenly. The static `doAssert kView mod tileK == 0`
+## rejects a mis-allocated view K loudly. A problem K not a multiple
+## of tileK is legal, the residue k-tile predicated at runtime.
 ##
 ## Positive cases must compile: kView == tileK (one k-tile, K = kView),
 ## kView = 2·tileK with K = kView (two exact k-tiles), kView = 2·tileK
@@ -32,6 +30,7 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/src/kernel_gemm_epilogues
+import workspace/crucible
 
 {.experimental: "callOperator".}
 

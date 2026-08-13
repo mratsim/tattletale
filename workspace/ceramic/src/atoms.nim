@@ -27,7 +27,7 @@ type
   MmaDType* = enum
     ## Operand / accumulator / scale-factor dtypes.
     ## Ceramic's own contract (not crucible's GpuTypeKind): the atom record is
-    ## backend-agnostic data; the mapping to emitted C++ types happens at
+    ## backend-agnostic data. The mapping to emitted C++ types happens at
     ## emission time per backend.
     mdtF32, mdtF64,
     mdtTF32,          ## 32-bit storage (f32 width), 10-bit mantissa; carried as a
@@ -50,7 +50,7 @@ type
 
   ConversionPoint* = enum
     ## Where an integer accumulator converts to f32 × scale.
-    ## Atom-level accumulation property; llama.cpp uses both perBlock and
+    ## Atom-level accumulation property. llama.cpp uses both perBlock and
     ## endOfK, they differ in the last ulps.
     cpPerBlock, cpEndOfK
 
@@ -114,8 +114,8 @@ type
       isa*: SimdIsa
       nbScalars*: int                      ## scalar count per vector register row —
                                         ## semantics vary per ISA (AVX512/VNNI: 16 =
-                                        ## one zmm; NEON: 8/16 = one row of i32).
-                                        ## Prepared for the SIMD microkernel emitter;
+                                        ## one zmm. NEON: 8/16 = one row of i32).
+                                        ## Prepared for the SIMD microkernel emitter.
                                         ## not derived from mnk.
       nbVecsNr*: int                       ## vector registers per thread along N = mnk.n div
                                         ## lanes (lanes: NEON=4, AVX512/VNNI=16) — checked
@@ -130,6 +130,7 @@ type
     atom*: A
     threadLayout*: TL                      ## (ThrM, ThrN, ThrK) — atoms tiled across threads
 
+
 # ═════════════════════════════════════════════════════════════════════════
 #  Derived metadata (layout queries — no stored fields behind these)
 # ═════════════════════════════════════════════════════════════════════════
@@ -137,7 +138,7 @@ type
 func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto {.inline.} =
   ## Number of threads cooperating on the atom (the T-mode size of the
   ## fragment layout). All three operand layouts share the same T.
-  ## COMPILE-TIME: Int[N] for static layouts (CuTe: size(ThrID{}) → Int<32>);
+  ## COMPILE-TIME: Int[N] for static layouts (CuTe: size(ThrID{}) → Int<32>).
   ## callers needing a runtime int convert with toIntVal() explicitly.
   ## (fold/flatten on the shape tuple avoids the makeIntTuple macro quirk
   ## that `mode`/`size` hit on generic-typed const fields.)
@@ -149,7 +150,7 @@ func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOper
 func valuesPerThread*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto {.inline.} =
   ## Number of elements of one operand this thread holds in registers:
   ## the V-mode size of the (T, V) layout — tensor-layouts' "values per
-  ## thread" (value_id in tile_mma_grid); CuTe calls the same mode FrgV.
+  ## thread" (value_id in tile_mma_grid). CuTe calls the same mode FrgV.
   ## COMPILE-TIME: Int[N] for static layouts (CuTe: the V-mode of the
   ## fragment layout, checked against the arch op's register-array extent
   ## by CUTE_STATIC_ASSERT_V — mma_traits.hpp:141-144).
@@ -158,3 +159,25 @@ func valuesPerThread*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static Mma
   when operand == opA: cosize(atom.aLayout) div atom.threadCount(opA)
   elif operand == opB: cosize(atom.bLayout) div atom.threadCount(opB)
   else:                cosize(atom.cLayout) div atom.threadCount(opC)
+
+func thrM*(tma: static TiledMma): static int {.inline.} =
+  ## The thread tiling's M mode (CuTe: size<1>(thr_layout_vmnk_)).
+  ## static: folded at the call site, nothing emitted in the kernel.
+  toIntVal(tma.threadLayout.shape[0])
+
+func thrN*(tma: static TiledMma): static int {.inline.} =
+  ## The thread tiling's N mode (CuTe: size<2>(thr_layout_vmnk_)).
+  ## static: folded at the call site, nothing emitted in the kernel.
+  toIntVal(tma.threadLayout.shape[1])
+
+func thrK*(tma: static TiledMma): static int {.inline.} =
+  ## The thread tiling's K mode (CuTe: size<3>(thr_layout_vmnk_)).
+  ## static: folded at the call site, nothing emitted in the kernel.
+  toIntVal(tma.threadLayout.shape[2])
+
+func threadCount*(tma: static TiledMma): static int {.inline.} =
+  ## The total threads the TiledMma uses (CuTe: size(thr_layout_vmnk_),
+  ## the atom's threads times the (ThrM, ThrN, ThrK) tiling). The block
+  ## size of a kernel using this TiledMma. static: folded at the call
+  ## site, nothing emitted in the kernel.
+  toIntVal(tma.atom.threadCount(opA)) * tma.thrM * tma.thrN * tma.thrK

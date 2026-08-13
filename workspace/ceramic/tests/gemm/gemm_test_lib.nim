@@ -1,7 +1,7 @@
 ## Shared oracle harness for the manual_*_cuda GPU tests.
 ##
 ## The per-arch test files (manual_sm80_*, ...) differ only in
-## the atom + the driver kernel; the fixture generation, the tf32 reference
+## the atom + the driver kernel. The fixture generation, the tf32 reference
 ## oracle, the execute/verify loop and the report are factored here so each
 ## new SM is just `const atom = ...` + the driver funcs + the cuda block +
 ## a 4-line main.
@@ -32,7 +32,7 @@ proc allClose(testC, refC: openArray[float32];
                relTol = 1e-4'f32; absTol = 1e-4'f32) =
   ## Element-wise numpy.allclose check: |test - ref| <= absTol + relTol·|ref|
   ## (single condition, NaN never equal) — loud doAssert on the first
-  ## failure. Defaults are loose for the tf32 oracle domain; the current
+  ## failure. Defaults are loose for the tf32 oracle domain. The current
   ## gemm tests pass with maxAbsErr = 0 (fixture-exact), but the assertion
   ## is a tolerance — tighten per test if needed.
   var maxAbsErr: float32 = 0.0'f32
@@ -49,7 +49,7 @@ proc allClose(testC, refC: openArray[float32];
 # ═════════════════════════════════════════════════════════════════════════
 #  Reference oracles — the naive whole-tile GEMMs the GPU kernels are
 #  tested against. gemm_ref is the layout-generic outer product over
-#  TensorViews; gemm_tf32_ref is the flat-array tf32-exact oracle
+#  TensorViews. gemm_tf32_ref is the flat-array tf32-exact oracle
 #  (experiment_testutils convention).
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_ref(C, A, B) — whole-tile reference (outer product)
@@ -62,7 +62,7 @@ proc gemm_ref*[T, ShA, StA, ShB, StB, ShC, StC](
   ## Reference fragment gemm: C[m,n] += A[m,k] * B[n,k] (outer product).
   ## Correctness oracle for the GPU kernels — not a performance kernel.
   ## (Moved here from kernel_gemm_gpu.nim 2026-08-10 with the
-  ## gemm_fragment → gemm_atom rename; now a proc, not a template.)
+  ## gemm_fragment → gemm_atom rename, now a proc, not a template.)
   const
     M = ShC.default[0]
     N = ShC.default[1]
@@ -97,7 +97,7 @@ proc tf32Fixture(rng: var Rand; M, K: int): seq[uint32] =
   ## 24-bit mantissa — this is what makes the gemm tests bit-exact regardless
   ## of the mma pipe's internal accumulation order (see gemm_tf32_ref).
   ## Negatives are required so epilogues with a clamp (EpiReLU) see both
-  ## signs of the accumulator; a dropped clamp would then fail the test.
+  ## signs of the accumulator. A dropped clamp would then fail the test.
   doAssert K * 15 * 15 < 1 shl 24,
     "tf32Fixture: K·15² ≥ 2^24 — partial sums leave the f32 exact-representable" &
     " domain; the oracle would no longer be bit-exact"
@@ -117,7 +117,7 @@ proc gemm_tf32_ref*(C: var openArray[float32];
   ## detail. It comes from the fixture domain (0..15, tf32ified): every
   ## product and partial sum is exactly representable in f32, so ANY
   ## accumulation order — fmaf, mul+add, or the mma adder tree — yields the
-  ## identical exact result. fmaf is used merely for convenience; do NOT
+  ## identical exact result. fmaf is used merely for convenience. Do not
   ## extend this oracle to non-exact ranges (e.g. random floats) without
   ## switching the comparison to a tolerance check.
   for m in 0 ..< M:
@@ -143,8 +143,8 @@ proc gemm_tf32_ref*(C: var openArray[float32];
 
 proc microtileFixtures(atom: static MmaAtom; rng: var Rand): tuple[A, B: seq[uint32]] =
   ## One microtile trial's tf32 fixtures — the shared oracle. The NVRTC and
-  ## OpenCL drivers both call this (and verifyMicrotile); they differ ONLY
-  ## in the launch. The _cuda/_opencl files must not touch tf32Fixture or
+  ## OpenCL drivers both call this (and verifyMicrotile). They differ only in the launch.
+  ## The _cuda/_opencl files must not touch tf32Fixture or
   ## gemm_tf32_ref directly.
   const M = atom.mnk.m
   const N = atom.mnk.n
@@ -215,12 +215,12 @@ proc testTiled*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## read fails the check.
   const
     TILE_K = 16
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
     TILE_M = thrM * tiled.atom.mnk.m
     TILE_N = thrN * tiled.atom.mnk.n
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    blockSize = tiled.threadCount()
   var rng = initRand(0xC0FFEE)
   for trial in 0 ..< 16:
     let A_gpu = tf32Fixture(rng, TILE_M, TILE_K)
@@ -248,16 +248,16 @@ proc testTiled*[E](engine: var E; tiled: static TiledMma; label: string) =
 
 proc testTiledMultiBlock*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## The tiled GEMM with K = 32 (TILE_K = 32): four k_blocks accumulated
-  ## through one gemm_ukernel call — the full-K fragment must be gathered
-  ## completely before the k_block loop reads it.
+  ## through one gemm_ukernel call: the full-K fragment must be copied
+  ## from the staged smem tile completely before the k_block loop reads it.
   const
     TILE_K = 32
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
     TILE_M = thrM * tiled.atom.mnk.m
     TILE_N = thrN * tiled.atom.mnk.n
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    blockSize = tiled.threadCount()
   var rng = initRand(0xF1F1)
   for trial in 0 ..< 16:
     let A_gpu = tf32Fixture(rng, TILE_M, TILE_K)
@@ -292,10 +292,10 @@ proc testGemmCta*[E](engine: var E; tiled: static TiledMma; label: string) =
     TILE_M = 32
     TILE_N = 16
     TILE_K = 32
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
+    blockSize = tiled.threadCount()
   const alpha = 1.0'f32
   const beta = 0.0'f32
   var rng = initRand(0xC0FFEE)
@@ -329,10 +329,10 @@ proc testGemmCtaBeta*[E](engine: var E; tiled: static TiledMma; label: string) =
     TILE_M = 32
     TILE_N = 16
     TILE_K = 32
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
+    blockSize = tiled.threadCount()
   const alpha = 1.0'f32
   const beta = 1.0'f32
   var rng = initRand(0xBEEF)
@@ -371,10 +371,10 @@ proc testGemmCtaK64*[E](engine: var E; tiled: static TiledMma; label: string) =
     TILE_M = 32
     TILE_N = 16
     tileK = 32
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
+    blockSize = tiled.threadCount()
   const alpha = 1.0'f32
   const beta = 0.0'f32
   var rng = initRand(0x2B17)
@@ -408,10 +408,10 @@ proc testGemmCtaSingle*[E](engine: var E; tiled: static TiledMma; label: string)
     TILE_M = 32
     TILE_N = 16
     TILE_K = 32
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
+    blockSize = tiled.threadCount()
   const alpha = 1.0'f32
   const beta = 0.0'f32
   var rng = initRand(0xF1F1)
@@ -445,10 +445,10 @@ proc testGemmCtaIdentity*[E](engine: var E; tiled: static TiledMma; label: strin
     TILE_M = 32
     TILE_N = 16
     TILE_K = 32
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
+    blockSize = tiled.threadCount()
   var rng = initRand(0x10EA)
   for trial in 0 ..< 16:
     let A_gpu = tf32Fixture(rng, M, K)
@@ -472,7 +472,7 @@ proc testGemmCtaIdentity*[E](engine: var E; tiled: static TiledMma; label: strin
 proc testGemmCtaReLU*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## The EpiReLU grid epilogue: D = max(0, AB) over the same 2×2 CTA grid.
   ## The fixture domain -15..15 makes AB span negative values, so the clamp
-  ## is exercised; the NaN-prefilled D still catches dropped stores.
+  ## is exercised. The NaN-prefilled D still catches dropped stores.
   const
     M = 64
     N = 32
@@ -480,10 +480,10 @@ proc testGemmCtaReLU*[E](engine: var E; tiled: static TiledMma; label: string) =
     TILE_M = 32
     TILE_N = 16
     TILE_K = 32
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
+    blockSize = tiled.threadCount()
   var rng = initRand(0x2E4A)
   for trial in 0 ..< 16:
     let A_gpu = tf32Fixture(rng, M, K)
@@ -506,7 +506,7 @@ proc testGemmCtaReLU*[E](engine: var E; tiled: static TiledMma; label: string) =
 
 proc testGemmCtaBias*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## The EpiAddBias grid epilogue: D = AB + bias over the same 2×2 CTA
-  ## grid. The bias is a (N,) column vector; the kernel builds a stride-0
+  ## grid. The bias is a (N,) column vector. The kernel builds a stride-0
   ## broadcast view over the output fragment's shape, so every row of a
   ## column reads the same bias element. The fixture domain keeps D
   ## exact-representable.
@@ -517,10 +517,10 @@ proc testGemmCtaBias*[E](engine: var E; tiled: static TiledMma; label: string) =
     TILE_M = 32
     TILE_N = 16
     TILE_K = 32
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
+    blockSize = tiled.threadCount()
   var rng = initRand(0x4B1A5E)
   for trial in 0 ..< 16:
     let A_gpu = tf32Fixture(rng, M, K)
@@ -554,15 +554,16 @@ proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
   ## the ceil(M/tileM) × ceil(N/tileN) CTA grid. The buffers are padded
   ## to the leading strides and to the ALLOCATED K (kView): the fixture
   ## fills the K problem columns at the strided offsets, and the columns
-  ## K ..< kView are NaN-padded (0x7FC00000): a false-positive gather
+  ## K ..< kView are NaN-padded (0x7FC00000): a false-positive load
   ## in the ragged-K residue reads NaN into the accumulator and allClose
   ## fails. The view K is kView (the kernel literal), the problem K is
   ## runtime (at most kView).
   ## A shape with M mod tileM != 0 or N mod tileN != 0 exercises the
-  ## ragged boundary predication (zeros gathered outside the problem,
-  ## only the valid elements stored); K mod tileK != 0 exercises the
-  ## ragged-K residue (the last k-tile is partial, its k >= validK
-  ## coordinates gather zeros). Two checks guard the predication itself:
+  ## ragged boundary predication, where the masked load zero-fills
+  ## outside the problem and only the valid elements are stored.
+  ## K mod tileK != 0 exercises the ragged-K residue, the last k-tile
+  ## partial with its k >= validK coordinates zero-filled at the load.
+  ## Two checks guard the predication itself:
   ## the pad region of C (rows m >= M, the guard columns n >= N) must
   ## stay NaN after the run, so a store-mask false positive fails the
   ## test instead of landing invisibly.
@@ -573,15 +574,15 @@ proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
   ## Bit-exact vs the tf32 reference.
   const
     TILE_K = 32                     # the k-tile depth
-    thrM = toIntVal(tiled.threadLayout.shape[0])
-    thrN = toIntVal(tiled.threadLayout.shape[1])
-    thrK = toIntVal(tiled.threadLayout.shape[2])
+    thrM = tiled.thrM
+    thrN = tiled.thrN
+    thrK = tiled.thrK
     # the tile dims follow from the thread layout's exact coverage, the
-    # same contract gemm_tiled asserts; the CUDA/OpenCL kernel strings
+    # same contract gemm_tiled asserts. The CUDA/OpenCL kernel strings
     # hardcode the matching literals (pinned by the manual tests)
     TILE_M = thrM * toIntVal(tiled.atom.mnk.m)
     TILE_N = thrN * toIntVal(tiled.atom.mnk.n)
-    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+    blockSize = tiled.threadCount()
   static:
     doAssert TILE_K mod (thrK * toIntVal(tiled.atom.mnk.k)) == 0,
       "testGemmCtaDynamic: the k-tile depth (" & $TILE_K &
@@ -621,7 +622,7 @@ proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
     var acc = newSeq[float32](M * N)
     acc.gemm_tf32_ref(A_fixture, B_fixture, M, N, K, 0.0'f32)
     # the C fixture: exact small ints, used by the β != 0 reference and
-    # the C prefill (the valid region only; the pad stays NaN)
+    # the C prefill (the valid region only, the pad stays NaN)
     var C_fixture = newSeq[float32](M * N)
     for i in 0 ..< M * N:
       C_fixture[i] = float32((i mod M) * 3 + (i div M) * 7 + 1)

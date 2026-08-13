@@ -9,56 +9,59 @@
 ##
 ## `gemm_atom`: the MMA (fragment-level) GEMM, one instruction on the
 ## thread's register fragments, in-place accumulate. The atom's `instr` +
-## fragment counts + register types produce the inline-asm statement
-## (NVIDIA mma.sync via kernel_gemm/nvidia_tensor_cores.nim; AMD MFMA and
-## Intel AMX construct their instructions differently). No kc loop, no
-## epilogue. The caller owns those.
+## fragment counts + register types produce the inline-asm statement.
+## NVIDIA mma.sync is built in kernel_gemm/nvidia_tensor_cores.nim, while
+## AMD MFMA and Intel AMX construct their instructions differently.
+## No kc loop, no epilogue. The caller owns those.
 ## (the naive whole-tile outer-product reference oracle lives in the
 ## tests: `gemm_ref` in tests/gemm/gemm_test_lib.nim)
 ##
 ## `gemm_ukernel`: the GEBB microkernel, the loop over K on top of
-##   `gemm_atom` (one atom instruction per k_block, accumulated in
-##   dFrag). Atom-parametric. The same signature serves GPU tensor cores
-##   and CPU FMA/AMX atoms.
+##   `gemm_atom` (one atom instruction per k_block, accumulated in dFrag).
+##   Atom-parametric. The same signature serves GPU tensor cores and
+##   CPU FMA/AMX atoms.
 ##
 ## `gemm_tiled`: one k-tile of the problem GEMM: thread partitioning,
-##   fragment gathering (tileK deep), and the k_block loop in
-##   `gemm_ukernel`, accumulating into the caller's dFrag (in/out: the
-##   persistent accumulator). No accumulator zeroing, no k-tile
-##   loop, no epilogue (gemm_cta owns all three). The gather reads zeros
-##   for fragment elements whose tile row/column falls outside the valid
-##   (M, N) extent of the CTA tile, or whose tile k falls outside the
-##   valid K extent of the k-tile (ragged boundary tiles and the
-##   ragged-K residue k-tile).
+##   fragment gathering from the staged smem k-tile (tileK deep), and
+##   the k_block loop in `gemm_ukernel`, accumulating into the caller's
+##   dFrag (in/out: the persistent accumulator). No accumulator zeroing,
+##   no k-tile loop, no epilogue (gemm_cta owns all three). The compute
+##   is branch-free: the ragged predication lives in the load
+##   (the predicated cp.async copy) and the store (cStoreMask), not here.
 ##
 ## `gemm_cta`: one CTA tile of the problem GEMM, selected by grid
 ##   coordinates (blockIdx.x/y) and the problem shape (M, N, K) passed
 ##   by the launcher. local_tile over the (M, kView) / (N, kView)
-##   problem views yields each k-tile as a static (tileM, tileK) /
-##   (tileN, tileK) view (the view K is the allocated extent; the
-##   runtime K is the problem K, at most kView). It loops them (the
-##   gemm_k_iterations loop, ceil(K/tileK) iterations, the last possibly
-##   partial), zeroes the accumulator once, and runs the fused epilogue
-##   once after the loop. Ragged M/N (problem dims not multiples of the
-##   tile dims) are handled: boundary tiles compute the full static tile
-##   with zeros outside the problem and store only the valid elements
-##   (the launcher must cover the ceil(M/tileM) × ceil(N/tileN) tile
-##   grid). Ragged K (K not a multiple of tileK) is handled the same
-##   way: the residue k-tile gathers zeros for k >= validK.
+##   problem views yields each k-tile as a static view of shape
+##   (tileM, tileK) / (tileN, tileK). The view K is the allocated extent.
+##   The runtime K is the problem K, at most kView.
+##   Staging flows gmem → smem → regs. The load issues the thread's
+##   predicated cp.async copies of the k-tile, 16-byte chunks per copy.
+##   The tile coordinate of each chunk comes from the tile shape,
+##   the identity-layout value at its position. gemm_tiled computes
+##   branch-free, and the fused epilogue runs once after the loop.
+##   Ragged M/N (problem dims not multiples of the tile dims) are
+##   handled: boundary tiles stage the full static tile, zero-filling
+##   outside the problem, and store only the valid elements.
+##   The launcher must cover the ceil(M/tileM) × ceil(N/tileN) tile grid.
+##   Ragged K (K not a multiple of tileK) is handled the same way:
+##   the residue k-tile's k >= validK lanes read 0 at the load.
 ##
 ## Data flow: one CTA tile (tileM×tileN) over the full problem K:
 ##
 ## ```
-## gemm_cta:  init dFrag := 0 before the k-tile loop
+## gemm_cta:  declare smemA/smemB {.shared.}, init dFrag := 0 before the k-tile loop
 ##              |  for kCTA in 0 ..< kTiles:          # k-tile loop, runtime bound
 ##              |    tA_k = local_tile(A, (tileM, tileK), (mCTA, kCTA))  # static (tileM, tileK) view
 ##              |    tB_k = local_tile(B, (tileN, tileK), (nCTA, kCTA))  #   (kView chunked into tileK-deep tiles)
+##              |    the load: copyPartition + copyFromIf           # predicated, ZFILL
+##              |    cp.async.wait_group(0)          # this thread's copies in smem
+##              |    syncthreads()                   # the staged k-tile is ready
 ##              ▼
-## gemm_tiled: partition_A/B of one k-tile
+## gemm_tiled: partition_A/B of the staged smem k-tile
 ##              ▼
 ##        tAv (V,RestM,tileK div atomK)   tBv (V,RestN,tileK div atomK)
-##              │ gather gmem → registers (make_fragment_A/B + copyFrom,
-##              │   zeros outside the valid M/N/K extent)
+##              │ copyFrom smem → registers (branch-free)
 ##              └──────────────┬───────────────┘
 ##                             ▼
 ##              gemm_ukernel: dFrag += Σ_k aFrag(_,_,k)·bFrag(_,_,k)
@@ -67,10 +70,10 @@
 ##                      dFrag (persistent accumulator)
 ##              │
 ##              ▼  after the loop: the fused epilogue (once):
-##        D = f(AB)                    (preflight stages the op operands:
-##        C (tileM, tileN) gmem         C for AXPBY, bias for AddBias;
-##        only valid M/N elements       the store mask skips the ragged
-##        are stored                    boundary elements)
+##        D = f(AB)                    preflight stages the op operands,
+##        C (tileM, tileN) gmem         C for AXPBY and bias for AddBias.
+##        only valid M/N elements       The store mask skips the ragged
+##        are stored                    boundary elements
 ## ```
 ##
 ## Loop nesting (kernel → collective → microkernel → atom):
@@ -79,9 +82,12 @@
 ## gemm_cta:   tile + k-tile origins from blockIdx and the loop var
 ##              init dFrag := 0 before the k-tile loop
 ##              for kCTA in 0 ..< kTiles:              # k-tile loop, runtime bound
-##                gemm_tiled: partition + gather (tileK)    # gmem → registers
+##                the load: cp.async per chunk + commit   # the ragged predication (ZFILL)
+##                cp.async.wait_group(0) + syncthreads()  # the staged k-tile is ready
+##                gemm_tiled: partition + copyFrom (tileK)   # smem → registers
 ##                gemm_ukernel: for k_block in 0 ..< kBlocks  # k_block loop
 ##                  gemm_atom(mma, dFrag, aFrag(_,_,k), bFrag(_,_,k))  # one mma.sync
+##                syncthreads()                        # smem free for the next k-tile
 ##              fused epilogue once after the loop
 ## ```
 ##
@@ -94,13 +100,12 @@
 ##    │   ├─ warp tile (tileM/nW, tileN/nW)          1 warp
 ##    │   │   └─ thread tile / fragment              1 thread   ← rmem (aFragTile/dFrag)
 ##    │   └─ k_block (atomK)                         1 warp     ← one gemm_atom
-##    └─ (the ragged-K tail k-tile is partial: the gather zero-fills
-##        k >= validK)
+##    └─ ragged-K tail k-tile, partial, the load zero-fills k >= validK
 ## ```
 ##
 ## Memory spaces:
 ##   gmem = global memory (the problem tensors)
-##   smem = shared memory (per-CTA staging: the epilogue's C operand)
+##   smem = shared memory (the per-CTA A/B k-tiles staged by the load)
 ##   rmem = register memory (the per-thread fragments)
 ##
 ## 1 threadblock tile = K/atomK k_blocks, looped in kTiles = ceil(K/tileK)
@@ -123,6 +128,7 @@ import ./kernel_fillwith_gpu
 import ./kernel_gemm_epilogues
 import ./macros/static_for
 import ./kernel_gemm/nvidia_tensor_cores
+import workspace/crucible
 
 {.experimental: "callOperator".}
 
@@ -148,11 +154,11 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
   ## boundary, so k_block slices like `aFrag(_, _, k)` pass as arguments.
   ## gemm_mma (kernel_gemm/nvidia_tensor_cores.nim) builds the asm and
   ## hardcodes float32/uint32 (TF32). See the TODO there.
-  const
-    aV = toIntVal(mma.valuesPerThread(opA))
-    bV = toIntVal(mma.valuesPerThread(opB))
-    dV = toIntVal(mma.valuesPerThread(opC))
-  gemm_mma(mma.instr, dV, aV, bV, dFrag, aFrag, bFrag)
+  gemm_mma(mma.instr,
+           toIntVal(mma.valuesPerThread(opC)),
+           toIntVal(mma.valuesPerThread(opA)),
+           toIntVal(mma.valuesPerThread(opB)),
+           dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_ukernel(mma, ...): the GEBB microkernel (loop over K)
@@ -184,7 +190,7 @@ func gemm_ukernel*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
   ##        deep. A k_block slice is a (VA, RestM) view at data offset
   ##        k·VA·RestM. v1 requires RestM == RestN == 1: each k_block
   ##        slice must be exactly one atom fragment (the static block
-  ##        below asserts it; TODO there tracks relaxing this to
+  ##        below asserts it. TODO there tracks relaxing this to
   ##        multi-rest fragments).
   ##
   ## The unrolled staticFor binds k_block to each k-block index. The
@@ -226,27 +232,31 @@ func gemm_ukernel*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
     gemm_atom(mma, dFrag, aFrag(_, _, k_block), bFrag(_, _, k_block))
 
 # ═════════════════════════════════════════════════════════════════════════
-#  gemm_tiled(tma, dFrag, A, B, TileShape, threadIdx): one k-tile of the GEMM
+#  gemm_tiled(tma, dFrag, sA, sB, TileShape, threadIdx): one k-tile of the GEMM
 # ═════════════════════════════════════════════════════════════════════════
-
 func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
     tma: static TiledMma;
     dFrag: var Tensor[TD, ShD, StD];   # the accumulator, in/out
-    A: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA];
-    B: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB];
+    sA: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA];
+    sB: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB];
     TileShape: static tuple[M: int, N: int, K: int];
-    threadIdx: int;
-    validM, validN, validK: int) {.inline.} =
+    threadIdx: int) {.inline.} =
   ## One k-tile of the problem GEMM: partition, gather, k_block microkernel.
   ##
-  ## This is the per-k-tile compute:
-  ##   the static (tileM, tileN, tileK) k-tile views are partitioned into
-  ##   this thread's (V, RestM, RestK) operand views, gathered gmem →
+  ## This is the per-k-tile compute over the staged smem k-tile:
+  ##   the static (tileM, tileN, tileK) smem k-tile is partitioned into
+  ##   this thread's (V, RestM, RestK) operand views, copied smem →
   ##   registers once, and gemm_ukernel accumulates into the caller's
   ##   dFrag (in/out).
   ## No accumulator zeroing, no k-tile loop, no epilogue:
   ##   gemm_cta zeroes dFrag once, loops the k-tiles, and runs the fused
   ##   epilogue once after the loop.
+  ## No predication here. The ragged lanes are zero-filled by the
+  ##   load's predicated cp.async copy, and the store mask owns the
+  ##   ragged store. The compute is the CUTLASS shape, partition +
+  ##   copyFrom + k_block loop. The caller owns the barriers, the
+  ##   cp.async.wait_group after staging and the syncthreads before the next
+  ##   load. gemm_cta emits both.
   ##
   ## Args:
   ##   tma: the TiledMma, atom plus (ThrM, ThrN, ThrK) thread tiling
@@ -254,39 +264,26 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
   ##        caller zeroes it before the k-tile loop and reads it in the
   ##        epilogue after. Its shape type is the partition_C shape (the
   ##        epilogue's shared-Sh contract)
-  ##   A: col-major (tileM, tileK) view, ONE k-tile of the CTA's A tile,
+  ##   sA: the staged (tileM, tileK) smem k-tile view of A, col-major,
   ##        element type TA (tf32 uint32 in v1)
-  ##   B: col-major (tileN, tileK) view, ONE k-tile of the CTA's B tile,
+  ##   sB: the staged (tileN, tileK) smem k-tile view of B, col-major,
   ##        element type TB (tf32 uint32 in v1)
   ##   TileShape: static (tileM, tileN, tileK), the k-tile dims. tileM and
   ##        tileN must be exactly the thread layout's coverage
   ##        (thrM·atomM, thrN·atomN). tileK is the k-tile depth
   ##   threadIdx: the flat linear thread id in 0 ..< blockSize (a
   ##        multi-dimensional block must be linearized by the caller)
-  ##   validM, validN: the valid (M, N) extent of the CTA tile, the part
-  ##        inside the problem. Fragment elements outside read 0 from the
-  ##        gather (boundary tiles). Pass tileM/tileN for a full tile (no
-  ##        predication).
-  ##   validK: the valid K extent of this k-tile, the part inside the
-  ##        problem K. Fragment elements with tile k >= validK read 0
-  ##        from the gather (the ragged-K residue of the last k-tile).
-  ##        Pass tileK for a full k-tile (no predication).
   ##
   ## Preconditions:
-  ##   - A/B are col-major views with shapes (tileM, tileK), (tileN, tileK)
+  ##   - sA/sB are col-major views with shapes (tileM, tileK),
+  ##     (tileN, tileK) over the CTA's staged smem tiles
   ##   - dFrag is the caller's accumulator, zeroed before the loop
-  ##   - validM in 1 .. tileM, validN in 1 .. tileN, validK in 1 .. tileK
-  ##     (the valid extents of the CTA tile / k-tile; an empty extent
-  ##     means the caller should not have launched this tile)
   ##   - tileK mod (thrK·atomK) == 0, ThrK == 1
   ##   - threadIdx < blockSize
-  ##   - the backing buffers must address the tile. The ragged underlying
-  ##     allocation is the caller's contract, not checked in v1
   ##
   ## Postconditions:
-  ##   - dFrag += A·B over the k-tile's valid K (the k < validK part;
-  ##     the residue reads zeros)
-  ##   - A and B are unmodified
+  ##   - dFrag += sA·sB over the k-tile
+  ##   - sA and sB are unmodified
   ##
   ## Panic-if (expansion-time rejections):
   ##   - TileShape.M/N != thrM·atomM / thrN·atomN. The thread layout must
@@ -303,67 +300,44 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
     tileM = TileShape[0]
     tileN = TileShape[1]
     tileK = TileShape[2]          # the k-tile depth
-    atomM = tma.atom.mnk.m
-    atomN = tma.atom.mnk.n
-    atomK = tma.atom.mnk.k
-    thrM  = toIntVal(tma.threadLayout.shape[0])
-    thrN  = toIntVal(tma.threadLayout.shape[1])
-    thrK  = toIntVal(tma.threadLayout.shape[2])
-    blockSize = toIntVal(tma.atom.threadCount(opA)) * thrM * thrN * thrK
 
   static:
-    doAssert tileM === thrM * atomM,
-      "gemm_tiled: TileShape.M (" & $tileM & ") != thrM·atomM (" & $thrM & "·" & $atomM &
+    doAssert tileM === tma.thrM * tma.atom.mnk.m,
+      "gemm_tiled: TileShape.M (" & $tileM & ") != thrM·atomM (" & $tma.thrM & "·" & $tma.atom.mnk.m &
         "). The thread layout must exactly cover the tile (partition contract)"
-    doAssert tileN === thrN * atomN,
-      "gemm_tiled: TileShape.N (" & $tileN & ") != thrN·atomN (" & $thrN & "·" & $atomN &
+    doAssert tileN === tma.thrN * tma.atom.mnk.n,
+      "gemm_tiled: TileShape.N (" & $tileN & ") != thrN·atomN (" & $tma.thrN & "·" & $tma.atom.mnk.n &
         "). The thread layout must exactly cover the tile (partition contract)"
-    doAssert tileK mod (thrK * atomK) == 0,
-      "gemm_tiled: TileShape.K (" & $tileK & ") mod (thrK·atomK) (" & $thrK & "·" & $atomK &
+    doAssert tileK mod (tma.thrK * tma.atom.mnk.k) == 0,
+      "gemm_tiled: TileShape.K (" & $tileK & ") mod (thrK·atomK) (" & $tma.thrK & "·" & $tma.atom.mnk.k &
         ") != 0. Use a k-tile depth multiple of thrK·atomK"
-    doAssert thrK == 1,
-      "gemm_tiled: ThrK (" & $thrK & ") != 1. v1 does not distribute threads along K"
+    doAssert tma.thrK == 1,
+      "gemm_tiled: ThrK (" & $tma.thrK & ") != 1. v1 does not distribute threads along K"
     doAssert ShA.default[0] === tileM and ShA.default[1] === tileK,
       "gemm_tiled: A shape (" & $ShA.default[0] & ", " & $ShA.default[1] &
         ") != tile (" & $tileM & ", " & $tileK & "). Pass a (tileM, tileK) view"
     doAssert ShB.default[0] === tileN and ShB.default[1] === tileK,
       "gemm_tiled: B shape (" & $ShB.default[0] & ", " & $ShB.default[1] &
         ") != tile (" & $tileN & ", " & $tileK & "). Pass a (tileN, tileK) view"
-    doAssert toIntVal(ShD.default[0]) * toIntVal(ShD.default[1]) * toIntVal(ShD.default[2]) === tileM * tileN div blockSize,
+    doAssert toIntVal(ShD.default[0]) * toIntVal(ShD.default[1]) * toIntVal(ShD.default[2]) === tileM * tileN div tma.threadCount(),
       "gemm_tiled: accumulator size (" & $(toIntVal(ShD.default[0]) * toIntVal(ShD.default[1]) * toIntVal(ShD.default[2])) &
-        ") != tile elements per thread (" & $(tileM * tileN div blockSize) & ")"
+        ") != tile elements per thread (" & $(tileM * tileN div tma.threadCount()) & ")"
 
   let thr = tma.get_slice(threadIdx)
-  # The thread's operand views for ONE k-tile (static (tileM, tileK) tile):
-  #   tAv = (V, RestM, RestK), my A fragment in gmem, RestK = tileK div atomK
-  let tAv = tma.partition_A(thr, A)
-  let tBv = tma.partition_B(thr, B)
+  # The thread's operand views for one k-tile (the staged (tileM, tileK)
+  # smem tile):
+  #   tAv = (V, RestM, RestK), my A fragment in smem, RestK = tileK div atomK
+  let tAv = tma.partition_A(thr, sA)
+  let tBv = tma.partition_B(thr, sB)
 
-  # gather the k-tile's fragments gmem → registers, tileK deep.
-  # A ragged boundary tile (validM < tileM or validN < tileN) or the
-  # ragged-K residue k-tile (validK < tileK) gathers zeros for the
-  # elements outside the problem so the accumulator never sees OOB gmem
-  # values. The K predicate is the tile k of the element: one combined
-  # decode per element per operand returns the (row, k) / (col, k) pair
-  # (aFragmentTileCoord / bFragmentTileCoord).
+  # gather the k-tile's fragments smem → registers, tileK deep. The copy
+  # is unconditional: the predication lives in the load, the cp.async
+  # copy that zero-fills the ragged lanes, and in the store, the
+  # cStoreMask, so the compute stays branch-free (the CUTLASS shape).
   var aFragTile = make_fragment_A(tma.atom, tAv)
   var bFragTile = make_fragment_B(tma.atom, tBv)
-  if validM < tileM or validN < tileN or validK < tileK:
-    for i in 0 ..< size(aFragTile):
-      let (r, k) = aFragmentTileCoord(tma, thr, tileM, tileK, i)
-      if r < validM and k < validK:
-        aFragTile(i) = tAv(i)
-      else:
-        aFragTile(i) = TA(0)
-    for i in 0 ..< size(bFragTile):
-      let (c, k) = bFragmentTileCoord(tma, thr, tileN, tileK, i)
-      if c < validN and k < validK:
-        bFragTile(i) = tBv(i)
-      else:
-        bFragTile(i) = TB(0)
-  else:
-    aFragTile.copyFrom(tAv)
-    bFragTile.copyFrom(tBv)
+  aFragTile.copyFrom(tAv)
+  bFragTile.copyFrom(tBv)
 
   # the k_block microkernel: accumulate into dFrag (in/out)
   gemm_ukernel(tma.atom, dFrag, aFragTile, bFragTile)
@@ -396,18 +370,25 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   ##
   ##   The K dimension is chunked into tileK-deep tiles:
   ##   the problem layout becomes a grid of (tileM × tileK) tiles.
-  ##   The coord slices one tile; the offset comes from crd2idx
-  ##   (no manual pointer math). kView must be a multiple of tileK
-  ##   (local_tile needs an even tile grid); the runtime K is free.
+  ##   The coord slices one tile, the offset comes from crd2idx
+  ##   (no manual pointer math). kView must be a multiple of tileK,
+  ##   local_tile needs an even tile grid. The runtime K is free.
   ##
-  ## The k-tile count is runtime: kTiles = ceil(K/tileK). A ragged-K
-  ## tail (K not a multiple of tileK) computes the full static k-tile
-  ## with zeros for the k >= validK coordinates: gemm_tiled's
-  ## predicated gather zero-fills them.
-  ## Ragged M/N (problem dims not a multiple of the tile dims) work: a
-  ## boundary tile computes the full static tile with zeros outside the
-  ## problem (gemm_tiled's predicated gather) and the epilogue stores
-  ## only the elements inside the valid extent (the store mask).
+  ## Each k-tile is staged through shared memory (gmem → smem → regs).
+  ## The load stages the gmem k-tile into the CTA's smem tiles with the
+  ## thread's predicated cp.async copies, 16-byte chunks per copy, the
+  ## copy_if analog. A chunk's tile coordinate comes from the tile shape,
+  ## and the ZFILL atom zero-fills the lanes outside the valid extent.
+  ## cp.async.wait_group + syncthreads barriers bracket the branch-free compute.
+  ## The k-tile count is runtime: kTiles = ceil(K/tileK). A ragged-K tail
+  ## (K not a multiple of tileK) computes the full static k-tile with
+  ## zeros for the k >= validK coordinates: the load zero-fills them.
+  ## Ragged M/N (problem dims not a multiple of the tile dims) work.
+  ## A boundary tile stages the full static tile with zeros outside the problem,
+  ## the masked load, and the epilogue stores only the valid elements, the store mask.
+  ## The predication lives in exactly two places, the load and the store.
+  ## The load carries the predicate tensors and the predicated cp.async copy,
+  ## the copy_if analog, and the store carries the cStoreMask + finalStore.
   ## The epilogue op and its destination view (D) are built by the caller
   ## (the kernel wrapper): the op carries its own state
   ## (alpha/beta, C, bias), the grid never sees it.
@@ -424,12 +405,12 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   ##        kView static from the view type)
   ##   M, N, K: the problem dims, runtime. The launcher's problem shape.
   ##        The tile grid must cover ceil(M/tileM) × ceil(N/tileN) CTAs.
-  ##        K is the problem K (the K actually multiplied); the views
+  ##        K is the problem K, the K actually multiplied. The views
   ##        hold the allocated kView >= K columns
   ##   epi: the fused epilogue op (EpiAXPBY, EpiIdentity, EpiReLU,
   ##        EpiAddBias or a user op), built by the caller with its state
   ##   TileShape: static (tileM, tileN, tileK), see gemm_tiled. tileK is
-  ##        the k-tile depth; the allocated K is a multiple of it
+  ##        the k-tile depth. The allocated K is a multiple of it
   ##        (gemm_cta loops ceil(K/tileK) k-tiles, the last possibly
   ##        partial)
   ##   mCTA, nCTA: the CTA grid coordinates, blockIdx.x/y. The tile
@@ -438,8 +419,8 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   ##
   ## Preconditions:
   ##   - K <= kView: the problem K does not exceed the allocated K the
-  ##     views were built on (the launcher's contract; a runtime K above
-  ##     kView would read past the buffer)
+  ##     views were built on, the launcher's contract.
+  ##     A runtime K above kView would read past the buffer
   ##   - the view K (ShA.default[1]) is a multiple of tileK, enforced by
   ##     the static assert below (local_tile needs an even tile grid)
   ##   - the CTA grid covers 0 ..< ceil(M/tileM) by 0 ..< ceil(N/tileN),
@@ -461,6 +442,9 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     tileM = TileShape[0]
     tileN = TileShape[1]
     tileK = TileShape[2]      # the k-tile depth
+    blockSize = tma.threadCount()
+    unitsA = (tileM * tileK) div (4 * blockSize)   # the 16-byte chunks per thread
+    unitsB = (tileN * tileK) div (4 * blockSize)
   static:
     doAssert ShA.default[1] === ShB.default[1],
       "gemm_cta: the A and B problem views must agree on the allocated K (" & $kView & " vs " &
@@ -487,36 +471,98 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
 
   # An out-of-range CTA (the launcher overshot the ceil(M/tileM) ×
   # ceil(N/tileN) tile grid) has no valid elements: return without
-  # storing. The launcher's contract is to launch exactly the grid;
-  # this guard only keeps an overshoot safe (no OOB stores).
+  # storing. The launcher's contract is to launch exactly the grid.
+  # This guard only keeps an overshoot safe (no OOB stores).
   if validM <= 0 or validN <= 0:
     return
 
+  # Shared memory staging buffers
+  # -----------------------------
+  # Declared inside the device function: the {.shared.} pragma emits
+  # __shared__ into the kernel (the sgemm_1 pattern), so gemm_cta's
+  # signature stays unchanged and the call sites keep their shape. The
+  # sizes fold from the static TileShape.
+  # The 16-byte cp.async copies need 16-byte alignment of both ends.
+  # The {.shared.} arrays are 16-byte aligned on the pinned toolchain,
+  # and the chunk offsets are 16-byte aligned, tileM/tileN multiples
+  # of 4 elements. The gmem side needs the k-tile view's leading
+  # stride a multiple of 4 elements. The launcher's padded-buffer
+  # contract provides it, which the fixtures honor.
+  var smemA {.shared.}: array[tileM * tileK, TA]
+  var smemB {.shared.}: array[tileN * tileK, TB]
+  var sA = make_view(addr smemA[0], make_layout((tileM, tileK)))
+  var sB = make_view(addr smemB[0], make_layout((tileN, tileK)))
+
   # Compute loop
   # ------------
-  # Each iteration pulls one k-tile view out of the problem views:
+  # Each iteration runs the CUTLASS load, staging the k-tile gmem → smem.
+  # The copy partition covers the k-tile.
+  # The tile coordinate of each copy element comes from the tile shape,
+  # the identity-layout value at its position, with no decode function.
+  # The coordinate is predicated against the valid extent, the residue,
+  # and the load issues a predicated cp.async per 16-byte chunk.
+  # The ZFILL atom carries the zero-fill: a false predicate makes the copy size 0,
+  # and the smem destination is zero-filled, no separate clear needed.
+  # The gmem address of the chunk's first element comes from the k-tile view's
+  # own layout (crd2idx), never raw offsets.
   #
-  #   (M, kView) view ── local_tile((tileM, tileK), (mCTA, kCTA)) ──▶ (tileM, tileK)
-  #   (N, kView) view ── local_tile((tileN, tileK), (nCTA, kCTA)) ──▶ (tileN, tileK)
-  #                              │                                       │
-  #                              ▼                                       ▼
-  #              kView chunked into tileK-deep tiles            gemm_tiled(dFrag, ...)
-  #                  (a grid of tiles over M × kView)
+  #   (M, kView) view ── local_tile((tileM, tileK), (mCTA, kCTA)) ──▶ (tileM, tileK) gmem
+  #   (N, kView) view ── local_tile((tileN, tileK), (nCTA, kCTA)) ──▶ (tileN, tileK) gmem
+  #                              │                                        │
+  #                              ▼                                        ▼
+  #              kView chunked into tileK-deep tiles            the load: cp.async chunks
+  #                  (a grid of tiles over M × kView)           + commit, wait, syncthreads
+  #                                                             + gemm_tiled (smem → regs)
   #
   #   The coord slices one tile, the offset comes from crd2idx.
   #   The k-tile count is runtime: ceil(K/tileK). Under the
   #   K <= kView contract the loop never slices past the view's even
   #   tile grid, so the local_tile coords stay in range.
   #
-  #   The last k-tile may be partial (ragged K): validK = K - kCTA·tileK
-  #   < tileK, and gemm_tiled's predicated gather zero-fills the
-  #   k >= validK coordinates.
+  #   The last k-tile may be partial (ragged K), with validK = K - kCTA·tileK < tileK,
+  #   and the load zero-fills the k >= validK lanes.
+  #   A partially-valid M/N chunk (m0 < validM but m0+3 >= validM)
+  #   still reads gmem safely. The launcher pads the buffers to the tile,
+  #   the padded-allocation contract, and the store mask skips the ragged lanes.
   let kTiles = (K + tileK - 1) div tileK
   for kCTA in 0 ..< kTiles:
     let tA = local_tile(A, (tileM, tileK), (mCTA, kCTA))
     let tB = local_tile(B, (tileN, tileK), (nCTA, kCTA))
     let validK = min(tileK, K - kCTA * tileK)
-    tma.gemm_tiled(dFrag, tA, tB, TileShape, threadIdx, validM, validN, validK)
+    # the thread's copy partition of the k-tile (CuTe: partition_S of
+    # the gmem k-tile, partition_D of the smem stage,
+    # sm80_mma_multistage.hpp:506-510), the predicate tensor (CuTe:
+    # tApA, :519-533), then the predicated tiled copy (CuTe: copy_if,
+    # copy.hpp:75-105). The predicate gates each unit on its tile
+    # coordinate against the valid extent, the identity-layout value at
+    # the unit's position (CuTe: tAcA).
+    let tAgA = partition_S(tA, tileM, tileK, blockSize, threadIdx)
+    var tAsA = partition_D(sA, tileM, tileK, blockSize, threadIdx)
+    var tApA: array[unitsA, bool]
+    for i in 0 ..< unitsA:
+      let (m0, k0) = idx2crd((tileM, tileK), 4 * (threadIdx + i * blockSize))
+      tApA[i] = m0 < validM and k0 < validK
+    let tApAv = make_view(addr tApA[0], make_layout((unitsA,)))
+    copyFromIf(tAsA, tAgA, tApAv)
+    # the B-load mirrors the A-load with (tileN, tileK) and validN
+    let tBgB = partition_S(tB, tileN, tileK, blockSize, threadIdx)
+    var tBsB = partition_D(sB, tileN, tileK, blockSize, threadIdx)
+    var tBpB: array[unitsB, bool]
+    for i in 0 ..< unitsB:
+      let (n0, k0) = idx2crd((tileN, tileK), 4 * (threadIdx + i * blockSize))
+      tBpB[i] = n0 < validN and k0 < validK
+    let tBpBv = make_view(addr tBpB[0], make_layout((unitsB,)))
+    copyFromIf(tBsB, tBgB, tBpBv)
+    # one commit group for both loads, then the single-stage pipeline:
+    # cp.async.wait_group(0) lands this thread's copies in smem,
+    # syncthreads makes every thread's copies visible, the branch-free
+    # compute reads the stage, and syncthreads frees smem for the next
+    # load.
+    cp.async.commit_group()
+    cp.async.wait_group(0)
+    syncthreads()
+    tma.gemm_tiled(dFrag, sA, sB, TileShape, threadIdx)
+    syncthreads()
 
   # Fused epilogue
   # --------------
