@@ -22,14 +22,14 @@
 ## col-major OFFSET in the tile (row + col·tileRows), which is what the
 ## kernel indexes shared/gmem with.
 ##
-## Construction — CuTe thrfrg chain (mma_atom.hpp), with ceramic
+## Construction — the thrfrg chain, with ceramic
 ## layout algebra, no loops, no seq, no manual div/mod:
 ##   zipped_divide(tileLayout, (unitM, unitK))        # unit | rest
 ##   zipped_divide(unit, (atomM, atomK))              # atom | positions
-##   fragment (T, V) part: compose(mode(ap, 0), atom.aLayout) — CuTe's
-##   `a_tensor.compose(AtomLayoutA_TV{}, _)`: the atom mode (AtomM, AtomK)
-##   at tile strides composed with the atom's (T, V) layout. compose's
-##   unwrap (CuTe `composition_impl`'s `unwrap`) merges the composed
+##   fragment (T, V) part: compose(mode(ap, 0), atom.aLayout), the
+##   atom-mode composition: the atom mode (AtomM, AtomK)
+##   at tile strides composed with the atom's (T, V) layout. The
+##   compose unwrap merges the composed
 ##   leaves flat, so the fragment comes out in the tile's col-major
 ##   (k-stride atomM → tileM) with the same nesting CuTe produces.
 ##
@@ -47,9 +47,9 @@
 ## keeps the offset arithmetic runtime — the algebra is uniform, there is
 ## no static/runtime branch (NVRTC folds the static leaves).
 ##
-## Reference semantics: tensor-layouts `tile_mma_grid` (layout_utils.py)
-## enumerates the same (thread, v, rest) → offset grid. The values
-## are cross-checked against CuTe's own partition output (host-extracted).
+## The (thread, v, rest) → offset grid semantics. The values are
+## cross-checked against the reference partition output,
+## host-extracted.
 
 import ./int_tuples
 import ./layouts
@@ -60,10 +60,10 @@ import ./tensors
 import ./atoms
 
 # ═════════════════════════════════════════════════════════════════════════
-#  thrfrg_A/B/C — the thread-fragment layouts (CuTe: ThrMMA::thrfrg_*)
+#  thrfrg_A/B/C — the thread-fragment layouts
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  CuTe: thrfrg_A (mma_atom.hpp) then slice at the thread:
+#  thrfrg_A then slice at the thread:
 #    logical_divide(tile, tiled-unit) → zipped_divide(unit, atom) →
 #    compose(atom (T,V) layout, _) → zipped_divide(_, (ThrM, ThrK))
 #  Ceramic (tuple tilers, quotient-first zipped_divide):
@@ -78,15 +78,15 @@ import ./atoms
 #  OWN layout, so its strides are the tile's real strides (static Int[N]
 #  leaves fold at compile time, a runtime leading stride keeps the offset
 #  leaves runtime — the algebra is uniform, no branch). The partition_*
-#  functions cut it at the thread's coordinates (CuTe: thr_tensor(
-#  thr_vmk, _) = slice_and_offset): the (T,V) mode is cut at tv
+#  functions cut it at the thread's coordinates, the slice_and_offset
+#  at the (T, V) and thread modes: the (T,V) mode is cut at tv
 #  (T-leaves dropped, V kept), the (Thr) mode at (tm/tn, tk), the Rest
 #  kept whole. The result is the thread's fragment view (V·, RestM,
 #  RestK) — offset inside the view, no linearization.
 
 func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
-  ## The thread-fragment layout of the (M, K) A tensor (CuTe:
-  ## ThrMMA::thrfrg_A): ((T, V), (ThrM, ThrK), (RestM, RestK)) → tile
+  ## The thread-fragment layout of the (M, K) A tensor:
+  ## ((T, V), (ThrM, ThrK), (RestM, RestK)) → tile
   ## offset. T = threads per atom, V = registers per thread, Thr* = the
   ## thread tiling, Rest* = the tile positions beyond one thread's unit.
   ## The strides come from A's own layout, see the section doc.
@@ -275,36 +275,37 @@ func partition_C*[T, Sh, St](
 # ═════════════════════════════════════════════════════════════════════════
 #
 #  cStoreMask predicates the store on each C-fragment element's
-#  coordinate in the tile. The coordinate of the element at flat index i
-#  comes from the layouts, never from hand-rolled register-pattern math.
-#  CUTLASS has no decode function: the store derives each element's
-#  tile coordinate by partitioning the tile's identity layout,
-#  PredicatedTileIterator-style, with no data strides.
+#  coordinate in the tile. The coordinate comes from the thread's
+#  fragment view of the tile, the same partition_C path the data
+#  takes: the element's tile offset is the view origin plus its
+#  layout offset, and the tile coordinate is the idx2crd of that
+#  offset, one comparison per element against the valid extent.
+#  No decode function, no
+#  register-pattern math, no i mod V: the fragment offsets come from
+#  the partition layout, never from hand-rolled register-position
+#  arithmetic.
 #
-#    v = i mod V                        the register position (V-mode)
-#    off = crd2idx(p, coords)           the tile offset from the partition
-#                                       layout at the thread's coordinates
-#    (row, col) = idx2crd(tileL, off)   the tile coordinate from the tile
-#                                       layout
-#
-#  The partition layout is built with compact strides: the tile
-#  coordinates are stride-independent. The exact-coverage contract
-#  (tileM === thrM·atomM, tileN === thrN·atomN, asserted in cStoreMask)
-#  leaves the fragment rest modes empty (RestM == RestN == 1), so the
-#  rest coordinates are (0, 0).
+#  The exact-coverage contract (tileM === thrM·atomM, tileN ===
+#  thrN·atomN, asserted in cStoreMask) leaves the fragment rest modes
+#  empty (RestM == RestN == 1), so the partition view is the (V,)
+#  fragment and the mask bit i = the fragment element i's coordinate
+#  inside the valid extent.
 
 func cStoreMask*(tma: static TiledMma; thr: ThrSlice;
                  tileM, tileN: static int; validM, validN: int): int =
   ## The store-predication bitmask over the C fragment: bit i set = the
-  ## element's tile coordinate is inside the valid (M, N) range of the
-  ## tile and may be stored. gemm_cta computes it from the tile's valid
-  ## extents (the min of the tile dim and the remaining problem extent)
-  ## and stores it on the op, whose finalStore skips the masked-off
-  ## stores (see kernel_gemm_epilogues). All bits set (no
-  ## predication) when the tile is fully inside the problem. The
-  ## coordinate derivation is inlined from the identity-layout
-  ## partition (see the section doc).
-  const cLayout = tma.atom.cLayout   # const: the codegen folds atom field access (case object)
+  ## fragment element's tile coordinate is inside the valid (M, N)
+  ## range of the tile and may be stored. gemm_cta computes it from the
+  ## tile's valid extents (the min of the tile dim and the remaining
+  ## problem extent) and stores it on the op, whose finalStore skips
+  ## the masked-off stores (see kernel_gemm_epilogues). All bits set
+  ## (no predication) when the tile is fully inside the problem.
+  ## The per-element coordinates come from the thread's slice of the
+  ## partition layout, the same thrfrg_C path the data takes: the
+  ## element's tile offset is the slice origin plus its layout offset,
+  ## its tile coordinate the idx2crd of that offset, one comparison
+  ## per element against the valid extent. No data is ever
+  ## dereferenced.
   const fragSize = tileM * tileN div tma.threadCount()
   static:
     doAssert fragSize <= 63,
@@ -313,16 +314,26 @@ func cStoreMask*(tma: static TiledMma; thr: ThrSlice;
     doAssert tileM === tma.thrM * tma.atom.mnk.m and tileN === tma.thrN * tma.atom.mnk.n,
       "cStoreMask: the tile dims must be the thread layout's exact coverage" &
       " (the partition contract gives the fragment no rest modes)"
+  const cLayout = tma.atom.cLayout
   const tileL = make_layout((tileM, tileN), (1, tileM))
   const pC = thrfrg_C(tma, tileL)
-  const V = product(cLayout.shape[1])
+  # the thread's (T, V) selection and the rest selection, the same
+  # selection partition_A/B/C apply (the exact-coverage contract leaves
+  # the rest modes empty, the (1, 1) rsel)
   let tsel = idx2crd(cLayout.shape[0], thr.tv)
+  let vsel = mapLeavesWith(cLayout.shape[1]): X()
+  let rsel = mapLeavesWith((1, 1)): X()
+  let fragL = slice(pC, ((tsel, vsel), (thr.tm, thr.tn), rsel))
+  let origin = crd2idx(pC, ((tsel, vsel), (thr.tm, thr.tn), rsel))
   result = 0
-  for i in 0 ..< fragSize:
-    let vcoords = idx2crd(cLayout.shape[1], i mod V)
-    let off = crd2idx(pC, ((tsel, vcoords), (thr.tm, thr.tn), (0, 0)))
+  # the early return: a tile fully outside the valid region,
+  # with a nonpositive extent on a side, zeroes the whole mask
+  if validM <= 0 or validN <= 0:
+    return 0
+  for i in 0 ..< size(fragL):
+    let off = origin + crd2idx(fragL, i)
     let (m, n) = idx2crd(tileL, off)
-    if m <= validM - 1 and n <= validN - 1:
+    if m < validM and n < validN:
       result = result or (1 shl i)
 
 # ═════════════════════════════════════════════════════════════════════════

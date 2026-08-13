@@ -124,6 +124,7 @@ import ./atoms
 import ./atoms_mma_partitioning
 import ./layout_algebra
 import ./kernel_copy_gpu
+import ./atoms_copy
 import ./kernel_fillwith_gpu
 import ./kernel_gemm_epilogues
 import ./macros/static_for
@@ -253,7 +254,7 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
   ##   epilogue once after the loop.
   ## No predication here. The ragged lanes are zero-filled by the
   ##   load's predicated cp.async copy, and the store mask owns the
-  ##   ragged store. The compute is the CUTLASS shape, partition +
+  ##   ragged store. The compute is the load shape, partition +
   ##   copyFrom + k_block loop. The caller owns the barriers, the
   ##   cp.async.wait_group after staging and the syncthreads before the next
   ##   load. gemm_cta emits both.
@@ -333,7 +334,7 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
   # gather the k-tile's fragments smem → registers, tileK deep. The copy
   # is unconditional: the predication lives in the load, the cp.async
   # copy that zero-fills the ragged lanes, and in the store, the
-  # cStoreMask, so the compute stays branch-free (the CUTLASS shape).
+  # cStoreMask, so the compute stays branch-free.
   var aFragTile = make_fragment_A(tma.atom, tAv)
   var bFragTile = make_fragment_B(tma.atom, tBv)
   aFragTile.copyFrom(tAv)
@@ -495,7 +496,7 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
 
   # Compute loop
   # ------------
-  # Each iteration runs the CUTLASS load, staging the k-tile gmem → smem.
+  # Each iteration runs the load, staging the k-tile gmem → smem.
   # The copy partition covers the k-tile.
   # The tile coordinate of each copy element comes from the tile shape,
   # the identity-layout value at its position, with no decode function.
@@ -529,29 +530,44 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     let tA = local_tile(A, (tileM, tileK), (mCTA, kCTA))
     let tB = local_tile(B, (tileN, tileK), (nCTA, kCTA))
     let validK = min(tileK, K - kCTA * tileK)
-    # the thread's copy partition of the k-tile (CuTe: partition_S of
-    # the gmem k-tile, partition_D of the smem stage,
-    # sm80_mma_multistage.hpp:506-510), the predicate tensor (CuTe:
-    # tApA, :519-533), then the predicated tiled copy (CuTe: copy_if,
-    # copy.hpp:75-105). The predicate gates each unit on its tile
-    # coordinate against the valid extent, the identity-layout value at
-    # the unit's position (CuTe: tAcA).
-    let tAgA = partition_S(tA, tileM, tileK, blockSize, threadIdx)
-    var tAsA = partition_D(sA, tileM, tileK, blockSize, threadIdx)
+    # the thread's copy partition of the k-tile, partition_S of the
+    # gmem k-tile and partition_D of the smem stage, the predicate
+    # tensor, then the predicated tiled copy. The predicate gates
+    # each unit on its tile coordinate against the valid extent, the
+    # coordinate read from the partition's own layout, the identity
+    # partition of the tile: the thread's slice origin plus each
+    # unit's layout offset, decoded through the tile.
+    let tAgA = partition_S(tA, CpAsyncAtom[TA], blockSize, threadIdx)
+    var tAsA = partition_D(sA, CpAsyncAtom[TA], blockSize, threadIdx)
     var tApA: array[unitsA, bool]
+    # the unit coordinates from the compact-tile partition, the
+    # identity-partition analog: the compact tile layout's offsets
+    # decode through the tile shape, so the coords are
+    # stride-independent, and the predicate compares each unit's
+    # (m, k) against the valid extent
+    const tileLA = make_layout((tileM, tileK), (1, tileM))
+    let pA = thrfrg_copy(tileLA, CpAsyncAtom[TA], blockSize)
+    let originA = crd2idx(pA, threadIdx)
+    let fragLA = slice(pA, (threadIdx, _, _))
     for i in 0 ..< unitsA:
-      let (m0, k0) = idx2crd((tileM, tileK), 4 * (threadIdx + i * blockSize))
+      let (m0, k0) = idx2crd((tileM, tileK),
+                             originA + toIntVal(crd2idx(fragLA, (0, i))))
       tApA[i] = m0 < validM and k0 < validK
-    let tApAv = make_view(addr tApA[0], make_layout((unitsA,)))
+    let tApAv = make_view(addr tApA[0], make_layout((1, unitsA)))
     copyFromIf(tAsA, tAgA, tApAv)
     # the B-load mirrors the A-load with (tileN, tileK) and validN
-    let tBgB = partition_S(tB, tileN, tileK, blockSize, threadIdx)
-    var tBsB = partition_D(sB, tileN, tileK, blockSize, threadIdx)
+    let tBgB = partition_S(tB, CpAsyncAtom[TB], blockSize, threadIdx)
+    var tBsB = partition_D(sB, CpAsyncAtom[TB], blockSize, threadIdx)
     var tBpB: array[unitsB, bool]
+    const tileLB = make_layout((tileN, tileK), (1, tileN))
+    let pB = thrfrg_copy(tileLB, CpAsyncAtom[TB], blockSize)
+    let originB = crd2idx(pB, threadIdx)
+    let fragLB = slice(pB, (threadIdx, _, _))
     for i in 0 ..< unitsB:
-      let (n0, k0) = idx2crd((tileN, tileK), 4 * (threadIdx + i * blockSize))
+      let (n0, k0) = idx2crd((tileN, tileK),
+                             originB + toIntVal(crd2idx(fragLB, (0, i))))
       tBpB[i] = n0 < validN and k0 < validK
-    let tBpBv = make_view(addr tBpB[0], make_layout((unitsB,)))
+    let tBpBv = make_view(addr tBpB[0], make_layout((1, unitsB)))
     copyFromIf(tBsB, tBgB, tBpBv)
     # one commit group for both loads, then the single-stage pipeline:
     # cp.async.wait_group(0) lands this thread's copies in smem,
