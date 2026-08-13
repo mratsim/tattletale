@@ -1,6 +1,6 @@
 ## Shared oracle harness for the manual_*_cuda GPU tests.
 ##
-## The per-arch test files (manual_sm80_*, manual_sm86_*, ...) differ only in
+## The per-arch test files (manual_sm80_*, ...) differ only in
 ## the atom + the driver kernel; the fixture generation, the tf32 reference
 ## oracle, the execute/verify loop and the report are factored here so each
 ## new SM is just `const atom = ...` + the driver funcs + the cuda block +
