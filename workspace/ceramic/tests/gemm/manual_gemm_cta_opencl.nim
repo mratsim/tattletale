@@ -1,6 +1,6 @@
-## Manual GPU test: gemm_grid (Level 4) via the OpenCL backend.
+## Manual GPU test: gemm_cta (Level 4) via the OpenCL backend.
 ##
-## Same problems as manual_gemm_grid_cuda.nim: the four shipped epilogues
+## Same problems as manual_gemm_cta_cuda.nim: the four shipped epilogues
 ## (EpiAXPBY, EpiIdentity, EpiReLU, EpiAddBias) over a 2×2 CTA grid (tile
 ## 32×16, K = 32), 128 work-items per CTA. The kernel body is the CUDA
 ## twin's verbatim; the launch geometry is linearized: the engine launches
@@ -9,19 +9,19 @@
 ## CTA (blk.x = 128): mma.sync works in multi-warp groups on NVIDIA's
 ## OpenCL (verified by experiment, the old one-warp pin was over-cautious).
 ## The oracle, trial loop and report live in gemm_test_lib
-## (testGemmGrid*), shared with the CUDA twin.
+## (testGemmCta*), shared with the CUDA twin.
 ##
 ## NVIDIA-OpenCL only: the mma.sync inline PTX travels inside the OpenCL C
 ## kernel as asm(...), which only NVIDIA's OpenCL compiler accepts. The
 ## host verifies the device vendor before launching.
 ##
 ## Requires an sm_80+ GPU with NVIDIA's OpenCL. Run with:
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_grid_opencl.nim
+##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_cta_opencl.nim
 ##
 ## TODO (file-level slop): M=64, N=32, tile (32,16), strides (1,64) and
 ## the m0/n0 tile origins are hardcoded in every kernel below — the dims
 ## must flow from the problem views and the origins from local_tile, per
-## the gemm_grid view migration.
+## the gemm_cta view migration.
 
 import std/[strformat, strutils]
 import workspace/ceramic/src/int_tuples
@@ -56,10 +56,10 @@ const kernelCode = opencl:
   # (mCTA, nCTA, threadIdx), builds the thread's C tile view (tile origin
   # from the grid coords), partitions it to the per-thread destination
   # fragment (D), constructs the epilogue op with its state, and hands
-  # both to gemm_grid. The grid never sees alpha/beta/C/bias: they are
+  # both to gemm_cta. The grid never sees alpha/beta/C/bias: they are
   # op state. Output-first (C): the OpenCL engine's run binds the output
   # at binding 0, inputs at 1..N in signature order.
-  proc gemmGridKernel(
+  proc gemmCtaKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
@@ -74,9 +74,9 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
-  proc gemmGridIdentityKernel(
+  proc gemmCtaIdentityKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
     let gid = int(get_global_id(0))
@@ -90,9 +90,9 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiIdentity()
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
-  proc gemmGridReLUKernel(
+  proc gemmCtaReLUKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
     let gid = int(get_global_id(0))
@@ -106,9 +106,9 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiReLU()
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
-  proc gemmGridBiasKernel(
+  proc gemmCtaBiasKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       bias: ptr UncheckedArray[float32]) {.global.} =
@@ -129,13 +129,13 @@ const kernelCode = opencl:
     # TODO: the tile origin (n0) and the hardcoded M/N/tile/strides in
     # this file are manual slop — the tile view must be auto-derived via
     # local_tile on the problem views (make_view(bias, (M, N), (0, 1)))
-    # with the dims flowing from the views, per the gemm_grid view
+    # with the dims flowing from the views, per the gemm_cta view
     # migration.
     var biasView = tiled.partition_C(thr, make_view(bias +% n0, (32, 16), (0, 1)))
     var epi = initEpiAddBias(biasView)
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, threadIdx)
 
-  proc gemmGridKernelSingle(
+  proc gemmCtaKernelSingle(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
@@ -146,19 +146,19 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_grid(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, threadIdx)
+    gemm_cta(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, threadIdx)
 
 proc runTest() =
   var engine = bkOpenCL.init(kernelCode)
   doAssert engine.deviceName().contains("NVIDIA"),
-    "gemm_grid OpenCL needs NVIDIA's OpenCL compiler for the mma.sync asm; got: " &
+    "gemm_cta OpenCL needs NVIDIA's OpenCL compiler for the mma.sync asm; got: " &
     engine.deviceName()
-  testGemmGrid(engine, tiled, "SM80")
-  testGemmGridBeta(engine, tiled, "SM80")
-  testGemmGridIdentity(engine, tiled, "SM80")
-  testGemmGridReLU(engine, tiled, "SM80")
-  testGemmGridBias(engine, tiled, "SM80")
-  testGemmGridSingle(engine, tiled, "SM80")
+  testGemmCta(engine, tiled, "SM80")
+  testGemmCtaBeta(engine, tiled, "SM80")
+  testGemmCtaIdentity(engine, tiled, "SM80")
+  testGemmCtaReLU(engine, tiled, "SM80")
+  testGemmCtaBias(engine, tiled, "SM80")
+  testGemmCtaSingle(engine, tiled, "SM80")
 
 when isMainModule:
   runTest()

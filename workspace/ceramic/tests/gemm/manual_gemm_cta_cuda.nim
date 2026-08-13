@@ -1,20 +1,20 @@
-## Manual GPU test: gemm_grid (Level 4) via NVRTC/CUDA.
+## Manual GPU test: gemm_cta (Level 4) via NVRTC/CUDA.
 ##
 ## The four shipped epilogues over a 2×2 CTA grid (tile 32×16, K =
 ## TILE_K = 32, four k_blocks through gemm_ukernel), 128 threads:
-##   gemmGridKernel       EpiAXPBY,   D = α·AB + β·C
-##   gemmGridIdentityKernel  EpiIdentity, D = AB
-##   gemmGridReLUKernel   EpiReLU,    D = max(0, AB)
-##   gemmGridBiasKernel   EpiAddBias, D = AB + bias (column broadcast)
+##   gemmCtaKernel       EpiAXPBY,   D = α·AB + β·C
+##   gemmCtaIdentityKernel  EpiIdentity, D = AB
+##   gemmCtaReLUKernel   EpiReLU,    D = max(0, AB)
+##   gemmCtaBiasKernel   EpiAddBias, D = AB + bias (column broadcast)
 ## The C buffer is pre-filled with NaN: a dropped store leaves NaN !=
 ## expected, and the β=0 branch must skip the C read (a spurious read
 ## also fails).
 ##
-## gemm_grid computes the tile origin from blockIdx (baking it into the
+## gemm_cta computes the tile origin from blockIdx (baking it into the
 ## A/B/C view pointers, the real global col-major strides stay), then
 ## delegates to gemm_tiled. The kernel below launches it directly. The
-## oracle, trial loop and report live in gemm_test_lib (testGemmGrid*),
-## shared with the OpenCL twin (manual_gemm_grid_opencl).
+## oracle, trial loop and report live in gemm_test_lib (testGemmCta*),
+## shared with the OpenCL twin (manual_gemm_cta_opencl).
 ##
 ## The atom is the parameter, SM80_16x8x8_F32TF32TF32F32_TN tiled
 ## (2,2,1). Requires an sm_80+ GPU. Run with:
@@ -22,8 +22,8 @@
 ## TODO (file-level slop): M=64, N=32, tile (32,16), strides (1,64) and
 ## the m0/n0 tile origins are hardcoded in every kernel below — the dims
 ## must flow from the problem views and the origins from local_tile, per
-## the gemm_grid view migration.
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_grid_cuda.nim
+## the gemm_cta view migration.
+##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_cta_cuda.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -50,8 +50,8 @@ const kernelCode = cuda:
   # Each kernel wrapper builds the thread's C tile view (tile origin from
   # blockIdx), partitions it to the per-thread destination fragment (D),
   # constructs the epilogue op with its state, and hands both to
-  # gemm_grid. The grid never sees alpha/beta/C/bias: they are op state.
-  proc gemmGridKernel(
+  # gemm_cta. The grid never sees alpha/beta/C/bias: they are op state.
+  proc gemmCtaKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
@@ -67,9 +67,9 @@ const kernelCode = cuda:
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
-  proc gemmGridIdentityKernel(
+  proc gemmCtaIdentityKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
     # 1D grid linearization (engine LaunchConfig.grid is a single int):
@@ -84,9 +84,9 @@ const kernelCode = cuda:
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiIdentity()
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
-  proc gemmGridReLUKernel(
+  proc gemmCtaReLUKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
     # 1D grid linearization (engine LaunchConfig.grid is a single int):
@@ -101,9 +101,9 @@ const kernelCode = cuda:
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiReLU()
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
-  proc gemmGridBiasKernel(
+  proc gemmCtaBiasKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       bias: ptr UncheckedArray[float32]) {.global.} =
@@ -125,14 +125,14 @@ const kernelCode = cuda:
     # TODO: the tile origin (n0) and the hardcoded M/N/tile/strides in
     # this file are manual slop — the tile view must be auto-derived via
     # local_tile on the problem views (make_view(bias, (M, N), (0, 1)))
-    # with the dims flowing from the views, per the gemm_grid view
+    # with the dims flowing from the views, per the gemm_cta view
     # migration.
     var biasView = tiled.partition_C(thr, make_view(bias +% n0, (32, 16), (0, 1)))
     var epi = initEpiAddBias(biasView)
-    gemm_grid(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, A, 64, B, 32, epi, 64, 32, 32, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
 
 const kernelCodeSingle = cuda:
-  proc gemmGridKernelSingle(
+  proc gemmCtaKernelSingle(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
@@ -148,17 +148,17 @@ const kernelCodeSingle = cuda:
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_grid(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, int(threadIdx.x))
+    gemm_cta(tiled, tCv, A, 32, B, 16, epi, 32, 16, 32, (32, 16, 32), 0, 0, int(threadIdx.x))
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)
-  testGemmGrid(engine, tiled, "SM80")
-  testGemmGridBeta(engine, tiled, "SM80")
-  testGemmGridIdentity(engine, tiled, "SM80")
-  testGemmGridReLU(engine, tiled, "SM80")
-  testGemmGridBias(engine, tiled, "SM80")
+  testGemmCta(engine, tiled, "SM80")
+  testGemmCtaBeta(engine, tiled, "SM80")
+  testGemmCtaIdentity(engine, tiled, "SM80")
+  testGemmCtaReLU(engine, tiled, "SM80")
+  testGemmCtaBias(engine, tiled, "SM80")
   var engineSingle = bkCuda.init(kernelCodeSingle)
-  testGemmGridSingle(engineSingle, tiled, "SM80")
+  testGemmCtaSingle(engineSingle, tiled, "SM80")
 
 when isMainModule:
   runTest()

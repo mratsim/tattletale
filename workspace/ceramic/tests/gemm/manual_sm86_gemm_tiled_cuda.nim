@@ -4,11 +4,14 @@
 ## (two k_blocks through gemm_ukernel), config (α, β) = (1.0, 0.0),
 ## 128 threads.
 ##
-## gemm_tiled(tma, threadIdx, epi, A, B, TileShape) = tiling + thread
-## decomposition + fragment gathering + the k_block loop in gemm_ukernel,
-## with a fused epilogue (EpiAXPBY: preflight + apply, D = α·AB + β·C).
-## The C buffer is pre-filled with NaN: the β=0 branch must skip the C
-## read, so a spurious read (or a dropped store) produces NaN != expected.
+## gemm_tiled(tma, dFrag, A, B, TileShape, threadIdx) = tiling + thread
+## decomposition + fragment gathering (one k-tile: K == BLK_K) + the
+## k_block loop in gemm_ukernel, accumulating into the caller's dFrag.
+## The fused epilogue (EpiAXPBY: preflight + apply, D = α·AB + β·C) runs
+## after the call (gemm_cta owns the accumulator + epilogue in the
+## production path).
+## NaN: the β=0 branch must skip the C read, so a spurious read (or a
+## dropped store) produces NaN != expected.
 ##
 ## The atom is the parameter — SM86_16x8x8_F32TF32TF32F32_TN; the tiling
 ## (2×2×1 atoms) and tile geometry are derived inside the driver func
@@ -31,6 +34,7 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/ceramic/src/kernel_gemm_epilogues
+import workspace/ceramic/src/kernel_fillwith_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible
 
@@ -46,10 +50,10 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
                      A, B: ptr UncheckedArray[uint32];
                      beta: float32) {.inline.} =
   ## C(32×16) = α·A(32×16)·B(16×16) + β·C — 1×1 tiled m16n8k8 tf32,
-  ## 128 threads, K = TILE_K = 16, fused epilogue.
+  ## 128 threads, K = TILE_K = BLK_K = 16, fused epilogue.
   ## Tile geometry: 2×2×1 atoms over the (2,2,1) thread layout.
   const
-    TILE_K = 16                  # the tile K in elements
+    TILE_K = 16                  # the full K and the k-tile depth (BLK_K == K)
     thrM = toIntVal(tma.threadLayout.shape[0])
     thrN = toIntVal(tma.threadLayout.shape[1])
     thrK = toIntVal(tma.threadLayout.shape[2])
@@ -63,7 +67,13 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   let thr = tma.get_slice(threadIdx)
   var tCv = tma.partition_C(thr, tC)
   var epi = initEpiAXPBY(alpha, beta, tCv)
-  tma.gemm_tiled(tCv, tA, tB, epi, (TILE_M, TILE_N, TILE_K), threadIdx)
+  # the accumulator: zeroed once, gemm_tiled accumulates into it, the
+  # epilogue runs once after (gemm_cta owns this in the production path)
+  var dFrag = make_tensor(float32, tCv.layout.shape)
+  dFrag.fillWith(float32(0))
+  tma.gemm_tiled(dFrag, tA, tB, (TILE_M, TILE_N, TILE_K), threadIdx)
+  epi.preflight()
+  epi.apply(tCv, dFrag)
 
 const kernelCode = cuda:
   proc gemmTiledKernel(

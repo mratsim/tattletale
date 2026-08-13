@@ -21,60 +21,64 @@
 ##   dFrag). Atom-parametric. The same signature serves GPU tensor cores
 ##   and CPU FMA/AMX atoms.
 ##
-## `gemm_tiled`: one tile of the problem GEMM: thread partitioning,
-##   fragment gathering, the k_block loop in `gemm_ukernel`, and the
-##   fused epilogue (the Epilogue zoo: EpiAXPBY, EpiIdentity, EpiReLU,
-##   EpiAddBias).
+## `gemm_tiled`: one k-tile of the problem GEMM: thread partitioning,
+##   fragment gathering (BLK_K deep), and the k_block loop in
+##   `gemm_ukernel`, accumulating into the caller's dFrag (in/out,
+##   cute::gemm's accumulator style). No accumulator zeroing, no k-tile
+##   loop, no epilogue (gemm_cta owns all three).
 ##
-## `gemm_grid`: one CTA tile of the problem GEMM, selected by grid
+## `gemm_cta`: one CTA tile of the problem GEMM, selected by grid
 ##   coordinates (blockIdx.x/y). It divides the global A/B layouts into
-##   tile grids (flat_divide) and slices the CTA's tile by coordinate,
-##   the CUTLASS local_tile pattern, then calls `gemm_tiled`.
+##   tile grids (flat_divide) with K as a TILED MODE (the local_tile
+##   pattern), slices each k-tile by coordinate, loops them (the
+##   gemm_k_iterations loop), zeroes the accumulator once, and runs the
+##   fused epilogue once after the loop.
 ##
-## Data flow: one CTA tile (tileM×tileN, K = the tile K):
+## Data flow: one CTA tile (tileM×tileN) over the full problem K:
 ##
 ## ```
-##   A (tileM, K) gmem          B (tileN, K) gmem
-##        │ partition_A              │ partition_B
-##        ▼                          ▼
-##   tAv (V,RestM,RestK)      tBv (V,RestN,RestK)        C (V,RestM,RestN)
-##        │                          │          (partition_C of the tile,
-##        └───────────┬──────────────┘           the epilogue destination)
-##                    ▼
-##              aFragTile     bFragTile     : full-K fragments
-##              (registers, make_fragment_A/B)  (one copyFrom each)
-##                    │           │
-##                    └─────┬─────┘
-##                          ▼
+## gemm_cta:  init dFrag := 0 before the k-tile loop
+##              |  for kCTA in 0 ..< kTiles:          # k-tile loop, static bound
+##              |    tA_k = tAg(_, _, mCTA, kCTA)     # static (tileM, BLK_K) view
+##              |    tB_k = tBg(_, _, nCTA, kCTA)     #   (K is a tiled mode)
+##              ▼
+## gemm_tiled: partition_A/B of one k-tile
+##              ▼
+##        tAv (V,RestM,BLK_K div atomK)   tBv (V,RestN,BLK_K div atomK)
+##              │ gather gmem → registers (make_fragment_A/B + copyFrom)
+##              └──────────────┬───────────────┘
+##                             ▼
 ##              gemm_ukernel: dFrag += Σ_k aFrag(_,_,k)·bFrag(_,_,k)
-##                          │   one gemm_atom per k_block
-##                          ▼
-##                    dFrag (register fragment, zero-cleared)
-##                          │
-##                          ▼  fused epilogue (the Epilogue zoo):
-##                    D = f(AB)                  (preflight stages the
-##                    C (tileM, tileN) gmem       op operands: C for AXPBY,
-##                                                bias for AddBias)
+##                             │   one gemm_atom per k_block
+##                             ▼
+##                      dFrag (persistent accumulator)
+##              │
+##              ▼  after the loop: the fused epilogue (once):
+##        D = f(AB)                    (preflight stages the op operands:
+##        C (tileM, tileN) gmem         C for AXPBY, bias for AddBias)
 ## ```
 ##
-## Loop nesting:
+## Loop nesting (CUTLASS kernel → collective → cute::gemm):
 ##
 ## ```
-## gemm_grid:   tile origin from blockIdx, bake into A/B/C views
-##                |
-## gemm_tiled:  gather aFragTile/bFragTile         # gmem → registers (full K)
+## gemm_cta:   tile + k-tile origins from blockIdx and the loop var
+##              init dFrag := 0 before the k-tile loop
+##              for kCTA in 0 ..< kTiles:              # k-tile loop, static bound
+##                gemm_tiled: partition + gather (BLK_K)    # gmem → registers
 ##                gemm_ukernel: for k_block in 0 ..< kBlocks  # k_block loop
 ##                  gemm_atom(mma, dFrag, aFrag(_,_,k), bFrag(_,_,k))  # one mma.sync
+##              fused epilogue once after the loop
 ## ```
 ##
 ## Tile/block hierarchy:
 ##
 ## ```
 ## problem (M, N, K)                                  gmem       the whole GEMM
-## └─ threadblock tile (tileM, tileN, tileK)          1 CTA      ← gemm_grid's blockIdx pick, gemm_tiled's tile
-##    ├─ warp tile (tileM/nW, tileN/nW)               1 warp
-##    │   └─ thread tile / fragment                   1 thread   ← rmem (aFragTile/dFrag)
-##    └─ k_block (atomK)                              1 warp     ← one gemm_atom
+## └─ threadblock tile (tileM, tileN, K)              1 CTA      ← gemm_cta's blockIdx pick
+##    ├─ k-tile (tileM, tileN, BLK_K)                1 k-tile    ← gemm_cta's loop var
+##    │   ├─ warp tile (tileM/nW, tileN/nW)          1 warp
+##    │   │   └─ thread tile / fragment              1 thread   ← rmem (aFragTile/dFrag)
+##    │   └─ k_block (atomK)                         1 warp     ← one gemm_atom
 ## ```
 ##
 ## Memory spaces:
@@ -82,7 +86,9 @@
 ##   smem = shared memory (per-CTA staging: the epilogue's C operand)
 ##   rmem = register memory (the per-thread fragments)
 ##
-## 1 threadblock tile = tileK/atomK k_blocks. Split-K is not used.
+## 1 threadblock tile = K/atomK k_blocks, looped in kTiles = K/tileK
+## k-tiles of tileK/atomK k_blocks each (tileK = BLK_K, the k-tile
+## depth). Split-K is not used.
 ##
 ## NVIDIA mma.sync assembly construction lives in
 ## kernel_gemm/nvidia_tensor_cores.nim.
@@ -170,6 +176,10 @@ func gemm_ukernel*[TC, ShC, StC, TA, ShA, StA, TB, ShB, StB](
   ## "f"/"r" constraints.
   ## Atom-parametric: the same signature serves GPU tensor-core atoms and
   ## CPU FMA/AMX atoms (the atom decides the per-k_block instruction).
+  ##
+  ## gemm_tiled calls it once per k-tile: the fragment's RestK mode is
+  ## the per-tile k_block count (tileK div atomK, tileK = BLK_K), so the
+  ## kBlocks asserts below hold per-tile.
   const
     VA = toIntVal(mma.valuesPerThread(opA))
     VB = toIntVal(mma.valuesPerThread(opB))
@@ -199,73 +209,73 @@ func gemm_ukernel*[TC, ShC, StC, TA, ShA, StA, TB, ShB, StB](
     gemm_atom(mma, dFrag, aFrag(_, _, k_block), bFrag(_, _, k_block))
 
 # ═════════════════════════════════════════════════════════════════════════
-#  gemm_tiled(tma, threadIdx, epi, A, B, TileShape): the tiled GEMM
+#  gemm_tiled(tma, dFrag, A, B, TileShape, threadIdx): one k-tile of the GEMM
 # ═════════════════════════════════════════════════════════════════════════
 
-func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
+func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC](
     tma: static TiledMma;
-    D: var (TensorView[TC, ShC, StC] or Tensor[TC, ShC, StC]);
+    dFrag: var Tensor[TC, ShC, StC];   # the accumulator, in/out (cute::gemm's D)
     A: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA];
     B: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB];
-    epi: Epi;
     TileShape: static tuple[M: int, N: int, K: int];
     threadIdx: int) {.inline.} =
-  ## One tile of the problem GEMM with a fused epilogue.
+  ## One k-tile of the problem GEMM: partition, gather, k_block microkernel.
+  ##
+  ## This is the per-k-tile compute of the CUTLASS collective mainloop
+  ## (partition_fragment_A + cute::gemm): the static (tileM, tileN,
+  ## BLK_K) k-tile views are
+  ## partitioned into this thread's (V, RestM, RestK) operand views,
+  ## gathered gmem → registers once, and gemm_ukernel accumulates into the
+  ## caller's dFrag (in/out). No accumulator zeroing, no k-tile loop, no
+  ## epilogue: gemm_cta zeroes dFrag once, loops the k-tiles, and runs
+  ## the fused epilogue once after the loop.
   ##
   ## Args:
   ##   tma: the TiledMma, atom plus (ThrM, ThrN, ThrK) thread tiling
-  ##   D: the thread's destination fragment view (partition_C of the C
-  ##        tile), written by the epilogue. AXPBY reads C_old from the
-  ##        same gmem through the op's staged copy
-  ##   A: col-major (tileM, tileK) view, element type TA (tf32 uint32 in v1)
-  ##   B: col-major (tileN, tileK) view, element type TB (tf32 uint32 in v1)
-  ##   epi: the fused epilogue op: any type satisfying the Epilogue
-  ##        concept (the shipped EpiAXPBY/EpiIdentity/EpiReLU/EpiAddBias
-  ##        or a user-defined op), built by the caller. It carries the
-  ##        staged operands (C, bias) and applies D = f(AB)
-  ##   TileShape: static (tileM, tileN, tileK), the tile dims. tileM and
+  ##   dFrag: the accumulator fragment (V, RestM, RestN), in/out. The
+  ##        caller zeroes it before the k-tile loop and reads it in the
+  ##        epilogue after. Its shape type is the partition_C shape (the
+  ##        epilogue's shared-Sh contract)
+  ##   A: col-major (tileM, tileK) view, ONE k-tile of the CTA's A tile,
+  ##        element type TA (tf32 uint32 in v1)
+  ##   B: col-major (tileN, tileK) view, ONE k-tile of the CTA's B tile,
+  ##        element type TB (tf32 uint32 in v1)
+  ##   TileShape: static (tileM, tileN, tileK), the k-tile dims. tileM and
   ##        tileN must be exactly the thread layout's coverage
-  ##        (thrM·atomM, thrN·atomN). tileK is the views' K
+  ##        (thrM·atomM, thrN·atomN). tileK is the k-tile depth (BLK_K)
   ##   threadIdx: the flat linear thread id in 0 ..< blockSize (a
   ##        multi-dimensional block must be linearized by the caller)
   ##
-  ## Computes the tile: the operand fragments span the full tile K and
-  ## are gathered gmem → registers once. gemm_ukernel loops the k_blocks
-  ## into a zero-cleared accumulator (dFrag, the epilogue's AB). The
-  ## fused epilogue stages its operands into smem (preflight: C for
-  ## AXPBY, bias for AddBias, nothing for Identity/ReLU) and applies
-  ## D = f(AB) (apply). No TMA, no tile-origin logic. The caller bakes
-  ## the origin into the view pointers.
+  ## are gathered gmem → registers once (0.75·BLK_K registers per
+  ## operand). gemm_ukernel loops the k_blocks into dFrag.
   ##
   ## Preconditions:
   ##   - A/B are col-major views with shapes (tileM, tileK), (tileN, tileK)
-  ##   - D is the thread's partition_C view of the tile, built by the
-  ##     caller. The op's staged C reads the same gmem through its own
-  ##     view (op state)
+  ##   - dFrag is the caller's accumulator, zeroed before the loop
   ##   - tileK mod (thrK·atomK) == 0, ThrK == 1
   ##   - threadIdx < blockSize
   ##   - the backing buffers must address the tile. The ragged underlying
   ##     allocation is the caller's contract, not checked in v1
-  ##   - the epilogue's C is read iff beta != 0. The caller must
-  ##     initialize C for beta != 0. C is never read when beta == 0
   ##
   ## Postconditions:
-  ##   - the tile's destination := the epilogue of the accumulated tile
+  ##   - dFrag += A·B over the k-tile's K
   ##   - A and B are unmodified
   ##
   ## Panic-if (expansion-time rejections):
   ##   - TileShape.M/N != thrM·atomM / thrN·atomN. The thread layout must
   ##     exactly cover the tile (the partition contract). Fix the TiledMma
   ##     thread layout or the tile
-  ##   - tileK mod (thrK·atomK) != 0. The tile K is not a multiple of the
-  ##     thread k-depth. Use a tile K multiple of thrK·atomK
+  ##   - tileK mod (thrK·atomK) != 0. The k-tile depth is not a multiple
+  ##     of the thread k-depth. Use a tile K multiple of thrK·atomK
   ##   - ThrK != 1. v1 does not distribute threads along K
-  ##   - view shape mismatch. Pass (tileM, tileK), (tileN, tileK)
-  ##     col-major views
+  ##   - view shape mismatch. Pass (tileM, tileK), (tileN, tileK) col-major
+  ##     views with tileK = BLK_K
+  ##   - accumulator size != tileM·tileN div blockSize. dFrag must be the
+  ##     thread's full C fragment for the tile
   const
     tileM = TileShape[0]
     tileN = TileShape[1]
-    tileK = TileShape[2]
+    tileK = TileShape[2]          # the k-tile depth (BLK_K)
     atomM = tma.atom.mnk.m
     atomN = tma.atom.mnk.n
     atomK = tma.atom.mnk.k
@@ -283,62 +293,39 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
         "). The thread layout must exactly cover the tile (partition contract)"
     doAssert tileK mod (thrK * atomK) == 0,
       "gemm_tiled: TileShape.K (" & $tileK & ") mod (thrK·atomK) (" & $thrK & "·" & $atomK &
-        ") != 0. Use a tile K multiple of thrK·atomK"
+        ") != 0. Use a k-tile depth multiple of thrK·atomK"
     doAssert thrK == 1,
       "gemm_tiled: ThrK (" & $thrK & ") != 1. v1 does not distribute threads along K"
-    doAssert ShA.default[0] === tileM,
-      "gemm_tiled: A shape M (" & $ShA.default[0] & ") != tile M (" & $tileM &
-        "). Pass a (tileM, tileK) view"
-    doAssert ShA.default[1] === tileK,
-      "gemm_tiled: A shape K (" & $ShA.default[1] & ") != tile K (" & $tileK &
-        "). Pass a (tileM, tileK) view"
-    doAssert ShB.default[0] === tileN,
-      "gemm_tiled: B shape N (" & $ShB.default[0] & ") != tile N (" & $tileN &
-        "). Pass a (tileN, tileK) view"
-    doAssert ShB.default[1] === tileK,
-      "gemm_tiled: B shape K (" & $ShB.default[1] & ") != tile K (" & $tileK &
-        "). Pass a (tileN, tileK) view"
+    doAssert ShA.default[0] === tileM and ShA.default[1] === tileK,
+      "gemm_tiled: A shape (" & $ShA.default[0] & ", " & $ShA.default[1] &
+        ") != tile (" & $tileM & ", " & $tileK & "). Pass a (tileM, BLK_K) view"
+    doAssert ShB.default[0] === tileN and ShB.default[1] === tileK,
+      "gemm_tiled: B shape (" & $ShB.default[0] & ", " & $ShB.default[1] &
+        ") != tile (" & $tileN & ", " & $tileK & "). Pass a (tileN, BLK_K) view"
     doAssert toIntVal(ShC.default[0]) * toIntVal(ShC.default[1]) * toIntVal(ShC.default[2]) === tileM * tileN div blockSize,
-      "gemm_tiled: epilogue C fragment size (" & $(toIntVal(ShC.default[0]) * toIntVal(ShC.default[1]) * toIntVal(ShC.default[2])) &
+      "gemm_tiled: accumulator size (" & $(toIntVal(ShC.default[0]) * toIntVal(ShC.default[1]) * toIntVal(ShC.default[2])) &
         ") != tile elements per thread (" & $(tileM * tileN div blockSize) & ")"
-    doAssert Epi is Epilogue,
-      "gemm_tiled: the epilogue op must satisfy the Epilogue concept (preflight + 2-arg apply)"
 
   let thr = tma.get_slice(threadIdx)
-  # The thread's operand views:
-  #   tAv = (V, RestM, RestK), my A fragment in gmem
-  #   tBv = (V, RestN, RestK), my B fragment in gmem
+  # The thread's operand views for ONE k-tile (static (tileM, BLK_K) tile):
+  #   tAv = (V, RestM, RestK), my A fragment in gmem, RestK = BLK_K div atomK
   let tAv = tma.partition_A(thr, A)
   let tBv = tma.partition_B(thr, B)
 
-  # D/AB naming follows the epilogue:
-  #   D   = the destination fragment, this thread's C view (epi.C_gmem)
-  #   AB  = the accumulator fragment, dFrag. dFrag shares the partition
-  #         view's shape type with column-major compact strides, so its
-  #         flat enumeration is the register order and the epilogue's
-  #         shared-Sh contract holds.
-  var dFrag = make_tensor(TC, ShC.default)
-  dFrag.fillWith(TC(0))  # TC(0) not 0.0'f32: the accumulator dtype derives from the atom's cType
-
-  var o = epi
-  # the operand fragments span the full tile K. The k_block loop lives
-  # in gemm_ukernel
+  # gather the k-tile's fragments gmem → registers, BLK_K deep
   var aFragTile = make_fragment_A(tma.atom, tAv)
   aFragTile.copyFrom(tAv)
   var bFragTile = make_fragment_B(tma.atom, tBv)
   bFragTile.copyFrom(tBv)
+
+  # the k_block microkernel: accumulate into dFrag (in/out)
   gemm_ukernel(tma.atom, dFrag, aFragTile, bFragTile)
 
-  # fused epilogue: preflight stages the op's operands (C for AXPBY,
-  # bias for AddBias, skipped for Identity/ReLU), apply writes D = f(AB)
-  o.preflight()
-  o.apply(D, dFrag)
-
 # ═════════════════════════════════════════════════════════════════════════
-#  gemm_grid(tma, D, A, ldA, B, ldB, epi, M, N, K, TileShape, mCTA, nCTA, threadIdx)
+#  gemm_cta(tma, D, A, ldA, B, ldB, epi, M, N, K, TileShape, mCTA, nCTA, threadIdx)
 # ═════════════════════════════════════════════════════════════════════════
 
-func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
+func gemm_cta*[TA, TB, TC, ShC, StC, Epi](
     tma: static TiledMma;
     D: var (TensorView[TC, ShC, StC] or Tensor[TC, ShC, StC]);  # the thread's destination fragment view
     A: ptr UncheckedArray[TA]; ldA: static int;   # (M, K) col-major gmem, ldA the leading dim
@@ -350,7 +337,7 @@ func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
   ## One CTA tile of the problem GEMM: the (mCTA, nCTA) tile of
   ## C = f(A·B) over the full (M, N, K) problem.
   ##
-  ## The grid layer owns the problem dims. gemm_grid divides the global
+  ## The grid layer owns the problem dims. gemm_cta divides the global
   ## A/B layouts into tile grids (flat_divide) and slices the CTA's tile
   ## by grid coordinate: the offset is resolved by the layout, the
   ## CUTLASS local_tile pattern. The epilogue op and its destination
@@ -371,8 +358,9 @@ func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
   ##   M, N, K: the problem dims, compile-time in v1 (partition offsets are
   ##        baked at compile time). K is the problem's K extent (the A/B
   ##        buffers' K)
-  ##   TileShape: static (tileM, tileN, tileK), see gemm_tiled. The
-  ##        problem K equals tileK in v1 (gemm_tiled has no k-tile loop)
+  ##   TileShape: static (tileM, tileN, tileK), see gemm_tiled. tileK is
+  ##        the k-tile depth (BLK_K); the problem K is a multiple of it
+  ##        (gemm_cta loops K div BLK_K k-tiles)
   ##   mCTA, nCTA: the CTA grid coordinates, blockIdx.x/y. The tile
   ##        origin is m0 = mCTA·tileM, n0 = nCTA·tileN
   ##   threadIdx: the flat linear thread id in 0 ..< blockSize
@@ -380,12 +368,13 @@ func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
   ## Preconditions:
   ##   - M mod tileM == 0 and N mod tileN == 0, the v1 divisibility
   ##     contract. Ragged tiles are a documented TODO
-  ##   - K == tileK: the CTA tile spans the whole problem K in v1 (no
-  ##     k-tile loop; the k-tile loop later slices K per tile)
+  ##   - K mod tileK == 0: the problem K is a multiple of the k-tile
+  ##     depth, so the CTA tile (which spans the full K) splits into an
+  ##     integer number of k-tiles
   ##   - the CTA grid covers 0 ..< M div tileM by 0 ..< N div tileN, so
   ##     m0 + tileM <= M and n0 + tileN <= N (the launcher's contract)
   ##   - ldA = M, ldB = N. The epilogue's C leading dim is M
-  ##   - K mod (thrK·atomK) == 0, enforced by gemm_tiled
+  ##   - tileK mod (thrK·atomK) == 0, enforced by gemm_tiled
   ##
   ## Postconditions:
   ##   - the (mCTA, nCTA) tile of the destination := the epilogue of the
@@ -394,34 +383,55 @@ func gemm_grid*[TA, TB, TC, ShC, StC, Epi](
   const
     tileM = TileShape[0]
     tileN = TileShape[1]
-    tileK = TileShape[2]
+    tileK = TileShape[2]      # the k-tile depth (BLK_K)
+    kTiles = K div tileK      # the k-tile count (CUTLASS's gemm_k_iterations)
   static:
     doAssert M mod tileM == 0,
-      "gemm_grid: M (" & $M & ") mod tileM (" & $tileM & ") != 0. v1 requires tile-aligned" &
+      "gemm_cta: M (" & $M & ") mod tileM (" & $tileM & ") != 0. v1 requires tile-aligned" &
       " problem dims, ragged tiles are a documented TODO"
     doAssert N mod tileN == 0,
-      "gemm_grid: N (" & $N & ") mod tileN (" & $tileN & ") != 0. v1 requires tile-aligned" &
+      "gemm_cta: N (" & $N & ") mod tileN (" & $tileN & ") != 0. v1 requires tile-aligned" &
       " problem dims, ragged tiles are a documented TODO"
-    doAssert tileK == K,
-      "gemm_grid: TileShape.K (" & $tileK & ") != problem K (" & $K & "). v1 has no" &
-      " k-tile loop — the CTA tile spans the whole problem K, so pass TileShape.K == K" &
-      " (the k-tile loop later relaxes this)"
+    doAssert K mod tileK == 0,
+      "gemm_cta: problem K (" & $K & ") mod k-tile depth (" & $tileK & ") != 0. The CTA" &
+      " tile spans the whole problem K; gemm_cta slices it into K div BLK_K k-tiles," &
+      " so the problem K must be a multiple of BLK_K"
     doAssert ldA == M,
-      "gemm_grid: ldA (" & $ldA & ") != M (" & $M & "). v1 requires compact (M, K) buffers"
+      "gemm_cta: ldA (" & $ldA & ") != M (" & $M & "). v1 requires compact (M, K) buffers"
     doAssert ldB == N,
-      "gemm_grid: ldB (" & $ldB & ") != N (" & $N & "). v1 requires compact (N, K) buffers"
+      "gemm_cta: ldB (" & $ldB & ") != N (" & $N & "). v1 requires compact (N, K) buffers"
+    doAssert Epi is Epilogue,
+      "gemm_cta: the epilogue op must satisfy the Epilogue concept (preflight + 2-arg apply)"
+    doAssert K > 0,
+      "gemm_cta: problem K (" & $K & ") must be positive. K = 0 would give zero k-tiles"
 
-  # Global views -> tile grids (flat_divide keeps the operand strides),
-  # then the CTA's tile by grid coordinate. The tile offset is the
-  # layout's crd2idx, not a hand-written pointer offset. The k mode is
-  # size 1 in v1 (tileK is the whole K, no k-tile loop), fixed to 0;
-  # the k-tile loop later slices it per tile.
-  # v1: tileK is the whole problem K (no k-tile loop), so the global
-  # shape K equals TileShape.K. The k-tile loop later passes K here.
-  let mA = make_view(A, (M, tileK), (1, ldA))
-  let mB = make_view(B, (N, tileK), (1, ldB))
+  # Global views -> tile grids: K becomes a TILED MODE (the local_tile
+  # pattern): flat_divide by (tileM, BLK_K) tiles the (M, K) layout into
+  # (tileM, BLK_K, m_tiles, k_tiles), so each slice (_, _, mCTA, kCTA) is
+  # a STATIC (tileM, BLK_K) k-tile view. The offset comes from the
+  # layout's crd2idx, no manual pointer math.
+  let mA = make_view(A, (M, K), (1, ldA))
+  let mB = make_view(B, (N, K), (1, ldB))
   let tAg = make_view(mA.data, flat_divide(mA.layout, (tileM, tileK)))
   let tBg = make_view(mB.data, flat_divide(mB.layout, (tileN, tileK)))
-  let tA = tAg(_, _, mCTA, 0)
-  let tB = tBg(_, _, nCTA, 0)
-  tma.gemm_tiled(D, tA, tB, epi, TileShape, threadIdx)
+
+  # the accumulator: zeroed once, persists across k-tiles (the collective
+  # mainloop's accumulator), built from D's partition_C shape
+  var dFrag = make_tensor(TC, D.layout.shape)
+  dFrag.fillWith(TC(0))  # TC(0) not 0.0'f32: the accumulator dtype is D's element type (the atom's cType in v1)
+
+  # the k-tile loop (the gemm_k_iterations loop): a runtime for-loop with
+  # a static bound (kTiles = K div BLK_K), anticipating the runtime-K
+  # phase. Each iteration hands gemm_tiled a static (tileM, BLK_K)
+  # k-tile view.
+  for kCTA in 0 ..< kTiles:
+    let tA = tAg(_, _, mCTA, kCTA)
+    let tB = tBg(_, _, nCTA, kCTA)
+    tma.gemm_tiled(dFrag, tA, tB, TileShape, threadIdx)
+
+  # the fused epilogue: once after the complete K accumulation (the
+  # invariant: never per k-tile, never per k_block; the CUTLASS
+  # CollectiveEpilogue pattern)
+  var o = epi
+  o.preflight()
+  o.apply(D, dFrag)
