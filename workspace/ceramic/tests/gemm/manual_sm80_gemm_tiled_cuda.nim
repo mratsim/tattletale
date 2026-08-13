@@ -4,9 +4,12 @@
 ## (two k_blocks through gemm_ukernel), config (α, β) = (1.0, 0.0),
 ## 128 threads.
 ##
-## gemm_tiled(tma, dFrag, A, B, TileShape, threadIdx) = tiling + thread
-## decomposition + fragment gathering (one k-tile: K == tileK) + the
-## k_block loop in gemm_ukernel, accumulating into the caller's dFrag.
+## gemm_tiled(tma, dFrag, A, B, TileShape, threadIdx, validM, validN) =
+## tiling + thread decomposition + fragment gathering (one k-tile:
+## K == tileK) + the k_block loop in gemm_ukernel, accumulating into the
+## caller's dFrag. Here validM/validN are the full tile dims (TILE_M,
+## TILE_N): this test runs no ragged boundary tiles, so the gather never
+## predicates.
 ## The fused epilogue (EpiAXPBY: preflight + apply, D = α·AB + β·C) runs
 ## after the call (gemm_cta owns the accumulator + epilogue in the
 ## production path).
@@ -71,9 +74,11 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   # epilogue runs once after (gemm_cta owns this in the production path)
   var dFrag = make_tensor(float32, tCv.layout.shape)
   dFrag.fillWith(float32(0))
-  tma.gemm_tiled(dFrag, tA, tB, (TILE_M, TILE_N, TILE_K), threadIdx)
+  tma.gemm_tiled(dFrag, tA, tB, (TILE_M, TILE_N, TILE_K), threadIdx, TILE_M, TILE_N)
   epi.preflight()
-  epi.apply(tCv, dFrag)
+  var res = make_tensor(float32, dFrag.layout.shape)
+  epi.apply(res, dFrag)
+  epi.finalStore(res, tCv)
 
 func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
                          alpha: float32;
@@ -101,9 +106,11 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
   # epilogue runs once after (gemm_cta owns this in the production path)
   var dFrag = make_tensor(float32, tCv.layout.shape)
   dFrag.fillWith(float32(0))
-  tma.gemm_tiled(dFrag, tA, tB, (TILE_M, TILE_N, TILE_K), threadIdx)
+  tma.gemm_tiled(dFrag, tA, tB, (TILE_M, TILE_N, TILE_K), threadIdx, TILE_M, TILE_N)
   epi.preflight()
-  epi.apply(tCv, dFrag)
+  var res = make_tensor(float32, dFrag.layout.shape)
+  epi.apply(res, dFrag)
+  epi.finalStore(res, tCv)
 
 const kernelCode = cuda:
   proc gemmTiledKernel(

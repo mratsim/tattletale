@@ -106,9 +106,9 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
       let s = newCall(bindSym"[]", st, newLit(i))
       let shI = newCall(bindSym"[]", sh, newLit(i))
       parts.add quote do:
-        when `sh` is Int[1]:
+        when `shI` is Int[1]:
           Int[0]()
-        elif `sh` is int:
+        elif `shI` is int:
           if `shI` == 1:
             0
           else:

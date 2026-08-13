@@ -543,3 +543,106 @@ proc testGemmCtaBias*[E](engine: var E; tiled: static TiledMma; label: string) =
     allClose(gpuC, C_ref, M, N, "gemm_cta bias trial " & $trial)
 
   echo "  OK: gemm_cta bias (EpiAddBias, D = AB + bias) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2x2 CTA grid, 128 threads, 16 trials, column broadcast, NaN D)"
+
+proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
+                            label, kernelName: string;
+                            M, N, ldA, ldB, ldC: int;
+                            alpha = 1.0'f32, beta = 0.0'f32) =
+  ## C(M×N) = α·A(M×K)·B(N×K) + β·C with runtime M/N and runtime leading
+  ## strides: the kernel receives M, N, ldA, ldB, ldC as arguments and
+  ## builds the problem views from them. gemm_cta covers the
+  ## ceil(M/tileM) × ceil(N/tileN) CTA grid. The buffers are padded to the
+  ## leading strides (the fixture at the compact m + k·ldA offsets), so the
+  ## views are non-compact when a stride exceeds the problem dim. A shape
+  ## with M mod tileM != 0 or N mod tileN != 0 exercises the ragged
+  ## boundary predication (zeros gathered outside the problem, only the
+  ## valid elements stored). Two checks guard the predication itself:
+  ## the pad region of C (rows m >= M, the guard columns n >= N) must stay
+  ## NaN after the run, so a store-mask false positive fails the test
+  ## instead of landing invisibly.
+  ##   - beta == 0: C is NaN-prefilled, a spurious C read fails
+  ##   - beta != 0: C's valid region is prefilled with exact small ints,
+  ##     the reference adds β·C, and the masked-off C reads are skipped
+  ##     (the mask wraps the read)
+  ## Bit-exact vs the tf32 reference.
+  const
+    K = 32                          # the problem K, one k-tile deep
+    TILE_K = 32                     # the k-tile depth
+    thrM = toIntVal(tiled.threadLayout.shape[0])
+    thrN = toIntVal(tiled.threadLayout.shape[1])
+    thrK = toIntVal(tiled.threadLayout.shape[2])
+    # the tile dims follow from the thread layout's exact coverage, the
+    # same contract gemm_tiled asserts; the CUDA/OpenCL kernel strings
+    # hardcode the matching literals (pinned by the manual tests)
+    TILE_M = thrM * toIntVal(tiled.atom.mnk.m)
+    TILE_N = thrN * toIntVal(tiled.atom.mnk.n)
+    blockSize = toIntVal(tiled.atom.threadCount(opA)) * thrM * thrN * thrK
+  static:
+    doAssert TILE_K mod (thrK * toIntVal(tiled.atom.mnk.k)) == 0,
+      "testGemmCtaDynamic: the k-tile depth (" & $TILE_K &
+      ") must be a multiple of thrK·atomK"
+  let gridM = (M + TILE_M - 1) div TILE_M
+  let gridN = (N + TILE_N - 1) div TILE_N
+  var rng = initRand(0xC0FFEE + M * 131 + N * 17 + ldA * 7)
+  for trial in 0 ..< 16:
+    let A_fixture = tf32Fixture(rng, M, K)
+    let B_fixture = tf32Fixture(rng, N, K)
+
+    # padded buffers: the fixture at the strided offsets, the pad rows
+    # never read (the views cover only the problem M/N)
+    var A_gpu = newSeq[uint32](ldA * K)
+    var B_gpu = newSeq[uint32](ldB * K)
+    for k in 0 ..< K:
+      for m in 0 ..< M:
+        A_gpu[m + k * ldA] = A_fixture[m + k * M]
+      for n in 0 ..< N:
+        B_gpu[n + k * ldB] = B_fixture[n + k * N]
+
+    var acc = newSeq[float32](M * N)
+    acc.gemm_tf32_ref(A_fixture, B_fixture, M, N, K, 0.0'f32)
+    # the C fixture: exact small ints, used by the β != 0 reference and
+    # the C prefill (the valid region only; the pad stays NaN)
+    var C_fixture = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      C_fixture[i] = float32((i mod M) * 3 + (i div M) * 7 + 1)
+    var C_ref = newSeq[float32](M * N)
+    for i in 0 ..< M * N:
+      C_ref[i] = alpha * acc[i] + beta * C_fixture[i]
+
+    # TILE_N guard columns: a store-mask false positive in n >= N lands
+    # here instead of past the buffer (ragged-N overshoot can reach
+    # n = N + TILE_N - 1)
+    var gpuC = newSeq[float32](ldC * (N + TILE_N))
+    for i in 0 ..< gpuC.len:
+      gpuC[i] = 0x7FC00000'f32    # NaN sentinel, a spurious C read fails
+    if beta != 0.0'f32:
+      for n in 0 ..< N:
+        for m in 0 ..< M:
+          gpuC[m + n * ldC] = C_fixture[m + n * M]
+    engine.run<<(gridM * gridN, blockSize)>>(kernelName, gpuC,
+               (A_gpu, B_gpu, int32(M), int32(N), int32(ldA), int32(ldB), int32(ldC),
+                alpha, beta))
+
+    # repack the ldC-strided result into a compact (M, N) array
+    var compact = newSeq[float32](M * N)
+    for n in 0 ..< N:
+      for m in 0 ..< M:
+        compact[m + n * M] = gpuC[m + n * ldC]
+    allClose(compact, C_ref, M, N,
+             "gemm_cta dynamic M=" & $M & " N=" & $N & " trial " & $trial)
+
+    # the pad region must be untouched: any element outside the valid
+    # (M, N) range still holding the NaN sentinel proves the store mask
+    # skipped it (a false positive writes the pad or a guard column)
+    for n in 0 ..< N + TILE_N:
+      for m in 0 ..< ldC:
+        if m >= M or n >= N:
+          doAssert isNaN(gpuC[m + n * ldC]),
+            "gemm_cta dynamic: a store wrote past the valid (M, N) range" &
+            " (m=" & $m & ", n=" & $n & "), the store mask has a false positive"
+
+  echo "  OK: gemm_cta dynamic M=" & $M & " N=" & $N &
+    " ldA=" & $ldA & " ldB=" & $ldB & " ldC=" & $ldC &
+    " (α=" & $alpha & ", β=" & $beta & ") matches reference within 1e-4" &
+    " (tf32-exact fixture, ", label, " atom, " & $gridM & "x" & $gridN &
+    " CTA grid, 16 trials, pad region verified NaN)"

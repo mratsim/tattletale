@@ -7,58 +7,83 @@
 ##
 ## Epilogue fusion operations for the tiled GEMM.
 ##
-## An Epilogue computes the output tile
+## An epilogue computes the output tile
 ##   D = f(AB)
 ## where
-##   D   is the destination (var, the output tile in registers or gmem)
+##   D   is the destination (the output tile in gmem, written per thread)
 ##   AB  is the accumulated GEMM result (the accumulator fragment)
 ##
-## The op object is the epilogue configuration.
-## It carries its operands as fields (EpiAXPBY's C, EpiAddBias's bias).
-## `apply` reads them through the op-held smem pointers, filled by `preflight`.
+## Each op is split into two concept members:
+##   `apply(op, res, AB)`      the math, pure: writes the result fragment
+##                            `res` (registers) from the accumulator and
+##                            the op's operands. No store, no predication.
+##   `finalStore(op, res, D)`  the store: writes the result fragment to
+##                            the gmem destination. This is where
+##                            ragged-tile predication and delayed stores
+##                            (flash-attention-style) live. One shared
+##                            implementation for every op (see below the
+##                            concept).
 ##
-## `apply` iterates `size(D)`, the destination's logical size.
-## For each flat index i it computes D(i) from AB(i) and the staged operands.
-## Each tensor is indexed through its own layout, so operand ranks and
-## strides are unconstrained and need not match D's.
+## The op object is the epilogue configuration. It carries its operands
+## as fields (EpiAXPBY's C, EpiAddBias's bias) and the store mask
+## (storeMask, set by gemm_cta on ragged boundary tiles). `apply` reads
+## the operands through the op-held gmem views.
 ##
-## alpha and beta are runtime values.
-## The `apply` branches on them once, before the element loop, so the
-## element loop has no branches on op state.
+## `apply` iterates the fragment size. For each flat index i it writes
+## res(i) from AB(i) and the op's operands. Each tensor is indexed
+## through its own layout, so operand ranks and strides are unconstrained
+## and need not match res's.
+##
+## alpha and beta are runtime values. `apply` branches on them once,
+## before the element loop, so the element loop has no branches on op
+## state. On GPU the branches are uniform (alpha and beta are identical
+## for every thread), so there is no warp divergence, the cost is on
+## instruction cache / code size.
+##
+## Ragged boundary tiles (the problem M or N is not a multiple of the
+## tile dims): gemm_cta computes the tile's valid extent, derives a
+## store mask from it (cStoreMask), and stores it on the op. `finalStore`
+## skips the masked-off elements, so the padding outside the problem is
+## never written. The math is never predicated: the elements outside the
+## valid extent are computed like any other (their A/B operands were
+## zero-filled by the ragged gather) but not stored.
 ##
 ## ── Contract ──
 ## Each op must provide:
 ##   `preflight(op: var Self)`  a TEMPLATE that injects the staging buffer
 ##                            into the caller scope ({.inject.}, shared memory via {.shared.} on GPU)
 ##                            and stages the op's gmem operands into it
-##                            (cp.async / TMA pending). EpiAXPBY's is a
-##                            no-op stub: C is read per-thread from gmem in
-##                            `apply` (direct register→gmem is the default;
-##                            smem staging is future LoadKind work).
+##                            (cp.async / TMA pending). All shipped ops
+##                            have no-op stubs: operands are read
+##                            per-thread from gmem in `apply` (direct
+##                            register→gmem is the default; smem staging
+##                            is future LoadKind work).
 ##
-##   `apply(op, D, AB)`         The actual epilogue function
+##   `apply(op, res, AB)`     The epilogue math, pure: writes the result
+##                            fragment `res` (registers) from the
+##                            accumulator `AB` and the op's operands.
 ##
-## D and AB share the shape type Sh: the compiler enforces equal shapes,
+##   `finalStore(op, res, D)` The store: writes the result fragment to
+##                            the gmem destination, skipping the elements
+##                            outside the tile's valid (M, N) extent
+##                            (op.storeMask, see below). One shared
+##                            implementation for every op.
+##
+## Store predication:
+##   `storeMask*: int`, bit i set = fragment element i is inside the
+##   valid (M, N) range of the tile and may be stored. Defaults to all
+##   bits set (no predication). gemm_cta overwrites it on ragged
+##   boundary tiles; `finalStore` skips the masked-off stores.
+##
+## res and AB share the shape type Sh: the compiler enforces equal shapes,
 ## a mismatched shape is a type error. They do not have to have the same types
-## hence epilogue can do type conversions.
+## hence the epilogue can do type conversions.
 ##
-## gemm_tiled calls, in order:
-##   `op.preflight()`           stages gmem operands (EpiAXPBY: no-op stub today)
-##   `op.apply(D, AB)`          the epilogue math (EpiAXPBY reads C via op.C_gmem)
-##
-## Target contract:
-##   `shard(op, D, tD, tDv)`    partition the captured operands by thread, projecting
-##                              onto the output fragment the kernel already partitioned
-##   `preflight(op)`            initiate async data movement (no-op stub today)
-##   `apply(op, AB, ...)`       the epilogue math, pure — reads the accumulator and the
-##                              shard's operand fragments, produces the output fragment.
-##                              `apply` STAYS a concept member
-##   `finalStore(op, out, D)`   the STORE — writes the output fragment to the gmem
-##                              destination. A separate responsibility from the math:
-##                              it is where ragged-tile predication and
-##                              flash-attention-style delayed stores live
-##   Today's fused `apply(D, AB)` (compute + store in one, D = the gmem destination
-##   written directly) is the v1 form, the target splits it into apply + finalStore.
+## gemm_cta calls, in order:
+##   `op.preflight()`           stages gmem operands (no-op stub today)
+##   `op.apply(res, AB)`        the epilogue math (EpiAXPBY reads C via op.C_gmem)
+##   `op.storeMask = ...`       gemm_cta derives the mask from the tile's valid extent
+##   `op.finalStore(res, D)`    the store, predicated for ragged tiles
 ##
 ## The concept is Nim concepts V2 (bare `concept`, `Self` = the matched type).
 ## V2 concepts only accept proc requirements, so `preflight` cannot be a concept member.
@@ -78,28 +103,54 @@ import ./tensors
 # ═════════════════════════════════════════════════════════════════════════
 
 type Epilogue* = concept
-  ## The concept: an Epilogue computes the output tile with the 2-arg
-  ## `apply(D, AB)` (the target name is `finalStore`, see the module
-  ## header). D and AB share the shape type Sh.
-  ## This is the only compiler-enforced member. Any user-defined type
-  ## with a matching apply is an epilogue; the shipped ops are examples,
-  ## not a closed zoo.
+  ## The concept: an Epilogue computes the output tile with the two
+  ## members `apply(res, AB)` (the math) and `finalStore(res, D)` (the
+  ## store). res and AB share the shape type Sh.
+  ## Any user-defined type with both members is an epilogue; the shipped
+  ## ops are examples, not a closed zoo. `finalStore` is satisfied by a
+  ## single generic implementation shared by every op (see below).
   ##
   ## Contract (structural, see the module header):
   ##   `template preflight(op: var Self): untyped`
   ##     A template that injects the staging buffer into the caller scope
   ##     ({.inject.}, shared on GPU) and stages the op's gmem operands.
-  ##   gemm_tiled calls `op.preflight()` before `op.apply(D, AB)`
+  ##   gemm_cta calls `op.preflight()` before `op.apply(res, AB)`
   ##   a missing `preflight` is a compile error at that call site.
   ##
-  ## Target contract:
-  ##   `shard(op, D, tD, tDv)`   partition the captured operands by thread,
-  ##                             projecting onto the output fragment the
-  ##                             kernel already partitioned
-  ##   `preflight(op)`           initiate async data movement (no-op today)
-  ##   `apply(op, AB, ...)`      the math — STAYS a concept member
-  ##   `finalStore(op, out, D)`  the store, separate from the math
-  proc apply(op: Self, D: var (TensorView or Tensor), AB: TensorView or Tensor)
+  ## Store predication (ragged tiles):
+  ##   `storeMask*: int`, bit i set = fragment element i is inside the
+  ##   valid (M, N) range of the tile and may be stored. Defaults to all
+  ##   bits set (no predication). gemm_cta overwrites it on ragged
+  ##   boundary tiles; `finalStore` skips the masked-off stores.
+  proc apply(op: Self, res: var (TensorView or Tensor), AB: TensorView or Tensor)
+  proc finalStore(op: Self, res: (TensorView or Tensor), D: var (TensorView or Tensor))
+
+# ═════════════════════════════════════════════════════════════════════════
+#  finalStore — the store, shared by every op
+# ═════════════════════════════════════════════════════════════════════════
+
+func finalStore*[T, Sh, StR, StD](
+    op: Epilogue;
+    res: (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
+    D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD])) {.inline.} =
+  ## Write the result fragment to the gmem destination, skipping the
+  ## elements outside the tile's valid (M, N) extent (ragged boundary
+  ## tiles): op.storeMask bit i set = element i may be stored.
+  ##
+  ## This is the store side of the epilogue, separate from the math
+  ## (apply), and one implementation shared by every op: the op type is
+  ## never used here, only its storeMask field.
+  ## The mask is uniform across threads (gemm_cta computes it once per
+  ## CTA), so the all-ones check below is a uniform branch and a full
+  ## tile takes the straight copy path.
+  let S = toIntVal(size(D.layout))
+  if op.storeMask == (1 shl S) - 1:
+    for i in 0 ..< S:
+      D(i) = res(i)
+  else:
+    for i in 0 ..< S:
+      if ((op.storeMask shr i) and 1) != 0:
+        D(i) = res(i)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiAXPBY: D = α·AB + β·C
@@ -110,6 +161,11 @@ type EpiAXPBY*[T, Sh, StC] = object
   ## D = α·AB + β·C
   alpha, beta: T
   C_gmem: TensorView[T, Sh, StC]
+  storeMask*: int = -1
+    ## Store predication: bit i set = fragment element i is inside the
+    ## valid (M, N) range of the tile and may be stored. All bits set by
+    ## default (no predication). gemm_cta computes it for ragged boundary
+    ## tiles; `finalStore` skips the masked-off stores.
   # C_smem: ptr UncheckedArray[T]
   #   Future: cp.async / TMA smem staging of C. For now C is read
   #   per-thread from gmem in `apply`: no staging, no race.
@@ -120,11 +176,9 @@ func initEpiAXPBY*[T, Sh, StC](
     C: TensorView[T, Sh, StC]): EpiAXPBY[T, Sh, StC] =
   ## Build the op with its C operand. The C view is the same shape as
   ## the output tile (shared Sh, enforced by the compiler).
-  result = EpiAXPBY[T, Sh, StC](alpha: alpha, beta: beta, C_gmem: C)
-
-func cView*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): var TensorView[T, Sh, StC] =
-  ## The C operand view in gmem (the destination D), writable by apply.
-  op.C_gmem
+  ## The store mask starts all-ones (no predication): gemm_cta overwrites
+  ## it for ragged boundary tiles.
+  result = EpiAXPBY[T, Sh, StC](alpha: alpha, beta: beta, C_gmem: C, storeMask: -1)
 
 template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
   ## No-op: C is read per-thread from gmem in `apply` (direct
@@ -133,53 +187,56 @@ template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
   ## into the caller scope and fills it here.
   discard
 
-func apply*[T, Sh, StD, StAB, StC](
+func apply*[T, Sh, StAB, StC, StR](
     op: EpiAXPBY[T, Sh, StC];
-    D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
+    res: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
-  ## D = α·AB + β·C, element-wise over the D tile's (M, N) shape.
-  ## Dispatch hoisted out of the loops (four flat paths):
+  ## D = α·AB + β·C, element-wise over the tile's (M, N) shape.
+  ## Writes the result fragment `res`, no gmem store (see finalStore).
+  ## Dispatch hoisted out of the loop (four flat paths):
   ##   β == 0 → C is never read, this saves memory bandwidth
   ##   α == 1 → the α multiply is skipped
   ## On GPU the branches are uniform
   ##   α/β are identical for every thread
   ##   no warp divergence, the cost is on instruction cache / code size
-  let S = size(D.layout)
+  let S = size(res.layout)
   if op.beta == T(0):
     if op.alpha == T(1):
       for i in 0 ..< S:
-        D(i) = AB(i)
+        res(i) = AB(i)
     else:
       for i in 0 ..< S:
-        D(i) = op.alpha * AB(i)
+        res(i) = op.alpha * AB(i)
   elif op.alpha == T(1):
     for i in 0 ..< S:
-      # This is a single FMA instruction,
-      # specializing for β == doesn't gain performance
-      D(i) = AB(i) + op.beta * op.C_gmem(i)
+      # A single FMA per element
+      res(i) = AB(i) + op.beta * op.C_gmem(i)
   else:
     for i in 0 ..< S:
-      D(i) = op.alpha * AB(i) + op.beta * op.C_gmem(i)
+      res(i) = op.alpha * AB(i) + op.beta * op.C_gmem(i)
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiIdentity: D = AB (α=1, β=0, compile-time constants)
 # ═════════════════════════════════════════════════════════════════════════
 
 type EpiIdentity* = object
-  ## Identity epilogue: D = AB, C ignored. Used when the GEMM has no C
-  ## operand. C stays in the signature (the concept is uniform) but is
-  ## never read.
+  ## Identity epilogue: D = AB. Used when the GEMM has no C operand.
+  storeMask*: int = -1
+    ## Store predication bitmask (see EpiAXPBY.storeMask)
 
 template preflight*(op: var EpiIdentity): untyped =
   ## EpiIdentity `preflight` is a no-op
   discard
 
-func apply*[T, Sh, StD, StAB](
+func apply*[T, Sh, StAB, StR](
     op: EpiIdentity;
-    D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
+    res: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
-  for i in 0 ..< size(D.layout):
-    D(i) = AB(i)
+  ## D = AB, element-wise over the tile's (M, N) shape.
+  for i in 0 ..< size(res.layout):
+    res(i) = AB(i)
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiAddBias: D = AB + bias (column broadcast)
@@ -189,12 +246,17 @@ type EpiAddBias*[T, Sh, St] = object
   ## D = AB + bias.
   ## Bias is a column vector broadcasted onto AB
   bias_gmem: TensorView[T, Sh, St]
+  storeMask*: int = -1
+    ## Store predication bitmask (see EpiAXPBY.storeMask)
   # bias_smem: ptr UncheckedArray[T]
   #   Future: cp.async / TMA smem staging of the bias. For now bias is
   #   read per-thread from gmem in `apply`: no staging, no race.
 
 func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, St] =
+  ## Build the op with its bias operand. The store mask starts all-ones
+  ## (no predication): gemm_cta overwrites it for ragged boundary tiles.
   result.bias_gmem = bias
+  result.storeMask = -1
 
 template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
   ## No-op: bias is read per-thread from gmem in `apply` (direct
@@ -203,12 +265,15 @@ template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
   ## into the caller scope and fills it here.
   discard
 
-func apply*[T, Sh, StD, StAB, StB](
+func apply*[T, Sh, StAB, StB, StR](
     op: EpiAddBias[T, Sh, StB];
-    D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
+    res: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
-  for i in 0 ..< size(D.layout):
-    D(i) = AB(i) + op.bias_gmem(i)
+  ## D = AB + bias, element-wise over the tile's (M, N) shape.
+  ## The bias is a column broadcast: its view has stride-0 rows.
+  for i in 0 ..< size(res.layout):
+    res(i) = AB(i) + op.bias_gmem(i)
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiReLU: D = max(0, AB)
@@ -216,14 +281,18 @@ func apply*[T, Sh, StD, StAB, StB](
 
 type EpiReLU* = object
   ## Rectified linear unit: D = max(0, AB)
+  storeMask*: int = -1
+    ## Store predication bitmask (see EpiAXPBY.storeMask)
 
 template preflight*(op: var EpiReLU): untyped =
   ## Nothing to stage: ReLU has no inputs.
   discard
 
-func apply*[T, Sh, StD, StAB](
+func apply*[T, Sh, StAB, StR](
     op: EpiReLU;
-    D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
+    res: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
-  for i in 0 ..< size(D.layout):
-    D(i) = max(AB(i), T(0))
+  ## D = max(0, AB), element-wise over the tile's (M, N) shape.
+  for i in 0 ..< size(res.layout):
+    res(i) = max(AB(i), T(0))
+

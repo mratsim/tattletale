@@ -66,7 +66,7 @@ const kernelCode = opencl:
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
 proc runTest() =
   var engine = bkOpenCL.init(kernelCode)

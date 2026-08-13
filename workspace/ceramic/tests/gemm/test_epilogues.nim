@@ -3,24 +3,24 @@
 ## Validates the Epilogue concept:
 ##   * concept conformance: each shipped op satisfies Epilogue
 ##     (compile-time, via `is Epilogue`)
-##   * generic dispatch: `applyEpilogue(op: Epilogue, ...)` binds each op
-##     and calls its `apply` (Nim concepts V2, works on 2.2.10)
+##   * generic dispatch: `applyEpilogue(op: Epilogue, ...)` binds each op,
+##     calls its `apply` and `finalStore` (Nim concepts V2, works on 2.2.10)
 ##   * the math: D = α·AB + β·C, identity, bias column broadcast, ReLU
 ##   * dispatch hoisting: EpiAXPBY β=0 never reads C (NaN-prefilled C
 ##     proves it), α=1 skips the multiply
 ##   * uniform 2-arg `apply`: inputs are op state (EpiAXPBY's C_gmem,
-##     EpiAddBias's bias) — the concept takes D and AB only
+##     EpiAddBias's bias) — the concept takes res and AB only
 ##   * layout robustness: row-major D/AB/C, strided C (row padding),
 ##     mixed layouts, sliced tensors (in / out / in+out), inverted
 ##     (negative) strides, the sm80 m16n8k8 C-fragment layout, rank-3
 ##     and nested+broadcast layouts. All operands share the shape type
-##     Sh (the compiler enforces equal shapes). `apply` iterates `size(D)`
-##     and indexes each operand through its own layout
+##     Sh (the compiler enforces equal shapes). `apply` iterates
+##     `size(res)` and indexes each operand through its own layout
 ##
-## `preflight` stages the op's gmem operands into smem buffers (EpiAddBias's
-## bias today; EpiAXPBY's C is read per-thread from gmem in `apply` — direct
-## register→gmem, cp.async/TMA staging pending). Async staging and capability
-## flags are future work. This file pins the math.
+## `preflight` stages the op's gmem operands into smem buffers (all shipped
+## ops: no-op stubs today — operands are read per-thread from gmem in
+## `apply`). Async staging and capability flags are future work. This file
+## pins the math.
 
 import std/math
 import workspace/ceramic/src/int_tuples
@@ -40,15 +40,18 @@ template test(label: string; body: untyped) =
 # dispatches. A template, with `auto` view params. Concept-typed view
 # params bind to ONE fixed instantiation (Nim V2 "first acceptable
 # candidate"). `auto` views + a concept-constrained op re-check
-# conformance per call site with the actual shapes. gemm_tiled will call
-# `op.preflight()` then `op.apply(D, AB)`, statically, the same way: the
-# staging template injects the smem buffer, `apply` consumes it through
-# the op's fields (bias_smem today; EpiAXPBY reads C via C_gmem directly).
+# conformance per call site with the actual shapes. gemm_cta calls
+# `op.preflight()` then `op.apply(res, AB)` then `op.finalStore(res, D)`,
+# statically, the same way: the staging template injects the smem buffer,
+# `apply` consumes it through the op's fields (EpiAXPBY reads C via C_gmem
+# directly).
 template applyEpilogue(op: Epilogue; D, AB: auto): untyped =
   block:
     var o = op
     o.preflight()
-    o.apply(D, AB)
+    var res = make_tensor(typeof(AB(0)), AB.layout.shape)
+    o.apply(res, AB)
+    o.finalStore(res, D)
 
 proc runEpilogueTests =
 
@@ -97,7 +100,9 @@ proc runEpilogueTests =
     var D2 = make_view(bufD2 +% 0, make_layout((M, N), (1, M)))
     var op = initEpiAXPBY(0.5'f32, 2.0'f32, C)
     op.preflight()
-    op.apply(D, AB)
+    var res = make_tensor(float32, AB.layout.shape)
+    op.apply(res, AB)
+    op.finalStore(res, D)
     applyEpilogue(op, D2, AB)
     for i in 0 ..< M:
       for j in 0 ..< N:
