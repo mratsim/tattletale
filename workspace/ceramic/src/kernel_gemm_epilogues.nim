@@ -95,6 +95,8 @@
 import ./int_tuples
 import ./layouts
 import ./tensors
+import ./atoms
+import ./atoms_mma_partitioning
 
 {.experimental: "callOperator".}
 
@@ -295,4 +297,42 @@ func apply*[T, Sh, StAB, StR](
   ## D = max(0, AB), element-wise over the tile's (M, N) shape.
   for i in 0 ..< size(res.layout):
     res(i) = max(AB(i), T(0))
+
+# ═════════════════════════════════════════════════════════════════════════
+#  shard: the per-thread epilogue hook (gemm_gpu's epi.shard)
+# ═════════════════════════════════════════════════════════════════════════
+#
+#  gemm_gpu receives the op with problem-level operand views.
+#  It calls `epi.shard(tma, thr, mCTA, nCTA)` to project them onto the thread's fragment of the CTA's tile.
+#  The shard is a template per op, resolved at the call site like preflight:
+#  a missing shard is a compile error at gemm_gpu's call.
+
+template shard*[T, ShC, StC](
+    op: EpiAXPBY[T, ShC, StC];
+    tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
+  ## The per-thread C fragment: partition the op's problem-level C view
+  ## at the CTA's tile. The sharded op is the fragment-typed epilogue
+  ## gemm_cta consumes.
+  const tileM = tma.thrM * tma.atom.mnk.m
+  const tileN = tma.thrN * tma.atom.mnk.n
+  initEpiAXPBY(op.alpha, op.beta,
+    tma.partition_C(thr, local_tile(op.C_gmem, (tileM, tileN), (mCTA, nCTA))))
+
+template shard*[T, Sh, St](
+    op: EpiAddBias[T, Sh, St];
+    tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
+  ## The per-thread bias fragment: partition the op's problem-level bias view
+  ## (stride-0 rows) at the CTA's tile.
+  const tileM = tma.thrM * tma.atom.mnk.m
+  const tileN = tma.thrN * tma.atom.mnk.n
+  initEpiAddBias(
+    tma.partition_C(thr, local_tile(op.bias_gmem, (tileM, tileN), (mCTA, nCTA))))
+
+template shard*(op: EpiIdentity; tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
+  ## EpiIdentity has no operands: the op passes through.
+  op
+
+template shard*(op: EpiReLU; tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
+  ## EpiReLU has no operands: the op passes through.
+  op
 
