@@ -252,8 +252,8 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     tileN = TileShape[1]
     tileK = TileShape[2]
     blockSize = tma.threadCount()
-    unitsA = (tileM * tileK) div (4 * blockSize)   # the 16-byte chunks per thread
-    unitsB = (tileN * tileK) div (4 * blockSize)
+    unitsA = (tileM * tileK) div (numPacked(CpAsyncAtom[TA]) * blockSize)   # the 16-byte chunks per thread
+    unitsB = (tileN * tileK) div (numPacked(CpAsyncAtom[TB]) * blockSize)
   static:
     doAssert ShA.default[1] === ShB.default[1],
       "gemm_cta: the A and B problem views must agree on the allocated K (" & $kView & " vs " &
