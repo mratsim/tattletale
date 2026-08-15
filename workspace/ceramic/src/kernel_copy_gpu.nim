@@ -146,10 +146,11 @@ template copyFromIf*[T, Sh, StA, StB, StP](
     src: TensorView[T, Sh, StA];
     predicate: AnyTensor[bool, Sh, StP]) =
   ## Predicated tiled copy: one 16-byte cp.async per predicate
-  ## element, from the src view to the dst view.
+  ## element, from the src view to the dst view. A false predicate
+  ## issues the copy with src-size 0, zero-filling the chunk.
 
   when Sh.rank == 1:
-    cp.async.cg_shared_global_16B(dst, src, predicate)
+    cp.async.cg_shared_global_16B(dst, src, if predicate.data[0]: 16 else: 0)
   else:
     for i in 0 ..< size(predicate):
-      cp.async.cg_shared_global_16B(dst(_, i), src(_, i), predicate(_, i))
+      cp.async.cg_shared_global_16B(dst(_, i), src(_, i), if predicate(_, i).data[0]: 16 else: 0)

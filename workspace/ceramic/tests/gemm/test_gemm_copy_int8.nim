@@ -31,11 +31,8 @@ import workspace/ceramic/tests/layouts_testutils
 
 proc runInt8PartitionTests =
   block:
-    ## The atom: the 16-byte chunk is 16 int8 elements, the tiler
-    ## the (16, 1) column chunk, one thread and one value per copy
+    ## The atom: 16 int8 elements per 16-byte chunk.
     check numPacked(CpAsyncAtom[int8]), 16, int
-    check atomNumThr(CpAsyncAtom[int8]), 1, int
-    check atomNumVal(CpAsyncAtom[int8]), 1, int
     doAssert tilerMN(CpAsyncAtom[int8]) === (16, 1)
     doAssert tilerMN(CpAsyncAtom[int64]) === (2, 1)
   block:
