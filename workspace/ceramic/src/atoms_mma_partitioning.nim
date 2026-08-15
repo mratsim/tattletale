@@ -5,51 +5,27 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## MMA fragment partitioning — partition_A / partition_B / partition_C.
+## MMA fragment partitioning: partition_A / partition_B / partition_C.
 ##
-## A TiledMma (atom + thread layout) tiles an operand tile of shape
-## (tileM, tileK) for A, (tileN, tileK) for B, (tileM, tileN) for C. Each
-## thread holds a FRAGMENT: the elements of the tile it reads into
-## registers / accumulates, in the register order the hardware expects.
+## A TiledMma (an MMA atom plus a thread layout) computes one tile of the output:
+##   - A tile (tileM, tileK)
+##   - B tile (tileN, tileK)
+##   - C tile (tileM, tileN)
+## Each thread holds a fragment: the tile elements it reads into registers (A, B) or accumulates (C)
+## in the order the hardware instruction expects.
 ##
-## A fragment ELEMENT is one such tile element: its (row, col) coordinate
-## in the operand tile. Examples (m16n8k8 tf32 atom, SM80_16x8x8_...):
-##   - single atom (1×1 tiled), A tile (16, 8), thread 0 holds
-##       (0,0) (8,0) (0,4) (8,4)   — v = 0..3, register order
-##   - 2×2 tiled, A tile (32, 8), thread 32 (atom position (1,0)) holds
-##       (16,0) (24,0) (16,4) (24,4) — the same v pattern shifted by 16
-## The partition layout maps the fragment coordinates to the element's
-## col-major OFFSET in the tile (row + col·tileRows), which is what the
-## kernel indexes shared/gmem with.
+## Example (m16n8k8 tf32 atom, SM80_16x8x8_F32TF32TF32F32_TN):
+##   - one atom: A tile (16, 8), thread 0 holds (0,0) (8,0) (0,4) (8,4), its 4 values in register order
+##   - 2×2 tiled: A tile (32, 8), thread 32 (atom (1, 0)) holds (16,0) (24,0) (16,4) (24,4), the same pattern shifted by 16
 ##
-## Construction — the thrfrg chain, with ceramic
-## layout algebra, no loops, no seq, no manual div/mod:
-##   zipped_divide(tileLayout, (unitM, unitK))        # unit | rest
-##   zipped_divide(unit, (atomM, atomK))              # atom | positions
-##   fragment (T, V) part: compose(mode(ap, 0), atom.aLayout), the
-##   atom-mode composition: the atom mode (AtomM, AtomK)
-##   at tile strides composed with the atom's (T, V) layout. The
-##   compose unwrap merges the composed
-##   leaves flat, so the fragment comes out in the tile's col-major
-##   (k-stride atomM → tileM) with the same nesting CuTe produces.
-##
-## Result: a rank-3 layout ((T, V), (ThrM, ThrK), (RestM, RestK)) → tile
-## offset. The per-thread fragment (CuTe partition_A on a thread index) is
-## two indexings: the thread's base = layout(threadCoords, zeros) and the
-## per-v offsets = layout(threadCoords, (v, rest)) — no div/mod anywhere,
-## the thread coordinate decomposition (tv, tm, tn, tk) is the caller's
-## (kernel threadIdx / idx2crd of the thread layout).
-##
-## Strides: the partition shape (which thread owns which coordinate) is
-## determined by the atom and the tile dims and is always static. The
-## stride values may be static Int[N] (offsets baked at compile time) or
-## runtime int. A runtime leading stride from the launcher's problem shape
-## keeps the offset arithmetic runtime — the algebra is uniform, there is
-## no static/runtime branch (NVRTC folds the static leaves).
-##
-## The (thread, v, rest) → offset grid semantics. The values are
-## cross-checked against the reference partition output,
-## host-extracted.
+## The fragment layout maps (thread, value, remainder) to the element's col-major offset in the tile
+## (the address the kernel indexes shared / global memory with).
+## The remainder counts how many times the thread layout repeats to fill the tile:
+##   the (2, 2, 1) thread layout covers (32, 8) of the A tile, so a (64, 16) tile has remainder (2, 2).
+##   Each repetition shifts a thread's fragment by (32, 8).
+## It is not the tiles of the kernel's K-loop, and it is not a partial tile at the problem edge (those are bounds-predicated).
+## It is built by thrfrg_A/B/C and cut per thread by get_slice + partition_A/B/C.
+## make_fragment_A/B/C allocate the register buffers, and cStoreMask predicates the C store.
 
 import ./int_tuples
 import ./layouts
@@ -60,36 +36,30 @@ import ./tensors
 import ./atoms
 
 # ═════════════════════════════════════════════════════════════════════════
-#  thrfrg_A/B/C — the thread-fragment layouts
+#  thrfrg_A/B/C: the fragment layout of an operand tile
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  thrfrg_A then slice at the thread:
-#    logical_divide(tile, tiled-unit) → zipped_divide(unit, atom) →
-#    compose(atom (T,V) layout, _) → zipped_divide(_, (ThrM, ThrK))
-#  Ceramic (tuple tilers, quotient-first zipped_divide):
-#    zipped_divide(tile, unit) → mode 0 = unit at tile strides,
-#                                mode 1 = rest at unit strides
-#    zipped_divide(unit, atom) → mode 0 = atom at tile strides,
-#                                mode 1 = atom positions at atom strides
-#  The (T, V) fragment layout is the atom's (T, V) layout re-strided into
-#  the tile's col-major (see module doc).
+#  For every (thread, value, tile position) the layout gives the offset in the tile, in the operand's own strides.
+#  It nests three blocks:
+#    (T, V)         the atom's layout: its T threads × V values mapped onto the atom block (atomM × atomK)
+#    (ThrM, ThrK)   the atom block of the thread layout this thread belongs to
+#                   (each block shifts the atom pattern by (tm·atomM, tk·atomK))
+#                   [(ThrM, ThrN) for C]
+#    (RestM, RestK) how many times the thread layout repeats to fill a tile larger than the thread layout's coverage:
+#                   the (2, 2, 1) thread layout covers (32, 8) of the A tile, so a (64, 16) tile has Rest (2, 2)
+#                   (each repetition shifts a thread's fragment by (32, 8))
 #
-#  The thrfrg_* functions build the partition layout from the operand's
-#  OWN layout, so its strides are the tile's real strides (static Int[N]
-#  leaves fold at compile time, a runtime leading stride keeps the offset
-#  leaves runtime — the algebra is uniform, no branch). The partition_*
-#  functions cut it at the thread's coordinates, the slice_and_offset
-#  at the (T, V) and thread modes: the (T,V) mode is cut at tv
-#  (T-leaves dropped, V kept), the (Thr) mode at (tm/tn, tk), the Rest
-#  kept whole. The result is the thread's fragment view (V·, RestM,
-#  RestK) — offset inside the view, no linearization.
+#  Build:
+#    - split the tile into (unit, remainder) by one thread's coverage (thread layout × atom)
+#    - split the unit into (atom block, atom positions)
+#    - compose the atom's (T, V) layout into the atom block
 
 func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
-  ## The thread-fragment layout of the (M, K) A tensor:
-  ## ((T, V), (ThrM, ThrK), (RestM, RestK)) → tile
-  ## offset. T = threads per atom, V = registers per thread, Thr* = the
-  ## thread tiling, Rest* = the tile positions beyond one thread's unit.
-  ## The strides come from A's own layout, see the section doc.
+  ## The fragment layout of the (M, K) A tensor:
+  ## ((T, V), (ThrM, ThrK), (RestM, RestK)) → offset in the tile.
+  ## T: threads per atom. V: registers per thread. Thr*: the thread layout.
+  ## Rest*: how many times the thread layout repeats across the tile
+  ## (the (2, 2, 1) thread layout covers (32, 8), so a (64, 16) tile has Rest (2, 2)).
   const
     aLayout = tma.atom.aLayout
     atomM = tma.atom.mnk.m
@@ -107,17 +77,14 @@ func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
   const unitM = thrM * atomM
   const unitK = thrK * atomK
   let ur = zipped_divide(L, (unitM, unitK))
-  let ap = zipped_divide(mode(ur, 0), (atomM, atomK))
-  # CuTe: a_tensor.compose(AtomLayoutA_TV, _) — the (T, V) layout
-  # composed into the atom mode at tile strides.
-  let fragPart = compose(mode(ap, 0), aLayout)
-  make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
-              (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))
+  let ap = zipped_divide(ur.mode(0), (atomM, atomK))
+  let fragPart = compose(ap.mode(0), aLayout)
+  make_layout((fragPart.shape, ap.mode(1).shape, ur.mode(1).shape),
+              (fragPart.stride, ap.mode(1).stride, ur.mode(1).stride))
 
 func thrfrg_B*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
-  ## The thread-fragment layout of the (N, K) B tensor (CuTe:
-  ## ThrMMA::thrfrg_B): ((T, V), (ThrN, ThrK), (RestN, RestK)) → tile
-  ## offset. See thrfrg_A.
+  ## The fragment layout of the (N, K) B tensor:
+  ## ((T, V), (ThrN, ThrK), (RestN, RestK)) → offset in the tile. See thrfrg_A.
   const
     bLayout = tma.atom.bLayout
     atomN = tma.atom.mnk.n
@@ -135,18 +102,16 @@ func thrfrg_B*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
   const unitN = thrN * atomN
   const unitK = thrK * atomK
   let ur = zipped_divide(L, (unitN, unitK))
-  let ap = zipped_divide(mode(ur, 0), (atomN, atomK))
-  # CuTe: b_tensor.compose(AtomLayoutB_TV, _)
-  let fragPart = compose(mode(ap, 0), bLayout)
-  make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
-              (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))
+  let ap = zipped_divide(ur.mode(0), (atomN, atomK))
+  let fragPart = compose(ap.mode(0), bLayout)
+  make_layout((fragPart.shape, ap.mode(1).shape, ur.mode(1).shape),
+              (fragPart.stride, ap.mode(1).stride, ur.mode(1).stride))
 
 func thrfrg_C*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
-  ## The thread-fragment layout of the (M, N) C tensor (CuTe:
-  ## ThrMMA::thrfrg_C): ((T, V), (ThrM, ThrN), (RestM, RestN)) → tile
-  ## offset. See thrfrg_A. Unlike A and B, C has no col-major
-  ## requirement: a stride-0 rows view (the epilogue's broadcast bias)
-  ## partitions to the same per-column offsets.
+  ## The fragment layout of the (M, N) C tensor:
+  ## ((T, V), (ThrM, ThrN), (RestM, RestN)) → offset in the tile. See thrfrg_A.
+  ## Unlike A and B, C has no col-major requirement: a stride-0 rows view
+  ## (the epilogue's broadcast bias) partitions to the same per-column offsets.
   const
     cLayout = tma.atom.cLayout
     atomM = tma.atom.mnk.m
@@ -160,38 +125,33 @@ func thrfrg_C*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
   const unitM = thrM * atomM
   const unitN = thrN * atomN
   let ur = zipped_divide(L, (unitM, unitN))
-  let ap = zipped_divide(mode(ur, 0), (atomM, atomN))
-  # CuTe: c_tensor.compose(AtomLayoutC_TV, _)
-  let fragPart = compose(mode(ap, 0), cLayout)
-  make_layout((fragPart.shape, mode(ap, 1).shape, mode(ur, 1).shape),
-              (fragPart.stride, mode(ap, 1).stride, mode(ur, 1).stride))
+  let ap = zipped_divide(ur.mode(0), (atomM, atomN))
+  let fragPart = compose(ap.mode(0), cLayout)
+  make_layout((fragPart.shape, ap.mode(1).shape, ur.mode(1).shape),
+              (fragPart.stride, ap.mode(1).stride, ur.mode(1).stride))
 
 # ═════════════════════════════════════════════════════════════════════════
-#  get_slice — the per-thread decomposition (CuTe: ThrMMA)
+#  get_slice: one thread's coordinates in the fragment layout
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  CuTe: thr_mma = mma.get_slice(threadIdx.x)
-#        tCsA = thr_mma.partition_A(sA)
-#  The partition layouts above are the (T,V),(Thr,Rest) grid. The kernel
-#  needs the THREAD'S slice of that grid. get_slice decomposes the flat
-#  thread index ONCE (CuTe: thr_layout_vmnk.get_flat_coord), the
-#  partition_* overloads below cut the partition at the decomposed
-#  coordinates (CuTe: thr_tensor(thr_vmk, _) = slice_and_offset).
+#  The thrfrg layouts cover all threads. A kernel thread needs its own slice:
+#  get_slice splits the flat thread index once, then partition_A/B/C cut the thrfrg layout at the result.
+#  Example (m16n8k8 atom, (2, 2, 1) thread layout, A tile (32, 8)):
+#    get_slice(32) → tv 0, tm 1, tn 0, tk 0
+#    partition_A cuts the ((32, 4), (2, 1), (1, 1)) layout at (0, 1, 0):
+#      - T dropped, V kept
+#      - (ThrM, ThrK) cut at (1, 0)
+#      - remainder kept whole
+#    → the thread's (4, 1, 1) fragment view, its 4 values in register order
 
 type ThrSlice* = object
-  ## The thread's view of the TiledMma (CuTe: ThrMMA) — the decomposed
-  ## thread coordinates.
-  ##   tv*: the thread within the atom (the T-mode of the fragment
-  ##        layouts — CuTe: ThrV)
-  ##   tm*, tn*, tk*: the atom coordinates over the threadLayout
-  ##        (CuTe: ThrM, ThrN, ThrK)
+  ## One thread's position in the TiledMma: tv is the thread's position within one atom (0 ..< T).
+  ## tm/tn/tk are which atom block of the thread layout the thread belongs to.
   tv*, tm*, tn*, tk*: int
 
 func get_slice*(tma: static TiledMma; threadIdx: int): ThrSlice {.inline.} =
-  ## Decompose the flat thread index once per thread (CuTe: mma.get_slice(
-  ## threadIdx.x)). threadIdx in 0 ..< T·ThrM·ThrN·ThrK. The decomposition
-  ## order matches CuTe's (ThrV fastest):
-  ##   threadIdx = tv + T·(tm + ThrM·(tn + ThrN·tk))
+  ## Split the flat thread index into the coordinates above, once per thread.
+  ## The thread-within-atom index varies fastest: threadIdx = tv + T·(tm + ThrM·(tn + ThrN·tk))
   const T = tma.atom.threadCount(opA)
   let coords = idx2crd(flatten(tma.threadLayout.shape), threadIdx div T)
   ThrSlice(
@@ -201,42 +161,39 @@ func get_slice*(tma: static TiledMma; threadIdx: int): ThrSlice {.inline.} =
     tk: coords[2])
 
 # ═════════════════════════════════════════════════════════════════════════
-#  partition_A / partition_B / partition_C — the thread's operand views
+#  partition_A / partition_B / partition_C: the thread's fragment of a tensor
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  CuTe: thr_mma.partition_A(atensor) = make_tensor(data, thrfrg_A(layout))
-#  then thr_tensor(thr_vmk, _) — the partition layout cut at the thread's
-#  coordinates with the rest left full. The result is the thread's
-#  fragment view (V·, RestM, RestK) — offset inside the view, no
-#  linearization.
+#  Cut a thrfrg layout at one thread's coordinates:
+#    - keep all V values
+#    - drop the thread's T coordinate
+#    - cut the thread block at (tm, tk), or (tm, tn) for C
+#    - keep the remainder whole
+#  The result is the thread's fragment view, in register order.
 
 func partition_A*[T, Sh, St](
     tma: static TiledMma; thr: ThrSlice;
     A: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
-  ## The thread's A-fragment view (CuTe: thr_mma.partition_A(atensor)) —
-  ## method-call syntax: `tma.partition_A(thr, A)`.
-  ## The partition layout is thrfrg_A. This slices it at the thread's
-  ## (T, (ThrM, ThrK)) coordinate, keeping every value mode. The result's
-  ## flat order is the register-fragment order the gather copies straight
-  ## into the mma fragment.
+  ## The thread's A-fragment view of a tensor, method-call syntax: `tma.partition_A(thr, A)`.
+  ## It cuts the thrfrg_A layout at the thread's coordinates, keeping every V value.
+  ## The flat order is the register order the gather copies into the mma fragment.
   const
     atomM = tma.atom.mnk.m
     atomK = tma.atom.mnk.k
     thrM  = tma.threadLayout.shape[0]
     thrK  = tma.threadLayout.shape[2]
     rshape = (Sh.default[0] div (thrM * atomM), Sh.default[1] div (thrK * atomK))
-  let thrTensor = make_view(A.data, thrfrg_A(tma, A.layout))   # CuTe: make_tensor(data, thrfrg_A(layout))
-  let tsel = idx2crd(tma.atom.aLayout.shape[0], thr.tv) # CuTe: get<0>(thr_vmnk_)
+  let thrTensor = make_view(A.data, thrfrg_A(tma, A.layout))
+  let tsel = idx2crd(tma.atom.aLayout.shape[0], thr.tv)
   let vsel = mapLeavesWith(tma.atom.aLayout.shape[1]): X()
   let rsel = mapLeavesWith(rshape): X()
-  thrTensor(((tsel, vsel), (thr.tm, thr.tk), rsel))     # CuTe: thr_tensor(thr_vmk, _)
+  thrTensor(((tsel, vsel), (thr.tm, thr.tk), rsel))
 
 func partition_B*[T, Sh, St](
     tma: static TiledMma; thr: ThrSlice;
     B: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
-  ## The thread's B-fragment view (CuTe: thr_mma.partition_B(btensor)) —
-  ## method-call syntax: `tma.partition_B(thr, B)`.
-  ## See partition_A. The (ThrN, ThrK) group is cut at (tn, tk).
+  ## The thread's B-fragment view of a tensor, method-call syntax: `tma.partition_B(thr, B)`.
+  ## See partition_A. The (ThrN, ThrK) block is cut at (tn, tk).
   const
     atomN = tma.atom.mnk.n
     atomK = tma.atom.mnk.k
@@ -252,11 +209,9 @@ func partition_B*[T, Sh, St](
 func partition_C*[T, Sh, St](
     tma: static TiledMma; thr: ThrSlice;
     C: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
-  ## The thread's C view (CuTe: thr_mma.partition_C(ctensor)) — method-call
-  ## syntax: `tma.partition_C(thr, C)`.
-  ## See partition_A. The (ThrM, ThrN) group is cut at (tm, tn). C has no
-  ## col-major requirement (thrfrg_C), so a stride-0 rows view (the
-  ## epilogue's broadcast bias) partitions to the same per-column offsets.
+  ## The thread's C view of a tensor, method-call syntax: `tma.partition_C(thr, C)`. See partition_A.
+  ## The (ThrM, ThrN) block is cut at (tm, tn). C has no col-major requirement (thrfrg_C), so a stride-0 rows view
+  ## (the epilogue's broadcast bias) partitions to the same per-column offsets.
   const
     atomM = tma.atom.mnk.m
     atomN = tma.atom.mnk.n
@@ -277,8 +232,6 @@ func partition_C*[T, Sh, St](
 #  cStoreMask predicates the store on each C-fragment element's
 #  coordinate in the tile.
 
-
-
 func cStoreMask*(tma: static TiledMma; threadIdx: int;
                  tileM, tileN: static int; validM, validN: int): int =
   ## Return a predication mask for selective copy
@@ -298,12 +251,9 @@ func cStoreMask*(tma: static TiledMma; threadIdx: int;
   if validM <= 0 or validN <= 0:
     return 0
 
-  #  The mapping index -> coordinates is stored as compile-time tables
-  #  to avoid expensive div/mod operation at runtime.
-  #
-  #  There are 2 tables:
-  #  - register (the target), that depends on the atom, i.e. what the hardware acceps
-  #  - origin   (the source)
+  #  Two compile-time tables map fragment elements to tile coordinates (div/mod is too slow at runtime):
+  #  - coordMap: value index → (row, col) within the atom block, from the atom's C layout
+  #  - origin: thread → the (row, col) of its fragment's top-left element in the tile
   const coordMap = block:
     var a: array[fragSize, (int, int)]
     for v in 0 ..< fragSize:
@@ -325,26 +275,22 @@ func cStoreMask*(tma: static TiledMma; threadIdx: int;
   for i in 0 ..< fragSize:
     if coordMap[i][0] < resM and coordMap[i][1] < resN:
       result = result or (1 shl i)
+
 # ═════════════════════════════════════════════════════════════════════════
-#  make_fragment_A/B/C — fragment tensors from partition views
+#  make_fragment_A/B/C: register buffers in hardware fragment order
 # ═════════════════════════════════════════════════════════════════════════
-#  The fragment is a tensor shaped like the partition view, with the V
-#  mode in the atom's register order (stride-1, the hardware enumeration
-#  of the atom's registers) and the rest modes kept in the view's order.
-#  The partition view's mode-0 is the atom's (T, V) layout composed in
-#  partition_A/B/C above, so make_fragment_like(view.layout, V shape)
-#  pins V to stride-1 and keeps the rest modes' order, decoupling the
-#  fragment from the operand's strides (row-major included).
 #
-#  API: make_fragment_A(mma, partitionView). The V boundary comes from
-#  the atom's aLayout (mma.aLayout.shape[1] is passed to
-#  make_fragment_like internally).
+#  A partition view is a window into a tensor with the tensor's strides. A fragment is a register buffer:
+#  its own layout, in the order the hardware instruction reads and writes registers.
+#  make_fragment builds that buffer from a partition view:
+#    - the V values become stride-1, the hardware register order, regardless of the operand's strides (row-major included)
+#    - the remaining positions keep the view's order, packed after the V registers
+#  The result has the same shape as the view, so copying between the two moves the thread's elements in flat register order.
 
 template make_fragment_A*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
-  ## The thread's A fragment: V flattened to atom register order
-  ## (stride-1), rest modes compact by the view's order. The V boundary
-  ## comes from the atom's aLayout (V shape value).
+  ## The thread's A fragment: a register buffer with the V values in hardware order (stride-1).
+  ## The remaining positions keep the view's order. V is the atom's register count (aLayout.shape[1] values per thread).
   make_tensor(T, make_fragment_like(t.layout, mma.aLayout.shape[1]))
 
 template make_fragment_B*[T, Sh, St](
@@ -354,6 +300,6 @@ template make_fragment_B*[T, Sh, St](
 
 template make_fragment_C*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
-  ## The thread's C fragment: the compact (V, RestM, RestN) fragment
-  ## derived from the partition view with V = atom cLayout order.
+  ## The thread's C fragment: a register buffer with the V values in hardware order (stride-1).
+  ## The remaining positions keep the view's order. V is the atom's register count (cLayout.shape[1] values per thread).
   make_tensor(T, make_fragment_like(t.layout, mma.cLayout.shape[1]))
