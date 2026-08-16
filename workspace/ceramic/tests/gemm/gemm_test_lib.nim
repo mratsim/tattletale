@@ -189,7 +189,7 @@ proc testMicrotile*[E](engine: var E; atom: static MmaAtom; label: string) =
   echo "  OK: m16n8k8 tf32 microtile matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, in-place + explicit)"
 
 proc testUkernel*[E](engine: var E; atom: static MmaAtom; label: string) =
-  ## The k-loop microkernel: C(M×N) = A(M, 2·K)·B(N, 2·K) — two k_blocks,
+  ## The k-loop microkernel: C(M×N) = A(M, 2·K)·B(N, 2·K) — two k slices,
   ## 16 trials vs the tf32 reference (exact on the tf32-exact fixture).
   const
     M = atom.mnk.m
@@ -206,11 +206,11 @@ proc testUkernel*[E](engine: var E; atom: static MmaAtom; label: string) =
     engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("gemmUkernelKernel", gpuC, (A, B))
     allClose(gpuC, refC, M, N, "trial " & $trial)
 
-  echo "  OK: m16n8k8 tf32 gemm_ukernel matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2 k_blocks, 16 trials)"
+  echo "  OK: m16n8k8 tf32 gemm_ukernel matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2 k slices, 16 trials)"
 
 proc testTiled*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## The tiled GEMM on the (2,2,1)-tiled atom: 1×1 grid, K = TILE_K = 16
-  ## (two k_blocks through gemm_ukernel), config (α, β) = (1, 0). C is
+  ## (two k slices through gemm_ukernel), config (α, β) = (1, 0). C is
   ## NaN-prefilled: the β=0 branch must skip the C read, so a spurious
   ## read fails the check.
   const
@@ -244,12 +244,12 @@ proc testTiled*[E](engine: var E; tiled: static TiledMma; label: string) =
                (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 
-  echo "  OK: gemm_tiled K=16 (2 k_blocks) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
+  echo "  OK: gemm_tiled K=16 (2 k slices) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
 
 proc testTiledMultiBlock*[E](engine: var E; tiled: static TiledMma; label: string) =
-  ## The tiled GEMM with K = 32 (TILE_K = 32): four k_blocks accumulated
+  ## The tiled GEMM with K = 32 (TILE_K = 32): four k slices accumulated
   ## through one gemm_ukernel call: the full-K fragment must be copied
-  ## from the staged smem tile completely before the k_block loop reads it.
+  ## from the staged smem tile completely before the k-slice loop reads it.
   const
     TILE_K = 32
     thrM = tiled.thrM
@@ -278,7 +278,7 @@ proc testTiledMultiBlock*[E](engine: var E; tiled: static TiledMma; label: strin
                (A_gpu, B_gpu, alpha, beta))
     allClose(gpuC, C_ref, TILE_M, TILE_N, "trial " & $trial)
 
-  echo "  OK: gemm_tiled K=32 (4 k_blocks) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
+  echo "  OK: gemm_tiled K=32 (4 k slices) matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, (1,0), NaN C)"
 
 proc testGemmCta*[E](engine: var E; tiled: static TiledMma; label: string) =
   ## C(64×32) = α·A(64×32)·B(32×32) + β·C over a 2×2 CTA grid: each CTA

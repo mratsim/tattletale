@@ -520,7 +520,7 @@ proc runEpilogueTests =
       for j in 0 ..< N:
         doAssert D[i, j] == AB[i, j]
 
-  test "EpiAXPBY rank-3 operands (V, RestM, RestN) = (4, 2, 2), distinct strides":
+  test "EpiAXPBY rank-3 operands (V, RepeatM, RepeatN) = (4, 2, 2), distinct strides":
     ## All operands share the shape type Sh. Each is indexed through its
     ## own stride pattern, here rank-3 with V stride-1 on AB (register
     ## order, the atom map) and different strides on C and D.
@@ -538,7 +538,7 @@ proc runEpilogueTests =
     for i in 0 ..< 16:
       doAssert D(i) == 2.0'f32 * AB(i) + 3.0'f32 * C(i)
     doAssert D(0) == 2.0'f32 * bufAB[0] + 3.0'f32 * bufC[0]
-    # flat 4 on (4,2,2):(1,8,16) decomposes (0,1,0) -> offset 8 (V=0, RestM=1)
+    # flat 4 on (4,2,2):(1,8,16) decomposes (0,1,0) -> offset 8 (V=0, RepeatM=1)
     doAssert AB(4) == bufAB[8]
 
   test "EpiIdentity AMX nested broadcast layout (1, (16, 16)):(0, (1, 16))":

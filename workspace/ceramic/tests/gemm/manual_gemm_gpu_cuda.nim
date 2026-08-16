@@ -1,14 +1,18 @@
 ## Manual GPU test: gemm_gpu (Level 5) via NVRTC/CUDA.
 ##
-## The gemm_gpu public seam: the test kernels build problem views over the raw buffers
+## gemm_gpu: the test kernels build input views over the raw buffers
 ## and hand them to gemm_gpu.
-## gemm_gpu derives the tma policy (atom_selector + pickThreadLayout + tileOf),
+## gemm_gpu derives the tma policy (atom_selector + threadLayoutOf + tile_shape),
 ## the CTA position from the ambient blockIdx.x/y,
 ## and the per-thread epilogue shard, then runs the gemm_cta body.
 ## The test kernels never see M/N/K, the tile, the thread layout or the grid coords.
 ##
-## The five epilogues run over a 1×1 CTA grid (tile 32×32, k-tile depth 32),
-## 256 threads. The K64 kernel runs two k-tiles:
+## TODO: row-major and arbitrary-stride views. The layout algebra is stride-agnostic,
+## so the copies can convert any layout into the smem and register arrangements.
+## Only col-major fixtures are covered today.
+##
+## The five epilogues run over a 1×1 CTA grid (tile 32×32, tileK 32),
+## 256 threads. The K64 kernel runs two tileK-sized slices of K:
 ##   gemmGpuKernel        EpiAXPBY,   D = α·AB + β·C
 ##   gemmGpuIdentityKernel  EpiIdentity, D = AB
 ##   gemmGpuReLUKernel    EpiReLU,    D = max(0, AB)
@@ -42,7 +46,7 @@ import workspace/crucible
 # The host derives the tile/blockSize for the oracle and the launch from the same policy
 # gemm_gpu computes internally (the dtype table).
 const atom = atom_selector(uint32, uint32, float32)
-const tiled = make_tiled_mma(atom, pickThreadLayout(atom, 32, 32))
+const tiled = make_tiled_mma(atom, threadLayoutOf(atom, 32, 32))
 
 const kernelCode = cuda:
   proc gemmGpuKernel(
@@ -87,7 +91,7 @@ const kernelCodeBias = cuda:
     let pA = make_view(A, (32, 32), (1, 32))
     let pB = make_view(B, (32, 32), (1, 32))
     var pC = make_view(C, (32, 32), (1, 32))
-    # The bias is a (N,) column vector: the problem view has stride-0 rows
+    # The bias is a (N,) column vector: the bias view has stride-0 rows
     # (every row of a column reads the same bias element). The shard
     # partitions it onto the thread's fragment at the CTA's tile.
     gemm_gpu(pC, pA, pB, initEpiAddBias(make_view(bias, (32, 32), (0, 1))))

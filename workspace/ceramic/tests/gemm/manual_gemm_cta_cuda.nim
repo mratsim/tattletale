@@ -1,7 +1,7 @@
 ## Manual GPU test: gemm_cta (Level 4) via NVRTC/CUDA.
 ##
 ## The four shipped epilogues over a 2×2 CTA grid (tile 32×16, K =
-## TILE_K = 32, four k_blocks through gemm_ukernel), 128 threads:
+## TILE_K = 32, four k slices through gemm_ukernel), 128 threads:
 ##   gemmCtaKernel       EpiAXPBY,   D = α·AB + β·C
 ##   gemmCtaIdentityKernel  EpiIdentity, D = AB
 ##   gemmCtaReLUKernel   EpiReLU,    D = max(0, AB)

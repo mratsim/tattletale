@@ -102,7 +102,7 @@ func initEpiAXPBY*[T, Sh, StC](
 
 func shard*[T, ShC, StC](
     op: EpiAXPBY[T, ShC, StC];
-    tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): EpiAXPBY[T, ShC, StC] =
+    tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
   ## Partition the epilogue `C` operand onto threads
   const tileM = tma.thrM * tma.atom.mnk.m
   const tileN = tma.thrN * tma.atom.mnk.n

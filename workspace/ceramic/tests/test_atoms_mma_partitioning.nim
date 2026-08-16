@@ -266,7 +266,7 @@ proc runThreadTilingBoundaryTests =
 #     What: the fragment when the tile exceeds the tiled-mma unit
 #     (rest > 1): pure value tiling (1×1 tiled) and tiled + value tiling
 #     (3×5 tiled), first and last threads. Why: pins the rest-position
-#     ordering (mma-position outer, col-major (RestM, RestK), v inner) —
+#     ordering (mma-position outer, col-major (RepeatM, RepeatK), v inner) —
 #     the (MMA, M, K) fragment shape.
 #     Expected values: [CUTE-EX]
 # ═════════════════════════════════════════════════════════════════════════

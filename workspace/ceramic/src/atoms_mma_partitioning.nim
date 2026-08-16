@@ -45,7 +45,7 @@ import ./atoms
 #    (ThrM, ThrK)   the atom block of the thread layout this thread belongs to
 #                   (each block shifts the atom pattern by (tm·atomM, tk·atomK))
 #                   [(ThrM, ThrN) for C]
-#    (RestM, RestK) how many times the thread layout repeats to fill a tile larger than the thread layout's coverage:
+#    (RepeatM, RepeatK) how many times the thread layout repeats to fill a tile larger than the thread layout's coverage:
 #                   the (2, 2, 1) thread layout covers (32, 8) of the A tile, so a (64, 16) tile has Rest (2, 2)
 #                   (each repetition shifts a thread's fragment by (32, 8))
 #
@@ -56,9 +56,9 @@ import ./atoms
 
 func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
   ## The fragment layout of the (M, K) A tensor:
-  ## ((T, V), (ThrM, ThrK), (RestM, RestK)) → offset in the tile.
+  ## ((T, V), (ThrM, ThrK), (RepeatM, RepeatK)) → offset in the tile.
   ## T: threads per atom. V: registers per thread. Thr*: the thread layout.
-  ## Rest*: how many times the thread layout repeats across the tile
+  ## Repeat*: how many times the thread layout repeats across the tile
   ## (the (2, 2, 1) thread layout covers (32, 8), so a (64, 16) tile has Rest (2, 2)).
   const
     aLayout = tma.atom.aLayout
@@ -84,7 +84,7 @@ func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
 
 func thrfrg_B*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
   ## The fragment layout of the (N, K) B tensor:
-  ## ((T, V), (ThrN, ThrK), (RestN, RestK)) → offset in the tile. See thrfrg_A.
+  ## ((T, V), (ThrN, ThrK), (RepeatN, RepeatK)) → offset in the tile. See thrfrg_A.
   const
     bLayout = tma.atom.bLayout
     atomN = tma.atom.mnk.n
@@ -109,7 +109,7 @@ func thrfrg_B*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
 
 func thrfrg_C*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
   ## The fragment layout of the (M, N) C tensor:
-  ## ((T, V), (ThrM, ThrN), (RestM, RestN)) → offset in the tile. See thrfrg_A.
+  ## ((T, V), (ThrM, ThrN), (RepeatM, RepeatN)) → offset in the tile. See thrfrg_A.
   ## Unlike A and B, C has no col-major requirement: a stride-0 rows view
   ## (the epilogue's broadcast bias) partitions to the same per-column offsets.
   const

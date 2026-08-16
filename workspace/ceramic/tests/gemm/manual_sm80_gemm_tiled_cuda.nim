@@ -1,12 +1,12 @@
 ## Manual GPU test: the tiled GEMM (gemm_tiled) via NVRTC/CUDA.
 ##
 ## C(32×16) = α·A(32×16)·B(16×16) + β·C. 1×1 grid, K = TILE_K = 16
-## (two k_blocks through gemm_ukernel), config (α, β) = (1.0, 0.0),
+## (two k slices through gemm_ukernel), config (α, β) = (1.0, 0.0),
 ## 128 threads.
 ##
 ## gemm_tiled(tma, dFrag, sA, sB, TileShape, threadIdx) =
 ## tiling + thread decomposition + fragment gathering from the staged
-## smem k-tile (one k-tile: K == tileK) + the k_block loop in
+## smem k-tile (one k-tile: K == tileK) + the k-slice loop in
 ## gemm_ukernel, accumulating into the caller's dFrag. The kernel
 ## declares its own {.shared.} smem tiles, copies the full gmem k-tile
 ## into them (unmasked: this test runs full tiles), syncthreads(), then
@@ -103,7 +103,7 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
                          A, B: ptr UncheckedArray[uint32];
                          beta: float32) {.inline.} =
   ## C(32×16) = α·A(32×32)·B(16×32) + β·C — 1×1 tiled m16n8k8 tf32,
-  ## 128 threads, K = 32 = tileK (four k_blocks through one gemm_ukernel
+  ## 128 threads, K = 32 = tileK (four k slices through one gemm_ukernel
   ## call in the single k-tile pass.
   const
     TILE_K = 32                  # the full K and the k-tile depth (tileK == K)
