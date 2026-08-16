@@ -93,9 +93,9 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   syncthreads()
   tma.gemm_tiled(dFrag, sA, sB, (TILE_M, TILE_N, TILE_K), threadIdx)
   epi.preflight()
-  var res = make_tensor(float32, dFrag.layout.shape)
-  epi.apply(res, dFrag)
-  epi.finalStore(res, tCv)
+  var tmp = make_tensor(float32, dFrag.layout.shape)
+  epi.apply(tmp, dFrag)
+  epi.finalStore(tCv, tmp)
 
 func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
                          alpha: float32;
@@ -141,9 +141,9 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
   syncthreads()
   tma.gemm_tiled(dFrag, sA, sB, (TILE_M, TILE_N, TILE_K), threadIdx)
   epi.preflight()
-  var res = make_tensor(float32, dFrag.layout.shape)
-  epi.apply(res, dFrag)
-  epi.finalStore(res, tCv)
+  var tmp = make_tensor(float32, dFrag.layout.shape)
+  epi.apply(tmp, dFrag)
+  epi.finalStore(tCv, tmp)
 
 const kernelCode = cuda:
   proc gemmTiledKernel(
