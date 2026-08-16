@@ -12,18 +12,13 @@ import std/macros
 ## Public entries:
 ##   - `buildNvidiaMmaAsm`: the asm string for one register-level MMA.
 ##   - `gemm_mma`: the macro that emits the register-level MMA call.
-## The Nvidia prefix keeps this builder distinct from AMD/Intel ones in the
-## gemm dispatch.
-##
-## The fragment elements are already register-typed by construction, so the
-## constraint letters derive from their element types here. The asm operands
-## are scalar register names (backtick identifiers), resolved by Nim to the
-## locals gemm_mma declares.
+## 
+# TODO: gemm_mma is currently Nvidia only but should be able to handle AMD and Intel tensor cores.
 
 func constraintLetter(elemTypeName: string): string =
   ## Nim DSL register element type → GCC asm constraint letter.
-  ## tf32/f16/bf16/int fragments travel in integer registers ("r").
-  ## f32/f64 accumulators in float registers ("f"/"d").
+  ## tf32/f16/bf16/int are mapped to integer registers ("r").
+  ## f32/f64 accumulators to float registers ("f"/"d").
   case elemTypeName
   of "float32": "f"
   of "float64": "d"
@@ -32,19 +27,16 @@ func constraintLetter(elemTypeName: string): string =
     raiseAssert "unsupported register element type: " & elemTypeName
 
 func regList(first, count: int): string =
-  ## "{%0,%1,...,%N-1}": the GCC operand register list for `count`
-  ## registers starting at `first` (the %N numbering).
+  ## GCC operand register list "{%0,%1,...,%N-1}"
   result = "{"
   for i in first ..< first + count:
     if i > first: result.add ","
     result.add "%" & $i
   result.add "}"
 
-func operandClause(name, letter: string; count: int): string =
+func operandClause(name, letter: string, count: int): string =
   ## The constraint clause for `count` scalar registers,
-  ## `"letter"(`name0`), "letter"(`name1`), ...`. The backtick
-  ## scalar-register format: Nim resolves the backticked name to the
-  ## symbol (a gemm_mma-declared local).
+  ## `"letter"(`name0`), "letter"(`name1`), ...`.
   result = ""
   for i in 0 ..< count:
     if result.len > 0: result.add ", "
@@ -53,7 +45,7 @@ func operandClause(name, letter: string; count: int): string =
 func buildNvidiaMmaAsm*(instr: string; va, vb, vc: int;
                         dName, aName, bName, cName: string;
                         dElem, aElem, bElem, cElem: string): string =
-  ## Full GCC extended-asm string for one NVIDIA register-level MMA.
+  ## GCC extended-asm builder for Nvidia Matrix-Multiply-Accumulate (MMA) instructions
   ##
   ## %N numbering follows the hardware operand order (V-order explode):
   ##   D = {%0..%vc-1}  A = {%vc..%vc+va-1}  B = {%vc+va..%vc+va+vb-1}
@@ -116,10 +108,6 @@ macro gemm_mma*(instr: static string; dV, aV, bV: static int;
   # scalar register locals, one per fragment element:
   #   d0..d(dV-1): var float32, seeded from the accumulator, written back after
   #   a0..a(aV-1), b0..b(bV-1): let uint32, read from the operand tensors
-  # The asm is a single literal string whose backtick identifiers Nim
-  # resolves to these locals (the backtick scalar-register format). A
-  # block scopes the locals so repeated expansions (the ukernel K loop)
-  # do not collide.
   result = newStmtList()
   for i in 0 ..< dV:
     result.add newVarStmt(ident("d" & $i), newCall(dFrag, newLit(i)))

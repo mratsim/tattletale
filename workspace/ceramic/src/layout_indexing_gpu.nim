@@ -55,21 +55,48 @@ template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int
 #  Tuple overloads
 # ═══════════════════════════════════════════════════════════════
 
-template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
-  ## Inner product: sum coord[i] * stride[i]
-  ## X markers contribute 0 via operator overloads (layout_indexing.nim).
-  ## makeIntTuple wraps static ints as Int[V] for compile-time constant folding.
+template crd2idxMode*(coord, shape, stride: typed): auto =
+  ## Per-mode crd2idx anchored on the shape mode structure.
   ##
-  ## PERF: Must stay template (not func). The `it_a * it_b` delegates to
-  ## Int[V]*int operator overloads which are ALSO templates (see genBinOp
-  ## in int_tuples_datatypes.nim). A func chain here would prevent C++ inlining.
+  ## PERF: Must stay template (not func). See crd2idx tuple overload.
+  when coord is X:
+    # X markers contribute 0 at any nesting level
+    Int[0]()
+  elif shape is tuple:
+    when coord is tuple:
+      # Nested coord into a nested mode: recurse over the sub-modes
+      crd2idxRecur(coord, shape, stride, 0)
+    else:
+      # Scalar coord into a nested mode: delegate to the scalar
+      # decomposition path (foldDim over the flattened mode)
+      crd2idx(coord, shape, stride)
+  else:
+    # Flat mode: inner product of the coord element with the stride
+    coord * stride
+
+template crd2idxRecur*(coord, shape, stride: typed; i: static int): auto =
+  ## Sum the per-mode contributions of a tuple coord over the shape.
+  ##
+  ## PERF: Must stay template (not func). See crd2idx tuple overload.
+  when i == rank(shape) - 1:
+    crd2idxMode(coord[i], shape[i], stride[i])
+  else:
+    crd2idxMode(coord[i], shape[i], stride[i]) +
+      crd2idxRecur(coord, shape, stride, i + 1)
+
+template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
+  ## Recursive over shape: each top-level mode is dispatched on
+  ## its own (coord element, shape mode, stride mode).
+  ##
+  ## PERF: Must stay template (not func). The per-mode arithmetic
+  ## delegates to the Int[V] times int operator overloads, which
+  ## are ALSO templates (see genBinOp in int_tuples_datatypes.nim).
+  ## A func chain here would prevent C++ inlining.
   block:
     evalOnceAs(P, makeIntTuple(coord))
+    evalOnceAs(S, makeIntTuple(shape))
     evalOnceAs(D, makeIntTuple(stride))
-    # Int[0]() accumulator + uniform `acc + it_a * it_b` works because
-    # X*int→Int[0]() operator overloads neutralize markers.
-    foldZipWith(P(), D(), Int[0]()):
-      acc + it_a * it_b
+    crd2idxRecur(P(), S(), D(), 0)
 
 template foldDim*(co, sh, st: typed; i: static int): auto =
   when i == rank(sh) - 1:

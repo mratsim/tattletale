@@ -1,4 +1,5 @@
-## Tests for MMA fragment partitioning: partition_A/B/C.
+## Tests for MMA fragment partitioning: thrfrg_A/B/C (the partition
+## layouts) and partition_A/B/C (the thread's views).
 ##
 ## The per-thread fragment: which elements of A/B/C a thread holds, in
 ## register order (v inner), with rest positions (value tiling beyond the
@@ -32,12 +33,23 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/atoms
 import workspace/ceramic/src/kernel_gemm/atoms_nvidia
 import workspace/ceramic/src/atoms_mma_partitioning
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/tests/layouts_testutils
 
 {.experimental: "callOperator".}
 
 const atom = SM80_16x8x8_F32TF32TF32F32_TN
   ## m16n8k8 tf32: V_A = 4, V_B = 2, V_C = 4; T = 32 threads per atom.
+
+# thrfrg takes the operand's layout; the CPU tests build compact col-major
+# layouts over one dummy buffer (the data pointer is never dereferenced)
+var dummyBuf = newSeq[uint32](64 * 64)
+let dummyPtr = cast[ptr UncheckedArray[uint32]](addr dummyBuf[0])
+
+template compactView*(tileM, tileK: static int): untyped =
+  ## A compact col-major (tileM, tileK) view for thrfrg layout builds.
+  make_view(dummyPtr, (tileM, tileK), (1, tileM))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  verifyFragments — test-only coverage check (kept out of src: it is a
@@ -80,9 +92,9 @@ template verifyFragments*(mma: untyped; tileM, tileK: static int;
                of opB: thrM
                of opC: thrK
   block:
-    let p = when operand == opA: mma.partition_A(tileM, tileK)
-            elif operand == opB: mma.partition_B(tileM, tileK)
-            else: mma.partition_C(tileM, tileK)
+    let p = when operand == opA: mma.thrfrg_A(compactView(tileM, tileK).layout)
+            elif operand == opB: mma.thrfrg_B(compactView(tileM, tileK).layout)
+            else: mma.thrfrg_C(compactView(tileM, tileK).layout)
     var counts = newSeq[int](tileM * tileK)
     for flatThread in 0 ..< T * thrM * thrN * thrK:
       let tv = flatThread mod T
@@ -134,9 +146,9 @@ template fragCoords*(mma: untyped; operand: static MmaOperand;
             else: tileK div (thrN * static(mma.atom.mnk.n))
     restK = tileK div (thrK * static(mma.atom.mnk.k))
   block:
-    let p = when operand == opA: mma.partition_A(tileM, tileK)
-            elif operand == opB: mma.partition_B(tileM, tileK)
-            else: mma.partition_C(tileM, tileK)
+    let p = when operand == opA: mma.thrfrg_A(compactView(tileM, tileK).layout)
+            elif operand == opB: mma.thrfrg_B(compactView(tileM, tileK).layout)
+            else: mma.thrfrg_C(compactView(tileM, tileK).layout)
     let tv = t mod T
     let (tm, tn, tk) = idx2crd(mma.threadLayout.shape, t div T)
     let tc = idx2crd(mode(atomLayout, 0).shape, tv)
@@ -254,7 +266,7 @@ proc runThreadTilingBoundaryTests =
 #     What: the fragment when the tile exceeds the tiled-mma unit
 #     (rest > 1): pure value tiling (1×1 tiled) and tiled + value tiling
 #     (3×5 tiled), first and last threads. Why: pins the rest-position
-#     ordering (mma-position outer, col-major (RestM, RestK), v inner) —
+#     ordering (mma-position outer, col-major (RepeatM, RepeatK), v inner) —
 #     the (MMA, M, K) fragment shape.
 #     Expected values: [CUTE-EX]
 # ═════════════════════════════════════════════════════════════════════════
@@ -347,7 +359,7 @@ proc runRejectionAndInvariantTests =
   block:  # non-multiple tile shape is rejected (doAssert fires)
     const mma = tiled(2, 2, 1)
     try:
-      discard mma.partition_A(33, 8)   # 33 not a multiple of 32
+      discard mma.thrfrg_A(compactView(33, 8).layout)   # 33 not a multiple of 32
       doAssert false, "expected AssertionDefect for non-multiple tile shape"
     except AssertionDefect:
       discard

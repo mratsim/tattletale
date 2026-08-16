@@ -291,6 +291,12 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
       let flds = resolveRecordFields(reg, impl)
       let typName = assignTypeName(n) # might be an object construction
       result = initGpuObjectType(typName, flds)
+    of ntyEnum:
+      # Enum types resolve to their underlying integer storage. The atom
+      # records carry enum fields (MmaDType) that never reach the emitted
+      # C++ (the record only flows as a dropped static arg), but the const's
+      # type must still resolve for the codegen to fold it.
+      result = initGpuType(gtUint32)
     of ntyArray:
       # For a generic, static array type, e.g.:
       if n.kind == nnkSym:
@@ -364,9 +370,21 @@ proc resolveRecordFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeFiel
     # Empty objects (e.g., `type Int[V] = object`) have no recList.
     if node.len > 2 and node[2].kind == nnkRecList:
       for ch in node[2]:
-        doAssert ch.kind == nnkIdentDefs and ch.len == 3
-        result.add GpuTypeField(name: ch[0].strVal,
-                                typ: resolveType(reg, ch[1]))
+        if ch.kind == nnkRecCase:
+          # A variant section (`case kind: ... of ...`): resolve the branch
+          # fields, skip the discriminator plumbing. The atom records carry
+          # variants but only flow as dropped static args.
+          for branch in ch[1 .. ^1]:
+            if branch.kind == nnkOfBranch:
+              for f in branch[1 .. ^1]:
+                if f.kind == nnkIdentDefs and f.len == 3:
+                  result.add GpuTypeField(name: f[0].strVal,
+                                          typ: resolveType(reg, f[1]))
+        else:
+          doAssert ch.kind == nnkIdentDefs and ch.len == 3,
+            "resolveRecordFields: unexpected recList child " & $ch.kind & ": " & $ch.treerepr
+          result.add GpuTypeField(name: ch[0].strVal,
+                                  typ: resolveType(reg, ch[1]))
   of nnkTupleTy, nnkTupleConstr:
     for fi in resolveTupleFields(node):
       result.add GpuTypeField(name: fi.name, typ: resolveType(reg, fi.typeNode))
