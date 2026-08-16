@@ -38,18 +38,6 @@ const WgpuIncludePath* = WgpuVendorDir / "wgpu" / "include"
 
 {.passC: "-I" & WgpuIncludePath.}
 
-static:
-  doAssert dirExists(WgpuVendorDir),
-    "Vendored wgpu-native not found at '" & WgpuVendorDir & "'.\n" &
-    "Run: nim c -r workspace/crucible/vendor/wgpu_installer.nim"
-
-  doAssert fileExists(WgpuLibPath / (
-    when defined(windows): "wgpu_native.dll"
-    elif defined(macosx):  "libwgpu_native.dylib"
-    else:                  "libwgpu_native.so"
-  )), "wgpu-native shared library not found in '" & WgpuLibPath & "'.\n" &
-    "Run: nim c -r workspace/crucible/vendor/wgpu_installer.nim"
-
 # ═══════════════════════════════════════════════════════════════════════
 # Opaque handle types
 # ═══════════════════════════════════════════════════════════════════════

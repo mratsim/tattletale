@@ -31,14 +31,14 @@ const atom = SM80_16x8x8_F32TF32TF32F32_TN
 
 # ── SECTION 1: V pinned, rest compact by value ─────────────────────────────
 proc sec1() =
-  # col-major tAv (V0, V1, RestM, RestK) — V strides follow the atom (compact)
+  # col-major tAv (V0, V1, RepeatM, RepeatK) — V strides follow the atom (compact)
   let colLayout = make_layout((2, 2, 1, 2), (1, 2, 4, 8))
   let colFrag = make_fragment_like(colLayout, atom.aLayout.shape[1])
   # V flattened to (4,):(1,); rest (1,2) compact by value (1,1) × V cosize 4
   doAssert colFrag === make_layout((4, 1, 2), (1, 4, 4))
 
   # row-major tAv — V strides stay the atom's (8,64), only the tile/rest
-  # strides follow the operand (RestK stride 1 = the make_layout_like trigger)
+  # strides follow the operand (RepeatK stride 1 = the make_layout_like trigger)
   let rowLayout = make_layout((2, 2, 1, 2), (8, 64, 2, 1))
   let rowFrag = make_fragment_like(rowLayout, atom.aLayout.shape[1])
   # V pinned: identical V block (4,):(1,) — rest reordered by row-major values
@@ -74,7 +74,7 @@ proc sec3() =
 
 # ── SECTION 4: make_fragment_A/B + coordinate copyFrom pin ─────────────────
 proc sec4() =
-  # partition_A-shaped view (V0, V1, RestM, RestK)
+  # partition_A-shaped view (V0, V1, RepeatM, RepeatK)
   var Aarr: array[4 * 1 * 2, uint32]
   let fakeAv = make_view(Aarr, make_layout((2, 2, 1, 2), (1, 2, 4, 8)))
   let aFrag = make_fragment_A(atom, fakeAv)
@@ -94,7 +94,7 @@ proc sec4() =
   let rowA = make_view(src, make_layout((16, 8), (8, 1)))
   let tAvRm = make_fragment_like(make_layout((2, 2, 1, 2), (8, 64, 2, 1)), atom.aLayout.shape[1])
   # direct gather, mirroring gemm_tiled's fragment write:
-  #   (v0, v1, 0, s) against the (V·, RestM, RestK) view
+  #   (v0, v1, 0, s) against the (V·, RepeatM, RepeatK) view
   var frag: array[4 * 1 * 2, uint32]
   let fragView = make_view(frag, tAvRm)
   for s in 0 ..< 2:

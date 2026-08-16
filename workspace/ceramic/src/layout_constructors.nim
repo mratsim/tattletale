@@ -330,7 +330,7 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
   ## coordinate alignment is unaffected.
   ##
   ## Examples:
-  ##   (V0,V1,RestM,RestK) view  →  V flattened stride-1, rest compact
+  ##   (V0,V1,RepeatM,RepeatK) view  →  V flattened stride-1, remainder compact
   ##   row-major operand          →  same V order (make_layout_like would
   ##     reorder V after a fast rest mode and scramble the registers)
   ##   broadcast V (stride-0)     →  (VA,):(0,)

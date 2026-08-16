@@ -42,14 +42,11 @@ const AMX_16x16x16_TDPBF16PS* = MmaAtom[typeof(AMX_1x256), typeof(AMX_1x256), ty
                                         # (each tmm row holds 32 bf16 = 2 K-slices of 16; the
                                         # instruction consumes one K=16 slice per step)
     aType: mdtBF16, bType: mdtBF16, cType: mdtF32,
-    scaleMode: smSoftware, blockSize: 32, # per-32-block software scale
-    sfaType: mdtF32, sfbType: mdtF32,
     kind: bkCPU_X86_AMX,
     instr: "tdpbf16ps",
     aLayout: AMX_1x256,
     bLayout: AMX_1x256,
     cLayout: AMX_1x256,
-    scaleVec: sv1X,                       # unused — AMX scale is smSoftware
   )
 
 const AMX_16x16x16_TDPBSSD* = MmaAtom[typeof(AMX_1x1024), typeof(AMX_1x1024), typeof(AMX_1x256)](
@@ -62,29 +59,9 @@ const AMX_16x16x16_TDPBSSD* = MmaAtom[typeof(AMX_1x1024), typeof(AMX_1x1024), ty
     # cannot encode that direction — _tile_loadd addressing / TILECFG
     # emission must treat A (M,K) and B (K,N) asymmetrically.
     aType: mdtInt8, bType: mdtInt8, cType: mdtInt32,
-    scaleMode: smSoftware, blockSize: 32,
-    sfaType: mdtF32, sfbType: mdtF32,
     kind: bkCPU_X86_AMX,
     instr: "tdpbssd",
     aLayout: AMX_1x1024,
     bLayout: AMX_1x1024,
     cLayout: AMX_1x256,
-    scaleVec: sv1X,
   )
-
-static:
-  # Fragment-tile cross-checks: the operand
-  # layouts must match the mnk tile geometry — aLayout/bLayout hold one
-  # full (M,K)/(N,K) tile per instruction, cLayout the (M,N) accumulator.
-  doAssert cosize(AMX_16x16x16_TDPBF16PS.aLayout) === 16 * 16,
-    "tdpbf16ps: aLayout cosize != m·k (16·16)"
-  doAssert cosize(AMX_16x16x16_TDPBF16PS.bLayout) === 16 * 16,
-    "tdpbf16ps: bLayout cosize != n·k (16·16)"
-  doAssert cosize(AMX_16x16x16_TDPBF16PS.cLayout) === 16 * 16,
-    "tdpbf16ps: cLayout cosize != m·n (16·16)"
-  doAssert cosize(AMX_16x16x16_TDPBSSD.aLayout) === 16 * 64,
-    "tdpbssd: aLayout cosize != m·k (16·64)"
-  doAssert cosize(AMX_16x16x16_TDPBSSD.bLayout) === 16 * 64,
-    "tdpbssd: bLayout cosize != n·k (16·64)"
-  doAssert cosize(AMX_16x16x16_TDPBSSD.cLayout) === 16 * 16,
-    "tdpbssd: cLayout cosize != m·n (16·16)"

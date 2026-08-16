@@ -103,7 +103,9 @@ proc sgemm_1_kernel(
   # (the tutorial's main() happens to pass alpha=1, beta=0).
   var epi = initEpiAXPBY(alpha, beta, tCgC)
   epi.preflight()
-  epi.apply(tCgC, tCrC)
+  var res = make_tensor(float32, tCrC.layout.shape)
+  epi.apply(res, tCrC)
+  epi.finalStore(res, tCgC)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  GPU kernel (cuda: block for NVRTC)
