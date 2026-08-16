@@ -1,22 +1,21 @@
 ## Manual GPU test: gemm_cta (Level 4) via the OpenCL backend.
 ##
-## Same problems as manual_gemm_cta_cuda.nim: the four shipped epilogues
-## (EpiAXPBY, EpiIdentity, EpiReLU, EpiAddBias) over a 2×2 CTA grid (tile
-## 32×16, K = 32), 128 work-items per CTA. The kernel body is the CUDA
-## twin's verbatim; the launch geometry is linearized: the engine launches
-## grid.x·grid.y·blockSize work-items and the kernel decomposes the linear
-## work-item id into (mCTA, nCTA, threadIdx). Work-groups span the full
-## CTA (blk.x = 128): mma.sync works in multi-warp groups on NVIDIA's
-## OpenCL (verified by experiment, the old one-warp pin was over-cautious).
-## The oracle, trial loop and report live in gemm_test_lib
-## (testGemmCta*), shared with the CUDA twin.
+## Four shipped epilogues (EpiAXPBY, EpiIdentity, EpiReLU, EpiAddBias)
+## over a 2×2 CTA grid (tile 32×16, K = 32), 128 work-items per CTA.
+## Launch geometry is linearized: the engine launches
+## grid.x·grid.y·blockSize work-items and the kernel decomposes the
+## linear work-item id into (mCTA, nCTA, threadIdx).
+## Reference, trial loop and report live in gemm_test_lib
+## (testGemmCta*).
 ##
-## NVIDIA-OpenCL only: the mma.sync inline PTX travels inside the OpenCL C
-## kernel as asm(...), which only NVIDIA's OpenCL compiler accepts. The
-## host verifies the device vendor before launching.
+## NVIDIA-OpenCL only: the mma.sync inline PTX is embedded in the OpenCL C
+## kernel as asm(...), which only NVIDIA's OpenCL compiler accepts. Host
+## verifies the device vendor before launching.
 ##
 ## Requires an sm_80+ GPU with NVIDIA's OpenCL. Run with:
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_cta_opencl.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/manual_gemm_cta_opencl.nim --nimcache:nimcache/tests/manual_gemm_cta_opencl.nim \
+##     workspace/ceramic/tests/gemm/manual_gemm_cta_opencl.nim
 
 import std/[strformat, strutils]
 import workspace/ceramic/src/int_tuples
@@ -47,14 +46,9 @@ static:
   doAssert blockSize == toIntVal(tiled.atom.threadCount(opA)) * 2 * 2 * 1
 
 const kernelCode = opencl:
-  # Each kernel wrapper decomposes the linear work-item id into
-  # (mCTA, nCTA, threadIdx), builds the problem views, derives the CTA's
-  # C tile by local_tile over the C problem layout (the origin comes from
-  # the grid coords, baked by crd2idx), partitions it to the per-thread
-  # destination fragment (D), constructs the epilogue op with its state,
-  # and hands both to gemm_cta. The grid never sees alpha/beta/C/bias:
-  # they are op state. Output-first (C): the OpenCL engine's run binds
-  # the output at binding 0, inputs at 1..N in signature order.
+  # Epilogue-op state: alpha/beta/C/bias never appear as kernel arguments.
+  # Output-first (C): the OpenCL engine's run binds the output at
+  # binding 0, inputs at 1..N in signature order.
   proc gemmCtaKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
@@ -123,21 +117,19 @@ const kernelCodeBias = opencl:
     let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
     let thr = tiled.get_slice(threadIdx)
     var tCv = tiled.partition_C(thr, tC)
-    # The bias is a (N,) column vector: the problem view has stride-0 rows
-    # (every row of a column reads the same bias element) and the same
-    # partition as C, which bakes each thread's column base into the
-    # fragment's data pointer. The tile grid over the (64, 32) bias
-    # problem layout and the (mCTA, nCTA) slice derive the tile origin by
-    # layout algebra, no +% pointer math.
+    # Bias is a (N,) column vector: the input view has stride-0 rows, so
+    # every row of a column reads the same bias element. The view is
+    # partitioned like C, which bakes each thread's column base into the
+    # fragment's data pointer. The (mCTA, nCTA) tile origin derives from
+    # the layout.
     let pBias = make_view(bias, (64, 32), (0, 1))
     var biasView = tiled.partition_C(thr, local_tile(pBias, (32, 16), (mCTA, nCTA)))
     var epi = initEpiAddBias(biasView)
     gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx)
 
-# The single-tile kernel lives in its own opencl block: five
-# view-heavy inlined kernels in one block exceed the OpenCL codegen's
-# compile-time VM-loop budget (maxLoopIterationsVM); the CUDA twin has
-# the same split.
+# The single-tile kernel lives in its own opencl block: five view-heavy
+# inlined kernels in one block exceed the OpenCL codegen's compile-time
+# VM-loop budget (maxLoopIterationsVM).
 const kernelCodeSingle = opencl:
   proc gemmCtaKernelSingle(
       C: ptr UncheckedArray[float32],

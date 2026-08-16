@@ -1,21 +1,22 @@
-## Manual GPU test: the k-tile loop through gemm_cta via the OpenCL
+## Manual GPU test: gemm_cta's loop over the K dimension via the OpenCL
 ## backend.
 ##
-## Same problem as manual_gemm_cta_k64_cuda.nim: C(64×32) = α·A(64×64)·
-## B(32×64) + β·C over a 2×2 CTA grid with TWO k-tiles (K = 64 =
-## 2·tileK, tileK = 32), 128 work-items per CTA. The kernel body is the
-## CUDA twin's verbatim; the launch geometry is linearized: the engine
-## launches grid.x·grid.y·blockSize work-items and the kernel decomposes
-## the linear work-item id into (mCTA, nCTA, threadIdx). The oracle,
-## trial loop and report live in gemm_test_lib (testGemmCtaK64),
-## shared with the CUDA twin.
+## C(64×32) = α·A(64×64)·B(32×64) + β·C over a 2×2 CTA grid with two
+## tileK-sized slices of K (K = 64 = 2·tileK, tileK = 32), 128
+## work-items per CTA. Launch geometry is linearized: the engine
+## launches grid.x·grid.y·blockSize work-items and the kernel
+## decomposes the linear work-item id into (mCTA, nCTA, threadIdx).
+## Reference, trial loop and report live in gemm_test_lib
+## (testGemmCtaK64).
 ##
-## NVIDIA-OpenCL only: the mma.sync inline PTX travels inside the OpenCL C
-## kernel as asm(...), which only NVIDIA's OpenCL compiler accepts. The
-## host verifies the device vendor before launching.
+## NVIDIA-OpenCL only: the mma.sync inline PTX is embedded in the
+## OpenCL C kernel as asm(...), which only NVIDIA's OpenCL compiler
+## accepts. Host verifies the device vendor before launching.
 ##
 ## Requires an sm_80+ GPU with NVIDIA's OpenCL. Run with:
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_cta_k64_opencl.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/manual_gemm_cta_k64_opencl.nim --nimcache:nimcache/tests/manual_gemm_cta_k64_opencl.nim \
+##     workspace/ceramic/tests/gemm/manual_gemm_cta_k64_opencl.nim
 
 import std/[strformat, strutils]
 import workspace/ceramic/src/int_tuples
@@ -50,10 +51,6 @@ const kernelCode = opencl:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    ## Same 2×2 CTA grid decomposition with K = 64 = 2·tileK: gemm_cta
-    ## hands each CTA a full-K (32, 64) / (16, 64) tile view and loops
-    ## the two k-tiles into the persistent accumulator (gemm_tiled
-    ## computes one k-tile each).
     let gid = int(get_global_id(0))
     let threadIdx = gid mod 128
     let blk = gid div 128

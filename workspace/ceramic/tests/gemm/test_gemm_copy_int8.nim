@@ -13,8 +13,8 @@
 ## 16·(t + i·4), each unit the atom's 16-byte column chunk.
 ##
 ## Runs on the CPU, no GPU needed:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests/test_gemm_copy_int8.nim \
-##     --nimcache:nimcache/tests/test_gemm_copy_int8.nim \
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/test_gemm_copy_int8.nim --nimcache:nimcache/tests/test_gemm_copy_int8.nim \
 ##     workspace/ceramic/tests/gemm/test_gemm_copy_int8.nim
 
 {.experimental: "callOperator".}
@@ -31,14 +31,12 @@ import workspace/ceramic/tests/layouts_testutils
 
 proc runInt8PartitionTests =
   block:
-    ## The atom: 16 int8 elements per 16-byte chunk.
     check numPacked(CpAsyncAtom[int8]), 16, int
     doAssert tilerMN(CpAsyncAtom[int8]) === (16, 1)
     doAssert tilerMN(CpAsyncAtom[int64]) === (2, 1)
   block:
-    ## The compact-tile partition proof: thread t's unit i sits at
-    ## the flat chunk position c = t + i·blockSize, the element
-    ## offset 16·c, decoded through the (16, 8) tile shape
+    ## Compact tile: expected offset m + k·TILE_M, decoded from the
+    ## element offset 16·c through the (16, 8) tile shape
     const blockSize = 4
     const TILE_M = 16
     const TILE_K = 8
@@ -60,8 +58,7 @@ proc runInt8PartitionTests =
           "int8 partition: thread " & $tid & " unit " & $i & ": tile offset " &
           $off & ", reference " & $expected
   block:
-    ## The padded-stride partition: the same proof on a gmem view
-    ## with the leading stride 80, the expected offset m + k·80
+    ## Padded leading stride: expected offset m + k·80
     const blockSize = 4
     const TILE_M = 16
     const TILE_K = 8

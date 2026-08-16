@@ -1,30 +1,33 @@
-## Manual GPU test: gemm_gpu (Level 5) via NVRTC/CUDA.
+## Manual GPU test: gemm_gpu via NVRTC/CUDA.
 ##
 ## gemm_gpu: the test kernels build input views over the raw buffers
 ## and hand them to gemm_gpu.
 ## gemm_gpu derives the tma policy (atom_selector + threadLayoutOf + tile_shape),
 ## the CTA position from the ambient blockIdx.x/y,
 ## and the per-thread epilogue shard, then runs the gemm_cta body.
-## The test kernels never see M/N/K, the tile, the thread layout or the grid coords.
+## Test kernels never see M/N/K, the tile, the thread layout or the grid coords.
 ##
 ## TODO: row-major and arbitrary-stride views. The layout algebra is stride-agnostic,
 ## so the copies can convert any layout into the smem and register arrangements.
 ## Only col-major fixtures are covered today.
 ##
-## The five epilogues run over a 1×1 CTA grid (tile 32×32, tileK 32),
-## 256 threads. The K64 kernel runs two tileK-sized slices of K:
-##   gemmGpuKernel        EpiAXPBY,   D = α·AB + β·C
+## Five kernels run over a 1×1 CTA grid (tile 32×32, tileK 32),
+## 256 threads. K64 kernel runs two tileK-sized slices of K.
+## Epilogues:
+##   gemmGpuKernel          EpiAXPBY,    D = α·AB + β·C
 ##   gemmGpuIdentityKernel  EpiIdentity, D = AB
-##   gemmGpuReLUKernel    EpiReLU,    D = max(0, AB)
-##   gemmGpuBiasKernel    EpiAddBias, D = AB + bias (column broadcast)
-## The C buffer is pre-filled with NaN: a dropped store leaves NaN != expected,
+##   gemmGpuReLUKernel      EpiReLU,     D = max(0, AB)
+##   gemmGpuBiasKernel      EpiAddBias,  D = AB + bias (column broadcast)
+## C buffer is pre-filled with NaN: a dropped store leaves NaN != expected,
 ## and the β=0 branch must skip the C read. A spurious read also fails.
 ##
-## The oracle, trial loop and report live in gemm_test_lib (testGemmGpu*),
-## launched over a 2D grid: gridDim = (1, 1), blockIdx.y drives nCTA.
+## Reference, trial loop and report live in gemm_test_lib (testGemmGpu*),
+## launched over a 1×1 CTA grid.
 ##
 ## Requires an sm_80+ GPU. Run with:
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_gpu_cuda.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/manual_gemm_gpu_cuda.nim --nimcache:nimcache/tests/manual_gemm_gpu_cuda.nim \
+##     workspace/ceramic/tests/gemm/manual_gemm_gpu_cuda.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -43,8 +46,8 @@ import workspace/crucible
 
 {.experimental: "callOperator".}
 
-# The host derives the tile/blockSize for the oracle and the launch from the same policy
-# gemm_gpu computes internally (the dtype table).
+# Host derives the reference and launch tile/blockSize
+# from the same policy gemm_gpu computes internally.
 const atom = atom_selector(uint32, uint32, float32)
 const tiled = make_tiled_mma(atom, threadLayoutOf(atom, 32, 32))
 
@@ -91,9 +94,8 @@ const kernelCodeBias = cuda:
     let pA = make_view(A, (32, 32), (1, 32))
     let pB = make_view(B, (32, 32), (1, 32))
     var pC = make_view(C, (32, 32), (1, 32))
-    # The bias is a (N,) column vector: the bias view has stride-0 rows
-    # (every row of a column reads the same bias element). The shard
-    # partitions it onto the thread's fragment at the CTA's tile.
+    # Bias is a (N,) column vector: the bias view has stride-0 rows,
+    # so every row of a column reads the same bias element.
     gemm_gpu(pC, pA, pB, initEpiAddBias(make_view(bias, (32, 32), (0, 1))))
 
 proc runTest() =

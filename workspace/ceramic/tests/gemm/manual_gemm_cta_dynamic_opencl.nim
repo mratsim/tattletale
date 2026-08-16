@@ -1,26 +1,24 @@
 ## Manual GPU test: gemm_cta with runtime M/N/K and runtime leading
 ## strides via the OpenCL backend.
 ##
-## Same kernel and problems as manual_gemm_cta_dynamic_cuda.nim: the
-## kernel receives M, N, K, ldA, ldB, ldC as runtime arguments, builds
-## the problem views from them (the view K is the ALLOCATED extent, the
-## literal kView = 64; the problem K is runtime), and gemm_cta covers
-## the ceil(M/32) × ceil(N/16) CTA grid, 128 work-items per CTA. The
-## launch geometry is linearized: the engine launches
-## gridM·gridN·blockSize work-items and the kernel decomposes the linear
-## id into (mCTA, nCTA, threadIdx). Work-groups span the full CTA
-## (blk.x = 128): mma.sync works in multi-warp groups on NVIDIA's
-## OpenCL (verified by experiment).
+## Kernel receives M, N, K, ldA, ldB, ldC as runtime arguments and
+## builds the input views from them. View K is the allocated kView = 64,
+## the input K is runtime, at most kView. gemm_cta covers the
+## ceil(M/32) × ceil(N/16) CTA grid with 128 work-items per CTA.
+## Launch geometry is linearized: the engine launches
+## gridM·gridN·blockSize work-items and the kernel decomposes the
+## linear id into (mCTA, nCTA, threadIdx).
+## Reference, trial loop and report live in gemm_test_lib
+## (testGemmCtaDynamic).
 ##
-## The oracle, trial loop and report live in gemm_test_lib
-## (testGemmCtaDynamic), shared with the CUDA twin.
-##
-## NVIDIA-OpenCL only: the mma.sync inline PTX travels inside the OpenCL C
-## kernel as asm(...), which only NVIDIA's OpenCL compiler accepts. The
-## host verifies the device vendor before launching.
+## NVIDIA-OpenCL only: the mma.sync inline PTX is embedded in the
+## OpenCL C kernel as asm(...), which only NVIDIA's OpenCL compiler
+## accepts. Host verifies the device vendor before launching.
 ##
 ## Requires an sm_80+ GPU with NVIDIA's OpenCL. Run with:
-##   nim c -r workspace/ceramic/tests/gemm/manual_gemm_cta_dynamic_opencl.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/manual_gemm_cta_dynamic_opencl.nim --nimcache:nimcache/tests/manual_gemm_cta_dynamic_opencl.nim \
+##     workspace/ceramic/tests/gemm/manual_gemm_cta_dynamic_opencl.nim
 
 import std/[strformat, strutils]
 import workspace/ceramic/src/int_tuples
@@ -51,12 +49,6 @@ static:
   doAssert blockSize == toIntVal(tiled.atom.threadCount(opA)) * 2 * 2 * 1
 
 const kernelCode = opencl:
-  # Dynamic-shape gemm_cta driver: M, N, K and the leading strides arrive
-  # as kernel arguments; the views are built from them at runtime. The
-  # view K is the ALLOCATED extent, the literal kView = 64 (the harness
-  # pads its buffers to 64 K-columns); the problem K passed to gemm_cta
-  # is the runtime K argument. The linear work-item id decomposes into
-  # (mCTA, nCTA, threadIdx) over the ceil(M/32) × ceil(N/16) CTA grid.
   # Output-first (C): the OpenCL engine's run binds the output at
   # binding 0, inputs at 1..N in signature order.
   proc gemmCtaDynamicKernel(
@@ -81,10 +73,10 @@ const kernelCode = opencl:
              mCTA, nCTA, threadIdx)
 
 proc runTest() =
-  # the kernel strings hardcode the tile literals (32, 16, 32), the
-  # allocated-K literal 64 and the 128-thread block; pin them to the
-  # atom's coverage so a config change cannot desync the kernel from the
-  # harness silently
+  # Kernel strings hardcode the tile literals (32, 16, 32), the
+  # allocated-K literal 64, and the 128-thread block. Pin them to the
+  # atom's tile shape so a config change cannot silently desync the
+  # kernel from the harness.
   static:
     doAssert 32 === toIntVal(tiled.threadLayout.shape[0]) * toIntVal(tiled.atom.mnk.m) and
       16 === toIntVal(tiled.threadLayout.shape[1]) * toIntVal(tiled.atom.mnk.n) and
@@ -94,9 +86,10 @@ proc runTest() =
       "manual_gemm_cta_dynamic: the kernel's tile/block literals (32, 16, 32, 64, 128)" &
       " must match the atom's coverage"
 
-  # the allocated K the kernel's views are built on: the kernel string's
-  # literal must equal this (the pin below checks divisibility only, a
-  # literal change to a different multiple of tileK silently desyncs)
+  # Allocated K the kernel views are built on: the kernel string's
+  # literal must equal this. The tile pin above checks divisibility
+  # only, so a literal change to another multiple of tileK would
+  # silently desync without this exact-value pin.
   const kView = 64
   static:
     doAssert kView === 64,
@@ -108,18 +101,18 @@ proc runTest() =
   doAssert engine.deviceName().contains("NVIDIA"),
     "gemm_cta dynamic OpenCL needs NVIDIA's OpenCL compiler for the mma.sync asm; got: " &
     engine.deviceName()
-  # runtime K: K = 32 < kView = 64, one k-tile with padded strides; the
-  # loop bound is runtime (ceil(K/tileK)), the NaN K-pad stays untouched
+  # K = 32 < kView = 64: one tileK-sized slice of K with padded strides,
+  # runtime loop bound (ceil(K/tileK)), NaN K-pad untouched
   testGemmCtaDynamic(engine, tiled, "SM80", "gemmCtaDynamicKernel",
                      64, 32, 32, 80, 48, 80, kView)
-  # two exact k-tiles: K == kView == 64
+  # K = 64 = kView: two exact tileK-sized slices of K
   testGemmCtaDynamic(engine, tiled, "SM80", "gemmCtaDynamicKernel",
                      64, 32, 64, 64, 32, 64, kView)
-  # ragged K: two k-tiles, residue 16 (the last k-tile gathers zeros
-  # for k >= 16)
+  # Ragged K = 48: two tileK-sized slices of K, residue 16 (the last
+  # slice's load zero-fills k >= 16)
   testGemmCtaDynamic(engine, tiled, "SM80", "gemmCtaDynamicKernel",
                      64, 32, 48, 64, 32, 64, kView)
-  # K < tileK: one partial k-tile (validK = 16 < tileK = 32)
+  # K = 16 < tileK: one partial slice of K (validK = 16 < tileK = 32)
   testGemmCtaDynamic(engine, tiled, "SM80", "gemmCtaDynamicKernel",
                      64, 32, 16, 64, 32, 64, kView)
   # ragged N (40 = 2.5 tiles) + ragged K (40 = tileK + 8)
@@ -133,8 +126,9 @@ proc runTest() =
   # exercised (the other trials run β = 0 where C is never read)
   testGemmCtaDynamic(engine, tiled, "SM80", "gemmCtaDynamicKernel",
                      48, 40, 48, 64, 48, 64, kView, alpha = 1.0'f32, beta = 1.0'f32)
-  # K = 0: no k-tiles, the gather never runs, the epilogue stores beta·C
-  # (the A/B buffers are entirely NaN and must stay untouched)
+  # K = 0: no loop over the K dimension, the gather never runs, the
+  # epilogue stores beta·C (the A/B buffers are entirely NaN and must
+  # stay untouched)
   testGemmCtaDynamic(engine, tiled, "SM80", "gemmCtaDynamicKernel",
                      64, 32, 0, 64, 32, 64, kView, alpha = 1.0'f32, beta = 1.0'f32)
 

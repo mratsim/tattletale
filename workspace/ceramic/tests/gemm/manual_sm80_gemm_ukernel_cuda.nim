@@ -1,19 +1,19 @@
-## Manual GPU test: the sm80 GEBB microkernel via NVRTC/CUDA — the loop over K.
+## Manual GPU test: the sm80 GEMM microkernel (gemm_ukernel)
+## via NVRTC/CUDA.
 ##
-## C(16×8) = A(16×16)·B(16×8) — two m16n8k8 k slices through gemm_ukernel
-## (one gemm_atom per slice, accumulated in cFrag — CuTe sgemm_2.cu's ukernel K-loop
-## analog). 32 threads. Fragment gathering is CuTe layout algebra (sgemm_2.cu): the
-## partition of the full (M, 2K)/(N, 2K) views carries the k slices in its
-## RepeatK mode; the register blocks are identity views and copyFrom does the
-## whole gather — no offset arithmetic. The epilogue is a direct identity copy to C.
+## C(16×8) = A(16×16)·B(16×8): two m16n8k8 k slices through
+## gemm_ukernel, one gemm_atom per slice accumulated in cFrag,
+## 32 threads. Epilogue is a direct identity copy to C.
 ##
-## The atom is the parameter — SM80_16x8x8_F32TF32TF32F32_TN; the tiling is
-## 1×1×1 (single atom); geometry is derived inside the driver func. The
-## oracle harness lives in gemm_test_lib.
+## Atom is the parameter, SM80_16x8x8_F32TF32TF32F32_TN. Tiling is
+## 1×1×1 (single atom). Geometry derives inside the driver func.
+## Reference harness lives in gemm_test_lib.
 ##
 ## Requires an sm_80+ GPU. Run with:
 ##   CUDA_HOME=/usr/local/cuda-12 LD_LIBRARY_PATH=/usr/local/cuda-12/lib64 \
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_sm80_gemm_ukernel_cuda.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/manual_sm80_gemm_ukernel_cuda.nim --nimcache:nimcache/tests/manual_sm80_gemm_ukernel_cuda.nim \
+##     workspace/ceramic/tests/gemm/manual_sm80_gemm_ukernel_cuda.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -39,10 +39,10 @@ const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
 func gemmUkernelMicrotile(tma: static TiledMma; t: int;
                           C: ptr UncheckedArray[float32];
                           A, B: ptr UncheckedArray[uint32]) {.inline.} =
-  ## C(16×8) = A(16×16)·B(16×8) — two m16n8k8 k slices via gemm_ukernel.
-  ## Fragment gathering: partition_A/B of the full (M, 2K)/(N, 2K) views, the
-  ## fragment blocks as owning tensors (make_fragment_A/B), one copyFrom
-  ## gathers all slices — no loops, no offsets, no raw-addr views.
+  ## C(16×8) = A(16×16)·B(16×8): two m16n8k8 k slices via gemm_ukernel.
+  ## Fragment gathering: partition_A/B of the full (M, 2K)/(N, 2K) views,
+  ## fragments as owning tensors (make_fragment_A/B). No loops, no
+  ## offsets, no raw-addr views.
   const
     kSlices = 2
     M = tma.atom.mnk.m
@@ -55,23 +55,20 @@ func gemmUkernelMicrotile(tma: static TiledMma; t: int;
   let tAv = tma.partition_A(thr, make_view(A, make_layout((M, kSlices * K), (1, M))))
   let tBv = tma.partition_B(thr, make_view(B, make_layout((N, kSlices * K), (1, N))))
   var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
-  # the fragment blocks as owning tensors shaped like the partitions:
-  # V flattened to atom register order, the k slices are the partition's
-  # RepeatK mode. One copyFrom gathers the whole block through each
-  # tensor's layout (coordinate semantics: dst(i)/src(i) decode i through
-  # their own shapes, identical flat enumeration, matching gemm_ukernel's
-  # coordinate slices)
+  # fragments as owning tensors shaped like the partitions:
+  # V flattened to atom register order, the k slices in the partition's
+  # RepeatK mode, so one copyFrom gathers all slices in the flat order
+  # gemm_ukernel indexes per k slice
   var aFrag = make_fragment_A(tma.atom, tAv)
   aFrag.copyFrom(tAv)
   var bFrag = make_fragment_B(tma.atom, tBv)
   bFrag.copyFrom(tBv)
-  # the accumulator: make_tensor, passed directly to gemm_ukernel
+  # accumulator: flat (VC,), zeroed, gemm_ukernel accumulates in place
   var cFrag = make_tensor(float32, (VC,))
   cFrag.fillWith(0.0'f32)
 
   gemm_ukernel(tma.atom, cFrag, aFrag, bFrag)   # two mma.sync, accumulating
 
-  # identity epilogue: the register fragment is written straight to C
   for i in 0 ..< size(tCv.layout):
     tCv(i) = cFrag(i)
 

@@ -1,25 +1,24 @@
 ## CPU unit test: the store-predication mask (cStoreMask) and the copy
 ## partition (partition_S / partition_D) against independent references.
 ##
-## The store-mask reference derives each C-fragment element's tile
-## coordinate from the partition view, without using the helper's own
-## atom-offset math: crd2idx(view.layout, i) is the flat tile offset of
-## fragment element i. The view and the fragment share the flat
-## alignment. Element i of the view is element i of the fragment.
-## The tile is col-major, so the row/col is offset mod tileM /
-## offset div tileM.
+## Store-mask reference: crd2idx(view.layout, i) is the flat tile offset
+## of fragment element i (element i of the view is element i of the
+## fragment), without using the helper's own atom-offset math. The tile
+## is col-major, so the row is offset mod tileM and the column offset
+## div tileM.
 ##
-## The copy-partition proof checks the partition views against the
-## pinned chunk sequence for every thread: the thread's 16-byte chunks
+## Copy-partition proof: the partition views are checked against the
+## pinned chunk sequence for every thread. The thread's 16-byte chunks
 ## sit at the flat chunk positions c = tid + i·blockSize of the
-## (TILE_M, TILE_K) k-tile. The reference derives each chunk's tile
-## offset from the SHAPE coordinates of its flat position 4·c (the
-## gemm_cta tApA construction), never from the partition's own layout.
-## The gmem side runs a padded leading stride, the smem side the
-## compact tile.
+## (TILE_M, TILE_K) slice of K. The reference derives each
+## chunk's tile offset from the shape coordinates of its flat position
+## 4·c, never from the partition's own layout. The gmem side runs a
+## padded leading stride, the smem side the compact tile.
 ##
 ## Runs on the CPU, no GPU needed:
-##   nim c -r workspace/ceramic/tests/gemm/test_gemm_predication.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/test_gemm_predication.nim --nimcache:nimcache/tests/test_gemm_predication.nim \
+##     workspace/ceramic/tests/gemm/test_gemm_predication.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -43,31 +42,31 @@ const tiled = TiledMma[typeof(atom), typeof(make_layout((2, 2, 1)))](
 const
   TILE_M = 32
   TILE_N = 16
-  TILE_K = 32                 # the copy-partition k-tile depth
+  TILE_K = 32                 # the copy-partition K depth
   thrM = tiled.thrM
   thrN = tiled.thrN
   thrK = tiled.thrK
   blockSize = tiled.threadCount()
   copyUnits = (TILE_M * TILE_K) div (4 * blockSize)   # the 16-byte chunks per thread
 
-# The tile view only feeds layout algebra: the data pointer is never
+# Tile view feeds layout algebra only: the data pointer is never
 # dereferenced, so one dummy buffer serves the C tile.
 var dummy = newSeq[uint32](TILE_M * TILE_N)
 let dummyPtr = cast[ptr UncheckedArray[uint32]](addr dummy[0])
 
 proc main() =
-  # every thread: the C store mask must match the partition-view reference
-  # for the full and ragged extents
+  # Every thread: the C store mask must match the partition-view
+  # reference for the full, ragged, and tiny sizes
   for tid in 0 ..< blockSize:
     let thr = tiled.get_slice(tid)
     let tC = make_view(dummyPtr, (TILE_M, TILE_N), (1, TILE_M))
     let tCv = tiled.partition_C(thr, tC)
-    # the partition view's data pointer is already advanced by the thread's
-    # partition origin: the tile offset of element i is the view-relative
-    # layout offset plus that origin (element units)
+    # The partition view's data pointer is already advanced by the
+    # thread's partition origin. The tile offset of element i is the
+    # view-relative layout offset plus that origin (element units)
     let originC = (cast[int](tCv.data) - cast[int](tC.data)) div int(sizeof(uint32))
 
-    # the store mask over a sweep of valid extents (full, ragged, tiny)
+    # Store mask over a sweep of valid sizes (full, ragged, tiny)
     for (validM, validN) in [(TILE_M, TILE_N), (16, 16), (16, 8), (8, 16),
                              (8, 8), (1, 1)]:
       var expected = 0
@@ -86,13 +85,6 @@ proc main() =
     " for every thread and valid extent"
 
   # ── the copy partition 1:1 proof (partition_S / partition_D) ──
-  # for every thread, the partition view holds exactly the thread's
-  # 16-byte chunks of the (TILE_M, TILE_K) k-tile at the flat chunk
-  # positions c = tid + i·blockSize. The reference derives each chunk's
-  # tile offset from the SHAPE coordinates of the flat position 4·c
-  # (the gemm_cta tApA construction), never from the partition's own
-  # layout. The gmem side runs a padded leading stride, the smem side
-  # the compact tile.
   for tid in 0 ..< blockSize:
     let ldA = 80     # a padded leading stride, runtime in the kernel
     let tA = make_view(dummyPtr, (TILE_M, TILE_K), (1, ldA))

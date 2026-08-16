@@ -4,12 +4,12 @@
 ##   * concept conformance: each shipped op satisfies Epilogue
 ##     (compile-time, via `is Epilogue`)
 ##   * generic dispatch: `applyEpilogue(op: Epilogue, ...)` binds each op,
-##     calls its `apply` and `finalStore` (Nim concepts V2, works on 2.2.10)
+##     calls its `apply` and `finalStore` (Nim concepts V2)
 ##   * the math: D = α·AB + β·C, identity, bias column broadcast, ReLU
 ##   * dispatch hoisting: EpiAXPBY β=0 never reads C (NaN-prefilled C
 ##     proves it), α=1 skips the multiply
 ##   * uniform 2-arg `apply`: inputs are op state (EpiAXPBY's C_gmem,
-##     EpiAddBias's bias) — the concept takes tmp and AB only
+##     EpiAddBias's bias). The concept takes tmp and AB only
 ##   * layout robustness: row-major D/AB/C, strided C (row padding),
 ##     mixed layouts, sliced tensors (in / out / in+out), inverted
 ##     (negative) strides, the sm80 m16n8k8 C-fragment layout, rank-3
@@ -17,10 +17,9 @@
 ##     Sh (the compiler enforces equal shapes). `apply` iterates
 ##     `size(tmp)` and indexes each operand through its own layout
 ##
-## `preflight` stages the op's gmem operands into smem buffers (all shipped
-## ops: no-op stubs today — operands are read per-thread from gmem in
-## `apply`). Async staging and capability flags are future work. This file
-## pins the math.
+## `preflight` prepares the op's gmem operands into smem buffers
+## (all shipped ops: no-op stubs, operands are read per-thread from
+## gmem in `apply`). This file pins the math.
 
 import std/math
 import workspace/ceramic/src/int_tuples
@@ -36,15 +35,10 @@ template test(label: string; body: untyped) =
     body
   echo "  [OK] ", label
 
-# The generic dispatcher: PoC validation that the concept binds and
-# dispatches. A template, with `auto` view params. Concept-typed view
-# params bind to ONE fixed instantiation (Nim V2 "first acceptable
-# candidate"). `auto` views + a concept-constrained op re-check
-# conformance per call site with the actual shapes. gemm_cta calls
-# `op.preflight()` then `op.apply(tmp, AB)` then `op.finalStore(D, tmp)`,
-# statically, the same way: the staging template injects the smem buffer,
-# `apply` consumes it through the op's fields (EpiAXPBY reads C via C_gmem
-# directly).
+# Validates that the concept binds and dispatches. Concept-typed view
+# params bind to one fixed instantiation (Nim V2 "first acceptable
+# candidate"). `auto` views with a concept-constrained op re-check
+# conformance per call site with the actual shapes.
 template applyEpilogue(op: Epilogue; D, AB: auto): untyped =
   block:
     var o = op
@@ -157,8 +151,7 @@ proc runEpilogueTests =
 
   # ── EpiAddBias ──
   test "EpiAddBias D = AB + bias column broadcast over rows":
-    ## The bias is op state: a same-size stride-0 broadcast view of the
-    ## column.
+    ## Bias: a stride-0 (M, N) broadcast view of the (N,) column.
     const M = 3; const N = 4
     var bufAB = newSeq[float32](M * N)
     var bufBias = newSeq[float32](N)
@@ -167,7 +160,7 @@ proc runEpilogueTests =
     for j in 0 ..< N: bufBias[j] = float32(100 + j)
     let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
     var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
-    # TODO: remove the pointer-offset arithmetic — the bias view must
+    # TODO: remove the pointer-offset arithmetic. The bias view must
     # come from the (N,) buffer's own layout, not `+%` offsets
     let bias = make_view(bufBias +% 0, (M, N), (0, 1))   # stride-0 rows
     let op = initEpiAddBias(bias)
@@ -191,10 +184,8 @@ proc runEpilogueTests =
         doAssert D[i, j] == max(AB[i, j], 0.0'f32)
 
   # ── layout robustness I: row-major / strided / mixed layouts ──
-  # The `apply` procs index D and AB each through their own layout
-  # size). These pin that the epilogues are not col-major only. The GPU
-  # gemm path feeds the accumulator fragment (atom layout) and the gmem
-  # C tile (arbitrary stride, as op state) into the same `apply`.
+  # The `apply` procs index each operand through its own layout.
+  # Pins that the epilogues are not col-major only.
 
   test "EpiAXPBY row-major D/AB with row-major C (α=2 β=3)":
     const M = 3; const N = 4
@@ -253,8 +244,6 @@ proc runEpilogueTests =
     for j in 0 ..< N: bufBias[j] = float32(100 + j)
     let AB = make_view(bufAB +% 0, make_layout((M, N), (N, 1)))   # row-major
     var D = make_view(bufD +% 0, make_layout((M, N), (N, 1)))
-    # TODO: remove the pointer-offset arithmetic — the bias view must
-    # come from the (N,) buffer's own layout, not `+%` offsets
     let bias = make_view(bufBias +% 0, (M, N), (0, 1))   # stride-0 rows
     let op = initEpiAddBias(bias)
     applyEpilogue(op, D, AB)
@@ -263,9 +252,8 @@ proc runEpilogueTests =
         doAssert D[i, j] == AB[i, j] + bufBias[j]
 
   test "EpiAddBias strided bias (stride-2 column, holes never read)":
-    ## The bias's own layout carries the stride: a (N,) column stored at
-    ## even offsets. The NaN holes prove the epilogue addresses through
-    ## the view, not a packed scan.
+    ## Bias stored at even offsets of a 2N buffer. The NaN holes prove
+    ## the epilogue addresses through the view, not a packed scan.
     const M = 3; const N = 4
     var bufAB = newSeq[float32](M * N)
     var bufBias = newSeq[float32](2 * N)
@@ -277,8 +265,6 @@ proc runEpilogueTests =
       bufBias[2 * j + 1] = NaN
     let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
     var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
-    # TODO: remove the pointer-offset arithmetic — the bias view must
-    # come from the (N,) buffer's own layout, not `+%` offsets
     let bias = make_view(bufBias +% 0, (M, N), (0, 2))   # stride-0 rows, stride-2 columns
     let op = initEpiAddBias(bias)
     applyEpilogue(op, D, AB)
@@ -288,8 +274,8 @@ proc runEpilogueTests =
         doAssert not D[i, j].isNaN, "stride-2 holes must never be read"
 
   test "EpiAddBias reversed bias (negative stride, natural order restored)":
-    ## The column stored in reverse order (bufBias[N-1-j] = 100 + j) is
-    ## viewed with stride -1: element (i, j) reads bufBias[N-1-j].
+    ## Negative stride: the reversed column viewed with stride -1.
+    ## Element (i, j) reads bufBias[N-1-j].
     const M = 3; const N = 4
     var bufAB = newSeq[float32](M * N)
     var bufBias = newSeq[float32](N)
@@ -300,8 +286,6 @@ proc runEpilogueTests =
       bufBias[j] = float32(100 + (N - 1 - j))
     let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
     var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
-    # TODO: remove the pointer-offset arithmetic — the bias view must
-    # come from the (N,) buffer's own layout, not `+%` offsets
     let bias = make_view(bufBias +% (N - 1), (M, N), (0, -1))   # reversed column
     let op = initEpiAddBias(bias)
     applyEpilogue(op, D, AB)
@@ -310,8 +294,8 @@ proc runEpilogueTests =
         doAssert D[i, j] == AB[i, j] + bufBias[N - 1 - j]
 
   test "EpiAddBias bias sliced from a larger buffer (in+out)":
-    ## The bias view may start mid-buffer: the data pointer carries the
-    ## offset, the layout the stride.
+    ## Mid-buffer view: the data pointer carries the offset, the layout
+    ## the stride.
     const M = 3; const N = 4
     var bufAB = newSeq[float32](M * N)
     var bufBig = newSeq[float32](2 + N + 2)   # [slack | bias | slack]
@@ -322,8 +306,6 @@ proc runEpilogueTests =
       bufBig[2 + j] = float32(100 + j)
     let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
     var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
-    # TODO: remove the pointer-offset arithmetic — the bias view must
-    # come from the (N,) buffer's own layout, not `+%` offsets
     let bias = make_view(bufBig +% 2, (M, N), (0, 1))
     let op = initEpiAddBias(bias)
     applyEpilogue(op, D, AB)
@@ -332,9 +314,9 @@ proc runEpilogueTests =
         doAssert D[i, j] == AB[i, j] + bufBig[2 + j]
 
   test "EpiAddBias fragment-shaped bias (m16n8k8 C-fragment layout, column-cyclic)":
-    ## The GPU path: the bias view mirrors the accumulator fragment shape
-    ## (rows {0,8} × cols {0,1}), with the ROW mode stride-0 — the
-    ## broadcast over the fragment's column-cyclic order.
+    ## Bias broadcast over the accumulator fragment shape
+    ## (rows {0,8} × cols {0,1}). The ROW mode is stride-0, the column
+    ## stride 1.
     const M = 2; const N = 2
     var bufTile = newSeq[float32](16 * 8)   # the full 16×8 accumulator tile
     var bufBias = newSeq[float32](2)        # the 2 columns
@@ -345,8 +327,6 @@ proc runEpilogueTests =
       bufBias[j] = float32(100 + j)
     let AB = make_view(bufTile +% 0, (2, 2), (8, 1))          # fragment: rows {0,8} × cols {0,1}
     var D = make_view(bufD +% 0, (M, N), (1, M))
-    # TODO: remove the pointer-offset arithmetic — the bias view must
-    # come from the (N,) buffer's own layout, not `+%` offsets
     let bias = make_view(bufBias +% 0, (2, 2), (0, 1))        # rows broadcast, cols stride 1
     let op = initEpiAddBias(bias)
     applyEpilogue(op, D, AB)
@@ -359,13 +339,8 @@ proc runEpilogueTests =
     doAssert D[1, 1] == bufTile[9] + bufBias[1]   # fragment (1,1) = tile[9], col 1
 
   # ── layout robustness II: slices, inverted strides, real atom shapes ──
-  # C and D live in gmem and their strides are NOT ours to choose. They
-  # may arrive reshaped from an implicit convolution, a sliced tensor, a
-  # permutation, etc. AB comes from the MMA accumulator fragment, whose
-  # layout is the atom's register map (never assumed col-major).
-  # The `apply` iterates `size(D)` and indexes each operand through its own
-  # layout, so rank-3 fragments, nested layouts and broadcast (stride-0)
-  # views all work. The AMX nested layout is exercised below.
+  # C and D live in gmem with strides the kernel does not choose.
+  # AB is the MMA accumulator fragment: the atom's register map.
 
   test "EpiAXPBY sliced tensors — in (view at buffer start, slack after)":
     const M = 3; const N = 4
@@ -420,9 +395,9 @@ proc runEpilogueTests =
       "slack on both sides must stay untouched"
 
   test "EpiAXPBY fully inverted strides (D, AB, C all (-1, -M))":
-    ## Negative strides: logical (0,0) sits at the buffer END; element
-    ## (i, j) lives at buf[(M-1) - i + (N-1-j)*M]. The epilogue must
-    ## address through the layout, not assume a forward scan.
+    ## Negative strides: logical (0,0) sits at the buffer end, element
+    ## (i, j) at buf[(M-1) - i + (N-1-j)*M]. The epilogue must address
+    ## through the layout, not assume a forward scan.
     const M = 3; const N = 4
     var bufAB = newSeq[float32](M * N)
     var bufC = newSeq[float32](M * N)
@@ -437,7 +412,7 @@ proc runEpilogueTests =
     for i in 0 ..< M:
       for j in 0 ..< N:
         doAssert D[i, j] == 2.0'f32 * AB[i, j] + 3.0'f32 * C[i, j]
-    # concrete buffer positions: logical (M-1, N-1) → buf[0]; (0, 0) → buf[MN-1]
+    # Concrete positions: logical (M-1, N-1) → buf[0], (0, 0) → buf[MN-1]
     doAssert bufD[0] == 2.0'f32 * bufAB[0] + 3.0'f32 * bufC[0]
     doAssert bufD[M*N - 1] == 2.0'f32 * bufAB[M*N - 1] + 3.0'f32 * bufC[M*N - 1]
 
@@ -458,19 +433,14 @@ proc runEpilogueTests =
     for i in 0 ..< M:
       for j in 0 ..< N:
         doAssert D[i, j] == 2.0'f32 * AB[i, j] + 3.0'f32 * C[i, j]
-    # AB rows inverted: (i,j) at buf[(M-1) - i + M*j]
-    #   (0,0)=buf[M-1], (M-1,N-1)=buf[M*(N-1)]
-    # C cols inverted:  (i,j) at buf[i + M*(N-1-j)]
-    #   (0,0)=buf[M*(N-1)], (M-1,N-1)=buf[M-1]
     doAssert D[0, 0] == 2.0'f32 * bufAB[M - 1] + 3.0'f32 * bufC[M * (N - 1)]
     doAssert D[M - 1, N - 1] == 2.0'f32 * bufAB[M * (N - 1)] + 3.0'f32 * bufC[M - 1]
 
   test "EpiAXPBY AB with the m16n8k8 C-fragment layout (shape (2,2), strides (8,1))":
-    ## The per-thread C fragment of the sm80 m16n8k8 tensor core
-    ## (atoms_nvidia.nim SM80_16x8_Row = (T32,V4) → (M16,N8)): 4 elements at
-    ## rows {0, 8} × cols {0, 1} of the 16×8 accumulator tile. The rows
-    ## are non-contiguous, with row pitch 8. AB must be addressed through
-    ## this layout, never assumed col-major.
+    ## Per-thread C fragment of the sm80 m16n8k8 tensor core: 4 elements
+    ## at rows {0, 8} × cols {0, 1} of the 16×8 accumulator tile, row
+    ## pitch 8. AB must be addressed through this layout, never assumed
+    ## col-major.
     const M = 2; const N = 2
     var bufTile = newSeq[float32](16 * 8)   # the full 16×8 accumulator tile
     var bufC = newSeq[float32](M * N)
@@ -492,8 +462,9 @@ proc runEpilogueTests =
     doAssert D[1, 1] == 2.0'f32 * bufTile[9] + 3.0'f32 * C[1, 1]   # fragment (1,1) = tile[9]
 
   test "EpiReLU with the m16n8k8 C-fragment AB layout":
-    ## Same fragment layout, activation op: proves the AB read through a
-    ## non-trivial atom layout is layout-correct, not just for EpiAXPBY.
+    ## Activation op on the m16n8k8 fragment layout: proves the AB read
+    ## through a non-trivial atom layout is layout-correct for an op
+    ## other than EpiAXPBY.
     const M = 2; const N = 2
     var bufTile = newSeq[float32](16 * 8)
     var bufD = newSeq[float32](M * N)
@@ -507,7 +478,6 @@ proc runEpilogueTests =
         doAssert D[i, j] == max(AB[i, j], 0.0'f32)
 
   test "EpiIdentity row-major D/AB":
-    ## Round out op × row-major coverage.
     const M = 3; const N = 4
     var bufAB = newSeq[float32](M * N)
     var bufD = newSeq[float32](M * N)
@@ -521,9 +491,8 @@ proc runEpilogueTests =
         doAssert D[i, j] == AB[i, j]
 
   test "EpiAXPBY rank-3 operands (V, RepeatM, RepeatN) = (4, 2, 2), distinct strides":
-    ## All operands share the shape type Sh. Each is indexed through its
-    ## own stride pattern, here rank-3 with V stride-1 on AB (register
-    ## order, the atom map) and different strides on C and D.
+    ## Rank-3 stride patterns: V stride-1 on AB (register order, the
+    ## atom map), different strides on C and D.
     const Shp = (4, 2, 2)
     var bufAB = newSeq[float32](32)
     var bufC = newSeq[float32](16)
@@ -542,9 +511,8 @@ proc runEpilogueTests =
     doAssert AB(4) == bufAB[8]
 
   test "EpiIdentity AMX nested broadcast layout (1, (16, 16)):(0, (1, 16))":
-    ## The AMX 16x16x32 accumulator layout (atoms_amx.py): nested 16x16
-    ## with a leading stride-0 (broadcast) mode. All operands share the
-    ## shape; the nested+broadcast layout is exercised on each.
+    ## AMX 16x16x32 accumulator layout: nested 16x16 with a leading
+    ## stride-0 (broadcast) mode, applied to every operand.
     const M = 16; const N = 16
     var bufAB = newSeq[float32](M * N)
     var bufD = newSeq[float32](M * N)
@@ -559,8 +527,7 @@ proc runEpilogueTests =
 
   test "preflight is callable on every op":
     ## `preflight` is a structural contract (not a concept member).
-    ## It injects the staging buffer and copies the op's operands into
-    ## it. Here: call it on each op, then `apply` still works.
+    ## Callable on every op.
     const M = 2; const N = 3
     var bufAB = newSeq[float32](M * N)
     var bufC = newSeq[float32](M * N)
@@ -588,9 +555,8 @@ proc runEpilogueTests =
         doAssert D[i, j] == 2.0'f32 * AB[i, j] + 3.0'f32 * C[i, j]
 
   test "AB with a different shape must not compile (shared Sh)":
-    ## D and AB share the shape type Sh in the signature. The compiler
-    ## enforces the same shape; a mismatched operand is a type error, no
-    ## runtime or static assert needed.
+    ## D and AB share the shape type Sh in the signature. A mismatched
+    ## operand is a type error, no runtime or static assert needed.
     const M = 2; const N = 2
     var bufAB = newSeq[float32](M * N)
     var bufC = newSeq[float32](M * N)

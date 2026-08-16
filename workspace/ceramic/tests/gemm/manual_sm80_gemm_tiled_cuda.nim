@@ -4,27 +4,29 @@
 ## (two k slices through gemm_ukernel), config (α, β) = (1.0, 0.0),
 ## 128 threads.
 ##
-## gemm_tiled(tma, dFrag, sA, sB, TileShape, threadIdx) =
-## tiling + thread decomposition + fragment gathering from the staged
-## smem k-tile (one k-tile: K == tileK) + the k-slice loop in
-## gemm_ukernel, accumulating into the caller's dFrag. The kernel
-## declares its own {.shared.} smem tiles, copies the full gmem k-tile
-## into them (unmasked: this test runs full tiles), syncthreads(), then
-## calls gemm_tiled on the smem views.
-## The fused epilogue runs after the call, and gemm_cta owns the
-## accumulator and epilogue in the production path. The epilogue is
-## EpiAXPBY (preflight + apply, D = α·AB + β·C).
+## gemm_tiled(tma, dFrag, sA, sB, TileShape, threadIdx) computes the
+## thread's fragment for one tileK-sized slice of K:
+## thread tiling → fragment gathering from the prepared smem tile →
+## gemm_ukernel's loop over the K dimension, accumulating into the
+## caller's dFrag.
+## Kernel declares its own {.shared.} smem tiles, copies the full
+## tileK-sized slice of K from gmem (unmasked: this test runs full
+## tiles), syncthreads(), then calls gemm_tiled on the smem views.
+## Fused epilogue runs after the call. gemm_tiled leaves the epilogue
+## to the caller: EpiAXPBY, preflight + apply, D = α·AB + β·C.
 ## NaN: the β=0 branch must skip the C read, so a spurious read (or a
 ## dropped store) produces NaN != expected.
 ##
-## The atom is the parameter, SM80_16x8x8_F32TF32TF32F32_TN. The tiling
-## (2×2×1 atoms) and tile geometry are derived inside the driver func,
-## the gemm_tiled convention, and the cuda: kernel is a thin wrapper. The oracle
-## harness lives in gemm_test_lib.
+## Atom is the parameter, SM80_16x8x8_F32TF32TF32F32_TN. Tiling
+## (2×2×1 atoms) and tile geometry derive inside the driver funcs per
+## the gemm_tiled convention. The cuda: kernel is a thin wrapper.
+## Reference harness lives in gemm_test_lib.
 ##
 ## Requires an sm_80+ GPU. Run with:
 ##   CUDA_HOME=/usr/local/cuda-12 LD_LIBRARY_PATH=/usr/local/cuda-12/lib64 \
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_sm80_gemm_tiled_cuda.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/manual_sm80_gemm_tiled_cuda.nim --nimcache:nimcache/tests/manual_sm80_gemm_tiled_cuda.nim \
+##     workspace/ceramic/tests/gemm/manual_sm80_gemm_tiled_cuda.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -53,11 +55,11 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
                      C: ptr UncheckedArray[float32];
                      A, B: ptr UncheckedArray[uint32];
                      beta: float32) {.inline.} =
-  ## C(32×16) = α·A(32×16)·B(16×16) + β·C — 1×1 tiled m16n8k8 tf32,
-  ## 128 threads, K = TILE_K = tileK = 16, fused epilogue.
+  ## C(32×16) = α·A(32×16)·B(16×16) + β·C: 1×1 tiled m16n8k8 tf32,
+  ## 128 threads, K = TILE_K = 16, fused epilogue.
   ## Tile geometry: 2×2×1 atoms over the (2,2,1) thread layout.
   const
-    TILE_K = 16                  # the full K and the k-tile depth (tileK == K)
+    TILE_K = 16                  # the full K, one tileK-sized slice (tileK == K)
     thrM = toIntVal(tma.threadLayout.shape[0])
     thrN = toIntVal(tma.threadLayout.shape[1])
     thrK = toIntVal(tma.threadLayout.shape[2])
@@ -72,12 +74,11 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   let thr = tma.get_slice(threadIdx)
   var tCv = tma.partition_C(thr, tC)
   var epi = initEpiAXPBY(alpha, beta, tCv)
-  # the accumulator: zeroed once, gemm_tiled accumulates into it, the
-  # epilogue runs once after (gemm_cta owns this in the production path)
+  # accumulator: zeroed once, then gemm_tiled accumulates into it
   var dFrag = make_tensor(float32, tCv.layout.shape)
   dFrag.fillWith(float32(0))
-  # stage the full k-tile gmem → smem, unmasked, this test running full
-  # tiles with no ragged lanes, then compute from the smem
+  # prepare the full tileK-sized slice of K gmem → smem, unmasked:
+  # this test runs full tiles with no ragged lanes
   var smemA {.shared.}: array[TILE_M * TILE_K, uint32]
   var smemB {.shared.}: array[TILE_N * TILE_K, uint32]
   let sA = make_view(addr smemA[0], make_layout((TILE_M, TILE_K)))
@@ -102,11 +103,10 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
                          C: ptr UncheckedArray[float32];
                          A, B: ptr UncheckedArray[uint32];
                          beta: float32) {.inline.} =
-  ## C(32×16) = α·A(32×32)·B(16×32) + β·C — 1×1 tiled m16n8k8 tf32,
-  ## 128 threads, K = 32 = tileK (four k slices through one gemm_ukernel
-  ## call in the single k-tile pass.
+  ## C(32×16) = α·A(32×32)·B(16×32) + β·C: 1×1 tiled m16n8k8 tf32,
+  ## 128 threads, K = tileK = 32: four k slices in one gemm_tiled pass.
   const
-    TILE_K = 32                  # the full K and the k-tile depth (tileK == K)
+    TILE_K = 32                  # the full K, one tileK-sized slice (tileK == K)
     thrM = toIntVal(tma.threadLayout.shape[0])
     thrN = toIntVal(tma.threadLayout.shape[1])
     thrK = toIntVal(tma.threadLayout.shape[2])
@@ -120,12 +120,11 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
   let thr = tma.get_slice(threadIdx)
   var tCv = tma.partition_C(thr, tC)
   var epi = initEpiAXPBY(alpha, beta, tCv)
-  # the accumulator: zeroed once, gemm_tiled accumulates into it, the
-  # epilogue runs once after (gemm_cta owns this in the production path)
+  # accumulator: zeroed once, then gemm_tiled accumulates into it
   var dFrag = make_tensor(float32, tCv.layout.shape)
   dFrag.fillWith(float32(0))
-  # stage the full k-tile gmem → smem, unmasked, this test running full
-  # tiles with no ragged lanes, then compute from the smem
+  # prepare the full tileK-sized slice of K gmem → smem, unmasked:
+  # this test runs full tiles with no ragged lanes
   var smemA {.shared.}: array[TILE_M * TILE_K, uint32]
   var smemB {.shared.}: array[TILE_N * TILE_K, uint32]
   let sA = make_view(addr smemA[0], make_layout((TILE_M, TILE_K)))

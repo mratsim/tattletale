@@ -1,25 +1,25 @@
 ## Manual GPU test: gemm_cta (Level 4) via NVRTC/CUDA.
 ##
-## The four shipped epilogues over a 2×2 CTA grid (tile 32×16, K =
-## TILE_K = 32, four k slices through gemm_ukernel), 128 threads:
+## Four shipped epilogues over a 2×2 CTA grid (tile 32×16,
+## K = TILE_K = 32), 128 threads:
 ##   gemmCtaKernel       EpiAXPBY,   D = α·AB + β·C
 ##   gemmCtaIdentityKernel  EpiIdentity, D = AB
 ##   gemmCtaReLUKernel   EpiReLU,    D = max(0, AB)
 ##   gemmCtaBiasKernel   EpiAddBias, D = AB + bias (column broadcast)
-## The C buffer is pre-filled with NaN: a dropped store leaves NaN !=
-## expected, and the β=0 branch must skip the C read (a spurious read
-## also fails).
+## C is prefilled with NaN: a dropped store leaves NaN in the output,
+## and the β=0 path must skip the C read (a spurious read also fails).
 ##
-## The kernels build (M, K), (N, K), (M, N) problem views over the raw
-## buffers; gemm_cta slices its tile grid (flat_divide) by CTA
-## coordinate, so the tile origin comes from the layout, no manual
-## pointer math. The oracle, trial loop and report live in
-## gemm_test_lib (testGemmCta*), shared with the OpenCL twin
-## (manual_gemm_cta_opencl).
+## Each kernel builds (M, K), (N, K), (M, N) input views over the raw
+## buffers. gemm_cta slices its tile grid (flat_divide) by CTA
+## coordinate, so the tile origin comes from the layout, not manual
+## pointer math. Reference, trial loop and report live in gemm_test_lib
+## (testGemmCta*).
 ##
-## The atom is the parameter, SM80_16x8x8_F32TF32TF32F32_TN tiled
-## (2,2,1). Requires an sm_80+ GPU. Run with:
-##   nim cpp -r workspace/ceramic/tests/gemm/manual_gemm_cta_cuda.nim
+## Atom parameter: SM80_16x8x8_F32TF32TF32F32_TN tiled (2,2,1).
+## Requires an sm_80+ GPU. Run with:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/manual_gemm_cta_cuda.nim --nimcache:nimcache/tests/manual_gemm_cta_cuda.nim \
+##     workspace/ceramic/tests/gemm/manual_gemm_cta_cuda.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -43,19 +43,13 @@ const tiled = TiledMma[typeof(atom), typeof(make_layout((2, 2, 1)))](
   atom: atom, threadLayout: make_layout((2, 2, 1)))
 
 const kernelCode = cuda:
-  # Each kernel wrapper builds the problem views, derives the CTA's C
-  # tile by local_tile over the C problem layout (the origin comes from
-  # the grid coords, baked by crd2idx), partitions it to the per-thread
-  # destination fragment (D), constructs the epilogue op with its state,
-  # and hands both to gemm_cta. The grid never sees alpha/beta/C/bias:
-  # they are op state.
+  # Epilogue-op state: alpha/beta/C/bias never appear as kernel arguments.
   proc gemmCtaKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    # 1D grid linearization (engine LaunchConfig.grid is a single int):
-    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2
-    # (same decomposition as the OpenCL twin's get_global_id path).
+    # 1D grid (engine LaunchConfig.grid is a single int):
+    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2.
     let blk = int(blockIdx.x)
     let mCTA = blk mod 2
     let nCTA = blk div 2
@@ -71,9 +65,6 @@ const kernelCode = cuda:
   proc gemmCtaIdentityKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
-    # 1D grid linearization (engine LaunchConfig.grid is a single int):
-    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2
-    # (same decomposition as the OpenCL twin's get_global_id path).
     let blk = int(blockIdx.x)
     let mCTA = blk mod 2
     let nCTA = blk div 2
@@ -90,9 +81,6 @@ const kernelCodeBias = cuda:
   proc gemmCtaReLUKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
-    # 1D grid linearization (engine LaunchConfig.grid is a single int):
-    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2
-    # (same decomposition as the OpenCL twin's get_global_id path).
     let blk = int(blockIdx.x)
     let mCTA = blk mod 2
     let nCTA = blk div 2
@@ -109,9 +97,6 @@ const kernelCodeBias = cuda:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       bias: ptr UncheckedArray[float32]) {.global.} =
-    # 1D grid linearization (engine LaunchConfig.grid is a single int):
-    # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2
-    # (same decomposition as the OpenCL twin's get_global_id path).
     let blk = int(blockIdx.x)
     let mCTA = blk mod 2
     let nCTA = blk div 2
@@ -121,12 +106,11 @@ const kernelCodeBias = cuda:
     let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
     let thr = tiled.get_slice(int(threadIdx.x))
     var tCv = tiled.partition_C(thr, tC)
-    # The bias is a (N,) column vector: the problem view has stride-0 rows
-    # (every row of a column reads the same bias element) and the same
-    # partition as C, which bakes each thread's column base into the
-    # fragment's data pointer. The tile grid over the (64, 32) bias
-    # problem layout and the (mCTA, nCTA) slice derive the tile origin by
-    # layout algebra, no +% pointer math.
+    # Bias is a (N,) column vector: the input view has stride-0 rows, so
+    # every row of a column reads the same bias element. The view is
+    # partitioned like C, which bakes each thread's column base into the
+    # fragment's data pointer. The (mCTA, nCTA) tile origin derives from
+    # the layout.
     let pBias = make_view(bias, (64, 32), (0, 1))
     var biasView = tiled.partition_C(thr, local_tile(pBias, (32, 16), (mCTA, nCTA)))
     var epi = initEpiAddBias(biasView)
