@@ -6,11 +6,12 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[macros, sequtils, tables]
+import std/[macros, os, sequtils, tables]
 
 import ./ir/gpu_types
 import ./targets/targets_lang
 import ./ir/nim_to_gpu
+import workspace/crucible/vendor/wgpu
 import ./passes/pass_datatypes
 import ./passes/pass_registry
 import ./passes/passes_legalizations
@@ -109,6 +110,12 @@ macro vulkan*(body: typed): string =
 
 macro webgpu*(body: typed): string =
   ## Converts the body of this macro into WebGPU WGSL code.
+  doAssert fileExists(WgpuLibPath / (
+    when defined(windows): "wgpu_native.dll"
+    elif defined(macosx):  "libwgpu_native.dylib"
+    else:                  "libwgpu_native.so"
+  )), "wgpu-native shared library not found in '" & WgpuLibPath & "'.\n" &
+    "Run: nim c -r workspace/crucible/vendor/wgpu_installer.nim"
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
