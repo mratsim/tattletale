@@ -18,6 +18,13 @@
 ##   vendor/wgpu/
 ##     lib/libwgpu_native.so
 ##     include/webgpu/webgpu.h
+##
+## Tested ABI (macOS, 2026-08-17):
+##   - wgpu-native 29.0.1.1 (Homebrew), arm64 `libwgpu_native.dylib`
+##   - struct layouts (WGPUInstanceDescriptor, WGPURequestAdapterOptions,
+##     WGPUPipelineLayoutDescriptor, ...) verified via sizeof/offsetof against
+##     `webgpu.h` from wgpu-native 29.0.1.1
+##   - host: macOS 26.6.1, Nim 2.2.10
 
 import std/os
 
@@ -94,8 +101,15 @@ const  # WGPUMapMode (WGPUFlags = uint64)
 type
   WGPUInstanceDescriptor* {.bycopy.} = object
     nextInChain*: pointer
+    requiredFeatureCount*: csize_t
+    requiredFeatures*: pointer
+    requiredLimits*: pointer
   WGPURequestAdapterOptions* {.bycopy.} = object
     nextInChain*: pointer
+    featureLevel*: uint32
+    powerPreference*: uint32
+    forceFallbackAdapter*: uint32
+    backendType*: uint32
     compatibleSurface*: pointer
   WGPUDeviceDescriptor* {.bycopy.} = object
     nextInChain*: pointer
@@ -204,6 +218,7 @@ type
     label*: WGPUStringView
     bindGroupLayoutCount*: csize_t
     bindGroupLayouts*: ptr WGPUBindGroupLayout
+    immediateSize*: uint32
 
   WGPUBindGroupEntry* {.bycopy.} = object
     nextInChain*: pointer
