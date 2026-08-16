@@ -7,13 +7,13 @@
 
 ## GPU-suitable copy kernels: divmod-based flat-index iteration.
 ##
-## These use `dst(i) = src(i)` which calls `crd2idx` per element
-## (divmod for flat→coord decomposition). Acceptable on GPU where
-## divmod is relatively cheap and warp divergence from wheel-winding
-## would be catastrophic.
+## These use `dst(i) = src(i)` which calls `crd2idx` per element.
+## `crd2idx` is unfortunately implemented in terms of slow div+mod,
+## however on GPU there is branch-free alternative.
+## Any branch would potentially lead to warp divergence per dimension of the tensors involved.
 ##
 ## On CPU, use `kernel_copy_cpu` (`copySameShape_cpu`/`copyPermuted_cpu`)
-## which avoids divmod entirely via contiguity-fused copyMem.
+## which avoids divmod entirely via if/else branching and can fuse contiguous accesses.
 
 import std/macros
 
@@ -27,80 +27,91 @@ import workspace/crucible
 
 {.experimental: "callOperator".}
 
-template copyFrom*[T, ShA, StA, ShB, StB](
-    dst: var TensorView[T, ShB, StB];
-    src: TensorView[T, ShA, StA]) =
+template copyFrom*[T, ShD, StD, ShS, StS](
+    dst: var (TensorView[T, ShD, StD] or Tensor[T, ShD, StD]);
+    src: AnyTensor[T, ShS, StS]) =
   ## Copy every logical element from src to dst.
-  ## Uses flat-index iteration (`dst(i) = src(i)`) which calls crd2idx
-  ## per element, acceptable on GPU, slow on CPU.
+  ## Uses flat-index iteration (`dst(i) = src(i)`)
+  ## which is divmod-based.
+  ##
+  ## This is slow but unavoidable on GPU as if/else-based indexing
+  ## would trigger warp-divergence.
   for i in 0 ..< size(dst):
     dst(i) = src(i)
 
-template copyFrom*[T, ShA, StA, ShB, StB](
-    dst: var Tensor[T, ShB, StB];
-    src: AnyTensor[T, ShA, StA]) =
-  ## Owning-tensor dst form: the fragment tensors
-  ## (make_fragment_A/B, make_tensor/make_tensor_like).
-  ## The flat-index `dst(i) = src(i)` is coordinate semantics:
-  ## crd2idx
-  ## decodes `i` through each tensor's own shape and maps through
-  ## its own strides. The fragment (V = atom register order,
-  ## stride-1) receives the element at the same logical coordinate
-  ## as src, whatever src's layout, row-major included.
-  ## The fragment's physical order follows the fragment's layout:
-  ## V fastest, matching gemm_atom's data[k·VA+i] read.
-  for i in 0 ..< size(dst):
-    dst(i) = src(i)
+template copyFromIfAsync*[T, Sh, StA, StB, StP](
+    dst: var TensorView[T, Sh, StB];
+    src: TensorView[T, Sh, StA];
+    predicate: AnyTensor[bool, Sh, StP]) =
+  ## Predicated **async** copy
+  ##
+  ## This requires cp.async.commit_group to actually enqueue the copy
+  ## and cp.async.wait_group to wait for its completion
+
+  when Sh.rank == 1:
+    cp.async.cg_shared_global_16B(dst, src, if predicate.data[0]: 16 else: 0)
+  else:
+    for i in 0 ..< size(predicate):
+      cp.async.cg_shared_global_16B(dst(_, i), src(_, i), if predicate(_, i).data[0]: 16 else: 0)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  The copy partition and the predicated tiled copy
+#  The copy partition
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  A tiled copy pairs the 16-byte cp.async atom with a thread layout.
-#  The thread layout assigns each thread its slice. partition_S
-#  cuts the source tensor, partition_D the destination.
-#  The identity partition gives each copy unit its tile coordinate.
-#  copy_if iterates the predicate tensor. The copy atom reads
-#  the unit addresses from the tensors, issuing one 16-byte cp.async
-#  per unit, the predicate as the copy size. A false predicate
-#  zeroes the copy size, the ZFILL zero-fill.
+#  The copy partition is the gmem → smem leg of the GEMM pipeline, the
+#  counterpart of the MMA partition on the smem → register leg:
 #
-#  The chunk is 4 row-consecutive elements at one k, matching
-#  the atom's 16-byte span. The flat (tileM, tileK) order makes
-#  the chunk a contiguous 16 bytes in both the gmem k-tile
-#  and the compact smem stage, so no swizzle is needed for
-#  the 16-byte alignment. The padded-allocation contract
-#  covers the ragged gmem reads. The thread layout is
-#  the strided chunk
-#  sequence c = threadIdx + i·blockSize over the flat chunk grid.
-#  The partition layout zips the tile by the chunk unit
-#  and the thread unit, its first mode the flat thread-index
-#  space. The partition slice (partition_S / partition_D) cuts
-#  it at the flat thread index with the underscore.
-#  crd2idx decomposes the index against the thread-grid mode,
-#  the chunk column and the first k of the thread units. Each
-#  unit view carries the addresses, the copy atom's
-#  &dst(0) / &src(0).
+#    gmem --------> smem --------> registers
+#    partition_S    partition_D    partition_A/B/C
+#
+#  The hardware shapes each leg:
+#  - cp.async copies exactly 16 bytes per instruction
+#  - the tile splits into 16-byte aligned chunks, shared between the threads
+#  - the MMA reads per-thread register fragments with fixed shapes and register order per operand
+#
+#  partition_A/B/C (atoms_mma_partitioning) slice the smem tile into per-thread register fragments for the MMA atom.
+#  partition_S / partition_D slice the gmem source and the smem destination into per-thread 16-byte chunks.
+#  The two sides are separate because the partition derives from each tensor's own strides.
+#  The padded gmem source and the compact smem destination produce different offsets despite the same shape structure.
+#  A/B/C name the MMA operands, S/D the copy's Source and Destination.
 
 func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
                           atom: typedesc[Atom];
                           blockSize: static int): auto {.inline.} =
-  ## The copy-partition layout of the (M, K) k-tile: the tile
-  ## zipped by the atom's chunk tiler, then the rest tiled
-  ## by the thread grid. The first mode is the thread-grid
-  ## space, its shape chunkCols·kRows == blockSize: the
-  ## partition slice
-  ## (partition_S / partition_D) decomposes the flat thread index
-  ## against it inside crd2idx, the chunk column and the first k
-  ## of the thread's units. The value mode is shape 1, the copy
-  ## atom's single chunk per predicate element, the rest mode
-  ## the units, the k coordinate advancing by tileK div kRows
-  ## per unit.
-  ## The chunk width is the atom's NumPacked (16 div sizeof(T):
-  ## int32 gives 4, int8 gives 16), the chunk tiler the atom's
-  ## Tiler_MN, the thread grid (chunkCols, kRows) the chunk columns
-  ## and the thread rows along k. The tile dims come from
-  ## the layout's own static shape.
+  ## Returns the copy partition: the tile split between the threads into 16-byte chunks.
+  ## Index it with (thread id, chunk index) to get the chunk's offset in the tile.
+  ##
+  ## The tile is a grid of 16-byte chunks, chunkCols columns and tileK rows.
+  ## Thread (tc, tr) takes the chunks at column tc, rows tr, tr + kRows, tr + 2·kRows, and so on.
+  ##
+  ## The layout shape ((chunkCols, kRows), 1, tileK div kRows):
+  ## - (chunkCols, kRows), the thread grid, indexed by the flat thread id
+  ## - 1, the single chunk per thread position
+  ## - tileK div kRows, the thread's chunks along k
+  ##
+  ## Numbers:
+  ## - chunkWidth = numPacked(atom), 16 div sizeof(T) elements:
+  ##   4 for int32, 16 for int8
+  ## - chunkCols = tileM div chunkWidth, the tile's chunk-columns
+  ##   (tileM = the first dimension, M for A, N for B)
+  ## - kRows = blockSize div chunkCols, the grid's k-rows
+  ##
+  ## The flat thread id decomposes as (tc, tr) against the grid.
+  ## Thread (tc, tr) owns the chunks at column tc and k-rows tr + i·kRows,
+  ## for i in 0 ..< tileK div kRows, flat chunk position c = tid + i·blockSize.
+  ##
+  ## Example: a (16, 8) int32 tile with 8 threads has chunkWidth 4,
+  ## chunkCols 4, kRows 2, layout ((4, 2), 1, 4). The chunk grid
+  ## (4 chunk-columns × 8 k-rows) with the owner thread per chunk:
+  ##
+  ##        k →  0   1   2   3   4   5   6   7
+  ##   m 0-3    T0  T4  T0  T4  T0  T4  T0  T4
+  ##   ↓ 4-7    T1  T5  T1  T5  T1  T5  T1  T5
+  ##     8-11   T2  T6  T2  T6  T2  T6  T2  T6
+  ##     12-15  T3  T7  T3  T7  T3  T7  T3  T7
+  ##
+  ## Thread 4 (column 0, k-rows 1, 3, 5, 7) owns the chunks at
+  ## element offsets m + 16·k = 16, 48, 80, 112.
   const
     chunkWidth = numPacked(atom)   # the elements packed in the 16-byte chunk
     tileM = Sh.default[0]
@@ -121,15 +132,18 @@ func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
                              atom: typedesc[Atom];
                              blockSize: static int;
                              thrIdx: int): auto =
-  ## The thread's copy units of the gmem k-tile: the partition
-  ## layout cut at the flat thread index, the units kept.
-  ## The one-liner is the operator() with the mixed
-  ## scalar/underscore coordinate: the flat index goes into
-  ## the underscore slice, and crd2idx decomposes it against
-  ## the thread-grid mode, the chunk column and the first k
-  ## of the thread's units, never hand-rolled. The slice moves
-  ## the data pointer, so the unit view carries
-  ## its own addresses, the copy atom's &src(0).
+  ## Slice the copy partition (thrfrg_copy) of the source tile at the flat thread id:
+  ## the thread's chunks to copy.
+  ## S = Source, the gmem side of the copy.
+  ##
+  ## In use, each thread slices its source and destination chunks,
+  ## then copyFromIfAsync issues one 16-byte cp.async per chunk:
+  ##
+  ##   let srcChunks = partition_S(tileA, atom, blockSize, threadIdx)
+  ##   var dstChunks = partition_D(stageA, atom, blockSize, threadIdx)
+  ##   copyFromIfAsync(dstChunks, srcChunks, predChunks)
+  ##
+  ## Example: a (16, 8) int8 tile with 4 threads, thread 2 gets the chunks at flat positions c = 2, 6, element offsets 32, 96.
   let thrTensor = make_view(src.data, thrfrg_copy(src.layout, atom, blockSize))
   thrTensor(thrIdx, _, _)
 
@@ -137,20 +151,17 @@ func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
                              atom: typedesc[Atom];
                              blockSize: static int;
                              thrIdx: int): auto =
-  ## The thread's copy units of the smem stage. See partition_S.
+  ## Slice the copy partition (thrfrg_copy) of the destination tile at the flat thread id:
+  ## the thread's chunks to receive the copy.
+  ## D = Destination, the smem side of the copy.
+  ##
+  ## In use, each thread slices its source and destination chunks,
+  ## then copyFromIfAsync issues one 16-byte cp.async per chunk:
+  ##
+  ##   let srcChunks = partition_S(tileA, atom, blockSize, threadIdx)
+  ##   var dstChunks = partition_D(stageA, atom, blockSize, threadIdx)
+  ##   copyFromIfAsync(dstChunks, srcChunks, predChunks)
+  ##
+  ## Example: a (16, 8) int8 tile with 4 threads, thread 2 gets the chunks at flat positions c = 2, 6, element offsets 32, 96.
   let thrTensor = make_view(dst.data, thrfrg_copy(dst.layout, atom, blockSize))
   thrTensor(thrIdx, _, _)
-
-template copyFromIf*[T, Sh, StA, StB, StP](
-    dst: var TensorView[T, Sh, StB];
-    src: TensorView[T, Sh, StA];
-    predicate: AnyTensor[bool, Sh, StP]) =
-  ## Predicated tiled copy: one 16-byte cp.async per predicate
-  ## element, from the src view to the dst view. A false predicate
-  ## issues the copy with src-size 0, zero-filling the chunk.
-
-  when Sh.rank == 1:
-    cp.async.cg_shared_global_16B(dst, src, if predicate.data[0]: 16 else: 0)
-  else:
-    for i in 0 ..< size(predicate):
-      cp.async.cg_shared_global_16B(dst(_, i), src(_, i), if predicate(_, i).data[0]: 16 else: 0)
