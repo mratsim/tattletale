@@ -12,6 +12,14 @@
 ## Uses the standard Vulkan loader (libvulkan.so.1) — ICD discovery and
 ## dispatch are delegated to the loader, same as ash/vulkano.
 ##
+## Tested ABI (macOS, 2026-08-17):
+##   - vulkan-loader 1.4.357 + MoltenVK 1.4.2 ICD
+##     (`/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json`)
+##   - driver: MoltenVK on Apple Silicon (portability driver — the instance
+##     must opt in via VK_KHR_portability_enumeration, see initVulkan)
+##   - host: macOS 26.6.1, Nim 2.2.10
+##   - loader lookup: dlopen by name, then `/opt/homebrew/lib` fallback
+##
 ## Example (engine API):
 ##   import workspace/crucible
 ##   const code = vulkan:
@@ -92,7 +100,15 @@ proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer 
 # Vulkan applications.
 
 proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
-  result.lib = loadLib(vk.VulkanLib)
+  # macOS: dyld does not search /opt/homebrew/lib by default, so dlopen by
+  # name misses the Homebrew loader. Try the name first, then the Homebrew
+  # path (LunarG SDK installs are handled later if needed).
+  when defined(macosx):
+    result.lib = loadLib(vk.VulkanLib)
+    if result.lib == nil:
+      result.lib = loadLib("/opt/homebrew/lib/" & vk.VulkanLib)
+  else:
+    result.lib = loadLib(vk.VulkanLib)
   if result.lib == nil:
     quit("Cannot load " & vk.VulkanLib & " — install a Vulkan loader (e.g. libvulkan1)")
   result.gpa = result.lib.symAddr("vkGetInstanceProcAddr")
@@ -183,9 +199,18 @@ proc initVulkan*(): VulkanContext =
     engineVersion: 1,
     apiVersion: 0x00403000
   )
+  # MoltenVK is a portability driver: macOS requires the instance to opt in
+  # via VK_KHR_portability_enumeration, otherwise vkCreateInstance fails with
+  # VK_ERROR_INCOMPATIBLE_DRIVER (-9). The loader provides the extension on
+  # every platform, so this is a no-op outside macOS.
+  # flags 0x00000001 = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR.
+  var portabilityExt = [cstring"VK_KHR_portability_enumeration"]
   var instCI = VkInstanceCreateInfo(
     sType: VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-    pApplicationInfo: appInfo.addr
+    flags: 0x00000001,
+    pApplicationInfo: appInfo.addr,
+    enabledExtensionCount: 1,
+    ppEnabledExtensionNames: cast[cstringArray](portabilityExt.addr)
   )
   check vkCreateInstance(instCI.addr, nil, result.instance.addr)
 
