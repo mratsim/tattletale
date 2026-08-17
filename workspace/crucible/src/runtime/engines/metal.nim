@@ -7,7 +7,7 @@
 
 ## MetalEngine: Metal (MSL) runtime compilation and execution.
 ##
-## ingest validates the 31-binding limit, then compiles the MSL source into a library
+## ingest compiles the MSL source into a library
 ## (level-1 cache, keyed by the source it was built from).
 ## run gets or builds the compute pipeline state per (kernel, argSizes)
 ## (level-2 cache), then dispatches `dispatchThreadgroups(grid, blk)`.
@@ -72,9 +72,6 @@ when defined(macosx):
   # ▸ PRIVATE constants
   # ─────────────────────────────────────────────────────────────────────────
 
-  const MslIdentChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
-    ## Identifier characters, used to spot the `kernel` qualifier token.
-
   const
     ## Constant-buffer slot stride for packed scalar args, in bytes.
     ## Verified on-device: 16-byte alignment on Apple Silicon.
@@ -85,71 +82,6 @@ when defined(macosx):
     ## 5 = error. `waitUntilCompleted` leaves the buffer in one of these.
     MTLCommandBufferStatusCompleted = 4
     MTLCommandBufferStatusError = 5
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # ▸ PRIVATE helpers
-  # ─────────────────────────────────────────────────────────────────────────
-
-  proc kernelBindingCounts(sig: string): tuple[count, maxIndex: int] =
-    ## Counts `[[buffer(n)]]` attributes in a kernel parameter list and the highest index among them.
-    var d = 0
-    while true:
-      let idx = sig.find("[[buffer(", d)
-      if idx < 0:
-        break
-      inc result.count
-      var n = 0
-      var k = idx + len("[[buffer(")
-      while k < sig.len and sig[k] in {'0' .. '9'}:
-        n = n * 10 + (ord(sig[k]) - ord('0'))
-        inc k
-      if n > result.maxIndex:
-        result.maxIndex = n
-      d = k
-
-  proc checkBindingLimit(source: string) =
-    ## Quits loudly when any kernel in `source` exceeds the Metal buffer limit (31 bindings, indices 0..30).
-    ## Metal itself rejects >31 buffers at compile time, so this must fire at ingest,
-    ## before newLibraryWithSource, or it would never run.
-    var i = 0
-    while i < source.len:
-      # skip comments: comment text must not fake a kernel declaration
-      if source[i] == '/' and i + 1 < source.len and source[i + 1] == '/':
-        while i < source.len and source[i] != '\n':
-          inc i
-        continue
-      if source[i] == '/' and i + 1 < source.len and source[i + 1] == '*':
-        inc i, 2
-        while i + 1 < source.len and not (source[i] == '*' and source[i + 1] == '/'):
-          inc i
-        inc i, 2
-        continue
-      if i + 6 < source.len and source[i .. i + 6] == "kernel " and
-         (i == 0 or source[i - 1] notin MslIdentChars):
-        let openParen = source.find('(', i + 7)
-        if openParen < 0:
-          failLoud("Metal ingest: kernel declaration at byte " & $i &
-                   " has no parameter list")
-        var depth = 0
-        var j = openParen
-        while j < source.len:
-          if source[j] == '(':
-            inc depth
-          elif source[j] == ')':
-            dec depth
-            if depth == 0:
-              break
-          inc j
-        if depth != 0:
-          failLoud("Metal ingest: unbalanced parameter list at byte " & $openParen)
-        let (count, maxIndex) = kernelBindingCounts(source[openParen .. j])
-        if count > 31 or maxIndex > 30:
-          failLoud("Metal ingest: a kernel has " & $count &
-                   " buffer bindings (highest index " & $maxIndex &
-                   "), the Metal limit is 31 bindings at indices 0..30")
-        i = j + 1
-        continue
-      inc i
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ Constructors/destructors
@@ -192,10 +124,7 @@ when defined(macosx):
   proc ingest*(engine: MetalEngine, source: string) =
     ## Store the MSL source and compile it into a library. Calling ingest again
     ## replaces the previous artifact and invalidates both cache levels.
-    ## The 31-binding check runs before compiling. Metal rejects >31 buffers at compile time,
-    ## so a runtime check would be dead code.
     let pool = newPool()
-    checkBindingLimit(source)
     let opts = compileOptions()
     let library = compileLibrary(engine.ctx.ctx.device, source, opts)
     releaseObjC(opts)
