@@ -29,6 +29,7 @@ proc toAddressSpace(symKind: GpuSymbolKind): AddressSpace =
   of gsLocal: asFunction
   of gsShared: asWorkspace
   of gsPrivate: asPrivate
+  of gsBuiltin: asFunction # thread-local value, like gsNone/gsLocal
   of gsNone:
     asFunction
     #raiseAssert "Encountered a node without a symbol kind!"

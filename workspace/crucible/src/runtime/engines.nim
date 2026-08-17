@@ -9,7 +9,7 @@
 ##
 ##   var engine = bkCuda.init()                          # live context, no kernel yet
 ##   engine.ingest(source)                               # compile; drops previous artifact
-##   let artifact = engine.getArtifact()                 # PTX / OpenCL src / SPIR-V / WGSL
+##   let artifact = engine.getArtifact()                 # PTX / OpenCL src / SPIR-V / WGSL / MSL
 ##   engine.run("kernel", output, (alpha, A, beta, B))   # plain: defaults — grid=blk=1 (Vulkan/WebGPU blk = shader-baked)
 ##   engine.run<<(2, 128)>>("kernel", output, args)              # 1D unchanged: (grid, blk)
 ##   engine.run<<((2,3), (128,2))>>(...)                         # 2D: tuple extents, padded to 3D
@@ -52,6 +52,7 @@ import ./engines/nvrtc {.all.}
 import ./engines/cl {.all.}
 import ./engines/vk {.all.}
 import ./engines/wgpu {.all.}
+import ./engines/metal {.all.}
 
 export gpu_types
 export chevrons
@@ -86,7 +87,7 @@ type
 proc init*(backend: static BackendKind): auto =
   ## Live context, no kernel yet. `ingest` compiles the source.
   ## Launch geometry is chevron-only — the engine carries no grid/blk:
-  ## plain `run` uses grid=blk=1 (CUDA/OpenCL) or blk = the shader-baked
+  ## plain `run` uses grid=blk=1 (CUDA/OpenCL/Metal) or blk = the shader-baked
   ## workgroup size (Vulkan/WebGPU).
   when backend == bkCuda:
     result = newCudaEngine()
@@ -96,6 +97,8 @@ proc init*(backend: static BackendKind): auto =
     result = newVulkanEngine()
   elif backend == bkWGSL:
     result = newWgpuEngine()
+  elif backend == bkMetal:
+    result = newMetalEngine()
   else:
     {.error: "init: unknown BackendKind".}
 

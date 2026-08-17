@@ -142,7 +142,7 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
       if n.strVal in ctx.symChoices:
         # Magic builtins keep their plain name: they are forwarded to the
         # backend's native function (e.g. CUDA's max), which knows no hash.
-        if not n.getImpl().hasMagicPragma:
+        if not hasPragma(n.getImpl(), "magic"):
           let id = ctx.sigTab[sig]
           id.symbol.name = id.symbol.iSym
       else:
@@ -215,10 +215,10 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
   # through to body-parsing exactly like +/*, so library overloads (e.g.
   # ceramic's genBinOp) are allowed.
   if node[0].repr in NimGpuNumericBuiltinsFunctions:
-    if inst.hasMagicPragma:
+    if hasPragma(inst, "magic"):
       let retType = resolveType(reg, sig.params[0])
       var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
-      ctx.builtins[name] = builtinFn
+      ctx.builtinFns[name] = builtinFn
       return
 
   # Operator builtins (system.* with magic: MulI etc.) — detect by name
@@ -227,10 +227,10 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
   if node[0].repr in NimGpuNumericBuiltinsOperators or
      node[0].repr in NimGpuBooleanOperators:
     # Only for magic/builtin operators — skip user-defined overloads
-    if inst.hasMagicPragma:
+    if hasPragma(inst, "magic"):
       let retType = resolveType(reg, sig.params[0])
       var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
-      ctx.builtins[name] = builtinFn
+      ctx.builtinFns[name] = builtinFn
       return
 
   # Function-style magic builtins (toOpenArray, etc.)
@@ -238,7 +238,7 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
   if node[0].repr in NimGpuFnBuiltins:
     let retType = resolveType(reg, sig.params[0])
     var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
-    ctx.builtins[name] = builtinFn
+    ctx.builtinFns[name] = builtinFn
     ctx.addToFnTable(name, builtinFn, {fkBuiltin})
     return
 
@@ -283,8 +283,8 @@ proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
     result = ctx.allFnTab[fn].pRetType.kind != gtVoid
   elif fn in ctx.genericInsts:
     result = ctx.genericInsts[fn].pRetType.kind != gtVoid
-  elif fn in ctx.builtins:
-    result = ctx.builtins[fn].pRetType.kind != gtVoid
+  elif fn in ctx.builtinFns:
+    result = ctx.builtinFns[fn].pRetType.kind != gtVoid
   elif fn in ctx.processedProcs:
     result = ctx.processedProcs[fn].retType.kind != gtVoid
   else:
@@ -403,7 +403,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
         result.pAttributes = collectProcAttributes(node.pragma)
         result.pWorkgroupSize = parseWorkgroupSize(node.pragma)
         if result.pAttributes.len == 0: # means `nimonly` was applied / is a `builtin`
-          ctx.builtins[name] = result # store in builtins, so that we know if it returns a value when called
+          ctx.builtinFns[name] = result # store in builtinFns, so that we know if it returns a value when called
           ctx.addToFnTable(name, result, {fkBuiltin})
           return GpuAst(kind: gpuDiscard)
       # Process parameters
@@ -609,12 +609,12 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
                                           # gemm_warp) — compile-time only, its
                                           # param was dropped in parseProcParameters
       args.add ctx.toGpuAst(reg, node[i])
-    if name in ctx.builtins and node[0].repr in NimGpuNumericBuiltinsOperators:
+    if name in ctx.builtinFns and node[0].repr in NimGpuNumericBuiltinsOperators:
       var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuNumericBuiltinsOperators[node[0].repr]))
       op.symbol.iSym = op.symbol.name
       result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
       result.bType = resolveType(reg, node.getTypeInst())
-    elif name in ctx.builtins and node[0].repr in NimGpuBooleanOperators:
+    elif name in ctx.builtinFns and node[0].repr in NimGpuBooleanOperators:
       var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuBooleanOperators[node[0].repr]))
       op.symbol.iSym = op.symbol.name
       result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
@@ -764,6 +764,8 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       ctx.sigTab[s] = result
     else:
       result = ctx.sigTab[s]
+    if node.hasPragma("builtin"):
+      result.symbol.symKind = gsBuiltin
 
   # literal types
   of nnkIntLit, nnkInt32Lit:

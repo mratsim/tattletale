@@ -75,7 +75,7 @@ proc toGpuTypeKind*(t: NimTypeKind): GpuTypeKind =
   of ntyFloat: gtFloat64
   of ntyFloat32: gtFloat32
   of ntyFloat64: gtFloat64
-  of ntyUInt: gtUint64
+  of ntyUInt: gtUint32 # `uint` is always mapped to `uint32` as that is the more "native" type on GPUs
   of ntyUInt8: gtUint8
   of ntyUInt16: gtUint16
   of ntyUInt32: gtUint32
@@ -209,16 +209,37 @@ proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
     else:
       raiseAssert "Unexpected pragma for procs: " & $pragma.treerepr
 
-proc hasMagicPragma*(n: NimNode): bool =
-  ## Check if a procdef has `{.magic.}` pragma (compiler intrinsic).
-  doAssert n.kind in {nnkProcDef, nnkFuncDef}, "hasMagicPragma: not a procdef: " & $n.treerepr
-  if n.pragma.kind == nnkEmpty:
+proc hasPragma*(n: NimNode, pragmaName: string): bool =
+  ## True when `n` carries the pragma `pragmaName`.
+  ## Covers procdefs and symbol references to procs (the magic
+  ## system.abs/min/max/operators) and to `{.builtin.}`-tagged lets
+  ## (the cuda/wgsl/metal index dummies).
+  var pragmaNode: NimNode
+  case n.kind
+  of nnkProcDef, nnkFuncDef:
+    pragmaNode = n.pragma
+  of nnkSym:
+    let impl = n.getImpl()
+    case impl.kind
+    of nnkProcDef, nnkFuncDef:
+      pragmaNode = impl.pragma
+    of nnkIdentDefs, nnkConstDef:
+      if impl.len > 0 and impl[0].kind == nnkPragmaExpr and
+         impl[0][1].kind == nnkPragma:
+        pragmaNode = impl[0][1]
+      else:
+        return false
+    else:
+      return false
+  else:
     return false
-  for p in n.pragma:
+  if pragmaNode.kind == nnkEmpty:
+    return false
+  for p in pragmaNode:
     let key = if p.kind in {nnkCall, nnkExprColonExpr}: p[0] else: p
-    if key.strVal == "magic":
+    if key.strVal == pragmaName:
       return true
-  return false
+  false
 
 proc collectAttributes*(n: NimNode): seq[GpuVarAttribute] =
   ## Collects all pragmas associated with the given variable.
