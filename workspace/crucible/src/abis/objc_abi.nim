@@ -7,19 +7,19 @@
 
 ## Minimal Objective-C runtime bridge for the Metal backend.
 ##
-## Sends ObjC methods through libobjc's `objc_msgSend`, with no Objective-C
-## source, no C++ wrapper, no link flags. Every symbol below resolves at
-## runtime via `dynlib:`; Nim loads the frameworks at module init, so there
-## is no manual init step.
+## Sends ObjC methods through libobjc's `objc_msgSend`, with no Objective-C source,
+## no C++ wrapper, and no link flags.
+## Every symbol below resolves at runtime via `dynlib:`.
+## Nim loads the frameworks at module init, so there is no manual init step.
 ##
 ## Tested ABI (macOS, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
 ## Nim 2.2.10.
 ##
-## Scope: the msgSend core only. Class reflection (ivars, methods, protocols,
-## properties, IMP, exceptions, class-pair allocation) is intentionally
-## absent. `MTL*` are protocols, not classes: `objc_getClass("MTLDevice")`
-## returns nil; obtain Metal objects from `MTLCreateSystemDefaultDevice` and
-## msgSend.
+## Scope: the msgSend core only. Class reflection is intentionally absent
+## (ivars, methods, protocols, properties, IMP, exceptions, class-pair allocation).
+## `MTL*` are protocols, not classes, so `objc_getClass("MTLDevice")`
+## returns nil. Obtain Metal objects from `MTLCreateSystemDefaultDevice`
+## and msgSend.
 
 const ObjcLibName = "libobjc.A.dylib"
 
@@ -39,15 +39,19 @@ else:
     NSUInteger* = cuint
 
 type
+  ## Objective-C object pointer (`id`).
   ID* = distinct pointer
+  ## Objective-C class object pointer.
   Class* = distinct pointer
+  ## Objective-C selector: a method name, interned by the runtime.
   SEL* = distinct pointer
+  ## Objective-C boolean: a C `signed char` (0/1).
   BOOL* = cchar
 
   MTLSize* = object
     ## Metal threadgroup/grid size: three NSUIntegers, 24 bytes on arm64.
-    ## Passed by value to `dispatchThreadgroups:threadsPerThreadgroup:`. The
-    ## arm64 aggregate ABI routes the struct by reference past `objc_msgSend`.
+    ## Passed by value to `dispatchThreadgroups:threadsPerThreadgroup:`.
+    ## The arm64 aggregate ABI routes the struct by reference past `objc_msgSend`.
     width*: NSUInteger
     height*: NSUInteger
     depth*: NSUInteger
@@ -66,19 +70,25 @@ proc isNil*(a: Class): bool =
 
 {.pragma: objcImport, cdecl, importc, dynlib: ObjcLibName.}
 
-## libobjc `objc_msgSend` symbol, plain varargs import. Never called with
-## extra arguments from Nim. Apple arm64 passes C variadic arguments on the
-## stack, where `objc_msgSend` does not look for them. The `msgSend` family
-## below is the only call path; it casts this symbol to each method's exact
-## fixed C signature before invoking.
+# libobjc `objc_msgSend` symbol: a plain varargs import.
+# Never called with extra arguments from Nim.
+# Apple arm64 passes C variadic arguments on the stack,
+# where `objc_msgSend` does not look for them.
+# The `msgSend` family below is the only call path.
+# It casts this symbol to each method's exact fixed C signature
+# before invoking.
 proc objc_msgSend(self: ID; op: SEL): ID {.objcimport, varargs.}
 
-# Fixed C signatures for the selectors the Metal backend uses. The cast makes
-# the C compiler pass the arguments in the registers the method IMP expects
-# (x2+), which a variadic call would not. Returns the method result as `ID`;
-# selectors returning void or a pointer are fine (discard or cast the result).
-# Selectors returning a struct larger than 16 bytes use the x8 sret register
-# and must never be sent through this bridge (UB).
+# Fixed C signatures for the selectors the Metal backend uses.
+# The cast makes the C compiler pass the arguments in the registers
+# the method IMP expects (x2+), which a variadic call would not.
+# Returns the method result as `ID`.
+# Selectors returning void or a pointer are fine (discard or cast the result).
+# arm64 needs no `objc_msgSend_stret`/`_fpret` variants.
+# The fixed cast handles pointer and id returns.
+# Struct returns larger than 16 bytes use the x8 struct-return register
+# and must never be sent through this bridge (undefined behavior).
+# None of the Metal selectors used here return such structs.
 type
   MsgSend0 = proc (self: ID; op: SEL): ID {.cdecl.}
   MsgSendCstr = proc (self: ID; op: SEL; a: cstring): ID {.cdecl.}
@@ -127,8 +137,7 @@ template msgSend*(self: ID; op: SEL; a: ID; b: NSUInteger; c: NSUInteger): ID =
 template msgSend*(self: ID; op: SEL; a: MTLSize; b: MTLSize): ID =
   cast[MsgSendSize2](objc_msgSend)(self, op, a, b)
 
-## Registers `str` as a selector (runtime-interned, returns the existing
-## selector when already registered).
+# Registers `str` as a selector (runtime-interned, returns the existing selector when already registered).
 proc sel_registerName(str: cstring): SEL {.objcimport.}
 
 proc `$$`*(str: string): SEL =
@@ -136,11 +145,11 @@ proc `$$`*(str: string): SEL =
   sel_registerName(str.cstring)
 
 ## Returns the class registered under `name`, or nil when not registered.
-## Only real classes resolve: `MTL*` are protocols and come back nil.
+## Only real classes resolve, because `MTL*` are protocols and come back nil.
 proc objc_getClass*(name: cstring): Class {.objcimport.}
 
-## Same lookup as `objc_getClass` (identical implementation in libobjc);
-## returns nil when the class is not registered.
+## Same lookup as `objc_getClass` (identical implementation in libobjc).
+## Returns nil when the class is not registered.
 proc objc_lookUpClass*(name: cstring): Class {.objcimport.}
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -148,28 +157,37 @@ proc objc_lookUpClass*(name: cstring): Class {.objcimport.}
 # ═══════════════════════════════════════════════════════════════════════
 
 proc nsStringToNimString*(ns: ID): string =
-  ## Converts an NSString (e.g. NSError `localizedDescription`) to a Nim
-  ## string via `UTF8String`. A nil `ns` yields an empty string.
+  ## Converts an NSString (e.g. NSError `localizedDescription`) to a Nim string
+  ## via `UTF8String`. A nil `ns` yields an empty string.
   let utf8 = msgSend(ns, $$"UTF8String")
   result = $cast[cstring](utf8)
+
+proc nsStringFromNimString*(s: string): ID =
+  ## Builds an autoreleased NSString from `s` via `stringWithUTF8String:`.
+  let cls = objc_getClass("NSString")
+  doAssert not cls.isNil, "NSString is nil — Foundation not loaded"
+  doAssert '\0' notin s, "string contains NUL — cannot bridge to NSString"
+  msgSend(ID(cls), $$"stringWithUTF8String:", s.cstring)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Framework auto-load
 # ═══════════════════════════════════════════════════════════════════════
 
-## Returns the current user's name (an NSString), or nil.
-##
-## This import exists to load Foundation.framework at module init: `dynlib:`
-## symbols resolve eagerly, and NS* classes (NSAutoreleasePool, NSString) are
-## nil to `objc_getClass` until the framework is loaded. `NSUserName` is a
-## zero-argument C function, so the load trigger below needs no NSString
-## (which cannot exist before the load).
+# Returns the current user's name (an NSString), or nil.
+#
+# This import exists to load Foundation.framework at module init:
+# `dynlib:` symbols resolve eagerly, and NS* classes
+# (NSAutoreleasePool, NSString) are nil to `objc_getClass`
+# until the framework is loaded.
+# `NSUserName` is a zero-argument C function, so the load trigger below
+# needs no NSString (which cannot exist before the load).
 proc NSUserName(): ID {.importc, cdecl, dynlib: "/System/Library/Frameworks/Foundation.framework/Foundation".}
 
-## True once Foundation.framework is loaded (always true in practice: a
-## failed dynlib load quits at module init). The call itself is what keeps
-## the `NSUserName` import alive: Nim dead-code-eliminates unreferenced
-## dynlib imports, so without the call the framework would never load.
+# True once Foundation.framework is loaded
+# (always true in practice: a failed dynlib load quits at module init).
+# The call itself is what keeps the `NSUserName` import alive:
+# Nim dead-code-eliminates unreferenced dynlib imports, so without the call
+# the framework would never load.
 let foundationLoaded* = not NSUserName().isNil
 
 ## Returns the default Metal device, or nil when no Metal device exists.
@@ -181,6 +199,6 @@ proc MTLCreateSystemDefaultDevice*(): ID {.importc, cdecl, dynlib: "/System/Libr
 ## Sets the class version number (libobjc `class_setVersion`).
 ##
 ## `{.importc: "class_$1".}` substitutes the Nim proc name into the C symbol,
-## so the Nim name stays unprefixed: the generated symbol is `class_setVersion`,
-## never `class_class_setVersion`.
+## so the Nim name stays unprefixed:
+## the generated symbol is `class_setVersion`, never `class_class_setVersion`.
 proc setVersion*(cls: Class; version: cint) {.importc: "class_$1", cdecl, dynlib: ObjcLibName.}
