@@ -21,7 +21,9 @@
 ## (ivars, methods, protocols, properties, IMP, exceptions, class-pair allocation).
 ## `MTL*` are protocols, not classes, so `getClass("MTLDevice")`
 ## returns nil. Obtain Metal objects from `MTLCreateSystemDefaultDevice`
-## and msgSend.
+## and msgSend. Memory management completes the bridge: autorelease pools
+## (`newPool`/`drainPool`/`withMemPool`) wrap engine call bodies, and
+## `release` balances +1 `new*`/Create acquisitions.
 ##
 ## The module is importable on any platform. The scalar and opaque types
 ## (ID, Class, SEL, BOOL, MTLSize, NSUInteger) and the `isNil` checks are
@@ -207,6 +209,32 @@ when defined(macosx):
     doAssert not cls.isNil, "NSString is nil — Foundation not loaded"
     doAssert '\0' notin s, "string contains NUL — cannot bridge to NSString"
     msgSend(ID(cls), $$"stringWithUTF8String:", s.cstring)
+
+  # ═════════════════════════════════════════════════
+  # Memory management
+  # ═════════════════════════════════════════════════
+
+  proc newPool*(): ID =
+    ## Alloc/init an `NSAutoreleasePool`. Engine calls wrap their body in one;
+    ## without a pool, autoreleased Metal objects trip OBJC_DEBUG_MISSING_POOLS=YES.
+    result = msgSend(ID(getClass("NSAutoreleasePool")), $$"alloc")
+    discard msgSend(result, $$"init")
+
+  proc drainPool*(pool: ID) =
+    ## Drains the pool: releases everything autoreleased since `newPool`.
+    discard msgSend(pool, $$"drain")
+
+  template withMemPool*(body: untyped): untyped =
+    ## Runs `body` inside a fresh autorelease pool, drained on scope exit.
+    ## The drain releases every autoreleased object the body created.
+    let pool = newPool()
+    defer: pool.drainPool()
+    body
+
+  proc release*(obj: ID) =
+    ## Releases a +1 Objective-C object, balanced against a `new*`/Create acquisition. Nil-safe.
+    if not isNil(obj):
+      discard msgSend(obj, $$"release")
 
   # ═════════════════════════════════════════════════
   # Framework auto-load

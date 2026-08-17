@@ -8,7 +8,7 @@
 ## Metal (MSL) runtime execution primitives for the `bkMetal` engine.
 ##
 ## Every public engine call wraps its body in an `NSAutoreleasePool`
-## (`newPool`/`drainPool`). Metal methods return autoreleased objects
+## (`objc.withMemPool`). Metal methods return autoreleased objects
 ## (command buffers, encoders) that a pool drain releases.
 ## The objects the engine caches (device, queue, library, pipeline states)
 ## come from `new*`/Create methods and are +1 owned.
@@ -18,7 +18,7 @@
 ## Nim 2.2.10, MSL 4.0.
 ##
 ## The Objective-C bridge lives in `objc_abi`, imported here as `objc`.
-## This module keeps only its own concerns: compile options, buffers, pools,
+## This module keeps only its own concerns: compile options, buffers,
 ## and the `failLoud` error policy.
 ##
 ## The execution primitives are `when defined(macosx)`-guarded. On other
@@ -74,25 +74,6 @@ type
 # ═════════════════════════════════════════════════
 
 when defined(macosx):
-  # ═════════════════════════════════════════════════
-  # Autorelease pools
-  # ═════════════════════════════════════════════════
-
-  proc newPool*(): objc.ID =
-    ## Alloc/init an `NSAutoreleasePool`. Public engine calls wrap their body in one.
-    ## Without a pool, autoreleased Metal objects trip OBJC_DEBUG_MISSING_POOLS=YES.
-    result = objc.msgSend(objc.ID(objc.getClass("NSAutoreleasePool")), objc.`$$`("alloc"))
-    discard objc.msgSend(result, objc.`$$`("init"))
-
-  proc drainPool*(pool: objc.ID) =
-    ## Drains the pool: releases everything autoreleased since `newPool`.
-    discard objc.msgSend(pool, objc.`$$`("drain"))
-
-  proc releaseObjC*(obj: objc.ID) =
-    ## Releases a +1 Objective-C object, balanced against a `new*`/Create acquisition. Nil-safe.
-    if not objc.isNil(obj):
-      discard objc.msgSend(obj, objc.`$$`("release"))
-
   # ═════════════════════════════════════════════════
   # MSL version ladder (uname)
   # ═════════════════════════════════════════════════
@@ -170,7 +151,7 @@ when defined(macosx):
     if objc.isNil(fn):
       failLoud("newFunctionWithName(" & kernel & ") returned nil")
     defer:
-      releaseObjC(fn)
+      objc.release(fn)
     var psoError: objc.ID = objc.ID(nil)
     result = objc.msgSend(device, objc.`$$`("newComputePipelineStateWithFunction:error:"),
                           fn, addr psoError)
@@ -187,7 +168,7 @@ when defined(macosx):
   proc initMetal*(): MetalCtx =
     ## The default Metal device and its command queue.
     ## Both are +1 (Create/new ownership rules) and survive the caller's autorelease-pool drain.
-    ## Release them via `releaseObjC`.
+    ## Release them via `objc.release`.
     result.device = objc.MTLCreateSystemDefaultDevice()
     if objc.isNil(result.device):
       failLoud("default Metal device lookup returned nil (no Metal device)")
@@ -211,6 +192,6 @@ when defined(macosx):
   proc releaseBuffer*(buffer: var MetalBuffer) =
     ## Releases the +1 buffer object. Nil-safe.
     if not objc.isNil(buffer.buffer):
-      releaseObjC(buffer.buffer)
+      objc.release(buffer.buffer)
       buffer.buffer = objc.ID(nil)
       buffer.data = nil

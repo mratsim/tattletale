@@ -91,31 +91,28 @@ when defined(macosx):
     ## Releases the +1 device and command queue (queue first, the reverse of creation order).
     ## The releases run inside a pool: the queue's dealloc autoreleases the device,
     ## and destroy runs outside any public call, so a bare release would trip OBJC_DEBUG_MISSING_POOLS=YES.
-    let pool = newPool()
-    releaseObjC(ctx.ctx.queue)
-    releaseObjC(ctx.ctx.device)
-    drainPool(pool)
+    objc.withMemPool:
+      objc.release(ctx.ctx.queue)
+      objc.release(ctx.ctx.device)
 
   proc `=destroy`(cache: var MetalCache) =
     ## Releases the library and cached pipeline states while the device is still alive:
     ## this field is declared after `ctx`,
     ## so reverse-order field destruction runs it before `ctx`'s `=destroy` releases the device.
     ## Runs inside a pool for the same reason as `MetalDeviceCtx`.
-    let pool = newPool()
-    releaseObjC(cache.library)
-    for pso in cache.psos.values:
-      releaseObjC(pso)
-    cache.psos.clear()
-    drainPool(pool)
+    objc.withMemPool:
+      objc.release(cache.library)
+      for pso in cache.psos.values:
+        objc.release(pso)
+      cache.psos.clear()
 
   proc newMetalEngine*(): MetalEngine =
     ## Factory reached by engines.nim via `import {.all.}`.
-    let pool = newPool()
-    result = MetalEngine(
-      ctx: MetalDeviceCtx(ctx: initMetal()),
-      cache: MetalCache(psos: initTable[(string, seq[int]), objc.ID]())
-    )
-    drainPool(pool)
+    objc.withMemPool:
+      result = MetalEngine(
+        ctx: MetalDeviceCtx(ctx: initMetal()),
+        cache: MetalCache(psos: initTable[(string, seq[int]), objc.ID]())
+      )
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PUBLIC API
@@ -124,19 +121,18 @@ when defined(macosx):
   proc ingest*(engine: MetalEngine, source: string) =
     ## Store the MSL source and compile it into a library. Calling ingest again
     ## replaces the previous artifact and invalidates both cache levels.
-    let pool = newPool()
-    let opts = compileOptions()
-    let library = compileLibrary(engine.ctx.ctx.device, source, opts)
-    releaseObjC(opts)
-    when defined(debug):
-      echo "[INFO]: metal ingest: invalidating previous artifact"
-    releaseObjC(engine.cache.library)
-    for pso in engine.cache.psos.values:
-      releaseObjC(pso)
-    engine.cache.psos.clear()
-    engine.cache.library = library
-    engine.source = source
-    drainPool(pool)
+    objc.withMemPool:
+      let opts = compileOptions()
+      let library = compileLibrary(engine.ctx.ctx.device, source, opts)
+      objc.release(opts)
+      when defined(debug):
+        echo "[INFO]: metal ingest: invalidating previous artifact"
+      objc.release(engine.cache.library)
+      for pso in engine.cache.psos.values:
+        objc.release(pso)
+      engine.cache.psos.clear()
+      engine.cache.library = library
+      engine.source = source
 
   proc getArtifact*(engine: MetalEngine): string =
     ## The MSL kernel source.
@@ -144,9 +140,8 @@ when defined(macosx):
 
   proc deviceName*(engine: MetalEngine): string =
     ## The Metal device name (e.g. "Apple M4 Max").
-    let pool = newPool()
-    result = objc.nsStringToNimString(objc.msgSend(engine.ctx.ctx.device, objc.`$$`("name")))
-    drainPool(pool)
+    objc.withMemPool:
+      result = objc.nsStringToNimString(objc.msgSend(engine.ctx.ctx.device, objc.`$$`("name")))
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PRIVATE run path
@@ -164,8 +159,7 @@ when defined(macosx):
     ## Metal may reject the dispatch after commit or complete it with stale
     ## output, and the status check cannot catch that geometry class.
     ## Callers must validate grid against the device limit.
-    let pool = newPool()
-    try:
+    objc.withMemPool:
       # blk is dispatch-time, so run validates the launch geometry.
       if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
         failLoud("Metal run: grid must be ≥ 1 per axis, got " &
@@ -280,8 +274,6 @@ when defined(macosx):
       # No staging buffer exists here.
       if outSize > 0:
         copyMem(output.data, outBuf.data, outSize)
-    finally:
-      drainPool(pool)
 
 # ═════════════════════════════════════════════════
 # ▸ Non-macOS entry point
