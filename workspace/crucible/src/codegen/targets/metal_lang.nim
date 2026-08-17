@@ -16,7 +16,7 @@
 ## `true`/`false` (emitted as valid MSL tokens), plus the `metal` namespace.
 ## It is a defensible superset of the MSL reserved words, not a hand-picked sample.
 
-import std / [macros, strformat, strutils, sequtils, tables, sets]
+import std / [macros, strformat, strutils, sequtils, tables]
 
 import ../ir/gpu_types
 import ./lang_utils
@@ -198,52 +198,8 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
 const MetalAtomicCalls = ["atomic_add", "atomicAdd",
                           "atomic_sub", "atomicSub",
                           "atomic_xchg", "atomicExchange"]
-  ## IR call names of the atomic builtin dummies (opencl_builtins, vulkan_builtins), mapped to MSL `atomic_fetch_*_explicit`.
-
-proc metalAtomicFnName(name: string): string =
-  ## MSL atomic function for an IR atomic builtin call name.
-  case name
-  of "atomic_add", "atomicAdd": "atomic_fetch_add_explicit"
-  of "atomic_sub", "atomicSub": "atomic_fetch_sub_explicit"
-  of "atomic_xchg", "atomicExchange": "atomic_exchange_explicit"
-  else: ""
-
-proc atomicElemName(t: GpuType): string =
-  ## MSL atomic element type for a (possibly pointer- or UA-wrapped) numeric type.
-  ## MSL atomics operate on `atomic_uint` / `atomic_int` /
-  ## `atomic_float` / `atomic_ulong` / `atomic_long` memory, declared
-  ## as kernel pointer params or as shared/private variables.
-  var e = t
-  if e.kind == gtPtr:
-    e = e.to
-  if e.kind == gtUA:
-    e = e.uaTo
-  case e.kind
-  of gtUint32: "atomic_uint"
-  of gtInt32: "atomic_int"
-  of gtFloat32: "atomic_float"
-  of gtUint64: "atomic_ulong"
-  of gtInt64: "atomic_long"
-  else:
-    raiseAssert "Metal atomics support 32/64-bit integers and 32-bit floats, got: " & $e.kind
-
-proc collectAtomicTargets(ctx: GpuContext, n: GpuAst, targets: var HashSet[string]) =
-  ## Records the first-argument identifier of every atomic builtin call.
-  ## The printer uses the set to declare the matching buffer or variable
-  ## with an `atomic_<T>` element type, since MSL atomic functions require atomic-typed pointers.
-  case n.kind
-  of gpuCall:
-    if n.cName.kind == gpuIdent and n.cName.ident() in MetalAtomicCalls and n.cArgs.len > 0:
-      var arg = n.cArgs[0]
-      if arg.kind == gpuAddr and arg.aOf.kind == gpuIdent:
-        arg = arg.aOf
-      if arg.kind == gpuIdent:
-        targets.incl arg.ident()
-    for ch in n:
-      ctx.collectAtomicTargets(ch, targets)
-  else:
-    for ch in n:
-      ctx.collectAtomicTargets(ch, targets)
+  ## IR call names of the atomic builtin dummies (opencl_builtins, vulkan_builtins).
+  ## Atomic support is unimplemented at the moment — such calls raise at codegen time.
 
 proc genLit*(ast: GpuAst): string =
   ## Lower a literal node for the MSL backend.
@@ -300,8 +256,7 @@ proc collectAttrIdents(n: GpuAst, attrIdents: var seq[string]) =
     for ch in n:
       collectAttrIdents(ch, attrIdents)
 
-proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
-                     atomics: HashSet[string]): string =
+proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
   ## MSL kernel parameter list:
   ## - buffer params: `device T*`, never const — matches device-fn params, and
   ##   MSL accepts non-const input buffers
@@ -310,7 +265,6 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
   ## Scalars stay 4 bytes on the host (arg_blobs blobOf), so scalar `bool` is declared `int`.
   ## Buffer elements marshal at their Nim width, so bool buffers declare `bool` (1 byte).
-  ## Atomic-used pointers are declared `device atomic_<T>*` and never const, since atomics mutate.
   var attrIdents: seq[string]
   collectAttrIdents(fn.pBody, attrIdents)
   var params: seq[string]
@@ -323,11 +277,8 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
       var inner = p.typ.to
       if inner.kind == gtUA:
         inner = inner.uaTo
-      if name in atomics:
-        params.add "device " & atomicElemName(p.typ) & "* " & name & binding
-      else:
-        var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-        params.add "device " & elem & "* " & name & binding
+      var elem = gpuTypeToString(inner, allowEmptyIdent = true)
+      params.add "device " & elem & "* " & name & binding
     else:
       var elem = gpuTypeToString(p.typ, allowEmptyIdent = true)
       if p.typ.kind == gtBool:
@@ -338,11 +289,9 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
     params.add "uint3 " & attr & " [[" & attr & "]]"
   result = params.join(", ")
 
-proc genDeviceParam(ctx: var GpuContext, p: GpuParam,
-                    atomics: HashSet[string]): string =
+proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
   ## MSL parameter for a device function (non-kernel). Pointer params carry an address space:
   ## `thread` for implicit `var T` params (locals), `device` for explicit `ptr T` params (kernel buffers).
-  ## Atomic-used pointers get the matching `atomic_<T>` element type.
   ## Large passByRef structs are emitted `thread const T&`.
   ## Such a reference binds thread-space values and temporaries, like a C++ const reference.
   let name = p.ident.ident()
@@ -351,12 +300,9 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam,
     var inner = p.typ.to
     if inner.kind == gtUA:
       inner = inner.uaTo
-    if name in atomics:
-      result = "device " & atomicElemName(p.typ) & "* " & name
-    else:
-      var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-      let space = if p.typ.implicit: "thread" else: "device"
-      result = space & ' ' & elem & "* " & name
+    var elem = gpuTypeToString(inner, allowEmptyIdent = true)
+    let space = if p.typ.implicit: "thread" else: "device"
+    result = space & ' ' & elem & "* " & name
   else:
     result = gpuTypeToString(p.typ, name)
 
@@ -368,13 +314,6 @@ proc metalVarAttr(a: GpuVarAttribute): string =
   of atvExtern: "extern"
   of atvVolatile: "volatile"
   of atvPrivate: "thread"
-
-proc genAtomicVarType(t: GpuType, ident: string): string =
-  ## `atomic_<T>` MSL declaration for a numeric or static-array variable.
-  if t.kind == gtArray:
-    result = atomicElemName(t.aTyp) & ' ' & ident & '[' & $t.aLen & ']'
-  else:
-    result = atomicElemName(t) & ' ' & ident
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
@@ -402,23 +341,18 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   for (fnIdent, fn) in fns: # everything in `fnTab` at this point is a global function
     ctx.scanFunctions(fn)
 
-proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
-                  atomics: HashSet[string]): string =
-  ## The actual MSL code generator. `atomics` holds the identifiers
-  ## of the atomic-call targets in the enclosing function. Params and variables
-  ## in that set declare `atomic_<T>` element types.
+proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
+  ## The actual MSL code generator.
   let indentStr = "  ".repeat(indent)
   case ast.kind
   of gpuDiscard: return # nothing to emit
   of gpuProc:
     checkReservedIdent(ast.pName.ident(), "function")
-    var fnAtomics: HashSet[string]
-    ctx.collectAtomicTargets(ast.pBody, fnAtomics)
     let isKernel = attGlobal in ast.pAttributes
     # Parameters
     var params: seq[string]
     if isKernel:
-      params.add ctx.genKernelParams(ast, fnAtomics)
+      params.add ctx.genKernelParams(ast)
     else:
       for p in ast.pParams:
         if p.passByRef:
@@ -427,7 +361,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
           checkReservedIdent(p.ident.ident(), "parameter")
           params.add "thread const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
         else:
-          params.add ctx.genDeviceParam(p, fnAtomics)
+          params.add ctx.genDeviceParam(p)
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
@@ -442,7 +376,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
       result.add ';'
     else:
       result.add "{\n"
-      result &= ctx.genMetalImpl(ast.pBody, indent + 1, fnAtomics)
+      result &= ctx.genMetalImpl(ast.pBody, indent + 1)
       result &= '\n' & indentStr & '}'
 
   of gpuBlock:
@@ -450,7 +384,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
-      let code = ctx.genMetalImpl(el, indent + (if ast.blockLabel.len > 0: 1 else: 0), atomics)
+      let code = ctx.genMetalImpl(el, indent + (if ast.blockLabel.len > 0: 1 else: 0))
       if code.len == 0:
         continue # skip gpuDiscard and empty statements
       result.add code
@@ -464,60 +398,55 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
   of gpuVar:
     let vName = ast.vName.ident()
     checkReservedIdent(vName, "variable")
-    if vName in atomics and ast.vInit.kind != gpuDiscard:
-      raiseAssert "Atomic variable '" & vName & "' must be declared without an initializer. " &
-        "MSL atomic types with value initializers are not device-verified."
     var attrs = ""
     for a in ast.vAttributes:
       attrs.add metalVarAttr(a) & ' '
-    let typ =
-      if vName in atomics: genAtomicVarType(ast.vType, vName)
-      else: gpuTypeToString(ast.vType, vName)
+    let typ = gpuTypeToString(ast.vType, vName)
     result = indentStr & attrs & typ
     if ast.vInit.kind != gpuDiscard:
-      result &= " = " & ctx.genMetalImpl(ast.vInit, 0, atomics)
+      result &= " = " & ctx.genMetalImpl(ast.vInit, 0)
   of gpuAssign:
-    result = indentStr & ctx.genMetalImpl(ast.aLeft, 0, atomics) & " = " &
-             ctx.genMetalImpl(ast.aRight, 0, atomics)
+    result = indentStr & ctx.genMetalImpl(ast.aLeft, 0) & " = " &
+             ctx.genMetalImpl(ast.aRight, 0)
   of gpuIf:
     # skip semicolon in the condition. Otherwise can lead to problematic code
     ctx.withoutSemicolon: # skip semicolon for if bodies
-      result = indentStr & "if (" & ctx.genMetalImpl(ast.ifCond, 0, atomics) & ") {\n"
-    result &= ctx.genMetalImpl(ast.ifThen, indent + 1, atomics) & '\n'
+      result = indentStr & "if (" & ctx.genMetalImpl(ast.ifCond, 0) & ") {\n"
+    result &= ctx.genMetalImpl(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
     if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
-      result &= ctx.genMetalImpl(ast.ifElse, indent + 1, atomics) & '\n'
+      result &= ctx.genMetalImpl(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
 
   of gpuTernary:
     ctx.withoutSemicolon:
-      result = '(' & ctx.genMetalImpl(ast.tCond, 0, atomics) & " ? " &
-               ctx.genMetalImpl(ast.tThen, 0, atomics) & " : " &
-               ctx.genMetalImpl(ast.tElse, 0, atomics) & ')'
+      result = '(' & ctx.genMetalImpl(ast.tCond, 0) & " ? " &
+               ctx.genMetalImpl(ast.tThen, 0) & " : " &
+               ctx.genMetalImpl(ast.tElse, 0) & ')'
 
   of gpuFor:
     checkReservedIdent(ast.fVar.ident(), "loop variable")
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
-             ctx.genMetalImpl(ast.fStart, 0, atomics) & "; " &
-             ast.fVar.ident() & cmp & ctx.genMetalImpl(ast.fEnd, 0, atomics) & "; " &
+             ctx.genMetalImpl(ast.fStart, 0) & "; " &
+             ast.fVar.ident() & cmp & ctx.genMetalImpl(ast.fEnd, 0) & "; " &
              ast.fVar.ident() & "++) {\n"
-    result &= ctx.genMetalImpl(ast.fBody, indent + 1, atomics) & '\n'
+    result &= ctx.genMetalImpl(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
   of gpuWhile:
     ctx.withoutSemicolon:
-      result = indentStr & "while (" & ctx.genMetalImpl(ast.wCond, 0, atomics) & "){\n"
-    result &= ctx.genMetalImpl(ast.wBody, indent + 1, atomics) & '\n'
+      result = indentStr & "while (" & ctx.genMetalImpl(ast.wCond, 0) & "){\n"
+    result &= ctx.genMetalImpl(ast.wBody, indent + 1) & '\n'
     result &= indentStr & '}'
 
   of gpuDot:
-    result = ctx.genMetalImpl(ast.dParent, 0, atomics) & '.' &
-             ctx.genMetalImpl(ast.dField, 0, atomics)
+    result = ctx.genMetalImpl(ast.dParent, 0) & '.' &
+             ctx.genMetalImpl(ast.dField, 0)
 
   of gpuIndex:
-    result = ctx.genMetalImpl(ast.iArr, 0, atomics) & '[' &
-             ctx.genMetalImpl(ast.iIndex, 0, atomics) & ']'
+    result = ctx.genMetalImpl(ast.iArr, 0) & '[' &
+             ctx.genMetalImpl(ast.iIndex, 0) & ']'
 
   of gpuCall:
     let name = ast.cName.ident()
@@ -526,25 +455,12 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
       # MSL spells the barrier with its memory flags.
       result = indentStr & "threadgroup_barrier(mem_flags::mem_threadgroup)"
     elif name in MetalAtomicCalls:
-      # The first argument must be an atomic target that `collectAtomicTargets` recorded:
-      # a plain identifier or `addr <ident>`. Any other shape (e.g. `addr arr[i]`)
-      # would emit a non-atomic pointer that MSL rejects, so raise instead of emitting invalid code.
-      if ast.cArgs.len == 0:
-        raiseAssert "Atomic call '" & name & "' requires a target argument"
-      let first = ast.cArgs[0]
-      let target = if first.kind == gpuAddr: first.aOf else: first
-      if target.kind != gpuIdent or target.ident() notin atomics:
-        raiseAssert "Atomic call '" & name & "' targets a non-atomic identifier. " &
-          "Pass a plain identifier or `addr <ident>` so the atomic declaration is emitted."
-      var args: seq[string]
-      for a in ast.cArgs:
-        args.add ctx.genMetalImpl(a, 0, atomics)
-      args.add "memory_order_relaxed" # MSL atomics require an explicit order
-      result = indentStr & metalAtomicFnName(name) & '(' & args.join(", ") & ')'
+      raiseAssert "Atomic support is unimplemented at the moment: '" & name &
+        "' is an OpenCL/Vulkan builtin (opencl_builtins, vulkan_builtins)"
     else:
       var args: seq[string]
       for a in ast.cArgs:
-        args.add ctx.genMetalImpl(a, 0, atomics)
+        args.add ctx.genMetalImpl(a, 0)
       result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
   of gpuTemplateCall:
     when nimvm:
@@ -556,10 +472,10 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
 
   of gpuBinOp:
     ctx.withoutSemicolon:
-      let l = ctx.genMetalImpl(ast.bLeft, 0, atomics)
-      let r = ctx.genMetalImpl(ast.bRight, 0, atomics)
+      let l = ctx.genMetalImpl(ast.bLeft, 0)
+      let r = ctx.genMetalImpl(ast.bRight, 0)
       result = indentStr & '(' & l & ' ' &
-               ctx.genMetalImpl(ast.bOp, 0, atomics) & ' ' &
+               ctx.genMetalImpl(ast.bOp, 0) & ' ' &
                r & ')'
 
   of gpuIdent:
@@ -576,16 +492,16 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
   of gpuArrayLit:
     result = "{"
     for i, el in ast.aValues:
-      result.add '(' & gpuTypeToString(ast.aLitType) & ')' & ctx.genMetalImpl(el, 0, atomics)
+      result.add '(' & gpuTypeToString(ast.aLitType) & ')' & ctx.genMetalImpl(el, 0)
       if i < ast.aValues.high:
         result.add ", "
     result.add '}'
 
   of gpuReturn:
-    result = indentStr & "return " & ctx.genMetalImpl(ast.rValue, 0, atomics)
+    result = indentStr & "return " & ctx.genMetalImpl(ast.rValue, 0)
 
   of gpuPrefix:
-    result = ast.pOp & ctx.genMetalImpl(ast.pVal, 0, atomics)
+    result = ast.pOp & ctx.genMetalImpl(ast.pVal, 0)
 
   of gpuTypeDef:
     result = "struct " & gpuTypeToString(ast.tTyp) & "{\n"
@@ -601,7 +517,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
   of gpuAlias:
     # Aliases come from `ctx.types`. MSL spells them as C++11 `using`
     result = "using " & gpuTypeToString(ast.aTyp) & " = " &
-             ctx.genMetalImpl(ast.aTo, 0, atomics) & ';'
+             ctx.genMetalImpl(ast.aTo, 0) & ';'
 
   of gpuObjConstr:
     # Braced init list: TypeName{val1, val2, ...}
@@ -613,7 +529,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
       if el.value.kind == gpuDiscard:
         result.add "{}"
       else:
-        result.add ctx.genMetalImpl(el.value, 0, atomics)
+        result.add ctx.genMetalImpl(el.value, 0)
       if i < ast.ocFields.len - 1:
         result.add ", "
     result.add '}'
@@ -626,39 +542,37 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
 
   of gpuConv:
     result = '(' & gpuTypeToString(ast.convTo, allowEmptyIdent = true) & ')' &
-             ctx.genMetalImpl(ast.convExpr, 0, atomics)
+             ctx.genMetalImpl(ast.convExpr, 0)
   of gpuCast:
     result = '(' & gpuTypeToString(ast.cTo, allowEmptyIdent = true) & ')' &
-             ctx.genMetalImpl(ast.cExpr, 0, atomics)
+             ctx.genMetalImpl(ast.cExpr, 0)
 
   of gpuAddr:
-    result = "(&" & ctx.genMetalImpl(ast.aOf, 0, atomics) & ')'
+    result = "(&" & ctx.genMetalImpl(ast.aOf, 0) & ')'
 
   of gpuDeref:
-    result = "(*" & ctx.genMetalImpl(ast.dOf, 0, atomics) & ')'
+    result = "(*" & ctx.genMetalImpl(ast.dOf, 0) & ')'
 
   of gpuConstexpr:
     ## MSL supports C++14 `constexpr` variables. Arrays need the length in the type.
     ## Hence the two emission shapes (mirrors the CUDA printer).
     let cInit =
       if ast.cValue.kind == gpuDiscard: "{}"
-      else: ctx.genMetalImpl(ast.cValue, 0, atomics)
+      else: ctx.genMetalImpl(ast.cValue, 0)
     if ast.cType.kind == gtArray:
-      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genMetalImpl(ast.cIdent, 0, atomics)) & " = " & cInit
+      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genMetalImpl(ast.cIdent, 0)) & " = " & cInit
     else:
       result = indentStr & "constexpr " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' &
-               ctx.genMetalImpl(ast.cIdent, 0, atomics) & " = " & cInit
+               ctx.genMetalImpl(ast.cIdent, 0) & " = " & cInit
   of gpuMaterialize:
-    result = ctx.genMetalImpl(ast.mExpr, 0, atomics) # C++ const& binds implicitly to temporaries
+    result = ctx.genMetalImpl(ast.mExpr, 0) # C++ const& binds implicitly to temporaries
 
   else:
     raiseAssert "Unhandled node kind in genMetal: " & ast.repr
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
-  ## MSL code for `ast`, used by `codegen` for top-level nodes. The entry point
-  ## passes an empty atomic target set, because each `gpuProc` computes its own set from its body.
-  var none: HashSet[string]
-  ctx.genMetalImpl(ast, indent, none)
+  ## MSL code for `ast`, used by `codegen` for top-level nodes.
+  ctx.genMetalImpl(ast, indent)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Emits the full MSL translation unit:
