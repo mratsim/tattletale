@@ -20,19 +20,27 @@
 ## The device context (`initMetal`) lives in `exec/metal_runtime`
 ## (imported below). This module owns the engine and its RAII `=destroy` hook.
 ##
-## Structure: PUBLIC API block first (exported `*`), PRIVATE machinery below (no `*`).
-## `{.experimental: "codeReordering".}` lifts Nim's declaration-before-use rule,
-## so the private helpers may appear after the public API, which calls them.
-{.experimental: "codeReordering".}
+## The engine implementation is `when defined(macosx)`-guarded. Only macOS
+## provides the Objective-C surface. On other platforms, `newMetalEngine`
+## still exists so `bkMetal.init()` compiles everywhere, and the engine
+## quits loudly when constructed.
+##
+## Structure: platform-neutral types at the top, then the macOS-only
+## implementation. Inside the guard, private helpers and constants
+## precede the public API they serve. Nim's `codeReordering` does not
+## see through `when` blocks, so declaration order is what the compiler
+## sees.
 
 import std/[strutils, tables]
 
-import workspace/crucible/src/abis/objc_abi
+import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
-import ./arg_blobs
-import ../chevrons
 
 export metal_runtime
+
+when defined(macosx):
+  import ./arg_blobs
+  import ../chevrons
 # ═════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════
@@ -45,8 +53,8 @@ type
     ## Two-level cache: the compiled library (level 1, keyed by the source it was built from)
     ## and per-(kernel, argSizes) compute pipeline states (level 2).
     ## Re-ingest replaces the library and clears the pipeline states.
-    library: ID
-    psos: Table[(string, seq[int]), ID]
+    library: objc.ID
+    psos: Table[(string, seq[int]), objc.ID]
 
   MetalEngine* = ref object
     ## `source` plus the RAII value fields `ctx` (device + queue) and `cache` (library + PSOs),
@@ -56,274 +64,298 @@ type
     cache: MetalCache   # after ctx: released before ctx shutdown
 
 # ═════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ═════════════════════════════════════════════════
-proc `=destroy`(ctx: var MetalDeviceCtx) =
-  ## Releases the +1 device and command queue (queue first, the reverse of creation order).
-  ## The releases run inside a pool: the queue's dealloc autoreleases the device,
-  ## and destroy runs outside any public call, so a bare release would trip OBJC_DEBUG_MISSING_POOLS=YES.
-  let pool = newPool()
-  releaseObjC(ctx.ctx.queue)
-  releaseObjC(ctx.ctx.device)
-  drainPool(pool)
-
-proc `=destroy`(cache: var MetalCache) =
-  ## Releases the library and cached pipeline states while the device is still alive:
-  ## this field is declared after `ctx`,
-  ## so reverse-order field destruction runs it before `ctx`'s `=destroy` releases the device.
-  ## Runs inside a pool for the same reason as `MetalDeviceCtx`.
-  let pool = newPool()
-  releaseObjC(cache.library)
-  for pso in cache.psos.values:
-    releaseObjC(pso)
-  cache.psos.clear()
-  drainPool(pool)
-
-proc newMetalEngine(): MetalEngine =
-  ## Private factory. engines.nim reaches it via `import {.all.}`.
-  let pool = newPool()
-  result = MetalEngine(
-    ctx: MetalDeviceCtx(ctx: initMetal()),
-    cache: MetalCache(psos: initTable[(string, seq[int]), ID]())
-  )
-  drainPool(pool)
-
-# ═════════════════════════════════════════════════
-# ▸ PUBLIC API
+# ▸ macOS-only engine implementation
 # ═════════════════════════════════════════════════
 
-proc ingest*(engine: MetalEngine, source: string) =
-  ## Store the MSL source and compile it into a library. Calling ingest again
-  ## replaces the previous artifact and invalidates both cache levels.
-  ## The 31-binding check runs before compiling. Metal rejects >31 buffers at compile time,
-  ## so a runtime check would be dead code.
-  let pool = newPool()
-  checkBindingLimit(source)
-  let opts = compileOptions()
-  let library = compileLibrary(engine.ctx.ctx.device, source, opts)
-  releaseObjC(opts)
-  when defined(debug):
-    echo "[INFO]: metal ingest: invalidating previous artifact"
-  releaseObjC(engine.cache.library)
-  for pso in engine.cache.psos.values:
-    releaseObjC(pso)
-  engine.cache.psos.clear()
-  engine.cache.library = library
-  engine.source = source
-  drainPool(pool)
+when defined(macosx):
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ PRIVATE constants
+  # ─────────────────────────────────────────────────────────────────────────
 
-proc getArtifact*(engine: MetalEngine): string =
-  ## The MSL kernel source.
-  engine.source
+  const MslIdentChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
+    ## Identifier characters, used to spot the `kernel` qualifier token.
 
-proc deviceName*(engine: MetalEngine): string =
-  ## The Metal device name (e.g. "Apple M4 Max").
-  let pool = newPool()
-  result = nsStringToNimString(msgSend(engine.ctx.ctx.device, $$"name"))
-  drainPool(pool)
+  const
+    ## Constant-buffer slot stride for packed scalar args, in bytes.
+    ## Verified on-device: 16-byte alignment on Apple Silicon.
+    ScalarSlotStride = 16
 
-# ─────────────────────────────────────────────────────────────────────────
-# ▸ PRIVATE
-# ─────────────────────────────────────────────────────────────────────────
+  const
+    ## `MTLCommandBufferStatus` values (MTLCommandBuffer.h): 4 = completed,
+    ## 5 = error. `waitUntilCompleted` leaves the buffer in one of these.
+    MTLCommandBufferStatusCompleted = 4
+    MTLCommandBufferStatusError = 5
 
-const MslIdentChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
-  ## Identifier characters, used to spot the `kernel` qualifier token.
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ PRIVATE helpers
+  # ─────────────────────────────────────────────────────────────────────────
 
-const
-  ## Constant-buffer slot stride for packed scalar args, in bytes.
-  ## Verified on-device: 16-byte alignment on Apple Silicon.
-  ScalarSlotStride = 16
+  proc kernelBindingCounts(sig: string): tuple[count, maxIndex: int] =
+    ## Counts `[[buffer(n)]]` attributes in a kernel parameter list and the highest index among them.
+    var d = 0
+    while true:
+      let idx = sig.find("[[buffer(", d)
+      if idx < 0:
+        break
+      inc result.count
+      var n = 0
+      var k = idx + len("[[buffer(")
+      while k < sig.len and sig[k] in {'0' .. '9'}:
+        n = n * 10 + (ord(sig[k]) - ord('0'))
+        inc k
+      if n > result.maxIndex:
+        result.maxIndex = n
+      d = k
 
-const
-  ## `MTLCommandBufferStatus` values (MTLCommandBuffer.h): 4 = completed,
-  ## 5 = error. `waitUntilCompleted` leaves the buffer in one of these.
-  MTLCommandBufferStatusCompleted = 4
-  MTLCommandBufferStatusError = 5
+  proc checkBindingLimit(source: string) =
+    ## Quits loudly when any kernel in `source` exceeds the Metal buffer limit (31 bindings, indices 0..30).
+    ## Metal itself rejects >31 buffers at compile time, so this must fire at ingest,
+    ## before newLibraryWithSource, or it would never run.
+    var i = 0
+    while i < source.len:
+      # skip comments: comment text must not fake a kernel declaration
+      if source[i] == '/' and i + 1 < source.len and source[i + 1] == '/':
+        while i < source.len and source[i] != '\n':
+          inc i
+        continue
+      if source[i] == '/' and i + 1 < source.len and source[i + 1] == '*':
+        inc i, 2
+        while i + 1 < source.len and not (source[i] == '*' and source[i + 1] == '/'):
+          inc i
+        inc i, 2
+        continue
+      if i + 6 < source.len and source[i .. i + 6] == "kernel " and
+         (i == 0 or source[i - 1] notin MslIdentChars):
+        let openParen = source.find('(', i + 7)
+        if openParen < 0:
+          failLoud("Metal ingest: kernel declaration at byte " & $i &
+                   " has no parameter list")
+        var depth = 0
+        var j = openParen
+        while j < source.len:
+          if source[j] == '(':
+            inc depth
+          elif source[j] == ')':
+            dec depth
+            if depth == 0:
+              break
+          inc j
+        if depth != 0:
+          failLoud("Metal ingest: unbalanced parameter list at byte " & $openParen)
+        let (count, maxIndex) = kernelBindingCounts(source[openParen .. j])
+        if count > 31 or maxIndex > 30:
+          failLoud("Metal ingest: a kernel has " & $count &
+                   " buffer bindings (highest index " & $maxIndex &
+                   "), the Metal limit is 31 bindings at indices 0..30")
+        i = j + 1
+        continue
+      inc i
 
-proc kernelBindingCounts(sig: string): tuple[count, maxIndex: int] =
-  ## Counts `[[buffer(n)]]` attributes in a kernel parameter list and the highest index among them.
-  var d = 0
-  while true:
-    let idx = sig.find("[[buffer(", d)
-    if idx < 0:
-      break
-    inc result.count
-    var n = 0
-    var k = idx + len("[[buffer(")
-    while k < sig.len and sig[k] in {'0' .. '9'}:
-      n = n * 10 + (ord(sig[k]) - ord('0'))
-      inc k
-    if n > result.maxIndex:
-      result.maxIndex = n
-    d = k
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ Constructors/destructors
+  # ─────────────────────────────────────────────────────────────────────────
 
-proc checkBindingLimit(source: string) =
-  ## Quits loudly when any kernel in `source` exceeds the Metal buffer limit (31 bindings, indices 0..30).
-  ## Metal itself rejects >31 buffers at compile time, so this must fire at ingest,
-  ## before newLibraryWithSource, or it would never run.
-  var i = 0
-  while i < source.len:
-    # skip comments: comment text must not fake a kernel declaration
-    if source[i] == '/' and i + 1 < source.len and source[i + 1] == '/':
-      while i < source.len and source[i] != '\n':
-        inc i
-      continue
-    if source[i] == '/' and i + 1 < source.len and source[i + 1] == '*':
-      inc i, 2
-      while i + 1 < source.len and not (source[i] == '*' and source[i + 1] == '/'):
-        inc i
-      inc i, 2
-      continue
-    if i + 6 < source.len and source[i .. i + 6] == "kernel " and
-       (i == 0 or source[i - 1] notin MslIdentChars):
-      let openParen = source.find('(', i + 7)
-      if openParen < 0:
-        failLoud("Metal ingest: kernel declaration at byte " & $i &
-                 " has no parameter list")
-      var depth = 0
-      var j = openParen
-      while j < source.len:
-        if source[j] == '(':
-          inc depth
-        elif source[j] == ')':
-          dec depth
-          if depth == 0:
-            break
-        inc j
-      if depth != 0:
-        failLoud("Metal ingest: unbalanced parameter list at byte " & $openParen)
-      let (count, maxIndex) = kernelBindingCounts(source[openParen .. j])
-      if count > 31 or maxIndex > 30:
-        failLoud("Metal ingest: a kernel has " & $count &
-                 " buffer bindings (highest index " & $maxIndex &
-                 "), the Metal limit is 31 bindings at indices 0..30")
-      i = j + 1
-      continue
-    inc i
+  proc `=destroy`(ctx: var MetalDeviceCtx) =
+    ## Releases the +1 device and command queue (queue first, the reverse of creation order).
+    ## The releases run inside a pool: the queue's dealloc autoreleases the device,
+    ## and destroy runs outside any public call, so a bare release would trip OBJC_DEBUG_MISSING_POOLS=YES.
+    let pool = newPool()
+    releaseObjC(ctx.ctx.queue)
+    releaseObjC(ctx.ctx.device)
+    drainPool(pool)
 
-proc runImpl(engine: MetalEngine, kernel: string, output: ArgBlob,
-             blobs: seq[ArgBlob], cfg: LaunchConfig) =
-  ## Get-or-build the pipeline state, then encode and dispatch.
-  ## The output is the kernel's first parameter (binding 0), then the input args in order:
-  ##   device buffers for size ≥ 0,
-  ##   constant-buffer slots for size < 0.
-  ## The output's current bytes are uploaded before launch (in-place β·C)
-  ## and read back after waitUntilCompleted.
-  let pool = newPool()
-  try:
-    # blk is dispatch-time, so run validates the launch geometry.
-    if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
-      failLoud("Metal run: grid must be ≥ 1 per axis, got " &
-               $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
-    if cfg.blk.x < 1 or cfg.blk.y < 1 or cfg.blk.z < 1:
-      failLoud("Metal run: blk must be ≥ 1 per axis, got " &
-               $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
-    # Per-axis cap before the product. Three ≤ 1024 axes cannot overflow,
-    # so a wrapped product cannot pass the 1024-thread guard.
-    if cfg.blk.x > 1024 or cfg.blk.y > 1024 or cfg.blk.z > 1024:
-      failLoud("Metal run: blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" &
-               $cfg.blk.z & " has an axis above 1024, exceeds the Apple " &
-               "Silicon maximum of 1024 threads per threadgroup")
-    let threadsPerThreadgroup = cfg.blk.x * cfg.blk.y * cfg.blk.z
-    if threadsPerThreadgroup > 1024:
-      failLoud("Metal run: blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" &
-               $cfg.blk.z & " = " & $threadsPerThreadgroup &
-               " threads per threadgroup, exceeds the Apple Silicon " &
-               "maximum of 1024")
+  proc `=destroy`(cache: var MetalCache) =
+    ## Releases the library and cached pipeline states while the device is still alive:
+    ## this field is declared after `ctx`,
+    ## so reverse-order field destruction runs it before `ctx`'s `=destroy` releases the device.
+    ## Runs inside a pool for the same reason as `MetalDeviceCtx`.
+    let pool = newPool()
+    releaseObjC(cache.library)
+    for pso in cache.psos.values:
+      releaseObjC(pso)
+    cache.psos.clear()
+    drainPool(pool)
 
-    # Compute pipeline state, cached per (kernel, argSizes). Created once per shape
-    # and reused by every run, per the ingest-once/run-many contract.
-    var argSizes = newSeq[int](blobs.len)
-    for i in 0 ..< blobs.len:
-      argSizes[i] = blobs[i].size   # signed: negative = scalar
-    let cacheKey = (kernel, argSizes)
-    var pso: ID
-    if engine.cache.psos.hasKey(cacheKey):
-      pso = engine.cache.psos[cacheKey]
-    else:
-      pso = compilePipelineState(engine.ctx.ctx.device,
-                                 engine.cache.library, kernel)
-      engine.cache.psos[cacheKey] = pso
+  proc newMetalEngine*(): MetalEngine =
+    ## Factory reached by engines.nim via `import {.all.}`.
+    let pool = newPool()
+    result = MetalEngine(
+      ctx: MetalDeviceCtx(ctx: initMetal()),
+      cache: MetalCache(psos: initTable[(string, seq[int]), objc.ID]())
+    )
+    drainPool(pool)
 
-    # Buffers: output + size ≥ 0 inputs (shared storage, memcpy in).
-    # The size < 0 scalars pack into one shared constant buffer at 16-byte slots.
-    let outSize = output.size
-    var outBuf = allocBuffer(engine.ctx.ctx.device, outSize)
-    defer:
-      releaseBuffer(outBuf)
-    if outSize > 0:
-      copyMem(outBuf.data, output.data, outSize)
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ PUBLIC API
+  # ─────────────────────────────────────────────────────────────────────────
 
-    var inputBuffers = newSeq[MetalBuffer](blobs.len)
-    var scalarCount = 0
-    for i in 0 ..< blobs.len:
-      if blobs[i].size >= 0:
-        inputBuffers[i] = allocBuffer(engine.ctx.ctx.device, blobs[i].size)
-        copyMem(inputBuffers[i].data, blobs[i].data, blobs[i].size)
+  proc ingest*(engine: MetalEngine, source: string) =
+    ## Store the MSL source and compile it into a library. Calling ingest again
+    ## replaces the previous artifact and invalidates both cache levels.
+    ## The 31-binding check runs before compiling. Metal rejects >31 buffers at compile time,
+    ## so a runtime check would be dead code.
+    let pool = newPool()
+    checkBindingLimit(source)
+    let opts = compileOptions()
+    let library = compileLibrary(engine.ctx.ctx.device, source, opts)
+    releaseObjC(opts)
+    when defined(debug):
+      echo "[INFO]: metal ingest: invalidating previous artifact"
+    releaseObjC(engine.cache.library)
+    for pso in engine.cache.psos.values:
+      releaseObjC(pso)
+    engine.cache.psos.clear()
+    engine.cache.library = library
+    engine.source = source
+    drainPool(pool)
+
+  proc getArtifact*(engine: MetalEngine): string =
+    ## The MSL kernel source.
+    engine.source
+
+  proc deviceName*(engine: MetalEngine): string =
+    ## The Metal device name (e.g. "Apple M4 Max").
+    let pool = newPool()
+    result = objc.nsStringToNimString(objc.msgSend(engine.ctx.ctx.device, objc.`$$`("name")))
+    drainPool(pool)
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ PRIVATE run path
+  # ─────────────────────────────────────────────────────────────────────────
+
+  proc runImpl(engine: MetalEngine, kernel: string, output: ArgBlob,
+               blobs: seq[ArgBlob], cfg: LaunchConfig) =
+    ## Get-or-build the pipeline state, then encode and dispatch.
+    ## The output is the kernel's first parameter (binding 0), then the input args in order:
+    ##   device buffers for size ≥ 0,
+    ##   constant-buffer slots for size < 0.
+    ## The output's current bytes are uploaded before launch (in-place β·C)
+    ## and read back after waitUntilCompleted.
+    let pool = newPool()
+    try:
+      # blk is dispatch-time, so run validates the launch geometry.
+      if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
+        failLoud("Metal run: grid must be ≥ 1 per axis, got " &
+                 $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
+      if cfg.blk.x < 1 or cfg.blk.y < 1 or cfg.blk.z < 1:
+        failLoud("Metal run: blk must be ≥ 1 per axis, got " &
+                 $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
+      # Per-axis cap before the product. Three ≤ 1024 axes cannot overflow,
+      # so a wrapped product cannot pass the 1024-thread guard.
+      if cfg.blk.x > 1024 or cfg.blk.y > 1024 or cfg.blk.z > 1024:
+        failLoud("Metal run: blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" &
+                 $cfg.blk.z & " has an axis above 1024, exceeds the Apple " &
+                 "Silicon maximum of 1024 threads per threadgroup")
+      let threadsPerThreadgroup = cfg.blk.x * cfg.blk.y * cfg.blk.z
+      if threadsPerThreadgroup > 1024:
+        failLoud("Metal run: blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" &
+                 $cfg.blk.z & " = " & $threadsPerThreadgroup &
+                 " threads per threadgroup, exceeds the Apple Silicon " &
+                 "maximum of 1024")
+
+      # Compute pipeline state, cached per (kernel, argSizes). Created once per shape
+      # and reused by every run, per the ingest-once/run-many contract.
+      var argSizes = newSeq[int](blobs.len)
+      for i in 0 ..< blobs.len:
+        argSizes[i] = blobs[i].size   # signed: negative = scalar
+      let cacheKey = (kernel, argSizes)
+      var pso: objc.ID
+      if engine.cache.psos.hasKey(cacheKey):
+        pso = engine.cache.psos[cacheKey]
       else:
-        inc scalarCount
-    defer:
-      for b in mitems(inputBuffers):
-        releaseBuffer(b)
+        pso = compilePipelineState(engine.ctx.ctx.device,
+                                   engine.cache.library, kernel)
+        engine.cache.psos[cacheKey] = pso
 
-    var scalarBuf: MetalBuffer
-    if scalarCount > 0:
-      scalarBuf = allocBuffer(engine.ctx.ctx.device, scalarCount * ScalarSlotStride)
-      let dst = cast[ptr UncheckedArray[byte]](scalarBuf.data)
+      # Buffers: output + size ≥ 0 inputs (shared storage, memcpy in).
+      # The size < 0 scalars pack into one shared constant buffer at 16-byte slots.
+      let outSize = output.size
+      var outBuf = allocBuffer(engine.ctx.ctx.device, outSize)
+      defer:
+        releaseBuffer(outBuf)
+      if outSize > 0:
+        copyMem(outBuf.data, output.data, outSize)
+
+      var inputBuffers = newSeq[MetalBuffer](blobs.len)
+      var scalarCount = 0
+      for i in 0 ..< blobs.len:
+        if blobs[i].size >= 0:
+          inputBuffers[i] = allocBuffer(engine.ctx.ctx.device, blobs[i].size)
+          copyMem(inputBuffers[i].data, blobs[i].data, blobs[i].size)
+        else:
+          inc scalarCount
+      defer:
+        for b in mitems(inputBuffers):
+          releaseBuffer(b)
+
+      var scalarBuf: MetalBuffer
+      if scalarCount > 0:
+        scalarBuf = allocBuffer(engine.ctx.ctx.device, scalarCount * ScalarSlotStride)
+        let dst = cast[ptr UncheckedArray[byte]](scalarBuf.data)
+        var slot = 0
+        for i in 0 ..< blobs.len:
+          if blobs[i].size < 0:
+            let sz = -blobs[i].size
+            if sz > ScalarSlotStride:
+              failLoud("Metal run: scalar arg " & $i & " is " & $sz &
+                       " bytes, exceeds the " & $ScalarSlotStride &
+                       "-byte constant-buffer slot")
+            copyMem(addr dst[slot * ScalarSlotStride], blobs[i].data, sz)
+            inc slot
+      defer:
+        releaseBuffer(scalarBuf)
+
+      # Encode: pipeline, buffers, dispatch, commit, wait.
+      let cmdBuf = objc.msgSend(engine.ctx.ctx.queue, objc.`$$`("commandBuffer"))
+      let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
+      discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
+      discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"), outBuf.buffer,
+                      objc.NSUInteger(0), objc.NSUInteger(0))
       var slot = 0
       for i in 0 ..< blobs.len:
-        if blobs[i].size < 0:
-          let sz = -blobs[i].size
-          if sz > ScalarSlotStride:
-            failLoud("Metal run: scalar arg " & $i & " is " & $sz &
-                     " bytes, exceeds the " & $ScalarSlotStride &
-                     "-byte constant-buffer slot")
-          copyMem(addr dst[slot * ScalarSlotStride], blobs[i].data, sz)
+        if blobs[i].size >= 0:
+          discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                          inputBuffers[i].buffer, objc.NSUInteger(0), objc.NSUInteger(i + 1))
+        else:
+          discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                          scalarBuf.buffer, objc.NSUInteger(slot * ScalarSlotStride), objc.NSUInteger(i + 1))
           inc slot
-    defer:
-      releaseBuffer(scalarBuf)
+      let grid = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
+                         height: objc.NSUInteger(cfg.grid.y),
+                         depth: objc.NSUInteger(cfg.grid.z))
+      let blk = objc.MTLSize(width: objc.NSUInteger(cfg.blk.x),
+                        height: objc.NSUInteger(cfg.blk.y),
+                        depth: objc.NSUInteger(cfg.blk.z))
+      discard objc.msgSend(encoder, objc.`$$`("dispatchThreadgroups:threadsPerThreadgroup:"),
+                      grid, blk)
+      discard objc.msgSend(encoder, objc.`$$`("endEncoding"))
+      discard objc.msgSend(cmdBuf, objc.`$$`("commit"))
+      discard objc.msgSend(cmdBuf, objc.`$$`("waitUntilCompleted"))
 
-    # Encode: pipeline, buffers, dispatch, commit, wait.
-    let cmdBuf = msgSend(engine.ctx.ctx.queue, $$"commandBuffer")
-    let encoder = msgSend(cmdBuf, $$"computeCommandEncoder")
-    discard msgSend(encoder, $$"setComputePipelineState:", pso)
-    discard msgSend(encoder, $$"setBuffer:offset:atIndex:", outBuf.buffer,
-                    NSUInteger(0), NSUInteger(0))
-    var slot = 0
-    for i in 0 ..< blobs.len:
-      if blobs[i].size >= 0:
-        discard msgSend(encoder, $$"setBuffer:offset:atIndex:",
-                        inputBuffers[i].buffer, NSUInteger(0), NSUInteger(i + 1))
-      else:
-        discard msgSend(encoder, $$"setBuffer:offset:atIndex:",
-                        scalarBuf.buffer, NSUInteger(slot * ScalarSlotStride), NSUInteger(i + 1))
-        inc slot
-    let grid = MTLSize(width: NSUInteger(cfg.grid.x),
-                       height: NSUInteger(cfg.grid.y),
-                       depth: NSUInteger(cfg.grid.z))
-    let blk = MTLSize(width: NSUInteger(cfg.blk.x),
-                      height: NSUInteger(cfg.blk.y),
-                      depth: NSUInteger(cfg.blk.z))
-    discard msgSend(encoder, $$"dispatchThreadgroups:threadsPerThreadgroup:",
-                    grid, blk)
-    discard msgSend(encoder, $$"endEncoding")
-    discard msgSend(cmdBuf, $$"commit")
-    discard msgSend(cmdBuf, $$"waitUntilCompleted")
+      # The device can reject a dispatch after commit (oversized grid, bad binding).
+      # Without a status check, the stale output would read back as success.
+      let status = objc.msgSendUInt(cmdBuf, objc.`$$`("status"))
+      if status != MTLCommandBufferStatusCompleted:
+        var detail = "no NSError object provided"
+        let err = objc.msgSend(cmdBuf, objc.`$$`("error"))
+        if not objc.isNil(err):
+          detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
+        failLoud("Metal run: command buffer failed (status " & $status &
+                 " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
-    # The device can reject a dispatch after commit (oversized grid, bad binding).
-    # Without a status check, the stale output would read back as success.
-    let status = msgSendUInt(cmdBuf, $$"status")
-    if status != MTLCommandBufferStatusCompleted:
-      var detail = "no NSError object provided"
-      let err = msgSend(cmdBuf, $$"error")
-      if not err.isNil:
-        detail = nsStringToNimString(msgSend(err, $$"localizedDescription"))
-      failLoud("Metal run: command buffer failed (status " & $status &
-               " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
+      # Direct readback: contents() is CPU-visible after waitUntilCompleted on shared-storage buffers.
+      # No staging buffer exists here.
+      if outSize > 0:
+        copyMem(output.data, outBuf.data, outSize)
+    finally:
+      drainPool(pool)
 
-    # Direct readback: contents() is CPU-visible after waitUntilCompleted on shared-storage buffers.
-    # No staging buffer exists here.
-    if outSize > 0:
-      copyMem(output.data, outBuf.data, outSize)
-  finally:
-    drainPool(pool)
+# ═════════════════════════════════════════════════
+# ▸ Non-macOS entry point
+# ═════════════════════════════════════════════════
+
+else:
+  proc newMetalEngine*(): MetalEngine =
+    ## Exists so `bkMetal.init()` compiles on every platform and fails loudly
+    ## at construction instead of at link time.
+    quit("bkMetal requires macOS")

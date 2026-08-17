@@ -1,0 +1,69 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Metal anti-regression, gid object probe.
+##
+## A user module-scope `let gid` referenced inside a `metal:` block must raise
+## at compile time. It must never be rewritten to the synthesized builtin
+## composite `bid * bdim + tid`. A rewrite compiles cleanly
+## and silently changes device results, the silent-miscompile class
+## this test pins. The printer rejects the identifier exactly like a kernel-local symbol named `gid`.
+##
+## The probe is standalone. It declares a module-scope `let gid`
+## shadowing the builtin `gid` for the whole module, so the shadowing
+## is confined to the probe's own compilation.
+##
+## The negative probe is a compile-time assert using `doAssert not compiles`
+## in a `static:` block. The binary builds only when the reference raises,
+## so a successful build is the pass.
+## The runtime body is the tester convention.
+##
+## Tested ABI (macOS, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
+## Nim 2.2.10, MSL 4.0.
+##
+## Run:
+##   cd tattletale
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/metal/test_metal_anti_regression_gid_object.nim
+
+import std/strutils
+
+import workspace/crucible
+
+type
+  MyVec = object
+    x: uint32
+    y: uint32
+
+let gid = MyVec(x: 7'u32, y: 8'u32)
+  ## Module-scope user symbol named like the Metal index builtin.
+
+## The positive control proves the `metal:` macro compiles in this module.
+## The probe's failure below is therefore attributable to the `gid` reference.
+const controlMsl = metal:
+  proc controlKernel(output: ptr UncheckedArray[uint32]) {.global.} =
+    output[0] = 7'u32
+
+static:
+  # The module-scope user `gid` referenced as `gid.x` inside `metal:` must raise.
+  # If a regression rewrites it to the builtin composite, the block compiles
+  # and this assert fails.
+  doAssert not compiles(block:
+    const k = metal:
+      proc gidProbeKernel(output: ptr UncheckedArray[uint32]) {.global.} =
+        output[0] = gid.x
+    discard k)
+
+proc runTest() =
+  # The compile-time assert above is the real verification. This body follows
+  # the tester convention and pins the positive control's MSL emission.
+  doAssert "controlKernel" in controlMsl
+  echo "anti-regression gid object: OK"
+
+when isMainModule:
+  runTest()

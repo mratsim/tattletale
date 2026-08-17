@@ -49,12 +49,9 @@
 import std/[strutils, tables]
 
 import workspace/crucible
-import workspace/crucible/src/abis/objc_abi
+import workspace/crucible/src/abis/objc_abi as objc
 import workspace/crucible/src/codegen/ir/gpu_types
 import workspace/crucible/src/codegen/targets/metal_lang
-import workspace/crucible/tests/codegen/metal/test_metal_msl_gid_probe_object
-import workspace/crucible/tests/codegen/metal/test_metal_msl_gid_probe_scalar
-import workspace/crucible/tests/codegen/metal/test_metal_msl_gid_probe_forge
 
 # ── DSL helper types (module scope, compile-time only) ──────────────────────
 
@@ -618,31 +615,31 @@ template failLoud(msg: string) =
   stderr.write($instantiationInfo() & " exited with error: " & msg & '\n')
   quit 1
 
-proc compileOne(device: ID; name, src: string) =
+proc compileOne(device: objc.ID; name, src: string) =
   ## Compiles `src` on the device via `newLibraryWithSource` and fails loudly
   ## on a nil library, surfacing the NSError `localizedDescription` when the compiler provides one.
   doAssert "threads_per_threadgroup(" notin src,
     name & " bakes a workgroup size; blk must stay dispatch-time"
   echo "  compiling ", name
-  var compileError: ID = ID(nil)
-  let library = msgSend(device, $$"newLibraryWithSource:options:error:",
-                        nsStringFromNimString(src), ID(nil), addr compileError)
-  if library.isNil:
-    if compileError.isNil:
+  var compileError: objc.ID = objc.ID(nil)
+  let library = objc.msgSend(device, objc.`$$`("newLibraryWithSource:options:error:"),
+                        objc.nsStringFromNimString(src), objc.ID(nil), addr compileError)
+  if objc.isNil(library):
+    if objc.isNil(compileError):
       failLoud("MSL compile failed for " & name & ": no NSError object provided")
-    let desc = msgSend(compileError, $$"localizedDescription")
-    failLoud("MSL compile failed for " & name & ": " & nsStringToNimString(desc))
+    let desc = objc.msgSend(compileError, objc.`$$`("localizedDescription"))
+    failLoud("MSL compile failed for " & name & ": " & objc.nsStringToNimString(desc))
   echo "    OK"
 
 proc runTest() =
   # Autorelease pool wraps the whole run, because Metal objects are autoreleased.
   # A missing pool would trip OBJC_DEBUG_MISSING_POOLS=YES.
-  let pool = msgSend(ID(objc_getClass("NSAutoreleasePool")), $$"alloc")
-  discard msgSend(pool, $$"init")
+  let pool = objc.msgSend(objc.ID(objc.getClass("NSAutoreleasePool")), objc.`$$`("alloc"))
+  discard objc.msgSend(pool, objc.`$$`("init"))
 
-  let device = MTLCreateSystemDefaultDevice()
-  if device.isNil:
-    failLoud("MTLCreateSystemDefaultDevice returned nil (no Metal device)")
+  let device = objc.MTLCreateSystemDefaultDevice()
+  if objc.isNil(device):
+    failLoud("default Metal device lookup returned nil (no Metal device)")
 
   compileOne(device, "add", addMsl)
   compileOne(device, "vec2 external struct + device fn", vec2Msl)
@@ -685,7 +682,7 @@ proc runTest() =
   doAssert "atomic_fetch_add_explicit(counter, 1U, memory_order_relaxed)" in atomicMsl
   echo "  OK — D7 atomic emission (atomic_uint param, atomic_fetch_add_explicit)"
 
-  discard msgSend(pool, $$"drain")
+  discard objc.msgSend(pool, objc.`$$`("drain"))
   echo "All 25 printed MSL sources compiled via newLibraryWithSource"
 
 when isMainModule:
