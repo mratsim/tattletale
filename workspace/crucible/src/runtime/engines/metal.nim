@@ -9,7 +9,7 @@
 ##
 ## ingest compiles the MSL source into a library
 ## (level-1 cache, keyed by the source it was built from).
-## run gets or builds the compute pipeline state per (kernel, argSizes)
+## run gets or builds the compute pipeline state per kernel name
 ## (level-2 cache), then dispatches `dispatchThreadgroups(grid, blk)`.
 ## blk is dispatch-time, so run validates it against the Apple Silicon 1024-thread limit.
 ## Scalars (ArgBlob size < 0) pack into one shared constant buffer at 16-byte slots,
@@ -51,10 +51,10 @@ type
 
   MetalCache = object
     ## Two-level cache: the compiled library (level 1, keyed by the source it was built from)
-    ## and per-(kernel, argSizes) compute pipeline states (level 2).
+    ## and per-kernel-name compute pipeline states (level 2).
     ## Re-ingest replaces the library and clears the pipeline states.
     library: objc.ID
-    psos: Table[(string, seq[int]), objc.ID]
+    psos: Table[string, objc.ID]
 
   MetalEngine* = ref object
     ## `source` plus the RAII value fields `ctx` (device + queue) and `cache` (library + PSOs),
@@ -111,7 +111,7 @@ when defined(macosx):
     objc.withMemPool:
       result = MetalEngine(
         ctx: MetalDeviceCtx(ctx: initMetal()),
-        cache: MetalCache(psos: initTable[(string, seq[int]), objc.ID]())
+        cache: MetalCache(psos: initTable[string, objc.ID]())
       )
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -155,10 +155,6 @@ when defined(macosx):
     ##   constant-buffer slots for size < 0.
     ## The output's current bytes are uploaded before launch (in-place β·C)
     ## and read back after waitUntilCompleted.
-    ## A grid beyond the device's maxTotalThreadgroupsPerGrid is undefined:
-    ## Metal may reject the dispatch after commit or complete it with stale
-    ## output, and the status check cannot catch that geometry class.
-    ## Callers must validate grid against the device limit.
     objc.withMemPool:
       # blk is dispatch-time, so run validates the launch geometry.
       if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
@@ -180,19 +176,16 @@ when defined(macosx):
                  " threads per threadgroup, exceeds the Apple Silicon " &
                  "maximum of 1024")
 
-      # Compute pipeline state, cached per (kernel, argSizes). Created once per shape
-      # and reused by every run, per the ingest-once/run-many contract.
-      var argSizes = newSeq[int](blobs.len)
-      for i in 0 ..< blobs.len:
-        argSizes[i] = blobs[i].size   # signed: negative = scalar
-      let cacheKey = (kernel, argSizes)
+      # Compute pipeline state, cached per kernel name. The PSO derives solely
+      # from the kernel function, so host buffer sizes never affect it; keying
+      # on sizes would rebuild pipelines per shape and grow the table unboundedly.
       var pso: objc.ID
-      if engine.cache.psos.hasKey(cacheKey):
-        pso = engine.cache.psos[cacheKey]
+      if engine.cache.psos.hasKey(kernel):
+        pso = engine.cache.psos[kernel]
       else:
         pso = compilePipelineState(engine.ctx.ctx.device,
                                    engine.cache.library, kernel)
-        engine.cache.psos[cacheKey] = pso
+        engine.cache.psos[kernel] = pso
 
       # Buffers: output + size ≥ 0 inputs (shared storage, memcpy in).
       # The size < 0 scalars pack into one shared constant buffer at 16-byte slots.

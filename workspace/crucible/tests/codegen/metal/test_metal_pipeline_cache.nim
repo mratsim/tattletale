@@ -2,7 +2,7 @@
 ##
 ## Exercises the MetalEngine's two-level cache in runImpl.
 ## The compiled library (level 1) is created once per ingest.
-## Compute pipeline states are created once per (kernel, argSizes) key
+## Compute pipeline states are created once per kernel name
 ## (level 2) and reused across runs. Running the same kernel twice
 ## with different input arrays asserts byte-exact outputs on both runs.
 ## Re-ingesting a new source and running again proves cache invalidation.
