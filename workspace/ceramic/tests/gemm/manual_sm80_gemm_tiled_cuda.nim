@@ -1,13 +1,13 @@
 ## Manual GPU test: the tiled GEMM (gemm_tiled) via NVRTC/CUDA.
 ##
 ## C(32×16) = α·A(32×16)·B(16×16) + β·C. 1×1 grid, K = TILE_K = 16
-## (two k slices through gemm_ukernel), config (α, β) = (1.0, 0.0),
+## (two k slices through gemm_warp), config (α, β) = (1.0, 0.0),
 ## 128 threads.
 ##
 ## gemm_tiled(tma, dFrag, sA, sB, TileShape, threadIdx) computes the
 ## thread's fragment for one tileK-sized slice of K:
 ## thread tiling → fragment gathering from the prepared smem tile →
-## gemm_ukernel's loop over the K dimension, accumulating into the
+## gemm_warp's loop over the K dimension, accumulating into the
 ## caller's dFrag.
 ## Kernel declares its own {.shared.} smem tiles, copies the full
 ## tileK-sized slice of K from gmem (unmasked: this test runs full

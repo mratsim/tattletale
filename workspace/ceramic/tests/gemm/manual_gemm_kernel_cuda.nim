@@ -1,8 +1,8 @@
-## Manual GPU test: gemm_gpu via NVRTC/CUDA.
+## Manual GPU test: gemm_kernel via NVRTC/CUDA.
 ##
-## gemm_gpu: the test kernels build input views over the raw buffers
-## and hand them to gemm_gpu.
-## gemm_gpu derives the tma policy (atom_selector + threadLayoutOf + tile_shape),
+## gemm_kernel: the test kernels build input views over the raw buffers
+## and hand them to gemm_kernel.
+## gemm_kernel derives the tma policy (atom_selector + threadLayoutOf + tile_shape),
 ## the CTA position from the ambient blockIdx.x/y,
 ## and the per-thread epilogue shard, then runs the gemm_cta body.
 ## Test kernels never see M/N/K, the tile, the thread layout or the grid coords.
@@ -26,8 +26,8 @@
 ##
 ## Requires an sm_80+ GPU. Run with:
 ##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests/manual_gemm_gpu_cuda.nim --nimcache:nimcache/tests/manual_gemm_gpu_cuda.nim \
-##     workspace/ceramic/tests/gemm/manual_gemm_gpu_cuda.nim
+##     --outdir:build/tests/manual_gemm_kernel_cuda.nim --nimcache:nimcache/tests/manual_gemm_kernel_cuda.nim \
+##     workspace/ceramic/tests/gemm/manual_gemm_kernel_cuda.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
@@ -47,7 +47,7 @@ import workspace/crucible
 {.experimental: "callOperator".}
 
 # Host derives the reference and launch tile/blockSize
-# from the same policy gemm_gpu computes internally.
+# from the same policy gemm_kernel computes internally.
 const atom = atom_selector(uint32, uint32, float32)
 const tiled = make_tiled_mma(atom, threadLayoutOf(atom, 32, 32))
 
@@ -59,7 +59,7 @@ const kernelCode = cuda:
     let pA = make_view(A, (32, 32), (1, 32))
     let pB = make_view(B, (32, 32), (1, 32))
     var pC = make_view(C, (32, 32), (1, 32))
-    gemm_gpu(pC, pA, pB, initEpiAXPBY(alpha, beta, pC))
+    gemm_kernel(pC, pA, pB, initEpiAXPBY(alpha, beta, pC))
 
   proc gemmGpuK64Kernel(
       C: ptr UncheckedArray[float32],
@@ -68,7 +68,7 @@ const kernelCode = cuda:
     let pA = make_view(A, (32, 64), (1, 32))
     let pB = make_view(B, (32, 64), (1, 32))
     var pC = make_view(C, (32, 32), (1, 32))
-    gemm_gpu(pC, pA, pB, initEpiAXPBY(alpha, beta, pC))
+    gemm_kernel(pC, pA, pB, initEpiAXPBY(alpha, beta, pC))
 
   proc gemmGpuIdentityKernel(
       C: ptr UncheckedArray[float32],
@@ -76,7 +76,7 @@ const kernelCode = cuda:
     let pA = make_view(A, (32, 32), (1, 32))
     let pB = make_view(B, (32, 32), (1, 32))
     var pC = make_view(C, (32, 32), (1, 32))
-    gemm_gpu(pC, pA, pB, EpiIdentity())
+    gemm_kernel(pC, pA, pB, EpiIdentity())
 
 const kernelCodeBias = cuda:
   proc gemmGpuReLUKernel(
@@ -85,7 +85,7 @@ const kernelCodeBias = cuda:
     let pA = make_view(A, (32, 32), (1, 32))
     let pB = make_view(B, (32, 32), (1, 32))
     var pC = make_view(C, (32, 32), (1, 32))
-    gemm_gpu(pC, pA, pB, EpiReLU())
+    gemm_kernel(pC, pA, pB, EpiReLU())
 
   proc gemmGpuBiasKernel(
       C: ptr UncheckedArray[float32],
@@ -96,7 +96,7 @@ const kernelCodeBias = cuda:
     var pC = make_view(C, (32, 32), (1, 32))
     # Bias is a (N,) column vector: the bias view has stride-0 rows,
     # so every row of a column reads the same bias element.
-    gemm_gpu(pC, pA, pB, initEpiAddBias(make_view(bias, (32, 32), (0, 1))))
+    gemm_kernel(pC, pA, pB, initEpiAddBias(make_view(bias, (32, 32), (0, 1))))
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)
