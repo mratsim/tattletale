@@ -195,12 +195,6 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
 
 # ── Metal builtins ──────────────────────────────────────────────────────────
 
-const MetalAtomicCalls = ["atomic_add", "atomicAdd",
-                          "atomic_sub", "atomicSub",
-                          "atomic_xchg", "atomicExchange"]
-  ## IR call names of the atomic builtin dummies (opencl_builtins, vulkan_builtins).
-  ## Atomic support is unimplemented at the moment — such calls raise at codegen time.
-
 proc genLit*(ast: GpuAst): string =
   ## Lower a literal node for the MSL backend.
   if ast.lType.kind == gtString:
@@ -454,9 +448,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       # The `{.cudaName: "__syncthreads".}` pragma on the shared builtin dummy renames the call.
       # MSL spells the barrier with its memory flags.
       result = indentStr & "threadgroup_barrier(mem_flags::mem_threadgroup)"
-    elif name in MetalAtomicCalls:
-      raiseAssert "Atomic support is unimplemented at the moment: '" & name &
-        "' is an OpenCL/Vulkan builtin (opencl_builtins, vulkan_builtins)"
     else:
       var args: seq[string]
       for a in ast.cArgs:

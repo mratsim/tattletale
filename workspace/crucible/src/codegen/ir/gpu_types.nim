@@ -51,7 +51,7 @@ type
 
   GpuTypeKind* = enum
     gtVoid,
-    gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64, gtSize_t, # atomics
+    gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64, gtSize_t,
     gtStatic       # Static integer value (used for generic params)
     gtArray,       # Static array `array[N, dtype]` -> `dtype[N]`
     gtString,
@@ -84,7 +84,7 @@ type
       name*: string
       oFields*: seq[GpuTypeField]
     of gtArray:
-      aTyp*: GpuType # the inner type (must be some atomic base type at the moment)
+      aTyp*: GpuType # the inner type
       aLen*: int     # The length of the array. If `aLen == -1` we look at a generic (static) array. Will be given at instantiation time
                     # On both CUDA and WebGPU a length of `0` is also used to generate `int foo[]` (CUDA)
                     # `array<foo>` (WebGPU) (runtime sized arrays), which are generated from `ptr UncheckedArray[float32]` for example.

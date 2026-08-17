@@ -38,10 +38,5 @@ when not declaredInScope(opencl):
   template select*(f, t: float32, cond: bool): float32 = discard
   template select*(f, t: int32, cond: bool): int32 = discard
 
-  ## Atomic operations
-  template atomic_add*(obj: ptr uint32, operand: uint32): uint32 = discard
-  template atomic_sub*(obj: ptr uint32, operand: uint32): uint32 = discard
-  template atomic_xchg*(obj: ptr uint32, value: uint32): uint32 = discard
-
   ## Vector type helpers
   template workgroup_barrier*(flags: uint32): void = discard

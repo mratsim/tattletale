@@ -31,8 +31,3 @@ when not declaredInScope(vulkan):
   template memoryBarrierBuffer*(): void = discard
   template memoryBarrierShared*(): void = discard
   template groupMemoryBarrier*(): void = discard
-
-  ## Atomic operations
-  template atomicAdd*(obj: ptr uint32, operand: uint32): uint32 = discard
-  template atomicSub*(obj: ptr uint32, operand: uint32): uint32 = discard
-  template atomicExchange*(obj: ptr uint32, value: uint32): uint32 = discard
