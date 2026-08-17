@@ -635,13 +635,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
              ctx.genMetalImpl(ast.cExpr, 0, atomics)
 
   of gpuAddr:
-    let t = ctx.exprType(ast.aOf)
-    if not t.isNil and t.kind == gtArray:
-      # Pointer decay: an array name is already a `T*` rvalue, while `&arr` would produce a pointer-to-array
-      # that MSL rejects where a `T*` is expected.
-      result = ctx.genMetalImpl(ast.aOf, 0, atomics)
-    else:
-      result = "(&" & ctx.genMetalImpl(ast.aOf, 0, atomics) & ')'
+    result = "(&" & ctx.genMetalImpl(ast.aOf, 0, atomics) & ')'
 
   of gpuDeref:
     result = "(*" & ctx.genMetalImpl(ast.dOf, 0, atomics) & ')'
