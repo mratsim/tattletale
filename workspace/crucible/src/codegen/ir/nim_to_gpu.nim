@@ -47,8 +47,13 @@ proc ownerModule(n: NimNode): string =
 
 proc isBackendBuiltinDummy(node: NimNode): bool =
   ## True when `node` references one of the backend index builtin dummies.
-  ## Requires BOTH the `{.builtin.}` pragma and a definition
+  ## Requires both the `{.builtin.}` pragma and a definition
   ## in a backend builtins module, so a user `let gid {.builtin.}` is never a dummy.
+  ## The owner-module check compares the module name only, not the file path.
+  ## A user module named `metal_builtins`, `cuda_builtins`, or `wgsl_builtins`
+  ## would pass this gate if it also forged the `{.builtin.}` pragma.
+  ## Nim's same-name module collision makes that setup deliberate.
+  ## The realistic forge classes stay closed.
   if node.symKind != nskLet:
     return false
   if ownerModule(node) notin ["metal_builtins", "cuda_builtins", "wgsl_builtins"]:

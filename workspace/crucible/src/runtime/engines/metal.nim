@@ -231,6 +231,10 @@ when defined(macosx):
     ##   constant-buffer slots for size < 0.
     ## The output's current bytes are uploaded before launch (in-place β·C)
     ## and read back after waitUntilCompleted.
+    ## A grid beyond the device's maxTotalThreadgroupsPerGrid is undefined:
+    ## Metal may reject the dispatch after commit or complete it with stale
+    ## output, and the status check cannot catch that geometry class.
+    ## Callers must validate grid against the device limit.
     let pool = newPool()
     try:
       # blk is dispatch-time, so run validates the launch geometry.

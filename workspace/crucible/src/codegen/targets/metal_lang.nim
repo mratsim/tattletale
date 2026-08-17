@@ -79,7 +79,7 @@ proc gpuTypeToString*(t: GpuType,
                       allowEmptyIdent = false): string
 
 proc getInnerArrayType(t: GpuType): string =
-  ## Returns the name of the inner most type for a nested array.
+  ## Returns the name of the innermost type for a nested array.
   case t.kind
   of gtArray:
     result = getInnerArrayType(t.aTyp)
@@ -146,7 +146,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "",
         raise newException(ValueError, "Invalid call, got an array type but don't have an identifier: " & $t)
     case t.aTyp.kind
     of gtArray: # nested array
-      let typ = getInnerArrayType(t)        # get inner most type
+      let typ = getInnerArrayType(t)
       let lengths = getInnerArrayLengths(t) # get lengths as `[X][Y][Z]...`
       result = typ & ' ' & ident & lengths
     else:
@@ -188,7 +188,6 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
     let innerLen = $typ.to.aLen
     result = &"{innerTyp} (*{fn}({fnArgs}))[{innerLen}]"
   else:
-    # normal stuff
     result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
 
 proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
