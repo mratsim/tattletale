@@ -36,7 +36,7 @@ const atom = SM80_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
   atom: atom, threadLayout: make_layout((1, 1, 1)))
 
-func gemmUkernelMicrotile(tma: static TiledMma; t: int;
+func gemmWarpMicrotile(tma: static TiledMma; t: int;
                           C: ptr UncheckedArray[float32];
                           A, B: ptr UncheckedArray[uint32]) {.inline.} =
   ## C(16×8) = A(16×16)·B(16×8): two m16n8k8 k slices via gemm_warp.
@@ -73,13 +73,13 @@ func gemmUkernelMicrotile(tma: static TiledMma; t: int;
     tCv(i) = cFrag(i)
 
 const kernelCode = cuda:
-  proc gemmUkernelKernel(C: ptr UncheckedArray[float32],
+  proc gemmWarpKernel(C: ptr UncheckedArray[float32],
                          A, B: ptr UncheckedArray[uint32]) {.global.} =
-    gemmUkernelMicrotile(tiled, int(threadIdx.x), C, A, B)
+    gemmWarpMicrotile(tiled, int(threadIdx.x), C, A, B)
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)
-  testUkernel(engine, atom, "SM80")
+  testWarp(engine, atom, "SM80")
 
 when isMainModule:
   runTest()

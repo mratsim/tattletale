@@ -14,14 +14,14 @@
 ## Five kernels run over a 1×1 CTA grid (tile 32×32, tileK 32),
 ## 256 threads. K64 kernel runs two tileK-sized slices of K.
 ## Epilogues:
-##   gemmGpuKernel          EpiAXPBY,    D = α·AB + β·C
-##   gemmGpuIdentityKernel  EpiIdentity, D = AB
-##   gemmGpuReLUKernel      EpiReLU,     D = max(0, AB)
-##   gemmGpuBiasKernel      EpiAddBias,  D = AB + bias (column broadcast)
+##   gemmKernelAXPBY        EpiAXPBY,    D = α·AB + β·C
+##   gemmKernelIdentity     EpiIdentity, D = AB
+##   gemmKernelReLU         EpiReLU,     D = max(0, AB)
+##   gemmKernelBias         EpiAddBias,  D = AB + bias (column broadcast)
 ## C buffer is pre-filled with NaN: a dropped store leaves NaN != expected,
 ## and the β=0 branch must skip the C read. A spurious read also fails.
 ##
-## Reference, trial loop and report live in gemm_test_lib (testGemmGpu*),
+## Reference, trial loop and report live in gemm_test_lib (testGemmKernel*),
 ## launched over a 1×1 CTA grid.
 ##
 ## Requires an sm_80+ GPU. Run with:
@@ -52,7 +52,7 @@ const atom = atom_selector(uint32, uint32, float32)
 const tiled = make_tiled_mma(atom, threadLayoutOf(atom, 32, 32))
 
 const kernelCode = cuda:
-  proc gemmGpuKernel(
+  proc gemmKernelAXPBY(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
@@ -61,7 +61,7 @@ const kernelCode = cuda:
     var pC = make_view(C, (32, 32), (1, 32))
     gemm_kernel(pC, pA, pB, initEpiAXPBY(alpha, beta, pC))
 
-  proc gemmGpuK64Kernel(
+  proc gemmKernelK64(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
@@ -70,7 +70,7 @@ const kernelCode = cuda:
     var pC = make_view(C, (32, 32), (1, 32))
     gemm_kernel(pC, pA, pB, initEpiAXPBY(alpha, beta, pC))
 
-  proc gemmGpuIdentityKernel(
+  proc gemmKernelIdentity(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
     let pA = make_view(A, (32, 32), (1, 32))
@@ -79,7 +79,7 @@ const kernelCode = cuda:
     gemm_kernel(pC, pA, pB, EpiIdentity())
 
 const kernelCodeBias = cuda:
-  proc gemmGpuReLUKernel(
+  proc gemmKernelReLU(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
     let pA = make_view(A, (32, 32), (1, 32))
@@ -87,7 +87,7 @@ const kernelCodeBias = cuda:
     var pC = make_view(C, (32, 32), (1, 32))
     gemm_kernel(pC, pA, pB, EpiReLU())
 
-  proc gemmGpuBiasKernel(
+  proc gemmKernelBias(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       bias: ptr UncheckedArray[float32]) {.global.} =
@@ -100,13 +100,13 @@ const kernelCodeBias = cuda:
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)
-  testGemmGpu(engine, tiled, "SM80")
-  testGemmGpuBeta(engine, tiled, "SM80")
-  testGemmGpuK64(engine, tiled, "SM80")
-  testGemmGpuIdentity(engine, tiled, "SM80")
+  testGemmKernel(engine, tiled, "SM80")
+  testGemmKernelBeta(engine, tiled, "SM80")
+  testGemmKernelK64(engine, tiled, "SM80")
+  testGemmKernelIdentity(engine, tiled, "SM80")
   var engineBias = bkCuda.init(kernelCodeBias)
-  testGemmGpuReLU(engineBias, tiled, "SM80")
-  testGemmGpuBias(engineBias, tiled, "SM80")
+  testGemmKernelReLU(engineBias, tiled, "SM80")
+  testGemmKernelBias(engineBias, tiled, "SM80")
 
 when isMainModule:
   runTest()
