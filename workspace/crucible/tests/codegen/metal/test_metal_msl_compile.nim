@@ -7,14 +7,14 @@
 ## - add
 ## - external-struct device fn
 ## - scalar marshalling
-## - all five index builtins (incl. synthesized gid)
+## - the five MSL attribute params
 ## - shared memory + barrier
 ## - for loops
 ## - large-struct passByRef
 ## - ternary
 ## - constexpr tuple
 ## - CuTe Tile/tileAt
-## - 2-D gid indexing
+## - 2-D thread_position_in_grid indexing
 ## - user-defined operator
 ## - multi-kernel sources
 ## - GEMM
@@ -30,11 +30,13 @@
 ## - int64/uint64 buffer arithmetic
 ##
 ## The gate also pins the emission rules. The shader bakes no workgroup size.
-## `blk` stays dispatch-time. The index-builtin mapping holds.
-## The four attribute-qualified `uint3` params appear verbatim.
-## `gid` maps to the composite `bid * bdim + tid`.
-## A hand-built-IR kernel checks the atomic emission. Compile-time tripwires pin the loud rejects.
-## fp64, reserved MSL keywords, and Metal builtin names never print.
+## `blk` stays dispatch-time.
+## The five attribute-qualified `uint3` params appear verbatim, named identically to their attribute strings.
+## The source-level builtin names are the MSL attribute names, so kernel-body references emit verbatim
+## and bind to the attribute params.
+## A hand-built-IR kernel checks the atomic emission.
+## Compile-time tripwires pin the loud rejects.
+## fp64 and reserved MSL keywords never print.
 ##
 ## The `basicKernel` binop set (test_webgpu_user_defined_operator.nim)
 ## and `maxGeneric` (test_webgpu_add.nim) are covered by the execution suite
@@ -133,21 +135,21 @@ const scalarMsl = metal:
       output[0] = uint32(x)
       output[1] = uint32(f)
 
-const tidMsl = metal:
-  proc tidKernel(output: ptr UncheckedArray[uint32]) {.global.} =
-    output[0] = uint32(threadIdx.x)
-    output[1] = uint32(blockIdx.x)
-    output[2] = uint32(blockDim.x)
-    output[3] = uint32(gridDim.x)
-    output[4] = uint32(gid.x)
-    output[5] = uint32(gid.y)
+const attrMsl = metal:
+  proc attrKernel(output: ptr UncheckedArray[uint32]) {.global.} =
+    output[0] = thread_position_in_threadgroup.x
+    output[1] = threadgroup_position_in_grid.x
+    output[2] = threads_per_threadgroup.x
+    output[3] = threadgroups_per_grid.x
+    output[4] = thread_position_in_grid.x
+    output[5] = thread_position_in_grid.y
 
 const sharedMsl = metal:
   proc sharedKernel(output: ptr UncheckedArray[uint32]) {.global.} =
     var scratch {.shared.}: array[64, uint32]
-    scratch[threadIdx.x] = uint32(threadIdx.x)
+    scratch[thread_position_in_threadgroup.x] = thread_position_in_threadgroup.x
     syncthreads()
-    output[threadIdx.x] = scratch[uint32(63) - uint32(threadIdx.x)]
+    output[thread_position_in_threadgroup.x] = scratch[63'u32 - thread_position_in_threadgroup.x]
 
 const forLoopMsl = metal:
   proc vec10_add(output: ptr UncheckedArray[uint32];
@@ -183,7 +185,8 @@ const cuteMsl = metal:
 
 const ndrangeMsl = metal:
   proc grid2d(C: ptr UncheckedArray[uint32]) {.global.} =
-    C[uint32(gid.y) * 8'u32 + uint32(gid.x)] = uint32(gid.y) * 8'u32 + uint32(gid.x)
+    let flat = thread_position_in_grid.y * 8'u32 + thread_position_in_grid.x
+    C[flat] = flat
 
 const opMsl = metal:
   proc structKernel(output: ptr UncheckedArray[uint32];
@@ -297,7 +300,8 @@ const staticIntOpsMsl = metal:
 
 const workgroupMsl = metal:
   proc grid2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
-    C[global_id.y * 8'u32 + global_id.x] = global_id.y * 8'u32 + global_id.x
+    let flat = thread_position_in_grid.y * 8'u32 + thread_position_in_grid.x
+    C[flat] = flat
 
 const tupleIndexMsl = metal:
   proc tupleKernel(C: ptr UncheckedArray[uint32]) {.global.} =
@@ -422,29 +426,6 @@ static:
       rejectMsg
 
   block:
-    # kernel param named `threadIdx` (Metal builtin name)
-    var rejected = false
-    var rejectMsg = ""
-    try:
-      let ptyp = GpuType(kind: gtPtr, to: GpuType(kind: gtUA, uaTo: GpuType(kind: gtUint32)))
-      let param = GpuParam(ident: mkIdent("threadIdx", ptyp, gsGlobalKernelParam), typ: ptyp)
-      let kernel = GpuAst(kind: gpuProc,
-                          pName: mkIdent("k", GpuType(kind: gtVoid), gsProc),
-                          pRetType: GpuType(kind: gtVoid),
-                          pParams: @[param],
-                          pBody: GpuAst(kind: gpuBlock),
-                          pAttributes: {attGlobal})
-      var ctx = GpuContext()
-      ctx.preprocess(kernel)
-      discard ctx.codegen()
-    except AssertionDefect as e:
-      rejected = true
-      rejectMsg = e.msg
-    doAssert rejected, "a kernel param named `threadIdx` printed instead of rejecting loudly"
-    doAssert "'threadIdx' is a Metal builtin name. Rename the parameter." == rejectMsg,
-      rejectMsg
-
-  block:
     # local variable named `threadgroup`
     var rejected = false
     var rejectMsg = ""
@@ -495,60 +476,6 @@ static:
     doAssert rejected, "a local variable named `half` printed instead of rejecting loudly"
     doAssert "'half' is a reserved keyword in MSL. Rename the variable." == rejectMsg,
       rejectMsg
-
-  block:
-    # local variable named `gid` (Metal builtin name)
-    var rejected = false
-    var rejectMsg = ""
-    try:
-      let vTyp = GpuType(kind: gtUint32)
-      let v = GpuAst(kind: gpuVar, vName: mkIdent("gid", vTyp, gsLocal),
-                     vType: vTyp,
-                     vInit: GpuAst(kind: gpuLit, lValue: "3", lType: vTyp))
-      let body = GpuAst(kind: gpuBlock, statements: @[v])
-      let kernel = GpuAst(kind: gpuProc,
-                          pName: mkIdent("k", GpuType(kind: gtVoid), gsProc),
-                          pRetType: GpuType(kind: gtVoid),
-                          pParams: @[],
-                          pBody: body,
-                          pAttributes: {attGlobal})
-      var ctx = GpuContext()
-      ctx.preprocess(kernel)
-      discard ctx.codegen()
-    except AssertionDefect as e:
-      rejected = true
-      rejectMsg = e.msg
-    doAssert rejected, "a local variable named `gid` printed instead of rejecting loudly"
-    doAssert "'gid' is a Metal builtin name. Rename the variable." == rejectMsg,
-      rejectMsg
-
-  block:
-    # Module-scope user symbol named `gid`. The hand-built ident carries the default `gsNone` kind.
-    # That is exactly the shape a module-scope user `let gid` produces in the frontend.
-    # The reference must raise. It must never rewrite to the builtin composite `bid * bdim + tid`.
-    var rejected = false
-    var rejectMsg = ""
-    try:
-      let vTyp = GpuType(kind: gtUint32)
-      let gidRef = GpuAst(kind: gpuIdent, symbol: newSymbol("gid"))
-      let v = GpuAst(kind: gpuVar, vName: mkIdent("x", vTyp, gsLocal),
-                     vType: vTyp,
-                     vInit: gidRef)
-      let body = GpuAst(kind: gpuBlock, statements: @[v])
-      let kernel = GpuAst(kind: gpuProc,
-                          pName: mkIdent("k", GpuType(kind: gtVoid), gsProc),
-                          pRetType: GpuType(kind: gtVoid),
-                          pParams: @[],
-                          pBody: body,
-                          pAttributes: {attGlobal})
-      var ctx = GpuContext()
-      ctx.preprocess(kernel)
-      discard ctx.codegen()
-    except AssertionDefect as e:
-      rejected = true
-      rejectMsg = e.msg
-    doAssert rejected, "a module-scope symbol named `gid` was rewritten to the builtin composite"
-    doAssert "'gid' is a Metal builtin name. Rename the identifier." == rejectMsg, rejectMsg
 
   block:
     # struct field named `metal`
@@ -605,6 +532,55 @@ static:
       rejectMsg = e.msg
     doAssert rejected, "a passByRef device-fn param named `device` printed instead of rejecting loudly"
     doAssert "'device' is a reserved keyword in MSL. Rename the parameter." == rejectMsg,
+      rejectMsg
+
+  block:
+    # kernel param named `thread_position_in_grid` (MSL attribute name)
+    var rejected = false
+    var rejectMsg = ""
+    try:
+      let ptyp = GpuType(kind: gtPtr, to: GpuType(kind: gtUA, uaTo: GpuType(kind: gtUint32)))
+      let param = GpuParam(ident: mkIdent("thread_position_in_grid", ptyp, gsGlobalKernelParam), typ: ptyp)
+      let kernel = GpuAst(kind: gpuProc,
+                          pName: mkIdent("k", GpuType(kind: gtVoid), gsProc),
+                          pRetType: GpuType(kind: gtVoid),
+                          pParams: @[param],
+                          pBody: GpuAst(kind: gpuBlock),
+                          pAttributes: {attGlobal})
+      var ctx = GpuContext()
+      ctx.preprocess(kernel)
+      discard ctx.codegen()
+    except AssertionDefect as e:
+      rejected = true
+      rejectMsg = e.msg
+    doAssert rejected, "a kernel param named `thread_position_in_grid` printed instead of rejecting loudly"
+    doAssert "'thread_position_in_grid' is a Metal index builtin name. Rename the parameter." == rejectMsg,
+      rejectMsg
+
+  block:
+    # local variable named `thread_position_in_threadgroup` (MSL attribute name)
+    var rejected = false
+    var rejectMsg = ""
+    try:
+      let vTyp = GpuType(kind: gtUint32)
+      let v = GpuAst(kind: gpuVar, vName: mkIdent("thread_position_in_threadgroup", vTyp, gsLocal),
+                     vType: vTyp,
+                     vInit: GpuAst(kind: gpuLit, lValue: "3", lType: vTyp))
+      let body = GpuAst(kind: gpuBlock, statements: @[v])
+      let kernel = GpuAst(kind: gpuProc,
+                          pName: mkIdent("k", GpuType(kind: gtVoid), gsProc),
+                          pRetType: GpuType(kind: gtVoid),
+                          pParams: @[],
+                          pBody: body,
+                          pAttributes: {attGlobal})
+      var ctx = GpuContext()
+      ctx.preprocess(kernel)
+      discard ctx.codegen()
+    except AssertionDefect as e:
+      rejected = true
+      rejectMsg = e.msg
+    doAssert rejected, "a local variable named `thread_position_in_threadgroup` printed instead of rejecting loudly"
+    doAssert "'thread_position_in_threadgroup' is a Metal index builtin name. Rename the variable." == rejectMsg,
       rejectMsg
 
   block:
@@ -697,14 +673,14 @@ proc runTest() =
   compileOne(device, "add", addMsl)
   compileOne(device, "vec2 external struct + device fn", vec2Msl)
   compileOne(device, "scalar marshalling (int32/float32/bool)", scalarMsl)
-  compileOne(device, "tid/bid/bdim/gdim + synthesized gid", tidMsl)
+  compileOne(device, "the five attribute params", attrMsl)
   compileOne(device, "shared memory + syncthreads barrier", sharedMsl)
   compileOne(device, "for-loop vec10", forLoopMsl)
   compileOne(device, "large struct passByRef", largeStructMsl)
   compileOne(device, "ternary", ternaryMsl)
   compileOne(device, "constexpr tuple", constexprMsl)
   compileOne(device, "cute_layout Tile + tileAt", cuteMsl)
-  compileOne(device, "2-D gid indexing", ndrangeMsl)
+  compileOne(device, "2-D thread_position_in_grid indexing", ndrangeMsl)
   compileOne(device, "user-defined operator struct", opMsl)
   compileOne(device, "multi-kernel source", multiKernelMsl)
   compileOne(device, "gemm nested loops + passByRef Tile", gemmMsl)
@@ -722,14 +698,13 @@ proc runTest() =
 
   # The asserts check string presence. A permuted attribute mapping would still satisfy all five and device-compile.
   # Semantic binding is verified by execution tests, which are not part of this compile gate.
-  # Index-builtin mapping. The tid kernel source carries the four attribute-qualified uint3 params
-  # and the synthesized gid composite, all verbatim.
-  doAssert "uint3 tid [[thread_position_in_threadgroup]]" in tidMsl
-  doAssert "uint3 bid [[threadgroup_position_in_grid]]" in tidMsl
-  doAssert "uint3 bdim [[threads_per_threadgroup]]" in tidMsl
-  doAssert "uint3 gdim [[threadgroups_per_grid]]" in tidMsl
-  doAssert "(bid * bdim + tid)" in tidMsl
-  echo "  OK — index-builtin mapping (tid/bid/bdim/gdim, gid = bid * bdim + tid)"
+  # Attribute-param mapping is pinned by the exact-string asserts below.
+  doAssert "uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]]" in attrMsl
+  doAssert "uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]]" in attrMsl
+  doAssert "uint3 threads_per_threadgroup [[threads_per_threadgroup]]" in attrMsl
+  doAssert "uint3 threadgroups_per_grid [[threadgroups_per_grid]]" in attrMsl
+  doAssert "uint3 thread_position_in_grid [[thread_position_in_grid]]" in attrMsl
+  echo "  OK — the five attribute params print verbatim"
 
   doAssert "device atomic_uint* counter [[buffer(1)]]" in atomicMsl
   doAssert "atomic_fetch_add_explicit(counter, 1U, memory_order_relaxed)" in atomicMsl

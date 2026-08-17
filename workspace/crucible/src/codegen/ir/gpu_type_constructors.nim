@@ -75,7 +75,7 @@ proc toGpuTypeKind*(t: NimTypeKind): GpuTypeKind =
   of ntyFloat: gtFloat64
   of ntyFloat32: gtFloat32
   of ntyFloat64: gtFloat64
-  of ntyUInt: gtUint64
+  of ntyUInt: gtUint32 # `uint` is always mapped to `uint32` as that is the more "native" type on GPUs
   of ntyUInt8: gtUint8
   of ntyUInt16: gtUint16
   of ntyUInt32: gtUint32

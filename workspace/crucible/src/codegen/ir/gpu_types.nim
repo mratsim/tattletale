@@ -248,7 +248,6 @@ type
 
   GpuSymbolKind* = enum
     gsNone,              ## Default to mark not explicitly set
-    gsBuiltin,           ## Reference to a backend builtin dummy (`{.builtin.}` let)
     gsDeviceKernelParam, ## Parameter of a device kernel (`function`)
     gsGlobalKernelParam, ## Parameter of a global kernel (`storage`) for WebGPU
     gsLocal,             ## Local variable (`function`)

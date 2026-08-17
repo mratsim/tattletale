@@ -9,7 +9,7 @@
 ##
 ## Lowers the shared GPU IR to MSL, modeled on the CUDA printer with Metal's ABI rules:
 ##   - kernel arguments are buffers (`device` pointers for arrays, `constant` references for scalars)
-##   - the index builtins become attribute-qualified parameters
+##   - the five thread-position attribute names become attribute-qualified `uint3` parameters
 ##   - the threadgroup size stays host-side (dispatch-time) and is never baked into the shader.
 ##
 ## `MetalReservedKeywords` is the MSL reserved-word table minus the boolean literals
@@ -19,6 +19,7 @@
 import std / [macros, strformat, strutils, sequtils, tables, sets]
 
 import ../ir/gpu_types
+import ../builtins/metal_builtins
 import ./lang_utils
 
 const MetalReservedKeywords = [
@@ -54,25 +55,13 @@ proc checkReservedIdent(name: string; what: string) =
   elif name in MetalReservedKeywords:
     raiseAssert "'" & name & "' is a reserved keyword in MSL. Rename the " & what & "."
 
-const MetalBuiltins = {
-  "threadIdx": "tid",
-  "blockIdx": "bid",
-  "blockDim": "bdim",
-  "gridDim": "gdim",
-  "gid": "(bid * bdim + tid)",
-  "global_id": "(bid * bdim + tid)",
-  "num_workgroups": "gdim",
-}.toTable
-  ## Metal index builtin identifiers, mapped to the MSL expression the printer emits for each.
-  ## This is the one source of truth. The same table drives the rewrite (`metalBuiltinExpr`)
-  ## and the rejection of user symbols that carry these names (`checkMetalBuiltinIdent`).
-  ## The two never drift apart.
-
-proc checkMetalBuiltinIdent(name: string; what: string) =
-  ## Raises when `name` collides with a Metal index builtin, so user symbols are never rewritten
-  ## to the builtin expression at emission.
-  if name in MetalBuiltins:
-    raiseAssert "'" & name & "' is a Metal builtin name. Rename the " & what & "."
+proc checkMetalAttrIdent(name: string; what: string) =
+  ## Raises when `name` is one of the five MSL attribute names,
+  ## so user declarations never shadow the attribute params appended by `genKernelParams`.
+  ## The backend dummies are compileTime values that never reach
+  ## a declaration site, so this only ever sees user symbols.
+  if name in MetalAttributeNames:
+    raiseAssert "'" & name & "' is a Metal index builtin name. Rename the " & what & "."
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -265,16 +254,6 @@ proc collectAtomicTargets(ctx: GpuContext, n: GpuAst, targets: var HashSet[strin
     for ch in n:
       ctx.collectAtomicTargets(ch, targets)
 
-proc metalBuiltinExpr(n: GpuAst): string =
-  ## MSL expression for a Metal index builtin identifier. Returns the empty
-  ## string when `n` is not a builtin. `gid` is synthesized as the composite
-  ## `bid * bdim + tid` (the thread_position_in_grid value) and is never declared
-  ## as a parameter. `global_id` and `num_workgroups`
-  ## map the same way for WGSL-source portability.
-  if n.kind != gpuIdent:
-    return ""
-  MetalBuiltins.getOrDefault(n.ident())
-
 proc genLit*(ast: GpuAst): string =
   ## Lower a literal node for the MSL backend.
   if ast.lType.kind == gtString:
@@ -325,7 +304,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
   ## - output buffer first: `device T*` at `[[buffer(0)]]`
   ## - input buffers: `device const T*`
   ## - scalars: `constant T&`
-  ## - the four index builtins as attribute-qualified `uint3` params
+  ## - the five attribute names as attribute-qualified `uint3` params
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
   ## `bool` element types become `int` to match the host's 4-byte i32 marshalling (arg_blobs blobOf).
   ## Atomic-used pointers are declared `device atomic_<T>*` and never const, since atomics mutate.
@@ -334,7 +313,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
   for i, p in fn.pParams:
     let name = p.ident.ident()
     checkReservedIdent(name, "parameter")
-    checkMetalBuiltinIdent(name, "parameter")
+    checkMetalAttrIdent(name, "parameter")
     let binding = " [[buffer(" & $bufferIdx & ")]]"
     if p.typ.kind == gtPtr:
       var inner = p.typ.to
@@ -356,10 +335,8 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
         elem = "int"
       params.add "constant " & elem & "& " & name & binding
     inc bufferIdx
-  params.add "uint3 tid [[thread_position_in_threadgroup]]"
-  params.add "uint3 bid [[threadgroup_position_in_grid]]"
-  params.add "uint3 bdim [[threads_per_threadgroup]]"
-  params.add "uint3 gdim [[threadgroups_per_grid]]"
+  for attr in MetalAttributeNames:
+    params.add "uint3 " & attr & " [[" & attr & "]]"
   result = params.join(", ")
 
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam,
@@ -371,7 +348,7 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam,
   ## Such a reference binds thread-space values and temporaries, like a C++ const reference.
   let name = p.ident.ident()
   checkReservedIdent(name, "parameter")
-  checkMetalBuiltinIdent(name, "parameter")
+  checkMetalAttrIdent(name, "parameter")
   if p.typ.kind == gtPtr:
     var inner = p.typ.to
     if inner.kind == gtUA:
@@ -452,7 +429,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
           # MSL requires an explicit address-space qualifier on reference params.
           # The referenced struct lives in the calling thread's memory.
           checkReservedIdent(p.ident.ident(), "parameter")
-          checkMetalBuiltinIdent(p.ident.ident(), "parameter")
+          checkMetalAttrIdent(p.ident.ident(), "parameter")
           params.add "thread const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
         else:
           params.add ctx.genDeviceParam(p, fnAtomics)
@@ -492,7 +469,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
   of gpuVar:
     let vName = ast.vName.ident()
     checkReservedIdent(vName, "variable")
-    checkMetalBuiltinIdent(vName, "variable")
+    checkMetalAttrIdent(vName, "variable")
     if vName in atomics and ast.vInit.kind != gpuDiscard:
       raiseAssert "Atomic variable '" & vName & "' must be declared without an initializer. " &
         "MSL atomic types with value initializers are not device-verified."
@@ -527,7 +504,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
 
   of gpuFor:
     checkReservedIdent(ast.fVar.ident(), "loop variable")
-    checkMetalBuiltinIdent(ast.fVar.ident(), "loop variable")
+    checkMetalAttrIdent(ast.fVar.ident(), "loop variable")
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genMetalImpl(ast.fStart, 0, atomics) & "; " &
@@ -593,18 +570,14 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
                r & ')'
 
   of gpuIdent:
-    if ast.ident() in MetalBuiltins and ast.symbol.symKind != gsBuiltin:
-      # Only the backend builtin dummies are rewritten to the builtin expression.
-      # The frontend marks those `{.builtin.}` lets as `gsBuiltin` by identity.
-      # Any other symbol with a builtin name raises instead of being silently rebound.
-      # That includes params, locals, loop variables, and module-scope user symbols.
-      checkMetalBuiltinIdent(ast.ident(), "identifier")
-    let b = metalBuiltinExpr(ast)
-    if b.len > 0:
-      result = b
-    else:
-      checkReservedIdent(ast.ident(), "identifier")
-      result = ast.ident()
+    # Identity naming: the source-level builtin names are the MSL attribute names,
+    # so an identifier emits verbatim and binds to the attribute param appended by `genKernelParams`.
+    # The declaration-site checks reject the attribute names on params, variables,
+    # loop variables, and struct fields declared inside the block. A symbol declared
+    # outside the macro that shares an attribute name still emits verbatim
+    # and silently binds to the param, the documented residual closed by the future reserved-name rule.
+    checkReservedIdent(ast.ident(), "identifier")
+    result = ast.ident()
 
   of gpuLit:
       result = genLit(ast)
@@ -631,7 +604,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
     else:
       for el in ast.tFields:
         checkReservedIdent(el.name, "field")
-        checkMetalBuiltinIdent(el.name, "field")
+        checkMetalAttrIdent(el.name, "field")
         result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
     result.add '}'
 

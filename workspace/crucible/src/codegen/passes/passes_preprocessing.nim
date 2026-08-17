@@ -737,8 +737,6 @@ proc toAddressSpace*(symKind: GpuSymbolKind): AddressSpace =
   of gsShared: asWorkspace
   of gsPrivate: asPrivate
   of gsNone: asFunction
-  of gsBuiltin:
-    raiseAssert "builtin symbol in type context"
   of gsProc:
     raiseAssert "proc symbol in type context"
 

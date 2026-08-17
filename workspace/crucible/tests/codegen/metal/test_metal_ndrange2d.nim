@@ -3,8 +3,9 @@
 ## because the threadgroup size is dispatch-time. The `<<(grid, blk)>>`
 ## chevrons drive `dispatchThreadgroups`, so an explicit blk is required.
 ## A plain `run()` dispatches blk=1 on Metal. The kernel indexes the output
-## with `global_id` (emitted as `bid * bdim + tid`), so every thread writes exactly its own slot
-## and the 8×8 output is the identity pattern.
+## with `thread_position_in_grid` (the attribute param appended by the printer),
+## so every thread writes exactly its own slot and the 8×8 output
+## is the identity pattern.
 ##
 ## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
 ## Nim 2.2.10, MSL 4.0.
@@ -20,7 +21,8 @@ import workspace/crucible
 
 const kernel2d = metal:
   proc grid2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
-    C[global_id.y * 8'u32 + global_id.x] = global_id.y * 8'u32 + global_id.x
+    let flat = thread_position_in_grid.y * 8'u32 + thread_position_in_grid.x
+    C[flat] = flat
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   echo kernel2d

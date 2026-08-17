@@ -52,7 +52,7 @@ workspace/crucible/
         cuda_lang.nim opencl_lang.nim vulkan_lang.nim wgsl_lang.nim metal_lang.nim   Printers
         lang_utils.nim            Shared printer helpers
       builtins/                   Per-backend and Nim builtins
-        metal_builtins.nim        Metal index-builtin dummies (gid, shared CUDA names)
+        metal_builtins.nim        Metal index-builtin dummies (the five MSL attribute names, and a same-named module-scope symbol binds to the attribute param)
     runtime/
       engines.nim                HwEngine — the sole public runtime API (init/ingest/getArtifact/run/chevrons)
       engines/                   CudaEngine (nvrtc.nim), OpenCLEngine (cl.nim), VulkanEngine (vk.nim), WgpuEngine (wgpu.nim), MetalEngine (metal.nim)
