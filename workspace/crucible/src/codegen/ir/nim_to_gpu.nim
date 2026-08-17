@@ -606,7 +606,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     for i in 1 ..< node.len:
       if isTypeDescNode(node[i]): continue
       if (i - 1) in staticSkip: continue # static VALUE arg (e.g. the atom record in
-                                          # gemm_ukernel) — compile-time only, its
+                                          # gemm_warp) — compile-time only, its
                                           # param was dropped in parseProcParameters
       args.add ctx.toGpuAst(reg, node[i])
     if name in ctx.builtins and node[0].repr in NimGpuNumericBuiltinsOperators:
