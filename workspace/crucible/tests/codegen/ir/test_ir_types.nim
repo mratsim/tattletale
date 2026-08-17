@@ -1,7 +1,7 @@
 ## Phase 1b: Type System Fixes test
 ##
 ## Verifies:
-## - hasMagicPragma returns true when magic is the second pragma
+## - hasPragma returns true when magic is the second pragma
 ## - GpuType.== on gtGenericInst with nil gFields does NOT crash
 ## - gtPtr.== distinguishes mutable from immutable
 ## - gtPtr.hash distinguishes mutable from immutable
@@ -21,7 +21,7 @@ import workspace/crucible/src/codegen/ir/gpu_types
 import workspace/crucible/src/codegen/ir/gpu_type_constructors
 
 # ═══════════════════════════════════════════════════════════════════════
-# 1. hasMagicPragma returns true when magic is the SECOND pragma (Bug 1)
+# 1. hasPragma returns true when magic is the SECOND pragma (Bug 1)
 # ═══════════════════════════════════════════════════════════════════════
 static:
   block:
@@ -29,12 +29,12 @@ static:
       proc foo() {.noSideEffect, magic.} = discard
     """)[0]
     doAssert node.kind == nnkProcDef
-    doAssert hasMagicPragma(node),
-      "hasMagicPragma should return true when magic is the second pragma"
-    echo "  OK — hasMagicPragma true for second pragma"
+    doAssert node.hasPragma("magic"),
+      "hasPragma should return true when magic is the second pragma"
+    echo "  OK — hasPragma true for second pragma"
 
 # ═══════════════════════════════════════════════════════════════════════
-# 2. hasMagicPragma returns false when no magic pragma present
+# 2. hasPragma returns false when no magic pragma present
 # ═══════════════════════════════════════════════════════════════════════
 static:
   block:
@@ -42,9 +42,9 @@ static:
       proc foo() {.noSideEffect, inline.} = discard
     """)[0]
     doAssert node.kind == nnkProcDef
-    doAssert not hasMagicPragma(node),
-      "hasMagicPragma should return false when magic is absent"
-    echo "  OK — hasMagicPragma false for non-magic pragmas"
+    doAssert not node.hasPragma("magic"),
+      "hasPragma should return false when magic is absent"
+    echo "  OK — hasPragma false for non-magic pragmas"
 
 # ═══════════════════════════════════════════════════════════════════════
 # 3. GpuType.== on gtGenericInst with nil gFields does NOT crash (Bug 2)
