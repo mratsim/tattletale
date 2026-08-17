@@ -22,7 +22,7 @@ Because it is a code generator, "correctness" of a feature means the emitted cod
 
 ## Status
 
-Crucible is under active development. The pass-architecture refactor (single `FnTable`, Symbol ref identity, `GpuRangeKind`, base58 mangling) is merged on `master` (commit `a076641`). NVRTC/CUDA is the primary, most-tested target; OpenCL, Vulkan, WebGPU, and Metal share the same IR and pipeline but have smaller suites and some backend-specific lowering (e.g. WGSL `injectAddressOf`, Vulkan SSBO/push-constant lowering in [`src/codegen/passes/passes_preprocessing.nim`](src/codegen/passes/passes_preprocessing.nim), Metal's dispatch-time threadgroup size and 31-binding ingest check). WIP is tracked per-feature; gaps are labelled in the source with `XXX`/`WIP` comments.
+Crucible is under active development. The pass-architecture refactor (single `FnTable`, Symbol ref identity, `GpuRangeKind`, base58 mangling) is merged on `master` (commit `a076641`). NVRTC/CUDA is the primary, most-tested target; OpenCL, Vulkan, WebGPU, and Metal share the same IR and pipeline but have smaller suites and some backend-specific lowering (e.g. WGSL `injectAddressOf`, Vulkan SSBO/push-constant lowering in [`src/codegen/passes/passes_preprocessing.nim`](src/codegen/passes/passes_preprocessing.nim), Metal's dispatch-time threadgroup size and compiler-enforced 31-binding limit). WIP is tracked per-feature; gaps are labelled in the source with `XXX`/`WIP` comments.
 
 ## Source layout
 

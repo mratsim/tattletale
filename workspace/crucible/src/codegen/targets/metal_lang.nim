@@ -308,7 +308,8 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
   ## - scalars: `constant T&`
   ## - the attribute params for the index builtins the kernel body references
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
-  ## `bool` element types become `int` to match the host's 4-byte i32 marshalling (arg_blobs blobOf).
+  ## Scalars stay 4 bytes on the host (arg_blobs blobOf), so scalar `bool` is declared `int`.
+  ## Buffer elements marshal at their Nim width, so bool buffers declare `bool` (1 byte).
   ## Atomic-used pointers are declared `device atomic_<T>*` and never const, since atomics mutate.
   var attrIdents: seq[string]
   collectAttrIdents(fn.pBody, attrIdents)
@@ -326,8 +327,6 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
         params.add "device " & atomicElemName(p.typ) & "* " & name & binding
       else:
         var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-        if inner.kind == gtBool:
-          elem = "int"
         if i == 0: # the engine binds the output at index 0
           params.add "device " & elem & "* " & name & binding
         else:
@@ -359,8 +358,6 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam,
       result = "device " & atomicElemName(p.typ) & "* " & name
     else:
       var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-      if inner.kind == gtBool:
-        elem = "int"
       let space = if p.typ.implicit: "thread" else: "device"
       result = space & ' ' & elem & "* " & name
   else:

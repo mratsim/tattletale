@@ -80,7 +80,7 @@ pointers become device buffers.
   `blk` is dispatch-time, validated against the Apple Silicon 1024-thread limit.
   Kernel args bind as buffers (output at index 0, then inputs in order).
   Scalars pack into one shared constant buffer at 16-byte slots.
-  The engine enforces the 31-binding limit at ingest.
+  Metal's own compiler rejects more than 31 bindings at ingest via NSError.
   Output reads back directly from `contents()` after `waitUntilCompleted`,
   with no staging or map path.
 - **Vulkan / WebGPU** — the workgroup size is baked into the shader at codegen
