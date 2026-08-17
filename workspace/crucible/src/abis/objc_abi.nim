@@ -65,11 +65,11 @@ type
     height*: NSUInteger
     depth*: NSUInteger
 
-proc isNil*(a: ID): bool =
+proc isNil*(a: ID): bool {.inline.} =
   ## Returns true when the object pointer is null.
   pointer(a) == nil
 
-proc isNil*(a: Class): bool =
+proc isNil*(a: Class): bool {.inline.} =
   ## Returns true when the class pointer is null.
   pointer(a) == nil
 
@@ -179,7 +179,7 @@ when defined(macosx):
   # Registers `str` as a selector (runtime-interned, returns the existing selector when already registered).
   proc selRegisterName(str: cstring): SEL {.objcimport, importc: "sel_registerName".}
 
-  proc `$$`*(str: string): SEL =
+  proc `$$`*(str: string): SEL {.inline.} =
     ## Returns the registered selector for `str`, e.g. `$$"alloc"`.
     selRegisterName(str.cstring)
 
@@ -214,13 +214,13 @@ when defined(macosx):
   # Memory management
   # ═════════════════════════════════════════════════
 
-  proc newPool*(): ID =
+  proc newPool*(): ID {.inline.} =
     ## Alloc/init an `NSAutoreleasePool`. Engine calls wrap their body in one;
     ## without a pool, autoreleased Metal objects trip OBJC_DEBUG_MISSING_POOLS=YES.
     result = msgSend(ID(getClass("NSAutoreleasePool")), $$"alloc")
     discard msgSend(result, $$"init")
 
-  proc drainPool*(pool: ID) =
+  proc drainPool*(pool: ID) {.inline.} =
     ## Drains the pool: releases everything autoreleased since `newPool`.
     discard msgSend(pool, $$"drain")
 
@@ -231,7 +231,7 @@ when defined(macosx):
     defer: pool.drainPool()
     body
 
-  proc release*(obj: ID) =
+  proc release*(obj: ID) {.inline.} =
     ## Releases a +1 Objective-C object, balanced against a `new*`/Create acquisition. Nil-safe.
     if not isNil(obj):
       discard msgSend(obj, $$"release")

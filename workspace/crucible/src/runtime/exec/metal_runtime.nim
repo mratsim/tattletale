@@ -189,8 +189,9 @@ when defined(macosx):
     if result.data == nil:
       failLoud("contents() returned nil for a shared buffer")
 
-  proc releaseBuffer*(buffer: var MetalBuffer) =
+  proc releaseBuffer*(buffer: var MetalBuffer) {.inline.} =
     ## Releases the +1 buffer object. Nil-safe.
+    ## Inlined: called per dispatch for the output and every input buffer.
     if not objc.isNil(buffer.buffer):
       objc.release(buffer.buffer)
       buffer.buffer = objc.ID(nil)
