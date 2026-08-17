@@ -9,7 +9,7 @@
 ##
 ## Lowers the shared GPU IR to MSL, modeled on the CUDA printer with Metal's ABI rules:
 ##   - kernel arguments are buffers (`device` pointers for arrays, `constant` references for scalars)
-##   - the five thread-position attribute names become attribute-qualified `uint3` parameters
+##   - referenced index builtins become attribute-qualified `uint3` parameters, one per use
 ##   - the threadgroup size stays host-side (dispatch-time) and is never baked into the shader.
 ##
 ## `MetalReservedKeywords` is the MSL reserved-word table minus the boolean literals
@@ -19,7 +19,6 @@
 import std / [macros, strformat, strutils, sequtils, tables, sets]
 
 import ../ir/gpu_types
-import ../builtins/metal_builtins
 import ./lang_utils
 
 const MetalReservedKeywords = [
@@ -54,14 +53,6 @@ proc checkReservedIdent(name: string; what: string) =
     raiseAssert "'" & name & "' collides with the MSL `metal::` namespace. Rename the " & what & "."
   elif name in MetalReservedKeywords:
     raiseAssert "'" & name & "' is a reserved keyword in MSL. Rename the " & what & "."
-
-proc checkMetalAttrIdent(name: string; what: string) =
-  ## Raises when `name` is one of the five MSL attribute names,
-  ## so user declarations never shadow the attribute params appended by `genKernelParams`.
-  ## The backend dummies are compileTime values that never reach
-  ## a declaration site, so this only ever sees user symbols.
-  if name in MetalAttributeNames:
-    raiseAssert "'" & name & "' is a Metal index builtin name. Rename the " & what & "."
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -298,22 +289,34 @@ proc exprType(ctx: GpuContext, n: GpuAst): GpuType =
   of gpuMaterialize: ctx.exprType(n.mExpr)
   else: nil
 
+proc collectAttrIdents(n: GpuAst, attrIdents: var seq[string]) =
+  ## Records gsBuiltin-marked identifiers in first-use order, deduped.
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil and n.symbol.symKind == gsBuiltin and
+       n.ident() notin attrIdents:
+      attrIdents.add n.ident()
+  else:
+    for ch in n:
+      collectAttrIdents(ch, attrIdents)
+
 proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
                      atomics: HashSet[string]): string =
   ## MSL kernel parameter list:
   ## - output buffer first: `device T*` at `[[buffer(0)]]`
   ## - input buffers: `device const T*`
   ## - scalars: `constant T&`
-  ## - the five attribute names as attribute-qualified `uint3` params
+  ## - the attribute params for the index builtins the kernel body references
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
   ## `bool` element types become `int` to match the host's 4-byte i32 marshalling (arg_blobs blobOf).
   ## Atomic-used pointers are declared `device atomic_<T>*` and never const, since atomics mutate.
+  var attrIdents: seq[string]
+  collectAttrIdents(fn.pBody, attrIdents)
   var params: seq[string]
   var bufferIdx = 0
   for i, p in fn.pParams:
     let name = p.ident.ident()
     checkReservedIdent(name, "parameter")
-    checkMetalAttrIdent(name, "parameter")
     let binding = " [[buffer(" & $bufferIdx & ")]]"
     if p.typ.kind == gtPtr:
       var inner = p.typ.to
@@ -335,7 +338,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
         elem = "int"
       params.add "constant " & elem & "& " & name & binding
     inc bufferIdx
-  for attr in MetalAttributeNames:
+  for attr in attrIdents:
     params.add "uint3 " & attr & " [[" & attr & "]]"
   result = params.join(", ")
 
@@ -348,7 +351,6 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam,
   ## Such a reference binds thread-space values and temporaries, like a C++ const reference.
   let name = p.ident.ident()
   checkReservedIdent(name, "parameter")
-  checkMetalAttrIdent(name, "parameter")
   if p.typ.kind == gtPtr:
     var inner = p.typ.to
     if inner.kind == gtUA:
@@ -429,7 +431,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
           # MSL requires an explicit address-space qualifier on reference params.
           # The referenced struct lives in the calling thread's memory.
           checkReservedIdent(p.ident.ident(), "parameter")
-          checkMetalAttrIdent(p.ident.ident(), "parameter")
           params.add "thread const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
         else:
           params.add ctx.genDeviceParam(p, fnAtomics)
@@ -469,7 +470,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
   of gpuVar:
     let vName = ast.vName.ident()
     checkReservedIdent(vName, "variable")
-    checkMetalAttrIdent(vName, "variable")
     if vName in atomics and ast.vInit.kind != gpuDiscard:
       raiseAssert "Atomic variable '" & vName & "' must be declared without an initializer. " &
         "MSL atomic types with value initializers are not device-verified."
@@ -504,7 +504,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
 
   of gpuFor:
     checkReservedIdent(ast.fVar.ident(), "loop variable")
-    checkMetalAttrIdent(ast.fVar.ident(), "loop variable")
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genMetalImpl(ast.fStart, 0, atomics) & "; " &
@@ -571,11 +570,9 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
 
   of gpuIdent:
     # Identity naming: the source-level builtin names are the MSL attribute names,
-    # so an identifier emits verbatim and binds to the attribute param appended by `genKernelParams`.
-    # The declaration-site checks reject the attribute names on params, variables,
-    # loop variables, and struct fields declared inside the block. A symbol declared
-    # outside the macro that shares an attribute name still emits verbatim
-    # and silently binds to the param, the documented residual closed by the future reserved-name rule.
+    # so a builtin-marked identifier emits verbatim
+    # and binds to the attribute param `genKernelParams` injects for that reference.
+    # Unmarked identifiers never get a param, so an undeclared name stays a loud MSL error.
     checkReservedIdent(ast.ident(), "identifier")
     result = ast.ident()
 
@@ -604,7 +601,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
     else:
       for el in ast.tFields:
         checkReservedIdent(el.name, "field")
-        checkMetalAttrIdent(el.name, "field")
         result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
     result.add '}'
 

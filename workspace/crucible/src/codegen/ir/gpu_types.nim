@@ -248,6 +248,7 @@ type
 
   GpuSymbolKind* = enum
     gsNone,              ## Default to mark not explicitly set
+    gsBuiltin,           ## Reference to a backend index builtin (e.g. MSL thread_position_in_grid).
     gsDeviceKernelParam, ## Parameter of a device kernel (`function`)
     gsGlobalKernelParam, ## Parameter of a global kernel (`storage`) for WebGPU
     gsLocal,             ## Local variable (`function`)
@@ -343,9 +344,9 @@ type
     ## - Value: signature of the (possibly generic) instantiation
     processedProcs*: OrderedTable[GpuAst, GpuProcSignature]
 
-    ## Storse all builtin / nimonly / importc / ... functions we encounter so that we can
+    ## Stores all builtin / nimonly / importc / ... functions we encounter so that we can
     ## check if they return a value when we encounter them in a `gpuCall`
-    builtins*: OrderedTable[GpuAst, GpuAst]
+    builtinFns*: OrderedTable[GpuAst, GpuAst]
 
     ## Table of all known types. Filled during Nim -> GpuAst. Includes generic
     ## instantiations, but also all other types.
@@ -1077,8 +1078,8 @@ proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
     result = ctx.fnTab[fn].pParams
   elif fn in ctx.genericInsts:
     result = ctx.genericInsts[fn].pParams
-  elif fn in ctx.builtins:
-    result = ctx.builtins[fn].pParams
+  elif fn in ctx.builtinFns:
+    result = ctx.builtinFns[fn].pParams
   elif fn in ctx.processedProcs:
     result = ctx.processedProcs[fn].params
 proc ident*(n: GpuAst): string =
@@ -1103,8 +1104,8 @@ proc getFnReturnType*(ctx: GpuContext, fn: GpuAst): GpuType =
     result = ctx.fnTab[fn].pRetType
   elif fn in ctx.genericInsts:
     result = ctx.genericInsts[fn].pRetType
-  elif fn in ctx.builtins:
-    result = ctx.builtins[fn].pRetType
+  elif fn in ctx.builtinFns:
+    result = ctx.builtinFns[fn].pRetType
   elif fn in ctx.processedProcs:
     result = ctx.processedProcs[fn].retType
   else:

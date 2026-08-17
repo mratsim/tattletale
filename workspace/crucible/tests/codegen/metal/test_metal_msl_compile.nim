@@ -3,11 +3,12 @@
 ## through Metal's `newLibraryWithSource`, the same objc_abi bridge harness
 ## as tests/codegen/metal/test_metal_abi_smoke.nim. The acceptance bar is device-compile-clean, not mere printing.
 ##
-## Covers 24 printer shapes:
+## Covers 25 printer shapes:
 ## - add
 ## - external-struct device fn
 ## - scalar marshalling
-## - the five MSL attribute params
+## - the five attribute params (attrKernel uses all five)
+## - single attribute param (per-use injection)
 ## - shared memory + barrier
 ## - for loops
 ## - large-struct passByRef
@@ -31,9 +32,12 @@
 ##
 ## The gate also pins the emission rules. The shader bakes no workgroup size.
 ## `blk` stays dispatch-time.
-## The five attribute-qualified `uint3` params appear verbatim, named identically to their attribute strings.
+## A `uint3` attribute param appears per referenced index builtin, named identically to its attribute string.
 ## The source-level builtin names are the MSL attribute names, so kernel-body references emit verbatim
-## and bind to the attribute params.
+## and bind to the injected attribute params.
+## A shadow kernel (local `let thread_position_in_grid`)
+## pins that a plain local named like an attribute stays legal,
+## because no attribute param is injected.
 ## A hand-built-IR kernel checks the atomic emission.
 ## Compile-time tripwires pin the loud rejects.
 ## fp64 and reserved MSL keywords never print.
@@ -143,6 +147,15 @@ const attrMsl = metal:
     output[3] = threadgroups_per_grid.x
     output[4] = thread_position_in_grid.x
     output[5] = thread_position_in_grid.y
+
+const singleAttrMsl = metal:
+  proc singleAttrKernel(output: ptr UncheckedArray[uint32]) {.global.} =
+    output[0] = thread_position_in_grid.x
+
+const shadowAttrMsl = metal:
+  proc shadowKernel(output: ptr UncheckedArray[uint32]) {.global.} =
+    let thread_position_in_grid = 5'u32
+    output[0] = thread_position_in_grid
 
 const sharedMsl = metal:
   proc sharedKernel(output: ptr UncheckedArray[uint32]) {.global.} =
@@ -535,55 +548,6 @@ static:
       rejectMsg
 
   block:
-    # kernel param named `thread_position_in_grid` (MSL attribute name)
-    var rejected = false
-    var rejectMsg = ""
-    try:
-      let ptyp = GpuType(kind: gtPtr, to: GpuType(kind: gtUA, uaTo: GpuType(kind: gtUint32)))
-      let param = GpuParam(ident: mkIdent("thread_position_in_grid", ptyp, gsGlobalKernelParam), typ: ptyp)
-      let kernel = GpuAst(kind: gpuProc,
-                          pName: mkIdent("k", GpuType(kind: gtVoid), gsProc),
-                          pRetType: GpuType(kind: gtVoid),
-                          pParams: @[param],
-                          pBody: GpuAst(kind: gpuBlock),
-                          pAttributes: {attGlobal})
-      var ctx = GpuContext()
-      ctx.preprocess(kernel)
-      discard ctx.codegen()
-    except AssertionDefect as e:
-      rejected = true
-      rejectMsg = e.msg
-    doAssert rejected, "a kernel param named `thread_position_in_grid` printed instead of rejecting loudly"
-    doAssert "'thread_position_in_grid' is a Metal index builtin name. Rename the parameter." == rejectMsg,
-      rejectMsg
-
-  block:
-    # local variable named `thread_position_in_threadgroup` (MSL attribute name)
-    var rejected = false
-    var rejectMsg = ""
-    try:
-      let vTyp = GpuType(kind: gtUint32)
-      let v = GpuAst(kind: gpuVar, vName: mkIdent("thread_position_in_threadgroup", vTyp, gsLocal),
-                     vType: vTyp,
-                     vInit: GpuAst(kind: gpuLit, lValue: "3", lType: vTyp))
-      let body = GpuAst(kind: gpuBlock, statements: @[v])
-      let kernel = GpuAst(kind: gpuProc,
-                          pName: mkIdent("k", GpuType(kind: gtVoid), gsProc),
-                          pRetType: GpuType(kind: gtVoid),
-                          pParams: @[],
-                          pBody: body,
-                          pAttributes: {attGlobal})
-      var ctx = GpuContext()
-      ctx.preprocess(kernel)
-      discard ctx.codegen()
-    except AssertionDefect as e:
-      rejected = true
-      rejectMsg = e.msg
-    doAssert rejected, "a local variable named `thread_position_in_threadgroup` printed instead of rejecting loudly"
-    doAssert "'thread_position_in_threadgroup' is a Metal index builtin name. Rename the variable." == rejectMsg,
-      rejectMsg
-
-  block:
     # atomic call with no target argument must raise
     var rejected = false
     var rejectMsg = ""
@@ -635,6 +599,41 @@ static:
     doAssert rejected, "an atomic call targeting a literal compiled instead of raising loudly"
     doAssert "targets a non-atomic identifier" in rejectMsg, rejectMsg
 
+static:
+  # Shadow pin. A local `let thread_position_in_grid` carries no `{.builtin.}`
+  # tag, so the printer injects no attribute param and the source has no MSL
+  # redefinition. The old unconditional five-param injection made this kernel
+  # a device-compile failure.
+  doAssert "uint thread_position_in_grid = 5U" in shadowAttrMsl,
+    "shadow kernel lost its local declaration"
+  doAssert "uint3 thread_position_in_grid [[" notin shadowAttrMsl,
+    "shadow kernel got an attribute param for a plain local"
+
+static:
+  # Runtime-path pin. The runtime `codegen(gen, ast, backend)` entry
+  # (gpu_compiler.nim) fills `genericInsts` only and farms kernels to `fnTab`
+  # at emission. The printer walks the node being emitted, so a gsBuiltin
+  # reference must still get its attribute param on this path.
+  block:
+    let outTyp = GpuType(kind: gtPtr, to: GpuType(kind: gtUA, uaTo: GpuType(kind: gtUint32)))
+    let outParam = GpuParam(ident: mkIdent("output", outTyp, gsGlobalKernelParam), typ: outTyp)
+    let body = GpuAst(kind: gpuBlock, statements: @[
+      GpuAst(kind: gpuAssign,
+             aLeft: mkIdent("output", outTyp, gsGlobalKernelParam),
+             aRight: mkIdent("thread_position_in_grid", GpuType(kind: gtUint32), gsBuiltin))])
+    let kernel = GpuAst(kind: gpuProc,
+                        pName: mkIdent("rtAttrKernel", GpuType(kind: gtVoid), gsProc),
+                        pRetType: GpuType(kind: gtVoid),
+                        pParams: @[outParam],
+                        pBody: body,
+                        pAttributes: {attGlobal})
+    var gen = GpuGenericsInfo(procs: @[kernel])
+    let src = codegen(gen, GpuAst(kind: gpuBlock, statements: @[kernel]), backend = bkMetal)
+    doAssert "uint3 thread_position_in_grid [[thread_position_in_grid]]" in src,
+      "runtime codegen path dropped the referenced builtin's attribute param"
+    doAssert "uint3 thread_position_in_threadgroup [[" notin src,
+      "runtime codegen path injected an unreferenced attribute param"
+
 # ── Compile gate ────────────────────────────────────────────────────────────
 
 template failLoud(msg: string) =
@@ -674,6 +673,7 @@ proc runTest() =
   compileOne(device, "vec2 external struct + device fn", vec2Msl)
   compileOne(device, "scalar marshalling (int32/float32/bool)", scalarMsl)
   compileOne(device, "the five attribute params", attrMsl)
+  compileOne(device, "single attribute param (per-use injection)", singleAttrMsl)
   compileOne(device, "shared memory + syncthreads barrier", sharedMsl)
   compileOne(device, "for-loop vec10", forLoopMsl)
   compileOne(device, "large struct passByRef", largeStructMsl)
@@ -706,12 +706,19 @@ proc runTest() =
   doAssert "uint3 thread_position_in_grid [[thread_position_in_grid]]" in attrMsl
   echo "  OK — the five attribute params print verbatim"
 
+  doAssert "uint3 thread_position_in_grid [[thread_position_in_grid]]" in singleAttrMsl
+  doAssert "uint3 thread_position_in_threadgroup [[" notin singleAttrMsl
+  doAssert "uint3 threadgroup_position_in_grid [[" notin singleAttrMsl
+  doAssert "uint3 threads_per_threadgroup [[" notin singleAttrMsl
+  doAssert "uint3 threadgroups_per_grid [[" notin singleAttrMsl
+  echo "  OK — one attribute param for one referenced builtin"
+
   doAssert "device atomic_uint* counter [[buffer(1)]]" in atomicMsl
   doAssert "atomic_fetch_add_explicit(counter, 1U, memory_order_relaxed)" in atomicMsl
   echo "  OK — atomic emission (atomic_uint param, atomic_fetch_add_explicit)"
 
   discard objc.msgSend(pool, objc.`$$`("drain"))
-  echo "All 25 printed MSL sources compiled via newLibraryWithSource"
+  echo "All 26 printed MSL sources compiled via newLibraryWithSource"
 
 when isMainModule:
   runTest()

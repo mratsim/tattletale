@@ -271,8 +271,8 @@ proc getTypeDesc*(ctx: var GpuContext; arg: GpuAst): TypeDesc =
       result = gpuTypeToDesc(ctx.genericInsts[fn].pRetType)
     elif fn in ctx.allFnTab:
       result = gpuTypeToDesc(ctx.allFnTab[fn].pRetType)
-    elif fn in ctx.builtins:
-      result = gpuTypeToDesc(ctx.builtins[fn].pRetType)
+    elif fn in ctx.builtinFns:
+      result = gpuTypeToDesc(ctx.builtinFns[fn].pRetType)
     else:
       result = TypeDesc(kind: tdkUnresolved)
   of gpuIndex:
@@ -737,6 +737,7 @@ proc toAddressSpace*(symKind: GpuSymbolKind): AddressSpace =
   of gsShared: asWorkspace
   of gsPrivate: asPrivate
   of gsNone: asFunction
+  of gsBuiltin: asFunction # thread-local value, like gsNone/gsLocal
   of gsProc:
     raiseAssert "proc symbol in type context"
 
@@ -853,33 +854,6 @@ proc patchBoolToI32Impl*(ctx: var GpuContext; n: var GpuAst) =
   else:
     for ch in n.mitems:
       ctx.patchBoolToI32Impl(ch)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Phase 6: injectWgslBuiltins pass
-# ═══════════════════════════════════════════════════════════════════════════
-
-proc injectWgslBuiltinsImpl*(ctx: var GpuContext; n: var GpuAst) =
-  ## Injects WGSL built-in parameters into kernel entry points.
-  ## WGSL requires explicit @builtin(global_invocation_id) parameters
-  ## on entry point functions, unlike CUDA/OpenCL where these are implicit.
-  case n.kind
-  of gpuProc:
-    if attGlobal in n.pAttributes:
-      let voidType = GpuType(kind: gtVoid)
-      let gidSym = newSymbol("global_id", iSym = "__wgsl_global_id", typ = voidType)
-      let gidIdent = GpuAst(kind: gpuIdent, symbol: gidSym)
-      let builtinParam1 = GpuParam(ident: gidIdent, typ: voidType, addressSpace: asFunction, passByRef: false)
-      let nwgSym = newSymbol("num_workgroups", iSym = "__wgsl_num_workgroups", typ = voidType)
-      let nwgIdent = GpuAst(kind: gpuIdent, symbol: nwgSym)
-      let builtinParam2 = GpuParam(ident: nwgIdent, typ: voidType, addressSpace: asFunction, passByRef: false)
-      n.pParams.add builtinParam1
-      n.pParams.add builtinParam2
-    for ch in n.mitems:
-      ctx.injectWgslBuiltinsImpl(ch)
-  else:
-    for ch in n.mitems:
-      ctx.injectWgslBuiltinsImpl(ch)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
