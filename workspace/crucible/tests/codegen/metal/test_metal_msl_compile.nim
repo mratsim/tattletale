@@ -59,6 +59,7 @@ import workspace/crucible
 import workspace/crucible/src/abis/objc_abi as objc
 import workspace/crucible/src/codegen/ir/gpu_types
 import workspace/crucible/src/codegen/targets/metal_lang
+from workspace/crucible/src/runtime/exec/metal_runtime import compileOptions
 
 # ── DSL helper types (module scope, compile-time only) ──────────────────────
 
@@ -649,9 +650,11 @@ proc compileOne(device: objc.ID; name, src: string) =
   doAssert "threads_per_threadgroup(" notin src,
     name & " bakes a workgroup size; blk must stay dispatch-time"
   echo "  compiling ", name
+  let opts = compileOptions()
   var compileError: objc.ID = objc.ID(nil)
   let library = objc.msgSend(device, objc.`$$`("newLibraryWithSource:options:error:"),
-                        objc.nsStringFromNimString(src), objc.ID(nil), addr compileError)
+                        objc.nsStringFromNimString(src), opts, addr compileError)
+  objc.release(opts)
   if objc.isNil(library):
     if objc.isNil(compileError):
       failLoud("MSL compile failed for " & name & ": no NSError object provided")

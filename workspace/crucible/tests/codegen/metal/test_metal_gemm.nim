@@ -20,7 +20,7 @@ import workspace/crucible
 const kernelCode = metal:
   type Tile[M, N: static int] = object
     data: array[M * N, uint32]
-  proc tileAt[M, N: static int](t: Tile[M, N]; r, c: uint32): uint32 =
+  proc tileAt[M, N: static int](t: Tile[M, N], r, c: uint32): uint32 =
     t.data[r * uint32(N) + c]
   proc gemmKernel(C: ptr UncheckedArray[uint32]) {.global.} =
     let A = Tile[2, 3](data: [1'u32, 2, 3, 4, 5, 6])

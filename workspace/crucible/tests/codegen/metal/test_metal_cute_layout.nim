@@ -20,7 +20,7 @@ import workspace/crucible
 const kernelMsl = metal:
   type Tile[M, N: static int] = object
     data: array[M * N, uint32]
-  proc tileAt[M, N: static int](t: Tile[M, N]; r, c: uint32): uint32 =
+  proc tileAt[M, N: static int](t: Tile[M, N], r, c: uint32): uint32 =
     t.data[r * uint32(N) + c]
   proc cuteKernel(output: ptr UncheckedArray[uint32]) {.global.} =
     let t = Tile[2, 3](data: [10'u32, 20'u32, 30'u32, 40'u32, 50'u32, 60'u32])

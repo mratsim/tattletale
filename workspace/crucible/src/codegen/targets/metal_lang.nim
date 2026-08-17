@@ -664,7 +664,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int,
     result = ctx.genMetalImpl(ast.mExpr, 0, atomics) # C++ const& binds implicitly to temporaries
 
   else:
-    echo "Unhandled node kind in genMetal: ", ast.kind
     raiseAssert "Unhandled node kind in genMetal: " & ast.repr
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =

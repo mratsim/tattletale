@@ -122,10 +122,6 @@ nim c -r --hints:off --warnings:off \
 
 # Metal (macOS)
 # tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17
-nim c -r --hints:off --warnings:off \
-  --outdir:build/tests --nimcache:nimcache/tests \
-  workspace/crucible/tests/codegen/metal/test_*.nim
-# whole suite, including the intentional-quit -d:case* binaries:
 nim test_crucible_metal
 ```
 

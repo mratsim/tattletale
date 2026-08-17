@@ -24,7 +24,7 @@ type
     len: int32
 
 # ── `()` operator: block: + local temps + result → gpuBlock(isExpr) ────────
-template `()`(s: MySpan; a, b: int32): auto =
+template `()`(s: MySpan, a, b: int32): auto =
   block:
     let coord = (a, b)
     let offset = coord[0] * s.len + coord[1]

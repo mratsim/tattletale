@@ -65,7 +65,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "addKernel: [10,20] + [1,2] = [11,22]":
       var engine = bkMetal.init()
       engine.ingest(addMsl)
-      echo addMsl
       var a: array[2, uint32] = [10'u32, 20'u32]
       var b: array[2, uint32] = [1'u32, 2'u32]
       var out32: array[2, uint32]
@@ -76,7 +75,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "vec2AddKernel (external type + fn)":
       var engine = bkMetal.init()
       engine.ingest(vec2Msl)
-      echo vec2Msl
       var a: array[2, uint32] = [100'u32, 200'u32]
       var b: array[2, uint32] = [3'u32, 4'u32]
       var out32: array[2, uint32]
@@ -87,7 +85,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "maxKernel (generic instantiation)":
       var engine = bkMetal.init()
       engine.ingest(maxMsl)
-      echo maxMsl
       var a: array[1, uint32] = [42'u32]
       var b: array[1, uint32] = [17'u32]
       var outVal: array[1, uint32]

@@ -93,10 +93,6 @@ nim c -r --hints:off --warnings:off \
 
 # Metal (macOS, on-device MSL compilation)
 # tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17
-nim c -r --hints:off --warnings:off \
-  --outdir:build/tests --nimcache:nimcache/tests \
-  workspace/crucible/tests/codegen/metal/test_*.nim
-# or the whole suite plus the intentional-quit cases:
 nim test_crucible_metal
 
 # IR-level tests (pure Nim, e.g.)
