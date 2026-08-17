@@ -71,6 +71,23 @@ func testerCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
     &" --outdir:build/tests/{filename} --nimcache:nimcache/tests/{filename} " &
     path
 
+
+proc expectQuit(cmd: string; message: string) =
+  ## Runs a command that must exit non-zero with `message` on stderr.
+  ## The engine's loud-quit policy is the assertion, so the intentional quit(1)
+  ## must not fail the suite. gorgeEx returns the exit code instead of raising.
+  ## A zero exit (the quit did not fire) fails the task loudly. stderr is merged into stdout
+  ## so the engine message is both visible in the task log and assertable here.
+  let (output, exitCode) = gorgeEx(cmd & " 2>&1")
+  echo output
+  if exitCode == 0:
+    raise newException(OSError,
+      "expected the intentional quit (non-zero exit), got 0: " & cmd)
+  if message notin output:
+    raise newException(OSError,
+      "quit case exited " & $exitCode & " without its engine message: " &
+      message & "\n" & cmd)
+
 func downloaderCmd(path: string): string =
   let filename = path.extractFilename()
   return
@@ -207,6 +224,34 @@ task test_crucible_webgpu, "Test workspace/crucible WebGPU codegen":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/webgpu"):
       runCmd(cmd)
+
+task test_crucible_metal, "Test workspace/crucible Metal codegen":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/metal"):
+      runCmd(cmd)
+    # The engine's loud-quit policy is asserted by running the quit binaries
+    # with each -d: case. test_metal_31_bindings.nim carries the 32-binding case
+    # and is wired here the same way.
+    expectQuit testerCmd(
+      "workspace/crucible/tests/codegen/metal/test_metal_quit_bindings.nim",
+      extraFlags = "-d:caseBindings"),
+      "a kernel has 32 buffer bindings"
+    expectQuit testerCmd(
+      "workspace/crucible/tests/codegen/metal/test_metal_quit_bindings.nim",
+      extraFlags = "-d:caseBlk"),
+      "blk 2048x1x1 has an axis above 1024"
+    expectQuit testerCmd(
+      "workspace/crucible/tests/codegen/metal/test_metal_quit_bindings.nim",
+      extraFlags = "-d:caseGrid"),
+      "grid must be"
+    expectQuit testerCmd(
+      "workspace/crucible/tests/codegen/metal/test_metal_quit_bindings.nim",
+      extraFlags = "-d:caseScalar"),
+      "scalar arg"
+    expectQuit testerCmd(
+      "workspace/crucible/tests/codegen/metal/test_metal_31_bindings.nim",
+      extraFlags = "-d:case32"),
+      "a kernel has 32 buffer bindings"
 
 # ---------------------------------------------------
 

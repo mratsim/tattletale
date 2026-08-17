@@ -20,6 +20,7 @@ tests/codegen/
   opencl/       — OpenCL
   vulkan/       — Vulkan
   webgpu/       — WebGPU
+  metal/        — Metal (macOS)
 ```
 
 **IR tests are the exception to the public import:** they test compiler internals
@@ -35,13 +36,14 @@ imports. Only engine/runtime tests use the public API (below).
 | `test_opencl_<desc>.nim` | Auto-runnable on OpenCL — `import workspace/crucible`; `bkOpenCL.init()` + `engine.ingest()` + `engine.run()` |
 | `test_vulkan_<desc>.nim` | Auto-runnable on Vulkan — `import workspace/crucible`; `bkVulkan.init()` + `engine.ingest()` + `engine.run()` |
 | `test_webgpu_<desc>.nim` | Auto-runnable on WebGPU — `import workspace/crucible`; `bkWGSL.init()` + `engine.ingest()` + `engine.run()` |
+| `test_metal_<desc>.nim` | Auto-runnable on Metal (macOS) — `import workspace/crucible`; `bkMetal.init()` + `engine.ingest()` + `engine.run()` (or `engine.run<<(grid, blk)>>(...)`; tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17) |
 | `manual_<backend>_<desc>.nim` | **Manual only** — tests that expect a compile-time error (e.g., `proc that won't compile`). These cannot auto-run. |
 
 ### Test Requirements
 
 **One import for everything:** `import workspace/crucible` re-exports the DSL
-macros (`cuda:`/`opencl:`/`vulkan:`/`webgpu:`) and the engine API (`bkCuda`/
-`bkOpenCL`/`bkVulkan`/`bkWGSL`, `init`, `ingest`, `getArtifact`, `run`, `check`,
+macros (`cuda:`/`opencl:`/`vulkan:`/`webgpu:`/`metal:`) and the engine API (`bkCuda`/
+`bkOpenCL`/`bkVulkan`/`bkWGSL`/`bkMetal`, `init`, `ingest`, `getArtifact`, `run`, `check`,
 `deviceName`). IR tests are the exception — they keep deep internal imports.
 
 **All tests must call `engine.run()`** (or the chevron form `engine.run<<(grid, blk)>>(...)` — no space around `<<`/`>>`), not just `getArtifact()`/`ingest()`. A compile check is not enough — it can produce valid CUDA that computes wrong results.
@@ -74,6 +76,13 @@ pointers become device buffers.
 
 - **CUDA / OpenCL** — `grid`/`blk` are host-side launch config; `blk` is free
   (not shader-baked).
+- **Metal** — `grid`/`blk` are host-side launch config like CUDA/OpenCL.
+  `blk` is dispatch-time, validated against the Apple Silicon 1024-thread limit.
+  Kernel args bind as buffers (output at index 0, then inputs in order).
+  Scalars pack into one shared constant buffer at 16-byte slots.
+  The engine enforces the 31-binding limit at ingest.
+  Output reads back directly from `contents()` after `waitUntilCompleted`,
+  with no staging or map path.
 - **Vulkan / WebGPU** — the workgroup size is baked into the shader at codegen
   time; the engine validates the run `blk` against the baked size and quits
   loudly on mismatch.
@@ -110,6 +119,14 @@ nim c -r --hints:off --warnings:off \
 nim c -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
   workspace/crucible/tests/codegen/webgpu/test_*.nim
+
+# Metal (macOS)
+# tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17
+nim c -r --hints:off --warnings:off \
+  --outdir:build/tests --nimcache:nimcache/tests \
+  workspace/crucible/tests/codegen/metal/test_*.nim
+# whole suite, including the intentional-quit -d:case* binaries:
+nim test_crucible_metal
 ```
 
 ## File Header
@@ -128,7 +145,7 @@ Every test file must have a header comment:
 
 A "minimal repro" for a crucible bug:
 - Uses ONLY types defined in the test file (no ceramic, no external lib)
-- Has a `cuda:` / `opencl:` / `vulkan:` / `webgpu:` block
+- Has a `cuda:` / `opencl:` / `vulkan:` / `webgpu:` / `metal:` block
 - Demonstrates the failing pattern in the simplest possible way
 - Runs the kernel via `engine.run()` to verify correctness
 

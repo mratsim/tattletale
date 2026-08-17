@@ -30,15 +30,16 @@
 ## - int64/uint64 buffer arithmetic
 ##
 ## The gate also pins the emission rules. The shader bakes no workgroup size.
-## `blk` stays dispatch-time. The D6 builtin mapping holds.
+## `blk` stays dispatch-time. The index-builtin mapping holds.
 ## The four attribute-qualified `uint3` params appear verbatim.
 ## `gid` maps to the composite `bid * bdim + tid`.
-## A hand-built-IR kernel checks the D7 atomic emission. Compile-time tripwires pin the loud rejects.
+## A hand-built-IR kernel checks the atomic emission. Compile-time tripwires pin the loud rejects.
 ## fp64, reserved MSL keywords, and Metal builtin names never print.
 ##
-## Deliberately not ported as separate sources: the `basicKernel` binop set
-## (test_webgpu_user_defined_operator.nim) and `maxGeneric` (test_webgpu_add.nim).
-## Both shapes device-compile cleanly on the Metal toolchain.
+## The `basicKernel` binop set (test_webgpu_user_defined_operator.nim)
+## and `maxGeneric` (test_webgpu_add.nim) are covered by the execution suite
+## (test_metal_user_defined_operator.nim, test_metal_add.nim), which runs
+## both shapes through engine.run().
 ##
 ## Run:
 ##   cd tattletale
@@ -606,6 +607,58 @@ static:
     doAssert "'device' is a reserved keyword in MSL. Rename the parameter." == rejectMsg,
       rejectMsg
 
+  block:
+    # atomic call with no target argument must raise
+    var rejected = false
+    var rejectMsg = ""
+    try:
+      let outTyp = GpuType(kind: gtPtr, to: GpuType(kind: gtUA, uaTo: GpuType(kind: gtUint32)))
+      let outParam = GpuParam(ident: mkIdent("output", outTyp, gsGlobalKernelParam), typ: outTyp)
+      let call = GpuAst(kind: gpuCall,
+                        cName: mkIdent("atomic_add", GpuType(kind: gtVoid), gsProc),
+                        cArgs: @[])
+      let body = GpuAst(kind: gpuBlock, statements: @[call])
+      let kernel = GpuAst(kind: gpuProc,
+                          pName: mkIdent("k", GpuType(kind: gtVoid), gsProc),
+                          pRetType: GpuType(kind: gtVoid),
+                          pParams: @[outParam],
+                          pBody: body,
+                          pAttributes: {attGlobal})
+      var ctx = GpuContext()
+      ctx.preprocess(kernel)
+      discard ctx.codegen()
+    except AssertionDefect as e:
+      rejected = true
+      rejectMsg = e.msg
+    doAssert rejected, "an atomic call with no target compiled instead of raising loudly"
+    doAssert "requires a target argument" in rejectMsg, rejectMsg
+
+  block:
+    # atomic call targeting a literal (non-identifier) must raise
+    var rejected = false
+    var rejectMsg = ""
+    try:
+      let outTyp = GpuType(kind: gtPtr, to: GpuType(kind: gtUA, uaTo: GpuType(kind: gtUint32)))
+      let outParam = GpuParam(ident: mkIdent("output", outTyp, gsGlobalKernelParam), typ: outTyp)
+      let call = GpuAst(kind: gpuCall,
+                        cName: mkIdent("atomic_add", GpuType(kind: gtVoid), gsProc),
+                        cArgs: @[uint32Lit("1")])
+      let body = GpuAst(kind: gpuBlock, statements: @[call])
+      let kernel = GpuAst(kind: gpuProc,
+                          pName: mkIdent("k", GpuType(kind: gtVoid), gsProc),
+                          pRetType: GpuType(kind: gtVoid),
+                          pParams: @[outParam],
+                          pBody: body,
+                          pAttributes: {attGlobal})
+      var ctx = GpuContext()
+      ctx.preprocess(kernel)
+      discard ctx.codegen()
+    except AssertionDefect as e:
+      rejected = true
+      rejectMsg = e.msg
+    doAssert rejected, "an atomic call targeting a literal compiled instead of raising loudly"
+    doAssert "targets a non-atomic identifier" in rejectMsg, rejectMsg
+
 # ── Compile gate ────────────────────────────────────────────────────────────
 
 template failLoud(msg: string) =
@@ -669,18 +722,18 @@ proc runTest() =
 
   # The asserts check string presence. A permuted attribute mapping would still satisfy all five and device-compile.
   # Semantic binding is verified by execution tests, which are not part of this compile gate.
-  # D6 builtin mapping. The tid kernel source carries the four attribute-qualified uint3 params
+  # Index-builtin mapping. The tid kernel source carries the four attribute-qualified uint3 params
   # and the synthesized gid composite, all verbatim.
   doAssert "uint3 tid [[thread_position_in_threadgroup]]" in tidMsl
   doAssert "uint3 bid [[threadgroup_position_in_grid]]" in tidMsl
   doAssert "uint3 bdim [[threads_per_threadgroup]]" in tidMsl
   doAssert "uint3 gdim [[threadgroups_per_grid]]" in tidMsl
   doAssert "(bid * bdim + tid)" in tidMsl
-  echo "  OK — D6 builtin mapping (tid/bid/bdim/gdim, gid = bid * bdim + tid)"
+  echo "  OK — index-builtin mapping (tid/bid/bdim/gdim, gid = bid * bdim + tid)"
 
   doAssert "device atomic_uint* counter [[buffer(1)]]" in atomicMsl
   doAssert "atomic_fetch_add_explicit(counter, 1U, memory_order_relaxed)" in atomicMsl
-  echo "  OK — D7 atomic emission (atomic_uint param, atomic_fetch_add_explicit)"
+  echo "  OK — atomic emission (atomic_uint param, atomic_fetch_add_explicit)"
 
   discard objc.msgSend(pool, objc.`$$`("drain"))
   echo "All 25 printed MSL sources compiled via newLibraryWithSource"
