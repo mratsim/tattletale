@@ -32,6 +32,8 @@ proc toAddressSpace(symKind: GpuSymbolKind): AddressSpace =
   of gsNone:
     asFunction
     #raiseAssert "Encountered a node without a symbol kind!"
+  of gsBuiltin:
+    raiseAssert "Encountered a builtin symbol in the context of a type for a variable"
   of gsProc:
     raiseAssert "Encountered a procedure symbol in the context of a type for a variable"
 

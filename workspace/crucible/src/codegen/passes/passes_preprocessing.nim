@@ -737,6 +737,8 @@ proc toAddressSpace*(symKind: GpuSymbolKind): AddressSpace =
   of gsShared: asWorkspace
   of gsPrivate: asPrivate
   of gsNone: asFunction
+  of gsBuiltin:
+    raiseAssert "builtin symbol in type context"
   of gsProc:
     raiseAssert "proc symbol in type context"
 
@@ -1225,3 +1227,8 @@ proc registerOpenclPasses*(reg: var PassRegistry) =
         if fn.kind == gpuProc:
           ctx.insertByrefAddrsImpl(fn.pBody)
   )
+
+proc registerMetalPasses*(reg: var PassRegistry) =
+  ## Registers nothing. MSL is a C-family language (like CUDA), so the common passes
+  ## (`registerCommonPasses`) already cover the IR shapes the printer needs.
+  discard

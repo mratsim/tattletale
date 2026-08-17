@@ -15,9 +15,11 @@ import ./cuda_builtins
 import ./wgsl_builtins
 import ./opencl_builtins
 import ./vulkan_builtins
+import ./metal_builtins
 
 export builtins_pragmas
 export cuda_builtins
 export wgsl_builtins
 export opencl_builtins
 export vulkan_builtins
+export metal_builtins

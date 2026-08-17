@@ -14,7 +14,8 @@ type
     bkCuda,   ## CUDA backend
     bkWGSL,   ## WebGPU WGSL backend
     bkOpenCL, ## OpenCL backend
-    bkVulkan  ## Vulkan (SPIR-V) backend
+    bkVulkan, ## Vulkan (SPIR-V) backend
+    bkMetal   ## Metal (MSL) backend
 
   GpuNodeKind* = enum
     gpuDiscard         # Just an empty statement. Useful to not emit anything
@@ -247,6 +248,7 @@ type
 
   GpuSymbolKind* = enum
     gsNone,              ## Default to mark not explicitly set
+    gsBuiltin,           ## Reference to a backend builtin dummy (`{.builtin.}` let)
     gsDeviceKernelParam, ## Parameter of a device kernel (`function`)
     gsGlobalKernelParam, ## Parameter of a global kernel (`storage`) for WebGPU
     gsLocal,             ## Local variable (`function`)

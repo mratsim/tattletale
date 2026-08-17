@@ -132,6 +132,24 @@ macro webgpu*(body: typed): string =
   let body = ctx.codegenWebGpu(gpuAst)
   result = newLit(body)
 
+macro metal*(body: typed): string =
+  ## Converts the body of this macro into Metal Shading Language (MSL) code.
+  var ctx = GpuContext()
+  var reg = PassRegistry.new()
+  reg.registerCommonPasses()
+  reg.register("rejectMetalKeywords", pkValidation, phaseMain,
+    "Rejects identifiers that are reserved MSL keywords",
+    proc(ctx: var GpuContext): void =
+      ctx.checkReservedKeywords(["kernel", "device", "constant", "threadgroup"], "MSL")
+  )
+  reg.registerMetalPasses()
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toGpuAst(typeReg, body)
+  ctx.types = typeReg.types
+  runPasses(ctx, reg)
+  let body = ctx.codegenMetal(gpuAst)
+  result = newLit(body)
+
 proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
               backend: BackendKind = bkCuda): string =
   ## Generates the code based on the given AST (optionally at runtime) and restricts
@@ -178,6 +196,16 @@ proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
       proc(ctx: var GpuContext): void =
         ctx.checkReservedKeywords(["extern", "interface", "buffer"], "GLSL")
     )
+  of bkMetal:
+    # The runtime path fills `genericInsts`, not `allFnTab`, so the keyword pass
+    # above iterates nothing here. Reserved identifiers are rejected at emission
+    # instead. The printer's `checkReservedIdent` guards params, locals, fields, and function names.
+    reg.register("rejectMetalKeywords", pkValidation, phaseMain,
+      "Rejects identifiers that are reserved MSL keywords",
+      proc(ctx: var GpuContext): void =
+        ctx.checkReservedKeywords(["kernel", "device", "constant", "threadgroup"], "MSL")
+    )
+    reg.registerMetalPasses()
   # Clone IR before running passes — passes mutate in place,
   # so without cloning, one call contaminates later calls for a different backend.
   let astCopy = ast.clone()
@@ -202,3 +230,5 @@ proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
     result = ctx.codegenOpenCL(astCopy, kernel)
   of bkVulkan:
     result = ctx.codegenVulkan(astCopy, kernel)
+  of bkMetal:
+    result = ctx.codegenMetal(astCopy, kernel)

@@ -36,6 +36,33 @@ proc isTypeDescNode(n: NimNode): bool =
   ## never has `ntyTypeDesc` type, so it is never erased.
   result = n.getTypeInst().typeKind == ntyTypeDesc
 
+proc ownerModule(n: NimNode): string =
+  ## Name of the module where the symbol `n` is defined (via the owner chain).
+  var s = n
+  while s.kind == nnkSym:
+    if s.owner.symKind == nskModule:
+      return $s.owner
+    s = s.owner
+  return ""
+
+proc isBackendBuiltinDummy(node: NimNode): bool =
+  ## True when `node` references one of the backend index builtin dummies.
+  ## Requires BOTH the `{.builtin.}` pragma and a definition
+  ## in a backend builtins module, so a user `let gid {.builtin.}` is never a dummy.
+  if node.symKind != nskLet:
+    return false
+  if ownerModule(node) notin ["metal_builtins", "cuda_builtins", "wgsl_builtins"]:
+    return false
+  let impl = node.getImpl
+  if impl.kind != nnkIdentDefs or impl.len == 0 or impl[0].kind != nnkPragmaExpr:
+    return false
+  let pragma = impl[0][1]
+  if pragma.kind != nnkPragma:
+    return false
+  for p in pragma:
+    if p.kind == nnkSym and p.strVal == "builtin":
+      return true
+
 proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute], staticParamPositions: var seq[int],
                          staticValueMask: seq[int] = @[]): seq[GpuParam] =
   ## Returns all parameters of the given procedure from the `params` node
@@ -735,6 +762,12 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     result.symbol.name = node.repr # for sym choices
     if result.symbol.name == "_":
       result.symbol.name = "underscore"
+    if node.kind == nnkOpenSymChoice:
+      # One candidate of an overload set may be a backend builtin dummy.
+      for ch in node:
+        if ch.kind == nnkSym and isBackendBuiltinDummy(ch):
+          result.symbol.symKind = gsBuiltin
+          break
   of nnkSym:
     # Sanitize the identifier name: backticks are used by Nim for gensym
     # symbols (e.g., ``field`gensym229``) but are invalid in C.
@@ -764,6 +797,8 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       ctx.sigTab[s] = result
     else:
       result = ctx.sigTab[s]
+    if isBackendBuiltinDummy(node):
+      result.symbol.symKind = gsBuiltin
 
   # literal types
   of nnkIntLit, nnkInt32Lit:
