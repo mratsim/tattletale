@@ -1,6 +1,6 @@
 ## Metal: bool buffer marshalling through the engine.
 ## Bool buffer elements marshal at their Nim width (1 byte/element).
-## The printer declares buffer bool params `device bool*` / `device const bool*`
+## The printer declares buffer bool params `device bool*`
 ## (MSL bool is 1 byte in the device address space), matching the host blobs.
 ## Scalar bools stay 4-byte i32 on the host and are covered by
 ## test_metal_scalar_marshalling.nim.

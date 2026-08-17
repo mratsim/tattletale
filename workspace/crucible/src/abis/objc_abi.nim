@@ -218,7 +218,8 @@ when defined(macosx):
     ## Alloc/init an `NSAutoreleasePool`. Engine calls wrap their body in one;
     ## without a pool, autoreleased Metal objects trip OBJC_DEBUG_MISSING_POOLS=YES.
     result = msgSend(ID(getClass("NSAutoreleasePool")), $$"alloc")
-    discard msgSend(result, $$"init")
+    # `init` may return a different object than `alloc` — keep the init result.
+    result = msgSend(result, $$"init")
 
   proc drainPool*(pool: ID) {.inline.} =
     ## Drains the pool: releases everything autoreleased since `newPool`.

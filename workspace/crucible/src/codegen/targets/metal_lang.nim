@@ -303,8 +303,8 @@ proc collectAttrIdents(n: GpuAst, attrIdents: var seq[string]) =
 proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
                      atomics: HashSet[string]): string =
   ## MSL kernel parameter list:
-  ## - output buffer first: `device T*` at `[[buffer(0)]]`
-  ## - input buffers: `device const T*`
+  ## - buffer params: `device T*`, never const — matches device-fn params, and
+  ##   MSL accepts non-const input buffers
   ## - scalars: `constant T&`
   ## - the attribute params for the index builtins the kernel body references
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
@@ -315,7 +315,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
   collectAttrIdents(fn.pBody, attrIdents)
   var params: seq[string]
   var bufferIdx = 0
-  for i, p in fn.pParams:
+  for p in fn.pParams:
     let name = p.ident.ident()
     checkReservedIdent(name, "parameter")
     let binding = " [[buffer(" & $bufferIdx & ")]]"
@@ -327,10 +327,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst,
         params.add "device " & atomicElemName(p.typ) & "* " & name & binding
       else:
         var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-        if i == 0: # the engine binds the output at index 0
-          params.add "device " & elem & "* " & name & binding
-        else:
-          params.add "device const " & elem & "* " & name & binding
+        params.add "device " & elem & "* " & name & binding
     else:
       var elem = gpuTypeToString(p.typ, allowEmptyIdent = true)
       if p.typ.kind == gtBool:

@@ -1,7 +1,7 @@
 ## MSL printer compile gate: emits MSL for a representative set
 ## of webgpu corpus kernels via the `metal:` macro and device-compiles every source
-## through Metal's `newLibraryWithSource`, the same objc_abi bridge harness
-## as tests/codegen/metal/test_metal_abi_smoke.nim. The acceptance bar is device-compile-clean, not mere printing.
+## through Metal's `newLibraryWithSource`, the objc_abi bridge (no engine). The
+## acceptance bar is device-compile-clean, not mere printing.
 ##
 ## Covers 25 printer shapes:
 ## - add

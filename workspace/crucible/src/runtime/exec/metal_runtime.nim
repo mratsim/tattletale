@@ -127,7 +127,8 @@ when defined(macosx):
     if objc.isNil(cls):
       failLoud("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
     result = objc.msgSend(objc.ID(cls), objc.`$$`("alloc"))
-    discard objc.msgSend(result, objc.`$$`("init"))
+    # `init` may return a different object than `alloc` — keep the init result.
+    result = objc.msgSend(result, objc.`$$`("init"))
     discard objc.msgSend(result, objc.`$$`("setFastMathEnabled:"), objc.BOOL(0))
     discard objc.msgSend(result, objc.`$$`("setLanguageVersion:"), mslLanguageVersion())
 
