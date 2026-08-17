@@ -6,7 +6,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import ./cuda_lang, ./wgsl_lang, ./opencl_lang, ./vulkan_lang
+import ./cuda_lang, ./wgsl_lang, ./opencl_lang, ./vulkan_lang, ./metal_lang
 import ../ir/gpu_types
 
 proc codegenCuda*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
@@ -24,3 +24,9 @@ proc codegenOpenCL*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): stri
 proc codegenVulkan*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
   vulkan_lang.preprocess(ctx, ast, kernel)
   result = vulkan_lang.codegen(ctx)
+
+proc codegenMetal*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
+  ## Lowers `ast` to MSL. Runs the Metal preprocessing passes, then emits the shader source for `kernel`
+  ## (all kernels when empty).
+  metal_lang.preprocess(ctx, ast, kernel)
+  result = metal_lang.codegen(ctx)

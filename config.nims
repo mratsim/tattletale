@@ -71,6 +71,7 @@ func testerCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
     &" --outdir:build/tests/{filename} --nimcache:nimcache/tests/{filename} " &
     path
 
+
 func downloaderCmd(path: string): string =
   let filename = path.extractFilename()
   return
@@ -206,6 +207,11 @@ task test_crucible_vulkan, "Test workspace/crucible Vulkan codegen":
 task test_crucible_webgpu, "Test workspace/crucible WebGPU codegen":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/webgpu"):
+      runCmd(cmd)
+
+task test_crucible_metal, "Test workspace/crucible Metal codegen":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/metal"):
       runCmd(cmd)
 
 # ---------------------------------------------------

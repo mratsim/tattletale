@@ -172,7 +172,7 @@ INTERNAL (not exported):
 
 ## Testing
 
-### `runTest` from `libtorch_testutils`
+### `runCppTest` from `libtorch_testutils`
 
 Use for ALL tests. Catches C++ exceptions. `quit(1)` on failure.
 
@@ -182,7 +182,7 @@ import
   workspace/libtorch_testutils
 
 proc runTests*() =
-  runTest "my test":
+  runCppTest "my test":
     proc(): bool =
       let t = zeros(2, 3, kFloat32)
       doAssert t.dim() == 2
@@ -193,11 +193,11 @@ when isMainModule:
   runTests()
 ```
 
-**NEVER `std/unittest`.** Cannot catch C++ exceptions. Happy-path-only tests still need `runTest` for error coverage.
+**NEVER `std/unittest`.** Cannot catch C++ exceptions. Happy-path-only tests still need `runCppTest` for error coverage.
 
-### `runTest` API (`libtorch_testutils.nim`)
+### `runCppTest` API (`libtorch_testutils.nim`)
 
-- `runTest(name, body)` (`:70`): PASS/FAIL print, `quit(1)` on fail
+- `runCppTest(name, body)` (`:70`): PASS/FAIL print, `quit(1)` on fail
 - `catchExceptions(body)` (`:26`): `true`/`false` return. Catches: `TorchError`, `CppStdException`, `LibTorchDefect`, `CatchableError`, `Defect`
 - `assertAllClose(actual, expected, rtol, abstol)` (`:90`): Tensor tolerance comparison
 - `assertShape(tensor, expectedShape)` (`:119`): Shape check
@@ -244,7 +244,7 @@ import pkg/jsony
 import workspace/libtorch             # Tensor + NN API
 import workspace/libtorch as F        # Short alias
 import workspace/libtorch/src/tensors # Direct (Tensor, LibTorchDefect)
-import workspace/libtorch_testutils   # runTest, assertAllClose
+import workspace/libtorch_testutils   # runCppTest, assertAllClose
 import workspace/safetensors
 import workspace/toktoktok
 
@@ -349,7 +349,7 @@ wrapLibtorch:
 5. Shadowing `result` special variable
 6. `nim check` instead of `nim cpp` → false C++ exception warnings
 7. `python` instead of `uv run`
-8. `std/unittest` → use `runTest` from `libtorch_testutils`
+8. `std/unittest` → use `runCppTest` from `libtorch_testutils`
 9. Import `TorchTensor` from app code → always `Tensor`
 10. Missing `convertLibTorchExceptions:` in explicit `wrapLibtorch:` bodies
 
