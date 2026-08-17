@@ -127,6 +127,56 @@ steps 1–5 match CuTe `sgemm_1.cu` statement-by-statement: CTA coordinate,
 tiles, `local_partition` for thread data, `fillWith` to clear the accumulator,
 main loop of `copyFrom` + `gemm`, epilogue `axpby` (CuTe tutorial naming; the ceramic epilogue is `EpiAXPBY`, `src/kernel_gemm_epilogues.nim`).
 
+## GEMM thread organization — who owns what (worked example)
+
+The tensor-core GEMM levels differ in *who owns which state* as much as in what they compute.
+The levels are `gemm_atom`, `gemm_warp`, `gemm_tiled`, `gemm_cta` and `gemm_kernel`, defined in `src/kernel_gemm_gpu.nim`.
+The canonical worked example lives in that module's header.
+This section mirrors it so the partitioning is visible away from the kernel code.
+
+**Config (worked example):**
+- atom: m16n8k8
+- thread layout: (2, 2, 1)
+- tile: (32, 16, 32)
+- CTA: one tile, 128 lanes = 4 warps
+
+The same 32 lanes are the cooperation unit at both `gemm_atom` and `gemm_warp`.
+
+```
+CTA (gemm_cta)            128 lanes = 4 warps, owns the (32, 16) output tile
+  └─ warp (tm, tn) ∈ (2, 2)      [gemm_tiled partition]
+     owns the (16, 8) sub-tile: A rows tm·16..tm·16+16, B rows tn·8..tn·8+8
+     └─ lane l ∈ 0..31           [hardware fragment layouts]
+        owns V values per atom: A: 4, B: 2, C: 4
+```
+
+- `gemm_atom`: one `mma.sync`. The warp's 32 lanes jointly perform
+  one 16×8×8 MMA into their C fragment (16×8 = 128 values = 32 lanes × 4).
+- `gemm_warp`: the same 32 lanes loop kSlice = 0 ..< 4, with RepeatK = tileK/atomK = 32/8.
+  Each iteration issues one warp-wide `mma.sync` into the C fragment.
+  Per lane:
+  - A: (4, 1, 4)
+  - B: (2, 1, 4)
+  - C: (4, 1, 1)
+- The (2, 2, 1) thread layout never splits an atom across lanes:
+  it replicates the atom 2×2 = 4 times across the 4 warps, so the warps together cover the (32, 16) CTA tile.
+
+State/data flow (per CTA tile, one tileK-sized slice of K at a time):
+
+```
+gmem A (32, kView), B (16, kView)
+  ── gemm_cta cp.async ──▶ smem A (32, 32), B (16, 32)
+  ── gemm_tiled gather ──▶ lane registers A (4, 1, 4), B (2, 1, 4)
+  ── gemm_cta zeroes C (4, 1, 1) once, before the K-loop
+  ── gemm_warp 4× mma.sync ──▶ C (4, 1, 1) accumulated
+  ── gemm_cta epilogue ──▶ gmem D (32, 16)
+```
+
+**Terminology:**
+- **lane**: one thread (`threadIdx.x % 32`)
+- **warp**: 32 lanes, the unit that executes `mma.sync`
+- **CTA / threadblock**: the unit scheduled on one SM (`blockIdx`), made of warps
+
 ## Extension points
 
 - **New layout transform.** Add to `src/layouts.nim` (structural transforms) or
