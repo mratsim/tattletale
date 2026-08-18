@@ -318,8 +318,9 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # Handle __local shared variables
     var typeStr: string
     if atvShared in ast.vAttributes:
-      let inner = gpuTypeToString(ast.vType, allowEmptyIdent = true)
-      typeStr = "__local " & inner & ' ' & ast.vName.ident()
+      # The array type prints its identifier in the C declaration position
+      # (`uint scratch[8]`, not `uint [8] scratch`), so the variable name must be passed as the type's ident.
+      typeStr = "__local " & gpuTypeToString(ast.vType, ast.vName.ident())
     else:
       typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
 

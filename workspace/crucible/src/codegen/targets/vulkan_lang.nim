@@ -311,8 +311,10 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                 else: ""
     var typeStr: string
     if atvShared in ast.vAttributes:
-      let inner = gpuTypeToString(ast.vType, allowEmptyIdent = true)
-      typeStr = "shared " & inner & ' ' & ast.vName.ident()
+      # The array type prints its identifier in the GLSL declaration
+      # position (`shared uint scratch[8]`, not `shared uint [8] scratch`),
+      # so the variable name must be passed as the type's ident.
+      typeStr = "shared " & gpuTypeToString(ast.vType, ast.vName.ident())
     else:
       typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
 
