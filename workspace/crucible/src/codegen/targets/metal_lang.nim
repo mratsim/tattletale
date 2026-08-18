@@ -444,8 +444,9 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
 
   of gpuCall:
     let name = ast.cName.ident()
-    if name == "__syncthreads" or name == "syncthreads":
-      # The `{.cudaName: "__syncthreads".}` pragma on the shared builtin dummy renames the call.
+    if name == "threadgroup_barrier":
+      # Every backend's barrier spelling is an alias template. Sem expands it
+      # to the canonical `threadgroup_barrier` call, so only that name reaches the IR.
       # MSL spells the barrier with its memory flags.
       result = indentStr & "threadgroup_barrier(mem_flags::mem_threadgroup)"
     else:

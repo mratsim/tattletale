@@ -32,8 +32,9 @@ let NimGpuBooleanOperators* {.compileTime.} = {
 }.toTable()
 
 let NimGpuFnBuiltins* {.compileTime.} = ["toOpenArray", "len",
-  # OpenCL work-item dimension helpers (dummy procs in opencl_builtins —
-  # calls forward to the OpenCL C builtins by name)
+  # OpenCL work-item dimension helpers: template aliases in builtins_catalog.nim.
+  # They expand to canonical names before codegen, so calls never reach this list.
+  # The entries remain for the name-only registration path.
   "get_global_id", "get_local_id", "get_group_id",
   "get_local_size", "get_global_size", "get_num_groups"]
   # Function-style builtins with `{.magic.}` that are called as function
