@@ -239,13 +239,15 @@ proc exprType(ctx: GpuContext, n: GpuAst): GpuType =
   of gpuMaterialize: ctx.exprType(n.mExpr)
   else: nil
 
-proc collectAttrIdents(n: GpuAst, attrIdents: var seq[string]) =
-  ## Records gsBuiltin-marked identifiers in first-use order, deduped.
+proc collectAttrIdents(n: GpuAst, attrIdents: var seq[(string, GpuCoordBuiltinKind)]) =
+  ## Records coordinate-builtin identifiers in first-use order, deduped by name.
+  ## The `gpuCall` name is not part of the child walk, so the barrier never becomes an attribute param.
   case n.kind
   of gpuIdent:
-    if n.symbol != nil and n.symbol.symKind == gsBuiltin and
-       n.ident() notin attrIdents:
-      attrIdents.add n.ident()
+    if n.symbol != nil and n.symbol.coordBuiltin != gbkNone:
+      let name = n.ident()
+      if not attrIdents.anyIt(it[0] == name):
+        attrIdents.add (name, n.symbol.coordBuiltin)
   else:
     for ch in n:
       collectAttrIdents(ch, attrIdents)
@@ -259,7 +261,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
   ## Scalars stay 4 bytes on the host (arg_blobs blobOf), so scalar `bool` is declared `int`.
   ## Buffer elements marshal at their Nim width, so bool buffers declare `bool` (1 byte).
-  var attrIdents: seq[string]
+  var attrIdents: seq[(string, GpuCoordBuiltinKind)]
   collectAttrIdents(fn.pBody, attrIdents)
   var params: seq[string]
   var bufferIdx = 0
@@ -279,10 +281,10 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
         elem = "int"
       params.add "constant " & elem & "& " & name & binding
     inc bufferIdx
-  for attr in attrIdents:
-    # The five coordinate builtins are `uint3` attribute params. The flat
-    # thread index `thread_index_in_threadgroup` is a scalar `uint` builtin.
-    let attrType = if attr == "thread_index_in_threadgroup": "uint" else: "uint3"
+  for (attr, kind) in attrIdents:
+    # The five coordinate builtins are `uint3` attribute params.
+    # The flat thread index `gbkThreadIndexInThreadgroup` is a scalar `uint` builtin.
+    let attrType = if kind == gbkThreadIndexInThreadgroup: "uint" else: "uint3"
     params.add attrType & " " & attr & " [[" & attr & "]]"
   result = params.join(", ")
 
@@ -446,13 +448,13 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
              ctx.genMetalImpl(ast.iIndex, 0) & ']'
 
   of gpuCall:
-    let name = ast.cName.ident()
-    if name == "threadgroup_barrier":
-      # Every backend's barrier spelling is an alias template. Sem expands it
-      # to the canonical `threadgroup_barrier` call, so only that name reaches the IR.
+    case ast.cName.symbol.synchroBuiltin
+    of gbkThreadgroupBarrier:
+      # Every backend spelling of the barrier is an alias template that sem
+      # expands to the canonical call, so only this kind reaches the IR.
       # MSL spells the barrier with its memory flags.
       result = indentStr & "threadgroup_barrier(mem_flags::mem_threadgroup)"
-    else:
+    of gbkNone:
       var args: seq[string]
       for a in ast.cArgs:
         args.add ctx.genMetalImpl(a, 0)

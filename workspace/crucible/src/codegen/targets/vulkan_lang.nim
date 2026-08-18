@@ -241,17 +241,19 @@ proc genLit*(ast: GpuAst): string =
     else:
       result = ast.lValue
 
-proc glslCoordIdent(name: string): string =
+proc glslCoordIdent(kind: GpuCoordBuiltinKind): string =
   ## GLSL spelling of a canonical coordinate builtin referenced whole.
   ## All six canonicals are native GLSL builtins, so this is a plain rename.
-  case name
-  of "thread_position_in_grid": "gl_GlobalInvocationID"
-  of "threadgroup_position_in_grid": "gl_WorkGroupID"
-  of "thread_position_in_threadgroup": "gl_LocalInvocationID"
-  of "threads_per_threadgroup": "gl_WorkGroupSize"
-  of "threadgroups_per_grid": "gl_NumWorkGroups"
-  of "thread_index_in_threadgroup": "gl_LocalInvocationIndex"
-  else: name
+  case kind
+  of gbkThreadPositionInGrid: "gl_GlobalInvocationID"
+  of gbkThreadgroupPositionInGrid: "gl_WorkGroupID"
+  of gbkThreadPositionInThreadgroup: "gl_LocalInvocationID"
+  of gbkThreadsPerThreadgroup: "gl_WorkGroupSize"
+  of gbkThreadgroupsPerGrid: "gl_NumWorkGroups"
+  of gbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
+  of gbkNone:
+    # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
+    raiseAssert "coordinate site with no coordinate builtin kind"
 
 proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual GLSL compute shader code generator.
@@ -362,12 +364,13 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genVulkan(ast.iArr) & '[' & ctx.genVulkan(ast.iIndex) & ']'
 
   of gpuCall:
-    if ast.cName.ident() == "threadgroup_barrier":
+    case ast.cName.symbol.synchroBuiltin
+    of gbkThreadgroupBarrier:
       # Every backend spelling of the barrier is an alias template that sem
-      # expands to the canonical call, so only this name reaches the IR.
+      # expands to the canonical call, so only this kind reaches the IR.
       # Vulkan spells it `barrier()`.
       result = indentStr & "barrier()"
-    else:
+    of gbkNone:
       var vkArgs: seq[string]
       for arg in ast.cArgs:
         vkArgs.add ctx.genVulkan(arg)
@@ -390,13 +393,18 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                r & ')'
 
   of gpuIdent:
-    if ast.symbol != nil and ast.symbol.symKind == gsBuiltin:
-      # Canonical coordinates are the MSL vocabulary. This printer maps each
-      # to its GLSL spelling (gl_GlobalInvocationID, gl_WorkGroupID,
-      # gl_LocalInvocationID, gl_WorkGroupSize, gl_NumWorkGroups,
-      # gl_LocalInvocationIndex). Locals shadowing a canonical name keep
-      # `gsLocal` and are emitted verbatim.
-      result = glslCoordIdent(ast.ident())
+    if ast.symbol != nil:
+      case ast.symbol.coordBuiltin
+      of gbkNone:
+        # A local shadowing a canonical name, or a call-shaped builtin
+        # (printf, cvtaGenericToShared): emit verbatim.
+        result = ast.ident()
+      else:
+        # Canonical coordinates are the MSL vocabulary. This printer maps
+        # each kind to its GLSL spelling (gl_GlobalInvocationID,
+        # gl_WorkGroupID, gl_LocalInvocationID, gl_WorkGroupSize,
+        # gl_NumWorkGroups, gl_LocalInvocationIndex).
+        result = glslCoordIdent(ast.symbol.coordBuiltin)
     else:
       result = ast.ident()
 

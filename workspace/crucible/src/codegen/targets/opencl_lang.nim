@@ -222,10 +222,10 @@ proc genLit*(ast: GpuAst): string =
     else:
       result = ast.lValue
 
-proc openclCoordFieldAccess(name, field: string): string =
+proc openclCoordFieldAccess(kind: GpuCoordBuiltinKind, field: string): string =
   ## OpenCL C spelling of a canonical coordinate field access: each component
   ## maps to a `get_*(d)` call with the dimension as a literal.
-  ## Returns "" for names without a per-component mapping
+  ## Returns "" for kinds without a per-component mapping
   ## (whole-value uses of the vector builtins have no OpenCL spelling).
   let d =
     case field
@@ -233,23 +233,30 @@ proc openclCoordFieldAccess(name, field: string): string =
     of "y": "1"
     of "z": "2"
     else: return ""
-  case name
-  of "thread_position_in_grid": "get_global_id(" & d & ")"
-  of "threadgroup_position_in_grid": "get_group_id(" & d & ")"
-  of "thread_position_in_threadgroup": "get_local_id(" & d & ")"
-  of "threads_per_threadgroup": "get_local_size(" & d & ")"
-  of "threadgroups_per_grid": "get_num_groups(" & d & ")"
-  else: ""
+  case kind
+  of gbkThreadPositionInGrid: "get_global_id(" & d & ")"
+  of gbkThreadgroupPositionInGrid: "get_group_id(" & d & ")"
+  of gbkThreadPositionInThreadgroup: "get_local_id(" & d & ")"
+  of gbkThreadsPerThreadgroup: "get_local_size(" & d & ")"
+  of gbkThreadgroupsPerGrid: "get_num_groups(" & d & ")"
+  of gbkThreadIndexInThreadgroup, gbkNone: ""
 
-proc openclCoordIdent(name: string): string =
+proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
   ## OpenCL spelling of a canonical scalar coordinate builtin referenced whole.
-  case name
-  of "thread_index_in_threadgroup":
+  case kind
+  of gbkThreadIndexInThreadgroup:
     # x-major flat thread index, parenthesized so a trailing `* k` cannot
     # mis-associate into `+ get_local_id(0) * k`.
     "(get_local_id(2)*get_local_size(0)*get_local_size(1) + get_local_id(1)*get_local_size(0) + get_local_id(0))"
-  else:
+  of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
+     gbkThreadPositionInThreadgroup, gbkThreadsPerThreadgroup,
+     gbkThreadgroupsPerGrid:
+    # Whole-value vector coordinates have no OpenCL spelling. Their names
+    # are emitted verbatim (zero in-tree uses, non-goal).
     name
+  of gbkNone:
+    # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
+    raiseAssert "coordinate site with no coordinate builtin kind: " & name
 
 proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual OpenCL C code generator.
@@ -363,9 +370,9 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuDot:
     if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
-       ast.dParent.symbol.symKind == gsBuiltin and
+       ast.dParent.symbol.coordBuiltin != gbkNone and
        ast.dField.kind == gpuIdent:
-      let mapped = openclCoordFieldAccess(ast.dParent.ident(), ast.dField.ident())
+      let mapped = openclCoordFieldAccess(ast.dParent.symbol.coordBuiltin, ast.dField.ident())
       if mapped.len > 0:
         result = mapped
       else:
@@ -377,12 +384,13 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genOpenCL(ast.iArr) & '[' & ctx.genOpenCL(ast.iIndex) & ']'
 
   of gpuCall:
-    if ast.cName.ident() == "threadgroup_barrier":
+    case ast.cName.symbol.synchroBuiltin
+    of gbkThreadgroupBarrier:
       # Every backend spelling of the barrier is an alias template that sem
-      # expands to the canonical call, so only this name reaches the IR.
+      # expands to the canonical call, so only this kind reaches the IR.
       # OpenCL spells it `barrier(CLK_LOCAL_MEM_FENCE)`.
       result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE)"
-    else:
+    of gbkNone:
       var clArgs: seq[string]
       for arg in ast.cArgs:
         clArgs.add ctx.genOpenCL(arg)
@@ -405,13 +413,18 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                r & ')'
 
   of gpuIdent:
-    if ast.symbol != nil and ast.symbol.symKind == gsBuiltin:
-      # Canonical coordinates are the MSL vocabulary. This printer maps each
-      # to its OpenCL spelling: get_global_id, get_group_id, get_local_id,
-      # get_local_size, get_num_groups and the flat-index linearization.
-      # Locals shadowing a canonical name keep `gsLocal` and are emitted
-      # verbatim.
-      result = openclCoordIdent(ast.ident())
+    if ast.symbol != nil:
+      case ast.symbol.coordBuiltin
+      of gbkNone:
+        # A local shadowing a canonical name, or a call-shaped builtin
+        # (printf, cvtaGenericToShared): emit verbatim.
+        result = ast.ident()
+      else:
+        # Canonical coordinates are the MSL vocabulary. This printer maps
+        # each kind to its OpenCL spelling: get_global_id, get_group_id,
+        # get_local_id, get_local_size, get_num_groups and the flat-index
+        # linearization.
+        result = openclCoordIdent(ast.symbol.coordBuiltin, ast.ident())
     else:
       result = ast.ident()
 

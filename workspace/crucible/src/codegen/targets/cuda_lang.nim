@@ -199,21 +199,25 @@ proc genLit*(ast: GpuAst): string =
     else:
       result = ast.lValue
 
-proc cudaCoordIdent(name: string): string =
+proc cudaCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
   ## CUDA spelling of a canonical coordinate builtin referenced whole.
-  ## `thread_position_in_grid` has no whole-value spelling
-  ## (it is an expression), and is handled at the field-access site in `gpuDot`.
-  case name
-  of "threadgroup_position_in_grid": "blockIdx"
-  of "thread_position_in_threadgroup": "threadIdx"
-  of "threads_per_threadgroup": "blockDim"
-  of "threadgroups_per_grid": "gridDim"
-  of "thread_index_in_threadgroup":
+  ## `gbkThreadPositionInGrid` has no whole-value spelling: the `gpuDot` field-access site emits the component expression.
+  case kind
+  of gbkThreadgroupPositionInGrid: "blockIdx"
+  of gbkThreadPositionInThreadgroup: "threadIdx"
+  of gbkThreadsPerThreadgroup: "blockDim"
+  of gbkThreadgroupsPerGrid: "gridDim"
+  of gbkThreadIndexInThreadgroup:
     # x-major flat thread index, parenthesized so a trailing `* k` cannot
     # mis-associate into `+ threadIdx.x * k`.
     "(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)"
-  else:
+  of gbkThreadPositionInGrid:
+    # whole-value use: no CUDA spelling, emit the canonical name verbatim
+    # (zero in-tree uses, non-goal)
     name
+  of gbkNone:
+    # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
+    raiseAssert "coordinate site with no coordinate builtin kind: " & name
 
 proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual CUDA code generator.
@@ -307,8 +311,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuDot:
     if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
-       ast.dParent.symbol.symKind == gsBuiltin and
-       ast.dParent.ident() == "thread_position_in_grid" and
+       ast.dParent.symbol.coordBuiltin == gbkThreadPositionInGrid and
        ast.dField.kind == gpuIdent:
       # Parenthesized expression: `thread_position_in_grid.d` is
       # `blockIdx.d*blockDim.d + threadIdx.d`. Without the parentheses,
@@ -322,12 +325,13 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genCuda(ast.iArr) & '[' & ctx.genCuda(ast.iIndex) & ']'
 
   of gpuCall:
-    if ast.cName.ident() == "threadgroup_barrier":
+    case ast.cName.symbol.synchroBuiltin
+    of gbkThreadgroupBarrier:
       # Every backend spelling of the barrier is an alias template that sem
-      # expands to the canonical call, so only this name reaches the IR.
+      # expands to the canonical call, so only this kind reaches the IR.
       # CUDA spells it `__syncthreads()`.
       result = indentStr & "__syncthreads()"
-    else:
+    of gbkNone:
       var cudaArgs: seq[string]
       for i, arg in ast.cArgs:
         cudaArgs.add ctx.genCuda(arg)
@@ -349,12 +353,17 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                r & ')'
 
   of gpuIdent:
-    if ast.symbol != nil and ast.symbol.symKind == gsBuiltin:
-      # Canonical coordinates are the MSL vocabulary. This printer maps each
-      # to its CUDA spelling (blockIdx, blockDim, gridDim, threadIdx).
-      # Locals shadowing a canonical name keep `gsLocal` and are emitted
-      # verbatim.
-      result = cudaCoordIdent(ast.ident())
+    if ast.symbol != nil:
+      case ast.symbol.coordBuiltin
+      of gbkNone:
+        # A local shadowing a canonical name, or a call-shaped builtin
+        # (printf, cvtaGenericToShared): emit verbatim.
+        result = ast.ident()
+      else:
+        # Canonical coordinates are the MSL vocabulary. This printer maps
+        # each kind to its CUDA spelling (blockIdx, blockDim, gridDim,
+        # threadIdx, the flat-index linearization).
+        result = cudaCoordIdent(ast.symbol.coordBuiltin, ast.ident())
     else:
       result = ast.ident()
 

@@ -842,12 +842,11 @@ proc wgslBuiltinParamName(canonical: string): string =
   if p.canonical.len > 0: p.param else: canonical
 
 proc collectWgslBuiltins(n: GpuAst, builtins: var seq[string]) =
-  ## Records the canonical coordinate builtins the body references, in
-  ## first-use order, deduped (the Metal `collectAttrIdents` pattern).
-  ## Only builtins with a real WGSL `@builtin` param are recorded.
+  ## Records the coordinate builtins the body references, in first-use order, deduped (the Metal `collectAttrIdents` pattern).
+  ## Only builtins with a real WGSL `@builtin` param are recorded. The `gpuCall` name is excluded from the walk.
   case n.kind
   of gpuIdent:
-    if n.symbol != nil and n.symbol.symKind == gsBuiltin:
+    if n.symbol != nil and n.symbol.coordBuiltin != gbkNone:
       let name = n.ident()
       if wgslBuiltinParam(name).canonical.len > 0 and name notin builtins:
         builtins.add name
@@ -986,12 +985,13 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genWebGpu(ast.iArr) & '[' & ctx.genWebGpu(ast.iIndex) & ']'
 
   of gpuCall:
-    if ast.cName.ident() == "threadgroup_barrier":
+    case ast.cName.symbol.synchroBuiltin
+    of gbkThreadgroupBarrier:
       # Every backend spelling of the barrier is an alias template that sem
-      # expands to the canonical call, so only this name reaches the IR.
+      # expands to the canonical call, so only this kind reaches the IR.
       # WGSL spells it `workgroupBarrier()`.
       result = indentStr & "workgroupBarrier()"
-    else:
+    of gbkNone:
       ctx.withoutSemicolon:
         result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
                  ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
@@ -1015,18 +1015,23 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                r & ')'
 
   of gpuIdent:
-    if ast.symbol != nil and ast.symbol.symKind == gsBuiltin:
-      let name = ast.ident()
-      if name == "threads_per_threadgroup":
+    if ast.symbol != nil:
+      case ast.symbol.coordBuiltin
+      of gbkNone:
+        # A local shadowing a canonical name, or a call-shaped builtin
+        # (printf, cvtaGenericToShared): emit verbatim.
+        result = ast.ident()
+      of gbkThreadsPerThreadgroup:
         raiseAssert "`threads_per_threadgroup` has no WGSL builtin: WGSL has " &
           "only the `@workgroup_size` attribute, never a `workgroup_size` " &
           "builtin, so the threadgroup size is not addressable from WGSL."
-      # Canonical coordinates are the MSL vocabulary. This printer maps each
-      # to the injected `@builtin` param name: global_id, workgroup_id,
-      # local_invocation_id, num_workgroups and local_invocation_index.
-      # Locals shadowing a canonical name keep `gsLocal` and are emitted
-      # verbatim.
-      result = wgslBuiltinParamName(name)
+      of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
+         gbkThreadPositionInThreadgroup, gbkThreadgroupsPerGrid,
+         gbkThreadIndexInThreadgroup:
+        # Canonical coordinates map to the injected `@builtin` param names
+        # (global_id, workgroup_id, local_invocation_id, num_workgroups,
+        # local_invocation_index).
+        result = wgslBuiltinParamName(ast.ident())
     else:
       result = ast.ident()
 

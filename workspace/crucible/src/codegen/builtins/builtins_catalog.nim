@@ -18,7 +18,7 @@ import ./builtins_pragmas
 ## Every other backend spelling, such as CUDA `blockIdx`, OpenCL `get_global_id`,
 ## GLSL `gl_GlobalInvocationID`, or WGSL `global_id`, is a template alias.
 ## Nim's sem expands each alias to the canonical name before the typed GPU macro sees the body.
-## The IR therefore only ever contains canonical names, with no alias tables or name→kind maps in the compiler.
+## The IR therefore only ever contains canonical names.
 ##
 ## The canonical coordinate type is the `uvec3` tuple, which supports `.x` and `[idx]` access and free destructuring.
 ## The `let {.builtin, compileTime.}` dummies exist so typed macro bodies typecheck.
