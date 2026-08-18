@@ -72,10 +72,12 @@ Notes:
   - MSL: the canonical names themselves
   `workgroup_barrier(flags)` and `workgroupBarrier()` are one declaration with a defaulted flag.
   `get_global_size` is excluded from the vocabulary: it is OpenCL-only native.
-- **Inert registration list.** `NimGpuFnBuiltins` in [`src/codegen/builtins/nim_builtins.nim`](src/codegen/builtins/nim_builtins.nim)
-  still lists the OpenCL `get_*` names. The list is a dead contract: the alias
-  templates expand during sem, before codegen's name-only registration path
-  would consult it, so calls never reach it.
+- **No OpenCL `get_*` registration.**
+  `NimGpuFnBuiltins` in [`src/codegen/builtins/nim_builtins.nim`](src/codegen/builtins/nim_builtins.nim)
+  registers only the Nim function-style magic builtins (`toOpenArray`, `len`).
+  The OpenCL work-item spellings are template aliases in `builtins_catalog.nim`
+  that expand to canonical names during sem. The name-only registration path
+  would never consult the list, so no codegen registration exists for them.
 
 ## Status
 
@@ -112,7 +114,7 @@ workspace/crucible/
         builtins_catalog.nim     Canonical coordinate/sync builtins + per-backend idiom aliases
         builtins_pragmas.nim     Backend pragmas: cudaName, workgroup, builtin, shared, ...
         builtins.nim             Re-exports the catalog and pragmas to the entry macros
-        nim_builtins.nim         Nim-level builtins: operators, min/max/abs, inert OpenCL get_* list
+        nim_builtins.nim         Nim-level builtins: operators, min/max/abs, function-style magic builtins
     runtime/
       engines.nim                HwEngine — the sole public runtime API (init/ingest/getArtifact/run/chevrons)
       engines/                   CudaEngine (nvrtc.nim), OpenCLEngine (cl.nim), VulkanEngine (vk.nim), WgpuEngine (wgpu.nim), MetalEngine (metal.nim)

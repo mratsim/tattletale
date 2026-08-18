@@ -31,15 +31,16 @@ let NimGpuBooleanOperators* {.compileTime.} = {
   "and": "&&", "or": "||", "not": "!"
 }.toTable()
 
-let NimGpuFnBuiltins* {.compileTime.} = ["toOpenArray", "len",
-  # OpenCL work-item dimension helpers: template aliases in builtins_catalog.nim.
-  # They expand to canonical names before codegen, so calls never reach this list.
-  # The entries remain for the name-only registration path.
-  "get_global_id", "get_local_id", "get_group_id",
-  "get_local_size", "get_global_size", "get_num_groups"]
+let NimGpuFnBuiltins* {.compileTime.} = ["toOpenArray", "len"]
   # Function-style builtins with `{.magic.}` that are called as function
   # calls (not operators). When these reach registerGenericInstOrExternalProc
   # they must be registered as builtins without parsing their bodies.
+  #
+  # The OpenCL work-item spellings get_global_id, get_group_id, get_local_id,
+  # get_local_size and get_num_groups are template aliases in builtins_catalog.nim:
+  # they expand to canonical names during sem. The name-only registration path
+  # never sees them, so they need no entry here.
+  # get_global_size is OpenCL-native and excluded from the vocabulary.
 
 let NimGpuNumericBuiltinsFunctions* {.compileTime.} = ["min", "max", "abs"]
   # Functions (not operators) that are {.magic.} in Nim
