@@ -123,6 +123,11 @@ template local_invocation_index*(): untyped = thread_index_in_threadgroup
 template syncthreads*(): untyped = threadgroup_barrier()
 
 # OpenCL idiom
+const CLK_LOCAL_MEM_FENCE* = 1'u32
+  ## OpenCL work-group barrier flag. OpenCL-idiom kernels write
+  ## `barrier(CLK_LOCAL_MEM_FENCE)`. The flag folds away in the alias
+  ## template. The OpenCL printer emits `barrier(CLK_LOCAL_MEM_FENCE)`
+  ## for the canonical barrier call.
 template barrier*(flags: uint32): untyped = threadgroup_barrier()
   ## OpenCL work-group barrier alias: the flag argument folds away, so `barrier(flags)` matches the OpenCL call shape.
 

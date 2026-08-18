@@ -222,6 +222,35 @@ proc genLit*(ast: GpuAst): string =
     else:
       result = ast.lValue
 
+proc openclCoordFieldAccess(name, field: string): string =
+  ## OpenCL C spelling of a canonical coordinate field access: each component
+  ## maps to a `get_*(d)` call with the dimension as a literal.
+  ## Returns "" for names without a per-component mapping
+  ## (whole-value uses of the vector builtins have no OpenCL spelling).
+  let d =
+    case field
+    of "x": "0"
+    of "y": "1"
+    of "z": "2"
+    else: return ""
+  case name
+  of "thread_position_in_grid": "get_global_id(" & d & ")"
+  of "threadgroup_position_in_grid": "get_group_id(" & d & ")"
+  of "thread_position_in_threadgroup": "get_local_id(" & d & ")"
+  of "threads_per_threadgroup": "get_local_size(" & d & ")"
+  of "threadgroups_per_grid": "get_num_groups(" & d & ")"
+  else: ""
+
+proc openclCoordIdent(name: string): string =
+  ## OpenCL spelling of a canonical scalar coordinate builtin referenced whole.
+  case name
+  of "thread_index_in_threadgroup":
+    # x-major flat thread index, parenthesized so a trailing `* k` cannot
+    # mis-associate into `+ get_local_id(0) * k`.
+    "(get_local_id(2)*get_local_size(0)*get_local_size(1) + get_local_id(1)*get_local_size(0) + get_local_id(0))"
+  else:
+    name
+
 proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual OpenCL C code generator.
   let indentStr = "  ".repeat(indent)
@@ -332,16 +361,31 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result &= indentStr & '}'
 
   of gpuDot:
-    result = ctx.genOpenCL(ast.dParent) & '.' & ctx.genOpenCL(ast.dField)
+    if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
+       ast.dParent.symbol.symKind == gsBuiltin and
+       ast.dField.kind == gpuIdent:
+      let mapped = openclCoordFieldAccess(ast.dParent.ident(), ast.dField.ident())
+      if mapped.len > 0:
+        result = mapped
+      else:
+        result = ctx.genOpenCL(ast.dParent) & '.' & ctx.genOpenCL(ast.dField)
+    else:
+      result = ctx.genOpenCL(ast.dParent) & '.' & ctx.genOpenCL(ast.dField)
 
   of gpuIndex:
     result = ctx.genOpenCL(ast.iArr) & '[' & ctx.genOpenCL(ast.iIndex) & ']'
 
   of gpuCall:
-    var clArgs: seq[string]
-    for arg in ast.cArgs:
-      clArgs.add ctx.genOpenCL(arg)
-    result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
+    if ast.cName.ident() == "threadgroup_barrier":
+      # Every backend spelling of the barrier is an alias template that sem
+      # expands to the canonical call, so only this name reaches the IR.
+      # OpenCL spells it `barrier(CLK_LOCAL_MEM_FENCE)`.
+      result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE)"
+    else:
+      var clArgs: seq[string]
+      for arg in ast.cArgs:
+        clArgs.add ctx.genOpenCL(arg)
+      result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:
@@ -360,7 +404,15 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                r & ')'
 
   of gpuIdent:
-    result = ast.ident()
+    if ast.symbol != nil and ast.symbol.symKind == gsBuiltin:
+      # Canonical coordinates are the MSL vocabulary. This printer maps each
+      # to its OpenCL spelling: get_global_id, get_group_id, get_local_id,
+      # get_local_size, get_num_groups and the flat-index linearization.
+      # Locals shadowing a canonical name keep `gsLocal` and are emitted
+      # verbatim.
+      result = openclCoordIdent(ast.ident())
+    else:
+      result = ast.ident()
 
   of gpuLit:
       result = genLit(ast)

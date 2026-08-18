@@ -280,7 +280,10 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
       params.add "constant " & elem & "& " & name & binding
     inc bufferIdx
   for attr in attrIdents:
-    params.add "uint3 " & attr & " [[" & attr & "]]"
+    # The five coordinate builtins are `uint3` attribute params. The flat
+    # thread index `thread_index_in_threadgroup` is a scalar `uint` builtin.
+    let attrType = if attr == "thread_index_in_threadgroup": "uint" else: "uint3"
+    params.add attrType & " " & attr & " [[" & attr & "]]"
   result = params.join(", ")
 
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =

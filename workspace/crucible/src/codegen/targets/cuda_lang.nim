@@ -199,6 +199,22 @@ proc genLit*(ast: GpuAst): string =
     else:
       result = ast.lValue
 
+proc cudaCoordIdent(name: string): string =
+  ## CUDA spelling of a canonical coordinate builtin referenced whole.
+  ## `thread_position_in_grid` has no whole-value spelling
+  ## (it is an expression), and is handled at the field-access site in `gpuDot`.
+  case name
+  of "threadgroup_position_in_grid": "blockIdx"
+  of "thread_position_in_threadgroup": "threadIdx"
+  of "threads_per_threadgroup": "blockDim"
+  of "threadgroups_per_grid": "gridDim"
+  of "thread_index_in_threadgroup":
+    # x-major flat thread index, parenthesized so a trailing `* k` cannot
+    # mis-associate into `+ threadIdx.x * k`.
+    "(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)"
+  else:
+    name
+
 proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual CUDA code generator.
   let indentStr = "  ".repeat(indent)
@@ -290,16 +306,32 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result &= indentStr & '}'
 
   of gpuDot:
-    result = ctx.genCuda(ast.dParent) & '.' & ctx.genCuda(ast.dField)
+    if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
+       ast.dParent.symbol.symKind == gsBuiltin and
+       ast.dParent.ident() == "thread_position_in_grid" and
+       ast.dField.kind == gpuIdent:
+      # Parenthesized expression: `thread_position_in_grid.d` is
+      # `blockIdx.d*blockDim.d + threadIdx.d`. Without the parentheses,
+      # a trailing `* k` would bind to `threadIdx.d` only.
+      let d = ast.dField.ident()
+      result = "(blockIdx." & d & "*blockDim." & d & "+threadIdx." & d & ")"
+    else:
+      result = ctx.genCuda(ast.dParent) & '.' & ctx.genCuda(ast.dField)
 
   of gpuIndex:
     result = ctx.genCuda(ast.iArr) & '[' & ctx.genCuda(ast.iIndex) & ']'
 
   of gpuCall:
-    var cudaArgs: seq[string]
-    for i, arg in ast.cArgs:
-      cudaArgs.add ctx.genCuda(arg)
-    result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
+    if ast.cName.ident() == "threadgroup_barrier":
+      # Every backend spelling of the barrier is an alias template that sem
+      # expands to the canonical call, so only this name reaches the IR.
+      # CUDA spells it `__syncthreads()`.
+      result = indentStr & "__syncthreads()"
+    else:
+      var cudaArgs: seq[string]
+      for i, arg in ast.cArgs:
+        cudaArgs.add ctx.genCuda(arg)
+      result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
   of gpuTemplateCall:
     when nimvm:
       error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
@@ -317,7 +349,14 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                r & ')'
 
   of gpuIdent:
-    result = ast.ident()
+    if ast.symbol != nil and ast.symbol.symKind == gsBuiltin:
+      # Canonical coordinates are the MSL vocabulary. This printer maps each
+      # to its CUDA spelling (blockIdx, blockDim, gridDim, threadIdx).
+      # Locals shadowing a canonical name keep `gsLocal` and are emitted
+      # verbatim.
+      result = cudaCoordIdent(ast.ident())
+    else:
+      result = ast.ident()
 
   of gpuLit:
       result = genLit(ast)
