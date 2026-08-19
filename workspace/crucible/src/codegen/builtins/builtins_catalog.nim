@@ -76,27 +76,37 @@ template get_global_id*(d: static uint32): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `thread_position_in_grid`.
   when d == 0: thread_position_in_grid.x
   elif d == 1: thread_position_in_grid.y
-  else:        thread_position_in_grid.z
+  elif d == 2: thread_position_in_grid.z
+  else:
+    {.error: "Invalid dimension " & $d & " in get_global_id".}
 template get_group_id*(d: static uint32): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `threadgroup_position_in_grid`.
   when d == 0: threadgroup_position_in_grid.x
   elif d == 1: threadgroup_position_in_grid.y
-  else:        threadgroup_position_in_grid.z
+  elif d == 2: threadgroup_position_in_grid.z
+  else:
+    {.error: "Invalid dimension " & $d & " in get_group_id".}
 template get_local_id*(d: static uint32): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `thread_position_in_threadgroup`.
   when d == 0: thread_position_in_threadgroup.x
   elif d == 1: thread_position_in_threadgroup.y
-  else:        thread_position_in_threadgroup.z
+  elif d == 2: thread_position_in_threadgroup.z
+  else:
+    {.error: "Invalid dimension " & $d & " in get_local_id".}
 template get_local_size*(d: static uint32): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `threads_per_threadgroup`.
   when d == 0: threads_per_threadgroup.x
   elif d == 1: threads_per_threadgroup.y
-  else:        threads_per_threadgroup.z
+  elif d == 2: threads_per_threadgroup.z
+  else:
+    {.error: "Invalid dimension " & $d & " in get_local_size".}
 template get_num_groups*(d: static uint32): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `threadgroups_per_grid`.
   when d == 0: threadgroups_per_grid.x
   elif d == 1: threadgroups_per_grid.y
-  else:        threadgroups_per_grid.z
+  elif d == 2: threadgroups_per_grid.z
+  else:
+    {.error: "Invalid dimension " & $d & " in get_num_groups".}
 
 # GLSL idiom
 template gl_GlobalInvocationID*(): untyped = thread_position_in_grid
@@ -124,12 +134,13 @@ template syncthreads*(): untyped = threadgroup_barrier()
 
 # OpenCL idiom
 const CLK_LOCAL_MEM_FENCE* = 1'u32
-  ## OpenCL work-group barrier flag. OpenCL-idiom kernels write
-  ## `barrier(CLK_LOCAL_MEM_FENCE)`. The flag folds away in the alias
-  ## template. The OpenCL printer emits `barrier(CLK_LOCAL_MEM_FENCE)`
-  ## for the canonical barrier call.
-template barrier*(flags: uint32): untyped = threadgroup_barrier()
-  ## OpenCL work-group barrier alias: the flag argument folds away, so `barrier(flags)` matches the OpenCL call shape.
+
+template barrier*(flags: static uint32 = CLK_LOCAL_MEM_FENCE): untyped =
+  ## OpenCL work-group barrier alias
+  ## Note: Only CLK_LOCAL_MEM_FENCE is supported
+  ## as CLK_GLOBAL_MEM_FENCE has no equivalent
+  static: doAssert flags == CLK_LOCAL_MEM_FENCE
+  threadgroup_barrier()
 
 # Vulkan idiom
 template barrier*(): untyped = threadgroup_barrier()
