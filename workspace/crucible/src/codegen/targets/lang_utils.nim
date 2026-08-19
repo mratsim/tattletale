@@ -47,6 +47,22 @@ proc genAsmStmt*(ast: GpuAst): string =
       result.add s[i]
       inc i
 
+proc genEmitStmt*(ctx: var GpuContext; ast: GpuAst;
+                  renderExpr: proc(ctx: var GpuContext; n: GpuAst): string): string =
+  ## Renders a `gpuEmit` statement: literal parts pass through verbatim,
+  ## expression parts render through the per-target expression codegen.
+  for part in ast.parts:
+    case part.kind
+    of peLiteral:
+      result.add part.literal
+    of peExpr:
+      result.add renderExpr(ctx, part.expr)
+
+proc isSelfTerminating*(el: GpuAst): bool =
+  ## True when the statement renders its own terminator and the gpuBlock loop
+  ## must not append `;` (nested blocks and `gpuEmit` raw text).
+  result = el.kind in {gpuBlock, gpuEmit}
+
 proc isGlobal*(fn: GpuAst): bool =
   doAssert fn.kind == gpuProc, "Not a function, but: " & $fn.kind
   result = attGlobal in fn.pAttributes

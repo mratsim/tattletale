@@ -289,6 +289,16 @@ proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
     result = ctx.processedProcs[fn].retType.kind != gtVoid
   else:
     error "The function: " & $fn & " is not known anywhere."
+
+proc buildEmitStmt(ctx: var GpuContext, reg: var TypeRegistry, emitArg: NimNode): GpuAst =
+  result = GpuAst(kind: gpuEmit)
+  for part in emitArg:
+    case part.kind
+    of nnkStrLit, nnkTripleStrLit, nnkRStrLit:
+      result.parts.add GpuEmitPart(kind: peLiteral, literal: part.strVal)
+    else:
+      result.parts.add GpuEmitPart(kind: peExpr, expr: ctx.toGpuAst(reg, part))
+
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
                staticValueMask: seq[int] = @[]): GpuAst =
   ## XXX: things still left to do:
@@ -1014,9 +1024,32 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     ## Irrelevant for GPU codegen — skip them.
     result = GpuAst(kind: gpuDiscard)
   of nnkPragma:
-    ## Pragmas are compile-time annotations (e.g. {.warning.} on operators).
-    ## They are irrelevant for GPU codegen — skip them.
-    result = GpuAst(kind: gpuDiscard)
+    ## Statement-level pragmas are compile-time annotations, except `{.emit: ... .}`
+    ## which injects raw target source (gpuEmit).
+    ## The emit pragma handles 2 forms:
+    ## - `{.emit: arg.}` arrives as `nnkExprColonExpr`
+    ## - `{.emit(arg).}` arrives as `nnkCall`
+    ## In both cases the argument sits at index 1 and takes one of two forms:
+    ## - `nnkArgList`: single-string and backtick forms.
+    ##   Backticks arrive already resolved to NimSym
+    ## - `nnkBracket`: the comma form
+    var emitArgs: seq[NimNode] = @[]
+    for child in node:
+      if child.kind in {nnkExprColonExpr, nnkCall} and
+         child.len >= 2 and
+         child[0].kind in {nnkIdent, nnkSym} and
+         child[0].strVal == "emit":
+        emitArgs.add child[1]
+    if emitArgs.len == 0:
+      # Pragmas are compile-time annotations (e.g. {.warning.} on operators).
+      # They are irrelevant for GPU codegen — skip them.
+      result = GpuAst(kind: gpuDiscard)
+    elif emitArgs.len == 1:
+      result = ctx.buildEmitStmt(reg, emitArgs[0])
+    else:
+      result = GpuAst(kind: gpuBlock)
+      for emitArg in emitArgs:
+        result.statements.add ctx.buildEmitStmt(reg, emitArg)
   of nnkWhenStmt:
     error "We shouldn't be seeing a `when` statement after sem check of the Nim code."
   else:
