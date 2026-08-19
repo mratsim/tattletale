@@ -32,7 +32,7 @@ proc insertResult(ctx: var GpuContext; fn: GpuAst) =
 
     for i in countdown(fn.pBody.statements.high, 0):
       let stmt = fn.pBody.statements[i]
-      if stmt.kind notin {gpuVar, gpuComment, gpuDiscard, gpuReturn, gpuIf, gpuFor, gpuWhile}:
+      if stmt.kind notin {gpuVar, gpuComment, gpuDiscard, gpuReturn, gpuIf, gpuFor, gpuWhile, gpuEmit}:
         if stmt.kind == gpuBlock and stmt.isExpr:
           if stmt.statements.len == 1:
             fn.pBody.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt.statements[0])

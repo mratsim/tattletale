@@ -301,7 +301,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
       result.add ctx.genVulkan(el, indent)
-      if el.kind != gpuBlock and not ctx.skipSemicolon:
+      if not el.isSelfTerminating() and not ctx.skipSemicolon:
         result.add ';'
       if i < ast.statements.high:
         result.add '\n'

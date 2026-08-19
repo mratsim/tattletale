@@ -263,7 +263,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       if code.len == 0:
         continue # skip gpuDiscard and empty statements
       result.add code
-      if el.kind != gpuBlock and not ctx.skipSemicolon:
+      if not el.isSelfTerminating() and not ctx.skipSemicolon:
         result.add ';'
       if i < ast.statements.high:
         result.add '\n'
