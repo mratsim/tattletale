@@ -31,11 +31,7 @@ let NimGpuBooleanOperators* {.compileTime.} = {
   "and": "&&", "or": "||", "not": "!"
 }.toTable()
 
-let NimGpuFnBuiltins* {.compileTime.} = ["toOpenArray", "len",
-  # OpenCL work-item dimension helpers (dummy procs in opencl_builtins —
-  # calls forward to the OpenCL C builtins by name)
-  "get_global_id", "get_local_id", "get_group_id",
-  "get_local_size", "get_global_size", "get_num_groups"]
+let NimGpuFnBuiltins* {.compileTime.} = ["toOpenArray", "len"]
   # Function-style builtins with `{.magic.}` that are called as function
   # calls (not operators). When these reach registerGenericInstOrExternalProc
   # they must be registered as builtins without parsing their bodies.

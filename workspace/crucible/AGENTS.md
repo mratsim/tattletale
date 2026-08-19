@@ -125,6 +125,40 @@ nim c -r --hints:off --warnings:off \
 nim test_crucible_metal
 ```
 
+## Builtins: canonical names → native spellings
+
+Kernel bodies write coordinates and barriers in the canonical MSL vocabulary:
+`thread_position_in_grid`, `threadgroup_position_in_grid`,
+`thread_position_in_threadgroup`, `threads_per_threadgroup`,
+`threadgroups_per_grid`, `thread_index_in_threadgroup`, `threadgroup_barrier`.
+Every other backend spelling is a template alias that expands to the canonical
+name during sem, so the IR only ever contains canonical names.
+[`src/codegen/builtins/builtins_catalog.nim`](src/codegen/builtins/builtins_catalog.nim)
+is the source of truth for the alias set. The printers under `src/codegen/targets/`
+emit the native spellings below.
+
+| Canonical (MSL) | CUDA | OpenCL | Vulkan (GLSL) | WGSL | MSL |
+|---|---|---|---|---|---|
+| `thread_position_in_grid` | `(blockIdx.d*blockDim.d+threadIdx.d)` | `get_global_id(d)` | `gl_GlobalInvocationID` | `global_id` | `thread_position_in_grid` |
+| `threadgroup_position_in_grid` | `blockIdx` | `get_group_id(d)` | `gl_WorkGroupID` | `workgroup_id` | `threadgroup_position_in_grid` |
+| `thread_position_in_threadgroup` | `threadIdx` | `get_local_id(d)` | `gl_LocalInvocationID` | `local_invocation_id` | `thread_position_in_threadgroup` |
+| `threads_per_threadgroup` | `blockDim` | `get_local_size(d)` | `gl_WorkGroupSize` | deferred (no WGSL builtin) | `threads_per_threadgroup` |
+| `threadgroups_per_grid` | `gridDim` | `get_num_groups(d)` | `gl_NumWorkGroups` | `num_workgroups` | `threadgroups_per_grid` |
+| `thread_index_in_threadgroup` | `(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)` | `(get_local_id(2)*get_local_size(0)*get_local_size(1) + get_local_id(1)*get_local_size(0) + get_local_id(0))` | `gl_LocalInvocationIndex` | `local_invocation_index` | `thread_index_in_threadgroup` |
+| `threadgroup_barrier` | `__syncthreads()` | `barrier(CLK_LOCAL_MEM_FENCE)` | `barrier()` | `workgroupBarrier()` | `threadgroup_barrier(mem_flags::mem_threadgroup)` |
+
+- CUDA and OpenCL spell the vector coordinates per component (`d` is the accessed component).
+  Whole-value uses of the coordinate vectors are out of scope.
+- WGSL injects one `@builtin(...)` kernel param per referenced canonical coordinate,
+  and the body references the param name. Generated WGSL text
+  therefore changes with the kernel body. Do not assert WGSL param naming,
+  ordering, or injection-set text. Stable negative guards such as
+  `@builtin(workgroup_size) notin src` are still expected.
+  Assert execution results (`engine.run()`).
+- `threads_per_threadgroup` is deferred on WGSL. WGSL has no `workgroup_size`
+  builtin, only the `@workgroup_size` attribute, so referencing it in a `webgpu:` kernel is a loud compile error, by design.
+  `thread_index_in_threadgroup` maps to WGSL's native `local_invocation_index`.
+
 ## File Header
 
 Every test file must have a header comment:

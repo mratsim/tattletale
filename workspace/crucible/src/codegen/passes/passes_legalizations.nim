@@ -366,6 +366,14 @@ proc blitExprSlot(ctx: var GpuContext; slot: var GpuAst; blitType: GpuType; fnRe
     result = ctx.blitExprSlot(slot.cExpr, GpuType(kind: gtVoid), fnRetType)
   of gpuIf:
     result.add ctx.blitExprSlot(slot.ifCond, GpuType(kind: gtVoid), fnRetType)
+  of gpuTernary:
+    # Ternary branches can carry block expressions (lowerIfExpr lowers if-exprs
+    # whose branches are blocks). Blit every branch so no block survives to codegen,
+    # where ensureNoExprBlocks rejects it. The ceramic gemm_cta tile-view templates
+    # expand into such if-expr chains.
+    result.add ctx.blitExprSlot(slot.tCond, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.tThen, GpuType(kind: gtVoid), fnRetType)
+    result.add ctx.blitExprSlot(slot.tElse, GpuType(kind: gtVoid), fnRetType)
   of gpuFor:
     result.add ctx.blitExprSlot(slot.fStart, GpuType(kind: gtVoid), fnRetType)
     result.add ctx.blitExprSlot(slot.fEnd, GpuType(kind: gtVoid), fnRetType)
