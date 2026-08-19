@@ -51,7 +51,7 @@ type
 
   GpuTypeKind* = enum
     gtVoid,
-    gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64, gtSize_t, # atomics
+    gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64, gtSize_t,
     gtStatic       # Static integer value (used for generic params)
     gtArray,       # Static array `array[N, dtype]` -> `dtype[N]`
     gtString,
@@ -84,7 +84,7 @@ type
       name*: string
       oFields*: seq[GpuTypeField]
     of gtArray:
-      aTyp*: GpuType # the inner type (must be some atomic base type at the moment)
+      aTyp*: GpuType # the inner type
       aLen*: int     # The length of the array. If `aLen == -1` we look at a generic (static) array. Will be given at instantiation time
                     # On both CUDA and WebGPU a length of `0` is also used to generate `int foo[]` (CUDA)
                     # `array<foo>` (WebGPU) (runtime sized arrays), which are generated from `ptr UncheckedArray[float32]` for example.
@@ -256,11 +256,26 @@ type
     gsShared,            ## A shared variable (`{.shared.}` / `workspace`)
     gsPrivate,           ## A private variable (to each thread)
 
+  GpuCoordBuiltinKind* = enum
+    gbkNone,                      ## Not a coordinate builtin (locals, printf, cvtaGenericToShared)
+    gbkThreadPositionInGrid,      ## Canonical `thread_position_in_grid`
+    gbkThreadgroupPositionInGrid, ## Canonical `threadgroup_position_in_grid`
+    gbkThreadPositionInThreadgroup, ## Canonical `thread_position_in_threadgroup`
+    gbkThreadsPerThreadgroup,     ## Canonical `threads_per_threadgroup`
+    gbkThreadgroupsPerGrid,       ## Canonical `threadgroups_per_grid`
+    gbkThreadIndexInThreadgroup   ## Canonical `thread_index_in_threadgroup`
+
+  GpuSynchroBuiltinKind* = enum
+    gbkNone,              ## Not a synchronization builtin
+    gbkThreadgroupBarrier ## Canonical `threadgroup_barrier()`
+
   Symbol* = ref object
     name*: string       ## Display name -- may be mangled for collision safety
     iSym*: string       ## IMMUTABLE fingerprint -- used as FnTable key (stays forever)
     typ*: GpuType       ## Type of the symbol
     symKind*: GpuSymbolKind ## Symbol kind
+    coordBuiltin*: GpuCoordBuiltinKind ## Coordinate builtin kind -> gbkNone when not a coordinate
+    synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     module*: string     ## Module provenance (optional)
 
   ## WebGPU only: Address space of a variable.
@@ -382,6 +397,33 @@ type
 type
   TypeRegistry* = object
     types*: OrderedTable[GpuType, GpuAst]  ## type definition dedup
+
+## Canonical coordinate name -> IR kind. Resolved once at the `gsBuiltin` marking, then the printers case on the kind alone.
+## A static assertion below cross-checks the table with the catalog's canonical declarations: a catalog rename fails loudly
+## at compile time, never orphaning a kind.
+let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKind] = {
+  "thread_position_in_grid": gbkThreadPositionInGrid,
+  "threadgroup_position_in_grid": gbkThreadgroupPositionInGrid,
+  "thread_position_in_threadgroup": gbkThreadPositionInThreadgroup,
+  "threads_per_threadgroup": gbkThreadsPerThreadgroup,
+  "threadgroups_per_grid": gbkThreadgroupsPerGrid,
+  "thread_index_in_threadgroup": gbkThreadIndexInThreadgroup,
+}.toTable()
+
+## Canonical synchronization name -> IR kind, with the same catalog cross-check as the coordinate table.
+let GpuSynchroBuiltinKindByName* {.compileTime.}: Table[string, GpuSynchroBuiltinKind] = {
+  "threadgroup_barrier": gbkThreadgroupBarrier,
+}.toTable()
+
+proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =
+  ## Returns the IR kind of a canonical coordinate name. Unmapped names
+  ## (printf, cvtaGenericToShared, shadowing locals) resolve to `gbkNone`.
+  GpuCoordBuiltinKindByName.getOrDefault(name, gbkNone)
+
+proc synchroBuiltinKind*(name: string): GpuSynchroBuiltinKind =
+  ## Returns the IR kind of a canonical synchronization name. Unmapped
+  ## names resolve to `gbkNone`.
+  GpuSynchroBuiltinKindByName.getOrDefault(name, gbkNone)
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,

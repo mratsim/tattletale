@@ -6,20 +6,10 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# NOTE: For the moment we import and export builtins here for all backends.
-# Once we change the code to make single backends importable on their own,
-# this will be changed and these builtins will be imported/exported in the
-# corresponding CUDA/WGSL etc module the user needs to import.
+# Unified builtin vocabulary for every backend: the canonical MSL names
+# plus the per-backend idiom aliases that expand to them (see builtins_catalog.nim).
 import ./builtins_pragmas
-import ./cuda_builtins
-import ./wgsl_builtins
-import ./opencl_builtins
-import ./vulkan_builtins
-import ./metal_builtins
+import ./builtins_catalog
 
 export builtins_pragmas
-export cuda_builtins
-export wgsl_builtins
-export opencl_builtins
-export vulkan_builtins
-export metal_builtins
+export builtins_catalog

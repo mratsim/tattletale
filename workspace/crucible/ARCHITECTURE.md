@@ -95,7 +95,7 @@ src/
       cuda_lang.nim opencl_lang.nim vulkan_lang.nim wgsl_lang.nim
                               "Dumb syntax printers": walk IR, emit native text.
       lang_utils.nim          Shared printer helpers.
-    builtins/                 Per-backend + Nim builtins.
+    builtins/                 Unified builtin vocabulary (catalog + pragmas).
   runtime/
     engines.nim             HwEngine — sole public runtime API (init/ingest/
                             getArtifact/run + run<<(G,B)>> chevrons).
