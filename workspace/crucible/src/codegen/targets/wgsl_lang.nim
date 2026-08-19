@@ -1084,7 +1084,10 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     raiseAssert "Inline assembly not supported on the WebGPU target."
 
   of gpuEmit:
-    raiseAssert "gpuEmit is not yet supported on the WebGPU target."
+    # Self-terminating raw text: the gpuBlock loop appends no `;`
+    # (the emitted text owns its own terminators).
+    result = genEmitStmt(ctx, ast,
+      proc(c: var GpuContext; n: GpuAst): string = c.genWebGpu(n, 0))
 
   of gpuComment:
     result = indentStr & "/* " & ast.comment & " */"

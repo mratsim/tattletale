@@ -485,6 +485,12 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuInlineAsm:
     result = indentStr & "asm(" & genAsmStmt(ast).strip & ");"
 
+  of gpuEmit:
+    # Self-terminating raw text: the gpuBlock loop appends no `;`
+    # (the emitted text owns its own terminators).
+    result = genEmitStmt(ctx, ast,
+      proc(c: var GpuContext; n: GpuAst): string = c.genOpenCL(n, 0))
+
   of gpuComment:
     result = indentStr & "/* " & ast.comment & " */"
 
