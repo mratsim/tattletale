@@ -809,6 +809,51 @@ proc genLit*(ast: GpuAst): string =
     else:
       result = ast.lValue
 
+type WgslBuiltinParam = tuple[canonical, builtin, param, wgslType: string]
+  ## Canonical coordinate builtin -> WGSL `@builtin(...)` kernel param.
+  ## - `canonical`: the MSL-vocabulary coordinate name.
+  ## - `builtin`: the WGSL builtin attribute.
+  ## - `param`: the name the kernel body binds it to.
+  ## - `wgslType`: the WGSL type (scalar for the flat index).
+
+const WgslBuiltinParams: array[5, WgslBuiltinParam] = [
+  ("thread_position_in_grid",        "global_invocation_id",  "global_id",             "vec3<u32>"),
+  ("threadgroup_position_in_grid",   "workgroup_id",          "workgroup_id",          "vec3<u32>"),
+  ("thread_position_in_threadgroup", "local_invocation_id",   "local_invocation_id",   "vec3<u32>"),
+  ("threadgroups_per_grid",          "num_workgroups",        "num_workgroups",        "vec3<u32>"),
+  ("thread_index_in_threadgroup",    "local_invocation_index","local_invocation_index","u32"),
+]
+  ## The five real WGSL builtins. `threads_per_threadgroup` is deliberately
+  ## absent: WGSL has no `workgroup_size` builtin
+  ## (only the `@workgroup_size` attribute exists), so it has no WGSL
+  ## emission and is rejected at the ident site.
+
+proc wgslBuiltinParam(canonical: string): WgslBuiltinParam =
+  ## The WGSL param for a canonical coordinate builtin, or an empty tuple when
+  ## the canonical has no WGSL builtin.
+  for p in WgslBuiltinParams:
+    if p.canonical == canonical:
+      return p
+
+proc wgslBuiltinParamName(canonical: string): string =
+  ## The kernel-body spelling of a canonical coordinate builtin: the injected
+  ## `@builtin` param name. Unknown names pass through unchanged.
+  let p = wgslBuiltinParam(canonical)
+  if p.canonical.len > 0: p.param else: canonical
+
+proc collectWgslBuiltins(n: GpuAst, builtins: var seq[string]) =
+  ## Records the coordinate builtins the body references, in first-use order, deduped (the Metal `collectAttrIdents` pattern).
+  ## Only builtins with a real WGSL `@builtin` param are recorded. The `gpuCall` name is excluded from the walk.
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil and n.symbol.coordBuiltin != gbkNone:
+      let name = n.ident()
+      if wgslBuiltinParam(name).canonical.len > 0 and name notin builtins:
+        builtins.add name
+  else:
+    for ch in n:
+      collectWgslBuiltins(ch, builtins)
+
 proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   #echo "AST: ", $ast
   let indentStr = "  ".repeat(indent)
@@ -825,8 +870,17 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     var fnArgs = params.join(", ")
     if $attGlobal in attrs:
       doAssert fnArgs.len == 0, "Global function `" & $ast.pName.ident() & "` still has arguments!"
-      ## XXX: make this more flexible. In theory can be any name
-      fnArgs = "@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>"
+      # Inject one `@builtin(...)` param per canonical coordinate the kernel
+      # body references, in first-use order. Only real WGSL builtins exist:
+      # there is no `workgroup_size` builtin, so `threads_per_threadgroup`
+      # is never injected and is rejected at the ident site.
+      var builtins: seq[string]
+      collectWgslBuiltins(ast.pBody, builtins)
+      var builtinArgs: seq[string]
+      for name in builtins:
+        let p = wgslBuiltinParam(name)
+        builtinArgs.add "@builtin(" & p.builtin & ") " & p.param & ": " & p.wgslType
+      fnArgs = builtinArgs.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
     result = indentStr & "fn " & fnSig & " {\n"
@@ -931,9 +985,16 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ctx.genWebGpu(ast.iArr) & '[' & ctx.genWebGpu(ast.iIndex) & ']'
 
   of gpuCall:
-    ctx.withoutSemicolon:
-      result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
-               ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
+    case ast.cName.symbol.synchroBuiltin
+    of gbkThreadgroupBarrier:
+      # Every backend spelling of the barrier is an alias template that sem
+      # expands to the canonical call, so only this kind reaches the IR.
+      # WGSL spells it `workgroupBarrier()`.
+      result = indentStr & "workgroupBarrier()"
+    of gbkNone:
+      ctx.withoutSemicolon:
+        result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
+                 ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:
@@ -954,7 +1015,25 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                r & ')'
 
   of gpuIdent:
-    result = ast.ident()
+    if ast.symbol != nil:
+      case ast.symbol.coordBuiltin
+      of gbkNone:
+        # A local shadowing a canonical name, or a call-shaped builtin
+        # (printf, cvtaGenericToShared): emit verbatim.
+        result = ast.ident()
+      of gbkThreadsPerThreadgroup:
+        raiseAssert "`threads_per_threadgroup` has no WGSL builtin: WGSL has " &
+          "only the `@workgroup_size` attribute, never a `workgroup_size` " &
+          "builtin, so the threadgroup size is not addressable from WGSL."
+      of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
+         gbkThreadPositionInThreadgroup, gbkThreadgroupsPerGrid,
+         gbkThreadIndexInThreadgroup:
+        # Canonical coordinates map to the injected `@builtin` param names
+        # (global_id, workgroup_id, local_invocation_id, num_workgroups,
+        # local_invocation_index).
+        result = wgslBuiltinParamName(ast.ident())
+    else:
+      result = ast.ident()
 
   of gpuLit:
       result = genLit(ast)

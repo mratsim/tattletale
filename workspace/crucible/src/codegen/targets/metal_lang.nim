@@ -195,12 +195,6 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
 
 # ── Metal builtins ──────────────────────────────────────────────────────────
 
-const MetalAtomicCalls = ["atomic_add", "atomicAdd",
-                          "atomic_sub", "atomicSub",
-                          "atomic_xchg", "atomicExchange"]
-  ## IR call names of the atomic builtin dummies (opencl_builtins, vulkan_builtins).
-  ## Atomic support is unimplemented at the moment — such calls raise at codegen time.
-
 proc genLit*(ast: GpuAst): string =
   ## Lower a literal node for the MSL backend.
   if ast.lType.kind == gtString:
@@ -245,13 +239,15 @@ proc exprType(ctx: GpuContext, n: GpuAst): GpuType =
   of gpuMaterialize: ctx.exprType(n.mExpr)
   else: nil
 
-proc collectAttrIdents(n: GpuAst, attrIdents: var seq[string]) =
-  ## Records gsBuiltin-marked identifiers in first-use order, deduped.
+proc collectAttrIdents(n: GpuAst, attrIdents: var seq[(string, GpuCoordBuiltinKind)]) =
+  ## Records coordinate-builtin identifiers in first-use order, deduped by name.
+  ## The `gpuCall` name is not part of the child walk, so the barrier never becomes an attribute param.
   case n.kind
   of gpuIdent:
-    if n.symbol != nil and n.symbol.symKind == gsBuiltin and
-       n.ident() notin attrIdents:
-      attrIdents.add n.ident()
+    if n.symbol != nil and n.symbol.coordBuiltin != gbkNone:
+      let name = n.ident()
+      if not attrIdents.anyIt(it[0] == name):
+        attrIdents.add (name, n.symbol.coordBuiltin)
   else:
     for ch in n:
       collectAttrIdents(ch, attrIdents)
@@ -265,7 +261,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
   ## Scalars stay 4 bytes on the host (arg_blobs blobOf), so scalar `bool` is declared `int`.
   ## Buffer elements marshal at their Nim width, so bool buffers declare `bool` (1 byte).
-  var attrIdents: seq[string]
+  var attrIdents: seq[(string, GpuCoordBuiltinKind)]
   collectAttrIdents(fn.pBody, attrIdents)
   var params: seq[string]
   var bufferIdx = 0
@@ -285,8 +281,11 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
         elem = "int"
       params.add "constant " & elem & "& " & name & binding
     inc bufferIdx
-  for attr in attrIdents:
-    params.add "uint3 " & attr & " [[" & attr & "]]"
+  for (attr, kind) in attrIdents:
+    # The five coordinate builtins are `uint3` attribute params.
+    # The flat thread index `gbkThreadIndexInThreadgroup` is a scalar `uint` builtin.
+    let attrType = if kind == gbkThreadIndexInThreadgroup: "uint" else: "uint3"
+    params.add attrType & " " & attr & " [[" & attr & "]]"
   result = params.join(", ")
 
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
@@ -449,15 +448,13 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
              ctx.genMetalImpl(ast.iIndex, 0) & ']'
 
   of gpuCall:
-    let name = ast.cName.ident()
-    if name == "__syncthreads" or name == "syncthreads":
-      # The `{.cudaName: "__syncthreads".}` pragma on the shared builtin dummy renames the call.
+    case ast.cName.symbol.synchroBuiltin
+    of gbkThreadgroupBarrier:
+      # Every backend spelling of the barrier is an alias template that sem
+      # expands to the canonical call, so only this kind reaches the IR.
       # MSL spells the barrier with its memory flags.
       result = indentStr & "threadgroup_barrier(mem_flags::mem_threadgroup)"
-    elif name in MetalAtomicCalls:
-      raiseAssert "Atomic support is unimplemented at the moment: '" & name &
-        "' is an OpenCL/Vulkan builtin (opencl_builtins, vulkan_builtins)"
-    else:
+    of gbkNone:
       var args: seq[string]
       for a in ast.cArgs:
         args.add ctx.genMetalImpl(a, 0)

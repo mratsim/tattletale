@@ -766,6 +766,12 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       result = ctx.sigTab[s]
     if node.hasPragma("builtin"):
       result.symbol.symKind = gsBuiltin
+      # Resolve the canonical name to its IR kind exactly once, here.
+      # - The printers case on the kind fields alone.
+      # - `getFnName` later clobbers this symbol's symKind to gsProc.
+      # - The kind survives because it is set on the same sigTab-cached symbol ref before that clobber.
+      result.symbol.coordBuiltin = coordBuiltinKind(result.symbol.name)
+      result.symbol.synchroBuiltin = synchroBuiltinKind(result.symbol.name)
 
   # literal types
   of nnkIntLit, nnkInt32Lit:
