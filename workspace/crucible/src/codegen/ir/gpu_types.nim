@@ -41,6 +41,7 @@ type
     gpuAlias        # A type alias
     gpuObjConstr    # Object (struct) constructor
     gpuInlineAsm    # Inline assembly (PTX)
+    gpuEmit         # Raw target-source injection ({.emit.})
     gpuAddr         # Address of an expression
     gpuDeref        # Dereferences an expression
     gpuConv         # A type conversion, i.e. `let x = 5; x.float`
@@ -138,6 +139,16 @@ type
     atvVolatile = "volatile"
     atvConstant = "__constant__" # use `{.constant.}` pragma, e.g. `var foo {.constant.}`
 
+  GpuEmitPartKind* = enum
+    peLiteral  ## Verbatim raw text run
+    peExpr     ## Expression part rendered through the target codegen
+
+  GpuEmitPart* = object
+    ## One ordered part of a `gpuEmit` statement: a verbatim literal run or an expression rendered by the target codegen.
+    case kind*: GpuEmitPartKind
+    of peLiteral: literal*: string
+    of peExpr: expr*: GpuAst
+
   GpuAst* = ref object
     case kind*: GpuNodeKind
     of gpuDiscard: discard
@@ -233,6 +244,8 @@ type
     of gpuInlineAsm:
       stmt*: string
       ops*: seq[GpuAst] ## Operand symbols (gpuIdent) for backtick names
+    of gpuEmit:
+      parts*: seq[GpuEmitPart] ## Ordered parts: literal runs verbatim, expr parts via target codegen
     of gpuComment:
       comment*: string
     of gpuConv:
@@ -640,6 +653,14 @@ proc clone*(ast: GpuAst): GpuAst =
     result.stmt = ast.stmt
     for op in ast.ops:
       result.ops.add op.clone()
+  of gpuEmit:
+    result = GpuAst(kind: gpuEmit)
+    for part in ast.parts:
+      case part.kind
+      of peLiteral:
+        result.parts.add GpuEmitPart(kind: peLiteral, literal: part.literal)
+      of peExpr:
+        result.parts.add GpuEmitPart(kind: peExpr, expr: part.expr.clone())
   of gpuAddr:
     result = GpuAst(kind: gpuAddr)
     result.aOf = ast.aOf.clone()
@@ -942,6 +963,13 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
       result.add pretty(f.value, indent + 2)
   of gpuInlineAsm:
     result.add id(n.stmt)
+  of gpuEmit:
+    for part in n.parts:
+      case part.kind
+      of peLiteral:
+        result.add id(part.literal)
+      of peExpr:
+        result.add pretty(part.expr, indent + 2)
   of gpuComment:
     result.add id(n.comment)
   of gpuConv:
@@ -1019,6 +1047,15 @@ template iterImpl(ast: untyped, mutable: static bool): untyped =
     else:
       for el in ast.ocFields:
         yield el.value
+  of gpuEmit:
+    when mutable:
+      for part in mitems(ast.parts):
+        if part.kind == peExpr:
+          yield part.expr
+    else:
+      for part in ast.parts:
+        if part.kind == peExpr:
+          yield part.expr
   of gpuAddr:
     ya(aOf)
   of gpuDeref:

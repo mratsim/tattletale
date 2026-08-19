@@ -894,7 +894,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
       result.add ctx.genWebGpu(el, indent)
-      if el.kind != gpuBlock and not ctx.skipSemicolon: # nested block ⇒ ; already added
+      if not el.isSelfTerminating() and not ctx.skipSemicolon: # nested blocks and emits carry their own terminators
         result.add ';'
       if i < ast.statements.high:
         result.add '\n'
@@ -1082,6 +1082,12 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuInlineAsm:
     raiseAssert "Inline assembly not supported on the WebGPU target."
+
+  of gpuEmit:
+    # Self-terminating raw text: the gpuBlock loop appends no `;`
+    # (the emitted text owns its own terminators).
+    result = genEmitStmt(ctx, ast,
+      proc(c: var GpuContext; n: GpuAst): string = c.genWebGpu(n, 0))
 
   of gpuComment:
     result = indentStr & "/* " & ast.comment & " */"
