@@ -35,12 +35,6 @@ let NimGpuFnBuiltins* {.compileTime.} = ["toOpenArray", "len"]
   # Function-style builtins with `{.magic.}` that are called as function
   # calls (not operators). When these reach registerGenericInstOrExternalProc
   # they must be registered as builtins without parsing their bodies.
-  #
-  # The OpenCL work-item spellings get_global_id, get_group_id, get_local_id,
-  # get_local_size and get_num_groups are template aliases in builtins_catalog.nim:
-  # they expand to canonical names during sem. The name-only registration path
-  # never sees them, so they need no entry here.
-  # get_global_size is OpenCL-native and excluded from the vocabulary.
 
 let NimGpuNumericBuiltinsFunctions* {.compileTime.} = ["min", "max", "abs"]
   # Functions (not operators) that are {.magic.} in Nim
