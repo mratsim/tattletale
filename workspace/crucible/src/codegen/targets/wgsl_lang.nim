@@ -47,14 +47,24 @@ proc fromAddressSpace(addrSpace: AddressSpace): GpuSymbolKind =
   of asRMEM: gsLocal
 
 
+proc addrSpaceToWgsl(space: AddressSpace): string =
+  ## WGSL keyword for `ptr<space, T>` types.
+  case space
+  of asDevice: "storage"
+  of asConstant: "uniform"
+  of asSMEM: "workgroup"
+  of asRMEM: "function"
+
 proc constructPtrSignature(addrSpace: AddressSpace, idTyp: GpuType, ptrStr, typStr: string): string =
   ## Constructs the `ptr<addressSpace, typStr, [read / read_write]>` string, which only includes
   ## the RW string if the address space is `storage`
   let rw = if idTyp.kind != gtVoid: idTyp.mutable else: false # symbol is a pointer -> mutable (can be implicit via `var T`)
   let rwStr = if rw: "read_write" else: "read"
-  case addrSpace
-  of asDevice: result = &"{ptrStr}<{addrSpace}, {typStr}, {rwStr}>"
-  else:         result = &"{ptrStr}<{addrSpace}, {typStr}>"
+  let space = addrSpaceToWgsl(addrSpace)
+  if addrSpace == asDevice:
+    result = &"{ptrStr}<{space}, {typStr}, {rwStr}>"
+  else:
+    result = &"{ptrStr}<{space}, {typStr}>"
 
 proc gpuTypeToString*(t: GpuTypeKind): string =
   case t

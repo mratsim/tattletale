@@ -316,7 +316,7 @@ proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
 # MSL requires an explicit address space on pointer struct fields and casts.
 # The IR carries none on `gtPtr`, so the printer resolves it from the value's
-# dataflow with an asDevice fallback.
+# dataflow with an asRMEM fallback.
 
 proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
   ## Struct type of a field-access base, with the pointer/UA layer stripped.
@@ -329,13 +329,13 @@ proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
 
 proc resolveValueAddressSpace(ctx: GpuContext, n: GpuAst): AddressSpace =
   ## Address space of a pointer-typed value, resolved from the value's
-  ## dataflow with an `asDevice` fallback.
+  ## dataflow with an `asRMEM` fallback.
   if n == nil:
-    return asDevice
+    return asRMEM
   case n.kind
   of gpuIdent:
     if n.symbol == nil:
-      asDevice
+      asRMEM
     elif n.symbol.iSym in ctx.varAddressSpaces:
       ctx.varAddressSpaces[n.symbol.iSym]
     elif n.symbol.symKind == gsDeviceKernelParam:
@@ -347,7 +347,7 @@ proc resolveValueAddressSpace(ctx: GpuContext, n: GpuAst): AddressSpace =
       else:
         asRMEM
     else:
-      asDevice
+      asRMEM
   of gpuAddr: ctx.resolveValueAddressSpace(n.aOf)
   of gpuCast: ctx.resolveValueAddressSpace(n.cExpr)
   of gpuConv: ctx.resolveValueAddressSpace(n.convExpr)
@@ -363,7 +363,7 @@ proc resolveValueAddressSpace(ctx: GpuContext, n: GpuAst): AddressSpace =
   of gpuDeref: ctx.resolveValueAddressSpace(n.dOf)
   of gpuPrefix: ctx.resolveValueAddressSpace(n.pVal)
   of gpuMaterialize: ctx.resolveValueAddressSpace(n.mExpr)
-  else: asDevice
+  else: asRMEM
 
 proc structFieldType(t: GpuType, name: string): GpuType =
   ## Declared type of field `name` in struct type `t` (nil when absent).
@@ -385,7 +385,10 @@ proc collectValueAddressSpacesImpl(ctx: var GpuContext, n: GpuAst) =
   case n.kind
   of gpuVar:
     if n.vName.symbol != nil:
-      ctx.varAddressSpaces[n.vName.symbol.iSym] = n.addressSpace
+      # Unannotated vars are per-thread registers. `asDevice` (zero) is
+      # "no pragma", not device memory, so record it as asRMEM.
+      ctx.varAddressSpaces[n.vName.symbol.iSym] =
+        if n.addressSpace == asDevice: asRMEM else: n.addressSpace
   of gpuObjConstr:
     for f in n.ocFields:
       let fieldTyp = structFieldType(n.ocType, f.name)
@@ -484,8 +487,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   of gpuVar:
     let vName = ast.vName.ident()
     checkReservedIdent(vName, "variable")
-    # The var's address-space keyword. Unannotated (`asDevice`) vars emit
-    # none, keeping MSL's thread default for locals.
+    # The var's address-space keyword. Unannotated vars emit none, keeping
+    # MSL's thread default for locals.
     var attrs = ""
     if ast.addressSpace != asDevice:
       attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
@@ -599,9 +602,9 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
         checkReservedIdent(el.name, "field")
         # Pointer-typed fields need an explicit address-space qualifier. The
         # space is the one resolved at the object constructions of this struct
-        # type, asDevice when the type is never constructed.
+        # type, asRMEM when the type is never constructed.
         if el.typ.kind == gtPtr:
-          let space = ctx.ptrFieldAddressSpaces.getOrDefault((ast.tTyp, el.name), asDevice)
+          let space = ctx.ptrFieldAddressSpaces.getOrDefault((ast.tTyp, el.name), asRMEM)
           result.add "  " & addrSpaceToMsl(space) & ' ' & gpuTypeToString(el.typ, el.name) & ";\n"
         else:
           result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
@@ -642,7 +645,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   of gpuConv:
     var castTyp = gpuTypeToString(ast.convTo, allowEmptyIdent = true)
     # Pointer-typed casts need an explicit address-space qualifier. The
-    # space is resolved from the cast operand's value (`asDevice` default).
+    # space is resolved from the cast operand's value (`asRMEM` default).
     if ast.convTo.kind == gtPtr:
       castTyp = addrSpaceToMsl(ctx.resolveValueAddressSpace(ast.convExpr)) & ' ' & castTyp
     result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.convExpr, 0)

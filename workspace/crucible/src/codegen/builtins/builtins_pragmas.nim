@@ -16,7 +16,7 @@
 
 ## Pragma templates for the GPU DSL. The address-space pragmas (`smem`,
 ## `rmem`, `const_mem`) set a var declaration's address space. Unannotated
-## vars default to device memory (`asDevice`).
+## vars default to per-thread register memory (`asRMEM`).
 template nimonly*(): untyped {.pragma.}
 template cudaName*(s: string): untyped {.pragma.}
 

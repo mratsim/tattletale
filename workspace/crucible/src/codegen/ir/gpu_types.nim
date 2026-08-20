@@ -290,10 +290,10 @@ type
     ## - asConstant: MSL `constant` / WGSL `uniform` / CUDA `__constant__`
     ## - asSMEM:     MSL `threadgroup` / WGSL `workgroup` / CUDA `__shared__`
     ## - asRMEM:     per-thread (register) memory: MSL `thread` / WGSL `function`+`private` / CUDA `__local__`
-    asDevice = "storage"
-    asConstant = "uniform"
-    asSMEM = "workgroup"
-    asRMEM = "function"
+    asDevice
+    asConstant
+    asSMEM
+    asRMEM
 
   ## XXX: maybe merge into `GpuAst`, then can be kept in same table as `gpuVar` for locals
   GpuParam* = object
@@ -347,7 +347,7 @@ type
     ## keyed by (struct type, field name), and of every var declaration,
     ## keyed by the symbol's immutable iSym. Populated from the value dataflow
     ## (var pragma -> addr/cast/object-construction) before MSL emission. A
-    ## struct that is never constructed keeps asDevice for its pointer fields.
+    ## struct that is never constructed keeps asRMEM for its pointer fields.
     ptrFieldAddressSpaces*: Table[(GpuType, string), AddressSpace]
     varAddressSpaces*: Table[string, AddressSpace]
     ## Set of all generic proc names we have encountered in Nim -> GpuAst. When
