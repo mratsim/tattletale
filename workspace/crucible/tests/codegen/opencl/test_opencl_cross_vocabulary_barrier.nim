@@ -3,7 +3,7 @@
 ##
 ## The zero-arg `barrier()` (Vulkan idiom) expands to the canonical
 ## `threadgroup_barrier` call. The OpenCL printer lowers it to `barrier(CLK_LOCAL_MEM_FENCE)`.
-## The kernel stages values in `{.shared.}` scratch (`__local`), barriers,
+## The kernel stages values in `{.smem.}` scratch (`__local`), barriers,
 ## then each work-item reads a slot written by a different work-item:
 ## the barrier is what makes the staged values visible.
 ## The emitted-text assertion is the effective barrier check.
@@ -20,7 +20,7 @@ import workspace/crucible
 
 const kernelCode = opencl:
   proc crossVocabBarrierKernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
-    var scratch {.shared.}: array[8, uint32]
+    var scratch {.smem.}: array[8, uint32]
     let tid = thread_index_in_threadgroup
     scratch[tid] = tid * 3'u32
     barrier()   # Vulkan-idiom zero-arg barrier in an OpenCL kernel

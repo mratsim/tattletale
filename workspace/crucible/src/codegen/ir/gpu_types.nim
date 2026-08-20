@@ -132,13 +132,6 @@ type
     attGlobal = "__global__"
     attForceInline = "__forceinline__"
 
-  GpuVarAttribute* = enum
-    atvExtern = "extern"
-    atvShared = "__shared__"
-    atvPrivate = "private" # WebGPU only
-    atvVolatile = "volatile"
-    atvConstant = "__constant__" # use `{.constant.}` pragma, e.g. `var foo {.constant.}`
-
   GpuEmitPartKind* = enum
     peLiteral  ## Verbatim raw text run
     peExpr     ## Expression part rendered through the target codegen
@@ -196,7 +189,9 @@ type
       vInit*: GpuAst
       vRequiresMemcpy*: bool
       vMutable*: bool # `true == var`, `false == let`
-      vAttributes*: seq[GpuVarAttribute] # order is important, hence seq
+      addressSpace*: AddressSpace
+        ## Resolved from the `{.smem.}`/`{.rmem.}`/`{.const_mem.}` pragma.
+        ## Unannotated locals default to asRMEM (per-thread registers).
     of gpuAssign:
       aLeft*, aRight*: GpuAst
       aRequiresMemcpy*: bool
@@ -266,8 +261,6 @@ type
     gsGlobalKernelParam, ## Parameter of a global kernel (`storage`) for WebGPU
     gsLocal,             ## Local variable (`function`)
     gsProc,              ## Kernel
-    gsShared,            ## A shared variable (`{.shared.}` / `workspace`)
-    gsPrivate,           ## A private variable (to each thread)
 
   GpuCoordBuiltinKind* = enum
     gbkNone,                      ## Not a coordinate builtin (locals, printf, cvtaGenericToShared)
@@ -291,19 +284,16 @@ type
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     module*: string     ## Module provenance (optional)
 
-  ## WebGPU only: Address space of a variable.
-  ## - storage: Storage buffer allocated on host and passed to device
-  ## - function: Local variable within a function
-  ## - workspace: Shared variable for all execution units in a block (like CUDA `shared`)
-  ## - uniform: ??
-  ## - private: Each thread has its own instance of the variable, e.g. useful for `carry`
-  ## On the CUDA backend the address space is ignored.
   AddressSpace* = enum
-    asFunction = "function"
-    asStorage = "storage"
-    asWorkspace = "workspace"
-    asUniform = "uniform"
-    asPrivate = "private"
+    ## Per-target spellings:
+    ## - asDevice:   MSL `device` / WGSL `storage` / CUDA `__global__` / OpenCL `__global`
+    ## - asConstant: MSL `constant` / WGSL `uniform` / CUDA `__constant__`
+    ## - asSMEM:     MSL `threadgroup` / WGSL `workgroup` / CUDA `__shared__`
+    ## - asRMEM:     per-thread (register) memory: MSL `thread` / WGSL `function` / CUDA unqualified (automatic)
+    asRMEM
+    asSMEM
+    asConstant
+    asDevice
 
   ## XXX: maybe merge into `GpuAst`, then can be kept in same table as `gpuVar` for locals
   GpuParam* = object
@@ -336,28 +326,37 @@ type
                                         ## generically instantiated functions.
     globalBlocks*: seq[GpuAst] ## Blocks in the global space. E.g. type defs or global variables.
     ## XXX: for now globals only store parameters, but we need to store `GpuAst` so that we can
-    ## also add manually added globals or lifted `{.shared.}` variables!
+    ## also add manually added globals or lifted `{.smem.}` variables!
     ## NOTE: The `globals` must store the type *AS IT WAS WRITTEN* in the Nim code. Any potential
     ## modifications we make locally for WebGPU (e.g. convert `bool` to `i32` for a global
     ## argument), must not be made to them. `globals` is used precisely to handle the *result* of
     ## that kind of transformation.
     ## As a result, the `globals` also *ONLY* contains the unique symbol as a key and not a `GpuAst`.
-    globals*: OrderedTable[string, GpuParam] #Table[GpuAst, GpuAst] ## Maps global symbols (`{.shared.}` lifted to global, manually defined in global,
+    globals*: OrderedTable[string, GpuParam] #Table[GpuAst, GpuAst] ## Maps global symbols (`{.smem.}` lifted to global, manually defined in global,
                          ## or `storage` buffer identifiers to the type? XXX to what?
     sigTab*: Table[string, GpuAst] ## Map the `nnkSym.signatureHash` to a `GpuAst` of kind `GpuIdent`
     currentScope*: GpuAst  ## Current scope block for variable registration during toGpuAst
     currentScopeSyms*: seq[(string, Symbol)]  ## Current scope's symbol table (parallel to currentScope)
     scopeSymsStack*: seq[seq[(string, Symbol)]]  ## Stack of parent scope symbol tables for push/pop
     genSymCount*: int ## increases for every generated identifier (currently only underscore `_`), hence the basic solution
-    ## Maps a struct type and field name, which is of pointer type to the value the user assigns
-    ## in the constructor. Allows us to later replace `foo.ptrField` by the assignment in the `Foo()`
-    ## constructor (WebGPU only).
-    structsWithPtrs*: Table[(GpuType, string), GpuAst]
-    ## Set of all generic proc names we have encountered in Nim -> GpuAst. When
-    ## we see an `nnkCall` we check if we call a generic function. If so, look up
-    ## the instantiated generic, parse it and store in `genericInsts` below.
-    generics*: HashSet[string]
 
+    structsWithPtrs*: Table[(GpuType, string), GpuAst]
+      ## WGSL: maps (struct type, pointer field name) to the kernel-param ident assigned to the field at its object construction.
+      ## WGSL structs cannot hold pointer fields, so the printer deletes them
+      ## from constructors and rewrites `foo.field` accesses to the recorded
+      ## ident, with `&` in global scope and the bare ident in device functions.
+    ptrFieldVariants*: Table[GpuType, seq[seq[AddressSpace]]]
+      ## Observed address-space tuples of pointer-typed struct fields, keyed by struct type.
+      ## One tuple per distinct space combination observed at a construction site, in first-seen order.
+    varAddressSpaces*: Table[string, AddressSpace]
+      ## Maps a variable symbol's iSym to its resolved address space, recorded
+      ## by the shared collection pass (Metal and WGSL). Unannotated locals are
+      ## recorded as asRMEM.
+
+    generics*: HashSet[string]
+      ## Set of all generic proc names we have encountered in Nim -> GpuAst. When
+      ## we see an `nnkCall` we check if we call a generic function. If so, look up
+      ## the instantiated generic, parse it and store in `genericInsts` below.
     ## Phase 3: Unified function table. Keyed by iSym string.
     ## Contains ALL known functions (defined, generic-inst, external, builtin).
     fnTable*: OrderedTable[string, FnTableEntry]
@@ -580,7 +579,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result.vInit = ast.vInit.clone()
     result.vRequiresMemcpy = ast.vRequiresMemcpy
     result.vMutable = ast.vMutable
-    result.vAttributes = ast.vAttributes
+    result.addressSpace = ast.addressSpace
   of gpuAssign:
     result = GpuAst(kind: gpuAssign)
     result.aLeft = ast.aLeft.clone()
@@ -907,11 +906,9 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
   of gpuVar:
     result.add pretty(n.vName, indent + 2)
     result.add pretty(n.vInit, indent + 2)
-    if n.vAttributes.len > 0:
-      result.add idd("Attributes")
-      for attr in n.vAttributes:
-        let indent = indent + 2
-        result.add idd(attr)
+    if n.addressSpace != asRMEM:
+      result.add idd("AddressSpace")
+      result.add idd(n.addressSpace)
   of gpuAssign:
     result.add pretty(n.aLeft, indent + 2)
     result.add pretty(n.aRight, indent + 2)

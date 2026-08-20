@@ -19,7 +19,7 @@ block:
   let sym = newSymbol("x", iSym = "x_h1", typ = ptrTyp)
   let ident = GpuAst(kind: gpuIdent, symbol: sym)
   var ctx = GpuContext()
-  ctx.globals["x_h1"] = GpuParam(ident: ident, typ: ptrTyp, addressSpace: asStorage)
+  ctx.globals["x_h1"] = GpuParam(ident: ident, typ: ptrTyp, addressSpace: asDevice)
   var n = ident
   ctx.injectAddressOfImpl(n)
   doAssert n.kind == gpuAddr, "Ptr global should become gpuAddr, got: " & $n.kind
@@ -35,7 +35,7 @@ block:
   let sym = newSymbol("b", iSym = "b_h2", typ = boolTyp)
   let ident = GpuAst(kind: gpuIdent, symbol: sym)
   var ctx = GpuContext()
-  ctx.globals["b_h2"] = GpuParam(ident: ident, typ: boolTyp, addressSpace: asStorage)
+  ctx.globals["b_h2"] = GpuParam(ident: ident, typ: boolTyp, addressSpace: asDevice)
   var n = ident
   ctx.injectAddressOfImpl(n)
   doAssert n.kind == gpuConv, "Bool global should become gpuConv, got: " & $n.kind
@@ -53,14 +53,14 @@ block:
   let ident = GpuAst(kind: gpuIdent, symbol: sym)
   var deref = GpuAst(kind: gpuDeref, dOf: ident)
   var ctx = GpuContext()
-  ctx.globals["p_h3"] = GpuParam(ident: ident, typ: ptrTyp, addressSpace: asStorage)
+  ctx.globals["p_h3"] = GpuParam(ident: ident, typ: ptrTyp, addressSpace: asDevice)
   var n = deref
   ctx.injectAddressOfImpl(n)
   doAssert n.kind == gpuIdent, "Deref of ptr global should collapse to ident, got: " & $n.kind
   echo "  OK — deref of ptr global collapses to ident"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 4. pullConstantPragmaVarsImpl extracts {.constant.} vars
+# 4. pullConstantPragmaVarsImpl extracts {.const_mem.} vars
 # ═══════════════════════════════════════════════════════════════════════════
 block:
   let int32 = GpuType(kind: gtInt32)
@@ -68,14 +68,14 @@ block:
   let varIdent = GpuAst(kind: gpuIdent, symbol: sym)
   let varNode = GpuAst(kind: gpuVar, vName: varIdent, vType: int32,
                        vInit: GpuAst(kind: gpuDiscard), vMutable: true,
-                       vAttributes: @[atvConstant])
+                       addressSpace: asConstant)
   var blk = GpuAst(kind: gpuBlock)
   blk.statements.add varNode
   var ctx = GpuContext()
   ctx.pullConstantPragmaVarsImpl(blk)
   doAssert blk.statements.len == 0, "Block should be empty after extraction"
   doAssert "buf_h4" in ctx.globals, "Extracted var should be in globals"
-  echo "  OK — {.constant.} var extracted from block to globals"
+  echo "  OK — {.const_mem.} var extracted from block to globals"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 5. removeStructPointerFieldsImpl removes ptr fields from structs
