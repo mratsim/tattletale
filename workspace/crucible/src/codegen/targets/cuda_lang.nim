@@ -271,8 +271,16 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
 
   of gpuVar:
-    let attrs = if ast.vAttributes.len > 0: ast.vAttributes.join(" ") & ' '
-                else: ""
+    # Explicit per-space spelling (the old attribute-string join relied on
+    # the attribute being named the CUDA keyword; the enum is authoritative):
+    # `__shared__` for asSMEM, `__constant__` for asConstant, `__local__`
+    # for asRMEM, nothing for the asDevice default.
+    var attrs = ""
+    case ast.addressSpace
+    of asSMEM: attrs = "__shared__ "
+    of asConstant: attrs = "__constant__ "
+    of asRMEM: attrs = "__local__ "
+    of asDevice: discard
     result = indentStr & attrs & gpuTypeToString(ast.vType, ast.vName.ident())
     if ast.vInit.kind != gpuDiscard:
       result &= " = " & ctx.genCuda(ast.vInit)
@@ -440,7 +448,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     ## TODO: We need to change the code such that we emit `constexpr` inside of procs and
     ## `__constant__` outside of procs. The point is we want to support mapping to `__constant__
     ## for `const foo = bar` Nim declarations to evaluate values at Nim's compile time.
-    ## Alternatively, make user write `const foo {.constant.} = bar` to produce a global
+    ## Alternatively, make user write `const foo {.const_mem.} = bar` to produce a global
     ## `__constant__` value.
     let cInit = if ast.cValue.kind == gpuDiscard: "{}" else: ctx.genCuda(ast.cValue)
     if ast.cType.kind == gtArray:

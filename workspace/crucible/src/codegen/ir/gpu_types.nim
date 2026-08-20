@@ -132,13 +132,6 @@ type
     attGlobal = "__global__"
     attForceInline = "__forceinline__"
 
-  GpuVarAttribute* = enum
-    atvExtern = "extern"
-    atvShared = "__shared__"
-    atvPrivate = "private" # WebGPU only
-    atvVolatile = "volatile"
-    atvConstant = "__constant__" # use `{.constant.}` pragma, e.g. `var foo {.constant.}`
-
   GpuEmitPartKind* = enum
     peLiteral  ## Verbatim raw text run
     peExpr     ## Expression part rendered through the target codegen
@@ -196,7 +189,7 @@ type
       vInit*: GpuAst
       vRequiresMemcpy*: bool
       vMutable*: bool # `true == var`, `false == let`
-      vAttributes*: seq[GpuVarAttribute] # order is important, hence seq
+      addressSpace*: AddressSpace ## resolved from the `{.smem.}`/`{.rmem.}`/`{.const_mem.}` pragma; `asDevice` (zero) = unannotated
     of gpuAssign:
       aLeft*, aRight*: GpuAst
       aRequiresMemcpy*: bool
@@ -266,7 +259,7 @@ type
     gsGlobalKernelParam, ## Parameter of a global kernel (`storage`) for WebGPU
     gsLocal,             ## Local variable (`function`)
     gsProc,              ## Kernel
-    gsShared,            ## A shared variable (`{.shared.}` / `workspace`)
+    gsShared,            ## A shared variable (`{.smem.}` / `workgroup`)
     gsPrivate,           ## A private variable (to each thread)
 
   GpuCoordBuiltinKind* = enum
@@ -291,19 +284,23 @@ type
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     module*: string     ## Module provenance (optional)
 
-  ## WebGPU only: Address space of a variable.
-  ## - storage: Storage buffer allocated on host and passed to device
-  ## - function: Local variable within a function
-  ## - workspace: Shared variable for all execution units in a block (like CUDA `shared`)
-  ## - uniform: ??
-  ## - private: Each thread has its own instance of the variable, e.g. useful for `carry`
-  ## On the CUDA backend the address space is ignored.
+  ## Address space of a variable, parameter, or pointer-typed value.
+  ## One unified model replaces the former WGSL-shaped enum (params path) and
+  ## the var-attribute mechanism (var path): a var's `{.smem.}` /
+  ## `{.rmem.}` / `{.const_mem.}` pragma resolves to the enum at declaration
+  ## (storage root), and the space propagates through the value's dataflow
+  ## (`addr` → pointer, cast, struct/object construction). `asDevice` is the
+  ## zero value and therefore the default for any unannotated declaration.
+  ## Per-target spellings:
+  ## - asDevice:   MSL `device` / WGSL `storage` / CUDA `__global__` / OpenCL `__global`
+  ## - asConstant: MSL `constant` / WGSL `uniform` / CUDA `__constant__`
+  ## - asSMEM:     MSL `threadgroup` / WGSL `workgroup` / CUDA `__shared__`
+  ## - asRMEM:     MSL `thread` / WGSL `function`+`private` / CUDA `__local__`
   AddressSpace* = enum
-    asFunction = "function"
-    asStorage = "storage"
-    asWorkspace = "workspace"
-    asUniform = "uniform"
-    asPrivate = "private"
+    asDevice = "storage"   ## Default: device memory (buffers) for pointers; unannotated vars keep it as the zero default
+    asConstant = "uniform" ## Constant memory, host-written before launch (`{.const_mem.}`)
+    asSMEM = "workgroup"   ## Shared memory for a block/threadgroup (`{.smem.}`)
+    asRMEM = "function"    ## Per-thread memory (`{.rmem.}`)
 
   ## XXX: maybe merge into `GpuAst`, then can be kept in same table as `gpuVar` for locals
   GpuParam* = object
@@ -336,13 +333,13 @@ type
                                         ## generically instantiated functions.
     globalBlocks*: seq[GpuAst] ## Blocks in the global space. E.g. type defs or global variables.
     ## XXX: for now globals only store parameters, but we need to store `GpuAst` so that we can
-    ## also add manually added globals or lifted `{.shared.}` variables!
+    ## also add manually added globals or lifted `{.smem.}` variables!
     ## NOTE: The `globals` must store the type *AS IT WAS WRITTEN* in the Nim code. Any potential
     ## modifications we make locally for WebGPU (e.g. convert `bool` to `i32` for a global
     ## argument), must not be made to them. `globals` is used precisely to handle the *result* of
     ## that kind of transformation.
     ## As a result, the `globals` also *ONLY* contains the unique symbol as a key and not a `GpuAst`.
-    globals*: OrderedTable[string, GpuParam] #Table[GpuAst, GpuAst] ## Maps global symbols (`{.shared.}` lifted to global, manually defined in global,
+    globals*: OrderedTable[string, GpuParam] #Table[GpuAst, GpuAst] ## Maps global symbols (`{.smem.}` lifted to global, manually defined in global,
                          ## or `storage` buffer identifiers to the type? XXX to what?
     sigTab*: Table[string, GpuAst] ## Map the `nnkSym.signatureHash` to a `GpuAst` of kind `GpuIdent`
     currentScope*: GpuAst  ## Current scope block for variable registration during toGpuAst
@@ -580,7 +577,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result.vInit = ast.vInit.clone()
     result.vRequiresMemcpy = ast.vRequiresMemcpy
     result.vMutable = ast.vMutable
-    result.vAttributes = ast.vAttributes
+    result.addressSpace = ast.addressSpace
   of gpuAssign:
     result = GpuAst(kind: gpuAssign)
     result.aLeft = ast.aLeft.clone()
@@ -907,11 +904,9 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
   of gpuVar:
     result.add pretty(n.vName, indent + 2)
     result.add pretty(n.vInit, indent + 2)
-    if n.vAttributes.len > 0:
-      result.add idd("Attributes")
-      for attr in n.vAttributes:
-        let indent = indent + 2
-        result.add idd(attr)
+    if n.addressSpace != asDevice:
+      result.add idd("AddressSpace")
+      result.add idd(n.addressSpace)
   of gpuAssign:
     result.add pretty(n.aLeft, indent + 2)
     result.add pretty(n.aRight, indent + 2)

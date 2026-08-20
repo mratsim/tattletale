@@ -449,14 +449,14 @@ proc injectAddressOfImpl*(ctx: var GpuContext; n: var GpuAst) =
       ctx.injectAddressOfImpl(ch)
 
 proc pullConstantPragmaVarsImpl*(ctx: var GpuContext; blk: var GpuAst) =
-  ## Filters out `var foo {.constant.}: dtype` from global blocks and adds to globals.
+  ## Filters out `var foo {.const_mem.}: dtype` from global blocks and adds to globals.
   doAssert blk.kind == gpuBlock
   var i = 0
   while i < blk.len:
     let g = blk.statements[i]
-    if g.kind == gpuVar and atvConstant in g.vAttributes:
-      doAssert g.vInit.kind == gpuDiscard, "{.constant.} var must not have init!"
-      let param = GpuParam(ident: g.vName, typ: g.vType, addressSpace: asStorage)
+    if g.kind == gpuVar and g.addressSpace == asConstant:
+      doAssert g.vInit.kind == gpuDiscard, "{.const_mem.} var must not have init!"
+      let param = GpuParam(ident: g.vName, typ: g.vType, addressSpace: asDevice)
       ctx.globals[param.ident.symbol.iSym] = param
       blk.statements.delete(i)
     else:
@@ -731,31 +731,32 @@ proc patchTypeImpl*(t: GpuType): GpuType =
 
 proc toAddressSpace*(symKind: GpuSymbolKind): AddressSpace =
   case symKind
-  of gsDeviceKernelParam: asFunction
-  of gsGlobalKernelParam: asStorage
-  of gsLocal: asFunction
-  of gsShared: asWorkspace
-  of gsPrivate: asPrivate
-  of gsNone: asFunction
-  of gsBuiltin: asFunction # thread-local value, like gsNone/gsLocal
+  of gsDeviceKernelParam: asRMEM
+  of gsGlobalKernelParam: asDevice
+  of gsLocal: asRMEM
+  of gsShared: asSMEM
+  of gsPrivate: asRMEM
+  of gsNone: asRMEM
+  of gsBuiltin: asRMEM # thread-local value, like gsNone/gsLocal
   of gsProc:
     raiseAssert "proc symbol in type context"
 
 proc fromAddressSpace*(addrSpace: AddressSpace): GpuSymbolKind =
+  ## Lossy conversion back to a symbol kind: only purpose is to assign a
+  ## kind for generic-instantiation identifiers, which round-trips through
+  ## `toAddressSpace`. `asRMEM` covers both `gsLocal` and `gsPrivate`.
   case addrSpace
-  of asFunction: gsLocal
-  of asStorage: gsGlobalKernelParam
-  of asWorkspace: gsShared
-  of asPrivate: gsPrivate
-  of asUniform: raiseAssert "Uniform not supported"
+  of asDevice: gsGlobalKernelParam
+  of asConstant: raiseAssert "Constant address space not supported for symbol-kind conversion"
+  of asSMEM: gsShared
+  of asRMEM: gsLocal
 
 proc shortAddrSpace*(addrSpace: AddressSpace): string =
   case addrSpace
-  of asFunction: "l"
-  of asUniform: "u"
-  of asWorkspace: "w"
-  of asPrivate: "p"
-  of asStorage: "s"
+  of asDevice: "s"
+  of asConstant: "u"
+  of asSMEM: "w"
+  of asRMEM: "l"
 
 proc determineSymKind*(arg: GpuAst): GpuSymbolKind =
   case arg.kind
@@ -816,7 +817,7 @@ proc getGenericArguments*(args: seq[GpuAst]; params: seq[GpuParam]; callerParams
   for i, arg in args:
     let p = params[i]
     if p.typ.kind != gtPtr:
-      result.add GenericArg(addrSpace: asFunction, mutable: false)
+      result.add GenericArg(addrSpace: asRMEM, mutable: false)
     else:
       let argIdent = arg.determineIdent()
       var lArg: GpuAst = arg
@@ -955,7 +956,7 @@ proc lowerPushConstantsImpl*(ctx: var GpuContext) =
   for (fnIdent, fn) in ctx.fnTab.mpairs:
     if fn.isGlobalFn():
       for p in fn.pParams:
-        if p.typ.kind != gtPtr and p.addressSpace != asWorkspace:
+        if p.typ.kind != gtPtr and p.addressSpace != asSMEM:
           # Check if already added
           let alreadyAdded = pushConstParams.anyIt(
             it.ident.ident() == p.ident.ident() and it.typ.kind == p.typ.kind)

@@ -305,14 +305,13 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
   else:
     result = gpuTypeToString(p.typ, name)
 
-proc metalVarAttr(a: GpuVarAttribute): string =
-  ## MSL address-space or qualifier keyword for a GPU variable attribute.
-  case a
-  of atvShared: "threadgroup"
-  of atvConstant: "constant"
-  of atvExtern: "extern"
-  of atvVolatile: "volatile"
-  of atvPrivate: "thread"
+proc addrSpaceToMsl(space: AddressSpace): string =
+  ## MSL address-space keyword for a value in the given space.
+  case space
+  of asDevice: "device"
+  of asConstant: "constant"
+  of asSMEM: "threadgroup"
+  of asRMEM: "thread"
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
@@ -397,9 +396,11 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   of gpuVar:
     let vName = ast.vName.ident()
     checkReservedIdent(vName, "variable")
+    # The var's address-space keyword; unannotated (`asDevice`) vars emit
+    # none, keeping MSL's thread default for locals.
     var attrs = ""
-    for a in ast.vAttributes:
-      attrs.add metalVarAttr(a) & ' '
+    if ast.addressSpace != asDevice:
+      attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
     let typ = gpuTypeToString(ast.vType, vName)
     result = indentStr & attrs & typ
     if ast.vInit.kind != gpuDiscard:

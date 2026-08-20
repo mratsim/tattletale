@@ -1,4 +1,4 @@
-## NVRTC: var pragma handlers (collectAttributes - inject/gensym)
+## NVRTC: var pragma handlers (collectAddressSpace - inject/gensym)
 ## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_var_pragmas.nim
 ##
 ## Coverage: nim_to_gpu.nim:611-612

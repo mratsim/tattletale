@@ -276,7 +276,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         # const Type* _p_name — pointer to const for large structs (no C++ references)
         # Note: lowerByrefParamsImpl already renamed the param to _p_
         params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "* " & p.ident.ident()
-      elif p.addressSpace == asWorkspace:
+      elif p.addressSpace == asSMEM:
         # __local T* — shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__local {inner}* {p.ident.ident()}"
@@ -320,16 +320,20 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
 
   of gpuVar:
-    let attrs = if ast.vAttributes.len > 0: ast.vAttributes.join(" ") & ' '
-                else: ""
-    # Handle __local shared variables
+    # The var's address-space keyword from the unified enum. asSMEM arrays
+    # need the qualifier as a prefix with the identifier in the C declaration
+    # position (`__local uint scratch[8]`, not `__local uint [8] scratch`),
+    # so the variable name is passed as the type's ident.
     var typeStr: string
-    if atvShared in ast.vAttributes:
-      # The array type prints its identifier in the C declaration position
-      # (`uint scratch[8]`, not `uint [8] scratch`), so the variable name must be passed as the type's ident.
+    case ast.addressSpace
+    of asSMEM:
       typeStr = "__local " & gpuTypeToString(ast.vType, ast.vName.ident())
-    else:
-      typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
+    of asRMEM:
+      typeStr = "__private " & gpuTypeToString(ast.vType, ast.vName.ident())
+    of asConstant:
+      typeStr = "__constant " & gpuTypeToString(ast.vType, ast.vName.ident())
+    of asDevice:
+      typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
     if ast.vInit.kind != gpuDiscard:

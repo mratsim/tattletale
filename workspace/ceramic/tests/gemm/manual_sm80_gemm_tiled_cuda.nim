@@ -9,7 +9,7 @@
 ## thread tiling → fragment gathering from the prepared smem tile →
 ## gemm_warp's loop over the K dimension, accumulating into the
 ## caller's dFrag.
-## Kernel declares its own {.shared.} smem tiles, copies the full
+## Kernel declares its own {.smem.} smem tiles, copies the full
 ## tileK-sized slice of K from gmem (unmasked: this test runs full
 ## tiles), syncthreads(), then calls gemm_tiled on the smem views.
 ## Fused epilogue runs after the call. gemm_tiled leaves the epilogue
@@ -79,8 +79,8 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   dFrag.fillWith(float32(0))
   # prepare the full tileK-sized slice of K gmem → smem, unmasked:
   # this test runs full tiles with no ragged lanes
-  var smemA {.shared.}: array[TILE_M * TILE_K, uint32]
-  var smemB {.shared.}: array[TILE_N * TILE_K, uint32]
+  var smemA {.smem.}: array[TILE_M * TILE_K, uint32]
+  var smemB {.smem.}: array[TILE_N * TILE_K, uint32]
   let sA = make_view(addr smemA[0], make_layout((TILE_M, TILE_K)))
   let sB = make_view(addr smemB[0], make_layout((TILE_N, TILE_K)))
   var o = threadIdx
@@ -125,8 +125,8 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
   dFrag.fillWith(float32(0))
   # prepare the full tileK-sized slice of K gmem → smem, unmasked:
   # this test runs full tiles with no ragged lanes
-  var smemA {.shared.}: array[TILE_M * TILE_K, uint32]
-  var smemB {.shared.}: array[TILE_N * TILE_K, uint32]
+  var smemA {.smem.}: array[TILE_M * TILE_K, uint32]
+  var smemB {.smem.}: array[TILE_N * TILE_K, uint32]
   let sA = make_view(addr smemA[0], make_layout((TILE_M, TILE_K)))
   let sB = make_view(addr smemB[0], make_layout((TILE_N, TILE_K)))
   var o = threadIdx

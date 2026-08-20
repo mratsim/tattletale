@@ -450,15 +450,17 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
         #   Empty
         varNode.vName = ctx.toGpuAst(reg, declaration[0][0])
         doAssert declaration[0][1].kind == nnkPragma
-        varNode.vAttributes = collectAttributes(declaration[0][1])
+        varNode.addressSpace = collectAddressSpace(declaration[0][1])
       else: error "Unexpected node kind for variable: " & $declaration.treeRepr
       varNode.vType = resolveType(reg, declaration)
       varNode.vName.symbol.typ = varNode.vType # also store the type in the symbol, for easier lookup later
-      # This is a *local* variable (i.e. `function` address space on WGSL) unless it is
-      # annotated with `{.shared.}` (-> `workspace` in WGSL)
-      varNode.vName.symbol.symKind = if atvShared in varNode.vAttributes: gsShared
-                                 elif atvPrivate in varNode.vAttributes: gsPrivate
-                                 else: gsLocal
+      # The var's address space (from its pragma) is mirrored on the symbol
+      # kind: `{.smem.}` -> gsShared, `{.rmem.}` -> gsPrivate, default -> gsLocal.
+      varNode.vName.symbol.symKind =
+        case varNode.addressSpace
+        of asSMEM: gsShared
+        of asRMEM: gsPrivate
+        of asDevice, asConstant: gsLocal
       varNode.vMutable = node.kind == nnkVarSection
       ## XXX: handle initialization for array types. Need a memcpy!
       ## In principle should be straightforward. Turn e.g.
@@ -1005,9 +1007,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
                     cValue: ctx.toGpuAst(reg, node[2]),
                     cType: resolveType(reg, node))
     result.cIdent.symbol.typ = result.cType # also store the type in the symbol, for easier lookup later
-    result.cIdent.symbol.symKind = gsLocal #if atvShared in result.vAttributes: gsShared
-                               #elif atvPrivate in varNode.vAttributes: gsPrivate
-                               #else: gsLocal
+    result.cIdent.symbol.symKind = gsLocal # constexpr: always per-thread (compile-time) value
 
   of nnkConstSection:
     result = GpuAst(kind: gpuBlock)

@@ -70,7 +70,7 @@ proc buildSpanProc(firstIdx: GpuAst; bodyStmts: seq[GpuAst]): GpuAst =
     pParams: @[GpuParam(
       ident: GpuAst(kind: gpuIdent, symbol: newSymbol("s", iSym = "s", typ = spanTyp)),
       typ: spanTyp,
-      addressSpace: asFunction,
+      addressSpace: asRMEM,
       passByRef: false)],
     pBody: GpuAst(kind: gpuBlock, isExpr: false, statements: bodyStmts))
 

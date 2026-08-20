@@ -1,5 +1,5 @@
 ## Metal: shared memory + `syncthreads` barrier.
-## A 64-thread threadgroup fills a `{.shared.}` scratch array, barriers, then
+## A 64-thread threadgroup fills a `{.smem.}` scratch array, barriers, then
 ## reads it back reversed through `thread_position_in_threadgroup`.
 ## Runs through `engine.run()` and asserts byte-exact output.
 ##
@@ -17,7 +17,7 @@ import workspace/crucible
 
 const sharedMsl = metal:
   proc sharedKernel(output: ptr UncheckedArray[uint32]) {.global.} =
-    var scratch {.shared.}: array[64, uint32]
+    var scratch {.smem.}: array[64, uint32]
     scratch[thread_position_in_threadgroup.x] = thread_position_in_threadgroup.x
     syncthreads()
     output[thread_position_in_threadgroup.x] = scratch[63'u32 - thread_position_in_threadgroup.x]

@@ -241,18 +241,28 @@ proc hasPragma*(n: NimNode, pragmaName: string): bool =
       return true
   false
 
-proc collectAttributes*(n: NimNode): seq[GpuVarAttribute] =
-  ## Collects all pragmas associated with the given variable.
-  ## Takes the `nnkPragma` node of the `nnkIdentDefs` associated with it.
+proc collectAddressSpace*(n: NimNode): AddressSpace =
+  ## Resolves the address-space pragma of a variable declaration to the
+  ## unified `AddressSpace` enum. Takes the `nnkPragma` node of the
+  ## `nnkIdentDefs` associated with it. The default (no address-space
+  ## pragma) is `asDevice`; the canonical pragmas are `{.smem.}`,
+  ## `{.rmem.}` and `{.const_mem.}`. A second address-space pragma on one
+  ## declaration is rejected; `noinit`, `inject` and `gensym` carry no
+  ## address-space meaning and are ignored.
   doAssert n.kind == nnkPragma
+  result = asDevice
   for pragma in n:
     doAssert pragma.kind in [nnkIdent, nnkSym], "Unexpected node kind: " & $pragma.treerepr
     case pragma.strVal.normalize
-    of "cuextern", "extern": result.add atvExtern
-    of "shared": result.add atvShared
-    of "private": result.add atvPrivate
-    of "volatile": result.add atvVolatile
-    of "constant": result.add atvConstant
+    of "smem":
+      doAssert result == asDevice, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      result = asSMEM
+    of "rmem":
+      doAssert result == asDevice, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      result = asRMEM
+    of "const_mem":
+      doAssert result == asDevice, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      result = asConstant
     of "noinit": discard # XXX: ignore for now
     of "inject": discard # injected symbols from templates/macros
     of "gensym": discard # template-generated symbol

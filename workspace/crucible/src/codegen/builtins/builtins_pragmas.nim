@@ -32,20 +32,17 @@ template forceinline*() {.pragma.}
 ## in the target backend. This is used for all the functions, types and variables
 ## defined below to indicate that we do not intend to generate code for them.
 template builtin*() {.pragma.}
-# If attached to a `var` it will be treated as a
-# `__constant__`! Only useful if you want to define a
-# constant without initializing it (and then use
-# `cudaMemcpyToSymbol` / `copyToSymbol` to initialize it
-# before executing the kernel)
-template constant*() {.pragma.}
+# If attached to a `var` it will be treated as constant memory
+# (MSL `constant` / CUDA `__constant__` / WGSL `uniform`). Only useful
+# if you want to define a constant without initializing it (and then
+# use `cudaMemcpyToSymbol` / `copyToSymbol` to initialize it before
+# executing the kernel)
+template const_mem*(): untyped {.pragma.}
 
-## `cuExtern` is mapped to `extern`, but has a different name, because Nim has its
-## own `extern` pragma (due to requiring an argument it cannot be reused):
-## https://nim-lang.org/docs/manual.html#foreign-function-interface-extern-pragma
-template cuExtern*(): untyped {.pragma.}
-template shared*(): untyped {.pragma.}
-template private*(): untyped {.pragma.}
-## You would typically use `cuExtern` and `shared` together:
-## `var x {.cuExtern, shared.}: array[N, Foo]`
-## for example to declare a constant array that is filled by the
-## host before kernel execution.
+## Address-space pragmas for variable declarations inside GPU blocks.
+## The var's address space resolves to the unified `AddressSpace` enum:
+## `{.smem.}` → asSMEM (block/threadgroup shared memory), `{.rmem.}` →
+## asRMEM (per-thread storage), `{.const_mem.}` → asConstant. The default
+## (no pragma) is asDevice.
+template smem*(): untyped {.pragma.}
+template rmem*(): untyped {.pragma.}

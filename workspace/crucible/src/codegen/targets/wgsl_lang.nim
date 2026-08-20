@@ -24,14 +24,14 @@ proc size*(ctx: var GpuContext, a: GpuType): string = size(gpuTypeToString(a, al
 
 proc toAddressSpace(symKind: GpuSymbolKind): AddressSpace =
   case symKind
-  of gsDeviceKernelParam: asFunction
-  of gsGlobalKernelParam: asStorage
-  of gsLocal: asFunction
-  of gsShared: asWorkspace
-  of gsPrivate: asPrivate
-  of gsBuiltin: asFunction # thread-local value, like gsNone/gsLocal
+  of gsDeviceKernelParam: asRMEM
+  of gsGlobalKernelParam: asDevice
+  of gsLocal: asRMEM
+  of gsShared: asSMEM
+  of gsPrivate: asRMEM
+  of gsBuiltin: asRMEM # thread-local value, like gsNone/gsLocal
   of gsNone:
-    asFunction
+    asRMEM
     #raiseAssert "Encountered a node without a symbol kind!"
   of gsProc:
     raiseAssert "Encountered a procedure symbol in the context of a type for a variable"
@@ -41,11 +41,10 @@ proc fromAddressSpace(addrSpace: AddressSpace): GpuSymbolKind =
   ## for identifiers in the context of generic instantiations to then get the correct address
   ## space back. Hence multiple map to `gsLocal` as that maps to `function`.
   case addrSpace
-  of asFunction: gsLocal
-  of asStorage: gsGlobalKernelParam
-  of asWorkspace: gsShared
-  of asPrivate: gsPrivate
-  of asUniform: raiseAssert "Uniform address space not supported yet"
+  of asDevice: gsGlobalKernelParam
+  of asConstant: raiseAssert "Constant address space not supported yet"
+  of asSMEM: gsShared
+  of asRMEM: gsLocal
 
 
 proc constructPtrSignature(addrSpace: AddressSpace, idTyp: GpuType, ptrStr, typStr: string): string =
@@ -54,7 +53,7 @@ proc constructPtrSignature(addrSpace: AddressSpace, idTyp: GpuType, ptrStr, typS
   let rw = if idTyp.kind != gtVoid: idTyp.mutable else: false # symbol is a pointer -> mutable (can be implicit via `var T`)
   let rwStr = if rw: "read_write" else: "read"
   case addrSpace
-  of asStorage: result = &"{ptrStr}<{addrSpace}, {typStr}, {rwStr}>"
+  of asDevice: result = &"{ptrStr}<{addrSpace}, {typStr}, {rwStr}>"
   else:         result = &"{ptrStr}<{addrSpace}, {typStr}>"
 
 proc gpuTypeToString*(t: GpuTypeKind): string =
@@ -162,11 +161,10 @@ proc patchSymbol(n: GpuAst): GpuAst =
 proc shortAddrSpace(addrSpace: AddressSpace): string =
   ## Shortens the address space to a single letter
   case addrSpace
-  of asFunction: "l"
-  of asUniform: "u"
-  of asWorkspace: "w"
-  of asPrivate: "p"
-  of asStorage: "s"
+  of asDevice: "s"
+  of asConstant: "u"
+  of asSMEM: "w"
+  of asRMEM: "l"
 
 proc determineSymKind(arg: GpuAst): GpuSymbolKind =
   ## Tries to determine the symbol kind of the argument.
@@ -253,7 +251,7 @@ proc getGenericArguments(args: seq[GpuAst], params: seq[GpuParam], callerParams:
   for i, arg in args:
     let p = params[i]
     if p.typ.kind != gtPtr: # not a pointer argument, fixed
-      result.add GenericArg(addrSpace: asFunction, mutable: false)
+      result.add GenericArg(addrSpace: asRMEM, mutable: false)
     else:
       let argIdent = arg.determineIdent()
       var lArg: GpuAst = arg
@@ -677,24 +675,24 @@ proc checkCodeValid(ctx: var GpuContext, n: GpuAst) =
       ctx.checkCodeValid(ch)
 
 proc pullConstantPragmaVars(ctx: var GpuContext, blk: var GpuAst) =
-  ## Filters out all `var foo {.constant.}: dtype` from the `globalBlocks` and adds them to
+  ## Filters out all `var foo {.const_mem.}: dtype` from the `globalBlocks` and adds them to
   ## the `globals` of the context. Such variables are *not* regular global constants, but rather
   ## `storage` buffers, which are filled before the kernel is executed.
   ##
   ## XXX: Document current not ideal behavior that one needs to be careful to pass data into
-  ## `wgsl.fakeExecute` precisely in the order in which the `var foo {.constant.}` are defined
+  ## `wgsl.fakeExecute` precisely in the order in which the `var foo {.const_mem.}` are defined
   ## *AND* after all kernel parameters!
   doAssert blk.kind == gpuBlock, "Argument must be a block, but is: " & $blk.kind
   var i = 0
   while i < blk.len:
     doAssert blk.kind == gpuBlock
     let g = blk.statements[i]
-    if g.kind == gpuVar and atvConstant in g.vAttributes:
+    if g.kind == gpuVar and g.addressSpace == asConstant:
       # remove this from `globalBlocks` and add to `globals`
-      doAssert g.vInit.kind == gpuDiscard, "A variable annotated with `{.constant.}` must not have an initialization!"
+      doAssert g.vInit.kind == gpuDiscard, "A variable annotated with `{.const_mem.}` must not have an initialization!"
       # we construct a fake parameter from it
       ## XXX: `storage` address space is probably what we want, but think more about it
-      let param = GpuParam(ident: g.vName, typ: g.vType, addressSpace: asStorage)
+      let param = GpuParam(ident: g.vName, typ: g.vType, addressSpace: asDevice)
       ctx.globals[param.ident.symbol.iSym] = param
       blk.statements.delete(i)
       # no need to increase `i`
@@ -760,7 +758,7 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     else:
       discard
 
-  # 2.b filter out all `var foo {.constant.}: dtype`
+  # 2.b filter out all `var foo {.const_mem.}: dtype`
   if ctx.globalBlocks.len > 0:
     pp.pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
   # 2.c remove all fields of structs, which have pointer type
@@ -903,9 +901,16 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuVar:
     let letOrVar = if ast.vMutable: "var" else: "let"
-    var attrs = ast.vAttributes.join(", ")
-    if attrs.len > 0: attrs = &"<{attrs}>"
-    result = &"{indentStr}{letOrVar}{attrs} {gpuTypeToString(ast.vType, ast.vName.ident(), symbolKind = ast.vName.symbol.symKind)}"
+    # The var's address space: `workgroup` for `{.smem.}` vars, `private`
+    # for per-thread (`{.rmem.}`) vars. `asDevice`/`asConstant` vars emit no
+    # qualifier: `storage` is illegal on locals and `{.const_mem.}` vars are
+    # lifted to globals by pullConstantPragmaVars before emission.
+    var addrSpaceAttr = ""
+    case ast.addressSpace
+    of asSMEM: addrSpaceAttr = "<workgroup>"
+    of asRMEM: addrSpaceAttr = "<private>"
+    of asDevice, asConstant: discard
+    result = &"{indentStr}{letOrVar}{addrSpaceAttr} {gpuTypeToString(ast.vType, ast.vName.ident(), symbolKind = ast.vName.symbol.symKind)}"
     # If there is an initialization, the type might require a memcpy
     doAssert not ast.vInit.isNil, "Variable initialization is nil. Should not happen."
     if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
