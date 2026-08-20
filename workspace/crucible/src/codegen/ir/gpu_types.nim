@@ -350,6 +350,13 @@ type
     ## in the constructor. Allows us to later replace `foo.ptrField` by the assignment in the `Foo()`
     ## constructor (WebGPU only).
     structsWithPtrs*: Table[(GpuType, string), GpuAst]
+    ## Metal printer: resolved address space of pointer-typed struct fields,
+    ## keyed by (struct type, field name), and of every var declaration,
+    ## keyed by the symbol's immutable iSym. Populated from the value dataflow
+    ## (var pragma -> addr/cast/object-construction) before MSL emission; a
+    ## struct that is never constructed keeps asDevice for its pointer fields.
+    ptrFieldAddressSpaces*: Table[(GpuType, string), AddressSpace]
+    varAddressSpaces*: Table[string, AddressSpace]
     ## Set of all generic proc names we have encountered in Nim -> GpuAst. When
     ## we see an `nnkCall` we check if we call a generic function. If so, look up
     ## the instantiated generic, parse it and store in `genericInsts` below.

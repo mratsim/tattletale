@@ -315,6 +315,112 @@ proc addrSpaceToMsl(space: AddressSpace): string =
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
+# ── Address-space resolution (value-level dataflow) ─────────────────────────
+# MSL requires an explicit address-space qualifier on every pointer spelling
+# that has no surrounding declaration to default from: struct fields and
+# casts. The IR carries no space on `gtPtr`, so the printer resolves it from
+# the value's dataflow — a var's `{.smem.}`/`{.rmem.}`/`{.const_mem.}`
+# pragma, a kernel/device buffer param, or the operand of an `addr`/cast/
+# arithmetic chain — and records the result per (struct type, field) at the
+# object constructions. `asDevice` is the fallback for anything the flow
+# does not pin down (the unified model's zero default).
+
+proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
+  ## Best-effort struct type of a field-access base (`src` in `src.data`):
+  ## strips the pointer/UA layer from `exprType` so `p.data` and `(*p).data`
+  ## resolve to the same struct type.
+  var t = ctx.exprType(n)
+  if t != nil and t.kind == gtPtr:
+    t = t.to
+  if t != nil and t.kind == gtUA:
+    t = t.uaTo
+  result = t
+
+proc resolveValueAddressSpace(ctx: GpuContext, n: GpuAst): AddressSpace =
+  ## Address space of the memory a pointer-typed value points into, resolved
+  ## from the value's dataflow. Identifiers resolve through the var's declared
+  ## space (`asDevice` when unannotated); device-fn params mirror
+  ## `genDeviceParam` (`device` for explicit `ptr T`, `thread` for `var T`);
+  ## `addr`/casts/pointer arithmetic propagate the operand's space; struct
+  ## pointer fields resolve through the space recorded at the object
+  ## construction (`ctx.ptrFieldAddressSpaces`). `asDevice` is the fallback.
+  if n == nil:
+    return asDevice
+  case n.kind
+  of gpuIdent:
+    if n.symbol == nil:
+      asDevice
+    elif n.symbol.iSym in ctx.varAddressSpaces:
+      ctx.varAddressSpaces[n.symbol.iSym]
+    elif n.symbol.symKind == gsDeviceKernelParam:
+      # explicit `ptr T` device-fn params are device pointers (genDeviceParam);
+      # implicit `var T` params and by-value scalars live in thread memory.
+      if n.symbol.typ != nil and n.symbol.typ.kind == gtPtr and
+         not n.symbol.typ.implicit:
+        asDevice
+      else:
+        asRMEM
+    else:
+      asDevice
+  of gpuAddr: ctx.resolveValueAddressSpace(n.aOf)
+  of gpuCast: ctx.resolveValueAddressSpace(n.cExpr)
+  of gpuConv: ctx.resolveValueAddressSpace(n.convExpr)
+  of gpuBinOp: ctx.resolveValueAddressSpace(n.bLeft)
+  of gpuDot:
+    let ptype = ctx.dotParentType(n.dParent)
+    if ptype != nil:
+      let key = (ptype, n.dField.ident())
+      if key in ctx.ptrFieldAddressSpaces:
+        return ctx.ptrFieldAddressSpaces[key]
+    ctx.resolveValueAddressSpace(n.dParent)
+  of gpuIndex: ctx.resolveValueAddressSpace(n.iArr)
+  of gpuDeref: ctx.resolveValueAddressSpace(n.dOf)
+  of gpuPrefix: ctx.resolveValueAddressSpace(n.pVal)
+  of gpuMaterialize: ctx.resolveValueAddressSpace(n.mExpr)
+  else: asDevice
+
+proc structFieldType(t: GpuType, name: string): GpuType =
+  ## Declared type of field `name` in struct type `t` (nil when absent).
+  case t.kind
+  of gtObject:
+    for f in t.oFields:
+      if f.name == name:
+        return f.typ
+  of gtGenericInst:
+    for f in t.gFields:
+      if f.name == name:
+        return f.typ
+  else: discard
+
+proc collectValueAddressSpacesImpl(ctx: var GpuContext, n: GpuAst) =
+  ## Records, for every var declaration, its resolved address space (from the
+  ## pragma), and for every object construction, the resolved space of each
+  ## pointer-typed field's value. The var pass must see the declaration
+  ## before its uses resolve, hence `codegen` walks the same ASTs once.
+  if n == nil:
+    return
+  case n.kind
+  of gpuVar:
+    if n.vName.symbol != nil:
+      ctx.varAddressSpaces[n.vName.symbol.iSym] = n.addressSpace
+  of gpuObjConstr:
+    for f in n.ocFields:
+      let fieldTyp = structFieldType(n.ocType, f.name)
+      if fieldTyp != nil and fieldTyp.kind == gtPtr:
+        ctx.ptrFieldAddressSpaces[(n.ocType, f.name)] =
+          ctx.resolveValueAddressSpace(f.value)
+  else: discard
+  for ch in n:
+    ctx.collectValueAddressSpacesImpl(ch)
+
+proc collectValueAddressSpaces(ctx: var GpuContext) =
+  ## Builds `ctx.varAddressSpaces` and `ctx.ptrFieldAddressSpaces` from every
+  ## function body and global block that `codegen` will emit.
+  for (_, fn) in ctx.fnTab.pairs:
+    ctx.collectValueAddressSpacesImpl(fn)
+  for blk in ctx.globalBlocks:
+    ctx.collectValueAddressSpacesImpl(blk)
+
 proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   ## MSL-specific IR preprocessing before codegen, mirroring the CUDA pipeline.
   ## Type definitions land before any global that uses them.
@@ -509,7 +615,14 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     else:
       for el in ast.tFields:
         checkReservedIdent(el.name, "field")
-        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+        # Pointer-typed fields need an explicit address-space qualifier;
+        # the space is the one resolved at the object constructions of this
+        # struct type (asDevice when the type is never constructed).
+        if el.typ.kind == gtPtr:
+          let space = ctx.ptrFieldAddressSpaces.getOrDefault((ast.tTyp, el.name), asDevice)
+          result.add "  " & addrSpaceToMsl(space) & ' ' & gpuTypeToString(el.typ, el.name) & ";\n"
+        else:
+          result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
     result.add '}'
 
   of gpuAlias:
@@ -545,11 +658,17 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result = indentStr & "/* " & ast.comment & " */"
 
   of gpuConv:
-    result = '(' & gpuTypeToString(ast.convTo, allowEmptyIdent = true) & ')' &
-             ctx.genMetalImpl(ast.convExpr, 0)
+    var castTyp = gpuTypeToString(ast.convTo, allowEmptyIdent = true)
+    # Pointer-typed casts need an explicit address-space qualifier; the
+    # space is resolved from the cast operand's value (`asDevice` default).
+    if ast.convTo.kind == gtPtr:
+      castTyp = addrSpaceToMsl(ctx.resolveValueAddressSpace(ast.convExpr)) & ' ' & castTyp
+    result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.convExpr, 0)
   of gpuCast:
-    result = '(' & gpuTypeToString(ast.cTo, allowEmptyIdent = true) & ')' &
-             ctx.genMetalImpl(ast.cExpr, 0)
+    var castTyp = gpuTypeToString(ast.cTo, allowEmptyIdent = true)
+    if ast.cTo.kind == gtPtr:
+      castTyp = addrSpaceToMsl(ctx.resolveValueAddressSpace(ast.cExpr)) & ' ' & castTyp
+    result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.cExpr, 0)
 
   of gpuAddr:
     result = "(&" & ctx.genMetalImpl(ast.aOf, 0) & ')'
@@ -583,6 +702,9 @@ proc codegen*(ctx: var GpuContext): string =
   ## - the `metal_stdlib` header
   ## - the global blocks (types, global variables)
   ## - forward declarations for device functions, then every function body.
+  # Resolve the value-level address spaces (var pragmas and struct pointer
+  # fields) before any spelling needs them.
+  ctx.collectValueAddressSpaces()
   result.add "#include <metal_stdlib>\n"
   result.add "using namespace metal;\n\n"
 
