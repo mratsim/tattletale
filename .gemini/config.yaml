@@ -1,5 +1,0 @@
-ignore_patterns:
-  - "**/*.safetensor"
-  - "**/*.safetensors"
-  - "fixtures/**"
-  - "tokenizers/**"
