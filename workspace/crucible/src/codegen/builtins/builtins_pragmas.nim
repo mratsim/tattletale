@@ -28,21 +28,22 @@ template workgroup*(size: untyped): untyped {.pragma.}
 template device*() {.pragma.}
 template forceinline*() {.pragma.}
 
-## If attached to a function, type or variable it will refer to a built in
-## in the target backend. This is used for all the functions, types and variables
-## defined below to indicate that we do not intend to generate code for them.
 template builtin*() {.pragma.}
-# If attached to a `var` it will be treated as constant memory
-# (MSL `constant` / CUDA `__constant__` / WGSL `uniform`). Only useful
-# if you want to define a constant without initializing it (and then
-# use `cudaMemcpyToSymbol` / `copyToSymbol` to initialize it before
-# executing the kernel)
+  ## If attached to a function, type or variable it will refer to a built in
+  ## in the target backend. This is used for all the functions, types and variables
+  ## defined below to indicate that we do not intend to generate code for them.
 template const_mem*(): untyped {.pragma.}
-
-## Address-space pragmas for variable declarations inside GPU blocks.
-## The var's address space resolves to the unified `AddressSpace` enum:
-## `{.smem.}` → asSMEM (block/threadgroup shared memory), `{.rmem.}` →
-## asRMEM (per-thread storage), `{.const_mem.}` → asConstant. The default
-## (no pragma) is asDevice.
+  ## If attached to a `var` it will be treated as constant memory
+  ## (MSL `constant` / CUDA `__constant__` / WGSL `uniform`). Only useful
+  ## if you want to define a constant without initializing it (and then
+  ## use `cudaMemcpyToSymbol` / `copyToSymbol` to initialize it before
+  ## executing the kernel)
 template smem*(): untyped {.pragma.}
+  ## Address-space pragmas for variable declarations inside GPU blocks.
+  ## The var's address space resolves to the unified `AddressSpace` enum:
+  ## `{.smem.}` → asSMEM (block/threadgroup shared memory), `{.rmem.}` →
+  ## asRMEM (per-thread storage), `{.const_mem.}` → asConstant. The default
+  ## (no pragma) is asDevice.
 template rmem*(): untyped {.pragma.}
+  ## Per-thread (register) storage — see `smem` for the address-space
+  ## pragma family.
