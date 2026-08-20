@@ -339,20 +339,20 @@ type
     currentScopeSyms*: seq[(string, Symbol)]  ## Current scope's symbol table (parallel to currentScope)
     scopeSymsStack*: seq[seq[(string, Symbol)]]  ## Stack of parent scope symbol tables for push/pop
     genSymCount*: int ## increases for every generated identifier (currently only underscore `_`), hence the basic solution
-    ## Maps a struct type and field name, which is of pointer type to the value the user assigns
-    ## in the constructor. Allows us to later replace `foo.ptrField` by the assignment in the `Foo()`
-    ## constructor (WebGPU only).
+
     structsWithPtrs*: Table[(GpuType, string), GpuAst]
-    ## Metal printer: resolved address space of pointer-typed struct fields,
-    ## keyed by (struct type, field name), and of every var declaration,
-    ## keyed by the symbol's immutable iSym. Populated from the value dataflow
-    ## (var pragma -> addr/cast/object-construction) before MSL emission. A
-    ## struct that is never constructed keeps asRMEM for its pointer fields.
-    ptrFieldAddressSpaces*: Table[(GpuType, string), AddressSpace]
+      ## WGSL: maps (struct type, pointer field name) to the kernel-param ident assigned to the field at its object construction.
+      ## WGSL structs cannot hold pointer fields, so the printer deletes them
+      ## from constructors and rewrites `foo.field` accesses to the recorded
+      ## ident, with `&` in global scope and the bare ident in device functions.
+    ptrFieldVariants*: Table[GpuType, seq[seq[AddressSpace]]]
+      ## Observed address-space tuples of pointer-typed struct fields, keyed by struct type.
+      ## One tuple per distinct space combination observed at a construction site, in first-seen order.
     varAddressSpaces*: Table[string, AddressSpace]
-    ## Set of all generic proc names we have encountered in Nim -> GpuAst. When
-    ## we see an `nnkCall` we check if we call a generic function. If so, look up
-    ## the instantiated generic, parse it and store in `genericInsts` below.
+      ## Set of all generic proc names we have encountered in Nim -> GpuAst. When
+      ## we see an `nnkCall` we check if we call a generic function. If so, look up
+      ## the instantiated generic, parse it and store in `genericInsts` below.
+
     generics*: HashSet[string]
 
     ## Phase 3: Unified function table. Keyed by iSym string.
