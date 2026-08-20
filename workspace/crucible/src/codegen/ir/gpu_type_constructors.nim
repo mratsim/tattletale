@@ -136,7 +136,7 @@ proc requiresMemcpy*(n: NimNode): bool =
 
 proc isBuiltIn*(n: NimNode): bool =
   ## Checks if the given proc is a `{.builtin.}` (or if it is a Nim "built in"
-  ## proc that uses `importc`, as we cannot emit those; they _need_ to have a
+  ## proc that uses `importc`, as we cannot emit those. They _need_ to have a
   ## WGSL / CUDA equivalent built in)
   doAssert n.kind in [nnkProcDef, nnkFuncDef], "Argument is not a proc: " & $n.treerepr
   for pragma in n.pragma:
@@ -242,20 +242,11 @@ proc hasPragma*(n: NimNode, pragmaName: string): bool =
   false
 
 proc collectAddressSpace*(n: NimNode): AddressSpace =
-  ## Resolves the address-space pragma of a variable declaration to the
-  ## unified `AddressSpace` enum. Takes the `nnkPragma` node of the
-  ## `nnkIdentDefs` associated with it. The default (no address-space
-  ## pragma) is `asDevice`; the canonical pragmas are `{.smem.}`,
-  ## `{.rmem.}` and `{.const_mem.}`. A second address-space pragma on one
-  ## declaration is rejected; `noinit`, `inject` and `gensym` carry no
-  ## address-space meaning and are ignored.
   doAssert n.kind == nnkPragma
   result = asDevice
   for pragma in n:
     doAssert pragma.kind in [nnkIdent, nnkSym], "Unexpected node kind: " & $pragma.treerepr
-    # Case-insensitive only: `strutils.normalize` also strips underscores,
-    # which would turn `{.const_mem.}` into "constmem" and never match.
-    case pragma.strVal.toLowerAscii
+    case pragma.strVal.toLowerAscii()
     of "smem":
       doAssert result == asDevice, "Multiple address-space pragmas on one variable: " & $n.treerepr
       result = asSMEM

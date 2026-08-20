@@ -115,7 +115,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
 
 proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
   ## Returns the correct function with its return type. Kept for backward compat
-  ## during Phase 5; will be removed when codegen reads sigString from FnTableEntry.
+  ## during Phase 5. Will be removed when codegen reads sigString from FnTableEntry.
   if typ.kind == gtPtr and typ.to.kind == gtArray:
     # crazy stuff. Syntax to return a pointer to a statically sized array:
     # `Foo (*fnName(fnArgs))[ArrayLen]`
@@ -271,10 +271,8 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
 
   of gpuVar:
-    # Explicit per-space spelling (the old attribute-string join relied on
-    # the attribute being named the CUDA keyword; the enum is authoritative):
-    # `__shared__` for asSMEM, `__constant__` for asConstant, `__local__`
-    # for asRMEM, nothing for the asDevice default.
+    # Per-space spelling: `__shared__` for asSMEM, `__constant__` for
+    # asConstant, `__local__` for asRMEM.
     var attrs = ""
     case ast.addressSpace
     of asSMEM: attrs = "__shared__ "

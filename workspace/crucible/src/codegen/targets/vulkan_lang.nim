@@ -309,12 +309,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
 
   of gpuVar:
-    # The var's address-space keyword from the unified enum. asSMEM arrays
-    # need the qualifier as a prefix with the identifier in the GLSL
-    # declaration position (`shared uint scratch[8]`, not
-    # `shared uint [8] scratch`), so the variable name is passed as the
-    # type's ident. asConstant has no GLSL per-variable keyword — a
-    # consumer would need a uniform-buffer lift — and emits none.
+    # The var's address-space keyword, prefixing the declaration ident for
+    # asSMEM arrays (`shared uint scratch[8]`). asConstant has no GLSL
+    # per-variable keyword and emits none.
     var typeStr: string
     case ast.addressSpace
     of asSMEM:

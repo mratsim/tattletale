@@ -1,18 +1,6 @@
-## Metal: pointer-typed struct fields and pointer casts carry the resolved
-## address-space qualifier.
-##
-## MSL rejects pointer spellings without an explicit address space: a
-## `ptr T` struct field rendered bare (`ushort* data;`) and a
-## `cast[ptr T]` rendered bare (`(ushort*)data`) both fail to compile. The
-## printer resolves the space from the value's dataflow — the var's
-## `{.smem.}`/`{.rmem.}`/`{.const_mem.}` pragma or the kernel buffer param,
-## propagated through `addr`/casts/object construction, `asDevice` default —
-## and emits it on both spellings.
-##
-## The device kernel builds a view over a kernel buffer param (the ceramic
-## make_view shape); the smem kernel builds a view over a `{.smem.}` array
-## (the threadgroup branch of the same propagation). Both run on-device and
-## assert byte-exact values.
+## Metal: pointer struct fields and casts carry the resolved address-space
+## qualifier (device view over a buffer param, smem view over a `{.smem.}`
+## array). Both kernels run on-device and assert byte-exact values.
 ##
 ## Run:
 ##   cd tattletale

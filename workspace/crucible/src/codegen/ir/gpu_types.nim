@@ -284,23 +284,16 @@ type
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     module*: string     ## Module provenance (optional)
 
-  ## Address space of a variable, parameter, or pointer-typed value.
-  ## One unified model replaces the former WGSL-shaped enum (params path) and
-  ## the var-attribute mechanism (var path): a var's `{.smem.}` /
-  ## `{.rmem.}` / `{.const_mem.}` pragma resolves to the enum at declaration
-  ## (storage root), and the space propagates through the value's dataflow
-  ## (`addr` → pointer, cast, struct/object construction). `asDevice` is the
-  ## zero value and therefore the default for any unannotated declaration.
-  ## Per-target spellings:
-  ## - asDevice:   MSL `device` / WGSL `storage` / CUDA `__global__` / OpenCL `__global`
-  ## - asConstant: MSL `constant` / WGSL `uniform` / CUDA `__constant__`
-  ## - asSMEM:     MSL `threadgroup` / WGSL `workgroup` / CUDA `__shared__`
-  ## - asRMEM:     MSL `thread` / WGSL `function`+`private` / CUDA `__local__`
   AddressSpace* = enum
-    asDevice = "storage"   ## Default: device memory (buffers) for pointers; unannotated vars keep it as the zero default
-    asConstant = "uniform" ## Constant memory, host-written before launch (`{.const_mem.}`)
-    asSMEM = "workgroup"   ## Shared memory for a block/threadgroup (`{.smem.}`)
-    asRMEM = "function"    ## Per-thread memory (`{.rmem.}`)
+    ## Per-target spellings:
+    ## - asDevice:   MSL `device` / WGSL `storage` / CUDA `__global__` / OpenCL `__global`
+    ## - asConstant: MSL `constant` / WGSL `uniform` / CUDA `__constant__`
+    ## - asSMEM:     MSL `threadgroup` / WGSL `workgroup` / CUDA `__shared__`
+    ## - asRMEM:     per-thread (register) memory: MSL `thread` / WGSL `function`+`private` / CUDA `__local__`
+    asDevice = "storage"
+    asConstant = "uniform"
+    asSMEM = "workgroup"
+    asRMEM = "function"
 
   ## XXX: maybe merge into `GpuAst`, then can be kept in same table as `gpuVar` for locals
   GpuParam* = object
@@ -353,7 +346,7 @@ type
     ## Metal printer: resolved address space of pointer-typed struct fields,
     ## keyed by (struct type, field name), and of every var declaration,
     ## keyed by the symbol's immutable iSym. Populated from the value dataflow
-    ## (var pragma -> addr/cast/object-construction) before MSL emission; a
+    ## (var pragma -> addr/cast/object-construction) before MSL emission. A
     ## struct that is never constructed keeps asDevice for its pointer fields.
     ptrFieldAddressSpaces*: Table[(GpuType, string), AddressSpace]
     varAddressSpaces*: Table[string, AddressSpace]

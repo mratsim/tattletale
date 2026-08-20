@@ -14,36 +14,52 @@
 #
 #export gpu_types
 
+## Pragma templates for the GPU DSL. The address-space pragmas (`smem`,
+## `rmem`, `const_mem`) set a var declaration's address space. Unannotated
+## vars default to device memory (`asDevice`).
 template nimonly*(): untyped {.pragma.}
 template cudaName*(s: string): untyped {.pragma.}
 
-# Dummy data for the typed nature of the `cuda` macro. These define commonly used
-# CUDA specific names so that they produce valid Nim code in the context of a typed macro.
 template global*() {.pragma.}
 template workgroup*(size: untyped): untyped {.pragma.}
-  ## `{.workgroup: (X, Y, Z).}` on a kernel proc bakes the workgroup size
-  ## into the generated shader, local_size_xyz on Vulkan or @workgroup_size
-  ## on WebGPU. Absent → per-backend default, Vulkan 256 or WebGPU 64,
-  ## both 1D.
+  ## Workgroup size annotation for a kernel proc: `{.workgroup: (X, Y, Z).}`
+  ## sets the threads per threadgroup. Backend spellings:
+  ##   `local_size_xyz` on Vulkan
+  ##   `@workgroup_size` on WebGPU
+  ## On Metal and CUDA the size is set host-side at dispatch, so the
+  ## annotation is not baked into the shader.
+  ## Without the annotation, the generated shader declares a default workgroup size:
+  ##   256×1×1 on Vulkan
+  ##   64×1×1 on WebGPU
 template device*() {.pragma.}
 template forceinline*() {.pragma.}
 
 template builtin*() {.pragma.}
-  ## If attached to a function, type or variable it will refer to a built in
-  ## in the target backend. This is used for all the functions, types and variables
-  ## defined below to indicate that we do not intend to generate code for them.
+  ## Marks a function, type, or variable as a builtin provided by the
+  ## target backend. The compiler generates no code for it.
 template const_mem*(): untyped {.pragma.}
-  ## If attached to a `var` it will be treated as constant memory
-  ## (MSL `constant` / CUDA `__constant__` / WGSL `uniform`). Only useful
-  ## if you want to define a constant without initializing it (and then
-  ## use `cudaMemcpyToSymbol` / `copyToSymbol` to initialize it before
-  ## executing the kernel)
+  ## Constant memory pragma for a var declaration inside a GPU block.
+  ## Allocates the var in read-only constant memory:
+  ##   `constant` in MSL
+  ##   `uniform` in WGSL
+  ##   `__constant__` in CUDA
+  ## Useful for a constant defined without an initializer, then filled
+  ## before kernel launch (`cudaMemcpyToSymbol` / `copyToSymbol`).
 template smem*(): untyped {.pragma.}
-  ## Address-space pragmas for variable declarations inside GPU blocks.
-  ## The var's address space resolves to the unified `AddressSpace` enum:
-  ## `{.smem.}` → asSMEM (block/threadgroup shared memory), `{.rmem.}` →
-  ## asRMEM (per-thread storage), `{.const_mem.}` → asConstant. The default
-  ## (no pragma) is asDevice.
+  ## Shared memory (smem) pragma for a var declaration inside a GPU block.
+  ## Allocates the var in block/threadgroup-scope memory:
+  ##   `threadgroup` in MSL
+  ##   `workgroup` in WGSL
+  ##   `__shared__` in CUDA
+  ##
+  ## Usage:
+  ##   var scratch {.smem.}: array[64, uint32]
 template rmem*(): untyped {.pragma.}
-  ## Per-thread (register) storage — see `smem` for the address-space
-  ## pragma family.
+  ## Register memory (rmem) pragma for a var declaration inside a GPU block.
+  ## Allocates the var in per-thread storage:
+  ##   `thread` in MSL
+  ##   `function` in WGSL
+  ##   `__local__` in CUDA
+  ##
+  ## Usage:
+  ##   var tile {.rmem.}: array[16, half]

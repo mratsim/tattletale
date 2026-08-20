@@ -320,10 +320,8 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
 
   of gpuVar:
-    # The var's address-space keyword from the unified enum. asSMEM arrays
-    # need the qualifier as a prefix with the identifier in the C declaration
-    # position (`__local uint scratch[8]`, not `__local uint [8] scratch`),
-    # so the variable name is passed as the type's ident.
+    # The var's address-space keyword, prefixing the declaration ident for
+    # asSMEM arrays (`__local uint scratch[8]`).
     var typeStr: string
     case ast.addressSpace
     of asSMEM:

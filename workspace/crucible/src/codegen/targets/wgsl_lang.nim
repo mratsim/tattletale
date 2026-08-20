@@ -187,7 +187,7 @@ proc determineSymKind(arg: GpuAst): GpuSymbolKind =
 
 proc determineMutability(arg: GpuAst): bool =
   ## Tries to determine the mutability of the underlying symbol (for the context of
-  ## determining the `read` or `read_write` property of a pointer; not whether
+  ## determining the `read` or `read_write` property of a pointer, not whether
   ## it is a `let` or `var` symbol)
   case arg.kind # XXX: Consider to extend notion of mutable to `var` variables in Nim? I.e. assign `mutable`
                 # if we construct a `var` instead of a let?
@@ -901,10 +901,9 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuVar:
     let letOrVar = if ast.vMutable: "var" else: "let"
-    # The var's address space: `workgroup` for `{.smem.}` vars, `private`
-    # for per-thread (`{.rmem.}`) vars. `asDevice`/`asConstant` vars emit no
-    # qualifier: `storage` is illegal on locals and `{.const_mem.}` vars are
-    # lifted to globals by pullConstantPragmaVars before emission.
+    # `workgroup` for smem vars, `private` for rmem vars. Device/constant
+    # emit none: `storage` is illegal on locals and const_mem vars are
+    # lifted to globals before emission.
     var addrSpaceAttr = ""
     case ast.addressSpace
     of asSMEM: addrSpaceAttr = "<workgroup>"

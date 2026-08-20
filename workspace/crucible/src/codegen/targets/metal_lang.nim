@@ -306,7 +306,6 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
     result = gpuTypeToString(p.typ, name)
 
 proc addrSpaceToMsl(space: AddressSpace): string =
-  ## MSL address-space keyword for a value in the given space.
   case space
   of asDevice: "device"
   of asConstant: "constant"
@@ -315,20 +314,12 @@ proc addrSpaceToMsl(space: AddressSpace): string =
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
-# ── Address-space resolution (value-level dataflow) ─────────────────────────
-# MSL requires an explicit address-space qualifier on every pointer spelling
-# that has no surrounding declaration to default from: struct fields and
-# casts. The IR carries no space on `gtPtr`, so the printer resolves it from
-# the value's dataflow — a var's `{.smem.}`/`{.rmem.}`/`{.const_mem.}`
-# pragma, a kernel/device buffer param, or the operand of an `addr`/cast/
-# arithmetic chain — and records the result per (struct type, field) at the
-# object constructions. `asDevice` is the fallback for anything the flow
-# does not pin down (the unified model's zero default).
+# MSL requires an explicit address space on pointer struct fields and casts.
+# The IR carries none on `gtPtr`, so the printer resolves it from the value's
+# dataflow with an asDevice fallback.
 
 proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
-  ## Best-effort struct type of a field-access base (`src` in `src.data`):
-  ## strips the pointer/UA layer from `exprType` so `p.data` and `(*p).data`
-  ## resolve to the same struct type.
+  ## Struct type of a field-access base, with the pointer/UA layer stripped.
   var t = ctx.exprType(n)
   if t != nil and t.kind == gtPtr:
     t = t.to
@@ -337,13 +328,8 @@ proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
   result = t
 
 proc resolveValueAddressSpace(ctx: GpuContext, n: GpuAst): AddressSpace =
-  ## Address space of the memory a pointer-typed value points into, resolved
-  ## from the value's dataflow. Identifiers resolve through the var's declared
-  ## space (`asDevice` when unannotated); device-fn params mirror
-  ## `genDeviceParam` (`device` for explicit `ptr T`, `thread` for `var T`);
-  ## `addr`/casts/pointer arithmetic propagate the operand's space; struct
-  ## pointer fields resolve through the space recorded at the object
-  ## construction (`ctx.ptrFieldAddressSpaces`). `asDevice` is the fallback.
+  ## Address space of a pointer-typed value, resolved from the value's
+  ## dataflow with an `asDevice` fallback.
   if n == nil:
     return asDevice
   case n.kind
@@ -353,8 +339,8 @@ proc resolveValueAddressSpace(ctx: GpuContext, n: GpuAst): AddressSpace =
     elif n.symbol.iSym in ctx.varAddressSpaces:
       ctx.varAddressSpaces[n.symbol.iSym]
     elif n.symbol.symKind == gsDeviceKernelParam:
-      # explicit `ptr T` device-fn params are device pointers (genDeviceParam);
-      # implicit `var T` params and by-value scalars live in thread memory.
+      # Explicit `ptr T` params are device pointers. Implicit `var T`
+      # params are thread.
       if n.symbol.typ != nil and n.symbol.typ.kind == gtPtr and
          not n.symbol.typ.implicit:
         asDevice
@@ -393,10 +379,7 @@ proc structFieldType(t: GpuType, name: string): GpuType =
   else: discard
 
 proc collectValueAddressSpacesImpl(ctx: var GpuContext, n: GpuAst) =
-  ## Records, for every var declaration, its resolved address space (from the
-  ## pragma), and for every object construction, the resolved space of each
-  ## pointer-typed field's value. The var pass must see the declaration
-  ## before its uses resolve, hence `codegen` walks the same ASTs once.
+  ## Records var spaces and objconstr pointer-field spaces for resolution.
   if n == nil:
     return
   case n.kind
@@ -414,8 +397,7 @@ proc collectValueAddressSpacesImpl(ctx: var GpuContext, n: GpuAst) =
     ctx.collectValueAddressSpacesImpl(ch)
 
 proc collectValueAddressSpaces(ctx: var GpuContext) =
-  ## Builds `ctx.varAddressSpaces` and `ctx.ptrFieldAddressSpaces` from every
-  ## function body and global block that `codegen` will emit.
+  ## Precomputes the value-space tables for every function body and global.
   for (_, fn) in ctx.fnTab.pairs:
     ctx.collectValueAddressSpacesImpl(fn)
   for blk in ctx.globalBlocks:
@@ -502,7 +484,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   of gpuVar:
     let vName = ast.vName.ident()
     checkReservedIdent(vName, "variable")
-    # The var's address-space keyword; unannotated (`asDevice`) vars emit
+    # The var's address-space keyword. Unannotated (`asDevice`) vars emit
     # none, keeping MSL's thread default for locals.
     var attrs = ""
     if ast.addressSpace != asDevice:
@@ -615,9 +597,9 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     else:
       for el in ast.tFields:
         checkReservedIdent(el.name, "field")
-        # Pointer-typed fields need an explicit address-space qualifier;
-        # the space is the one resolved at the object constructions of this
-        # struct type (asDevice when the type is never constructed).
+        # Pointer-typed fields need an explicit address-space qualifier. The
+        # space is the one resolved at the object constructions of this struct
+        # type, asDevice when the type is never constructed.
         if el.typ.kind == gtPtr:
           let space = ctx.ptrFieldAddressSpaces.getOrDefault((ast.tTyp, el.name), asDevice)
           result.add "  " & addrSpaceToMsl(space) & ' ' & gpuTypeToString(el.typ, el.name) & ";\n"
@@ -659,7 +641,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
 
   of gpuConv:
     var castTyp = gpuTypeToString(ast.convTo, allowEmptyIdent = true)
-    # Pointer-typed casts need an explicit address-space qualifier; the
+    # Pointer-typed casts need an explicit address-space qualifier. The
     # space is resolved from the cast operand's value (`asDevice` default).
     if ast.convTo.kind == gtPtr:
       castTyp = addrSpaceToMsl(ctx.resolveValueAddressSpace(ast.convExpr)) & ' ' & castTyp
