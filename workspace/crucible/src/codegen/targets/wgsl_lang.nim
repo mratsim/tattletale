@@ -142,14 +142,6 @@ proc patchSymbol(n: GpuAst): GpuAst =
   if n.symbol != nil and n.symbol.symKind == gsGlobalKernelParam:
     result.symbol.typ = patchType(result.symbol.typ)
 
-proc shortAddrSpace(addrSpace: AddressSpace): string =
-  ## Shortens the address space to a single letter
-  case addrSpace
-  of asDevice: "s"
-  of asConstant: "u"
-  of asSMEM: "w"
-  of asRMEM: "l"
-
 proc determineIdent(arg: GpuAst): GpuAst =
   ## Tries to determine the underlying ident that is contained in this node.
   ## The issue is the argument to a `gpuCall` can be a complicated expression.

@@ -906,7 +906,7 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
   of gpuVar:
     result.add pretty(n.vName, indent + 2)
     result.add pretty(n.vInit, indent + 2)
-    if n.addressSpace != asDevice:
+    if n.addressSpace != asRMEM:
       result.add idd("AddressSpace")
       result.add idd(n.addressSpace)
   of gpuAssign:

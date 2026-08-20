@@ -30,7 +30,7 @@ type
     data: ptr UncheckedArray[uint32]
     len: uint32
 
-proc makeDeviceView(data: ptr UncheckedArray[uint32]; len: uint32): DeviceView {.inline.} =
+proc makeDeviceView(data: ptr UncheckedArray[uint32], len: uint32): DeviceView {.inline.} =
   ## Mirror of ceramic `make_view`: the pointer-typed field value is an
   ## explicit cast of the `data` parameter.
   DeviceView(data: cast[ptr UncheckedArray[uint32]](data), len: len)

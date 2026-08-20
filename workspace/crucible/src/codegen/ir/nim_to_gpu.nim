@@ -84,7 +84,13 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
       p.symbol.typ = paramType     ## Update the type of the symbol
       p.symbol.symKind = symKind ## and the symbol kind
       let byref = isLargeStruct(paramType)
-      let param = GpuParam(ident: p, typ: paramType, passByRef: byref)
+      # Explicit `ptr T` params are device pointers; implicit `var T`
+      # params and scalars stay in per-thread registers.
+      let paramAddrSpace =
+        if paramType.kind == gtPtr and not paramType.implicit: asDevice
+        else: asRMEM
+      let param = GpuParam(ident: p, typ: paramType,
+                           addressSpace: paramAddrSpace, passByRef: byref)
       result.add(param)
     curIdx += numParams
 

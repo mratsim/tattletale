@@ -379,10 +379,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   of gpuVar:
     let vName = ast.vName.ident()
     checkReservedIdent(vName, "variable")
-    # The var's address-space keyword. asDevice/asRMEM emit none:
-    # register (thread) storage is the default declaration form for MSL locals.
     var attrs = ""
-    if ast.addressSpace notin {asDevice, asRMEM}:
+    if ast.addressSpace != asRMEM:
       attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
     var typ = gpuTypeToString(ast.vType, vName)
     if ast.vInit.kind == gpuObjConstr:

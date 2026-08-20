@@ -919,10 +919,7 @@ proc collectValueAddressSpacesImpl*(ctx: var GpuContext, n: GpuAst) =
   case n.kind
   of gpuVar:
     if n.vName.symbol != nil:
-      # Unannotated vars are per-thread registers. `asDevice` (zero) is
-      # "no pragma", not device memory, so record it as asRMEM.
-      ctx.varAddressSpaces[n.vName.symbol.iSym] =
-        if n.addressSpace == asDevice: asRMEM else: n.addressSpace
+      ctx.varAddressSpaces[n.vName.symbol.iSym] = n.addressSpace
   of gpuObjConstr:
     let spaces = ctx.siteSpaceTuple(n)
     var variants = ctx.ptrFieldVariants.getOrDefault(n.ocType, @[])
@@ -934,9 +931,13 @@ proc collectValueAddressSpacesImpl*(ctx: var GpuContext, n: GpuAst) =
     ctx.collectValueAddressSpacesImpl(ch)
 
 proc paramAddressSpace(p: GpuParam): AddressSpace =
-  ## Pointee space of a parameter: `device` for explicit `ptr T` params,
-  ## `thread` for implicit `var T` params and scalars.
-  if p.typ != nil and p.typ.kind == gtPtr and not p.typ.implicit:
+  ## Space of a parameter: the recorded space when one is set (generic
+  ## instantiation records arg spaces at clone sites), otherwise derived
+  ## from the type — `device` for explicit `ptr T` params, `thread` for
+  ## implicit `var T` params and scalars.
+  if p.addressSpace != asRMEM:
+    p.addressSpace
+  elif p.typ != nil and p.typ.kind == gtPtr and not p.typ.implicit:
     asDevice
   else:
     asRMEM
