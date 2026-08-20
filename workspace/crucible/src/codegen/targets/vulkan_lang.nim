@@ -309,16 +309,13 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
 
   of gpuVar:
-    # The var's address-space keyword, prefixing the declaration ident for
-    # asSMEM arrays (`shared uint scratch[8]`). asConstant has no GLSL
-    # per-variable keyword and emits none.
+    # The var's address-space keyword, prefixing the declaration ident for asSMEM arrays (`shared uint scratch[8]`).
+    # asConstant/asRMEM/asDevice have no GLSL per-variable keyword and emit none (`private` is not a valid GLSL storage qualifier).
     var typeStr: string
     case ast.addressSpace
     of asSMEM:
       typeStr = "shared " & gpuTypeToString(ast.vType, ast.vName.ident())
-    of asRMEM:
-      typeStr = "private " & gpuTypeToString(ast.vType, ast.vName.ident())
-    of asConstant, asDevice:
+    of asRMEM, asConstant, asDevice:
       typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr

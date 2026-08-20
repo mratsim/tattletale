@@ -136,14 +136,12 @@ template syncthreads*(): untyped = threadgroup_barrier()
 const CLK_LOCAL_MEM_FENCE* = 1'u32
 
 template barrier*(flags: static uint32 = CLK_LOCAL_MEM_FENCE): untyped =
-  ## OpenCL work-group barrier alias
+  ## OpenCL work-group barrier alias. the zero-arg form also serves the
+  ## Vulkan idiom.
   ## Note: Only CLK_LOCAL_MEM_FENCE is supported
   ## as CLK_GLOBAL_MEM_FENCE has no equivalent
   static: doAssert flags == CLK_LOCAL_MEM_FENCE
   threadgroup_barrier()
-
-# Vulkan idiom
-template barrier*(): untyped = threadgroup_barrier()
 
 # OpenCL 2.0 / WGSL idiom
 template workgroup_barrier*(flags: uint32 = 0): untyped = threadgroup_barrier()

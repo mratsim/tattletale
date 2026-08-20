@@ -189,7 +189,9 @@ type
       vInit*: GpuAst
       vRequiresMemcpy*: bool
       vMutable*: bool # `true == var`, `false == let`
-      addressSpace*: AddressSpace ## resolved from the `{.smem.}`/`{.rmem.}`/`{.const_mem.}` pragma; `asDevice` (zero) = unannotated
+      addressSpace*: AddressSpace
+        ## Resolved from the `{.smem.}`/`{.rmem.}`/`{.const_mem.}` pragma.
+        ## Unannotated locals default to asRMEM (per-thread registers).
     of gpuAssign:
       aLeft*, aRight*: GpuAst
       aRequiresMemcpy*: bool
@@ -289,11 +291,11 @@ type
     ## - asDevice:   MSL `device` / WGSL `storage` / CUDA `__global__` / OpenCL `__global`
     ## - asConstant: MSL `constant` / WGSL `uniform` / CUDA `__constant__`
     ## - asSMEM:     MSL `threadgroup` / WGSL `workgroup` / CUDA `__shared__`
-    ## - asRMEM:     per-thread (register) memory: MSL `thread` / WGSL `function`+`private` / CUDA `__local__`
-    asDevice
-    asConstant
-    asSMEM
+    ## - asRMEM:     per-thread (register) memory: MSL `thread` / WGSL `function` / CUDA unqualified (automatic)
     asRMEM
+    asSMEM
+    asConstant
+    asDevice
 
   ## XXX: maybe merge into `GpuAst`, then can be kept in same table as `gpuVar` for locals
   GpuParam* = object
@@ -349,12 +351,14 @@ type
       ## Observed address-space tuples of pointer-typed struct fields, keyed by struct type.
       ## One tuple per distinct space combination observed at a construction site, in first-seen order.
     varAddressSpaces*: Table[string, AddressSpace]
+      ## Maps a variable symbol's iSym to its resolved address space, recorded
+      ## by the shared collection pass (Metal and WGSL). Unannotated locals are
+      ## recorded as asRMEM.
+
+    generics*: HashSet[string]
       ## Set of all generic proc names we have encountered in Nim -> GpuAst. When
       ## we see an `nnkCall` we check if we call a generic function. If so, look up
       ## the instantiated generic, parse it and store in `genericInsts` below.
-
-    generics*: HashSet[string]
-
     ## Phase 3: Unified function table. Keyed by iSym string.
     ## Contains ALL known functions (defined, generic-inst, external, builtin).
     fnTable*: OrderedTable[string, FnTableEntry]

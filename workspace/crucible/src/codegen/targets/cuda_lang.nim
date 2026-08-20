@@ -271,14 +271,13 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
 
   of gpuVar:
-    # Per-space spelling: `__shared__` for asSMEM, `__constant__` for
-    # asConstant, `__local__` for asRMEM.
+    # Per-space spelling: `__shared__` for asSMEM, `__constant__` for asConstant.
+    # asRMEM emits none: register storage is the default declaration form for CUDA automatic variables.
     var attrs = ""
     case ast.addressSpace
     of asSMEM: attrs = "__shared__ "
     of asConstant: attrs = "__constant__ "
-    of asRMEM: attrs = "__local__ "
-    of asDevice: discard
+    of asRMEM, asDevice: discard
     result = indentStr & attrs & gpuTypeToString(ast.vType, ast.vName.ident())
     if ast.vInit.kind != gpuDiscard:
       result &= " = " & ctx.genCuda(ast.vInit)

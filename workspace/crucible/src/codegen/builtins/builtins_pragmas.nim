@@ -56,10 +56,9 @@ template smem*(): untyped {.pragma.}
   ##   var scratch {.smem.}: array[64, uint32]
 template rmem*(): untyped {.pragma.}
   ## Register memory (rmem) pragma for a var declaration inside a GPU block.
-  ## Allocates the var in per-thread storage:
-  ##   `thread` in MSL
-  ##   `function` in WGSL
-  ##   `__local__` in CUDA
+  ## Allocates the var in per-thread storage.
+  ## The declaration is emitted unqualified: register/function storage is the default declaration form
+  ## in MSL, WGSL and CUDA, so no address-space qualifier exists for it.
   ##
   ## Usage:
   ##   var tile {.rmem.}: array[16, half]

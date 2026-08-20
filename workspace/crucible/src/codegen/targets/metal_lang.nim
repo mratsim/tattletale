@@ -20,6 +20,7 @@ import std / [macros, strformat, strutils, sequtils, tables]
 
 import ../ir/gpu_types
 import ./lang_utils
+import ../passes/passes_preprocessing as pp
 
 const MetalReservedKeywords = [
   # C++/MSL keyword table (MSL is C++14-based)
@@ -214,31 +215,6 @@ proc genLit*(ast: GpuAst): string =
     else:
       result = ast.lValue
 
-proc exprType(ctx: GpuContext, n: GpuAst): GpuType =
-  ## Best-effort type of an expression node (nil when unknown). The printer uses it
-  ## to detect array-typed operands of `addr`, which need pointer decay rather than `&`.
-  case n.kind
-  of gpuIdent: n.symbol.typ
-  of gpuLit: n.lType
-  of gpuBinOp: n.bType
-  of gpuPrefix: ctx.exprType(n.pVal)
-  of gpuCall: ctx.getFnReturnType(n.cName)
-  of gpuAddr: ctx.exprType(n.aOf)
-  of gpuDeref: ctx.exprType(n.dOf)
-  of gpuIndex:
-    let arrT = ctx.exprType(n.iArr)
-    if arrT.isNil:
-      nil
-    elif arrT.kind == gtArray: arrT.aTyp
-    elif arrT.kind == gtPtr: arrT.to
-    elif arrT.kind == gtUA: arrT.uaTo
-    else: nil
-  of gpuObjConstr: n.ocType
-  of gpuConv: n.convTo
-  of gpuCast: n.cTo
-  of gpuMaterialize: ctx.exprType(n.mExpr)
-  else: nil
-
 proc collectAttrIdents(n: GpuAst, attrIdents: var seq[(string, GpuCoordBuiltinKind)]) =
   ## Records coordinate-builtin identifiers in first-use order, deduped by name.
   ## The `gpuCall` name is not part of the child walk, so the barrier never becomes an attribute param.
@@ -314,127 +290,13 @@ proc addrSpaceToMsl(space: AddressSpace): string =
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
-# MSL requires an explicit address space on pointer struct fields and casts.
-# The IR carries none on `gtPtr`, so the printer resolves it from the value's
-# dataflow with an asRMEM fallback.
-
-proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
-  ## Struct type of a field-access base, with the pointer/UA layer stripped.
-  var t = ctx.exprType(n)
-  if t != nil and t.kind == gtPtr:
-    t = t.to
-  if t != nil and t.kind == gtUA:
-    t = t.uaTo
-  result = t
-
-proc ptrFieldNames(t: GpuType): seq[string] =
-  ## Pointer field names of a struct type, in declaration order.
-  case t.kind
-  of gtObject:
-    for f in t.oFields:
-      if f.typ.kind == gtPtr:
-        result.add f.name
-  of gtGenericInst:
-    for f in t.gFields:
-      if f.typ.kind == gtPtr:
-        result.add f.name
-  else: discard
-
-proc resolveValueAddressSpace(ctx: GpuContext, n: GpuAst): AddressSpace =
-  ## Address space of a pointer-typed value, resolved from the value's
-  ## dataflow with an `asRMEM` fallback.
-  if n == nil:
-    return asRMEM
-  case n.kind
-  of gpuIdent:
-    if n.symbol == nil:
-      asRMEM
-    elif n.symbol.iSym in ctx.varAddressSpaces:
-      ctx.varAddressSpaces[n.symbol.iSym]
-    elif n.symbol.symKind in {gsDeviceKernelParam, gsGlobalKernelParam}:
-      # Explicit `ptr T` params are device pointers. Implicit `var T`
-      # params are thread.
-      if n.symbol.typ != nil and n.symbol.typ.kind == gtPtr and
-         not n.symbol.typ.implicit:
-        asDevice
-      else:
-        asRMEM
-    else:
-      asRMEM
-  of gpuAddr: ctx.resolveValueAddressSpace(n.aOf)
-  of gpuCast: ctx.resolveValueAddressSpace(n.cExpr)
-  of gpuConv: ctx.resolveValueAddressSpace(n.convExpr)
-  of gpuBinOp: ctx.resolveValueAddressSpace(n.bLeft)
-  of gpuDot:
-    let ptype = ctx.dotParentType(n.dParent)
-    if ptype != nil and ptype in ctx.ptrFieldVariants:
-      let base = ctx.ptrFieldVariants[ptype][0]
-      let fieldIdx = ptrFieldNames(ptype).find(n.dField.ident())
-      if fieldIdx >= 0 and fieldIdx < base.len:
-        return base[fieldIdx] # base variant space of the field
-    ctx.resolveValueAddressSpace(n.dParent)
-  of gpuIndex: ctx.resolveValueAddressSpace(n.iArr)
-  of gpuDeref: ctx.resolveValueAddressSpace(n.dOf)
-  of gpuPrefix: ctx.resolveValueAddressSpace(n.pVal)
-  of gpuMaterialize: ctx.resolveValueAddressSpace(n.mExpr)
-  else: asRMEM
-
-proc variantSuffix(spaces: seq[AddressSpace]): string =
-  ## `_`-prefixed suffix of a space tuple, e.g. `_smem`, `_devicesmem`.
-  result = "_"
-  for space in spaces:
-    case space
-    of asDevice: result.add "device"
-    of asConstant: result.add "const"
-    of asSMEM: result.add "smem"
-    of asRMEM: result.add "rmem"
-
-proc siteSpaceTuple(ctx: GpuContext, n: GpuAst): seq[AddressSpace] =
-  ## Resolved pointer-field space tuple of an object construction site, in
-  ## field declaration order.
-  for fname in ptrFieldNames(n.ocType):
-    var space = asRMEM
-    for f in n.ocFields:
-      if f.name == fname and f.value.kind != gpuDiscard:
-        space = ctx.resolveValueAddressSpace(f.value)
-        break
-    result.add space
-
 proc structVariantName(ctx: GpuContext, t: GpuType,
                        spaces: seq[AddressSpace]): string =
   ## MSL struct name of a space tuple: base name for the first observed
   ## tuple, otherwise base name suffixed with the tuple's space tags.
   result = gpuTypeToString(t, allowEmptyIdent = true)
   if ctx.ptrFieldVariants.getOrDefault(t, @[]).find(spaces) > 0:
-    result.add variantSuffix(spaces)
-
-proc collectValueAddressSpacesImpl(ctx: var GpuContext, n: GpuAst) =
-  ## Records var spaces and objconstr pointer-field spaces for resolution.
-  if n == nil:
-    return
-  case n.kind
-  of gpuVar:
-    if n.vName.symbol != nil:
-      # Unannotated vars are per-thread registers. `asDevice` (zero) is
-      # "no pragma", not device memory, so record it as asRMEM.
-      ctx.varAddressSpaces[n.vName.symbol.iSym] =
-        if n.addressSpace == asDevice: asRMEM else: n.addressSpace
-  of gpuObjConstr:
-    let spaces = ctx.siteSpaceTuple(n)
-    var variants = ctx.ptrFieldVariants.getOrDefault(n.ocType, @[])
-    if spaces notin variants:
-      variants.add spaces
-    ctx.ptrFieldVariants[n.ocType] = variants
-  else: discard
-  for ch in n:
-    ctx.collectValueAddressSpacesImpl(ch)
-
-proc collectValueAddressSpaces(ctx: var GpuContext) =
-  ## Precomputes the value-space tables for every function body and global.
-  for (_, fn) in ctx.fnTab.pairs:
-    ctx.collectValueAddressSpacesImpl(fn)
-  for blk in ctx.globalBlocks:
-    ctx.collectValueAddressSpacesImpl(blk)
+    result.add pp.variantSuffix(spaces)
 
 proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   ## MSL-specific IR preprocessing before codegen, mirroring the CUDA pipeline.
@@ -517,17 +379,17 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   of gpuVar:
     let vName = ast.vName.ident()
     checkReservedIdent(vName, "variable")
-    # The var's address-space keyword. Unannotated vars emit none, keeping
-    # MSL's thread default for locals.
+    # The var's address-space keyword. asDevice/asRMEM emit none:
+    # register (thread) storage is the default declaration form for MSL locals.
     var attrs = ""
-    if ast.addressSpace != asDevice:
+    if ast.addressSpace notin {asDevice, asRMEM}:
       attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
     var typ = gpuTypeToString(ast.vType, vName)
     if ast.vInit.kind == gpuObjConstr:
       # The var's decl type must match the objconstr's variant name, or MSL
       # rejects the type mismatch.
       let variantName = ctx.structVariantName(ast.vInit.ocType,
-                                              ctx.siteSpaceTuple(ast.vInit))
+                                              pp.siteSpaceTuple(ctx, ast.vInit))
       let base = gpuTypeToString(ast.vInit.ocType, allowEmptyIdent = true)
       if variantName != base:
         typ = variantName & ' ' & vName
@@ -631,13 +493,13 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result = ast.pOp & ctx.genMetalImpl(ast.pVal, 0)
 
   of gpuTypeDef:
-    let ptrNames = ptrFieldNames(ast.tTyp)
+    let ptrNames = pp.ptrFieldNames(ast.tTyp)
     var tuples = ctx.ptrFieldVariants.getOrDefault(ast.tTyp, @[])
     if tuples.len == 0:
       # Never constructed: one struct with per-thread pointer fields.
       tuples = @[newSeqWith(ptrNames.len, asRMEM)]
     for i, spaces in tuples:
-      let suffix = if i == 0: "" else: variantSuffix(spaces)
+      let suffix = if i == 0: "" else: pp.variantSuffix(spaces)
       result.add "struct " & gpuTypeToString(ast.tTyp) & suffix & "{\n"
       if ast.tFields.len == 0:
         # MSL requires at least one field in a struct.
@@ -670,7 +532,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     # Using `TypeName{...}` (functional-style cast) instead of bare `{val}`
     # ensures the result is a valid C++ expression. Bare braced-init-lists
     # are not expressions and cannot be used with member access (gpuDot).
-    result = ctx.structVariantName(ast.ocType, ctx.siteSpaceTuple(ast)) & "{"
+    result = ctx.structVariantName(ast.ocType, pp.siteSpaceTuple(ctx, ast)) & "{"
     for i, el in ast.ocFields:
       if el.value.kind == gpuDiscard:
         result.add "{}"
@@ -697,12 +559,12 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     # Pointer-typed casts need an explicit address-space qualifier. The
     # space is resolved from the cast operand's value (`asRMEM` default).
     if ast.convTo.kind == gtPtr:
-      castTyp = addrSpaceToMsl(ctx.resolveValueAddressSpace(ast.convExpr)) & ' ' & castTyp
+      castTyp = addrSpaceToMsl(pp.resolveValueAddressSpace(ctx, ast.convExpr)) & ' ' & castTyp
     result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.convExpr, 0)
   of gpuCast:
     var castTyp = gpuTypeToString(ast.cTo, allowEmptyIdent = true)
     if ast.cTo.kind == gtPtr:
-      castTyp = addrSpaceToMsl(ctx.resolveValueAddressSpace(ast.cExpr)) & ' ' & castTyp
+      castTyp = addrSpaceToMsl(pp.resolveValueAddressSpace(ctx, ast.cExpr)) & ' ' & castTyp
     result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.cExpr, 0)
 
   of gpuAddr:
@@ -739,7 +601,7 @@ proc codegen*(ctx: var GpuContext): string =
   ## - forward declarations for device functions, then every function body.
   # Resolve the value-level address spaces (var pragmas and struct pointer
   # fields) before any spelling needs them.
-  ctx.collectValueAddressSpaces()
+  pp.collectValueAddressSpaces(ctx)
   result.add "#include <metal_stdlib>\n"
   result.add "using namespace metal;\n\n"
 

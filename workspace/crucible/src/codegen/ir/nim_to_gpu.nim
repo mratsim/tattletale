@@ -440,6 +440,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
         #   Sym "uint32"
         #   Empty
         varNode.vName = ctx.toGpuAst(reg, declaration[0])
+        # Unannotated locals live in per-thread registers. The pragma branch
+        # below overrides this default when an address-space pragma is present.
+        varNode.addressSpace = asRMEM
       of nnkPragmaExpr:
         # IdentDefs               # declaration
         #   PragmaExpr            # declaration[0]
@@ -454,13 +457,6 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       else: error "Unexpected node kind for variable: " & $declaration.treeRepr
       varNode.vType = resolveType(reg, declaration)
       varNode.vName.symbol.typ = varNode.vType # also store the type in the symbol, for easier lookup later
-      # The var's address space (from its pragma) is mirrored on the symbol
-      # kind: `{.smem.}` -> gsShared, `{.rmem.}` -> gsPrivate, default -> gsLocal.
-      varNode.vName.symbol.symKind =
-        case varNode.addressSpace
-        of asSMEM: gsShared
-        of asRMEM: gsPrivate
-        of asDevice, asConstant: gsLocal
       varNode.vMutable = node.kind == nnkVarSection
       ## XXX: handle initialization for array types. Need a memcpy!
       ## In principle should be straightforward. Turn e.g.

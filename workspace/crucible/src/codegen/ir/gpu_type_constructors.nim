@@ -242,19 +242,26 @@ proc hasPragma*(n: NimNode, pragmaName: string): bool =
   false
 
 proc collectAddressSpace*(n: NimNode): AddressSpace =
+  ## Address space of a var's pragma list: `smem`/`rmem`/`const_mem` set it,
+  ## other pragmas are discarded.
+  ## A pragma list without an address-space pragma resolves to asRMEM (per-thread registers).
   doAssert n.kind == nnkPragma
-  result = asDevice
+  result = asRMEM
+  var seen = false
   for pragma in n:
     doAssert pragma.kind in [nnkIdent, nnkSym], "Unexpected node kind: " & $pragma.treerepr
     case pragma.strVal.toLowerAscii()
     of "smem":
-      doAssert result == asDevice, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      seen = true
       result = asSMEM
     of "rmem":
-      doAssert result == asDevice, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      seen = true
       result = asRMEM
     of "const_mem":
-      doAssert result == asDevice, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      seen = true
       result = asConstant
     of "noinit": discard # XXX: ignore for now
     of "inject": discard # injected symbols from templates/macros

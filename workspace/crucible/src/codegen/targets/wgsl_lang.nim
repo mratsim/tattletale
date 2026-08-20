@@ -99,7 +99,8 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     let addrSpace = symbolKind.toAddressSpace()
     let ptrStr = gpuTypeToString(t.kind)
     let typStr = gpuTypeToString(t.to, allowEmptyIdent = true)
-    result = constructPtrSignature(addrSpace, t.to, ptrStr, typStr)
+    let idTyp = if t.to.kind == gtPtr: t.to else: t
+    result = constructPtrSignature(addrSpace, idTyp, ptrStr, typStr)
   of gtArray:
     # empty idents happen in e.g. function return types or casts
     if ident.len == 0 and not allowEmptyIdent: # and not allowArrayToPtr:
@@ -634,9 +635,10 @@ proc makeCodeValid(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
           var p = params[i]
           ## XXX: update anything else? We mostly care about the address space here, because
           ## the rest _should_ be the same anyway.
-          if p.addressSpace != argId.symbol.symKind.toAddressSpace():
-            p.addressSpace = argId.symbol.symKind.toAddressSpace()
-            p.ident.symbol.symKind = argId.symbol.symKind
+          let argSpace = pp.resolveIdentAddressSpace(ctx, argId)
+          if p.addressSpace != argSpace:
+            p.addressSpace = argSpace
+            p.ident.symbol.symKind = argSpace.fromAddressSpace()
             fn.pParams[i] = p # write back, not a ref type!
   of gpuVar:
     # first recurse on the `gpuVar` to get possible replacements
@@ -646,9 +648,15 @@ proc makeCodeValid(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
     # possible after replacements of `gpuDot` nodes above.
     if n.vType.kind == gtPtr:
       let rightId = n.vInit.determineIdent()
-      n.vName.symbol.symKind = rightId.symbol.symKind
-      n.vType.mutable = rightId.symbol.typ.mutable
-      n.vName.symbol.typ.mutable = rightId.symbol.typ.mutable
+      let space = pp.resolveIdentAddressSpace(ctx, rightId)
+      ctx.varAddressSpaces[n.vName.symbol.iSym] = space
+      n.vName.symbol.symKind = space.fromAddressSpace()
+      # The RHS ident's own type may be a non-pointer (e.g. `addr arr[0]`
+      # over an array): only a pointer RHS carries a mutability flag.
+      let rightTyp = if rightId.symbol != nil: rightId.symbol.typ else: nil
+      let rhsIsPtr = not rightTyp.isNil and rightTyp.kind == gtPtr
+      n.vType.mutable = rhsIsPtr and rightTyp.mutable
+      n.vName.symbol.typ.mutable = rhsIsPtr and rightTyp.mutable
   else:
     for ch in mitems(n):
       ctx.makeCodeValid(ch, inGlobal)
@@ -789,6 +797,10 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     if fn.isGlobal():
       pp.injectAddressOfImpl(ctx, fn)
 
+  # 4.b Collect value address spaces before makeCodeValid resolves call
+  # args and pointer aliases from the authoritative map.
+  pp.collectValueAddressSpaces(ctx)
+
   # 5. makeCodeValid
   for (fnIdent, fn) in mpairs(ctx.fnTab):
     pp.makeCodeValidImpl(ctx, fn, inGlobal = fn.isGlobal())
@@ -911,14 +923,10 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuVar:
     let letOrVar = if ast.vMutable: "var" else: "let"
-    # `workgroup` for smem vars, `private` for rmem vars. Device/constant
-    # emit none: `storage` is illegal on locals and const_mem vars are
-    # lifted to globals before emission.
     var addrSpaceAttr = ""
     case ast.addressSpace
     of asSMEM: addrSpaceAttr = "<workgroup>"
-    of asRMEM: addrSpaceAttr = "<private>"
-    of asDevice, asConstant: discard
+    of asRMEM, asDevice, asConstant: discard
     result = &"{indentStr}{letOrVar}{addrSpaceAttr} {gpuTypeToString(ast.vType, ast.vName.ident(), symbolKind = ast.vName.symbol.symKind)}"
     # If there is an initialization, the type might require a memcpy
     doAssert not ast.vInit.isNil, "Variable initialization is nil. Should not happen."
