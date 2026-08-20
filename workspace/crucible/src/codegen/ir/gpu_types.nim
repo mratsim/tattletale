@@ -261,8 +261,6 @@ type
     gsGlobalKernelParam, ## Parameter of a global kernel (`storage`) for WebGPU
     gsLocal,             ## Local variable (`function`)
     gsProc,              ## Kernel
-    gsShared,            ## A shared variable (`{.smem.}` / `workgroup`)
-    gsPrivate,           ## A private variable (to each thread)
 
   GpuCoordBuiltinKind* = enum
     gbkNone,                      ## Not a coordinate builtin (locals, printf, cvtaGenericToShared)
