@@ -426,8 +426,8 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
 
   # Shared memory staging buffers
   # -----------------------------
-  var smemA {.shared.}: array[tileM * tileK, TA]
-  var smemB {.shared.}: array[tileN * tileK, TB]
+  var smemA {.smem.}: array[tileM * tileK, TA]
+  var smemB {.smem.}: array[tileN * tileK, TB]
   var sA = make_view(addr smemA[0], make_layout((tileM, tileK)))
   var sB = make_view(addr smemB[0], make_layout((tileN, tileK)))
 

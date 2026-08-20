@@ -420,16 +420,14 @@ proc mangleNamesImpl*(ctx: var GpuContext) =
 # Forward declarations for Phase 6 helper functions
 proc getStructType*(n: GpuAst): GpuType
 proc determineIdent*(arg: GpuAst): GpuAst
-proc determineSymKind*(arg: GpuAst): GpuSymbolKind
 proc determineMutability*(arg: GpuAst): bool
-proc toAddressSpace*(symKind: GpuSymbolKind): AddressSpace
-proc fromAddressSpace*(addrSpace: AddressSpace): GpuSymbolKind
+proc resolveIdentAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace
 proc shortAddrSpace*(addrSpace: AddressSpace): string
 proc patchTypeImpl*(t: GpuType): GpuType
 proc patchSymbolImpl*(n: GpuAst): GpuAst
-proc genGenericName*(n: GpuAst; params: seq[GpuParam]; callerParams: Table[string, GpuParam]): string
-proc makeFnGeneric*(fn: GpuAst; gi: GenericInst): GpuAst
-proc getGenericArguments*(args: seq[GpuAst]; params: seq[GpuParam]; callerParams: Table[string, GpuParam]): seq[GenericArg]
+proc genGenericName*(ctx: GpuContext; n: GpuAst; params: seq[GpuParam]; callerParams: Table[string, GpuParam]): string
+proc makeFnGeneric*(ctx: var GpuContext; fn: GpuAst; gi: GenericInst): GpuAst
+proc getGenericArguments*(ctx: GpuContext; args: seq[GpuAst]; params: seq[GpuParam]; callerParams: Table[string, GpuParam]): seq[GenericArg]
 
 proc injectAddressOfImpl*(ctx: var GpuContext; n: var GpuAst) =
   ## Replaces storage-buffer idents with `gpuAddr(ident)` in global fns.
@@ -449,14 +447,14 @@ proc injectAddressOfImpl*(ctx: var GpuContext; n: var GpuAst) =
       ctx.injectAddressOfImpl(ch)
 
 proc pullConstantPragmaVarsImpl*(ctx: var GpuContext; blk: var GpuAst) =
-  ## Filters out `var foo {.constant.}: dtype` from global blocks and adds to globals.
+  ## Filters out `var foo {.const_mem.}: dtype` from global blocks and adds to globals.
   doAssert blk.kind == gpuBlock
   var i = 0
   while i < blk.len:
     let g = blk.statements[i]
-    if g.kind == gpuVar and atvConstant in g.vAttributes:
-      doAssert g.vInit.kind == gpuDiscard, "{.constant.} var must not have init!"
-      let param = GpuParam(ident: g.vName, typ: g.vType, addressSpace: asStorage)
+    if g.kind == gpuVar and g.addressSpace == asConstant:
+      doAssert g.vInit.kind == gpuDiscard, "{.const_mem.} var must not have init!"
+      let param = GpuParam(ident: g.vName, typ: g.vType, addressSpace: asDevice)
       ctx.globals[param.ident.symbol.iSym] = param
       blk.statements.delete(i)
     else:
@@ -568,18 +566,24 @@ proc makeCodeValidImpl*(ctx: var GpuContext; n: var GpuAst; inGlobal: bool) =
         let argId = arg.determineIdent()
         if argId.kind != gpuDiscard and argId.ident().len > 0:
           var p = params[i]
-          if p.addressSpace != argId.symbol.symKind.toAddressSpace():
-            p.addressSpace = argId.symbol.symKind.toAddressSpace()
-            p.ident.symbol.symKind = argId.symbol.symKind
+          let argSpace = ctx.resolveIdentAddressSpace(argId)
+          if p.addressSpace != argSpace:
+            p.addressSpace = argSpace
+            ctx.varAddressSpaces[p.ident.symbol.iSym] = argSpace
             fn.pParams[i] = p
   of gpuVar:
     for ch in n.mitems:
       ctx.makeCodeValidImpl(ch, inGlobal)
     if n.vType.kind == gtPtr:
       let rightId = n.vInit.determineIdent()
-      n.vName.symbol.symKind = rightId.symbol.symKind
-      n.vType.mutable = rightId.symbol.typ.mutable
-      n.vName.symbol.typ.mutable = rightId.symbol.typ.mutable
+      let space = ctx.resolveIdentAddressSpace(rightId)
+      ctx.varAddressSpaces[n.vName.symbol.iSym] = space
+      # The RHS ident's own type may be a non-pointer (e.g. `addr arr[0]`
+      # over an array): only a pointer RHS carries a mutability flag.
+      let rightTyp = if rightId.symbol != nil: rightId.symbol.typ else: nil
+      let rhsIsPtr = not rightTyp.isNil and rightTyp.kind == gtPtr
+      n.vType.mutable = rhsIsPtr and rightTyp.mutable
+      n.vName.symbol.typ.mutable = rhsIsPtr and rightTyp.mutable
   else:
     for ch in n.mitems:
       ctx.makeCodeValidImpl(ch, inGlobal)
@@ -615,8 +619,8 @@ proc scanGenericsImpl*(ctx: var GpuContext; n: GpuAst; callerParams: Table[strin
     let fn = n.cName
     if fn in ctx.allFnTab:
       let params = ctx.allFnTab[fn].pParams
-      let gi = GenericInst(name: genGenericName(n, params, callerParams),
-                           args: getGenericArguments(n.cArgs, params, callerParams))
+      let gi = GenericInst(name: genGenericName(ctx, n, params, callerParams),
+                           args: getGenericArguments(ctx, n.cArgs, params, callerParams))
       let anyPointers = params.anyIt(it.typ.kind == gtPtr)
       if anyPointers:
         n.cName = GpuAst(kind: gpuIdent,
@@ -624,7 +628,7 @@ proc scanGenericsImpl*(ctx: var GpuContext; n: GpuAst; callerParams: Table[strin
         let gName = n.cName
         if gName notin ctx.fnTab:
           let fnCalled = ctx.allFnTab[fn].clone()
-          let fnGen = makeFnGeneric(fnCalled, gi)
+          let fnGen = makeFnGeneric(ctx, fnCalled, gi)
           ctx.fnTab[gName] = fnGen
           ctx.allFnTab[gName] = fnGen
           var callParams = initTable[string, GpuParam]()
@@ -664,7 +668,7 @@ proc getStructType*(n: GpuAst): GpuType =
              p.symbol.typ
            else: GpuType(kind: gtVoid)
 
-proc genGenericName*(n: GpuAst; params: seq[GpuParam]; callerParams: Table[string, GpuParam]): string =
+proc genGenericName*(ctx: GpuContext; n: GpuAst; params: seq[GpuParam]; callerParams: Table[string, GpuParam]): string =
   ## Generates unique name for a generic WGSL function instantiation.
   doAssert n.kind == gpuCall
   result = n.cName.ident() & '_'
@@ -678,7 +682,7 @@ proc genGenericName*(n: GpuAst; params: seq[GpuParam]; callerParams: Table[strin
       var lArg: GpuAst = arg
       if argIdent.kind != gpuDiscard and argIdent.symbol.iSym in callerParams:
         lArg = callerParams[argIdent.symbol.iSym].ident
-      let addrSpace = lArg.determineSymKind().toAddressSpace()
+      let addrSpace = ctx.resolveIdentAddressSpace(lArg)
       let mutable = lArg.determineMutability()
       let m = if mutable: "mut" else: ""
       s = shortAddrSpace(addrSpace) & m
@@ -686,15 +690,15 @@ proc genGenericName*(n: GpuAst; params: seq[GpuParam]; callerParams: Table[strin
     if i < n.cArgs.high:
       result.add '_'
 
-proc makeFnGeneric*(fn: GpuAst; gi: GenericInst): GpuAst =
+proc makeFnGeneric*(ctx: var GpuContext; fn: GpuAst; gi: GenericInst): GpuAst =
   ## Returns a cloned function with params updated for the generic instantiation.
   result = fn
   let pnSym = newSymbol(gi.name, symKind = gsProc)
   result.pName = GpuAst(kind: gpuIdent, symbol: pnSym)
   for i, p in result.pParams.mpairs:
     let arg = gi.args[i]
-    p.ident.symbol.symKind = arg.addrSpace.fromAddressSpace()
     p.addressSpace = arg.addrSpace
+    ctx.varAddressSpaces[p.ident.symbol.iSym] = arg.addrSpace
     if p.ident.symbol.typ.kind == gtPtr:
       p.ident.symbol.typ.mutable = arg.mutable
     p.ident = patchSymbolImpl(p.ident)
@@ -729,51 +733,12 @@ proc patchTypeImpl*(t: GpuType): GpuType =
   elif result.kind == gtPtr and result.to.kind == gtBool:
     result.to.kind = gtInt32
 
-proc toAddressSpace*(symKind: GpuSymbolKind): AddressSpace =
-  case symKind
-  of gsDeviceKernelParam: asFunction
-  of gsGlobalKernelParam: asStorage
-  of gsLocal: asFunction
-  of gsShared: asWorkspace
-  of gsPrivate: asPrivate
-  of gsNone: asFunction
-  of gsBuiltin: asFunction # thread-local value, like gsNone/gsLocal
-  of gsProc:
-    raiseAssert "proc symbol in type context"
-
-proc fromAddressSpace*(addrSpace: AddressSpace): GpuSymbolKind =
-  case addrSpace
-  of asFunction: gsLocal
-  of asStorage: gsGlobalKernelParam
-  of asWorkspace: gsShared
-  of asPrivate: gsPrivate
-  of asUniform: raiseAssert "Uniform not supported"
-
 proc shortAddrSpace*(addrSpace: AddressSpace): string =
   case addrSpace
-  of asFunction: "l"
-  of asUniform: "u"
-  of asWorkspace: "w"
-  of asPrivate: "p"
-  of asStorage: "s"
-
-proc determineSymKind*(arg: GpuAst): GpuSymbolKind =
-  case arg.kind
-  of gpuIdent:
-    if arg.symbol != nil: arg.symbol.symKind else: gsNone
-  of gpuAddr: arg.aOf.determineSymKind()
-  of gpuDeref: arg.dOf.determineSymKind()
-  of gpuCall: gsLocal
-  of gpuIndex: arg.iArr.determineSymKind()
-  of gpuDot: arg.dParent.determineSymKind()
-  of gpuLit: gsLocal
-  of gpuBinOp: gsLocal
-  of gpuBlock: arg.statements[^1].determineSymKind()
-  of gpuPrefix: gsLocal
-  of gpuConv: gsLocal
-  of gpuCast: arg.cExpr.determineSymKind()
-  else:
-    raiseAssert "Cannot determine sym kind from: " & $arg
+  of asDevice: "s"
+  of asConstant: "u"
+  of asSMEM: "w"
+  of asRMEM: "l"
 
 proc determineMutability*(arg: GpuAst): bool =
   case arg.kind
@@ -812,17 +777,196 @@ proc determineIdent*(arg: GpuAst): GpuAst =
   else:
     raiseAssert "Cannot determine ident from: " & $arg
 
-proc getGenericArguments*(args: seq[GpuAst]; params: seq[GpuParam]; callerParams: Table[string, GpuParam]): seq[GenericArg] =
+# ─── Value address-space resolution ────────────────────────────────────────────
+# MSL requires an explicit address space on pointer struct fields and casts.
+# The IR carries none on `gtPtr`, so the printers resolve it from the value's
+# dataflow with an asRMEM fallback. The collection pass below precomputes the
+# var spaces (`varAddressSpaces`) for every backend; the pointer-field variant
+# table (`ptrFieldVariants`) is Metal-only.
+
+proc exprType(ctx: GpuContext, n: GpuAst): GpuType =
+  ## Best-effort type of an expression node (nil when unknown). The printers
+  ## use it to detect array-typed operands of `addr`, which need pointer
+  ## decay rather than `&`.
+  case n.kind
+  of gpuIdent: n.symbol.typ
+  of gpuLit: n.lType
+  of gpuBinOp: n.bType
+  of gpuPrefix: ctx.exprType(n.pVal)
+  of gpuCall: ctx.getFnReturnType(n.cName)
+  of gpuAddr: ctx.exprType(n.aOf)
+  of gpuDeref: ctx.exprType(n.dOf)
+  of gpuIndex:
+    let arrT = ctx.exprType(n.iArr)
+    if arrT.isNil:
+      nil
+    elif arrT.kind == gtArray: arrT.aTyp
+    elif arrT.kind == gtPtr: arrT.to
+    elif arrT.kind == gtUA: arrT.uaTo
+    else: nil
+  of gpuObjConstr: n.ocType
+  of gpuConv: n.convTo
+  of gpuCast: n.cTo
+  of gpuMaterialize: ctx.exprType(n.mExpr)
+  else: nil
+
+proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
+  ## Struct type of a field-access base, with the pointer/UA layer stripped.
+  var t = ctx.exprType(n)
+  if t != nil and t.kind == gtPtr:
+    t = t.to
+  if t != nil and t.kind == gtUA:
+    t = t.uaTo
+  result = t
+
+proc ptrFieldNames*(t: GpuType): seq[string] =
+  ## Pointer field names of a struct type, in declaration order.
+  case t.kind
+  of gtObject:
+    for f in t.oFields:
+      if f.typ.kind == gtPtr:
+        result.add f.name
+  of gtGenericInst:
+    for f in t.gFields:
+      if f.typ.kind == gtPtr:
+        result.add f.name
+  else: discard
+
+proc resolveValueAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
+  ## Address space of a pointer-typed value, resolved from the value's
+  ## dataflow with an `asRMEM` fallback.
+  if n == nil:
+    return asRMEM
+  case n.kind
+  of gpuIdent:
+    if n.symbol == nil:
+      asRMEM
+    elif n.symbol.iSym in ctx.varAddressSpaces:
+      ctx.varAddressSpaces[n.symbol.iSym]
+    elif n.symbol.symKind in {gsDeviceKernelParam, gsGlobalKernelParam}:
+      # Explicit `ptr T` params are device pointers. Implicit `var T`
+      # params are thread.
+      if n.symbol.typ != nil and n.symbol.typ.kind == gtPtr and
+         not n.symbol.typ.implicit:
+        asDevice
+      else:
+        asRMEM
+    else:
+      asRMEM
+  of gpuAddr: ctx.resolveValueAddressSpace(n.aOf)
+  of gpuCast: ctx.resolveValueAddressSpace(n.cExpr)
+  of gpuConv: ctx.resolveValueAddressSpace(n.convExpr)
+  of gpuBinOp: ctx.resolveValueAddressSpace(n.bLeft)
+  of gpuDot:
+    let ptype = ctx.dotParentType(n.dParent)
+    if ptype != nil and ptype in ctx.ptrFieldVariants:
+      let base = ctx.ptrFieldVariants[ptype][0]
+      let fieldIdx = ptrFieldNames(ptype).find(n.dField.ident())
+      if fieldIdx >= 0 and fieldIdx < base.len:
+        return base[fieldIdx] # base variant space of the field
+    ctx.resolveValueAddressSpace(n.dParent)
+  of gpuIndex: ctx.resolveValueAddressSpace(n.iArr)
+  of gpuDeref: ctx.resolveValueAddressSpace(n.dOf)
+  of gpuPrefix: ctx.resolveValueAddressSpace(n.pVal)
+  of gpuMaterialize: ctx.resolveValueAddressSpace(n.mExpr)
+  else: asRMEM
+
+proc resolveIdentAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
+  ## Authoritative address space of a symbol reference: the recorded var or
+  ## param space, else `asRMEM`. Non-ident expressions (`addr`, `deref`,
+  ## `index`, `dot`, `cast`, `block`, `materialize`) resolve through their
+  ## base ident; other expressions are `asRMEM`.
+  var base = n
+  while base != nil and base.kind != gpuIdent:
+    case base.kind
+    of gpuAddr: base = base.aOf
+    of gpuDeref: base = base.dOf
+    of gpuIndex: base = base.iArr
+    of gpuDot: base = base.dParent
+    of gpuCast: base = base.cExpr
+    of gpuBlock: base = base.statements[^1]
+    of gpuMaterialize: base = base.mExpr
+    else: return asRMEM
+  if base == nil or base.symbol == nil:
+    return asRMEM
+  ctx.varAddressSpaces.getOrDefault(base.symbol.iSym, asRMEM)
+
+proc variantSuffix*(spaces: seq[AddressSpace]): string =
+  ## `_`-prefixed suffix of a space tuple, e.g. `_smem`, `_devicesmem`.
+  result = "_"
+  for space in spaces:
+    case space
+    of asDevice: result.add "device"
+    of asConstant: result.add "const"
+    of asSMEM: result.add "smem"
+    of asRMEM: result.add "rmem"
+
+proc siteSpaceTuple*(ctx: GpuContext, n: GpuAst): seq[AddressSpace] =
+  ## Resolved pointer-field space tuple of an object construction site, in
+  ## field declaration order.
+  for fname in ptrFieldNames(n.ocType):
+    var space = asRMEM
+    for f in n.ocFields:
+      if f.name == fname and f.value.kind != gpuDiscard:
+        space = ctx.resolveValueAddressSpace(f.value)
+        break
+    result.add space
+
+proc collectValueAddressSpacesImpl*(ctx: var GpuContext, n: GpuAst) =
+  ## Records var spaces and objconstr pointer-field spaces for resolution.
+  if n == nil:
+    return
+  case n.kind
+  of gpuVar:
+    if n.vName.symbol != nil:
+      ctx.varAddressSpaces[n.vName.symbol.iSym] = n.addressSpace
+  of gpuObjConstr:
+    let spaces = ctx.siteSpaceTuple(n)
+    var variants = ctx.ptrFieldVariants.getOrDefault(n.ocType, @[])
+    if spaces notin variants:
+      variants.add spaces
+    ctx.ptrFieldVariants[n.ocType] = variants
+  else: discard
+  for ch in n:
+    ctx.collectValueAddressSpacesImpl(ch)
+
+proc paramAddressSpace(p: GpuParam): AddressSpace =
+  ## Space of a parameter: the recorded space when one is set (generic
+  ## instantiation records arg spaces at clone sites), otherwise derived
+  ## from the type — `device` for explicit `ptr T` params, `thread` for
+  ## implicit `var T` params and scalars.
+  if p.addressSpace != asRMEM:
+    p.addressSpace
+  elif p.typ != nil and p.typ.kind == gtPtr and not p.typ.implicit:
+    asDevice
+  else:
+    asRMEM
+
+proc collectValueAddressSpaces*(ctx: var GpuContext) =
+  ## Precomputes the value-space tables for every function body and global.
+  ## Params of generic fns get authoritative entries at their clone sites
+  ## (`makeFnGeneric`), which run after this pass.
+  for (_, fn) in ctx.fnTab.pairs:
+    for p in fn.pParams:
+      if p.ident.symbol != nil:
+        ctx.varAddressSpaces[p.ident.symbol.iSym] = paramAddressSpace(p)
+    ctx.collectValueAddressSpacesImpl(fn)
+  for (iSym, g) in ctx.globals.pairs:
+    ctx.varAddressSpaces[iSym] = asDevice
+  for blk in ctx.globalBlocks:
+    ctx.collectValueAddressSpacesImpl(blk)
+
+proc getGenericArguments*(ctx: GpuContext; args: seq[GpuAst]; params: seq[GpuParam]; callerParams: Table[string, GpuParam]): seq[GenericArg] =
   for i, arg in args:
     let p = params[i]
     if p.typ.kind != gtPtr:
-      result.add GenericArg(addrSpace: asFunction, mutable: false)
+      result.add GenericArg(addrSpace: asRMEM, mutable: false)
     else:
       let argIdent = arg.determineIdent()
       var lArg: GpuAst = arg
       if argIdent.kind != gpuDiscard and argIdent.symbol.iSym in callerParams:
         lArg = callerParams[argIdent.symbol.iSym].ident
-      let addrSpace = lArg.determineSymKind().toAddressSpace()
+      let addrSpace = ctx.resolveIdentAddressSpace(lArg)
       let mutable = lArg.determineMutability()
       result.add GenericArg(addrSpace: addrSpace, mutable: mutable)
 
@@ -955,7 +1099,7 @@ proc lowerPushConstantsImpl*(ctx: var GpuContext) =
   for (fnIdent, fn) in ctx.fnTab.mpairs:
     if fn.isGlobalFn():
       for p in fn.pParams:
-        if p.typ.kind != gtPtr and p.addressSpace != asWorkspace:
+        if p.typ.kind != gtPtr and p.addressSpace != asSMEM:
           # Check if already added
           let alreadyAdded = pushConstParams.anyIt(
             it.ident.ident() == p.ident.ident() and it.typ.kind == p.typ.kind)
@@ -1145,6 +1289,9 @@ proc registerWgslPasses*(reg: var PassRegistry) =
     "Addresses WGSL AST patterns (compound assign, struct ptr fields)",
     dependsOn = @["injectAddressOf"],
     run = proc(ctx: var GpuContext): void =
+      # Collect value address spaces before call args and pointer aliases
+      # are resolved from the authoritative map.
+      ctx.collectValueAddressSpaces()
       for (fnIdent, fn) in ctx.fnTab.mpairs:
         ctx.makeCodeValidImpl(fn, inGlobal = fn.isGlobalFn())
   )

@@ -273,7 +273,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       if isKernel and p.typ.kind == gtPtr:
         # Skip — these will be emitted as SSBO declarations at the top level
         discard
-      elif p.addressSpace == asWorkspace:
+      elif p.addressSpace == asSMEM:
         # shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"shared {inner} {p.ident.ident()}[]"
@@ -309,16 +309,14 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
 
   of gpuVar:
-    let attrs = if ast.vAttributes.len > 0: ast.vAttributes.join(" ") & ' '
-                else: ""
+    # The var's address-space keyword, prefixing the declaration ident for asSMEM arrays (`shared uint scratch[8]`).
+    # asConstant/asRMEM/asDevice have no GLSL per-variable keyword and emit none (`private` is not a valid GLSL storage qualifier).
     var typeStr: string
-    if atvShared in ast.vAttributes:
-      # The array type prints its identifier in the GLSL declaration
-      # position (`shared uint scratch[8]`, not `shared uint [8] scratch`),
-      # so the variable name must be passed as the type's ident.
+    case ast.addressSpace
+    of asSMEM:
       typeStr = "shared " & gpuTypeToString(ast.vType, ast.vName.ident())
-    else:
-      typeStr = attrs & gpuTypeToString(ast.vType, ast.vName.ident())
+    of asRMEM, asConstant, asDevice:
+      typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
     if ast.vInit.kind != gpuDiscard:
@@ -537,7 +535,7 @@ proc codegen*(ctx: var GpuContext): string =
           if ssboIdx >= canonicalSsbo.len:
             canonicalSsbo.add (p.ident.ident(), inner)
           inc ssboIdx
-        elif p.addressSpace != asWorkspace:
+        elif p.addressSpace != asSMEM:
           pushConstDecls.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
 
   # ── Step 2: Emit push-constant block (if any) ──

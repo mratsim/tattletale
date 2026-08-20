@@ -17,7 +17,7 @@ block:
   let int32 = GpuType(kind: gtInt32)
   let sym = newSymbol("data", iSym = "data_byref", typ = int32)
   let ident = GpuAst(kind: gpuIdent, symbol: sym)
-  let param = GpuParam(ident: ident, typ: int32, addressSpace: asFunction, passByRef: true)
+  let param = GpuParam(ident: ident, typ: int32, addressSpace: asRMEM, passByRef: true)
   var body = GpuAst(kind: gpuBlock)
   body.statements.add GpuAst(kind: gpuDiscard)
   var procNode = GpuAst(kind: gpuProc, pName: ident, pParams: @[param], pBody: body)
@@ -40,7 +40,7 @@ block:
   let identL = GpuAst(kind: gpuIdent, symbol: sym)
   let identR = GpuAst(kind: gpuIdent, symbol: sym)
   let param = GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym), typ: int32,
-                       addressSpace: asFunction, passByRef: true)
+                       addressSpace: asRMEM, passByRef: true)
   var body = GpuAst(kind: gpuBlock)
   body.statements.add GpuAst(kind: gpuAssign, aLeft: identL, aRight: identR)
   var procNode = GpuAst(kind: gpuProc, pName: GpuAst(kind: gpuIdent, symbol: sym),
@@ -70,7 +70,7 @@ block:
   let int32 = GpuType(kind: gtInt32)
   let sym = newSymbol("kernel_data", iSym = "kd_h3", typ = int32)
   let ident = GpuAst(kind: gpuIdent, symbol: sym)
-  let param = GpuParam(ident: ident, typ: int32, addressSpace: asFunction, passByRef: true)
+  let param = GpuParam(ident: ident, typ: int32, addressSpace: asRMEM, passByRef: true)
   var body = GpuAst(kind: gpuBlock)
   body.statements.add GpuAst(kind: gpuDiscard)
   var procNode = GpuAst(kind: gpuProc, pName: ident, pParams: @[param], pBody: body)

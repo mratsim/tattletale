@@ -59,8 +59,8 @@ proc sgemm_1_kernel(
   # CuTe: __shared__ smemA/smemB + make_tensor(make_smem_ptr(...)).
   # make_tensor_like would allocate a PER-THREAD local array (each thread
   # would only ever see its own rake) — real GEMM smem must be block-shared.
-  var smemA {.shared.}: array[128 * 8, float32]  # (BLK_M, BLK_K)
-  var smemB {.shared.}: array[128 * 8, float32]  # (BLK_N, BLK_K)
+  var smemA {.smem.}: array[128 * 8, float32]  # (BLK_M, BLK_K)
+  var smemB {.smem.}: array[128 * 8, float32]  # (BLK_N, BLK_K)
   let sA = make_view(addr smemA[0], make_layout((128, 8)))  # (BLK_M, BLK_K)
   let sB = make_view(addr smemB[0], make_layout((128, 8)))  # (BLK_N, BLK_K)
 

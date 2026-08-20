@@ -16,7 +16,7 @@ import ../passes/pass_registry
 
 proc unwrapSingleStmt(n: NimNode): NimNode =
   ## Unwrap a single-statement StmtList body (statement-kind branches may
-  ## carry one); callers keep their own multi-statement constraints.
+  ## carry one). Callers keep their own multi-statement constraints.
   if n.kind == nnkStmtList and n.len == 1:
     n[0]
   else:
@@ -30,7 +30,7 @@ proc isTypeDescNode(n: NimNode): bool =
   ## or a `typedesc` literal (e.g. `T` in `make_tensor(T, L)`). In the typed
   ## AST such an argument is a type symbol whose type is `typedesc[T]`
   ## (`typeKind == ntyTypeDesc`). CUDA has no type values, so these cannot be
-  ## lowered to a runtime value and are erased at gpuCall construction; the
+  ## lowered to a runtime value and are erased at gpuCall construction. The
   ## matching `typedesc` param is dropped in `parseProcParameters`.
   ## A genuine value symbol (var/let/param/result/const of a value type)
   ## never has `ntyTypeDesc` type, so it is never erased.
@@ -60,7 +60,7 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
     if isTypeDescNode(param[typIdx-1]):
       curIdx += numParams
       continue # typedesc[T] param — no CUDA value; skip whole IdentDefs (multi-name too)
-    # The TYPE node is `param[typIdx]` (second to last); `param[typIdx-1]` is the
+    # The TYPE node is `param[typIdx]` (second to last). `param[typIdx-1]` is the
     # (last) NAME — whose type isTypeDescNode probes above. A static VALUE param's
     # instantiated type node IS the value (e.g. `static MiniAtom` ->
     # `MiniAtom(dtype: ..., k: ...)`), which resolveType cannot lower (record
@@ -84,7 +84,13 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
       p.symbol.typ = paramType     ## Update the type of the symbol
       p.symbol.symKind = symKind ## and the symbol kind
       let byref = isLargeStruct(paramType)
-      let param = GpuParam(ident: p, typ: paramType, passByRef: byref)
+      # Explicit `ptr T` params are device pointers; implicit `var T`
+      # params and scalars stay in per-thread registers.
+      let paramAddrSpace =
+        if paramType.kind == gtPtr and not paramType.implicit: asDevice
+        else: asRMEM
+      let param = GpuParam(ident: p, typ: paramType,
+                           addressSpace: paramAddrSpace, passByRef: byref)
       result.add(param)
     curIdx += numParams
 
@@ -440,6 +446,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
         #   Sym "uint32"
         #   Empty
         varNode.vName = ctx.toGpuAst(reg, declaration[0])
+        # Unannotated locals live in per-thread registers. The pragma branch
+        # below overrides this default when an address-space pragma is present.
+        varNode.addressSpace = asRMEM
       of nnkPragmaExpr:
         # IdentDefs               # declaration
         #   PragmaExpr            # declaration[0]
@@ -450,15 +459,10 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
         #   Empty
         varNode.vName = ctx.toGpuAst(reg, declaration[0][0])
         doAssert declaration[0][1].kind == nnkPragma
-        varNode.vAttributes = collectAttributes(declaration[0][1])
+        varNode.addressSpace = collectAddressSpace(declaration[0][1])
       else: error "Unexpected node kind for variable: " & $declaration.treeRepr
       varNode.vType = resolveType(reg, declaration)
       varNode.vName.symbol.typ = varNode.vType # also store the type in the symbol, for easier lookup later
-      # This is a *local* variable (i.e. `function` address space on WGSL) unless it is
-      # annotated with `{.shared.}` (-> `workspace` in WGSL)
-      varNode.vName.symbol.symKind = if atvShared in varNode.vAttributes: gsShared
-                                 elif atvPrivate in varNode.vAttributes: gsPrivate
-                                 else: gsLocal
       varNode.vMutable = node.kind == nnkVarSection
       ## XXX: handle initialization for array types. Need a memcpy!
       ## In principle should be straightforward. Turn e.g.
@@ -673,7 +677,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       elif result.bRight.kind == gpuLit:
         result.bRight.lType = rightTyp
       # Carry the operator's true return type: typ = node[0].getTypeImpl() is
-      # the ProcTy; typ[0] is the FormalParams; typ[0][0] is the return type
+      # the ProcTy. typ[0] is the FormalParams. typ[0][0] is the return type
       # node. Compound-assign operators (`+=`, `-=`, ...) declare no return
       # type in their ProcTy (nnkEmpty), so the result type is the LHS operand
       # type (stripping the `var` wrapper Nim puts on var params).
@@ -717,7 +721,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     ## Case-object field access: Nim wraps it in a discriminant check
     ## (`contains(kind, {...})`) which has no C representation. Case
     ## objects have no place on the GPU — the atom records are
-    ## compile-time (const/static) and fold before reaching here; a
+    ## compile-time (const/static) and fold before reaching here. A
     ## runtime case object would silently lose its memory-safety check.
     ## Reject loudly.
     error("nnkCheckedFieldExpr: case-object field access is not supported on GPU — " &
@@ -758,7 +762,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     # Resolve `const _ = X()` inline: the constant value lives outside the cuda: block
     # so emitting a GPU identifier would reference an undeclared name.
     if sanitized == "_" and symKind(node) == nskConst:
-      # getImpl returns nnkConstDef; [2] is the value expression (e.g. X_marker())
+      # getImpl returns nnkConstDef. [2] is the value expression (e.g. X_marker())
       # Using the whole def would recurse since the name child is also `_`.
       return ctx.toGpuAst(reg, getImpl(node)[2])
     if s notin ctx.sigTab:
@@ -1005,9 +1009,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
                     cValue: ctx.toGpuAst(reg, node[2]),
                     cType: resolveType(reg, node))
     result.cIdent.symbol.typ = result.cType # also store the type in the symbol, for easier lookup later
-    result.cIdent.symbol.symKind = gsLocal #if atvShared in result.vAttributes: gsShared
-                               #elif atvPrivate in varNode.vAttributes: gsPrivate
-                               #else: gsLocal
+    result.cIdent.symbol.symKind = gsLocal # constexpr: always per-thread (compile-time) value
 
   of nnkConstSection:
     result = GpuAst(kind: gpuBlock)

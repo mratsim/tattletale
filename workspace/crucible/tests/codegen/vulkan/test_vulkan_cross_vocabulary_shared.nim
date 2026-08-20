@@ -1,6 +1,6 @@
 ## Vulkan: shared-memory scratch + barrier with neighbor-slot semantics.
 ##
-## The kernel stages values in `{.shared.}` scratch (GLSL `shared`), runs the Vulkan-idiom
+## The kernel stages values in `{.smem.}` scratch (GLSL `shared`), runs the Vulkan-idiom
 ## `barrier()`, then each work-item reads a slot written by a different work-item.
 ## The neighbor read verifies the staged values are visible after the barrier.
 ## The scratch is module-level because GLSL allows `shared` only at global scope.
@@ -19,7 +19,7 @@ import std/strutils
 import workspace/crucible
 
 const kernelCode = vulkan:
-  var scratch {.shared.}: array[8, uint32]
+  var scratch {.smem.}: array[8, uint32]
   proc crossVocabSharedKernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     let tid = thread_index_in_threadgroup
     scratch[tid] = tid * 3'u32
