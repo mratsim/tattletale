@@ -253,7 +253,9 @@ proc collectAddressSpace*(n: NimNode): AddressSpace =
   result = asDevice
   for pragma in n:
     doAssert pragma.kind in [nnkIdent, nnkSym], "Unexpected node kind: " & $pragma.treerepr
-    case pragma.strVal.normalize
+    # Case-insensitive only: `strutils.normalize` also strips underscores,
+    # which would turn `{.const_mem.}` into "constmem" and never match.
+    case pragma.strVal.toLowerAscii
     of "smem":
       doAssert result == asDevice, "Multiple address-space pragmas on one variable: " & $n.treerepr
       result = asSMEM
