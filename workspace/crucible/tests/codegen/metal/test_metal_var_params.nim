@@ -13,7 +13,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_var_params.nim
 
-import std/unittest
+import std/[strutils, unittest]
 import workspace/crucible
 
 const varParamMsl = metal:
@@ -43,6 +43,14 @@ proc runTest() =
     test "setPair + swap round-trip":
       var engine = bkMetal.init()
       engine.ingest(varParamMsl)
+      let msl = engine.getArtifact()
+      # Unannotated locals emit no address-space qualifier: register (thread)
+      # storage is the default declaration form. Only implicit `var T` params
+      # carry an explicit `thread` qualifier.
+      check "uint a = 1;" in msl
+      check "uint b = 1;" in msl
+      check "Pair p;" in msl
+      check "thread uint a" notin msl
       var res: array[4, uint32]
       engine.run("varParamKernel", res, ())
       check res[0] == 10'u32

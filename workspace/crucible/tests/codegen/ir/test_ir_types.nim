@@ -124,9 +124,9 @@ block:
   let ident2 = GpuAst(kind: gpuIdent, symbol: sym) # same Symbol ref
 
   let param1 = GpuParam(ident: ident, typ: GpuType(kind: gtInt32),
-    addressSpace: asFunction, passByRef: false)
+    addressSpace: asRMEM, passByRef: false)
   let param2 = GpuParam(ident: ident2, typ: GpuType(kind: gtInt32),
-    addressSpace: asFunction, passByRef: false)
+    addressSpace: asRMEM, passByRef: false)
 
   doAssert param1 == param2,
     "GpuParam with same Symbol ref should be equal"
@@ -140,9 +140,9 @@ block:
   let identB = GpuAst(kind: gpuIdent, symbol: symB)
 
   let paramA = GpuParam(ident: identA, typ: GpuType(kind: gtInt32),
-    addressSpace: asFunction, passByRef: false)
+    addressSpace: asRMEM, passByRef: false)
   let paramB = GpuParam(ident: identB, typ: GpuType(kind: gtInt32),
-    addressSpace: asFunction, passByRef: false)
+    addressSpace: asRMEM, passByRef: false)
 
   doAssert not (paramA == paramB),
     "GpuParam with different Symbol refs should not be equal"
@@ -153,9 +153,9 @@ block:
   let sym = newSymbol("x", iSym = "x_hash")
   let ident = GpuAst(kind: gpuIdent, symbol: sym)
   let param1 = GpuParam(ident: ident, typ: GpuType(kind: gtInt32),
-    addressSpace: asFunction, passByRef: false)
+    addressSpace: asRMEM, passByRef: false)
   let param2 = GpuParam(ident: ident, typ: GpuType(kind: gtInt32),
-    addressSpace: asFunction, passByRef: false)
+    addressSpace: asRMEM, passByRef: false)
 
   let sigA = GpuProcSignature(
     params: @[param1],

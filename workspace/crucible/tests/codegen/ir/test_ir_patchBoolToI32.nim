@@ -18,7 +18,7 @@ block:
   let sym = newSymbol("flag", iSym = "flag_h1", typ = boolTyp)
   let ident = GpuAst(kind: gpuIdent, symbol: sym)
   var ctx = GpuContext()
-  ctx.globals["flag_h1"] = GpuParam(ident: ident, typ: boolTyp, addressSpace: asStorage)
+  ctx.globals["flag_h1"] = GpuParam(ident: ident, typ: boolTyp, addressSpace: asDevice)
   var n = ident
   ctx.patchBoolToI32Impl(n)
   doAssert n.kind == gpuConv, "Bool global should get gpuConv, got: " & $n.kind
@@ -48,7 +48,7 @@ block:
   let sym = newSymbol("val", iSym = "val_h3", typ = int32)
   let ident = GpuAst(kind: gpuIdent, symbol: sym)
   var ctx = GpuContext()
-  ctx.globals["val_h3"] = GpuParam(ident: ident, typ: int32, addressSpace: asStorage)
+  ctx.globals["val_h3"] = GpuParam(ident: ident, typ: int32, addressSpace: asDevice)
   var n = ident
   ctx.patchBoolToI32Impl(n)
   doAssert n.kind == gpuIdent, "Int32 global should stay as gpuIdent, got: " & $n.kind

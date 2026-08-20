@@ -19,7 +19,7 @@ import workspace/crucible
 
 const crossVocabMsl = metal:
   proc crossVocabKernel(output: ptr UncheckedArray[uint32]) {.global.} =
-    var scratch {.shared.}: array[64, uint32]
+    var scratch {.smem.}: array[64, uint32]
     scratch[thread_position_in_threadgroup.x] =
       blockIdx.x * 64'u32 + thread_position_in_threadgroup.x
     syncthreads()

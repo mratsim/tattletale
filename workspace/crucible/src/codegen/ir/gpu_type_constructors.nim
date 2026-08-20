@@ -136,7 +136,7 @@ proc requiresMemcpy*(n: NimNode): bool =
 
 proc isBuiltIn*(n: NimNode): bool =
   ## Checks if the given proc is a `{.builtin.}` (or if it is a Nim "built in"
-  ## proc that uses `importc`, as we cannot emit those; they _need_ to have a
+  ## proc that uses `importc`, as we cannot emit those. They _need_ to have a
   ## WGSL / CUDA equivalent built in)
   doAssert n.kind in [nnkProcDef, nnkFuncDef], "Argument is not a proc: " & $n.treerepr
   for pragma in n.pragma:
@@ -241,18 +241,28 @@ proc hasPragma*(n: NimNode, pragmaName: string): bool =
       return true
   false
 
-proc collectAttributes*(n: NimNode): seq[GpuVarAttribute] =
-  ## Collects all pragmas associated with the given variable.
-  ## Takes the `nnkPragma` node of the `nnkIdentDefs` associated with it.
+proc collectAddressSpace*(n: NimNode): AddressSpace =
+  ## Address space of a var's pragma list: `smem`/`rmem`/`const_mem` set it,
+  ## other pragmas are discarded.
+  ## A pragma list without an address-space pragma resolves to asRMEM (per-thread registers).
   doAssert n.kind == nnkPragma
+  result = asRMEM
+  var seen = false
   for pragma in n:
     doAssert pragma.kind in [nnkIdent, nnkSym], "Unexpected node kind: " & $pragma.treerepr
-    case pragma.strVal.normalize
-    of "cuextern", "extern": result.add atvExtern
-    of "shared": result.add atvShared
-    of "private": result.add atvPrivate
-    of "volatile": result.add atvVolatile
-    of "constant": result.add atvConstant
+    case pragma.strVal.toLowerAscii()
+    of "smem":
+      doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      seen = true
+      result = asSMEM
+    of "rmem":
+      doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      seen = true
+      result = asRMEM
+    of "const_mem":
+      doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
+      seen = true
+      result = asConstant
     of "noinit": discard # XXX: ignore for now
     of "inject": discard # injected symbols from templates/macros
     of "gensym": discard # template-generated symbol

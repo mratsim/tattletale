@@ -1,6 +1,5 @@
-# Constantine
-# Copyright (c) 2018-2019    Status Research & Development GmbH
-# Copyright (c) 2020-Present Mamy André-Ratsimbazafy
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
@@ -115,7 +114,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
 
 proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
   ## Returns the correct function with its return type. Kept for backward compat
-  ## during Phase 5; will be removed when codegen reads sigString from FnTableEntry.
+  ## during Phase 5. Will be removed when codegen reads sigString from FnTableEntry.
   if typ.kind == gtPtr and typ.to.kind == gtArray:
     # crazy stuff. Syntax to return a pointer to a statically sized array:
     # `Foo (*fnName(fnArgs))[ArrayLen]`
@@ -271,8 +270,13 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
 
   of gpuVar:
-    let attrs = if ast.vAttributes.len > 0: ast.vAttributes.join(" ") & ' '
-                else: ""
+    # Per-space spelling: `__shared__` for asSMEM, `__constant__` for asConstant.
+    # asRMEM emits none: register storage is the default declaration form for CUDA automatic variables.
+    var attrs = ""
+    case ast.addressSpace
+    of asSMEM: attrs = "__shared__ "
+    of asConstant: attrs = "__constant__ "
+    of asRMEM, asDevice: discard
     result = indentStr & attrs & gpuTypeToString(ast.vType, ast.vName.ident())
     if ast.vInit.kind != gpuDiscard:
       result &= " = " & ctx.genCuda(ast.vInit)
@@ -440,7 +444,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     ## TODO: We need to change the code such that we emit `constexpr` inside of procs and
     ## `__constant__` outside of procs. The point is we want to support mapping to `__constant__
     ## for `const foo = bar` Nim declarations to evaluate values at Nim's compile time.
-    ## Alternatively, make user write `const foo {.constant.} = bar` to produce a global
+    ## Alternatively, make user write `const foo {.const_mem.} = bar` to produce a global
     ## `__constant__` value.
     let cInit = if ast.cValue.kind == gpuDiscard: "{}" else: ctx.genCuda(ast.cValue)
     if ast.cType.kind == gtArray:

@@ -18,7 +18,7 @@ block:
   let ptrInt32 = GpuType(kind: gtPtr, to: int32)
   let sym = newSymbol("buf", iSym = "buf_ssbo1", typ = ptrInt32)
   let ident = GpuAst(kind: gpuIdent, symbol: sym)
-  let param = GpuParam(ident: ident, typ: ptrInt32, addressSpace: asStorage)
+  let param = GpuParam(ident: ident, typ: ptrInt32, addressSpace: asDevice)
   var kernelBody = GpuAst(kind: gpuBlock, statements: @[GpuAst(kind: gpuDiscard)])
   var kernel = GpuAst(kind: gpuProc, pName: ident, pParams: @[param], pBody: kernelBody)
   kernel.pAttributes = {attGlobal}
@@ -39,14 +39,14 @@ block:
   let ptrInt32 = GpuType(kind: gtPtr, to: int32)
   let sym1 = newSymbol("bufferA", iSym = "buf_a_sym", typ = ptrInt32)
   let ident1 = GpuAst(kind: gpuIdent, symbol: sym1)
-  let param1 = GpuParam(ident: ident1, typ: ptrInt32, addressSpace: asStorage)
+  let param1 = GpuParam(ident: ident1, typ: ptrInt32, addressSpace: asDevice)
   var body1 = GpuAst(kind: gpuBlock, statements: @[GpuAst(kind: gpuDiscard)])
   var kernel1 = GpuAst(kind: gpuProc, pName: ident1, pParams: @[param1], pBody: body1)
   kernel1.pAttributes = {attGlobal}
 
   let sym2 = newSymbol("bufferB", iSym = "buf_b_sym", typ = ptrInt32)
   let ident2 = GpuAst(kind: gpuIdent, symbol: sym2)
-  let param2 = GpuParam(ident: ident2, typ: ptrInt32, addressSpace: asStorage)
+  let param2 = GpuParam(ident: ident2, typ: ptrInt32, addressSpace: asDevice)
   var body2 = GpuAst(kind: gpuBlock, statements: @[GpuAst(kind: gpuDiscard)])
   var kernel2 = GpuAst(kind: gpuProc, pName: ident2, pParams: @[param2], pBody: body2)
   kernel2.pAttributes = {attGlobal}

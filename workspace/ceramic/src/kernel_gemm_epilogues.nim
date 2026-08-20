@@ -53,7 +53,7 @@ type Epilogue* = concept
   ##
   ## TODO:
   ##   currently using Nim concepts v2 but we likely will require templates
-  ##   to inject {.shared.} buffer(s) in the caller.
+  ##   to inject {.smem.} buffer(s) in the caller.
   ##   Only Nim concepts v1 can specify templates as part of the concept
   proc apply(op: Self, tmp: var (TensorView or Tensor), AB: TensorView or Tensor)
   proc finalStore(op: Self, D: var (TensorView or Tensor), tmp: (TensorView or Tensor))
@@ -115,7 +115,7 @@ template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
   #
   # TODO:
   #   Pending cp.async / TMA copy into shared memory
-  #   Then, this template will inject the {.shared.} staging buffer
+  #   Then, this template will inject the {.smem.} staging buffer
   #   into the caller scope so it can be accessed from `apply`
   #   and copy data in `preflight`
   discard
@@ -203,7 +203,7 @@ template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
   #
   # TODO:
   #   Pending cp.async / TMA copy into shared memory
-  #   Then, this template will inject the {.shared.} staging buffer
+  #   Then, this template will inject the {.smem.} staging buffer
   #   into the caller scope so it can be accessed from `apply`
   #   and copy data in `preflight`
   discard
