@@ -1,8 +1,8 @@
 ## Metal: pointer-typed struct fields and pointer casts carry the resolved
 ## address-space qualifier.
 ##
-## MSL rejects pointer spellings without an explicit address space (F-R4-12,
-## gaps 1+2): a `ptr T` struct field rendered bare (`ushort* data;`) and a
+## MSL rejects pointer spellings without an explicit address space: a
+## `ptr T` struct field rendered bare (`ushort* data;`) and a
 ## `cast[ptr T]` rendered bare (`(ushort*)data`) both fail to compile. The
 ## printer resolves the space from the value's dataflow — the var's
 ## `{.smem.}`/`{.rmem.}`/`{.const_mem.}` pragma or the kernel buffer param,
