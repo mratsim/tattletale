@@ -9,7 +9,11 @@
 ##
 ## Lowers the shared GPU IR to MSL, modeled on the CUDA printer with Metal's ABI rules:
 ##   - kernel arguments are buffers (`device` pointers for arrays, `constant` references for scalars)
-##   - referenced index builtins become attribute-qualified `uint3` parameters, one per use
+##   - coordinate builtins ride in the param list: the `materializeIndexBuiltinParams` pass
+##     appends one param per referenced builtin, marked on the symbol's `coordBuiltin`.
+##     Kernels emit the attribute-qualified form (`uint3 name [[name]]`), device functions
+##     the plain form, and call sites forward the names
+##     (MSL device functions have no implicit thread index)
 ##   - the threadgroup size stays host-side (dispatch-time) and is never baked into the shader.
 ##
 ## `MetalReservedKeywords` is the MSL reserved-word table minus the boolean literals
@@ -212,35 +216,30 @@ proc genLit*(ast: GpuAst): string =
     else:
       result = ast.lValue
 
-proc collectAttrIdents(n: GpuAst, attrIdents: var seq[(string, GpuCoordBuiltinKind)]) =
-  ## Records coordinate-builtin identifiers in first-use order, deduped by name.
-  ## The `gpuCall` name is not part of the child walk, so the barrier never becomes an attribute param.
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.coordBuiltin != gbkNone:
-      let name = n.ident()
-      if not attrIdents.anyIt(it[0] == name):
-        attrIdents.add (name, n.symbol.coordBuiltin)
-  else:
-    for ch in n:
-      collectAttrIdents(ch, attrIdents)
-
 proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
   ## MSL kernel parameter list:
   ## - buffer params: `device T*`, never const — matches device-fn params, and
   ##   MSL accepts non-const input buffers
   ## - scalars: `constant T&`
-  ## - the attribute params for the index builtins the kernel body references
+  ## - a param whose symbol carries a coordinate builtin kind emits the
+  ##   attribute form (`uint3 name [[name]]`, scalar `uint` for the flat thread
+  ##   index): no `[[buffer(n)]]` binding, and it does not advance the buffer
+  ##   index. The `materializeIndexBuiltinParams` pass appends these after the
+  ##   declared params, so declared params keep their `[[buffer(n)]]` positions.
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
   ## Scalars stay 4 bytes on the host (arg_blobs blobOf), so scalar `bool` is declared `int`.
   ## Buffer elements marshal at their Nim width, so bool buffers declare `bool` (1 byte).
-  var attrIdents: seq[(string, GpuCoordBuiltinKind)]
-  collectAttrIdents(fn.pBody, attrIdents)
   var params: seq[string]
   var bufferIdx = 0
   for p in fn.pParams:
     let name = p.ident.ident()
     checkReservedIdent(name, "parameter")
+    if p.ident.symbol.coordBuiltin != gbkNone:
+      # The five coordinate builtins are `uint3` attribute params.
+      # The flat thread index `gbkThreadIndexInThreadgroup` is a scalar `uint` builtin.
+      let attrType = if p.ident.symbol.coordBuiltin == gbkThreadIndexInThreadgroup: "uint" else: "uint3"
+      params.add attrType & " " & name & " [[" & name & "]]"
+      continue
     let binding = " [[buffer(" & $bufferIdx & ")]]"
     if p.typ.kind == gtPtr:
       var inner = p.typ.to
@@ -254,11 +253,6 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
         elem = "int"
       params.add "constant " & elem & "& " & name & binding
     inc bufferIdx
-  for (attr, kind) in attrIdents:
-    # The five coordinate builtins are `uint3` attribute params.
-    # The flat thread index `gbkThreadIndexInThreadgroup` is a scalar `uint` builtin.
-    let attrType = if kind == gbkThreadIndexInThreadgroup: "uint" else: "uint3"
-    params.add attrType & " " & attr & " [[" & attr & "]]"
   result = params.join(", ")
 
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
@@ -464,8 +458,9 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
 
   of gpuIdent:
     # Identity naming: the source-level builtin names are the MSL attribute names,
-    # so a builtin-marked identifier emits verbatim
-    # and binds to the attribute param `genKernelParams` injects for that reference.
+    # so a builtin-marked identifier emits verbatim and binds to the attribute
+    # param `genKernelParams` emits for a kernel, or to the plain param a device
+    # function receives for the same builtin.
     # Unmarked identifiers never get a param, so an undeclared name stays a loud MSL error.
     checkReservedIdent(ast.ident(), "identifier")
     result = ast.ident()
