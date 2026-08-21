@@ -58,17 +58,13 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
   var skipIdent = false
   case t.kind
   of gtPtr:
-    var t = t
-    # Strip `gtUA` layer (ptr UncheckedArray[T] → ptr T)
-    if t.to.kind == gtUA:
-      t.to = t.to.uaTo
-
-    if t.to.kind == gtArray: # ptr to array type
+    let inner = if t.to.kind == gtUA: t.to.uaTo else: t.to
+    if inner.kind == gtArray: # ptr to array type
       let ptrStar = gpuTypeToString(t.kind)
-      result = gpuTypeToString(t.to, '(' & ptrStar & ident & ')')
+      result = gpuTypeToString(inner, '(' & ptrStar & ident & ')')
       skipIdent = true
     else:
-      let typ = gpuTypeToString(t.to, allowEmptyIdent = allowEmptyIdent)
+      let typ = gpuTypeToString(inner, allowEmptyIdent = allowEmptyIdent)
       let ptrStar = gpuTypeToString(t.kind)
       result = typ & ptrStar
   of gtArray:
