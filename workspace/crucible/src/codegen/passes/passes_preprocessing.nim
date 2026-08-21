@@ -1347,7 +1347,179 @@ proc registerOpenclPasses*(reg: var PassRegistry) =
           ctx.insertByrefAddrsImpl(fn.pBody)
   )
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 6: materializeIndexBuiltinParams pass (Metal)
+# ═══════════════════════════════════════════════════════════════════════════
+# MSL device functions have no implicit thread index: a body that references a
+# canonical coordinate builtin must bind it to a param the caller forwards.
+# This pass computes each function's transitive builtin needs once and appends
+# one param per need into `pParams`, for kernels and device functions alike,
+# with the param's symbol carrying the builtin kind (`coordBuiltin`, resolved
+# from the canonical name exactly as the frontend marks builtin symbols). The
+# Metal printer then discriminates the attribute form (kernels) from the plain
+# form (device functions) by that symbol field alone, and call sites forward
+# the canonical names.
+
+proc collectCoordBuiltinIdents(n: GpuAst, acc: var seq[(string, GpuCoordBuiltinKind)]) =
+  ## Records coordinate-builtin identifiers in first-use order, deduped by name.
+  ## The symbol's `coordBuiltin` decides, never the name: a local or declared
+  ## param shadowing a canonical name carries `gbkNone` and is skipped.
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil and n.symbol.coordBuiltin != gbkNone:
+      let name = n.ident()
+      if not acc.anyIt(it[0] == name):
+        acc.add (name, n.symbol.coordBuiltin)
+  else:
+    for ch in n:
+      collectCoordBuiltinIdents(ch, acc)
+
+proc collectCallees(n: GpuAst, callees: var seq[GpuAst]) =
+  ## Records the functions a body calls, in first-use order, deduped.
+  ## Barrier calls are skipped: they lower to a native statement, never a
+  ## function call.
+  case n.kind
+  of gpuCall:
+    if n.cName.symbol.synchroBuiltin == gbkNone and not callees.anyIt(it == n.cName):
+      callees.add n.cName
+    for ch in n:
+      collectCallees(ch, callees)
+  else:
+    for ch in n:
+      collectCallees(ch, callees)
+
+proc fnBuiltinNeedsImpl(ctx: GpuContext, fn: GpuAst,
+                        acc: var seq[(string, GpuCoordBuiltinKind)],
+                        visited: var seq[string]) =
+  ## Appends the coordinate builtins `fn` must bind, transitively: the builtins
+  ## its own body references, then the needs of every device function it calls,
+  ## each name first-seen once. A visited set guards recursive calls.
+  let key = fn.pName.symbol.iSym
+  if key in visited:
+    return
+  visited.add key
+  collectCoordBuiltinIdents(fn.pBody, acc)
+  var callees: seq[GpuAst]
+  collectCallees(fn.pBody, callees)
+  for calleeIdent in callees:
+    let callee = ctx.allFnTab.getOrDefault(calleeIdent,
+                                           ctx.genericInsts.getOrDefault(calleeIdent))
+    if not callee.isNil:
+      if callee.kind == gpuProc:
+        fnBuiltinNeedsImpl(ctx, callee, acc, visited)
+
+proc fnBuiltinNeeds(ctx: GpuContext, fn: GpuAst): seq[(string, GpuCoordBuiltinKind)] =
+  ## Transitive coordinate-builtin needs of `fn`: its own body, then every
+  ## device function it calls. The same first-seen order is used at every
+  ## emission site, so the identity-named identifiers bind to the params.
+  var visited: seq[string]
+  fnBuiltinNeedsImpl(ctx, fn, result, visited)
+
+proc builtinParamType(kind: GpuCoordBuiltinKind): GpuType =
+  ## IR type of a coordinate builtin bound as a param: scalar `uint32` for the
+  ## flat thread index, the MSL `uint3` vector spelling otherwise. `uint3` is a
+  ## synthetic generic name carrying the printer's native spelling; no struct
+  ## is ever registered for it.
+  if kind == gbkThreadIndexInThreadgroup:
+    GpuType(kind: gtUint32)
+  else:
+    GpuType(kind: gtGenericInst, gName: "uint3")
+
+proc appendBuiltinParams(fn: GpuAst,
+                         needs: seq[(string, GpuCoordBuiltinKind)]) =
+  ## Appends one plain param per transitive coordinate-builtin need, after the
+  ## declared params, for kernels and device functions alike. The param's
+  ## symbol carries the builtin kind (`coordBuiltin` resolved from the
+  ## canonical name via the builtin catalog, the same marking the frontend
+  ## applies to builtin identifiers), so the printer emits the attribute form
+  ## for kernels and the plain form for device functions by the symbol alone.
+  for (name, kind) in needs:
+    let typ = builtinParamType(kind)
+    let sym = newSymbol(name, iSym = name & "_builtin", symKind = gsDeviceKernelParam)
+    sym.coordBuiltin = coordBuiltinKind(name)
+    let ident = GpuAst(kind: gpuIdent, symbol: sym)
+    fn.pParams.add GpuParam(ident: ident, typ: typ,
+                            addressSpace: asRMEM, passByRef: false)
+
+proc appendBuiltinForwardingArgs(n: var GpuAst,
+                                 needs: seq[(string, GpuCoordBuiltinKind)]) =
+  ## Appends one forwarding arg per callee need, in the callee's needs order.
+  ## The identity-named identifiers bind to the caller's own params (kernel
+  ## attribute params or device-fn hidden params) in the emitted source.
+  for (name, _) in needs:
+    let sym = newSymbol(name, iSym = name & "_builtin", symKind = gsLocal)
+    n.cArgs.add GpuAst(kind: gpuIdent, symbol: sym)
+
+proc materializeCallArgsImpl(ctx: GpuContext, n: var GpuAst,
+                             needs: Table[string, seq[(string, GpuCoordBuiltinKind)]]) =
+  ## Appends the forwarding args to every `gpuCall` whose callee has
+  ## coordinate-builtin needs, in the callee's needs order. The walk happens
+  ## before the append so the argument list is not mutated mid-iteration.
+  case n.kind
+  of gpuCall:
+    let callee = ctx.allFnTab.getOrDefault(n.cName,
+                                           ctx.genericInsts.getOrDefault(n.cName))
+    var calleeNeeds: seq[(string, GpuCoordBuiltinKind)]
+    if not callee.isNil:
+      if callee.kind == gpuProc:
+        calleeNeeds = needs.getOrDefault(callee.pName.symbol.iSym, @[])
+    for ch in mitems(n):
+      materializeCallArgsImpl(ctx, ch, needs)
+    appendBuiltinForwardingArgs(n, calleeNeeds)
+  else:
+    for ch in mitems(n):
+      materializeCallArgsImpl(ctx, ch, needs)
+
+proc materializeIndexBuiltinParamsImpl*(ctx: var GpuContext) =
+  ## Materializes coordinate-builtin binding for the Metal backend:
+  ## - every function receives its transitive needs as params appended to
+  ##   `pParams`, after the declared params, the symbol carrying the builtin kind
+  ## - every call site forwards the callee's needs as trailing args
+  ##
+  ## MSL device functions have no implicit thread index, so a body that
+  ## references a canonical coordinate builtin binds it to a param the caller
+  ## forwards. The closure analysis runs first, once per function, so every
+  ## rewrite reads the same memoized needs in the same first-seen order.
+  var needs = initTable[string, seq[(string, GpuCoordBuiltinKind)]]()
+  for fnKey in ctx.allFnTab.keys:
+    var fn = ctx.allFnTab[fnKey]
+    if fn.kind == gpuProc:
+      needs[fn.pName.symbol.iSym] = fnBuiltinNeeds(ctx, fn)
+  for fnKey in ctx.genericInsts.keys:
+    var fn = ctx.genericInsts[fnKey]
+    if fn.kind == gpuProc:
+      needs[fn.pName.symbol.iSym] = fnBuiltinNeeds(ctx, fn)
+
+  # A pulled-in device function is registered in both `allFnTab` and
+  # `genericInsts` under the same symbol: rewrite each function once.
+  # Kernels and device functions alike receive the needs as params; the
+  # printer's attribute form vs plain form is decided by the symbol's
+  # `coordBuiltin` at emission time.
+  var done = initHashSet[string]()
+  for fnKey in ctx.allFnTab.keys:
+    var fn = ctx.allFnTab[fnKey]
+    if fn.kind == gpuProc:
+      let key = fn.pName.symbol.iSym
+      if key in done:
+        continue
+      done.incl key
+      appendBuiltinParams(fn, needs[key])
+      materializeCallArgsImpl(ctx, fn.pBody, needs)
+  for fnKey in ctx.genericInsts.keys:
+    var fn = ctx.genericInsts[fnKey]
+    if fn.kind == gpuProc:
+      let key = fn.pName.symbol.iSym
+      if key in done:
+        continue
+      done.incl key
+      appendBuiltinParams(fn, needs[key])
+      materializeCallArgsImpl(ctx, fn.pBody, needs)
+
 proc registerMetalPasses*(reg: var PassRegistry) =
-  ## Registers nothing. MSL is a C-family language (like CUDA), so the common passes
-  ## (`registerCommonPasses`) already cover the IR shapes the printer needs.
-  discard
+  ## Register Metal-specific preprocessing passes.
+  reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,
+    "Materializes coordinate-builtin binding: builtin params appended to pParams, call-site forwarding args",
+    dependsOn = @["emitFunctionSignatures"],
+    run = proc(ctx: var GpuContext): void =
+      materializeIndexBuiltinParamsImpl(ctx)
+  )
