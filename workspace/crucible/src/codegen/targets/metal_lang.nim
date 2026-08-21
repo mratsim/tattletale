@@ -9,8 +9,10 @@
 ##
 ## Lowers the shared GPU IR to MSL, modeled on the CUDA printer with Metal's ABI rules:
 ##   - kernel arguments are buffers (`device` pointers for arrays, `constant` references for scalars)
-##   - referenced index builtins become attribute-qualified `uint3` parameters, one per use
-##   - device functions receive the same builtins as hidden plain parameters, forwarded at call sites
+##   - coordinate builtins ride in the param list: the `materializeIndexBuiltinParams` pass
+##     appends one param per referenced builtin, marked on the symbol's `coordBuiltin`.
+##     Kernels emit the attribute-qualified form (`uint3 name [[name]]`), device functions
+##     the plain form, and call sites forward the names
 ##     (MSL device functions have no implicit thread index)
 ##   - the threadgroup size stays host-side (dispatch-time) and is never baked into the shader.
 ##
@@ -214,77 +216,30 @@ proc genLit*(ast: GpuAst): string =
     else:
       result = ast.lValue
 
-proc collectAttrIdents(n: GpuAst, attrIdents: var seq[(string, GpuCoordBuiltinKind)]) =
-  ## Records coordinate-builtin identifiers in first-use order, deduped by name.
-  ## The `gpuCall` name is not part of the child walk, so the barrier never becomes an attribute param.
-  ## The symbol's `coordBuiltin` decides, never the name: a local or declared
-  ## param shadowing a canonical name carries `gbkNone` and is skipped.
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.coordBuiltin != gbkNone:
-      let name = n.ident()
-      if not attrIdents.anyIt(it[0] == name):
-        attrIdents.add (name, n.symbol.coordBuiltin)
-  else:
-    for ch in n:
-      collectAttrIdents(ch, attrIdents)
-
-proc collectCallees(n: GpuAst, callees: var seq[GpuAst]) =
-  ## Records the functions a body calls, in first-use order, deduped.
-  ## Barrier calls are skipped: they lower to a native MSL statement, never a
-  ## function call.
-  case n.kind
-  of gpuCall:
-    if n.cName.symbol.synchroBuiltin == gbkNone and not callees.anyIt(it == n.cName):
-      callees.add n.cName
-    for ch in n:
-      collectCallees(ch, callees)
-  else:
-    for ch in n:
-      collectCallees(ch, callees)
-
-proc fnBuiltinNeedsImpl(ctx: GpuContext, fn: GpuAst,
-                        acc: var seq[(string, GpuCoordBuiltinKind)],
-                        visited: var seq[string]) =
-  ## Appends the coordinate builtins `fn` must bind, transitively: the
-  ## builtins its own body references, then the needs of every device function
-  ## it calls, each name first-seen once. A visited set guards recursive calls.
-  let key = fn.pName.symbol.iSym
-  if key in visited:
-    return
-  visited.add key
-  collectAttrIdents(fn.pBody, acc)
-  var callees: seq[GpuAst]
-  collectCallees(fn.pBody, callees)
-  for calleeIdent in callees:
-    let callee = ctx.fnTab.getOrDefault(calleeIdent, ctx.allFnTab.getOrDefault(calleeIdent))
-    if callee != nil and callee.kind == gpuProc:
-      fnBuiltinNeedsImpl(ctx, callee, acc, visited)
-
-proc fnBuiltinNeeds(ctx: GpuContext, fn: GpuAst): seq[(string, GpuCoordBuiltinKind)] =
-  ## Transitive coordinate-builtin needs of `fn`: its own body, then every
-  ## device function it calls. Emitted as kernel attribute params, device-fn
-  ## hidden params, and call-site forwarding args, in this same order at every
-  ## site, so the identity-named identifiers bind to the params.
-  var visited: seq[string]
-  fnBuiltinNeedsImpl(ctx, fn, result, visited)
-
 proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
   ## MSL kernel parameter list:
   ## - buffer params: `device T*`, never const — matches device-fn params, and
   ##   MSL accepts non-const input buffers
   ## - scalars: `constant T&`
-  ## - the attribute params for the index builtins the kernel needs: its own
-  ##   body, plus the transitive needs of every device function it calls
+  ## - a param whose symbol carries a coordinate builtin kind emits the
+  ##   attribute form (`uint3 name [[name]]`, scalar `uint` for the flat thread
+  ##   index): no `[[buffer(n)]]` binding, and it does not advance the buffer
+  ##   index. The `materializeIndexBuiltinParams` pass appends these after the
+  ##   declared params, so declared params keep their `[[buffer(n)]]` positions.
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
   ## Scalars stay 4 bytes on the host (arg_blobs blobOf), so scalar `bool` is declared `int`.
   ## Buffer elements marshal at their Nim width, so bool buffers declare `bool` (1 byte).
-  let attrIdents = fnBuiltinNeeds(ctx, fn)
   var params: seq[string]
   var bufferIdx = 0
   for p in fn.pParams:
     let name = p.ident.ident()
     checkReservedIdent(name, "parameter")
+    if p.ident.symbol.coordBuiltin != gbkNone:
+      # The five coordinate builtins are `uint3` attribute params.
+      # The flat thread index `gbkThreadIndexInThreadgroup` is a scalar `uint` builtin.
+      let attrType = if p.ident.symbol.coordBuiltin == gbkThreadIndexInThreadgroup: "uint" else: "uint3"
+      params.add attrType & " " & name & " [[" & name & "]]"
+      continue
     let binding = " [[buffer(" & $bufferIdx & ")]]"
     if p.typ.kind == gtPtr:
       var inner = p.typ.to
@@ -298,11 +253,6 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
         elem = "int"
       params.add "constant " & elem & "& " & name & binding
     inc bufferIdx
-  for (attr, kind) in attrIdents:
-    # The five coordinate builtins are `uint3` attribute params.
-    # The flat thread index `gbkThreadIndexInThreadgroup` is a scalar `uint` builtin.
-    let attrType = if kind == gbkThreadIndexInThreadgroup: "uint" else: "uint3"
-    params.add attrType & " " & attr & " [[" & attr & "]]"
   result = params.join(", ")
 
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
@@ -384,12 +334,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
           params.add "thread const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
         else:
           params.add ctx.genDeviceParam(p)
-      for (name, kind) in fnBuiltinNeeds(ctx, ast):
-        # MSL device functions have no implicit thread index: a body that
-        # references a coordinate builtin binds it to a hidden param the
-        # caller forwards. Kernels receive the attribute form (genKernelParams).
-        let builtinType = if kind == gbkThreadIndexInThreadgroup: "uint" else: "uint3"
-        params.add builtinType & " " & name
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
@@ -495,13 +439,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       var args: seq[string]
       for a in ast.cArgs:
         args.add ctx.genMetalImpl(a, 0)
-      let callee = ctx.fnTab.getOrDefault(ast.cName, ctx.allFnTab.getOrDefault(ast.cName))
-      if callee != nil and callee.kind == gpuProc:
-        # Forward the callee's needed coordinate builtins: the canonical names
-        # bind to the caller's own params (attribute params for kernels, hidden
-        # params for device functions).
-        for (name, _) in fnBuiltinNeeds(ctx, callee):
-          args.add name
       result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
   of gpuTemplateCall:
     when nimvm:
@@ -522,8 +459,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   of gpuIdent:
     # Identity naming: the source-level builtin names are the MSL attribute names,
     # so a builtin-marked identifier emits verbatim and binds to the attribute
-    # param `genKernelParams` injects for a kernel, or to the hidden plain param
-    # a device function receives for the same builtin.
+    # param `genKernelParams` emits for a kernel, or to the plain param a device
+    # function receives for the same builtin.
     # Unmarked identifiers never get a param, so an undeclared name stays a loud MSL error.
     checkReservedIdent(ast.ident(), "identifier")
     result = ast.ident()
