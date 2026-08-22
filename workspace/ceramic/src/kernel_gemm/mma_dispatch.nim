@@ -7,13 +7,15 @@
 
 import std/macros
 
-## NVIDIA tensor-core mma.sync asm construction (compile-time string builder).
+## Register-level MMA dispatch (compile-time string builder / AST emitter).
 ##
 ## Public entries:
-##   - `buildNvidiaMmaAsm`: the asm string for one register-level MMA.
-##   - `gemm_mma`: the macro that emits the register-level MMA call.
-## 
-# TODO: gemm_mma is currently Nvidia only but should be able to handle AMD and Intel tensor cores.
+##   - `buildNvidiaMmaAsm`: the asm string for one NVIDIA register-level MMA.
+##   - `gemm_mma`: the macro that emits the register-level MMA call — NVIDIA
+##     `mma.sync` asm, or the Apple simdgroup intrinsic on Metal.
+##
+# TODO: gemm_mma is currently Nvidia asm + Apple simdgroup only but should
+# be able to handle AMD and Intel tensor cores.
 
 func constraintLetter(elemTypeName: string): string =
   ## Nim DSL register element type → GCC asm constraint letter.
@@ -89,16 +91,23 @@ macro gemm_mma*(instr: static string; dV, aV, bV: static int;
   ## Tensor-core-level Matrix-Multiplication
   ##
   ## Args:
-  ##   instr: the mma.sync mnemonic
+  ##   instr: the mma.sync mnemonic, or "simdgroup_multiply_accumulate"
+  ##     for the Apple simdgroup atoms
   ##   dV, aV, bV: per-operand register counts (V per thread)
   ##   dFrag: the accumulator fragment tensor, seeded to the asm output
   ##     and written back (in-place accumulate)
   ##   aFrag, bFrag: the operand fragment tensors, read-only
   ##
+  ## The Apple simdgroup atoms emit a call to the `simdgroupMultiplyAccumulate`
+  ## builtin (the MSL printer maps it to the simdgroup intrinsic); the NVIDIA
+  ## atoms keep the extended-asm path below.
+  ##
   ## TODO:
   ##   Hardcoded element types:
   ##     float32 accumulator
   ##     uint32 operands (TF32)
+  if instr == "simdgroup_multiply_accumulate":
+    return newCall(ident("simdgroupMultiplyAccumulate"), dFrag, aFrag, bFrag)
   let dElem = "float32"
   let aElem = "uint32"
   let bElem = "uint32"

@@ -235,7 +235,7 @@ proc openclCoordFieldAccess(kind: GpuCoordBuiltinKind, field: string): string =
   of gbkThreadPositionInThreadgroup: "get_local_id(" & d & ")"
   of gbkThreadsPerThreadgroup: "get_local_size(" & d & ")"
   of gbkThreadgroupsPerGrid: "get_num_groups(" & d & ")"
-  of gbkThreadIndexInThreadgroup, gbkNone: ""
+  of gbkThreadIndexInThreadgroup, gbkThreadIndexInSimdgroup, gbkNone: ""
 
 proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
   ## OpenCL spelling of a canonical scalar coordinate builtin referenced whole.
@@ -250,6 +250,8 @@ proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
     # Whole-value vector coordinates have no OpenCL spelling. Their names
     # are emitted verbatim (zero in-tree uses, non-goal).
     name
+  of gbkThreadIndexInSimdgroup:
+    raiseAssert "`thread_index_in_simdgroup` is Metal-only: OpenCL has no SIMD lane index builtin"
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
     raiseAssert "coordinate site with no coordinate builtin kind: " & name
