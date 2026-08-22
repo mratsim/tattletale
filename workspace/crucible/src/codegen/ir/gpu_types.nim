@@ -269,11 +269,22 @@ type
     gbkThreadPositionInThreadgroup, ## Canonical `thread_position_in_threadgroup`
     gbkThreadsPerThreadgroup,     ## Canonical `threads_per_threadgroup`
     gbkThreadgroupsPerGrid,       ## Canonical `threadgroups_per_grid`
-    gbkThreadIndexInThreadgroup   ## Canonical `thread_index_in_threadgroup`
+    gbkThreadIndexInThreadgroup,  ## Canonical `thread_index_in_threadgroup`
+    gbkThreadIndexInSimdgroup     ## Canonical `thread_index_in_simdgroup`
 
   GpuSynchroBuiltinKind* = enum
     gbkNone,              ## Not a synchronization builtin
     gbkThreadgroupBarrier ## Canonical `threadgroup_barrier()`
+
+  GpuSimdgroupBuiltinKind* = enum
+    sgbkNone,                          ## Not a simdgroup builtin
+    sgbkSimdgroupLoad,                 ## Canonical `simdgroup_load`
+    sgbkSimdgroupStore,                ## Canonical `simdgroup_store`
+    sgbkSimdgroupMultiplyAccumulate,   ## Canonical `simdgroup_multiply_accumulate`
+    sgbkMakeFilledSimdgroupMatrix      ## Canonical `make_filled_simdgroup_matrix`
+    ## TODO: consider unification with the Vulkan KHR cooperative matrices
+    ## (see `_references_kernels/vk_cooperative_matrix_perf`) — the
+    ## fragment-gather/multiply-accumulate surface is the same shape.
 
   Symbol* = ref object
     name*: string       ## Display name -- may be mangled for collision safety
@@ -282,6 +293,7 @@ type
     symKind*: GpuSymbolKind ## Symbol kind
     coordBuiltin*: GpuCoordBuiltinKind ## Coordinate builtin kind -> gbkNone when not a coordinate
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
+    simdgroupBuiltin*: GpuSimdgroupBuiltinKind ## Simdgroup fragment builtin kind -> sgbkNone when not a simdgroup intrinsic
     module*: string     ## Module provenance (optional)
 
   AddressSpace* = enum
@@ -420,11 +432,21 @@ let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKin
   "threads_per_threadgroup": gbkThreadsPerThreadgroup,
   "threadgroups_per_grid": gbkThreadgroupsPerGrid,
   "thread_index_in_threadgroup": gbkThreadIndexInThreadgroup,
+  "thread_index_in_simdgroup": gbkThreadIndexInSimdgroup,
 }.toTable()
 
 ## Canonical synchronization name -> IR kind, with the same catalog cross-check as the coordinate table.
 let GpuSynchroBuiltinKindByName* {.compileTime.}: Table[string, GpuSynchroBuiltinKind] = {
   "threadgroup_barrier": gbkThreadgroupBarrier,
+}.toTable()
+
+## Canonical simdgroup fragment intrinsic name -> IR kind, resolved once at
+## the builtin marking like the coordinate and synchronization tables.
+let GpuSimdgroupBuiltinKindByName* {.compileTime.}: Table[string, GpuSimdgroupBuiltinKind] = {
+  "simdgroupLoad": sgbkSimdgroupLoad,
+  "simdgroupStore": sgbkSimdgroupStore,
+  "simdgroupMultiplyAccumulate": sgbkSimdgroupMultiplyAccumulate,
+  "makeFilledSimdgroupMatrix": sgbkMakeFilledSimdgroupMatrix,
 }.toTable()
 
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =
@@ -436,6 +458,11 @@ proc synchroBuiltinKind*(name: string): GpuSynchroBuiltinKind =
   ## Returns the IR kind of a canonical synchronization name. Unmapped
   ## names resolve to `gbkNone`.
   GpuSynchroBuiltinKindByName.getOrDefault(name, gbkNone)
+
+proc simdgroupBuiltinKind*(name: string): GpuSimdgroupBuiltinKind =
+  ## Returns the IR kind of a canonical simdgroup fragment intrinsic name.
+  ## Unmapped names resolve to `sgbkNone`.
+  GpuSimdgroupBuiltinKindByName.getOrDefault(name, sgbkNone)
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,

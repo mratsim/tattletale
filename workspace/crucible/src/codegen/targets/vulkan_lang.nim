@@ -247,6 +247,8 @@ proc glslCoordIdent(kind: GpuCoordBuiltinKind): string =
   of gbkThreadsPerThreadgroup: "gl_WorkGroupSize"
   of gbkThreadgroupsPerGrid: "gl_NumWorkGroups"
   of gbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
+  of gbkThreadIndexInSimdgroup:
+    raiseAssert "`thread_index_in_simdgroup` is Metal-only: GLSL has no SIMD lane index builtin"
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
     raiseAssert "coordinate site with no coordinate builtin kind"

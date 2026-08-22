@@ -8,10 +8,12 @@
 template `+%`*[T](p: ptr T, offset: SomeInteger): ptr T =
   ## Pointer arithmetic | increment.
   ## Wraps on offset > 2^64 / sizeof(T) (~4.6e18 elements for float32).
-  cast[ptr T](cast[uint](p) + uint(offset) * uint(sizeof(T)))
+  ## `uint64`, not `uint`: the GPU DSL maps Nim `uint` to a 32-bit type,
+  ## which would truncate a 64-bit device pointer.
+  cast[ptr T](cast[uint64](p) + uint64(offset) * uint64(sizeof(T)))
 
 template `+%`*[T](p: ptr UncheckedArray[T], offset: SomeInteger): ptr UncheckedArray[T] =
-  cast[ptr UncheckedArray[T]](cast[uint](p) + cast[uint](offset)*uint(sizeof(T)))
+  cast[ptr UncheckedArray[T]](cast[uint64](p) + cast[uint64](offset)*uint64(sizeof(T)))
 
 template `+%`*[E](data: openArray[E]; off: int): auto =
   ## Slice an openArray from `off` to end (for make_view ergonomics).

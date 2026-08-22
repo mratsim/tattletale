@@ -57,6 +57,12 @@ let thread_index_in_threadgroup* {.builtin, compileTime.}: uint32 = 0'u32
   ##   so each printer emits its native flat index
   ##   (WGSL `local_invocation_index`)
 
+let thread_index_in_simdgroup* {.builtin, compileTime.}: uint32 = 0'u32
+  ## Flat lane index within the SIMD group (0..31 on Apple GPUs).
+  ## Metal-only: the coordinate-builtin mechanism binds it as the kernel
+  ## attribute `[[thread_index_in_simdgroup]]`, or a plain param on device
+  ## functions. The other backends raise loudly (no equivalent).
+
 proc threadgroup_barrier*() {.builtin.} = discard
   ## Canonical workgroup barrier. Each backend printer emits its native spelling
   ## (e.g. MSL `threadgroup_barrier(mem_flags::mem_threadgroup)`).
@@ -124,6 +130,51 @@ template num_workgroups*(): untyped = threadgroups_per_grid
 template local_invocation_index*(): untyped = thread_index_in_threadgroup
 # No `workgroup_size` alias: WGSL has no `workgroup_size` builtin:
 # only the `@workgroup_size` attribute exists, so `threads_per_threadgroup` is deferred on WGSL.
+
+# ═══════════════════════════════════════════════════════════
+# 1b. Simdgroup fragments (Apple GPU simdgroup MMAs)
+# ═══════════════════════════════════════════════════════════
+# Per-lane slice of a simdgroup matrix fragment, V = 2 for the 8x8x8 atoms.
+# isLayoutLeft: fragment memory in LEFT (row-major) order in fragment (row, col)
+# coordinates, false for the col-major A/C operands, true for B. MSL transpose
+# arg = not isLayoutLeft. Not a gather for make_filled / multiply_accumulate.
+# Registered name-only: the MSL printer rewrites each call to the native intrinsic.
+
+type SimdgroupFragment*[T; isLayoutLeft: static bool] = object
+  ## Per-lane register slice of a simdgroup matrix fragment: V = 2 elements
+  ## for the 8x8x8 atoms. Emitted as `simdgroup_float8x8` (f32) or
+  ## `simdgroup_half8x8` (f16) by the MSL printer; a plain struct elsewhere.
+  data*: array[2, T]
+
+proc simdgroupLoad*[T; isLayoutLeft: static bool](frag: var SimdgroupFragment[T, isLayoutLeft];
+    src: ptr UncheckedArray[T];
+    stride, offset: uint32;
+    transpose: bool) {.builtin.} = discard
+  ## Hardware fragment gather: `simdgroup_load(frag, src, stride, offset, transpose)`.
+  ## The stride is the source row length, the offset an element offset from
+  ## `src`, the transpose flag swaps the fragment's row and column axes
+  ## against the source's (its value is `not isLayoutLeft`).
+
+proc simdgroupStore*[T; isLayoutLeft: static bool](frag: SimdgroupFragment[T, isLayoutLeft];
+    dst: ptr UncheckedArray[T];
+    stride, offset: uint32;
+    transpose: bool) {.builtin.} = discard
+  ## Hardware fragment scatter: `simdgroup_store(frag, dst, stride, offset, transpose)`.
+  ## Argument semantics mirror `simdgroupLoad`.
+
+proc simdgroupMultiplyAccumulate*[TD; TA; TB; isLayoutLeftD: static bool; isLayoutLeftA: static bool; isLayoutLeftB: static bool](
+    d: var SimdgroupFragment[TD, isLayoutLeftD];
+    a: SimdgroupFragment[TA, isLayoutLeftA];
+    b: SimdgroupFragment[TB, isLayoutLeftB]) {.builtin.} = discard
+  ## One 8x8x8 MMA, in-place accumulate:
+  ## `simdgroup_multiply_accumulate(d, a, b, d)`. The accumulator fragment
+  ## element type may differ from the operands' (f32 accumulator over f16
+  ## operands).
+
+proc makeFilledSimdgroupMatrix*[T; isLayoutLeft: static bool](val: T): SimdgroupFragment[T, isLayoutLeft] {.builtin.} = discard
+  ## Fragment filled with `val` on every lane:
+  ## `make_filled_simdgroup_matrix<T, 8>(val)`. The isLayoutLeft param is
+  ## carried through for type uniformity; it is not a gather.
 
 # ═══════════════════════════════════════════════════════════
 # 2. Synchronization
