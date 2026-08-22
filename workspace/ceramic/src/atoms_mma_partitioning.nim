@@ -34,6 +34,7 @@ import ./layout_indexing
 import ./layout_algebra
 import ./tensors
 import ./atoms
+import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════
 #  thrfrg_A/B/C: the fragment layout of an operand tile
@@ -291,15 +292,43 @@ template make_fragment_A*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
   ## The thread's A fragment: a register buffer with the V values in hardware order (stride-1).
   ## The remaining positions keep the view's order. V is the atom's register count (aLayout.shape[1] values per thread).
-  make_tensor(T, make_fragment_like(t.layout, mma.aLayout.shape[1]))
+  ## On the Apple simdgroup atoms the buffer is a `SimdgroupFragment` (emitted as
+  ## `simdgroup_float8x8` / `simdgroup_half8x8` by the MSL printer), whose gather
+  ## orientation is the A operand's (isLayoutLeft=false: the fragment's row axis M is
+  ## the col-major view's column axis).
+  when mma.kind == bkGPU_TensorCore:
+    when mma.instr == "simdgroup_multiply_accumulate":
+      SimdgroupFragment[T, false]()
+    else:
+      make_tensor(T, make_fragment_like(t.layout, mma.aLayout.shape[1]))
+  else:
+    make_tensor(T, make_fragment_like(t.layout, mma.aLayout.shape[1]))
 
 template make_fragment_B*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
   ## The thread's B fragment (see make_fragment_A).
-  make_tensor(T, make_fragment_like(t.layout, mma.bLayout.shape[1]))
+  ## On the Apple simdgroup atoms the gather orientation is the B operand's
+  ## (isLayoutLeft=true: the B fragment's row axis is K, the memory row of the
+  ## (N,K) view read as (K,N) row-major).
+  when mma.kind == bkGPU_TensorCore:
+    when mma.instr == "simdgroup_multiply_accumulate":
+      SimdgroupFragment[T, true]()
+    else:
+      make_tensor(T, make_fragment_like(t.layout, mma.bLayout.shape[1]))
+  else:
+    make_tensor(T, make_fragment_like(t.layout, mma.bLayout.shape[1]))
 
 template make_fragment_C*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
   ## The thread's C fragment: a register buffer with the V values in hardware order (stride-1).
   ## The remaining positions keep the view's order. V is the atom's register count (cLayout.shape[1] values per thread).
-  make_tensor(T, make_fragment_like(t.layout, mma.cLayout.shape[1]))
+  ## On the Apple simdgroup atoms the gather orientation is the C operand's
+  ## (isLayoutLeft=false, like A: the fragment's row axis M is the col-major
+  ## view's column axis).
+  when mma.kind == bkGPU_TensorCore:
+    when mma.instr == "simdgroup_multiply_accumulate":
+      SimdgroupFragment[T, false]()
+    else:
+      make_tensor(T, make_fragment_like(t.layout, mma.cLayout.shape[1]))
+  else:
+    make_tensor(T, make_fragment_like(t.layout, mma.cLayout.shape[1]))

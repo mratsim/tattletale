@@ -184,6 +184,8 @@ task test_ceramic, "Test workspace/ceramic":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/ceramic/tests"):
       runCmd(cmd)
+    for cmd in getTestCommands("workspace/ceramic/tests/atoms_mma"):
+      runCmd(cmd)
     for cmd in getTestCommands("workspace/ceramic/tests/gemm"):
       runCmd(cmd)
 

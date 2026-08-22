@@ -120,9 +120,9 @@ type
     aType*, bType*, cType*: MmaDType       ## cType is the ACCUMULATOR type
     # TODO: pending the sm_120 _VS atom and its kernel.
     case kind*: MmaAtomKind
-    of bkGPU_TensorCore, bkCPU_X86_AMX:
-      ## Fragment layout: T = the atom's threads, V = the values each thread holds in registers.
-      instr*: string                       ## mma.sync… / v_mfma… / dpas / tdpbf16ps / tdpbssd
+    of bkGPU_TensorCore, bkCPU_X86_AMX, bk_FMA:
+      instr*: string                       ## mma.sync… / v_mfma… / dpas / tdpbf16ps / tdpbssd;
+                                           ## empty for bk_FMA — its instruction is plain arithmetic
       aLayout*: LA                         ## (T, V) → col-major offset in (M, K)
       bLayout*: LB                         ## (T, V) → col-major offset in (N, K)
       cLayout*: LC                         ## (T, V) → col-major offset in (M, N)
@@ -130,8 +130,6 @@ type
       isa*: SimdIsa
       nbScalarsPerVector*: int
       nbVectorsPerTile*: int
-    of bk_FMA:
-      discard                              ## no payload — universal (1,1,1) atom
 
   TiledMma*[A: MmaAtom, TL: Layout] = object
     ## Compile-time record: the atom plus its (ThrM, ThrN, ThrK) tiling across threads.

@@ -784,7 +784,7 @@ proc determineIdent*(arg: GpuAst): GpuAst =
 # var spaces (`varAddressSpaces`) for every backend; the pointer-field variant
 # table (`ptrFieldVariants`) is Metal-only.
 
-proc exprType(ctx: GpuContext, n: GpuAst): GpuType =
+proc exprType*(ctx: GpuContext, n: GpuAst): GpuType =
   ## Best-effort type of an expression node (nil when unknown). The printers
   ## use it to detect array-typed operands of `addr`, which need pointer
   ## decay rather than `&`.
@@ -1420,7 +1420,7 @@ proc builtinParamType(kind: GpuCoordBuiltinKind): GpuType =
   ## flat thread index, the MSL `uint3` vector spelling otherwise. `uint3` is a
   ## synthetic generic name carrying the printer's native spelling; no struct
   ## is ever registered for it.
-  if kind == gbkThreadIndexInThreadgroup:
+  if kind in {gbkThreadIndexInThreadgroup, gbkThreadIndexInSimdgroup}:
     GpuType(kind: gtUint32)
   else:
     GpuType(kind: gtGenericInst, gName: "uint3")
