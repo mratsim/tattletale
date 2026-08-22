@@ -159,6 +159,7 @@ import ./kernel_gemm_epilogues
 import ./macros/static_for
 import ./kernel_gemm/nvidia_tensor_cores
 import ./kernel_gemm/atoms_nvidia
+import ./kernel_gemm/atoms_universal
 import workspace/crucible
 
 {.experimental: "callOperator".}
@@ -174,7 +175,9 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
     bFrag: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB]) {.inline.} =
   ## Register-level MMA, in-place accumulate: dFrag += aFrag·bFrag.
   ##
-  ## One mma.sync, executed by the 32 lanes of a warp cooperatively.
+  ## One mma.sync (tensor-core atoms), executed by the 32 lanes of a warp
+  ## cooperatively, or one scalar FMA (bk_FMA atoms) on 1×1 fragments,
+  ## executed by a single thread.
   ##
   ## Worked example (m16n8k8, (2, 2, 1), tile (32, 16, 32), 128 lanes = 4 warps):
   ##   each lane runs this call on its own register slice.
@@ -187,11 +190,17 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
   ##   dFrag: mutable register fragment tensor (V, RepeatM, RepeatN), the accumulator (AB).
   ##   aFrag: the A register fragment tensor (V, RepeatM, 1), one k slice
   ##   bFrag: the B register fragment tensor (V, RepeatN, 1), one k slice
-  gemm_mma(mma.instr,
-           toIntVal(mma.valuesPerThread(opC)),
-           toIntVal(mma.valuesPerThread(opA)),
-           toIntVal(mma.valuesPerThread(opB)),
-           dFrag, aFrag, bFrag)
+  when mma.kind == bk_FMA:
+    # The universal atom's instruction: plain a·b+c, no fused-fma op.
+    # Compiles on every backend and on the host; NVRTC/MSL/clang fuse
+    # the expression where available.
+    dFrag[0] = aFrag[0] * bFrag[0] + dFrag[0]
+  else:
+    gemm_mma(mma.instr,
+             toIntVal(mma.valuesPerThread(opC)),
+             toIntVal(mma.valuesPerThread(opA)),
+             toIntVal(mma.valuesPerThread(opB)),
+             dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_warp(mma, ...): loop over atoms
@@ -530,13 +539,21 @@ template mmaDTypeOf(T: typedesc): MmaDType =
 
 template atom_selector*(TA, TB, TC: typedesc): auto =
   ## Derive the MMA atom for the operand types.
+  ##
+  ## Matches the raw operand types: mmaDTypeOf errors on any type but
+  ## uint32 and float32, so the selector cannot route through it.
+  ## Unmatched combinations fall back to the scalar-FMA atom, which
+  ## compiles wherever plain arithmetic does.
   # TODO: naive dtype matching: the operand types may pack smaller
   # datatypes (4 × fp8, 2 × fp16). Rework when those land.
-  when mmaDTypeOf(TA) == mdtTF32 and mmaDTypeOf(TB) == mdtTF32 and mmaDTypeOf(TC) == mdtF32:
+  when TA is uint32 and TB is uint32 and TC is float32:
     SM80_16x8x8_F32TF32TF32F32_TN
+  elif TA is float32 and TB is float32 and TC is float32:
+    UNIVERSAL_FMA_F32
   else:
-    {.error: "atom_selector: no atom defined for the operand types (" & $TA & ", " & $TB & ", " & $TC &
-      ").".}
+    {.warning: "atom_selector: no backend MMA for (" & $TA & ", " & $TB & ", " & $TC &
+      "); falling back to scalar FMA (UNIVERSAL_FMA_F32).".}
+    UNIVERSAL_FMA_F32
 
 proc make_tiled_mma*[LA, LB, LC, Sh, St](
     a: MmaAtom[LA, LB, LC],
