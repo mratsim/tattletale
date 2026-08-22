@@ -786,6 +786,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       # - The kind survives because it is set on the same sigTab-cached symbol ref before that clobber.
       result.symbol.coordBuiltin = coordBuiltinKind(result.symbol.name)
       result.symbol.synchroBuiltin = synchroBuiltinKind(result.symbol.name)
+      result.symbol.simdgroupBuiltin = simdgroupBuiltinKind(result.symbol.name)
 
   # literal types
   of nnkIntLit, nnkInt32Lit:

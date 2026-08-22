@@ -157,7 +157,7 @@ import ./atoms_copy
 import ./kernel_fillwith_gpu
 import ./kernel_gemm_epilogues
 import ./macros/static_for
-import ./kernel_gemm/nvidia_tensor_cores
+import ./kernel_gemm/mma_dispatch
 import ./kernel_gemm/atoms_nvidia
 import ./kernel_gemm/atoms_universal
 import workspace/crucible
@@ -177,7 +177,8 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
   ##
   ## One mma.sync (tensor-core atoms), executed by the 32 lanes of a warp
   ## cooperatively, or one scalar FMA (bk_FMA atoms) on 1×1 fragments,
-  ## executed by a single thread.
+  ## executed by a single thread. The Apple simdgroup atoms use the
+  ## simdgroup-fragment overload below.
   ##
   ## Worked example (m16n8k8, (2, 2, 1), tile (32, 16, 32), 128 lanes = 4 warps):
   ##   each lane runs this call on its own register slice.
@@ -201,6 +202,32 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
              toIntVal(mma.valuesPerThread(opA)),
              toIntVal(mma.valuesPerThread(opB)),
              dFrag, aFrag, bFrag)
+
+template gemm_atom*[TD, TA, TB; isLayoutLeftD: static bool; isLayoutLeftA: static bool; isLayoutLeftB: static bool](
+    mma: static MmaAtom,
+    dFrag: var SimdgroupFragment[TD, isLayoutLeftD],
+    aFrag: SimdgroupFragment[TA, isLayoutLeftA],
+    bFrag: SimdgroupFragment[TB, isLayoutLeftB]): untyped =
+  ## Simdgroup-fragment form of gemm_atom: one `simdgroup_multiply_accumulate`
+  ## on the fragment tensors, in-place accumulate (dFrag += aFrag·bFrag).
+  ## The Apple simdgroup atoms' fragment path; the MSL printer emits the
+  ## intrinsic. A template so the call inlines into the kernel body: MSL
+  ## simdgroup matrices cannot be passed by pointer, and a `var` parameter
+  ## would lower to one on the device-function boundary.
+  ##
+  ## Args:
+  ##   mma: the hardware instruction descriptor (the Apple simdgroup atoms)
+  ##   dFrag: the accumulator simdgroup fragment, in/out
+  ##   aFrag, bFrag: the operand simdgroup fragments
+  static:
+    doAssert mma.kind == bkGPU_TensorCore and mma.instr == "simdgroup_multiply_accumulate",
+      "gemm_atom: simdgroup fragments require an Apple simdgroup atom" &
+      " (kind bkGPU_TensorCore, instr simdgroup_multiply_accumulate)"
+  gemm_mma(mma.instr,
+           toIntVal(mma.valuesPerThread(opC)),
+           toIntVal(mma.valuesPerThread(opA)),
+           toIntVal(mma.valuesPerThread(opB)),
+           dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_warp(mma, ...): loop over atoms

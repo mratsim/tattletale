@@ -16,6 +16,7 @@
 import ./int_tuples
 import ./layouts
 import ./tensors
+import workspace/crucible
 
 {.experimental: "callOperator".}
 
@@ -29,3 +30,8 @@ template fillWith*[T, Sh, St](t: var Tensor[T, Sh, St]; val: T) =
   ## Set every logical element of `t` to `val`.
   for i in 0 ..< size(t.layout):
     t(i) = val
+
+template fillWith*[T; isLayoutLeft: static bool](frag: var SimdgroupFragment[T, isLayoutLeft]; val: T) =
+  ## Metal simdgroup fill: every lane's fragment elements set to `val` via
+  ## `make_filled_simdgroup_matrix` (the accumulator's identity seed).
+  frag = makeFilledSimdgroupMatrix[T, isLayoutLeft](val)
