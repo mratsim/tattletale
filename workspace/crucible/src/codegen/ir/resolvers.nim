@@ -40,32 +40,39 @@ proc toGpuTypeKind*(t: NimNode): GpuTypeKind =
 #  Array length resolution
 # ═══════════════════════════════════════════════════════════════════════
 
+proc evalConstInt(n: NimNode): int =
+  ## Evaluates a compile-time integer expression (the array-length forms
+  ## `getTypeInst` produces: literals, const syms, and infix arithmetic
+  ## like `32 * 16` or the `0 .. 15` range).
+  case n.kind
+  of nnkIntLit, nnkUIntLit:
+    result = n.intVal
+  of nnkSym:
+    # const symbol — value from its implementation
+    result = n.getImpl.intVal
+  of nnkInfix:
+    let a = evalConstInt(n[1])
+    let b = evalConstInt(n[2])
+    case n[0].strVal
+    of "*":  result = a * b
+    of "+":  result = a + b
+    of "-":  result = a - b
+    of "div": result = a div b
+    of "mod": result = a mod b
+    of "shl": result = a shl b
+    of "shr": result = a shr b
+    of "and": result = a and b
+    of "..":  result = b - a + 1
+    of "..<": result = b - a
+    else:
+      error "Unsupported operator in array length: " & n[0].strVal & " in " & n.treerepr
+  else:
+    error "Unsupported node in array length: " & n.treerepr
+
 proc resolveArrayLength*(n: NimNode): int =
   ## Returns the length of a static array type.
   ## Callers must pass `getTypeInst()` output — idents are never expected.
-  case n[1].kind
-  of nnkSym:
-    # resolved symbol — get the constant int value from its implementation
-    result = n[1].getImpl.intVal
-  of nnkIdent:
-    # Should never happen with getTypeInst() output
-    error "Unresolved ident in array length: " & $n[1].strVal
-  else:
-    case n[1].kind
-    of nnkIntLit: result = n[1].intVal
-    else:
-      # E.g.
-      # BracketExpr
-      #   Sym "array"
-      #   Infix
-      #     Ident ".."
-      #     IntLit 0
-      #     IntLit 11
-      #   Sym "BigInt"
-      doAssert n[1].kind == nnkInfix, "No is: " & $n.treerepr
-      doAssert n[1][1].kind == nnkIntLit, "No is: " & $n.treerepr
-      doAssert n[1][1].intVal == 0, "No is: " & $n.treerepr
-      result = n[1][2].intVal + 1
+  result = evalConstInt(n[1])
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Forward declarations (defined below)
@@ -233,6 +240,11 @@ proc assignTypeName*(n: NimNode, recursedSym: bool = false): string =
     # It must name identically to the nnkTupleConstr form.
     if n.len >= 2 and n[0].kind in {nnkSym, nnkIdent} and n[0].strVal == "tuple":
       result = tupleTypeName(resolveTupleFields(n))
+    elif n[0].kind == nnkSym and n[0].strVal == "array":
+      # `array[N, T]`: name from the length and the element type. Never
+      # recurse through the `array` symbol — its type inst is the array
+      # itself, which would loop.
+      result = "Array_" & $resolveArrayLength(n) & "_" & n[2].assignTypeName()
     else:
       # construct a type name `Foo_Bar_Baz`
       for i, ch in n:
