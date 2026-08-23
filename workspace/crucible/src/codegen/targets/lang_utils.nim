@@ -8,6 +8,7 @@
 import std / tables
 import ../ir/gpu_types
 import ../builtins/nim_builtins
+import ../builtins/builtins_gpu_types
 import ../passes/passes_optimizations
 
 proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
@@ -20,7 +21,7 @@ proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
     let t = ctx.operandType(call.cArgs[0]) # builtin min/max/abs always have 1 or 2 cArgs
     if not t.isNil:
       return getMaxMinAbsBuiltinFnName(backend, name, t.kind)
-  name
+  NimGpuFp16ConversionBuiltins.getOrDefault((backend, name), name)
 
 proc address*(a: string): string = "&" & a
 proc size*(a: string): string = "sizeof(" & a & ")"
