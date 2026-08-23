@@ -164,6 +164,8 @@ type
     tdkUint64
     tdkFloat32
     tdkFloat64
+    tdkFloat16
+    tdkBf16
     tdkSize
     tdkPtr       # pointer to another type descriptor
     tdkArray     # fixed-size array
@@ -177,7 +179,7 @@ type
     case kind*: TypeDescKind
     of tdkVoid, tdkBool, tdkInt8, tdkUint8, tdkInt16, tdkUint16,
        tdkInt32, tdkUint32, tdkInt64, tdkUint64, tdkFloat32, tdkFloat64,
-       tdkSize, tdkString, tdkVoidPtr, tdkUnresolved:
+       tdkFloat16, tdkBf16, tdkSize, tdkString, tdkVoidPtr, tdkUnresolved:
       discard
     of tdkPtr:
       tdTo*: TypeDesc         # pointed-to type
@@ -209,6 +211,8 @@ proc gpuTypeToDesc*(t: GpuType): TypeDesc =
   of gtInt64:    TypeDesc(kind: tdkInt64)
   of gtFloat32:  TypeDesc(kind: tdkFloat32)
   of gtFloat64:  TypeDesc(kind: tdkFloat64)
+  of gtFloat16:  TypeDesc(kind: tdkFloat16)
+  of gtBf16:     TypeDesc(kind: tdkBf16)
   of gtSize_t:   TypeDesc(kind: tdkSize)
   of gtString:   TypeDesc(kind: tdkString)
   of gtVoidPtr:  TypeDesc(kind: tdkVoidPtr)

@@ -90,6 +90,8 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtInt32: "int"
   of gtInt64: "long"
   of gtFloat32: "float"
+  of gtFloat16: "half"
+  of gtBf16: "bfloat"
   of gtFloat64:
     raiseAssert "The Metal target does not support 64-bit floating point (gtFloat64): " & $t
   of gtVoid: "void"
@@ -130,10 +132,13 @@ proc simdgroupFragmentMslType(t: GpuType): string =
   ## MSL matrix spelling of a `SimdgroupFragment`: `simdgroup_float8x8` for
   ## f32 elements, `simdgroup_half8x8` for half (Metal's only other simdgroup
   ## element type). The matrix is always 8x8: MSL defines no other sizes.
-  if simdgroupFragmentElemType(t).kind == gtFloat32:
-    "simdgroup_float8x8"
+  ## Other element types raise: no simdgroup matrix exists for them.
+  case simdgroupFragmentElemType(t).kind
+  of gtFloat32: "simdgroup_float8x8"
+  of gtFloat16: "simdgroup_half8x8"
   else:
-    "simdgroup_half8x8"
+    raiseAssert "SimdgroupFragment element type has no MSL simdgroup matrix: " &
+      $simdgroupFragmentElemType(t).kind
 
 proc isDefaultInit(vInit: GpuAst): bool =
   ## True for a default-constructed object init (no field carries a real
@@ -260,6 +265,8 @@ proc genLit*(ast: GpuAst): string =
   else:
     case ast.lType.kind
     of gtFloat32: result = ast.lValue & "f"
+    of gtFloat16: result = ast.lValue & "h"
+    of gtBf16:    result = "bfloat(" & ast.lValue & ')'
     of gtUint32: result = ast.lValue & "U"
     of gtUint64: result = ast.lValue & "ULL"
     of gtInt64:  result = ast.lValue & "LL"
@@ -527,11 +534,20 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
                  ctx.genFragmentRef(ast.cArgs[1]) & ", " &
                  ctx.genFragmentRef(ast.cArgs[2]) & ", " & d & ')'
       of sgbkMakeFilledSimdgroupMatrix:
-        # make_filled_simdgroup_matrix<T, 8>(val): the template element type
-        # follows the value argument's type (float, or half for f16
-        # fragments). The matrix is always 8x8 on Metal.
+        # make_filled_simdgroup_matrix<T, 8>(val): the element spelling
+        # follows the value argument's type (float for f32, half for f16),
+        # falling back to the fragment element type when the value type
+        # is unresolvable. The matrix is always 8x8 on Metal.
         let argTyp = pp.exprType(ctx, ast.cArgs[0])
-        let elemSpelling = if argTyp != nil and argTyp.kind == gtFloat32: "float" else: "half"
+        let elemKind =
+          if argTyp.isNil: simdgroupFragmentElemType(pp.exprType(ctx, ast)).kind
+          else: argTyp.kind
+        let elemSpelling =
+          case elemKind
+          of gtFloat32: "float"
+          of gtFloat16: "half"
+          else:
+            raiseAssert "make_filled has no MSL simdgroup element type: " & $elemKind
         let elemVal = ctx.genMetalImpl(ast.cArgs[0], 0)
         result = indentStr & "make_filled_simdgroup_matrix<" & elemSpelling &
                  ", 8>(" & elemVal & ')'
