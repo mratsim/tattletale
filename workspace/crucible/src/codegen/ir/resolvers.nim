@@ -85,24 +85,45 @@ type
     typeNode: NimNode
 
 proc resolveTupleFields(node: NimNode): seq[FieldInfo] =
-  ## Shared traversal of nnkTupleTy / nnkTupleConstr.
+  ## Shared traversal of the anonymous tuple type in any of its AST spellings:
+  ## nnkTupleTy / nnkTupleConstr and the nnkBracketExpr `tuple[...]` full form.
   ## Called by both resolveRecordFields and assignTypeName.
-  node.expectKind({nnkTupleTy, nnkTupleConstr})
-  for i, ch in node:
-    case ch.kind
-    of nnkIdentDefs:
-      for j in 0 ..< ch.len - 2:
-        result.add FieldInfo(name: ch[j].strVal, typeNode: ch[ch.len - 2])
-    of nnkSym:
-      result.add FieldInfo(name: "F" & $i, typeNode: ch)
-    of nnkExprColonExpr:
-      result.add FieldInfo(name: ch[0].strVal, typeNode: ch[1])
-    of nnkBracketExpr:
-      # resolve via getTypeInst() to avoid leaking ObjectTy repr into struct name
-      result.add FieldInfo(name: "F" & $i, typeNode: ch.getTypeInst())
-    else:
-      # resolve via getTypeInst() to avoid leaking ObjectTy repr into struct name
-      result.add FieldInfo(name: "F" & $i, typeNode: ch.getTypeInst())
+  case node.kind
+  of nnkTupleTy, nnkTupleConstr:
+    for i, ch in node:
+      case ch.kind
+      of nnkIdentDefs:
+        for j in 0 ..< ch.len - 2:
+          result.add FieldInfo(name: ch[j].strVal, typeNode: ch[ch.len - 2])
+      of nnkSym:
+        result.add FieldInfo(name: "F" & $i, typeNode: ch)
+      of nnkExprColonExpr:
+        result.add FieldInfo(name: ch[0].strVal, typeNode: ch[1])
+      of nnkBracketExpr:
+        # resolve via getTypeInst() to avoid leaking ObjectTy repr into struct name
+        result.add FieldInfo(name: "F" & $i, typeNode: ch.getTypeInst())
+      else:
+        # resolve via getTypeInst() to avoid leaking ObjectTy repr into struct name
+        result.add FieldInfo(name: "F" & $i, typeNode: ch.getTypeInst())
+  of nnkBracketExpr:
+    # `tuple[Int[1], Int[2]]` is the full AST form of an anonymous tuple type
+    # (getTypeInst output, e.g. generic args of an object construction).
+    doAssert node[0].kind in {nnkSym, nnkIdent} and node[0].strVal == "tuple",
+      "unexpected tuple bracket: " & $node.treerepr
+    for i in 1 ..< node.len:
+      result.add FieldInfo(name: "F" & $(i - 1), typeNode: node[i].getTypeInst())
+  else:
+    error "Unsupported node kind for tuple fields: " & $node.kind
+
+proc tupleTypeName(fields: seq[FieldInfo]): string =
+  ## Canonical struct name for an anonymous tuple type: `Tuple_` + one
+  ## `Name_TypeName` segment per field. Every AST spelling of the same tuple
+  ## type names through this single function.
+  result = "Tuple_"
+  for i, fi in fields:
+    if i > 0:
+      result.add "_"
+    result.add fi.name & "_" & fi.typeNode.assignTypeName()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Generic type argument / implementation resolution
@@ -205,15 +226,17 @@ proc assignTypeName*(n: NimNode, recursedSym: bool = false): string =
     # Anonymous object type — use its repr as a fallback name.
     result = n.repr
   of nnkTupleTy, nnkTupleConstr:
-    result = "Tuple_"
-    for i, fi in resolveTupleFields(n):
-      if i > 0: result.add "_"
-      let typName = fi.typeNode.assignTypeName()
-      result.add fi.name & "_" & typName
+    result = tupleTypeName(resolveTupleFields(n))
   of nnkBracketExpr:
-    # construct a type name `Foo_Bar_Baz`
-    for i, ch in n:
-      result.add ch.assignTypeName()
+    # `tuple[Int[1], Int[2]]` is the full AST form of an anonymous tuple type
+    # (getTypeInst output, e.g. generic args of an object construction).
+    # It must name identically to the nnkTupleConstr form.
+    if n.len >= 2 and n[0].kind in {nnkSym, nnkIdent} and n[0].strVal == "tuple":
+      result = tupleTypeName(resolveTupleFields(n))
+    else:
+      # construct a type name `Foo_Bar_Baz`
+      for i, ch in n:
+        result.add ch.assignTypeName()
   of nnkIntLit:
     result = $n.intVal
   of nnkUIntLit:
