@@ -10,6 +10,8 @@
 # plus the per-backend idiom aliases that expand to them (see builtins_catalog.nim).
 import ./builtins_pragmas
 import ./builtins_catalog
+import ./builtins_gpu_types
 
 export builtins_pragmas
 export builtins_catalog
+export builtins_gpu_types
