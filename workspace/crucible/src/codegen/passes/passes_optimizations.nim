@@ -46,7 +46,8 @@ proc materializePassByRefArgs*(ctx: var GpuContext) =
 
 const
   BasicNumericKinds* = {gtUint8, gtUint16, gtInt16, gtUint32, gtInt32,
-                        gtUint64, gtInt64, gtFloat32, gtFloat64, gtSize_t}
+                        gtUint64, gtInt64, gtFloat32, gtFloat64, gtFloat16,
+                        gtBf16, gtSize_t}
     ## Types the backends' native max/min accept. Int[N] structs (gtObject)
     ## are deliberately excluded — ceramic's genBinOp handles those.
 
@@ -156,7 +157,7 @@ proc foldMinMaxPattern(ctx: GpuContext; n: var GpuAst): bool =
   # The unguarded form on floats is NOT fmax: NaN propagates to tElse
   # ((y <= x) with y NaN is false → returns y). Only the NaN-guarded
   # form is fmax-equivalent on floats.
-  if not hasGuard and tA.kind in {gtFloat32, gtFloat64}: return false
+  if not hasGuard and tA.kind in {gtFloat32, gtFloat64, gtFloat16, gtBf16}: return false
 
   var callName = GpuAst(kind: gpuIdent, symbol: newSymbol(builtin))
   n = GpuAst(kind: gpuCall, cIsExpr: true, cName: callName,

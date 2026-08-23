@@ -1,28 +1,11 @@
-## Tests for MMA fragment partitioning: thrfrg_A/B/C (the partition
-## layouts) and partition_A/B/C (the thread's views).
+## Host-side tests for MMA fragment partitioning: thrfrg_A/B/C layouts
+## and partition_A/B/C thread views, on the m16n8k8 tf32 atom.
 ##
-## The per-thread fragment: which elements of A/B/C a thread holds, in
-## register order (v inner), with rest positions (value tiling beyond the
-## tiled-mma unit) outer — the (MMA, M, K) fragment shape.
-##
-## References:
-##   [CUTE-PAR] CuTe C++: atom/mma_atom.hpp — partition_A/B/C via the
-##              thrfrg chain (logical_divide → zipped_divide → compose)
-##   [CUTE-EX]  Expected coordinates in sections 2-4 were extracted by
-##              running the CuTe partition implementation itself (host-side
-##              build, no GPU: make_tiled_mma / get_slice / partition_* on
-##              identity tensors), for the SM80_16x8x8_F32TF32TF32F32_TN
-##              atom under the listed tilings. They pin the exact
-##              coordinate-level contract of the partition — the level
-##              neither CuTe's own tests (whole-GEMM only) nor the other
-##              references cover.
-##   [TL-GRID]  tensor-layouts: layout_utils.tile_mma_grid (the analysis
-##              cross-check used by the experiment tests)
-##
-## Coverage: tile-size derivation, fragment size = V × rest, exact
-## per-thread coordinates (single atom, thread tiling boundaries, rest
-## positions, K-tiled), rejection of non-multiple tile shapes, coverage
-## with the expected cross-atom multiplicity.
+## Run from the tattletale root:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests/test_atoms_mma_partitioning.nim \
+##     --nimcache:nimcache/tests/test_atoms_mma_partitioning.nim \
+##     workspace/ceramic/tests/atoms_mma/test_atoms_mma_partitioning.nim
 
 import std/[strformat, sequtils]
 import workspace/ceramic/src/int_tuples
@@ -40,21 +23,17 @@ import workspace/ceramic/tests/layouts_testutils
 {.experimental: "callOperator".}
 
 const atom = SM80_16x8x8_F32TF32TF32F32_TN
-  ## m16n8k8 tf32: V_A = 4, V_B = 2, V_C = 4; T = 32 threads per atom.
+  ## m16n8k8 tf32: V_A = 4, V_B = 2, V_C = 4, T = 32 threads per atom.
 
-# thrfrg takes the operand's layout; the CPU tests build compact col-major
-# layouts over one dummy buffer (the data pointer is never dereferenced)
+# thrfrg takes the operand's layout: CPU tests build compact col-major layouts over one dummy buffer (never dereferenced).
 var dummyBuf = newSeq[uint32](64 * 64)
 let dummyPtr = cast[ptr UncheckedArray[uint32]](addr dummyBuf[0])
 
 template compactView*(tileM, tileK: static int): untyped =
-  ## A compact col-major (tileM, tileK) view for thrfrg layout builds.
+  ## Compact col-major (tileM, tileK) view for thrfrg layout builds.
   make_view(dummyPtr, (tileM, tileK), (1, tileM))
 
-# ═════════════════════════════════════════════════════════════════════════
-#  verifyFragments — test-only coverage check (kept out of src: it is a
-#  verification helper, not part of the partition API)
-# ═════════════════════════════════════════════════════════════════════════
+#  verifyFragments: test-only coverage check, not part of the partition API
 
 proc checkMultiplicity(counts: seq[int]; expected: int; label: string) =
   ## Every tile element must appear in exactly `expected` fragments.
@@ -64,13 +43,8 @@ proc checkMultiplicity(counts: seq[int]; expected: int; label: string) =
 
 template verifyFragments*(mma: untyped; tileM, tileK: static int;
                           operand: static MmaOperand) =
-  ## Every tile element appears in EXACTLY the expected number of threads'
-  ## fragments, with no duplicates within one thread group:
-  ##   A: ThrN copies (A is shared across N-atoms)
-  ##   B: ThrM copies (B is shared across M-atoms)
-  ##   C: ThrK copies (C is k-independent: each tk group holds a full copy)
-  ## Checks: per-thread count == vCount × rest; per-element multiplicity ==
-  ## expected.
+  ## Every tile element appears in exactly `expected` thread fragments,
+  ## with no duplicates within one thread group (A ×ThrN, B ×ThrM, C ×ThrK).
   const
     T = static(mma.atom.threadCount(operand).toIntVal())
     vCount = static(mma.atom.valuesPerThread(operand).toIntVal())
@@ -125,10 +99,8 @@ template verifyFragments*(mma: untyped; tileM, tileK: static int;
 
 template fragCoords*(mma: untyped; operand: static MmaOperand;
                      tileM, tileK: static int; t: int): seq[(int, int)] =
-  ## The (row, col) coordinates of thread t's fragment, in fragment order
-  ## (v inner, rest outer, restM fastest) — decoded from the partition
-  ## layout's nested coords; the atom T/V modes and the thread position
-  ## are decomposed via the shape-based idx2crd(shape, flat).
+  ## (row, col) coords of thread t's fragment, in fragment order.
+  ## (v inner, rest outer, restM fastest), decoded from the partition layout.
   const
     T = static(mma.atom.threadCount(operand).toIntVal())
     vCount = static(mma.atom.valuesPerThread(operand).toIntVal())
@@ -181,21 +153,16 @@ template tiled(thrM, thrN, thrK: static int): untyped =
   TiledMma[typeof(atom), typeof(make_layout((thrM, thrN, thrK)))](
     atom: atom, threadLayout: make_layout((thrM, thrN, thrK)))
 
-# ═════════════════════════════════════════════════════════════════════════
-#  1. Derived quantities — tile sizes and fragment sizes
-#     CuTe: make_tiled_mma(atom, thr_layout) — tile_size_mnk
-#     Fragment size per thread = V registers × rest positions
-# ═════════════════════════════════════════════════════════════════════════
+#  1. Derived quantities
 
 proc runDerivedQuantityTests =
-  block:  # tile sizes derive from atom shape × thread tiling (3×5 tiled)
+  block:  # tile sizes: atom shape × thread tiling (3×5 tiled)
     #   tile M = ThrM·m = 3·16 = 48, N = ThrN·n = 5·8 = 40, K = ThrK·k = 8
     const mma = tiled(3, 5, 1)
     doAssert mma.threadLayout.shape[0].toIntVal() * atom.mnk.m == 48, "tile M"
     doAssert mma.threadLayout.shape[1].toIntVal() * atom.mnk.n == 40, "tile N"
     doAssert mma.threadLayout.shape[2].toIntVal() * atom.mnk.k == 8,  "tile K"
-    # compile-time derived: thread count (T-mode of the layouts) and
-    # values per thread (V-mode) are Int[N], not runtime int
+    # Compile-time: thread count and values per thread are Int[N], not runtime int.
     check atom.threadCount(opA), 32, Int
     check atom.valuesPerThread(opA), 4, Int
     check atom.valuesPerThread(opB), 2, Int
@@ -216,16 +183,7 @@ proc runDerivedQuantityTests =
 
   echo "  1. Derived quantities: 3 blocks OK"
 
-# ═════════════════════════════════════════════════════════════════════════
-#  2. Exact coordinates — single atom and thread-tiling boundaries
-#     What: the exact (row, col) sets a thread's fragment holds, for a
-#     single atom and a 2×2 tiling. Why these threads: the thread-per-atom
-#     boundary (31/32), the atom-position boundary (63/64), and one thread
-#     per corner — together they pin the get_slice decomposition (tm, tn),
-#     the local-thread mapping, and the operand-sharing pattern (A shared
-#     across N-atoms, B shifting with the N-atom, C per (tm, tn)).
-#     Expected values: [CUTE-EX]
-# ═════════════════════════════════════════════════════════════════════════
+#  2. Exact coordinates: single atom and thread-tiling boundaries
 
 proc runThreadTilingBoundaryTests =
   block:  # single atom (1×1), rest (1,1,1), thread 0
@@ -241,7 +199,7 @@ proc runThreadTilingBoundaryTests =
       @[(7,3),(15,3),(7,7),(15,7)],    # t31:  atom (0,0), last local thread
       @[(16,0),(24,0),(16,4),(24,4)],  # t32:  atom (1,0), first local thread
       @[(23,3),(31,3),(23,7),(31,7)],  # t63:  atom (1,0)
-      @[(0,0),(8,0),(0,4),(8,4)],      # t64:  atom (0,1) — A shared with t0
+      @[(0,0),(8,0),(0,4),(8,4)],      # t64:  atom (0,1), A shared with t0
       @[(23,3),(31,3),(23,7),(31,7)]]  # t127: atom (1,1)
     let expB = @[
       @[(0,0),(0,4)], @[(7,3),(7,7)],
@@ -261,18 +219,10 @@ proc runThreadTilingBoundaryTests =
 
   echo "  2. Thread-tiling boundaries: 2 blocks OK"
 
-# ═════════════════════════════════════════════════════════════════════════
-#  3. Exact coordinates — rest positions (value tiling)
-#     What: the fragment when the tile exceeds the tiled-mma unit
-#     (rest > 1): pure value tiling (1×1 tiled) and tiled + value tiling
-#     (3×5 tiled), first and last threads. Why: pins the rest-position
-#     ordering (mma-position outer, col-major (RepeatM, RepeatK), v inner) —
-#     the (MMA, M, K) fragment shape.
-#     Expected values: [CUTE-EX]
-# ═════════════════════════════════════════════════════════════════════════
+#  3. Exact coordinates: rest positions (value tiling)
 
 proc runRestPositionTests =
-  block:  # 1×1 tiled, rest (7,1)/(9,1)/(7,9) — pure value tiling, thread 0
+  block:  # 1×1 tiled, rest (7,1)/(9,1)/(7,9), pure value tiling, thread 0
     const mma = tiled(1, 1, 1)
     let expA = @[
       (0,0),(8,0),(0,4),(8,4), (16,0),(24,0),(16,4),(24,4),
@@ -286,7 +236,7 @@ proc runRestPositionTests =
       (32,0),(32,4), (40,0),(40,4), (48,0),(48,4), (56,0),(56,4),
       (64,0),(64,4)]
     doAssert fragCoords(mma, opB, 72, 8, 0) == expB, "1×1 rest(9,1) B"
-    # C rest (7,9): size 252; corner samples at the (rn, rm) corners
+    # C rest (7,9): size 252, corner samples at the (rn, rm) corners
     let fC = fragCoords(mma, opC, 112, 72, 0)
     doAssert fC.len == 252
     doAssert fC[0..3] == @[(0,0),(0,1),(8,0),(8,1)]
@@ -324,15 +274,7 @@ proc runRestPositionTests =
 
   echo "  3. Rest positions (value tiling): 2 blocks OK"
 
-# ═════════════════════════════════════════════════════════════════════════
-#  4. Exact coordinates — K-tiled mma (thrK > 1)
-#     What: coordinates when the atom tiling includes K (2×2×2): the
-#     k-coordinates shift by the atom's k-step for tk = 1 threads, and C is
-#     unaffected by tk (each tk group holds a full copy of the same C
-#     fragment). Why: pins the tk decomposition of get_slice and the
-#     k-independent C partition.
-#     Expected values: [CUTE-EX]
-# ═════════════════════════════════════════════════════════════════════════
+#  4. Exact coordinates: K-tiled mma (thrK > 1)
 
 proc runKTiledTests =
   block:  # 2×2×2 tiled, rest (1,1,1): threads 0 / 128 (tk=1) / 255
@@ -340,7 +282,7 @@ proc runKTiledTests =
     doAssert fragCoords(mma, opA, 32, 16, 0) == @[(0,0),(8,0),(0,4),(8,4)]
     doAssert fragCoords(mma, opB, 16, 16, 0) == @[(0,0),(0,4)]
     doAssert fragCoords(mma, opC, 32, 16, 0) == @[(0,0),(0,1),(8,0),(8,1)]
-    # thread 128: tk = 1 → k coords 8, 12; C unchanged (C has no K)
+    # thread 128: tk = 1 → k coords 8, 12, C identical to thread 0's (C has no K)
     doAssert fragCoords(mma, opA, 32, 16, 128) == @[(0,8),(8,8),(0,12),(8,12)]
     doAssert fragCoords(mma, opB, 16, 16, 128) == @[(0,8),(0,12)]
     doAssert fragCoords(mma, opC, 32, 16, 128) == @[(0,0),(0,1),(8,0),(8,1)]
@@ -351,9 +293,7 @@ proc runKTiledTests =
 
   echo "  4. K-tiled mma: 1 block OK"
 
-# ═════════════════════════════════════════════════════════════════════════
 #  5. Rejections and structural invariants
-# ═════════════════════════════════════════════════════════════════════════
 
 proc runRejectionAndInvariantTests =
   block:  # non-multiple tile shape is rejected (doAssert fires)
@@ -364,8 +304,7 @@ proc runRejectionAndInvariantTests =
     except AssertionDefect:
       discard
 
-  block:  # coverage with rest modes — every element exactly the expected
-    #        multiplicity (A ×ThrN, B ×ThrM, C ×ThrK), including rest
+  block:  # coverage with rest modes: every element at the expected multiplicity (A ×ThrN, B ×ThrM, C ×ThrK), including rest
     const mma = tiled(3, 5, 1)
     mma.verifyFragments(336, 8, opA)
     mma.verifyFragments(360, 8, opB)
@@ -377,14 +316,13 @@ proc runRejectionAndInvariantTests =
     mma.verifyFragments(16, 16, opB)
     mma.verifyFragments(32, 16, opC)
 
-  block:  # single atom with value tiling only (1×1, rest (7,9,1)) — the
-    #        tensor-layouts tile_mnk expansion shape
+  block:  # single atom with value tiling only (1×1, rest (7,9,1))
     const mma = tiled(1, 1, 1)
     mma.verifyFragments(112, 8, opA)
     mma.verifyFragments(72, 8, opB)
     mma.verifyFragments(112, 72, opC)
 
-  block:  # every thread of a 3×5 tiling has the same fragment SIZE
+  block:  # every thread of a 3×5 tiling has the same fragment size
     const mma = tiled(3, 5, 1)
     for t in 0 ..< 480:
       doAssert fragCoords(mma, opA, 336, 8, t).len == 28, &"A size t{t}"
@@ -392,10 +330,6 @@ proc runRejectionAndInvariantTests =
       doAssert fragCoords(mma, opC, 336, 360, t).len == 252, &"C size t{t}"
 
   echo "  5. Rejections and invariants: 5 blocks OK"
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Test runner
-# ═════════════════════════════════════════════════════════════════════════
 
 proc runTests =
   runDerivedQuantityTests()

@@ -52,7 +52,8 @@ type
 
   GpuTypeKind* = enum
     gtVoid,
-    gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64, gtSize_t,
+    gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64,
+    gtFloat16, gtBf16, gtSize_t,
     gtStatic       # Static integer value (used for generic params)
     gtArray,       # Static array `array[N, dtype]` -> `dtype[N]`
     gtString,
@@ -466,7 +467,7 @@ proc simdgroupBuiltinKind*(name: string): GpuSimdgroupBuiltinKind =
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,
-                         gtFloat32, gtFloat64, gtSize_t}
+                         gtFloat32, gtFloat64, gtFloat16, gtBf16, gtSize_t}
   ## Set of numeric (scalar) GpuTypeKind variants.
 
 const TAG_IDENT_IN_ASM* = "\x01"
@@ -1125,7 +1126,7 @@ func size*(t: GpuType): int =
     result = 0
   of gtBool, gtUint8:
     result = 1
-  of gtUint16, gtInt16:
+  of gtUint16, gtInt16, gtFloat16, gtBf16:
     result = 2
   of gtUint32, gtInt32, gtFloat32:
     result = 4
@@ -1245,6 +1246,8 @@ proc gpuTypeToShortString*(t: GpuType): string =
   of gtInt64:   result = "i64"
   of gtFloat32: result = "f32"
   of gtFloat64: result = "f64"
+  of gtFloat16: result = "f16"
+  of gtBf16:    result = "bf16"
   of gtBool:    result = "bool"
   of gtObject:
     result = $t.name

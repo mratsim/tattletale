@@ -13,6 +13,7 @@
 import std / [macros, strutils, sequtils, tables, sets]
 import ./gpu_types
 import ./gpu_type_constructors
+import ../builtins/builtins_gpu_types
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Generic type name utilities
@@ -260,6 +261,11 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
       else:
         n
     # ── end canonicalization ──
+    # Builtin GPU types (float16, bfloat16): distinct uint16 tagged `{.builtin.}`,
+    # resolved by name before the typeKind switch, since distinct types
+    # have no nty* GPU mapping of their own.
+    if n.kind == nnkSym and builtinGpuTypeKind(n) != gtVoid:
+      return initGpuType(builtinGpuTypeKind(n))
     case n.typeKind
     of ntyBool, ntyInt .. ntyUint64: # includes all float types
       result = initGpuType(toGpuTypeKind n.typeKind)

@@ -1,22 +1,12 @@
-## Manual GPU test: the sm80 tensor-core microtile via the OpenCL backend,
-## one register-level MMA.
+## Manual GPU test: sm80 tensor-core microtile via the OpenCL backend.
+## NVIDIA-OpenCL only: the inline PTX mma.sync needs NVIDIA's compiler,
+## and the work-group is pinned to one warp (warp-synchronous).
 ##
-## C(16×8) = A(16×8)·B(8×8): one m16n8k8 tf32 atom, 32 work-items,
-## emitted by the `opencl:` macro and run on the OpenCL device.
-## Both MMA forms run: the 4-arg in-place and the explicit-destination
-## variant with cFrag = 1.0.
-##
-## NVIDIA-OpenCL only: the mma.sync inline PTX travels inside the OpenCL C
-## kernel as `asm(...)` with GCC-style constraints, which only NVIDIA's
-## OpenCL compiler accepts (Intel/AMD/POCL reject it at build time).
-## Host also verifies the device vendor before launching. mma.sync is
-## warp-synchronous, so the work-group is pinned to exactly one warp
-## (32 work-items).
-##
-## Requires an sm_80+ GPU with NVIDIA's OpenCL. Run with:
+## Requires an sm_80+ GPU with NVIDIA's OpenCL. Run:
 ##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests/manual_sm80_tensor_cores_opencl.nim --nimcache:nimcache/tests/manual_sm80_tensor_cores_opencl.nim \
-##     workspace/ceramic/tests/gemm/manual_sm80_tensor_cores_opencl.nim
+##     --outdir:build/tests/manual_sm80_tensor_cores_opencl.nim \
+##     --nimcache:nimcache/tests/manual_sm80_tensor_cores_opencl.nim \
+##     workspace/ceramic/tests/atoms_mma/manual_sm80_tensor_cores_opencl.nim
 
 import std/[strformat, strutils, random]
 import workspace/ceramic/src/int_tuples
@@ -40,10 +30,6 @@ const atom = SM80_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
   atom: atom, threadLayout: make_layout((1, 1, 1)))
 
-# mma.sync is warp-synchronous: all 32 lanes of one warp must execute it
-# convergently. Pin the work-group to exactly one warp. A non-32-multiple
-# group would split work-items across warps with inactive lanes (hang or
-# illegal-instruction risk for mma.sync).
 const WORK_GROUP = toIntVal(atom.threadCount(opA))   # 32 work-items = one warp
 static:
   doAssert WORK_GROUP == 32,
@@ -52,10 +38,7 @@ static:
 func mmaMicrotile(tma: static TiledMma; t: int;
                   C: ptr UncheckedArray[float32];
                   A, B: ptr UncheckedArray[uint32]) {.inline.} =
-  ## C(16×8) = A(16×8)·B(8×8): one m16n8k8 tf32 atom, 32 work-items, in-place.
-  ## Fragment gathering: partition_A/B/C, fragment registers as owning
-  ## tensors (make_fragment_A/B/C), copyFrom/fillWith. All layout
-  ## algebra, no loops, no offsets, no raw-addr views.
+  ## One m16n8k8 tf32 atom (C = A·B), in-place, via the library path.
   const
     M = tma.atom.mnk.m
     N = tma.atom.mnk.n
@@ -67,28 +50,23 @@ func mmaMicrotile(tma: static TiledMma; t: int;
   let tAv = tma.partition_A(thr, make_view(A, make_layout((M, K), (1, M))))
   let tBv = tma.partition_B(thr, make_view(B, make_layout((N, K), (1, N))))
   var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
-  # fragment registers as owning tensors shaped like the partitions,
-  # one declaration, no raw-addr views
   var aFrag = make_fragment_A(tma.atom, tAv)
   aFrag.copyFrom(tAv)
   var bFrag = make_fragment_B(tma.atom, tBv)
   bFrag.copyFrom(tBv)
-  # the accumulator is identity-shaped (the fragment register order):
-  # a compact make_tensor_like would scramble it to 0,2,1,3
+  # Accumulator is identity-shaped: make_tensor_like would scramble register order to 0,2,1,3.
   var cFrag = make_tensor(float32, (VC,))
   cFrag.fillWith(0.0'f32)
 
   gemm_atom(tma.atom, cFrag, aFrag, bFrag)   # one mma.sync, in-place accumulate
 
-  # identity epilogue: fragment copied straight to C
   for i in 0 ..< size(tCv.layout):
     tCv(i) = cFrag(i)
 
 func mmaMicrotileExplicit(tma: static TiledMma; t: int;
                           C: ptr UncheckedArray[float32];
                           A, B: ptr UncheckedArray[uint32]) {.inline.} =
-  ## C(16×8) = A(16×8)·B(8×8) + 1: explicit destination, dFrag starts as
-  ## a copy of cFrag, then accumulates in place.
+  ## Same atom, explicit destination (C = A·B + cFrag, cFrag = 1.0).
   const
     M = tma.atom.mnk.m
     N = tma.atom.mnk.n
@@ -108,30 +86,21 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
   cFrag.fillWith(1.0'f32)                        # nonzero accumulator input
   var dFrag = make_tensor(float32, (VC,))
 
-  dFrag.copyFrom(cFrag)                        # seed the accumulator input
+  dFrag.copyFrom(cFrag)
   gemm_atom(tma.atom, dFrag, aFrag, bFrag)   # dFrag = aFrag·bFrag + cFrag
 
-  # identity epilogue: fragment copied straight to C
   for i in 0 ..< size(tCv.layout):
     tCv(i) = dFrag(i)
 
 const kernelCode = opencl:
   proc mmaMicrotileKernel(C: ptr UncheckedArray[float32],
                           A, B: ptr UncheckedArray[uint32]) {.global.} =
-    ## C(16×8) = A(16×8)·B(8×8): one m16n8k8 tf32 atom, 32 work-items.
-    ## Output-first (C): the engine's OpenCL `run` binds the output at
-    ## binding 0, inputs at 1..N in signature order.
+    ## Output-first: the engine binds the output at binding 0, inputs at 1..N.
     mmaMicrotile(tiled, int(get_local_id(0)), C, A, B)
 
   proc mmaMicrotileExplicitKernel(C: ptr UncheckedArray[float32],
                                   A, B: ptr UncheckedArray[uint32]) {.global.} =
-    ## C(16×8) = A(16×8)·B(8×8) + 1: the explicit-destination form.
     mmaMicrotileExplicit(tiled, int(get_local_id(0)), C, A, B)
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Host side: a thin shell. Reference, trial loop and report live in
-#  gemm_test_lib (testMicrotile). No buffer management here.
-# ═════════════════════════════════════════════════════════════════════════
 
 proc runTest() =
   var engine = bkOpenCL.init(kernelCode)
