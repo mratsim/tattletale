@@ -91,3 +91,17 @@ const APPLE_8x8x8_F16* = MmaAtom[
     cLayout: Apple8x8_AC_Layout,
   )
   ## f16 operands, f32 accumulator on `simdgroup_half8x8` fragments.
+
+const APPLE_8x8x8_BF16* = MmaAtom[
+    typeof(Apple8x8_AC_Layout), typeof(Apple8x8_B_Layout), typeof(Apple8x8_AC_Layout)
+  ](
+    name: "APPLE_8x8x8_BF16",
+    mnk: (m: 8, n: 8, k: 8),
+    aType: mdtBF16, bType: mdtBF16, cType: mdtF32,
+    kind: bkGPU_TensorCore,
+    instr: "simdgroup_multiply_accumulate",
+    aLayout: Apple8x8_AC_Layout,
+    bLayout: Apple8x8_B_Layout,
+    cLayout: Apple8x8_AC_Layout,
+  )
+  ## bf16 operands, f32 accumulator on `simdgroup_bfloat8x8` fragments.

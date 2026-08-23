@@ -39,6 +39,8 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtInt32: "int"
   of gtInt64: "int64_t"
   of gtFloat32: "float"
+  of gtFloat16: "float16_t"
+  of gtBf16: "bfloat16_t"
   of gtFloat64: "double"
   of gtVoid: "void"
   of gtSize_t: "uint"
@@ -120,6 +122,19 @@ proc containsFloat64(t: GpuType): bool =
     result = t.uaTo.containsFloat64()
   of gtFloat64: result = true
   else: result = false
+
+
+proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
+  ## True if the type tree contains `kind` somewhere.
+  case t.kind
+  of gtPtr:
+    result = t.to.containsKind(kind)
+  of gtArray:
+    result = t.aTyp.containsKind(kind)
+  of gtUA:
+    result = t.uaTo.containsKind(kind)
+  else:
+    result = t.kind == kind
 
 
 const glslReserved*: array[40, string] = [
@@ -229,6 +244,8 @@ proc genLit*(ast: GpuAst): string =
   else:
     case ast.lType.kind
     of gtFloat32: result = ast.lValue & "f"
+    of gtFloat16, gtBf16:
+      result = gpuTypeToString(ast.lType, allowEmptyIdent = true) & '(' & ast.lValue & ')'
     of gtUint32: result = ast.lValue & "U"
     of gtUint64: result = ast.lValue & "ULL"
     of gtInt64:  result = ast.lValue & "LL"
@@ -504,19 +521,35 @@ proc renameIdentRefs(n: var GpuAst, symToRename: Table[string, string]) =
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle.
 
-  # Check if we need fp64 extension
+  # Check if we need fp64 / fp16 / bf16 extensions
   var needsFp64 = false
+  var needsFp16 = false
+  var needsBf16 = false
   for fnIdent, fn in ctx.fnTab:
-    if fn.pRetType.kind == gtFloat64:
+    if fn.pRetType.containsKind(gtFloat64):
       needsFp64 = true
+    if fn.pRetType.containsKind(gtFloat16):
+      needsFp16 = true
+    if fn.pRetType.containsKind(gtBf16):
+      needsBf16 = true
     for p in fn.pParams:
-      if p.typ.containsFloat64():
+      if p.typ.containsKind(gtFloat64):
         needsFp64 = true
+      if p.typ.containsKind(gtFloat16):
+        needsFp16 = true
+      if p.typ.containsKind(gtBf16):
+        needsBf16 = true
 
   # Emit GLSL header
   result = "#version 450\n"
   if needsFp64:
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
+  if needsFp16:
+    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n"
+    result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
+  if needsBf16:
+    result.add "#extension GL_EXT_bfloat16 : enable\n"
+    result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
   result.add "\n"
 
   # Note: SSBO name normalization and type validation is done by lowerSsboParams pass.

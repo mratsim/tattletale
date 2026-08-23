@@ -136,6 +136,7 @@ proc simdgroupFragmentMslType(t: GpuType): string =
   case simdgroupFragmentElemType(t).kind
   of gtFloat32: "simdgroup_float8x8"
   of gtFloat16: "simdgroup_half8x8"
+  of gtBf16: "simdgroup_bfloat8x8"
   else:
     raiseAssert "SimdgroupFragment element type has no MSL simdgroup matrix: " &
       $simdgroupFragmentElemType(t).kind
@@ -546,6 +547,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
           case elemKind
           of gtFloat32: "float"
           of gtFloat16: "half"
+          of gtBf16: "bfloat"
           else:
             raiseAssert "make_filled has no MSL simdgroup element type: " & $elemKind
         let elemVal = ctx.genMetalImpl(ast.cArgs[0], 0)

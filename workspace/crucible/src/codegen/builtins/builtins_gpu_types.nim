@@ -18,6 +18,31 @@ type
   bfloat16* {.builtin.} = distinct uint16
     ## bfloat16: the top 16 bits of an f32, 1 sign, 8 exponent, 7 mantissa.
 
+# Arithmetic operators: the DSL lowers them to the target's native ops.
+# Compile-time guards (error pragma, static assert) fire at DSL resolution
+# too — the typed macro must resolve these calls. Bodies raise instead:
+# codegen never reaches them, host use fails with a clear error.
+
+template fp16Op(op: untyped): untyped =
+  func op*(a, b: float16): float16 {.inline.} =
+    raise newException(ValueError, "float16 arithmetic is GPU-side only")
+  func op*(a, b: bfloat16): bfloat16 {.inline.} =
+    raise newException(ValueError, "bfloat16 arithmetic is GPU-side only")
+
+fp16Op(`+`)
+fp16Op(`-`)
+fp16Op(`*`)
+fp16Op(`/`)
+
+func `+`*(a: float16): float16 {.inline.} =
+  raise newException(ValueError, "float16 arithmetic is GPU-side only")
+func `-`*(a: float16): float16 {.inline.} =
+  raise newException(ValueError, "float16 arithmetic is GPU-side only")
+func `+`*(a: bfloat16): bfloat16 {.inline.} =
+  raise newException(ValueError, "bfloat16 arithmetic is GPU-side only")
+func `-`*(a: bfloat16): bfloat16 {.inline.} =
+  raise newException(ValueError, "bfloat16 arithmetic is GPU-side only")
+
 proc builtinGpuTypeKind*(n: NimNode): GpuTypeKind =
   ## Maps a builtin GPU type symbol to its GpuTypeKind, or gtVoid otherwise.
   ## Recognized by name plus the `{.builtin.}` pragma.
