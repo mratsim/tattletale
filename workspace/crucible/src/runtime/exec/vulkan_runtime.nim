@@ -303,8 +303,22 @@ proc initVulkan*(): VulkanContext =
     queueCount: 1,
     pQueuePriorities: qprio.addr
   )
+  # 16-bit float arithmetic + 16-bit storage (core features since Vulkan 1.1/1.2).
+  var gpdf2 = cast[
+    proc(physicalDevice: VkPhysicalDevice, pFeatures: ptr VkPhysicalDeviceFeatures2): void {.cdecl.}
+  ](gpa("vkGetPhysicalDeviceFeatures2"))
+  var f16feat = VkPhysicalDeviceShaderFloat16Int8Features(
+    sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES)
+  var s16feat = VkPhysicalDevice16BitStorageFeatures(
+    sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES)
+  var f2 = VkPhysicalDeviceFeatures2(
+    sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
+  f16feat.pNext = s16feat.addr
+  f2.pNext = f16feat.addr
+  gpdf2(result.physicalDevice, f2.addr)
   var dci = VkDeviceCreateInfo(
     sType: VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+    pNext: f2.addr,
     queueCreateInfoCount: 1,
     pQueueCreateInfos: qci.addr
   )

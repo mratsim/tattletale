@@ -92,6 +92,9 @@ const
   VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO* = VkStructureType(42)
   VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE* = VkStructureType(49)
   VK_STRUCTURE_TYPE_COPY_BUFFER_INFO* = VkStructureType(78)
+  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2* = VkStructureType(1000059000)
+  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES* = VkStructureType(1000082000)
+  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES* = VkStructureType(1000083000)
 
   # Shader stages
   VK_SHADER_STAGE_COMPUTE_BIT* = VkShaderStageFlagBits(1 shl 5)
@@ -173,6 +176,29 @@ type
     queueFamilyIndex*: uint32
     queueCount*: uint32
     pQueuePriorities*: ptr cfloat
+
+  VkPhysicalDeviceFeatures* = object
+    ## VkPhysicalDeviceFeatures: 55 VkBool32 (Vulkan 1.0 field count).
+    flags: array[55, VkBool32]
+
+  VkPhysicalDeviceFeatures2* = object
+    sType*: VkStructureType
+    pNext*: pointer
+    features: VkPhysicalDeviceFeatures
+
+  VkPhysicalDeviceShaderFloat16Int8Features* = object
+    sType*: VkStructureType
+    pNext*: pointer
+    shaderFloat16*: VkBool32
+    shaderInt8*: VkBool32
+
+  VkPhysicalDevice16BitStorageFeatures* = object
+    sType*: VkStructureType
+    pNext*: pointer
+    storageBuffer16BitAccess*: VkBool32
+    uniformAndStorageBuffer16BitAccess*: VkBool32
+    storagePushConstant16*: VkBool32
+    storageInputOutput16*: VkBool32
 
   VkDeviceCreateInfo* = object
     sType*: VkStructureType

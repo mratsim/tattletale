@@ -46,6 +46,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtUint32: "u32"
   of gtInt32: "i32"
   of gtFloat32: "f32"
+  of gtFloat16: "f16"
   of gtVoid: ""
   of gtSize_t: "u32" ##: Acceptable mapping?
   of gtPtr: "ptr" ## XXX: needs address space and target type, `ptr<address_space, target_type>`
@@ -252,6 +253,7 @@ proc genLit*(ast: GpuAst): string =
   else:
     case ast.lType.kind
     of gtUint32: result = ast.lValue & "u"
+    of gtFloat16: result = ast.lValue & "h"
     of gtFloat64: result = ast.lValue & "lf"
     of gtInt16, gtUint16, gtUint8, gtBool:
       result = gpuTypeToString(ast.lType, allowEmptyIdent = true) & '(' & ast.lValue & ')'
@@ -563,11 +565,34 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuMaterialize:
     raiseAssert "gpuMaterialize should not reach WGSL backend — passByRef is not used"
 
+proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
+  ## True if the type tree contains `kind` somewhere.
+  case t.kind
+  of gtPtr:
+    result = t.to.containsKind(kind)
+  of gtArray:
+    result = t.aTyp.containsKind(kind)
+  of gtUA:
+    result = t.uaTo.containsKind(kind)
+  else:
+    result = t.kind == kind
+
+
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle
   ##
   ## NOTE: WGSL does not require forward declarations / does not care about
   ## the order in which functions are defined
+
+  var needsF16 = false
+  for fnIdent, fn in ctx.fnTab:
+    if fn.pRetType.containsKind(gtFloat16):
+      needsF16 = true
+    for p in fn.pParams:
+      if p.typ.containsKind(gtFloat16):
+        needsF16 = true
+  if needsF16:
+    result = "enable f16;\n\n"
 
   var bindingCounter = 0
   proc mutateToAllowedTypes(p: GpuType): GpuType =
