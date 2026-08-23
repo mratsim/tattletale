@@ -121,7 +121,8 @@ proc tupleTypeName(fields: seq[FieldInfo]): string =
   ## type names through this single function.
   result = "Tuple_"
   for i, fi in fields:
-    if i > 0: result.add "_"
+    if i > 0:
+      result.add "_"
     result.add fi.name & "_" & fi.typeNode.assignTypeName()
 
 # ═══════════════════════════════════════════════════════════════════════
