@@ -147,6 +147,7 @@
 import std/macros
 import ./int_tuples
 import ./layouts
+import ./layout_constructors
 import ./tensors
 import ./ptr_arithmetic
 import ./atoms
@@ -202,32 +203,6 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
              toIntVal(mma.valuesPerThread(opA)),
              toIntVal(mma.valuesPerThread(opB)),
              dFrag, aFrag, bFrag)
-
-template gemm_atom*[TD, TA, TB; isLayoutLeftD: static bool; isLayoutLeftA: static bool; isLayoutLeftB: static bool](
-    mma: static MmaAtom,
-    dFrag: var SimdgroupFragment[TD, isLayoutLeftD],
-    aFrag: SimdgroupFragment[TA, isLayoutLeftA],
-    bFrag: SimdgroupFragment[TB, isLayoutLeftB]): untyped =
-  ## Simdgroup-fragment form of gemm_atom: one `simdgroup_multiply_accumulate`
-  ## on the fragment tensors, in-place accumulate (dFrag += aFrag·bFrag).
-  ## The Apple simdgroup atoms' fragment path; the MSL printer emits the
-  ## intrinsic. A template so the call inlines into the kernel body: MSL
-  ## simdgroup matrices cannot be passed by pointer, and a `var` parameter
-  ## would lower to one on the device-function boundary.
-  ##
-  ## Args:
-  ##   mma: the hardware instruction descriptor (the Apple simdgroup atoms)
-  ##   dFrag: the accumulator simdgroup fragment, in/out
-  ##   aFrag, bFrag: the operand simdgroup fragments
-  static:
-    doAssert mma.kind == bkGPU_TensorCore and mma.instr == "simdgroup_multiply_accumulate",
-      "gemm_atom: simdgroup fragments require an Apple simdgroup atom" &
-      " (kind bkGPU_TensorCore, instr simdgroup_multiply_accumulate)"
-  gemm_mma(mma.instr,
-           toIntVal(mma.valuesPerThread(opC)),
-           toIntVal(mma.valuesPerThread(opA)),
-           toIntVal(mma.valuesPerThread(opB)),
-           dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_warp(mma, ...): loop over atoms
@@ -564,6 +539,23 @@ template mmaDTypeOf(T: typedesc): MmaDType =
     {.error: "mmaDTypeOf: no MmaDType for the operand type " & $T &
       ". At the moment: uint32 (TF32) and float32".}
 
+const ScalarFmaF32* = MmaAtom[
+    typeof(make_layout((1, 1))), typeof(make_layout((1, 1))), typeof(make_layout((1, 1)))
+  ](
+    name: "ScalarFmaF32",
+    mnk: (m: 1, n: 1, k: 1),
+    aType: mdtF32, bType: mdtF32, cType: mdtF32,
+    kind: bk_FMA,
+    instr: "",
+    aLayout: make_layout((1, 1)),
+    bLayout: make_layout((1, 1)),
+    cLayout: make_layout((1, 1)),
+  )
+  ## The legacy gemm's plain-arithmetic fallback atom (1×1×1, one value
+  ## per lane). The tile layer's universal atom is the 8×8×8 software mma
+  ## (atoms_universal); this scalar form exists only for the legacy CUDA
+  ## gemm_atom path, whose bk_FMA branch computes one scalar FMA.
+
 template atom_selector*(TA, TB, TC: typedesc): auto =
   ## Derive the MMA atom for the operand types.
   ##
@@ -576,11 +568,11 @@ template atom_selector*(TA, TB, TC: typedesc): auto =
   when TA is uint32 and TB is uint32 and TC is float32:
     SM80_16x8x8_F32TF32TF32F32_TN
   elif TA is float32 and TB is float32 and TC is float32:
-    UNIVERSAL_FMA_F32
+    ScalarFmaF32
   else:
     {.warning: "atom_selector: no backend MMA for (" & $TA & ", " & $TB & ", " & $TC &
-      "); falling back to scalar FMA (UNIVERSAL_FMA_F32).".}
-    UNIVERSAL_FMA_F32
+      "); falling back to scalar FMA (ScalarFmaF32).".}
+    ScalarFmaF32
 
 proc make_tiled_mma*[LA, LB, LC, Sh, St](
     a: MmaAtom[LA, LB, LC],

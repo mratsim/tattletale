@@ -138,16 +138,16 @@ func f16MmaMicrotile(tma: static TiledMma; t: int;
   let tBv = tma.partition_B(thr, Bview)
   var tCv = tma.partition_C(thr, Cview)
   var aFrag = make_fragment_A(tma.atom, tAv)
-  aFrag.copyFrom(Aview)
+  simdgroupLoad(aFrag, Aview.data, uint32(M), 0'u32, true)
   var bFrag = make_fragment_B(tma.atom, tBv)
-  bFrag.copyFrom(Bview)
-  # make_fragment_C yields the SimdgroupFragment type gemm_atom's simdgroup overload requires.
+  simdgroupLoad(bFrag, Bview.data, uint32(N), 0'u32, false)
+  # make_fragment_C yields the SimdgroupMatrix type gemm_atom's simdgroup overload requires.
   var cFrag = make_fragment_C(tma.atom, tCv)
   cFrag.fillWith(0.0'f32)
 
   gemm_atom(tma.atom, cFrag, aFrag, bFrag)   # one simdgroup_multiply_accumulate
 
-  Cview.copyFrom(cFrag)
+  simdgroupStore(cFrag, Cview.data, uint32(M), 0'u32, true)
 
 func f16MmaMicrotileExplicit(tma: static TiledMma; t: int;
                              C: ptr UncheckedArray[float32];
@@ -165,17 +165,17 @@ func f16MmaMicrotileExplicit(tma: static TiledMma; t: int;
   let tBv = tma.partition_B(thr, Bview)
   var tCv = tma.partition_C(thr, Cview)
   var aFrag = make_fragment_A(tma.atom, tAv)
-  aFrag.copyFrom(Aview)
+  simdgroupLoad(aFrag, Aview.data, uint32(M), 0'u32, true)
   var bFrag = make_fragment_B(tma.atom, tBv)
-  bFrag.copyFrom(Bview)
+  simdgroupLoad(bFrag, Bview.data, uint32(N), 0'u32, false)
   var cFrag = make_fragment_C(tma.atom, tCv)
   cFrag.fillWith(1.0'f32)                        # nonzero accumulator input
   var dFrag = make_fragment_C(tma.atom, tCv)
 
-  dFrag.copyFrom(cFrag)
+  dFrag = cFrag
   gemm_atom(tma.atom, dFrag, aFrag, bFrag)   # dFrag = aFrag·bFrag + cFrag
 
-  Cview.copyFrom(dFrag)
+  simdgroupStore(dFrag, Cview.data, uint32(M), 0'u32, true)
 
 func f16HalfFill(tma: static TiledMma; t: int;
                  A: ptr UncheckedArray[float16]) {.inline.} =
