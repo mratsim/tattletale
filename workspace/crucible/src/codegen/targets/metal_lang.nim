@@ -15,11 +15,6 @@
 ##     the plain form, and call sites forward the names
 ##     (MSL device functions have no implicit thread index)
 ##   - the threadgroup size stays host-side (dispatch-time) and is never baked into the shader.
-##   - Apple simdgroup matrices lower to `simdgroup_float8x8` / `simdgroup_half8x8`
-##     variables, and the matrix intrinsics (`simdgroup_load`/`store`,
-##     `simdgroup_multiply_accumulate`, `make_filled_simdgroup_matrix`) emit
-##     their native MSL spellings. The lane index builtin
-##     `thread_index_in_simdgroup` binds like the other coordinate builtins.
 ##
 ## `MetalReservedKeywords` is the MSL reserved-word table minus the boolean literals
 ## `true`/`false` (emitted as valid MSL tokens), plus the `metal` namespace.
@@ -105,49 +100,6 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   else:
     raiseAssert "Invalid type : " & $t
 
-proc isSimdgroupMatrixType(t: GpuType): bool =
-  ## True when `t` is a `SimdgroupMatrix` (the per-lane matrix type of
-  ## the Apple simdgroup atoms). Detected by the Nim generic's base name;
-  ## the MSL printer replaces the whole struct with the native simdgroup
-  ## matrix type.
-  case t.kind
-  of gtObject: t.name.startsWith("SimdgroupMatrix")
-  of gtGenericInst: t.gName.startsWith("SimdgroupMatrix")
-  else: false
-
-proc simdgroupMatrixElemType(t: GpuType): GpuType =
-  ## Element type of a `SimdgroupMatrix`: the `T` of its `data: array[V, T]`
-  ## field. Raises when the type has no data field (not a matrix).
-  let fields =
-    case t.kind
-    of gtObject: t.oFields
-    of gtGenericInst: t.gFields
-    else: @[]
-  for f in fields:
-    if f.name == "data" and f.typ.kind == gtArray:
-      return f.typ.aTyp
-  raiseAssert "SimdgroupMatrix type without a data array field: " & $t
-
-proc simdgroupMatrixMslType(t: GpuType): string =
-  ## MSL matrix spelling of a `SimdgroupMatrix`: `simdgroup_float8x8` for
-  ## f32 elements, `simdgroup_half8x8` for half (Metal's only other simdgroup
-  ## element type). The matrix is always 8x8: MSL defines no other sizes.
-  ## Other element types raise: no simdgroup matrix exists for them.
-  case simdgroupMatrixElemType(t).kind
-  of gtFloat32: "simdgroup_float8x8"
-  of gtFloat16: "simdgroup_half8x8"
-  of gtBf16: "simdgroup_bfloat8x8"
-  else:
-    raiseAssert "SimdgroupMatrix element type has no MSL simdgroup matrix: " &
-      $simdgroupMatrixElemType(t).kind
-
-proc isDefaultInit(vInit: GpuAst): bool =
-  ## True for a default-constructed object init (no field carries a real
-  ## value: every field is the `DEFAULT` literal marker, or there are no
-  ## fields). The Metal printer drops such inits on simdgroup matrices.
-  vInit.kind == gpuObjConstr and
-  vInit.ocFields.allIt(it.value.kind == gpuLit and it.value.lValue == "DEFAULT")
-
 proc gpuTypeToString*(t: GpuType, ident: string = "",
                       allowEmptyIdent = false): string =
   ## MSL spelling of `t`, with `ident` appended for array types, which require an identifier in the emitted declaration.
@@ -189,27 +141,17 @@ proc gpuTypeToString*(t: GpuType, ident: string = "",
         result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & '[' & $t.aLen & ']'
     skipIdent = true
   of gtGenericInst:
-    if isSimdgroupMatrixType(t):
-      # The matrix struct never materializes: the var is a simdgroup matrix.
-      result = simdgroupMatrixMslType(t)
-      skipIdent = false
-    else:
-      # NOTE: We turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
-      # use short names (uint32, int64) for generic args, not C names (unsigned int, long long)
-      checkReservedIdent(t.gName, "type")
-      result = t.gName
-      for i, g in t.gArgs:
-        result.add gpuTypeToShortString(g)
-        if i < t.gArgs.high:
-          result.add 'x'
+    # NOTE: We turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
+    # use short names (uint32, int64) for generic args, not C names (unsigned int, long long)
+    checkReservedIdent(t.gName, "type")
+    result = t.gName
+    for i, g in t.gArgs:
+      result.add gpuTypeToShortString(g)
+      if i < t.gArgs.high:
+        result.add 'x'
   of gtObject:
-    if isSimdgroupMatrixType(t):
-      # The matrix struct never materializes: the var is a simdgroup matrix.
-      result = simdgroupMatrixMslType(t)
-      skipIdent = false
-    else:
-      checkReservedIdent(t.name, "type")
-      result = t.name
+    checkReservedIdent(t.name, "type")
+    result = t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## unchecked array just T?
   of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
@@ -299,10 +241,10 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
     let name = p.ident.ident()
     checkReservedIdent(name, "parameter")
     if p.ident.symbol.coordBuiltin != gbkNone:
-      # The five coordinate builtins are `uint3` attribute params.
+      # The vector coordinate builtins are `uint3` attribute params.
       # The flat thread index `gbkThreadIndexInThreadgroup` is a scalar `uint` builtin.
-      let attrType = if p.ident.symbol.coordBuiltin in {gbkThreadIndexInThreadgroup,
-                                                        gbkThreadIndexInSimdgroup}: "uint" else: "uint3"
+      let attrType = if p.ident.symbol.coordBuiltin == gbkThreadIndexInThreadgroup:
+        "uint" else: "uint3"
       params.add attrType & " " & name & " [[" & name & "]]"
       continue
     let binding = " [[buffer(" & $bufferIdx & ")]]"
@@ -346,20 +288,6 @@ proc addrSpaceToMsl(space: AddressSpace): string =
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string
-
-proc genMatrixRef(ctx: var GpuContext, n: GpuAst): string =
-  ## Renders a simdgroup matrix argument. The MSL intrinsics take thread
-  ## references, so the var-param address-of (`&frag`) the frontend wraps
-  ## around mutable matrix args is dropped. A var-param pointer to a matrix
-  ## (`frag` at a device-function boundary) is dereferenced.
-  if n.kind == gpuAddr:
-    ctx.genMetalImpl(n.aOf, 0)
-  else:
-    let t = ctx.exprType(n)
-    if not t.isNil and t.kind == gtPtr and isSimdgroupMatrixType(t.to):
-      "(*" & ctx.genMetalImpl(n, 0) & ')'
-    else:
-      ctx.genMetalImpl(n, 0)
 
 proc structVariantName(ctx: GpuContext, t: GpuType,
                        spaces: seq[AddressSpace]): string =
@@ -454,23 +382,17 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     if ast.addressSpace != asRMEM:
       attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
     var typ = gpuTypeToString(ast.vType, vName)
-    if isSimdgroupMatrixType(ast.vType) and isDefaultInit(ast.vInit):
-      # A default-constructed matrix has no MSL initializer (simdgroup
-      # matrices cannot be brace-initialized); the gather or fill that
-      # follows writes it.
-      result = indentStr & attrs & typ
-    else:
-      if ast.vInit.kind == gpuObjConstr:
-        # The var's decl type must match the objconstr's variant name, or MSL
-        # rejects the type mismatch.
-        let variantName = ctx.structVariantName(ast.vInit.ocType,
-                                                pp.siteSpaceTuple(ctx, ast.vInit))
-        let base = gpuTypeToString(ast.vInit.ocType, allowEmptyIdent = true)
-        if variantName != base:
-          typ = variantName & ' ' & vName
-      result = indentStr & attrs & typ
-      if ast.vInit.kind != gpuDiscard:
-        result &= " = " & ctx.genMetalImpl(ast.vInit, 0)
+    if ast.vInit.kind == gpuObjConstr:
+      # The var's decl type must match the objconstr's variant name, or MSL
+      # rejects the type mismatch.
+      let variantName = ctx.structVariantName(ast.vInit.ocType,
+                                              pp.siteSpaceTuple(ctx, ast.vInit))
+      let base = gpuTypeToString(ast.vInit.ocType, allowEmptyIdent = true)
+      if variantName != base:
+        typ = variantName & ' ' & vName
+    result = indentStr & attrs & typ
+    if ast.vInit.kind != gpuDiscard:
+      result &= " = " & ctx.genMetalImpl(ast.vInit, 0)
   of gpuAssign:
     result = indentStr & ctx.genMetalImpl(ast.aLeft, 0) & " = " &
              ctx.genMetalImpl(ast.aRight, 0)
@@ -522,83 +444,22 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       # MSL spells the barrier with its memory flags.
       result = indentStr & "threadgroup_barrier(mem_flags::mem_threadgroup)"
     of gbkNone:
-      case ast.cName.symbol.simdgroupBuiltin
-      of sgbkSimdgroupLoad, sgbkSimdgroupStore:
-        # Hardware fragment gather/scatter. The fragment arg arrives wrapped
-        # in `&` (var param); the intrinsic takes a thread reference.
-        let frag = ctx.genMatrixRef(ast.cArgs[0])
-        let mslName = if ast.cName.symbol.simdgroupBuiltin == sgbkSimdgroupLoad:
-          "simdgroup_load" else: "simdgroup_store"
-        result = indentStr & mslName & '(' & frag & ", " &
-                 ctx.genMetalImpl(ast.cArgs[1], 0) & ", " &
-                 ctx.genMetalImpl(ast.cArgs[2], 0) & ", " &
-                 ctx.genMetalImpl(ast.cArgs[3], 0) & ", " &
-                 ctx.genMetalImpl(ast.cArgs[4], 0) & ')'
-      of sgbkSimdgroupMultiplyAccumulate:
-        # One 8x8x8 MMA, in-place: the MSL intrinsic takes the accumulator
-        # twice (d = a·b + c with c = d).
-        let d = ctx.genMatrixRef(ast.cArgs[0])
-        result = indentStr & "simdgroup_multiply_accumulate(" & d & ", " &
-                 ctx.genMatrixRef(ast.cArgs[1]) & ", " &
-                 ctx.genMatrixRef(ast.cArgs[2]) & ", " & d & ')'
-      of sgbkMakeFilledSimdgroupMatrix:
-        # make_filled_simdgroup_matrix<T, 8>(val): the element spelling
-        # follows the value argument's type (float for f32, half for f16),
-        # falling back to the matrix element type when the value type
-        # is unresolvable. The matrix is always 8x8 on Metal.
-        let argTyp = pp.exprType(ctx, ast.cArgs[0])
-        let elemKind =
-          if argTyp.isNil: simdgroupMatrixElemType(pp.exprType(ctx, ast)).kind
-          else: argTyp.kind
-        let elemSpelling =
-          case elemKind
-          of gtFloat32: "float"
-          of gtFloat16: "half"
-          of gtBf16: "bfloat"
-          else:
-            raiseAssert "make_filled has no MSL simdgroup element type: " & $elemKind
-        let elemVal = ctx.genMetalImpl(ast.cArgs[0], 0)
-        result = indentStr & "make_filled_simdgroup_matrix<" & elemSpelling &
-                 ", 8>(" & elemVal & ')'
-      of sgbkThreadElements:
-        # Per-lane fragment element accessor. A simdgroup matrix exposes its
-        # per-lane elements through `thread_elements()`, while the FMA
-        # per-lane value array indexes directly. The fragment shape is read
-        # from the resolved overload's first parameter. The var wrapper
-        # lowers to an implicit pointer, and the frontend's address-of wrap
-        # is dropped from the argument, so the accessor takes the fragment
-        # lvalue itself.
-        if ast.cName notin ctx.processedProcs:
-          raiseAssert "threadElements: unresolved overload signature for " &
-            ast.cName.ident()
-        let fragParam = ctx.processedProcs[ast.cName].params[0].typ
-        let fragShape = if fragParam.kind == gtPtr: fragParam.to
-                        else: fragParam
-        let fragArg = if ast.cArgs[0].kind == gpuAddr: ast.cArgs[0].aOf
-                      else: ast.cArgs[0]
-        let frag = ctx.genMetalImpl(fragArg, 0)
-        let vpt = ctx.genMetalImpl(ast.cArgs[1], 0)
-        if isSimdgroupMatrixType(fragShape):
-          result = indentStr & frag & ".thread_elements()[" & vpt & ']'
-        else:
-          result = indentStr & frag & '[' & vpt & ']'
-      of sgbkNone:
-        case ast.cName.symbol.reductionBuiltin
-        of gbkSimdShuffleDown:
-          # SIMD-group gather from lane + delta: `simd_shuffle_down(v, delta)`.
-          result = indentStr & "simd_shuffle_down(" &
-                   ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
-                   ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
-        of gbkSimdShuffle:
-          # SIMD-group gather from an absolute lane: `simd_shuffle(v, lane)`.
-          result = indentStr & "simd_shuffle(" &
-                   ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
-                   ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
-        of gbkNone:
-          var args: seq[string]
-          for a in ast.cArgs:
-            args.add ctx.genMetalImpl(a, 0)
-          result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
+      case ast.cName.symbol.reductionBuiltin
+      of gbkSimdShuffleDown:
+        # SIMD-group gather from lane + delta: `simd_shuffle_down(v, delta)`.
+        result = indentStr & "simd_shuffle_down(" &
+                 ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
+                 ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
+      of gbkSimdShuffle:
+        # SIMD-group gather from an absolute lane: `simd_shuffle(v, lane)`.
+        result = indentStr & "simd_shuffle(" &
+                 ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
+                 ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
+      of gbkNone:
+        var args: seq[string]
+        for a in ast.cArgs:
+          args.add ctx.genMetalImpl(a, 0)
+        result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
   of gpuTemplateCall:
     when nimvm:
       error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
@@ -642,50 +503,45 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result = ast.pOp & ctx.genMetalImpl(ast.pVal, 0)
 
   of gpuTypeDef:
-    if isSimdgroupMatrixType(ast.tTyp):
-      # The fragment is emitted as a native simdgroup matrix type at its use
-      # sites; no struct definition exists for it in MSL.
-      result = ""
-    else:
-      let ptrNames = pp.ptrFieldNames(ast.tTyp)
-      var tuples = ctx.ptrFieldVariants.getOrDefault(ast.tTyp, @[])
-      if tuples.len == 0:
-        # Never constructed: one struct with per-thread pointer fields.
-        tuples = @[newSeqWith(ptrNames.len, asRMEM)]
-      for i, spaces in tuples:
-        let suffix = if i == 0: "" else: pp.variantSuffix(spaces)
-        result.add "struct " & gpuTypeToString(ast.tTyp) & suffix & "{\n"
-        if ast.tFields.len == 0:
-          # MSL requires at least one field in a struct.
-          result.add "  char _;\n"
-        else:
-          for el in ast.tFields:
-            checkReservedIdent(el.name, "field")
-            # MSL has no string type: every gtString field of every struct
-            # is dropped here, not just the tile layer's atom descriptors.
-            # The invariant is that a struct reaching MSL emission carries
-            # no runtime string data, because the drop shifts every later
-            # field's offset and a consumer would silently read the next
-            # field. The MmaAtom name/instr strings are compile-time-only:
-            # the atom travels as a static generic param and its struct is
-            # emitted for type-name completeness but never instantiated,
-            # so the dropped fields carry no runtime data.
-            if el.typ.kind == gtString:
-              continue
-            # MSL requires an explicit address-space qualifier on pointer-typed
-            # fields.
-            if el.typ.kind == gtPtr:
-              let fi = ptrNames.find(el.name)
-              let space = if fi >= 0 and fi < spaces.len: spaces[fi] else: asRMEM
-              result.add "  " & addrSpaceToMsl(space) & ' ' &
-                         gpuTypeToString(el.typ, el.name) & ";\n"
-            else:
-              result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
-        result.add '}'
-        if i < tuples.high:
-          # MSL requires `;` after every struct declaration, not just the last
-          # variant of the type.
-          result.add ";\n"
+    let ptrNames = pp.ptrFieldNames(ast.tTyp)
+    var tuples = ctx.ptrFieldVariants.getOrDefault(ast.tTyp, @[])
+    if tuples.len == 0:
+      # Never constructed: one struct with per-thread pointer fields.
+      tuples = @[newSeqWith(ptrNames.len, asRMEM)]
+    for i, spaces in tuples:
+      let suffix = if i == 0: "" else: pp.variantSuffix(spaces)
+      result.add "struct " & gpuTypeToString(ast.tTyp) & suffix & "{\n"
+      if ast.tFields.len == 0:
+        # MSL requires at least one field in a struct.
+        result.add "  char _;\n"
+      else:
+        for el in ast.tFields:
+          checkReservedIdent(el.name, "field")
+          # MSL has no string type: every gtString field of every struct
+          # is dropped here, not just the tile layer's atom descriptors.
+          # The invariant is that a struct reaching MSL emission carries
+          # no runtime string data, because the drop shifts every later
+          # field's offset and a consumer would silently read the next
+          # field. The MmaAtom name/instr strings are compile-time-only:
+          # the atom travels as a static generic param and its struct is
+          # emitted for type-name completeness but never instantiated,
+          # so the dropped fields carry no runtime data.
+          if el.typ.kind == gtString:
+            continue
+          # MSL requires an explicit address-space qualifier on pointer-typed
+          # fields.
+          if el.typ.kind == gtPtr:
+            let fi = ptrNames.find(el.name)
+            let space = if fi >= 0 and fi < spaces.len: spaces[fi] else: asRMEM
+            result.add "  " & addrSpaceToMsl(space) & ' ' &
+                       gpuTypeToString(el.typ, el.name) & ";\n"
+          else:
+            result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+      result.add '}'
+      if i < tuples.high:
+        # MSL requires `;` after every struct declaration, not just the last
+        # variant of the type.
+        result.add ";\n"
 
   of gpuAlias:
     # Aliases come from `ctx.types`. MSL spells them as C++11 `using`
@@ -736,15 +592,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result = "(&" & ctx.genMetalImpl(ast.aOf, 0) & ')'
 
   of gpuDeref:
-    if ast.dOf.kind == gpuCall and
-       ast.dOf.cName.symbol.simdgroupBuiltin == sgbkThreadElements:
-      # The accessor's emit is already the deref'd element: the frontend
-      # wraps the var-returning call in a hidden deref. The element-access
-      # spelling absorbs that deref, like the address-of of var matrix args
-      # dropped in genMatrixRef.
-      result = ctx.genMetalImpl(ast.dOf, 0)
-    else:
-      result = "(*" & ctx.genMetalImpl(ast.dOf, 0) & ')'
+    result = "(*" & ctx.genMetalImpl(ast.dOf, 0) & ')'
 
   of gpuConstexpr:
     ## MSL supports C++14 `constexpr` variables. Arrays need the length in the type.

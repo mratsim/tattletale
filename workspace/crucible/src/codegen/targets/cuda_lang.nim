@@ -211,8 +211,6 @@ proc cudaCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
     # whole-value use: no CUDA spelling, emit the canonical name verbatim
     # (zero in-tree uses, non-goal)
     name
-  of gbkThreadIndexInSimdgroup:
-    raiseAssert "`thread_index_in_simdgroup` is Metal-only: CUDA has no SIMD lane index builtin"
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
     raiseAssert "coordinate site with no coordinate builtin kind: " & name

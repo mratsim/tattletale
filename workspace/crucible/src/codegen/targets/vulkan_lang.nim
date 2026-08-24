@@ -274,8 +274,6 @@ proc glslCoordIdent(kind: GpuCoordBuiltinKind): string =
   of gbkThreadsPerThreadgroup: "gl_WorkGroupSize"
   of gbkThreadgroupsPerGrid: "gl_NumWorkGroups"
   of gbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
-  of gbkThreadIndexInSimdgroup:
-    raiseAssert "`thread_index_in_simdgroup` is Metal-only: GLSL has no SIMD lane index builtin"
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
     raiseAssert "coordinate site with no coordinate builtin kind"
@@ -397,8 +395,8 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       case ast.cName.symbol.reductionBuiltin
       of gbkSimdShuffleDown:
         # SIMD-group gather from lane + delta: `subgroupShuffleDown(v, delta)`,
-        # gated by GL_KHR_shader_subgroup_shuffle_relative (POC-settled, the
-        # umbrella GL_KHR_shader_subgroup is not a GLSL extension name).
+        # gated by GL_KHR_shader_subgroup_shuffle_relative (the umbrella
+        # GL_KHR_shader_subgroup is not a GLSL extension name).
         result = indentStr & "subgroupShuffleDown(" &
                  ctx.genVulkan(ast.cArgs[0]) & ", " &
                  ctx.genVulkan(ast.cArgs[1]) & ')'
@@ -581,11 +579,11 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
   if needsSubgroup:
     # subgroupShuffleDown is gated by GL_KHR_shader_subgroup_shuffle_relative,
-    # subgroupShuffle by GL_KHR_shader_subgroup_shuffle. POC-settled (mission
-    # 13-01): the umbrella GL_KHR_shader_subgroup is not a GLSL extension name
-    # and glslang rejects it. Both are emitted when either kind is used: the
-    # tile reduction trees use the two together (the down tree then the leader
-    # broadcast).
+    # subgroupShuffle by GL_KHR_shader_subgroup_shuffle. The umbrella
+    # GL_KHR_shader_subgroup is not a GLSL extension name and glslang
+    # rejects it. Both are emitted when either kind is used: the
+    # tile reduction trees use the two together (the down tree then the
+    # leader broadcast).
     result.add "#extension GL_KHR_shader_subgroup_shuffle_relative : enable\n"
     result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
   result.add "\n"

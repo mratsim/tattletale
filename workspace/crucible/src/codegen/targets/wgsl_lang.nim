@@ -493,8 +493,6 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         raiseAssert "`threads_per_threadgroup` has no WGSL builtin: WGSL has " &
           "only the `@workgroup_size` attribute, never a `workgroup_size` " &
           "builtin, so the threadgroup size is not addressable from WGSL."
-      of gbkThreadIndexInSimdgroup:
-        raiseAssert "`thread_index_in_simdgroup` is Metal-only: WGSL has no SIMD lane index builtin"
       of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
          gbkThreadPositionInThreadgroup, gbkThreadgroupsPerGrid,
          gbkThreadIndexInThreadgroup:

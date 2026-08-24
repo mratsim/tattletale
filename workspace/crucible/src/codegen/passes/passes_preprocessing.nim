@@ -1447,7 +1447,7 @@ proc builtinParamType(kind: GpuCoordBuiltinKind): GpuType =
   ## flat thread index, the MSL `uint3` vector spelling otherwise. `uint3` is a
   ## synthetic generic name carrying the printer's native spelling; no struct
   ## is ever registered for it.
-  if kind in {gbkThreadIndexInThreadgroup, gbkThreadIndexInSimdgroup}:
+  if kind == gbkThreadIndexInThreadgroup:
     GpuType(kind: gtUint32)
   else:
     GpuType(kind: gtGenericInst, gName: "uint3")
