@@ -322,22 +322,24 @@ proc smePackBCopy32f32x4*(
   ## Streaming SME2 B-pack for four consecutive full `jr` panels.
   ##
   ## Expected input:
-  ##   - src: first row of panel `jr0` (row-major f32, rows
-  ##     `srcRowStride` elements apart, 32 contiguous f32 per row)
+  ##   - src: first row of the four-panel group (row-major f32, rows
+  ##     `srcRowStride` elements apart, 128 contiguous f32 per row:
+  ##     four consecutive 32-f32 panels)
   ##   - srcRowStride: elements between consecutive source rows
   ##   - nRows: source rows per panel (k)
   ##   - dst0..dst3: panel bases (packB + (jr0+i)*kc*nr for i in 0..3)
   ##
   ## Output: row `k` of each panel copied into its packed slot:
-  ##   rows 32 f32 apart: `dst_i[k*32 ..< k*32+32] = src[k*rs ..< k*rs+32]`
+  ##   `dst_i[k*32 ..< k*32+32] =
+  ##     src[k*rs + i*32 ..< k*rs + (i+1)*32]`
   ##   for each panel `i` in `0 .. 3`, `k in 0 ..< nRows` (bases dst0..dst3).
   ##   No zero-fill: every lane is copied.
   ##
-  ## before (src, one panel):              after (dst_i, packed):
-  ##   k0: [32 f32] at src + 0*rs           k0: [32 f32] at dst_i + 0*32
-  ##   k1: [32 f32] at src + 1*rs           k1: [32 f32] at dst_i + 1*32
-  ##   k2: [32 f32] at src + 2*rs           k2: [32 f32] at dst_i + 2*32
-  ##   rows `rs` f32 apart                  rows 32 f32 apart
+  ## before (src, four panels):            after (dst_i, packed):
+  ##   k0: [32][32][32][32] at src         k0: [32 f32] at dst_i + 0*32
+  ##   k1: [32][32][32][32] at src+rs      k1: [32 f32] at dst_i + 1*32
+  ##   k2: [32][32][32][32] at src+2*rs    k2: [32 f32] at dst_i + 2*32
+  ##   rows `rs` f32 apart                 rows 32 f32 apart
   ##
   ## Contract: all four panels have 32 valid lanes per row and the panel
   ## count is a multiple of 4.

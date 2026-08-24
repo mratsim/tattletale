@@ -158,6 +158,9 @@ func `$`*(m: MemAddr): string =
 proc addOperand(a: var AssemblerSME, op: AsmOperand) =
   for existing in a.inputs:
     if existing.asmId == op.asmId:
+      if existing.nimSymbol.repr != op.nimSymbol.repr:
+        raise newException(ValueError,
+          "conflicting binding for asm operand " & op.asmId)
       return
   a.inputs.add op
 

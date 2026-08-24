@@ -16,9 +16,9 @@ import std/[random, strformat]
 import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_arm64_sme2
 
 proc gemmReference(
+    C: var openArray[float32],
     M, N, K: int, A, B: ptr UncheckedArray[float32],
-    alpha, beta: float32, relu: bool,
-    C: var openArray[float32]) =
+    alpha, beta: float32, relu: bool) =
   ## Scalar reference: `C[i*N+j] = beta*C[i*N+j] + alpha*f(acc)` with
   ## `f` = identity or ReLU and `acc = Σ_k A[i*K+k] * B[k*N+j]`.
   ## A `beta == 0` call writes `alpha*f(acc)` without reading C, matching
@@ -40,8 +40,8 @@ proc gemmReference(
               else: beta * C[ci] + alpha * f
 
 proc packTiles(
-    MR, NR, K: int, A, B: ptr UncheckedArray[float32],
-    packA, packB: ptr UncheckedArray[float32]) =
+    packA, packB: ptr UncheckedArray[float32],
+    MR, NR, K: int, A, B: ptr UncheckedArray[float32]) =
   ## Packs A/B into the kernels' `(ir, kc, MR/NR)` layout, the
   ## `gemmUkernelSme` documented contract: `packA[k*MR + r] = A[r*K + k]`,
   ## `packB[k*NR + j] = B[k*NR + j]`.
@@ -102,21 +102,22 @@ proc main() =
         for i in 0 ..< B.len: B[i] = rng.rand(2.0'f32) - 1.0'f32
         var packA = newSeq[float32](K * MR)
         var packB = newSeq[float32](K * NR)
-        packTiles(MR, NR, K,
-                  cast[ptr UncheckedArray[float32]](addr A[0]),
-                  cast[ptr UncheckedArray[float32]](addr B[0]),
-                  cast[ptr UncheckedArray[float32]](addr packA[0]),
-                  cast[ptr UncheckedArray[float32]](addr packB[0]))
+        packTiles(
+          cast[ptr UncheckedArray[float32]](addr packA[0]),
+          cast[ptr UncheckedArray[float32]](addr packB[0]),
+          MR, NR, K,
+          cast[ptr UncheckedArray[float32]](addr A[0]),
+          cast[ptr UncheckedArray[float32]](addr B[0]))
         var AB: array[MR, array[NR, float32]]
         gemmUkernelSme[MR, NR](
           cast[ptr UncheckedArray[float32]](addr packA[0]),
           cast[ptr UncheckedArray[float32]](addr packB[0]),
           AB, K)
         var refC = newSeq[float32](MR * NR)
-        gemmReference(MR, NR, K,
+        gemmReference(refC, MR, NR, K,
                       cast[ptr UncheckedArray[float32]](addr A[0]),
                       cast[ptr UncheckedArray[float32]](addr B[0]),
-                      1.0'f32, 0.0'f32, false, refC)
+                      1.0'f32, 0.0'f32, false)
         var flat: array[MR * NR, float32]
         for i in 0 ..< MR:
           for j in 0 ..< NR:
@@ -141,21 +142,22 @@ proc main() =
         for i in 0 ..< B.len: B[i] = rng.rand(2.0'f32) - 1.0'f32
         var packA = newSeq[float32](K * MR)
         var packB = newSeq[float32](K * NR)
-        packTiles(MR, NR, K,
-                  cast[ptr UncheckedArray[float32]](addr A[0]),
-                  cast[ptr UncheckedArray[float32]](addr B[0]),
-                  cast[ptr UncheckedArray[float32]](addr packA[0]),
-                  cast[ptr UncheckedArray[float32]](addr packB[0]))
+        packTiles(
+          cast[ptr UncheckedArray[float32]](addr packA[0]),
+          cast[ptr UncheckedArray[float32]](addr packB[0]),
+          MR, NR, K,
+          cast[ptr UncheckedArray[float32]](addr A[0]),
+          cast[ptr UncheckedArray[float32]](addr B[0]))
         var AB: array[MR, array[NR, float32]]
         gemmUkernelSme[MR, NR](
           cast[ptr UncheckedArray[float32]](addr packA[0]),
           cast[ptr UncheckedArray[float32]](addr packB[0]),
           AB, K)
         var refC = newSeq[float32](MR * NR)
-        gemmReference(MR, NR, K,
+        gemmReference(refC, MR, NR, K,
                       cast[ptr UncheckedArray[float32]](addr A[0]),
                       cast[ptr UncheckedArray[float32]](addr B[0]),
-                      1.0'f32, 0.0'f32, false, refC)
+                      1.0'f32, 0.0'f32, false)
         var flat: array[MR * NR, float32]
         for i in 0 ..< MR:
           for j in 0 ..< NR:
@@ -182,11 +184,12 @@ proc main() =
             for i in 0 ..< B.len: B[i] = rng.rand(2.0'f32) - 1.0'f32
             var packA = newSeq[float32](K * MR)
             var packB = newSeq[float32](K * NR)
-            packTiles(MR, NR, K,
-                      cast[ptr UncheckedArray[float32]](addr A[0]),
-                      cast[ptr UncheckedArray[float32]](addr B[0]),
-                      cast[ptr UncheckedArray[float32]](addr packA[0]),
-                      cast[ptr UncheckedArray[float32]](addr packB[0]))
+            packTiles(
+              cast[ptr UncheckedArray[float32]](addr packA[0]),
+              cast[ptr UncheckedArray[float32]](addr packB[0]),
+              MR, NR, K,
+              cast[ptr UncheckedArray[float32]](addr A[0]),
+              cast[ptr UncheckedArray[float32]](addr B[0]))
             var C = newSeq[float32](MR * NR)
             for i in 0 ..< C.len: C[i] = rng.rand(2.0'f32) - 1.0'f32
             var refC = C
@@ -197,10 +200,10 @@ proc main() =
               alpha, beta, cint(relu),
               cint(alpha == 1.0'f32), cint(beta == 0.0'f32),
               cint(beta == 1.0'f32))
-            gemmReference(MR, NR, K,
+            gemmReference(refC, MR, NR, K,
                           cast[ptr UncheckedArray[float32]](addr A[0]),
                           cast[ptr UncheckedArray[float32]](addr B[0]),
-                          alpha, beta, relu == 1, refC)
+                          alpha, beta, relu == 1)
             let (ok, maxAbs, maxRel) = closeEnough(C, refC)
             totalCases.inc
             seedCases.inc
@@ -222,11 +225,12 @@ proc main() =
             for i in 0 ..< B.len: B[i] = rng.rand(2.0'f32) - 1.0'f32
             var packA = newSeq[float32](K * MR)
             var packB = newSeq[float32](K * NR)
-            packTiles(MR, NR, K,
-                      cast[ptr UncheckedArray[float32]](addr A[0]),
-                      cast[ptr UncheckedArray[float32]](addr B[0]),
-                      cast[ptr UncheckedArray[float32]](addr packA[0]),
-                      cast[ptr UncheckedArray[float32]](addr packB[0]))
+            packTiles(
+              cast[ptr UncheckedArray[float32]](addr packA[0]),
+              cast[ptr UncheckedArray[float32]](addr packB[0]),
+              MR, NR, K,
+              cast[ptr UncheckedArray[float32]](addr A[0]),
+              cast[ptr UncheckedArray[float32]](addr B[0]))
             var C = newSeq[float32](MR * NR)
             for i in 0 ..< C.len: C[i] = rng.rand(2.0'f32) - 1.0'f32
             var refC = C
@@ -237,10 +241,10 @@ proc main() =
               alpha, beta, cint(relu),
               cint(alpha == 1.0'f32), cint(beta == 0.0'f32),
               cint(beta == 1.0'f32))
-            gemmReference(MR, NR, K,
+            gemmReference(refC, MR, NR, K,
                           cast[ptr UncheckedArray[float32]](addr A[0]),
                           cast[ptr UncheckedArray[float32]](addr B[0]),
-                          alpha, beta, relu == 1, refC)
+                          alpha, beta, relu == 1)
             let (ok, maxAbs, maxRel) = closeEnough(C, refC)
             totalCases.inc
             seedCases.inc

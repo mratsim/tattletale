@@ -213,6 +213,8 @@ proc gemm_strided*[T: SomeNumber](
         for k in 0 ..< K:
           acc += A[i * rowStrideA + k * colStrideA] * B[k * rowStrideB + j * colStrideB]
         let ci = i * rowStrideC + j * colStrideC
+        if activation == akReLU:
+          acc = max(acc, T(0))
         C[ci] = if beta == T(0): alpha * acc
                 else: beta * C[ci] + alpha * acc
     return
@@ -223,6 +225,9 @@ proc gemm_strided*[T: SomeNumber](
   let num_ir = mc div mr
   let num_ic = ceil_div(M, mc)
   let num_pc = ceil_div(K, kc)
+  doAssert activation == akIdentity or num_pc == 1,
+    "gemm_strided: activation is applied per k-block; K must fit one kc block (K=" &
+    $K & ", kc=" & $kc & ")"
 
   # ── Matrix views ──
   let vA = make_view(A, (M, K), (rowStrideA, colStrideA))
