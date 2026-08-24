@@ -391,10 +391,24 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # OpenCL spells it `barrier(CLK_LOCAL_MEM_FENCE)`.
       result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE)"
     of gbkNone:
-      var clArgs: seq[string]
-      for arg in ast.cArgs:
-        clArgs.add ctx.genOpenCL(arg)
-      result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
+      case ast.cName.symbol.reductionBuiltin
+      of gbkSimdShuffleDown:
+        # SIMD-group gather from lane + delta: the OpenCL 2.0 core sub-group
+        # function. Apple's 1.2 runtime rejects it (POC, mission 13-01), so
+        # this spelling is pinned as emitted text only.
+        result = indentStr & "sub_group_shuffle_down(" &
+                 ctx.genOpenCL(ast.cArgs[0]) & ", " &
+                 ctx.genOpenCL(ast.cArgs[1]) & ')'
+      of gbkSimdShuffle:
+        # SIMD-group gather from an absolute lane index.
+        result = indentStr & "sub_group_shuffle(" &
+                 ctx.genOpenCL(ast.cArgs[0]) & ", " &
+                 ctx.genOpenCL(ast.cArgs[1]) & ')'
+      of gbkNone:
+        var clArgs: seq[string]
+        for arg in ast.cArgs:
+          clArgs.add ctx.genOpenCL(arg)
+        result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:

@@ -446,9 +446,23 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # WGSL spells it `workgroupBarrier()`.
       result = indentStr & "workgroupBarrier()"
     of gbkNone:
-      ctx.withoutSemicolon:
-        result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
-                 ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
+      case ast.cName.symbol.reductionBuiltin
+      of gbkSimdShuffleDown:
+        # SIMD-group gather from lane + delta: `subgroupShuffleDown(v, delta)`,
+        # gated by the `subgroups` feature (`enable subgroups;`, injected by
+        # the wgsl codegen header scan).
+        ctx.withoutSemicolon:
+          result = indentStr & "subgroupShuffleDown(" &
+                   ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
+      of gbkSimdShuffle:
+        # SIMD-group gather from an absolute lane index.
+        ctx.withoutSemicolon:
+          result = indentStr & "subgroupShuffle(" &
+                   ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
+      of gbkNone:
+        ctx.withoutSemicolon:
+          result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
+                   ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:
@@ -577,6 +591,16 @@ proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
   else:
     result = t.kind == kind
 
+proc usesReductionBuiltin(n: GpuAst): bool =
+  ## True when the AST contains a reduction builtin call (the subgroup
+  ## shuffles), which needs the `subgroups` feature enabled at module scope.
+  if n.kind == gpuCall and n.cName.symbol != nil and
+     n.cName.symbol.reductionBuiltin != gbkNone:
+    return true
+  for ch in n:
+    if usesReductionBuiltin(ch):
+      return true
+
 
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle
@@ -585,14 +609,21 @@ proc codegen*(ctx: var GpuContext): string =
   ## the order in which functions are defined
 
   var needsF16 = false
+  var needsSubgroups = false
   for fnIdent, fn in ctx.fnTab:
     if fn.pRetType.containsKind(gtFloat16):
       needsF16 = true
     for p in fn.pParams:
       if p.typ.containsKind(gtFloat16):
         needsF16 = true
+    if usesReductionBuiltin(fn.pBody):
+      needsSubgroups = true
   if needsF16:
-    result = "enable f16;\n\n"
+    result.add "enable f16;\n\n"
+  if needsSubgroups:
+    # The subgroup shuffles are gated by the `subgroups` feature, declared
+    # module-wide like `enable f16;` above (the same injection mechanism).
+    result.add "enable subgroups;\n\n"
 
   var bindingCounter = 0
   proc mutateToAllowedTypes(p: GpuType): GpuType =

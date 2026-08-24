@@ -283,12 +283,15 @@ type
     sgbkSimdgroupStore,                ## Canonical `simdgroup_store`
     sgbkSimdgroupMultiplyAccumulate,   ## Canonical `simdgroup_multiply_accumulate`
     sgbkMakeFilledSimdgroupMatrix,     ## Canonical `make_filled_simdgroup_matrix`
-    sgbkSimdShuffleDown,               ## Canonical `simd_shuffle_down`
-    sgbkSimdShuffle,                   ## Canonical `simd_shuffle`
     sgbkThreadElements                 ## Canonical `threadElements`: the per-lane fragment element access
                                        ## (simdgroup matrices and the FMA per-lane value arrays)
     ## TODO: unify with Vulkan KHR cooperative matrices when that
     ## backend lands (the gather/multiply-accumulate surface matches).
+
+  GpuReductionBuiltinKind* = enum
+    gbkNone,              ## Not a reduction builtin
+    gbkSimdShuffleDown,   ## Canonical `simd_shuffle_down`: gather from lane + delta
+    gbkSimdShuffle        ## Canonical `simd_shuffle`: gather from an absolute lane
 
   Symbol* = ref object
     name*: string       ## Display name -- may be mangled for collision safety
@@ -298,6 +301,7 @@ type
     coordBuiltin*: GpuCoordBuiltinKind ## Coordinate builtin kind -> gbkNone when not a coordinate
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     simdgroupBuiltin*: GpuSimdgroupBuiltinKind ## Simdgroup fragment builtin kind -> sgbkNone when not a simdgroup intrinsic
+    reductionBuiltin*: GpuReductionBuiltinKind ## Reduction builtin kind -> gbkNone when not a reduction intrinsic
     module*: string     ## Module provenance (optional)
 
   AddressSpace* = enum
@@ -451,9 +455,16 @@ let GpuSimdgroupBuiltinKindByName* {.compileTime.}: Table[string, GpuSimdgroupBu
   "simdgroupStore": sgbkSimdgroupStore,
   "simdgroupMultiplyAccumulate": sgbkSimdgroupMultiplyAccumulate,
   "makeFilledSimdgroupMatrix": sgbkMakeFilledSimdgroupMatrix,
-  "simdShuffleDown": sgbkSimdShuffleDown,
-  "simdShuffle": sgbkSimdShuffle,
   "threadElements": sgbkThreadElements,
+}.toTable()
+
+## Canonical reduction intrinsic name -> IR kind, resolved once at the
+## builtin marking like the other canonical name tables. The Nim proc
+## names (`simdShuffleDown`/`simdShuffle`) are canonical: consumers call
+## by name, the IR kind is the only thing that changed.
+let GpuReductionBuiltinKindByName* {.compileTime.}: Table[string, GpuReductionBuiltinKind] = {
+  "simdShuffleDown": gbkSimdShuffleDown,
+  "simdShuffle": gbkSimdShuffle,
 }.toTable()
 
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =
@@ -470,6 +481,11 @@ proc simdgroupBuiltinKind*(name: string): GpuSimdgroupBuiltinKind =
   ## Returns the IR kind of a canonical simdgroup fragment intrinsic name.
   ## Unmapped names resolve to `sgbkNone`.
   GpuSimdgroupBuiltinKindByName.getOrDefault(name, sgbkNone)
+
+proc reductionBuiltinKind*(name: string): GpuReductionBuiltinKind =
+  ## Returns the IR kind of a canonical reduction intrinsic name.
+  ## Unmapped names resolve to `gbkNone`.
+  GpuReductionBuiltinKindByName.getOrDefault(name, gbkNone)
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,

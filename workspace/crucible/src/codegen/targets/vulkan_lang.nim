@@ -136,6 +136,16 @@ proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
   else:
     result = t.kind == kind
 
+proc usesReductionBuiltin(n: GpuAst): bool =
+  ## True when the AST contains a reduction builtin call (the subgroup
+  ## shuffles), which needs the GLSL subgroup extensions at module scope.
+  if n.kind == gpuCall and n.cName.symbol != nil and
+     n.cName.symbol.reductionBuiltin != gbkNone:
+    return true
+  for ch in n:
+    if usesReductionBuiltin(ch):
+      return true
+
 
 const glslReserved*: array[40, string] = [
   "output", "input", "in", "out", "attribute", "uniform", "varying",
@@ -384,10 +394,25 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # Vulkan spells it `barrier()`.
       result = indentStr & "barrier()"
     of gbkNone:
-      var vkArgs: seq[string]
-      for arg in ast.cArgs:
-        vkArgs.add ctx.genVulkan(arg)
-      result = indentStr & ctx.getFnName(bkVulkan, ast) & '(' & vkArgs.join(", ") & ')'
+      case ast.cName.symbol.reductionBuiltin
+      of gbkSimdShuffleDown:
+        # SIMD-group gather from lane + delta: `subgroupShuffleDown(v, delta)`,
+        # gated by GL_KHR_shader_subgroup_shuffle_relative (POC-settled, the
+        # umbrella GL_KHR_shader_subgroup is not a GLSL extension name).
+        result = indentStr & "subgroupShuffleDown(" &
+                 ctx.genVulkan(ast.cArgs[0]) & ", " &
+                 ctx.genVulkan(ast.cArgs[1]) & ')'
+      of gbkSimdShuffle:
+        # SIMD-group gather from an absolute lane index, gated by
+        # GL_KHR_shader_subgroup_shuffle.
+        result = indentStr & "subgroupShuffle(" &
+                 ctx.genVulkan(ast.cArgs[0]) & ", " &
+                 ctx.genVulkan(ast.cArgs[1]) & ')'
+      of gbkNone:
+        var vkArgs: seq[string]
+        for arg in ast.cArgs:
+          vkArgs.add ctx.genVulkan(arg)
+        result = indentStr & ctx.getFnName(bkVulkan, ast) & '(' & vkArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:
@@ -521,10 +546,12 @@ proc renameIdentRefs(n: var GpuAst, symToRename: Table[string, string]) =
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle.
 
-  # Check if we need fp64 / fp16 / bf16 extensions
+  # Check if we need fp64 / fp16 / bf16 extensions or the subgroup
+  # shuffles (which need the KHR subgroup shuffle extensions)
   var needsFp64 = false
   var needsFp16 = false
   var needsBf16 = false
+  var needsSubgroup = false
   for fnIdent, fn in ctx.fnTab:
     if fn.pRetType.containsKind(gtFloat64):
       needsFp64 = true
@@ -539,6 +566,8 @@ proc codegen*(ctx: var GpuContext): string =
         needsFp16 = true
       if p.typ.containsKind(gtBf16):
         needsBf16 = true
+    if usesReductionBuiltin(fn.pBody):
+      needsSubgroup = true
 
   # Emit GLSL header
   result = "#version 450\n"
@@ -550,6 +579,15 @@ proc codegen*(ctx: var GpuContext): string =
   if needsBf16:
     result.add "#extension GL_EXT_bfloat16 : enable\n"
     result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
+  if needsSubgroup:
+    # subgroupShuffleDown is gated by GL_KHR_shader_subgroup_shuffle_relative,
+    # subgroupShuffle by GL_KHR_shader_subgroup_shuffle. POC-settled (mission
+    # 13-01): the umbrella GL_KHR_shader_subgroup is not a GLSL extension name
+    # and glslang rejects it. Both are emitted when either kind is used: the
+    # tile reduction trees use the two together (the down tree then the leader
+    # broadcast).
+    result.add "#extension GL_KHR_shader_subgroup_shuffle_relative : enable\n"
+    result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
   result.add "\n"
 
   # Note: SSBO name normalization and type validation is done by lowerSsboParams pass.

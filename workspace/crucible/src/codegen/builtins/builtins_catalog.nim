@@ -185,6 +185,17 @@ proc makeFilledSimdgroupMatrix*[T; isLayoutLeft: static bool](val: T): Simdgroup
   ## `make_filled_simdgroup_matrix<T, 8>(val)`. The isLayoutLeft param is
   ## carried through for type uniformity; it is not a gather.
 
+# ═══════════════════════════════════════════════════════════
+# 1c. Reduction builtins (cross-backend subgroup shuffles)
+# ═══════════════════════════════════════════════════════════
+# Per-lane gathers every SIMD backend spells natively: MSL
+# simd_shuffle_down/simd_shuffle, CUDA __shfl_down_sync/__shfl_sync,
+# OpenCL sub_group_shuffle_down/sub_group_shuffle, GLSL and WGSL
+# subgroupShuffleDown/subgroupShuffle. The IR kinds live in
+# GpuReductionBuiltinKind and the printers case on the kind alone.
+# The Nim proc names are the canonical names (mission 13-01): only the
+# IR kinds were re-homed, the consumers call by name, unchanged.
+
 proc simdShuffleDown*[T](v: T; delta: uint32): T {.builtin.} = discard
   ## Returns, on each lane, the value of `v` held by the lane at
   ## `lane + delta` (`simd_shuffle_down`). Out-of-range sources

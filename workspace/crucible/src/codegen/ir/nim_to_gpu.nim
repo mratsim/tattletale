@@ -792,6 +792,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       result.symbol.coordBuiltin = coordBuiltinKind(result.symbol.name)
       result.symbol.synchroBuiltin = synchroBuiltinKind(result.symbol.name)
       result.symbol.simdgroupBuiltin = simdgroupBuiltinKind(result.symbol.name)
+      result.symbol.reductionBuiltin = reductionBuiltinKind(result.symbol.name)
 
   # literal types
   of nnkIntLit, nnkInt32Lit:

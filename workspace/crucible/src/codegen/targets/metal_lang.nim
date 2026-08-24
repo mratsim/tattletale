@@ -560,16 +560,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
         let elemVal = ctx.genMetalImpl(ast.cArgs[0], 0)
         result = indentStr & "make_filled_simdgroup_matrix<" & elemSpelling &
                  ", 8>(" & elemVal & ')'
-      of sgbkSimdShuffleDown:
-        # SIMD-group gather from lane + delta: `simd_shuffle_down(v, delta)`.
-        result = indentStr & "simd_shuffle_down(" &
-                 ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
-                 ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
-      of sgbkSimdShuffle:
-        # SIMD-group gather from an absolute lane: `simd_shuffle(v, lane)`.
-        result = indentStr & "simd_shuffle(" &
-                 ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
-                 ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
       of sgbkThreadElements:
         # Per-lane fragment element accessor. A simdgroup matrix exposes its
         # per-lane elements through `thread_elements()`, while the FMA
@@ -593,10 +583,22 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
         else:
           result = indentStr & frag & '[' & vpt & ']'
       of sgbkNone:
-        var args: seq[string]
-        for a in ast.cArgs:
-          args.add ctx.genMetalImpl(a, 0)
-        result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
+        case ast.cName.symbol.reductionBuiltin
+        of gbkSimdShuffleDown:
+          # SIMD-group gather from lane + delta: `simd_shuffle_down(v, delta)`.
+          result = indentStr & "simd_shuffle_down(" &
+                   ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
+                   ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
+        of gbkSimdShuffle:
+          # SIMD-group gather from an absolute lane: `simd_shuffle(v, lane)`.
+          result = indentStr & "simd_shuffle(" &
+                   ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
+                   ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
+        of gbkNone:
+          var args: seq[string]
+          for a in ast.cArgs:
+            args.add ctx.genMetalImpl(a, 0)
+          result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
   of gpuTemplateCall:
     when nimvm:
       error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
