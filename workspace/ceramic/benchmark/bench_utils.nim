@@ -38,6 +38,38 @@ proc allClose*(
   result.ok = result.maxAbsErr <= atol and result.maxRelErr <= rtol
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Scalar GEMM reference
+# ═══════════════════════════════════════════════════════════════════════════
+
+proc gemm_reference*(
+    M, N, K: int, alpha: float32,
+    A: openArray[float32], rsA, csA: int,
+    B: openArray[float32], rsB, csB: int,
+    beta: float32, C: var openArray[float32], rsC, csC: int) =
+  ## Scalar triple-loop GEMM: `C = beta*C + alpha*A·B` for strided f32
+  ## views, the correctness reference for the tuned kernels.
+  ##
+  ## Expected input:
+  ##   - A: M×K view, element strides (rsA, csA)
+  ##   - B: K×N view, element strides (rsB, csB)
+  ##   - C: M×N view, element strides (rsC, csC), prior values read
+  ##
+  ## Output: C updated in place to `beta*C + alpha*A·B`. B elements equal
+  ## to 0 skip their rank-1 update.
+  for j in 0 ..< N:
+    for i in 0 ..< M:
+      let ci = i * rsC + j * csC
+      C[ci] = if beta == 0.0'f32: 0.0'f32
+              elif beta != 1.0'f32: C[ci] * beta
+              else: C[ci]
+  for j in 0 ..< N:
+    for k in 0 ..< K:
+      let bv = B[k * rsB + j * csB]
+      if bv != 0.0'f32:
+        for i in 0 ..< M:
+          C[i * rsC + j * csC] += alpha * A[i * rsA + k * csA] * bv
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Median
 # ═══════════════════════════════════════════════════════════════════════════
 
