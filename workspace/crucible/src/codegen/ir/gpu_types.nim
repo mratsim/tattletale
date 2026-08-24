@@ -174,6 +174,7 @@ type
     of gpuFor:
       fVar*: GpuAst ## Will be a `GpuIdent`
       fStart*, fEnd*: GpuAst
+      fStep*: GpuAst ## The loop increment; always set (1 for ranges, the countup step)
       fBody*: GpuAst
       fRangeKind*: GpuRangeKind
     of gpuWhile:
@@ -578,6 +579,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result.fVar = ast.fVar.clone()
     result.fStart = ast.fStart.clone()
     result.fEnd = ast.fEnd.clone()
+    result.fStep = ast.fStep.clone()
     result.fBody = ast.fBody.clone()
     result.fRangeKind = ast.fRangeKind
   of gpuWhile:
@@ -913,6 +915,8 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     result.add pretty(n.fVar, indent + 2)
     result.add pretty(n.fStart, indent + 2)
     result.add pretty(n.fEnd, indent + 2)
+    if n.fStep != nil:
+      result.add pretty(n.fStep, indent + 2)
     result.add pretty(n.fBody, indent + 2)
     result.add id("RangeKind", n.fRangeKind)
   of gpuWhile:
@@ -1027,6 +1031,7 @@ template iterImpl(ast: untyped, mutable: static bool): untyped =
   of gpuFor:
     ya(fStart)
     ya(fEnd)
+    ya(fStep)
     ya(fBody)
   of gpuWhile:
     ya(wCond)

@@ -368,7 +368,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genVulkan(ast.fStart) & "; " &
              ast.fVar.ident() & cmp & ctx.genVulkan(ast.fEnd) & "; " &
-             ast.fVar.ident() & "++) {\n"
+             ast.fVar.ident() & " += " & ctx.genVulkan(ast.fStep) & ") {\n"
     result &= ctx.genVulkan(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
 

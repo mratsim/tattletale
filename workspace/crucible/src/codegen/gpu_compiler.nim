@@ -6,7 +6,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[macros, os, sequtils, tables]
+import std/[macros, tables]
 
 import ./ir/gpu_types
 import ./targets/targets_lang
@@ -23,6 +23,8 @@ import ./passes/passes_preprocessing
 
 import ./builtins/builtins # all the builtins for the backend to make the Nim compiler happy
 export builtins
+import ./builtins/builtins_compilermagic
+export builtins_compilermagic
 
 template registerCommonPasses*(reg: var PassRegistry) =
   ## Register passes common to all backends.
@@ -44,8 +46,8 @@ macro toGpuAst*(body: typed): GpuAst =
   # Scope syms are stored on GpuContext, not gpuBlock, so no walk needed.
   newLit(gpuAst)
 
-macro cuda*(body: typed): string =
-  ## Converts the body of this macro into CUDA code.
+macro codegenCuda(body: typed): string =
+  ## Compiles a `cuda:` block body into CUDA code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
@@ -63,12 +65,18 @@ macro cuda*(body: typed): string =
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
   runPasses(ctx, reg)
-  let body = ctx.codegenCuda(gpuAst)
-  result = newLit(body)
+  result = newLit(ctx.codegenCuda(gpuAst))
 
+macro cuda*(body: untyped): string =
+  ## Converts the body of this macro into CUDA code.
+  # The untyped -> typed macro delegation dance
+  # allows delaying compileTime const resolution
+  # until after crucibleCompileTarget is updated
+  crucibleCompileTarget = ctCuda
+  result = newCall(bindSym"codegenCuda", body)
 
-macro opencl*(body: typed): string =
-  ## Converts the body of this macro into OpenCL C code.
+macro codegenOpenCL(body: typed): string =
+  ## Compiles an `opencl:` block body into OpenCL C code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
@@ -88,11 +96,18 @@ macro opencl*(body: typed): string =
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
   runPasses(ctx, reg)
-  let body = ctx.codegenOpenCL(gpuAst)
-  result = newLit(body)
+  result = newLit(ctx.codegenOpenCL(gpuAst))
 
-macro vulkan*(body: typed): string =
-  ## Converts the body of this macro into GLSL compute shader code.
+macro opencl*(body: untyped): string =
+  ## Converts the body of this macro into OpenCL C code.
+  # The untyped -> typed macro delegation dance
+  # allows delaying compileTime const resolution
+  # until after crucibleCompileTarget is updated
+  crucibleCompileTarget = ctOpenCL
+  result = newCall(bindSym"codegenOpenCL", body)
+
+macro codegenVulkan(body: typed): string =
+  ## Compiles a `vulkan:` block body into GLSL compute shader code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
@@ -105,17 +120,18 @@ macro vulkan*(body: typed): string =
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
   runPasses(ctx, reg)
-  let body = ctx.codegenVulkan(gpuAst)
-  result = newLit(body)
+  result = newLit(ctx.codegenVulkan(gpuAst))
 
-macro webgpu*(body: typed): string =
-  ## Converts the body of this macro into WebGPU WGSL code.
-  doAssert fileExists(WgpuLibPath / (
-    when defined(windows): "wgpu_native.dll"
-    elif defined(macosx):  "libwgpu_native.dylib"
-    else:                  "libwgpu_native.so"
-  )), "wgpu-native shared library not found in '" & WgpuLibPath & "'.\n" &
-    "Run: nim c -r workspace/crucible/vendor/wgpu_installer.nim"
+macro vulkan*(body: untyped): string =
+  ## Converts the body of this macro into GLSL compute shader code.
+  # The untyped -> typed macro delegation dance
+  # allows delaying compileTime const resolution
+  # until after crucibleCompileTarget is updated
+  crucibleCompileTarget = ctVulkan
+  result = newCall(bindSym"codegenVulkan", body)
+
+macro codegenWebGpu(body: typed): string =
+  ## Compiles a `webgpu:` block body into WebGPU WGSL code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
@@ -129,11 +145,18 @@ macro webgpu*(body: typed): string =
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
   runPasses(ctx, reg)
-  let body = ctx.codegenWebGpu(gpuAst)
-  result = newLit(body)
+  result = newLit(ctx.codegenWebGpu(gpuAst))
 
-macro metal*(body: typed): string =
-  ## Converts the body of this macro into Metal Shading Language (MSL) code.
+macro webgpu*(body: untyped): string =
+  ## Converts the body of this macro into WebGPU WGSL code.
+  # The untyped -> typed macro delegation dance
+  # allows delaying compileTime const resolution
+  # until after crucibleCompileTarget is updated
+  crucibleCompileTarget = ctWebGPU
+  result = newCall(bindSym"codegenWebGpu", body)
+
+macro codegenMetal(body: typed): string =
+  ## Compiles a `metal:` block body into Metal Shading Language (MSL) code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
@@ -147,8 +170,15 @@ macro metal*(body: typed): string =
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
   runPasses(ctx, reg)
-  let body = ctx.codegenMetal(gpuAst)
-  result = newLit(body)
+  result = newLit(ctx.codegenMetal(gpuAst))
+
+macro metal*(body: untyped): string =
+  ## Converts the body of this macro into Metal Shading Language (MSL) code.
+  # The untyped -> typed macro delegation dance
+  # allows delaying compileTime const resolution
+  # until after crucibleCompileTarget is updated
+  crucibleCompileTarget = ctMetal
+  result = newCall(bindSym"codegenMetal", body)
 
 proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
               backend: BackendKind = bkCuda): string =

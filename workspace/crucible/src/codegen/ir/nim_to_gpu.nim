@@ -315,7 +315,6 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
   ## XXX: things still left to do:
   ## - support `result` variable? Currently not supported. Maybe we will won't
 
-  #echo node.treerepr
   case node.kind
   of nnkEmpty: result = GpuAst(kind: gpuDiscard) # nothing to do
   of nnkStmtList:
@@ -566,6 +565,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       scopeAdd(ctx.currentScopeSyms, result.fVar.symbol.name, result.fVar.symbol)
     # Range expression — Phase 3: use fRangeKind instead of +1 patching
     result.fRangeKind = rkInclusive # default (safe for C-style < loops)
+    # fStep is always set (never nil): the AST serializers and walkers
+    # reject nil GpuAst fields. Ranges step by 1; countup carries its step.
+    result.fStep = GpuAst(kind: gpuLit, lValue: "1", lType: initGpuType(gtInt32))
     if node[1].kind == nnkInfix:
       result.fStart = ctx.toGpuAst(reg, node[1][1])
       result.fEnd = ctx.toGpuAst(reg, node[1][2])
@@ -573,6 +575,14 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       if node[1][0].repr == "..<":
         result.fRangeKind = rkExclusive
       # else `..` stays rkInclusive (default) — backends emit <= or equivalent
+    elif node[1].kind == nnkCall and node[1].len >= 4 and "countup" in node[1][0].repr:
+      # `countup(a, b, step)`: the last call arg is the step, not the end.
+      # Without this branch the generic fallback reads the step as the end
+      # and emits a step-1 loop (the tile layer strides its per-thread
+      # subtiles with countup).
+      result.fStart = ctx.toGpuAst(reg, node[1][1])
+      result.fEnd = ctx.toGpuAst(reg, node[1][2])
+      result.fStep = ctx.toGpuAst(reg, node[1][3])
     elif node[1].kind == nnkCall and node[1].len >= 2 and node[1][1].kind == nnkObjConstr:
       let objConstr = node[1][1]
       for i in 1 ..< objConstr.len:

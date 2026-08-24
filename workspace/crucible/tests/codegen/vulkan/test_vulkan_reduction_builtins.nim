@@ -1,13 +1,13 @@
-## Vulkan: reduction builtin emission pin + real glslangValidator 16.5.0 run.
+## Vulkan: reduction builtin emission check + real glslangValidator 16.5.0 run.
 ##
 ## Two parts:
 ## 1. Emission: the GLSL header carries the KHR subgroup shuffle extensions
 ##    (scan-driven) and the body spells `subgroupShuffleDown`/`subgroupShuffle`.
-## 2. Real pin: the emitted shader is compiled by glslangValidator with the
+## 2. Real check: the emitted shader is compiled by glslangValidator with the
 ##    subgroup extensions injected at harness level and `--target-env vulkan1.1`
 ##    (the shuffles need SPIR-V 1.3, while the default -V target is SPIR-V 1.0).
 ##
-## POC-settled: the umbrella `GL_KHR_shader_subgroup` is not a
+## The umbrella `GL_KHR_shader_subgroup` is not a
 ## GLSL extension name (glslang rejects it). subgroupShuffleDown needs
 ## GL_KHR_shader_subgroup_shuffle_relative, subgroupShuffle needs
 ## GL_KHR_shader_subgroup_shuffle. Both are emitted when either kind is used.
@@ -39,11 +39,11 @@ proc runTest() =
   doAssert "subgroupShuffle(v, 0U)" in kernelCode,
     "GLSL subgroupShuffle spelling missing:\n" & kernelCode
 
-  # ── real glslangValidator pin ──────────────────────────────────────────────
+  # ── real glslangValidator check ──────────────────────────────────────────────
   block:
     let exe = findExe("glslangValidator")
     doAssert exe.len > 0,
-      "glslangValidator not found on PATH (the GLSL pin needs it)"
+      "glslangValidator not found on PATH (the GLSL check needs it)"
     # Inject the subgroup extensions at harness level (belt and suspenders
     # over the scan): the shader must compile with them regardless of where
     # they come from. Dedupe when the scan already emitted them. GLSL kernel

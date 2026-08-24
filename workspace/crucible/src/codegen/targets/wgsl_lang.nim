@@ -423,7 +423,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = indentStr & "for(var " & i & ": i32 = " &
              ctx.genWebGpu(ast.fStart) & "; " &
              i & cmp & ctx.genWebGpu(ast.fEnd) & "; " &
-             i & " = " & i & " + 1) {\n"
+             i & " = " & i & " + " & (if ast.fStep == nil: "1" else: ctx.genWebGpu(ast.fStep)) & ") {\n"
     result &= ctx.genWebGpu(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
   of gpuWhile:

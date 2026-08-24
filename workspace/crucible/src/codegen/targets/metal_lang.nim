@@ -277,7 +277,13 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
     let space = if p.typ.implicit: "thread" else: "device"
     result = space & ' ' & elem & "* " & name
   else:
-    result = gpuTypeToString(p.typ, name)
+    # By-value array params decay to pointers in MSL. They are read-only
+    # (a plain `array[T]` param), so emit `const`: the call site passes
+    # const lvalue arrays, and a non-const `T*` would reject them.
+    if p.typ.kind == gtArray:
+      result = "const " & gpuTypeToString(p.typ, name)
+    else:
+      result = gpuTypeToString(p.typ, name)
 
 proc addrSpaceToMsl(space: AddressSpace): string =
   case space
@@ -419,7 +425,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genMetalImpl(ast.fStart, 0) & "; " &
              ast.fVar.ident() & cmp & ctx.genMetalImpl(ast.fEnd, 0) & "; " &
-             ast.fVar.ident() & "++) {\n"
+             ast.fVar.ident() & " += " & ctx.genMetalImpl(ast.fStep, 0) & ") {\n"
     result &= ctx.genMetalImpl(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
   of gpuWhile:

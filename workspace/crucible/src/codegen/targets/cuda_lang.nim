@@ -232,7 +232,13 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         # const Type& name — C++ reference, no body changes needed
         params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
       else:
-        params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+        # By-value array params decay to pointers. They are read-only
+        # (a plain `array[T]` param), so emit `const`: the call site
+        # passes const lvalue arrays, and a non-const `T*` rejects them.
+        if p.typ.kind == gtArray:
+          params.add "const " & gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+        else:
+          params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
@@ -301,7 +307,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genCuda(ast.fStart) & "; " &
              ast.fVar.ident() & cmp & ctx.genCuda(ast.fEnd) & "; " &
-             ast.fVar.ident() & "++) {\n"
+             ast.fVar.ident() & " += " & ctx.genCuda(ast.fStep) & ") {\n"
     result &= ctx.genCuda(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
   of gpuWhile:
