@@ -278,14 +278,17 @@ type
     gbkThreadgroupBarrier ## Canonical `threadgroup_barrier()`
 
   GpuSimdgroupBuiltinKind* = enum
-    sgbkNone,                          ## Not a simdgroup builtin
+    sgbkNone,                          ## Not a simdgroup matrix builtin
     sgbkSimdgroupLoad,                 ## Canonical `simdgroup_load`
     sgbkSimdgroupStore,                ## Canonical `simdgroup_store`
     sgbkSimdgroupMultiplyAccumulate,   ## Canonical `simdgroup_multiply_accumulate`
-    sgbkMakeFilledSimdgroupMatrix      ## Canonical `make_filled_simdgroup_matrix`
-    ## TODO: consider unification with the Vulkan KHR cooperative matrices
-    ## (see `_references_kernels/vk_cooperative_matrix_perf`) — the
-    ## fragment-gather/multiply-accumulate surface is the same shape.
+    sgbkMakeFilledSimdgroupMatrix,     ## Canonical `make_filled_simdgroup_matrix`
+    sgbkSimdShuffleDown,               ## Canonical `simd_shuffle_down`
+    sgbkSimdShuffle,                   ## Canonical `simd_shuffle`
+    sgbkThreadElements                 ## Canonical `threadElements`: the per-lane fragment element access
+                                       ## (simdgroup matrices and the FMA per-lane value arrays)
+    ## TODO: unify with Vulkan KHR cooperative matrices when that
+    ## backend lands (the gather/multiply-accumulate surface matches).
 
   Symbol* = ref object
     name*: string       ## Display name -- may be mangled for collision safety
@@ -448,6 +451,9 @@ let GpuSimdgroupBuiltinKindByName* {.compileTime.}: Table[string, GpuSimdgroupBu
   "simdgroupStore": sgbkSimdgroupStore,
   "simdgroupMultiplyAccumulate": sgbkSimdgroupMultiplyAccumulate,
   "makeFilledSimdgroupMatrix": sgbkMakeFilledSimdgroupMatrix,
+  "simdShuffleDown": sgbkSimdShuffleDown,
+  "simdShuffle": sgbkSimdShuffle,
+  "threadElements": sgbkThreadElements,
 }.toTable()
 
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =

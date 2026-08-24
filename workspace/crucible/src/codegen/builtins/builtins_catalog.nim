@@ -23,6 +23,10 @@ import ./builtins_pragmas
 ## The canonical coordinate type is the `uvec3` tuple, which supports `.x` and `[idx]` access and free destructuring.
 ## The `let {.builtin, compileTime.}` dummies exist so typed macro bodies typecheck.
 ## Their values are never evaluated or emitted.
+## `thread_index_in_threadgroup` is the one plain builtin among them,
+## not compileTime: host-side tile-op proc bodies call it at runtime
+## (the tile ops run on the host in the ceramic tests). The printers
+## forward it to the backend spelling like any other builtin.
 ## Calls to `{.builtin.}` procs are registered name-only by the compiler
 ## and forwarded to the backend spelling by each printer.
 
@@ -48,7 +52,10 @@ let threads_per_threadgroup* {.builtin, compileTime.}: uvec3 = default(uvec3)
 let threadgroups_per_grid* {.builtin, compileTime.}: uvec3 = default(uvec3)
   ## Grid size, in threadgroups, per axis.
 
-let thread_index_in_threadgroup* {.builtin, compileTime.}: uint32 = 0'u32
+# Not compileTime: host-side tile-op proc bodies call it at runtime,
+# and a compileTime dummy would fold before the host link. The
+# builtin marking and the device path are unchanged.
+let thread_index_in_threadgroup* {.builtin.}: uint32 = 0'u32
   ## Flat thread index within the threadgroup.
   ##
   ## - `thread_position_in_threadgroup` linearized in x-major order
@@ -134,19 +141,19 @@ template local_invocation_index*(): untyped = thread_index_in_threadgroup
 # ═══════════════════════════════════════════════════════════
 # 1b. Simdgroup fragments (Apple GPU simdgroup MMAs)
 # ═══════════════════════════════════════════════════════════
-# Per-lane slice of a simdgroup matrix fragment, V = 2 for the 8x8x8 atoms.
+# Per-lane slice of a simdgroup matrix, V = 2 for the 8x8x8 atoms.
 # isLayoutLeft: fragment memory in LEFT (row-major) order in fragment (row, col)
 # coordinates, false for the col-major A/C operands, true for B. MSL transpose
 # arg = not isLayoutLeft. Not a gather for make_filled / multiply_accumulate.
 # Registered name-only: the MSL printer rewrites each call to the native intrinsic.
 
-type SimdgroupFragment*[T; isLayoutLeft: static bool] = object
-  ## Per-lane register slice of a simdgroup matrix fragment: V = 2 elements
+type SimdgroupMatrix*[T; isLayoutLeft: static bool] = object
+  ## Per-lane register slice of a simdgroup matrix: V = 2 elements
   ## for the 8x8x8 atoms. Emitted as `simdgroup_float8x8` (f32) or
   ## `simdgroup_half8x8` (f16) by the MSL printer; a plain struct elsewhere.
   data*: array[2, T]
 
-proc simdgroupLoad*[T; isLayoutLeft: static bool](frag: var SimdgroupFragment[T, isLayoutLeft];
+proc simdgroupLoad*[T; isLayoutLeft: static bool](frag: var SimdgroupMatrix[T, isLayoutLeft];
     src: ptr UncheckedArray[T];
     stride, offset: uint32;
     transpose: bool) {.builtin.} = discard
@@ -155,26 +162,72 @@ proc simdgroupLoad*[T; isLayoutLeft: static bool](frag: var SimdgroupFragment[T,
   ## `src`, the transpose flag swaps the fragment's row and column axes
   ## against the source's (its value is `not isLayoutLeft`).
 
-proc simdgroupStore*[T; isLayoutLeft: static bool](frag: SimdgroupFragment[T, isLayoutLeft];
+proc simdgroupStore*[T; isLayoutLeft: static bool](frag: SimdgroupMatrix[T, isLayoutLeft];
     dst: ptr UncheckedArray[T];
     stride, offset: uint32;
     transpose: bool) {.builtin.} = discard
   ## Hardware fragment scatter: `simdgroup_store(frag, dst, stride, offset, transpose)`.
-  ## Argument semantics mirror `simdgroupLoad`.
+  ## The stride is the destination row length, the offset an element
+  ## offset from `dst`, the transpose flag swaps the fragment's row
+  ## and column axes against the destination's.
 
 proc simdgroupMultiplyAccumulate*[TD; TA; TB; isLayoutLeftD: static bool; isLayoutLeftA: static bool; isLayoutLeftB: static bool](
-    d: var SimdgroupFragment[TD, isLayoutLeftD];
-    a: SimdgroupFragment[TA, isLayoutLeftA];
-    b: SimdgroupFragment[TB, isLayoutLeftB]) {.builtin.} = discard
+    d: var SimdgroupMatrix[TD, isLayoutLeftD];
+    a: SimdgroupMatrix[TA, isLayoutLeftA];
+    b: SimdgroupMatrix[TB, isLayoutLeftB]) {.builtin.} = discard
   ## One 8x8x8 MMA, in-place accumulate:
-  ## `simdgroup_multiply_accumulate(d, a, b, d)`. The accumulator fragment
-  ## element type may differ from the operands' (f32 accumulator over f16
-  ## operands).
+  ## `simdgroup_multiply_accumulate(d, a, b, d)`. The accumulator's
+  ## element type may differ from the operands' (f32 accumulator over
+  ## f16 operands).
 
-proc makeFilledSimdgroupMatrix*[T; isLayoutLeft: static bool](val: T): SimdgroupFragment[T, isLayoutLeft] {.builtin.} = discard
-  ## Fragment filled with `val` on every lane:
+proc makeFilledSimdgroupMatrix*[T; isLayoutLeft: static bool](val: T): SimdgroupMatrix[T, isLayoutLeft] {.builtin.} = discard
+  ## Matrix filled with `val` on every lane:
   ## `make_filled_simdgroup_matrix<T, 8>(val)`. The isLayoutLeft param is
   ## carried through for type uniformity; it is not a gather.
+
+proc simdShuffleDown*[T](v: T; delta: uint32): T {.builtin.} = discard
+  ## Returns, on each lane, the value of `v` held by the lane at
+  ## `lane + delta` (`simd_shuffle_down`). Out-of-range sources
+  ## return the calling lane's own value.
+
+proc simdShuffle*[T](v: T; lane: uint32): T {.builtin.} = discard
+  ## Returns, on each lane, the value of `v` held by the lane at
+  ## absolute index `lane` (`simd_shuffle`). Only the active lanes
+  ## must read `v`.
+
+proc threadElements*[T; isLayoutLeft: static bool](
+    frag: var SimdgroupMatrix[T, isLayoutLeft]; vpt: uint32): var T {.builtin.} =
+  ## Returns the fragment's per-lane element at `vpt` as an lvalue:
+  ## `threadElements(frag, vpt) = x` writes into the fragment, and
+  ## later reads through the accessor observe that value. On the host
+  ## the matrix is a plain struct and the call indexes its storage
+  ## field. The MSL printer emits `frag.thread_elements()[vpt]`,
+  ## the simdgroup matrix's per-lane element accessor.
+  frag.data[vpt]
+
+proc threadElements*[N: static int; T](
+    frag: var array[N, T]; vpt: uint32): var T {.builtin.} =
+  ## Returns the per-lane element at `vpt` of a plain per-lane value
+  ## array (the FMA atom's fragment storage), as an lvalue. The lvalue
+  ## aliases the array's `vpt`-th element, so writes through the accessor
+  ## are visible to later reads of that element. The MSL printer emits
+  ## `frag[vpt]`.
+  frag[vpt]
+
+proc threadElements*[T; isLayoutLeft: static bool](
+    frag: SimdgroupMatrix[T, isLayoutLeft]; vpt: uint32): T {.builtin.} =
+  ## Returns the fragment's per-lane element at `vpt`
+  ## (read-only form, for non-var fragments). The MSL printer emits
+  ## the same `frag.thread_elements()[vpt]` accessor as the lvalue
+  ## form.
+  frag.data[vpt]
+
+proc threadElements*[N: static int; T](
+    frag: array[N, T]; vpt: uint32): T {.builtin.} =
+  ## Returns the per-lane element at `vpt` of a plain per-lane value
+  ## array (read-only form, for non-var fragments). The MSL printer
+  ## emits the same `frag[vpt]` accessor as the lvalue form.
+  frag[vpt]
 
 # ═══════════════════════════════════════════════════════════
 # 2. Synchronization

@@ -146,9 +146,14 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
         result.symbol.iSym = result.symbol.iSym.replace(oldName, result.symbol.name)
       # handle overloads with different signatures
       if n.strVal in ctx.symChoices:
-        # Magic builtins keep their plain name: they are forwarded to the
-        # backend's native function (e.g. CUDA's max), which knows no hash.
-        if not hasPragma(n.getImpl(), "magic"):
+        # Magic and {.builtin.} procs keep their plain name on every
+        # backend: they are forwarded to the backend's native function
+        # (e.g. CUDA's max, MSL's rsqrt), which knows no hash. The contract
+        # is that a {.builtin.} proc is declared with the backend's
+        # own function name, so the forwarded name resolves natively
+        # wherever the tile layer targets. Mangling a builtin call breaks
+        # the printer's name-only forwarding, which resolves by the plain name.
+        if not hasPragma(n.getImpl(), "magic") and not hasPragma(n.getImpl(), "builtin"):
           let id = ctx.sigTab[sig]
           id.symbol.name = id.symbol.iSym
       else:

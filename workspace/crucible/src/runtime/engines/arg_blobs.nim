@@ -83,6 +83,12 @@ func outBlob*[T](x: var seq[T]): ArgBlob {.inline.} =
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil),
           size: x.len * sizeof(T), off: 0)
 
+func outBlob*[T](x: PtrArg[T]): ArgBlob {.inline.} =
+  ## Output blob over a PtrArg buffer: the kernel writes through
+  ## `x.buf` at element offset `x.off`, the caller reads the same
+  ## memory back.
+  (data: cast[pointer](x.buf), size: x.len * sizeof(T), off: x.off * sizeof(T))
+
 func outBlob*[N, T](x: var array[N, T]): ArgBlob {.inline.} =
   (data: cast[pointer](addr x[0]), size: sizeof(x), off: 0)
 
