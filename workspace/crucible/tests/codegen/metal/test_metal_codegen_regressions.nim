@@ -5,8 +5,8 @@
 ##    The tile layer's rsqrt/exp2 scalar math builtins resolve this way from inside generic op bodies.
 ## 2. A gpuAssign whose LHS needs a blit keeps the LHS preamble: the RHS
 ##    blit appends to it, so the assignment's blitted index expression
-##    stays declared. The rt_r fp32 store emits exactly this shape. The MSL compile
-##    (the ingest below) fails with an undeclared `_blit_N`
+##    stays declared. The local store fixture below emits exactly this shape.
+##    The MSL compile (the ingest below) fails with an undeclared `_blit_N`
 ##    if the preamble is dropped.
 ## 3. MSL struct emission drops gtString fields: MSL has no string type.
 ##    A struct carrying a string field would otherwise emit an illegal
@@ -33,17 +33,6 @@
 
 import std/[strutils, unittest]
 import workspace/crucible
-import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_constructors
-import workspace/ceramic/src/layout_indexing
-import workspace/ceramic/src/tensors
-import workspace/ceramic/src/ptr_arithmetic
-import workspace/ceramic/src/tile_algebra/tile_config
-import workspace/ceramic/src/tile_algebra/tiles
-import workspace/ceramic/src/tile_algebra/tile_views
-import workspace/ceramic/src/tile_algebra/tile_io
-import workspace/ceramic/src/kernel_gemm/atoms_apple
 
 # ── 1. {.builtin.} plain-name forwarding ─────────────────────────────────────
 #
@@ -67,19 +56,46 @@ const builtinMsl = metal:
 # The store's LHS index is a multi-statement expression that the blit
 # machinery hoists into a preamble temp, and the assignment references
 # that temp. Dropping the preamble leaves the reference undeclared.
-# Lane 0 (fm = fn = 0) writes frags[0][0] to outBuf[0..1] and frags[1][0]
-# to outBuf[8..9] on the 8×16 tile with the transposed output view.
+# Lane 0 writes frags[0][0] to outBuf[0..1] and frags[1][0]
+# to outBuf[8..9] through the fixture's store view.
+
+# Local fixture: the tile-store surface, built from crucible types only.
+# The ceramic tile layer's rt_r fp32 store emits the pinned blit shape.
+# These stand-ins reproduce it with a C-outer tile of per-lane simdgroup
+# fragments and a view whose data base the store indexes.
+
+type
+  StoreFrag = object
+    ## One atom subtile's per-lane register fragment.
+    frag: SimdgroupMatrix[float32, false]
+  StoreTile = object
+    ## C-outer register tile: 2 col subtiles × 1 row subtile of 8×8 fragments.
+    frags: array[2, array[1, StoreFrag]]
+  StoreView = object
+    ## Global view: the store's data base.
+    data: ptr UncheckedArray[float32]
+
+proc storeTile(tile: StoreTile; dst: StoreView) {.device.} =
+  ## Writes each fragment's per-lane elements through the view's blitted
+  ## index, the LHS preamble the contract pins.
+  for m in 0 ..< 2:
+    for v in 0 ..< 2:
+      dst.data[block:
+        let mm = m
+        let vv = v
+        mm * 8 + vv
+      ] = threadElements(tile.frags[m][0].frag, uint32(v))
 
 const storeMsl = metal:
   proc storeKernel(Out: ptr UncheckedArray[float32]) {.global.} =
-    var tile: rt_r(float32, 8, 16)
+    var tile: StoreTile
     let lane = thread_index_in_threadgroup
     threadElements(tile.frags[0][0].frag, 0'u32) = float32(lane) + 1.0'f32
     threadElements(tile.frags[0][0].frag, 1'u32) = float32(lane) + 2.0'f32
     threadElements(tile.frags[1][0].frag, 0'u32) = float32(lane) + 3.0'f32
     threadElements(tile.frags[1][0].frag, 1'u32) = float32(lane) + 4.0'f32
-    let gl_out = makeGlStrided(Out, 8 * 16, 0, 1, 16)
-    tile.store(gl_out, (0'i32, 0'i32, 0'i32, 0'i32))
+    let gl_out = StoreView(data: Out)
+    storeTile(tile, gl_out)
 
 # ── 3. gtString field drop in MSL structs ───────────────────────────────────
 

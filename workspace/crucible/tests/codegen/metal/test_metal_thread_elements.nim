@@ -7,13 +7,11 @@
 ## a direct index (`frag[vpt]`). The register-surface field chains
 ## (`FragmentOf.frag`, a tile's subtile grid) must emit through the same
 ## accessor, and no fragment access may leak a `.data[` field spelling.
-## The fragment types come from the ceramic tile layer,
-## hence the cross-package imports.
+## The fragment types come from crucible builtins (SimdgroupMatrix)
+## and the local fixture types defined below.
 ##
-## The device-run section covers only the two plain fragment shapes:
-## the field-chain kernels drag the atom's `name: string` field into the MSL
-## struct emission (`const char* name;`), which the MSL compiler rejects
-## for struct pointer fields. Their spelling is pinned by the string
+## The device-run section covers the two plain fragment shapes.
+## The field-chain kernels pin their accessor spelling with the string
 ## asserts instead.
 ##
 ## Run:
@@ -25,13 +23,48 @@
 ##     workspace/crucible/tests/codegen/metal/test_metal_thread_elements.nim
 
 import std/[strutils, unittest]
-import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/tile_algebra/tile_config
-import workspace/ceramic/src/tile_algebra/tiles
-import workspace/ceramic/src/kernel_gemm/atoms_apple
-import workspace/ceramic/src/kernel_gemm/atoms_universal
-import workspace/ceramic/src/layouts_datatypes
 import workspace/crucible
+
+# ── Local fixture: the tile-layer fragment surface, crucible types only ────
+# The ceramic tile layer's FragmentOf/RtLeft/atom records define
+# the fragment shapes these kernels pin. The stand-ins below reproduce
+# them with crucible's SimdgroupMatrix: a per-lane simdgroup fragment
+# behind `frag` and a per-lane value array behind the FMA fragment.
+
+type
+  StrideOrder = enum
+    LayoutLeft, LayoutRight
+  MmaAtomKind = enum
+    bkGPU_TensorCore
+    bk_FMA
+  AppleLayout = object
+    ## Placeholder layout type of the atom's compile-time layout params.
+  MmaAtom[LA, LB, LC] = object
+    ## Compile-time MMA atom record: the static generic param selects
+    ## the fragment kind below.
+    name: string
+    mnk: tuple[m, n, k: int]
+    kind: MmaAtomKind
+  FragmentOf[A: static MmaAtom; T; L: static StrideOrder] = object
+    ## Per-lane register fragment of one atom subtile: a simdgroup matrix
+    ## for the Apple atoms, a per-lane value array for the FMA atom.
+    when A.kind == bkGPU_TensorCore:
+      frag: SimdgroupMatrix[T, L == LayoutRight]
+    elif A.kind == bk_FMA:
+      frag: array[1, T]
+    else:
+      frag: array[1, T]
+  RtLeft[T; R, C: static int; A: static MmaAtom] = object
+    ## R-outer register tile: the subtile grid of per-lane fragments.
+    frags: array[R div A.mnk.m, array[C div A.mnk.n, FragmentOf[A, T, LayoutLeft]]]
+
+const APPLE_8x8x8_F32 = MmaAtom[AppleLayout, AppleLayout, AppleLayout](
+  name: "APPLE_8x8x8_F32", mnk: (m: 8, n: 8, k: 8), kind: bkGPU_TensorCore)
+  ## The 8×8×8 simdgroup atom: one per-lane simdgroup matrix per subtile.
+
+const UNIVERSAL_FMA_F32 = MmaAtom[AppleLayout, AppleLayout, AppleLayout](
+  name: "UNIVERSAL_FMA_F32", mnk: (m: 1, n: 1, k: 1), kind: bk_FMA)
+  ## The 1×1×1 scalar-FMA atom: one per-lane value per thread.
 
 const teMsl = metal:
   proc teKernel(C: ptr UncheckedArray[float32]) {.global.} =
@@ -59,8 +92,8 @@ const teMsl = metal:
     threadElements(f.frag, 0'u32) = 7.0'f32
     C[0] = threadElements(f.frag, 0'u32)
 
-# Device-runnable subset: the two plain fragment shapes only. See the header note
-# on why the field-chain kernels stay string-asserted.
+# Device-runnable subset: the two plain fragment shapes only. See the header
+# note on why the field-chain kernels stay string-asserted.
 const teDeviceMsl = metal:
   proc teDeviceKernel(C: ptr UncheckedArray[float32]) {.global.} =
     var d: SimdgroupMatrix[float32, false]

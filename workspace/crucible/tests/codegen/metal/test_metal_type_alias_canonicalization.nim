@@ -22,15 +22,6 @@
 
 import std/[strutils, unittest]
 import workspace/crucible
-import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_constructors
-import workspace/ceramic/src/layout_indexing
-import workspace/ceramic/src/tile_algebra/tile_config
-import workspace/ceramic/src/tile_algebra/tiles
-import workspace/ceramic/src/kernel_gemm/atoms_apple
-import workspace/ceramic/src/layouts_datatypes
-import workspace/ceramic/src/atoms
 import ./helper_metal_type_alias_apply
 
 type Pair[T] = object
