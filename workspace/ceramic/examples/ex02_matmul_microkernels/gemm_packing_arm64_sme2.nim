@@ -15,11 +15,6 @@
 
 import workspace/cpuplatforms/arm/macro_assembler_arm64
 
-func memStep(base: XReg, imm: int): MemAddr =
-  ## Memory operand for a vector load at `imm` vector lengths:
-  ## `[base]` when `imm == 0`, `[base, #imm, MUL VL]` otherwise.
-  if imm == 0: mem(base) else: memVL(base, imm)
-
 proc emitTrnStore8x8(ctx: var AssemblerSME) =
   for cell in 0 .. 3:
     let a = 8 * (cell div 2) + cell mod 2
@@ -41,7 +36,7 @@ proc emitTrnStore8x8(ctx: var AssemblerSME) =
 proc buildNeonPackATranspose8rows(
     ctx: var AssemblerSME,
     dst, src, rowStrideOp, nGroupsOp, validOp: NimNode) =
-  ## Records the `neon_packA_transpose_8rows` instruction stream into
+  ## Records the `neonPackATranspose8rows` instruction stream into
   ## `ctx` in source order: the eight row pointers, the full 8-row transpose loop,
   ## then the cold partial-row loop. Operand bindings:
   ## pointers via `"r"`, the stride and counts via `"r"((long)...)`.
@@ -95,13 +90,13 @@ proc buildNeonPackATranspose8rows(
 macro genNeonPackATranspose8rows(
     dst, src, rowStrideOp, nGroupsOp, validOp: typed): untyped =
   ## Expands to the `{.emit: ...}` pragma for
-  ## `neon_packA_transpose_8rows`.
+  ## `neonPackATranspose8rows`.
   var ctx = init(AssemblerSME)
   buildNeonPackATranspose8rows(ctx, dst, src, rowStrideOp, nGroupsOp,
                                validOp)
   result = ctx.generate()
 
-proc neon_packA_transpose_8rows*(
+proc neonPackATranspose8rows*(
     dst: ptr float32,      # packA + ir*kc*mr + g*8 (8-row group g, k = 0)
     src: ptr float32,      # pA_ptr + (srcRow + g*8) * pA_rs (group's first row, k = 0)
     srcRowStride: cint,    # pA_rs: elements between consecutive A rows
@@ -151,7 +146,7 @@ proc emitA16TransposeStore(ctx: var AssemblerSME) =
 proc buildSmePackATranspose16rows(
     ctx: var AssemblerSME,
     dst, src, rowStrideOp, nColBlocksOp, validOp: NimNode) =
-  ## Records the `sme_packA_transpose_16rows` instruction stream into
+  ## Records the `smePackATranspose16rows` instruction stream into
   ## `ctx` in source order: the smstart bracket, the 16 row pointers,
   ## the full 16-row transpose loop, then the cold partial-row loop.
   ## Operand bindings: pointers via `"r"`, the stride and counts via `"r"((long)...)`.
@@ -229,13 +224,13 @@ proc buildSmePackATranspose16rows(
 macro genSmePackATranspose16rows(
     dst, src, rowStrideOp, nColBlocksOp, validOp: typed): untyped =
   ## Expands to the `{.emit: ...}` pragma for
-  ## `sme_packA_transpose_16rows`.
+  ## `smePackATranspose16rows`.
   var ctx = init(AssemblerSME)
   buildSmePackATranspose16rows(ctx, dst, src, rowStrideOp, nColBlocksOp,
                                validOp)
   result = ctx.generate()
 
-proc sme_packA_transpose_16rows*(
+proc smePackATranspose16rows*(
     dst: ptr float32,      # packA + ir*kc*mr + g*16 (16-row group g, k = 0)
     src: ptr float32,      # pA_ptr + (srcRow + g*16) * pA_rs (group's first row, k = 0)
     srcRowStride: cint,    # pA_rs: elements between consecutive A rows
@@ -270,7 +265,7 @@ proc sme_packA_transpose_16rows*(
 proc buildSmePackBCopy32f32X4(
     ctx: var AssemblerSME,
     dst0, dst1, dst2, dst3, src, rowStrideOp, nRowsOp: NimNode) =
-  ## Records the `sme_packB_copy_32f32_x4` instruction stream into
+  ## Records the `smePackBCopy32f32x4` instruction stream into
   ## `ctx` in source order: the smstart bracket, then the row loop of eight `ld1w` loads
   ## and eight `st1w` stores. Operand bindings:
   ## pointers via `"r"`, the stride and row count via `"r"((long)...)`.
@@ -290,6 +285,7 @@ proc buildSmePackBCopy32f32X4(
   ctx.mov(x(12), view(d3Op))
   ctx.lsl(x(25), xview(rsOp), 2)
   ctx.mov(w(27), wview(nOp))
+  ctx.cbz(w(27), "9f")
   ctx.label("1")
   for lane in 0 .. 7:
     ctx.ld1w(z(lane), "s", p(0), memStep(x(26), lane))
@@ -301,6 +297,7 @@ proc buildSmePackBCopy32f32X4(
     ctx.add(x(9 + panel), x(9 + panel), 128)
   ctx.subs(w(27), w(27), 1)
   ctx.bne("1b")
+  ctx.label("9")
   ctx.smstop()
   ctx.clobber("x9", "x10", "x11", "x12", "x25", "x26", "w27")
   ctx.clobberZ()
@@ -311,13 +308,13 @@ proc buildSmePackBCopy32f32X4(
 macro genSmePackBCopy32f32X4(
     dst0, dst1, dst2, dst3, src, rowStrideOp, nRowsOp: typed): untyped =
   ## Expands to the `{.emit: ...}` pragma for
-  ## `sme_packB_copy_32f32_x4`.
+  ## `smePackBCopy32f32x4`.
   var ctx = init(AssemblerSME)
   buildSmePackBCopy32f32X4(ctx, dst0, dst1, dst2, dst3, src,
                            rowStrideOp, nRowsOp)
   result = ctx.generate()
 
-proc sme_packB_copy_32f32_x4*(
+proc smePackBCopy32f32x4*(
     dst0, dst1, dst2, dst3: ptr float32,  # packB + (jr0+i)*kc*nr for i in 0..3
     src: ptr float32,                     # pB_ptr + jr0*nr (k = 0)
     srcRowStride: cint,                   # pB_rs: elements between consecutive B rows
@@ -351,7 +348,7 @@ proc sme_packB_copy_32f32_x4*(
 proc buildNeonPackBCopy32f32(
     ctx: var AssemblerSME,
     dst, src, rowStrideOp, nRowsOp: NimNode) =
-  ## Records the `neon_packB_copy_32f32` instruction stream into `ctx`
+  ## Records the `neonPackBCopy32f32` instruction stream into `ctx`
   ## in source order: the row loop of two 4-register `ld1`/`st1` pairs
   ## with the post-copy row advance. Operand bindings: pointers via `"r"`,
   ## the stride and row count via `"r"((long)...)`.
@@ -364,6 +361,7 @@ proc buildNeonPackBCopy32f32(
   ctx.lsl(x(22), xview(rsOp), 2)
   ctx.sub(x(22), x(22), 128)
   ctx.mov(w(23), wview(nOp))
+  ctx.cbz(w(23), "9f")
   ctx.label("1")
   ctx.ld1(vlist(0, 3, "4s"), memPost(x(21), 64))
   ctx.ld1(vlist(4, 7, "4s"), memPost(x(21), 64))
@@ -372,6 +370,7 @@ proc buildNeonPackBCopy32f32(
   ctx.st1(vlist(4, 7, "4s"), memPost(x(20), 64))
   ctx.subs(w(23), w(23), 1)
   ctx.bne("1b")
+  ctx.label("9")
   ctx.clobber("x20", "x21", "x22", "w23")
   ctx.clobber("v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7")
   ctx.clobberCC()
@@ -379,12 +378,12 @@ proc buildNeonPackBCopy32f32(
 
 macro genNeonPackBCopy32f32(
     dst, src, rowStrideOp, nRowsOp: typed): untyped =
-  ## Expands to the `{.emit: ...}` pragma for `neon_packB_copy_32f32`.
+  ## Expands to the `{.emit: ...}` pragma for `neonPackBCopy32f32`.
   var ctx = init(AssemblerSME)
   buildNeonPackBCopy32f32(ctx, dst, src, rowStrideOp, nRowsOp)
   result = ctx.generate()
 
-proc neon_packB_copy_32f32*(
+proc neonPackBCopy32f32*(
     dst: ptr float32,      # packB + jr*kc*nr (k = 0)
     src: ptr float32,      # pB_ptr + jr*nr (k = 0)
     srcRowStride: cint,    # pB_rs: elements between consecutive B rows

@@ -126,6 +126,11 @@ func memPost*(base: XReg, imm: int): MemAddr =
   ## Post-indexed memory operand `[base], #imm`.
   MemAddr(base: base, kind: mkPostIndex, imm: imm)
 
+func memStep*(base: XReg, imm: int): MemAddr =
+  ## Memory operand for a vector load at `imm` vector lengths: `[base]`
+  ## when `imm == 0`, `[base, #imm, MUL VL]` otherwise.
+  if imm == 0: mem(base) else: memVL(base, imm)
+
 func `$`*(t: ZaTile): string = t.name & "." & t.shape
 func `$`*(s: ZaSlice): string =
   result = s.name & "." & s.shape & "[" & s.idx & ", " & $s.off
@@ -291,9 +296,9 @@ proc ld1w2*(a: var AssemblerSME, zt1, xn, rm: int) =
   a.inst 0xa1000000 or (rm shl 16) or (17 shl 10) or (xn shl 5) or zt1
 
 proc incw*(a: var AssemblerSME, xn: int) =
-  ## `incw xn, ALL, MUL #2` as a raw word: `.inst 0x04b1e3f0 | Xn`.
+  ## `incw xn, ALL, MUL #2` as a raw word: `.inst 0x04b1e3e0 | Xn`.
   ## Increments a vector counter by 32 elements (two 64-B vectors).
-  a.inst 0x04b1e3f0 or xn
+  a.inst 0x04b1e3e0 or xn
 
 # Instructions
 # -----------------------------------------------------------------------------
@@ -324,8 +329,8 @@ proc mov*(a: var AssemblerSME, dst: ZReg, shape: string, imm: int) =
 
 proc mov*(a: var AssemblerSME, dst: ZRange, src: ZaSlice) =
   ## SME2 tile-slice read into vectors: `mov <dst>, <src>`.
-  ## On M4 a `.h` column group of a `.s` tile holds one output row, which is
-  ## what makes the transposed-tile extract work.
+  ## Multi-vector `.h` slices pair tile N with tile N+2, the same
+  ## M4-verified delivery as the `mova` reads.
   a.code.add "mov " & $dst & ", " & $src & '\n'
 
 proc add*(a: var AssemblerSME, dst: XReg or WReg, src: XReg or WReg, imm: int) =
@@ -423,17 +428,21 @@ proc st1w*(a: var AssemblerSME, slice: ZaSlice, pr: PReg, mem: MemAddr) =
 
 proc fmopa*(a: var AssemblerSME, tile: ZaTile, pg1, pg2: PReg, zn, zm: ZReg) =
   ## Fused outer-product accumulate: `fmopa <tile>, <pg1>/m, <pg2>/m, <zn>.s, <zm>.s`.
-  ## M4 computes `ZA[i][j] += Y[i] * X[j]` for operands `(X, Y)`,
-  ## transposed vs the ARM-doc convention.
-  ## AB-store kernels pass (B, A). The epi kernel passes (A, B), whose
-  ## transposed tile feeds the column-wise mova extract.
+  ## Computes `ZA[i][j] += Zn[i] * Zm[j]` (ARM-doc semantics, M4-verified:
+  ## first operand contributes rows, second columns).
+  ## AB-store kernels pass `(B, A)`, which transposes the accumulator.
+  ## Epi kernels pass `(A, B)` for an untransposed one.
   ## Swapping the order silently transposes every tile, detectable only with asymmetric data.
   a.code.add "fmopa " & $tile & ", " & $pg1 & "/m, " & $pg2 & "/m, " & $zn & ".s, " & $zm & ".s" & '\n'
 
 proc mova*(a: var AssemblerSME, zrng: ZRange, slice: ZaSlice) =
   ## SME2 tile-slice read to vectors: `mova <zrng>, <slice>`.
-  ## `slice` is a column group (`zaNh.h[w12, 0:3]`). On M4 a `.h` column
-  ## of a `.s` tile holds one output row, which is the transposed-tile extract.
+  ## `slice` is a horizontal slice group (`zaNh.h[w12, 0:3]`). M4-verified
+  ## delivery: vectors 0/2 carry rows of the named tile, vectors 1/3 the
+  ## same rows of the tile two above it (`za0h.h[w12, 0:3]` yields
+  ## `za0 row w12/2, za2 row w12/2, za0 row w12/2+1, za2 row w12/2+1`).
+  ## The epi extract uses this pairing to fetch one output row's left and
+  ## right halves (za0/za2 for `za0h`, za1/za3 for `za1h`).
   a.code.add "mova " & $zrng & ", " & $slice & '\n'
 
 proc mova*(a: var AssemblerSME, slice: ZaSlice, zrng: ZRange) =

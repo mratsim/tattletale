@@ -15,7 +15,7 @@
 ##
 ## Two fmopa conventions live in this file:
 ##   - AB-store kernels (16×16, 32×32): operands (B, A)
-##   - epi kernels: operands (A, B), required by their column-wise mova extract
+##   - epi kernels: operands (A, B), required by their row-wise mova extract
 ## Swapping the order silently transposes every tile. Only asymmetric data detects it.
 
 {.localpassC: "-march=armv9-a+sme2 -fno-vectorize -fno-slp-vectorize".}
@@ -23,14 +23,9 @@
 # disabled because emitted SVE instructions fault outside streaming mode.
 import workspace/cpuplatforms/arm/macro_assembler_arm64
 
-func memStep(base: XReg, imm: int): MemAddr =
-  ## Memory operand for a k-step vector load: `[base]` when `imm == 0`,
-  ## `[base, #imm, MUL VL]` otherwise.
-  if imm == 0: mem(base) else: memVL(base, imm)
-
 proc buildSme16x16(
     ctx: var AssemblerSME, pa, pb, ab, kcOp: NimNode) =
-  ## Records the `sme_gemm_ukernel_16x16` instruction stream into `ctx`
+  ## Records the `smeGemmUkernel16x16` instruction stream into `ctx`
   ## in source order: the k-loop over 16-lane vectors, then the 16-row
   ## tile-slice store. Operand bindings: pointers via `"r"`, the k counter
   ## via `"r"((long)...)`.
@@ -69,12 +64,12 @@ proc buildSme16x16(
   ctx.clobberMemory()
 
 macro genSme16x16(pa, pb, ab, kcOp: typed): untyped =
-  ## Expands to the `{.emit: ...}` pragma for `sme_gemm_ukernel_16x16`
+  ## Expands to the `{.emit: ...}` pragma for `smeGemmUkernel16x16`
   var ctx = init(AssemblerSME)
   buildSme16x16(ctx, pa, pb, ab, kcOp)
   result = ctx.generate()
 
-proc sme_gemm_ukernel_16x16*(
+proc smeGemmUkernel16x16*(
     packA, packB: ptr float32, AB: ptr float32, kc: cint) =
   ## 16×16 f32 SME outer-product micro-kernel:
   ## `AB[i][j] = Σ_k packA[k*16+i] * packB[k*16+j]`.
@@ -116,7 +111,7 @@ proc storeQuadrant(
 
 proc buildSme32x32(
     ctx: var AssemblerSME, pa, pb, ab, kcOp: NimNode) =
-  ## Records the `sme_gemm_ukernel_32x32` instruction stream into `ctx`
+  ## Records the `smeGemmUkernel32x32` instruction stream into `ctx`
   ## in source order: the block-pipelined k-loop over four ZA
   ## accumulators, the oddments tail, then the four quadrant stores.
   ## Operand bindings: pointers via `"r"`, the k counter via
@@ -214,12 +209,12 @@ proc buildSme32x32(
   ctx.clobberMemory()
 
 macro genSme32x32(pa, pb, ab, kcOp: typed): untyped =
-  ## Expands to the `{.emit: ...}` pragma for `sme_gemm_ukernel_32x32`
+  ## Expands to the `{.emit: ...}` pragma for `smeGemmUkernel32x32`
   var ctx = init(AssemblerSME)
   buildSme32x32(ctx, pa, pb, ab, kcOp)
   result = ctx.generate()
 
-proc sme_gemm_ukernel_32x32*(
+proc smeGemmUkernel32x32*(
     packA, packB: ptr float32, AB: ptr float32, kc: cint) =
   ## 32×32 f32 SME outer-product micro-kernel with four independent ZA
   ## accumulators (ZA0..ZA3), one per 16×16 quadrant of the output tile:
@@ -282,9 +277,10 @@ proc extractRows8(
   ## Emits the fused 8-row C-extract body for one ZA tile half: four SME2
   ## `mova` slice reads (2 output rows each), then per row the epilogue
   ## math and a streaming 2-vector store. `tile` is `za0h` (output rows
-  ## 0-15) or `za1h` (rows 16-31). In the transposed tile a mova column
-  ## equals the output row. The paired vectors of each mova hold that
-  ## row's left and right halves (za0/za2 for `za0h`, za1/za3 for `za1h`).
+  ## 0-15) or `za1h` (rows 16-31). Mova slice rows equal output rows
+  ## (the accumulator is untransposed). The paired vectors of each mova
+  ## hold that row's left and right halves (za0/za2 for `za0h`,
+  ## za1/za3 for `za1h`).
   ##
   ## Caller owns the loop counters: emits `mov w11, #2` and `mov w12, #0`
   ## before the `3:`/`4:` head and brackets the body with `b.ne`,
@@ -309,7 +305,7 @@ proc extractRows8(
 proc buildSme32x32Epi(
     ctx: var AssemblerSME,
     pa, pb, cOp, cs, kcOp, abits, bbits, reluOp, aone, bzero, bone: NimNode) =
-  ## Records the `sme_gemm_ukernel_32x32_epi` instruction stream into
+  ## Records the `smeGemmUkernel32x32Epi` instruction stream into
   ## `ctx` in source order: the single-vector k-loop over four ZA
   ## accumulators, the oddments tail, then the two fused extracts. Operand
   ## bindings. Stream shape equals
@@ -321,7 +317,7 @@ proc buildSme32x32Epi(
   let kcOp2 = ctx.inputLong("kc", kcOp)
   let abitsOp = ctx.inputLongParen("abits", abits)
   let bbitsOp = ctx.inputLongParen("bbits", bbits)
-  let infbitsOp = ctx.inputLit("infbits", 2143289344)
+  let clampHiBitsOp = ctx.inputLit("clampHiBits", 2143289344)
   let reluOp2 = ctx.inputLong("relu", reluOp)
   let aoneOp = ctx.inputLong("aone", aone)
   let bzeroOp = ctx.inputLong("bzero", bzero)
@@ -335,7 +331,7 @@ proc buildSme32x32Epi(
   ctx.dup(z(14), "s", wview(abitsOp))
   ctx.dup(z(15), "s", wview(bbitsOp))
   ctx.mov(z(4), "s", 0)
-  ctx.dup(z(5), "s", wview(infbitsOp))
+  ctx.dup(z(5), "s", wview(clampHiBitsOp))
   ctx.cbz(w(14), "9f")
   ctx.lsr(w(16), w(14), 2)
   ctx.cbz(w(16), "5f")
@@ -424,18 +420,18 @@ proc buildSme32x32Epi(
 
 macro genSme32x32Epi(
     pa, pb, cOp, cs, kcOp, abits, bbits, reluOp, aone, bzero, bone: typed): untyped =
-  ## Expands to the `{.emit: ...}` pragma for `sme_gemm_ukernel_32x32_epi`
+  ## Expands to the `{.emit: ...}` pragma for `smeGemmUkernel32x32Epi`
   var ctx = init(AssemblerSME)
   buildSme32x32Epi(ctx, pa, pb, cOp, cs, kcOp, abits, bbits,
                    reluOp, aone, bzero, bone)
   result = ctx.generate()
 
-proc sme_gemm_ukernel_32x32_epi*(
+proc smeGemmUkernel32x32Epi*(
     packA, packB: ptr float32, C: ptr float32, cRowStride: cint, kc: cint,
     alpha, beta: float32, relu, alphaOne, betaZero, betaOne: cint) =
   ## 32×32 f32 SME micro-kernel with a fused in-streaming extract to C
   ## (single-vector inner loop). The dual-vector variant
-  ## `sme_gemm_ukernel_32x32_epi_dv` is the hot path with the same
+  ## `smeGemmUkernel32x32EpiDv` is the hot path with the same
   ## contract.
   ##
   ## Expected input:
@@ -446,13 +442,13 @@ proc sme_gemm_ukernel_32x32_epi*(
   ##   - relu, alphaOne, betaZero, betaOne: flags mirroring the scalar epilogue's comparisons
   ##
   ## Output: `C[i][j] = beta*C[i][j] + alpha*f(AB[i][j])`, f = identity
-  ## or ReLU. The accumulator sits in ZA transposed (za row j = output col j),
-  ## so the in-streaming mova extract reads output rows
-  ## while applying the epilogue math:
+  ## or ReLU. The accumulator is untransposed (`ZA[i][j] = AB[i][j]`),
+  ## so the in-streaming mova extract reads horizontal slices
+  ## (output rows) while applying the epilogue math:
   ##
   ##   before (ZA accumulator):            after (C, row-major):
-  ##     za[j][i] = AB[i][j]                C[i][j] = beta*C[i][j]
-  ##     (za row j = output col j)          + alpha*f(AB[i][j])
+  ##     ZA[i][j] = AB[i][j]                C[i][j] = beta*C[i][j]
+  ##     (za row i = output row i)          + alpha*f(AB[i][j])
   ##
   ## ReLU `fclamp` maps NaN to 0 on M4, like the scalar epilogue.
   ## `beta == 0` stores `alpha*f(AB)`, possibly `-0.0` where the scalar epilogue stores `+0.0`.
@@ -464,12 +460,12 @@ proc sme_gemm_ukernel_32x32_epi*(
 proc buildSme32x32EpiDv(
     ctx: var AssemblerSME,
     pa, pb, cOp, cs, kcOp, abits, bbits, reluOp, aone, bzero, bone: NimNode) =
-  ## Records the `sme_gemm_ukernel_32x32_epi_dv` instruction stream into
+  ## Records the `smeGemmUkernel32x32EpiDv` instruction stream into
   ## `ctx` in source order: SME2 dual-vector loads in the 4-k-step blocks,
   ## single-vector oddments, then the two fused extracts. Operand bindings
   ## bindings: pointers and 64-bit values via
   ## `"r"`, 32-bit flags via `"r"((long)...)`, the alpha/beta bit patterns
-  ## via `"r"((long)(...))`, and the ReLU +inf word as a literal.
+  ## via `"r"((long)(...))`, and the quiet-NaN clamp upper bound as a literal.
   let paOp = ctx.input("pa", pa)
   let pbOp = ctx.input("pb", pb)
   let cOp2 = ctx.input("C", cOp)
@@ -477,7 +473,7 @@ proc buildSme32x32EpiDv(
   let kcOp2 = ctx.inputLong("kc", kcOp)
   let abitsOp = ctx.inputLongParen("abits", abits)
   let bbitsOp = ctx.inputLongParen("bbits", bbits)
-  let infbitsOp = ctx.inputLit("infbits", 2143289344)
+  let clampHiBitsOp = ctx.inputLit("clampHiBits", 2143289344)
   let reluOp2 = ctx.inputLong("relu", reluOp)
   let aoneOp = ctx.inputLong("aone", aone)
   let bzeroOp = ctx.inputLong("bzero", bzero)
@@ -492,7 +488,7 @@ proc buildSme32x32EpiDv(
   ctx.dup(z(14), "s", wview(abitsOp))
   ctx.dup(z(15), "s", wview(bbitsOp))
   ctx.mov(z(4), "s", 0)
-  ctx.dup(z(5), "s", wview(infbitsOp))
+  ctx.dup(z(5), "s", wview(clampHiBitsOp))
   ctx.cbz(w(14), "9f")
   ctx.lsr(w(16), w(14), 2)
   ctx.mov(x(21), "#0")
@@ -574,13 +570,13 @@ proc buildSme32x32EpiDv(
 
 macro genSme32x32EpiDv(
     pa, pb, cOp, cs, kcOp, abits, bbits, reluOp, aone, bzero, bone: typed): untyped =
-  ## Expands to the `{.emit: ...}` pragma for `sme_gemm_ukernel_32x32_epi_dv`.
+  ## Expands to the `{.emit: ...}` pragma for `smeGemmUkernel32x32EpiDv`.
   var ctx = init(AssemblerSME)
   buildSme32x32EpiDv(ctx, pa, pb, cOp, cs, kcOp, abits, bbits,
                      reluOp, aone, bzero, bone)
   result = ctx.generate()
 
-proc sme_gemm_ukernel_32x32_epi_dv*(
+proc smeGemmUkernel32x32EpiDv*(
     packA, packB: ptr float32, C: ptr float32, cRowStride: cint, kc: cint,
     alpha, beta: float32, relu, alphaOne, betaZero, betaOne: cint) =
   ## 32×32 f32 SME micro-kernel with a fused in-streaming extract to C
@@ -597,13 +593,13 @@ proc sme_gemm_ukernel_32x32_epi_dv*(
   ##     `betaOne = beta == 1`
   ##
   ## Output: `C[i][j] = beta*C[i][j] + alpha*f(AB[i][j])`.
-  ## The accumulator sits in ZA transposed (za row j = output col j),
-  ## so the in-streaming mova extract reads output rows
-  ## while applying the epilogue math:
+  ## The accumulator is untransposed (`ZA[i][j] = AB[i][j]`),
+  ## so the in-streaming mova extract reads horizontal slices
+  ## (output rows) while applying the epilogue math:
   ##
   ##   before (ZA accumulator):            after (C, row-major):
-  ##     za[j][i] = AB[i][j]                C[i][j] = beta*C[i][j]
-  ##     (za row j = output col j)          + alpha*f(AB[i][j])
+  ##     ZA[i][j] = AB[i][j]                C[i][j] = beta*C[i][j]
+  ##     (za row i = output row i)          + alpha*f(AB[i][j])
   ##
   ## ReLU `fclamp` maps NaN to 0 on M4, like the scalar epilogue.
   ## `beta == 0` stores `alpha*f(AB)`, possibly `-0.0` where the scalar epilogue stores `+0.0`.
@@ -617,7 +613,7 @@ proc buildNeonEpilogue(
     ctx: var AssemblerSME,
     cOp, abOp, rowStrideOp, abits, bbits,
     reluOp, aone, bzero, bone: NimNode) =
-  ## Records the `neon_epilogue_f32_32x32` instruction stream into `ctx`
+  ## Records the `neonEpilogueF3232x32` instruction stream into `ctx`
   ## in source order: the beta==0 store loop, then the beta!=0
   ## read-modify-write loop. Operand bindings:
   ## constraint list: pointers via `"r"`, the row stride and flags via
@@ -691,13 +687,13 @@ proc buildNeonEpilogue(
 macro genNeonEpilogue(
     cOp, abOp, rowStrideOp, abits, bbits,
     reluOp, aone, bzero, bone: typed): untyped =
-  ## Expands to the `{.emit: ...}` pragma for `neon_epilogue_f32_32x32`
+  ## Expands to the `{.emit: ...}` pragma for `neonEpilogueF3232x32`
   var ctx = init(AssemblerSME)
   buildNeonEpilogue(ctx, cOp, abOp, rowStrideOp, abits, bbits,
                     reluOp, aone, bzero, bone)
   result = ctx.generate()
 
-proc neon_epilogue_f32_32x32*(
+proc neonEpilogueF3232x32*(
     C: ptr float32, cRowStride: cint,   # C tile base, row stride in f32 elements
     AB: ptr float32,                    # full 32x32 AB tile (128 B per row)
     alpha, beta: float32,
@@ -730,7 +726,7 @@ proc neon_epilogue_f32_32x32*(
 # Tile dispatch
 # ----------------------------------------------------------------------------
 
-proc gemm_ukernel_sme*[MR, NR: static int](
+proc gemmUkernelSme*[MR, NR: static int](
     packA, packB: ptr UncheckedArray[float32],
     AB: var array[MR, array[NR, float32]],
     kc: int) =
@@ -747,19 +743,19 @@ proc gemm_ukernel_sme*[MR, NR: static int](
   ## Output: `AB` = the MR×NR outer-product tile, all lanes written.
   ##
   ## Two tile shapes, backed by two asm kernels in this file:
-  ## - MR == NR == 16: one ZA0 accumulator (sme_gemm_ukernel_16x16).
+  ## - MR == NR == 16: one ZA0 accumulator (smeGemmUkernel16x16).
   ## - MR == NR == 32: four ZA0..ZA3 accumulators, one per 16×16 quadrant
-  ##   of the 32×32 output tile (sme_gemm_ukernel_32x32), 4-way ILP
+  ##   of the 32×32 output tile (smeGemmUkernel32x32), 4-way ILP
   ##   hiding the `fmopa` latency.
   static: doAssert MR == NR and MR in {16, 32},
-    "gemm_ukernel_sme requires square tiles of 16 or 32 (got MR=" & $MR & ", NR=" & $NR & ")"
-  doAssert kc >= 0, "gemm_ukernel_sme: kc must be >= 0 (got " & $kc & ")"
+    "gemmUkernelSme requires square tiles of 16 or 32 (got MR=" & $MR & ", NR=" & $NR & ")"
+  doAssert kc >= 0, "gemmUkernelSme: kc must be >= 0 (got " & $kc & ")"
   when MR == 16:
-    sme_gemm_ukernel_16x16(
+    smeGemmUkernel16x16(
       cast[ptr float32](packA), cast[ptr float32](packB),
       addr AB[0][0], kc.cint)
   else:
-    sme_gemm_ukernel_32x32(
+    smeGemmUkernel32x32(
       cast[ptr float32](packA), cast[ptr float32](packB),
       addr AB[0][0], kc.cint)
 

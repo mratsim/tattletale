@@ -48,7 +48,7 @@ template genEpilogue*(epilogueName: untyped, relu: static bool, activationBody: 
       # the scalar path's comparisons, so both paths agree element-for-element
       # for all finite inputs.
       if mr == 32 and nr == 32 and C.layout.stride[1] == 1 and C.layout.stride[0] >= 32:
-        neon_epilogue_f32_32x32(
+        neonEpilogueF3232x32(
           cast[ptr float32](C.data), cint(C.layout.stride[0]),
           cast[ptr float32](addr AB[0][0]),
           alpha, beta,
@@ -134,7 +134,7 @@ export gemm_ukernel_arm64_sme2  # epilogue templates instantiate in the caller's
 proc builtin_prefetch*(p: pointer, rw: cint, locality: cint) {.importc: "__builtin_prefetch", nodecl.}
 ## Clang alignment-assert builtin used by the pack paths. Available on every
 ## target, so the off-arm64 fallback compiles.
-proc builtin_assume_aligned*(p: pointer, alignment: csize): pointer {.importc: "__builtin_assume_aligned", nodecl.}
+proc builtin_assume_aligned*(p: pointer, alignment: csize_t): pointer {.importc: "__builtin_assume_aligned", nodecl.}
 
 const simdArch {.strdefine.} = "auto"
 
@@ -159,7 +159,7 @@ proc simdArchString*(): string = resolvedArch
 
 template gemm_ukernel(packA, packB, AB, kc: untyped): untyped =
   when resolvedArch == "sme":
-    gemm_ukernel_sme(packA, packB, AB, kc)
+    gemmUkernelSme(packA, packB, AB, kc)
   else:
     gemm_ukernel_generic(packA, packB, AB, kc)
 
@@ -213,7 +213,8 @@ proc gemm_strided*[T: SomeNumber](
         for k in 0 ..< K:
           acc += A[i * rowStrideA + k * colStrideA] * B[k * rowStrideB + j * colStrideB]
         let ci = i * rowStrideC + j * colStrideC
-        C[ci] = beta * C[ci] + alpha * acc
+        C[ci] = if beta == T(0): alpha * acc
+                else: beta * C[ci] + alpha * acc
     return
 
   # ── Derived quantities ──
@@ -250,45 +251,37 @@ proc gemm_strided*[T: SomeNumber](
     if current_kc <= 0: continue
     let effective_beta = if pc == 0: beta else: T(1)
 
-    for jc in 0 ..< 1:
-      let panelB = local_tile(vB, (kc, nc), (pc, jc))
-      let pB_ptr = cast[ptr UncheckedArray[T]](panelB.data)
-      let pB_rs = panelB.layout.stride[0]  # row stride of panel
-      let pB_cs = panelB.layout.stride[1]  # col stride of panel
+    # B is packed across the full N dimension: nc = num_jr*nr covers all of N.
+    let panelB = local_tile(vB, (kc, nc), (pc, 0))
+    let pB_ptr = cast[ptr UncheckedArray[T]](panelB.data)
+    let pB_rs = panelB.layout.stride[0]  # row stride of panel
+    let pB_cs = panelB.layout.stride[1]  # col stride of panel
 
-      # Pack B: explicit triple loop (copyMem-compatible stride, SIMD-friendly)
-      let packB_aligned = cast[ptr UncheckedArray[T]](builtin_assume_aligned(cast[pointer](packB_ptr), 32))
-      for jr in 0 ..< num_jr:
-        let eff = min(nr, N - jr * nr)   # lanes valid in the last micro-panel
-        if pB_cs == 1:
-          when defined(arm64) and T is float32:
-            if N mod nr == 0 and num_jr mod 4 == 0:
-              # Four full panels per pass: one B-row visit reads 512 contiguous bytes
-              # (DRAM row locality) instead of a 128-B slice. The group's remaining jr iterations are no-ops.
-              if jr mod 4 == 0:
-                sme_packB_copy_32f32_x4(
-                  cast[ptr float32](cast[int](packB_aligned) +% ((jr + 0) * kc * nr) *% sizeof(T).int),
-                  cast[ptr float32](cast[int](packB_aligned) +% ((jr + 1) * kc * nr) *% sizeof(T).int),
-                  cast[ptr float32](cast[int](packB_aligned) +% ((jr + 2) * kc * nr) *% sizeof(T).int),
-                  cast[ptr float32](cast[int](packB_aligned) +% ((jr + 3) * kc * nr) *% sizeof(T).int),
-                  cast[ptr float32](cast[int](pB_ptr) +% (jr * nr) *% sizeof(T).int),
-                  cint(pB_rs), cint(current_kc))
-            elif eff == nr:
-              # 32 valid lanes per row: 128-B NEON copies (2× ld1/st1 per row).
-              # Partial-column last panels (eff < nr) keep the copyMem loop
-              # below, so B is never read past its valid lanes.
-              neon_packB_copy_32f32(
-                cast[ptr float32](cast[int](packB_aligned) +% (jr * kc * nr) *% sizeof(T).int),
+    # Pack B: explicit triple loop (copyMem-compatible stride, SIMD-friendly)
+    let packB_aligned = cast[ptr UncheckedArray[T]](builtin_assume_aligned(cast[pointer](packB_ptr), 32))
+    for jr in 0 ..< num_jr:
+      let eff = min(nr, N - jr * nr)   # lanes valid in the last micro-panel
+      if pB_cs == 1:
+        when defined(arm64) and T is float32:
+          if N mod nr == 0 and num_jr mod 4 == 0:
+            # Four full panels per pass: one B-row visit reads 512 contiguous bytes
+            # (DRAM row locality) instead of a 128-B slice. The group's remaining jr iterations are no-ops.
+            if jr mod 4 == 0:
+              smePackBCopy32f32x4(
+                cast[ptr float32](cast[int](packB_aligned) +% ((jr + 0) * kc * nr) *% sizeof(T).int),
+                cast[ptr float32](cast[int](packB_aligned) +% ((jr + 1) * kc * nr) *% sizeof(T).int),
+                cast[ptr float32](cast[int](packB_aligned) +% ((jr + 2) * kc * nr) *% sizeof(T).int),
+                cast[ptr float32](cast[int](packB_aligned) +% ((jr + 3) * kc * nr) *% sizeof(T).int),
                 cast[ptr float32](cast[int](pB_ptr) +% (jr * nr) *% sizeof(T).int),
                 cint(pB_rs), cint(current_kc))
-            else:
-              # B rows are contiguous: copyMem
-              for k in 0 ..< current_kc:
-                let dstOff = jr * kc * nr + k * nr
-                let srcOff = k * pB_rs + jr * nr
-                copyMem(addr packB_aligned[dstOff], addr pB_ptr[srcOff], eff * sizeof(T).int)
-                for jj in eff ..< nr:
-                  packB_aligned[dstOff + jj] = T(0)
+          elif eff == nr:
+            # 32 valid lanes per row: 128-B NEON copies (2× ld1/st1 per row).
+            # Partial-column last panels (eff < nr) keep the copyMem loop
+            # below, so B is never read past its valid lanes.
+            neonPackBCopy32f32(
+              cast[ptr float32](cast[int](packB_aligned) +% (jr * kc * nr) *% sizeof(T).int),
+              cast[ptr float32](cast[int](pB_ptr) +% (jr * nr) *% sizeof(T).int),
+              cint(pB_rs), cint(current_kc))
           else:
             # B rows are contiguous: copyMem
             for k in 0 ..< current_kc:
@@ -298,98 +291,95 @@ proc gemm_strided*[T: SomeNumber](
               for jj in eff ..< nr:
                 packB_aligned[dstOff + jj] = T(0)
         else:
+          # B rows are contiguous: copyMem
           for k in 0 ..< current_kc:
             let dstOff = jr * kc * nr + k * nr
-            let srcOff = k * pB_rs + jr * nr * pB_cs
-            for jj in 0 ..< eff:
-              packB_aligned[dstOff + jj] = pB_ptr[srcOff + jj * pB_cs]
+            let srcOff = k * pB_rs + jr * nr
+            copyMem(addr packB_aligned[dstOff], addr pB_ptr[srcOff], eff * sizeof(T).int)
             for jj in eff ..< nr:
               packB_aligned[dstOff + jj] = T(0)
+      else:
+        for k in 0 ..< current_kc:
+          let dstOff = jr * kc * nr + k * nr
+          let srcOff = k * pB_rs + jr * nr * pB_cs
+          for jj in 0 ..< eff:
+            packB_aligned[dstOff + jj] = pB_ptr[srcOff + jj * pB_cs]
+          for jj in eff ..< nr:
+            packB_aligned[dstOff + jj] = T(0)
 
-      # ── Loop 3 (ic): row blocks of A ──
-      for ic in 0 ..< num_ic:
-        let current_mc = min(M - ic * mc, mc)
-        if current_mc <= 0:
-          continue
-        let last_m = (current_mc < mc)
-        let num_ir_eff = if last_m: ceil_div(current_mc, mr)
-                         else: num_ir
+    # ── Loop 3 (ic): row blocks of A ──
+    for ic in 0 ..< num_ic:
+      let current_mc = min(M - ic * mc, mc)
+      if current_mc <= 0:
+        continue
+      let last_m = (current_mc < mc)
+      let num_ir_eff = if last_m: ceil_div(current_mc, mr)
+                       else: num_ir
 
-        let panelA = local_tile(vA, (mc, kc), (ic, pc))
+      let panelA = local_tile(vA, (mc, kc), (ic, pc))
 
-        let pA_ptr = cast[ptr UncheckedArray[T]](panelA.data)
-        let pA_rs = panelA.layout.stride[0]
-        let pA_cs = panelA.layout.stride[1]
+      let pA_ptr = cast[ptr UncheckedArray[T]](panelA.data)
+      let pA_rs = panelA.layout.stride[0]
+      let pA_cs = panelA.layout.stride[1]
 
-        # Pack A: explicit triple loop (with copyMem for contiguous rows)
-        let packA_aligned = cast[ptr UncheckedArray[T]](builtin_assume_aligned(cast[pointer](packA_ptr), 32))
-        if pA_rs == 1:
-          # Rows are contiguous in memory (column-major): use copyMem
+      # Pack A: explicit triple loop (with copyMem for contiguous rows)
+      let packA_aligned = cast[ptr UncheckedArray[T]](builtin_assume_aligned(cast[pointer](packA_ptr), 32))
+      if pA_rs == 1:
+        # Rows are contiguous in memory (column-major): use copyMem
+        for ir in 0 ..< num_ir_eff:
+          let srcRow = ir * mr
+          let lastTile = (srcRow + mr) > current_mc
+          for k in 0 ..< current_kc:
+            let dstOff = ir * kc * mr + k * mr
+            let srcOff = srcRow + k * pA_cs
+            if lastTile:
+              let valid = current_mc - srcRow
+              copyMem(addr packA_aligned[dstOff], addr pA_ptr[srcOff], valid * sizeof(T).int)
+              for ii in valid ..< mr:
+                packA_aligned[dstOff + ii] = T(0)
+            else:
+              copyMem(addr packA_aligned[dstOff], addr pA_ptr[srcOff], mr * sizeof(T).int)
+      elif pA_cs == 1:
+        when defined(arm64) and T is float32:
+          # Row-major A: NEON 8×8 trn pack, or the streaming mova 16×16 pack
+          # when kc % 16 == 0 (16-column ZA tile). validRows zero-fills rows
+          # past current_mc, and leftover k steps use the scalar gather below.
+          static: doAssert mr == 32  # helpers' 8-row/16-row store geometry
+          let kBlocks = current_kc div 8
+          let kBlocks16 = current_kc div 16
+          let kcEven16 = current_kc mod 16 == 0
+          let kDone = if kcEven16: kBlocks16 * 16 else: kBlocks * 8
           for ir in 0 ..< num_ir_eff:
             let srcRow = ir * mr
-            let lastTile = (srcRow + mr) > current_mc
-            for k in 0 ..< current_kc:
-              let dstOff = ir * kc * mr + k * mr
-              let srcOff = srcRow + k * pA_cs
-              if lastTile:
-                let valid = current_mc - srcRow
-                copyMem(addr packA_aligned[dstOff], addr pA_ptr[srcOff], valid * sizeof(T).int)
-                for ii in valid ..< mr:
-                  packA_aligned[dstOff + ii] = T(0)
+            let dstBase = ir * kc * mr
+            if kBlocks > 0:
+              if kcEven16:
+                # Two 16-row groups per 32-row tile.
+                for g in 0 ..< 2:
+                  let groupValid = max(0, min(16, current_mc - srcRow - g * 16))
+                  smePackATranspose16rows(
+                    cast[ptr float32](cast[int](packA_aligned) +% (dstBase + g * 16) *% sizeof(T).int),
+                    cast[ptr float32](cast[int](pA_ptr) +% ((srcRow + g * 16) * pA_rs) *% sizeof(T).int),
+                    cint(pA_rs), cint(kBlocks16), cint(groupValid))
               else:
-                copyMem(addr packA_aligned[dstOff], addr pA_ptr[srcOff], mr * sizeof(T).int)
-        elif pA_cs == 1:
-          when defined(arm64) and T is float32:
-            # Row-major A: NEON 8×8 trn pack, or the streaming mova 16×16 pack
-            # when kc % 16 == 0 (16-column ZA tile). validRows zero-fills rows
-            # past current_mc, and leftover k steps use the scalar gather below.
-            static: doAssert mr == 32  # helpers' 8-row/16-row store geometry
-            let kBlocks = current_kc div 8
-            let kBlocks16 = current_kc div 16
-            let kcEven16 = current_kc mod 16 == 0
-            let kDone = if kcEven16: kBlocks16 * 16 else: kBlocks * 8
-            for ir in 0 ..< num_ir_eff:
-              let srcRow = ir * mr
-              let dstBase = ir * kc * mr
-              if kBlocks > 0:
-                if kcEven16:
-                  # Two 16-row groups per 32-row tile.
-                  for g in 0 ..< 2:
-                    let groupValid = max(0, min(16, current_mc - srcRow - g * 16))
-                    sme_packA_transpose_16rows(
-                      cast[ptr float32](cast[int](packA_aligned) +% (dstBase + g * 16) *% sizeof(T).int),
-                      cast[ptr float32](cast[int](pA_ptr) +% ((srcRow + g * 16) * pA_rs) *% sizeof(T).int),
-                      cint(pA_rs), cint(kBlocks16), cint(groupValid))
+                # Four 8-row groups per 32-row tile.
+                for g in 0 ..< 4:
+                  let groupValid = max(0, min(8, current_mc - srcRow - g * 8))
+                  neonPackATranspose8rows(
+                    cast[ptr float32](cast[int](packA_aligned) +% (dstBase + g * 8) *% sizeof(T).int),
+                    cast[ptr float32](cast[int](pA_ptr) +% ((srcRow + g * 8) * pA_rs) *% sizeof(T).int),
+                    cint(pA_rs), cint(kBlocks), cint(groupValid))
+            for k in kDone ..< current_kc:
+              let dstOff = dstBase + k * mr
+              let srcOff = srcRow * pA_rs + k * pA_cs
+              for ii in 0 ..< mr:
+                if (srcRow + ii) < current_mc:
+                  packA_aligned[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
                 else:
-                  # Four 8-row groups per 32-row tile.
-                  for g in 0 ..< 4:
-                    let groupValid = max(0, min(8, current_mc - srcRow - g * 8))
-                    neon_packA_transpose_8rows(
-                      cast[ptr float32](cast[int](packA_aligned) +% (dstBase + g * 8) *% sizeof(T).int),
-                      cast[ptr float32](cast[int](pA_ptr) +% ((srcRow + g * 8) * pA_rs) *% sizeof(T).int),
-                      cint(pA_rs), cint(kBlocks), cint(groupValid))
-              for k in kDone ..< current_kc:
-                let dstOff = dstBase + k * mr
-                let srcOff = srcRow * pA_rs + k * pA_cs
-                for ii in 0 ..< mr:
-                  if (srcRow + ii) < current_mc:
-                    packA_aligned[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
-                  else:
-                    packA_aligned[dstOff + ii] = T(0)
-          else:
-            # Scalar gather: same pack layout as the NEON path, without the 8×8 block transpose.
-            # Rows past current_mc store zeros.
-            for ir in 0 ..< num_ir_eff:
-              let srcRow = ir * mr
-              for k in 0 ..< current_kc:
-                let dstOff = ir * kc * mr + k * mr
-                let srcOff = srcRow * pA_rs + k * pA_cs
-                for ii in 0 ..< mr:
-                  if (srcRow + ii) < current_mc:
-                    packA_aligned[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
-                  else:
-                    packA_aligned[dstOff + ii] = T(0)
+                  packA_aligned[dstOff + ii] = T(0)
         else:
+          # Scalar gather: same pack layout as the NEON path, without the 8×8 block transpose.
+          # Rows past current_mc store zeros.
           for ir in 0 ..< num_ir_eff:
             let srcRow = ir * mr
             for k in 0 ..< current_kc:
@@ -400,58 +390,69 @@ proc gemm_strided*[T: SomeNumber](
                   packA_aligned[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
                 else:
                   packA_aligned[dstOff + ii] = T(0)
-
-        # ── Loop 1 (ir): micro-tiles of A, then Loop 2 (jr): micro-panels of B ──
-        # ir outer, jr inner: the packed A tile stays resident across the jr
-        # sweep, while the inner loop streams the packed B panels. Tile visit order
-        # changes, so no element's accumulation order is affected.
-        let packB_ptr = cast[ptr UncheckedArray[T]](alignB)
-        let packA_ptr = cast[ptr UncheckedArray[T]](alignA)
-        let packA_jump = kc * mr   # elements per ir slice
+      else:
         for ir in 0 ..< num_ir_eff:
-          let cRow = ic * mc + ir * mr
-          let aOffset = ir * packA_jump
-          let eff_mr = min(mr, M - cRow)
-          for jr in 0 ..< num_jr:
-            let cCol = jr * nr
-            if cCol >= N:
-              break
-
-            let bTilePtr = cast[ptr UncheckedArray[T]](packB_ptr)
-            let bOffset = jr * kc * nr   # elements into the packed B buffer for micro-panel jr
-            var AB {.noInit.}: array[mr, array[nr, T]]
-            # Prefetch the next B and A panels.
-            builtin_prefetch(cast[pointer](cast[int](bTilePtr) +% bOffset *% sizeof(T).int), 0, 1)
-            builtin_prefetch(cast[pointer](cast[int](packA_ptr) +% aOffset *% sizeof(T).int), 0, 1)
-            # Epilogue: displace (layout algebra) for view, raw-pointer dispatch
-            let eff_nr = min(nr, N - cCol)
-            let cTile {.noInit.} = displace(vC, (cRow, cCol))
-            when defined(arm64) and T is float32:
-              if eff_mr == mr and eff_nr == nr and
-                 vC.layout.stride[1] == 1 and vC.layout.stride[0] >= nr:
-                # Full 32×32 tile with contiguous C rows: kernel extracts ZA straight to C,
-                # fusing alpha/beta/ReLU in streaming mode (no AB scratch, no separate epilogue).
-                sme_gemm_ukernel_32x32_epi_dv(
-                  cast[ptr float32](cast[int](packA_ptr) +% aOffset *% sizeof(T).int),
-                  cast[ptr float32](cast[int](bTilePtr) +% bOffset *% sizeof(T).int),
-                  cast[ptr float32](cTile.data),
-                  cint(vC.layout.stride[0]), cint(current_kc),
-                  alpha, effective_beta,
-                  cint(activation == akReLU),
-                  cint(alpha == T(1)), cint(effective_beta == T(0)),
-                  cint(effective_beta == T(1)))
+          let srcRow = ir * mr
+          for k in 0 ..< current_kc:
+            let dstOff = ir * kc * mr + k * mr
+            let srcOff = srcRow * pA_rs + k * pA_cs
+            for ii in 0 ..< mr:
+              if (srcRow + ii) < current_mc:
+                packA_aligned[dstOff + ii] = pA_ptr[srcOff + ii * pA_rs]
               else:
-                gemm_ukernel(
-                  cast[ptr UncheckedArray[T]](cast[int](packA_ptr) +% aOffset *% sizeof(T).int),
-                  cast[ptr UncheckedArray[T]](cast[int](bTilePtr) +% bOffset *% sizeof(T).int),
-                  AB, current_kc)
-                gemm_epilogue(activation, cTile, AB, eff_mr, eff_nr, alpha, effective_beta)
+                packA_aligned[dstOff + ii] = T(0)
+
+      # ── Loop 1 (ir): micro-tiles of A, then Loop 2 (jr): micro-panels of B ──
+      # ir outer, jr inner: the packed A tile stays resident across the jr
+      # sweep, while the inner loop streams the packed B panels. Tile visit order
+      # changes, so no element's accumulation order is affected.
+      let packB_ptr = cast[ptr UncheckedArray[T]](alignB)
+      let packA_ptr = cast[ptr UncheckedArray[T]](alignA)
+      let packA_jump = kc * mr   # elements per ir slice
+      for ir in 0 ..< num_ir_eff:
+        let cRow = ic * mc + ir * mr
+        let aOffset = ir * packA_jump
+        let eff_mr = min(mr, M - cRow)
+        for jr in 0 ..< num_jr:
+          let cCol = jr * nr
+          if cCol >= N:
+            break
+
+          let bTilePtr = cast[ptr UncheckedArray[T]](packB_ptr)
+          let bOffset = jr * kc * nr   # elements into the packed B buffer for micro-panel jr
+          var AB {.noInit.}: array[mr, array[nr, T]]
+          # Prefetch the next B and A panels.
+          builtin_prefetch(cast[pointer](cast[int](bTilePtr) +% bOffset *% sizeof(T).int), 0, 1)
+          builtin_prefetch(cast[pointer](cast[int](packA_ptr) +% aOffset *% sizeof(T).int), 0, 1)
+          # Epilogue: displace (layout algebra) for view, raw-pointer dispatch
+          let eff_nr = min(nr, N - cCol)
+          let cTile {.noInit.} = displace(vC, (cRow, cCol))
+          when defined(arm64) and T is float32:
+            if eff_mr == mr and eff_nr == nr and
+               vC.layout.stride[1] == 1 and vC.layout.stride[0] >= nr:
+              # Full 32×32 tile with contiguous C rows: kernel extracts ZA straight to C,
+              # fusing alpha/beta/ReLU in streaming mode (no AB scratch, no separate epilogue).
+              smeGemmUkernel32x32EpiDv(
+                cast[ptr float32](cast[int](packA_ptr) +% aOffset *% sizeof(T).int),
+                cast[ptr float32](cast[int](bTilePtr) +% bOffset *% sizeof(T).int),
+                cast[ptr float32](cTile.data),
+                cint(vC.layout.stride[0]), cint(current_kc),
+                alpha, effective_beta,
+                cint(activation == akReLU),
+                cint(alpha == T(1)), cint(effective_beta == T(0)),
+                cint(effective_beta == T(1)))
             else:
               gemm_ukernel(
                 cast[ptr UncheckedArray[T]](cast[int](packA_ptr) +% aOffset *% sizeof(T).int),
                 cast[ptr UncheckedArray[T]](cast[int](bTilePtr) +% bOffset *% sizeof(T).int),
                 AB, current_kc)
               gemm_epilogue(activation, cTile, AB, eff_mr, eff_nr, alpha, effective_beta)
+          else:
+            gemm_ukernel(
+              cast[ptr UncheckedArray[T]](cast[int](packA_ptr) +% aOffset *% sizeof(T).int),
+              cast[ptr UncheckedArray[T]](cast[int](bTilePtr) +% bOffset *% sizeof(T).int),
+              AB, current_kc)
+            gemm_epilogue(activation, cTile, AB, eff_mr, eff_nr, alpha, effective_beta)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Convenience overload: openArray[T]
@@ -483,27 +484,11 @@ proc gemm_strided*[T: SomeNumber](
 
 when isMainModule:
   import std/[random, strutils]
+  import workspace/ceramic/benchmark/bench_utils
 
   when defined(arm64):
     doAssert simdArchString() == "sme",
       "SME path not active on arm64 (resolvedArch = " & simdArchString() & ")"
-
-  proc gemm_reference(M, N, K: int, alpha: float32,
-      A: openArray[float32], rsA, csA: int,
-      B: openArray[float32], rsB, csB: int,
-      beta: float32, C: var openArray[float32], rsC, csC: int) =
-    for j in 0 ..< N:
-      for i in 0 ..< M:
-        let ci = i * rsC + j * csC
-        C[ci] = if beta == 0.0'f32: 0.0'f32
-                elif beta != 1.0'f32: C[ci] * beta
-                else: C[ci]
-    for j in 0 ..< N:
-      for k in 0 ..< K:
-        let bv = B[k * rsB + j * csB]
-        if bv != 0.0'f32:
-          for i in 0 ..< M:
-            C[i * rsC + j * csC] += alpha * A[i * rsA + k * csA] * bv
 
   proc test(M, N, K: int, rsA, csA, rsB, csB, rsC, csC: int, label: string, tol: float32 = 1e-4'f32,
       alpha: float32 = 1.0'f32, beta: float32 = 1.0'f32) =
@@ -553,7 +538,7 @@ when isMainModule:
       for i in 0 ..< 16:
         for j in 0 ..< 16:
           AB[i][j] = 123.0'f32
-      gemm_ukernel_sme(
+      gemmUkernelSme(
         cast[ptr UncheckedArray[float32]](addr packA[0]),
         cast[ptr UncheckedArray[float32]](addr packB[0]),
         AB, 0)
@@ -570,7 +555,7 @@ when isMainModule:
       for i in 0 ..< 32:
         for j in 0 ..< 32:
           AB[i][j] = 123.0'f32
-      gemm_ukernel_sme(
+      gemmUkernelSme(
         cast[ptr UncheckedArray[float32]](addr packA[0]),
         cast[ptr UncheckedArray[float32]](addr packB[0]),
         AB, 0)
@@ -590,7 +575,7 @@ when isMainModule:
       for i in 0 ..< C.len:
         C[i] = rand(1.0'f32)
         Cref[i] = C[i]
-      sme_gemm_ukernel_32x32_epi_dv(addr packA[0], addr packB[0], addr C[0],
+      smeGemmUkernel32x32EpiDv(addr packA[0], addr packB[0], addr C[0],
         cint(32), cint(0), 1.0'f32, 2.0'f32, 0, 1, 0, 0)  # kc=0, beta=2
       for i in 0 ..< C.len:
         doAssert abs(C[i] - 2.0'f32 * Cref[i]) < 1e-6, "fused kc=0 must yield beta*C"
@@ -753,7 +738,7 @@ when isMainModule:
       for i in 0 ..< C.len:
         C[i] = rand(1.0'f32)
         Cref[i] = C[i] + (if ((i div 32 + i mod 32) mod 2) == 0: 1.0'f32 else: 0.0'f32)
-      neon_epilogue_f32_32x32(addr C[0], cint(32), addr AB[0][0],
+      neonEpilogueF3232x32(addr C[0], cint(32), addr AB[0][0],
         1.0'f32, 1.0'f32, 1, 1, 0, 1)
       for i in 0 ..< C.len:
         doAssert abs(C[i] - Cref[i]) < 1e-6, "NEON epilogue ReLU mismatch (got " & $C[i] & ")"

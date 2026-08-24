@@ -30,24 +30,6 @@ const
   WarmupSamples = 1
   Tol = 1e-4'f32
 
-proc gemm_reference_naive(M, N, K: int; alpha: float32;
-    A: openArray[float32]; rsA, csA: int;
-    B: openArray[float32]; rsB, csB: int;
-    beta: float32; C: var openArray[float32]; rsC, csC: int) =
-  ## Scalar triple-loop GEMM: correctness reference and generic-path baseline.
-  for j in 0 ..< N:
-    for i in 0 ..< M:
-      let ci = i * rsC + j * csC
-      C[ci] = if beta == 0.0'f32: 0.0'f32
-              elif beta != 1.0'f32: C[ci] * beta
-              else: C[ci]
-  for j in 0 ..< N:
-    for k in 0 ..< K:
-      let bv = B[k * rsB + j * csB]
-      if bv != 0.0'f32:
-        for i in 0 ..< M:
-          C[i * rsC + j * csC] += alpha * A[i * rsA + k * csA] * bv
-
 proc gflops(elapsed: float64; ops: float64): float64 =
   (ops / 1e9) / elapsed
 
@@ -91,7 +73,7 @@ when isMainModule:
     var
       C_naive = newSeq[float32](N * N)
       C_sme = newSeq[float32](N * N)
-    gemm_reference_naive(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C_naive, rs, cs)
+    gemm_reference(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C_naive, rs, cs)
     v_a.gemm_strided(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C_sme, rs, cs)
     let chk = allClose(C_sme, C_naive, rtol = Tol, atol = Tol)
     doAssert chk.ok, &"N={N}: SME vs naive maxAbsErr={chk.maxAbsErr:.2e}"
@@ -102,10 +84,13 @@ when isMainModule:
       var C = newSeq[float32](N * N)
       proc run() = v_a.gemm_strided(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C, rs, cs)
       results.add bench("sme (ex02a-sme)", run, ops)
-    block:
-      var C = newSeq[float32](N * N)
-      proc run() = gemm_reference_naive(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C, rs, cs)
-      results.add bench("generic (naive)", run, ops)
+    if N < 512:
+      # Naive baseline is cache-missing at 512³: five passes would dominate
+      # the budget, so time it only up to 256³.
+      block:
+        var C = newSeq[float32](N * N)
+        proc run() = gemm_reference(N, N, N, 1.0'f32, A, rs, cs, B, rs, cs, 0.0'f32, C, rs, cs)
+        results.add bench("generic (naive)", run, ops)
 
     echo &"  N={N:4d}  correctness vs naive: maxAbsErr={chk.maxAbsErr:.2e} ✅"
     for r in results:
