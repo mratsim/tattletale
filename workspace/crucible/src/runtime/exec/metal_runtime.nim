@@ -79,7 +79,7 @@ when defined(macosx):
   # ═════════════════════════════════════════════════
 
   type
-    UtSName = object
+    UtSName {.importc: "struct utsname", header: "<sys/utsname.h>".} = object
       ## libc `struct utsname`: every field is 256 chars on macOS.
       sysname: array[256, char]
       nodename: array[256, char]

@@ -13,37 +13,54 @@
 ##
 ## Containers (seq/array/string) → `(addr, len·sizeof(T))` device buffers;
 ## scalars (incl. raw pointer values) → `(addr, -sizeof(T))` by-value.
+## `PtrArg` passes a raw pointer at an arbitrary offset as a device buffer
+## (a strided or negative-stride view's base, where the buffer extends
+## behind the base).
 ## `bool` is the exception: it marshals as a 4-byte i32 (see `blobOf`).
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
 type
-  ArgBlob* = tuple[data: pointer, size: int]
+  ArgBlob* = tuple[data: pointer, size: int, off: int]
     ## Type-erased internal layer:
     ##   size >= 0 → device buffer: memcpy `size` bytes host→device, bind as
-    ##               buffer/SSBO/storage
+    ##               buffer/SSBO/storage at byte `off`
     ##   size <  0 → trivial by-value scalar of `-size` bytes (no device alloc)
     ## The output of `run` is always treated as a device buffer (uploaded
     ## before launch, read back after) regardless of the sign of its size.
+
+  PtrArg*[T] = object
+    ## A raw buffer view with an explicit binding offset, the pointer-base
+    ## form of a seq arg: the device buffer holds `len` elements starting
+    ## at `buf`, and the kernel's base pointer binds at element `off`
+    ## (the negative-stride views' shifted base inside the buffer).
+    buf*: ptr UncheckedArray[T]
+    len*: int
+    off*: int
 
 func blobOf*[T](x: seq[T], storage: var seq[byte]): ArgBlob {.inline.} =
   # A seq param is a shallow copy sharing the caller's refcounted buffer,
   # so addr x[0] stays valid for the whole launch (the args tuple holds
   # the caller's seq alive).
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil),
-          size: x.len * sizeof(T))
+          size: x.len * sizeof(T), off: 0)
+
+func blobOf*[T](x: PtrArg[T], storage: var seq[byte]): ArgBlob {.inline.} =
+  # The pointer stays valid for the whole launch (the args tuple holds
+  # the caller's buffer alive).
+  (data: cast[pointer](x.buf), size: x.len * sizeof(T), off: x.off * sizeof(T))
 
 template blobOf*[N, T](x: array[N, T], storage: var seq[byte]): ArgBlob =
   # Must stay a template: a by-value array param copies to the callee
   # stack and the blob would dangle after return, while literal-array
   # args (e.g. `[1'u32]`) are rvalues a `var` param cannot accept.
   static: doAssert(sizeof(x) > 0, "empty array args are not supported (array[0, T])")
-  (data: cast[pointer](addr x[0]), size: sizeof(x))
+  (data: cast[pointer](addr x[0]), size: sizeof(x), off: 0)
 
 func blobOf*(x: string, storage: var seq[byte]): ArgBlob {.inline.} =
   # Same refcounted-buffer reasoning as the seq overload.
-  (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil), size: x.len)
+  (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil), size: x.len, off: 0)
 
 func blobOf*[T](x: T, storage: var seq[byte]): ArgBlob {.inline.} =
   let off = storage.len
@@ -55,23 +72,23 @@ func blobOf*[T](x: T, storage: var seq[byte]): ArgBlob {.inline.} =
     storage.setLen(off + 4)
     var tmp = int32(x)
     copyMem(addr storage[off], addr tmp, 4)
-    (data: cast[pointer](addr storage[off]), size: -4)
+    (data: cast[pointer](addr storage[off]), size: -4, off: 0)
   else:
     storage.setLen(off + sizeof(T))
     var tmp = x   # make literals/consts addressable
     copyMem(addr storage[off], addr tmp, sizeof(T))
-    (data: cast[pointer](addr storage[off]), size: -sizeof(T))
+    (data: cast[pointer](addr storage[off]), size: -sizeof(T), off: 0)
 
 func outBlob*[T](x: var seq[T]): ArgBlob {.inline.} =
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil),
-          size: x.len * sizeof(T))
+          size: x.len * sizeof(T), off: 0)
 
 func outBlob*[N, T](x: var array[N, T]): ArgBlob {.inline.} =
-  (data: cast[pointer](addr x[0]), size: sizeof(x))
+  (data: cast[pointer](addr x[0]), size: sizeof(x), off: 0)
 
 func outBlob*(x: var string): ArgBlob {.inline.} =
-  (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil), size: x.len)
+  (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil), size: x.len, off: 0)
 
 func outBlob*[T](x: var T): ArgBlob {.inline.} =
-  (data: cast[pointer](addr x), size: sizeof(T))
+  (data: cast[pointer](addr x), size: sizeof(T), off: 0)
 
