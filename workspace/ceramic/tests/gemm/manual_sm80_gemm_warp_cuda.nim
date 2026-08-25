@@ -20,8 +20,10 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/atoms
-import workspace/ceramic/src/kernel_gemm/atoms_nvidia
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
+
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
@@ -45,9 +47,9 @@ func gemmWarpMicrotile(tma: static TiledMma; t: int;
   ## offsets, no raw-addr views.
   const
     kSlices = 2
-    M = tma.atom.mnk.m
-    N = tma.atom.mnk.n
-    K = tma.atom.mnk.k
+    M = tma.atom.getM()
+    N = tma.atom.getN()
+    K = tma.atom.getK()
     VA = toIntVal(tma.atom.valuesPerThread(opA))
     VB = toIntVal(tma.atom.valuesPerThread(opB))
     VC = toIntVal(tma.atom.valuesPerThread(opC))

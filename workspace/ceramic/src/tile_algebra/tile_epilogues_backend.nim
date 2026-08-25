@@ -1,0 +1,164 @@
+## Tattletale
+## Copyright (c) 2026 Mamy André-Ratsimbazafy
+## Licensed and distributed under either of
+##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+## at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+import std/macros
+import workspace/crucible
+import ../int_tuples
+import ../layouts
+import ../layout_constructors
+import ../layout_indexing
+import ../tensors
+import ../ptr_arithmetic
+import ../atoms_mma_partitioning
+import ./tiles
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Per-lane view
+# ═════════════════════════════════════════════════════════════════════════
+
+template shardShape*[R, C: static int; A: static MmaAtom](): untyped =
+  ## Per-lane shape of an epilogue operand view: (rowTiles, colTiles, vpt).
+  (Int[R div A.getM()](), Int[C div A.getN()](),
+   Int[toIntVal(A.valuesPerThread(opC))]())
+
+template shardStrides*[R, C: static int; A: static MmaAtom](
+    strideRow, strideCol: static int): untyped =
+  ## Per-lane strides of an epilogue operand view:
+  ## (A.getM()·strideRow, A.getN()·strideCol, strideCol).
+  (Int[A.getM() * strideRow](), Int[A.getN() * strideCol](),
+   Int[strideCol]())
+
+template shardView*[T; R, C: static int; A: static MmaAtom](
+    buf: ptr UncheckedArray[T],
+    strideRow, strideCol: static int,
+    origin: untyped): untyped =
+  ## Per-lane gmem view of an epilogue operand
+  let lane = int(thread_index_in_threadgroup)
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let baseOff = (uint32(origin[2]) * uint32(R)) * uint32(strideRow) +
+                (uint32(origin[3]) * uint32(C)) * uint32(strideCol) +
+                uint32(cell mod A.getM()) * uint32(strideRow) +
+                uint32(cell div A.getM()) * uint32(strideCol)
+  make_view(buf +% baseOff,
+            make_layout((Int[R div A.getM()](), Int[C div A.getN()](),
+                         Int[toIntVal(A.valuesPerThread(opC))]()),
+                        (Int[A.getM() * strideRow](), Int[A.getN() * strideCol](),
+                         Int[strideCol]())))
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Type introspection helpers
+# ═════════════════════════════════════════════════════════════════════════
+func isTensorViewType(n: NimNode): bool =
+  n.kind == nnkBracketExpr and n[0].eqIdent("TensorView")
+
+func isStridedOperandType(n: NimNode): bool =
+  n.kind == nnkBracketExpr and n[0].eqIdent("StridedOperand")
+
+func fieldName(field: NimNode): NimNode =
+  ## The plain ident of an IdentDefs name (strips the `*` postfix).
+  if field.kind == nnkPostfix: field[1] else: field
+
+func intOf(node: NimNode): int =
+  if node.kind == nnkBracketExpr and node[0].eqIdent("Int"):
+    node[1].intVal
+  else:
+    error("shard: expected an Int[V] type node, got " & node.treeRepr, node)
+
+func sameTree(a, b: NimNode): bool =
+  if a.kind != b.kind: return false
+  if a.kind in {nnkIdent, nnkSym}: return a.eqIdent(b)
+  if a.kind == nnkIntLit: return a.intVal == b.intVal
+  if a.len != b.len: return false
+  for i in 0 ..< a.len:
+    if not sameTree(a[i], b[i]): return false
+  true
+
+func rebuildType(epiType, origSh, origSt, newSh, newSt: NimNode): NimNode =
+  result = copyNimTree(epiType)
+  if result.kind == nnkBracketExpr:
+    for i in 1 ..< result.len:
+      if sameTree(result[i], origSh):
+        result[i] = copyNimTree(newSh)
+      elif sameTree(result[i], origSt):
+        result[i] = copyNimTree(newSt)
+
+template shardStridedOperand*[T; R, C: static int; A: static MmaAtom](
+    buf: ptr UncheckedArray[T], rscArg, cscArg: int32,
+    origin: untyped): untyped =
+  ## Per-lane view of a runtime-strided operand: base = the tile-origin
+  ## offset plus the lane's cell offset. The args are named rscArg/cscArg
+  ## so the constructor field names rsc/csc survive template substitution.
+  let lane = int(thread_index_in_threadgroup)
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let base = (uint32(origin[2]) * uint32(R)) * uint32(rscArg) +
+             (uint32(origin[3]) * uint32(C)) * uint32(cscArg) +
+             uint32(cell mod A.getM()) * uint32(rscArg) +
+             uint32(cell div A.getM()) * uint32(cscArg)
+  StridedOperand[T](data: buf, rsc: rscArg, csc: cscArg, base: int32(base))
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Auto-generating shard
+# ═════════════════════════════════════════════════════════════════════════
+
+macro shard*(epi: typed, buf: untyped, origin: untyped, tile: typed): untyped =
+  let epiType = epi.getTypeInst()
+  let epiImpl = epiType.getTypeImpl()
+  let tileType = tile.getTypeInst()
+
+  var operands: seq[NimNode]   # the TensorView/StridedOperand fields
+  var scalars: seq[NimNode]    # the IdentDefs of the other fields
+  for child in epiImpl[2]:
+    if child.kind == nnkIdentDefs:
+      if isTensorViewType(child[1]) or isStridedOperandType(child[1]):
+        operands.add child
+      else:
+        scalars.add child
+
+  if operands.len == 0:
+    return epi
+
+  let R = tileType[2]
+  let C = tileType[3]
+  let A = tileType[4]
+  let T = tileType[1]
+
+  var shardedType = epiType
+  for f in operands:
+    if isTensorViewType(f[1]):
+      let shNode = f[1][2]   # (Int[R], Int[C])
+      let stNode = f[1][3]   # (Int[strideRow], Int[strideCol])
+      let strideRow = intOf(stNode[0])
+      let strideCol = intOf(stNode[1])
+      let newSh = newCall(newTree(nnkBracketExpr, bindSym"shardShape", R, C, A))
+      let newSt = newCall(newTree(nnkBracketExpr, bindSym"shardStrides", R, C, A),
+                          newLit(strideRow), newLit(strideCol))
+      shardedType = rebuildType(shardedType, shNode, stNode, newSh, newSt)
+    # StridedOperand fields keep their type (runtime strides)
+
+  var obj = newNimNode(nnkObjConstr)
+  obj.add shardedType
+  for f in scalars:
+    obj.add newTree(nnkExprColonExpr, f[0], newTree(nnkDotExpr, epi, f[0]))
+  for f in operands:
+    if isTensorViewType(f[1]):
+      let stNode = f[1][3]
+      let strideRow = intOf(stNode[0])
+      let strideCol = intOf(stNode[1])
+      let view = newCall(newTree(nnkBracketExpr, bindSym"shardView", T, R, C, A),
+                         buf, newLit(strideRow), newLit(strideCol), origin)
+      obj.add newTree(nnkExprColonExpr, f[0], view)
+    else:
+      let cField = fieldName(f[0])
+      let view = newCall(newTree(nnkBracketExpr, bindSym"shardStridedOperand", T, R, C, A),
+                         buf,
+                         newTree(nnkDotExpr, newTree(nnkDotExpr, epi, cField), ident"rsc"),
+                         newTree(nnkDotExpr, newTree(nnkDotExpr, epi, cField), ident"csc"),
+                         origin)
+      obj.add newTree(nnkExprColonExpr, f[0], view)
+  result = obj
+
+# TODO: smem-staged operand copies (CUDA async-copy markers) when a backend stages epilogue operands through shared memory.

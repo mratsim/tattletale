@@ -147,9 +147,13 @@
 import std/macros
 import ./int_tuples
 import ./layouts
+import ./layout_constructors
 import ./tensors
 import ./ptr_arithmetic
-import ./atoms
+import ./hardware/h_configgen
+import ./hardware/h_registry
+import ./hardware/h_properties
+import ./hardware/h_mma_dispatch
 import ./atoms_mma_partitioning
 import ./layout_algebra
 import ./kernel_copy_gpu
@@ -157,9 +161,6 @@ import ./atoms_copy
 import ./kernel_fillwith_gpu
 import ./kernel_gemm_epilogues
 import ./macros/static_for
-import ./kernel_gemm/mma_dispatch
-import ./kernel_gemm/atoms_nvidia
-import ./kernel_gemm/atoms_universal
 import workspace/crucible
 
 {.experimental: "callOperator".}
@@ -176,9 +177,9 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
   ## Register-level MMA, in-place accumulate: dFrag += aFrag·bFrag.
   ##
   ## One mma.sync (tensor-core atoms), executed by the 32 lanes of a warp
-  ## cooperatively, or one scalar FMA (bk_FMA atoms) on 1×1 fragments,
-  ## executed by a single thread. The Apple simdgroup atoms use the
-  ## simdgroup-fragment overload below.
+  ## cooperatively, or one scalar FMA (the universal FMA atoms, empty
+  ## instr) on 1×1 fragments, executed by a single thread. The Apple
+  ## simdgroup atoms use the simdgroup-fragment overload below.
   ##
   ## Worked example (m16n8k8, (2, 2, 1), tile (32, 16, 32), 128 lanes = 4 warps):
   ##   each lane runs this call on its own register slice.
@@ -191,43 +192,17 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
   ##   dFrag: mutable register fragment tensor (V, RepeatM, RepeatN), the accumulator (AB).
   ##   aFrag: the A register fragment tensor (V, RepeatM, 1), one k slice
   ##   bFrag: the B register fragment tensor (V, RepeatN, 1), one k slice
-  when mma.kind == bk_FMA:
-    # The universal atom's instruction: plain a·b+c, no fused-fma op.
+  when mma.getInstr() == "":
+    # The universal FMA atoms carry no mnemonic: plain a·b+c, no fused-fma op.
     # Compiles on every backend and on the host; NVRTC/MSL/clang fuse
     # the expression where available.
     dFrag[0] = aFrag[0] * bFrag[0] + dFrag[0]
   else:
-    gemm_mma(mma.instr,
+    gemm_mma(mma.getInstr(),
              toIntVal(mma.valuesPerThread(opC)),
              toIntVal(mma.valuesPerThread(opA)),
              toIntVal(mma.valuesPerThread(opB)),
              dFrag, aFrag, bFrag)
-
-template gemm_atom*[TD, TA, TB; isLayoutLeftD: static bool; isLayoutLeftA: static bool; isLayoutLeftB: static bool](
-    mma: static MmaAtom,
-    dFrag: var SimdgroupFragment[TD, isLayoutLeftD],
-    aFrag: SimdgroupFragment[TA, isLayoutLeftA],
-    bFrag: SimdgroupFragment[TB, isLayoutLeftB]): untyped =
-  ## Simdgroup-fragment form of gemm_atom: one `simdgroup_multiply_accumulate`
-  ## on the fragment tensors, in-place accumulate (dFrag += aFrag·bFrag).
-  ## The Apple simdgroup atoms' fragment path; the MSL printer emits the
-  ## intrinsic. A template so the call inlines into the kernel body: MSL
-  ## simdgroup matrices cannot be passed by pointer, and a `var` parameter
-  ## would lower to one on the device-function boundary.
-  ##
-  ## Args:
-  ##   mma: the hardware instruction descriptor (the Apple simdgroup atoms)
-  ##   dFrag: the accumulator simdgroup fragment, in/out
-  ##   aFrag, bFrag: the operand simdgroup fragments
-  static:
-    doAssert mma.kind == bkGPU_TensorCore and mma.instr == "simdgroup_multiply_accumulate",
-      "gemm_atom: simdgroup fragments require an Apple simdgroup atom" &
-      " (kind bkGPU_TensorCore, instr simdgroup_multiply_accumulate)"
-  gemm_mma(mma.instr,
-           toIntVal(mma.valuesPerThread(opC)),
-           toIntVal(mma.valuesPerThread(opA)),
-           toIntVal(mma.valuesPerThread(opB)),
-           dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_warp(mma, ...): loop over atoms
@@ -333,14 +308,14 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
     tileK = TileShape[2]
 
   static:
-    doAssert tileM === tma.thrM * tma.atom.mnk.m,
-      "gemm_tiled: TileShape.M (" & $tileM & ") != thrM·atomM (" & $tma.thrM & "·" & $tma.atom.mnk.m &
+    doAssert tileM === tma.thrM * tma.atom.getM(),
+      "gemm_tiled: TileShape.M (" & $tileM & ") != thrM·atomM (" & $tma.thrM & "·" & $tma.atom.getM() &
         "). The thread layout must exactly cover the tile (partition contract)"
-    doAssert tileN === tma.thrN * tma.atom.mnk.n,
-      "gemm_tiled: TileShape.N (" & $tileN & ") != thrN·atomN (" & $tma.thrN & "·" & $tma.atom.mnk.n &
+    doAssert tileN === tma.thrN * tma.atom.getN(),
+      "gemm_tiled: TileShape.N (" & $tileN & ") != thrN·atomN (" & $tma.thrN & "·" & $tma.atom.getN() &
         "). The thread layout must exactly cover the tile (partition contract)"
-    doAssert tileK mod (tma.thrK * tma.atom.mnk.k) == 0,
-      "gemm_tiled: TileShape.K (" & $tileK & ") mod (thrK·atomK) (" & $tma.thrK & "·" & $tma.atom.mnk.k &
+    doAssert tileK mod (tma.thrK * tma.atom.getK()) == 0,
+      "gemm_tiled: TileShape.K (" & $tileK & ") mod (thrK·atomK) (" & $tma.thrK & "·" & $tma.atom.getK() &
         ") != 0. Use a tileK multiple of thrK·atomK"
     doAssert tma.thrK == 1,
       "gemm_tiled: ThrK (" & $tma.thrK & ") != 1. At the moment, threads are not distributed along K"
@@ -569,37 +544,37 @@ template atom_selector*(TA, TB, TC: typedesc): auto =
   ##
   ## Matches the raw operand types: mmaDTypeOf errors on any type but
   ## uint32 and float32, so the selector cannot route through it.
-  ## Unmatched combinations fall back to the scalar-FMA atom, which
+  ## Unmatched combinations fall back to the 1×1×1 universal atom, which
   ## compiles wherever plain arithmetic does.
   # TODO: naive dtype matching: the operand types may pack smaller
   # datatypes (4 × fp8, 2 × fp16). Rework when those land.
   when TA is uint32 and TB is uint32 and TC is float32:
     SM80_16x8x8_F32TF32TF32F32_TN
   elif TA is float32 and TB is float32 and TC is float32:
-    UNIVERSAL_FMA_F32
+    UNIVERSAL_1x1x1_F32F32F32F32
   else:
     {.warning: "atom_selector: no backend MMA for (" & $TA & ", " & $TB & ", " & $TC &
-      "); falling back to scalar FMA (UNIVERSAL_FMA_F32).".}
-    UNIVERSAL_FMA_F32
+      "); falling back to scalar FMA (UNIVERSAL_1x1x1_F32F32F32F32).".}
+    UNIVERSAL_1x1x1_F32F32F32F32
 
-proc make_tiled_mma*[LA, LB, LC, Sh, St](
-    a: MmaAtom[LA, LB, LC],
-    thread_layout: Layout[Sh, St]): TiledMma[MmaAtom[LA, LB, LC], Layout[Sh, St]] {.inline.} =
-  TiledMma[MmaAtom[LA, LB, LC], Layout[Sh, St]](atom: a, threadLayout: thread_layout)
+func make_tiled_mma*[Sh, St](
+    a: static MmaAtom,
+    thread_layout: Layout[Sh, St]): TiledMma[MmaAtom, Layout[Sh, St]] {.inline.} =
+  TiledMma[MmaAtom, Layout[Sh, St]](atom: a, threadLayout: thread_layout)
 
 template threadLayoutOf*(atom: static MmaAtom, M, N: static int): auto =
-  ## Thread tiling for the input M and N, derived from the atom's mnk dimensions:
-  ##   thrM = M div atom.mnk.m, thrN = N div atom.mnk.n
+  ## Thread tiling for the input M and N, derived from the atom's tile dimensions:
+  ##   thrM = M div atom.getM(), thrN = N div atom.getN()
   ## The input M and N must be multiples of the atom.
   # TODO: this needs M, N known at compile-time but they are dynamic
-  make_layout((M div atom.mnk.m, N div atom.mnk.n, 1))
+  make_layout((M div atom.getM(), N div atom.getN(), 1))
 
 template tile_shape*(tma: static TiledMma; tileK: static int): auto =
   ## The tile one CTA computes: (thrM·atomM, thrN·atomN, tileK),
   ## the thread layout times the atom on M and N,
   ## one tileK-sized slice of K.
   ## The grid is M/tileM × N/tileN CTAs.
-  (M: tma.thrM * tma.atom.mnk.m, N: tma.thrN * tma.atom.mnk.n, K: tileK)
+  (M: tma.thrM * tma.atom.getM(), N: tma.thrN * tma.atom.getN(), K: tileK)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_kernel(D, A, B, epi)

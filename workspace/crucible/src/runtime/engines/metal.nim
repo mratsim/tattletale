@@ -235,7 +235,8 @@ when defined(macosx):
       for i in 0 ..< blobs.len:
         if blobs[i].size >= 0:
           discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                          inputBuffers[i].buffer, objc.NSUInteger(0), objc.NSUInteger(i + 1))
+                          inputBuffers[i].buffer, objc.NSUInteger(blobs[i].off),
+                          objc.NSUInteger(i + 1))
         else:
           discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
                           scalarBuf.buffer, objc.NSUInteger(slot * ScalarSlotStride), objc.NSUInteger(i + 1))

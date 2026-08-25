@@ -33,8 +33,59 @@ import ./layout_constructors
 import ./layout_indexing
 import ./layout_algebra
 import ./tensors
-import ./atoms
+import ./hardware/h_configgen
+import ./hardware/h_registry
+import ./hardware/h_properties
 import workspace/crucible
+
+# ═════════════════════════════════════════════════════════════════════════
+#  TiledMma and derived counts
+# ═════════════════════════════════════════════════════════════════════════
+
+type TiledMma*[A: MmaAtom, TL: Layout] = object
+  ## Compile-time record: the atom plus its (ThrM, ThrN, ThrK) tiling across threads.
+  ## ThrM, ThrN, ThrK: the atom's replication counts along M, N, K.
+  ## Covered tile = (ThrM·M, ThrN·N, ThrK·K).
+  ## Total threads = atom.threadCount × ThrM·ThrN·ThrK.
+  ## Example (m16n8k8 tf32 atom, tiling (2, 2, 1)):
+  ##   covered tile (32, 16, 8), 128 threads
+  ##   thread 32 (atom position (1, 0)) holds the A fragment
+  ##   (16,0) (24,0) (16,4) (24,4).
+  ## The atom is fixed by the hardware. The tiling is a software choice.
+  ## Downstream consumers:
+  ## - thread-fragment layouts (thrfrg_A/B/C),
+  ## - operand partitions (partition_A/B/C),
+  ## - the kernel's K-loop.
+  atom*: MmaAtom
+  threadLayout*: TL                      ## (ThrM, ThrN, ThrK)
+
+template threadCount*(atom: static MmaAtom; operand: static MmaOperand): untyped =
+  ## The number of threads cooperating on the atom for operand matrix A, B or C
+  ## in the `C <- A*B + C` microkernel. Every declared GPU atom uses the same
+  ## thread count for all three operands.
+  Int[atom.getThreadCount()]()
+
+template valuesPerThread*(atom: static MmaAtom; operand: static MmaOperand): untyped =
+  ## The operand's values per thread: the operand layout's cosize over the
+  ## atom's thread count. A, B and C may each differ. The declared atoms'
+  ## V_A/V_B/V_C: tf32 4/2/4, f16+bf16 k16 8/4/4, int8+e4m3 k32 16/8/4,
+  ## universal 8×8×8 and Apple 2/2/2, 1×1×1 1/1/1.
+  when operand == opA: cosize(atom.getLayoutA()) div atom.threadCount(opA)
+  elif operand == opB: cosize(atom.getLayoutB()) div atom.threadCount(opB)
+  else:                cosize(atom.getLayoutC()) div atom.threadCount(opC)
+
+func thrM*(tma: static TiledMma): static int {.inline.} =
+  toIntVal(tma.threadLayout.shape[0])
+
+func thrN*(tma: static TiledMma): static int {.inline.} =
+  toIntVal(tma.threadLayout.shape[1])
+
+func thrK*(tma: static TiledMma): static int {.inline.} =
+  toIntVal(tma.threadLayout.shape[2])
+
+func threadCount*(tma: static TiledMma): static int {.inline.} =
+  ## Total threads the TiledMma uses: T × ThrM·ThrN·ThrK.
+  tma.atom.getThreadCount() * tma.thrM * tma.thrN * tma.thrK
 
 # ═════════════════════════════════════════════════════════════════════════
 #  thrfrg_A/B/C: the fragment layout of an operand tile
@@ -62,9 +113,9 @@ func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
   ## Repeat*: how many times the thread layout repeats across the tile
   ## (the (2, 2, 1) thread layout covers (32, 8), so a (64, 16) tile has Rest (2, 2)).
   const
-    aLayout = tma.atom.aLayout
-    atomM = tma.atom.mnk.m
-    atomK = tma.atom.mnk.k
+    aLayout = tma.atom.getLayoutA()
+    atomM = tma.atom.getM()
+    atomK = tma.atom.getK()
     thrM  = tma.threadLayout.shape[0]
     thrK  = tma.threadLayout.shape[2]
   static:
@@ -87,9 +138,9 @@ func thrfrg_B*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
   ## The fragment layout of the (N, K) B tensor:
   ## ((T, V), (ThrN, ThrK), (RepeatN, RepeatK)) → offset in the tile. See thrfrg_A.
   const
-    bLayout = tma.atom.bLayout
-    atomN = tma.atom.mnk.n
-    atomK = tma.atom.mnk.k
+    bLayout = tma.atom.getLayoutB()
+    atomN = tma.atom.getN()
+    atomK = tma.atom.getK()
     thrN  = tma.threadLayout.shape[1]
     thrK  = tma.threadLayout.shape[2]
   static:
@@ -114,9 +165,9 @@ func thrfrg_C*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
   ## Unlike A and B, C has no col-major requirement: a stride-0 rows view
   ## (the epilogue's broadcast bias) partitions to the same per-column offsets.
   const
-    cLayout = tma.atom.cLayout
-    atomM = tma.atom.mnk.m
-    atomN = tma.atom.mnk.n
+    cLayout = tma.atom.getLayoutC()
+    atomM = tma.atom.getM()
+    atomN = tma.atom.getN()
     thrM  = tma.threadLayout.shape[0]
     thrN  = tma.threadLayout.shape[1]
   static:
@@ -179,14 +230,14 @@ func partition_A*[T, Sh, St](
   ## It cuts the thrfrg_A layout at the thread's coordinates, keeping every V value.
   ## The flat order is the register order the gather copies into the mma fragment.
   const
-    atomM = tma.atom.mnk.m
-    atomK = tma.atom.mnk.k
+    atomM = tma.atom.getM()
+    atomK = tma.atom.getK()
     thrM  = tma.threadLayout.shape[0]
     thrK  = tma.threadLayout.shape[2]
     rshape = (Sh.default[0] div (thrM * atomM), Sh.default[1] div (thrK * atomK))
   let thrTensor = make_view(A.data, thrfrg_A(tma, A.layout))
-  let tsel = idx2crd(tma.atom.aLayout.shape[0], thr.tv)
-  let vsel = mapLeavesWith(tma.atom.aLayout.shape[1]): X()
+  let tsel = idx2crd(tma.atom.getLayoutA().shape[0], thr.tv)
+  let vsel = mapLeavesWith(tma.atom.getLayoutA().shape[1]): X()
   let rsel = mapLeavesWith(rshape): X()
   thrTensor(((tsel, vsel), (thr.tm, thr.tk), rsel))
 
@@ -196,14 +247,14 @@ func partition_B*[T, Sh, St](
   ## The thread's B-fragment view of a tensor, method-call syntax: `tma.partition_B(thr, B)`.
   ## See partition_A. The (ThrN, ThrK) block is cut at (tn, tk).
   const
-    atomN = tma.atom.mnk.n
-    atomK = tma.atom.mnk.k
+    atomN = tma.atom.getN()
+    atomK = tma.atom.getK()
     thrN  = tma.threadLayout.shape[1]
     thrK  = tma.threadLayout.shape[2]
     rshape = (Sh.default[0] div (thrN * atomN), Sh.default[1] div (thrK * atomK))
   let thrTensor = make_view(B.data, thrfrg_B(tma, B.layout))
-  let tsel = idx2crd(tma.atom.bLayout.shape[0], thr.tv)
-  let vsel = mapLeavesWith(tma.atom.bLayout.shape[1]): X()
+  let tsel = idx2crd(tma.atom.getLayoutB().shape[0], thr.tv)
+  let vsel = mapLeavesWith(tma.atom.getLayoutB().shape[1]): X()
   let rsel = mapLeavesWith(rshape): X()
   thrTensor(((tsel, vsel), (thr.tn, thr.tk), rsel))
 
@@ -214,14 +265,14 @@ func partition_C*[T, Sh, St](
   ## The (ThrM, ThrN) block is cut at (tm, tn). C has no col-major requirement (thrfrg_C), so a stride-0 rows view
   ## (the epilogue's broadcast bias) partitions to the same per-column offsets.
   const
-    atomM = tma.atom.mnk.m
-    atomN = tma.atom.mnk.n
+    atomM = tma.atom.getM()
+    atomN = tma.atom.getN()
     thrM  = tma.threadLayout.shape[0]
     thrN  = tma.threadLayout.shape[1]
     rshape = (Sh.default[0] div (thrM * atomM), Sh.default[1] div (thrN * atomN))
   let thrTensor = make_view(C.data, thrfrg_C(tma, C.layout))
-  let tsel = idx2crd(tma.atom.cLayout.shape[0], thr.tv)
-  let vsel = mapLeavesWith(tma.atom.cLayout.shape[1]): X()
+  let tsel = idx2crd(tma.atom.getLayoutC().shape[0], thr.tv)
+  let vsel = mapLeavesWith(tma.atom.getLayoutC().shape[1]): X()
   let rsel = mapLeavesWith(rshape): X()
   thrTensor(((tsel, vsel), (thr.tm, thr.tn), rsel))
 
@@ -236,9 +287,9 @@ func partition_C*[T, Sh, St](
 func cStoreMask*(tma: static TiledMma; threadIdx: int;
                  tileM, tileN: static int; validM, validN: int): int =
   ## Return a predication mask for selective copy
-  const cLayout = tma.atom.cLayout
-  const atomM = tma.atom.mnk.m
-  const atomN = tma.atom.mnk.n
+  const cLayout = tma.atom.getLayoutC()
+  const atomM = tma.atom.getM()
+  const atomN = tma.atom.getN()
   const atomL = make_layout((atomM, atomN), (1, atomM))
   const fragSize = toIntVal(product(cLayout.shape[1]))
   const blockSize = tma.threadCount()
@@ -291,18 +342,15 @@ func cStoreMask*(tma: static TiledMma; threadIdx: int;
 template make_fragment_A*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
   ## The thread's A fragment: a register buffer with the V values in hardware order (stride-1).
-  ## The remaining positions keep the view's order. V is the atom's register count (aLayout.shape[1] values per thread).
-  ## On the Apple simdgroup atoms the buffer is a `SimdgroupFragment` (emitted as
+  ## The remaining positions keep the view's order. V is the atom's register count (getLayoutA().shape[1] values per thread).
+  ## On the Apple simdgroup atoms the buffer is a `SimdgroupMatrix` (emitted as
   ## `simdgroup_float8x8` / `simdgroup_half8x8` by the MSL printer), whose gather
   ## orientation is the A operand's (isLayoutLeft=false: the fragment's row axis M is
   ## the col-major view's column axis).
-  when mma.kind == bkGPU_TensorCore:
-    when mma.instr == "simdgroup_multiply_accumulate":
-      SimdgroupFragment[T, false]()
-    else:
-      make_tensor(T, make_fragment_like(t.layout, mma.aLayout.shape[1]))
+  when mma.getInstr() == "simdgroup_multiply_accumulate":
+    SimdgroupMatrix[T, false]()
   else:
-    make_tensor(T, make_fragment_like(t.layout, mma.aLayout.shape[1]))
+    make_tensor(T, make_fragment_like(t.layout, mma.getLayoutA().shape[1]))
 
 template make_fragment_B*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
@@ -310,13 +358,10 @@ template make_fragment_B*[T, Sh, St](
   ## On the Apple simdgroup atoms the gather orientation is the B operand's
   ## (isLayoutLeft=true: the B fragment's row axis is K, the memory row of the
   ## (N,K) view read as (K,N) row-major).
-  when mma.kind == bkGPU_TensorCore:
-    when mma.instr == "simdgroup_multiply_accumulate":
-      SimdgroupFragment[T, true]()
-    else:
-      make_tensor(T, make_fragment_like(t.layout, mma.bLayout.shape[1]))
+  when mma.getInstr() == "simdgroup_multiply_accumulate":
+    SimdgroupMatrix[T, true]()
   else:
-    make_tensor(T, make_fragment_like(t.layout, mma.bLayout.shape[1]))
+    make_tensor(T, make_fragment_like(t.layout, mma.getLayoutB().shape[1]))
 
 template make_fragment_C*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
@@ -325,10 +370,7 @@ template make_fragment_C*[T, Sh, St](
   ## On the Apple simdgroup atoms the gather orientation is the C operand's
   ## (isLayoutLeft=false, like A: the fragment's row axis M is the col-major
   ## view's column axis).
-  when mma.kind == bkGPU_TensorCore:
-    when mma.instr == "simdgroup_multiply_accumulate":
-      SimdgroupFragment[T, false]()
-    else:
-      make_tensor(T, make_fragment_like(t.layout, mma.cLayout.shape[1]))
+  when mma.getInstr() == "simdgroup_multiply_accumulate":
+    SimdgroupMatrix[T, false]()
   else:
-    make_tensor(T, make_fragment_like(t.layout, mma.cLayout.shape[1]))
+    make_tensor(T, make_fragment_like(t.layout, mma.getLayoutC().shape[1]))

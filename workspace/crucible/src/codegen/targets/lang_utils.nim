@@ -7,14 +7,14 @@
 
 import std / tables
 import ../ir/gpu_types
-import ../builtins/nim_builtins
+import ../builtins/builtins_functions
 import ../builtins/builtins_gpu_types
 import ../passes/passes_optimizations
 
 proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
   ## Backend function name of a call to a numeric builtin function
   ## (min/max/abs), resolved via the per-backend per-type map
-  ## (NimGpuNumericBuiltinsFnNames, nim_builtins.nim). Calls to anything
+  ## (NimGpuNumericBuiltinsFnNames, builtins_functions.nim). Calls to anything
   ## else keep their name unchanged.
   let name = call.cName.ident()
   if name in NimGpuNumericBuiltinsFunctions:

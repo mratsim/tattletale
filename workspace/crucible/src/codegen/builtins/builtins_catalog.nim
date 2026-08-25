@@ -23,6 +23,10 @@ import ./builtins_pragmas
 ## The canonical coordinate type is the `uvec3` tuple, which supports `.x` and `[idx]` access and free destructuring.
 ## The `let {.builtin, compileTime.}` dummies exist so typed macro bodies typecheck.
 ## Their values are never evaluated or emitted.
+## `thread_index_in_threadgroup` is the one plain builtin among them,
+## not compileTime: host-side tile-op proc bodies call it at runtime
+## (the tile ops run on the host in the ceramic tests). The printers
+## forward it to the backend spelling like any other builtin.
 ## Calls to `{.builtin.}` procs are registered name-only by the compiler
 ## and forwarded to the backend spelling by each printer.
 
@@ -48,7 +52,10 @@ let threads_per_threadgroup* {.builtin, compileTime.}: uvec3 = default(uvec3)
 let threadgroups_per_grid* {.builtin, compileTime.}: uvec3 = default(uvec3)
   ## Grid size, in threadgroups, per axis.
 
-let thread_index_in_threadgroup* {.builtin, compileTime.}: uint32 = 0'u32
+# Not compileTime: host-side tile-op proc bodies call it at runtime,
+# and a compileTime dummy would fold before the host link. The
+# builtin marking and the device path are unchanged.
+let thread_index_in_threadgroup* {.builtin.}: uint32 = 0'u32
   ## Flat thread index within the threadgroup.
   ##
   ## - `thread_position_in_threadgroup` linearized in x-major order
@@ -56,12 +63,6 @@ let thread_index_in_threadgroup* {.builtin, compileTime.}: uint32 = 0'u32
   ## - the formula needs `threads_per_threadgroup` (no WGSL spelling)
   ##   so each printer emits its native flat index
   ##   (WGSL `local_invocation_index`)
-
-let thread_index_in_simdgroup* {.builtin, compileTime.}: uint32 = 0'u32
-  ## Flat lane index within the SIMD group (0..31 on Apple GPUs).
-  ## Metal-only: the coordinate-builtin mechanism binds it as the kernel
-  ## attribute `[[thread_index_in_simdgroup]]`, or a plain param on device
-  ## functions. The other backends raise loudly (no equivalent).
 
 proc threadgroup_barrier*() {.builtin.} = discard
   ## Canonical workgroup barrier. Each backend printer emits its native spelling
@@ -132,49 +133,23 @@ template local_invocation_index*(): untyped = thread_index_in_threadgroup
 # only the `@workgroup_size` attribute exists, so `threads_per_threadgroup` is deferred on WGSL.
 
 # ═══════════════════════════════════════════════════════════
-# 1b. Simdgroup fragments (Apple GPU simdgroup MMAs)
+# 1c. Reduction builtins (cross-backend subgroup shuffles)
 # ═══════════════════════════════════════════════════════════
-# Per-lane slice of a simdgroup matrix fragment, V = 2 for the 8x8x8 atoms.
-# isLayoutLeft: fragment memory in LEFT (row-major) order in fragment (row, col)
-# coordinates, false for the col-major A/C operands, true for B. MSL transpose
-# arg = not isLayoutLeft. Not a gather for make_filled / multiply_accumulate.
-# Registered name-only: the MSL printer rewrites each call to the native intrinsic.
+# Per-lane gathers every SIMD backend spells natively: MSL
+# simd_shuffle_down/simd_shuffle, CUDA __shfl_down_sync/__shfl_sync,
+# OpenCL sub_group_shuffle_down/sub_group_shuffle, GLSL and WGSL
+# subgroupShuffleDown/subgroupShuffle. The IR kinds live in
+# GpuReductionBuiltinKind and the printers case on the kind alone.
 
-type SimdgroupFragment*[T; isLayoutLeft: static bool] = object
-  ## Per-lane register slice of a simdgroup matrix fragment: V = 2 elements
-  ## for the 8x8x8 atoms. Emitted as `simdgroup_float8x8` (f32) or
-  ## `simdgroup_half8x8` (f16) by the MSL printer; a plain struct elsewhere.
-  data*: array[2, T]
+proc simdShuffleDown*[T](v: T; delta: uint32): T {.builtin.} = discard
+  ## Returns, on each lane, the value of `v` held by the lane at
+  ## `lane + delta` (`simd_shuffle_down`). Out-of-range sources
+  ## return the calling lane's own value.
 
-proc simdgroupLoad*[T; isLayoutLeft: static bool](frag: var SimdgroupFragment[T, isLayoutLeft];
-    src: ptr UncheckedArray[T];
-    stride, offset: uint32;
-    transpose: bool) {.builtin.} = discard
-  ## Hardware fragment gather: `simdgroup_load(frag, src, stride, offset, transpose)`.
-  ## The stride is the source row length, the offset an element offset from
-  ## `src`, the transpose flag swaps the fragment's row and column axes
-  ## against the source's (its value is `not isLayoutLeft`).
-
-proc simdgroupStore*[T; isLayoutLeft: static bool](frag: SimdgroupFragment[T, isLayoutLeft];
-    dst: ptr UncheckedArray[T];
-    stride, offset: uint32;
-    transpose: bool) {.builtin.} = discard
-  ## Hardware fragment scatter: `simdgroup_store(frag, dst, stride, offset, transpose)`.
-  ## Argument semantics mirror `simdgroupLoad`.
-
-proc simdgroupMultiplyAccumulate*[TD; TA; TB; isLayoutLeftD: static bool; isLayoutLeftA: static bool; isLayoutLeftB: static bool](
-    d: var SimdgroupFragment[TD, isLayoutLeftD];
-    a: SimdgroupFragment[TA, isLayoutLeftA];
-    b: SimdgroupFragment[TB, isLayoutLeftB]) {.builtin.} = discard
-  ## One 8x8x8 MMA, in-place accumulate:
-  ## `simdgroup_multiply_accumulate(d, a, b, d)`. The accumulator fragment
-  ## element type may differ from the operands' (f32 accumulator over f16
-  ## operands).
-
-proc makeFilledSimdgroupMatrix*[T; isLayoutLeft: static bool](val: T): SimdgroupFragment[T, isLayoutLeft] {.builtin.} = discard
-  ## Fragment filled with `val` on every lane:
-  ## `make_filled_simdgroup_matrix<T, 8>(val)`. The isLayoutLeft param is
-  ## carried through for type uniformity; it is not a gather.
+proc simdShuffle*[T](v: T; lane: uint32): T {.builtin.} = discard
+  ## Returns, on each lane, the value of `v` held by the lane at
+  ## absolute index `lane` (`simd_shuffle`). Only the active lanes
+  ## must read `v`.
 
 # ═══════════════════════════════════════════════════════════
 # 2. Synchronization

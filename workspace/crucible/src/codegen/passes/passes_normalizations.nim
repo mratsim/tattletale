@@ -13,7 +13,7 @@
 import std / [sequtils, tables, sets, strutils]
 import ../ir/gpu_types
 import ../ir/gpu_type_constructors
-import ../builtins/nim_builtins
+import ../builtins/builtins_functions
 import ./pass_datatypes
 import ./passes_preprocessing
 

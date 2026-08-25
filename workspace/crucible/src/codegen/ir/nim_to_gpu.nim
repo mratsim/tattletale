@@ -9,7 +9,7 @@ import std / [macros, strutils, sequtils, options, tables, sets]
 
 import ./gpu_types
 import ./gpu_type_constructors
-import ../builtins/nim_builtins
+import ../builtins/builtins_functions
 import ./resolvers
 import ../passes/pass_registry
 
@@ -146,9 +146,14 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
         result.symbol.iSym = result.symbol.iSym.replace(oldName, result.symbol.name)
       # handle overloads with different signatures
       if n.strVal in ctx.symChoices:
-        # Magic builtins keep their plain name: they are forwarded to the
-        # backend's native function (e.g. CUDA's max), which knows no hash.
-        if not hasPragma(n.getImpl(), "magic"):
+        # Magic and {.builtin.} procs keep their plain name on every
+        # backend: they are forwarded to the backend's native function
+        # (e.g. CUDA's max, MSL's rsqrt), which knows no hash. The contract
+        # is that a {.builtin.} proc is declared with the backend's
+        # own function name, so the forwarded name resolves natively
+        # wherever the tile layer targets. Mangling a builtin call breaks
+        # the printer's name-only forwarding, which resolves by the plain name.
+        if not hasPragma(n.getImpl(), "magic") and not hasPragma(n.getImpl(), "builtin"):
           let id = ctx.sigTab[sig]
           id.symbol.name = id.symbol.iSym
       else:
@@ -310,7 +315,6 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
   ## XXX: things still left to do:
   ## - support `result` variable? Currently not supported. Maybe we will won't
 
-  #echo node.treerepr
   case node.kind
   of nnkEmpty: result = GpuAst(kind: gpuDiscard) # nothing to do
   of nnkStmtList:
@@ -561,6 +565,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       scopeAdd(ctx.currentScopeSyms, result.fVar.symbol.name, result.fVar.symbol)
     # Range expression — Phase 3: use fRangeKind instead of +1 patching
     result.fRangeKind = rkInclusive # default (safe for C-style < loops)
+    # fStep is always set (never nil): the AST serializers and walkers
+    # reject nil GpuAst fields. Ranges step by 1; countup carries its step.
+    result.fStep = GpuAst(kind: gpuLit, lValue: "1", lType: initGpuType(gtInt32))
     if node[1].kind == nnkInfix:
       result.fStart = ctx.toGpuAst(reg, node[1][1])
       result.fEnd = ctx.toGpuAst(reg, node[1][2])
@@ -568,6 +575,14 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       if node[1][0].repr == "..<":
         result.fRangeKind = rkExclusive
       # else `..` stays rkInclusive (default) — backends emit <= or equivalent
+    elif node[1].kind == nnkCall and node[1].len >= 4 and "countup" in node[1][0].repr:
+      # `countup(a, b, step)`: the last call arg is the step, not the end.
+      # Without this branch the generic fallback reads the step as the end
+      # and emits a step-1 loop (the tile layer strides its per-thread
+      # subtiles with countup).
+      result.fStart = ctx.toGpuAst(reg, node[1][1])
+      result.fEnd = ctx.toGpuAst(reg, node[1][2])
+      result.fStep = ctx.toGpuAst(reg, node[1][3])
     elif node[1].kind == nnkCall and node[1].len >= 2 and node[1][1].kind == nnkObjConstr:
       let objConstr = node[1][1]
       for i in 1 ..< objConstr.len:
@@ -786,7 +801,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       # - The kind survives because it is set on the same sigTab-cached symbol ref before that clobber.
       result.symbol.coordBuiltin = coordBuiltinKind(result.symbol.name)
       result.symbol.synchroBuiltin = synchroBuiltinKind(result.symbol.name)
-      result.symbol.simdgroupBuiltin = simdgroupBuiltinKind(result.symbol.name)
+      result.symbol.reductionBuiltin = reductionBuiltinKind(result.symbol.name)
 
   # literal types
   of nnkIntLit, nnkInt32Lit:
