@@ -49,7 +49,7 @@ described by a layout can be run on either path:
 | fill | `src/kernel_fillwith_cpu.nim` | `src/kernel_fillwith_gpu.nim` |
 | copy | `src/kernel_copy_cpu.nim` | `src/kernel_copy_gpu.nim` |
 | GEMM | (see microkernels below) | `src/kernel_gemm_gpu.nim` |
-| epilogue (D = α·AB + β·C) | fused into the GEMM | `src/kernel_gemm_epilogues.nim` |
+| epilogue (D = α·AB + β·C) | fused into the GEMM | `src/tile_algebra/epilogues.nim` |
 
 CPU kernels fuse contiguous suffixes into `copyMem`/`zeroMem` and use
 stride-sorted nested loops otherwise; GPU kernels use flat-index `crd2idx`

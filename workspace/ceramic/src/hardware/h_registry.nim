@@ -5,7 +5,8 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## MMA Atoms -> Low-level MMA (Matrix-Multiply-Accumulate) hardware descriptors
+## The MMA atom catalog: every GPU MMA that exists, declared to
+## `declareAtoms:` (h_configgen.nim).
 ##
 ## Glossary:
 ## - MMA:
@@ -24,9 +25,8 @@
 ## - T: the atom's threads.
 ## - V: the values each thread holds in registers.
 ##
-## Hardware schema:
-##   the m16n8k8 tf32 atom as a tiled GEMM, C = A·B.
-##   Each cell is the owning (thread, value):
+## Hardware schema (m16n8k8 tf32 atom as a tiled GEMM, C = A·B):
+##   each cell is the owning (thread, value):
 ##   - T = the atom's threads (0..31),
 ##   - v = the value's index in that thread's registers.
 ##     v is local to the thread:
@@ -71,109 +71,198 @@
 ## Each C value sums A(m,k)·B(k,n) over the 8 k entries. The k terms live in
 ## different threads (T00 holds only k ∈ {0, 4} of A and B), and the
 ## instruction sums them into the owning thread's register.
+##
+## Catalog: 4 universal FMA atoms (the 1×1×1 scalar fallback and the
+## 8×8×8 cross-lane shuffle atoms on f32/f16/bf16), 3 Apple
+## simdgroup atoms, 5 NVIDIA tensor-core atoms (SM80/SM89). The CPU
+## atoms (AMX, SIMD ukernels) are not declared.
+# TODO: pending the CPU-atom registry at CPU-merge time.
 
-import ./int_tuples
-import ./layouts_datatypes
-import ./layouts
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Datatypes and SIMD ISAs
-# ═════════════════════════════════════════════════════════════════════════
-
-type
-  MmaDType* = enum
-    ## Matrix-Multiply-Accumulate (MMA) datatypes.
-    mdtF32, mdtF64,
-    mdtTF32,          ## specialized tensor float32, 32-bit with 10-bit mantissa in a 32-bit "opaque" blob
-    mdtF16, mdtBF16,  ## 16-bit, packed 2-per-u32 in registers
-    mdtFP8E4M3,       ## 8-bit: 1 sign + 4 exponent + 3 mantissa bits
-    mdtFP8E5M2,       ## 8-bit: 1 sign + 5 exponent + 2 mantissa bits
-    mdtInt8, mdtUint8, mdtInt16, mdtInt32
-
-  SimdIsa* = enum
-    siAVX2, siAVX512, siNEON, siSVE, siI8MM, siVNNI, siSDOT
+import ../int_tuples
+import ../layouts
+import ../layout_constructors
+import ./h_configgen
 
 # ═════════════════════════════════════════════════════════════════════════
-#  MmaAtom — the record
+#  Reusable layout aliases
 # ═════════════════════════════════════════════════════════════════════════
 
-type
-  MmaAtomKind* = enum
-    bkGPU_TensorCore ## NVIDIA mma.sync / AMD MFMA+WMMA / Intel Xe DPAS
-    bkCPU_X86_AMX    ## Intel AMX: CPU tensor core
-    bkCPU_SIMD       ## SIMD ukernels: dpbusd/dpbssd, SDOT/i8mm, FMA
-    bk_FMA           ## Fallback scalar FMA
+const Universal8x8_AC_Layout* = make_layout(((2, 2, 2, 2, 2), 2), ((16, 1, 2, 32, 4), 8))
+  ## (T32, V2) → (M8, K8) / (M8, N8): A and C fragments of the 8×8×8 atoms,
+  ## col-major offset m + 8·n, V stepping along K (A) or N (C).
+  ## A and C share one layout so an accumulator feeds the next mma's A
+  ## operand with zero movement (the attention S→A handoff needs no
+  ## redistribution). B strides along N, keeping each lane's two B values
+  ## inside its own k row.
 
-  MmaOperand* = enum
-    ## Matrix operand in the standard GEMM description α·AB + β·C.
-    opA, opB, opC
+const Universal8x8_B_Layout* = make_layout(((2, 2, 2, 2, 2), 2), ((2, 8, 16, 4, 32), 1))
+  ## (T32, V2) → (N8, K8): B fragment of the 8×8×8 atoms, col-major offset
+  ## n + 8·k, V stepping along N.
 
-  NoLayout* = Int[-1]
-    ## Sentinel layout.
+const Apple8x8_AC_Layout* = make_layout(((2, 2, 2, 2, 2), 2), ((16, 1, 2, 32, 4), 8))
+  ## (T32, V2) → (M8, K8) / (M8, N8) — A and C fragments of the Apple
+  ## simdgroup atoms, col-major offset m + 8·n, V stepping along K (A) or N (C).
 
-  MmaAtom*[LA, LB, LC] = object
-    ## Matrix-Multiply-Accumulate (MMA) hardware descriptor.
-    name*: string
-    mnk*: tuple[m, n, k: int]
-      ## Tile dims in elements: A is (M, K), B is (N, K), C the (M, N) result.
-      ## B is stored (N, K) as in Nvidia CUTLASS, the transpose of the textbook (K, N).
-    aType*, bType*, cType*: MmaDType       ## cType is the ACCUMULATOR type
-    # TODO: pending the sm_120 _VS atom and its kernel.
-    case kind*: MmaAtomKind
-    of bkGPU_TensorCore, bkCPU_X86_AMX, bk_FMA:
-      instr*: string                       ## mma.sync… / v_mfma… / dpas / tdpbf16ps / tdpbssd;
-                                           ## empty for bk_FMA — its instruction is plain arithmetic
-      aLayout*: LA                         ## (T, V) → col-major offset in (M, K)
-      bLayout*: LB                         ## (T, V) → col-major offset in (N, K)
-      cLayout*: LC                         ## (T, V) → col-major offset in (M, N)
-    of bkCPU_SIMD:
-      isa*: SimdIsa
-      nbScalarsPerVector*: int
-      nbVectorsPerTile*: int
+const Apple8x8_B_Layout* = make_layout(((2, 2, 2, 2, 2), 2), ((2, 8, 16, 4, 32), 1))
+  ## (T32, V2) → (N8, K8) — B fragment of the Apple simdgroup atoms,
+  ## col-major offset n + 8·k, V stepping along N.
 
-  TiledMma*[A: MmaAtom, TL: Layout] = object
-    ## Compile-time record: the atom plus its (ThrM, ThrN, ThrK) tiling across threads.
-    ## ThrM, ThrN, ThrK: the atom's replication counts along M, N, K.
-    ## Covered tile = (ThrM·M, ThrN·N, ThrK·K).
-    ## Total threads = atom.threadCount × ThrM·ThrN·ThrK.
-    ## Example (m16n8k8 tf32 atom, tiling (2, 2, 1)):
-    ##   covered tile (32, 16, 8), 128 threads
-    ##   thread 32 (atom position (1, 0)) holds the A fragment
-    ##   (16,0) (24,0) (16,4) (24,4).
-    ## The atom is fixed by the hardware. The tiling is a software choice.
-    ## Downstream consumers:
-    ## - thread-fragment layouts (thrfrg_A/B/C),
-    ## - operand partitions (partition_A/B/C),
-    ## - the kernel's K-loop.
-    atom*: A
-    threadLayout*: TL                      ## (ThrM, ThrN, ThrK)
-
+const
+  SM80_16x8_Row* = make_layout(((4, 8), (2, 2)), ((32, 1), (16, 8)))
+    ## (T32,V4) → (M16,N8) — C fragment of the m16n8k{8,16,32} f16·bf16·tf32·int8·fp8 atoms
+  SM80_8x8_Row* = make_layout(((4, 8), 2), ((16, 1), 8))
+    ## (T32,V2) → (M8,K8) — B fragment of m16n8k8
+  SM80_16x8x8_A_TF32* = make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64)))
+    ## (T32,V4) → (M16,K8) — A fragment of m16n8k8 tf32
+  SM80_16x8x8_B_TF32* = make_layout(((4, 8), 2), ((8, 1), 32))
+    ## (T32,V2) → (N8,K8) — B fragment of m16n8k8 tf32
+  SM80_16x8x16_A* = make_layout(((4, 8), (2, 2, 2)), ((32, 1), (16, 8, 128)))
+    ## (T32,V8) → (M16,K16) — A fragment of m16n8k16 f16·bf16,
+    ## the tensor-layouts reference transcription (atoms_nv.py)
+  SM80_16x8x16_B* = make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64)))
+    ## (T32,V4) → (N8,K16) — B fragment of m16n8k16 f16·bf16
+  SM80_16x8x32_A* = make_layout(((4, 8), (4, 2, 2)), ((64, 1), (16, 8, 256)))
+    ## (T32,V16) → (M16,K32) — A fragment of m16n8k32 int8·fp8
+  SM80_16x8x32_B* = make_layout(((4, 8), (4, 2)), ((32, 1), (8, 128)))
+    ## (T32,V8) → (N8,K32) — B fragment of m16n8k32 int8·fp8
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Derived metadata — layout queries, no stored fields
+#  The atoms
 # ═════════════════════════════════════════════════════════════════════════
+#
+#  vpt is the A fragment's values per thread (the B and C fragments' V
+#  derive from their layouts via valuesPerThread). threadCount is 32
+#  for every multi-lane atom, 1 for the scalar 1×1×1 fallback.
 
-func threadCount*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto {.inline.} =
-  ## Returns the number of threads cooperating on the atom for operand matrix A, B or C in `C <- A*B + C` microkernel
-  mixin fold, flatten
-  when operand == opA: fold(flatten(atom.aLayout.shape[0]), Int[1](), acc * it)
-  elif operand == opB: fold(flatten(atom.bLayout.shape[0]), Int[1](), acc * it)
-  else:                fold(flatten(atom.cLayout.shape[0]), Int[1](), acc * it)
+declareAtoms:
+  # Universal FMA atoms: the gemm_atom scalar fallback (1×1×1) and the
+  # cross-lane shuffle atoms. instr "" — plain arithmetic, no mnemonic.
+  atom UNIVERSAL_1x1x1_F32F32F32F32:
+    m: 1
+    n: 1
+    k: 1
+    vpt: 1
+    threadCount: 1
+    aLayout: make_layout((1, 1))
+    bLayout: make_layout((1, 1))
+    cLayout: make_layout((1, 1))
+    instr: ""
+  atom UNIVERSAL_8x8x8_F32F32F32F32:
+    m: 8
+    n: 8
+    k: 8
+    vpt: 2
+    threadCount: 32
+    aLayout: Universal8x8_AC_Layout
+    bLayout: Universal8x8_B_Layout
+    cLayout: Universal8x8_AC_Layout
+    instr: ""
+  atom UNIVERSAL_8x8x8_F32F16F16F32:
+    m: 8
+    n: 8
+    k: 8
+    vpt: 2
+    threadCount: 32
+    aLayout: Universal8x8_AC_Layout
+    bLayout: Universal8x8_B_Layout
+    cLayout: Universal8x8_AC_Layout
+    instr: ""
+  atom UNIVERSAL_8x8x8_F32BF16BF16F32:
+    m: 8
+    n: 8
+    k: 8
+    vpt: 2
+    threadCount: 32
+    aLayout: Universal8x8_AC_Layout
+    bLayout: Universal8x8_B_Layout
+    cLayout: Universal8x8_AC_Layout
+    instr: ""
 
-func valuesPerThread*[LA, LB, LC](atom: MmaAtom[LA, LB, LC]; operand: static MmaOperand): auto {.inline.} =
-  when operand == opA: cosize(atom.aLayout) div atom.threadCount(opA)
-  elif operand == opB: cosize(atom.bLayout) div atom.threadCount(opB)
-  else:                cosize(atom.cLayout) div atom.threadCount(opC)
+  # Apple simdgroup atoms: the Metal simdgroup_multiply_accumulate intrinsic
+  # on simdgroup_float8x8 / simdgroup_half8x8 fragments. Contraction is the
+  # natural D = A·B + C, no transposes, no operand swap: A is (M, K), B is
+  # (K, N) — llama.cpp stores B transposed and passes it first; with row-major
+  # (K, N) B data the natural operand order (A first, B second) is correct.
+  atom APPLE_8x8x8_F32:
+    m: 8
+    n: 8
+    k: 8
+    vpt: 2
+    threadCount: 32
+    aLayout: Apple8x8_AC_Layout
+    bLayout: Apple8x8_B_Layout
+    cLayout: Apple8x8_AC_Layout
+    instr: "simdgroup_multiply_accumulate"
+  atom APPLE_8x8x8_F16:
+    m: 8
+    n: 8
+    k: 8
+    vpt: 2
+    threadCount: 32
+    aLayout: Apple8x8_AC_Layout
+    bLayout: Apple8x8_B_Layout
+    cLayout: Apple8x8_AC_Layout
+    instr: "simdgroup_multiply_accumulate"
+  atom APPLE_8x8x8_BF16:
+    m: 8
+    n: 8
+    k: 8
+    vpt: 2
+    threadCount: 32
+    aLayout: Apple8x8_AC_Layout
+    bLayout: Apple8x8_B_Layout
+    cLayout: Apple8x8_AC_Layout
+    instr: "simdgroup_multiply_accumulate"
 
-func thrM*(tma: static TiledMma): static int {.inline.} =
-  toIntVal(tma.threadLayout.shape[0])
-
-func thrN*(tma: static TiledMma): static int {.inline.} =
-  toIntVal(tma.threadLayout.shape[1])
-
-func thrK*(tma: static TiledMma): static int {.inline.} =
-  toIntVal(tma.threadLayout.shape[2])
-
-func threadCount*(tma: static TiledMma): static int {.inline.} =
-  ## Total threads the TiledMma uses: T × ThrM·ThrN·ThrK.
-  toIntVal(tma.atom.threadCount(opA)) * tma.thrM * tma.thrN * tma.thrK
+  # NVIDIA tensor-core atoms: the mma.sync extended-asm path. The fp8
+  # atom shares the m16n8k32 int8 layouts.
+  atom SM80_16x8x8_F32TF32TF32F32_TN:
+    m: 16
+    n: 8
+    k: 8
+    vpt: 4
+    threadCount: 32
+    aLayout: SM80_16x8x8_A_TF32
+    bLayout: SM80_16x8x8_B_TF32
+    cLayout: SM80_16x8_Row
+    instr: "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"
+  atom SM80_16x8x16_F32BF16BF16F32_TN:
+    m: 16
+    n: 8
+    k: 16
+    vpt: 8
+    threadCount: 32
+    aLayout: SM80_16x8x16_A
+    bLayout: SM80_16x8x16_B
+    cLayout: SM80_16x8_Row
+    instr: "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"
+  atom SM80_16x8x16_F32F16F16F32_TN:
+    m: 16
+    n: 8
+    k: 16
+    vpt: 8
+    threadCount: 32
+    aLayout: SM80_16x8x16_A
+    bLayout: SM80_16x8x16_B
+    cLayout: SM80_16x8_Row
+    instr: "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"
+  atom SM80_16x8x32_S32S8S8S32_TN:
+    m: 16
+    n: 8
+    k: 32
+    vpt: 16
+    threadCount: 32
+    aLayout: SM80_16x8x32_A
+    bLayout: SM80_16x8x32_B
+    cLayout: SM80_16x8_Row
+    instr: "mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32"
+  atom SM89_16x8x32_F32E4M3E4M3F32_TN:
+    m: 16
+    n: 8
+    k: 32
+    vpt: 16
+    threadCount: 32
+    aLayout: SM80_16x8x32_A
+    bLayout: SM80_16x8x32_B
+    cLayout: SM80_16x8_Row
+    instr: "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32"

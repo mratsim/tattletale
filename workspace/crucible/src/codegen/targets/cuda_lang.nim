@@ -211,8 +211,6 @@ proc cudaCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
     # whole-value use: no CUDA spelling, emit the canonical name verbatim
     # (zero in-tree uses, non-goal)
     name
-  of gbkThreadIndexInSimdgroup:
-    raiseAssert "`thread_index_in_simdgroup` is Metal-only: CUDA has no SIMD lane index builtin"
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
     raiseAssert "coordinate site with no coordinate builtin kind: " & name
@@ -234,7 +232,13 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         # const Type& name — C++ reference, no body changes needed
         params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
       else:
-        params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+        # By-value array params decay to pointers. They are read-only
+        # (a plain `array[T]` param), so emit `const`: the call site
+        # passes const lvalue arrays, and a non-const `T*` rejects them.
+        if p.typ.kind == gtArray:
+          params.add "const " & gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+        else:
+          params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
@@ -303,7 +307,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genCuda(ast.fStart) & "; " &
              ast.fVar.ident() & cmp & ctx.genCuda(ast.fEnd) & "; " &
-             ast.fVar.ident() & "++) {\n"
+             ast.fVar.ident() & " += " & ctx.genCuda(ast.fStep) & ") {\n"
     result &= ctx.genCuda(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
   of gpuWhile:
@@ -335,10 +339,23 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # CUDA spells it `__syncthreads()`.
       result = indentStr & "__syncthreads()"
     of gbkNone:
-      var cudaArgs: seq[string]
-      for i, arg in ast.cArgs:
-        cudaArgs.add ctx.genCuda(arg)
-      result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
+      case ast.cName.symbol.reductionBuiltin
+      of gbkSimdShuffleDown:
+        # SIMD-group gather from lane + delta. The mask literal 0xffffffff
+        # marks all lanes active and the width is fixed at 32 lanes.
+        result = indentStr & "__shfl_down_sync(0xffffffff, " &
+                 ctx.genCuda(ast.cArgs[0]) & ", " &
+                 ctx.genCuda(ast.cArgs[1]) & ", 32)"
+      of gbkSimdShuffle:
+        # SIMD-group gather from an absolute lane index.
+        result = indentStr & "__shfl_sync(0xffffffff, " &
+                 ctx.genCuda(ast.cArgs[0]) & ", " &
+                 ctx.genCuda(ast.cArgs[1]) & ", 32)"
+      of gbkNone:
+        var cudaArgs: seq[string]
+        for i, arg in ast.cArgs:
+          cudaArgs.add ctx.genCuda(arg)
+        result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
   of gpuTemplateCall:
     when nimvm:
       error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &

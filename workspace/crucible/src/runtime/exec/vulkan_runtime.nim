@@ -33,7 +33,7 @@
 ## Used by the VulkanEngine (engines/vk.nim) — this module is internal; the
 ## public surface is the engine's run/ingest/getArtifact.
 
-import std/[dynlib, os, osproc, hashes, streams, tempfiles]
+import std/[dynlib, os, osproc, hashes, streams, strutils, tempfiles]
 import workspace/crucible/src/abis/vulkan_abi as vk
 import ./runtime_utils
 type
@@ -123,6 +123,9 @@ proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
 proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32] =
   ## Compiles GLSL to SPIR-V via ``glslangValidator``.
   ## (``libshaderc_shared`` does not support compute shaders on this platform.)
+  ## Subgroup shuffles are SPIR-V 1.3 instructions (the KHR subgroup
+  ## extensions the codegen emits), so their sources compile with the
+  ## vulkan1.1 target env; all other sources stay on the SPIR-V 1.0 default.
   let tmpDir = getKernelDir("vulkan")
   # Private temp dir: 0700 so other local users cannot plant symlinks at
   # deterministic paths (TOCTOU), and unique names so concurrent compiles
@@ -135,7 +138,14 @@ proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32]
   defer:
     if fileExists(srcPath): removeFile(srcPath)
     if fileExists(spvPath): removeFile(spvPath)
-  let p = startProcess("glslangValidator", args = @["-V", "-e", entryPoint, "--source-entrypoint", "main", "-o", spvPath, srcPath],
+  var args = @["-V", "-e", entryPoint, "--source-entrypoint", "main"]
+  if "GL_KHR_shader_subgroup" in glsl:
+    args.add "--target-env"
+    args.add "vulkan1.1"
+  args.add "-o"
+  args.add spvPath
+  args.add srcPath
+  let p = startProcess("glslangValidator", args = args,
     options = {poUsePath, poStdErrToStdOut})
   let compOut = p.outputStream.readAll()
   let exitCode = p.waitForExit()

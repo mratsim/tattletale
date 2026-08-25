@@ -39,35 +39,6 @@ template copyFrom*[T, ShD, StD, ShS, StS](
   for i in 0 ..< size(dst):
     dst(i) = src(i)
 
-# ── Simdgroup fragments (Apple GPU, Metal): hardware gather/scatter ────────
-# simdgroup_load/store is a tile-level all-32-lane gather: the view must be
-# the TILE view (base pointer, row-length stride), never the partition view
-# (per-thread offset), col-major, with MSL transpose arg = not isLayoutLeft.
-
-template copyFrom*[T, Sh, St; isLayoutLeft: static bool](
-    dst: var SimdgroupFragment[T, isLayoutLeft];
-    src: AnyTensor[T, Sh, St]) =
-  ## Metal simdgroup gather: `simdgroup_load(dst, src.data, stride, 0, not isLayoutLeft)`
-  ## with stride the source tile's row length (`St.default[1]` of the
-  ## col-major view). `src` is the tile view, not the partition view.
-  simdgroupLoad(dst, src.data, uint32(toIntVal(St.default[1])), 0'u32, not isLayoutLeft)
-
-template copyFrom*[T; isLayoutLeftD: static bool; isLayoutLeftS: static bool](
-    dst: var SimdgroupFragment[T, isLayoutLeftD];
-    src: SimdgroupFragment[T, isLayoutLeftS]) =
-  ## Fragment-to-fragment copy: a plain simdgroup matrix assignment (the
-  ## explicit-destination form seeds the accumulator with a copy of the
-  ## input fragment).
-  dst = src
-
-template copyFrom*[T, Sh, St; isLayoutLeft: static bool](
-    dst: AnyTensor[T, Sh, St];
-    frag: SimdgroupFragment[T, isLayoutLeft]) =
-  ## Metal simdgroup scatter, destination first:
-  ## `simdgroup_store(frag, dst.data, stride, 0, not isLayoutLeft)` with stride
-  ## the destination tile's row length. `dst` is the tile view, not the
-  ## partition view.
-  simdgroupStore(frag, dst.data, uint32(toIntVal(St.default[1])), 0'u32, not isLayoutLeft)
 
 template copyFromIfAsync*[T, Sh, StA, StB, StP](
     dst: var TensorView[T, Sh, StB];

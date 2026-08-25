@@ -144,6 +144,12 @@ proc waitForRequest(instance: WGPUInstance, done: var bool, what: string) =
 
 proc initWgpu*(): WgpuContext =
   ## Initializes wgpu-native: creates instance, picks adapter, opens device.
+  doAssert fileExists(WgpuLibPath / (
+    when defined(windows): "wgpu_native.dll"
+    elif defined(macosx):  "libwgpu_native.dylib"
+    else:                  "libwgpu_native.so"
+  )), "wgpu-native shared library not found in '" & WgpuLibPath & "'.\n" &
+    "Run: nim c -r workspace/crucible/vendor/wgpu_installer.nim"
   let instance = wgpuCreateInstance(nil)
   doAssert instance != nil, "wgpuCreateInstance failed"
   var ad = AdapterCallbackData(done: false)

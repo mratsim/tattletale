@@ -41,6 +41,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtInt64: "long"
   of gtFloat32: "float"
   of gtFloat64: "double"
+  of gtFloat16: "half"
   of gtVoid: "void"
   of gtSize_t: "size_t"
   of gtPtr: "*"
@@ -67,7 +68,11 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     else:
       let typ = gpuTypeToString(inner, allowEmptyIdent = allowEmptyIdent)
       let ptrStar = gpuTypeToString(t.kind)
-      result = typ & ptrStar
+      # Explicit `ptr T` types bind device buffers and must carry the
+      # __global qualifier wherever they appear (params, struct fields,
+      # casts). Implicit `var T` pointers are per-thread registers.
+      let space = if t.implicit: "" else: "__global "
+      result = space & typ & ptrStar
   of gtArray:
     if ident.len == 0 and not allowEmptyIdent:
       when nimvm:
@@ -120,6 +125,18 @@ proc containsFloat64(t: GpuType): bool =
   of gtUA:
     result = t.uaTo.containsFloat64()
   of gtFloat64: result = true
+  else: result = false
+
+proc containsFloat16(t: GpuType): bool =
+  ## Returns true if the type tree contains float16 (half) somewhere.
+  case t.kind
+  of gtPtr:
+    result = t.to.containsFloat16()
+  of gtArray:
+    result = t.aTyp.containsFloat16()
+  of gtUA:
+    result = t.uaTo.containsFloat16()
+  of gtFloat16: result = true
   else: result = false
 
 
@@ -235,7 +252,7 @@ proc openclCoordFieldAccess(kind: GpuCoordBuiltinKind, field: string): string =
   of gbkThreadPositionInThreadgroup: "get_local_id(" & d & ")"
   of gbkThreadsPerThreadgroup: "get_local_size(" & d & ")"
   of gbkThreadgroupsPerGrid: "get_num_groups(" & d & ")"
-  of gbkThreadIndexInThreadgroup, gbkThreadIndexInSimdgroup, gbkNone: ""
+  of gbkThreadIndexInThreadgroup, gbkNone: ""
 
 proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
   ## OpenCL spelling of a canonical scalar coordinate builtin referenced whole.
@@ -250,8 +267,6 @@ proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
     # Whole-value vector coordinates have no OpenCL spelling. Their names
     # are emitted verbatim (zero in-tree uses, non-goal).
     name
-  of gbkThreadIndexInSimdgroup:
-    raiseAssert "`thread_index_in_simdgroup` is Metal-only: OpenCL has no SIMD lane index builtin"
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
     raiseAssert "coordinate site with no coordinate builtin kind: " & name
@@ -278,12 +293,21 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         # __local T* — shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__local {inner}* {p.ident.ident()}"
-      elif isKernel and p.typ.kind == gtPtr:
-        # __global T* restrict — for kernel pointer parameters
+      elif p.typ.kind == gtPtr and p.addressSpace == asDevice:
+        # __global T* restrict — explicit `ptr T` params bind device
+        # buffers, in kernel signatures and device functions alike.
+        # Implicit `var T` pointer params (private arrays) take the
+        # plain unqualified spelling below.
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__global {inner}* restrict {p.ident.ident()}"
       else:
-        params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+        # By-value array params decay to pointers. They are read-only
+        # (a plain `array[T]` param), so emit `const`: the call site
+        # passes const lvalue arrays, and a non-const `T*` rejects them.
+        if p.typ.kind == gtArray:
+          params.add "const " & gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+        else:
+          params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
     let fnArgs = params.join(", ")
     let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
 
@@ -358,7 +382,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genOpenCL(ast.fStart) & "; " &
              ast.fVar.ident() & cmp & ctx.genOpenCL(ast.fEnd) & "; " &
-             ast.fVar.ident() & "++) {\n"
+             ast.fVar.ident() & " += " & ctx.genOpenCL(ast.fStep) & ") {\n"
     result &= ctx.genOpenCL(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
 
@@ -391,10 +415,24 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # OpenCL spells it `barrier(CLK_LOCAL_MEM_FENCE)`.
       result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE)"
     of gbkNone:
-      var clArgs: seq[string]
-      for arg in ast.cArgs:
-        clArgs.add ctx.genOpenCL(arg)
-      result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
+      case ast.cName.symbol.reductionBuiltin
+      of gbkSimdShuffleDown:
+        # SIMD-group gather from lane + delta: the OpenCL 2.0 core sub-group
+        # function. Apple's 1.2 runtime rejects it, so this spelling is
+        # pinned as emitted text only.
+        result = indentStr & "sub_group_shuffle_down(" &
+                 ctx.genOpenCL(ast.cArgs[0]) & ", " &
+                 ctx.genOpenCL(ast.cArgs[1]) & ')'
+      of gbkSimdShuffle:
+        # SIMD-group gather from an absolute lane index.
+        result = indentStr & "sub_group_shuffle(" &
+                 ctx.genOpenCL(ast.cArgs[0]) & ", " &
+                 ctx.genOpenCL(ast.cArgs[1]) & ')'
+      of gbkNone:
+        var clArgs: seq[string]
+        for arg in ast.cArgs:
+          clArgs.add ctx.genOpenCL(arg)
+        result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:
@@ -525,8 +563,9 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle.
-  # Check if we need fp64 extension
+  # Check if we need fp64/fp16 extensions
   var needsFp64 = false
+  var needsFp16 = false
   for blk in ctx.globalBlocks:
     # We could scan types here, but for now we check in the generated code
     discard
@@ -534,12 +573,18 @@ proc codegen*(ctx: var GpuContext): string =
     # Check for float64 usage in function
     if fn.pRetType.kind == gtFloat64:
       needsFp64 = true
+    if fn.pRetType.kind == gtFloat16:
+      needsFp16 = true
     for p in fn.pParams:
       if p.typ.containsFloat64():
         needsFp64 = true
+      if p.typ.containsFloat16():
+        needsFp16 = true
 
   if needsFp64:
     result = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n\n"
+  if needsFp16:
+    result = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n\n"
 
   # 1. Generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:

@@ -812,6 +812,29 @@ proc exprType*(ctx: GpuContext, n: GpuAst): GpuType =
   of gpuConv: n.convTo
   of gpuCast: n.cTo
   of gpuMaterialize: ctx.exprType(n.mExpr)
+  of gpuDot:
+    # The field's type on the parent's struct type (ptr/UA layers
+    # stripped): generic field-type inference for field-access chains.
+    # The value address-space resolution uses it for nested
+    # pointer-field chains.
+    block:
+      var pT = ctx.exprType(n.dParent)
+      if pT != nil and pT.kind == gtPtr: pT = pT.to
+      if pT != nil and pT.kind == gtUA: pT = pT.uaTo
+      if pT == nil or n.dField.kind != gpuIdent or n.dField.symbol == nil:
+        nil
+      else:
+        let fields =
+          case pT.kind
+          of gtObject: pT.oFields
+          of gtGenericInst: pT.gFields
+          else: @[]
+        var found: GpuType = nil
+        for f in fields:
+          if f.name == n.dField.symbol.name:
+            found = f.typ
+            break
+        found
   else: nil
 
 proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
@@ -1424,7 +1447,7 @@ proc builtinParamType(kind: GpuCoordBuiltinKind): GpuType =
   ## flat thread index, the MSL `uint3` vector spelling otherwise. `uint3` is a
   ## synthetic generic name carrying the printer's native spelling; no struct
   ## is ever registered for it.
-  if kind in {gbkThreadIndexInThreadgroup, gbkThreadIndexInSimdgroup}:
+  if kind == gbkThreadIndexInThreadgroup:
     GpuType(kind: gtUint32)
   else:
     GpuType(kind: gtGenericInst, gName: "uint3")

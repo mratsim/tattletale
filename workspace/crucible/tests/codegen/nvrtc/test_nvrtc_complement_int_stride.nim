@@ -2,7 +2,7 @@
 ##
 ## Failure mode this test prevents:
 ##   Crucible emits a static `Int[N]` (a compile-time type-level integer) as an
-##   EMPTY struct and FORWARDS `max` — an "ambiguous builtin" (nim_builtins.nim:14)
+##   EMPTY struct and FORWARDS `max` — an "ambiguous builtin" (builtins_functions.nim)
 ##   — to CUDA's native max WITHOUT lowering the static `Int[N]` value. A layout
 ##   complement then produces `max(1, <int value>)` whose operand is the empty
 ##   struct, and NVRTC rejects it:
