@@ -13,8 +13,9 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/atoms
-import workspace/ceramic/src/kernel_gemm/atoms_nvidia
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
@@ -51,16 +52,16 @@ template verifyFragments*(mma: untyped; tileM, tileK: static int;
     thrM = static(mma.threadLayout.shape[0].toIntVal())
     thrN = static(mma.threadLayout.shape[1].toIntVal())
     thrK = static(mma.threadLayout.shape[2].toIntVal())
-    atomLayout = when operand == opA: mma.atom.aLayout
-                 elif operand == opB: mma.atom.bLayout
-                 else: mma.atom.cLayout
+    atomLayout = when operand == opA: mma.atom.getLayoutA()
+                 elif operand == opB: mma.atom.getLayoutB()
+                 else: mma.atom.getLayoutC()
     tileRows = tileM
-    restM = when operand == opA: tileM div (thrM * static(mma.atom.mnk.m))
+    restM = when operand == opA: tileM div (thrM * static(mma.atom.getM()))
             elif operand == opB: 1
-            else: tileM div (thrM * static(mma.atom.mnk.m))
-    restN = when operand == opB: tileM div (thrN * static(mma.atom.mnk.n))
-            else: tileK div (thrN * static(mma.atom.mnk.n))
-    restK = tileK div (thrK * static(mma.atom.mnk.k))
+            else: tileM div (thrM * static(mma.atom.getM()))
+    restN = when operand == opB: tileM div (thrN * static(mma.atom.getN()))
+            else: tileK div (thrN * static(mma.atom.getN()))
+    restK = tileK div (thrK * static(mma.atom.getK()))
     expected = case operand
                of opA: thrN
                of opB: thrM
@@ -107,16 +108,16 @@ template fragCoords*(mma: untyped; operand: static MmaOperand;
     thrM = static(mma.threadLayout.shape[0].toIntVal())
     thrN = static(mma.threadLayout.shape[1].toIntVal())
     thrK = static(mma.threadLayout.shape[2].toIntVal())
-    atomLayout = when operand == opA: mma.atom.aLayout
-                 elif operand == opB: mma.atom.bLayout
-                 else: mma.atom.cLayout
+    atomLayout = when operand == opA: mma.atom.getLayoutA()
+                 elif operand == opB: mma.atom.getLayoutB()
+                 else: mma.atom.getLayoutC()
     tileRows = tileM
-    restM = when operand == opA: tileM div (thrM * static(mma.atom.mnk.m))
+    restM = when operand == opA: tileM div (thrM * static(mma.atom.getM()))
             elif operand == opB: 1
-            else: tileM div (thrM * static(mma.atom.mnk.m))
-    restN = when operand == opB: tileM div (thrN * static(mma.atom.mnk.n))
-            else: tileK div (thrN * static(mma.atom.mnk.n))
-    restK = tileK div (thrK * static(mma.atom.mnk.k))
+            else: tileM div (thrM * static(mma.atom.getM()))
+    restN = when operand == opB: tileM div (thrN * static(mma.atom.getN()))
+            else: tileK div (thrN * static(mma.atom.getN()))
+    restK = tileK div (thrK * static(mma.atom.getK()))
   block:
     let p = when operand == opA: mma.thrfrg_A(compactView(tileM, tileK).layout)
             elif operand == opB: mma.thrfrg_B(compactView(tileM, tileK).layout)
@@ -159,9 +160,9 @@ proc runDerivedQuantityTests =
   block:  # tile sizes: atom shape × thread tiling (3×5 tiled)
     #   tile M = ThrM·m = 3·16 = 48, N = ThrN·n = 5·8 = 40, K = ThrK·k = 8
     const mma = tiled(3, 5, 1)
-    doAssert mma.threadLayout.shape[0].toIntVal() * atom.mnk.m == 48, "tile M"
-    doAssert mma.threadLayout.shape[1].toIntVal() * atom.mnk.n == 40, "tile N"
-    doAssert mma.threadLayout.shape[2].toIntVal() * atom.mnk.k == 8,  "tile K"
+    doAssert mma.threadLayout.shape[0].toIntVal() * atom.getM() == 48, "tile M"
+    doAssert mma.threadLayout.shape[1].toIntVal() * atom.getN() == 40, "tile N"
+    doAssert mma.threadLayout.shape[2].toIntVal() * atom.getK() == 8,  "tile K"
     # Compile-time: thread count and values per thread are Int[N], not runtime int.
     check atom.threadCount(opA), 32, Int
     check atom.valuesPerThread(opA), 4, Int
@@ -170,7 +171,7 @@ proc runDerivedQuantityTests =
 
   block:  # K-tiled: tile K = ThrK · kAtom = 2·8 = 16
     const mma = tiled(2, 2, 2)
-    doAssert mma.threadLayout.shape[2].toIntVal() * atom.mnk.k == 16, "tile K"
+    doAssert mma.threadLayout.shape[2].toIntVal() * atom.getK() == 16, "tile K"
 
   block:  # fragment size = V × rest per thread (3×5 tiled, rest (7,9,1))
     #   A tile (336, 8):  rest M = 336/48 = 7, rest K = 8/8 = 1 → 4·7 = 28

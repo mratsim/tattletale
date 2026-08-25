@@ -18,38 +18,24 @@ import ../layout_constructors
 import ../layout_indexing
 import ../tensors
 import ../ptr_arithmetic
-import ../atoms
-import ../tile_algebra/tile_config
-import ../tile_algebra/tile_views
-import ../tile_algebra/tile_io
-import ../tile_algebra/tile_ops
+import ../tile_algebra
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_config, tile_views, tile_io, tile_ops
+       ptr_arithmetic, tile_algebra
 
-proc rms_single_row*[TIn, TOut](
+proc rms_norm*[TIn, TOut](
     Out: ptr UncheckedArray[TOut], X, G: ptr UncheckedArray[TIn],
     C: int32, eps: float32) {.device.} =
-  ## Computes one 8×128 RMSNorm row tile per threadgroup
-  ## (grid.y = row-tile index):
-  ## y = x·rsqrt(mean(x²)+ε)·γ, mean over the C runtime columns, C ≤ 128.
-  ## Expected input:
-  ##   x, out: row-major M×128, data in the first C columns
-  ##   γ: 128 slots, the first C real (the host zero-pads beyond C)
-  ## The host zero-pads x/γ beyond C and dispatches grid (1, rows/8).
-  ## Loads are unconditional.
-  ## fp16 storage widens to fp32 in registers.
-  ## The output rounds to the storage type at the write.
   let gid = threadgroup_position_in_grid.y
-  let gl_x = makeGlStrided(X, 8 * 128, 0, 1, 128)
-  let gl_g = makeGlStrided(G, 0, 0, 1, 0)
-  let gl_out = makeGlStrided(Out, 8 * 128, 0, 1, 128)
+  let gd_x = gd(X, shape = (-1, -1, -1, -1), stride = ( 8 * 128, 0, 1, 128))
+  let gd_g = gd(G, shape = (-1, -1, -1, -1), stride = ( 0, 0, 1, 0))
+  let gd_out = gd(Out, shape = (-1, -1, -1, -1), stride = ( 8 * 128, 0, 1, 128))
   var x_rtr: rt_r(float32, 8, 128)
   var gamma_rtr: rt_r(float32, 8, 128)
   var sq_rtr: rt_r(float32, 8, 128)
-  var ss: ColVecOf(float32, 8, 128)
-  x_rtr.load(gl_x, (gid, 0, 0, 0))
-  gamma_rtr.load(gl_g, (0, 0, 0, 0))
+  var ss: rv(float32, 8, 128)
+  loadTile(x_rtr, gd_x, (gid, 0, 0, 0))
+  loadTile(gamma_rtr, gd_g, (0, 0, 0, 0))
   sq_rtr.mul(x_rtr, x_rtr)
   ss.row_sum(sq_rtr)
   let invC = 1.0'f32 / float32(C)
@@ -58,4 +44,4 @@ proc rms_single_row*[TIn, TOut](
   ss.rsqrt(ss)
   x_rtr.mul_row(x_rtr, ss)
   x_rtr.mul(x_rtr, gamma_rtr)
-  x_rtr.store(gl_out, (gid, 0, 0, 0))
+  storeTile(gd_out, x_rtr, (gid, 0, 0, 0))

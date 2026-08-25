@@ -4,244 +4,196 @@
 ##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
-
-# ############################################################
-#
-#          Tile binary ops: the per-thread binary and row maps
-#
-# ############################################################
-#
-# Map tile params carry separate atoms.
-# A shared atom across two params does not unify in Nim.
-# Each map guards the shared subtile grid with a static assert instead.
-
 import ../int_tuples
 import ../tensors
-import ../atoms
 import ./tiles
 import ./tile_config
-import ./tile_fma_partition
+import ./tile_ops_unary
 import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════
-#  The col-vec binary ops
+#  Col-vec binary ops
 # ═════════════════════════════════════════════════════════════════════════
 
-proc add*[rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    src: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]; s: float32) =
+func add*[T; S; rowTiles, vpt: static int](
+    dst: var Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    s: S) =
   ## dst = src + s, per slot.
   for i in 0 ..< rowTiles * vpt:
     dst.data[i] = src.data[i] + s
 
-proc sub*[rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    lhs: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    rhs: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+func sub*[T; rowTiles, vpt: static int](
+    dst: var Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    lhs: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    rhs: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst = lhs − rhs, per slot.
   for i in 0 ..< rowTiles * vpt:
     dst.data[i] = lhs.data[i] - rhs.data[i]
 
-proc mul*[rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    src: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]; s: float32) =
+func mul*[T; S; rowTiles, vpt: static int](
+    dst: var Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    s: S) =
   ## dst = src · s, per slot.
   for i in 0 ..< rowTiles * vpt:
     dst.data[i] = src.data[i] * s
 
-proc mul*[rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    lhs: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    rhs: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+func mul*[T; rowTiles, vpt: static int](
+    dst: var Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    lhs: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    rhs: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst = lhs · rhs, per slot.
   for i in 0 ..< rowTiles * vpt:
     dst.data[i] = lhs.data[i] * rhs.data[i]
 
 # ═════════════════════════════════════════════════════════════════════════
-#  The tile binary maps
+#  Tile binary maps
 # ═════════════════════════════════════════════════════════════════════════
 
-proc mul*[RA, RB, RC: static MmaAtom; R, C: static int; TL: static ThreadLayout](
-    dst: var RtLeft[float32, R, C, RA, TL];
-    src: RtLeft[float32, R, C, RB, TL];
-    src2: RtLeft[float32, R, C, RC, TL]) =
-  ## dst = src · src2, per element.
-  static:
-    doAssert RA.mnk.m == RB.mnk.m and RA.mnk.m == RC.mnk.m and
-            RA.mnk.n == RB.mnk.n and RA.mnk.n == RC.mnk.n,
-      "mul: the operand tiles must share the atom's subtile grid"
-  const rowTiles = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt = toIntVal(RA.valuesPerThread(opA))
-  let thr = fmaSlice[RA, TL]()
-  for n in countup(thr.tm, rowTiles - 1, TL.thrM):
+func mul*[TIn; TOut; R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[TOut, R, C, A],
+    src: RtLeft[TIn, R, C, A],
+    src2: RtLeft[TIn, R, C, A]) =
+  ## dst = src · src2, per element: computed in the destination type.
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for vptI in 0 ..< vpt:
         dst.frags[n][m].frag[vptI] =
-          src.frags[n][m].frag[vptI] * src2.frags[n][m].frag[vptI]
+          src.frags[n][m].frag[vptI].to(TOut) * src2.frags[n][m].frag[vptI].to(TOut)
 
-proc mul*[RA, RB, RC: static MmaAtom; R, C: static int; TL: static ThreadLayout](
-    dst: var RtRight[float32, R, C, RA, TL];
-    src: RtRight[float32, R, C, RB, TL];
-    src2: RtRight[float32, R, C, RC, TL]) =
-  ## dst = src · src2, per element.
-  static:
-    doAssert RA.mnk.m == RB.mnk.m and RA.mnk.m == RC.mnk.m and
-            RA.mnk.n == RB.mnk.n and RA.mnk.n == RC.mnk.n,
-      "mul: the operand tiles must share the atom's subtile grid"
-  const rowTiles = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt = toIntVal(RA.valuesPerThread(opA))
-  let thr = fmaSlice[RA, TL]()
-  for m in countup(thr.tn, colTiles - 1, TL.thrN):
+func mul*[TIn; TOut; R, C: static int; A: static MmaAtom](
+    dst: var RtRight[TOut, R, C, A],
+    src: RtRight[TIn, R, C, A],
+    src2: RtRight[TIn, R, C, A]) =
+  ## dst = src · src2, per element: computed in the destination type.
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for m in 0 ..< colTiles:
     for n in 0 ..< rowTiles:
       for vptI in 0 ..< vpt:
         dst.frags[m][n].frag[vptI] =
-          src.frags[m][n].frag[vptI] * src2.frags[m][n].frag[vptI]
+          src.frags[m][n].frag[vptI].to(TOut) * src2.frags[m][n].frag[vptI].to(TOut)
 
-proc mul*[RA, RB: static MmaAtom; R, C: static int; TL: static ThreadLayout](
-    dst: var RtLeft[float16, R, C, RA, TL];
-    src: RtLeft[float16, R, C, RB, TL]; s: float32) =
-  ## dst = src · s per element, rounded back to fp16 (RNE).
-  static:
-    doAssert RA.mnk.m == RB.mnk.m and RA.mnk.n == RB.mnk.n,
-      "mul: the operand tiles must share the atom's subtile grid"
-  const rowTiles = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt = toIntVal(RA.valuesPerThread(opA))
-  let thr = fmaSlice[RA, TL]()
-  for n in countup(thr.tm, rowTiles - 1, TL.thrM):
+func mul*[T; S; R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[T, R, C, A],
+    src: RtLeft[T, R, C, A],
+    s: S) =
+  ## dst = src · s per element, computed in T.
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for vptI in 0 ..< vpt:
-        dst.frags[n][m].frag[vptI] =
-          toFp16(toFp32(src.frags[n][m].frag[vptI]) * s)
+        dst.frags[n][m].frag[vptI] = src.frags[n][m].frag[vptI].to(T) * s.to(T)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  The row maps
+#  Row maps
 # ═════════════════════════════════════════════════════════════════════════
 
-proc mul_row*[RA, RB: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var RtLeft[float32, R, C, RA, TL];
-    src: RtLeft[float32, R, C, RB, TL];
+func mul_row*[TIn; TOut; R, C, rowTiles, vpt: static int; A: static MmaAtom](
+    dst: var RtLeft[TOut, R, C, A],
+    src: RtLeft[TIn, R, C, A],
     rowVals: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
-  ## dst[r][c] = src[r][c] · rowVals[r].
+  ## dst[r][c] = src[r][c] · rowVals[r], computed in the destination type.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "mul_row: the col-vec subtile count must match the tile's"
-    doAssert RA.mnk.m == RB.mnk.m and RA.mnk.n == RB.mnk.n,
-      "mul_row: the operand tiles must share the atom's subtile grid"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  let thr = fmaSlice[RA, TL]()
-  for n in countup(thr.tm, rowTiles0 - 1, TL.thrM):
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  for n in 0 ..< rowTiles0:
     for m in 0 ..< colTiles:
       for vptI in 0 ..< vpt0:
         dst.frags[n][m].frag[vptI] =
-          src.frags[n][m].frag[vptI] *
-          rowVals.data[n * vpt + vptI]
+          src.frags[n][m].frag[vptI].to(TOut) * rowVals.data[n * vpt + vptI].to(TOut)
 
-proc mul_row*[RA, RB: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var RtRight[float32, R, C, RA, TL];
-    src: RtRight[float32, R, C, RB, TL];
+func mul_row*[TIn; TOut; R, C, rowTiles, vpt: static int; A: static MmaAtom](
+    dst: var RtRight[TOut, R, C, A],
+    src: RtRight[TIn, R, C, A],
     rowVals: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
-  ## dst[r][c] = src[r][c] · rowVals[r].
+  ## dst[r][c] = src[r][c] · rowVals[r], computed in the destination type.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "mul_row: the col-vec subtile count must match the tile's"
-    doAssert RA.mnk.m == RB.mnk.m and RA.mnk.n == RB.mnk.n,
-      "mul_row: the operand tiles must share the atom's subtile grid"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  let thr = fmaSlice[RA, TL]()
-  for m in countup(thr.tn, colTiles - 1, TL.thrN):
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  for m in 0 ..< colTiles:
     for n in 0 ..< rowTiles0:
       for vptI in 0 ..< vpt0:
         dst.frags[m][n].frag[vptI] =
-          src.frags[m][n].frag[vptI] *
-          rowVals.data[n * vpt + vptI]
+          src.frags[m][n].frag[vptI].to(TOut) * rowVals.data[n * vpt + vptI].to(TOut)
 
-proc sub_row*[RA, RB: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var RtLeft[float32, R, C, RA, TL];
-    src: RtLeft[float32, R, C, RB, TL];
+func sub_row*[TIn; TOut; R, C, rowTiles, vpt: static int; A: static MmaAtom](
+    dst: var RtLeft[TOut, R, C, A],
+    src: RtLeft[TIn, R, C, A],
     rowVals: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
-  ## dst[r][c] = src[r][c] − rowVals[r].
+  ## dst[r][c] = src[r][c] − rowVals[r], computed in the destination type.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "sub_row: the col-vec subtile count must match the tile's"
-    doAssert RA.mnk.m == RB.mnk.m and RA.mnk.n == RB.mnk.n,
-      "sub_row: the operand tiles must share the atom's subtile grid"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  let thr = fmaSlice[RA, TL]()
-  for n in countup(thr.tm, rowTiles0 - 1, TL.thrM):
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  for n in 0 ..< rowTiles0:
     for m in 0 ..< colTiles:
       for vptI in 0 ..< vpt0:
         dst.frags[n][m].frag[vptI] =
-          src.frags[n][m].frag[vptI] -
-          rowVals.data[n * vpt + vptI]
+          src.frags[n][m].frag[vptI].to(TOut) - rowVals.data[n * vpt + vptI].to(TOut)
 
-proc sub_row*[RA, RB: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var RtRight[float32, R, C, RA, TL];
-    src: RtRight[float32, R, C, RB, TL];
+func sub_row*[TIn; TOut; R, C, rowTiles, vpt: static int; A: static MmaAtom](
+    dst: var RtRight[TOut, R, C, A],
+    src: RtRight[TIn, R, C, A],
     rowVals: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
-  ## dst[r][c] = src[r][c] − rowVals[r].
+  ## dst[r][c] = src[r][c] − rowVals[r], computed in the destination type.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "sub_row: the col-vec subtile count must match the tile's"
-    doAssert RA.mnk.m == RB.mnk.m and RA.mnk.n == RB.mnk.n,
-      "sub_row: the operand tiles must share the atom's subtile grid"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  let thr = fmaSlice[RA, TL]()
-  for m in countup(thr.tn, colTiles - 1, TL.thrN):
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  for m in 0 ..< colTiles:
     for n in 0 ..< rowTiles0:
       for vptI in 0 ..< vpt0:
         dst.frags[m][n].frag[vptI] =
-          src.frags[m][n].frag[vptI] -
-          rowVals.data[n * vpt + vptI]
+          src.frags[m][n].frag[vptI].to(TOut) - rowVals.data[n * vpt + vptI].to(TOut)
 
-proc div_row*[RA, RB: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var RtLeft[float32, R, C, RA, TL];
-    src: RtLeft[float32, R, C, RB, TL];
+func div_row*[TIn; TOut; R, C, rowTiles, vpt: static int; A: static MmaAtom](
+    dst: var RtLeft[TOut, R, C, A],
+    src: RtLeft[TIn, R, C, A],
     rowVals: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
-  ## dst[r][c] = src[r][c] / rowVals[r].
+  ## dst[r][c] = src[r][c] / rowVals[r], computed in the destination type.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "div_row: the col-vec subtile count must match the tile's"
-    doAssert RA.mnk.m == RB.mnk.m and RA.mnk.n == RB.mnk.n,
-      "div_row: the operand tiles must share the atom's subtile grid"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  let thr = fmaSlice[RA, TL]()
-  for n in countup(thr.tm, rowTiles0 - 1, TL.thrM):
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  for n in 0 ..< rowTiles0:
     for m in 0 ..< colTiles:
       for vptI in 0 ..< vpt0:
         dst.frags[n][m].frag[vptI] =
-          src.frags[n][m].frag[vptI] /
-          rowVals.data[n * vpt + vptI]
+          src.frags[n][m].frag[vptI].to(TOut) / rowVals.data[n * vpt + vptI].to(TOut)
 
-proc div_row*[RA, RB: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var RtRight[float32, R, C, RA, TL];
-    src: RtRight[float32, R, C, RB, TL];
+func div_row*[TIn; TOut; R, C, rowTiles, vpt: static int; A: static MmaAtom](
+    dst: var RtRight[TOut, R, C, A],
+    src: RtRight[TIn, R, C, A],
     rowVals: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
-  ## dst[r][c] = src[r][c] / rowVals[r].
+  ## dst[r][c] = src[r][c] / rowVals[r], computed in the destination type.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "div_row: the col-vec subtile count must match the tile's"
-    doAssert RA.mnk.m == RB.mnk.m and RA.mnk.n == RB.mnk.n,
-      "div_row: the operand tiles must share the atom's subtile grid"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  let thr = fmaSlice[RA, TL]()
-  for m in countup(thr.tn, colTiles - 1, TL.thrN):
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  for m in 0 ..< colTiles:
     for n in 0 ..< rowTiles0:
       for vptI in 0 ..< vpt0:
         dst.frags[m][n].frag[vptI] =
-          src.frags[m][n].frag[vptI] /
-          rowVals.data[n * vpt + vptI]
+          src.frags[m][n].frag[vptI].to(TOut) / rowVals.data[n * vpt + vptI].to(TOut)

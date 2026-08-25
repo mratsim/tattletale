@@ -5,9 +5,6 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## On-device tile-layer attention forward (manual, Metal): `attn_fwd`
-## vs torch SDPA (libtorch, tolerance 1e-2) over hash-randomized shapes
-## (N a multiple of 8, D = 64/128).
 ##
 ## Run: nim cpp -r --hints:off --warnings:off \
 ##   --outdir:build/tests/manual_tile_attn_fp16 \

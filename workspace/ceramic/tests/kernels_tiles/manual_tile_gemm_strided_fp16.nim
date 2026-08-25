@@ -5,9 +5,7 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## On-device GEMM with strided views (manual, Metal): `gemm` vs the
-## fp32-exact host reference over row-major, col-major, negative and
-## 1-out-of-2 strides.
+##
 
 import workspace/crucible
 import ../tile_test_utils
@@ -18,13 +16,10 @@ const stridedMsl = metal:
   proc fusedGemm(D: ptr UncheckedArray[float32],
                  A, B: ptr UncheckedArray[float16],
                  M, N, K: int32, rsa, csa, rsb, csb: int32) {.global.} =
-    gemm(D, M, N, K, A, rsa, csa, B, rsb, csb, nil, false)
+    gemm_with_epilogue(D, N, 1, A, rsa, csa, B, rsb, csb, M, K, N, EpiIdentity())
 
 proc runStrided(engine: var auto; M, N, K: int;
                 rsa, csa, rsb, csb, aBase, bBase: int) =
-  ## Fills the strided A and B buffers (the logical value at the physical
-  ## index aBase + m·rsa + k·csa), runs the kernel, compares the real M×N
-  ## output against the strided fp32-exact reference.
   let aSize = aBase + max(0, (M - 1) * rsa) + (K - 1) * csa + 1
   let bSize = bBase + max(0, (K - 1) * rsb) + (N - 1) * csb + 1
   var Ah = newSeq[uint16](aSize)
@@ -52,10 +47,6 @@ proc runTest() =
   const M = 64
   const N = 64
   const K = 32
-  # The 8×8×8 mma's cross-lane reduction needs subgroup shuffles, which
-  # Apple's OpenCL-to-Metal translation rejects, so all four stride
-  # cases run on Metal on this machine; on OpenCL 2.0+ platforms they
-  # run on OpenCL.
   var engine = bkMetal.init()
   engine.ingest(stridedMsl)
   runStrided(engine, M, N, K, K, 1, N, 1, 0, 0)      # row-major

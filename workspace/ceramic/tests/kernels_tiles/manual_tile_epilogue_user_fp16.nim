@@ -5,13 +5,6 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## On-device user-defined epilogue (manual, Metal): the test-local
-## `EpiScale` (type + `apply` proc) passed as the object to
-## `gemm_with_epilogue`, vs the triple-loop GEMM reference scaled by hand.
-##
-## The 8×8×8 mma's cross-lane reduction needs subgroup shuffles, which
-## Apple's OpenCL-to-Metal translation rejects, so this gate runs on
-## Metal on this machine; on OpenCL 2.0+ platforms it runs on OpenCL.
 ##
 ## Run: nim c -r --hints:off --warnings:off \
 ##   --outdir:build/tests/manual_tile_epilogue_user_fp16 \
@@ -20,8 +13,8 @@
 
 import workspace/crucible
 import ../libtest_epilogues
-import ../../src/atoms
-import ../../src/kernels/k_tile_gemm_epilogues
+import ../../src/atoms_mma_partitioning
+import ../../src/kernels/k_tile_gemm
 
 {.experimental: "callOperator".}
 
@@ -51,11 +44,11 @@ proc apply[T; R, C: static int; AT, ABT: static MmaAtom](
   ## assert enforces the shared subtile grid and per-lane count (see the shipped
   ## applies).
   static:
-    doAssert AT.mnk.m == ABT.mnk.m and AT.mnk.n == ABT.mnk.n and
+    doAssert AT.getM() == ABT.getM() and AT.getN() == ABT.getN() and
       toIntVal(AT.valuesPerThread(opC)) == toIntVal(ABT.valuesPerThread(opC)),
       "apply: the accumulator and operand tiles must share the atom's subtile grid and per-lane count"
-  const rowTiles = R div AT.mnk.m
-  const colTiles = C div AT.mnk.n
+  const rowTiles = R div AT.getM()
+  const colTiles = C div AT.getN()
   const vpt = toIntVal(AT.valuesPerThread(opC))
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
@@ -68,7 +61,7 @@ static:
 const msl = metal:
   proc fusedScaleUser(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                       Scale: float32, N, K, M: int32) {.global.} =
-    gemm_with_epilogue(D, A, B, N, K, M, EpiScale[float32](s: Scale))
+    gemm_with_epilogue(D, M, 1, A, K, 1, B, M, 1, N, K, M, EpiScale[float32](s: Scale))
 
 proc runTest() =
   let M = 64

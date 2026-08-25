@@ -5,12 +5,6 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## On-device tile-layer RMSNorm (manual, Metal): `rms_single_row` vs
-## libtorch fp32 `rms_norm` (tolerance 1e-5, 40× the deterministic 2.4e-7)
-## over hash-randomized M×C shapes, C arbitrary (1..128), plus one unpadded
-## C == 128 draw. The ε varies across the draws (1e-5, 1e-2):
-## a kernel that drops the ε shift fails the gate loudly at ε = 1e-2.
-## The loads are branchless: the host zero-pads the sources to width 128.
 ##
 ## Run: nim cpp -r --hints:off --warnings:off \
 ##   --outdir:build/tests/manual_tile_rmsnorm_fp16 \
@@ -28,9 +22,9 @@ import ../../src/kernels/k_tile_rmsnorm
 # ═════════════════════════════════════════════════════════════════════════
 
 const rmsnormMsl = metal:
-  proc rmsnorm(Out: ptr UncheckedArray[float32], X, G: ptr UncheckedArray[float16],
+  proc rmsnormKernel(Out: ptr UncheckedArray[float32], X, G: ptr UncheckedArray[float16],
                C: int32, eps: float32) {.global.} =
-    rms_single_row(Out, X, G, C, eps)
+    rms_norm(Out, X, G, C, eps)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Host reference: libtorch rms_norm in fp32 over the real shape
@@ -66,7 +60,7 @@ proc checkRmsnorm(engine: var auto; kernel: string; M, C: int; eps: float32) =
   ## columns, zeros beyond) and γ (Ct, data in [0, C)), runs the kernel
   ## with grid (1, Mp div 8) × blk 32, then compares the real M×C
   ## outputs against torch rms_norm with a 1e-5 tolerance (40× the deterministic 2.4e-7).
-  ## The gate catches an fp16 output store (7.8e-4) and a dropped-ε kernel
+  ## Catches an fp16 output store (7.8e-4) and a dropped-ε kernel
   ## at ε = 1e-2. The padding zeros the reads, so the loads
   ## need no per-element guard.
   let Mp = ((M + 7) div 8) * 8
@@ -109,21 +103,21 @@ proc runTests() =   # engines are RAII, so keep them function-local
   engine.ingest(rmsnormMsl)
   echo rmsnormMsl           # keep the generated MSL inspectable
 
-  var draws = initShapeDraws("rmsnorm")
+  var draws = initShapeDraws("rmsnormKernel")
   for draw in 0 ..< 2:
     let b = draws.nextBytes()
     let M = drawInRange(b, 0, 1, 64)
     let C = drawInRange(b, 1, 1, 128)
     doAssert C <= Ct, "C must fit the static tile width (Ct)"
     # ε varies across the draws: at ε = 1e-2 a kernel that drops the ε shift
-    # (rstd without the add) errs orders above the 1e-5 gate.
+    # (rstd without the add) errs orders above the 1e-5 tolerance.
     let eps = if draw == 0: 1e-5'f32 else: 1e-2'f32
-    checkRmsnorm(engine, "rmsnorm", M, C, eps)
+    checkRmsnorm(engine, "rmsnormKernel", M, C, eps)
   # The C == 128 draw exercises the unpadded path: every source column
   # carries real data, so the zero-padding never contributes.
   let b = draws.nextBytes()
   let M = drawInRange(b, 0, 1, 64)
-  checkRmsnorm(engine, "rmsnorm", M, Ct, eps = 1e-2'f32)
+  checkRmsnorm(engine, "rmsnormKernel", M, Ct, eps = 1e-2'f32)
 
 when isMainModule:
   runTests()

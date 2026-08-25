@@ -9,7 +9,7 @@ import std / [macros, strutils, sequtils, options, tables, sets]
 
 import ./gpu_types
 import ./gpu_type_constructors
-import ../builtins/nim_builtins
+import ../builtins/builtins_functions
 import ./resolvers
 import ../passes/pass_registry
 

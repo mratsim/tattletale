@@ -62,8 +62,8 @@ const APPLE_8x8x8_F32 = MmaAtom[AppleLayout, AppleLayout, AppleLayout](
   name: "APPLE_8x8x8_F32", mnk: (m: 8, n: 8, k: 8), kind: bkGPU_TensorCore)
   ## The 8×8×8 simdgroup atom: one per-lane simdgroup matrix per subtile.
 
-const UNIVERSAL_FMA_F32 = MmaAtom[AppleLayout, AppleLayout, AppleLayout](
-  name: "UNIVERSAL_FMA_F32", mnk: (m: 1, n: 1, k: 1), kind: bk_FMA)
+const UNIVERSAL_1x1x1_F32F32F32F32 = MmaAtom[AppleLayout, AppleLayout, AppleLayout](
+  name: "UNIVERSAL_1x1x1_F32F32F32F32", mnk: (m: 1, n: 1, k: 1), kind: bk_FMA)
   ## The 1×1×1 scalar-FMA atom: one per-lane value per thread.
 
 const teMsl = metal:
@@ -88,7 +88,7 @@ const teMsl = metal:
     C[0] = e
 
   proc teFmaKernel(C: ptr UncheckedArray[float32]) {.global.} =
-    var f: FragmentOf[UNIVERSAL_FMA_F32, float32, LayoutLeft]
+    var f: FragmentOf[UNIVERSAL_1x1x1_F32F32F32F32, float32, LayoutLeft]
     threadElements(f.frag, 0'u32) = 7.0'f32
     C[0] = threadElements(f.frag, 0'u32)
 

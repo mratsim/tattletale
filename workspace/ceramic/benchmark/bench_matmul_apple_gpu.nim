@@ -46,9 +46,9 @@ const
 const gemmKernel = "fusedGemm"
 
 const gemmMsl = metal:
-  proc fusedGemm(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[uint16],
+  proc fusedGemm(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                  N, K, M: int32) {.global.} =
-    gemm(D, N, M, K, A, K, 1, B, M, 1)
+    matmul(D, A, B, N, K, M)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Theoretical peak (Apple GPU)

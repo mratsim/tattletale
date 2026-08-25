@@ -5,55 +5,70 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## On-device tile-layer ragged GEMM (manual, Metal): the `gemm` kernel's
-## strategies (zero-fill and branching) vs the fp32-exact host reference
-## (tolerance 1e-3) over hash-randomized per-row lengths.
-## The 8×8×8 mma's cross-lane reduction needs subgroup shuffles, which
-## Apple's OpenCL-to-Metal translation rejects, so both strategies run
-## on Metal on this machine; on OpenCL 2.0+ platforms they run on
-## OpenCL. The fp32 accumulation order is deterministic, so the
-## ragZf ≡ ragBr bit-identical gate stays valid.
-##
 ## Run: nim cpp -r --hints:off --warnings:off \
-##   --outdir:build/tests/manual_tile_ragged_gemm_fp16 \
-##   --nimcache:nimcache/tests/manual_tile_ragged_gemm_fp16 \
-##   workspace/ceramic/tests/kernels_tiles/manual_tile_ragged_gemm_fp16.nim
+##   --outdir:build/experiments/manual_tile_ragged_gemm_fp16 \
+##   --nimcache:nimcache/experiments/manual_tile_ragged_gemm_fp16 \
+##   workspace/ceramic/experiments/manual_tile_ragged_gemm_fp16.nim
 
 import std/[strformat, strutils]
 import workspace/crucible
-import ../tile_test_utils
-import ../../src/kernels/k_tile_gemm
-
-# ═════════════════════════════════════════════════════════════════════════
-#  The thin {.global.} launchers, one per strategy.
-#  First param = the output buffer D: engine.run binds the separate outBuf argument to it
-#  and the args tuple to the rest (the zero-bug trap).
-# ═════════════════════════════════════════════════════════════════════════
+import ../tests/tile_test_utils
+import ../src/int_tuples
+import ../src/layouts
+import ../src/layout_constructors
+import ../src/layout_indexing
+import ../src/tensors
+import ../src/ptr_arithmetic
+import ../src/tile_algebra
 
 const raggedZfMsl = metal:
   proc ragZf(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
              N, K, M: int32) {.global.} =
-    # The full K-loop form: the padded A zeros contribute nothing.
-    gemm(D, M, N, K, A, K, 1, B, N, 1, nil, false)
+    # Zero-fill strategy, composed from the tile ops: the full K-loop over
+    # the padded (zero-filled) A rows.
+    let gd_a = gd(A, shape = (1, 1, M, K), stride = (0, 0, K, 1))
+    let gd_b = gd(B, shape = (1, 1, N, K), stride = (0, 0, 1, N))
+    let gd_d = gd(D, shape = (1, 1, M, N), stride = (0, 0, N, 1))
+    var a_rtl: rt_l(float16, 32, 16)
+    var b_rtr: rt_r(float16, 16, 32)
+    var d_rtl: rt_l(float32, 32, 32, getTileConfig(float32, float16))
+    d_rtl.zero()
+    let OUTPUT_Y = threadgroup_position_in_grid.y
+    let OUTPUT_X = threadgroup_position_in_grid.x
+    let kLimit = K div int32(16)
+    for k in 0'i32 ..< kLimit:
+      loadTile(a_rtl, gd_a, (0, 0, OUTPUT_Y, k))
+      loadTile(b_rtr, gd_b, (0, 0, OUTPUT_X, k))
+      d_rtl.mma_AB(a_rtl, b_rtr)
+    storeTile(gd_d, d_rtl, (0, 0, OUTPUT_Y, OUTPUT_X))
 
 const raggedBrMsl = metal:
   proc ragBr(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
              Lengths: ptr UncheckedArray[uint16],
              N, K, M: int32) {.global.} =
-    # The branching form: the k-end ladder bounds the loop.
-    gemm(D, M, N, K, A, K, 1, B, N, 1, Lengths, true)
+    # Branching strategy, composed from the tile ops (the gemm kernels
+    # carry no Lengths): the per-tile k-end ladder bounds the K-loop.
+    let gd_a = gd(A, shape = (1, 1, M, K), stride = (0, 0, K, 1))
+    let gd_b = gd(B, shape = (1, 1, N, K), stride = (0, 0, 1, N))
+    let gd_d = gd(D, shape = (1, 1, M, N), stride = (0, 0, N, 1))
+    var a_rtl: rt_l(float16, 32, 16)
+    var b_rtr: rt_r(float16, 16, 32)
+    var d_rtl: rt_l(float32, 32, 32, getTileConfig(float32, float16))
+    d_rtl.zero()
+    let OUTPUT_Y = threadgroup_position_in_grid.y
+    let OUTPUT_X = threadgroup_position_in_grid.x
+    let kLimit = min(K div int32(16), int32(tileKMax(Lengths, OUTPUT_Y)))
+    for k in 0'i32 ..< kLimit:
+      loadTile(a_rtl, gd_a, (0, 0, OUTPUT_Y, k))
+      loadTile(b_rtr, gd_b, (0, 0, OUTPUT_X, k))
+      d_rtl.mma_AB(a_rtl, b_rtr)
+    storeTile(gd_d, d_rtl, (0, 0, OUTPUT_Y, OUTPUT_X))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Host reference: the dumb triple loop (ragged A + full B)
 # ═════════════════════════════════════════════════════════════════════════
 
 proc buildRaggedA(M, Kp: int; kEffs: seq[int]): seq[uint16] =
-  ## Builds the ragged A buffer for M rows with per-row effective K:
-  ## row m occupies `Ah[m·Kp .. m·Kp + Kp)`, the first kEffs[m]
-  ## elements real, the rest zero. The per-row padding makes the
-  ## strided load's unconditional read safe and contributes zeros to
-  ## the mma (the padding is the load's contract, the mma never
-  ## guards). Values use the deterministic pattern
   ## fp32ToFp16(1 + 2m + 7k), exact fp16.
   doAssert kEffs.len == M
   var Ah = newSeq[uint16](M * Kp)
@@ -63,11 +78,7 @@ proc buildRaggedA(M, Kp: int; kEffs: seq[int]): seq[uint16] =
   result = Ah
 
 proc buildB(K, Kp, N, Np: int): seq[uint16] =
-  ## The full Kp×Np row-major B buffer (pattern fp32ToFp16(1 + 3k + 11n))
-  ## with the real K×N data in the top-left. B rows k ≥ every K_eff
-  ## are never load-bearing: they multiply the zero-filled A in the zero-fill variant
-  ## and are skipped in the branching variant.
-  ## The finite pattern keeps their products ±0.
+  ## pattern fp32ToFp16(1 + 3k + 11n)
   result = newSeq[uint16](Kp * Np)
   for k in 0 ..< K:
     for n in 0 ..< N:
@@ -75,14 +86,6 @@ proc buildB(K, Kp, N, Np: int): seq[uint16] =
 
 func raggedRefGemm(M, N, Np, Kp: int; Ah, Bh: seq[uint16];
                    kEffs: seq[int]): seq[float32] =
-  ## The fp32-exact host reference is the plain triple loop
-  ## D(m, n) = Σ_{k < kEffs[m]} A[m·Kp + k] · B[k·Np + n] (Kp = the
-  ## padded row stride, the `K` the kernel sees). It runs over the
-  ## real M×N shape; the loop bounds keep the padding out. fp16→fp32
-  ## is exact and the fp16 products are exact in fp32. Plain fp32
-  ## accumulation is therefore the exact-in-fp32 reference. The
-  ## hardware MMA's internal accumulation order may differ, hence the
-  ## 1e-3 tolerance.
   doAssert kEffs.len == M
   result = newSeq[float32](M * N)
   for m in 0 ..< M:
@@ -99,16 +102,13 @@ func raggedRefGemm(M, N, Np, Kp: int; Ah, Bh: seq[uint16];
 proc checkRagged(
     engine: var auto; kernel: string;
     M, N, K: int; kEffs: seq[int]): seq[float32] =
-  ## Runs one strategy on the shape and gates it against the fp32-exact
-  ## host reference (1e-3, NaN is a hard failure). Returns the padded
-  ## output for the cross-strategy bit-identical gate.
   let Mp = ((M + 31) div 32) * 32
   let Np = ((N + 31) div 32) * 32
   let Kp = ((K + 15) div 16) * 16
-  # Guard: the kernel's K-loop steps 16-wide k-blocks, so K must stay a multiple
-  # of 16 (a non-divisible dim would silently truncate the accumulation).
+
   doAssert Kp mod 16 == 0
   doAssert kEffs.len == M
+
   let Ah = buildRaggedA(M, Kp, kEffs)
   let Bh = buildB(K, Kp, N, Np)
   var Lengths = newSeq[uint16](Mp)
@@ -146,7 +146,7 @@ proc checkRagged(
     quit 1
   result = outC
 
-proc gateIdentical(name: string; A, B: seq[float32]; M, N, Np: int) =
+proc checkIdentical(name: string; A, B: seq[float32]; M, N, Np: int) =
   ## The two strategies on the same inputs must be bit-identical
   ## over all outputs (the skipped/excess k contributions are exact +0.0).
   var worstD = 0.0'f32
@@ -173,8 +173,6 @@ proc runTests() =   # engines are RAII, so keep them function-local
   zfEngine.ingest(raggedZfMsl)
   brEngine.ingest(raggedBrMsl)
 
-  # K=64, K_eff = 40 for all rows: tileKMax = 40, block 3 (k=48..63)
-  # is skipped. Rows' k=40..47 are zero-filled by the ragged predicate.
   var k40 = newSeq[int](32)
   for m in 0 ..< 32:
     k40[m] = 40
@@ -182,12 +180,12 @@ proc runTests() =   # engines are RAII, so keep them function-local
   let N0 = 32
   let K0 = 64
   let Np0 = ((N0 + 31) div 32) * 32
-  echo raggedZfMsl      # keep the generated MSL inspectable
-  echo raggedBrMsl      # keep the generated MSL inspectable
+  #echo raggedZfMsl      # keep the generated MSL inspectable
+  #echo raggedBrMsl      # keep the generated MSL inspectable
   echo &"ragged GEMM {M0}×{N0}×{K0} (K_eff = 40, both strategies):"
   let zf0 = checkRagged(zfEngine, "ragZf", M0, N0, K0, k40)
   let br0 = checkRagged(brEngine, "ragBr", M0, N0, K0, k40)
-  gateIdentical("ragZf ≡ ragBr", zf0, br0, M0, N0, Np0)
+  checkIdentical("ragZf ≡ ragBr", zf0, br0, M0, N0, Np0)
 
   var draws = initShapeDraws("ragged")
   for draw in 0 ..< 2:
@@ -209,7 +207,7 @@ proc runTests() =   # engines are RAII, so keep them function-local
     echo &"ragged GEMM {M}×{N}×{K} (K_eff ∈ [{kEffs.min},{kEffs.max}], both strategies):"
     let zf = checkRagged(zfEngine, "ragZf", M, N, K, kEffs)
     let br = checkRagged(brEngine, "ragBr", M, N, K, kEffs)
-    gateIdentical("ragZf ≡ ragBr", zf, br, M, N, Np)
+    checkIdentical("ragZf ≡ ragBr", zf, br, M, N, Np)
 
 when isMainModule:
   runTests()

@@ -5,12 +5,6 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## On-device fused linear+relu (manual, Metal): `linear_relu`
-## vs the triple-loop GEMM reference with bias and relu applied by hand.
-##
-## The 8×8×8 mma's cross-lane reduction needs subgroup shuffles, which
-## Apple's OpenCL-to-Metal translation rejects, so this gate runs on
-## Metal on this machine; on OpenCL 2.0+ platforms it runs on OpenCL.
 ##
 ## Run: nim c -r --hints:off --warnings:off \
 ##   --outdir:build/tests/manual_tile_linear_relu_fp16 \
@@ -19,7 +13,7 @@
 
 import workspace/crucible
 import ../libtest_epilogues
-import ../../src/kernels/k_tile_gemm_epilogues
+import ../../src/kernels/k_tile_gemm
 
 {.experimental: "callOperator".}
 

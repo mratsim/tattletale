@@ -27,7 +27,7 @@
 import ./int_tuples
 import ./layouts
 import ./tensors
-import ./atoms
+import ./hardware/h_properties
 import ./atoms_mma_partitioning
 
 {.experimental: "callOperator".}
@@ -108,8 +108,8 @@ func shard*[T, ShC, StC](
     tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
   ## Partition the epilogue `C` operand onto threads (the legacy path
   ## gemm_cta drives).
-  const tileM = tma.thrM * tma.atom.mnk.m
-  const tileN = tma.thrN * tma.atom.mnk.n
+  const tileM = tma.thrM * tma.atom.getM()
+  const tileN = tma.thrN * tma.atom.getN()
   initEpiAXPBY(op.alpha, op.beta, tma.partition_C(thr, local_tile(op.C_gmem, (tileM, tileN), (mCTA, nCTA))))
 
 template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
@@ -186,8 +186,8 @@ template shard*[T, Sh, St](
     op: EpiAddBias[T, Sh, St];
     tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
   ## Partition the epilogue `bias` operand onto threads (the legacy path gemm_cta drives).
-  const tileM = tma.thrM * tma.atom.mnk.m
-  const tileN = tma.thrN * tma.atom.mnk.n
+  const tileM = tma.thrM * tma.atom.getM()
+  const tileN = tma.thrN * tma.atom.getN()
   initEpiAddBias(tma.partition_C(thr, local_tile(op.bias_gmem, (tileM, tileN), (mCTA, nCTA))))
 
 template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
@@ -221,8 +221,8 @@ template shard*[T, Sh, St](
     op: EpiLinearBiasReLU[T, Sh, St];
     tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
   ## Partition the epilogue `bias` operand onto threads (the legacy path gemm_cta drives).
-  const tileM = tma.thrM * tma.atom.mnk.m
-  const tileN = tma.thrN * tma.atom.mnk.n
+  const tileM = tma.thrM * tma.atom.getM()
+  const tileN = tma.thrN * tma.atom.getN()
   initEpiLinearBiasReLU(tma.partition_C(thr, local_tile(op.bias_gmem, (tileM, tileN), (mCTA, nCTA))))
 
 template preflight*[T, Sh, St](op: var EpiLinearBiasReLU[T, Sh, St]): untyped =

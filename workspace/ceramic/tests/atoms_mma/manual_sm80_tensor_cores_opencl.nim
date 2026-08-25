@@ -14,8 +14,10 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/atoms
-import workspace/ceramic/src/kernel_gemm/atoms_nvidia
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
+
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
@@ -40,9 +42,9 @@ func mmaMicrotile(tma: static TiledMma; t: int;
                   A, B: ptr UncheckedArray[uint32]) {.inline.} =
   ## One m16n8k8 tf32 atom (C = A·B), in-place, via the library path.
   const
-    M = tma.atom.mnk.m
-    N = tma.atom.mnk.n
-    K = tma.atom.mnk.k
+    M = tma.atom.getM()
+    N = tma.atom.getN()
+    K = tma.atom.getK()
     VA = toIntVal(tma.atom.valuesPerThread(opA))
     VB = toIntVal(tma.atom.valuesPerThread(opB))
     VC = toIntVal(tma.atom.valuesPerThread(opC))
@@ -68,9 +70,9 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
                           A, B: ptr UncheckedArray[uint32]) {.inline.} =
   ## Same atom, explicit destination (C = A·B + cFrag, cFrag = 1.0).
   const
-    M = tma.atom.mnk.m
-    N = tma.atom.mnk.n
-    K = tma.atom.mnk.k
+    M = tma.atom.getM()
+    N = tma.atom.getN()
+    K = tma.atom.getK()
     VA = toIntVal(tma.atom.valuesPerThread(opA))
     VB = toIntVal(tma.atom.valuesPerThread(opB))
     VC = toIntVal(tma.atom.valuesPerThread(opC))

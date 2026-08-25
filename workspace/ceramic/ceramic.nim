@@ -12,14 +12,11 @@ import ./src/int_tuples
 import ./src/layouts
 import ./src/layout_algebra
 import ./src/tensors
-import ./src/tile_algebra/tiles
-import ./src/tile_algebra/tile_ops
-import ./src/tile_algebra/tile_mma
+import ./src/tile_algebra
 import ./src/kernel_gemm_epilogues
 import ./src/tile_algebra/tile_epilogues
 import ./src/kernels/k_tile_gemm
 import ./src/kernels/k_tile_rmsnorm
-import ./src/kernels/k_tile_gemm_epilogues
 import ./src/kernels/k_tile_attn
 import ./src/kernel_copy_cpu
 import ./src/kernel_copy_gpu
@@ -29,11 +26,10 @@ import ./src/layout_indexing_cpu
 import ./src/layout_indexing_gpu
 import ./src/layout_indexing
 
-export int_tuples, layouts, layout_algebra, tensors, tiles,
-       tile_views, tile_io, tile_conversions, tile_ops, tile_mma,
+export int_tuples, layouts, layout_algebra, tensors, tile_algebra,
        tile_epilogues, kernel_gemm_epilogues,
        gemm, matmul, rms_single_row, attn_fwd,
-       gemm_relu, linear, linear_relu, gemm_axpby
+       gemm_relu, linear, linear_relu
 export kernel_copy_cpu, kernel_copy_gpu, kernel_fillwith_cpu,
        kernel_fillwith_gpu, layout_indexing_cpu, layout_indexing_gpu,
        layout_indexing

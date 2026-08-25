@@ -13,8 +13,10 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/atoms
-import workspace/ceramic/src/kernel_gemm/atoms_apple
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
+
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
@@ -127,9 +129,9 @@ func f16MmaMicrotile(tma: static TiledMma; t: int;
                      A, B: ptr UncheckedArray[float16]) {.inline.} =
   ## One 8×8×8 f16 simdgroup atom (C = A·B), in-place, via the library path.
   const
-    M = tma.atom.mnk.m
-    N = tma.atom.mnk.n
-    K = tma.atom.mnk.k
+    M = tma.atom.getM()
+    N = tma.atom.getN()
+    K = tma.atom.getK()
   let Aview = make_view(A, make_layout((M, K), (1, M)))
   let Bview = make_view(B, make_layout((N, K), (1, N)))
   var Cview = make_view(C, make_layout((M, N), (1, M)))
@@ -154,9 +156,9 @@ func f16MmaMicrotileExplicit(tma: static TiledMma; t: int;
                              A, B: ptr UncheckedArray[float16]) {.inline.} =
   ## Same atom, explicit destination (C = A·B + cFrag, cFrag = 1.0).
   const
-    M = tma.atom.mnk.m
-    N = tma.atom.mnk.n
-    K = tma.atom.mnk.k
+    M = tma.atom.getM()
+    N = tma.atom.getN()
+    K = tma.atom.getK()
   let Aview = make_view(A, make_layout((M, K), (1, M)))
   let Bview = make_view(B, make_layout((N, K), (1, N)))
   var Cview = make_view(C, make_layout((M, N), (1, M)))
@@ -181,8 +183,8 @@ func f16HalfFill(tma: static TiledMma; t: int;
                  A: ptr UncheckedArray[float16]) {.inline.} =
   ## Pins the half make_filled spelling the f32 kernels never emit.
   const
-    M = tma.atom.mnk.m
-    K = tma.atom.mnk.k
+    M = tma.atom.getM()
+    K = tma.atom.getK()
   let Aview = make_view(A, make_layout((M, K), (1, M)))
   let thr = tma.get_slice(t)
   let tAv = tma.partition_A(thr, Aview)
@@ -227,9 +229,9 @@ proc verifyF16(atom: static MmaAtom; gpuC: openArray[float32];
                A, B: openArray[uint16]; cInit: float32; context: string) =
   ## Reference: exact f32 GEMM over f16ToF32 values.
   ## Gate: maxAbsErr == 0.
-  const M = atom.mnk.m
-  const N = atom.mnk.n
-  const K = atom.mnk.k
+  const M = atom.getM()
+  const N = atom.getN()
+  const K = atom.getK()
   var refC = newSeq[float32](M * N)
   for m in 0 ..< M:
     for n in 0 ..< N:
@@ -252,9 +254,9 @@ proc runTest() =
   doAssert msl.contains("make_filled_simdgroup_matrix<half, 8>"),
     "half-fragment fill must emit the half make_filled spelling"
   const
-    M = atom.mnk.m
-    N = atom.mnk.n
-    K = atom.mnk.k
+    M = atom.getM()
+    N = atom.getN()
+    K = atom.getK()
   var rng = initRand(0xC0FFEE)
   for trial in 0 ..< 16:
     # Trial 0 is the discriminator: the −15..15 domain cannot tell f16 from f32 accumulation.
@@ -270,7 +272,7 @@ proc runTest() =
     engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("f16MmaExplicitKernel", gpuD, (A, B))
     verifyF16(atom, gpuD, A, B, 1.0'f32, "explicit trial " & $trial)
 
-  echo "  OK: f16 m8n8k8 microtile matches the exact f32 reference (", atom.name,
+  echo "  OK: f16 m8n8k8 microtile matches the exact f32 reference (", $atom,
        ", 16 trials incl. the 1+2⁻¹⁰ discriminator trial, in-place + explicit)"
 
 proc runBf16Copy() =

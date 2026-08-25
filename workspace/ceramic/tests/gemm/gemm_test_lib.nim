@@ -9,7 +9,10 @@ import std/[random, strformat, math, typetraits]
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/atoms
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
+import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/kernel_gemm_gpu
 import workspace/crucible
 
@@ -123,10 +126,10 @@ proc gemm_tf32_ref*(C: var openArray[float32];
 # ═════════════════════════════════════════════════════════════════════════
 
 proc microtileFixtures(atom: static MmaAtom; rng: var Rand): tuple[A, B: seq[uint32]] =
-  ## A and B tf32 fixtures: A is (M, K), B is (N, K), from the atom's mnk.
-  const M = atom.mnk.m
-  const N = atom.mnk.n
-  const K = atom.mnk.k
+  ## A and B tf32 fixtures: A is (M, K), B is (N, K), from the atom's tile dims.
+  const M = atom.getM()
+  const N = atom.getN()
+  const K = atom.getK()
   result.A = tf32Fixture(rng, M, K)
   result.B = tf32Fixture(rng, N, K)
 
@@ -134,9 +137,9 @@ proc verifyMicrotile(atom: static MmaAtom; trial: int;
                       gpuC: openArray[float32]; A, B: openArray[uint32];
                       cInit: float32; context: string) =
   ## Computes gemm_tf32_ref for the trial and allClose-compares gpuC against it.
-  const M = atom.mnk.m
-  const N = atom.mnk.n
-  const K = atom.mnk.k
+  const M = atom.getM()
+  const N = atom.getN()
+  const K = atom.getK()
   var refC = newSeq[float32](M * N)
   refC.gemm_tf32_ref(A, B, M, N, K, cInit)
   allClose(gpuC, refC, M, N, context)
@@ -146,8 +149,8 @@ proc testMicrotile*[E](engine: var E; atom: static MmaAtom; label: string) =
   ## Runs both the 4-arg (in-place) and 5-arg (explicit, cFrag = 1.0) forms,
   ## 16 trials each, bit-exact vs the tf32 reference.
   const
-    M = atom.mnk.m
-    N = atom.mnk.n
+    M = atom.getM()
+    N = atom.getN()
   var rng = initRand(0xC0FFEE)
   for trial in 0 ..< 16:
     let (A, B) = microtileFixtures(atom, rng)
@@ -168,9 +171,9 @@ proc testWarp*[E](engine: var E; atom: static MmaAtom; label: string) =
   ## gemm_warp k-loop: C(M×N) = A(M, 2·K)·B(N, 2·K), two k slices,
   ## 16 trials vs the tf32 reference.
   const
-    M = atom.mnk.m
-    N = atom.mnk.n
-    Ktotal = 2 * atom.mnk.k
+    M = atom.getM()
+    N = atom.getN()
+    Ktotal = 2 * atom.getK()
   var rng = initRand(0xC0FFEE)
   for trial in 0 ..< 16:
     let A = tf32Fixture(rng, M, Ktotal)
@@ -193,8 +196,8 @@ proc testTiled*[E](engine: var E; tiled: static TiledMma; label: string) =
     thrM = tiled.thrM
     thrN = tiled.thrN
     thrK = tiled.thrK
-    TILE_M = thrM * tiled.atom.mnk.m
-    TILE_N = thrN * tiled.atom.mnk.n
+    TILE_M = thrM * tiled.atom.getM()
+    TILE_N = thrN * tiled.atom.getN()
     blockSize = tiled.threadCount()
   var rng = initRand(0xC0FFEE)
   for trial in 0 ..< 16:
@@ -228,8 +231,8 @@ proc testTiledMultiBlock*[E](engine: var E; tiled: static TiledMma; label: strin
     thrM = tiled.thrM
     thrN = tiled.thrN
     thrK = tiled.thrK
-    TILE_M = thrM * tiled.atom.mnk.m
-    TILE_N = thrN * tiled.atom.mnk.n
+    TILE_M = thrM * tiled.atom.getM()
+    TILE_N = thrN * tiled.atom.getN()
     blockSize = tiled.threadCount()
   var rng = initRand(0xF1F1)
   for trial in 0 ..< 16:
@@ -547,11 +550,11 @@ proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
     thrN = tiled.thrN
     thrK = tiled.thrK
     # tile dims follow from the thread layout times the atom
-    TILE_M = thrM * toIntVal(tiled.atom.mnk.m)
-    TILE_N = thrN * toIntVal(tiled.atom.mnk.n)
+    TILE_M = thrM * toIntVal(tiled.atom.getM())
+    TILE_N = thrN * toIntVal(tiled.atom.getN())
     blockSize = tiled.threadCount()
   static:
-    doAssert TILE_K mod (thrK * toIntVal(tiled.atom.mnk.k)) == 0,
+    doAssert TILE_K mod (thrK * toIntVal(tiled.atom.getK())) == 0,
       "testGemmCtaDynamic: the k-tile depth (" & $TILE_K &
       ") must be a multiple of thrK·atomK"
   doAssert kView mod TILE_K == 0,
@@ -642,8 +645,8 @@ proc testGemmKernel*[E](engine: var E; tiled: static TiledMma; label: string) =
     M = 32
     N = 32
     K = 32
-    TILE_M = tiled.thrM * tiled.atom.mnk.m
-    TILE_N = tiled.thrN * tiled.atom.mnk.n
+    TILE_M = tiled.thrM * tiled.atom.getM()
+    TILE_N = tiled.thrN * tiled.atom.getN()
     blockSize = tiled.threadCount()
   const alpha = 1.0'f32
   const beta = 0.0'f32
@@ -672,8 +675,8 @@ proc testGemmKernelBeta*[E](engine: var E; tiled: static TiledMma; label: string
     M = 32
     N = 32
     K = 32
-    TILE_M = tiled.thrM * tiled.atom.mnk.m
-    TILE_N = tiled.thrN * tiled.atom.mnk.n
+    TILE_M = tiled.thrM * tiled.atom.getM()
+    TILE_N = tiled.thrN * tiled.atom.getN()
     blockSize = tiled.threadCount()
   const alpha = 1.0'f32
   const beta = 1.0'f32
@@ -702,8 +705,8 @@ proc testGemmKernelK64*[E](engine: var E; tiled: static TiledMma; label: string)
     M = 32
     N = 32
     K = 64
-    TILE_M = tiled.thrM * tiled.atom.mnk.m
-    TILE_N = tiled.thrN * tiled.atom.mnk.n
+    TILE_M = tiled.thrM * tiled.atom.getM()
+    TILE_N = tiled.thrN * tiled.atom.getN()
     blockSize = tiled.threadCount()
   const alpha = 1.0'f32
   const beta = 0.0'f32
@@ -731,8 +734,8 @@ proc testGemmKernelIdentity*[E](engine: var E; tiled: static TiledMma; label: st
     M = 32
     N = 32
     K = 32
-    TILE_M = tiled.thrM * tiled.atom.mnk.m
-    TILE_N = tiled.thrN * tiled.atom.mnk.n
+    TILE_M = tiled.thrM * tiled.atom.getM()
+    TILE_N = tiled.thrN * tiled.atom.getN()
     blockSize = tiled.threadCount()
   var rng = initRand(0x10EA)
   for trial in 0 ..< 16:
@@ -758,8 +761,8 @@ proc testGemmKernelReLU*[E](engine: var E; tiled: static TiledMma; label: string
     M = 32
     N = 32
     K = 32
-    TILE_M = tiled.thrM * tiled.atom.mnk.m
-    TILE_N = tiled.thrN * tiled.atom.mnk.n
+    TILE_M = tiled.thrM * tiled.atom.getM()
+    TILE_N = tiled.thrN * tiled.atom.getN()
     blockSize = tiled.threadCount()
   var rng = initRand(0x2E4A)
   for trial in 0 ..< 16:
@@ -786,8 +789,8 @@ proc testGemmKernelBias*[E](engine: var E; tiled: static TiledMma; label: string
     M = 32
     N = 32
     K = 32
-    TILE_M = tiled.thrM * tiled.atom.mnk.m
-    TILE_N = tiled.thrN * tiled.atom.mnk.n
+    TILE_M = tiled.thrM * tiled.atom.getM()
+    TILE_N = tiled.thrN * tiled.atom.getN()
     blockSize = tiled.threadCount()
   var rng = initRand(0x4B1A5E)
   for trial in 0 ..< 16:

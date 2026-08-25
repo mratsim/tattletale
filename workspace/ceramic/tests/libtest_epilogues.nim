@@ -5,9 +5,9 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Shared epilogue-test support: the triple-loop GEMM reference, the
-## per-epilogue math helpers, and a seq-based assertAllClose. Not a
-## test module (no `test_` prefix): `nim test_ceramic` does not run it.
+## Shared epilogue-test support: the GEMM reference, the per-epilogue
+## math helpers, and a seq-based assertAllClose. Not run by
+## `nim test_ceramic` (no `test_` prefix).
 
 import std/[strformat]
 import ./tile_test_utils
@@ -17,8 +17,7 @@ import ./tile_test_utils
 # ═════════════════════════════════════════════════════════════════════════
 
 func gemmRef*(M, N, K, Mp, Np, Kp: int; Ah, Bh: seq[uint16]): seq[float32] =
-  ## Exact fp32 GEMM D(m, n) = Σ_{k < K} A[m, k]·B[k, n], over the padded
-  ## buffers with the padded strides (fp16→fp32 inputs).
+  ## fp32 GEMM D(m, n) = Σ_{k < K} A[m, k]·B[k, n] (fp16→fp32 inputs).
   result = newSeq[float32](M * N)
   for m in 0 ..< M:
     for n in 0 ..< N:
@@ -29,9 +28,8 @@ func gemmRef*(M, N, K, Mp, Np, Kp: int; Ah, Bh: seq[uint16]): seq[float32] =
 
 func gemmRefStrided*(M, N, K: int; rsa, csa, rsb, csb: int;
                      aBase, bBase: int; Ah, Bh: seq[uint16]): seq[float32] =
-  ## Exact fp32 GEMM D(m, n) = Σ_{k < K} A[aBase + m·rsa + k·csa]·B[bBase + k·rsb + n·csb],
-  ## the strided-view reference (negative strides index the buffer
-  ## from the passed base).
+  ## fp32 GEMM over strided views: D(m, n) = Σ_k A[aBase + m·rsa + k·csa]·B[bBase + k·rsb + n·csb].
+  ## Negative strides index the buffer from the passed base.
   result = newSeq[float32](M * N)
   for m in 0 ..< M:
     for n in 0 ..< N:

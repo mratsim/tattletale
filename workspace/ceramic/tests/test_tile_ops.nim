@@ -5,17 +5,9 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Host-side value checks of the tile op surface over the 8×8×8 FMA atom:
-## the fp32 load/store dataflow, the op call semantics (receiver =
-## destination, in-place allowed), and the fp32-A mma_AB signature.
-## The host runs lane 0 (thread_index_in_threadgroup = 0), whose fragment
-## cell is (fm, fn) = (0, 0) of every subtile, and whose (1, 1, 1) thread
-## layout owns every subtile. The two fragment values are the (0, 0) and
-## (0, 1) cells of each subtile.
-## Host-only: fp16 boundary conversions raise on the host, so the fp16
-## path is not exercised here. The on-device gates cover it, including the
-## mma's shuffle reduction (device-only: the host smoke checks its
-## signature inside a metal block, not its values).
+## Host-side value checks of the tile op surface over the 8×8×8 FMA
+## atom: the fp32 load/store dataflow and the op call semantics.
+## Host-only: the fp16 path and the mma shuffle need the device.
 ##
 ## Run: nim c -r --hints:off --warnings:off \
 ##   --outdir:build/tests/test_tile_ops --nimcache:nimcache/tests/test_tile_ops \
@@ -25,13 +17,13 @@ import std/strformat
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/atoms
-import workspace/ceramic/src/kernel_gemm/atoms_universal
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
 import workspace/ceramic/src/tile_algebra/tiles
 import workspace/ceramic/src/tile_algebra/tile_config
-import workspace/ceramic/src/tile_algebra/tile_views
 import workspace/ceramic/src/tile_algebra/tile_io
-import workspace/ceramic/src/tile_algebra/tile_ops
+import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/tile_algebra/tile_mma
 import workspace/ceramic/src/tile_algebra/tile_epilogues
 import workspace/ceramic/src/tile_algebra/tile_epilogues_backend
@@ -40,7 +32,7 @@ import workspace/ceramic/src/tile_algebra/tile_epilogues_backend
 #  The fp32 load/store dataflow, end to end on the host (lane 0)
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  The host runs lane 0, whose fragment cell is (fm, fn) = (0, 0) and
+#  The host runs lane 0, whose fragment cell is (row, col) = (0, 0) and
 #  whose (1, 1, 1) thread layout owns every subtile: the loads fill both
 #  fragment values of every subtile, the stores write them all back.
 
@@ -48,9 +40,9 @@ proc checkFp32LoadStore() =
   var buf: array[32 * 16, float32]
   for i in 0 ..< buf.len:
     buf[i] = float32(i)
-  let gl = makeGl(cast[ptr UncheckedArray[float32]](addr buf[0]), 0, 0, 32, 16)
-  var t: rt_l(float32, 32, 16, UNIVERSAL_FMA_F32)
-  t.load(gl, (0'i32, 0'i32, 0'i32, 0'i32))
+  let gl = gd(cast[ptr UncheckedArray[float32]](addr buf[0]), 0, 0, 32, 16)
+  var t: rt_l(float32, 32, 16, UNIVERSAL_8x8x8_F32F32F32F32)
+  loadTile(t, gl, (0'i32, 0'i32, 0'i32, 0'i32))
   # Lane 0 reads subtile (n, m)'s cells (8n, 8m) and (8n, 8m+1):
   # buffer elements (8n)·16 + 8m and +1.
   for n in 0 ..< 4:
@@ -64,8 +56,8 @@ proc checkFp32LoadStore() =
   var outBuf: array[32 * 16, float32]
   for i in 0 ..< outBuf.len:
     outBuf[i] = -1.0'f32
-  let glOut = makeGl(cast[ptr UncheckedArray[float32]](addr outBuf[0]), 0, 0, 32, 16)
-  t.store(glOut, (0'i32, 0'i32, 0'i32, 0'i32))
+  let glOut = gd(cast[ptr UncheckedArray[float32]](addr outBuf[0]), 0, 0, 32, 16)
+  storeTile(glOut, t, (0'i32, 0'i32, 0'i32, 0'i32))
   for n in 0 ..< 4:
     for m in 0 ..< 2:
       doAssert outBuf[n * 128 + m * 8] == float32(n * 128 + m * 8),
@@ -76,23 +68,24 @@ proc checkFp32LoadStore() =
 
 proc checkFmaStorage() =
   # The 8×8×8 FMA atom addresses its storage partition with the atom's
-  # subtile strides: the tile-plane strides come from the atom's mnk.
+  # subtile strides: the tile-plane strides come from the atom's M/N.
   # A 32×16 FMA tile holds 16 slots (rowTiles=4, colTiles=2, vpt=2).
   var buf: array[32 * 16, float32]
   for i in 0 ..< buf.len:
     buf[i] = float32(i)
-  let gl = makeGl(cast[ptr UncheckedArray[float32]](addr buf[0]), 0, 0, 32, 16)
-  # Stride probe: the FMA tile plane steps by the atom's mnk
-  # (8·strideRow, 8·strideCol, strideCol).
-  let fmaView = bufferView[float32, 4, 2, 2, 8, 8](gl, 0'i64, colTile = false)
-  doAssert fmaView.layout.stride[0] == 8 * gl.strideRow,
-    "the FMA tile-plane n stride must be mnk.m·strideRow"
-  doAssert fmaView.layout.stride[1] == 8 * gl.strideCol,
-    "the FMA tile-plane m stride must be mnk.n·strideCol"
+  let gl = gd(cast[ptr UncheckedArray[float32]](addr buf[0]), 0, 0, 32, 16)
+  # Stride probe: the local_tile_dyn plane keeps the view's (rows, cols)
+  # strides (32·strideRow, 16·strideCol); the subtile steps come from the
+  # lane's fragment cell, evaluated from the atom's A/C layout at the load.
+  let fmaView = local_tile_dyn(gl, 32, 16, (0, 0, 0, 0))
+  doAssert fmaView.layout.stride[0] == gl.layout.stride[2],
+    "the FMA tile-plane row stride must be the view's row stride"
+  doAssert fmaView.layout.stride[1] == gl.layout.stride[3],
+    "the FMA tile-plane col stride must be the view's col stride"
   # Host load over lane 0's owned cells: slot (n, m, v) reads buffer
   # element (8n)·16 + 8m + v.
-  var t: rt_l(float32, 32, 16, UNIVERSAL_FMA_F32)
-  t.load(gl, (0'i32, 0'i32, 0'i32, 0'i32))
+  var t: rt_l(float32, 32, 16, UNIVERSAL_8x8x8_F32F32F32F32)
+  loadTile(t, gl, (0'i32, 0'i32, 0'i32, 0'i32))
   for n in 0 ..< 4:
     for m in 0 ..< 2:
       doAssert t.frags[n][m].frag[0] == float32(n * 128 + m * 8),
@@ -101,22 +94,22 @@ proc checkFmaStorage() =
   var outBuf: array[32 * 16, float32]
   for i in 0 ..< outBuf.len:
     outBuf[i] = -1.0'f32
-  let glOut = makeGl(cast[ptr UncheckedArray[float32]](addr outBuf[0]), 0, 0, 32, 16)
-  t.store(glOut, (0'i32, 0'i32, 0'i32, 0'i32))
+  let glOut = gd(cast[ptr UncheckedArray[float32]](addr outBuf[0]), 0, 0, 32, 16)
+  storeTile(glOut, t, (0'i32, 0'i32, 0'i32, 0'i32))
   for n in 0 ..< 4:
     for m in 0 ..< 2:
       doAssert outBuf[n * 128 + m * 8] == float32(n * 128 + m * 8),
         &"FMA store cell ({n},{m},0): {outBuf[n * 128 + m * 8]} != {float32(n * 128 + m * 8)}"
-  echo "  OK: FMA atom storage (mnk 8×8, vpt=2) partitions lane 0's cells"
+  echo "  OK: FMA atom storage (M×N 8×8, vpt=2) partitions lane 0's cells"
 
 proc checkFmaMaps() =
   # The maps resolve explicit-atom tiles through the method-call
   # inference of the per-tile atom params (d.mul(a, b)); the map
   # iterates lane 0's owned subtiles (all of them) over both fragment
   # values.
-  var fa: rt_l(float32, 8, 8, UNIVERSAL_FMA_F32)
-  var fb: rt_l(float32, 8, 8, UNIVERSAL_FMA_F32)
-  var fd: rt_l(float32, 8, 8, UNIVERSAL_FMA_F32)
+  var fa: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
+  var fb: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
+  var fd: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
   fa.frags[0][0].frag[0] = 1.0'f32
   fa.frags[0][0].frag[1] = 2.0'f32
   fb.frags[0][0].frag[0] = 3.0'f32
@@ -146,9 +139,9 @@ proc checkFmaMaps() =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc checkMulTile() =
-  var a: rt_l(float32, 8, 8, UNIVERSAL_FMA_F32)
-  var b: rt_l(float32, 8, 8, UNIVERSAL_FMA_F32)
-  var d: rt_l(float32, 8, 8, UNIVERSAL_FMA_F32)
+  var a: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
+  var b: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
+  var d: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
   a.frags[0][0].frag[0] = 1.0'f32
   a.frags[0][0].frag[1] = 2.0'f32
   b.frags[0][0].frag[0] = 3.0'f32
@@ -166,9 +159,9 @@ proc checkMulTile() =
   # the transposed-B map overload shares the same per-slot contract, with the
   # col-subtile-outer fragment grid (frags[m][n]); lane 0 owns every
   # subtile.
-  var kr: rt_r(float32, 8, 16, UNIVERSAL_FMA_F32)
-  var ks: rt_r(float32, 8, 16, UNIVERSAL_FMA_F32)
-  var kd: rt_r(float32, 8, 16, UNIVERSAL_FMA_F32)
+  var kr: rt_r(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
+  var ks: rt_r(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
+  var kd: rt_r(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
   for m in 0 ..< 2:
     for v in 0 ..< 2:
       kr.frags[m][0].frag[v] = float32(m * 8 + v + 3)
@@ -199,9 +192,9 @@ proc checkVecOps() =
   echo "  OK: mul/add (col-vec × scalar): in-place forms, vpt-generic"
 
 proc checkMulRow() =
-  var a: rt_l(float32, 8, 16, UNIVERSAL_FMA_F32)
+  var a: rt_l(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
   var rv: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
-  var d: rt_l(float32, 8, 16, UNIVERSAL_FMA_F32)
+  var d: rt_l(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
   for m in 0 ..< 2:
     for v in 0 ..< 2:
       a.frags[0][m].frag[v] = float32(m * 8 + v + 1)
@@ -245,9 +238,9 @@ proc checkColVecPairOps() =
   echo "  OK: col-vec pair ops (sub/mul/copy/zero/neg_infty)"
 
 proc checkRowMaps() =
-  var a: rt_l(float32, 8, 16, UNIVERSAL_FMA_F32)
+  var a: rt_l(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
   var rv: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
-  var d: rt_l(float32, 8, 16, UNIVERSAL_FMA_F32)
+  var d: rt_l(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
   for m in 0 ..< 2:
     for v in 0 ..< 2:
       a.frags[0][m].frag[v] = float32(m * 8 + v + 1)
@@ -271,17 +264,17 @@ proc checkRtRightStore() =
   # The store through the transposed-B view: lane 0 writes every
   # subtile's cells. Slot (m, n, v) lands at buffer offset
   # n·8 + m·128 + v·16 (the colTile tile-plane strides
-  # (mnk.m·strideCol, mnk.n·strideRow, strideRow) = (8, 128, 16)).
-  var kt: rt_r(float32, 8, 16, UNIVERSAL_FMA_F32)
+  # (M·strideCol, N·strideRow, strideRow) = (8, 128, 16)).
+  var kt: rt_r(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
   for m in 0 ..< 2:
     for v in 0 ..< 2:
       kt.frags[m][0].frag[v] = float32(m * 8 + v + 1)
   var outBuf: array[8 * 16, float32]
   for i in 0 ..< outBuf.len:
     outBuf[i] = -1.0'f32
-  let glOut = makeGlStrided(cast[ptr UncheckedArray[float32]](addr outBuf[0]),
-                            8 * 16, 0, 1, 16)
-  kt.store(glOut, (0'i32, 0'i32, 0'i32, 0'i32))
+  let glOut = gd(cast[ptr UncheckedArray[float32]](addr outBuf[0]), shape = (-1, -1, -1, -1), stride = (
+                            8 * 16, 0, 1, 16))
+  storeTile(glOut, kt, (0'i32, 0'i32, 0'i32, 0'i32))
   for m in 0 ..< 2:
     for v in 0 ..< 2:
       doAssert outBuf[m * 8 + v] == float32(m * 8 + v + 1),
@@ -293,10 +286,10 @@ proc checkEpiApply() =
   # owned cells. The EpiAXPBY C operand comes from the shard macro over
   # the same tile, so the shardView base (the tile-origin offset plus the
   # lane's fragment cell) is exercised here too.
-  var ab: rt_l(float32, 8, 8, UNIVERSAL_FMA_F32)
+  var ab: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
   ab.frags[0][0].frag[0] = -3.0'f32
   ab.frags[0][0].frag[1] = 2.0'f32
-  var d: rt_l(float32, 8, 8, UNIVERSAL_FMA_F32)
+  var d: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
   d.frags[0][0].frag[0] = -7.0'f32  # sentinel
   d.frags[0][0].frag[1] = -7.0'f32
   EpiReLU().apply(d, ab)
@@ -310,7 +303,7 @@ proc checkEpiApply() =
   for i in 0 ..< cbuf.len:
     cbuf[i] = float32(i)
   let cptr = cast[ptr UncheckedArray[float32]](addr cbuf[0])
-  var o2 = shard(initEpiAXPBY(2'f32, 3'f32, cView[float32, 8, 8](cptr)),
+  var o2 = shard(initEpiAXPBY(2'f32, 3'f32, cView(float32, 8, 8, cptr)),
                  cptr, (0'i32, 0'i32, 1'i32, 2'i32), d)
   o2.apply(d, ab)
   doAssert d.frags[0][0].frag[0] == 2'f32 * (-3.0'f32) + 3'f32 * 80.0'f32,
@@ -326,21 +319,21 @@ proc checkEpiApply() =
 # The shuffle mma reads the lane id and gathers other lanes' registers,
 # which cannot run on the host. Its contract (products accumulate in k
 # order 0,1,2,… like the CPU reference) is asserted by the on-device gemm
-# gate at |Δ| = 0.0. This probe checks that the fp32-A form instantiates
+# check at |Δ| = 0.0. This probe checks that the fp32-A form instantiates
 # inside a DSL block.
 const mmaCompileProbe = metal:
   proc mmaProbe(d: ptr UncheckedArray[float32], a, b: ptr UncheckedArray[float16]) {.global.} =
     var a_rtl: rt_l(float16, 8, 8)
     var b_rtr: rt_r(float16, 8, 8)
-    var d_rtl: rt_l(float32, 8, 8)
-    let gl_a = makeGl(a, 0, 0, 8, 8)
-    let gl_b = makeGlStrided(b, 0, 0, 1, 8)
-    a_rtl.load(gl_a, (0'i32, 0'i32, 0'i32, 0'i32))
-    b_rtr.load(gl_b, (0'i32, 0'i32, 0'i32, 0'i32))
+    var d_rtl: rt_l(float32, 8, 8, getTileConfig(float32, float16))
+    let gd_a = gd(a, 0, 0, 8, 8)
+    let gd_b = gd(b, shape = (-1, -1, -1, -1), stride = ( 0, 0, 1, 8))
+    loadTile(a_rtl, gd_a, (0'i32, 0'i32, 0'i32, 0'i32))
+    loadTile(b_rtr, gd_b, (0'i32, 0'i32, 0'i32, 0'i32))
     d_rtl.zero()
     d_rtl.mma_AB(a_rtl, b_rtr)
-    let gl_d = makeGl(d, 0, 0, 8, 8)
-    d_rtl.store(gl_d, (0'i32, 0'i32, 0'i32, 0'i32))
+    let gd_d = gd(d, 0, 0, 8, 8)
+    storeTile(gd_d, d_rtl, (0'i32, 0'i32, 0'i32, 0'i32))
 
 when isMainModule:
   echo "TILE OPS HOST PASS"

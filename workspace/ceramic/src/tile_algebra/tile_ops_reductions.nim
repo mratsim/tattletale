@@ -4,247 +4,283 @@
 ##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
-
-# ############################################################
-#
-#          Tile reductions: the row sums and row maxima
-#
-# ############################################################
-
 import ../int_tuples
+import ../layout_indexing
 import ../tensors
-import ../atoms
 import ./tiles
 import ./tile_config
-import ./tile_fma_partition
 import workspace/crucible
+
+# ═════════════════════════════════════════════════════════════════════════
+#  The row-reduction shuffle tree
+# ═════════════════════════════════════════════════════════════════════════
+
+type ReductionTree* = tuple
+  deltas: array[8, int]
+  steps: int
+  mask: uint32
+
+func getReductionTree*(A: static MmaAtom): ReductionTree =
+  ## The row-reduction shuffle tree (deltas, step count, leader mask)
+  ## derived from the atom's fragment-column lane coefficients.
+  when A.getThreadCount() == 1:
+    discard
+  else:
+    const colCoeffs = block:
+      var a: array[5, int]
+      for b in 0 .. 4:
+        a[b] = toIntVal(crd2idx(A.getLayoutA(), 1 shl b)) div A.getM()
+      a
+    # Unrolled over the 5 lane bits: each nonzero col coefficient adds
+    # its bit's delta (2^b) to the tree and to the leader mask.
+    var steps = 0
+    when colCoeffs[0] != 0:
+      result.deltas[steps] = 1
+      result.mask = result.mask or 1'u32
+      inc steps
+    when colCoeffs[1] != 0:
+      result.deltas[steps] = 2
+      result.mask = result.mask or 2'u32
+      inc steps
+    when colCoeffs[2] != 0:
+      result.deltas[steps] = 4
+      result.mask = result.mask or 4'u32
+      inc steps
+    when colCoeffs[3] != 0:
+      result.deltas[steps] = 8
+      result.mask = result.mask or 8'u32
+      inc steps
+    when colCoeffs[4] != 0:
+      result.deltas[steps] = 16
+      result.mask = result.mask or 16'u32
+      inc steps
+    result.steps = steps
 
 # ═════════════════════════════════════════════════════════════════════════
 #  The row-reduction family
 # ═════════════════════════════════════════════════════════════════════════
-
-proc row_sum*[RA: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    src: RtLeft[float32, R, C, RA, TL]) =
+proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
+    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: RtLeft[float32, R, C, A]) =
   ## dst[n] = Σ over row n of src, per owned row.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "row_sum: the col-vec subtile count must match the tile's"
-    doAssert C div RA.mnk.n >= TL.thrN,
-      "row_sum: the col subtile grid must cover every lane's tn"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  const tree = fmaTree[RA, TL]()
-  const steps = tree[1]
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  const tree = A.getReductionTree()
+  const steps = tree.steps
+  const delta0 = tree.deltas[0]
+  const delta1 = tree.deltas[1]
+  const delta2 = tree.deltas[2]
   static:
     doAssert steps <= 3,
       "row_sum: the unrolled tree supports at most 3 shuffle steps"
-  let thr = fmaSlice[RA, TL]()
   let lane = thread_index_in_threadgroup
-  let leader = lane and (not tree[2])
-  for n in countup(thr.tm, rowTiles0 - 1, TL.thrM):
-    var acc = src.frags[n][thr.tn].frag[0]
+  let leader = lane and (not tree.mask)
+  for n in 0 ..< rowTiles0:
+    var acc = src.frags[n][0].frag[0]
     for vptI in 1 ..< vpt0:
-      acc = acc + src.frags[n][thr.tn].frag[vptI]
-    for m in countup(thr.tn + TL.thrN, colTiles - 1, TL.thrN):
+      acc = acc + src.frags[n][0].frag[vptI]
+    for m in 1 ..< colTiles:
       for vptI in 0 ..< vpt0:
         acc = acc + src.frags[n][m].frag[vptI]
     when steps >= 1:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][0]))
+      acc = acc + simdShuffleDown(acc, uint32(delta0))
     when steps >= 2:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][1]))
+      acc = acc + simdShuffleDown(acc, uint32(delta1))
     when steps >= 3:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][2]))
+      acc = acc + simdShuffleDown(acc, uint32(delta2))
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = acc
 
-proc row_sum*[RA: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    src: RtRight[float32, R, C, RA, TL]) =
+proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
+    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: RtRight[float32, R, C, A]) =
   ## dst[n] = Σ over row n of src, per owned row.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "row_sum: the col-vec subtile count must match the tile's"
-    doAssert C div RA.mnk.n >= TL.thrN,
-      "row_sum: the col subtile grid must cover every lane's tn"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  const tree = fmaTree[RA, TL]()
-  const steps = tree[1]
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  const tree = A.getReductionTree()
+  const steps = tree.steps
+  const delta0 = tree.deltas[0]
+  const delta1 = tree.deltas[1]
+  const delta2 = tree.deltas[2]
   static:
     doAssert steps <= 3,
       "row_sum: the unrolled tree supports at most 3 shuffle steps"
-  let thr = fmaSlice[RA, TL]()
   let lane = thread_index_in_threadgroup
-  let leader = lane and (not tree[2])
+  let leader = lane and (not tree.mask)
   for n in 0 ..< rowTiles0:
-    var acc = src.frags[thr.tn][n].frag[0]
+    var acc = src.frags[0][n].frag[0]
     for vptI in 1 ..< vpt0:
-      acc = acc + src.frags[thr.tn][n].frag[vptI]
-    for m in countup(thr.tn + TL.thrN, colTiles - 1, TL.thrN):
+      acc = acc + src.frags[0][n].frag[vptI]
+    for m in 1 ..< colTiles:
       for vptI in 0 ..< vpt0:
         acc = acc + src.frags[m][n].frag[vptI]
     when steps >= 1:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][0]))
+      acc = acc + simdShuffleDown(acc, uint32(delta0))
     when steps >= 2:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][1]))
+      acc = acc + simdShuffleDown(acc, uint32(delta1))
     when steps >= 3:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][2]))
+      acc = acc + simdShuffleDown(acc, uint32(delta2))
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = acc
 
-proc row_sum*[RA: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    src: RtLeft[float32, R, C, RA, TL];
+proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
+    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: RtLeft[float32, R, C, A],
     srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = srcAccum[n] + Σ over row n of src, the online-softmax running-sum update.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "row_sum: the col-vec subtile count must match the tile's"
-    doAssert C div RA.mnk.n >= TL.thrN,
-      "row_sum: the col subtile grid must cover every lane's tn"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  const tree = fmaTree[RA, TL]()
-  const steps = tree[1]
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  const tree = A.getReductionTree()
+  const steps = tree.steps
+  const delta0 = tree.deltas[0]
+  const delta1 = tree.deltas[1]
+  const delta2 = tree.deltas[2]
   static:
     doAssert steps <= 3,
       "row_sum: the unrolled tree supports at most 3 shuffle steps"
-  let thr = fmaSlice[RA, TL]()
   let lane = thread_index_in_threadgroup
-  let leader = lane and (not tree[2])
-  for n in countup(thr.tm, rowTiles0 - 1, TL.thrM):
-    var acc = src.frags[n][thr.tn].frag[0]
+  let leader = lane and (not tree.mask)
+  for n in 0 ..< rowTiles0:
+    var acc = src.frags[n][0].frag[0]
     for vptI in 1 ..< vpt0:
-      acc = acc + src.frags[n][thr.tn].frag[vptI]
-    for m in countup(thr.tn + TL.thrN, colTiles - 1, TL.thrN):
+      acc = acc + src.frags[n][0].frag[vptI]
+    for m in 1 ..< colTiles:
       for vptI in 0 ..< vpt0:
         acc = acc + src.frags[n][m].frag[vptI]
     when steps >= 1:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][0]))
+      acc = acc + simdShuffleDown(acc, uint32(delta0))
     when steps >= 2:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][1]))
+      acc = acc + simdShuffleDown(acc, uint32(delta1))
     when steps >= 3:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][2]))
+      acc = acc + simdShuffleDown(acc, uint32(delta2))
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = srcAccum.data[n * vpt + vptI] + acc
 
-proc row_sum*[RA: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    src: RtRight[float32, R, C, RA, TL];
+proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
+    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: RtRight[float32, R, C, A],
     srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = srcAccum[n] + Σ over row n of src.
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "row_sum: the col-vec subtile count must match the tile's"
-    doAssert C div RA.mnk.n >= TL.thrN,
-      "row_sum: the col subtile grid must cover every lane's tn"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  const tree = fmaTree[RA, TL]()
-  const steps = tree[1]
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  const tree = A.getReductionTree()
+  const steps = tree.steps
+  const delta0 = tree.deltas[0]
+  const delta1 = tree.deltas[1]
+  const delta2 = tree.deltas[2]
   static:
     doAssert steps <= 3,
       "row_sum: the unrolled tree supports at most 3 shuffle steps"
-  let thr = fmaSlice[RA, TL]()
   let lane = thread_index_in_threadgroup
-  let leader = lane and (not tree[2])
+  let leader = lane and (not tree.mask)
   for n in 0 ..< rowTiles0:
-    var acc = src.frags[thr.tn][n].frag[0]
+    var acc = src.frags[0][n].frag[0]
     for vptI in 1 ..< vpt0:
-      acc = acc + src.frags[thr.tn][n].frag[vptI]
-    for m in countup(thr.tn + TL.thrN, colTiles - 1, TL.thrN):
+      acc = acc + src.frags[0][n].frag[vptI]
+    for m in 1 ..< colTiles:
       for vptI in 0 ..< vpt0:
         acc = acc + src.frags[m][n].frag[vptI]
     when steps >= 1:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][0]))
+      acc = acc + simdShuffleDown(acc, uint32(delta0))
     when steps >= 2:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][1]))
+      acc = acc + simdShuffleDown(acc, uint32(delta1))
     when steps >= 3:
-      acc = acc + simdShuffleDown(acc, uint32(tree[0][2]))
+      acc = acc + simdShuffleDown(acc, uint32(delta2))
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = srcAccum.data[n * vpt + vptI] + acc
 
-proc row_max*[RA: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    src: RtLeft[float32, R, C, RA, TL];
+proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
+    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: RtLeft[float32, R, C, A],
     srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = max(srcAccum[n], max over row n of src).
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "row_max: the col-vec subtile count must match the tile's"
-    doAssert C div RA.mnk.n >= TL.thrN,
-      "row_max: the col subtile grid must cover every lane's tn"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  const tree = fmaTree[RA, TL]()
-  const steps = tree[1]
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  const tree = A.getReductionTree()
+  const steps = tree.steps
+  const delta0 = tree.deltas[0]
+  const delta1 = tree.deltas[1]
+  const delta2 = tree.deltas[2]
   static:
     doAssert steps <= 3,
       "row_max: the unrolled tree supports at most 3 shuffle steps"
-  let thr = fmaSlice[RA, TL]()
   let lane = thread_index_in_threadgroup
-  let leader = lane and (not tree[2])
-  for n in countup(thr.tm, rowTiles0 - 1, TL.thrM):
-    var acc = src.frags[n][thr.tn].frag[0]
+  let leader = lane and (not tree.mask)
+  for n in 0 ..< rowTiles0:
+    var acc = src.frags[n][0].frag[0]
     for vptI in 1 ..< vpt0:
-      acc = max(acc, src.frags[n][thr.tn].frag[vptI])
-    for m in countup(thr.tn + TL.thrN, colTiles - 1, TL.thrN):
+      acc = max(acc, src.frags[n][0].frag[vptI])
+    for m in 1 ..< colTiles:
       for vptI in 0 ..< vpt0:
         acc = max(acc, src.frags[n][m].frag[vptI])
     when steps >= 1:
-      acc = max(acc, simdShuffleDown(acc, uint32(tree[0][0])))
+      acc = max(acc, simdShuffleDown(acc, uint32(delta0)))
     when steps >= 2:
-      acc = max(acc, simdShuffleDown(acc, uint32(tree[0][1])))
+      acc = max(acc, simdShuffleDown(acc, uint32(delta1)))
     when steps >= 3:
-      acc = max(acc, simdShuffleDown(acc, uint32(tree[0][2])))
+      acc = max(acc, simdShuffleDown(acc, uint32(delta2)))
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = max(srcAccum.data[n * vpt + vptI], acc)
 
-proc row_max*[RA: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static ThreadLayout](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])];
-    src: RtRight[float32, R, C, RA, TL];
+proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
+    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: RtRight[float32, R, C, A],
     srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = max(srcAccum[n], max over row n of src).
   static:
-    doAssert rowTiles == R div RA.mnk.m,
+    doAssert rowTiles == R div A.getM(),
       "row_max: the col-vec subtile count must match the tile's"
-    doAssert C div RA.mnk.n >= TL.thrN,
-      "row_max: the col subtile grid must cover every lane's tn"
-  const rowTiles0 = R div RA.mnk.m
-  const colTiles = C div RA.mnk.n
-  const vpt0 = toIntVal(RA.valuesPerThread(opA))
-  const tree = fmaTree[RA, TL]()
-  const steps = tree[1]
+  const rowTiles0 = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt0 = A.getVpt()
+  const tree = A.getReductionTree()
+  const steps = tree.steps
+  const delta0 = tree.deltas[0]
+  const delta1 = tree.deltas[1]
+  const delta2 = tree.deltas[2]
   static:
     doAssert steps <= 3,
       "row_max: the unrolled tree supports at most 3 shuffle steps"
-  let thr = fmaSlice[RA, TL]()
   let lane = thread_index_in_threadgroup
-  let leader = lane and (not tree[2])
+  let leader = lane and (not tree.mask)
   for n in 0 ..< rowTiles0:
-    var acc = src.frags[thr.tn][n].frag[0]
+    var acc = src.frags[0][n].frag[0]
     for vptI in 1 ..< vpt0:
-      acc = max(acc, src.frags[thr.tn][n].frag[vptI])
-    for m in countup(thr.tn + TL.thrN, colTiles - 1, TL.thrN):
+      acc = max(acc, src.frags[0][n].frag[vptI])
+    for m in 1 ..< colTiles:
       for vptI in 0 ..< vpt0:
         acc = max(acc, src.frags[m][n].frag[vptI])
     when steps >= 1:
-      acc = max(acc, simdShuffleDown(acc, uint32(tree[0][0])))
+      acc = max(acc, simdShuffleDown(acc, uint32(delta0)))
     when steps >= 2:
-      acc = max(acc, simdShuffleDown(acc, uint32(tree[0][1])))
+      acc = max(acc, simdShuffleDown(acc, uint32(delta1)))
     when steps >= 3:
-      acc = max(acc, simdShuffleDown(acc, uint32(tree[0][2])))
+      acc = max(acc, simdShuffleDown(acc, uint32(delta2)))
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = max(srcAccum.data[n * vpt + vptI], acc)
@@ -253,7 +289,7 @@ proc row_max*[RA: static MmaAtom; R, C, rowTiles, vpt: static int; TL: static Th
 #  tileKMax: the ragged tile's effective k-end (the branching skip)
 # ═════════════════════════════════════════════════════════════════════════
 
-proc tileKMax*(Lengths: ptr UncheckedArray[uint16];
+proc tileKMax*(Lengths: ptr UncheckedArray[uint16],
                mTile: uint32): uint32 =
   ## The tile's effective K-loop bound in k-block units:
   ## ceil(max over the tile's rows of Lengths[row] / 16).

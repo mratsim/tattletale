@@ -5,13 +5,6 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## On-device tile-layer epilogues (manual, Metal): `matmul`,
-## `gemm_relu`, `linear`, `gemm_axpby` vs the triple-loop GEMM
-## reference with the epilogue applied by hand.
-##
-## The 8×8×8 mma's cross-lane reduction needs subgroup shuffles, which
-## Apple's OpenCL-to-Metal translation rejects, so this gate runs on
-## Metal on this machine; on OpenCL 2.0+ platforms it runs on OpenCL.
 ##
 ## Run: nim cpp -r --hints:off --warnings:off \
 ##   --outdir:build/tests/manual_tile_gemm_epilogues_fp16 \
@@ -21,7 +14,7 @@
 import workspace/crucible
 import ../libtest_epilogues
 import ../tile_test_utils
-import ../../src/kernels/k_tile_gemm_epilogues
+import ../../src/kernels/k_tile_gemm
 
 {.experimental: "callOperator".}
 
@@ -41,7 +34,12 @@ const epiloguesMsl = metal:
   proc fusedAxpby(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                   C: ptr UncheckedArray[float32], Alpha, Beta: float32,
                   N, K, M: int32) {.global.} =
-    gemm_axpby(D, A, B, C, Alpha, Beta, N, K, M)
+    gemm(D, N, K, M, Alpha, A, K, 1, B, M, 1, Beta, C, M, 1)
+
+  proc fusedAxpbyS(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
+                   C: ptr UncheckedArray[float32], Alpha, Beta: float32,
+                   N, K, M: int32, rsc, csc: int32) {.global.} =
+    gemm(D, N, K, M, Alpha, A, K, 1, B, M, 1, Beta, C, rsc, csc)
 
 # The dtype-parametrized tile applies: the fp16 and fp32 tiles each
 # resolve the same generic `apply` (the identity form). Their own
@@ -98,8 +96,23 @@ proc runTest() =
   assertAllClose(D, sum(scale(gemmRef(M, N, K, M, N, K, Ah, Bh), 2.0'f32),
                         scale(Cmat, 4.0'f32)))
 
-  # The dtype variants resolve and run: the OpenCL compiler accepts all
-  # kernels (the ingest), and each kernel runs to completion.
+  # Strided C: the β-operand at (rsc, csc) = (2·N, 1), every other padded
+  # row — the runtime strides must be honored by the axpby epilogue.
+  var Cp = newSeq[float32](M * 2 * N)
+  for m in 0 ..< M:
+    for n in 0 ..< N:
+      Cp[m * 2 * N + n] = float32(1 + 3 * m + 5 * n)
+  var Cref = newSeq[float32](M * N)
+  for m in 0 ..< M:
+    for n in 0 ..< N:
+      Cref[m * N + n] = Cp[m * 2 * N + n]
+  engine.run << (grid: grid, blk: (32, 1)) >> (
+    "fusedAxpbyS", D, (Ah, Bh, Cp, 2.0'f32, 4.0'f32,
+                       int32(M), int32(K), int32(N), int32(2 * N), int32(1)))
+  assertAllClose(D, sum(scale(gemmRef(M, N, K, M, N, K, Ah, Bh), 2.0'f32),
+                        scale(Cref, 4.0'f32)))
+
+  # The dtype variants resolve and run.
   var dres: array[1, float32]
   var a16 = newSeq[uint16](1)
   a16[0] = fp32ToFp16(5.0'f32)

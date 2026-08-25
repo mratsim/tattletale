@@ -22,7 +22,7 @@
 ##     workspace/crucible/tests/codegen/ir/test_ir_builtin_registration_guard.nim
 
 import std/strutils
-import workspace/crucible/src/codegen/builtins/nim_builtins
+import workspace/crucible/src/codegen/builtins/builtins_functions
 
 static:
   doAssert NimGpuFnBuiltins.len == 2,

@@ -5,12 +5,33 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Built-in Nim functions and operators that collide with or must be
-## mapped to GPU backend equivalents.
-## This file is not reexported by builtins.nim, it is only used by the compiler.
+## Built-in device functions (exp2/rsqrt) and the Nim-operator/function
+## name tables the codegen consults.
 
 import std/tables
 import ../ir/gpu_types
+import ./builtins_pragmas
+
+# ═════════════════════════════════════════════════════════════════════════
+#  The scalar math builtins: the element ops of the tile/col-vec maps
+# ═════════════════════════════════════════════════════════════════════════
+#
+#  Declared here so they resolve before the tile_ops map templates (which
+#  pass their own names as map ops): a same-named tile template declared
+#  earlier would capture the reference.
+
+proc exp2*(x: float32): float32 {.builtin.} = discard
+  ## Returns `2^x`, declared `{.builtin.}` so the DSL forwards
+  ## the backend's native `exp2` (used by the online-softmax maps,
+  ## exact for integer exponents).
+
+proc rsqrt*(x: float32): float32 {.builtin.} = discard
+  ## Returns `1/sqrt(x)`: the DSL forwards the backend's native `rsqrt`.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Built-in Nim functions and operators that collide with or must be
+#  mapped to GPU backend equivalents (compile-time tables, codegen-only)
+# ═══════════════════════════════════════════════════════════════════════
 
 let NimGpuNumericBuiltinsOperators* {.compileTime.} = {
   # Nim numeric operators and their GPU backend equivalents.

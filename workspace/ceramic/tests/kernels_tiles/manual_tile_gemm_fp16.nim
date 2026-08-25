@@ -5,12 +5,6 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## On-device tile-layer GEMM (manual, Metal): `gemm` end-to-end,
-## bit-exact (tolerance 0.0) vs the fp32-exact host reference over
-## hash-randomized padded shapes. The 8×8×8 mma's cross-lane reduction
-## needs subgroup shuffles, which Apple's OpenCL-to-Metal translation
-## rejects, so this gate runs on Metal on this machine; on OpenCL 2.0+
-## platforms the same kernel runs on OpenCL.
 ##
 ## Run: nim cpp -r --hints:off --warnings:off \
 ##   --outdir:build/tests/manual_tile_gemm_fp16 \
@@ -31,7 +25,7 @@ import ../../src/kernels/k_tile_gemm
 const gemmMsl = metal:
   proc fusedGemm(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                  N, K, M: int32) {.global.} =
-    gemm(D, N, M, K, A, K, 1, B, M, 1, nil, false)
+    matmul(D, A, B, N, K, M)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Host reference: fp32-exact from f16→f32, over the real shape
