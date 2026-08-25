@@ -11,8 +11,10 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/atoms
-import workspace/ceramic/src/kernel_gemm/atoms_apple
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
+
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
@@ -34,9 +36,9 @@ func mmaMicrotile(tma: static TiledMma; t: int;
                   A, B: ptr UncheckedArray[float32]) {.inline.} =
   ## One 8×8×8 simdgroup atom (C = A·B), in-place, via the library path.
   const
-    M = tma.atom.mnk.m
-    N = tma.atom.mnk.n
-    K = tma.atom.mnk.k
+    M = tma.atom.getM()
+    N = tma.atom.getN()
+    K = tma.atom.getK()
   let Aview = make_view(A, make_layout((M, K), (1, M)))
   let Bview = make_view(B, make_layout((N, K), (1, N)))
   var Cview = make_view(C, make_layout((M, N), (1, M)))
@@ -45,25 +47,25 @@ func mmaMicrotile(tma: static TiledMma; t: int;
   let tBv = tma.partition_B(thr, Bview)
   var tCv = tma.partition_C(thr, Cview)
   var aFrag = make_fragment_A(tma.atom, tAv)
-  aFrag.copyFrom(Aview)
+  simdgroupLoad(aFrag, Aview.data, uint32(M), 0'u32, true)
   var bFrag = make_fragment_B(tma.atom, tBv)
-  bFrag.copyFrom(Bview)
-  # make_fragment_C yields the SimdgroupFragment type gemm_atom's simdgroup overload requires.
+  simdgroupLoad(bFrag, Bview.data, uint32(N), 0'u32, false)
+  # make_fragment_C yields the SimdgroupMatrix type gemm_atom's simdgroup overload requires.
   var cFrag = make_fragment_C(tma.atom, tCv)
   cFrag.fillWith(0.0'f32)
 
   gemm_atom(tma.atom, cFrag, aFrag, bFrag)   # one simdgroup_multiply_accumulate
 
-  Cview.copyFrom(cFrag)
+  simdgroupStore(cFrag, Cview.data, uint32(M), 0'u32, true)
 
 func mmaMicrotileExplicit(tma: static TiledMma; t: int;
                           C: ptr UncheckedArray[float32];
                           A, B: ptr UncheckedArray[float32]) {.inline.} =
   ## Same atom, explicit destination (C = A·B + cFrag, cFrag = 1.0).
   const
-    M = tma.atom.mnk.m
-    N = tma.atom.mnk.n
-    K = tma.atom.mnk.k
+    M = tma.atom.getM()
+    N = tma.atom.getN()
+    K = tma.atom.getK()
   let Aview = make_view(A, make_layout((M, K), (1, M)))
   let Bview = make_view(B, make_layout((N, K), (1, N)))
   var Cview = make_view(C, make_layout((M, N), (1, M)))
@@ -72,17 +74,17 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
   let tBv = tma.partition_B(thr, Bview)
   var tCv = tma.partition_C(thr, Cview)
   var aFrag = make_fragment_A(tma.atom, tAv)
-  aFrag.copyFrom(Aview)
+  simdgroupLoad(aFrag, Aview.data, uint32(M), 0'u32, true)
   var bFrag = make_fragment_B(tma.atom, tBv)
-  bFrag.copyFrom(Bview)
+  simdgroupLoad(bFrag, Bview.data, uint32(N), 0'u32, false)
   var cFrag = make_fragment_C(tma.atom, tCv)
   cFrag.fillWith(1.0'f32)                        # nonzero accumulator input
   var dFrag = make_fragment_C(tma.atom, tCv)
 
-  dFrag.copyFrom(cFrag)
+  dFrag = cFrag
   gemm_atom(tma.atom, dFrag, aFrag, bFrag)   # dFrag = aFrag·bFrag + cFrag
 
-  Cview.copyFrom(dFrag)
+  simdgroupStore(dFrag, Cview.data, uint32(M), 0'u32, true)
 
 const kernelCode = metal:
   proc mmaMicrotileKernel(C: ptr UncheckedArray[float32],

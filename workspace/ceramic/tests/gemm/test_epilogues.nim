@@ -1,4 +1,4 @@
-## Test: the Epilogue concept + the four shipped epilogues.
+## Test: the Epilogue concept + the five shipped epilogues.
 ##
 ## Validates the Epilogue concept:
 ##   * concept conformance: each shipped op satisfies Epilogue
@@ -58,9 +58,11 @@ proc runEpilogueTests =
     doAssert EpiIdentity is Epilogue, "EpiIdentity must satisfy Epilogue"
     doAssert EpiAddBias[float32, ConfShp, ConfStp] is Epilogue,
       "EpiAddBias must satisfy Epilogue"
+    doAssert EpiLinearBiasReLU[float32, ConfShp, ConfStp] is Epilogue,
+      "EpiLinearBiasReLU must satisfy Epilogue"
     doAssert EpiReLU is Epilogue, "EpiReLU must satisfy Epilogue"
 
-  test "all four epilogues conform to the Epilogue concept (static)":
+  test "all five epilogues conform to the Epilogue concept (static)":
     discard
 
   # ── EpiAXPBY ──
@@ -168,6 +170,26 @@ proc runEpilogueTests =
     for i in 0 ..< M:
       for j in 0 ..< N:
         doAssert D[i, j] == AB[i, j] + bufBias[j]
+
+  # ── EpiLinearBiasReLU ──
+  test "EpiLinearBiasReLU D = max(0, AB + bias) column broadcast over rows":
+    ## Bias: a stride-0 (M, N) broadcast view of the (N,) column, with a sign mix so both relu branches are exercised.
+    const M = 3; const N = 4
+    var bufAB = newSeq[float32](M * N)
+    var bufBias = newSeq[float32](N)
+    var bufD = newSeq[float32](M * N)
+    for i in 0 ..< M*N:
+      bufAB[i] = float32(int(i) - 2)   # -2, -1, 0, 1, 2, 3, ...
+    for j in 0 ..< N:
+      bufBias[j] = float32(100 + j)
+    let AB = make_view(bufAB +% 0, make_layout((M, N), (1, M)))
+    var D = make_view(bufD +% 0, make_layout((M, N), (1, M)))
+    let bias = make_view(bufBias +% 0, (M, N), (0, 1))   # stride-0 rows
+    let op = initEpiLinearBiasReLU(bias)
+    applyEpilogue(op, D, AB)
+    for i in 0 ..< M:
+      for j in 0 ..< N:
+        doAssert D[i, j] == max(AB[i, j] + bufBias[j], 0.0'f32)
 
   # ── EpiReLU ──
   test "EpiReLU D = max(0, AB)":
@@ -491,8 +513,7 @@ proc runEpilogueTests =
         doAssert D[i, j] == AB[i, j]
 
   test "EpiAXPBY rank-3 operands (V, RepeatM, RepeatN) = (4, 2, 2), distinct strides":
-    ## Rank-3 stride patterns: V stride-1 on AB (register order, the
-    ## atom map), different strides on C and D.
+    ## Rank-3 stride patterns: V stride-1 on AB (register order, the atom map), different strides on C and D.
     const Shp = (4, 2, 2)
     var bufAB = newSeq[float32](32)
     var bufC = newSeq[float32](16)

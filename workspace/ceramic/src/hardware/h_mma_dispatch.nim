@@ -5,17 +5,20 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/macros
+import std/[macros, strutils]
+import workspace/crucible
 
 ## Register-level MMA dispatch (compile-time string builder / AST emitter).
 ##
 ## Public entries:
-##   - `buildNvidiaMmaAsm`: the asm string for one NVIDIA register-level MMA.
 ##   - `gemm_mma`: the macro that emits the register-level MMA call — NVIDIA
 ##     `mma.sync` asm, or the Apple simdgroup intrinsic on Metal.
+##   - `universalMma8x8x8`: the software 8×8×8 cross-lane shuffle reduction,
+##     the universal FMA atoms' device path.
+##   - `buildNvidiaMmaAsm`: the asm string for one NVIDIA register-level MMA.
 ##
-# TODO: gemm_mma is currently Nvidia asm + Apple simdgroup only but should
-# be able to handle AMD and Intel tensor cores.
+# TODO: gemm_mma handles Nvidia asm + Apple simdgroup only; AMD and Intel
+# tensor cores are not implemented yet.
 
 func constraintLetter(elemTypeName: string): string =
   ## Nim DSL register element type → GCC asm constraint letter.
@@ -106,8 +109,12 @@ macro gemm_mma*(instr: static string; dV, aV, bV: static int;
   ##   Hardcoded element types:
   ##     float32 accumulator
   ##     uint32 operands (TF32)
-  if instr == "simdgroup_multiply_accumulate":
+  case instr
+  of "simdgroup_multiply_accumulate":
     return newCall(ident("simdgroupMultiplyAccumulate"), dFrag, aFrag, bFrag)
+  else:
+    if not instr.startsWith("mma.sync.aligned."):
+      error("gemm_mma: unsupported instruction `" & instr & "`")
   let dElem = "float32"
   let aElem = "uint32"
   let bElem = "uint32"
@@ -128,3 +135,36 @@ macro gemm_mma*(instr: static string; dV, aV, bV: static int;
   for i in 0 ..< dV:
     result.add newAssignment(newCall(dFrag, newLit(i)), ident("d" & $i))
   result = newTree(nnkBlockStmt, newEmptyNode(), result)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  universalMma8x8x8: the 8×8×8 register-level MMA
+# ═════════════════════════════════════════════════════════════════════════
+
+proc universalMma8x8x8*[TD; TA; TB](
+    d: var array[2, TD]; a: array[2, TA]; b: array[2, TB]) =
+  ## One 8×8×8 FMA atom's cross-lane reduction: D = A·B + D.
+  ##
+  ## Each lane holds
+  ##   A(m, n), A(m, n+1)
+  ##   B(m, n), B(m, n+1)
+
+  let lane = int(thread_index_in_threadgroup)
+  let row = 4 * ((lane shr 4) and 1) + 2 * ((lane shr 2) and 1) + ((lane shr 1) and 1)
+  let col = 4 * ((lane shr 3) and 1) + 2 * (lane and 1)
+  let colBase = uint32((lane and 1) + 8 * ((lane shr 3) and 1))
+  let srcABase = uint32(2 * row + 8 * (row div 4))
+  for j in 0 ..< 4:
+    let srcA = srcABase + uint32((j and 1) + (j shr 1) * 8)
+    let srcB0 = colBase + uint32(4 * j + 8 * (j div 2))
+    let srcB1 = colBase + uint32(4 * j + 2 + 8 * ((2 * j + 1) div 4))
+    let a0 = simdShuffle(a[0], srcA)
+    let a1 = simdShuffle(a[1], srcA)
+    let b00 = simdShuffle(b[0], srcB0)
+    let b01 = simdShuffle(b[1], srcB0)
+    let b10 = simdShuffle(b[0], srcB1)
+    let b11 = simdShuffle(b[1], srcB1)
+    d[0] = d[0] + TD(a0) * TD(b00)   # k = 2j terms
+    d[1] = d[1] + TD(a0) * TD(b01)
+    d[0] = d[0] + TD(a1) * TD(b10)   # k = 2j+1 terms
+    d[1] = d[1] + TD(a1) * TD(b11)

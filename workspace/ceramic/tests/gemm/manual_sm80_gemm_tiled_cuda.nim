@@ -33,8 +33,10 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/atoms
-import workspace/ceramic/src/kernel_gemm/atoms_nvidia
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
+
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
@@ -63,8 +65,8 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
     thrM = toIntVal(tma.threadLayout.shape[0])
     thrN = toIntVal(tma.threadLayout.shape[1])
     thrK = toIntVal(tma.threadLayout.shape[2])
-    TILE_M = thrM * tma.atom.mnk.m   # 2·16 = 32
-    TILE_N = thrN * tma.atom.mnk.n   # 2·8  = 16
+    TILE_M = thrM * tma.atom.getM()   # 2·16 = 32
+    TILE_N = thrN * tma.atom.getN()   # 2·8  = 16
     blockSize = toIntVal(tma.atom.threadCount(opA)) * thrM * thrN * thrK
   # gmem col-major: A[m + k·32], B[n + k·16], C[m + n·32]
   let tA = make_view(A, make_layout((TILE_M, TILE_K), (1, TILE_M)))
@@ -110,8 +112,8 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
     thrM = toIntVal(tma.threadLayout.shape[0])
     thrN = toIntVal(tma.threadLayout.shape[1])
     thrK = toIntVal(tma.threadLayout.shape[2])
-    TILE_M = thrM * tma.atom.mnk.m   # 2·16 = 32
-    TILE_N = thrN * tma.atom.mnk.n   # 2·8  = 16
+    TILE_M = thrM * tma.atom.getM()   # 2·16 = 32
+    TILE_N = thrN * tma.atom.getN()   # 2·8  = 16
     blockSize = toIntVal(tma.atom.threadCount(opA)) * thrM * thrN * thrK
   # gmem col-major: A[m + k·32], B[n + k·32]
   let tA = make_view(A, make_layout((TILE_M, TILE_K), (1, TILE_M)))

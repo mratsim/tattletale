@@ -344,7 +344,10 @@ proc blitExprSlot(ctx: var GpuContext; slot: var GpuAst; blitType: GpuType; fnRe
       result.add ctx.blitExprSlot(slot.aRight, lhsType, fnRetType)
       return
     result.add ctx.blitExprSlot(slot.aLeft, GpuType(kind: gtVoid), fnRetType)
-    result = ctx.blitExprSlot(slot.aRight, lhsType, fnRetType)
+    # The RHS blit appends to the LHS preamble: assigning instead would
+    # drop the preamble, whose temps the assignment statement references
+    # (the undeclared `_blit_N` failure).
+    result.add ctx.blitExprSlot(slot.aRight, lhsType, fnRetType)
   of gpuBinOp:
     result.add ctx.blitExprSlot(slot.bLeft, GpuType(kind: gtVoid), fnRetType)
     result.add ctx.blitExprSlot(slot.bRight, GpuType(kind: gtVoid), fnRetType)

@@ -315,7 +315,7 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
   ## V modes to the hardware V enumeration regardless of the operand
   ## strides, and only the remaining modes follow the view's order.
   ##
-  ## vShape: the atom's V shape value (atom.aLayout.shape[1]). Its flat
+  ## vShape: the atom's V shape value (getLayoutA().shape[1]). Its flat
   ## leaf count tells the macro how many leading leaves are V — tattletale
   ## partitions flatten the atom's (T,V) V part into consecutive modes, so
   ## the boundary must be stated (CuTe's make_fragment_like needs no such
@@ -383,7 +383,7 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
     return
 
   # ── V part: first vLeafCount leaves — flattened to (VA,):(1|0,) ──
-  # vShape is the V shape value (e.g. mma.aLayout.shape[1]) — its static
+  # vShape is the V shape value (e.g. getLayoutA().shape[1]) — its static
   # type tells the macro how many leading leaves are V. The argument is
   # `typed`: only its static type is read, the macro expands at compile
   # time, so crucible only ever sees the emitted layout.

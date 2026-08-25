@@ -25,8 +25,9 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/atoms
-import workspace/ceramic/src/kernel_gemm/atoms_nvidia
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/kernel_copy_gpu
 import workspace/ceramic/src/atoms_copy

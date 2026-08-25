@@ -26,8 +26,10 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_constructors
 import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/atoms
-import workspace/ceramic/src/kernel_gemm/atoms_nvidia
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
+
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
@@ -78,9 +80,9 @@ proc runTest() =
   # atom's tile shape so a config change cannot silently desync the
   # kernel from the harness.
   static:
-    doAssert 32 === toIntVal(tiled.threadLayout.shape[0]) * toIntVal(tiled.atom.mnk.m) and
-      16 === toIntVal(tiled.threadLayout.shape[1]) * toIntVal(tiled.atom.mnk.n) and
-      32 mod (toIntVal(tiled.threadLayout.shape[2]) * toIntVal(tiled.atom.mnk.k)) == 0 and
+    doAssert 32 === toIntVal(tiled.threadLayout.shape[0]) * toIntVal(tiled.atom.getM()) and
+      16 === toIntVal(tiled.threadLayout.shape[1]) * toIntVal(tiled.atom.getN()) and
+      32 mod (toIntVal(tiled.threadLayout.shape[2]) * toIntVal(tiled.atom.getK())) == 0 and
       64 mod 32 == 0 and
       128 === toIntVal(tiled.atom.threadCount(opA)) * toIntVal(product(tiled.threadLayout.shape)),
       "manual_gemm_cta_dynamic: the kernel's tile/block literals (32, 16, 32, 64, 128)" &

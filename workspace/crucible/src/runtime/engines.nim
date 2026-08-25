@@ -61,7 +61,7 @@ export chevrons
 # grant access to the engine modules' private factories (newCudaEngine,
 # newOpenCLEngine, newVulkanEngine, newWgpuEngine) without leaking them:
 # `export module` after `import {.all.}` would re-export the privates too.
-export ingest, getArtifact, run, check, deviceName
+export ingest, getArtifact, run, check, deviceName, PtrArg
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
@@ -125,13 +125,16 @@ proc run*[T, A](engine: HwEngine, kernel: string, output: var T, args: A,
   when A is tuple:
     var size = 0
     for f in fields(args):
-      when (typeof(f) is seq) or (typeof(f) is array) or (typeof(f) is string):
+      when (typeof(f) is seq) or (typeof(f) is array) or (typeof(f) is string) or
+           (typeof(f) is PtrArg):
         discard
       else:
         size += sizeof(f)
     blobStorage.setLen(0)
     blobStorage.setLen(size)
     for f in fields(args):
+      when (typeof(f) is seq) or (typeof(f) is array):
+        {.warning: "[crucible-perf] seq/array arg copied in full host->device at every launch; a persistent buffer avoids the copy for large tensors".}
       blobs.add blobOf(f, blobStorage)
   else:
     blobStorage.setLen(0)

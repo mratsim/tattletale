@@ -57,6 +57,10 @@ func toFp16*(x: float32): float16 {.builtin.} =
   ## Numeric fp32 → fp16 conversion (RNE).
   raise newException(ValueError, "fp16 conversion is GPU-side only")
 
+func toBf16*(x: float32): bfloat16 {.builtin.} =
+  ## Numeric fp32 → bf16 conversion (RNE).
+  raise newException(ValueError, "bf16 conversion is GPU-side only")
+
 func toFp32*(x: float16): float32 {.builtin.} =
   ## Numeric fp16 → fp32 conversion (exact widening).
   raise newException(ValueError, "fp16 conversion is GPU-side only")
@@ -82,11 +86,13 @@ let NimGpuFp16ConversionBuiltins* {.compileTime.}: Table[(BackendKind, string), 
    (bkVulkan, "toFp16"): "float16_t",
    (bkVulkan, "toFp32"): "float",
    (bkVulkan, "asFp16"): "uint16BitsToFloat16",
+   (bkVulkan, "toBf16"): "bfloat16_t",
    (bkVulkan, "asU16"):  "float16BitsToUint16",
    (bkCuda,   "toFp16"): "__float2half_rn",
    (bkCuda,   "toFp32"): "__half2float",
    (bkCuda,   "asFp16"): "__ushort_as_half",
    (bkCuda,   "asU16"):  "__half_as_ushort",
+   (bkCuda,   "toBf16"): "__float2bfloat16",
    (bkWGSL,   "toFp16"): "f16",
    (bkWGSL,   "toFp32"): "f32",
    (bkWGSL,   "asFp16"): "bitcast<f16>"}.toTable()
