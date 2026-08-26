@@ -11,61 +11,41 @@
 #
 # ############################################################
 
-## Fused qk-norm + NEOX rotary forward on the ceramic Tile API. Per
-## 8-row tile (one 32-lane threadgroup), the two-rounding qk-norm
-## (`RNE(x·rmf)` then `RNE(γ16·v)`, the `rms_norm` arithmetic from
-## exllamav3's fused rope kernel) followed by the NEOX half-tile
-## rotation. The body has zero branches and zero runtime div/mod (the
-## `xColBase div 1024` lowers to a shift: constant power of two).
+## Fused qk-norm + NEOX rotary forward on the ceramic Tile API.
 ##
-## Tile geometry: one 8×128 tile per threadgroup, grid (1, tokens,
-## headBlocks). The X view's token stride is `xTokenStride` (the qkv
-## row width for the layer's q/k views). Each tile's 8 rows are one
-## token's 8-head block (`threadgroup_position_in_grid.z` is the block
-## index) plus the head-column offset `xColBase` (0 for q, H·D for
-## k). The k tile's slots past Nkv read the v region, which the caller
-## discards. The cos/sin tables use the same (token, head-block)
-## decomposition with `cosTokenStride` rows per token. The output tile
-## index is `gidY·headBlocks + gidZ`, so the output is
-## (tokens·headBlocks·8, 128) row-major. The flat `(Mp, 128)` input
-## contract is the special case xTokenStride = 8·128, cosTokenStride =
-## 8, headBlocks = 1, xColBase = 0, grid (1, Mp div 8, 1).
+## Contract: one 8×128 tile computes the two-rounding qk-norm
+## and the NEOX half-tile rotation. The qk-norm rounds twice:
+## `RNE(x·rmf)` then the fp16×fp16 γ multiply.
 ##
-## The four views (gd + local_tile_dyn addressing, origin components
-## in tile-extent units: element (r, c) of an R×C tile at origin
-## (o0, o1, o2, o3) reads ptr[o0·s0 + o1·s1 + o2·s2·R + o3·s3·C +
-## r·s2 + c·s3]):
-## - glX = gd(X, stride (xTokenStride, 0, 128, 1)), origin
-##   (gidY, 0, gidZ + xColBase div 1024, 0): the tile's 8 rows are the
-##   token's head rows gidZ·8 + xColBase div 128 + r, cols the 128 dims
-##   (xColBase is a 128-multiple, so xColBase div 1024 = H div 8 rows
-##   of block offset)
-## - glG = gd(G, stride (0, 0, 0, 1)), origin (0, 0, 0, 0): rows
-##   broadcast, cols the 128 dims
-## - glCos/glSin = gd(..., stride (cosTokenStride·64, 0, 64, 1)),
-##   origin (gidY, 0, gidZ, 0): the fp32 tables, 8×64 tiles at the
-##   token's head-block rows
-## - glOut = gd(Out, stride (8·128, 0, 128, 1)), origins (tile, 0, 0, 0)
-##   and (tile, 0, 0, 1): the two 8×64 stores at column origins 0 and 1
-##   of the tile (64 columns per half, one RNE fp16 round at the store)
+## Dataflow:
 ##
-## Norm sequence (fp32 state): x² tile, `row_sum` (rv), ·1/128, +eps,
-## rsqrt (the rms col-vec ops), `mul_row`. Then the fp16 two-rounding:
-## `x16 = fp16(x·rmf)` (one RNE round), `x16 = x16 · γ16` (fp16×fp16
-## single rounding, the per-element `mulF16`, γ loaded as an fp16
-## broadcast tile). Rotation (fp32 state, fp16 output): the norm
-## tile's column halves [0, 64) and [64, 128) split by a per-lane
-## register copy (`splitHalfFloat32`, same-lane, no shuffle), the cos/sin fp32 loads,
-## the sin products, and the two rotation adds as explicit IEEE fused multiply-adds
-## (`fma`: the Metal compiler does not contract cross-statement arithmetic,
-## so the explicit form keeps each rotation add a single IEEE rounding).
-## The results quantize to fp16 at the store (one RNE round each).
-## The cos/sin come from host-precomputed fp32 tables (no in-kernel sincos).
+##     x ──► x² ──► row_sum ──► ·1/128 ──► +ε ──► rsqrt ──► x·rmf
+##     x·rmf ──► fp16 round ──► γ16 multiply ──► x16
+##     x16 ──► halves (x1, x2)
+##     x1 ──► Out[0, 64)   = x1·cos − x2·sin
+##     x2 ──► Out[64, 128) = x2·cos + x1·sin
+##
+## All norm state is fp32. The rotation runs in fp32 with explicit
+## fused multiply-adds. The results quantize to fp16 at the store.
+## The cos/sin come from host-precomputed fp32 tables.
+##
+## Buffers:
+##   - Out: (tokens·headBlocks·8, 128) fp16 row-major output
+##   - X: (tokens·xTokenStride) fp16, the qkv view
+##   - G: (128,) fp16 norm weight, rows broadcast
+##   - Cos, Sin: (tokens·cosTokenStride, 64) fp32 rotary tables
+##
+## Tile facts:
+##   - each tile's 8 rows are one token's 8-head block
+##     at the head-column offset `xColBase` (0 for q, H·D for k)
+##   - the k tile's slots past Nkv read the v region, which the caller
+##     discards
+##   - the flat (Mp, 128) input contract is the special case
+##     `xTokenStride = 8·128, cosTokenStride = 8, headBlocks = 1, xColBase = 0`
 ##
 ## Known production gaps (documented, not fixed):
 ## - D fixed at 128 (the EXL3 head dim, which the kernel hardcodes).
-## - H should be an 8-multiple: grid.z covers whole 8-head blocks
-##   (the composed q view requires H % 8 == 0).
+## - H should be an 8-multiple. The composed q view requires H % 8 == 0.
 ## - Concrete fp16 in / fp16 out only: no fp32 path.
 
 import workspace/crucible
@@ -158,13 +138,11 @@ proc qk_norm_rope_fwd*(
     headBlocks: int32,                   # the 8-head blocks per token (grid.z extent)
     xColBase: int32,                     # the head-column offset (0 for q, H·D for k)
     eps: float32) {.device.} =
-  ## Computes one 8×128 qk-norm+rope tile per threadgroup, the module doc's sequence:
-  ## the `rms_norm` arithmetic (x² tile, `row_sum`, the rstd col-vec ops, `mul_row`),
-  ## the fp16 two-rounding (fp32→fp16 convert, then the fp16×fp16 γ `mulF16`),
-  ## the rotary half-tile sequence (the `splitHalfFloat32` register copy,
-  ## the cos/sin loads, the sin products, the two fused multiply-adds),
-  ## and the two fp16 8×64 stores at column origins 0 and 1 of the tile `gidY·headBlocks + gidZ`.
-  ## All norm state is fp32. The rotation state is fp32 with the final fp16 rounding at the store.
+  ## Computes the module doc's contract for one 8×128 tile:
+  ## the `rms_norm` arithmetic, the fp16 two-rounding γ multiply
+  ## and the rotary half-tile rotation. The two fp16 8×64 stores
+  ## write to column origins 0 and 1. All norm state is fp32.
+  ## The rotation state is fp32 with the final fp16 rounding at the store.
   ## `xColBase` must be a 1024-multiple (0 or H·D with D = 128 and H an 8-multiple).
   ## The flat path passes 0.
   let gidY = int32(threadgroup_position_in_grid.y)

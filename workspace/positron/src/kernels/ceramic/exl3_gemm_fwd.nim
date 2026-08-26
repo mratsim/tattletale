@@ -11,41 +11,41 @@
 #
 # ############################################################
 
-## Prefill-GEMM instantiation of the fused EXL3 linear forward on the
-## ceramic Tile API. The kernel body is identical to `exl3_linear_fwd`:
-## the same tile ops (`dequantTrellis` → `hadamard128` → `mma_AB` with
-## the fp32 accumulator), with the static set widened to bits {1..8} ×
-## cb {0, 1, 2}. cb0 is the production default codebook.
+## Fused EXL3 prefill-GEMM forward on the ceramic Tile API.
 ##
-## Contract, identical to the linear kernel:
+## Contract:
 ##
 ##     out = FWHT-128( svh ⊙ ( FWHT-128( suh ⊙ x ) @ W_dequant ) )
 ##
-## over fp16 buffers `Out` (M, N), `x` (M, K), `suh` (K), `svh` (N)
-## and the packed int16 trellis codes (tiles_k, tiles_n,
-## 256·bits div 16). The weight matrix is not stored: 16×32 fp16
-## weight tiles are reconstructed on the fly by `dequantTrellis`.
+## Buffers:
+##   - Out: (M, N) fp16 output
+##   - x: (M, K) fp16 input
+##   - trellis: (tiles_k, tiles_n, 256·bits div 16) packed int16 codes
+##   - suh: (K) fp16 input scales
+##   - svh: (N) fp16 output scales
+##
+## The weight matrix is not stored. Each 16×32 fp16 weight tile
+## is reconstructed on the fly by `dequantTrellis` (exl3_ops).
 ## D is the static FWHT block (128).
+## `bits` and `cb` are the static instantiation family (bits 1..8 × cb 0..2).
+## cb0 is the production default codebook.
 ##
-## Grid and decode shape: grid x = N div 128, grid y = (M + 31) div
-## 32, threadgroup = 32 lanes. K and N are 128-multiples. M is the runtime row count
-## (16 = the prefill tile, 32 = a full tile). Rows ≥ M
-## are zero-filled on load and skipped on store. Per 128-column K-block
-## the sequence is fixed: predicated x load, suh pre-scale,
-## tile-level FWHT-128, dequant GEMM into the fp32 accumulators, fp16 accumulator quantization,
-## output FWHT-128, svh post-scale, predicated store.
+## Shapes: K and N must be 128-multiples. M is the runtime row count (16 = the prefill tile, 32 = a full tile).
+## Rows ≥ M are zero-filled on load and skipped on store.
 ##
-## Launch model. exllamav3's kernel is cooperative (one grid over the
-## whole problem, `grid.sync()` barriers order the M-slices). Metal has
-## no grid-wide sync, so this kernel runs one launch per 32-row ×
-## 128-column output tile. The FWHT passes have no cross-threadgroup
-## dependency, so the numerics are unchanged.
+## Dataflow per 128-column K-block:
+##
+##     x ──► suh ⊙ ──► FWHT-128 ────┐
+##                                  ▼
+##     trellis ──► dequantTrellis ──► mma_AB ──► fp32 accum
+##                                                 │
+##                                                 ▼
+##     Out ◄── svh ⊙ ◄── FWHT-128 ◄── fp16 round ◄─┘
 ##
 ## Known gaps:
 ## - K and N must be 128-multiples. Partial shapes are out of contract.
-## - The cb2 decode is the two-rounding numeric form (see exl3_ops'
-##   module-doc gap note), not exllamav3's CUDA-faithful
-##   single-rounding half fma.
+## - The cb2 decode is the two-rounding numeric form, a few fp16 ulps
+##   from the single-rounding reference decode (see the exl3_ops module doc).
 ## - No fp32 path.
 
 import workspace/crucible
@@ -102,14 +102,10 @@ proc exl3_gemm_fwd*(
     bits: static int,
     cb: static int,
     D: static int) {.device.} =
-  ## Computes the fused EXL3 prefill-GEMM forward for one output block,
-  ## the module doc's sequence: per 128-column K-block the predicated x load + suh pre-scale,
-  ## the tile-level FWHT-128, the trellis-dequant GEMM into the 4 fp32 accumulators,
-  ## then the fp16 accumulator quantization, the output FWHT-128, the svh post-scale
-  ## and the predicated store. D is the static FWHT block (128).
+  ## Computes the module doc's contract for one 32-row × 128-column
+  ## output tile. D is the static FWHT block (128).
   ## `bits` and `cb` are the static instantiation family (bits 1..8 × cb 0..2).
   ## M is the runtime row count (16 = the production prefill tile).
-  ## Grid x = N div 128, grid y = (M + 31) div 32, threadgroup = 32 lanes.
   static: doAssert D == 128
   static: doAssert bits in {1, 2, 3, 4, 5, 6, 7, 8},
     "the dequantTrellis funnel Layout is instantiated for bits 1..8"

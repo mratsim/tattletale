@@ -11,41 +11,45 @@
 #
 # ############################################################
 
-## Shared device-op layer of the EXL3 kernel family on the ceramic Tile API:
-## the fragment-layout FWHT-128 (`hadamard128`, the 8-k-block and 4-accumulator forms),
-## plus the on-the-fly trellis dequant weight-tile op (`dequantTrellis`).
-## Row-bounded fp16 tile load/store (`loadTileRows`/`storeTileRows`) come from `tile_io_rows`, a positron-local extension.
-## The linear/gemm/gemv kernels import this module.
+## Shared device-op layer of the EXL3 kernel family on the ceramic Tile API.
+## Provides the FWHT-128 op `hadamard128` and the trellis dequant
+## weight-tile op `dequantTrellis`. Row-bounded fp16 tile load/store
+## (`loadTileRows`/`storeTileRows`) come from `tile_io_rows`.
 ##
 ## Fragment layout convention. All ops follow the loadTile mapping:
-## lane `l` owns the 8×8 fragment cell
-## `cell = crd2idx(A.getLayoutA(), (l, 0))`, `row = cell mod 8`,
-## `col = cell div 8`. Element (r, c) sits in `frags[n][m].frag[v]`
-## at `r = row + n·8`, `c = col + m·8 + v`. The atom's two per-lane values are the horizontal pair (row, col), (row, col+1).
-## The span `col + v` = 0..7 is the trellis word-index range.
+##   - lane `l` owns the 8×8 fragment cell
+##     `cell = crd2idx(A.getLayoutA(), (l, 0))`, `row = cell mod 8`,
+##     `col = cell div 8`
+##   - element (r, c) sits in `frags[n][m].frag[v]` at
+##     `r = row + n·8`, `c = col + m·8 + v`
+##   - the atom's two per-lane values are the horizontal pair
+##     (row, col) and (row, col+1)
+##   - the span `col + v` = 0..7 is the trellis word-index range
 ##
 ## FWHT-128 (both forms): the 7-stage butterfly over each lane's 32
-## register slots of a tile row in fp32, scaled by 1/sqrt(128)
-## (0.088388347648) and rounded to fp16 on the scatter. The stages,
-## lane exchanges and slot maps are documented on `butterflyCore`
-## and the two `hadamard128` overloads.
+## register slots of a tile row, in fp32, scaled by 1/sqrt(128)
+## (0.088388347648) and rounded to fp16 on the scatter.
+## The stages, lane exchanges and slot maps are documented on `butterflyCore` and the two `hadamard128` overloads.
 ##
-## Dequant. `dequantTrellis` decodes a 16×32 fp16 weight tile from the packed
-## trellis codes. Three decode mechanisms combine:
-## - exllamav3's funnel-shift window extraction: a compile-time (i0, i1, s0)
-##   table over the runtime word index
-## - the procedural codebook decode: cb 0/1/2 at static `cb`
-## - the closed-form tensor-core-shuffle word index: reconstruct.cu's fragment-to-row-major permutation
+## Dequant dataflow (`dequantTrellis`):
+##
+##     packed int16 words
+##       ─► funnel window (i0, i1, s0) on the word index
+##       ─► 16-bit window w
+##       ─► codebook decode (cb 0/1/2)
+##       ─► fp16 halves (lo, hi) ── fp16 add ──► 16×32 fp16 W tile
+##
+## The window extraction is a compile-time (i0, i1, s0) table over the runtime word index.
+## The word index is the closed-form tensor-core-shuffle placement (the fragment-to-row-major permutation).
+## The codebook is procedural at static `cb`.
 ## The word-index formula and the decode arithmetic are documented on the op.
 ##
 ## Known gaps:
-## - cb2 uses a two-rounding numeric form (fp16(sum·k_inv) then fp16
-##   add of k_bias, RNE constants 0x1EEF/0xC932), a few fp16 ulps away
-##   from exllamav3's CUDA-faithful single-rounding half fma (constants
-##   0x1EEE/0xC931). cb0/cb1 decode with the single-rounding fp16 add.
+## - cb2 uses a two-rounding numeric form (fp16(sum·k_inv) then fp16 add of k_bias, RNE constants 0x1EEF/0xC932),
+##   a few fp16 ulps from the single-rounding reference half fma (constants 0x1EEE/0xC931).
+##   cb0/cb1 decode with the single-rounding fp16 add.
 ## - No fp32 path: the ops are fp16 in, fp16 out.
-## - Row-bounded IO guards rows only: a partial last column block is out
-##   of contract.
+## - Row-bounded IO guards rows only. A partial last column block is out of contract.
 
 import workspace/crucible
 import workspace/ceramic
