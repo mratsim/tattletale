@@ -503,3 +503,58 @@ when isMainModule:
 - Use `printTensor` and `printTensorShape` for debugging failures
 - Test files should be in `workspace/module/tests/` directory
 - File names should start with `test_` or `t_`
+
+## Kernel tests against a reference
+
+A kernel test that compares against a libtorch reference is three clearly
+separated parts, so a reader always sees which variable comes from the
+kernel, which from the reference, and where the comparison happens:
+
+1. A proc that **computes with the function under check** (runs the kernel,
+   returns the output as a tensor).
+2. A proc that **computes the reference** (libtorch over the same inputs).
+3. The `check*()` proc that builds the shared inputs once, calls both, and
+   asserts.
+
+```nim
+proc kernelUnderTest(xf: seq[float32], M, N: int): F.Tensor =
+  ## Runs the kernel on the fp16-rounded inputs; returns the fp16
+  ## output converted to fp32.
+  var engine = bkMetal.init()
+  engine.ingest(kernelMsl)
+  ...  # build fp16 buffers from xf, engine.run, read back
+  result = toTensor(outF).reshape(M, N)
+
+proc reference(xf: seq[float32], M, N: int): F.Tensor =
+  ## The reference: torch op over the same fp16-rounded inputs.
+  let xh = toTensor(xf).reshape(M, N).to(kFloat16)
+  result = F.some_op(xh.to(kFloat32))
+
+proc checkFeature(): bool =
+  ## Kernel output vs the torch reference on one random batch.
+  Torch.manual_seed(0x5EED'u64)
+  let xf = scaledRand(M, N, 2.0'f32)
+  let actual = kernelUnderTest(xf, M, N)
+  let expected = reference(xf, M, N)
+  echo &"  worst |Δ| = {worstAbsDiff(actual, expected)} (tolerance 5e-3)"
+  assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 5e-3'f64)
+  result = true
+
+when isMainModule:
+  runCppTest("feature vs the torch reference", checkFeature)
+```
+
+Rules:
+
+- Name the two results `actual` and `expected` (or `kernel`/`ref`), so the
+  kernel-vs-reference split is visible at the assert.
+- Both sides derive from the SAME random inputs, with fp16 rounding applied
+  identically (the kernel buffer rounds once; the reference widens the same
+  fp16 values). Never round the reference from the kernel's fp16 output.
+- Complex reference construction (per-seq SDPA, gathers, masks) lives inside
+  the reference proc; the `check*()` proc stays readable.
+- A tiny `worstAbsDiff(a, b: F.Tensor): float32` helper prints the worst
+  deviation before the assert; the assert carries the tolerance.
+- Test documentation scales with test complexity: an element-wise tile op or
+  a kernel-vs-reference match needs a few lines of setup, the reference
+  call, the tolerance, done.
