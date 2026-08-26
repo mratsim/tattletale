@@ -97,10 +97,9 @@ def qwen35_main():
     sequential (recurrent) rule. The HF chunked prefill diverges from the
     sequential reference through 24 bf16 layers (~1e-2..1e-1 logits), so the
     HF side is patched to the recurrent rule the Nim implementation mirrors
-    (the mission's sequential reference); the comparison then runs at the
-    mission's rtol/atol 1e-3 bar.
+    (the sequential reference). The comparison then runs at the
+    rtol/atol 1e-3 bar.
     """
-    import transformers.models.qwen3_5.modeling_qwen3_5 as M
     from transformers.models.qwen3_5.modeling_qwen3_5 import (
         Qwen3_5ForConditionalGeneration,
         torch_recurrent_gated_delta_rule,

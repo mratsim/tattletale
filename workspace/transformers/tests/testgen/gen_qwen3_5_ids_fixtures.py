@@ -7,7 +7,7 @@ Reference: gen_05_ids_to_logits_inference.py conventions, extended with a
 sequential replay reference per the GDN fixture generators.
 
 Fixtures are the ground truth for the Nim q_bf16 ids test
-(test_qwen3_5_05_ids_to_logits_inference.nim, mission 05). The Nim
+The Nim
 implementation is fixed to match these fixtures, never the other way around.
 
 What is generated (under tests/fixtures/ids-inference/Qwen3.5-0.8B/):

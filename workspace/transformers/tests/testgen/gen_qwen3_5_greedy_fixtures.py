@@ -6,10 +6,10 @@ stack using the VENDORED prod transformers modeling on CPU torch bf16.
 Reference: gen_07_greedy_fixture.py conventions (one JSON file per prompt).
 
 Fixtures are the ground truth for the Nim q_bf16 greedy test
-(test_qwen3_5_07_greedy_decoding.nim, mission 06). The Nim implementation
+The Nim implementation
 is fixed to match these fixtures, never the other way around.
 
-Decode entry convention: the Qwen3.5 config has NO bos_token_id and no
+Decode entry convention: the Qwen3.5 config has no bos_token_id and no
 generation_config.json, so the decode entry is defined explicitly here:
 generation starts from the prompt tokens directly (no special token is
 prepended) and stops at config eos_token_id 248044. The tokenizer's own
@@ -17,9 +17,9 @@ eos (248046, im_end) is not used.
 
 One prompt ("The resume is ready", decomposed e + U+0301) carries combining
 marks in its token stream. The vendored pre-tokenizer regex includes the
-\\p{M} class, so the marks merge into letter tokens ("rÃ©sumÃ©"). The fixture
+\\p{M} class, so the marks merge into letter tokens ("résumé"). The fixture
 locks that token stream so the Nim tokenizer must handle combining marks the
-same way (mission 06 t2t/greedy verification).
+same way.
 
 What is generated (under tests/fixtures/greedy-decoding/Qwen3.5-0.8B/):
 

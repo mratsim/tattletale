@@ -216,6 +216,18 @@ proc main() =
       doAssert bandDiff > 0.0, "sequential and chunked outputs are identical, band not exercised"
       doAssert bandDiff < 1e-3, "sequential-vs-chunked divergence exceeded the documented band"
 
+      # The f32 recurrence core and SSM state carry the same band: the two
+      # rules diverge by more than zero and stay sub-1e-5 (measured 9.5e-7
+      # core / 1.5e-7 state on the committed fixture).
+      let coreSeq = st.getTensorOwned("core_attn_out_seq")
+      let coreChunked = st.getTensorOwned("core_attn_out_chunked")
+      let ssmSeq = st.getTensorOwned("ssm_state_seq")
+      let ssmChunked = st.getTensorOwned("ssm_state_chunked")
+      let coreBand = (coreSeq.to(kFloat32) - coreChunked.to(kFloat32)).abs().max().item(float64)
+      let ssmBand = (ssmSeq.to(kFloat32) - ssmChunked.to(kFloat32)).abs().max().item(float64)
+      doAssert coreBand > 0.0 and coreBand < 1e-5, "core band outside (0, 1e-5)"
+      doAssert ssmBand > 0.0 and ssmBand < 1e-6, "ssm band outside (0, 1e-6)"
+
       # The Nim layer is sequential: 0.00 against the sequential replay, and
       # inside the 5e-3 block bar against the vendored chunked forward.
       var ctx = InferenceContext.init(24, 1, 2, 512, 256)
