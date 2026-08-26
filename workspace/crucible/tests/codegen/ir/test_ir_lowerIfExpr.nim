@@ -18,7 +18,8 @@ block:
   let thenVal = GpuAst(kind: gpuLit, lValue: "42", lType: GpuType(kind: gtInt32))
   let elseVal = GpuAst(kind: gpuLit, lValue: "0", lType: GpuType(kind: gtInt32))
   var ifExpr = GpuAst(kind: gpuIf, ifIsExpr: true,
-                      ifCond: cond, ifThen: thenVal, ifElse: elseVal)
+                      ifCond: cond, ifThen: thenVal, ifElse: elseVal,
+                      ifElifs: @[])
 
   var fnBody = GpuAst(kind: gpuBlock, statements: @[ifExpr])
   lowerIfExprImpl(fnBody)
@@ -39,7 +40,8 @@ block:
   let cond = GpuAst(kind: gpuLit, lValue: "true", lType: GpuType(kind: gtBool))
   let thenVal = GpuAst(kind: gpuLit, lValue: "42", lType: GpuType(kind: gtInt32))
   var stmtIf = GpuAst(kind: gpuIf, ifIsExpr: false,
-                      ifCond: cond, ifThen: thenVal, ifElse: GpuAst(kind: gpuDiscard))
+                      ifCond: cond, ifThen: thenVal, ifElse: GpuAst(kind: gpuDiscard),
+                      ifElifs: @[])
 
   var fnBody = GpuAst(kind: gpuBlock, statements: @[stmtIf])
   lowerIfExprImpl(fnBody)
@@ -60,9 +62,11 @@ block:
   let v3 = GpuAst(kind: gpuLit, lValue: "30", lType: GpuType(kind: gtInt32))
 
   let innerIf = GpuAst(kind: gpuIf, ifIsExpr: true,
-                       ifCond: cond2, ifThen: v2, ifElse: v3)
+                       ifCond: cond2, ifThen: v2, ifElse: v3,
+                       ifElifs: @[])
   var outerIf = GpuAst(kind: gpuIf, ifIsExpr: true,
-                       ifCond: cond1, ifThen: v1, ifElse: innerIf)
+                       ifCond: cond1, ifThen: v1, ifElse: innerIf,
+                       ifElifs: @[])
 
   var fnBody = GpuAst(kind: gpuBlock, statements: @[outerIf])
   lowerIfExprImpl(fnBody)

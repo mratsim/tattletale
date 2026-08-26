@@ -110,6 +110,9 @@ proc decomposeMemcpyVarsImpl*(ctx: var GpuContext; n: var GpuAst) =
   of gpuIf:
     decomposeMemcpyVarsImpl(ctx, n.ifCond)
     decomposeMemcpyVarsImpl(ctx, n.ifThen)
+    for el in n.ifElifs.mitems:
+      decomposeMemcpyVarsImpl(ctx, el.cond)
+      decomposeMemcpyVarsImpl(ctx, el.body)
     if n.ifElse.kind != gpuDiscard:
       decomposeMemcpyVarsImpl(ctx, n.ifElse)
 

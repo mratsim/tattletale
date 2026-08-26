@@ -170,6 +170,9 @@ proc lowerIfExprImpl*(n: var GpuAst) =
       # Recurse into children
       lowerIfExprImpl(n.ifCond)
       lowerIfExprImpl(n.ifThen)
+      for el in n.ifElifs.mitems:
+        lowerIfExprImpl(el.cond)
+        lowerIfExprImpl(el.body)
       if n.ifElse.kind != gpuDiscard:
         lowerIfExprImpl(n.ifElse)
   of gpuBlock:
@@ -321,6 +324,9 @@ proc mapOperatorsImpl*(n: var GpuAst) =
   of gpuIf:
     mapOperatorsImpl(n.ifCond)
     mapOperatorsImpl(n.ifThen)
+    for el in n.ifElifs.mitems:
+      mapOperatorsImpl(el.cond)
+      mapOperatorsImpl(el.body)
     if n.ifElse.kind != gpuDiscard:
       mapOperatorsImpl(n.ifElse)
   of gpuProc:
@@ -457,6 +463,9 @@ proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext; n: var GpuAst) =
   of gpuIf:
     resolveOverloadedOperatorsImpl(ctx, n.ifCond)
     resolveOverloadedOperatorsImpl(ctx, n.ifThen)
+    for el in n.ifElifs.mitems:
+      resolveOverloadedOperatorsImpl(ctx, el.cond)
+      resolveOverloadedOperatorsImpl(ctx, el.body)
     if n.ifElse.kind != gpuDiscard:
       resolveOverloadedOperatorsImpl(ctx, n.ifElse)
   of gpuProc:
@@ -507,6 +516,9 @@ proc deEmbedForRangeAdjustmentImpl*(n: var GpuAst) =
   of gpuIf:
     deEmbedForRangeAdjustmentImpl(n.ifCond)
     deEmbedForRangeAdjustmentImpl(n.ifThen)
+    for el in n.ifElifs.mitems:
+      deEmbedForRangeAdjustmentImpl(el.cond)
+      deEmbedForRangeAdjustmentImpl(el.body)
     if n.ifElse.kind != gpuDiscard:
       deEmbedForRangeAdjustmentImpl(n.ifElse)
   of gpuTernary:
