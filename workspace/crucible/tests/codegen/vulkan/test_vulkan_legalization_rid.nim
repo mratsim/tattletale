@@ -141,7 +141,7 @@ const builtinRsqrtVk = vulkan:
   proc rsqrtKernel(dst: ptr UncheckedArray[float32], v: float32) {.global.} =
     dst[0] = rsqrt(v)     # the `{.builtin.}` rsqrt → GLSL inversesqrt
 
-# ── (f) multi-var-arg calls — unwritten args are value params ──
+# ── (f) multi-var-arg calls — unwritten args are value params ─────────────────
 
 const add2Vk = vulkan:
   proc add2(a: var uint32, b: var uint32): uint32 {.device.} =
@@ -164,7 +164,7 @@ const bumpVk = vulkan:
     bump(x, lim)
     dst[0] = x
 
-# ── (g) fixReturn stops at nested proc boundaries ──
+# ── (g) fixReturn stops at nested proc boundaries ─────────────────────────────
 
 const nestedProcVk = vulkan:
   proc outer(x: var int32) {.device.} =
@@ -179,7 +179,7 @@ const nestedProcVk = vulkan:
     outer(v)
     dst[0] = uint32(v)
 
-# ── (h) lane-id rewrite is node-local (same-module scoping) ──
+# ── (h) lane-id rewrite is node-local (same-module scoping) ───────────────────
 
 const laneShareVk = vulkan:
   proc leafShuffle(acc: float32, lane: uint32): float32 {.device.} =
