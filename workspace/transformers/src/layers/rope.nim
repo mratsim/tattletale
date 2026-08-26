@@ -58,11 +58,11 @@ type
     ##  - `cos_cache.shape == sin_cache.shape == (max_seq_len, rotary_dim)`,
     ##    with `rotary_dim <= head_dim` and `max_seq_len == self.max_seq_len`
     ##  - Each value `cos_cache[p, d]` equals `cos(p * rope_theta^(-d/rotary_dim))`
-    ##    (with NEOX-style dim repetition: odd dims copy even dims)
+    ##    (NEOX half-repeat: dim d and dim d + rotary_dim/2 share a frequency)
     ##  - `ropeByPositions(position_ids)` returns tensors of shape `(seq_len, rotary_dim)`
     ##    where `seq_len == position_ids.numel()`
-    ##  - `applyRope` rotates only the first `rotary_dim` columns of head_dim;
-    ##    the remaining columns pass through unchanged
+    ##  - `applyRope` rotates only the first `rotary_dim` columns of head_dim.
+    ##    The remaining columns pass through unchanged.
     ##  - `applyRope` is pure: same inputs always produce same outputs
     ##
     ## **USAGE**:
@@ -103,7 +103,7 @@ func applyRopeImpl(
   ## Freestanding RoPE implementation.
   ##
   ## **Contract:** cos and sin MUST be 2D `(seq, rotary_dim)`. The rotation
-  ## width is derived from `cos.size(-1)`; when it equals `head_dim` this is
+  ## width is derived from `cos.size(-1)`. When it equals `head_dim` this is
   ## the plain full-head_dim rotation.
   ##
   ## Input q,k: (batch, seq, head, head_dim)
@@ -111,7 +111,7 @@ func applyRopeImpl(
   ## Output: (batch, seq, head, head_dim)
   ##
   ## Only the first `rotary_dim` columns of head_dim rotate (`q_rot * cos +
-  ## rotateHalf(q_rot) * sin`, NEOX pairwise repetition); columns
+  ## rotateHalf(q_rot) * sin`, NEOX pairwise repetition). Columns
   ## `rotary_dim ..< head_dim` pass through unchanged. This matches the
   ## vendored `apply_rotary_pos_emb` (rotary_dim = cos.shape[-1], split
   ## q_rot/q_pass, rotate q_rot, concatenate).
@@ -158,7 +158,7 @@ func new*(_: type RotaryPositionEmbeddingRef,
       rotary_dim = -1): RotaryPositionEmbeddingRef =
   ## Build RoPE lookup table for all positions `0..max_seq_len-1`.
   ##
-  ## `rotary_dim` defaults to `head_dim` (full rotation); pass a smaller value
+  ## `rotary_dim` defaults to `head_dim` (full rotation). Pass a smaller value
   ## (e.g. 64 for Qwen3.5) to rotate only the first `rotary_dim` columns.
   ## The cache is sized `(max_seq_len, rotary_dim)` so a partial rotation does
   ## not allocate the full head_dim table.
@@ -174,13 +174,13 @@ func new*(_: type RotaryPositionEmbeddingRef,
   ##     unique dimension `d`, compute `cos(p * inv_freq[d])` and
   ##     `sin(p * inv_freq[d])` in FP64 for precision.
   ##
-  ##  3. Duplicate even-dimension values to cover all `rotary_dim` positions:
-  ##     `[freq_0, freq_0, freq_1, freq_1, ...]` by concatenating the
-  ##     even-dim table with itself along the dimension axis.
+  ##  3. Duplicate the half table to cover all `rotary_dim` positions:
+  ##     `[f0 .. f_{m-1}, f0 .. f_{m-1}]` (m = rotary_dim/2) by
+  ##     concatenating the table with itself along the dimension axis.
   ##
   ##  4. Cast result to `dtype` (e.g., BF16) and move to `device`.
   ##
-  ## **Complexity**: O(max_seq_len * rotary_dim) — done once per model load.
+  ## **Complexity**: O(max_seq_len * rotary_dim), done once per model load.
   ##
   let dim = if rotary_dim < 0: head_dim else: rotary_dim
   doAssert dim <= head_dim, "rotary_dim " & $dim & " exceeds head_dim " & $head_dim
@@ -219,7 +219,7 @@ proc ropeByPositions*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (
   ##   position_ids: Tensor of shape (seq_len,) or (batch, seq_len)
   ##
   ## Returns:
-  ##   (cos, sin) of shape (seq_len, rotary_dim) — sliced from cache
+  ##   (cos, sin) of shape (seq_len, rotary_dim), sliced from cache
   ##
   ## Note:
   ##   Called once per forward pass at model level.

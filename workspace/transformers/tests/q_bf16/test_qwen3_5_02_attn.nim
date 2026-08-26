@@ -64,7 +64,7 @@ proc openFixture(name: string): (MemFile, Safetensor) =
   result = (memFile, safetensors.load(memFile))
 
 proc newCtx(maxSeq = 512): (InferenceContext, PagePool) =
-  ## Fresh InferenceContext with a page pool; the pool ref is returned with
+  ## Fresh InferenceContext with a page pool. The pool ref is returned with
   ## the context so the borrowed pages stay alive for the test's duration.
   var ctx = InferenceContext.init(
     num_layers = 24, batch_size = 1,
@@ -76,6 +76,18 @@ proc newCtx(maxSeq = 512): (InferenceContext, PagePool) =
   for i in 0 ..< numPages:
     ctx.pages.add(pool.borrow())
   (ctx, pool)
+
+proc normFixtureTest(caseNum: int, msg: string): bool =
+  ## GemmaRMSNorm (1 + w) in isolation, 0.00 vs vendored ground truth.
+  var (memFile, st) = openFixture("norm-Qwen3.5-0.8B-0" & $caseNum & ".safetensor")
+  defer: close(memFile)
+  let x = st.getTensorOwned("input")
+  let expected = st.getTensorOwned("output")
+  let w = st.getTensorOwned("weight")
+  let norm = GemmaRmsNorm.init(w, eps = 1e-6)
+  let got = norm.forward(x)
+  assertAllClose(got, expected, rtol = 0.0, abstol = 0.0, msg = msg)
+  true
 
 proc main() =
   # ──────────────────────────────────────────────────────────────────────────
@@ -120,7 +132,7 @@ proc main() =
         rtol = 0.0, abstol = 0.0, msg = "k_norm mismatch")
       assertAllClose(gate, st.getTensorOwned("gate"),
         rtol = 0.0, abstol = 0.0, msg = "gate mismatch")
-      # Fixture q_rot/k_rot are (batch, heads, seq, dim); Nim keeps
+      # Fixture q_rot/k_rot are (batch, heads, seq, dim). Nim keeps
       # (batch, seq, heads, dim).
       assertAllClose(qRot, st.getTensorOwned("q_rot").transpose(1, 2),
         rtol = 0.0, abstol = 0.0, msg = "q_rot mismatch")
@@ -128,7 +140,7 @@ proc main() =
         rtol = 0.0, abstol = 0.0, msg = "k_rot mismatch")
 
       # Pre-o_proj output: SDPA + sigmoid gate. The layer's forward output
-      # was already compared above; this pins the gate application itself.
+      # was already compared above. This asserts the gate application itself.
       let vReshaped = attn.v_proj.forward(x).reshape([1, seqLen, 2, 256])
       let kExp = kRot.repeat_interleave(4, 2)
       let vExp = vReshaped.repeat_interleave(4, 2)
@@ -268,6 +280,13 @@ proc main() =
       assertAllClose(zeroV, zeroExp, rtol = 1e-6, abstol = 1e-6,
         msg = "Page 1 unwritten slots should be zero (V)")
       true
+
+  runCppTest "GemmaRmsNorm 1+w head_dim forward vs fixture":
+    proc(): bool = normFixtureTest(0, "GemmaRmsNorm head_dim_forward mismatch")
+  runCppTest "GemmaRmsNorm 1+w single token vs fixture":
+    proc(): bool = normFixtureTest(1, "GemmaRmsNorm single_token mismatch")
+  runCppTest "GemmaRmsNorm 1+w zeros input (eps guard) vs fixture":
+    proc(): bool = normFixtureTest(2, "GemmaRmsNorm zeros_input mismatch")
 
   echo "\nAll Qwen3.5 gated-attention tests passed!"
 

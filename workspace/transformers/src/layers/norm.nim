@@ -99,15 +99,17 @@ type
     ## RMSNorm with the weight applied as `1 + w` (Gemma-style), used for
     ## Qwen3.5 qk-norm.
     ##
-    ## Forward computes, all in f32: `output = (x / sqrt(mean(x^2) + eps)) *
-    ## (1 + w)`, then casts back to the input dtype. The weight is stored
-    ## as-is (BF16 [head_dim] in the shard); the `1 + w` scaling happens in
+    ## Forward computes, all in f32:
+    ##   `output = (x / sqrt(mean(x^2) + eps)) * (1 + w)`,
+    ## then casts back to the input dtype. The weight is stored
+    ## as-is (BF16 [head_dim] in the shard). The `1 + w` scaling happens in
     ## f32. This matches the vendored Qwen3_5RMSNorm
     ## (`_norm(x.float()) * (1.0 + weight.float())`, `.type_as(x)`).
     weight*: Tensor
     eps*: float64
     hidden_size*: int
 
+## Build GemmaRMSNorm from a `[head_dim]` weight (applied as `1 + w`). eps defaults to 1e-6.
 func init*(_: type GemmaRmsNorm, weight: Tensor, eps: SomeFloat = 1e-6): GemmaRmsNorm =
   let hidden_size = weight.size(0)
   GemmaRmsNorm(

@@ -26,7 +26,7 @@ type
     ## GQA is handled either by PyTorch's SDPA `enable_gqa` flag or by
     ## pre-expanding K/V heads before a standard SDPA call. The pre-expanded
     ## path (enable_gqa = false) matches the HF reference convention
-    ## (repeat_interleave) bit for bit; see FIXTURE_GENERATION.md section 6.
+    ## (repeat_interleave) bit for bit (FIXTURE_GENERATION.md section 6).
     head_dim*: int
     num_qo_head*: int
     num_kv_head*: int
@@ -104,7 +104,7 @@ func forward*(
   ##   v: Value tensor of shape (batch, seq, num_kv_head, head_dim)
   ##   is_causal: If true, apply causal mask
   ##   enable_gqa: If false, K/V must already have num_qo_head heads
-  ##     (pre-expanded); SDPA runs without the GQA flag.
+  ##     (pre-expanded). SDPA runs without the GQA flag.
   ##
   ## Returns:
   ##   Attention output of shape (batch, seq, num_qo_head * head_dim)

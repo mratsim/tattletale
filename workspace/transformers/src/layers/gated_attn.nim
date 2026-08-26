@@ -156,7 +156,7 @@ proc forward(
   #   1. Prefill:  startSequence sets kv_position=0
   #                forward writes at offset=0
   #                generate() calls setKvPosition(ids.len)
-  #   2. Decode:   decodeStep sets position_ids WITHOUT incrementing
+  #   2. Decode:   decodeStep sets position_ids without incrementing
   #                forward writes at offset=kv_position (matches pos_ids.min())
   #                generate() increments kv_position after forward
   #   => Invariant: kv_position == position_ids.min() during forward.

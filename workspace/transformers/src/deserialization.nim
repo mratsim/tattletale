@@ -70,14 +70,15 @@ proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, devic
 proc load*(_: type GemmaRmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): GemmaRmsNorm =
   ## Load a Gemma-style RMS norm (weight applied as 1 + w) from safetensors.
   ##
-  ## Shares the RmsNorm codec loader; only the forward semantics differ
+  ## Shares the RmsNorm codec loader. Only the forward semantics differ
   ## (the weight scales as `1 + w`, see GemmaRmsNorm.forward).
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].rmsNorm
   if loader == nil:
     raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
   let weight = loader(st, prefix, cfg, device)
-  GemmaRmsNorm.init(weight, cfg{"rms_norm_eps"}.getFloat(1e-6))
+  let textCfg = cfg{"text_config"}
+  GemmaRmsNorm.init(weight, textCfg{"rms_norm_eps"}.getFloat(1e-6))
 
 # ─── Embedding ──────────────────────────────────────────────────────────
 

@@ -17,11 +17,11 @@ What is generated (under tests/fixtures/layers/Qwen3.5-0.8B-layer-3/):
            intermediates (q_normed, k_normed, q_rot, k_rot, gate,
            attn_output_gated)
 
-Determinism: torch.manual_seed per generator; cudnn flags; metadata in
+Determinism: torch.manual_seed per generator, cudnn flags, and metadata in
 separate .metadata.json files (safetensors HashMap order is randomized).
 
 The attention forward is replayed step by step with the vendored ops so the
-intermediates can be captured; the replay output is asserted bit-identical to
+intermediates can be captured. The replay output is asserted bit-identical to
 the module's own forward before saving.
 """
 
@@ -34,7 +34,14 @@ from safetensors import safe_open
 from safetensors import torch as st
 
 # Vendored prod transformers is the source of truth.
-VENDORED_SRC = "/Users/pi/Documents/Programming/workspace-tattletale/_references_prod/transformers/src"
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+VENDORED_SRC = os.environ.get(
+    "QWEN35_VENDORED_SRC",
+    os.path.join(_REPO_ROOT, "_references_prod", "transformers", "src"))
+if not os.path.isdir(VENDORED_SRC):
+    raise SystemExit(
+        f"[gen_qwen3_5_attn_fixtures] vendored modeling not found at {VENDORED_SRC}; "
+        "set QWEN35_VENDORED_SRC to the _references_prod/transformers/src directory")
 sys.path.insert(0, VENDORED_SRC)
 
 from transformers.models.qwen3_5.modeling_qwen3_5 import (
