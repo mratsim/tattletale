@@ -59,6 +59,10 @@ func apply(
     tmp: var RtLeft[float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32],
     AB: RtLeft[float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32]) {.inline.} =
   ## Per-slot epilogue math (fragment-resident accumulator form): tmp = s·AB.
+  static:
+    doAssert 32 mod UNIVERSAL_8x8x8_F32F16F16F32.getM() == 0 and
+      32 mod UNIVERSAL_8x8x8_F32F16F16F32.getN() == 0,
+      "apply: the accumulator tile dims must be exact multiples of the atom dims"
   const rowTiles = 32 div UNIVERSAL_8x8x8_F32F16F16F32.getM()
   const colTiles = 32 div UNIVERSAL_8x8x8_F32F16F16F32.getN()
   const vpt = toIntVal(UNIVERSAL_8x8x8_F32F16F16F32.valuesPerThread(opC))
@@ -72,6 +76,10 @@ func apply(
     tmp: var RtLeft[float32, 32, 32, APPLE_8x8x8_F16],
     AB: RtLeft[float32, 32, 32, APPLE_8x8x8_F16]) {.inline.} =
   ## Per-slot epilogue math for the Metal twin (Apple atom): tmp = s·AB.
+  static:
+    doAssert 32 mod APPLE_8x8x8_F16.getM() == 0 and
+      32 mod APPLE_8x8x8_F16.getN() == 0,
+      "apply: the accumulator tile dims must be exact multiples of the atom dims"
   const rowTiles = 32 div APPLE_8x8x8_F16.getM()
   const colTiles = 32 div APPLE_8x8x8_F16.getN()
   const vpt = toIntVal(APPLE_8x8x8_F16.valuesPerThread(opC))
@@ -150,6 +158,13 @@ proc buildRaggedEdgeB(K, Kp, N, Np: int): seq[uint16] =
       result[k * Np + n] = fp32ToFp16(float32(1 + 3 * k + 11 * n))
     for n in N ..< Np:
       result[k * Np + n] = 0'u16
+  # the K-padding rows (k in K..Kp-1) must be ZERO to match the comment
+  # (the kernel reads them inside the K loop — 0xDEAD fp16 is a finite
+  # number ≈ −341.3, and a garbage change to Inf/NaN would poison the
+  # real M×N region through 0×garbage)
+  for k in K ..< Kp:
+    for n in 0 ..< Np:
+      result[k * Np + n] = 0'u16
 
 proc checkClose(name: string; actual, expected: seq[float32];
                 M, N, Np: int; tol = 1e-2'f32) =
@@ -221,6 +236,34 @@ proc checkScaleUser(engine: var auto; M, N, K: int) =
   checkClose("fusedScaleUser vs fp32-exact reference", D,
              scale(gemmRef(M, N, K, Mp, Np, Kp, Ah, Bh), 2.0'f32), M, N, Np)
 
+proc checkKGuard(engine: var auto; M, N, K: int) =
+  ## HPC-A-002: an UNPADDED K (K mod 16 != 0) must fail loudly — the kernel
+  ## returns before writing D, so the untouched 0xDEAD sentinel survives.
+  ## Without the guard the kernel would silently GEMM over K div 16 full
+  ## blocks and write a finite truncated result (not NaN) into D.
+  let Mp = ((M + 31) div 32) * 32
+  let Np = ((N + 31) div 32) * 32
+  # Kp == K here: deliberately NO K-padding — the guard must fire before
+  # the K loop reads anything.
+  let Ah = buildRaggedEdgeA(M, Mp, K, K)
+  let Bh = buildRaggedEdgeB(K, K, N, Np)
+  let rsc = 2 * Np
+  let csc = 1
+  var Cp = newSeq[float32](Mp * rsc)
+  for i in 0 ..< Mp * rsc:
+    Cp[i] = 0xDEAD'f32
+  var D = newSeq[float32](Mp * Np)
+  for i in 0 ..< Mp * Np:
+    D[i] = 0xDEAD'f32
+  echo &"  plainEpi {M}×{N}×{K} (UNPADDED K: guard must fire, D untouched):"
+  engine.run << (grid: (Np div 32, Mp div 32), blk: (32, 1)) >> (
+    "plainEpi", D, (Ah, Bh, Cp, 2.0'f32, 4.0'f32,
+                    int32(Mp), int32(Np), int32(K), int32(rsc), int32(csc)))
+  if D[0] != 0xDEAD'f32:
+    echo &"  FAIL — D[0] = {D[0]} (guard did not fire: silent truncated GEMM)"
+    quit 1
+  echo "  PASS — D[0] untouched (guard fired before any write)"
+
 # ═════════════════════════════════════════════════════════════════════════
 #  Runner
 # ═════════════════════════════════════════════════════════════════════════
@@ -261,6 +304,12 @@ proc runTest() =   # engines are RAII, so keep them function-local
     "GPU-B-001: shuffle lane id not rewritten to gl_SubgroupInvocationID:\n" & plainEpiVk
   doAssert "int lane = int(gl_LocalInvocationIndex)" in plainEpiVk,
     "GPU-B-001: lane-id rewrite leaked into non-shuffle fns:\n" & plainEpiVk
+  # HPC-A-002: ragged-K (K mod 16 != 0) fails loudly — the guard returns
+  # before any write, so a host-side value check sees the untouched output
+  # instead of a silently truncated result (the K loop iterates K div 16
+  # full blocks and would drop the tail).
+  doAssert "if (!((K % 16) == 0)) {" in plainEpiVk,
+    "HPC-A-002: missing ragged-K fail-loudly guard:\n" & plainEpiVk
 
   echo "── scaleUserVk GLSL (" & $scaleUserVk.len & " chars) ──"
   doAssert "void fusedScaleUser()" in scaleUserVk, "missing kernel entry point:\n" & scaleUserVk
@@ -287,6 +336,7 @@ proc runTest() =   # engines are RAII, so keep them function-local
   vkEngine.ingest(plainEpiVk)
   checkPlain(vkEngine, 37, 55, 48)    # ragged M/N; K divides 16 exactly
   checkPlain(vkEngine, 65, 89, 71)    # ragged M/N/K (Kp = 80, partial block)
+  checkKGuard(vkEngine, 65, 89, 71)   # UNPADDED K: the guard must fire
   vkEngine.ingest(scaleUserVk)
   checkScaleUser(vkEngine, 65, 89, 71)
 
@@ -295,6 +345,7 @@ proc runTest() =   # engines are RAII, so keep them function-local
   mslEngine.ingest(gemmVkMsl)
   checkPlain(mslEngine, 37, 55, 48)
   checkPlain(mslEngine, 65, 89, 71)
+  checkKGuard(mslEngine, 65, 89, 71)
   checkScaleUser(mslEngine, 65, 89, 71)
 
   echo "manual_tile_ragged_gemm_epi_vulkan: Vulkan gemm_with_epilogue (plain strided + user epilogue, ragged-edge shapes) PASS on MoltenVK + Metal twins"

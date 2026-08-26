@@ -32,6 +32,18 @@ proc gemm_with_epilogue*[TIn, TOut; Epi](
     B: ptr UncheckedArray[TIn], rsb, csb: int32,
     N, K, M: int32; epi: Epi, buf1: ptr UncheckedArray[float32]) {.device.} =
   ## D = f(A·B), A (N, K), B (K, M), D (N, M), explicit row/col strides.
+  ##
+  ## K contract (ragged-K): K is the ALLOCATED extent and must be a
+  ## multiple of the tile K (16) — the loop below iterates `K div 16` full
+  ## 16-slice blocks and a ragged K would silently drop the tail. For a
+  ## ragged logical K, pass the padded extent Kp (multiple of 16) and
+  ## ZERO-FILL the K..Kp-1 extent: the kernel reads it inside the K loop,
+  ## so garbage there leaks finite wrong values into the accumulator
+  ## (0xDEAD fp16 is a normal finite number, not NaN). An unpadded K fails
+  ## loudly: the kernel returns before writing D, so a host-side value
+  ## check sees the untouched output instead of a truncated result.
+  if K mod 16 != 0:
+    return
   let gd_a = gd(A, shape = (1, 1, N, K), stride = (0, 0, rsa, csa))
   let gd_b = gd(B, shape = (1, 1, M, K), stride = (0, 0, csb, rsb))
   let gd_d = gd(D, shape = (1, 1, N, M), stride = (0, 0, rsd, csd))
