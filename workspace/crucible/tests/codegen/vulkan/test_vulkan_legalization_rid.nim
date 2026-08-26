@@ -129,6 +129,44 @@ const builtinRsqrtVk = vulkan:
   proc rsqrtKernel(dst: ptr UncheckedArray[float32], v: float32) {.global.} =
     dst[0] = rsqrt(v)     # the `{.builtin.}` rsqrt → GLSL inversesqrt
 
+# ── (f) SLOP-002: multi-var-arg calls — unwritten args are value params ──
+
+const add2Vk = vulkan:
+  proc add2(a: var uint32, b: var uint32): uint32 {.device.} =
+    a + b
+
+  proc add2Kernel(dst: ptr UncheckedArray[uint32]) {.global.} =
+    var x: uint32 = 1
+    var y: uint32 = 2
+    dst[0] = add2(x, y)
+
+const bumpVk = vulkan:
+  proc bump(x: var uint32, limit: var uint32) {.device.} =
+    if x > limit:
+      return
+    x = x + 1'u32
+
+  proc bumpKernel(dst: ptr UncheckedArray[uint32]) {.global.} =
+    var x: uint32 = 1
+    var lim: uint32 = 5
+    bump(x, lim)
+    dst[0] = x
+
+# ── (g) SLOP-003: fixReturn stops at nested proc boundaries ──────────────
+
+const nestedProcVk = vulkan:
+  proc outer(x: var int32) {.device.} =
+    proc inner(y: int32): int32 =
+      if y > 10:
+        return y
+      y + 1
+    x = inner(x)
+
+  proc nestedKernel(dst: ptr UncheckedArray[uint32]) {.global.} =
+    var v: int32 = 5
+    outer(v)
+    dst[0] = uint32(v)
+
 static:
   # An array-var-param fn whose body contains a `return` must be rejected
   # loudly: inlining it would splice the `return` into the host kernel,
@@ -149,7 +187,14 @@ static:
 
   # COV-A-005: the passes' rejection guards fire loudly instead of emitting
   # valid-but-wrong GLSL.
-  # (1) two written var params — GLSL fns return one value
+  # (1) two written var params — GLSL fns return one value. `not compiles`
+  # pins only "the module must not compile": with the fn-level guard present
+  # the DEFINITION is rejected during conversion; without it the call-site
+  # guard (written var args > 1) rejects the CALL. Both guards enforce the
+  # same rule, so deleting either leaves this probe passing (RED-verified) —
+  # guard-level pinning is done via RED logs, not in-tree. The positive
+  # control below pins the boundary: one written + one unwritten var arg
+  # MUST compile (the call-site guard counts only written args).
   doAssert not compiles(block:
     const bad = vulkan:
       proc twoWritten(a: var uint32, b: var uint32) {.device.} =
@@ -251,6 +296,47 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var res: array[1, uint32]
       engine.run << (grid: (1, 1), blk: (1, 1)) >> ("zeroKernel", res, ())
       check res[0] == 0'u32
+
+    test "SLOP-002: two unwritten var args lower to plain value params":
+      # add2 reads both var params without writing them — GLSL's
+      # one-return-value rule is not violated, so the call must lower to
+      # `dst[0] = add2(x, y)` with `uint add2(uint a, uint b)`. The old
+      # call-site guard rejected ANY multi-var-arg call with a factually
+      # wrong message (SLOP-002).
+      check "uint add2(uint a, uint b)" in add2Vk
+      check "dst[0] = add2(x, y);" in add2Vk
+      var engine = bkVulkan.init()
+      engine.ingest(add2Vk)
+      var res: array[1, uint32]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> ("add2Kernel", res, ())
+      check res[0] == 3'u32
+
+    test "SLOP-002: written + unwritten var args mix (one return value)":
+      # bump writes only x — the fn-level guard permits the fn (one written
+      # param → one return value), so the call must lower to
+      # `x = bump(x, lim)` with `uint bump(uint x, uint limit)`. The old
+      # call-site guard rejected the call site anyway (SLOP-002).
+      check "uint bump(uint x, uint limit)" in bumpVk
+      check "x = bump(x, lim);" in bumpVk
+      var engine = bkVulkan.init()
+      engine.ingest(bumpVk)
+      var res: array[1, uint32]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> ("bumpKernel", res, ())
+      # 1 ≤ 5 → bump applies: x = 2
+      check res[0] == 2'u32
+
+    test "SLOP-003: fixReturn stops at nested proc boundaries":
+      # outer(x: var int32) converts to return-by-value; the return rewrite
+      # must touch ONLY outer's own returns. The old full-tree recursion
+      # descended into the nested `inner`'s gpuProc body and rewrote its
+      # returns with outer's retIdent (`return y;` / `return result;` became
+      # `return x;` — an undeclared x inside the hoisted top-level inner).
+      # The module cannot run on device yet: codegen emits the nested
+      # definition in place AND a hoisted top-level copy, which glslang
+      # rejects (pre-existing nested-fn emission defect — tracked debt) —
+      # the asserts pin the return rewrite itself.
+      check "return y;" in nestedProcVk
+      check "return result;" in nestedProcVk
 
     test "SEC-B-001: user device fn shadowing a builtin name keeps its body":
       # The user `rsqrt` must be emitted as its own GLSL fn with its call

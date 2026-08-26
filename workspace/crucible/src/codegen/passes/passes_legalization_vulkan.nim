@@ -588,6 +588,12 @@ proc convertVarParams(ctx: var GpuContext) =
           case n.kind
           of gpuReturn:
             n.rValue = retIdent.clone()
+          of gpuProc:
+            # nested device fn — its returns belong to its own scope and the
+            # outer fn's retIdent is not in scope there (SLOP-003: the old
+            # full-tree recursion rewrote them, emitting `return x;` inside
+            # the nested fn where x is undeclared)
+            discard
           else:
             for ch in n.mitems:
               fixReturn(ch)
@@ -617,39 +623,42 @@ proc convertVarParams(ctx: var GpuContext) =
             if n.cArgs.len != fn.pParams.len:
               raiseAssert "Vulkan: arity mismatch calling device fn '" & fn.pName.ident() &
                 "' (" & $n.cArgs.len & " args vs " & $fn.pParams.len & " params)"
-            # find the var arg(s): the position(s) that were var params
-            var varArgPos: seq[int]
+            # find the var arg(s): the position(s) that were var params.
+            # Only WRITTEN var args conflict with GLSL's one-return-value
+            # rule; unwritten ones become plain value params (BUG-A-005).
+            # The old guard counted ALL var args and rejected valid calls
+            # with a factually wrong message (SLOP-002).
+            var writtenArgPos: seq[int]
             for pos in varPos:
-              if pos < n.cArgs.len:
-                varArgPos.add pos
-            if varArgPos.len > 1:
+              if pos < n.cArgs.len and writtenISyms.len == 1 and
+                 fn.pParams[pos].ident.symbol.iSym == writtenISyms[0]:
+                writtenArgPos.add pos
+            if writtenArgPos.len > 1:
               raiseAssert "Vulkan: call to '" & fn.pName.ident() &
-                "' passes " & $varArgPos.len & " var args — GLSL fns return one value"
-            let pos = varArgPos[0]
-            var lvalue = n.cArgs[pos]
-            if lvalue.kind == gpuAddr:
-              lvalue = lvalue.aOf
-            if lvalue.kind == gpuDeref:
-              lvalue = lvalue.dOf
-            if writtenISyms.len == 1:
+                "' passes " & $writtenArgPos.len &
+                " written var args — GLSL fns return one value"
+            # the callee now takes VALUE params — strip addr/deref from every
+            # var arg (written ones additionally come back as the return value)
+            var newArgs = n.cArgs
+            for pos in varPos:
+              if pos >= newArgs.len:
+                continue
+              var a = newArgs[pos]
+              if a.kind == gpuAddr:
+                a = a.aOf
+              if a.kind == gpuDeref:
+                a = a.dOf
+              newArgs[pos] = a
+            var newCall = GpuAst(kind: gpuCall, cIsExpr: true, cName: n.cName)
+            for a in newArgs:
+              newCall.cArgs.add a
+            if writtenArgPos.len == 1:
               # the callee returns the mutated value → `lvalue = f(…lvalue…)`
-              var newArgs = n.cArgs
-              newArgs[pos] = lvalue.clone()
-              var newCall = GpuAst(kind: gpuCall, cIsExpr: true, cName: n.cName)
-              for a in newArgs:
-                newCall.cArgs.add a
+              let lvalue = newArgs[writtenArgPos[0]]
               let assign = GpuAst(kind: gpuAssign, aLeft: lvalue.clone(), aRight: newCall)
               n = assign
             else:
-              # unwritten var param: the callee now takes a VALUE param —
-              # strip addr/deref so the arg passes the value (BUG-A-005: the
-              # old code left the addr-wrapped arg untouched, which codegen
-              # rejects with "Vulkan GLSL does not support addr")
-              var newArgs = n.cArgs
-              newArgs[pos] = lvalue.clone()
-              var newCall = GpuAst(kind: gpuCall, cIsExpr: true, cName: n.cName)
-              for a in newArgs:
-                newCall.cArgs.add a
+              # no written var param: plain value call
               n = newCall
         of gpuBlock:
           for i, st in n.statements.mpairs:
