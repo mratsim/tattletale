@@ -17,7 +17,9 @@
 ##   - `type MmaAtom = enum` with one member per atom,
 ##   - one exported const per atom per property: `NAME_m`, `NAME_n`,
 ##     `NAME_k`, `NAME_vpt`, `NAME_threadCount`, `NAME_aLayout`,
-##     `NAME_bLayout`, `NAME_cLayout`, `NAME_instr`.
+##     `NAME_bLayout`, `NAME_cLayout`, `NAME_instr`, plus `NAME_elem`
+##     (the MSL operand element name) for the Apple simdgroup atoms.
+##     Optional keys absent from an atom's declaration default to "".
 ##
 ## Mirrors Constantine's `declareCurves` machinery
 ## (`constantine/named/deriv/parser_fields.nim`): the same AST shape
@@ -63,6 +65,11 @@ const AtomPropKeys* = ["m", "n", "k", "vpt", "threadCount",
   ## The property keys every atom must declare, in declaration order.
   ## The generated const name is `NAME_key`.
 
+const OptionalAtomPropKeys = ["elem"]
+  ## Optional property keys, declared only by the atoms that need them
+  ## (the Apple simdgroup atoms' MSL operand element name). Absent keys
+  ## generate a default const ("" for string keys).
+
 const IntPropKeys = ["m", "n", "k", "vpt", "threadCount"]
   ## The scalar keys whose values must be positive int literals.
 
@@ -97,7 +104,7 @@ proc parseAtomDecls*(defs: var seq[AtomParams]; body: NimNode) =
       let valNode = prop[1]
       valNode.expectKind(nnkStmtList)
       let keyStr = $key
-      doAssert keyStr in AtomPropKeys,
+      doAssert keyStr in AtomPropKeys or keyStr in OptionalAtomPropKeys,
         "declareAtoms: unknown property `" & keyStr & "` on atom `" & $name & "`"
       doAssert keyStr notin seen,
         "declareAtoms: duplicate property `" & keyStr & "` on atom `" & $name & "`"
@@ -115,10 +122,16 @@ proc parseAtomDecls*(defs: var seq[AtomParams]; body: NimNode) =
                  v.strVal.startsWith("mma.sync.aligned."),
           "declareAtoms: invalid instruction `" & v.strVal & "` on atom `" & $name &
           "` (expected \"\", \"simdgroup_multiply_accumulate\", or an mma.sync.aligned.* mnemonic)"
+      elif keyStr == "elem":
+        let v = valNode[0]
+        v.expectKind(nnkStrLit)
+        doAssert v.strVal in ["float", "half", "bfloat"],
+          "declareAtoms: invalid MSL element name `" & v.strVal & "` on atom `" & $name &
+          "` (expected \"float\", \"half\", or \"bfloat\")"
       params.props.add (keyStr, valNode[0])
-    doAssert seen.len == AtomPropKeys.len,
-      "declareAtoms: atom `" & $name & "` declares " & $seen.len &
-      " properties, expected " & $AtomPropKeys.len & " (" & AtomPropKeys.join(", ") & ")"
+    for key in AtomPropKeys:
+      doAssert key in seen,
+        "declareAtoms: atom `" & $name & "` is missing property `" & key & "`"
     defs.add params
 
 proc genAtomDecls(defs: seq[AtomParams]): NimNode =
@@ -127,6 +140,8 @@ proc genAtomDecls(defs: seq[AtomParams]): NimNode =
   ##   const NAME1_m* = 8            (one exported const per atom per property)
   ##         NAME1_n* = 8
   ##         …
+  ## Optional keys an atom does not declare emit a default const
+  ## ("" for the string key `elem`).
   result = newStmtList()
   var fields: seq[NimNode]
   for d in defs:
@@ -138,6 +153,14 @@ proc genAtomDecls(defs: seq[AtomParams]): NimNode =
       result.add newConstStmt(
         nnkPostfix.newTree(ident"*", ident(base & "_" & key)),
         val)
+    for key in OptionalAtomPropKeys:
+      var declared = false
+      for (k, _) in d.props:
+        if k == key: declared = true
+      if not declared:
+        result.add newConstStmt(
+          nnkPostfix.newTree(ident"*", ident(base & "_" & key)),
+          newLit(""))
 
 macro declareAtoms*(body: untyped): untyped =
   ## Parses the YAML-like atom registry block and expands to the enum

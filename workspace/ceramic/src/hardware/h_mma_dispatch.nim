@@ -7,18 +7,26 @@
 
 import std/[macros, strutils]
 import workspace/crucible
+import ./h_registry
+
+{.experimental: "dynamicBindSym".}
+# bindSym with a computed name (`$atom & "_suffix"`) from a static macro
+# parameter needs this experimental mode (same as h_properties.nim).
 
 ## Register-level MMA dispatch (compile-time string builder / AST emitter).
 ##
 ## Public entries:
-##   - `gemm_mma`: the macro that emits the register-level MMA call — NVIDIA
-##     `mma.sync` asm, or the Apple simdgroup intrinsic on Metal.
+##   - `gemm_mma`: the atom-first register-level MMA macro — the atom's registry
+##     consts (h_configgen) drive everything instruction-level: NVIDIA
+##     `mma.sync` asm, the Apple simdgroup intrinsic on Metal, or the
+##     universal software cross-lane shuffle reduction.
 ##   - `universalMma8x8x8`: the software 8×8×8 cross-lane shuffle reduction,
-##     the universal FMA atoms' device path.
+##     the universal FMA atoms' device path (the `gemm_mma` "universal" case
+##     delegates here).
 ##   - `buildNvidiaMmaAsm`: the asm string for one NVIDIA register-level MMA.
 ##
-# TODO: gemm_mma handles Nvidia asm + Apple simdgroup only; AMD and Intel
-# tensor cores are not implemented yet.
+# TODO: gemm_mma handles Nvidia asm + Apple simdgroup + the universal
+# software reduction; AMD and Intel tensor cores are not implemented yet.
 
 func constraintLetter(elemTypeName: string): string =
   ## Nim DSL register element type → GCC asm constraint letter.
@@ -85,57 +93,31 @@ func buildNvidiaMmaAsm*(instr: string; va, vb, vc: int;
   if not aliased:
     result.add ", " & operandClause(cName, constraintLetter(cElem), vc)
 
-# ═════════════════════════════════════════════════════════════════════════
-#  gemm_mma: one register-level MMA call
-# ═════════════════════════════════════════════════════════════════════════
-
-macro gemm_mma*(instr: static string; dV, aV, bV: static int;
-                dFrag, aFrag, bFrag: untyped): untyped =
-  ## Tensor-core-level Matrix-Multiplication
-  ##
-  ## Args:
-  ##   instr: the mma.sync mnemonic, or "simdgroup_multiply_accumulate"
-  ##     for the Apple simdgroup atoms
-  ##   dV, aV, bV: per-operand register counts (V per thread)
-  ##   dFrag: the accumulator fragment tensor, seeded to the asm output
-  ##     and written back (in-place accumulate)
-  ##   aFrag, bFrag: the operand fragment tensors, read-only
-  ##
-  ## The Apple simdgroup atoms emit a call to the `simdgroupMultiplyAccumulate`
-  ## builtin (the MSL printer maps it to the simdgroup intrinsic); the NVIDIA
-  ## atoms keep the extended-asm path below.
-  ##
-  ## TODO:
-  ##   Hardcoded element types:
-  ##     float32 accumulator
-  ##     uint32 operands (TF32)
-  case instr
-  of "simdgroup_multiply_accumulate":
-    return newCall(ident("simdgroupMultiplyAccumulate"), dFrag, aFrag, bFrag)
-  else:
-    if not instr.startsWith("mma.sync.aligned."):
-      error("gemm_mma: unsupported instruction `" & instr & "`")
-  let dElem = "float32"
-  let aElem = "uint32"
-  let bElem = "uint32"
-  let asmStr = buildNvidiaMmaAsm(instr, aV, bV, dV, "d", "a", "b", "d",
-                                 dElem, aElem, bElem, dElem)
-
-  # scalar register locals, one per fragment element:
-  #   d0..d(dV-1): var float32, seeded from the accumulator, written back after
-  #   a0..a(aV-1), b0..b(bV-1): let uint32, read from the operand tensors
-  result = newStmtList()
+func buildAppleSimdgroupAsm(dElem, aElem, bElem: string; dV, aV, bV: int): string =
+  ## The MSL staging block for one Apple simdgroup MMA:
+  ##   - one braced block per payload — mma_AB unrolls several payloads
+  ##     into the same function scope, so the `simdgroup_*8x8`
+  ##     declarations must not collide
+  ##   - fragments are `make_filled` (uninitialized simdgroup vars trip
+  ##     "used without initialization" diagnostics)
+  ##   - `d0`, `a0`… backticked names are Nim asm symbols → plain MSL locals
+  result = "{\n"
+  result.add "  simdgroup_" & dElem & "8x8 sd = make_filled_simdgroup_matrix<" & dElem &
+            ", 8>(" & dElem & "(0.0f));\n"
   for i in 0 ..< dV:
-    result.add newVarStmt(ident("d" & $i), newCall(dFrag, newLit(i)))
+    result.add "  sd.thread_elements()[" & $i & "] = `d" & $i & "`;\n"
+  result.add "  simdgroup_" & aElem & "8x8 sa = make_filled_simdgroup_matrix<" & aElem &
+            ", 8>(" & aElem & "(0.0f));\n"
   for i in 0 ..< aV:
-    result.add newLetStmt(ident("a" & $i), newCall(aFrag, newLit(i)))
+    result.add "  sa.thread_elements()[" & $i & "] = `a" & $i & "`;\n"
+  result.add "  simdgroup_" & bElem & "8x8 sb = make_filled_simdgroup_matrix<" & bElem &
+            ", 8>(" & bElem & "(0.0f));\n"
   for i in 0 ..< bV:
-    result.add newLetStmt(ident("b" & $i), newCall(bFrag, newLit(i)))
-  result.add newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
+    result.add "  sb.thread_elements()[" & $i & "] = `b" & $i & "`;\n"
+  result.add "  simdgroup_multiply_accumulate(sd, sa, sb, sd);\n"
   for i in 0 ..< dV:
-    result.add newAssignment(newCall(dFrag, newLit(i)), ident("d" & $i))
-  result = newTree(nnkBlockStmt, newEmptyNode(), result)
-
+    result.add "  `d" & $i & "` = sd.thread_elements()[" & $i & "];\n"
+  result.add "}"
 
 # ═════════════════════════════════════════════════════════════════════════
 #  universalMma8x8x8: the 8×8×8 register-level MMA
@@ -168,3 +150,120 @@ proc universalMma8x8x8*[TD; TA; TB](
     d[1] = d[1] + TD(a0) * TD(b01)
     d[0] = d[0] + TD(a1) * TD(b10)   # k = 2j+1 terms
     d[1] = d[1] + TD(a1) * TD(b11)
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Atom registry access (macro-time)
+# ═════════════════════════════════════════════════════════════════════════
+
+template constStr(atom: untyped; suffix: untyped): string =
+  ## The string value of a per-atom registry const.
+  bindSym($atom & "_" & suffix).getImpl()[2].strVal
+
+proc leafProduct(n: NimNode): int =
+  ## Product of the int literals in a type-AST subtree (layout shape parts).
+  case n.kind
+  of nnkIntLit: result = int(n.intVal)
+  of nnkTupleConstr, nnkPar, nnkBracketExpr, nnkTupleTy, nnkBracket,
+     nnkIdentDefs:
+    result = 1
+    for ch in n:
+      result *= leafProduct(ch)
+  else: result = 1
+
+template vptOf(atom: untyped; layoutKey: untyped): int =
+  ## The operand's values per thread: the layout const's (T, V) shape
+  ## type's V component (the second part of the two-part shape tuple).
+  ## Mirrors valuesPerThread (atoms_mma_partitioning) from the layout type
+  ## alone — no layout-value evaluation needed.
+  let layoutType = bindSym($atom & "_" & layoutKey).getTypeInst()
+  doAssert layoutType.kind == nnkBracketExpr and layoutType.len == 3,
+    "gemm_mma: expected a Layout[Shape, Stride] type, got " & layoutType.repr
+  let shape = layoutType[1]
+  doAssert shape.len >= 2,
+    "gemm_mma: expected a (T, V) layout shape, got " & shape.repr
+  leafProduct(shape[1])
+
+# ═════════════════════════════════════════════════════════════════════════
+#  gemm_mma: one register-level MMA call
+# ═════════════════════════════════════════════════════════════════════════
+
+macro gemm_mma*(atom: static MmaAtom; dFrag, aFrag, bFrag: untyped): untyped =
+  ## One register-level MMA call — `atom.gemm_mma(dFrag, aFrag, bFrag)`.
+  ##
+  ## Everything instruction-level is derived from the atom's registry
+  ## consts (h_configgen): the mnemonic (`instr`), the per-operand
+  ## fragment counts (the layouts' V), and the MSL element names (`elem`).
+  ##
+  ## Dispatch by mnemonic:
+  ##   - "simdgroup_multiply_accumulate" (Apple atoms): an `nnkAsmStmt`
+  ##     staging block (buildAppleSimdgroupAsm), rendered by the Metal
+  ##     printer as raw MSL. The accumulator is always fp32; the operand
+  ##     element names come from the atom's `elem` registry const.
+  ##   - "" (universal FMA atoms): a plain call to `universalMma8x8x8`.
+  ##   - "mma.sync.aligned.*" (NVIDIA atoms): the extended-asm path below.
+  ##
+  ## Args:
+  ##   atom: the MmaAtom enum member
+  ##   dFrag: the accumulator fragment, seeded to the asm output and
+  ##     written back (in-place accumulate)
+  ##   aFrag, bFrag: the operand fragments, read-only
+  let instr = constStr(atom, "instr")
+  let dV = vptOf(atom, "cLayout")
+  let aV = vptOf(atom, "aLayout")
+  let bV = vptOf(atom, "bLayout")
+  case instr
+  of "simdgroup_multiply_accumulate":
+    if dV != 2 or aV != 2 or bV != 2:
+      error("gemm_mma: simdgroup_multiply_accumulate requires vpt 2 (Apple 8x8x8 atoms)")
+    let aElem = constStr(atom, "elem")
+    if aElem.len == 0:
+      error("gemm_mma: atom `" & $atom & "` is missing the `elem` registry " &
+            "property (\"float\"/\"half\"/\"bfloat\") for the Apple staging payload")
+    # Scalar locals: asm operand names must be plain MSL identifiers, so
+    # the fragment scalars are staged into Nim locals (bracket access: the
+    # tile layer's fragments are plain arrays; legacy Tensors support `[]`).
+    result = newStmtList()
+    for i in 0 ..< dV:
+      result.add newVarStmt(ident("d" & $i),
+        newTree(nnkBracketExpr, dFrag, newLit(i)))
+    for i in 0 ..< aV:
+      result.add newLetStmt(ident("a" & $i),
+        newTree(nnkBracketExpr, aFrag, newLit(i)))
+    for i in 0 ..< bV:
+      result.add newLetStmt(ident("b" & $i),
+        newTree(nnkBracketExpr, bFrag, newLit(i)))
+    result.add newTree(nnkAsmStmt, newEmptyNode(),
+      newLit(buildAppleSimdgroupAsm("float", aElem, aElem, dV, aV, bV)))
+    for i in 0 ..< dV:
+      result.add newAssignment(
+        newTree(nnkBracketExpr, dFrag, newLit(i)), ident("d" & $i))
+    result = newTree(nnkBlockStmt, newEmptyNode(), result)
+    return result
+  of "":
+    if dV != 2 or aV != 2 or bV != 2:
+      error("gemm_mma: universal requires vpt 2 (universal 8x8x8 atoms)")
+    result = newCall(bindSym("universalMma8x8x8"), dFrag, aFrag, bFrag)
+    return result
+  else:
+    if not instr.startsWith("mma.sync.aligned."):
+      error("gemm_mma: unsupported instruction `" & instr & "`")
+  let dElem = "float32"
+  let aElem = "uint32"
+  let bElem = "uint32"
+  let asmStr = buildNvidiaMmaAsm(instr, aV, bV, dV, "d", "a", "b", "d",
+                                 dElem, aElem, bElem, dElem)
+
+  # scalar register locals, one per fragment element:
+  #   d0..d(dV-1): var float32, seeded from the accumulator, written back after
+  #   a0..a(aV-1), b0..b(bV-1): let uint32, read from the operand tensors
+  result = newStmtList()
+  for i in 0 ..< dV:
+    result.add newVarStmt(ident("d" & $i), newCall(dFrag, newLit(i)))
+  for i in 0 ..< aV:
+    result.add newLetStmt(ident("a" & $i), newCall(aFrag, newLit(i)))
+  for i in 0 ..< bV:
+    result.add newLetStmt(ident("b" & $i), newCall(bFrag, newLit(i)))
+  result.add newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
+  for i in 0 ..< dV:
+    result.add newAssignment(newCall(dFrag, newLit(i)), ident("d" & $i))
+  result = newTree(nnkBlockStmt, newEmptyNode(), result)

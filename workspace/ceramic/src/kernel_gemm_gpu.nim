@@ -178,8 +178,9 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
   ##
   ## One mma.sync (tensor-core atoms), executed by the 32 lanes of a warp
   ## cooperatively, or one scalar FMA (the universal FMA atoms, empty
-  ## instr) on 1×1 fragments, executed by a single thread. The Apple
-  ## simdgroup atoms use the simdgroup-fragment overload below.
+  ## instr) on 1×1 fragments, executed by a single thread. All
+  ## instruction-carrying atoms dispatch through `gemm` (h_mma_dispatch),
+  ## which derives the mnemonic and fragment counts from the atom.
   ##
   ## Worked example (m16n8k8, (2, 2, 1), tile (32, 16, 32), 128 lanes = 4 warps):
   ##   each lane runs this call on its own register slice.
@@ -198,11 +199,7 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
     # the expression where available.
     dFrag[0] = aFrag[0] * bFrag[0] + dFrag[0]
   else:
-    gemm_mma(mma.getInstr(),
-             toIntVal(mma.valuesPerThread(opC)),
-             toIntVal(mma.valuesPerThread(opA)),
-             toIntVal(mma.valuesPerThread(opB)),
-             dFrag, aFrag, bFrag)
+    gemm(mma, dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_warp(mma, ...): loop over atoms
