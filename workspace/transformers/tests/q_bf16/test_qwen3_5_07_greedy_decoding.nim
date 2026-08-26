@@ -12,7 +12,6 @@
 import
   std/json,
   std/os,
-  std/strformat,
   std/strutils,
   workspace/libtorch as F,
   workspace/toktoktok,
