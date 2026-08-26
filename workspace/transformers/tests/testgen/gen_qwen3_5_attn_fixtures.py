@@ -40,8 +40,8 @@ VENDORED_SRC = os.environ.get(
     os.path.join(_REPO_ROOT, "_references_prod", "transformers", "src"))
 if not os.path.isdir(VENDORED_SRC):
     raise SystemExit(
-        f"[gen_qwen3_5_attn_fixtures] vendored modeling not found at {VENDORED_SRC}; "
-        "set QWEN35_VENDORED_SRC to the _references_prod/transformers/src directory")
+        f"[gen_qwen3_5_attn_fixtures] vendored modeling not found at {VENDORED_SRC}. "
+        "Set QWEN35_VENDORED_SRC to the _references_prod/transformers/src directory")
 sys.path.insert(0, VENDORED_SRC)
 
 from transformers.models.qwen3_5.modeling_qwen3_5 import (
@@ -319,7 +319,7 @@ def generate_attn_fixtures(attn: Qwen3_5Attention, rotary: Qwen3_5TextRotaryEmbe
             past_key_values=None,
         )
 
-        # Replay with capture; must be bit-identical to the real forward.
+        # Replay with capture. Must be bit-identical to the real forward.
         output_cap, attn_output_gated, gate, q_normed, k_normed, q_rot, k_rot = (
             attention_forward_capture(attn, hidden_states, (cos, sin))
         )

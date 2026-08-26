@@ -350,8 +350,10 @@ proc main() =
         var (memFile, st) = openFixture(ChainFixtureDir, "block-0" & $i & ".safetensor")
         defer: close(memFile)
         # Sequential chain inputs/outputs at 0.00, vendored chunked chain
-        # at 5e-3. The single-chunk T=4 fixture agrees with the sequential
-        # path to sub-bf16-ULP (~1e-8). Multi-chunk prefills diverge ~1.5e-5.
+        # at 5e-3. The single-chunk T=4 fixture has chunked == sequential
+        # bit-exact, so the 5e-3-vs-chunked asserts are degenerate.
+        # Multi-chunk prefills diverge ~1.5e-5 (locked by the T=70 band
+        # test above).
         assertAllClose(hidden, st.getTensorOwned("layer_input_seq"),
           rtol = 0.0, abstol = 0.0, msg = "chain layer " & $i & " sequential input mismatch")
         assertAllClose(hidden, st.getTensorOwned("layer_input"),

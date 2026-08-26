@@ -5,9 +5,10 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Real-shard load check for the Qwen3.5-0.8B text stack.
-##
-## Needs the local model copy at `tests/hf_models/Qwen3.5-0.8B` (gitignored).
+## nim cpp -r --hints:off --warnings:off --outdir:build/tests/qwen35-shard \
+##   --nimcache:nimcache/tests/qwen35-shard \
+##   workspace/transformers/tests/q_bf16/test_qwen3_5_shard_load.nim
+# Requires: local model at tests/hf_models/Qwen3.5-0.8B (gitignored)
 
 import
   std/memfiles,

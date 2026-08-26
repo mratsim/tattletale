@@ -105,7 +105,9 @@ proc forward(
   ##
   ## Computes (matching the vendored Qwen3_5Attention.forward):
   ##   q, gate = chunk(q_proj(x) as (batch, seq, heads, 2*head_dim), 2)
-  ##   q = q_norm(q); k = k_norm(k_proj(x)); v = v_proj(x)
+  ##   q = q_norm(q)
+  ##   k = k_norm(k_proj(x))
+  ##   v = v_proj(x)
   ##   (q, k) = rotary.applyRope(q, k, ctx.cos, ctx.sin)
   ##   Write k_rot, v_reshaped into ctx.pages page slots
   ##   Gather pages into contiguous k_full, v_full

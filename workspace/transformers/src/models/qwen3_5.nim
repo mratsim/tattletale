@@ -157,17 +157,17 @@ type
   ShardTensorCounts* = object
     ## Tensor counts of a Qwen3.5 shard, grouped by prefix.
     total*: int
-    languageModel*: int  ## `model.language_model.*` — the text stack this model loads
-    visual*: int         ## `model.visual.*` — vision tower, never loaded
-    mtp*: int            ## `mtp.*` — multi-token-prediction draft head, never loaded
+    languageModel*: int  ## `model.language_model.*` prefix: the text stack this model loads
+    visual*: int         ## `model.visual.*` prefix: the vision tower, never loaded
+    mtp*: int            ## `mtp.*` prefix: the multi-token-prediction draft head, never loaded
 
 proc countShardTensors*(st: Safetensor): ShardTensorCounts =
   ## Count the tensors of a Qwen3.5 shard by top-level prefix.
   ##
   ## The single shard holds three disjoint groups:
-  ## - `model.language_model.*` — the text stack loaded by this model
-  ## - `model.visual.*` — vision tower
-  ## - `mtp.*` — MTP draft head
+  ## - `model.language_model.*`: the text stack loaded by this model
+  ## - `model.visual.*`: the vision tower
+  ## - `mtp.*`: the multi-token-prediction draft head
   ##
   ## The loader only requests `model.language_model.*` names, so the
   ## vision and MTP tensors are skipped without being read.

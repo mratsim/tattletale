@@ -55,7 +55,7 @@ proc main() =
         # Sequential chain inputs/outputs at 0.00, vendored chunked chain
         # at 5e-3. The T=4 single-chunk chain fixture has chunked ==
         # sequential bit-exact, so the 5e-3-vs-chunked asserts are
-        # degenerate; the real contracts are the 0.00-vs-seq asserts and
+        # degenerate. The real contracts are the 0.00-vs-seq asserts and
         # the recomposed local-residual invariant. Multi-chunk divergence
         # is covered by test 03's T=70 band test.
         assertAllClose(hidden, st.getTensorOwned("layer_input_seq"),
