@@ -558,3 +558,41 @@ Rules:
 - Test documentation scales with test complexity: an element-wise tile op or
   a kernel-vs-reference match needs a few lines of setup, the reference
   call, the tolerance, done.
+
+## Forbidden: reimplementation and tautological references
+
+A kernel test's reference must be libtorch math over the same fp16-rounded
+inputs — never a Nim reimplementation of the kernel's algorithm, and never a
+reference that shares the kernel's own code path.
+
+### Reimplementation tests
+
+Rebuilding the kernel's arithmetic in Nim (matmul loops, norms, rope
+rotations, ...) instead of calling libtorch is banned:
+
+- The duplication can carry the same misunderstanding twice: the test
+  passes while kernel and reference are both wrong.
+- It bloats the test to hundreds of lines. The ceiling for a kernel test
+  is ~80 lines (model: `manual_silu_and_mul_fp16.nim`); the reference call
+  must be a torch op — `F.linear`, `F.rmsNorm`,
+  `F.scaled_dot_product_attention`, ... from the transformers workspace
+  (`workspace/transformers/src/layers/linear.nim` pattern).
+
+Data-preparation helpers that mirror a storage format (e.g. a dequant
+decode table that rebuilds an fp16 weight matrix from its packed bits) are
+allowed — they are fixture-style reconstruction, not the op's arithmetic —
+but they must live once in a shared helper, not be copied per test.
+
+### Tautological references
+
+A reference that cannot diverge from the kernel proves nothing:
+
+- Reusing the kernel's own helper procs as the reference: a shared decode
+  table used by both sides means a wrong decode passes identically on both.
+- Deriving the reference from the kernel's output: rounding, reshaping, or
+  post-processing the kernel result and comparing it to itself.
+- Asserting only self-consistency (shape, finiteness, determinism) in
+  place of a value comparison against an independent reference.
+
+The reference must be computed independently of the kernel: same random
+inputs, fp16 rounding applied identically, torch arithmetic.
