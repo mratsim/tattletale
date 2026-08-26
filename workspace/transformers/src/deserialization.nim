@@ -65,7 +65,7 @@ proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, devic
   if loader == nil:
     raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
   let weight = loader(st, prefix, cfg, device)
-  RmsNorm.init(weight, quant, cfg["rms_norm_eps"].getFloat(1e-6))
+  RmsNorm.init(weight, quant, cfg{"rms_norm_eps"}.getFloat(1e-6))
 
 # ─── Embedding ──────────────────────────────────────────────────────────
 
