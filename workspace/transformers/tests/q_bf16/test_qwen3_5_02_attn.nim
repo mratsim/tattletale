@@ -116,13 +116,16 @@ proc main() =
       # Intermediates, recomputed through the layer's own components and
       # compared against the fixture's captured values (deterministic ops).
       let seqLen = x.size(1)
+      let gqa = attn.gqa_attn
+      # q_proj packs [q | gate] per head, so the head axis is 2 * head_dim.
       let qg = attn.q_proj.forward(x)
-      let qgR = qg.reshape([1, seqLen, 8, 512])
-      let queryR = qgR.narrow(3, 0, 256)
-      let gateR = qgR.narrow(3, 256, 256)
-      let gate = gateR.reshape([1, seqLen, 2048])
+      let qgR = qg.reshape([1, seqLen, gqa.num_qo_head, 2 * gqa.head_dim])
+      let queryR = qgR.narrow(3, 0, gqa.head_dim)
+      let gateR = qgR.narrow(3, gqa.head_dim, gqa.head_dim)
+      let gate = gateR.reshape([1, seqLen, gqa.num_qo_head * gqa.head_dim])
       let qNormed = attn.q_norm.forward(queryR)
-      let kReshaped = attn.k_proj.forward(x).reshape([1, seqLen, 2, 256])
+      let kReshaped = attn.k_proj.forward(x).reshape(
+        [1, seqLen, gqa.num_kv_head, gqa.head_dim])
       let kNormed = attn.k_norm.forward(kReshaped)
       let (qRot, kRot) = attn.rotary.applyRope(qNormed, kNormed, ctx.cos, ctx.sin)
 
@@ -141,9 +144,10 @@ proc main() =
 
       # Pre-o_proj output: SDPA + sigmoid gate. The layer's forward output
       # was already compared above. This asserts the gate application itself.
-      let vReshaped = attn.v_proj.forward(x).reshape([1, seqLen, 2, 256])
-      let kExp = kRot.repeat_interleave(4, 2)
-      let vExp = vReshaped.repeat_interleave(4, 2)
+      let vReshaped = attn.v_proj.forward(x).reshape(
+        [1, seqLen, gqa.num_kv_head, gqa.head_dim])
+      let kExp = kRot.repeat_interleave(gqa.num_qo_head div gqa.num_kv_head, 2)
+      let vExp = vReshaped.repeat_interleave(gqa.num_qo_head div gqa.num_kv_head, 2)
       let attnOut = attn.gqa_attn.forward(qRot, kExp, vExp,
         is_causal = true, enable_gqa = false)
       let attnGated = attnOut * F.sigmoid(gate)
@@ -172,13 +176,16 @@ proc main() =
         msg = "gated attention decode output mismatch")
 
       let seqLen = x.size(1)
+      let gqa = attn.gqa_attn
+      # q_proj packs [q | gate] per head, so the head axis is 2 * head_dim.
       let qg = attn.q_proj.forward(x)
-      let qgR = qg.reshape([1, seqLen, 8, 512])
-      let queryR = qgR.narrow(3, 0, 256)
-      let gateR = qgR.narrow(3, 256, 256)
-      let gate = gateR.reshape([1, seqLen, 2048])
+      let qgR = qg.reshape([1, seqLen, gqa.num_qo_head, 2 * gqa.head_dim])
+      let queryR = qgR.narrow(3, 0, gqa.head_dim)
+      let gateR = qgR.narrow(3, gqa.head_dim, gqa.head_dim)
+      let gate = gateR.reshape([1, seqLen, gqa.num_qo_head * gqa.head_dim])
       let qNormed = attn.q_norm.forward(queryR)
-      let kReshaped = attn.k_proj.forward(x).reshape([1, seqLen, 2, 256])
+      let kReshaped = attn.k_proj.forward(x).reshape(
+        [1, seqLen, gqa.num_kv_head, gqa.head_dim])
       let kNormed = attn.k_norm.forward(kReshaped)
       let (qRot, kRot) = attn.rotary.applyRope(qNormed, kNormed, ctx.cos, ctx.sin)
 

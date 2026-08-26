@@ -309,13 +309,16 @@ proc main() =
       assertAllClose(hNorm, st.getTensorOwned("input_layernorm_output"),
         rtol = 0.0, abstol = 0.0, msg = "layer 3 input_layernorm mismatch")
       let seqLen = x.size(1)
+      let gqa = layer3.gatedAttn.gqa_attn
+      # q_proj packs [q | gate] per head, so the head axis is 2 * head_dim.
       let qg = layer3.gatedAttn.q_proj.forward(hNorm)
-      let qgR = qg.reshape([1, seqLen, 8, 512])
-      let queryR = qgR.narrow(3, 0, 256)
-      let gateR = qgR.narrow(3, 256, 256)
-      let gate = gateR.reshape([1, seqLen, 2048])
+      let qgR = qg.reshape([1, seqLen, gqa.num_qo_head, 2 * gqa.head_dim])
+      let queryR = qgR.narrow(3, 0, gqa.head_dim)
+      let gateR = qgR.narrow(3, gqa.head_dim, gqa.head_dim)
+      let gate = gateR.reshape([1, seqLen, gqa.num_qo_head * gqa.head_dim])
       let qNormed = layer3.gatedAttn.q_norm.forward(queryR)
-      let kReshaped = layer3.gatedAttn.k_proj.forward(hNorm).reshape([1, seqLen, 2, 256])
+      let kReshaped = layer3.gatedAttn.k_proj.forward(hNorm).reshape(
+        [1, seqLen, gqa.num_kv_head, gqa.head_dim])
       let kNormed = layer3.gatedAttn.k_norm.forward(kReshaped)
       assertAllClose(qNormed, st.getTensorOwned("q_normed"),
         rtol = 0.0, abstol = 0.0, msg = "layer 3 q_normed mismatch")
