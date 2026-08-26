@@ -19,9 +19,11 @@ export h_configgen, h_registry, h_properties
 
 func getTileConfig*(TOut, TIn: typedesc): static auto {.inline.} =
   when ccGetBackend() == ctMetal:
-    when TOut is float32 and TIn is float16: UNIVERSAL_8x8x8_F32F16F16F32
-    elif TOut is float32 and TIn is bfloat16: UNIVERSAL_8x8x8_F32BF16BF16F32
-    elif TOut is float32 and TIn is float32: UNIVERSAL_8x8x8_F32F32F32F32
+    # Metal: the Apple simdgroup atoms (hardware simdgroup_multiply_accumulate).
+    # The accumulator is always fp32; operand element selects the atom.
+    when TOut is float32 and TIn is float16: APPLE_8x8x8_F16
+    elif TOut is float32 and TIn is bfloat16: APPLE_8x8x8_BF16
+    elif TOut is float32 and TIn is float32: APPLE_8x8x8_F32
     else: {.error: "getTileConfig: no atom for (" & $TOut & ", " & $TIn &
       ") mix (fp32 accumulator with f16/bf16/f32 operands only)".}
   elif ccGetBackend() == ctCuda:
