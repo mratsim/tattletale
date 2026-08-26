@@ -12,8 +12,9 @@
 # ############################################################
 
 ## Shared device-op layer of the EXL3 kernel family on the ceramic Tile API.
-## Provides the FWHT-128 op `hadamard128` and the trellis dequant
-## weight-tile op `dequantTrellis`. Row-bounded fp16 tile load/store
+## Provides the FWHT-128 op `hadamard128`, the trellis dequant
+## weight-tile op `dequantTrellis` and the per-element fp16 register-tile
+## ops `mulF16`/`quantizeF16`. Row-bounded fp16 tile load/store
 ## (`loadTileRows`/`storeTileRows`) come from `tile_io_rows`.
 ##
 ## Fragment layout convention. All ops follow the loadTile mapping:
@@ -259,3 +260,38 @@ proc dequantTrellis*[A: static MmaAtom](
           let t1 = (sum16.to(float32) * kInv.to(float32)).to(float16)
           bReg.frags[m][n].frag[v] =
             (t1.to(float32) + kBias.to(float32)).to(float16)
+
+# ═════════════════════════════════════════════════════════════════════
+#  Per-element register-tile fp16 arithmetic
+#  ═════════════════════════════════════════════════════════════════════
+
+proc mulF16*[R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[float16, R, C, A],
+    a, b: RtLeft[float16, R, C, A]) {.device.} =
+  ## Per-element fp16 multiply with one rounding (the `mul` op
+  ## semantics): the fp32 product of the promoted operands, one RNE
+  ## fp16 round. The frag walk covers the register tile elementwise
+  ## in `loadTile` order. Aliasing dst with a or b is safe: each
+  ## element's reads complete before its write.
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        dst.frags[n][m].frag[v] =
+          (a.frags[n][m].frag[v].to(float32) *
+           b.frags[n][m].frag[v].to(float32)).to(float16)
+
+proc quantizeF16*[R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[float16, R, C, A],
+    src: RtLeft[float32, R, C, A]) {.device.} =
+  ## Per-element fp32 → fp16 quantization (RNE) over one register
+  ## tile: the accumulator's one fp16 round before the output FWHT.
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].to(float16)

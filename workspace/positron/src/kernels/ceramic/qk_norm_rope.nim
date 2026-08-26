@@ -50,6 +50,7 @@
 
 import workspace/crucible
 import workspace/ceramic
+import ./exl3_ops
 
 # The kernel is non-generic (the contract has no static params), so its tile types
 # cannot take the `rt_l`/`rv` default atoms: those defaults
@@ -67,24 +68,6 @@ proc fma(x, y, z: float32): float32 {.builtin.} = discard
   ## forwards the plain name to the backend, and MSL has `fma` natively.
   ## The two rotation adds spell the fma explicitly because the Metal compiler
   ## does not contract cross-statement fp32 arithmetic.
-
-proc mulF16[A: static MmaAtom](
-    dst: var RtLeft[float16, 8, 128, A],
-    a, b: RtLeft[float16, 8, 128, A]) {.device.} =
-  ## Per-element fp16 multiply with one rounding (the `mul` op
-  ## semantics): the fp32 product of the promoted operands, one RNE
-  ## fp16 round. The frag walk covers exactly the elements the loads
-  ## produced (same lane→element mapping as `loadTile`), so a, b and dst agree elementwise.
-  ## Aliasing dst with a or b is safe: the element reads complete before the element write.
-  const rowTiles = 8 div A.getM()
-  const colTiles = 128 div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        dst.frags[n][m].frag[v] =
-          (a.frags[n][m].frag[v].to(float32) *
-           b.frags[n][m].frag[v].to(float32)).to(float16)
 
 proc splitHalfFloat32[A16, AF32: static MmaAtom](
     x1, x2: var RtLeft[float32, 8, 64, AF32],

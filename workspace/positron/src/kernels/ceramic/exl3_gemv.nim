@@ -60,41 +60,6 @@ import ./exl3_ops
 import ./tile_io_rows
 
 # ═════════════════════════════════════════════════════════════════════
-#  Local device extensions: the per-element arithmetic the fusion needs
-#  ═════════════════════════════════════════════════════════════════════
-
-proc mulF16[R, C: static int; A: static MmaAtom](
-    dst: var RtLeft[float16, R, C, A],
-    a, b: RtLeft[float16, R, C, A]) {.device.} =
-  ## Per-element fp16 multiply with one rounding (the `mul` op
-  ## semantics): the fp32 product of the promoted operands, one RNE
-  ## fp16 round. The frag walk covers exactly the elements the loads
-  ## produced (same lane→element mapping as `loadTileRows`), so a, b
-  ## and dst agree elementwise. Aliasing dst with a or b is safe: the element reads complete before the element write.
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        dst.frags[n][m].frag[v] =
-          (a.frags[n][m].frag[v].to(float32) *
-           b.frags[n][m].frag[v].to(float32)).to(float16)
-
-proc quantizeF16[R, C: static int; A: static MmaAtom](
-    dst: var RtLeft[float16, R, C, A],
-    src: RtLeft[float32, R, C, A]) {.device.} =
-  ## Per-element fp32 → fp16 quantization (RNE) over one register
-  ## tile: the accumulator's one fp16 round before the output FWHT.
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].to(float16)
-
-# ═════════════════════════════════════════════════════════════════════
 #  The kernel
 #  ═════════════════════════════════════════════════════════════════════
 
