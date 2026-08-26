@@ -11,17 +11,16 @@
 #
 # ############################################################
 
-## Decode-GEMV instantiation of the fused EXL3 linear forward on the ceramic Tile
-## API (exllamav3 `exl3_gemv_kernel` at the two production gemv modes).
-## The kernel body is identical to `exl3_gemm_fwd`: the same tile ops,
-## `dequantTrellis` → `hadamard128` → `mma_AB` with the fp32 accumulator,
-## except the x row guard is static. MMODE 0 is the m=1 fast path
-## (compile-time x row limit 1, rows 1..31 fold to statically-zero fragments).
-## MMODE 1 covers m ≤ 8 with the runtime M guard. The store guard stays M in both modes.
-## Dequant family: bits {1..8} × cb {0,1,2}. Bits = 6 is the real model's lm_head bitrate.
-## cb0 is the production default.
+## Decode-GEMV instantiation of the fused EXL3 linear forward on the
+## ceramic Tile API. The kernel body is identical to `exl3_gemm_fwd`:
+## the same tile ops (`dequantTrellis` → `hadamard128` → `mma_AB` with
+## the fp32 accumulator), except the x row guard is static. MMODE 0 is
+## the m = 1 fast path (compile-time x row limit 1, rows 1..31 fold to
+## statically-zero fragments). MMODE 1 covers m ≤ 8 with the runtime M
+## guard. The store guard stays M in both modes.
+## Dequant family: bits {1..8} × cb {0, 1, 2}. cb0 is the production default.
 ##
-## Contract (frozen, identical to the linear/gemm kernels):
+## Contract, identical to the linear/gemm kernels:
 ##
 ##     out = FWHT-128( svh ⊙ ( FWHT-128( suh ⊙ x ) @ W_dequant ) )
 ##
@@ -40,13 +39,13 @@
 ## fp16 accumulator quantization, output FWHT-128, svh post-scale,
 ## predicated store.
 ##
-## Launch model deviation (documented). exllamav3's kernel is
-## cooperative (one grid over the whole problem, `grid.sync()`
-## barriers order the M-slices). Metal has no grid-wide sync, so this kernel
-## runs one launch per 32-row × 128-column output tile. The FWHT passes
-## have no cross-threadgroup dependency, so the numerics are unchanged.
+## Launch model. exllamav3's kernel is cooperative (one grid over the
+## whole problem, `grid.sync()` barriers order the M-slices). Metal has
+## no grid-wide sync, so this kernel runs one launch per 32-row ×
+## 128-column output tile. The FWHT passes have no cross-threadgroup
+## dependency, so the numerics are unchanged.
 ##
-## Known production gaps (documented, not fixed):
+## Known gaps:
 ## - K and N must be 128-multiples. Partial shapes are out of contract.
 ## - The cb2 decode is the two-rounding numeric form (see exl3_ops'
 ##   module-doc gap note), not exllamav3's CUDA-faithful
@@ -84,8 +83,7 @@ proc quantizeF16[R, C: static int; A: static MmaAtom](
     dst: var RtLeft[float16, R, C, A],
     src: RtLeft[float32, R, C, A]) {.device.} =
   ## Per-element fp32 → fp16 quantization (RNE) over one register
-  ## tile: the fused-EXL3 epilogue order (F-EX5)'s first step, the accumulator's one fp16 round
-  ## before the output FWHT (the reference's C is the fp16-rounded matmul result).
+  ## tile: the accumulator's one fp16 round before the output FWHT.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = A.getVpt()

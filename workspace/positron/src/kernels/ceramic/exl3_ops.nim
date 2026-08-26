@@ -38,11 +38,11 @@
 ## - the closed-form tensor-core-shuffle word index: reconstruct.cu's fragment-to-row-major permutation
 ## The word-index formula and the decode arithmetic are documented on the op.
 ##
-## Known gaps (documented, not fixed):
+## Known gaps:
 ## - cb2 uses a two-rounding numeric form (fp16(sum·k_inv) then fp16
 ##   add of k_bias, RNE constants 0x1EEF/0xC932), a few fp16 ulps away
 ##   from exllamav3's CUDA-faithful single-rounding half fma (constants
-##   0x1EEE/0xC931). cb0/cb1 are bit-exact against the host reference.
+##   0x1EEE/0xC931). cb0/cb1 decode with the single-rounding fp16 add.
 ## - No fp32 path: the ops are fp16 in, fp16 out.
 ## - Row-bounded IO guards rows only: a partial last column block is out
 ##   of contract.
@@ -186,8 +186,9 @@ proc dequantTrellis*[A: static MmaAtom](
   ## 4·(m mod 2)` (reconstruct.cu's fragment-to-row-major permutation,
   ## the same mixed-radix word as the fm → row, fn → col, kSub → n,
   ## nSub → m mapping). `useShuffle = false` substitutes the natural
-  ## row-major word `t = k·16 + (c mod 16)` (no tensor-core shuffle),
-  ## kept so the test can prove the shuffled placement is essential.
+  ## row-major word `t = k·16 + (c mod 16)` (no tensor-core shuffle).
+  ## The natural placement does not match the fragment order of the
+  ## tensor-core decode.
   ##
   ## The decode arithmetic is exllamav3's: the 16-bit funnel window at bit b0 = t·bits + bits − 16 + 256·bits
   ## of the packed tile, the procedural codebook and the closed-form word placement. The codebook:
@@ -226,7 +227,7 @@ proc dequantTrellis*[A: static MmaAtom](
                  (uint32(uint16(trellis[base + 2 * i0 + 1])) shl 16)
         let p1 = uint32(uint16(trellis[base + 2 * i1])) or
                  (uint32(uint16(trellis[base + 2 * i1 + 1])) shl 16)
-        # the 16-bit window: the same 64-bit merged shift as the reference implementation's funnelWord, defined for every s0
+        # the 16-bit window: the 64-bit merged shift, defined for every s0
         # including 0 (a (p0 shl (31 - s0)) shl 1 form is a uint32 shift-by-32 at s0 = 0, undefined in the emitted C/MSL)
         let w = uint32((uint64(p0) shl 32 or uint64(p1)) shr s0) and 0xFFFF'u32
         if cb == 0:

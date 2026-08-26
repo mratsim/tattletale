@@ -11,13 +11,12 @@
 #
 # ############################################################
 
-## Fused qk-norm + NEOX rotary forward on the ceramic Tile API, the tile-program form of the ThunderMittens
-## `tm_exl3_qk_norm_rope_fp16.nim` kernel contract. Per 8-row tile (one 32-lane threadgroup),
-## the exllamav3 fused two-rounding qk-norm
-## (`rope.cu` `apply_norm`: `RNE(x·rmf)` then `RNE(γ16·v)`, the `rms_norm` arithmetic)
-## followed by the NEOX half-tile rotation. The body has zero branches
-## and zero runtime div/mod (the `xColBase div 1024` lowers to a shift:
-## constant power of two).
+## Fused qk-norm + NEOX rotary forward on the ceramic Tile API. Per
+## 8-row tile (one 32-lane threadgroup), the two-rounding qk-norm
+## (`RNE(x·rmf)` then `RNE(γ16·v)`, the `rms_norm` arithmetic from
+## exllamav3's fused rope kernel) followed by the NEOX half-tile
+## rotation. The body has zero branches and zero runtime div/mod (the
+## `xColBase div 1024` lowers to a shift: constant power of two).
 ##
 ## Tile geometry: one 8×128 tile per threadgroup, grid (1, tokens,
 ## headBlocks). The X view's token stride is `xTokenStride` (the qkv
@@ -59,7 +58,7 @@
 ## register copy (`splitHalfFloat32`, same-lane, no shuffle), the cos/sin fp32 loads,
 ## the sin products, and the two rotation adds as explicit IEEE fused multiply-adds
 ## (`fma`: the Metal compiler does not contract cross-statement arithmetic,
-## so the explicit form keeps the kernel and the reference implementation's `fmaf` rope bit-exact).
+## so the explicit form keeps each rotation add a single IEEE rounding).
 ## The results quantize to fp16 at the store (one RNE round each).
 ## The cos/sin come from host-precomputed fp32 tables (no in-kernel sincos).
 ##

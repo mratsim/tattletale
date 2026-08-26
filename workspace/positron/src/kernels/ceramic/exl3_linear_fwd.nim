@@ -11,10 +11,9 @@
 #
 # ############################################################
 
-## Fused EXL3 linear forward on the ceramic Tile API, the tile-program form of the ThunderMittens `tm_exl3_linear_tile_fp16.nim`
-## kernel contract (ported to the concrete buffer and tile types).
+## Fused EXL3 linear forward on the ceramic Tile API.
 ##
-## Contract (frozen):
+## Contract:
 ##
 ##     out = FWHT-128( svh ⊙ ( FWHT-128( suh ⊙ x ) @ W_dequant ) )
 ##
@@ -22,9 +21,9 @@
 ## and the packed int16 trellis codes (tiles_k, tiles_n,
 ## 256·bits div 16). The weight matrix is not stored: 16×32 fp16
 ## weight tiles are reconstructed on the fly by `dequantTrellis`
-## (funnel shift + the procedural cb0 codebook + the tensor-core-shuffle word placement).
-## cb0 codebook only. D is the static FWHT block (128).
-## `bits` is static and restricted to {3, 5, 8} for this kernel. The gemm/gemv kernels
+## (funnel shift, the procedural cb0 codebook, the tensor-core-shuffle
+## word placement). cb0 codebook only. D is the static FWHT block (128).
+## `bits` is static, restricted to {3, 5, 8}; the gemm/gemv kernels
 ## cover bits 1..8 × cb 0..2.
 ##
 ## Grid and decode shape: grid x = N div 128, grid y = (M + 31) div
@@ -35,23 +34,23 @@
 ## accumulator quantization, output FWHT-128, svh post-scale,
 ## predicated store.
 ##
-## Launch model deviation (documented). The exllamav3 counterparts
-## (`exl3_gemm_kernel`, `exl3_gemv_kernel`) are cooperative kernels:
-## one grid spans the whole problem with `grid.sync()` barriers
-## ordering the M-slices. Metal has no grid-wide sync primitive, so this kernel
-## runs one launch per 32-row × 128-column output tile. The FWHT passes
-## have no cross-threadgroup dependency, so the numerics are unchanged.
+## Launch model. exllamav3's `exl3_gemm_kernel` and `exl3_gemv_kernel`
+## are cooperative kernels: one grid spans the whole problem with
+## `grid.sync()` barriers ordering the M-slices. Metal has no grid-wide
+## sync primitive, so this kernel runs one launch per 32-row ×
+## 128-column output tile. The FWHT passes have no cross-threadgroup
+## dependency, so the numerics are unchanged.
 ##
-## The smem-free constraint carries over: both cross-lane FWHT stages
-## run in registers via `simd_shuffle` inside the layer op (MSL
-## rejects threadgroup variables in `{.device.}` procs), so the kernel
-## body sees no lane bit, no shuffle, no word math.
+## No shared memory: both cross-lane FWHT stages run in registers via
+## `simd_shuffle` inside the layer op (MSL rejects threadgroup variables
+## in `{.device.}` procs), so the kernel body sees no lane bit, no
+## shuffle, no word math.
 ##
-## Known production gaps (documented, not fixed):
+## Known gaps:
 ## - K and N must be 128-multiples, `bits` must dispatch to {3, 5, 8},
 ##   and the output column count must be a multiple of the 128-col
 ##   grid block. Partial shapes are out of contract.
-## - cb0 codebook only (production default): cb1/cb2 are the gemm/gemv kernels' matrix.
+## - cb0 codebook only: cb1/cb2 live in the gemm/gemv kernels.
 ## - No fp32 path.
 
 import workspace/crucible
@@ -85,8 +84,7 @@ proc quantizeF16[R, C: static int; A: static MmaAtom](
     dst: var RtLeft[float16, R, C, A],
     src: RtLeft[float32, R, C, A]) {.device.} =
   ## Per-element fp32 → fp16 quantization (RNE) over one register
-  ## tile: the fused-EXL3 epilogue order (F-EX5)'s first step, the accumulator's one fp16 round
-  ## before the output FWHT (the reference's C is the fp16-rounded matmul result).
+  ## tile: the accumulator's one fp16 round before the output FWHT.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = A.getVpt()
