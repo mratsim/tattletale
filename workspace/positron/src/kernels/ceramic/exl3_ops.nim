@@ -21,8 +21,7 @@
 ##   - lane `l` owns the 8×8 fragment cell
 ##     `cell = crd2idx(A.getLayoutA(), (l, 0))`, `row = cell mod 8`,
 ##     `col = cell div 8`
-##   - element (r, c) maps to `frags[n][m].frag[v]` with
-##     `r = row + n·8`, `c = col + m·8 + v`
+##   - element (r, c) maps to `frags[n][m].frag[v]` with `r = row + n·8`, `c = col + m·8 + v`
 ##   - the atom's two per-lane values are the horizontal pair
 ##     (row, col) and (row, col+1)
 ##   - the span `col + v` = 0..7 is the trellis word-index range
@@ -193,8 +192,7 @@ proc dequantTrellis*[A: static MmaAtom](
   ## the same mixed-radix word as the fm → row, fn → col, kSub → n,
   ## nSub → m mapping). `useShuffle = false` substitutes the natural
   ## row-major word `t = k·16 + (c mod 16)` (no tensor-core shuffle).
-  ## The natural placement does not match the fragment order of the
-  ## tensor-core decode.
+  ## The natural placement does not match the fragment order of the tensor-core decode.
   ##
   ## The decode arithmetic is exllamav3's: the 16-bit funnel window at bit b0 = t·bits + bits − 16 + 256·bits
   ## of the packed tile, the procedural codebook and the closed-form word placement. The codebook:
