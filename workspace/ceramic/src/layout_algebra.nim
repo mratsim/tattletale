@@ -514,24 +514,23 @@ func logical_divide*[L, T: Layout](layout: L; tiler: T): auto =
   ## Layout tiler → CuTe formula directly.
   logical_divide_impl(layout, tiler)
 
-template logical_divide*[L: Layout](layout: L; tiler: int): auto =
+func logical_divide*[L: Layout](layout: L; tiler: int): auto {.inline.} =
   ## Dynamic int tiler → wrap in Layout → CuTe formula.
-  block:
-    evalOnceAs(lyt, layout)
-    evalOnceAs(tl, tiler)
-    logical_divide_impl(lyt, make_layout(tl))
+  logical_divide_impl(layout, make_layout(tiler))
 
-template logical_divide*[L: Layout; V: static int](layout: L; tiler: Int[V]): auto =
+func logical_divide*[L: Layout; V: static int](layout: L; tiler: Int[V]): auto {.inline.} =
   ## Static int tiler (Int[N]) → wrap in Layout → CuTe formula.
   logical_divide_impl(layout, make_layout(tiler))
 
-template logical_divide*[L: Layout](layout: L; tiler: static int): auto =
+func logical_divide*[L: Layout](layout: L; tiler: static int): auto {.inline.} =
   ## Compile-time int tiler (const) → preserve via Int[N] wrap → CuTe formula.
   logical_divide_impl(layout, make_layout(Int[tiler]()))
 
-template logical_divide_builder*(layout: untyped; tiler: untyped; LayoutRank: static int; idx: static int; accSh, accSt: typed): auto =
+func logical_divide_builder*[LayoutT, TilerT](
+    layout: LayoutT; tiler: TilerT; LayoutRank: static int; idx: static int;
+    accSh, accSt: auto): auto {.inline.} =
   ## Recursive build helper for logical_divide(tuple tiler).
-  ## Exported (`*`) to avoid generic sandwich / template self-reference issues.
+  ## Exported (`*`) to avoid generic sandwich / self-reference issues.
   when idx >= max(rank(tiler), LayoutRank):
     make_layout(accSh, accSt)
   else:
@@ -542,7 +541,7 @@ template logical_divide_builder*(layout: untyped; tiler: untyped; LayoutRank: st
       let m = mode(layout, idx)
       logical_divide_builder(layout, tiler, LayoutRank, idx + 1, concat(accSh, (m.shape,)), concat(accSt, (m.stride,)))
 
-template logical_divide*(layout: Layout; tiler: tuple): auto =
+func logical_divide*(layout: Layout; tiler: tuple): auto {.inline.} =
   ## Tuple tiler → per-mode divide (transform_layout).
   ## Each tiler element applies to the corresponding layout mode.
   ## Modes beyond len(tiler) pass through unchanged.
@@ -574,8 +573,9 @@ template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
 #  zipped_divide_builder — one-pass build for tuple tiler
 # ═══════════════════════════════════════════════════════════════
 
-template zipped_divide_builder*(layout, tiler: typed; LayoutRank: static int; idx: static;
-                                 tileSh, tileSt, restSh, restSt: typed): auto =
+func zipped_divide_builder*[LayoutT, TilerT](
+    layout: LayoutT; tiler: TilerT; LayoutRank: static int; idx: static int;
+    tileSh, tileSt, restSh, restSt: auto): auto {.inline.} =
   ## Recursive build helper for zipped_divide(tuple tiler).
   ## One-pass: builds (tile, rest) groups directly without intermediate
   ## logical_divide + tile_unzip.
@@ -588,45 +588,39 @@ template zipped_divide_builder*(layout, tiler: typed; LayoutRank: static int; id
     )
   else:
     when idx < rank(tiler):
-      evalOnceAs d, logical_divide(mode(layout, idx), tiler[idx])
+      let d = logical_divide(mode(layout, idx), tiler[idx])
       zipped_divide_builder(layout, tiler, LayoutRank, idx + 1,
         concat(tileSh, (mode(d, 0).shape,)),
         concat(tileSt, (mode(d, 0).stride,)),
         concat(restSh, (mode(d, 1).shape,)),
         concat(restSt, (mode(d, 1).stride,)))
     else:
-      evalOnceAs m, mode(layout, idx)
+      let m = mode(layout, idx)
       zipped_divide_builder(layout, tiler, LayoutRank, idx + 1,
         tileSh, tileSt,
         concat(restSh, (m.shape,)),
         concat(restSt, (m.stride,)))
 
-template zipped_divide*(layout: Layout; tiler: auto): auto =
+func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
   ## Divide layout by tiler and zip tile/rest modes into rank-2 result.
   ##
   ## CuTe: zipped_divide =
   ##   - Layout tiler: logical_divide(layout, tiler)
   ##   - tuple/int tiler: tile_unzip(logical_divide(layout, tiler), tiler)
-  block:
-    evalOnceAs(lyt, layout)
-    evalOnceAs(tlr, tiler)
-    when tiler is Layout:
-      logical_divide(lyt, tlr)
-    elif tiler is int or tiler is Int:
-      # Scalar tiler
-      logical_divide(lyt, tlr)
-    else:
-      # Tuple tiler — one-pass builder avoids intermediate concat types
-      # that trigger Nim C++ backend struct hash collision
-      # (see https://github.com/nim-lang/Nim/issues/25883#issuecomment-4658908569)
-      block:
-        evalOnceAs lyt, layout
-        evalOnceAs tlr, tiler
-        const R = static(rank(lyt))
-        const Tr = static(rank(tlr))
-        static: doAssert Tr <= R,
-          "zipped_divide: tiler has more modes (" & $Tr & ") than layout (" & $R & ")"
-        zipped_divide_builder(lyt, tlr, R, 0, (), (), (), ())
+  when TilerT is Layout:
+    logical_divide(layout, tiler)
+  elif TilerT is int or TilerT is Int:
+    # Scalar tiler
+    logical_divide(layout, tiler)
+  else:
+    # Tuple tiler: one-pass builder avoids intermediate concat types
+    # that trigger Nim C++ backend struct hash collision
+    # (see https://github.com/nim-lang/Nim/issues/25883#issuecomment-4658908569)
+    const R = static(rank(layout))
+    const Tr = static(rank(tiler))
+    static: doAssert Tr <= R,
+      "zipped_divide: tiler has more modes (" & $Tr & ") than layout (" & $R & ")"
+    zipped_divide_builder(layout, tiler, R, 0, (), (), (), ())
 
 template tiled_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack the second mode into individual modes.
