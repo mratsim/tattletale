@@ -216,8 +216,17 @@ proc runTest() =
     "missing explicit_arithmetic_types_int16 extension (uint16 arithmetic):\n" & kMaxVk
   doAssert "subgroupShuffleDown(" in kMaxVk, "missing subgroupShuffleDown:\n" & kMaxVk
   doAssert "subgroupShuffle(" in kMaxVk, "missing subgroupShuffle:\n" & kMaxVk
-  doAssert "gl_LocalInvocationIndex" in kMaxVk,
-    "thread_index_in_threadgroup must emit gl_LocalInvocationIndex:\n" & kMaxVk
+  # GPU-B-001: kMax's tileKMax max-reduction is a subgroup shuffle tree —
+  # its lane id must be the SUBGROUP lane (gl_SubgroupInvocationID), pinned
+  # to 32 lanes by the fail-loudly guard. The old gl_LocalInvocationIndex
+  # spelling was the workgroup lane, silently wrong on devices whose
+  # workgroup spans several subgroups.
+  doAssert "if (gl_SubgroupSize < 32u) { return; }" in kMaxVk,
+    "GPU-B-001: missing gl_SubgroupSize<32 fail-loudly guard:\n" & kMaxVk
+  doAssert "gl_SubgroupInvocationID" in kMaxVk,
+    "GPU-B-001: shuffle lane id must be gl_SubgroupInvocationID:\n" & kMaxVk
+  doAssert "gl_LocalInvocationIndex" notin kMaxVk,
+    "GPU-B-001: shuffle-reachable lane id must be fully rewritten:\n" & kMaxVk
 
   # ── emission part (Metal, blast radius) ─────────────────────────────────
   doAssert "simd_shuffle_down(" in attnMsl, "MSL subgroup shuffle spelling drifted:\n" & attnMsl
