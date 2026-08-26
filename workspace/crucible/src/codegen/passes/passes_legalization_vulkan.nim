@@ -227,11 +227,25 @@ proc substIdents(n: GpuAst; subst: Table[string, GpuAst]): GpuAst =
     for ch in result.mitems:
       ch = substIdents(ch, subst)
 
+proc exprType(n: GpuAst): GpuType =
+  ## Best-effort static type of an expression, for the ptr-index fold's
+  ## offset coercion (COMP-B-003: GLSL forbids mixed-type arithmetic).
+  if n.isNil: return nil
+  case n.kind
+  of gpuIdent: result = n.symbol.typ
+  of gpuLit: result = n.lType
+  of gpuBinOp: result = n.bType
+  of gpuCast: result = n.cTo
+  of gpuConv: result = n.convTo
+  else: result = nil
+
 proc leafName(base: string; path: seq[string]): string =
-  ## `epi` + ["C", "rsc"] → "epi__C__rsc"
+  ## `epi` + ["C", "rsc"] → "epi_C_rsc". Single-underscore separator:
+  ## GLSL §3.7 reserves identifiers containing two consecutive underscores
+  ## (BUG-A-006).
   result = base
   for p in path:
-    result.add "__" & p
+    result.add "_" & p
   if result.startsWith("gl_"):
     # identifiers starting with `gl_` are reserved in GLSL (the TensorView
     # param in loadTile/storeTile is named `gl`) — escape the prefix
@@ -451,28 +465,58 @@ proc convertVarParams(ctx: var GpuContext) =
     for host in hosts:
       # inline every call to this fn in one walk, matching by callee iSym
       # (GpuAst `==` only supports idents; ref identity is unavailable in
-      # the compile-time VM)
-      proc inlineCalls(n: var GpuAst) =
+      # the compile-time VM). Only STATEMENT-position calls are inlined
+      # (GLSL has no expression blocks); an expression-position call to an
+      # array-var-param fn is rejected loudly. Any `return` in the callee
+      # body is also rejected: an inlined `return` would return from the
+      # HOST kernel, silently truncating it (BUG-A-003).
+      proc checkNoReturn(n: GpuAst) =
         case n.kind
-        of gpuCall:
-          if n.cName.symbol != nil and n.cName.symbol.iSym == fnISym:
-            if n.cArgs.len != fn.pParams.len:
-              raiseAssert "Vulkan: arity mismatch inlining device fn '" & fn.pName.ident() &
-                "' (" & $n.cArgs.len & " args vs " & $fn.pParams.len & " params)"
+        of gpuReturn:
+          raiseAssert "Vulkan: cannot inline array-var-param device fn '" &
+            fn.pName.ident() & "' — body contains a `return` (an inlined " &
+            "return would return from the host kernel)"
+        else:
+          for ch in n:
+            checkNoReturn(ch)
+      proc inlineWalk(n: var GpuAst)   # forward — inlineBlock calls it
+      proc inlineBlock(stmts: var seq[GpuAst]) =
+        var outS: seq[GpuAst]
+        for st in stmts.mitems:
+          var s = st
+          if s.kind == gpuCall and s.cName.symbol != nil and
+             s.cName.symbol.iSym == fnISym:
+            if s.cArgs.len != fn.pParams.len:
+              raiseAssert "Vulkan: arity mismatch inlining device fn '" &
+                fn.pName.ident() & "' (" & $s.cArgs.len & " args vs " &
+                $fn.pParams.len & " params)"
             var subst = initTable[string, GpuAst]()
             for i, p in fn.pParams:
-              subst[p.ident.symbol.iSym] = n.cArgs[i]
+              subst[p.ident.symbol.iSym] = s.cArgs[i]
             var inlined = fn.pBody.clone()
             inlined = substIdents(inlined, subst)
+            checkNoReturn(inlined)
             # replace the call statement with the inlined body in a fresh block
-            n = GpuAst(kind: gpuBlock, statements: @[inlined])
+            outS.add GpuAst(kind: gpuBlock, statements: @[inlined])
+          else:
+            inlineWalk(s)
+            outS.add s
+        stmts = outS
+      proc inlineWalk(n: var GpuAst) =
+        case n.kind
         of gpuBlock:
-          for i, st in n.statements.mpairs:
-            inlineCalls(st)
+          inlineBlock(n.statements)
+        of gpuCall:
+          if n.cName.symbol != nil and n.cName.symbol.iSym == fnISym:
+            raiseAssert "Vulkan: cannot inline array-var-param device fn '" &
+              fn.pName.ident() &
+              "' in expression position — GLSL has no expression blocks"
+          for a in n.cArgs.mitems:
+            inlineWalk(a)
         else:
           for ch in n.mitems:
-            inlineCalls(ch)
-      inlineCalls(host.pBody)
+            inlineWalk(ch)
+      inlineWalk(host.pBody)
     removeFn(ctx, fnISym)
 
   # ── Pass 1b: struct/scalar var params → value + return ─────────────────
@@ -903,20 +947,24 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
         else:
           off = nil
         if not base.isNil and not off.isNil:
-          # fold: base[off + idx], with the offset cast to the index's type
+          # fold: base[off + idx]. The WHOLE index is preserved — a `+`-binop
+          # index keeps both operands (BUG-A-001: the old special branch
+          # dropped idx.bLeft, silently mis-addressing `ptr[a + b]` reads).
           var offC = off
           if offC.kind == gpuCast and offC.cTo.kind == gtUint64:
             offC = offC.cExpr
-          var newIdx: GpuAst
-          if idx.kind == gpuBinOp and idx.bOp.kind == gpuIdent and idx.bOp.ident() == "+":
-            newIdx = GpuAst(kind: gpuBinOp, bOp: idx.bOp,
-                           bLeft: offC.clone(), bRight: idx.bRight,
-                           bIsOverloaded: false, bType: nil)
-          else:
-            newIdx = GpuAst(kind: gpuBinOp,
-                           bOp: newGpuIdent("+"),
-                           bLeft: offC.clone(), bRight: idx,
-                           bIsOverloaded: false, bType: nil)
+          let idxT = exprType(idx)
+          if not idxT.isNil:
+            let offT = exprType(offC)
+            if not offT.isNil and offT.kind != idxT.kind and
+               idxT.kind in {gtInt32, gtUint32}:
+              # coerce the offset to the index's type (COMP-B-003: GLSL
+              # forbids mixed-type arithmetic operands)
+              offC = GpuAst(kind: gpuConv, convTo: idxT, convExpr: offC)
+          let newIdx = GpuAst(kind: gpuBinOp,
+                             bOp: newGpuIdent("+"),
+                             bLeft: offC.clone(), bRight: idx,
+                             bIsOverloaded: false, bType: nil)
           result = GpuAst(kind: gpuIndex, iArr: base, iIndex: newIdx)
           return
     # plain ident base (SSBO member) or anything else: keep arr as-is
@@ -1082,20 +1130,46 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
           return false
       of gpuAssign:
         if n.aLeft.kind == gpuIdent and isTaintedStruct(n.aLeft.symbol.typ):
-          # assignment to a tainted temp — register its leaves, drop it
+          # assignment to a tainted var — update its leaves. Value leaves are
+          # ASSIGNED when already declared (re-assignment must use the new
+          # value — HIDN-A-001: the old code dropped the assign, leaving the
+          # stale first value) or DECLARED for the blit-temp pattern (gpuVar
+          # with discard init); ptr leaves update the expression map.
           let vISym = n.aLeft.symbol.iSym
           let leaves = taintedLeaves(n.aLeft.symbol.typ)
           var leafList: seq[FlattenedLeaf]
+          var replacements: seq[GpuAst]
+          let prevLeaves = vmapL.getOrDefault(vISym)
+          var prevNames = initHashSet[string]()
+          for pl in prevLeaves:
+            if pl.kind == lkValue:
+              prevNames.incl pl.name
           for lf in leaves:
             var lv = leafValueOf(n.aRight, lf.path, fnISym, vmapL, pmapL)
             rewriteExpr(lv)
             if isPtrType(lf.typ):
               leafList.add mkPtrLeaf(lf.path, lf.typ, lv)
             else:
-              leafList.add mkValueLeaf(lf.path, lf.typ,
-                                       leafName(n.aLeft.ident(), lf.path))
+              let lname = leafName(n.aLeft.ident(), lf.path)
+              leafList.add mkValueLeaf(lf.path, lf.typ, lname)
+              if lname in prevNames:
+                # already declared at the declaration site — assign the new value
+                var upd = GpuAst(kind: gpuAssign, aLeft: newGpuIdent(lname),
+                                 aRight: lv)
+                upd.aLeft.symbol.typ = lf.typ
+                replacements.add upd
+              else:
+                var lvNode = GpuAst(kind: gpuVar, vName: newGpuIdent(lname),
+                                    vType: lf.typ, vInit: lv,
+                                    vMutable: false, addressSpace: asRMEM)
+                lvNode.vName.symbol.typ = lf.typ
+                replacements.add lvNode
           vmapL[vISym] = leafList
-          return true
+          if replacements.len == 0:
+            return true
+          var blk = GpuAst(kind: gpuBlock, statements: replacements)
+          n = blk
+          return false
         else:
           rewriteExpr(n.aLeft)
           rewriteExpr(n.aRight)
@@ -1194,13 +1268,52 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
 #  Pass 3: vulkanBindDeviceFnPtrParams
 # ═════════════════════════════════════════════════════════════════════════
 
+proc structuralKey(n: GpuAst): string =
+  ## Structural pretty-print with ident display names replaced by iSyms, so
+  ## two expressions over different symbols never produce the same grouping
+  ## key (BUG-B-002: name-keyed grouping merged distinct buffers).
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil:
+      result = "id(" & n.symbol.iSym & ")"
+    else:
+      result = "id(?)"
+  of gpuCast: result = "cast[" & $n.cTo.kind & "](" & structuralKey(n.cExpr) & ")"
+  of gpuConv: result = "conv[" & $n.convTo.kind & "](" & structuralKey(n.convExpr) & ")"
+  of gpuBinOp:
+    result = "(" & structuralKey(n.bLeft) & " " & structuralKey(n.bOp) &
+             " " & structuralKey(n.bRight) & ")"
+  of gpuIndex: result = structuralKey(n.iArr) & "[" & structuralKey(n.iIndex) & "]"
+  of gpuDot: result = structuralKey(n.dParent) & "." & structuralKey(n.dField)
+  of gpuDeref: result = "*" & structuralKey(n.dOf)
+  of gpuAddr: result = "&" & structuralKey(n.aOf)
+  of gpuLit: result = "lit(" & n.lValue & ")"
+  of gpuPrefix: result = "prefix(" & n.pOp & "," & structuralKey(n.pVal) & ")"
+  of gpuCall:
+    result = "call(" & structuralKey(n.cName)
+    for a in n.cArgs:
+      result.add "," & structuralKey(a)
+    result.add ")"
+  of gpuArrayLit:
+    result = "arr("
+    for v in n.aValues:
+      result.add structuralKey(v) & ","
+    result.add ")"
+  of gpuObjConstr:
+    result = "constr("
+    for f in n.ocFields:
+      result.add f.name & ":" & structuralKey(f.value) & ","
+    result.add ")"
+  else: result = $n.kind
+
 proc callArgKey(a: GpuAst): string =
-  ## Canonical grouping key for a ptr call-site arg: idents by name, others
-  ## by their pretty-printed structure.
+  ## Canonical grouping key for a ptr call-site arg: idents by symbol
+  ## identity (iSym), others by their structure with base-ident iSyms
+  ## substituted for display names.
   if a.kind == gpuIdent and a.symbol != nil:
-    result = "ident:" & a.symbol.name
+    result = "ident:" & a.symbol.iSym
   else:
-    result = "expr:" & $a
+    result = "expr:" & structuralKey(a)
 
 proc bindDeviceFnPtrParams(ctx: var GpuContext) =
   ## (a) — see module header.

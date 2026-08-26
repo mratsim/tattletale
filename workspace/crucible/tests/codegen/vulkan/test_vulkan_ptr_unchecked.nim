@@ -92,10 +92,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       # PtrPair is flattened (ptr field → SSBO expression, scale → leaf
       # local) and the device fn's ptr params bind to the kernel SSBOs,
       # so no `struct PtrPair` (GLSL structs cannot hold pointer members)
-      # is emitted: scalePair takes only the value leaf (`p__scale`) and
+      # is emitted: scalePair takes only the value leaf (`p_scale`) and
       # reads the SSBO names `dst`/`src` directly.
       check "struct PtrPair" notin pairVk
-      check "dst[0] = (src[0] * p__scale);" in pairVk
+      check "dst[0] = (src[0] * p_scale);" in pairVk
+      check "p__scale" notin pairVk
       var engine = bkVulkan.init()
       engine.ingest(pairVk)
       var res: array[1, uint32]
