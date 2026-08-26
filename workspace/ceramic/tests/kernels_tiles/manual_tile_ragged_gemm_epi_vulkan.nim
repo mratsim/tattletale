@@ -297,7 +297,7 @@ proc runTest() =   # engines are RAII, so keep them function-local
   # reads the lane id from gl_SubgroupInvocationID (the true subgroup
   # lane) inside the shuffle fns — while non-shuffle fns keep
   # gl_LocalInvocationIndex (the workgroup lane; equal only because the
-  # guard pins subgroup 32 == the kernels' baked 32-wide workgroups).
+  # guard fixes subgroup 32 == the kernels' baked 32-wide workgroups).
   doAssert "void plainEpi() {\nif (gl_SubgroupSize < 32u) { return; }" in plainEpiVk,
     "GPU-B-001: missing gl_SubgroupSize<32 fail-loudly guard as first stmt:\n" & plainEpiVk
   doAssert "gl_SubgroupInvocationID" in plainEpiVk,

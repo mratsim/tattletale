@@ -217,7 +217,7 @@ proc runTest() =
   doAssert "subgroupShuffleDown(" in kMaxVk, "missing subgroupShuffleDown:\n" & kMaxVk
   doAssert "subgroupShuffle(" in kMaxVk, "missing subgroupShuffle:\n" & kMaxVk
   # GPU-B-001: kMax's tileKMax max-reduction is a subgroup shuffle tree —
-  # its lane id must be the SUBGROUP lane (gl_SubgroupInvocationID), pinned
+  # its lane id must be the subgroup lane (gl_SubgroupInvocationID), fixed
   # to 32 lanes by the fail-loudly guard. The old gl_LocalInvocationIndex
   # spelling was the workgroup lane, silently wrong on devices whose
   # workgroup spans several subgroups.

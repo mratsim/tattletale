@@ -1531,7 +1531,7 @@ proc subgroupGuard32(ctx: var GpuContext) =
   ##  - in those fns, the lane id comes from `gl_SubgroupInvocationID` (the
   ##    true subgroup lane) instead of `gl_LocalInvocationIndex` (the
   ##    workgroup lane — equal only when workgroup == subgroup, which the
-  ##    guard pins at 32 alongside the kernels' baked 32-wide workgroups).
+  ##    guard fixes at 32 alongside the kernels' baked 32-wide workgroups).
   ## The engine-level VkPhysicalDeviceSubgroupProperties ingest query is
   ## tracked debt (no engine edits in this op).
   let reachable = reachableFns(ctx)
@@ -1555,16 +1555,17 @@ proc subgroupGuard32(ctx: var GpuContext) =
         shuffleReachable.incl fn.pName.symbol.iSym
         changed = true
   # lane id: thread_index_in_threadgroup → gl_SubgroupInvocationID in
-  # shuffle-reachable bodies. A fresh symbol is required: the catalog
-  # builtin symbol is shared module-wide via sigTab, so mutating it would
-  # leak into non-shuffle fns (which must keep gl_LocalInvocationIndex —
-  # gl_SubgroupInvocationID is only valid where the subgroup extensions
-  # are enabled).
+  # shuffle-reachable bodies. Replace the node rather than mutating it: the
+  # catalog ident node is sigTab-shared across the module, so an in-place
+  # symbol swap would leak the subgroup lane into every non-shuffle fn that
+  # still references the shared node (GOAL-001/SLOP-001) — non-shuffle fns
+  # must keep gl_LocalInvocationIndex (gl_SubgroupInvocationID is only valid
+  # where the subgroup extensions are enabled).
   proc rewriteLaneId(n: var GpuAst) =
     if n.kind == gpuIdent and n.symbol != nil and
        n.symbol.coordBuiltin == gbkThreadIndexInThreadgroup:
-      n.symbol = newSymbol("gl_SubgroupInvocationID",
-                           typ = n.symbol.typ, symKind = gsBuiltin)
+      n = GpuAst(kind: gpuIdent, symbol: newSymbol("gl_SubgroupInvocationID",
+                 typ = n.symbol.typ, symKind = gsBuiltin))
     else:
       for ch in n.mitems:
         rewriteLaneId(ch)

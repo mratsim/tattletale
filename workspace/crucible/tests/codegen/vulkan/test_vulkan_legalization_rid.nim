@@ -116,8 +116,8 @@ const userRsqrtVk = vulkan:
 # translation emits the call as `rsqrt(param)`, ambiguous between the user
 # fn and Metal stdlib `rsqrt` (platform limitation, not a codegen issue;
 # GLSL has no `rsqrt` builtin so the name is free there). The emission
-# asserts on userRsqrtVk pin the name handling; this twin pins the user
-# math on device.
+# asserts on userRsqrtVk lock in the name handling; this twin locks in the
+# user math on device.
 const userRsqrtTwinVk = vulkan:
   proc rsqrtUser(x: float32): float32 {.device.} =
     x * 0.25'f32
@@ -167,6 +167,26 @@ const nestedProcVk = vulkan:
     outer(v)
     dst[0] = uint32(v)
 
+# ── (h) GOAL-001: lane-id rewrite is node-local (same-module scoping) ────
+
+const laneShareVk = vulkan:
+  proc leafShuffle(acc: float32, lane: uint32): float32 {.device.} =
+    simdShuffleDown(acc, lane)
+
+  proc mid(acc: float32): float32 {.device.} =
+    let lane = uint32(thread_index_in_threadgroup)
+    leafShuffle(acc, lane)
+
+  proc nonShuffle(acc: float32): float32 {.device.} =
+    let lane = uint32(thread_index_in_threadgroup)
+    acc + float32(lane)
+
+  proc k1(dst: ptr UncheckedArray[float32]) {.global.} =
+    dst[0] = mid(dst[0])
+
+  proc k2(dst: ptr UncheckedArray[float32]) {.global.} =
+    dst[0] = nonShuffle(dst[0])
+
 static:
   # An array-var-param fn whose body contains a `return` must be rejected
   # loudly: inlining it would splice the `return` into the host kernel,
@@ -188,13 +208,14 @@ static:
   # COV-A-005: the passes' rejection guards fire loudly instead of emitting
   # valid-but-wrong GLSL.
   # (1) two written var params — GLSL fns return one value. `not compiles`
-  # pins only "the module must not compile": with the fn-level guard present
-  # the DEFINITION is rejected during conversion; without it the call-site
-  # guard (written var args > 1) rejects the CALL. Both guards enforce the
-  # same rule, so deleting either leaves this probe passing (RED-verified) —
-  # guard-level pinning is done via RED logs, not in-tree. The positive
-  # control below pins the boundary: one written + one unwritten var arg
-  # MUST compile (the call-site guard counts only written args).
+  # asserts only "the module must not compile": with the fn-level guard
+  # present the DEFINITION is rejected during conversion; without it the
+  # call-site guard (written var args > 1) rejects the CALL. Both guards
+  # enforce the same rule, so deleting either leaves this probe passing
+  # (RED-verified) — guard-level attribution is done via RED logs, not
+  # in-tree. The positive control below fixes the boundary: one written +
+  # one unwritten var arg MUST compile (the call-site guard counts only
+  # written args).
   doAssert not compiles(block:
     const bad = vulkan:
       proc twoWritten(a: var uint32, b: var uint32) {.device.} =
@@ -334,9 +355,19 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       # The module cannot run on device yet: codegen emits the nested
       # definition in place AND a hoisted top-level copy, which glslang
       # rejects (pre-existing nested-fn emission defect — tracked debt) —
-      # the asserts pin the return rewrite itself.
+      # the asserts lock in the return rewrite itself.
       check "return y;" in nestedProcVk
       check "return result;" in nestedProcVk
+
+    test "GOAL-001: lane-id rewrite is node-local — non-shuffle fn keeps gl_LocalInvocationIndex":
+      # mid (shuffle-reachable) and nonShuffle (not) both read
+      # thread_index_in_threadgroup in the same vulkan: block. The catalog
+      # ident node is sigTab-shared, so an in-place symbol swap on mid's
+      # copy would leak gl_SubgroupInvocationID into nonShuffle (RED:
+      # nonShuffle emitted the subgroup lane). The rewrite must replace the
+      # node, leaving the shared node intact for non-shuffle fns.
+      check "uint lane = uint(gl_SubgroupInvocationID);" in laneShareVk
+      check "uint lane = uint(gl_LocalInvocationIndex);" in laneShareVk
 
     test "SEC-B-001: user device fn shadowing a builtin name keeps its body":
       # The user `rsqrt` must be emitted as its own GLSL fn with its call
