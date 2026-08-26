@@ -12,7 +12,7 @@
 
 ## Vulkan GEMM epilogue probe (ragged-edge shapes).
 ##
-## Compiles `gemm_with_epilogue` with the REAL `vulkan:` macro (the
+## Compiles `gemm_with_epilogue` with the `vulkan:` macro (the
 ## Vulkan IR legalization passes run inside the macro) and value-runs it on
 ## MoltenVK vs an fp32-exact host reference. Ragged = the tile does not
 ## exactly divide M/N/K; every GEMM handles it natively in-kernel — no
@@ -84,7 +84,7 @@ static:
   doAssert EpiScale is Epilogue, "EpiScale must satisfy the Epilogue concept"
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Vulkan kernels (REAL `vulkan:` macro — the pass pipeline runs in-macro)
+#  Vulkan kernels (`vulkan:` macro — the pass pipeline runs in-macro)
 #  One kernel per source: the Vulkan engine only ingests single-kernel
 #  sources with scalar params (see engines/vk.nim ingest contract).
 # ═════════════════════════════════════════════════════════════════════════
@@ -120,7 +120,7 @@ const gemmVkMsl = metal:
       EpiScale(s: Scale))
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Host inputs + fp32-exact reference (S7 harness, source of truth)
+#  Host inputs + fp32-exact host reference (source of truth for both backends)
 # ═════════════════════════════════════════════════════════════════════════
 
 proc buildRaggedEdgeA(M, Mp, K, Kp: int): seq[uint16] =
@@ -247,6 +247,20 @@ proc runTest() =   # engines are RAII, so keep them function-local
     "device fn still carries a float* param (pass 3 binding missed):\n" & plainEpiVk
   doAssert "EpiAXPBYStrided" notin plainEpiVk and "StridedOperand" notin plainEpiVk,
     "tainted epilogue struct leaked into GLSL (pass 2 flatten missed):\n" & plainEpiVk
+  # GPU-B-001: the fp16-subgroup shuffle path (tileKMax reduction trees,
+  # universalMma8x8x8) assumes 32-lane subgroups. Pass 4 injects a
+  # fail-loudly guard as the kernel's FIRST statement (a <32-lane device
+  # returns without writing its outputs, so host value checks fail) and
+  # reads the lane id from gl_SubgroupInvocationID (the true subgroup
+  # lane) inside the shuffle fns — while non-shuffle fns keep
+  # gl_LocalInvocationIndex (the workgroup lane; equal only because the
+  # guard pins subgroup 32 == the kernels' baked 32-wide workgroups).
+  doAssert "void plainEpi() {\nif (gl_SubgroupSize < 32u) { return; }" in plainEpiVk,
+    "GPU-B-001: missing gl_SubgroupSize<32 fail-loudly guard as first stmt:\n" & plainEpiVk
+  doAssert "gl_SubgroupInvocationID" in plainEpiVk,
+    "GPU-B-001: shuffle lane id not rewritten to gl_SubgroupInvocationID:\n" & plainEpiVk
+  doAssert "int lane = int(gl_LocalInvocationIndex)" in plainEpiVk,
+    "GPU-B-001: lane-id rewrite leaked into non-shuffle fns:\n" & plainEpiVk
 
   echo "── scaleUserVk GLSL (" & $scaleUserVk.len & " chars) ──"
   doAssert "void fusedScaleUser()" in scaleUserVk, "missing kernel entry point:\n" & scaleUserVk
@@ -256,6 +270,12 @@ proc runTest() =   # engines are RAII, so keep them function-local
     "user epilogue construction missing:\n" & scaleUserVk
   doAssert "float16_t*" notin scaleUserVk and "float*" notin scaleUserVk,
     "device fn still carries a ptr param:\n" & scaleUserVk
+  doAssert "void fusedScaleUser() {\nif (gl_SubgroupSize < 32u) { return; }" in scaleUserVk,
+    "GPU-B-001: missing gl_SubgroupSize<32 fail-loudly guard as first stmt:\n" & scaleUserVk
+  doAssert "gl_SubgroupInvocationID" in scaleUserVk,
+    "GPU-B-001: shuffle lane id not rewritten to gl_SubgroupInvocationID:\n" & scaleUserVk
+  doAssert "int lane = int(gl_LocalInvocationIndex)" in scaleUserVk,
+    "GPU-B-001: lane-id rewrite leaked into non-shuffle fns:\n" & scaleUserVk
 
   # ── Metal twins (blast radius): the same kernels still compile on Metal ──
   doAssert "plainEpi" in gemmVkMsl and "fusedScaleUser" in gemmVkMsl,

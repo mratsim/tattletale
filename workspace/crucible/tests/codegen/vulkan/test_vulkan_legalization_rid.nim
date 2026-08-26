@@ -101,6 +101,34 @@ const zeroFillVk = vulkan:
     zeroFill(buf)
     dst[0] = buf[0] + buf[1] + buf[2] + buf[3]
 
+# ── (e) SEC-B-001: a user device fn shadowing a builtin name keeps its ──
+#        own body; only `{.builtin.}` procs remap to the backend spelling
+
+const userRsqrtVk = vulkan:
+  proc rsqrt(x: float32): float32 {.device.} =
+    x * 0.25'f32          # user math — deliberately NOT 1/sqrt(x)
+
+  proc rsqrtKernel(dst: ptr UncheckedArray[float32], v: float32) {.global.} =
+    dst[0] = rsqrt(v)
+
+# Same-body twin for the device value run: an MSL-family device cannot
+# compile a user fn literally named `rsqrt` — MoltenVK's SPIR-V→MSL
+# translation emits the call as `rsqrt(param)`, ambiguous between the user
+# fn and Metal stdlib `rsqrt` (platform limitation, not a codegen issue;
+# GLSL has no `rsqrt` builtin so the name is free there). The emission
+# asserts on userRsqrtVk pin the name handling; this twin pins the user
+# math on device.
+const userRsqrtTwinVk = vulkan:
+  proc rsqrtUser(x: float32): float32 {.device.} =
+    x * 0.25'f32
+
+  proc rsqrtKernel(dst: ptr UncheckedArray[float32], v: float32) {.global.} =
+    dst[0] = rsqrtUser(v)
+
+const builtinRsqrtVk = vulkan:
+  proc rsqrtKernel(dst: ptr UncheckedArray[float32], v: float32) {.global.} =
+    dst[0] = rsqrt(v)     # the `{.builtin.}` rsqrt → GLSL inversesqrt
+
 static:
   # An array-var-param fn whose body contains a `return` must be rejected
   # loudly: inlining it would splice the `return` into the host kernel,
@@ -223,6 +251,32 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var res: array[1, uint32]
       engine.run << (grid: (1, 1), blk: (1, 1)) >> ("zeroKernel", res, ())
       check res[0] == 0'u32
+
+    test "SEC-B-001: user device fn shadowing a builtin name keeps its body":
+      # The user `rsqrt` must be emitted as its own GLSL fn with its call
+      # intact. Remapping by name alone would rebind the call to the GLSL
+      # builtin `inversesqrt`, silently changing the math to 1/sqrt(x) and
+      # dead-coding the user body.
+      check "float rsqrt(float x)" in userRsqrtVk
+      check "rsqrt(v)" in userRsqrtVk
+      check "result = (x * 0.25f)" in userRsqrtVk
+      check "inversesqrt" notin userRsqrtVk
+      # device value run on the same-body twin (see the kernel comment for
+      # why the `rsqrt`-named fn itself cannot run on an MSL-family device):
+      # user math 4 × 0.25 = 1.0, not 0.5 (inversesqrt).
+      var engine = bkVulkan.init()
+      engine.ingest(userRsqrtTwinVk)
+      var res: array[1, float32]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> ("rsqrtKernel", res, (4.0'f32,))
+      check res[0] == 1.0'f32
+
+    test "SEC-B-001: the {.builtin.} rsqrt still remaps to inversesqrt":
+      check "inversesqrt(v)" in builtinRsqrtVk
+      var engine = bkVulkan.init()
+      engine.ingest(builtinRsqrtVk)
+      var res: array[1, float32]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> ("rsqrtKernel", res, (4.0'f32,))
+      check abs(res[0] - 0.5'f32) < 1e-6'f32
 
 when isMainModule:
   runTest()

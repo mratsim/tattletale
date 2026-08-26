@@ -253,6 +253,20 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     ctx.addToFnTable(name, builtinFn, {fkBuiltin})
     return
 
+  # `{.builtin.}` procs (exp2/rsqrt, threadgroup_barrier, simdShuffle*,
+  # the fp16 conversion primitives) are name-only forwarding natives: their
+  # Nim bodies are host-side stubs (discard/raise) and the per-backend
+  # printers own the real spelling. Register them name-only (like the
+  # min/max/abs magics above) so the stub bodies are never parsed into dead
+  # device fns, and so backends can tell a `{.builtin.}` call from a
+  # user-defined fn that shadows the name (SEC-B-001: a user device fn
+  # named `rsqrt` must not be remapped to the GLSL builtin `inversesqrt`).
+  if hasPragma(inst, "builtin"):
+    let retType = resolveType(reg, sig.params[0])
+    var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
+    ctx.builtinFns[name] = builtinFn
+    return
+
   let fn = ctx.toGpuAst(reg, inst, staticValueMask)
   if fn.kind == gpuDiscard:
     doAssert inst.isBuiltIn()

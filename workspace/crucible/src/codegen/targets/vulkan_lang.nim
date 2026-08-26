@@ -5,7 +5,7 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [algorithm, macros, strformat, strutils, sugar, sequtils, tables]
+import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
 import ../ir/gpu_types
 import ./lang_utils
@@ -423,7 +423,16 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         for arg in ast.cArgs:
           vkArgs.add ctx.genVulkan(arg)
         let fnName = ctx.getFnName(bkVulkan, ast)
-        result = indentStr & vulkanBuiltinFnNames.getOrDefault(fnName, fnName) &
+        # SEC-B-001: the name remap applies only to `{.builtin.}` procs
+        # (registered name-only in ctx.builtinFns) — a user-defined device
+        # fn that shadows a table key (e.g. `proc rsqrt`) keeps its own
+        # name and body. Remapping by name alone would silently rebind the
+        # user's fn to the GLSL builtin, making its body dead code.
+        let mapped = if ctx.builtinFns.hasKey(ast.cName):
+                       vulkanBuiltinFnNames.getOrDefault(fnName, fnName)
+                     else:
+                       fnName
+        result = indentStr & mapped &
                  '(' & vkArgs.join(", ") & ')'
 
   of gpuTemplateCall:
