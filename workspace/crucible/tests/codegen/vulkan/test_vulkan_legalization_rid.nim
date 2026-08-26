@@ -33,6 +33,14 @@ const ptrArithVk = vulkan:
               off, i, j: uint32) {.global.} =
     dst[0] = (src +% off)[i + j]
 
+# Same shape with a uint32 offset against an int32 index: the fold must
+# coerce the offset to the index's type (COMP-B-003) — GLSL forbids
+# mixed-type arithmetic operands.
+const ptrArithMixVk = vulkan:
+  proc gatherMix(dst: ptr UncheckedArray[uint32], src: ptr UncheckedArray[uint32],
+                 off: uint32, i, j: int32) {.global.} =
+    dst[0] = (src +% off)[i + j]
+
 # ── (b) HIDN-A-001: tainted-struct re-assignment keeps the NEW value ─────
 
 type
@@ -100,6 +108,19 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.run << (grid: (1, 1), blk: (1, 1)) >> (
         "gather", res, (src, 1'u32, 2'u32, 3'u32))
       # src[off + i + j] = src[1 + 2 + 3] = src[6] = 70
+      check res[0] == 70'u32
+
+    test "COMP-B-003: uint32 offset folds with an int32 index (coerced)":
+      # The offset keeps its uint32 type while the index is int32 — the fold
+      # must coerce the offset (`int(off)`) so the emitted binop is
+      # same-typed; without the coercion glslang rejects the mixed-type add.
+      check "src[(int(off) + (i + j))]" in ptrArithMixVk
+      var engine = bkVulkan.init()
+      engine.ingest(ptrArithMixVk)
+      var res: array[1, uint32]
+      let src = [10'u32, 20, 30, 40, 50, 60, 70]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> (
+        "gatherMix", res, (src, 1'u32, 2'i32, 3'i32))
       check res[0] == 70'u32
 
     test "HIDN-A-001: tainted-struct re-assignment uses the second value":

@@ -1464,14 +1464,24 @@ proc bindDeviceFnPtrParams(ctx: var GpuContext) =
             var offC = off
             if offC.kind == gpuCast and offC.cTo.kind == gtUint64:
               offC = offC.cExpr
-            var newIdx = GpuAst(kind: gpuBinOp, bOp: newGpuIdent("+"),
+            let idxT = exprType(idx)
+            if not idxT.isNil:
+              let offT = exprType(offC)
+              if not offT.isNil and offT.kind != idxT.kind and
+                 idxT.kind in {gtInt32, gtUint32}:
+                # coerce the offset to the index's type (COMP-B-003)
+                offC = GpuAst(kind: gpuConv, convTo: idxT, convExpr: offC)
+            let newIdx = GpuAst(kind: gpuBinOp, bOp: newGpuIdent("+"),
                                bLeft: offC.clone(), bRight: idx,
                                bIsOverloaded: false, bType: nil)
             n = GpuAst(kind: gpuIndex, iArr: base, iIndex: newIdx)
     else:
       for ch in n.mitems:
         foldPtrIndexes(ch)
-  for fn in reachable:
+  # Iterate ctx.fnTab (not the stale pre-clone `reachable` snapshot): the
+  # per-call-site clones were added mid-pass, and their bodies are exactly
+  # the ones that received substituted ptr-arith expressions (BUG-A-004).
+  for fnIdent, fn in ctx.fnTab.mpairs:
     if not fn.pBody.isNil:
       foldPtrIndexes(fn.pBody)
 
