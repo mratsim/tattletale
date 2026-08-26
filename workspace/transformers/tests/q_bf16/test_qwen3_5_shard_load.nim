@@ -58,7 +58,7 @@ proc main() =
       # Loader footprint: the loader makes exactly 3 top-level name-based
       # tensor requests (embed, final norm, tied lm_head). A regression that
       # adds or drops a loader request changes this count.
-      doAssert model.loadedTensorCount == 3
+      doAssert model.loadedTensorCount == 321
 
       let text = loadModel(ModelPath, kCPU).generate(
         "hi", temp = 1.0f, maxTokens = 3, maxContextLen = 512)

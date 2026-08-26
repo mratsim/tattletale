@@ -1,0 +1,9 @@
+{
+  "case": "prefill_seq5",
+  "head_k_dim": 128,
+  "head_v_dim": 128,
+  "layer": "model.language_model.layers.0.linear_attn",
+  "model": "Qwen3.5-0.8B",
+  "num_heads": 16,
+  "seq_len": 5
+}

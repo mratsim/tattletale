@@ -130,3 +130,52 @@ proc forward*(self: GemmaRmsNorm, x: Tensor): Tensor =
 
 template `()`*(layer: GemmaRmsNorm, x: Tensor): untyped =
   forward(layer, x)
+
+type
+  RmsNormGated* = ref object
+    ## RMSNorm with a SiLU-gated multiplier over the last dimension,
+    ## the Gated DeltaNet output norm (vendored `Qwen3_5RMSNormGated`).
+    ##
+    ## The weight is applied as a REGULAR multiply (not `1 + w`): the shard
+    ## stores the norm weight directly (F32 [128], mean near 1). The gate
+    ## tensor carries the z projection reshaped to the normed shape.
+    ##
+    ## Forward, matching the vendored op order:
+    ##   normed = x.f32 * rsqrt(mean(x.f32^2) + eps)     (f32)
+    ##   normed = normed.to(x.dtype)                      (bf16)
+    ##   gated  = weight * normed                         (f32 weight × bf16 → f32)
+    ##   gated  = gated * silu(gate.f32)                  (f32)
+    ##   output = gated.to(x.dtype)                       (bf16)
+    weight*: Tensor
+    eps*: float64
+    hidden_size*: int
+
+## Build RmsNormGated from a `[head_v_dim]` weight. eps defaults to 1e-6.
+func init*(_: type RmsNormGated, weight: Tensor, eps: SomeFloat = 1e-6): RmsNormGated =
+  let hidden_size = weight.size(0)
+  RmsNormGated(
+    weight: weight,
+    eps: float64(eps),
+    hidden_size: hidden_size,
+  )
+
+proc forward*(self: RmsNormGated, x: Tensor, gate: Tensor): Tensor =
+  ## RmsNormGated over the last dimension of `x`, gated by `silu(gate)`.
+  ##
+  ## Args:
+  ##   x: (…, hidden_size) tensor to normalize (bf16)
+  ##   gate: same leading shape as `x`, last dim `hidden_size` (bf16)
+  ##
+  ## Returns:
+  ##   (…, hidden_size) in x.dtype
+  let input_dtype = x.scalarType()
+  let x32 = x.to(kFloat32)
+  let variance = x32.square().mean(axis = -1, keepdim = true)
+  let rstd = variance.add(Scalar(self.eps)).rsqrt()
+  let normed = (x32 * rstd).to(input_dtype)
+  let weighted = self.weight * normed
+  let gated = weighted * F.silu(gate.to(kFloat32))
+  result = gated.to(input_dtype)
+
+template `()`*(layer: RmsNormGated, x, gate: Tensor): untyped =
+  forward(layer, x, gate)

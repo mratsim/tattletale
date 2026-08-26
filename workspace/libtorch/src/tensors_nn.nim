@@ -44,6 +44,11 @@ wrapLibtorch:
 
   proc sigmoid_mut*(input: var Tensor)
 
+  func softplus*(input: Tensor, beta: float64 = 1.0, threshold: float64 = 20.0): Tensor
+    ## Softplus activation: ``log(1 + exp(beta * x)) / beta``, linear above
+    ## ``threshold``. Defaults match torch (beta = 1.0, threshold = 20.0).
+
+
   # Normalized activations
   # -------------------------------------------------------
 
@@ -60,6 +65,41 @@ wrapLibtorch:
 
   func linear*(input, weight: Tensor): Tensor
   func linear*(input, weight, bias: Tensor): Tensor
+
+
+  # Convolution
+  # -------------------------------------------------------
+
+  func conv1d*(input, weight: Tensor, bias: Option[Tensor] = none(Tensor),
+               stride: varargs[int], padding: varargs[int],
+               dilation: varargs[int], groups: int = 1): Tensor {.inline, nodestroy.} =
+    ## 1D convolution (ATen `conv1d`), depthwise when groups == input channels.
+    ##
+    ## Expected input:
+    ##   input: (N, C_in, L)
+    ##   weight: (C_out, C_in / groups, K)
+    ##
+    ## Output:
+    ##   (N, C_out, L_out), with L_out = (L + 2 * padding - K) / stride + 1
+    ##   for the common stride 1 case.
+    ##
+    ## ``bias`` is optional (the GDN conv1d has no bias). ``stride``,
+    ## ``padding`` and ``dilation`` are single-element sequences in torch's
+    ## IntArrayRef form. Empty varargs default to stride 1 / padding 0 /
+    ## dilation 1 (the empty-varargs path would read oa[0] on a nil view).
+    let strideV = if stride.len == 0: asTorchView([1]) else: asTorchView(stride)
+    let paddingV = if padding.len == 0: asTorchView([0]) else: asTorchView(padding)
+    let dilationV = if dilation.len == 0: asTorchView([1]) else: asTorchView(dilation)
+    convertLibTorchExceptions:
+      wrapTorchTensor:
+        if bias.isSome():
+          F.conv1d(input.raw, weight.raw, bias.unsafeGet().raw,
+                   strideV, paddingV, dilationV,
+                   groups.int64)
+        else:
+          F.conv1d(input.raw, weight.raw, cpp_nullopt(),
+                   strideV, paddingV, dilationV,
+                   groups.int64)
 
   # Loss functions
   # -------------------------------------------------------

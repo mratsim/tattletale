@@ -13,7 +13,7 @@ import
   std/tables,
   pkg/iface,
   pkg/packedjson,
-  workspace/libtorch,
+  workspace/libtorch as F,
   workspace/safetensors,
   workspace/toktoktok,
   ../layers,
@@ -185,24 +185,95 @@ proc countShardTensors*(st: Safetensor): ShardTensorCounts =
 ################################################################################
 
 type
+  Qwen35DecoderLayer* = ref object
+    ## One of the 24 hybrid decoder layers. Exactly one attention variant is
+    ## non-nil per layer: `gdn` for "linear_attention" layers, `gatedAttn`
+    ## for "full_attention" layers. The residual pattern matches the vendored
+    ## Qwen3_5DecoderLayer.forward (local residuals, BF16 additions).
+    layer_type*: string
+    input_layernorm: GemmaRmsNorm          # 1+w GemmaRMSNorm
+    gdn: GatedDeltaNet                     # nil on full_attention layers
+    gatedAttn: GatedAttention              # nil on linear_attention layers
+    post_attention_layernorm: GemmaRmsNorm # 1+w GemmaRMSNorm
+    mlp: GatedMLP                          # dense SwiGLU
+
   Qwen3_5Model* = ref object
     embedTokens: Embedding
-    norm: RmsNorm
+    layers: seq[Qwen35DecoderLayer]
+    norm: GemmaRmsNorm
     lmHead: LMHead
+    rotary: RotaryPositionEmbeddingRef
     config*: Qwen3_5Config
     tokenizer*: BPETokenizer
     device*: DeviceKind
     loadedTensorCount*: int  ## Name-based tensor requests made by the loader
                              ## (foreign prefixes are never requested)
 
-proc forward*(self: Qwen3_5Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
-  ## Text forward pass: embed → final RMSNorm → tied lm_head.
+func init*(
+    _: type Qwen35DecoderLayer,
+    layer_type: string,
+    input_layernorm, post_attention_layernorm: GemmaRmsNorm,
+    gdn: GatedDeltaNet,
+    gatedAttn: GatedAttention,
+    mlp: GatedMLP): Qwen35DecoderLayer =
+  ## Assemble one hybrid decoder layer. Exactly one of `gdn` / `gatedAttn`
+  ## is non-nil, selected by `layer_type` ("linear_attention" or
+  ## "full_attention").
+  Qwen35DecoderLayer(
+    layer_type: layer_type,
+    input_layernorm: input_layernorm,
+    gdn: gdn,
+    gatedAttn: gatedAttn,
+    post_attention_layernorm: post_attention_layernorm,
+    mlp: mlp
+  )
+
+proc forward*(self: Qwen35DecoderLayer, ctx: var InferenceContext, hidden: Tensor): Tensor =
+  ## Run one hybrid decoder layer with local residuals (vendored
+  ## Qwen3_5DecoderLayer.forward):
   ##
-  ## The 24 hybrid layers (18 Gated DeltaNet, 6 full attention) are not
-  ## wired yet, so the forward skips them entirely. This minimal path lets
-  ## `generate()` run end to end. Layer dispatch is added in later work.
-  let x = self.embedTokens(input_ids)
-  let normed = self.norm(x)
+  ##   h = input_layernorm(hidden)
+  ##   h = hidden + attn_or_gdn(ctx, h)
+  ##   h = post_attention_layernorm(h)
+  ##   h = h + mlp(h)
+  ##
+  ## Dispatch on `layer_type` routes linear_attention layers to the Gated
+  ## DeltaNet block (conv + SSM state in ctx) and full_attention layers to
+  ## the gated full attention block (KV pages in ctx).
+  let residual = hidden
+  let hNorm = self.input_layernorm(hidden)
+  let attnOut =
+    if self.layer_type == "linear_attention":
+      self.gdn(ctx, hNorm)
+    else:
+      self.gatedAttn(ctx, hNorm)
+  let h1 = residual + attnOut
+  let residual2 = h1
+  let hNorm2 = self.post_attention_layernorm(h1)
+  let mlpOut = self.mlp(hNorm2)
+  result = residual2 + mlpOut
+
+template `()`*(layer: Qwen35DecoderLayer,
+            ctx: var InferenceContext,
+            x: Tensor): untyped =
+  layer.forward(ctx, x)
+
+proc forward*(self: Qwen3_5Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
+  ## Text forward pass: embed → 24 hybrid layers → final GemmaRMSNorm → tied lm_head.
+  ##
+  ## Each layer runs `Qwen35DecoderLayer.forward`, which dispatches on
+  ## `config.layer_types[i]`. `ctx.setRopeForPositions` is called once per
+  ## forward. Only full-attn layers read ctx.cos/sin (GDN layers carry no
+  ## rope). GDN per-sequence state lives in ctx (conv + SSM), full-attn
+  ## state in ctx.pages.
+  var h = self.embedTokens(input_ids)
+
+  ctx.setRopeForPositions(self.rotary)
+
+  for layer in self.layers:
+    h = layer(ctx, h)
+
+  let normed = self.norm(h)
   result = self.lmHead(normed)
 
 proc getConfig(self: Qwen3_5Model): ModelConfigBase =
@@ -238,6 +309,12 @@ proc loadQwen3_5ModelRaw(modelPath: string, device = kCPU): Qwen3_5Model =
   ## (draft head) tensors living in the same shard are never requested,
   ## so the load skips them without error.
   ##
+  ## Every layer loads its input/post_attention layernorms (GemmaRMSNorm,
+  ## 1 + w) and its SwiGLU MLP. The attention block is loaded per
+  ## `config.layer_types[i]` from the `linear_attn.*` or `self_attn.*`
+  ## prefixes. The final norm is a GemmaRMSNorm (the Qwen3.5 text stack
+  ## applies the weight as 1 + w at every RMSNorm, including the final one).
+  ##
   ## The shard has no `lm_head` tensor (`tie_word_embeddings: true`), so
   ## LMHead.load falls back to the tied embedding.
   let config = loadQwen3_5Config(modelPath / "config.json")
@@ -255,7 +332,87 @@ proc loadQwen3_5ModelRaw(modelPath: string, device = kCPU): Qwen3_5Model =
   inc tensorRequests
   let embedTokens = Embedding.init(embedWeight)
 
-  let norm = RmsNorm.load(weightsSt, cfgJson, "model.language_model.norm", device)
+  let rotary = RotaryPositionEmbeddingRef.new(
+    config.head_dim,
+    config.max_position_embeddings,
+    config.rope_theta,
+    F.kBFloat16,
+    device,
+    rotary_dim = int(config.head_dim.float64 * config.partial_rotary_factor))
+
+  var layers = newSeq[Qwen35DecoderLayer](config.num_hidden_layers)
+  for i in 0 ..< config.num_hidden_layers:
+    let lp = "model.language_model.layers." & $i & "."
+
+    let inputLN = GemmaRmsNorm.load(weightsSt, cfgJson, lp & "input_layernorm", device)
+    inc tensorRequests
+    let postLN = GemmaRmsNorm.load(weightsSt, cfgJson, lp & "post_attention_layernorm", device)
+    inc tensorRequests
+
+    let gateProj = Linear.load(weightsSt, cfgJson, lp & "mlp.gate_proj", device)
+    inc tensorRequests
+    let upProj = Linear.load(weightsSt, cfgJson, lp & "mlp.up_proj", device)
+    inc tensorRequests
+    let downProj = Linear.load(weightsSt, cfgJson, lp & "mlp.down_proj", device)
+    inc tensorRequests
+    let mlp = GatedMLP.init(gateProj, upProj, downProj)
+
+    var gdn: GatedDeltaNet = nil
+    var gatedAttn: GatedAttention = nil
+    if config.layer_types[i] == "linear_attention":
+      let qkvProj = Linear.load(weightsSt, cfgJson, lp & "linear_attn.in_proj_qkv", device)
+      inc tensorRequests
+      let zProj = Linear.load(weightsSt, cfgJson, lp & "linear_attn.in_proj_z", device)
+      inc tensorRequests
+      let aProj = Linear.load(weightsSt, cfgJson, lp & "linear_attn.in_proj_a", device)
+      inc tensorRequests
+      let bProj = Linear.load(weightsSt, cfgJson, lp & "linear_attn.in_proj_b", device)
+      inc tensorRequests
+      let convWeight = weightsSt.getTensorOwned(lp & "linear_attn.conv1d.weight", device)
+      inc tensorRequests
+      let aLog = weightsSt.getTensorOwned(lp & "linear_attn.A_log", device)
+      inc tensorRequests
+      let dtBias = weightsSt.getTensorOwned(lp & "linear_attn.dt_bias", device)
+      inc tensorRequests
+      let gdnNorm = RmsNormGated.load(weightsSt, cfgJson, lp & "linear_attn.norm", device)
+      inc tensorRequests
+      let outProj = Linear.load(weightsSt, cfgJson, lp & "linear_attn.out_proj", device)
+      inc tensorRequests
+      gdn = GatedDeltaNet.init(
+        i, lp & "linear_attn",
+        qkvProj, zProj, aProj, bProj,
+        convWeight, aLog, dtBias, gdnNorm, outProj,
+        config.linear_num_key_heads,
+        config.linear_num_value_heads,
+        config.linear_key_head_dim,
+        config.linear_value_head_dim,
+        config.linear_conv_kernel_dim)
+    else:
+      let qProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.q_proj", device)
+      inc tensorRequests
+      let kProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.k_proj", device)
+      inc tensorRequests
+      let vProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.v_proj", device)
+      inc tensorRequests
+      let oProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.o_proj", device)
+      inc tensorRequests
+      let qNorm = GemmaRmsNorm.load(weightsSt, cfgJson, lp & "self_attn.q_norm", device)
+      inc tensorRequests
+      let kNorm = GemmaRmsNorm.load(weightsSt, cfgJson, lp & "self_attn.k_norm", device)
+      inc tensorRequests
+      gatedAttn = GatedAttention.init(
+        i, lp & "self_attn",
+        qProj, kProj, vProj, oProj,
+        qNorm, kNorm,
+        config.num_attention_heads,
+        config.num_key_value_heads,
+        config.head_dim,
+        rotary)
+
+    layers[i] = Qwen35DecoderLayer.init(
+      config.layer_types[i], inputLN, postLN, gdn, gatedAttn, mlp)
+
+  let norm = GemmaRmsNorm.load(weightsSt, cfgJson, "model.language_model.norm", device)
   inc tensorRequests
 
   # The tied lm_head request materializes no tensor (no lm_head.weight in the
@@ -267,8 +424,10 @@ proc loadQwen3_5ModelRaw(modelPath: string, device = kCPU): Qwen3_5Model =
   let tokenizer = loadHFTokenizer(tokenizerPath)
   result = Qwen3_5Model(
     embedTokens: embedTokens,
+    layers: layers,
     norm: norm,
     lmHead: lmHead,
+    rotary: rotary,
     config: config,
     tokenizer: tokenizer,
     device: device,
