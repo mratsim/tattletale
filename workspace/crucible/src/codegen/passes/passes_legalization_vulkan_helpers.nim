@@ -6,12 +6,12 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Vulkan-specific shared helpers for the Vulkan IR legalization passes:
-## taint analysis (struct types containing pointer fields), expression
-## resolution over single-assignment chains, fn-table and reachability
-## helpers, and the ptr-index fold shared by passes 2 and 3.
+## taint analysis (struct types containing pointer fields), fn-table and
+## reachability helpers, and the ptr-index fold shared by passes 2 and 3.
 
 import std/[sets, strutils, tables]
 import ../ir/gpu_types
+import ./passes_utils
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Taint analysis: struct types that contain pointer fields
@@ -74,153 +74,6 @@ proc taintedLeaves*(t: GpuType, path: seq[string] = @[]): seq[tuple[path: seq[st
 # ═════════════════════════════════════════════════════════════════════════
 #  IR helpers
 # ═════════════════════════════════════════════════════════════════════════
-
-# moved to passes_utils in the dedup mission
-proc collectAssigns*(n: GpuAst; assigns, consts: var Table[string, GpuAst]) =
-  ## Collects single-assignment chains: gpuAssign(ident ← rhs), gpuVar
-  ## (vName ← vInit) and gpuConstexpr (cIdent ← cValue), keyed by iSym.
-  case n.kind
-  of gpuAssign:
-    if n.aLeft.kind == gpuIdent and n.aLeft.symbol != nil:
-      assigns[n.aLeft.symbol.iSym] = n.aRight
-      # Nim IR quirk: the blit pass assigns the fn result through a symbol
-      # whose iSym differs from the `result` slot the Return references
-      # (same display name, e.g. `result` vs `result___69c5…`). The codegen
-      # resolves by name, so alias the name to keep return-value resolution
-      # (tainted-return fns) working.
-      if n.aLeft.symbol.name == "result" and n.aLeft.symbol.iSym != "result":
-        assigns["result"] = n.aRight
-  of gpuVar:
-    if n.vInit.kind != gpuDiscard and n.vName.symbol != nil:
-      assigns[n.vName.symbol.iSym] = n.vInit
-  of gpuConstexpr:
-    if n.cIdent.kind == gpuIdent and n.cIdent.symbol != nil:
-      consts[n.cIdent.symbol.iSym] = n.cValue
-  else:
-    discard
-  for ch in n:
-    collectAssigns(ch, assigns, consts)
-
-proc resolveValue*(n: GpuAst; assigns, consts: Table[string, GpuAst];
-                   visited: var HashSet[string]; depth: int): GpuAst =
-  ## Resolves an expression through single-assignment chains (blit temps,
-  ## constexprs) and folds dots over object constructions, so a leaf value
-  ## becomes a pure expression over params/literals. `visited` guards
-  ## against cycles. `depth` bounds pathological chains.
-  if n.isNil: return n
-  if depth > 512:
-    raiseAssert "Vulkan: resolveValue exceeded depth (assignment cycle?)"
-  case n.kind
-  of gpuIdent:
-    if n.symbol == nil: return n
-    let i = n.symbol.iSym
-    if i in assigns:
-      if i in visited:
-        raiseAssert "Vulkan: assignment cycle involving '" & i & "'"
-      visited.incl i
-      result = resolveValue(assigns[i], assigns, consts, visited, depth + 1)
-      visited.excl i
-    elif i in consts:
-      if i in visited:
-        raiseAssert "Vulkan: constexpr cycle involving '" & i & "'"
-      visited.incl i
-      result = resolveValue(consts[i], assigns, consts, visited, depth + 1)
-      visited.excl i
-    else:
-      result = n
-  of gpuDot:
-    let parent = resolveValue(n.dParent, assigns, consts, visited, depth + 1)
-    if parent.kind == gpuObjConstr and n.dField.kind == gpuIdent:
-      let fname = n.dField.ident()
-      for f in parent.ocFields:
-        if f.name == fname:
-          return resolveValue(f.value, assigns, consts, visited, depth + 1)
-      raiseAssert "Vulkan: field '" & fname & "' not found in object construction"
-    elif parent.kind == gpuObjConstr:
-      # parent resolved to a construction but the field is not an ident
-      result = n
-    else:
-      # parent resolved through let-chains to a param/other expr: rebuild the
-      # dot on the RESOLVED parent (else leaf exprs keep stale local names
-      # like `sh`/`st` that are out of scope at the call site)
-      result = GpuAst(kind: gpuDot, dParent: parent, dField: n.dField)
-  of gpuObjConstr:
-    result = GpuAst(kind: gpuObjConstr, ocType: n.ocType)
-    for f in n.ocFields:
-      result.ocFields.add GpuFieldInit(name: f.name, typ: f.typ,
-        value: resolveValue(f.value, assigns, consts, visited, depth + 1))
-  of gpuCast:
-    result = GpuAst(kind: gpuCast, cTo: n.cTo,
-                    cExpr: resolveValue(n.cExpr, assigns, consts, visited, depth + 1))
-  of gpuConv:
-    result = GpuAst(kind: gpuConv, convTo: n.convTo,
-                    convExpr: resolveValue(n.convExpr, assigns, consts, visited, depth + 1))
-  of gpuBinOp:
-    result = GpuAst(kind: gpuBinOp, bOp: n.bOp,
-                    bLeft: resolveValue(n.bLeft, assigns, consts, visited, depth + 1),
-                    bRight: resolveValue(n.bRight, assigns, consts, visited, depth + 1),
-                    bIsOverloaded: n.bIsOverloaded, bType: n.bType)
-  of gpuIndex:
-    result = GpuAst(kind: gpuIndex,
-                    iArr: resolveValue(n.iArr, assigns, consts, visited, depth + 1),
-                    iIndex: resolveValue(n.iIndex, assigns, consts, visited, depth + 1))
-  of gpuPrefix:
-    result = GpuAst(kind: gpuPrefix, pOp: n.pOp,
-                    pVal: resolveValue(n.pVal, assigns, consts, visited, depth + 1))
-  of gpuArrayLit:
-    result = GpuAst(kind: gpuArrayLit, aLitType: n.aLitType)
-    for v in n.aValues:
-      result.aValues.add resolveValue(v, assigns, consts, visited, depth + 1)
-  of gpuCall:
-    result = GpuAst(kind: gpuCall, cIsExpr: n.cIsExpr, cName: n.cName)
-    for a in n.cArgs:
-      result.cArgs.add resolveValue(a, assigns, consts, visited, depth + 1)
-  of gpuLit:
-    result = n
-  else:
-    result = n
-
-proc substIdents*(n: GpuAst; subst: Table[string, GpuAst]): GpuAst =
-  ## Replaces ident refs (by iSym) with deep-copied expressions. A deref of a
-  ## substituted pointer ident collapses to the substituted expression.
-  if n.isNil: return nil
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym in subst:
-      result = subst[n.symbol.iSym].clone()
-    else:
-      result = n
-  of gpuDeref:
-    if n.dOf.kind == gpuIdent and n.dOf.symbol != nil and n.dOf.symbol.iSym in subst:
-      result = subst[n.dOf.symbol.iSym].clone()
-    else:
-      result = GpuAst(kind: gpuDeref, dOf: substIdents(n.dOf, subst))
-  else:
-    result = n.clone()
-    for ch in result.mitems:
-      ch = substIdents(ch, subst)
-
-proc exprType(n: GpuAst; fns: Table[string, GpuAst]): GpuType =
-  ## Best-effort static type of an expression, for the ptr-index fold's
-  ## offset coercion (COMP-B-003: GLSL forbids mixed-type arithmetic).
-  ## `fns` maps callee iSym → device fn so a gpuCall operand resolves to
-  ## the callee's return type. Without it the coercion is silently skipped
-  ## and mixed-type GLSL surfaces only at glslang ingest.
-  if n.isNil: return nil
-  case n.kind
-  of gpuIdent: result = n.symbol.typ
-  of gpuLit: result = n.lType
-  of gpuBinOp: result = n.bType
-  of gpuCast: result = n.cTo
-  of gpuConv: result = n.convTo
-  of gpuCall:
-    if n.cName.symbol != nil and fns.hasKey(n.cName.symbol.iSym):
-      let callee = fns[n.cName.symbol.iSym]
-      if not callee.pRetType.isNil and
-         callee.pRetType.kind in {gtUint8, gtInt16, gtUint16, gtInt32,
-                                  gtUint32, gtInt64, gtUint64}:
-        result = callee.pRetType
-  else: result = nil
 
 proc leafName*(base: string; path: seq[string]): string =
   ## `epi` + ["C", "rsc"] → "epi_C_rsc". Single-underscore separator:
@@ -374,9 +227,9 @@ proc foldPtrIndexToElement*(arr, idx: GpuAst; ctx: GpuContext;
         var offC = off
         if offC.kind == gpuCast and offC.cTo.kind == gtUint64:
           offC = offC.cExpr
-        let idxT = exprType(idx, fns)
+        let idxT = getExprType(ctx, idx, fns)
         if not idxT.isNil:
-          let offT = exprType(offC, fns)
+          let offT = getExprType(ctx, offC, fns)
           if not offT.isNil and offT.kind != idxT.kind and
              idxT.kind in {gtInt32, gtUint32}:
             # coerce the offset to the index's type: GLSL forbids mixed-type

@@ -17,6 +17,7 @@
 import std/[sets, tables]
 import ../ir/gpu_types
 import ./passes_legalization_vulkan_helpers
+import ./passes_utils
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Pass 2: vulkanFlattenStructPtrValues

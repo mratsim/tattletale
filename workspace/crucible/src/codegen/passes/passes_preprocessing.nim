@@ -9,6 +9,7 @@ import std / [sequtils, tables, sets, strutils, strformat, options]
 import ../ir/gpu_types
 import ./pass_datatypes
 import ./passes_legalizations
+import ./passes_utils
 
 proc isGlobalFn*(fn: GpuAst): bool =
   doAssert fn.kind == gpuProc
@@ -795,50 +796,7 @@ proc exprType*(ctx: GpuContext, n: GpuAst): GpuType =
   ## Best-effort type of an expression node (nil when unknown). The printers
   ## use it to detect array-typed operands of `addr`, which need pointer
   ## decay rather than `&`.
-  case n.kind
-  of gpuIdent: n.symbol.typ
-  of gpuLit: n.lType
-  of gpuBinOp: n.bType
-  of gpuPrefix: ctx.exprType(n.pVal)
-  of gpuCall: ctx.getFnReturnType(n.cName)
-  of gpuAddr: ctx.exprType(n.aOf)
-  of gpuDeref: ctx.exprType(n.dOf)
-  of gpuIndex:
-    let arrT = ctx.exprType(n.iArr)
-    if arrT.isNil:
-      nil
-    elif arrT.kind == gtArray: arrT.aTyp
-    elif arrT.kind == gtPtr: arrT.to
-    elif arrT.kind == gtUA: arrT.uaTo
-    else: nil
-  of gpuObjConstr: n.ocType
-  of gpuConv: n.convTo
-  of gpuCast: n.cTo
-  of gpuMaterialize: ctx.exprType(n.mExpr)
-  of gpuDot:
-    # The field's type on the parent's struct type (ptr/UA layers
-    # stripped): generic field-type inference for field-access chains.
-    # The value address-space resolution uses it for nested
-    # pointer-field chains.
-    block:
-      var pT = ctx.exprType(n.dParent)
-      if pT != nil and pT.kind == gtPtr: pT = pT.to
-      if pT != nil and pT.kind == gtUA: pT = pT.uaTo
-      if pT == nil or n.dField.kind != gpuIdent or n.dField.symbol == nil:
-        nil
-      else:
-        let fields =
-          case pT.kind
-          of gtObject: pT.oFields
-          of gtGenericInst: pT.gFields
-          else: @[]
-        var found: GpuType = nil
-        for f in fields:
-          if f.name == n.dField.symbol.name:
-            found = f.typ
-            break
-        found
-  else: nil
+  passes_utils.exprTypeBestEffort(ctx, n)
 
 proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
   ## Struct type of a field-access base, with the pointer/UA layer stripped.
