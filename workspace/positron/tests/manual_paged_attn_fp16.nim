@@ -25,9 +25,10 @@ const pagedMsl = metal:
       o, q: ptr UncheckedArray[float16],
       k_cache, v_cache: ptr UncheckedArray[float16],
       block_table, cache_seqlens, cu_seqlens_q: ptr UncheckedArray[int32],
-      num_seqs, H, Nkv, max_pages, page_size: int32) {.global.} =
+      num_seqs, H, Nkv, max_pages, num_layers, layer: int32) {.global.} =
     paged_attn_fwd(o, q, k_cache, v_cache, block_table, cache_seqlens,
-                   cu_seqlens_q, num_seqs, H, Nkv, max_pages, page_size, 128)
+                   cu_seqlens_q, num_seqs, H, Nkv, max_pages, num_layers,
+                   layer, 16, 128)
 
 proc scaledRand(rows, cols: int, scaleF: float32): seq[float32] =
   ## rand(rows, cols) shifted host-side to [-scaleF, scaleF). The
@@ -46,6 +47,11 @@ proc worstAbsDiff(a, b: F.Tensor): float32 =
   for i in 0 ..< a.numel():
     let d = abs(ap[i] - bp[i])
     if d > result: result = d
+
+proc layerSelect(t: F.Tensor, layer: int): F.Tensor =
+  ## torch's select(1, layer) as a view: narrow the layer dim then
+  ## squeeze it. The result keeps the layer-major page stride.
+  t.narrow(1, layer, 1).squeeze(1)
 
 proc gatherKv(src: F.Tensor, blockTable: seq[int32], maxPages, pageSize, covered, s: int): F.Tensor =
   ## The seq's contiguous K or V: the flat (num_pages·page_size, Nkv, D)
@@ -81,9 +87,9 @@ proc sdpaPrefill(qt, kt, vt: F.Tensor, cacheSeqlen, qLen, H, Nkv: int): F.Tensor
 proc pagedAttnKernel(
     qf, kf, vf: seq[float32],
     blockTable, cacheSeqlens, cuSeqlensQ: seq[int32],
-    numSeqs, H, Nkv, maxPages, pageSize, nQo, D: int): F.Tensor =
-  ## Runs pagedD128 on the fp16-rounded inputs; returns the fp16
-  ## output converted to fp32.
+    numSeqs, H, Nkv, maxPages, numLayers, layer, nQo, D: int): F.Tensor =
+  ## Runs pagedD128 on the fp16-rounded layer-major slabs, returning the
+  ## fp16 output converted to fp32.
   var engine = bkMetal.init()
   engine.ingest(pagedMsl)
   var kSlab = newSeq[uint16](kf.len)
@@ -97,7 +103,7 @@ proc pagedAttnKernel(
   var outO = newSeq[uint16](nQo * H * D)
   let args = (q, kSlab, vSlab, blockTable, cacheSeqlens, cuSeqlensQ,
               int32(numSeqs), int32(H), int32(Nkv), int32(maxPages),
-              int32(pageSize))
+              int32(numLayers), int32(layer))
   engine.run << (grid: (1, H, numSeqs), blk: (32, 1)) >> ("pagedD128", outO, args)
   var outF = newSeq[float32](nQo * H * D)
   for i in 0 ..< nQo * H * D:
@@ -107,13 +113,21 @@ proc pagedAttnKernel(
 proc pagedAttnReference(
     qf, kf, vf: seq[float32],
     blockTable, cacheSeqlens, cuSeqlensQ, qLens: seq[int32],
-    numPages, maxPages, pageSize, numSeqs, H, Nkv, nQo, D: int): F.Tensor =
+    numPages, numLayers, layer, maxPages, pageSize, numSeqs, H, Nkv, nQo, D: int): F.Tensor =
   ## torch SDPA over the same fp16-rounded values, per seq: decode
   ## (q_len = 1) causal off, prefill (q_len >= 2) banded causal over
-  ## [0, cache_seqlen + q_len). SDPA wants (1, H, q_len, D), so the
+  ## [0, cache_seqlen + q_len). The K/V come from the layer-major pool
+  ## via torch's own per-layer addressing (select + contiguous, since
+  ## the select view is strided). SDPA wants (1, H, q_len, D), so the
   ## prefill q is transposed from the kernel's (q, H, D) order.
-  let kT = toTensor(kf).reshape(numPages * pageSize, Nkv, D).to(kFloat16).to(kFloat32)
-  let vT = toTensor(vf).reshape(numPages * pageSize, Nkv, D).to(kFloat16).to(kFloat32)
+  let kT = toTensor(kf).reshape(numPages, numLayers, pageSize, Nkv, D)
+            .layerSelect(layer).contiguous()
+            .reshape(numPages * pageSize, Nkv, D)
+            .to(kFloat16).to(kFloat32)
+  let vT = toTensor(vf).reshape(numPages, numLayers, pageSize, Nkv, D)
+            .layerSelect(layer).contiguous()
+            .reshape(numPages * pageSize, Nkv, D)
+            .to(kFloat16).to(kFloat32)
   let qT = toTensor(qf).reshape(nQo, H, D).to(kFloat16).to(kFloat32)
   var oRef = newSeq[float32](nQo * H * D)
   for s in 0 ..< numSeqs:
@@ -143,7 +157,9 @@ proc pagedAttnReference(
 
 proc checkPagedAttn(): bool =
   ## One mixed batch (decode and prefill seqs under one cu_seqlens_q):
-  ## kernel output vs torch SDPA per seq.
+  ## kernel output vs torch SDPA per seq, plus the cross-layer
+  ## invariant: the layer-1 kernel output must NOT match a layer-0
+  ## reference (a missing layer term or pageStride would make it match).
   Torch.manual_seed(0x5EED'u64)
   let numSeqs = 3
   let H = 4
@@ -152,23 +168,33 @@ proc checkPagedAttn(): bool =
   let pageSize = 16
   let maxPages = 3
   let numPages = 7
+  let numLayers = 2
+  let layer = 1
   let nQo = 5
   let cacheSeqlens = [20'i32, 5, 33].toSeq()
   let qLens = [1'i32, 3, 1].toSeq()
   let blockTable = [0'i32, 1, -1, 2, 3, -1, 4, 5, 6].toSeq()
   let cuSeqlensQ = [0'i32, 1, 4, 5].toSeq()
-  let kf = scaledRand(numPages * pageSize, Nkv * D, 2.0'f32)
-  let vf = scaledRand(numPages * pageSize, Nkv * D, 2.0'f32)
+  let kf = scaledRand(numPages * numLayers * pageSize, Nkv * D, 2.0'f32)
+  let vf = scaledRand(numPages * numLayers * pageSize, Nkv * D, 2.0'f32)
   let qf = scaledRand(nQo, H * D, 2.0'f32)
   let actual = pagedAttnKernel(qf, kf, vf, blockTable, cacheSeqlens,
                                cuSeqlensQ, numSeqs, H, Nkv, maxPages,
-                               pageSize, nQo, D)
+                               numLayers, layer, nQo, D)
   let expected = pagedAttnReference(qf, kf, vf, blockTable, cacheSeqlens,
-                                    cuSeqlensQ, qLens, numPages, maxPages,
-                                    pageSize, numSeqs, H, Nkv, nQo, D)
-  echo &"  worst |Δ| = {worstAbsDiff(actual, expected)} (tolerance 5e-3)"
+                                    cuSeqlensQ, qLens, numPages, numLayers,
+                                    layer, maxPages, pageSize, numSeqs, H,
+                                    Nkv, nQo, D)
+  echo &"  layer {layer}: worst |Δ| = {worstAbsDiff(actual, expected)} (tolerance 5e-3)"
   assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 5e-3'f64)
+  let wrongLayer = pagedAttnReference(qf, kf, vf, blockTable, cacheSeqlens,
+                                      cuSeqlensQ, qLens, numPages, numLayers,
+                                      0, maxPages, pageSize, numSeqs, H,
+                                      Nkv, nQo, D)
+  let cross = worstAbsDiff(actual, wrongLayer)
+  echo &"  cross-layer |Δ| vs layer 0 = {cross} (must exceed 1e-2)"
+  doAssert cross > 1e-2'f32, "kernel output matches the other layer's data"
   result = true
 
 when isMainModule:
-  runCppTest("paged_attn vs torch SDPA (decode + prefill)", checkPagedAttn)
+  runCppTest("paged_attn vs torch SDPA on a layer-major pool", checkPagedAttn)

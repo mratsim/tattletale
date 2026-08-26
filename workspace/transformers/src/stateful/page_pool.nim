@@ -20,7 +20,8 @@ type
   PageObj = object
     ## Underlying data for Page ref objects.
     index: int32 = -1i32
-    pool {.cursor.}: PagePool # Back-pointer (orchestrator keeps pool alive, and we only have integers to return so don't refcount)
+    pool {.cursor.}: PagePool # Back-pointer: the orchestrator keeps the pool
+    # alive, and we only have integers to return, so don't refcount
     k_view*: Tensor           # (num_layers, PAGE_SIZE, kv_heads, head_dim) — view into pool
     v_view*: Tensor           # same
 
@@ -28,7 +29,8 @@ type
 # destruction handles Tensor/TorchTensor lifecycle correctly for PagePool
 #
 # For the Page, if the PagePool is not destroyed return the index to it so it can be borrowed again
-# We need to nil Tensor field to ensure their destructor is called so the TorchTensor's refcount is decremnented and they are collected
+# We need to nil the Tensor fields so their destructors run, the TorchTensor
+# refcount is decremented, and they are collected
 
 proc `=destroy`(p: var PageObj) =
   ## Auto-recycle slot index to the pool's free stack.
@@ -71,3 +73,11 @@ func pagesAvailable*(pool: PagePool): int =
 
 func pageIndex*(p: Page): int32 =
   p.index
+
+func layerView*(pool: PagePool, layer: int): tuple[kView, vView: Tensor] =
+  ## Returns the per-layer slab views (num_pages, PAGE_SIZE, kv_heads,
+  ## head_dim) of the layer-major pool, the slice that the paged
+  ## kernels consume per dispatch: data_ptr at the layer base, page
+  ## stride num_layers·PAGE_SIZE·kv_heads·head_dim.
+  (pool.k_buffer.narrow(1, layer, 1).squeeze(1),
+   pool.v_buffer.narrow(1, layer, 1).squeeze(1))

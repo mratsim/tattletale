@@ -7,6 +7,7 @@
 
 import std/unittest
 import std/importutils
+import workspace/libtorch
 import workspace/transformers/src/stateful/page_pool
 import workspace/transformers/src/stateful/kvcache
 
@@ -43,3 +44,18 @@ suite "Page + KVCache integration (P = Page, public API only)":
     dcache.graftPages(@[2'u32], @[43])
     let freed = dcache.evict()
     check freed > 0
+
+suite "PagePool layer views":
+  test "layerView selects the per-layer slab slice":
+    let pool = PagePool.init(4, 3, 2, 128, kFloat16, kCPU)
+    let kv = pool.layerView(1)
+    let k = kv.kView
+    let v = kv.vView
+    check k.size(0) == 4
+    check k.size(1) == TokensPerPage
+    check k.size(2) == 2
+    check k.size(3) == 128
+    check v.size(0) == 4
+    let off = cast[int](k.data_ptr()) - cast[int](pool.layerView(0).kView.data_ptr())
+    check off == 1 * TokensPerPage * 2 * 128 * k.element_size()
+    check k.strides()[0] == 3 * TokensPerPage * 2 * 128
