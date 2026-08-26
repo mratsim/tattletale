@@ -42,14 +42,14 @@ proc gemm_with_epilogue*[TIn, TOut; Epi](
   ## (0xDEAD fp16 is a normal finite number, not NaN). An unpadded K fails
   ## loudly: the kernel returns before writing D, so a host-side value
   ## check sees the untouched output instead of a truncated result.
-  if K mod 16 != 0:
+  const tileK = 16
+  if K mod tileK != 0:
     return
   let gd_a = gd(A, shape = (1, 1, N, K), stride = (0, 0, rsa, csa))
   let gd_b = gd(B, shape = (1, 1, M, K), stride = (0, 0, csb, rsb))
   let gd_d = gd(D, shape = (1, 1, N, M), stride = (0, 0, rsd, csd))
 
   const TileDim = 32
-  const tileK = 16
   var a_rtl: rt_l(TIn, TileDim, tileK)
   var b_rtr: rt_r(TIn, tileK, TileDim)
   var d_rtl: rt_l(float32, TileDim, TileDim, getTileConfig(float32, TIn))

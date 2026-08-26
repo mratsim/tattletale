@@ -17,9 +17,11 @@
 ## MoltenVK vs an fp32-exact host reference. Ragged = the tile does not
 ## exactly divide M/N/K; every GEMM handles it natively in-kernel — no
 ## Lengths params, no caller padding. The shapes below are deliberately not
-## multiples of 32/16. The host zero-fills the K-padding (columns/rows
-## K..Kp-1) so the kernel's K loop over Kp/16 blocks stays exact; the M/N
-## padding is garbage and must never leak into the real M×N region.
+## multiples of 32/16. B's K-padding rows (k in K..Kp-1) are ZERO — the
+## kernel's K loop reads them, and A's K-padding columns stay 0xDEAD
+## garbage, so exactness relies on garbage × 0 = 0 (this pairing makes the
+## B zero-fill load-bearing in the value runs); the M/N padding is garbage
+## and must never leak into the real M×N region.
 ##
 ## Two kernels: the plain strided-C epilogue (EpiAXPBYStrided, α=2/β=4) and
 ## a user-defined scale epilogue (EpiScale, a plain value struct). Each has
@@ -133,9 +135,11 @@ const gemmVkMsl = metal:
 
 proc buildRaggedEdgeA(M, Mp, K, Kp: int): seq[uint16] =
   ## A over the padded Mp×Kp buffer: the real M×K region carries the exact
-  ## fp16 pattern 1 + 2m + 7k; the K-padding columns (k in K..Kp-1) are
-  ## ZERO (the kernel reads them inside the K loop, so garbage would leak
-  ## into the accumulator); the padded M rows stay 0xDEAD garbage — their
+  ## fp16 pattern 1 + 2m + 7k; the K-padding columns (k in K..Kp-1) stay
+  ## 0xDEAD garbage — exactness relies on B's K-padding rows being ZERO
+  ## (garbage × 0 = 0; garbage × garbage would leak finite wrong values
+  ## into the accumulator — which is how the B zero-fill is load-bearing
+  ## in the value runs); the padded M rows stay 0xDEAD garbage — their
   ## D outputs are outside the checked M×N region.
   result = newSeq[uint16](Mp * Kp)
   for i in 0 ..< Mp * Kp:
@@ -143,8 +147,6 @@ proc buildRaggedEdgeA(M, Mp, K, Kp: int): seq[uint16] =
   for m in 0 ..< M:
     for k in 0 ..< K:
       result[m * Kp + k] = fp32ToFp16(float32(1 + 2 * m + 7 * k))
-    for k in K ..< Kp:
-      result[m * Kp + k] = 0'u16
 
 proc buildRaggedEdgeB(K, Kp, N, Np: int): seq[uint16] =
   ## B over the padded Kp×Np buffer: the real K×N region carries the exact
@@ -190,9 +192,10 @@ proc checkClose(name: string; actual, expected: seq[float32];
 proc checkPlain(engine: var auto; M, N, K: int) =
   ## D = 2·AB + 4·C, C at runtime strides (2·Np, 1), on a ragged-edge shape:
   ## M/N are not multiples of 32 and K is not a multiple of 16, so the grid
-  ## covers padding tiles and the K loop reads a zero-filled partial block.
-  ## The host zero-fills only the K-padding; the M/N padding is garbage and
-  ## must never leak into the checked M×N region.
+  ## covers padding tiles and the K loop reads a partial block: B's
+  ## K-padding rows are zero while A's K-padding columns stay garbage
+  ## (garbage × 0 = 0 keeps the result exact vs the reference's real-K sum).
+  ## The M/N padding is garbage and must never leak into the checked M×N region.
   let Mp = ((M + 31) div 32) * 32
   let Np = ((N + 31) div 32) * 32
   let Kp = ((K + 15) div 16) * 16
@@ -223,7 +226,7 @@ proc checkPlain(engine: var auto; M, N, K: int) =
 
 proc checkScaleUser(engine: var auto; M, N, K: int) =
   ## The user epilogue (EpiScale, plain value struct): D = 2·AB, on a
-  ## ragged-edge shape with the same zero-filled K-padding.
+  ## ragged-edge shape with the same K-padding pairing (A garbage, B zero).
   let Mp = ((M + 31) div 32) * 32
   let Np = ((N + 31) div 32) * 32
   let Kp = ((K + 15) div 16) * 16
