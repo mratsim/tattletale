@@ -61,7 +61,7 @@ type
 #                               o_t = S · (q_t * Dk^-0.5)
 #   core_attn_out (b, T, 16, 128) → RmsNormGated(·, silu(z)) → out_proj → (b, T, 1024)
 #
-# GDN layers never touch ctx.pages: the conv + SSM state IS the cache.
+# GDN layers never touch ctx.pages: the conv + SSM state is the cache.
 # =============================================================================
 
 func init*(

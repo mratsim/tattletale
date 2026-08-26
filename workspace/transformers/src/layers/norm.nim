@@ -136,7 +136,7 @@ type
     ## RMSNorm with a SiLU-gated multiplier over the last dimension,
     ## the Gated DeltaNet output norm (vendored `Qwen3_5RMSNormGated`).
     ##
-    ## The weight is applied as a REGULAR multiply (not `1 + w`): the shard
+    ## The weight is applied as a regular multiply (not `1 + w`). The shard
     ## stores the norm weight directly (F32 [128], mean near 1). The gate
     ## tensor carries the z projection reshaped to the normed shape.
     ##

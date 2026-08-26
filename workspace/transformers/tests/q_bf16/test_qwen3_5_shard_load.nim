@@ -55,8 +55,8 @@ proc main() =
       doAssert model.config.vocab_size == 248320
       doAssert model.config.dtype == "bfloat16"
 
-      # Loader footprint: the loader makes exactly 3 top-level name-based
-      # tensor requests (embed, final norm, tied lm_head). A regression that
+      # Loader footprint: 321 name-based tensor requests (1 embed + 18x14 GDN
+      # + 6x11 full-attn + 1 final norm + 1 tied lm_head). A regression that
       # adds or drops a loader request changes this count.
       doAssert model.loadedTensorCount == 321
 

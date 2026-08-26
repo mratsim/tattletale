@@ -167,8 +167,8 @@ proc main() =
         rtol = 0.0, abstol = 0.0, msg = "v post-split mismatch")
 
       # Gates: f32 exp/softplus and bf16 sigmoid. Both sides call the same
-      # ATen ops, so bit-exact is expected. The tolerance documents ulp
-      # slack for the transcendentals.
+      # ATen ops, so bit-exact is expected on the reference CPU. The 1e-4
+      # bar is a portability guard for cross-platform libm variance.
       let aProj = gdn.in_proj_a.forward(x)
       let aLogExp = gdn.a_log.to(kFloat32).exp()
       let aPlusBias = aProj.to(kFloat32) + gdn.dt_bias
@@ -179,11 +179,12 @@ proc main() =
       assertAllClose(beta, st.getTensorOwned("beta"),
         rtol = 1e-4, abstol = 1e-4, msg = "beta mismatch")
 
-      # Block output: 0.00 vs the sequential reference (the recurrence is
-      # exercised end to end. The per-step core/state values are asserted by
-      # the state-persistence test), 5e-3 vs the vendored chunked forward.
-      # The T=5 fixture is a single chunk, so chunked == sequential in the
-      # fixture itself. Multi-chunk prefills diverge ~1.5e-5.
+      # Block output: 0.00 vs the sequential reference, 5e-3 vs the vendored
+      # chunked forward. The recurrence is exercised end to end. The per-step
+      # core/state values are asserted by the state-persistence test.
+      # The T=5 fixture is a single chunk, so chunked vs sequential agree to
+      # ~1e-8 f32 (sub-bf16-ULP, bf16 rounding-boundary flips possible).
+      # Multi-chunk prefills diverge ~1.5e-5. Both are expected, not defects.
       assertAllClose(output, st.getTensorOwned("output_seq"),
         rtol = 0.0, abstol = 0.0, msg = "sequential block output mismatch")
       assertAllClose(output, st.getTensorOwned("output_chunked"),
@@ -222,7 +223,7 @@ proc main() =
         rtol = 0.0, abstol = 0.0, msg = "layer 0 mlp mismatch")
 
       # The layer forward itself: 0.00 vs the sequential replay, 5e-3 vs the
-      # vendored chunked forward (single-chunk T=5 fixture is bit-equal).
+      # vendored chunked forward (single-chunk T=5 fixture, sub-ULP agree).
       var ctx = InferenceContext.init(24, 1, 2, 512, 256)
       let output = layer0(ctx, x)
       assertAllClose(output, st.getTensorOwned("layer_output_seq"),
@@ -299,8 +300,8 @@ proc main() =
         var (memFile, st) = openFixture(ChainFixtureDir, "block-0" & $i & ".safetensor")
         defer: close(memFile)
         # Sequential chain inputs/outputs at 0.00, vendored chunked chain
-        # at 5e-3 (single-chunk T=4 fixture is bit-equal to the sequential
-        # path. Multi-chunk prefills diverge ~1.5e-5.
+        # at 5e-3. The single-chunk T=4 fixture agrees with the sequential
+        # path to sub-bf16-ULP (~1e-8). Multi-chunk prefills diverge ~1.5e-5.
         assertAllClose(hidden, st.getTensorOwned("layer_input_seq"),
           rtol = 0.0, abstol = 0.0, msg = "chain layer " & $i & " sequential input mismatch")
         assertAllClose(hidden, st.getTensorOwned("layer_input"),
@@ -314,7 +315,7 @@ proc main() =
       true
 
   # ──────────────────────────────────────────────────────────────────────────
-  # State persistence: two-step decode == one-shot prefill (key AC)
+  # State persistence: two-step decode == one-shot prefill
   # ──────────────────────────────────────────────────────────────────────────
   runCppTest "GDN state persistence: 2-step decode == one-shot prefill":
     proc(): bool =
@@ -447,7 +448,7 @@ proc main() =
       let cfgJson = (ModelDir / "config.json").parseFile()
       let gdn = loadGdn(shardSt, cfgJson, 0)
 
-      # Fresh context with NO pages borrowed: a GDN forward must not touch
+      # Fresh context with no pages borrowed: a GDN forward must not touch
       # ctx.pages, the conv + SSM state is the whole cache.
       var ctx = InferenceContext.init(24, 1, 2, 512, 256)
       doAssert ctx.pages.len == 0

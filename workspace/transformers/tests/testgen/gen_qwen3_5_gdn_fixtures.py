@@ -351,7 +351,7 @@ def recurrent_rule_with_trajectory(query, key, value, g, beta, eps: float = 1e-6
 def decoder_layer_forward_seq(layer: Qwen3_5DecoderLayer, x: torch.Tensor) -> torch.Tensor:
     """Qwen3_5DecoderLayer.forward with the GDN block on the sequential rule.
 
-    The real vendored forward runs the chunked rule for prefill; this replay
+    The real vendored forward runs the chunked rule for prefill. This replay
     substitutes the sequential rule so the Nim implementation (sequential
     always) has a 0.00 reference at the layer level.
     """
@@ -508,8 +508,7 @@ def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
             "num_heads": block.num_k_heads,
             "conv_kernel": block.conv_kernel_size,
             "note": "conv_state_after_prefill/d/e are the vendored 4-wide "
-                    "cache states; the _tail3 variants are the equivalent "
-                    "3-wide tails the Nim layer maintains",
+                    "cache states. The _tail3 variants are the 3-wide tails",
         },
         {
             "one_shot_input": one_shot_input,
@@ -570,7 +569,7 @@ def generate_layer0_fixture(layer0: Qwen3_5DecoderLayer) -> None:
             "case": "full_layer_prefill_seq5",
             "seq_len": PREFILL_SEQ,
             "layer_type": layer0.layer_type,
-            "note": "layer_output is the vendored chunked forward (5e-3); "
+            "note": "layer_output is the vendored chunked forward (5e-3). "
                     "layer_output_seq is the sequential replay (0.00)",
         },
         {
@@ -669,7 +668,7 @@ def generate_chain_fixture(layers, config: Qwen3_5TextConfig) -> None:
             "case": f"chain_block_{i}_seq{CHAIN_SEQ}",
             "seq_len": CHAIN_SEQ,
             "layer_type": layer.layer_type,
-            "note": "layer_output is the vendored chunked chain (5e-3); "
+            "note": "layer_output is the vendored chunked chain (5e-3). "
                     "layer_output_seq is the sequential chain (0.00)",
         }
         metadata_path = filepath + ".metadata.json"
