@@ -41,6 +41,18 @@ const ptrArithMixVk = vulkan:
                  off: uint32, i, j: int32) {.global.} =
     dst[0] = (src +% off)[i + j]
 
+# Same shape, but the offset is a uint32-returning DEVICE-FN CALL: the fold
+# must resolve the callee's return type before coercing, otherwise it skips
+# the coercion and ships mixed-type GLSL that glslang rejects only at
+# ingest (opaque shader error instead of a fold-time diagnostic).
+const ptrArithCallVk = vulkan:
+  proc getOff(): uint32 {.device.} =
+    result = 1'u32
+
+  proc gatherCall(dst: ptr UncheckedArray[uint32], src: ptr UncheckedArray[uint32],
+                  i, j: int32) {.global.} =
+    dst[0] = (src +% getOff())[i + j]
+
 # ── (b) HIDN-A-001: tainted-struct re-assignment keeps the NEW value ─────
 
 type
@@ -129,7 +141,7 @@ const builtinRsqrtVk = vulkan:
   proc rsqrtKernel(dst: ptr UncheckedArray[float32], v: float32) {.global.} =
     dst[0] = rsqrt(v)     # the `{.builtin.}` rsqrt → GLSL inversesqrt
 
-# ── (f) SLOP-002: multi-var-arg calls — unwritten args are value params ──
+# ── (f) multi-var-arg calls — unwritten args are value params ──
 
 const add2Vk = vulkan:
   proc add2(a: var uint32, b: var uint32): uint32 {.device.} =
@@ -152,7 +164,7 @@ const bumpVk = vulkan:
     bump(x, lim)
     dst[0] = x
 
-# ── (g) SLOP-003: fixReturn stops at nested proc boundaries ──────────────
+# ── (g) fixReturn stops at nested proc boundaries ──
 
 const nestedProcVk = vulkan:
   proc outer(x: var int32) {.device.} =
@@ -167,7 +179,7 @@ const nestedProcVk = vulkan:
     outer(v)
     dst[0] = uint32(v)
 
-# ── (h) GOAL-001: lane-id rewrite is node-local (same-module scoping) ────
+# ── (h) lane-id rewrite is node-local (same-module scoping) ──
 
 const laneShareVk = vulkan:
   proc leafShuffle(acc: float32, lane: uint32): float32 {.device.} =
@@ -268,7 +280,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         "gatherMix", res, (src, 1'u32, 2'i32, 3'i32))
       check res[0] == 70'u32
 
-    test "HIDN-A-001: tainted-struct re-assignment uses the second value":
+    test "COMP-B-003: device-fn call offset folds with an int32 index (coerced)":
+      # The offset is `getOff()` (a uint32-returning device fn): the fold
+      # resolves its return type via the fn table and coerces to the int32
+      # index type — the emitted binop is same-typed and the call survives.
+      check "src[(int(getOff()) + (i + j))]" in ptrArithCallVk
+      var engine = bkVulkan.init()
+      engine.ingest(ptrArithCallVk)
+      var res: array[1, uint32]
+      let src = [10'u32, 20, 30, 40, 50, 60, 70]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> (
+        "gatherCall", res, (src, 2'i32, 3'i32))
+      check res[0] == 70'u32
+
+    test "HIDN-A-001: tainted-struct re-assignment uses the new value":
       # `v = View(data: b, scale: 3)` inside the conditional must update the
       # flattened value leaf: pick(v, dst) reads b[0] * 3. The old code
       # dropped the assign and left the declared scale leaf at 2 (stale).
@@ -318,12 +343,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.run << (grid: (1, 1), blk: (1, 1)) >> ("zeroKernel", res, ())
       check res[0] == 0'u32
 
-    test "SLOP-002: two unwritten var args lower to plain value params":
+    test "two unwritten var args lower to plain value params":
       # add2 reads both var params without writing them — GLSL's
       # one-return-value rule is not violated, so the call must lower to
       # `dst[0] = add2(x, y)` with `uint add2(uint a, uint b)`. The old
       # call-site guard rejected ANY multi-var-arg call with a factually
-      # wrong message (SLOP-002).
+      # wrong message.
       check "uint add2(uint a, uint b)" in add2Vk
       check "dst[0] = add2(x, y);" in add2Vk
       var engine = bkVulkan.init()
@@ -332,11 +357,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.run << (grid: (1, 1), blk: (1, 1)) >> ("add2Kernel", res, ())
       check res[0] == 3'u32
 
-    test "SLOP-002: written + unwritten var args mix (one return value)":
+    test "written + unwritten var args mix (one return value)":
       # bump writes only x — the fn-level guard permits the fn (one written
       # param → one return value), so the call must lower to
       # `x = bump(x, lim)` with `uint bump(uint x, uint limit)`. The old
-      # call-site guard rejected the call site anyway (SLOP-002).
+      # call-site guard rejected the call site anyway.
       check "uint bump(uint x, uint limit)" in bumpVk
       check "x = bump(x, lim);" in bumpVk
       var engine = bkVulkan.init()
@@ -346,7 +371,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       # 1 ≤ 5 → bump applies: x = 2
       check res[0] == 2'u32
 
-    test "SLOP-003: fixReturn stops at nested proc boundaries":
+    test "fixReturn stops at nested proc boundaries":
       # outer(x: var int32) converts to return-by-value; the return rewrite
       # must touch ONLY outer's own returns. The old full-tree recursion
       # descended into the nested `inner`'s gpuProc body and rewrote its
@@ -359,7 +384,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "return y;" in nestedProcVk
       check "return result;" in nestedProcVk
 
-    test "GOAL-001: lane-id rewrite is node-local — non-shuffle fn keeps gl_LocalInvocationIndex":
+    test "lane-id rewrite is node-local — non-shuffle fn keeps gl_LocalInvocationIndex":
       # mid (shuffle-reachable) and nonShuffle (not) both read
       # thread_index_in_threadgroup in the same vulkan: block. The catalog
       # ident node is sigTab-shared, so an in-place symbol swap on mid's
