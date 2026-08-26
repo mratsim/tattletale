@@ -28,8 +28,7 @@ import ./src/layout_indexing
 
 export int_tuples, layouts, layout_algebra, tensors, tile_algebra,
        tile_epilogues, kernel_gemm_epilogues,
-       gemm, matmul, rms_single_row, attn_fwd,
-       gemm_relu, linear, linear_relu
+       k_tile_gemm, k_tile_rmsnorm, k_tile_attn
 export kernel_copy_cpu, kernel_copy_gpu, kernel_fillwith_cpu,
        kernel_fillwith_gpu, layout_indexing_cpu, layout_indexing_gpu,
        layout_indexing
