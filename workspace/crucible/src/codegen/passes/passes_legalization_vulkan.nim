@@ -580,23 +580,22 @@ proc convertVarParams(ctx: var GpuContext) =
       let newRet = fn.pParams[retPos].typ
       fn.pRetType = newRet
       if not fn.pBody.isNil and fn.pBody.kind == gpuBlock:
-        # replace a trailing `return` (void) or append `return p`
+        # Every `return` in the body must carry the mutated value: the old
+        # code only converted the trailing return, leaving bare `return;` in
+        # early-exit branches — invalid GLSL in a non-void fn (BUG-A-002).
         var body = fn.pBody
-        var replaced = false
         proc fixReturn(n: var GpuAst) =
-          if replaced: return
           case n.kind
           of gpuReturn:
             n.rValue = retIdent.clone()
-            replaced = true
-          of gpuBlock:
-            if n.statements.len > 0:
-              fixReturn(n.statements[^1])
           else:
-            discard
+            for ch in n.mitems:
+              fixReturn(ch)
         fixReturn(body)
-        if not replaced:
-          body.statements.add GpuAst(kind: gpuReturn, rValue: retIdent.clone())
+        # GLSL requires every path of a non-void fn to return a value —
+        # append a trailing `return x` for the fall-through path (dead code
+        # when the body already ends with a return).
+        body.statements.add GpuAst(kind: gpuReturn, rValue: retIdent.clone())
     # rewrite call sites: `x = f(x, …)` — one walk per host, matching calls
     # by callee iSym (GpuAst `==` only supports idents; ref identity is
     # unavailable in the compile-time VM). Each call node computes its own
@@ -641,6 +640,17 @@ proc convertVarParams(ctx: var GpuContext) =
                 newCall.cArgs.add a
               let assign = GpuAst(kind: gpuAssign, aLeft: lvalue.clone(), aRight: newCall)
               n = assign
+            else:
+              # unwritten var param: the callee now takes a VALUE param —
+              # strip addr/deref so the arg passes the value (BUG-A-005: the
+              # old code left the addr-wrapped arg untouched, which codegen
+              # rejects with "Vulkan GLSL does not support addr")
+              var newArgs = n.cArgs
+              newArgs[pos] = lvalue.clone()
+              var newCall = GpuAst(kind: gpuCall, cIsExpr: true, cName: n.cName)
+              for a in newArgs:
+                newCall.cArgs.add a
+              n = newCall
         of gpuBlock:
           for i, st in n.statements.mpairs:
             rewriteCalls(st)

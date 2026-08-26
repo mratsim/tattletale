@@ -61,6 +61,32 @@ const reAssignVk = vulkan:
 
 # ── (c) BUG-A-003: array-var-param inlining (happy + return rejection) ───
 
+const earlyRetVk = vulkan:
+  proc bumpLimit(x: var int32, limit: int32) {.device.} =
+    if x > limit:
+      return
+    x = x + 1'i32
+
+  proc earlyRetKernel(dst: ptr UncheckedArray[uint32]) {.global.} =
+    var v: int32 = 5
+    bumpLimit(v, 4)         # 5 > 4 → early return, v stays 5
+    dst[0] = uint32(v)
+
+# ── (d) BUG-A-005: unwritten var param keeps an addr-wrapped arg ─────────
+
+type
+  Holder = object
+    val: uint32
+
+const unwrittenVk = vulkan:
+  proc readOnly(x: var uint32): uint32 {.device.} =
+    x + 1'u32
+
+  proc unwrittenKernel(dst: ptr UncheckedArray[uint32]) {.global.} =
+    var h: Holder
+    h.val = 41'u32
+    dst[0] = readOnly(h.val)
+
 const zeroFillVk = vulkan:
   proc zeroFill(d: var array[4, uint32]) {.device.} =
     for i in 0 ..< 4:
@@ -91,6 +117,31 @@ static:
         buf[0] = 9'u32
         zeroFillRet(buf)
         dst[0] = buf[0]
+  )
+
+  # COV-A-005: the passes' rejection guards fire loudly instead of emitting
+  # valid-but-wrong GLSL.
+  # (1) two written var params — GLSL fns return one value
+  doAssert not compiles(block:
+    const bad = vulkan:
+      proc twoWritten(a: var uint32, b: var uint32) {.device.} =
+        a = a + 1'u32
+        b = b + 1'u32
+      proc k(dst: ptr UncheckedArray[uint32]) {.global.} =
+        var x: uint32 = 1
+        var y: uint32 = 2
+        twoWritten(x, y)
+        dst[0] = x + y
+  )
+  # (2) written var param + non-void return — cannot lower
+  doAssert not compiles(block:
+    const bad = vulkan:
+      proc retAndMutate(x: var uint32): uint32 {.device.} =
+        x = x + 1'u32
+        return x
+      proc k(dst: ptr UncheckedArray[uint32]) {.global.} =
+        var x: uint32 = 1
+        dst[0] = retAndMutate(x)
   )
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
@@ -137,6 +188,29 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let b = [14'u32]
       engine.run << (grid: (1, 1), blk: (1, 1)) >> (
         "reAssignKernel", res, (a, b, 1'u32))
+      check res[0] == 42'u32
+
+    test "BUG-A-002: early `return` in a written-var fn carries the value":
+      # bumpLimit(x: var int32) is converted to return-by-value; the early
+      # `return` inside the if must become `return x;` (the old code left a
+      # bare `return;` — invalid GLSL in a non-void fn).
+      check "return x;" in earlyRetVk
+      var engine = bkVulkan.init()
+      engine.ingest(earlyRetVk)
+      var res: array[1, uint32]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> ("earlyRetKernel", res, ())
+      # 5 > 4 → the early return keeps v = 5
+      check res[0] == 5'u32
+
+    test "BUG-A-005: unwritten var param arg loses its addr wrap":
+      # readOnly(x: var uint32): uint32 reads x without writing it — the
+      # param converts to a value param and the call-site arg `h.val` must
+      # be unwrapped (addr → value). The old code left the addr-wrapped arg
+      # and codegen raised "Vulkan GLSL does not support addr".
+      var engine = bkVulkan.init()
+      engine.ingest(unwrittenVk)
+      var res: array[1, uint32]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> ("unwrittenKernel", res, ())
       check res[0] == 42'u32
 
     test "BUG-A-003: array-var-param fn inlines in statement position":
