@@ -117,10 +117,10 @@ proc exl3_gemm_fwd*(
 
   # x/Out carry the natural row strides. suh/svh are stride-0-row
   # column-broadcast views (the rmsnorm γ pattern)
-  let glX = gd(x, shape = (-1, -1, -1, -1), stride = (32 * K, 0, K, 1))
-  let glSuh = gd(suh, shape = (-1, -1, -1, -1), stride = (0, 0, 0, 1))
-  let glSvh = gd(svh, shape = (-1, -1, -1, -1), stride = (0, 0, 0, 1))
-  let glOut = gd(Out, shape = (-1, -1, -1, -1), stride = (32 * N, 0, N, 1))
+  let glX = x.gd(shape = (-1, -1, -1, -1), stride = (32 * K, 0, K, 1))
+  let glSuh = suh.gd(shape = (-1, -1, -1, -1), stride = (0, 0, 0, 1))
+  let glSvh = svh.gd(shape = (-1, -1, -1, -1), stride = (0, 0, 0, 1))
+  let glOut = Out.gd(shape = (-1, -1, -1, -1), stride = (32 * N, 0, N, 1))
 
   # the output accumulators, array-resident and zeroed before the K loop
   # (declared on the fp16 atom so the mma's three operands share one
@@ -139,27 +139,27 @@ proc exl3_gemm_fwd*(
   #    tile-level FWHT-128 (1/sqrt(128) norm + fp16 round inside the op)
   for blk in 0'i32 ..< K div 128:
     for kk in 0'i32 ..< 8:
-      loadTileRows(a_reg, glX, (0, 0, tgy, blk * 8 + kk), M)
-      loadTile(suhReg, glSuh, (0, 0, 0, blk * 8 + kk))
-      mulF16(a_reg, a_reg, suhReg)
+      a_reg.loadTileRows(glX, (0, 0, tgy, blk * 8 + kk), M)
+      suhReg.loadTile(glSuh, (0, 0, 0, blk * 8 + kk))
+      a_reg.mulF16(a_reg, suhReg)
       aStore[kk] = a_reg
-    hadamard128(aStore)
+    aStore.hadamard128()
 
     # ── the GEMM over the block's 8 k-blocks ──
     for kk in 0'i32 ..< 8:
       a_reg = aStore[kk]
       for nt in 0'i32 ..< 4:
-        dequantTrellis(b_reg, trellis, blk * 8 + kk, tilesN, tgx, nt, bits, cb)
-        mma_AB(d[nt], a_reg, b_reg)
+        b_reg.dequantTrellis(trellis, blk * 8 + kk, tilesN, tgx, nt, bits, cb)
+        d[nt].mma_AB(a_reg, b_reg)
 
   # ── output pass: quantize the accumulator to fp16 first, tile-level
   #    FWHT-128, svh post-scale, predicated store ──
   var y: array[4, rt_l(float16, 32, 32)]
   for nt in 0'i32 ..< 4:
-    quantizeF16(y[nt], d[nt])
-  hadamard128(y)
+    y[nt].quantizeF16(d[nt])
+  y.hadamard128()
   var svhReg: rt_l(float16, 32, 32)
   for nt in 0'i32 ..< 4:
-    loadTile(svhReg, glSvh, (0, 0, 0, tgx * 4 + nt))
-    mulF16(y[nt], y[nt], svhReg)
-    storeTileRows(glOut, y[nt], (0, 0, tgy, tgx * 4 + nt), M)
+    svhReg.loadTile(glSvh, (0, 0, 0, tgx * 4 + nt))
+    y[nt].mulF16(y[nt], svhReg)
+    glOut.storeTileRows(y[nt], (0, 0, tgy, tgx * 4 + nt), M)
