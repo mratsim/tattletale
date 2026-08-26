@@ -221,13 +221,12 @@ static:
   # valid-but-wrong GLSL.
   # (1) two written var params — GLSL fns return one value. `not compiles`
   # asserts only "the module must not compile": with the fn-level guard
-  # present the DEFINITION is rejected during conversion; without it the
-  # call-site guard (written var args > 1) rejects the CALL. Both guards
+  # present the DEFINITION is rejected during conversion. Without it,
+  # the call-site guard (written var args > 1) rejects the CALL. Both guards
   # enforce the same rule, so deleting either leaves this test passing —
-  # guard-level attribution is not asserted in-tree. The
-  # positive control below fixes the boundary: one written + one
-  # unwritten var arg MUST compile (the call-site guard counts only
-  # written args).
+  # guard-level attribution is not asserted in-tree. The positive control
+  # below fixes the boundary: one written + one unwritten var arg MUST
+  # compile (the call-site guard counts only written args).
   doAssert not compiles(block:
     const bad = vulkan:
       proc twoWritten(a: var uint32, b: var uint32) {.device.} =

@@ -20,14 +20,13 @@
 ## deliberately not multiples of 32/16. B's K-padding rows (k in K..Kp-1)
 ## are ZERO — the kernel's K loop reads them, and A's K-padding columns
 ## stay 0xDEAD garbage, so exactness relies on garbage × 0 = 0 (this
-## pairing makes the B zero-fill essential in the value runs). The M/N
-## padding is garbage and must never leak into the real M×N region.
+## pairing makes the B zero-fill essential in the value runs).
+## The M/N padding is garbage and must never leak into the real M×N region.
 ##
 ## Two kernels: the plain strided-C epilogue (EpiAXPBYStrided, α=2/β=4)
 ## and a user-defined scale epilogue (EpiScale, a plain value struct).
-## Each has a Metal twin run for cross-backend parity (the kernels are
-## backend-agnostic: all adaptation lives in the Vulkan legalization
-## passes).
+## Each has a Metal twin run for cross-backend parity: the kernels are backend-agnostic.
+## All adaptation lives in the Vulkan legalization passes.
 
 import std/[strformat, strutils]
 import workspace/crucible
