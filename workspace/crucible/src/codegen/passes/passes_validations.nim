@@ -19,6 +19,8 @@ proc warnUnassigned(n: GpuAst; fnName: string): void =
         assigned = true
       elif ch.kind == gpuIf:
         ch.ifThen.warnUnassigned(fnName)
+        for el in ch.ifElifs:
+          el.body.warnUnassigned(fnName)
         if ch.ifElse.kind != gpuDiscard:
           ch.ifElse.warnUnassigned(fnName)
       elif ch.kind in {gpuFor, gpuWhile}:

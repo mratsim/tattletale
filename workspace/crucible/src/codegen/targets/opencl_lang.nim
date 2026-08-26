@@ -366,6 +366,11 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "if (" & ctx.genOpenCL(ast.ifCond) & ") {\n"
     result &= ctx.genOpenCL(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
+    for el in ast.ifElifs:
+      ctx.withoutSemicolon:
+        result &= " else if (" & ctx.genOpenCL(el.cond) & ") {\n"
+      result &= ctx.genOpenCL(el.body, indent + 1) & '\n'
+      result &= indentStr & '}'
     if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genOpenCL(ast.ifElse, indent + 1) & '\n'

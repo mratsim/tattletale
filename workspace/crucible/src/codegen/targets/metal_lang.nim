@@ -408,6 +408,11 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       result = indentStr & "if (" & ctx.genMetalImpl(ast.ifCond, 0) & ") {\n"
     result &= ctx.genMetalImpl(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
+    for el in ast.ifElifs:
+      ctx.withoutSemicolon:
+        result &= " else if (" & ctx.genMetalImpl(el.cond, 0) & ") {\n"
+      result &= ctx.genMetalImpl(el.body, indent + 1) & '\n'
+      result &= indentStr & '}'
     if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genMetalImpl(ast.ifElse, indent + 1) & '\n'

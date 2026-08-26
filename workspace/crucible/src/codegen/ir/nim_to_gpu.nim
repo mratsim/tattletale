@@ -503,9 +503,18 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     let branch = node[0]  # First branch
     result.ifCond = ctx.toGpuAst(reg, branch[0])
     result.ifThen = ctx.toGpuAst(reg, branch[1])
-    if node.len > 1 and node[^1].kind == nnkElse:
-      result.ifElse = ctx.toGpuAst(reg, node[^1][0])
-    else:
+    # Flat elif branches: every remaining nnkElifBranch keeps its condition
+    # and body in source order (intermediate branches used to be dropped).
+    for i in 1 ..< node.len:
+      case node[i].kind
+      of nnkElifBranch:
+        result.ifElifs.add (cond: ctx.toGpuAst(reg, node[i][0]),
+                            body: ctx.toGpuAst(reg, node[i][1]))
+      of nnkElse:
+        result.ifElse = ctx.toGpuAst(reg, node[i][0])
+      else:
+        error "Unexpected child in nnkIfStmt: " & $node[i].kind
+    if result.ifElse.isNil:
       result.ifElse = GpuAst(kind: gpuDiscard)
 
   of nnkIfExpr:
