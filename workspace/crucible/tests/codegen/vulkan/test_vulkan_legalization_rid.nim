@@ -113,8 +113,8 @@ const zeroFillVk = vulkan:
     zeroFill(buf)
     dst[0] = buf[0] + buf[1] + buf[2] + buf[3]
 
-# ── (e) SEC-B-001: a user device fn shadowing a builtin name keeps its ──
-#        own body; only `{.builtin.}` procs remap to the backend spelling
+# ── (e) SEC-B-001: a user device fn shadowing a builtin keeps its body ──
+#        only `{.builtin.}` procs remap to the backend spelling
 
 const userRsqrtVk = vulkan:
   proc rsqrt(x: float32): float32 {.device.} =
@@ -224,7 +224,7 @@ static:
   # present the DEFINITION is rejected during conversion; without it the
   # call-site guard (written var args > 1) rejects the CALL. Both guards
   # enforce the same rule, so deleting either leaves this test passing —
-  # guard-level attribution lives in the fix evidence, not in-tree. The
+  # guard-level attribution is not asserted in-tree. The
   # positive control below fixes the boundary: one written + one
   # unwritten var arg MUST compile (the call-site guard counts only
   # written args).

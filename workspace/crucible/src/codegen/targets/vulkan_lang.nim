@@ -570,8 +570,7 @@ proc ssboInnerType(p: GpuParam): string =
 
 proc normalizeKernelSsboParams(ctx: var GpuContext,
                                canonicalSsbo: var seq[tuple[name: string, inner: string]]) =
-  ## Positional SSBO canonicalization for kernel (`{.global.}`) ptr params, the live
-  ## codegen() replacement for the dead lowerSsboParams pass:
+  ## Positional SSBO canonicalization for kernel (`{.global.}`) ptr params:
   ## - the first kernel's ptr params seed the canonical (name, inner-type) list
   ## - a later kernel's ptr param at the same position must have the SAME inner type
   ##   (loud raiseAssert otherwise) and is renamed to the canonical name

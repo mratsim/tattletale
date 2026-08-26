@@ -477,7 +477,7 @@ proc convertVarParams(ctx: var GpuContext) =
           hosts.add host
           break
     if hosts.len == 0:
-      # dead — removed by (b) if tainted-returning; otherwise leave
+      # dead — removed by pass 2 if tainted-returning; otherwise leave
       continue
     for host in hosts:
       # inline every call to this fn in one walk, matching by callee iSym

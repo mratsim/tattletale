@@ -32,14 +32,14 @@ proc gemm_with_epilogue*[TIn, TOut; Epi](
   ## D = f(A·B), A (N, K), B (K, M), D (N, M), explicit row/col strides.
   ##
   ## K contract (ragged-K): K is the ALLOCATED extent and must be a
-  ## multiple of the tile K (16) — the loop below iterates `K div 16` full
-  ## 16-slice blocks, and the guard fails loudly when K is not a multiple
-  ## (the kernel returns before writing D, so a host-side value check sees
-  ## the untouched output). For a ragged logical K, pass the padded extent
-  ## Kp (multiple of 16) and ZERO-FILL the K..Kp-1 extent: the kernel
-  ## reads it inside the K loop, so garbage there leaks finite wrong
-  ## values into the accumulator (0xDEAD fp16 is a normal finite number,
-  ## not NaN).
+  ## multiple of the tile K (16). The loop below iterates `K div 16` times,
+  ## one full 16-slice block per iteration, and the guard fails loudly when
+  ## K is not a multiple: the kernel returns before writing D, so a
+  ## host-side value check sees the untouched output. For a ragged logical
+  ## K, pass the padded extent Kp (multiple of 16) and ZERO-FILL the
+  ## K..Kp-1 extent: the kernel reads it inside the K loop, so garbage
+  ## there leaks finite wrong values into the accumulator (0xDEAD fp16 is
+  ## a normal finite number, not NaN).
   const tileK = 16
   if K mod tileK != 0:
     return
