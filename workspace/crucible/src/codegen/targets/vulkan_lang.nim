@@ -352,6 +352,11 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "if (" & ctx.genVulkan(ast.ifCond) & ") {\n"
     result &= ctx.genVulkan(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
+    for el in ast.ifElifs:
+      ctx.withoutSemicolon:
+        result &= " else if (" & ctx.genVulkan(el.cond) & ") {\n"
+      result &= ctx.genVulkan(el.body, indent + 1) & '\n'
+      result &= indentStr & '}'
     if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genVulkan(ast.ifElse, indent + 1) & '\n'

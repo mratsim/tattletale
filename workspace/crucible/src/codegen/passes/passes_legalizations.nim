@@ -87,6 +87,8 @@ proc liftConstexprFrom(n: var GpuAst; lifts: var seq[GpuAst]) =
     liftConstexprFrom(n.pVal, lifts)
   of gpuIf:
     liftConstexprFrom(n.ifCond, lifts)
+    for el in n.ifElifs.mitems:
+      liftConstexprFrom(el.cond, lifts)
   of gpuFor:
     liftConstexprFrom(n.fStart, lifts)
     liftConstexprFrom(n.fEnd, lifts)
@@ -145,6 +147,8 @@ proc liftConstexpr(pbody: var GpuAst) =
         liftConstexpr(pbody.statements[i])
   of gpuIf:
     liftConstexpr(pbody.ifThen)
+    for el in pbody.ifElifs.mitems:
+      liftConstexpr(el.body)
     if pbody.ifElse.kind != gpuDiscard:
       liftConstexpr(pbody.ifElse)
   of gpuFor:
@@ -369,6 +373,8 @@ proc blitExprSlot(ctx: var GpuContext; slot: var GpuAst; blitType: GpuType; fnRe
     result = ctx.blitExprSlot(slot.cExpr, GpuType(kind: gtVoid), fnRetType)
   of gpuIf:
     result.add ctx.blitExprSlot(slot.ifCond, GpuType(kind: gtVoid), fnRetType)
+    for el in slot.ifElifs.mitems:
+      result.add ctx.blitExprSlot(el.cond, GpuType(kind: gtVoid), fnRetType)
   of gpuTernary:
     # Ternary branches can carry block expressions (lowerIfExpr lowers if-exprs
     # whose branches are blocks). Blit every branch so no block survives to codegen,
@@ -466,6 +472,8 @@ proc blitFnBody(ctx: var GpuContext; body: var GpuAst; fnRetType: GpuType) =
             stmt = stmt.statements[0]
       of gpuIf:
         preamble.add ctx.blitExprSlot(stmt.ifCond, GpuType(kind: gtVoid), fnRetType)
+        for el in stmt.ifElifs.mitems:
+          preamble.add ctx.blitExprSlot(el.cond, GpuType(kind: gtVoid), fnRetType)
       of gpuFor:
         preamble.add ctx.blitExprSlot(stmt.fStart, GpuType(kind: gtVoid), fnRetType)
         preamble.add ctx.blitExprSlot(stmt.fEnd, GpuType(kind: gtVoid), fnRetType)
@@ -498,6 +506,8 @@ proc blitFnBody(ctx: var GpuContext; body: var GpuAst; fnRetType: GpuType) =
     ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
   of gpuIf:
     blitFnBody(ctx, body.ifThen, fnRetType)
+    for el in body.ifElifs.mitems:
+      blitFnBody(ctx, el.body, fnRetType)
     if body.ifElse.kind != gpuDiscard:
       blitFnBody(ctx, body.ifElse, fnRetType)
   of gpuFor:
@@ -690,6 +700,9 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
           of gpuIf:
             if n.ifThen.kind != gpuBlock:
               n.ifThen = GpuAst(kind: gpuBlock, statements: @[n.ifThen])
+            for el in n.ifElifs.mitems:
+              if el.body.kind != gpuBlock:
+                el.body = GpuAst(kind: gpuBlock, statements: @[el.body])
             if n.ifElse.kind != gpuDiscard and n.ifElse.kind != gpuBlock:
               n.ifElse = GpuAst(kind: gpuBlock, statements: @[n.ifElse])
           of gpuFor:
