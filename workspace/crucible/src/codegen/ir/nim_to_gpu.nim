@@ -504,7 +504,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     result.ifCond = ctx.toGpuAst(reg, branch[0])
     result.ifThen = ctx.toGpuAst(reg, branch[1])
     # Flat elif branches: every remaining nnkElifBranch keeps its condition
-    # and body in source order (intermediate branches used to be dropped).
+    # and body in source order.
     for i in 1 ..< node.len:
       case node[i].kind
       of nnkElifBranch:

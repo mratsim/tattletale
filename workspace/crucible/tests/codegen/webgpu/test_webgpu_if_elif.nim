@@ -34,8 +34,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - if/elif/else statement lowering":
 
     test "elif chain reaches the device: all four branches distinct":
-      # Emitted shape: every branch condition present, in source order, as an
-      # `else if` chain (the pre-fix codegen dropped the elif branches).
+      # Emitted shape: every branch condition present, in source order, as an `else if` chain.
       doAssert "if (((&x)[0] == 0)) {" in elifWgsl
       doAssert "else if (((&x)[0] == 1)) {" in elifWgsl
       doAssert "else if (((&x)[0] == 2)) {" in elifWgsl

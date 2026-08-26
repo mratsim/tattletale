@@ -34,8 +34,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "OpenCL - if/elif/else statement lowering":
 
     test "elif chain reaches the device: all four branches distinct":
-      # Emitted shape: every branch condition present, in source order, as an
-      # `else if` chain (the pre-fix codegen dropped the elif branches).
+      # Emitted shape: every branch condition present, in source order, as an `else if` chain.
       doAssert "else if ((x[0] == 1)) {" in elifCl
       doAssert "else if ((x[0] == 2)) {" in elifCl
       doAssert elifCl.find("else if ((x[0] == 1))") < elifCl.find("else if ((x[0] == 2))")

@@ -34,8 +34,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Vulkan - if/elif/else statement lowering":
 
     test "elif chain reaches the device: all four branches distinct":
-      # Emitted shape: every branch condition present, in source order, as an
-      # `else if` chain (the pre-fix codegen dropped the elif branches).
+      # Emitted shape: every branch condition present, in source order, as an `else if` chain.
       doAssert "else if ((x[0] == 1)) {" in elifGlsl
       doAssert "else if ((x[0] == 2)) {" in elifGlsl
       doAssert elifGlsl.find("else if ((x[0] == 1))") < elifGlsl.find("else if ((x[0] == 2))")

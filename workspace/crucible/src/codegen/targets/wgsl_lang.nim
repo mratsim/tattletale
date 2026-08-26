@@ -395,7 +395,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuIf:
     template genCond(c: GpuAst): untyped =
-      ## Compile time `bool` is turned into int literals 0 and 1 in typed AST
+      # Compile time `bool` is turned into int literals 0 and 1 in typed AST
       (if c.kind == gpuLit and c.lType.kind == gtInt32 and c.lValue == "1": "true"
        elif c.kind == gpuLit and c.lType.kind == gtInt32 and c.lValue == "0": "false"
        else: ctx.genWebGpu(c))
