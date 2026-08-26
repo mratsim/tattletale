@@ -87,9 +87,12 @@ wrapLibtorch:
     ## ``padding`` and ``dilation`` are single-element sequences in torch's
     ## IntArrayRef form. Empty varargs default to stride 1 / padding 0 /
     ## dilation 1 (the empty-varargs path would read oa[0] on a nil view).
-    let strideV = if stride.len == 0: asTorchView([1]) else: asTorchView(stride)
-    let paddingV = if padding.len == 0: asTorchView([0]) else: asTorchView(padding)
-    let dilationV = if dilation.len == 0: asTorchView([1]) else: asTorchView(dilation)
+    let defaultStride = @[1]
+    let defaultPadding = @[0]
+    let defaultDilation = @[1]
+    let strideV = if stride.len == 0: asTorchView(defaultStride) else: asTorchView(stride)
+    let paddingV = if padding.len == 0: asTorchView(defaultPadding) else: asTorchView(padding)
+    let dilationV = if dilation.len == 0: asTorchView(defaultDilation) else: asTorchView(dilation)
     convertLibTorchExceptions:
       wrapTorchTensor:
         if bias.isSome():

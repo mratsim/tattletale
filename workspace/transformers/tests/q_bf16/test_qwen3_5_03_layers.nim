@@ -192,6 +192,41 @@ proc main() =
       true
 
   # ──────────────────────────────────────────────────────────────────────────
+  # Multi-chunk GDN prefill T=70: sequential-vs-chunked divergence band
+  # ──────────────────────────────────────────────────────────────────────────
+  runCppTest "GDN multi-chunk prefill T=70 divergence band (sequential vs chunked)":
+    proc(): bool =
+      var (shardMem, shardSt) = openModelShard()
+      defer: close(shardMem)
+      let cfgJson = (ModelDir / "config.json").parseFile()
+      let gdn = loadGdn(shardSt, cfgJson, 0)
+
+      var (memFile, st) = openFixture(GdnFixtureDir, "gdn-Qwen3.5-0.8B-02.safetensor")
+      defer: close(memFile)
+
+      let x = st.getTensorOwned("input")
+      let outputSeq = st.getTensorOwned("output_seq")
+      let outputChunked = st.getTensorOwned("output_chunked")
+
+      # The fixture's own band: the chunked and sequential rules diverge by
+      # more than zero and stay under 1e-3 (f32 core ~1.5e-5, a few bf16
+      # ULPs at the block output). The band is a property of the two rules,
+      # locked here so a future change to either side cannot drift silently.
+      let bandDiff = (outputSeq.to(kFloat32) - outputChunked.to(kFloat32)).abs().max().item(float64)
+      doAssert bandDiff > 0.0, "sequential and chunked outputs are identical, band not exercised"
+      doAssert bandDiff < 1e-3, "sequential-vs-chunked divergence exceeded the documented band"
+
+      # The Nim layer is sequential: 0.00 against the sequential replay, and
+      # inside the 5e-3 block bar against the vendored chunked forward.
+      var ctx = InferenceContext.init(24, 1, 2, 512, 256)
+      let output = gdn(ctx, x)
+      assertAllClose(output, outputSeq,
+        rtol = 0.0, abstol = 0.0, msg = "multi-chunk sequential output mismatch")
+      assertAllClose(output, outputChunked,
+        rtol = 5e-3, abstol = 5e-3, msg = "multi-chunk chunked output mismatch")
+      true
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Full decoder layer 0 (GDN), prefill seq 5
   # ──────────────────────────────────────────────────────────────────────────
   runCppTest "Full decoder layer 0 (GDN) vs fixture":

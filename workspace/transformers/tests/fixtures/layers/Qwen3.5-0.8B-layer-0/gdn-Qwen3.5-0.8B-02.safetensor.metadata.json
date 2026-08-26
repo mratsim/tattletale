@@ -1,0 +1,11 @@
+{
+  "case": "multichunk_prefill_seq70",
+  "chunk_size": 64,
+  "head_k_dim": 128,
+  "head_v_dim": 128,
+  "layer": "model.language_model.layers.0.linear_attn",
+  "model": "Qwen3.5-0.8B",
+  "note": "output_seq is the sequential replay. output_chunked is the chunked forward. Max diff is inside (0, 1e-3)",
+  "num_heads": 16,
+  "seq_len": 70
+}

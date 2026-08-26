@@ -1,0 +1,45 @@
+{
+  "prompt": "What is the capital of France?",
+  "prompt_ids": [
+    3710,
+    369,
+    279,
+    6511,
+    314,
+    9338,
+    30
+  ],
+  "full_ids": [
+    3710,
+    369,
+    279,
+    6511,
+    314,
+    9338,
+    30,
+    271,
+    760,
+    6511,
+    314,
+    9338,
+    369,
+    2972,
+    57590
+  ],
+  "generated_ids": [
+    271,
+    760,
+    6511,
+    314,
+    9338,
+    369,
+    2972,
+    57590
+  ],
+  "full_text": "What is the capital of France?\n\nThe capital of France is **Paris",
+  "generated_text": "\n\nThe capital of France is **Paris",
+  "num_prompt_tokens": 7,
+  "num_generated_tokens": 8,
+  "eos_token_id": 248044,
+  "note": "decode entry is the prompt tokens (no bos token exists). eos is the config eos_token_id 248044"
+}

@@ -1,0 +1,39 @@
+{
+  "prompt": "The résumé is ready",
+  "prompt_ids": [
+    760,
+    238976,
+    369,
+    5354
+  ],
+  "full_ids": [
+    760,
+    238976,
+    369,
+    5354,
+    310,
+    381,
+    3106,
+    310,
+    279,
+    22413,
+    6436,
+    13
+  ],
+  "generated_ids": [
+    310,
+    381,
+    3106,
+    310,
+    279,
+    22413,
+    6436,
+    13
+  ],
+  "full_text": "The résumé is ready to be sent to the hiring manager.",
+  "generated_text": " to be sent to the hiring manager.",
+  "num_prompt_tokens": 4,
+  "num_generated_tokens": 8,
+  "eos_token_id": 248044,
+  "note": "decode entry is the prompt tokens (no bos token exists). eos is the config eos_token_id 248044"
+}

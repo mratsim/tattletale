@@ -38,6 +38,13 @@ What is generated:
       the vendored chunked chain (layer_input, layer_output) and the
       sequential-replay chain (layer_input_seq, layer_output_seq).
 
+  tests/fixtures/layers/Qwen3.5-0.8B-layer-0/
+    gdn-Qwen3.5-0.8B-02.safetensor
+      Multi-chunk prefill (T=70, two FLA chunks): the vendored chunked block
+      output, the sequential-replay output and the f32 core/state values.
+      The generator asserts the sequential-vs-chunked max diff lies in
+      (0, 1e-3), locking the documented ~1.5e-5 divergence band.
+
 Determinism: torch.manual_seed per fixture section, CPU only, and every
 replay is asserted bit-identical (torch.equal) to the module's own forward
 before anything is saved.
@@ -101,11 +108,13 @@ SEED_STATE = 62
 SEED_LAYER0 = 63
 SEED_LAYER3 = 64
 SEED_CHAIN = 65
+SEED_MULTICHUNK = 66
 
 HIDDEN = 1024
 PREFILL_SEQ = 5
 CHAIN_SEQ = 4
 PREFILL_STATE_TOKENS = 3
+MULTICHUNK_SEQ = 70
 
 
 def load_text_config() -> Qwen3_5TextConfig:
@@ -162,9 +171,9 @@ def build_gdn_layer0(config: Qwen3_5TextConfig) -> Qwen3_5GatedDeltaNet:
     block.in_proj_a.weight.data = w["in_proj_a.weight"]
     block.in_proj_b.weight.data = w["in_proj_b.weight"]
     block.conv1d.weight.data = w["conv1d.weight"]
-    block.A_log.data = w["A_log"]
+    block.A_log.data = w["A_log"].to(torch.bfloat16)
     block.dt_bias.data = w["dt_bias"]
-    block.norm.weight.data = w["norm.weight"]
+    block.norm.weight.data = w["norm.weight"].to(torch.bfloat16)
     block.out_proj.weight.data = w["out_proj.weight"]
     return block
 
@@ -185,9 +194,9 @@ def build_decoder_layer(config: Qwen3_5TextConfig, layer_idx: int) -> Qwen3_5Dec
         layer.linear_attn.in_proj_a.weight.data = w["linear_attn.in_proj_a.weight"]
         layer.linear_attn.in_proj_b.weight.data = w["linear_attn.in_proj_b.weight"]
         layer.linear_attn.conv1d.weight.data = w["linear_attn.conv1d.weight"]
-        layer.linear_attn.A_log.data = w["linear_attn.A_log"]
+        layer.linear_attn.A_log.data = w["linear_attn.A_log"].to(torch.bfloat16)
         layer.linear_attn.dt_bias.data = w["linear_attn.dt_bias"]
-        layer.linear_attn.norm.weight.data = w["linear_attn.norm.weight"]
+        layer.linear_attn.norm.weight.data = w["linear_attn.norm.weight"].to(torch.bfloat16)
         layer.linear_attn.out_proj.weight.data = w["linear_attn.out_proj.weight"]
     else:
         attn = layer.self_attn
@@ -413,6 +422,59 @@ def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> None:
         },
     )
     print(f"Generated gdn prefill fixtures")
+
+
+
+def generate_multichunk_fixture(block: Qwen3_5GatedDeltaNet) -> None:
+    """Multi-chunk GDN prefill T=70: lock the sequential-vs-chunked band.
+
+    Two FLA chunks (64 + 6) exercise the cross-chunk state handoff that a
+    single-chunk prefill never touches. The chunked replay is asserted
+    bit-identical to the module forward, and the sequential-vs-chunked max
+    diff is asserted inside (0, 1e-3): the documented multi-chunk divergence
+    (~1.5e-5 in the f32 core, a few bf16 ULPs at the block output). The band
+    is a property of the chunked and sequential rules, so the Nim test
+    asserts it from the fixture tensors directly.
+    """
+    torch.manual_seed(SEED_MULTICHUNK)
+    x = torch.randn(1, MULTICHUNK_SEQ, HIDDEN, dtype=torch.bfloat16)
+
+    module_output = block(x)  # vendored forward, chunked rule, two chunks
+    chunk_replay = gdn_forward_replay(block, x, use_recurrent=False)
+    assert torch.equal(module_output, chunk_replay["output"]), (
+        "chunked replay diverged from the module forward"
+    )
+    seq_replay = gdn_forward_replay(block, x, use_recurrent=True)
+
+    out_diff = (seq_replay["output"].float() - module_output.float()).abs().max().item()
+    assert 0.0 < out_diff < 1e-3, f"sequential-vs-chunked diff outside (0, 1e-3): {out_diff}"
+
+    save_fixture(
+        LAYER0_FIXTURE_DIR, "gdn", 2,
+        {
+            "model": MODEL_NAME,
+            "layer": "model.language_model.layers.0.linear_attn",
+            "case": "multichunk_prefill_seq70",
+            "seq_len": MULTICHUNK_SEQ,
+            "chunk_size": 64,
+            "head_k_dim": block.head_k_dim,
+            "head_v_dim": block.head_v_dim,
+            "num_heads": block.num_k_heads,
+            "note": "output_seq is the sequential replay. output_chunked is "
+                    "the chunked forward. Max diff is inside (0, 1e-3)",
+        },
+        {
+            "input": x,
+            "output_seq": seq_replay["output"],
+            "output_chunked": module_output,
+            "core_attn_out_seq": seq_replay["core_attn_out"],
+            "core_attn_out_chunked": chunk_replay["core_attn_out"],
+            "ssm_state_seq": seq_replay["ssm_state"],
+            "ssm_state_chunked": chunk_replay["ssm_state"],
+        },
+    )
+    print(f"Generated multi-chunk (T={MULTICHUNK_SEQ}) fixtures "
+          f"(sequential-vs-chunked max diff {out_diff:.2e})")
 
 
 def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
@@ -695,6 +757,7 @@ def main() -> None:
 
     generate_gdn_prefill_fixture(block)
     generate_state_fixture(block)
+    generate_multichunk_fixture(block)
     generate_layer0_fixture(layer0)
     generate_layer3_fixture(layer3, config)
     generate_chain_fixture(chain_layers, config)

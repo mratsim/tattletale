@@ -91,5 +91,76 @@ def main():
         print(f"{20 - passed} test(s) failed")
         return 1
 
+
+def qwen35_main():
+    """Qwen3.5-0.8B fuzz: Nim sequential GDN vs vendored HF patched to the
+    sequential (recurrent) rule. The HF chunked prefill diverges from the
+    sequential reference through 24 bf16 layers (~1e-2..1e-1 logits), so the
+    HF side is patched to the recurrent rule the Nim implementation mirrors
+    (the mission's sequential reference); the comparison then runs at the
+    mission's rtol/atol 1e-3 bar.
+    """
+    import transformers.models.qwen3_5.modeling_qwen3_5 as M
+    from transformers.models.qwen3_5.modeling_qwen3_5 import (
+        Qwen3_5ForConditionalGeneration,
+        torch_recurrent_gated_delta_rule,
+    )
+
+    MODEL_PATH = str(Path(__file__).parent / "hf_models" / "Qwen3.5-0.8B")
+
+    print("Loading Qwen3.5 HuggingFace model (bf16, CPU)...")
+    hf_model = Qwen3_5ForConditionalGeneration.from_pretrained(
+        MODEL_PATH, torch_dtype=torch.bfloat16)
+    hf_model.eval()
+    hf_model = hf_model.to("cpu")
+
+    # Patch every GDN layer to the recurrent (sequential) rule so the HF
+    # reference computes the same recurrence as the Nim implementation.
+    for layer in hf_model.model.language_model.layers:
+        if layer.layer_type == "linear_attention":
+            layer.linear_attn.chunk_gated_delta_rule = torch_recurrent_gated_delta_rule
+
+    print("Loading Nim model...")
+    import pytttransformers
+    nim_model = pytttransformers.init_model(MODEL_PATH)
+
+    print("Running 20 Qwen3.5 fuzzing cases...")
+    random.seed(42)
+    torch.manual_seed(42)
+
+    passed = 0
+    for i in range(20):
+        seq_len = random.randint(1, 20)
+        input_ids = torch.randint(100, 1000, (1, seq_len))
+
+        with torch.no_grad():
+            hf_output = hf_model(input_ids)
+            hf_logits = hf_output.logits
+
+        nim_logits = nim_model.forward(input_ids)
+
+        hf_f32 = hf_logits.float()
+        nim_f32 = nim_logits.float()
+
+        max_diff = (hf_f32 - nim_f32).abs().max().item()
+        allclose = torch.allclose(hf_f32, nim_f32, rtol=1e-3, atol=1e-3)
+
+        if allclose:
+            print(f"  ✅ Qwen3.5 case {i} passed (seq_len={seq_len}, max_diff={max_diff:.6f})")
+            passed += 1
+        else:
+            print(f"  ❌ Qwen3.5 case {i} FAILED (seq_len={seq_len}, max_diff={max_diff:.6f})")
+            diff = (hf_f32 - nim_f32).abs()
+            max_idx = diff.argmax()
+            print(f"     HF logits[..., {max_idx.item()}] = {hf_f32.flatten()[max_idx].item():.4f}")
+            print(f"     Nim logits[..., {max_idx.item()}] = {nim_f32.flatten()[max_idx].item():.4f}")
+
+    print(f"\nQwen3.5 Results: {passed}/20 passed")
+    return 0 if passed == 20 else 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    rc = main()
+    if rc != 0:
+        sys.exit(rc)
+    sys.exit(qwen35_main())

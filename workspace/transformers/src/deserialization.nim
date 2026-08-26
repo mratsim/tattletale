@@ -92,7 +92,7 @@ proc load*(_: type RmsNormGated, st: Safetensor, cfg: JsonNode, prefix: string, 
     raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
   let weight = loader(st, prefix, cfg, device)
   let textCfg = cfg{"text_config"}
-  RmsNormGated.init(weight, textCfg{"rms_norm_eps"}.getFloat(1e-6))
+  RmsNormGated.init(weight.to(kBFloat16), textCfg{"rms_norm_eps"}.getFloat(1e-6))
 
 # ─── Embedding ──────────────────────────────────────────────────────────
 

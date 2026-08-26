@@ -1,0 +1,43 @@
+{
+  "prompt": "Hello, how are you?",
+  "prompt_ids": [
+    9419,
+    11,
+    1204,
+    513,
+    488,
+    30
+  ],
+  "full_ids": [
+    9419,
+    11,
+    1204,
+    513,
+    488,
+    30,
+    271,
+    9419,
+    0,
+    353,
+    2688,
+    3604,
+    1575,
+    11
+  ],
+  "generated_ids": [
+    271,
+    9419,
+    0,
+    353,
+    2688,
+    3604,
+    1575,
+    11
+  ],
+  "full_text": "Hello, how are you?\n\nHello! I'm doing well,",
+  "generated_text": "\n\nHello! I'm doing well,",
+  "num_prompt_tokens": 6,
+  "num_generated_tokens": 8,
+  "eos_token_id": 248044,
+  "note": "decode entry is the prompt tokens (no bos token exists). eos is the config eos_token_id 248044"
+}

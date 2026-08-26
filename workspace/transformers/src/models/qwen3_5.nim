@@ -370,7 +370,7 @@ proc loadQwen3_5ModelRaw(modelPath: string, device = kCPU): Qwen3_5Model =
       inc tensorRequests
       let convWeight = weightsSt.getTensorOwned(lp & "linear_attn.conv1d.weight", device)
       inc tensorRequests
-      let aLog = weightsSt.getTensorOwned(lp & "linear_attn.A_log", device)
+      let aLog = weightsSt.getTensorOwned(lp & "linear_attn.A_log", device).to(kBFloat16)
       inc tensorRequests
       let dtBias = weightsSt.getTensorOwned(lp & "linear_attn.dt_bias", device)
       inc tensorRequests
