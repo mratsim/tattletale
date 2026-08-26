@@ -1,0 +1,7 @@
+{
+  "case": "decode_single_token_pos5",
+  "layer": "model.language_model.layers.3.self_attn",
+  "model": "Qwen3.5-0.8B",
+  "rotary_dim": 64,
+  "theta": 10000000
+}

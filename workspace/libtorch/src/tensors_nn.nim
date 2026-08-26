@@ -39,6 +39,11 @@ wrapLibtorch:
 
   proc silu_mut*(input: var Tensor)
 
+  func sigmoid*(input: Tensor): Tensor
+    ## Sigmoid activation function: ``1 / (1 + exp(-x))``
+
+  proc sigmoid_mut*(input: var Tensor)
+
   # Normalized activations
   # -------------------------------------------------------
 

@@ -3,6 +3,7 @@
 import
   ./attn,
   ./embedding,
+  ./gated_attn,
   ./linear,
   ./lmhead,
   ./mlp,
@@ -13,6 +14,7 @@ import
 export
   attn,
   embedding,
+  gated_attn,
   linear,
   lmhead,
   mlp,

@@ -55,6 +55,12 @@ proc main() =
       doAssert model.config.vocab_size == 248320
       doAssert model.config.dtype == "bfloat16"
 
+      # Loader footprint: only the text-stack names are requested (embed,
+      # final norm, tied lm_head). A regression to whole-shard load-then-filter
+      # would blow this count (the shard holds 488 tensors; the loader
+      # requests 3 names).
+      doAssert model.loadedTensorCount == 3
+
       let text = loadModel(ModelPath, kCPU).generate(
         "hi", temp = 1.0f, maxTokens = 3, maxContextLen = 512)
       doAssert text.len > 0

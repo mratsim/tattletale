@@ -192,6 +192,8 @@ type
     config*: Qwen3_5Config
     tokenizer*: BPETokenizer
     device*: DeviceKind
+    loadedTensorCount*: int  ## Name-based tensor requests made by the loader
+                             ## (foreign prefixes are never requested)
 
 proc forward*(self: Qwen3_5Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   ## Text forward pass: embed → final RMSNorm → tied lm_head.
@@ -247,12 +249,19 @@ proc loadQwen3_5ModelRaw(modelPath: string, device = kCPU): Qwen3_5Model =
   # Raw config JSON for deserialization (codecs inspect quantization_config)
   let cfgJson = (modelPath / "config.json").parseFile()
 
+  var tensorRequests = 0
+
   let embedWeight = Embedding.load(weightsSt, cfgJson, "model.language_model.embed_tokens", device)
+  inc tensorRequests
   let embedTokens = Embedding.init(embedWeight)
 
   let norm = RmsNorm.load(weightsSt, cfgJson, "model.language_model.norm", device)
+  inc tensorRequests
 
+  # The tied lm_head request materializes no tensor (no lm_head.weight in the
+  # shard) but is still a name-based request the footprint counts.
   let lmHead = LMHead.load(weightsSt, cfgJson, embedTokens, device)
+  inc tensorRequests
 
   let tokenizerPath = modelPath / "tokenizer.json"
   let tokenizer = loadHFTokenizer(tokenizerPath)
@@ -262,7 +271,8 @@ proc loadQwen3_5ModelRaw(modelPath: string, device = kCPU): Qwen3_5Model =
     lmHead: lmHead,
     config: config,
     tokenizer: tokenizer,
-    device: device
+    device: device,
+    loadedTensorCount: tensorRequests
   )
 
 proc loadQwen3_5Model*(modelPath: string, device = kCPU): Model =

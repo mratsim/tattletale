@@ -9,6 +9,7 @@ import std/unittest
 import std/tables
 import std/options
 import std/os
+import std/sequtils
 
 import pkg/packedjson
 
@@ -59,13 +60,13 @@ suite "Qwen3.5 Config":
     check cfg.attn_output_gate == true
     check cfg.full_attention_interval == 4
 
-    # Hybrid layer types: [linear_attention, linear_attention, linear_attention, full_attention] x6
+    # Hybrid layer types: [linear_attention x3, full_attention] x6
     check cfg.layer_types.len == 24
-    check cfg.layer_types[0] == "linear_attention"
-    check cfg.layer_types[2] == "linear_attention"
-    check cfg.layer_types[3] == "full_attention"
-    check cfg.layer_types[7] == "full_attention"
-    check cfg.layer_types[23] == "full_attention"
+    check cfg.layer_types.countIt(it == "linear_attention") == 18
+    check cfg.layer_types.countIt(it == "full_attention") == 6
+    for i in 0 ..< 24:
+      let expectFull = (i mod 4) == 3
+      check (cfg.layer_types[i] == "full_attention") == expectFull
 
     # Gated DeltaNet dims
     check cfg.linear_conv_kernel_dim == 4
@@ -85,6 +86,12 @@ suite "Qwen3.5 Config":
     check cfg.eos_token_id == 248044
 
     check cfg.numKvGroups == 4  # 8 / 2 = 4
+
+  test "Wrapper JSON: top-level model_type and vision_config presence":
+    let json = (CONFIGS_DIR / "config-Qwen3.5-0.8B.json").parseFile()
+    check json["model_type"].getStr() == "qwen3_5"
+    check json.hasKey("vision_config")
+    check json["text_config"]["model_type"].getStr() == "qwen3_5_text"
 
   test "Registry resolves Qwen3_5ForConditionalGeneration":
     const registry = static(ModelRegistry)

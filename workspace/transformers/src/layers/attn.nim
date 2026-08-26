@@ -19,14 +19,21 @@ import
 {.experimental: "callOperator".}
 
 type
-  GroupedQueryAttention = object
-    head_dim: int
-    num_qo_head: int
-    num_kv_head: int
-    num_kv_groups: int
-    qo_attn_dim: int
-    kv_attn_dim: int
-    softmax_scale: float64
+  GroupedQueryAttention* = object
+    ## Scaled dot-product attention over (batch, seq, heads, head_dim)
+    ## tensors with optional grouped-query head expansion.
+    ##
+    ## GQA is handled either by PyTorch's SDPA `enable_gqa` flag or by
+    ## pre-expanding K/V heads before a standard SDPA call. The pre-expanded
+    ## path (enable_gqa = false) matches the HF reference convention
+    ## (repeat_interleave) bit for bit; see FIXTURE_GENERATION.md section 6.
+    head_dim*: int
+    num_qo_head*: int
+    num_kv_head*: int
+    num_kv_groups*: int
+    qo_attn_dim*: int
+    kv_attn_dim*: int
+    softmax_scale*: float64
 
   RopeGQAttention* = ref object
     ## Rope + Grouped Query Attention.
@@ -66,7 +73,9 @@ type
 # positional role in the similarity computation.
 # =============================================================================
 
-func init(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
+func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
+  ## Configure GQA over `num_qo_head` query heads and `num_kv_head` KV heads,
+  ## each of width `head_dim`. The softmax scale is `head_dim^-0.5`.
   let num_kv_groups = num_qo_head div num_kv_head
   GroupedQueryAttention(
     head_dim: head_dim,
@@ -78,14 +87,15 @@ func init(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int
     softmax_scale: 1.0'f64 / sqrt(head_dim.float64)
   )
 
-func forward(
+func forward*(
       self: GroupedQueryAttention,
       q: Tensor,
       k: Tensor,
       v: Tensor,
       is_causal: bool = true,
       attn_mask = none(Tensor),
-      dropout_p = 0.0'f64): Tensor =
+      dropout_p = 0.0'f64,
+      enable_gqa: bool = true): Tensor =
   ## Scaled dot-product attention with GQA support.
   ##
   ## Args:
@@ -93,6 +103,8 @@ func forward(
   ##   k: Key tensor of shape (batch, seq, num_kv_head, head_dim)
   ##   v: Value tensor of shape (batch, seq, num_kv_head, head_dim)
   ##   is_causal: If true, apply causal mask
+  ##   enable_gqa: If false, K/V must already have num_qo_head heads
+  ##     (pre-expanded); SDPA runs without the GQA flag.
   ##
   ## Returns:
   ##   Attention output of shape (batch, seq, num_qo_head * head_dim)
@@ -115,7 +127,7 @@ func forward(
     dropout_p = dropout_p,
     is_causal = is_causal,
     scale = some(self.softmax_scale),
-    enable_gqa = self.num_kv_groups > 1
+    enable_gqa = enable_gqa and self.num_kv_groups > 1
   )
 
   let attn_perm = attn_out.permute([0, 2, 1, 3])
@@ -125,8 +137,9 @@ template `()`*(layer: GroupedQueryAttention,
             q, k, v: Tensor,
             is_causal: bool = true,
             attn_mask = none(Tensor),
-            dropout_p = 0.0'f64): untyped =
-  layer.forward(q, k, v, is_causal, attn_mask, dropout_p)
+            dropout_p = 0.0'f64,
+            enable_gqa: bool = true): untyped =
+  layer.forward(q, k, v, is_causal, attn_mask, dropout_p, enable_gqa)
 
 
 func init*(

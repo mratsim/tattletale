@@ -1,0 +1,9 @@
+{
+  "case": "prefill_seq8",
+  "head_dim": 256,
+  "layer": "model.language_model.layers.3.self_attn",
+  "model": "Qwen3.5-0.8B",
+  "num_kv_heads": 2,
+  "num_qo_heads": 8,
+  "rotary_dim": 64
+}
