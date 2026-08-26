@@ -19,11 +19,11 @@
 ##
 ## Dataflow:
 ##
-##     x ──► x² ──► row_sum ──► ·1/128 ──► +ε ──► rsqrt ──► x·rmf
-##     x·rmf ──► fp16 round ──► γ16 multiply ──► x16
-##     x16 ──► halves (x1, x2)
-##     x1 ──► Out[0, 64)   = x1·cos − x2·sin
-##     x2 ──► Out[64, 128) = x2·cos + x1·sin
+##     x --> x² --> row_sum --> ·1/128 --> +ε --> rsqrt --> x·rmf
+##     x·rmf --> fp16 round --> γ16 multiply --> x16
+##     x16 --> halves (x1, x2)
+##     x1 --> Out[0, 64)   = x1·cos - x2·sin
+##     x2 --> Out[64, 128) = x2·cos + x1·sin
 ##
 ## All norm state is fp32. The rotation runs in fp32 with explicit
 ## fused multiply-adds. The results quantize to fp16 at the store.
@@ -122,9 +122,11 @@ proc qk_norm_rope_fwd*(
     xColBase: int32,                     # the head-column offset (0 for q, H·D for k)
     eps: float32) {.device.} =
   ## Computes the module doc's contract for one 8×128 tile:
-  ## the `rms_norm` arithmetic, the fp16 two-rounding γ multiply
-  ## and the rotary half-tile rotation. The two fp16 8×64 stores
-  ## write to column origins 0 and 1. All norm state is fp32.
+  ##   - the `rms_norm` arithmetic (x², row_sum, rsqrt, mul_row)
+  ##   - the fp16 two-rounding γ multiply
+  ##   - the rotary half-tile rotation
+  ## The two fp16 8×64 stores write to column origins 0 and 1.
+  ## All norm state is fp32.
   ## The rotation state is fp32 with the final fp16 rounding at the store.
   ## `xColBase` must be a 1024-multiple (0 or H·D with D = 128 and H an 8-multiple).
   ## The flat path passes 0.

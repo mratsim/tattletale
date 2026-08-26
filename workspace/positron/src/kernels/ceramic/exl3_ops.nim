@@ -21,24 +21,24 @@
 ##   - lane `l` owns the 8×8 fragment cell
 ##     `cell = crd2idx(A.getLayoutA(), (l, 0))`, `row = cell mod 8`,
 ##     `col = cell div 8`
-##   - element (r, c) sits in `frags[n][m].frag[v]` at
+##   - element (r, c) maps to `frags[n][m].frag[v]` with
 ##     `r = row + n·8`, `c = col + m·8 + v`
 ##   - the atom's two per-lane values are the horizontal pair
 ##     (row, col) and (row, col+1)
 ##   - the span `col + v` = 0..7 is the trellis word-index range
 ##
 ## FWHT-128 (both forms): the 7-stage butterfly over each lane's 32
-## register slots of a tile row, in fp32, scaled by 1/sqrt(128)
-## (0.088388347648) and rounded to fp16 on the scatter.
+## register slots of a tile row. Runs in fp32. The result is scaled
+## by 1/sqrt(128) (0.088388347648), then rounded to fp16 on the scatter.
 ## The stages, lane exchanges and slot maps are documented on `butterflyCore` and the two `hadamard128` overloads.
 ##
 ## Dequant dataflow (`dequantTrellis`):
 ##
 ##     packed int16 words
-##       ─► funnel window (i0, i1, s0) on the word index
-##       ─► 16-bit window w
-##       ─► codebook decode (cb 0/1/2)
-##       ─► fp16 halves (lo, hi) ── fp16 add ──► 16×32 fp16 W tile
+##       --> funnel window (i0, i1, s0) on the word index
+##       --> 16-bit window w
+##       --> codebook decode (cb 0/1/2)
+##       --> fp16 halves (lo, hi) -- fp16 add --> 16×32 fp16 W tile
 ##
 ## The window extraction is a compile-time (i0, i1, s0) table over the runtime word index.
 ## The word index is the closed-form tensor-core-shuffle placement (the fragment-to-row-major permutation).
@@ -46,7 +46,8 @@
 ## The word-index formula and the decode arithmetic are documented on the op.
 ##
 ## Known gaps:
-## - cb2 uses a two-rounding numeric form (fp16(sum·k_inv) then fp16 add of k_bias, RNE constants 0x1EEF/0xC932),
+## - cb2 uses a two-rounding numeric form: fp16(sum·k_inv) → fp16 add
+##   of k_bias (RNE constants 0x1EEF/0xC932),
 ##   a few fp16 ulps from the single-rounding reference half fma (constants 0x1EEE/0xC931).
 ##   cb0/cb1 decode with the single-rounding fp16 add.
 ## - No fp32 path: the ops are fp16 in, fp16 out.

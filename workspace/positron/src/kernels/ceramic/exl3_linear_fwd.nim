@@ -26,7 +26,9 @@
 ##
 ## The weight matrix is not stored. Each 16×32 fp16 weight tile
 ## is reconstructed on the fly by `dequantTrellis` (exl3_ops):
-## the funnel shift, the procedural cb0 codebook and the tensor-core-shuffle word placement.
+##   - the funnel shift
+##   - the procedural cb0 codebook
+##   - the tensor-core-shuffle word placement
 ## Only the cb0 codebook is instantiated.
 ## D is the static FWHT block (128). `bits` is static, restricted to {3, 5, 8}.
 ##
@@ -34,12 +36,12 @@
 ##
 ## Dataflow per 128-column K-block:
 ##
-##     x ──► suh ⊙ ──► FWHT-128 ────┐
-##                                  ▼
-##     trellis ──► dequantTrellis ──► mma_AB ──► fp32 accum
-##                                                 │
-##                                                 ▼
-##     Out ◄── svh ⊙ ◄── FWHT-128 ◄── fp16 round ◄─┘
+##     x --> suh ⊙ --> FWHT-128 ----+
+##                                  v
+##     trellis --> dequantTrellis --> mma_AB --> fp32 accum
+##                                                 |
+##                                                 v
+##     Out <-- svh ⊙ <-- FWHT-128 <-- fp16 round <-+
 ##
 ## Known gaps:
 ## - K and N must be 128-multiples. Partial shapes are out of contract.
@@ -94,8 +96,8 @@ proc exl3_linear_fwd*(
   var suhReg: rt_l(float16, 32, 16)
   var b_reg: rt_r(float16, 16, 32)
 
-  # ── input pass: per 128-block, predicated load + suh pre-scale,
-  #    tile-level FWHT-128 (1/sqrt(128) norm + fp16 round inside the op)
+  # Input pass: per 128-block, predicated load + suh pre-scale,
+  # tile-level FWHT-128 (1/sqrt(128) norm + fp16 round inside the op)
   for blk in 0'i32 ..< K div 128:
     for kk in 0'i32 ..< 8:
       a_reg.loadTileRows(glX, (0, 0, tgy, blk * 8 + kk), M)
@@ -104,15 +106,15 @@ proc exl3_linear_fwd*(
       aStore[kk] = a_reg
     aStore.hadamard128()
 
-    # ── the GEMM over the block's 8 k-blocks ──
+    # The GEMM over the block's 8 k-blocks
     for kk in 0'i32 ..< 8:
       a_reg = aStore[kk]
       for nt in 0'i32 ..< 4:
         b_reg.dequantTrellis(trellis, blk * 8 + kk, tilesN, tgx, nt, bits)
         d[nt].mma_AB(a_reg, b_reg)
 
-  # ── output pass: quantize the accumulator to fp16 first, tile-level
-  #    FWHT-128, svh post-scale, predicated store ──
+  # Output pass: quantize the accumulator to fp16 first, tile-level
+  # FWHT-128, svh post-scale, predicated store
   var y: array[4, rt_l(float16, 32, 32)]
   for nt in 0'i32 ..< 4:
     y[nt].quantizeF16(d[nt])
