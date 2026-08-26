@@ -227,9 +227,12 @@ proc substIdents(n: GpuAst; subst: Table[string, GpuAst]): GpuAst =
     for ch in result.mitems:
       ch = substIdents(ch, subst)
 
-proc exprType(n: GpuAst): GpuType =
+proc exprType(n: GpuAst; fns: Table[string, GpuAst]): GpuType =
   ## Best-effort static type of an expression, for the ptr-index fold's
   ## offset coercion (COMP-B-003: GLSL forbids mixed-type arithmetic).
+  ## `fns` maps callee iSym → device fn so a gpuCall operand resolves to
+  ## the callee's return type; without it the coercion is silently skipped
+  ## and mixed-type GLSL surfaces only at glslang ingest.
   if n.isNil: return nil
   case n.kind
   of gpuIdent: result = n.symbol.typ
@@ -237,6 +240,13 @@ proc exprType(n: GpuAst): GpuType =
   of gpuBinOp: result = n.bType
   of gpuCast: result = n.cTo
   of gpuConv: result = n.convTo
+  of gpuCall:
+    if n.cName.symbol != nil and fns.hasKey(n.cName.symbol.iSym):
+      let callee = fns[n.cName.symbol.iSym]
+      if not callee.pRetType.isNil and
+         callee.pRetType.kind in {gtUint8, gtInt16, gtUint16, gtInt32,
+                                  gtUint32, gtInt64, gtUint64}:
+        result = callee.pRetType
   else: result = nil
 
 proc leafName(base: string; path: seq[string]): string =
@@ -590,7 +600,7 @@ proc convertVarParams(ctx: var GpuContext) =
             n.rValue = retIdent.clone()
           of gpuProc:
             # nested device fn — its returns belong to its own scope and the
-            # outer fn's retIdent is not in scope there (SLOP-003: the old
+            # outer fn's retIdent is not in scope there (the old
             # full-tree recursion rewrote them, emitting `return x;` inside
             # the nested fn where x is undeclared)
             discard
@@ -627,7 +637,7 @@ proc convertVarParams(ctx: var GpuContext) =
             # Only WRITTEN var args conflict with GLSL's one-return-value
             # rule; unwritten ones become plain value params (BUG-A-005).
             # The old guard counted ALL var args and rejected valid calls
-            # with a factually wrong message (SLOP-002).
+            # with a factually wrong message.
             var writtenArgPos: seq[int]
             for pos in varPos:
               if pos < n.cArgs.len and writtenISyms.len == 1 and
@@ -972,9 +982,9 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
           var offC = off
           if offC.kind == gpuCast and offC.cTo.kind == gtUint64:
             offC = offC.cExpr
-          let idxT = exprType(idx)
+          let idxT = exprType(idx, byISym)
           if not idxT.isNil:
-            let offT = exprType(offC)
+            let offT = exprType(offC, byISym)
             if not offT.isNil and offT.kind != idxT.kind and
                idxT.kind in {gtInt32, gtUint32}:
               # coerce the offset to the index's type (COMP-B-003: GLSL
@@ -1453,6 +1463,10 @@ proc bindDeviceFnPtrParams(ctx: var GpuContext) =
 
   # ── post: fold ptr-index bases introduced by the substitutions ─────────
   # (Index over `cast[ptr](uint64(base) + off*sizeof)` → base[off + idx])
+  # Fresh iSym → fn table (includes the clones added above) for exprType.
+  var foldFns = initTable[string, GpuAst]()
+  for fnIdent, fn in ctx.fnTab:
+    foldFns[fnIdent.symbol.iSym] = fn
   proc foldPtrIndexes(n: var GpuAst) =
     case n.kind
     of gpuIndex:
@@ -1483,9 +1497,9 @@ proc bindDeviceFnPtrParams(ctx: var GpuContext) =
             var offC = off
             if offC.kind == gpuCast and offC.cTo.kind == gtUint64:
               offC = offC.cExpr
-            let idxT = exprType(idx)
+            let idxT = exprType(idx, foldFns)
             if not idxT.isNil:
-              let offT = exprType(offC)
+              let offT = exprType(offC, foldFns)
               if not offT.isNil and offT.kind != idxT.kind and
                  idxT.kind in {gtInt32, gtUint32}:
                 # coerce the offset to the index's type (COMP-B-003)
@@ -1558,7 +1572,7 @@ proc subgroupGuard32(ctx: var GpuContext) =
   # shuffle-reachable bodies. Replace the node rather than mutating it: the
   # catalog ident node is sigTab-shared across the module, so an in-place
   # symbol swap would leak the subgroup lane into every non-shuffle fn that
-  # still references the shared node (GOAL-001/SLOP-001) — non-shuffle fns
+  # still references the shared node — non-shuffle fns
   # must keep gl_LocalInvocationIndex (gl_SubgroupInvocationID is only valid
   # where the subgroup extensions are enabled).
   proc rewriteLaneId(n: var GpuAst) =
