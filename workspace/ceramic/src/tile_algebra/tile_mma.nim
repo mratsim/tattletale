@@ -18,11 +18,10 @@ proc mma_AB*[TIn; R, C, K: static int; A: static MmaAtom](
     a: RtLeft[TIn, R, K, A],
     b: RtRight[TIn, K, C, A]) =
   ## `dst.mma_AB(a, b)`: dst += a·b over the K subtiles, accumulated in fp32.
-  # TODO: tensor cores
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const rK = K div A.getK()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for k in 0 ..< rK:
-        universalMma8x8x8(dst.frags[n][m].frag, a.frags[n][k].frag, b.frags[m][k].frag)
+        A.gemm_mma(dst.frags[n][m].frag, a.frags[n][k].frag, b.frags[m][k].frag)

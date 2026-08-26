@@ -570,7 +570,10 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result.add '}'
 
   of gpuInlineAsm:
-    raiseAssert "Inline assembly is not supported on the Metal target."
+    # Raw MSL statement: the gpuBlock loop appends the `;` terminator
+    # (CUDA/OpenCL/Vulkan wrap the body in `asm(...)`; MSL has no such
+    # wrapper — the simdgroup intrinsics are plain statements).
+    result = indentStr & genAsmStmt(ast).strip
 
   of gpuEmit:
     # Self-terminating raw text: the gpuBlock loop appends no `;`

@@ -193,6 +193,7 @@ declareAtoms:
     bLayout: Apple8x8_B_Layout
     cLayout: Apple8x8_AC_Layout
     instr: "simdgroup_multiply_accumulate"
+    elem: "float"
   atom APPLE_8x8x8_F16:
     m: 8
     n: 8
@@ -203,6 +204,7 @@ declareAtoms:
     bLayout: Apple8x8_B_Layout
     cLayout: Apple8x8_AC_Layout
     instr: "simdgroup_multiply_accumulate"
+    elem: "half"
   atom APPLE_8x8x8_BF16:
     m: 8
     n: 8
@@ -213,6 +215,7 @@ declareAtoms:
     bLayout: Apple8x8_B_Layout
     cLayout: Apple8x8_AC_Layout
     instr: "simdgroup_multiply_accumulate"
+    elem: "bfloat"
 
   # NVIDIA tensor-core atoms: the mma.sync extended-asm path. The fp8
   # atom shares the m16n8k32 int8 layouts.
