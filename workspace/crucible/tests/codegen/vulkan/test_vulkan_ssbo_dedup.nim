@@ -7,54 +7,61 @@
 ##
 ## Vulkan: SSBO dedup by position (not by param name).
 ##
-## When two kernels in the same module have pointer params with different
-## names at the same position, the Nth parameter should always get
-## binding 0 = output, then the pointer args in order (output first, per
-## CONVENTIONS.md).
-## The SSBO variable name should be consistent so both kernels can
-## reference the same buffer.
+## SSBO bindings are assigned by param POSITION, not param name, so kernels
+## with differently-named ptr params at the same position share the same
+## buffer. kernel1's `output`/`a` and kernel2's `y`/`x` are both lowered to
+## binding 0 / binding 1, and both kernels are ingested and run through the
+## engine with real buffers to prove the shared bindings work.
+##
+## Run:
+##   nim cpp -r --hints:off --warnings:off \
+##     --outdir:build/tests/vulkan --nimcache:nimcache/tests/vulkan \
+##     workspace/crucible/tests/codegen/vulkan/test_vulkan_ssbo_dedup.nim
 
-import std/[os, osproc, strformat, strutils, tempfiles]
+import std/[strutils, unittest]
 import workspace/crucible
+
 const code = vulkan:
-  proc kernel1(output: ptr UncheckedArray[uint32];
-               a: ptr UncheckedArray[uint32]) {.global.} =
+  proc kernel1(
+      output: ptr UncheckedArray[uint32],
+      a: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = a[0] + 1'u32
-  proc kernel2(y: ptr UncheckedArray[uint32];
-               x: ptr UncheckedArray[uint32]) {.global.} =
+  proc kernel2(
+      y: ptr UncheckedArray[uint32],
+      x: ptr UncheckedArray[uint32]) {.global.} =
     y[0] = x[0] * 2'u32
 
-# Check that SSBO bindings use position (0, 1) not param names (0,1,2,3)
-# Both kernels should share binding 0 for the first param and binding 1 for the second.
+proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+  suite "Vulkan - SSBO dedup by position":
+    test "2 SSBOs, binding 0 = first param, binding 1 = second, shared across kernels":
+      # Two kernels × 2 ptr params each must produce exactly 2 SSBOs, not 4:
+      # kernel2's `y`/`x` are renamed to kernel1's canonical `output`/`a`,
+      # so both kernels reference the same binding-0 / binding-1 buffers.
+      # (`output` is a GLSL reserved keyword — emitted as `output_vk`.)
+      let ssboCount = code.count("layout(set = 0, binding =")
+      check ssboCount == 2
+      check "layout(set = 0, binding = 0) buffer Buf0 { uint output_vk[]; };" in code
+      check "layout(set = 0, binding = 1) buffer Buf1 { uint a[]; };" in code
+      check "void kernel1()" in code
+      check "void kernel2()" in code
+      # kernel2's body reads the shared canonical names (position 0 and 1),
+      # proving the bindings are shared across differently-named kernels.
+      check "output_vk[0] = (a[0] * 2U);" in code
 
-# kernel1's output should be at binding 0
-doAssert code.contains("binding = 0"), &"Expected binding = 0 in:\n{code}"
-doAssert code.contains("binding = 1"), &"Expected binding = 1 in:\n{code}"
+      # Runtime proof: both kernels run on the engine with real buffers.
+      # kernel1: output = a + 1; kernel2: y = x * 2 — the second param
+      # (binding 1) is shared, so the same input value fed to `a` and `x`
+      # lands in the same buffer slot and each kernel reads it back.
+      var engine = bkVulkan.init()
+      engine.ingest(code)
+      var res1: array[1, uint32]
+      let a = [41'u32]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> ("kernel1", res1, (a,))
+      check res1[0] == 42'u32
+      var res2: array[1, uint32]
+      let x = [41'u32]
+      engine.run << (grid: (1, 1), blk: (1, 1)) >> ("kernel2", res2, (x,))
+      check res2[0] == 82'u32
 
-# There should be exactly 2 SSBO declarations, not 4
-var ssboCount = 0
-for line in code.split('\n'):
-  if line.contains("buffer Buf") and line.contains("layout"):
-    ssboCount += 1
-doAssert ssboCount == 2, &"Expected exactly 2 SSBOs, got {ssboCount}\n{code}"
-
-# kernel1's position-0 buffer is its output param
-# kernel2's output `y` shares the canonical position-0 buffer name
-doAssert code.contains("void kernel1()"), &"Missing kernel1 in:\n{code}"
-doAssert code.contains("void kernel2()"), &"Missing kernel2 in:\n{code}"
-
-# The name-mismatch rename fix (kernel2's y/x → canonical output/a) must produce
-# GLSL that actually validates. Validate each kernel like the engine does.
-for kern in ["kernel1", "kernel2"]:
-  var s = code.replace("void " & kern & "()", "void main()")
-  let (tmpFile, tmpPath) = createTempFile("vk_ssbo_dedup", ".comp")
-  defer: tmpFile.close()
-  tmpFile.write(s)
-  tmpFile.flushFile()
-  let (outp, exitCode) = execCmdEx(
-    "glslangValidator -V --target-env vulkan1.1 " & quoteShell(tmpPath) & " -o /dev/null")
-  doAssert exitCode == 0,
-    "glslangValidator rejected " & kern & ":\n" & outp & "\n--- shader ---\n" & s
-
-echo code
-echo "  OK — SSBO dedup by position"
+when isMainModule:
+  runTest()

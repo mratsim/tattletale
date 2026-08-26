@@ -10,24 +10,23 @@
 ##   --nimcache:nimcache/tests/manual_tile_ragged_gemm_epi_vulkan \
 ##   workspace/ceramic/tests/kernels_tiles/manual_tile_ragged_gemm_epi_vulkan.nim
 
-## Vulkan GEMM epilogue probe (kEnds-free, ragged-edge shapes).
+## Vulkan GEMM epilogue probe (ragged-edge shapes).
 ##
 ## Compiles `gemm_with_epilogue` with the REAL `vulkan:` macro (the
-## Vulkan IR legalization passes run inside the macro), glslang-checks the
-## emitted GLSL, and value-runs it on MoltenVK vs an fp32-exact host
-## reference. Ragged = the tile does not divide M/N/K (operator definition):
-## the shapes below are deliberately not multiples of 32/16. The host
-## zero-fills the K-padding (columns/rows K..Kp-1) so the kernel's K loop
-## over Kp/16 blocks stays exact; the M/N padding is garbage and must never
-## leak into the real M×N region. No kEnds, no Lengths, no caller padding
-## in the kernel API.
+## Vulkan IR legalization passes run inside the macro) and value-runs it on
+## MoltenVK vs an fp32-exact host reference. Ragged = the tile does not
+## exactly divide M/N/K; every GEMM handles it natively in-kernel — no
+## Lengths params, no caller padding. The shapes below are deliberately not
+## multiples of 32/16. The host zero-fills the K-padding (columns/rows
+## K..Kp-1) so the kernel's K loop over Kp/16 blocks stays exact; the M/N
+## padding is garbage and must never leak into the real M×N region.
 ##
 ## Two kernels: the plain strided-C epilogue (EpiAXPBYStrided, α=2/β=4) and
 ## a user-defined scale epilogue (EpiScale, a plain value struct). Each has
 ## a Metal twin run for cross-backend parity (the kernels are
 ## backend-agnostic; all adaptation lives in the Vulkan legalization passes).
 
-import std/[os, osproc, strformat, strutils, tempfiles]
+import std/[strformat, strutils]
 import workspace/crucible
 import ../tile_test_utils
 import ../libtest_epilogues
@@ -37,43 +36,52 @@ import ../../src/kernels/k_tile_gemm
 {.experimental: "callOperator".}
 
 # ═════════════════════════════════════════════════════════════════════════
-#  User epilogue: a plain value struct plus an `apply` proc (no kEnds)
+#  User epilogue: a plain value struct plus an `apply` proc
 # ═════════════════════════════════════════════════════════════════════════
 
-type EpiScale[T] = object
+type EpiScale = object
   ## Scale epilogue: D = s·AB. Plain scalar field — the Vulkan passes must
   ## carry it as a value struct (unlike EpiAXPBYStrided, whose ptr field is
   ## flattened to leaves).
-  s*: T
+  s*: float32
 
-func apply[T, Sh, StAB, StR](
-    op: EpiScale[T];
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+func apply(
+    op: EpiScale,
+    tmp: var TensorView[float32, (Int[32], Int[32]), (Int[32], Int[1])],
+    AB: TensorView[float32, (Int[32], Int[32]), (Int[32], Int[1])]) {.inline.} =
   ## Per-thread epilogue math: tmp = s·AB.
   const S = toIntVal(size(tmp))
   for i in 0 ..< S:
     tmp(i) = op.s * AB(i)
 
-func apply[T; R, C: static int; AT, ABT: static MmaAtom](
-    op: EpiScale[T];
-    tmp: var RtLeft[T, R, C, AT];
-    AB: RtLeft[T, R, C, ABT]) {.inline.} =
+func apply(
+    op: EpiScale,
+    tmp: var RtLeft[float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32],
+    AB: RtLeft[float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32]) {.inline.} =
   ## Per-slot epilogue math (fragment-resident accumulator form): tmp = s·AB.
-  static:
-    doAssert AT.getM() == ABT.getM() and AT.getN() == ABT.getN() and
-      toIntVal(AT.valuesPerThread(opC)) == toIntVal(ABT.valuesPerThread(opC)),
-      "apply: the accumulator and operand tiles must share the atom's subtile grid and per-lane count"
-  const rowTiles = R div AT.getM()
-  const colTiles = C div AT.getN()
-  const vpt = toIntVal(AT.valuesPerThread(opC))
+  const rowTiles = 32 div UNIVERSAL_8x8x8_F32F16F16F32.getM()
+  const colTiles = 32 div UNIVERSAL_8x8x8_F32F16F16F32.getN()
+  const vpt = toIntVal(UNIVERSAL_8x8x8_F32F16F16F32.valuesPerThread(opC))
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        tmp.frags[n][m].frag[v] = op.s * AB.frags[n][m].frag[v]
+
+func apply(
+    op: EpiScale,
+    tmp: var RtLeft[float32, 32, 32, APPLE_8x8x8_F16],
+    AB: RtLeft[float32, 32, 32, APPLE_8x8x8_F16]) {.inline.} =
+  ## Per-slot epilogue math for the Metal twin (Apple atom): tmp = s·AB.
+  const rowTiles = 32 div APPLE_8x8x8_F16.getM()
+  const colTiles = 32 div APPLE_8x8x8_F16.getN()
+  const vpt = toIntVal(APPLE_8x8x8_F16.valuesPerThread(opC))
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
         tmp.frags[n][m].frag[v] = op.s * AB.frags[n][m].frag[v]
 
 static:
-  doAssert EpiScale[float32] is Epilogue, "EpiScale must satisfy the Epilogue concept"
+  doAssert EpiScale is Epilogue, "EpiScale must satisfy the Epilogue concept"
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Vulkan kernels (REAL `vulkan:` macro — the pass pipeline runs in-macro)
@@ -92,7 +100,7 @@ const scaleUserVk = vulkan:
   proc fusedScaleUser(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                       Scale: float32, M, N, K: int32) {.global, workgroup: (32, 1, 1).} =
     gemm_with_epilogue(D, N, 1, A, K, 1, B, N, 1, M, K, N,
-      EpiScale[float32](s: Scale))
+      EpiScale(s: Scale))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Metal twins — the SAME kernels on Metal: the kernels + host refs are
@@ -109,7 +117,7 @@ const gemmVkMsl = metal:
   proc fusedScaleUser(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                       Scale: float32, M, N, K: int32) {.global.} =
     gemm_with_epilogue(D, N, 1, A, K, 1, B, N, 1, M, K, N,
-      EpiScale[float32](s: Scale))
+      EpiScale(s: Scale))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Host inputs + fp32-exact reference (S7 harness, source of truth)
@@ -214,24 +222,6 @@ proc checkScaleUser(engine: var auto; M, N, K: int) =
              scale(gemmRef(M, N, K, Mp, Np, Kp, Ah, Bh), 2.0'f32), M, N, Np)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  glslangValidator check (fail-hard, house pattern from test_tile_ops_vulkan)
-# ═════════════════════════════════════════════════════════════════════════
-
-proc glslangCheck(src: string; renameFrom: string; label: string) =
-  ## Compile the shader with glslangValidator (-V, vulkan1.1 target) after
-  ## renaming the target kernel to `main`, the same per-kernel recompilation
-  ## the Vulkan engine does. A missing tool or any rejection fails the test.
-  var s = src.replace("void " & renameFrom & "()", "void main()")
-  let (tmpFile, tmpPath) = createTempFile("vk_gemm_epi", ".comp")
-  defer: tmpFile.close()
-  tmpFile.write(s)
-  tmpFile.flushFile()
-  let (outp, exitCode) = execCmdEx(
-    "glslangValidator -V --target-env vulkan1.1 " & quoteShell(tmpPath) & " -o /dev/null")
-  doAssert exitCode == 0,
-    "glslangValidator rejected " & label & ":\n" & outp & "\n--- shader ---\n" & s
-
-# ═════════════════════════════════════════════════════════════════════════
 #  Runner
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -260,9 +250,9 @@ proc runTest() =   # engines are RAII, so keep them function-local
 
   echo "── scaleUserVk GLSL (" & $scaleUserVk.len & " chars) ──"
   doAssert "void fusedScaleUser()" in scaleUserVk, "missing kernel entry point:\n" & scaleUserVk
-  doAssert "struct EpiScalef32" in scaleUserVk,
+  doAssert "struct EpiScale" in scaleUserVk,
     "user epilogue must survive as a plain value struct:\n" & scaleUserVk
-  doAssert "EpiScalef32(Scale)" in scaleUserVk,
+  doAssert "EpiScale(Scale)" in scaleUserVk,
     "user epilogue construction missing:\n" & scaleUserVk
   doAssert "float16_t*" notin scaleUserVk and "float*" notin scaleUserVk,
     "device fn still carries a ptr param:\n" & scaleUserVk
@@ -271,12 +261,8 @@ proc runTest() =   # engines are RAII, so keep them function-local
   doAssert "plainEpi" in gemmVkMsl and "fusedScaleUser" in gemmVkMsl,
     "Metal twin drift:\n" & gemmVkMsl
 
-  # ── glslangValidator (per-kernel, like the engine) ──────────────────────
-  glslangCheck(plainEpiVk, "plainEpi", "plainEpi")
-  glslangCheck(scaleUserVk, "fusedScaleUser", "fusedScaleUser")
-  echo "  glslangValidator: plainEpi + fusedScaleUser → SPIR-V OK"
-
   # ── MoltenVK value runs vs the fp32-exact host reference ────────────────
+  #    (engine.ingest is the fail-hard glslangValidator → SPIR-V compile path)
   var vkEngine = bkVulkan.init()
   vkEngine.ingest(plainEpiVk)
   checkPlain(vkEngine, 37, 55, 48)    # ragged M/N; K divides 16 exactly

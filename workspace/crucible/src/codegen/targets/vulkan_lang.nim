@@ -588,15 +588,6 @@ proc normalizeKernelSsboParams(ctx: var GpuContext,
             canonicalSsbo.add (p.ident.ident(), ssboInnerType(p))
           inc ssboIdx
 
-proc bindDeviceFnPtrParams(ctx: var GpuContext) =
-  ## Superseded by the Vulkan IR legalization passes
-  ## (passes_legalization_vulkan.nim, vulkanBindDeviceFnPtrParams): device-fn
-  ## ptr params are bound per call site (with cloning for disagreeing buffer
-  ## tuples) before codegen runs, so no device fn reaches this point with a
-  ## ptr param. Kept as a no-op backstop: if a ptr param ever survives, the
-  ## gpuTypeToString(gtPtr) raise in genVulkan reports it loudly.
-  discard
-
 proc containsAnyKind(t: GpuType, kinds: set[GpuTypeKind]): bool =
   ## True when the type tree contains any kind in `kinds`.
   if t.isNil: return false
@@ -708,7 +699,6 @@ proc codegen*(ctx: var GpuContext): string =
   #    already bound by the Vulkan legalization passes) ──
   var canonicalSsbo: seq[tuple[name: string, inner: string]]
   normalizeKernelSsboParams(ctx, canonicalSsbo)
-  bindDeviceFnPtrParams(ctx)
 
   # ── Step 1b: Push-constant declarations (deduped by name) ──
   var pushConstDecls: seq[string]
