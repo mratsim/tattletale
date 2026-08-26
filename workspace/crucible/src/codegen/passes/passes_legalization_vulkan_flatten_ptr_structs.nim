@@ -24,8 +24,7 @@ import ./passes_utils
 # ═════════════════════════════════════════════════════════════════════════
 
 type
-  ## Kind of a flattened leaf: a value backed by a var/param ident, or a
-  ## pointer expression.
+  ## Kind of a flattened leaf: a value backed by a var/param ident, or a pointer expression.
   LeafKind* = enum
     lkValue      ## scalar or plain-struct leaf, backed by a var or param ident
     lkPtr        ## pointer leaf, backed by an expression (SSBO ref / ptr arith)

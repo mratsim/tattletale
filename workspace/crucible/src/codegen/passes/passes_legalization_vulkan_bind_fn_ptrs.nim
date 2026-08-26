@@ -189,7 +189,7 @@ proc bindDeviceFnPtrParams*(ctx: var GpuContext) =
 
   # ── post: fold ptr-index bases introduced by the substitutions ─────────
   # (Index over `cast[ptr](uint64(base) + off*sizeof)` → base[off + idx])
-  # Fresh iSym → fn table (includes the clones added above) for exprType.
+  # Fresh iSym → fn table (includes the clones added above) for getExprType.
   var foldFns = initTable[string, GpuAst]()
   for fnIdent, fn in ctx.fnTab:
     foldFns[fnIdent.symbol.iSym] = fn

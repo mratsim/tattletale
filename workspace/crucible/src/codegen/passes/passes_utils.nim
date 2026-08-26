@@ -25,10 +25,9 @@ proc getExprType*(ctx: GpuContext; n: GpuAst; fns: Table[string, GpuAst]): GpuTy
   ## Errors if the node kind doesn't carry its own type (e.g. gpuDot, gpuIndex).
   ## Those cases require the caller to provide the type from context instead.
   ##
-  ## `fns` resolves gpuCall to a device-fn return type (Vulkan ptr-index
-  ## fold): only integer return kinds resolve, and a callee missing from the
-  ## table leaves the type nil. An empty table resolves through the context
-  ## fn tables instead.
+  ## `fns` resolves gpuCall to a device-fn return type (Vulkan ptr-index fold):
+  ## only integer return kinds resolve, and a callee missing from the table
+  ## leaves the type nil. An empty table resolves through the context fn tables instead.
   if n == nil: error "Cannot get type of nil node"
   case n.kind
   of gpuIdent:
@@ -56,8 +55,8 @@ proc getExprType*(ctx: GpuContext; n: GpuAst; fns: Table[string, GpuAst]): GpuTy
       result = ctx.getFnReturnType(n.cName)
   of gpuObjConstr: result = n.ocType
   of gpuBinOp:
-    # Presence-only check by design: verifies bType is non-nil/non-void, never its
-    # value correctness, which the construction sites and literal typing establish.
+    # Presence-only check by design: verifies bType is non-nil/non-void,
+    # never its value correctness, which the construction sites and literal typing establish.
     # A nil/void bType must not silently fall through to the blitExprSlot fnRetType
     # rung (or raise a misleading "blit temp" error on a perfectly typed binop), so
     # it is surfaced as a defect at the read site instead of returning nil.

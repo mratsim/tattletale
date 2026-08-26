@@ -47,6 +47,7 @@ proc isTaintedStruct*(t: GpuType): bool =
   isStructType(t) and containsPtrField(t)
 
 proc isPtrType*(t: GpuType): bool =
+  ## True when `t` is a non-nil pointer-like type (gtPtr / gtUA / gtVoidPtr).
   not t.isNil and t.kind in {gtPtr, gtUA, gtVoidPtr}
 
 proc taintedLeaves*(t: GpuType, path: seq[string] = @[]): seq[tuple[path: seq[string], typ: GpuType]] =
@@ -92,6 +93,7 @@ proc leafName*(base: string; path: seq[string]): string =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc isGlobalFn*(fn: GpuAst): bool =
+  ## True when the fn carries the global (kernel) attribute.
   fn.kind == gpuProc and attGlobal in fn.pAttributes
 
 proc allFnIdentifiers*(ctx: GpuContext): seq[tuple[key: GpuAst, fn: GpuAst]] =
