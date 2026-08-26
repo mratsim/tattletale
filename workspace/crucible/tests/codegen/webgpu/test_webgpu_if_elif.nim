@@ -36,9 +36,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "elif chain reaches the device: all four branches distinct":
       # Emitted shape: every branch condition present, in source order, as an
       # `else if` chain (the pre-fix codegen dropped the elif branches).
-      doAssert "else if" in elifWgsl
-      doAssert elifWgsl.find("else if") > elifWgsl.find("if (")
-      for v in ["10", "20", "30", "40"]:
+      doAssert "if (((&x)[0] == 0)) {" in elifWgsl
+      doAssert "else if (((&x)[0] == 1)) {" in elifWgsl
+      doAssert "else if (((&x)[0] == 2)) {" in elifWgsl
+      doAssert elifWgsl.find("else if (((&x)[0] == 1))") < elifWgsl.find("else if (((&x)[0] == 2))")
+      for v in ["(&output)[0] = 10;", "(&output)[0] = 20;", "(&output)[0] = 30;", "(&output)[0] = 40;"]:
         doAssert v in elifWgsl
       var engine = bkWGSL.init()
       engine.ingest(elifWgsl)
@@ -57,7 +59,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 40
 
     test "no else in source emits no else block":
-      doAssert "else if" in noElseWgsl
+      doAssert "else if (((&x)[0] == 1)) {" in noElseWgsl
       doAssert "else {" notin noElseWgsl
       var engine = bkWGSL.init()
       engine.ingest(noElseWgsl)
