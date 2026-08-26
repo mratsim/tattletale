@@ -44,8 +44,7 @@ proc subgroupGuard32*(ctx: var GpuContext) =
   ##    true subgroup lane) instead of `gl_LocalInvocationIndex` (the
   ##    workgroup lane, equal only when workgroup == subgroup, which the
   ##    guard fixes at 32 alongside the kernels' baked 32-wide workgroups).
-  ## The engine does not ingest VkPhysicalDeviceSubgroupProperties, so the
-  ## subgroup size is not confirmed at runtime.
+  ## The engine does not ingest VkPhysicalDeviceSubgroupProperties, so the subgroup size is not confirmed at runtime.
   let reachable = reachableFns(ctx)
   # transitive closure over the call graph: a fn is shuffle-reachable when
   # its body contains a reduction builtin or calls a shuffle-reachable fn

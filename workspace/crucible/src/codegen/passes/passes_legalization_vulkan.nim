@@ -9,8 +9,8 @@
 ##
 ## Four passes lower GLSL-illegal IR shapes to legal Vulkan GLSL: device-fn
 ## `var T` params, struct values carrying pointer fields, device-fn `ptr`
-## params, and fp16-subgroup lane assumptions. All are guarded on
-## `crucibleCompileTarget == ctVulkan` so the other backends never see them.
+## params, and fp16-subgroup lane assumptions. All are guarded on `crucibleCompileTarget == ctVulkan`
+## so the other backends never see them.
 
 import ../ir/gpu_types
 import ../builtins/builtins_compilermagic

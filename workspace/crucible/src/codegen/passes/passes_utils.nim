@@ -31,10 +31,10 @@ proc getExprType*(ctx: GpuContext; n: GpuAst; fns: Table[string, GpuAst]): GpuTy
   case n.kind
   of gpuIdent:
     result = n.symbol.typ
-    # Ident analogue of the gpuBinOp read-site policy: a gpuIdent whose
-    # symbol carries no type must not silently fall through to the
-    # blitExprSlot fnRetType rung (which absorbs it in value-returning
-    # procs), the same silent wrong-type class. Error at the read site.
+    # Ident analogue of the gpuBinOp read-site policy: a gpuIdent whose symbol
+    # carries no type must not silently fall through to the blitExprSlot fnRetType rung
+    # (which absorbs it in value-returning procs), the same silent wrong-type class.
+    # Error at the read site.
     if result.isNil or result.kind == gtVoid:
       error "gpuIdent with nil or void symbol type: Cannot determine type for blit temp in " &
         "block expression (nil/void symbol.typ on a gpuIdent is a defect — idents reaching getExprType must carry a type)"
