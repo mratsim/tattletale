@@ -10,13 +10,13 @@
 ## Three single-kernel modules exercise the Vulkan-only legalization passes
 ## (passes_legalization_vulkan.nim) on the raw-pointer shapes the ceramic
 ## tile layer uses, without importing ceramic:
-##   (a) add3 — a kernel with 3 differently-named ptr params pins
+##   (a) add3 — a kernel with 3 differently-named ptr params locks in
 ##       position-based SSBO binding (binding N = param N);
 ##   (b) countUp — a device fn with a `var uint32` param, called twice,
-##       pins vulkanVarParamsToValue (GLSL has no references; the call
+##       locks in vulkanVarParamsToValue (GLSL has no references; the call
 ##       becomes `acc = bump(acc)` returning the mutated value);
 ##   (c) pairKernel — a value struct carrying a ptr field passed to a
-##       device fn pins vulkanFlattenStructPtrValues + per-call-site
+##       device fn locks in vulkanFlattenStructPtrValues + per-call-site
 ##       binding (GLSL structs cannot hold pointer members, so the ptr
 ##       field becomes an SSBO expression and the struct is flattened).
 ##

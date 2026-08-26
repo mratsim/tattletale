@@ -24,8 +24,6 @@ import ../tile_algebra/tile_epilogues_backend
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra, tile_epilogues_backend
 
-# TODO: ragged support
-
 proc gemm_with_epilogue*[TIn, TOut; Epi](
     D: ptr UncheckedArray[TOut], rsd, csd: int32,
     A: ptr UncheckedArray[TIn], rsa, csa: int32,
@@ -35,13 +33,13 @@ proc gemm_with_epilogue*[TIn, TOut; Epi](
   ##
   ## K contract (ragged-K): K is the ALLOCATED extent and must be a
   ## multiple of the tile K (16) — the loop below iterates `K div 16` full
-  ## 16-slice blocks and a ragged K would silently drop the tail. For a
-  ## ragged logical K, pass the padded extent Kp (multiple of 16) and
-  ## ZERO-FILL the K..Kp-1 extent: the kernel reads it inside the K loop,
-  ## so garbage there leaks finite wrong values into the accumulator
-  ## (0xDEAD fp16 is a normal finite number, not NaN). An unpadded K fails
-  ## loudly: the kernel returns before writing D, so a host-side value
-  ## check sees the untouched output instead of a truncated result.
+  ## 16-slice blocks, and the guard fails loudly when K is not a multiple
+  ## (the kernel returns before writing D, so a host-side value check sees
+  ## the untouched output). For a ragged logical K, pass the padded extent
+  ## Kp (multiple of 16) and ZERO-FILL the K..Kp-1 extent: the kernel
+  ## reads it inside the K loop, so garbage there leaks finite wrong
+  ## values into the accumulator (0xDEAD fp16 is a normal finite number,
+  ## not NaN).
   const tileK = 16
   if K mod tileK != 0:
     return

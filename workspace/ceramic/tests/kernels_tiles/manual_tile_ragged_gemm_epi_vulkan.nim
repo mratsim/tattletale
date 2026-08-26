@@ -10,17 +10,18 @@
 ##   --nimcache:nimcache/tests/manual_tile_ragged_gemm_epi_vulkan \
 ##   workspace/ceramic/tests/kernels_tiles/manual_tile_ragged_gemm_epi_vulkan.nim
 
-## Vulkan GEMM epilogue probe (ragged-edge shapes).
+## Vulkan GEMM epilogue test (ragged-edge shapes).
 ##
 ## Compiles `gemm_with_epilogue` with the `vulkan:` macro (the
 ## Vulkan IR legalization passes run inside the macro) and value-runs it on
 ## MoltenVK vs an fp32-exact host reference. Ragged = the tile does not
 ## exactly divide M/N/K; every GEMM handles it natively in-kernel — no
-## Lengths params, no caller padding. The shapes below are deliberately not
-## multiples of 32/16. B's K-padding rows (k in K..Kp-1) are ZERO — the
-## kernel's K loop reads them, and A's K-padding columns stay 0xDEAD
-## garbage, so exactness relies on garbage × 0 = 0 (this pairing makes the
-## B zero-fill load-bearing in the value runs); the M/N padding is garbage
+## Lengths params, no padding descriptors. The shapes below are
+## deliberately not multiples of 32/16. B's K-padding rows (k in K..Kp-1)
+## are ZERO — the kernel's K loop reads them, and A's K-padding columns
+## stay 0xDEAD garbage, so exactness relies on garbage × 0 = 0 (this
+## pairing makes the B zero-fill essential in the value runs); the M/N
+## padding is garbage
 ## and must never leak into the real M×N region.
 ##
 ## Two kernels: the plain strided-C epilogue (EpiAXPBYStrided, α=2/β=4) and
@@ -138,8 +139,8 @@ proc buildRaggedEdgeA(M, Mp, K, Kp: int): seq[uint16] =
   ## fp16 pattern 1 + 2m + 7k; the K-padding columns (k in K..Kp-1) stay
   ## 0xDEAD garbage — exactness relies on B's K-padding rows being ZERO
   ## (garbage × 0 = 0; garbage × garbage would leak finite wrong values
-  ## into the accumulator — which is how the B zero-fill is load-bearing
-  ## in the value runs); the padded M rows stay 0xDEAD garbage — their
+  ## into the accumulator — which is how the B zero-fill is essential in
+  ## the value runs); the padded M rows stay 0xDEAD garbage — their
   ## D outputs are outside the checked M×N region.
   result = newSeq[uint16](Mp * Kp)
   for i in 0 ..< Mp * Kp:
@@ -241,7 +242,7 @@ proc checkScaleUser(engine: var auto; M, N, K: int) =
 
 proc checkKGuard(engine: var auto; M, N, K: int) =
   ## HPC-A-002: an UNPADDED K (K mod 16 != 0) must fail loudly — the kernel
-  ## returns before writing D, so the untouched 0xDEAD sentinel survives.
+  ## returns before writing D, so the untouched 0xDEAD marker survives.
   ## Without the guard the kernel would silently GEMM over K div 16 full
   ## blocks and write a finite truncated result (not NaN) into D.
   let Mp = ((M + 31) div 32) * 32
@@ -272,21 +273,21 @@ proc checkKGuard(engine: var auto; M, N, K: int) =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc runTest() =   # engines are RAII, so keep them function-local
-  checkDrawPins()          # the hash draws must not drift
+  checkDrawPins()          # shared runner: seed-derived shapes must stay stable
 
   # ── Emission part (Vulkan): the legalization passes must have lowered
-  #    every ptr/var-param construct — these asserts are the mutation bite
-  #    (reverting a pass changes the shapes below and fails the probe).
+  #    every ptr/var-param construct — reverting a pass changes the shapes
+  #    below and fails this test.
   echo "── plainEpiVk GLSL (" & $plainEpiVk.len & " chars) ──"
   doAssert "void plainEpi()" in plainEpiVk, "missing kernel entry point:\n" & plainEpiVk
   doAssert "float16_t A[]" in plainEpiVk, "missing A fp16 SSBO:\n" & plainEpiVk
   doAssert "layout(push_constant)" in plainEpiVk, "missing push-constant block:\n" & plainEpiVk
   doAssert "d_rtl = zero" in plainEpiVk,
-    "pass 1b value-return shape missing (var-param fn must return by value):\n" & plainEpiVk
+    "value-return shape missing (var-param fn must return by value):\n" & plainEpiVk
   doAssert "a_rtl = loadTile" in plainEpiVk,
-    "pass 1b value-return shape missing (loadTile must return by value):\n" & plainEpiVk
+    "value-return shape missing (loadTile must return by value):\n" & plainEpiVk
   doAssert "d_rtl = mma_AB" in plainEpiVk,
-    "pass 1b value-return shape missing (mma_AB must return by value):\n" & plainEpiVk
+    "value-return shape missing (mma_AB must return by value):\n" & plainEpiVk
   doAssert "float16_t*" notin plainEpiVk,
     "device fn still carries a float16_t* param (pass 3 binding missed):\n" & plainEpiVk
   doAssert "float*" notin plainEpiVk,
@@ -329,7 +330,7 @@ proc runTest() =   # engines are RAII, so keep them function-local
   doAssert "int lane = int(gl_LocalInvocationIndex)" in scaleUserVk,
     "GPU-B-001: lane-id rewrite leaked into non-shuffle fns:\n" & scaleUserVk
 
-  # ── Metal twins (blast radius): the same kernels still compile on Metal ──
+  # ── Metal twins: the same kernels still compile on Metal ──
   doAssert "plainEpi" in gemmVkMsl and "fusedScaleUser" in gemmVkMsl,
     "Metal twin drift:\n" & gemmVkMsl
 

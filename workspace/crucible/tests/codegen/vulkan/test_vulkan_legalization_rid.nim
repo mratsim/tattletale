@@ -223,10 +223,10 @@ static:
   # asserts only "the module must not compile": with the fn-level guard
   # present the DEFINITION is rejected during conversion; without it the
   # call-site guard (written var args > 1) rejects the CALL. Both guards
-  # enforce the same rule, so deleting either leaves this probe passing
-  # (RED-verified) — guard-level attribution is done via RED logs, not
-  # in-tree. The positive control below fixes the boundary: one written +
-  # one unwritten var arg MUST compile (the call-site guard counts only
+  # enforce the same rule, so deleting either leaves this test passing —
+  # guard-level attribution lives in the fix evidence, not in-tree. The
+  # positive control below fixes the boundary: one written + one
+  # unwritten var arg MUST compile (the call-site guard counts only
   # written args).
   doAssert not compiles(block:
     const bad = vulkan:
@@ -335,7 +335,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "BUG-A-003: array-var-param fn inlines in statement position":
       # zeroFill(d: var array[4, uint32]) is inlined into zeroKernel — the
       # inlined body runs and zeroes the buffer (9+8+7+6 → 0+0+0+0). The
-      # return-rejection path is pinned by the static `not compiles` above.
+      # return-rejection path is locked in by the static `not compiles` above.
       check "for(int i = 0; i < 4; i += 1)" in zeroFillVk
       var engine = bkVulkan.init()
       engine.ingest(zeroFillVk)
@@ -379,7 +379,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       # `return x;` — an undeclared x inside the hoisted top-level inner).
       # The module cannot run on device yet: codegen emits the nested
       # definition in place AND a hoisted top-level copy, which glslang
-      # rejects (pre-existing nested-fn emission defect — tracked debt) —
+      # rejects (pre-existing nested-fn emission defect) —
       # the asserts lock in the return rewrite itself.
       check "return y;" in nestedProcVk
       check "return result;" in nestedProcVk
@@ -388,8 +388,9 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       # mid (shuffle-reachable) and nonShuffle (not) both read
       # thread_index_in_threadgroup in the same vulkan: block. The catalog
       # ident node is sigTab-shared, so an in-place symbol swap on mid's
-      # copy would leak gl_SubgroupInvocationID into nonShuffle (RED:
-      # nonShuffle emitted the subgroup lane). The rewrite must replace the
+      # copy would leak gl_SubgroupInvocationID into nonShuffle (an
+      # in-place swap made nonShuffle emit the subgroup lane). The rewrite
+      # must replace the
       # node, leaving the shared node intact for non-shuffle fns.
       check "uint lane = uint(gl_SubgroupInvocationID);" in laneShareVk
       check "uint lane = uint(gl_LocalInvocationIndex);" in laneShareVk

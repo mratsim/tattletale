@@ -11,7 +11,7 @@
 ## Pass 3 (`vulkanBindDeviceFnPtrParams`) clones a device fn once per
 ## disagreeing ptr-arg tuple. That branch was entirely untested (COV-A-001);
 ## this file exercises it with one multi-kernel module (pointer-only, so the
-## engine ingests it) and pins:
+## engine ingests it) and locks in:
 ##   (a) both `_vk0`/`_vk1` clone entry points exist and the original fn is
 ##       gone (COV-A-001);
 ##   (b) ptr-arith call-site args substituted into clone bodies are folded

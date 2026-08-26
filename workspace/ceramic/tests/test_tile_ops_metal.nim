@@ -75,7 +75,7 @@ proc checkFmaStorage() =
   for i in 0 ..< buf.len:
     buf[i] = float32(i)
   let gdBuf = gd(cast[ptr UncheckedArray[float32]](addr buf[0]), 0, 0, 32, 16)
-  # Stride probe: the local_tile_dyn plane keeps the view's (rows, cols)
+  # Stride check: the local_tile_dyn plane keeps the view's (rows, cols)
   # strides (32·strideRow, 16·strideCol); the subtile steps come from the
   # lane's fragment cell, evaluated from the atom's A/C layout at the load.
   let fmaView = local_tile_dyn(gdBuf, 32, 16, (0, 0, 0, 0))
@@ -291,7 +291,7 @@ proc checkEpiApply() =
   ab.frags[0][0].frag[0] = -3.0'f32
   ab.frags[0][0].frag[1] = 2.0'f32
   var d: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
-  d.frags[0][0].frag[0] = -7.0'f32  # sentinel
+  d.frags[0][0].frag[0] = -7.0'f32  # marker
   d.frags[0][0].frag[1] = -7.0'f32
   EpiReLU().apply(d, ab)
   doAssert d.frags[0][0].frag[0] == 0.0'f32 and d.frags[0][0].frag[1] == 2.0'f32,
@@ -320,7 +320,7 @@ proc checkEpiApply() =
 # The shuffle mma reads the lane id and gathers other lanes' registers,
 # which cannot run on the host. Its contract (products accumulate in k
 # order 0,1,2,… like the CPU reference) is asserted by the on-device gemm
-# check at |Δ| = 0.0. This probe checks that the fp32-A form instantiates
+# check at |Δ| = 0.0. This test checks that the fp32-A form instantiates
 # inside a DSL block.
 const mmaCompileProbe = metal:
   proc mmaProbe(d: ptr UncheckedArray[float32], a, b: ptr UncheckedArray[float16]) {.global.} =

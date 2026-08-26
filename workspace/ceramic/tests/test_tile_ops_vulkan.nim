@@ -90,7 +90,7 @@ const kMaxVk = vulkan:
                   lengths: ptr UncheckedArray[uint16], mTile: uint32) {.global, workgroup: (32, 1, 1).} =
     o[0] = tileKMax(lengths, mTile)
 
-# Metal twin of attnD64 — pins the MSL emission (blast radius for tile_ops edits).
+# Metal twin of attnD64 — locks in the MSL emission (Metal coverage for tile_ops edits).
 const attnMsl = metal:
   proc attnD64(o: ptr UncheckedArray[float32],
                q, k, v: ptr UncheckedArray[float16], H, N: int32) {.global.} =
@@ -142,7 +142,7 @@ func tileKMaxRef(lengths: seq[uint16]; mTile: uint32): uint32 =
   result = (m + 15'u32) div 16'u32
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Harness
+#  Runner
 # ═════════════════════════════════════════════════════════════════════════
 
 proc glslangCheck(src: string; renameFrom: string; label: string) =
@@ -228,7 +228,7 @@ proc runTest() =
   doAssert "gl_LocalInvocationIndex" notin kMaxVk,
     "GPU-B-001: shuffle-reachable lane id must be fully rewritten:\n" & kMaxVk
 
-  # ── emission part (Metal, blast radius) ─────────────────────────────────
+  # ── emission part (Metal) ───────────────────────────────────────────────
   doAssert "simd_shuffle_down(" in attnMsl, "MSL subgroup shuffle spelling drifted:\n" & attnMsl
   doAssert "simd_shuffle(" in attnMsl, "MSL subgroup shuffle spelling drifted:\n" & attnMsl
   doAssert "thread_index_in_threadgroup" in attnMsl,

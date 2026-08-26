@@ -12,7 +12,7 @@
 ## tile_mma) uses all three: device-fn `ptr UncheckedArray` params,
 ## `var T` (pass-by-reference) params, and struct VALUES that carry pointer
 ## fields (`StridedOperand.data`, `TensorView.data`).
-## These three passes lower those IR shapes to legal GLSL:
+## These four passes lower those IR shapes to legal GLSL:
 ##
 ## 1. `vulkanVarParamsToValue` — device-fn `var T` params become value params.
 ##    Mutated struct/scalar params are returned by value (call sites become
@@ -21,17 +21,24 @@
 ## 2. `vulkanFlattenStructPtrValues` — struct values that (transitively)
 ##    contain pointer fields are eliminated: vars split into leaf scalars +
 ##    ptr-leaf expressions (GLSL has no pointer locals), value params split
-##    into leaf params, struct-returning fns (gd,
-##    local_tile_dyn) resolve to per-leaf return expressions over their
-##    params, dot-access chains are rewritten, and the tainted struct type
-##    defs are removed (GLSL structs cannot hold pointer members).
+##    into leaf params, struct-returning fns (gd, local_tile_dyn) resolve
+##    to per-leaf return expressions over their params, dot-access chains
+##    are rewritten, and the tainted struct type defs are removed (GLSL
+##    structs cannot hold pointer members).
 ## 3. `vulkanBindDeviceFnPtrParams` — per-call-site device-fn binding:
 ##    device fns with `ptr` params are cloned per agreeing call-site arg
 ##    tuple, the ptr args are substituted ident→expression into the body
 ##    (`buf +% baseOff` shapes), and ptr-arg indexing over
 ##    pointer-arithmetic chains folds to SSBO element indexing.
+## 4. `vulkanSubgroupGuard32` — the fp16-subgroup shuffle path assumes
+##    32-lane subgroups: kernels whose transitive call graph reaches a
+##    reduction builtin get `if (gl_SubgroupSize < 32u) { return; }` as
+##    their first statement (fail loudly: the kernel returns without
+##    writing its outputs, so a host-side value check fails) and their
+##    lane id is rewritten to `gl_SubgroupInvocationID` (the true subgroup
+##    lane, valid only where the subgroup extensions are enabled).
 ##
-## All three are gated on `crucibleCompileTarget == ctVulkan` so the other
+## All four are gated on `crucibleCompileTarget == ctVulkan` so the other
 ## backends (Metal/CUDA/OpenCL/WGSL) never see them. They run after the
 ## common passes (blit/constexpr normalization) and before vulkan_lang's
 ## codegen, which then only asserts that the IR is legal.
@@ -706,7 +713,7 @@ proc flattenedParamName(base: string; path: seq[string]): string =
   leafName(base, path)
 
 proc flattenStructPtrValues(ctx: var GpuContext) =
-  ## (b) — see module header.
+  ## Pass 2 — vulkanFlattenStructPtrValues: flatten struct-with-ptr-field values (see module header).
 
   let reachable = reachableFns(ctx)
   var byISym = initTable[string, GpuAst]()
@@ -729,7 +736,7 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
         for lf in leaves:
           let lname = flattenedParamName(p.ident.ident(), lf.path)
           if isPtrType(lf.typ):
-            nps.add (i, mkPtrLeaf(lf.path, lf.typ, nil))  # ptr param — bound by pass A
+            nps.add (i, mkPtrLeaf(lf.path, lf.typ, nil))  # ptr param — bound by pass 3
             nps[^1].leaf.name = lname
           else:
             nps.add (i, mkValueLeaf(lf.path, lf.typ, lname))
@@ -839,7 +846,7 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
         return nil
       if bestLen == path.len:
         # full leaf: value → ident; ptr → expr (or the leaf-param ident when
-        # the ptr is a device-fn param bound later by pass A)
+        # the ptr is a device-fn param bound later by pass 3)
         if best.kind == lkValue:
           result = newGpuIdent(best.name)
           result.symbol.typ = best.typ
@@ -881,7 +888,7 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
             elif not lf.expr.isNil:
               result = lf.expr.clone()
             else:
-              # ptr-leaf param bound by pass A → the leaf-param ident
+              # ptr-leaf param bound by pass 3 → the leaf-param ident
               result = newGpuIdent(lf.name)
               result.symbol.typ = lf.typ
             return
@@ -933,7 +940,7 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
             elif not lf.expr.isNil:
               result = lf.expr.clone()
             else:
-              # ptr-leaf param bound by pass A → the leaf-param ident
+              # ptr-leaf param bound by pass 3 → the leaf-param ident
               result = newGpuIdent(lf.name)
               result.symbol.typ = lf.typ
             return
@@ -1253,7 +1260,7 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
         var leafList: seq[FlattenedLeaf]
         for lf in leaves:
           if isPtrType(lf.typ):
-            leafList.add mkPtrLeaf(lf.path, lf.typ, nil)  # ptr param — bound by pass A
+            leafList.add mkPtrLeaf(lf.path, lf.typ, nil)  # ptr param — bound by pass 3
             leafList[^1].name = flattenedParamName(p.ident.ident(), lf.path)
           else:
             leafList.add mkValueLeaf(lf.path, lf.typ,
@@ -1275,7 +1282,7 @@ proc flattenStructPtrValues(ctx: var GpuContext) =
                             passByRef: false)
           np.ident.symbol.typ = leaf.typ
           if leaf.kind == lkPtr:
-            # ptr leaf param: keep a ptr param (bound by pass A); the name
+            # ptr leaf param: keep a ptr param (bound by pass 3); the name
             # must be unique — reuse the leaf name
             np.typ = leaf.typ
           newPS.add np
@@ -1345,7 +1352,7 @@ proc callArgKey(a: GpuAst): string =
     result = "expr:" & structuralKey(a)
 
 proc bindDeviceFnPtrParams(ctx: var GpuContext) =
-  ## (a) — see module header.
+  ## Pass 3 — vulkanBindDeviceFnPtrParams: per-call-site device-fn ptr binding (see module header).
 
   let reachable = reachableFns(ctx)
   var byISym = initTable[string, GpuAst]()
@@ -1474,7 +1481,7 @@ proc bindDeviceFnPtrParams(ctx: var GpuContext) =
       foldPtrIndexes(n.iIndex)
       if n.iArr.kind == gpuCast and n.iArr.cTo.kind == gtPtr:
         var idx = n.iIndex
-        # reuse the same lowering as pass 2
+        # same lowering as pass 2, inlined here (its proc is local to pass 2)
         let bop = n.iArr.cExpr
         if bop.kind == gpuBinOp and bop.bOp.kind == gpuIdent and bop.bOp.ident() == "+":
           var base: GpuAst = nil
@@ -1546,8 +1553,8 @@ proc subgroupGuard32(ctx: var GpuContext) =
   ##    true subgroup lane) instead of `gl_LocalInvocationIndex` (the
   ##    workgroup lane — equal only when workgroup == subgroup, which the
   ##    guard fixes at 32 alongside the kernels' baked 32-wide workgroups).
-  ## The engine-level VkPhysicalDeviceSubgroupProperties ingest query is
-  ## tracked debt (no engine edits in this op).
+  ## The engine does not yet ingest VkPhysicalDeviceSubgroupProperties to
+  ## confirm the subgroup size (an engine-side change, deferred).
   let reachable = reachableFns(ctx)
   # transitive closure over the call graph: a fn is shuffle-reachable when
   # its body contains a reduction builtin or calls a shuffle-reachable fn
