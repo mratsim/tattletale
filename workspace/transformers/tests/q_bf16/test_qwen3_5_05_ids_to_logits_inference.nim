@@ -91,10 +91,11 @@ proc main() =
         # vs chunked band as the tolerance: through 24 bf16 layer boundaries
         # the sub-ULP GDN core agreement flips bf16 rounding boundaries and
         # accumulates, so the fixture band reaches well past the 5e-3 suite
-        # bar at later layers (locked below: < 0.05 per layer). The Nim
-        # output must sit no further from the chunked forward than the
-        # fixture's own sequential replay does. The band-regime asserts lock
-        # the fixture's documented self-consistency guards.
+        # bar at later layers (locked below: < 0.05 per layer). Given the
+        # 0.00-vs-seq asserts above, the band-anchored comparisons hold by
+        # construction; they are fixture self-consistency locks, and the
+        # independent checks are the 0.00-vs-seq asserts plus the band-
+        # regime doAsserts below (the fixture's documented guards).
         let inputBand = maxAbsDiff(st.getTensorOwned("layer_input_seq"),
                                    st.getTensorOwned("layer_input"))
         assertAllClose(h, st.getTensorOwned("layer_input"),
