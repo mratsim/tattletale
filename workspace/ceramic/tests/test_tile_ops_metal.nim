@@ -5,13 +5,10 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Host-side value checks of the tile op surface over the 8×8×8 FMA
-## atom: the fp32 load/store dataflow and the op call semantics.
-## Host-only: the fp16 path and the mma shuffle need the device.
-##
-## Run: nim c -r --hints:off --warnings:off \
-##   --outdir:build/tests/test_tile_ops --nimcache:nimcache/tests/test_tile_ops \
-##   workspace/ceramic/tests/test_tile_ops.nim
+## Run: nim cpp -r --hints:off --warnings:off \
+##   --outdir:build/tests/test_tile_ops_metal \
+##   --nimcache:nimcache/tests/test_tile_ops_metal \
+##   workspace/ceramic/tests/test_tile_ops_metal.nim
 
 import std/strformat
 import workspace/crucible

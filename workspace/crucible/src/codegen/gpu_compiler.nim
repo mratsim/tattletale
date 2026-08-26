@@ -15,6 +15,7 @@ import workspace/crucible/vendor/wgpu
 import ./passes/pass_datatypes
 import ./passes/pass_registry
 import ./passes/passes_legalizations
+import ./passes/passes_legalization_vulkan
 import ./passes/passes_validations
 import ./passes/passes_optimizations
 import ./passes/passes_lowering
@@ -111,6 +112,10 @@ macro codegenVulkan(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
+  # Vulkan-only legalizations: var params → value, struct-with-ptr-field
+  # values → flattened leaves, device-fn ptr params → per-call-site SSBO
+  # binding (all gated on ctVulkan inside the passes).
+  reg.registerLegalizationVulkanPasses()
   reg.register("rejectVulkanKeywords", pkValidation, phaseMain,
     "Rejects identifiers that are reserved GLSL keywords",
     proc(ctx: var GpuContext): void =

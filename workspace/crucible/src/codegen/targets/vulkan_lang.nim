@@ -5,7 +5,7 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [macros, strformat, strutils, sugar, sequtils, tables]
+import std / [algorithm, macros, strformat, strutils, sugar, sequtils, tables]
 
 import ../ir/gpu_types
 import ./lang_utils
@@ -162,6 +162,13 @@ proc glslSafeName*(name: string): string =
     result = name & "_vk"
   else:
     result = name
+
+const vulkanBuiltinFnNames* = {
+  # `{.builtin.}` math procs forward their plain name to the backend's native
+  # spelling (builtins_functions.nim): MSL has `rsqrt`, GLSL has `inversesqrt`.
+  # Keyed by the getFnName-resolved name.
+  "rsqrt": "inversesqrt"
+}.toTable()
 
 proc genSsboDeclaration(name: string, innerType: string, binding: int): string =
   ## Generates a GLSL SSBO declaration:
@@ -415,7 +422,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         var vkArgs: seq[string]
         for arg in ast.cArgs:
           vkArgs.add ctx.genVulkan(arg)
-        result = indentStr & ctx.getFnName(bkVulkan, ast) & '(' & vkArgs.join(", ") & ')'
+        let fnName = ctx.getFnName(bkVulkan, ast)
+        result = indentStr & vulkanBuiltinFnNames.getOrDefault(fnName, fnName) &
+                 '(' & vkArgs.join(", ") & ')'
 
   of gpuTemplateCall:
     when nimvm:
@@ -546,14 +555,101 @@ proc renameIdentRefs(n: var GpuAst, symToRename: Table[string, string]) =
     for ch in mitems(n):
       renameIdentRefs(ch, symToRename)
 
+proc ssboInnerType(p: GpuParam): string =
+  ## The SSBO element type of a kernel ptr param (`ptr UncheckedArray[T]` → T's GLSL spelling).
+  gpuTypeToString(p.typ.to, allowEmptyIdent = true)
+
+proc normalizeKernelSsboParams(ctx: var GpuContext,
+                               canonicalSsbo: var seq[tuple[name: string, inner: string]]) =
+  ## Positional SSBO canonicalization for kernel (`{.global.}`) ptr params, the live
+  ## codegen() replacement for the dead lowerSsboParams pass:
+  ## - the first kernel's ptr params seed the canonical (name, inner-type) list
+  ## - a later kernel's ptr param at the same position must have the SAME inner type
+  ##   (loud raiseAssert otherwise) and is renamed to the canonical name
+  ##   (param symbol + body refs), so both kernels reference the same SSBO member.
+  for (fnIdent, fn) in ctx.fnTab.mpairs:
+    if fn.isGlobal():
+      var ssboIdx = 0
+      for p in fn.pParams.mitems:
+        if p.typ.kind == gtPtr:
+          if ssboIdx < canonicalSsbo.len:
+            let (canonName, canonInner) = canonicalSsbo[ssboIdx]
+            let inner = ssboInnerType(p)
+            if inner != canonInner:
+              raiseAssert "Vulkan: SSBO type mismatch at position " & $ssboIdx &
+                " (kernel '" & fn.pName.ident() & "' passes '" & p.ident.ident() &
+                ": " & inner & "', canonical is '" & canonName & ": " & canonInner & "')"
+            if p.ident.ident() != canonName:
+              var renames = initTable[string, string]()
+              renames[p.ident.symbol.iSym] = canonName
+              renameIdentRefs(fn.pBody, renames)
+              p.ident.symbol.name = canonName
+          else:
+            canonicalSsbo.add (p.ident.ident(), ssboInnerType(p))
+          inc ssboIdx
+
+proc bindDeviceFnPtrParams(ctx: var GpuContext) =
+  ## Superseded by the Vulkan IR legalization passes
+  ## (passes_legalization_vulkan.nim, vulkanBindDeviceFnPtrParams): device-fn
+  ## ptr params are bound per call site (with cloning for disagreeing buffer
+  ## tuples) before codegen runs, so no device fn reaches this point with a
+  ## ptr param. Kept as a no-op backstop: if a ptr param ever survives, the
+  ## gpuTypeToString(gtPtr) raise in genVulkan reports it loudly.
+  discard
+
+proc containsAnyKind(t: GpuType, kinds: set[GpuTypeKind]): bool =
+  ## True when the type tree contains any kind in `kinds`.
+  if t.isNil: return false
+  case t.kind
+  of gtPtr:   result = containsAnyKind(t.to, kinds)
+  of gtArray: result = containsAnyKind(t.aTyp, kinds)
+  of gtUA:    result = containsAnyKind(t.uaTo, kinds)
+  of gtObject:
+    for f in t.oFields:
+      if containsAnyKind(f.typ, kinds): return true
+  of gtGenericInst:
+    for g in t.gArgs:
+      if containsAnyKind(g, kinds): return true
+  else:       result = t.kind in kinds
+
+proc astContainsAnyKind(n: GpuAst, kinds: set[GpuTypeKind]): bool =
+  ## True when any GpuType attached to `n` or its subtree contains a kind in `kinds`.
+  if n.isNil: return false
+  case n.kind
+  of gpuVar:       result = containsAnyKind(n.vType, kinds) or astContainsAnyKind(n.vInit, kinds)
+  of gpuLit:       result = containsAnyKind(n.lType, kinds)
+  of gpuConv:      result = containsAnyKind(n.convTo, kinds) or astContainsAnyKind(n.convExpr, kinds)
+  of gpuCast:      result = containsAnyKind(n.cTo, kinds) or astContainsAnyKind(n.cExpr, kinds)
+  of gpuArrayLit:
+    if containsAnyKind(n.aLitType, kinds): return true
+    for v in n.aValues:
+      if astContainsAnyKind(v, kinds): return true
+  of gpuTypeDef:
+    if containsAnyKind(n.tTyp, kinds): return true
+    for f in n.tFields:
+      if containsAnyKind(f.typ, kinds): return true
+  of gpuObjConstr:
+    if containsAnyKind(n.ocType, kinds): return true
+    for f in n.ocFields:
+      if containsAnyKind(f.typ, kinds) or astContainsAnyKind(f.value, kinds): return true
+  of gpuConstexpr:
+    result = containsAnyKind(n.cType, kinds) or astContainsAnyKind(n.cValue, kinds)
+  of gpuIdent:
+    result = n.symbol != nil and n.symbol.typ != nil and containsAnyKind(n.symbol.typ, kinds)
+  else:
+    for ch in n:
+      if astContainsAnyKind(ch, kinds): return true
+
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle.
 
-  # Check if we need fp64 / fp16 / bf16 extensions or the subgroup
+  # Check if we need fp64 / fp16 / bf16 / int16 / int8 extensions, or the subgroup
   # shuffles (which need the KHR subgroup shuffle extensions)
   var needsFp64 = false
   var needsFp16 = false
   var needsBf16 = false
+  var needsInt16 = false
+  var needsInt8 = false
   var needsSubgroup = false
   for fnIdent, fn in ctx.fnTab:
     if fn.pRetType.containsKind(gtFloat64):
@@ -562,6 +658,8 @@ proc codegen*(ctx: var GpuContext): string =
       needsFp16 = true
     if fn.pRetType.containsKind(gtBf16):
       needsBf16 = true
+    if containsAnyKind(fn.pRetType, {gtUint16, gtInt16}): needsInt16 = true
+    if containsAnyKind(fn.pRetType, {gtUint8}):   needsInt8 = true
     for p in fn.pParams:
       if p.typ.containsKind(gtFloat64):
         needsFp64 = true
@@ -569,6 +667,10 @@ proc codegen*(ctx: var GpuContext): string =
         needsFp16 = true
       if p.typ.containsKind(gtBf16):
         needsBf16 = true
+      if containsAnyKind(p.typ, {gtUint16, gtInt16}): needsInt16 = true
+      if containsAnyKind(p.typ, {gtUint8}):   needsInt8 = true
+    if astContainsAnyKind(fn.pBody, {gtUint16, gtInt16}): needsInt16 = true
+    if astContainsAnyKind(fn.pBody, {gtUint8}):   needsInt8 = true
     if usesReductionBuiltin(fn.pBody):
       needsSubgroup = true
 
@@ -582,33 +684,51 @@ proc codegen*(ctx: var GpuContext): string =
   if needsBf16:
     result.add "#extension GL_EXT_bfloat16 : enable\n"
     result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
+  if needsInt16:
+    result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
+    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_int16 : enable\n"
+  if needsInt8:
+    result.add "#extension GL_EXT_shader_8bit_storage : enable\n"
+    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_int8 : enable\n"
   if needsSubgroup:
     # subgroupShuffleDown is gated by GL_KHR_shader_subgroup_shuffle_relative,
     # subgroupShuffle by GL_KHR_shader_subgroup_shuffle. The umbrella
     # GL_KHR_shader_subgroup is not a GLSL extension name and glslang
     # rejects it. Both are emitted when either kind is used: the
     # tile reduction trees use the two together (the down tree then the
-    # leader broadcast).
+    # leader broadcast). fp16 subgroup operands (universalMma8x8x8 shuffles
+    # float16 registers) additionally need the extended-types ext.
     result.add "#extension GL_KHR_shader_subgroup_shuffle_relative : enable\n"
     result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
+    if needsFp16:
+      result.add "#extension GL_EXT_shader_subgroup_extended_types_float16 : enable\n"
   result.add "\n"
 
-  # Note: SSBO name normalization and type validation is done by lowerSsboParams pass.
-
-  # ── Step 1: Build SSBO and push-const info from IR (after pass normalization) ──
+  # ── Step 1: Normalize kernel SSBO params (device-fn ptr params were
+  #    already bound by the Vulkan legalization passes) ──
   var canonicalSsbo: seq[tuple[name: string, inner: string]]
+  normalizeKernelSsboParams(ctx, canonicalSsbo)
+  bindDeviceFnPtrParams(ctx)
+
+  # ── Step 1b: Push-constant declarations (deduped by name) ──
   var pushConstDecls: seq[string]
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
+  var pushConstSeen: Table[string, string]   # param name -> emitted type string
+  for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
-      var ssboIdx = 0
       for p in fn.pParams:
         if p.typ.kind == gtPtr:
-          let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
-          if ssboIdx >= canonicalSsbo.len:
-            canonicalSsbo.add (p.ident.ident(), inner)
-          inc ssboIdx
+          discard  # SSBOs were canonicalized by normalizeKernelSsboParams
         elif p.addressSpace != asSMEM:
-          pushConstDecls.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+          let pname = p.ident.ident()
+          let ptype = gpuTypeToString(p.typ, allowEmptyIdent = true)
+          if pname in pushConstSeen:
+            if pushConstSeen[pname] != ptype:
+              raiseAssert "Vulkan: push-constant param '" & pname &
+                "' has conflicting types across kernels ('" & pushConstSeen[pname] &
+                "' vs '" & ptype & "')"
+          else:
+            pushConstSeen[pname] = ptype
+            pushConstDecls.add gpuTypeToString(p.typ, pname, allowEmptyIdent = false)
 
   # ── Step 2: Emit push-constant block (if any) ──
   if pushConstDecls.len > 0:

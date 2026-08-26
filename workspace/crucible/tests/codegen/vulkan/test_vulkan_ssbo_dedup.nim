@@ -14,8 +14,7 @@
 ## The SSBO variable name should be consistent so both kernels can
 ## reference the same buffer.
 
-import std/strformat
-import std/strutils
+import std/[os, osproc, strformat, strutils, tempfiles]
 import workspace/crucible
 const code = vulkan:
   proc kernel1(output: ptr UncheckedArray[uint32];
@@ -43,6 +42,19 @@ doAssert ssboCount == 2, &"Expected exactly 2 SSBOs, got {ssboCount}\n{code}"
 # kernel2's output `y` shares the canonical position-0 buffer name
 doAssert code.contains("void kernel1()"), &"Missing kernel1 in:\n{code}"
 doAssert code.contains("void kernel2()"), &"Missing kernel2 in:\n{code}"
+
+# The name-mismatch rename fix (kernel2's y/x → canonical output/a) must produce
+# GLSL that actually validates. Validate each kernel like the engine does.
+for kern in ["kernel1", "kernel2"]:
+  var s = code.replace("void " & kern & "()", "void main()")
+  let (tmpFile, tmpPath) = createTempFile("vk_ssbo_dedup", ".comp")
+  defer: tmpFile.close()
+  tmpFile.write(s)
+  tmpFile.flushFile()
+  let (outp, exitCode) = execCmdEx(
+    "glslangValidator -V --target-env vulkan1.1 " & quoteShell(tmpPath) & " -o /dev/null")
+  doAssert exitCode == 0,
+    "glslangValidator rejected " & kern & ":\n" & outp & "\n--- shader ---\n" & s
 
 echo code
 echo "  OK — SSBO dedup by position"
