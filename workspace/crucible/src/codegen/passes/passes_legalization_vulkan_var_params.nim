@@ -271,7 +271,7 @@ proc convertVarParams*(ctx: var GpuContext) =
             for ch in n.mitems:
               fixReturn(ch)
         fixReturn(body)
-        # GLSL requires every path of a non-void fn to return a value, so
+        # GLSL requires every path of a non-void fn to return a value:
         # append a trailing `return x` for the fall-through path (dead code
         # when the body already ends with a return).
         body.statements.add GpuAst(kind: gpuReturn, rValue: retIdent.clone())

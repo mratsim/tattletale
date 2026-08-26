@@ -8,8 +8,8 @@
 ## Vulkan IR legalization pass 4: fail-loudly subgroup-size guard.
 ##
 ## Kernels whose transitive call graph reaches a subgroup-shuffle reduction
-## builtin get `if (gl_SubgroupSize < 32u) { return; }` as their first
-## statement, and their lane id is rewritten to `gl_SubgroupInvocationID`.
+## builtin get `if (gl_SubgroupSize < 32u) { return; }` as their first statement,
+## and their lane id is rewritten to `gl_SubgroupInvocationID`.
 ## Runs after pass 3.
 
 import std/[sets]

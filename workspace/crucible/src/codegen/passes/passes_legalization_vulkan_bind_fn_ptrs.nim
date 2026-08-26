@@ -9,8 +9,8 @@
 ##
 ## Device fns with `ptr` params are cloned per agreeing call-site arg tuple,
 ## and the ptr args are substituted ident→expression into the body
-## (`buf +% baseOff` shapes). Ptr-arg indexing over pointer-arithmetic
-## chains then folds to SSBO element indexing. Runs after pass 2.
+## (`buf +% baseOff` shapes). Ptr-arg indexing over pointer-arithmetic chains
+## then folds to SSBO element indexing. Runs after pass 2.
 
 import std/[algorithm, tables]
 import ../ir/gpu_types

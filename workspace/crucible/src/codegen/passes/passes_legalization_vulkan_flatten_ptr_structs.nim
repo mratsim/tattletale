@@ -10,8 +10,8 @@
 ## hold pointer members).
 ##
 ## Tainted vars split into leaf vars, value params split into leaf params,
-## struct-returning fns resolve to per-leaf return expressions over their
-## params, and dot-access chains are rewritten onto the leaves. Tainted
+## struct-returning fns resolve to per-leaf return expressions over their params,
+## and dot-access chains are rewritten onto the leaves. Tainted
 ## struct type defs are removed. Runs after pass 1.
 
 import std/[sets, tables]

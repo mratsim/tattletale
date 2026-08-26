@@ -6,8 +6,8 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Vulkan-specific shared helpers for the Vulkan IR legalization passes:
-## taint analysis (struct types containing pointer fields), fn-table and
-## reachability helpers, and the ptr-index fold shared by passes 2 and 3.
+## taint analysis (struct types containing pointer fields), fn-table and reachability helpers,
+## plus the ptr-index fold shared by passes 2 and 3.
 
 import std/[sets, strutils, tables]
 import ../ir/gpu_types
@@ -193,8 +193,7 @@ proc foldPtrIndexToElement*(arr, idx: GpuAst; ctx: GpuContext;
   ## Recognizes the `+%` pointer-arithmetic shape (ptr = cast[ptr T](
   ## uint64(base) + uint64(off) * sizeof(T))) and lowers element indexing
   ## over it to SSBO indexing with the offset folded into the index.
-  ## Returns nil when the shape does not match, so callers keep their
-  ## original Index node.
+  ## Returns nil when the shape does not match, so callers keep their original Index node.
   if arr.kind == gpuCast and arr.cTo.kind == gtPtr and arr.cExpr.kind == gpuBinOp:
     let bop = arr.cExpr
     if bop.bOp.kind == gpuIdent and bop.bOp.ident() == "+":

@@ -5,11 +5,10 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Canonical IR expression typing and body helpers shared across passes:
-## the strict `getExprType` and best-effort `exprTypeBestEffort` type
-## readers, the block-expression blitter and symbol-renaming helpers, and
-## the single-assignment-chain resolvers used by the Vulkan legalization
-## passes.
+## Canonical IR expression typing and body helpers shared across passes.
+## Provides the strict `getExprType` and best-effort `exprTypeBestEffort`
+## type readers, the block-expression blitter and symbol-renaming helpers,
+## and the single-assignment-chain resolvers used by the Vulkan passes.
 
 import std / [macros, sequtils, sets, tables]
 import ../ir/gpu_types
