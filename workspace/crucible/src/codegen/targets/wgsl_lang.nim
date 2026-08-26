@@ -394,17 +394,21 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         result = indentStr & ctx.genWebGpu(ast.aLeft) & " = " & ctx.genWebGpu(ast.aRight)
 
   of gpuIf:
+    template genCond(c: GpuAst): untyped =
+      # Compile time `bool` is turned into int literals 0 and 1 in typed AST
+      (if c.kind == gpuLit and c.lType.kind == gtInt32 and c.lValue == "1": "true"
+       elif c.kind == gpuLit and c.lType.kind == gtInt32 and c.lValue == "0": "false"
+       else: ctx.genWebGpu(c))
     # skip semicolon in the condition. Otherwise can lead to problematic code
     ctx.withoutSemicolon: # skip semicolon for if bodies
-      ## Compile time `bool` is turned into int literals 0 and 1 in typed AST
-      if ast.ifCond.kind == gpuLit and ast.ifCond.lType.kind == gtInt32 and ast.ifCond.lValue == "1":
-        result = indentStr & "if (true) {\n"
-      elif ast.ifCond.kind == gpuLit and ast.ifCond.lType.kind == gtInt32 and ast.ifCond.lValue == "0":
-        result = indentStr & "if (false) {\n"
-      else:
-        result = indentStr & "if (" & ctx.genWebGpu(ast.ifCond) & ") {\n"
+      result = indentStr & "if (" & genCond(ast.ifCond) & ") {\n"
     result &= ctx.genWebGpu(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
+    for el in ast.ifElifs:
+      ctx.withoutSemicolon:
+        result &= " else if (" & genCond(el.cond) & ") {\n"
+      result &= ctx.genWebGpu(el.body, indent + 1) & '\n'
+      result &= indentStr & '}'
     if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genWebGpu(ast.ifElse, indent + 1) & '\n'

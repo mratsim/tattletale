@@ -166,6 +166,7 @@ type
       ifCond*: GpuAst
       ifThen*: GpuAst
       ifIsExpr*: bool     ## True if from nnkIfExpr (expression-if), False if from nnkIfStmt
+      ifElifs*: seq[tuple[cond, body: GpuAst]] ## Flat elif branches (from nnkIfStmt), empty for if-exprs
       ifElse*: GpuAst # will be `GpuAst(kind*: gpuDiscard)` if no else branch
     of gpuTernary:
       tCond*: GpuAst  # condition
@@ -568,6 +569,8 @@ proc clone*(ast: GpuAst): GpuAst =
     result.ifCond = ast.ifCond.clone()
     result.ifThen = ast.ifThen.clone()
     result.ifIsExpr = ast.ifIsExpr
+    for el in ast.ifElifs:
+      result.ifElifs.add (cond: el.cond.clone(), body: el.body.clone())
     result.ifElse = ast.ifElse.clone()
   of gpuTernary:
     result = GpuAst(kind: gpuTernary)
@@ -805,8 +808,7 @@ proc len*(ast: GpuAst): int =
   of gpuCall:      1 + ast.cArgs.len
   of gpuBlock:     ast.statements.len
   of gpuIf:
-    if ast.ifElse.kind != gpuDiscard: 3
-    else:          2
+    (if ast.ifElse.kind != gpuDiscard: 3 else: 2) + ast.ifElifs.len
   of gpuTernary:   3
   of gpuFor:       3
   of gpuWhile:     2
@@ -901,6 +903,11 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     result.add pretty(n.ifCond, indent + 4)
     result.add idd("IfThen")
     result.add pretty(n.ifThen, indent + 4)
+    for i, el in n.ifElifs:
+      result.add idd("IfElif" & $i & "Cond")
+      result.add pretty(el.cond, indent + 4)
+      result.add idd("IfElif" & $i & "Body")
+      result.add pretty(el.body, indent + 4)
     if n.ifElse.kind != gpuDiscard:
       result.add idd("IfElse")
       result.add pretty(n.ifElse, indent + 4)
@@ -1022,6 +1029,14 @@ template iterImpl(ast: untyped, mutable: static bool): untyped =
   of gpuIf:
     ya(ifCond)
     ya(ifThen)
+    when mutable:
+      for el in mitems(ast.ifElifs):
+        yield el.cond
+        yield el.body
+    else:
+      for el in ast.ifElifs:
+        yield el.cond
+        yield el.body
     if ast.ifElse.kind != gpuDiscard:
       yield ast.ifElse
   of gpuTernary:

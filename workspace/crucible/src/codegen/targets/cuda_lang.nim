@@ -291,6 +291,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "if (" & ctx.genCuda(ast.ifCond) & ") {\n"
     result &= ctx.genCuda(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
+    for el in ast.ifElifs:
+      ctx.withoutSemicolon:
+        result &= " else if (" & ctx.genCuda(el.cond) & ") {\n"
+      result &= ctx.genCuda(el.body, indent + 1) & '\n'
+      result &= indentStr & '}'
     if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
       result &= ctx.genCuda(ast.ifElse, indent + 1) & '\n'
