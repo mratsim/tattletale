@@ -69,7 +69,7 @@ proc loadTileRows*[R, C: static int; A: static MmaAtom](
     rowLimit: int32) {.device.} =
   ## Row-bounded loadTile: tile-plane rows origin[2]·R + r at or above
   ## `rowLimit` are zero-filled instead of read.
-  loadTile(tile, gl, origin)
+  tile.loadTile(gl, origin)
   let r0 = int32(origin[2]) * int32(R)
   if r0 + int32(R) > rowLimit:
     zeroRows(tile, r0, rowLimit)
@@ -109,7 +109,7 @@ proc storeTileRows*[R, C: static int; A: static MmaAtom](
   ## A tile fully inside the limit stores through the facility. A straddling tile writes only its in-range rows.
   let r0 = int32(origin[2]) * int32(R)
   if r0 + int32(R) <= rowLimit:
-    storeTile(gl, tile, origin)
+    gl.storeTile(tile, origin)
   else:
     storeRows(gl, tile, origin, r0, rowLimit)
 
@@ -121,7 +121,7 @@ proc storeTileRows*[R, C: static int; A: static MmaAtom](
   ## Row-bounded storeTile for fp16 tiles. The `to` round trip is the identity.
   let r0 = int32(origin[2]) * int32(R)
   if r0 + int32(R) <= rowLimit:
-    storeTile(gl, tile, origin)
+    gl.storeTile(tile, origin)
   else:
     storeRows(gl, tile, origin, r0, rowLimit)
 
@@ -157,7 +157,7 @@ proc loadTileRows*[TIn, TOut; R, C: static int; A: static MmaAtom](
     rowLimit: int32) {.device.} =
   ## Row-bounded loadTile for the swapped rmsnorm views: tile-plane
   ## rows origin[3]·R + r at or above `rowLimit` are zero-filled instead of read.
-  loadTile(tile, gl, origin)
+  tile.loadTile(gl, origin)
   let r0 = int32(origin[3]) * int32(R)
   if r0 + int32(R) > rowLimit:
     zeroRows(tile, r0, rowLimit)
@@ -195,6 +195,6 @@ proc storeTileRows*[R, C: static int; A: static MmaAtom](
   ## Row-bounded storeTile for the swapped rmsnorm views: rows at or above `rowLimit` are not written.
   let r0 = int32(origin[3]) * int32(R)
   if r0 + int32(R) <= rowLimit:
-    storeTile(gl, tile, origin)
+    gl.storeTile(tile, origin)
   else:
     storeRows(gl, tile, origin, r0, rowLimit)
