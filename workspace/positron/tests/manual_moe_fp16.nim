@@ -20,8 +20,6 @@ const moeMsl = metal:
     moe_fwd(out_r, x, router_w, gate_up_w, down_w, shared_gate_up_w, shared_down_w,
       h_scratch, hs_scratch, num_tokens)
 type MoEG = tuple[xf, rwf, guf, dnf, sguf, sdwf: seq[float32]]
-proc w32(fs: seq[float32], rows, cols: int): F.Tensor =
-  toTensor(fp16sToF32(fp32sToFp16(fs))).reshape(rows, cols)
 proc genMoE(T: int): MoEG =
   (scaledRand(T, 2048, 0.3'f32), scaledRand(64, 2048, 0.125'f32),
    scaledRand(64 * 3072, 2048, 0.125'f32), scaledRand(64 * 2048, 1536, 0.125'f32),

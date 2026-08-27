@@ -45,6 +45,12 @@ proc fp32sToFp16*(fs: seq[float32]): seq[uint16] =
   for i in 0 ..< fs.len:
     result[i] = fp32ToFp16(fs[i])
 
+proc w32*(fs: seq[float32], shape: varargs[int]): F.Tensor =
+  ## Rebuilds an fp16-rounded weight/input tensor from the shared
+  ## fp32 seq: the kernel buffer and the reference tensors derive
+  ## from the same fp16 values.
+  result = toTensor(fp16sToF32(fp32sToFp16(fs))).reshape(shape)
+
 proc buildRopeCosSin*(rows, dim: int, theta: float32): tuple[cosT, sinT: seq[float32]] =
   ## Returns the NEOX fp32 cos/sin tables: row r carries cos/sin of
   ## inv_freq[t]·r with inv_freq[t] = theta^(−2t/dim), t in

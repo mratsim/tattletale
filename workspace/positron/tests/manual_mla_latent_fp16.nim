@@ -20,8 +20,6 @@ const mlaMsl = metal:
     let n = num_tokens * num_heads * 256
     mla_latent_fwd(combined, combined +% int(n), combined +% (2 * int(n)),
       x, qa_w, qa_g, qb_w, kva_w, kva_g, kvb_w, cos_t, sin_t, num_tokens, num_heads)
-proc w32(fs: seq[float32], shape: varargs[int]): F.Tensor =
-  toTensor(fp16sToF32(fp32sToFp16(fs))).reshape(shape)
 proc dup64(a: seq[float32], T: int): seq[float32] =
   ## The model's emb = cat((freqs, freqs)): entry c = freq (c mod 32).
   for r in 0 ..< T:
@@ -73,7 +71,7 @@ proc mlaReference(g: tuple[xf, qaWF, qaGF, qbWF, kvaWF, kvaGF, kvbWF: seq[float3
 proc checkMlaLatent(): bool =
   ## T=8/H=4 and T=16/H=20 (the real head count). The 1e-2 bound
   ## covers 4 chained matmuls, 2 norms and the rope at the 0.125 scale
-  ## (observed worst ~1e-3).
+  ## (observed worst ~4e-3).
   Torch.manual_seed(0x5EED'u64)
   for (T, H) in [(8, 4), (16, 20)]:
     let g = genIn(T, H)

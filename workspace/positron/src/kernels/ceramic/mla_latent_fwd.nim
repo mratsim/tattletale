@@ -17,8 +17,8 @@
 ## Experimental: not a production kernel, known gaps below, not fixed.
 ##
 ## The chain per token t (fp16 inputs, fp32 accumulation, one fp16
-## RNE round at every state store. The model's RMSNorm does ONE
-## rounding, unlike qk_norm_rope's two-rounding form):
+## RNE round at every state store. The model's RMSNorm rounds once,
+## the `weight * x.to(dtype)` form):
 ##
 ##   qa  = qa_w @ x                     (768)
 ##   qn  = rms_norm(qa, 768, qa_g)      -> fp16
@@ -87,11 +87,10 @@ const
   HiddenDim = 2048      # the model hidden size
   QLoRARank = 768       # the q_a projection width
   KvLoRARank = 512      # the kv_a k_pass width
-  QkRopeDim = 64        # the rotary head dim
   QkNopeDim = 192       # the non-rotary q/k head dim
   QkHeadDim = 256       # qk_nope + qk_rope, the stored q/k head width
   VHeadDim = 256        # the stored v head width
-  KvAOut = 576          # KvLoRARank + QkRopeDim, the kv_a width
+  KvAOut = 576          # KvLoRARank + the 64-dim rotary, the kv_a width
   KvBPerHead = 448      # QkNopeDim + VHeadDim, the per-head kv_b width
   RmsEps = 1e-5'f32     # rms_norm_eps
 
@@ -105,8 +104,8 @@ proc normRound16[A: static MmaAtom](
     gamma: RtLeft[float16, 8, 32, A],
     rowVals: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]) {.device.} =
   ## `dst[r][c] = fp16(src[r][c] · rowVals[r] · gamma[r][c])`: the MLA
-  ## RMSNorm epilogue with ONE fp16 RNE round at the end (the model's
-  ## rounding, not the two-round qk_norm_rope form). `rowVals` is the
+  ## RMSNorm epilogue with one fp16 RNE round at the end (the model's
+  ## `weight * x.to(dtype)` rounding). `rowVals` is the
   ## row-rsqrt'ed variance col-vec (fp32 variance mean(x²) + eps). The
   ## frag walk follows the loadTile lane→element mapping, so src,
   ## gamma and dst agree elementwise.
@@ -174,26 +173,26 @@ proc mla_latent_fwd*(
   let hBlock = int32(threadgroup_position_in_grid.y)
   let head0 = hBlock * 2
 
-  let glQo = qo.gd(shape = (-1, -1, -1, -1), stride = (num_heads * 256, 256, num_heads * 256, 1))
-  let glKo = ko.gd(shape = (-1, -1, -1, -1), stride = (num_heads * 256, 256, num_heads * 256, 1))
-  let glVo = vo.gd(shape = (-1, -1, -1, -1), stride = (num_heads * 256, 256, num_heads * 256, 1))
+  let glQo = qo.gd(shape = (-1, -1, -1, -1), stride = (num_heads * QkHeadDim, QkHeadDim, num_heads * QkHeadDim, 1))
+  let glKo = ko.gd(shape = (-1, -1, -1, -1), stride = (num_heads * QkHeadDim, QkHeadDim, num_heads * QkHeadDim, 1))
+  let glVo = vo.gd(shape = (-1, -1, -1, -1), stride = (num_heads * VHeadDim, VHeadDim, num_heads * VHeadDim, 1))
   let glX = x.gd(shape = (-1, -1, -1, -1), stride = (2048, 0, 2048, 1))
   let glQaW = qa_w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 2048, 1))
   let glQaG = qa_g.gd(shape = (-1, -1, -1, -1), stride = (0, 0, 0, 1))
-  let glQbW = qb_w.gd(shape = (-1, -1, -1, -1), stride = (256 * 768, 0, 768, 1))
+  let glQbW = qb_w.gd(shape = (-1, -1, -1, -1), stride = (QkHeadDim * QLoRARank, 0, QLoRARank, 1))
   let glKvaW = kva_w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 2048, 1))
   let glKvaG = kva_g.gd(shape = (-1, -1, -1, -1), stride = (0, 0, 0, 1))
-  let glKvbW = kvb_w.gd(shape = (-1, -1, -1, -1), stride = (448 * 512, 0, 512, 1))
+  let glKvbW = kvb_w.gd(shape = (-1, -1, -1, -1), stride = (KvBPerHead * KvLoRARank, 0, KvLoRARank, 1))
 
   # The accumulator arrays: 32-wide N-tiles over the threadgroup's
   # 8 tokens × 2 heads. Register budget per lane (fp32 units): qa 192,
   # q 128, kv 144, kb 224, plus the qn/kp fp16 state and the B tiles.
   var qaAcc: array[24, rt_l(float32, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
   var qnT: array[24, rt_l(float16, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
-  var qAcc: array[16, rt_l(float32, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
-  var kvAcc: array[18, rt_l(float32, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
-  var kpT: array[16, rt_l(float16, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
-  var kbAcc: array[28, rt_l(float32, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
+  var qAcc: array[2 * QkHeadDim div 32, rt_l(float32, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
+  var kvAcc: array[KvAOut div 32, rt_l(float32, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
+  var kpT: array[KvLoRARank div 32, rt_l(float16, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
+  var kbAcc: array[2 * KvBPerHead div 32, rt_l(float32, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)]
 
   var a: rt_l(float16, 8, 16, UNIVERSAL_8x8x8_F32F16F16F32)
   var b: rt_r(float16, 16, 32, UNIVERSAL_8x8x8_F32F16F16F32)
@@ -203,26 +202,26 @@ proc mla_latent_fwd*(
   var gammaT: rt_l(float16, 8, 32, UNIVERSAL_8x8x8_F32F16F16F32)
 
   # ── qa = qa_w @ x, then the one-rounding RMSNorm over 768 ──
-  for nt in 0 ..< 24:
+  for nt in 0 ..< QLoRARank div 32:
     qaAcc[nt].zero()
   for kk in 0'i32 ..< HiddenDim div 16:
     a.loadTileRows(glX, (0, 0, tBlock, kk), num_tokens)
-    for nt in 0'i32 ..< 24:
+    for nt in 0'i32 ..< QLoRARank div 32:
       b.loadTile(glQaW, (0, 0, nt, kk))
       qaAcc[nt].mma_AB(a, b)
   ss.zero()
-  for nt in 0 ..< 24:
+  for nt in 0 ..< QLoRARank div 32:
     sq.mul(qaAcc[nt], qaAcc[nt])
     ss.row_sum(sq, ss)
-  ss.mul(ss, 1.0'f32 / 768.0'f32)
+  ss.mul(ss, 1.0'f32 / float32(QLoRARank))
   ss.add(ss, RmsEps)
   ss.rsqrt(ss)
-  for nt in 0 ..< 24:
+  for nt in 0 ..< QLoRARank div 32:
     gammaT.loadTile(glQaG, (0, 0, 0, nt))
     qnT[nt].normRound16(qaAcc[nt], gammaT, ss)
 
   # ── q = qb_w @ qn (768-wide K, 16 N-tiles = 2 heads × 256) ──
-  for nt in 0 ..< 16:
+  for nt in 0 ..< 2 * QkHeadDim div 32:
     qAcc[nt].zero()
   for kk in 0'i32 ..< QLoRARank div 32:
     for nt in 0'i32 ..< 16:
@@ -230,55 +229,57 @@ proc mla_latent_fwd*(
       qAcc[nt].mma_AB(qnT[kk], b32)
 
   # ── kv = kva_w @ x (576 = 512 k_pass + 64 k_rot) ──
-  for nt in 0 ..< 18:
+  for nt in 0 ..< KvAOut div 32:
     kvAcc[nt].zero()
   for kk in 0'i32 ..< HiddenDim div 16:
     a.loadTileRows(glX, (0, 0, tBlock, kk), num_tokens)
-    for nt in 0'i32 ..< 18:
+    for nt in 0'i32 ..< KvAOut div 32:
       b.loadTile(glKvaW, (0, 0, nt, kk))
       kvAcc[nt].mma_AB(a, b)
 
   # ── kp = rms_norm(kv[0:512], kva_g), one rounding ──
   ss.zero()
-  for nt in 0 ..< 16:
+  for nt in 0 ..< KvLoRARank div 32:
     sq.mul(kvAcc[nt], kvAcc[nt])
     ss.row_sum(sq, ss)
-  ss.mul(ss, 1.0'f32 / 512.0'f32)
+  ss.mul(ss, 1.0'f32 / float32(KvLoRARank))
   ss.add(ss, RmsEps)
   ss.rsqrt(ss)
-  for nt in 0 ..< 16:
+  for nt in 0 ..< KvLoRARank div 32:
     gammaT.loadTile(glKvaG, (0, 0, 0, nt))
     kpT[nt].normRound16(kvAcc[nt], gammaT, ss)
 
   # ── kb = kvb_w @ kp (512-wide K, 28 N-tiles = 2 heads × 448) ──
-  for nt in 0 ..< 28:
+  for nt in 0 ..< 2 * KvBPerHead div 32:
     kbAcc[nt].zero()
   for kk in 0'i32 ..< KvLoRARank div 32:
-    for nt in 0'i32 ..< 28:
+    for nt in 0'i32 ..< 2 * KvBPerHead div 32:
       b32.loadTile(glKvbW, (head0, 0, nt, kk))
       kbAcc[nt].mma_AB(kpT[kk], b32)
 
   # ── interleaved rope, in place on the rot accumulator tiles:
   #    kvAcc[16..17] = the shared k_rot (pairs 0..15, 16..31),
   #    qAcc[hh·8 + 6..7] = head hh's q_rot halves ──
-  kvAcc[16].ropeTile32(cos_t, sin_t, tBlock * 8, 0)
-  kvAcc[17].ropeTile32(cos_t, sin_t, tBlock * 8, 16)
+  kvAcc[KvLoRARank div 32].ropeTile32(cos_t, sin_t, tBlock * 8, 0)
+  kvAcc[KvLoRARank div 32 + 1].ropeTile32(cos_t, sin_t, tBlock * 8, 16)
   for hh in 0 ..< 2:
-    qAcc[hh * 8 + 6].ropeTile32(cos_t, sin_t, tBlock * 8, 0)
-    qAcc[hh * 8 + 7].ropeTile32(cos_t, sin_t, tBlock * 8, 16)
+    qAcc[hh * (QkHeadDim div 32) + QkNopeDim div 32].ropeTile32(cos_t, sin_t, tBlock * 8, 0)
+    qAcc[hh * (QkHeadDim div 32) + QkNopeDim div 32 + 1].ropeTile32(cos_t, sin_t, tBlock * 8, 16)
 
   # ── stores: the nope parts straight from the accumulators, the
   #    roped rot tiles at the head's cols [192, 256), the shared
   #    k_rot at both heads' rot cols ──
   for hh in 0'i32 ..< 2:
     let head = head0 + hh
-    for nt in 0'i32 ..< 6:
-      glQo.storeTileRows(qAcc[hh * 8 + nt], (0, head, tBlock, nt), num_tokens)
-    glQo.storeTileRows(qAcc[hh * 8 + 6], (0, head, tBlock, 6), num_tokens)
-    glQo.storeTileRows(qAcc[hh * 8 + 7], (0, head, tBlock, 7), num_tokens)
-    for nt in 0'i32 ..< 6:
-      glKo.storeTileRows(kbAcc[hh * 14 + nt], (0, head, tBlock, nt), num_tokens)
-    glKo.storeTileRows(kvAcc[16], (0, head, tBlock, 6), num_tokens)
-    glKo.storeTileRows(kvAcc[17], (0, head, tBlock, 7), num_tokens)
-    for nt in 0'i32 ..< 8:
-      glVo.storeTileRows(kbAcc[hh * 14 + 6 + nt], (0, head, tBlock, nt), num_tokens)
+    let headTiles = QkHeadDim div 32
+    let nopeTiles = QkNopeDim div 32
+    for nt in 0'i32 ..< nopeTiles:
+      glQo.storeTileRows(qAcc[hh * headTiles + nt], (0, head, tBlock, nt), num_tokens)
+    glQo.storeTileRows(qAcc[hh * headTiles + nopeTiles], (0, head, tBlock, nopeTiles), num_tokens)
+    glQo.storeTileRows(qAcc[hh * headTiles + nopeTiles + 1], (0, head, tBlock, nopeTiles + 1), num_tokens)
+    for nt in 0'i32 ..< nopeTiles:
+      glKo.storeTileRows(kbAcc[hh * (KvBPerHead div 32) + nt], (0, head, tBlock, nt), num_tokens)
+    glKo.storeTileRows(kvAcc[KvLoRARank div 32], (0, head, tBlock, nopeTiles), num_tokens)
+    glKo.storeTileRows(kvAcc[KvLoRARank div 32 + 1], (0, head, tBlock, nopeTiles + 1), num_tokens)
+    for nt in 0'i32 ..< VHeadDim div 32:
+      glVo.storeTileRows(kbAcc[hh * (KvBPerHead div 32) + nopeTiles + nt], (0, head, tBlock, nt), num_tokens)

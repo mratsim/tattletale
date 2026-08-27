@@ -44,7 +44,7 @@
 ## (lowest index on ties), and a −inf mask in the selection copy (the
 ## original sigmoid values stay for the weights).
 ##
-## Grid (num_tokens, 1, 1), 32 lanes, ONE token per threadgroup: the
+## Grid (num_tokens, 1, 1), 32 lanes, one token per threadgroup: the
 ## expert sets differ per token, so a shared-B tile across rows is
 ## impossible. Every tile load/store carries the token in the origin's
 ## batch component (the tile's 32 plane rows have only row 0 real, and
@@ -56,7 +56,7 @@
 ## live 32×32 fp32 accumulators (the gHalf/uHalf pair) plus
 ## transients. The h intermediates round to fp16 and land in the
 ## working buffers (h_scratch (num_tokens, 4, 1536), hs_scratch
-## (num_tokens, 1536)). They are NOT caller padding or a ragged
+## (num_tokens, 1536)). They are not caller padding or a ragged
 ## strategy.
 ##
 ## Local device procs: siluMul16 (the expert activation), accScale
@@ -103,7 +103,7 @@ proc siluMul16[A: static MmaAtom](
     dst: var RtLeft[float16, 32, 32, A],
     gHalf, uHalf: RtLeft[float32, 32, 32, A]) {.device.} =
   ## `dst[r][c] = fp16(silu(gHalf[r][c]) · uHalf[r][c])`: the expert
-  ## activation with ONE fp16 RNE round (the h_scratch contract). The
+  ## activation with one fp16 RNE round (the h_scratch contract). The
   ## silu is fp32 from the fp32 gHalf operand (g / (1 + exp2(−g·log2e))),
   ## the product is fp32, one fp16 round at the end. The frag walk
   ## follows the loadTile lane→element mapping, so the operands agree
@@ -256,17 +256,17 @@ proc moe_fwd*(
   let glX = x.gd(shape = (-1, -1, -1, -1), stride = (2048, 0, 2048, 1))
   let glOut = out_r.gd(shape = (-1, -1, -1, -1), stride = (2048, 0, 2048, 1))
   let glRouter = router_w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 2048, 1))
-  let glGu = gate_up_w.gd(shape = (-1, -1, -1, -1), stride = (3072 * 2048, 0, 2048, 1))
+  let glGu = gate_up_w.gd(shape = (-1, -1, -1, -1), stride = (GateUpOut * 2048, 0, 2048, 1))
   let glDown = down_w.gd(shape = (-1, -1, -1, -1), stride = (2048 * 1536, 0, 1536, 1))
   let glSgu = shared_gate_up_w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 2048, 1))
   let glSd = shared_down_w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 1536, 1))
   let glH = h_scratch.gd(shape = (-1, -1, -1, -1), stride = (1536, 1536, 1536, 1))
   let glHs = hs_scratch.gd(shape = (-1, -1, -1, -1), stride = (1536, 0, 1536, 1))
 
-  var dR: rt_l(float32, 32, 64, UNIVERSAL_8x8x8_F32F16F16F32)
+  var dR: rt_l(float32, 32, NumRoutedExperts, UNIVERSAL_8x8x8_F32F16F16F32)
   var a: rt_l(float16, 32, 16, UNIVERSAL_8x8x8_F32F16F16F32)
   var b16: rt_r(float16, 16, 32, UNIVERSAL_8x8x8_F32F16F16F32)
-  var b64: rt_r(float16, 16, 64, UNIVERSAL_8x8x8_F32F16F16F32)
+  var b64: rt_r(float16, 16, NumRoutedExperts, UNIVERSAL_8x8x8_F32F16F16F32)
   var scores: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
   var top4: array[4, int32]
   var w: array[4, float32]
@@ -304,7 +304,7 @@ proc moe_fwd*(
     glHs.storeTileRows(h16, (t, 0, 0, nt), 1)
 
   # ── the 4 routed expert activations -> h_scratch[t, slot] ──
-  for slot in 0 ..< 4:
+  for slot in 0 ..< TopK:
     for nt in 0'i32 ..< MoeIntermediate div 32:
       gHalf.zero()
       uHalf.zero()
@@ -320,7 +320,7 @@ proc moe_fwd*(
   # ── output: routed = Σ w[slot]·down_w[e] @ h, + shared, fp16 store ──
   for nt in 0'i32 ..< HiddenDim div 32:
     routed.zero()
-    for slot in 0 ..< 4:
+    for slot in 0 ..< TopK:
       d.zero()
       for kk in 0'i32 ..< MoeIntermediate div 16:
         a.loadTileRows(glH, (t * 4 + slot, 0, 0, kk), 1)
