@@ -25,6 +25,7 @@ import ../../src/kernels/k_tile_gemm
 type EpiScale[T] = object
   ## Scale epilogue: D = s·AB.
   s*: T
+  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
 
 func apply[T, Sh, StAB, StR](
     op: EpiScale[T];
@@ -61,7 +62,8 @@ static:
 const msl = metal:
   proc fusedScaleUser(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                       Scale: float32, N, K, M: int32) {.global.} =
-    gemm_with_epilogue(D, M, 1, A, K, 1, B, M, 1, N, K, M, EpiScale[float32](s: Scale))
+    gemm_with_epilogue(D, M, 1, A, K, 1, B, M, 1, N, K, M,
+                       EpiScale[float32](s: Scale))
 
 proc runTest() =
   let M = 64
