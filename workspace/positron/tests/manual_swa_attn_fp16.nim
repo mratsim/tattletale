@@ -26,11 +26,22 @@ const swaMsl = metal:
       num_qo, num_kv, q_offset, H, Nkv, window: int32) {.global.} =
     swa_attn_fwd(o, q, k, v, num_qo, num_kv, q_offset, H, Nkv, window, 128)
 
+proc padRows8(fs: seq[float32], rows, rowStride: int): seq[float32] =
+  ## Appends zero rows until the row count is a multiple of 8.
+  ## The kernel's tile loads fetch full 8-row blocks, so a partial
+  ## trailing block must exist in the buffer. The zero rows are inert:
+  ## the band mask excludes them from the softmax and the zero v rows
+  ## add nothing to the P·V mma.
+  let padRows = (rows + 7) div 8 * 8 - rows
+  result = fs & newSeq[float32](padRows * rowStride)
+
 proc swaAttnKernel(qf, kf, vf: seq[float32], numQo, numKv, qOffset, H, Nkv, window, D: int): F.Tensor =
   ## Runs the D-specialized wrapper on the fp16-rounded inputs, returns the fp16 output widened to fp32.
   var engine = bkMetal.init()
   engine.ingest(swaMsl)
-  let args = (fp32sToFp16(qf), fp32sToFp16(kf), fp32sToFp16(vf),
+  let args = (fp32sToFp16(padRows8(qf, numQo, H * D)),
+              fp32sToFp16(padRows8(kf, numKv, Nkv * D)),
+              fp32sToFp16(padRows8(vf, numKv, Nkv * D)),
               int32(numQo), int32(numKv), int32(qOffset), int32(H), int32(Nkv), int32(window))
   var outO = newSeq[uint16](numQo * H * D)
   engine.run << (grid: ((numQo + 7) div 8, H, 1), blk: (32, 1)) >> ("swaD" & $D, outO, args)
@@ -69,7 +80,8 @@ proc checkSwaAttn(): bool =
     let actual = swaAttnKernel(qf, kf, vf, numQo, numKv, qOffset, H, Nkv, window, D)
     let expected = swaAttnReference(qf, kf, vf, numQo, numKv, qOffset, H, Nkv, window, D)
     let w = worstAbsDiff(actual, expected)
-    if w > worstAll: worstAll = w
+    if w > worstAll:
+      worstAll = w
     echo &"  H={H} Nkv={Nkv} D={D} num_qo={numQo} num_kv={numKv} q_offset={qOffset} window={window}: worst |Δ| = {w}"
     assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 5e-3'f64)
   echo &"  worst |Δ| across {cases.len} cases = {worstAll} (tolerance 5e-3)"

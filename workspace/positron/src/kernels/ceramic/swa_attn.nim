@@ -29,11 +29,20 @@
 ## unscaled.
 ##
 ## Buffers, fp16 first then scalars:
-##   - o, q: (num_qo, H, D) row-major
-##   - k, v: (num_kv, Nkv, D) row-major
+##   - o: (num_qo, H, D) row-major, written row-bounded
+##   - q: (pad_qo, H, D) row-major, pad_qo = ceil(num_qo/8)·8
+##   - k, v: (pad_kv, Nkv, D) row-major, pad_kv = ceil(num_kv/8)·8
 ##   - num_qo, num_kv, q_offset, H, Nkv, window: int32
 ##   - D: static int, 64 or 128 (tile geometry). No generic brackets,
 ##     no stride or scratch parameters.
+##
+## Padding contract: the q, k and v buffers hold an 8-row multiple.
+## The tile loads fetch full 8-row blocks, so a partial trailing block
+## would read past the buffer end. Callers zero-fill the padding rows.
+## The padding rows are inert: the band mask excludes them from the
+## softmax (the upper band edge is min(num_kv − 1, p) and the GQA
+## contract num_kv >= q_offset + num_qo keeps every real query row
+## below num_kv), and the zero v rows add nothing to the P·V mma.
 ##
 ## Window band (query row i, absolute position p = q_offset + i):
 ##
@@ -124,8 +133,9 @@ proc swa_attn_fwd*(
   ##   - kvStart = max(0, qAbs − window + 1) div 8
   ##   - kvEnd = (min(num_kv − 1, qAbs + 7)) div 8 + 1
   ## The last block may extend up to 7 rows past num_kv − 1.
-  ## Overhang rows load as zero (Metal bounds-checks buffer reads).
-  ## The causal bound excludes them.
+  ## Those rows are the caller's zero padding (the module doc's padding
+  ## contract). The band mask excludes them from the softmax, and the
+  ## zero v rows add nothing to the P·V mma.
   static: doAssert D == 64 or D == 128
 
   let qBlock = int32(threadgroup_position_in_grid.x)
