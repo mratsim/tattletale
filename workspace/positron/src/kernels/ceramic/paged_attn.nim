@@ -156,12 +156,12 @@ proc paged_attn_fwd*(
   # The q/o views carry the (q row, head, dim) strides. The K/V views
   # carry the slab's row stride and take the per-block base as the
   # origin's batch component (see the module doc's fetch formula).
-  let gl_q = gd(q, shape = (-1, -1, -1, -1), stride = (H * D, D, H * D, 1))
-  let gl_o = gd(o, shape = (-1, -1, -1, -1), stride = (H * D, D, H * D, 1))
-  let gl_k = gd(k_cache, shape = (-1, -1, -1, -1), stride = (1, 1, Nkv * D, 1))
+  let gd_q = q.gd(shape = (-1, -1, -1, -1), stride = (H * D, D, H * D, 1))
+  let gd_o = o.gd(shape = (-1, -1, -1, -1), stride = (H * D, D, H * D, 1))
+  let gd_k = k_cache.gd(shape = (-1, -1, -1, -1), stride = (1, 1, Nkv * D, 1))
   # The V view is the transposed slab view: the RtRight loadTile
   # hands Vᵀ to the P·V mma.
-  let gl_v = gd(v_cache, shape = (-1, -1, -1, -1), stride = (1, 1, 1, Nkv * D))
+  let gd_v = v_cache.gd(shape = (-1, -1, -1, -1), stride = (1, 1, 1, Nkv * D))
 
   let kvHead = head div (H div Nkv)
   let q0 = cu_seqlens_q[seqId]
@@ -195,7 +195,7 @@ proc paged_attn_fwd*(
   var max_vec: rv(float32, 8, 8)
   var norm_vec: rv(float32, 8, 8)
 
-  loadTileRows(q_reg, gl_q, (q0, head, qBlock, 0), qLen)
+  q_reg.loadTileRows(gd_q, (q0, head, qBlock, 0), qLen)
   max_vec.neg_infty()
   norm_vec.zero()
   o_reg.zero()
@@ -209,7 +209,7 @@ proc paged_attn_fwd*(
     let base = pageId * pageStride + inPage * rowStride + kvHead * int32(D)
     # The block's rows are local to the base: the origin's row-tile
     # component stays 0.
-    loadTile(k_reg, gl_k, (base, 0, 0, 0))
+    k_reg.loadTile(gd_k, (base, 0, 0, 0))
     att_block.zero()
     att_block.mma_AB(q_reg, k_reg)
     maskCausal(att_block, cachedLen + q0Local - kv_idx * 8 - decodeAdj)
@@ -223,7 +223,7 @@ proc paged_attn_fwd*(
     norm_vec.row_sum(att_block, norm_vec)
     p_reg.convert(att_block)
     o_reg.mul_row(o_reg, max_vec_last)
-    loadTile(v_reg, gl_v, (base, 0, 0, 0))
+    v_reg.loadTile(gd_v, (base, 0, 0, 0))
     o_reg.mma_AB(p_reg, v_reg)
   o_reg.div_row(o_reg, norm_vec)
-  storeTileRows(gl_o, o_reg, (q0, head, qBlock, 0), qLen)
+  gd_o.storeTileRows(o_reg, (q0, head, qBlock, 0), qLen)
