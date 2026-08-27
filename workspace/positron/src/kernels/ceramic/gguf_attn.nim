@@ -215,6 +215,15 @@ proc ggufAttnForward*(engine: var auto, p: GGufAttnParams, x: seq[uint16],
   # The page decomposition is shift/mask (pageSize is a power of two).
   let lgPageSize = countTrailingZeroBits(p.pageSize)
   let pageMask = p.pageSize - 1
+  # the slabs hold whole pages of (page_size, Nkv, D); the per-token
+  # write moves one (Nkv, D) row into both slabs at the same offset,
+  # so the k and v slabs must share an equal whole-page capacity
+  let slabPageElems = p.pageSize * p.Nkv * p.D
+  let slabPageCount = kSlab.len div slabPageElems
+  doAssert kSlab.len == vSlab.len,
+    "the k and v slabs must hold an equal number of elements"
+  doAssert kSlab.len mod slabPageElems == 0,
+    "the k slab length must be a whole number of pages"
   for s in 0 ..< numSeqs:
     let qLen = (p.cuSeqlensQ[s + 1] - p.cuSeqlensQ[s]).int
     let q0 = p.cuSeqlensQ[s].int
@@ -227,6 +236,8 @@ proc ggufAttnForward*(engine: var auto, p: GGufAttnParams, x: seq[uint16],
       let inPage = row and pageMask
       let pageId = p.blockTable[s * p.maxPages + pageIdx].int
       doAssert pageId >= 0, "cache write hit an unused block_table slot"
+      doAssert pageId < slabPageCount,
+        "cache write hit a pageId beyond the slab's page capacity"
       # each token's Nkv·D span is one contiguous move on both sides:
       # the slab row (pageId, inPage) and the kRope/vBuf token row are
       # both head-dim-contiguous (slabOffset's h·D + d layout)
