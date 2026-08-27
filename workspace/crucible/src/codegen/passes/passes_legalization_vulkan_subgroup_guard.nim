@@ -14,7 +14,7 @@
 
 import std/[sets]
 import ../ir/gpu_types
-import ./passes_legalization_vulkan_helpers
+import ./passes_legalization_vulkan_ptr_in_struct
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Pass 4: vulkanSubgroupGuard32 (GPU-B-001)

@@ -15,9 +15,7 @@
 import ../ir/gpu_types
 import ../builtins/builtins_compilermagic
 import ./pass_datatypes
-import ./passes_legalization_vulkan_var_params
-import ./passes_legalization_vulkan_flatten_ptr_structs
-import ./passes_legalization_vulkan_bind_fn_ptrs
+import ./passes_legalization_vulkan_ptr_in_struct
 import ./passes_legalization_vulkan_subgroup_guard
 
 # ═════════════════════════════════════════════════════════════════════════
