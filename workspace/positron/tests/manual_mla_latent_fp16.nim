@@ -8,27 +8,32 @@
 ##
 ## Run: nim cpp -r --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip \
 ##   workspace/positron/tests/manual_mla_latent_fp16.nim
+
 import std/strformat
 import workspace/[crucible, libtorch, libtorch_testutils]
 import workspace/libtorch as F
 from workspace/libtorch/src/raw_libtorch import manual_seed
 import ../src/kernels/ceramic/mla_latent_fwd
 import ./attn_test_utils
+
 const mlaMsl = metal:
   proc mlaLatent(combined: ptr UncheckedArray[float16], x, qa_w, qa_g, qb_w, kva_w, kva_g, kvb_w: ptr UncheckedArray[float16],
       cos_t, sin_t: ptr UncheckedArray[float32], num_tokens, num_heads: int32) {.global.} =
     let n = num_tokens * num_heads * 256
     mla_latent_fwd(combined, combined +% int(n), combined +% (2 * int(n)),
       x, qa_w, qa_g, qb_w, kva_w, kva_g, kvb_w, cos_t, sin_t, num_tokens, num_heads)
+
 proc dup64(a: seq[float32], T: int): seq[float32] =
   ## The model's emb = cat((freqs, freqs)): entry c = freq (c mod 32).
   for r in 0 ..< T:
     for half in 0 ..< 2:
       for c in 0 ..< 32:
         result.add a[r * 32 + c]
+
 proc gammaVals(n: int): seq[float32] =
   for c in 0 ..< n:
     result.add 0.5'f32 + float32(((7 * c + 55 + 13 * (c div 32)) mod 16)) / 16.0'f32
+
 proc ropePairs(r, cos32, sin32: F.Tensor): F.Tensor =
   let rb = r.reshape(r.size(0), r.size(1), 32, 2)
   let c32 = cos32.unsqueeze(1)
@@ -36,10 +41,12 @@ proc ropePairs(r, cos32, sin32: F.Tensor): F.Tensor =
   let a = rb.narrow(3, 0, 1).squeeze(3)
   let b = rb.narrow(3, 1, 1).squeeze(3)
   F.cat([(a * c32 - b * s32).unsqueeze(3), (b * c32 + a * s32).unsqueeze(3)], 3).reshape(r.size(0), r.size(1), 64)
+
 proc genIn(T, H: int): tuple[xf, qaWF, qaGF, qbWF, kvaWF, kvaGF, kvbWF: seq[float32]] =
   (scaledRand(T, 2048, 0.125'f32), scaledRand(768, 2048, 0.125'f32), gammaVals(768),
    scaledRand(H * 256, 768, 0.125'f32), scaledRand(576, 2048, 0.125'f32), gammaVals(512),
    scaledRand(H * 448, 512, 0.125'f32))
+
 proc mlaKernel(g: tuple[xf, qaWF, qaGF, qbWF, kvaWF, kvaGF, kvbWF: seq[float32]],
                cosF, sinF: seq[float32], T, H: int): F.Tensor =
   var engine = bkMetal.init()
@@ -53,6 +60,7 @@ proc mlaKernel(g: tuple[xf, qaWF, qaGF, qbWF, kvaWF, kvaGF, kvbWF: seq[float32]]
   let q = toTensor(fp16sToF32(outAll[0 ..< n])).reshape(T, H, 256)
   F.cat([q, toTensor(fp16sToF32(outAll[n ..< 2 * n])).reshape(T, H, 256),
          toTensor(fp16sToF32(outAll[2 * n ..< 3 * n])).reshape(T, H, 256)], 0).reshape(-1)
+
 proc mlaReference(g: tuple[xf, qaWF, qaGF, qbWF, kvaWF, kvaGF, kvbWF: seq[float32]],
                   cos32, sin32: seq[float32], T, H: int): F.Tensor =
   let x32 = w32(g.xf, T, 2048)
@@ -68,6 +76,7 @@ proc mlaReference(g: tuple[xf, qaWF, qaGF, qbWF, kvaWF, kvaGF, kvbWF: seq[float3
   F.cat([F.cat([q.narrow(2, 0, 192), qRotR], 2).to(kFloat16).to(kFloat32),
          F.cat([kb.narrow(2, 0, 192), kRotR], 2).to(kFloat16).to(kFloat32),
          kb.narrow(2, 192, 256).to(kFloat16).to(kFloat32)], 0).reshape(-1)
+
 proc checkMlaLatent(): bool =
   ## T=8/H=4 and T=16/H=20 (the real head count). The 1e-2 bound
   ## covers 4 chained matmuls, 2 norms and the rope at the 0.125 scale
@@ -81,5 +90,6 @@ proc checkMlaLatent(): bool =
     echo &"  T={T} H={H}: worst |Δ| = {worstAbsDiff(actual, expected)}"
     assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 1e-2'f64)
   result = true
+
 when isMainModule:
   runCppTest("mla_latent_fwd vs the torch reference", checkMlaLatent)

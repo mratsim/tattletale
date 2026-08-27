@@ -6,9 +6,7 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ##
-## Run: nim cpp -r --hints:off --warnings:off \
-##   --outdir:build/wip \
-##   --nimcache:nimcache/wip \
+## Run: nim cpp -r --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip \
 ##   workspace/positron/tests/manual_swa_attn_fp16.nim
 
 import std/[strformat, math, options]
@@ -21,12 +19,10 @@ import ../src/kernels/ceramic/swa_attn
 import ./attn_test_utils
 
 const swaMsl = metal:
-  proc swaD64(
-      o, q, k, v: ptr UncheckedArray[float16],
+  proc swaD64(o, q, k, v: ptr UncheckedArray[float16],
       num_qo, num_kv, q_offset, H, Nkv, window: int32) {.global.} =
     swa_attn_fwd(o, q, k, v, num_qo, num_kv, q_offset, H, Nkv, window, 64)
-  proc swaD128(
-      o, q, k, v: ptr UncheckedArray[float16],
+  proc swaD128(o, q, k, v: ptr UncheckedArray[float16],
       num_qo, num_kv, q_offset, H, Nkv, window: int32) {.global.} =
     swa_attn_fwd(o, q, k, v, num_qo, num_kv, q_offset, H, Nkv, window, 128)
 
@@ -41,9 +37,7 @@ proc swaAttnKernel(qf, kf, vf: seq[float32], numQo, numKv, qOffset, H, Nkv, wind
   result = toTensor(fp16sToF32(outO)).reshape(numQo, H, D)
 
 proc swaAttnReference(qf, kf, vf: seq[float32], numQo, numKv, qOffset, H, Nkv, window, D: int): F.Tensor =
-  ## torch SDPA over the same fp16-rounded values: q (1, H, num_qo, D),
-  ## k/v (1, Nkv, num_kv, D), scale 1.0, the banded window mask as an
-  ## additive bias, GQA on when H > Nkv.
+  ## torch SDPA over the same fp16-rounded values: scale 1.0, the banded window mask as an additive bias, GQA on when H > Nkv.
   let qT = toTensor(qf).reshape(numQo, H, D).to(kFloat16).to(kFloat32)
   let kT = toTensor(kf).reshape(numKv, Nkv, D).to(kFloat16).to(kFloat32)
   let vT = toTensor(vf).reshape(numKv, Nkv, D).to(kFloat16).to(kFloat32)
@@ -60,16 +54,12 @@ proc swaAttnReference(qf, kf, vf: seq[float32], numQo, numKv, qOffset, H, Nkv, w
   result = o4.transpose(1, 2).reshape(numQo, H, D)
 
 proc checkSwaAttn(): bool =
-  ## Five cases vs torch SDPA: window 512 (causal only), window 16
-  ## (band binds), GQA with D = 64, a decode query at the tail, and a
-  ## short decode window at the causal edge. The 5e-3 bound sits ~7x
-  ## above the observed 7e-4 accumulation-order noise between the
-  ## torch matmuls and the Metal mma, so a wrong band edge, scale or
-  ## GQA mapping shows up as O(1) errors.
+  ## Five cases vs torch SDPA: causal-only, banded, GQA, tail decode,
+  ## and a short edge window. The 5e-3 bound is ~7x the observed noise
+  ## (~7e-4), so wrong band edges, scale or GQA mapping fail by O(1).
   Torch.manual_seed(0x5EED'u64)
   let cases = [(8, 1, 128, 64, 64, 0, 512), (8, 1, 128, 128, 128, 0, 16),
-               (4, 2, 64, 40, 40, 0, 12), (8, 1, 128, 1, 33, 32, 8),
-               (4, 2, 64, 4, 28, 24, 8)]
+               (4, 2, 64, 40, 40, 0, 12), (8, 1, 128, 1, 33, 32, 8), (4, 2, 64, 4, 28, 24, 8)]
   var worstAll = 0.0'f32
   for d in 0 ..< cases.len:
     let (H, Nkv, D, numQo, numKv, qOffset, window) = cases[d]

@@ -11,59 +11,38 @@
 #
 # ############################################################
 
-## Mixture-of-experts forward on the ceramic Tile API: the
-## Glm4MoeLiteMoE routing + NaiveMoe experts + shared MLP for the
-## GLM-4.7-Flash dims. Experimental: not a production kernel, known
-## gaps below, not fixed.
+## Mixture-of-experts forward on the ceramic Tile API.
+## Implements the Glm4MoeLiteMoE routing, the NaiveMoe experts and the shared MLP for the GLM-4.7-Flash dims.
+## Experimental: not a production kernel, known gaps below, not fixed.
 ##
-## Per token t, fp32 arithmetic over fp16-rounded inputs:
+## Dataflow per token (fp32 arithmetic over fp16-rounded inputs):
 ##
-##   logits = router_w @ x                     (64)
-##   s      = sigmoid(logits)                  (in-kernel exp)
-##   top4   = the 4 largest s, lowest-index tiebreak
-##   w      = s[top4]
-##   w      = w / (sum(w) + 1e-20) · 1.8
-##   per slot e = top4[slot]:
-##     gHalf, uHalf = gate_up_w[e] @ x         (gate cols 0:1536, up cols 1536:3072)
-##     h            = silu(gHalf) · uHalf      (1536), fp16 round -> h_scratch[t, slot]
-##   routed = Σ_slot w[slot] · (down_w[e] @ h_scratch[t, slot])
-##   gs, us = shared_gate_up_w @ x
-##   hs     = silu(gs) · us (fp16 round -> hs_scratch[t])
-##   out_r[t] = fp16(routed + shared_down_w @ hs_scratch[t])
+##   router:  x --> router_w @ --> logits (64) --> sigmoid --> s
+##            top-4 of s (lowest-index tiebreak) --> w = s/(sum(w)+1e-20)·1.8
+##   experts: per slot e = top4[slot]:
+##            x --> gate_up_w[e] @ --> (gHalf, uHalf)
+##                  --> h = silu(gHalf)·uHalf (1536) --> fp16 round
+##                  --> h_scratch[t, slot]
+##            routed = Σ_slot w[slot] · (down_w[e] @ h_scratch[t, slot])
+##   shared:  x --> shared_gate_up_w @ --> (gs, us)
+##                  --> hs = silu(gs)·us (1536) --> fp16 round
+##                  --> hs_scratch[t]
+##            out_r[t] = fp16(routed + shared_down_w @ hs_scratch[t])
 ##
-## The model's group gating (n_group = 1, topk_group = 1, zero bias)
-## selects all 64 experts, so the group step is a no-op and folds into
-## the plain top-4 over the sigmoid scores.
+## The model's group selection (n_group = 1, topk_group = 1, zero bias)
+## selects all 64 experts, so the group step is a no-op.
+## The top-4 runs directly over the sigmoid scores.
 ##
-## Routing: the router GEMV fills a (32, 64) accumulator with only
-## row 0 real (the exl3 MMODE-0 trick: the 32-row x tiles load
-## row-bounded to 1). The 64 row-0 logits are redistributed into an
-## (8, 8) score tile, 2 values per lane across the 32 lanes, then the
-## top-4 runs as 4 passes over the tile: local max of the lane's 2
-## scores, a 5-step simdShuffleDown max tree, the holding expert
-## (lowest index on ties), and a −inf mask in the selection copy (the
-## original sigmoid values stay for the weights).
-##
-## Grid (num_tokens, 1, 1), 32 lanes, one token per threadgroup: the
-## expert sets differ per token, so a shared-B tile across rows is
-## impossible. Every tile load/store carries the token in the origin's
-## batch component (the tile's 32 plane rows have only row 0 real, and
-## origin[2] steps in 32-row units).
-##
-## GEMMs: the exl3_gemv MMODE-0 trick (32-row tiles, `loadTileRows`
-## rowLimit 1), 16-wide K-steps (HiddenDim div 16 = 128 over 2048)
-## with mma_AB into fp32 accumulators. Register budget: at most ~2
-## live 32×32 fp32 accumulators (the gHalf/uHalf pair) plus
-## transients. The h intermediates round to fp16 and land in the
-## working buffers (h_scratch (num_tokens, 4, 1536), hs_scratch
-## (num_tokens, 1536)). They are not caller padding or a ragged
-## strategy.
-##
-## Local device procs: siluMul16 (the expert activation), accScale
-## (the weighted routed accumulation), addStore16 (the output round),
-## gatherScores (the logit redistribution) and topk4 (the register
-## selection) live in this module. The row-bounded load/store come
-## from tile_io_rows (positron local extension).
+## Buffers:
+##   - out_r: (num_tokens, 2048) fp16 routed + shared output
+##   - x: (num_tokens, 2048) fp16
+##   - router_w: (64, 2048) fp16
+##   - gate_up_w: (64, 3072, 2048) fp16 fused g|up weight (g 0:1536, up 1536:3072)
+##   - down_w: (64, 2048, 1536) fp16
+##   - shared_gate_up_w: (3072, 2048) fp16
+##   - shared_down_w: (2048, 1536) fp16
+##   - h_scratch: (num_tokens, 4, 1536) fp16 working buffer
+##   - hs_scratch: (num_tokens, 1536) fp16 working buffer
 ##
 ## Known production gaps (documented, not fixed):
 ##   - one token per threadgroup: no expert-batched B tiles, no x
@@ -80,12 +59,12 @@ import ./tile_io_rows
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
-# The real GLM-4.7-Flash dims, baked as module constants. The kernel
-# is non-generic: its tile types cannot take the rt_l/rv default atoms
-# (those call getTileConfig, which asserts a metal:/cuda: block context,
-# and a non-generic proc body is typechecked on the host import). The
-# explicit universal-atom enum members below are exactly what the
-# defaults resolve to on the Metal and CUDA backends.
+# The real GLM-4.7-Flash dims, baked as module constants.
+# The kernel is non-generic: its tile types cannot take the rt_l/rv
+# default atoms, which call getTileConfig and assert a metal:/cuda:
+# block context. A non-generic proc body is typechecked on the host
+# import.
+# The explicit universal-atom enum members below are exactly what the defaults resolve to on the Metal and CUDA backends.
 
 const
   HiddenDim = 2048          # the model hidden size
@@ -103,11 +82,10 @@ proc siluMul16[A: static MmaAtom](
     dst: var RtLeft[float16, 32, 32, A],
     gHalf, uHalf: RtLeft[float32, 32, 32, A]) {.device.} =
   ## `dst[r][c] = fp16(silu(gHalf[r][c]) · uHalf[r][c])`: the expert
-  ## activation with one fp16 RNE round (the h_scratch contract). The
-  ## silu is fp32 from the fp32 gHalf operand (g / (1 + exp2(−g·log2e))),
-  ## the product is fp32, one fp16 round at the end. The frag walk
-  ## follows the loadTile lane→element mapping, so the operands agree
-  ## elementwise.
+  ## activation with one fp16 RNE round (the h_scratch contract).
+  ## The silu is fp32 from the fp32 gHalf operand, g / (1 + exp2(−g·log2e)),
+  ## and the product is fp32 with one fp16 round at the end.
+  ## The frag walk follows the loadTile lane→element mapping, so the operands agree elementwise.
   const rowTiles = 32 div A.getM()
   const colTiles = 32 div A.getN()
   const vpt = A.getVpt()
@@ -136,8 +114,7 @@ proc accScale[A: static MmaAtom](
 proc addStore16[A: static MmaAtom](
     dst: var RtLeft[float16, 32, 32, A],
     routed, shared: RtLeft[float32, 32, 32, A]) {.device.} =
-  ## `dst[r][c] = fp16(routed[r][c] + shared[r][c])`: the output's one
-  ## fp16 RNE round.
+  ## `dst[r][c] = fp16(routed[r][c] + shared[r][c])`: the output's one fp16 RNE round.
   const rowTiles = 32 div A.getM()
   const colTiles = 32 div A.getN()
   const vpt = A.getVpt()
@@ -153,12 +130,12 @@ proc gatherScores[AL, AS: static MmaAtom](
   ## Redistributes the 64 row-0 router logits of the (32, 64)
   ## accumulator into the (8, 8) score tile: element (r, c) holds
   ## sigmoid(logit of expert 8r + c), 2 values per lane across all 32
-  ## lanes. The row-0 logits live in the accumulator's lanes {0, 1, 8,
-  ## 9} (2 per col-frag). Destination lane d pulls its pair from the
-  ## source lane `d and 9` (the row-0 owner of the same col pair).
-  ## The lane→expert mapping follows the universal AC fragment layout
-  ## of both tiles (a wrong mapping shows up as a routing mismatch,
-  ## not a value error).
+  ## lanes. The row-0 logits live in the accumulator's lanes
+  ## {0, 1, 8, 9} (2 per col-frag). Destination lane d pulls its pair
+  ## from the source lane `d and 9` (the row-0 owner of the same col
+  ## pair). The lane→expert mapping follows the universal AC fragment
+  ## layout of both tiles (a wrong mapping shows up as a routing
+  ## mismatch, not a value error).
   static:
     doAssert AL.getM() == AS.getM() and AL.getN() == AS.getN() and
       AL.getVpt() == AS.getVpt(),
@@ -180,15 +157,15 @@ proc topk4[A: static MmaAtom](
     scores: RtLeft[float32, 8, 8, A],
     top4: var array[4, int32],
     w: var array[4, float32]) {.device.} =
-  ## Selects the 4 largest router scores of the (8, 8) score tile, the
-  ## top-4 of the sigmoid values with the lowest-index tiebreak. The
-  ## weights come from the original tile. The selection runs on a
-  ## masked copy. Per pass: the local max of the lane's 2 scores, a
-  ## 5-step simdShuffleDown max tree (deltas 16, 8, 4, 2, 1)
+  ## Selects the 4 largest router scores of the (8, 8) score tile:
+  ## the top-4 of the sigmoid values with the lowest-index tiebreak.
+  ## The weights come from the original tile. The selection runs on
+  ## a masked copy. Per pass: the local max of the lane's 2 scores,
+  ## a 5-step simdShuffleDown max tree (deltas 16, 8, 4, 2, 1)
   ## broadcast from lane 0, the candidate expert indices where
   ## score == max (no match = 64) reduced by a 5-step min tree
-  ## broadcast from lane 0, and the found expert masked to −inf in the
-  ## selection copy.
+  ## broadcast from lane 0, and the found expert masked to −inf in
+  ## the selection copy.
   var sel: RtLeft[float32, 8, 8, A]
   sel.frags[0][0].frag[0] = scores.frags[0][0].frag[0]
   sel.frags[0][0].frag[1] = scores.frags[0][0].frag[1]
@@ -245,12 +222,28 @@ proc moe_fwd*(
     h_scratch: ptr UncheckedArray[float16],  # (num_tokens, 4, 1536) fp16 working buffer
     hs_scratch: ptr UncheckedArray[float16], # (num_tokens, 1536) fp16 working buffer
     num_tokens: int32) {.device.} =
-  ## Computes the module doc's contract for one token: the router
-  ## GEMV + in-register top-4, the 4 per-slot expert activations into
-  ## h_scratch, the shared expert activation into hs_scratch, the
-  ## weighted routed + shared down projections, and the fp16 output
-  ## store. Every tile carries the token (or h_scratch row) in the
-  ## origin's batch component.
+  ## Computes the module doc's contract for one token:
+  ##   - the router GEMV + in-register top-4
+  ##   - the 4 per-slot expert activations into h_scratch
+  ##   - the shared expert activation into hs_scratch
+  ##   - the weighted routed + shared down projections
+  ##   - the fp16 output store
+  ##
+  ## Grid (num_tokens, 1, 1), 32 lanes, one token per threadgroup.
+  ## The expert sets differ per token, so a shared-B tile across rows
+  ## is impossible. Every tile load/store carries the token
+  ## or the h_scratch row in the origin's batch component. The tile's
+  ## 32 plane rows have only row 0 real, and origin[2] steps in 32-row
+  ## units.
+  ##
+  ## GEMMs: 32-row tiles loaded row-bounded to 1 (only row 0 real),
+  ## 16-wide K-steps (128 over 2048) with mma_AB into fp32
+  ## accumulators. The router GEMV fills a (32, 64) accumulator.
+  ## The 64 row-0 logits redistribute into an (8, 8) score tile,
+  ## 2 values per lane. The top-4 runs as 4 passes over the tile
+  ## (the gatherScores and topk4 device procs).
+  ## Register budget: ~2 live 32×32 fp32 accumulators (the gHalf/uHalf pair) plus transients.
+  ## The h intermediates round to fp16 and land in the working buffers, which are not caller padding.
   let t = int32(threadgroup_position_in_grid.x)
 
   let glX = x.gd(shape = (-1, -1, -1, -1), stride = (2048, 0, 2048, 1))

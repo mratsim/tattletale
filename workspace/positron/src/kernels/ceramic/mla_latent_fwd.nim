@@ -11,63 +11,43 @@
 #
 # ############################################################
 
-## MLA latent projection forward on the ceramic Tile API: the
-## Glm4MoeLiteAttention low-rank chain rebuilds the per-head q/k/v
-## states from the fp16 hidden rows and writes them for the SDPA core.
+## MLA latent projection forward: the Glm4MoeLiteAttention low-rank chain rebuilds per-head q/k/v states for the SDPA core.
 ## Experimental: not a production kernel, known gaps below, not fixed.
 ##
-## The chain per token t (fp16 inputs, fp32 accumulation, one fp16
-## RNE round at every state store. The model's RMSNorm rounds once,
-## the `weight * x.to(dtype)` form):
+## Dataflow per token (fp16 inputs, fp32 accumulation, fp16 RNE round at every state store):
 ##
-##   qa  = qa_w @ x                     (768)
-##   qn  = rms_norm(qa, 768, qa_g)      -> fp16
-##   q   = qb_w @ qn                    (num_heads · 256)
-##   kv  = kva_w @ x                    (576 = 512 k_pass + 64 k_rot)
-##   kp  = rms_norm(kv[0:512], kva_g)   -> fp16
-##   kb  = kvb_w @ kp                   (num_heads · 448)
-##   per head: q_nope = q[0:192], q_rot = q[192:256]
-##             k_nope = kb[0:192], v = kb[192:448]
-##   rope (interleaved, below) on q_rot and the shared k_rot
-##   store qo = cat(q_nope, q_rot), ko = cat(k_nope, k_rot), vo = v,
-##   each (num_tokens, num_heads, 256) fp16.
+##   q chain:  x --> qa_w @ --> qa --> rms_norm(qa, 768, qa_g) --> qn --> qb_w @ --> q
+##   kv chain: x --> kva_w @ --> kv = (kp_part 512, k_rot 64)
+##             kv[0:512] --> rms_norm(kv, 512, kva_g) --> kp --> kvb_w @ --> kb
+##   per head: q = (q_nope 192, q_rot 64), kb = (k_nope 192, v 256)
+##             q_rot, k_rot --> interleaved rope
+##   stores:   qo = (q_nope, q_rot), ko = (k_nope, k_rot), vo = v
+##             each (num_tokens, num_heads, 256) fp16
 ##
-## Interleaved rope (the model's apply_rotary_pos_emb_interleave,
-## rope_interleave = true): the 64-dim rot part rotates in ADJACENT
-## pairs (2i, 2i+1), i in [0, 32), by pos · theta^(−2i/64) with theta
-## = 1e6. The cos/sin tables are (num_tokens, 64) fp32 with entry c
-## equal to cos/sin of freq (c mod 32) (the model's emb =
-## cat((freqs, freqs))). The kernel reads table col i for pair i.
-## k_rot is computed once per token and replicated across heads (the
-## model's `k_rot.expand`).
+## Buffers:
+##   - qo, ko, vo: (num_tokens, num_heads, 256) fp16 output states
+##   - x: (num_tokens, 2048) fp16 hidden rows
+##   - qa_w: (768, 2048) fp16, qa_g: (768,) fp16
+##   - qb_w: (num_heads·256, 768) fp16
+##   - kva_w: (576, 2048) fp16, kva_g: (512,) fp16
+##   - kvb_w: (num_heads·448, 512) fp16
+##   - cos_t, sin_t: (num_tokens, 64) fp32 rope tables
 ##
-## Grid (ceil(num_tokens/8), num_heads div HBLK, 1), 32 lanes, one
-## 8-token × HBLK-head block per threadgroup. HBLK = 2: the kv_b
-## accumulator alone is 8·(2·448) fp32 = 224 registers per lane. Do
-## not raise without re-checking the register budget. The shared
-## projections (qa, qn, kv, krot, kp) compute once per threadgroup,
-## the per-head parts for the block's HBLK heads.
-##
-## GEMM structure: the exl3 K-loop with mma_AB into fp32 accumulators.
-## The qa/kv chains step 16-wide x tiles over 2048 (128 steps) against
-## 16×32 weight tiles. The q/kv_b chains step the 8×32 activation
-## tiles over 768/512 (24/16 steps) against 32×32 weight tiles. Every
-## output width is an exact 32-multiple (768 = 24×32, 576 = 18×32,
-## 448 = 14×32), so no tail tiles.
-##
-## Local device procs: normRound16 (the one-rounding RMSNorm
-## epilogue) and ropeTile32 (the interleaved adjacent-pair rotation)
-## live in this module. The row-bounded load/store come from
-## tile_io_rows (positron local extension).
+## Semantics:
+##   - the interleaved rope rotates the 64-dim rot parts in adjacent pairs
+##     (2i, 2i+1), i in [0, 32), by pos·theta^(−2i/64)
+##     (theta = 1e6). Table entry c = cos/sin of freq (c mod 32).
+##     k_rot computes once per token and replicates across heads.
+##   - the RMSNorm rounds once (the model's `weight * x.to(dtype)`)
 ##
 ## Known production gaps (documented, not fixed):
 ##   - the states feed the SDPA core with scale 0.0625
-##     (= qk_head_dim^−0.5, a consumer concern, not applied here)
-##   - prefill contract: num_tokens = the kv length, no cache or
-##     position offsets. num_tokens must be a multiple of 8 for the
-##     k/v store (rows beyond it are zero-filled and skipped)
-##   - x and the weights re-read from global per projection (no
-##     threadgroup staging)
+##     (qk_head_dim^−0.5, a consumer concern, not applied here)
+##   - prefill contract: num_tokens = the kv length, no cache
+##     or position offsets. num_tokens must be a multiple of 8.
+##     The k/v store zero-fills and skips rows beyond it.
+##   - x and the weights re-read from global per projection
+##     (no threadgroup staging)
 
 import workspace/crucible
 import workspace/ceramic
@@ -76,12 +56,12 @@ import ./tile_io_rows
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
-# The real GLM-4.7-Flash dims, baked as module constants. The kernel is
-# non-generic: its tile types cannot take the rt_l/rv default atoms
-# (those call getTileConfig, which asserts a metal:/cuda: block context,
-# and a non-generic proc body is typechecked on the host import). The
-# explicit universal-atom enum members below are exactly what the
-# defaults resolve to on the Metal and CUDA backends.
+# The real GLM-4.7-Flash dims, baked as module constants.
+# The kernel is non-generic: its tile types cannot take the rt_l/rv
+# default atoms, which call getTileConfig and assert a metal:/cuda:
+# block context. A non-generic proc body is typechecked on the host
+# import.
+# The explicit universal-atom enum members below are exactly what the defaults resolve to on the Metal and CUDA backends.
 
 const
   HiddenDim = 2048      # the model hidden size
@@ -105,10 +85,10 @@ proc normRound16[A: static MmaAtom](
     rowVals: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]) {.device.} =
   ## `dst[r][c] = fp16(src[r][c] · rowVals[r] · gamma[r][c])`: the MLA
   ## RMSNorm epilogue with one fp16 RNE round at the end (the model's
-  ## `weight * x.to(dtype)` rounding). `rowVals` is the
-  ## row-rsqrt'ed variance col-vec (fp32 variance mean(x²) + eps). The
-  ## frag walk follows the loadTile lane→element mapping, so src,
-  ## gamma and dst agree elementwise.
+  ## `weight * x.to(dtype)` rounding). `rowVals` is the row-rsqrt'ed
+  ## variance col-vec (fp32 variance mean(x²) + eps). The frag walk
+  ## follows the loadTile lane→element mapping, so src, gamma and dst
+  ## agree elementwise.
   const rowTiles = 8 div A.getM()
   const colTiles = 32 div A.getN()
   const vpt = A.getVpt()
@@ -124,12 +104,12 @@ proc ropeTile32[A: static MmaAtom](
     cosT, sinT: ptr UncheckedArray[float32],
     t0, pairOff: int32) {.device.} =
   ## In-place interleaved rope over one (8, 32) fp32 rot half-tile:
-  ## each lane owns one adjacent pair (the AC layout col pairs), so
-  ## the rotation needs no cross-lane data. The cos/sin for pair index
-  ## `pairOff + 4m + (cell div 16)` come from the (num_tokens, 64)
-  ## tables' col i (entry c = freq (c mod 32)). `t0` is the tile's
-  ## first token row. `pairOff` is 0 for the low half (pairs 0..15)
-  ## and 16 for the high half (pairs 16..31).
+  ## each lane owns one adjacent pair (the AC layout col pairs).
+  ## The rotation needs no cross-lane data. The cos/sin for the pair
+  ## index `pairOff + 4m + (cell div 16)` come from the tables' col i
+  ## (entry c = freq (c mod 32)).
+  ## `t0` is the tile's first token row. `pairOff` is 0 for the low
+  ## half (pairs 0..15) and 16 for the high half (pairs 16..31).
   const M = A.getM()
   const colTiles = 32 div A.getN()
   let lane = int(thread_index_in_threadgroup)
@@ -164,11 +144,27 @@ proc mla_latent_fwd*(
     num_tokens, num_heads: int32) {.device.} =
   ## Computes the module doc's contract for one 8-token × 2-head
   ## block: the qa/qn/q and kv/krot/kp/kb chains, the interleaved rope
-  ## on the in-register rot tiles, and the q/k/v stores (fp16 RNE at
-  ## every state store). The q/k/v views carry the (token, head, dim)
+  ## on the in-register rot tiles, and the q/k/v stores.
+  ##
+  ## Grid (ceil(num_tokens/8), num_heads div 2, 1), 32 lanes.
+  ## One 8-token × 2-head block per threadgroup. HBLK = 2 keeps the kv_b
+  ## accumulator at 224 fp32 registers per lane, the largest single accumulator.
+  ## Raising HBLK requires re-checking the register budget.
+  ## The full breakdown is inline at the accumulator declarations.
+  ## The shared projections (qa, qn, kv, k_rot, kp) compute once per threadgroup.
+  ## The per-head parts follow for the block's 2 heads.
+  ##
+  ## GEMM structure: the qa/kv chains step 16-wide x tiles over 2048
+  ## (128 steps) against 16×32 weight tiles. The q/kv_b chains step
+  ## the 8×32 activation tiles over 768/512 (24/16 steps) against
+  ## 32×32 weight tiles. Every output width is an exact 32-multiple
+  ## (768 = 24×32, 576 = 18×32, 448 = 14×32), so no tail tiles.
+  ##
+  ## Views: the q/k/v output views carry the (token, head, dim)
   ## strides. The qb_w/kvb_w views carry the head block in the batch
-  ## component (head0 · 256 or head0 · 448 rows), the rest are the
-  ## transposed B-operand views of the row-major (out, in) buffers.
+  ## component (head0 · 256 or head0 · 448 rows), the other weights
+  ## are transposed B-operand views of the row-major (out, in)
+  ## buffers.
   let tBlock = int32(threadgroup_position_in_grid.x)
   let hBlock = int32(threadgroup_position_in_grid.y)
   let head0 = hBlock * 2
@@ -266,9 +262,9 @@ proc mla_latent_fwd*(
     qAcc[hh * (QkHeadDim div 32) + QkNopeDim div 32].ropeTile32(cos_t, sin_t, tBlock * 8, 0)
     qAcc[hh * (QkHeadDim div 32) + QkNopeDim div 32 + 1].ropeTile32(cos_t, sin_t, tBlock * 8, 16)
 
-  # ── stores: the nope parts straight from the accumulators, the
-  #    roped rot tiles at the head's cols [192, 256), the shared
-  #    k_rot at both heads' rot cols ──
+  # ── stores: nope parts from the accumulators.
+  #    Roped rot tiles land in the head's cols [192, 256).
+  #    The shared k_rot lands in both heads' rot cols ──
   for hh in 0'i32 ..< 2:
     let head = head0 + hh
     let headTiles = QkHeadDim div 32

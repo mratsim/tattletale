@@ -11,14 +11,22 @@
 #
 # ############################################################
 
-## Sliding-window attention forward on the ceramic Tile API: the
-## Gemma-4-E2B text sliding-layer attention. One 8×D q tile per
-## threadgroup, K/V fetched per 8-row block over the window band,
-## online softmax in the exp2 form. The Gemma-4 text attention scale
-## is 1.0 (`self.scaling = 1.0`, no 1/sqrt(D) division), so q_mul =
-## log2(e) scales the fp32 S tile after the mma. The mma consumes
-## fp16 Q unscaled.
+## Sliding-window attention forward on the ceramic Tile API.
+## Gemma-4-E2B text sliding-layer attention, one 8×D q tile per threadgroup.
 ## Experimental: not a production kernel, known gaps below, not fixed.
+##
+## Dataflow per threadgroup:
+##
+##   q (8×D) --Q·Kᵀ--> S (8×8) --·log2(e)--> band mask --> softmax --> P (8×8) fp16
+##   k: 8-row blocks over the window band --------------------------------+
+##   P --P·V mma--> O (8×D) fp32 --÷ row norm--> fp16 store
+##   v: 8-row blocks over the window band -----------------+
+##
+## The softmax is online: each kv block rescales O and the row sum
+## by exp2(m_prev − m_cur). The Gemma-4 text scale is 1.0
+## (`self.scaling = 1.0`, no 1/sqrt(D) division), so q_mul = log2(e)
+## scales the fp32 S tile after the mma and the mma consumes fp16 Q
+## unscaled.
 ##
 ## Buffers, fp16 first then scalars:
 ##   - o, q: (num_qo, H, D) row-major
@@ -27,42 +35,32 @@
 ##   - D: static int, 64 or 128 (tile geometry). No generic brackets,
 ##     no stride or scratch parameters.
 ##
-## Semantics (transformers `sliding_window_causal_mask_function`):
-## query row i sits at absolute position p = q_offset + i and attends
-## key rows j with max(0, p − window + 1) <= j <= min(num_kv − 1, p),
-## causal AND j > p − window. GQA: kv_head = h div (H div Nkv).
-## num_kv >= q_offset + num_qo.
+## Window band (query row i, absolute position p = q_offset + i):
 ##
-## Grid (ceil(num_qo/8), H, 1), 32 lanes, one 8×D q tile per
-## threadgroup. The q/o tiles load and store row-bounded by num_qo.
-## The KV loop covers blocks [kvStart, kvEnd):
-##   - qAbs = q_offset + qBlock·8
-##   - kvStart = max(0, qAbs − window + 1) div 8
-##   - kvEnd = (min(num_kv − 1, qAbs + 7)) div 8 + 1
-## The last block may extend up to 7 rows past num_kv − 1: those rows
-## load as zero (Metal bounds-checks buffer reads) and the causal
-## bound excludes them, the paged_attn garbage-row convention.
+##   attended keys j: max(0, p − window + 1) <= j <= min(num_kv − 1, p)
+##
+##   key rows:  0 ...... p−window+1 ...... p ...... num_kv−1
+##              |           |            |          |
+##              +-- masked -+--- band ---+-- masked+
+##
+##   GQA: kv_head = h div (H div Nkv). num_kv >= q_offset + num_qo.
 ##
 ## Numerics:
-##   - online softmax in TM's exp2 shape, q_mul = log2(e) applied to
-##     the fp32 S tile after the mma (exp2(S·q_mul − m) is the
-##     exp(S·scale) convention with scale = 1.0)
+##   - online softmax in the exp2 shape. q_mul = log2(e) applies in fp32
+##     after the mma, so exp2(S·q_mul − m) is the exp(S·scale)
+##     convention with scale = 1.0
 ##   - masked S elements are the most-negative finite fp32
-##     (−3.402823466e38), so the running row max ignores them and
+##     (−3.402823466e38). The running row max ignores them.
 ##     exp2(S − m) underflows to exact +0.0
 ##   - P downcast to fp16 (`convert`) before the P·V mma. The output
 ##     store quantizes the fp32 O tile to fp16 (RNE) through the `to`
 ##     chokepoint
 ##
-## Local device procs: the shared tile_algebra lacks the banded window
-## mask, so the module carries maskBand locally. The row-bounded
-## load/store come from tile_io_rows (positron local extension).
-##
 ## Known production gaps (documented, not fixed):
-##   - D ∈ {64, 128} only. Gemma-4's real head_dim is 256. The
-##     window/scale/GQA semantics are D-independent.
+##   - D ∈ {64, 128} only. Gemma-4's real head_dim is 256.
+##     The window/scale/GQA semantics are D-independent.
 ##   - Single sequence: one (num_qo, H, D) q buffer, no batch dim.
-##   - k/v not projected in-kernel (the paged_attn convention).
+##   - k/v not projected in-kernel.
 
 import workspace/crucible
 import workspace/ceramic
@@ -78,16 +76,15 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 proc maskBand[A: static MmaAtom](
     tile: var RtLeft[float32, 8, 8, A],
     limit, window: int32) {.device.} =
-  ## Banded sliding-window mask on an 8×8 S tile: element (r, c) is
-  ## attended iff c <= limit + r AND c >= limit + r − window + 1.
+  ## Banded sliding-window mask on an 8×8 S tile.
+  ## Element (r, c) is attended iff c <= limit + r and c >= limit + r − window + 1.
   ## Masked elements become the most-negative finite fp32
-  ## (−3.402823466e38), so the online softmax excludes them (the row
-  ## max ignores them, exp2(S − m) underflows to exact +0.0). `limit`
-  ## is the block's band offset (qAbs − kv_idx·8), signed: a negative
-  ## limit masks every column of the row, where an unsigned wrap would
-  ## leave them attended. The frag walk follows the loadTile
-  ## lane→element mapping, so the mask hits exactly the elements the
-  ## Q·Kᵀ mma produced.
+  ## (−3.402823466e38). The online softmax excludes them: the row max
+  ## ignores them and exp2(S − m) underflows to exact +0.0. `limit`
+  ## is the block's band offset (qAbs − kv_idx·8), signed. A negative limit
+  ## masks every column of the row. An unsigned wrap leaves them attended.
+  ## The frag walk follows the loadTile lane→element mapping, so the mask
+  ## hits exactly the elements that the Q·Kᵀ mma produced.
   const M = A.getM()
   const N = A.getN()
   const rowTiles = 8 div M
@@ -117,18 +114,26 @@ proc swa_attn_fwd*(
     num_qo, num_kv, q_offset, H, Nkv, window: int32,
     D: static int) {.device.} =
   ## One grid point = one (head, 8-row q block), following the module
-  ## doc's contract: the q tile loads row-bounded by num_qo, the KV
-  ## loop covers the window band blocks [kvStart, kvEnd), and the fp16
+  ## doc's contract: the q tile loads row-bounded by num_qo. The KV
+  ## loop covers the window band blocks [kvStart, kvEnd). The fp16
   ## store writes only the q rows below num_qo.
+  ##
+  ## Grid (ceil(num_qo/8), H, 1), 32 lanes. The KV loop covers the blocks
+  ## [kvStart, kvEnd):
+  ##   - qAbs = q_offset + qBlock·8
+  ##   - kvStart = max(0, qAbs − window + 1) div 8
+  ##   - kvEnd = (min(num_kv − 1, qAbs + 7)) div 8 + 1
+  ## The last block may extend up to 7 rows past num_kv − 1.
+  ## Overhang rows load as zero (Metal bounds-checks buffer reads).
+  ## The causal bound excludes them.
   static: doAssert D == 64 or D == 128
 
   let qBlock = int32(threadgroup_position_in_grid.x)
   let head = int32(threadgroup_position_in_grid.y)
 
   # The q/o views carry the (q row, head, dim) strides. The K/V views
-  # carry the buffer row stride and take the per-block base as the
-  # origin's batch component (the module doc's kvStart/kvEnd fetch
-  # formula).
+  # carry the buffer row stride. Their per-block base is the origin's
+  # batch component (the kvStart/kvEnd fetch formula).
   let gl_q = q.gd(shape = (-1, -1, -1, -1), stride = (H * D, D, H * D, 1))
   let gl_o = o.gd(shape = (-1, -1, -1, -1), stride = (H * D, D, H * D, 1))
   let gl_k = k.gd(shape = (-1, -1, -1, -1), stride = (1, 1, Nkv * D, 1))
@@ -158,9 +163,8 @@ proc swa_attn_fwd*(
   max_vec.neg_infty()
   norm_vec.zero()
   o_reg.zero()
-  # log2(e), the exp2-form scale: Gemma-4 text attention uses scale
-  # 1.0, so the fp32 S tile carries the 1.0 dot product and q_mul
-  # applies in fp32 after the mma, keeping Q unscaled in fp16
+  # log2(e), the exp2-form scale. Gemma-4 text attention uses scale 1.0,
+  # so q_mul applies in fp32 after the mma, keeping the fp16 Q unscaled.
   let q_mul = 1.44269504089'f32
   for kv_idx in kvStart ..< kvEnd:
     let base = kv_idx * 8 * rowStride + kvHead * int32(D)
