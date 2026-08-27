@@ -90,6 +90,35 @@ func max_pool2d*(input: TorchTensor): TorchTensor {.varargs, importcpp: "torch::
 
 func max_pool2d*(input: TorchTensor, kernel_size: IntArrayRef): TorchTensor {.importcpp: "torch::max_pool2d(@)".}
 
+
+# Convolution functions
+# -------------------------------------------------------------------------
+
+func conv1d*(
+  input, weight: TorchTensor,
+  bias: Optional[TorchTensor],
+  stride: IntArrayRef,
+  padding: IntArrayRef,
+  dilation: IntArrayRef,
+  groups: int64
+): TorchTensor {.importcpp: "torch::conv1d(@)".}
+  ## 1D convolution (ATen `at::conv1d`), depthwise when groups == input channels.
+  ##
+  ## C++ signature:
+  ##   at::Tensor at::conv1d(
+  ##     const at::Tensor & input,
+  ##     const at::Tensor & weight,
+  ##     const ::std::optional<at::Tensor> & bias,
+  ##     at::IntArrayRef stride,
+  ##     at::IntArrayRef padding,
+  ##     at::IntArrayRef dilation,
+  ##     int64_t groups
+  ##   )
+  ##
+  ## Weight layout: (out_channels, in_channels / groups, kernel_size).
+  ## With groups == input channels the convolution is depthwise: each input
+  ## channel is convolved with its own kernel of shape (1, kernel_size).
+
 # Activation functions
 # -------------------------------------------------------------------------
 
@@ -118,6 +147,17 @@ func silu*(self: TorchTensor): TorchTensor {.importcpp: "torch::silu(@)".}
   ## SiLU (Sigmoid Linear Unit) activation function: x / (1 + exp(-x))
   ## Also known as Swish.
 func silu_mut*(self: var TorchTensor) {.importcpp: "torch::silu_(@)".}
+
+
+func softplus*(input: TorchTensor, beta: Scalar, threshold: Scalar): TorchTensor {.importcpp: "torch::softplus(@)".}
+  ## Softplus activation: log(1 + exp(beta * x)) / beta, linear above threshold.
+  ##
+  ## C++ signature:
+  ##   at::Tensor at::softplus(const at::Tensor & self, const at::Scalar & beta, const at::Scalar & threshold)
+  ##
+  ## Defaults in torch are beta = 1.0, threshold = 20.0. The wrapped API
+  ## (tensors_nn.nim) applies those defaults.
+
 
 func tanh*(input: TorchTensor): TorchTensor {.importcpp: "torch::tanh(@)".}
 func tanh_mut*(input: var TorchTensor) {.importcpp: "torch::tanh_(@)".}
