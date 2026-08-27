@@ -117,7 +117,7 @@ task make_pytoktoktok, "Build pytoktoktok.so for Python import":
 
 func pytttransformersBuildCmd(): string =
   return
-    "nim c --app:lib" &
+    "nim cpp --app:lib" &
     " --debugger:native " &
     " --verbosity:0 --hints:off --warnings:off" &
     " --outdir:workspace/transformers/tests" &
