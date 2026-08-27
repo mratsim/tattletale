@@ -26,11 +26,11 @@ import ./qk_norm_rope
 import ./paged_attn
 
 # ═════════════════════════════════════════════════════════════════════
-#  The thin {.global.} launchers, one per scheme for the quantized
-#  linear (0 = Q8_0, 1 = Q4_K, 2 = IQ4_XS) plus the qk-norm+rope and
-#  paged attention forwards at D = 128. Each launcher's first param is
-#  the output buffer: engine.run binds the separate outBuf argument to
-#  it and the args tuple to the rest.
+#  The thin {.global.} launchers, one per GGufScheme for the quantized
+#  linear plus the qk-norm+rope and paged attention forwards at D =
+#  128. Each launcher's first param is the output buffer: engine.run
+#  binds the separate outBuf argument to it and the args tuple to the
+#  rest.
 #  ═════════════════════════════════════════════════════════════════════
 
 const ggufAttnMsl* = metal:
@@ -70,6 +70,10 @@ const ggufAttnMsl* = metal:
 #  ═════════════════════════════════════════════════════════════════════
 
 type
+  GGufScheme* = enum
+    ## The GGUF block-quantization schemes the four projections accept.
+    gsQ8_0, gsQ4_K, gsIQ4_XS
+
   GGufAttnParams* = object
     ## Geometry, tables and weights of one attention-layer forward.
     ## `x`, the token rows, is passed separately to `ggufAttnForward`.
@@ -86,7 +90,7 @@ type
     positions*: seq[int32]        # (num_qo_tokens), the per-token positions
     qw*, kw*, vw*, ow*: seq[byte] # the raw GGUF block streams
     qRowBytes*, kRowBytes*, vRowBytes*, oRowBytes*: int32
-    qScheme*, kScheme*, vScheme*, oScheme*: int  # 0 = Q8_0, 1 = Q4_K, 2 = IQ4_XS
+    qScheme*, kScheme*, vScheme*, oScheme*: GGufScheme
     normGammaQ*, normGammaK*: seq[uint16]  # (D,) fp16 per-dim weights
 
   GGufAttnResult* = object
@@ -128,14 +132,12 @@ proc buildRopeCosSin*(nTokens, rowsPerToken, D: int; positions: seq[int32];
         result.cosT[row * half + t] = cos(ang)
         result.sinT[row * half + t] = sin(ang)
 
-func ggufLinearLauncher(scheme: int): string =
-  ## Metal launcher name for the packed-stream scheme: 0 = Q8_0,
-  ## 1 = Q4_K, 2 = IQ4_XS.
+func ggufLinearLauncher(scheme: GGufScheme): string =
+  ## Metal launcher name for the packed-stream scheme.
   case scheme
-  of 0: "ggufLinearQ8"
-  of 1: "ggufLinearQ4K"
-  of 2: "ggufLinearIQ4XS"
-  else: raise newException(ValueError, "unknown GGUF scheme: " & $scheme)
+  of gsQ8_0: "ggufLinearQ8"
+  of gsQ4_K: "ggufLinearQ4K"
+  of gsIQ4_XS: "ggufLinearIQ4XS"
 
 func slabOffset(pageId, inPage, h, d: int; pageSize, Nkv, D: int): int =
   ## K/V slab offset of (pageId, inPage, head h, dim d) in the flat
@@ -163,6 +165,9 @@ proc ggufAttnForward*(engine: var auto, p: GGufAttnParams, x: seq[uint16],
     "the composed q/k views require H % 8 == 0 and Nkv % 8 == 0"
   doAssert p.pageSize >= 1 and (p.pageSize and (p.pageSize - 1)) == 0,
     "the cache write requires a power-of-two pageSize (shift/mask)"
+  doAssert p.D == 128, "the qk-norm+rope and paged attention kernels run 128-wide"
+  doAssert p.hidden mod 128 == 0,
+    "the o_proj grid tiles hidden in 128-column blocks"
   let numSeqs = p.cuSeqlensQ.len - 1
   let nTokens = p.cuSeqlensQ[numSeqs].int
   doAssert nTokens >= 1, "the forward needs at least one query token"
@@ -216,16 +221,19 @@ proc ggufAttnForward*(engine: var auto, p: GGufAttnParams, x: seq[uint16],
     let writeStart = p.cacheSeqlens[s].int - (if qLen == 1: 1 else: 0)
     for j in 0 ..< qLen:
       let row = writeStart + j
+      doAssert row >= 0, "the cache write row must be non-negative"
       let pageIdx = row shr lgPageSize
+      doAssert pageIdx < p.maxPages, "the cache write row exceeds the block-table budget"
       let inPage = row and pageMask
       let pageId = p.blockTable[s * p.maxPages + pageIdx].int
       doAssert pageId >= 0, "cache write hit an unused block_table slot"
+      # each token's Nkv·D span is one contiguous move on both sides:
+      # the slab row (pageId, inPage) and the kRope/vBuf token row are
+      # both head-dim-contiguous (slabOffset's h·D + d layout)
       let t = q0 + j
-      for h in 0 ..< p.Nkv:
-        for d in 0 ..< p.D:
-          let i = slabOffset(pageId, inPage, h, d, p.pageSize, p.Nkv, p.D)
-          kSlab[i] = result.kRope[(t * p.Nkv + h) * p.D + d]
-          vSlab[i] = result.vBuf[(t * p.Nkv + h) * p.D + d]
+      let dstBase = slabOffset(pageId, inPage, 0, 0, p.pageSize, p.Nkv, p.D)
+      copyMem(addr kSlab[dstBase], addr result.kRope[t * nKv], nKv * 2)
+      copyMem(addr vSlab[dstBase], addr result.vBuf[t * nKv], nKv * 2)
 
   # the paged attention's x extent: the batch's longest q_len in 8-row
   # q blocks (the kernel zero-fills the blocks beyond a seq's own q_len)

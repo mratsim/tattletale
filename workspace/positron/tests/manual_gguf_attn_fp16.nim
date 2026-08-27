@@ -57,13 +57,12 @@ proc worstAbsDiff(a, b: F.Tensor): float32 =
     let d = abs(ap[i] - bp[i])
     if d > result: result = d
 
-proc decodeWeights(scheme: int, packed: seq[uint8], K, N: int): seq[uint16] =
+proc decodeWeights(scheme: GGufScheme, packed: seq[uint8], K, N: int): seq[uint16] =
   ## (N, K) file-order fp16 reconstruction for the packed scheme.
   case scheme
-  of 0: decodeWeightsQ8_0(packed, K, N)
-  of 1: decodeWeightsQ4_K(packed, K, N)
-  of 2: decodeWeightsIQ4_XS(packed, K, N)
-  else: raise newException(ValueError, "unknown scheme: " & $scheme)
+  of gsQ8_0: decodeWeightsQ8_0(packed, K, N)
+  of gsQ4_K: decodeWeightsQ4_K(packed, K, N)
+  of gsIQ4_XS: decodeWeightsIQ4_XS(packed, K, N)
 
 proc tensorFromFp16(hs: seq[uint16], rows, cols: int): F.Tensor =
   ## fp16 bit buffer widened to a (rows, cols) fp32 tensor.
@@ -109,7 +108,7 @@ proc writeRefSlab(dst: var seq[float32], src: F.Tensor, p: GGufAttnParams,
                   rowsPerToken: int) =
   ## Fills the flat (num_pages·page_size·Nkv·D) fp32 slab from the
   ## reference's own kRope/v with the driver's write-band addressing
-  ## (rows outside the bands stay zero).
+  ## (rows outside the bands keep the seeded history).
   let lgPageSize = countTrailingZeroBits(p.pageSize)
   let pageMask = p.pageSize - 1
   let sp = src.contiguous().data_ptr(float32)
@@ -158,11 +157,15 @@ proc sdpaPrefill(qt, kt, vt: F.Tensor, cacheSeqlen, qLen, H, Nkv: int): F.Tensor
   let mt = toTensor(maskF).reshape(1, qLen, covered)
   scaled_dot_product_attention(qt, k2, v2, attn_mask = some(mt), enable_gqa = H > Nkv)
 
-proc reference(p: GGufAttnParams, x: seq[uint16], numPages: int): AttnTensors =
+proc reference(p: GGufAttnParams, x: seq[uint16], numPages: int,
+               kSeed, vSeed: int): AttnTensors =
   ## Torch composition: F.linear projections, rms_norm + rope with
   ## the driver's cos/sin tables, the reference's own slab writes,
   ## per-seq SDPA with GQA, then the o_proj. Every fp16 round mirrors
   ## the kernel's fp16 buffers. The slabs never come from the kernel.
+  ## The k/v history starts from the same fp16 buildX seeds as the
+  ## kernel's slabs, so the fetched history rows are non-zero on both
+  ## sides.
   let nTokens = p.cuSeqlensQ[^1].int
   let nQ = p.H * p.D
   let nKv = p.Nkv * p.D
@@ -180,6 +183,10 @@ proc reference(p: GGufAttnParams, x: seq[uint16], numPages: int): AttnTensors =
   result.kRope = qkNormRopeRef(result.kBuf, p.normGammaK, cosK, sinK, p.Nkv, p.D, p.eps)
   var kSlab = newSeq[float32](numPages * p.pageSize * p.Nkv * p.D)
   var vSlab = newSeq[float32](numPages * p.pageSize * p.Nkv * p.D)
+  let kHist = buildX(numPages * p.pageSize * p.Nkv, p.D, kSeed, 1.0'f32)
+  let vHist = buildX(numPages * p.pageSize * p.Nkv, p.D, vSeed, 1.0'f32)
+  for i in 0 ..< kHist.len: kSlab[i] = fp16ToFp32(kHist[i])
+  for i in 0 ..< vHist.len: vSlab[i] = fp16ToFp32(vHist[i])
   writeRefSlab(kSlab, result.kRope, p, p.Nkv)
   writeRefSlab(vSlab, result.vBuf, p, p.Nkv)
   let kT = toTensor(kSlab).reshape(numPages * p.pageSize, p.Nkv, p.D).to(kFloat16).to(kFloat32)
@@ -246,13 +253,18 @@ proc checkGGUFAttn(): bool =
     kRowBytes: int32(kw.len div nKv),
     vRowBytes: int32(vw.len div nKv),
     oRowBytes: int32(ow.len div hidden),
-    qScheme: 1, kScheme: 2, vScheme: 0, oScheme: 1,
+    qScheme: gsQ4_K, kScheme: gsIQ4_XS, vScheme: gsQ8_0, oScheme: gsQ4_K,
     normGammaQ: gammaQ, normGammaK: gammaK)
   let x = buildX(nTokens, hidden, 11, 1.0'f32 / 65536.0'f32)
-  var kSlab = newSeq[uint16](numPages * pageSize * Nkv * D)
-  var vSlab = newSeq[uint16](numPages * pageSize * Nkv * D)
+  let kSeed = 13
+  let vSeed = 17
+  # the slabs start non-zero so the fetched history rows carry real
+  # values on both sides (a wrong history-page fetch no longer
+  # returns zeros and passes)
+  var kSlab = buildX(numPages * pageSize * Nkv, D, kSeed, 1.0'f32)
+  var vSlab = buildX(numPages * pageSize * Nkv, D, vSeed, 1.0'f32)
   let actual = kernelUnderTest(p, x, kSlab, vSlab)
-  let expected = reference(p, x, numPages)
+  let expected = reference(p, x, numPages, kSeed, vSeed)
   var worstAll = 0.0'f32
   for stage in [("qBuf", actual.qBuf, expected.qBuf),
                 ("kBuf", actual.kBuf, expected.kBuf),
@@ -264,8 +276,13 @@ proc checkGGUFAttn(): bool =
     let w = worstAbsDiff(stage[1], stage[2])
     worstAll = max(worstAll, w)
     echo &"  {stage[0]}: worst |Δ| = {w}, {stage[1].numel()} elements"
-  echo &"  worst |Δ| across stages = {worstAll} (per-stage evidence, only outBuf is asserted at 5e-3)"
-  assertAllClose(actual.outBuf, expected.outBuf, rtol = 0.0'f64, abstol = 5e-3'f64)
+  echo &"  worst |Δ| across stages = {worstAll} (per-stage evidence, only outBuf is asserted at 6.25e-2)"
+  # outBuf tolerance: the seeded k/v history lifts the layer output to
+  # O(10-30), where the fp16 output ulp (0.03125 at |31.3|) alone
+  # exceeds the 5e-3 bound that suits O(1) outputs. Measured worst
+  # |Δ| = 0.03125, one ulp at the largest output. The 0.0625 bound is
+  # two ulp at that magnitude, a 2x margin over the measurement.
+  assertAllClose(actual.outBuf, expected.outBuf, rtol = 0.0'f64, abstol = 6.25e-2'f64)
   result = true
 
 when isMainModule:

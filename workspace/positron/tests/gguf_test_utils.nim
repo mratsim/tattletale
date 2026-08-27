@@ -49,7 +49,8 @@ func fp16sToF32*(hs: seq[uint16]): seq[float32] =
 proc genQ8_0*(K, N, seed: int): seq[uint8] =
   ## Deterministic packed Q8_0 stream: N rows × (K div 32) blocks of
   ## 34 bytes. d = fp16-exact per (row, block), q = int8 spanning the
-  ## signed range.
+  ## signed range. Requires K a 32-multiple.
+  doAssert K mod 32 == 0, "Q8_0 packs 32 columns per block, K must be a 32-multiple"
   let blocks = K div 32
   let rowBytes = blocks * 34
   result = newSeq[uint8](N * rowBytes)
@@ -77,7 +78,9 @@ proc genQ4_K*(K, N, seed: int): seq[uint8] =
   ## Deterministic packed Q4_K stream: N rows × (K div 256)
   ## super-blocks of 144 bytes. d, dmin, the 12 scale bytes and the
   ## nibble bytes are per-index mixes. The scale bytes exercise both
-  ## the nt < 4 and the nt ≥ 4 unpack branches.
+  ## the nt < 4 and the nt ≥ 4 unpack branches. Requires K a
+  ## 256-multiple.
+  doAssert K mod 256 == 0, "Q4_K packs 256 columns per super-block, K must be a 256-multiple"
   let sbs = K div 256
   let rowBytes = sbs * 144
   result = newSeq[uint8](N * rowBytes)
@@ -114,7 +117,8 @@ proc genQ4_K*(K, N, seed: int): seq[uint8] =
 proc genIQ4_XS*(K, N, seed: int): seq[uint8] =
   ## Deterministic packed IQ4_XS stream: N rows × (K div 256)
   ## super-blocks of 136 bytes. d, sc_h, the 4 scale-low bytes and the
-  ## nibble bytes are per-index mixes.
+  ## nibble bytes are per-index mixes. Requires K a 256-multiple.
+  doAssert K mod 256 == 0, "IQ4_XS packs 256 columns per super-block, K must be a 256-multiple"
   let sbs = K div 256
   let rowBytes = sbs * 136
   result = newSeq[uint8](N * rowBytes)
@@ -161,7 +165,8 @@ func decodeWeightsQ8_0*(packed: seq[uint8], K, N: int): seq[uint16] =
   ## order: element (row r over N, col c over K) at index r·K + c. Per
   ## (row, block) a 256-entry table holds fp32(d)·q for every int8 q,
   ## the gather rounds once with fp32ToFp16 (RNE), the kernel's exact
-  ## chain.
+  ## chain. Requires K a 32-multiple.
+  doAssert K mod 32 == 0, "Q8_0 packs 32 columns per block, K must be a 32-multiple"
   let blocks = K div 32
   let rowBytes = blocks * 34
   result = newSeq[uint16](N * K)
@@ -182,7 +187,8 @@ func decodeWeightsQ4_K*(packed: seq[uint8], K, N: int): seq[uint16] =
   ## (row, super-block, sub-block) a 16-entry table holds
   ## t2 = (fp32(d)·sc)·nibble − fp32(dmin)·m for every nibble, the
   ## gather rounds once with fp32ToFp16 (RNE), the kernel's exact
-  ## chain order.
+  ## chain order. Requires K a 256-multiple.
+  doAssert K mod 256 == 0, "Q4_K packs 256 columns per super-block, K must be a 256-multiple"
   let sbs = K div 256
   let rowBytes = sbs * 144
   result = newSeq[uint16](N * K)
@@ -218,7 +224,9 @@ func decodeWeightsIQ4_XS*(packed: seq[uint8], K, N: int): seq[uint16] =
   ## file order: element (row r over N, col c over K) at index r·K + c.
   ## Per (row, super-block, sub-block) a 16-entry table holds
   ## fp32(d)·scale6'·kvaluesIQ4NL[nibble], the gather rounds once with
-  ## fp32ToFp16 (RNE), the kernel's exact chain order.
+  ## fp32ToFp16 (RNE), the kernel's exact chain order. Requires K a
+  ## 256-multiple.
+  doAssert K mod 256 == 0, "IQ4_XS packs 256 columns per super-block, K must be a 256-multiple"
   let sbs = K div 256
   let rowBytes = sbs * 136
   result = newSeq[uint16](N * K)

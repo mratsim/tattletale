@@ -43,8 +43,8 @@ proc gguf_linear_fwd*(
 
   # x and Out carry the natural row strides (the w stream is addressed
   # by the decoders through the raw pointer and rowBytes)
-  let glX = x.gd(shape = (-1, -1, -1, -1), stride = (32 * K, 0, K, 1))
-  let glOut = Out.gd(shape = (-1, -1, -1, -1), stride = (32 * N, 0, N, 1))
+  let gdX = x.gd(shape = (-1, -1, -1, -1), stride = (32 * K, 0, K, 1))
+  let gdOut = Out.gd(shape = (-1, -1, -1, -1), stride = (32 * N, 0, N, 1))
 
   # the output accumulators, array-resident and zeroed before the K
   # loop (declared on the fp16 atom so the mma's three operands share
@@ -57,7 +57,7 @@ proc gguf_linear_fwd*(
   var b_reg: rt_r(float16, 16, 32)
 
   for kk in 0'i32 ..< K div 16:
-    a_reg.loadTileRows(glX, (0, 0, tgy, kk), M)
+    a_reg.loadTileRows(gdX, (0, 0, tgy, kk), M)
     for nt in 0'i32 ..< 4:
       when scheme == 0:
         dequantGGUF_Q8_0(b_reg, w, kk, rowBytes, tgx, nt)
@@ -70,4 +70,4 @@ proc gguf_linear_fwd*(
   var y: array[4, rt_l(float16, 32, 32)]
   for nt in 0'i32 ..< 4:
     y[nt].convert(d[nt])
-    glOut.storeTileRows(y[nt], (0, 0, tgy, tgx * 4 + nt), M)
+    gdOut.storeTileRows(y[nt], (0, 0, tgy, tgx * 4 + nt), M)
