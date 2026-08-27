@@ -26,12 +26,18 @@ proc scaledRand*(rows, cols: int, scaleF: float32): seq[float32] =
 
 proc worstAbsDiff*(a, b: F.Tensor): float32 =
   ## Returns the largest |a[i] - b[i]| over all elements.
+  ## `a` and `b` must have the same element count.
+  if a.numel() != b.numel():
+    raise newException(ValueError,
+      "worstAbsDiff: element count mismatch, got " & $a.numel() &
+      " vs " & $b.numel())
   let ap = a.contiguous().data_ptr(float32)
   let bp = b.contiguous().data_ptr(float32)
   result = 0.0'f32
   for i in 0 ..< a.numel():
     let d = abs(ap[i] - bp[i])
-    if d > result: result = d
+    if d > result:
+      result = d
 
 proc fp16sToF32*(hs: seq[uint16]): seq[float32] =
   ## Widens an fp16 bit-pattern buffer to fp32 values.
