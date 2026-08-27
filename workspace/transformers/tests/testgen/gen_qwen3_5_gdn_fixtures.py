@@ -5,10 +5,6 @@ VENDORED prod transformers modeling on CPU torch bf16.
 
 Reference: gen_qwen3_5_attn_fixtures.py conventions.
 
-Fixtures are the ground truth for the Nim q_bf16 tests
-(test_qwen3_5_03_layers.nim). The Nim implementation is fixed to match these
-fixtures, never the other way around.
-
 What is generated:
 
   tests/fixtures/layers/Qwen3.5-0.8B-layer-0/

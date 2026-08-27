@@ -5,10 +5,6 @@ with the vendored prod transformers modeling on CPU torch bf16.
 Reference: gen_05_ids_to_logits_inference.py conventions, extended with a
 sequential replay reference per the GDN fixture generators.
 
-Fixtures are the ground truth for the Nim q_bf16 ids test.
-The Nim implementation is fixed to match these fixtures, never the other
-way around.
-
 Generated under tests/fixtures/ids-inference/Qwen3.5-0.8B/:
 
   layer-{i:02d}.safetensor   per decoder layer i (24 files)

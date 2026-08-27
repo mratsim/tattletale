@@ -4,10 +4,6 @@ using the VENDORED prod transformers modeling on CPU torch bf16.
 
 Reference: gen_03_layer_fixtures_Qwen3-0.6B.py conventions.
 
-Fixtures are the ground truth for the Nim q_bf16 tests
-(test_qwen3_5_01_rope.nim, test_qwen3_5_02_attn.nim). The Nim implementation
-is fixed to match these fixtures, never the other way around.
-
 What is generated (under tests/fixtures/layers/Qwen3.5-0.8B-layer-3/):
 
   rope-*   partial rotary: q/k (bf16) + positions + cos/sin (bf16, 64 wide)

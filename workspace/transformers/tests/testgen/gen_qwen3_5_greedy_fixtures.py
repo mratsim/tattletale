@@ -5,10 +5,6 @@ stack using the VENDORED prod transformers modeling on CPU torch bf16.
 
 Reference: gen_07_greedy_fixture.py conventions (one JSON file per prompt).
 
-Fixtures are the ground truth for the Nim q_bf16 greedy test
-The Nim implementation
-is fixed to match these fixtures, never the other way around.
-
 Decode entry convention: the Qwen3.5 config has no bos_token_id and no
 generation_config.json, so the decode entry is defined explicitly here:
 generation starts from the prompt tokens directly (no special token is
