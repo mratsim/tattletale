@@ -1,0 +1,19 @@
+{
+  "batch_size": 1,
+  "device": "cpu",
+  "dtype": "bfloat16",
+  "input_text": "Hello, how are you?",
+  "input_tokens": [
+    9419,
+    11,
+    1204,
+    513,
+    488,
+    30
+  ],
+  "layer": "model.language_model.layers.11",
+  "layer_type": "full_attention",
+  "model": "Qwen3.5-0.8B",
+  "note": "layer_output is the vendored chunked forward (5e-3). layer_output_seq is the sequential replay (0.00)",
+  "seq_len": 6
+}

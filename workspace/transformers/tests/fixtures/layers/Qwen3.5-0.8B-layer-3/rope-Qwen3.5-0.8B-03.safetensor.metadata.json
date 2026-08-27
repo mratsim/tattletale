@@ -1,0 +1,5 @@
+{
+  "case": "rotate_half_64wide",
+  "layer": "model.language_model.layers.3.self_attn",
+  "model": "Qwen3.5-0.8B"
+}

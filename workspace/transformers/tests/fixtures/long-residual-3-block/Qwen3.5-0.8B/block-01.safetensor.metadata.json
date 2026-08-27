@@ -1,0 +1,8 @@
+{
+  "case": "chain_block_1_seq4",
+  "layer": "model.language_model.layers.1",
+  "layer_type": "linear_attention",
+  "model": "Qwen3.5-0.8B",
+  "note": "layer_output is the vendored chunked chain (5e-3). layer_output_seq is the sequential chain (0.00)",
+  "seq_len": 4
+}

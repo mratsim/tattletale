@@ -65,7 +65,34 @@ proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, devic
   if loader == nil:
     raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
   let weight = loader(st, prefix, cfg, device)
-  RmsNorm.init(weight, quant, cfg["rms_norm_eps"].getFloat(1e-6))
+  RmsNorm.init(weight, quant, cfg{"rms_norm_eps"}.getFloat(1e-6))
+
+proc load*(_: type GemmaRmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): GemmaRmsNorm =
+  ## Load a Gemma-style RMS norm (weight applied as 1 + w) from safetensors.
+  ##
+  ## Shares the RmsNorm codec loader. Only the forward semantics differ
+  ## (the weight scales as `1 + w`, see GemmaRmsNorm.forward).
+  let quant = detectQuantization(cfg)
+  let loader = QuantLoaderRegistry[quant].rmsNorm
+  if loader == nil:
+    raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
+  let weight = loader(st, prefix, cfg, device)
+  let textCfg = cfg{"text_config"}
+  GemmaRmsNorm.init(weight, textCfg{"rms_norm_eps"}.getFloat(1e-6))
+
+proc load*(_: type RmsNormGated, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): RmsNormGated =
+  ## Load a gated RMSNorm (Qwen3.5 Gated DeltaNet norm) from safetensors.
+  ##
+  ## Shares the RmsNorm codec loader. The shard stores the weight as
+  ## F32 [head_v_dim]. The qBF16 codec passes tensors through in their
+  ## stored dtype, so the weight keeps its F32 type.
+  let quant = detectQuantization(cfg)
+  let loader = QuantLoaderRegistry[quant].rmsNorm
+  if loader == nil:
+    raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
+  let weight = loader(st, prefix, cfg, device)
+  let textCfg = cfg{"text_config"}
+  RmsNormGated.init(weight.to(kBFloat16), textCfg{"rms_norm_eps"}.getFloat(1e-6))
 
 # ─── Embedding ──────────────────────────────────────────────────────────
 

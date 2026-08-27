@@ -43,6 +43,12 @@ type InferenceContext* = ref object
   ## Owned here (not on the layer) to keep attention stateless.
   k_gather_buf*: Tensor  ## (1, max_seq, kv_heads, head_dim) — allocated lazily on first forward
   v_gather_buf*: Tensor  ## (1, max_seq, kv_heads, head_dim) — allocated lazily on first forward
+  ## GDN (Gated DeltaNet) per-layer recurrent state. Unlike the paged KV
+  ## cache, GDN layers carry their whole context in these two tensors:
+  ## the causal-conv history and the f32 SSM state. Allocated lazily on
+  ## first use by the GDN layer forward, indexed by layer index.
+  gdnConvState*: seq[Tensor]  ## Per GDN layer: [conv_dim, 3] BF16 causal-conv history
+  gdnSsmState*: seq[Tensor]   ## Per GDN layer: [num_v_heads, Dk, Dv] F32 SSM state
 
 proc init*(
     _: type InferenceContext,
@@ -68,6 +74,33 @@ proc init*(
     max_seq: max_seq,
     head_dim: head_dim
   )
+
+
+proc ensureGdnStates*(
+    ctx: var InferenceContext,
+    layer_idx, convDim, numVHeads, keyDim, valueDim: int,
+    device: DeviceKind) =
+  ## Allocate the GDN conv and SSM states for `layer_idx` (zeros).
+  ##
+  ## The GDN layer forward calls this on every pass. The seqs are sized to
+  ## the context's layer count on first use, then only nil slots are filled.
+  ## This avoids reallocating the seq payloads mid-forward, which corrupted
+  ## the heap when interleaved with the model's tensor alloc/free churn
+  ## (two payload pointers converged, causing use-after-free SIGSEGVs in
+  ## repeated forwards). clearState drops the seqs so a new sequence starts
+  ## from zero state.
+  ##
+  ## TODO: chunked GDN prefill and long-context state management (rolling
+  ## the conv/SSM window past the kernel size) are future work. The current
+  ## state is the full per-sequence cache.
+  if ctx.gdnConvState.len <= layer_idx:
+    ctx.gdnConvState.setLen(max(ctx.num_layers, layer_idx + 1))
+    ctx.gdnSsmState.setLen(max(ctx.num_layers, layer_idx + 1))
+  if ctx.gdnConvState[layer_idx].isNil:
+    ctx.gdnConvState[layer_idx] = F.zeros(
+      convDim, 3, F.tensorOptions(F.kBFloat16, device))
+    ctx.gdnSsmState[layer_idx] = F.zeros(
+      numVHeads, keyDim, valueDim, F.tensorOptions(F.kFloat32, device))
 
 proc setRopeForPositions*(ctx: var InferenceContext, rotary: RotaryPositionEmbeddingRef) =
   ## Populate ctx.cos and ctx.sin from the model's RoPE cache.
@@ -95,6 +128,8 @@ proc clearState*(ctx: var InferenceContext) =
   ctx.position_ids = nil
   ctx.k_gather_buf = nil
   ctx.v_gather_buf = nil
+  ctx.gdnConvState = default(seq[Tensor])
+  ctx.gdnSsmState = default(seq[Tensor])
 
 proc setPositionIds*(ctx: var InferenceContext, position_ids: Tensor) =
   ## Set position_ids for current forward pass.

@@ -9,6 +9,12 @@
 ## Follows the HuggingFace Transformers pattern:
 ##   - `model(input_ids)` — single-pass, no cache, positions auto-derived
 ##   - `model(input_ids, cache=cache)` — with caller-managed cache (future)
+##
+## Build (C++ backend required):
+##   nim cpp --app:lib --debugger:native --verbosity:0 --hints:off --warnings:off \
+##     --outdir:workspace/transformers/tests --nimcache:nimcache/pytttransformers \
+##     -o:workspace/transformers/tests/pytttransformers.so \
+##     workspace/transformers/tests/pytttransformers.nim
 
 import
   nimpy,

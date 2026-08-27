@@ -1,0 +1,12 @@
+{
+  "case": "state_trajectory_3prefill_2decode",
+  "conv_kernel": 4,
+  "head_k_dim": 128,
+  "head_v_dim": 128,
+  "layer": "model.language_model.layers.0.linear_attn",
+  "model": "Qwen3.5-0.8B",
+  "note": "conv_state_after_prefill/d/e are the vendored 4-wide cache states. The _tail3 variants are the 3-wide tails",
+  "num_heads": 16,
+  "one_shot_tokens": 5,
+  "prefill_tokens": 3
+}

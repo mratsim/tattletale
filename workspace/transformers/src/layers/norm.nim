@@ -93,3 +93,89 @@ template `()`*(layer: RmsNorm, x: Tensor): untyped =
 
 template `()`*(layer: RmsNorm, x, residual: Tensor): untyped =
   forward_with_residual(layer, x, residual)
+
+type
+  GemmaRmsNorm* = ref object
+    ## RMSNorm with the weight applied as `1 + w` (Gemma-style), used for
+    ## Qwen3.5 qk-norm.
+    ##
+    ## Forward computes, all in f32:
+    ##   `output = (x / sqrt(mean(x^2) + eps)) * (1 + w)`,
+    ## then casts back to the input dtype. The weight is stored
+    ## as-is (BF16 [head_dim] in the shard). The `1 + w` scaling happens in
+    ## f32. This matches the vendored Qwen3_5RMSNorm
+    ## (`_norm(x.float()) * (1.0 + weight.float())`, `.type_as(x)`).
+    weight*: Tensor
+    eps*: float64
+    hidden_size*: int
+
+## Build GemmaRMSNorm from a `[head_dim]` weight (applied as `1 + w`). eps defaults to 1e-6.
+func init*(_: type GemmaRmsNorm, weight: Tensor, eps: SomeFloat = 1e-6): GemmaRmsNorm =
+  let hidden_size = weight.size(0)
+  GemmaRmsNorm(
+    weight: weight,
+    eps: float64(eps),
+    hidden_size: hidden_size,
+  )
+
+proc forward*(self: GemmaRmsNorm, x: Tensor): Tensor =
+  ## GemmaRMSNorm over the last dimension, f32 math, cast back to x.dtype.
+  let input_dtype = x.scalarType()
+  let x32 = x.to(kFloat32)
+  let variance = x32.square().mean(axis = -1, keepdim = true)
+  let rstd = variance.add(Scalar(self.eps)).rsqrt()
+  let normed = x32 * rstd
+  let w32 = self.weight.to(kFloat32)
+  result = (normed * (1.0 + w32)).to(input_dtype)
+
+template `()`*(layer: GemmaRmsNorm, x: Tensor): untyped =
+  forward(layer, x)
+
+type
+  RmsNormGated* = ref object
+    ## RMSNorm with a SiLU-gated multiplier over the last dimension,
+    ## the Gated DeltaNet output norm (vendored `Qwen3_5RMSNormGated`).
+    ##
+    ## The weight is applied as a regular multiply (not `1 + w`). The shard
+    ## stores the norm weight directly (F32 [128], mean near 1). The gate
+    ## tensor carries the z projection reshaped to the normed shape.
+    ##
+    ## Forward, matching the vendored op order:
+    ##   normed = x.f32 * rsqrt(mean(x.f32^2) + eps)     (f32)
+    ##   normed = normed.to(x.dtype)                      (bf16)
+    ##   gated  = weight * normed                         (f32 weight × bf16 → f32)
+    ##   gated  = gated * silu(gate.f32)                  (f32)
+    ##   output = gated.to(x.dtype)                       (bf16)
+    weight*: Tensor
+    eps*: float64
+    hidden_size*: int
+
+## Build RmsNormGated from a `[head_v_dim]` weight. eps defaults to 1e-6.
+func init*(_: type RmsNormGated, weight: Tensor, eps: SomeFloat = 1e-6): RmsNormGated =
+  let hidden_size = weight.size(0)
+  RmsNormGated(
+    weight: weight,
+    eps: float64(eps),
+    hidden_size: hidden_size,
+  )
+
+proc forward*(self: RmsNormGated, x: Tensor, gate: Tensor): Tensor =
+  ## RmsNormGated over the last dimension of `x`, gated by `silu(gate)`.
+  ##
+  ## Args:
+  ##   x: (…, hidden_size) tensor to normalize (bf16)
+  ##   gate: same leading shape as `x`, last dim `hidden_size` (bf16)
+  ##
+  ## Returns:
+  ##   (…, hidden_size) in x.dtype
+  let input_dtype = x.scalarType()
+  let x32 = x.to(kFloat32)
+  let variance = x32.square().mean(axis = -1, keepdim = true)
+  let rstd = variance.add(Scalar(self.eps)).rsqrt()
+  let normed = (x32 * rstd).to(input_dtype)
+  let weighted = self.weight * normed
+  let gated = weighted * F.silu(gate.to(kFloat32))
+  result = gated.to(input_dtype)
+
+template `()`*(layer: RmsNormGated, x, gate: Tensor): untyped =
+  forward(layer, x, gate)

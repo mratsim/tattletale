@@ -1,0 +1,15 @@
+{
+  "dtype": "bfloat16",
+  "input_text": "Hello, how are you?",
+  "input_tokens": [
+    9419,
+    11,
+    1204,
+    513,
+    488,
+    30
+  ],
+  "model": "Qwen3.5-0.8B",
+  "note": "logits is the vendored chunked forward (5e-3). logits_seq is the sequential replay (0.00)",
+  "seq_len": 6
+}
