@@ -1,22 +1,19 @@
 """
 Generate fixtures for the Qwen3.5-0.8B gated full-attention layer (layer 3)
-using the VENDORED prod transformers modeling on CPU torch bf16.
+using the reference transformers modeling on CPU torch bf16.
 
 Reference: gen_03_layer_fixtures_Qwen3-0.6B.py conventions.
 
 What is generated (under tests/fixtures/layers/Qwen3.5-0.8B-layer-3/):
 
   rope-*   partial rotary: q/k (bf16) + positions + cos/sin (bf16, 64 wide)
-           -> q_rot/k_rot via the vendored apply_rotary_pos_emb
+           -> q_rot/k_rot via the reference apply_rotary_pos_emb
   norm-*   GemmaRMSNorm (1+w): x (bf16) -> norm(x), real q_norm weight
   attn-*   gated full attention layer 3: x -> output (post o_proj), plus
            intermediates (q_normed, k_normed, q_rot, k_rot, gate,
            attn_output_gated)
 
-Determinism: torch.manual_seed per generator, cudnn flags, and metadata in
-separate .metadata.json files (safetensors HashMap order is randomized).
-
-The attention forward is replayed step by step with the vendored ops so the
+The attention forward is replayed step by step with the reference ops so the
 intermediates can be captured. The replay output is asserted bit-identical to
 the module's own forward before saving.
 """
@@ -29,7 +26,7 @@ import torch
 from safetensors import safe_open
 from safetensors import torch as st
 
-# Vendored prod transformers is the source of truth.
+# The reference transformers checkout is the source of truth.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 VENDORED_SRC = os.environ.get(
     "QWEN35_VENDORED_SRC",
@@ -248,9 +245,9 @@ def generate_norm_fixtures(q_norm: Qwen3_5RMSNorm, weights: dict) -> None:
 # ── Gated full attention ───────────────────────────────────────────────────
 
 def attention_forward_capture(attn, hidden_states, position_embeddings):
-    """Replay of the vendored Qwen3_5Attention.forward with intermediate capture.
+    """Replay of the reference Qwen3_5Attention.forward with intermediate capture.
 
-    The replay copies the vendored forward body op for op (modeling_qwen3_5.py
+    The replay copies the reference forward body op for op (modeling_qwen3_5.py
     Qwen3_5Attention.forward, sdpa interface): q|gate chunk, Gemma qk-norm,
     partial rope, repeat_kv, torch SDPA, sigmoid gate, o_proj. The caller
     asserts the replayed output equals the module's own forward output.

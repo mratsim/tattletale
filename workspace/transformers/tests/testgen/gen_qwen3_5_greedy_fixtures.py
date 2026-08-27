@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate greedy (temperature 0) decoding fixtures for the Qwen3.5-0.8B text
-stack using the VENDORED prod transformers modeling on CPU torch bf16.
+stack using the reference transformers modeling on CPU torch bf16.
 
 Reference: gen_07_greedy_fixture.py conventions (one JSON file per prompt).
 
@@ -12,7 +12,7 @@ prepended) and stops at config eos_token_id 248044. The tokenizer's own
 eos (248046, im_end) is not used.
 
 One prompt ("The resume is ready", decomposed e + U+0301) carries combining
-marks in its token stream. The vendored pre-tokenizer regex includes the
+marks in its token stream. The reference pre-tokenizer regex includes the
 \\p{M} class, so the marks merge into letter tokens ("résumé"). The fixture
 locks that token stream so the Nim tokenizer must handle combining marks the
 same way.
@@ -22,9 +22,6 @@ What is generated (under tests/fixtures/greedy-decoding/Qwen3.5-0.8B/):
   <safe_name>.json   per prompt: prompt, prompt_ids, full_ids,
     generated_ids, full_text, generated_text, num_prompt_tokens,
     num_generated_tokens, eos_token_id.
-
-Determinism: torch.manual_seed per prompt section, CPU only, greedy decoding
-(no sampling), and the tokenizer is deterministic, so reruns are byte-identical.
 """
 
 import json
@@ -32,7 +29,7 @@ import os
 import sys
 import torch
 
-# Vendored prod transformers is the source of truth.
+# The reference transformers checkout is the source of truth.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 VENDORED_SRC = os.environ.get(
     "QWEN35_VENDORED_SRC",
@@ -90,7 +87,7 @@ def build_model(cfg: Qwen3_5Config) -> Qwen3_5ForConditionalGeneration:
     """Wrapper model with real shard weights, bf16, eval, CPU.
 
     The rotary inv_freq buffer is restored to f32 after the dtype cast: the
-    vendored rotary forward computes cos/sin in f32 and bf16 storage would
+    reference rotary forward computes cos/sin in f32 and bf16 storage would
     round the frequency values (~1e-3 per element).
     """
     model = Qwen3_5ForConditionalGeneration(cfg)

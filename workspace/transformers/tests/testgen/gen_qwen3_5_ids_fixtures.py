@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate full-model ids-to-logits fixtures for the Qwen3.5-0.8B text stack
-with the vendored prod transformers modeling on CPU torch bf16.
+with the reference transformers modeling on CPU torch bf16.
 Reference: gen_05_ids_to_logits_inference.py conventions, extended with a
 sequential replay reference per the GDN fixture generators.
 
@@ -22,14 +22,6 @@ Tolerances (asserted by the Nim ids test):
     layer_output_seq, logits_seq)
   - 5e-3 against the chunked-forward tensors (layer_input, layer_output,
     logits)
-
-The sequential-replay tensors are the reference the Nim implementation
-mirrors. On this single-chunk 6-token prompt the chunked and sequential
-rules agree to ~1e-8 f32, so the 5e-3 bar against the chunked tensors only
-absorbs bf16 rounding-boundary flips.
-
-Determinism: torch.manual_seed per section, CPU only, replay run twice and
-asserted bit-identical before saving.
 """
 
 import json
@@ -40,7 +32,7 @@ import torch
 from safetensors import safe_open
 from safetensors import torch as st
 
-# Vendored prod transformers is the source of truth.
+# The reference transformers checkout is the source of truth.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 VENDORED_SRC = os.environ.get(
     "QWEN35_VENDORED_SRC",
@@ -118,7 +110,7 @@ def build_model(cfg: Qwen3_5Config) -> Qwen3_5ForConditionalGeneration:
     """Wrapper model with real shard weights, bf16, eval, CPU.
 
     The rotary inv_freq buffer is restored to f32 after the dtype cast: the
-    vendored rotary forward computes cos/sin in f32 and bf16 storage would
+    reference rotary forward computes cos/sin in f32 and bf16 storage would
     round the frequency values (~1e-3 per element).
     """
     model = Qwen3_5ForConditionalGeneration(cfg)
@@ -152,7 +144,7 @@ def install_capture_hooks(layers):
     Returns the capture list (one dict per layer) and a restore closure. The
     wrapper records the exact hidden_states the layer receives and the exact
     tensor it returns, so the fixtures hold the true layer boundary values of
-    the vendored forward. Each install restores the pristine class forward
+    the reference forward. Each install restores the pristine class forward
     after the run, so a second install never chains onto a previous wrapper.
     """
     captured = [None] * len(layers)
@@ -234,7 +226,7 @@ def main() -> None:
     layers = model.model.language_model.layers
     num_layers = len(layers)
 
-    # Chunked forward: the vendored ground truth.
+    # Chunked forward: the reference ground truth.
     chunked_captured, logits_chunked = run_forward(model, input_ids, SEED_CHUNKED)
 
     # Sequential replay through the patched model, twice for determinism.

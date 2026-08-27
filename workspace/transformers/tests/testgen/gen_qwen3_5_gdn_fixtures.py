@@ -1,7 +1,7 @@
 """
 Generate fixtures for the Qwen3.5-0.8B Gated DeltaNet (GDN) layer 0, full
 decoder layers 0 and 3, and a 3-block chain of layers 0..2, using the
-VENDORED prod transformers modeling on CPU torch bf16.
+reference transformers modeling on CPU torch bf16.
 
 Reference: gen_qwen3_5_attn_fixtures.py conventions.
 
@@ -12,11 +12,11 @@ What is generated:
       GDN block prefill T=5 with real layer-0 weights: conv output, q/k/v
       post-split, z, g, beta, sequential core output + per-step SSM states,
       gated RMSNorm output, sequential block output (0.00 reference) and the
-      vendored chunked module output (5e-3 reference).
+      chunked module output (5e-3 reference).
     gdn-Qwen3.5-0.8B-01.safetensor
       State trajectory: a sequential one-shot over 5 tokens (per-step conv
       output, core output, SSM states, block output) plus a 2-step decode
-      after a 3-token prefill through the vendored module with a cache
+      after a 3-token prefill through the reference module with a cache
       (conv states, SSM states, per-step conv inputs and outputs, decode
       outputs). The generator asserts the two paths agree bit for bit.
     layer-Qwen3.5-0.8B-00.safetensor
@@ -26,24 +26,20 @@ What is generated:
   tests/fixtures/layers/Qwen3.5-0.8B-layer-3/
     layer-Qwen3.5-0.8B-03.safetensor
       Full decoder layer 3 (full attention) forward on T=5 with real rotary
-      embeddings, plus the deterministic attn intermediates.
+      embeddings, plus the attn intermediates.
 
   tests/fixtures/long-residual-3-block/Qwen3.5-0.8B/
     block-00..02.safetensor
       Layers 0, 1, 2 run in sequence on a seeded T=4 input. Each block saves
-      the vendored chunked chain (layer_input, layer_output) and the
+      the reference chunked chain (layer_input, layer_output) and the
       sequential-replay chain (layer_input_seq, layer_output_seq).
 
   tests/fixtures/layers/Qwen3.5-0.8B-layer-0/
     gdn-Qwen3.5-0.8B-02.safetensor
-      Multi-chunk prefill (T=70, two FLA chunks): the vendored chunked block
+      Multi-chunk prefill (T=70, two FLA chunks): the reference chunked block
       output, the sequential-replay output and the f32 core/state values.
       The generator asserts the sequential-vs-chunked max diff lies in
       (0, 1e-3), locking the documented ~1.5e-5 divergence band.
-
-Determinism: torch.manual_seed per fixture section, CPU only, and every
-replay is asserted bit-identical (torch.equal) to the module's own forward
-before anything is saved.
 """
 
 import json
@@ -55,7 +51,7 @@ import torch.nn.functional as F
 from safetensors import safe_open
 from safetensors import torch as st
 
-# Vendored prod transformers is the source of truth.
+# The reference transformers checkout is the source of truth.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 VENDORED_SRC = os.environ.get(
     "QWEN35_VENDORED_SRC",
@@ -212,11 +208,11 @@ def l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
 
 
 class _LayerCache:
-    """Minimal per-layer cache for the vendored GDN decode path.
+    """Minimal per-layer cache for the reference GDN decode path.
 
     Implements the surface the module forward touches: conv_states,
     recurrent_states, has_previous_state and the two update procs, which
-    copy in place like the vendored LinearAttentionLayer cache.
+    copy in place like the reference LinearAttentionLayer cache.
     """
 
     def __init__(self, conv_states: torch.Tensor, recurrent_states: torch.Tensor):
@@ -250,7 +246,7 @@ class _GdnCache:
 
 
 def gdn_projections(block: Qwen3_5GatedDeltaNet, hidden_states: torch.Tensor):
-    """in_proj_qkv/z/a/b of the GDN block, matching the vendored forward."""
+    """in_proj_qkv/z/a/b of the GDN block, matching the reference forward."""
     mixed_qkv = block.in_proj_qkv(hidden_states)
     mixed_qkv = mixed_qkv.transpose(1, 2)
     z = block.in_proj_z(hidden_states)
@@ -261,7 +257,7 @@ def gdn_projections(block: Qwen3_5GatedDeltaNet, hidden_states: torch.Tensor):
 
 
 def gdn_forward_replay(block: Qwen3_5GatedDeltaNet, hidden_states: torch.Tensor, use_recurrent: bool) -> dict:
-    """Replay of the vendored Qwen3_5GatedDeltaNet.forward with a selectable
+    """Replay of the reference Qwen3_5GatedDeltaNet.forward with a selectable
     core rule, capturing every intermediate.
 
     The chunked replay must be bit-identical to the module's own forward
@@ -307,7 +303,7 @@ def gdn_forward_replay(block: Qwen3_5GatedDeltaNet, hidden_states: torch.Tensor,
 def recurrent_rule_with_trajectory(query, key, value, g, beta, eps: float = 1e-6):
     """torch_recurrent_gated_delta_rule with per-step state capture.
 
-    Replicates the vendored loop op for op and asserts the final output and
+    Replicates the reference loop op for op and asserts the final output and
     state match the function's own results, so the captured per-step
     trajectory is trustworthy.
     """
@@ -356,7 +352,7 @@ def recurrent_rule_with_trajectory(query, key, value, g, beta, eps: float = 1e-6
 def decoder_layer_forward_seq(layer: Qwen3_5DecoderLayer, x: torch.Tensor) -> torch.Tensor:
     """Qwen3_5DecoderLayer.forward with the GDN block on the sequential rule.
 
-    The real vendored forward runs the chunked rule for prefill. This replay
+    The reference forward runs the chunked rule for prefill. This replay
     substitutes the sequential rule so the Nim implementation (sequential
     always) has a 0.00 reference at the layer level.
     """
@@ -374,11 +370,11 @@ def decoder_layer_forward_seq(layer: Qwen3_5DecoderLayer, x: torch.Tensor) -> to
 
 
 def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> None:
-    """GDN block prefill T=5: sequential reference + vendored chunked output."""
+    """GDN block prefill T=5: sequential reference + chunked module output."""
     torch.manual_seed(SEED_GDN_PREFILL)
     x = torch.randn(1, PREFILL_SEQ, HIDDEN, dtype=torch.bfloat16)
 
-    module_output = block(x)  # vendored forward, chunked rule
+    module_output = block(x)  # reference forward, chunked rule
     chunk_replay = gdn_forward_replay(block, x, use_recurrent=False)
     assert torch.equal(module_output, chunk_replay["output"]), (
         "chunked replay diverged from the module forward"
@@ -435,7 +431,7 @@ def generate_multichunk_fixture(block: Qwen3_5GatedDeltaNet) -> None:
     torch.manual_seed(SEED_MULTICHUNK)
     x = torch.randn(1, MULTICHUNK_SEQ, HIDDEN, dtype=torch.bfloat16)
 
-    module_output = block(x)  # vendored forward, chunked rule, two chunks
+    module_output = block(x)  # reference forward, chunked rule, two chunks
     chunk_replay = gdn_forward_replay(block, x, use_recurrent=False)
     assert torch.equal(module_output, chunk_replay["output"]), (
         "chunked replay diverged from the module forward"
@@ -488,7 +484,7 @@ def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
         oneshot["g"], oneshot["beta"],
     )
 
-    # Two-step decode through the vendored module with a cache. The cache
+    # Two-step decode through the reference module with a cache. The cache
     # starts from the sequential state over the 3-token prefill, so every
     # decode output must match the one-shot positions 3 and 4 bit for bit.
     mixed_prefill, _, _, _ = gdn_projections(block, prefill_x)
@@ -542,7 +538,7 @@ def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
         "decode e ssm state diverged from the one-shot reference"
     )
 
-    # The vendored cache holds a 4-wide conv state (the decode conv sees
+    # The reference cache holds a 4-wide conv state (the decode conv sees
     # [state(4), x(1)] and the state never shrinks). The Nim layer keeps the
     # equivalent 3-wide tail: the dropped oldest column never enters a conv
     # output, so every decode conv output is identical (asserted above). The
