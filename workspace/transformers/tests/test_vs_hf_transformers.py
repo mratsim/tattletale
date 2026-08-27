@@ -100,10 +100,18 @@ def qwen35_main():
     (the sequential reference). The comparison then runs at the
     rtol/atol 1e-3 bar.
     """
-    from transformers.models.qwen3_5.modeling_qwen3_5 import (
-        Qwen3_5ForConditionalGeneration,
-        torch_recurrent_gated_delta_rule,
-    )
+    try:
+        from transformers.models.qwen3_5.modeling_qwen3_5 import (
+            Qwen3_5ForConditionalGeneration,
+            torch_recurrent_gated_delta_rule,
+        )
+    except ModuleNotFoundError:
+        import transformers
+        print(
+            "[test_vs_hf_transformers] transformers >= 5.2.0 required for qwen3_5; "
+            f"got {transformers.__version__}; run uv pip install -U transformers"
+        )
+        sys.exit(1)
 
     MODEL_PATH = str(Path(__file__).parent / "hf_models" / "Qwen3.5-0.8B")
 

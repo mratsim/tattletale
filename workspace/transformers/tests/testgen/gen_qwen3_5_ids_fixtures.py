@@ -1,45 +1,39 @@
 #!/usr/bin/env python3
 """
 Generate full-model ids-to-logits fixtures for the Qwen3.5-0.8B text stack
-using the VENDORED prod transformers modeling on CPU torch bf16.
-
+with the vendored prod transformers modeling on CPU torch bf16.
 Reference: gen_05_ids_to_logits_inference.py conventions, extended with a
 sequential replay reference per the GDN fixture generators.
 
-Fixtures are the ground truth for the Nim q_bf16 ids test
-The Nim
-implementation is fixed to match these fixtures, never the other way around.
+Fixtures are the ground truth for the Nim q_bf16 ids test.
+The Nim implementation is fixed to match these fixtures, never the other
+way around.
 
-What is generated (under tests/fixtures/ids-inference/Qwen3.5-0.8B/):
+Generated under tests/fixtures/ids-inference/Qwen3.5-0.8B/:
 
   layer-{i:02d}.safetensor   per decoder layer i (24 files)
-    layer_input      the chunked-run layer input (embedding output for layer 0,
-                     previous layer output for layers 1+, 5e-3 bar)
-    layer_input_seq  the sequential-run layer input (0.00 bar)
-    layer_output     the vendored chunked forward output (5e-3 bar)
-    layer_output_seq the sequential-replay output (0.00 bar)
+    layer_input       chunked-run layer input (embedding output for layer 0,
+                      previous layer output for layers 1+)
+    layer_input_seq   sequential-run layer input
+    layer_output      chunked-forward layer output
+    layer_output_seq  sequential-replay layer output
   final_logits.safetensor
-    logits     the vendored wrapper logits, all positions (5e-3 bar)
-    logits_seq the sequential-replay logits, all positions (0.00 bar)
+    logits      wrapper logits, all positions
+    logits_seq  sequential-replay logits, all positions
 
-The prompt "Hello, how are you?" tokenizes to 6 tokens (single chunk, well
-under FLA_CHUNK_SIZE 64), so the chunked and sequential GDN cores agree to
-~1e-8 f32 (sub-bf16-ULP). Layer bf16 outputs can still flip one ULP at a
-rounding boundary, so the chunked-vs-sequential diff asserts use the 5e-3
-bar. The 0.00 bar applies against the sequential replay, the 5e-3 bar
-against the vendored chunked forward.
+Tolerances (asserted by the Nim ids test):
+  - 0.00 against the sequential-replay tensors (layer_input_seq,
+    layer_output_seq, logits_seq)
+  - 5e-3 against the chunked-forward tensors (layer_input, layer_output,
+    logits)
 
-Sequential replay: the vendored text model forward is run with every GDN
-layer's `chunk_gated_delta_rule` replaced by `torch_recurrent_gated_delta_rule`
-(the pure-torch sequential rule the Nim implementation mirrors). Everything
-else (embed, norms, rotary, full-attention, MLP, final norm, tied lm_head)
-runs the real vendored forward unchanged. The chunked run and the sequential
-run both capture per-layer inputs and outputs through forward wrappers.
+The sequential-replay tensors are the reference the Nim implementation
+mirrors. On this single-chunk 6-token prompt the chunked and sequential
+rules agree to ~1e-8 f32, so the 5e-3 bar against the chunked tensors only
+absorbs bf16 rounding-boundary flips.
 
-Determinism: torch.manual_seed per section, CPU only, and the sequential
-replay is run twice and asserted bit-identical (torch.equal) before anything
-is saved. The per-layer sequential outputs are additionally replayed from the
-captured inputs through the manual GDN replay and asserted bit-identical.
+Determinism: torch.manual_seed per section, CPU only, replay run twice and
+asserted bit-identical before saving.
 """
 
 import json
