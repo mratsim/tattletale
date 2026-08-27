@@ -40,9 +40,9 @@ proc checkFp32LoadStore() =
   var buf: array[32 * 16, float32]
   for i in 0 ..< buf.len:
     buf[i] = float32(i)
-  let gl = gd(cast[ptr UncheckedArray[float32]](addr buf[0]), 0, 0, 32, 16)
+  let gdBuf = gd(cast[ptr UncheckedArray[float32]](addr buf[0]), 0, 0, 32, 16)
   var t: rt_l(float32, 32, 16, UNIVERSAL_8x8x8_F32F32F32F32)
-  loadTile(t, gl, (0'i32, 0'i32, 0'i32, 0'i32))
+  t.loadTile(gdBuf, (0'i32, 0'i32, 0'i32, 0'i32))
   # Lane 0 reads subtile (n, m)'s cells (8n, 8m) and (8n, 8m+1):
   # buffer elements (8n)·16 + 8m and +1.
   for n in 0 ..< 4:
@@ -56,8 +56,8 @@ proc checkFp32LoadStore() =
   var outBuf: array[32 * 16, float32]
   for i in 0 ..< outBuf.len:
     outBuf[i] = -1.0'f32
-  let glOut = gd(cast[ptr UncheckedArray[float32]](addr outBuf[0]), 0, 0, 32, 16)
-  storeTile(glOut, t, (0'i32, 0'i32, 0'i32, 0'i32))
+  let gdOutBuf = gd(cast[ptr UncheckedArray[float32]](addr outBuf[0]), 0, 0, 32, 16)
+  gdOutBuf.storeTile(t, (0'i32, 0'i32, 0'i32, 0'i32))
   for n in 0 ..< 4:
     for m in 0 ..< 2:
       doAssert outBuf[n * 128 + m * 8] == float32(n * 128 + m * 8),
@@ -73,19 +73,19 @@ proc checkFmaStorage() =
   var buf: array[32 * 16, float32]
   for i in 0 ..< buf.len:
     buf[i] = float32(i)
-  let gl = gd(cast[ptr UncheckedArray[float32]](addr buf[0]), 0, 0, 32, 16)
+  let gdBuf = gd(cast[ptr UncheckedArray[float32]](addr buf[0]), 0, 0, 32, 16)
   # Stride probe: the local_tile_dyn plane keeps the view's (rows, cols)
   # strides (32·strideRow, 16·strideCol); the subtile steps come from the
   # lane's fragment cell, evaluated from the atom's A/C layout at the load.
-  let fmaView = local_tile_dyn(gl, 32, 16, (0, 0, 0, 0))
-  doAssert fmaView.layout.stride[0] == gl.layout.stride[2],
+  let fmaView = local_tile_dyn(gdBuf, 32, 16, (0, 0, 0, 0))
+  doAssert fmaView.layout.stride[0] == gdBuf.layout.stride[2],
     "the FMA tile-plane row stride must be the view's row stride"
-  doAssert fmaView.layout.stride[1] == gl.layout.stride[3],
+  doAssert fmaView.layout.stride[1] == gdBuf.layout.stride[3],
     "the FMA tile-plane col stride must be the view's col stride"
   # Host load over lane 0's owned cells: slot (n, m, v) reads buffer
   # element (8n)·16 + 8m + v.
   var t: rt_l(float32, 32, 16, UNIVERSAL_8x8x8_F32F32F32F32)
-  loadTile(t, gl, (0'i32, 0'i32, 0'i32, 0'i32))
+  t.loadTile(gdBuf, (0'i32, 0'i32, 0'i32, 0'i32))
   for n in 0 ..< 4:
     for m in 0 ..< 2:
       doAssert t.frags[n][m].frag[0] == float32(n * 128 + m * 8),
@@ -94,8 +94,8 @@ proc checkFmaStorage() =
   var outBuf: array[32 * 16, float32]
   for i in 0 ..< outBuf.len:
     outBuf[i] = -1.0'f32
-  let glOut = gd(cast[ptr UncheckedArray[float32]](addr outBuf[0]), 0, 0, 32, 16)
-  storeTile(glOut, t, (0'i32, 0'i32, 0'i32, 0'i32))
+  let gdOutBuf = gd(cast[ptr UncheckedArray[float32]](addr outBuf[0]), 0, 0, 32, 16)
+  gdOutBuf.storeTile(t, (0'i32, 0'i32, 0'i32, 0'i32))
   for n in 0 ..< 4:
     for m in 0 ..< 2:
       doAssert outBuf[n * 128 + m * 8] == float32(n * 128 + m * 8),
@@ -272,9 +272,9 @@ proc checkRtRightStore() =
   var outBuf: array[8 * 16, float32]
   for i in 0 ..< outBuf.len:
     outBuf[i] = -1.0'f32
-  let glOut = gd(cast[ptr UncheckedArray[float32]](addr outBuf[0]), shape = (-1, -1, -1, -1), stride = (
+  let gdOutBuf = gd(cast[ptr UncheckedArray[float32]](addr outBuf[0]), shape = (-1, -1, -1, -1), stride = (
                             8 * 16, 0, 1, 16))
-  storeTile(glOut, kt, (0'i32, 0'i32, 0'i32, 0'i32))
+  gdOutBuf.storeTile(kt, (0'i32, 0'i32, 0'i32, 0'i32))
   for m in 0 ..< 2:
     for v in 0 ..< 2:
       doAssert outBuf[m * 8 + v] == float32(m * 8 + v + 1),
@@ -326,14 +326,14 @@ const mmaCompileProbe = metal:
     var a_rtl: rt_l(float16, 8, 8)
     var b_rtr: rt_r(float16, 8, 8)
     var d_rtl: rt_l(float32, 8, 8, getTileConfig(float32, float16))
-    let gd_a = gd(a, 0, 0, 8, 8)
-    let gd_b = gd(b, shape = (-1, -1, -1, -1), stride = ( 0, 0, 1, 8))
-    loadTile(a_rtl, gd_a, (0'i32, 0'i32, 0'i32, 0'i32))
-    loadTile(b_rtr, gd_b, (0'i32, 0'i32, 0'i32, 0'i32))
+    let gd_a = a.gd(0, 0, 8, 8)
+    let gd_b = b.gd(shape = (-1, -1, -1, -1), stride = ( 0, 0, 1, 8))
+    a_rtl.loadTile(gd_a, (0'i32, 0'i32, 0'i32, 0'i32))
+    b_rtr.loadTile(gd_b, (0'i32, 0'i32, 0'i32, 0'i32))
     d_rtl.zero()
     d_rtl.mma_AB(a_rtl, b_rtr)
-    let gd_d = gd(d, 0, 0, 8, 8)
-    storeTile(gd_d, d_rtl, (0'i32, 0'i32, 0'i32, 0'i32))
+    let gd_d = d.gd(0, 0, 8, 8)
+    gd_d.storeTile(d_rtl, (0'i32, 0'i32, 0'i32, 0'i32))
 
 when isMainModule:
   echo "TILE OPS HOST PASS"
