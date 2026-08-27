@@ -453,6 +453,43 @@ proc main() =
       true
 
   # ──────────────────────────────────────────────────────────────────────────
+  # Conv history across a multi-token continuation: two-call == one-shot
+  # ──────────────────────────────────────────────────────────────────────────
+  runCppTest "GDN conv history: multi-token continuation == one-shot tail":
+    proc(): bool =
+      var (shardMem, shardSt) = openModelShard()
+      defer: close(shardMem)
+      let cfgJson = (ModelDir / "config.json").parseFile()
+      let gdn = loadGdn(shardSt, cfgJson, 0)
+
+      # Deterministic tiny input: arange scaled to [0, 1), bf16.
+      let n = 5 * 1024
+      let arange = F.arange(n, F.tensorOptions(F.kInt64, F.kCPU)).to(kFloat32)
+      let x = (arange * (1.0 / float64(n)))
+        .reshape([1, 5, 1024])
+        .to(kBFloat16)
+      let firstCall = x.narrow(1, 0, 3)
+      let secondCall = x.narrow(1, 3, 2)
+
+      # Two-call continuation: prefill 3 tokens, then a second multi-token
+      # prefill of 2 tokens on the same context. The second call must keep
+      # the conv history written by the first, not re-zero the window.
+      var ctx2 = InferenceContext.init(24, 1, 2, 512, 256)
+      discard gdn(ctx2, firstCall)
+      let outTwoCall = gdn(ctx2, secondCall)
+
+      # One-shot prefill over the concatenated 5 tokens.
+      var ctx1 = InferenceContext.init(24, 1, 2, 512, 256)
+      let outOneShot = gdn(ctx1, x)
+
+      # The second call's positions must be bit-identical to the one-shot
+      # tail (the conv history of the first call feeds the second).
+      assertAllClose(outTwoCall, outOneShot.narrow(1, 3, 2),
+        rtol = 0.0, abstol = 0.0,
+        msg = "multi-token continuation tail != one-shot tail")
+      true
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Dispatch: 18 linear + 6 full attention, plus a model-level run
   # ──────────────────────────────────────────────────────────────────────────
   runCppTest "GDN/full-attention dispatch (18 linear + 6 full) + model run":

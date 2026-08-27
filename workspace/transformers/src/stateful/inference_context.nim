@@ -83,7 +83,7 @@ proc ensureGdnStates*(
   ## Allocate the GDN conv and SSM states for `layer_idx` (zeros).
   ##
   ## The GDN layer forward calls this on every pass. The seqs are sized to
-  ## the full layer count (24) on first use, then only nil slots are filled.
+  ## the context's layer count on first use, then only nil slots are filled.
   ## This avoids reallocating the seq payloads mid-forward, which corrupted
   ## the heap when interleaved with the model's tensor alloc/free churn
   ## (two payload pointers converged, causing use-after-free SIGSEGVs in
@@ -94,8 +94,8 @@ proc ensureGdnStates*(
   ## the conv/SSM window past the kernel size) are future work. The current
   ## state is the full per-sequence cache.
   if ctx.gdnConvState.len <= layer_idx:
-    ctx.gdnConvState.setLen(max(layer_idx + 1, 24))
-    ctx.gdnSsmState.setLen(max(layer_idx + 1, 24))
+    ctx.gdnConvState.setLen(max(ctx.num_layers, layer_idx + 1))
+    ctx.gdnSsmState.setLen(max(ctx.num_layers, layer_idx + 1))
   if ctx.gdnConvState[layer_idx].isNil:
     ctx.gdnConvState[layer_idx] = F.zeros(
       convDim, 3, F.tensorOptions(F.kBFloat16, device))

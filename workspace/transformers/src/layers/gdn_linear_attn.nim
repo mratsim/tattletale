@@ -222,16 +222,23 @@ proc forward(
     ctx.gdnConvState[self.layer_idx] =
       catInput.narrow(2, catInput.size(2) - 3, 3)[0].contiguous()
   else:
-    # Prefill: causal conv with 3-position left padding, take first T.
+    # Prefill: prepend the stored conv history (zeros on a fresh sequence)
+    # and take the last seqLen valid outputs, so a continuation after an
+    # earlier multi-token forward keeps the preceding positions in the
+    # conv window instead of re-zeroing them.
+    let state = ctx.gdnConvState[self.layer_idx]  # (conv_dim, 3) bf16, or nil
+    let pre =
+      if state.isNil:
+        F.zeros(batch, self.conv_dim, 3, F.tensorOptions(F.kBFloat16, device))
+      else:
+        state.unsqueeze(0)
+    let padded = F.cat([pre, mixedQkv], -1)  # (b, conv_dim, 3 + T)
     let conv = F.conv1d(
-      mixedQkv, self.conv1d_weight,
-      padding = [3], groups = self.conv_dim)
-    convOut = F.silu(conv.narrow(2, 0, seqLen))
-    # New state = last 3 positions of the zero-padded pre-conv input, so a
-    # prefill shorter than the kernel still yields a full 3-wide context.
-    let padded = F.cat([
-      F.zeros(batch, self.conv_dim, 3, F.tensorOptions(F.kBFloat16, device)),
-      mixedQkv], -1)
+      padded, self.conv1d_weight,
+      padding = [0], groups = self.conv_dim)
+    convOut = F.silu(conv.narrow(2, conv.size(2) - seqLen, seqLen))
+    # New state = last 3 positions of the pre-conv input, so a prefill
+    # shorter than the kernel still yields a full 3-wide context.
     ctx.gdnConvState[self.layer_idx] =
       padded.narrow(2, padded.size(2) - 3, 3)[0].contiguous()
 

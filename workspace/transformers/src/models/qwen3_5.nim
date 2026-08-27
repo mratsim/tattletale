@@ -325,6 +325,7 @@ proc loadQwen3_5ModelRaw(modelPath: string, device = kCPU): Qwen3_5Model =
 
   # Raw config JSON for deserialization (codecs inspect quantization_config)
   let cfgJson = (modelPath / "config.json").parseFile()
+  let actDtype = activationDtype(cfgJson)
 
   var tensorRequests = 0
 
@@ -336,11 +337,15 @@ proc loadQwen3_5ModelRaw(modelPath: string, device = kCPU): Qwen3_5Model =
     config.head_dim,
     config.max_position_embeddings,
     config.rope_theta,
-    F.kBFloat16,
+    actDtype,
     device,
     rotary_dim = int(config.head_dim.float64 * config.partial_rotary_factor))
 
   var layers = newSeq[Qwen35DecoderLayer](config.num_hidden_layers)
+  if config.layer_types.len != config.num_hidden_layers:
+    raise newException(ValueError,
+      "layer_types has " & $config.layer_types.len &
+      " entries, expected " & $config.num_hidden_layers)
   for i in 0 ..< config.num_hidden_layers:
     let lp = "model.language_model.layers." & $i & "."
 
@@ -370,7 +375,7 @@ proc loadQwen3_5ModelRaw(modelPath: string, device = kCPU): Qwen3_5Model =
       inc tensorRequests
       let convWeight = weightsSt.getTensorOwned(lp & "linear_attn.conv1d.weight", device)
       inc tensorRequests
-      let aLog = weightsSt.getTensorOwned(lp & "linear_attn.A_log", device).to(kBFloat16)
+      let aLog = weightsSt.getTensorOwned(lp & "linear_attn.A_log", device)
       inc tensorRequests
       let dtBias = weightsSt.getTensorOwned(lp & "linear_attn.dt_bias", device)
       inc tensorRequests
