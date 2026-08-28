@@ -228,6 +228,8 @@ proc cbrtDefined(x: float32): float32 {.device.} =
   if m >= 2.0'f32:
     m = m * 0.5'f32
     e += 1
+  if ax == 0.0'f32:
+    return x
   while m < 1.0'f32:
     m = m * 2.0'f32
     e -= 1

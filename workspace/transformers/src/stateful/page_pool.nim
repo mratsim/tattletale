@@ -79,5 +79,6 @@ func layerView*(pool: PagePool, layer: int): tuple[kView, vView: Tensor] =
   ## head_dim) of the layer-major pool, the slice the paged kernels
   ## consume per dispatch. data_ptr at the layer base, page stride
   ## num_layers·PAGE_SIZE·kv_heads·head_dim.
+  ## The kernel's `layer` arg must be 0 when a layerView view is passed (the offset is already applied).
   (pool.k_buffer.narrow(1, layer, 1).squeeze(1),
    pool.v_buffer.narrow(1, layer, 1).squeeze(1))

@@ -491,15 +491,14 @@ type KvStats* = object
 
 proc runKvCombo*(engine: var auto; d: KvCase; bits, compander: int;
                  compandA: float32; tag: string;
-                 st: var KvStats; hAll: var uint32;
-                 numLayers = 1, layer = 0): tuple[worstRt: float32, hash: uint32] =
+                 st: var KvStats; hAll: var uint32): tuple[worstRt: float32, hash: uint32] =
   ## One (bits, compander) round-trip run over the case: the reference
   ## quant + the kernel quant (cache_seqlens = 0, binding-0 sliced:
   ## [K words | V words | K scales | V scales]), then the reference
   ## dequant of the reference quant + the kernel dequant of the kernel
-  ## quant (cache_seqlens = rows, binding-0 [K rows | V rows]). Runs
-  ## at layer `layer` of a `numLayers`-layer pool (defaults 1 and 0,
-  ## the plain pool). Checks: quant planes and scales and dequant
+  ## quant (cache_seqlens = rows, binding-0 [K rows | V rows]). Runs at
+  ## layer 0 of a 1-layer pool (the plain pool). Checks: quant planes
+  ## and scales and dequant
   ## rows 100% bit-exact vs the reference implementation (NaN =
   ## failure), the dequant |Δ| ≤ 1e-2 bound, and the round-trip worst
   ## |Δ| ≤ 64 bound (a backstop against NaN/inf/wild out-of-slab
@@ -524,7 +523,7 @@ proc runKvCombo*(engine: var auto; d: KvCase; bits, compander: int;
     "kvQuantD128", kq,
     (d.kSlab, d.vSlab, d.blockTable, rowsZero,
      int32(d.numSeqs), int32(d.maxPages), int32(d.tokenDim), int32(groups),
-     int32(qWordsTotal), int32(numLayers), int32(layer),
+     int32(qWordsTotal), int32(1), int32(0),
      compandA, int32(bits), int32(compander)))
 
   # ── bit-exact planes + scales ──
@@ -559,7 +558,7 @@ proc runKvCombo*(engine: var auto; d: KvCase; bits, compander: int;
     "kvDequantD128", kd,
     (qK, qV, sK, sV, d.blockTable, rowsCached,
      int32(d.numSeqs), int32(d.maxPages), int32(d.tokenDim), int32(groups),
-     int32(outTotal), int32(numLayers), int32(layer),
+     int32(outTotal), int32(1), int32(0),
      compandA, int32(bits), int32(compander)))
 
   # ── the dequant bit-exact check + the round-trip |Δ| (kernel path) ──
