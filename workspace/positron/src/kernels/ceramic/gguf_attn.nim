@@ -63,7 +63,8 @@ const ggufAttnMsl* = metal:
       block_table, cache_seqlens, cu_seqlens_q: ptr UncheckedArray[int32],
       num_seqs, H, Nkv, max_pages, page_size: int32) {.global.} =
     paged_attn_fwd(o, q, k_cache, v_cache, block_table, cache_seqlens,
-                   cu_seqlens_q, num_seqs, H, Nkv, max_pages, page_size, 128)
+                   cu_seqlens_q, num_seqs, H, Nkv, max_pages,
+                   num_layers = 1, layer = 0, page_size = 16, D = 128)
 
 # ═════════════════════════════════════════════════════════════════════
 #  The attention-forward parameters and result
