@@ -6,7 +6,7 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Host-side test support for the tile layer: the fp16↔fp32 bit-pattern converters
-## (round-to-nearest-even) and the deterministic shape draws for the on-device tests.
+## (round-to-nearest-even) and the deterministic shape cases for the on-device tests.
 ## Not a test module (no `test_` prefix): `nim test_ceramic` does not run it.
 
 import std/sha1
@@ -73,100 +73,100 @@ func fp32ToFp16*(x: float32): uint16 =
   return sign or uint16(bexp shl 10) or uint16(r)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Deterministic shape draws (SHA-1 of a fixed seed and a per-draw counter)
+#  Deterministic shape cases (SHA-1 of a fixed seed and a per-case counter)
 # ═════════════════════════════════════════════════════════════════════════
 #
 # The on-device tests must be impossible to pass by hardcoding dimensions:
-# each test draws its shapes from the SHA-1 digest of a fixed seed and a per-draw counter
+# each test takes its shapes from the SHA-1 digest of a fixed seed and a per-case counter
 # (preimage-resistant), so the dimensions cannot be baked into a kernel.
 # The digest bytes are the only source of shape parameters.
 
 type
-  ShapeDraws* = object
-    ## A deterministic hash-draw stream. `seed` is fixed at construction.
-    ## `counter` increments per draw. `nextBytes` returns the 20-byte SHA-1 digest
+  ShapeCases* = object
+    ## A deterministic hash-case stream. `seed` is fixed at construction.
+    ## `counter` increments per case. `nextBytes` returns the 20-byte SHA-1 digest
     ## of `seed & ":" & counter`.
     seed*: string
     counter*: int
 
-func initShapeDraws*(seed: string): ShapeDraws =
-  ## Starts a draw stream for `seed`. All draws are deterministic: the same seed
+func initShapeCases*(seed: string): ShapeCases =
+  ## Starts a case stream for `seed`. All cases are deterministic: the same seed
   ## always yields the same shapes.
-  ShapeDraws(seed: seed, counter: 0)
+  ShapeCases(seed: seed, counter: 0)
 
-func nextBytes*(draws: var ShapeDraws): array[20, uint8] =
+func nextBytes*(cases: var ShapeCases): array[20, uint8] =
   ## Returns the 20 digest bytes of `sha1(seed & ":" & counter)`.
-  let digest = secureHash(draws.seed & ":" & $draws.counter)
-  inc draws.counter
+  let digest = secureHash(cases.seed & ":" & $cases.counter)
+  inc cases.counter
   Sha1Digest(digest)
 
-func drawInRange*(b: array[20, uint8]; i: int; lo, hi: int): int =
+func caseInRange*(b: array[20, uint8]; i: int; lo, hi: int): int =
   ## Returns a deterministic value in `[lo, hi]` from digest byte `i`.
   ## Callers keep `i` distinct per parameter so the parameters stay
   ## independent.
   doAssert i >= 0 and i < 20
   lo + int(b[i]) mod (hi - lo + 1)
 
-proc checkDrawPins*() =
-  ## Verifies the fixed digest bytes and derived shapes for the first draws
+proc checkCasePins*() =
+  ## Verifies the fixed digest bytes and derived shapes for the first cases
   ## of each test seed. A silent hash regression must fail loudly
   ## here, not silently shrink every shape.
   block gemmPins:
-    var d = initShapeDraws("gemm")
+    var d = initShapeCases("gemm")
     let b0 = d.nextBytes()
     doAssert b0[0] == 0x85'u8 and b0[1] == 0xf3'u8 and b0[2] == 0x8f'u8,
       "gemm:0 digest bytes changed"
-    doAssert drawInRange(b0, 0, 1, 96) == 38
-    doAssert drawInRange(b0, 1, 1, 96) == 52
-    doAssert drawInRange(b0, 2, 1, 96) == 48
+    doAssert caseInRange(b0, 0, 1, 96) == 38
+    doAssert caseInRange(b0, 1, 1, 96) == 52
+    doAssert caseInRange(b0, 2, 1, 96) == 48
     let b1 = d.nextBytes()
-    doAssert b1 != b0, "gemm draws must differ"
-    doAssert drawInRange(b1, 0, 1, 96) == 53
-    doAssert drawInRange(b1, 1, 1, 96) == 35
-    doAssert drawInRange(b1, 2, 1, 96) == 77
+    doAssert b1 != b0, "gemm cases must differ"
+    doAssert caseInRange(b1, 0, 1, 96) == 53
+    doAssert caseInRange(b1, 1, 1, 96) == 35
+    doAssert caseInRange(b1, 2, 1, 96) == 77
   block rmsnormPins:
-    var d = initShapeDraws("rmsnorm")
+    var d = initShapeCases("rmsnorm")
     let b0 = d.nextBytes()
     doAssert b0[0] == 0x4a'u8 and b0[1] == 0x8f'u8,
       "rmsnorm:0 digest bytes changed"
-    doAssert drawInRange(b0, 0, 1, 64) == 11
-    doAssert drawInRange(b0, 1, 1, 128) == 16
+    doAssert caseInRange(b0, 0, 1, 64) == 11
+    doAssert caseInRange(b0, 1, 1, 128) == 16
     let b1 = d.nextBytes()
-    doAssert drawInRange(b1, 0, 1, 64) == 48
-    doAssert drawInRange(b1, 1, 1, 128) == 44
+    doAssert caseInRange(b1, 0, 1, 64) == 48
+    doAssert caseInRange(b1, 1, 1, 128) == 44
   block raggedPins:
-    var d = initShapeDraws("ragged")
+    var d = initShapeCases("ragged")
     let b0 = d.nextBytes()
     doAssert b0[0] == 0xa8'u8 and b0[1] == 0x4a'u8 and b0[2] == 0x5b'u8,
       "ragged:0 digest bytes changed"
-    doAssert drawInRange(b0, 0, 1, 96) == 73
-    doAssert drawInRange(b0, 1, 1, 96) == 75
-    doAssert drawInRange(b0, 2, 1, 96) == 92
+    doAssert caseInRange(b0, 0, 1, 96) == 73
+    doAssert caseInRange(b0, 1, 1, 96) == 75
+    doAssert caseInRange(b0, 2, 1, 96) == 92
     # The ragged test's per-row K_eff stream consumes one digest per 20 rows
-    # after the shape draw, so the second shape draw is the 6th digest
-    # (b0 + 4 kEff digests for the 73-row draw + the draw itself).
+    # after the shape case, so the second shape case is the 6th digest
+    # (b0 + 4 kEff digests for the 73-row case + the case itself).
     var b1: array[20, uint8]
     for i in 0 ..< 5:
       b1 = d.nextBytes()
-    doAssert drawInRange(b1, 0, 1, 96) == 47,
-      "ragged second shape draw changed"
-    doAssert drawInRange(b1, 1, 1, 96) == 9
-    doAssert drawInRange(b1, 2, 1, 96) == 48
+    doAssert caseInRange(b1, 0, 1, 96) == 47,
+      "ragged second shape case changed"
+    doAssert caseInRange(b1, 1, 1, 96) == 9
+    doAssert caseInRange(b1, 2, 1, 96) == 48
   block attnPins:
-    var d = initShapeDraws("attn")
+    var d = initShapeCases("attn")
     let b0 = d.nextBytes()
     doAssert b0[0] == 0x28'u8 and b0[1] == 0x56'u8 and b0[4] == 0x5e'u8,
       "attn:0 digest bytes changed"
-    doAssert drawInRange(b0, 0, 1, 2) == 1
-    doAssert drawInRange(b0, 1, 1, 2) == 1
-    doAssert 8 * drawInRange(b0, 4, 1, 12) == 88
+    doAssert caseInRange(b0, 0, 1, 2) == 1
+    doAssert caseInRange(b0, 1, 1, 2) == 1
+    doAssert 8 * caseInRange(b0, 4, 1, 12) == 88
     let b1 = d.nextBytes()
-    doAssert 8 * drawInRange(b1, 4, 1, 12) == 24,
+    doAssert 8 * caseInRange(b1, 4, 1, 12) == 24,
       "attn:1 KV dimension changed"
     let b2 = d.nextBytes()
-    doAssert 8 * drawInRange(b2, 4, 1, 12) == 16,
+    doAssert 8 * caseInRange(b2, 4, 1, 12) == 16,
       "attn:2 KV dimension changed"
-    doAssert drawInRange(b2, 0, 1, 2) == 1 and drawInRange(b2, 1, 1, 2) == 2,
-      "attn:2 batch/head draws changed"
+    doAssert caseInRange(b2, 0, 1, 2) == 1 and caseInRange(b2, 1, 1, 2) == 2,
+      "attn:2 batch/head cases changed"
 when isMainModule:
-  checkDrawPins()
+  checkCasePins()

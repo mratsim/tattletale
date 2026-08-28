@@ -12,84 +12,94 @@
 # ############################################################
 
 ## Paged multi-head attention forward on the ceramic Tile API: decode
-## and prefill in one kernel, K/V fetched per 8-row block through a
-## dense `block_table` + `cache_seqlens` (no page→contiguous gather).
-## Experimental: not a production kernel, known gaps below, not fixed.
+## and prefill in one kernel, K/V fetched per 8-row block through
+## a dense `block_table` + `cache_seqlens`
+## (no page-to-contiguous gather). The K/V come from the layer-major
+## PagePool slab (num_pages, num_layers, page_size, Nkv, D), one layer
+## per kernel dispatch via the `layer` scalar.
+##
+## Dataflow per threadgroup:
+##
+##   q tile (8×D) --× q_mul--> Q·Kᵀ --> S tile (8×8)
+##   k tile: 8-row block <- block_table[seq, t div page_size] <- k_cache slab
+##   S tile --banded causal mask--> exp2 --> P (8×8) fp16
+##   v tile: 8-row block <- block_table[seq, t div page_size] <- v_cache slab
+##   P --P·V mma--> O (8×D) fp32 --÷ row norm--> fp16 store
+##
+## The softmax is online: each kv block rescales the running O
+## and row sum by exp2(m_prev − m_cur).
+##
+## Modes:
+##   - decode (q_len == 1): causal off, each query attends the cached
+##     rows [0, cache_seqlen)
+##   - prefill (q_len ≥ 2): causal on over [0, cache_seqlen + q_len),
+##     query row j attends keys [0, cache_seqlen + j]
+##     (flash-attn varlen semantics)
+##   - GQA: kv_head = q_head div (H div Nkv)
 ##
 ## Buffers, fp16 first then int32 tables then scalars:
 ##   - o, q: (num_qo_tokens, H, D)
-##   - k_cache, v_cache: (num_pages, page_size, Nkv, D), seq-first
-##     slab (row stride Nkv·D, head-dim contiguous)
-##   - block_table: (num_seqs, max_pages) dense, -1 padding, never read
+##   - k_cache, v_cache: (num_pages, num_layers, page_size, Nkv, D)
+##     layer-major pool (page stride num_layers·page_size·Nkv·D,
+##     per-layer row stride Nkv·D, head-dim contiguous)
+##   - block_table: (num_seqs, max_pages) dense, -1 padding
 ##   - cache_seqlens: (num_seqs)
 ##   - cu_seqlens_q: (num_seqs+1), the prefill query ranges
-##   - num_seqs, H, Nkv, max_pages, page_size: int32
+##   - num_seqs, H, Nkv, max_pages, num_layers, layer: int32
+##   - page_size: static int, multiple of 8 (tile geometry)
 ##   - D: static int, 64 or 128 (tile geometry). No generic brackets,
 ##     no stride or scratch parameters.
 ##
 ## The 16-bit element type is the DSL's `float16` (distinct uint16,
 ## bit-identical on the host).
 ##
-## Grid and modes:
-##   - grid (q token blocks, H, num_seqs): z = seq, y = head, x = the
-##     seq's 8-row q block
-##   - decode (q_len == 1): causal OFF, each query attends the cached
-##     rows [0, cache_seqlen)
-##   - prefill (q_len ≥ 2): causal ON over [0, cache_seqlen + q_len),
-##     query row j attends keys [0, cache_seqlen + j] (flash-attn
-##     varlen semantics)
-##   - GQA: kv_head = q_head div (H div Nkv)
-##
 ## Block fetch, page_size a multiple of 8 so each 8-row KV block lies
 ## inside one page. For block t0:
 ##   - page_idx = t0 div page_size, in_page = t0 mod page_size,
 ##     page_id = block_table[seq·max_pages + page_idx]
-##   - slab base = page_id·(page_size·Nkv·D) + in_page·(Nkv·D) +
-##     kv_head·D, passed as the origin's batch component, the block
-##     rows local to it
-##   - the K view carries stride (1, 1, Nkv·D, 1). The V view
-##     carries the transposed stride (1, 1, 1, Nkv·D), so the P·V mma
-##     consumes Vᵀ from the natural slab view, matching the plain attn kernel's V view
+##   - slab base = page_id·(num_layers·page_size·Nkv·D) +
+##     layer·(page_size·Nkv·D) + in_page·(Nkv·D) + kv_head·D
+##     (the layer-major pool position), passed as the origin's batch
+##     component, the block rows local to it
+##   - the K view carries stride (1, 1, Nkv·D, 1). The V view carries
+##     the transposed stride (1, 1, 1, Nkv·D), so the P·V mma consumes
+##     Vᵀ from the natural slab view
 ##
 ## Partial last page:
-##   - K/V rows are bounded by cache_seqlens[seq] (decode) or
-##     cache_seqlen + q_len (prefill), never by page multiples. The
-##     tail page may hold garbage beyond the covered length
+##   - K/V rows are bounded by cache_seqlens[seq] (decode)
+##     or cache_seqlen + q_len (prefill), never by page multiples.
+##     The tail page may hold garbage beyond the covered length
 ##     (bound, don't filter)
 ##   - the KV loop stays inside the seq's table pages
-##     (pageBlocks = ceil(totalK/page_size)·(page_size div 8), a block
-##     beyond the last table page would read a -1 padding slot). It
-##     also stays inside the last block's attended range
-##     (lastKey = min(cachedLen + q0Local + 7, totalK − 1))
-##   - garbage rows load as valid slab memory and are excluded by the
-##     banded mask: masked S columns are set to the most-negative
+##     (pageBlocks = ceil(totalK/page_size)·(page_size div 8))
+##     and inside the last block's attended range
+##     (lastKey = min(cachedLen + q0Local + 7, totalK − 1)). A block
+##     beyond the last table page would read a -1 padding slot
+##   - garbage rows load as valid slab memory and are excluded
+##     by the banded mask. Masked S columns become the most-negative
 ##     finite fp32 (−3.402823466e38), so the running row max ignores
-##     them and exp2(S − m) underflows to exact +0.0. The P, l and O
-##     accumulations never see them
+##     them and exp2(S − m) underflows to exact +0.0. The P, l
+##     and O accumulations never see them
 ##
 ## Numerics:
-##   - online softmax in TM's exp2 shape, q_mul = scale·log2(e) folded
+##   - online softmax in the exp2 shape, q_mul = scale·log2(e) folded
 ##     into Q (exp2(S·q_mul − m) is the exp(S·scale) convention,
 ##     scale = 1/sqrt(D))
 ##   - P downcast to fp16 (`convert`) before the P·V mma. The output
 ##     store quantizes the fp32 O tile to fp16 (RNE) through the `to`
 ##     chokepoint
 ##
-## Local device procs: the shared tile_algebra lacks the banded causal mask, so the module carries maskCausal locally.
-## The row-bounded load/store come from tile_io_rows (positron local extension).
+## Local device procs: the shared tile algebra has no banded causal
+## mask, so the module carries `maskCausal` locally. The row-bounded
+## loads/stores come from `tile_io_rows`.
 ##
-## Known production gaps (documented, not fixed):
-##   - Layer-major PagePool stride: production slabs are
-##     [num_pages, num_layers, page_size, kv_heads, head_dim]. This
-##     kernel consumes a per-layer slab view contiguous per layer (row
-##     stride Nkv·D), so the per-layer view needs a layer offset and a
-##     batch stride of num_layers·page_size·Nkv·D.
-##   - Runtime page_size: production should specialize page_size as a
-##     constexpr (the fetch math derives pageBlocks and the page
-##     stride from it).
-##   - Single-path gate: the new API has no `useCeramicLayout` toggle
-##     (the old API's addressing-layer switch). The kernel is the one
-##     path.
+## Production contract:
+##   - single addressing path, no toggle: the kernel is the one
+##     addressing path, and the Tile API has no `useCeramicLayout`
+##     switch
+##   - batch metadata (block_table, cache_seqlens, cu_seqlens_q)
+##     arrives as raw pointers. A future AttentionBatchInfo struct
+##     passes the same raw pointers, so the signature stays unchanged
 
 import workspace/crucible
 import workspace/ceramic
@@ -98,9 +108,9 @@ import ./tile_io_rows
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
-# ═════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 #  Local device extensions: the tile API gaps the paged fetch needs
-#  ═════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 
 proc maskCausal[A: static MmaAtom](
     tile: var RtLeft[float32, 8, 8, A],
@@ -130,24 +140,27 @@ proc maskCausal[A: static MmaAtom](
         if int32(col + m * N + v) > band:
           tile.frags[n][m].frag[v] = -3.402823466e38'f32
 
-# ═════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 #  The kernel
-#  ═════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 
 proc paged_attn_fwd*(
     o: ptr UncheckedArray[float16],            # (num_qo_tokens, H, D)
     q: ptr UncheckedArray[float16],            # (num_qo_tokens, H, D)
-    k_cache, v_cache: ptr UncheckedArray[float16],  # (num_pages, page_size, Nkv, D)
+    k_cache, v_cache: ptr UncheckedArray[float16],  # (num_pages, num_layers, page_size, Nkv, D) layer-major pool
     block_table: ptr UncheckedArray[int32],    # (num_seqs, max_pages) dense
     cache_seqlens: ptr UncheckedArray[int32],  # (num_seqs)
     cu_seqlens_q: ptr UncheckedArray[int32],   # (num_seqs+1) prefill q ranges
-    num_seqs, H, Nkv, max_pages, page_size: int32,
-    D: static int) {.device.} =
+    num_seqs, H, Nkv, max_pages, num_layers, layer: int32,
+    page_size: static int, D: static int) {.device.} =
   ## One grid point = (seq, head, 8-row q block), following the module
   ## doc's contract: the q tile loads row-bounded, the KV loop is
   ## bounded by the seq's table pages and the banded causal mask, and
   ## the fp16 store writes only the seq's q rows.
+  ## Grid: (q token blocks, H, num_seqs), 32 lanes. x = the seq's
+  ## 8-row q block, y = head, z = seq.
   static: doAssert D == 64 or D == 128
+  static: doAssert page_size mod 8 == 0
 
   let seqId = int32(threadgroup_position_in_grid.z)
   let head = int32(threadgroup_position_in_grid.y)
@@ -173,7 +186,7 @@ proc paged_attn_fwd*(
   let decodeAdj = (if qLen == 1: 1'i32 else: 0'i32)
   let totalK = cachedLen + qLen - decodeAdj
   let q0Local = qBlock * 8
-  let pageStride = page_size * Nkv * int32(D)
+  let pageStride = num_layers * page_size * Nkv * int32(D)
   let rowStride = Nkv * int32(D)
   # The KV loop stays inside the seq's table pages and the last
   # attended block.
@@ -206,7 +219,8 @@ proc paged_attn_fwd*(
     let pageIdx = (kv_idx * 8) div page_size
     let inPage = kv_idx * 8 - pageIdx * page_size
     let pageId = block_table[seqId * max_pages + pageIdx]
-    let base = pageId * pageStride + inPage * rowStride + kvHead * int32(D)
+    let base = pageId * pageStride + layer * page_size * Nkv * int32(D) +
+               inPage * rowStride + kvHead * int32(D)
     # The block's rows are local to the base: the origin's row-tile
     # component stays 0.
     k_reg.loadTile(gd_k, (base, 0, 0, 0))

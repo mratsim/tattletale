@@ -118,17 +118,17 @@ proc checkAttn(engine: var auto; kernel: string; B, H, N, D: int;
     quit 1
 
 proc runTests() =   # engines are RAII, so keep them function-local
-  checkDrawPins()          # the hash draws must not drift
+  checkCasePins()          # the hash cases must not drift
   var engine = bkMetal.init()
   engine.ingest(attnMsl)
   echo attnMsl            # keep the generated MSL inspectable
 
-  var draws = initShapeDraws("attn")
-  for draw in 0 ..< 3:
-    let b = draws.nextBytes()
-    let B = drawInRange(b, 0, 1, 2)
-    let H = drawInRange(b, 1, 1, 2)
-    let N = 8 * drawInRange(b, 4, 1, 12)   # N ∈ {8..96}, multiples of 8
+  var cases = initShapeCases("attn")
+  for caseIdx in 0 ..< 3:
+    let b = cases.nextBytes()
+    let B = caseInRange(b, 0, 1, 2)
+    let H = caseInRange(b, 1, 1, 2)
+    let N = 8 * caseInRange(b, 4, 1, 12)   # N ∈ {8..96}, multiples of 8
     let g = torchSdpa(B, H, N, D = 64, seedQ = 1, seedK = 4, seedV = 8)
     checkAttn(engine, "attnD64", B, H, N, 64, g)
     let g128 = torchSdpa(B, H, N, D = 128, seedQ = 11, seedK = 14, seedV = 18)
