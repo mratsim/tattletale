@@ -20,19 +20,21 @@ type
   PageObj = object
     ## Underlying data for Page ref objects.
     index: int32 = -1i32
-    pool {.cursor.}: PagePool # Back-pointer (orchestrator keeps pool alive, and we only have integers to return so don't refcount)
-    k_view*: Tensor           # (num_layers, PAGE_SIZE, kv_heads, head_dim) — view into pool
+    pool {.cursor.}: PagePool # Back-pointer: the orchestrator keeps the pool
+    # alive, and we only have integers to return, so don't refcount
+    k_view*: Tensor           # (num_layers, PAGE_SIZE, kv_heads, head_dim) slab view
     v_view*: Tensor           # same
 
-# No custom =destroy, =copy, =sink hooks — ORC default field-by-field
-# destruction handles Tensor/TorchTensor lifecycle correctly for PagePool
+# No custom =destroy, =copy, =sink hooks. ORC default field-by-field
+# destruction handles Tensor/TorchTensor lifecycle correctly for PagePool.
 #
-# For the Page, if the PagePool is not destroyed return the index to it so it can be borrowed again
-# We need to nil Tensor field to ensure their destructor is called so the TorchTensor's refcount is decremnented and they are collected
+# A Page returns its slot to the pool's free stack while the pool
+# is still alive, then clears the tensor fields so their destructors
+# run and release the TorchTensor refcounts.
 
 proc `=destroy`(p: var PageObj) =
-  ## Auto-recycle slot index to the pool's free stack.
-  ## Called by ORC when the last Page ref is dropped.
+  ## Returns the slot index to the pool's free stack when the last
+  ## Page ref is dropped.
   ## SAFETY: PagePool outlives all Pages (orchestrator lifetime).
   if p.pool != nil and p.index >= 0:
     p.pool.free_indices.add(p.index)
@@ -71,3 +73,12 @@ func pagesAvailable*(pool: PagePool): int =
 
 func pageIndex*(p: Page): int32 =
   p.index
+
+func layerView*(pool: PagePool, layer: int): tuple[kView, vView: Tensor] =
+  ## Returns the per-layer slab views (num_pages, PAGE_SIZE, kv_heads,
+  ## head_dim) of the layer-major pool, the slice the paged kernels
+  ## consume per dispatch. data_ptr at the layer base, page stride
+  ## num_layers·PAGE_SIZE·kv_heads·head_dim.
+  ## The kernel's `layer` arg must be 0 when a layerView view is passed (the offset is already applied).
+  (pool.k_buffer.narrow(1, layer, 1).squeeze(1),
+   pool.v_buffer.narrow(1, layer, 1).squeeze(1))

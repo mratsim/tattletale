@@ -98,25 +98,25 @@ proc checkRmsnorm(engine: var auto; kernel: string; M, C: int; eps: float32) =
     quit 1
 
 proc runTests() =   # engines are RAII, so keep them function-local
-  checkDrawPins()          # the hash draws must not drift
+  checkCasePins()          # the hash cases must not drift
   var engine = bkMetal.init()
   engine.ingest(rmsnormMsl)
   echo rmsnormMsl           # keep the generated MSL inspectable
 
-  var draws = initShapeDraws("rmsnormKernel")
-  for draw in 0 ..< 2:
-    let b = draws.nextBytes()
-    let M = drawInRange(b, 0, 1, 64)
-    let C = drawInRange(b, 1, 1, 128)
+  var cases = initShapeCases("rmsnormKernel")
+  for caseIdx in 0 ..< 2:
+    let b = cases.nextBytes()
+    let M = caseInRange(b, 0, 1, 64)
+    let C = caseInRange(b, 1, 1, 128)
     doAssert C <= Ct, "C must fit the static tile width (Ct)"
-    # ε varies across the draws: at ε = 1e-2 a kernel that drops the ε shift
+    # ε varies across the cases: at ε = 1e-2 a kernel that drops the ε shift
     # (rstd without the add) errs orders above the 1e-5 tolerance.
-    let eps = if draw == 0: 1e-5'f32 else: 1e-2'f32
+    let eps = if caseIdx == 0: 1e-5'f32 else: 1e-2'f32
     checkRmsnorm(engine, "rmsnormKernel", M, C, eps)
-  # The C == 128 draw exercises the unpadded path: every source column
+  # The C == 128 case exercises the unpadded path: every source column
   # carries real data, so the zero-padding never contributes.
-  let b = draws.nextBytes()
-  let M = drawInRange(b, 0, 1, 64)
+  let b = cases.nextBytes()
+  let M = caseInRange(b, 0, 1, 64)
   checkRmsnorm(engine, "rmsnormKernel", M, Ct, eps = 1e-2'f32)
 
 when isMainModule:

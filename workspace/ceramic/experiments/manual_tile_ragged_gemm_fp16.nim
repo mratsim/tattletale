@@ -167,7 +167,7 @@ proc checkIdentical(name: string; A, B: seq[float32]; M, N, Np: int) =
     quit 1
 
 proc runTests() =   # engines are RAII, so keep them function-local
-  checkDrawPins()          # the hash draws must not drift
+  checkCasePins()          # the hash cases must not drift
   var zfEngine = bkMetal.init()
   var brEngine = bkMetal.init()
   zfEngine.ingest(raggedZfMsl)
@@ -187,21 +187,21 @@ proc runTests() =   # engines are RAII, so keep them function-local
   let br0 = checkRagged(brEngine, "ragBr", M0, N0, K0, k40)
   checkIdentical("ragZf ≡ ragBr", zf0, br0, M0, N0, Np0)
 
-  var draws = initShapeDraws("ragged")
-  for draw in 0 ..< 2:
-    let b0 = draws.nextBytes()
-    let M = drawInRange(b0, 0, 1, 96)
-    let N = drawInRange(b0, 1, 1, 96)
-    let K = drawInRange(b0, 2, 1, 96)
+  var cases = initShapeCases("ragged")
+  for caseIdx in 0 ..< 2:
+    let b0 = cases.nextBytes()
+    let M = caseInRange(b0, 0, 1, 96)
+    let N = caseInRange(b0, 1, 1, 96)
+    let K = caseInRange(b0, 2, 1, 96)
     let Np = ((N + 31) div 32) * 32
-    # per-row K_eff from the following digest bytes (20 rows per draw)
+    # per-row K_eff from the following digest bytes (20 rows per case)
     var kEffs = newSeq[int](M)
     var i = 0
-    var b = draws.nextBytes()
+    var b = cases.nextBytes()
     for m in 0 ..< M:
       if i >= 20:
         i = 0
-        b = draws.nextBytes()
+        b = cases.nextBytes()
       kEffs[m] = int(b[i]) mod (K + 1)
       inc i
     echo &"ragged GEMM {M}×{N}×{K} (K_eff ∈ [{kEffs.min},{kEffs.max}], both strategies):"
