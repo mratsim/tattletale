@@ -103,7 +103,7 @@ proc checkGemm(engine: var auto; kernel: string; M, N, K: int) =
     quit 1
 
 proc runTests() =   # engines are RAII, so keep them function-local
-  checkDrawPins()          # the hash draws must not drift
+  checkCasePins()          # the hash cases must not drift
   var engine = bkMetal.init()
   engine.ingest(gemmMsl)
   echo gemmMsl          # keep the generated MSL inspectable
@@ -113,12 +113,12 @@ proc runTests() =   # engines are RAII, so keep them function-local
   # (bit-exact vs the empty reference).
   checkGemm(engine, "fusedGemm", 32, 64, 0)
 
-  var draws = initShapeDraws("gemm")
-  for draw in 0 ..< 2:
-    let b = draws.nextBytes()
-    let M = drawInRange(b, 0, 1, 96)
-    let N = drawInRange(b, 1, 1, 96)
-    let K = drawInRange(b, 2, 1, 96)
+  var cases = initShapeCases("gemm")
+  for caseIdx in 0 ..< 2:
+    let b = cases.nextBytes()
+    let M = caseInRange(b, 0, 1, 96)
+    let N = caseInRange(b, 1, 1, 96)
+    let K = caseInRange(b, 2, 1, 96)
     checkGemm(engine, "fusedGemm", M, N, K)
 
 when isMainModule:
