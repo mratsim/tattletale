@@ -197,3 +197,52 @@ when defined(macosx):
       objc.release(buffer.buffer)
       buffer.buffer = objc.ID(nil)
       buffer.data = nil
+
+  proc getpagesize(): cint {.importc: "getpagesize", header: "<unistd.h>".}
+
+  proc madvise(data: pointer, length: csize_t, advice: cint): cint
+    {.importc: "madvise", header: "<sys/mman.h>", sideEffect.}
+
+  const MadvNormal = 0                # MADV_NORMAL: default page reclamation
+
+  proc hostRangeLive*(data: pointer, size: int): bool =
+    ## Mapping check: true when every byte of [data, data+size) is mapped.
+    ## madvise(MADV_NORMAL) walks the VM map without touching pages
+    ## and without changing any byte or permission. Its defined effect is resetting
+    ## the range's paging advice to the machine default, so an advisory hint the caller had set
+    ## on that memory comes back cleared.
+    ## - ENOMEM (unmapped) or EINVAL (hole, advice-refusing mapping): false means
+    ##   "not proven mapped", never "proven freed".
+    ## - Mapped is not owned: the caller keeps ownership of the memory.
+    ##   The same-address remap hole is documented at `cachedWrap`.
+    ## Precondition: page-aligned data and a byte length that is a page multiple.
+    madvise(data, csize_t(size), MadvNormal) == 0
+
+  proc hostPageSize*(): int =
+    ## Host page size (16 KiB on Apple Silicon). NoCopy binding requires it
+    ## for both the pointer and the length.
+    int(getpagesize())
+
+  proc wrapBufferNoCopy*(device: objc.ID, data: pointer, size: int): MetalBuffer =
+    ## Shared no-copy view over page-aligned host memory: no allocation, no copy,
+    ## the GPU aliases the caller's bytes in place.
+    ## Contract: `data` page-aligned, `size` a page-size multiple and no larger
+    ## than the caller's allocation behind it, and that memory outliving the buffer,
+    ## which holds no reference to it (nil deallocator). Release tears down
+    ## the mapping only, never touching host pages.
+    ## Quits loudly on non-positive `size`, an unaligned `data`, a `size`
+    ## that is not a page multiple, or a nil buffer from the driver.
+    ## Returns +1, released via `releaseBuffer`.
+    if size <= 0:
+      failLoud("wrapBufferNoCopy: size must be positive, got " & $size)
+    if (cast[uint](data) mod hostPageSize().uint) != 0'u:
+      failLoud("wrapBufferNoCopy: data pointer is not page-aligned " &
+               "(page size " & $hostPageSize() & ")")
+    if (size mod hostPageSize()) != 0:
+      failLoud("wrapBufferNoCopy: size " & $size & " is not a page-size " &
+               "multiple (page size " & $hostPageSize() & ")")
+    result.buffer = objc.msgSend(device, objc.`$$`("newBufferWithBytesNoCopy:length:options:deallocator:"),
+                                data, objc.NSUInteger(size), SharedUntrackedOptions, objc.ID(nil))
+    if objc.isNil(result.buffer):
+      failLoud("newBufferWithBytesNoCopy returned nil (length " & $size & ")")
+    result.data = data
