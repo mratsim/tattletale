@@ -58,27 +58,19 @@ proc load*(_: type Linear, st: Safetensor, cfg: JsonNode, prefix: string, device
 
 # ─── RmsNorm ───────────────────────────────────────────────────────────
 
-proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): RmsNorm =
-  ## Load RMS norm layer from safetensors, dispatching to the right codec.
+proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU,
+             constant_bias = 0.0): RmsNorm =
+  ## Load an RMS norm layer from safetensors, dispatching to the right codec.
+  ## `constant_bias` 1 selects the 1-centered weight spelling: the norm
+  ## applies its weight as `1 + w` in f32, the Qwen3.5-family form.
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].rmsNorm
   if loader == nil:
     raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
-  let weight = loader(st, prefix, cfg, device)
-  RmsNorm.init(weight, quant, cfg{"rms_norm_eps"}.getFloat(1e-6))
-
-proc load*(_: type GemmaRmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): GemmaRmsNorm =
-  ## Load a Gemma-style RMS norm (weight applied as 1 + w) from safetensors.
-  ##
-  ## Shares the RmsNorm codec loader. Only the forward semantics differ
-  ## (the weight scales as `1 + w`, see GemmaRmsNorm.forward).
-  let quant = detectQuantization(cfg)
-  let loader = QuantLoaderRegistry[quant].rmsNorm
-  if loader == nil:
-    raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
-  let weight = loader(st, prefix, cfg, device)
   let textCfg = cfg{"text_config"}
-  GemmaRmsNorm.init(weight, textCfg{"rms_norm_eps"}.getFloat(1e-6))
+  let eps = textCfg{"rms_norm_eps"}.getFloat(cfg{"rms_norm_eps"}.getFloat(1e-6))
+  let weight = loader(st, prefix, cfg, device)
+  RmsNorm.init(weight, quant, eps, constant_bias)
 
 proc load*(_: type RmsNormGated, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): RmsNormGated =
   ## Load a gated RMSNorm (Qwen3.5 Gated DeltaNet norm) from safetensors.

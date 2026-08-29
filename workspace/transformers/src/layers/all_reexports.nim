@@ -1,24 +1,24 @@
 ## Re-export all layer types for the models module.
 
 import
-  ./attn,
+  ./attn_ssm/gated_delta_net,
+  ./attn_ssm/grouped_query_attention,
   ./embedding,
-  ./gated_attn,
-  ./gdn_linear_attn,
   ./linear,
   ./lmhead,
+  ./mixtures_of_experts,
   ./mlp,
   ./norm,
   ./rope,
   ./transformer
 
 export
-  attn,
+  gated_delta_net,
+  grouped_query_attention,
   embedding,
-  gated_attn,
-  gdn_linear_attn,
   linear,
   lmhead,
+  mixtures_of_experts,
   mlp,
   norm,
   rope,

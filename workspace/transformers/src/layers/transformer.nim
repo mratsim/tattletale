@@ -118,7 +118,7 @@
 import
   std/options,
   workspace/libtorch as F,
-  ./attn,
+  ./attn_ssm/grouped_query_attention,
   ./mlp,
   ./norm,
   ../stateful/inference_context

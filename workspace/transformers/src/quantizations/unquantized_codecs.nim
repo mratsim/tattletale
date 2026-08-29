@@ -5,10 +5,10 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Unquantized BF16 codec — identity loaders (pass-through from safetensor).
+## Unquantized BF16 codec: identity loaders (pass-through from safetensor).
 ##
-## No dtype conversion; tensors are returned in whatever dtype the
-## safetensor stores them in (typically BF16 for modern models).
+## No dtype conversion. Tensors are returned in whatever dtype
+## the safetensor stores them in (typically BF16 for modern models).
 
 import
   std/tables,

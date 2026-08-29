@@ -1,0 +1,32 @@
+{
+  "bands": {
+    "input_band": 0.5,
+    "output_band": 0.5
+  },
+  "batch_size": 1,
+  "device": "cpu",
+  "dtype": "bfloat16",
+  "experts_implementation": "eager",
+  "input_text": "Hello, how are you?",
+  "input_tokens": [
+    9419,
+    11,
+    1204,
+    513,
+    488,
+    30
+  ],
+  "layer": "model.language_model.layers.20",
+  "layer_type": "linear_attention",
+  "margins": {
+    "boundary_tie_tokens": 0,
+    "topk_margin_min": 0.00020598387345671654
+  },
+  "model": "Qwen3.6-35B-A3B",
+  "note": "layer_output is the vendored chunked forward. layer_output_seq is the sequential replay (0.00 for Nim).",
+  "num_threads": 1,
+  "seq_len": 6,
+  "torch_version": "2.11.0",
+  "transformers_version": "5.16.0.dev0",
+  "vendored_sha": "36deb0b53ed0863f4b4dfdea23dcaec7f3df3701"
+}

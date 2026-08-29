@@ -16,7 +16,7 @@ import
   workspace/transformers/src/stateful/kvcache {.all.},
   workspace/transformers/src/stateful/page_pool,
   workspace/transformers/src/stateful/inference_context,
-  workspace/transformers/src/layers/attn {.all.},
+  workspace/transformers/src/layers/attn_ssm/grouped_query_attention {.all.},
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/layers/linear {.all.},
   workspace/transformers/src/layers/norm {.all.}
@@ -71,8 +71,8 @@ proc main() =
       var attn = RopeGQAttention.init(
         0, "test_layer",
         qProj, kProj, vProj, oProj,
-        qNorm, kNorm,
-        numQoHeads, numKvHeads, headDim, rotary)
+        numQoHeads, numKvHeads, headDim, rotary,
+        q_norm = some(qNorm), k_norm = some(kNorm))
 
       # Set up cos/sin
       ctx.position_ids = F.arange(0, 10).unsqueeze(0)

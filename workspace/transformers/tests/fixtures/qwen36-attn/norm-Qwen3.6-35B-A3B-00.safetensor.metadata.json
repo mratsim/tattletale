@@ -1,0 +1,6 @@
+{
+  "case": "head_dim_forward",
+  "eps": 1e-06,
+  "layer": "model.language_model.layers.3.self_attn.q_norm",
+  "model": "Qwen3.6-35B-A3B"
+}
