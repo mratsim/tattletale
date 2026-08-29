@@ -119,6 +119,7 @@ when defined(macosx):
     MsgSendIDIDPtr = proc (self: ID; op: SEL; a: ID; b: ID; c: ptr ID): ID {.cdecl.}
     MsgSendUInt2 = proc (self: ID; op: SEL; a: NSUInteger; b: NSUInteger): ID {.cdecl.}
     MsgSendIDUInt2 = proc (self: ID; op: SEL; a: ID; b: NSUInteger; c: NSUInteger): ID {.cdecl.}
+    MsgSendPtrUInt2ID = proc (self: ID, op: SEL, a: pointer, b: NSUInteger, c: NSUInteger, d: ID): ID {.cdecl.}
     MsgSendSize2 = proc (self: ID; op: SEL; a: MTLSize; b: MTLSize): ID {.cdecl.}
     MsgSendBOOL = proc (self: ID; op: SEL; a: BOOL): ID {.cdecl.}
     MsgSendUInt1 = proc (self: ID; op: SEL; a: NSUInteger): ID {.cdecl.}
@@ -156,6 +157,11 @@ when defined(macosx):
   ## setBuffer:offset:atIndex:.
   template msgSend*(self: ID; op: SEL; a: ID; b: NSUInteger; c: NSUInteger): ID =
     cast[MsgSendIDUInt2](objc_msgSend)(self, op, a, b, c)
+
+  ## Selectors with one pointer, two NSUInteger and one object argument:
+  ## newBufferWithBytesNoCopy:length:options:deallocator: (nil deallocator).
+  template msgSend*(self: ID, op: SEL, a: pointer, b: NSUInteger, c: NSUInteger, d: ID): ID =
+    cast[MsgSendPtrUInt2ID](objc_msgSend)(self, op, a, b, c, d)
 
   ## Selectors with two MTLSize arguments:
   ## dispatchThreadgroups:threadsPerThreadgroup:.
