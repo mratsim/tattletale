@@ -75,9 +75,9 @@ should not be presented as finished end-to-end attention.
 ```
 src/
   models.nim            # loadModel + generate entry points
-  models/               # Model iface, ModelRegistry, qwen3 implementation
+  models/               # Model iface, ModelRegistry, qwen3/qwen3_5/lfm2 implementations
   layers.nim            # Layer union type + device/dtype conversion
-  layers/               # attn, embedding, linear, lmhead, mlp, norm, rope, transformer
+  layers/               # attn, embedding, linear, lmhead, mlp, norm, rope, short_conv, transformer
   quantizations/        # exl3, exl3_codecs, datatypes, unquantized_codecs
   samplers.nim          # Gumbel-max sampling
   deserialization.nim   # safetensors / weight loading

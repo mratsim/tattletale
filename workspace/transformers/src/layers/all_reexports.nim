@@ -10,6 +10,7 @@ import
   ./mlp,
   ./norm,
   ./rope,
+  ./short_conv,
   ./transformer
 
 export
@@ -22,4 +23,5 @@ export
   mlp,
   norm,
   rope,
+  short_conv,
   transformer
