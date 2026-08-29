@@ -13,10 +13,11 @@
 ## time, and bit-exactness vs the fp32 host reference on sampled output
 ## positions (tolerance 0.0).
 ##
-## Timing is host-side end-to-end (buffer upload, encode, dispatch, wait,
-## readback) — the harness's run contract. A K=16 overhead probe with the
-## same buffers separates the per-run copy/dispatch cost from the kernel
-## compute (est. compute = full run − overhead).
+## Timing is host-side end-to-end: the timed region is one full `engine.run` call
+## (bind, encode, dispatch, wait). Device args live in page-aligned host buffers
+## that the runtime binds no-copy, so the timed region holds no upload and no
+## readback copy. A K=16 overhead probe on the same buffers separates the per-run
+## dispatch cost from the kernel compute, giving est. compute = full run − overhead.
 ##
 ## Usage:
 ##   nim cpp -r --hints:off --warnings:off \
@@ -33,6 +34,26 @@ import ./bench_utils
 import ../tests/tile_test_utils
 import ../src/kernels/k_tile_gemm
 
+proc posix_memalign(memptr: ptr pointer, alignment: csize_t, size: csize_t): cint
+  {.importc: "posix_memalign", header: "<stdlib.h>".}
+
+proc getpagesize(): cint {.importc: "getpagesize", header: "<unistd.h>".}
+
+func roundPages(nbytes: int, ps = getpagesize()): int =
+  ## Byte length rounded up to a host-page multiple, 16 KiB on Apple Silicon.
+  ## The device-visible length must be a page multiple for a no-copy binding.
+  (nbytes + ps - 1) div ps * ps
+
+proc allocAligned(nbytes: int): pointer =
+  ## Allocation that is page-aligned and has a byte length that is a page multiple,
+  ## the two requirements of no-copy binding. Any other length gets an allocated
+  ## buffer and a copy.
+  let ps = getpagesize()
+  var p: pointer = nil
+  doAssert posix_memalign(addr p, csize_t(ps), csize_t(roundPages(nbytes, ps))) == 0,
+    "posix_memalign failed for " & $nbytes & " bytes"
+  p
+
 # ═════════════════════════════════════════════════════════════════════════
 #  Config
 # ═════════════════════════════════════════════════════════════════════════
@@ -44,11 +65,26 @@ const
   SamplePositions = 1024
 
 const gemmKernel = "fusedGemm"
+const linearKernel = "fusedLinear"
+const gemmStridedKernel = "fusedGemmStrided"
 
+# One metal block = one library: ingest replaces the previous artifact,
+# so this single source holds every bench kernel.
 const gemmMsl = metal:
   proc fusedGemm(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                  N, K, M: int32) {.global.} =
     matmul(D, A, B, N, K, M)
+
+  proc fusedLinear(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
+                   Bias: ptr UncheckedArray[float32], N, K, M: int32) {.global.} =
+    linear(D, A, B, Bias, N, K, M)
+
+  proc fusedGemmStrided(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
+                        C: ptr UncheckedArray[float32],
+                        M, N, K: int32, alpha: float32,
+                        rsa, csa, rsb, csb: int32, beta: float32,
+                        rsc, csc: int32) {.global.} =
+    gemm(D, M, N, K, alpha, A, rsa, csa, B, rsb, csb, beta, C, rsc, csc)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Theoretical peak (Apple GPU)
@@ -132,7 +168,55 @@ proc bench(run: proc(); ops: float64): tuple[gflops, medianUs: float64] =
   let med = median(times)
   ((ops / 1e9) / med, med * 1e6)
 
-proc checkBitExact(M, N, K, Mp, Np, Kp: int; Ah, Bh: seq[uint16]; C: seq[float32]): tuple[maxAbs, maxRel: float32] =
+func biasVal(n: int): float32 =
+  ## Deterministic per-column bias mix, negative on every third column.
+  (if n mod 3 == 0: -float32(1 + 2 * n) else: float32(1 + 2 * n))
+
+proc checkBitExactBias(M, N, K, Mp, Np, Kp: int, Ah, Bh: ptr UncheckedArray[uint16],
+                       Bias: ptr UncheckedArray[float32],
+                       C: ptr UncheckedArray[float32]): tuple[maxAbs, maxRel: float32] =
+  ## Bit-exactness on SamplePositions sampled (m, n) outputs, D = A·B + bias.
+  ## Reference: fp32 k-sum plus the fp32 bias add, exact in fp32,
+  ## which the kernel's k-ordered accumulation must match.
+  var rng = initRand(0xC0FFEE)
+  result = (0.0'f32, 0.0'f32)
+  for s in 0 ..< SamplePositions:
+    let m = rng.rand(M - 1)
+    let n = rng.rand(N - 1)
+    var acc = 0.0'f32
+    for k in 0 ..< K:
+      acc += fp16ToFp32(Ah[m * Kp + k]) * fp16ToFp32(Bh[k * Np + n])
+    let got = C[m * Np + n]
+    let d = abs(got - (acc + Bias[n]))
+    if d > result.maxAbs: result.maxAbs = d
+    let rel = d / max(abs(got), max(abs(acc + Bias[n]), 1e-12'f32))
+    if rel > result.maxRel: result.maxRel = rel
+  doAssert result.maxAbs == 0.0'f32,
+    &"not bit-exact: worst |Δ| = {result.maxAbs}"
+
+proc checkBitExactAxpy(M, N, K, Mp, Np, Kp: int, Ah, Bh: ptr UncheckedArray[uint16],
+                       Ch: ptr UncheckedArray[float32],
+                       C: ptr UncheckedArray[float32]): tuple[maxAbs, maxRel: float32] =
+  ## Bit-exactness on SamplePositions sampled (m, n) outputs, D = A·B + C.
+  ## Reference: fp32 k-sum plus the fp32 C add (α = β = 1, exact in fp32).
+  var rng = initRand(0xC0FFEE)
+  result = (0.0'f32, 0.0'f32)
+  for s in 0 ..< SamplePositions:
+    let m = rng.rand(M - 1)
+    let n = rng.rand(N - 1)
+    var acc = 0.0'f32
+    for k in 0 ..< K:
+      acc += fp16ToFp32(Ah[m * Kp + k]) * fp16ToFp32(Bh[k * Np + n])
+    let got = C[m * Np + n]
+    let d = abs(got - (acc + Ch[m * Np + n]))
+    if d > result.maxAbs: result.maxAbs = d
+    let rel = d / max(abs(got), max(abs(acc + Ch[m * Np + n]), 1e-12'f32))
+    if rel > result.maxRel: result.maxRel = rel
+  doAssert result.maxAbs == 0.0'f32,
+    &"not bit-exact: worst |Δ| = {result.maxAbs}"
+
+proc checkBitExact(M, N, K, Mp, Np, Kp: int, Ah, Bh: ptr UncheckedArray[uint16],
+                   C: ptr UncheckedArray[float32]): tuple[maxAbs, maxRel: float32] =
   ## Bit-exactness on SamplePositions sampled (m, n) outputs.
   ## The reference is the sequential fp32 k-sum: fp16→fp32 is exact and
   ## fp16 products are exact in fp32, so it is the exact-in-fp32 result,
@@ -168,7 +252,7 @@ proc runBench() =   # engines are RAII, so keep them function-local
   echo &"  GEMM benchmark — Apple GPU tile layer (fp16 in, fp32 acc)"
   echo &"  Device: {engine.deviceName()}"
   echo &"  Tiles: 32×32 output per threadgroup (32 lanes), K-block 16"
-  echo &"  Timing: host-side end-to-end; K=16 probe separates copy overhead"
+  echo &"  Timing: host-side end-to-end, no-copy args, K=16 probe separates dispatch overhead"
   echo "=".repeat(72)
   echo ""
   printPeakTable(cores)
@@ -185,18 +269,18 @@ proc runBench() =   # engines are RAII, so keep them function-local
       Kp = N
       ops = float64(2 * N * N * N)
 
-    var Ah = newSeq[uint16](Mp * Kp)
-    var Bh = newSeq[uint16](Kp * Np)
-    for i in 0 ..< Ah.len: Ah[i] = fp32ToFp16(rand(1.0'f32))
-    for i in 0 ..< Bh.len: Bh[i] = fp32ToFp16(rand(1.0'f32))
-    var C = newSeq[float32](Mp * Np)
+    var Ah = cast[ptr UncheckedArray[uint16]](allocAligned(Mp * Kp * sizeof(uint16)))
+    var Bh = cast[ptr UncheckedArray[uint16]](allocAligned(Kp * Np * sizeof(uint16)))
+    for i in 0 ..< Mp * Kp: Ah[i] = fp32ToFp16(rand(1.0'f32))
+    for i in 0 ..< Kp * Np: Bh[i] = fp32ToFp16(rand(1.0'f32))
+    var C = cast[ptr UncheckedArray[float32]](allocAligned(Mp * Np * sizeof(float32)))
 
-    # Raw-pointer views into the host buffers (the pointer API, no
-    # seq/array marshalling). Ah/Bh/C live until the next size, so
-    # the views stay valid for the whole size iteration.
-    var aArg = PtrArg[uint16](buf: cast[ptr UncheckedArray[uint16]](addr Ah[0]), len: Ah.len, off: 0)
-    var bArg = PtrArg[uint16](buf: cast[ptr UncheckedArray[uint16]](addr Bh[0]), len: Bh.len, off: 0)
-    var cArg = PtrArg[float32](buf: cast[ptr UncheckedArray[float32]](addr C[0]), len: C.len, off: 0)
+    # Raw-pointer views into the page-aligned host buffers, the pointer API with no
+    # seq/array marshalling. Ah/Bh/C live until the next size, so the views stay
+    # valid for the whole size iteration.
+    var aArg = PtrArg[uint16](buf: Ah, len: Mp * Kp, off: 0)
+    var bArg = PtrArg[uint16](buf: Bh, len: Kp * Np, off: 0)
+    var cArg = PtrArg[float32](buf: C, len: Mp * Np, off: 0)
 
     # Correctness on a fresh run, then warmup + timed samples on the same buffers.
     engine.run << (grid: (Np div 32, Mp div 32), blk: (32, 1)) >>
@@ -222,9 +306,9 @@ proc runBench() =   # engines are RAII, so keep them function-local
       echo &"         grid ({Np div 32},{Mp div 32}), K-loop {Kp div 16} iters, " &
            &"AI {ops / float64((Mp * Kp + Kp * Np) * 2):.1f} FLOP/B"
 
-      # Harness overhead probe: same buffers, K = 16 (one k-block, ~zero
-      # compute). The per-run upload + readback + dispatch cost at identical
-      # buffer sizes, so est. compute = full run − overhead.
+      # K=16 overhead probe: same buffers at K = 16, one k-block and ~zero compute.
+      # Measures the per-run bind + encode/commit/wait + dispatch cost, giving est.
+      # compute = full run − overhead.
       proc runOverhead() =
         engine.run << (grid: (Np div 32, Mp div 32), blk: (32, 1)) >>
           (gemmKernel, cArg, (aArg, bArg, int32(Mp), int32(16), int32(Np)))
@@ -232,6 +316,92 @@ proc runBench() =   # engines are RAII, so keep them function-local
       let computeUs = r.medianUs - o.medianUs
       echo &"         est. compute {computeUs:.1f} μs (full {r.medianUs:.0f} − " &
            &"overhead {o.medianUs:.0f}) → {ops / (computeUs * 1e6):.1f} TFLOPS"
+    echo ""
+
+  # ── Linear (bias fused) and strided-C gemm paths ──
+  # Same fused core with the bias / α·A·B+β·C epilogues. The strided kernel
+  # takes runtime row/col strides for C (row-major here).
+  echo "=".repeat(72)
+  echo "  Linear (bias fused) and strided-C gemm — same fused core"
+  echo "=".repeat(72)
+  echo ""
+
+  for N in ProblemSizes:
+    let
+      Mp = N
+      Np = N
+      Kp = N
+      ops = float64(2 * N * N * N)
+
+    var Ah = cast[ptr UncheckedArray[uint16]](allocAligned(Mp * Kp * sizeof(uint16)))
+    var Bh = cast[ptr UncheckedArray[uint16]](allocAligned(Kp * Np * sizeof(uint16)))
+    for i in 0 ..< Mp * Kp: Ah[i] = fp32ToFp16(rand(1.0'f32))
+    for i in 0 ..< Kp * Np: Bh[i] = fp32ToFp16(rand(1.0'f32))
+    var Ch = cast[ptr UncheckedArray[float32]](allocAligned(Mp * Np * sizeof(float32)))
+    for i in 0 ..< Mp * Np: Ch[i] = rand(1.0'f32)
+    var Bias = cast[ptr UncheckedArray[float32]](allocAligned(Np * sizeof(float32)))
+    for n in 0 ..< Np: Bias[n] = biasVal(n)
+    var D = cast[ptr UncheckedArray[float32]](allocAligned(Mp * Np * sizeof(float32)))
+
+    var aArg = PtrArg[uint16](buf: Ah, len: Mp * Kp, off: 0)
+    var bArg = PtrArg[uint16](buf: Bh, len: Kp * Np, off: 0)
+    var dArg = PtrArg[float32](buf: D, len: Mp * Np, off: 0)
+    var cArg = PtrArg[float32](buf: Ch, len: Mp * Np, off: 0)
+    # Bias is the only arg whose byte length can land inside a single page
+    # (16 KiB = 4096 fp32 lanes). A length that is not a page multiple would take
+    # the allocate-and-copy path on every dispatch, so `len` is the page-rounded
+    # length, in-bounds because allocAligned rounds the allocation up too. Kernel
+    # code reads the `Np` named lanes, never the padding.
+    var biasArg = PtrArg[float32](
+      buf: Bias, len: roundPages(Np * sizeof(float32)) div sizeof(float32), off: 0)
+
+    # ── linear (D = A·B + bias) ──
+    engine.run << (grid: (Np div 32, Mp div 32), blk: (32, 1)) >>
+      (linearKernel, dArg, (aArg, bArg, biasArg, int32(Mp), int32(Kp), int32(Np)))
+    block:
+      let chk = checkBitExactBias(N, N, N, Mp, Np, Kp, Ah, Bh, Bias, D)
+      proc run() =
+        engine.run << (grid: (Np div 32, Mp div 32), blk: (32, 1)) >>
+          (linearKernel, dArg, (aArg, bArg, biasArg, int32(Mp), int32(Kp), int32(Np)))
+      let r = bench(run, ops)
+      let label = &"{N}³"
+      echo &"  linear  {label:<21} {r.gflops:>8.2f}  {int(r.medianUs):>6d} μs  " &
+           &"{formatFloat(chk.maxAbs, ffScientific, 1):>9} {formatFloat(chk.maxRel, ffScientific, 1):>9}"
+
+    # ── gemm strided-C (D = α·A·B + β·C, row-major C) ──
+    engine.run << (grid: (Np div 32, Mp div 32), blk: (32, 1)) >>
+      (gemmStridedKernel, dArg,
+       (aArg, bArg, cArg, int32(Mp), int32(Np), int32(Kp), 1.0'f32,
+        int32(Kp), int32(1), int32(Np), int32(1), 0.0'f32, int32(Np), int32(1)))
+    block:
+      # β = 0 probe: the epilogue skips the C read (EpiAXPBYStrided),
+      # D = A·B, isolating the C-read cost vs the plain matmul core.
+      let chk = checkBitExact(N, N, N, Mp, Np, Kp, Ah, Bh, D)
+      proc run() =
+        engine.run << (grid: (Np div 32, Mp div 32), blk: (32, 1)) >>
+          (gemmStridedKernel, dArg,
+           (aArg, bArg, cArg, int32(Mp), int32(Np), int32(Kp), 1.0'f32,
+            int32(Kp), int32(1), int32(Np), int32(1), 0.0'f32, int32(Np), int32(1)))
+      let r = bench(run, ops)
+      let label = &"{N}³"
+      echo &"  strided-β0 {label:<18} {r.gflops:>8.2f}  {int(r.medianUs):>6d} μs  " &
+           &"{formatFloat(chk.maxAbs, ffScientific, 1):>9} {formatFloat(chk.maxRel, ffScientific, 1):>9}"
+
+    engine.run << (grid: (Np div 32, Mp div 32), blk: (32, 1)) >>
+      (gemmStridedKernel, dArg,
+       (aArg, bArg, cArg, int32(Mp), int32(Np), int32(Kp), 1.0'f32,
+        int32(Kp), int32(1), int32(Np), int32(1), 1.0'f32, int32(Np), int32(1)))
+    block:
+      let chk = checkBitExactAxpy(N, N, N, Mp, Np, Kp, Ah, Bh, Ch, D)
+      proc run() =
+        engine.run << (grid: (Np div 32, Mp div 32), blk: (32, 1)) >>
+          (gemmStridedKernel, dArg,
+           (aArg, bArg, cArg, int32(Mp), int32(Np), int32(Kp), 1.0'f32,
+            int32(Kp), int32(1), int32(Np), int32(1), 1.0'f32, int32(Np), int32(1)))
+      let r = bench(run, ops)
+      let label = &"{N}³"
+      echo &"  strided {label:<21} {r.gflops:>8.2f}  {int(r.medianUs):>6d} μs  " &
+           &"{formatFloat(chk.maxAbs, ffScientific, 1):>9} {formatFloat(chk.maxRel, ffScientific, 1):>9}"
     echo ""
 
   echo "Done."
