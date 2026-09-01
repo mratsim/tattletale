@@ -19,7 +19,7 @@ import
   workspace/transformers/src/stateful/kvcache,
   workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/stateful/page_pool,
-  workspace/transformers/src/layers/attn {.all.},
+  workspace/transformers/src/layers/attn_ssm/grouped_query_attention {.all.},
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/models/qwen3 {.all.},
   workspace/libtorch_testutils
@@ -76,9 +76,9 @@ proc setupAttn(): RopeGQAttention =
   return RopeGQAttention.init(
     8, "model.layers.8.self_attn",
     qProj, kProj, vProj, oProj,
-    qNorm, kNorm,
     model.config.num_attention_heads, model.config.num_key_value_heads,
-    model.config.head_dim, rotary
+    model.config.head_dim, rotary,
+    q_norm = some(qNorm), k_norm = some(kNorm)
   )
 
 

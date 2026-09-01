@@ -20,14 +20,22 @@ type
     eps*: float64
     hidden_size*: int
     quant_format*: QuantFormatKind
+    constant_bias*: float64
+      ## Additive constant on the weight. 0 is the plain RMSNorm, whose weight
+      ## scales as `w`. 1 is the Gemma-style 1+w form, the Qwen3.5-family
+      ## qk-norm and layernorm shape. Applied in f32. Served values 0 and 1.
 
 func init*(_: type RmsNorm, weight: Tensor, quant_format: QuantFormatKind = qBF16,
-           eps: SomeFloat = 1e-6): RmsNorm =
+           eps: SomeFloat = 1e-6, constant_bias: float64 = 0.0): RmsNorm =
+  ## Build one RMSNorm from a `[width]` weight. `constant_bias` 1 selects
+  ## the Gemma-style 1+w spelling:
+  ##   `RmsNorm.init(w, eps = 1e-6, constant_bias = 1.0)`
   let hidden_size = weight.size(0)
   RmsNorm(
     weight: weight, eps: float64(eps),
     hidden_size: hidden_size,
     quant_format: quant_format,
+    constant_bias: constant_bias,
   )
 
 proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
@@ -43,13 +51,28 @@ proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
   ##      to match ext.rms_norm's rounding.
   ##   4. Multiplies by weight
   ##
-  ## The multiplication order differs by quantization format:
-  ##   qExl3: (x*w)*rstd → cast (weight-first, all FP32, matches ext.rms_norm)
-  ##   qBF16: (x*rstd).to(dtype)*w (rstd-first, matches HF Qwen3RMSNorm)
+  ## With `constant_bias` 0 the multiply order differs by quantization format:
+  ##   qExl3: (x*w)*rstd → cast, weight-first, all FP32, matches ext.rms_norm
+  ##   qBF16: (x*rstd).to(dtype)*w, rstd-first, matches HF Qwen3RMSNorm
   ##
   ## The multiplication order (weight-first vs rstd-first) is the dominant
   ## factor in matching EXL3 vs HF fixtures (0.000244 vs 0.0 CPU diff).
   ## FP16/BF16 intermediates are significantly worse (0.125+ diff).
+  ##
+  ## With `constant_bias` 1 the form is the 1-centered RMSNorm
+  ## (Gemma-style, used for Qwen3.5 qk-norm). Forward computes, all in f32:
+  ##   `output = (x / sqrt(mean(x^2) + eps)) * (1 + w)`,
+  ## then casts back to the input dtype. The weight is stored unwrapped.
+  ## This matches the vendored Qwen3_5RMSNorm
+  ## (`_norm(x.float()) * (1.0 + weight.float())`, `.type_as(x)`).
+  if self.constant_bias != 0.0:
+    let input_dtype = hidden_state.scalarType()
+    let x = hidden_state.to(kFloat32)
+    let w = self.weight.to(kFloat32)
+    let variance = x.square().mean(axis = -1, keepdim = true)
+    let rstd = variance.add(Scalar(self.eps)).rsqrt()
+    return (x * rstd * (Scalar(self.constant_bias) + w)).to(input_dtype)
+
   case self.quant_format
   of qExl3:
     # We emulate warp-shuffle reduction
@@ -93,43 +116,6 @@ template `()`*(layer: RmsNorm, x: Tensor): untyped =
 
 template `()`*(layer: RmsNorm, x, residual: Tensor): untyped =
   forward_with_residual(layer, x, residual)
-
-type
-  GemmaRmsNorm* = ref object
-    ## RMSNorm with the weight applied as `1 + w` (Gemma-style), used for
-    ## Qwen3.5 qk-norm.
-    ##
-    ## Forward computes, all in f32:
-    ##   `output = (x / sqrt(mean(x^2) + eps)) * (1 + w)`,
-    ## then casts back to the input dtype. The weight is stored
-    ## as-is (BF16 [head_dim] in the shard). The `1 + w` scaling happens in
-    ## f32. This matches the vendored Qwen3_5RMSNorm
-    ## (`_norm(x.float()) * (1.0 + weight.float())`, `.type_as(x)`).
-    weight*: Tensor
-    eps*: float64
-    hidden_size*: int
-
-## Build GemmaRMSNorm from a `[head_dim]` weight (applied as `1 + w`). eps defaults to 1e-6.
-func init*(_: type GemmaRmsNorm, weight: Tensor, eps: SomeFloat = 1e-6): GemmaRmsNorm =
-  let hidden_size = weight.size(0)
-  GemmaRmsNorm(
-    weight: weight,
-    eps: float64(eps),
-    hidden_size: hidden_size,
-  )
-
-proc forward*(self: GemmaRmsNorm, x: Tensor): Tensor =
-  ## GemmaRMSNorm over the last dimension, f32 math, cast back to x.dtype.
-  let input_dtype = x.scalarType()
-  let x32 = x.to(kFloat32)
-  let variance = x32.square().mean(axis = -1, keepdim = true)
-  let rstd = variance.add(Scalar(self.eps)).rsqrt()
-  let normed = x32 * rstd
-  let w32 = self.weight.to(kFloat32)
-  result = (normed * (1.0 + w32)).to(input_dtype)
-
-template `()`*(layer: GemmaRmsNorm, x: Tensor): untyped =
-  forward(layer, x)
 
 type
   RmsNormGated* = ref object

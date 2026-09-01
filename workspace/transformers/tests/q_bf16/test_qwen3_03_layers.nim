@@ -175,8 +175,8 @@ proc main() =
 
       var attn = RopeGQAttention.init(8, "model.layers.8.self_attn",
         Linear.init(qWeight), Linear.init(kWeight), Linear.init(vWeight), Linear.init(oWeight),
-        qNorm, kNorm,
-        numQoHeads, numKvHeads, headDim, rotary)
+        numQoHeads, numKvHeads, headDim, rotary,
+        q_norm = some(qNorm), k_norm = some(kNorm))
 
       for caseNum in 0..1:
         let fixturePath = FixtureDir / &"attn-{ModelName}-{caseNum:02d}.safetensor"
@@ -329,8 +329,8 @@ proc main() =
       # Initialize sublayers
       var attn = RopeGQAttention.init(8, "model.layers.8.self_attn",
         Linear.init(qWeight), Linear.init(kWeight), Linear.init(vWeight), Linear.init(oWeight),
-        qNorm, kNorm,
-        numQoHeads, numKvHeads, headDim, rotary)
+        numQoHeads, numKvHeads, headDim, rotary,
+        q_norm = some(qNorm), k_norm = some(kNorm))
       let mlp = GatedMLP.init(Linear.init(gateWeight), Linear.init(upWeight), Linear.init(downWeight), kSilu)
 
       # Create TransformerBlock

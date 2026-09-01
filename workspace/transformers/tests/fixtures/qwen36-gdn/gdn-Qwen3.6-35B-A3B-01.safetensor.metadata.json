@@ -1,0 +1,21 @@
+{
+  "case": "multichunk_prefill_seq70",
+  "chunk_size": 64,
+  "chunk_vs_recurrent_core_diff": 4.76837158203125e-07,
+  "chunk_vs_recurrent_output_diff": 0.0009765625,
+  "chunk_vs_recurrent_ssm_diff": 2.384185791015625e-07,
+  "dtype": "bfloat16",
+  "head_k_dim": 128,
+  "head_v_dim": 128,
+  "hidden_size": 2048,
+  "layer": "model.language_model.layers.0.linear_attn",
+  "model": "Qwen3.6-35B-A3B",
+  "note": "output_seq is the recurrent-rule replay, the bitwise reference for the Nim layer. output_chunked is the chunked forward. The recurrent-vs-chunked divergence is about one fp32 ulp at the state magnitude, sub-linear in seq_len",
+  "num_k_heads": 16,
+  "num_threads": 1,
+  "num_v_heads": 32,
+  "seed": 72,
+  "seq_len": 70,
+  "torch_version": "2.13.0",
+  "transformers_version": "5.16.0.dev0"
+}

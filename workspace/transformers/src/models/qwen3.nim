@@ -94,9 +94,6 @@ proc loadQwen3Config(path: string): Qwen3Config =
   let json = path.parseFile()
   result = parseQwen3Config(json)
 
-proc numKvGroups(cfg: Qwen3Config): int =
-  cfg.num_attention_heads div cfg.num_key_value_heads
-
 ################################################################################
 #                          Qwen3 Model                                         #
 ################################################################################
@@ -213,9 +210,9 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     let attn = RopeGQAttention.init(
       i, lp & "self_attn",
       qProj, kProj, vProj, oProj,
-      qNorm, kNorm,
       config.num_attention_heads, config.num_key_value_heads, config.head_dim,
-      rotary
+      rotary,
+      q_norm = some(qNorm), k_norm = some(kNorm)
     )
     let mlp = GatedMLP.init(gateProj, upProj, downProj, kSilu)
     layers[i] = TransformerBlock.init(i, attn_norm, attn, mlp_norm, mlp)
