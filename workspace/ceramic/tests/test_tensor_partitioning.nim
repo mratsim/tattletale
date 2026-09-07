@@ -1,7 +1,5 @@
 ## Faithful port of CuTe's inner_partition / outer_partition tests.
 ##
-## CuTe reference: _references_kernels/cutlass/test_inner_outer.cpp
-##
 ## Tests the EXISTING ceramic inner_partition / outer_partition templates
 ## from tensors.nim. No local implementations — only ceramic library calls.
 

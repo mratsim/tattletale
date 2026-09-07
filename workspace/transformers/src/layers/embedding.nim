@@ -32,8 +32,7 @@ func init*(_: type Embedding, weight: Tensor): Embedding =
   ##
   ## Returns:
   ##   Embedding layer with the given weight
-  if weight.numel() == 0:
-    raise newException(ValueError, "[ttt] Internal Error: Embedding weight tensor is empty")
+  doAssert weight.numel() > 0, "[ttt] Internal Error: Embedding weight tensor is empty"
 
   Embedding(
     weight: weight,
@@ -54,8 +53,7 @@ proc forward*(self: Embedding, input_ids: Tensor): Tensor =
   ##   embeddings = weight.index_select(0, input_ids.flatten()).reshape(input_ids.shape + (hidden_size,))
   # Ensure input_ids is on the same device as the weight tensor
   let input_ids = input_ids.to(self.weight.deviceType())
-  if self.weight.numel() == 0:
-    raise newException(ValueError, "[ttt] Internal Error: Embedding weight tensor is empty")
+  doAssert self.weight.numel() > 0, "[ttt] Internal Error: Embedding weight tensor is empty"
 
   # Embedding lookup: select rows from weight based on input_ids
   # For multi-dimensional input_ids, flatten, select, then reshape

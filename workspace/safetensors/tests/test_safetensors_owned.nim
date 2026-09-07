@@ -9,12 +9,15 @@ import
   std/unittest,
   std/os,
   std/math,
-  std/memfiles,
   std/strformat,
   std/strutils,
   std/tables,
   workspace/safetensors,
+  std/importutils,
+  workspace/safetensors/src/safetensors {.all.},
   workspace/libtorch as torch
+
+privateAccess(SafetensorObj)
 
 const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"
 
@@ -67,10 +70,7 @@ proc main() =
       let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
       check fileExists(fixturePath)
 
-      var memFile = memFiles.open(fixturePath, mode = fmRead)
-      defer: close(memFile)
-
-      var st = safetensors.load(memFile)
+      var st = Safetensor.open(fixturePath)
 
       let key = "F64_vandermonde_5x5"
       check st.tensors.hasKey(key)
@@ -87,10 +87,7 @@ proc main() =
       let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
       check fileExists(fixturePath)
 
-      var memFile = memFiles.open(fixturePath, mode = fmRead)
-      defer: close(memFile)
-
-      var st = safetensors.load(memFile)
+      var st = Safetensor.open(fixturePath)
 
       let key = "BF16_vandermonde_5x5"
       check st.tensors.hasKey(key)
@@ -103,14 +100,48 @@ proc main() =
       let actualTensor = st.getTensorOwned(key)
       check actualTensor.equal(expectedTensor)
 
-    test "load python-generated safetensors fixtures (owned)":
+    test "getTensorOwned copies survive scope exit":
+      # Contract of the owned surface.
+      # `open(path)` acquires the mapping and the destructor releases it
+      # with the last reference. Owned copies from a live reader
+      # stay valid beyond the destructor.
+      let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
+      check fileExists(fixturePath)
+
+      let expectedTensor = genShiftedVandermonde5x5(kFloat64)
+      var ownedTensor: Tensor
+      block readerScope:
+        var st = Safetensor.open(fixturePath)
+        ownedTensor = st.getTensorOwned("F64_vandermonde_5x5")
+      check ownedTensor.equal(expectedTensor)
+
+    test "scope exit releases the mapping":
+      # Contract of the ownership surface: the destructor of a reader
+      # runs exactly once, with the last reference, releasing the owned
+      # mapping. `munmap(nil, 0)` fails, so a destructor that never ran
+      # or ran twice raises OSError or corrupts memory when the same
+      # fixture is mapped again. The checks below traverse both release
+      # points without error.
+      let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
+      check fileExists(fixturePath)
+
+      var first = Safetensor.open(fixturePath)
+      check first.tensors.hasKey("F64_vandermonde_5x5")
+      block secondReaderScope:
+        # A second mapping of the same file, copied from the live header
+        # tables before either value dies.
+        var second = Safetensor.open(fixturePath)
+        check second.tensors.hasKey("F64_vandermonde_5x5")
+      # The second reader's destructor ran here.
+      check first.getTensorOwned("F64_vandermonde_5x5").equal(
+        genShiftedVandermonde5x5(kFloat64))
+      # first's destructor runs at test-body end.
+
+    test "open python-generated safetensor fixtures (owned)":
       let fixturePath = FIXTURES_DIR / "fixtures.safetensors"
       check fileExists(fixturePath)
 
-      var memFile = memFiles.open(fixturePath, mode = fmRead)
-      defer: close(memFile)
-
-      var st = safetensors.load(memFile)
+      var st = Safetensor.open(fixturePath)
 
       var count = 0
       for dtype in TestedDtypes:

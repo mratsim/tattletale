@@ -5,11 +5,12 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# This file implements a safetensor loader.
-# It returns an iterator tuple[key: string, loc: MemSlice] with loc being memory-mapped (read-only)
-# to the original file.
-# This allows zero-copy access to the data if needed and it allows direct loading to GPU
-# without materializing the tensors in RAM.
+# This file implements a safetensors reader.
+# `open(path)` parses the header of one safetensor file, memory-mapping
+# the file read-only. That mapping belongs to the returned Safetensor
+# until the last reference dies.
+# While the mapping is open, zero-copy views and direct loads to GPU
+# are available without materializing tensors in RAM.
 #
 # Assuming NVMe drives (and especially no HDD) actual loading
 # might benefit from parallelism or multiple Cuda streams.
@@ -91,29 +92,28 @@ type
     dataOffsets*: tuple[start, stopEx: int]
       # stop is exclusive
 
-  Safetensor* = object
+  SafetensorObj = object
+    metadata: Option[OrderedTable[string, string]]
+    tensors: OrderedTable[string, TensorInfo]
+    dataSectionOffset: int ## Offset of the data section in the file. Set after parsing.
+    memFile: MemFile ## The mapping owned by this reader.
+
+  Safetensor* = ref SafetensorObj
     ## A safetensor file loaded into memory.
     ## Stores for each tensor
     ##   * tensor names
     ##   * the type of the data
     ##   * the shape of the data
     ##   * start and (exclusive) stop offset of the tensor data relative to the data offset
-    ##
-    ## Memory safety:
-    ##   A `SafeTensor` is derived from an input `memFile`,
-    ##   the `SafeTensor` MUST NOT outlive the underlying memory mapping.
-    ##   Currently this is not enforced by the compiler but is an area of research:
-    ##   - https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
-    ##   - https://nim-lang.org/docs/manual.html#var-return-type-future-directions
-    ## Lifetime:
-    ##   The `MemSlice` is valid as long as `st` is valid, which is tied to
-    ##   the original `MemFile` passed to `load`.
-    metadata*: Option[OrderedTable[string, string]]
-    tensors*: OrderedTable[string, TensorInfo]
-    dataSectionOffset: int ## Offset of the data section in the file. Set after parsing.
-    memFile: MemFile ## The memory-mapped file. Lifetime tied to the `load` caller's MemFile.
 
-proc skipHook*(T: typedesc[Safetensor], key: string): bool =
+proc `=destroy`(st: var SafetensorObj) =
+  ## Release the memory mapping this reader acquired in `open`.
+  ## A nil reader, or one whose mapping was never acquired, releases
+  ## nothing.
+  if st.memFile.mem != nil:
+    close(st.memFile)
+
+proc skipHook(T: typedesc[Safetensor], key: string): bool =
   key == "dataSectionOffset" or key == "memFile"
 
 const DtypeSize: array[ST_dtype, int] = [
@@ -130,7 +130,7 @@ const DtypeSize: array[ST_dtype, int] = [
 
 proc parseHook(src: string, pos: var int, value: var Safetensor) =
   # Who got the bright idea to put heterogenous data at the same level?
-  var safetensor = default(Safetensor)
+  var safetensor = Safetensor()
 
   eatChar(src, pos, '{')
   while pos < src.len:
@@ -191,24 +191,9 @@ func validate_offsets(st: Safetensor, dataSectionSize: int) =
   if cur != dataSectionSize:
     raise newException(RangeDefect, &"safetensors: Tensor offsets and data section size mismatch")
 
-proc load*(memFile: MemFile): Safetensor =
-  ## Load a safetensor file and return a Safetensor object with
-  ## - for each tensor
-  ##   * tensor names
-  ##   * the type of the data
-  ##   * the shape of the data
-  ##   * start and (exclusive) stop offset of the tensor data relative to the data offset
-  ##
-  ## Memory safety:
-  ##   The returned `SafeTensor` is derived from `memFile`,
-  ##   the `SafeTensor` MUST NOT outlive the underlying memory mapping.
-  ##   Currently this is not enforced by the compiler but is an area of research:
-  ##   - https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
-  ##   - https://nim-lang.org/docs/manual.html#var-return-type-future-directions
-  ## Lifetime:
-  ##   The `MemSlice` is valid as long as `st` is valid, which is tied to
-  ##   the original `MemFile` passed to `load`.
-
+proc parseMapped(memFile: MemFile): Safetensor =
+  ## Parse and validate the header of a memory-mapped safetensors file.
+  ## Raises RangeDefect on any header or data-offset defect.
   let parsedHeaderSize = uint64.fromBytesLE(toOpenArray(cast[ptr UncheckedArray[byte]](memFile.mem), 0, sizeof(uint64)-1))
   let headerSize = int(parsedHeaderSize)
 
@@ -231,6 +216,19 @@ proc load*(memFile: MemFile): Safetensor =
   # Validate that offsets are within the file with no gap or overlap
   result.validate_offsets(memFile.size - result.dataSectionOffset)
 
+proc open*(_: typedesc[Safetensor], path: string): Safetensor =
+  ## Read the safetensor file at `path`, memory-mapping it read-only.
+  ##
+  ## The header is parsed and validated: tensor names, dtypes, shapes
+  ## and data offsets (contiguous, non-overlapping, within the file).
+  ## Tensor bytes stay in the mapping until read through `getMmapView`
+  ## or the libtorch bridge.
+  ##
+  ## Failures propagate as the exception raised: `OSError` from the memory-map
+  ## open for an absent or unreadable path, a parser defect for a corrupt header,
+  ## per the error model at the top of this file.
+  var memFile = memFiles.open(path, mode = fmRead)
+  result = memFile.parseMapped()
   result.memFile = memFile
 
 
@@ -239,35 +237,20 @@ proc load*(memFile: MemFile): Safetensor =
 #
 # The API here might change with the following consideration
 # - How to allow fast loading (async Streams, parallel workers, direct to GPU, ...)
-# - How to associate lifetimes of `MemFile` and `MemSlice`
 #
-#   Unfortunately MemFile predates `lent` and `openarray` as values view `{.experimental: "views".}`
-#   so we don't get compiler-enforced borrow-checking.
-#   https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
-#
-#   And this is not available yet
-#   https://nim-lang.org/docs/manual.html#var-return-type-future-directions
-#   `proc foo(other: Y; container: var X): var T from container`
-#
-# The borrow check for `var T` return types:
-#   https://nim-lang.org/docs/manual.html#procedures-var-return-type
-#
-# is not applicable here because we allocate a fresh address to store MemSlice
-# instead of using the input Safetensor or one of its field.
+# Views returned here borrow from the mapping owned by `st`.
+# The borrow is a documented contract, not a compiler-checked one.
+# `MemFile` predates `lent` and view openarrays, so no borrow-checking
+# exists.
+# https://nim-lang.org/docs/manual.html#var-return-type-future-directions
 
 proc getMmapView*(st: Safetensor, tensorName: string): MemSlice {.inline.} =
-  ## Get a memory view to the tensor data.
-  ## Returns a `MemSlice` that allows zero-copy access to the tensor data.
+  ## Returns a zero-copy `MemSlice` view of the tensor data of `tensorName`.
   ##
-  ## Memory safety:
-  ##   The returned `MemSlice` is derived from `st.memFile`,
-  ##   the view MUST NOT outlive the underlying memory mapping.
-  ##   Currently this is not enforced by the compiler but is an area of research:
-  ##   - https://github.com/nim-lang/nimony/issues/1517#issuecomment-3859350630
-  ##   - https://nim-lang.org/docs/manual.html#var-return-type-future-directions
-  ## Lifetime:
-  ##   The `MemSlice` is valid as long as `st` is valid, which is tied to
-  ##   the original `MemFile` passed to `load`.
+  ## Preconditions: `st` is a reader returned by `open` and still alive,
+  ## `tensorName` is a key of `st.tensors`.
+  ## Postconditions: the view is valid while the reader is alive,
+  ## dangling after its destructor ran.
   let info = st.tensors[tensorName]
   let (start, stopEx) = info.dataOffsets
   MemSlice(

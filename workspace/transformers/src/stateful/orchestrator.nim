@@ -21,7 +21,7 @@ import
 # ## Lifecycle (single sequence, MVP)
 #
 # ```
-#         Orchestrator.init       startSequence       decodeStep × N      endSequence
+#         Orchestrator.init       startSequence       appendToken × N      endSequence
 #              │                       │                   │                   │
 #              ▼                       ▼                   ▼                   ▼
 #     ┌──────────────────┐   ┌──────────────────┐   ┌──────────┐   ┌──────────────────┐
@@ -45,7 +45,7 @@ import
 #          trie from LPM, so it can skip writing them (protecting immutable pages).
 #
 # ```
-#            startSequence                     decodeStep × N
+#            startSequence                     appendToken × N
 #                 │                                │
 #                 ▼                                ▼
 #     ┌─────────────────────┐           ┌────────────────────┐
@@ -73,10 +73,10 @@ import
 # ### `kv_position` — Page allocation write cursor
 #
 # Purpose: Track total tokens written to the KV cache so far in this sequence.
-#          Used ONLY by `decodeStep` for page-boundary detection.
+#          Used ONLY by `appendToken` for page-boundary detection.
 #
 # ```
-#            startSequence         generate() after          decodeStep × N
+#            startSequence         generate() after          appendToken × N
 #                                    prefill forward
 #                 │                       │                       │
 #                 ▼                       ▼                       ▼
@@ -94,7 +94,7 @@ import
 # Lifecycle:
 #   1. `startSequence`: set to 0 (no local tokens written yet).
 #   2. `setKvPosition(n)` (called by generate() AFTER prefill forward): set to ids.len.
-#   3. `decodeStep`: checked for page boundary, then incremented by 1.
+#   3. `appendToken`: checked for page boundary, then incremented by 1.
 #   4. `clearState`: reset to 0.
 #
 # ### Why two fields? (BUG-B-001 history)
@@ -119,10 +119,10 @@ import
 #    Borrows fresh pages from the pool for any unmatched prompt tokens.  Sets
 #    position_ids for the prefill forward pass.  Sets `cached_tokens` from LPM.
 #
-# 3. **decodeStep (× N)** — Appends one token to the tracking sequence.  If
-#    the write cursor crosses a page boundary, borrows a new page.  Updates
-#    position_ids for the single-token decode forward pass.  Checks `kv_position`
-#    for page boundaries (not `cached_tokens`).
+# 3. **appendToken (× N)**: Appends one token to the tracking sequence.
+#    If the write cursor crosses a page boundary, borrows a new page.
+#    Updates position_ids for the single-token decode forward pass. Checks
+#    `kv_position` for page boundaries (not `cached_tokens`).
 #
 # 4. **endSequence** — Collects ALL tokens and ALL pages accumulated during the
 #    sequence, then sinks them into the trie via `graftPages`.  The trie
@@ -215,7 +215,7 @@ type
     ##   - `logical_map`: PagedRadixTrie mapping token sequences → Page refs
     ##   - `active_context`: Mutable state for the current sequence
     ##
-    ## **Lifecycle**: `init` → `startSequence` → `decodeStep`* → `endSequence`
+    ## **Lifecycle**: `init` → `startSequence` → `appendToken`* → `endSequence`
     ##
     ## **Destruction order** (reverse field order):
     ##   `logical_map` before `page_pool` — the trie's Page refs hold views
@@ -230,7 +230,7 @@ type
     active_context: InferenceContext
     num_layers: int
     device: DeviceKind
-    position_ids_buf: Tensor  # pre-allocated 1-element tensor for decodeStep
+    position_ids_buf: Tensor  # pre-allocated 1-element tensor for appendToken
     logical_map: KVCache[uint32, Page]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -268,6 +268,7 @@ proc getInferenceContextMut*(orc: var Orchestrator): var InferenceContext {.inli
   ## Get the active inference context.
   orc.active_context
 
+# TODO: review ownership and parameter passing of position parameter
 proc setKvPosition*(orc: var Orchestrator, pos: int) {.inline.} =
   ## Set the write cursor position (called after prefill forward completes).
   orc.active_context.kv_position = pos
@@ -377,7 +378,8 @@ proc startSequence*(
   # ── 5. Set position_ids for prefill ──
   ctx.setPositionIdsArange(input_ids.len, offset = 0, device = orc.device)
 
-proc decodeStep*(orc: var Orchestrator, position: int, token_id: uint32,
+# TODO: review ownership and parameter passing of position parameter
+proc appendToken*(orc: var Orchestrator, position: int, token_id: uint32,
                  device: DeviceKind | Device = kCPU) =
   ## Prepare for a single decode step (one token).
   ##
@@ -394,7 +396,7 @@ proc decodeStep*(orc: var Orchestrator, position: int, token_id: uint32,
   ## GPU→CPU synchronous read on every forward pass).
   ##
   ## Lifecycle for one decode step:
-  ##   decodeStep(position=300) -> forward() -> generate: setKvPosition(+1)
+  ##   appendToken(position=300) -> forward() -> generate: setKvPosition(+1)
   ##     |                            |
   ##     | position_ids = [300]       | attn reads kv_position (=300)
   ##     | kv_position unchanged      | which equals position_ids.min()

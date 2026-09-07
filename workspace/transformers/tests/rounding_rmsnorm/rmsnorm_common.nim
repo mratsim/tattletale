@@ -7,7 +7,7 @@
 
 ## Shared RMSNorm function implementations and reporting for rounding research tests.
 ##
-## Both test_exl3_rms_norm.nim and test_hf_rms_norm.nim import this module.
+## Both t_exl3_rms_norm.nim and test_hf_rms_norm.nim import this module.
 
 import
   std/strformat,

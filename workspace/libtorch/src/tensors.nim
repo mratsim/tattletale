@@ -725,6 +725,11 @@ wrapLibtorch:
     ## Returns (values, originalIndices) of type (TensorT, TensorInt64)
     ## where originalIndices is the original index of each values (before sorting)
   func argsort*(a: Tensor, axis = -1, descending = false): Tensor
+  func topk*(a: Tensor, k: int, axis = -1, largest = true, sorted = true): tuple[values, indices: Tensor]
+    ## Returns the k largest (largest=true) or smallest (largest=false) elements
+    ## and their indices along the given axis.
+    ## Returns (values, indices) of type (TensorT, TensorInt64)
+    ## where with both defaults, values is in descending order.
   func qr*(a: Tensor, some: bool): tuple[q, r: Tensor]
 
   # #######################################################################

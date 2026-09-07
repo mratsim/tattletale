@@ -1,7 +1,11 @@
-# HugginfFace models used for testing
+# HuggingFace models used for testing
 # -----------------------------------------------------------------------------------------
 tests/hf_models/*
 !tests/hf_models/.gitkeep
+
+# Tokenizer files are never committed. Model suites use the tokenizer kept
+# in the gitignored tests/hf_models/<Model>/ directory.
+tests/fixtures/**/tokenizer.json
 
 # Large weights
 # -----------------------------------------------------------------------------------------

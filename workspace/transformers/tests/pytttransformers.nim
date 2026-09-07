@@ -26,7 +26,7 @@ import
   workspace/transformers/src/stateful/page_pool
 type
   ModelRef* = ref object of PyNimObjectExperimental
-    model: Model
+    model: AnyModel
 
 proc init_model*(path: string): ModelRef {.exportpy.} =
   ## Load a model from the given path.

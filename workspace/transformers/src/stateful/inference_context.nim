@@ -102,7 +102,7 @@ proc ensureGdnStates*(
     ctx.gdnSsmState[layer_idx] = F.zeros(
       numVHeads, keyDim, valueDim, F.tensorOptions(F.kFloat32, device))
 
-proc setRopeForPositions*(ctx: var InferenceContext, rotary: RotaryPositionEmbeddingRef) =
+proc setRopeForPositions*(ctx: var InferenceContext, rotary: RotaryPositionEmbedding) =
   ## Populate ctx.cos and ctx.sin from the model's RoPE cache.
   ##
   ## Internally calls `rotary.ropeByPositions(ctx.position_ids)` and stores
