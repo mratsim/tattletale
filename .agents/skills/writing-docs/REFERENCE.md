@@ -230,8 +230,15 @@ of the house style:
 7. `workspace/transformers/src/layers/rope.nim` (small math/layer module:
    type doc with LIFETIME / DATA FLOW / INVARIANTS / USAGE, numbered
    algorithm steps, explicit contracts)
+8. `workspace/libtorch/src/raw/abi/neural_nets.nim` (raw FFI boundary, the
+   internal-facing counterpart to #1: ABI wrapper docs state the torch op
+   signature, arg marshalling contract, and dtype/shape preconditions the
+   C++ side imposes, nothing about the Nim call sites)
 
-This skill is self-contained: the seven canonical files above are the
+Public-facing modules follow #1/#6/#7 shape; raw ABI and boundary layers
+follow #8; kernel-level modules follow #2/#3.
+
+This skill is self-contained: the eight canonical files above are the
 exemplars it is derived from, and the Write Without Hidden Context framing is
 integrated in SKILL.md.
 
