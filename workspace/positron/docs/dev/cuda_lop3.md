@@ -306,8 +306,6 @@ This formula was verified in **three independent ways**:
 
 2. **Empirical GPU test**: Isolated GPU kernel confirms the production kernel produces identical output to `(x & M1) ^ M2` for all test inputs. Verified `max|Δ| = 0.000000` across all 10 layers of Qwen3-0.6B-EXL3.
 
-3. **qtip reference**: The `qtip` library (`_references_research/qtip/lib/codebook/bitshift.py`) independently implements `decode_3inst` as `(mask & x) ^ fpmask` with `mask=0x8fff8fff`, `fpmask=0x3b603b60` — exactly the same formula.
-
 ### Alternative View: Argument Swap
 
 Equivalently, if you keep the standard PTX idx `(c<<2)|(b<<1)|a` but **swap** the
@@ -435,5 +433,4 @@ def verify_all_ttbls():
 1. [PTX ISA: Logic and Shift Instructions — lop3](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#logic-and-shift-instructions-lop3)
 2. [njuffa — What does LOP3.LUT mean? (2022)](https://forums.developer.nvidia.com/t/what-does-lop3-lut-mean-how-is-it-executed/227472/7)
 3. [njuffa — Reverse LUT for LOP3.LUT (2020)](https://forums.developer.nvidia.com/t/reverse-lut-for-lop3-lut/110651/2)
-4. EXL3 codebook decode: `_references_prod/exllamav3/exllamav3/exllamav3_ext/quant/codebook.cuh`
-5. EXL3 format spec: `transformers/specs/exl3-format.md`
+4. EXL3 format spec: `transformers/specs/exl3-format.md`

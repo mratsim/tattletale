@@ -16,6 +16,9 @@ when defined(cuda):
 
 type
   RmsNorm* = ref object
+    ## Root-mean-square layer norm with a learned per-dimension scale.
+    ##   `output = (x * rsqrt(mean(x^2) + eps)) * w`
+    ## The bias-one variant is RmsNormOne.
     weight*: Tensor
     eps*: float64
     hidden_size*: int
@@ -23,6 +26,7 @@ type
 
 func init*(_: type RmsNorm, weight: Tensor, quant_format: QuantFormatKind = qBF16,
            eps: SomeFloat = 1e-6): RmsNorm =
+  ## Build one RMSNorm from a `[width]` weight.
   let hidden_size = weight.size(0)
   RmsNorm(
     weight: weight, eps: float64(eps),
@@ -43,23 +47,24 @@ proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
   ##      to match ext.rms_norm's rounding.
   ##   4. Multiplies by weight
   ##
-  ## The multiplication order differs by quantization format:
-  ##   qExl3: (x*w)*rstd → cast (weight-first, all FP32, matches ext.rms_norm)
-  ##   qBF16: (x*rstd).to(dtype)*w (rstd-first, matches HF Qwen3RMSNorm)
+  ## The multiply order differs by quantization format:
+  ##   qExl3: (x*w)*rstd → cast, weight-first, all FP32, matches ext.rms_norm
+  ##   qBF16: (x*rstd).to(dtype)*w, rstd-first, matches HF Qwen3RMSNorm
   ##
   ## The multiplication order (weight-first vs rstd-first) is the dominant
-  ## factor in matching EXL3 vs HF fixtures (0.000244 vs 0.0 CPU diff).
+  ## factor in reproducing the ext.rms_norm and HF Qwen3RMSNorm numbers
+  ## (0.000244 vs 0.0 CPU diff).
   ## FP16/BF16 intermediates are significantly worse (0.125+ diff).
   case self.quant_format
   of qExl3:
     # We emulate warp-shuffle reduction
     # TODO: optimized kernel
     # See
-    #  - tattletale/workspace/transformers/tests/rounding_rmsnorm/test_exl3_rms_norm.nim
+    #  - tattletale/workspace/transformers/tests/rounding_rmsnorm/t_exl3_rms_norm.nim
     #  - tattletale/workspace/transformers/tests/rounding_rmsnorm/rmsnorm_common.nim
     when defined(cuda):
       if hidden_state.deviceType() == kCuda:
-        return pkl_rms_norm_fp16_cuda(hidden_state, self.weight, self.eps)
+        return pkl_rms_norm_fp16_cuda(hidden_state, self.weight.to(kFloat16), self.eps)
 
     ## EXL3 order: (x*w)*rstd, all FP32. Weight upcast to FP32.
     let input_dtype = hidden_state.scalarType()
@@ -78,7 +83,7 @@ proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
     let w = self.weight.to(kFloat32)
     let variance = x.square().mean(axis = -1, keepdim = true)
     let rstd = variance.add(Scalar(self.eps)).rsqrt()
-    return (x * rstd).to(input_dtype) * self.weight
+    return (x * rstd).to(input_dtype) * self.weight.to(input_dtype)
 
 proc forward_with_residual(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
   ## Fused residual addition + RMSNorm.
@@ -95,60 +100,61 @@ template `()`*(layer: RmsNorm, x, residual: Tensor): untyped =
   forward_with_residual(layer, x, residual)
 
 type
-  GemmaRmsNorm* = ref object
-    ## RMSNorm with the weight applied as `1 + w` (Gemma-style), used for
-    ## Qwen3.5 qk-norm.
+  RmsNormOne* = ref object
+    ## RMSNorm with a weight bias of one:
+    ##   `output = (x * rsqrt(mean(x^2) + eps)) * (1 + w)`
+    ## Computed in f32 and cast back to the input dtype.
     ##
-    ## Forward computes, all in f32:
-    ##   `output = (x / sqrt(mean(x^2) + eps)) * (1 + w)`,
-    ## then casts back to the input dtype. The weight is stored
-    ## as-is (BF16 [head_dim] in the shard). The `1 + w` scaling happens in
-    ## f32. This matches the vendored Qwen3_5RMSNorm
-    ## (`_norm(x.float()) * (1.0 + weight.float())`, `.type_as(x)`).
+    ## The checkpoint stores the offset `w`.
+    ## A stored zero leaves the norm unscaled.
     weight*: Tensor
     eps*: float64
     hidden_size*: int
+    quant_format*: QuantFormatKind
 
-## Build GemmaRMSNorm from a `[head_dim]` weight (applied as `1 + w`). eps defaults to 1e-6.
-func init*(_: type GemmaRmsNorm, weight: Tensor, eps: SomeFloat = 1e-6): GemmaRmsNorm =
+func init*(_: type RmsNormOne, weight: Tensor, quant_format: QuantFormatKind = qBF16,
+           eps: SomeFloat = 1e-6): RmsNormOne =
+  ## Build one bias-one RMSNorm from a `[width]` weight offset.
   let hidden_size = weight.size(0)
-  GemmaRmsNorm(
-    weight: weight,
-    eps: float64(eps),
+  RmsNormOne(
+    weight: weight, eps: float64(eps),
     hidden_size: hidden_size,
+    quant_format: quant_format,
   )
 
-proc forward*(self: GemmaRmsNorm, x: Tensor): Tensor =
-  ## GemmaRMSNorm over the last dimension, f32 math, cast back to x.dtype.
-  let input_dtype = x.scalarType()
-  let x32 = x.to(kFloat32)
-  let variance = x32.square().mean(axis = -1, keepdim = true)
+proc forward*(self: RmsNormOne, hidden_state: Tensor): Tensor =
+  ## Bias-one RMSNorm over the last dimension, FP32 intermediate:
+  ##   `output = (x * rsqrt(mean(x^2) + eps)) * (1 + w)`
+  let input_dtype = hidden_state.scalarType()
+  let x = hidden_state.to(kFloat32)
+  let w = self.weight.to(kFloat32)
+  let variance = x.square().mean(axis = -1, keepdim = true)
   let rstd = variance.add(Scalar(self.eps)).rsqrt()
-  let normed = x32 * rstd
-  let w32 = self.weight.to(kFloat32)
-  result = (normed * (1.0 + w32)).to(input_dtype)
+  return (x * rstd * (Scalar(1.0) + w)).to(input_dtype)
 
-template `()`*(layer: GemmaRmsNorm, x: Tensor): untyped =
+proc forward_with_residual(self: RmsNormOne, hidden_state, residual: Tensor): (Tensor, Tensor) =
+  ## Residual addition + bias-one RMSNorm.
+  let new_residual = hidden_state + residual
+  (self.forward(new_residual), new_residual)
+
+## Call operator overloads:
+## - norm(x)              → forward(x)           → Tensor
+## - norm(x, residual)    → forward_with_residual(x, residual) → (Tensor, Tensor)
+template `()`*(layer: RmsNormOne, x: Tensor): untyped =
   forward(layer, x)
+
+template `()`*(layer: RmsNormOne, x, residual: Tensor): untyped =
+  forward_with_residual(layer, x, residual)
 
 type
   RmsNormGated* = ref object
-    ## RMSNorm with a SiLU-gated multiplier over the last dimension,
-    ## the Gated DeltaNet output norm (vendored `Qwen3_5RMSNormGated`).
-    ##
-    ## The weight is applied as a regular multiply (not `1 + w`). The shard
-    ## stores the norm weight directly (F32 [128], mean near 1). The gate
-    ## tensor carries the z projection reshaped to the normed shape.
-    ##
-    ## Forward, matching the vendored op order:
-    ##   normed = x.f32 * rsqrt(mean(x.f32^2) + eps)     (f32)
-    ##   normed = normed.to(x.dtype)                      (bf16)
-    ##   gated  = weight * normed                         (f32 weight × bf16 → f32)
-    ##   gated  = gated * silu(gate.f32)                  (f32)
-    ##   output = gated.to(x.dtype)                       (bf16)
-    weight*: Tensor
-    eps*: float64
-    hidden_size*: int
+    ## RMSNorm with a SiLU gate on the last dimension, the Gated DeltaNet output norm.
+    ##   normed = x.f32 * rsqrt(mean(x.f32^2) + eps)
+    ##   output = (w * normed.to(x.dtype) * silu(gate.f32)).to(x.dtype)
+    ## The gate multiplication runs in f32 and the result is cast back to the input dtype.
+    weight: Tensor
+    eps: float64
+    hidden_size: int
 
 ## Build RmsNormGated from a `[head_v_dim]` weight. eps defaults to 1e-6.
 func init*(_: type RmsNormGated, weight: Tensor, eps: SomeFloat = 1e-6): RmsNormGated =

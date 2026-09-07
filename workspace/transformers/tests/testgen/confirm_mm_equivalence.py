@@ -12,7 +12,7 @@ Background:
 import torch, sys, os
 from exllamav3.ext import exllamav3_ext as ext
 sys.path.insert(0, os.path.dirname(__file__))
-from q_exl3_common import reconstruct_orig_exl3
+from fixture_exl3_common import reconstruct_orig_exl3
 from safetensors.torch import load_file as st_load
 
 DEVICE = 'cuda:0'

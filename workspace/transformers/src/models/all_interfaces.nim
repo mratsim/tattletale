@@ -13,7 +13,10 @@ import
   workspace/safetensors,
   workspace/toktoktok/src/bpe_codec,
 
+  ../instrumentation,
   ../stateful/inference_context
+
+export instrumentation
 
 type ModelConfigBase* = ref object
   ## Minimal config shared by all model types for InferenceContext creation.
@@ -31,10 +34,10 @@ type ModelConfigBase* = ref object
   max_position_embeddings*: int
   eosTokenId*: int  # EOS token ID for generation stop condition
 
-iface *Model:
+iface *AnyModel:
   proc forward(ctx: var InferenceContext, input_ids: Tensor): Tensor
   proc getConfig(): ModelConfigBase
   proc getTokenizer(): BPETokenizer
   proc getDeviceKind(): DeviceKind
-var ModelRegistry* {.compileTime.}: Table[string, proc(modelPath: string, device: DeviceKind): Model {.nimcall.}]
+var ModelRegistry* {.compileTime.}: Table[string, proc(modelPath: string, device: DeviceKind): AnyModel {.nimcall.}]
   ## Model registry - populated by each model module at initialization

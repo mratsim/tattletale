@@ -14,6 +14,7 @@
 import
   std/memfiles, std/strformat, std/strutils, std/os, std/importutils,
   workspace/safetensors,
+  workspace/safetensors/src/collections,
   workspace/transformers/src/layers,
   workspace/transformers/src/deserialization,
   pkg/packedjson,
@@ -60,9 +61,7 @@ proc main() =
   let cfgJson = (ModelPath / "config.json").parseFile()
   let eps = 1e-6
 
-  var mfile = memFiles.open(ModelPath / "model.safetensors", mode = fmRead)
-  defer: close(mfile)
-  let mst = safetensors.load(mfile)
+  let view = SafetensorsCollection.open(ModelPath)
 
   echo "RMSNorm Function Research Test (HF baseline)"
   echo "═════════════════════════════════════════════"
@@ -82,16 +81,14 @@ proc main() =
     echo &"  Device: {deviceLabel}"
     echo repeat('=', 70)
 
-    # ── Block 0 ─────────────────────────────────────────────────
+    # ── Layer 0 ──────────────────────────────────────────────────
     echo ""
     echo repeat('#', 70)
-    echo "  Block 0: From long-residual-3-block fixture"
+    echo "  Layer 0: From long-residual-3-block fixture"
     echo repeat('#', 70)
 
     block block0:
-      var memFile = memFiles.open(FixtureDir / "block-00.safetensor", mode = fmRead)
-      defer: close(memFile)
-      let st = safetensors.load(memFile)
+      var st = Safetensor.open(FixtureDir / "block-00.safetensor")
       template load(n: string): Tensor = st.getTensorOwned(n, kCPU)
 
       let layer_input = load("layer_input")
@@ -101,8 +98,8 @@ proc main() =
       let attn_residual = load("after_attn_norm_residual")
       let post_attn_input = after_attn + attn_residual
 
-      let ln_d = RmsNorm.load(mst, cfgJson, "model.layers.0.input_layernorm").to(device)
-      let pln_d = RmsNorm.load(mst, cfgJson, "model.layers.0.post_attention_layernorm").to(device)
+      let ln_d = RmsNorm.load(view, cfgJson, "model.layers.0.input_layernorm", device = device)
+      let pln_d = RmsNorm.load(view, cfgJson, "model.layers.0.post_attention_layernorm", device = device)
       let x_d = layer_input.to(device)
       let e_attn_norm_d = e_attn_norm.to(device)
       let post_attn_input_d = post_attn_input.to(device)
@@ -114,16 +111,14 @@ proc main() =
       reportSummary("post_attention_layernorm (dim=1024)")
       runNormComparison("post_attn_layernorm", post_attn_input_d, e_mlp_norm_d, pln_d.weight, eps)
 
-    # ── Block 2 ─────────────────────────────────────────────────
+    # ── Layer 2 ──────────────────────────────────────────────────
     echo ""
     echo repeat('#', 70)
-    echo "  Block 2: From long-residual-3-block fixture"
+    echo "  Layer 2: From long-residual-3-block fixture"
     echo repeat('#', 70)
 
     block block2:
-      var memFile = memFiles.open(FixtureDir / "block-02.safetensor", mode = fmRead)
-      defer: close(memFile)
-      let st = safetensors.load(memFile)
+      var st = Safetensor.open(FixtureDir / "block-02.safetensor")
       template load(n: string): Tensor = st.getTensorOwned(n, kCPU)
 
       let layer_input = load("layer_input")
@@ -133,8 +128,8 @@ proc main() =
       let attn_residual = load("after_attn_norm_residual")
       let post_attn_input = after_attn + attn_residual
 
-      let ln_d = RmsNorm.load(mst, cfgJson, "model.layers.2.input_layernorm").to(device)
-      let pln_d = RmsNorm.load(mst, cfgJson, "model.layers.2.post_attention_layernorm").to(device)
+      let ln_d = RmsNorm.load(view, cfgJson, "model.layers.2.input_layernorm", device = device)
+      let pln_d = RmsNorm.load(view, cfgJson, "model.layers.2.post_attention_layernorm", device = device)
       let x_d = layer_input.to(device)
       let e_attn_norm_d = e_attn_norm.to(device)
       let post_attn_input_d = post_attn_input.to(device)

@@ -8,7 +8,7 @@
 ## Models module - imports all model implementations and provides the generic loadModel proc
 ##
 ## Import order matters:
-## 1. all_interfaces - defines ModelRegistry and Model iface
+## 1. all_interfaces - defines ModelRegistry and AnyModel iface
 ## 2. Individual models (qwen3, etc.) - populate ModelRegistry via static blocks
 ## 3. This file - uses ModelRegistry in loadModel (after it's populated)
 
@@ -24,8 +24,9 @@ import workspace/libtorch as F
 import workspace/toktoktok
 import ./stateful/orchestrator
 import ./samplers
+import ./instrumentation
 
-proc loadModel*(modelPath: string, device = kCPU): Model =
+proc loadModel*(modelPath: string, device = kCPU): AnyModel =
   # Pass the compile-time -> runtime boundary
   # and make the var {.compiletime.} a const at runtime
   const registry = static(ModelRegistry)
@@ -33,16 +34,13 @@ proc loadModel*(modelPath: string, device = kCPU): Model =
   let cfg = modelPath.joinPath("config.json").parseFile()
   let archs = cfg["architectures"]
 
-  if archs.len == 0:
-    raise newException(ValueError, "[ttt] No architectures found in config.json")
+  checkValue(archs.len != 0, "[ttt] No architectures found in config.json")
 
-  if archs.len > 1:
-    raise newException(ValueError, "[ttt] Multiple architectures not supported")
+  checkValue(archs.len <= 1, "[ttt] Multiple architectures not supported")
 
   let arch = archs[0].getStr()
 
-  if not registry.hasKey(arch):
-    raise newException(ValueError, "[ttt] Unknown architecture: " & arch)
+  checkValue(registry.hasKey(arch), "[ttt] Unknown architecture: " & arch)
 
   let loader = registry[arch]
   loader(modelPath, device)
@@ -71,7 +69,7 @@ proc parseTorchDtype(s: string): ScalarKind =
     raise newException(ValueError, "[ttt] Unknown torch_dtype: " & s)
 
 proc generate*(
-        model: Model,
+        model: AnyModel,
         prompt: string,
         temp = 1.0f,
         maxTokens = 200,
@@ -91,9 +89,8 @@ proc generate*(
   var ids = model.getTokenizer().encode(prompt)
 
   # guard against prompt exceeding max context length
-  if ids.len > maxCtx:
-    raise newException(ValueError,
-      "[ttt] Prompt length exceeds max context length: " & $ids.len & " > " & $maxCtx)
+  checkValue(ids.len <= maxCtx,
+    "[ttt] Prompt length exceeds max context length: " & $ids.len & " > " & $maxCtx)
 
   let startPos = ids.len
 
@@ -106,6 +103,7 @@ proc generate*(
   let inputIds = F.toTensor([ids]).to(device)
   let logits = model.forward(orc.getInferenceContextMut(), inputIds)
   # kv_position must reflect total prefill tokens for correct decode page allocation
+  # TODO: review ownership and parameter passing of position parameter
   orc.setKvPosition(ids.len)
   let lastLogits = logits.narrow(1, startPos - 1, 1).squeeze(1)
   var nextToken = sample(lastLogits, temp)
@@ -114,14 +112,16 @@ proc generate*(
   # === DECODE LOOP: forward on 1 token at a time ===
   while ids.len < startPos + maxTokens and ids.len < maxCtx:
     # Set position for this decode step
-    orc.decodeStep(ids.len - 1, nextToken.uint32, device)
+    # TODO: review ownership and parameter passing of position parameter
+    orc.appendToken(ids.len - 1, nextToken.uint32, device)
     # Forward on single token: [1, 1]
     let singleToken = F.toTensor([[nextToken]]).to(device)
     let stepLogits = model.forward(orc.getInferenceContextMut(), singleToken)
     # Advance kv_position AFTER forward — the attention layer used
     # ctx.kv_position as the write offset (equal to position_ids.min())
     # during this call, avoiding a GPU→CPU sync.  Now advance so the
-    # next decodeStep's boundary check sees the updated total.
+    # next appendToken's boundary check sees the updated total.
+    # TODO: review ownership and parameter passing of position parameter
     orc.setKvPosition(ids.len)
     # Sample next token from [1, 1, vocab] -> [vocab]
     let stepLastLogits = stepLogits.squeeze(0).squeeze(0)

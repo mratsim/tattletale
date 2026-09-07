@@ -69,7 +69,7 @@ def group_exl3_tensors(raw):
 tensors = group_exl3_tensors(raw)
 
 P = "model.layers.0.self_attn"
-from q_exl3_common import (
+from fixture_exl3_common import (
     derive_K, derive_cb, reconstruct_orig_exl3, linear_forward_reimpl_exl3,
     rms_norm_orig_exl3, precompute_freqs_cis_reimpl_exl3, apply_rotary_pos_emb_reimpl_exl3,
 )

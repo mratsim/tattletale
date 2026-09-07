@@ -77,7 +77,7 @@ src/
   models.nim            # loadModel + generate entry points
   models/               # Model iface, ModelRegistry, qwen3 implementation
   layers.nim            # Layer union type + device/dtype conversion
-  layers/               # attn, embedding, linear, lmhead, mlp, norm, rope, transformer
+  layers/               # attn, embedding, linear, lmhead, ffn, norm, rope, decoder_layers
   quantizations/        # exl3, exl3_codecs, datatypes, unquantized_codecs
   samplers.nim          # Gumbel-max sampling
   deserialization.nim   # safetensors / weight loading
@@ -115,11 +115,11 @@ CUDA_LIB="$(dirname "$(find "$SITE_PKGS/nvidia" -maxdepth 1 -type d -name 'cu*' 
 
 nim cpp --hints:off --warnings:off \
   --outdir:build/wip --nimcache:nimcache/wip \
-  workspace/transformers/tests/q_exl3/test_exl3_hadamard.nim
+  workspace/transformers/tests/q_exl3/t_exl3_hadamard.nim
 
 LD_PRELOAD="$TORCH_LIB/libtorch_cuda.so" \
 LD_LIBRARY_PATH="$(pwd)/.venv/lib:$TORCH_LIB:$CUDA_LIB" \
-build/wip/test_exl3_hadamard
+build/wip/t_exl3_hadamard
 ```
 
 ## Related docs

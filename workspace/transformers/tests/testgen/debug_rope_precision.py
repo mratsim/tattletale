@@ -14,7 +14,7 @@ torch.backends.cudnn.deterministic = True
 
 # Add testgen dir to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from q_exl3_common import linear_forward_reimpl_exl3, get_exl3_tensors, reconstruct_reimpl_exl3, load_config, get_in_features_out_features, derive_K, derive_cb, had_r_128_reimpl_exl3
+from fixture_exl3_common import linear_forward_reimpl_exl3, get_exl3_tensors, reconstruct_reimpl_exl3, load_config, get_in_features_out_features, derive_K, derive_cb, had_r_128_reimpl_exl3
 
 MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hf_models", "Qwen3-0.6B-EXL3-5bpw")
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")

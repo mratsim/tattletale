@@ -99,6 +99,7 @@ type
     kMSNPU = 8
     kXLA = 9
     kVulkan = 10
+    kMPS = 13
 
   Device* {.importcpp: "c10::Device", bycopy.} = object
     kind* {.importc: "type_".}: DeviceKind
@@ -1020,6 +1021,14 @@ func sort*(
   ## Returns (values, originalIndices) of type (TensorT, TensorInt64)
   ## where originalIndices is the original index of each values (before sorting)
 func argsort*(a: TorchTensor, axis: int = -1, descending: bool = false): TorchTensor {.importcpp: "#.argsort(@)".}
+
+func topk*(
+  a: TorchTensor, k: int, axis: int = -1, largest: bool = true, sorted: bool = true
+): CppTuple2[TorchTensor, TorchTensor] {.importcpp: "#.topk(@)".}
+  ## Returns the k largest (largest=true) or smallest (largest=false) elements
+  ## and their indices along the given axis.
+  ## Returns (values, indices) of type (TensorT, TensorInt64)
+  ## where with both defaults, values is in descending order.
 
 func cat*(tensors: ArrayRef[TorchTensor], axis: int = 0): TorchTensor {.importcpp: "torch::cat(@)".}
 func cat*(tensors: CppVector[TorchTensor], axis: int = 0): TorchTensor {.importcpp: "torch::cat(@)".}

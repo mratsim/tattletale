@@ -16,12 +16,12 @@ import
   workspace/transformers/src/stateful/kvcache {.all.},
   workspace/transformers/src/stateful/page_pool,
   workspace/transformers/src/stateful/inference_context,
-  workspace/transformers/src/layers/attn {.all.},
+  workspace/transformers/src/layers/attn_ssm/grouped_query_attention {.all.},
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/layers/linear {.all.},
   workspace/transformers/src/layers/norm {.all.}
 
-privateAccess(RopeGQAttention)
+privateAccess(RopeGQAttention[RmsNorm])
 privateAccess(GroupedQueryAttention)
 
 proc main() =
@@ -50,7 +50,7 @@ proc main() =
       let kNorm = RmsNorm.init(kNormWeight)
 
       # RoPE
-      let rotary = RotaryPositionEmbeddingRef.new(
+      let rotary = RotaryPositionEmbedding.new(
         headDim, max_seq_len = 4096, rope_theta = 10000.0,
         dtype = F.kFloat32, device = F.kCPU)
 
@@ -68,11 +68,11 @@ proc main() =
         ctx.pages.add(pool.borrow())
 
       # Create attention layer
-      var attn = RopeGQAttention.init(
+      var attn = RopeGQAttention[RmsNorm].init(
         0, "test_layer",
         qProj, kProj, vProj, oProj,
-        qNorm, kNorm,
-        numQoHeads, numKvHeads, headDim, rotary)
+        numQoHeads, numKvHeads, headDim, rotary,
+        q_norm = qNorm, k_norm = kNorm)
 
       # Set up cos/sin
       ctx.position_ids = F.arange(0, 10).unsqueeze(0)

@@ -663,7 +663,7 @@ proc appendOp[T, P](cache: var KVCache[T, P];
 #   back the FULL tokens + pages.  The trie internally:
 #
 #     1. walkDown(tokens)  — finds the deepest matching node
-#     2. classifyGraft      — decides: fullMatch? partialMatch? fork? append?
+#     2. classifyGraft     - classifies: fullMatch? partialMatch? fork? append?
 #     3. branch proc        — attaches pages to the tree, releases locks
 #
 #   This means:

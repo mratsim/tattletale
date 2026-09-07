@@ -216,3 +216,36 @@ storage reduction while maintaining coverage of early, middle, and late layers.
 The generator `gen_exl3_codec_fixtures.py` defaults to this mode.  Pass
 `--all-layers` to generate for all 28 layers (e.g. for a full verification run,
 not tracked in git), or `--layer N` for a single layer.
+
+---
+
+## 9.  Generator file naming
+
+Every fixture generator is named `gen_<quant>_<id>_<slug>_<model>.py`:
+
+| Part | Rule | Examples |
+|---|---|---|
+| `<quant>` | omitted for the unquantized/bf16 path, a marker for a quantized one | `gen_exl3_*` carries `exl3`, bf16 files carry none |
+| `<id>` | the consuming suite's slot, spelled exactly as that suite spells it | `03`, `04_3`, `03b`, `02_attn`, `02_gdn`, and non-numbered suites contribute their slug: `codec`, `hadamard` |
+| `<slug>` | the fixture concern | `layer_fixtures`, `ids_to_logits_fixtures`, `greedy_fixtures` |
+| `<model>` | the checkpoint name | `Qwen3-0.6B`, `Qwen3.5-0.8B`, `Qwen3.6-35B-A3B` |
+
+Suffixed slots (`04_3`, `03b`) are house-legal. The model name lives in the
+filename, and the concern name is the one the consuming suite spells, never
+a private name of a port's own invention.
+
+A non-generator never wears the `gen_` prefix. Shared helpers take
+`fixture_*`: `fixture_exl3_common.py` (kernel-reconstruction and forward logic).
+
+Every generator with no Qwen3 precedent carries a justification header at
+the top of its docstring: what it is, which suite consumes it, and why no
+Qwen3 analog exists. The name itself is the justification when a Qwen3
+file of the same concern exists.
+
+## 10.  JSON fixture payloads ship compressed
+
+JSON fixture payloads ship as single-entry deflate `.json.zip` archives so
+pretty-printed numerics stay out of text diffs and history bloat. Suites
+inflate them in memory with the `transformers_testutils` reader and parse
+through jsony against a declared schema type. Generators emit the archives
+directly.

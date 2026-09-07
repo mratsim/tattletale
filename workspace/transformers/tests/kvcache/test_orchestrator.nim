@@ -79,17 +79,17 @@ proc makeTokens(n: int): seq[uint32] =
 #   2. Prefill forward pass writes KV at positions 0..seq_len-1 but NEVER
 #      updates kv_position.
 #   3. After 256-token prefill, kv_position is still 0.
-#   4. decodeStep checks: kv_position > 0 and (kv_position mod 256) == 0
+#   4. appendToken checks: kv_position > 0 and (kv_position mod 256) == 0
 #      → 0 > 0 is false → no page allocated.
 #   5. attn.forward computes pageIdx = 256 / 256 = 1 → ctx.pages[1] → OOB crash.
 # ═════════════════════════════════════════════════════════════════════════════
 
 proc testBugB001KvPositionTracking(): bool =
-  ## Verify kv_position tracking through startSequence and decodeStep.
+  ## Verify kv_position tracking through startSequence and appendToken.
   ## Note: BUG-B-001's actual fix (setting kv_position = input_ids.len) is in
   ## generate() AFTER the prefill forward pass, to avoid corrupting the attention
   ## layer's writeStart computation (which uses kv_position - offset).
-  ## The orchestrator only tracks kv_position via decodeStep's increment.
+  ## The orchestrator only tracks kv_position via appendToken's increment.
   var orc = makeOrchestrator()
   let tokens = makeTokens(TokensPerPage)  # exactly 256 tokens = 1 page
 
@@ -105,8 +105,8 @@ proc testBugB001KvPositionTracking(): bool =
   doAssert ctx.pages.len == 1,
     "Expected 1 page for 256 tokens, got " & $ctx.pages.len
 
-  # decodeStep: kv_position increments by 1 each step
-  orc.decodeStep(position = TokensPerPage, token_id = 42'u32, device = kCPU)
+  # appendToken: kv_position increments by 1 each step
+  orc.appendToken(position = TokensPerPage, token_id = 42'u32, device = kCPU)
   doAssert ctx.kv_position == 0,
     "kv_position should be 0 after 1 decode step, got " & $ctx.kv_position
 
@@ -245,14 +245,14 @@ proc testOrchestratorDecodeTracking(): bool =
     "kv_position should be 0 after startSequence, got " & $ctx.kv_position
 
   # Decode at position 255 — kv_position stays 0 (inc happens after forward in generate)
-  orc.decodeStep(position = TokensPerPage - 1, token_id = 100'u32, device = kCPU)
+  orc.appendToken(position = TokensPerPage - 1, token_id = 100'u32, device = kCPU)
   doAssert ctx.pages.len == 1,
     "Expected still 1 page after 1 decode, got " & $ctx.pages.len
   doAssert ctx.kv_position == 0,
     "kv_position should be 0 after decode, got " & $ctx.kv_position
 
   # Second decode
-  orc.decodeStep(position = TokensPerPage, token_id = 101'u32, device = kCPU)
+  orc.appendToken(position = TokensPerPage, token_id = 101'u32, device = kCPU)
   doAssert ctx.kv_position == 0,
     "kv_position should be 0, got " & $ctx.kv_position
 
@@ -361,12 +361,12 @@ proc testWriteStartCachedPrefix(): bool =
 #   - cached_tokens: set by startSequence (LPM match count), stable forever.
 #     Used by attention for writeStart. NEVER updated after startSequence.
 #   - kv_position: starts at 0, set by setKvPosition() after prefill forward.
-#     Used by decodeStep for page allocation. Incremented each decode step.
+#     Used by appendToken for page allocation. Incremented each decode step.
 #   - Setting one must not affect the other.
 
 proc testFieldIndependencePrefillDecode(): bool =
   ## Verify cached_tokens stays 0 through prefill and decode (no LPM match).
-  ## kv_position starts at 0, is set by setKvPosition, and increments via decodeStep.
+  ## kv_position starts at 0, is set by setKvPosition, and increments via appendToken.
   var orc = makeOrchestrator()
   let tokens = makeTokens(64)
 
@@ -387,10 +387,10 @@ proc testFieldIndependencePrefillDecode(): bool =
   doAssert ctx.cached_tokens == 0,
     "cached_tokens must not change when kv_position is set, got " & $ctx.cached_tokens
 
-  # decodeSteps no longer increment kv_position — generate() does it after forward
-  orc.decodeStep(position = 64, token_id = 100'u32, device = kCPU)
+  # appendTokens no longer increment kv_position: generate() does it after forward
+  orc.appendToken(position = 64, token_id = 100'u32, device = kCPU)
   doAssert ctx.kv_position == 64,
-    "kv_position should be 64 after decodeStep (no inc), got " & $ctx.kv_position
+    "kv_position should be 64 after appendToken (no inc), got " & $ctx.kv_position
   doAssert ctx.cached_tokens == 0
 
   result = true
@@ -506,16 +506,15 @@ proc testCowPartialPageIsolated(): bool =
 # ═════════════════════════════════════════════════════════════════════════════
 # Test runner
 # ═════════════════════════════════════════════════════════════════════════════
-# COV-B-005: Page boundary crossing during decodeStep
+# COV-B-005: Page boundary crossing during appendToken
 # ═════════════════════════════════════════════════════════════════════════════
 #
-# decodeStep checks ctx.kv_position > 0 and (ctx.kv_position mod 256) == 0
+# appendToken checks ctx.kv_position > 0 and (ctx.kv_position mod 256) == 0
 # to trigger lazy page allocation. After a full-page prefill, setKvPosition
-# sets kv_position = 256, and the first decodeStep should trigger a page borrow.
+# sets kv_position = 256, and the first appendToken should trigger a page borrow.
 
 proc testDecodePageBoundary(): bool =
-  ## Verify decodeStep borrows a new page when kv_position crosses a
-  ## TokensPerPage boundary.
+  ## Verify appendToken borrows a new page when kv_position crosses a TokensPerPage boundary.
   var orc = makeOrchestrator()
   let tokens = makeTokens(TokensPerPage)  # exactly 256 tokens = 1 page
 
@@ -531,9 +530,9 @@ proc testDecodePageBoundary(): bool =
 
   # First decode at position 256 — kv_position=256, triggers boundary crossing
   #   condition: kv_position > 0 and 256 mod 256 == 0 → borrow page
-  orc.decodeStep(position = TokensPerPage, token_id = 100'u32, device = kCPU)
+  orc.appendToken(position = TokensPerPage, token_id = 100'u32, device = kCPU)
   doAssert ctx.kv_position == TokensPerPage,
-    "kv_position should be 256 (no inc in decodeStep), got " & $ctx.kv_position
+    "kv_position should be 256 (no inc in appendToken), got " & $ctx.kv_position
   doAssert ctx.pages.len == 2,
     "Expected 2 pages after boundary crossing, got " & $ctx.pages.len
 
@@ -541,9 +540,9 @@ proc testDecodePageBoundary(): bool =
   orc.setKvPosition(ctx.kv_position + 1)
 
   # Second decode at position 257 — no boundary (257 mod 256 != 0)
-  orc.decodeStep(position = TokensPerPage + 1, token_id = 101'u32, device = kCPU)
+  orc.appendToken(position = TokensPerPage + 1, token_id = 101'u32, device = kCPU)
   doAssert ctx.kv_position == TokensPerPage + 1,
-    "kv_position should be 257 (no inc in decodeStep), got " & $ctx.kv_position
+    "kv_position should be 257 (no inc in appendToken), got " & $ctx.kv_position
   doAssert ctx.pages.len == 2
   result = true
 
@@ -551,9 +550,8 @@ proc testDecodePageBoundary(): bool =
 # COV-B-009: Partial-page gather boundary
 # ═════════════════════════════════════════════════════════════════════════════
 #
-# The attention gather loop (attn.nim:239-245) handles the last page when
-# totalSeqLen is not a multiple of TokensPerPage. This test verifies the
-# page structure that the gather loop operates on, for a non-aligned prefill.
+# On a non-aligned prefill, the attention gather loop in attn.nim handles
+# a final partial page. This test checks the page structure it reads.
 
 proc testPartialPageStructure(): bool =
   ## Verify page structure for non-page-aligned sequence length.
@@ -579,9 +577,9 @@ proc testPartialPageStructure(): bool =
     "Expected pages[1].index == 1, got " & $ctx.pages[1].pageIndex()
 
   # Decode: position 300, no boundary (300 mod 256 != 0)
-  orc.decodeStep(position = 300, token_id = 200'u32, device = kCPU)
+  orc.appendToken(position = 300, token_id = 200'u32, device = kCPU)
   doAssert ctx.kv_position == 300,
-    "kv_position should be 300 after decodeStep (no inc), got " & $ctx.kv_position
+    "kv_position should be 300 after appendToken (no inc), got " & $ctx.kv_position
   doAssert ctx.pages.len == 2,
     "Expected still 2 pages (no boundary), got " & $ctx.pages.len
 
@@ -699,7 +697,7 @@ proc testComputePageSizeBytes(): bool =
   result = true
 
 proc runTests*() =
-  runCppTest("BUG-B-001: kv_position tracking through startSequence and decodeStep",
+  runCppTest("BUG-B-001: kv_position tracking through startSequence and appendToken",
     testBugB001KvPositionTracking)
 
   runCppTest("BUG-B-002: LPM 300 tokens (256 full + 44 partial) → correct page order",
@@ -729,7 +727,7 @@ proc runTests*() =
   runCppTest("COV-A-005: cowPartialPage copy verification",
     testCowPartialPageIsolated)
 
-  runCppTest("COV-B-005: page boundary crossing during decodeStep",
+  runCppTest("COV-B-005: page boundary crossing during appendToken",
     testDecodePageBoundary)
 
   runCppTest("COV-B-009: partial-page gather structure (300 tokens, non-aligned)",
