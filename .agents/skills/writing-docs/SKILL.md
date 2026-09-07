@@ -1,6 +1,6 @@
 ---
 name: writing-docs
-description: "Repository documentation contract for the Tattletale monorepo: the house style for doc comments, module headers, inline comments, and any committed prose (what-over-how, contracts over narration, banned-vocabulary blocklist, format rules, seven canonical reference files). Use when writing or updating doc comments, module headers, inline comments, or any prose in this repo, or when de-sloping existing comments."
+description: "Repository documentation contract for the Tattletale monorepo: the house style for doc comments, module headers, inline comments, and any committed prose (what-over-how, contracts over narration, banned-vocabulary blocklist, format rules, eight canonical reference files). Use when writing or updating doc comments, module headers, inline comments, or any prose in this repo, or when de-sloping existing comments."
 license: MIT
 compatibility: opencode
 metadata:
@@ -13,7 +13,7 @@ metadata:
 ## What I do
 
 This skill is the repository documentation contract. It distills the style of
-the seven canonical files (REFERENCE.md) plus the Write Without Hidden Context
+the eight canonical files (REFERENCE.md) plus the Write Without Hidden Context
 framing below into one enforceable standard: comments for a developer who just
 cloned the repo, no history, no pipeline labels, no campaign vocabulary.
 
