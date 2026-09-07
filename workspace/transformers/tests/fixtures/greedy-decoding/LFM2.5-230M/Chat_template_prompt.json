@@ -1,0 +1,132 @@
+{
+  "argmax_margins": [
+    7.75,
+    3.25,
+    8.0,
+    11.0,
+    0.125,
+    11.375,
+    1.75,
+    4.125,
+    5.375,
+    1.875,
+    5.375,
+    0.125,
+    0.25,
+    1.875,
+    4.625,
+    2.0
+  ],
+  "argmax_top2_ids": [
+    [
+      1098,
+      31466
+    ],
+    [
+      12123,
+      7043
+    ],
+    [
+      7705,
+      9258
+    ],
+    [
+      7043,
+      811
+    ],
+    [
+      2888,
+      1929
+    ],
+    [
+      811,
+      797
+    ],
+    [
+      779,
+      768
+    ],
+    [
+      30682,
+      19245
+    ],
+    [
+      803,
+      810
+    ],
+    [
+      19462,
+      2793
+    ],
+    [
+      968,
+      521
+    ],
+    [
+      12709,
+      779
+    ],
+    [
+      810,
+      797
+    ],
+    [
+      10222,
+      12965
+    ],
+    [
+      797,
+      521
+    ],
+    [
+      779,
+      5487
+    ]
+  ],
+  "eos_token_id": 7,
+  "generated_ids": [
+    1098,
+    12123,
+    7705,
+    7043,
+    2888,
+    811,
+    779,
+    30682,
+    803,
+    19462,
+    968,
+    12709,
+    810,
+    10222,
+    797,
+    779
+  ],
+  "generated_text": "The sky appears blue due to the scattering of sunlight by molecules and particles in the",
+  "note": "temp 0 greedy, no eos stop, 16 tokens; margins are debug-only",
+  "num_generated_tokens": 16,
+  "num_prompt_tokens": 20,
+  "prompt": "<|startoftext|><|im_start|>user\nExplain in one sentence why the sky appears blue.<|im_end|>\n<|im_start|>assistant\n",
+  "prompt_ids": [
+    1,
+    6,
+    6423,
+    708,
+    27388,
+    958,
+    797,
+    1235,
+    13184,
+    3921,
+    779,
+    12123,
+    7705,
+    7043,
+    523,
+    7,
+    708,
+    6,
+    64015,
+    708
+  ]
+}

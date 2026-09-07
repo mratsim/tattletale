@@ -43,11 +43,12 @@ import workspace/ceramic
 #  RtLeft variants (unswapped views, guard on origin[2])
 #  ═════════════════════════════════════════════════════════════════════
 
-proc zeroRows[R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[float16, R, C, A],
+proc zeroRows[T; R, C: static int; A: static MmaAtom](
+    tile: var RtLeft[T, R, C, A],
     r0, rowLimit: int32) {.device.} =
   ## Zeroes the tile's rows with plane row >= rowLimit. `r0` is the tile's
-  ## first plane row (origin[2]·R).
+  ## first plane row (origin[2]·R). The zero value is the element type's fp32
+  ## 0.0 conversion (fp16 or bf16, both exact).
   const M = A.getM()
   const N = A.getN()
   const rowTiles = R div M
@@ -56,32 +57,37 @@ proc zeroRows[R, C: static int; A: static MmaAtom](
   let lane = int(thread_index_in_threadgroup)
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
+  let zeroVal =
+    when T is float16: 0'u16.asFp16()
+    elif T is bfloat16: toBf16(0.0'f32)
+    else: {.error: "zeroRows: unsupported tile element type " & $T.}
   for n in 0 ..< rowTiles:
     if r0 + int32(n * M + row) >= rowLimit:
       for m in 0 ..< colTiles:
         for v in 0 ..< vpt:
-          tile.frags[n][m].frag[v] = 0'u16.asFp16()
+          tile.frags[n][m].frag[v] = zeroVal
 
-proc loadTileRows*[R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[float16, R, C, A],
-    gl: GlView[float16],
+proc loadTileRows*[TIn, TOut; R, C: static int; A: static MmaAtom](
+    tile: var RtLeft[TOut, R, C, A],
+    gl: GlView[TIn],
     origin: tuple,
     rowLimit: int32) {.device.} =
   ## Row-bounded loadTile: tile-plane rows origin[2]·R + r at or above
-  ## `rowLimit` are zero-filled instead of read.
+  ## `rowLimit` are zero-filled instead of read. The load converts
+  ## TIn → TOut through the `to` chokepoint (fp16/bf16 both supported).
   tile.loadTile(gl, origin)
   let r0 = int32(origin[2]) * int32(R)
   if r0 + int32(R) > rowLimit:
     zeroRows(tile, r0, rowLimit)
 
-proc storeRows[TIn; R, C: static int; A: static MmaAtom](
-    gl: GlView[float16],
+proc storeRows[TIn, TOut; R, C: static int; A: static MmaAtom](
+    gl: GlView[TOut],
     tile: RtLeft[TIn, R, C, A],
     origin: tuple,
     r0, rowLimit: int32) {.device.} =
-  ## Stores only the tile's in-range rows (plane row < rowLimit).
-  ## The fp32 tile quantizes to fp16 (RNE) via the `to` chokepoint.
-  ## An fp16 tile round-trips unchanged.
+  ## Stores only the tile's in-range rows (plane row < rowLimit). Values
+  ## quantize to the view element type (RNE) through the `to` chokepoint.
+  ## A same-type tile round-trips unchanged.
   const M = A.getM()
   const N = A.getN()
   const rowTiles = R div M
@@ -98,27 +104,15 @@ proc storeRows[TIn; R, C: static int; A: static MmaAtom](
       for m in 0 ..< colTiles:
         for v in 0 ..< vpt:
           dst[row + n * M, col + m * N + v] =
-            tile.frags[n][m].frag[v].to(float16)
+            tile.frags[n][m].frag[v].to(TOut)
 
-proc storeTileRows*[R, C: static int; A: static MmaAtom](
-    gl: GlView[float16],
-    tile: RtLeft[float32, R, C, A],
+proc storeTileRows*[TIn, TOut; R, C: static int; A: static MmaAtom](
+    gl: GlView[TOut],
+    tile: RtLeft[TIn, R, C, A],
     origin: tuple,
     rowLimit: int32) {.device.} =
   ## Row-bounded storeTile: rows at or above `rowLimit` are not written.
   ## A tile fully inside the limit stores through the facility. A straddling tile writes only its in-range rows.
-  let r0 = int32(origin[2]) * int32(R)
-  if r0 + int32(R) <= rowLimit:
-    gl.storeTile(tile, origin)
-  else:
-    storeRows(gl, tile, origin, r0, rowLimit)
-
-proc storeTileRows*[R, C: static int; A: static MmaAtom](
-    gl: GlView[float16],
-    tile: RtLeft[float16, R, C, A],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile for fp16 tiles. The `to` round trip is the identity.
   let r0 = int32(origin[2]) * int32(R)
   if r0 + int32(R) <= rowLimit:
     gl.storeTile(tile, origin)

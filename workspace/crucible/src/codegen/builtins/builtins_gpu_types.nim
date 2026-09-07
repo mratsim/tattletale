@@ -65,6 +65,10 @@ func toFp32*(x: float16): float32 {.builtin.} =
   ## Numeric fp16 → fp32 conversion (exact widening).
   raise newException(ValueError, "fp16 conversion is GPU-side only")
 
+func toFp32*(x: bfloat16): float32 {.builtin.} =
+  ## Numeric bf16 → fp32 conversion (exact widening).
+  raise newException(ValueError, "bf16 conversion is GPU-side only")
+
 func asFp16*(x: uint16): float16 {.builtin.} =
   ## Bit-pattern reinterpret u16 → fp16.
   raise newException(ValueError, "fp16 reinterpret is GPU-side only")
@@ -81,6 +85,7 @@ let NimGpuFp16ConversionBuiltins* {.compileTime.}: Table[(BackendKind, string), 
   # those spellings cannot be emitted until the types land.
   {(bkMetal,  "toFp16"): "half",
    (bkMetal,  "toFp32"): "float",
+   (bkMetal,  "toBf16"): "bfloat",
    (bkMetal,  "asFp16"): "as_type<half>",
    (bkMetal,  "asU16"):  "as_type<ushort>",
    (bkVulkan, "toFp16"): "float16_t",

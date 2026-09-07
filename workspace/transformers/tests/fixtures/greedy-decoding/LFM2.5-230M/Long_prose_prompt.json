@@ -1,0 +1,132 @@
+{
+  "argmax_margins": [
+    3.1875,
+    7.375,
+    5.0,
+    4.75,
+    5.0,
+    5.125,
+    5.375,
+    5.375,
+    5.5,
+    5.625,
+    5.875,
+    6.0,
+    6.25,
+    6.375,
+    6.5,
+    6.5
+  ],
+  "argmax_top2_ids": [
+    [
+      7,
+      941
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ],
+    [
+      7,
+      2
+    ]
+  ],
+  "eos_token_id": 7,
+  "generated_ids": [
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7
+  ],
+  "generated_text": "<|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|><|im_end|>",
+  "note": "temp 0 greedy, no eos stop, 16 tokens; margins are debug-only",
+  "num_generated_tokens": 16,
+  "num_prompt_tokens": 20,
+  "prompt": "The old lighthouse keeper climbed the spiral stairs every evening to light the lamp above the harbor.",
+  "prompt_ids": [
+    1098,
+    2731,
+    809,
+    43861,
+    1726,
+    11099,
+    47977,
+    779,
+    33994,
+    37077,
+    1973,
+    14367,
+    811,
+    2793,
+    779,
+    29114,
+    3537,
+    779,
+    37581,
+    523
+  ]
+}

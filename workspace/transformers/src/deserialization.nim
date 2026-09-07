@@ -14,6 +14,7 @@
 ## The quant format is detected from the model config.json (`cfg`).
 
 import
+  std/options,
   std/tables,
   pkg/packedjson,
   workspace/safetensors,
@@ -58,14 +59,22 @@ proc load*(_: type Linear, st: Safetensor, cfg: JsonNode, prefix: string, device
 
 # ─── RmsNorm ───────────────────────────────────────────────────────────
 
-proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): RmsNorm =
+proc load*(_: type RmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU,
+             eps: Option[float64] = none(float64)): RmsNorm =
   ## Load RMS norm layer from safetensors, dispatching to the right codec.
+  ##
+  ## `eps` overrides the epsilon read from the config (`rms_norm_eps`, default 1e-6).
+  ## Models that spell the epsilon under another key, LFM2's `norm_eps`,
+  ## pass it through this parameter.
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].rmsNorm
   if loader == nil:
     raise newException(ValueError, "[ttt] No RMSNorm loader for " & $quant)
   let weight = loader(st, prefix, cfg, device)
-  RmsNorm.init(weight, quant, cfg{"rms_norm_eps"}.getFloat(1e-6))
+  let epsVal =
+    if eps.isSome: eps.get()
+    else: cfg["rms_norm_eps"].getFloat(1e-6)
+  RmsNorm.init(weight, quant, epsVal)
 
 proc load*(_: type GemmaRmsNorm, st: Safetensor, cfg: JsonNode, prefix: string, device = kCPU): GemmaRmsNorm =
   ## Load a Gemma-style RMS norm (weight applied as 1 + w) from safetensors.

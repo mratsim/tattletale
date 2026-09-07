@@ -49,6 +49,11 @@ type InferenceContext* = ref object
   ## first use by the GDN layer forward, indexed by layer index.
   gdnConvState*: seq[Tensor]  ## Per GDN layer: [conv_dim, 3] BF16 causal-conv history
   gdnSsmState*: seq[Tensor]   ## Per GDN layer: [num_v_heads, Dk, Dv] F32 SSM state
+  ## LFM2 short-conv per-layer recurrent state, indexed by layer index:
+  ## the last K-1 pre-conv inputs ([conv_dim, K-1] bf16). Conv layers
+  ## carry their whole context here.
+  ## Allocation happens lazily inside the Lfm2ShortConv layer forward.
+  convState*: seq[Tensor]  ## Per LFM2 conv layer: [conv_dim, K-1] BF16 causal-conv history
 
 proc init*(
     _: type InferenceContext,
@@ -75,7 +80,6 @@ proc init*(
     head_dim: head_dim
   )
 
-
 proc ensureGdnStates*(
     ctx: var InferenceContext,
     layer_idx, convDim, numVHeads, keyDim, valueDim: int,
@@ -101,6 +105,26 @@ proc ensureGdnStates*(
       convDim, 3, F.tensorOptions(F.kBFloat16, device))
     ctx.gdnSsmState[layer_idx] = F.zeros(
       numVHeads, keyDim, valueDim, F.tensorOptions(F.kFloat32, device))
+
+proc ensureConvStates*(
+    ctx: var InferenceContext,
+    layer_idx, convDim, convWidth: int,
+    device: DeviceKind) =
+  ## Allocate the LFM2 short-conv state for `layer_idx` (zeros).
+  ##
+  ## Called by the Lfm2ShortConv layer forward on every pass. The seq
+  ## grows to at least 14 slots on first use, and only nil slots
+  ## are filled, so a live payload is never reallocated mid-forward.
+  ## clearState drops the seq so a new sequence starts from zero state.
+  ##
+  ## convState holds the whole per-sequence conv history.
+  ## TODO: chunked short-conv prefill and a rolling conv window. Remove
+  ## when prefill is chunked and the state width is capped at K-1.
+  if ctx.convState.len <= layer_idx:
+    ctx.convState.setLen(max(layer_idx + 1, 14))
+  if ctx.convState[layer_idx].isNil:
+    ctx.convState[layer_idx] = F.zeros(
+      convDim, convWidth, F.tensorOptions(F.kBFloat16, device))
 
 proc setRopeForPositions*(ctx: var InferenceContext, rotary: RotaryPositionEmbeddingRef) =
   ## Populate ctx.cos and ctx.sin from the model's RoPE cache.
@@ -130,6 +154,7 @@ proc clearState*(ctx: var InferenceContext) =
   ctx.v_gather_buf = nil
   ctx.gdnConvState = default(seq[Tensor])
   ctx.gdnSsmState = default(seq[Tensor])
+  ctx.convState = default(seq[Tensor])
 
 proc setPositionIds*(ctx: var InferenceContext, position_ids: Tensor) =
   ## Set position_ids for current forward pass.

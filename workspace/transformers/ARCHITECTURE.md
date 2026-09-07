@@ -25,7 +25,7 @@ flowchart LR
     subgraph Load["Model loading"]
         A["config.json + safetensors"] --> B["loadModel (src/models.nim)"]
         B --> C["ModelRegistry dispatch by architecture"]
-        C --> D["qwen3 model build (src/models/qwen3.nim)"]
+        C --> D["model build: qwen3, qwen3_5, lfm2 (src/models/)"]
     end
 
     subgraph Generate["Generation (generate proc)"]
@@ -69,7 +69,9 @@ workspace/transformers/
 │   ├── models/
 │   │   ├── all_interfaces.nim  # Model iface (iface pkg) + compile-time ModelRegistry
 │   │   ├── all_reexports.nim
-│   │   └── qwen3.nim           # Qwen3 model implementation, registers in registry
+│   │   ├── qwen3.nim           # Qwen3 model implementation, registers in registry
+│   │   ├── qwen3_5.nim         # Qwen3.5 model implementation, registers in registry
+│   │   └── lfm2.nim            # LFM2.5 model implementation, registers in registry
 │   ├── layers.nim              # Layer union type; to() device/dtype conversion
 │   ├── layers/
 │   │   ├── embedding.nim       # token embeddings
@@ -79,6 +81,7 @@ workspace/transformers/
 │   │   ├── norm.nim            # RMSNorm
 │   │   ├── rope.nim            # rotary position embeddings (cos/sin cache)
 │   │   ├── attn.nim            # grouped attention over KV pages
+│   │   ├── short_conv.nim      # gated short conv, per-layer conv state carry (LFM2)
 │   │   └── transformer.nim     # TransformerBlock composition
 │   ├── quantizations/
 │   │   ├── exl3.nim            # EXL3 decode constants / codebook decoding
