@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate a minimal safetensors fixture to reproduce the shape aliasing bug.
+Generate a minimal safetensor fixture to reproduce the shape aliasing bug.
 
 This creates a file with multiple tensors of different shapes to test
 that loading multiple tensors doesn't corrupt their shape metadata.

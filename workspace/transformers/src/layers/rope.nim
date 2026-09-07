@@ -9,7 +9,7 @@ import
   workspace/libtorch as F
 
 type
-  RotaryPositionEmbeddingRef* = ref object
+  RotaryPositionEmbedding* = ref object
     ## Rotary Position Embedding (RoPE): precomputed cosine/sine lookup table.
     ##
     ## **LIFETIME**: Per-model. Created once by `new()` at model initialization;
@@ -69,10 +69,10 @@ type
     ##
     ##  ```nim
     ##  # Model init (once)
-    ##  let rotary = RotaryPositionEmbeddingRef.new(128, 8192, 1e6, kBFloat16, kCPU)
+    ##  let rotary = RotaryPositionEmbedding.new(128, 8192, 1e6, kBFloat16, kCPU)
     ##
     ##  # Partial rotary: only the first 64 of 256 dims rotate (Qwen3.5)
-    ##  let rotary = RotaryPositionEmbeddingRef.new(256, 262144, 1e7, kBFloat16, kCPU, rotary_dim = 64)
+    ##  let rotary = RotaryPositionEmbedding.new(256, 262144, 1e7, kBFloat16, kCPU, rotary_dim = 64)
     ##
     ##  # Each forward pass: model calls ctx.setRopeForPositions(rotary)
     ##  ctx.setRopeForPositions(rotary)
@@ -112,9 +112,7 @@ func applyRopeImpl(
   ##
   ## Only the first `rotary_dim` columns of head_dim rotate (`q_rot * cos +
   ## rotateHalf(q_rot) * sin`, NEOX pairwise repetition). Columns
-  ## `rotary_dim ..< head_dim` pass through unchanged. This matches the
-  ## vendored `apply_rotary_pos_emb` (rotary_dim = cos.shape[-1], split
-  ## q_rot/q_pass, rotate q_rot, concatenate).
+  ## `rotary_dim ..< head_dim` pass through unchanged.
   doAssert cos.dim == 2, "applyRopeImpl: cos must be 2D (seq, rotary_dim), got " & $cos.dim & "D"
   doAssert sin.dim == 2, "applyRopeImpl: sin must be 2D (seq, rotary_dim), got " & $sin.dim & "D"
 
@@ -150,12 +148,12 @@ func applyRopeImpl(
     result = (F.cat([qRotated, qPass], -1).transpose(1, 2),
               F.cat([kRotated, kPass], -1).transpose(1, 2))
 
-func new*(_: type RotaryPositionEmbeddingRef,
+func new*(_: type RotaryPositionEmbedding,
       head_dim, max_seq_len: int,
       rope_theta: float64,
       dtype: ScalarKind,
       device: DeviceKind,
-      rotary_dim = -1): RotaryPositionEmbeddingRef =
+      rotary_dim = -1): RotaryPositionEmbedding =
   ## Build RoPE lookup table for all positions `0..max_seq_len-1`.
   ##
   ## `rotary_dim` defaults to `head_dim` (full rotation). Pass a smaller value
@@ -200,13 +198,13 @@ func new*(_: type RotaryPositionEmbeddingRef,
   result.cos_cache = F.cat([cos_half, cos_half], -1).to(dtype).to(device)
   result.sin_cache = F.cat([sin_half, sin_half], -1).to(dtype).to(device)
 
-proc ropeByPositions*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (Tensor, Tensor) =
+proc ropeByPositions*(self: RotaryPositionEmbedding, position_ids: Tensor): (Tensor, Tensor) =
   ## Slice cos/sin cache using position_ids.
   ##
   ## **input_ids vs position_ids — they are NOT the same**:
   ##
   ##   - `input_ids`: Token IDs. *What* to compute (e.g., `[9707, 11, 1246]` = "Hello, how")
-  ##   - `position_ids`: Absolute positions in the sequence. *Where* each token sits
+  ##   - `position_ids`: Absolute positions in the sequence. *Where* each token goes
   ##
   ##   For the common case (prefill from 0, decode sequentially):
   ##     input_ids = `[9707, 11, 1246]`  →  position_ids = `[0, 1, 2]`
@@ -236,7 +234,7 @@ proc ropeByPositions*(self: RotaryPositionEmbeddingRef, position_ids: Tensor): (
   result = (self.cos_cache.index_select(0, pos_ids), self.sin_cache.index_select(0, pos_ids))
 
 proc applyRope*(
-    self: RotaryPositionEmbeddingRef,
+    self: RotaryPositionEmbedding,
     q: Tensor,
     k: Tensor,
     cos, sin: Tensor): (Tensor, Tensor) =

@@ -12,25 +12,27 @@
 
 import
   pkg/packedjson,
-  pkg/packedjson,
   std/tables,
   workspace/safetensors,
   workspace/libtorch,
+  workspace/safetensors/src/collections,
   ../layers/linear,
   ../layers/lmhead,
   ../layers/norm,
   ../layers/embedding,
+  ../layers/ffn,
   ./datatypes
 
 export datatypes
 
 type
   QuantLoaders* = object
-    linear*: proc(st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind): Linear {.nimcall.}
-    rmsNorm*: proc(st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind): Tensor {.nimcall.}
-    embedding*: proc(st: Safetensor, prefix: string, cfg: JsonNode, device: DeviceKind): Tensor {.nimcall.}
-    lmHead*: proc(st: Safetensor, device: DeviceKind): LMHead {.nimcall.}
-    activationDtype*: ScalarKind  ## Activation dtype for this quant format
+    ## Load quantized layers.
+    ## In practice, only linear and LMHead layers are quantized.
+    linear*: proc(view: SafetensorsCollection, prefix: string, cfg: JsonNode, device: DeviceKind): Linear {.nimcall.}
+    lmHead*: proc(view: SafetensorsCollection, device: DeviceKind): LMHead {.nimcall.}
+    deployDtype*: ScalarKind
+    ## Deployment dtype for all non-quantized tensors, storage dtype aside.
 
 var QuantLoaderRegistry* {.compileTime.}: Table[QuantFormatKind, QuantLoaders]
   ## Compile-time registry populated by codec static blocks.
