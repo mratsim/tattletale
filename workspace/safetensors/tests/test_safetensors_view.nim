@@ -9,12 +9,15 @@ import
   std/unittest,
   std/os,
   std/math,
-  std/memfiles,
   std/strformat,
   std/strutils,
   std/tables,
   workspace/safetensors,
+  std/importutils,
+  workspace/safetensors/src/safetensors {.all.},
   workspace/libtorch as torch
+
+privateAccess(SafetensorObj)
 
 const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"
 
@@ -67,10 +70,7 @@ proc main() =
       let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
       check fileExists(fixturePath)
 
-      var memFile = memFiles.open(fixturePath, mode = fmRead)
-      defer: close(memFile)
-
-      var st = safetensors.load(memFile)
+      var st = Safetensor.open(fixturePath)
 
       let key = "F64_vandermonde_5x5"
       check st.tensors.hasKey(key)
@@ -87,10 +87,7 @@ proc main() =
       let fixturePath = FIXTURES_DIR / "vandermonde.safetensors"
       check fileExists(fixturePath)
 
-      var memFile = memFiles.open(fixturePath, mode = fmRead)
-      defer: close(memFile)
-
-      var st = safetensors.load(memFile)
+      var st = Safetensor.open(fixturePath)
 
       let key = "BF16_vandermonde_5x5"
       check st.tensors.hasKey(key)
@@ -103,14 +100,11 @@ proc main() =
       let actualTensor = st.getTensorView(key)
       check actualTensor.equal(expectedTensor)
 
-    test "load python-generated safetensors fixtures (view)":
+    test "open python-generated safetensor fixtures (view)":
       let fixturePath = FIXTURES_DIR / "fixtures.safetensors"
       check fileExists(fixturePath)
 
-      var memFile = memFiles.open(fixturePath, mode = fmRead)
-      defer: close(memFile) # TODO - close them after data is loaded but before testing to ensure we own the buffer
-
-      var st = safetensors.load(memFile)
+      var st = Safetensor.open(fixturePath)
 
       var count = 0
       for dtype in TestedDtypes:

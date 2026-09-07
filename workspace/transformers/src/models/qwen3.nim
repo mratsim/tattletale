@@ -8,7 +8,6 @@
 import
   std/options,
   std/os,
-  std/memfiles,
   std/tables,
   pkg/iface,
   pkg/packedjson,
@@ -19,6 +18,7 @@ import
   ../layers,
   ../deserialization,
   ../quantizations/datatypes,
+  workspace/safetensors/src/collections,
   ../stateful/inference_context,
   ./all_interfaces
 
@@ -94,41 +94,26 @@ proc loadQwen3Config(path: string): Qwen3Config =
   let json = path.parseFile()
   result = parseQwen3Config(json)
 
-proc numKvGroups(cfg: Qwen3Config): int =
-  cfg.num_attention_heads div cfg.num_key_value_heads
-
 ################################################################################
 #                          Qwen3 Model                                         #
 ################################################################################
 
 type
+  Qwen3DecoderLayer = DecoderLayer[RopeGQAttention[RmsNorm], GatedDenseFFN, RmsNorm]
+
   Qwen3Model* = ref object
     embedTokens: Embedding
-    layers: seq[TransformerBlock]
+    layers: seq[Qwen3DecoderLayer]
     norm: RmsNorm
     lmHead: LMHead
     config*: Qwen3Config
-    rotary*: RotaryPositionEmbeddingRef
+    rotary*: RotaryPositionEmbedding
     tokenizer*: BPETokenizer
     device*: DeviceKind
 
 proc forward*(self: Qwen3Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
-  ## Forward pass for Qwen3 model.
-  ##
-  ## Args:
-  ##   ctx: InferenceContext with KV caches and position_ids
-  ##   input_ids: Input token IDs of shape (batch, seq_len)
-  ##
-  ## Returns:
-  ##   Logits of shape (batch, seq_len, vocab_size)
-  ##
-  ## Computes:
-  ##   x = self.embedTokens(input_ids)
-  ##   ctx.setRopeForPositions(self.rotary)
-  ##   for layer in self.layers:
-  ##     (x, residual) = layer(ctx, x, residual)
-  ##   x = self.norm(x + residual)
-  ##   return self.lmHead(x)
+  ## Input: (batch, seq_len) token ids.
+  ## Output: logits of (batch, seq_len, vocab_size).
 
   var x = self.embedTokens(input_ids)
 
@@ -173,20 +158,17 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
   ## deserialization.nim and QuantLoaderRegistry.
   let config = loadQwen3Config(modelPath / "config.json")
   let weightsPath = modelPath / "model.safetensors"
-  var weightsMemFile = memFiles.open(weightsPath, mode = fmRead)
-  defer: close(weightsMemFile)
-  var weightsSt = safetensors.load(weightsMemFile)
+  let weights = SafetensorsCollection.open(weightsPath)
 
   # Raw config JSON for deserialization (codecs inspect quantization_config)
   let cfgJson = (modelPath / "config.json").parseFile()
-  let actDtype = activationDtype(cfgJson)
+  let actDtype = getDeployDtype(cfgJson)
 
-  let embedWeight = Embedding.load(weightsSt, cfgJson, "model.embed_tokens", device)
-  let embedTokens = Embedding.init(embedWeight)
+  let embedTokens = Embedding.load(weights, cfgJson, "model.embed_tokens", device)
 
-  var layers = newSeq[TransformerBlock](config.num_hidden_layers)
+  var layers = newSeq[Qwen3DecoderLayer](config.num_hidden_layers)
 
-  let rotary = RotaryPositionEmbeddingRef.new(
+  let rotary = RotaryPositionEmbedding.new(
     config.head_dim,
     config.max_position_embeddings,
     config.rope_theta,
@@ -198,30 +180,17 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
 
     let lp = "model.layers." & $i & "."
 
-    let attn_norm = RmsNorm.load(weightsSt, cfgJson, lp & "input_layernorm", device)
-    let mlp_norm = RmsNorm.load(weightsSt, cfgJson, lp & "post_attention_layernorm", device)
-    let qNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.q_norm", device)
-    let kNorm = RmsNorm.load(weightsSt, cfgJson, lp & "self_attn.k_norm", device)
-
-    let qProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.q_proj", device)
-    let kProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.k_proj", device)
-    let vProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.v_proj", device)
-    let oProj = Linear.load(weightsSt, cfgJson, lp & "self_attn.o_proj", device)
-    let gateProj = Linear.load(weightsSt, cfgJson, lp & "mlp.gate_proj", device)
-    let upProj = Linear.load(weightsSt, cfgJson, lp & "mlp.up_proj", device)
-    let downProj = Linear.load(weightsSt, cfgJson, lp & "mlp.down_proj", device)
-    let attn = RopeGQAttention.init(
-      i, lp & "self_attn",
-      qProj, kProj, vProj, oProj,
-      qNorm, kNorm,
+    let attn_norm = RmsNorm.load(weights, cfgJson, lp & "input_layernorm", device)
+    let mlp_norm = RmsNorm.load(weights, cfgJson, lp & "post_attention_layernorm", device)
+    let attn = RopeGQAttention[RmsNorm].load(
+      weights, cfgJson, lp & "self_attn", i,
       config.num_attention_heads, config.num_key_value_heads, config.head_dim,
-      rotary
-    )
-    let mlp = GatedMLP.init(gateProj, upProj, downProj, kSilu)
-    layers[i] = TransformerBlock.init(i, attn_norm, attn, mlp_norm, mlp)
+      rotary, device)
+    let mlp = GatedDenseFFN.load(weights, cfgJson, lp & "mlp", device)
+    layers[i] = Qwen3DecoderLayer.init(attn_norm, attn, mlp_norm, mlp)
 
-  let norm = RmsNorm.load(weightsSt, cfgJson, "model.norm", device)
-  let lmHead = LMHead.load(weightsSt, cfgJson, embedTokens, device)
+  let norm = RmsNorm.load(weights, cfgJson, "model.norm", device)
+  let lmHead = LMHead.load(weights, cfgJson, embedTokens, device)
   let tokenizerPath = modelPath / "tokenizer.json"
   let tokenizer = loadHFTokenizer(tokenizerPath)
   result = Qwen3Model(
@@ -235,10 +204,10 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     device: device
   )
 
-proc loadQwen3Model*(modelPath: string, device = kCPU): Model =
+proc loadQwen3Model*(modelPath: string, device = kCPU): AnyModel =
   let qwen3Model = loadQwen3ModelRaw(modelPath, device)
-  # iface generates to[Model] converter automatically
-  qwen3Model.to(Model)
+  # iface generates to[AnyModel] converter automatically
+  qwen3Model.to(AnyModel)
 
 static:
   # Register Qwen3 model in the registry

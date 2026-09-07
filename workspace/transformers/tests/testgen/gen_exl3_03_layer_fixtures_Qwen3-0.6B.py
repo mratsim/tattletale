@@ -4,10 +4,10 @@ Generate EXL3 layer fixtures for Qwen3-0.6B using exllamav3 CUDA backend.
 
 This script:
 1. Loads the EXL3-quantized model (trellis + suh + svh per linear layer)
-2. Reconstructs weights via q_exl3_common
+2. Reconstructs weights via fixture_exl3_common
 3. Runs EXL3 linear forward (Hadamard + GEMM + Hadamard) on CUDA
 4. Runs attention and transformer block forward with long residual stream pattern
-5. Saves per-layer fixtures for Nim testing (test_qwen3_03_layers_exl3.nim)
+5. Saves per-layer fixtures for Nim testing (t_exl3_qwen3_03_layers.nim)
 
 Space-saving: All weights come from the EXL3 model file. Only inputs/outputs are saved.
 
@@ -53,7 +53,7 @@ if "TORCH_CUDA_ARCH_LIST" not in os.environ:
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPT_DIR)
 
-from q_exl3_common import (
+from fixture_exl3_common import (
     get_exl3_tensors,
     get_in_features_out_features,
     derive_K,
@@ -69,13 +69,13 @@ from q_exl3_common import (
 # ─── Try CUDA backend ───
 USE_CUDA: bool = False
 try:
-    from q_exl3_common import reconstruct_orig_exl3
+    from fixture_exl3_common import reconstruct_orig_exl3
     USE_CUDA = True
     print(f"  [OK] exllamav3 CUDA extension loaded")
 except Exception as e:
     print(f"  [WARN] exllamav3 CUDA extension not available: {e}")
     print(f"  [WARN] Falling back to PyTorch reimpl")
-    from q_exl3_common import reconstruct_reimpl_exl3
+    from fixture_exl3_common import reconstruct_reimpl_exl3
 
 # ─── Determinism ──────────────────────────────────────────────────────
 torch.backends.cudnn.deterministic = True

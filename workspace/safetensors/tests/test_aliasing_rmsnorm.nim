@@ -4,10 +4,9 @@
 #
 # STANDALONE REPRODUCTION: Tensor shape corruption bug with RMSnorm
 #
-# NO dependencies on transformers package - uses only safetensors fixtures.
+# NO dependencies on transformers package - uses only safetensor fixtures.
 
 import
-  std/memfiles,
   std/options,
   std/os,
   std/strformat,
@@ -23,22 +22,19 @@ const
   ModelPath = FixtureDir / "model.safetensor"
 
 proc main() =
-  runTest "Tensor shape corruption bug":
+  runCppTest "Tensor shape corruption bug":
     proc(): bool =
       echo "=== TENSOR SHAPE CORRUPTION BUG ==="
       echo ""
-      echo "ROOT CAUSE: Loading a new safetensors file corrupts"
+      echo "ROOT CAUSE: Loading a new safetensor corrupts"
       echo "            the shape of previously loaded tensors."
       echo ""
       echo "This happens DURING getTensorOwned, NOT during layer init."
       echo ""
 
       # Step 1: Load weights ONCE from model file
-      echo "Step 1: Load weights from model.safetensor (once)..."
-      var weightsMemFile = memFiles.open(ModelPath, mode = fmRead)
-      defer: close(weightsMemFile)
-
-      var weightsSt = safetensors.load(weightsMemFile)
+      echo "Step 1: Load weights from the model safetensor (once)..."
+      var weightsSt = Safetensor.open(ModelPath)
       let inputLnWeight = weightsSt.getTensorOwned("input_layernorm.weight")
       let postAttnWeight = weightsSt.getTensorOwned("post_attention_layernorm.weight")
 
@@ -63,18 +59,13 @@ proc main() =
         echo "    postAttnWeight.shape = ", postAttnWeight.shape
 
         # Load fixture - THIS IS WHERE CORRUPTION HAPPENS
-        var fixtureMemFile = memFiles.open(fixturePath, mode = fmRead)
-        defer: close(fixtureMemFile)
-
-        var st = safetensors.load(fixtureMemFile)
+        var st = Safetensor.open(fixturePath)
         let inputHiddenStates = st.getTensorOwned("input_hidden_states")
-        let layerPath = st.metadata.unsafeGet().getOrDefault("layer", "")
 
         echo "  After loading fixture:"
         echo "    inputLnWeight.shape = ", inputLnWeight.shape
         echo "    postAttnWeight.shape = ", postAttnWeight.shape
         echo "    inputHiddenStates.shape = ", inputHiddenStates.shape
-        echo "    layerPath = ", layerPath
 
         # Check if shapes changed
         let inputLnShape = @(inputLnWeight.shape)

@@ -26,15 +26,13 @@ import torch
 from safetensors import safe_open
 from safetensors import torch as st
 
-# The reference transformers checkout is the source of truth.
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-VENDORED_SRC = os.environ.get(
-    "QWEN35_VENDORED_SRC",
-    os.path.join(_REPO_ROOT, "_references_prod", "transformers", "src"))
-if not os.path.isdir(VENDORED_SRC):
+# The pinned transformers checkout is the source of truth for generated
+# bytes. QWEN35_VENDORED_SRC must point at its src directory. There is no default location.
+VENDORED_SRC = os.environ.get("QWEN35_VENDORED_SRC")
+if not VENDORED_SRC or not os.path.isdir(VENDORED_SRC):
     raise SystemExit(
-        f"[gen_qwen3_5_attn_fixtures] vendored modeling not found at {VENDORED_SRC}. "
-        "Set QWEN35_VENDORED_SRC to the _references_prod/transformers/src directory")
+        "[gen_qwen3_5_attn_fixtures] set QWEN35_VENDORED_SRC to the src directory of the pinned transformers "
+        "checkout recorded in the fixtures metadata")
 sys.path.insert(0, VENDORED_SRC)
 
 from transformers.models.qwen3_5.modeling_qwen3_5 import (

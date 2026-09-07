@@ -17,7 +17,6 @@
 ## See TensorInfo.shape documentation in safetensors.nim.
 
 import
-  std/memfiles,
   std/os,
   workspace/safetensors,
   workspace/libtorch
@@ -42,10 +41,7 @@ proc main() =
     echo "❌ Fixture not found. Run generate_multi_shape_tensors.py first."
     quit(1)
 
-  var mf = memFiles.open(FIXTURE_PATH, mode = fmRead)
-  defer: mf.close()
-
-  var st = safetensors.load(mf)
+  var st = Safetensor.open(FIXTURE_PATH)
 
   echo "Loading tensors and verifying shapes:"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

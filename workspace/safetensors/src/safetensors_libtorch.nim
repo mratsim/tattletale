@@ -6,10 +6,15 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  ./safetensors,
   std/memfiles,
   std/tables,
+  std/importutils,
   workspace/libtorch
+
+import ./safetensors {.all.}
+import ./collections {.all.}
+privateAccess(SafetensorObj)
+privateAccess(SafetensorsCollectionObj)
 
 # #######################################################################
 #
@@ -54,6 +59,15 @@ proc toTorchType*(dtype: ST_dtype): ScalarKind {.inline.} =
     else:
       raise newException(ValueError, "No direct libtorch mapping for safetensors dtype: " & $dtype)
 
+proc hasTensor*(st: Safetensor, tensorName: string): bool {.inline.} =
+  ## True when `st`'s header holds `tensorName`.
+  ## Loaders use it to probe optional tensors (.bias, .mcg, .mul1).
+  st.tensors.hasKey(tensorName)
+
+proc hasTensor*(view: SafetensorsCollection, tensorName: string): bool {.inline.} =
+  ## True when the collection's weight map routes `tensorName` to a file.
+  view.weightMap.hasKey(tensorName)
+
 proc getTensorView*(st: Safetensor, tensorName: string): Tensor =
   ## Get a memory view to the tensor data.
   ## Returns a `Tensor` that views the underlying memory-mapped data.
@@ -61,7 +75,7 @@ proc getTensorView*(st: Safetensor, tensorName: string): Tensor =
   ## Memory safety:
   ##   ⚠️ WARNING: The returned `Tensor` is a view into `st.memFile`.
   ##   The tensor MUST NOT outlive the underlying memory mapping.
-  ##   If the `MemFile` is closed, accessing this tensor will cause undefined behavior / crash.
+  ##   If the mapping is released, accessing this tensor will cause undefined behavior / crash.
   ##
   ## For safe tensor loading, use `getTensorOwned` instead.
   ## This is intended to:
@@ -70,14 +84,14 @@ proc getTensorView*(st: Safetensor, tensorName: string): Tensor =
   ##
   ## Lifetime:
   ##   The tensor is valid as long as `st` is valid, which is tied to
-  ##   the original `MemFile` passed to `load`.
+  ##   the `MemFile` acquired by `open` and released by the destructor.
   let view = st.getMmapView(tensorName)
   let info = st.tensors[tensorName]
   return from_blob(view.data, info.shape, info.dtype.toTorchType())
 
 proc getTensorOwned*(st: Safetensor, tensorName: string, device = kCPU): Tensor =
   ## Get an owned copy of the tensor data.
-  ## Returns a `TorchTensor` that owns its data, safe to use after closing the `MemFile`.
+  ## Returns a `TorchTensor` that owns its data, safe to use after the mapping is released.
   ##
   ## This is the recommended way to load tensors for inference.
   ## The tensor is cloned to `device` memory (default CPU).
@@ -89,3 +103,20 @@ proc getTensorOwned*(st: Safetensor, tensorName: string, device = kCPU): Tensor 
   ## Returns:
   ##   An owned `TorchTensor` on `device`.
   st.getTensorView(tensorName).to(device, copy=true) # Force copy
+
+proc getTensorOwned*(view: SafetensorsCollection, tensorName: string, device = kCPU): Tensor =
+  ## Get an owned copy of the tensor data of `tensorName`.
+  ## Weight map routes the name to the owning safetensor file.
+  ## That file answers the header: source of truth for the data it holds.
+  ##
+  ## This is the recommended way to load tensors for inference.
+  ## The tensor is cloned to `device` memory (default CPU).
+  ##
+  ## Args:
+  ##   view: A collection that is alive for the duration of the copy
+  ##   tensorName: Name of the tensor to load
+  ##
+  ## Returns:
+  ##   An owned `TorchTensor` on `device`, independent of every mapping.
+  ## Raises ValueError naming the tensor when the collection holds no entry.
+  view.files[view.fileOf(tensorName)].getTensorOwned(tensorName, device)

@@ -259,7 +259,7 @@ proc forward*(self: var TransformerBlock, x: Tensor, residual: Option[Tensor]): 
   ##   (mlp_out, residual)
 ```
 
-#### MLP Forward (mlp.nim)
+#### MLP Forward (ffn.nim)
 
 ```nim
 proc forward*(self: GatedMLP, x: Tensor): Tensor =

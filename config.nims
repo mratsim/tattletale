@@ -145,25 +145,25 @@ iterator getTestCommands(path: string; extraFlags = ""; compiler = "nim c"): str
 
 task test_libtorch, "Test workspace/libtorch":
   withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/libtorch/tests/raw_torch_tensors"):
+    for cmd in getTestCommands("workspace/libtorch/tests/raw_torch_tensors", compiler = "nim cpp"):
       runCmd(cmd)
-    for cmd in getTestCommands("workspace/libtorch/tests/tensors"):
+    for cmd in getTestCommands("workspace/libtorch/tests/tensors", compiler = "nim cpp"):
       runCmd(cmd)
-    for cmd in getTestCommands("workspace/libtorch/tests/python_integration"):
+    for cmd in getTestCommands("workspace/libtorch/tests/python_integration", compiler = "nim cpp"):
       runCmd(cmd)
 
 task test_safetensors, "Test workspace/safetensors":
   withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/safetensors/tests"):
+    for cmd in getTestCommands("workspace/safetensors/tests", compiler = "nim cpp"):
       runCmd(cmd)
 
 task test_transformers, "Test workspace/transformers":
   withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/transformers/tests"):
+    for cmd in getTestCommands("workspace/transformers/tests", compiler = "nim cpp"):
       runCmd(cmd)
-    for cmd in getTestCommands("workspace/transformers/tests/q_bf16"):
+    for cmd in getTestCommands("workspace/transformers/tests/q_bf16", compiler = "nim cpp"):
       runCmd(cmd)
-    for cmd in getTestCommands("workspace/transformers/tests/q_exl3"):
+    for cmd in getTestCommands("workspace/transformers/tests/q_exl3", compiler = "nim cpp"):
       runCmd(cmd)
 
 task test_toktoktok, "Test workspace/toktoktok":

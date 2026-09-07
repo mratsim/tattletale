@@ -42,10 +42,10 @@ flowchart LR
     end
 
     subgraph Stack["Layer stack (src/layers)"]
-        H2["Embedding"] --> R["TransformerBlock × N"]
+        H2["Embedding"] --> R["TransformerDecodeLayer × N"]
         R --> O["RMSNorm"]
         O --> P["RopeGQAttention"]
-        P --> Q["GatedMLP"]
+        P --> Q["GatedDenseFFN"]
         Q --> S["LMHead"]
     end
 
@@ -75,11 +75,11 @@ workspace/transformers/
 │   │   ├── embedding.nim       # token embeddings
 │   │   ├── linear.nim          # linear projection (incl. EXL3-quantized path)
 │   │   ├── lmhead.nim          # language-model head
-│   │   ├── mlp.nim             # gated MLP
+│   │   ├── ffn.nim             # gated MLP
 │   │   ├── norm.nim            # RMSNorm
 │   │   ├── rope.nim            # rotary position embeddings (cos/sin cache)
 │   │   ├── attn.nim            # grouped attention over KV pages
-│   │   └── transformer.nim     # TransformerBlock composition
+│   │   └── decoder_layers.nim  # DecoderLayer generic composition
 │   ├── quantizations/
 │   │   ├── exl3.nim            # EXL3 decode constants / codebook decoding
 │   │   ├── exl3_codecs.nim     # trellis + lattice codecs
@@ -117,7 +117,7 @@ workspace/transformers/
    the KV cache and page pool. `startSequence` and `decodeStep` allocate pages
    and track `kv_position`; `endSequence` releases them.
 4. **Prefill.** The full prompt tensor is forwarded through the layer stack.
-   Each `TransformerBlock` runs embedding → attention (`RopeGQAttention`) →
+   Each `TransformerDecodeLayer` runs embedding → attention (`RopeGQAttention`) →
    gated MLP → RMSNorm, ending in the `LMHead`. Attention reads/writes KV pages
    through the cache. `kv_position` is set after prefill to reflect total
    prefill tokens before decode allocation.
