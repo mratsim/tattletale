@@ -49,8 +49,11 @@ task make_libpositron_cuda, "Build Positron Cuda kernels in static library":
   # Compiles make_libpositron_cuda.cu directly with nvcc.
   # The .cu file #include's all kernel source files as a single translation unit.
   # Caller must have nvcc on PATH (e.g. export PATH="$VENV/lib/python3.14/site-packages/nvidia/cu13/bin:$PATH")
+  # --allow-unsupported-compiler: the flag is a no-op when the host gcc is
+  # within nvcc's supported range; it lets boxes with gcc > 15 build anyway
+  # (nvcc only fails the version check, the compile itself is unaffected).
   exec("mkdir -p build/")
-  exec "nvcc -lib -O3 --use_fast_math --std=c++17 -o build/libpositron_cuda.a workspace/positron/make_libpositron_cuda.cu"
+  exec "nvcc -lib -O3 --use_fast_math --std=c++17 --allow-unsupported-compiler -o build/libpositron_cuda.a workspace/positron/make_libpositron_cuda.cu"
 
 # Utils
 # --------------------------------------------------
