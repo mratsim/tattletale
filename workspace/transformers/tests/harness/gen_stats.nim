@@ -49,6 +49,7 @@
 ## the selftest bit-exact agreement.
 
 import
+  std/sugar,
   std/os,
   std/strutils,
   workspace/libtorch,
@@ -137,6 +138,141 @@ const RecordedFixtures: seq[(string, seq[EntrySpec])] = @[
       ("one_shot_ssm_states[5]", false, dmDrift, true),
       ("one_shot_conv_output", false, dmExact, true),
       ("one_shot_core_attn_out", false, dmExact, true)]),
+
+  # EXL3 families: every recorded fixture regenerates from the committed
+  # payload, the entries mirror the recorded tensor names of each family.
+  # The final-logits raw payload retired from the tree per the decision-payload
+  # contract: its committed stats sidecar is frozen data, the entry states it.
+  ("fixtures/exl3-01-block-02-trace/layer02_trace.safetensor",
+    @[("after_input_layernorm", false, dmNone, false), ("after_k_norm", false, dmNone, false), ("after_o_proj", false, dmNone, false), ("after_post_layernorm", false, dmNone, false), ("after_q_norm", false, dmNone, false), ("after_residual", false, dmNone, false), ("after_rope_k", false, dmNone, false), ("after_rope_q", false, dmNone, false), ("attn_output", false, dmNone, false), ("k_proj_out", false, dmNone, false), ("mlp_activation", false, dmNone, false), ("mlp_down_out", false, dmNone, false), ("mlp_gate_out", false, dmNone, false), ("mlp_up_out", false, dmNone, false), ("output", false, dmNone, false), ("output_residual", false, dmNone, false), ("q_proj_out", false, dmNone, false), ("v_proj_out", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/attn-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
+    @[("output", true, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/attn-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
+    @[("output", true, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/attn-Qwen3-0.6B-EXL3-5bpw-02.safetensor",
+    @[("output", true, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.down_proj-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.down_proj-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.down_proj-Qwen3-0.6B-EXL3-5bpw-02.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.down_proj-Qwen3-0.6B-EXL3-5bpw-03.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.gate_proj-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.gate_proj-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.gate_proj-Qwen3-0.6B-EXL3-5bpw-02.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.gate_proj-Qwen3-0.6B-EXL3-5bpw-03.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.up_proj-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.up_proj-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.up_proj-Qwen3-0.6B-EXL3-5bpw-02.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-mlp.up_proj-Qwen3-0.6B-EXL3-5bpw-03.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.k_proj-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.k_proj-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.k_proj-Qwen3-0.6B-EXL3-5bpw-02.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.k_proj-Qwen3-0.6B-EXL3-5bpw-03.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.o_proj-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.o_proj-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.o_proj-Qwen3-0.6B-EXL3-5bpw-02.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.o_proj-Qwen3-0.6B-EXL3-5bpw-03.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.q_proj-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.q_proj-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.q_proj-Qwen3-0.6B-EXL3-5bpw-02.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.q_proj-Qwen3-0.6B-EXL3-5bpw-03.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.v_proj-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.v_proj-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.v_proj-Qwen3-0.6B-EXL3-5bpw-02.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/linear-self_attn.v_proj-Qwen3-0.6B-EXL3-5bpw-03.safetensor",
+    @[("output", false, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/transformer-block-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
+    @[("output", true, dmNone, false), ("output_residual", true, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/transformer-block-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
+    @[("output", true, dmNone, false), ("output_residual", true, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/transformer-block-Qwen3-0.6B-EXL3-5bpw-02.safetensor",
+    @[("output", true, dmNone, false), ("output_residual", true, dmNone, false)]),
+  ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/transformer-block-Qwen3-0.6B-EXL3-5bpw-03.safetensor",
+    @[("output", true, dmNone, false), ("output_residual", true, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/final_logits.safetensor",
+    @[("logits", false, dmNone, true)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-00.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-01.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-02.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-03.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-04.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-05.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-06.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-07.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-08.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-09.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-10.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-11.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-12.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-13.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-14.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-15.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-16.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-17.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-18.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-19.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-20.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-21.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-22.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-23.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-24.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-25.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-26.safetensor",
+    @[("layer_output", false, dmNone, false)]),
+  ("fixtures/exl3-03-full-forward-to-logits/Qwen3-0.6B-EXL3-5bpw/layer-27.safetensor",
+    @[("layer_output", false, dmNone, false)]),
 ]
 
 const TestsDir = currentSourcePath().parentDir() / ".."
@@ -160,19 +296,34 @@ proc recordedTensor(st: Safetensor, name: string): Tensor =
 proc main() =
   for (rel, names) in RecordedFixtures:
     let path = TestsDir / rel
-    let st = Safetensor.open(path)
+    # An all-frozen fixture carries no payload: every entry's source retired
+    # from the tree, the committed sidecars stay as recorded. A missing payload
+    # with a regenerable entry stays a hard tooling error (the open below raises).
+    var hasRegenerable = false
+    for e in names:
+      if not e.frozenSource:
+        hasRegenerable = true
+    var st: Safetensor
+    if hasRegenerable:
+      st = Safetensor.open(path)
     var statsFile, descFile: FingerprintStatsFile
     statsFile.schema = FingerprintStatsFileSchema
     descFile.schema = FingerprintStatsFileSchema
     statsFile.source = splitFile(path).name & splitFile(path).ext
     descFile.source = statsFile.source
+    var hasFrozenStats = false
     for (name, withHist, mode, frozenSource) in names:
       if mode != dmNone:
         continue
       if frozenSource:
-        raise newException(ValueError,
-          "fingerprint entry marked frozenSource but fingerprint entries" &
-          " regenerate from the payload always: " & rel & " " & name)
+        # The source retired from the payload (the raw logits of a decision
+        # payload family, for example): the committed stats sidecar is frozen
+        # data, the regenerable entries of the same file byte-verify against
+        # it below.
+        echo "frozen stats entry, source retired from the payload: " &
+          rel & " " & name
+        hasFrozenStats = true
+        continue
       # Fingerprint entries must be regenerable from the committed payload bytes: a missing source
       # is a tooling error and raises.
       let t = recordedTensor(st, name)
@@ -181,10 +332,23 @@ proc main() =
       statsFile.tensors.add ts
     if statsFile.tensors.len > 0:
       let outPath = path & ".stats.json.zst"
-      writeFingerprintStats(outPath, statsFile)
-      var total = 0
-      for ts in statsFile.tensors: total += ts.n
-      echo "wrote " & outPath & " (" & $total & " elements)"
+      if hasFrozenStats:
+        # Frozen stats file: the regenerable entries must still byte-match the
+        # committed sidecar, the frozen entries stay as recorded.
+        let committed = loadFingerprintStats(outPath)
+        for ts in statsFile.tensors:
+          let want = committed.statsTensor(ts.name)
+          if encodeTensorStatsBody(ts) != encodeTensorStatsBody(want):
+            raise newException(ValueError,
+              "regenerable stats entry " & ts.name & " of " & outPath &
+              " byte-diverges from the committed sidecar")
+        echo "frozen stats file verified entry-wise against the committed sidecar: " &
+          outPath
+      else:
+        writeFingerprintStats(outPath, statsFile)
+        var total = 0
+        for ts in statsFile.tensors: total += ts.n
+        echo "wrote " & outPath & " (" & $total & " elements)"
 
     var hasFrozen = false
     for (name, withHist, mode, frozenSource) in names:
