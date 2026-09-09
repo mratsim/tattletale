@@ -5,11 +5,21 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Test Qwen3-0.6B-EXL3-5bpw: token IDs to logit inference with layer intermediates
-## checked against EXL3-specific fixtures.
-## Due to floating point associativity issue, rounding and
-## warp-shuffle reduction, the tests cannot match on CPU
-## and tests against EXL3 fixtures MUST be done with Cuda backend.
+## Test Qwen3-0.6B-EXL3-5bpw: token IDs to logit inference against the
+## exl3-03-full-forward-to-logits family. The reference-device variant replays
+## the chain bit-exactly and checks the final logits through the decision
+## projection with its bit-exact strided probe. A run on any other device is
+## the cross-device class: chained stages accumulate drift linearly, so the
+## per-layer elementwise bound is the chain checkpoint band (fp16 unit, EXL3
+## dequantizes to fp16), the layer outputs also compare against the recorded
+## stats sidecars, and the final logits compare through the recorded
+## quantile fingerprint plus the per-position argmax agreement. The
+## tail-probability checksum of the projection is a reference-device check:
+## the recorded full logits row the softmax integrates retired with the raw
+## tensor, so no cross-device drift row applies to it.
+##
+## Run:
+##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_05_ids_to_logits
 
 import
   std/strformat,
@@ -17,6 +27,7 @@ import
   std/os,
   std/options,
   std/importutils,
+  pkg/jsony,
   workspace/libtorch as F,
   workspace/safetensors,
   workspace/safetensors/src/safetensors {.all.},
@@ -25,6 +36,7 @@ import
   workspace/transformers/src/stateful/kvcache,
   workspace/transformers/src/stateful/page_pool,
   workspace/transformers/src/models/qwen3 {.all.},
+  workspace/transformers/tests/harness,
   workspace/libtorch_testutils
 
 {.experimental: "callOperator".}
@@ -35,8 +47,11 @@ privateAccess(DecoderLayer[RopeGQAttention[RmsNorm], GatedDenseFFN, RmsNorm])
 privateAccess(RopeGQAttention[RmsNorm])
 
 const
-  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-ids-inference" / "Qwen3-0.6B-EXL3-5bpw"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-03-full-forward-to-logits" / "Qwen3-0.6B-EXL3-5bpw"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
+  LogitsChainDepth = 29
+    ## The final logits sit one stage past the last recorded layer: the
+    ## decision-band depth of the accumulated chain law.
 
 proc loadLayerFixture(layerIdx: int): Table[string, Tensor] =
   ## Load EXL3 layer intermediates from safetensor fixture.
@@ -44,109 +59,140 @@ proc loadLayerFixture(layerIdx: int): Table[string, Tensor] =
   var st = Safetensor.open(fixturePath)
   result = initTable[string, Tensor]()
   for name in st.tensors.keys():
-    result[name] = st.getTensorOwned(name, kCuda)
+    result[name] = st.getTensorOwned(name, kCPU)
+
+proc replayChain(dev: F.DeviceKind): Tensor =
+  ## Full 28-layer replay on `dev`, the layer boundaries checked against the
+  ## recorded anchors under the accumulated chain band. Returns the final
+  ## logits.
+  let model = loadQwen3ModelRaw($ModelPath, dev)
+
+  var ctx = InferenceContext.init(
+    num_layers = model.config.num_hidden_layers,
+    batch_size = 1, kv_heads = model.config.num_key_value_heads,
+    max_seq = 4096, head_dim = model.config.head_dim)
+
+  let pool = PagePool.init(
+    64, num_layers = model.config.num_hidden_layers,
+    kv_heads = model.config.num_key_value_heads,
+    head_dim = model.config.head_dim,
+    dtype = F.kFloat16, device = dev)
+  let numPages = ceilDiv(4096, TokensPerPage)
+
+  # Borrow pages once — reused across all layers (each writes to own layerIdx slice)
+  for i in 0 ..< numPages:
+    ctx.pages.add(pool.borrow())
+
+  # Input tokens: "Hello, how are you?"
+  let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0).to(dev)
+
+  # Embedding pass
+  let x = model.embedTokens(inputIds)
+  var hidden = x
+  var residual: Option[Tensor] = none(Tensor)
+
+  echo "Comparing layer-by-layer EXL3 intermediates..."
+  echo "================================================================="
+
+  for layerIdx in 0..<model.layers.len:
+    let fixturePath = FixtureDir / &"layer-{layerIdx:02d}.safetensor"
+    var st = Safetensor.open(fixturePath)
+    let fixtureInput = st.getTensorOwned("layer_input", kCPU).to(dev)
+    let fixtureOutput = st.getTensorOwned("layer_output", kCPU).to(dev)
+    let statsFile = loadFingerprintStats(fixturePath & ".stats")
+    let layer = model.layers[layerIdx]
+
+    let nimInput = if residual.isSome():
+      hidden + residual.unsafeGet()
+    else:
+      hidden
+    let depth = layerIdx + 1
+    discard assertChainCheckpoint(nimInput, fixtureInput, depth,
+      reductionLen = model.config.intermediate_size,
+      msg = &"layer {layerIdx} input", rtol = ChainCheckpointRtolF16)
+
+    # Prepare InferenceContext for this layer — reuse pages, reset positional state
+    ctx.kv_position = 0
+    ctx.position_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64).to(dev)
+    ctx.setRopeForPositions(layer.sequence_mixer.rotary)
+
+    # Forward through layer (long residual stream pattern)
+    let (output, newResidual) = layer(ctx, hidden, residual)
+
+    # Compare: Nim (output + residual) vs EXL3 fixture (layer_output) under
+    # the accumulated chain band, then the recorded stats sidecar.
+    let nimSum = output + newResidual
+    let mw = assertChainCheckpoint(nimSum, fixtureOutput, depth,
+      reductionLen = model.config.intermediate_size,
+      msg = &"layer {layerIdx} output", rtol = ChainCheckpointRtolF16)
+    assertStatsChainBand(nimSum, statsFile.statsTensor("layer_output"), depth,
+      msg = &"layer {layerIdx} output stats")
+    echo &"Layer {layerIdx:02d}: worst band width {mw.worst:.3f}"
+
+    # Update state
+    hidden = output
+    residual = some(newResidual)
+
+  # No drift-scaling check here: the flat ratio-to-first-bound model assumes
+  # a stable per-depth honest drift, and the measured mac-replay widths
+  # against the CUDA recording decline with depth (0.82 at depth 3 down to
+  # 0.09 at depth 27) because the depth-1 boundary anchor sits below the
+  # per-depth drift scale. The per-layer band and mean-drift checks carry
+  # the compounding detection.
+
+  # Final logits
+  echo "================================================================="
+  echo "Final logits:"
+  let finalResidual = residual.get(hidden)
+  let finalNorm = model.norm(hidden + finalResidual)
+  result = model.lmHead(finalNorm)
 
 proc main() =
+  let dev = testDevice()
+
   runCppTest "Qwen3-0.6B-EXL3-5bpw: ids-to-logits — long residual stream vs EXL3 fixtures":
     proc(): bool =
-      ## Strategy:
-      ## - layer_input: should match (same embedding)
-      ## - layer_output + layer_residual (Nim) vs layer_output (HF): should match
-      ## - EXL3 tolerance: 1e-4 (Must use Cuda due to RMSNorm warp-shuffle)
+      echo "    devices: ", compareLine(FixtureDir, dev)
+      let finalLogits = replayChain(dev)
 
-      const tol = 1e-4
+      if dev == F.kCUDA:
+        # Reference-device variant: the chain replays bit-exactly, the final
+        # logits go through the full decision projection with the bit-exact
+        # strided probe and the tail-probability checksum.
+        let projection = zstdReadFixture(
+          FixtureDir / "final_logits.decisions.json.zst"
+        ).fromJson(LogitsProjection)
+        assertProjection(finalLogits, projection,
+          msg = "Qwen3-0.6B-EXL3-5bpw final logits projection")
+      else:
+        # Cross-device variant: the recorded distribution of the retired raw
+        # logits tensor under the accumulated chain band, plus the discrete
+        # argmax agreement per position.
+        let statsFile = loadFingerprintStats(
+          FixtureDir / "final_logits.safetensor.stats")
+        assertStatsChainBand(finalLogits, statsFile.statsTensor("logits"),
+          LogitsChainDepth, msg = "final logits stats")
+        let projection = zstdReadFixture(
+          FixtureDir / "final_logits.decisions.json.zst"
+        ).fromJson(LogitsProjection)
+        let row = finalLogits.contiguous().to(F.kCPU).to(F.kFloat32)
+        for step in projection.steps:
+          let flat = row.narrow(1, step.position, 1).squeeze(1).squeeze(0)
+          let n = flat.numel()
+          let raw = cast[ptr UncheckedArray[float32]](flat.data_ptr(float32))
+          var obsArgmax = 0
+          var obsTop1 = NegInf
+          for i in 0 ..< n:
+            if raw[i].float64 > obsTop1:
+              obsTop1 = raw[i].float64
+              obsArgmax = i
+          if obsArgmax != step.argmaxId:
+            raise newException(HarnessCheckError,
+              "position " & $step.position & " argmax " & $obsArgmax &
+              " != recorded " & $step.argmaxId &
+              " (recorded margin " & $step.argmaxMargin & ")")
 
-      let model = loadQwen3ModelRaw($ModelPath, kCuda)
-
-      # InferenceContext for stateful attention
-      var ctx = InferenceContext.init(
-        num_layers = model.config.num_hidden_layers,
-        batch_size = 1, kv_heads = model.config.num_key_value_heads,
-        max_seq = 4096, head_dim = model.config.head_dim)
-
-      let pool = PagePool.init(
-        64, num_layers = model.config.num_hidden_layers,
-        kv_heads = model.config.num_key_value_heads,
-        head_dim = model.config.head_dim,
-        dtype = F.kFloat16, device = F.kCuda)
-      let numPages = ceilDiv(4096, TokensPerPage)
-
-      # Borrow pages once — reused across all layers (each writes to own layerIdx slice)
-      for i in 0 ..< numPages:
-        ctx.pages.add(pool.borrow())
-
-      # Input tokens: "Hello, how are you?"
-      let inputIds = @[9707.int64, 11, 1246, 525, 498, 30].toTensor().unsqueeze(0).to(kCuda)
-
-      # Embedding pass
-      let x = model.embedTokens(inputIds)
-      var hidden = x
-      var residual: Option[Tensor] = none(Tensor)
-
-      echo "Comparing layer-by-layer EXL3 intermediates..."
-      echo "================================================================="
-
-      for layerIdx in 0..<model.layers.len:
-        let hfFixture = loadLayerFixture(layerIdx)
-        var layer = model.layers[layerIdx]
-
-        # Compare layer_input
-        let nimInput = if residual.isSome():
-          hidden + residual.unsafeGet()
-        else:
-          hidden
-        let inputDiff = (nimInput.to(kFloat32) - hfFixture["layer_input"].to(kFloat32)).abs().max().item(float)
-        echo &"Layer {layerIdx:02d}: input_diff={inputDiff:.2e}"
-
-        if inputDiff > tol:
-          raise newException(ValueError, &"Layer {layerIdx:02d}: layer_input diff = {inputDiff:.6e}")
-
-        # Prepare InferenceContext for this layer — reuse pages, reset positional state
-        ctx.kv_position = 0
-        ctx.position_ids = nil
-        let pos_ids = arange(hidden.size(1)).unsqueeze(0).to(kInt64).to(kCuda)
-        ctx.position_ids = pos_ids
-        ctx.setRopeForPositions(layer.sequence_mixer.rotary)
-
-        # Forward through layer (long residual stream pattern)
-        let (output, newResidual) = layer(ctx, hidden, residual)
-
-        # Compare: Nim (output + residual) vs EXL3 fixture (layer_output)
-        let nimSum = output + newResidual
-        let outputDiff = (hfFixture["layer_output"].to(kFloat32) - nimSum.to(kFloat32)).abs().max().item(float)
-        echo &"  output + residual diff={outputDiff:.2e}"
-
-        # Update state
-        hidden = output
-        residual = some(newResidual)
-
-        if outputDiff > tol:
-          raise newException(ValueError, &"Layer {layerIdx:02d}: output + residual diff = {outputDiff:.6e} (tol={tol})")
-
-      # Final logits comparison
-      echo "================================================================="
-      echo "Final logits:"
-      let finalResidual = residual.get(hidden)
-      let finalNorm = model.norm(hidden + finalResidual)
-      let finalLogits = model.lmHead(finalNorm)
-      # Load EXL3 logits fixture to CPU (save GPU memory)
-      let logitsFixturePath = FixtureDir / "final_logits.safetensor"
-      var logitsSt = Safetensor.open(logitsFixturePath)
-      let hfLogits = logitsSt.getTensorOwned("logits", kCPU)
-      # Compare on CPU to avoid GPU OOM
-      let finalLogits_cpu = finalLogits.to(kCPU).to(kFloat32)
-      let hfLogits_cpu = hfLogits.to(kCPU).to(kFloat32)  # already CPU but no-op is fine
-      echo &"  Nim logits mean: {finalLogits_cpu.mean().item(float):.6f}"
-      echo &"  Nim logits shape: {finalLogits_cpu.shape}"
-      echo &"  Fixture logits mean: {hfLogits_cpu.mean().item(float):.6f}"
-      echo &"  Fixture logits shape: {hfLogits_cpu.shape}"
-      let logitsDiff = (finalLogits_cpu - hfLogits_cpu).abs().max().item(float)
-      echo &"  max_diff: {logitsDiff:.6e}"
-
-      if logitsDiff > tol:
-        raise newException(ValueError, &"Logits diff = {logitsDiff:.6e} (tol={tol})")
-
-      echo "✓ PASS: All layers + logits match within EXL3 tolerance (" & $tol & ")"
+      echo "✓ PASS: All layers and the logits surface checked"
       true
 
 when isMainModule:

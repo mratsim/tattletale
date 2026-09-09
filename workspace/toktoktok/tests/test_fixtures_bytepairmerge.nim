@@ -7,8 +7,9 @@ import std/json
 import std/strutils
 
 import workspace/toktoktok {.all.}
+import workspace/zstd/zstd_highlevel
 
-const FixtureFilePath = currentSourcePath().parentDir() / "fixtures" / "bytepairmerge" / "bytepairmerge.json"
+const FixturePath = currentSourcePath().parentDir() / "fixtures" / "bytepairmerge" / "bytepairmerge"
 
 proc b64DecodeToBytes(b64_str: string): seq[byte] =
   let decoded = decode(b64_str)
@@ -42,7 +43,7 @@ proc runBytePairMergeTests() =
     # coming from Rust vs Pcre2 mismatch on "\p{Han}" (excludes punctuation in Rust)
     # Pcre2 \p{Script=Han} seems to work.
     # See Kimi-K2.5 workaround commit bc8d9df32db81a9d08c4458bce5df2b1098a8f68
-    let content = readFile(FixtureFilePath)
+    let content = readFile(FixturePath & ".json.zst").zstdDecompress(string)
     let fixtureNodes = parseJson(content).getElems()
 
     for fixtureNode in fixtureNodes:

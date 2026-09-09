@@ -19,7 +19,7 @@ if "CUDA_HOME" not in os.environ:
 DEVICE = "cuda:0"
 DTYPE = torch.float16
 HERE = os.path.dirname(os.path.abspath(__file__))
-FIXTURE_DIR = os.path.join(HERE, "..", "fixtures", "exl3-layers", "Qwen3-0.6B-EXL3-5bpw-layer-0")
+FIXTURE_DIR = os.path.join(HERE, "..", "fixtures", "exl3-01-layer-internals", "Qwen3-0.6B-EXL3-5bpw-layer-0")
 MODEL_DIR = os.path.join(HERE, "..", "hf_models", "Qwen3-0.6B-EXL3-5bpw")
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
 

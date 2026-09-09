@@ -11,6 +11,8 @@ Fixtures are JSON files with the format:
 """
 
 import json
+
+from zstd_frame import write_text_zst
 import base64
 from pathlib import Path
 from typing import Dict, List, Any
@@ -226,9 +228,10 @@ def generate_tiktoken_fixtures():
             fixture = generate_fixture(text, filename, encoding)
             fixtures.append({"name": name, **fixture})
 
-        output_path = FIXTURES_DIR / f"tiktoken_{tokenizer_name}.json"
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(fixtures, f, ensure_ascii=False, indent=2)
+        output_path = FIXTURES_DIR / f"tiktoken_{tokenizer_name}.json.zst"
+        write_text_zst(output_path,
+                       json.dumps(fixtures, ensure_ascii=False,
+                                  indent=2).encode("utf-8"))
         print(f"  [OK] Generated {len(fixtures)} fixtures to {output_path}")
 
 
@@ -258,9 +261,10 @@ def generate_tiktoken_from_hf():
             fixture = generate_fixture(text, hf_filename, encoding)
             fixtures.append({"name": name, **fixture})
 
-        output_path = FIXTURES_DIR / f"tiktoken_from_hf_{hf_name}.json"
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(fixtures, f, ensure_ascii=False, indent=2)
+        output_path = FIXTURES_DIR / f"tiktoken_from_hf_{hf_name}.json.zst"
+        write_text_zst(output_path,
+                       json.dumps(fixtures, ensure_ascii=False,
+                                  indent=2).encode("utf-8"))
         print(f"  [OK] Generated {len(fixtures)} fixtures to {output_path}")
 
 

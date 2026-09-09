@@ -22,7 +22,7 @@ import
   workspace/transformers/src/models/qwen35_moe {.all.},
   workspace/transformers/src/models/loading/layer_kinds,
   workspace/transformers/src/models/loading/generation_config,
-  workspace/transformers/tests/transformers_testutils,
+  workspace/transformers/tests/harness,
   workspace/libtorch_testutils
 
 {.experimental: "callOperator".}
@@ -31,7 +31,7 @@ const ModelDir = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3.6
 const WeightsFile1 = ModelDir / "model-00001-of-00026.safetensors"
 const WeightsFile2 = ModelDir / "model-00002-of-00026.safetensors"
 const FixturePath = currentSourcePath().parentDir() / ".." / "fixtures" /
-  "layers" / "Qwen3.6-35B-A3B-layer-0" / "moe_layer0_fixture.json.zip"
+  "bf16-01-layer-internals" / "Qwen3.6-35B-A3B-layer-0" / "moe_layer0_fixture.json.zst"
 
 const Tokens = 6
 const TopK = 8
@@ -42,8 +42,8 @@ const Hidden = 2048
 # Recording environment of the committed routed-block fixture. The suite
 # compares the fixture's meta versions against these consts, so an artifact
 # regenerated in a foreign environment fails the comparison.
-const TorchRecordingVersion = "2.13.0"
-const TransformersRecordingVersion = "5.16.0.dev0"
+const TorchRecordingVersion = "2.14.0"
+const TransformersRecordingVersion = "5.16.1"
 
 type
   MoEFixtureBands = object
@@ -144,6 +144,7 @@ proc main() =
 
   runCppTest "Routed block forward vs fixture within recorded bands":
     proc(): bool =
+      echo "    devices: ", compareLine(splitFile(FixturePath).dir, F.kCPU)
       var st1 = Safetensor.open(WeightsFile1)
       var st2 = Safetensor.open(WeightsFile2)
 
@@ -165,7 +166,7 @@ proc main() =
       let sharedExpert = GatedDenseFFN.init(
         sharedGateProj, sharedUpProj, sharedDownProj)
 
-      let fixture = readFixture(FixturePath).fromJson(MoEFixture)
+      let fixture = zstdReadFixture(FixturePath).fromJson(MoEFixture)
       doAssert fixture.meta.torch_version == TorchRecordingVersion
       doAssert fixture.meta.transformers_version == TransformersRecordingVersion
       let numExpertsPerTok = fixture.meta.num_experts_per_tok
@@ -205,6 +206,22 @@ proc main() =
           doAssert nimIdx.item(int64) == fixIdx.item(int64),
             "topk index mismatch at [" & $tok & ", " & $pos & "]"
       true
+
+  runCppTest "Routed block forward, cross-device variant (device-pair report)":
+    proc(): bool =
+      let runDev = testDevice()
+      echo "    devices: ", compareLine(splitFile(FixturePath).dir, runDev)
+      if runDev == F.kCPU:
+        echo "    the run device matches the recorded device, the reference variant carries the replay"
+        return true
+      # The recorded output and routing-weight bands were measured cpu
+      # against cpu by the generator. The layers family carries
+      # no PROVENANCE.md manifest and states no recorded device, leaving
+      # row-class selection unavailable: the suite skips on the run device.
+      echo "    no cross-device drift row applies: the recorded bands are",
+        " cpu class and the family manifest is absent, the suite skips on ",
+        deviceName(runDev)
+      return true
 
 when isMainModule:
   main()

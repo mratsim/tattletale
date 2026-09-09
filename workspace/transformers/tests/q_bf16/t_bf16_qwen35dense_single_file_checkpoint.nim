@@ -20,6 +20,7 @@ import
   workspace/safetensors/src/safetensors {.all.},
   workspace/transformers/src/models,
   workspace/transformers/src/models/qwen35 {.all.},
+  workspace/transformers/tests/harness,
   workspace/libtorch_testutils
 
 privateAccess(SafetensorObj)
@@ -27,6 +28,8 @@ privateAccess(SafetensorObj)
 const ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3.5-0.8B"
 
 proc main() =
+  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
   runCppTest "Qwen3.5-0.8B single safetensor file - language_model prefix, foreign tensors skipped":
     proc(): bool =
       let weightsPath = ModelPath / "model.safetensors-00001-of-00001.safetensors"
@@ -88,6 +91,25 @@ proc main() =
         "hi", temp = 1.0f, maxTokens = 3, maxContextLen = 512)
       doAssert text.len > 0
 
+      true
+
+  runCppTest "Qwen3.5-0.8B load plumbing, cross-device variant":
+    proc(): bool =
+      # No fixture family: the checkpoint loads by name and the counts
+      # stay device-free bookkeeping. The computed side takes the run
+      # device, the weights still come from the real checkpoint dir.
+      let runDev = testDevice()
+      echo "    device pair: no fixture family, load plumbing runs on ", deviceName(runDev)
+      if runDev == F.kCPU:
+        echo "    the run device matches the recorded device, the reference variant carries the replay"
+        return true
+      let model = loadQwen35ModelRaw(ModelPath, runDev)
+      doAssert model.config.num_hidden_layers == 24
+      doAssert model.config.vocab_size == 248320
+      doAssert model.config.dtype == "bfloat16"
+      let text = loadModel(ModelPath, runDev).generate(
+        "hi", temp = 1.0f, maxTokens = 3, maxContextLen = 512)
+      doAssert text.len > 0
       true
 
 main()

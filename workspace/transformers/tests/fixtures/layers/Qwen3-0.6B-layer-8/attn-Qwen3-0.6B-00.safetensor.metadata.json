@@ -1,5 +1,0 @@
-{
-  "case": "normal_forward",
-  "layer": "model.layers.8.self_attn",
-  "model": "Qwen3-0.6B"
-}

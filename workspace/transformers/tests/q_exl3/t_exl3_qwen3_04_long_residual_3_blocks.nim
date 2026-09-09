@@ -23,7 +23,7 @@ privateAccess(Qwen3Model)
 privateAccess(DecoderLayer[RopeGQAttention[RmsNorm], GatedDenseFFN, RmsNorm])
 
 const
-  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-ids-inference" / "Qwen3-0.6B-EXL3-5bpw"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-03-full-forward-to-logits" / "Qwen3-0.6B-EXL3-5bpw"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
   Tol = 1e-2
 

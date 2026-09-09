@@ -15,6 +15,7 @@ import
   std/os,
   std/importutils,
   pkg/iface,
+  pkg/jsony,
   workspace/libtorch as F,
   workspace/safetensors,
   workspace/transformers/src/layers,
@@ -22,7 +23,8 @@ import
   workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/stateful/page_pool,
   workspace/transformers/src/models/qwen35 {.all.},
-  workspace/transformers/tests/transformers_testutils,
+  workspace/transformers/tests/harness,
+  workspace/transformers/tests/q_bf16/kvcontext,
   workspace/libtorch_testutils
 
 {.experimental: "callOperator".}
@@ -32,7 +34,7 @@ privateAccess(DecoderLayer[GatedDeltaNet, GatedDenseFFN, RmsNormOne])
 privateAccess(DecoderLayer[RopeElementWiseGatedAttention[RmsNormOne], GatedDenseFFN, RmsNormOne])
 
 const
-  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "ids-inference" / "Qwen3.5-0.8B"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "bf16-03-full-forward-to-logits" / "Qwen3.5-0.8B"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3.5-0.8B"
 
 proc openLayerFixture(layerIdx: int): Safetensor =
@@ -40,14 +42,18 @@ proc openLayerFixture(layerIdx: int): Safetensor =
   ## released with the last reference to the reader.
   Safetensor.open(FixtureDir / &"layer-{layerIdx:02d}.safetensor")
 
-proc openFinalLogits(): Safetensor =
-  ## Read the final logits fixture. The result owns its memory mapping
-  ## for its whole lifetime, released when the value goes out of scope.
-  Safetensor.open(FixtureDir / "final_logits.safetensor")
+type
+  FinalLogitsMeta = object
+    ## Metadata of the final-logits projection family: the recorded
+    ## sequential vs chunked band and the payload note.
+    logits_band: Option[float64]
+    note: string
 
 proc main() =
+  assertTorchStamp(FixtureDir)
   runCppTest "Qwen3.5-0.8B ids to logits - 24 layers + final logits vs fixtures":
     proc(): bool =
+      echo "    devices: ", compareReport(FixtureDir, F.kCPU)
       let model = loadQwen35ModelRaw(ModelPath, kCPU)
       doAssert model.layers.len == 24
 
@@ -71,55 +77,99 @@ proc main() =
         # match the vendored sequential replay bit for bit at every layer
         # boundary (0.00 bar).
         assertAllClose(h, st.getTensorOwned("layer_input_seq"),
-          rtol = 0.0, abstol = 0.0, msg = "layer " & $layerIdx & " sequential input mismatch")
+          rtol = 0.0, abstol = 0.0, msg = "layer " & $layerIdx & " input mismatch")
 
         # Tolerances for the chunked comparisons come from the fixture's own
-        # sequential-vs-chunked band, locked below at < 0.05 per layer.
-        # Independent checks: the 0.00-vs-seq asserts plus the band-regime doAsserts.
+        # measured sequential-vs-chunked layer delta, locked below at < 0.05
+        # per layer. Independent checks: the 0.00-vs-seq asserts plus the
+        # band doAsserts.
         let inputBand = maxAbsDiff(st.getTensorOwned("layer_input_seq"),
                                    st.getTensorOwned("layer_input"))
         assertAllClose(h, st.getTensorOwned("layer_input"),
           rtol = 0.0, abstol = inputBand,
-          msg = "layer " & $layerIdx & " chunked input mismatch (fixture band " & $inputBand & ")")
+          msg = "layer " & $layerIdx & " chunked input mismatch (measured layer delta " & $inputBand & ")")
 
         let pair = model.layers[layerIdx].forward(ctx, blockInput, stream)
         blockInput = pair[0]
         stream = some(pair[1])
         h = pair[1] + pair[0]
 
-        assertAllClose(h, st.getTensorOwned("layer_output_seq"),
-          rtol = 0.0, abstol = 0.0, msg = "layer " & $layerIdx & " sequential output mismatch")
-        let outputBand = maxAbsDiff(st.getTensorOwned("layer_output_seq"),
-                                    st.getTensorOwned("layer_output"))
-        doAssert outputBand < 0.05,
-          "layer " & $layerIdx & " fixture band exceeds the documented 0.05 guard"
-        if layerIdx >= 2:
-          doAssert outputBand > 0.0,
-            "layer " & $layerIdx & " sequential and chunked outputs are identical, band not exercised"
-        assertAllClose(h, st.getTensorOwned("layer_output"),
-          rtol = 0.0, abstol = outputBand,
-          msg = "layer " & $layerIdx & " chunked output mismatch (fixture band " & $outputBand & ")")
+        # One recorded input copy per layer boundary. The recorded input
+        # of layer i+1 is the output of layer i, so the chained comparison
+        # checks each block output twice: against this layer's forward
+        # result and as the next layer's input. The chunked-vs-sequential
+        # band of this boundary reappears as the next layer's input band.
+        if layerIdx < model.layers.len - 1:
+          var next = openLayerFixture(layerIdx + 1)
+          assertAllClose(h, next.getTensorOwned("layer_input_seq"),
+            rtol = 0.0, abstol = 0.0,
+            msg = "layer " & $layerIdx & " sequential output mismatch (next layer chained input)")
+          let outputBand = maxAbsDiff(next.getTensorOwned("layer_input_seq"),
+                                      next.getTensorOwned("layer_input"))
+          doAssert outputBand < 0.05,
+            "layer " & $layerIdx & " measured layer delta exceeds the documented 0.05 guard"
+          if layerIdx >= 2:
+            doAssert outputBand > 0.0,
+              "layer " & $layerIdx & " sequential and chunked outputs are identical, band not exercised"
+          assertAllClose(h, next.getTensorOwned("layer_input"),
+            rtol = 0.0, abstol = outputBand,
+            msg = "layer " & $layerIdx & " chunked output mismatch (measured layer delta " & $outputBand & ")")
+        else:
+          # The final block output left the payload. Its recorded surface
+          # lives in the layer-23 descriptor sidecar (dmExact), the
+          # zero-tolerance reference of this boundary.
+          let finalDesc = loadFingerprintStats(
+            FixtureDir / "layer-23.safetensor.descriptors")
+          let finalEntry = finalDesc.statsTensor("layer_output_seq")
+          assertStats(h, finalEntry,
+            descriptorStatsBudget(finalEntry.probeMode),
+            msg = "final block output fingerprint")
+          assertDescriptors(h, finalEntry,
+            msg = "final block output descriptors")
 
       let normed = model.norm(blockInput + stream.get(blockInput))
       let logits = model.lmHead(normed)
 
-      var stF = openFinalLogits()
-
-      # Same contract as the layers: 0.00 against the sequential replay, and
-      # the fixture's own sequential vs chunked band (locked < 0.25, the
-      # generator's documented guard) against the chunked forward.
-      assertAllClose(logits, stF.getTensorOwned("logits_seq"),
-        rtol = 0.0, abstol = 0.0, msg = "logits vs sequential replay mismatch")
-      let logitsBand = maxAbsDiff(stF.getTensorOwned("logits_seq"),
-                                  stF.getTensorOwned("logits"))
-      doAssert logitsBand < 0.25,
-        "logits fixture band exceeds the documented 0.25 guard"
-      doAssert logitsBand > 0.0,
-        "sequential and chunked logits are identical, band not exercised"
-      assertAllClose(logits, stF.getTensorOwned("logits"),
-        rtol = 0.0, abstol = logitsBand,
-        msg = "logits vs chunked forward mismatch (fixture band " & $logitsBand & ")")
+      # Decision projection checks: argmax, the top-2 competing
+      # pair, the argmax margin and the tail-probability checksum,
+      # per position, against the sequential-reference projection
+      # (the 0.00 reference). Raw logits tensors left the tree, only
+      # the sequential vs chunked band survives as recorded metadata
+      # under its documented 0.25 guard.
+      let logitsMeta = zstdReadFixture(
+        FixtureDir / "final_logits.safetensor.metadata"
+      ).fromJson(FinalLogitsMeta)
+      doAssert logitsMeta.logits_band.isSome,
+        "final logits metadata logits_band is not a float"
+      doAssert logitsMeta.logits_band.get() > 0.0 and
+        logitsMeta.logits_band.get() < 0.25,
+        "recorded logits band " & $logitsMeta.logits_band.get() &
+        " outside the documented (0, 0.25) guard"
+      let projection = zstdReadFixture(
+        FixtureDir / "final_logits.decisions.json.zst"
+      ).fromJson(LogitsProjection)
+      assertProjection(logits, projection,
+        msg = "Qwen3.5-0.8B final logits projection")
       true
+
+  runCppTest "Qwen3.5-0.8B ids to logits, cross-device variant (device-pair report)":
+    proc(): bool =
+      let runDev = testDevice()
+      echo "    devices: ", compareReport(FixtureDir, runDev)
+      if compareClass(recordedDevice(recordedFrom(FixtureDir)), runDev) ==
+          sameDeviceBitExact:
+        echo "    the pair selects the reference rows, the reference variant carries the replay"
+        return true
+      # The ids fixtures compare bit-exact on the reference device:
+      # - the dmExact descriptor entries
+      # - the exact layer boundary sums
+      # - the decision projection with its bit-exact strided probe
+      # No cross-device drift tolerance applies, so a flipped run names the
+      # tolerance class and skips.
+      echo "    no cross-device drift row applies: the dmExact descriptors, ",
+        "the exact boundary sums and the bit-exact probe accept zero drift, ",
+        "the suite skips on ", deviceName(runDev)
+      return true
 
 when isMainModule:
   main()

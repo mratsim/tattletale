@@ -15,16 +15,16 @@ requires-python = "==3.14.*"
 # For now Python is mostly used to generate test vectors.
 [dependency-groups]
 test-vectors = [
-    "torch==2.11.0",
+    "torch==2.14.0",
     "safetensors>=0.7.0",
-    "transformers>=5.2.0",
+    "transformers==5.16.1",
     "tokenizers>=0.20.0",
     "tiktoken>=0.12.0",
 ]
 
 bench = [
     "tokendagger == 0.1.1",
-    "flash_attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.4/flash_attn-2.8.3+cu130torch2.11-cp314-cp314-linux_x86_64.whl ; sys_platform == 'linux'"
+    "flash_attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.10.0/flash_attn-2.7.4+cu130torch2.14-cp314-cp314-linux_x86_64.whl ; sys_platform == 'linux'"
 ]
 
 [tool.uv]

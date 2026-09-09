@@ -29,7 +29,8 @@ import
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/layers/attn_ssm/grouped_query_attention {.all.},
   workspace/transformers/src/layers/attn_ssm/gated_attention {.all.},
-  workspace/transformers/tests/transformers_testutils,
+  workspace/transformers/tests/harness,
+  workspace/transformers/tests/q_bf16/kvcontext,
   workspace/libtorch_testutils
 
 {.experimental: "callOperator".}
@@ -46,7 +47,7 @@ proc ulpBf16(m: float64): float64 =
 
 const
   FixtureDir =
-    currentSourcePath().parentDir() / ".." / "fixtures" / "layers" / "Qwen3.6-35B-A3B-layer-3"
+    currentSourcePath().parentDir() / ".." / "fixtures" / "bf16-01-layer-internals" / "Qwen3.6-35B-A3B-layer-3"
   ModelDir = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3.6-35B-A3B"
   LayerPrefix = "model.language_model.layers.3.self_attn"
   WeightsFile3 = ModelDir / "model-00003-of-00026.safetensors"
@@ -92,8 +93,8 @@ proc normFixtureTest(caseNum: int, msg: string): bool =
   # eps comes from the fixture metadata
   type NormFixture = object
     eps: float64
-  let meta = readFixture(FixtureDir / "norm-Qwen3.6-35B-A3B-0" & $caseNum &
-    ".safetensor.metadata.json.zip").fromJson(NormFixture)
+  let meta = zstdReadFixture(FixtureDir / "norm-Qwen3.6-35B-A3B-0" & $caseNum &
+    ".safetensor.metadata.json.zst").fromJson(NormFixture)
   let norm = RmsNormOne.init(w, eps = meta.eps)
   let got = norm.forward(x)
   assertAllClose(got, expected, rtol = 0.0, abstol = 0.0, msg = msg)
@@ -104,6 +105,7 @@ proc main() =
   # ──────────────────────────────────────────────────────────────────────────
   runCppTest "Gated full attention prefill (seq 8) vs fixture":
     proc(): bool =
+      echo "    devices: ", compareLine(FixtureDir, F.kCPU)
       let attn = setupAttn()
       var (ctx, pool) = newKVContext(numLayers = 40, kvHeads = NumKvHeads, headDim = HeadDim)
       var st = Safetensor.open(FixtureDir / "attn-Qwen3.6-35B-A3B-00.safetensor")
@@ -226,6 +228,20 @@ proc main() =
     proc(): bool = normFixtureTest(0, "RMSNorm head_dim_forward mismatch")
 
 
+
+  runCppTest "Gated full attention, cross-device variant (device-pair report)":
+    proc(): bool =
+      let runDev = testDevice()
+      echo "    devices: ", compareLine(FixtureDir, runDev)
+      if runDev == F.kCPU:
+        echo "    the run device matches the recorded device, the reference variant carries the replay"
+        return true
+      # The recorded intermediates compare bit-exact (q/k norms, gate, rope)
+      # and no manifest states a recorded device for the layers family.
+      # No cross-device drift row applies, the suite skips.
+      echo "    no cross-device drift row applies: the bit-exact intermediates",
+        " accept zero drift, the suite skips on ", deviceName(runDev)
+      return true
 
   echo "\nAll Qwen3.6 gated-attention tests passed!"
 

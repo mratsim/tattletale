@@ -2,98 +2,148 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Verify greedy (temp=0) decoding matches HF Transformers output,
-## token-exact.
+## Greedy (temp=0) decoding of the Qwen3-0.6B stack against tt-greedy-2
+## fixtures: per-step argmax checks with margin-scaled logit caps,
+## truncated-KL and tail-probability checksums, plus teacher-forced
+## recovery at structural ties (harness/tolerance.nim greedy checks).
 
 import
-  std/os,
   std/json,
-  std/strformat,
+  std/strutils,
+  std/os,
   std/sequtils,
-  workspace/libtorch,
+  workspace/libtorch as F,
   workspace/toktoktok,
-  workspace/transformers/src/models
+  workspace/transformers/src/models,
+  workspace/transformers/src/stateful/orchestrator,
+  workspace/transformers/tests/harness,
+  workspace/libtorch_testutils
 
 const
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
-  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "greedy-decoding" / "Qwen3-0.6B"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "bf16-04-greedy-text-generation" / "Qwen3-0.6B"
 
-proc checkFixture(model: AnyModel, jsonPath: string) =
-  let data = parseJson(readFile(jsonPath))
-  let prompt = data["prompt"].getStr()
+  # Tie-eligibility from the corpus margin report
+  # structural ties record margin 0.0,
+  # the smallest nonzero margin is exactly one bf16 ulp at logit 16.
+  # The floor is tieUlps ulps of the step's own top logit, never
+  # an absolute constant: one ulp is 0.0625 at logit 16, 0.125
+  # at logit 32.
+  ChainChecks = GreedyConfig(
+    tieUlps: 1,
+    epsBase: 0.05,
+    tailBand: 0.3,
+    klBand: 0.05,
+    maxFlips: 4)
 
-  # Parse generated_ids from JSON array
-  var expectedIds: seq[int] = @[]
-  for el in data["generated_ids"]:
-    expectedIds.add(el.getInt())
+proc parseGreedyStep(node: JsonNode, step: int): GreedyStepRef =
+  ## tt-greedy-2 step node to GreedyStepRef.
+  result.step = step
+  result.chosenToken = node["chosen_token"].getInt()
+  for el in node["top32_ids"]:
+    result.top32Ids.add el.getInt()
+  for el in node["top32_logits"]:
+    result.top32Logits.add float32(el.getFloat())
+  result.argmaxMargin = node["argmax_margin"].getFloat()
+  result.tailProbability = node["tail_probability"].getFloat()
 
-  let expectedText = data["generated_text"].getStr()
-  let numPrompt = data["num_prompt_tokens"].getInt()
-  let numGen = data["num_generated_tokens"].getInt()
+proc runChain(model: AnyModel, fixture: JsonNode): bool =
+  ## Replay one greedy chain with per-step checks, the recorded prefix
+  ## teacher-forced at every step. A tie flip keeps the chain aligned
+  ## with the recording, and every following check must re-converge. The flip cap
+  ## and a post-flip real divergence both fail with the localized report.
+  let promptIds = fixture["prompt_ids"].mapIt(it.getInt())
+  let expected = fixture["generated_ids"].mapIt(it.getInt())
+  let horizon = expected.len
+  let cfg = model.getConfig()
+  let device = model.getDeviceKind()
+  let maxCtx = cfg.max_position_embeddings
+  let numPoolPages = computeNumPages(maxCtx, concurrentRequests = 1)
+  var orc = Orchestrator.init(cfg.num_hidden_layers, 1,
+    cfg.num_key_value_heads, maxCtx, cfg.head_dim, numPoolPages,
+    F.kBFloat16, device)
+  defer: orc.endSequence()
 
-  echo &"  Prompt ({numPrompt} tokens): {prompt}"
+  var state = GreedyState()
+  var ids = promptIds
+  orc.startSequence(ids.mapIt(it.uint32))
+  let inputIds = F.toTensor([ids]).to(device)
+  let logits = model.forward(orc.getInferenceContextMut(), inputIds)
+  orc.setKvPosition(ids.len)
+  var row = logits.narrow(1, ids.len - 1, 1).squeeze(1).squeeze(0)
 
-  # Generate with temp=0 (greedy)
-  let output = model.generate(prompt, temp = 0.0f, maxTokens = numGen)
+  for step in 0 ..< horizon:
+    let refStep = parseGreedyStep(fixture["steps"][step], step)
+    let verdict = checkGreedyStep(state, ChainChecks, refStep, row)
+    if verdict == gvTieFlip:
+      echo "    step " & $step & " tie flip (recorded margin " &
+        $refStep.argmaxMargin & "), teacher-forcing " &
+        $refStep.chosenToken
+    let chosen = expected[step]
+    ids.add chosen
+    if step + 1 < horizon:
+      orc.appendToken(ids.len - 1, chosen.uint32, device)
+      let stepLogits = model.forward(orc.getInferenceContextMut(),
+        F.toTensor([[chosen]]).to(device))
+      orc.setKvPosition(ids.len)
+      row = stepLogits.squeeze(0).squeeze(0)
+  echo "    chain passed: " & $state.flips & " tie flip(s) within cap"
+  result = true
 
-  # Compare token IDs. Re-encode the output to get the generated portion
-  let actualIds = model.getTokenizer().encode(output)
-  let actualGenerated = if actualIds.len >= numPrompt:
-    actualIds[numPrompt ..< actualIds.len]
-  else:
-    actualIds
-
-  echo &"  Expected ({expectedIds.len} tokens): {expectedText}"
-  echo &"  Actual   ({actualGenerated.len} tokens): {model.getTokenizer().decodeToString(actualGenerated)}"
-
-  let idMatch = actualGenerated == expectedIds
-  if idMatch:
-    echo "  ✅ Token IDs match perfectly"
-  else:
-    var firstDiff = "N/A"
-    var firstDiffIdx = -1
-    for i in 0 ..< min(expectedIds.len, actualGenerated.len):
-      if expectedIds[i] != actualGenerated[i]:
-        firstDiff = &"token {i}: expected {expectedIds[i]}, got {actualGenerated[i]}"
-        firstDiffIdx = i
-        break
-    if expectedIds.len != actualGenerated.len:
-      firstDiff = &"length: expected {expectedIds.len}, got {actualGenerated.len}"
-    echo &"  ❌ Token IDs diverge: {firstDiff}"
-    raise newException(AssertionError, &"[greedy-test] Token mismatch for {jsonPath}")
-
-proc main*() =
-  # The chain replays on the Metal Performance Shaders device, with a PyTorch
-  # fallback for the kernels Metal does not implement.
-  # The switch is process-wide, so set it before the first libtorch call.
+proc main() =
+  assertTorchStamp(FixtureDir)
   putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-  echo "Loading model..."
-  let model = loadModel($ModelPath, kMPS)
-  echo "Model loaded.\n"
+  runCppTest "Qwen3-0.6B greedy decoding - prefix checks vs tt-greedy-2 fixtures":
+    proc(): bool =
+      echo "Loading model..."
+      let model = loadModel($ModelPath, testDevice())
+      echo "Model loaded."
+      var passed = 0
+      var total = 0
+      for f in ["Hello_how_are_you.json.zst",
+                "Do_you_know_the_story_of_this_proverb_磨刀.json.zst"]:
+        inc total
+        echo "Fixture: " & f
+        if runChain(model, parseJson(zstdReadFixture(FixtureDir / f))):
+          inc passed
+      echo "Greedy decoding: " & $passed & "/" & $total & " fixtures passed"
+      result = passed == total
 
-  var passed = 0
-  var total = 0
+  # Forced-first-step variant, the retired t2t suite folded in here. The production
+  # prefill-to-decode transition becomes step 1 of the prefix
+  # test: generate() tokenizes, prefills, samples and decodes through the same
+  # orchestrator that the chain replay above drives by hand. This variant
+  # checks the entry conventions and the structural contracts.
+  # The recorded-chain variant carries the per-step determinism.
+  runCppTest "Qwen3-0.6B t2t entry: decode conventions + prefill-to-decode transition":
+    proc(): bool =
+      echo "Loading model..."
+      let model = loadModel($ModelPath, kCPU)
 
-  for fixture in walkPattern($FixtureDir & "/*.json"):
-    inc total
-    try:
-      checkFixture(model, fixture)
-      inc passed
-    except AssertionError:
-      discard
-    echo ""
+      # Decode entry: encode(prompt) must equal the recorded fixture
+      # prompt_ids exactly, locking the no-bos convention on both sides
+      # and tying this variant to the recorded chain family.
+      let data = parseJson(zstdReadFixture(FixtureDir / "Hello_how_are_you.json.zst"))
+      let fixturePrompt = data["prompt"].getStr()
+      var expectedIds: seq[int] = @[]
+      for el in data["prompt_ids"]:
+        expectedIds.add(el.getInt())
+      doAssert model.getTokenizer().encode(fixturePrompt) == expectedIds,
+        "decode entry diverges from the recorded chain convention"
 
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  if passed == total:
-    echo &"✅ PASS | Greedy decoding: {passed}/{total} fixtures match"
-  else:
-    echo &"❌ FAIL | Greedy decoding: {passed}/{total} fixtures match"
-    raise newException(AssertionError, &"{passed}/{total} greedy fixtures passed")
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      # End-to-end generate: prefill on the prompt, decode a short
+      # continuation. temp = 1.0 samples (Gumbel), so the structural
+      # contracts below are the deterministic part of this variant.
+      let prompt = "Hello, how are you?"
+      let output = model.generate(prompt, temp = 1.0f, maxTokens = 16)
+      echo "Output: " & output
+      doAssert output.len > prompt.len, "output must be longer than the prompt"
+      doAssert output.startsWith(prompt), "output must start with the prompt text"
+      true
 
 when isMainModule:
   main()

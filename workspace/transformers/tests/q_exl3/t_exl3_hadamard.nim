@@ -32,7 +32,7 @@ import
   workspace/libtorch_testutils
 
 const
-  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-hadamard"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-00-hadamard"
   Tol = 1e-4
 
 # ─── Test cases ─────────────────────────────────────────────────────

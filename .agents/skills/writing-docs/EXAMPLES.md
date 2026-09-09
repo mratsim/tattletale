@@ -5,29 +5,48 @@ seen in this repo.
 
 ## Banned vocabulary (hard blocklist)
 
-Campaign and harness words that must NEVER appear in any committed doc
-comment, module header, or prose. A reviewer greps for these, so even a
-domain-legitimate use should be rephrased to the replacement below.
+Campaign terms and test-theater metaphors that must NEVER appear in any
+committed doc comment, module header, or prose. A reviewer greps for
+these, so even a domain-legitimate use should be rephrased to the
+replacement below. Terms ruled acceptable by the operator and removed
+from this list: fingerprint (format names and prose), sentinel (the CS
+term of art), harness, smoke.
 
 | Banned | Replacement |
 |---|---|
-| `pin` / `pinned` | "verified against", "checked by" (never "pins behavior"). CUDA page-locked memory: write "page-locked", never "pinned" |
-| `gate` / `gates` / `gating` (for tests) | "test", "check", "assert" |
+| `pin` / `pinned` | "verified against", "checked by", "locked" (never "pins behavior"). CUDA page-locked memory: write "page-locked", never "pinned" |
+| `gate` / `gates` / `gating` (for tests) | "test", "check", "assert" — model-architecture names (gate.weight, sigmoid gate) are exempt |
 | `draw` / `draws` (test/harness verb) | "read", "take", "use" |
 | `bite` | "chunk", "step", "case" |
 | `mission` (campaign phase label) | the module's real name or path ("ex02a", never "Mission 02") |
-| `fingerprint` | "identifier", "signature" |
 | `digest` (test-run summary sense) | "summary", "report" (the cryptographic sense stays: "Returns the SHA-256 digest" is canonical) |
-| `sentinel` | "marker", "guard value" |
 | `mutation` (test-theater sense) | "change", "variation" |
 | `RED` / `GREEN` (test-status theater) | never. State the invariant or behavior in present tense |
 | `oracle` | "reference implementation" |
 | `probe` | "test". Test files are `test_*.nim`, never "probes" |
-| `harness` | "test suite", "runner" |
-| `smoke` (as in "smoke test") | "sanity", "quick", "basic" |
 | `deviation class` | describe the actual difference (ulps, bytes, layout) |
 | `load-bearing` | "essential", "critical", "necessary" ("the load-bearing guard" → "the essential guard") |
 | `seam` | "boundary", "interface", "edge" ("the seam between tiles" → "the boundary between tiles") |
+| `physics` / `physics-bearing` (for numerical behavior) | "honest rounding", "rounding", "drift behavior", "value-bearing" ("the physics-bearing slices" → "the value-bearing slices") |
+| `committed bytes` / `committed blob hashes` (invented compounds) | "recorded inputs", "recorded files", "recorded checksums" ("pure functions of committed bytes" → "deterministic ops on recorded inputs"). The plain word blob is fine, "frozen blobs" reads correctly |
+| `tail-mass` / `tail mass` | "tail probability" (the standard statistics term for the scalar, probability beyond the top ranks; "tail distribution" would suggest a shape comparison). Applied to the on-disk key and identifiers too: "tail_probability", tailProbability, fkTailProbability |
+| `arm` (test-variant sense: "CPU arm", "MPS arm", "forced-first-step arm") | "variant" or rephrase ("the CPU variant (reference device)", "the forced first step") |
+| `rail` / `rails` (reference-path sense: "sequential rail", "KV page rails") | "reference", "reference path", "boundary reference" |
+| `battery` (set-of-checks sense: "model battery", "battery log") | "checks", "suite"; "battery log results" → "the re-run results" |
+| `wave` (campaign-phase sense: "re-record wave", "device-matrix wave") | "pass" ("re-record pass"), "work" ("device-matrix work") |
+| `donor` (fixture-source sense: "fixture donor", "the same donor") | "recorded family", "recorded source" |
+
+## Line-end hazards from the reflow scanner
+
+The line-break checker rejects lines ending on more words than the doc
+skill lists. Words seen flagged in review, in addition to the documented
+stopwords: `both`, `own`. When a line would end on one, reflow it so the
+line ends on a content noun or verb.
+
+| Rejected line end | House style |
+|---|---|
+| "...the subject and committer date survive both" | "...the subject and committer date survive both events" |
+| "...the report readable on its own" | "...the report self-contained" |
 
 ## Before → after
 
@@ -43,3 +62,7 @@ From actual slop seen in this repo:
 | "the oracle emits the reference layout" | "the reference implementation emits the expected layout" |
 | "smoke test covers the load path" | "sanity test covers the load path" |
 | "a sentinel row marks the tile end" | "a marker row ends the tile" |
+| "the tail-mass check catches the drift" | "the tail-probability check catches the drift" |
+| "a pure function of committed bytes" | "a deterministic op on recorded inputs" |
+| "the physics-bearing slices of the family" | "the value-bearing slices of the family" |
+| "record-time drift physics differ per row class" | "drift behavior differs per row class" |

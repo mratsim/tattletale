@@ -28,7 +28,8 @@ import
   workspace/transformers/src/layers/attn_ssm/grouped_query_attention {.all.},
   workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/layers/attn_ssm/gated_delta_net {.all.},
-  workspace/transformers/tests/transformers_testutils,
+  workspace/transformers/tests/harness,
+  workspace/transformers/tests/q_bf16/kvcontext,
   workspace/libtorch_testutils
 
 {.experimental: "callOperator".}
@@ -38,9 +39,9 @@ privateAccess(GatedBlockSparseFFN)
 
 const
   Layer0FixtureDir =
-    currentSourcePath().parentDir() / ".." / "fixtures" / "layers" / "Qwen3.6-35B-A3B-layer-0"
+    currentSourcePath().parentDir() / ".." / "fixtures" / "bf16-01-layer-internals" / "Qwen3.6-35B-A3B-layer-0"
   Layer3FixtureDir =
-    currentSourcePath().parentDir() / ".." / "fixtures" / "layers" / "Qwen3.6-35B-A3B-layer-3"
+    currentSourcePath().parentDir() / ".." / "fixtures" / "bf16-01-layer-internals" / "Qwen3.6-35B-A3B-layer-3"
   ModelDir = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3.6-35B-A3B"
   WeightsFile3 = ModelDir / "model-00003-of-00026.safetensors"
   GdnPrefix = "model.language_model.layers.0.linear_attn"
@@ -114,6 +115,7 @@ type
 proc main() =
   runCppTest "full decoder layer 0 (GDN + MoE) vs fixture":
     proc(): bool =
+      echo "    devices: ", compareLine(Layer0FixtureDir, F.kCPU)
       let view = SafetensorsCollection.open(ModelDir)
       let gdn = buildGdnViaView(view)
       var ctx = InferenceContext.init(num_layers = 1, batch_size = 1,
@@ -148,8 +150,8 @@ proc main() =
       let (gotIndices, gotWeights) =
         routeToExperts(h2Flat, routerWeight, numExpertsPerTok)
       let moeOut = ffn.forward(h2)
-      let meta = readFixture(
-        Layer0FixtureDir / "layer-Qwen3.6-35B-A3B-00.safetensor.metadata.json.zip"
+      let meta = zstdReadFixture(
+        Layer0FixtureDir / "layer-Qwen3.6-35B-A3B-00.safetensor.metadata.json.zst"
       ).fromJson(LayerFixture)
       let routingWeightsBand = meta.bands.routing_weights_band
       let moeOutputBand = meta.bands.moe_output_band
@@ -169,10 +171,29 @@ proc main() =
       let layerOut = h1 + moeOut
       let layerOutDiff = maxAbsDiff(layerOut, st.getTensorOwned("layer_output_seq"))
       doAssert layerOutDiff <= layerOutputBand, "layer_output diff " & $layerOutDiff & " outside the recorded band"
+
+      # Layer-0 block outputs get signature checks: match rate, order
+      # statistics everywhere. Histograms appear only beside the tensor
+      # that feeds the post-residual step.
+      let layerBudgetAttn = defaultBudget(obAttention, F.kCPU)
+      let layerBudgetResid = defaultBudget(obPostResidual, F.kCPU)
+      let layerStatsFile = loadFingerprintStats(
+        Layer0FixtureDir / "layer-Qwen3.6-35B-A3B-00.safetensor.stats")
+      assertMatchRate(gdnOut, st.getTensorOwned("gdn_block_output_seq"),
+        layerBudgetAttn, msg = "layer-0 gdn output match rate")
+      assertStats(gdnOut, layerStatsFile.statsTensor("gdn_block_output_seq"),
+        layerBudgetAttn, msg = "layer-0 gdn output stats")
+      assertStats(moeOut, layerStatsFile.statsTensor("moe_output"),
+        layerBudgetResid, msg = "layer-0 moe output stats")
+      assertMatchRate(layerOut, st.getTensorOwned("layer_output_seq"),
+        layerBudgetResid, msg = "layer-0 post-residual match rate")
+      assertStats(layerOut, layerStatsFile.statsTensor("layer_output_seq"),
+        layerBudgetResid, msg = "layer-0 post-residual stats")
       true
 
   runCppTest "full decoder layer 3 (attn + MoE) vs fixture":
     proc(): bool =
+      echo "    devices: ", compareLine(Layer3FixtureDir, F.kCPU)
       let cfgJson = (ModelDir / "config.json").parseFile()
       let weights = SafetensorsCollection.open(WeightsFile3)
       let qProj = Linear.load(weights, cfgJson, AttnPrefix & ".q_proj")
@@ -220,8 +241,8 @@ proc main() =
       let (gotIndices, gotWeights) =
         routeToExperts(h2Flat, routerWeight, numExpertsPerTok)
       let moeOut = ffn.forward(h2)
-      let meta = readFixture(
-        Layer3FixtureDir / "layer-Qwen3.6-35B-A3B-03.safetensor.metadata.json.zip"
+      let meta = zstdReadFixture(
+        Layer3FixtureDir / "layer-Qwen3.6-35B-A3B-03.safetensor.metadata.json.zst"
       ).fromJson(LayerFixture)
       # The band absorbs MoE- and SDPA-inherited noise through the residual
       # add, the post-attention layernorm, the fp32 renorm and its cast
@@ -247,6 +268,21 @@ proc main() =
       doAssert layerOutDiff <= layerBand, "layer_output diff " & $layerOutDiff & " outside the recorded band"
       true
 
+
+  runCppTest "full decoder layer, cross-device variant (device-pair report)":
+    proc(): bool =
+      let runDev = testDevice()
+      echo "    devices: ", compareLine(Layer0FixtureDir, runDev)
+      if runDev == F.kCPU:
+        echo "    the run device matches the recorded device, the reference variant carries the replay"
+        return true
+      # The recorded intermediates compare bit-exact (norms, GDN block row)
+      # and the fingerprint sidecars were recorded on cpu. No cross-device
+      # drift row applies, the suite skips.
+      echo "    no cross-device drift row applies: the bit-exact rows and the",
+        " cpu fingerprint sidecars accept zero drift, the suite skips on ",
+        deviceName(runDev)
+      return true
 
   echo "\nAll Qwen3.6 decoder-layer blocks PASS"
 

@@ -15,13 +15,14 @@ import
   std/algorithm,
   pkg/packedjson,
   workspace/safetensors,
+  workspace/transformers/tests/harness,
   workspace/libtorch,
   workspace/libtorch as F,
   workspace/libtorch_testutils,
   workspace/transformers/src/quantizations/exl3
 
 const
-  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-codec"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-00-codec"
 
 proc runTests*() =
   # Enumerate all layer fixture dirs
@@ -39,7 +40,7 @@ proc runTests*() =
       var failed = 0
 
       for fixturePath in fixtureList:
-        let metaJson = parseJson(readFile(fixturePath / "metadata.json"))
+        let metaJson = parseJson(zstdReadFixture(fixturePath / "metadata"))
         let key = metaJson["layer_key"].getStr
         let expectedHash = metaJson["weight_hash"].getStr
 

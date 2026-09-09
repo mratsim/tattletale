@@ -101,8 +101,11 @@ workspace/transformers/
     ├── testgen/                # fixture generation (FIXTURE_GENERATION.md)
     ├── kvcache/                # KV cache tests
     ├── q_bf16/                 # bf16 tests
-    ├── fixtures/, hf_models/   # shared fixtures / HF reference models
-    └── test_sampler.nim, test_vs_hf_transformers.py
+    ├── harness/                # harness modules + selftest + invariants
+    ├── samplers/               # sampler tests
+    ├── synthetic/              # layer-specific synthetic tests
+    ├── vs_python/              # fuzzing against HF transformers (python)
+    └── fixtures/, hf_models/   # shared fixtures / HF reference models
 ```
 
 ## Data-flow walkthrough

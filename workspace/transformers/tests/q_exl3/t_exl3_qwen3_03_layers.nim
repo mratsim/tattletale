@@ -5,14 +5,14 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## EXL3 layer tests for Qwen3-0.6B-EXL3-5bpw.
+## EXL3 layer-internals suite for Qwen3-0.6B-EXL3-5bpw: the linear, attention
+## and decoder-block fixtures of the exl3-01-layer-internals family, compared
+## through the fingerprint stats sidecars plus the elementwise match-rate
+## against the raw payloads. The exl3 families use the bf16 bounds with the
+## ulp unit taken in fp16, because EXL3 dequantizes to fp16.
 ##
-## Runs on CUDA via LD_PRELOAD of libtorch_cuda.so.
-## Analogous to t_bf16_qwen3_03_layers.nim (bf16) but uses EXL3-quantized weights.
-##
-## Due to floating point associativity issue, rounding and
-## warp-shuffle reduction, the tests cannot match on CPU
-## and tests against EXL3 fixtures MUST be done with Cuda backend.
+## Run:
+##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_03_layers
 
 import
   std/options,
@@ -22,17 +22,16 @@ import
   std/importutils,
   workspace/safetensors,
   workspace/libtorch as F,
-  workspace/libtorch/vendor/libtorch,
   workspace/transformers/src/layers,
   workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/stateful/kvcache,
   workspace/transformers/src/stateful/page_pool,
-  workspace/transformers/src/layers/rope {.all.},
   workspace/transformers/src/models/qwen3 {.all.},
+  workspace/transformers/tests/harness,
   workspace/libtorch_testutils
 
 const
-  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-layers" / "Qwen3-0.6B-EXL3-5bpw-layer-0"
+  FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-01-layer-internals" / "Qwen3-0.6B-EXL3-5bpw-layer-0"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
   ModelName = "Qwen3-0.6B-EXL3-5bpw"
 
@@ -43,13 +42,35 @@ privateAccess(DecoderLayer[RopeGQAttention[RmsNorm], GatedDenseFFN, RmsNorm])
 privateAccess(RopeGQAttention[RmsNorm])
 privateAccess(GatedDenseFFN)
 
-const Tol = 1e-4
-const TolAttn = 5e-3  # SDPA differs from production kernel by ~0.001 in fp16 softmax
-const TolLayer = 5e-3  # Compounds 7 linears + SDPA + RoPE + RMSNorm + SiLU
+proc statsPath(fixturePath: string): string =
+  ## The sidecar path as loadFingerprintStats expects it: the fixture path
+  ## without the .json.zst suffix.
+  fixturePath & ".stats"
+
+proc elementwise(actual, expected: Tensor, sameDevice: bool, reductionLen: int,
+    msg: string) =
+  ## Elementwise comparison by device class: a run on the recording device
+  ## (the exl3 payloads are recorded from the production CUDA kernel) takes
+  ## the per-op ulp row, a cross-device run takes the chain checkpoint band
+  ## (the SPEC cross-device class of composed paths). Chained stages
+  ## accumulate drift linearly, so the band grows with the stage depth.
+  if meanAbsValue(expected) == 0.0:
+    # The zeros-input cases produce all-zero outputs, a pure function of the
+    # recorded bytes on any device: compared value-equal.
+    assertWithinBudget(actual, expected,
+      ToleranceBudget(tier: ctBitExact), msg = msg)
+  elif sameDevice:
+    assertMatchRate(actual, expected, exl3Budget(obPostResidual), msg = msg)
+  else:
+    discard assertChainCheckpoint(actual, expected, 1,
+      reductionLen = reductionLen, msg = msg, rtol = ChainCheckpointRtolF16)
 
 proc main() =
-  # Model MUST be loaded on Cuda due to RMSNorm warp shuffle rounding differently from CPU
-  let model = loadQwen3ModelRaw($ModelPath, kCuda)
+  let dev = testDevice()
+  let sameDevice = dev == F.kCUDA
+  echo compareLine(FixtureDir, dev)
+
+  let model = loadQwen3ModelRaw($ModelPath, dev)
 
   # ──────────────────────────────────────────────────────────────────────────
   # EXL3 Linear layer fixtures
@@ -77,12 +98,21 @@ proc main() =
 
           var st = Safetensor.open(fixturePath)
 
-          let input = st.getTensorOwned("input", kCuda)
-          let expectedOutput = st.getTensorOwned("output", kCuda)
+          let input = st.getTensorOwned("input", dev)
+          let expectedOutput = st.getTensorOwned("output", dev)
           let output = linear(input)
 
-          assertAllClose(output, expectedOutput, rtol = Tol, abstol = Tol,
-            msg = &"Linear {projName} case {caseNum} failed")
+          elementwise(output, expectedOutput, sameDevice, linear.in_features,
+            &"Linear {projName} case {caseNum}")
+          let statsFile = loadFingerprintStats(statsPath(fixturePath))
+          if sameDevice:
+            assertStats(output, statsFile.statsTensor("output"),
+              exl3Budget(obPostResidual),
+              msg = &"Linear {projName} case {caseNum} stats")
+          else:
+            assertStatsChainBand(output, statsFile.statsTensor("output"), 1,
+    rtol = ChainCheckpointRtolF16,
+              msg = &"Linear {projName} case {caseNum} stats")
           echo &"    case {caseNum}: PASSED"
 
       true
@@ -104,7 +134,7 @@ proc main() =
         64, num_layers = 1,
         kv_heads = model.config.num_key_value_heads,
         head_dim = model.config.head_dim,
-        dtype = F.kFloat16, device = F.kCuda)
+        dtype = F.kFloat16, device = dev)
       let numPages = ceilDiv(4096, TokensPerPage)
 
       # Borrow pages once — reused across all batch items
@@ -119,11 +149,11 @@ proc main() =
 
         var st = Safetensor.open(fixturePath)
 
-        let hiddenStates = st.getTensorOwned("hidden_states", kCuda)
-        let expectedOutput = st.getTensorOwned("output", kCuda)
-        let hfCos = st.getTensorOwned("cos", kCuda)
-        let hfSin = st.getTensorOwned("sin", kCuda)
-        let hfPosIds = st.getTensorOwned("position_ids", kCuda)
+        let hiddenStates = st.getTensorOwned("hidden_states", dev)
+        let expectedOutput = st.getTensorOwned("output", dev)
+        let hfCos = st.getTensorOwned("cos", dev)
+        let hfSin = st.getTensorOwned("sin", dev)
+        let hfPosIds = st.getTensorOwned("position_ids", dev)
 
         let batch = hiddenStates.size(0)
         var outputs: seq[Tensor] = @[]
@@ -148,8 +178,17 @@ proc main() =
         doAssert finalOutput.shape == expectedOutput.shape,
           &"Shape mismatch: {finalOutput.shape} vs {expectedOutput.shape}"
 
-        assertAllClose(finalOutput, expectedOutput, rtol = TolAttn, abstol = TolAttn,
-          msg = &"Attention case {caseNum} failed")
+        elementwise(finalOutput, expectedOutput, sameDevice,
+          model.config.hidden_size, &"Attention case {caseNum}")
+        let statsFile = loadFingerprintStats(statsPath(fixturePath))
+        if sameDevice:
+          assertStats(finalOutput, statsFile.statsTensor("output"),
+            exl3Budget(obAttention),
+            msg = &"Attention case {caseNum} stats")
+        else:
+          assertStatsChainBand(finalOutput, statsFile.statsTensor("output"), 1,
+    rtol = ChainCheckpointRtolF16,
+            msg = &"Attention case {caseNum} stats")
 
         echo &"Attention case {caseNum} (batch={batch}, seq={hiddenStates.size(1)}): PASSED"
 
@@ -172,7 +211,7 @@ proc main() =
         64, num_layers = 1,
         kv_heads = model.config.num_key_value_heads,
         head_dim = model.config.head_dim,
-        dtype = F.kFloat16, device = F.kCuda)
+        dtype = F.kFloat16, device = dev)
       let numPagesLayer = ceilDiv(4096, TokensPerPage)
 
       # Borrow pages once -- reused across all batch items
@@ -187,10 +226,10 @@ proc main() =
 
         var st = Safetensor.open(fixturePath)
 
-        let inputHiddenStates = st.getTensorOwned("input_hidden_states", kCuda)
-        let expectedOutput = st.getTensorOwned("output", kCuda)
-        let expectedOutputResidual = st.getTensorOwned("output_residual", kCuda)
-        let hfPosIds = st.getTensorOwned("position_ids", kCuda)
+        let inputHiddenStates = st.getTensorOwned("input_hidden_states", dev)
+        let expectedOutput = st.getTensorOwned("output", dev)
+        let expectedOutputResidual = st.getTensorOwned("output_residual", dev)
+        let hfPosIds = st.getTensorOwned("position_ids", dev)
 
         let batch = inputHiddenStates.size(0)
         var outputs: seq[Tensor] = @[]
@@ -202,7 +241,7 @@ proc main() =
           ctx.position_ids = hfPosIds[b]
           ctx.setRopeForPositions(rotary)
 
-          let residualTensor = st.getTensorOwned("residual", kCuda)
+          let residualTensor = st.getTensorOwned("residual", dev)
           let residual = some(residualTensor[b].unsqueeze(0))
 
           let (o, oRes) = layer(ctx, x, residual)
@@ -215,18 +254,33 @@ proc main() =
         doAssert finalOutput.shape == expectedOutput.shape, &"Shape mismatch: {finalOutput.shape} vs {expectedOutput.shape}"
         doAssert finalOutputResidual.shape == expectedOutputResidual.shape, &"Shape mismatch: {finalOutputResidual.shape} vs {expectedOutputResidual.shape}"
 
-        assertAllClose(finalOutput, expectedOutput, rtol = TolLayer, abstol = TolLayer,
-          msg = &"Layer output case {caseNum} failed")
-        assertAllClose(finalOutputResidual, expectedOutputResidual, rtol = TolLayer, abstol = TolLayer,
-          msg = &"Layer output_residual case {caseNum} failed")
+        elementwise(finalOutput, expectedOutput, sameDevice,
+          model.config.intermediate_size, &"Layer output case {caseNum}")
+        elementwise(finalOutputResidual, expectedOutputResidual, sameDevice,
+          model.config.hidden_size, &"Layer output_residual case {caseNum}")
+        let statsFile = loadFingerprintStats(statsPath(fixturePath))
+        if sameDevice:
+          assertStats(finalOutput, statsFile.statsTensor("output"),
+            exl3Budget(obPostResidual),
+            msg = &"Layer output case {caseNum} stats")
+          assertStats(finalOutputResidual, statsFile.statsTensor("output_residual"),
+            exl3Budget(obPostResidual),
+            msg = &"Layer output_residual case {caseNum} stats")
+        else:
+          assertStatsChainBand(finalOutput, statsFile.statsTensor("output"), 1,
+    rtol = ChainCheckpointRtolF16,
+            msg = &"Layer output case {caseNum} stats")
+          assertStatsChainBand(finalOutputResidual,
+            statsFile.statsTensor("output_residual"), 1,
+            msg = &"Layer output_residual case {caseNum} stats")
 
         echo &"    Layer case {caseNum}: PASSED"
 
       true
 
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "All EXL3 layer tests completed"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 when isMainModule:
   main()

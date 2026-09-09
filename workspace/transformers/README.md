@@ -33,9 +33,10 @@ Transform is implemented in positron at
 `workspace/positron/src/kernels/portable/hadamard_transforms.nim`.
 
 Test coverage is in [`tests/q_exl3/`](tests/q_exl3/) (see its
-[`README.md`](tests/q_exl3/README.md)). Because of floating-point associativity
-and warp-shuffle reductions, these fixtures cannot match on CPU — EXL3 tests
-must run on a CUDA backend. Fixture-generation conventions are documented in
+[`README.md`](tests/q_exl3/README.md)). The fixture suites compare through
+the recorded-summary surface and run on any device; the recorded payloads
+come from the production CUDA kernel, so only a CUDA replay is the bit-exact
+reference class. Fixture-generation conventions are documented in
 [`tests/testgen/FIXTURE_GENERATION.md`](tests/testgen/FIXTURE_GENERATION.md).
 
 ### 2. KV cache (PagedRadixTrie)
@@ -104,7 +105,7 @@ nim cpp -r --verbosity:0 --hints:off --warnings:off \
   workspace/transformers/tests/test_sampler.nim
 ```
 
-EXL3 tests must run on CUDA; inject the CUDA runtime at link time via
+A CUDA replay of the EXL3 fixtures injects the CUDA runtime at link time via
 `LD_PRELOAD` of `libtorch_cuda.so` (see `AGENTS.md`). Example:
 
 ```bash
