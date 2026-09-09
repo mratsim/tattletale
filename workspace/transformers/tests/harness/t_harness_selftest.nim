@@ -78,6 +78,9 @@ proc main() =
         currentSourcePath().parentDir() / ".." / "fixtures"
       for kind, family in walkDir(fixturesDir):
         if kind != pcDir: continue
+        # The manifest sits either at the family root (the EXL3 families
+        # record one checkpoint per family) or under a model directory
+        # (the bf16 families record one recording per model).
         for k2, modelDir in walkDir(family):
           if k2 != pcDir: continue
           if not fileExists(modelDir / "PROVENANCE.md"): continue
@@ -88,6 +91,11 @@ proc main() =
           # fails the run instead.
           assertTorchStamp(modelDir)
           inc stamped
+        if not fileExists(family / "PROVENANCE.md"): continue
+        let rec = recordedFrom(family)
+        discard recordedDevice(rec)
+        assertTorchStamp(family)
+        inc stamped
       echo "    fixture family manifests verified: " & $stamped
       doAssert stamped >= 8,
         "the fixture families must carry verified provenance manifests"

@@ -171,6 +171,16 @@ proc linkedTorchVersion*(): string =
   ## used, so this value is what the PROVENANCE torch stamp must carry.
   $cppTorchVersion()
 
+proc torchBaseVersion*(v: string): string =
+  ## The base version segment of a torch version stamp. The libtorch headers
+  ## carry TORCH_VERSION without the python wheel's local build segment:
+  ## the CUDA wheel stamps "2.14.0+cu130" in python and "2.14.0" in C++.
+  let plus = v.find('+')
+  if plus < 0:
+    v
+  else:
+    v[0 ..< plus]
+
 proc assertTorchStamp*(fixtureDir: string) =
   ## Check the environment at suite start: the linked libtorch must carry
   ## the torch version stamped in the fixture family manifest. A venv
@@ -180,9 +190,10 @@ proc assertTorchStamp*(fixtureDir: string) =
   let path = fixtureDir / "PROVENANCE.md"
   if not fileExists(path):
     return
-  let stamped = manifestValue(fixtureDir, "torch")
-  let linked = linkedTorchVersion()
+  let stamped = torchBaseVersion(manifestValue(fixtureDir, "torch"))
+  let linked = torchBaseVersion(linkedTorchVersion())
   if stamped != linked:
     raise newException(HarnessCheckError,
       "linked torch " & linked & " != recorded torch " & stamped &
       " of " & path & ": the reference rows would re-base silently")
+
