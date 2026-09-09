@@ -14,7 +14,7 @@
 ## fp16.
 ##
 ## Run:
-##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_07_greedy
+##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_04_greedy_text_generation
 
 import
   std/json,

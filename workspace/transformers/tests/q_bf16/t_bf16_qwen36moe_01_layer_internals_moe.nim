@@ -6,8 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## nim cpp -r --verbosity:0 --hints:off --warnings:off \
-##   --outdir:build/tests/t_bf16_qwen36moe_01_moe --nimcache:nimcache/tests/t_bf16_qwen36moe_01_moe \
-##   workspace/transformers/tests/q_bf16/t_bf16_qwen36moe_01_moe.nim
+##   --outdir:build/tests/t_bf16_qwen36moe_01_layer_internals_moe --nimcache:nimcache/tests/t_bf16_qwen36moe_01_layer_internals_moe \
+##   workspace/transformers/tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_moe.nim
 # Requires: local model at tests/hf_models/Qwen3.6-35B-A3B (gitignored)
 
 import

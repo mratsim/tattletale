@@ -7,7 +7,7 @@
 
 ## nim cpp -r --hints:off --warnings:off --outdir:build/tests/qwen35dense-ids \
 ##   --nimcache:nimcache/tests/qwen35dense-ids \
-##   workspace/transformers/tests/q_bf16/t_bf16_qwen35dense_05_ids_to_logits_inference.nim
+##   workspace/transformers/tests/q_bf16/t_bf16_qwen35dense_03_full_forward_to_logits.nim
 
 import
   std/options,
@@ -51,7 +51,7 @@ type
 
 proc main() =
   assertTorchStamp(FixtureDir)
-  runCppTest "Qwen3.5-0.8B ids to logits - 24 layers + final logits vs fixtures":
+  runCppTest "Qwen3.5-0.8B full forward to logits - 24 layers + final logits vs fixtures":
     proc(): bool =
       echo "    devices: ", compareReport(FixtureDir, F.kCPU)
       let model = loadQwen35ModelRaw(ModelPath, kCPU)
@@ -152,7 +152,7 @@ proc main() =
         msg = "Qwen3.5-0.8B final logits projection")
       true
 
-  runCppTest "Qwen3.5-0.8B ids to logits, cross-device variant (device-pair report)":
+  runCppTest "Qwen3.5-0.8B full forward to logits, cross-device variant (device-pair report)":
     proc(): bool =
       let runDev = testDevice()
       echo "    devices: ", compareReport(FixtureDir, runDev)

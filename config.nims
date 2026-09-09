@@ -171,7 +171,7 @@ task test_safetensors, "Test workspace/safetensors":
 # a change touched. The device-flip convention (harness/device.nim)
 # rides the TTT_TEST_ON environment variable: its value becomes
 # the compile-time define of every transformer suite command.
-# Therefore `TTT_TEST_ON=cpu nim test_tf_bf16_qwen3_03_chain`
+# Therefore `TTT_TEST_ON=cpu nim test_tf_bf16_qwen3_02_first_8_layers_plus_final`
 # flips the device of one suite.
 
 proc tttDeviceDefine(): string =
@@ -212,44 +212,44 @@ proc runFamily(suites: seq[tuple[folder, filename: string]]) =
   for s in suites:
     runTransformerSuite(s.folder, s.filename)
 
-task test_tf_bf16_qwen3_03_chain, "Suite: Qwen3-0.6B 8+1 chain checkpoints":
-  runTransformerSuite("q_bf16", "t_bf16_qwen3_03_chain.nim")
-task test_tf_bf16_qwen3_05_ids_to_logits_inference, "Suite: Qwen3-0.6B ids to logits inference":
-  runTransformerSuite("q_bf16", "t_bf16_qwen3_05_ids_to_logits_inference.nim")
-task test_tf_bf16_qwen3_07_greedy_decoding, "Suite: Qwen3-0.6B greedy decoding":
-  runTransformerSuite("q_bf16", "t_bf16_qwen3_07_greedy_decoding.nim")
-task test_tf_bf16_qwen35dense_03_chain, "Suite: Qwen3.5-0.8B 8+1 chain checkpoints":
-  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_03_chain.nim")
-task test_tf_bf16_qwen35dense_05_ids_to_logits_inference, "Suite: Qwen3.5-0.8B ids to logits inference":
-  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_05_ids_to_logits_inference.nim")
-task test_tf_bf16_qwen35dense_07_greedy_decoding, "Suite: Qwen3.5-0.8B greedy decoding":
-  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_07_greedy_decoding.nim")
+task test_tf_bf16_qwen3_02_first_8_layers_plus_final, "Suite: Qwen3-0.6B 8+1 chain checkpoints":
+  runTransformerSuite("q_bf16", "t_bf16_qwen3_02_first_8_layers_plus_final.nim")
+task test_tf_bf16_qwen3_03_full_forward_to_logits, "Suite: Qwen3-0.6B ids to logits inference":
+  runTransformerSuite("q_bf16", "t_bf16_qwen3_03_full_forward_to_logits.nim")
+task test_tf_bf16_qwen3_04_greedy_text_generation, "Suite: Qwen3-0.6B greedy decoding":
+  runTransformerSuite("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim")
+task test_tf_bf16_qwen35dense_02_first_8_layers_plus_final, "Suite: Qwen3.5-0.8B 8+1 chain checkpoints":
+  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim")
+task test_tf_bf16_qwen35dense_03_full_forward_to_logits, "Suite: Qwen3.5-0.8B ids to logits inference":
+  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim")
+task test_tf_bf16_qwen35dense_04_greedy_text_generation, "Suite: Qwen3.5-0.8B greedy decoding":
+  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim")
 task test_tf_bf16_qwen35dense_single_file_checkpoint, "Suite: Qwen3.5-0.8B single-file checkpoint load":
   runTransformerSuite("q_bf16", "t_bf16_qwen35dense_single_file_checkpoint.nim")
-task test_tf_bf16_qwen36moe_01_moe, "Suite: Qwen3.6-35B-A3B MoE expert math":
-  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_moe.nim")
-task test_tf_bf16_qwen36moe_02_attn, "Suite: Qwen3.6-35B-A3B attention":
-  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_02_attn.nim")
-task test_tf_bf16_qwen36moe_02_gdn, "Suite: Qwen3.6-35B-A3B Gated DeltaNet":
-  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_02_gdn.nim")
-task test_tf_bf16_qwen36moe_03_layers, "Suite: Qwen3.6-35B-A3B decoder layers":
-  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_03_layers.nim")
-task test_tf_bf16_qwen36moe_05_ids_to_logits_inference, "Suite: Qwen3.6-35B-A3B ids to logits inference":
-  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_05_ids_to_logits_inference.nim")
-task test_tf_bf16_qwen36moe_07_greedy, "Suite: Qwen3.6-35B-A3B greedy decoding":
-  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_07_greedy.nim")
-task test_tf_exl3_codec, "Suite: EXL3 trellis decode vs production kernel hash":
-  runTransformerSuite("q_exl3", "t_exl3_codec.nim")
-task test_tf_exl3_hadamard, "Suite: EXL3 hadamard vs production kernel":
-  runTransformerSuite("q_exl3", "t_exl3_hadamard.nim")
-task test_tf_exl3_qwen3_03_layers, "Suite: Qwen3-0.6B-EXL3 layer internals":
-  runTransformerSuite("q_exl3", "t_exl3_qwen3_03_layers.nim")
-task test_tf_exl3_qwen3_03b_layer2, "Suite: Qwen3-0.6B-EXL3 layer-02 stage trace":
-  runTransformerSuite("q_exl3", "t_exl3_qwen3_03b_layer2.nim")
-task test_tf_exl3_qwen3_05_ids_to_logits, "Suite: Qwen3-0.6B-EXL3 ids to logits inference":
-  runTransformerSuite("q_exl3", "t_exl3_qwen3_05_ids_to_logits.nim")
-task test_tf_exl3_qwen3_07_greedy, "Suite: Qwen3-0.6B-EXL3 greedy decoding":
-  runTransformerSuite("q_exl3", "t_exl3_qwen3_07_greedy.nim")
+task test_tf_bf16_qwen36moe_01_layer_internals_moe, "Suite: Qwen3.6-35B-A3B MoE expert math":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim")
+task test_tf_bf16_qwen36moe_01_layer_internals_attn, "Suite: Qwen3.6-35B-A3B attention":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim")
+task test_tf_bf16_qwen36moe_01_layer_internals_gdn, "Suite: Qwen3.6-35B-A3B Gated DeltaNet":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim")
+task test_tf_bf16_qwen36moe_01_layer_internals, "Suite: Qwen3.6-35B-A3B decoder layers":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim")
+task test_tf_bf16_qwen36moe_03_full_forward_to_logits, "Suite: Qwen3.6-35B-A3B ids to logits inference":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim")
+task test_tf_bf16_qwen36moe_04_greedy_text_generation, "Suite: Qwen3.6-35B-A3B greedy decoding":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")
+task test_tf_exl3_qwen3_00_codec, "Suite: EXL3 trellis decode vs production kernel hash":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_00_codec.nim")
+task test_tf_exl3_qwen3_00_hadamard, "Suite: EXL3 hadamard vs production kernel":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_00_hadamard.nim")
+task test_tf_exl3_qwen3_01_layer_internals, "Suite: Qwen3-0.6B-EXL3 layer internals":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_01_layer_internals.nim")
+task test_tf_exl3_qwen3_01_block_02_trace, "Suite: Qwen3-0.6B-EXL3 layer-02 stage trace":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_01_block_02_trace.nim")
+task test_tf_exl3_qwen3_03_full_forward_to_logits, "Suite: Qwen3-0.6B-EXL3 ids to logits inference":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_03_full_forward_to_logits.nim")
+task test_tf_exl3_qwen3_04_greedy_text_generation, "Suite: Qwen3-0.6B-EXL3 greedy decoding":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_04_greedy_text_generation.nim")
 task test_tf_bf16_unit_rope, "Suite: rope unit donors":
   runTransformerSuite("q_bf16", "t_bf16_unit_rope.nim")
 task test_tf_bf16_unit_attn, "Suite: attention unit donors":
@@ -284,30 +284,30 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|unit|moe|check
   case familyName()
   of "chain":
     runFamily(@[
-      ("q_bf16", "t_bf16_qwen3_03_chain.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_03_chain.nim")])
+      ("q_bf16", "t_bf16_qwen3_02_first_8_layers_plus_final.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim")])
   of "ids":
     runFamily(@[
-      ("q_bf16", "t_bf16_qwen3_05_ids_to_logits_inference.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_05_ids_to_logits_inference.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_05_ids_to_logits_inference.nim")])
+      ("q_bf16", "t_bf16_qwen3_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim")])
   of "greedy":
     runFamily(@[
-      ("q_bf16", "t_bf16_qwen3_07_greedy_decoding.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_07_greedy_decoding.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_07_greedy.nim")])
+      ("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
   of "unit":
     runFamily(@[
       ("q_bf16", "t_bf16_unit_rope.nim"),
       ("q_bf16", "t_bf16_unit_attn.nim")])
   of "moe":
     runFamily(@[
-      ("q_bf16", "t_bf16_qwen36moe_01_moe.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_02_attn.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_02_gdn.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_03_layers.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_05_ids_to_logits_inference.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_07_greedy.nim")])
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
   of "checkpoint":
     runFamily(@[("q_bf16", "t_bf16_qwen35dense_single_file_checkpoint.nim")])
   of "harness":
@@ -338,19 +338,19 @@ task test_transformers, "Test workspace/transformers (the full set, final verifi
     runFamily(@[
       ("q_bf16", "t_bf16_unit_rope.nim"),
       ("q_bf16", "t_bf16_unit_attn.nim"),
-      ("q_bf16", "t_bf16_qwen3_03_chain.nim"),
-      ("q_bf16", "t_bf16_qwen3_05_ids_to_logits_inference.nim"),
-      ("q_bf16", "t_bf16_qwen3_07_greedy_decoding.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_03_chain.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_05_ids_to_logits_inference.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_07_greedy_decoding.nim"),
+      ("q_bf16", "t_bf16_qwen3_02_first_8_layers_plus_final.nim"),
+      ("q_bf16", "t_bf16_qwen3_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim"),
       ("q_bf16", "t_bf16_qwen35dense_single_file_checkpoint.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_01_moe.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_02_attn.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_02_gdn.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_03_layers.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_05_ids_to_logits_inference.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_07_greedy.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim"),
       ("harness", "t_harness_invariants.nim"),
       ("harness", "t_harness_selftest.nim"),
       ("samplers", "t_sampler.nim"),

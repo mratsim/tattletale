@@ -7,7 +7,7 @@
 
 ## nim cpp -r --hints:off --warnings:off --outdir:build/tests/qwen35dense-greedy \
 ##   --nimcache:nimcache/tests/qwen35dense-greedy \
-##   workspace/transformers/tests/q_bf16/t_bf16_qwen35dense_07_greedy_decoding.nim
+##   workspace/transformers/tests/q_bf16/t_bf16_qwen35dense_04_greedy_text_generation.nim
 
 import
   std/json,

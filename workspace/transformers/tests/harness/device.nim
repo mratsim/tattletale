@@ -19,7 +19,7 @@
 ##
 ## The per-suite test tasks translate an environment `TTT_TEST_ON`
 ## value into this define through config.nims. Therefore
-## `TTT_TEST_ON=cpu nim test_tf_bf16_qwen3_03_chain`
+## `TTT_TEST_ON=cpu nim test_tf_bf16_qwen3_02_first_8_layers_plus_final`
 ## flips the device without a hand-written build command.
 ##
 ## On a GPU-less host the auto default asks

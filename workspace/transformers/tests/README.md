@@ -193,7 +193,7 @@ flowchart TD
   states the check semantics, `PLAYBOOK.md` the how-to.
 - `q_bf16/` — four fixture families per dense port: one chain suite per
   model (3-block long residual replay, sidecar checkpoints per block,
-  drift-scaling check), one ids-to-logits suite, one greedy suite (with
+  drift-scaling check), one full-forward-to-logits suite, one greedy suite (with
   the t2t entry as the forced first step), and the per-op unit suites
   (`t_bf16_unit_rope`, `t_bf16_unit_attn`) shared across the dense ports
   with one recorded family per op. The 35B MoE port keeps its own suites.

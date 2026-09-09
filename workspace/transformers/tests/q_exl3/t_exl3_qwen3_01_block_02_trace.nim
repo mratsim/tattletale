@@ -13,7 +13,7 @@
 ## The norm stages measured bit-exact across devices act as drift anchors.
 ##
 ## Run:
-##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_03b_layer2
+##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_01_block_02_trace
 
 import
   std/memfiles, std/strformat, std/tables, std/os, std/options, std/importutils,

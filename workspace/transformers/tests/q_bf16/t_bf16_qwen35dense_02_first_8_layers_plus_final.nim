@@ -34,7 +34,7 @@
 ##   nim cpp -d:release --stackTrace:on --lineTrace:on --lineDir:on
 ##     --debugger:native --hints:off --warnings:off --passC:"-std=c++20"
 ##     --outdir:build/tests/rel --nimcache:nimcache/tests/rel
-##     workspace/transformers/tests/q_bf16/t_bf16_qwen35dense_03_chain.nim
+##     workspace/transformers/tests/q_bf16/t_bf16_qwen35dense_02_first_8_layers_plus_final.nim
 
 import
   std/importutils,

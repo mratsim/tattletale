@@ -6,9 +6,9 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## nim cpp -r --verbosity:0 --hints:off --warnings:off
-##   --outdir:build/tests/t_bf16_qwen36moe_05_ids_to_logits_inference
-##   --nimcache:nimcache/tests/t_bf16_qwen36moe_05_ids_to_logits_inference
-##   workspace/transformers/tests/q_bf16/t_bf16_qwen36moe_05_ids_to_logits_inference.nim
+##   --outdir:build/tests/t_bf16_qwen36moe_03_full_forward_to_logits
+##   --nimcache:nimcache/tests/t_bf16_qwen36moe_03_full_forward_to_logits
+##   workspace/transformers/tests/q_bf16/t_bf16_qwen36moe_03_full_forward_to_logits.nim
 # Requires: local model at tests/hf_models/Qwen3.6-35B-A3B (gitignored)
 
 import
@@ -83,7 +83,7 @@ type
 
 proc main() =
   assertTorchStamp(FullForwardToLogitsFixtureDir)
-  runCppTest "Qwen3.6-35B-A3B ids to logits - 40 layers + final logits vs fixtures":
+  runCppTest "Qwen3.6-35B-A3B full forward to logits - 40 layers + final logits vs fixtures":
     proc(): bool =
       # Two reference paths per boundary, compared against the replayed model:
       #
@@ -218,7 +218,7 @@ proc main() =
         msg = "Qwen3.6-35B-A3B final logits projection")
       true
 
-  runCppTest "Qwen3.6-35B-A3B ids to logits, cross-device variant (device-pair report)":
+  runCppTest "Qwen3.6-35B-A3B full forward to logits, cross-device variant (device-pair report)":
     proc(): bool =
       let runDev = testDevice()
       echo "    devices: ", compareReport(FullForwardToLogitsFixtureDir, runDev)
@@ -237,7 +237,7 @@ proc main() =
         "the suite skips on ", deviceName(runDev)
       return true
 
-  echo "\nAll Qwen3.6 ids-to-logits blocks PASS"
+  echo "\nAll Qwen3.6 full-forward-to-logits blocks PASS"
 
 when isMainModule:
   main()

@@ -270,7 +270,7 @@ proc main() =
       echo &"Greedy decoding: {passed}/{total} fixtures passed"
       result = passed == total
 
-  echo "\nt_bf16_qwen36moe_07_greedy: all blocks PASS"
+  echo "\nt_bf16_qwen36moe_04_greedy_text_generation: all blocks PASS"
 
 when isMainModule:
   main()
