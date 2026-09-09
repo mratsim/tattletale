@@ -60,10 +60,14 @@ proc runChain(model: AnyModel, fixture: JsonNode): bool =
   let horizon = expected.len
   let cfg = model.getConfig()
   let device = model.getDeviceKind()
-  let maxCtx = cfg.max_position_embeddings
-  let numPoolPages = computeNumPages(maxCtx, concurrentRequests = 1)
+  # Decode context ceiling for the replay: the recorded chains stay under
+  # 50 tokens (prompt + horizon), so one TokensPerPage page covers every
+  # chain with headroom. A pool sized by the model's max_position_embeddings
+  # would pre-allocate a multi-gigabyte KV pool for a 48-token chain.
+  const TestMaxCtx = 256
+  let numPoolPages = computeNumPages(TestMaxCtx, concurrentRequests = 1)
   var orc = Orchestrator.init(cfg.num_hidden_layers, 1,
-    cfg.num_key_value_heads, maxCtx, cfg.head_dim, numPoolPages,
+    cfg.num_key_value_heads, TestMaxCtx, cfg.head_dim, numPoolPages,
     F.kBFloat16, device)
   defer: orc.endSequence()
 
