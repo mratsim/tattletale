@@ -5,14 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Greedy (temp=0) decoding of the Qwen3-0.6B-EXL3-5bpw stack: per-step
-## argmax checks against the recorded chains (harness/tolerance.nim greedy
-## checks). The steps carry the recorded support logits, the argmax margin
-## and the tail probability (ttt-tf-001-greedy-steps-h2); recordings that predate the
-## tail field skip the tail checksum, the margin-scaled cap and the
-## truncated KL carry the step. The ulp unit is fp16, EXL3 dequantizes to
-## fp16.
-##
 ## Run:
 ##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_04_greedy_text_generation
 

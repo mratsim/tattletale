@@ -224,16 +224,17 @@ proc main() =
       echo "    devices: ", compareReport(FullForwardToLogitsFixtureDir, runDev)
       if compareClass(recordedDevice(recordedFrom(FullForwardToLogitsFixtureDir)),
           runDev) == sameDeviceBitExact:
-        echo "    the pair selects the reference rows, the reference variant carries the replay"
+        echo "    the device comparison selects the reference budgets, the reference variant carries the replay"
         return true
-      # The ids fixtures compare bit-exact on the reference device:
+      # The full-forward fixtures compare bit-exact on the reference
+      # device:
       # - the dmExact descriptor entries
       # - the rtol-0 seq boundary rows
-      # - the decision projection with its bit-exact strided probe
+      # - the decision projection on the 4-ulp band (bf16 unit)
       # The seq-to-chunked band is the reference's own internal divergence,
       # not a device budget.
-      echo "    no cross-device drift row applies: the dmExact descriptors, ",
-        "the rtol-0 boundary rows and the bit-exact probe accept zero drift, ",
+      echo "    no cross-device drift budget applies: the dmExact descriptors, ",
+        "the rtol-0 boundary rows and the decision projection compare on the ulp band, ",
         "the suite skips on ", deviceName(runDev)
       return true
 

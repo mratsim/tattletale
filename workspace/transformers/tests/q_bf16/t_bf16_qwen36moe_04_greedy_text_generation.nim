@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Greedy (temp=0) decoding of the wired Qwen3.6-35B-A3B stack against
@@ -153,7 +153,6 @@ proc runChain(model: AnyModel, fixture: JsonNode): bool =
       row = stepLogits.squeeze(0).squeeze(0)
   echo "    chain passed: " & $state.flips & " tie flip(s) within cap"
   # Informational perf line: wall clock and tok/s of the replay chain.
-  # The 35B cpu replay runs at ~0.01 tok/s (operator-measured blocker).
   # These numbers make device and kernel regressions visible per run.
   let chainWall = (getMonoTime() - chainStart).inNanoseconds.float64 * 1e-9
   echo &"    chain wall {chainWall:.3f} s ({horizon.float64 / chainWall:.3f} tok/s)"

@@ -78,9 +78,10 @@ proc main() =
         currentSourcePath().parentDir() / ".." / "fixtures"
       for kind, family in walkDir(fixturesDir):
         if kind != pcDir: continue
-        # The manifest sits either at the family root (the EXL3 families
-        # record one checkpoint per family) or under a model directory
-        # (the bf16 families record one recording per model).
+        # Single-checkpoint families put the manifest at the family root
+        # (exl3-00-codec, exl3-00-hadamard, exl3-01-*, exl3-04-greedy),
+        # families recording one manifest per model put it under the model
+        # directory (the bf16 families and exl3-03).
         for k2, modelDir in walkDir(family):
           if k2 != pcDir: continue
           if not fileExists(modelDir / "PROVENANCE.md"): continue

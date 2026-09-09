@@ -110,7 +110,7 @@ proc assertWithinBudget*(
       rtol = budget.rtol, abstol = budget.abstol, msg = msg)
   of ctDistribution:
     raise newException(ValueError,
-      "ctDistribution budgets require fingerprint checks, not yet implemented")
+      "ctDistribution budgets compare through the stats checks (assertStats), not assertWithinBudget")
 
 proc worstRelDiff*(actual, expected: Tensor): float64 =
   ## Worst relative element-wise difference in f32, abstol-guarded. Elements with |expected| below 1e-12
@@ -659,7 +659,7 @@ proc defaultBudget*(kind: OpBudgetKind, computed: F.DeviceKind,
   of F.kCPU, F.kMPS: discard
   else:
     raise newException(ValueError,
-      "budget table v0 has no row for computed device kind " & $computed)
+      "budget table v0 has no entry for computed device kind " & $computed)
 
 proc exl3Budget*(kind: OpBudgetKind): ToleranceBudget =
   ## The budget rows of the exl3 families: the bf16 table rows with the ulp
@@ -910,8 +910,9 @@ proc assertMatchRate*(actual, expected: Tensor,
       (if msg.len > 0: ": " & msg else: ""))
   # The per-element walk reads the storages through raw host pointers:
   # both tensors must be host-resident first. On CUDA a device tensor's
-  # data pointer is not readable from the host (the unified-memory devices
-  # hid this), so copy to the host before the view.
+  # data pointer is not readable from the host: Metal's unified memory
+  # makes reading a device pointer from the host silently work, CUDA
+  # faults on it. Copy to the host before the view.
   let a = actual.contiguous().to(F.kCPU)
   let e = expected.contiguous().to(F.kCPU)
   if a.numel() != e.numel():
@@ -1517,13 +1518,13 @@ proc assertProjection*(logits: Tensor, projection: LogitsProjection, msg = "",
     ulpUnitF16 = false) =
   ## Check computed final logits against the recorded decision projection: argmax id and top-2
   ## competing pair per position, the ulp-banded logit row, argmax margin, and the
-  ## tail-probability checksum beyond the pair. Raw logits tensors leave the tree, the consumers
-  ## read the decisions only.
+  ## tail-probability checksum beyond the pair. Raw logits tensors leave the tree: the
+  ## consumers read the decisions only.
   ##
   ## The ulp unit follows the recorded dequant grid (the GreedyConfig.ulpUnitF16
   ## switch): fp16 for the exl3 families, bf16 otherwise. The ulp count is the
-  ## per-op row budget (4) evaluated at the recorded top-1 logit binade — the
-  ## support-wide ulpFloor shape of checkGreedyStep, because the chain
+  ## 4-ulp per-op cap evaluated at the recorded top-1 logit binade (the
+  ## support-wide ulpFloor shape of checkGreedyStep), because the chain
   ## perturbation is a logit-scale absolute drift. bf16 is the loose grid; the
   ## same ulp count on the fp16 grid is a strictly tighter absolute band, never
   ## worse.
@@ -1564,9 +1565,8 @@ proc assertProjection*(logits: Tensor, projection: LogitsProjection, msg = "",
       let id = step.top2Ids[slot]
       let diff = abs(raw[id].float64 - step.top2Logits[slot].float64)
       # 4-ulp band at the recorded top-1 logit binade: the chain
-      # perturbation is a logit-scale absolute drift (~1 fp16 ulp measured
-      # on the rebuilt binary), the support-wide ulpFloor shape of
-      # checkGreedyStep.
+      # perturbation is a logit-scale absolute drift (about one fp16 ulp),
+      # the support-wide ulpFloor shape of checkGreedyStep.
       if diff > max(1e-5, 4.0 * ulpAt(step.top2Logits[0].float64)):
         raise newException(HarnessCheckError,
           "position " & $step.position & " top2 slot " & $slot &
@@ -1589,12 +1589,10 @@ proc assertProjection*(logits: Tensor, projection: LogitsProjection, msg = "",
     # The band term derives from the 4-ulp logit floor through softmax
     # sensitivity: a logit-scale shift delta moves the tail probability by
     # (exp(delta) - 1) x tail, so tailBand = exp(4 ulp at the top-1
-    # binade) - 1, capped at the bf16 greedy tailBand 0.3 — the 4-ulp floor
+    # binade) - 1, capped at the bf16 greedy tailBand 0.3: the 4-ulp floor
     # must never translate into a looser tail row than the bf16 convention
     # (the fp16 grids stay strictly tighter, e.g. 3.1e-2 at logit 8).
-    # Measured on the CUDA reference box with the rebuilt binary:
-    # 1.65e-3/8.2e-3/1.24e-2 relative at tails 0.28/0.027/0.38. A
-    # wrong-weights bug shifts tails by O(1) and stays detected.
+    # A wrong-weights bug shifts tails by O(1) and stays detected.
     let tailLimit = min(0.3,
       exp(4.0 * ulpAt(step.top2Logits[0].float64)) - 1.0) *
       max(step.tailProbability, 1e-3) + 1e-4

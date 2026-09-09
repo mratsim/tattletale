@@ -354,7 +354,9 @@ def main():
     tokenizer = load_tokenizer(MODEL_DIR)
 
     from fixture_stats import recording_env
-    env = recording_env(extra={"dtype": "float16", "device": "cuda"})
+    recorded_from = os.environ.get("TTT_RECORD_FROM", "m4max-cpu")
+    env = recording_env(
+        extra={"dtype": "float16", "device": recorded_from.rsplit("-", 1)[-1]})
 
     for prompt in PROMPTS:
         safe_name = prompt.replace(" ", "_").replace("'", "").replace("?", "")[:40]

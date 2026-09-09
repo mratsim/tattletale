@@ -22,10 +22,10 @@
 ## `TTT_TEST_ON=cpu nim test_tf_bf16_qwen3_02_first_8_layers_plus_final`
 ## flips the device without a hand-written build command.
 ##
-## On a GPU-less host the auto default asks
+## On a non-macOS host the auto default asks
 ## `Torch.cuda_is_available()` at run time inside the compiled suite.
-## A GPU-less Apple Silicon host always takes the macOS Metal branch, so the GPU-less
-## branch is verified by the define logic alone.
+## Apple Silicon always takes the Metal branch, so the fallback branch is
+## verified by the define logic alone.
 ##
 ## Device comparison: the recorded device (the fixture manifest's
 ## `recorded_from` row) compared against the run device (`testDevice()`)
@@ -167,8 +167,9 @@ proc cppTorchVersion(): cstring =
 
 proc linkedTorchVersion*(): string =
   ## Version stamp of the libtorch build the suite links, e.g. "2.14.0".
-  ## The suites link the venv libtorch, the same library the recordings
-  ## used, so this value is what the PROVENANCE torch stamp must carry.
+  ## The suites link the venv libtorch. The PROVENANCE torch stamp must
+  ## carry this base version segment; its local build segment (`+cu130`)
+  ## is not compared.
   $cppTorchVersion()
 
 proc torchBaseVersion*(v: string): string =
@@ -182,8 +183,9 @@ proc torchBaseVersion*(v: string): string =
     v[0 ..< plus]
 
 proc assertTorchStamp*(fixtureDir: string) =
-  ## Check the environment at suite start: the linked libtorch must carry
-  ## the torch version stamped in the fixture family manifest. A venv
+  ## Check the environment at suite start: the base version segment of the
+  ## linked libtorch must equal the base version segment of the manifest's
+  ## torch row; local build segments (`+cu130`) may differ. A venv
   ## downgrade re-bases every reference row silently, so the guard fails
   ## any mismatched suite before a comparison runs.
   ## Families without manifests pass unguarded.

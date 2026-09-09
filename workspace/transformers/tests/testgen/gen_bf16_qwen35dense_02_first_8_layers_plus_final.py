@@ -1,12 +1,13 @@
 """
 Generate fixtures for the Qwen3.5-0.8B Gated DeltaNet (GDN) layer 0, full
-decoder layers 0 and 3, and a 3-block chain of layers 0..2, using the
-reference transformers modeling on CPU torch bf16.
+decoder layers 0 and 3, and the 8-block chain plus the final pre-norm tail
+checkpoint, using the reference transformers modeling on CPU torch bf16.
 
 Reference: gen_bf16_qwen35dense_01_layer_internals.py conventions.
 
 Consumed by tests/q_bf16/t_bf16_qwen35dense_02_first_8_layers_plus_final.nim (the gdn-* state
-boundary references and the 3-block chain). No Qwen3 analog: GatedDeltaNet is the SSM (linear-attention)
+boundary references and the 8-block chain plus the final pre-norm tail
+checkpoint). No Qwen3 analog: GatedDeltaNet is the SSM (linear-attention)
 layer Qwen3.5 interleaves with its gated attention, and Qwen3 has no SSM
 layer, so no Qwen3-era fixture records a recurrent-versus-chunked
 state-space contract or SSM state trajectories.

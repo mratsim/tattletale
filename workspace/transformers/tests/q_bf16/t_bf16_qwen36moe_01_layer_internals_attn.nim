@@ -102,7 +102,6 @@ proc normFixtureTest(caseNum: int, msg: string): bool =
 
 proc main() =
   # ──────────────────────────────────────────────────────────────────────────
-  # ──────────────────────────────────────────────────────────────────────────
   runCppTest "Gated full attention prefill (seq 8) vs fixture":
     proc(): bool =
       echo "    devices: ", compareLine(FixtureDir, F.kCPU)
@@ -180,7 +179,6 @@ proc main() =
         rtol = 0.0, abstol = gatedBand, msg = "attn_output_gated mismatch")
       true
 
-  # ──────────────────────────────────────────────────────────────────────────
   # ──────────────────────────────────────────────────────────────────────────
   runCppTest "Gated full attention decode (single token, position 5) vs fixture":
     proc(): bool =

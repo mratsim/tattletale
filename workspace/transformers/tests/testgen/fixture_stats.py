@@ -430,8 +430,9 @@ def provenance_entries(env):
 def recording_env(model=None, generator=None, seed=None, extra=None):
     """Standard recording-environment dict for one recording run. recorded_from
     names box plus device; the TTT_RECORD_FROM environment variable overrides
-    the default recording box (a non-default recording must set it, the value
-    lands in PROVENANCE.md and in the env frame of the greedy fixtures)."""
+    the default recording box (a recording on a non-default box must set it,
+    the value lands in PROVENANCE.md and in the env frame of the greedy
+    fixtures)."""
     import os
     import platform
 

@@ -36,8 +36,8 @@ tensors except the value-bearing slices:
 - **PROVENANCE.md** per fixture family, generated at record time with
   `fixture_stats.write_provenance`:
   date, dtype, generator, model, platform, python/torch/transformers
-  versions, recorded_from, seed, kept light enough to
-  recreate the recording run.
+  versions, recorded_from, seed.
+  The manifest stays light enough to recreate the recording run.
   No device row and no num_threads row:
   the recording device derives from the recorded_from row, its last
   dash-separated component (harness/device.nim `recordedDevice`).
@@ -45,14 +45,14 @@ tensors except the value-bearing slices:
   on the recorded versions and the generator beside the fixtures, and
   hashes dangle under squash merges and rewrites.
 - **GDN family frozen truth**: the GDN conv/state fixtures regenerate
-  byte-identically against the frozen recordings (the re-record records are
-  archived with the work reports). A regeneration that differs must stop the
-  change until the cause is found (a stale assumption, a code defect, or the
-  wrong model): run the force-fallback verification first, then escalate
-  before accepting a new canonical truth for the family. Never silently
-  re-record GDN.
+  byte-identically against the frozen recordings. A regeneration that
+  differs must stop the change until the cause is found (a stale
+  assumption, a code defect, or the wrong model): run the force-fallback
+  verification first, then take the finding to review before accepting a
+  new canonical truth for the family. Never silently re-record GDN.
 - **Re-record records** (fixture file checksums before and after, plus the
-  re-run results) are archived with the work reports.
+  re-run byte-comparison results) are kept outside the repo. The record
+  contract is the "verified re-record record" definition in ../README.md.
   Old raw payloads leave the tree only after the family successor passes.
 
 ### Recording environment
@@ -76,9 +76,12 @@ back to the pure-torch bodies, which is the reference behavior.
 ### Recording box
 
 `recorded_from` names the recording box plus device ("m4max-cpu",
-"rtxpro6000-cuda"). The default recording box stays m4max-cpu; a recording on
-another box sets `TTT_RECORD_FROM` in the environment, the value lands in the
-PROVENANCE.md rows and in the env frame of the greedy fixtures. Every EXL3
+"rtxpro6000-cuda"). The default recording box stays m4max-cpu. A recording on
+another box sets `TTT_RECORD_FROM` in the environment. The value lands in the
+PROVENANCE.md rows and in the env frame of the greedy fixtures, and the env
+frame additionally carries an explicit `device` row while PROVENANCE.md has
+none (the recording device derives from the recorded_from row, its last
+dash-separated component). Every EXL3
 fixture family writes its PROVENANCE.md at record time through
 `fixture_exl3_common.write_family_provenance`.
 
@@ -115,7 +118,7 @@ fixture family writes its PROVENANCE.md at record time through
 - Rung 02:
   several decoder layers in sequence.
 - Rung 03:
-  the whole forward pass to logits.
+  the full forward pass, token ids to logits.
 - Rung 04:
   autoregressive text generation.
 - Each rung contains the previous rung plus more:
@@ -360,7 +363,7 @@ for an **exponential subset** of layers:
 This yields 7 layers × 7 projections = **49 fixtures** instead of 196, a ~75%
 storage reduction while maintaining coverage of early, middle, and late layers.
 
-The generator `gen_exl3_codec_fixtures.py` defaults to this mode.  Pass
+The generator `gen_exl3_qwen3_00_codec.py` defaults to this mode. Pass
 `--all-layers` to generate for all 28 layers (e.g. for a full verification run,
 not tracked in git), or `--layer N` for a single layer.
 
@@ -373,8 +376,8 @@ Every fixture generator is named `gen_<quant>_<id>_<slug>_<model>.py`:
 | Part | Rule | Examples |
 |---|---|---|
 | `<quant>` | omitted for the unquantized/bf16 path, a marker for a quantized one | `gen_exl3_*` carries `exl3`, bf16 files carry none |
-| `<id>` | the consuming suite's slot, spelled exactly as that suite spells it | `02_first_8_layers_plus_final`, `03_full_forward_to_logits`, `04_greedy_text_generation`, `01_layer_internals`, `01_layer_internals_attn`, `01_layer_internals_gdn`, `01_layer_internals_moe`, `01_block_02_trace`, `00_codec`, `00_hadamard` |
-| `<slug>` | the fixture concern (the fixture family directory name) | `first-8-layers-plus-final`, `full-forward-to-logits`, `greedy-text-generation` |
+| `<id>` | the consuming suite's slot, spelled exactly as that suite spells it | `02_first_8_layers_plus_final`, `03_full_forward_to_logits`, `04_greedy_text_generation`, `01_layer_internals`, `01_block_02_trace`, `00_codec`, `00_hadamard` |
+| `<slug>` | the fixture concern (the fixture family directory name) | `first-8-layers-plus-final`, `full-forward-to-logits`, `greedy-text-generation`, `layer-internals`, `block-02-trace`, `codec`, `hadamard` |
 | `<model>` | the checkpoint name | `Qwen3-0.6B`, `Qwen3.5-0.8B`, `Qwen3.6-35B-A3B` |
 
 The `<id>` is the fixture family the consuming suite names, so suite,
@@ -428,7 +431,7 @@ invocations. Generators emit the frames directly.
 New fixture files respect a size budget so the tree weight stays flat:
 
 - Hard cap 256 kiB per new fixture file. A larger fixture needs an
-  explicit operator decision before it is added.
+  reviewed exception before it is added.
 - Soft target 64 kiB for committed text payloads (decisions,
   sidecars). The target is advisory; the check reports it as a note.
 - Per-model fixture directory total 1.5 MiB. A directory (first two path

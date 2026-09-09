@@ -5,34 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Chain suite for the Qwen3-0.6B dense stack: the long residual stream
-## replay at the 8+1 chain checkpoints against the recorded fixtures.
-## The checkpoints are the outputs of decoder blocks 0..7 plus the tail,
-## the decoder stack output taken pre-final-norm at depth 28. The model
-## has 28 uniform-attention layers, so the 8-block prefix contains one
-## complete layer class, and the tail validates the depth extrapolation
-## over the full stack. Every prefix block carries a sidecar checkpoint.
-##
-## The suite carries two variants over the same committed fixtures:
-##
-## - CPU variant (reference device): the manual block decomposition
-##   compares bit-exactly against the recording at every intermediate,
-##   and the full 28-layer chain replay is bit-exact on the tail
-##   checkpoint. Each checkpoint also passes the sidecar stats assert.
-##   On the reference device, both sides call the same ATen kernels
-##   carrying the same call order, so any drift at all is a bug
-##   by definition.
-## - MPS variant (cross-device): the replay runs on Metal against the cpu
-##   recording. Each checkpoint passes the chain tolerance:
-##   the obChainCheckpoint elementwise cap in tolerance.nim.
-##   Its absolute term scales with the depth and the checkpoint bulk.
-##   Nine measured per-checkpoint band widths feed the drift-scaling check.
-##
-## Build:
-##   nim cpp -d:release --stackTrace:on --lineTrace:on --lineDir:on
-##     --debugger:native --hints:off --warnings:off --passC:"-std=c++20"
-##     --outdir:build/tests/rel --nimcache:nimcache/tests/rel
-##     workspace/transformers/tests/q_bf16/t_bf16_qwen3_02_first_8_layers_plus_final.nim
+## Run:
+##   TTT_TEST_ON=cpu nim test_tf_bf16_qwen3_02_first_8_layers_plus_final
 
 import
   std/importutils,
@@ -209,10 +183,10 @@ proc replayChain(model: Qwen3Model, ctx: var InferenceContext,
     device: F.DeviceKind, reductionLen: int): seq[float64] =
   ## Replay the full 28-layer chain and return the per-checkpoint band
   ## widths: the 8 prefix block checkpoints plus the tail checkpoint,
-  ## the decoder stack output taken pre-final-norm. The fixture family
-  ## device pair selects the tolerances: a run on the recorded device
+  ## the decoder stack output taken pre-final-norm. The recorded/run device
+  ## comparison selects the tolerance class: a run on the recorded device
   ## compares the checkpoints bit-exactly, a run on any other device
-  ## compares under the chain row.
+  ## compares under the chain checkpoint budget.
   let referenceReplay =
     compareClass(recordedDevice(recordedFrom(FixtureDir)), device) ==
     sameDeviceBitExact
@@ -313,16 +287,16 @@ proc main() =
 
   runCppTest "Qwen3-0.6B 9-checkpoint chain, cross-device variant drift band and scaling check":
     proc(): bool =
-      # The device pair selects the drift row: the recorded_from manifest
-      # value stays fixed while the run-time device follows TTT_TEST_ON.
-      # Under TTT_TEST_ON=cpu the pair degenerates to the recorded device,
-      # the reference rows apply and the reference variant above carries
-      # the replay.
+      # The recorded/run device comparison selects the drift budget: the
+      # recorded_from manifest value stays fixed while the run-time device
+      # follows TTT_TEST_ON. Under TTT_TEST_ON=cpu the comparison
+      # degenerates to the recorded device, the reference budgets apply and
+      # the reference variant above carries the replay.
       let runDev = testDevice()
       echo "    devices: ", compareReport(FixtureDir, runDev)
       if compareClass(recordedDevice(recordedFrom(FixtureDir)), runDev) ==
           sameDeviceBitExact:
-        echo "    the pair selects the reference rows, the reference variant carries the replay"
+        echo "    the device comparison selects the reference budgets, the reference variant carries the replay"
         return true
       let model = loadQwen3ModelRaw(ModelPath, runDev)
       var (ctx, pool) = newContext(model, runDev, poolLayers = ChainDepth)

@@ -591,10 +591,12 @@ def dequant_reimpl_exl3(w_reconstructed: torch.Tensor,
 def write_family_provenance(output_dir: str, generator: str, model_name: str,
                             extra: dict | None = None) -> dict:
     """PROVENANCE.md at record time for one EXL3 fixture family, the same
-    contract as the bf16 generators (fixture_stats.write_provenance).
-    Returns the recording environment rows. The TTT_RECORD_FROM environment
-    variable names the recording box plus device, e.g. rtxpro6000-cuda; a
-    non-default recording box must set it."""
+    contract as the bf16 generators. The rows come from
+    fixture_stats.recording_env, the writer byte-matches
+    harness/provenance.nim. Returns the recording environment rows. The
+    TTT_RECORD_FROM environment variable names the recording box plus
+    device, e.g. rtxpro6000-cuda. A non-default recording box must set
+    it."""
     from fixture_stats import recording_env, write_provenance
     env = recording_env(
         model=model_name,

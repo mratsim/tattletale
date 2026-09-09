@@ -18,7 +18,7 @@
 ##
 ## Usage:
 ##   1. Generate fixtures:
-##      CUDA_HOME=... PATH=... python testgen/gen_exl3_hadamard_fixtures_Qwen3-0.6B.py
+##      CUDA_HOME=... PATH=... python testgen/gen_exl3_qwen3_00_hadamard.py
 ##   2. Build and run:
 ##      nim cpp -r --hints:off q_exl3/t_exl3_qwen3_00_hadamard.nim
 

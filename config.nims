@@ -51,7 +51,7 @@ task make_libpositron_cuda, "Build Positron Cuda kernels in static library":
   # Caller must have nvcc on PATH (e.g. export PATH="$VENV/lib/python3.14/site-packages/nvidia/cu13/bin:$PATH")
   # --allow-unsupported-compiler: the flag is a no-op when the host gcc is
   # within nvcc's supported range; it lets boxes with gcc > 15 build anyway
-  # (nvcc only fails the version check, the compile itself is unaffected).
+  # (on gcc-15 hosts the nvcc version check is the only observed failure).
   exec("mkdir -p build/")
   exec "nvcc -lib -O3 --use_fast_math --std=c++17 --allow-unsupported-compiler -o build/libpositron_cuda.a workspace/positron/make_libpositron_cuda.cu"
 
@@ -334,7 +334,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|unit|moe|check
       ("kvcache", "test_kvcache_lpm.nim"),
       ("kvcache", "test_codera020_batch_guard.nim")])
   else:
-    echo "unknown family: name the family chain, ids, greedy, unit, moe, checkpoint, harness, sampler or synthetic"
+    echo "unknown family: name the family chain, ids, greedy, unit, moe, kvcache, checkpoint, harness, sampler or synthetic"
     quit(1)
 
 task test_transformers, "Test workspace/transformers (the full set, final verification)":

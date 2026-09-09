@@ -183,14 +183,15 @@ proc main() =
       echo "    devices: ", compareReport(FixtureDir, runDev)
       if compareClass(recordedDevice(recordedFrom(FixtureDir)), runDev) ==
           sameDeviceBitExact:
-        echo "    the pair selects the reference rows, the reference variant carries the replay"
+        echo "    the device comparison selects the reference budgets, the reference variant carries the replay"
         return true
-      # The ids fixtures compare bit-exact on the reference device: dmExact
-      # descriptor entries, the exact layer boundary sums, and the decision
-      # projection with its bit-exact strided probe. No cross-device drift
-      # row applies, so a flipped run names the tolerance class and skips.
-      echo "    no cross-device drift row applies: the dmExact descriptors, ",
-        "the exact boundary sums and the bit-exact probe accept zero drift, ",
+      # The full-forward fixtures compare bit-exact on the reference
+      # device: dmExact descriptor entries, the exact layer boundary sums,
+      # and the decision projection on the 4-ulp band (bf16 unit). No
+      # cross-device drift budget applies, so a flipped run names the
+      # tolerance class and skips.
+      echo "    no cross-device drift budget applies: the dmExact descriptors, ",
+        "the exact boundary sums and the decision projection compare on the ulp band, ",
         "the suite skips on ", deviceName(runDev)
       return true
 

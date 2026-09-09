@@ -29,13 +29,14 @@
 ## - `<fixture>.descriptors.json.zst`, the descriptor sidecar frame: entries
 ##   for the descriptor-carried tensors (dmExact, dmDrift)
 ##
-## Frozen descriptor entries: the entries written when the fixtures moved
-## from inline raw tensors to the descriptor summaries and zstd frames
-## describe tensors absent from the payload, their source bytes are archived
-## outside the repo with the re-record records (checksums before and after
-## plus the re-run results, see FIXTURE_GENERATION.md section 10), so the
-## sidecar is frozen committed data. Each recorded entry states its frozenSource flag
-## explicitly, absence is never interpreted:
+## Frozen sidecar entries: entries whose source tensors are absent from
+## the payload. The frozen class covers both sidecar frames, the stats
+## frame (dmNone) and the descriptor frame (dmExact, dmDrift). The source
+## bytes are archived outside the repo with the re-record records
+## (checksums before and after plus the re-run results, see
+## FIXTURE_GENERATION.md section 10), so the sidecar is frozen committed
+## data. Each recorded entry states its frozenSource flag explicitly,
+## absence is never interpreted:
 ## - a non-frozen missing tensor is a hard tooling error and raises
 ## - a frozen entry prints a line, the file stays committed
 ## - the regenerable entries of a frozen file are byte-verified against
@@ -140,11 +141,29 @@ const RecordedFixtures: seq[(string, seq[EntrySpec])] = @[
       ("one_shot_core_attn_out", false, dmExact, true)]),
 
   # EXL3 families: every recorded fixture regenerates from the committed
-  # payload, the entries mirror the recorded tensor names of each family.
-  # The final-logits raw payload retired from the tree per the decision-payload
-  # contract: its committed stats sidecar is frozen data, the entry states it.
+  # payload. The entries mirror the recorded tensor names of each family.
+  # The final-logits raw payload retired from the tree per the
+  # decision-payload contract: its committed stats sidecar is frozen data.
+  # The entry states it.
   ("fixtures/exl3-01-block-02-trace/layer02_trace.safetensor",
-    @[("after_input_layernorm", false, dmNone, false), ("after_k_norm", false, dmNone, false), ("after_o_proj", false, dmNone, false), ("after_post_layernorm", false, dmNone, false), ("after_q_norm", false, dmNone, false), ("after_residual", false, dmNone, false), ("after_rope_k", false, dmNone, false), ("after_rope_q", false, dmNone, false), ("attn_output", false, dmNone, false), ("k_proj_out", false, dmNone, false), ("mlp_activation", false, dmNone, false), ("mlp_down_out", false, dmNone, false), ("mlp_gate_out", false, dmNone, false), ("mlp_up_out", false, dmNone, false), ("output", false, dmNone, false), ("output_residual", false, dmNone, false), ("q_proj_out", false, dmNone, false), ("v_proj_out", false, dmNone, false)]),
+    @[("after_input_layernorm", false, dmNone, false),
+      ("after_k_norm", false, dmNone, false),
+      ("after_o_proj", false, dmNone, false),
+      ("after_post_layernorm", false, dmNone, false),
+      ("after_q_norm", false, dmNone, false),
+      ("after_residual", false, dmNone, false),
+      ("after_rope_k", false, dmNone, false),
+      ("after_rope_q", false, dmNone, false),
+      ("attn_output", false, dmNone, false),
+      ("k_proj_out", false, dmNone, false),
+      ("mlp_activation", false, dmNone, false),
+      ("mlp_down_out", false, dmNone, false),
+      ("mlp_gate_out", false, dmNone, false),
+      ("mlp_up_out", false, dmNone, false),
+      ("output", false, dmNone, false),
+      ("output_residual", false, dmNone, false),
+      ("q_proj_out", false, dmNone, false),
+      ("v_proj_out", false, dmNone, false)]),
   ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/attn-Qwen3-0.6B-EXL3-5bpw-00.safetensor",
     @[("output", true, dmNone, false)]),
   ("fixtures/exl3-01-layer-internals/Qwen3-0.6B-EXL3-5bpw-layer-0/attn-Qwen3-0.6B-EXL3-5bpw-01.safetensor",
@@ -296,9 +315,10 @@ proc recordedTensor(st: Safetensor, name: string): Tensor =
 proc main() =
   for (rel, names) in RecordedFixtures:
     let path = TestsDir / rel
-    # An all-frozen fixture carries no payload: every entry's source retired
-    # from the tree, the committed sidecars stay as recorded. A missing payload
-    # with a regenerable entry stays a hard tooling error (the open below raises).
+    # An all-frozen fixture carries no payload: every entry's source is
+    # retired from the tree. The committed sidecars stay as recorded. A
+    # missing payload with a regenerable entry stays a hard tooling error
+    # (the open below raises).
     var hasRegenerable = false
     for e in names:
       if not e.frozenSource:
@@ -333,8 +353,8 @@ proc main() =
     if statsFile.tensors.len > 0:
       let outPath = path & ".stats.json.zst"
       if hasFrozenStats:
-        # Frozen stats file: the regenerable entries must still byte-match the
-        # committed sidecar, the frozen entries stay as recorded.
+        # Frozen stats file: the regenerable entries must still byte-match
+        # the committed sidecar. The frozen entries stay as recorded.
         let committed = loadFingerprintStats(outPath)
         for ts in statsFile.tensors:
           let want = committed.statsTensor(ts.name)

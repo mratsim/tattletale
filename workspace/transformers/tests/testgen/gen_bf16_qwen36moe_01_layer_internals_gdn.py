@@ -13,15 +13,15 @@ What is generated (under tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-
   gdn-Qwen3.6-35B-A3B-00.safetensor (+ .metadata.json.zst)
     GDN block prefill T=5 with real layer-0 weights: conv output, q/k/v
     post-split, g, beta, the recurrent block output and the chunked
-    module output. Fixture contract v2: the f32 final SSM states and the
-    sublayer intermediates (z, gated RMSNorm output, core outputs) are
-    NOT stored in full at any model size; their external surface lives
+    module output. The f32 final SSM states and the sublayer
+    intermediates (z, gated RMSNorm output, core outputs) are not in the
+    payload at any model size; their external surface lives
     in the descriptor sidecar (gdn-Qwen3.6-35B-A3B-00.safetensor.
     descriptors.json, written by harness/gen_stats.nim from the
     pre-migration bytes and frozen there; a sanctioned re-record
     rewrites it through fixture_stats.py descriptor_fields).
-  The multi-chunk T=70 case retired with the fixture contract v2: no
-  suite consumed it, its full-tensor shape violated the per-file byte
+  The multi-chunk T=70 case is not in the payload: no suite consumed
+  it, its full-tensor shape violated the per-file byte
   cap at any model size, and the cross-chunk property it exercised
   lives on as a synthetic tier-1 check in the consuming suite (both
   live computation modes on a seeded random input, no recorded bytes).

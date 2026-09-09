@@ -5,20 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Test Qwen3-0.6B-EXL3-5bpw: token IDs to logit inference against the
-## exl3-03-full-forward-to-logits family. The reference-device variant replays
-## the chain bit-exactly and checks the final logits through the decision
-## projection through the ulp-banded decision rows (4 ulp at the recorded
-## top-1 logit binade, unit fp16). A run on any other device is
-## the cross-device class: chained stages accumulate drift linearly, so the
-## per-layer elementwise bound is the chain checkpoint band (fp16 unit, EXL3
-## dequantizes to fp16), the layer outputs also compare against the recorded
-## stats sidecars, and the final logits compare through the recorded
-## quantile fingerprint plus the per-position argmax agreement. The
-## tail-probability checksum of the projection is a reference-device check:
-## the recorded full logits row the softmax integrates retired with the raw
-## tensor, so no cross-device drift row applies to it.
-##
 ## Run:
 ##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_03_full_forward_to_logits
 
@@ -168,9 +154,9 @@ proc main() =
           msg = "Qwen3-0.6B-EXL3-5bpw final logits projection",
           ulpUnitF16 = true)
       else:
-        # Cross-device variant: the recorded distribution of the retired raw
-        # logits tensor under the accumulated chain band, plus the discrete
-        # argmax agreement per position.
+        # Cross-device variant: the raw logits tensor is not in the
+        # payload, its recorded distribution compares under the accumulated
+        # chain band, plus the discrete argmax agreement per position.
         let statsFile = loadFingerprintStats(
           FixtureDir / "final_logits.safetensor.stats")
         assertStatsChainBand(finalLogits, statsFile.statsTensor("logits"),

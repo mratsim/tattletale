@@ -30,7 +30,7 @@ to our kernels and compare against those recordings.
 ```mermaid
 flowchart LR
     A["HF transformers reference<br/>python, installed release"] --> B["record once<br/>layer tensors + logits"]
-    B --> C["fixtures<br/>zip recordings + compact projections"]
+    B --> C["fixtures<br/>zstd decision frames + compact projections"]
     C --> D["Nim replay<br/>same inputs, our kernels"]
     C --> E["check layer<br/>budgets + signatures"]
     D --> E
@@ -39,8 +39,8 @@ flowchart LR
     F -->|no| H["difference is a bug<br/>the report names the step"]
 ```
 
-- Zip recordings carry chosen tokens, top-32 logits and margins per step for
-  greedy decoding.
+- Decision frames (`.json.zst`) carry chosen tokens, top-32 logits and margins
+  per step for greedy decoding.
 - Decision projections compress million-element logits to a few hundred
   bytes: argmax, the top-2 competing pair, and the tail probability
   per position, the probability of tokens outside the recorded top ranks.
@@ -192,8 +192,9 @@ flowchart TD
   stats, provenance rows, the two-sided selftest, invariants. `SPEC.md`
   states the check semantics, `PLAYBOOK.md` the how-to.
 - `q_bf16/` — four fixture families per dense port: one chain suite per
-  model (3-block long residual replay, sidecar checkpoints per block,
-  drift-scaling check), one full-forward-to-logits suite, one greedy suite (with
+  model (8+1 long-residual replay: first 8 layers plus the final pre-norm
+  tail, sidecar checkpoints per block, drift-scaling check), one
+  full-forward-to-logits suite, one greedy suite (with
   the t2t entry as the forced first step), and the per-op unit suites
   (`t_bf16_unit_rope`, `t_bf16_unit_attn`) shared across the dense ports
   with one recorded family per op. The 35B MoE port keeps its own suites.
@@ -324,7 +325,7 @@ flowchart TD
     U["HF transformers release update"] --> G["generators re-run<br/>against the installed release"]
     G --> C{"regenerated tensors<br/>byte-identical against<br/>the committed recordings?"}
     C -->|yes| K["frozen recording stays the truth"]
-    C -->|no| P["operator-sanctioned re-record pass<br/>per family: regenerate PROVENANCE.md<br/>plus the byte-comparison record"]
+    C -->|no| P["reviewed re-record pass<br/>per family: regenerate PROVENANCE.md<br/>plus the byte-comparison record"]
 ```
 
 - The GDN families regenerate byte-identically, so a frozen recording stays
@@ -350,12 +351,8 @@ Derived, not tuned:
   linearly with depth: the per-block differences from the addition
   order are bounded but not zero-mean. The chain budget states that model: an
   absolute term of 2^-3 times the depth times the bulk scale of the
-  recorded checkpoint, plus two ulp of relative slack. The first chain
-  budget assumed a zero-mean random walk and scaled its absolute term
-  with sqrt(depth). The 9-checkpoint measurement falsified that
-  assumption at depth 8, and the budget changed through the derivation
-  procedure (the budget-change log in harness/SPEC.md carries the
-  record).
+  recorded checkpoint, plus two ulp of relative slack (the derivation and
+  the budget-change log in harness/SPEC.md carry the record).
 
 Measurement checks, never sets:
 

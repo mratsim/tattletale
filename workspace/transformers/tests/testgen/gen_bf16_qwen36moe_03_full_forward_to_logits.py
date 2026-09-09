@@ -28,12 +28,12 @@ GDN chunked rule with the installed recurrent rule at the modeling-module
 level, so the whole chain runs the exact op sequence the Nim
 implementation mirrors. The expert dispatch is locked to `eager`
 (the default `from_pretrained` backend resolution picks `grouped_mm`, a
-different accumulation formulation). Under the fixture contract v2 the
-chunked copies (layer_input, layer_output, final logits tensors) left the
-payload: the Nim full-forward-to-logits test asserts 0.00 against layer_input_seq,
-the top-k router records and the projection, and the recorded
-seq-vs-chunked bands stay as metadata documentation. The 0.8B ids
-fixtures of the same family keep the older shape.
+different accumulation formulation). Under the payload-tiering rules of
+FIXTURE_GENERATION.md the chunked copies (layer_input, layer_output, final
+logits tensors) left the payload: the Nim full-forward-to-logits test asserts
+0.00 against layer_input_seq, the top-k router records and the projection, and
+the recorded seq-vs-chunked bands stay as metadata documentation. The 0.8B
+full-forward fixtures of the same family keep the earlier shape.
 
 Tolerances asserted here:
   - the sequential run is bit-identical on a second execution

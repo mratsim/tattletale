@@ -8,9 +8,10 @@
 ## EXL3 layer-02 stage trace for Qwen3-0.6B-EXL3-5bpw: the per-stage fixtures
 ## of the exl3-01-block-02-trace family, the first-divergence bisector of the
 ## decoder layer. Chained stages accumulate drift linearly, so the per-stage
-## bound grows with stage index; a Metal EXL3 reimplementation later adds a
-## measured Metal calibration row without touching fixtures or suites.
-## The norm stages measured bit-exact across devices act as drift anchors.
+## bound grows one base step per chained stage since the last bit-exact
+## anchor; a Metal calibration row, when EXL3 dequant is ported, extends the
+## same law. The norm stages measured bit-exact across devices act as drift
+## anchors.
 ##
 ## Run:
 ##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_01_block_02_trace

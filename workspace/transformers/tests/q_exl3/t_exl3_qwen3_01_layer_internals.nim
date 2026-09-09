@@ -5,12 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## EXL3 layer-internals suite for Qwen3-0.6B-EXL3-5bpw: the linear, attention
-## and decoder-block fixtures of the exl3-01-layer-internals family, compared
-## through the fingerprint stats sidecars plus the elementwise match-rate
-## against the raw payloads. The exl3 families use the bf16 bounds with the
-## ulp unit taken in fp16, because EXL3 dequantizes to fp16.
-##
 ## Run:
 ##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_01_layer_internals
 
@@ -255,11 +249,12 @@ proc main() =
         doAssert finalOutputResidual.shape == expectedOutputResidual.shape, &"Shape mismatch: {finalOutputResidual.shape} vs {expectedOutputResidual.shape}"
 
         # The same-device class takes the accumulated-bound law, not the
-        # static per-op row: the block output is a 9-stage composition
-        # (norm, qkv, qk-norm, rope, sdpa, o_proj, residual add, post-norm,
-        # mlp chain, output add) and per-op budgets never compose — see the
-        # t_exl3_qwen3_01_block_02_trace stage trace, which measures the same
-        # composition at chained depth 9.
+        # static per-op cap: the block output is a 9-stage composition
+        # (qkv, qk-norm, rope, sdpa, o_proj, residual add, post-norm, mlp
+        # chain, output add) chained since the input-norm anchor, and per-op
+        # budgets never compose (see the t_exl3_qwen3_01_block_02_trace
+        # stage trace, which measures the same composition at chained
+        # depth 9).
         if meanAbsValue(expectedOutput) == 0.0:
           assertWithinBudget(finalOutput, expectedOutput,
             ToleranceBudget(tier: ctBitExact),
@@ -282,7 +277,7 @@ proc main() =
         if sameDevice:
           # Accumulated-bound law on the reference device too: the block is
           # a 9-stage composition, the soft histograms drift like the
-          # elementwise outputs (measured 0.0109 L1 on the reference box).
+          # elementwise outputs.
           assertStatsChainBand(finalOutput, statsFile.statsTensor("output"), 9,
             rtol = ChainCheckpointRtolF16,
             msg = &"Layer output case {caseNum} stats")

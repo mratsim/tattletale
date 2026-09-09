@@ -96,7 +96,6 @@ proc buildGdn(dev = F.kCPU): GatedDeltaNet =
 
 proc main() =
   # ──────────────────────────────────────────────────────────────────────────
-  # ──────────────────────────────────────────────────────────────────────────
   runCppTest "Real layer-0 GDN tensors: conv-split geometry vs fixture q/k/v":
     proc(): bool =
       let gdn = buildGdn()
@@ -160,7 +159,6 @@ proc main() =
       assertAllClose(vNim, vFix, rtol = 0.0, abstol = 0.0, msg = "split v mismatch")
       true
 
-  # ──────────────────────────────────────────────────────────────────────────
   # ──────────────────────────────────────────────────────────────────────────
   runCppTest "GDN layer forward (recurrent) vs prefill fixture":
     proc(): bool =
@@ -259,20 +257,10 @@ proc main() =
     proc(): bool =
       let runDev = testDevice()
       echo "    devices: ", compareLine(FixtureDir, runDev)
-      # Budget provenance of the cross-device variant:
-      # Measured facts: Metal, both orders run on the device.
-      # - bf16 block outputs: 0.25 bf16 ulps at the output max 3.375.
-      # - conv state: one bf16 step at the differing element, 0.25 ulp-units
-      #   at the conv max 7.34375 (the element sits in a lower binade).
-      # - f32 state: 1027.4 fp32 ulps at the pair max 1.032 over the T=70
-      #   decode, about 15 fp32 ulps per step.
-      # CPU reference: the conv states compare bit-equal across the orders.
-      # The state drifts one fp32 ulp.
-      # Bounds: the conv budget (two bf16 ulp-units at the max) and the
-      # linear-in-decode-length state drift bound, both through the
-      # evaluation-order checks.
-      # Rejection rows: the selftest evaluation-order corpus rejects past both bounds
-      # and accepts the sub-bound drifts.
+      # Budget provenance of the cross-device variant: the bounds and the
+      # measured drifts live in the "GDN evaluation order" section of
+      # harness/SPEC.md. On the cpu reference the conv states compare
+      # bit-equal across the orders.
       let gdn = buildGdn(runDev)
       Torch.manual_seed(0x5EEDC0DE'u64)
       let x = F.randn(70 * Hidden, F.tensorOptions(F.kBFloat16, runDev))

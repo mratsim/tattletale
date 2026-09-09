@@ -313,7 +313,7 @@ proc main() =
       echo "    devices: ", compareReport(ChainFixtureDir, runDev)
       if compareClass(recordedDevice(recordedFrom(ChainFixtureDir)),
           runDev) == sameDeviceBitExact:
-        echo "    the pair selects the reference rows, the reference variant carries the replay"
+        echo "    the device comparison selects the reference budgets, the reference variant carries the replay"
         return true
       let model = loadQwen35ModelRaw(ModelDir, runDev)
       var (ctx, pool) = newKVContext(numLayers = ChainDepth, kvHeads = 2,
