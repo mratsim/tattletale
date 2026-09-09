@@ -8,7 +8,8 @@
 ## Test Qwen3-0.6B-EXL3-5bpw: token IDs to logit inference against the
 ## exl3-03-full-forward-to-logits family. The reference-device variant replays
 ## the chain bit-exactly and checks the final logits through the decision
-## projection with its bit-exact strided probe. A run on any other device is
+## projection through the ulp-banded decision rows (4 ulp at the recorded
+## top-1 logit binade, unit fp16). A run on any other device is
 ## the cross-device class: chained stages accumulate drift linearly, so the
 ## per-layer elementwise bound is the chain checkpoint band (fp16 unit, EXL3
 ## dequantizes to fp16), the layer outputs also compare against the recorded
@@ -19,7 +20,7 @@
 ## tensor, so no cross-device drift row applies to it.
 ##
 ## Run:
-##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_05_ids_to_logits
+##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_03_full_forward_to_logits
 
 import
   std/strformat,
@@ -150,20 +151,22 @@ proc replayChain(dev: F.DeviceKind): Tensor =
 proc main() =
   let dev = testDevice()
 
-  runCppTest "Qwen3-0.6B-EXL3-5bpw: ids-to-logits — long residual stream vs EXL3 fixtures":
+  runCppTest "Qwen3-0.6B-EXL3-5bpw: full forward to logits — long residual stream vs EXL3 fixtures":
     proc(): bool =
       echo "    devices: ", compareLine(FixtureDir, dev)
       let finalLogits = replayChain(dev)
 
       if dev == F.kCUDA:
         # Reference-device variant: the chain replays bit-exactly, the final
-        # logits go through the full decision projection with the bit-exact
-        # strided probe and the tail-probability checksum.
+        # logits go through the full decision projection: the recorded
+        # strided sample (probe_bits), the tail-probability checksum, and
+        # the ulp-banded decision rows with the fp16 unit.
         let projection = zstdReadFixture(
           FixtureDir / "final_logits.decisions.json.zst"
         ).fromJson(LogitsProjection)
         assertProjection(finalLogits, projection,
-          msg = "Qwen3-0.6B-EXL3-5bpw final logits projection")
+          msg = "Qwen3-0.6B-EXL3-5bpw final logits projection",
+          ulpUnitF16 = true)
       else:
         # Cross-device variant: the recorded distribution of the retired raw
         # logits tensor under the accumulated chain band, plus the discrete

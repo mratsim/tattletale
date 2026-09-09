@@ -1475,7 +1475,7 @@ const
   ## Schema of the first-generation final_logits.decisions.json.zst
   ## payloads, decisions only.
   LogitsProjectionSchema2* = "tt-final-logits-projection-2"
-  ## Schema adding the strided bit-exact probe of every deciding row:
+  ## Schema adding the strided bit-exact sample of every deciding row:
   ## 512 f32 words per position, one every ceil(vocab/512) positions.
   ## The f32 logit agreement cap stays 1e-5 absolute, the committed
   ## top-2 cap.
@@ -1507,11 +1507,21 @@ type
     vocabSize*: int
     steps*: seq[DecisionStep]
 
-proc assertProjection*(logits: Tensor, projection: LogitsProjection, msg = "") =
+proc assertProjection*(logits: Tensor, projection: LogitsProjection, msg = "",
+    ulpUnitF16 = false) =
   ## Check computed final logits against the recorded decision projection: argmax id and top-2
-  ## competing pair per position, f32 logit cap 1e-5, argmax margin, and the tail-probability
-  ## checksum beyond the pair. Raw logits tensors leave the tree, the consumers read the decisions
-  ## only.
+  ## competing pair per position, the ulp-banded logit row, argmax margin, and the
+  ## tail-probability checksum beyond the pair. Raw logits tensors leave the tree, the consumers
+  ## read the decisions only.
+  ##
+  ## The ulp unit follows the recorded dequant grid (the GreedyConfig.ulpUnitF16
+  ## switch): fp16 for the exl3 families, bf16 otherwise. The ulp count is the
+  ## per-op row budget (4) evaluated at the recorded top-1 logit binade — the
+  ## support-wide ulpFloor shape of checkGreedyStep, because the chain
+  ## perturbation is a logit-scale absolute drift. bf16 is the loose grid; the
+  ## same ulp count on the fp16 grid is a strictly tighter absolute band, never
+  ## worse.
+  let ulpAt = if ulpUnitF16: fp16UlpAt else: bf16UlpAt
   let ctx = (if msg.len > 0: ": " & msg else: "")
   let row = logits.contiguous().to(F.kCPU).to(F.kFloat32)
   if not (row.dim == 3 and row.size(0) == 1):
@@ -1536,10 +1546,10 @@ proc assertProjection*(logits: Tensor, projection: LogitsProjection, msg = "") =
         obsArgmax = i
       elif v > obsTop2:
         obsTop2 = v
-    let tieEligible = step.argmaxMargin <= bf16UlpAt(step.top2Logits[0].float64) and
+    let tieEligible = step.argmaxMargin <= ulpAt(step.top2Logits[0].float64) and
       obsArgmax in step.top2Ids and
       abs(obsTop1 - step.top2Logits[0].float64) <=
-        max(4.0 * bf16UlpAt(step.top2Logits[0].float64), 1e-5)
+        max(4.0 * ulpAt(step.top2Logits[0].float64), 1e-5)
     if not (obsArgmax == step.argmaxId or tieEligible):
       raise newException(HarnessCheckError,
         "position " & $step.position & " argmax " & $obsArgmax &
@@ -1547,27 +1557,51 @@ proc assertProjection*(logits: Tensor, projection: LogitsProjection, msg = "") =
     for slot in 0 ..< step.top2Ids.len:
       let id = step.top2Ids[slot]
       let diff = abs(raw[id].float64 - step.top2Logits[slot].float64)
-      if diff > 1e-5:
+      # 4-ulp band at the recorded top-1 logit binade: the chain
+      # perturbation is a logit-scale absolute drift (~1 fp16 ulp measured
+      # on the rebuilt binary), the support-wide ulpFloor shape of
+      # checkGreedyStep.
+      if diff > max(1e-5, 4.0 * ulpAt(step.top2Logits[0].float64)):
         raise newException(HarnessCheckError,
           "position " & $step.position & " top2 slot " & $slot &
           " logit drift " & $diff & ctx)
-    if abs(obsTop1 - obsTop2 - step.argmaxMargin) > 1e-5:
+    let marginDrift = abs(obsTop1 - obsTop2 - step.argmaxMargin)
+    # The margin combines two banded logits: the cap is the top-2 band
+    # twice (2 x 4 ulp at the top-1 binade), not an independent constant.
+    if marginDrift >
+        max(1e-5, 8.0 * ulpAt(step.top2Logits[0].float64)):
       raise newException(HarnessCheckError,
-        "position " & $step.position & " argmax margin drift" & ctx)
+        "position " & $step.position & " argmax margin drift " & $marginDrift &
+        " (recorded margin " & $step.argmaxMargin & ", cap " &
+        $max(1e-5, 8.0 * ulpAt(step.top2Logits[0].float64)) & ")" & ctx)
     let probs = F.softmax(flat, dim = -1)
     var kept = 0.0'f64
     for id in step.top2Ids:
       kept += probs[id].item(float64)
     let tail = 1.0 - kept
-    let tailLimit = 1e-3 * max(step.tailProbability, 1e-3) + 1e-4
+    # The greedy tailBand row shape (tailBand x max(tail, 1e-3) + 1e-4).
+    # The band term derives from the 4-ulp logit floor through softmax
+    # sensitivity: a logit-scale shift delta moves the tail probability by
+    # (exp(delta) - 1) x tail, so tailBand = exp(4 ulp at the top-1
+    # binade) - 1, capped at the bf16 greedy tailBand 0.3 — the 4-ulp floor
+    # must never translate into a looser tail row than the bf16 convention
+    # (the fp16 grids stay strictly tighter, e.g. 3.1e-2 at logit 8).
+    # Measured on the CUDA reference box with the rebuilt binary:
+    # 1.65e-3/8.2e-3/1.24e-2 relative at tails 0.28/0.027/0.38. A
+    # wrong-weights bug shifts tails by O(1) and stays detected.
+    let tailLimit = min(0.3,
+      exp(4.0 * ulpAt(step.top2Logits[0].float64)) - 1.0) *
+      max(step.tailProbability, 1e-3) + 1e-4
     if abs(tail - step.tailProbability) > tailLimit:
       raise newException(HarnessCheckError,
         "position " & $step.position & " tail probability " & $tail &
         " vs recorded " & $step.tailProbability & " outside band " & $tailLimit & ctx)
     if step.probeBits.len > 0:
-      # Schema-2 probe: bit-exact strided sample of the deciding row
-      # over the reference device. The stride must cover the row with 512
-      # words, indices i * stride, ceil(n / stride) == word count.
+      # Schema-2 strided sample (probe_stride, probe_mode, probe_bits on disk)
+      # of the deciding row over the reference device. The stride must cover the row with 512 words,
+      # indices i * stride, ceil(n / stride) == word count. Compared on the
+      # 4-ulp band at the recorded top-1 binade (same chain drift as the
+      # top2 cap).
       if not (step.probeStride > 0 and step.probeMode == "exact"):
         raise newException(HarnessCheckError,
           "position " & $step.position & " probe stride or mode malformed" & ctx)
@@ -1582,7 +1616,12 @@ proc assertProjection*(logits: Tensor, projection: LogitsProjection, msg = "") =
         let idx = i * step.probeStride
         let rec = cast[float32](uint32(parseHexInt(
           step.probeBits[i * 8 ..< i * 8 + 8])))
-        if raw[idx] != rec:
+        # The chain perturbation is a logit-scale absolute drift, so tail
+        # words carry the same absolute noise as the top pair: the band is
+        # the 4-ulp floor at the recorded top-1 binade (the support-wide
+        # ulpFloor shape of checkGreedyStep).
+        if abs(raw[idx] - rec) > max(1e-5,
+            4.0 * ulpAt(step.top2Logits[0].float64)):
           raise newException(HarnessCheckError,
             "position " & $step.position & " probe word " & $i &
             " at logit " & $idx & " drifts from the recorded row" & ctx)

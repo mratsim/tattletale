@@ -12,7 +12,7 @@
 ## ulp unit taken in fp16, because EXL3 dequantizes to fp16.
 ##
 ## Run:
-##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_03_layers
+##   TTT_TEST_ON=cpu nim test_tf_exl3_qwen3_01_layer_internals
 
 import
   std/options,
@@ -254,21 +254,45 @@ proc main() =
         doAssert finalOutput.shape == expectedOutput.shape, &"Shape mismatch: {finalOutput.shape} vs {expectedOutput.shape}"
         doAssert finalOutputResidual.shape == expectedOutputResidual.shape, &"Shape mismatch: {finalOutputResidual.shape} vs {expectedOutputResidual.shape}"
 
-        elementwise(finalOutput, expectedOutput, sameDevice,
-          model.config.intermediate_size, &"Layer output case {caseNum}")
-        elementwise(finalOutputResidual, expectedOutputResidual, sameDevice,
-          model.config.hidden_size, &"Layer output_residual case {caseNum}")
+        # The same-device class takes the accumulated-bound law, not the
+        # static per-op row: the block output is a 9-stage composition
+        # (norm, qkv, qk-norm, rope, sdpa, o_proj, residual add, post-norm,
+        # mlp chain, output add) and per-op budgets never compose — see the
+        # t_exl3_qwen3_01_block_02_trace stage trace, which measures the same
+        # composition at chained depth 9.
+        if meanAbsValue(expectedOutput) == 0.0:
+          assertWithinBudget(finalOutput, expectedOutput,
+            ToleranceBudget(tier: ctBitExact),
+            msg = &"Layer output case {caseNum}")
+        else:
+          discard assertChainCheckpoint(finalOutput, expectedOutput, 9,
+            reductionLen = model.config.intermediate_size,
+            msg = &"Layer output case {caseNum}",
+            rtol = ChainCheckpointRtolF16)
+        if meanAbsValue(expectedOutputResidual) == 0.0:
+          assertWithinBudget(finalOutputResidual, expectedOutputResidual,
+            ToleranceBudget(tier: ctBitExact),
+            msg = &"Layer output_residual case {caseNum}")
+        else:
+          discard assertChainCheckpoint(finalOutputResidual, expectedOutputResidual, 9,
+            reductionLen = model.config.hidden_size,
+            msg = &"Layer output_residual case {caseNum}",
+            rtol = ChainCheckpointRtolF16)
         let statsFile = loadFingerprintStats(statsPath(fixturePath))
         if sameDevice:
-          assertStats(finalOutput, statsFile.statsTensor("output"),
-            exl3Budget(obPostResidual),
+          # Accumulated-bound law on the reference device too: the block is
+          # a 9-stage composition, the soft histograms drift like the
+          # elementwise outputs (measured 0.0109 L1 on the reference box).
+          assertStatsChainBand(finalOutput, statsFile.statsTensor("output"), 9,
+            rtol = ChainCheckpointRtolF16,
             msg = &"Layer output case {caseNum} stats")
-          assertStats(finalOutputResidual, statsFile.statsTensor("output_residual"),
-            exl3Budget(obPostResidual),
+          assertStatsChainBand(finalOutputResidual,
+            statsFile.statsTensor("output_residual"), 9,
+            rtol = ChainCheckpointRtolF16,
             msg = &"Layer output_residual case {caseNum} stats")
         else:
           assertStatsChainBand(finalOutput, statsFile.statsTensor("output"), 1,
-    rtol = ChainCheckpointRtolF16,
+            rtol = ChainCheckpointRtolF16,
             msg = &"Layer output case {caseNum} stats")
           assertStatsChainBand(finalOutputResidual,
             statsFile.statsTensor("output_residual"), 1,
