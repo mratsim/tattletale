@@ -1,8 +1,158 @@
-# EXL3 Fixture Generation Conventions
+# Fixture Generation Conventions
 
 This document records the conventions and invariants that fixture generators must
-follow to produce deterministic, production-faithful test data for the Nim EXL3
-inference pipeline.
+follow to produce deterministic, production-faithful test data for the Nim
+inference pipelines.
+
+## Fixture payload tiering rules
+
+Quantization fixture families mirror the bf16 contract (stats + descriptor
+sidecars, summary-surface comparisons) except the hash-anchored 00 families,
+whose bit-exactness contract requires the raw inputs plus the recorded kernel
+hash. The exl3 families carry the bf16 bounds with the ulp unit taken in
+fp16, because EXL3 dequantizes to fp16; every bound comparison is inclusive,
+a value landing exactly on the bound passes.
+
+
+A fixture family ships sidecar plus slices plus PROVENANCE.md, never raw output
+tensors except the value-bearing slices:
+
+- **Decision payloads** (greedy chains, final logits) are recorded as compact
+  JSON decisions: greedy chains carry the chosen token, top-32 ids and f32
+  logits, argmax margin and the explicit `tail_probability` key per step
+  (ttt-tf-001-greedy-steps-h2). Final logits carry the decision projection
+  ttt-tf-002-logit-decisions-probe-h2, per
+  position the argmax id, the top-2 competing pair with f32 logits, the argmax
+  margin and the softmax probability beyond the top-2 pair, plus the strided
+  512-word bit-exact probe row of every deciding row. The [1,6,248320]
+  raw-logits class shrinks from megabytes to tens of KB, consumers read argmax
+  and top-2 only.
+- **Boundary slices** that feed bit-exact or band-compared boundaries stay raw
+  (layer inputs/outputs, GDN conv/state trajectories), they are the
+  value-bearing slices of the family.
+- **Fingerprint sidecars** (`<fixture>.stats.json.zst` frames, payload
+  byte format of harness/gen_stats.nim) carry order statistics and
+  histograms so removed raw tensors keep a distribution check.
+- **PROVENANCE.md** per fixture family, generated at record time with
+  `fixture_stats.write_provenance`:
+  date, dtype, generator, model, platform, python/torch/transformers
+  versions, recorded_from, seed.
+  The manifest stays light enough to recreate the recording run.
+  No device row and no num_threads row:
+  the recording device derives from the recorded_from row, its last
+  dash-separated component (harness/device.nim `recordedDevice`).
+  No git metadata: a re-run depends only
+  on the recorded versions and the generator beside the fixtures, and
+  hashes dangle under squash merges and rewrites.
+- **GDN family frozen truth**: the GDN conv/state fixtures regenerate
+  byte-identically against the frozen recordings. A regeneration that
+  differs must stop the change until the cause is found (a stale
+  assumption, a code defect, or the wrong model): run the force-fallback
+  verification first, then take the finding to review before accepting a
+  new canonical truth for the family. Never silently re-record GDN.
+- **Re-record records** (fixture file checksums before and after, plus the
+  re-run byte-comparison results) are kept outside the repo. The record
+  contract is the "verified re-record record" definition in ../README.md.
+  Old raw payloads leave the tree only after the family successor passes.
+
+### Recording environment
+
+Fixture generation runs in the uv-synced environment:
+
+    uv sync --group test-vectors
+
+CAUTION: the group pins torch==2.11.0, so a sync DOWNGRADES torch from the
+recorded 2.14.0. Restore the recorded version after every sync, then re-check
+that `torch.__version__` matches the version recorded in the fixture metadata
+before generating:
+
+    uv pip install torch==2.14.0
+
+The installed transformers (5.16.1) is the source of truth:
+no vendored checkout is consulted, `_references_*` never appears in comments or
+fixture generation, and hub kernel packages are absent so kernel dispatch falls
+back to the pure-torch bodies, which is the reference behavior.
+
+### Recording box
+
+`recorded_from` names the recording box plus device ("m4max-cpu",
+"rtxpro6000-cuda"). The default recording box stays m4max-cpu. A recording on
+another box sets `TTT_RECORD_FROM` in the environment. The value lands in the
+PROVENANCE.md rows and in the env frame of the greedy fixtures, and the env
+frame additionally carries an explicit `device` row while PROVENANCE.md has
+none (the recording device derives from the recorded_from row, its last
+dash-separated component). Every EXL3
+fixture family writes its PROVENANCE.md at record time through
+`fixture_exl3_common.write_family_provenance`.
+
+### Fixed quantile method and bucket spec
+
+- Quantiles: exact order statistic of the ascending sort, index
+  `floor(p * (n - 1))`, no interpolation, computed in f64 indices over values
+  promoted from the native dtype to f32 for storage. Fixed
+  probabilities: 0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99, plus
+  min and max, stored as hex f32 bit patterns.
+- Histograms: binade-log soft buckets over the bf16 bit pattern. Bucket =
+  (sign, binade -64..63, mantissa top 6 bits), 14-bit keys in sparse sorted
+  storage, plus dedicated zero (65534) and subnormal (65535) bins. Soft
+  bucketing: each element contributes (2 - low) toward its bucket and low
+  toward the neighbor bucket, low being the dropped 8th mantissa bit, integer
+  math, bit-exact cross-implementation. Bucket width is 4 ulp. NaN and
+  +Inf raise an error, -Inf is whitelisted only through allow_minus_inf and stays
+  unbucketed (a quantile-only path).
+- The cross-implementation contract is carried by the committed stats corpus:
+  tests/harness/stats-corpus, verified inside the harness selftest, python and Nim
+  fingerprints bit-exact on order statistics and histograms, the histogram
+  total exact as the summation statistic.
+
+### Fixture classes and the family ladder
+
+- The fixture tree carries exactly two quant classes:
+  the bf16-* families and the exl3-* families, both under tests/fixtures/.
+- The bf16 and exl3 family prefixes climb one ladder:
+  the number is the rung.
+- Rung 00:
+  codec and hadamard primitives, no layer context.
+- Rung 01:
+  one decoder layer, its internal operations.
+- Rung 02:
+  several decoder layers in sequence.
+- Rung 03:
+  the full forward pass, token ids to logits.
+- Rung 04:
+  autoregressive text generation.
+- Each rung contains the previous rung plus more:
+  a missing rung is simply not yet recorded.
+- Harness self-test material lives in tests/harness/, never under fixtures/:
+  the stats corpus sits at tests/harness/stats-corpus, it is the
+  instrument-check input of the harness machinery.
+
+### The exl3 families
+
+- Rung 00 (codec, hadamard): packed trellis inputs plus metadata frames with
+  the production-CUDA-kernel weight hash, bit-exactness the contract, no
+  stats sidecars.
+- Rung 01 layer internals: fingerprint stats sidecars per payload,
+  quantile-only entries on the linear outputs and histogram entries on the
+  attention and block outputs, the margin-critical class. The suites compare
+  the per-op ulp rows on the recording device and the chain checkpoint band
+  elsewhere, elementwise plus stats.
+- Rung 01 block-02 trace: quantile-only stats entries per stage tensor, the
+  chained stages accumulating drift linearly under the stage-indexed bound,
+  the bit-exact input-layernorm anchor resetting the count.
+- Rung 03 full forward: per-layer quantile-only stats entries beside the
+  raw boundary payloads, the final logits decision projection
+  (ttt-tf-002-logit-decisions-probe-h2) plus the frozen quantile entry of the
+  retired raw tensor. The 1.7 MB raw logits tensor stays out of the tree.
+- Rung 04 greedy: ttt-tf-001-greedy-steps-h2 step records (top-32 support, argmax margin,
+  tail probability); the suites replay with teacher-forced tie recovery.
+- Record-time sidecars come from the generators; the mac battery between
+  record waves regenerates the identical frames from the committed payload
+  bytes through testgen/fixture_sidecar_bootstrap.py. The raw logits payload
+  is the one frozen source: with it retired, the committed decision and
+  stats frames stay frozen data.
+- Tier-1 synthetic product-property tests live in tests/synthetic/:
+  they are fixture-free by construction, no fixture material involved.
 
 ## Guiding principle
 
@@ -213,7 +363,7 @@ for an **exponential subset** of layers:
 This yields 7 layers × 7 projections = **49 fixtures** instead of 196, a ~75%
 storage reduction while maintaining coverage of early, middle, and late layers.
 
-The generator `gen_exl3_codec_fixtures.py` defaults to this mode.  Pass
+The generator `gen_exl3_qwen3_00_codec.py` defaults to this mode. Pass
 `--all-layers` to generate for all 28 layers (e.g. for a full verification run,
 not tracked in git), or `--layer N` for a single layer.
 
@@ -226,11 +376,12 @@ Every fixture generator is named `gen_<quant>_<id>_<slug>_<model>.py`:
 | Part | Rule | Examples |
 |---|---|---|
 | `<quant>` | omitted for the unquantized/bf16 path, a marker for a quantized one | `gen_exl3_*` carries `exl3`, bf16 files carry none |
-| `<id>` | the consuming suite's slot, spelled exactly as that suite spells it | `03`, `04_3`, `03b`, `02_attn`, `02_gdn`, and non-numbered suites contribute their slug: `codec`, `hadamard` |
-| `<slug>` | the fixture concern | `layer_fixtures`, `ids_to_logits_fixtures`, `greedy_fixtures` |
+| `<id>` | the consuming suite's slot, spelled exactly as that suite spells it | `02_first_8_layers_plus_final`, `03_full_forward_to_logits`, `04_greedy_text_generation`, `01_layer_internals`, `01_block_02_trace`, `00_codec`, `00_hadamard` |
+| `<slug>` | the fixture concern (the fixture family directory name) | `first-8-layers-plus-final`, `full-forward-to-logits`, `greedy-text-generation`, `layer-internals`, `block-02-trace`, `codec`, `hadamard` |
 | `<model>` | the checkpoint name | `Qwen3-0.6B`, `Qwen3.5-0.8B`, `Qwen3.6-35B-A3B` |
 
-Suffixed slots (`04_3`, `03b`) are house-legal. The model name lives in the
+The `<id>` is the fixture family the consuming suite names, so suite,
+generator and fixture directory carry the same name. The model name lives in the
 filename, and the concern name is the one the consuming suite spells, never
 a private name of a port's own invention.
 
@@ -244,8 +395,54 @@ file of the same concern exists.
 
 ## 10.  JSON fixture payloads ship compressed
 
-JSON fixture payloads ship as single-entry deflate `.json.zip` archives so
-pretty-printed numerics stay out of text diffs and history bloat. Suites
-inflate them in memory with the `transformers_testutils` reader and parse
-through jsony against a declared schema type. Generators emit the archives
-directly.
+JSON fixture payloads ship as single zstd frames (`.json.zst`) so
+pretty-printed numerics stay out of text diffs and history bloat.
+
+Container contract:
+
+- producers write level 19 frames with the content size and a checksum
+  recorded in the frame header, the same shape from both producer sides
+  (python `compression.zstd` and the Nim binding)
+- suites inflate them in memory through the `zstdReadFixture` reader
+  (`harness/recording.nim`, vendored zstd binding) and parse through
+  jsony against a declared schema type
+- the reader asserts the recorded content size instead of guessing
+  buffers, a corrupt or content-size-unknown frame raises an error
+- retired containers keep their re-record records outside the repo,
+  the retired `.json.zip` paths are removable by a git history rewrite
+  that drops the retired blobs
+
+Every fixture data file is blob material: review the generators and
+the harness, never the recorded payloads. The recorded
+json sidecars ship as `.json.zst` frames the same way, the reader is
+`readJsonFixture` (`harness/recording.nim`).
+
+The system dynlib is the default binding path
+(`TTT_USE_SYSTEM_ZSTD=true`), the vendored static build is the
+opt-in (`-d:TTT_USE_SYSTEM_ZSTD=false`) and requires a materialized
+`workspace/zstd/vendor/zstd` submodule. On macOS the binary
+self-locates the dylib through a baked rpath, no environment
+variables involved. The round-trip test
+(`workspace/zstd/tests/t_zstd_roundtrip.nim`) documents both
+invocations. Generators emit the frames directly.
+
+## 11.  Size budgets and the ratchet check
+
+New fixture files respect a size budget so the tree weight stays flat:
+
+- Hard cap 256 kiB per new fixture file. A larger fixture needs an
+  reviewed exception before it is added.
+- Soft target 64 kiB for committed text payloads (decisions,
+  sidecars). The target is advisory; the check reports it as a note.
+- Per-model fixture directory total 1.5 MiB. A directory (first two path
+  components under `tests/fixtures/`) that the new files push past the
+  total is a defect; directories already over the budget at the check's
+  base are recorded baseline exceptions, not failures.
+
+`testgen/check_fixture_filesize.py` is the check. Call it with:
+`python3 check_fixture_filesize.py <repo> <base> <head-or-''> [paths...]`. It prints one line per finding plus a summary block and always
+exits 0; automation greps the `summary: defect kinds: {...}` line for a
+non-empty dict. Run it once with `<base>` set to `-` to list the current
+over-budget files and directories as baseline exceptions (sweep mode).
+Baseline exceptions are removed when their payload is removed (zip,
+projection, or deletion), never by editing the budget constants.

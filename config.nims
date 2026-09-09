@@ -49,8 +49,11 @@ task make_libpositron_cuda, "Build Positron Cuda kernels in static library":
   # Compiles make_libpositron_cuda.cu directly with nvcc.
   # The .cu file #include's all kernel source files as a single translation unit.
   # Caller must have nvcc on PATH (e.g. export PATH="$VENV/lib/python3.14/site-packages/nvidia/cu13/bin:$PATH")
+  # --allow-unsupported-compiler: the flag is a no-op when the host gcc is
+  # within nvcc's supported range; it lets boxes with gcc > 15 build anyway
+  # (on gcc-15 hosts the nvcc version check is the only observed failure).
   exec("mkdir -p build/")
-  exec "nvcc -lib -O3 --use_fast_math --std=c++17 -o build/libpositron_cuda.a workspace/positron/make_libpositron_cuda.cu"
+  exec "nvcc -lib -O3 --use_fast_math --std=c++17 --allow-unsupported-compiler -o build/libpositron_cuda.a workspace/positron/make_libpositron_cuda.cu"
 
 # Utils
 # --------------------------------------------------
@@ -66,16 +69,21 @@ func testerCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
   return
     compiler & " -r" &
     (if extraFlags.len > 0: " " & extraFlags else: "") &
+    " -d:release --stackTrace:on --lineTrace:on --lineDir:on " &
     " --debugger:native " &
     " --hints:off --warnings:off " &
-    &" --outdir:build/tests/{filename} --nimcache:nimcache/tests/{filename} " &
+    # One shared nimcache for every suite: the torch/transformer stack compiles
+    # to ~150 MB of C++, and a per-suite cache recompiles it for every task.
+    # Cache entries are keyed by module path, so shared modules compile once
+    # across suites and only each suite's own modules add incremental cost.
+    &" --outdir:build/tests --nimcache:nimcache/tests " &
     path
 
 
 func downloaderCmd(path: string): string =
   let filename = path.extractFilename()
   return
-    "nim c -r -d:ssl" &
+    "nim c -r -d:ssl -d:release --stackTrace:on --lineTrace:on --lineDir:on" &
     " --verbosity:0 --hints:off --warnings:off " &
     &" --outdir:build/downloaders/{filename} --nimcache:nimcache/downloaders/{filename} " &
     path
@@ -102,7 +110,7 @@ task download_test_tokenizers, "Download gpt-2 and llama3 tokenizers for testing
 func pytoktoktokBuildCmd(): string =
   return
     "nim c --app:lib" &
-    # " -d:release --stackTrace:on --lineTrace:on " &
+    " -d:release --stackTrace:on --lineTrace:on --lineDir:on " &
     " --debugger:native " &
     " --verbosity:0 --hints:off --warnings:off" &
     " --outdir:workspace/toktoktok/tests" &
@@ -118,6 +126,7 @@ task make_pytoktoktok, "Build pytoktoktok.so for Python import":
 func pytttransformersBuildCmd(): string =
   return
     "nim cpp --app:lib" &
+    " -d:release --stackTrace:on --lineTrace:on --lineDir:on " &
     " --debugger:native " &
     " --verbosity:0 --hints:off --warnings:off" &
     " --outdir:workspace/transformers/tests" &
@@ -132,7 +141,10 @@ task make_pytttransformers, "Build pytttransformers.so for Python import":
 
 # Test tasks
 # --------------------------------------------------
-# Compile with: nim cpp --outdir:build/tests --nimcache:nimcache/tests --hints:off --warnings:off
+# Build with -d:release --stackTrace:on --lineTrace:on --lineDir:on:
+# debug builds cannot parse GB-scale jsony fixtures.
+# Compile with: nim cpp -d:release --stackTrace:on --lineTrace:on --lineDir:on
+#   --outdir:build/tests --nimcache:nimcache/tests --hints:off --warnings:off
 
 iterator getTestCommands(path: string; extraFlags = ""; compiler = "nim c"): string =
   ## Convention: tests start with test_ or t_
@@ -157,14 +169,204 @@ task test_safetensors, "Test workspace/safetensors":
     for cmd in getTestCommands("workspace/safetensors/tests", compiler = "nim cpp"):
       runCmd(cmd)
 
-task test_transformers, "Test workspace/transformers":
+# Granular transformer suite tasks
+# ===================================================
+# Per-suite and per-family tasks so an agent picks exactly the suites
+# a change touched. The device-flip convention (harness/device.nim)
+# rides the TTT_TEST_ON environment variable: its value becomes
+# the compile-time define of every transformer suite command.
+# Therefore `TTT_TEST_ON=cpu nim test_tf_bf16_qwen3_02_first_8_layers_plus_final`
+# flips the device of one suite.
+
+proc tttDeviceDefine(): string =
+  ## TTT_TEST_ON passthrough: an empty value adds nothing, a named
+  ## device becomes the define, junk names fail loudly.
+  let v = getEnv("TTT_TEST_ON")
+  if v.len == 0:
+    return ""
+  case v
+  of "auto", "metal", "cpu", "cuda":
+    return " -d:TTT_TEST_ON=" & v
+  else:
+    echo "TTT_TEST_ON must name auto, metal, cpu or cuda, got: " & v
+    quit(1)
+
+proc transformerSuiteCmd(folder, filename: string): string =
+  ## Build-and-run command of one transformer suite file, carrying
+  ## the C++20 compile flag the transformer sources require.
+  testerCmd("workspace/transformers/tests/" & folder & "/" & filename,
+    extraFlags = tttDeviceDefine() & " --passC:\"-std=c++20\"",
+    compiler = "nim cpp")
+
+proc runTransformerSuite(folder, filename: string) =
   withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/transformers/tests", compiler = "nim cpp"):
-      runCmd(cmd)
-    for cmd in getTestCommands("workspace/transformers/tests/q_bf16", compiler = "nim cpp"):
-      runCmd(cmd)
-    for cmd in getTestCommands("workspace/transformers/tests/q_exl3", compiler = "nim cpp"):
-      runCmd(cmd)
+    runCmd(transformerSuiteCmd(folder, filename))
+
+proc familyName(): string =
+  ## Family selector argument: `nim test_tf_family name=chain`
+  ## on the command line, with TTT_TEST_FAMILY in the environment
+  ## as the fallback.
+  result = getEnv("TTT_TEST_FAMILY")
+  for i in 2 .. paramCount():
+    let p = paramStr(i)
+    if p.startsWith("name="):
+      result = p[5 .. ^1]
+
+proc runFamily(suites: seq[tuple[folder, filename: string]]) =
+  for s in suites:
+    runTransformerSuite(s.folder, s.filename)
+
+task test_tf_bf16_qwen3_02_first_8_layers_plus_final, "Suite: Qwen3-0.6B 8+1 chain checkpoints":
+  runTransformerSuite("q_bf16", "t_bf16_qwen3_02_first_8_layers_plus_final.nim")
+task test_tf_bf16_qwen3_03_full_forward_to_logits, "Suite: Qwen3-0.6B ids to logits inference":
+  runTransformerSuite("q_bf16", "t_bf16_qwen3_03_full_forward_to_logits.nim")
+task test_tf_bf16_qwen3_04_greedy_text_generation, "Suite: Qwen3-0.6B greedy decoding":
+  runTransformerSuite("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim")
+task test_tf_bf16_qwen35dense_02_first_8_layers_plus_final, "Suite: Qwen3.5-0.8B 8+1 chain checkpoints":
+  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim")
+task test_tf_bf16_qwen35dense_03_full_forward_to_logits, "Suite: Qwen3.5-0.8B ids to logits inference":
+  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim")
+task test_tf_bf16_qwen35dense_04_greedy_text_generation, "Suite: Qwen3.5-0.8B greedy decoding":
+  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim")
+task test_tf_bf16_qwen35dense_single_file_checkpoint, "Suite: Qwen3.5-0.8B single-file checkpoint load":
+  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_single_file_checkpoint.nim")
+task test_tf_bf16_qwen36moe_01_layer_internals_moe, "Suite: Qwen3.6-35B-A3B MoE expert math":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim")
+task test_tf_bf16_qwen36moe_01_layer_internals_attn, "Suite: Qwen3.6-35B-A3B attention":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim")
+task test_tf_bf16_qwen36moe_01_layer_internals_gdn, "Suite: Qwen3.6-35B-A3B Gated DeltaNet":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim")
+task test_tf_bf16_qwen36moe_01_layer_internals, "Suite: Qwen3.6-35B-A3B decoder layers":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim")
+task test_tf_bf16_qwen36moe_03_full_forward_to_logits, "Suite: Qwen3.6-35B-A3B ids to logits inference":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim")
+task test_tf_bf16_qwen36moe_04_greedy_text_generation, "Suite: Qwen3.6-35B-A3B greedy decoding":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")
+task test_tf_exl3_qwen3_00_codec, "Suite: EXL3 trellis decode vs production kernel hash":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_00_codec.nim")
+task test_tf_exl3_qwen3_00_hadamard, "Suite: EXL3 hadamard vs production kernel":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_00_hadamard.nim")
+task test_tf_exl3_qwen3_01_layer_internals, "Suite: Qwen3-0.6B-EXL3 layer internals":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_01_layer_internals.nim")
+task test_tf_exl3_qwen3_01_block_02_trace, "Suite: Qwen3-0.6B-EXL3 layer-02 stage trace":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_01_block_02_trace.nim")
+task test_tf_exl3_qwen3_03_full_forward_to_logits, "Suite: Qwen3-0.6B-EXL3 ids to logits inference":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_03_full_forward_to_logits.nim")
+task test_tf_exl3_qwen3_04_greedy_text_generation, "Suite: Qwen3-0.6B-EXL3 greedy decoding":
+  runTransformerSuite("q_exl3", "t_exl3_qwen3_04_greedy_text_generation.nim")
+task test_tf_bf16_unit_rope, "Suite: rope unit donors":
+  runTransformerSuite("q_bf16", "t_bf16_unit_rope.nim")
+task test_tf_bf16_unit_attn, "Suite: attention unit donors":
+  runTransformerSuite("q_bf16", "t_bf16_unit_attn.nim")
+task test_tf_kvcache_kvcache, "Suite: kvcache core (cpu-only, model-free)":
+  runTransformerSuite("kvcache", "test_kvcache.nim")
+task test_tf_kvcache_page_pool, "Suite: page pool lifecycle (cpu-only, model-free)":
+  runTransformerSuite("kvcache", "test_page_pool.nim")
+task test_tf_kvcache_orchestrator, "Suite: orchestrator (cpu-only, model-free)":
+  runTransformerSuite("kvcache", "test_orchestrator.nim")
+task test_tf_kvcache_radix_invariants, "Suite: radix trie invariants (cpu-only, model-free)":
+  runTransformerSuite("kvcache", "test_radix_invariants.nim")
+task test_tf_kvcache_fork_stability, "Suite: fork stability (cpu-only, model-free)":
+  runTransformerSuite("kvcache", "test_fork_stability.nim")
+task test_tf_kvcache_kvcache_lpm, "Suite: longest prefix match (cpu-only, model-free)":
+  runTransformerSuite("kvcache", "test_kvcache_lpm.nim")
+task test_tf_kvcache_codera020_batch_guard, "Suite: codera020 batch guard (cpu-only, model-free)":
+  runTransformerSuite("kvcache", "test_codera020_batch_guard.nim")
+
+task test_tf_harness_invariants, "Suite: harness analytic invariants":
+  runTransformerSuite("harness", "t_harness_invariants.nim")
+task test_tf_harness_selftest, "Suite: harness selftest (fault corpus)":
+  runTransformerSuite("harness", "t_harness_selftest.nim")
+task test_tf_sampler, "Suite: samplers":
+  runTransformerSuite("samplers", "t_sampler.nim")
+task test_tf_block_sparse_batch_property, "Suite: synthetic block-sparse batch property":
+  runTransformerSuite("synthetic", "t_block_sparse_batch_property.nim")
+task test_tf_deserialization_lmhead, "Suite: synthetic deserialization and lm head":
+  runTransformerSuite("synthetic", "t_deserialization_lmhead.nim")
+
+task test_tf_family, "Run one suite family (name=chain|ids|greedy|unit|moe|checkpoint|harness|sampler|synthetic|kvcache)":
+  case familyName()
+  of "chain":
+    runFamily(@[
+      ("q_bf16", "t_bf16_qwen3_02_first_8_layers_plus_final.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim")])
+  of "ids":
+    runFamily(@[
+      ("q_bf16", "t_bf16_qwen3_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim")])
+  of "greedy":
+    runFamily(@[
+      ("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
+  of "unit":
+    runFamily(@[
+      ("q_bf16", "t_bf16_unit_rope.nim"),
+      ("q_bf16", "t_bf16_unit_attn.nim")])
+  of "moe":
+    runFamily(@[
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
+  of "checkpoint":
+    runFamily(@[("q_bf16", "t_bf16_qwen35dense_single_file_checkpoint.nim")])
+  of "harness":
+    runFamily(@[
+      ("harness", "t_harness_invariants.nim"),
+      ("harness", "t_harness_selftest.nim")])
+  of "sampler":
+    runFamily(@[("samplers", "t_sampler.nim")])
+  of "synthetic":
+    runFamily(@[
+      ("synthetic", "t_block_sparse_batch_property.nim"),
+      ("synthetic", "t_deserialization_lmhead.nim")])
+  of "kvcache":
+    runFamily(@[
+      ("kvcache", "test_kvcache.nim"),
+      ("kvcache", "test_page_pool.nim"),
+      ("kvcache", "test_orchestrator.nim"),
+      ("kvcache", "test_radix_invariants.nim"),
+      ("kvcache", "test_fork_stability.nim"),
+      ("kvcache", "test_kvcache_lpm.nim"),
+      ("kvcache", "test_codera020_batch_guard.nim")])
+  else:
+    echo "unknown family: name the family chain, ids, greedy, unit, moe, kvcache, checkpoint, harness, sampler or synthetic"
+    quit(1)
+
+task test_transformers, "Test workspace/transformers (the full set, final verification)":
+  withDir(ProjectRoot):
+    runFamily(@[
+      ("q_bf16", "t_bf16_unit_rope.nim"),
+      ("q_bf16", "t_bf16_unit_attn.nim"),
+      ("q_bf16", "t_bf16_qwen3_02_first_8_layers_plus_final.nim"),
+      ("q_bf16", "t_bf16_qwen3_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_single_file_checkpoint.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim"),
+      ("harness", "t_harness_invariants.nim"),
+      ("harness", "t_harness_selftest.nim"),
+      ("samplers", "t_sampler.nim"),
+      ("synthetic", "t_block_sparse_batch_property.nim"),
+      ("synthetic", "t_deserialization_lmhead.nim"),
+      ("kvcache", "test_kvcache.nim"),
+      ("kvcache", "test_page_pool.nim"),
+      ("kvcache", "test_orchestrator.nim"),
+      ("kvcache", "test_radix_invariants.nim"),
+      ("kvcache", "test_fork_stability.nim"),
+      ("kvcache", "test_kvcache_lpm.nim"),
+      ("kvcache", "test_codera020_batch_guard.nim")])
 
 task test_toktoktok, "Test workspace/toktoktok":
   withDir(ProjectRoot):
@@ -288,3 +490,53 @@ put("pcre2_tables.always", CONFIG_H)
 put("pcre2_ucd.always", CONFIG_H)
 put("pcre2_valid_utf.always", CONFIG_H)
 put("pcre2_xclass.always", CONFIG_H)
+
+# Per-file compile options for the vendored zstd
+# ══════════════════════════════════════════════════
+
+const ZstdDir = ProjectRoot/"workspace/zstd"
+
+# Under nim cpp the -std=c++20 passC of the transformer suites reaches
+# every compiled file and the C driver rejects that flag for plain .c
+# inputs. The vendored zstd compiles clean as C++ at v1.5.7, a probe
+# result recorded in workspace/zstd/vendor/README.md, so every source
+# is told its true language before the C++ standard reaches it.
+# Sources live in the submodule lib/ subtree (pcre2 vendoring shape).
+# The put keys are file stems. The vendored tree therefore stays
+# free of basename collisions, verified at vendor time for v1.5.7.
+
+const ZstdSources = [
+  "common/debug",
+  "common/entropy_common",
+  "common/error_private",
+  "common/fse_decompress",
+  "common/pool",
+  "common/threading",
+  "common/xxhash",
+  "common/zstd_common",
+  "compress/fse_compress",
+  "compress/hist",
+  "compress/huf_compress",
+  "compress/zstd_compress",
+  "compress/zstd_compress_literals",
+  "compress/zstd_compress_sequences",
+  "compress/zstd_compress_superblock",
+  "compress/zstd_double_fast",
+  "compress/zstd_fast",
+  "compress/zstd_lazy",
+  "compress/zstd_ldm",
+  "compress/zstd_opt",
+  "compress/zstd_preSplit",
+  "compress/zstdmt_compress",
+  "decompress/huf_decompress",
+  "decompress/zstd_ddict",
+  "decompress/zstd_decompress",
+  "decompress/zstd_decompress_block",
+  "dictBuilder/cover",
+  "dictBuilder/divsufsort",
+  "dictBuilder/fastcover",
+  "dictBuilder/zdict",
+]
+
+for zstdSource in ZstdSources:
+  put(zstdSource.rsplit("/", 1)[1] & ".always", "-x c++")

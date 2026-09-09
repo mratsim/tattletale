@@ -95,11 +95,11 @@ func init*(
   ##   num_k_heads, num_v_heads, head_k_dim, head_v_dim: GDN head geometry
   ##   conv_kernel_size: causal conv kernel width (4)
   ##
-  ## Raises ValueError naming the layer key path for a non-positive head
-  ## count, for a value-head count outside the key-head multiple law,
-  ## both before the conv-dim arithmetic reads them.
+  ## Raises ValueError naming the layer key path:
+  ## - a non-positive head count
+  ## - a value-head count that is not a multiple of the key-head count
   #
-  # Head-count gates run before the conv-dim arithmetic: a zero count
+  # Head-count checks run before the conv-dim arithmetic: a zero count
   # satisfies the alignment check vacuously.
   checkValue(num_k_heads > 0,
     "[ttt] " & name & ": linear_num_key_heads is " & $num_k_heads &
@@ -184,17 +184,48 @@ proc gatedDeltaRuleRecurrence(
   var s = initialS
   var coreOut = F.zeros(batch, numHeads, seqLen, vDim,
     F.tensorOptions(kFloat32, q32.deviceType()))
-  for t in 0 ..< seqLen:
-    let gT = g32[_, _, t].exp().unsqueeze(-1).unsqueeze(-1)
-    let betaT = beta32[_, _, t].unsqueeze(-1)
-    let kT = k32[_, _, t, _].unsqueeze(-1)
-    let vT = v32[_, _, t, _]
-    let qT = qScaled[_, _, t, _].unsqueeze(-1)
-    s = s * gT
-    let kvMem = (s * kT).sum(axis = -2)
+  if seqLen == 1 and q32.deviceType() == F.kCPU:
+    # CPU decode spelling (T = 1), measured in
+    # workspace/libtorch/bench/cpu/bench_gdn_recurrence.nim:
+    # - kv and output reductions run as batched matmuls over the flattened
+    #   head batch, and the state update outer product is one bmm,
+    #   replacing five full-size elementwise passes and two broadcast
+    #   reduces with three full-size ops and three batched reduces
+    # - 0.291 to 0.221 ms per step
+    # - state drift 2.2 fp32 ulps against the mul + sum spelling
+    #   (fixture budget: 4 fp32 ulps)
+    # - the math and the f32 core stay unchanged, MPS keeps the loop spelling
+    let batchHeads = batch * numHeads
+    let dkDim = k32.size(3)
+    let gTrow = g32[_, _, 0].exp().unsqueeze(-1)     # (batch, heads, 1)
+    let gT4 = gTrow.unsqueeze(-1)                    # (batch, heads, 1, 1)
+    let betaT = beta32[_, _, 0].unsqueeze(-1)        # (batch, heads, 1)
+    let kT = k32[_, _, 0, _].unsqueeze(-1)           # (batch, heads, Dk, 1)
+    let vT = v32[_, _, 0, _]                         # (batch, heads, Dv)
+    let qRow = qScaled[_, _, 0, _].unsqueeze(-1)     # (batch, heads, Dk, 1)
+    let s3 = s.view(batchHeads, dkDim, vDim)
+    let kT3 = kT.view(batchHeads, dkDim, 1)
+    let qRow3 = qRow.view(batchHeads, 1, dkDim)
+    let kvMem = F.bmm(kT3.transpose(1, 2), s3)
+      .view(batch, numHeads, vDim) * gTrow
     let delta = (vT - kvMem) * betaT
-    s = s + kT * delta.unsqueeze(-2)
-    coreOut[_, _, t, _] = (s * qT).sum(axis = -2)
+    let outer = F.bmm(kT3, delta.view(batchHeads, 1, vDim))
+      .view(batch, numHeads, dkDim, vDim)
+    s = s * gT4 + outer
+    coreOut[_, _, 0, _] = F.bmm(qRow3, s.view(batchHeads, dkDim, vDim))
+      .view(batch, numHeads, vDim)
+  else:
+    for t in 0 ..< seqLen:
+      let gT = g32[_, _, t].exp().unsqueeze(-1).unsqueeze(-1)
+      let betaT = beta32[_, _, t].unsqueeze(-1)
+      let kT = k32[_, _, t, _].unsqueeze(-1)
+      let vT = v32[_, _, t, _]
+      let qT = qScaled[_, _, t, _].unsqueeze(-1)
+      s = s * gT
+      let kvMem = (s * kT).sum(axis = -2)
+      let delta = (vT - kvMem) * betaT
+      s = s + kT * delta.unsqueeze(-2)
+      coreOut[_, _, t, _] = (s * qT).sum(axis = -2)
   let output = coreOut.transpose(1, 2).contiguous().to(initialDtype)
   (output, s)
 
@@ -212,11 +243,10 @@ proc forward(
   ## Returns:
   ##   Output tensor of shape (batch, seq, hidden_size)
   ##
-  ## Decode (seq_len 1) reads the stored conv/SSM state and writes the
-  ## updated state back. Prefill (seq_len > 1) starts from the stored state
-  ## (zeros on a fresh sequence) and overwrites it. The recurrence is
-  ## sequential in both cases, so decode after prefill is bit-identical to a
-  ## one-shot forward over the same tokens.
+  ## Decode (seq_len 1) reads the stored conv/SSM state and writes the updated state back.
+  ## Prefill (seq_len > 1) starts from the stored state (zeros on a fresh sequence) and overwrites it.
+  ## The recurrence is sequential in both cases, so decode after prefill is bit-identical
+  ## to a one-shot forward over the same tokens.
   let batch = x.size(0)
   checkValue(batch == 1,
     "[ttt] GDN currently supports batch_size == 1 only, got " & $batch)
@@ -240,11 +270,32 @@ proc forward(
     # Decode step: prepend the stored conv context, valid conv, take last 1.
     let state = ctx.gdnConvState[self.layer_idx]  # (conv_dim, 3) bf16
     let catInput = F.cat([state.unsqueeze(0), mixedQkv], -1)  # (b, conv_dim, 4)
-    let conv = F.conv1d(
-      catInput, self.conv1d_weight,
-      padding = [0], groups = self.conv_dim)
-    convOut = F.silu(conv.narrow(2, conv.size(2) - seqLen, seqLen))
-    # New state = last conv_kernel_size - 1 positions of the concatenated input.
+    # Depthwise dot spelling of the grouped conv on CPU:
+    # - torch's CPU grouped-conv kernel thrashes its thread pool on 8192
+    #   tiny per-channel convs: 270 ms vs 6.5 ms single-thread, 0.072 ms
+    #   with groups = 1, drill mode,
+    #   workspace/libtorch/bench/cpu/bench_decode_stage.nim
+    # - elementwise multiply plus a sum over the kernel window avoids
+    #   that kernel
+    # - products and accumulation run in fp32, mirroring the conv kernel
+    #   internally, one rounding to the storage dtype at the output
+    # - the fixture recording path is thereby reproduced within the fp32
+    #   ulp budget of the fixtures
+    # - the MPS grouped-conv kernel is healthy and stays on conv1d
+    if device == F.kCPU:
+      let kernel = self.conv1d_weight.size(2)
+      let wWindow32 = self.conv1d_weight.reshape([1, self.conv_dim, kernel])
+        .to(kFloat32)
+      let conv32 = (catInput.to(kFloat32) * wWindow32)
+        .sum(-1, keepdim = true)  # (b, conv_dim, 1), fp32 accumulation
+      convOut = F.silu(conv32.to(x.scalarType()))
+    else:
+      let conv = F.conv1d(
+        catInput, self.conv1d_weight,
+        padding = [0], groups = self.conv_dim)
+      convOut = F.silu(conv.narrow(2, conv.size(2) - seqLen, seqLen))
+    # New state = last conv_kernel_size - 1 positions of the concatenated
+    # input.
     ctx.gdnConvState[self.layer_idx] =
       catInput.narrow(2, catInput.size(2) - 3, 3)[0].contiguous()
   else:
@@ -259,10 +310,28 @@ proc forward(
       else:
         state.unsqueeze(0)
     let padded = F.cat([pre, mixedQkv], -1)  # (b, conv_dim, 3 + T)
-    let conv = F.conv1d(
-      padded, self.conv1d_weight,
-      padding = [0], groups = self.conv_dim)
-    convOut = F.silu(conv.narrow(2, conv.size(2) - seqLen, seqLen))
+    # Depthwise dot spelling on CPU, same rationale as the decode branch:
+    # the grouped-conv kernel is pathological there, K shifted multiplies
+    # and adds over the sequence slices avoid it entirely. The products
+    # and accumulation run in fp32, mirroring the conv kernel internals.
+    # One rounding to the storage dtype at the output. The fixture
+    # recording path is thereby reproduced inside the fp32 ulp budget.
+    if device == F.kCPU:
+      let kernel = self.conv1d_weight.size(2)
+      let wFlat32 = self.conv1d_weight.reshape([self.conv_dim, kernel])
+        .to(kFloat32)
+      let padded32 = padded.to(kFloat32)
+      var conv32 = padded32.narrow(2, 0, seqLen) *
+        wFlat32.narrow(1, 0, 1).reshape([1, self.conv_dim, 1])
+      for k in 1 ..< kernel:
+        conv32 = conv32 + padded32.narrow(2, k, seqLen) *
+          wFlat32.narrow(1, k, 1).reshape([1, self.conv_dim, 1])
+      convOut = F.silu(conv32.to(x.scalarType()))
+    else:
+      let conv = F.conv1d(
+        padded, self.conv1d_weight,
+        padding = [0], groups = self.conv_dim)
+      convOut = F.silu(conv.narrow(2, conv.size(2) - seqLen, seqLen))
     # New state = last 3 positions of the pre-conv input, so a prefill
     # shorter than the kernel still yields a full 3-wide context.
     ctx.gdnConvState[self.layer_idx] =

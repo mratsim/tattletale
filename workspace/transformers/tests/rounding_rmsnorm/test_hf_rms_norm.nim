@@ -25,7 +25,7 @@ import
 
 const
   ModelPath = currentSourcePath().parentDir().parentDir() / "hf_models" / "Qwen3-0.6B"
-  FixtureDir = currentSourcePath().parentDir().parentDir() / "fixtures" / "long-residual-3-block" / "Qwen3-0.6B"
+  FixtureDir = currentSourcePath().parentDir().parentDir() / "fixtures" / "bf16-02-first-8-layers-plus-final" / "Qwen3-0.6B"
 
 proc reportSummary(title: string) =
   echo ""
@@ -84,7 +84,7 @@ proc main() =
     # ── Layer 0 ──────────────────────────────────────────────────
     echo ""
     echo repeat('#', 70)
-    echo "  Layer 0: From long-residual-3-block fixture"
+    echo "  Layer 0: From bf16-02-first-8-layers-plus-final fixture"
     echo repeat('#', 70)
 
     block block0:
@@ -114,7 +114,7 @@ proc main() =
     # ── Layer 2 ──────────────────────────────────────────────────
     echo ""
     echo repeat('#', 70)
-    echo "  Layer 2: From long-residual-3-block fixture"
+    echo "  Layer 2: From bf16-02-first-8-layers-plus-final fixture"
     echo repeat('#', 70)
 
     block block2:

@@ -16,6 +16,7 @@ import argparse
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "tests"))
+from corpus_reader import read_corpus, read_corpus_prefix
 import pytoktoktok
 
 from hf_to_tiktoken import KIMI_K25_PATTERN
@@ -23,7 +24,7 @@ import tiktoken
 import tokendagger
 
 TEST_DIR = Path(__file__).parent.parent / "tests"
-FIXTURES_DIR = TEST_DIR / "fixtures" / "large"
+CORPUS_DIR = TEST_DIR / "corpus"
 
 
 def get_fixtures() -> List[Tuple[str, Path, int]]:
@@ -31,16 +32,16 @@ def get_fixtures() -> List[Tuple[str, Path, int]]:
     return [
         (
             "verne",
-            FIXTURES_DIR / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt",
+            CORPUS_DIR / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt".zst,
             10000,
         ),
-        ("shakespeare", FIXTURES_DIR / "pg100-shakespeare.txt", 10000),
+        ("shakespeare", CORPUS_DIR / "pg100-shakespeare.txt".zst, 10000),
         (
             "sanguozhi",
-            FIXTURES_DIR / "pg23950-三國志演義-Romance_of_the_Three_Kingdoms.txt",
+            CORPUS_DIR / "pg23950-三國志演義-Romance_of_the_Three_Kingdoms.txt".zst,
             10000,
         ),
-        ("sqlite", FIXTURES_DIR / "sqlite3.c", 10000),
+        ("sqlite", CORPUS_DIR / "sqlite3.c".zst, 10000),
     ]
 
 
@@ -104,11 +105,10 @@ def benchmark_tokenizer(
     print(f"{'=' * 70}")
 
     for fixture_name, path, max_chars in fixtures:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            if max_chars:
-                text = f.read(max_chars)
-            else:
-                text = f.read()
+        if max_chars:
+            text = read_corpus_prefix(path, max_chars)
+        else:
+            text = read_corpus(path)
 
         print(f"\n  {fixture_name}: {len(text):,} chars", end="", flush=True)
 

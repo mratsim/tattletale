@@ -3,6 +3,7 @@ import std/os
 import pkg/jsony
 
 import workspace/toktoktok
+import workspace/zstd/zstd_highlevel
 
 const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures" / "small"
 const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
@@ -28,14 +29,16 @@ proc runTiktokenFromHFTests() =
     for pair in HfFixtures:
       let fixtureName = pair[0]
       let hfFile = pair[1]
-      let fixturePath = FIXTURES_DIR / "tiktoken_from_hf_" & fixtureName & ".json"
+      let fixturePath = FIXTURES_DIR / "tiktoken_from_hf_" & fixtureName
       let hfPath = TOKENIZERS_DIR / hfFile
 
-      doAssert fileExists(fixturePath), "Fixture not found: " & fixturePath
+      # the fixture container is the recorded .json.zst frame
+      doAssert fileExists(fixturePath & ".json.zst"),
+        "Fixture not found: " & fixturePath
       doAssert fileExists(hfPath), "HF tokenizer not found: " & hfPath
 
       let tokenizer = loadHFTokenizer(hfPath)
-      let content = readFile(fixturePath)
+      let content = readFile(fixturePath & ".json.zst").zstdDecompress(string)
       let fixtures = content.fromJson(seq[CodecFixture])
 
       for fixture in fixtures:

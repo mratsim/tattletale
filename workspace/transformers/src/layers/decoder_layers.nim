@@ -118,8 +118,8 @@
 ##     - So output = mlp(RMSNorm(self_attn_out+r)), residual = self_attn_out+r
 ##     - Therefore output + residual = mlp + self_attn_out + x = x_local
 ##
-##     The invariant is tested in gen_bf16_04_3_long_residual_3_blocks_Qwen3-0.6B.py
-##     via t_bf16_qwen3_04_long_residual_3_blocks.nim.
+##     gen_bf16_qwen3_02_first_8_layers_plus_final.py records it,
+##     t_bf16_qwen3_02_first_8_layers_plus_final.nim asserts it.
 
 
 import

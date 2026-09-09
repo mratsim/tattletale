@@ -13,6 +13,8 @@ Format:
 """
 
 import json
+
+from zstd_frame import write_text_zst
 import base64
 from pathlib import Path
 from typing import Dict, List, Any, Tuple
@@ -468,10 +470,11 @@ def main():
         print(f"Computed expected_tokens for: {case['description']}")
         print(f"  -> {case['expected_tokens']}")
 
-    output_path = FIXTURES_DIR / "bytepairmerge.json"
+    output_path = FIXTURES_DIR / "bytepairmerge.json.zst"
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(cases, f, ensure_ascii=False, indent=2)
+    write_text_zst(output_path,
+                   json.dumps(cases, ensure_ascii=False, indent=2)
+                   .encode("utf-8"))
 
     print(f"Generated {len(cases)} test cases to {output_path}")
     print("=" * 70)
