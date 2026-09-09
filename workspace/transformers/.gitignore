@@ -9,4 +9,4 @@ tests/fixtures/**/tokenizer.json
 
 # Large weights
 # -----------------------------------------------------------------------------------------
-tattletale/workspace/transformers/tests/fixtures/layers/Qwen3-0.6B-embed-lmhead/embed-lmhead-Qwen3-0.6B-01.safetensor
+tattletale/workspace/transformers/tests/fixtures/bf16-01-layer-internals/Qwen3-0.6B-embed-lmhead/embed-lmhead-Qwen3-0.6B-01.safetensor

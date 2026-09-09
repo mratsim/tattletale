@@ -174,6 +174,93 @@ nim test_safetensors
 
 The command `nim test_toktoktok` compiles and runs all test files in `workspace/toktoktok/tests/` that start with `test_` or `t_`.
 
+## Transformer fixture suites (q_bf16, q_exl3)
+
+The transformer suites (workspace/transformers/tests/) run on the harness,
+not on ad-hoc tolerances:
+
+- **Budget pointer:** the tolerance budget table (op class rows, tiered
+  ctBitExact / ctElementWise / ctDistribution, per-row maxUlp, mismatch
+  fraction and histogram L1) lives in
+  `workspace/transformers/tests/harness/SPEC.md` (Budget table v0) and is
+  encoded in `harness/tolerance.nim defaultBudget`. Pick the row matching the
+  op class, never an ad-hoc rtol. The device pair selects the row class:
+  a run on the recorded device replays bit-exactly, a run on any other
+  device compares under the cross-device drift rows (`budgetRowClass`,
+  see the device-flip convention below).
+- **New-suite checklist:** `workspace/transformers/tests/harness/PLAYBOOK.md`
+  carries the step-by-step checklist (file location, imports, one runCppTest
+  per unit, one invariant call plus one tolerance call per unit, stats file
+  wiring, suite registration in config.nims).
+- **Fixture recording:** the payload tiering law, the pinned quantile method
+  and bucket spec, the decision-projection schemas and the PROVENANCE
+  requirement live in
+  `workspace/transformers/tests/testgen/FIXTURE_GENERATION.md` (section 0).
+  Record-time payloads come from `tests/testgen/fixture_stats.py`, raw output
+  tensors stay out of the tree except physics-bearing slices.
+- The cross-implementation fingerprint contract is carried by the committed
+  crossimpl corpus, verified in `harness/selftest.nim` on every suite run.
+
+## Device-flip convention and granular test tasks
+
+Transformer suites resolve the compute device through `testDevice()`
+(`harness/device.nim`), never a hardcoded device per suite:
+
+- `TTT_TEST_ON=metal|cpu|cuda` flips the device of any suite or family
+  run through the granular tasks. The environment value becomes the
+  compile-time define; an unknown value fails before any build.
+- The auto default is platform-dependent: Metal on macOS, CUDA when a
+  Linux host provides one (`Torch.cuda_is_available()`), CPU as the
+  last resort.
+- Budget rows pair the record-time device with the run-time device.
+  The record-time device is manifest-declared: the `recorded_from` row
+  of the fixture family PROVENANCE.md (`recordedFrom` / `manifestValue`),
+  verified by re-render. The run-time device is `testDevice()`.
+  `budgetRowClass` owns the selection: same-device runs compare
+  bit-exactly, cross-device runs compare under the chain checkpoint
+  band and the greedy margin rows. Suites print the pair with
+  `pairReport`, the receipt line per device-flipped run.
+- The measurement instrument for the Metal rows is
+  `harness/bench_metal_budget.nim` (run manually, no `t_` prefix, so
+  it stays out of the suite sweep).
+
+Granular tasks live in config.nims. The name mirrors the suite file:
+`test_tf_` plus the file name without the leading `t_` and the
+extension, so `t_bf16_qwen36moe_01_moe.nim` runs as
+`nim test_tf_bf16_qwen36moe_01_moe`. Listed logically, per-op units
+first, then the per-model suites in suite-number order, then the
+infrastructure suites:
+
+    nim test_tf_bf16_unit_rope
+    nim test_tf_bf16_unit_attn
+    nim test_tf_bf16_qwen3_03_chain
+    nim test_tf_bf16_qwen3_05_ids_to_logits_inference
+    nim test_tf_bf16_qwen3_07_greedy_decoding
+    nim test_tf_bf16_qwen35dense_03_chain
+    nim test_tf_bf16_qwen35dense_05_ids_to_logits_inference
+    nim test_tf_bf16_qwen35dense_07_greedy_decoding
+    nim test_tf_bf16_qwen35dense_single_file_checkpoint
+    nim test_tf_bf16_qwen36moe_01_moe
+    nim test_tf_bf16_qwen36moe_02_attn
+    nim test_tf_bf16_qwen36moe_02_gdn
+    nim test_tf_bf16_qwen36moe_03_layers
+    nim test_tf_bf16_qwen36moe_05_ids_to_logits_inference
+    nim test_tf_bf16_qwen36moe_07_greedy
+    nim test_tf_harness_invariants
+    nim test_tf_harness_selftest
+    nim test_tf_sampler
+    nim test_tf_block_sparse_batch_property
+    nim test_tf_deserialization_lmhead
+
+One family each, picked on the command line or through the
+TTT_TEST_FAMILY environment fallback:
+
+    nim test_tf_family name=chain|ids|greedy|unit|moe|
+        checkpoint|harness|sampler|synthetic
+
+An agent picks exactly the suites a change touched. The full
+`nim test_transformers` run stays for final verification only.
+
 ### Compilation settings
 
 The project uses:

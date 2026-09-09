@@ -14,6 +14,8 @@ Fixtures are JSON files with the format:
 """
 
 import json
+
+from zstd_frame import write_text_zst
 from pathlib import Path
 from typing import Dict, List, Any
 from tokenizers import Tokenizer
@@ -187,9 +189,10 @@ def generate_hf_fixtures():
             fixture = generate_fixture(text, hf_filename, tokenizer)
             fixtures.append({"name": name, **fixture})
 
-        output_path = FIXTURES_DIR / f"hf_{hf_name}.json"
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(fixtures, f, ensure_ascii=False, indent=2)
+        output_path = FIXTURES_DIR / f"hf_{hf_name}.json.zst"
+        write_text_zst(output_path,
+                       json.dumps(fixtures, ensure_ascii=False,
+                                  indent=2).encode("utf-8"))
         print(f"  [OK] Generated {len(fixtures)} fixtures to {output_path}")
 
 

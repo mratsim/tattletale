@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import List, Tuple
 import tiktoken
 
+from corpus_reader import read_corpus_prefix
+
 TEST_DIR = Path(__file__).parent.resolve()
 
 
@@ -31,6 +33,7 @@ def get_test_samples() -> List[Tuple[str, str]]:
     """Get test samples from fixture files."""
     samples = []
     fixtures_dir = TEST_DIR / "fixtures"
+    corpus_dir = TEST_DIR / "corpus"
 
     synthetic_samples = [
         ("hello_world", "Hello, world! This is a test."),
@@ -43,26 +46,19 @@ def get_test_samples() -> List[Tuple[str, str]]:
     samples.extend(synthetic_samples)
 
     fixture_files = [
-        (
-            "verne",
-            fixtures_dir / "large" / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt",
-            5000,
-        ),
-        ("shakespeare", fixtures_dir / "large" / "pg100-shakespeare.txt", 10000),
+        ("verne", corpus_dir / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt.zst", 5000),
+        ("shakespeare", corpus_dir / "pg100-shakespeare.txt.zst", 10000),
         (
             "sanguozhi",
-            fixtures_dir
-            / "large"
-            / "pg23950-三國志演義-Romance_of_the_Three_Kingdoms.txt",
+            corpus_dir
+            / "pg23950-三國志演義-Romance_of_the_Three_Kingdoms.txt.zst",
             5000,
         ),
-        ("sqlite", fixtures_dir / "large" / "sqlite3.c", 50000),
+        ("sqlite", corpus_dir / "sqlite3.c.zst", 50000),
     ]
 
     for name, path, max_chars in fixture_files:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            sample = f.read(max_chars)
-            samples.append((name, sample))
+        samples.append((name, read_corpus_prefix(path, max_chars)))
 
     return samples
 

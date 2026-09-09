@@ -15,6 +15,7 @@
 import
   std/strutils,
   std/macros,
+  std/times,
   workspace/libtorch/src/tensors
 
 from workspace/libtorch/src/raw_libtorch import TorchError, CppStdException, what
@@ -76,11 +77,13 @@ proc runCppTest*(name: string, body: proc(): bool) =
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Section: " & name
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  let t0 = epochTime()
   let passed = catchExceptions(body())
+  let elapsed = epochTime() - t0
   if passed:
-    echo "✅ PASS | ", name
+    echo "✅ PASS | ", name, " | ", elapsed.formatFloat(ffDecimal, 2), "s"
   else:
-    echo "❌ FAIL | ", name
+    echo "❌ FAIL | ", name, " | ", elapsed.formatFloat(ffDecimal, 2), "s"
     quit(1)
   echo ""
 

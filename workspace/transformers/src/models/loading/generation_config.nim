@@ -11,7 +11,7 @@
 import
   std/options,
   pkg/packedjson,
-  config_json
+  ./config_json
 
 type
   GenerationConfig* = ref object

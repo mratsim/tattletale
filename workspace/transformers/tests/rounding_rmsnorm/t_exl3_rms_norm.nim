@@ -26,8 +26,8 @@ import
 
 const
   ModelPath = currentSourcePath().parentDir().parentDir() / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
-  Layer2TraceDir = currentSourcePath().parentDir().parentDir() / "fixtures" / "exl3-layer02-trace"
-  IdsInferenceDir = currentSourcePath().parentDir().parentDir() / "fixtures" / "exl3-ids-inference" / "Qwen3-0.6B-EXL3-5bpw"
+  Layer2TraceDir = currentSourcePath().parentDir().parentDir() / "fixtures" / "exl3-01-block-02-trace"
+  FullForwardToLogitsDir = currentSourcePath().parentDir().parentDir() / "fixtures" / "exl3-03-full-forward-to-logits" / "Qwen3-0.6B-EXL3-5bpw"
 
 # ─── Reporting ─────────────────────────────────────────────────────
 
@@ -95,7 +95,7 @@ proc main() =
     # ── Layer 2: full trace ────────────────────────────────────────
     echo ""
     echo repeat('#', 70)
-    echo "  Layer 2: Full trace from exl3-layer02-trace"
+    echo "  Layer 2: Full trace from exl3-01-block-02-trace"
     echo repeat('#', 70)
 
     block layer2:
@@ -131,16 +131,16 @@ proc main() =
       reportSummary("k_norm (multi-head dim=128)")
       runNormComparison("k_norm", k_mh, e_kn_d.reshape(k_mh.shape), kn.weight, eps, onCuda)
 
-    # ── Layer 4: ids-inference (only layer_input/layer_output) ─────
+    # ── Layer 4: bf16-03-full-forward-to-logits (only layer_input/layer_output) ─────
     echo ""
     echo repeat('#', 70)
-    echo "  Layer 4: From ids-inference fixture"
+    echo "  Layer 4: From bf16-03-full-forward-to-logits fixture"
     echo repeat('#', 70)
     echo "  NOTE: No intermediate norm outputs → implementations compared against"
     echo "  weight-first FP32 reference (nearest to EXL3 order)."
 
     block layer4:
-      let fixturePath = IdsInferenceDir / "layer-04.safetensor"
+      let fixturePath = FullForwardToLogitsDir / "layer-04.safetensor"
       var st = Safetensor.open(fixturePath)
       let layer_input = st.getTensorOwned("layer_input", kCPU)
       let ln4 = RmsNorm.load(view, cfgJson, "model.layers.4.input_layernorm", device = device)

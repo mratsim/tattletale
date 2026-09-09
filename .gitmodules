@@ -1,3 +1,6 @@
 [submodule "workspace/pcre2/vendor/pcre2"]
 	path = workspace/pcre2/vendor/pcre2
 	url = https://github.com/PCRE2Project/pcre2
+[submodule "workspace/zstd/vendor/zstd"]
+	path = workspace/zstd/vendor/zstd
+	url = https://github.com/facebook/zstd
