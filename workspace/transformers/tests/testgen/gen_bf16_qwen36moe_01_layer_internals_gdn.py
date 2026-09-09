@@ -4,7 +4,7 @@ the real checkpoint safetensors files, using the installed reference
 modeling on CPU
 torch bf16.
 
-Consumed by tests/q_bf16/t_bf16_qwen36moe_02_gdn.nim. No Qwen3 analog: the
+Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_gdn.nim. No Qwen3 analog: the
 same GatedDeltaNet SSM layer as the Qwen3.5-0.8B dense family, absent
 from Qwen3, so no Qwen3-era generator exists to inherit.
 

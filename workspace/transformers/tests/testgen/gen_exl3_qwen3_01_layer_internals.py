@@ -7,7 +7,7 @@ This script:
 2. Reconstructs weights via fixture_exl3_common
 3. Runs EXL3 linear forward (Hadamard + GEMM + Hadamard) on CUDA
 4. Runs attention and transformer block forward with long residual stream pattern
-5. Saves per-layer fixtures for Nim testing (t_exl3_qwen3_03_layers.nim)
+5. Saves per-layer fixtures for Nim testing (t_exl3_qwen3_01_layer_internals.nim)
 
 Space-saving: All weights come from the EXL3 model file. Only inputs/outputs are saved.
 

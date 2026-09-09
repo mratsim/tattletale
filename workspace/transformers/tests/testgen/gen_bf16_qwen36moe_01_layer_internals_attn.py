@@ -17,7 +17,7 @@ The attention forward is replayed step by step with the reference ops so the
 intermediates can be captured. The replay output is asserted bit-identical to
 the module's own forward before saving.
 
-Consumed by tests/q_bf16/t_bf16_qwen36moe_02_attn.nim (attn-*, norm-*). No
+Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_attn.nim (attn-*, norm-*). No
 Qwen3 analog: the same gated full-attention variant (per-head output
 gate, partial rotary) as the Qwen3.5-0.8B generator, which Qwen3
 attention never had, so the Qwen3 family carries no dedicated attention

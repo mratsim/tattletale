@@ -106,7 +106,9 @@ path=os.path.join(FIXTURE_DIR,'layer02_trace.safetensor')
 st_save(t, path)
 # Fingerprint stats sidecar: one quantile-only entry per recorded stage
 # tensor, the raw payload stays the value-bearing slice.
-entries=[(k, v, False, False) for k, v in sorted(t.items()) if k != 'input_hidden_states']
+# Stats writer reads host memory: move stage tensors to CPU first
+# (the CUDA-resident stage tensors cannot feed .numpy() directly).
+entries=[(k, v.detach().cpu().contiguous(), False, False) for k, v in sorted(t.items()) if k != 'input_hidden_states']
 write_stats_file(path + '.stats.json.zst', 'layer02_trace.safetensor', entries)
 print(f'Saved: {path} (+ stats sidecar, {len(entries)} entries)')
 for k,v in t.items(): print(f'  {k}: {v.shape}')

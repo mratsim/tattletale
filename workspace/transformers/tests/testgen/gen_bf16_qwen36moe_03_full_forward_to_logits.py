@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Qwen3.6-35B-A3B full-model ids-to-logits fixtures: the complete
+"""Generate the Qwen3.6-35B-A3B full-model full-forward-to-logits fixtures: the complete
 embed -> 40 hybrid MoE decoder layers -> norm -> lm_head chain of the real
 checkpoint, recorded from the installed transformers modeling on CPU torch
 bf16.
@@ -30,7 +30,7 @@ implementation mirrors. The expert dispatch is locked to `eager`
 (the default `from_pretrained` backend resolution picks `grouped_mm`, a
 different accumulation formulation). Under the fixture contract v2 the
 chunked copies (layer_input, layer_output, final logits tensors) left the
-payload: the Nim ids-to-logits test asserts 0.00 against layer_input_seq,
+payload: the Nim full-forward-to-logits test asserts 0.00 against layer_input_seq,
 the top-k router records and the projection, and the recorded
 seq-vs-chunked bands stay as metadata documentation. The 0.8B ids
 fixtures of the same family keep the older shape.
@@ -513,7 +513,7 @@ def load_tokenizer():
 
 
 def main() -> None:
-    print(f"Generating {MODEL_NAME} full-model ids-to-logits fixtures")
+    print(f"Generating {MODEL_NAME} full-model full-forward-to-logits fixtures")
     print("=" * 60)
     check_ram()
     print(f"transformers {TRANSFORMERS_VERSION}")

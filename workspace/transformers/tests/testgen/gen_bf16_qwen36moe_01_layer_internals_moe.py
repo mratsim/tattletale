@@ -4,7 +4,7 @@ real checkpoint safetensor files, using the installed reference modeling
 on CPU torch
 bf16.
 
-Consumed by tests/q_bf16/t_bf16_qwen36moe_01_moe.nim. No Qwen3 analog: the
+Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_moe.nim. No Qwen3 analog: the
 Qwen3 and Qwen3.5 dense families are not routed, so router logits,
 top-k selection and the fused rank-3 expert tensors exist only in the
 MoE checkpoints and no Qwen3-era fixture records them.

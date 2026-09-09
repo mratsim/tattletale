@@ -256,7 +256,7 @@ def main():
 
     print("\n✓ All invariants verified (EXACT equality, diff=0.0) at all "
           f"{num_layers} layer boundaries")
-    print("  The invariant and the 9 checkpoints are tested in t_bf16_qwen3_03_chain.nim")
+    print("  The invariant and the 9 checkpoints are tested in t_bf16_qwen3_02_first_8_layers_plus_final.nim")
 
 
 if __name__ == "__main__":

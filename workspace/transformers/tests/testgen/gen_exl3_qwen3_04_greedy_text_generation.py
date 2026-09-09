@@ -44,6 +44,7 @@ from fixture_exl3_common import (
 BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # tests/
 MODEL_DIR = os.path.join(BASE_DIR, "hf_models", "Qwen3-0.6B-EXL3-5bpw")
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
+MODEL_NAME = "Qwen3-0.6B-EXL3-5bpw"
 OUT_DIR = Path(BASE_DIR) / "fixtures" / "exl3-04-greedy-text-generation"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 LAYER_COUNT = 28

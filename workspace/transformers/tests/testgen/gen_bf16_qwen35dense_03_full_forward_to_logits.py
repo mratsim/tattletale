@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate full-model ids-to-logits fixtures for the Qwen3.5-0.8B text stack
+Generate full-model full-forward-to-logits fixtures for the Qwen3.5-0.8B text stack
 with the reference transformers modeling on CPU torch bf16.
 Reference: gen_bf16_qwen3_03_full_forward_to_logits.py conventions, extended with a
 sequential replay reference per the GDN fixture generators.
@@ -242,7 +242,7 @@ def replay_linear_layer(layer, layer_input):
 
 
 def main() -> None:
-    print(f"Generating {MODEL_NAME} ids-to-logits fixtures")
+    print(f"Generating {MODEL_NAME} full-forward-to-logits fixtures")
     print("=" * 60)
     ensure_fixture_dir()
 

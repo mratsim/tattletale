@@ -105,7 +105,7 @@ back to the pure-torch bodies, which is the reference behavior.
 - Rung 02:
   several decoder layers in sequence.
 - Rung 03:
-  the whole forward pass, token ids to logits.
+  the whole forward pass to logits.
 - Rung 04:
   autoregressive text generation.
 - Each rung contains the previous rung plus more:
@@ -363,11 +363,12 @@ Every fixture generator is named `gen_<quant>_<id>_<slug>_<model>.py`:
 | Part | Rule | Examples |
 |---|---|---|
 | `<quant>` | omitted for the unquantized/bf16 path, a marker for a quantized one | `gen_exl3_*` carries `exl3`, bf16 files carry none |
-| `<id>` | the consuming suite's slot, spelled exactly as that suite spells it | `03`, `04_3`, `03b`, `02_attn`, `02_gdn`, and non-numbered suites contribute their slug: `codec`, `hadamard` |
-| `<slug>` | the fixture concern | `layer_fixtures`, `ids_to_logits_fixtures`, `greedy_fixtures` |
+| `<id>` | the consuming suite's slot, spelled exactly as that suite spells it | `02_first_8_layers_plus_final`, `03_full_forward_to_logits`, `04_greedy_text_generation`, `01_layer_internals`, `01_layer_internals_attn`, `01_layer_internals_gdn`, `01_layer_internals_moe`, `01_block_02_trace`, `00_codec`, `00_hadamard` |
+| `<slug>` | the fixture concern (the fixture family directory name) | `first-8-layers-plus-final`, `full-forward-to-logits`, `greedy-text-generation` |
 | `<model>` | the checkpoint name | `Qwen3-0.6B`, `Qwen3.5-0.8B`, `Qwen3.6-35B-A3B` |
 
-Suffixed slots (`04_3`, `03b`) are allowed by this convention. The model name lives in the
+The `<id>` is the fixture family the consuming suite names, so suite,
+generator and fixture directory carry the same name. The model name lives in the
 filename, and the concern name is the one the consuming suite spells, never
 a private name of a port's own invention.
 
