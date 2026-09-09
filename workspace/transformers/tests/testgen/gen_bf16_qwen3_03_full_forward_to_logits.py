@@ -31,6 +31,7 @@ from fixture_stats import (  # noqa: E402
 )
 
 # ── Config ──────────────────────────────────────────────────────────────
+DECISION_PROBE_SCHEMA = "ttt-tf-002-logit-decisions-probe-h2"
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_PATH = str(Path(__file__).parent.parent / "hf_models" / MODEL_NAME)
 OUTPUT_DIR = Path(__file__).parent.parent / "fixtures" / "bf16-03-full-forward-to-logits" / MODEL_NAME
@@ -190,7 +191,7 @@ def main():
     print("Saving final logits decision projection...")
     hf_dir.mkdir(parents=True, exist_ok=True)
     projection = {
-        "schema": "tt-final-logits-projection-2",
+        "schema": DECISION_PROBE_SCHEMA,
         "model": MODEL_NAME,
         "input_text": INPUT_TEXT,
         "input_ids": tokenizer(INPUT_TEXT)["input_ids"],

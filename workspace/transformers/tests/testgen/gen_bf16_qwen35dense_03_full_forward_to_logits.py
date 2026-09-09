@@ -37,7 +37,7 @@ from safetensors import safe_open
 from safetensors import torch as st
 
 from fixture_stats import (  # noqa: E402
-    decision_steps,
+    decision_steps_probed,
     recording_env,
     write_json_zst,
     write_provenance,
@@ -56,6 +56,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 # Config.
+DECISION_PROBE_SCHEMA = "ttt-tf-002-logit-decisions-probe-h2"
 MODEL_NAME = "Qwen3.5-0.8B"
 INPUT_TEXT = "Hello, how are you?"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -319,17 +320,19 @@ def main() -> None:
     assert logits_diff < 0.25, f"sequential vs chunked logits diff too large: {logits_diff}"
     # Decision projection of the sequential reference, the 0.00
     # comparison: the raw logits tensors leave the tree, the consumers
-    # carry argmax, the top-2 competing pair and the tail probability.
-    # The sequential vs chunked band stays as recorded metadata.
+    # carry argmax, the top-2 competing pair, the tail probability and
+    # the strided 512-word probe row of every deciding row
+    # (ttt-tf-002-logit-decisions-probe-h2). The sequential vs chunked
+    # band stays as recorded metadata.
     write_json_zst(
         os.path.join(FIXTURE_DIR, "final_logits.decisions.json.zst"),
         {
-            "schema": "tt-final-logits-projection-1",
+            "schema": DECISION_PROBE_SCHEMA,
             "model": MODEL_NAME,
             "input_text": INPUT_TEXT,
             "input_tokens": tokenizer_ids,
             "vocab_size": int(logits_seq.shape[-1]),
-            "steps": decision_steps(logits_seq.to(torch.float32)),
+            "steps": decision_steps_probed(logits_seq.to(torch.float32)),
         },
     )
     metadata_path = os.path.join(

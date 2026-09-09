@@ -307,8 +307,8 @@ proc main() =
     if hasRegenerable:
       st = Safetensor.open(path)
     var statsFile, descFile: FingerprintStatsFile
-    statsFile.schema = FingerprintStatsFileSchema
-    descFile.schema = FingerprintStatsFileSchema
+    statsFile.schema = TensorStatsSchema
+    descFile.schema = TensorStatsSchema
     statsFile.source = splitFile(path).name & splitFile(path).ext
     descFile.source = statsFile.source
     var hasFrozenStats = false

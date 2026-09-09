@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Greedy (temp=0) decoding of the Qwen3-0.6B stack against tt-greedy-2
+## Greedy (temp=0) decoding of the Qwen3-0.6B stack against ttt-tf-001-greedy-steps-h2
 ## fixtures: per-step argmax checks with margin-scaled logit caps,
 ## truncated-KL and tail-probability checksums, plus teacher-forced
 ## recovery at structural ties (harness/tolerance.nim greedy checks).
@@ -40,7 +40,7 @@ const
     maxFlips: 4)
 
 proc parseGreedyStep(node: JsonNode, step: int): GreedyStepRef =
-  ## tt-greedy-2 step node to GreedyStepRef.
+  ## ttt-tf-001-greedy-steps-h2 step node to GreedyStepRef.
   result.step = step
   result.chosenToken = node["chosen_token"].getInt()
   for el in node["top32_ids"]:
@@ -101,7 +101,7 @@ proc main() =
   assertTorchStamp(FixtureDir)
   putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-  runCppTest "Qwen3-0.6B greedy decoding - prefix checks vs tt-greedy-2 fixtures":
+  runCppTest "Qwen3-0.6B greedy decoding - prefix checks vs ttt-tf-001-greedy-steps-h2 fixtures":
     proc(): bool =
       echo "Loading model..."
       let model = loadModel($ModelPath, testDevice())

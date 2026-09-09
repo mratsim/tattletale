@@ -580,6 +580,39 @@ proc runSelftest*(): bool =
         ok = false
       check "stats-corpus " & ts.name & " assertStats passed", ok
 
+  block:
+    # Format registry: the harness loaders accept exactly the three
+    # ttt-tf registry ids; the h1-era shapes (no schema field, or the
+    # numeric 1) are retired. The constants are the observable contract,
+    # the selftest pins the literal values so a silent rename cannot pass.
+    check "registry id ttt-tf-001-greedy-steps-h2",
+      GreedyStepsSchema == "ttt-tf-001-greedy-steps-h2"
+    check "registry id ttt-tf-002-logit-decisions-probe-h2",
+      LogitDecisionsProbeSchema == "ttt-tf-002-logit-decisions-probe-h2"
+    check "registry id ttt-tf-003-tensor-stats-h2",
+      TensorStatsSchema == "ttt-tf-003-tensor-stats-h2"
+    # Stats parse/write roundtrip under the string registry id: the writer
+    # emits {"schema":"ttt-tf-003-tensor-stats-h2",...} and the reader
+    # returns the same schema value and the same tensor entries.
+    var roundtripStats: FingerprintStatsFile
+    roundtripStats.schema = TensorStatsSchema
+    roundtripStats.source = "selftest-roundtrip.safetensor"
+    var roundtripEntry = tensorStats(probs, withHistogram = true)
+    # tensorStats names the entry only in its error paths; the writer
+    # emits ts.name as the JSON key, so set it like gen_stats does.
+    roundtripEntry.name = "probs"
+    roundtripStats.tensors.add roundtripEntry
+    let roundtripPath = getTempDir() / "ttt-selftest-stats-roundtrip.json.zst"
+    writeFingerprintStats(roundtripPath, roundtripStats)
+    let readBack = loadFingerprintStats(roundtripPath)
+    check "stats roundtrip schema is the registry string",
+      readBack.schema == TensorStatsSchema
+    check "stats roundtrip source round-trips",
+      readBack.source == roundtripStats.source
+    check "stats roundtrip tensor entry byte-exact",
+      encodeTensorStatsBody(readBack.statsTensor("probs")) ==
+        encodeTensorStatsBody(roundtripEntry)
+
   # Descriptor rejection rows: the recorded summary of the fixture
   # contract must reject the fault classes the full tensor caught.
   # Detected and undetected fault classes both carry their measured floor

@@ -27,11 +27,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from safetensors import safe_open  # noqa: E402
 
 from fixture_stats import (  # noqa: E402
+    STATS_SCHEMA,
     decision_steps_probed,
     read_text_zst,
     write_stats_file,
     write_text_zst,
 )
+
+DECISION_PROBE_SCHEMA = "ttt-tf-002-logit-decisions-probe-h2"
+# Format registry id of the final_logits.decisions.json.zst frames this
+# bootstrap writes and verifies.
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__)) + "/.."
 EXL3_DIR = os.path.join(TESTS_DIR, "fixtures")
@@ -123,7 +128,7 @@ def main():
                          [("logits", logits, False, False)])
         write_text_zst(os.path.join(dir03, "final_logits.decisions.json.zst"),
                        json.dumps({
-                           "schema": "tt-final-logits-projection-2",
+                           "schema": DECISION_PROBE_SCHEMA,
                            "model": "Qwen3-0.6B-EXL3-5bpw",
                            "input_text": "Hello, how are you?",
                            "input_tokens": [9707, 11, 1246, 525, 498, 30],
@@ -147,7 +152,7 @@ def main():
                     continue
                 payload = read_text_zst(os.path.join(root, name))
                 parsed = json.loads(payload.decode("utf-8"))
-                assert parsed.get("schema") in (1, "tt-final-logits-projection-2"), \
+                assert parsed.get("schema") in (DECISION_PROBE_SCHEMA, STATS_SCHEMA), \
                     os.path.join(root, name)
                 count += 1
     print(f"verified {count} sidecar frames inflate and parse")

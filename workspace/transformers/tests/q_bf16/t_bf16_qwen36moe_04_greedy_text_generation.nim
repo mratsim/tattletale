@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Greedy (temp=0) decoding of the wired Qwen3.6-35B-A3B stack against
-## tt-greedy-2 fixtures: per-step argmax checks with margin-scaled logit
+## greedy-steps fixtures (GreedyStepsSchema): per-step argmax checks with margin-scaled logit
 ## caps, truncated-KL and tail-probability checksums, plus teacher-forced
 ## recovery at structural ties (harness/tolerance.nim greedy checks).
 
@@ -102,7 +102,7 @@ proc checkpointTensorRequests(): int =
     inc result
 
 proc parseGreedyStep(node: JsonNode, step: int): GreedyStepRef =
-  ## tt-greedy-2 step node to GreedyStepRef.
+  ## ttt-tf-001-greedy-steps-h2 step node to GreedyStepRef.
   result.step = step
   result.chosenToken = node["chosen_token"].getInt()
   for el in node["top32_ids"]:
@@ -180,7 +180,7 @@ proc main() =
         # values.
         let meta = zstdReadFixture(GreedyFixtureDir / fixtureName)
           .fromJson(GreedyFixture)
-        doAssert meta.schema == "tt-greedy-2"
+        doAssert meta.schema == GreedyStepsSchema
         doAssert meta.model == "Qwen3.6-35B-A3B"
         doAssert meta.torch_version ==
           manifestValue(GreedyFixtureDir, "torch")
@@ -254,7 +254,7 @@ proc main() =
           "the check block carries the verdict"
       true
 
-  runCppTest "greedy chains through the wired 35B vs tt-greedy-2 checks":
+  runCppTest "greedy chains through the wired 35B vs ttt-tf-001-greedy-steps-h2 checks":
     proc(): bool =
       echo "Loading model..."
       let model = loadModel($(ModelDir), testDevice())

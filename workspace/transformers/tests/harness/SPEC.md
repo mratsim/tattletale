@@ -302,10 +302,29 @@ rope output, the layer output). Everything else carries quantile stats.
 Sidecars stay under 64 KB per fixture family and add no raw tensor
 payloads. Regenerate only after a sanctioned re-record (PLAYBOOK.md).
 The descriptor sidecar class (`<fixture>.descriptors.json.zst`,
-schema 1
+the `ttt-tf-003-tensor-stats-h2` format
 with the descriptor keys) records the numeric summary of tensors
 that left a payload at migration time. A sanctioned re-record
 regenerates it from the fresh recording through the same writer.
+
+### Format registry
+
+The fixture wire formats carry a registry id in the payload's `schema`
+field: `ttt-tf-<id>-<slug>-h2` (h2: harness generation 2). The loaders
+accept exactly the three constants below (harness/tolerance.nim); no
+legacy branch exists.
+
+| registry id | content | retired predecessor |
+|---|---|---|
+| `ttt-tf-001-greedy-steps-h2` | greedy generation: per-step chosen token, top-32 support with f32 logits, argmax margin, softmax tail beyond the top-32 | `tt-greedy-2` |
+| `ttt-tf-002-logit-decisions-probe-h2` | final logits: per-position argmax id, top-2 competing pair, margin, tail probability, plus the strided 512-word bit-exact probe row of every deciding row | `tt-final-logits-projection-2` (decisions + probe) and `tt-final-logits-projection-1` (decisions only, no probe) |
+| `ttt-tf-003-tensor-stats-h2` | `.stats.json.zst` and `.descriptors.json.zst` sidecars: hex f32 quantile bits, sparse packed histogram buckets, descriptor keys only on descriptor-carried entries | the numeric `1` |
+
+h1-era frames (the `schema` field absent, or the numeric `1`) are
+retired as of this change: no such frame exists in the tree, and the
+loaders accept exactly the three registry constants above.
+New formats register at 004+; registration is an operator decision
+recorded before any generator emits.
 
 ## Fixture contract and scaling model
 
@@ -511,7 +530,7 @@ sign-off):
 ## Greedy chain checks
 
 `checkGreedyStep` checks one decode step of a greedy chain against its
-tt-greedy-2 recording. Semantics:
+`ttt-tf-001-greedy-steps-h2` recording (the Format registry). Semantics:
 
 - **Argmax agreement** with the recorded chosen token. On agreement the
   top-32 f32 logits must sit under a margin-scaled cap:
@@ -541,8 +560,9 @@ Run through `nim test_transformers` (the selftest suite file).
 ## Recordings
 
 A recording is a `.json.zst` zstd frame holding exactly one JSON
-payload, parsed by the consuming suite with jsony (schema version 1, the
-recording module). The frame records its content size and a checksum in
+payload, parsed by the consuming suite with jsony against the payload's
+registry id (the stats recordings carry `ttt-tf-003-tensor-stats-h2`,
+see the Format registry). The frame records its content size and a checksum in
 the header: producers write level 19 frames with both fields, and the
 reader asserts the content size instead of guessing buffers, so a corrupt
 or content-size-unknown frame raises an error. Every recording writes

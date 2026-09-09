@@ -39,7 +39,7 @@ const
     maxFlips: 4)
 
 proc parseGreedyStep(node: JsonNode, step: int): GreedyStepRef =
-  ## tt-greedy-2 step node to GreedyStepRef.
+  ## ttt-tf-001-greedy-steps-h2 step node to GreedyStepRef.
   result.step = step
   result.chosenToken = node["chosen_token"].getInt()
   for el in node["top32_ids"]:
@@ -102,7 +102,7 @@ proc main() =
   # TTT_TEST_ON=metal|cpu|cuda flips the device.
   putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-  runCppTest "Qwen3.5-0.8B greedy decoding - prefix checks vs tt-greedy-2 fixtures":
+  runCppTest "Qwen3.5-0.8B greedy decoding - prefix checks vs ttt-tf-001-greedy-steps-h2 fixtures":
     proc(): bool =
       echo "Loading model..."
       let model = loadModel($ModelPath, testDevice())

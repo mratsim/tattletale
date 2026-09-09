@@ -18,7 +18,7 @@ What is generated (under tests/fixtures/bf16-03-full-forward-to-logits/Qwen3.6-3
     layer_output_seq  descriptor entry of the final block output, the
                       bytes the projection below derives from
   final_logits.decisions.json.zst
-    schema tt-final-logits-projection-2: per position the argmax id,
+    schema ttt-tf-002-logit-decisions-probe-h2: per position the argmax id,
     the top-2 competing pair with f32 logits, the argmax margin, the
     softmax tail probability beyond the pair, and a 512-word bit-exact
     strided probe of the deciding row
@@ -152,6 +152,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 # Config.
+DECISION_PROBE_SCHEMA = "ttt-tf-002-logit-decisions-probe-h2"
 MODEL_NAME = "Qwen3.6-35B-A3B"
 INPUT_TEXT = "Hello, how are you?"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -662,7 +663,7 @@ def main() -> None:
     # carry argmax, the top-2 competing pair and the tail probability.
     # The sequential vs chunked band stays as the recorded metadata band.
     write_json_zst(os.path.join(FIXTURE_DIR, "final_logits.decisions.json.zst"), {
-        "schema": "tt-final-logits-projection-2",
+        "schema": DECISION_PROBE_SCHEMA,
         "model": MODEL_NAME,
         "input_text": INPUT_TEXT,
         "input_tokens": tokenizer_ids,

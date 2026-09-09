@@ -46,7 +46,7 @@ HIST_KEY_ZERO = 0xFFFE
 HIST_KEY_SUBNORMAL = 0xFFFF
 HIST_BINADE_MIN = -64
 HIST_BINADE_MAX = 63
-STATS_SCHEMA = 1
+STATS_SCHEMA = "ttt-tf-003-tensor-stats-h2"
 
 # Probe subset size target, in f32 words: about 2 kB of values, with the stride spreading the probe
 # over the whole tensor. Mirrors harness/tolerance.nim DescriptorProbeWords.

@@ -47,6 +47,7 @@ from fixture_exl3_common import (
 
 # ── Paths ─────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # tests/
+DECISION_PROBE_SCHEMA = "ttt-tf-002-logit-decisions-probe-h2"
 MODEL_NAME = "Qwen3-0.6B-EXL3-5bpw"
 MODEL_DIR = os.path.join(BASE_DIR, "hf_models", MODEL_NAME)
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
@@ -372,7 +373,7 @@ def main():
         )
         print(f"  Layer {i:02d}: {filepath}")
 
-    # Final logits decision projection (tt-final-logits-projection-2): the
+    # Final logits decision projection (ttt-tf-002-logit-decisions-probe-h2): the
     # raw [1, seq, vocab] tensor leaves the tree, the consumers read the
     # argmax, the top-2 pair, the tail probability and the strided probe.
     # The fingerprint stats entry and the metadata frame keep the
@@ -382,7 +383,7 @@ def main():
     logits_cpu = logits.detach().cpu()
     write_text_zst(str(OUTPUT_DIR / "final_logits.decisions.json.zst"),
                    json.dumps({
-                       "schema": "tt-final-logits-projection-2",
+                       "schema": DECISION_PROBE_SCHEMA,
                        "model": "Qwen3-0.6B-EXL3-5bpw",
                        "input_text": INPUT_TEXT,
                        "input_tokens": input_ids[0].tolist(),

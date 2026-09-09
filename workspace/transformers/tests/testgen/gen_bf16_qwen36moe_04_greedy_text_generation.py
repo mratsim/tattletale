@@ -10,7 +10,7 @@ What is generated (under tests/fixtures/bf16-04-greedy-text-generation/Qwen3.6-3
                             no special tokens added
     generated_ids           the horizon greedy tokens, argmax of the
                             last-position logits at every decode step
-    steps                   tt-greedy-2 per-step records: chosen_token,
+    steps                   ttt-tf-001-greedy-steps-h2 per-step records: chosen_token,
                             top32_ids, top32_logits (f32), argmax_margin,
                             tail_probability beyond the top-32 support
 
@@ -114,6 +114,7 @@ def _load_sibling(filename: str):
 
 _ids_inference = _load_sibling("gen_bf16_qwen36moe_03_full_forward_to_logits.py")
 NUM_THREADS = _ids_inference.NUM_THREADS
+GREEDY_STEPS_SCHEMA = "ttt-tf-001-greedy-steps-h2"
 MODEL_NAME = _ids_inference.MODEL_NAME
 MODEL_DIR = _ids_inference.MODEL_DIR
 INDEX_PATH = _ids_inference.INDEX_PATH
@@ -244,7 +245,7 @@ def greedy_chain(model, token_ids: tuple[int, ...], max_new_tokens: int) -> dict
     prefill over the whole prompt with the returned past-key cache, then
     one single-token forward per step feeding back the argmax id.
 
-    Returns the generated ids and the tt-greedy-2 per-step records of the
+    Returns the generated ids and the ttt-tf-001-greedy-steps-h2 per-step records of the
     deciding last-position logits row: the top-32 ids with f32 logits,
     the argmax margin, and the softmax tail probability beyond the top-32
     support. Exactly max_new_tokens argmax picks are recorded; the cache
@@ -325,7 +326,7 @@ def main() -> None:
         assert len(chain["generated_ids"]) == max_new_tokens
         assert len(chain["steps"]) == max_new_tokens
         fixture = {
-            "schema": "tt-greedy-2",
+            "schema": GREEDY_STEPS_SCHEMA,
             "model": MODEL_NAME,
             "prompt": prompt_text,
             "prompt_ids": list(token_ids),

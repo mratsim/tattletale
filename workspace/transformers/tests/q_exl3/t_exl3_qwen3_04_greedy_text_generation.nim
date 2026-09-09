@@ -8,7 +8,7 @@
 ## Greedy (temp=0) decoding of the Qwen3-0.6B-EXL3-5bpw stack: per-step
 ## argmax checks against the recorded chains (harness/tolerance.nim greedy
 ## checks). The steps carry the recorded support logits, the argmax margin
-## and the tail probability (tt-greedy-2); recordings that predate the
+## and the tail probability (ttt-tf-001-greedy-steps-h2); recordings that predate the
 ## tail field skip the tail checksum, the margin-scaled cap and the
 ## truncated KL carry the step. The ulp unit is fp16, EXL3 dequantizes to
 ## fp16.
@@ -48,7 +48,7 @@ const
 
 proc parseGreedyStep(node: JsonNode, step: int): GreedyStepRef =
   ## One recorded step node to GreedyStepRef. The support is whatever the
-  ## recording carries (top-32 of the tt-greedy-2 shape, the top-10 of the
+  ## recording carries (top-32 of the ttt-tf-001-greedy-steps-h2 shape, the top-10 of the
   ## recordings that predate it); the argmax margin derives from the support
   ## pair when the node does not state it, and the tail checksum runs only
   ## when the recording carries the tail probability.

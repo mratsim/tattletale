@@ -19,7 +19,7 @@
 ## fingerprint plus probe, the same recorded-summary comparison the 35B dense
 ## suite runs.
 ## Final logits go through the decision projection
-## (tt-final-logits-projection-2): argmax and top-2 pair per position,
+## (ttt-tf-002-logit-decisions-probe-h2): argmax and top-2 pair per position,
 ## the tail-probability checksum and the strided probe. No raw logits tensor.
 
 import

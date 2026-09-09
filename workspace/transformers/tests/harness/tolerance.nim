@@ -214,7 +214,7 @@ type
 
   FingerprintStatsFile* = object
     ## Fingerprint stats file for one committed fixture, one entry per tensor.
-    schema*: int
+    schema*: string
     source*: string
     tensors*: seq[TensorStats]
 
@@ -975,8 +975,11 @@ proc assertMatchRate*(actual, expected: Tensor,
 # files ###########################################################################
 
 const
-  FingerprintStatsFileSchema* = 1
-    ## Schema of the `.stats.json` files next to committed fixtures.
+  TensorStatsSchema* = "ttt-tf-003-tensor-stats-h2"
+    ## Format registry id of the `.stats.json` and `.descriptors.json` sidecar
+    ## frames: per-tensor order statistics (hex f32 quantile bits), optional
+    ## packed histogram buckets, and the descriptor keys only on
+    ## descriptor-carried entries.
 
   QuantileNames* = ["p01", "p05", "p10", "p25", "p50", "p75", "p90", "p95",
                     "p99"]
@@ -1016,7 +1019,7 @@ type
     probe_mode: string
     probe_bits: string
   StatsFileJson = object
-    schema: int
+    schema: string
     source: string
     tensors: OrderedTable[string, TensorStatsJson]
 
@@ -1172,7 +1175,7 @@ proc writeFingerprintStats*(path: string, statsFile: FingerprintStatsFile) =
   ## The python twin (fixture_stats.py stats_file_bytes) emits
   ## the same payload bytes: the zstd frame carries the bytes and defines
   ## nothing, the JSON payload inside is the format.
-  var s = "{\"schema\":" & $statsFile.schema & ",\"source\":\"" &
+  var s = "{\"schema\":\"" & statsFile.schema & "\",\"source\":\"" &
     statsFile.source & "\",\"tensors\":{"
   for i, ts in statsFile.tensors:
     if i > 0: s.add ","
@@ -1471,16 +1474,18 @@ proc assertSsmEvalOrder*(a, b: Tensor, steps: int, msg = "") =
     $bulk & ")"
 
 const
-  LogitsProjectionSchema* = "tt-final-logits-projection-1"
-  ## Schema of the first-generation final_logits.decisions.json.zst
-  ## payloads, decisions only.
-  LogitsProjectionSchema2* = "tt-final-logits-projection-2"
-  ## Schema adding the strided bit-exact sample of every deciding row:
-  ## 512 f32 words per position, one every ceil(vocab/512) positions.
-  ## The f32 logit agreement cap stays 1e-5 absolute, the committed
-  ## top-2 cap.
-  ## Schema of the final_logits.decisions.json.zst payloads: one step per position carrying the argmax
-  ## id, the top-2 competing pair, the argmax margin and the softmax tail probability beyond the pair.
+  GreedyStepsSchema* = "ttt-tf-001-greedy-steps-h2"
+  ## Format registry id of the greedy-text-generation fixture frames: one
+  ## record per generation step carrying the argmax id, the chosen token,
+  ## the top-32 competing support with f32 logits, the argmax margin and the
+  ## softmax tail probability beyond the top-32 support.
+  LogitDecisionsProbeSchema* = "ttt-tf-002-logit-decisions-probe-h2"
+  ## Format registry id of the final_logits.decisions.json.zst payloads:
+  ## one step per position carrying the argmax id, the top-2 competing pair,
+  ## the argmax margin and the softmax tail probability beyond the pair,
+  ## plus the strided bit-exact sample of every deciding row: 512 f32 words
+  ## per position, one every ceil(vocab/512) positions. The f32 logit
+  ## agreement cap stays 1e-5 absolute, the committed top-2 cap.
 
 type
   DecisionStep* = object
@@ -1492,8 +1497,9 @@ type
     argmaxMargin*: float64
     tailProbability*: float64
     probeStride*: int
-      ## Strided probe step of the deciding row, 0 when the step carries
-      ## no probe (schema 1).
+      ## Strided probe step of the deciding row, one every
+      ## ceil(vocab / probeStride) positions; 0 when the step carries no
+      ## probe (the retired decisions-only h1-era layout).
     probeMode*: string
       ## "exact": the probe words compare bit-exactly on the reference
       ## device.
@@ -1630,7 +1636,8 @@ proc assertProjection*(logits: Tensor, projection: LogitsProjection, msg = "",
 
 type
   GreedyStepRef* = object
-    ## Recorded reference for one greedy decode step (tt-greedy-2 schema).
+    ## Recorded reference for one greedy decode step (the greedy-steps
+    ## fixture format, registry id GreedyStepsSchema).
     step*: int
     chosenToken*: int
     top32Ids*: seq[int]
@@ -1640,9 +1647,9 @@ type
     tailProbability*: float64
       ## Softmax probability mass beyond the top-32 support.
     tailRecorded*: bool = true
-      ## Whether the recording carries the tail probability at all. The exl3
-      ## greedy payloads recorded before the tt-greedy-2 migration hold the
-      ## top-10 support only, no tail: the checksum step is skipped and the
+      ## Whether the recording carries the tail probability at all. The retired
+      ## h1-era exl3 greedy payloads (no registry id on disk) held the top-10
+      ## support only, no tail: the checksum step is skipped and the
       ## margin-scaled cap and the truncated KL carry the step check.
 
   GreedyConfig* = object

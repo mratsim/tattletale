@@ -20,10 +20,11 @@ tensors except the value-bearing slices:
 - **Decision payloads** (greedy chains, final logits) are recorded as compact
   JSON decisions: greedy chains carry the chosen token, top-32 ids and f32
   logits, argmax margin and the explicit `tail_probability` key per step
-  (tt-greedy-2). Final logits carry the decision projection
-  tt-final-logits-projection-1, per
+  (ttt-tf-001-greedy-steps-h2). Final logits carry the decision projection
+  ttt-tf-002-logit-decisions-probe-h2, per
   position the argmax id, the top-2 competing pair with f32 logits, the argmax
-  margin and the softmax probability beyond the top-2 pair. The [1,6,248320]
+  margin and the softmax probability beyond the top-2 pair, plus the strided
+  512-word bit-exact probe row of every deciding row. The [1,6,248320]
   raw-logits class shrinks from megabytes to tens of KB, consumers read argmax
   and top-2 only.
 - **Boundary slices** that feed bit-exact or band-compared boundaries stay raw
@@ -138,9 +139,9 @@ fixture family writes its PROVENANCE.md at record time through
   the bit-exact input-layernorm anchor resetting the count.
 - Rung 03 full forward: per-layer quantile-only stats entries beside the
   raw boundary payloads, the final logits decision projection
-  (tt-final-logits-projection-2) plus the frozen quantile entry of the
+  (ttt-tf-002-logit-decisions-probe-h2) plus the frozen quantile entry of the
   retired raw tensor. The 1.7 MB raw logits tensor stays out of the tree.
-- Rung 04 greedy: tt-greedy-2 step records (top-32 support, argmax margin,
+- Rung 04 greedy: ttt-tf-001-greedy-steps-h2 step records (top-32 support, argmax margin,
   tail probability); the suites replay with teacher-forced tie recovery.
 - Record-time sidecars come from the generators; the mac battery between
   record waves regenerates the identical frames from the committed payload

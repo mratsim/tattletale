@@ -46,6 +46,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 # Config.
+GREEDY_STEPS_SCHEMA = "ttt-tf-001-greedy-steps-h2"
 MODEL_NAME = "Qwen3.5-0.8B"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 FIXTURE_DIR = os.path.join(
@@ -129,7 +130,7 @@ def main() -> None:
         prompt_ids = input_ids[0].tolist()
         print(f"\nPrompt ({len(prompt_ids)} tokens): {prompt!r}")
 
-        # tt-greedy-2: replay generation step by step so each deciding row
+        # ttt-tf-001-greedy-steps-h2: replay generation step by step so each deciding row
         # is captured in f32. Greedy is argmax over the raw logits row.
         scores = []
         generated_ids = []
@@ -177,7 +178,7 @@ def main() -> None:
         }
 
         fixture = {
-            "schema": "tt-greedy-2",
+            "schema": GREEDY_STEPS_SCHEMA,
             "model": "Qwen3.5-0.8B",
             "env": env,
             "prompt": prompt,

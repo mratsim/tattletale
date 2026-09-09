@@ -52,6 +52,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 LAYER_COUNT = 28
 DTYPE = torch.float16
 DEVICE = "cuda:0"
+GREEDY_STEPS_SCHEMA = "ttt-tf-001-greedy-steps-h2"
 MAX_NEW_TOKENS = 20
 
 PROMPTS = [
@@ -249,7 +250,7 @@ class EXL3Model:
 
             chosen_id = next_token_logits.argmax().item()
 
-            # tt-greedy-2 step record: the argmax pick, the top-32 competing
+            # ttt-tf-001-greedy-steps-h2 step record: the argmax pick, the top-32 competing
             # support with f32 logits, the argmax margin and the softmax tail
             # probability beyond the support.
             top_vals, top_idxs = next_token_logits.topk(32)
@@ -376,7 +377,7 @@ def main():
         generated_text = decode_tokens(generated_ids, tokenizer)
 
         fixture = {
-            "schema": "tt-greedy-2",
+            "schema": GREEDY_STEPS_SCHEMA,
             "env": env,
             "model": MODEL_NAME,
             "prompt": prompt,

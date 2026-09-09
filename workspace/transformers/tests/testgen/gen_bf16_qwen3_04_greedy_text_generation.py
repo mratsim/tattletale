@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate greedy (temp=0) decoding fixtures for end-to-end inference
-verification under the tt-greedy-2 schema:
+verification under the ttt-tf-001-greedy-steps-h2 schema:
 per step the top-32 ids with f32 logits, the argmax margin, and the
 softmax tail probability beyond the top-32 support.
 
@@ -33,6 +33,7 @@ PROMPTS = [
     "Do you know the story of this proverb '磨刀不误砍柴功' and why is it so similar to Abraham Lincoln quote?",
 ]
 
+GREEDY_STEPS_SCHEMA = "ttt-tf-001-greedy-steps-h2"
 MAX_NEW_TOKENS = 20  # short fixtures for fast verification
 
 TOP_K = 32
@@ -112,7 +113,7 @@ def main():
             })
 
         fixture = {
-            "schema": "tt-greedy-2",
+            "schema": GREEDY_STEPS_SCHEMA,
             "model": "Qwen3-0.6B",
             "env": env,
             "prompt": prompt,
