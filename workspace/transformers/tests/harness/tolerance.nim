@@ -908,8 +908,12 @@ proc assertMatchRate*(actual, expected: Tensor,
     raise newException(ValueError,
       "tolerance carries no match-rate cap, use the margin checks instead" &
       (if msg.len > 0: ": " & msg else: ""))
-  let a = actual.contiguous()
-  let e = expected.contiguous()
+  # The per-element walk reads the storages through raw host pointers:
+  # both tensors must be host-resident first. On CUDA a device tensor's
+  # data pointer is not readable from the host (the unified-memory devices
+  # hid this), so copy to the host before the view.
+  let a = actual.contiguous().to(F.kCPU)
+  let e = expected.contiguous().to(F.kCPU)
   if a.numel() != e.numel():
     raise newException(HarnessCheckError,
       "[ttt] match-rate element count mismatch" &
