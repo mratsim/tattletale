@@ -34,17 +34,15 @@ const epiloguesMsl = metal:
   proc fusedAxpby(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                   C: ptr UncheckedArray[float32], Alpha, Beta: float32,
                   N, K, M: int32) {.global.} =
-    gemm(D, N, K, M, Alpha, A, K, 1, B, M, 1, Beta, C, M, 1)
+    gemm(D, K, 1, N, K, M, Alpha, A, K, 1, B, M, 1, Beta, C, M, 1)
 
   proc fusedAxpbyS(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16],
                    C: ptr UncheckedArray[float32], Alpha, Beta: float32,
                    N, K, M: int32, rsc, csc: int32) {.global.} =
-    gemm(D, N, K, M, Alpha, A, K, 1, B, M, 1, Beta, C, rsc, csc)
+    gemm(D, K, 1, N, K, M, Alpha, A, K, 1, B, M, 1, Beta, C, rsc, csc)
 
-# The dtype-parametrized tile applies: the fp16 and fp32 tiles each
-# resolve the same generic `apply` (the identity form). Their own
-# program keeps the codegen surface small, since the fused and dtype
-# kernels together trip a legalization-pass limitation.
+# The dtype-parametrized tile applies live in a separate program.
+# Fusing them with the kernels above trips a legalization-pass limit.
 const dtypeMsl = metal:
   proc dtypeFp16(D: ptr UncheckedArray[float32], A: ptr UncheckedArray[float16]) {.global.} =
     var t_rtl: rt_l(float16, 16, 16)
@@ -92,7 +90,8 @@ proc runTest() =
     for n in 0 ..< N:
       Cmat[m * N + n] = float32(1 + 3 * m + 5 * n)
   engine.run << (grid: grid, blk: (32, 1)) >> (
-    "fusedAxpby", D, (Ah, Bh, Cmat, 2.0'f32, 4.0'f32, int32(M), int32(K), int32(N)))
+    "fusedAxpby", D, (Ah, Bh, Cmat, 2.0'f32, 4.0'f32,
+                       int32(M), int32(K), int32(N)))
   assertAllClose(D, sum(scale(gemmRef(M, N, K, M, N, K, Ah, Bh), 2.0'f32),
                         scale(Cmat, 4.0'f32)))
 
@@ -108,7 +107,7 @@ proc runTest() =
       Cref[m * N + n] = Cp[m * 2 * N + n]
   engine.run << (grid: grid, blk: (32, 1)) >> (
     "fusedAxpbyS", D, (Ah, Bh, Cp, 2.0'f32, 4.0'f32,
-                       int32(M), int32(K), int32(N), int32(2 * N), int32(1)))
+                        int32(M), int32(K), int32(N), int32(2 * N), int32(1)))
   assertAllClose(D, sum(scale(gemmRef(M, N, K, M, N, K, Ah, Bh), 2.0'f32),
                         scale(Cref, 4.0'f32)))
 

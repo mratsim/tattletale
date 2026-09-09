@@ -14,6 +14,7 @@ import ../ptr_arithmetic
 import ../atoms_mma_partitioning
 import ./tiles
 import ./tile_config
+import ./tile_io
 import ./tile_ops_unary
 import ./tile_ops_binary
 import ./tile_ops_reductions
@@ -28,10 +29,50 @@ export tiles, tile_ops_unary, tile_ops_binary,
 # ═════════════════════════════════════════════════════════════════════════
 
 type Epilogue* = concept
-  ## A tile epilogue computes the output tile D = f(AB)
-  ## from the accumulated GEMM result.
+  ## A tile epilogue computes D = f(AB) from the accumulated GEMM tile.
+  ##
+  ## Each epilogue implements `apply` (the per-epilogue math).
+  ## It carries a `storeMask` field for the valid (M, N) range.
+  ## The shared `finalStore` consumes the mask for the masked store.
   proc apply(op: Self, tmp: var (TensorView or Tensor), AB: TensorView or Tensor)
   proc apply(op: Self, tmp: var RtLeft, AB: RtLeft)
+  proc finalStore(op: Self, gl: GlView, tile: RtLeft, origin: (int, int, int, int))
+
+# ═════════════════════════════════════════════════════════════════════════
+#  finalStore, shared by every op
+# ═════════════════════════════════════════════════════════════════════════
+
+proc finalStore*[Epi; TIn, TOut; R, C: static int; A: static MmaAtom](
+    op: Epi,
+    gl: GlView[TOut],
+    tile: RtLeft[TIn, R, C, A],
+    origin: (int, int, int, int)) {.inline.} =
+  ## Masked tile store. Full tile when every storeMask bit is set
+  ## (the plain storeTile path). Per-lane predicated otherwise.
+  ## A ragged edge leaves the destination padding untouched.
+  const M = A.getM()
+  const N = A.getN()
+  const rowTiles = R div M
+  const colTiles = C div N
+  const vpt = A.getVpt()
+  const S = rowTiles * colTiles * vpt
+  const fullMask = when S == 32: -1 else: (1 shl S) - 1
+  if op.storeMask == fullMask:
+    storeTile(gl, tile, origin)
+  else:
+    let lane = int(thread_index_in_threadgroup)
+    let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+    let row = cell mod M
+    let col = cell div M
+    let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
+    var dst = local_tile_dyn(gl, R, C, o)
+    var mask = op.storeMask
+    for n in 0 ..< rowTiles:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          if (mask and 1) != 0:
+            dst[row + n * M, col + m * N + v] = tile.frags[n][m].frag[v].to(TOut)
+          mask = mask shr 1
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Operand captures: the tile-shaped gmem views
@@ -51,6 +92,7 @@ func cView*(T: typedesc, R, C: static int,
 
 type EpiIdentity* = object
   ## Identity: D = AB.
+  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
 
 func apply*[T, Sh, StAB, StR](
     op: EpiIdentity,
@@ -80,6 +122,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
 
 type EpiReLU* = object
   ## Rectified linear unit: D = max(0, AB).
+  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
 
 func apply*[T, Sh, StAB, StR](
     op: EpiReLU,
@@ -112,6 +155,7 @@ type EpiAXPBY*[T, Sh, StC] = object
   ## D = α·AB + β·C, per element.
   alpha*, beta*: T
   C_gmem*: TensorView[T, Sh, StC]
+  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
 
 func initEpiAXPBY*[T, Sh, StC](alpha: T, beta: T,
                                C: TensorView[T, Sh, StC]): EpiAXPBY[T, Sh, StC] =
@@ -144,7 +188,8 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StC](
     op: EpiAXPBY[T, Sh, StC],
     tmp: var RtLeft[T, R, C, A],
     AB: RtLeft[T, R, C, A]) {.inline.} =
-  ## D = α·AB + β·C, per owned slot, the C view the per-lane shard.
+  ## D = α·AB + β·C, per owned slot.
+  ## The C view is the per-lane shard of C_gmem.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = toIntVal(A.valuesPerThread(opC))
@@ -174,51 +219,42 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StC](
             op.alpha * AB.frags[n][m].frag[v] +
             op.beta * op.C_gmem[n, m, v]
 
-# ═════════════════════════════════════════════════════════════════════════
-#  Strided AXPBY: D = α·AB + β·C, C with runtime strides
-# ═════════════════════════════════════════════════════════════════════════
-
-type StridedOperand*[T] = object
-  ## A gmem operand with runtime (BLIS) row/col strides. The shard
-  ## fills `base` with the tile-origin + lane-cell offset.
-  data*: ptr UncheckedArray[T]
-  rsc*, csc*: int32
-  base*: int32
-
-type EpiAXPBYStrided*[T] = object
-  ## D = α·AB + β·C, C addressed with runtime strides.
-  alpha*, beta*: T
-  C*: StridedOperand[T]
-
-func initEpiAXPBY*[T](alpha, beta: T, C: ptr UncheckedArray[T],
-                      rsc, csc: int32): EpiAXPBYStrided[T] =
-  ## The runtime-strided form: C with explicit row/col strides (BLIS).
-  EpiAXPBYStrided[T](alpha: alpha, beta: beta,
-                     C: StridedOperand[T](data: C, rsc: rsc, csc: csc, base: 0))
-
-func apply*[T; R, C: static int; A: static MmaAtom](
-    op: EpiAXPBYStrided[T],
+func apply*[T; R, C: static int; A: static MmaAtom; Sh, StC](
+    op: EpiAXPBY[T, Sh, StC],
     tmp: var RtLeft[T, R, C, A],
-    AB: RtLeft[T, R, C, A]) {.inline.} =
-  ## D = α·AB + β·C, per owned slot. C is read at (row, col) with the
-  ## runtime strides (rsc, csc); β = 0 skips the read.
+    AB: RtLeft[T, R, C, A],
+    Creg: RtLeft[T, R, C, A]) {.inline.} =
+  ## D = α·AB + β·Creg, per owned slot.
+  ## C arrives as the register tile Creg. The C_gmem view is unused here.
+  ## β = 0 skips the C term. α = 1 skips the multiply.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = toIntVal(A.valuesPerThread(opC))
   if op.beta == T(0):
+    if op.alpha == T(1):
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] = AB.frags[n][m].frag[v]
+    else:
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] =
+              op.alpha * AB.frags[n][m].frag[v]
+  elif op.alpha == T(1):
     for n in 0 ..< rowTiles:
       for m in 0 ..< colTiles:
         for v in 0 ..< vpt:
-          tmp.frags[n][m].frag[v] = op.alpha * AB.frags[n][m].frag[v]
+          tmp.frags[n][m].frag[v] =
+            AB.frags[n][m].frag[v] + op.beta * Creg.frags[n][m].frag[v]
   else:
     for n in 0 ..< rowTiles:
       for m in 0 ..< colTiles:
-        let cOff = op.C.base + int32(n * A.getM()) * op.C.rsc +
-                                int32(m * A.getN()) * op.C.csc
         for v in 0 ..< vpt:
           tmp.frags[n][m].frag[v] =
             op.alpha * AB.frags[n][m].frag[v] +
-            op.beta * op.C.data[int(cOff) + int(v) * int(op.C.csc)]
+            op.beta * Creg.frags[n][m].frag[v]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiAddBias
@@ -227,6 +263,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
 type EpiAddBias*[T, Sh, St] = object
   ## D = AB + bias, the bias a column vector broadcast over the tile rows via its stride-0 row view.
   bias_gmem*: TensorView[T, Sh, St]
+  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
 
 func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, St] {.inline.} =
   EpiAddBias[T, Sh, St](bias_gmem: bias)
@@ -244,7 +281,8 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
     op: EpiAddBias[T, Sh, StB],
     tmp: var RtLeft[T, R, C, A],
     AB: RtLeft[T, R, C, A]) {.inline.} =
-  ## D = AB + bias, per owned slot, the bias view the per-lane shard.
+  ## D = AB + bias, per owned slot.
+  ## The bias view is the per-lane shard of bias_gmem.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = toIntVal(A.valuesPerThread(opC))
@@ -261,6 +299,7 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
 type EpiLinearBiasReLU*[T, Sh, St] = object
   ## D = max(0, AB + bias), the bias a column vector broadcast over the tile rows.
   bias_gmem*: TensorView[T, Sh, St]
+  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
 
 func initEpiLinearBiasReLU*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiLinearBiasReLU[T, Sh, St] {.inline.} =
   ## Gmem capture of the bias.
@@ -279,7 +318,8 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
     op: EpiLinearBiasReLU[T, Sh, StB],
     tmp: var RtLeft[T, R, C, A],
     AB: RtLeft[T, R, C, A]) {.inline.} =
-  ## D = max(0, AB + bias), per owned slot, the bias view the per-lane shard.
+  ## D = max(0, AB + bias), per owned slot.
+  ## The bias view is the per-lane shard of bias_gmem.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = toIntVal(A.valuesPerThread(opC))
