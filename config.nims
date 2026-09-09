@@ -72,7 +72,11 @@ func testerCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
     " -d:release --stackTrace:on --lineTrace:on --lineDir:on " &
     " --debugger:native " &
     " --hints:off --warnings:off " &
-    &" --outdir:build/tests/{filename} --nimcache:nimcache/tests/{filename} " &
+    # One shared nimcache for every suite: the torch/transformer stack compiles
+    # to ~150 MB of C++, and a per-suite cache recompiles it for every task.
+    # Cache entries are keyed by module path, so shared modules compile once
+    # across suites and only each suite's own modules add incremental cost.
+    &" --outdir:build/tests --nimcache:nimcache/tests " &
     path
 
 
