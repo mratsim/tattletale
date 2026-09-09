@@ -112,3 +112,6 @@ entries=[(k, v.detach().cpu().contiguous(), False, False) for k, v in sorted(t.i
 write_stats_file(path + '.stats.json.zst', 'layer02_trace.safetensor', entries)
 print(f'Saved: {path} (+ stats sidecar, {len(entries)} entries)')
 for k,v in t.items(): print(f'  {k}: {v.shape}')
+from fixture_exl3_common import write_family_provenance
+write_family_provenance(
+    FIXTURE_DIR, 'testgen/gen_exl3_qwen3_01_block_02_trace.py', 'Qwen3-0.6B-EXL3-5bpw')

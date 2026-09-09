@@ -85,4 +85,8 @@ for name, batch, dim in cases:
         "output_none": y_none.cpu()  # no scale
     })
 
+from fixture_exl3_common import write_family_provenance  # noqa: E402
+write_family_provenance(
+    FIXTURE_DIR, "testgen/gen_exl3_qwen3_00_hadamard.py", "Qwen3-0.6B-EXL3-5bpw")
+
 print(f"\nDone. Fixtures in {FIXTURE_DIR}")

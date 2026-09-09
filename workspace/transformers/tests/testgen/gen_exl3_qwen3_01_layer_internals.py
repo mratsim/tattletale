@@ -62,6 +62,7 @@ from fixture_exl3_common import (
     derive_cb,
     load_config,
     linear_forward_orig_exl3,
+    write_family_provenance,
     had_r_128_orig_exl3,
     rms_norm_orig_exl3,
     precompute_freqs_cis_reimpl_exl3,
@@ -582,6 +583,10 @@ def main():
         generate_block_fixtures(tensors, config)
     else:
         GENERATORS[only](tensors, config)
+
+    write_family_provenance(
+        os.path.dirname(FIXTURE_DIR),
+        "testgen/gen_exl3_qwen3_01_layer_internals.py", MODEL_NAME)
 
     print("=" * 60)
     print(f"Fixture generation complete!")

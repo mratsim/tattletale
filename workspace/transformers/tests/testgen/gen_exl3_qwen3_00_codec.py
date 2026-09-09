@@ -72,7 +72,7 @@ from fixture_exl3_common import (
 # ─── try importing the CUDA backend ───
 USE_CUDA: bool = False
 try:
-    from fixture_exl3_common import reconstruct_orig_exl3
+    from fixture_exl3_common import reconstruct_orig_exl3, write_family_provenance
     USE_CUDA = True
     print(f"  [OK] exllamav3 CUDA extension available")
 except ImportError:
@@ -81,7 +81,8 @@ except ImportError:
 # ─── Paths ─────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # tests/
 FIXTURE_DIR = os.path.join(BASE_DIR, "fixtures", "exl3-00-codec")
-MODEL_DIR = os.path.join(BASE_DIR, "hf_models", "Qwen3-0.6B-EXL3-5bpw")
+MODEL_NAME = "Qwen3-0.6B-EXL3-5bpw"
+MODEL_DIR = os.path.join(BASE_DIR, "hf_models", MODEL_NAME)
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
 FP16_MODEL_DIR = os.path.join(BASE_DIR, "hf_models", "Qwen3-0.6B")
 FP16_MODEL_PATH = os.path.join(FP16_MODEL_DIR, "model.safetensors")
@@ -493,6 +494,8 @@ def main():
         proj_filter=args.proj,
         all_layers=args.all_layers,
     )
+    write_family_provenance(
+        FIXTURE_DIR, "testgen/gen_exl3_qwen3_00_codec.py", MODEL_NAME)
 
 
 if __name__ == "__main__":

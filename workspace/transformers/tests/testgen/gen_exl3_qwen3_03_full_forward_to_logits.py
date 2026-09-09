@@ -47,7 +47,8 @@ from fixture_exl3_common import (
 
 # ── Paths ─────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # tests/
-MODEL_DIR = os.path.join(BASE_DIR, "hf_models", "Qwen3-0.6B-EXL3-5bpw")
+MODEL_NAME = "Qwen3-0.6B-EXL3-5bpw"
+MODEL_DIR = os.path.join(BASE_DIR, "hf_models", MODEL_NAME)
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
 OUTPUT_DIR = Path(BASE_DIR) / "fixtures" / "exl3-03-full-forward-to-logits" / "Qwen3-0.6B-EXL3-5bpw"
 INPUT_TEXT = "Hello, how are you?"
@@ -403,6 +404,8 @@ def main():
                        "note": "the decision projection and the stats entry carry the "
                                "recorded surface, the raw logits tensor stays out of the tree",
                    }, sort_keys=True, indent=2).encode("utf-8") + b"\n")
+    write_family_provenance(
+        OUTPUT_DIR, "testgen/gen_exl3_qwen3_03_full_forward_to_logits.py", MODEL_NAME)
     print(f"  Decisions: {OUTPUT_DIR / 'final_logits.decisions.json.zst'}")
     print(f"\nDone.")
 

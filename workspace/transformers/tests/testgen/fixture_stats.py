@@ -428,7 +428,11 @@ def provenance_entries(env):
 
 
 def recording_env(model=None, generator=None, seed=None, extra=None):
-    """Standard recording-environment dict for one wave invocation."""
+    """Standard recording-environment dict for one recording run. recorded_from
+    names box plus device; the TTT_RECORD_FROM environment variable overrides
+    the default recording box (a non-default recording must set it, the value
+    lands in PROVENANCE.md and in the env frame of the greedy fixtures)."""
+    import os
     import platform
 
     import transformers
@@ -437,7 +441,7 @@ def recording_env(model=None, generator=None, seed=None, extra=None):
         "python": platform.python_version(),
         "torch": torch.__version__,
         "transformers": transformers.__version__,
-        "recorded_from": "m4max-cpu",
+        "recorded_from": os.environ.get("TTT_RECORD_FROM", "m4max-cpu"),
         "platform": platform.platform(),
         "date": __import__("datetime").date.today().isoformat(),
     }

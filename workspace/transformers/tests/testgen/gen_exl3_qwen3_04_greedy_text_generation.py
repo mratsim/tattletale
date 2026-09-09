@@ -350,6 +350,9 @@ def main():
 
     tokenizer = load_tokenizer(MODEL_DIR)
 
+    from fixture_stats import recording_env
+    env = recording_env(extra={"dtype": "float16", "device": "cuda"})
+
     for prompt in PROMPTS:
         safe_name = prompt.replace(" ", "_").replace("'", "").replace("?", "")[:40]
         print(f"\n{'=' * 70}")
@@ -372,6 +375,7 @@ def main():
 
         fixture = {
             "schema": "tt-greedy-2",
+            "env": env,
             "model": MODEL_NAME,
             "prompt": prompt,
             "prompt_ids": prompt_ids,
@@ -395,6 +399,9 @@ def main():
         print(f"  Generated:      {len(generated_ids)} tokens")
         print(f"  Generated text: {generated_text!r}")
         print(f"  Fixture saved:  {out_path}")
+
+    write_family_provenance(
+        OUT_DIR, "testgen/gen_exl3_qwen3_04_greedy_text_generation.py", MODEL_NAME)
 
     print(f"\nDone. Fixtures in {OUT_DIR}")
 

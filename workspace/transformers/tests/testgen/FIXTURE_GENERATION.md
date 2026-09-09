@@ -72,6 +72,15 @@ no vendored checkout is consulted, `_references_*` never appears in comments or
 fixture generation, and hub kernel packages are absent so kernel dispatch falls
 back to the pure-torch bodies, which is the reference behavior.
 
+### Recording box
+
+`recorded_from` names the recording box plus device ("m4max-cpu",
+"rtxpro6000-cuda"). The default recording box stays m4max-cpu; a recording on
+another box sets `TTT_RECORD_FROM` in the environment, the value lands in the
+PROVENANCE.md rows and in the env frame of the greedy fixtures. Every EXL3
+fixture family writes its PROVENANCE.md at record time through
+`fixture_exl3_common.write_family_provenance`.
+
 ### Fixed quantile method and bucket spec
 
 - Quantiles: exact order statistic of the ascending sort, index
