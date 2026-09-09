@@ -23,8 +23,7 @@ test-vectors = [
 ]
 
 bench = [
-    "tokendagger == 0.1.1",
-    "flash_attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.10.0/flash_attn-2.7.4+cu130torch2.14-cp314-cp314-linux_x86_64.whl ; sys_platform == 'linux'"
+    "tokendagger == 0.1.1"
 ]
 
 [tool.uv]
