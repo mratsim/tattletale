@@ -38,6 +38,8 @@ from fixture_exl3_common import (
     rms_norm_orig_exl3,
     precompute_freqs_cis_reimpl_exl3,
     apply_rotary_pos_emb_reimpl_exl3,
+    # provenance
+    write_family_provenance,
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────
