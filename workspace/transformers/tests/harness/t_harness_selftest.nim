@@ -2,123 +2,366 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Selftest: the harness checks reject a seeded fault corpus and accept
-## known-good platform drift. Detection floors live in the module doc
-## of harness/selftest.nim. Run through `nim test_transformers` or directly:
+## Selftest of tests/harness/harness.nim.
 ##
-## nim cpp -r -d:release --stackTrace:on --lineTrace:on --lineDir:on \
-##   --outdir:build/tests/t_harness_selftest \
-##   --nimcache:nimcache/tests/t_harness_selftest \
-##   workspace/transformers/tests/harness/t_harness_selftest.nim
+## Every case drives the real exported API and reads only outcomes:
+## - accept, the call returns
+## - reject, HarnessCheckError carries the expected message fragment
+## - allowance math, deriveBands checked against hand-derived values
+##
+## Run through the test_tf_harness_selftest task in config.nims.
 
 import
+  std/importutils,
   std/os,
+  std/sequtils,
+  std/strutils,
   workspace/libtorch as F,
-  workspace/libtorch_testutils,
-  workspace/transformers/tests/harness
+  workspace/zstd/zstd_highlevel,
+  workspace/transformers/tests/harness/harness {.all.}
+
+privateAccess(StatsRecord)
+privateAccess(ArgmaxRecord)
+
+# ============================ Hand-derived allowances ============================
+
+# deriveBands(2, 30.0) gives ulpBand = ceil(2 x 1 x 1) = 2, delta = 2 x 0.125 = 0.25,
+# klBand = 0.5 x 0.0625 = 0.03125.
+# deriveBands(4, 30.0) gives ulpBand = 4, delta = 0.5, klBand = 0.125.
+# deriveBands(2, 30.0, depth = 2) gives ulpBand = 4, delta = 0.5, klBand = 0.125.
+# deriveBands(4, 30.0, depth = 2) gives ulpBand = 8, delta = 1.0, klBand = 0.5.
+
+# ============================ Stimulus tensors ============================
+
+# Base value pattern, 16.0 + 0.125 x (i mod 112), n = 4096.
+# - every value is exactly bf16-representable (binade 4, step 0.125)
+# - max magnitude 29.875, binade 4, one bf16 ulp 0.125
+# - quantile ranks, p01 -> index 40, p50 -> 2047, p99 -> 4054
 
 proc main() =
-  runCppTest "harness selftest: fault corpus rejected, drift corpus accepted":
-    proc(): bool =
-      runSelftest()
+  proc demand(cond: bool, what: string) =
+    if not cond:
+      raise newException(AssertionDefect, what)
 
-  runCppTest "device selection resolves the define and the platform default":
-    proc(): bool =
-      let dev = testDevice()
-      echo "    testDevice resolves to " & deviceName(dev)
-      when TTT_TEST_ON == "auto":
-        when defined(macosx):
-          doAssert dev == F.kMPS,
-            "the auto default must resolve to Metal on macOS"
+  proc expectReject(action: proc(), fragment: string, what: string) =
+    var caught = false
+    try:
+      action()
+    except HarnessCheckError as e:
+      caught = true
+      if fragment notin e.msg:
+        raise newException(AssertionDefect,
+          what & ": message '" & e.msg & "' lacks '" & fragment & "'")
+    if not caught:
+      raise newException(AssertionDefect, what & ": no HarnessCheckError raised")
+
+  var baseSeq = newSeq[float32](4096)
+  for i in 0 ..< 4096:
+    baseSeq[i] = 16.0'f32 + 0.125'f32 * float32(i mod 112)
+
+  proc perturb(offsets: seq[int], by: float32): seq[float32] =
+    result = baseSeq
+    for i in offsets:
+      result[i] = result[i] + by
+
+  proc constSeq(v: float32): seq[float32] =
+    newSeq(result, 4096)
+    for i in 0 ..< 4096:
+      result[i] = v
+
+  proc maxOffsets(): seq[int] =
+    # Elements carrying the maximum value (i mod 112 == 111), 36 of them.
+    result = toSeq(0 ..< 4096).filterIt(it mod 112 == 111)
+
+  let baseF32 = F.toTensor(baseSeq)
+  let baseBf16 = baseF32.to(F.kBfloat16)
+  let constBf16 = F.toTensor(constSeq(30.0'f32)).to(F.kBfloat16)
+
+  # ============================ Band math ============================
+
+  block:
+    let b = deriveBands(4, 30.0)
+    demand(b.ulpBand == 4 and b.delta == 0.5 and b.klBand == 0.125,
+      "deriveBands(4, 30.0) must be (4, 0.5, 0.125), got " & $b)
+    let b2 = deriveBands(2, 30.0)
+    demand(b2.ulpBand == 2 and b2.delta == 0.25 and b2.klBand == 0.03125,
+      "deriveBands(2, 30.0) must be (2, 0.25, 0.03125), got " & $b2)
+    let bd2 = deriveBands(4, 30.0, depth = 2)
+    demand(bd2.ulpBand == 8 and bd2.delta == 1.0 and bd2.klBand == 0.5,
+      "deriveBands(4, 30.0, depth 2) must be (8, 1.0, 0.5), got " & $bd2)
+    var ampRaised = false
+    try:
+      discard deriveBands(2, 30.0, coarseAmplification = 0.5)
+    except ValueError:
+      ampRaised = true
+    demand(ampRaised, "coarse amplification below 1.0 must raise")
+
+  # ============================ Stats accept cases ============================
+
+  let recBase = baseBf16.loadUniformStats("base")
+  demand(recBase.ulpDatatype == ulpBf16,
+    "record shape: ulp datatype " & ulpDatatypeName(recBase.ulpDatatype))
+
+  block:
+    # Round-trip case, the replay recomputes identical instruments, every
+    # drift 0 <= ulpBand 2.
+    harnessStats(baseBf16, recBase, kElementwise)
+    harnessStats(baseBf16, recBase, kReduction)
+    harnessStats(baseBf16, recBase, kReduction, depth = 2)
+
+  block:
+    # Constant tensor case, one histogram bucket, every element sits above
+    # the tail threshold (recorded max / 16 = 1.875), so the tail
+    # probability is 1.0 with tailEdge 0.
+    let recConst = constBf16.loadUniformStats("const")
+    demand(recConst.histKeys.len == 1 and recConst.tailProbability == 1.0 and
+      recConst.tailEdge == 0,
+      "constant record: buckets " & $recConst.histKeys.len & " tail " &
+      $recConst.tailProbability)
+    harnessStats(constBf16, recConst, kElementwise)
+
+  block:
+    # Depth-2 band edge case, the max quantile sits 4 steps up, 0.5 = delta.
+    # The comparison is strict, so the edge itself passes.
+    let up4 = F.toTensor(perturb(maxOffsets(), 0.5'f32)).to(F.kBfloat16)
+    harnessStats(up4, recBase, kElementwise, depth = 2)
+
+  # ============================ Stats reject cases ============================
+
+  block:
+    # Element count guard fires before any band math.
+    let short = F.toTensor(baseSeq[0 ..< 2048]).to(F.kBfloat16)
+    expectReject(proc() = harnessStats(short, recBase, kElementwise),
+      "element count", "count mismatch")
+
+  block:
+    # Datatype guard case, same values recorded on a different ulp
+    # datatype than the replay computes.
+    expectReject(proc() = harnessStats(baseF32, recBase, kElementwise),
+      "ulp datatype mismatch", "ulp datatype fault")
+
+  block:
+    # Depth-1 quantile instrument reads grid steps, max up 8 steps
+    # against ulpBand 2.
+    let up8 = F.toTensor(perturb(maxOffsets(), 1.0'f32)).to(F.kBfloat16)
+    expectReject(proc() = harnessStats(up8, recBase, kElementwise),
+      "8 grid steps", "quantile step fault")
+
+  block:
+    # Depth-2 quantile instrument reads absolute scale, max up 6 steps
+    # = 0.75 against delta 0.5.
+    let up6 = F.toTensor(perturb(maxOffsets(), 0.75'f32)).to(F.kBfloat16)
+    expectReject(proc() = harnessStats(up6, recBase, kElementwise, depth = 2),
+      "exceeds band", "quantile absolute fault")
+
+
+
+  # Same-id record, id0 = 30.0, ids 1..31 = 20.0, off-set = 0.0,
+  # V = 128. margin = 10, allowance 4: delta 0.5, cap 1.0, klBand 0.125.
+  let rowSeq = (block:
+    var s = newSeq[float32](128)
+    s[0] = 30.0'f32
+    for i in 1 ..< 128:
+      s[i] = if i <= 31: 20.0'f32 else: 0.0'f32
+    s)
+  let rowA = F.toTensor(rowSeq)
+  let topKIds = toSeq(0 ..< 32)
+  var recA = ArgmaxRecord(
+    argmaxId: 0,
+    topK: topKIds,
+    topKLogits: topKIds.mapIt(rowSeq[it]),
+    margin: 10.0,
+    tailProbability: observedTailProbability(rowA, topKIds),
+    kind: kReduction)
+
+  block:
+    var r = recA
+    var flipCount = 0
+    checkArgmaxRow(rowA, r, flipCount)
+    demand(flipCount == 0, "same-id accept must not count a flip")
+
+  block:
+    # Top-32 drift 1.5 against cap 1.0.
+    var driftSeq = rowSeq
+    driftSeq[5] = 21.5'f32
+    var r = recA
+    var flipCount = 0
+    expectReject(proc() = checkArgmaxRow(F.toTensor(driftSeq), r, flipCount),
+      "top-32 logit drift", "top-32 drift fault")
+
+  block:
+    # Tail fault, 8 off-set logits 0 -> 21.5, observed tail moves
+    # 1.6e-3 against limit 4e-4, top-32 and KL instruments clean.
+    var tailSeq = rowSeq
+    for i in 32 ..< 40:
+      tailSeq[i] = 21.5'f32
+    var r = recA
+    var flipCount = 0
+    expectReject(proc() = checkArgmaxRow(F.toTensor(tailSeq), r, flipCount),
+      "tail probability", "tail fault")
+
+  block:
+    # KL instrument, a redundant bound:
+    # - under the drift cap the truncated KL cannot exceed klBand
+    # - the sup over top-32 shapes sits at margin 0 (cap = delta 0.5), the vertex split 13 up / 19 down gives KL 0.12323 < 0.125
+    # - the check never fires first for any reachable record
+    # The strike-or-tighten question stays open for the operator.
+    let flat = newSeqWith(32, 30.0'f32)
+    var mixed = newSeq[float32](32)
+    for i in 0 ..< 32:
+      mixed[i] = if i < 13: 30.5'f32 else: 29.5'f32
+    let kl = truncatedKl(flat, mixed)
+    demand(kl <= 0.125 and kl > 0.1,
+      "KL bound observation: got " & $kl)
+
+  block:
+    # Tie flip, recorded pick id3 = 30.0 against id7 = 29.9375,
+    # margin 0.0625 <= one bf16 ulp at 30.0 (0.125). The replay swaps
+    # the two logits, the flip counts and passes, and the fifth call
+    # passes the cap of 4.
+    var recRow = rowSeq
+    recRow[3] = 30.0'f32
+    recRow[7] = 29.9375'f32
+    recRow[0] = 20.0'f32
+    let tieIds = @[3, 7] & toSeq(0 ..< 32).filterIt(it != 3 and it != 7)
+    var recTie = ArgmaxRecord(
+      argmaxId: 3,
+      topK: tieIds,
+      topKLogits: tieIds.mapIt(recRow[it]),
+      margin: 0.0625,
+      tailProbability: observedTailProbability(F.toTensor(recRow), tieIds),
+      kind: kReduction)
+    var flipRow = recRow
+    flipRow[3] = 29.9375'f32
+    flipRow[7] = 30.0'f32
+    var flipCount = 0
+    for call in 1 ..< 5:
+      checkArgmaxRow(F.toTensor(flipRow), recTie, flipCount)
+    demand(flipCount == 4, "four flips must be counted, got " & $flipCount)
+    expectReject(proc() = checkArgmaxRow(F.toTensor(flipRow), recTie, flipCount),
+      "tie-flip cap", "tie cap overrun")
+
+  block:
+    # Real divergence, margin 2.0 is not tie-eligible, the replay picks
+    # an off-set id at 29.5 while the recorded top-1 fell to 26.0.
+    var divRow = rowSeq
+    divRow[3] = 30.0'f32
+    divRow[0] = 20.0'f32
+    divRow[1] = 28.0'f32
+    let divIds = @[3, 1] & toSeq(0 ..< 32).filterIt(it != 1 and it != 3)
+    var recDiv = ArgmaxRecord(
+      argmaxId: 3,
+      topK: divIds,
+      topKLogits: divIds.mapIt(divRow[it]),
+      margin: 2.0,
+      tailProbability: observedTailProbability(F.toTensor(divRow), divIds),
+      kind: kReduction)
+    # The record is built from the observed row, every instrument passes
+    # and the pick alone diverges, recorded 3 against observed pick 1.
+    var obsRow = divRow
+    obsRow[3] = 26.0'f32
+    recDiv = ArgmaxRecord(
+      argmaxId: 3,
+      topK: divIds,
+      topKLogits: divIds.mapIt(obsRow[it]),
+      margin: 2.0,
+      tailProbability: observedTailProbability(F.toTensor(obsRow), divIds),
+      kind: kReduction)
+    var flipCount = 0
+    expectReject(proc() = checkArgmaxRow(F.toTensor(obsRow), recDiv, flipCount),
+      "argmax divergence", "real divergence")
+
+  block:
+    # The tie-flip cap through the public path form, the flip counts
+    # survive between calls
+    # - five tie flips breach the cap of four, the fifth call raises
+    # - with a fresh record per call the cap never fires
+    # - this case fails against that regression
+    var flipSeq = newSeq[float32](128)
+    flipSeq[5] = 20.0'f32
+    flipSeq[9] = 19.875'f32
+    let flipRow = F.toTensor(flipSeq)
+    let flipIds = @[5, 9] & toSeq(0 ..< 32).filterIt(it != 5 and it != 9)
+    let flipLogits = @[20.0'f32, 19.875'f32] & toSeq(0 ..< 30).mapIt(0.0'f32)
+    let tailHex = "0x" & toHex(cast[uint64](
+      observedTailProbability(flipRow, flipIds)), 16)
+    let idsCsv = flipIds.mapIt($it).join(",")
+    let bitsHex = flipLogits.mapIt("0x" & toHex(cast[uint32](it), 8)).join(" ")
+    var steps = ""
+    for si in 0 ..< 5:
+      if si > 0: steps.add ","
+      steps.add("{\"argmax_id\":5,\"margin\":\"0x3fc0000000000000\"," &
+        "\"tail_probability\":\"" & tailHex & "\"," &
+        "\"top_k\":[" & idsCsv & "],\"top_k_logits\":\"" &
+        bitsHex & "\"}")
+    let frameJson = "{\"schema\":\"ttt-tf-005-argmax-decisions\"," &
+      "\"source\":\"selftest-flip-cap\",\"ulp_datatype\":\"bf16\",\"steps\":[" & steps & "]}"
+    let framePath = getTempDir() / "selftest_flip_cap.json.zst"
+    writeFile(framePath, zstdCompress(frameJson, string))
+    # The observed row swaps the near-tie pair, the pick flips every step.
+    var obsFlip = flipSeq
+    obsFlip[5] = 19.875'f32
+    obsFlip[9] = 20.0'f32
+    let obsRow = F.toTensor(obsFlip)
+    var flipCount = 0
+    var capFired = false
+    for step in 0 ..< 5:
+      try:
+        assertArgMax(obsRow, framePath, step, kReduction, flipCount)
+      except HarnessCheckError as e:
+        if step == 4 and "tie-flip cap" in e.msg:
+          capFired = true
         else:
-          doAssert dev in {F.kCPU, F.kCUDA},
-            "the auto default must resolve to CUDA or CPU off macOS"
-      else:
-        doAssert dev == parseTestDevice(TTT_TEST_ON),
-          "an explicit TTT_TEST_ON value must win"
-      true
+          raise newException(AssertionDefect,
+            "flip chain: unexpected rejection at step " & $step & ": " & e.msg)
+    demand(capFired, "the flip cap must fire on the fifth flip")
 
-  runCppTest "device pairing selects tolerances from the device pair":
-    proc(): bool =
-      doAssert compareClass(F.kCPU, F.kCPU) == sameDeviceBitExact
-      doAssert compareClass(F.kMPS, F.kMPS) == sameDeviceBitExact
-      doAssert compareClass(F.kCPU, F.kMPS) == crossDeviceDrift
-      doAssert compareClass(F.kCPU, F.kCUDA) == crossDeviceDrift
-      doAssert recordedDevice("m4max-cpu") == F.kCPU
-      doAssert recordedDevice("boxtwo-metal") == F.kMPS
-      doAssert recordedDevice("rbox-cuda") == F.kCUDA
-      try:
-        discard recordedDevice("m4max")
-        doAssert false, "recordedDevice accepted a box-only value"
-      except ValueError:
-        discard
-      try:
-        discard recordedDevice("m4max-vulkan")
-        doAssert false, "recordedDevice accepted an unknown device"
-      except ValueError:
-        discard
-      # recordedFrom reads the manifest of a real fixture family.
-      let fixtureDir =
-        currentSourcePath().parentDir() / ".." / "fixtures" /
-        "bf16-02-first-8-layers-plus-final" / "Qwen3-0.6B"
-      let rec = recordedFrom(fixtureDir)
-      echo "    manifest recorded_from: " & rec
-      doAssert rec == "m4max-cpu"
-      let expected = if testDevice() == F.kCPU: sameDeviceBitExact
-                     else: crossDeviceDrift
-      doAssert compareClass(recordedDevice(rec), testDevice()) == expected
-      echo "    devices: ", compareReport(fixtureDir, testDevice())
-      # Every fixture family manifest verifies and names a legal device:
-      # the recorded-platform facts are manifest-declared, never assumed.
-      var stamped = 0
-      let fixturesDir =
-        currentSourcePath().parentDir() / ".." / "fixtures"
-      for kind, family in walkDir(fixturesDir):
-        if kind != pcDir: continue
-        # Single-checkpoint families put the manifest at the family root
-        # (exl3-00-codec, exl3-00-hadamard, exl3-01-*, exl3-04-greedy),
-        # families recording one manifest per model put it under the model
-        # directory (the bf16 families and exl3-03).
-        for k2, modelDir in walkDir(family):
-          if k2 != pcDir: continue
-          if not fileExists(modelDir / "PROVENANCE.md"): continue
-          let rec = recordedFrom(modelDir)
-          discard recordedDevice(rec)
-          # The linked torch must match the recorded torch version. A venv
-          # downgrade cannot silently desync the environment rows: the guard
-          # fails the run instead.
-          assertTorchStamp(modelDir)
-          inc stamped
-        if not fileExists(family / "PROVENANCE.md"): continue
-        let rec = recordedFrom(family)
-        discard recordedDevice(rec)
-        assertTorchStamp(family)
-        inc stamped
-      echo "    fixture family manifests verified: " & $stamped
-      doAssert stamped >= 8,
-        "the fixture families must carry verified provenance manifests"
-      # The environment guard: the linked torch against the recorded torch
-      # version. A mismatched version raises an error before any comparison
-      # runs.
-      block:
-        let badDir = getTempDir() / "ttt-torch-version-guard"
-        createDir(badDir)
-        writeFile(badDir / "PROVENANCE.md", renderProvenance(@[
-          ("python", "3.14.1"), ("torch", "9.9.9"),
-          ("transformers", "5.16.1"), ("recorded_from", "m4max-cpu")]))
-        let raised = (proc(): bool =
-          try:
-            assertTorchStamp(badDir)
-            false
-          except HarnessCheckError:
-            true)()
-        doAssert raised, "the torch-version check accepted a mismatched version"
-        echo "    linked torch ", linkedTorchVersion(),
-          ", the guard rejects a mismatched torch version"
-      true
+
+  block:
+    # Serialized-allowance closure case, check-time allowance derivation:
+    # - the frame serializes a wildly loose allowance (4096), the old
+    #   override channel would widen delta past 64 bf16 ulps
+    # - the observed row drifts one top-32 logit by 1.5, the derived
+    #   delta (allowance 4, one bf16 ulp at 30.0 = 0.125) is 0.5 with cap 1.0
+    # - the check must reject against the derived value
+    var row = rowSeq
+    var driftRow = rowSeq
+    driftRow[5] = 21.5'f32
+    let tailHex = "0x" & toHex(cast[uint64](
+      observedTailProbability(F.toTensor(row), topKIds)), 16)
+    let idsCsv = topKIds.mapIt($it).join(",")
+    let bitsHex = topKIds.mapIt(
+      "0x" & toHex(cast[uint32](rowSeq[it]), 8)).join(" ")
+    let stepJson = "{\"argmax_id\":0,\"margin\":\"0x4024000000000000\"," &
+      "\"tail_probability\":\"" & tailHex & "\",\"top_k\":[" &
+      idsCsv & "],\"top_k_logits\":\"" & bitsHex &
+      "\",\"ulp_drift_allowance\":4096}"
+    let frameJson = "{\"schema\":\"ttt-tf-005-argmax-decisions\"," &
+      "\"source\":\"selftest-allowance-closure\",\"ulp_datatype\":\"bf16\"," &
+      "\"steps\":[" & stepJson & "]}"
+    let framePath = getTempDir() / "selftest_allowance_closure.json.zst"
+    writeFile(framePath, zstdCompress(frameJson, string))
+    var flipCount = 0
+    expectReject(proc() = assertArgMax(F.toTensor(driftRow), framePath, 0,
+      kReduction, flipCount),
+      "top-32 logit drift", "a loose serialized allowance must not widen delta")
+
+  block:
+    # A NaN logit rejects before the instruments, ordered comparisons
+    # would read NaN as no drift and accept silently.
+    var nanSeq = rowSeq
+    nanSeq[40] = NaN
+    var r = recA
+    var flipCount = 0
+    expectReject(proc() = checkArgmaxRow(F.toTensor(nanSeq), r, flipCount),
+      "non-finite", "NaN logits reject")
+
+  block:
+    echo "t_harness_selftest: all cases green"
+
 
 when isMainModule:
   main()

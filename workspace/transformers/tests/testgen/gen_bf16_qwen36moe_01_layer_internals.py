@@ -1,42 +1,32 @@
 #!/usr/bin/env python3
-"""Generate the Qwen3.6-35B-A3B full decoder-layer fixtures (layer 0 GDN +
-MoE, layer 3 gated full attention + MoE) from the real checkpoint
-safetensors files,
-using the installed reference modeling on CPU torch bf16.
+"""Generate the Qwen3.6-35B-A3B full decoder-layer fixtures for layer 0 GDN + MoE
+and layer 3 gated full attention + MoE, from the real checkpoint
+safetensors files, on the installed reference modeling, CPU torch bf16.
 
-What is generated (under tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-layer-0/ and
-tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-layer-3/, the house layer dirs holding
-one decoder layer's fixture files each):
+Generated under tests/fixtures/bf16-01-layer-internals/, the house layer dirs
+Qwen3.6-35B-A3B-layer-0/ and Qwen3.6-35B-A3B-layer-3/, one layer's fixture files per dir:
 
-  layer-Qwen3.6-35B-A3B-00.safetensor (+ .metadata.json.zst)
-    Full decoder layer 0 (linear_attention + routed MoE), prefill T=6:
-    layer input, input layernorm output, the GDN block output under both
-    core rules, post-attention layernorm output, the routed-block
-    intermediates (router logits, top-k indices, routing weights, shared
-    gate, routed-block output) and the layer outputs under both rules.
-  layer-Qwen3.6-35B-A3B-03.safetensor (+ .metadata.json.zst)
-    Full decoder layer 3 (full_attention + routed MoE), prefill T=6 at
-    positions 0..5: layer input, positions, cos/sin, input layernorm
-    output, the gated attention output after o_proj, the post-attention
-    layernorm output, the routed-block intermediates and the layer output.
+| file | contents |
+|---|---|
+| layer-Qwen3.6-35B-A3B-00.safetensor (+ .metadata.json.zst) | full decoder layer 0 (linear_attention + routed MoE), prefill T=6, the recorded boundary and routed-block intermediates (layer input, input layernorm output, the GDN block output under both core rules, post-attention layernorm output, router logits, top-k indices, routing weights, shared gate, routed-block output, the layer outputs under both rules), as the combined 01 suite replays them |
+| layer-Qwen3.6-35B-A3B-03.safetensor (+ .metadata.json.zst) | full decoder layer 3 (full_attention + routed MoE), prefill T=6 at positions 0..5, the replay driving tensors (layer input, positions); the 004 stats frame carries the sublayer intermediates, the routed-block intermediates and the layer output |
 
-The layer chain is the installed Qwen3_5MoeDecoderLayer.forward: local
-residuals, input layernorm, token mixer, residual, post-attention
-layernorm, routed block, residual. The GDN chunked rule is the installed
-forward. The recurrent rule is the bitwise reference for the Nim block
-(the Nim recurrence is bit-identical to torch_recurrent_gated_delta_rule).
-Weights are routed through model.safetensors.index.json, opening only the
-safetensors files that hold the requested layer.
+Chain per the installed Qwen3_5MoeDecoderLayer.forward:
 
-Run (twice; cmp proves byte determinism):
-  cd <worktree root> && .venv/bin/python \
-    workspace/transformers/tests/testgen/gen_bf16_qwen36moe_01_layer_internals.py
+  - local residual, input layernorm, token mixer, residual
+  - post-attention layernorm, routed block, residual
 
+  - the GDN chunked rule is the installed forward
+  - the recurrent rule is the bitwise reference for the Nim block, mirroring torch_recurrent_gated_delta_rule element for element
+  - weights route through model.safetensors.index.json, opening only the safetensors files that hold the requested layer
 
-RAM: the invoking shell runs `vm_stat` and `pgrep -f "python.*(torch|hf)"`
-before this script. The script re-runs both checks itself and refuses to
-load weights when free memory is low or another python/torch process is
-running (its own process chain is excluded).
+  - cd <worktree root> && .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen36moe_01_layer_internals.py
+  - run twice, cmp proves byte determinism
+
+RAM:
+
+  - the invoking shell runs `vm_stat` and `pgrep -f "python.*(torch|hf)"` before this script
+  - the script re-runs both checks and refuses to load when memory is low or another python/torch process runs, its own chain excluded
 """
 
 import json
@@ -50,9 +40,11 @@ ZSTD_WRITE_OPTIONS = {
 
 
 def write_json_zst(path, obj, ensure_ascii=True):
-    """Write obj as a single zstd frame, level 19 with content size and
-    checksum recorded in the frame header. JSON fixtures stay reviewable
-    via the generator and the frame stays out of text diffs."""
+    """Writes obj as one zstd frame, level 19, with the content size
+    checksum recorded in the frame header.
+
+    Returns nothing. JSON fixtures stay reviewable via the generator,
+    the frame stays out of text diffs."""
     payload = json.dumps(
         obj, sort_keys=True, indent=2, ensure_ascii=ensure_ascii
     ).encode("utf-8") + b"\n"
@@ -65,17 +57,19 @@ import subprocess
 import sys
 
 
-import torch  # noqa: E402
-import torch.nn.functional as F  # noqa: E402
+import torch  # noqa, the path insert precedes the import
+
+from fixture_stats import assert_path_equivalent  # noqa: E402
+import torch.nn.functional as F  # noqa, the path insert precedes the import
 from safetensors import safe_open
 from safetensors import torch as st
 
 
-import transformers  # noqa: E402
-from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import (  # noqa: E402
+import transformers  # noqa, the path insert precedes the import
+from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import (  # noqa because the path insert precedes the import
     Qwen3_5MoeTextConfig,
 )
-from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: E402
+from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa, the path insert precedes the import
     Qwen3_5MoeAttention,
     Qwen3_5MoeDecoderLayer,
     Qwen3_5MoeGatedDeltaNet,
@@ -87,16 +81,15 @@ from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: E402
     torch_recurrent_gated_delta_rule,
 )
 
-# Determinism: single intra-op thread, deterministic kernels.
+# determinism, single intra-op thread and deterministic kernels
 torch.set_num_threads(1)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# Config.
+# config constants:
 MODEL_NAME = "Qwen3.6-35B-A3B"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
-# The layer dirs hold that layer's fixture files, house template
-# fixtures/bf16-01-layer-internals/<Model>-layer-<N>/.
+# The layer dirs hold that layer's fixture files, house template fixtures/bf16-01-layer-internals/<Model>-layer-<N>/.
 LAYERS_DIR = os.path.join(GRANDPARENT_DIR, "fixtures", "bf16-01-layer-internals")
 LAYER0_DIR = os.path.join(LAYERS_DIR, "Qwen3.6-35B-A3B-layer-0")
 LAYER3_DIR = os.path.join(LAYERS_DIR, "Qwen3.6-35B-A3B-layer-3")
@@ -113,12 +106,9 @@ NUM_THREADS = 1
 SEED_LAYER0_BASE = 211
 SEED_LAYER3_BASE = 307
 
-# Geometry of the checkpoint.
-HIDDEN = 2048
+# Geometry reads from the parsed config (config is king), see load_text_config.
 SEQ_LEN = 6
 CHUNK_SIZE = 64
-NUM_EXPERTS = 256
-TOP_K = 8
 
 PREFIX_FMT = "model.language_model.layers.{layer}."
 MIN_FREE_BYTES = 8 * 1024 ** 3
@@ -170,9 +160,11 @@ def ancestor_pids() -> set:
 
 
 def check_ram() -> None:
-    """Refuse to load weights when memory is low or another python/torch
-    process holds RAM (this process chain is excluded from the pgrep match,
-    whose command line spells the torch dependency of this run)."""
+    """Refuses to load weights when memory is low or another python/torch
+    process holds RAM.
+
+    Returns nothing. The pgrep match excludes this process chain, whose
+    command line spells the torch dependency of the run."""
     free = free_bytes()
     if free < MIN_FREE_BYTES:
         raise SystemExit(
@@ -197,6 +189,14 @@ def load_text_config() -> Qwen3_5MoeTextConfig:
     return cfg
 
 
+# Geometry reads from the parsed config (config is king), no hardcoded
+# copies of the checkpoint's hidden size, expert count, or top-k.
+GEOMETRY = load_text_config()
+HIDDEN = GEOMETRY.hidden_size
+NUM_EXPERTS = GEOMETRY.num_experts
+TOP_K = GEOMETRY.num_experts_per_tok
+
+
 def load_index_weight_map() -> dict:
     """Parse the checkpoint index and return its weight_map."""
     with open(INDEX_PATH) as f:
@@ -205,8 +205,7 @@ def load_index_weight_map() -> dict:
 
 
 def layer_shorts(cfg: Qwen3_5MoeTextConfig, layer_idx: int) -> list:
-    """Tensor name suffixes of one decoder layer: the token mixer keys of
-    its kind plus the routed block and the two layernorms."""
+    """Tensor name suffixes of one decoder layer, the token mixer keys of its kind plus the routed block and the two layernorms."""
     kind = cfg.layer_types[layer_idx]
     if kind == "linear_attention":
         mixer = [
@@ -235,9 +234,10 @@ def layer_shorts(cfg: Qwen3_5MoeTextConfig, layer_idx: int) -> list:
 
 def load_layer_weights(weight_map: dict, cfg: Qwen3_5MoeTextConfig,
                        layer_idx: int) -> dict:
-    """Load one decoder layer's tensors through the checkpoint index,
-    opening only the safetensors files that hold them (safe_open, memory mapped,
-    only these tensors are copied)."""
+    """Loads one decoder layer's tensors through the checkpoint index.
+
+    Returns the weight dict. Only the safetensors files holding the layer
+    open (safe_open, memory mapped, only these tensors are copied)."""
     base = PREFIX_FMT.format(layer=layer_idx)
     by_file = OrderedDict()
     for short in layer_shorts(cfg, layer_idx):
@@ -251,75 +251,14 @@ def load_layer_weights(weight_map: dict, cfg: Qwen3_5MoeTextConfig,
     return weights
 
 
-def build_moe(cfg: Qwen3_5MoeTextConfig, weights: dict) -> Qwen3_5MoeSparseMoeBlock:
-    """Routed block with real weights: router, fused experts, shared expert."""
-    moe = Qwen3_5MoeSparseMoeBlock(cfg)
-    with torch.no_grad():
-        moe.gate.weight.data = weights["mlp.gate.weight"]
-        moe.experts.gate_up_proj.data = weights["mlp.experts.gate_up_proj"]
-        moe.experts.down_proj.data = weights["mlp.experts.down_proj"]
-        moe.shared_expert.gate_proj.weight.data = \
-            weights["mlp.shared_expert.gate_proj.weight"]
-        moe.shared_expert.up_proj.weight.data = \
-            weights["mlp.shared_expert.up_proj.weight"]
-        moe.shared_expert.down_proj.weight.data = \
-            weights["mlp.shared_expert.down_proj.weight"]
-        moe.shared_expert_gate.weight.data = weights["mlp.shared_expert_gate.weight"]
-    moe.eval()
-    return moe
-
-
-def build_decoder_layer(cfg: Qwen3_5MoeTextConfig, weights: dict,
-                        layer_idx: int) -> Qwen3_5MoeDecoderLayer:
-    """Full decoder layer with real weights, both layernorms, the token
-    mixer of the layer kind and the routed block."""
-    layer = Qwen3_5MoeDecoderLayer(cfg, layer_idx)
-    with torch.no_grad():
-        if hasattr(layer, "linear_attn"):
-            gdn = layer.linear_attn
-            gdn.in_proj_qkv.weight.data = weights["linear_attn.in_proj_qkv.weight"]
-            gdn.in_proj_z.weight.data = weights["linear_attn.in_proj_z.weight"]
-            gdn.out_proj.weight.data = weights["linear_attn.out_proj.weight"]
-            gdn.A_log.data = weights["linear_attn.A_log"].to(torch.bfloat16)
-            gdn.conv1d.weight.data = weights["linear_attn.conv1d.weight"]
-            gdn.dt_bias.data = weights["linear_attn.dt_bias"]
-            gdn.in_proj_a.weight.data = weights["linear_attn.in_proj_a.weight"]
-            gdn.in_proj_b.weight.data = weights["linear_attn.in_proj_b.weight"]
-            gdn.norm.weight.data = weights["linear_attn.norm.weight"].to(torch.bfloat16)
-        else:
-            attn = layer.self_attn
-            attn.q_proj.weight.data = weights["self_attn.q_proj.weight"]
-            attn.k_proj.weight.data = weights["self_attn.k_proj.weight"]
-            attn.v_proj.weight.data = weights["self_attn.v_proj.weight"]
-            attn.o_proj.weight.data = weights["self_attn.o_proj.weight"]
-            attn.q_norm.weight.data = weights["self_attn.q_norm.weight"].to(torch.bfloat16)
-            attn.k_norm.weight.data = weights["self_attn.k_norm.weight"].to(torch.bfloat16)
-        moe = layer.mlp
-        moe.gate.weight.data = weights["mlp.gate.weight"]
-        moe.experts.gate_up_proj.data = weights["mlp.experts.gate_up_proj"]
-        moe.experts.down_proj.data = weights["mlp.experts.down_proj"]
-        moe.shared_expert.gate_proj.weight.data = \
-            weights["mlp.shared_expert.gate_proj.weight"]
-        moe.shared_expert.up_proj.weight.data = \
-            weights["mlp.shared_expert.up_proj.weight"]
-        moe.shared_expert.down_proj.weight.data = \
-            weights["mlp.shared_expert.down_proj.weight"]
-        moe.shared_expert_gate.weight.data = weights["mlp.shared_expert_gate.weight"]
-        layer.input_layernorm.weight.data = weights["input_layernorm.weight"]
-        layer.post_attention_layernorm.weight.data = \
-            weights["post_attention_layernorm.weight"]
-    layer.eval()
-    return layer
-
-
 def gdn_forward_replay(block, hidden_states: torch.Tensor,
                        use_recurrent: bool) -> dict:
-    """Replay of the reference Qwen3_5MoeGatedDeltaNet.forward with a
-    selectable core rule, capturing every intermediate.
+    """Replays the reference Qwen3_5MoeGatedDeltaNet.forward with a selectable
+    core rule, capturing every intermediate.
 
-    The chunked replay must be bit-identical to the module forward
-    (asserted by the caller). The recurrent replay is the bitwise
-    reference for the Nim implementation."""
+    Returns the output dict. The caller asserts the chunked replay against
+    the module forward with assert_path_equivalent, the recurrent replay
+    is the bitwise reference for the Nim implementation."""
     batch_size, seq_len, _ = hidden_states.shape
     with torch.no_grad():
         mixed_qkv = block.in_proj_qkv(hidden_states).transpose(1, 2)
@@ -358,9 +297,9 @@ def gdn_forward_replay(block, hidden_states: torch.Tensor,
 
 def moe_forward_capture(moe: Qwen3_5MoeSparseMoeBlock,
                         hidden_states: torch.Tensor) -> dict:
-    """Replay of the reference Qwen3_5MoeSparseMoeBlock.forward, capturing
-    every intermediate. Must be bit-identical to the module forward
-    (asserted by the caller)."""
+    """Replays the reference Qwen3_5MoeSparseMoeBlock.forward, capturing
+    every intermediate. Returns the capture dict, the caller asserting
+    it against the module forward with assert_path_equivalent."""
     batch, seq, hidden_dim = hidden_states.shape
     with torch.no_grad():
         flat = hidden_states.view(-1, hidden_dim)
@@ -381,9 +320,9 @@ def moe_forward_capture(moe: Qwen3_5MoeSparseMoeBlock,
 def attn_forward_capture(attn: Qwen3_5MoeAttention,
                          hidden_states: torch.Tensor,
                          position_embeddings) -> dict:
-    """Replay of the reference Qwen3_5MoeAttention.forward, capturing the
-    gated output and the o_proj output. Must be bit-identical to the
-    module forward (asserted by the caller)."""
+    """Replays the reference Qwen3_5MoeAttention.forward, capturing the gated
+    output and the o_proj output. Returns the capture dict, the caller
+    asserting it against the module forward."""
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, attn.head_dim)
     with torch.no_grad():
@@ -417,8 +356,8 @@ def max_abs_diff(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def ulp_bf16(m: float) -> float:
-    """One bf16 ulp at magnitude m: bf16 stores 7 significand bits, so for
-    m in [2**e, 2**(e+1)) the ulp is 2**(e-7). Zero maps to 0."""
+    """One bf16 ulp at magnitude m, bf16 stores 7 significand bits, so
+    for m in [2**e, 2**(e+1)) the ulp is 2**(e-7), zero maps to 0."""
     if m <= 0:
         return 0.0
     e = int(torch.floor(torch.log2(torch.tensor(m))).item())
@@ -426,9 +365,10 @@ def ulp_bf16(m: float) -> float:
 
 
 def router_margins(router_logits: torch.Tensor) -> tuple:
-    """Smallest top-k margin and smallest adjacent gap of the sorted
-    probabilities. Both must be positive: a tie would leave the top-k
-    order ambiguous between a sort and a topk, and so make the fixture
+    """Smallest top-k margin and smallest adjacent gap of the sorted probabilities.
+
+    Returns the two margins. Both must be positive, a tie would leave
+    the top-k order ambiguous between a sort and a topk, and so make the fixture
     unusable for exact-index asserts."""
     probs = torch.nn.functional.softmax(router_logits, dtype=torch.float32, dim=-1)
     sorted_probs = torch.sort(probs, dim=-1, descending=True).values
@@ -438,10 +378,11 @@ def router_margins(router_logits: torch.Tensor) -> tuple:
 
 
 def moe_bands(capture: dict) -> dict:
-    """Routed-block bands from bf16 ulp arithmetic, first principles:
-    one ulp at the max magnitude for the router logits, routing weights
-    and shared gate, three ulps for the routed-block output (a GEMM
-    boundary flip is tolerated up to that band)."""
+    """Routed-block bands from bf16 ulp arithmetic, first principles.
+
+    Returns the band dict. One ulp at the max magnitude for the router logits,
+    routing weights, and `shared_gate`, three ulps for the routed-block
+    output (a GEMM boundary flip is tolerated up to that band)."""
     return {
         "router_logits_band": ulp_bf16(capture["router_logits"].abs().max().item()),
         "routing_weights_band": ulp_bf16(capture["routing_weights"].abs().max().item()),
@@ -451,8 +392,7 @@ def moe_bands(capture: dict) -> dict:
 
 
 def save_fixture(case_num: int, metadata: dict, tensors: dict) -> str:
-    """Save a fixture to safetensors with a separate deterministic metadata
-    file."""
+    """Saves a fixture to safetensors with a separate deterministic metadata file."""
     filename = f"layer-{MODEL_NAME}-{case_num:02d}.safetensor"
     fixture_dir = LAYER0_DIR if case_num == 0 else LAYER3_DIR
     filepath = os.path.join(fixture_dir, filename)
@@ -472,9 +412,11 @@ def save_fixture(case_num: int, metadata: dict, tensors: dict) -> str:
 
 
 def generate_layer0_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict) -> None:
-    """Full decoder layer 0 (GDN + MoE): the recurrent rule as the bitwise
-    reference, the chunked rule as the module forward, and the
-    installed decoder layer as the chain cross-check."""
+    """Full decoder layer 0 (GDN + MoE) fixture.
+
+    Returns nothing. The recurrent rule is the bitwise reference,
+    the chunked rule is the module forward, the installed decoder layer
+    is the chain cross-check."""
     base = PREFIX_FMT.format(layer=0)
     weights = load_layer_weights(weight_map, cfg, 0)
 
@@ -510,9 +452,10 @@ def generate_layer0_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict) -> None
         post_ln = layer.post_attention_layernorm
     layer.eval()
 
-    # Seed search: a tie in the top-k probabilities would leave the order
-    # ambiguous, so the fixture demands positive margins. Only the cheap
-    # prefix of the chain runs per candidate.
+    # seed search, the fixture demands positive top-k margins since a tie
+    # would leave the order ambiguous between a sort and a topk
+    #
+    # - only the cheap prefix of the chain runs per candidate
     for offset in range(64):
         seed = SEED_LAYER0_BASE + offset
         gen = torch.Generator(device="cpu")
@@ -536,8 +479,8 @@ def generate_layer0_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict) -> None
     with torch.no_grad():
         module_mixer = gdn(h_norm, cache_params=None, attention_mask=None)
         chunk_replay = gdn_forward_replay(gdn, h_norm, use_recurrent=False)
-        assert torch.equal(module_mixer, chunk_replay["output"]), (
-            "[gen_bf16_qwen36moe_01_layer_internals] chunked replay diverged from the "
+        assert_path_equivalent(module_mixer, chunk_replay["output"],
+            "[gen_bf16_qwen36moe_01_layer_internals] chunked replay vs the "
             "module forward for layer 0")
 
         # The installed decoder layer forward is the chain ground truth,
@@ -548,12 +491,11 @@ def generate_layer0_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict) -> None
         h2_chunked = post_ln(h1_chunked)
         moe_chunked = moe_forward_capture(moe, h2_chunked)
         manual_layer_out = h1_chunked + moe_chunked["moe_output"]
-        assert torch.equal(real_layer_out, manual_layer_out), (
-            "[gen_bf16_qwen36moe_01_layer_internals] manual chain diverged from the "
+        assert_path_equivalent(real_layer_out, manual_layer_out,
+            "[gen_bf16_qwen36moe_01_layer_internals] manual chain vs the "
             "decoder layer forward for layer 0")
 
-        # Recurrent chain for the Nim block with the same routed block
-        # and residuals.
+        # recurrent chain for the Nim block with the same routed block and residuals
         moe_seq = moe_forward_capture(moe, h2)
         layer_out_seq = h1 + moe_seq["moe_output"]
 
@@ -564,10 +506,11 @@ def generate_layer0_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict) -> None
             f"[gen_bf16_qwen36moe_01_layer_internals] recurrent-vs-chunked mixer diff "
             f"outside (0, {BLOCK_BAR}): {mixer_diff}")
 
-        # Bands: the routed-block band plus one bf16 ulp for the residual
-        # add, at the larger of the two magnitudes. The GDN block stays
-        # bitwise against the recurrent replay, so the chain delta comes
-        # from the routed-block band alone.
+        # the routed-block band plus one bf16 ulp for the residual add
+        # at the larger of the two magnitudes
+        #
+        # - the GDN block stays bitwise against the recurrent replay,
+        #   the chain delta comes from the routed-block band alone
         bands = moe_bands(moe_seq)
         layer_band = bands["moe_output_band"] + ulp_bf16(
             max(layer_out_seq.abs().max().item(),
@@ -616,8 +559,8 @@ def generate_layer0_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict) -> None
 
 def generate_layer3_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict,
                             rotary) -> None:
-    """Full decoder layer 3 (gated attention + MoE): the installed decoder
-    layer forward as the chain ground truth, prefill T=6 at positions 0..5."""
+    """Full decoder layer 3 (gated attention + MoE) fixture, the installed
+    decoder layer forward as the chain ground truth, prefill T=6 at positions 0..5."""
     base = PREFIX_FMT.format(layer=3)
     weights = load_layer_weights(weight_map, cfg, 3)
     layer = Qwen3_5MoeDecoderLayer(cfg, 3)
@@ -680,8 +623,8 @@ def generate_layer3_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict,
             h_norm, position_embeddings=(cos, sin),
             attention_mask=None, past_key_values=None)
         mixer_cap = attn_forward_capture(attn, h_norm, (cos, sin))
-        assert torch.equal(mixer_real, mixer_cap["output"]), (
-            "[gen_bf16_qwen36moe_01_layer_internals] attention replay diverged from the "
+        assert_path_equivalent(mixer_real, mixer_cap["output"],
+            "[gen_bf16_qwen36moe_01_layer_internals] attention replay vs the "
             "module forward for layer 3")
 
         # The installed decoder layer forward, the chain ground truth,
@@ -693,16 +636,18 @@ def generate_layer3_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict,
         h2 = post_ln(h1)
         moe_cap = moe_forward_capture(moe, h2)
         manual_layer_out = h1 + moe_cap["moe_output"]
-        assert torch.equal(real_layer_out, manual_layer_out), (
-            "[gen_bf16_qwen36moe_01_layer_internals] manual chain diverged from the "
+        assert_path_equivalent(real_layer_out, manual_layer_out,
+            "[gen_bf16_qwen36moe_01_layer_internals] manual chain vs the "
             "decoder layer forward for layer 3")
 
-        # Bands: cross-version SDPA CPU kernel noise. The Nim binary links
-        # libtorch 2.11, this fixture records with torch 2.13. Identical
-        # inputs and flags differ by one bf16 ulp at the differing
-        # element, invariant to stride and to input provenance. The layer
-        # band compounds the attention block bar with the routed-block
-        # band and one bf16 ulp for the residual add.
+        # cross-version SDPA CPU kernel noise
+        #
+        # - the Nim binary links libtorch 2.11, this fixture records
+        #   with torch 2.13
+        # - identical inputs and flags differ by one bf16 ulp
+        #   at the differing element, invariant to stride and to the input's origin
+        # - the layer band compounds the attention block bar with the routed-block
+        #   band and one bf16 ulp for the residual add
         bands = moe_bands(moe_cap)
         layer_band = ATTN_BAR + bands["moe_output_band"] + ulp_bf16(
             max(real_layer_out.abs().max().item(),
@@ -731,29 +676,22 @@ def generate_layer3_fixture(cfg: Qwen3_5MoeTextConfig, weight_map: dict,
             "topk_inner_gap_min": inner_gap,
         },
     }, {
+        # the suite-read driving tensors only, the sublayer intermediates
+        # and the layer output stay on the 004 stats frame
         "layer_input": x,
         "position_ids": position_ids,
-        "cos": cos, "sin": sin,
-        "input_layernorm_output": h_norm,
-        "attn_mixer_output": mixer_cap["output"],
-        "post_attention_layernorm_output": h2,
-        "router_logits": moe_cap["router_logits"],
-        "topk_indices": moe_cap["topk_indices"],
-        "routing_weights": moe_cap["routing_weights"],
-        "shared_gate": moe_cap["shared_gate"],
-        "moe_output": moe_cap["moe_output"],
-        "layer_output": real_layer_out,
     })
     print(f"Generated layer 3 fixture (seed {seed})")
 
 
 def main() -> None:
+    """Generates the layer 0 and layer 3 fixtures."""
     check_ram()
 
     cfg = load_text_config()
     weight_map = load_index_weight_map()
 
-    # The text rotary of the checkpoint: theta 1e7, head 256, partial 0.25.
+    # the checkpoint text rotary, theta 1e7, head 256, partial 0.25
     from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
         Qwen3_5MoeTextRotaryEmbedding,
     )

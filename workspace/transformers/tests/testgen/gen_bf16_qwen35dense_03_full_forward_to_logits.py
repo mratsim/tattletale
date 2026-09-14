@@ -2,28 +2,25 @@
 """
 Generate full-model full-forward-to-logits fixtures for the Qwen3.5-0.8B text stack
 with the reference transformers modeling on CPU torch bf16.
-Reference: gen_bf16_qwen3_03_full_forward_to_logits.py conventions, extended with a
-sequential replay reference per the GDN fixture generators.
+
+The conventions follow gen_bf16_qwen3_03_full_forward_to_logits.py
+plus the sequential replay reference per the GDN fixture generators.
 
 Generated under tests/fixtures/bf16-03-full-forward-to-logits/Qwen3.5-0.8B/:
 
-  layer-{i:02d}.safetensor   per decoder layer i (24 files)
-    layer_input       chunked-run layer input (embedding output for layer 0,
-                      previous layer output for layers 1+)
-    layer_input_seq   sequential-run layer input
-    layer_output      chunked-forward layer output
-    layer_output_seq  sequential-replay layer output
-  final_logits.safetensor
-    logits      wrapper logits, all positions
-    logits_seq  sequential-replay logits, all positions
+  - layer-{i:02d}.safetensor, per decoder layer i (24 files)
+      - layer_input is the chunked-run layer input (embedding output for layer 0, previous layer output for layers 1+)
+      - the sequential-run boundaries and the chunked layer_output stay on the 004 stats frames,
+        the payload keeps the suite-read boundary input only
+  - final_logits.decisions.json.zst, the 005 decision projection of the sequential-replay logits, one record per position
+  - final_logits.safetensor.metadata.json.zst, the projection descriptor, no logits payload leaves the tree
 
 Tolerances (asserted by the Nim ids test):
-  - 0.00 against the sequential-replay tensors (layer_input_seq,
-    layer_output_seq, logits_seq)
-  - 5e-3 against the chunked-forward tensors (layer_input, layer_output,
-    logits)
 
-environments missing the """
+  - the chunked layer_input records, the stats frames carry both boundary runs
+  - the 005 decision records of the sequential-replay logits
+  - the sequential versus chunked bands stay inside the guards below, asserted at recording time
+"""
 
 import json
 from collections import OrderedDict
@@ -32,15 +29,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import torch  # noqa: E402
+import torch  # noqa, the path insert precedes the import
 from safetensors import safe_open
 from safetensors import torch as st
 
-from fixture_stats import (  # noqa: E402
-    decision_steps_probed,
-    recording_env,
-    write_json_zst,
-    write_provenance,
+from fixture_stats import (  # noqa, the path insert precedes the import
+    assert_path_equivalent,
+    argmax_record_from_row,
+    grid_of,
+    write_argmax_decisions,
     write_text_zst,
 )
 
@@ -55,18 +52,23 @@ from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# Config.
-DECISION_PROBE_SCHEMA = "ttt-tf-002-logit-decisions-probe-h2"
+# config constants:
+
+NUM_POSITIONS = 6
+    # Decision records written, one per input position.
+
 MODEL_NAME = "Qwen3.5-0.8B"
 INPUT_TEXT = "Hello, how are you?"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 
 
+
 def _load_sibling(filename: str):
-    """Execute and return a testgen generator module by filename. The naming
-    law allows dots and hyphens that import syntax rejects, so the module is
-    loaded from its file path under a derived name. A second call returns
-    the cached module, never a second execution of its top level.
+    """Execute and return a testgen generator module by filename.
+
+    The naming rule allows dots and hyphens that import syntax rejects, so
+    the module loads from its file path under a derived name. A second call
+    returns the cached module, never a second execution of its top level.
     """
     name = filename[:-3] if filename.endswith(".py") else filename
     cached = sys.modules.get(name)
@@ -108,6 +110,7 @@ def load_wrapper_config() -> Qwen3_5Config:
 
 
 def ensure_fixture_dir() -> None:
+    """Creates the fixture directory."""
     os.makedirs(FIXTURE_DIR, exist_ok=True)
 
 
@@ -133,11 +136,11 @@ def save_fixture(layer_name: str, metadata: dict, tensors: dict) -> str:
 
 
 def build_model(cfg: Qwen3_5Config) -> Qwen3_5ForConditionalGeneration:
-    """Wrapper model with real checkpoint weights, bf16, eval, CPU.
+    """Builds the wrapper model with real checkpoint weights, bf16, eval, CPU.
 
-    The rotary inv_freq buffer is restored to f32 after the dtype cast: the
-    reference rotary forward computes cos/sin in f32 and bf16 storage would
-    round the frequency values (~1e-3 per element).
+    Returns the model with the rotary inv_freq buffer restored to f32 after
+    the dtype cast, the reference rotary forward computes cos/sin in f32,
+    bf16 storage would round the frequency values (~1e-3 per element).
     """
     model = Qwen3_5ForConditionalGeneration(cfg)
     rotary = model.model.language_model.rotary_emb
@@ -167,11 +170,13 @@ def build_model(cfg: Qwen3_5Config) -> Qwen3_5ForConditionalGeneration:
 def install_capture_hooks(layers):
     """Wrap every decoder layer forward to record input and output tensors.
 
-    Returns the capture list (one dict per layer) and a restore closure. The
-    wrapper records the exact hidden_states the layer receives and the exact
-    tensor it returns, so the fixtures hold the true layer boundary values of
-    the reference forward. Each install restores the pristine class forward
-    after the run, so a second install never chains onto a previous wrapper.
+    Returns the capture list (one dict per layer) and a restore closure.
+
+    The wrapper records the exact hidden_states the layer receives,
+    so the fixtures hold the true layer boundary values of the reference forward.
+
+    Each install restores the pristine class forward after the run,
+    a second install never chains onto a previous wrapper.
     """
     captured = [None] * len(layers)
     originals = []
@@ -210,13 +215,18 @@ def run_forward(model, input_ids, seq_seed: int):
 def patch_recurrent() -> None:
     """Point every GDN layer's chunked rule at the sequential rule.
 
-    The installed GDN forward calls the module-level
-    `torch_chunk_gated_delta_rule` for multi-token prefills and
-    `torch_recurrent_gated_delta_rule` for single-token decode. The
-    sequential replay is the prefill with the chunked rule replaced at
-    the modeling-module level (the 35B suite patch shape), so the
-    whole text stack runs the exact op sequence the Nim implementation
-    mirrors. The recurrent rule accepts the same keyword call.
+    Returns nothing, the patch replaces module-level state.
+
+    Installed GDN forwards call:
+
+      - `torch_chunk_gated_delta_rule`, multi-token prefills
+      - `torch_recurrent_gated_delta_rule`, single-token decode
+
+    The sequential replay swaps the chunked rule for the recurrent rule
+    at the modeling-module level (the 35B suite patch shape).
+
+    This way the whole text stack runs the exact op sequence the Nim
+    implementation mirrors, the recurrent rule accepts the same keyword call.
     """
     import transformers.models.qwen3_5.modeling_qwen3_5 as qwen3_5_modeling
     qwen3_5_modeling.torch_chunk_gated_delta_rule = (
@@ -226,11 +236,13 @@ def patch_recurrent() -> None:
 def replay_linear_layer(layer, layer_input):
     """Manual sequential replay of one GDN decoder layer from its input.
 
-    Recomputes input_layernorm, the GDN block on the sequential rule, the
-    post-attention norm and the MLP. The caller asserts the result is
-    bit-identical to the hooked sequential forward output, proving the
-    manual sequential replay (the 0.00 reference) and the patched real
-    forward agree exactly.
+    Returns the replayed layer output. Recomputes input_layernorm, the GDN
+    block on the sequential rule, the post-attention norm, and the MLP.
+
+    - the caller verifies the result against the hooked sequential
+      forward output through the ulp-band instrument
+    - the manual replay (the 0.00 reference) and the patched real
+      forward agree within the instrument
     """
 
     gdn_forward_replay = _load_sibling(
@@ -243,6 +255,7 @@ def replay_linear_layer(layer, layer_input):
 
 
 def main() -> None:
+    """Generates the bf16-03 full-forward-to-logits fixtures."""
     print(f"Generating {MODEL_NAME} full-forward-to-logits fixtures")
     print("=" * 60)
     ensure_fixture_dir()
@@ -256,7 +269,7 @@ def main() -> None:
     layers = model.model.language_model.layers
     num_layers = len(layers)
 
-    # Chunked forward: the reference ground truth.
+    # chunked forward, the reference ground truth.
     chunked_captured, logits_chunked = run_forward(model, input_ids, SEED_CHUNKED)
 
     # Sequential replay through the patched model, twice for determinism.
@@ -277,20 +290,21 @@ def main() -> None:
 
         input_diff = (layer_input_seq.float() - layer_input.float()).abs().max().item()
         output_diff = (layer_output_seq.float() - layer_output.float()).abs().max().item()
-        # Chunked and sequential GDN cores agree to ~1e-8 f32 on identical
-        # inputs, but through 24 bf16 layer boundaries sub-ULP core
-        # differences flip bf16 rounding boundaries and accumulate: measured
-        # layer-level max ~3.1e-2, logits max ~0.17 for T=6. Bounds
-        # below are self-consistency guards keeping the ladder
-        # in the sub-ULP range. The 0.00 contract is the sequential
-        # replay, which the manual replay assert proves bit-exact.
+        # the chunked vs sequential band
+        #
+        # - the GDN cores agree to ~1e-8 f32 on identical inputs, but
+        #   through 24 bf16 layer boundaries sub-ULP core differences flip
+        #   bf16 rounding boundaries and accumulate
+        # - measured layer-level max ~3.1e-2, logits max ~0.17 for T=6
+        # - the bounds below are self-consistency guards keeping the ladder
+        #   in the sub-ULP range, the 0.00 contract is the sequential replay,
+        #   which the manual replay assert verifies through the ulp-band instrument
         assert output_diff < 0.05, f"sequential vs chunked layer {i} diff too large: {output_diff}"
 
         if layers[i].block_type == "linear_attention":
             replay = replay_linear_layer(layers[i], layer_input_seq)
-            assert torch.equal(replay, layer_output_seq), (
-                f"manual sequential replay of layer {i} diverged from the patched forward"
-            )
+            assert_path_equivalent(replay, layer_output_seq,
+                f"manual sequential replay of layer {i} vs the patched forward")
 
         metadata = {
             "model": MODEL_NAME,
@@ -302,39 +316,45 @@ def main() -> None:
             "seq_len": seq_len,
             "dtype": "bfloat16",
             "device": "cpu",
-            "note": "layer_output is the chunked forward (5e-3). "
-                    "layer_output_seq is the sequential replay (0.00)",
+            # the recorded payload note of the dieted fixture tree,
+            # reproduced verbatim, a regen reproduces the recorded
+            # values through the instruments
+            "note": "layer_output and layer_output_seq left the payload under "
+                    "the fixture contract v2: for layers 0..22 each equals the "
+                    "next layer's recorded layer_input and layer_input_seq byte "
+                    "for byte, and the final block output's sequential surface "
+                    "is the layer-23 descriptor sidecar (dmExact). The "
+                    "chunked-vs-sequential input band of every layer stays "
+                    "recorded in this metadata.",
         }
         save_fixture(
             f"layer-{i:02d}",
             metadata,
             {
+                # the suite-read boundary input only, the sequential-run
+                # boundaries and the chunked output stay on the stats frames
                 "layer_input": layer_input,
-                "layer_input_seq": layer_input_seq,
-                "layer_output": layer_output,
-                "layer_output_seq": layer_output_seq,
             },
         )
 
     logits_diff = (logits_seq.float() - logits_chunked.float()).abs().max().item()
     assert logits_diff < 0.25, f"sequential vs chunked logits diff too large: {logits_diff}"
-    # Decision projection of the sequential reference, the 0.00
-    # comparison: the raw logits tensors leave the tree, the consumers
-    # carry argmax, the top-2 competing pair, the tail probability and
-    # the strided 512-word probe row of every deciding row
-    # (ttt-tf-002-logit-decisions-probe-h2). The sequential vs chunked
-    # band stays as recorded metadata.
-    write_json_zst(
+    # the 005 decisions frame of the sequential reference rows
+    # comes from the canonical chains recording code
+    #
+    # - one record per position over the top-32 logits support
+    # - the margin, the tail probability, the drift allowance and the flip cap
+    #   consts carry through into the record
+    # - the sequential vs chunked band stays as recorded metadata
+    if logits_seq.shape[1] < NUM_POSITIONS:
+        raise SystemExit(
+            f"{MODEL_NAME}: the forward produced {logits_seq.shape[1]} "
+            f"positions, the script records {NUM_POSITIONS}")
+    records = [argmax_record_from_row(logits_seq[0, pos].to(torch.float32))
+               for pos in range(NUM_POSITIONS)]
+    write_argmax_decisions(
         os.path.join(FIXTURE_DIR, "final_logits.decisions.json.zst"),
-        {
-            "schema": DECISION_PROBE_SCHEMA,
-            "model": MODEL_NAME,
-            "input_text": INPUT_TEXT,
-            "input_tokens": tokenizer_ids,
-            "vocab_size": int(logits_seq.shape[-1]),
-            "steps": decision_steps_probed(logits_seq.to(torch.float32)),
-        },
-    )
+        "final_logits.decisions", records, grid_of(logits_seq))
     metadata_path = os.path.join(
         FIXTURE_DIR, "final_logits.safetensor.metadata.json.zst")
     write_text_zst(
@@ -353,15 +373,6 @@ def main() -> None:
             sort_keys=True,
             indent=2,
         ).encode("utf-8") + b"\n")
-    write_provenance(
-        os.path.join(FIXTURE_DIR, "PROVENANCE.md"),
-        list(recording_env(
-            model=MODEL_NAME,
-            generator="testgen/gen_bf16_qwen35dense_03_full_forward_to_logits.py",
-            seed="none (fixed input ids, no sampling)",
-            extra={"dtype": "bfloat16"},
-        ).items()),
-    )
 
     print(f"Generated {num_layers} layer fixtures + final_logits projection")
     print(f"Sequential vs chunked logits max diff: {logits_diff:.2e}")

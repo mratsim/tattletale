@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Nim testing conventions, unittest framework, and C++ compatibility patterns
+description: How tests are written in this repo — fixture suites, analytic suites, the assert surface, the linters
 license: MIT
 compatibility: opencode
 metadata:
@@ -10,676 +10,135 @@ metadata:
 
 ## What I do
 
-I provide guidance for writing tests in Nim that:
-- Work correctly with the `std/unittest` framework
-- Avoid C++ compilation errors with complex FFI types like `TorchTensor`
-- Follow project conventions for test organization
+I define how tests are written in this repo:
+
+- the two test kinds (fixture-replay, analytic) and when each applies
+- the assert surface and the suite shape
+- where fixtures come from, how a new model gets its test tree
+- the linters that verify all of it before anything commits
 
 ## When to use me
 
-Use this skill when:
-- Writing new tests for any workspace module
-- Debugging C++ compilation errors in test code
-- Organizing test fixtures and test data
+Use this skill when doing any of these:
 
-## The unittest framework
+- writing or extending a test under `workspace/*/tests/`
+- adding a new model, quantization scheme, or layer ([ARCHITECTURE.md](../../workspace/transformers/ARCHITECTURE.md))
+- recording a new fixture family ([FIXTURE_GENERATION.md](../../workspace/transformers/tests/testgen/FIXTURE_GENERATION.md))
 
-Nim's standard library provides a simple testing framework:
+Related docs, each with its own job:
 
-```nim
-import std/unittest
+| doc | job |
+|---|---|
+| [`tests/README.md`](../../workspace/transformers/tests/README.md) | test tree, check ladder, the stakes |
+| [`tests/harness/README.md`](../../workspace/transformers/tests/harness/README.md) | assert API: assertStats, assertArgMax, the record |
+| [`ARCHITECTURE.md` Extension Points](../../workspace/transformers/ARCHITECTURE.md) | where a new model or layer plugs in, test side included |
+| [`FIXTURE_GENERATION.md`](../../workspace/transformers/tests/testgen/FIXTURE_GENERATION.md) | recording: tiers, payload rules, provenance |
+| [`writing-docs` skill](../writing-docs/SKILL.md) | doc comments, together with the global writing-code-doc skill |
 
-suite "my module tests":
-  test "addition works":
-    check 1 + 1 == 2
+## Test kinds
 
-  test "string handling":
-    let result = "hello".toUpperAscii()
-    check result == "HELLO"
-```
+| kind | expected side | home |
+|---|---|---|
+| fixture-replay | recorded sidecar statistics + decision records, produced once by the python reference | `q_bf16/`, `q_exl3/` |
+| analytic | truth computed in-process: closed forms, exact order statistics, in-process reference ops | `kvcache/`, `samplers/`, `batch_invariance/` |
 
-**Key procs:**
-- `suite(name, body)` - Group related tests
-- `test(name, body)` - Define a single test
-- `check(expr)` - Assert expression is true, prints failed value on failure
-- `doAssert(expr)` - Like `check` but raises on failure (use for invariants)
-- `submitTest(result)` - Submit test result from a procedure
+A fixture-replay suite can never compare bit-exactly.
 
-## Critical pattern: Wrap tests in a proc
+Honest rounding between recording and replay is the checked quantity.
 
-### The problem
+An analytic suite compares against values computed in the same process,
+where bit-exact is available and expected whenever the math is exact.
 
-When you declare variables at module scope (top-level) in Nim tests, the generated C++ code uses `= {}` initialization:
+## Assert surface
 
-```cpp
-TorchTensor expectedTensor = {};  // This fails!
-expectedTensor = myFunction(a, b);
-```
+Two functions, that is all, full contract in [the harness README](../../workspace/transformers/tests/harness/README.md).
 
-The C++ `torch::Tensor` type (and other FFI types with `cppNonPod`) does not accept brace initialization. This causes:
-```
-error: ambiguous overload for 'operator=' (operand types are 'at::Tensor' and '<brace-enclosed initializer list>')
-```
+- `assertStats(actual, record, kind)` checks the statistical property:
+  quantiles, histogram, boundary elements, mean and tail bands
+- `assertArgMax(actual, record)` checks the decision: argmax id,
+  top-k pair, margin, tail
 
-### The solution
+`kind` names a statistical property, never an operation:
 
-Always wrap test code in a `proc main()`:
+| kind | error model |
+|---|---|
+| `kElementwise` | reduction-free sequence, tight band, zero mismatch |
+| `kReduction` | one accumulation point, moderate band, small mismatch fraction, histogram L1 |
+| composed chains | `kReduction` plus the depth argument |
 
-```nim
-import std/unittest, workspace/libtorch
+Ban list, enforced by the linters:
 
-proc generateTensor(): TorchTensor =
-  # This works - Nim generates:
-  # auto result = myFunction(a, b);
-  arange(10, kFloat32)
+- ad-hoc `rtol` or `atol` at call sites, the band comes from the kind
+- raw `doAssert` for value comparisons in suites
+- `try`/`except`/`discard` that eats a failed check
+- `check*` enforcement procs outside `tests/harness/`
+- PASS emission and verdict printing, a failed assert raises, rc=0 is green
 
-proc runTests*() =
-  suite "tensor tests":
-    test "generate tensor":
-      let tensor = generateTensor()
-      check tensor.numel() == 10
+## Suite shape
 
-when isMainModule:
-  runTests()
-```
+- one file, one flat `main`, setup then asserts, no framework sections
+- every random tensor is seeded or replaced by a closed form
+- `const` blocks carry filepaths only, model geometry arrives over
+  `config.json` through the loader, never a literal
+- setup helpers import `tests/layer_utils.nim` for layer setup,
+  `tests/stateful_utils.nim` for the stateful context
+- ulp math imports `tests/ulp_utils.nim`
+- headers carry the run command and the contract, never the journey
+- `std/unittest` (`suite`/`test`/`check`) is retired for suites,
+  existing conversions remove it
 
-This generates proper C++:
-```cpp
-auto tensor = generateTensor();  // No {} initialization
-```
+## Adding a new model, the short version
 
-## Test organization
+1. the model module + registry entry ([ARCHITECTURE.md](../../workspace/transformers/ARCHITECTURE.md#extension-points))
+2. one generator per fixture tier, named `gen_<dtype>_<model>_<NN>_<tier>.py`
+3. record the families ([`FIXTURE_GENERATION.md`](../../workspace/transformers/tests/testgen/FIXTURE_GENERATION.md))
+4. the suites per tier, per the suite-shape rules above
+5. register the granular task inside `config.nims`
 
-### Fixture file pattern
+## Linters, run before commit, always
 
-Tests that load files should follow this pattern:
+| linter | checks |
+|---|---|
+| `.agents/skills/writing-docs/tools/lint_docs.py` | doc comments everywhere |
+| `tests/linters/lint_gen_scripts.py` | generators: docs, config over consts, entry shape, directory allowlist |
+| `tests/linters/lint_fixtures.py` | fixtures: size caps, dir tiers, symlinks, record schema, provenance |
+| `tests/linters/lint_nim_fixtures_consumers.py` | suites: assert allowlist, flat main, consts, shared helpers, docs |
 
-```nim
-import std/unittest, std/os, workspace/safetensors, workspace/libtorch
+Each linter header carries its rules table, the golden doc-comment
+rules, and pointers to both doc skills.
 
-const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"
+Read them, they are always forgotten.
 
-proc main() =
-  suite "safetensors loading":
-    test "load fixture":
-      let fixturePath = FIXTURES_DIR / "model.safetensors"
-      check fileExists(fixturePath)
+A finding is fixed, never silenced and never widened into acceptance.
 
-      var mf = memfiles.open(fixturePath, mode = fmRead)
-      defer: mf.close()
+## Nim mechanics that bite (libtorch FFI)
 
-      let (st, offset) = safetensors.load(mf)
-      check st.tensors.len > 0
-
-when isMainModule:
-  main()
-```
-
-Key points:
-- Use `currentSourcePath().parentDir() / "fixtures"` for fixture paths
-- Use `memfiles.open` with `defer: mf.close()`
-- Return early or use `continue` for missing fixtures
-
-### Test constants
-
-Define test parameters as `const` at module level:
-
-```nim
-const Patterns = ["gradient", "alternating", "repeating"]
-const Shapes: array[4, seq[int64]] = [
-  @[int64 8],
-  @[int64 4, 4],
-  @[int64 2, 3, 4],
-  @[int64 3, 2, 2, 2]
-]
-const TestedDtypes = [F64, F32, F16, I64, I32, I16, I8, U64, U32, U16, U8]
-```
-
-### Helper procedures
-
-Extract reusable logic into `proc` with `*` export:
-
-```nim
-proc generateExpectedTensor*(pattern: string, shape: seq[int64], dtype: ScalarKind): TorchTensor =
-  let shapeRef = shape.asTorchView()
-  let numel = shape.product()
-
-  case pattern
-  of "gradient":
-    arange(numel, dtype).reshape(shapeRef).to(dtype)
-  of "alternating":
-    let flat = arange(numel, kInt64)
-    let modVal = (flat % 2).to(kFloat64)
-    modVal.reshape(shapeRef).to(dtype)
-  else:
-    raise newException(ValueError, "Unknown pattern: " & pattern)
-```
-
-Note: Each branch of a `case` must assign to `result`.
-
-## Running tests
-
-Each module has a task defined in `config.nims` for running its tests:
-
-```bash
-# Test toktoktok
-nim test_toktoktok
-
-# Test libtorch
-nim test_libtorch
-
-# Test safetensors
-nim test_safetensors
-```
-
-The command `nim test_toktoktok` compiles and runs all test files in `workspace/toktoktok/tests/` that start with `test_` or `t_`.
-
-## Transformer fixture suites (q_bf16, q_exl3)
-
-The transformer suites (workspace/transformers/tests/) run on the harness,
-not on ad-hoc tolerances:
-
-- **Budget pointer:** the tolerance budget table (op class rows, tiered
-  ctBitExact / ctElementWise / ctDistribution, per-row maxUlp, mismatch
-  fraction and histogram L1) lives in
-  `workspace/transformers/tests/harness/SPEC.md` (Budget table v0) and is
-  encoded in `harness/tolerance.nim defaultBudget`. Pick the row matching the
-  op class, never an ad-hoc rtol. The device pair selects the row class:
-  a run on the recorded device replays bit-exactly, a run on any other
-  device compares under the cross-device drift rows (`budgetRowClass`,
-  see the device-flip convention below).
-- **New-suite checklist:** `workspace/transformers/tests/harness/PLAYBOOK.md`
-  carries the step-by-step checklist (file location, imports, one runCppTest
-  per unit, one invariant call plus one tolerance call per unit, stats file
-  wiring, suite registration in config.nims).
-- **Fixture recording:** the payload tiering law, the pinned quantile method
-  and bucket spec, the decision-projection schemas and the PROVENANCE
-  requirement live in
-  `workspace/transformers/tests/testgen/FIXTURE_GENERATION.md` (section 0).
-  Record-time payloads come from `tests/testgen/fixture_stats.py`, raw output
-  tensors stay out of the tree except physics-bearing slices.
-- The cross-implementation fingerprint contract is carried by the committed
-  crossimpl corpus, verified in `harness/selftest.nim` on every suite run.
-
-## Device-flip convention and granular test tasks
-
-Transformer suites resolve the compute device through `testDevice()`
-(`harness/device.nim`), never a hardcoded device per suite:
-
-- `TTT_TEST_ON=metal|cpu|cuda` flips the device of any suite or family
-  run through the granular tasks. The environment value becomes the
-  compile-time define; an unknown value fails before any build.
-- The auto default is platform-dependent: Metal on macOS, CUDA when a
-  Linux host provides one (`Torch.cuda_is_available()`), CPU as the
-  last resort.
-- Budget rows pair the record-time device with the run-time device.
-  The record-time device is manifest-declared: the `recorded_from` row
-  of the fixture family PROVENANCE.md (`recordedFrom` / `manifestValue`),
-  verified by re-render. The run-time device is `testDevice()`.
-  `budgetRowClass` owns the selection: same-device runs compare
-  bit-exactly, cross-device runs compare under the chain checkpoint
-  band and the greedy margin rows. Suites print the pair with
-  `pairReport`, the receipt line per device-flipped run.
-- The measurement instrument for the Metal rows is
-  `harness/bench_metal_budget.nim` (run manually, no `t_` prefix, so
-  it stays out of the suite sweep).
-
-Granular tasks live in config.nims. The name mirrors the suite file:
-`test_tf_` plus the file name without the leading `t_` and the
-extension, so `t_bf16_qwen36moe_01_moe.nim` runs as
-`nim test_tf_bf16_qwen36moe_01_moe`. Listed logically, per-op units
-first, then the per-model suites in suite-number order, then the
-infrastructure suites:
-
-    nim test_tf_bf16_unit_rope
-    nim test_tf_bf16_unit_attn
-    nim test_tf_bf16_qwen3_03_chain
-    nim test_tf_bf16_qwen3_05_ids_to_logits_inference
-    nim test_tf_bf16_qwen3_07_greedy_decoding
-    nim test_tf_bf16_qwen35dense_03_chain
-    nim test_tf_bf16_qwen35dense_05_ids_to_logits_inference
-    nim test_tf_bf16_qwen35dense_07_greedy_decoding
-    nim test_tf_bf16_qwen35dense_single_file_checkpoint
-    nim test_tf_bf16_qwen36moe_01_moe
-    nim test_tf_bf16_qwen36moe_02_attn
-    nim test_tf_bf16_qwen36moe_02_gdn
-    nim test_tf_bf16_qwen36moe_03_layers
-    nim test_tf_bf16_qwen36moe_05_ids_to_logits_inference
-    nim test_tf_bf16_qwen36moe_07_greedy
-    nim test_tf_harness_invariants
-    nim test_tf_harness_selftest
-    nim test_tf_sampler
-    nim test_tf_block_sparse_batch_property
-    nim test_tf_deserialization_lmhead
-
-One family each, picked on the command line or through the
-TTT_TEST_FAMILY environment fallback:
-
-    nim test_tf_family name=chain|ids|greedy|unit|moe|
-        checkpoint|harness|sampler|synthetic
-
-An agent picks exactly the suites a change touched. The full
-`nim test_transformers` run stays for final verification only.
-
-### Compilation settings
-
-The project uses:
-- `--path:.` - Makes `workspace/module` imports work
-- Tests compiled with: `nim cpp -r` plus flags for output and cache directories
-
-### Fixture files
-
-For this project, fixtures are in:
-```bash
-workspace/toktoktok/tests/tokenizers/
-```
-
-Reference fixtures using:
-```nim
-const FIXTURES_DIR = currentSourcePath().parentDir() / "tokenizers"
-```
-
-## Common errors and fixes
-
-### "undeclared field" with parameter shadowing
-
-If you have a parameter named `shape` and access a field `info.shape`:
-```nim
-proc generateExpectedTensor*(pattern: string, shape: seq[int64], ...): TorchTensor =
-  for info in tensors:  # error: 'shape' shadows info.shape
-    check info.shape == shape
-```
-
-Fix: Rename parameter to avoid shadowing:
-```nim
-proc generateExpectedTensor*(pattern: string, shapeSeq: seq[int64], ...): TorchTensor =
-  for info in tensors:
-    check info.shape == shapeSeq  # Now works
-```
-
-### Case statement not returning
-
-Each branch of a case must explicitly assign to `result`:
-```nim
-proc foo(x: int): int =
-  case x
-  of 1: result = 10  # Must use 'result ='
-  of 2: 20             # ERROR: doesn't assign!
-```
-
-## How to add a new test
-
-### Step 1: Create the test file
-
-Follow the naming convention: `test_*.nim` or `t_*.nim` in the module's `tests/` directory.
-
-```nim
-# workspace/my_module/tests/test_myfeature.nim
-
-import std/unittest, std/os
-import workspace/my_module
-
-proc runMyFeatureTests*() =
-  suite "my feature tests":
-    test "basic functionality":
-      let result = myModule.function()
-      check result == expectedValue
-
-when isMainModule:
-  runMyFeatureTests()
-```
-
-### Step 2: Run the test
-
-The test will be discovered automatically by the test command:
-
-```bash
-# If it's in my_module:
-nim c -r --task:test_my_module
-```
-
-Or run all tests for the module:
-```bash
-nim test_my_module
-```
-
-### Step 3: Add test fixtures (if needed)
-
-Create a `fixtures/` directory and add test data:
-
-```bash
-workspace/my_module/tests/fixtures/
-```
-
-Reference in test code:
-```nim
-const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures"
-let fixturePath = FIXTURES_DIR / "test_data.bin"
-```
-
-### Checklist for new tests
-
-- [ ] File name starts with `test_` or `t_`
-- [ ] Located in `workspace/module/tests/`
-- [ ] Test code wrapped in `proc runTests*()`
-- [ ] Has `when isMainModule: runTests()` at the end
-- [ ] Uses `defer` for resource cleanup (files, etc.)
-- [ ] Helper procedures exported with `*`
-- [ ] Constants defined at module level with `const`
-
-## Python test vector generation
-
-For AI/ML modules, test vectors are generated via Python scripts using torch and safetensors.
-
-### Directory structure
-
-```
-workspace/module/
-├── tests/
-│   ├── test_module.nim          # Nim tests
-│   ├── fixtures/                # Generated fixture files
-│   │   ├── model.safetensors
-│   │   └── tokenizer.json
-│   └── testgen/                 # Python test vector generators
-│       └── generate_vectors.py
-```
-
-### Convention
-
-- **Python 3.12** standard for all test vector generation (matches vLLM/SGLang)
-- **Single root `pyproject.toml`** with `[dependency-groups]` for shared dependencies:
-  ```toml
-  [dependency-groups]
-  test-vectors = [
-      "torch>=2.0.0",
-      "safetensors>=0.7.0",
-      "transformers>=4.40.0",
-      "numpy>=2.4.2",
-  ]
-  ```
-- **Run generators** with: `uv run --group test-vectors python workspace/module/tests/testgen/generate_vectors.py`
-
-### Example testgen script
-
-```python
-import torch
-import numpy as np
-from safetensors.numpy import save_file
-import os
-
-FIXTURES_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "fixtures",
-)
-
-def generate_vandermonde():
-    x = torch.arange(1, 6, dtype=torch.float32)
-    vandermonde = torch.vander(x, increasing=True).T
-    return vandermonde.to(torch.bfloat16).view(torch.uint16).numpy()
-
-def main():
-    fixtures = {
-        "BF16_vandermonde_5x5": generate_vandermonde(),
-    }
-    save_file(fixtures, os.path.join(FIXTURES_DIR, "vandermonde.safetensors"))
-    print("Fixtures generated")
-
-if __name__ == "__main__":
-    main()
-```
-
-### Fixture regeneration
-
-When adding new test vectors, regenerate the fixture files:
-
-```bash
-uv run --group test-vectors python workspace/module/tests/testgen/generate_vectors.py
-```
-
-## Test utilities for libtorch tests
-
-Tests involving `TorchTensor` and other libtorch FFI types should use the shared test utilities:
-
-```nim
-import workspace/libtorch_testutils
-```
-
-### C++ exception handling
-
-Wrap test code that may throw C++ exceptions:
-
-```nim
-proc testTensorOps(): bool =
-  let a = ones(@[2, 3], kFloat32)
-  let b = zeros(@[2, 3], kFloat32)
-  let c = a + b
-  result = c.isDefined()
-
-when isMainModule:
-  runCppTest("tensor operations", testTensorOps)  # Handles exceptions automatically
-```
-
-Or use the template directly:
-
-```nim
-check catchCppExceptions(testTensorOps())
-```
-
-### Tensor assertions
-
-**assertDefined** - Check tensor is initialized:
-
-```nim
-let tensor = ones(@[2, 3], kFloat32)
-assertDefined(tensor)  # Raises if not defined
-assertDefined(tensor, "weight")  # Custom name in error
-```
-
-**assertShape** - Verify tensor dimensions:
-
-```nim
-let tensor = randn(@[2, 3, 4])
-assertShape(tensor, 2, 3, 4)
-```
-
-**assertDtype** - Verify tensor dtype:
-
-```nim
-let tensor = ones(@[2, 3], kFloat32)
-assertDtype(tensor, kFloat32)
-```
-
-**assertAllClose** / **assertClose** - Compare tensor values:
-
-```nim
-let actual = computeSomething()
-let expected = ones(@[2, 3], kFloat32) * 2.0
-assertAllClose(actual, expected)  # Default rtol=2e-2, abstol=2e-2
-assertClose(actual, expected, rtol=1e-5, abstol=1e-5)  # Custom tolerance
-```
-
-### Debug helpers
-
-**printTensor** - Print tensor with label:
-
-```nim
-printTensor(myTensor, "Weight matrix")
-```
-
-**printTensorShape** - Print shape and dtype:
-
-```nim
-printTensorShape(myTensor, "Input")
-# Output: Input:
-#         Shape: [2, 3, 4], Dtype: kFloat32
-```
-
-**ptrHex** - Convert pointer to hex string for aliasing detection:
-
-```nim
-let tensor = ones(@[2, 3], kFloat32)
-echo "data_ptr = 0x", tensor.data_ptr().ptrHex()
-echo "shape.data() = 0x", tensor.shape.data().ptrHex()
-# Useful for detecting memory aliasing issues
-```
-
-**dataPtrHex** / **shapePtrHex** - Convenience wrappers:
-
-```nim
-let tensor = ones(@[2, 3], kFloat32)
-echo "data_ptr = 0x", tensor.dataPtrHex()
-echo "shape_ptr = 0x", tensor.shapePtrHex()
-# Equivalent to above but more convenient
-```
-
-```nim
-printTensorShape(myTensor, "Input")
-# Output: Input:
-#         Shape: [2, 3, 4], Dtype: kFloat32
-```
-
-**traceExec** - Debug macro to trace execution:
-
-```nim
-traceExec:
-  let a = ones(@[2, 3])
-  let b = zeros(@[2, 3])
-  let c = a + b
-# Prints each statement before executing
-```
-
-### Test file structure
-
-Complete example:
-
-```nim
-# workspace/my_module/tests/test_feature.nim
-import
-  std/unittest,
-  workspace/libtorch,
-  workspace/libtorch_testutils,
-  workspace/my_module
-
-proc testBasicFunctionality(): bool =
-  let input = ones(@[2, 3], kFloat32)
-  let result = myModule.process(input)
-  
-  assertDefined(result)
-  assertShape(result, 2, 3)
-  result = true
-
-proc testEdgeCase(): bool =
-  let input = zeros(@[1], kFloat32)
-  let output = myModule.process(input)
-  assertAllClose(output, input)
-  result = true
-
-when isMainModule:
-  runCppTest("basic functionality", testBasicFunctionality)
-  runCppTest("edge case", testEdgeCase)
-```
-
-### Key points
-
-- Always import `workspace/libtorch_testutils` for tests with TorchTensor
-- Use `runCppTest` for formatted output with automatic exception handling
-  (captures the C++ stacktrace; do NOT confuse it with crucible's private
-  `proc runTest()` scope wrapper — see `workspace/crucible/AGENTS.md`)
-- Use `catchCppExceptions` when integrating with `std/unittest` `check`
-- Use assertion helpers (`assertDefined`, `assertShape`, etc.) for clear error messages
-- Use `printTensor` and `printTensorShape` for debugging failures
-- Test files should be in `workspace/module/tests/` directory
-- File names should start with `test_` or `t_`
+- wrap test code in procs: module-scope `TorchTensor` variables fail
+  compilation, `cppNonPod` types reject brace initialization
+- every branch of a `case` must assign `result`
+- a parameter shadowing an accessed field is a compile error, rename it
+- import `workspace/libtorch_testutils` for tensor test utilities
+- `runCppTest` stays for the transitional suites only
 
 ## Kernel tests against a reference
 
-A kernel test that compares against a libtorch reference is three clearly
-separated parts, so a reader always sees which variable comes from the
-kernel, which from the reference, and where the comparison happens:
+A kernel test against a reference has three parts, so a reader always
+sees which side is which:
 
-1. A proc that **computes with the function under check** (runs the kernel,
-   returns the output as a tensor).
-2. A proc that **computes the reference** (libtorch over the same inputs).
-3. The `check*()` proc that builds the shared inputs once, calls both, and
-   asserts.
-
-```nim
-proc kernelUnderTest(xf: seq[float32], M, N: int): F.Tensor =
-  ## Runs the kernel on the fp16-rounded inputs; returns the fp16
-  ## output converted to fp32.
-  var engine = bkMetal.init()
-  engine.ingest(kernelMsl)
-  ...  # build fp16 buffers from xf, engine.run, read back
-  result = toTensor(outF).reshape(M, N)
-
-proc reference(xf: seq[float32], M, N: int): F.Tensor =
-  ## The reference: torch op over the same fp16-rounded inputs.
-  let xh = toTensor(xf).reshape(M, N).to(kFloat16)
-  result = F.some_op(xh.to(kFloat32))
-
-proc checkFeature(): bool =
-  ## Kernel output vs the torch reference on one random batch.
-  Torch.manual_seed(0x5EED'u64)
-  let xf = scaledRand(M, N, 2.0'f32)
-  let actual = kernelUnderTest(xf, M, N)
-  let expected = reference(xf, M, N)
-  echo &"  worst |Δ| = {worstAbsDiff(actual, expected)} (tolerance 5e-3)"
-  assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 5e-3'f64)
-  result = true
-
-when isMainModule:
-  runCppTest("feature vs the torch reference", checkFeature)
-```
+1. a proc that computes with the function under check
+2. a proc that computes the reference: an independent implementation,
+   libtorch math over the same rounded inputs, or a closed form
+3. the comparison, naming both sides at the assert
 
 Rules:
 
-- Name the two results `actual` and `expected` (or `kernel`/`ref`), so the
-  kernel-vs-reference split is visible at the assert.
-- Both sides derive from the SAME random inputs, with fp16 rounding applied
-  identically (the kernel buffer rounds once; the reference widens the same
-  fp16 values). Never round the reference from the kernel's fp16 output.
-- Complex reference construction (per-seq SDPA, gathers, masks) lives inside
-  the reference proc; the `check*()` proc stays readable.
-- A tiny `worstAbsDiff(a, b: F.Tensor): float32` helper prints the worst
-  deviation before the assert; the assert carries the tolerance.
-- Test documentation scales with test complexity: an element-wise tile op or
-  a kernel-vs-reference match needs a few lines of setup, the reference
-  call, the tolerance, done.
-
-## Forbidden: reimplementation and tautological references
-
-A kernel test's reference must be libtorch math over the same fp16-rounded
-inputs — never a Nim reimplementation of the kernel's algorithm, and never a
-reference that shares the kernel's own code path.
-
-### Reimplementation tests
-
-Rebuilding the kernel's arithmetic in Nim (matmul loops, norms, rope
-rotations, ...) instead of calling libtorch is banned:
-
-- The duplication can carry the same misunderstanding twice: the test
-  passes while kernel and reference are both wrong.
-- It bloats the test to hundreds of lines. The ceiling for a kernel test
-  is ~80 lines (model: `manual_silu_and_mul_fp16.nim`); the reference call
-  must be a torch op — `F.linear`, `F.rmsNorm`,
-  `F.scaled_dot_product_attention`, ... from the transformers workspace
-  (`workspace/transformers/src/layers/linear.nim` pattern).
-
-Data-preparation helpers that mirror a storage format (e.g. a dequant
-decode table that rebuilds an fp16 weight matrix from its packed bits) are
-allowed — they are fixture-style reconstruction, not the op's arithmetic —
-but they must live once in a shared helper, not be copied per test.
-
-### Tautological references
-
-A reference that cannot diverge from the kernel proves nothing:
-
-- Reusing the kernel's own helper procs as the reference: a shared decode
-  table used by both sides means a wrong decode passes identically on both.
-- Deriving the reference from the kernel's output: rounding, reshaping, or
-  post-processing the kernel result and comparing it to itself.
-- Asserting only self-consistency (shape, finiteness, determinism) in
-  place of a value comparison against an independent reference.
-
-The reference must be computed independently of the kernel: same random
-inputs, fp16 rounding applied identically, torch arithmetic.
+- name the two results `actual` and `expected` at the assert site
+- both sides derive from the same seeded inputs, rounding applied
+  identically, never round the reference from the kernel's output
+- a Nim reimplementation of the kernel's arithmetic as the reference
+  is banned, the duplication can carry the same misunderstanding twice
+- a reference sharing the kernel's code path proves nothing, it must
+  be able to diverge
+- data-preparation helpers that mirror a storage format are allowed,
+  once, in a shared helper, never copied per test
+- the ceiling for a kernel test is around 80 lines

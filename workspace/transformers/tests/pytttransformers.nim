@@ -7,15 +7,9 @@
 
 ## Nim ↔ Python wrapper for transformers model inference.
 ## Follows the HuggingFace Transformers pattern:
-##   - `model(input_ids)` — single-pass, no cache, positions auto-derived
-##   - `model(input_ids, cache=cache)` — with caller-managed cache (future)
+##   - `model(input_ids)`, single-pass, no cache, positions auto-derived
+##   - `model(input_ids, cache=cache)`, caller-managed cache (future)
 ##
-## Build (C++ backend required):
-##   nim cpp --app:lib --debugger:native --verbosity:0 --hints:off --warnings:off \
-##     --outdir:workspace/transformers/tests --nimcache:nimcache/pytttransformers \
-##     -o:workspace/transformers/tests/pytttransformers.so \
-##     workspace/transformers/tests/pytttransformers.nim
-
 import
   nimpy,
   workspace/libtorch,
@@ -25,30 +19,32 @@ import
   workspace/transformers/src/stateful/kvcache,
   workspace/transformers/src/stateful/page_pool
 type
+  ## One exported model handle per Python object, wrapping the loaded AnyModel.
   ModelRef* = ref object of PyNimObjectExperimental
     model: AnyModel
 
+
 proc init_model*(path: string): ModelRef {.exportpy.} =
-  ## Load a model from the given path.
-  ## Follows HF pattern: ``model = pytttransformers.init_model(path)``
+  ## Load a model from the given path, HF pattern form:
+  ##   ``model = pytttransformers.init_model(path)``
   result = ModelRef()
   result.model = loadModel(path, kCPU)
 
 proc forward*(self: ModelRef, inputIds: PyObject): PyObject {.exportpy.} =
-  ## Run a forward pass on the model.
+  ## Run a forward pass on the model, single-pass prefix, no cache.
   ##
   ## Follows the HF Transformers pattern:
-  ##   - ``logits = model.forward(input_ids)`` — single-pass prefix, no cache
-  ##   - Positions are auto-derived as ``arange(seq_len)``
-  ##   - KV cache is empty (prefix pass)
+  ##   - ``logits = model.forward(input_ids)``, the prefix pass
+  ##   - positions auto-derived as ``arange(seq_len)``
+  ##   - the KV cache stays empty
   ##
   ## Args:
-  ##   input_ids: torch.Tensor of shape ``(batch, seq_len)``, dtype ``int64``.
+  ##   input_ids, one torch.Tensor of shape ``(batch, seq_len)`` of dtype ``int64``
   ##
   ## Returns:
-  ##   torch.Tensor of shape ``(batch, seq_len, vocab_size)`` — raw logits.
+  ##   one torch.Tensor of shape ``(batch, seq_len, vocab_size)``, the raw logits
 
-  # Python → Nim: extract input tensor
+  # Python to Nim, extract the input tensor
   let input = tensorFromPyObject(inputIds)
 
   # Derive dimensions from input + model config
@@ -73,13 +69,15 @@ proc forward*(self: ModelRef, inputIds: PyObject): PyObject {.exportpy.} =
   for i in 0 ..< numPages:
     ctx.pages.add(pool.borrow())
 
-  # Set position_ids for prefill: [0, 1, 2, ..., seq_len-1]
+  # Set position_ids for prefill:
+  #   [0, 1, 2, ..., seq_len-1]
   ctx.setPositionIdsArange(seqLen, offset = 0, device = kCPU)
 
   # Model forward populates ctx.cos/ctx.sin via setRopeForPositions internally
   let logits = self.model.forward(ctx, input)
 
-  # Nim → Python: return logits tensor
+  # Nim → Python:
+  #   return logits tensor
   tensorToPyObject(logits)
 
 setModuleDocString(

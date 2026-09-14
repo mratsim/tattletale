@@ -1,33 +1,29 @@
 #!/usr/bin/env python3
-"""Generate the Qwen3.6-35B-A3B routed-block (MoE) layer-0 fixture from the
-real checkpoint safetensor files, using the installed reference modeling
-on CPU torch
-bf16.
+"""Routed-block (MoE) layer-0 fixture for the Qwen3.6-35B-A3B checkpoint,
+recorded on CPU torch bf16 with the installed reference modeling, from safetensors.
 
-Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_moe.nim. No Qwen3 analog: the
-Qwen3 and Qwen3.5 dense families are not routed, so router logits,
-top-k selection and the fused rank-3 expert tensors exist only in the
-MoE checkpoints and no Qwen3-era fixture records them.
+Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_moe.nim:
 
-What is generated:
+  - no Qwen3-era fixture records the router logits, top-k selection or the fused rank-3 expert tensors
+  - the Qwen3 and Qwen3.5 dense families are not routed
+  - moe_layer0_fixture.json, under tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-layer-0/
+  - it holds one routed-block forward on T=6 deterministic bf16 tokens with real layer-0 weights
 
-  tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-layer-0/moe_layer0_fixture.json
-    One routed-block forward on T=6 deterministic bf16 tokens with real
-    layer-0 weights: h, router logits (f32), top-k indices,
-    renormalized fp32 values, routing weights after the dtype cast, the
-    shared-expert gate (post-sigmoid), the MoE output, bands derived from
-    bf16 ulp arithmetic, and the sorted-value margins that justify
-    exact-index asserts.
+Records h, router logits (f32), top-k indices, renormalized fp32 values, routing weights after the dtype cast:
 
-Run (twice; cmp proves byte determinism):
-  cd <worktree root> && .venv/bin/python \
-    workspace/transformers/tests/testgen/gen_bf16_qwen36moe_01_layer_internals_moe.py
+  - the shared-expert gate (post-sigmoid) and the MoE output
+  - bands derived from bf16 ulp arithmetic
+  - the sorted-value margins that justify exact-index asserts
 
+Run twice, cmp proves byte determinism:
 
-RAM: the invoking shell runs `vm_stat` and `pgrep -f "python.*(torch|hf)"`
-before this script. The script re-runs both checks itself and refuses to
-load weights when free memory is low or another python/torch process is
-running (its own process chain is excluded).
+  cd <worktree root> && .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen36moe_01_layer_internals_moe.py
+
+RAM guards:
+
+  - the invoking shell runs `vm_stat` and `pgrep -f "python.*(torch|hf)"` before this script
+  - the script re-runs both checks and refuses the weight load when free memory is low or another python/torch process runs
+  - its own process chain stays excluded from the pgrep match
 """
 
 import json
@@ -41,9 +37,13 @@ ZSTD_WRITE_OPTIONS = {
 
 
 def write_json_zst(path, obj, ensure_ascii=True):
-    """Write obj as a single zstd frame, level 19 with content size and
-    checksum recorded in the frame header. JSON fixtures stay reviewable
-    via the generator and the frame stays out of text diffs."""
+    """Write obj as one zstd frame, level 19, content size and checksum
+    recorded in the frame header.
+
+    Args:
+    - path, obj, the destination file and the JSON-serializable payload
+    - ensure_ascii, the json.dumps escaping switch
+    """
     payload = json.dumps(
         obj, sort_keys=True, indent=2, ensure_ascii=ensure_ascii
     ).encode("utf-8") + b"\n"
@@ -57,6 +57,7 @@ import sys
 
 import torch  # noqa: E402
 
+from fixture_stats import assert_path_equivalent  # noqa: E402
 
 import transformers  # noqa: E402
 from safetensors import safe_open  # noqa: E402
@@ -67,12 +68,12 @@ from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: E402
     Qwen3_5MoeSparseMoeBlock,
 )
 
-# Determinism: single intra-op thread, deterministic kernels.
+# Determinism, single intra-op thread, deterministic kernels.
 torch.set_num_threads(1)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# Config.
+# Checkpoint, fixture and config paths.
 MODEL_NAME = "Qwen3.6-35B-A3B"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 FIXTURE_DIR = os.path.join(
@@ -92,11 +93,8 @@ CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 SEED_BASE = 71
 NUM_THREADS = 1
 
-# Routed-block geometry of the checkpoint.
+# Routed-block sequence length, the geometry lives in the parsed config.
 T = 6
-NUM_EXPERTS = 256
-TOP_K = 8
-HIDDEN = 2048
 
 PREFIX = "model.language_model.layers.0.mlp."
 MIN_FREE_BYTES = 8 * 1024 ** 3
@@ -142,8 +140,14 @@ def ancestor_pids() -> set:
 
 def check_ram() -> None:
     """Refuse to load weights when memory is low or another python/torch
-    process holds RAM (this process chain is excluded from the pgrep match,
-    whose command line spells the torch dependency of this run)."""
+    process holds RAM.
+
+    Guard:
+
+    - free memory below the floor raises
+    - the pgrep match excludes this process chain, its own command line
+      spells the torch dependency of the run
+    """
     free = free_bytes()
     if free < MIN_FREE_BYTES:
         raise SystemExit(
@@ -160,9 +164,11 @@ def check_ram() -> None:
 
 
 def load_text_config() -> Qwen3_5MoeTextConfig:
-    """Load the nested text_config from the checkpoint config.json. The
-    the installed PretrainedConfig defaults `_experts_implementation` to None, so
-    the module below runs the reference expert loop."""
+    """Load the nested text_config from the checkpoint config.json.
+
+    - the installed PretrainedConfig defaults `_experts_implementation` to None
+    - the module built on this config runs the reference expert loop
+    """
     with open(CONFIG_PATH) as f:
         wrapper = json.load(f)
     return Qwen3_5MoeTextConfig.from_dict(wrapper["text_config"])
@@ -170,8 +176,11 @@ def load_text_config() -> Qwen3_5MoeTextConfig:
 
 def load_layer0_moe_weights() -> dict:
     """Load the layer-0 MoE tensors from the two safetensor files that hold
-    them, via
-    safe_open (memory-mapped, only these tensors are copied)."""
+    them via safe_open (memory-mapped, only these tensors are copied).
+
+    Returns:
+    - the weight dict keyed by the short tensor names used below
+    """
     weights = {}
     with safe_open(WEIGHTS_FILE_1, framework="pt") as f:
         weights["experts.gate_up_proj"] = f.get_tensor(
@@ -205,31 +214,39 @@ def build_block(cfg, weights) -> Qwen3_5MoeSparseMoeBlock:
 
 
 def ulp_bf16(m: float) -> float:
-    """One bf16 ulp at magnitude m: bf16 has 8 significand bits, so for
-    m in [2**e, 2**(e+1)) the ulp is 2**(e-7). Zero maps to band 0."""
+    """One bf16 ulp at magnitude m, bf16 has 8 significand bits, so for m
+    in [2**e, 2**(e+1)) the ulp is 2**(e-7). Zero maps to band 0."""
     if m <= 0:
         return 0.0
     e = int(torch.floor(torch.log2(torch.tensor(m))).item())
     return 2.0 ** (e - 7)
 
 
-def pick_seed(block):
-    """First seed from SEED_BASE whose sorted-probability margins are
-    positive: a tie would leave the top-k order ambiguous between a sort
-    and a topk, and so make the fixture unusable for exact-index asserts.
-    Returns the seed, its h, its full-probability tensor and margins."""
+def pick_seed(block, cfg):
+    """First seed from SEED_BASE whose sorted-probability margins are positive.
+
+    A tie leaves the top-k order ambiguous between a sort and a topk, which
+    makes the fixture unusable for exact-index asserts.
+
+    Args:
+    - block, cfg, the weighted MoE block and the parsed text config
+
+    Returns:
+    - the seed, its h, its full-probability tensor and the two margins
+    """
+    top_k = cfg.num_experts_per_tok
     for offset in range(64):
         seed = SEED_BASE + offset
         gen = torch.Generator(device="cpu")
         gen.manual_seed(seed)
-        h = torch.randn(1, T, HIDDEN, generator=gen, dtype=torch.bfloat16)
+        h = torch.randn(1, T, cfg.hidden_size, generator=gen, dtype=torch.bfloat16)
         with torch.no_grad():
             router_logits, _, _ = block.gate(h)
             probs = torch.nn.functional.softmax(
                 router_logits, dtype=torch.float32, dim=-1)
         sorted_probs = torch.sort(probs, dim=-1, descending=True).values
-        top9_margin = (sorted_probs[:, TOP_K - 1] - sorted_probs[:, TOP_K]).min().item()
-        inner_gap = (sorted_probs[:, :TOP_K - 1] - sorted_probs[:, 1:TOP_K]).min().item()
+        top9_margin = (sorted_probs[:, top_k - 1] - sorted_probs[:, top_k]).min().item()
+        inner_gap = (sorted_probs[:, :top_k - 1] - sorted_probs[:, 1:top_k]).min().item()
         if top9_margin > 0 and inner_gap > 0:
             return seed, h, probs, top9_margin, inner_gap
     raise SystemExit(
@@ -237,28 +254,30 @@ def pick_seed(block):
 
 
 def main() -> None:
+    """Write the layer-0 routed-block fixture after the RAM guard."""
     check_ram()
 
     cfg = load_text_config()
     weights = load_layer0_moe_weights()
     block = build_block(cfg, weights)
 
-    seed, h, probs, top9_margin, inner_gap = pick_seed(block)
+    seed, h, probs, top9_margin, inner_gap = pick_seed(block, cfg)
 
     with torch.no_grad():
-        # The router chain on its own: logits at the hidden-state dtype,
+        # The router chain on its own, logits at the hidden-state dtype,
         # softmax over the f32 router logits of all experts, top-k, fp32 renorm,
         # cast back last. The fp32 renormed values are kept pre-cast.
         router_logits, router_scores, router_indices = block.gate(h)
-        top_values_fp32, top_indices = torch.topk(probs, TOP_K, dim=-1)
+        top_values_fp32, top_indices = torch.topk(probs, cfg.num_experts_per_tok, dim=-1)
         renorm_fp32 = top_values_fp32 / top_values_fp32.sum(dim=-1, keepdim=True)
         routing_weights = renorm_fp32.to(router_logits.dtype)
 
-        # Generator self-check: the manual chain reproduces the module
-        # router scores bit for bit.
-        assert torch.equal(routing_weights, router_scores), \
-            "[gen_bf16_qwen36moe_01_layer_internals_moe] manual router chain != module router scores"
-        assert torch.equal(top_indices, router_indices), \
+        # Generator self-check, the manual chain reproduces the module
+        # router scores within the instrument, plain integer equality
+        # for the indices (discrete ids, no rounding).
+        assert_path_equivalent(routing_weights, router_scores,
+            "[gen_bf16_qwen36moe_01_layer_internals_moe] manual router chain vs the module router scores")
+        assert bool((top_indices == router_indices).all()), \
             "[gen_bf16_qwen36moe_01_layer_internals_moe] manual top-k indices != module top-k indices"
 
         shared_gate = torch.nn.functional.sigmoid(
@@ -273,9 +292,10 @@ def main() -> None:
     output_fp32 = moe_output[0].to(torch.float32)
 
     # Bands from bf16 ulp arithmetic (first principles, not observed deltas):
-    # one ulp at the max magnitude for the pointwise values, three ulps
-    # for the MoE output. A GEMM boundary flip propagates
-    # through the multiply, the accumulate and the shared add.
+    #
+    # - one ulp at the max magnitude for the pointwise values
+    # - three ulps for the MoE output, a GEMM boundary flip propagates
+    #   through the multiply, the accumulate and the shared add
     logits_max = logits_fp32.abs().max().item()
     weights_max = weights_list.abs().max().item()
     gate_max = gate_list.abs().max().item()
@@ -287,9 +307,9 @@ def main() -> None:
             "dtype": "bfloat16",
             "torch_version": torch.__version__,
             "transformers_version": transformers.__version__,
-            "num_experts": NUM_EXPERTS,
-            "num_experts_per_tok": TOP_K,
-            "hidden_size": HIDDEN,
+            "num_experts": int(cfg.num_experts),
+            "num_experts_per_tok": int(cfg.num_experts_per_tok),
+            "hidden_size": int(cfg.hidden_size),
             "moe_intermediate_size": int(cfg.moe_intermediate_size),
             "shared_expert_intermediate_size": int(cfg.shared_expert_intermediate_size),
         },

@@ -1,37 +1,29 @@
 #!/usr/bin/env python3
-"""Generate the Qwen3.6-35B-A3B gated full-attention layer (layer 3)
-fixtures from the real checkpoint safetensors files, using the installed
-reference
-modeling on CPU torch bf16.
+"""Generate the Qwen3.6-35B-A3B gated full-attention layer-3 fixtures
+on CPU torch bf16, from the real checkpoint safetensors files.
 
-What is generated (under tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-layer-3/):
+Generated under tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-layer-3/:
 
-  rope-*   partial rotary: q/k (bf16) + positions + cos/sin (bf16, 64 wide)
-           -> q_rot/k_rot via the reference apply_rotary_pos_emb
-  norm-*   GemmaRMSNorm (1+w): x (bf16) -> norm(x), real q_norm weight
-  attn-*   gated full attention layer 3: x -> output (post o_proj), plus
-           intermediates (q_normed, k_normed, q_rot, k_rot, gate,
-           attn_output_gated)
+  - attn-00/attn-01, the two gated full-attention replay cases of layer 3
+  - the payload carries the suite-read driving tensors, hidden_states plus position_ids
+  - the 004 stats frame carries the q/k norm tensors, the sigmoid gate, the gated attention output and the o_proj output
 
-The attention forward is replayed step by step with the reference ops so the
-intermediates can be captured. The replay output is asserted bit-identical to
-the module's own forward before saving.
+Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_attn.nim.
 
-Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_attn.nim (attn-*, norm-*). No
-Qwen3 analog: the same gated full-attention variant (per-head output
-gate, partial rotary) as the Qwen3.5-0.8B generator, which Qwen3
-attention never had, so the Qwen3 family carries no dedicated attention
-generator to inherit.
+Replay contract:
 
-Run (twice; cmp proves byte determinism):
-  cd <worktree root> && .venv/bin/python \
-    workspace/transformers/tests/testgen/gen_bf16_qwen36moe_01_layer_internals_attn.py
+  - the attention forward is replayed step by step with the reference ops
+  - the intermediates reach the stats frame
+  - the replay output is asserted against the module's own forward before saving
 
+Run twice, cmp proves byte determinism:
+  cd <worktree root> && .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen36moe_01_layer_internals_attn.py
 
-RAM: the invoking shell runs `vm_stat` and `pgrep -f "python.*(torch|hf)"`
-before this script. The script re-runs both checks itself and refuses to
-load weights when free memory is low or another python/torch process is
-running (its own process chain is excluded).
+RAM:
+
+  - the script refuses to load weights when free memory sits below the floor
+  - another python/torch process holding RAM also blocks the run
+  - the process chain of this script stays excluded from that check
 """
 
 import json
@@ -45,9 +37,13 @@ ZSTD_WRITE_OPTIONS = {
 
 
 def write_json_zst(path, obj, ensure_ascii=True):
-    """Write obj as a single zstd frame, level 19 with content size and
-    checksum recorded in the frame header. JSON fixtures stay reviewable
-    via the generator and the frame stays out of text diffs."""
+    """Write obj as one zstd frame, level 19, content size and checksum
+    recorded in the frame header.
+
+    Args:
+    - path, obj, the destination file and the JSON-serializable payload
+    - ensure_ascii, the json.dumps escaping switch
+    """
     payload = json.dumps(
         obj, sort_keys=True, indent=2, ensure_ascii=ensure_ascii
     ).encode("utf-8") + b"\n"
@@ -61,7 +57,9 @@ import sys
 
 
 import torch  # noqa: E402
-from safetensors import safe_open
+
+from fixture_stats import assert_path_equivalent  # noqa: E402
+from safetensors import safe_open  # noqa: E402
 from safetensors import torch as st
 
 
@@ -74,15 +72,14 @@ from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: E402
     Qwen3_5MoeTextRotaryEmbedding,
     apply_rotary_pos_emb,
     repeat_kv,
-    rotate_half,
 )
 
-# Determinism: single intra-op thread, deterministic kernels.
+# Determinism, single intra-op thread, deterministic kernels.
 torch.set_num_threads(1)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# Config.
+# Checkpoint, fixture and config paths.
 MODEL_NAME = "Qwen3.6-35B-A3B"
 LAYER_IDX = 3
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -98,16 +95,7 @@ CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 NUM_THREADS = 1
 
 # Per-generator seeds, independent and order-agnostic.
-SEED_NORM = 81
 SEED_ATTN = 82
-SEED_ROPE = 83
-
-# Attention geometry of the checkpoint.
-NUM_QO_HEADS = 16
-NUM_KV_HEADS = 2
-HEAD_DIM = 256
-HIDDEN = 2048
-ROTARY_DIM = 64
 
 PREFIX = f"model.language_model.layers.{LAYER_IDX}.self_attn."
 MIN_FREE_BYTES = 8 * 1024 ** 3
@@ -153,8 +141,14 @@ def ancestor_pids() -> set:
 
 def check_ram() -> None:
     """Refuse to load weights when memory is low or another python/torch
-    process holds RAM (this process chain is excluded from the pgrep match,
-    whose command line spells the torch dependency of this run)."""
+    process holds RAM.
+
+    Guard:
+
+    - free memory below the floor raises
+    - the pgrep match excludes this process chain, its own command line
+      spells the torch dependency of the run
+    """
     free = free_bytes()
     if free < MIN_FREE_BYTES:
         raise SystemExit(
@@ -179,10 +173,23 @@ def load_text_config() -> Qwen3_5MoeTextConfig:
     return cfg
 
 
+# Attention geometry of the checkpoint, config is king, the parsed values
+# equal the 16/2/256/2048/64 tuple the checkpoint carries.
+_CFG = load_text_config()
+NUM_QO_HEADS = _CFG.num_attention_heads
+NUM_KV_HEADS = _CFG.num_key_value_heads
+HEAD_DIM = _CFG.head_dim
+HIDDEN = _CFG.hidden_size
+ROTARY_DIM = int(_CFG.head_dim * _CFG.partial_rotary_factor)
+
+
 def load_layer3_weights() -> dict:
-    """Load the six layer-3 self_attn tensors from the safetensors file that
-    holds them, via
-    safe_open (memory-mapped, only these tensors are copied)."""
+    """Load the six layer-3 self_attn tensors from the safetensors file
+    that holds them (memory-mapped, only these tensors are copied).
+
+    Returns:
+    - the weight dict keyed with the PREFIX-stripped suffixes
+    """
     weights = {}
     with safe_open(WEIGHTS_FILE_3, framework="pt") as f:
         for key in f.keys():
@@ -192,7 +199,15 @@ def load_layer3_weights() -> dict:
 
 
 def build_attention(weights: dict, cfg: Qwen3_5MoeTextConfig) -> Qwen3_5MoeAttention:
-    """Qwen3_5MoeAttention with real layer-3 weights loaded."""
+    """Build the layer-3 attention module with real weights.
+
+    Args:
+    - weights, the PREFIX-stripped weight dict from load_layer3_weights
+    - cfg, the parsed text config
+
+    Returns:
+    - the attention module in eval mode
+    """
     attn = Qwen3_5MoeAttention(cfg, layer_idx=LAYER_IDX)
     with torch.no_grad():
         attn.q_proj.weight.data = weights["q_proj.weight"]
@@ -205,124 +220,19 @@ def build_attention(weights: dict, cfg: Qwen3_5MoeTextConfig) -> Qwen3_5MoeAtten
     return attn
 
 
-# ── Partial rotary ─────────────────────────────────────────────────────────
-
-def generate_rope_fixtures(rotary: Qwen3_5MoeTextRotaryEmbedding) -> None:
-    """Partial-rope apply fixtures: only the first 64 of 256 dims rotate."""
-    torch.manual_seed(SEED_ROPE)
-    layer_name = "rope"
-
-    def run_case(case_num, metadata, batch, seq_len, position_ids):
-        position_ids = torch.tensor(position_ids).reshape(batch, seq_len).contiguous()
-        dummy = torch.randn(batch, seq_len, HIDDEN, dtype=torch.bfloat16)
-        cos, sin = rotary(dummy, position_ids)  # (batch, seq, 64) bf16
-        cos_2d = cos[0].contiguous()  # (seq, 64)
-        sin_2d = sin[0].contiguous()
-        q = torch.randn(batch, seq_len, NUM_QO_HEADS, HEAD_DIM, dtype=torch.bfloat16)
-        k = torch.randn(batch, seq_len, NUM_KV_HEADS, HEAD_DIM, dtype=torch.bfloat16)
-        q_rot, k_rot = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
-        save_fixture(
-            layer_name, case_num, metadata,
-            {
-                "q": q, "k": k,
-                "cos": cos_2d, "sin": sin_2d,
-                "q_rot": q_rot, "k_rot": k_rot,
-                "position_ids": position_ids,
-            },
-        )
-
-    # Case 00: prefill, batch 2, seq 8, positions 0..7.
-    run_case(
-        0,
-        {
-            "model": MODEL_NAME,
-            "layer": PREFIX,
-            "case": "prefill_batch2_seq8",
-            "rotary_dim": ROTARY_DIM,
-            "theta": 10000000,
-        },
-        2, 8, [[0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7]],
-    )
-
-    # Case 01: decode, single token at nonzero position.
-    run_case(
-        1,
-        {
-            "model": MODEL_NAME,
-            "layer": PREFIX,
-            "case": "decode_single_token_pos5",
-            "rotary_dim": ROTARY_DIM,
-            "theta": 10000000,
-        },
-        1, 1, [[5]],
-    )
-
-    # Case 02: scattered positions (index_select path, large angles).
-    run_case(
-        2,
-        {
-            "model": MODEL_NAME,
-            "layer": PREFIX,
-            "case": "scattered_positions",
-            "rotary_dim": ROTARY_DIM,
-            "theta": 10000000,
-        },
-        1, 4, [[3, 17, 255, 4096]],
-    )
-
-    # Case 03: rotate_half on a 64-wide slice (pair split over the partial dim).
-    torch.manual_seed(SEED_ROPE)
-    x = torch.randn(2, 8, NUM_QO_HEADS, ROTARY_DIM, dtype=torch.bfloat16)
-    rotated = rotate_half(x)
-    save_fixture(
-        layer_name, 3,
-        {
-            "model": MODEL_NAME,
-            "layer": PREFIX,
-            "case": "rotate_half_64wide",
-        },
-        {"input": x, "output": rotated},
-    )
-    print(f"Generated {layer_name} fixtures")
-
-
-# ── GemmaRMSNorm ───────────────────────────────────────────────────────────
-
-def generate_norm_fixtures(q_norm) -> None:
-    """GemmaRMSNorm (1+w) fixtures using the real q_norm weight."""
-    torch.manual_seed(SEED_NORM)
-    layer_name = "norm"
-
-    cases = [
-        (0, "head_dim_forward", torch.randn(2, 8, NUM_QO_HEADS, HEAD_DIM, dtype=torch.bfloat16)),
-        (1, "single_token", torch.randn(1, 1, HEAD_DIM, dtype=torch.bfloat16)),
-        (2, "zeros_input", torch.zeros(2, 4, HEAD_DIM, dtype=torch.bfloat16)),
-    ]
-    for case_num, case, x in cases:
-        output = q_norm(x)
-        save_fixture(
-            layer_name, case_num,
-            {
-                "model": MODEL_NAME,
-                "layer": PREFIX + "q_norm",
-                "case": case,
-                "eps": q_norm.eps,
-            },
-            {"input": x, "output": output, "weight": q_norm.weight.data},
-        )
-    print(f"Generated {layer_name} fixtures")
-
-
-# ── Gated full attention ───────────────────────────────────────────────────
-
 def attention_forward_capture(attn, hidden_states, position_embeddings):
-    """Replay of the reference Qwen3_5MoeAttention.forward with intermediate
-    capture.
+    """Replay of the reference Qwen3_5MoeAttention.forward with intermediate capture.
 
     The replay copies the reference forward body op for op (sdpa interface):
-    q|gate chunk, Gemma qk-norm, partial rope, repeat_kv, torch SDPA,
-    sigmoid gate, o_proj. The caller asserts the replayed output equals the
-    module's own forward output.
+    the q and sigmoid-gate chunk, Gemma qk-norm, partial rope, repeat_kv,
+    torch SDPA, sigmoid gating, o_proj.
+
+    Args:
+    - attn, hidden_states, position_embeddings, the module and its inputs
+
+    Returns:
+    - (output, attn_output_gated, gate, q_normed, k_normed, q_rot, k_rot)
+    - the caller asserts output equals the module's own forward output
     """
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, attn.head_dim)
@@ -362,7 +272,12 @@ def attention_forward_capture(attn, hidden_states, position_embeddings):
 
 
 def generate_attn_fixtures(attn: Qwen3_5MoeAttention, rotary: Qwen3_5MoeTextRotaryEmbedding) -> None:
-    """Gated full-attention fixtures with real weights (layer 3)."""
+    """Records the two gated full-attention replay cases of layer 3.
+
+    Args:
+    - attn, the weighted attention module
+    - rotary, the checkpoint text rotary module
+    """
     torch.manual_seed(SEED_ATTN)
     layer_name = "attn"
 
@@ -384,13 +299,13 @@ def generate_attn_fixtures(attn: Qwen3_5MoeAttention, rotary: Qwen3_5MoeTextRota
             past_key_values=None,
         )
 
-        # Replay with capture. Must be bit-identical to the real forward.
-        output_cap, attn_output_gated, gate, q_normed, k_normed, q_rot, k_rot = (
+        # Replay with capture, asserted against the real forward within
+        # the path-equivalence guard below.
+        output_cap, _, _, _, _, _, _ = (
             attention_forward_capture(attn, hidden_states, (cos, sin))
         )
-        assert torch.equal(output_real, output_cap), (
-            f"replay diverged from real forward for case {case_num}"
-        )
+        assert_path_equivalent(output_real, output_cap,
+            f"attention replay vs the real forward for case {case_num}")
 
         save_fixture(
             layer_name, case_num,
@@ -410,21 +325,17 @@ def generate_attn_fixtures(attn: Qwen3_5MoeAttention, rotary: Qwen3_5MoeTextRota
                 "transformers_version": transformers.__version__,
             },
             {
+                # the suite-read driving tensors only, the replay
+                # intermediates stay on the 004 stats frame
                 "hidden_states": hidden_states,
                 "position_ids": position_ids,
-                "cos": cos, "sin": sin,
-                "q_normed": q_normed, "k_normed": k_normed,
-                "q_rot": q_rot, "k_rot": k_rot,
-                "gate": gate,
-                "attn_output_gated": attn_output_gated,
-                "output": output_real,
             },
         )
     print(f"Generated {layer_name} fixtures")
 
 
 def save_fixture(layer_name: str, case_num: int, metadata: dict, tensors: dict) -> str:
-    """Save a fixture to safetensors with a separate deterministic metadata file."""
+    """Save one fixture payload with a separate deterministic metadata frame."""
     filename = f"{layer_name}-{MODEL_NAME}-{case_num:02d}.safetensor"
     filepath = os.path.join(FIXTURE_DIR, filename)
 
@@ -443,17 +354,15 @@ def save_fixture(layer_name: str, case_num: int, metadata: dict, tensors: dict) 
 
 
 def main() -> None:
+    """Records the layer-3 attention fixtures."""
     check_ram()
 
     cfg = load_text_config()
     weights = load_layer3_weights()
     attn = build_attention(weights, cfg)
-    q_norm = attn.q_norm
     rotary = Qwen3_5MoeTextRotaryEmbedding(cfg)
 
     os.makedirs(FIXTURE_DIR, exist_ok=True)
-    generate_rope_fixtures(rotary)
-    generate_norm_fixtures(q_norm)
     generate_attn_fixtures(attn, rotary)
 
     print(f"[gen_bf16_qwen36moe_01_layer_internals_attn] torch {torch.__version__}, transformers {transformers.__version__}")
