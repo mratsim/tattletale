@@ -160,7 +160,7 @@ proc main() =
 
 
   # Same-id record, id0 = 30.0, ids 1..31 = 20.0, off-set = 0.0,
-  # V = 128. margin = 10, allowance 4: delta 0.5, cap 1.0, klBand 0.125.
+  # V = 128. margin = 10, allowance 4: delta 0.5, klBand 0.125.
   let rowSeq = (block:
     var s = newSeq[float32](128)
     s[0] = 30.0'f32
@@ -184,13 +184,27 @@ proc main() =
     demand(flipCount == 0, "same-id accept must not count a flip")
 
   block:
-    # Top-32 drift 1.5 against cap 1.0.
+    # One recorded top-32 id drifts 1.5, twelve delta steps.
+    # The per-id value band is retired, the top-32 distribution
+    # instrument is the truncated KL, and a single mid-table id move
+    # of 1.5 sits far under klBand 0.125, so the step accepts and no
+    # flip is counted.
     var driftSeq = rowSeq
     driftSeq[5] = 21.5'f32
     var r = recA
     var flipCount = 0
-    expectReject(proc() = checkArgmaxRow(F.toTensor(driftSeq), r, flipCount),
-      "top-32 logit drift", "top-32 drift fault")
+    checkArgmaxRow(F.toTensor(driftSeq), r, flipCount)
+    demand(flipCount == 0, "a per-id drift inside the KL band must not count a flip")
+
+  block:
+    # Distribution fault, one recorded top-32 id drifts 8.5, id 5
+    # moves to 28.5, the truncated KL reaches 0.2 against klBand 0.125.
+    var klSeq = rowSeq
+    klSeq[5] = 28.5'f32
+    var r = recA
+    var flipCount = 0
+    expectReject(proc() = checkArgmaxRow(F.toTensor(klSeq), r, flipCount),
+      "truncated KL", "top-32 distribution fault")
 
   block:
     # Tail fault, 8 off-set logits 0 -> 21.5, observed tail moves
@@ -204,11 +218,11 @@ proc main() =
       "tail probability", "tail fault")
 
   block:
-    # KL instrument, a redundant bound:
-    # - under the drift cap the truncated KL cannot exceed klBand
-    # - the sup over top-32 shapes sits at margin 0 (cap = delta 0.5), the vertex split 13 up / 19 down gives KL 0.12323 < 0.125
-    # - the check never fires first for any reachable record
-    # The strike-or-tighten question stays open for the operator.
+    # KL allowance tightness:
+    # - the delta^2 bound is not loose, the worst top-32 shape keeping
+    #   every per-id drift at delta, the vertex split 13 up / 19 down
+    #   by 0.5 over a flat record, gives KL 0.12323, under klBand 0.125
+    #   by under 2 percent
     let flat = newSeqWith(32, 30.0'f32)
     var mixed = newSeq[float32](32)
     for i in 0 ..< 32:
@@ -322,14 +336,15 @@ proc main() =
 
   block:
     # Serialized-allowance closure case, check-time allowance derivation:
-    # - the frame serializes a wildly loose allowance (4096), the old
-    #   override channel would widen delta past 64 bf16 ulps
-    # - the observed row drifts one top-32 logit by 1.5, the derived
-    #   delta (allowance 4, one bf16 ulp at 30.0 = 0.125) is 0.5 with cap 1.0
+    # - the frame serializes a wildly loose allowance (4096), honoring
+    #   it would widen delta past 512 and the KL band past 131072
+    # - the observed row drifts one top-32 id by 8.5 (id 5 -> 28.5),
+    #   the derived delta (allowance 4, one bf16 ulp at 30.0 = 0.125)
+    #   is 0.5, klBand 0.125
     # - the check must reject against the derived value
     var row = rowSeq
     var driftRow = rowSeq
-    driftRow[5] = 21.5'f32
+    driftRow[5] = 28.5'f32
     let tailHex = "0x" & toHex(cast[uint64](
       observedTailProbability(F.toTensor(row), topKIds)), 16)
     let idsCsv = topKIds.mapIt($it).join(",")
@@ -347,7 +362,7 @@ proc main() =
     var flipCount = 0
     expectReject(proc() = assertArgMax(F.toTensor(driftRow), framePath, 0,
       kReduction, flipCount),
-      "top-32 logit drift", "a loose serialized allowance must not widen delta")
+      "truncated KL", "a loose serialized allowance must not widen delta")
 
   block:
     # A NaN logit rejects before the instruments, ordered comparisons

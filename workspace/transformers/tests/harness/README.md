@@ -14,7 +14,7 @@ This file is the contract for the assert API.
 | function | asserts | kind argument |
 |---|---|---|
 | `assertStats(actual, statsPath, tensorName, kind, depth = 1, msg = "")` | quantiles, histogram, boundary elements, mean and tail bands, everything the sidecar record carries | the statistical property |
-| `assertArgMax(actual, decisionsPath, step, kind, flipCount, msg = "", depth = 1)` | argmax id, 32-wide top-32 logits, truncated KL, tail probability, flip events | the error model class |
+| `assertArgMax(actual, decisionsPath, step, kind, flipCount, msg = "", depth = 1)` | argmax id, truncated KL over the 32-wide top-32, tail probability, flip events | the error model class |
 
 ### Kinds (statistical properties, never operations)
 
@@ -103,7 +103,6 @@ assertArgMax(actual, decisionsPath, step, kind, flipCount, msg = "", depth = 1)
 
   instruments, every step, agreement and flip alike:
   |  a non-finite logit rejects
-  |  top-32 logit drift <= delta + slack(0.05) x margin
   |  truncatedKl over the shared top-32 <= klBand
   |  tail probability inside its sensitivity-scaled allowance
   v
@@ -178,6 +177,25 @@ The EXL3 packed-quantization fixtures are the one exception, justified
 by deterministic dequant, no reductions, no associativity.
 
 ## Bands are derived, not calibrated
+
+### Two-tier decision law
+
+Two decision tiers, pick strictness and distribution shape:
+
+- the pick stays strict, the decoded token is the recorded argmax id,
+  divergence raises unless tie-eligible
+- the top-32 distribution is what sampling consumes, the truncated-KL
+  band enforces it, and the individual top-32 logits stay
+  unguarded per id
+- the per-id value band is retired on measurement, the MoE routed-stack
+  replay's mid-table id drift is the platform noise floor
+- measured drift, dense controls at most 1.5 reference-ulps, the A3B
+  routed stack a mean of about 2 id-ulps, p95 7 and max 16.5
+  reference-ulps across the MPS/CPU/MLX backends, 9 of 96 steps past
+  the reduction class's 4-ulp per-stage allowance, while the truncated
+  KL stayed inside the derived 0.5 x delta^2 band on all 96 steps
+- the bands still derive from the error model, klBand = 0.5 x delta^2,
+  no calibrated constants, no device keys
 
 - the band formulas derive from the error model, reordering
   opportunities times ulp per reordering
