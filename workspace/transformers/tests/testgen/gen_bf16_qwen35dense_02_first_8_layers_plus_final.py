@@ -1,49 +1,25 @@
 """
-Generate fixtures for the Qwen3.5-0.8B Gated DeltaNet (GDN) layer 0, full
-decoder layers 0 and 3, and the 8-block chain plus the final pre-norm tail
-checkpoint, using the reference transformers modeling on CPU torch bf16.
+Generates the Qwen3.5-0.8B fixtures for the Gated DeltaNet (GDN) layer 0,
+the 8-block chain and the final pre-norm tail checkpoint, CPU torch bf16,
+reference transformers modeling.
 
-Reference: gen_bf16_qwen35dense_01_layer_internals.py conventions.
+The conventions follow gen_bf16_qwen35dense_01_layer_internals.py.
 
-Consumed by tests/q_bf16/t_bf16_qwen35dense_02_first_8_layers_plus_final.nim (the gdn-* state
-boundary references and the 8-block chain plus the final pre-norm tail
-checkpoint). No Qwen3 analog: GatedDeltaNet is the SSM (linear-attention)
-layer Qwen3.5 interleaves with its gated attention, and Qwen3 has no SSM
-layer, so no Qwen3-era fixture records a recurrent-versus-chunked
-state-space contract or SSM state trajectories.
+Consumed by tests/q_bf16/t_bf16_qwen35dense_02_first_8_layers_plus_final.nim,
+the gdn-* state boundary references and the 8-block chain checkpoints.
 
-What is generated:
+  - no Qwen3 analog exists, GatedDeltaNet is the SSM (linear-attention) layer Qwen3.5 interleaves with gated attention, Qwen3 has none
+  - no Qwen3-era fixture records a recurrent-versus-chunked state-space contract or SSM state trajectories
 
-  tests/fixtures/bf16-01-layer-internals/Qwen3.5-0.8B-layer-0/
-    gdn-Qwen3.5-0.8B-00.safetensor
-      GDN block prefill T=5 with real layer-0 weights: conv output, q/k/v
-      post-split, z, g, beta, sequential core output + per-step SSM states,
-      gated RMSNorm output, sequential block output (0.00 reference) and the
-      chunked module output (5e-3 reference).
-    gdn-Qwen3.5-0.8B-01.safetensor
-      State trajectory: a sequential one-shot over 5 tokens (per-step conv
-      output, core output, SSM states, block output) plus a 2-step decode
-      after a 3-token prefill through the reference module with a cache
-      (conv states, SSM states, per-step conv inputs and outputs, decode
-      outputs). The generator asserts the two paths agree bit for bit.
-  tests/fixtures/bf16-01-layer-internals/Qwen3.5-0.8B-layer-3/
-    layer-Qwen3.5-0.8B-03.safetensor
-      Full decoder layer 3 (full attention) forward on T=5 with real rotary
-      embeddings, plus the attn intermediates.
+Generated fixtures:
 
-  tests/fixtures/bf16-02-first-8-layers-plus-final/Qwen3.5-0.8B/
-    block-00..07.safetensor
-      Layers 0..7 run in sequence on a seeded T=4 input, the 8 prefix
-      chain checkpoints (two full periods of the period-4 pattern, so
-      the prefix is class-complete). Each block saves the reference
-      chunked chain (layer_input, layer_output) and the
-      sequential-replay chain (layer_input_seq, layer_output_seq).
-    tail.safetensor
-      The full 24-layer chain tail taken pre-final-norm: the sequential
-      chain output feeding the final RMSNorm (pre_final_norm) and the
-      chunked chain output (pre_final_norm_chunked).
-
-environments missing the """
+| file | contents |
+|---|---|
+| tests/fixtures/bf16-01-layer-internals/Qwen3.5-0.8B-layer-0/gdn-Qwen3.5-0.8B-00.safetensor | GDN block prefill T=5 with real layer-0 weights, the replay input; the 004 stats frame carries the sublayer intermediates and the sequential (0.00 reference) plus chunked (5e-3 reference) block outputs |
+| tests/fixtures/bf16-01-layer-internals/Qwen3.5-0.8B-layer-0/gdn-Qwen3.5-0.8B-01.safetensor | state trajectory driving inputs, the 3-token prefill, the 2 decode tokens and the 5-token sequential one-shot block output; the generator verifies the decode path against the one-shot path through the ulp-band instrument (two ulps of the dtype at each element), the 004 stats frame carries the per-step trajectory |
+| tests/fixtures/bf16-02-first-8-layers-plus-final/Qwen3.5-0.8B/block-00..07.safetensor | layers 0..7 run in sequence on a seeded T=4 input, the 8 prefix chain checkpoints (two full periods of the period-4 pattern, so the prefix is class-complete), each block saves the reference chunked chain (layer_input, layer_output) and the sequential-replay chain (layer_input_seq, layer_output_seq) |
+| tests/fixtures/bf16-02-first-8-layers-plus-final/Qwen3.5-0.8B/tail.safetensor | the full 24-layer chain tail taken pre-final-norm, the sequential chain output feeding the final RMSNorm (pre_final_norm) and the chunked chain output (pre_final_norm_chunked) |
+"""
 
 import json
 from collections import OrderedDict
@@ -52,13 +28,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fixture_stats import (  # noqa: E402
-    recording_env,
-    write_provenance,
+from fixture_stats import (  # noqa, the path insert precedes the import
+    assert_path_equivalent,
     write_text_zst,
 )
 
-import torch  # noqa: E402
+import torch  # noqa, the path insert precedes the import
 import torch.nn.functional as F
 from safetensors import safe_open
 from safetensors import torch as st
@@ -78,14 +53,11 @@ from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5TextConfig
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# Config.
+# config constants:
 MODEL_NAME = "Qwen3.5-0.8B"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 LAYER0_FIXTURE_DIR = os.path.join(
     GRANDPARENT_DIR, "fixtures", "bf16-01-layer-internals", f"{MODEL_NAME}-layer-0"
-)
-LAYER3_FIXTURE_DIR = os.path.join(
-    GRANDPARENT_DIR, "fixtures", "bf16-01-layer-internals", f"{MODEL_NAME}-layer-3"
 )
 CHAIN_FIXTURE_DIR = os.path.join(
     GRANDPARENT_DIR, "fixtures", "bf16-02-first-8-layers-plus-final", MODEL_NAME
@@ -100,11 +72,8 @@ CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 SEED_GDN_PREFILL = 61
 SEED_STATE = 62
 SEED_LAYER0 = 63
-SEED_LAYER3 = 64
 SEED_CHAIN = 65
-SEED_MULTICHUNK = 66
 
-HIDDEN = 1024
 PREFILL_SEQ = 5
 CHAIN_SEQ = 4
 CHAIN_PREFIX_BLOCKS = 8
@@ -121,8 +90,14 @@ def load_text_config() -> Qwen3_5TextConfig:
     return cfg
 
 
+# The hidden size reads from the parsed config (config is king), the value
+# equals the 1024 the checkpoint carries.
+HIDDEN = load_text_config().hidden_size
+
+
 def ensure_fixture_dirs() -> None:
-    for d in (LAYER0_FIXTURE_DIR, LAYER3_FIXTURE_DIR, CHAIN_FIXTURE_DIR):
+    """Creates the fixture directories."""
+    for d in (LAYER0_FIXTURE_DIR, CHAIN_FIXTURE_DIR):
         os.makedirs(d, exist_ok=True)
 
 
@@ -148,8 +123,7 @@ def save_fixture(fixture_dir: str, layer_name: str, case_num: int, metadata: dic
 
 
 def load_file_tensors(prefix: str) -> dict:
-    """Load every tensor of the checkpoint under a key prefix, with the
-    prefix stripped."""
+    """Load every tensor of the checkpoint under a key prefix, prefix stripped."""
     weights = {}
     with safe_open(MODEL_PATH, framework="pt") as f:
         for key in f.keys():
@@ -214,7 +188,7 @@ def l2norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
 class _LayerCache:
     """Minimal per-layer cache for the reference GDN decode path.
 
-    Implements the surface the module forward touches: conv_states,
+    The contract covers the surface the module forward touches, conv_states,
     recurrent_states, has_previous_state and the two update procs, which
     copy in place like the reference LinearAttentionLayer cache.
     """
@@ -241,10 +215,12 @@ class _GdnCache:
     """Cache facade for one GDN layer (decode path only)."""
 
     def __init__(self, layer_idx: int, conv_states: torch.Tensor, recurrent_states: torch.Tensor):
-        # The installed forward indexes conv_states[0] / recurrent_states[0]
-        # (state-slot dim leading), so the shim stores the tensors under one
-        # extra leading dim and the fixture saves recover the Nim contract
-        # shape by indexing it away.
+        # the installed forward indexes conv_states[0] / recurrent_states[0]
+        # (state-slot dim leading)
+        #
+        # - the shim stores the tensors under one extra leading dim
+        # - the fixture saves recover the Nim contract shape by indexing
+        #   the extra dim away
         self.layers = {layer_idx: _LayerCache(conv_states.unsqueeze(0), recurrent_states.unsqueeze(0))}
 
     def has_previous_state(self, layer_idx: int, state_idx: int = 0) -> bool:
@@ -272,9 +248,11 @@ def gdn_forward_replay(block: Qwen3_5GatedDeltaNet, hidden_states: torch.Tensor,
     """Replay of the reference Qwen3_5GatedDeltaNet.forward with a selectable
     core rule, capturing every intermediate.
 
-    The chunked replay must be bit-identical to the module's own forward
-    (asserted by the caller). The sequential replay is the 0.00 reference for
-    the Nim implementation.
+    Returns the intermediate dict.
+
+    - the chunked replay must match the module's own forward through
+      the ulp-band instrument, the caller asserts it
+    - the sequential replay is the 0.00 reference for the Nim implementation
     """
     batch_size, seq_len, _ = hidden_states.shape
     mixed_qkv, z, b, a = gdn_projections(block, hidden_states)
@@ -315,9 +293,9 @@ def gdn_forward_replay(block: Qwen3_5GatedDeltaNet, hidden_states: torch.Tensor,
 def recurrent_rule_with_trajectory(query, key, value, g, beta, eps: float = 1e-6):
     """torch_recurrent_gated_delta_rule with per-step state capture.
 
-    Replicates the reference loop op for op and asserts the final output and
-    state match the function's own results, so the captured per-step
-    trajectory is trustworthy.
+    Returns the per-step trajectory. Replicates the reference loop op for op
+    and asserts the final output and state match the function's own results,
+    so the captured per-step trajectory is trustworthy.
     """
     initial_dtype = query.dtype
     q_n = l2norm(query, dim=-1, eps=eps)
@@ -356,8 +334,8 @@ def recurrent_rule_with_trajectory(query, key, value, g, beta, eps: float = 1e-6
         initial_state=None, output_final_state=True,
         use_qk_l2norm_in_kernel=True,
     )
-    assert torch.equal(out, ref_out), "trajectory output diverged from the recurrent rule"
-    assert torch.equal(s, ref_state), "trajectory state diverged from the recurrent rule"
+    assert_path_equivalent(out, ref_out, "trajectory output vs the recurrent rule")
+    assert_path_equivalent(s, ref_state, "trajectory state vs the recurrent rule")
     return out, s, torch.stack(states)[:, 0]
 
 
@@ -367,11 +345,12 @@ def decoder_layer_forward_seq(
 ) -> torch.Tensor:
     """Qwen3_5DecoderLayer.forward with the GDN block on the sequential rule.
 
-    The reference forward runs the chunked rule for prefill. This replay
-    substitutes the sequential rule so the Nim implementation (sequential
-    always) has a 0.00 reference at the layer level. Full-attention
-    layers carry no chunked versus sequential split: the module forward
-    is the sequential reference.
+    Returns the layer output. The reference forward runs the chunked rule
+    for prefill, this replay substitutes the sequential rule so the Nim
+    implementation (sequential always) has a 0.00 reference at the layer level.
+
+    Full-attention layers carry no chunked versus sequential split,
+    the module forward is the sequential reference.
     """
     if layer.block_type != "linear_attention":
         return layer(
@@ -388,24 +367,22 @@ def decoder_layer_forward_seq(
 
 
 def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> None:
-    """GDN block prefill T=5: sequential reference + chunked module output."""
+    """GDN block prefill T=5, the sequential reference plus the chunked module output."""
     torch.manual_seed(SEED_GDN_PREFILL)
     x = torch.randn(1, PREFILL_SEQ, HIDDEN, dtype=torch.bfloat16)
 
     module_output = block(x)  # reference forward, chunked rule
     chunk_replay = gdn_forward_replay(block, x, use_recurrent=False)
-    assert torch.equal(module_output, chunk_replay["output"]), (
-        "chunked replay diverged from the module forward"
-    )
+    assert_path_equivalent(module_output, chunk_replay["output"],
+                           "chunked replay vs the module forward")
 
     core_out, _, states = recurrent_rule_with_trajectory(
         chunk_replay["query"], chunk_replay["key"], chunk_replay["value"],
         chunk_replay["g"], chunk_replay["beta"],
     )
     seq_replay = gdn_forward_replay(block, x, use_recurrent=True)
-    assert torch.equal(seq_replay["core_attn_out"], core_out), (
-        "sequential replay core diverged from the trajectory"
-    )
+    assert_path_equivalent(seq_replay["core_attn_out"], core_out,
+                           "sequential replay core vs the trajectory")
 
     save_fixture(
         LAYER0_FIXTURE_DIR, "gdn", 0,
@@ -419,15 +396,9 @@ def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> None:
             "num_heads": block.num_k_heads,
         },
         {
+            # the suite-read driving input only, the sublayer intermediates
+            # and both block outputs stay on the 004 stats frame
             "input": x,
-            "conv_output": chunk_replay["conv_output"],
-            "q": chunk_replay["query"], "k": chunk_replay["key"], "v": chunk_replay["value"],
-            "z": chunk_replay["z"],
-            "g": chunk_replay["g"], "beta": chunk_replay["beta"],
-            "core_attn_out_seq": seq_replay["core_attn_out"],
-            "rmsnorm_gated_output": seq_replay["normed"],
-            "output_seq": seq_replay["output"],
-            "output_chunked": module_output,
         },
     )
     print(f"Generated gdn prefill fixtures")
@@ -435,7 +406,7 @@ def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> None:
 
 
 def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
-    """State trajectory: 5-token sequential one-shot + 2-step decode."""
+    """State trajectory, a 5-token sequential one-shot plus a 2-step decode."""
     torch.manual_seed(SEED_STATE)
     prefill_x = torch.randn(1, PREFILL_STATE_TOKENS, HIDDEN, dtype=torch.bfloat16)
     decode_x_d = torch.randn(1, 1, HIDDEN, dtype=torch.bfloat16)
@@ -449,23 +420,25 @@ def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
         oneshot["g"], oneshot["beta"],
     )
 
-    # Two-step decode through the reference module with a cache. The cache
-    # starts from sequential state over the 3-token prefill.
-    # Every decode output must match one-shot positions 3 and 4 bit for bit.
+    # two-step decode through the reference module with a cache:
+    # - the cache starts from the sequential state over the 3-token prefill
+    # - every decode output matches one-shot positions 3 and 4 within two
+    #   ulps of the dtype, the path-equivalence instrument
     mixed_prefill, _, _, _ = gdn_projections(block, prefill_x)
     conv_state_prefill = F.pad(mixed_prefill, (block.conv_kernel_size - PREFILL_STATE_TOKENS, 0))
     prefill_seq = gdn_forward_replay(block, prefill_x, use_recurrent=True)
-    assert torch.equal(prefill_seq["ssm_state"], states[PREFILL_STATE_TOKENS].unsqueeze(0)), (
+    assert torch.equal(prefill_seq["ssm_state"],
+                       states[PREFILL_STATE_TOKENS].unsqueeze(0)), (
         "prefill state diverged from the one-shot state at the same step"
     )
-    # Cache owns clones: decode steps mutate conv and recurrent
-    # states in place, and pre-decode values are saved too.
+    # the cache owns clones, decode steps mutate conv and recurrent states
+    # in place, pre-decode values are saved too
     cache = _GdnCache(0, conv_state_prefill.clone(), prefill_seq["ssm_state"].clone())
 
     decode_tensors = {}
     for name, tok in (("d", decode_x_d), ("e", decode_x_e)):
-        # Snapshot the conv state before the forward: the module's decode
-        # updates the cache state in place inside causal_conv1d_update.
+        # snapshot the conv state before the forward, the module's decode
+        # updates the cache state in place inside causal_conv1d_update
         state_before = cache.layers[0].conv_states[0].clone()
         out = block(tok, cache_params=cache)
         mixed_tok, _, _, _ = gdn_projections(block, tok)
@@ -484,35 +457,30 @@ def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
 
     step_d = PREFILL_STATE_TOKENS
     step_e = PREFILL_STATE_TOKENS + 1
-    assert torch.equal(decode_tensors["d"]["output"], oneshot["output"][:, step_d:step_d + 1]), (
+    assert_path_equivalent(decode_tensors["d"]["output"],
+                           oneshot["output"][:, step_d:step_d + 1],
         "decode d output diverged from the one-shot reference"
     )
-    assert torch.equal(decode_tensors["e"]["output"], oneshot["output"][:, step_e:step_e + 1]), (
+    assert_path_equivalent(decode_tensors["e"]["output"],
+                           oneshot["output"][:, step_e:step_e + 1],
         "decode e output diverged from the one-shot reference"
     )
-    assert torch.equal(decode_tensors["d"]["conv_output"], oneshot["conv_output"][:, :, step_d:step_d + 1]), (
+    assert_path_equivalent(decode_tensors["d"]["conv_output"],
+                           oneshot["conv_output"][:, :, step_d:step_d + 1],
         "decode d conv output diverged from the one-shot reference"
     )
-    assert torch.equal(decode_tensors["e"]["conv_output"], oneshot["conv_output"][:, :, step_e:step_e + 1]), (
+    assert_path_equivalent(decode_tensors["e"]["conv_output"],
+                           oneshot["conv_output"][:, :, step_e:step_e + 1],
         "decode e conv output diverged from the one-shot reference"
     )
-    assert torch.equal(decode_tensors["d"]["ssm_state"], states[step_d + 1].unsqueeze(0)), (
+    assert_path_equivalent(decode_tensors["d"]["ssm_state"],
+                           states[step_d + 1].unsqueeze(0),
         "decode d ssm state diverged from the one-shot reference"
     )
-    assert torch.equal(decode_tensors["e"]["ssm_state"], states[step_e + 1].unsqueeze(0)), (
+    assert_path_equivalent(decode_tensors["e"]["ssm_state"],
+                           states[step_e + 1].unsqueeze(0),
         "decode e ssm state diverged from the one-shot reference"
     )
-
-    # Reference cache holds 4-wide conv state: decode conv sees
-    # [state(4), x(1)] and state never shrinks. Nim layer keeps
-    # equivalent 3-wide tail: dropped oldest column never enters conv
-    # output, so every decode conv output is bit-identical, asserted.
-    # Tail slices are saved so Nim test can compare its own state shape.
-    conv_state_tail3 = {
-        "conv_state_after_prefill_tail3": conv_state_prefill[..., 1:],
-        "conv_state_after_d_tail3": decode_tensors["d"]["conv_state"][..., 1:],
-        "conv_state_after_e_tail3": decode_tensors["e"]["conv_state"][..., 1:],
-    }
 
     save_fixture(
         LAYER0_FIXTURE_DIR, "gdn", 1,
@@ -530,94 +498,29 @@ def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
                     "cache states. The _tail3 variants are the 3-wide tails",
         },
         {
-            "one_shot_input": one_shot_input,
-            "one_shot_block_output": oneshot["output"],
+            # the suite-read driving tensors, the per-step trajectory stays
+            # on the 004 stats frame only
             "prefill_x": prefill_x,
             "decode_x_d": decode_x_d,
             "decode_x_e": decode_x_e,
-            "decode_conv_output_d": decode_tensors["d"]["conv_output"],
-            "decode_conv_output_e": decode_tensors["e"]["conv_output"],
-            "decode_output_d": decode_tensors["d"]["output"],
-            "decode_output_e": decode_tensors["e"]["output"],
-            **conv_state_tail3,
+            "one_shot_block_output": oneshot["output"],
         },
     )
     print(f"Generated gdn state fixtures")
 
 
-def generate_layer3_fixture(layer3: Qwen3_5DecoderLayer, config: Qwen3_5TextConfig) -> None:
-    """Full decoder layer 3 (full attention) forward, T=5."""
-    torch.manual_seed(SEED_LAYER3)
-    x = torch.randn(1, PREFILL_SEQ, HIDDEN, dtype=torch.bfloat16)
-    position_ids = torch.arange(PREFILL_SEQ).unsqueeze(0)
-    rotary = Qwen3_5TextRotaryEmbedding(config)
-    cos, sin = rotary(x, position_ids)
-
-    input_ln = layer3.input_layernorm(x)
-    layer_output = layer3(x, position_embeddings=(cos, sin), attention_mask=None)
-
-    attn = layer3.self_attn
-    input_shape = x.shape[:-1]
-    hidden_shape = (*input_shape, -1, attn.head_dim)
-    # The attention sees the input_layernorm output, not the raw input.
-    query_states, gate = torch.chunk(
-        attn.q_proj(input_ln).view(*input_shape, -1, attn.head_dim * 2), 2, dim=-1
-    )
-    gate = gate.reshape(*input_shape, -1)
-    q_normed = attn.q_norm(query_states.view(hidden_shape))
-    k_normed = attn.k_norm(attn.k_proj(input_ln).view(hidden_shape))
-
-    save_fixture(
-        LAYER3_FIXTURE_DIR, "layer", 3,
-        {
-            "model": MODEL_NAME,
-            "layer": "model.language_model.layers.3",
-            "case": "full_layer_prefill_seq5",
-            "seq_len": PREFILL_SEQ,
-            "layer_type": layer3.block_type,
-            "num_qo_heads": config.num_attention_heads,
-            "num_kv_heads": config.num_key_value_heads,
-            "head_dim": attn.head_dim,
-        },
-        {
-            "layer_input": x,
-            "position_ids": position_ids,
-            "cos": cos, "sin": sin,
-            "input_layernorm_output": input_ln,
-            "q_normed": q_normed, "k_normed": k_normed,
-            "gate": gate,
-            "layer_output": layer_output,
-        },
-    )
-    print(f"Generated layer 3 fixtures")
-
-
 def generate_chain_fixture(layers, config: Qwen3_5TextConfig) -> None:
-    """The 8+1 chain checkpoints on a seeded T=4 input.
+    """Records the 8+1 chain checkpoints on a seeded T=4 input.
 
-    Layers 0..7 run in sequence, the 8 prefix checkpoints (two full
-    periods of the period-4 pattern, so the prefix is class-complete).
-    Then the full num_layers-layer chain tail is taken pre-final-norm:
-    the sequential chain output that feeds the final RMSNorm, plus the
-    chunked chain output for the sequential versus chunked band at the
-    full stack depth. The tail validates the depth extrapolation.
+    The prefix checkpoints cover two full periods of the period-4 pattern, the tail validates the depth extrapolation.
     """
-    provenance = recording_env(
-        model=MODEL_NAME,
-        generator="testgen/gen_bf16_qwen35dense_02_first_8_layers_plus_final.py",
-        seed="SEED_CHAIN=65 for the chain input; deterministic forward, no sampling",
-        extra={"dtype": "bfloat16"},
-    )
-    write_provenance(
-        os.path.join(CHAIN_FIXTURE_DIR, "PROVENANCE.md"), list(provenance.items()))
-
     torch.manual_seed(SEED_CHAIN)
     x = torch.randn(1, CHAIN_SEQ, HIDDEN, dtype=torch.bfloat16)
     rotary = Qwen3_5TextRotaryEmbedding(config)
     position_ids = torch.arange(CHAIN_SEQ).unsqueeze(0)
 
-    hidden = x       # chunked chain
-    hidden_seq = x   # sequential chain
+    hidden = x       # the chunked chain
+    hidden_seq = x   # the sequential chain
     fixtures = []
     for i, layer in enumerate(layers):
         layer_input = hidden.clone()
@@ -633,9 +536,11 @@ def generate_chain_fixture(layers, config: Qwen3_5TextConfig) -> None:
         layer_output_seq = decoder_layer_forward_seq(layer, layer_input_seq, pe)
 
         diff = (layer_output_seq.float() - layer_output.float()).abs().max().item()
-        # Coarse gross-breakage tripwire only: the sequential versus
-        # chunked divergence accumulates through the chain, so the guard
-        # scales with the depth. The calibrated band lives in the suites.
+        # coarse gross-breakage guard only
+        #
+        # - the sequential versus chunked divergence accumulates through the chain,
+        #   so the guard scales with the depth
+        # - the calibrated band lives in the suites
         assert diff < 0.02 * (i + 1), (
             f"sequential vs chunked chain layer {i} diff too large: {diff}")
 
@@ -690,25 +595,23 @@ def generate_chain_fixture(layers, config: Qwen3_5TextConfig) -> None:
 
 
 def main() -> None:
+    """Generates the GDN, layer, and chain fixtures."""
     print(f"Generating {MODEL_NAME} GDN / layer / chain fixtures")
     print("=" * 60)
     ensure_fixture_dirs()
 
     config = load_text_config()
     block = build_gdn_layer0(config)
-    layer3 = build_decoder_layer(config, 3)
     chain_layers = [
         build_decoder_layer(config, i) for i in range(config.num_hidden_layers)
     ]
 
     generate_gdn_prefill_fixture(block)
     generate_state_fixture(block)
-    generate_layer3_fixture(layer3, config)
     generate_chain_fixture(chain_layers, config)
 
     print("=" * 60)
     print(f"Fixture generation complete: {LAYER0_FIXTURE_DIR}")
-    print(f"                          : {LAYER3_FIXTURE_DIR}")
     print(f"                          : {CHAIN_FIXTURE_DIR}")
 
 

@@ -1,35 +1,29 @@
 #!/usr/bin/env python3
 """
-Proof and fixtures for the long residual stream invariant, recorded at
-the 8+1 chain checkpoints.
+Proof and fixtures for the long residual stream invariant, recorded
+at the 8+1 chain checkpoints of Qwen3-0.6B.
 
-Generates fixtures for the Qwen3-0.6B chain: the outputs of the first
-8 decoder blocks (full per-block intermediates for the manual replay)
-plus the tail checkpoint, the decoder stack output taken pre-final-norm
-(the layer output that feeds the final RMSNorm and lm_head). The model
-has 28 uniform-attention layers, so the 8-block prefix is
-class-complete (every block of the prefix belongs to the one layer class
-the model has), and the tail checkpoint validates the depth
-extrapolation to the full 28-layer stack.
+  - the first 8 decoder blocks carry full per-block intermediates for the manual replay
+  - the tail checkpoint carries the decoder stack output taken pre-final-norm, the layer output feeding the final RMSNorm and lm_head
+  - the model has 28 uniform-attention layers, the 8-block prefix is
+    class-complete, every prefix block belongs to the one layer class the model has
+  - the tail checkpoint validates the depth extrapolation to the full 28-layer stack
 
-Computes, per block:
-1. HF local residual outputs (x_local)
-2. Long residual stream outputs (mlp_out, r2)
+Per block the fixtures record:
 
-Verifies the invariant: mlp_out + r2 == x_local at every layer boundary,
-all 28 of them. The invariant holds with EXACT equality (diff=0.0) when
-both paths use:
-- BF16 addition for residuals (not FP32)
-- FP32 RMSNorm internally (HF's Qwen3RMSNorm, not F.rms_norm)
+  - HF local residual outputs (x_local)
+  - long residual stream outputs (mlp_out, r2)
 
-Each block fixture carries a metadata.json sidecar (model, layer, case,
-sequence length), the tail fixture carries the decoder stack depth, and
-the recording stamps PROVENANCE.md at record time through
-fixture_stats.write_provenance.
+The invariant mlp_out + r2 == x_local holds with EXACT equality
+(diff=0.0) at every one of the 28 layer boundaries when both paths use:
 
-Usage:
-    cd tattletale
-    .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen3_02_first_8_layers_plus_final.py
+  - BF16 addition for residuals (not FP32)
+  - FP32 RMSNorm internally (HF's Qwen3RMSNorm, not F.rms_norm)
+
+Each block fixture carries a metadata.json sidecar (model, layer, case, sequence length), the tail fixture carries the decoder stack depth.
+
+  - cd tattletale
+  - .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen3_02_first_8_layers_plus_final.py
 """
 import json
 import os
@@ -42,11 +36,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fixture_stats import (  # noqa: E402
-    recording_env,
-    write_provenance,
-    write_text_zst,
-)
+from fixture_stats import write_text_zst  # noqa, the path insert precedes the import
 
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_PATH = str(Path(__file__).parent.parent / "hf_models" / MODEL_NAME)
@@ -56,13 +46,14 @@ INPUT_TEXT = "Hello, how are you?"
 
 
 def main():
-    # Load model
+    """Generates the bf16-02 first-8-layers-plus-final chain fixtures."""
+    # load the checkpoint
     model = AutoModelForCausalLM.from_pretrained(MODEL_PATH)
     model.eval()
     model.to("cpu")
     num_layers = model.config.num_hidden_layers
 
-    # Preserve inv_freq buffers in float32: model.to(bfloat16) would corrupt them.
+    # Preserve inv_freq buffers in float32, model.to(bfloat16) would corrupt them.
     # bfloat16 loses too much precision for RoPE frequency values (up to 1.2e-3 per element).
     # This causes ~4e-3 cos/sin discrepancy that propagates through every layer.
     inv_freq = model.model.rotary_emb.inv_freq.float()
@@ -79,18 +70,10 @@ def main():
     print(f"Input tokens: {input_ids[0].tolist()}")
     print(f"Decoder layers: {num_layers}, recorded prefix blocks: {PREFIX_BLOCKS}")
 
-    provenance = recording_env(
-        model=MODEL_NAME,
-        generator="testgen/gen_bf16_qwen3_02_first_8_layers_plus_final.py",
-        seed="none (deterministic forward, no sampling)",
-        extra={"dtype": "bfloat16"},
-    )
-    write_provenance(str(FIXTURE_DIR / "PROVENANCE.md"), list(provenance.items()))
-
-    # Get embedding
+    # get the embedding
     x_embed = model.model.embed_tokens(input_ids)
 
-    # Store fixtures
+    # store the fixtures
     fixtures = []
 
     # HF local residual stream state
@@ -106,7 +89,7 @@ def main():
         cos, sin = model.model.rotary_emb(x_hf, pos_ids)
 
         # ── HF LOCAL RESIDUAL (actual model forward) ─────────────────────
-        # Sublayer 1: attention
+        # sublayer 1 runs the attention
         res = x_hf
         h_hf = layer.input_layernorm(x_hf)
         attn_out_hf, _ = layer.self_attn(
@@ -117,26 +100,26 @@ def main():
         )
         x_hf = res + attn_out_hf
 
-        # Sublayer 2: mlp
+        # sublayer 2 runs the mlp
         res2 = x_hf
         h2_hf = layer.post_attention_layernorm(x_hf)
         mlp_out_hf = layer.mlp(h2_hf)
         x_hf = res2 + mlp_out_hf
 
         # ── LONG RESIDUAL STREAM (matches Nim implementation) ────────────
-        # Step 1: attn_norm.forward_with_residual(x, residual)
-        # CRITICAL: use BF16 addition (not FP32), then HF's FP32 RMSNorm module
+        # step 1 runs attn_norm.forward_with_residual(x, residual)
+        # use BF16 addition (not FP32), then HF's FP32 RMSNorm module
         if r_long is None:
-            # First layer: attn_norm(x), residual = x
+            # first layer runs attn_norm(x), the residual stays x
             h_l = layer.input_layernorm(x_long)
             r_l = x_long.clone()
         else:
-            # Subsequent layers: fused norm(x + r), BF16 addition
-            combined = x_long + r_long  # BF16 addition
+            # later layers run the fused norm(x + r), the addition stays BF16
+            combined = x_long + r_long  # the BF16 addition
             r_l = combined.clone()
             h_l = layer.input_layernorm(combined)  # HF's FP32 RMSNorm
 
-        # Step 2: Attention
+        # step 2 runs the attention
         attn_l, _ = layer.self_attn(
             hidden_states=h_l,
             position_embeddings=(cos, sin),
@@ -144,13 +127,13 @@ def main():
             past_key_values=None,
         )
 
-        # Step 3: mlp_norm.forward_with_residual(attn_out, residual)
-        # CRITICAL: BF16 addition, then HF's FP32 RMSNorm
-        combined2 = attn_l + r_l  # BF16 addition
+        # step 3 runs mlp_norm.forward_with_residual(attn_out, residual)
+        # BF16 addition again, then HF's FP32 RMSNorm
+        combined2 = attn_l + r_l  # the BF16 addition
         r2_l = combined2.clone()
         h2_l = layer.post_attention_layernorm(combined2)  # HF's FP32 RMSNorm
 
-        # Step 4: MLP
+        # step 4 runs the MLP
         mlp_l = layer.mlp(h2_l)
 
         # ── Assert invariant ─────────────────────────────────────────────
@@ -167,24 +150,24 @@ def main():
         if layer_idx < PREFIX_BLOCKS:
             # ── Save ALL intermediate values ──────────────────────────────
             fixture = {
-                # Input
+                # block input:
                 "layer_input": x_long.clone(),
 
-                # After attn_norm.forward_with_residual(x, residual)
+                # after attn_norm.forward_with_residual(x, residual):
                 "after_attn_norm": h_l.clone(),
                 "after_attn_norm_residual": r_l.clone(),
 
-                # After attention
+                # after attention:
                 "after_attn": attn_l.clone(),
 
-                # After mlp_norm.forward_with_residual(attn_out, residual)
+                # after mlp_norm.forward_with_residual(attn_out, residual):
                 "after_mlp_norm": h2_l.clone(),
                 "after_mlp_norm_residual": r2_l.clone(),
 
-                # After MLP
+                # after MLP:
                 "mlp_out": mlp_l.clone(),
 
-                # HF local reference: the chain checkpoint of this block
+                # the HF local reference (the chain checkpoint of this block):
                 "hf_layer_output": x_hf.clone(),
 
                 # RoPE (for Nim test)
@@ -194,10 +177,11 @@ def main():
             }
             fixtures.append(fixture)
         elif layer_idx == num_layers - 1:
-            # Tail checkpoint: the decoder stack output feeding the final
-            # RMSNorm and lm_head. The long stream sum equals the local
-            # stream exactly at every layer, so both formulations hand
-            # the same value to the final norm.
+            # the tail checkpoint carries the decoder stack output taken pre-final-norm,
+            # the layer output feeding the final RMSNorm and lm_head
+            #
+            # - the long stream sum equals the local stream at every layer,
+            #   so both formulations hand the same value to the final norm
             fixtures.append({
                 "pre_final_norm": x_hf.clone(),
             })
@@ -210,7 +194,7 @@ def main():
         f"expected {PREFIX_BLOCKS + 1} fixtures (8 block checkpoints + tail), "
         f"got {len(fixtures)}")
 
-    # Save fixtures
+    # save the fixtures
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
 
     for idx, fixture in enumerate(fixtures):

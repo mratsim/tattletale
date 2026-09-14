@@ -2,14 +2,14 @@
 """
 Generate layer intermediates for HF transformers.
 
-Captures the block input and output at each of the 28 layers. Under
-the fixture contract v2 the intermediate after_* tensors left the
-payload: no suite consumed them and the block input and output carry
-the whole external surface the ids suite checks.
+Captures the block input at each of the 28 layers.
 
-Usage:
-    cd tattletale
-    .venv/bin/python debug/gen_layer_intermediates.py
+  - the fixture contract v2 drops the intermediate after_* tensors, no suite consumed them
+  - the block input carries the whole external surface the ids suite checks
+
+invocation:
+
+  - cd <tests dir>, uv run python testgen/gen_bf16_qwen3_03_full_forward_to_logits.py
 """
 import json
 import os
@@ -22,16 +22,17 @@ from collections import OrderedDict
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fixture_stats import (  # noqa: E402
-    decision_steps_probed,
-    recording_env,
-    write_json_zst,
-    write_provenance,
+from fixture_stats import (  # noqa, the path insert precedes the import
+    argmax_record_from_row,
+    grid_of,
+    write_argmax_decisions,
     write_text_zst,
 )
 
+NUM_POSITIONS = 6
+    # Decision records written, one per input position.
+
 # ── Config ──────────────────────────────────────────────────────────────
-DECISION_PROBE_SCHEMA = "ttt-tf-002-logit-decisions-probe-h2"
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_PATH = str(Path(__file__).parent.parent / "hf_models" / MODEL_NAME)
 OUTPUT_DIR = Path(__file__).parent.parent / "fixtures" / "bf16-03-full-forward-to-logits" / MODEL_NAME
@@ -58,7 +59,7 @@ def save_fixture(output_dir: Path, layer_idx: int, framework: str, metadata: dic
         if tensor is not None
     )
 
-    # Save tensors (no metadata — deterministic)
+    # Save tensors (no metadata, deterministic)
     serialized = st.save(sorted_tensors, metadata=None)
     with open(filepath, "wb") as f:
         f.write(serialized)
@@ -89,7 +90,7 @@ def capture_hf_intermediates(model, tokenizer, input_text: str) -> list:
 
         intermediates["layer_input"] = hidden_states.clone()
 
-        # Sublayer 1: attention
+        # sublayer 1 runs the attention
         residual = hidden_states
         h = self.input_layernorm(hidden_states)
 
@@ -105,28 +106,27 @@ def capture_hf_intermediates(model, tokenizer, input_text: str) -> list:
 
         hidden_states = residual + h
 
-        # Sublayer 2: mlp
+        # sublayer 2 runs the mlp
         residual = hidden_states
         h = self.post_attention_layernorm(hidden_states)
 
         h = self.mlp(h)
 
         hidden_states = residual + h
-        intermediates["layer_output"] = hidden_states.clone()
 
         captured[i] = intermediates
         return hidden_states
 
-    # Patch
+    # patch every layer's forward
     for layer in model.model.layers:
         layer.forward = instrumented_forward.__get__(layer, type(layer))
 
-    # Run forward
+    # run the forward pass
     inputs = tokenizer(input_text, return_tensors="pt")
     with torch.no_grad():
         _ = model(**inputs, use_cache=False)
 
-    # Restore
+    # restore the original forwards
     for layer in model.model.layers:
         layer.forward = original_forward.__get__(layer, type(layer))
 
@@ -134,6 +134,7 @@ def capture_hf_intermediates(model, tokenizer, input_text: str) -> list:
 
 
 def main():
+    """Generates the bf16-03 full-forward-to-logits fixtures."""
     print(f"Model: {MODEL_PATH}")
     print(f"Input: {INPUT_TEXT}")
     print(f"Device: {DEVICE}")
@@ -146,7 +147,7 @@ def main():
     hf_model = Qwen3ForCausalLM.from_pretrained(MODEL_PATH)
     hf_model.eval()
     hf_model = hf_model.to(DEVICE)
-    # Preserve inv_freq buffers in float32 — model.to(bfloat16) would corrupt them.
+    # Preserve inv_freq buffers in float32, model.to(bfloat16) would corrupt them.
     # bfloat16 loses too much precision for RoPE frequency values (up to 1.2e-3 per element).
     inv_freq = hf_model.model.rotary_emb.inv_freq.float()
     original_inv_freq = hf_model.model.rotary_emb.original_inv_freq.float()
@@ -158,7 +159,7 @@ def main():
     hf_model.model.rotary_emb.original_inv_freq = original_inv_freq
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
     hf_intermediates = capture_hf_intermediates(hf_model, tokenizer, INPUT_TEXT)
-    # Save
+    # save the fixtures
     hf_dir = OUTPUT_DIR
     hf_logits = hf_model(**tokenizer(INPUT_TEXT, return_tensors="pt"), use_cache=False).logits
     for i, intermediates in enumerate(hf_intermediates):
@@ -177,35 +178,39 @@ def main():
                 "seq_len": len(tokenizer(INPUT_TEXT)["input_ids"]),
                 "dtype": "bfloat16",
                 "device": "cpu",
+                # the recorded payload note of the dieted fixture tree,
+                # reproduced verbatim, a regen reproduces the recorded
+                # values through the instruments
+                "note": "layer_output left the payload under the fixture contract v2: "
+                        "for layers 0..26 it equals the next layer's recorded "
+                        "layer_input byte for byte, and the final block output is "
+                        "the layer-27 descriptor sidecar (dmExact).",
             },
             tensors=intermediates,
         )
         print(f"  Layer {i:02d}: {filepath}")
 
-    # Decision projection instead of raw logits: the payload
-    # carries one step per position, the argmax id, the top-2 competing
-    # pair with f32 logits, and the softmax tail probability beyond the pair.
-    # The [1,6,151936] bf16 tensor shrinks to tens of KB, the consumers
-    # read argmax and top-2 only.
+    # the 005 decisions frame of the forward rows, the canonical
+    # chains recording code writes it
+    #
+    # - one record per position over the top-32 logits support
+    # - the margin, the tail probability, the drift allowance and the flip cap
+    #   consts carry through into the record
+    # - the [1,6,151936] bf16 tensor shrinks to tens of KB
+    # - the suite reads the frame through assertArgMax
     print()
-    print("Saving final logits decision projection...")
+    print("Saving final logits decisions frame...")
     hf_dir.mkdir(parents=True, exist_ok=True)
-    projection = {
-        "schema": DECISION_PROBE_SCHEMA,
-        "model": MODEL_NAME,
-        "input_text": INPUT_TEXT,
-        "input_ids": tokenizer(INPUT_TEXT)["input_ids"],
-        "vocab_size": int(hf_logits.shape[-1]),
-        "steps": decision_steps_probed(hf_logits.detach().cpu().to(torch.float32)),
-    }
-    write_json_zst(str(hf_dir / "final_logits.decisions.json.zst"), projection)
-    provenance = recording_env(
-        model=MODEL_NAME,
-        generator="testgen/gen_bf16_qwen3_03_full_forward_to_logits.py",
-        seed="none (fixed input ids, no sampling)",
-        extra={"dtype": "bfloat16"},
-    )
-    write_provenance(str(hf_dir / "PROVENANCE.md"), list(provenance.items()))
-    print(f"  Projection: {hf_dir / 'final_logits.decisions.json.zst'}")
+    logits_rows = hf_logits.detach().cpu().to(torch.float32)
+    if logits_rows.shape[1] < NUM_POSITIONS:
+        raise SystemExit(
+            f"{MODEL_NAME}: the forward produced {logits_rows.shape[1]} "
+            f"positions, the script records {NUM_POSITIONS}")
+    records = [argmax_record_from_row(logits_rows[0, pos])
+               for pos in range(NUM_POSITIONS)]
+    decisions_path = str(hf_dir / "final_logits.decisions.json.zst")
+    write_argmax_decisions(decisions_path, "final_logits.decisions", records,
+                           grid_of(hf_logits))
+    print(f"  Decisions: {decisions_path}")
 if __name__ == "__main__":
     main()

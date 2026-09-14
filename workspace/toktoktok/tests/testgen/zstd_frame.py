@@ -3,7 +3,7 @@
 
 One zstd frame, level 19, content size and checksum recorded in the
 frame header, matching the recording convention of the workspace:
-the JSON payload rides inside the zstd frame, the byte law is content-exact.
+the JSON payload sits inside the zstd frame, the byte law is content-exact.
 """
 
 import compression.zstd

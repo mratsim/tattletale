@@ -23,7 +23,9 @@ template handleNegativeIndex[T: int|Nullopt_t](idx: T, axisLen: int): T =
       idx
 ```
 
-This fails if you call `handleNegativeIndex(start, len)` where `start` is `int` and you want to pass `nullopt` for `stop`. The compiler complains because `int` and `Nullopt_t` are different types, even though both belong to the union.
+- Calling `handleNegativeIndex(start, len)` with `start: int`
+  and `nullopt` for `stop` fails: `int` and `Nullopt_t` are
+  different types even though both belong to the union.
 
 ## Solution: Use `distinct` type
 
@@ -49,7 +51,7 @@ func normalizedSlice*(
   torchSlice(normStart, normStop, step)
 ```
 
-The `distinct` keyword creates a new type that:
+`distinct` creates a new type with these effects:
 1. Is compatible with all types in the union at runtime
 2. Allows parameters to have DIFFERENT concrete types from the same union
 3. Preserves type safety while enabling flexible APIs

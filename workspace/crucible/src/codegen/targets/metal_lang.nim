@@ -9,7 +9,7 @@
 ##
 ## Lowers the shared GPU IR to MSL, modeled on the CUDA printer with Metal's ABI rules:
 ##   - kernel arguments are buffers (`device` pointers for arrays, `constant` references for scalars)
-##   - coordinate builtins ride in the param list: the `materializeIndexBuiltinParams` pass
+##   - coordinate builtins sit in the param list: the `materializeIndexBuiltinParams` pass
 ##     appends one param per referenced builtin, marked on the symbol's `coordBuiltin`.
 ##     Kernels emit the attribute-qualified form (`uint3 name [[name]]`), device functions
 ##     the plain form, and call sites forward the names

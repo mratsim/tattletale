@@ -35,6 +35,7 @@ term of art), harness, smoke.
 | `battery` (set-of-checks sense: "model battery", "battery log") | "checks", "suite"; "battery log results" → "the re-run results" |
 | `wave` (campaign-phase sense: "re-record wave", "device-matrix wave") | "pass" ("re-record pass"), "work" ("device-matrix work") |
 | `donor` (fixture-source sense: "fixture donor", "the same donor") | "recorded family", "recorded source" |
+| `law` / `laws` (set-of-rules sense: "harness law", "fixture law") | "rule", "rule set", "contract" ("harness law" → "harness contract") |
 
 ## Line-end hazards from the reflow scanner
 
@@ -47,6 +48,21 @@ line ends on a content noun or verb.
 |---|---|
 | "...the subject and committer date survive both" | "...the subject and committer date survive both events" |
 | "...the report readable on its own" | "...the report self-contained" |
+
+## Justification prose (lawyer speak)
+
+A doc line that argues for a design choice, tombstones a deleted check,
+or prefaces a skip with its justification is rejected on review. State
+what the code does, never what it refuses, lacks, or why something is
+absent. Real lines from this repo, all rejected:
+
+| Rejected justification | House style |
+|---|---|
+| "The per-token top-8 routing index equality case drops here, because neither assert expresses a top-8 id list, and the routing weights record carries the routing coverage." | the tombstone comment is deleted outright, the kept check carries the coverage |
+| "The stored K must differ from the raw k_proj output. That negative contrast case drops here, because neither assert expresses a must-differ comparison." | deleted, the suite states the cases it runs |
+| "The decode fixture carries no stats sidecar, so the record comes off the fixture payload in-suite." | deleted, the in-suite recording call shows it |
+| "The layer-3 payload carries no stats sidecar, its records come off the fixture." | deleted from the module header, no absent-capability notes |
+| "The recorded intermediates accept zero drift, so no cross-device drift case applies and the suite skips." | the echo line alone: "cross-device replay is out of scope for this suite, skipping on <device>" |
 
 ## Before → after
 

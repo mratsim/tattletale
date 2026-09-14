@@ -1,182 +1,173 @@
 #!/usr/bin/env python3
 """
-Generate EXL3 layer-by-layer inference fixtures for Nim testing.
+EXL3 chain generator, aligned to the bf16-03 chain template.
 
-Captures layer_input and layer_output for each of the 28 layers, plus final_logits.
-
-All core logic (decoder, forward, RoPE, RMS norm) lives in ``fixture_exl3_common.py``.
-This file only handles model paths, tokenizer, data I/O, and the top-level
-forward orchestration.
-
-Usage:
-    cd tattletale
-    .venv/bin/python testgen/gen_exl3_qwen3_03_full_forward_to_logits.py
+- one 004 stats frame per layer boundary, the two boundary entries
+  (layer_input, layer_output) on the fp16 storage grid
+- one 005 decisions frame, one record per position over the top-32
+  logits support, written by the canonical chains recording code
+  imported from fixture_stats and gen_rerecord_chains_005
+- statistics-only output, exactly the surface the suite consumes
+- recordings come from the exl3_utils loading machinery, never out of the code under test
+- backend exllamav3_cuda runs the production kernels, the CUDA extension required
+- backend pytorch is the pure-torch fallback, the 00 codec family records the two decoders agreeing element for element
+- the pre-write guard mirrors gen_rerecord_chains_005, the recorded argmax id
+  reproduces exactly, the margin stays inside the band, a wider
+  divergence aborts the write
+- run from the tests/ dir, uv run python testgen/gen_exl3_qwen3_03_full_forward_to_logits.py
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
+import struct
 import sys
-from collections import OrderedDict
 from pathlib import Path
 
 import torch
-from safetensors.torch import save_file as st_save_file
 
-# ── Add testgen dir to path for importing fixture_exl3_common ──
+# ── Script dir plus the tests/ tree on the import path ──
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPT_DIR)
+sys.path.insert(0, os.path.dirname(_SCRIPT_DIR))
 
-from fixture_stats import decision_steps_probed, write_stats_file, write_text_zst  # noqa: E402
-
-from fixture_exl3_common import (
-    # utilities
-    get_exl3_tensors,
-    get_in_features_out_features,
-    derive_K,
-    load_config,
-    # orig (CUDA ground truth)
-    reconstruct_orig_exl3,
-    linear_forward_orig_exl3,
-    # orig / reimpl (EXL3-anchored)
-    rms_norm_orig_exl3,
-    precompute_freqs_cis_reimpl_exl3,
-    apply_rotary_pos_emb_reimpl_exl3,
-)
+# Both imports sit directly below the sys.path setup
+from fixture_stats import argmax_record_from_row, grid_of, read_text_zst, stats_file_bytes, write_argmax_decisions, write_text_zst  # noqa
+from gen_rerecord_chains_005 import NUM_POSITIONS  # noqa
+from quant_utils.exl3_utils import get_exl3_tensors, get_in_features_out_features, derive_K, derive_cb, load_config, reconstruct_orig_exl3, reconstruct_reimpl_exl3, linear_forward_orig_exl3, linear_forward_reimpl_exl3, rms_norm_orig_exl3, precompute_freqs_cis_reimpl_exl3, apply_rotary_pos_emb_reimpl_exl3  # noqa
 
 # ── Paths ─────────────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # tests/
-DECISION_PROBE_SCHEMA = "ttt-tf-002-logit-decisions-probe-h2"
+BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # the tests/ directory
 MODEL_NAME = "Qwen3-0.6B-EXL3-5bpw"
 MODEL_DIR = os.path.join(BASE_DIR, "hf_models", MODEL_NAME)
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
-OUTPUT_DIR = Path(BASE_DIR) / "fixtures" / "exl3-03-full-forward-to-logits" / "Qwen3-0.6B-EXL3-5bpw"
+OUTPUT_DIR = Path(BASE_DIR) / "fixtures" / "exl3-03-full-forward-to-logits" / MODEL_NAME
 INPUT_TEXT = "Hello, how are you?"
-LAYER_COUNT = 28
 DTYPE = torch.float16
-DEVICE = "cuda:0"
+
+# Tokenizer ids of INPUT_TEXT, the ids the suite replays verbatim.
+INPUT_IDS = [9707, 11, 1246, 525, 498, 30]
+
+# ── Backend ─────────────────────────────────────────────────────────────
+# Production ext kernels run CUDA-only, the pure-torch reimplementation
+# stands in on the cpu reference box, the 01-layer generator fallback
+try:
+    from exllamav3.ext import exllamav3_ext as _ext  # noqa: F401
+    USE_CUDA = torch.cuda.is_available()
+except (ImportError, ModuleNotFoundError, OSError):
+    USE_CUDA = False
+BACKEND = "exllamav3_cuda" if USE_CUDA else "pytorch"
+DEVICE = torch.device("cuda:0" if USE_CUDA else "cpu")
 
 # ── Determinism ────────────────────────────────────────────────────────
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
-torch.manual_seed(42)
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────
+# ── EXL3 linear machinery ────────────────────────────────────────────────
 
 
 def reconstruct_and_cache(tensors: dict, config: dict) -> dict:
-    """Reconstruct all EXL3 linear weights and cache them.
+    """Reconstruct every EXL3 linear weight through the loading machinery.
 
-    Returns:
-        { "model.layers.0.self_attn.q_proj": weight [out_features, in_features], ... }
+    - backend exllamav3_cuda, [in_features, out_features], the ext.hgemm layout
+    - backend pytorch, [out_features, in_features], the F.linear layout
+    - returns the reconstructed weights dict keyed like model.layers.0.self_attn.q_proj
     """
     cache: dict = {}
     for key, entry in tensors.items():
         if key.startswith("_") or entry.get("trellis") is None:
             continue
-        trellis = entry["trellis"].to("cuda:0")
+        trellis = entry["trellis"].to(DEVICE)
         K = derive_K(trellis)
-        mcg = entry.get("mcg") is not None
-        mul1 = entry.get("mul1") is not None
         in_f, out_f = get_in_features_out_features(key, trellis, config)
-        w = reconstruct_orig_exl3(trellis, K, mcg, mul1, (in_f, out_f))
-        # Transpose to [out_features, in_features] for F.linear
-        cache[key] = w.contiguous()  # [in_features, out_features] — non-transposed, for ext.hgemm (differs from F.linear which needs [out_features, in_features])
-        print(f"  Reconstructed {key}: [{in_f}, {out_f}] -> weight [{out_f}, {in_f}]")
+        if BACKEND == "exllamav3_cuda":
+            mcg = entry.get("mcg") is not None
+            mul1 = entry.get("mul1") is not None
+            w = reconstruct_orig_exl3(trellis, K, mcg, mul1, (in_f, out_f))
+            cache[key] = w.contiguous()
+        else:
+            cb = derive_cb(entry)
+            w = reconstruct_reimpl_exl3(trellis, K, cb, (in_f, out_f))
+            cache[key] = w.t().contiguous()
+        print(f"  Reconstructed {key}: [{in_f}, {out_f}] ({BACKEND})")
     return cache
 
 
-# ── Tokenizer helpers (minimal, no HF dependency) ──────────────────────
+def linear_forward(x: torch.Tensor, weight: torch.Tensor,
+                   suh: torch.Tensor, svh: torch.Tensor) -> torch.Tensor:
+    """One EXL3 linear pass on the selected backend, Hadamard in then GEMM then Hadamard out, the layouts from reconstruct_and_cache."""
+    if BACKEND == "exllamav3_cuda":
+        return linear_forward_orig_exl3(x, weight, suh, svh)
+    return linear_forward_reimpl_exl3(x, weight, suh, svh)
 
 
-def load_tokenizer(model_dir: str) -> dict:
-    """Load tokenizer config for vocab size and special tokens."""
-    import json
-    with open(os.path.join(model_dir, "tokenizer_config.json")) as f:
-        tok_config = json.load(f)
-    with open(os.path.join(model_dir, "vocab.json")) as f:
-        vocab = json.load(f)
-    return {
-        "vocab": vocab,
-        "bos_token_id": tok_config.get("bos_token_id", 151643),
-        "eos_token_id": tok_config.get("eos_token_id", 151645),
-    }
+def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+    """RMS norm on the selected backend, fp32 accumulation, fp16 output."""
+    if BACKEND == "exllamav3_cuda":
+        return rms_norm_orig_exl3(x, weight, eps)
+    orig_shape = x.shape
+    x32 = x.reshape(-1, orig_shape[-1]).to(torch.float32)
+    w32 = weight.to(torch.float32)
+    variance = x32.pow(2).mean(-1, keepdim=True)
+    y = x32 * torch.rsqrt(variance + eps) * w32
+    return y.to(x.dtype).reshape(orig_shape)
 
 
-def encode_text(text: str, vocab: dict) -> list:
-    """Simple byte-level encode for our fixed test input."""
-    known = {"Hello, how are you?": [10161, 11, 1355, 527, 499, 30]}
-    if text in known:
-        return known[text]
-    tokens = []
-    for ch in text:
-        if ch in vocab:
-            tokens.append(vocab[ch])
-        else:
-            tokens.append(vocab.get(" ", 220))
-    return tokens if tokens else [151643]
-
-
-# ── Main forward pass ─────────────────────────────────────────────────
+# ── Forward pass ────────────────────────────────────────────────────────
 
 
 def run_exl3_forward(tensors: dict, weights: dict, config: dict,
-                     input_ids: torch.Tensor) -> tuple:
-    """Run full EXL3 model forward pass, capturing per-layer intermediates.
+                     input_ids: list) -> tuple:
+    """Run the full EXL3 model forward pass, capturing per-layer boundaries.
 
     Args:
-        tensors: Raw EXL3 tensors dict (for norms, embeddings, lm_head entries).
-        weights: Reconstructed linear weights dict.
-        config: Model config dict.
-        input_ids: [1, seq_len] token ids.
+    - tensors, the raw EXL3 tensor dict (norms, embeddings, lm_head entries)
+    - weights, the reconstructed linear weights dict
+    - config, the parsed model config
+    - input_ids, the flat token id list
 
     Returns:
-        (per_layer_intermediates, final_logits)
+    - (per_layer_boundaries, logits), one (layer_input, layer_output) pair
+      per layer as fp16 cpu tensors, the final logits on DEVICE
     """
-    device = torch.device(DEVICE)
     hidden_size = config["hidden_size"]
     num_heads = config["num_attention_heads"]
     num_kv_heads = config["num_key_value_heads"]
     head_dim = config["head_dim"]
-    intermediate_size = config["intermediate_size"]
     rms_eps = config.get("rms_norm_eps", 1e-6)
     rope_theta = config.get("rope_theta", 1000000.0)
     max_seq_len = config.get("max_position_embeddings", 40960)
 
-    batch, seq_len = input_ids.shape
+    ids = torch.tensor([input_ids], dtype=torch.long)
+    batch, seq_len = ids.shape
     position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
 
     # Precompute RoPE cos/sin
     cos, sin = precompute_freqs_cis_reimpl_exl3(head_dim, max_seq_len, theta=rope_theta)
-    cos = cos.to(DTYPE).to(device)
-    sin = sin.to(DTYPE).to(device)
+    cos = cos.to(DTYPE).to(DEVICE)
+    sin = sin.to(DTYPE).to(DEVICE)
 
-    # Embedding
-    embed_weight = tensors["_embeddings"]["model.embed_tokens.weight"].to(device)
-    h = torch.nn.functional.embedding(input_ids.to(device), embed_weight)
+    # Embedding lookup step
+    embed_weight = tensors["_embeddings"]["model.embed_tokens.weight"].to(DEVICE)
+    h = torch.nn.functional.embedding(ids.to(DEVICE), embed_weight)
 
     # Gather norm weights
     norms: dict = {}
     for k, v in tensors["_norms"].items():
-        norms[k] = v.to(device)
+        norms[k] = v.to(DEVICE)
 
-    # Gather lm_head entry
-    lm_head_key = "lm_head"
+    boundaries: list = [None] * int(config["num_hidden_layers"])
 
-    intermediates_list: list = [None] * LAYER_COUNT
-
-    for layer_idx in range(LAYER_COUNT):
+    for layer_idx in range(int(config["num_hidden_layers"])):
         prefix = f"model.layers.{layer_idx}"
         layer_input = h.clone()
 
         # ── RMS Norm (input_layernorm) ──
-        norm_key = f"{prefix}.input_layernorm.weight"
-        ln_weight = norms.get(norm_key)
-        if ln_weight is None:
-            ln_weight = norms.get(f"{prefix}.input_layernorm.weight")
-        h_norm = rms_norm_orig_exl3(h, ln_weight, rms_eps)
+        ln_weight = norms[f"{prefix}.input_layernorm.weight"]
+        h_norm = rms_norm(h, ln_weight, rms_eps)
 
         # ── Self-Attention ──
         q_weight = weights[f"{prefix}.self_attn.q_proj"]
@@ -184,230 +175,254 @@ def run_exl3_forward(tensors: dict, weights: dict, config: dict,
         v_weight = weights[f"{prefix}.self_attn.v_proj"]
         o_weight = weights[f"{prefix}.self_attn.o_proj"]
 
-        q_suh = tensors[f"{prefix}.self_attn.q_proj"]["suh"].to(device)
-        q_svh = tensors[f"{prefix}.self_attn.q_proj"]["svh"].to(device)
-        k_suh = tensors[f"{prefix}.self_attn.k_proj"]["suh"].to(device)
-        k_svh = tensors[f"{prefix}.self_attn.k_proj"]["svh"].to(device)
-        v_suh = tensors[f"{prefix}.self_attn.v_proj"]["suh"].to(device)
-        v_svh = tensors[f"{prefix}.self_attn.v_proj"]["svh"].to(device)
-        o_suh = tensors[f"{prefix}.self_attn.o_proj"]["suh"].to(device)
-        o_svh = tensors[f"{prefix}.self_attn.o_proj"]["svh"].to(device)
+        q_suh = tensors[f"{prefix}.self_attn.q_proj"]["suh"].to(DEVICE)
+        q_svh = tensors[f"{prefix}.self_attn.q_proj"]["svh"].to(DEVICE)
+        k_suh = tensors[f"{prefix}.self_attn.k_proj"]["suh"].to(DEVICE)
+        k_svh = tensors[f"{prefix}.self_attn.k_proj"]["svh"].to(DEVICE)
+        v_suh = tensors[f"{prefix}.self_attn.v_proj"]["suh"].to(DEVICE)
+        v_svh = tensors[f"{prefix}.self_attn.v_proj"]["svh"].to(DEVICE)
+        o_suh = tensors[f"{prefix}.self_attn.o_proj"]["suh"].to(DEVICE)
+        o_svh = tensors[f"{prefix}.self_attn.o_proj"]["svh"].to(DEVICE)
 
-        # Q/K/V
-        q = linear_forward_orig_exl3(h_norm, q_weight, q_suh, q_svh)
-        k = linear_forward_orig_exl3(h_norm, k_weight, k_suh, k_svh)
-        v = linear_forward_orig_exl3(h_norm, v_weight, v_suh, v_svh)
+        # Q/K/V projection passes
+        q = linear_forward(h_norm, q_weight, q_suh, q_svh)
+        k = linear_forward(h_norm, k_weight, k_suh, k_svh)
+        v = linear_forward(h_norm, v_weight, v_suh, v_svh)
 
         # Reshape to multi-head format
         q = q.view(batch, seq_len, num_heads, head_dim).transpose(1, 2)
         k = k.view(batch, seq_len, num_kv_heads, head_dim).transpose(1, 2)
         v = v.view(batch, seq_len, num_kv_heads, head_dim).transpose(1, 2)
 
-        # QK norm
+        # QK norm application
         q_norm_w = norms.get(f"{prefix}.self_attn.q_norm.weight")
         k_norm_w = norms.get(f"{prefix}.self_attn.k_norm.weight")
         if q_norm_w is not None:
-            q = rms_norm_orig_exl3(q, q_norm_w.to(device), rms_eps)
+            q = rms_norm(q, q_norm_w, rms_eps)
         if k_norm_w is not None:
-            k = rms_norm_orig_exl3(k, k_norm_w.to(device), rms_eps)
+            k = rms_norm(k, k_norm_w, rms_eps)
 
-        # RoPE
+        # RoPE application step
         q, k = apply_rotary_pos_emb_reimpl_exl3(q, k, cos, sin, position_ids)
         q = q.to(torch.float16)
         k = k.to(torch.float16)
 
-        # GQA
+        # GQA head expansion
         if num_kv_heads < num_heads:
             n_repeat = num_heads // num_kv_heads
             k = k.repeat_interleave(n_repeat, dim=1)
             v = v.repeat_interleave(n_repeat, dim=1)
 
-        # SDPA
+        # SDPA attention call
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True,
             scale=head_dim ** -0.5)
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(batch, seq_len, num_heads * head_dim)
 
-        # O projection
-        attn_output = linear_forward_orig_exl3(attn_output, o_weight, o_suh, o_svh)
+        # O projection pass
+        attn_output = linear_forward(attn_output, o_weight, o_suh, o_svh)
 
-        # Residual
+        # Residual add step
         h = layer_input + attn_output
-        after_attn_residual = h.clone()
+        residual = h
 
         # ── MLP ──
-        residual = h
-        post_ln_weight = norms.get(f"{prefix}.post_attention_layernorm.weight")
-        h_norm = rms_norm_orig_exl3(h, post_ln_weight, rms_eps)
+        h_norm = rms_norm(h, norms[f"{prefix}.post_attention_layernorm.weight"], rms_eps)
 
         gate_weight = weights[f"{prefix}.mlp.gate_proj"]
         up_weight = weights[f"{prefix}.mlp.up_proj"]
         down_weight = weights[f"{prefix}.mlp.down_proj"]
 
-        gate_suh = tensors[f"{prefix}.mlp.gate_proj"]["suh"].to(device)
-        gate_svh = tensors[f"{prefix}.mlp.gate_proj"]["svh"].to(device)
-        up_suh = tensors[f"{prefix}.mlp.up_proj"]["suh"].to(device)
-        up_svh = tensors[f"{prefix}.mlp.up_proj"]["svh"].to(device)
-        down_suh = tensors[f"{prefix}.mlp.down_proj"]["suh"].to(device)
-        down_svh = tensors[f"{prefix}.mlp.down_proj"]["svh"].to(device)
+        gate_suh = tensors[f"{prefix}.mlp.gate_proj"]["suh"].to(DEVICE)
+        gate_svh = tensors[f"{prefix}.mlp.gate_proj"]["svh"].to(DEVICE)
+        up_suh = tensors[f"{prefix}.mlp.up_proj"]["suh"].to(DEVICE)
+        up_svh = tensors[f"{prefix}.mlp.up_proj"]["svh"].to(DEVICE)
+        down_suh = tensors[f"{prefix}.mlp.down_proj"]["suh"].to(DEVICE)
+        down_svh = tensors[f"{prefix}.mlp.down_proj"]["svh"].to(DEVICE)
 
-        gate = linear_forward_orig_exl3(h_norm, gate_weight, gate_suh, gate_svh)
-        up = linear_forward_orig_exl3(h_norm, up_weight, up_suh, up_svh)
+        gate = linear_forward(h_norm, gate_weight, gate_suh, gate_svh)
+        up = linear_forward(h_norm, up_weight, up_suh, up_svh)
 
         gate = torch.nn.functional.silu(gate)
         mlp_output = gate * up
-        mlp_output = linear_forward_orig_exl3(mlp_output, down_weight, down_suh, down_svh)
+        mlp_output = linear_forward(mlp_output, down_weight, down_suh, down_svh)
 
         h = residual + mlp_output
-        layer_output = h.clone()
 
-        intermediates_list[layer_idx] = {
-            "layer_input": layer_input.cpu().to(DTYPE).contiguous(),
-            "layer_output": layer_output.cpu().to(DTYPE).contiguous(),
-        }
+        boundaries[layer_idx] = (
+            layer_input.cpu().to(DTYPE).contiguous(),
+            h.clone().cpu().to(DTYPE).contiguous(),
+        )
+        print(f"  Layer {layer_idx:02d}: boundary captured")
 
     # ── Final norm ──
-    final_norm_weight = norms.get("model.norm.weight")
-    h = rms_norm_orig_exl3(h, final_norm_weight, rms_eps)
+    h = rms_norm(h, norms["model.norm.weight"], rms_eps)
 
     # ── LM Head (EXL3-quantized) ──
-    if lm_head_key in weights:
-        lm_w = weights[lm_head_key]
-        lm_suh = tensors[lm_head_key]["suh"].to(device)
-        lm_svh = tensors[lm_head_key]["svh"].to(device)
-        logits = linear_forward_orig_exl3(h, lm_w, lm_suh, lm_svh)
+    if "lm_head" in weights:
+        logits = linear_forward(h, weights["lm_head"],
+                                tensors["lm_head"]["suh"].to(DEVICE),
+                                tensors["lm_head"]["svh"].to(DEVICE))
     else:
-        # Fallback: use embed_tokens.weight (tie_word_embeddings)
+        # Fallback path through the tied embed_tokens weight.
         logits = torch.nn.functional.linear(h, embed_weight)
 
-    return intermediates_list, logits
+    return boundaries, logits
 
 
 # ── Saving ──────────────────────────────────────────────────────────────
 
 
-def save_fixture(output_dir: Path, layer_idx: int, metadata: dict, tensors_dict: dict) -> Path:
-    """Save intermediate tensors as safetensor + metadata JSON plus the
-    fingerprint stats sidecar of the layer output (quantile-only entry)."""
+def save_layer_stats(output_dir: Path, layer_idx: int, frame: bytes) -> Path:
+    """Write the 004 uniform stats frame of one layer boundary, the sidecar carrying the layer boundary entries."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"layer-{layer_idx:02d}.safetensor"
-    filepath = output_dir / filename
+    path = output_dir / f"layer-{layer_idx:02d}.safetensor.stats.json.zst"
+    write_text_zst(str(path), frame)
+    return path
 
-    sorted_tensors = OrderedDict(
-        (name, tensor.detach().cpu().to(DTYPE).contiguous())
-        for name, tensor in sorted(tensors_dict.items())
-        if tensor is not None
-    )
 
-    st_save_file(sorted_tensors, str(filepath))
+def _hex_f64_to_float(s: str) -> float:
+    """One hex f64 bit pattern back to a float."""
+    return struct.unpack("<d", struct.pack("<Q", int(s, 16)))[0]
 
-    metadata_path = filepath.with_suffix(".metadata.json.zst")
-    write_text_zst(metadata_path,
-                   json.dumps(metadata, sort_keys=True, indent=2)
-                   .encode("utf-8") + b"\n")
 
-    write_stats_file(str(filepath) + ".stats.json.zst", filename,
-                     [("layer_output", sorted_tensors["layer_output"], False, False)])
+def load_recorded_decisions():
+    """Returns the already recorded decisions frame of this model dir or None."""
+    path = OUTPUT_DIR / "final_logits.decisions.json.zst"
+    if not path.exists():
+        return None
+    return json.loads(read_text_zst(str(path)))
 
-    return filepath
+
+def check_recorded_decisions(old: dict | None, records: list) -> None:
+    """Pre-write guard against the already recorded decisions frame.
+
+    - per position the recorded argmax id reproduces exactly
+    - the margin sits inside the gen_rerecord_chains_005 band, 0.5
+    - a wider divergence means the machine does not reproduce the committed recording, the write aborts instead of corrupting the chain truth
+    """
+    if old is None:
+        print("  No recorded decisions frame, the guard passes trivially.")
+        return
+    schema = old.get("schema")
+    print("  pos  argmax_old  argmax_new  match  margin_old  margin_new")
+    for pos, rec in enumerate(records):
+        old_step = old["steps"][pos]
+        if schema == "ttt-tf-005-argmax-decisions":
+            margin_old = _hex_f64_to_float(old_step["margin"])
+        else:
+            margin_old = old_step["argmax_margin"]
+        margin_new = _hex_f64_to_float(rec["margin"])
+        ok = rec["argmax_id"] == old_step["argmax_id"]
+        print(f"  {pos:>3}  {old_step['argmax_id']:>10}  {rec['argmax_id']:>10}"
+              f"  {str(ok):>5}  {margin_old:>10.6g}  {margin_new:>10.6g}")
+        if not ok:
+            raise SystemExit(
+                f"argmax divergence at position {pos}: computed "
+                f"{rec['argmax_id']} vs recorded {old_step['argmax_id']} "
+                f"({BACKEND} on {DEVICE.type} does not reproduce the "
+                "committed recording, refusing to corrupt the chain truth)")
+        if abs(margin_new - margin_old) > 0.5:
+            raise SystemExit(
+                f"margin divergence at position {pos}: computed "
+                f"{margin_new} vs recorded {margin_old}")
+
+
+def compare_layer_stats(output_dir: Path, layer_bytes: list) -> None:
+    """Fingerprint deltas of the new stats frames against the recorded frames, a drift report over the band inputs before the overwrite.
+
+    Args:
+    - layer_bytes, the new (layer_idx, frame_bytes) pairs in layer order
+    """
+    max_abs = 0.0
+    max_rel = 0.0
+    where = ""
+    for layer_idx, frame in layer_bytes:
+        obj = json.loads(frame.decode("utf-8"))
+        old_path = output_dir / f"layer-{layer_idx:02d}.safetensor.stats.json.zst"
+        if not old_path.exists():
+            continue
+        old = json.loads(read_text_zst(str(old_path)))
+        for name, tensor in obj["tensors"].items():
+            old_tensor = old["tensors"].get(name)
+            if old_tensor is None:
+                continue
+            for key in ("mean_abs", "signed_mean", "tail_probability",
+                        "max_magnitude"):
+                new_v = _hex_f64_to_float(tensor[key])
+                old_v = _hex_f64_to_float(old_tensor[key])
+                if math.isnan(new_v) or math.isnan(old_v) or old_v == 0.0:
+                    continue
+                delta = abs(new_v - old_v)
+                rel = delta / max(abs(old_v), 1e-30)
+                if delta > max_abs:
+                    max_abs, where = delta, f"layer {layer_idx:02d} {name} {key}"
+                if rel > max_rel:
+                    max_rel, where = rel, f"layer {layer_idx:02d} {name} {key}"
+    print(f"  Incumbent-frame drift: max abs {max_abs:.3g}, max rel {max_rel:.3g}"
+          f" (at {where})")
 
 
 # ── Main ────────────────────────────────────────────────────────────────
 
 
 def main():
+    """Record the per-layer stats frames plus the final logits decisions."""
     print(f"Model: {MODEL_DIR}")
     print(f"Input: {INPUT_TEXT}")
+    print(f"Input ids: {INPUT_IDS}")
     print(f"Device: {DEVICE}")
+    print(f"Backend: {BACKEND}")
     print(f"Output: {OUTPUT_DIR}")
     print()
 
-    config = load_config()
+    config = load_config(MODEL_DIR)
     print(f"Loading EXL3 tensors from {MODEL_PATH}...")
     tensors = get_exl3_tensors(MODEL_PATH)
 
-    # Check if lm_head is in the main result dict
-    lm_head_key = "lm_head"
-    if lm_head_key in tensors:
-        print(f"  Found lm_head in main EXL3 layers (has trellis: {tensors[lm_head_key].get('trellis') is not None})")
+    if "lm_head" in tensors:
+        print(f"  Found lm_head in main EXL3 layers (has trellis: "
+              f"{tensors['lm_head'].get('trellis') is not None})")
     else:
-        print(f"  Warning: lm_head not found as EXL3 layer, will use embed_tokens.weight as fallback")
+        print(f"  Warning: lm_head not found as EXL3 layer, "
+              f"will use embed_tokens.weight as fallback")
 
     print(f"\nReconstructing EXL3 weights...")
     weights = reconstruct_and_cache(tensors, config)
 
-    print(f"\nRunning forward pass for {LAYER_COUNT} layers...")
-    try:
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(str(MODEL_DIR))
-        input_ids = tokenizer(INPUT_TEXT, return_tensors="pt").input_ids
-    except (ImportError, ModuleNotFoundError, OSError) as e:
-        print(f"  [info] transformers not available ({e}), using known token IDs")
-        input_ids = torch.tensor([[10161, 11, 1355, 527, 499, 30]])
-    print(f"  Input IDs: {input_ids[0].tolist()}")
-    print(f"  Sequence length: {input_ids.shape[1]}")
+    print(f"\nRunning forward pass for {int(config['num_hidden_layers'])} layers...")
+    boundaries, logits = run_exl3_forward(tensors, weights, config, INPUT_IDS)
 
-    intermediates_list, logits = run_exl3_forward(tensors, weights, config, input_ids)
-
-    # Save per-layer fixtures
-    print(f"\nSaving layer fixtures...")
-    for i, intermediates in enumerate(intermediates_list):
-        if intermediates is None:
+    # Per-layer 004 uniform stats frames, one per layer boundary.
+    print(f"\nWriting per-layer stats frames...")
+    layer_bytes = []
+    for i, (layer_input, layer_output) in enumerate(boundaries):
+        if layer_input is None:
             print(f"  Layer {i:02d}: SKIPPED")
             continue
-        filepath = save_fixture(
-            OUTPUT_DIR, i,
-            metadata={
-                "framework": "exl3",
-                "model": "Qwen3-0.6B-EXL3-5bpw",
-                "layer": i,
-                "input_text": INPUT_TEXT,
-                "input_tokens": input_ids[0].tolist(),
-                "batch_size": 1,
-                "seq_len": input_ids.shape[1],
-                "dtype": "float16",
-                "device": "cpu",
-            },
-            tensors_dict=intermediates,
-        )
-        print(f"  Layer {i:02d}: {filepath}")
+        frame = stats_file_bytes(
+            f"layer-{i:02d}",
+            [("layer_input", layer_input), ("layer_output", layer_output)])
+        layer_bytes.append((i, frame))
+    compare_layer_stats(OUTPUT_DIR, layer_bytes)
+    for i, frame in layer_bytes:
+        print(f"  Layer {i:02d}: {save_layer_stats(OUTPUT_DIR, i, frame)}")
 
-    # Final logits decision projection (ttt-tf-002-logit-decisions-probe-h2): the
-    # raw [1, seq, vocab] tensor leaves the tree, the consumers read the
-    # argmax, the top-2 pair, the tail probability and the strided probe.
-    # The fingerprint stats entry and the metadata frame keep the
-    # distribution check and the recording stamp of the retired tensor.
-    print(f"\nSaving final logits decision projection...")
+    # Final logits 005 argmax decisions frame, the canonical chains
+    # recording code, one record per position over the top-32 support.
+    print(f"\nSaving final logits argmax decisions...")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     logits_cpu = logits.detach().cpu()
-    write_text_zst(str(OUTPUT_DIR / "final_logits.decisions.json.zst"),
-                   json.dumps({
-                       "schema": DECISION_PROBE_SCHEMA,
-                       "model": "Qwen3-0.6B-EXL3-5bpw",
-                       "input_text": INPUT_TEXT,
-                       "input_tokens": input_ids[0].tolist(),
-                       "vocab_size": int(logits_cpu.shape[-1]),
-                       "steps": decision_steps_probed(logits_cpu.to(torch.float32)),
-                   }, sort_keys=True, indent=2).encode("utf-8") + b"\n")
-    # Quantile-only entry: the margin-critical surface of the family is the
-    # decision projection, and the depth-28 chain drift moves real histogram
-    # mass, so the logits fingerprint carries order statistics only.
-    write_stats_file(str(OUTPUT_DIR / "final_logits.safetensor.stats.json.zst"),
-                     "final_logits.safetensor",
-                     [("logits", logits_cpu.to(DTYPE).contiguous(), False, False)])
-    write_text_zst(str(OUTPUT_DIR / "final_logits.safetensor.metadata.json.zst"),
-                   json.dumps({
-                       "model": "Qwen3-0.6B-EXL3-5bpw",
-                       "input_text": INPUT_TEXT,
-                       "input_tokens": input_ids[0].tolist(),
-                       "dtype": "float16",
-                       "note": "the decision projection and the stats entry carry the "
-                               "recorded surface, the raw logits tensor stays out of the tree",
-                   }, sort_keys=True, indent=2).encode("utf-8") + b"\n")
-    write_family_provenance(
-        OUTPUT_DIR, "testgen/gen_exl3_qwen3_03_full_forward_to_logits.py", MODEL_NAME)
-    print(f"  Decisions: {OUTPUT_DIR / 'final_logits.decisions.json.zst'}")
+    records = []
+    for pos in range(min(NUM_POSITIONS, logits_cpu.shape[1])):
+        row = logits_cpu[0, pos].to(torch.float32)
+        records.append(argmax_record_from_row(row))
+    check_recorded_decisions(load_recorded_decisions(), records)
+    decisions_path = OUTPUT_DIR / "final_logits.decisions.json.zst"
+    write_argmax_decisions(str(decisions_path), "final_logits.decisions",
+                           records, grid_of(logits_cpu))
+    print(f"  Decisions: {decisions_path} ({len(records)} records)")
     print(f"\nDone.")
 
 

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Generate greedy (temp=0) decoding fixtures for end-to-end inference
 verification under the ttt-tf-001-greedy-steps-h2 schema:
-per step the top-32 ids with f32 logits, the argmax margin, and the
-softmax tail probability beyond the top-32 support.
 
-the installed transformers is the source of truth,
-no vendored checkout is consulted. Payloads ship as single-entry deflate
-.json.zst archives (FIXTURE_GENERATION.md rule 10), and the generator stamps
-PROVENANCE.md at record time through fixture_stats.write_provenance.
+- per step the top-32 ids with f32 logits, the argmax margin
+- the softmax tail probability beyond the top-32 support
+
+The installed transformers is the source of truth, no vendored checkout is consulted.
+
+Payloads ship as single-entry deflate .json.zst archives
+(FIXTURE_GENERATION.md rule 10).
 """
 
 import json
@@ -22,7 +23,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fixture_stats import recording_env, write_json_zst, write_provenance  # noqa: E402
+from fixture_stats import (  # noqa, the E402 import follows the path insert
+    argmax_record_from_step, write_argmax_decisions,
+    write_json_zst)
 
 MODEL_PATH = Path(__file__).parent.parent / "hf_models" / "Qwen3-0.6B"
 OUT_DIR = Path(__file__).parent.parent / "fixtures" / "bf16-04-greedy-text-generation" / "Qwen3-0.6B"
@@ -38,8 +41,14 @@ MAX_NEW_TOKENS = 20  # short fixtures for fast verification
 
 TOP_K = 32
 
+DECISION_ULP_DATATYPE = "bf16"
+    # The ulp datatype of the chain, serialized as the 005 decisions
+    # frame's "ulp_datatype" key, the unit every decision band check consumes.
+
+
 
 def main():
+    """Records the greedy chain fixtures and the decision frames."""
     torch.set_num_threads(4)
 
     tokenizer = AutoTokenizer.from_pretrained(str(MODEL_PATH))
@@ -59,14 +68,6 @@ def main():
         "device": "cpu",
     }
 
-    provenance = recording_env(
-        model="Qwen3-0.6B",
-        generator="testgen/gen_bf16_qwen3_04_greedy_text_generation.py",
-        seed="none (greedy temp=0, no sampling)",
-        extra={"dtype": "bfloat16"},
-    )
-    write_provenance(str(OUT_DIR / "PROVENANCE.md"), list(provenance.items()))
-
     for prompt in PROMPTS:
         safe_name = prompt.replace(" ", "_").replace("'", "").replace("?", "")[:40]
         print(f"\n{'='*70}")
@@ -74,7 +75,7 @@ def main():
         print(f"{'='*70}")
 
         inputs = tokenizer(prompt, return_tensors="pt")
-        input_ids = inputs.input_ids  # [1, seq_len]
+        input_ids = inputs.input_ids  # [1, seq_len] tensor shape
 
         with torch.no_grad():
             outputs = model.generate(
@@ -83,7 +84,7 @@ def main():
                 do_sample=False,          # greedy (temp = 0)
                 temperature=1.0,
                 pad_token_id=tokenizer.eos_token_id,
-                output_scores=True,       # per-step logits
+                output_scores=True,       # per-step f32 logits captured
                 return_dict_in_generate=True,
             )
 
@@ -130,6 +131,10 @@ def main():
 
         out_path = OUT_DIR / f"{safe_name}.json.zst"
         write_json_zst(str(out_path), fixture)
+        write_argmax_decisions(
+            str(OUT_DIR / f"{safe_name}.decisions.json.zst"), safe_name,
+            [argmax_record_from_step(step)
+             for step in steps], DECISION_ULP_DATATYPE)
 
         print(f"  Prompt tokens:  {len(prompt_ids)}")
         print(f"  Generated:      {len(generated_ids)} tokens")

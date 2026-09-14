@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 """
-Generate EXL3 layer fixtures for Qwen3-0.6B using exllamav3 CUDA backend.
+Generate EXL3 layer-internal fixtures for the Nim layer-internals suite.
 
-This script:
-1. Loads the EXL3-quantized model (trellis + suh + svh per linear layer)
-2. Reconstructs weights via fixture_exl3_common
-3. Runs EXL3 linear forward (Hadamard + GEMM + Hadamard) on CUDA
-4. Runs attention and transformer block forward with long residual stream pattern
-5. Saves per-layer fixtures for Nim testing (t_exl3_qwen3_01_layer_internals.nim)
+1. load the EXL3-quantized model (trellis, suh, svh per linear layer)
+2. reconstruct the weights through ``quant_utils/exl3_utils.py``
+3. run the EXL3 linear forward (Hadamard + GEMM + Hadamard) on CUDA
+4. run the attention and transformer block forward, the long residual
+   stream pattern of the suite
+5. save per-layer fixtures for Nim testing (t_exl3_qwen3_01_layer_internals.nim)
 
-Space-saving: All weights come from the EXL3 model file. Only inputs/outputs are saved.
+All weights come from the EXL3 model file, the payloads carry
+only the suite-read driving tensors, the 004 stats frames keep
+the full recorded tensor set (the fingerprint surface of the dieted family).
 
-Determinism:
-- Each generator calls torch.manual_seed with its own seed constant
-- CUDA determinism: cudnn.deterministic=True, cudnn.benchmark=False
-- Fixture files are fully deterministic across separate process invocations
+Determinism contract:
 
-Usage:
-    cd workspace/transformers
-    CUDA_HOME=... PATH=... python tests/testgen/gen_exl3_qwen3_01_layer_internals.py
-    python tests/testgen/gen_exl3_qwen3_01_layer_internals.py --only linear
-    python tests/testgen/gen_exl3_qwen3_01_layer_internals.py --only attn
-    python tests/testgen/gen_exl3_qwen3_01_layer_internals.py --only block
+- each generator seeds through torch.manual_seed with its own constant
+- CUDA determinism flags, cudnn.deterministic=True, cudnn.benchmark=False
+- fixture files reproduce exactly across separate process invocations
+
+Run with python tests/testgen/gen_exl3_qwen3_01_layer_internals.py [--only {linear,attn,block}]
 """
 
 from __future__ import annotations
@@ -49,20 +47,23 @@ if "CUDA_HOME" not in os.environ:
 if "TORCH_CUDA_ARCH_LIST" not in os.environ:
     os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0"
 
-# ── Add testgen dir to path ──
+# ── Script dir plus the tests/ tree on the import path ──
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPT_DIR)
+sys.path.insert(0, os.path.dirname(_SCRIPT_DIR))
 
-from fixture_stats import write_stats_file, write_text_zst  # noqa: E402
-
-from fixture_exl3_common import (
+from fixture_stats import (  # path insert precedes the import (noqa E402)
+    write_stats_file, write_text_zst)
+from quant_utils.exl3_utils import (  # path insert precedes the import (noqa E402)
     get_exl3_tensors,
     get_in_features_out_features,
     derive_K,
     derive_cb,
     load_config,
+    reconstruct_orig_exl3,
+    reconstruct_reimpl_exl3,
     linear_forward_orig_exl3,
-    write_family_provenance,
+    linear_forward_reimpl_exl3,
     had_r_128_orig_exl3,
     rms_norm_orig_exl3,
     precompute_freqs_cis_reimpl_exl3,
@@ -70,15 +71,40 @@ from fixture_exl3_common import (
 )
 
 # ─── Try CUDA backend ───
+# Dispatch shape, matching the 03-chain generator:
+# - exllamav3_cuda when exllamav3_ext imports and a CUDA device exists
+# - pytorch otherwise, the pure-torch fallback
+# Ext import presence is the real availability check, the wrapper
+# functions import lazily and fail only at the first reconstruct call.
 USE_CUDA: bool = False
 try:
-    from fixture_exl3_common import reconstruct_orig_exl3
-    USE_CUDA = True
+    from exllamav3.ext import exllamav3_ext as _ext  # noqa: F401
+    USE_CUDA = torch.cuda.is_available()
     print(f"  [OK] exllamav3 CUDA extension loaded")
 except Exception as e:
     print(f"  [WARN] exllamav3 CUDA extension not available: {e}")
     print(f"  [WARN] Falling back to PyTorch reimpl")
-    from fixture_exl3_common import reconstruct_reimpl_exl3
+
+def linear_forward(x: torch.Tensor, weight: torch.Tensor,
+                   suh: torch.Tensor, svh: torch.Tensor,
+                   bias: torch.Tensor | None = None) -> torch.Tensor:
+    """One EXL3 linear pass on the selected backend, Hadamard in, GEMM, Hadamard out."""
+    if USE_CUDA:
+        return linear_forward_orig_exl3(x, weight, suh, svh, bias, device=DEVICE)
+    return linear_forward_reimpl_exl3(x, weight, suh, svh, bias, device=DEVICE)
+
+
+def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+    """RMS norm on the selected backend, fp32 accumulation, fp16 output."""
+    if USE_CUDA:
+        return rms_norm_orig_exl3(x, weight, eps)
+    orig_shape = x.shape
+    x32 = x.reshape(-1, orig_shape[-1]).to(torch.float32)
+    w32 = weight.to(torch.float32)
+    variance = x32.pow(2).mean(-1, keepdim=True)
+    y = x32 * torch.rsqrt(variance + eps) * w32
+    return y.to(x.dtype).reshape(orig_shape)
+
 
 # ─── Determinism ──────────────────────────────────────────────────────
 torch.backends.cudnn.deterministic = True
@@ -94,14 +120,14 @@ FIXTURE_DIR = os.path.join(
 MODEL_DIR = os.path.join(GRANDPARENT_DIR, "hf_models", MODEL_NAME)
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
 
-# Per-generator seeds — independent, order-agnostic.
+# Per-generator seeds, independent and order-agnostic.
 SEED_LINEAR = 42
 SEED_BLOCK = 43
 SEED_ATTN = 44
 
 # EXL3 operates in float16 on CUDA
 DTYPE = torch.float16
-DEVICE = torch.device("cuda:0") if USE_CUDA and torch.cuda.is_available() else torch.device("cpu")
+DEVICE = torch.device("cuda:0" if USE_CUDA else "cpu")
 print(f"  [info] Using device: {DEVICE}")
 
 
@@ -109,38 +135,43 @@ print(f"  [info] Using device: {DEVICE}")
 
 
 def ensure_fixture_dir() -> None:
+    """Creates FIXTURE_DIR when absent."""
     os.makedirs(FIXTURE_DIR, exist_ok=True)
 
 
-def save_fixture(layer_name: str, case_num: int, metadata: dict, tensors: dict,
-                 stats: dict | None = None) -> str:
-    """Save a fixture to safetensors format with separate metadata file.
+def save_fixture(layer_name: str, case_num: int, metadata: dict,
+                 tensors: dict, payload: dict) -> str:
+    """Save one fixture payload with a separate metadata frame.
 
-    `stats` maps the fingerprint-sidecar tensor names to their with_hist
-    flag (the fixture stats contract: one `<fixture>.stats.json.zst` frame
-    beside the payload, histograms only on the margin-critical tensors of
-    the family). None writes no sidecar.
+    Args:
+    - layer_name, case_num, naming the output file `<layer>-<model>-<case>.safetensor`
+    - metadata, the descriptor dict written beside the payload
+    - tensors, the full recorded tensor set, the uniform stats frame
+      covers every float-dtype tensor of it so the dieted-out tensors
+      keep a distribution check
+    - payload, the suite-read driving tensors saved into the safetensor file
+
+    Returns the fixture file path.
     """
     filename = f"{layer_name}-{MODEL_NAME}-{case_num:02d}.safetensor"
     filepath = os.path.join(FIXTURE_DIR, filename)
 
-    sorted_tensors = OrderedDict(
+    sorted_payload = OrderedDict(
         (name, tensor.detach().cpu().contiguous())
-        for name, tensor in sorted(tensors.items())
+        for name, tensor in sorted(payload.items())
         if tensor is not None
     )
-    st_save_file(sorted_tensors, filepath)
+    st_save_file(sorted_payload, filepath)
 
     metadata_path = filepath + ".metadata.json.zst"
     write_text_zst(metadata_path,
                    json.dumps(metadata, sort_keys=True, indent=2)
                    .encode("utf-8") + b"\n")
 
-    if stats:
-        entries = [(name, sorted_tensors[name], with_hist, False)
-                   for name, with_hist in sorted(stats.items())]
-        write_stats_file(filepath + ".stats.json.zst",
-                         os.path.basename(filepath), entries)
+    entries = [(name, tensor) for name, tensor in sorted(tensors.items())
+               if tensor.dtype.is_floating_point]
+    write_stats_file(filepath + ".stats.json.zst",
+                     os.path.basename(filepath), entries)
 
     return filepath
 
@@ -170,10 +201,10 @@ def _build_linear_layer(layer_key: str, entry: dict, config: dict):
 
     if USE_CUDA:
         w = reconstruct_orig_exl3(trellis, K, mcg, mul1, (in_f, out_f))
+        weight = w.contiguous()  # [in_features, out_features] for ext.hgemm
     else:
         w = reconstruct_reimpl_exl3(trellis, K, cb, (in_f, out_f))
-
-    weight = w.contiguous()  # [in_features, out_features] for ext.hgemm
+        weight = w.t().contiguous()  # [out_features, in_features] for F.linear
 
     return {
         "weight": weight,
@@ -219,23 +250,23 @@ def generate_linear_fixtures(tensors: dict, config: dict) -> None:
         in_f = layer_info["in_features"]
 
         test_shapes = [
-            (2, 4),   # 00: batch=2, seq=4 (flattened)
-            (1, 1),   # 01: single token
-            (1, 8),   # 02: short sequence
-            (2, 4),   # 03: zeros (same shape as 00)
+            (2, 4),   # 00 has batch=2, seq=4 (flattened)
+            (1, 1),   # 01 has a single token
+            (1, 8),   # 02 has a short sequence
+            (2, 4),   # 03 has zeros (same shape as 00)
         ]
 
         for case_num, (batch, seq) in enumerate(test_shapes):
             total = batch * seq
 
-            if case_num == 3:  # zeros
+            if case_num == 3:  # all-zero input case
                 x = torch.zeros(total, in_f, dtype=DTYPE, device=DEVICE)
             else:
                 x = torch.randn(total, in_f, dtype=DTYPE, device=DEVICE)
 
-            y = linear_forward_orig_exl3(
+            y = linear_forward(
                 x, layer_info["weight"], layer_info["suh"], layer_info["svh"],
-                layer_info["bias"], device=DEVICE
+                layer_info["bias"]
             )
 
             layer_name = f"linear-{proj_short}"
@@ -255,7 +286,11 @@ def generate_linear_fixtures(tensors: dict, config: dict) -> None:
                     "input": x.cpu(),
                     "output": y.cpu(),
                 },
-                stats={"output": False},
+                {
+                    # the suite-read driving input, the output
+                    # stays on the 004 stats frame only
+                    "input": x.cpu(),
+                },
             )
 
         print(f"  Generated {proj_short} fixtures (4 cases, backend={'cuda' if USE_CUDA else 'cpu'})")
@@ -302,33 +337,33 @@ def generate_attn_fixtures(tensors: dict, config: dict) -> None:
         hidden_states = torch.randn(batch, seq, hidden_size, dtype=DTYPE, device=DEVICE)
         position_ids = torch.arange(seq, device=DEVICE).unsqueeze(0).expand(batch, -1).contiguous()
 
-        q = linear_forward_orig_exl3(
+        q = linear_forward(
             hidden_states, linear_layers["q_proj"]["weight"],
-            linear_layers["q_proj"]["suh"], linear_layers["q_proj"]["svh"],
-            linear_layers["q_proj"]["bias"], device=DEVICE)
-        k = linear_forward_orig_exl3(
+                linear_layers["q_proj"]["suh"], linear_layers["q_proj"]["svh"],
+                linear_layers["q_proj"]["bias"])
+        k = linear_forward(
             hidden_states, linear_layers["k_proj"]["weight"],
-            linear_layers["k_proj"]["suh"], linear_layers["k_proj"]["svh"],
-            linear_layers["k_proj"]["bias"], device=DEVICE)
-        v = linear_forward_orig_exl3(
+                linear_layers["k_proj"]["suh"], linear_layers["k_proj"]["svh"],
+                linear_layers["k_proj"]["bias"])
+        v = linear_forward(
             hidden_states, linear_layers["v_proj"]["weight"],
-            linear_layers["v_proj"]["suh"], linear_layers["v_proj"]["svh"],
-            linear_layers["v_proj"]["bias"], device=DEVICE)
+                linear_layers["v_proj"]["suh"], linear_layers["v_proj"]["svh"],
+                linear_layers["v_proj"]["bias"])
 
         q = q.view(batch, seq, num_heads, head_dim).transpose(1, 2)
         k = k.view(batch, seq, num_kv_heads, head_dim).transpose(1, 2)
         v = v.view(batch, seq, num_kv_heads, head_dim).transpose(1, 2)
 
         if q_norm_weight is not None:
-            q = rms_norm_orig_exl3(q, q_norm_weight, rms_eps)
+            q = rms_norm(q, q_norm_weight, rms_eps)
         if k_norm_weight is not None:
-            k = rms_norm_orig_exl3(k, k_norm_weight, rms_eps)
+            k = rms_norm(k, k_norm_weight, rms_eps)
 
         q, k = apply_rotary_pos_emb_reimpl_exl3(q, k, cos, sin, position_ids)
         q = q.to(DTYPE)
         k = k.to(DTYPE)
 
-        # GQA: repeat K and V to match Q heads before SDPA
+        # GQA path, repeat K and V to match Q heads before SDPA
         if num_kv_heads < num_heads:
             n_repeat = num_heads // num_kv_heads
             k = k.repeat_interleave(n_repeat, dim=1)
@@ -339,10 +374,10 @@ def generate_attn_fixtures(tensors: dict, config: dict) -> None:
             scale=head_dim ** -0.5)
         attn_out = attn_out.transpose(1, 2).contiguous().view(batch, seq, num_heads * head_dim)
 
-        out = linear_forward_orig_exl3(
+        out = linear_forward(
             attn_out, linear_layers["o_proj"]["weight"],
-            linear_layers["o_proj"]["suh"], linear_layers["o_proj"]["svh"],
-            linear_layers["o_proj"]["bias"], device=DEVICE)
+                linear_layers["o_proj"]["suh"], linear_layers["o_proj"]["svh"],
+                linear_layers["o_proj"]["bias"])
 
         cos_ref = cos[position_ids[0]].unsqueeze(0).expand(batch, -1, -1).to(DTYPE).cpu()
         sin_ref = sin[position_ids[0]].unsqueeze(0).expand(batch, -1, -1).to(DTYPE).cpu()
@@ -356,7 +391,12 @@ def generate_attn_fixtures(tensors: dict, config: dict) -> None:
             "cos": cos_ref, "sin": sin_ref,
             "position_ids": position_ids.cpu(),
             "output": out.cpu(),
-        }, stats={"output": True})
+        }, {
+            # the suite-read driving tensors, the rope tables and the output
+            # stay on the 004 stats frame only
+            "hidden_states": hidden_states.cpu(),
+            "position_ids": position_ids.cpu(),
+        })
     print(f"  Generated attn fixtures (2 cases, backend={'cuda' if USE_CUDA else 'cpu'})")
 
 
@@ -415,18 +455,18 @@ def generate_block_fixtures(tensors: dict, config: dict) -> None:
         print("  Warning: norm weights not available, skipping block fixtures")
         return
 
-    # Test cases: (batch, seq, with_residual)
+    # Test cases carry (batch, seq, with_residual)
     test_cases = [
-        (1, 1, False),  # 00: single token, no residual (first block, decode)
-        (2, 8, False),  # 01: short sequence, no residual (first block, prefill)
-        (1, 1, True),   # 02: single token, with residual (middle block, decode)
-        (2, 8, True),   # 03: short sequence, with residual (middle block, prefill)
+        (1, 1, False),  # 00, single token, no residual (first block, decode)
+        (2, 8, False),  # 01, short sequence, no residual (first block, prefill)
+        (1, 1, True),   # 02, single token, with residual (middle block, decode)
+        (2, 8, True),   # 03, short sequence, with residual (middle block, prefill)
     ]
 
     for case_num, (batch, seq, with_residual) in enumerate(test_cases):
         print(f"  Generating block case {case_num}: batch={batch}, seq={seq}, with_residual={with_residual}")
 
-        # Input
+        # Input hidden states
         input_hidden_states = torch.randn(batch, seq, hidden_size, dtype=DTYPE, device=DEVICE)
         residual = torch.randn(batch, seq, hidden_size, dtype=DTYPE, device=DEVICE) if with_residual else None
         position_ids = torch.arange(seq, device=DEVICE).unsqueeze(0).expand(batch, -1).contiguous()
@@ -435,42 +475,42 @@ def generate_block_fixtures(tensors: dict, config: dict) -> None:
         if residual is None:
             residual = input_hidden_states.clone()
 
-        # Step 2: attn_norm.forward_with_residual(x, residual)
+        # Step 2 runs attn_norm.forward_with_residual(x, residual)
         attn_norm_input = input_hidden_states + residual
-        attn_norm_out = rms_norm_orig_exl3(attn_norm_input, input_ln_weight, rms_eps)
+        attn_norm_out = rms_norm(attn_norm_input, input_ln_weight, rms_eps)
         r_after_attn_norm = attn_norm_input
 
-        # Step 3: Attention forward with EXL3 linear layers
-        q = linear_forward_orig_exl3(
+        # Step 3, the attention forward with EXL3 linear layers
+        q = linear_forward(
             attn_norm_out, linear_layers["q_proj"]["weight"],
-            linear_layers["q_proj"]["suh"], linear_layers["q_proj"]["svh"],
-            linear_layers["q_proj"]["bias"], device=DEVICE)
-        k = linear_forward_orig_exl3(
+                linear_layers["q_proj"]["suh"], linear_layers["q_proj"]["svh"],
+                linear_layers["q_proj"]["bias"])
+        k = linear_forward(
             attn_norm_out, linear_layers["k_proj"]["weight"],
-            linear_layers["k_proj"]["suh"], linear_layers["k_proj"]["svh"],
-            linear_layers["k_proj"]["bias"], device=DEVICE)
-        v = linear_forward_orig_exl3(
+                linear_layers["k_proj"]["suh"], linear_layers["k_proj"]["svh"],
+                linear_layers["k_proj"]["bias"])
+        v = linear_forward(
             attn_norm_out, linear_layers["v_proj"]["weight"],
-            linear_layers["v_proj"]["suh"], linear_layers["v_proj"]["svh"],
-            linear_layers["v_proj"]["bias"], device=DEVICE)
+                linear_layers["v_proj"]["suh"], linear_layers["v_proj"]["svh"],
+                linear_layers["v_proj"]["bias"])
 
         # Reshape to multi-head format
         q = q.view(batch, seq, num_heads, head_dim).transpose(1, 2)
         k = k.view(batch, seq, num_kv_heads, head_dim).transpose(1, 2)
         v = v.view(batch, seq, num_kv_heads, head_dim).transpose(1, 2)
 
-        # QK norm
+        # QK norm application
         if q_norm_weight is not None:
-            q = rms_norm_orig_exl3(q, q_norm_weight, rms_eps)
+            q = rms_norm(q, q_norm_weight, rms_eps)
         if k_norm_weight is not None:
-            k = rms_norm_orig_exl3(k, k_norm_weight, rms_eps)
+            k = rms_norm(k, k_norm_weight, rms_eps)
 
-        # RoPE
+        # RoPE application step
         q, k = apply_rotary_pos_emb_reimpl_exl3(q, k, cos, sin, position_ids)
         q = q.to(DTYPE)
         k = k.to(DTYPE)
 
-        # GQA: repeat K and V to match Q heads before SDPA
+        # GQA path, repeat K and V to match Q heads before SDPA
         if num_kv_heads < num_heads:
             n_repeat = num_heads // num_kv_heads
             k = k.repeat_interleave(n_repeat, dim=1)
@@ -482,34 +522,34 @@ def generate_block_fixtures(tensors: dict, config: dict) -> None:
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(batch, seq, num_heads * head_dim)
 
-        # O projection
-        attn_output = linear_forward_orig_exl3(
+        # O projection pass
+        attn_output = linear_forward(
             attn_output, linear_layers["o_proj"]["weight"],
-            linear_layers["o_proj"]["suh"], linear_layers["o_proj"]["svh"],
-            linear_layers["o_proj"]["bias"], device=DEVICE)
+                linear_layers["o_proj"]["suh"], linear_layers["o_proj"]["svh"],
+                linear_layers["o_proj"]["bias"])
 
-        # Long residual: h = attn_norm_input + attn_output
+        # Long residual, h = attn_norm_input + attn_output
         h = r_after_attn_norm + attn_output
 
-        # Step 4: mlp_norm.forward_with_residual(h, r)
-        mlp_norm_out = rms_norm_orig_exl3(h, post_attn_ln_weight, rms_eps)
+        # Step 4 runs mlp_norm.forward_with_residual(h, r)
+        mlp_norm_out = rms_norm(h, post_attn_ln_weight, rms_eps)
         output_residual = h
 
-        # Step 5: MLP forward with EXL3 linear layers
-        gate = linear_forward_orig_exl3(
+        # Step 5, the MLP forward with EXL3 linear layers
+        gate = linear_forward(
             mlp_norm_out, linear_layers["gate_proj"]["weight"],
-            linear_layers["gate_proj"]["suh"], linear_layers["gate_proj"]["svh"],
-            linear_layers["gate_proj"]["bias"], device=DEVICE)
-        up = linear_forward_orig_exl3(
+                linear_layers["gate_proj"]["suh"], linear_layers["gate_proj"]["svh"],
+                linear_layers["gate_proj"]["bias"])
+        up = linear_forward(
             mlp_norm_out, linear_layers["up_proj"]["weight"],
-            linear_layers["up_proj"]["suh"], linear_layers["up_proj"]["svh"],
-            linear_layers["up_proj"]["bias"], device=DEVICE)
+                linear_layers["up_proj"]["suh"], linear_layers["up_proj"]["svh"],
+                linear_layers["up_proj"]["bias"])
         gate = torch.nn.functional.silu(gate)
         mlp_inter = gate * up
-        mlp_out = linear_forward_orig_exl3(
+        mlp_out = linear_forward(
             mlp_inter, linear_layers["down_proj"]["weight"],
-            linear_layers["down_proj"]["suh"], linear_layers["down_proj"]["svh"],
-            linear_layers["down_proj"]["bias"], device=DEVICE)
+                linear_layers["down_proj"]["suh"], linear_layers["down_proj"]["svh"],
+                linear_layers["down_proj"]["bias"])
 
         output = mlp_out
 
@@ -535,7 +575,13 @@ def generate_block_fixtures(tensors: dict, config: dict) -> None:
                 "output": output.cpu(),
                 "output_residual": output_residual.cpu(),
             },
-            stats={"output": True, "output_residual": True},
+            {
+                # the suite-read driving tensors, the two
+                # outputs stay on the 004 stats frame only
+                "input_hidden_states": input_hidden_states.cpu(),
+                "residual": residual.cpu() if residual is not None else None,
+                "position_ids": position_ids.cpu(),
+            },
         )
 
     print(f"  Generated block fixtures (4 cases, backend={'cuda' if USE_CUDA else 'cpu'})")
@@ -553,6 +599,7 @@ GENERATORS = {
 # ─── Main ────────────────────────────────────────────────────────────
 
 def main():
+    """Parse the --only switch and run the selected fixture generator."""
     only = None
     if len(sys.argv) > 1 and sys.argv[1] == "--only":
         if len(sys.argv) < 3:
@@ -583,10 +630,6 @@ def main():
         generate_block_fixtures(tensors, config)
     else:
         GENERATORS[only](tensors, config)
-
-    write_family_provenance(
-        os.path.dirname(FIXTURE_DIR),
-        "testgen/gen_exl3_qwen3_01_layer_internals.py", MODEL_NAME)
 
     print("=" * 60)
     print(f"Fixture generation complete!")

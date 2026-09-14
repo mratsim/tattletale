@@ -2,34 +2,28 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Test harness for the transformer suites: tolerance budgets, fixture
-## reading, analytic invariants, provenance stamps, device selection,
-## and selftest.
+## Fixture-frame reader for the transformer suites.
 ##
-## SPEC.md states the check semantics, PLAYBOOK.md the new-suite checklist.
+## Consumers import the check layer from harness/harness.nim, the device
+## selection from harness/select_device.nim, and take only
+## `zstdReadFixture` from this module.
 
 import
   std/strutils,
-  harness/tolerance,
-  workspace/zstd/zstd_highlevel,
-  harness/invariants,
-  harness/provenance,
-  harness/device,
-  harness/selftest
-
-export zstd_highlevel
-export harness.tolerance, harness.invariants,
-  harness.provenance, harness.device, harness.selftest
+  workspace/zstd/zstd_highlevel
 
 proc zstdReadFixture*(fixturePath: string): string =
-  ## JSON text of one fixture json sidecar, the single payload of
-  ## the `.json.zst` frame. The argument resolves in two forms:
-  ## the frame path itself, or the sidecar stem without any
-  ## container suffix. A missing, empty or corrupt frame raises
-  ## an error, never a silent empty result.
+  ## JSON text of one fixture json sidecar, the single payload
+  ## inside the `.json.zst` frame.
+  ##
+  ## Args:
+  ## the frame path itself, or the sidecar stem without any container suffix
+  ## - a missing, empty or corrupt frame raises,
+  ## never a silent empty result
   let framePath =
     if fixturePath.endsWith(".json.zst"): fixturePath
     else: fixturePath & ".json.zst"

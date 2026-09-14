@@ -2,37 +2,19 @@
 """
 Generate EXL3 codec fixtures for an EXL3-quantized model.
 
-This script:
-1. Loads an EXL3-quantized model from safetensors
-2. Reconstructs weights (via PyTorch reimpl and/or production EXL3 CUDA)
-3. Runs linear-layer forward passes and saves per-layer fixtures
-4. Optionally verifies the PyTorch decoder against the production CUDA kernel
-   or against the original FP16 weights
+Pipeline:
 
-All core logic is in ``fixture_exl3_common.py``. This file only handles
-orchestration, CLI, and data serialisation.
+1. load an EXL3-quantized model from safetensors
+2. reconstruct weights (PyTorch reimpl, production EXL3 CUDA kernel)
+3. run linear-layer forward passes, saving per-layer fixtures
+4. optionally verify the PyTorch decoder against the production CUDA kernel or the original FP16 weights
 
-Usage:
-  # Default: use our PyTorch reimpl decoder, save fixtures
-  python testgen/gen_exl3_qwen3_00_codec.py
+All core logic lives in ``quant_utils/exl3_utils.py``, this file handles orchestration,
+the CLI, and data serialisation.
 
-  # Use production EXL3 reconstruct (requires compiled exllamav3_ext)
-  python testgen/gen_exl3_qwen3_00_codec.py --backend exllamav3
-
-  # Run both and compare (verification mode)
-  python testgen/gen_exl3_qwen3_00_codec.py --backend both --check
-
-  # Only test a specific layer
-  python testgen/gen_exl3_qwen3_00_codec.py --layer 8 --proj q_proj
-
-  # Dry-run: just decode one tile, no fixture files
-  python testgen/gen_exl3_qwen3_00_codec.py --dry-run
-
-  # Verify decoder consistency against production kernel
-  python testgen/gen_exl3_qwen3_00_codec.py --verify
-
-  # Verify decoder against original FP16 weights
-  python testgen/gen_exl3_qwen3_00_codec.py --verify-fp16
+run as python testgen/gen_exl3_qwen3_00_codec.py
+       [--backend {pytorch,exllamav3,both}] [--check] [--dry-run]
+       [--layer N] [--proj NAME] [--all-layers] [--verify] [--verify-fp16]
 """
 
 from __future__ import annotations
@@ -47,39 +29,27 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file as st_save_file
 
-# ── Add testgen dir to path ──
+# ── Script dir plus the tests/ tree on the import path ──
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPT_DIR)
+sys.path.insert(0, os.path.dirname(_SCRIPT_DIR))
 
-from fixture_stats import write_text_zst  # noqa: E402
-
-from fixture_exl3_common import (
-    # utilities
+from fixture_stats import write_text_zst  # noqa, the path insert precedes the import
+from quant_utils.exl3_utils import (  # noqa because the path insert precedes the import
     load_config,
     get_exl3_tensors,
     parse_layer_name,
     get_in_features_out_features,
     derive_cb,
     derive_K,
-    # reimpl (PyTorch)
     reconstruct_reimpl_exl3,
-    had_r_128_reimpl_exl3,
     linear_forward_reimpl_exl3,
-    # orig (CUDA)
     dequant_reimpl_exl3,
+    reconstruct_orig_exl3,
 )
 
-# ─── try importing the CUDA backend ───
-USE_CUDA: bool = False
-try:
-    from fixture_exl3_common import reconstruct_orig_exl3, write_family_provenance
-    USE_CUDA = True
-    print(f"  [OK] exllamav3 CUDA extension available")
-except ImportError:
-    print(f"  [info] exllamav3_ext not available — CUDA backend disabled")
-
 # ─── Paths ─────────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # tests/
+BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # the tests/ directory
 FIXTURE_DIR = os.path.join(BASE_DIR, "fixtures", "exl3-00-codec")
 MODEL_NAME = "Qwen3-0.6B-EXL3-5bpw"
 MODEL_DIR = os.path.join(BASE_DIR, "hf_models", MODEL_NAME)
@@ -88,7 +58,7 @@ FP16_MODEL_DIR = os.path.join(BASE_DIR, "hf_models", "Qwen3-0.6B")
 FP16_MODEL_PATH = os.path.join(FP16_MODEL_DIR, "model.safetensors")
 LAYER_COUNT = 28
 
-# Exponential layer subset: early, middle, late coverage at ~25% storage cost
+# exponential layer subset, early, middle, and late coverage at ~25% storage cost
 EXPONENTIAL_LAYERS = sorted({0, 1, 2, 4, 8, 16, LAYER_COUNT - 1})
 
 # ─── Determinism ───────────────────────────────────────────────────
@@ -101,18 +71,8 @@ SEED_FORWARD = 43
 # ─── Helpers ───────────────────────────────────────────────────────
 
 
-def _try_import_exllamav3():
-    """Try to import exllamav3_ext. Returns None if unavailable."""
-    try:
-        from exllamav3.ext import exllamav3_ext as ext
-        return ext
-    except (ImportError, ModuleNotFoundError) as e:
-        print(f"  [info] exllamav3_ext not available: {e}")
-        return None
-
-
 # ────────────────────────────────────────────────────────────────────
-#  Fixture generation
+#  Fixture generation helpers
 # ────────────────────────────────────────────────────────────────────
 
 
@@ -123,15 +83,15 @@ def generate_forward_fixture(layer_key: str, layer_entry: dict,
     """Generate forward-pass fixtures for one EXL3 linear layer.
 
     Args:
-        layer_key: e.g. "model.layers.8.self_attn.q_proj"
-        layer_entry: dict with "trellis", "suh", "svh", etc.
-        config: Model config dict.
-        device: torch device.
-        backend: "pytorch", "exllamav3", or "both".
-        check: If True and backend="both", assert both match.
+    - layer_key is a safetensors key, for example `model.layers.8.self_attn.q_proj`
+    - layer_entry is a dict with `trellis`, `suh`, `svh`, and friends
+    - config is the parsed model config
+    - device is the torch device
+    - backend is `pytorch`, `exllamav3`, or `both`, the decoder selection
+    - check compares the two decoders when True with backend `both`
 
     Returns:
-        Dict with fixture tensors.
+    - the fixture tensor dict
     """
     trellis = layer_entry["trellis"]
     suh = layer_entry["suh"]
@@ -216,12 +176,16 @@ def generate_all_fixtures(device: torch.device,
                           layer_filter: int | None = None,
                           proj_filter: str | None = None,
                           all_layers: bool = False):
-    """Generate fixtures for EXL3 layers.
+    """Generate fixtures for the EXL3 layers.
 
-    By default generates only the exponential subset ({0,1,2,4,8,16,last}).
-    Pass all_layers=True or use --layer N for full/single-layer coverage.
+    The default covers the exponential subset (0, 1, 2, 4, 8, 16, last layer),
+    early through late coverage at a fraction of the storage cost
+
+    - `all_layers=True` or `--layer N` widens to full or single-layer coverage
     """
     config = load_config()
+    layer_count = int(config["num_hidden_layers"])
+    exponential_layers = sorted({0, 1, 2, 4, 8, 16, layer_count - 1})
     tensors = get_exl3_tensors(MODEL_PATH)
 
     # Extract layer entries
@@ -235,7 +199,7 @@ def generate_all_fixtures(device: torch.device,
         layer_idx, component, proj_name = parsed
         if layer_filter is not None and layer_idx != layer_filter:
             continue
-        if not all_layers and layer_filter is None and layer_idx not in EXPONENTIAL_LAYERS:
+        if not all_layers and layer_filter is None and layer_idx not in exponential_layers:
             continue
         if proj_filter is not None and proj_filter not in proj_name:
             continue
@@ -273,7 +237,7 @@ def generate_all_fixtures(device: torch.device,
             print(f"  [dry-run] Would save fixtures for {layer_key}")
             continue
 
-        # Save fixtures
+        # Save the fixture payload
         layer_name = layer_key.replace(".", "_")
         layer_fixture_dir = os.path.join(FIXTURE_DIR, layer_name)
         os.makedirs(layer_fixture_dir, exist_ok=True)
@@ -308,15 +272,19 @@ def generate_all_fixtures(device: torch.device,
 
 
 # ────────────────────────────────────────────────────────────────────
-#  Verification helpers
+#  Decoder verification helpers
 # ────────────────────────────────────────────────────────────────────
 
 
 def verify_decoder_on_tile(device: torch.device, verbose: bool = True):
     """Verify the PyTorch decoder by running known test vectors.
 
-    Reads one tile from the model, decodes with both implementations,
-    and checks for consistency.
+    Reads one tile from the model, decodes with both implementations:
+
+    - PyTorch decoder vs the production kernel when exllamav3_ext imports
+    - decoder statistics alone otherwise
+
+    Returns nothing, the comparison prints to stdout.
     """
     print("=" * 60)
     print("Verification: tile-level decode")
@@ -342,10 +310,10 @@ def verify_decoder_on_tile(device: torch.device, verbose: bool = True):
     print(f"K={K}, cb={cb}, mcg={mcg}, mul1={mul1}")
     print(f"trellis shape: {list(trellis.shape)}")
 
-    # PyTorch decoder
+    # PyTorch decoder output
     w_pytorch = reconstruct_reimpl_exl3(trellis, K, cb, (in_f, out_f))
 
-    # Production decoder
+    # Production decoder output
     w_prod = None
     try:
         w_prod = reconstruct_orig_exl3(trellis, K, mcg, mul1, (in_f, out_f))
@@ -409,7 +377,7 @@ def verify_against_fp16(device: torch.device, num_layers: int = 5):
         in_f, out_f = get_in_features_out_features(key, trellis, {})
         w_fp16 = fp16_weights[fp16_key].to(device)
 
-        # Align shapes
+        # Align the shapes before comparison
         if w_fp16.shape[0] == out_f and w_fp16.shape[1] == in_f:
             w_fp16 = w_fp16.t()
 
@@ -419,7 +387,7 @@ def verify_against_fp16(device: torch.device, num_layers: int = 5):
         # Convert back to original FP16 domain
         w = dequant_reimpl_exl3(w_exl3, suh, svh)
 
-        # Trim padding
+        # Trim the padding before comparison
         min_in = min(w.shape[0], w_fp16.shape[0])
         min_out = min(w.shape[1], w_fp16.shape[1])
         we = w[:min_in, :min_out]
@@ -447,11 +415,12 @@ def verify_against_fp16(device: torch.device, num_layers: int = 5):
 
 
 # ────────────────────────────────────────────────────────────────────
-#  MAIN
+#  Command-line entry point
 # ────────────────────────────────────────────────────────────────────
 
 
 def main():
+    """Parse the CLI, dispatching to the verification or recording path."""
     parser = argparse.ArgumentParser(
         description="Generate EXL3 codec fixtures")
     parser.add_argument("--all-layers", action="store_true",
@@ -494,8 +463,6 @@ def main():
         proj_filter=args.proj,
         all_layers=args.all_layers,
     )
-    write_family_provenance(
-        FIXTURE_DIR, "testgen/gen_exl3_qwen3_00_codec.py", MODEL_NAME)
 
 
 if __name__ == "__main__":
