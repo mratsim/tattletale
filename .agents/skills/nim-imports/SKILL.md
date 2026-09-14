@@ -65,13 +65,13 @@ let doubled = nums.mapIt(it * 2)  # Fails without sequtils import
 
 ### Wrong import for workspace libraries
 
-**WRONG:**
+**Wrong form (rejects):**
 ```nim
 import toktoktok               # Fails - not in stdlib or pkg
 import workspace/toktoktok/toktoktok.nim  # Wrong path
 ```
 
-**CORRECT:**
+**Correct form (compiles):**
 ```nim
 import workspace/toktoktok    # Imports the re-export module
 ```
@@ -151,11 +151,11 @@ No manual configuration needed - just `import workspace/pcre2`.
 
 ## Config.nims Setup
 
-The project root has a `config.nims` that sets:
+Project root `config.nims` sets:
 - `--path:"."` - Allows `import workspace/foo` syntax
 - PCRE2 compile flags
 - Test task commands
 
-Tests are discovered by:
+Test discovery rules:
 - Files in `workspace/*/tests/` directory
-- Filenames starting with `test_` or `t_`
+- Filenames with the `test_` prefix or the `t_` prefix

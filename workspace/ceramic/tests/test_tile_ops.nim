@@ -181,7 +181,7 @@ proc checkVecOps() =
   v.add(v, 1.0'f32)
   doAssert v.data[0] == 3.0'f32,
     "vec scalar op slot mismatch"
-  # the Apple-width (vpt = 2) col-vec rides the same generic ops
+  # the Apple-width (vpt = 2) col-vec runs the same generic ops
   var v2: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
   v2.data[0] = 1.0'f32
   v2.data[1] = 2.0'f32

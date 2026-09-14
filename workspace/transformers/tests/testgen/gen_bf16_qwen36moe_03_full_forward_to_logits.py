@@ -1,76 +1,57 @@
 #!/usr/bin/env python3
-"""Generate the Qwen3.6-35B-A3B full-model full-forward-to-logits fixtures: the complete
-embed -> 40 hybrid MoE decoder layers -> norm -> lm_head chain of the real
-checkpoint, recorded from the installed transformers modeling on CPU torch
-bf16.
+"""
+Qwen3.6-35B-A3B bf16-03 full-forward-to-logits fixtures, the complete
+embed -> 40 hybrid MoE decoder layers -> norm -> lm_head chain, recorded from the installed transformers modeling on CPU torch bf16.
 
-What is generated (under tests/fixtures/bf16-03-full-forward-to-logits/Qwen3.6-35B-A3B/):
+Generated under tests/fixtures/bf16-03-full-forward-to-logits/Qwen3.6-35B-A3B/:
 
-  layer-{i:02d}.safetensor (+ .metadata.json.zst), one per decoder layer i
-    layer_input_seq   the sequential-run layer input at the boundary
-                      (embedding output for layer 0, previous sequential
-                      layer output for layers 1+), the chain anchor
-    topk_indices      the sequential-run router's torch.topk expert ids
-                      [seq_len, top_k] int64
-    routing_weights   the sequential-run router's renormalized routing
-                      weights [seq_len, top_k], cast to the hidden dtype
-  layer-39.safetensor.descriptors.json
-    layer_output_seq  descriptor entry of the final block output, the
-                      bytes the projection below derives from
-  final_logits.decisions.json.zst
-    schema ttt-tf-002-logit-decisions-probe-h2: per position the argmax id,
-    the top-2 competing pair with f32 logits, the argmax margin, the
-    softmax tail probability beyond the pair, and a 512-word bit-exact
-    strided probe of the deciding row
+  - layer-{i:02d}.safetensor.metadata.json.zst, one per decoder layer i
+  - no layer payload safetensor leaves the tree, the 004 stats frames carry the recorded surface
+  - routing_weights records hold the sequential-run router renormalized routing weights ([seq_len, top_k], cast to the hidden dtype)
+  - the boundary input is the embedding output at layer 0, then the prior sequential layer output for layers 1+
+  - final_logits.decisions.json.zst carries the per-position decision records, the schema id lives in the `schema` key
+  - each decision record holds the argmax id, the top-32 set ids with f32 logits, the margin, the softmax tail probability
 
-The chunked run is the installed forward. The sequential run replaces the
-GDN chunked rule with the installed recurrent rule at the modeling-module
-level, so the whole chain runs the exact op sequence the Nim
-implementation mirrors. The expert dispatch is locked to `eager`
-(the default `from_pretrained` backend resolution picks `grouped_mm`, a
-different accumulation formulation). Under the payload-tiering rules of
-FIXTURE_GENERATION.md the chunked copies (layer_input, layer_output, final
-logits tensors) left the payload: the Nim full-forward-to-logits test asserts
-0.00 against layer_input_seq, the top-k router records and the projection, and
-the recorded seq-vs-chunked bands stay as metadata documentation. The 0.8B
-full-forward fixtures of the same family keep the earlier shape.
+Run shape:
+
+  - the chunked run is the installed forward
+  - the sequential run replaces the GDN chunked rule with the installed recurrent rule at the modeling-module level
+  - so the whole chain runs the exact op sequence the Nim implementation mirrors
+  - the expert dispatch is locked to `eager`
+  - the default `from_pretrained` backend resolution picks `grouped_mm`, a different accumulation formulation
+  - the statistics-only emission keeps the metadata frames and the decisions frame
+  - every layer payload tensor is left under the FIXTURE_GENERATION.md tiering rules
+  - the Nim full-forward-to-logits test asserts the routing_weights records and the projection decisions
+  - the recorded seq-vs-chunked bands stay as metadata documentation
+  - the 0.8B full-forward fixtures of the same family keep the earlier shape
+  - run the command below twice, both run checksums must match before the fixtures are installed
 
 Tolerances asserted here:
-  - the sequential run is bit-identical on a second execution
-  - every GDN layer recomputes bitwise from its recorded sequential
-    input through the installed norms, the recurrent GDN core and the
-    routed block
-  - exact fp32 ties at the router top-k boundary are structural in this
-    checkpoint (`torch.topk` vs sort disagree on the tie order), so
-    `topk_margin_min` and the boundary-tie token count are recorded
-    metadata, never asserted positive, and the sequential run's
-    `torch.topk` indices and routing weights are recorded bitwise
+
+  - the sequential run reproduces its records on a second execution
+  - every GDN layer recomputes value-identically from its recorded sequential input
+  - the recompute path is the installed norms, the recurrent core and routed block
+  - exact fp32 ties at the router top-k boundary are structural in this checkpoint, the tie order of `torch.topk` and sort disagrees
+  - `topk_margin_min` and the boundary-tie token count are recorded metadata, never asserted positive
+  - the sequential run records its `torch.topk` indices and routing weights as the recorded values
   - the seq-vs-chunked bands stay inside the bounds below
 
-Weights flow through model.safetensors.index.json. The out-of-scope
-prefixes `mtp.*` (19 keys) and `model.visual.*` (333 keys) are never
-read. `lm_head.weight` (file 26) loads as an independent untied
-parameter; the assert suite below proves embed_tokens and lm_head
-share no storage and no values.
+Weights flow through model.safetensors.index.json:
 
-Run from the worktree root under the declared project interpreter, twice;
-the checksums of both runs must be bit-identical before the fixtures are
-installed:
-  cd <worktree root> && .venv/bin/python \
-    workspace/transformers/tests/testgen/gen_bf16_qwen36moe_03_full_forward_to_logits.py
+  - the out-of-scope prefixes `mtp.*` (19 keys) and `model.visual.*` (333 keys) are never read
+  - `lm_head.weight` (file 26) loads as an independent untied parameter
+  - the assert suite below proves embed_tokens and lm_head share no storage and no values
 
+  cd <worktree root> && .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen36moe_03_full_forward_to_logits.py
 
-RAM: one model-resident process globally. The full checkpoint is about
-70.2 GB of text-stack weights in bf16 (plus the random-initialized draft
-and vision tower under 2 GB), so the script verifies a
-free+inactive+speculative pool above 32 GiB and that no other
-python/torch process is running before it loads anything. Weights
-materialize through the `from_pretrained` streaming loader, so
-the text stack never exists twice. The floor formula (free +
-inactive + speculative) is the op RAM rule; the constant is sized to the
-measured anonymous peak of this process (a few GiB) because the
-loader assigns mmap-backed storages: the 70 GB weight stack rides
-file-backed pages the OS evicts under pressure.
+One model-resident process globally:
+
+  - the full checkpoint carries about 70.2 GB of text-stack weights in bf16, plus the random-initialized draft and vision tower under 2 GB
+  - the script verifies a free+inactive+speculative pool above 32 GiB and that no other python/torch process runs before it loads anything
+  - weights materialize through the `from_pretrained` streaming loader, so the text stack never exists twice
+  - the floor formula (free + inactive + speculative) is the op RAM rule
+  - the constant is sized to the measured anonymous peak of this process
+  - the loader assigns mmap-backed storages, the 70 GB weight stack uses file-backed pages the OS evicts under pressure
 """
 
 import json
@@ -83,45 +64,55 @@ ZSTD_WRITE_OPTIONS = {
 }
 
 
+
 def write_json_zst(path, obj, ensure_ascii=True):
-    """Write obj as a single zstd frame, level 19 with content size and
-    checksum recorded in the frame header. JSON fixtures stay reviewable
-    via the generator and the frame stays out of text diffs."""
+    """Writes obj as one zstd frame.
+
+    - level 19, content size and checksum recorded in the frame header
+    - JSON fixtures stay reviewable via the generator, the frame stays
+      out of text diffs
+    """
     payload = json.dumps(
         obj, sort_keys=True, indent=2, ensure_ascii=ensure_ascii
     ).encode("utf-8") + b"\n"
     with open(path, "wb") as f:
         f.write(compression.zstd.compress(payload, options=ZSTD_WRITE_OPTIONS))
 
-from collections import OrderedDict
 import os
 import subprocess
 import sys
 
 
-import torch  # noqa: E402
+import torch  # noqa, the E402 import follows the path insert
 from safetensors import safe_open
-from safetensors import torch as st
 
 # The script directory first keeps the sibling generator imports working.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fixture_stats import decision_steps_probed  # noqa: E402
+from fixture_stats import (  # noqa, the E402 import follows the path insert
+    argmax_record_from_row,
+    grid_of,
+    write_argmax_decisions,
+    write_json_zst,
+    assert_path_equivalent,
+)
 
-from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import (  # noqa: E402
+from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import (  # noqa, the E402 import follows the path insert
     Qwen3_5MoeConfig,
 )
-from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: E402
+from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa, the E402 import follows the path insert
     Qwen3_5MoeForConditionalGeneration,
 )
 # The GDN replay and router-margin helpers are shared with the layer
-# generator, loaded from its path because the naming-law filename carries
-# characters import syntax rejects.
+# generator and load from its file path, the naming-rule filename
+# carries characters import syntax rejects.
 def _load_sibling(filename: str):
-    """Execute and return a testgen generator module by filename. The naming
-    law allows dots and hyphens that import syntax rejects, so the module is
-    loaded from its file path under a derived name. A second call returns
-    the cached module, never a second execution of its top level.
+    """Loads and returns a testgen generator module by filename.
+
+    - the naming rule allows dots and hyphens that import syntax rejects,
+      so the module loads from its file path under a derived name
+    - a second call returns the cached module, never a second execution
+      of its top level
     """
     name = filename[:-3] if filename.endswith(".py") else filename
     cached = sys.modules.get(name)
@@ -143,16 +134,18 @@ _layer_fixtures = _load_sibling("gen_bf16_qwen36moe_01_layer_internals.py")
 gdn_forward_replay = _layer_fixtures.gdn_forward_replay
 router_margins = _layer_fixtures.router_margins
 
-import transformers  # noqa: E402
+import transformers  # noqa, the E402 import follows the path insert
 TRANSFORMERS_VERSION = transformers.__version__
 
-# Determinism: single intra-op thread, deterministic kernels.
+# Determinism, one intra-op thread and deterministic kernels.
 torch.set_num_threads(1)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# Config.
-DECISION_PROBE_SCHEMA = "ttt-tf-002-logit-decisions-probe-h2"
+# Identity and fixture-location constants.
+
+NUM_POSITIONS = 6
+    # Decision records written, one per input position.
 MODEL_NAME = "Qwen3.6-35B-A3B"
 INPUT_TEXT = "Hello, how are you?"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -169,45 +162,48 @@ CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 
 NUM_THREADS = 1
 
-# Counts of the real checkpoint (model.safetensors.index.json): the text
-# stack, the untied head, and the two out-of-scope prefixes a text-only
-# load never requests.
+# Checkpoint key counts, verbatim from model.safetensors.index.json:
+#
+# - LANGUAGE_MODEL_KEYS the text stack
+# - LM_HEAD_KEYS the untied lm_head
+# - VISUAL_KEYS and MTP_KEYS, the two out-of-scope prefixes a text-only
+#   load never requests
 LANGUAGE_MODEL_KEYS = 692
 LM_HEAD_KEYS = 1
 VISUAL_KEYS = 333
 MTP_KEYS = 19
 
-# The GDN chunked-vs-recurrent band bounds. The chunked and recurrent GDN
-# cores agree to ~1e-8 f32 on identical inputs, but through the bf16
-# layer boundaries the sub-ULP core differences flip bf16 rounding
-# boundaries and accumulate. The accumulated band grows with the layer
-# count and the hidden width, since the absolute bf16 ulp tracks
-# residual stream magnitude. The 24-layer, 1024-wide Qwen3.5-0.8B chain
-# measured layer-level bands up to ~3.1e-2 and final logits up to ~0.17.
-# This 40-layer, 2048-wide chain runs about an order of magnitude higher:
-# first generation measured layer-level bands past 0.09 at layer 23,
-# still growing. The bounds below are therefore tripwires, several times
-# the expected scale in size, catching gross generator or checkpoint
-# drift, not the band itself: the true bands are measured per run,
-# recorded per layer in the metadata, with the Nim suite asserting
-# against the recorded bands.
-# Tripwire scale, measured first hand on the eager-experts evaluation, run
-# with these guards neutralized (stubbed saves): seq-vs-chunked input
-# band peaked 0.500000, output band peaked 0.500000, final logits band
-# 0.8828125, both branches still riding the bf16 grid. The tripwires sit
-# four to five times above the measured scale, with the recorded
-# per-layer bands staying the Nim-side contract.
+# GDN chunked-vs-recurrent band bounds:
+#
+# - on identical inputs the chunked and recurrent GDN cores agree within
+#   ~1e-8 f32, but through the bf16 layer boundaries the sub-ULP core
+#   differences flip bf16 rounding boundaries, then accumulate through the chain
+# - the accumulated band grows with the layer count and the hidden width, since the absolute bf16 ulp tracks residual stream magnitude
+# - the 24-layer, 1024-wide Qwen3.5-0.8B chain measured layer-level bands up to ~3.1e-2 and final logits up to ~0.17
+# - this 40-layer, 2048-wide chain runs about an order of magnitude higher
+# - first generation measured layer-level bands past 0.09 at layer 23, still growing
+# - the bounds below are guards sized several times above the expected scale,
+#   catching gross generator or checkpoint drift rather than the band itself,
+#   the true bands stay measured per run, recorded per layer in the metadata,
+#   with the Nim suite asserting against the recorded bands
+# - guard scale, measured first hand on the eager-experts evaluation
+#   run with the guards neutralized (stubbed saves), the seq-vs-chunked
+#   input band peaked 0.500000, the output band peaked 0.500000,
+#   the final logits band 0.8828125, both branches still on the bf16 grid
+# - the guards sit four to five times above the measured scale
+#   and the recorded per-layer bands stay the Nim-side contract
 INPUT_BAND_GUARD = 2.00
 OUTPUT_BAND_GUARD = 2.00
 LOGITS_BAND_GUARD = 4.00
 
-# Pool floor. The floor formula stays the op RAM-rulebook: free +
-# inactive + speculative, with the constant sized to the measured
-# single-process footprint of this generator: `from_pretrained` assigns
-# mmap-backed storages, so the 70 GB weight stack rides file-backed
-# pages and the anonymous peak stays at a few GiB, measured at 2.2 GiB
-# anon after load, before any forward. 32 GiB keeps ample headroom
-# beyond that peak.
+# Pool floor:
+#
+# - the floor formula stays the op RAM rule, free + inactive + speculative
+# - the constant is sized to the measured single-process footprint,
+#   this generator runs `from_pretrained` with mmap-backed storages, so
+#   the 70 GB weight stack sits on file-backed pages and the anonymous
+#   peak stays at a few GiB, measured at 2.2 GiB anon after load, before any forward
+# - 32 GiB keeps ample headroom beyond that measured peak
 MIN_POOL_BYTES = 32 * 1024 ** 3
 
 
@@ -254,10 +250,12 @@ def ancestor_pids() -> set:
 
 
 def check_ram() -> None:
-    """Refuse to load weights when the memory pool is low or another
-    python/torch process holds RAM (this process chain is excluded from
-    the pgrep match, whose command line spells the torch dependency of
-    this run)."""
+    """Refuses to load weights when the memory pool is low or another
+    python/torch process holds RAM.
+
+    - the pgrep match excludes this process chain
+    - the match command line spells the torch dependency of this run
+    """
     pool = pool_bytes()
     if pool < MIN_POOL_BYTES:
         raise SystemExit(
@@ -284,43 +282,21 @@ def load_wrapper_config() -> Qwen3_5MoeConfig:
     return cfg
 
 
-def index_counts(weight_map: dict) -> None:
-    """Check the checkpoint index against the verbatim key counts of the
-    real checkpoint: the text stack, the untied head, and the two
-    out-of-scope prefixes."""
-    total = len(weight_map)
-    expected = LANGUAGE_MODEL_KEYS + LM_HEAD_KEYS + VISUAL_KEYS + MTP_KEYS
-    assert total == expected, (
-        f"[gen_bf16_qwen36moe_03_full_forward_to_logits] checkpoint index holds {total} keys, "
-        f"expected {expected}")
-    visual = sum(1 for key in weight_map if key.startswith("model.visual."))
-    mtp = sum(1 for key in weight_map if key.startswith("mtp."))
-    lm_head = sum(1 for key in weight_map if key == "lm_head.weight")
-    assert visual == VISUAL_KEYS, f"visual tensors: {visual}, expected {VISUAL_KEYS}"
-    assert mtp == MTP_KEYS, f"mtp tensors: {mtp}, expected {MTP_KEYS}"
-    assert lm_head == LM_HEAD_KEYS, "exactly one lm_head.weight entry expected"
-
-
 def build_model(cfg, weight_map: dict) -> Qwen3_5MoeForConditionalGeneration:
-    """Wrapper model from the real checkpoint of 26 safetensors files, bf16,
-    eval, CPU,
-    through the installed `from_pretrained` (per-file streaming, mmap-backed:
-    weights materialize per file, never the whole 70 GB twice).
+    """Wrapper model from the real checkpoint of 26 safetensors files, bf16 eval on CPU, through the installed `from_pretrained` loader.
 
-    The reference wrapper construction keeps its own lm_head at the outer
-    dtype; from_pretrained casts every checkpoint tensor (this checkpoint
-    ships all 1045 as bf16), so the untied head ends bf16 like the text
-    stack. The expert dispatch is locked to `eager`: the default
-    `from_pretrained` backend resolution picks `grouped_mm`, whose reshape+sum
-    accumulation is a different formulation from the eager index_add_
-    loop the Nim implementation mirrors, so the fixture truth is the
-    eager loop. The rotary inv_freq buffers are restored in f32 after the
-    blanket cast: the reference rotary forward computes cos/sin in f32 and
-    bf16 storage would round the frequency values.
+    - the loader streams per file with mmap-backed storages, weights
+      materialize per file, never the whole 70 GB twice
+    - the reference wrapper construction keeps its own lm_head at the outer
+      dtype and `from_pretrained` casts every checkpoint tensor
+      (all 1045 ship as bf16), so the untied head ends bf16 like the text stack
+    - the expert dispatch is locked to `eager`
+    - the rotary inv_freq buffers are restored in f32 after the blanket cast,
+      the reference rotary forward computes cos and sin in f32, bf16 storage would round the frequency values
 
-    Raises SystemExit when the head shares storage or values with the
-    embedding, or when the loaded head disagrees with the raw file-26
-    `lm_head.weight` tensor."""
+    Raises SystemExit when the head shares storage or values with the embedding,
+    or when the loaded head disagrees with the raw file-26 `lm_head.weight` tensor.
+    """
     assert cfg.tie_word_embeddings is False, "this checkpoint must be untied"
     model = Qwen3_5MoeForConditionalGeneration.from_pretrained(
         MODEL_DIR, config=cfg, dtype=torch.bfloat16,
@@ -347,28 +323,29 @@ def build_model(cfg, weight_map: dict) -> Qwen3_5MoeForConditionalGeneration:
         raise SystemExit(
             "[gen_bf16_qwen36moe_03_full_forward_to_logits] lm_head shares storage with embed_tokens; "
             "the untied head was silently tied")
-    if torch.equal(head, embed):
+    if bool((head == embed).all()):
         raise SystemExit(
             "[gen_bf16_qwen36moe_03_full_forward_to_logits] lm_head equals embed_tokens elementwise; "
             "the untied head was silently tied")
 
-    # The head must be the file-26 tensor itself, bitwise: a silently
-    # tied head would pass the shape gate (both tables are [248320, 2048])
-    # and would produce garbage logits.
+    # Head tensor identity against the file-26 checkpoint tensor:
+    #
+    # - a silently tied head would pass the shape check and produce garbage logits
     with safe_open(os.path.join(
             MODEL_DIR, weight_map["lm_head.weight"]), framework="pt") as f:
         raw_head = f.get_tensor("lm_head.weight")
-    assert torch.equal(head, raw_head),         "loaded lm_head.weight disagrees bitwise with the checkpoint tensor"
+    assert torch.equal(head, raw_head),         "loaded lm_head.weight disagrees with the checkpoint tensor"  # noqa: torch-equal, the same-interpreter construction self-check
     del raw_head
     return model
 
 
 def install_capture_hooks(layers):
-    """Wrap every decoder layer forward to record input and output tensors.
+    """Wraps every decoder layer forward to record input and output tensors.
 
-    Returns the capture list (one dict per layer) and a restore closure.
-    Each install restores the pristine class forward after the run, so a
-    second install never chains onto a previous wrapper."""
+    - returns the capture list (one dict per layer) and a restore closure
+    - each install restores the pristine class forward after the run
+      (a second install never chains onto a previous wrapper)
+    """
     captured = [None] * len(layers)
     originals = []
 
@@ -394,12 +371,14 @@ def install_capture_hooks(layers):
 
 
 def install_router_hooks(layers):
-    """Wrap every router (layer.mlp.gate) forward to record its logits.
+    """Wraps every router (layer.mlp.gate, the gating mechanism) forward
+    to record its logits.
 
-    The logits are the source of the recorded per-layer topk_indices and
-    routing_weights fixtures and of the boundary-tie metadata: the
-    checkpoint produces exact fp32 ties at the top-k boundary, so the
-    indices record precisely the choice torch.topk made."""
+    - the logits are the source of the recorded per-layer topk_indices
+      and routing_weights fixtures and of the boundary-tie metadata
+    - the checkpoint produces exact fp32 ties at the top-k boundary, so
+      the indices record precisely the choice torch.topk made
+    """
     routed = [None] * len(layers)
     originals = []
 
@@ -423,11 +402,12 @@ def install_router_hooks(layers):
 
 
 def run_forward(model, input_ids: torch.Tensor, capture_routers: bool):
-    """Run the wrapper forward with per-layer capture and, when
-    `capture_routers` is set, per-router capture. Returns captures,
-    router logits (None when routers were not captured) and the wrapper
-    logits. Only the sequential run captures routers: its tensors are
-    the ones the Nim implementation asserts 0.00 against."""
+    """Runs the wrapper forward with per-layer capture, per-router
+    capture included when `capture_routers` is set.
+
+    - returns the capture list, the router logits (None when routers were not captured), and the wrapper logits
+    - only the sequential run captures routers, its tensors are the ones the Nim implementation asserts 0.00 against
+    """
     layers = model.model.language_model.layers
     captured, restore_layer = install_capture_hooks(layers)
     if capture_routers:
@@ -446,11 +426,12 @@ def run_forward(model, input_ids: torch.Tensor, capture_routers: bool):
 def replay_gdn_layer(layer, layer_input):
     """Manual sequential replay of one GDN decoder layer from its input.
 
-    Recomputes input_layernorm, the GDN block on the recurrent rule, the
-    post-attention norm and the routed block. The caller asserts the
-    result is bit-identical to the hooked sequential forward output,
-    proving the manual sequential replay and the patched real forward
-    agree exactly."""
+    - recomputes input_layernorm, the GDN block on the recurrent rule,
+      the post-attention norm and the routed block
+    - the caller verifies the result against the hooked sequential
+      forward output through the ulp-band instrument, the manual
+      sequential replay and the patched real forward agree within it
+    """
     normed = layer.input_layernorm(layer_input)
     gdn_out = gdn_forward_replay(layer.linear_attn, normed, use_recurrent=True)["output"]
     h1 = layer_input + gdn_out
@@ -463,11 +444,14 @@ def replay_gdn_layer(layer, layer_input):
 
 def recorded_router_outputs(router_logits: torch.Tensor, top_k: int) -> dict:
     """Top-k expert ids and routing weights exactly as the reference
-    router computes them, from the router logits: softmax over the fp32
-    all experts in f32, torch.topk, renormalized in f32, cast to
-    the logits dtype. The computation is deterministic under the locked
-    thread count, so replaying it from the captured logits is bitwise
-    the module's own result."""
+    router computes them, from the router logits.
+
+    - softmax over all experts in f32, torch.topk, renormalized
+      in f32, cast to the logits dtype
+    - the computation is deterministic under the locked thread count,
+      so replaying it from the captured logits reproduces the module
+      result value-identically, verified through the instrument
+    """
     probs = torch.nn.functional.softmax(router_logits, dtype=torch.float32, dim=-1)
     topk_values, topk_indices = torch.topk(probs, top_k, dim=-1)
     renorm = topk_values / topk_values.sum(dim=-1, keepdim=True)
@@ -478,42 +462,40 @@ def recorded_router_outputs(router_logits: torch.Tensor, top_k: int) -> dict:
 
 
 def boundary_tie_count(router_logits: torch.Tensor, top_k: int) -> int:
-    """Token count whose top-k boundary probabilities (descending
-    positions top_k-1 and top_k) tie exactly at fp32. Such a tie makes
-    the selected last expert order-sensitive; the recorded topk_indices
-    locks the choice torch.topk made."""
+    """Token count whose top-k boundary probabilities (descending positions top_k-1 and top_k) tie exactly at fp32.
+
+    - such a tie makes the selected last expert order-sensitive
+    - the recorded topk_indices locks the choice torch.topk made
+    """
     probs = torch.nn.functional.softmax(router_logits, dtype=torch.float32, dim=-1)
     sorted_probs = torch.sort(probs, dim=-1, descending=True).values
     return int(
         (sorted_probs[:, top_k - 1] == sorted_probs[:, top_k]).sum().item())
 
 
-def save_fixture(name: str, metadata: dict, tensors: dict) -> str:
-    """Save a fixture to safetensors with a separate deterministic metadata
-    file."""
+def save_layer_metadata(name: str, metadata: dict) -> str:
+    """Writes one layer's deterministic metadata frame.
+
+    No layer payload safetensor leaves the tree, the 004 stats frames
+    carry the recorded boundary and router surface.
+
+    Returns:
+    - the metadata frame path
+    """
     os.makedirs(FIXTURE_DIR, exist_ok=True)
-    filepath = os.path.join(FIXTURE_DIR, f"{name}.safetensor")
-    sorted_tensors = OrderedDict(
-        (key, tensor.detach().cpu().contiguous())
-        for key, tensor in sorted(tensors.items())
-        if tensor is not None
-    )
-    serialized = st.save(sorted_tensors, metadata=None)
-    with open(filepath, "wb") as f:
-        f.write(serialized)
-    metadata_path = filepath + ".metadata.json.zst"
+    metadata_path = os.path.join(FIXTURE_DIR, f"{name}.safetensor.metadata.json.zst")
     write_json_zst(metadata_path, metadata)
-    return filepath
+    return metadata_path
 
 
 def load_tokenizer():
-    """Tokenize prompts through the checkpoint's own tokenizer files, the
-    no-special-token form (no bos) the decode contract fixes."""
+    """Tokenizes prompts through the checkpoint's own tokenizer files with no special tokens added (no bos)."""
     from transformers import AutoTokenizer
     return AutoTokenizer.from_pretrained(MODEL_DIR)
 
 
 def main() -> None:
+    """Runs the full fixture generation end to end."""
     print(f"Generating {MODEL_NAME} full-model full-forward-to-logits fixtures")
     print("=" * 60)
     check_ram()
@@ -526,8 +508,8 @@ def main() -> None:
         LANGUAGE_MODEL_KEYS + LM_HEAD_KEYS + VISUAL_KEYS + MTP_KEYS), (
         "checkpoint index key count disagrees with the fixed counts")
     model = build_model(cfg, weight_map)
-    # The eager setting resolved in build_model and recorded in every fixture
-    # metadata so the consumers see the numeric path the chain ran.
+    # The eager setting comes out of build_model and goes into every
+    # fixture metadata entry, the consumers see the numeric path the chain ran.
     resolved_impl = model.config.text_config._experts_implementation
     tokenizer = load_tokenizer()
 
@@ -541,8 +523,8 @@ def main() -> None:
     assert num_layers == cfg.text_config.num_hidden_layers == 40, (
         "the checkpoint must carry 40 decoder layers")
 
-    # Chunked forward: the reference ground truth. Router outputs go
-    # uncaptured here, the sequential run's outputs stay the fixture truth.
+    # Chunked forward, the reference ground truth. Router outputs go
+    # uncaptured here, the sequential run outputs stay the fixture truth.
     chunked_captured, _, logits_chunked = run_forward(
         model, input_ids, capture_routers=False)
 
@@ -556,11 +538,10 @@ def main() -> None:
         model, input_ids, capture_routers=False)
     moe_modeling.torch_chunk_gated_delta_rule = original_chunk_rule
     for i in range(num_layers):
-        assert torch.equal(
+        assert torch.equal(  # noqa: torch-equal, the same-interpreter determinism self-check
             seq_captured[i]["layer_output"], seq_captured_again[i]["layer_output"]
         ), f"sequential replay layer {i} is not deterministic"
-    assert torch.equal(logits_seq, logits_seq_again), \
-        "sequential replay logits are not deterministic"
+    assert torch.equal(logits_seq, logits_seq_again), "sequential replay logits are not deterministic"  # noqa: torch-equal, the same-interpreter determinism self-check
 
     top_k = cfg.text_config.num_experts_per_tok
     assert top_k == 8, (
@@ -580,26 +561,29 @@ def main() -> None:
         # after the first GDN layer. Any nonzero input band at layer 0
         # means the patch changed something outside the GDN core.
         if i == 0:
-            assert torch.equal(layer_input, layer_input_seq), \
+            assert torch.equal(  # noqa: torch-equal, the same-interpreter determinism self-check
+                layer_input, layer_input_seq), \
                 "layer 0 inputs must be identical across the chunked and sequential runs"
         input_diff = (layer_input_seq.float() - layer_input.float()).abs().max().item()
         output_diff = (layer_output_seq.float() - layer_output.float()).abs().max().item()
 
-        # The manual sequential replay is the 0.00 reference. Every GDN
-        # layer recomputes bitwise from its recorded sequential input
-        # through the shared norms, the recurrent GDN core and the routed
-        # block of the module.
+        # The manual sequential replay is the 0.00 reference.
+        #
+        # Every GDN layer recomputes value-identically from its recorded
+        # sequential input through the shared norms, the recurrent GDN
+        # core and the routed block, verified through the instrument.
         if kind == "linear_attention":
             replay = replay_gdn_layer(layer_obj, layer_input_seq)
-            assert torch.equal(replay, layer_output_seq), (
-                f"manual sequential replay of GDN layer {i} diverged from the patched forward")
+            assert_path_equivalent(replay, layer_output_seq,
+                f"manual sequential replay of GDN layer {i} vs the patched forward")
 
         # Router outputs of the sequential run, the run the Nim
-        # implementation asserts 0.00 against: recorded indices and weights
-        # assert the router bitwise, the boundary-tie census
-        # and margin go to the metadata. Exact fp32 ties at the top-k
-        # boundary are structural in this checkpoint, making the margin
-        # recorded information rather than a positive-assert failure.
+        # implementation asserts 0.00 against:
+        #
+        # - the recorded indices and weights verify the router through the instrument
+        # - the boundary-tie counts and margin go to the metadata
+        # - the top-k boundary of this checkpoint carries exact fp32 ties,
+        #   the margin is recorded information, never a positive-assert failure
         router_top_margin, _inner = router_margins(seq_router[i])
         router_outputs = recorded_router_outputs(seq_router[i], top_k)
         ties = boundary_tie_count(seq_router[i], top_k)
@@ -640,17 +624,11 @@ def main() -> None:
                     "payload under the fixture contract v2; the recorded "
                     "bands keep documenting the divergence they measured.",
         }
-        # Fixture contract v2: the chunked copies left the payload
-        # (layer_input, layer_output), and the sequential outputs too
-        # (layer_output_seq) wherever a later layer's recorded input
-        # holds the same bytes. The chain anchor is layer_input_seq
-        # layer_output_seq of the last layer moves to the descriptor
-        # sidecar of layer-39 instead of the payload.
-        save_fixture(f"layer-{i:02d}", metadata, {
-            "layer_input_seq": layer_input_seq,
-            "topk_indices": router_outputs["topk_indices"],
-            "routing_weights": router_outputs["routing_weights"],
-        })
+        # Statistics-only fixture contract, no layer payload safetensor:
+        #
+        # - the 004 stats frame carries the router records
+        # - the metadata frame carries the recorded bands
+        save_layer_metadata(f"layer-{i:02d}", metadata)
         print(f"  layer {i:02d} ({kind}): input_band {input_diff:.3e}, "
               f"output_band {output_diff:.3e}, topk_margin {router_top_margin:.3e}, "
               f"boundary_tie_tokens {ties}")
@@ -659,17 +637,20 @@ def main() -> None:
     assert logits_diff < LOGITS_BAND_GUARD, \
         f"sequential vs chunked logits diff too large: {logits_diff}"
     # Decision projection of the sequential reference, the 0.00 Nim
-    # comparison: the raw logits tensors leave the tree, the consumers
-    # carry argmax, the top-2 competing pair and the tail probability.
-    # The sequential vs chunked band stays as the recorded metadata band.
-    write_json_zst(os.path.join(FIXTURE_DIR, "final_logits.decisions.json.zst"), {
-        "schema": DECISION_PROBE_SCHEMA,
-        "model": MODEL_NAME,
-        "input_text": INPUT_TEXT,
-        "input_tokens": tokenizer_ids,
-        "vocab_size": int(logits_seq.shape[-1]),
-        "steps": decision_steps_probed(logits_seq.to(torch.float32)),
-    })
+    # comparison:
+    #
+    # - the raw logits tensors leave the tree
+    # - the consumers carry argmax, the top-2 competing pair and the tail probability
+    # - the sequential vs chunked band stays as the recorded metadata band
+    if logits_seq.shape[1] < NUM_POSITIONS:
+        raise SystemExit(
+            f"{MODEL_NAME}: the forward produced {logits_seq.shape[1]} "
+            f"positions, the script records {NUM_POSITIONS}")
+    records = [argmax_record_from_row(logits_seq[0, pos].to(torch.float32))
+               for pos in range(NUM_POSITIONS)]
+    write_argmax_decisions(
+        os.path.join(FIXTURE_DIR, "final_logits.decisions.json.zst"),
+        "final_logits.decisions", records, grid_of(logits_seq))
     write_json_zst(os.path.join(FIXTURE_DIR, "final_logits.safetensor.metadata.json.zst"), {
         "model": MODEL_NAME,
         "input_text": INPUT_TEXT,
@@ -687,15 +668,6 @@ def main() -> None:
         "note": "the projection is the sequential replay (0.00 for Nim), "
                 "logits_band is the sequential vs chunked band.",
     })
-    from fixture_stats import recording_env, write_provenance
-    write_provenance(os.path.join(FIXTURE_DIR, "PROVENANCE.md"), list(recording_env(
-        model=MODEL_NAME,
-        generator="testgen/gen_bf16_qwen36moe_03_full_forward_to_logits.py",
-        seed="none (fixed input ids, no sampling)",
-        extra={"dtype": "bfloat16",
-               "experts_implementation": resolved_impl},
-    ).items()))
-
     # A summary of the recorded bands. The recorded bands remain
     # the only tolerance source on the Nim side, and these guards catch
     # generator or checkpoint drift at generation time.

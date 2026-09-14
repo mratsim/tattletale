@@ -2,12 +2,16 @@
 """
 Generate EXL3 greedy (temp=0) decoding fixtures for end-to-end inference verification.
 
-All core logic (decoder, forward, RoPE, RMS norm) lives in ``fixture_exl3_common.py``.
-This file only handles model paths, tokenizer, generation orchestration, and data I/O.
+All core logic (decoder, forward, RoPE, RMS norm) lives in the helper
+module ``quant_utils/exl3_utils.py``, this file handles the model paths,
+the tokenizer, the generation orchestration, and data I/O.
 
-Usage:
-    cd tattletale
-    .venv/bin/python testgen/gen_exl3_qwen3_04_greedy_text_generation.py
+- the backend auto-selects like the 01-layer and 03-chain generators:
+  exllamav3_cuda when exllamav3_ext imports and a CUDA device exists,
+  pytorch otherwise, the pure-torch fallback
+- the forward hardwires the production kernels, a recording run needs the CUDA box either way
+
+Invoke the generator via `python3 testgen/gen_exl3_qwen3_04_greedy_text_generation.py`.
 """
 
 from __future__ import annotations
@@ -19,41 +23,54 @@ from pathlib import Path
 
 import torch
 
-# ── Add testgen dir to path for importing fixture_exl3_common ──
+# ── Script dir plus the tests/ tree on the import path ──
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPT_DIR)
+sys.path.insert(0, os.path.dirname(_SCRIPT_DIR))
 
-from fixture_stats import write_text_zst  # noqa: E402
-
-from fixture_exl3_common import (
-    # utilities
+# The path insert above precedes both imports (noqa without code).
+from fixture_stats import (
+    argmax_record_from_step, write_argmax_decisions, write_text_zst)
+from quant_utils.exl3_utils import (
     get_exl3_tensors,
     get_in_features_out_features,
     derive_K,
     load_config,
-    # orig (CUDA ground truth)
     reconstruct_orig_exl3,
     linear_forward_orig_exl3,
-    # orig / reimpl (EXL3-anchored)
     rms_norm_orig_exl3,
     precompute_freqs_cis_reimpl_exl3,
     apply_rotary_pos_emb_reimpl_exl3,
-    # provenance
-    write_family_provenance,
 )
 
+# ── Backend ────────────────────────────────────────────────────────────
+# Production ext kernels run CUDA-only, one dispatch shape across the exl3 generators:
+# - exllamav3_cuda when exllamav3_ext imports and a CUDA device exists
+# - pytorch otherwise, the pure-torch fallback
+try:
+    from exllamav3.ext import exllamav3_ext as _ext  # noqa: F401
+    USE_CUDA = torch.cuda.is_available()
+except (ImportError, ModuleNotFoundError, OSError):
+    USE_CUDA = False
+BACKEND = "exllamav3_cuda" if USE_CUDA else "pytorch"
+DEVICE = torch.device("cuda:0" if USE_CUDA else "cpu")
+
 # ── Paths ─────────────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # tests/
+BASE_DIR = os.path.dirname(_SCRIPT_DIR)  # the tests/ directory
 MODEL_DIR = os.path.join(BASE_DIR, "hf_models", "Qwen3-0.6B-EXL3-5bpw")
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors")
 MODEL_NAME = "Qwen3-0.6B-EXL3-5bpw"
-OUT_DIR = Path(BASE_DIR) / "fixtures" / "exl3-04-greedy-text-generation"
+OUT_DIR = Path(BASE_DIR) / "fixtures" / "exl3-04-greedy-text-generation" / "Qwen3-0.6B-EXL3-5bpw"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 LAYER_COUNT = 28
 DTYPE = torch.float16
-DEVICE = "cuda:0"
 GREEDY_STEPS_SCHEMA = "ttt-tf-001-greedy-steps-h2"
 MAX_NEW_TOKENS = 20
+
+DECISION_ULP_DATATYPE = "fp16"
+    # The ulp datatype of the chain (the DTYPE const above), serialized
+    # as the 005 decisions frame's "ulp_datatype" key, the unit every
+    # decision band check consumes.
 
 PROMPTS = [
     "Hello how are you?",
@@ -85,30 +102,30 @@ class EXL3Model:
         self.max_seq_len = config.get("max_position_embeddings", 40960)
         self.vocab_size = config.get("vocab_size", 151936)
 
-        # Precompute RoPE
+        # Precompute the RoPE tables
         cos, sin = precompute_freqs_cis_reimpl_exl3(
             self.head_dim, self.max_seq_len, theta=self.rope_theta
         )
-        self.register_buffer("cos", cos.to(DTYPE).to("cuda:0"))
-        self.register_buffer("sin", sin.to(DTYPE).to("cuda:0"))
+        self.register_buffer("cos", cos.to(DTYPE).to(DEVICE))
+        self.register_buffer("sin", sin.to(DTYPE).to(DEVICE))
 
         # Move norms to CUDA
         self.norms: dict = {}
         for k, v in tensors["_norms"].items():
-            self.norms[k] = v.to("cuda:0")
+            self.norms[k] = v.to(DEVICE)
 
-        # Embedding weight
-        self.embed_weight = tensors["_embeddings"]["model.embed_tokens.weight"].to("cuda:0")
+        # Embedding weight fetch
+        self.embed_weight = tensors["_embeddings"]["model.embed_tokens.weight"].to(DEVICE)
 
-        # Final norm
+        # Final norm weight
         self.final_norm_weight = self.norms.get("model.norm.weight")
 
         # Check if lm_head is EXL3-quantized or shared
         lm_head_key = "lm_head"
         self.lm_head_exl3 = lm_head_key in weights
         self.lm_weight = weights.get(lm_head_key)
-        self.lm_suh = tensors[lm_head_key]["suh"].to("cuda:0") if lm_head_key in tensors else None
-        self.lm_svh = tensors[lm_head_key]["svh"].to("cuda:0") if lm_head_key in tensors else None
+        self.lm_suh = tensors[lm_head_key]["suh"].to(DEVICE) if lm_head_key in tensors else None
+        self.lm_svh = tensors[lm_head_key]["svh"].to(DEVICE) if lm_head_key in tensors else None
 
         # Pre-extract per-layer weights and scales (move to CUDA)
         self.layers: list = []
@@ -120,26 +137,26 @@ class EXL3Model:
                 "q_norm": self.norms[f"{prefix}.self_attn.q_norm.weight"],
                 "k_norm": self.norms[f"{prefix}.self_attn.k_norm.weight"],
                 "q_w": weights[f"{prefix}.self_attn.q_proj"],
-                "q_suh": tensors[f"{prefix}.self_attn.q_proj"]["suh"].to("cuda:0"),
-                "q_svh": tensors[f"{prefix}.self_attn.q_proj"]["svh"].to("cuda:0"),
+                "q_suh": tensors[f"{prefix}.self_attn.q_proj"]["suh"].to(DEVICE),
+                "q_svh": tensors[f"{prefix}.self_attn.q_proj"]["svh"].to(DEVICE),
                 "k_w": weights[f"{prefix}.self_attn.k_proj"],
-                "k_suh": tensors[f"{prefix}.self_attn.k_proj"]["suh"].to("cuda:0"),
-                "k_svh": tensors[f"{prefix}.self_attn.k_proj"]["svh"].to("cuda:0"),
+                "k_suh": tensors[f"{prefix}.self_attn.k_proj"]["suh"].to(DEVICE),
+                "k_svh": tensors[f"{prefix}.self_attn.k_proj"]["svh"].to(DEVICE),
                 "v_w": weights[f"{prefix}.self_attn.v_proj"],
-                "v_suh": tensors[f"{prefix}.self_attn.v_proj"]["suh"].to("cuda:0"),
-                "v_svh": tensors[f"{prefix}.self_attn.v_proj"]["svh"].to("cuda:0"),
+                "v_suh": tensors[f"{prefix}.self_attn.v_proj"]["suh"].to(DEVICE),
+                "v_svh": tensors[f"{prefix}.self_attn.v_proj"]["svh"].to(DEVICE),
                 "o_w": weights[f"{prefix}.self_attn.o_proj"],
-                "o_suh": tensors[f"{prefix}.self_attn.o_proj"]["suh"].to("cuda:0"),
-                "o_svh": tensors[f"{prefix}.self_attn.o_proj"]["svh"].to("cuda:0"),
+                "o_suh": tensors[f"{prefix}.self_attn.o_proj"]["suh"].to(DEVICE),
+                "o_svh": tensors[f"{prefix}.self_attn.o_proj"]["svh"].to(DEVICE),
                 "gate_w": weights[f"{prefix}.mlp.gate_proj"],
-                "gate_suh": tensors[f"{prefix}.mlp.gate_proj"]["suh"].to("cuda:0"),
-                "gate_svh": tensors[f"{prefix}.mlp.gate_proj"]["svh"].to("cuda:0"),
+                "gate_suh": tensors[f"{prefix}.mlp.gate_proj"]["suh"].to(DEVICE),
+                "gate_svh": tensors[f"{prefix}.mlp.gate_proj"]["svh"].to(DEVICE),
                 "up_w": weights[f"{prefix}.mlp.up_proj"],
-                "up_suh": tensors[f"{prefix}.mlp.up_proj"]["suh"].to("cuda:0"),
-                "up_svh": tensors[f"{prefix}.mlp.up_proj"]["svh"].to("cuda:0"),
+                "up_suh": tensors[f"{prefix}.mlp.up_proj"]["suh"].to(DEVICE),
+                "up_svh": tensors[f"{prefix}.mlp.up_proj"]["svh"].to(DEVICE),
                 "down_w": weights[f"{prefix}.mlp.down_proj"],
-                "down_suh": tensors[f"{prefix}.mlp.down_proj"]["suh"].to("cuda:0"),
-                "down_svh": tensors[f"{prefix}.mlp.down_proj"]["svh"].to("cuda:0"),
+                "down_suh": tensors[f"{prefix}.mlp.down_proj"]["suh"].to(DEVICE),
+                "down_svh": tensors[f"{prefix}.mlp.down_proj"]["svh"].to(DEVICE),
             }
             self.layers.append(layer)
 
@@ -151,21 +168,21 @@ class EXL3Model:
         """Full forward pass returning logits for all positions.
 
         Args:
-            input_ids: [1, seq_len]
+        - input_ids, the [1, seq_len] prompt token ids
 
         Returns:
-            logits: [1, seq_len, vocab_size]
+        - the [1, seq_len, vocab_size] logits tensor
         """
         batch, seq_len = input_ids.shape
-        position_ids = torch.arange(seq_len, dtype=torch.long, device="cuda:0").unsqueeze(0)
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=DEVICE).unsqueeze(0)
 
-        # Embedding
+        # Embedding lookup step
         h = torch.nn.functional.embedding(input_ids, self.embed_weight)
 
         for layer_idx in range(LAYER_COUNT):
             ly = self.layers[layer_idx]
 
-            # RMS Norm
+            # RMS Norm application
             h_norm = rms_norm_orig_exl3(h, ly["input_ln"], self.rms_eps)
 
             # Q, K, V projections
@@ -178,14 +195,14 @@ class EXL3Model:
             k = k.view(batch, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
             v = v.view(batch, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-            # QK norm
+            # QK norm application
             q = rms_norm_orig_exl3(q, ly["q_norm"], self.rms_eps)
             k = rms_norm_orig_exl3(k, ly["k_norm"], self.rms_eps)
 
-            # RoPE
+            # RoPE application step
             q, k = apply_rotary_pos_emb_reimpl_exl3(q, k, self.cos, self.sin, position_ids)
 
-            # SDPA
+            # SDPA attention call
             attn_output = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v,
                 attn_mask=None, dropout_p=0.0, is_causal=True,
@@ -195,13 +212,13 @@ class EXL3Model:
             attn_output = attn_output.transpose(1, 2).contiguous()
             attn_output = attn_output.view(batch, seq_len, self.num_heads * self.head_dim)
 
-            # O projection
+            # O projection pass
             attn_output = linear_forward_orig_exl3(attn_output, ly["o_w"], ly["o_suh"], ly["o_svh"])
 
-            # Residual
+            # Residual add step
             h = h + attn_output
 
-            # MLP
+            # MLP block pass
             residual = h
             h_norm = rms_norm_orig_exl3(h, ly["post_ln"], self.rms_eps)
 
@@ -213,10 +230,10 @@ class EXL3Model:
 
             h = residual + mlp_output
 
-        # Final norm
+        # Final norm application
         h = rms_norm_orig_exl3(h, self.final_norm_weight, self.rms_eps)
 
-        # LM head
+        # LM head dispatch
         if self.lm_head_exl3 and self.lm_weight is not None:
             logits = linear_forward_orig_exl3(h, self.lm_weight, self.lm_suh, self.lm_svh)
         else:
@@ -231,12 +248,12 @@ class EXL3Model:
         """Autoregressive greedy generation (temp=0).
 
         Args:
-            input_ids: [1, seq_len] prompt token IDs.
-            max_new_tokens: Maximum number of tokens to generate.
-            eos_token_id: End-of-sequence token ID.
+        - input_ids, the [1, seq_len] prompt token ids
+        - max_new_tokens, the maximum number of tokens to generate
+        - eos_token_id, the end-of-sequence token id
 
         Returns:
-            (full_ids, prompt_ids, generated_ids, per_step_logits)
+        - (full_ids, prompt_ids, generated_ids, per_step_logits)
         """
         prompt_ids = input_ids[0].tolist()
         full_ids = input_ids.clone()
@@ -250,9 +267,9 @@ class EXL3Model:
 
             chosen_id = next_token_logits.argmax().item()
 
-            # ttt-tf-001-greedy-steps-h2 step record: the argmax pick, the top-32 competing
-            # support with f32 logits, the argmax margin and the softmax tail
-            # probability beyond the support.
+            # ttt-tf-001-greedy-steps-h2 step record holding the argmax
+            # pick and the top-32 competing support with f32 logits,
+            # plus the argmax margin and the softmax tail probability.
             top_vals, top_idxs = next_token_logits.topk(32)
             probs = torch.softmax(next_token_logits.float(), dim=-1)
             tail = float(1.0 - probs[top_idxs].sum().item())
@@ -287,13 +304,13 @@ def reconstruct_all_weights(tensors: dict, config: dict) -> dict:
     for key, entry in tensors.items():
         if key.startswith("_") or entry.get("trellis") is None:
             continue
-        trellis = entry["trellis"].to("cuda:0")
+        trellis = entry["trellis"].to(DEVICE)
         K = derive_K(trellis)
         mcg = entry.get("mcg") is not None
         mul1 = entry.get("mul1") is not None
         in_f, out_f = get_in_features_out_features(key, trellis, config)
         w = reconstruct_orig_exl3(trellis, K, mcg, mul1, (in_f, out_f))
-        cache[key] = w.contiguous()  # [in_features, out_features] — non-transposed, for ext.hgemm (differs from F.linear which needs [out_features, in_features])
+        cache[key] = w.contiguous()  # [in_features, out_features], non-transposed for ext.hgemm (F.linear needs [out_features, in_features])
         print(f"  Reconstructed {key}: [{in_f}, {out_f}] -> weight [{out_f}, {in_f}]")
     return cache
 
@@ -335,8 +352,10 @@ def decode_tokens(token_ids: list, tokenizer) -> str:
 
 
 def main():
+    """Record the greedy decoding fixtures for every prompt in PROMPTS."""
     torch.set_num_threads(4)
     print(f"Model: {MODEL_DIR}")
+    print(f"Backend: {BACKEND}")
     print(f"Device: {DEVICE}")
     print(f"Max new tokens: {MAX_NEW_TOKENS}")
     print()
@@ -364,7 +383,7 @@ def main():
         print(f"Prompt: {prompt}")
         print(f"{'=' * 70}")
 
-        input_ids = encode_prompt(prompt, tokenizer).to("cuda:0")
+        input_ids = encode_prompt(prompt, tokenizer).to(DEVICE)
         prompt_ids_list = input_ids[0].tolist()
 
         print(f"  Prompt tokens ({len(prompt_ids_list)}): {prompt_ids_list}")
@@ -399,14 +418,15 @@ def main():
         write_text_zst(out_path,
                        json.dumps(fixture, indent=2, ensure_ascii=False)
                        .encode("utf-8"))
+        write_argmax_decisions(
+            str(OUT_DIR / f"{safe_name}.decisions.json.zst"), safe_name,
+            [argmax_record_from_step(step)
+             for step in step_logits], DECISION_ULP_DATATYPE)
 
         print(f"  Prompt tokens:  {len(prompt_ids)}")
         print(f"  Generated:      {len(generated_ids)} tokens")
         print(f"  Generated text: {generated_text!r}")
         print(f"  Fixture saved:  {out_path}")
-
-    write_family_provenance(
-        OUT_DIR, "testgen/gen_exl3_qwen3_04_greedy_text_generation.py", MODEL_NAME)
 
     print(f"\nDone. Fixtures in {OUT_DIR}")
 

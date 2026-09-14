@@ -1,15 +1,20 @@
 # EXL3 tests
 
-The fixture suites compare through the recorded-summary surface (tensor stats
-sidecars, chain checkpoint bands, decision projections, greedy step checks)
-and run on any device via `testDevice()`; the granular tasks live in
-`config.nims` (`nim test_tf_exl3_qwen3_00_codec`, ...).
+The fixture suites enforce through the two harness functions.
 
-The recorded payloads come from the production EXL3 CUDA kernel
-(`exllamav3_ext`), so only a CUDA replay is the bit-exact reference class: on
-the recording device the suites run the elementwise ulp rows and the full
-decision projection, on any other device the chain checkpoint band with the
-ulp unit taken in fp16, because EXL3 dequantizes to fp16.
+- assertStats against the committed 004 uniform-stats frames
+- assertArgMax against the committed 005 decision frames
+- the 03 logits decisions frame stays in the 002 decimal shape and loads through loadArgmaxRecords
+- suites run on the suite device via `testDevice()`, the granular tasks
+  live in `config.nims` (`nim test_tf_exl3_qwen3_00_codec`, ...)
 
-Check the family contracts in `../testgen/FIXTURE_GENERATION.md` and the
-budget derivation in `../harness/SPEC.md`.
+- the recorded payloads come from the production EXL3 CUDA kernel (`exllamav3_ext`)
+- replays on any device compare through the kinded depth allowances, the depth
+  argument carries the composed reordered stages since the recorded reference
+- the EXL3-00 codec payload keeps its bit-for-bit contract, no other exl3
+  assert runs an exact class
+
+One EXL3 linear composes 3 reordered stages (pre-Hadamard FWHT, fp16 GEMM, post-Hadamard FWHT).
+See the 01 layer internals suite for the derivation.
+
+Check the family contracts in `../testgen/FIXTURE_GENERATION.md`.

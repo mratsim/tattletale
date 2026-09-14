@@ -1,46 +1,37 @@
 #!/usr/bin/env python3
-"""Generate the Qwen3.6-35B-A3B Gated DeltaNet (GDN) layer-0 fixtures from
-the real checkpoint safetensors files, using the installed reference
-modeling on CPU
-torch bf16.
+"""Gated DeltaNet (GDN) layer-0 fixtures for the Qwen3.6-35B-A3B checkpoint,
+recorded on CPU torch bf16 with the installed reference modeling, from safetensors.
 
-Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_gdn.nim. No Qwen3 analog: the
-same GatedDeltaNet SSM layer as the Qwen3.5-0.8B dense family, absent
-from Qwen3, so no Qwen3-era generator exists to inherit.
+Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals_gdn.nim:
 
-What is generated (under tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-layer-0/):
+  - no Qwen3 analog exists to inherit, the GatedDeltaNet SSM layer matches the Qwen3.5-0.8B dense family, absent from Qwen3
+  - files land under tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-layer-0/
+  - gdn-Qwen3.6-35B-A3B-00.safetensor (+ .metadata.json.zst) holds the GDN block prefill T=5 with real layer-0 weights
+  - the payload carries the conv output, q/k/v post-split, g, beta, the recurrent block output and the chunked output
+  - the f32 final SSM states and the sublayer intermediates (z, gated RMSNorm output, core outputs) stay out of the payload
+  - their external surface lives in a descriptor sidecar, gdn-Qwen3.6-35B-A3B-00.safetensor.descriptors.json
+  - harness/gen_stats.nim wrote the sidecar from the pre-migration bytes and froze it there
+  - a sanctioned re-record rewrites it through fixture_stats.py descriptor_fields
+  - the multi-chunk T=70 case stays out of the payload, no suite consumes it
+  - its full-tensor shape breaks the per-file byte cap at any model size
+  - the cross-chunk property it exercised lives on as a synthetic tier-1 check
+  - that check runs both live computation modes on a seeded random input, no recorded bytes
 
-  gdn-Qwen3.6-35B-A3B-00.safetensor (+ .metadata.json.zst)
-    GDN block prefill T=5 with real layer-0 weights: conv output, q/k/v
-    post-split, g, beta, the recurrent block output and the chunked
-    module output. The f32 final SSM states and the sublayer
-    intermediates (z, gated RMSNorm output, core outputs) are not in the
-    payload at any model size; their external surface lives
-    in the descriptor sidecar (gdn-Qwen3.6-35B-A3B-00.safetensor.
-    descriptors.json, written by harness/gen_stats.nim from the
-    pre-migration bytes and frozen there; a sanctioned re-record
-    rewrites it through fixture_stats.py descriptor_fields).
-  The multi-chunk T=70 case is not in the payload: no suite consumed
-  it, its full-tensor shape violated the per-file byte
-  cap at any model size, and the cross-chunk property it exercised
-  lives on as a synthetic tier-1 check in the consuming suite (both
-  live computation modes on a seeded random input, no recorded bytes).
+Compute forms of the gated delta rule core:
 
-The chunked form is the installed forward (torch_chunk_gated_delta_rule,
-chunk_size 64). The recurrent form is the bitwise reference for the Nim
-implementation: the Nim recurrence is bit-identical to
-torch_recurrent_gated_delta_rule, and its distance to the chunked form
-equals the reference's own chunk-versus-recurrent floor.
+  - the chunked form is the installed forward, torch_chunk_gated_delta_rule at chunk_size 64
+  - the recurrent form is the bitwise reference for the Nim block, matching torch_recurrent_gated_delta_rule element for element
+  - the recurrent-to-chunked distance equals the reference floor between chunked and recurrent forms
 
-Run (twice; cmp proves byte determinism):
-  cd <worktree root> && .venv/bin/python \
-    workspace/transformers/tests/testgen/gen_bf16_qwen36moe_01_layer_internals_gdn.py
+Run twice, cmp proves byte determinism:
 
+  cd <worktree root> && .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen36moe_01_layer_internals_gdn.py
 
-RAM: the invoking shell runs `vm_stat` and `pgrep -f "python.*(torch|hf)"`
-before this script. The script re-runs both checks itself and refuses to
-load weights when free memory is low or another python/torch process is
-running (its own process chain is excluded).
+RAM guards:
+
+  - the invoking shell runs `vm_stat` and `pgrep -f "python.*(torch|hf)"` before this script
+  - the script re-runs both checks and refuses the weight load when free memory is low or another python/torch process runs
+  - its own process chain stays excluded from the pgrep match
 """
 
 import json
@@ -54,9 +45,13 @@ ZSTD_WRITE_OPTIONS = {
 
 
 def write_json_zst(path, obj, ensure_ascii=True):
-    """Write obj as a single zstd frame, level 19 with content size and
-    checksum recorded in the frame header. JSON fixtures stay reviewable
-    via the generator and the frame stays out of text diffs."""
+    """Write obj as one zstd frame, level 19, content size and checksum
+    recorded in the frame header.
+
+    Args:
+    - path, obj, the destination file and the JSON-serializable payload
+    - ensure_ascii, the json.dumps escaping switch
+    """
     payload = json.dumps(
         obj, sort_keys=True, indent=2, ensure_ascii=ensure_ascii
     ).encode("utf-8") + b"\n"
@@ -70,7 +65,9 @@ import sys
 
 
 import torch  # noqa: E402
-import torch.nn.functional as F  # noqa: E402
+
+from fixture_stats import assert_path_equivalent  # noqa: E402
+import torch.nn.functional as F  # noqa, the path insert precedes the import
 from safetensors import safe_open
 from safetensors import torch as st
 
@@ -85,12 +82,12 @@ from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: E402
     torch_recurrent_gated_delta_rule,
 )
 
-# Determinism: single intra-op thread, deterministic kernels.
+# Determinism, single intra-op thread, deterministic kernels.
 torch.set_num_threads(1)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# Config.
+# Checkpoint, fixture and config paths.
 MODEL_NAME = "Qwen3.6-35B-A3B"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 FIXTURE_DIR = os.path.join(
@@ -108,29 +105,28 @@ NUM_THREADS = 1
 # Per-generator seed, independent and order-agnostic.
 SEED_GDN_PREFILL = 71
 
-# GDN geometry of the checkpoint.
-HIDDEN = 2048
+# Generation shape of the prefill case, geometry lives in the parsed config.
 PREFILL_SEQ = 5
 CHUNK_SIZE = 64
-NUM_K_HEADS = 16
-NUM_V_HEADS = 32
-HEAD_K_DIM = 128
-HEAD_V_DIM = 128
 
 PREFIX = "model.language_model.layers.0.linear_attn."
 MIN_FREE_BYTES = 8 * 1024 ** 3
 
-# Recurrent-vs-chunked divergence caps at 35B dims: the fp32 floor
-# (SSM state) and the block-level bar. The floor is about one fp32 ulp
-# at the divergent element's magnitude, sub-linear in seq_len, about
-# four orders of magnitude under bf16 rounding. The cap below allows
-# four fp32 ulps at the generated state's max magnitude.
+# Recurrent-vs-chunked divergence caps at 35B dims, two tiers:
+#
+# - BLOCK_BAR and CORE_BAR, the block-level bars
+# - the SSM floor, about one fp32 ulp at the divergent element's magnitude,
+#   sub-linear in seq_len, about four orders of magnitude under bf16 rounding
+#
+# The cap below allows four fp32 ulps at the generated state's max magnitude.
 BLOCK_BAR = 1e-3
 CORE_BAR = 1e-5
-# The seq-70 multichunk accumulation measured the largest divergent
-# element at 2.4 fp32 ulps under torch 2.13 and 2.7 under torch 2.11.
-# The ulp-scaled tripwire sits at 8, far below the order-of-magnitude
-# drift it exists to catch.
+# Observed seq-70 multichunk accumulation:
+#
+# - the largest divergent element measured 2.4 fp32 ulps under torch 2.13
+#   and 2.7 under torch 2.11
+# - the ulp-scaled guard SSM_ULP_MARGIN sits at 8, far below the drift
+#   it exists to catch
 SSM_ULP_MARGIN = 8.0
 
 
@@ -174,8 +170,14 @@ def ancestor_pids() -> set:
 
 def check_ram() -> None:
     """Refuse to load weights when memory is low or another python/torch
-    process holds RAM (this process chain is excluded from the pgrep match,
-    whose command line spells the torch dependency of this run)."""
+    process holds RAM.
+
+    Guard:
+
+    - free memory below the floor raises
+    - the pgrep match excludes this process chain, its own command line
+      spells the torch dependency of the run
+    """
     free = free_bytes()
     if free < MIN_FREE_BYTES:
         raise SystemExit(
@@ -202,8 +204,11 @@ def load_text_config() -> Qwen3_5MoeTextConfig:
 
 def load_gdn_weights() -> dict:
     """Load the layer-0 GDN tensors from the two safetensors files that hold
-    them, via
-    safe_open (memory-mapped, only these tensors are copied)."""
+    them via safe_open (memory-mapped, only these tensors are copied).
+
+    Returns:
+    - the weight dict keyed by the short tensor names used below
+    """
     weights = {}
     with safe_open(WEIGHTS_FILE_1, framework="pt") as f:
         for short in ("in_proj_qkv.weight", "in_proj_z.weight", "out_proj.weight"):
@@ -224,8 +229,15 @@ def load_gdn_weights() -> dict:
 def build_gdn_layer0(cfg: Qwen3_5MoeTextConfig) -> Qwen3_5MoeGatedDeltaNet:
     """Qwen3_5MoeGatedDeltaNet with real layer-0 weights loaded.
 
+    Args:
+    - cfg, the parsed text config
+
+    Returns:
+    - the layer-0 block in eval mode
+
     A_log and the norm weight are cast to bf16, matching a bf16 model load
-    (the checkpoint already stores them bf16, so the cast is a no-op)."""
+    (the checkpoint already stores them bf16, so the cast is a no-op).
+    """
     block = Qwen3_5MoeGatedDeltaNet(cfg, layer_idx=0)
     w = load_gdn_weights()
     with torch.no_grad():
@@ -244,12 +256,20 @@ def build_gdn_layer0(cfg: Qwen3_5MoeTextConfig) -> Qwen3_5MoeGatedDeltaNet:
 
 def gdn_forward_replay(block: Qwen3_5MoeGatedDeltaNet, hidden_states: torch.Tensor,
                        use_recurrent: bool) -> dict:
-    """Replay of the reference Qwen3_5MoeGatedDeltaNet.forward with a
-    selectable core rule, capturing every intermediate.
+    """Replay of the reference Qwen3_5MoeGatedDeltaNet.forward with a selectable
+    core rule, capturing every intermediate.
 
-    The chunked replay must be bit-identical to the module's own forward
-    (asserted by the caller). The recurrent replay is the bitwise reference
-    for the Nim implementation.
+    Args:
+    - block, hidden_states, the layer-0 module and its bf16 prefill input
+    - use_recurrent, True selects torch_recurrent_gated_delta_rule, False
+      the chunked rule
+
+    Returns:
+    - the capture dict, every intermediate tensor under its own name
+
+    The caller asserts the chunked replay against the module's own forward
+    through assert_path_equivalent. The recurrent replay is the bitwise
+    reference for the Nim implementation.
     """
     batch_size, seq_len, _ = hidden_states.shape
     mixed_qkv = block.in_proj_qkv(hidden_states).transpose(1, 2)
@@ -258,9 +278,10 @@ def gdn_forward_replay(block: Qwen3_5MoeGatedDeltaNet, hidden_states: torch.Tens
     b = block.in_proj_b(hidden_states)
     a = block.in_proj_a(hidden_states)
 
-    # Fresh prefill conv: the built-in padding (kernel - 1) matches
-    # the reference causal_conv1d_fn fallback, whose only padding
-    # source is this same F.conv1d call.
+    # Fresh prefill conv, matching the reference causal_conv1d_fn fallback:
+    #
+    # - the fallback's only padding source is the built-in padding
+    #   (kernel - 1) of this same F.conv1d call
     conv_output = F.silu(
         block.conv1d(mixed_qkv)[:, :, : mixed_qkv.shape[-1]])
     mixed = conv_output.transpose(1, 2)
@@ -274,7 +295,7 @@ def gdn_forward_replay(block: Qwen3_5MoeGatedDeltaNet, hidden_states: torch.Tens
     g = -block.A_log.float().exp() * F.softplus(a.float() + block.dt_bias)
 
     # Head-group expansion before the core rule, mirroring the reference
-    # forward: the value heads share one key head per group. A no-op
+    # forward where the value heads share one key head per group, a no-op
     # when the two head counts are equal.
     query_core, key_core = query, key
     if block.num_v_heads // block.num_k_heads > 1:
@@ -311,8 +332,8 @@ def max_abs_diff(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def ulp_fp32(m: float) -> float:
-    """One fp32 ulp at magnitude m: fp32 has 23 significand bits, so for
-    m in [2**e, 2**(e+1)) the ulp is 2**(e-23). Zero maps to 0."""
+    """One fp32 ulp at magnitude m, fp32 has 23 significand bits, so for m
+    in [2**e, 2**(e+1)) the ulp is 2**(e-23). Zero maps to 0."""
     if m <= 0:
         return 0.0
     e = int(torch.floor(torch.log2(torch.tensor(m))).item())
@@ -320,10 +341,12 @@ def ulp_fp32(m: float) -> float:
 
 
 def ssm_cap(ssm_state: torch.Tensor) -> float:
-    """Recurrent-vs-chunked SSM cap: SSM_ULP_MARGIN fp32 ulps at the
-    generated state's max magnitude. The two rules diverge by a few ulps
-    at the largest divergent element, whose magnitude is bounded by the
-    state's max magnitude."""
+    """Returns the recurrent-vs-chunked SSM cap, SSM_ULP_MARGIN fp32 ulps
+    measured at the generated state's max magnitude:
+
+    - the two rules diverge by a few ulps at the largest divergent element,
+      whose magnitude is bounded by the state max
+    """
     return SSM_ULP_MARGIN * ulp_fp32(ssm_state.abs().max().item())
 
 
@@ -340,7 +363,15 @@ def divergence_meta(output_diff: float, core_diff: float, ssm_diff: float) -> di
 def save_fixture(case_num: int, metadata: dict, tensors: dict) -> str:
     """Save a fixture to safetensors with a separate deterministic metadata
     file. The final SSM states are saved without the batch dim so the Nim
-    layer state [num_v_heads, Dk, Dv] compares directly."""
+    layer state [num_v_heads, Dk, Dv] compares directly.
+
+    Args:
+    - case_num, metadata, tensors, the fixture index, the metadata payload
+      and the tensors to serialize
+
+    Returns:
+    - the payload filepath, sidecars excluded
+    """
     filename = f"gdn-{MODEL_NAME}-{case_num:02d}.safetensor"
     filepath = os.path.join(FIXTURE_DIR, filename)
 
@@ -359,17 +390,21 @@ def save_fixture(case_num: int, metadata: dict, tensors: dict) -> str:
 
 
 def generate_gdn_prefill_fixture(block: Qwen3_5MoeGatedDeltaNet, cfg: Qwen3_5MoeTextConfig) -> None:
-    """GDN block prefill T=5: recurrent reference + chunked module output."""
+    """GDN block prefill T=5, the recurrent reference plus the chunked module output.
+
+    Args:
+    - block, cfg, the weighted layer-0 module and the parsed text config
+    """
     gen = torch.Generator(device="cpu")
     gen.manual_seed(SEED_GDN_PREFILL)
-    x = torch.randn(1, PREFILL_SEQ, HIDDEN, generator=gen, dtype=torch.bfloat16)
+    x = torch.randn(1, PREFILL_SEQ, cfg.hidden_size, generator=gen, dtype=torch.bfloat16)
 
     with torch.no_grad():
         module_output = block(x)  # reference forward, chunked rule
         chunk_replay = gdn_forward_replay(block, x, use_recurrent=False)
         seq_replay = gdn_forward_replay(block, x, use_recurrent=True)
-    assert torch.equal(module_output, chunk_replay["output"]), (
-        "[gen_bf16_qwen36moe_01_layer_internals_gdn] chunked replay diverged from the module forward")
+    assert_path_equivalent(module_output, chunk_replay["output"],
+        "[gen_bf16_qwen36moe_01_layer_internals_gdn] chunked replay vs the module forward")
 
     output_diff = max_abs_diff(seq_replay["output"], module_output)
     core_diff = max_abs_diff(seq_replay["core_attn_out"], chunk_replay["core_attn_out"])
@@ -390,11 +425,11 @@ def generate_gdn_prefill_fixture(block: Qwen3_5MoeGatedDeltaNet, cfg: Qwen3_5Moe
             "case": "prefill_seq5",
             "seq_len": PREFILL_SEQ,
             "chunk_size": CHUNK_SIZE,
-            "head_k_dim": HEAD_K_DIM,
-            "head_v_dim": HEAD_V_DIM,
-            "num_k_heads": NUM_K_HEADS,
-            "num_v_heads": NUM_V_HEADS,
-            "hidden_size": HIDDEN,
+            "head_k_dim": block.head_k_dim,
+            "head_v_dim": block.head_v_dim,
+            "num_k_heads": block.num_k_heads,
+            "num_v_heads": block.num_v_heads,
+            "hidden_size": cfg.hidden_size,
             "seed": SEED_GDN_PREFILL,
             "num_threads": NUM_THREADS,
             "dtype": "bfloat16",
@@ -424,6 +459,7 @@ def generate_gdn_prefill_fixture(block: Qwen3_5MoeGatedDeltaNet, cfg: Qwen3_5Moe
 
 
 def main() -> None:
+    """Write the layer-0 GDN prefill fixture after the RAM guard."""
     check_ram()
     cfg = load_text_config()
     block = build_gdn_layer0(cfg)

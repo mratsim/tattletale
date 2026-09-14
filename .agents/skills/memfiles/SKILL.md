@@ -10,7 +10,7 @@ metadata:
 
 ## What I do
 
-The `memfiles` module provides memory-mapped file access:
+`memfiles` provides memory-mapped file access:
 - Map files directly into memory address space
 - Access file contents via pointers without copying
 - Zero-copy reading and writing
@@ -19,7 +19,7 @@ The `memfiles` module provides memory-mapped file access:
 
 ## When to use me
 
-Use memfiles when you need to:
+Use memfiles in these cases:
 - Read large files efficiently (safetensors, models, datasets)
 - Access file data without copying into memory buffers
 - Random access to specific file offsets

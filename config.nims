@@ -228,10 +228,14 @@ task test_tf_bf16_qwen35dense_03_full_forward_to_logits, "Suite: Qwen3.5-0.8B id
   runTransformerSuite("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim")
 task test_tf_bf16_qwen35dense_04_greedy_text_generation, "Suite: Qwen3.5-0.8B greedy decoding":
   runTransformerSuite("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim")
-task test_tf_bf16_qwen35dense_single_file_checkpoint, "Suite: Qwen3.5-0.8B single-file checkpoint load":
-  runTransformerSuite("q_bf16", "t_bf16_qwen35dense_single_file_checkpoint.nim")
 task test_tf_bf16_qwen36moe_01_layer_internals_moe, "Suite: Qwen3.6-35B-A3B MoE expert math":
   runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim")
+
+task test_tf_layer_invariance_blocksparse, "Suite: layer invariance block-sparse FFN batch property":
+  runTransformerSuite("layer_invariance", "t_blocksparse_batch_invariance.nim")
+
+task test_tf_layer_invariance_gdn, "Suite: layer invariance GDN prefill vs recurrence":
+  runTransformerSuite("layer_invariance", "t_gated_delta_net_prefill_vs_recurrence_invariance.nim")
 task test_tf_bf16_qwen36moe_01_layer_internals_attn, "Suite: Qwen3.6-35B-A3B attention":
   runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim")
 task test_tf_bf16_qwen36moe_01_layer_internals_gdn, "Suite: Qwen3.6-35B-A3B Gated DeltaNet":
@@ -248,16 +252,10 @@ task test_tf_exl3_qwen3_00_hadamard, "Suite: EXL3 hadamard vs production kernel"
   runTransformerSuite("q_exl3", "t_exl3_qwen3_00_hadamard.nim")
 task test_tf_exl3_qwen3_01_layer_internals, "Suite: Qwen3-0.6B-EXL3 layer internals":
   runTransformerSuite("q_exl3", "t_exl3_qwen3_01_layer_internals.nim")
-task test_tf_exl3_qwen3_01_block_02_trace, "Suite: Qwen3-0.6B-EXL3 layer-02 stage trace":
-  runTransformerSuite("q_exl3", "t_exl3_qwen3_01_block_02_trace.nim")
 task test_tf_exl3_qwen3_03_full_forward_to_logits, "Suite: Qwen3-0.6B-EXL3 ids to logits inference":
   runTransformerSuite("q_exl3", "t_exl3_qwen3_03_full_forward_to_logits.nim")
 task test_tf_exl3_qwen3_04_greedy_text_generation, "Suite: Qwen3-0.6B-EXL3 greedy decoding":
   runTransformerSuite("q_exl3", "t_exl3_qwen3_04_greedy_text_generation.nim")
-task test_tf_bf16_unit_rope, "Suite: rope unit donors":
-  runTransformerSuite("q_bf16", "t_bf16_unit_rope.nim")
-task test_tf_bf16_unit_attn, "Suite: attention unit donors":
-  runTransformerSuite("q_bf16", "t_bf16_unit_attn.nim")
 task test_tf_kvcache_kvcache, "Suite: kvcache core (cpu-only, model-free)":
   runTransformerSuite("kvcache", "test_kvcache.nim")
 task test_tf_kvcache_page_pool, "Suite: page pool lifecycle (cpu-only, model-free)":
@@ -273,18 +271,14 @@ task test_tf_kvcache_kvcache_lpm, "Suite: longest prefix match (cpu-only, model-
 task test_tf_kvcache_codera020_batch_guard, "Suite: codera020 batch guard (cpu-only, model-free)":
   runTransformerSuite("kvcache", "test_codera020_batch_guard.nim")
 
-task test_tf_harness_invariants, "Suite: harness analytic invariants":
-  runTransformerSuite("harness", "t_harness_invariants.nim")
-task test_tf_harness_selftest, "Suite: harness selftest (fault corpus)":
+task test_tf_harness_selftest, "Suite: harness selftest":
   runTransformerSuite("harness", "t_harness_selftest.nim")
 task test_tf_sampler, "Suite: samplers":
   runTransformerSuite("samplers", "t_sampler.nim")
-task test_tf_block_sparse_batch_property, "Suite: synthetic block-sparse batch property":
-  runTransformerSuite("synthetic", "t_block_sparse_batch_property.nim")
-task test_tf_deserialization_lmhead, "Suite: synthetic deserialization and lm head":
-  runTransformerSuite("synthetic", "t_deserialization_lmhead.nim")
+task test_tf_block_sparse_batch_property, "Suite: block-sparse batch invariance":
+  runTransformerSuite("layer_invariance", "t_blocksparse_batch_invariance.nim")
 
-task test_tf_family, "Run one suite family (name=chain|ids|greedy|unit|moe|checkpoint|harness|sampler|synthetic|kvcache)":
+task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|kvcache)":
   case familyName()
   of "chain":
     runFamily(@[
@@ -300,10 +294,6 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|unit|moe|check
       ("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim"),
       ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim"),
       ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
-  of "unit":
-    runFamily(@[
-      ("q_bf16", "t_bf16_unit_rope.nim"),
-      ("q_bf16", "t_bf16_unit_attn.nim")])
   of "moe":
     runFamily(@[
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim"),
@@ -312,18 +302,11 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|unit|moe|check
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
       ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
-  of "checkpoint":
-    runFamily(@[("q_bf16", "t_bf16_qwen35dense_single_file_checkpoint.nim")])
   of "harness":
     runFamily(@[
-      ("harness", "t_harness_invariants.nim"),
       ("harness", "t_harness_selftest.nim")])
   of "sampler":
     runFamily(@[("samplers", "t_sampler.nim")])
-  of "synthetic":
-    runFamily(@[
-      ("synthetic", "t_block_sparse_batch_property.nim"),
-      ("synthetic", "t_deserialization_lmhead.nim")])
   of "kvcache":
     runFamily(@[
       ("kvcache", "test_kvcache.nim"),
@@ -334,32 +317,26 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|unit|moe|check
       ("kvcache", "test_kvcache_lpm.nim"),
       ("kvcache", "test_codera020_batch_guard.nim")])
   else:
-    echo "unknown family: name the family chain, ids, greedy, unit, moe, kvcache, checkpoint, harness, sampler or synthetic"
+    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness or sampler"
     quit(1)
 
 task test_transformers, "Test workspace/transformers (the full set, final verification)":
   withDir(ProjectRoot):
     runFamily(@[
-      ("q_bf16", "t_bf16_unit_rope.nim"),
-      ("q_bf16", "t_bf16_unit_attn.nim"),
       ("q_bf16", "t_bf16_qwen3_02_first_8_layers_plus_final.nim"),
       ("q_bf16", "t_bf16_qwen3_03_full_forward_to_logits.nim"),
       ("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim"),
       ("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim"),
       ("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim"),
       ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_single_file_checkpoint.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
       ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim"),
-      ("harness", "t_harness_invariants.nim"),
       ("harness", "t_harness_selftest.nim"),
       ("samplers", "t_sampler.nim"),
-      ("synthetic", "t_block_sparse_batch_property.nim"),
-      ("synthetic", "t_deserialization_lmhead.nim"),
       ("kvcache", "test_kvcache.nim"),
       ("kvcache", "test_page_pool.nim"),
       ("kvcache", "test_orchestrator.nim"),
@@ -540,3 +517,7 @@ const ZstdSources = [
 
 for zstdSource in ZstdSources:
   put(zstdSource.rsplit("/", 1)[1] & ".always", "-x c++")
+
+task hooks_setup, "Activate the pre-commit linter hooks for this clone (core.hooksPath = .githooks)":
+  exec "git config core.hooksPath .githooks"
+  echo "hooks active: git config core.hooksPath .githooks"

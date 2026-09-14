@@ -18,7 +18,7 @@ Torch tensors provide bindings to PyTorch's libtorch C++ library:
 
 ## When to use me
 
-Use torch tensors when you need to:
+Use torch tensors in these cases:
 - Load and manipulate tensors
 - Perform tensor operations (reshape, transpose, matmul, etc.)
 - Work with ML models and neural network layers
@@ -219,7 +219,7 @@ The change from `^` (Nim inclusive) to `-` (Python exclusive) was intentional:
 
 ### Span (`_`) vs Ellipsis (`...`)
 
-The `_` symbol and `...` ellipsis have different meanings:
+`_` symbol and `...` ellipsis carry different meanings:
 
 - **`_` (Span)**: Selects the entire dimension. Equivalent to Python's `:` or libtorch's `Slice()`.
   - `tensor[_, 3]` = `tensor[:, 3]` = all of dim 0, specific index of dim 1
@@ -429,7 +429,9 @@ let slice = tensor[-2..-1, 0..<5]  # last 2 elements, first 5 of dim 1
 
 ### Python Slice to Nim Translation Reference (Updated for Python semantics)
 
-**Python slices are EXCLUSIVE on the end.** Nim uses `..` (inclusive) or `..<` (exclusive), but for negative indices we use `..-` following Python semantics directly.
+- Python slices are exclusive on the end. Nim uses `..` (inclusive)
+  or `..<` (exclusive). Negative indices take `..-` and follow
+  the Python exclusive-upper-bound semantics directly.
 
 | Python syntax | Nim syntax | Result indices | Description |
 |---------------|-----------|---------------|-------------|
@@ -459,11 +461,13 @@ For a 5-element array (indices 0, 1, 2, 3, 4):
 | `a[-3:]` | `a[-3.._]` | 2,3,4 | Start at -3 (2), go to end |
 | `a[-3:-1]` | `a[-3..-1]` | 2,3 | Start at -3 (2), stop before -1 (4) |
 
-**Key insight**: In Python slicing, `-1` as stop means "up to but NOT including the last element". The libtorch `Slice` constructor follows Python's exclusive upper bound semantics.
+- In Python slicing, `-1` as stop means up to but not including
+  the last element. The libtorch `Slice` constructor follows
+  the same exclusive upper bound semantics.
 
 ### Ellipsis (`...`) vs Span (`_`)
 
-The `_` symbol and `...` ellipsis have different meanings:
+`_` symbol and `...` ellipsis carry different meanings:
 
 - **`_` (Span)**: Selects the entire dimension. Equivalent to Python's `:` or libtorch's `Slice()`.
   - `tensor[_, 3]` = `tensor[:, 3]` = all of dim 0, specific index of dim 1
@@ -476,7 +480,7 @@ The `_` symbol and `...` ellipsis have different meanings:
 
 ### Step type and operators
 
-Internal workaround for operator precedence:
+Operator precedence needs explicit grouping here:
 
 ```nim
 type Step = object
@@ -515,7 +519,7 @@ func pythonSliceToTorchSlice*(
   ##   Since stop=4 is exclusive, we get elements up to index 3 (all but last)
 ```
 
-This function is automatically called during tensor indexing when negative indices are detected.
+Tensor indexing calls this handler when a negative index appears.
 
 ### FancySelectorKind - Indexing dispatch
 
@@ -671,6 +675,6 @@ suite "Operator precedence":
 2. Use `shape.asTorchView()` for shape parameters
 3. Use `dtype.toTorchType()` for dtype conversion
 4. Use `==` for tensor comparison (uses `equal()` internally)
-5. Each branch of `case` must assign to `result`
+5. Every `case` branch assigns `result`
 6. For FFT tests, verify roundtrip with `abs()` and `mean()` of difference
 7. Use `max(abs(tensor)).item(float64)` for normalization in error calculations

@@ -1,29 +1,24 @@
 #!/usr/bin/env python3
 """
-Generate greedy (temperature 0) decoding fixtures for the Qwen3.5-0.8B text
-stack using the reference transformers modeling on CPU torch bf16.
+Greedy (temperature 0) decoding fixtures for the Qwen3.5-0.8B text stack,
+reference transformers modeling on CPU torch bf16, one JSON file per prompt
+following the gen_bf16_qwen3_04_greedy_text_generation.py conventions.
 
-Reference: gen_bf16_qwen3_04_greedy_text_generation.py conventions (one JSON file per prompt).
+Decode entry, explicit because the Qwen3.5 config has no bos_token_id, no
+generation_config.json:
 
-Decode entry convention: the Qwen3.5 config has no bos_token_id and no
-generation_config.json, so the decode entry is defined explicitly here:
-generation starts from the prompt tokens directly (no special token is
-prepended) and stops at config eos_token_id 248044. The tokenizer's own
-eos (248046, im_end) is not used.
+  - generation starts from the prompt tokens directly (no special token prepended)
+  - decoding stops at the config eos_token_id 248044
+  - the tokenizer's own eos (248046, im_end) is not used
 
-One prompt ("The resume is ready", decomposed e + U+0301) carries combining
-marks in its token stream. The reference pre-tokenizer regex includes the
-\\p{M} class, so the marks merge into letter tokens ("résumé"). The fixture
-locks that token stream so the Nim tokenizer must handle combining marks the
-same way.
+One prompt ("The resume is ready", decomposed e + U+0301) carries combining marks in its token stream:
 
-What is generated (under tests/fixtures/bf16-04-greedy-text-generation/Qwen3.5-0.8B/):
+  - the reference pre-tokenizer regex includes the \p{M} class, so the marks merge into letter tokens ("résumé")
+  - the fixture locks that token stream so the Nim tokenizer must handle combining marks the same way
 
-  <safe_name>.json   per prompt: prompt, prompt_ids, full_ids,
-    generated_ids, full_text, generated_text, num_prompt_tokens,
-    num_generated_tokens, eos_token_id.
-
-environments missing the """
+Generated under tests/fixtures/bf16-04-greedy-text-generation/Qwen3.5-0.8B/,
+one <safe_name>.json file per prompt.
+"""
 
 import json
 import os
@@ -31,11 +26,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import platform  # noqa: E402
-import torch  # noqa: E402
-import transformers  # noqa: E402
+import platform
+import torch
+import transformers
 
-from fixture_stats import recording_env, write_json_zst, write_provenance  # noqa: E402
+from fixture_stats import (  # noqa, the E402 import follows the path insert
+    argmax_record_from_step, write_argmax_decisions,
+    write_json_zst)
 from transformers import AutoTokenizer
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5ForConditionalGeneration
 from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config
@@ -45,8 +42,14 @@ from safetensors import safe_open
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# Config.
+# Config, schema id and model path constants.
 GREEDY_STEPS_SCHEMA = "ttt-tf-001-greedy-steps-h2"
+
+DECISION_ULP_DATATYPE = "bf16"
+    # The ulp datatype of the chain, serialized as the 005 decisions
+    # frame's "ulp_datatype" key, the unit every decision band check consumes.
+
+
 MODEL_NAME = "Qwen3.5-0.8B"
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 FIXTURE_DIR = os.path.join(
@@ -58,11 +61,12 @@ MODEL_DIR = os.path.join(
 MODEL_PATH = os.path.join(MODEL_DIR, "model.safetensors-00001-of-00001.safetensors")
 CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 
-# (prompt, output file name, max_new_tokens, seed). The second prompt
-# uses decomposed e + U+0301 combining acute to exercise pre-tokenizer
-# \p{M} class and decodes to text identical to the precomposed
-# form. Greedy decoding is sampling-free, so the seeds
-# are fixed per prompt for reproducible RNG state on reruns.
+# PROMPTS entries carry (prompt, output file name, max_new_tokens, seed).
+# - greedy decoding is sampling-free, so the seeds are fixed per prompt
+#   for reproducible RNG state on reruns
+# - the second prompt uses decomposed e + U+0301 combining acute,
+#   exercising the pre-tokenizer \p{M} class and decoding to text
+#   identical to the precomposed form
 PROMPTS = [
     ("Hello, how are you?", "Hello_how_are_you", 8, 81),
     ("The résumé is ready", "The_resume_is_ready", 8, 82),
@@ -83,9 +87,9 @@ def load_wrapper_config() -> Qwen3_5Config:
 def build_model(cfg: Qwen3_5Config) -> Qwen3_5ForConditionalGeneration:
     """Wrapper model with real checkpoint weights, bf16, eval, CPU.
 
-    The rotary inv_freq buffer is restored to f32 after the dtype cast: the
-    reference rotary forward computes cos/sin in f32 and bf16 storage would
-    round the frequency values (~1e-3 per element).
+    Returns the model with the rotary inv_freq buffer restored to f32
+    after the dtype cast, because bf16 storage would round the frequency
+    values (~1e-3 per element) while the reference computes cos/sin in f32.
     """
     model = Qwen3_5ForConditionalGeneration(cfg)
     rotary = model.model.language_model.rotary_emb
@@ -113,6 +117,7 @@ def build_model(cfg: Qwen3_5Config) -> Qwen3_5ForConditionalGeneration:
 
 
 def main() -> None:
+    """Generates the bf16-04 greedy fixtures and the decision records."""
     print(f"Generating {MODEL_NAME} bf16-04-greedy-text-generation fixtures")
     print("=" * 60)
     os.makedirs(FIXTURE_DIR, exist_ok=True)
@@ -130,8 +135,9 @@ def main() -> None:
         prompt_ids = input_ids[0].tolist()
         print(f"\nPrompt ({len(prompt_ids)} tokens): {prompt!r}")
 
-        # ttt-tf-001-greedy-steps-h2: replay generation step by step so each deciding row
-        # is captured in f32. Greedy is argmax over the raw logits row.
+        # ttt-tf-001-greedy-steps-h2, replaying generation step by step so
+        # each deciding row is captured in f32, greedy decoding being argmax
+        # over the raw logits row.
         scores = []
         generated_ids = []
         with torch.no_grad():
@@ -197,18 +203,15 @@ def main() -> None:
 
         out_path = os.path.join(FIXTURE_DIR, f"{out_name}.json.zst")
         write_json_zst(out_path, fixture)
+        write_argmax_decisions(
+            os.path.join(FIXTURE_DIR, f"{out_name}.decisions.json.zst"),
+            out_name,
+            [argmax_record_from_step(step)
+             for step in steps], DECISION_ULP_DATATYPE)
         print(f"  Generated: {len(generated_ids)} tokens -> {generated_text!r}")
         print(f"  Fixture saved: {out_path}")
 
     print("=" * 60)
-    provenance = recording_env(
-        model=MODEL_NAME,
-        generator="testgen/gen_bf16_qwen35dense_04_greedy_text_generation.py",
-        seed="none (greedy temp=0, no sampling)",
-        extra={"dtype": "bfloat16"},
-    )
-    write_provenance(os.path.join(FIXTURE_DIR, "PROVENANCE.md"),
-                     list(provenance.items()))
     print(f"Fixture generation complete: {FIXTURE_DIR}")
 
 
