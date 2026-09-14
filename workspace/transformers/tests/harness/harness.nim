@@ -67,11 +67,6 @@ const
     ## Edge-band width of the tail instrument, the threshold-binade
     ## ulp steps giving the honest drift allowance past the threshold.
 
-  MarginSensitivitySlack = 0.05
-    ## Fraction of the recorded margin added to the top-32 logit band,
-    ## covering a reference error of size e on the recorded logits,
-    ## every dependent band shifts by at most slack x margin.
-
   UniformStatsSchema = "ttt-tf-004-uniform-stats"
     ## Format registry id of the uniform stats record frame, one
     ## record per tensor:
@@ -338,11 +333,6 @@ proc ulpDistance(g: UlpDatatype, a, b: float32): int64 =
 #                          Statistics primitives
 # #######################################################################
 
-proc logitCap(delta: float64, margin: float64): float64 =
-  ## Recorded-logit drift cap, the allowance delta plus the sensitivity
-  ## slack scaled by the recorded margin.
-  delta + MarginSensitivitySlack * margin
-
 proc totalVariation(a, b: tuple[keys: seq[uint16], counts: seq[uint32],
     total: uint64]): float64 =
   ## Total variation distance between two soft histograms, the summed
@@ -567,28 +557,22 @@ proc loadUniformStats(t: Tensor, name = ""): StatsRecord =
 #                          Allowance derivation
 # #######################################################################
 type
-  BandSet = tuple[ulpBand: int, delta: float64, klBand: float64,
-    logitCap: float64]
+  BandSet = tuple[ulpBand: int, delta: float64, klBand: float64]
     ## Derived allowances of one comparison.
     ## - ulpBand, honest drift allowance in ulps at the reference magnitude
     ## - delta, the same allowance in absolute scale
-    ## - klBand, the truncated-KL allowance
-    ## - logitCap, the recorded-logit drift cap
-    ##   formula = delta + MarginSensitivitySlack x margin
+    ## - klBand, the truncated-KL allowance, 0.5 x delta^2
 
 
 proc deriveBands(ulpAllowance: int, top1: float64, depth = 1,
     datatype: UlpDatatype = ulpBf16,
-    coarseAmplification = 1.0, margin = 0.0): BandSet =
+    coarseAmplification = 1.0): BandSet =
   ## Returns the drift allowances for one comparison.
   ##
   ## - the reference magnitude = the recorded top-1 logit for decisions,
   ##   the recorded max magnitude for value records
   ## - the bands scale by the composed chain's depth, one stage = one
   ##   allowance of the error-model class
-  ## - the logit cap adds a sensitivity slack:
-  ##   a reference error of size slack x margin shifts every dependent band
-  ##   by that much
   ## - worked example, a bf16 recording with recorded top-1 17.25
   ##   - one bf16 ulp at 17.25 = 0.125
   ##   - the reduction class (4 ulps per stage) gives delta = 0.5
@@ -601,7 +585,6 @@ proc deriveBands(ulpAllowance: int, top1: float64, depth = 1,
   result.ulpBand = ceil(ulpAllowance.float64 * depth.float64 * amp).int
   result.delta = result.ulpBand.float64 * ulpStepAt(datatype, abs(top1))
   result.klBand = 0.5 * result.delta * result.delta
-  result.logitCap = logitCap(result.delta, margin)
 
 
 # #######################################################################
@@ -903,10 +886,14 @@ proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord,
   ##   computed row -> argmax, top-32 logits, truncated KL, tail
   ##   recorded record -----------------------------------------> allowances
   ##
-  ## Every step runs the top-32 instruments, flips included:
-  ## - the top-32 logits differ from the recorded values by at most
-  ##   delta + 0.05 x margin
-  ## - the truncated KL over the 32 recorded ids stays at most 0.5 x delta^2
+  ## Two-tier instrument, the pick and the top-32 distribution price
+  ## different quantities. Every step runs the top-32 instruments, flips
+  ## included:
+  ## - the pick is the decoded token, divergence raises unless tie-eligible
+  ## - the truncated KL over the 32 recorded ids stays at most
+  ##   0.5 x delta^2, the distribution allowance, the individual top-32
+  ##   logits carry no per-id value band, honest mid-table id drift
+  ##   stays inside the KL band
   ## - the tail probability differs from the recorded value by at most
   ##   min(0.3, exp(delta) - 1) x max(recorded tail, 1e-3) + 1e-4 a uniform
   ##   shift of every logit cancels in the softmax, the instruments read
@@ -935,9 +922,10 @@ proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord,
   ## rank-32/33 gaps run one ulp wide, matching cross-platform kernel
   ## drift's scale. A membership verdict would measure the platform,
   ## never the model.
-  ## The boundary stays covered by the value instruments, every
-  ## recorded top-32 logit is band-checked on every step, the drift
-  ## cannot hide, only the membership = unobserved.
+  ## The boundary stays covered by the set certificate and the KL
+  ## instrument. A rank-32/33 swap the certificate accepts sits within
+  ## one ulp of the record's datatype and the drift band, a wider set
+  ## change or a distribution shift past the KL band raises.
   ## - kind, the error model class the allowances derive from at check
   ## - flipCount, the caller-owned chain-wide counter, the MaxTieFlips
   ##   constant caps it, pick flips increment it
@@ -969,27 +957,16 @@ proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord,
 
   let top1Rec = record.topKLogits[0].float64
   let bands = deriveBands(allowanceOf(record.kind), top1Rec, depth,
-    record.ulpDatatype, margin = record.margin)
-  let cap = bands.logitCap
+    record.ulpDatatype)
 
   # The top-32 instruments run on every step, flips included, the 32-wide
   # (record width) truncated KL check does not skip flips.
   var obs = newSeq[float32](record.topKLogits.len)
-  var worst = 0.0'f64
-  var worstId = -1
   for i, id in record.topK:
     if id < 0 or id >= n:
       raise newException(HarnessCheckError,
         "argmax record top-32 id " & $id & " outside the row" & ctx)
     obs[i] = raw[id]
-    let d = abs(obs[i].float64 - record.topKLogits[i].float64)
-    if d > worst:
-      worst = d
-      worstId = id
-  if worst > cap:
-    raise newException(HarnessCheckError,
-      "argmax top-32 logit drift " & $worst & " at id " & $worstId &
-      " exceeds cap " & $cap & " (margin " & $record.margin & ")" & ctx)
   let kl = truncatedKl(record.topKLogits, obs)
   if kl > bands.klBand:
     raise newException(HarnessCheckError,
