@@ -244,6 +244,8 @@ task test_tf_bf16_qwen36moe_01_layer_internals, "Suite: Qwen3.6-35B-A3B decoder 
   runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim")
 task test_tf_bf16_qwen36moe_03_full_forward_to_logits, "Suite: Qwen3.6-35B-A3B ids to logits inference":
   runTransformerSuite("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim")
+task test_tf_bf16_qwen36moe_04_greedy_text_generation, "Suite: Qwen3.6-35B-A3B greedy decoding":
+  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")
 task test_tf_exl3_qwen3_00_codec, "Suite: EXL3 trellis decode vs production kernel hash":
   runTransformerSuite("q_exl3", "t_exl3_qwen3_00_codec.nim")
 task test_tf_exl3_qwen3_00_hadamard, "Suite: EXL3 hadamard vs production kernel":
@@ -290,14 +292,16 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
   of "greedy":
     runFamily(@[
       ("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim")])
+      ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
   of "moe":
     runFamily(@[
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim")])
+      ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
   of "harness":
     runFamily(@[
       ("harness", "t_harness_selftest.nim")])
@@ -330,6 +334,7 @@ task test_transformers, "Test workspace/transformers (the full set, final verifi
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim"),
       ("harness", "t_harness_selftest.nim"),
       ("samplers", "t_sampler.nim"),
       ("kvcache", "test_kvcache.nim"),
