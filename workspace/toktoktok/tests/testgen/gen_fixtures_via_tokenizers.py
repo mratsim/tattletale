@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Generate fixture files for tokenizer testing via HuggingFace tokenizers library.
+Generate fixture files for tokenizer testing via the HuggingFace tokenizers library.
 
-This generates fixtures using the HuggingFace tokenizers library directly,
-which should produce identical results to our Nim HF-to-tiktoken conversion.
+This generates fixtures using the HuggingFace tokenizers library,
+which should produce identical results to the Nim HF-to-tiktoken conversion.
 
-Fixtures are JSON files with the format:
-{
-    "text": "Some example text",
-    "token_ids": [10, 234, 6909, ..., 99],
-    "tokenizer": "gpt2-tokenizer.json"
-}
+Each fixture frame row carries:
+- text, the example text.
+- token_ids, the recorded tiktoken id stream.
+- tokenizer, the source checkpoint file name
+  (for example gpt2-tokenizer.json).
 """
 
 import json
@@ -47,7 +46,7 @@ def get_test_texts() -> List[tuple[str, str]]:
     """Get all test texts for fixture generation."""
     texts = []
 
-    # From gen_fixtures_via_tiktoken.py
+    # texts from gen_fixtures_via_tiktoken.py
     texts.extend(
         [
             ("chinese", "你好世界"),
@@ -62,7 +61,7 @@ def get_test_texts() -> List[tuple[str, str]]:
         ]
     )
 
-    # Greek texts
+    # Greek text rows
     texts.extend(
         [
             ("greek_basic", "Ελληνικά και μαθηματικά"),

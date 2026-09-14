@@ -2,12 +2,11 @@
 """
 Generate fixture files for tokenizer testing via tiktoken.
 
-Fixtures are JSON files with the format:
-{
-    "text": "Some example text",
-    "token_ids": [10, 234, 6909, ..., 99],
-    "tokenizer": "tiktoken_r50k_base.tiktoken"
-}
+Each fixture frame row carries:
+- text, the example text.
+- token_ids, the recorded tiktoken id stream.
+- tokenizer, the source rank file name
+  (for example tiktoken_r50k_base.tiktoken).
 """
 
 import json
@@ -72,7 +71,7 @@ def get_test_texts() -> List[tuple[str, str]]:
     """Get all test texts for fixture generation."""
     texts = []
 
-    # From test_roundtrip_tiktokenizer.nim
+    # texts from test_roundtrip_tiktokenizer.nim
     texts.extend(
         [
             ("chinese", "你好世界"),
@@ -87,7 +86,7 @@ def get_test_texts() -> List[tuple[str, str]]:
         ]
     )
 
-    # Greek texts
+    # Greek text rows
     texts.extend(
         [
             ("greek_basic", "Ελληνικά και μαθηματικά"),

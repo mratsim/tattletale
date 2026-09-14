@@ -5,6 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+## Byte-level BPE codec over PCRE2 pattern matching
+## (pattern wrappers, tokenizer object, merge cores, checkpoint loaders).
+
 import std/tables
 import std/os
 import std/strutils
@@ -21,17 +24,19 @@ import ./tokenizers_regexps
 const MaxInt = high(int)
 
 type
+  ## Wrapper for a compiled PCRE2 pattern, owner of the code pointer.
   Pcre2Code* = object
-    ## Wrapper for compiled PCRE2 pattern
     code*: ptr Code
     pattern*: string
 
+  ## PCRE2 match state, owner of the match data, borrower of the code.
   Pcre2Matcher* = object
     code*: ptr Code
     matchData*: ptr MatchData
     ovector*: ptr UncheckedArray[int]
     ovectorCount*: uint32
 
+  ## Byte-level BPE codec over PCRE2 pattern matching (encoder, decoder, special-token tables, per-piece cache).
   BPETokenizer* = ref object
     encoder*: Table[seq[byte], int]
     decoder*: Table[int, seq[byte]]
@@ -44,6 +49,8 @@ type
     cache*: Table[seq[byte], seq[int]]
     byteDecoder*: Table[string, int]
 
+  ## Raised for missing/empty files, malformed checkpoints and invalid
+  ## token ids on the decode path.
   TokenizerError* = object of ValueError
 
 proc `=destroy`(code: Pcre2Code) {.inline.} =
@@ -56,7 +63,7 @@ proc `=wasMoved`(code: var Pcre2Code) {.inline.}  =
   `=wasMoved`(code.pattern)
 
 proc `=destroy`(matcher: Pcre2Matcher) {.inline.} =
-  # Pcre2Matcher does NOT own the ptr Code — it is borrowed from Pcre2Code.
+# Pcre2Matcher does NOT own the ptr Code, it is borrowed from Pcre2Code.
   # Only Pcre2Code's destructor calls code_free. Freeing matchData is sufficient.
   if matcher.matchData != nil:
     match_data_free(matcher.matchData)
@@ -68,13 +75,12 @@ proc `=wasMoved`(matcher: var Pcre2Matcher) {.inline.} =
   matcher.ovectorCount = 0
 
 proc init*(_: type BPETokenizer): BPETokenizer =
+  ## Empty tokenizer, the tables are filled by the loaders.
   default(BPETokenizer)
 
-################################################################################
-#                                                                              #
-#                          Pattern Matching                                    #
-#                                                                              #
-################################################################################
+#------------------------------------------------------------------------------
+# Pattern Matching
+#------------------------------------------------------------------------------
 
 proc compilePcre2(pattern: string, utf8: bool = true): Pcre2Code {.meter.} =
   var errorCode: CompileError
@@ -132,18 +138,28 @@ iterator findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0)
     if matchStart == matchEnd:
        offset += 1
 
-################################################################################
-#                                                                              #
-#                          Byte-Pair Encoding                                  #
-#                                                                              #
-################################################################################
+#------------------------------------------------------------------------------
+# Byte-Pair Encoding
+#------------------------------------------------------------------------------
 #
 # Benchmarking shows that repeatedly returning/concatenating sequences was too much overhead
 # in `bytePairEncode` and in-place construction was necessary.
 #
-# Note: TTT_METER introduces significant overhead especially for small functions (cache misses + atomic increment on function in/out)
+# Note:
+#   TTT_METER introduces significant overhead especially for small functions (cache misses + atomic increment on function in/out)
+#
+# Metering harness for BPETokenizer.encode, run with -d:TTT_METER:
 #
 # ❯ nim c -r --hints:off --warnings:off --verbosity:0 -d:danger -d:TTT_METER --outdir:build workspace/toktoktok/bench/meter_tokenizer.nim
+#
+# bench/meter_tokenizer.nim loads a tokenizer, encodes a fixture text in-process
+# with BPETokenizer.encode, and reports per {.meter.}-tagged proc:
+#
+#   - number of calls
+#   - throughput in ops/s, total time and average time per call
+#
+# Metering receipt, Apple M4 Max (the bencher prints no CPU cycle
+# columns on this CPU family, the cycle counter is unavailable):
 #
 # ======================================================================
 # PERFORMANCE METERING: BPETokenizer.encode
@@ -157,34 +173,45 @@ iterator findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0)
 # Metering tokenizer.encode on Verne text (10000 chars)
 # ============================================================
 #
-# CPU: Intel(R) Core(TM) Ultra 7 265K
-# The CPU Cycle Count is indicative only. It cannot be used to compare across systems, works at your CPU nominal frequency and is sensitive to overclocking, throttling and frequency scaling (powersaving and Turbo Boost).
+# **2026-02-10 6c85b537** - the value-returning bytePairEncode, the
+# revision where metering was introduced
 #
-# **BEFORE**
-#
-# |                         Procedures                         |  # of Calls  | Throughput (ops/s) |   Time (10⁻⁶s)   | Avg Time (10⁻⁶s) | CPU 10³cycles | Avg 10³cycles |
-# |------------------------------------------------------------|--------------|--------------------|------------------|------------------|---------------|---------------|
-# |bytePairMerge*(piece: seq[byte]; ranks: Table[seq[byte], ...|           662|          777351.135|           851.610|             1.286|       3162.868|          4.778|
-# |bytePairEncode*(piece: seq[byte]; ranks: Table[seq[byte] ...|           662|             257.659|       2569284.415|          3881.094|    9964170.880|      15051.618|
-# |splitTextOrdinary(tokenizer: BPETokenizer; text: string) ...|             1|            3152.058|           317.253|           317.253|       1230.220|       1230.220|
-# |encodeOrdinary*(tokenizer: BPETokenizer; text: string):  ...|             1|               0.389|       2569959.520|       2569959.520|    9967008.492|    9967008.492|
-# |encodeWithSpecialTokens*(tokenizer: BPETokenizer; text:  ...|             1|               0.389|       2569969.828|       2569969.828|    9967048.497|    9967048.497|
-# |encode*(tokenizer: BPETokenizer; text: string): seq[int]    |             1|               0.389|       2569969.950|       2569969.950|    9967049.001|    9967049.001|
+# |                         Procedures                         |  # of Calls  | Throughput (ops/s) |    Time (µs)     |  Avg Time (µs)   |
+# |------------------------------------------------------------|--------------|--------------------|------------------|------------------|
+# |bytePairMerge*(piece: seq[byte]; ranks: Table[seq[byte], ...|           662|         1318268.170|           502.174|             0.759|
+# |bytePairEncode*(piece: seq[byte]; ranks: Table[seq[byte] ...|           662|             260.505|       2541218.584|          3838.699|
+# |splitTextOrdinary(tokenizer: BPETokenizer; text: string) ...|             1|            2458.011|           406.833|           406.833|
+# |encodeOrdinary*(tokenizer: BPETokenizer; text: string):  ...|             1|               0.393|       2541807.125|       2541807.125|
+# |encodeWithSpecial*(tokenizer: BPETokenizer; text: string ...|             1|               0.393|       2541821.791|       2541821.791|
+# |encode*(tokenizer: BPETokenizer; text: string): seq[int]    |             1|               0.393|       2541821.875|       2541821.875|
 #
 # Result: 3124 tokens encoded
 #
-# **AFTER**
+# **2026-09-14, master implementation** - the in-place encodedResult
+# construction (introduced 2026-02-10 5184fe48)
 #
-# |                         Procedures                         |  # of Calls  | Throughput (ops/s) |   Time (10⁻⁶s)   | Avg Time (10⁻⁶s) | CPU 10³cycles | Avg 10³cycles |
-# |------------------------------------------------------------|--------------|--------------------|------------------|------------------|---------------|---------------|
-# |bytePairMerge(piece: seq[byte]; ranks: Table[seq[byte],  ...|           662|         1076666.108|           614.861|             0.929|       2337.808|          3.531|
-# |bytePairEncode*(encodedResult: var seq[int]; piece: seq[ ...|           662|          966358.464|           685.046|             1.035|       2610.018|          3.943|
-# |splitTextOrdinary(tokenizer: BPETokenizer; text: string) ...|             1|            2934.221|           340.806|           340.806|       1321.500|       1321.500|
-# |encodeOrdinaryImpl(encodedResult: var seq[int]; tokenize ...|             1|             832.752|          1200.837|          1200.837|       4656.916|       4656.916|
-# |encodeWithSpecialTokens*(tokenizer: BPETokenizer; text:  ...|             1|             830.313|          1204.365|          1204.365|       4670.778|       4670.778|
-# |encode*(tokenizer: BPETokenizer; text: string): seq[int]    |             1|             830.270|          1204.427|          1204.427|       4671.020|       4671.020|
+# |                         Procedures                         |  # of Calls  | Throughput (ops/s) |    Time (µs)     |  Avg Time (µs)   |
+# |------------------------------------------------------------|--------------|--------------------|------------------|------------------|
+# |bytePairMerge(piece: seq[byte]; ranks: Table[seq[byte],  ...|           662|         1013203.790|           653.373|             0.987|
+# |bytePairEncode*(encodedResult: var seq[int]; piece: seq[ ...|           662|          916954.658|           721.955|             1.091|
+# |splitTextOrdinary(tokenizer: BPETokenizer; text: string) ...|             1|            2406.982|           415.458|           415.458|
+# |encodeOrdinaryImpl(encodedResult: var seq[int]; tokenize ...|             1|             740.238|          1350.917|          1350.917|
+# |encodeWithSpecialTokens*(tokenizer: BPETokenizer; text:  ...|             1|             736.490|          1357.791|          1357.791|
+# |encode*(tokenizer: BPETokenizer; text: string): seq[int]    |             1|             736.400|          1357.958|          1357.958|
 #
 # Result: 3124 tokens encoded
+#
+# **2026-09-14, commit ID pending** - the streaming pipeline
+# (TokPipeline over the same kimik2.5 ranks and the same Verne text,
+# tables warmed, 40 interleaved alternating-order reps against the
+# in-place implementation, id streams asserted identical):
+#
+# |   input   | in-place min | in-place median | streaming min | streaming median |
+# |-----------|--------------|-----------------|---------------|------------------|
+# | 10K Verne |     0.822 ms |         0.836 ms |      0.283 ms |         0.294 ms |
+# | 461KB     |    40.144 ms |        41.380 ms |     16.108 ms |        16.635 ms |
+#
+# Running the meter produces the report.
 
 proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] {.meter.} =
   var parts = newSeqOfCap[(int, int)](piece.len + 2)
@@ -193,7 +220,7 @@ proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, in
   var minRankIdx = 0
 
   for i in 0..<piece.len - 1:
-    let pair = @[piece[i], piece[i+1]]          # TODO: That seems like a wasteful allocation
+    let pair = @[piece[i], piece[i+1]]          # TODO drop the per-pair seq allocation
     let rank = ranks.getOrDefault(pair, MaxInt)
     if rank < minRank:
       minRank = rank
@@ -204,9 +231,7 @@ proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, in
   parts.add((piece.len, MaxInt))
 
   template getRank(parts: seq[(int, int)], i: int): int =
-    ## Get rank for pair starting at parts[i], spanning to parts[i+3] boundary.
-    ## Captures `ranks` and `piece`
-    ## Always inlined
+    ## Get rank for pair starting at parts[i], spanning to parts[i+3] boundary. Captures `ranks` and `piece` Always inlined
     if i + 3 < parts.len:
       let startIdx = parts[i][0]
       let endIdx = parts[i+3][0]
@@ -238,6 +263,8 @@ proc bytePairEncode*(
         encodedResult: var seq[int],
         piece: seq[byte],
         ranks: Table[seq[byte], int]) {.meter.} =
+  ## Naive full-rescan BPE merge of one piece over the rank table,
+  ## the emitted ids append to encodedResult.
 
   if piece.len == 1:
     encodedResult.add(ranks[piece])
@@ -247,11 +274,9 @@ proc bytePairEncode*(
   for i in 0 ..< mergedParts.len-1:
     encodedResult.add(ranks[piece[mergedParts[i][0]..<mergedParts[i+1][0]]])
 
-################################################################################
-#                                                                              #
-#                             Tokenizing                                       #
-#                                                                              #
-################################################################################
+#------------------------------------------------------------------------------
+# Tokenizing
+#------------------------------------------------------------------------------
 
 proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] {.meter.} =
   var lastPos = 0
@@ -265,11 +290,12 @@ proc splitTextOrdinary(tokenizer: BPETokenizer, text: string): seq[string] {.met
     result.add(text[lastPos..<text.len])
 
 proc encodeOrdinaryImpl(encodedResult: var seq[int], tokenizer: BPETokenizer, text: string) {.meter.} =
-  # TODO: text should be a view to avoid alloc
+  # TODO:
+  #   text should be a view to avoid alloc
   let pieces = tokenizer.splitTextOrdinary(text)
   for piece in pieces:
     # string and seq[byte] have the same internal repr in Nim, at leat Nim v0, v1 and v2
-    # except string have also a terminating \0 (not counted in len)
+    # except strings also carry a terminating zero byte (not counted in len)
     let pieceByte = cast[seq[byte]](piece)
     if pieceByte in tokenizer.encoder:
       encodedResult.add(tokenizer.encoder[pieceByte])
@@ -277,9 +303,12 @@ proc encodeOrdinaryImpl(encodedResult: var seq[int], tokenizer: BPETokenizer, te
       encodedResult.bytePairEncode(pieceByte, tokenizer.encoder)
 
 proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] =
+  ## Encodes text with no special-token handling, the ordinary path.
   result.encodeOrdinaryImpl(tokenizer, text)
 
 proc encodeWithSpecialTokens*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
+  ## Encodes text with special-token segmentation, one id per special
+  ## token and the ordinary path per ordinary slice.
   var pos = 0
 
   while pos < text.len:
@@ -299,13 +328,14 @@ proc encodeWithSpecialTokens*(tokenizer: BPETokenizer, text: string): seq[int] {
       pos = pos + specialToken.len
     elif foundSpecial:
       if pos < nextPos:
-        result.encodeOrdinaryImpl(tokenizer, text[pos ..< nextPos]) # TODO: view slices
+        result.encodeOrdinaryImpl(tokenizer, text[pos ..< nextPos]) # TODO view slices
       pos = nextPos
     else:
-      result.encodeOrdinaryImpl(tokenizer, text[pos ..< text.len]) # TODO: view slices
+      result.encodeOrdinaryImpl(tokenizer, text[pos ..< text.len]) # TODO view slices
       break
 
 proc encode*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
+  ## Encodes text, special tokens included.
   tokenizer.encodeWithSpecialTokens(text)
 
 proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: openArray[int]): seq[byte] {.meter.} =
@@ -321,17 +351,16 @@ proc decodeToBytes(tokenizer: BPETokenizer, tokenIds: openArray[int]): seq[byte]
         raise newException(TokenizerError, "Invalid token: " & $id)
 
 proc decodeToString*(tokenizer: BPETokenizer, tokenIds: openArray[int]): string {.meter.} =
+  ## Decodes ids back to the original text (mergeable ranks first, special ids second, unknown ids raise TokenizerError).
   let bytes = tokenizer.decodeToBytes(tokenIds)
   if bytes.len == 0:
     return ""
   result = newString(bytes.len)
   copyMem(result[0].addr, bytes[0].unsafeAddr, bytes.len)
 
-################################################################################
-#                                                                              #
-#                        Vocabulary loaders                                    #
-#                                                                              #
-################################################################################
+#------------------------------------------------------------------------------
+# Vocabulary loaders
+#------------------------------------------------------------------------------
 
 proc loadFromTiktoken(ttk: TiktokenFormat): BPETokenizer =
   var tokenizer = BPETokenizer()
@@ -386,12 +415,13 @@ proc loadFromTiktoken(ttk: TiktokenFormat): BPETokenizer =
     tokenizer.specialMatcher = createMatcher(tokenizer.specialPattern)
   else:
     # Create a matcher that never matches
-    tokenizer.specialPattern = compilePcre2("(?!)")  # Never matches
+    tokenizer.specialPattern = compilePcre2("(?!)")  # the never-matching pattern
     tokenizer.specialMatcher = createMatcher(tokenizer.specialPattern)
 
   tokenizer
 
 proc loadHFTokenizer*(path: string): BPETokenizer =
+  ## Loads an HF tokenizer.json into a codec (deserialize, convert, load).
   if not fileExists(path):
     raise newException(TokenizerError, "HF tokenizer JSON file not found: " & path)
 
@@ -404,6 +434,7 @@ proc loadHFTokenizer*(path: string): BPETokenizer =
   loadFromTiktoken(ttk)
 
 proc loadTiktokenizer*(path: string, regexp: TokRegexp): BPETokenizer =
+  ## Loads a `.tiktoken` rank file with the given pattern regexp.
   if not fileExists(path):
     raise newException(TokenizerError, "Tiktoken file not found: " & path)
 
@@ -414,5 +445,23 @@ proc loadTiktokenizer*(path: string, regexp: TokRegexp): BPETokenizer =
   let ttk = deserializeTiktokenizer(content, regexp)
   loadFromTiktoken(ttk)
 
+proc loadTiktokenizer*(path: string, regexp: TokRegexp,
+    specialTokens: sink OrderedTable[string, int]): BPETokenizer =
+  ## Tiktoken rank table with explicit special tokens, loader contract:
+  ## - the base64 rank lines of a `.tiktoken` file carry mergeable ranks only.
+  ## - the special strings of a checkpoint live beside it, for example the checkpoint tokenizer_config.json added_tokens_decoder block.
+  ## - the explicit specialTokens mapping fixes the special-token alternation order.
+  if not fileExists(path):
+    raise newException(TokenizerError, "Tiktoken file not found: " & path)
+
+  let content = readFile(path)
+  if content.len == 0:
+    raise newException(TokenizerError, "Tiktoken file is empty: " & path)
+
+  var ttk = deserializeTiktokenizer(content, regexp)
+  ttk.specialTokens = specialTokens
+  loadFromTiktoken(ttk)
+
 proc tokenCount*(tokenizer: BPETokenizer): int =
+  ## Vocabulary size, mergeable ranks plus special tokens.
   tokenizer.encoder.len + tokenizer.specialTokensEncoder.len

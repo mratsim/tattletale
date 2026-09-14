@@ -59,6 +59,7 @@ proc getProjectDir(): string {.compileTime.} =
   currentSourcePath.parentDir()
 
 proc downloadTokenizer*(url, targetDir, filename: string) {.async.} =
+  ## Fetches one fixture file into targetDir, skipping an existing copy.
   createDir(targetDir)
   let targetPath = targetDir / filename
   if fileExists(targetPath):
@@ -75,6 +76,7 @@ proc downloadTokenizer*(url, targetDir, filename: string) {.async.} =
   await noCancel(httpSession.closeWait())
 
 proc downloadAllTokenizers*() {.async.} =
+  ## Downloads every tokenizer fixture into the tests' fixture directory.
   echo "======================================================================"
   echo "Downloading tokenizer test fixtures"
   echo "======================================================================"

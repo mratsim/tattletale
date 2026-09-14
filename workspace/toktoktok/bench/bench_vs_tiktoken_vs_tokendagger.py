@@ -141,6 +141,7 @@ def benchmark_tokenizer(
 
 
 def main():
+    """Benchmark Nim BPETokenizer against tiktoken and TokenDagger over the KimiK2.5 fixtures."""
     print("\n" + "=" * 70)
     print("BENCHMARK: Nim BPETokenizer vs tiktoken vs TokenDagger (KimiK2.5)")
     print("=" * 70)

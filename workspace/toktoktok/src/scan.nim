@@ -1,0 +1,1121 @@
+# Tattletale
+# Copyright (c) 2026 Mamy Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Text-to-pieces stage of the machine pipeline in one module:
+## the special-token scan (step 1) plus the per-family
+## pre-tokenization (step 2, pattern-split fast path included).
+##
+## Machine shape per src/machine.nim:
+##   object + ctor + ONE items, position state advanced before each yield.
+## Each stage carries its section doc below.
+
+import std/strutils
+import std/monotimes
+import std/times
+
+import workspace/data_structures/src/daac
+import workspace/regex_engine
+import ./machine
+
+# ------------------------------------------------------------------------
+# Step 1: special-token scan (SpecialScanner + SpecialScan machine)
+# ------------------------------------------------------------------------
+
+## Special-token scan stage (machine shape), double-array Aho-Corasick
+## over the special-token dictionary (workspace/data_structures),
+## yielding (ordinary-text | special-token) decisions as offset pairs.
+##
+## Decision semantics, matching toktoktok's special-token scan:
+## - greedy leftmost-start, the earliest start of any dictionary match wins.
+## - among candidates at that same start, the pattern declared FIRST
+##   in dictionary order wins. This is not longest-match, a shorter
+##   same-start candidate declared earlier beats a longer one.
+## - winning specials consume their bytes, text before them is one ordinary decision.
+## - ordinary regions are never split, one predecessor ordinary region
+##   is exactly one ordinary decision, so downstream pre-tokenization
+##   sees identical piece boundaries.
+##
+## Construction:
+## - dictionaries of at most `TwoLevelMaxPatterns` patterns skip
+##   the automaton entirely and use a two-level prefix index, level 1
+##   maps first byte to bucket, level 2 then compares candidates
+##   in priority order, with automaton-path equivalence fuzz-verified in the test suites.
+## - larger dictionaries build the automaton at scanner init, the build
+##   duration is recorded on the scanner and reported by the parity
+##   suite (heavy-construction rule).
+##
+## Streaming:
+##   the machine walks bytes once, carrying automaton state
+## and pending matches across feeds (carry-buffer discipline).
+## - an automaton-path decision at start s is final once the scan has
+##   progressed s + maxPatternLen bytes, no undiscovered match can start earlier.
+## - that finality makes chunk boundaries safe, a special straddling
+##   a chunk edge is held in the window and matched after the next feed.
+## - decision offsets index the machine window buffer (`win`, absolute base `winBase`), valid until the next feed.
+## - whole-input mode aliases the caller's string (zero copy), chunked
+##   mode reuses one growing window with decided-prefix compaction.
+## - no per-decision strings, decisions are offsets plus one id.
+##
+## Machine shape (src/machine.nim), object + ctor + ONE items:
+## - `items` refills the decision queue on demand and pops one
+##   decision per yield.
+## - `feed`/`finish` are state updates, not consumption surfaces.
+## - queued decision offsets stay valid only until the next feed.
+
+const
+  TwoLevelMaxPatterns* = 10
+  ## Dictionary size at or below which the two-level prefix index
+  ## replaces the automaton (the common small-special case).
+
+type
+  ## Built special-token dictionary, shared across machines, tie
+  ## priority in `patterns` (first entry wins same-start ties).
+  SpecialScanner* = ref object
+    patterns: seq[string]
+    ids: seq[int]
+    maxLen: int
+    useTwoLevel: bool
+    bucketStart: array[256 + 1, int32]
+    bucketOrder: seq[int32]
+    daac: Daac
+    buildNanos: int64
+
+  PendingMatch = object
+    ## One discovered-but-undecided match (absolute stream coordinates).
+    start: int
+    pat: int32
+
+  SpecialScan* {.final.} = object
+    ## Special-token scan machine (chain depth 1), decisions queue in `dq`, the scan machinery refills it on demand.
+    scanner: SpecialScanner
+    win*: string
+    ## Window buffer indexing the decision offsets, valid until the next feed (whole-input mode aliases the caller's string).
+    winBase*: int
+    ## Absolute stream offset of win[0].
+    decided: int
+    scanPos: int
+    acState: int32
+    curMin: int
+    pending: seq[PendingMatch]
+    dq: seq[SpecialDecision]
+    dqHead: int
+    streamEnded: bool
+
+proc patternCount*(s: SpecialScanner): int {.inline.} =
+  ## Number of dictionary patterns after deduplication.
+  s.patterns.len
+
+proc buildMillis*(s: SpecialScanner): float64 {.inline.} =
+  ## Automaton build wall time in milliseconds (0 for two-level and empty dictionaries).
+  float64(s.buildNanos) / 1_000_000.0
+
+proc maxPatternLen*(s: SpecialScanner): int {.inline.} =
+  ## Longest dictionary pattern byte length.
+  s.maxLen
+
+proc usesTwoLevel*(s: SpecialScanner): bool {.inline.} =
+  ## True when the scanner serves via the two-level prefix index
+  ## instead of the automaton.
+  s.useTwoLevel
+
+proc init*(_: type SpecialScanner, patterns: openArray[string],
+    ids: openArray[int], forceDaac = false): SpecialScanner =
+  ## Builds the scanner at init:
+  ## - patterns arrive in tie-priority order (the order that wins same-start ties),
+  ##   duplicates keep their first occurrence.
+  ## Raises ValueError on an empty pattern, the reference scan would not
+  ## terminate on it.
+  doAssert patterns.len == ids.len
+  new result
+  for pat in patterns:
+    if pat.len == 0:
+      raise newException(ValueError,
+        "SpecialScanner: empty special-token pattern (the reference scan would not terminate on it)")
+  for i in 0 ..< patterns.len:
+    var dup = false
+    for existing in result.patterns:
+      if existing == patterns[i]:
+        dup = true
+        break
+    if not dup:
+      result.patterns.add string(patterns[i])
+      result.ids.add ids[i]
+  result.maxLen = 0
+  for pat in result.patterns:
+    if pat.len > result.maxLen:
+      result.maxLen = pat.len
+  result.useTwoLevel = not forceDaac and result.patterns.len <= TwoLevelMaxPatterns
+  if result.useTwoLevel or result.patterns.len == 0:
+    # Two-level prefix index, a counting sort by first byte:
+    # stable in priority order, so a bucket scan visits candidates earliest-declared first.
+    var counts: array[256, int32]
+    for i in 0 ..< result.patterns.len:
+      inc counts[uint8(result.patterns[i][0])]
+    result.bucketStart[0] = 0
+    for b in 0 ..< 256:
+      result.bucketStart[b + 1] = result.bucketStart[b] + counts[b]
+    result.bucketOrder = newSeq[int32](result.patterns.len)
+    var fill: array[256, int32]
+    for bIdx in 0 ..< 256:
+      fill[bIdx] = result.bucketStart[bIdx]
+    for i in 0 ..< result.patterns.len:
+      let b = uint8(result.patterns[i][0])
+      result.bucketOrder[fill[b]] = int32(i)
+      inc fill[b]
+  else:
+    var priorityVals: seq[int] = @[]
+    for i in 0 ..< result.patterns.len:
+      priorityVals.add i
+    let t0 = getMonoTime()
+    result.daac = buildDaac(result.patterns, priorityVals)
+    result.buildNanos = (getMonoTime() - t0).inNanoseconds
+
+# ---------------------------------------------------------------------
+# Decision machinery
+# ---------------------------------------------------------------------
+
+proc emitOrdinary(c: var SpecialScan, absHi: int) {.inline.} =
+  ## Ordinary decision over [decided, absHi), skipped when empty (the predecessor emits nothing between adjacent specials).
+  if absHi > c.decided:
+    c.dq.add SpecialDecision(
+      lo: c.decided - c.winBase, hi: absHi - c.winBase,
+      specialId: -1)
+    c.decided = absHi
+
+proc emitSpecial(c: var SpecialScan, pat: int) {.inline.} =
+  ## Special decision for pattern `pat` starting at the decided frontier.
+  let endAbs = c.decided + c.scanner.patterns[pat].len
+  c.dq.add SpecialDecision(
+    lo: c.decided - c.winBase, hi: endAbs - c.winBase,
+    specialId: c.scanner.ids[pat])
+  c.decided = endAbs
+
+proc finalize(c: var SpecialScan) =
+  ## Emits one pending decision:
+  ## - ordinary up to the minimal pending match start, then the winning special (earliest-declared among candidates starting exactly there).
+  ## - prunes matches consumed or overlapped by the token.
+  doAssert c.pending.len > 0
+  var winner = -1
+  for m in c.pending.items:
+    if m.start == c.curMin and (winner < 0 or m.pat < winner):
+      winner = int(m.pat)
+  c.emitOrdinary(c.curMin)
+  c.emitSpecial(winner)
+  var w = 0
+  var newMin = high(int)
+  for m in c.pending.items:
+    if m.start >= c.decided:
+      if m.start < newMin:
+        newMin = m.start
+      c.pending[w] = m
+      inc w
+  c.pending.setLen(w)
+  c.curMin = newMin
+
+proc scanByte(c: var SpecialScan) =
+  ## One automaton step, transition then record every output-chain
+  ## match that starts at or after the decided frontier.
+  let sc = c.scanner
+  let b = uint8(c.win[c.scanPos - c.winBase])
+  c.acState = sc.daac.nextState(c.acState, b)
+  let endAbs = c.scanPos + 1
+  var op = sc.daac.outputHead(c.acState)
+  while op != 0:
+    let s0 = endAbs - int(sc.daac.outputLength(op))
+    if s0 >= c.decided:
+      if c.pending.len == 0 or s0 < c.curMin:
+        c.curMin = s0
+      c.pending.add PendingMatch(start: s0, pat: sc.daac.outputValue(op))
+    op = sc.daac.outputParent(op)
+  c.scanPos = endAbs
+
+proc probe(sc: SpecialScanner, win: string, off: int): int =
+  ## Two-level prefix lookup, the first pattern in priority order
+  ## matching at win[off ..], or -1:
+  ## - candidates too long for the window tail are skipped, they
+  ##   cannot match there.
+  ## - mid-stream callers guarantee full lookahead before the lookup.
+  let b = uint8(win[off])
+  var k = sc.bucketStart[b]
+  while k < sc.bucketStart[b + 1]:
+    let pat = sc.bucketOrder[k]
+    let patStr = sc.patterns[pat]
+    if off + patStr.len <= win.len:
+      var ok = true
+      for i in 0 ..< patStr.len:
+        if win[off + i] != patStr[i]:
+          ok = false
+          break
+      if ok:
+        return int(pat)
+    inc k
+  -1
+
+proc twoLevelServe(c: var SpecialScan) =
+  ## Two-level decision path, positions tested from the decided
+  ## frontier in order:
+  ## - first match wins (priority-ordered bucket), ordinary text
+  ##   before it is one decision.
+  ## - positions inside the final maxPatternLen bytes wait for more
+  ##   input (the carry), unless the stream ended.
+  let sc = c.scanner
+  let winEnd = c.winBase + c.win.len
+  while true:
+    var found = -1
+    var matchPos = -1
+    var pos = c.decided
+    while pos < winEnd:
+      if not c.streamEnded and pos + sc.maxLen > winEnd:
+        break
+      let hit = sc.probe(c.win, pos - c.winBase)
+      if hit >= 0:
+        found = hit
+        matchPos = pos
+        break
+      inc pos
+    if found >= 0:
+      c.emitOrdinary(matchPos)
+      c.emitSpecial(found)
+      return
+    if not c.streamEnded:
+      return
+    break
+  c.emitOrdinary(winEnd)
+
+proc daacServe(c: var SpecialScan) =
+  ## Automaton decision path:
+  ## - finalize whenever no undiscovered match can start before
+  ##   the minimal pending start (scan reached curMin + maxPatternLen),
+  ##   scanning one byte per step otherwise.
+  ## - at stream end every match is discovered, so pending drains
+  ##   directly and the tail ordinary region closes the stream.
+  let sc = c.scanner
+  let winEnd = c.winBase + c.win.len
+  while true:
+    if c.pending.len > 0 and c.scanPos >= c.curMin + sc.maxLen:
+      c.finalize()
+      return
+    if c.scanPos < winEnd:
+      c.scanByte()
+      continue
+    break
+  if c.streamEnded:
+    while c.pending.len > 0:
+      c.finalize()
+    c.emitOrdinary(winEnd)
+
+proc serve(c: var SpecialScan) =
+  ## Refills the decision queue:
+  ## - empty dictionaries are a pure passthrough, one ordinary
+  ##   decision over the whole stream at finish.
+  c.dq.setLen(0)
+  c.dqHead = 0
+  let sc = c.scanner
+  if sc.patterns.len == 0:
+    if c.streamEnded:
+      c.emitOrdinary(c.winBase + c.win.len)
+    return
+  if sc.useTwoLevel:
+    c.twoLevelServe()
+  else:
+    c.daacServe()
+
+# ---------------------------------------------------------------------
+# Machine surface
+# ---------------------------------------------------------------------
+
+proc decisionsQueued*(c: var SpecialScan): bool {.inline.} =
+  ## True while decisions are queued but not yet yielded:
+  ## - a caller draining a partially consumed stream consumes (or discards) them before re-binding the machine to a new stream.
+  ## - their offsets index the current window.
+  c.dqHead < c.dq.len
+
+proc drained*(c: var SpecialScan): bool {.inline.} =
+  ## True once the machine is finished:
+  ## - every byte scanned and decided, nothing queued.
+  ## - an iteration past the last decision ends there.
+  c.dqHead >= c.dq.len and c.streamEnded and c.pending.len == 0 and
+    c.decided >= c.winBase + c.win.len
+
+iterator items*(c: var SpecialScan): SpecialDecision {.inline.} =
+  ## Decision stream contract, yielded by `items`:
+  ## - ordinary stretches and special-token occurrences left to right,
+  ##   covering the decided stream exactly once.
+  ## - offsets into machine `win` (absolute base `winBase`), valid only
+  ##   until the next feed.
+  while true:
+    if c.dqHead < c.dq.len:
+      let d = c.dq[c.dqHead]
+      inc c.dqHead
+      if c.dqHead == c.dq.len:
+        c.dq.setLen(0)
+        c.dqHead = 0
+      yield d
+      continue
+    c.serve()
+    if c.dqHead >= c.dq.len:
+      break
+
+# ---------------------------------------------------------------------
+# Feeding
+# ---------------------------------------------------------------------
+
+proc compact(c: var SpecialScan) =
+  ## Drops the decided prefix of the window (carry-buffer reclamation).
+  let drop = c.decided - c.winBase
+  if drop <= 0:
+    return
+  for i in 0 ..< c.win.len - drop:
+    c.win[i] = c.win[i + drop]
+  c.win.setLen(c.win.len - drop)
+  c.winBase += drop
+
+proc feed*(c: var SpecialScan, chunk: openArray[char]) =
+  ## Appends the next stream chunk:
+  ## - queued decision offsets stay valid until this call, consumers
+  ##   must drain before further feeding.
+  ## - compaction runs only when the queue is empty.
+  doAssert not c.streamEnded, "feed after finish"
+  if c.dqHead >= c.dq.len:
+    c.compact()
+  let old = c.win.len
+  c.win.setLen(old + chunk.len)
+  for i in 0 ..< chunk.len:
+    c.win[old + i] = chunk[i]
+
+proc finish*(c: var SpecialScan) =
+  ## Marks the stream complete, the tail decision drains on the next iteration, idempotent.
+  c.streamEnded = true
+
+proc init*(_: type SpecialScan, scanner: SpecialScanner,
+    input: sink string): SpecialScan {.inline.} =
+  ## Whole-input mode, the window aliases the caller's string (zero copy) and the stream is complete from the start.
+  SpecialScan(scanner: scanner, win: input, winBase: 0, decided: 0,
+    scanPos: 0, acState: int32(DaacRootIdx), curMin: high(int),
+    streamEnded: true)
+
+proc init*(_: type SpecialScan, scanner: SpecialScanner): SpecialScan {.inline.} =
+  ## Chunked mode:
+  ##   feed chunks then finish. The window starts empty and carries undecided bytes across feeds.
+  SpecialScan(scanner: scanner, win: "", winBase: 0, decided: 0,
+    scanPos: 0, acState: int32(DaacRootIdx), curMin: high(int),
+    streamEnded: false)
+
+# ------------------------------------------------------------------------
+# Step 2 fast path, pattern-split lookahead emulation (SplitPattern triple + scanSplit)
+# ------------------------------------------------------------------------
+
+## Split triple, the fast path the step-2 chain consumes.
+##
+## Pattern-split pre-tokenization, rust-gems bpe-openai lookahead emulation:
+## - patterns at crates/bpe-openai/src/lib.rs:25-58.
+## - the anchored Splits iterator with the drop-last flag at lib.rs:252-280.
+## A family pattern whose top-level alternation carries the whitespace
+## lookahead alternative `\s+(?!\S)` compiles to three cooperating
+## anchored sub-patterns scanned in priority order
+## [(pat1, false), (pat2, true), (pat3, false)]:
+##
+## - pat1 carries every alternative before the lookahead slot
+##   unchanged plus `\s+$` in the lookahead slot, lookahead-free:
+##   - `\s+$` answers the end-of-window case, a run reaching the window end is one piece.
+##   - the original's trailing whitespace alternative is NOT part of pat1,
+##     it must stay lower priority than pat2 or a trailing `\s`
+##     would win the interior-run cursors of the pat2 emulation.
+## - pat2 is `\s+\s`, flagged drop-last. An interior run of >= 2
+##   whitespace codepoints has the greedy `\s+(?!\S)` extent equal to the run minus its last codepoint, which pat2 matches
+##   in full and the scan drops, resuming at the dropped codepoint (lib.rs:252-280).
+## - pat3 is the original's trailing whitespace alternative carried verbatim,
+##   reachable only where pat1 and pat2 both fail:
+##   - a one-codepoint run precedes a non-whitespace codepoint there.
+##   - r50k/cl100k carry `\s`, the o200k-shaped families `\s+`.
+##
+## The split scan reproduces the single-pattern leftmost-first scan exactly, an alternation admits the earliest
+## alternative with a non-empty match:
+## - pat1 answers the alternatives at or above the lookahead slot's end-of-window case.
+## - pat2 with the drop-last flag answers the interior lookahead case.
+## - pat3 answers the trailing slot.
+## The equivalence suite proves the split byte-identical to the frontier engine on every served family.
+## Window discipline, engine-owned:
+## - `$` binds at winHi (or before a final LF), never past it.
+## - pieces cut at special-token or region boundaries segment
+##   identically to the per-slice PCRE2 subject of the predecessor.
+##
+## Direct whitespace paths, proven by case analysis, gated by the equivalence suite plus two build-time capability tests of pat1.
+## At a cursor opening a run of ASCII whitespace bytes (0x09-0x0D, 0x20)
+## with no byte >= 0x80, every pat1 alternative that could fire
+## falls into exactly three shapes:
+## - a leading-char alternative whose lead is one non-CRLF codepoint
+##   followed by a non-whitespace continuation, firing only when the run is that single codepoint.
+## - a dollar-anchored alternative, firing only when the run reaches
+##   the window end.
+## - a `\s*[\r\n]`-shaped alternative, firing only when the run
+##   contains a carriage return or line feed, the engine attempt
+##   deciding the extent.
+## The capability tests ask pat1 whether it can match strictly inside
+## a whitespace run, `\t\tX` for the no-CRLF shape and `\t\r\nX` for the CRLF shape.
+## Where a test comes back negative, the scan resolves the cursor
+## without touching the engine:
+## - an interior run of >= 2 bytes takes the pat2 drop-last shape.
+## - a single CR or LF byte is a one-byte piece.
+## - a run reaching the window end without CRLF is the pat1 `$`
+##   full-run piece, a one-piece emission.
+## Any other whitespace cursor defers to the engine path:
+## - a multi-byte whitespace codepoint such as U+00A0 or U+3000.
+## - a test-positive shape.
+## There pat1, then pat2 drop-last, then pat3, then the one-codepoint gap advance the leftmost scan mirror prescribes.
+## The capability tests only ever make the scan more conservative (engine path):
+## a pattern whose alternatives fall outside the three shapes must not use the split.
+##
+## Longest-match contract of the split triple, measured over the first
+## lookahead-carrying pattern of every served pre-tokenization family:
+## - the regex engine's ordered-frontier (ordered live-thread) machinery
+##   is required, not collapsible to a plain longest-match powerset DFA
+##   for the family patterns the split serves.
+## - the collapsing exception is r50k/p50k, where leftmost-first
+##   segmentation equals a longest-match scan over pat1's alternatives
+##   (disjoint non-whitespace continuation classes, dollar alternatives of equal extent).
+## - the other ten families diverge on real rows, in three shapes:
+##   - contraction vs letter overlap, `'v'De` splits contraction-first
+##     (`'d` matches `'D`) where a longest-match scan reaches `'De`
+##     through the letter alternative
+##   - uppercase-led and lowercase-led letter alternatives carrying Lo
+##     in both classes, the uppercase-led one reaching farther
+##     (`_文D`, `あTZ`)
+##   - `\s*[\r\n]`-shaped and `\s+$`-shaped alternatives at a window end,
+##     a trailing `\n\t` segmenting differently under the two shapes.
+## - standing proof, the pattern-split equivalence suite
+##   tests/fuzzing/t_pretok_split.nim, checking per family the split
+##   scan against a longest-match scan over pat1's alternatives.
+
+type
+  ## Error raised by the pattern-split compilation preconditions.
+  SplitPatternError* = object of ValueError
+
+  ## Compiled sub-pattern triple of one lookahead-bearing family pattern, cooperation contract in the section doc above.
+  SplitPattern* = ref object
+    pat1*: CompiledPattern
+    pat2*: CompiledPattern
+    pat3*: CompiledPattern
+    interiorPlainCapable*: bool
+    ## Build-time test result, true when pat1 can match strictly inside
+    ## a whitespace run without CRLF:
+    ## - false for every served family pattern.
+    interiorCrlfCapable*: bool
+    ## Build-time test result for the `\s*[\r\n]`-shaped alternatives:
+    ## - true when pat1 can match strictly inside a whitespace run
+    ##   containing a carriage return or line feed.
+    ## - true for the cl100k/o200k-shaped and chain families.
+    name*: string
+
+const
+  WhitespaceLookahead* = r"\s+(?!\S)"
+  ## Lookahead alternative the split emulates, appearing verbatim
+  ## in every served family pattern.
+
+proc splitAlternatives*(pattern: string): seq[string] =
+  ## Returns the pattern split on top-level `|` operators, depth-tracked
+  ## over groups (...) and classes [...] with backslash escapes honored,
+  ## so alternations inside groups or classes stay intact:
+  ## splitAlternatives(r"a|b(?:c|d)|[|]") == @["a", r"b(?:c|d)", r"[|]"].
+  var depth = 0
+  var start = 0
+  var i = 0
+  while i < pattern.len:
+    case pattern[i]
+    of '\\':
+      inc i # the escaped character never opens, closes or splits
+    of '(', '[':
+      inc depth
+    of ')', ']':
+      if depth > 0:
+        dec depth
+    of '|':
+      if depth == 0:
+        result.add pattern[start ..< i]
+        start = i + 1
+    else:
+      discard
+    inc i
+  result.add pattern[start ..< pattern.len]
+
+proc hasWhitespaceLookahead*(pattern: string): bool =
+  ## True when the pattern's top-level alternation carries
+  ## `\s+(?!\S)` exactly (the split's precondition).
+  for alt in splitAlternatives(pattern).items:
+    if alt == WhitespaceLookahead:
+      return true
+
+proc pat1AlternativeStrings*(pattern: string): seq[string] =
+  ## Returns the pat1 alternative list the split compiles:
+  ## - every alternative before the lookahead slot, then `\s+$`
+  ##   in the lookahead slot's place.
+  ## - the original's trailing whitespace alternative excluded, it
+  ##   moves to pat3.
+  ## Raises SplitPatternError under the same preconditions as splitLookaheadPattern, the equivalence suite's longest-match
+  ## instrument compiles these one by one.
+  let alts = splitAlternatives(pattern)
+  var lookIdx = -1
+  var lookCount = 0
+  for i, alt in alts.pairs:
+    if alt == WhitespaceLookahead:
+      lookIdx = i
+      inc lookCount
+  if lookCount != 1 or lookIdx == alts.len - 1:
+    raise newException(SplitPatternError,
+      "pattern [" & pattern & "] is not a splittable lookahead pattern")
+  let tail = alts[lookIdx + 1]
+  if tail != r"\s" and tail != r"\s+":
+    raise newException(SplitPatternError,
+      "pattern [" & pattern & "] trailing alternative [" & tail &
+      "] is not \\s or \\s+")
+  for i, alt in alts.pairs:
+    if i == lookIdx:
+      result.add r"\s+$"
+    elif i != lookIdx + 1:
+      result.add alt
+
+proc splitLookaheadPattern*(pattern: string, rustWs = false,
+    name = "anonymous"): SplitPattern =
+  ## Compiles one lookahead-bearing family pattern into the sub-pattern
+  ## triple (see the section doc above):
+  ## - the lookahead alternative must appear exactly once as a whole top-level alternative.
+  ## - the alternative immediately after it must be `\s` or `\s+`
+  ##   (pat3's equivalence contract).
+  ## - anything else raises SplitPatternError rather than silently
+  ##   mis-splitting the pattern.
+  let alts = splitAlternatives(pattern)
+  var lookIdx = -1
+  var lookCount = 0
+  for i, alt in alts.pairs:
+    if alt == WhitespaceLookahead:
+      lookIdx = i
+      inc lookCount
+  if lookCount == 0:
+    raise newException(SplitPatternError,
+      "pattern [" & pattern & "] has no " & WhitespaceLookahead &
+      " alternative to split")
+  if lookCount > 1:
+    raise newException(SplitPatternError,
+      "pattern [" & pattern & "] repeats the " & WhitespaceLookahead &
+      " alternative")
+  if lookIdx == alts.len - 1:
+    raise newException(SplitPatternError,
+      "pattern [" & pattern & "] has no trailing whitespace alternative" &
+      " after " & WhitespaceLookahead)
+  let tail = alts[lookIdx + 1]
+  if tail != r"\s" and tail != r"\s+":
+    raise newException(SplitPatternError,
+      "pattern [" & pattern & "] trailing alternative [" & tail &
+      "] is not \\s or \\s+")
+  var pat1Parts: seq[string]
+  for i, alt in alts.pairs:
+    if i == lookIdx:
+      pat1Parts.add r"\s+$" # the lookahead slot becomes the anchored tail
+    elif i == lookIdx + 1:
+      discard # the trailing alternative moves to pat3 verbatim
+    else:
+      pat1Parts.add alt
+  result = SplitPattern(
+    pat1: compilePattern(pat1Parts.join("|"), rustWs, name & "_pat1"),
+    pat2: compilePattern(r"\s+\s", rustWs, name & "_pat2"),
+    pat3: compilePattern(tail, rustWs, name & "_pat3"),
+    name: name)
+  # Build-time capability tests of pat1 itself (the engine is the ground truth of its own semantics):
+  # strictly inside a whitespace run, before a non-whitespace codepoint, with and without CRLF.
+  result.interiorPlainCapable =
+    result.pat1.matchAt("\t\tX", 0, 3, 0) >= 0
+  result.interiorCrlfCapable =
+    result.pat1.matchAt("\t\r\nX", 0, 4, 0) >= 0
+
+proc lastCodepointWidth(input: string, pos: int): int {.inline.} =
+  ## Returns the byte width of the codepoint ending at pos (the last codepoint of input[0 ..< pos]), walking back over
+  ## UTF-8 continuation bytes.
+  doAssert pos > 0 and pos <= input.len
+  var i = pos - 1
+  while i > 0 and (uint8(input[i]) and 0xC0'u8) == 0x80'u8:
+    dec i
+  result = pos - i
+
+proc scanSplit*(sp: SplitPattern, input: string, winLo, winHi: int,
+    outPieces: var seq[tuple[lo, hi: int32]]) {.inline.} =
+  ## Anchored split scan over the window [winLo, winHi):
+  ## - the PCRE2 scan-mirror emission, a gap piece before each match
+  ##   and the unmatched remainder as one trailing piece.
+  ## - the sub-pattern priority of the section doc above plus the drop-last resume rule for pat2 matches.
+  ## - pieces are byte-offset pairs into the input the caller holds,
+  ##   the applyRegexStep surface of the frontier-engine step.
+  ##
+  ## Expected input:
+  ## - valid UTF-8, codepoint-aligned window bounds.
+  ## Output:
+  ## - consecutive, non-empty, non-overlapping [lo, hi) pieces
+  ##   covering [winLo, winHi) exactly once.
+  var lastEmit = winLo
+  var offset = winLo
+  while offset < winHi:
+    var pieceEnd = -1
+    var resume = -1
+    let b0 = uint8(input[offset])
+    if b0 < 0x80'u8 and (b0 == 0x20'u8 or (b0 >= 0x09'u8 and b0 <= 0x0D'u8)):
+      # Whitespace cursor, the run measured at byte level, every ASCII
+      # whitespace byte is `\s` under both the PCRE2-UCP and the Rust
+      # White_Space variant, while a byte >= 0x80 may open a multi-byte
+      # `\s` codepoint and defers the whole cursor to the engine path.
+      var p = offset
+      var sawCr = false
+      var multiByte = false
+      while p < winHi:
+        let bb = uint8(input[p])
+        if bb >= 0x80'u8:
+          multiByte = true
+          break
+        if bb == 0x0A'u8 or bb == 0x0D'u8:
+          sawCr = true
+          inc p
+        elif bb == 0x20'u8 or bb == 0x09'u8 or bb == 0x0B'u8 or
+            bb == 0x0C'u8:
+          inc p
+        else:
+          break
+      let runEnd = p
+      if not multiByte:
+        if runEnd == winHi:
+          if not sawCr:
+            # pat1's `\s+$` extent is the full run, one piece.
+            pieceEnd = runEnd
+          else:
+            # A CRLF run reaching the window end, the preferred extent
+            # depends on the family's alternative order, one engine
+            # attempt decides, which always succeeds here.
+            pieceEnd = sp.pat1.matchAt(input, winLo, winHi, offset)
+        elif runEnd - offset == 1:
+          if sawCr:
+            # A single CR or LF byte, the `\s*[\r\n]`-shaped
+            # alternative (when present) and the trailing alternative
+            # both give the one-byte piece, the leading-char
+            # alternatives exclude CR and LF. No engine attempt.
+            pieceEnd = offset + 1
+          else:
+            # A single space or tab byte, a leading-char alternative
+            # may still absorb it into the following piece.
+            pieceEnd = sp.pat1.matchAt(input, winLo, winHi, offset)
+            if pieceEnd < 0:
+              pieceEnd = offset + 1
+        else:
+          # Interior run of >= 2 bytes, the byte at runEnd is ASCII
+          # non-whitespace so genuinely `\S`, pat1 cannot fire
+          # without the CRLF shape, and with it one engine attempt decides,
+          # otherwise the pat2 drop-last shape resolves the cursor directly.
+          if sawCr and sp.interiorCrlfCapable:
+            pieceEnd = sp.pat1.matchAt(input, winLo, winHi, offset)
+          elif not sawCr and sp.interiorPlainCapable:
+            pieceEnd = sp.pat1.matchAt(input, winLo, winHi, offset)
+            if pieceEnd < 0:
+              pieceEnd = sp.pat2.matchAt(input, winLo, winHi, offset)
+              if pieceEnd >= 0:
+                resume = pieceEnd - lastCodepointWidth(input, pieceEnd)
+                doAssert resume > offset,
+                  "a pat2 match must retain at least one codepoint"
+              else:
+                pieceEnd = sp.pat3.matchAt(input, winLo, winHi, offset)
+          if pieceEnd < 0:
+            pieceEnd = runEnd - 1
+            resume = runEnd - 1
+    if pieceEnd < 0:
+      # Engine path:
+      #   word cursors and multi-byte \s runs, pat1 then
+      # pat2 (drop-last) then pat3, in priority order.
+      pieceEnd = sp.pat1.matchAt(input, winLo, winHi, offset)
+      if pieceEnd < 0:
+        pieceEnd = sp.pat2.matchAt(input, winLo, winHi, offset)
+        if pieceEnd >= 0:
+          resume = pieceEnd - lastCodepointWidth(input, pieceEnd)
+          doAssert resume > offset,
+            "a pat2 match must retain at least one codepoint"
+        else:
+          pieceEnd = sp.pat3.matchAt(input, winLo, winHi, offset)
+          if pieceEnd < 0:
+            # No sub-pattern matches at this cursor, the gap grows
+            # by one codepoint, exactly like the leftmost scan mirror.
+            let d = decodeCp(input, offset, winHi)
+            offset += (if d.width > 0: d.width else: 1)
+            continue
+    # A drop-last match emits the match minus its final codepoint,
+    # resuming AT the dropped codepoint (the next cursor re-segments it).
+    let emitEnd = if resume >= 0: resume else: pieceEnd
+    if offset > lastEmit:
+      outPieces.add (int32(lastEmit), int32(offset))
+    outPieces.add (int32(offset), int32(emitEnd))
+    lastEmit = emitEnd
+    offset = emitEnd
+  if lastEmit < winHi:
+    outPieces.add (int32(lastEmit), int32(winHi))
+
+# ------------------------------------------------------------------------
+# Step 2, per-family pre-tokenization (PreTokenizer machine, Isolated Split-chain semantics)
+# ------------------------------------------------------------------------
+
+## Per-family pre-tokenization stage, the family patterns compiling
+## through workspace/regex_engine (table-walk matching, never PCRE2 at runtime), Isolated
+## Split-chain semantics for chain-configured checkpoints, byte-offset pieces into the caller-owned input on every hot path.
+##
+## Formal spec, issue #22 special-pretokenization, HF checkpoints
+## configure pre_tokenizer chains of `Split` steps, each step carrying
+## its regex pattern and `behavior: Isolated`. Isolated chain semantics:
+## - apply step 1 to the whole input, then apply step 2 to EACH output
+##   piece independently, and so on down the chain.
+## - a split isolates, pieces matched by an earlier step are never
+##   re-examined by later steps, later patterns only see within-piece content.
+## - within one step the scan is the PCRE2 leftmost scan mirror:
+##   the first position admitting a non-empty match wins,
+##   at pattern-preference extent, gaps before matches are emitted
+##   as pieces, the scan stops at the first unmatched position,
+##   and the remainder becomes one trailing piece, exactly
+##   findAllPcre2 + splitTextOrdinary of the predecessor.
+##
+## NOT a flat alternation join:
+## - folding a chain's patterns into one alternation `p1|p2|p3`
+##   (leftmost-first across the whole input) is precisely the convertHfToTiktoken flaw for chain-configured checkpoints
+##   (serialization.nim joins the Split patterns with |).
+## - alternation gives earlier patterns priority at every input position, while chain semantics give step-1 matches
+##   absolute priority in their own span and hide those spans from later steps.
+## - the Step-3.5-Flash and EXAONE failures in issue #22 are exactly this config class.
+##
+## Chain features implemented:
+## - `\p{N}{1,3}` digit grouping (Step-3.5-Flash Split 1, also the cl100k/o200k patterns):
+##   runs of digits are cut into groups of at most 3 digits.
+## - CJK-script splitting, [一-龥぀-ゟ゠-ヿ]+
+##   (U+4E00-U+9FA5 ideographs, U+3040-U+309F hiragana, U+30A0-U+30FF katakana) as an Isolated step,
+##   so a CJK run is one pre-token piece (Step-3.5-Flash Split 2).
+## - GPT-2-style letter/contraction patterns with `\p{L}\p{M}*`
+##   combining-mark handling (EXAONE Split 1).
+## - Gemma-4 style Split(String " ", MergedWithPrevious), a space
+##   delimiter joins the preceding non-space run inside its piece,
+##   consecutive or leading spaces stand alone (verified against the HF engine, see the chain fixture suite).
+## - ByteLevel(use_regex=false) as the chain tail, byte remap of each
+##   piece with add_prefix_space=false at pre position, prefix-space
+##   semantics belong to POST-processing (EXAONE post_processor ByteLevel add_prefix_space=true),
+##   not to pre-tokenization, and the tail is not a split step,
+##   so it stays out of this stage's scope.
+##
+## Pattern-split lookahead emulation (src/pretok_split.nim), family
+## patterns whose top-level alternation carries `\s+(?!\S)` build
+## a sub-pattern triple on the same step:
+## - pat1 = earlier alternatives plus `\s+$`.
+## - pat2 = `\s+\s` drop-last.
+## - pat3 = the trailing alternative verbatim.
+## The step's default scan is the split scan, the frontier-engine
+## pattern stays compiled as the paired scan for the parity suites to referee against.
+##
+## Machine shape (src/machine.nim), object + ctor + ONE items:
+## - pieces are byte-offset pairs into the input the machine holds.
+## - the Isolated chain applies its steps over two reusable scratch
+##   buffers inside the object, so per-input work after the first
+##   pass is buffer reuse only (zero-alloc steady state across `reset` calls).
+## - no collect proc, no pull overload, consumers iterate.
+##
+## Pattern provenance per family, all patterns regular, all compiling
+## in the workspace/regex_engine pattern engine, no construct outside
+## its supported regular subset:
+## - r50k / p50k / gpt2, tiktoken openai_public.py r50k_base shared
+##   by the GPT-2 and P50k checkpoints.
+## - cl100k and o200k, tiktoken openai_public.py, the o200k
+##   7-alternative form joined exactly like tokenizers_regexps.nim does.
+## - kimik25, Moonshot tokenization_kimi.py pat_str, Script=Han form.
+## - moonlight, Moonshot tokenization_moonshot.py pat_str, the Rust-regex
+##   translation with lookahead-guarded Lo classes (tokenizers_regexps.nim notes).
+## - qwen, Qwen3-0.6B tokenizer.json pre_tokenizer Split regex.
+## - qwen35, Qwen3.5-0.8B tokenizer.json, `\p{M}` added to the letter
+##   and punctuation alternative classes.
+## - glm47, GLM-4.7-Flash tokenizer.json, a single Split with a `\p{N}{1,3}` digit group.
+## - ling3, Ling-3.0-tiny tokenizer.json, possessive class quantifiers
+##   compiled greedy per the engine's extent-equivalence proof.
+## - gemma4, gemma-4-E2B-it tokenizer.json pre_tokenizer (a String split).
+## - exaone, K-EXAONE-236B-A23B tokenizer.json Split 1 plus a ByteLevel tail.
+## - step35flash, Step-3.5-Flash tokenizer.json Splits 1..3 plus a ByteLevel
+##   tail. Its chain steps resolve `\s` through the Rust
+##   regex White_Space variant (whitespaceIsRust in the engine),
+##   matching the HF reference engine for chain checkpoints.
+
+const
+  # Each family pat_str is one verbatim HF/tiktoken constant, wrapped
+  # as concatenated raw literals (byte-identical values, line-width rules).
+  QwenPat* = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}|""" &
+    r""" ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
+  Qwen35Pat* = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}|""" &
+    r""" ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
+  Glm47Pat* = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}|""" &
+    r""" ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
+  Ling3Pat* = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}|""" &
+    r""" ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
+  ExaoneStepPat* = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|""" &
+    r"""[^\r\n\p{L}\p{N}]?(?:\p{L}\p{M}*(?: \p{L}\p{M}*)*)+|\p{N}|""" &
+    r""" ?[^\s\p{L}\p{N}]+[\r\n/]?|\s*[\r\n]|\s+(?!\S)|\s+"""
+  Step35DigitsPat* = r"""\p{N}{1,3}"""
+  Step35CjkPat* = "[一-龥぀-ゟ゠-ヿ]+"
+  Step35MainPat* = r"""[!"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~][A-Za-z]+|""" &
+    r"""[^\r\n\p{L}\p{P}\p{S}]?[\p{L}\p{M}]+| ?[\p{P}\p{S}]+[\r\n]*|""" &
+    r"""\s*[\r\n]+|\s+(?!\S)|\s+"""
+  R50kPat* = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|""" &
+    r"""\s++$|\s+(?!\S)|\s"""
+  Cl100kPat* = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+|""" &
+    r""" ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s"""
+  O200kPat* = r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+""" &
+    r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)?|""" &
+    r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*""" &
+    r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}|""" &
+    r""" ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
+  KimiK25Pat* = r"""[\p{Script=Han}]+|""" &
+    r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+""" &
+    r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)?|""" &
+    r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*""" &
+    r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}|""" &
+    r""" ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
+  MoonlightPat* = r"""[\p{Script=Han}]+|""" &
+    r"""[^\r\n\p{L}\p{N}]?(?:(?!\p{Script=Han})\p{Lo}|[\p{Lt}\p{Lu}\p{Lm}\p{M}])*""" &
+    r"""(?:(?!\p{Script=Han})\p{Lo}|[\p{Ll}\p{Lm}\p{M}])+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|""" &
+    r"""[^\r\n\p{L}\p{N}]?(?:(?!\p{Script=Han})\p{Lo}|[\p{Lt}\p{Lu}\p{Lm}\p{M}])+""" &
+    r"""(?:(?!\p{Script=Han})\p{Lo}|[\p{Ll}\p{Lm}\p{M}])*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|""" &
+    r"""\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
+
+type
+  Family* {.pure.} = enum
+    ## Model families this stage pre-tokenizes. pat_str provenance per
+    ## family in the module docstring.
+    famR50k
+    famP50k
+    famCl100k
+    famO200k
+    famKimiK25
+    famMoonlight
+    famQwen
+    famQwen35
+    famGlm47
+    famLing3
+    famGemma4
+    famExaone
+    famStep35Flash
+
+  SplitStepKind* = enum
+    skRegex          # compiled split pattern (frontier DFA walk), Isolated
+    skSpaceMergedPrev # Split(String " ", MergedWithPrevious), Gemma-4
+
+  ## One Isolated chain step, shared and immutable once built, per-kind contract:
+  ## - a regex step always carries the frontier-engine pattern `pat`,
+  ##   the paired scan every parity suite referees against.
+  ## - `split` additionally carries the pattern-split lookahead
+  ##   emulation when the pattern's top-level alternation has the `\s+(?!\S)` alternative, nil otherwise.
+  SplitStep* = ref object
+    name*: string
+    case kind*: SplitStepKind
+    of skRegex:
+      pat*: CompiledPattern
+      split*: SplitPattern
+    of skSpaceMergedPrev:
+      discard
+
+  ## Build receipt per family, the heavy-construction rule.
+  ChainBuildStats* = object
+    built*: bool
+    steps*: int
+    instrs*: int
+    buildMillis*: float64
+
+var
+  familyChains: array[Family, seq[SplitStep]]
+  familyStats: array[Family, ChainBuildStats]
+
+proc buildFamilyChain(f: Family): seq[SplitStep] =
+  ## Compiles the family's Isolated split chain at first use:
+  ## - every family here is a regex chain of at most 3 steps or one
+  ##   string split, so construction is milliseconds at worst.
+  ## - chainStats records the build duration, the heavy-construction rule.
+  let t0 = getMonoTime()
+  template addRegex(stepName: string, pattern: string,
+      rustWs = false) =
+    # Appends through the enclosing proc's result directly, template method-call syntax would bind the receiver into
+    # the stepName parameter, so call sites pass the two strings only.
+    result.add SplitStep(name: stepName, kind: skRegex,
+      pat: compilePattern(pattern, rustWs, stepName),
+      split: (if hasWhitespaceLookahead(pattern):
+        splitLookaheadPattern(pattern, rustWs, stepName) else: nil))
+  case f
+  of famR50k, famP50k:
+    addRegex("r50k_split", R50kPat)
+  of famCl100k:
+    addRegex("cl100k_split", Cl100kPat)
+  of famO200k:
+    addRegex("o200k_split", O200kPat)
+  of famKimiK25:
+    addRegex("kimik25_split", KimiK25Pat)
+  of famMoonlight:
+    addRegex("moonlight_split", MoonlightPat)
+  of famQwen:
+    addRegex("qwen_split", QwenPat)
+  of famQwen35:
+    addRegex("qwen35_split", Qwen35Pat)
+  of famGlm47:
+    addRegex("glm47_split", Glm47Pat)
+  of famLing3:
+    addRegex("ling3_split", Ling3Pat)
+  of famGemma4:
+    result.add SplitStep(name: "gemma4_space_merged_prev",
+      kind: skSpaceMergedPrev)
+  of famExaone:
+    # 1 regex step, the ByteLevel(use_regex=false) tail is a remap
+    # carrying no split behavior
+    addRegex("exaone_split1", ExaoneStepPat, rustWs = true)
+  of famStep35Flash:
+    # 3 regex steps, chain depth 3 of the documented maximum, then
+    # the ByteLevel tail remap (out of scope here)
+    addRegex("step35_split1_digits", Step35DigitsPat, rustWs = true)
+    addRegex("step35_split2_cjk", Step35CjkPat, rustWs = true)
+    addRegex("step35_split3_main", Step35MainPat, rustWs = true)
+  familyStats[f].built = true
+  familyStats[f].steps = result.len
+  var instrs = 0
+  for step in result.items:
+    if step.kind == skRegex:
+      instrs += step.pat.prog.len
+  familyStats[f].instrs = instrs
+  familyStats[f].buildMillis =
+    (getMonoTime() - t0).inMicroseconds.float64 / 1000.0
+
+proc familySteps*(f: Family): seq[SplitStep] =
+  ## Compiled split chain of the family (compiled at first use).
+  if not familyStats[f].built:
+    familyChains[f] = buildFamilyChain(f)
+  familyChains[f]
+
+proc chainStats*(f: Family): ChainBuildStats =
+  ## Build receipt of the family chain (zeros before first use).
+  familyStats[f]
+
+proc allFamilyStats*: array[Family, ChainBuildStats] =
+  familyStats
+
+proc applyRegexStep(input: string, pieceLo, pieceHi: int, step: SplitStep,
+    outPieces: var seq[tuple[lo, hi: int32]]) {.inline.} =
+  ## One Isolated regex step over one piece, PCRE2-scan-mirror
+  ## segmentation of the piece into matched and gap pieces.
+  var lastEmit = pieceLo
+  var offset = pieceLo
+  while offset < pieceHi:
+    let (ms, me) = step.pat.nextMatch(input, offset, pieceLo, pieceHi)
+    if ms < 0:
+      break
+    if ms > lastEmit:
+      outPieces.add (int32(lastEmit), int32(ms))
+    outPieces.add (int32(ms), int32(me))
+    lastEmit = me
+    offset = me
+  if lastEmit < pieceHi:
+    outPieces.add (int32(lastEmit), int32(pieceHi))
+
+proc applySpaceMergedPrevStep(input: string, pieceLo, pieceHi: int,
+    outPieces: var seq[tuple[lo, hi: int32]]) {.inline.} =
+  ## Split(String " ", MergedWithPrevious) over one piece, a space
+  ## delimiter joins the run of non-space bytes before it, consecutive
+  ## or leading spaces stand alone as their own pieces.
+  var runStart = pieceLo
+  var i = pieceLo
+  while i < pieceHi:
+    if input[i] == ' ':
+      if i == pieceLo or input[i - 1] == ' ':
+        if runStart < i:
+          outPieces.add (int32(runStart), int32(i))
+        outPieces.add (int32(i), int32(i + 1))
+      else:
+        outPieces.add (int32(runStart), int32(i + 1))
+      runStart = i + 1
+    inc i
+  if runStart < pieceHi:
+    outPieces.add (int32(runStart), int32(pieceHi))
+
+type
+  PreTokenizer* {.final.} = object
+    ## Pre-tokenization machine over one input (machine shape, chain depth 1):
+    ## - `items` yields byte-offset pairs into the machine-held input.
+    ## - the Isolated chain applies its steps over the two reusable
+    ##   scratch buffers inside this object, built once per input, so
+    ##   a `reset` + full pass reuses every buffer.
+    input: string
+    steps: seq[SplitStep]
+    pieces: seq[tuple[lo, hi: int32]]
+    head: int
+    built: bool
+    scratchA, scratchB: seq[tuple[lo, hi: int32]]
+
+proc applyStepDefault(input: string, pieceLo, pieceHi: int, step: SplitStep,
+    outPieces: var seq[tuple[lo, hi: int32]]) {.inline.} =
+  ## One Isolated regex step, default scan:
+  ## - the pattern-split scan when the step carries one (the lookahead emulation).
+  ## - the frontier-engine scan otherwise.
+  ## The paired-scan discipline keeps applyRegexStep in-tree for every parity suite.
+  if step.split != nil:
+    scanSplit(step.split, input, pieceLo, pieceHi, outPieces)
+  else:
+    applyRegexStep(input, pieceLo, pieceHi, step, outPieces)
+
+proc buildPieces(r: var PreTokenizer) =
+  ## Applies the Isolated chain, level by level, reusing the scratch
+  ## buffers (at most 3 levels per the chain-depth rules).
+  r.pieces.setLen(0)
+  if r.steps.len == 0 or r.input.len == 0:
+    if r.input.len > 0:
+      r.pieces.add (0'i32, int32(r.input.len))
+    r.built = true
+    return
+  r.scratchA.setLen(0)
+  r.scratchA.add (0'i32, int32(r.input.len))
+  for level in 0 ..< r.steps.len:
+    let step = r.steps[level]
+    if level mod 2 == 0:
+      r.scratchB.setLen(0)
+      for piece in r.scratchA.items:
+        case step.kind
+        of skRegex:
+          applyStepDefault(r.input, piece.lo, piece.hi, step, r.scratchB)
+        of skSpaceMergedPrev:
+          applySpaceMergedPrevStep(r.input, piece.lo, piece.hi, r.scratchB)
+    else:
+      r.scratchA.setLen(0)
+      for piece in r.scratchB.items:
+        case step.kind
+        of skRegex:
+          applyStepDefault(r.input, piece.lo, piece.hi, step, r.scratchA)
+        of skSpaceMergedPrev:
+          applySpaceMergedPrevStep(r.input, piece.lo, piece.hi, r.scratchA)
+  if r.steps.len mod 2 == 1:
+    r.pieces = system.move(r.scratchB)
+  else:
+    r.pieces = system.move(r.scratchA)
+  r.built = true
+
+proc initPreTokenizer*(family: Family, input: sink string): PreTokenizer {.inline.} =
+  ## Builds one pre-tokenization machine over the whole input, which
+  ## aliases the caller's string.
+  PreTokenizer(input: input, steps: familySteps(family))
+
+proc reset*(r: var PreTokenizer, family: Family, input: sink string) =
+  ## Rebinds the machine to a new input, reusing every buffer (zero alloc steady state for repeated encodes over one stream).
+  r.input = input
+  r.steps = familySteps(family)
+  r.pieces.setLen(0)
+  r.head = 0
+  r.built = false
+
+iterator items*(r: var PreTokenizer): tuple[lo, hi: int] {.inline.} =
+  ## Yields the pre-token pieces as byte-offset pairs, left to right:
+  ## - the pieces cover the input exactly once.
+  ## - a partially consumed stream resumes at the machine's head on re-iteration.
+  if not r.built:
+    r.buildPieces()
+  while r.head < r.pieces.len:
+    let piece = r.pieces[r.head]
+    inc r.head
+    yield (int(piece.lo), int(piece.hi))

@@ -2,14 +2,11 @@
 """
 Generate fixture files for byte-pair merge algorithm testing.
 
-This uses the reference Rust byte_pair_merge algorithm to ensure correct expected_tokens.
-Format:
-{
-    "input_bytes": [228, 189, 160, ...],
-    "ranks": {"bytes_literal": rank, ...},
-
-    "description": "Human readable test description"
-}
+Uses the reference Rust byte_pair_merge algorithm to ensure correct
+expected_tokens. Each fixture frame row carries:
+- input_bytes, the byte sequence to merge.
+- ranks, the rank table keyed by base64-encoded byte literals.
+- description, a human readable test description.
 """
 
 import json
@@ -39,7 +36,8 @@ def byte_pair_merge(piece: List[int], ranks: Dict[bytes, int]) -> List[Tuple]:
     min_rank = float("inf")
     min_rank_idx = 0
 
-    # Initial pass: compute ranks for all adjacent byte pairs
+    # Initial pass:
+    #   compute ranks for all adjacent byte pairs
     for i in range(len(piece) - 1):
         pair = bytes([piece[i], piece[i + 1]])
         rank = ranks.get(pair, float("inf"))
@@ -60,7 +58,8 @@ def byte_pair_merge(piece: List[int], ranks: Dict[bytes, int]) -> List[Tuple]:
             return ranks.get(pair, float("inf"))
         return float("inf")
 
-    # Main merge loop: repeatedly merge the lowest-ranked pair
+    # Main merge loop:
+    #   repeatedly merge the lowest-ranked pair
     while min_rank != float("inf"):
         i = min_rank_idx
 
@@ -109,7 +108,7 @@ def get_test_cases() -> List[Dict[str, Any]]:
     """Get all byte pair merge test cases."""
     cases = []
 
-    # Basic ASCII
+    # basic ASCII rows
     cases.append(
         {
             "description": "Simple ASCII text 'hello'",
@@ -390,24 +389,25 @@ def get_test_cases() -> List[Dict[str, Any]]:
         }
     )
 
-    # Combined token 。\n (Chinese period + newline) - regression test for KimiK2.5
+    # Combined token 。`\n` (Chinese period + newline) - regression test for KimiK2.5
     # This tests that when a 4-byte token exists in vocab, it should be found during BPE
     # and not split into separate tokens
     cases.append(
         {
             "description": "Chinese period + newline '。\\n' - combined 4-byte token regression",
-            "input_bytes": [227, 128, 130, 10],  # 。 (3 bytes) + \n (1 byte)
+"input_bytes": [227, 128, 130, 10],  # 。 (3 bytes) + `\n` (1 byte)
             "ranks": bytes_to_b64_key(
                 {
                     bytes([227, 128, 130]): 292,  # 。 standalone rank
-                    bytes([10]): 198,  # \n standalone rank
-                    bytes([227, 128, 130, 10]): 10155,  # 。\n combined rank
+                    bytes([10]): 198,  # `\n` standalone rank for the newline byte
+bytes([227, 128, 130, 10]): 10155,  # 。`\n` combined rank
                 }
             ),
         }
     )
 
-    # More complex: testing 。\n in context with surrounding text
+    # More complex:
+    # testing 。`\n` in context with surrounding text
     cases.append(
         {
             "description": "Chinese text with 。\\n combined token in context",
@@ -422,15 +422,15 @@ def get_test_cases() -> List[Dict[str, Any]]:
                 128,
                 130,
                 10,
-            ],  # 談中。\n
+],  # 談中。`\n` plus newline
             "ranks": bytes_to_b64_key(
                 {
                     bytes([232, 131]): 60412,
                     bytes([142, 232]): 229,
                     bytes([232, 131, 136]): 435,
-                    bytes([227, 128, 130]): 292,  # 。
-                    bytes([10]): 198,  # \n
-                    bytes([227, 128, 130, 10]): 10155,  # 。\n combined
+                    bytes([227, 128, 130]): 292,  # 。 standalone rank
+bytes([10]): 198,  # `\n` standalone rank for the newline byte
+bytes([227, 128, 130, 10]): 10155,  # 。`\n` combined rank
                 }
             ),
         }

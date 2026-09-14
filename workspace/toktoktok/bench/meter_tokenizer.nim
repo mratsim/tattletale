@@ -5,8 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# Compile with
-# nim c -r --hints:off --warnings:off --verbosity:0 -d:danger -d:TTT_METER --outdir:build workspace/toktoktok/bench/meter_tokenizer.nim
+# Compile with nim c -r --hints:off --warnings:off --verbosity:0 -d:danger
+# -d:TTT_METER --outdir:build workspace/toktoktok/bench/meter_tokenizer.nim
 
 import workspace/bencher # bencher MUST be imported before measured import
 

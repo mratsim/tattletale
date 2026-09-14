@@ -50,5 +50,6 @@ runnableExamples:
   fixLinksAfterIndexRemap(links, root, lastIdx, 1)
 
 import ./src/wavl_tree
+import ./src/daac
 
-export wavl_tree
+export wavl_tree, daac

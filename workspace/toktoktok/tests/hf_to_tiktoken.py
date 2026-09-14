@@ -43,7 +43,8 @@ def _bytes_to_unicode() -> dict[int, str]:
 
 
 def _unicode_to_bytes() -> dict[str, int]:
-    """Returns the reverse mapping: unicode characters back to bytes."""
+    """Returns the reverse mapping:
+      unicode characters back to bytes."""
     return {v: k for k, v in _bytes_to_unicode().items()}
 
 
@@ -86,9 +87,10 @@ def parse_tiktoken_file(tiktoken_path: str) -> dict[bytes, int]:
 
 def extract_pattern(hf_tokenizer_path: str) -> str:
     """Extract the pre-tokenization regex pattern from the tokenizer.
+    Returns the joined pattern string.
 
-    For Sequence pre-tokenizers with multiple Split steps, joins all patterns with '|'.
-    This ensures that all tokenization rules are applied in a single pass.
+    For Sequence pre-tokenizers with multiple Split steps, joins all
+    patterns with '|', so every tokenization rule applies in a single pass.
     """
     with open(hf_tokenizer_path, "r", encoding="utf-8") as f:
         data = json.load(f)

@@ -1,9 +1,10 @@
 # Corpus provenance
 
 Large encoding-test corpus, tracked as zstd frames so the checksum
-replaces the downloader. The files were recorded once, the sha256 of
-the original bytes is the reference, no network fetch happens at test
-time.
+replaces the downloader.
+
+- recorded once, the sha256 of the original bytes is the reference
+- no network fetch happens at test time
 
 ## Container contract
 
@@ -28,5 +29,5 @@ time.
   when the content is expected to be identical
 - recompress at level 19 with content size and checksum in the header
 - update the recorded sha256 and sizes in this file
-- the encoding tests read prefixes, so any content change shifts the
+- the encoding tests read prefixes, so any content change shifts
   expected token streams and must come with re-recorded expectations

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Test Nim BPETokenizer against tiktoken for HF tokenizer JSON format (after conversion).
+Run:
+
+python3 test_fixtures_large_vs_tiktoken_converted_from_hf.py  # from the toktoktok tests dir
+
+Test Nim BPETokenizer against tiktoken, HF tokenizer JSON format after conversion.
 """
 
 import pytoktoktok

@@ -7,6 +7,8 @@
 
 import std/base64
 import std/strutils
+## Checkpoint serialization for the PCRE2-era codec path, HF json records, tiktoken rank tables, and the byte decoder.
+
 import std/options
 import std/tables
 import std/unicode
@@ -14,16 +16,20 @@ import pkg/jsony
 import ./tokenizers_regexps
 
 type
+  ## HF json Split-step pattern record, the json spells the key "Regex".
   HFtokRegexp* = object
     Regex*: string
 
+  ## Deserialized checkpoint (mergeable ranks plus pattern plus special tokens).
   TiktokenFormat* = object
     mergeableRanks*: OrderedTable[seq[byte], int]
     pattern*: TokRegexp
     specialTokens*: OrderedTable[string, int]
 
+  ## Raised for malformed checkpoint content on the parse path.
   TokenizerParseError* = object of ValueError
 
+  ## Deserialized HF tokenizer.json root record (jsony target).
   HFTokenizer* = object
     version*: string
     truncation*: string
@@ -34,6 +40,7 @@ type
     decoder*: HFDecoder
     model*: HFTokenizerModel
 
+  ## Deserialized HF model section (jsony target).
   HFTokenizerModel* = object
     vocab*: OrderedTable[string, int]
     dropout*: string
@@ -44,6 +51,7 @@ type
     `type`*: string
     pattern*: TokRegexp
 
+  ## Deserialized HF pre_tokenizer section (jsony target).
   HFPreTokenizer* = object
     addPrefixSpace*: bool
     trimOffsets*: bool
@@ -51,6 +59,7 @@ type
     pretokenizers*: seq[HFPretokenizerStep]
     useRegex*: Option[bool]
 
+  ## One HF pre_tokenizer chain step (jsony target).
   HFPretokenizerStep* = object
     `type`*: string
     pattern*: HFtokRegexp
@@ -60,16 +69,19 @@ type
     trimOffsets*: bool
     useRegex*: Option[bool]
 
+  ## Deserialized HF post_processor section (jsony target).
   HFPostProcessor* = object
     addPrefixSpace*: bool
     trimOffsets*: bool
     `type`*: string
 
+  ## Deserialized HF decoder section (jsony target).
   HFDecoder* = object
     addPrefixSpace*: bool
     trimOffsets*: bool
     `type`*: string
 
+  ## One HF added-token special entry (jsony target).
   HFSpecialToken* = object
     content*: string
     id*: int
@@ -80,9 +92,12 @@ type
     special*: bool
 
 template toBytes*(str: string): seq[byte] =
+  ## String bytes as a seq[byte] copy.
   @(toOpenArrayByte(str, 0, str.len - 1))
 
 proc initByteDecoder*(): Table[uint32, int] =
+  ## GPT-2 bytes-to-unicode inverse map, codepoint to original byte
+  ## value (printable bytes map to themselves, the rest shift to 256+n).
   result = initTable[uint32, int]()
   var bs = newSeq[int]()
   var cs = newSeq[int]()
@@ -113,6 +128,7 @@ proc initByteDecoder*(): Table[uint32, int] =
     result[uint32(cs[i])] = bs[i]
 
 proc renameHook*(v: var HFTokenizer, key: var string) =
+  ## jsony rename hook, snake_case json keys map to the camelCase fields.
   if key == "added_tokens":
     key = "addedTokens"
   elif key == "pre_tokenizer":
@@ -121,6 +137,7 @@ proc renameHook*(v: var HFTokenizer, key: var string) =
     key = "postProcessor"
 
 proc renameHook*(v: var HFTokenizerModel, key: var string) =
+  ## jsony rename hook, snake_case json keys map to the camelCase fields.
   if key == "unk_token":
     key = "unkToken"
   elif key == "continuing_subword_prefix":
@@ -131,37 +148,47 @@ proc renameHook*(v: var HFTokenizerModel, key: var string) =
     key = "fuseUnk"
 
 proc renameHook*(v: var HFPreTokenizer, key: var string) =
+  ## jsony rename hook, snake_case json keys map to the camelCase fields.
   if key == "add_prefix_space":
     key = "addPrefixSpace"
   elif key == "trim_offsets":
     key = "trimOffsets"
 
 proc renameHook*(v: var HFPostProcessor, key: var string) =
+  ## jsony rename hook, snake_case json keys map to the camelCase fields.
   if key == "add_prefix_space":
     key = "addPrefixSpace"
   elif key == "trim_offsets":
     key = "trimOffsets"
 
 proc renameHook*(v: var HFDecoder, key: var string) =
+  ## jsony rename hook, snake_case json keys map to the camelCase fields.
   if key == "add_prefix_space":
     key = "addPrefixSpace"
   elif key == "trim_offsets":
     key = "trimOffsets"
 
 proc renameHook*(v: var HFSpecialToken, key: var string) =
+  ## jsony rename hook, snake_case json keys map to the camelCase fields.
   if key == "single_word":
     key = "singleWord"
   elif key == "special_tokens":
     key = "specialTokens"
 
 proc renameHook*(v: var HFtokRegexp, key: var string) =
+  ## jsony rename hook, snake_case json keys map to the camelCase fields.
   if key == "Regex":
     key = "Regex"
 
 proc deserializeHfTokenizer*(jsonContent: string): HFTokenizer =
+  ## Parses one HF tokenizer.json (jsony into the HF record types).
   jsonContent.fromJson(HFTokenizer)
 
 proc deserializeTiktokenizer*(content: string, regexp = R50kRegexp): TiktokenFormat =
+  ## Expected input:
+  ## - one "base64 rank" pair per line, '#' comment lines and empties skipped.
+  ## Output:
+  ## - the parsed TiktokenFormat with the given pattern, specialTokens stays empty.
   let lines = content.splitLines()
   var mergeableRanks = initOrderedTable[seq[byte], int]()
 
@@ -189,6 +216,14 @@ proc deserializeTiktokenizer*(content: string, regexp = R50kRegexp): TiktokenFor
   )
 
 proc convertHfToTiktoken*(hf: HFTokenizer): TiktokenFormat =
+  ## Converts one deserialized HF checkpoint into tiktoken shape,
+  ## conversion contract:
+  ## - vocab keys walk back to raw bytes through the byte decoder, keys
+  ##   with non-decodable codepoints are dropped.
+  ## - the pattern field carries the model-level Regex, else the Split
+  ##   steps of the pre_tokenizer chain joined with '|', else the GPT-2
+  ##   default pattern for ByteLevel pre-tokenizers.
+  ## - a checkpoint with none of those is a load error.
 
   var pattern: TokRegexp
 

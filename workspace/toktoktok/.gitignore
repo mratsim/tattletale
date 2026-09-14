@@ -1,5 +1,3 @@
-# Tokenizers
+# Tokenizers: downloaded test fixtures, regenerable, not tracked
 # -----------------------------------------------------------------------------------------
-tests/tokenizers/*.json
-tests/tokenizers/*.bpe
-tests/tokenizers/*.tiktoken
+tests/tokenizers

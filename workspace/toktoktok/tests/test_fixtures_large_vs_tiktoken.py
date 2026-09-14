@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Test Nim BPETokenizer against tiktoken for tiktoken file format (base64 line format).
+Run:
+
+python3 test_fixtures_large_vs_tiktoken.py  # from the toktoktok tests dir
+
+Test Nim BPETokenizer against tiktoken, tiktoken file format
+(base64 line format).
 """
 
 import pytoktoktok

@@ -358,6 +358,10 @@ task test_toktoktok, "Test workspace/toktoktok":
     make_pytoktoktokTask()
     for cmd in getTestCommands("workspace/toktoktok/tests"):
       runCmd(cmd)
+    for cmd in getTestCommands("workspace/toktoktok/tests/unit"):
+      runCmd(cmd)
+    for cmd in getTestCommands("workspace/toktoktok/tests/fuzzing"):
+      runCmd(cmd)
 
 task test_ceramic, "Test workspace/ceramic":
   withDir(ProjectRoot):

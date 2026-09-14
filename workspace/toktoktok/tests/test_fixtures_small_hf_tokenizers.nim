@@ -1,12 +1,47 @@
+# Tattletale
+# Copyright (c) 2026 Mamy Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
 import std/unittest
 import std/os
 import pkg/jsony
 
-import workspace/toktoktok
+import workspace/toktoktok/src/deserializers
 import workspace/zstd/zstd_highlevel
+import workspace/toktoktok/src/pipeline
+import pytoktoktok
 
-const FIXTURES_DIR = currentSourcePath().parentDir() / "fixtures" / "small"
-const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
+let
+  SourcePathAbs = absolutePath(currentSourcePath())
+  FixturesDir = SourcePathAbs.parentDir() /
+    "fixtures" / "small"
+  TokenizersDir = SourcePathAbs.parentDir() /
+    "tokenizers"
+
+const PullCap = 4096
+
+proc pullAll(pipeline: TokPipeline, text: string): seq[int] =
+  ## Run:
+  ##   nim test_toktoktok  # from the worktree root
+  ## Whole-input encode as a bounded-consumption loop, the one-shot
+  ##
+  ## convenience lives in the tests, never in the binding, so every row
+  ## exercises bounded machine consumption and the drain discipline.
+  pipeline.resetText(text)
+  var taken = 0
+  while true:
+    var batch = 0
+    for id in pipeline.items:
+      result.add id
+      inc taken
+      inc batch
+      if batch == PullCap:
+        break
+    if batch < PullCap:
+      break
 
 type
   CodecFixture = object
@@ -29,8 +64,8 @@ proc runHfTokenizersTests() =
     for pair in HfFixtures:
       let fixtureName = pair[0]
       let hfFile = pair[1]
-      let fixturePath = FIXTURES_DIR / "hf_" & fixtureName
-      let hfPath = TOKENIZERS_DIR / hfFile
+      let fixturePath = FixturesDir / "hf_" & fixtureName
+      let hfPath = TokenizersDir / hfFile
       let testName = "HF tokenizers library fixture (" & fixtureName & ")"
 
       # the fixture container is the recorded .json.zst frame
@@ -38,25 +73,19 @@ proc runHfTokenizersTests() =
         "Fixture not found: " & fixturePath
       doAssert fileExists(hfPath), "HF tokenizer not found: " & hfPath
 
-      let tokenizer = loadHFTokenizer(hfPath)
+      # the frames are recorded from the HF tokenizers library, whose
+      # added-token ids the specials-active pipeline emits the same way
+      let loaded = load_tokenizer_hf(hfPath)
       let content = readFile(fixturePath & ".json.zst").zstdDecompress(string)
       let fixtures = content.fromJson(seq[CodecFixture])
 
       for fixture in fixtures:
-        if (fixture.name, fixtureName) == ("sanguozhi_paragraph", "step-3.5-flash") or
-            (fixture.name, fixtureName) == ("sanguozhi_paragraph", "exaone"):
-          # TODO: Currently failing, probably due to a difference between Rust regexp on Han characters
-          # and pcre2 handling of Han characters.
-          #   Given that in many cases the regex is supplied by the model
-          #   we might want to add a preprocessing phase
-          #   that would translate [\p{Han}]+ into [\p{Script=Han}]
-          #   see commit bc8d9df32db81a9d08c4458bce5df2b1098a8f68 for a workaround for Kimi-K2.5
-          echo "⏩ [SKIPPED]" & "HF tokenizer fixture - " & fixture.name & " (" & fixtureName & ")"
-          continue
-
         test "HF tokenizer fixture - " & fixture.name & " (" & fixtureName & ")":
-          let result = tokenizer.encodeOrdinary(fixture.text)
+          let result = pullAll(loaded.pipe, fixture.text)
           check result == fixture.tokenIds
 
 when isMainModule:
+  import std/[monotimes, times]
+  let suiteWallStart = getMonoTime()
   runHfTokenizersTests()
+  echo "\nwall ", (getMonoTime() - suiteWallStart).inMilliseconds.float64 / 1000.0, " s"

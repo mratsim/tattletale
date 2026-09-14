@@ -90,6 +90,7 @@ def benchmark_tokenizer(
 
 
 def main():
+    """Benchmark Nim BPETokenizer against the HuggingFace tokenizer over the fixture corpus."""
     print("\n" + "=" * 70)
     print("BENCHMARK: Nim BPETokenizer vs HuggingFace (GLM-4.7)")
     print("=" * 70)

@@ -1,11 +1,25 @@
+# Tattletale
+# Copyright (c) 2026 Mamy Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Serialization unit rows over the loader conversion:
+## named HF json spellings into convertHfToTiktoken, named rank
+## and special-token expectations.
+##
+## Run:
+##
+##   nim cpp -r --verbosity:0 --hints:off --warnings:off \
+##      --outdir:build/tests --nimcache:nimcache/tests \ workspace/toktoktok/tests/test_serialization.nim
+
 import std/unittest
 import std/os
 import std/sequtils
 import std/tables
 
-import ../src/serialization
-
-const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
+import workspace/toktoktok/src/deserializers
 
 proc runSerializationTests() =
   suite "Serialization Tests":
@@ -34,7 +48,7 @@ proc runSerializationTests() =
       let hf = deserializeHfTokenizer(hfJson)
       let format = convertHfToTiktoken(hf)
 
-      check format.pattern.regexp.len > 0  # Should have a pattern
+      check format.pattern.len > 0  # Should have a pattern
       check format.specialTokens.len == 0
 
       check format.mergeableRanks[@[byte(97)]] == 0
@@ -155,4 +169,7 @@ proc runSerializationTests() =
       check format.mergeableRanks.len == 256  # All byte tokens are added
 
 when isMainModule:
+  import std/[monotimes, times]
+  let suiteWallStart = getMonoTime()
   runSerializationTests()
+  echo "\nwall ", (getMonoTime() - suiteWallStart).inMilliseconds.float64 / 1000.0, " s"

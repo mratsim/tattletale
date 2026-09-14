@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Zstd frame writer for the toktoktok test fixtures.
 
-One zstd frame, level 19, content size and checksum recorded in the
-frame header, matching the recording convention of the workspace:
-the JSON payload sits inside the zstd frame, the byte law is content-exact.
+One zstd frame, level 19, content size and checksum recorded in the frame header.
+
+Matches the recording convention of the workspace, the JSON payload sits inside the zstd frame, the byte rule is content-exact.
 """
 
 import compression.zstd
