@@ -50,7 +50,7 @@ assertStats(actual, statsPath, tensorName, kind, depth = 1, msg = "")
   v
   deriveBands(allowanceOf(kind), record.maxMagnitude, depth,
               record.ulpDatatype)
-  |  ulpBand = reorders x depth
+  |  ulpBand = reorders x sqrt(depth)
   |  delta   = ulpBand x ulpStepAt(datatype, |reference|)
   v
   instruments, every fault raises HarnessCheckError carrying msg:
@@ -76,8 +76,9 @@ computed tensor --> fingerprint
 - parallel math adds numbers in a different but equally valid order
   than the reference, the last bits differ honestly, the bands say
   how much honest difference looks like
-- depth composed operations drift up to depth times more, the band
-  widens with the depth argument
+- depth composed operations drift up to sqrt(depth) times more, the band
+  widens with the depth argument under the root-sum-square accumulation
+  of independent per-stage reordering errors
 
 ### What the fingerprint instruments cannot see
 
@@ -96,8 +97,8 @@ assertArgMax(actual, decisionsPath, step, kind, flipCount, msg = "", depth = 1)
   flipCount:    var int  the caller-owned chain-wide flip counter
 
   the frame parses once per path and stays in the cache for the run,
-  the allowances derive at check from the per-stage kind constant x depth,
-  uniform for every model (the frame serializes no allowance and no
+  the allowances derive at check from the per-stage kind constant x
+  sqrt(depth), uniform for every model (the frame serializes no allowance and no
   flip cap, the cap = the harness MaxTieFlips constant, the counter
   lives in the suite loop)
 

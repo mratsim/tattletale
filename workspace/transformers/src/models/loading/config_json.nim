@@ -5,8 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Config JSON readers: strictly typed, loudly failing key access shared
-## across checkpoint configuration parsers.
+## Config JSON readers: strictly typed key access shared across
+## checkpoint configuration parsers; every refusal raises naming the key.
 
 import
   std/options,
@@ -16,7 +16,7 @@ import
 proc parseIntList*(json: JsonNode, key: string): seq[int] =
   ## Parse a JSON list of ints, or a single int as a one-element list.
   ## `JNull` (absent or null key) yields an empty seq.
-  ## The scalar arm carries a receipt: HF checkpoints write `eos_token_id`
+  ## The scalar form carries a receipt: HF checkpoints write `eos_token_id`
   ## as a bare int or as a list depending on the family.
   ## Array elements must be `JInt`: any other kind raises `ValueError`
   ## naming `key` and the index.
@@ -56,7 +56,7 @@ proc reqPosInt*(json: JsonNode, key: string): int =
     "[ttt] " & key & ": expected a positive value, found " & $result)
 
 proc reqPosFloat*(json: JsonNode, key: string): float64 =
-  ## Read a positive number, accepting the `JInt` spelling a JSON writer emits
+  ## Read a positive number, accepting the `JInt` form a JSON writer emits
   ## for a whole value. Raises `ValueError` naming `key` for any other kind
   ## and for a non-positive value.
   case json.kind

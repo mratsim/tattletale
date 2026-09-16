@@ -28,11 +28,16 @@ privateAccess(ArgmaxRecord)
 
 # ============================ Hand-derived allowances ============================
 
-# deriveBands(2, 30.0) gives ulpBand = ceil(2 x 1 x 1) = 2, delta = 2 x 0.125 = 0.25,
+# deriveBands(2, 30.0) gives ulpBand = ceil(2 x sqrt(1) x 1) = 2, delta = 2 x 0.125 = 0.25,
 # klBand = 0.5 x 0.0625 = 0.03125.
 # deriveBands(4, 30.0) gives ulpBand = 4, delta = 0.5, klBand = 0.125.
-# deriveBands(2, 30.0, depth = 2) gives ulpBand = 4, delta = 0.5, klBand = 0.125.
-# deriveBands(4, 30.0, depth = 2) gives ulpBand = 8, delta = 1.0, klBand = 0.5.
+# deriveBands(2, 30.0, depth = 2) gives ulpBand = ceil(2 x sqrt(2)) = 3, delta = 3 x 0.125 = 0.375,
+# klBand = 0.5 x 0.140625 = 0.0703125.
+# deriveBands(4, 30.0, depth = 2) gives ulpBand = ceil(4 x sqrt(2)) = 6, delta = 6 x 0.125 = 0.75,
+# klBand = 0.5 x 0.5625 = 0.28125.
+# The depth scaling is the root-sum-square (RSS) accumulation of independent
+# per-stage reordering errors, ~ sqrt(depth) x the per-stage allowance, not
+# the worst-case linear depth x it.
 
 # ============================ Stimulus tensors ============================
 
@@ -90,8 +95,8 @@ proc main() =
     demand(b2.ulpBand == 2 and b2.delta == 0.25 and b2.klBand == 0.03125,
       "deriveBands(2, 30.0) must be (2, 0.25, 0.03125), got " & $b2)
     let bd2 = deriveBands(4, 30.0, depth = 2)
-    demand(bd2.ulpBand == 8 and bd2.delta == 1.0 and bd2.klBand == 0.5,
-      "deriveBands(4, 30.0, depth 2) must be (8, 1.0, 0.5), got " & $bd2)
+    demand(bd2.ulpBand == 6 and bd2.delta == 0.75 and bd2.klBand == 0.28125,
+      "deriveBands(4, 30.0, depth 2) must be (6, 0.75, 0.28125), got " & $bd2)
     var ampRaised = false
     try:
       discard deriveBands(2, 30.0, coarseAmplification = 0.5)
@@ -124,10 +129,10 @@ proc main() =
     harnessStats(constBf16, recConst, kElementwise)
 
   block:
-    # Depth-2 band edge case, the max quantile sits 4 steps up, 0.5 = delta.
+    # Depth-2 band edge case, the max quantile sits 3 steps up, 0.375 = delta.
     # The comparison is strict, so the edge itself passes.
-    let up4 = F.toTensor(perturb(maxOffsets(), 0.5'f32)).to(F.kBfloat16)
-    harnessStats(up4, recBase, kElementwise, depth = 2)
+    let up3 = F.toTensor(perturb(maxOffsets(), 0.375'f32)).to(F.kBfloat16)
+    harnessStats(up3, recBase, kElementwise, depth = 2)
 
   # ============================ Stats reject cases ============================
 
@@ -145,10 +150,11 @@ proc main() =
 
   block:
     # Depth-1 quantile instrument reads grid steps, max up 8 steps
-    # against ulpBand 2.
+    # against ulpBand 2. The harness reports the absolute drift
+    # and the derived band. It does not report a grid-step count.
     let up8 = F.toTensor(perturb(maxOffsets(), 1.0'f32)).to(F.kBfloat16)
     expectReject(proc() = harnessStats(up8, recBase, kElementwise),
-      "8 grid steps", "quantile step fault")
+      "exceeds band", "quantile step fault")
 
   block:
     # Depth-2 quantile instrument reads absolute scale, max up 6 steps
