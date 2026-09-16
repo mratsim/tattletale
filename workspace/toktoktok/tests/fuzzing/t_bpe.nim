@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run:
@@ -134,10 +134,10 @@ proc main() =
         warm += scratch.len
     check "warmup drain emitted ids", warm > 0
     let before = getTotalMem()
+    let data = CjkText.toOpenArrayByte(0, CjkText.len - 1)
+    var scratch: seq[int] = @[]
     for i in 0 ..< 2000:
       r.reset(cache, famCl100k, CjkText)
-      var scratch: seq[int] = @[]
-      let data = CjkText.toOpenArrayByte(0, CjkText.len - 1)
       for piece in r.items:
         scratch.setLen(0)
         encodeSegment(engine, scratch, bt, data, piece[0], piece[1])

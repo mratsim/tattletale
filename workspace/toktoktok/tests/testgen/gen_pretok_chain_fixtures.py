@@ -1,36 +1,17 @@
 #!/usr/bin/env python3
-"""HF reference chain segmentation fixtures. Each row carries piece
-(lo,hi) byte offsets for the pre-tokenization stage over the shared
-corpus prefixes plus adversarial rows.
+"""HF reference chain segmentation fixtures.
 
-Families covered are exaone, step-3.5-flash and gemma-4.
+Each row is {name, text, pieces, tokenizer}. Pieces holds [lo, hi] byte
+offsets into text (half-open).
 
-Rows follow the shared shape {name, text, pieces, tokenizer} where
-pieces is a list of [lo, hi] BYTE offsets into text (half-open).
+HF pre_tokenizer returns code-point offsets. The generator converts
+them to byte offsets so Nim Span byte views compare directly.
 
-HF pre_tokenizer.pre_tokenize_str returns code-point offsets, so
-the generator converts them to byte offsets via the utf-8 byte width
-of each code point.
+Reference path per family (authoritative HF engine):
+- exaone and step-3.5-flash run Tokenizer.from_file(..).pre_tokenizer, a Sequence of Isolated Split steps with a ByteLevel tail.
+- gemma-4 runs Split(String " ", MergedWithPrevious).
 
-Nim suites compare these directly against Span byte views.
-Offset conversion is exercised by the invariant check below, the byte
-slices of every row must reassemble into text exactly.
-
-Reference path per family (the authoritative HF engine):
-- exaone and step-3.5-flash run Tokenizer.from_file(..).pre_tokenizer,
-  a Sequence of Isolated Split steps with a ByteLevel(use_regex=false)
-  tail (a byte remap that carries no split behavior).
-- gemma-4 uses Split(String " ", MergedWithPrevious).
-
-Byte-determinism rule, run this script TWICE, sha256 both outputs,
-commit only when the hashes match run-to-run.
-
-Usage:
-    /path/to/venv/bin/python gen_pretok_chain_fixtures.py  # twice
-
-Gemma-4 rows need TTT_GEMMA4_TOKENIZER in the environment, the absolute
-path of the machine-local gemma-4-E2B-it tokenizer.json
-(gitignored, never committed).
+Run python gen_pretok_chain_fixtures.py twice. Commit only when the sha256 hashes match. Gemma-4 rows need TTT_GEMMA4_TOKENIZER.
 """
 
 import io
@@ -161,9 +142,11 @@ def tokenize_family(family, texts, cache={}):
                  tk.pre_tokenizer.pre_tokenize_str(text)]
         pieces = char_to_byte_offsets(text, pairs)
         # invariant check:
-        #   byte slices must reassemble into text exactly
-        rebuilt = "".join(text[lo:hi] for lo, hi in pieces)
-        if rebuilt != text:
+        #   pieces hold UTF-8 byte offsets into text, so slice the byte
+        #   buffer and compare against the byte encoding.
+        buf = text.encode("utf-8")
+        rebuilt = b"".join(buf[lo:hi] for lo, hi in pieces)
+        if rebuilt != text.encode("utf-8"):
             raise SystemExit(
                 f"coverage gate failed for {family} {name}: pieces do"
                 f" not reassemble into text")

@@ -213,10 +213,12 @@ proc addComplementRange(res: var CpRanges, lo, hi: uint32)
   # forward, defined with the table helpers
 
 proc classComplement*(a: CpRanges): CpRanges =
-  ## Complement over 0x0000..0x10FFFF minus the UTF-16 surrogate block
-  ## (surrogates never appear in valid UTF-8 and no class matches them).
+  ## Complement over 0x0000..0x10FFFF minus the UTF-16 surrogate block,
+  ## the input sorted first (a raw `classAdd` class arrives unsorted).
+  var ranges = a.rs
+  ranges.sort()
   var cur = 0'u32
-  for r in a.rs.items:
+  for r in ranges.items:
     if r.lo > cur:
       result.addComplementRange(cur, r.lo - 1)
     if r.hi >= cur:
@@ -1430,7 +1432,8 @@ proc nextMatch*(p: CompiledPattern, input: string, fromPos: int,
   ## DFA-backed scan driver, the default entry of the scanner.
   ## Returns the next match span, or (-1, -1) when nothing matches.
   ## - falls back to the NFA simulation only through the permanent dfaOverflow latch
-  nextMatchImpl(p, input, fromPos, winLo, winHi, not p.dfaOverflow)
+  nextMatchImpl(p, input, fromPos, winLo, winHi,
+    useDfa = p.dfa != nil and not p.dfaOverflow)
 
 proc nextMatchNfa*(p: CompiledPattern, input: string, fromPos: int,
     winLo = 0, winHi = -1): tuple[start, stop: int] =

@@ -24,7 +24,7 @@
 ##   | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 ##   | scan-only          | the pre-tokenization machine's piece stream alone, the pattern-split scan where the step carries one, the frontier-engine scan otherwise |
 ##   | scan-only-frontier | the same machine forced down the frontier-engine scan, the A/B row against the pattern-split scan                                        |
-##   | bpe-only           | the ordinary naive-merge tail, whole-piece hit first else the naive merge core per piece                                                 |
+##   | bpe-only           | the ordinary naive-merge tail over pre-computed pieces, whole-piece hit first else the naive merge core per piece                        |
 ##   | bpe-only-bt        | the ordinary backtracking tail, whole-piece hit first else the bt core                                                                   |
 ##
 ## Id stream:
@@ -77,18 +77,18 @@ proc readCorpusPrefix(path: string, maxBytes: int): string =
     text = text[0 ..< maxBytes]
   text
 
-proc bpeOnlyOrd(cache: var PreTokRegexCache, ranks: Table[seq[byte], int], text: string): seq[int] =
+proc bpeOnlyOrd(pieces: seq[tuple[lo, hi: int]], ranks: Table[seq[byte], int], text: string): seq[int] =
   ## Ordinary BPE tail over the family's pre-tokenized pieces:
   ## - whole-piece rank hit first, else the naive merge core
   ##   (`bpe_codec.bytePairEncode`) per piece.
   ## - the naive core is the library's tiktoken-reference merge core,
   ##   the wired pipeline serves the backtracking core instead.
   ##
-  ## Serves both as the board's id reference and as the timed bpe-only stage row.
+  ## Times BPE alone over pre-computed pieces. The caller pre-tokenizes once
+  ## and feeds the piece spans, so the row measures the merge core only.
   var scratch: seq[int] = @[]
   var piece: seq[byte] = @[]
-  var r = initPreTokenizer(cache, famKimiK25, text)
-  for (lo, hi) in r.items:
+  for (lo, hi) in pieces:
     scratch.setLen(0)
     piece = cast[seq[byte]](text[lo ..< hi])
     if piece in ranks:
@@ -161,7 +161,12 @@ proc main() =
 
   for (name, file, prefixBytes) in Corpora.items:
     let text = readCorpusPrefix(CorpusDir / file, prefixBytes)
-    let reference = bpeOnlyOrd(cache, codec.ranks, text)
+    var pieces: seq[tuple[lo, hi: int]] = @[]
+    block:
+      var r = initPreTokenizer(cache, famKimiK25, text)
+      for piece in r.items:
+        pieces.add piece
+    let reference = bpeOnlyOrd(pieces, codec.ranks, text)
     var walls: seq[float] = @[]
     var ids0: seq[int] = @[]
     for k in 0 ..< reps + 1: # rep 0 = warm-up, dropped
@@ -218,15 +223,10 @@ proc main() =
       " MB/s=", (text.len.float / 1e6 / (scanFMedian / 1e3)).formatFloat(ffDecimal, 1)
 
     var bpeWalls: seq[float] = @[]
-    var pieces: seq[tuple[lo, hi: int]] = @[]
-    block:
-      var r = initPreTokenizer(cache, famKimiK25, text)
-      for piece in r.items:
-        pieces.add piece
     var bpeIds: seq[int] = @[]
     for k in 0 ..< reps + 1:
       let w0 = nowMs()
-      bpeIds = bpeOnlyOrd(cache, codec.ranks, text)
+      bpeIds = bpeOnlyOrd(pieces, codec.ranks, text)
       let w1 = nowMs()
       doAssert bpeIds == reference, "bpe-only stream diverged"
       if k > 0:

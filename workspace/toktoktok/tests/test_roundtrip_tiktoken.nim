@@ -3,6 +3,7 @@
 
 import std/unittest
 import std/os
+import std/strutils
 import std/tables
 
 import workspace/toktoktok/src/deserializers
@@ -47,7 +48,7 @@ proc runTiktokenizerTests() =
         check encoded.len > 0
 
         let decoded = decodeToString(loaded.codec, encoded)
-        check decoded.len >= 5 and decoded[0 .. 4] == "Hello"
+        check decoded.len >= 5 and decoded.startsWith("Hello")
 
       test "byte encoding roundtrip (" & name & ")":
         let loaded = loadOnce(name, filename, pattern)

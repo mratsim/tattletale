@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## RegexScanner machine conformance (object, ctor, one items iterator).
@@ -128,7 +128,19 @@ proc main() =
     var resumeFails = 0
     for i, text in TextRows.pairs:
       let full = drain(p, text)
-      for k in 0 ..< max(full.len, 1):
+      # k == 0: resume from the initial cursor, nothing consumed before
+      # the resume, the whole stream is yielded
+      var m0 = initRegexScanner(p, text)
+      var tail0: seq[tuple[start, stop: int]]
+      for s in m0.items:
+        tail0.add s
+      if tail0 != full:
+        inc resumeFails
+        echo "RESUME MISMATCH row_", $i, " k=0 (initial cursor): ",
+          tail0, " vs ", full
+      # For k >= 1, consume k spans. The cursor advances before each yield, so
+      # the resume picks up exactly after span k
+      for k in 1 ..< max(full.len, 1):
         var m = initRegexScanner(p, text)
         var head: seq[tuple[start, stop: int]]
         var n = 0
@@ -202,6 +214,39 @@ proc main() =
         echo "INTERLEAVE MISMATCH (spaces) row_", $i, ": ", sb
     check "interleaved scanners sharing one pattern keep their own drains",
       interFails == 0
+
+  #
+  # shared-pattern scratch buffer, two interleaved scanners on the SAME
+  # compiled pattern (the pattern's attempt buffers are reused per attempt)
+  # must each reproduce their own full drain, so one scanner's in-flight
+  # attempt never clobbers the other's state
+  #
+  block:
+    var sharedFails = 0
+    for i, text in TextRows.pairs:
+      var ma = initRegexScanner(p, text)
+      var mb = initRegexScanner(p, text)
+      var sa, sb: seq[tuple[start, stop: int]]
+      while true:
+        var progressed = false
+        for s in ma.items:
+          sa.add s
+          progressed = true
+          break
+        for s in mb.items:
+          sb.add s
+          progressed = true
+          break
+        if not progressed:
+          break
+      if sa != drain(p, text):
+        inc sharedFails
+        echo "SHARED-SCRATCH MISMATCH row_", $i, ": ", sa
+      if sb != drain(p, text):
+        inc sharedFails
+        echo "SHARED-SCRATCH MISMATCH row_", $i, ": ", sb
+    check "two interleaved scanners sharing one pattern keep their own drains",
+      sharedFails == 0
 
   if checkFailures > 0:
     echo "\n", checkFailures, " check(s) failed"

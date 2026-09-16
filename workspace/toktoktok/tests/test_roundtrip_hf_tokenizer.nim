@@ -1,7 +1,7 @@
 ## Run:
 ##   nim test_toktoktok  # from the worktree root
 
-import std/[monotimes, times]
+import std/[monotimes, times, strutils]
 import std/unittest
 import std/os
 import std/tables
@@ -49,7 +49,7 @@ proc runHfTokenizerTests() =
         check encoded.len > 0
 
         let decoded = decodeToString(loaded.codec, encoded)
-        check decoded.len >= 5 and decoded[0 .. 4] == "Hello"
+        check decoded.len >= 5 and decoded.startsWith("Hello")
 
       test "byte encoding roundtrip (" & name & ")":
         let loaded = loadOnce(name, filename)

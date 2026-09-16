@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run:
@@ -119,7 +119,7 @@ proc runTests*() =
     let withSpace = bytesToUnicode("abc", true)
     check "no prefix space when disabled",
       withSpace.len == spaceMapped.len + 3 and
-      bytesToUnicode("abc", false) == withSpace[spaceMapped.len .. ^1]
+      withSpace.endsWith(bytesToUnicode("abc", false))
 
   #
   # 4. the remap string is the full mapped alphabet

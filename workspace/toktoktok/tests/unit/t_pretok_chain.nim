@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run:
@@ -269,19 +269,28 @@ proc runTests*() =
       composedOk
     # coverage:
     #   special offsets and pre-token pieces partition the input
-    var cov = 0
+    #   (contiguous, non-overlapping, covering [0, text.len) exactly,
+    #   not merely a length sum that an overlap + gap would fool)
     var coverOk = true
+    var expect = 0
     var c2 = SpecialScan.init(sc, text)
     for d in c2.items:
       if d.specialId >= 0:
-        cov += d.hi - d.lo
+        let lo = c2.winBase + d.lo
+        let hi = c2.winBase + d.hi
+        if lo != expect:
+          coverOk = false
+        expect = hi
       else:
         let lo = c2.winBase + d.lo
         let hi = c2.winBase + d.hi
         for s in collectPieces(cache, famStep35Flash, text[lo ..< hi]):
-          cov += s[1] - s[0]
+          if lo + s[0] != expect:
+            coverOk = false
+          expect = lo + s[1]
+    coverOk = coverOk and expect == text.len
     check "composition: specials + pieces cover the input bytes",
-      coverOk and cov == text.len, $cov & " of " & $text.len
+      coverOk, "covered to " & $expect & " of " & $text.len
     # piece count sanity:
     #   specials excluded, pieces dense within regions
     check "composition decision stream emitted", composed.len > 0

@@ -440,8 +440,13 @@ def is_diagram(text):
 
 
 def is_table(text):
-    """Returns True for table rows holding two or more pipe characters."""
-    return text.count("|") >= 2
+    """Returns True for table rows holding two or more pipe characters.
+
+    A real table row opens on a pipe (the comment marker the extractors
+    already strip), so a prose line that merely carries two pipes mid-line
+    (e.g. `use a | b | c`) stays prose and is never mistaken for a table.
+    """
+    return text.count("|") >= 2 and text.lstrip().startswith("|")
 
 
 def _is_separator_row(text):
@@ -1677,10 +1682,12 @@ def _parse_added_lines(diff):
 def added_lines(path, base):
     """Returns the 1-based post-image line numbers a diff from base adds.
 
-    The diff is read from the staged index relative to the base commit
-    (`git diff --cached <base> --unified=0`). When nothing is staged for
-    the file, the working-tree diff relative to base is read instead.
-    Returns None when there is no repository to read a diff from.
+    The diff is read from the working tree relative to the base commit
+    (`git diff <base> --unified=0`), the same text the linter reads, so a
+    partially-staged file keeps its line numbers aligned. Returns None
+    when there is no repository to read a diff from, or when git fails, so
+    the caller scopes nothing and lints the whole file instead of silently
+    passing on an empty added-line set.
     """
     repo = _repo_root()
     if repo is None:
@@ -1688,19 +1695,13 @@ def added_lines(path, base):
     rel = os.path.relpath(path.resolve(), repo)
     if rel.startswith(".."):
         return None
-    cmd = ["git", "diff", "--cached"]
-    if base:
-        cmd.append(base)
-    cmd += ["--unified=0", "--", rel]
-    out = subprocess.run(cmd, capture_output=True, text=True)
-    lines = _parse_added_lines(out.stdout)
-    if lines:
-        return lines
     cmd = ["git", "diff"]
     if base:
         cmd.append(base)
     cmd += ["--unified=0", "--", rel]
     out = subprocess.run(cmd, capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
     return _parse_added_lines(out.stdout)
 
 
