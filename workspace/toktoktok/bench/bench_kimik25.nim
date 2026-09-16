@@ -51,7 +51,7 @@ import workspace/toktoktok/src/bpe_codec {.all.}
 
 const
   WorkDir = currentSourcePath().parentDir()
-  ToktoktokDir = WorkDir.parentDir().parentDir()
+  ToktoktokDir = WorkDir.parentDir()
   CorpusDir = ToktoktokDir / "tests" / "corpus"
   TokenizersDir = ToktoktokDir / "tests" / "tokenizers"
 
@@ -77,7 +77,7 @@ proc readCorpusPrefix(path: string, maxBytes: int): string =
     text = text[0 ..< maxBytes]
   text
 
-proc bpeOnlyOrd(ranks: Table[seq[byte], int], text: string): seq[int] =
+proc bpeOnlyOrd(cache: var PreTokRegexCache, ranks: Table[seq[byte], int], text: string): seq[int] =
   ## Ordinary BPE tail over the family's pre-tokenized pieces:
   ## - whole-piece rank hit first, else the naive merge core
   ##   (`bpe_codec.bytePairEncode`) per piece.
@@ -87,7 +87,7 @@ proc bpeOnlyOrd(ranks: Table[seq[byte], int], text: string): seq[int] =
   ## Serves both as the board's id reference and as the timed bpe-only stage row.
   var scratch: seq[int] = @[]
   var piece: seq[byte] = @[]
-  var r = initPreTokenizer(famKimiK25, text)
+  var r = initPreTokenizer(cache, famKimiK25, text)
   for (lo, hi) in r.items:
     scratch.setLen(0)
     piece = cast[seq[byte]](text[lo ..< hi])
@@ -98,14 +98,14 @@ proc bpeOnlyOrd(ranks: Table[seq[byte], int], text: string): seq[int] =
       for x in scratch.items:
         result.add x
 
-proc frontierPieces(fam: Family, text: string): seq[tuple[lo, hi: int]] =
+proc frontierPieces(cache: var PreTokRegexCache, fam: Family, text: string): seq[tuple[lo, hi: int]] =
   ## Pre-tokenization piece stream driven down the frontier-engine scan
   ## (step.pat.nextMatch per pattern step):
   ##
   ## the A/B row against the machine's default (pattern-split) scan
   ## and the frontier-scan + backtracking-tail composition row.
   var level = @[(0, text.len)]
-  for step in familySteps(fam).items:
+  for step in cache.steps(fam).items:
     var nxt: seq[(int, int)]
     for (pieceLo, pieceHi) in level.items:
       var lastEmit = pieceLo
@@ -148,11 +148,12 @@ proc main() =
   echo "[bench-kimik2.5] full-pipeline board, reps=", reps
 
   let codec = loadTiktokenCodec(TokenizersDir / "kimik2.5.tiktoken")
+  var cache: PreTokRegexCache
   # ONE pipeline for the whole board:
   #   its engine builds once, the loud load receipts print at the first
   #   encode below, every rep reuses it through resetText
   #   (the machine protocol's zero-alloc steady state, a fresh pipeline per rep would pay the full table build per rep).
-  let pipe = TokPipeline.init(codec.ranks, @[], @[], famKimiK25)
+  let pipe = TokPipeline.init(cache, codec.ranks, @[], @[], famKimiK25)
   # The reference walk runs on its own engine
   # (the pipeline's engine field is internal), both engines build once,
   # outside every timed window (the first reference encode and the first warm-up rep).
@@ -160,7 +161,7 @@ proc main() =
 
   for (name, file, prefixBytes) in Corpora.items:
     let text = readCorpusPrefix(CorpusDir / file, prefixBytes)
-    let reference = bpeOnlyOrd(codec.ranks, text)
+    let reference = bpeOnlyOrd(cache, codec.ranks, text)
     var walls: seq[float] = @[]
     var ids0: seq[int] = @[]
     for k in 0 ..< reps + 1: # rep 0 = warm-up, dropped
@@ -188,7 +189,7 @@ proc main() =
     var scanPieces = 0
     for k in 0 ..< reps + 1:
       let w0 = nowMs()
-      var r = initPreTokenizer(famKimiK25, text)
+      var r = initPreTokenizer(cache, famKimiK25, text)
       scanPieces = 0
       for (lo, hi) in r.items:
         inc scanPieces
@@ -205,7 +206,7 @@ proc main() =
     var scanFPieces = 0
     for k in 0 ..< reps + 1:
       let w0 = nowMs()
-      scanFPieces = frontierPieces(famKimiK25, text).len
+      scanFPieces = frontierPieces(cache, famKimiK25, text).len
       let w1 = nowMs()
       if k > 0:
         scanFWalls.add w1 - w0
@@ -219,13 +220,13 @@ proc main() =
     var bpeWalls: seq[float] = @[]
     var pieces: seq[tuple[lo, hi: int]] = @[]
     block:
-      var r = initPreTokenizer(famKimiK25, text)
+      var r = initPreTokenizer(cache, famKimiK25, text)
       for piece in r.items:
         pieces.add piece
     var bpeIds: seq[int] = @[]
     for k in 0 ..< reps + 1:
       let w0 = nowMs()
-      bpeIds = bpeOnlyOrd(codec.ranks, text)
+      bpeIds = bpeOnlyOrd(cache, codec.ranks, text)
       let w1 = nowMs()
       doAssert bpeIds == reference, "bpe-only stream diverged"
       if k > 0:
@@ -264,7 +265,7 @@ proc main() =
     var idsM2: seq[int] = @[]
     for k in 0 ..< reps + 1:
       let w0 = nowMs()
-      idsM2 = bpeOnlyBt(refEngine, btM2, frontierPieces(famKimiK25, text), text)
+      idsM2 = bpeOnlyBt(refEngine, btM2, frontierPieces(cache, famKimiK25, text), text)
       let w1 = nowMs()
       doAssert idsM2 == reference, "frontier-scan + backtracking-tail stream diverged"
       if k > 0:

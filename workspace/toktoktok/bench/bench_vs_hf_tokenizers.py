@@ -25,16 +25,16 @@ def get_fixtures() -> List[Tuple[str, Path, int]]:
     return [
         (
             "verne",
-            CORPUS_DIR / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt".zst,
+            CORPUS_DIR / "pg4791-Verne-Voyage_au_centre_de_la_Terre.txt.zst",
             10000,
         ),
-        ("shakespeare", CORPUS_DIR / "pg100-shakespeare.txt".zst, 10000),
+        ("shakespeare", CORPUS_DIR / "pg100-shakespeare.txt.zst", 10000),
         (
             "sanguozhi",
-            CORPUS_DIR / "pg23950-三國志演義-Romance_of_the_Three_Kingdoms.txt".zst,
+            CORPUS_DIR / "pg23950-三國志演義-Romance_of_the_Three_Kingdoms.txt.zst",
             10000,
         ),
-        ("sqlite", CORPUS_DIR / "sqlite3.c".zst, 10000),
+        ("sqlite", CORPUS_DIR / "sqlite3.c.zst", 10000),
     ]
 
 
