@@ -9,30 +9,38 @@ source of truth for the doc rules.
 
 Rule table (rule | trigger | severity):
 
-| rule-id | trigger | severity |
-|---|---|---|
-| banned-vocab | a blocklist word (EXAMPLES.md, plus operator-extended entries) | counted |
-| the-opener | a doc comment or heading opens with the article "The" | counted |
-| semicolon | a semicolon in prose | counted |
-| em-dash | an em-dash or en-dash in prose | counted |
-| line-length | a prose line over 140 characters | counted |
-| article-eol | a line ends on a dangling article or a stranded possessive | counted |
-| stray-fragment | a line ends on a bare connective or a fragment after the period | counted |
-| colon-break | a colon orphaned at line start or split from its lead phrase | counted |
-| colon-inline | a prose colon followed by prose on the same line | counted |
-| unit-split | a line opens on a severed one-word continuation ("apply,") | counted |
-| paren-split | a line ends inside an open parenthesis | counted |
-| single-word-eol | a 1-2 word stub line with reflow room on the previous line | counted |
-| escape-noise | an escape sequence used as a prose word | counted |
-| narration | temporal or history narration: currently, as of, once X lands | counted |
-| artifact-ref | a pipeline artifact ID: SLOP-002, QA-004, iter-3 | counted |
-| wall-of-text | 10+ consecutive prose lines with no bullet, table, or diagram | advisory |
-| wall-no-air | 4+ dense prose lines with no air line inside | counted |
-| how-narration | a doc narrates the how: "This function...", "we iterate", "make sure" | advisory |
-| module-header-length | a module header past 8 tight prose lines | advisory |
-| test-header-command | a test file header with no run command line | counted |
-| missing-doc | a public item with no doc comment (exported Nim proc or type, module-level Python def or class) | counted |
-| missing-contract | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant) | advisory |
+| rule-id              | trigger                                                                                           | severity |
+| -------------------- | ------------------------------------------------------------------------------------------------- | -------- |
+| banned-vocab         | a blocklist word (EXAMPLES.md, plus operator-extended entries)                                    | counted  |
+| the-opener           | a doc comment or heading opens with the article "The"                                             | counted  |
+| semicolon            | a semicolon in prose                                                                              | counted  |
+| em-dash              | an em-dash or en-dash in prose                                                                    | counted  |
+| line-length          | a prose line over 140 characters                                                                  | counted  |
+| article-eol          | a line ends on a dangling article or a stranded possessive                                        | counted  |
+| stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
+| colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
+| colon-inline         | a prose colon followed by prose on the same line                                                  | counted  |
+| unit-split           | a line opens on a severed one-word continuation ("apply,")                                        | counted  |
+| paren-split          | a line ends inside an open parenthesis                                                            | counted  |
+| single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
+| doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
+| bullet-list-length   | a bullet list with 4 or more items                                                                | counted  |
+| bullet-item-length   | a single bullet item spanning 4 or more lines                                                     | counted  |
+| table-separator      | a table with no |---| separator row after the header                                              | counted  |
+| table-mispadding     | a table row with a different cell count than the header, or a doc table row with an unpadded cell | counted  |
+| table-cell-wall      | a table cell over 30 words                                                                        | counted  |
+| table-alignment      | a table whose pipe separators do not line up (pad each cell to the column width)                  | counted  |
+| escape-noise         | an escape sequence used as a prose word                                                           | counted  |
+| narration            | temporal or history narration: currently, as of, once X lands                                     | counted  |
+| artifact-ref         | a pipeline artifact ID: SLOP-002, QA-004, iter-3                                                  | counted  |
+| wall-of-text         | 10+ consecutive prose lines with no bullet, table, or diagram                                     | advisory |
+| wall-no-air          | the longest consecutive airless prose stretch reaches 4 lines                                     | counted  |
+| missing-diagram      | a multi-step flow described in prose or bullets with no diagram                                   | advisory |
+| how-narration        | a doc narrates the how: "This function...", "we iterate", "make sure"                             | advisory |
+| module-header-length | a module header past 8 tight prose lines                                                          | advisory |
+| test-header-command  | a test file header with no run command line                                                       | counted  |
+| missing-doc          | a public item with no doc comment (exported Nim proc or type, module-level Python def or class)   | counted  |
+| missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)            | advisory |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -49,13 +57,21 @@ Scanned shapes, per file:
 - .md carries every line, fenced code blocks included
 
 - code lines, tables (2+ pipe characters), and URL lines are exempt
-- diagram lines (box-drawing characters, arrows, mermaid tokens) are exempt
+- diagram lines (box-drawing characters, 2+ arrow markers, mermaid tokens) are exempt
 - the Tattletale license header, the skill rule definitions, and this file are exempt
 
 Usage:
 
     python3 lint_docs.py <files-or-dirs>...
+    python3 lint_docs.py --base <commit> <files-or-dirs>...
     python3 lint_docs.py --fix <path>...
+
+When --base <commit> is set (or DOC_LINT_BASE env names the commit), findings
+are scoped to the lines a diff from that commit adds, so pre-existing
+violations a change did not touch stay out of the report. The diff is read
+from the staged index relative to the base commit, falling back to the
+working-tree diff when nothing is staged. Without --base, every file is
+linted in full.
 
 Output is one finding per line in the `path:line: rule-id: reason` shape,
 sorted by path and line.
@@ -72,13 +88,13 @@ writing the fixed text back.
 - a transform that would leave any new finding of any rule is skipped,
   the site stays for the LLM pass
 
-| mechanical class | transform |
-|---|---|
+| mechanical class            | transform                                                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | article-eol, stray-fragment | rewrap the paragraph so no line ends on a dangling article, a bare connective, or a 1-2 word tail after a period |
-| single-word-eol | merge the stub line into the reflow, the last line keeps 3+ words |
-| unit-split | rewrap when a pure rewrap heals the severed `word,` continuation |
-| colon-inline | break after the colon, the continuation indented two spaces under the lead, only when the tail rewraps clean |
-| wall-no-air | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment |
+| single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
+| unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
+| colon-inline                | break after the colon, the continuation indented two spaces under the lead, only when the tail rewraps clean     |
+| wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
 Leftover findings print tagged, [mechanical] for a class the transform
 could not heal and [judgment] for the rest.
@@ -88,7 +104,9 @@ could not heal and [judgment] for the rest.
 
 import ast
 import io
+import os
 import re
+import subprocess
 import sys
 import tokenize
 from collections import Counter
@@ -98,7 +116,15 @@ PROSE_CAP = 140
 SINGLE_WORD_EOL_PREV_MAX = 110
 WALL_OF_TEXT_LINES = 10
 WALL_NO_AIR_LINES = 4
+# A table cell over this many words is a wall of prose in a cell,
+# split it into bullets or a diagram.
+TABLE_CELL_MAX_WORDS = 30
 MODULE_HEADER_MAX_LINES = 8
+# Bullet-shape caps. A bullet list holds at most 3 items and one item
+# spans at most 3 lines, a 4-item list is banned, longer bullet walls
+# belong in a table or diagram.
+BULLET_LIST_MAX_ITEMS = 3
+BULLET_ITEM_MAX_LINES = 3
 
 ARTICLE_EOL = {"the", "a", "an", "this", "that", "its", "their", "both", "own"}
 CONNECTIVE_EOL = {"with", "of", "for", "to", "in", "and", "or", "on", "at",
@@ -143,6 +169,19 @@ NIM_EXPORTED_CALLABLE_RE = re.compile(
     r"^\s*(?:proc|func|macro|iterator|template|converter)\s+(\w+)\*(?:\s*\[|\s*\()")
 NIM_EXPORTED_TYPE_RE = re.compile(
     r"^\s*(?:type\s+)?(\w+)\*\s*=\s*(?:object|ref|distinct)\b")
+
+# The doc-above-type rule. The house doc comment of a type lives inside
+# its body, above the fields it describes (the placement object fields
+# use), a ## block directly above the declaration does not attach that way.
+#
+# The bare single-line form after a ## block is flagged too.
+TYPE_KEYWORD_RE = re.compile(r"^\s*type\b")
+TYPE_DECL_RE = re.compile(
+    r"^\s*[A-Za-z_]\w*\*?\s*(?:\[[^\]]*\])?\s*=\s*(?:ref\s+)?"
+    r"(?:object|distinct|enum|tuple)\b")
+SECTION_END_RE = re.compile(
+    r"^\s*(?:proc|func|macro|iterator|template|converter|const|let|var|import|"
+    r"export|include)\b")
 
 # Temporal and history narration (the narration rule).
 # Each entry carries the pattern plus a one-line hint.
@@ -327,6 +366,20 @@ RULES = {
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
     "single-word-eol": Rule("single-word-eol", True,
                             "a 1-2 word stub line with reflow room on the previous line"),
+    "doc-above-type": Rule("doc-above-type", True,
+                           "a ## block sits directly above a type declaration"),
+    "bullet-list-length": Rule("bullet-list-length", True,
+                               "a bullet list with 4 or more items"),
+    "bullet-item-length": Rule("bullet-item-length", True,
+                               "a single bullet item spanning 4 or more lines"),
+    "table-separator": Rule("table-separator", True,
+                            "a table with no |---| separator row after the header"),
+    "table-mispadding": Rule("table-mispadding", True,
+                              "a table row with a different cell count than the header, or a doc table row with an unpadded cell"),
+    "table-cell-wall": Rule("table-cell-wall", True,
+                             "a table cell over TABLE_CELL_MAX_WORDS words (split the cell into bullets or a diagram)"),
+    "table-alignment": Rule("table-alignment", True,
+                             "a table whose pipe separators do not line up (pad each cell to the column width)"),
     "escape-noise": Rule("escape-noise", True, "an escape sequence used as a prose word"),
     "narration": Rule("narration", True,
                       "temporal or history narration: currently, as of, once X lands"),
@@ -335,7 +388,9 @@ RULES = {
     "wall-of-text": Rule("wall-of-text", False,
                          "10+ consecutive prose lines with no bullet, table, or diagram"),
     "wall-no-air": Rule("wall-no-air", True,
-                        "4+ dense prose lines with no air line inside"),
+                        "the longest consecutive airless prose stretch reaches WALL_NO_AIR_LINES lines"),
+    "missing-diagram": Rule("missing-diagram", False,
+                            "a multi-step flow described in prose or bullets with no diagram"),
     "how-narration": Rule("how-narration", False,
                           "a doc narrates the how: \"This function...\", \"we iterate\", \"make sure\""),
     "module-header-length": Rule("module-header-length", False,
@@ -366,12 +421,17 @@ def strip_backticks(text):
 
 
 def is_diagram(text):
-    """Returns True for diagram lines holding box-drawing characters, arrows, or mermaid tokens."""
+    """Returns True for a spatially-structured diagram line.
+
+    A line is a diagram when it carries box-drawing characters, a mermaid
+    diagram token, or 2+ arrow markers. A single `-->` or `→` in prose is
+    an arrow for readability, not a diagram, so a line like
+    `s --> t = base(s) xor b` stays prose under the rules.
+    """
     if any(ch in DIAGRAM_CHARS for ch in text):
         return True
-    if text.count("→") + text.count("←") >= 2:
-        return True
-    if re.search(r"-->|──", text):
+    if (text.count("→") + text.count("←")
+            + text.count("-->") + text.count("──") >= 2):
         return True
     if re.match(r"^(?:graph|flowchart|sequenceDiagram|stateDiagram|erDiagram|"
                 r"classDiagram)\b", text.strip()):
@@ -382,6 +442,106 @@ def is_diagram(text):
 def is_table(text):
     """Returns True for table rows holding two or more pipe characters."""
     return text.count("|") >= 2
+
+
+def _is_separator_row(text):
+    """Returns True for a table separator row, every cell a run of 2+
+    dashes with optional alignment colons, e.g. `|---|---|`."""
+    cells = [c.strip() for c in text.strip().strip("|").split("|")]
+    return bool(cells) and all(re.fullmatch(r":?-{2,}:?", c) for c in cells)
+
+
+def _cell_count(text):
+    """Counts the cells in a pipe-delimited table row."""
+    body = text.strip().strip("|")
+    return 0 if not body else len(body.split("|"))
+
+
+def _cell_word_count(text):
+    """Returns the word count of a table cell, backticked spans stripped."""
+    return len(words(strip_backticks(text)))
+
+
+def _table_cells_padded(text):
+    """Returns True when every cell in a table row carries a leading and
+    trailing space (e.g. `| a | b |`), False when a cell is unpadded."""
+    body = text.strip().strip("|")
+    if not body:
+        return True
+    return all(c.startswith(" ") and c.endswith(" ") for c in body.split("|"))
+
+
+def _separator_cells(cells):
+    """Returns True when every stripped cell is a separator cell, a run
+    of 2+ dashes with optional alignment colons (e.g. `---`, `:---:`, `---:`)."""
+    return bool(cells) and all(re.fullmatch(r":?-{2,}:?", c) for c in cells)
+
+
+def _split_table_row(line):
+    """Splits a table row into its comment prefix and its content cells.
+
+    - the prefix is everything before the first pipe, e.g. `## ` or the empty
+      string when the content carries no comment marker
+    - cells are split on the pipe-space-pipe delimiter, so a literal pipe
+      inside a cell does not split the cell
+    - a trailing empty cell from the closing pipe is dropped, so the count
+      never includes the closing pipe as a field
+    """
+    prefix, sep, tail = line.partition("|")
+    if not sep:
+        return prefix, []
+    body = tail
+    if body.startswith(" "):
+        body = body[1:]
+    if body.endswith(" |"):
+        body = body[:-2]
+    elif body.endswith("|"):
+        body = body[:-1]
+    if not body.strip():
+        return prefix, []
+    return prefix, [c.strip() for c in body.split(" | ")]
+
+
+def _table_row_padded(line):
+    """Returns True when a table row carries a space around every cell.
+
+    A padded row opens with a space after the first pipe and splits into two
+    or more cells. An unpadded row splits into a single fused cell, so it
+    never qualifies here.
+    """
+    return len(_split_table_row(line)[1]) >= 2
+
+
+def _render_separator_cell(cell, width):
+    """Returns one separator cell filled with dashes to the column width.
+
+    A `:---:` cell at width 19 renders 17 dashes between the colons, keeping
+    the total cell width at the column width. A column narrower than 3 keeps
+    at least 3 dashes.
+    """
+    m = re.fullmatch(r"(:?)(-+)(:?)", cell)
+    if not m:
+        return cell.ljust(width)
+    left, _dashes, right = m.groups()
+    n = max(width - len(left) - len(right), 3)
+    return left + "-" * n + right
+
+
+def _render_aligned_row(prefix, cells, widths):
+    """Returns one table row with each cell padded to its column width.
+
+    A separator row fills its cells with dashes to the column width.
+    A content row left-justifies each cell to the width, so the pipe
+    separators line up across the whole table.
+    """
+    parts = []
+    sep = _separator_cells(cells)
+    for idx, cell in enumerate(cells):
+        if sep:
+            parts.append(_render_separator_cell(cell, widths[idx]))
+        else:
+            parts.append(cell.ljust(widths[idx]))
+    return prefix + "| " + " | ".join(parts) + " |"
 
 
 def is_url_line(text):
@@ -662,13 +822,35 @@ def flush_wall(path, run, findings):
 
 
 def flush_wall_no_air(path, run, findings):
-    """Fires the counted wall-no-air rule on a prose run of WALL_NO_AIR_LINES
-    or more lines holding no air line anywhere inside it."""
-    if len(run) >= WALL_NO_AIR_LINES and not any(air for _, air in run):
+    """Fires the counted wall-no-air rule on the longest consecutive
+    airless prose stretch inside a sub-block.
+
+    A stretch is a run of consecutive prose lines with no bullet, table,
+    diagram, or URL line between them. Fire when that stretch reaches
+    WALL_NO_AIR_LINES lines, so a dense paragraph next to a bullet or
+    table is still caught instead of being excused by the nearby air.
+    """
+    best_start = None
+    best_len = 0
+    cur_start = None
+    cur_len = 0
+    for n, air in run:
+        if air:
+            cur_start = None
+            cur_len = 0
+            continue
+        if cur_start is None:
+            cur_start = n
+        cur_len += 1
+        if cur_len > best_len:
+            best_len = cur_len
+            best_start = cur_start
+    if best_len >= WALL_NO_AIR_LINES and best_start is not None:
         findings.append(Finding(
-            path, run[0][0], "wall-no-air",
-            "prose block of %d lines has no bullets or diagram: "
-            "add air (bullet the list-able content, split the paragraph)" % len(run)))
+            path, best_start, "wall-no-air",
+            "prose stretch of %d lines has no bullet, table, or diagram "
+            "between them: add air (bullet the list-able content, "
+            "split the paragraph)" % best_len))
 
 
 def _compile_table(table, ignore_case):
@@ -839,6 +1021,233 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
             "or end the line before the paren)"))
 
 
+def _bullet_continuation(entry, lead_indent):
+    """Returns True for a list-run member line that is no bullet lead.
+
+    Contract, the item continues when:
+
+    - the line is no fence, heading, empty line, or trailing comment
+    - the line indents past the item's lead line (Nim `##` doc lines
+      carry indent 1 flush, so the lead's own width is the floor)
+
+    A line at or left of the lead indent ends the item.
+    """
+    _n, c, kind, indent, trailing = entry
+    if not c or trailing or kind in ("fence", "heading"):
+        return False
+    return indent > lead_indent
+
+
+def check_bullets(path, block, findings):
+    """Fires the bullet-shape rules over one block of prose entries.
+
+    Threshold contract, a bullet list holds at most 3 items and one item
+    spans at most 3 lines, a 4-item list is banned. Longer bullet walls
+    belong in a diagram, a table, or split lists.
+
+    A list is a maximal run of entries where every member is a bullet
+    lead or a continuation indented past its item's lead line.
+
+    - every lead line counts as an item, nested leads included
+    - a nested lead ends the item above it
+    - a run never crosses an empty line, a heading, a fence, a line at
+      or left of the lead indent, or a trailing comment
+    - adjacent lists separated by air or prose stay separate runs
+    """
+    lead_idx = {}
+    for i, (_n, c, kind, indent, trailing) in enumerate(block):
+        if kind in ("doc", "hash", "prose") and c and not trailing \
+                and BULLET_RE.match(c):
+            lead_idx[i] = indent
+    if not lead_idx:
+        return
+    i = 0
+    while i < len(block):
+        if i not in lead_idx:
+            i += 1
+            continue
+        spans = []
+        j = i
+        while j < len(block):
+            if j in lead_idx:
+                k = j + 1
+                while k < len(block) and k not in lead_idx \
+                        and _bullet_continuation(block[k], lead_idx[j]):
+                    k += 1
+                spans.append((j, k - j))
+                j = k
+                continue
+            break
+        if len(spans) > BULLET_LIST_MAX_ITEMS:
+            findings.append(Finding(
+                path, block[i][0], "bullet-list-length",
+                "bullet list holds %d items, cap is %d (split the list, "
+                "or move the content into a table or diagram)"
+                % (len(spans), BULLET_LIST_MAX_ITEMS)))
+        for lead, span in spans:
+            if span > BULLET_ITEM_MAX_LINES:
+                findings.append(Finding(
+                    path, block[lead][0], "bullet-item-length",
+                    "bullet item spans %d lines, cap is %d (wrap tighter, "
+                    "or move the content into a table or diagram)"
+                    % (span, BULLET_ITEM_MAX_LINES)))
+        i = j + 1
+
+
+def check_tables(path, block, findings):
+    """Fires the table-separator, table-mispadding, and table-alignment
+    rules over a run of pipe-delimited rows.
+
+    A table is a run of 2+ consecutive pipe-delimited rows. A table that
+    carries no separator row after its header is flagged, since the
+    header and body cannot be told apart. A doc-comment table whose cells
+    carry no leading/trailing space is flagged as mispadded. A table whose
+    rows pad each cell to a different column width is flagged so the pipe
+    separators line up across the whole table.
+    """
+    i = 0
+    n = len(block)
+    while i < n:
+        if not is_table(block[i][1]):
+            i += 1
+            continue
+        run = []
+        j = i
+        while j < n and is_table(block[j][1]):
+            run.append(block[j])
+            j += 1
+        if len(run) >= 2:
+            if not any(_is_separator_row(row[1]) for row in run):
+                findings.append(Finding(
+                    path, run[0][0], "table-separator",
+                    "table carries no separator row after the header "
+                    "(add a |---| row between the header and the body)"))
+            header_cells = _cell_count(run[0][1])
+            if header_cells:
+                for row in run[1:]:
+                    if _is_separator_row(row[1]):
+                        continue
+                    n_cells = _cell_count(row[1])
+                    if n_cells != header_cells:
+                        findings.append(Finding(
+                            path, row[0], "table-mispadding",
+                            "table row has %d cells, header has %d "
+                            "(align the row to the header columns)"
+                            % (n_cells, header_cells)))
+            if any(row[2] == "doc" for row in run):
+                for row in run:
+                    if not _table_cells_padded(row[1]):
+                        findings.append(Finding(
+                            path, row[0], "table-mispadding",
+                            "table row is not padded (give each cell a "
+                            "leading and trailing space, e.g. `| a | b |`)"))
+            for row in run:
+                if _is_separator_row(row[1]):
+                    continue
+                cells = [c.strip() for c in row[1].strip().strip("|").split("|")]
+                for cell in cells:
+                    wc = _cell_word_count(cell)
+                    if wc > TABLE_CELL_MAX_WORDS:
+                        findings.append(Finding(
+                            path, row[0], "table-cell-wall",
+                            "table cell is %d words, cap is %d (split the "
+                            "cell into bullets or a diagram)"
+                            % (wc, TABLE_CELL_MAX_WORDS)))
+            # Column alignment. Flag rows whose pipe separators do not line
+            # up with the shared column widths.
+            #
+            # - Only padded rows are candidates, so an unpadded row stays
+            #   table-mispadding's job and never double-fires here.
+            # - A run with ragged cell counts is table-mispadding's job too,
+            #   so it is skipped entirely.
+            candidates = []
+            for row in run:
+                if not _table_row_padded(row[1]):
+                    continue
+                _prefix, cells = _split_table_row(row[1])
+                if cells:
+                    candidates.append((row, cells))
+            if candidates:
+                n_cols = len(candidates[0][1])
+                if all(len(cells) == n_cols for _row, cells in candidates):
+                    widths = [0] * n_cols
+                    for _row, cells in candidates:
+                        if _separator_cells(cells):
+                            continue
+                        for idx, cell in enumerate(cells):
+                            if len(cell) > widths[idx]:
+                                widths[idx] = len(cell)
+                    for row, cells in candidates:
+                        if _render_aligned_row("", cells, widths) != row[1]:
+                            findings.append(Finding(
+                                path, row[0], "table-alignment",
+                                "table columns are not aligned (pad each "
+                                "cell to the column width so the | "
+                                "separators line up)"))
+        i = j
+
+
+# Flow and step vocabulary the missing-diagram advisory matches.
+DIAGRAM_FLOW_VOCAB = re.compile(
+    r"\b(?:step|transition|compile|walk|pipeline|stage|phase|flow|lifecycle|"
+    r"then|sequence|match)\b", re.IGNORECASE)
+
+
+def _bullet_lists_in_block(block):
+    """Counts the maximal bullet lists in a block, the runs `check_bullets`
+    treats as one list each."""
+    lead_idx = {}
+    for i, (_n, c, kind, indent, trailing) in enumerate(block):
+        if kind in ("doc", "hash", "prose") and c and not trailing \
+                and BULLET_RE.match(c):
+            lead_idx[i] = indent
+    if not lead_idx:
+        return 0
+    count = 0
+    i = 0
+    while i < len(block):
+        if i not in lead_idx:
+            i += 1
+            continue
+        count += 1
+        j = i
+        while j < len(block):
+            if j in lead_idx:
+                k = j + 1
+                while k < len(block) and k not in lead_idx \
+                        and _bullet_continuation(block[k], lead_idx[j]):
+                    k += 1
+                j = k
+                continue
+            break
+        i = j + 1
+    return count
+
+
+def check_missing_diagram(path, block, findings):
+    """Fires the advisory missing-diagram rule on a comment block that
+    describes a multi-step flow in bullets and prose with no diagram.
+
+    A block qualifies when it holds 2 or more bullet lists, carries flow
+    or step vocabulary, and contains no diagram line. The finding is
+    advisory, so it prints without blocking a commit.
+    """
+    kinds = {e[2] for e in block}
+    if not (kinds & {"doc", "hash"}):
+        return
+    if any(is_diagram(c) for _n, c, _k, _i, _t in block if c):
+        return
+    text = " ".join(c for _n, c, _k, _i, _t in block if c)
+    if not DIAGRAM_FLOW_VOCAB.search(text):
+        return
+    if _bullet_lists_in_block(block) < 2:
+        return
+    findings.append(Finding(
+        path, block[0][0], "missing-diagram",
+        "multi-step flow described in prose/bullets; "
+        "consider a sequence or dataflow diagram", warning=True))
+
+
 def check_module_header(path, header_lines, is_test, is_self, findings):
     """Runs the module header rules, the tight-line cap and the test run command.
 
@@ -863,13 +1272,129 @@ def check_module_header(path, header_lines, is_test, is_self, findings):
             "test file header carries no run command line"))
 
 
+def _type_decl_and_field_lines(lines):
+    """Classifies a Nim file's type-section lines.
+
+    Returns the (decls, fields) pair, two sets of 1-based line numbers.
+
+    - decls, the type-section member declarations, the first member's
+      indentation is the member level and deeper lines are bodies
+    - fields, the object-body lines indented deeper than their member
+
+    A single-line `type X = object` declaration counts as a decl by itself.
+    Blank and comment lines are neutral, they end neither the section nor
+    a member body.
+    """
+    decls = set()
+    fields = set()
+    n = len(lines)
+    i = 0
+    while i < n:
+        if not TYPE_KEYWORD_RE.match(lines[i]):
+            i += 1
+            continue
+        if "=" in lines[i]:
+            decls.add(i + 1)
+            i += 1
+            continue
+        j = i + 1
+        member_indent = None
+        while j < n:
+            stripped = lines[j].strip()
+            if not stripped or stripped.startswith("#"):
+                j += 1
+                continue
+            indent = len(lines[j]) - len(lines[j].lstrip())
+            if member_indent is None:
+                member_indent = indent
+            elif indent < member_indent:
+                break
+            if indent == member_indent:
+                decls.add(j + 1)
+            else:
+                fields.add(j + 1)
+            j += 1
+        i = j
+    return decls, fields
+
+
+def _type_has_field_docs(lines, decl_idx):
+    """Returns True when the type body carries ## doc lines, the field-doc
+    placement the doc-above-type rule fixes toward.
+
+    The body spans the lines indented deeper than the declaration, up to
+    the first line at or below the declaration's indent."""
+    decl_indent = len(lines[decl_idx]) - len(lines[decl_idx].lstrip())
+    j = decl_idx + 1
+    n = len(lines)
+    while j < n:
+        stripped = lines[j].strip()
+        if not stripped:
+            j += 1
+            continue
+        indent = len(lines[j]) - len(lines[j].lstrip())
+        if indent <= decl_indent:
+            break
+        if stripped.startswith("##"):
+            return True
+        j += 1
+    return False
+
+
+def check_doc_above_type(path, text, findings):
+    """Fires the doc-above-type rule on a ## block placed directly above a type declaration.
+
+    Flagged when the line immediately after the ## block is one of:
+
+    - the `type` keyword, section header or single-line declaration
+    - a type-section member declaration (object, ref object, distinct, enum, tuple)
+    - the bare `X* = object` single-line form outside a section
+    - a module doc block directly above a leading type declaration, Nimdoc
+      attaches it to the type, never the intended attachment
+
+    Not flagged:
+
+    - ## field docs inside a type body
+    - ## above procs, funcs, consts, lets, and vars
+    - a ## block with any line between it and the declaration, a blank line
+      is the stray-comment case and a # comment line is the convert-to-# fix
+    """
+    lines = text.splitlines()
+    decls, fields = _type_decl_and_field_lines(lines)
+    n = len(lines)
+    i = 0
+    while i < n:
+        if not lines[i].strip().startswith("##"):
+            i += 1
+            continue
+        start = i
+        while i < n and lines[i].strip().startswith("##"):
+            i += 1
+        if i >= n:
+            continue
+        code = lines[i]
+        k = i
+        if code.strip() == "":
+            # a blank line breaks the adjacency, the stray-comment case
+            continue
+        if (TYPE_KEYWORD_RE.match(code)
+                or (k + 1) in decls
+                or (TYPE_DECL_RE.match(code) and (k + 1) not in fields)):
+            findings.append(Finding(
+                path, start + 1, "doc-above-type",
+                "## above the type declaration: the doc comment belongs "
+                "inside the body, above the fields it describes"))
+
+
 def nim_structure_checks(path, text, header_nos, findings):
     """Runs the Nim structure rules over the declarations, the shapes
     stay conservative single-line forms.
     - doc-above-proc bans the ## block above a proc or func declaration
     - the house doc comment of a proc or func is the first body line
     - missing-doc plus missing-contract read the body doc block
-    - exported types keep the doc block above them"""
+    - exported types are documented by a doc block above them or by the
+      ## field docs inside the body, a ## block directly above the
+      declaration is banned (doc-above-type)"""
     lines = text.splitlines()
     for i, raw in enumerate(lines):
         line = raw.rstrip()
@@ -951,7 +1476,7 @@ def nim_structure_checks(path, text, header_nos, findings):
                 break
             j -= 1
             depth += 1
-        if not doc_lines:
+        if not doc_lines and not _type_has_field_docs(lines, i):
             findings.append(Finding(
                 path, i + 1, "missing-doc",
                 "exported %s carries no doc comment" % tm.group(1)))
@@ -1035,6 +1560,7 @@ def scan(path, text, findings):
                     header_nos = {e[0] for e in block}
                     break
             nim_structure_checks(path, text, header_nos, findings)
+            check_doc_above_type(path, text, findings)
         if is_py and meta is not None:
             tree = None
             try:
@@ -1050,6 +1576,9 @@ def scan(path, text, findings):
     for block in blocks:
         kinds = {e[2] for e in block}
         block_is_doc = "doc" in kinds
+        check_bullets(path, block, findings)
+        check_tables(path, block, findings)
+        check_missing_diagram(path, block, findings)
         first = next(((e[0], e[1]) for e in block if e[1] and e[2] != "heading"),
                      None)
         if first and block_is_doc and strip_backticks(first[1]).split()[:1] == ["The"]:
@@ -1116,6 +1645,65 @@ def scan(path, text, findings):
         flush_wall_no_air(path, air_run, findings)
 
 
+def _repo_root():
+    """Returns the repository root path, or None outside a git repository."""
+    out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True)
+    root = out.stdout.strip()
+    return root if out.returncode == 0 and root else None
+
+
+def _parse_added_lines(diff):
+    """Extracts the 1-based post-image line numbers a unified=0 diff adds."""
+    lines = set()
+    new_ln = None
+    for raw in diff.split("\n"):
+        if raw.startswith("@@"):
+            plus = raw.split("+", 1)[1].split("@@", 1)[0]
+            new_ln = int(plus.split(",")[0])
+        elif raw.startswith("+") and not raw.startswith("+++"):
+            if new_ln is not None:
+                lines.add(new_ln)
+                new_ln += 1
+        elif raw.startswith("\\"):
+            continue
+        elif new_ln is not None:
+            # context lines advance the post-image cursor, removals do not
+            if raw.startswith(" "):
+                new_ln += 1
+    return lines
+
+
+def added_lines(path, base):
+    """Returns the 1-based post-image line numbers a diff from base adds.
+
+    The diff is read from the staged index relative to the base commit
+    (`git diff --cached <base> --unified=0`). When nothing is staged for
+    the file, the working-tree diff relative to base is read instead.
+    Returns None when there is no repository to read a diff from.
+    """
+    repo = _repo_root()
+    if repo is None:
+        return None
+    rel = os.path.relpath(path.resolve(), repo)
+    if rel.startswith(".."):
+        return None
+    cmd = ["git", "diff", "--cached"]
+    if base:
+        cmd.append(base)
+    cmd += ["--unified=0", "--", rel]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    lines = _parse_added_lines(out.stdout)
+    if lines:
+        return lines
+    cmd = ["git", "diff"]
+    if base:
+        cmd.append(base)
+    cmd += ["--unified=0", "--", rel]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    return _parse_added_lines(out.stdout)
+
+
 def collect_files(paths):
     """Collects the .nim, .py, and .md files under paths, sorted and deduped.
 
@@ -1149,12 +1737,28 @@ def collect_files(paths):
     return out
 
 
-def lint(paths):
-    """Lints every collected file under paths, returning sorted findings."""
+def lint(paths, base=None):
+    """Lints every collected file under paths, returning sorted findings.
+
+    When base is set, findings are scoped to the added lines of the diff
+    from that commit to the staged index (the working tree when nothing
+    is staged), so pre-existing violations a change did not touch stay
+    out of the report. Without base, every file is linted in full.
+    """
     findings = []
     for f in collect_files(paths):
         text = f.read_text(encoding="utf-8", errors="replace")
-        scan(f, text, findings)
+        file_findings = []
+        scan(f, text, file_findings)
+        if base:
+            added = added_lines(f, base)
+            if added is None:
+                findings.extend(file_findings)
+            else:
+                findings.extend(fd for fd in file_findings
+                                if fd.line in added)
+        else:
+            findings.extend(file_findings)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
     return findings
 
@@ -1172,7 +1776,7 @@ def lint_text(text, filename):
 # Every other class needs judgment about what the prose should say.
 MECHANICAL_RULES = frozenset((
     "article-eol", "stray-fragment", "single-word-eol",
-    "unit-split", "colon-inline",
+    "unit-split", "colon-inline", "table-alignment",
 ))
 
 # wall-no-air joins the transform triggers for the one-sentence merge but
@@ -1694,6 +2298,80 @@ def _para_width(path, para, width):
     return width
 
 
+def _is_fix_table_line(line, path):
+    """Returns True when a raw line is a doc table row the autofix may
+    realign. A comment-prefixed table row or a bare row opening on a pipe
+    qualifies. A code line that merely carries two pipes never qualifies.
+    """
+    if not is_table(line):
+        return False
+    if path.suffix == ".md":
+        return True
+    stripped = line.strip()
+    for marker in ("##", "///", "//", "#"):
+        if stripped.startswith(marker):
+            rest = stripped[len(marker):].lstrip()
+            return rest.startswith("|")
+    return stripped.startswith("|")
+
+
+def _align_table_run(lines, i, j):
+    """Aligns one run of table rows to their shared column widths.
+
+    Returns the aligned rendering as a list of lines, or None when the run
+    cannot be aligned (ragged cell counts) or is already aligned.
+    """
+    parsed = []
+    n_cols = None
+    for k in range(i, j):
+        prefix, cells = _split_table_row(lines[k])
+        if not cells:
+            return None
+        if n_cols is None:
+            n_cols = len(cells)
+        elif len(cells) != n_cols:
+            return None
+        parsed.append((prefix, cells))
+    widths = [0] * n_cols
+    for prefix, cells in parsed:
+        if _separator_cells(cells):
+            continue
+        for idx, cell in enumerate(cells):
+            if len(cell) > widths[idx]:
+                widths[idx] = len(cell)
+    rendered = []
+    for prefix, cells in parsed:
+        rendered.append(_render_aligned_row(prefix, cells, widths))
+    if rendered == list(lines[i:j]):
+        return None
+    return rendered
+
+
+def _fix_first_table_run(path, text):
+    """Aligns the first run of unaligned doc table rows in the text.
+
+    Returns (new_text, None) when a run was realigned, (None, None) when no
+    qualifying run needs alignment. The fix_file loop applies one table
+    run per round.
+    """
+    raws = text.split("\n")
+    n = len(raws)
+    i = 0
+    while i < n:
+        if not _is_fix_table_line(raws[i], path):
+            i += 1
+            continue
+        j = i
+        while j < n and _is_fix_table_line(raws[j], path):
+            j += 1
+        if j - i >= 2:
+            aligned = _align_table_run(raws, i, j)
+            if aligned is not None:
+                return "\n".join(raws[:i] + aligned + raws[j:]), None
+        i = j
+    return None, None
+
+
 def _fix_round(path, text, width):
     """Runs one autofix round over one file's text.
 
@@ -1761,6 +2439,17 @@ def _fix_round(path, text, width):
             if (sum(counts_after[r] for r in mech_keys)
                     < sum(before[r] for r in mech_keys)):
                 return new_text
+    table_fix = _fix_first_table_run(path, text)
+    if table_fix[0] is not None:
+        after = []
+        scan(path, table_fix[0], after)
+        counts_after = Counter(f.rule for f in after)
+        if any(counts_after[r] > before.get(r, 0) for r in counts_after):
+            return None
+        mech_keys = MECHANICAL_RULES | {_MERGE_RULE}
+        if (sum(counts_after[r] for r in mech_keys)
+                < sum(before[r] for r in mech_keys)):
+            return table_fix[0]
     return None
 
 
@@ -1848,6 +2537,15 @@ def main(argv):
     Returns the process exit code with 0 for clean, 1 for findings left,
     and 2 for failure."""
     args = argv[1:]
+    base = None
+    if "--base" in args:
+        i = args.index("--base")
+        if i + 1 >= len(args):
+            print(__doc__)
+            return 2
+        base = args[i + 1]
+        args = args[:i] + args[i + 2:]
+    base = base or os.environ.get("DOC_LINT_BASE") or None
     if "--fix" in args:
         paths = [a for a in args if a != "--fix"]
         if not paths:
@@ -1859,7 +2557,7 @@ def main(argv):
     if not args:
         print(__doc__)
         return 2
-    findings = lint(args)
+    findings = lint(args, base)
     for fd in findings:
         tag = "warning" if fd.warning else "violation"
         print("%s:%d: %s: %s [%s]" % (fd.path, fd.line, fd.rule, fd.reason, tag))

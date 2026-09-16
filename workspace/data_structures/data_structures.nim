@@ -50,5 +50,6 @@ runnableExamples:
   fixLinksAfterIndexRemap(links, root, lastIdx, 1)
 
 import ./src/wavl_tree
+import ./src/aho_corasick
 
-export wavl_tree
+export wavl_tree, aho_corasick
