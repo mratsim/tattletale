@@ -58,9 +58,9 @@ proc buildPieces(r: var RegionPreTok) =
       for piece in r.scratchB.items:
         applyStep(step, r.scratchA, r.host[], piece[0], piece[1])
   if r.steps.len mod 2 == 1:
-    r.pieces = system.move(r.scratchB)
+    swap(r.pieces, r.scratchB)
   else:
-    r.pieces = system.move(r.scratchA)
+    swap(r.pieces, r.scratchA)
   r.built = true
 
 proc initRegionPreTok(steps: seq[SplitStep], host: ptr string): RegionPreTok =

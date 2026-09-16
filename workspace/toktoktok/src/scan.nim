@@ -984,9 +984,9 @@ proc buildPieces(r: var PreTokenizer) =
       for piece in r.scratchB.items:
         applyStep(step, r.scratchA, r.input, piece.lo, piece.hi)
   if r.steps.len mod 2 == 1:
-    r.pieces = system.move(r.scratchB)
+    swap(r.pieces, r.scratchB)
   else:
-    r.pieces = system.move(r.scratchA)
+    swap(r.pieces, r.scratchA)
   r.built = true
 
 proc initPreTokenizer*(cache: var PreTokRegexCache, family: Family,
