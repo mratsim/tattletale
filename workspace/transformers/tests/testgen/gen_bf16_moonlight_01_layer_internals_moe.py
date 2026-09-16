@@ -95,7 +95,7 @@ TOP_K = 6
 HIDDEN = 2048
 PREFILL_LEN = 8
 DECODE_POSITION = 8
-MIN_FREE_BYTES = 32 * 1024 ** 3
+MIN_POOL_BYTES = 32 * 1024 ** 3
 
 
 def vm_page_size() -> int:
@@ -108,16 +108,20 @@ def vm_page_size() -> int:
         "[gen_bf16_moonlight_01_layer_internals_moe] vm_stat gave no page size line")
 
 
-def free_bytes() -> int:
-    """Free physical memory in bytes from `vm_stat`."""
+def pool_bytes() -> int:
+    """Free, inactive and speculative physical memory in bytes from `vm_stat`."""
     out = subprocess.run(["vm_stat"], capture_output=True, text=True, check=True)
     page = vm_page_size()
+    wanted = ("Pages free:", "Pages inactive:", "Pages speculative:")
+    pool = 0
     for line in out.stdout.splitlines():
-        if line.startswith("Pages free:"):
-            pages = int(line.split()[2].rstrip("."))
-            return pages * page
-    raise SystemExit(
-        "[gen_bf16_moonlight_01_layer_internals_moe] vm_stat gave no 'Pages free' line")
+        for label in wanted:
+            if line.startswith(label):
+                pool += int(line.split()[2].rstrip(".")) * page
+    if pool == 0:
+        raise SystemExit(
+            "[gen_bf16_moonlight_01_layer_internals_moe] vm_stat gave no pool lines")
+    return pool
 
 
 def ancestor_pids() -> set:
@@ -140,11 +144,12 @@ def ancestor_pids() -> set:
 
 def check_ram() -> None:
     """Refuse to load weights under low memory or a stray python/torch process, the 29.7 GiB load runs against the 32 GiB pool floor."""
-    free = free_bytes()
-    if free < MIN_FREE_BYTES:
+    pool = pool_bytes()
+    if pool < MIN_POOL_BYTES:
         raise SystemExit(
-            f"[gen_bf16_moonlight_01_layer_internals_moe] free memory {free / 1024 ** 3:.1f} GiB below "
-            f"the {MIN_FREE_BYTES / 1024 ** 3:.0f} GiB floor, stop and retry when idle")
+            f"[gen_bf16_moonlight_01_layer_internals_moe] free+inactive+speculative pool "
+            f"{pool / 1024 ** 3:.1f} GiB below the "
+            f"{MIN_POOL_BYTES / 1024 ** 3:.0f} GiB floor, stop and retry when idle")
     out = subprocess.run(
         ["pgrep", "-f", r"python.*(torch|hf)"], capture_output=True, text=True)
     found = {int(p) for p in out.stdout.split() if p.strip().isdigit()}

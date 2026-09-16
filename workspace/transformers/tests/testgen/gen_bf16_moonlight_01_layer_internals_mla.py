@@ -112,7 +112,7 @@ QK_NOPE_HEAD_DIM = _CKPT_CONFIG["qk_nope_head_dim"]
 QK_ROPE_HEAD_DIM = _CKPT_CONFIG["qk_rope_head_dim"]
 V_HEAD_DIM = _CKPT_CONFIG["v_head_dim"]
 HIDDEN = _CKPT_CONFIG["hidden_size"]
-ROPE_THETA = 50000.0
+ROPE_THETA = _CKPT_CONFIG["rope_theta"]
 MAX_SEQ = 8192
 
 PREFIX = f"model.layers.{LAYER_IDX}.self_attn."
