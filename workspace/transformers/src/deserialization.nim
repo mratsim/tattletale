@@ -230,7 +230,10 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
     checkValue(gateRow.numel() == gateRowBytes and
       upRow.numel() == gateRowBytes and downRow.numel() == downRowBytes and
       gateRow.scalarType() == upRow.scalarType() and
-      gateRow.scalarType() == downRow.scalarType(),
+      gateRow.scalarType() == downRow.scalarType() and
+      gateRow.scalarType() == gateW.scalarType() and
+      upRow.scalarType() == gateW.scalarType() and
+      downRow.scalarType() == gateW.scalarType(),
       "[ttt] BlockSparseFFN.load: experts." & $e &
       " rows disagree with the fused shapes or the checkpoint scalar type")
     let gateUpSlice = gateUp.narrow(0, e, 1).squeeze(0)

@@ -430,7 +430,6 @@ proc expertForwardPrefill(
 
     # Routing weight per (token, position) pair, read through an fp32
     # form of topKWeights so bf16 values round-trip exactly
-    let weights32 = topKWeights.to(kFloat32)
     var weightVals = newSeq[float32](n)
     for i in 0 ..< n:
       let tokI = tokenIdx[i]

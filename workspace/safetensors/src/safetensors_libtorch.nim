@@ -77,6 +77,11 @@ when defined(TTT_ALLOC_TRACE):
   import std/strformat
   import std/strutils
 
+  # Optional log path for the allocation trace. The strdefine lets
+  # -d:TTT_ALLOC_TRACE_LOG=/path compile, and an empty value keeps
+  # the stderr fallback in tttAllocTraceEmit.
+  const TTT_ALLOC_TRACE_LOG {.strdefine.} = ""
+
   var tttTraceRetainedBytes: int64 = 0
   var tttTraceSink: File = stderr
   var tttTraceSinkReady = false
@@ -138,7 +143,7 @@ when defined(TTT_ALLOC_TRACE):
     if not tttTraceSinkReady:
       tttTraceSinkReady = true
       when defined(TTT_ALLOC_TRACE_LOG):
-        let opened = open(TTT_ALLOC_TRACE_LOG, fmWrite)
+        let opened = syncio.open(TTT_ALLOC_TRACE_LOG, fmWrite)
         if opened.isNil:
           tttTraceSink = stderr
         else:
