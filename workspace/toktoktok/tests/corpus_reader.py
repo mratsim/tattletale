@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Shared reader for the committed corpus frames (workspace/toktoktok/
-tests/corpus/, provenance in that directory).
+"""Shared reader for the committed corpus frames under
+workspace/toktoktok/tests/corpus/ (provenance in that directory).
 
-The corpus ships as zstd frames, streamed through the stdlib
+The corpus ships as zstd frames streamed through the stdlib
 `compression.zstd` module. Text semantics match the historical plain
-text reads exactly: utf-8 decoding with `errors="replace"`, universal
-newline translation, and `read(max_chars)` returning max_chars
-characters, so the encoded token streams of the consumers stay
-identical to what the plain text files produced.
+text reads exactly:
+- utf-8 decoding with `errors="replace"`
+- universal newline translation
+- `read(max_chars)` returning max_chars characters
+
+The consumers' encoded token streams stay identical to the plain
+text file streams.
 """
 
 import io

@@ -3,9 +3,7 @@ import std/os
 import std/sequtils
 import std/tables
 
-import ../src/serialization
-
-const TOKENIZERS_DIR = currentSourcePath().parentDir() / "tokenizers"
+import workspace/toktoktok/src/serialization
 
 proc runSerializationTests() =
   suite "Serialization Tests":
@@ -155,4 +153,7 @@ proc runSerializationTests() =
       check format.mergeableRanks.len == 256  # All byte tokens are added
 
 when isMainModule:
+  import std/[monotimes, times]
+  let suiteWallStart = getMonoTime()
   runSerializationTests()
+  echo "\nwall ", (getMonoTime() - suiteWallStart).inMilliseconds.float64 / 1000.0, " s"

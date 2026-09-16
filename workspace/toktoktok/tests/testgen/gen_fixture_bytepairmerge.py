@@ -3,11 +3,12 @@
 Generate fixture files for byte-pair merge algorithm testing.
 
 This uses the reference Rust byte_pair_merge algorithm to ensure correct expected_tokens.
+
 Format:
 {
     "input_bytes": [228, 189, 160, ...],
     "ranks": {"bytes_literal": rank, ...},
-
+    "expected_tokens": [10, 234, ...],
     "description": "Human readable test description"
 }
 """
