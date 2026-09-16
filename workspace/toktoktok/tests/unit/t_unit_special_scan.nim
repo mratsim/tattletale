@@ -12,10 +12,9 @@
 ## exact decision list:
 ## Core decisions:
 ## - greedy leftmost-start selection.
-## - the first-declared same-start tie rule.
+## - the longest-match same-start tie rule.
 ## - ordinary-region non-split.
 ## Boundary and cross-check decisions:
-## - the automaton path agreeing with the two-level path.
 ## - the empty dictionary passthrough.
 ## - the empty-pattern rejection.
 ## Machine stream rows:
@@ -51,21 +50,13 @@ proc runTests*() =
 
   block:
     # same-start tie:
-    #   first declared wins, not longest match
+    #   longest match wins, not first declared
     let sc = SpecialScanner.init(["ab", "abc"], [3, 4])
-    check "scan tie 'abc ab' -> 'ab' id 3, one ordinary region, 'ab' id 3",
+    check "scan tie 'abc ab' -> 'abc' id 4, one ordinary region, 'ab' id 3",
       collectDecisions(sc, "abc ab") == @[
-        SpecialDecision(lo: 0, hi: 2, specialId: 3),
-        SpecialDecision(lo: 2, hi: 4, specialId: -1),
+        SpecialDecision(lo: 0, hi: 3, specialId: 4),
+        SpecialDecision(lo: 3, hi: 4, specialId: -1),
         SpecialDecision(lo: 4, hi: 6, specialId: 3)]
-
-  block:
-    # automaton path (forceAhoCorasick) == two-level path on the same rows
-    let sc2 = SpecialScanner.init(["\n\n", "<|fim|>"], [5, 7])
-    let scD = SpecialScanner.init(["\n\n", "<|fim|>"], [5, 7], forceAhoCorasick = true)
-    let text = "a <|fim|> b\n\n c"
-    check "scan forceAhoCorasick == two-level on 'a <|fim|> b\\n\\n c'",
-      collectDecisions(scD, text) == collectDecisions(sc2, text)
 
   block:
     let sc = SpecialScanner.init([], [])

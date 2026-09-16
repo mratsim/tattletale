@@ -3,7 +3,7 @@
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run:
@@ -55,8 +55,7 @@ proc firstDiff(a, b: seq[int]): int =
   -1
 
 proc specialDict(codec: TiktokenCodec): tuple[pats: seq[string], ids: seq[int]] =
-  ## Special dictionary in tie-priority order (same-start tie keeps the first pattern the table iteration yields), extracted
-  ## from the live codec table, never assumed.
+  ## Special dictionary extracted from the live codec table (same-start tie keeps the longest match), never assumed.
   for token, id in codec.specials:
     result.pats.add token
     result.ids.add id

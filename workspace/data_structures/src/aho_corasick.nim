@@ -17,7 +17,7 @@
 ##
 ## Matching semantics:
 ## - overlapping matches, one report per pattern occurrence at its end position.
-## - decision semantics (earliest start, first-declared ties) and leftmost selection live in the scanner (workspace/toktoktok/src/scan.nim).
+## - decision semantics (earliest start, longest-match ties) and leftmost selection live in the scanner (workspace/toktoktok/src/scan.nim).
 ##
 ## Base placement and safety:
 ##   | rule        | contract                                                                                                                       |
@@ -27,10 +27,10 @@
 ##   | block close | vacant slots receive check values keyed to the one never-assigned base, so no transition validates a vacant slot               |
 ##
 ## Match-policy boundary:
-##   | case           | behavior                                                                                                                         |
-##   | -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-##   | same-start tie | kept as the last-visited (deepest) output, diverges from a first-declared rule when candidates relate through a suffix link      |
-##   | reproducer     | "xabcd", patterns ["bcd", "abcd"] both match at start 1, first-declared wins in the consuming scanner, last-visited picks "abcd" |
+##   | case           | behavior                                                                                                               |
+##   | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
+##   | same-start tie | each occurrence reports once, the scanner (workspace/toktoktok/src/scan.nim) resolves same-start ties by longest match |
+##   | reproducer     | "abc", patterns ["ab", "abc"] both match at start 0, the scanner picks "abc" (longest)                                 |
 
 import std/algorithm
 

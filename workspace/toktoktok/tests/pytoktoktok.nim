@@ -34,7 +34,7 @@ type
     ## Opaque wrapper around one toktoktok pipeline machine, the composed
     ## encoder plus the codec it loaded from (decode surface and special-token table source):
     ## - `pipe`, the machine carrying the load flavor's special-token setting.
-    ## - `plain`, the specials-free machine built lazily for encode_ordinary.
+    ## - `plain`, the specials-free machine built at load for encode_ordinary.
     pipe*: TokPipeline
     plain*: TokPipeline
     fam*: scan.Family
@@ -82,8 +82,7 @@ proc mkPipeline(codec: TiktokenCodec, fam: scan.Family,
     withSpecials: bool, cache: var PreTokRegexCache): TokPipeline =
   new result
   if withSpecials:
-    # Special dictionary in tie-priority order extracted from the live codec
-    # table (the same-start tie rule keeps the first pattern the table iteration yields), never assumed.
+    # Special dictionary extracted from the live codec table (the same-start tie rule keeps the longest match), never assumed.
     var pats: seq[string]
     var ids: seq[int]
     for token, id in codec.specials:
@@ -104,6 +103,7 @@ proc load_tokenizer_hf*(path: string): PipelineRef {.exportpy.} =
   result.codec = codec
   result.fam = hfFamily(path)
   result.pipe = mkPipeline(codec, result.fam, true, result.cache)
+  result.plain = mkPipeline(codec, result.fam, false, result.cache)
 
 proc load_tokenizer_hf_ordinary*(path: string): PipelineRef {.exportpy.} =
   ## HF tokenizer json, no special tokens (the ordinary encode semantics).
@@ -112,6 +112,7 @@ proc load_tokenizer_hf_ordinary*(path: string): PipelineRef {.exportpy.} =
   result.codec = codec
   result.fam = hfFamily(path)
   result.pipe = mkPipeline(codec, result.fam, false, result.cache)
+  result.plain = mkPipeline(codec, result.fam, false, result.cache)
 
 proc tiktokenFamily(pattern: string): scan.Family =
   ## Rank-file pattern name -> family
@@ -135,6 +136,7 @@ proc load_tokenizer_tiktoken*(path: string, pattern: string): PipelineRef {.expo
   result.codec = codec
   result.fam = tiktokenFamily(pattern)
   result.pipe = mkPipeline(codec, result.fam, true, result.cache)
+  result.plain = mkPipeline(codec, result.fam, false, result.cache)
 
 proc load_tokenizer_tiktoken_ordinary*(path: string,
     pattern: string): PipelineRef {.exportpy.} =
@@ -145,13 +147,10 @@ proc load_tokenizer_tiktoken_ordinary*(path: string,
   result.codec = codec
   result.fam = tiktokenFamily(pattern)
   result.pipe = mkPipeline(codec, result.fam, false, result.cache)
+  result.plain = mkPipeline(codec, result.fam, false, result.cache)
 
 proc ordinaryPipeline(self: PipelineRef): TokPipeline =
-  ## Returns the specials-free machine for encode_ordinary, built lazily:
-  ## the rank-table engine build dominates load time, so an ordinary-only
-  ## consumer must not pay for it at load.
-  if self.plain.isNil:
-    self.plain = TokPipeline.init(self.cache, self.codec.ranks, @[], @[], self.fam)
+  ## Returns the specials-free machine for encode_ordinary.
   self.plain
 
 proc drainAll(p: TokPipeline): seq[int] =

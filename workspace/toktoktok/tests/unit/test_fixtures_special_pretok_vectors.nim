@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run:
@@ -50,13 +50,11 @@ proc runRecordedVectorTests() =
   ## (recorded upstream in mratsim/tattletale#22, see the module header).
   ##
   ## Pull-chain rows resolve the flat-join divergence class,
-  ## covering step-3.5-flash and kimik2.5,
+  ## covering step-3.5-flash, kimik2.5 and exaone,
   ## asserted against the recorded reference ids.
   ##
-  ## Exaone frame rows stay skipped, their recorded ids come from the HF
-  ## tokenizers library, whose AddedVocabulary splits added tokens out with longest-match.
-  ##
-  ## Converted-tiktoken special semantics apply instead (same-start tie by table order), a documented engine-flavor divergence.
+  ## The special-token scan is longest-match (HF tokenizers LeftmostLongest),
+  ## so the exaone frame's added-token rows assert directly.
   suite "Special pre-tokenization recorded vectors":
     const VectorFrames = [
       ("kimik2.5", "special_pretok_kimik2.5.json.zst", "", "kimik2.5.tiktoken", "kimik2.5"),
@@ -78,14 +76,8 @@ proc runRecordedVectorTests() =
       for fixture in fixtures:
         test "Special pre-tokenization vector - " & fixture.name &
             " (" & configName & ")":
-          if configName == "exaone":
-            echo "[SKIPPED] ", fixture.name, " (", configName,
-              ") recorded ", $fixture.tokenIds.len,
-              " ids (HF added-token longest-match class), pull chain not asserted"
-            skip()
-          else:
-            let result = pullAll(loaded.pipe, fixture.text)
-            check result == fixture.tokenIds
+          let result = pullAll(loaded.pipe, fixture.text)
+          check result == fixture.tokenIds
 
 when isMainModule:
   import std/[monotimes, times]

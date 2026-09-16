@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Text-to-pieces stage of the machine pipeline in one module:
@@ -34,25 +34,20 @@ import ./machine
 ## | rule            | decision                                                                                                                                   |
 ## | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 ## | start selection | greedy leftmost-start, the earliest start of any dictionary match wins                                                                     |
-## | same-start tie  | first declared in dictionary order wins, not longest-match, a shorter same-start candidate beats a longer one                              |
+## | same-start tie  | longest match wins (longest-prefix-match, matching HF tokenizers LeftmostLongest)                                                          |
 ## | consume         | a winning special consumes its bytes, the text before it is one ordinary decision                                                          |
 ## | region split    | an ordinary region is never split, each ordinary region is one ordinary decision, so downstream pre-tokenization sees identical boundaries |
 ##
 ## Construction:
-## - dictionaries of at most `TwoLevelMaxPatterns` patterns skip
-##   the automaton entirely, a two-level prefix index serves instead
-##   (level 1 first-byte buckets, level 2 priority-ordered candidates).
-## - larger dictionaries build the automaton at scanner init, the build
-##   duration is recorded on the scanner and reported by the parity suite.
-## - two-level and automaton serve paths are equivalence fuzz-verified
-##   in the test suites.
+## - the scanner always builds the Aho-Corasick automaton at init,
+##   the single serving path for every dictionary.
 ##
 ## Streaming, the machine walks bytes once, carrying automaton state
 ## and pending matches across feeds (carry-buffer discipline):
 ##
 ## | rule         | behavior                                                                                                                        |
 ## | ------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-## | finality     | an automaton-path decision at start s is final once the scan has progressed s + maxPatternLen bytes                             |
+## | finality     | a decision at start s is final once the scan has progressed s + maxPatternLen bytes                                             |
 ## | chunk safety | that finality makes chunk boundaries safe, a special straddling a chunk edge is held and matched after the next feed            |
 ## | offsets      | decision offsets index the machine window, absolute base `winBase` over `win`, valid until the next feed                        |
 ## | input mode   | whole-input mode aliases the caller's string (zero copy), chunked mode reuses one growing window with decided-prefix compaction |
@@ -63,21 +58,13 @@ import ./machine
 ## - `feed`/`finish` are state updates, not consumption surfaces.
 ## - queued decision offsets stay valid only until the next feed.
 
-const
-  TwoLevelMaxPatterns* = 10
-  ## Dictionary size at or below which the two-level prefix index
-  ## replaces the automaton (the common small-special case).
-
 type
   SpecialScanner* = ref object
-    ## Built special-token dictionary, shared across machines, tie
-    ## priority in `patterns` (first entry wins same-start ties).
+    ## Built special-token dictionary, shared across machines, match
+    ## length decides same-start ties.
     patterns: seq[string]
     ids: seq[int]
     maxLen: int
-    useTwoLevel: bool
-    bucketStart: array[256 + 1, int32]
-    bucketOrder: seq[int32]
     ahoCorasick: AhoCorasick
 
   PendingMatch = object
@@ -103,10 +90,9 @@ type
 
 
 proc init*(_: type SpecialScanner, patterns: openArray[string],
-    ids: openArray[int], forceAhoCorasick = false): SpecialScanner =
+    ids: openArray[int]): SpecialScanner =
   ## Builds the scanner at init:
-  ## - patterns arrive in tie-priority order (the order that wins same-start ties),
-  ##   duplicates keep their first occurrence.
+  ## - duplicates keep their first occurrence.
   ## Raises ValueError on an empty pattern, the reference scan would not
   ## terminate on it.
   doAssert patterns.len == ids.len
@@ -128,29 +114,10 @@ proc init*(_: type SpecialScanner, patterns: openArray[string],
   for pat in result.patterns:
     if pat.len > result.maxLen:
       result.maxLen = pat.len
-  result.useTwoLevel = not forceAhoCorasick and result.patterns.len <= TwoLevelMaxPatterns
-  if result.useTwoLevel or result.patterns.len == 0:
-    # Two-level prefix index, a counting sort by first byte:
-    # stable in priority order, so a bucket scan visits candidates earliest-declared first.
-    var counts: array[256, int32]
-    for i in 0 ..< result.patterns.len:
-      inc counts[uint8(result.patterns[i][0])]
-    result.bucketStart[0] = 0
-    for b in 0 ..< 256:
-      result.bucketStart[b + 1] = result.bucketStart[b] + counts[b]
-    result.bucketOrder = newSeq[int32](result.patterns.len)
-    var fill: array[256, int32]
-    for bIdx in 0 ..< 256:
-      fill[bIdx] = result.bucketStart[bIdx]
-    for i in 0 ..< result.patterns.len:
-      let b = uint8(result.patterns[i][0])
-      result.bucketOrder[fill[b]] = int32(i)
-      inc fill[b]
-  else:
-    var priorityVals: seq[int] = @[]
-    for i in 0 ..< result.patterns.len:
-      priorityVals.add i
-    result.ahoCorasick = buildAhoCorasick(result.patterns, priorityVals)
+  var priorityVals: seq[int] = @[]
+  for i in 0 ..< result.patterns.len:
+    priorityVals.add i
+  result.ahoCorasick = buildAhoCorasick(result.patterns, priorityVals)
 
 # ---------------------------------------------------------------------
 # Decision machinery
@@ -174,13 +141,18 @@ proc emitSpecial(c: var SpecialScan, pat: int) {.inline.} =
 
 proc finalize(c: var SpecialScan) =
   ## Emits one pending decision:
-  ## - ordinary up to the minimal pending match start, then the winning special (earliest-declared among candidates starting exactly there).
+  ## - ordinary up to the minimal pending match start, then the winning special
+  ##   (the longest match starting there, HF tokenizers LeftmostLongest).
   ## - prunes matches consumed or overlapped by the token.
   doAssert c.pending.len > 0
   var winner = -1
+  var winnerLen = 0
   for m in c.pending.items:
-    if m.start == c.curMin and (winner < 0 or m.pat < winner):
-      winner = int(m.pat)
+    if m.start == c.curMin:
+      let plen = c.scanner.patterns[int(m.pat)].len
+      if winner < 0 or plen > winnerLen:
+        winner = int(m.pat)
+        winnerLen = plen
   c.emitOrdinary(c.curMin)
   c.emitSpecial(winner)
   var w = 0
@@ -210,59 +182,6 @@ proc scanByte(c: var SpecialScan) =
       c.pending.add PendingMatch(start: s0, pat: sc.ahoCorasick.outputValue(op))
     op = sc.ahoCorasick.outputParent(op)
   c.scanPos = endAbs
-
-proc probe(sc: SpecialScanner, win: string, off: int): int =
-  ## Two-level prefix lookup, the first pattern in priority order
-  ## matching at win[off ..], or -1:
-  ## - candidates too long for the window tail are skipped, they
-  ##   cannot match there.
-  ## - mid-stream callers guarantee full lookahead before the lookup.
-  let b = uint8(win[off])
-  var k = sc.bucketStart[b]
-  while k < sc.bucketStart[b + 1]:
-    let pat = sc.bucketOrder[k]
-    let patStr = sc.patterns[pat]
-    if off + patStr.len <= win.len:
-      var ok = true
-      for i in 0 ..< patStr.len:
-        if win[off + i] != patStr[i]:
-          ok = false
-          break
-      if ok:
-        return int(pat)
-    inc k
-  -1
-
-proc twoLevelServe(c: var SpecialScan) =
-  ## Two-level decision path, positions tested from the decided
-  ## frontier in order:
-  ## - first match wins (priority-ordered bucket), ordinary text
-  ##   before it is one decision.
-  ## - positions inside the final maxPatternLen bytes wait for more
-  ##   input (the carry), unless the stream ended.
-  let sc = c.scanner
-  let winEnd = c.winBase + c.win.len
-  while true:
-    var found = -1
-    var matchPos = -1
-    var pos = c.decided
-    while pos < winEnd:
-      if not c.streamEnded and pos + sc.maxLen > winEnd:
-        break
-      let hit = sc.probe(c.win, pos - c.winBase)
-      if hit >= 0:
-        found = hit
-        matchPos = pos
-        break
-      inc pos
-    if found >= 0:
-      c.emitOrdinary(matchPos)
-      c.emitSpecial(found)
-      return
-    if not c.streamEnded:
-      return
-    break
-  c.emitOrdinary(winEnd)
 
 proc ahoCorasickServe(c: var SpecialScan) =
   ## Automaton decision path:
@@ -297,10 +216,7 @@ proc serve(c: var SpecialScan) =
     if c.streamEnded:
       c.emitOrdinary(c.winBase + c.win.len)
     return
-  if sc.useTwoLevel:
-    c.twoLevelServe()
-  else:
-    c.ahoCorasickServe()
+  c.ahoCorasickServe()
 
 # ---------------------------------------------------------------------
 # Machine surface
@@ -1022,6 +938,30 @@ proc applyStepDefault(step: SplitStep,
   else:
     applyRegexStep(step, outPieces, input, pieceLo, pieceHi)
 
+proc applyStep*(step: SplitStep,
+    outPieces: var seq[tuple[lo, hi: int32]], input: string,
+    pieceLo, pieceHi: int) {.inline.} =
+  ## One Isolated chain step applied to one piece of the input.
+  ##
+  ##   input[pieceLo..<pieceHi] ──▶ outPieces[]
+  ##
+  ## Output:
+  ## - cuts `input[pieceLo ..< pieceHi]` into smaller pieces and appends
+  ##   each as a byte-offset pair to `outPieces`.
+  ## - the output pieces are consecutive, non-empty, and cover the input
+  ##   piece exactly once.
+  ##
+  ## Per step kind:
+  ## - a regex step cuts at every match of its pattern. It uses the pattern-split scan when present and the frontier scan otherwise.
+  ## - a space-merged-prev step cuts at spaces, grouping each space
+  ##   with the non-space bytes before it. Consecutive and leading
+  ##   spaces stand alone.
+  case step.kind
+  of skRegex:
+    applyStepDefault(step, outPieces, input, pieceLo, pieceHi)
+  of skSpaceMergedPrev:
+    applySpaceMergedPrevStep(outPieces, input, pieceLo, pieceHi)
+
 proc buildPieces(r: var PreTokenizer) =
   ## Applies the Isolated chain, level by level, reusing the scratch
   ## buffers (at most 3 levels per the chain-depth rules).
@@ -1038,19 +978,11 @@ proc buildPieces(r: var PreTokenizer) =
     if level mod 2 == 0:
       r.scratchB.setLen(0)
       for piece in r.scratchA.items:
-        case step.kind
-        of skRegex:
-          applyStepDefault(step, r.scratchB, r.input, piece.lo, piece.hi)
-        of skSpaceMergedPrev:
-          applySpaceMergedPrevStep(r.scratchB, r.input, piece.lo, piece.hi)
+        applyStep(step, r.scratchB, r.input, piece.lo, piece.hi)
     else:
       r.scratchA.setLen(0)
       for piece in r.scratchB.items:
-        case step.kind
-        of skRegex:
-          applyStepDefault(step, r.scratchA, r.input, piece.lo, piece.hi)
-        of skSpaceMergedPrev:
-          applySpaceMergedPrevStep(r.scratchA, r.input, piece.lo, piece.hi)
+        applyStep(step, r.scratchA, r.input, piece.lo, piece.hi)
   if r.steps.len mod 2 == 1:
     r.pieces = system.move(r.scratchB)
   else:

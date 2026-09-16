@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Top-level pipeline machine for toktoktok. Input text in, token ids out, one scan decision in flight at a time.
@@ -40,46 +40,6 @@ type
     head: int
     built: bool
     scratchA, scratchB: seq[tuple[lo, hi: int32]]
-
-proc applyStep(step: SplitStep, outPieces: var seq[tuple[lo, hi: int32]],
-    input: string, pieceLo, pieceHi: int) {.inline.} =
-  ## One Isolated chain step over one piece, applied per the stage-3
-  ## contract (PCRE2 leftmost-first segmentation, window = piece):
-  ## - the default regex scan is the pattern-split one where the step
-  ##   carries it, the frontier-engine scan otherwise.
-  case step.kind
-  of skRegex:
-    if step.split != nil:
-      scanSplit(step.split, outPieces, input, pieceLo, pieceHi)
-      return
-    var lastEmit = pieceLo
-    var offset = pieceLo
-    while offset < pieceHi:
-      let (ms, me) = step.pat.nextMatch(input, offset, pieceLo, pieceHi)
-      if ms < 0:
-        break
-      if ms > lastEmit:
-        outPieces.add (int32(lastEmit), int32(ms))
-      outPieces.add (int32(ms), int32(me))
-      lastEmit = me
-      offset = me
-    if lastEmit < pieceHi:
-      outPieces.add (int32(lastEmit), int32(pieceHi))
-  of skSpaceMergedPrev:
-    var runStart = pieceLo
-    var i = pieceLo
-    while i < pieceHi:
-      if input[i] == ' ':
-        if i == pieceLo or input[i - 1] == ' ':
-          if runStart < i:
-            outPieces.add (int32(runStart), int32(i))
-          outPieces.add (int32(i), int32(i + 1))
-        else:
-          outPieces.add (int32(runStart), int32(i + 1))
-        runStart = i + 1
-      inc i
-    if runStart < pieceHi:
-      outPieces.add (int32(runStart), int32(pieceHi))
 
 proc buildPieces(r: var RegionPreTok) =
   ## Applies the Isolated chain over the region, level by level, reusing
@@ -162,8 +122,8 @@ proc init*(_: type TokPipeline, cache: var PreTokRegexCache,
     ranks: Table[seq[byte], int], specialPatterns: openArray[string],
     specialIds: openArray[int], family: Family): TokPipeline =
   ## Builds the pipeline machine for one tokenizer configuration, build contract:
-  ## - mergeable ranks, special dictionary in tie-priority order and family chain
-  ##   (the first declared pattern wins a same-start tie, extract the order from the live codec table, never assume it)
+  ## - mergeable ranks, special dictionary in codec table order and family chain
+  ##   (the longest match wins a same-start tie, extract the order from the live codec table, never assume it)
   new result
   result.scanner = SpecialScanner.init(specialPatterns, specialIds)
   result.engine = BpeEngine.init(ranks)
