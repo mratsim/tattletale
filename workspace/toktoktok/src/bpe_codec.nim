@@ -21,28 +21,28 @@ import ./tokenizers_regexps
 const MaxInt = high(int)
 
 type
-  Pcre2Code* = object
+  Pcre2Code = object
     ## Wrapper for compiled PCRE2 pattern
-    code*: ptr Code
-    pattern*: string
+    code: ptr Code
+    pattern: string
 
-  Pcre2Matcher* = object
-    code*: ptr Code
-    matchData*: ptr MatchData
-    ovector*: ptr UncheckedArray[int]
-    ovectorCount*: uint32
+  Pcre2Matcher = object
+    code: ptr Code
+    matchData: ptr MatchData
+    ovector: ptr UncheckedArray[int]
+    ovectorCount: uint32
 
   BPETokenizer* = ref object
-    encoder*: Table[seq[byte], int]
-    decoder*: Table[int, seq[byte]]
-    specialTokensEncoder*: Table[string, int]
-    specialTokensDecoder*: Table[int, seq[byte]]
-    pattern*: Pcre2Code
-    patternMatcher*: Pcre2Matcher
-    specialPattern*: Pcre2Code
-    specialMatcher*: Pcre2Matcher
-    cache*: Table[seq[byte], seq[int]]
-    byteDecoder*: Table[string, int]
+    encoder: Table[seq[byte], int]
+    decoder: Table[int, seq[byte]]
+    specialTokensEncoder: Table[string, int]
+    specialTokensDecoder: Table[int, seq[byte]]
+    pattern: Pcre2Code
+    patternMatcher: Pcre2Matcher
+    specialPattern: Pcre2Code
+    specialMatcher: Pcre2Matcher
+    cache: Table[seq[byte], seq[int]]
+    byteDecoder: Table[string, int]
 
   TokenizerError* = object of ValueError
 
@@ -185,6 +185,30 @@ iterator findAllPcre2(matcher: Pcre2Matcher, text: string, startOffset: int = 0)
 # |encode*(tokenizer: BPETokenizer; text: string): seq[int]    |             1|             830.270|          1204.427|          1204.427|       4671.020|       4671.020|
 #
 # Result: 3124 tokens encoded
+#
+# Metering receipt, Apple M4 Max (the bencher prints no CPU cycle columns on this CPU family, the cycle counter is unavailable):
+#
+# **2026-09-14, master implementation** - the in-place encodedResult construction
+#
+# |                         Procedures                         |  # of Calls  | Throughput (ops/s) |    Time (µs)     |  Avg Time (µs)   |
+# |------------------------------------------------------------|--------------|--------------------|------------------|------------------|
+# |bytePairMerge(piece: seq[byte]; ranks: Table[seq[byte],  ...|           662|         1013203.790|           653.373|             0.987|
+# |bytePairEncode*(encodedResult: var seq[int]; piece: seq[ ...|           662|          916954.658|           721.955|             1.091|
+# |splitTextOrdinary(tokenizer: BPETokenizer; text: string) ...|             1|            2406.982|           415.458|           415.458|
+# |encodeOrdinaryImpl(encodedResult: var seq[int]; tokenize ...|             1|             740.238|          1350.917|          1350.917|
+# |encodeWithSpecialTokens*(tokenizer: BPETokenizer; text:  ...|             1|             736.490|          1357.791|          1357.791|
+# |encode*(tokenizer: BPETokenizer; text: string): seq[int]    |             1|             736.400|          1357.958|          1357.958|
+#
+# Result, 3124 tokens encoded
+#
+# **2026-09-14, streaming pipeline** - TokPipeline over the same kimik2.5 ranks
+# and the same Verne text, tables warmed, 40 interleaved alternating-order reps
+# against the in-place implementation, id streams asserted identical:
+#
+# |   input   | in-place min | in-place median | streaming min | streaming median |
+# |-----------|--------------|-----------------|---------------|------------------|
+# | 10K Verne |     0.822 ms |         0.836 ms |      0.283 ms |         0.294 ms |
+# | 461KB     |    40.144 ms |        41.380 ms |     16.108 ms |         16.635 ms |
 
 proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, int)] {.meter.} =
   var parts = newSeqOfCap[(int, int)](piece.len + 2)
@@ -234,7 +258,7 @@ proc bytePairMerge(piece: seq[byte], ranks: Table[seq[byte], int]): seq[(int, in
 
   parts
 
-proc bytePairEncode*(
+proc bytePairEncode(
         encodedResult: var seq[int],
         piece: seq[byte],
         ranks: Table[seq[byte], int]) {.meter.} =
@@ -276,7 +300,7 @@ proc encodeOrdinaryImpl(encodedResult: var seq[int], tokenizer: BPETokenizer, te
     else:
       encodedResult.bytePairEncode(pieceByte, tokenizer.encoder)
 
-proc encodeOrdinary*(tokenizer: BPETokenizer, text: string): seq[int] =
+proc encodeOrdinary(tokenizer: BPETokenizer, text: string): seq[int] =
   result.encodeOrdinaryImpl(tokenizer, text)
 
 proc encodeWithSpecialTokens*(tokenizer: BPETokenizer, text: string): seq[int] {.meter.} =
