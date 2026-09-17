@@ -65,6 +65,7 @@ proc main() =
       "tables-Ling-3.0-tiny-00.safetensor.stats.json.zst"
     assertStats(rotary.cosCache, tablesStats, "cos_rows", kElementwise,
       depth = 1, msg = "plain-theta cos table rows")
+    # TODO sin_rows (kElementwise, depth 1) drifts 3 ulps on Metal against the 2-ulp allowance, sin max 0.99997407 in binade [0.5, 1)
     assertStats(rotary.sinCache, tablesStats, "sin_rows", kElementwise,
       depth = 1, msg = "plain-theta sin table rows")
 
@@ -193,6 +194,7 @@ proc main() =
 
     ctx.cos = st.getTensorOwned("cos")
     ctx.sin = st.getTensorOwned("sin")
+    # TODO mixer output in attn-Ling-3.0-tiny-00 (kReduction, depth 1) drifts 0.2109375 on CPU, 13.5 ulps against the 4-ulp band 0.0625
     assertStats(attn(ctx, x), statsPath, "output", kReduction, depth = 1,
       msg = "prefill seq4 mixer output")
     # The discard holds the orchestrator alive to the end of the block,
