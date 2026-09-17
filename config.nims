@@ -299,6 +299,8 @@ task test_tf_bf16_kimi_02_tokenizer, "Suite: Kimi-Linear tokenizer unit checks, 
   runTransformerSuite("q_bf16", "t_bf16_kimi_02_tokenizer.nim")
 task test_tf_bf16_kimi_04_greedy_text_generation, "Suite: Kimi-Linear greedy text generation, 3 chains x 32 steps vs fixtures":
   runTransformerSuite("q_bf16", "t_bf16_kimi_04_greedy_text_generation.nim")
+task test_tf_bf16_ling3_05_coherence, "Suite: Ling-3.0-tiny fixture-free coherence, answer-position ranking + greedy chain":
+  runTransformerSuite("q_bf16", "t_bf16_ling3_05_coherence.nim")
 task test_tf_bf16_glm47flash_03_full_forward_to_logits, "Suite: GLM-4.7-Flash full forward to logits, 47 layers + final logits vs fixtures":
   runTransformerSuite("q_bf16", "t_bf16_glm47flash_03_full_forward_to_logits.nim")
 task test_tf_bf16_moonlight_03_full_forward_to_logits, "Suite: Moonlight full forward to logits, 27 layers + final logits vs fixtures":
@@ -337,7 +339,7 @@ task test_tf_sampler, "Suite: samplers":
 task test_tf_block_sparse_batch_property, "Suite: block-sparse batch invariance":
   runTransformerSuite("layer_invariance", "t_blocksparse_batch_invariance.nim")
 
-task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|moonlight|glm47flash|kimi|mla|router|kda|kvcache)":
+task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|moonlight|glm47flash|kimi|ling3|mla|router|kda|kvcache)":
   case familyName()
   of "chain":
     runFamily(@[
@@ -384,6 +386,9 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("q_bf16", "t_bf16_kimi_01_layer_internals_kda.nim"),
       ("q_bf16", "t_bf16_kimi_02_tokenizer.nim"),
       ("q_bf16", "t_bf16_kimi_04_greedy_text_generation.nim")])
+  of "ling3":
+    runFamily(@[
+      ("q_bf16", "t_bf16_ling3_05_coherence.nim")])
   of "mla":
     runFamily(@[
       ("q_bf16", "t_bf16_kimi_01_layer_internals_mla.nim"),
