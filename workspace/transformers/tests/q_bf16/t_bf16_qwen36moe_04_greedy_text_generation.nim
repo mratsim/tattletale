@@ -53,11 +53,6 @@ proc main() =
   # recorded chain comfortably above the prompt + horizon footprint.
   const MaxContextLen = 256
 
-  # The chains replay on the device testDevice() resolves, Metal is
-  # the auto default on macOS with a PyTorch fallback where kernels
-  # are missing (TTT_TEST_ON flips the device before the first call).
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-
   echo "Loading model..."
   let model = loadModel($(ModelDir), testDevice())
   echo "Model loaded."
