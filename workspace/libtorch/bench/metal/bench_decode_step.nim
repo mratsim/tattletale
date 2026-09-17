@@ -105,10 +105,6 @@ proc runSequence(model: AnyModel, argmaxSample: bool): seq[seq[int64]] =
   result = stepNs
 
 proc main() =
-  # Chains replay on the Metal Performance Shaders device, with a PyTorch
-  # fallback for the kernels Metal does not implement.
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-
   echo "Full decode step benchmark, Qwen3.6-35B-A3B, real checkpoint"
   echo "============================================================"
   echo &"date: ", now().format("yyyy-MM-dd HH:mm:ss")

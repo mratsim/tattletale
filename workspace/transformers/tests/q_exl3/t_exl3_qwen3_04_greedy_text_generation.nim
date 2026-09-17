@@ -34,10 +34,6 @@ proc main() =
   ## Replays the greedy chains teacher-forced against the committed 005 decision frames, every step through assertArgMax.
   ##
   ## - teacher forcing at every step keeps the chain aligned with the recording
-  # The Metal backend falls back to the cpu kernels where the device kernels
-  # are missing, the chains replay on whatever testDevice() resolves.
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-
   # Recorded-chain replay against the committed decision frames, one
   # chain per fixture, the recorded tokens teacher-forced at every step.
   echo "Loading model..."
