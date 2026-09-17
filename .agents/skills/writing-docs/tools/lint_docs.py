@@ -1679,7 +1679,37 @@ def _parse_added_lines(diff):
     return lines
 
 
-def added_lines(path, base):
+def _diff_added_map(base):
+    """Returns {post-image path: set of added post-image line numbers}.
+
+    The whole diff is read in one pass and bucketed per file, because a
+    pathspec limited to one name prevents git from pairing a rename, which
+    would report an unchanged renamed file as entirely new. `--find-renames`
+    makes a pure rename contribute no added lines, and a rename with edits
+    contributes only its hunks.
+    """
+    cmd = ["git", "diff", "--find-renames", "--unified=0"]
+    if base:
+        cmd.append(base)
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    added = {}
+    for chunk in out.stdout.split("diff --git "):
+        if not chunk.strip():
+            continue
+        path = None
+        for line in chunk.split("\n"):
+            if line.startswith("+++ b/"):
+                path = line[6:].split("\t", 1)[0]
+                break
+        if path is None:
+            continue
+        added[path] = added.get(path, set()) | _parse_added_lines("diff --git " + chunk)
+    return added
+
+
+def added_lines(path, base, cache=None):
     """Returns the 1-based post-image line numbers a diff from base adds.
 
     The diff is read from the working tree relative to the base commit
@@ -1688,6 +1718,11 @@ def added_lines(path, base):
     when there is no repository to read a diff from, or when git fails, so
     the caller scopes nothing and lints the whole file instead of silently
     passing on an empty added-line set.
+
+    `cache` is a per-invocation dict, one fresh dict per lint call, so a
+    whole lint still reads the diff once. A caller that omits it gets a diff
+    read of its own, never the added-line map of an earlier working-tree
+    state.
     """
     repo = _repo_root()
     if repo is None:
@@ -1695,14 +1730,15 @@ def added_lines(path, base):
     rel = os.path.relpath(path.resolve(), repo)
     if rel.startswith(".."):
         return None
-    cmd = ["git", "diff"]
-    if base:
-        cmd.append(base)
-    cmd += ["--unified=0", "--", rel]
-    out = subprocess.run(cmd, capture_output=True, text=True)
-    if out.returncode != 0:
+    if cache is None:
+        cache = {}
+    key = (repo, base)
+    if key not in cache:
+        cache[key] = _diff_added_map(base)
+    added = cache[key]
+    if added is None:
         return None
-    return _parse_added_lines(out.stdout)
+    return added.get(rel, set())
 
 
 def collect_files(paths):
@@ -1747,12 +1783,16 @@ def lint(paths, base=None):
     out of the report. Without base, every file is linted in full.
     """
     findings = []
+    added_lines_cache = {}
     for f in collect_files(paths):
+        if not f.is_file():
+            # A path deleted by the change under review has no lines to scope to.
+            continue
         text = f.read_text(encoding="utf-8", errors="replace")
         file_findings = []
         scan(f, text, file_findings)
         if base:
-            added = added_lines(f, base)
+            added = added_lines(f, base, added_lines_cache)
             if added is None:
                 findings.extend(file_findings)
             else:

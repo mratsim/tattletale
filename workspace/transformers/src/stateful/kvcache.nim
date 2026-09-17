@@ -133,7 +133,7 @@
 ##   A partially filled pages will be copied-on-write.
 ##   It will naturally be evicted when it's last access is the oldest.
 
-import workspace/data_structures
+import workspace/data_structures/wavl_trees
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Types
