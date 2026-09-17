@@ -623,6 +623,7 @@ wrapLibtorch:
 
   func `+`*(a: SomeNumber, b: Tensor): Tensor
   func `+`*(a: Tensor, b: SomeNumber): Tensor
+  func `-`*(a: SomeNumber, b: Tensor): Tensor
   func `-`*(a: Tensor, b: SomeNumber): Tensor
   func `*`*(a: SomeNumber, b: Tensor): Tensor
   func `*`*(a: Tensor, b: SomeNumber): Tensor

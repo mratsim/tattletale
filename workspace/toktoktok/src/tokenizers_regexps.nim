@@ -54,3 +54,34 @@ const
             r"""\s+""",
       ].join("|")
     )
+  MoonshotPatStrRegexp* = TokRegexp(regexp:
+      # From the Moonlight checkpoint tokenization_moonshot.py pat_str
+      # (huggingface.co/moonshotai/Moonlight-16B-A3B). The Kimi-Linear
+      # checkpoint pat_str is byte-identical, so one spelling serves
+      # the whole Moonshot pat_str family. Two Rust-regex
+      # constructs have no PCRE2 spelling, translated here and verified
+      # token-identical against the tiktoken Rust engine on ASCII and CJK
+      # corpora: letters, contractions, digits, Han punctuation adjacency,
+      # mixed-script runs:
+      # - the class intersections
+      #   [\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]] and [\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]
+      #   become
+      #   lookahead-guarded alternations. Han script characters carry
+      #   general category Lo, so guarding \p{Lo} with a negative
+      #   lookahead and keeping the other categories in plain classes
+      #   reproduces the intersection.
+      # - \p{Han} reads as \p{Script=Han}: PCRE2 resolves the plain
+      #   name through Script_Extensions and would also take the Han
+      #   punctuation U+3002 that the Rust engine refuses
+      #   (KimiK25 precedent, same file).
+      [
+            r"""[\p{Script=Han}]+""",
+            r"""[^\r\n\p{L}\p{N}]?(?:(?!\p{Script=Han})\p{Lo}|[\p{Lt}\p{Lu}\p{Lm}\p{M}])*(?:(?!\p{Script=Han})\p{Lo}|[\p{Ll}\p{Lm}\p{M}])+(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
+            r"""[^\r\n\p{L}\p{N}]?(?:(?!\p{Script=Han})\p{Lo}|[\p{Lt}\p{Lu}\p{Lm}\p{M}])+(?:(?!\p{Script=Han})\p{Lo}|[\p{Ll}\p{Lm}\p{M}])*(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
+            r"""\p{N}{1,3}""",
+            r""" ?[^\s\p{L}\p{N}]+[\r\n]*""",
+            r"""\s*[\r\n]+""",
+            r"""\s+(?!\S)""",
+            r"""\s+""",
+      ].join("|")
+    )

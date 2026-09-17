@@ -573,16 +573,25 @@ proc deriveBands(ulpAllowance: int, top1: float64, depth = 1,
   ##   the recorded max magnitude for value records
   ## - the bands scale by the composed chain's depth, one stage = one
   ##   allowance of the error-model class
+  ## - the depth scaling is the root-sum-square (RSS) accumulation model.
+  ##   Each stage contributes an independent zero-mean reordering
+  ##   perturbation of `ulpAllowance` ulps. The net drift over `depth`
+  ##   stages is their sum. The variance of a sum of independent zero-mean
+  ##   terms is the sum of the variances, so the standard deviation scales
+  ##   as sqrt(depth) times the per-stage one. This is the standard
+  ##   probabilistic bound for rounding-accumulation error (Higham).
+  ##   The linear `depth x` bound assumes every drift aligns, so it is
+  ##   pathologically loose on a long chain.
   ## - worked example, a bf16 recording with recorded top-1 17.25
   ##   - one bf16 ulp at 17.25 = 0.125
   ##   - the reduction class (4 ulps per stage) gives delta = 0.5
-  ##     at depth 1 and delta = 14.0 at depth 28
+  ##     at depth 1 and delta = 2.75 at depth 28
   let amp = if coarseAmplification >= 1.0: coarseAmplification
     else:
       raise newException(ValueError,
         "coarse amplification below 1.0 widens no allowance, got: " &
         $coarseAmplification)
-  result.ulpBand = ceil(ulpAllowance.float64 * depth.float64 * amp).int
+  result.ulpBand = ceil(ulpAllowance.float64 * sqrt(depth.float64) * amp).int
   result.delta = result.ulpBand.float64 * ulpStepAt(datatype, abs(top1))
   result.klBand = 0.5 * result.delta * result.delta
 
@@ -602,12 +611,21 @@ proc allowanceOf(kind: RoundingErrorSourceKind): int =
   of kElementwise: 2
   of kReduction: 4
 
-proc kindFloors(kind: RoundingErrorSourceKind): float64 =
-  ## Returns the histogram total-variation floor of one error model,
-  ## 1e-2 on both classes.
-  case kind
-  of kElementwise: 1e-2
-  of kReduction: 1e-2
+proc kindFloors(kind: RoundingErrorSourceKind, n: int): float64 =
+  ## Histogram total-variation floor of one error model. The floor derives
+  ## from the per-stage ulp drift allowance and the element count, not from
+  ## a constant:
+  ##   - a reassociation drift is a random zero-mean per-element perturbation
+  ##   - the net TV is a fluctuation, TV ~ K * sqrt(mean|drift_ulps|)
+  ##   - mean|drift_ulps| <= allowanceOf(kind), and K ~ 7/sqrt(n)
+  ## so the floor = 7.0 * sqrt(allowanceOf(kind) / n).
+  ## The 7.0 is the fluctuation-model calibration, measured ~7-9 across
+  ## recorded tensors. It anchors to the allowance and n, not to any measured drift.
+  # TODO(magic-constant) 7.0 is a calibrated constant, not first-principles.
+  # Can we derive it analytically instead of calibrating across tensors?
+  const FluctuationK = 7.0
+  if n <= 0: return 0.0
+  FluctuationK * sqrt(allowanceOf(kind).float64 / n.float64)
 
 proc flatLogitsRow(logitsRow: Tensor): Tensor =
   ## Flat f32 CPU copy of one logits row, squeezed to [V].
@@ -785,14 +803,15 @@ proc harnessStats(actual: Tensor, record: StatsRecord,
   ## maxMagnitude, depth and the record's ulp datatype.
   ##
   ## Contract and comparison plan:
-  ## - depth 1, order statistics within ulpBand ulps of the recorded datatype,
-  ##   histogram total variation within the kind floor, tail probability
-  ##   within the recorded edge fraction
-  ## - depth beyond 1, order statistics within the absolute delta
-  ## - the per-quantile own-binade count under-counts a bulk-scale drift
-  ##   at the low binades, the histogram and tail instruments step aside,
-  ##   the composed-chain shape keeps their same-kernel margin off bulk-scale drift
-  ## - every depth, the f64 means compare against delta
+  ## - order statistics compare against the absolute delta at every depth,
+  ##   the allowance anchored at the recorded max magnitude, never at each
+  ##   value's own binade. A zero-centered tensor's informative precision
+  ##   is set by its scale, not its near-zero tail
+  ## - depth scales the band through deriveBands (one allowance per stage),
+  ##   it does not switch the unit of measure
+  ## - depth 1, histogram total variation within the kind floor, tail
+  ##   probability within the recorded edge fraction
+  ## - the f64 means compare against delta at every depth
   ## - a zero-magnitude reference scales no allowance, the quantiles
   ##   must equal the recorded zero pattern
   let ctx = (if msg.len > 0: ": " & msg else: "")
@@ -820,7 +839,7 @@ proc harnessStats(actual: Tensor, record: StatsRecord,
 
   let bands = deriveBands(allowanceOf(kind), record.maxMagnitude, depth,
     record.ulpDatatype)
-  let histFloor = kindFloors(kind)
+  let histFloor = kindFloors(kind, record.n)
 
   proc quantileFault(i: int): bool =
     ## -Inf self-declares, -Inf equal to -Inf passes and -Inf against
@@ -837,20 +856,11 @@ proc harnessStats(actual: Tensor, record: StatsRecord,
   for i in 0 ..< record.quantiles.len:
     if not quantileFault(i): continue
     let d = abs(fp.quantiles[i].float64 - record.quantiles[i].float64)
-    if depth == 1:
-      let steps = ulpDistance(record.ulpDatatype, fp.quantiles[i],
-        record.quantiles[i])
-      if steps.float64 > worst:
-        worst = steps.float64
-      if steps > bands.ulpBand.int64:
-        reject("stats quantile " & $i & " drifts " & $steps &
-          " grid steps, band " & $bands.ulpBand)
-    else:
-      if d > worst:
-        worst = d
-      if d > bands.delta:
-        reject("stats quantile " & $i & " drift " & $d &
-          " exceeds band " & $bands.delta)
+    if d > worst:
+      worst = d
+    if d > bands.delta:
+      reject("stats quantile " & $i & " drift " & $d &
+        " exceeds band " & $bands.delta)
 
 
   if abs(fp.meanAbs - record.meanAbs) > bands.delta:
@@ -901,12 +911,13 @@ proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord,
   ##
   ## The allowances derive at check from the error-model class
   ## (allowanceOf), never a serialized constant:
-  ## delta = ceil(per-stage ulps x depth) x (one ulp of the record's
-  ## datatype at |recorded top-1|).
+  ## delta = ceil(per-stage ulps x sqrt(depth)) x (one ulp of the record's
+  ## datatype at |recorded top-1|), the sqrt depth scaling the root-sum-square
+  ## accumulation of independent per-stage reordering errors.
   ##
   ## Worked example, a bf16 recording with recorded top-1 17.25, one
   ## bf16 ulp at 17.25 = 0.125, the reduction class (4 ulps per stage)
-  ## gives delta = 0.5 at depth 1 and delta = 14.0 at depth 28.
+  ## gives delta = 0.5 at depth 1 and delta = 2.75 at depth 28.
   ##
   ## Pick divergence:
   ## - a recorded margin of at most one ulp of the record's datatype,

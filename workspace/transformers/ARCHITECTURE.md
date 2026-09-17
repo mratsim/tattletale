@@ -163,7 +163,8 @@ It copies page KV into contiguous views (`copyFrom` in `src/layers/attn.nim`).
 
 - **New architectures.** Add a model module under `src/models/` that implements
   the `Model` iface and registers itself in `ModelRegistry` via a static block.
-  `loadModel` then dispatches to it automatically.
+  `loadModel` then dispatches to it automatically. The per-family load procs
+  and the shared loader convention are catalogued in [`src/models/README.md`](src/models/README.md).
 - **New quantization schemes.** Add codecs under `src/quantizations/` and wire
   them into the layer implementations, the linear layer already carries
   an EXL3-quantized path.

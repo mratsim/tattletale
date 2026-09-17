@@ -59,3 +59,28 @@ proc newOrchestrator*(model: AnyModel, dtype = F.kBFloat16,
   Orchestrator.init(cfg.num_hidden_layers, 1,
     cfg.num_key_value_heads, maxContextLen, cfg.head_dim, numPoolPages,
     dtype, device)
+
+proc newMlaOrchestrator*(maxSeq, kvLoraRank, qkRopeHeadDim: int,
+    numLayers = 1, device = F.kCPU): Orchestrator =
+  ## Batch-1 pool on the MLA split geometry:
+  ## - the K buffer kv_lora_rank channels wide, one head
+  ## - the V buffer the qk_rope_head_dim plane, one head
+  ## - `numLayers` sizes the pool past the mixer's real wiring layer
+  ##   index where the template keeps a nonzero index
+  Orchestrator.init(
+    num_layers = numLayers, batch_size = 1, k_kv_heads = 1,
+    k_head_dim = kvLoraRank,
+    v_kv_heads = 1, v_head_dim = qkRopeHeadDim, max_seq = maxSeq,
+    num_pages = 4, dtype = kBFloat16, device = device)
+
+proc newMlaCacheCtx*(maxSeq, kvLoraRank, qkRopeHeadDim: int,
+    tokens: seq[uint32], numLayers = 1,
+    device = F.kCPU): tuple[orc: Orchestrator, ctx: InferenceContext] =
+  ## Returns a fresh orchestrator plus its active context:
+  ## - the sequence opens on `tokens`, the fixture pass the caller replays
+  ## - the context borrows the pool pages, alive while the returned
+  ##   pool ref stays alive
+  var orc = newMlaOrchestrator(maxSeq, kvLoraRank, qkRopeHeadDim,
+    numLayers, device)
+  orc.startSequence(tokens)
+  result = (orc, orc.getInferenceContextMut())

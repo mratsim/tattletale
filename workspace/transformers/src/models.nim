@@ -78,12 +78,20 @@ proc generate*(
   let device = model.getDeviceKind()
   let maxCtx = if maxContextLen < 0: cfg.max_position_embeddings else: maxContextLen
   let numPoolPages = computeNumPages(maxCtx, concurrentRequests = 1)
-  var orc = init(Orchestrator, cfg.num_hidden_layers, 1,
-                 cfg.num_key_value_heads, maxCtx, cfg.head_dim,
-                 numPoolPages, parseTorchDtype(cfg.torch_dtype), device)
-  defer: orc.endSequence()
-
   let dtype = parseTorchDtype(cfg.torch_dtype)
+  var orc =
+    if cfg.mlaKvLoraRank > 0:
+      # MLA latent-cache pool: K the compressed latent, V the kpe plane,
+      # both single-head, the per-buffer-width shape the MLA mixers
+      # write through ctx.pages.
+      init(Orchestrator, cfg.num_hidden_layers, 1,
+           1, cfg.mlaKvLoraRank, 1, cfg.mlaKpeWidth,
+           maxCtx, numPoolPages, dtype, device)
+    else:
+      init(Orchestrator, cfg.num_hidden_layers, 1,
+           cfg.num_key_value_heads, maxCtx, cfg.head_dim,
+           numPoolPages, dtype, device)
+  defer: orc.endSequence()
 
   # Tokenize prompt with special tokens
   var ids = model.getTokenizer().encode(prompt)
@@ -130,7 +138,8 @@ proc generate*(
 
     stdout.write model.getTokenizer().decodeToString([ids[^1]])
 
-    if ids[^1] == cfg.eosTokenId:
+    if (cfg.eosTokenIds.len != 0 and ids[^1] in cfg.eosTokenIds) or
+        (cfg.eosTokenIds.len == 0 and ids[^1] == cfg.eosTokenId):
       break
 
   model.getTokenizer().decodeToString(ids)
