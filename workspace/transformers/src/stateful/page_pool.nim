@@ -12,8 +12,11 @@ import
 type
   PagePool* = ref object
     ## Persistent stack GPU page allocator (value type for =destroy hook).
-    k_buffer: Tensor         # (num_pages, num_layers, PAGE_SIZE, kv_heads, head_dim)
-    v_buffer: Tensor         # same shape
+    ## K and V buffers carry independent per-buffer widths; MLA pages put
+    ## the compressed latent in the K buffer (k = kv_lora_rank) and the
+    ## kpe plane in the V buffer (v = qk_rope_head_dim), kv_heads 1.
+    k_buffer: Tensor         # (num_pages, num_layers, PAGE_SIZE, k_kv_heads, k_head_dim)
+    v_buffer: Tensor         # (num_pages, num_layers, PAGE_SIZE, v_kv_heads, v_head_dim)
     free_indices: seq[int32] # stack of available slot indices
 
   Page* = ref PageObj
@@ -22,8 +25,8 @@ type
     index: int32 = -1i32
     pool {.cursor.}: PagePool # Back-pointer: the orchestrator keeps the pool
     # alive, and we only have integers to return, so don't refcount
-    k_view*: Tensor           # (num_layers, PAGE_SIZE, kv_heads, head_dim) slab view
-    v_view*: Tensor           # same
+    k_view*: Tensor           # (num_layers, PAGE_SIZE, k_kv_heads, k_head_dim) slab view
+    v_view*: Tensor           # (num_layers, PAGE_SIZE, v_kv_heads, v_head_dim) slab view
 
 # No custom =destroy, =copy, =sink hooks. ORC default field-by-field
 # destruction handles Tensor/TorchTensor lifecycle correctly for PagePool.
@@ -44,17 +47,30 @@ proc `=destroy`(p: var PageObj) =
 
 proc init*(_: type PagePool;
             num_pages: int; num_layers: int;
-            kv_heads, head_dim: int;
+            k_kv_heads, k_head_dim: int;
+            v_kv_heads, v_head_dim: int;
             dtype: ScalarKind; device: DeviceKind): PagePool =
+  ## Per-buffer widths: MLA calls this with k_kv_heads 1,
+  ## k_head_dim kv_lora_rank, v_kv_heads 1, v_head_dim qk_rope_head_dim.
   let opts = F.tensorOptions(dtype, device)
   var free = newSeq[int32](num_pages)
   for i in 0 ..< num_pages:
     free[i] = (num_pages - 1 - i).int32
   result = PagePool(
-    k_buffer: F.zeros(num_pages, num_layers, TokensPerPage, kv_heads, head_dim, opts),
-    v_buffer: F.zeros(num_pages, num_layers, TokensPerPage, kv_heads, head_dim, opts),
+    k_buffer: F.zeros(num_pages, num_layers, TokensPerPage, k_kv_heads, k_head_dim, opts),
+    v_buffer: F.zeros(num_pages, num_layers, TokensPerPage, v_kv_heads, v_head_dim, opts),
     free_indices: free
   )
+
+proc init*(_: type PagePool;
+            num_pages: int; num_layers: int;
+            kv_heads, head_dim: int;
+            dtype: ScalarKind; device: DeviceKind): PagePool =
+  ## Shared-width overload for the GQA page class: both buffers
+  ## carry one (kv_heads, head_dim) shape.
+  PagePool.init(num_pages, num_layers,
+    kv_heads, head_dim, kv_heads, head_dim,
+    dtype, device)
 
 proc borrow*(pool: PagePool): Page =
   if pool.free_indices.len == 0:

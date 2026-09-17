@@ -264,6 +264,30 @@ proc init*(_: type Orchestrator;
     position_ids_buf: F.zeros(1, F.tensorOptions(F.kInt64, device))
   )
 
+proc init*(_: type Orchestrator;
+            num_layers, batch_size: int;
+            k_kv_heads, k_head_dim: int;
+            v_kv_heads, v_head_dim: int;
+            max_seq: int;
+            num_pages: int;
+            dtype: ScalarKind; device: DeviceKind): Orchestrator =
+  ## Per-buffer-width variant of Orchestrator.init: the K and V pool
+  ## buffers take independent (kv_heads, head_dim) widths. The
+  ## InferenceContext records only the K pool shape (k_kv_heads,
+  ## k_head_dim); a consumer reading shapes from the context sees K
+  ## only, and V-side components size their buffers from their own
+  ## config.
+  result = Orchestrator(
+    logical_map: KVCache[uint32, Page].new(),
+    page_pool: PagePool.init(num_pages, num_layers,
+      k_kv_heads, k_head_dim, v_kv_heads, v_head_dim, dtype, device),
+    active_context: InferenceContext.init(
+      num_layers, batch_size, k_kv_heads, max_seq, k_head_dim),
+    num_layers: num_layers,
+    device: device,
+    position_ids_buf: F.zeros(1, F.tensorOptions(F.kInt64, device))
+  )
+
 proc getInferenceContextMut*(orc: var Orchestrator): var InferenceContext {.inline.} =
   ## Get the active inference context.
   orc.active_context

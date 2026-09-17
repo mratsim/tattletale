@@ -8,6 +8,7 @@ import
   ./linear,
   ./lmhead,
   ./ffn,
+  ./moe_router,
   ./norm,
   ./rope,
   ./decoder_layers
@@ -20,6 +21,7 @@ export
   linear,
   lmhead,
   ffn,
+  moe_router,
   norm,
   rope,
   decoder_layers

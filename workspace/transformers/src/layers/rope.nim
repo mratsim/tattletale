@@ -251,3 +251,96 @@ proc applyRope*(
   ##   Pure function — no mutation of self.
   ##   cos/sin must match seq_len of q/k.
   applyRopeImpl(q, k, cos, sin)
+
+# ###########################################################################
+# Rope policies
+# ###########################################################################
+
+type
+  NoPe* = object
+    ## Rope policy: no rotation applied, ever. A kpe plane is cached
+    ## unrotated when the checkpoint carries one (Kimi-Linear MLA).
+
+  FullRoPe* = object
+    ## Rope policy: the whole kpe plane rotates (DeepSeek-V2/V3, GLM).
+
+  PartialRoPe*[rotaryDim: static int] = object
+    ## Rope policy: the first `rotaryDim` plane channels rotate,
+    ## remaining channels pass through. `rotaryDim` must be even,
+    ## never over the plane width, evenness enforced at compile time,
+    ## the over-plane width refused at layer init against the runtime
+    ## plane width.
+
+# ###########################################################################
+# Interleaved rotation kernel
+# ###########################################################################
+
+func rotateInterleaved(x: Tensor, cos, sin: Tensor): Tensor =
+  ## GPT-J interleaved rotation of the last dimension: the channel pair
+  ## (2i, 2i+1) rotates by the row-i angle.
+  ##
+  ## Args:
+  ##   x: (batch, seq, heads, plane), even plane
+  ##   cos, sin: (seq, plane div 2) f32 frequency tables
+  ##
+  ## Returns:
+  ##   Rotated tensor, same shape and dtype as `x`. The pair products
+  ##   and sums run in f32 and round once back to the storage dtype,
+  ##   the same arithmetic and rounding as the complex-multiply form
+  ##   produces.
+  let batch = x.size(0)
+  let seq = x.size(1)
+  let heads = x.size(2)
+  let plane = x.size(3)
+  doAssert (plane mod 2) == 0, "rotateInterleaved: plane width must be even"
+  let half = plane div 2
+  doAssert cos.dim == 2 and sin.dim == 2, "rotateInterleaved: cos/sin must be 2D (seq, half)"
+  doAssert cos.size(0) == seq and sin.size(0) == seq,
+    "rotateInterleaved: cos/sin rows must match the sequence length"
+  doAssert cos.size(1) == half and sin.size(1) == half,
+    "rotateInterleaved: cos/sin columns must match plane/2"
+  doAssert cos.scalarType() == kFloat32 and sin.scalarType() == kFloat32,
+    "rotateInterleaved: cos/sin must be f32 frequency tables"
+
+  let x32 = x.to(kFloat32)
+  let pairs = x32.reshape([batch, seq, heads, half, 2])
+  let even = pairs.narrow(4, 0, 1).reshape([batch, seq, heads, half])
+  let odd = pairs.narrow(4, 1, 1).reshape([batch, seq, heads, half])
+  let cosB = cos.unsqueeze(0).unsqueeze(2) # (1, seq, 1, half)
+  let sinB = sin.unsqueeze(0).unsqueeze(2)
+  let outEven = even * cosB - odd * sinB
+  let outOdd = even * sinB + odd * cosB
+  result = F.cat([outEven.unsqueeze(4), outOdd.unsqueeze(4)], 4)
+    .reshape([batch, seq, heads, plane]).to(x.scalarType())
+
+func applyRope*(qPe, kPe: Tensor, cos, sin: Tensor, R: typedesc[NoPe]): (Tensor, Tensor) =
+  ## NoPe rope: identity. Nothing is computed, the call compiles out.
+  (qPe, kPe)
+
+func applyRope*(qPe, kPe: Tensor, cos, sin: Tensor, R: typedesc[FullRoPe]): (Tensor, Tensor) =
+  ## FullRoPe: rotate the whole plane of q and k.
+  (rotateInterleaved(qPe, cos, sin), rotateInterleaved(kPe, cos, sin))
+
+func applyRope*(qPe, kPe: Tensor, cos, sin: Tensor,
+    R: typedesc[PartialRoPe]): (Tensor, Tensor) =
+  ## PartialRoPe[rotaryDim]: rotate the first `rotaryDim` plane
+  ## channels of q and k, pass the rest through unchanged.
+  const rotaryDim = R.rotaryDim
+  let plane = qPe.size(3)
+  doAssert rotaryDim <= plane,
+    "PartialRoPe rotary width " & $rotaryDim & " exceeds the plane width " & $plane
+  if rotaryDim == plane:
+    return (rotateInterleaved(qPe, cos, sin), rotateInterleaved(kPe, cos, sin))
+  else:
+    # Frequency tables cover the whole plane (seq, plane div 2),
+    # the rotation consumes the first rotaryDim div 2 columns.
+    doAssert cos.size(1) == plane div 2 and sin.size(1) == plane div 2,
+      "PartialRoPe expects full-plane frequency tables (seq, plane/2)"
+    let half = rotaryDim div 2
+    let cosRot = cos.narrow(1, 0, half)
+    let sinRot = sin.narrow(1, 0, half)
+    let qRot = rotateInterleaved(qPe.narrow(3, 0, rotaryDim), cosRot, sinRot)
+    let kRot = rotateInterleaved(kPe.narrow(3, 0, rotaryDim), cosRot, sinRot)
+    let qOut = F.cat([qRot, qPe.narrow(3, rotaryDim, plane - rotaryDim)], 3)
+    let kOut = F.cat([kRot, kPe.narrow(3, rotaryDim, plane - rotaryDim)], 3)
+    (qOut, kOut)

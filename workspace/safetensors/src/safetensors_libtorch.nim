@@ -68,6 +68,92 @@ proc hasTensor*(view: SafetensorsCollection, tensorName: string): bool {.inline.
   ## True when the collection's weight map routes `tensorName` to a file.
   view.weightMap.hasKey(tensorName)
 
+when defined(TTT_ALLOC_TRACE):
+  # Diagnostic allocation trace, compile-time gated, zero overhead and
+  # zero output when the define is absent. Per getTensorOwned call one
+  # flushed line names the callsite outside this file and the byte
+  # delta, the log survives a mid-load death by design.
+  import std/os
+  import std/strformat
+  import std/strutils
+
+  # Optional log path for the allocation trace. The strdefine lets
+  # -d:TTT_ALLOC_TRACE_LOG=/path compile, and an empty value keeps
+  # the stderr fallback in tttAllocTraceEmit.
+  const TTT_ALLOC_TRACE_LOG {.strdefine.} = ""
+
+  var tttTraceRetainedBytes: int64 = 0
+  var tttTraceSink: File = stderr
+  var tttTraceSinkReady = false
+
+  proc tttTraceFrame(line: string): tuple[ok: bool, file: string,
+      num: int, procName: string] =
+    ## Parse one Nim stack frame of the form file(num) procname or
+    ## file(num, col) procname.
+    let open = line.find('(')
+    if open <= 0:
+      return (false, "", 0, "")
+    let close = line.find(')', open)
+    if close < 0 or close + 2 > line.len:
+      return (false, "", 0, "")
+    let file = line[0 ..< open]
+    if not file.endsWith(".nim"):
+      return (false, "", 0, "")
+    let body = line[open + 1 ..< close]
+    let sep = body.find(',')
+    let numText = if sep < 0: body else: body[0 ..< sep]
+    var num = 0
+    try:
+      num = parseInt(numText)
+    except ValueError:
+      return (false, "", 0, "")
+    let procName = line[close + 2 .. ^1]
+    result = (true, file, num, procName)
+
+  proc tttTraceLocate(frameLines: seq[string]): string =
+    ## Innermost frame outside safetensors_libtorch.nim is the calling
+    ## loader, when the next frame toward the copy machinery sits in
+    ## libtorch it rides the line too. Nim tracebacks list outermost
+    ## frames first, the scan runs from the innermost end.
+    var parsed: seq[tuple[ok: bool, file: string, num: int, procName: string]]
+    for line in frameLines:
+      let f = tttTraceFrame(line)
+      if f.ok:
+        parsed.add f
+    var idx = -1
+    var i = parsed.len - 1
+    while i >= 0:
+      if not parsed[i].file.endsWith("safetensors_libtorch.nim"):
+        idx = i
+        break
+      dec i
+    if idx < 0:
+      return "<unknown-callsite>"
+    let c = parsed[idx]
+    result = &"{c.file}:{c.num}:{c.procName}"
+    if idx > 0 and "libtorch" in parsed[idx - 1].file:
+      let u = parsed[idx - 1]
+      result.add &" up={u.file}:{u.num}:{u.procName}"
+
+  proc tttAllocTraceEmit(tensorName: string, view: Tensor) {.noinline.} =
+    ## One flushed line per owned copy, delta counted before the copy
+    ## sits so the last line of a dead run names the killing callsite.
+    let delta = view.numel.int64 * view.itemsize.int64
+    tttTraceRetainedBytes += delta
+    if not tttTraceSinkReady:
+      tttTraceSinkReady = true
+      when defined(TTT_ALLOC_TRACE_LOG):
+        let opened = syncio.open(TTT_ALLOC_TRACE_LOG, fmWrite)
+        if opened.isNil:
+          tttTraceSink = stderr
+        else:
+          tttTraceSink = opened
+    let stackLines = getStackTrace().splitLines()
+    let loc = tttTraceLocate(stackLines)
+    tttTraceSink.writeLine(
+      &"{loc} tensor={tensorName} delta={delta} retained={tttTraceRetainedBytes}")
+    tttTraceSink.flushFile()
+
 proc getTensorView*(st: Safetensor, tensorName: string): Tensor =
   ## Get a memory view to the tensor data.
   ## Returns a `Tensor` that views the underlying memory-mapped data.
@@ -102,7 +188,10 @@ proc getTensorOwned*(st: Safetensor, tensorName: string, device = kCPU): Tensor 
   ##
   ## Returns:
   ##   An owned `TorchTensor` on `device`.
-  st.getTensorView(tensorName).to(device, copy=true) # Force copy
+  let view = st.getTensorView(tensorName)
+  when defined(TTT_ALLOC_TRACE):
+    tttAllocTraceEmit(tensorName, view)
+  result = view.to(device, copy=true) # Force copy
 
 proc getTensorOwned*(view: SafetensorsCollection, tensorName: string, device = kCPU): Tensor =
   ## Get an owned copy of the tensor data of `tensorName`.
@@ -119,4 +208,19 @@ proc getTensorOwned*(view: SafetensorsCollection, tensorName: string, device = k
   ## Returns:
   ##   An owned `TorchTensor` on `device`, independent of every mapping.
   ## Raises ValueError naming the tensor when the collection holds no entry.
+  ## Trace coverage comes from the per-tensor proc above: the
+  ## collection-level form routes through it so every call is counted
+  ## exactly once.
   view.files[view.fileOf(tensorName)].getTensorOwned(tensorName, device)
+
+proc getTensorView*(view: SafetensorsCollection, tensorName: string): Tensor =
+  ## Zero-copy mmap view of the tensor data of `tensorName`,
+  ## collection-level form of the per-file `getTensorView`: the weight
+  ## map routes the name to the owning safetensor file and that file serves
+  ## the view from its mapping, no owned copy is made.
+  ##
+  ## Lifetime: the returned `Tensor` borrows the mapping. The collection
+  ## must outlive every tensor served this way, the model-level loaders
+  ## that use this proc keep the collection alive beside the weights.
+  ## Raises ValueError naming the tensor when the collection holds no entry.
+  view.files[view.fileOf(tensorName)].getTensorView(tensorName)

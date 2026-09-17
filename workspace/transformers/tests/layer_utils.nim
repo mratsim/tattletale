@@ -31,7 +31,9 @@ import
   workspace/transformers/src/layers,
   workspace/transformers/src/deserialization,
   workspace/transformers/src/layers/rope,
-  workspace/transformers/src/layers/attn_ssm/gated_delta_net
+  workspace/transformers/src/layers/attn_ssm/gated_delta_net,
+  workspace/transformers/src/layers/attn_ssm/multi_head_latent_attention,
+  workspace/transformers/src/quantizations/datatypes
 
 privateAccess(SafetensorObj)
 
@@ -139,3 +141,133 @@ proc ulpBf16*(m: float32): float32 {.inline.} =
   if m <= 0.0'f32:
     return 0.0'f32
   result = pow(2.0'f32, floor(log2(m)) - 7.0'f32)
+
+# ── MLA (DeepSeek-style latent attention) ──────────────────────────────────
+
+func mlaInterleaveLayout*(x: F.Tensor): F.Tensor =
+  ## Recorded rotation output layout, the cat of the even and odd pair
+  ## values over the last dimension, the interleaved pair layout.
+  ##
+  ## Expected input:
+  ## - x, the (batch, seq, heads, plane) tensor whose plane channels
+  ##   sit in the half-split layout, pair i at channels (i, plane/2 + i)
+  ##
+  ## Output:
+  ## - the same shape with pair i at channels (2i, 2i + 1), pure data
+  ##   movement over the pair values
+  let d = x.size(3)
+  let even = x.narrow(3, 0, d div 2)
+  let odd = x.narrow(3, d div 2, d div 2)
+  F.cat([even.unsqueeze(4), odd.unsqueeze(4)], 4).reshape(
+    x.size(0), x.size(1), x.size(2), d)
+
+proc setupMlaDirect*[Pe](modelDir, prefix: string, layerIdx, maxSeq: int,
+    device = F.kCPU): MLAttention[void, Pe] =
+  ## Direct-Q MLAttention load of checkpoint layer `layerIdx`
+  ## over the typed latent cache, wiring mirrored from the model files:
+  ## - geometry off the flat config.json section
+  ## - latent norm at the bottleneck eps
+  ## - softmax scale 1/sqrt(qk_head_dim)
+  ##
+  ## Expected input:
+  ## - modelDir, the checkpoint directory (config.json plus weight shards)
+  ## - prefix, the dot-terminated attention path, shaped "model.layers.N.self_attn."
+  ## - Pe, the rope policy the caller locks (FullRoPe or NoPe)
+  let cfgJson = packedjson.parseFile(modelDir / "config.json")
+  let view = SafetensorsCollection.open(modelDir)
+  let cache = MlaLatentCache.init(
+    cfgJson{"kv_lora_rank"}.getInt(), cfgJson{"qk_rope_head_dim"}.getInt(),
+    maxSeq, kBFloat16, device)
+  MLAttention[void, Pe].init(
+    layerIdx, prefix,
+    Linear.load(view, cfgJson, prefix & ".q_proj", device),
+    Linear.load(view, cfgJson, prefix & ".o_proj", device),
+    Linear.load(view, cfgJson, prefix & ".kv_a_proj_with_mqa", device),
+    RmsNorm.init(
+      view.getTensorOwned(prefix & ".kv_a_layernorm.weight", device),
+      qBF16, eps = BottleneckNormEps),
+    Linear.load(view, cfgJson, prefix & ".kv_b_proj", device),
+    numHeads = cfgJson{"num_attention_heads"}.getInt(),
+    qkNopeHeadDim = cfgJson{"qk_nope_head_dim"}.getInt(),
+    kvLoraRank = cfgJson{"kv_lora_rank"}.getInt(),
+    vHeadDim = cfgJson{"v_head_dim"}.getInt(),
+    softmaxScale = mlaSoftmaxScale(cfgJson{"qk_nope_head_dim"}.getInt(),
+      cfgJson{"qk_rope_head_dim"}.getInt()),
+    cache = cache)
+
+proc setupMlaCompressed*(modelDir, prefix: string, layerIdx, maxSeq: int,
+    device = F.kCPU): MLAttention[RmsNorm, FullRoPe] =
+  ## Compressed-Q MLAttention load of checkpoint layer `layerIdx`
+  ## over the typed latent cache, wiring mirrored from the model files:
+  ## - q bottleneck plus both latent norms at the bottleneck eps
+  ## - softmax scale 1/sqrt(qk_head_dim)
+  ##
+  ## Expected input:
+  ## - modelDir, the checkpoint directory (config.json plus weight shards)
+  ## - prefix, the dot-terminated attention path, shaped "model.layers.N.self_attn."
+  let cfgJson = packedjson.parseFile(modelDir / "config.json")
+  let view = SafetensorsCollection.open(modelDir)
+  let cache = MlaLatentCache.init(
+    cfgJson{"kv_lora_rank"}.getInt(), cfgJson{"qk_rope_head_dim"}.getInt(),
+    maxSeq, kBFloat16, device)
+  MLAttention[RmsNorm, FullRoPe].init(
+    layerIdx, prefix,
+    q_a_proj = Linear.load(view, cfgJson, prefix & ".q_a_proj", device),
+    q_b_proj = Linear.load(view, cfgJson, prefix & ".q_b_proj", device),
+    q_a_norm = RmsNorm.init(
+      view.getTensorOwned(prefix & ".q_a_layernorm.weight", device),
+      qBF16, eps = BottleneckNormEps),
+    kv_a_proj_with_mqa = Linear.load(
+      view, cfgJson, prefix & ".kv_a_proj_with_mqa", device),
+    kv_a_layernorm = RmsNorm.init(
+      view.getTensorOwned(prefix & ".kv_a_layernorm.weight", device),
+      qBF16, eps = BottleneckNormEps),
+    kv_b_proj = Linear.load(view, cfgJson, prefix & ".kv_b_proj", device),
+    o_proj = Linear.load(view, cfgJson, prefix & ".o_proj", device),
+    numHeads = cfgJson{"num_attention_heads"}.getInt(),
+    qkNopeHeadDim = cfgJson{"qk_nope_head_dim"}.getInt(),
+    kvLoraRank = cfgJson{"kv_lora_rank"}.getInt(),
+    vHeadDim = cfgJson{"v_head_dim"}.getInt(),
+    softmaxScale = mlaSoftmaxScale(cfgJson{"qk_nope_head_dim"}.getInt(),
+      cfgJson{"qk_rope_head_dim"}.getInt()),
+    cache = cache)
+
+proc setupMlaGated*(modelDir, prefix: string, layerIdx, maxSeq: int,
+    device = F.kCPU): HeadwiseGatedMLAttention[RmsNorm, FullRoPe] =
+  ## Head-wise gated MLAttention load of checkpoint layer `layerIdx`
+  ## over the typed latent cache, wiring mirrored from the model files:
+  ## - compressed-Q bottleneck, both latent norms at the bottleneck eps
+  ## - per-head sigmoid gate weight projection, the gate multiply
+  ##   sits before the output projection
+  ## - softmax scale 1/sqrt(qk_head_dim)
+  ##
+  ## Expected input:
+  ## - modelDir, the checkpoint directory (config.json plus weight shards)
+  ## - prefix, the dot-terminated attention path, shaped "model.layers.N.attention."
+  let cfgJson = packedjson.parseFile(modelDir / "config.json")
+  let view = SafetensorsCollection.open(modelDir)
+  let cache = MlaLatentCache.init(
+    cfgJson{"kv_lora_rank"}.getInt(), cfgJson{"qk_rope_head_dim"}.getInt(),
+    maxSeq, kBFloat16, device)
+  HeadwiseGatedMLAttention[RmsNorm, FullRoPe].init(
+    layerIdx, prefix,
+    q_a_proj = Linear.load(view, cfgJson, prefix & ".q_a_proj", device),
+    q_b_proj = Linear.load(view, cfgJson, prefix & ".q_b_proj", device),
+    q_a_norm = RmsNorm.init(
+      view.getTensorOwned(prefix & ".q_a_layernorm.weight", device),
+      qBF16, eps = BottleneckNormEps),
+    kv_a_proj_with_mqa = Linear.load(
+      view, cfgJson, prefix & ".kv_a_proj_with_mqa", device),
+    kv_a_layernorm = RmsNorm.init(
+      view.getTensorOwned(prefix & ".kv_a_layernorm.weight", device),
+      qBF16, eps = BottleneckNormEps),
+    kv_b_proj = Linear.load(view, cfgJson, prefix & ".kv_b_proj", device),
+    o_proj = Linear.load(view, cfgJson, prefix & ".dense", device),
+    g_proj = Linear.load(view, cfgJson, prefix & ".g_proj", device),
+    numHeads = cfgJson{"num_attention_heads"}.getInt(),
+    qkNopeHeadDim = cfgJson{"qk_nope_head_dim"}.getInt(),
+    kvLoraRank = cfgJson{"kv_lora_rank"}.getInt(),
+    vHeadDim = cfgJson{"v_head_dim"}.getInt(),
+    softmaxScale = mlaSoftmaxScale(cfgJson{"qk_nope_head_dim"}.getInt(),
+      cfgJson{"qk_rope_head_dim"}.getInt()),
+    cache = cache)

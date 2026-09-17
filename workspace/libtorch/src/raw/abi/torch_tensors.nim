@@ -770,6 +770,8 @@ func `*`*(a: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# * #)".}
 
 func `+`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "(# + #)".}
 func `+`*(a: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# + #)".}
+func `-`*(a: SomeNumber, b: TorchTensor): TorchTensor {.importcpp: "(# - #)".}
+func `-`*(a: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# - #)".}
 
 proc `/`*(a, b: TorchTensor): TorchTensor {.importcpp: "(# / #)".}
 proc `/`*(a: TorchTensor, b: SomeNumber): TorchTensor {.importcpp: "(# / #)".}

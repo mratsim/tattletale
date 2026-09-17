@@ -144,7 +144,7 @@ proc loadQwen35Config(path: string): Qwen35Config =
 ################################################################################
 
 type
-  Qwen35GdnDecoderLayer = DecoderLayer[GatedDeltaNet, GatedDenseFFN, RmsNormOne]
+  Qwen35GdnDecoderLayer = DecoderLayer[GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus], GatedDenseFFN, RmsNormOne]
 
   Qwen35AttnDecoderLayer = DecoderLayer[RopeElementWiseGatedAttention[RmsNormOne], GatedDenseFFN, RmsNormOne]
 
@@ -232,11 +232,11 @@ proc loadQwen35ModelRaw(modelPath: string, device = kCPU): Qwen35Model =
 
     let mlp = GatedDenseFFN.load(weights, cfgJson, lp & "mlp", device)
 
-    var gdn: GatedDeltaNet = nil
+    var gdn: GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus] = nil
     var attn: RopeElementWiseGatedAttention[RmsNormOne] = nil
     if config.layer_types[i] == alkGatedDeltaNet:
       let gdnPrefix = lp & "linear_attn"
-      gdn = GatedDeltaNet.load(
+      gdn = GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus].load(
         weights, cfgJson, gdnPrefix, i,
         config.linear_num_key_heads, config.linear_num_value_heads,
         config.linear_key_head_dim, config.linear_value_head_dim,

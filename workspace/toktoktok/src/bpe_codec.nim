@@ -438,5 +438,23 @@ proc loadTiktokenizer*(path: string, regexp: TokRegexp): BPETokenizer =
   let ttk = deserializeTiktokenizer(content, regexp)
   loadFromTiktoken(ttk)
 
+proc loadTiktokenizer*(path: string, regexp: TokRegexp,
+    specialTokens: sink OrderedTable[string, int]): BPETokenizer =
+  ## Tiktoken rank table with explicit special tokens: the base64 rank
+  ## lines of a `.tiktoken` file carry mergeable ranks only, the special
+  ## strings of a checkpoint live beside it, for example the checkpoint
+  ## tokenizer_config.json added_tokens_decoder block, and the explicit
+  ## specialTokens mapping fixes the special-token alternation order.
+  if not fileExists(path):
+    raise newException(TokenizerError, "Tiktoken file not found: " & path)
+
+  let content = readFile(path)
+  if content.len == 0:
+    raise newException(TokenizerError, "Tiktoken file is empty: " & path)
+
+  var ttk = deserializeTiktokenizer(content, regexp)
+  ttk.specialTokens = specialTokens
+  loadFromTiktoken(ttk)
+
 proc tokenCount*(tokenizer: BPETokenizer): int =
   tokenizer.encoder.len + tokenizer.specialTokensEncoder.len

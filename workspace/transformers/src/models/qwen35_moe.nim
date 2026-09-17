@@ -203,7 +203,7 @@ proc loadQwen35MoeConfig(path: string): Qwen35MoeConfig =
 ################################################################################
 
 type
-  Qwen35MoeGdnDecoderLayer = DecoderLayer[GatedDeltaNet, GatedBlockSparseFFN, RmsNormOne]
+  Qwen35MoeGdnDecoderLayer = DecoderLayer[GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus], GatedBlockSparseFFN, RmsNormOne]
 
   Qwen35MoeAttnDecoderLayer = DecoderLayer[RopeElementWiseGatedAttention[RmsNormOne], GatedBlockSparseFFN, RmsNormOne]
 
@@ -294,11 +294,11 @@ proc loadQwen35MoeModelRaw(modelPath: string, device = kCPU): Qwen35MoeModel =
     let ffn = GatedBlockSparseFFN.load(
       view, cfgJson, mlpPrefix, config.numExpertsPerTok, device)
 
-    var gdn: GatedDeltaNet = nil
+    var gdn: GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus] = nil
     var attn: RopeElementWiseGatedAttention[RmsNormOne] = nil
     if config.layerTypes[i] == alkGatedDeltaNet:
       let gdnPrefix = lp & ".linear_attn"
-      gdn = GatedDeltaNet.load(
+      gdn = GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus].load(
         view, cfgJson, gdnPrefix, i,
         config.linearNumKeyHeads, config.linearNumValueHeads,
         config.linearKeyHeadDim, config.linearValueHeadDim,

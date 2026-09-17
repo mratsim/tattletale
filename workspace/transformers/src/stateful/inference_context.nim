@@ -49,6 +49,13 @@ type InferenceContext* = ref object
   ## first use by the GDN layer forward, indexed by layer index.
   gdnConvState*: seq[Tensor]  ## Per GDN layer: [conv_dim, 3] BF16 causal-conv history
   gdnSsmState*: seq[Tensor]   ## Per GDN layer: [num_v_heads, Dk, Dv] F32 SSM state
+  ## KDA per-layer recurrent state, same lifecycle as the GDN slots:
+  ## causal-conv history is per branch, q/k/v each keeping k-1 tokens
+  ## (the KDA checkpoints carry one conv weight per branch) and the f32
+  ## SSM state is the per-channel-decay delta-rule core.
+  kdaConvState*: seq[array[3, Tensor]]
+    ## Per KDA layer: branch q/k/v histories, each [branch_dim, k-1] BF16
+  kdaSsmState*: seq[Tensor]   ## Per KDA layer: [num_heads, Dk, Dv] F32 SSM state
 
 proc init*(
     _: type InferenceContext,
@@ -83,12 +90,9 @@ proc ensureGdnStates*(
   ## Allocate the GDN conv and SSM states for `layer_idx` (zeros).
   ##
   ## The GDN layer forward calls this on every pass. The seqs are sized to
-  ## the context's layer count on first use, then only nil slots are filled.
-  ## This avoids reallocating the seq payloads mid-forward, which corrupted
-  ## the heap when interleaved with the model's tensor alloc/free churn
-  ## (two payload pointers converged, causing use-after-free SIGSEGVs in
-  ## repeated forwards). clearState drops the seqs so a new sequence starts
-  ## from zero state.
+  ## the context's layer count on first use, then only nil slots are filled;
+  ## the seq payloads never reallocate mid-forward. clearState drops the
+  ## seqs so a new sequence starts from zero state.
   ##
   ## TODO: chunked GDN prefill and long-context state management (rolling
   ## the conv/SSM window past the kernel size) are future work. The current
@@ -101,6 +105,30 @@ proc ensureGdnStates*(
       convDim, 3, F.tensorOptions(F.kBFloat16, device))
     ctx.gdnSsmState[layer_idx] = F.zeros(
       numVHeads, keyDim, valueDim, F.tensorOptions(F.kFloat32, device))
+
+proc ensureKdaStates*(
+    ctx: var InferenceContext,
+    layer_idx, queryDim, keyDim, valueDim, numHeads, keyHeadDim, valueHeadDim,
+    convKernel: int,
+    device: DeviceKind) =
+  ## Allocate layer layer_idx's KDA states zero-filled: three bf16 conv
+  ## tail buffers for the q/k/v branches (tail = convKernel - 1) and one
+  ## f32 SSM state numHeads x keyHeadDim x valueHeadDim. The state seqs
+  ## grow to the layer count once, only nil slots allocate; clearState
+  ## drops both seqs so the next sequence restarts from zero.
+  if ctx.kdaConvState.len <= layer_idx:
+    ctx.kdaConvState.setLen(max(ctx.num_layers, layer_idx + 1))
+    ctx.kdaSsmState.setLen(max(ctx.num_layers, layer_idx + 1))
+  if ctx.kdaConvState[layer_idx][0].isNil:
+    let tail = convKernel - 1
+    ctx.kdaConvState[layer_idx][0] = F.zeros(
+      queryDim, tail, F.tensorOptions(F.kBFloat16, device))
+    ctx.kdaConvState[layer_idx][1] = F.zeros(
+      keyDim, tail, F.tensorOptions(F.kBFloat16, device))
+    ctx.kdaConvState[layer_idx][2] = F.zeros(
+      valueDim, tail, F.tensorOptions(F.kBFloat16, device))
+    ctx.kdaSsmState[layer_idx] = F.zeros(
+      numHeads, keyHeadDim, valueHeadDim, F.tensorOptions(F.kFloat32, device))
 
 proc setRopeForPositions*(ctx: var InferenceContext, rotary: RotaryPositionEmbedding) =
   ## Populate ctx.cos and ctx.sin from the model's RoPE cache.
@@ -130,6 +158,8 @@ proc clearState*(ctx: var InferenceContext) =
   ctx.v_gather_buf = nil
   ctx.gdnConvState = default(seq[Tensor])
   ctx.gdnSsmState = default(seq[Tensor])
+  ctx.kdaConvState = default(seq[array[3, Tensor]])
+  ctx.kdaSsmState = default(seq[Tensor])
 
 proc setPositionIds*(ctx: var InferenceContext, position_ids: Tensor) =
   ## Set position_ids for current forward pass.
@@ -141,13 +171,7 @@ proc setPositionIds*(ctx: var InferenceContext, position_ids: Tensor) =
   ctx.position_ids = position_ids
 
 proc setPositionIdsArange*(ctx: var InferenceContext, seq_len: int, offset: int = 0, device: DeviceKind = kCPU) =
-  ## Set position_ids to arange(offset, offset+seq_len) as int64.
-  ##
-  ## Convenience proc for common case.
-  ##
-  ## Note: dtype is now kInt64 (changed from previous default).
-  ## The old `device=device` keyword argument was replaced with
-  ## explicit `tensorOptions(kInt64, device)`.
+  ## Set position_ids to arange(offset, offset+seq_len), kInt64.
   ##
   ## Args:
   ##   seq_len: Sequence length

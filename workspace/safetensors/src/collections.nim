@@ -115,15 +115,6 @@ proc getMmapView*(view: SafetensorsCollection, tensorName: string): MemSlice {.i
   privateAccess(SafetensorObj)
   view.files[view.fileOf(tensorName)].getMmapView(tensorName)
 
-proc sumTensorBytes(weightMap: Table[string, string],
-                    files: Table[string, Safetensor]): int =
-  ## Sum of element count times byte width over every tensor named by `weightMap`.
-  ## Computed from the owning safetensor file headers, tensor bytes stay on disk.
-  privateAccess(SafetensorObj)
-  for tensorName, fileName in weightMap.pairs():
-    let info = files[fileName].tensors[tensorName]
-    result += info.shape.elementCount() * stElementBytes(info.dtype)
-
 proc open*(_: typedesc[SafetensorsCollection], path: string): SafetensorsCollection =
   ## Open one checkpoint as a tensor-keyed collection and validate it.
   ##
@@ -131,13 +122,12 @@ proc open*(_: typedesc[SafetensorsCollection], path: string): SafetensorsCollect
   ## - a checkpoint directory carrying `model.safetensors.index.json`:
   ##   the weight map resolves tensor keys across the referenced safetensor files
   ## - a checkpoint directory without an index: every `.safetensors` file in it is indexed.
-  ##   A key claimed by two files raises loudly.
+  ##   A key claimed by two files raises, naming the key.
   ## - a `.safetensors` file path whose own header is the whole weight map
   ##
   ## Raises ValueError naming the tensor or file for these defects:
   ## - an index that is missing or malformed
   ## - a referenced safetensor file that is missing
-  ## - a `metadata.total_size` that disagrees with the summed tensor bytes
   ## - an index entry that its safetensor file does not carry
   ## - a file whose header is defective
   ## - a key claimed by two safetensor files
@@ -203,13 +193,9 @@ proc open*(_: typedesc[SafetensorsCollection], path: string): SafetensorsCollect
         "safetensors: collection: index entry '" & tensorName &
         "' is absent from the safetensor file " & fileName)
 
-    let summedTensorBytes = sumTensorBytes(weightMap, files)
-    checkValue(summedTensorBytes == totalSize,
-      "safetensors: collection: summed tensor bytes " &
-      $summedTensorBytes &
-      " disagree with metadata.total_size " & $totalSize &
-      " in " & indexPath)
-
+    # metadata.total_size is recorded, not enforced: real checkpoints
+    # ship stale counts. Tensor integrity is enforced at open time
+    # instead (the header parses, every weight_map entry exists).
     return SafetensorsCollection(weightMap: weightMap, files: files)
 
   # No index in the directory: index every .safetensors file it carries.
