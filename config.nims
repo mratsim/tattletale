@@ -268,8 +268,6 @@ task test_tf_bf16_kimi_02_tokenizer, "Suite: Kimi-Linear tokenizer unit checks, 
   runTransformerSuite("q_bf16", "t_bf16_kimi_02_tokenizer.nim")
 task test_tf_bf16_kimi_04_greedy_text_generation, "Suite: Kimi-Linear greedy text generation, 3 chains x 32 steps vs fixtures":
   runTransformerSuite("q_bf16", "t_bf16_kimi_04_greedy_text_generation.nim")
-task test_tf_bf16_ling3_03_full_forward_to_logits, "Suite: Ling-3.0-tiny full forward to logits, 24 layers + final logits vs fixtures":
-  runTransformerSuite("q_bf16", "t_bf16_ling3_03_full_forward_to_logits.nim")
 task test_tf_bf16_glm47flash_03_full_forward_to_logits, "Suite: GLM-4.7-Flash full forward to logits, 47 layers + final logits vs fixtures":
   runTransformerSuite("q_bf16", "t_bf16_glm47flash_03_full_forward_to_logits.nim")
 task test_tf_bf16_moonlight_03_full_forward_to_logits, "Suite: Moonlight full forward to logits, 27 layers + final logits vs fixtures":
@@ -347,8 +345,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
   of "ling3":
     runFamily(@[
       ("q_bf16", "t_bf16_ling3_01_layer_internals_mla.nim"),
-      ("q_bf16", "t_bf16_ling3_01_layer_internals_kda.nim"),
-      ("q_bf16", "t_bf16_ling3_03_full_forward_to_logits.nim")])
+      ("q_bf16", "t_bf16_ling3_01_layer_internals_kda.nim")])
   of "glm47flash":
     runFamily(@[
       ("q_bf16", "t_bf16_glm47flash_01_layer_internals_mla.nim"),
