@@ -108,6 +108,16 @@ proc toInstantiatedProcSignature(ctx: var GpuContext, reg: var TypeRegistry,
     staticParamPositions: staticParamPositions
   )
 
+proc isGenericProc(node: NimNode): bool =
+  # An instantiated generic keeps its params in an `nnkBracket` at `impl[5]`.
+  let impl = node.getImpl()
+  if impl.kind notin [nnkProcDef, nnkFuncDef]:
+    return false
+  if impl[2].kind == nnkGenericParams:
+    return true
+  result = impl.len > 5 and impl[5].kind == nnkBracket and
+    impl[5].len > 1 and impl[5][1].kind == nnkGenericParams
+
 proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
   ## Returns the name for the function. Either the symbol name _or_
   ## the `{.cudaName.}` pragma argument.
@@ -115,7 +125,10 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
   # check if the implementation has a pragma
 
   if n.kind == nnkSym:
-    let sig = n.repr & "_" & n.signatureHash()
+    var sig = n.repr & "_" & n.signatureHash()
+    if n.symKind in {nskProc, nskFunc} and isGenericProc(n):
+      # `signatureHash` erases static-param bindings, so instantiations share one key.
+      sig &= "_" & n.symBodyHash()
     if sig in ctx.sigTab:
       result = ctx.sigTab[sig]
     else:
@@ -258,12 +271,15 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     doAssert inst.isBuiltIn()
     return
   fn.pAttributes.incl attDevice # make sure this is interpreted as a device function
-  doAssert fn.pName.symbol.iSym == name.symbol.iSym, "Not matching"
+  # Bind the body, which names the generic definition, to this instantiation's ident.
+  fn.pName = name
   # now overwrite the identifier's `iName` field by its `iSym` so that different
   # generic insts have different
   fn.pName.symbol.name = fn.pName.symbol.iSym
   name.symbol.name = fn.pName.symbol.iSym ## update the name of the called function
   ctx.genericInsts[fn.pName] = fn
+  # Iterating passes like `ensureBlock` only see instantiations in `allFnTab`.
+  ctx.allFnTab[fn.pName] = fn
 
 proc isExpression(n: GpuAst): bool =
   ## Returns whether the given AST node is an expression
@@ -777,7 +793,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     # Sanitize the identifier name: backticks are used by Nim for gensym
     # symbols (e.g., ``field`gensym229``) but are invalid in C.
     let sanitized = node.repr.multiReplace(("`", "_"))
-    let s = sanitized & "_" & node.signatureHash()
+    var s = sanitized & "_" & node.signatureHash()
+    if node.symKind in {nskProc, nskFunc} and isGenericProc(node):
+      s &= "_" & node.symBodyHash()
     # NOTE: The reason we have a tab of known symbols is not to keep the same _reference_ to each
     # symbol, but rather to allow having the same symbol kind and appropriate type for each
     # symbol `GpuAst` (of kind `gpuIdent`), which is set in the caller of this call.
