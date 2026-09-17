@@ -49,8 +49,6 @@ const
                   "Big_blue_whales_eat_krill_32_steps"]
 
 proc main() =
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-
   echo "Loading model..."
   let model = loadModel($ModelPath, testDevice())
   echo "Model loaded."
@@ -58,18 +56,20 @@ proc main() =
   echo "Replay device: " & deviceName(device)
   let cfg = model.getConfig()
 
-  # Composed depth of one full-stack forward, used as the assertArgMax depth.
-  # Moonlight is a pure MLA stack, every block runs one MLA mixer and one
-  # hidden mixer, and the stage spelling follows the model's own 03 suites:
-  # - each MLA mixer composes 3 accumulation stages
-  # - each routed block output composes 2 stages, past the grouped_mm record
-  # - each leading dense block output composes 1 stage, the dense count is
-  #   first_k_dense_replace in the checkpoint config
-  # - the final norm and the head projection add 2 stages
-  # This model's getConfig leaves layerKinds empty, the schedule carries no
-  # per-layer entry to loop, so the depth derives from the layer count.
-  # At first_k_dense_replace = 1 the sum is 3N + 2(N - 1) + 1 + 2 = 5N + 1,
-  # the depth the 03 full-forward suite carries for this model's final logits.
+  # Depth of one full-stack forward, used as the assertArgMax depth.
+  # Moonlight's getConfig leaves layerKinds empty.
+  # Depth derives from the layer count N alone, per the 03 suites' stage spelling.
+  #
+  # | Stage source                   | Stages            |
+  # |--------------------------------|-------------------|
+  # | MLA mixer accumulation         | 3 per layer       |
+  # | Routed block output            | 2 per layer       |
+  # | Dense block output             | 1 per dense layer |
+  # | Final norm and head projection | 2                 |
+  #
+  # The dense count comes from `first_k_dense_replace` in the checkpoint config.
+  # At 1 dense layer the sum is 3N + 2(N - 1) + 1 + 2 = 5N + 1.
+  # depth the 03 full-forward suite carries for final logits.
   let denseBlocks =
     parseFile($ModelPath / "config.json"){"first_k_dense_replace"}.getInt()
   var composedDepth = 0
