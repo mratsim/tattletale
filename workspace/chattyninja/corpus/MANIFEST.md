@@ -28,7 +28,7 @@ rows column counts fixture frames, split ok / err (`err_*` rows carry `expected_
 Column notes:
 
 - macro (chain, cycle):
-  count of `{% macro %}` defs (37 total, matching the inventory), the longest static call chain,
+  count of `{% macro %}` defs (37 total), the longest static call chain,
   and cycle presence, measured by string-stripped call-graph DFS per template
 - ns assign:
   `ns.field = ...` change sites, the `nkSetNs` fixture demand. The `namespace(...)` creation appears
@@ -89,7 +89,7 @@ The cheapest covering pair is **northminicode10** with macros x6, the capture, `
 and `set` /`setNs`, plus **lfm25** with macros x3, a generation span whose 5 rows all carry recorded spans,
 plus `setNs`, `default` /`join`/`trim` filters and `mapping` /`string` tests. Together 17 KB, not 27 KB.
 
-The `gemma4` +`lagunaxs21` alternative costs 27 KB. The mandated recurring-macro test cannot use `kimi`,
+The `gemma4` +`lagunaxs21` alternative costs 27 KB. Recurring-macro coverage cannot use `kimi`,
 whose single macro does not self-call in these files.
 
 It runs **gptoss20b** `render_typescript_type` (self-recursive on schema `items`/`variant`) or **gemma4**

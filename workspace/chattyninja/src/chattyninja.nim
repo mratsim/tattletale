@@ -5,11 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# chattyninja v4 POC. The compiled form and its driver.
+# Compiled chattyninja templates and their render driver.
 #
 # Lifecycle:
 #
-# | Phase    | Behavior                                                                                                                                                              |
+# | Step     | Behavior                                                                                                                                                              |
 # | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 # | parse    | `parseTemplate` reads template text and appends nodes in source order, resolving the whitespace policy and interning names into `Tables`                              |
 # | load     | the caller builds `Machine` from the arena plus the borrowed template text, so the artifact holds no mutable state and cannot outlive the text it points into         |
@@ -17,7 +17,7 @@
 # | dispatch | `steps` is total over `NodeKind`, so the executable meaning of a node is a pure function of its kind and no node carries a proc field or program counter              |
 #
 # The re-entry contract. A step may be re-entered, and resumption state comes from the top
-# of the driver's frame stack (frame identity plus phase), never from a node. The re-entering kinds
+# of the driver's frame stack (the frame plus its resume state), never from a node. The re-entering kinds
 # are `nkFor`, `nkSetBlock` and `nkGeneration`, whose body returns control to them. `nkIf`
 # is single-entry and single-activation because parse time backpatches its branch bodies past the whole chain.
 #
@@ -199,10 +199,9 @@ proc stepSet(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   d.curNode = nd.succ
 
 proc gap(kindName, corpusSite: string): void {.noreturn.} =
-  ## Reports a declared construct whose implementation is outside this stage, naming what it would
-  ## serve rather than leaving the gap silent.
-  raise newImplementError("v4 gap: " & kindName & " is declared and dispatched but not " &
-      "implemented in this stage; " & corpusSite)
+  ## Reports a declared construct that is not implemented, naming what the corpus demands of it
+  ## rather than leaving the gap silent.
+  raise newImplementError(kindName & " is not implemented; " & corpusSite)
 
 proc stepBreak(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Unwinds to the nearest for-frame and continues at its successor, stopping at a macro-call

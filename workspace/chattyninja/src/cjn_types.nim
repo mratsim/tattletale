@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# chattyninja v4 POC. Core data covers the compiled artifact, the parse-built side tables, and the render
+# Core data of the chattyninja engine. Covers the compiled artifact, the parse-built side tables, and the render
 # driver. See chattyninja.nim for the dispatch table and the `items` pull interface.
 
 import cjn_errors, cjn_values
@@ -112,8 +112,8 @@ const
   # instead of overflowing.
   MacroDepthCap* {.intdefine.} = 16
 
-  # The expression walker recurses on nesting. Deepest paren nesting measured in a corpus expression
-  # is 10 (`northminicode10`, inside a macro body), so 24 clears the observed maximum with margin
+  # The expression walker recurses on nesting. Deepest paren nesting measured over the corpus
+  # templates is 3 (`gemma4`, `lfm25`), so 24 clears the observed maximum with margin
   # while staying far below the depth a C stack would overflow on.
   ExprDepthCap* {.intdefine.} = 24
 

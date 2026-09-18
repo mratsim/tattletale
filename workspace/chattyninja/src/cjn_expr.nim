@@ -5,9 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# chattyninja v4 POC. The fused expression walker:
-#   an expression is template text, and one
-# `lo..hi` span of it is parsed and evaluated in a single pass. No expression becomes a node.
+# Fused expression walker of the chattyninja engine.
+# An expression is template text, and one `lo..hi` span of it is parsed and evaluated
+# in a single pass. No expression becomes a node.
 #
 # A dry pass advances tokens without evaluating. Three places need it, and all three are the same
 # mechanism:
@@ -16,7 +16,7 @@
 # - a ternary is located by a dry scan so the condition can be evaluated first and exactly one
 #   branch then runs. Re-running a branch that holds `strftime_now` or `raise_exception` would
 #   change bytes or raise from the branch not taken
-# - skipped branches never reach the registries, so a construct outside the corpus cannot fail
+# - skipped branches never reach the registries, so an unimplemented construct cannot fail
 #   a render from a branch Jinja would not have entered
 
 import std/[math, strbasics, strutils, times, unicode]
@@ -322,9 +322,8 @@ func runeCount(s: string): int =
 # ---------------------------------------------------------------------------
 #
 # Filters, tests, methods and globals dispatch by name. `tojson` is one filter name exactly like
-# `trim`, never a construct. A nil entry is a declared name whose implementation is outside
-# the corpus this POC renders, and reaching it raises `ImplementedError` rather
-# than answering wrongly.
+# `trim`, never a construct. A nil entry is a declared name no template in the corpus uses,
+# and reaching it raises `NotImplementedError` rather than answering wrongly.
 
 type
   FilterName = enum
@@ -362,13 +361,12 @@ const
   ]
 
 func gapWhat(what: string, name: openArray[char]): void {.noreturn.} =
-  ## Reports a declared registry name whose implementation is outside the corpus, so a gap is never
+  ## Reports a declared registry name that no template in the corpus uses, so a gap is never
   ## mistaken for a wrong answer.
   ## Only this report quotes `name`, so the span is copied here and nowhere else.
   var quoted = ""
   quoted.add name
-  raise newImplementError("v4 gap: " & what & " `" & quoted &
-      "` is declared and dispatched but fixture-zero in the corpus, so it is not implemented")
+  raise newImplementError(what & " `" & quoted & "` is not implemented; no template in the corpus uses it")
 
 proc tojsonFilter(v: Value, args: seq[Arg]): Value =
   ## Renders JSON. `ensure_ascii` and `separators` are the only kwargs the corpus passes.

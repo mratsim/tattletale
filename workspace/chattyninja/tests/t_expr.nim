@@ -170,7 +170,7 @@ block gapIsLoud:
     discard render("[2, 1] | map('int')")
   except NotImplementedError as e:
     reported = e.msg
-  doAssert "v4 gap" in reported and "map" in reported, reported
+  doAssert "not implemented" in reported and "map" in reported, reported
 doAssert render("range(3)") == "[0, 1, 2]"
 
 # Slices: bounds, and the step of `messages[::-1]`

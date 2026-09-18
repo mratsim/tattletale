@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# chattyninja v4 POC. Parser turns template text into a flat node arena.
+# The chattyninja parser turns template text into a flat node arena.
 #
 # Lifecycle:
 #
@@ -527,10 +527,9 @@ proc parseSet(p: var P): Head =
   Head(head: idx, tails: @[idx])
 
 proc gap(what, corpusSite: string): Head =
-  ## Reports a declared construct whose implementation is outside this stage, naming the corpus
-  ## demand it would serve.
-  raise newImplementError("v4 gap: " & what & " is declared and dispatched but not implemented in " &
-      "this stage; " & corpusSite)
+  ## Reports a declared construct that is not implemented, stating what the corpus demands of it
+  ## or that no template in the corpus demands it.
+  raise newImplementError(what & " is not implemented; " & corpusSite)
 
 proc parseConstruct(p: var P): Head =
   ## Dispatches one `{% %}` tag to its construct parser.
@@ -551,8 +550,8 @@ proc parseConstruct(p: var P): Head =
   of "endfor", "endif", "else", "elif", "endset":
     raise err("`{% " & kw & " %}` has no matching opener")
   of "endmacro", "call", "filter", "block", "extends", "include", "import", "from":
-    gap("`{% " & kw & " %}`", "corpus demand is 1 `{% block %}` in k25.jinja and 0 call, filter, " &
-        "endmacro-without-macro, extends, include or from sites")
+    gap("`{% " & kw & " %}`", "no template in the corpus uses call, filter, block, endmacro " &
+        "without a matching macro, extends, include, import or from")
   else:
     raise err("unknown `{% " & kw & " %}` tag")
 

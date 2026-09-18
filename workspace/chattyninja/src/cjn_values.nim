@@ -15,7 +15,7 @@ import cjn_errors
 type
   ValueKind* = enum
     ## Jinja value tiers the corpus reaches. Float is carried for JSON fidelity only.
-    ## Arithmetic on floats is fixture-zero and not implemented.
+    ## No template in the corpus does float arithmetic, so it is not implemented.
     vkUndefined
     vkNone
     vkBool

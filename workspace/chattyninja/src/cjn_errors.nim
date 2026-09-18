@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# chattyninja v4 POC. Template-level failure surface.
+# Template-level failure surface of the chattyninja engine.
 
 type
   TemplateError* = ref object of CatchableError
@@ -14,7 +14,7 @@ type
     ## recorded on the corpus `err_*` rows.
 
   NotImplementedError* = ref object of CatchableError
-    ## A construct that is declared and dispatched but deliberately left out of this stage, so a gap
+    ## A construct that is declared and dispatched but not implemented, so a gap
     ## surfaces as a gap and never as a wrong answer.
 
 proc err*(msg: string): TemplateError =
