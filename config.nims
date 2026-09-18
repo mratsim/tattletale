@@ -169,6 +169,14 @@ task test_safetensors, "Test workspace/safetensors":
     for cmd in getTestCommands("workspace/safetensors/tests", compiler = "nim cpp"):
       runCmd(cmd)
 
+task test_chattyninja, "Test workspace/chattyninja template engine suites":
+  withDir(ProjectRoot):
+    runCmd "./workspace/chattyninja/run_tests.sh"
+
+task test_chattyninja_corpus, "Test workspace/chattyninja recorded corpus fixtures":
+  withDir(ProjectRoot):
+    runCmd "python3 workspace/chattyninja/tests/check_corpus.py"
+
 # Granular transformer suite tasks
 # ===================================================
 # Per-suite and per-family tasks so an agent picks exactly the suites
