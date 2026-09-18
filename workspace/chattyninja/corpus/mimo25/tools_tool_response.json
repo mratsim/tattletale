@@ -1,0 +1,75 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "mimo25",
+  "template": {
+    "dir": "MiMo-V2.5",
+    "source": "tokenizer_config.json:chat_template",
+    "sha256": "3134ac101acd29d3ab41297707cc1a85699f5f0acb283fdeb0681e3750998403"
+  },
+  "row": "tools_tool_response",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "Answer through the tool."
+    },
+    {
+      "role": "user",
+      "content": "Weather in Tokyo, then Kyoto."
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "function": {
+            "name": "get_weather",
+            "arguments": {
+              "city": "東京"
+            }
+          }
+        },
+        {
+          "function": {
+            "name": "get_weather",
+            "arguments": {
+              "city": "京都",
+              "days": 2
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Tokyo sunny 18C."
+    },
+    {
+      "role": "tool",
+      "content": "Kyoto cloudy 16C."
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for one city",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "kwargs": {},
+  "generation_spans": [],
+  "rendered": "<|im_start|>system\nAnswer through the tool.\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou have access to the following functions:\n\n<tools>\n<function>\n<name>get_weather</name>\n<description>Current weather for one city</description>\n<parameters>\n<parameter>\n<name>city</name>\n<type>string</type>\n</parameter>\n<required>[\"city\"]</required>\n</parameters>\n</function>\n</tools>\n\nFor each function call, output the function name and arguments in the following format:\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>value_1</parameter>\n<parameter=example_parameter_2>This is the value for the second parameter\nthat can span\nmultiple lines</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- DO NOT use function calls inside <think></think> tags.\n- The value enclosed between parameter tags is preserved exactly as-is, including newlines and spaces.\n</IMPORTANT><|im_end|><|im_start|>user\nWeather in Tokyo, then Kyoto.<|im_end|><|im_start|>assistant\n<think></think><tool_call>\n<function=get_weather>\n<parameter=city>東京</parameter>\n</function>\n</tool_call><tool_call>\n<function=get_weather>\n<parameter=city>京都</parameter>\n<parameter=days>2</parameter>\n</function>\n</tool_call><|im_end|><|im_start|>tool\n<tool_response>\nTokyo sunny 18C.\n</tool_response>\n<tool_response>\nKyoto cloudy 16C.\n</tool_response>\n<|im_end|><|im_start|>assistant\n"
+}

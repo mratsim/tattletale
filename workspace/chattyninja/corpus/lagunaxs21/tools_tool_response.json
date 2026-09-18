@@ -1,0 +1,70 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "lagunaxs21",
+  "template": {
+    "dir": "Laguna-XS-2.1",
+    "source": "chat_template.jinja",
+    "sha256": "2d3c724b3c2e9eb71fe9ccc5423ff268a370a8bfa89e9238b6de14fe000825c8"
+  },
+  "row": "tools_tool_response",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "Answer through the tool."
+    },
+    {
+      "role": "user",
+      "content": "Weather in Tokyo?"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_001",
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": {
+              "city": "Tokyo"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_001",
+      "content": "Sunny, 21 C."
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for one city",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "kwargs": {},
+  "generation_spans": [
+    [
+      440,
+      557
+    ]
+  ],
+  "rendered": "〈|EOS|〉<system>Answer through the tool.\n\n### Tools\n\nYou may call functions to assist with the user query.\nAll available function signatures are listed below:\n<available_tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Current weather for one city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]}}}\n</available_tools></system>\n<user>Weather in Tokyo?</user>\n<assistant></think><tool_call>get_weather<arg_key>city</arg_key><arg_value>Tokyo</arg_value></tool_call></assistant>\n<tool_response>Sunny, 21 C.</tool_response>\n<assistant></think>"
+}

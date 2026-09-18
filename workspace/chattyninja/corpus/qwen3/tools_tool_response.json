@@ -1,0 +1,62 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "qwen3",
+  "template": {
+    "dir": "Qwen3-0.6B",
+    "source": "tokenizer_config.json:chat_template",
+    "sha256": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8"
+  },
+  "row": "tools_tool_response",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "Answer through the tool."
+    },
+    {
+      "role": "user",
+      "content": "What is the weather in Tokyo? Ask the tool."
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "function": {
+            "name": "get_weather",
+            "arguments": {
+              "city": "東京"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Sunny, 18 degrees."
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for one city",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "kwargs": {},
+  "generation_spans": [],
+  "rendered": "<|im_start|>system\nAnswer through the tool.\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Current weather for one city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]}}}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n<|im_start|>user\nWhat is the weather in Tokyo? Ask the tool.<|im_end|>\n<|im_start|>assistant\n<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"東京\"}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\nSunny, 18 degrees.\n</tool_response><|im_end|>\n<|im_start|>assistant\n"
+}

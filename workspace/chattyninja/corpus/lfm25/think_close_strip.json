@@ -1,0 +1,36 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "lfm25",
+  "template": {
+    "dir": "LFM2.5-230M",
+    "source": "chat_template.jinja",
+    "sha256": "c5b67247c9f736f6c40eaa91ae1ef27dc67f5b041eedaadb97a1bea5030fb0ff"
+  },
+  "row": "think_close_strip",
+  "add_generation_prompt": false,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Sketch the answer first."
+    },
+    {
+      "role": "assistant",
+      "content": "draft line.</think>\nfinal answer."
+    },
+    {
+      "role": "user",
+      "content": "Now settle it."
+    }
+  ],
+  "tools": null,
+  "kwargs": {
+    "bos_token": "<|startoftext|>"
+  },
+  "generation_spans": [
+    [
+      89,
+      113
+    ]
+  ],
+  "rendered": "<|startoftext|><|im_start|>user\nSketch the answer first.<|im_end|>\n<|im_start|>assistant\nfinal answer.<|im_end|>\n<|im_start|>user\nNow settle it.<|im_end|>\n"
+}

@@ -1,0 +1,60 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "gptoss20b",
+  "template": {
+    "dir": "gpt-oss-20b",
+    "source": "chat_template.jinja",
+    "sha256": "a4c9919cbbd4acdd51ccffe22da049264b1b73e59055fa58811a99efbd7c8146"
+  },
+  "row": "err_both_fields",
+  "add_generation_prompt": false,
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the tallest mountain in Japan?"
+    },
+    {
+      "role": "assistant",
+      "content": "note",
+      "thinking": "note too",
+      "tool_calls": [
+        {
+          "id": "call_002",
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": {
+              "city": "Osaka"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for one city",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "kwargs": {},
+  "expected_error": {
+    "exception": "TemplateError",
+    "message": "Cannot pass both content and thinking in an assistant message with tool calls! Put the analysis message in one or the other, but not both."
+  },
+  "epoch": 1789315200
+}

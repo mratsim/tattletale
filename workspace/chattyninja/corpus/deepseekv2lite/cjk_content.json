@@ -1,0 +1,36 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "deepseekv2lite",
+  "template": {
+    "dir": "DeepSeek-V2-Lite",
+    "source": "tokenizer_config.json:chat_template",
+    "sha256": "8aeba567270fa9a8d5372caf4b04affea947c4421d96adc01e3ff94021b0ae8e"
+  },
+  "row": "cjk_content",
+  "add_generation_prompt": false,
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是乐于助人的助手。"
+    },
+    {
+      "role": "user",
+      "content": "用一句话介绍月球。"
+    },
+    {
+      "role": "assistant",
+      "content": "月球是地球唯一的天然卫星。"
+    },
+    {
+      "role": "user",
+      "content": "谢谢！"
+    }
+  ],
+  "tools": null,
+  "kwargs": {
+    "bos_token": "<｜begin▁of▁sentence｜>",
+    "eos_token": "<｜end▁of▁sentence｜>"
+  },
+  "generation_spans": [],
+  "rendered": "<｜begin▁of▁sentence｜>你是乐于助人的助手。\n\nUser: 用一句话介绍月球。\n\nAssistant: 月球是地球唯一的天然卫星。<｜end▁of▁sentence｜>User: 谢谢！\n\n"
+}

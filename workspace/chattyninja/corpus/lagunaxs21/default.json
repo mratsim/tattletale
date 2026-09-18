@@ -1,0 +1,21 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "lagunaxs21",
+  "template": {
+    "dir": "Laguna-XS-2.1",
+    "source": "chat_template.jinja",
+    "sha256": "2d3c724b3c2e9eb71fe9ccc5423ff268a370a8bfa89e9238b6de14fe000825c8"
+  },
+  "row": "default",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Summarize the plot of Hamlet briefly."
+    }
+  ],
+  "tools": null,
+  "kwargs": {},
+  "generation_spans": [],
+  "rendered": "〈|EOS|〉<system>You are a helpful, conversationally-fluent assistant made by Poolside. You are here to be helpful to users through natural language conversations.</system>\n<user>Summarize the plot of Hamlet briefly.</user>\n<assistant></think>"
+}

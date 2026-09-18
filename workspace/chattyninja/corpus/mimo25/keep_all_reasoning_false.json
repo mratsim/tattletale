@@ -1,0 +1,32 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "mimo25",
+  "template": {
+    "dir": "MiMo-V2.5",
+    "source": "tokenizer_config.json:chat_template",
+    "sha256": "3134ac101acd29d3ab41297707cc1a85699f5f0acb283fdeb0681e3750998403"
+  },
+  "row": "keep_all_reasoning_false",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Which Martian moon is larger?"
+    },
+    {
+      "role": "assistant",
+      "reasoning_content": "Phobos at 22 km, Deimos at 12 km.",
+      "content": "Phobos is larger."
+    },
+    {
+      "role": "user",
+      "content": "And its orbital period?"
+    }
+  ],
+  "tools": null,
+  "kwargs": {
+    "keep_all_reasoning": false
+  },
+  "generation_spans": [],
+  "rendered": "<|im_start|>system\nYou are MiMo, a helpful AI assistant engineered by Xiaomi.<|im_end|><|im_start|>user\nWhich Martian moon is larger?<|im_end|><|im_start|>assistant\n<think></think>Phobos is larger.<|im_end|><|im_start|>user\nAnd its orbital period?<|im_end|><|im_start|>assistant\n"
+}

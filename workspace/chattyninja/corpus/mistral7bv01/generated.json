@@ -1,0 +1,27 @@
+{
+  "schema": "chattyninja-chat-template-generated-1",
+  "suite": "mistral7bv01",
+  "template": {
+    "dir": "mistral7bv01",
+    "source": "suite-template.jinja"
+  },
+  "sha256": "95643f3d5c9df0c880946b59b52b2317b7721713fb8b52781e521452a2e76b02",
+  "generator": {
+    "clone": "mistral-common",
+    "clone_version": "1.11.7",
+    "clone_commit": "e224216f4cdf1f3f3ff1484dbe648ef203e4e1cd",
+    "entry": "mistral_common.integrations.chat_templates.template_generator.build_chat_template",
+    "config": {
+      "version": "v1",
+      "spm": true,
+      "image_support": false,
+      "audio_support": false,
+      "thinking_support": false,
+      "plain_thinking_support": null,
+      "use_special_token_variables": true
+    },
+    "call": "build_chat_template(TemplateConfig(version=TokenizerVersion('v1'), spm=True, image_support=False, audio_support=False, thinking_support=False, plain_thinking_support=None, use_special_token_variables=True))",
+    "load_mode": "package-root shim plus AST-extracted SpecialTokens and TokenizerVersion enums, the clone stays untouched",
+    "era_rationale": "v1 spm matches the Mistral-7B-v0.1 LlamaTokenizer era whose repo carries no chat_template key"
+  }
+}

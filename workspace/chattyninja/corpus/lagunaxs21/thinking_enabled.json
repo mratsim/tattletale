@@ -1,0 +1,37 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "lagunaxs21",
+  "template": {
+    "dir": "Laguna-XS-2.1",
+    "source": "chat_template.jinja",
+    "sha256": "2d3c724b3c2e9eb71fe9ccc5423ff268a370a8bfa89e9238b6de14fe000825c8"
+  },
+  "row": "thinking_enabled",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Summarize the plot of Hamlet briefly."
+    },
+    {
+      "role": "assistant",
+      "reasoning_content": "The plot turns on feigned madness.",
+      "content": "A prince feigns madness for revenge."
+    },
+    {
+      "role": "user",
+      "content": "And the ending?"
+    }
+  ],
+  "tools": null,
+  "kwargs": {
+    "enable_thinking": true
+  },
+  "generation_spans": [
+    [
+      222,
+      331
+    ]
+  ],
+  "rendered": "〈|EOS|〉<system>You are a helpful, conversationally-fluent assistant made by Poolside. You are here to be helpful to users through natural language conversations.</system>\n<user>Summarize the plot of Hamlet briefly.</user>\n<assistant><think>The plot turns on feigned madness.</think>A prince feigns madness for revenge.</assistant>\n<user>And the ending?</user>\n<assistant><think>"
+}

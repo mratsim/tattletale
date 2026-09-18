@@ -1,0 +1,29 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "kimi",
+  "template": {
+    "dir": "Kimi-Linear-48B-A3B-Instruct",
+    "source": "chat_template.jinja",
+    "sha256": "75e3cd76bd26b77c02507eb35073b66c8ffd0c88eab185ebc6f8c6e425161809"
+  },
+  "row": "cjk_content",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是乐于助人的助手。"
+    },
+    {
+      "role": "user",
+      "content": "用一句话介绍月球。"
+    },
+    {
+      "role": "assistant",
+      "content": "月球是地球唯一的天然卫星，平均距离约三十八万公里。"
+    }
+  ],
+  "tools": null,
+  "kwargs": {},
+  "generation_spans": [],
+  "rendered": "<|im_system|>system<|im_middle|>你是乐于助人的助手。<|im_end|><|im_user|>user<|im_middle|>用一句话介绍月球。<|im_end|><|im_assistant|>assistant<|im_middle|>月球是地球唯一的天然卫星，平均距离约三十八万公里。<|im_end|><|im_assistant|>assistant<|im_middle|>"
+}

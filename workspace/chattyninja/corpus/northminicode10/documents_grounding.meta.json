@@ -1,0 +1,8 @@
+{
+  "row": "documents_grounding",
+  "kwargs": {
+    "bos_token": "<BOS_TOKEN>",
+    "grounding": "enabled"
+  },
+  "template_sha256": "d8366efb9f07c571da620ce6a924594fc52c80273a0fbb46a38b643972df95fd"
+}

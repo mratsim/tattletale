@@ -1,0 +1,25 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "glm47flash",
+  "template": {
+    "dir": "GLM-4.7-Flash",
+    "source": "chat_template.jinja",
+    "sha256": "d63ad536c3c81880043e22ec7fd08db42b4d8fb7c89c7138bc562bfa25281375"
+  },
+  "row": "think_substring",
+  "add_generation_prompt": false,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Solve 2 + 2."
+    },
+    {
+      "role": "assistant",
+      "content": "<think>\nCheck the tidal locking first.\n</think>\n4"
+    }
+  ],
+  "tools": null,
+  "kwargs": {},
+  "generation_spans": [],
+  "rendered": "[gMASK]<sop><|user|>Solve 2 + 2.<|assistant|><think>Check the tidal locking first.</think>4"
+}

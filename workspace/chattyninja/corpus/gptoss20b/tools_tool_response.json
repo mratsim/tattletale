@@ -1,0 +1,62 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "gptoss20b",
+  "template": {
+    "dir": "gpt-oss-20b",
+    "source": "chat_template.jinja",
+    "sha256": "a4c9919cbbd4acdd51ccffe22da049264b1b73e59055fa58811a99efbd7c8146"
+  },
+  "row": "tools_tool_response",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the tallest mountain in Japan?"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_001",
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": {
+              "city": "Tokyo"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_001",
+      "content": "18 C, clear."
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for one city",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "kwargs": {},
+  "generation_spans": [],
+  "rendered": "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2026-09-13\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.\nCalls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Tools\n\n## functions\n\nnamespace functions {\n\n// Current weather for one city\ntype get_weather = (_: {\ncity: string,\n}) => any;\n\n} // namespace functions<|end|><|start|>user<|message|>What is the tallest mountain in Japan?<|end|><|start|>assistant to=functions.get_weather<|channel|>commentary json<|message|>{\"city\": \"Tokyo\"}<|call|><|start|>functions.get_weather to=assistant<|channel|>commentary<|message|>\"18 C, clear.\"<|end|><|start|>assistant",
+  "epoch": 1789315200
+}

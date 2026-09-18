@@ -1,0 +1,28 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "qwen38flashnext",
+  "template": {
+    "dir": "Qwen3.8-Flash-Next",
+    "source": "chat_template.jinja",
+    "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+  },
+  "row": "err_item_type",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "audio",
+          "audio_url": "clip.wav"
+        }
+      ]
+    }
+  ],
+  "tools": null,
+  "kwargs": {},
+  "expected_error": {
+    "exception": "TemplateError",
+    "message": "Unexpected item type in content."
+  }
+}

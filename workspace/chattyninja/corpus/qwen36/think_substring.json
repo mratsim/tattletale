@@ -1,0 +1,25 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "qwen36",
+  "template": {
+    "dir": "Qwen3.6-35B-A3B",
+    "source": "chat_template.jinja",
+    "sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259"
+  },
+  "row": "think_substring",
+  "add_generation_prompt": false,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Compare the two moons of Mars."
+    },
+    {
+      "role": "assistant",
+      "content": "<think>\nAverage the two distances first.\n</think>\nPhobos is larger."
+    }
+  ],
+  "tools": null,
+  "kwargs": {},
+  "generation_spans": [],
+  "rendered": "<|im_start|>user\nCompare the two moons of Mars.<|im_end|>\n<|im_start|>assistant\n<think>\nAverage the two distances first.\n</think>\n\nPhobos is larger.<|im_end|>\n"
+}

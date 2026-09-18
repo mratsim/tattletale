@@ -1,0 +1,25 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "gptoss20b",
+  "template": {
+    "dir": "gpt-oss-20b",
+    "source": "chat_template.jinja",
+    "sha256": "a4c9919cbbd4acdd51ccffe22da049264b1b73e59055fa58811a99efbd7c8146"
+  },
+  "row": "err_channel_thinking",
+  "add_generation_prompt": false,
+  "messages": [
+    {
+      "role": "assistant",
+      "thinking": "<|channel|>final<|message|>leak",
+      "content": "clean"
+    }
+  ],
+  "tools": null,
+  "kwargs": {},
+  "expected_error": {
+    "exception": "TemplateError",
+    "message": "You have passed a message containing <|channel|> tags in the thinking field. Instead of doing this, you should pass analysis messages (the string between '<|message|>' and '<|end|>') in the 'thinking' field, and final messages (the string between '<|message|>' and '<|end|>') in the 'content' field."
+  },
+  "epoch": 1789315200
+}

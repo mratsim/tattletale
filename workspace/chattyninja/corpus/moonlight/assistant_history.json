@@ -1,0 +1,29 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "moonlight",
+  "template": {
+    "dir": "Moonlight-16B-A3B",
+    "source": "tokenizer_config.json:chat_template",
+    "sha256": "0af7f5845651f3ba85a82d70d8af968a1da0a60f4c7bb662a9c305cfc9cc224c"
+  },
+  "row": "assistant_history",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Who are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "I am a helpful assistant."
+    },
+    {
+      "role": "user",
+      "content": "Show an example."
+    }
+  ],
+  "tools": null,
+  "kwargs": {},
+  "generation_spans": [],
+  "rendered": "<|im_system|>system<|im_middle|>You are a helpful assistant<|im_end|><|im_user|>user<|im_middle|>Who are you?<|im_end|><|im_assistant|>assistant<|im_middle|>I am a helpful assistant.<|im_end|><|im_user|>user<|im_middle|>Show an example.<|im_end|><|im_assistant|>assistant<|im_middle|>"
+}

@@ -1,0 +1,25 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "moonlight",
+  "template": {
+    "dir": "Moonlight-16B-A3B",
+    "source": "tokenizer_config.json:chat_template",
+    "sha256": "0af7f5845651f3ba85a82d70d8af968a1da0a60f4c7bb662a9c305cfc9cc224c"
+  },
+  "row": "default",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    },
+    {
+      "role": "user",
+      "content": "Give me two facts about the moon."
+    }
+  ],
+  "tools": null,
+  "kwargs": {},
+  "generation_spans": [],
+  "rendered": "<|im_system|>system<|im_middle|>You are a helpful assistant.<|im_end|><|im_user|>user<|im_middle|>Give me two facts about the moon.<|im_end|><|im_assistant|>assistant<|im_middle|>"
+}

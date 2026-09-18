@@ -1,0 +1,27 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "gemma4",
+  "template": {
+    "dir": "gemma-4-E2B-it",
+    "source": "chat_template.jinja",
+    "sha256": "0a2c8073c878ab1da004bee933a998606537bbb62016310352c7285c3f01c5b5"
+  },
+  "row": "channel_strip",
+  "add_generation_prompt": false,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Draft a reply about Mars."
+    },
+    {
+      "role": "assistant",
+      "content": "下書き。 <channel|>extra thought\n<|channel> 推敲済み。"
+    }
+  ],
+  "tools": null,
+  "kwargs": {
+    "bos_token": "<bos>"
+  },
+  "generation_spans": [],
+  "rendered": "<bos><|turn>user\nDraft a reply about Mars.<turn|>\n<|turn>model\n下書き。 extra thought<turn|>\n"
+}

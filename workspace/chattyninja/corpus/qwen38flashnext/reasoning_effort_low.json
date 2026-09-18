@@ -1,0 +1,32 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "qwen38flashnext",
+  "template": {
+    "dir": "Qwen3.8-Flash-Next",
+    "source": "chat_template.jinja",
+    "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+  },
+  "row": "reasoning_effort_low",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Which Martian moon is larger?"
+    },
+    {
+      "role": "assistant",
+      "reasoning_content": "Phobos at 22 km, Deimos at 12 km.",
+      "content": "Phobos is larger."
+    },
+    {
+      "role": "user",
+      "content": "And its orbital period?"
+    }
+  ],
+  "tools": null,
+  "kwargs": {
+    "reasoning_effort": "low"
+  },
+  "generation_spans": [],
+  "rendered": "<|im_start|>system\nReasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration.<|im_end|>\n<|im_start|>user\nWhich Martian moon is larger?<|im_end|>\n<|im_start|>assistant\n<think>\nPhobos at 22 km, Deimos at 12 km.\n</think>\n\nPhobos is larger.<|im_end|>\n<|im_start|>user\nAnd its orbital period?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+}

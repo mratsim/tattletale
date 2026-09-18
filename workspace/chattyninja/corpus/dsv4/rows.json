@@ -1,0 +1,45 @@
+{
+  "reference_module": "MODELS/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
+  "reference_pairs_dir": "MODELS/DeepSeek-V4-Flash-0731/encoding/tests/",
+  "fork_reference_dir": "_references_prod/local-inference-lab-vllm/rust/src/chat/src/renderer/deepseek_v4/fixtures/",
+  "fork_license": "Apache-2.0 (LICENSE at the fork root), fixtures redistributed verbatim as test data",
+  "audit_note": "The two fixture sources agree byte-exact on every row they share: rows thinking_tools and drop_thinking exist in both trees with identical bytes (cmp exit zero on inputs and outputs). Rows interleaved_search and quick_task exist only in the HF pair set, row developer_tools only in the fork set, so no row carries a disagreement and none needed a reproducer.",
+  "rows": [
+    {
+      "row": "thinking_tools",
+      "input": "test_input_1.json",
+      "output": "test_output_1.txt",
+      "thinking": true,
+      "inject_tools_into_first_message": true,
+      "provenance": "hf_encoding_tests_and_prod_fork"
+    },
+    {
+      "row": "drop_thinking",
+      "input": "test_input_2.json",
+      "output": "test_output_2.txt",
+      "thinking": true,
+      "provenance": "hf_encoding_tests_and_prod_fork"
+    },
+    {
+      "row": "interleaved_search",
+      "input": "test_input_3.json",
+      "output": "test_output_3.txt",
+      "thinking": true,
+      "provenance": "hf_encoding_tests_only"
+    },
+    {
+      "row": "quick_task",
+      "input": "test_input_4.json",
+      "output": "test_output_4.txt",
+      "thinking": false,
+      "provenance": "hf_encoding_tests_only"
+    },
+    {
+      "row": "developer_tools",
+      "input": "test_input_developer_tools.json",
+      "output": "test_output_developer_tools.txt",
+      "thinking": true,
+      "provenance": "prod_fork_only"
+    }
+  ]
+}

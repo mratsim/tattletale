@@ -1,0 +1,28 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "deepseekv2lite",
+  "template": {
+    "dir": "DeepSeek-V2-Lite",
+    "source": "tokenizer_config.json:chat_template",
+    "sha256": "8aeba567270fa9a8d5372caf4b04affea947c4421d96adc01e3ff94021b0ae8e"
+  },
+  "row": "default",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    },
+    {
+      "role": "user",
+      "content": "Give me two facts about the moon."
+    }
+  ],
+  "tools": null,
+  "kwargs": {
+    "bos_token": "<｜begin▁of▁sentence｜>",
+    "eos_token": "<｜end▁of▁sentence｜>"
+  },
+  "generation_spans": [],
+  "rendered": "<｜begin▁of▁sentence｜>You are a helpful assistant.\n\nUser: Give me two facts about the moon.\n\nAssistant:"
+}

@@ -1,0 +1,27 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "glm47flash",
+  "template": {
+    "dir": "GLM-4.7-Flash",
+    "source": "chat_template.jinja",
+    "sha256": "d63ad536c3c81880043e22ec7fd08db42b4d8fb7c89c7138bc562bfa25281375"
+  },
+  "row": "enable_thinking_false",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    },
+    {
+      "role": "user",
+      "content": "Give me two facts about the moon."
+    }
+  ],
+  "tools": null,
+  "kwargs": {
+    "enable_thinking": false
+  },
+  "generation_spans": [],
+  "rendered": "[gMASK]<sop><|system|>You are a helpful assistant.<|user|>Give me two facts about the moon.<|assistant|></think>"
+}

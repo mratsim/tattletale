@@ -1,0 +1,66 @@
+{
+  "schema": "chattyninja-chat-render-row-1",
+  "suite": "gemma4",
+  "template": {
+    "dir": "gemma-4-E2B-it",
+    "source": "chat_template.jinja",
+    "sha256": "0a2c8073c878ab1da004bee933a998606537bbb62016310352c7285c3f01c5b5"
+  },
+  "row": "tools_tool_response",
+  "add_generation_prompt": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "Answer through the tool."
+    },
+    {
+      "role": "user",
+      "content": "What is the weather in Tokyo? Ask the tool."
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_001",
+          "function": {
+            "name": "get_weather",
+            "arguments": {
+              "city": "Tokyo"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_001",
+      "content": "晴れ、18度。"
+    }
+  ],
+  "tools": [
+    {
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for one city",
+        "parameters": {
+          "properties": {
+            "city": {
+              "description": "City name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  ],
+  "kwargs": {
+    "bos_token": "<bos>"
+  },
+  "generation_spans": [],
+  "rendered": "<bos><|turn>system\nAnswer through the tool.<|tool>declaration:get_weather{description:<|\"|>Current weather for one city<|\"|>,parameters:{properties:{city:{description:<|\"|>City name<|\"|>,type:<|\"|>STRING<|\"|>}},required:[<|\"|>city<|\"|>],type:<|\"|>OBJECT<|\"|>}}<tool|><turn|>\n<|turn>user\nWhat is the weather in Tokyo? Ask the tool.<turn|>\n<|turn>model\n<|tool_call>call:get_weather{city:<|\"|>Tokyo<|\"|>}<tool_call|><|tool_response>response:get_weather{value:<|\"|>晴れ、18度。<|\"|>}<tool_response|>"
+}
