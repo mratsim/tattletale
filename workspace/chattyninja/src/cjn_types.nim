@@ -58,8 +58,10 @@ type
     ##   ids for `nkFor`, parameter name and default-span triples for `nkMacroDef`
     kind*: NodeKind
     slots*: SmallSeq[5, int32]
-      ## Payload slots, capacity 5 the measured corpus knee, spilling only for a variable
-      ## `nkFor` or `nkMacroDef` payload at parse time.
+      ## Payload slots, capacity 5 the measured corpus knee:
+      ## - 93% of the 1098 nodes of the 13 corpus templates that parse hold at most 5 slots
+      ## - no node holds exactly 6, and the other 5 corpus templates raise declared gaps
+      ## - only a variable `nkFor` or `nkMacroDef` payload spills, one heap block at parse time
 
   Machine* = object
     ## Read-only compiled template. Two fields and no mutable state, so one artifact renders
@@ -109,7 +111,6 @@ const
 # | `nkEmit`     | 3 slots, `lo`, `hi`, `succ`                                                                     |
 # | `nkIf`       | 5 slots, `lo`, `hi`, `succ`, `child`, `alt`                                                     |
 # | `nkFor`      | 7 + one per target, `lo`, `hi`, `succ`, `child`, `loopName`, `filterLo`, `filterHi`, target ids |
-# | `nkBreak`    | 3 slots, `succ` at 2, `0` and `1` unused                                                        |
 # | `nkSet`      | 4 slots, `lo`, `hi`, `succ`, interned target name id                                            |
 # | `nkSetNs`    | 5 slots, `lo`, `hi`, `succ`, `target`, `field`                                                  |
 # | `nkMacroDef` | 4 + 3 per parameter, `macroName`, filler, `succ`, `child` body, name and default-span triples   |
@@ -118,49 +119,95 @@ const
 # no slot layout. `succ` shadows `system.succ`, which stays reachable for ordinal arguments
 # because overload resolution only sees this template for a `Node` receiver.
 
+const
+  ## One slot position per construct role, plus the two variable-tail bases. Parse and render
+  ## index through the same constants, so a slot-layout move is one shared edit.
+  slotLo* = 0
+  slotHi* = 1
+  slotSucc* = 2
+  slotChild* = 3
+  slotAlt* = 4
+  slotLoopName* = 4
+  slotFilterLo* = 5
+  slotFilterHi* = 6
+  slotNsTarget* = 3
+  slotNsField* = 4
+  slotMacroName* = 0
+  forTargetsBase* = 7
+    ## First `nkFor` target name id slot, directly after the fixed prefix.
+  macroParamsBase* = 4
+    ## First `nkMacroDef` parameter slot, each parameter one name id then its default span,
+    ## three slots in all.
+
 template lo*(nd: Node): int32 =
   ## Payload span start into `Machine.jinja`, or the `nkMacroDef` macro name id.
-  nd.slots[0]
+  nd.slots[slotLo]
 
 template hi*(nd: Node): int32 =
   ## Payload span end into `Machine.jinja`, exclusive.
-  nd.slots[1]
+  nd.slots[slotHi]
 
 template succ*(nd: Node): int32 =
   ## Next node in program order by arena index, `noLink` once the artifact is exhausted.
-  nd.slots[2]
+  nd.slots[slotSucc]
 
 template child*(nd: Node): int32 =
   ## First node of the body by arena index, or the `nkSet` target name id.
-  nd.slots[3]
+  nd.slots[slotChild]
 
 template alt*(nd: Node): int32 =
   ## Next `nkIf` level in the else/elif chain by arena index, `noLink` when the chain ends.
-  nd.slots[4]
+  nd.slots[slotAlt]
 
 template loopName*(nd: Node): int32 =
   ## Interned `loop` name id of `nkFor`, bound so the driver never interns at render time.
-  nd.slots[4]
+  nd.slots[slotLoopName]
 
 template filterLo*(nd: Node): int32 =
   ## `nkFor` filter clause span start into `Machine.jinja`, `noLink` when the header has no `if`.
-  nd.slots[5]
+  nd.slots[slotFilterLo]
 
 template filterHi*(nd: Node): int32 =
   ## `nkFor` filter clause span end into `Machine.jinja`, exclusive.
-  nd.slots[6]
+  nd.slots[slotFilterHi]
 
 template target*(nd: Node): int32 =
   ## Interned namespace name id of `nkSetNs`.
-  nd.slots[3]
+  nd.slots[slotNsTarget]
 
 template field*(nd: Node): int32 =
   ## Interned member name id of `nkSetNs`.
-  nd.slots[4]
+  nd.slots[slotNsField]
 
 template macroName*(nd: Node): int32 =
   ## Interned macro name id that `nkMacroDef` binds.
-  nd.slots[0]
+  nd.slots[slotMacroName]
+
+template targetCount*(nd: Node): int32 =
+  ## Number of `nkFor` target name ids in the payload tail.
+  nd.slots.len - forTargetsBase
+
+template targetAt*(nd: Node, i: int): int32 =
+  ## `nkFor` target name id `i`, `i` in `0 ..< nd.targetCount`.
+  nd.slots[forTargetsBase + i]
+
+template paramCount*(nd: Node): int32 =
+  ## Number of `nkMacroDef` parameters in the payload tail.
+  (nd.slots.len - macroParamsBase) div 3
+
+template paramNameAt*(nd: Node, k: int): int32 =
+  ## `nkMacroDef` parameter `k` interned name id, `k` in `0 ..< nd.paramCount`.
+  nd.slots[macroParamsBase + 3 * k]
+
+template paramDefLoAt*(nd: Node, k: int): int32 =
+  ## `nkMacroDef` parameter `k` default span start into `Machine.jinja`, `noLink` when
+  ## the parameter has no default.
+  nd.slots[macroParamsBase + 3 * k + 1]
+
+template paramDefHiAt*(nd: Node, k: int): int32 =
+  ## `nkMacroDef` parameter `k` default span end into `Machine.jinja`, exclusive, meaningful
+  ## only while `paramDefLoAt` is not `noLink`.
+  nd.slots[macroParamsBase + 3 * k + 2]
 
 func findName*(t: Tables, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `noLink` when the template never names it.

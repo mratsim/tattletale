@@ -239,8 +239,8 @@ func addNode(p: var P, n: sink Node): int32 =
   p.nodes.add n
 
 func patch(nodes: var seq[Node], idx, target: int32) =
-  ## Resolves one node's successor, payload slot 2.
-  nodes[idx].slots[2] = target
+  ## Resolves one node's successor, the `slotSucc` position.
+  nodes[idx].slots[slotSucc] = target
 
 func tagKeyword(p: P, t: Tag): string =
   ## Returns the leading identifier of a `{% %}` tag.
@@ -351,6 +351,8 @@ proc parseMacroParams(p: var P, t: Tag, at: int, nodeIdx: int32) =
       defLo = int32 k
       defHi = int32 skipBalanced(p, k, t.tHi, ",)")
       k = defHi.int
+    # One parameter per iteration, the triple `paramNameAt` reads from `macroParamsBase`,
+    # name id first, then the default `lo`, then the default `hi`.
     p.nodes[nodeIdx].slots.add name
     p.nodes[nodeIdx].slots.add defLo
     p.nodes[nodeIdx].slots.add defHi
@@ -388,7 +390,7 @@ proc parseMacro(p: var P): Head =
   if p.i >= p.tags.len or tagKeyword(p, p.tags[p.i]) != "endmacro":
     raise err("`{% macro %}` has no `{% endmacro %}`")
   inc p.i
-  p.nodes[idx].slots[3] = body.head
+  p.nodes[idx].slots[slotChild] = body.head
   for x in body.tails:
     patch(p.nodes, x, idx)
   Head(head: idx, tails: @[idx])
@@ -406,7 +408,7 @@ proc parseIf(p: var P): Head =
   #   a construct cannot sit below the nodes it dispatches into.
   let idx = addNode(p, mkNode(nkIf, condLo, condHi, noLink, noLink, noLink))
   let body = parseBody(p, ["elif", "else", "endif"])
-  p.nodes[idx].slots[3] = body.head
+  p.nodes[idx].slots[slotChild] = body.head
   var tails = @[idx]
   tails.add body.tails
   if p.i >= p.tags.len:
@@ -416,12 +418,12 @@ proc parseIf(p: var P): Head =
   case nk
   of "elif":
     let nested = parseIf(p)
-    p.nodes[idx].slots[4] = nested.head
+    p.nodes[idx].slots[slotAlt] = nested.head
     tails.add nested.tails
   of "else":
     inc p.i
     let eb = parseBody(p, ["endif"])
-    p.nodes[idx].slots[4] = eb.head
+    p.nodes[idx].slots[slotAlt] = eb.head
     tails.add eb.tails
     if p.i >= p.tags.len or tagKeyword(p, p.tags[p.i]) != "endif":
       raise err("`{% else %}` has no `{% endif %}`")
@@ -476,13 +478,14 @@ proc parseFor(p: var P): Head =
   inc p.i
   let idx = addNode(p, mkNode(nkFor, int32 iterLo, int32 iterHi, noLink, noLink, loopId,
       filterLo, filterHi))
+  # Target ids append after the fixed prefix, the tail `targetAt` reads from `forTargetsBase`.
   for tg in targets:
     p.nodes[idx].slots.add tg
   let body = parseBody(p, ["endfor"])
   if p.i >= p.tags.len or tagKeyword(p, p.tags[p.i]) != "endfor":
     raise err("`{% for %}` has no `{% endfor %}`")
   inc p.i
-  p.nodes[idx].slots[3] = body.head
+  p.nodes[idx].slots[slotChild] = body.head
   for x in body.tails:
     patch(p.nodes, x, idx)
   Head(head: idx, tails: @[idx])

@@ -91,8 +91,9 @@ func bindName(d: var Driver, name: int32, val: Value) =
 # ---------------------------------------------------------------------------
 #
 # Every step reads its node's payload through the `nd` slot-accessor templates, which expand
-# textually onto the arena entry. A step must never bind a `Node` value, because the binding
-# invokes the payload's deep-copy hook and heap-allocates a spilled node's block every step.
+# textually onto the arena entry. Render code never binds a `Node` value:
+#   a binding runs SmallSeq's `=copy` and heap-allocates a spilled payload's block
+#   (7% of corpus nodes spill).
 
 proc stepVerbatim(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Streams the final text run. The span already reflects every whitespace rule, so this step has
@@ -142,18 +143,17 @@ func materialize(v: Value): seq[Value] =
 
 proc bindTargets(m: Machine, t: Tables, d: var Driver, n: int32, item: Value) =
   ## Binds the loop targets of the `nkFor` node at `n`. More than one target unpacks a sequence,
-  ## which is what `x.items()` feeds through `{% for k, v in x.items() %}`. Target name ids sit
-  ## past slot 7, after the loop name and the filter span.
+  ## which is what `x.items()` feeds through `{% for k, v in x.items() %}`.
   template nd: Node = m.nodes[n]
-  let ntargets = int(nd.slots.len) - 7
+  let ntargets = int(nd.targetCount)
   if ntargets == 1:
-    d.bindName(nd.slots[7], item)
+    d.bindName(nd.targetAt(0), item)
   else:
     if item.kind != vkSeq or item.xs.items.len != ntargets:
       raise err("`for` unpacks " & $ntargets & " targets from a value that is not a " &
           $ntargets & "-element sequence")
     for i in 0 ..< ntargets:
-      d.bindName(nd.slots[7 + i], item.xs.items[i])
+      d.bindName(nd.targetAt(i), item.xs.items[i])
 
 proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
   ## Re-entry path. Move the shared cursor to the next item passing the filter clause and re-enter
@@ -260,8 +260,8 @@ const
 
 proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Arg]) =
   ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`.
-  ## Each parameter occupies three payload slots from slot 4, the interned name then the default
-  ## expression span, `noLink` when absent.
+  ## Each parameter carries its interned name id and default expression span in the node tail,
+  ## `noLink` when the default is absent.
   ##
   ## Binding order:
   ## - positionals, then keywords, then the defaults
@@ -269,9 +269,8 @@ proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Arg
   ##   that a default sees in Jinja
   template nd: Node = m.nodes[n]
   var pos = 0
-  let nparams = (int(nd.slots.len) - 4) div 3
+  let nparams = int(nd.paramCount)
   for k in 0 ..< nparams:
-    let base = 4 + 3 * k
     var val = undefinedVal()
     var bound = false
     while pos < args.len and args[pos].nameLo == noLink:
@@ -282,16 +281,16 @@ proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Arg
       break
     if not bound:
       for a in args:
-        if a.nameLo != noLink and argName(m, a) == t.names[nd.slots[base]]:
+        if a.nameLo != noLink and argName(m, a) == t.names[nd.paramNameAt(k)]:
           val = a.val
           bound = true
           break
     if not bound:
-      if nd.slots[base + 1] == noLink:
+      if nd.paramDefLoAt(k) == noLink:
         val = undefinedVal()
       else:
-        val = evalSpan(m, t, d, nd.slots[base + 1], nd.slots[base + 2], runMacroBody)
-    d.bindName(nd.slots[base], val)
+        val = evalSpan(m, t, d, nd.paramDefLoAt(k), nd.paramDefHiAt(k), runMacroBody)
+    d.bindName(nd.paramNameAt(k), val)
 
 proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Arg]): string =
   ## Statement tier side of the macro runner. A macro body cannot stream, because its output is

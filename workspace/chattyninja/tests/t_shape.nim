@@ -49,8 +49,12 @@ static:
   # `int32`, and one 8-byte-aligned tail pointer. `Node` pads the one-byte kind to the tail
   # pointer's alignment, so 8 + 40 = 48 bytes per node, the arena's per-node budget.
   #
-  # Measured over the corpus, 93% of nodes hold at most 5 payload slots. Only the variable
-  # `nkFor` and `nkMacroDef` payloads spill, one heap block each at parse time, never a render.
+  # Measured over the 1098 nodes of the 13 corpus templates that parse, the other 5 raising
+  # declared gaps. 93% of nodes hold at most 5 payload slots and no node holds exactly 6,
+  # the histogram peaking at 3, 4 and 5 slots.
+  #
+  # Only the variable `nkFor` and `nkMacroDef` payloads spill, one heap block each at parse
+  # time and never at render.
   #
   # Any proc, `string` or `seq` member would change `sizeof`, so this pair of assertions
   # rules out a proc field and a heap box without naming each forbidden type.
