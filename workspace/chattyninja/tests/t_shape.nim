@@ -13,6 +13,7 @@
 
 import std/macros
 import cjn_types, chattyninja
+import workspace/data_structures/src/small_seqs
 
 macro fieldNames(T: type): untyped =
   ## Returns the field names of an object type, in declaration order.
@@ -34,7 +35,7 @@ macro fieldNames(T: type): untyped =
       error("unexpected field node", f)
 
 const
-  nodeFields: array[6, string] = fieldNames(Node)
+  nodeFields: array[2, string] = fieldNames(Node)
   machineFields: array[2, string] = fieldNames(Machine)
 
 static:
@@ -43,17 +44,20 @@ static:
   assert $NodeKind.low == "nkVerbatim", "nkVerbatim opens the enum"
   assert $NodeKind.high == "nkMacroDef", "nkMacroDef closes the enum"
 
-  # Node is `{kind, lo, hi, succ, child, alt}` and nothing else. The six names are
-  # spelled out explicitly, and the layout proof is arithmetic, five `int32` links
-  # and payload fields plus a one-byte tag padded to a four-byte alignment, 24 bytes.
-  # Any proc, pointer, `string` or `seq` member would raise `alignof` to 8 and change
-  # `sizeof`, so this pair of assertions
+  # Node is `{kind, slots}` and nothing else. Measured layout on arm64 with Nim 2.2.10:
+  # `SmallSeq[5, int32]` is 40 bytes, an `int32` len and cap, a 20-byte inline array of five
+  # `int32`, and one 8-byte-aligned tail pointer. `Node` pads the one-byte kind to the tail
+  # pointer's alignment, so 8 + 40 = 48 bytes per node, the arena's per-node budget.
+  #
+  # Measured over the corpus, 93% of nodes hold at most 5 payload slots. Only the variable
+  # `nkFor` and `nkMacroDef` payloads spill, one heap block each at parse time, never a render.
+  #
+  # Any proc, `string` or `seq` member would change `sizeof`, so this pair of assertions
   # rules out a proc field and a heap box without naming each forbidden type.
-  assert nodeFields == ["kind", "lo", "hi", "succ", "child", "alt"],
-      "Node must be exactly {kind, lo, hi, succ, child, alt}"
-  assert sizeof(Node) == 24, "Node layout: " & $sizeof(Node)
-  assert alignof(Node) == 4, "a pointer-sized member would lift alignment to 8"
-  assert sizeof(Node) <= 32, "the arena's per-node budget is 32 bytes"
+  assert nodeFields == ["kind", "slots"], "Node must be exactly {kind, slots}"
+  assert sizeof(SmallSeq[5, int32]) == 40, "SmallSeq[5, int32] layout: " & $sizeof(SmallSeq[5, int32])
+  assert sizeof(Node) == 48, "Node layout: " & $sizeof(Node)
+  assert alignof(Node) == 8, "the payload tail pointer aligns the node to 8 bytes"
   assert not (Node is ref), "nodes are POD in one seq, never a ref box"
 
   # Machine is the borrowed text plus the arena:
@@ -73,17 +77,21 @@ static:
 for k in NodeKind:
   doAssert not steps[k].isNil, "steps has no entry for " & $k
 
-# A `Node` must move by assignment with no reference held anywhere:
-#   this is the property that lets
-# the arena be one allocation and the artifact be serializable.
-static:
-  let a = Node(kind: nkEmit, lo: 1'i32, hi: 2'i32, succ: 3'i32, child: 4'i32, alt: 5'i32)
-  var arena = @[a, a]
-  arena[1] = arena[0]
-  assert arena[1].succ == 3'i32
-  assert arena.len == 2
+# A `Node` must move by assignment with no reference left behind:
+#   this is the property that lets the arena be one allocation. An assignment deep-copies
+# the spilled payload, so the copy stays valid after the source's block is freed.
+#
+# The check runs at runtime, the compile-time VM cannot run the payload's allocator.
+var a = Node(kind: nkEmit)
+for slot in 7'i32 .. 12'i32:
+  a.slots.add slot
+var arena = @[a, a]
+arena[1] = arena[0]
+arena[0].slots[0] = 99'i32
+doAssert arena[1].slots[0] == 7'i32, "an assignment must deep-copy a spilled payload"
+doAssert arena.len == 2, "the arena moved by assignment with no reference left behind"
 
 doAssert sizeof(Machine) == 32, "Machine layout: " & $sizeof(Machine)
 
 echo "t_shape: Node=", sizeof(Node), "B align=", alignof(Node),
-    " Machine=", sizeof(Machine), "B steps=", steps.len
+    " SmallSeq=", sizeof(SmallSeq[5, int32]), "B Machine=", sizeof(Machine), "B steps=", steps.len

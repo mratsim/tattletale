@@ -45,11 +45,11 @@ type
     idx*: int
 
   MacroVal* = ref object
-    ## A bound macro. `node` is the `nkMacroDef` arena index, and the body's terminators land on it:
-    ## a call runs the body to completion and detects the end by arriving back at that node.
+    ## A bound macro. `node` is the `nkMacroDef` arena index and the body's terminators land
+    ## on it, so a call detects its end by arriving back there. Name and parameters are read
+    ## from the definition node's payload slots at call time.
     name*: int32
     body*: int32
-    aux*: int32
     node*: int32
 
   Value* = object

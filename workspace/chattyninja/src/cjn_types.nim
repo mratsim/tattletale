@@ -9,12 +9,13 @@
 # driver. See chattyninja.nim for the dispatch table and the `items` pull interface.
 
 import cjn_errors, cjn_values
+import workspace/data_structures/src/small_seqs
 
-export cjn_errors, cjn_values
+export cjn_errors, cjn_values, small_seqs
 
 const
   noLink* = -1'i32
-    ## Marks an absent link in every int32 node field.
+    ## Marks an absent link or absent span in every node payload slot.
 
 type
   NodeKind* {.pure.} = enum
@@ -25,7 +26,7 @@ type
     ## | `nkVerbatim`   | final text run, whitespace already resolved                                 |
     ## | `nkEmit`       | `{{ }}` span, evaluates the `lo..hi` span, stringifies, pending piece       |
     ## | `nkIf`         | condition span, then-body, else-or-elif chain, bodies terminated past endif |
-    ## | `nkFor`        | iterable span, body, aux record for targets and the filter clause           |
+    ## | `nkFor`        | iterable span, body, loop name, filter span, interned target ids            |
     ## | `nkBreak`      | unwinds to the nearest for-frame, stopping at a macro-call boundary         |
     ## | `nkSet`        | single-target binding of an expression                                      |
     ## | `nkSetNs`      | `ns.field = expr`, ns and field as interned name ids                        |
@@ -44,16 +45,21 @@ type
     nkMacroDef
 
   Node* = object
-    ## POD node in one append-only arena. Six fields, no proc field. A node's executable meaning
-    ## is a pure function of `kind` through `steps`, so the artifact stays data.
+    ## POD node in one append-only arena, `kind` naming the construct. A node's executable
+    ## meaning is a pure function of `kind` through `steps`, so the artifact stays data.
     ##
-    ## `noLink` (-1) marks an absent link in every int32 field.
+    ## Every payload reference is one int32 slot:
+    ##   a span into `Machine.jinja`, an arena index, or an interned name id.
+    ## `noLink` (-1) marks an absent link or absent span.
+    ##
+    ## Slot positions are uniform across kinds:
+    ## - `0` `lo`, `1` `hi`, `2` `succ` and `3` `child` on every kind that fills them
+    ## - `4` and past are kind-specific, `alt` for `nkIf`, loop name, filter span and target
+    ##   ids for `nkFor`, parameter name and default-span triples for `nkMacroDef`
     kind*: NodeKind
-    lo*, hi*: int32
-      ## payload span into `Machine.jinja`:
-      ##   the expression or text this node owns
-    succ*, child*, alt*: int32
-      ## graph links by arena index
+    slots*: SmallSeq[5, int32]
+      ## Payload slots, capacity 5 the measured corpus knee, spilling only for a variable
+      ## `nkFor` or `nkMacroDef` payload at parse time.
 
   Machine* = object
     ## Read-only compiled template. Two fields and no mutable state, so one artifact renders
@@ -62,43 +68,10 @@ type
     jinja*: openArray[char]
     nodes*: seq[Node]
 
-  AuxKind* = enum
-    axFor
-    axSet
-    axMacro
-
-  MacroParam* = object
-    ## One macro parameter:
-    ##   an interned name plus the default expression span, `noLink` when absent.
-    name*: int32
-    defLo*, defHi*: int32
-
-  Aux* = object
-    ## Variable-length payloads the six node fields cannot hold. Parse-built and read-only at render, so
-    ## `nkFor` and `nkMacroDef` keep the six-field budget.
-    case kind*: AuxKind
-    of axFor:
-      targets*: seq[int32]
-        ## interned loop target names, more than one means tuple unpacking
-      loopName*: int32
-        ## interned `loop`, bound alongside the targets so the driver never interns at render time
-      filterLo*, filterHi*: int32
-        ## the `if` clause of a for header, `noLink` when absent
-    of axSet:
-      target*: int32
-        ## interned namespace name
-      field*: int32
-        ## interned member name
-    of axMacro:
-      name*: int32
-        ## interned macro name, the binding `nkMacroDef` writes
-      params*: seq[MacroParam]
-
   Tables* = object
-    ## Parse-built side arenas, read-only at render, passed into the driver. Node int32 name and aux
-    ## fields index these, so a `Machine` is only meaningful together with its `Tables`.
+    ## Parse-built side arena, read-only at render, passed into the driver. Node int32 name slots
+    ## index into it, so a `Machine` is only meaningful together with its `Tables`.
     names*: seq[string]
-    aux*: seq[Aux]
 
 const
   ## Caps measured against the corpus, each a compile-time define.
@@ -123,6 +96,71 @@ const
 
   wsSpace* = {' ', '\t', '\n', '\r', '\v', '\f'}
   wsNameChars* = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
+
+# Payload slot accessors
+# ---------------------------------------------------------------------------
+#
+# One slot per construct role, uniform across the kinds that fill it. Each expands textually
+# to a slot read, so `nd.succ` on `m.nodes[n]` never copies the node. Slot layouts per kind:
+#
+# | Kind         | Slots                                                                                           |
+# |--------------|-------------------------------------------------------------------------------------------------|
+# | `nkVerbatim` | 3 slots, `lo`, `hi`, `succ`                                                                     |
+# | `nkEmit`     | 3 slots, `lo`, `hi`, `succ`                                                                     |
+# | `nkIf`       | 5 slots, `lo`, `hi`, `succ`, `child`, `alt`                                                     |
+# | `nkFor`      | 7 + one per target, `lo`, `hi`, `succ`, `child`, `loopName`, `filterLo`, `filterHi`, target ids |
+# | `nkBreak`    | 3 slots, `succ` at 2, `0` and `1` unused                                                        |
+# | `nkSet`      | 4 slots, `lo`, `hi`, `succ`, interned target name id                                            |
+# | `nkSetNs`    | 5 slots, `lo`, `hi`, `succ`, `target`, `field`                                                  |
+# | `nkMacroDef` | 4 + 3 per parameter, `macroName`, filler, `succ`, `child` body, name and default-span triples   |
+#
+# `nkSetBlock` and `nkGeneration` are declared kinds the parser never builds, so they carry
+# no slot layout. `succ` shadows `system.succ`, which stays reachable for ordinal arguments
+# because overload resolution only sees this template for a `Node` receiver.
+
+template lo*(nd: Node): int32 =
+  ## Payload span start into `Machine.jinja`, or the `nkMacroDef` macro name id.
+  nd.slots[0]
+
+template hi*(nd: Node): int32 =
+  ## Payload span end into `Machine.jinja`, exclusive.
+  nd.slots[1]
+
+template succ*(nd: Node): int32 =
+  ## Next node in program order by arena index, `noLink` once the artifact is exhausted.
+  nd.slots[2]
+
+template child*(nd: Node): int32 =
+  ## First node of the body by arena index, or the `nkSet` target name id.
+  nd.slots[3]
+
+template alt*(nd: Node): int32 =
+  ## Next `nkIf` level in the else/elif chain by arena index, `noLink` when the chain ends.
+  nd.slots[4]
+
+template loopName*(nd: Node): int32 =
+  ## Interned `loop` name id of `nkFor`, bound so the driver never interns at render time.
+  nd.slots[4]
+
+template filterLo*(nd: Node): int32 =
+  ## `nkFor` filter clause span start into `Machine.jinja`, `noLink` when the header has no `if`.
+  nd.slots[5]
+
+template filterHi*(nd: Node): int32 =
+  ## `nkFor` filter clause span end into `Machine.jinja`, exclusive.
+  nd.slots[6]
+
+template target*(nd: Node): int32 =
+  ## Interned namespace name id of `nkSetNs`.
+  nd.slots[3]
+
+template field*(nd: Node): int32 =
+  ## Interned member name id of `nkSetNs`.
+  nd.slots[4]
+
+template macroName*(nd: Node): int32 =
+  ## Interned macro name id that `nkMacroDef` binds.
+  nd.slots[0]
 
 func findName*(t: Tables, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `noLink` when the template never names it.

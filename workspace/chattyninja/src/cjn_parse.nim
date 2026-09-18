@@ -64,8 +64,12 @@ type
     head: int32
     tails: seq[int32]
 
-func mkNode(kind: NodeKind, lo, hi, succ, child, alt: int32): Node =
-  Node(kind: kind, lo: lo, hi: hi, succ: succ, child: child, alt: alt)
+proc mkNode(kind: NodeKind, slots: varargs[int32]): Node =
+  ## Builds one node, appending its payload slots in layout order. The enclosing construct
+  ## backpatches `succ` and `child` from `noLink` through `patch` or a direct slot write.
+  result.kind = kind
+  for s in slots:
+    result.slots.add s
 
 # Tokenise
 # ---------------------------------------------------------------------------
@@ -229,13 +233,14 @@ func intern(p: var P, name: openArray[char]): int32 =
   result = int32 p.tables.names.len
   p.tables.names.add interned
 
-func addNode(p: var P, n: Node): int32 =
+func addNode(p: var P, n: sink Node): int32 =
+  ## Appends one node and returns its arena index.
   result = int32 p.nodes.len
   p.nodes.add n
 
 func patch(nodes: var seq[Node], idx, target: int32) =
-  ## Resolves one node's successor.
-  nodes[idx].succ = target
+  ## Resolves one node's successor, payload slot 2.
+  nodes[idx].slots[2] = target
 
 func tagKeyword(p: P, t: Tag): string =
   ## Returns the leading identifier of a `{% %}` tag.
@@ -315,11 +320,13 @@ func findKeyword(p: P, at, stop: int, word: string): int =
 proc parseBody(p: var P, stopKws: openArray[string]): Head
 proc parseConstruct(p: var P): Head
 
-proc parseMacroParams(p: var P, t: Tag, at: int): (seq[MacroParam], int) =
-  ## Parses `(a, b = expr, ...)` starting at the open paren. Defaults stay template text.
+proc parseMacroParams(p: var P, t: Tag, at: int, nodeIdx: int32) =
+  ## Parses `(a, b = expr, ...)` starting at the open paren and appends one payload triple
+  ## per parameter to the `nkMacroDef` node at `nodeIdx`, the interned name then the default
+  ## expression span, `noLink` when absent. Defaults stay template text.
+  ##
   ## A call evaluates each default in the caller's scope, after the parameters bound before it.
   var i = at + 1 # past the open paren
-  var params = newSeq[MacroParam]()
   while true:
     while i < t.tHi and p.src[i] in wsSpace:
       inc i
@@ -344,7 +351,9 @@ proc parseMacroParams(p: var P, t: Tag, at: int): (seq[MacroParam], int) =
       defLo = int32 k
       defHi = int32 skipBalanced(p, k, t.tHi, ",)")
       k = defHi.int
-    params.add MacroParam(name: name, defLo: defLo, defHi: defHi)
+    p.nodes[nodeIdx].slots.add name
+    p.nodes[nodeIdx].slots.add defLo
+    p.nodes[nodeIdx].slots.add defHi
     i = k
     while i < t.tHi and p.src[i] in wsSpace:
       inc i
@@ -355,7 +364,6 @@ proc parseMacroParams(p: var P, t: Tag, at: int): (seq[MacroParam], int) =
       inc i
       break
     raise err("macro parameter list is not closed at byte " & $i)
-  (params, i)
 
 proc parseMacro(p: var P): Head =
   ## `{% macro name(a, b = 1) %} body {% endmacro %}`. The definition binds a value and never runs
@@ -373,16 +381,14 @@ proc parseMacro(p: var P): Head =
     inc i
   if i >= t.tHi or p.src[i] != '(':
     raise err("`macro` parameters are not parenthesised at byte " & $i)
-  let (params, _) = parseMacroParams(p, t, i)
-  let aux = int32 p.tables.aux.len
-  p.tables.aux.add Aux(kind: axMacro, name: name, params: params)
   inc p.i
-  let idx = addNode(p, mkNode(nkMacroDef, name, noLink, noLink, noLink, aux))
+  let idx = addNode(p, mkNode(nkMacroDef, name, noLink, noLink, noLink))
+  parseMacroParams(p, t, i, idx)
   let body = parseBody(p, ["endmacro"])
   if p.i >= p.tags.len or tagKeyword(p, p.tags[p.i]) != "endmacro":
     raise err("`{% macro %}` has no `{% endmacro %}`")
   inc p.i
-  p.nodes[idx].child = body.head
+  p.nodes[idx].slots[3] = body.head
   for x in body.tails:
     patch(p.nodes, x, idx)
   Head(head: idx, tails: @[idx])
@@ -400,7 +406,7 @@ proc parseIf(p: var P): Head =
   #   a construct cannot sit below the nodes it dispatches into.
   let idx = addNode(p, mkNode(nkIf, condLo, condHi, noLink, noLink, noLink))
   let body = parseBody(p, ["elif", "else", "endif"])
-  p.nodes[idx].child = body.head
+  p.nodes[idx].slots[3] = body.head
   var tails = @[idx]
   tails.add body.tails
   if p.i >= p.tags.len:
@@ -410,12 +416,12 @@ proc parseIf(p: var P): Head =
   case nk
   of "elif":
     let nested = parseIf(p)
-    p.nodes[idx].alt = nested.head
+    p.nodes[idx].slots[4] = nested.head
     tails.add nested.tails
   of "else":
     inc p.i
     let eb = parseBody(p, ["endif"])
-    p.nodes[idx].alt = eb.head
+    p.nodes[idx].slots[4] = eb.head
     tails.add eb.tails
     if p.i >= p.tags.len or tagKeyword(p, p.tags[p.i]) != "endif":
       raise err("`{% else %}` has no `{% endif %}`")
@@ -466,16 +472,17 @@ proc parseFor(p: var P): Head =
   var targets = newSeq[int32](names.len)
   for k, n in names:
     targets[k] = intern(p, p.src.toOpenArray(n.lo, n.hi - 1))
-  let aux = int32 p.tables.aux.len
-  p.tables.aux.add Aux(kind: axFor, targets: targets, loopName: intern(p, "loop"),
-      filterLo: filterLo, filterHi: filterHi)
+  let loopId = intern(p, "loop")
   inc p.i
-  let idx = addNode(p, mkNode(nkFor, int32 iterLo, int32 iterHi, noLink, noLink, aux))
+  let idx = addNode(p, mkNode(nkFor, int32 iterLo, int32 iterHi, noLink, noLink, loopId,
+      filterLo, filterHi))
+  for tg in targets:
+    p.nodes[idx].slots.add tg
   let body = parseBody(p, ["endfor"])
   if p.i >= p.tags.len or tagKeyword(p, p.tags[p.i]) != "endfor":
     raise err("`{% for %}` has no `{% endfor %}`")
   inc p.i
-  p.nodes[idx].child = body.head
+  p.nodes[idx].slots[3] = body.head
   for x in body.tails:
     patch(p.nodes, x, idx)
   Head(head: idx, tails: @[idx])
@@ -510,11 +517,10 @@ proc parseSet(p: var P): Head =
     var v = k + 1
     while v < t.tHi and p.src[v] in wsSpace:
       inc v
-    let aux = int32 p.tables.aux.len
-    p.tables.aux.add Aux(kind: axSet, target: intern(p, p.src.toOpenArray(nsLo, nsHi - 1)),
-        field: intern(p, p.src.toOpenArray(fieldLo, fieldHi - 1)))
+    let targetId = intern(p, p.src.toOpenArray(nsLo, nsHi - 1))
+    let fieldId = intern(p, p.src.toOpenArray(fieldLo, fieldHi - 1))
     inc p.i
-    let idx = addNode(p, mkNode(nkSetNs, int32 v, t.tHi.int32, noLink, aux.int32, noLink))
+    let idx = addNode(p, mkNode(nkSetNs, int32 v, t.tHi.int32, noLink, targetId, fieldId))
     return Head(head: idx, tails: @[idx])
   if j >= t.tHi or p.src[j] != '=':
     raise err("`{% set %}` needs a target and `=`")
@@ -523,7 +529,7 @@ proc parseSet(p: var P): Head =
     inc v
   let target = intern(p, p.src.toOpenArray(nameStart, i - 1))
   inc p.i
-  let idx = addNode(p, mkNode(nkSet, int32 v, t.tHi.int32, noLink, target, noLink))
+  let idx = addNode(p, mkNode(nkSet, int32 v, t.tHi.int32, noLink, target))
   Head(head: idx, tails: @[idx])
 
 proc gap(what, corpusSite: string): Head =
@@ -570,11 +576,11 @@ proc parseBody(p: var P, stopKws: openArray[string]): Head =
     case t.kind
     of tkText:
       inc p.i
-      entry = addNode(p, mkNode(nkVerbatim, int32 t.lo, int32 t.hi, noLink, noLink, noLink))
+      entry = addNode(p, mkNode(nkVerbatim, int32 t.lo, int32 t.hi, noLink))
       fresh = @[entry]
     of tkVariable:
       inc p.i
-      entry = addNode(p, mkNode(nkEmit, int32 t.tLo, int32 t.tHi, noLink, noLink, noLink))
+      entry = addNode(p, mkNode(nkEmit, int32 t.tLo, int32 t.tHi, noLink))
       fresh = @[entry]
     of tkBlock:
       if tagKeyword(p, t) in stopKws:
@@ -590,8 +596,8 @@ proc parseBody(p: var P, stopKws: openArray[string]): Head =
   Head(head: head, tails: open)
 
 proc parseTemplate*(src: string): (seq[Node], Tables) =
-  ## Compiles template text to the arena plus its `Tables`. Interned names and aux records are
-  ## built in parse order and read-only at render.
+  ## Compiles template text to the arena plus its `Tables`. Interned names are built in parse
+  ## order and read-only at render.
   var p = P(src: src, tags: tokenize(src, src.len), i: 0, tables: Tables(), nodes: newSeq[Node]())
   let body = parseBody(p, [])
   for x in body.tails:

@@ -89,17 +89,21 @@ func bindName(d: var Driver, name: int32, val: Value) =
 
 # Steps
 # ---------------------------------------------------------------------------
+#
+# Every step reads its node's payload through the `nd` slot-accessor templates, which expand
+# textually onto the arena entry. A step must never bind a `Node` value, because the binding
+# invokes the payload's deep-copy hook and heap-allocates a spilled node's block every step.
 
 proc stepVerbatim(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Streams the final text run. The span already reflects every whitespace rule, so this step has
   ## nothing to decide.
-  let nd = m.nodes[n]
+  template nd: Node = m.nodes[n]
   emitSpan(m, d, nd.lo, nd.hi)
   d.curNode = nd.succ
 
 proc stepEmit(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Evaluates the expression span, stringifies it, and hands the result on as the pending piece.
-  let nd = m.nodes[n]
+  template nd: Node = m.nodes[n]
   let v = evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody)
   emitStr(d, if v.kind == vkStr: v.s else: pyStr(v))
   d.curNode = nd.succ
@@ -107,7 +111,7 @@ proc stepEmit(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
 proc stepIf(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Chooses a branch once. Branch bodies terminate past the chain, so this node is never entered
   ## a second time and no frame exists for it.
-  let nd = m.nodes[n]
+  template nd: Node = m.nodes[n]
   let v = evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody)
   if isTruthy(v):
     d.curNode = if nd.child == noLink: nd.succ else: nd.child
@@ -136,22 +140,26 @@ func materialize(v: Value): seq[Value] =
   else:
     raise err("cannot iterate a " & $v.kind)
 
-proc bindTargets(m: Machine, t: Tables, d: var Driver, aux: Aux, item: Value) =
-  ## Binds the loop targets. More than one target unpacks a sequence, which is what `x.items()`
-  ## feeds through `{% for k, v in x.items() %}`.
-  if aux.targets.len == 1:
-    d.bindName(aux.targets[0], item)
+proc bindTargets(m: Machine, t: Tables, d: var Driver, n: int32, item: Value) =
+  ## Binds the loop targets of the `nkFor` node at `n`. More than one target unpacks a sequence,
+  ## which is what `x.items()` feeds through `{% for k, v in x.items() %}`. Target name ids sit
+  ## past slot 7, after the loop name and the filter span.
+  template nd: Node = m.nodes[n]
+  let ntargets = int(nd.slots.len) - 7
+  if ntargets == 1:
+    d.bindName(nd.slots[7], item)
   else:
-    if item.kind != vkSeq or item.xs.items.len != aux.targets.len:
-      raise err("`for` unpacks " & $aux.targets.len & " targets from a value that is not a " &
-          $aux.targets.len & "-element sequence")
-    for i, name in aux.targets:
-      d.bindName(name, item.xs.items[i])
+    if item.kind != vkSeq or item.xs.items.len != ntargets:
+      raise err("`for` unpacks " & $ntargets & " targets from a value that is not a " &
+          $ntargets & "-element sequence")
+    for i in 0 ..< ntargets:
+      d.bindName(nd.slots[7 + i], item.xs.items[i])
 
-proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32, aux: Aux) =
+proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
   ## Re-entry path. Move the shared cursor to the next item passing the filter clause and re-enter
   ## the body, or close the frame and continue past the loop. The frame index is re-read after every
   ## evaluation because a nested construct can grow the frame stack and move it.
+  template nd: Node = m.nodes[n]
   while true:
     let fi = d.frames.len - 1
     let items = d.frames[fi].loop.items
@@ -160,24 +168,23 @@ proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32, aux: Aux) =
     if idx >= items.len:
       d.scopes.setLen(d.frames[fi].scopeAt - 1)
       d.frames.setLen(d.frames.len - 1)
-      d.curNode = m.nodes[n].succ
+      d.curNode = nd.succ
       return
-    bindTargets(m, t, d, aux, items[idx])
-    if aux.filterLo == noLink:
+    bindTargets(m, t, d, n, items[idx])
+    if nd.filterLo == noLink:
       break
-    let keep = evalSpan(m, t, d, aux.filterLo, aux.filterHi, runMacroBody)
+    let keep = evalSpan(m, t, d, nd.filterLo, nd.filterHi, runMacroBody)
     if isTruthy(keep):
       break
-  d.curNode = m.nodes[n].child
+  d.curNode = nd.child
 
 proc stepFor(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## `{% for %}`:
   ##   one function, two modes. A matching frame on top of the stack means advance.
   ##   Anything else means set up the iteration.
-  let nd = m.nodes[n]
-  let aux = t.aux[nd.alt]
+  template nd: Node = m.nodes[n]
   if d.frames.len > 0 and d.frames[^1].kind == frFor and d.frames[^1].node == n:
-    advanceFor(m, t, d, n, aux)
+    advanceFor(m, t, d, n)
     return
   let items = materialize(evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody))
   if items.len == 0:
@@ -185,16 +192,17 @@ proc stepFor(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
     return
   d.scopes.add @[]
   d.frames.add Frame(node: n, kind: frFor, loop: LoopState(items: items, idx: -1),
-      scopeAt: d.scopes.len, filterLo: aux.filterLo, filterHi: aux.filterHi)
+      scopeAt: d.scopes.len, filterLo: nd.filterLo, filterHi: nd.filterHi)
   let fi = d.frames.len - 1
   d.frames[fi].loop.idx = 0
-  bindTargets(m, t, d, aux, items[0])
-  d.bindName(aux.loopName, loopVal(d.frames[fi].loop))
+  bindTargets(m, t, d, n, items[0])
+  d.bindName(nd.loopName, loopVal(d.frames[fi].loop))
   d.curNode = if nd.child == noLink: nd.succ else: nd.child
 
 proc stepSet(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
-  ## Single-target `{% set %}`. It emits nothing, so the pending piece is untouched.
-  let nd = m.nodes[n]
+  ## Single-target `{% set %}`, the target carried as an interned name id in the child slot.
+  ## It emits nothing, so the pending piece is untouched.
+  template nd: Node = m.nodes[n]
   d.bindName(nd.child, evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody))
   d.curNode = nd.succ
 
@@ -214,13 +222,12 @@ proc stepSetNs(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## `ns.field = expr`, mutating the shared namespace mapping in place. The value is a `DictVal` ref
   ## shared by every holder, so the write is visible wherever the namespace was bound,
   ## and nothing is emitted.
-  let nd = m.nodes[n]
-  let aux = t.aux[nd.child]
-  let ns = lookupNameById(t, d, aux.target)
+  template nd: Node = m.nodes[n]
+  let ns = lookupNameById(t, d, nd.target)
   if ns.kind != vkNs:
-    raise err("`" & t.names[aux.target] & "` is not a namespace, so it has no `" &
-        t.names[aux.field] & "` to set")
-  dictSet(ns.d, t.names[aux.field], evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody))
+    raise err("`" & t.names[nd.target] & "` is not a namespace, so it has no `" &
+        t.names[nd.field] & "` to set")
+  dictSet(ns.d, t.names[nd.field], evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody))
   d.curNode = nd.succ
 
 proc stepSetBlock(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
@@ -238,10 +245,9 @@ proc stepGeneration(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} 
 proc stepMacroDef(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Binds a macro value and emits nothing. The body never runs here:
   ##   a macro's output is a string value, so only a call can run it, and a call runs it to completion.
-  let nd = m.nodes[n]
-  let aux = t.aux[nd.alt]
-  d.bindName(aux.name, macroVal(
-      MacroVal(name: aux.name, body: nd.child, aux: nd.alt, node: n)))
+  template nd: Node = m.nodes[n]
+  d.bindName(nd.macroName, macroVal(
+      MacroVal(name: nd.macroName, body: nd.child, node: n)))
   d.curNode = nd.succ
 
 const
@@ -252,12 +258,20 @@ const
     ## Dispatch table, total over `NodeKind`:
     ##   a new kind without a step is a compile error.
 
-proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, aux: Aux, args: seq[Arg]) =
-  ## Binds one macro call's parameters in a fresh scope. The order is positionals, then keywords,
-  ## then the defaults. A default is evaluated after the parameters before it are bound, and inside
-  ## the macro scope, which is the frame a default sees in Jinja.
+proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Arg]) =
+  ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`.
+  ## Each parameter occupies three payload slots from slot 4, the interned name then the default
+  ## expression span, `noLink` when absent.
+  ##
+  ## Binding order:
+  ## - positionals, then keywords, then the defaults
+  ## - a default is evaluated after the parameters before it are bound, inside the macro scope
+  ##   that a default sees in Jinja
+  template nd: Node = m.nodes[n]
   var pos = 0
-  for k, param in aux.params:
+  let nparams = (int(nd.slots.len) - 4) div 3
+  for k in 0 ..< nparams:
+    let base = 4 + 3 * k
     var val = undefinedVal()
     var bound = false
     while pos < args.len and args[pos].nameLo == noLink:
@@ -268,16 +282,16 @@ proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, aux: Aux, args: seq[Arg
       break
     if not bound:
       for a in args:
-        if a.nameLo != noLink and argName(m, a) == t.names[param.name]:
+        if a.nameLo != noLink and argName(m, a) == t.names[nd.slots[base]]:
           val = a.val
           bound = true
           break
     if not bound:
-      if param.defLo == noLink:
+      if nd.slots[base + 1] == noLink:
         val = undefinedVal()
       else:
-        val = evalSpan(m, t, d, param.defLo, param.defHi, runMacroBody)
-    d.bindName(param.name, val)
+        val = evalSpan(m, t, d, nd.slots[base + 1], nd.slots[base + 2], runMacroBody)
+    d.bindName(nd.slots[base], val)
 
 proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Arg]): string =
   ## Statement tier side of the macro runner. A macro body cannot stream, because its output is
@@ -296,7 +310,7 @@ proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[
   let savedNode = d.curNode
   d.scopes.add @[]
   d.sinks.add ""
-  bindMacroArgs(m, t, d, t.aux[mc.aux], args)
+  bindMacroArgs(m, t, d, mc.node, args)
   var node = mc.body
   while node != mc.node and node != noLink:
     steps[m.nodes[node].kind](m, t, d, node)

@@ -32,27 +32,31 @@ doAssert nodes.len == wantKinds.len,
 for i, k in wantKinds:
   doAssert nodes[i].kind == k, "node " & $i & " is " & $nodes[i].kind & " want " & $k
 
-# Names are interned rather than stored per node, and variable-length payloads live in `Tables.aux`,
-# so a node keeps its six fields.
+# Names are interned rather than stored per node, and a for-header carries its bindings
+# inside its own payload slots past position 6.
 doAssert tables.names.len == 3, "interned names: " & $tables.names.len
-doAssert tables.aux.len == 1, "the one for-header needs one aux record"
-doAssert nodes[3].kind == nkFor and nodes[3].alt == 0'i32, "nkFor holds its aux id in `alt`"
+doAssert nodes[3].kind == nkFor and int(nodes[3].slots.len) == 8,
+    "nkFor carries its seven fixed slots plus one target id"
+doAssert tables.names[nodes[3].loopName] == "loop", "nkFor binds the interned `loop` name"
+doAssert tables.names[nodes[3].slots[7]] == "message", "nkFor carries its target name id"
 doAssert src[nodes[3].lo ..< nodes[3].hi].strip == "messages",
     "nkFor keeps the iterable as a text span"
 
-# Spans and links stay inside the artifact that owns them.
+# Spans and links stay inside the artifact that owns them. `succ` is a link on every kind,
+# `child` only on the kinds that carry a body.
 for i, n in nodes:
   doAssert n.hi >= n.lo and n.hi <= src.len.int32, "node " & $i & " has a bad span"
-  for link in [n.succ, n.child]:
-    doAssert link == noLink or (link >= 0'i32 and link < nodes.len.int32),
-        "node " & $i & " has an out-of-range link"
+  doAssert n.succ == noLink or (n.succ >= 0'i32 and n.succ < nodes.len.int32),
+      "node " & $i & " has an out-of-range successor"
+  if n.kind in {nkIf, nkFor}:
+    doAssert n.child == noLink or (n.child >= 0'i32 and n.child < nodes.len.int32),
+        "node " & $i & " has an out-of-range body link"
 
-# An expression is never a node. Every `nkEmit` payload is one `lo..hi` span
-# with no subgraph below it, which is the trampoline the design rejected.
+# An expression is never a node. Every `nkEmit` payload is one `lo..hi` span and nothing else,
+# the three-slot shape with no subgraph below it, which is the trampoline the design rejected.
 for i, n in nodes:
   if n.kind == nkEmit:
-    doAssert n.child == noLink and n.alt == noLink,
-        "node " & $i & ": an expression must not become a node"
+    doAssert int(n.slots.len) == 3, "node " & $i & ": an expression must not become a node"
 
 # `nkIf` is single-entry and single-activation. Walking a branch body forward by `succ` must reach
 # the `if` node's own successor, which parse time backpatched past the whole chain, and must never

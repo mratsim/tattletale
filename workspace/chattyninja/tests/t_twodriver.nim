@@ -39,6 +39,16 @@ func bytesOf(m: Machine): string =
   for i in 0 ..< m.jinja.len:
     result[i] = m.jinja[i]
 
+func payloadOf(m: Machine): seq[tuple[kind: NodeKind, slots: seq[int32]]] =
+  ## Copies every node's kind and payload slots, so a render-time write into the arena is
+  ## observable. Slots are compared by value, since a spilled payload's heap block address
+  ## is an allocation detail, not part of the artifact's meaning.
+  result = newSeq[tuple[kind: NodeKind, slots: seq[int32]]](m.nodes.len)
+  for i, nd in m.nodes:
+    result[i].kind = nd.kind
+    for j, s in nd.slots:
+      result[i].slots.add s
+
 proc renderAll(m: Machine, t: Tables, ctx: Value, clock: float64): string =
   ## Renders once, whole, through the pull interface.
   var d = newDriver(ctx, clock)
@@ -159,9 +169,9 @@ block twoMachinesInterleaved:
   doAssert a == wantA, "interleaving a second artifact changed the first"
   doAssert b == wantB, "interleaving a second artifact changed the second"
 
-# The artifact itself is unchanged by rendering. Same node bytes, same arena length, same text.
+# The artifact itself is unchanged by rendering. Same node payloads, same arena length, same text.
 block artifactBytesUnchangedAfterRender:
-  let before = machineA.nodes
+  let before = payloadOf(machineA)
   let beforeText = bytesOf(machineA)
   let ctxBefore = machineA.nodes.len
   discard renderAll(machineA, tablesA, rowA.context, rowA.clock)
@@ -170,7 +180,7 @@ block artifactBytesUnchangedAfterRender:
   doAssert machineA.nodes.len == ctxBefore
   var differing = -1
   for i, nd in machineA.nodes:
-    if nd != before[i]:
+    if nd.kind != before[i].kind or nd.slots != before[i].slots:
       differing = i
       break
   doAssert differing < 0, "node " & $differing & " was mutated by a render"
