@@ -19,12 +19,12 @@
 #   each construct returns the nodes whose successor is unresolved, and the enclosing construct
 #   resolves them, which is how an `if` chain's bodies end up terminating past the whole chain
 #
-# | Rule            | Effect                                                                                    |
-# | --------------- | ----------------------------------------------------------------------------------------- |
-# | `trim_blocks`   | one newline directly after a block tag's `%}` is dropped                                  |
-# | `lstrip_blocks` | spaces and tabs immediately before `{%` are dropped when only they precede it on the line |
-# | `{{- ` / `{%- ` | every whitespace run before the tag is stripped                                           |
-# | `- }}` / `-%}`  | every whitespace run after the tag is stripped                                            |
+# | Rule                 | Effect                                                                                            |
+# | -------------------- | ------------------------------------------------------------------------------------------------- |
+# | `trim_blocks`        | one newline directly after a block or comment tag's close is dropped                              |
+# | `lstrip_blocks`      | spaces and tabs immediately before `{%` or `{#` are dropped when only they precede it on the line |
+# | `{{- ` `{%- ` `{#- ` | every whitespace run before the tag is stripped                                                   |
+# | `- }}` `-%}` `-#}`   | every whitespace run after the tag is stripped                                                    |
 #
 # - template text is literal, with no backslash escaping of delimiters. `{% raw %}` holds its body verbatim
 # - an expression stays template text:
@@ -131,17 +131,38 @@ proc tokenize(src: string, stop: int): seq[Tag] =
         let c = findTagClose(src, openAt + 2, stop, "#}")
         if c < 0:
           raise err("unclosed comment opened at byte " & $openAt)
-        # The comment's own body is erased, but the text run before it is real output and must be emitted,
-        # with `lstrip_blocks` applied when only blanks precede the comment on its line.
-        var clo = lo
-        var chi = hi
-        if atLineStart(src, openAt):
-          while clo < chi and src[chi - 1] in {' ', '\t'}:
-            dec chi
-        if clo < chi:
-          result.add Tag(kind: tkText, lo: int32 clo, hi: int32 chi, tLo: 0, tHi: 0)
-        i = c + 2
+        # The comment's own body is erased, but the text run before it is real output and must be emitted
+        # under the block tag's whitespace rules:
+        #   `{#-` strips the whitespace run before the tag
+        #   `lstrip_blocks` strips blanks preceding the tag on its line
+        #   `-#}` strips the whitespace run after the tag
+        #   trim_blocks drops one newline after the close
+        let afterTag = c + 2
+        var innerLo = openAt + 2
+        var innerHi = c
+        let stripBefore = innerLo < innerHi and src[innerLo] == '-'
+        let stripAfter = innerHi > innerLo and src[innerHi - 1] == '-'
+        if stripBefore:
+          inc innerLo
+        if stripAfter:
+          dec innerHi
+        if stripBefore:
+          while lo < hi and src[hi - 1] in wsSpace:
+            dec hi
+        elif atLineStart(src, openAt):
+          while lo < hi and src[hi - 1] in {' ', '\t'}:
+            dec hi
+        if lo < hi:
+          result.add Tag(kind: tkText, lo: int32 lo, hi: int32 hi, tLo: 0, tHi: 0)
+        if stripAfter:
+          var j = afterTag
+          while j < stop and src[j] in wsSpace:
+            inc j
+          i = j
+        else:
+          i = afterTag
         runStart = i
+        pendBr = true
         continue
       let isVar = marker == "{{"
       # The close is the bare delimiter. `-%}` carries no space before `%}`, so a `" %}"` marker

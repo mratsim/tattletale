@@ -137,6 +137,10 @@ doAssert render("{'a': 1, 'b': 2} | tojson") == "{\"a\": 1, \"b\": 2}"
 doAssert render("[1, 2] | tojson") == "[1, 2]"
 doAssert render("'x' | tojson") == "\"x\""
 doAssert render("'<' | tojson") == "\"\\u003c\"", "tojson applies the Jinja HTML escape"
+# Plain `| tojson` renders non-ASCII as raw UTF-8, the recording environment's policy.
+doAssert render("'東京' | tojson") == "\"東京\"", "tojson keeps non-ASCII verbatim by default"
+doAssert renderStmt("{#- hello -#}\nA{{ name }}",
+    ctx(("name", strVal("B")))) == "AB", "comment `-` markers strip the surrounding whitespace runs"
 doAssert render("people.tags | join('-')", withPeople) == "x-y"
 doAssert render("'ab' | upper") == "AB"
 doAssert render("'AB' | lower") == "ab"

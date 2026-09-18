@@ -48,6 +48,10 @@ type
 const CorpusRoot* = currentSourcePath().parentDir.parentDir / "corpus"
   ## the extracted corpus tree, read-only from a test's point of view
 
+const RenderRowSchema* = "chattyninja-chat-render-row-1"
+  ## the `schema` value every recorded render row carries. A suite also holds frames whose
+  ## schema differs (its generator metadata), which carry no render inputs and are skipped.
+
 # JSON reader
 # ---------------------------------------------------------------------------
 
@@ -277,11 +281,15 @@ proc loadRow*(suite, row: string): Row =
       clock: clockOf(frame))
 
 proc rows*(suite: string): seq[Row] =
-  ## Every recorded row of one suite, in sorted row order.
+  ## Every recorded row of one suite, in sorted row order. Frames whose `schema` is not
+  ## `RenderRowSchema` are skipped because a suite's generator metadata carries no render inputs.
   var stems = newSeq[string]()
   for path in walkPattern(CorpusRoot / suite / "*.json"):
     let name = lastPathPart(path)
     if not name.endsWith(".json") or name.endsWith(".meta.json"):
+      continue
+    let schema = field(jsonDoc(readFile(path)), "schema")
+    if schema.kind == vkStr and schema.s != RenderRowSchema:
       continue
     stems.add name[0 ..< name.len - ".json".len]
   stems.sort

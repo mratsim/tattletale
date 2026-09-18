@@ -115,6 +115,15 @@ doAssert cn.allIt(it.kind == nkVerbatim), "a comment became a node kind"
 doAssert cn.mapIt(cSrc[it.lo ..< it.hi]).join == "ab",
     "a comment is erased, not preserved: " & $cn.mapIt(cSrc[it.lo ..< it.hi])
 
+# A comment carries the block tag's whitespace rules. `lstrip_blocks` strips blanks before a plain
+# comment on its line, trim_blocks drops one newline after it, and `{#-` / `-#}` strip the whole
+# whitespace run before / after the comment.
+const cmSrc = "A\n   {# plain #}\nB{#- gone -#}  C"
+let (cmn, _) = parseTemplate(cmSrc)
+doAssert cmn.allIt(it.kind == nkVerbatim), "a comment became a node kind"
+doAssert cmn.mapIt(cmSrc[it.lo ..< it.hi]).join == "A\nBC",
+    "comment whitespace rules: " & $cmn.mapIt(cmSrc[it.lo ..< it.hi])
+
 # Only a trailing newline is dropped, so interior and trailing spacing survive byte for byte:
 # final does not mean trimmed.
 const pSrc = "keep  me  "

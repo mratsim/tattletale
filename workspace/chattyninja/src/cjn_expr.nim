@@ -370,6 +370,8 @@ func gapWhat(what: string, name: openArray[char]): void {.noreturn.} =
 
 proc tojsonFilter(v: Value, args: seq[Arg]): Value =
   ## Renders JSON. `ensure_ascii` and `separators` are the only kwargs the corpus passes.
+  ## `ensure_ascii` defaults to false to match the recording environment, which emits
+  ## non-ASCII as raw UTF-8 rather than `\uXXXX` escapes.
   var opts = JsonOpts()
   for a in args:
     case a.kw

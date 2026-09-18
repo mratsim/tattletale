@@ -67,7 +67,9 @@ type
 
   JsonOpts* = object
     ## `tojson` knobs the corpus passes, `ensure_ascii` and `separators`.
-    ensureAscii*: bool = true
+    ## `ensureAscii` defaults to false to match the recording environment, which emits
+    ## non-ASCII as raw UTF-8 rather than `\uXXXX` escapes.
+    ensureAscii*: bool = false
     itemSep*: string = ", "
     kvSep*: string = ": "
 
@@ -268,7 +270,7 @@ func pyRepr*(v: Value): string =
     result = pyStr(v)
 
 func jsonEscape(s: string, ensureAscii: bool): string =
-  ## Returns a JSON string body, ASCII-escaped when `ensureAscii` as Python's `json.dumps` defaults do.
+  ## Returns a JSON string body, ASCII-escaped when `ensureAscii` is set and raw UTF-8 otherwise.
   for r in s.runes:
     let c = ord(r)
     if c == ord('"'):
@@ -310,7 +312,7 @@ func jsonEscapeHtml(s: string): string =
 
 func toJson*(v: Value, opts = JsonOpts()): string =
   ## Returns the `tojson` filter rendering:
-  ##   `json.dumps` defaults with the corpus kwargs applied,
+  ##   non-ASCII renders as raw UTF-8 unless the template passes `ensure_ascii`,
   ## then Jinja's HTML escaping.
   case v.kind
   of vkUndefined, vkNone: result = "null"

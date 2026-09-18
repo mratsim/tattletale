@@ -50,6 +50,35 @@ for f in "${files[@]}"; do
   sed -n '1,20p' "$bin_dir/$name.out"
 done
 
+# `t_twodriver` also runs with a tiny chunk size, which puts a chunk boundary inside every
+# corpus render; the default 4096 never reaches one. The small-chunk delivery path is only
+# exercised by this build, so it ships as a second binary beside the plain one.
+run_chunk7=false
+if [ "$#" -eq 0 ]; then
+  run_chunk7=true
+else
+  for a in "$@"; do
+    [ "$(basename "${a%.nim}")" = "t_twodriver" ] && run_chunk7=true
+  done
+fi
+if [ "$run_chunk7" = true ]; then
+  f="tests/t_twodriver.nim"
+  name="t_twodriver-chunk7"
+  log="$bin_dir/$name.log"
+  if ! nim c "${flags[@]}" -d:ChunkSize=7 -o:"$bin_dir/$name" "$f" >"$log" 2>&1; then
+    echo "FAIL compile  $f (-d:ChunkSize=7)"
+    sed -n '1,25p' "$log"
+    status=1
+  elif ! "$bin_dir/$name" >"$bin_dir/$name.out" 2>&1; then
+    echo "FAIL run      $f (-d:ChunkSize=7)"
+    sed -n '1,40p' "$bin_dir/$name.out"
+    status=1
+  else
+    echo "ok            $f (-d:ChunkSize=7)"
+    sed -n '1,20p' "$bin_dir/$name.out"
+  fi
+fi
+
 if [ "$status" -eq 0 ]; then
   echo "gate: PASS"
 else
