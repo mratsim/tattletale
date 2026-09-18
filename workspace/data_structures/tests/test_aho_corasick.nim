@@ -22,7 +22,7 @@ import std/random
 import std/algorithm
 import std/strutils
 import std/importutils
-import workspace/data_structures/src/aho_corasick
+import workspace/data_structures/aho_corasick
 privateAccess(AhoCorasick)
 
 type

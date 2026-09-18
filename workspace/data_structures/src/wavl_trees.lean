@@ -5,7 +5,7 @@
 
   Intrusive WAVL (Weak AVL) Tree — index-based, Array-backed.
 
-  Formalization in Lean 4 of the Nim implementation at wavl_tree.nim.
+  Formalization in Lean 4 of the Nim implementation at wavl_trees.nim.
   
   References:
   - Haeupler, Sen, Tarjan (2015). "Rank-Balanced Trees".

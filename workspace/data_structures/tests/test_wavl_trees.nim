@@ -6,7 +6,7 @@
 # at your option. This file may not be published, modified, or distributed except according to those terms.
 
 import std/random
-import ../data_structures
+import workspace/data_structures/wavl_trees
 
 
 # ---------------------------------------------------------------------------
