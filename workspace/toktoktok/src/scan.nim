@@ -15,7 +15,7 @@ import std/strutils
 import std/monotimes
 import std/times
 
-import workspace/data_structures/src/aho_corasick
+import workspace/data_structures/aho_corasick
 import workspace/regex_engine
 import ./machine
 
