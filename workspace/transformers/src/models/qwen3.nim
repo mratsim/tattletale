@@ -154,8 +154,6 @@ proc getDeviceKind(self: Qwen3Model): DeviceKind =
   self.device
 
 proc loadQwen3ModelRaw(modelPath: string, device: DeviceKind): Qwen3Model =
-  ## Load Qwen3 model — no quantization knowledge, all dispatched via
-  ## deserialization.nim and QuantLoaderRegistry.
   let config = loadQwen3Config(modelPath / "config.json")
   let weightsPath = modelPath / "model.safetensors"
   let weights = SafetensorsCollection.open(weightsPath)

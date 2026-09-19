@@ -230,8 +230,6 @@ proc loadMoonlightTokenizer(modelPath: string): BPETokenizer =
   loadTiktokenizer(modelPath / "tiktoken.model", MoonshotPatStrRegexp, specialTokens)
 
 proc loadMoonlightModelRaw(modelPath: string, device: DeviceKind): MoonlightModel =
-  ## Weight scope: `model.*` plus the untied `lm_head.weight`; no
-  ## vision tower and no draft block on this checkpoint.
   let config = loadMoonlightConfig(modelPath / "config.json")
   checkValue(config.modelType == "deepseek_v3",
     "[ttt] loadMoonlightModelRaw: model_type \"" & config.modelType &

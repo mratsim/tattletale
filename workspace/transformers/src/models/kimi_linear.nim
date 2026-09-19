@@ -420,17 +420,6 @@ proc loadKimiTokenizer*(modelPath: string): BPETokenizer =
   loadTiktokenizer(modelPath / "tiktoken.model", MoonshotPatStrRegexp, specialTokens)
 
 proc loadKimiLinearModelRaw(modelPath: string, device: DeviceKind): KimiModel =
-  ## Loads the Kimi-Linear model weights from the checkpoint.
-  ##
-  ## Weight scope covers `model.*` over the main stack 0..num_hidden_layers-1
-  ## plus the untied `lm_head.weight`.
-  ## - Every weight loads as a device-resident owned copy under the shared
-  ##   loaders' device parameter.
-  ## - The router weights and the MLA weights call getTensorOwned directly.
-  ## - Router bias, A_log and dt_bias convert from the checkpoint bf16 grid
-  ##   to f32 explicitly.
-  ## - The safetensors collection releases at load end, CPU and device
-  ##   requests produce identical weight bytes on their named devices.
   let config = loadKimiConfig(modelPath / "config.json")
   checkValue(config.modelType == "kimi_linear",
     "[ttt] loadKimiLinearModelRaw: model_type \"" & config.modelType &

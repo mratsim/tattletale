@@ -292,14 +292,6 @@ proc getDeviceKind(self: Ling3Model): DeviceKind =
   self.device
 
 proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
-  ## Loads the Ling-3.0-tiny model weights from the checkpoint.
-  ##
-  ## Weight scope covers `model.*` over the main stack 0..num_hidden_layers-1
-  ## plus the untied `lm_head.weight`.
-  ## - The embedding key is model.word_embeddings on this template.
-  ## - expert_bias is stored f32 in the checkpoint but loads through the bf16 grid, matching the reference deployment dtype.
-  ## - Routing weights gather from the unbiased f32 scores.
-  ## - Explicit-dtype tensors A_log and dt_bias keep checkpoint dtype.
   let config = loadLing3Config(modelPath / "config.json")
   checkValue(config.modelType == "bailing_hybrid",
     "[ttt] loadLing3ModelRaw: model_type \"" & config.modelType &
@@ -425,83 +417,6 @@ proc loadLing3Model*(modelPath: string, device: DeviceKind): AnyModel =
   # iface generates to[AnyModel] converter automatically
   ling3Model.to(AnyModel)
 
-proc censusDerivedSchedule*(modelPath: string, cfg: LingConfig):
-    tuple[onDisk, mlaLayers, kdaLayers, loadScope: int] =
-  ## Weight-map cross-check helper for the derived schedule.
-  ##
-  ## Returns the on-disk, MLA, KDA, and load-scope counts.
-  ## - Every layer index lands in 0..num_hidden_layers-1.
-  ## - MLA vocabulary (attention.dense, q_a_proj, q_b_proj, g_proj) sits
-  ##   exactly on the (idx + 1) mod layer_group_size == 0 set.
-  ## - KDA vocabulary (attention.A_log, attention.dt_bias, o_norm) sits on the other layers.
-  ## - On-disk router bias buffer, A_log and dt_bias stay f32, the loader
-  ##   mirrors the reference dtype plan from these raw bytes.
-  let indexJson = parseFile(modelPath / "model.safetensors.index.json")
-  let weightMap = indexJson{"weight_map"}
-  checkValue(weightMap.kind == JObject and weightMap.len != 0,
-    "[ttt] censusDerivedSchedule: model.safetensors.index.json carries no weight_map")
-  let layerPrefix = "model.layers."
-  var mlaSeen, kdaSeen: seq[int]
-  var biasKeys, aLogKeys, dtBiasKeys: seq[string]
-  for name, shard in weightMap:
-    checkValue(shard.kind == JString,
-      "[ttt] censusDerivedSchedule: weight_map entry " & $name &
-      " is not a filename")
-    inc result.onDisk
-    if name.startsWith(layerPrefix):
-      let rest = name[layerPrefix.len .. ^1]
-      let dot = rest.find('.')
-      checkValue(dot > 0,
-        "[ttt] censusDerivedSchedule: key " & $name & " carries no layer index")
-      let layerIdx = parseInt(rest[0 ..< dot])
-      checkValue(layerIdx >= 0 and layerIdx < cfg.numHiddenLayers,
-        "[ttt] censusDerivedSchedule: layer index " & $layerIdx &
-        " outside 0.." & $(cfg.numHiddenLayers - 1) & " in key " & $name)
-      if ".attention.dense." in name:
-        mlaSeen.add layerIdx
-      if ".attention.A_log" in name:
-        kdaSeen.add layerIdx
-        aLogKeys.add name
-      if ".attention.dt_bias" in name:
-        dtBiasKeys.add name
-      if ".mlp.gate.expert_bias" in name:
-        biasKeys.add name
-    inc result.loadScope
-
-  result.mlaLayers = mlaSeen.len
-  result.kdaLayers = kdaSeen.len
-  checkValue(mlaSeen.len + kdaSeen.len == cfg.numHiddenLayers,
-    "[ttt] censusDerivedSchedule: " & $mlaSeen.len & " MLA and " &
-    $kdaSeen.len & " KDA layers do not cover the " & $cfg.numHiddenLayers &
-    " layer stack")
-  var mlaDerived: seq[int]
-  for i in 0 ..< cfg.numHiddenLayers:
-    if cfg.layerKinds[i] == alkMla:
-      mlaDerived.add i
-  checkValue(mlaSeen.sorted == mlaDerived,
-    "[ttt] censusDerivedSchedule: MLA layer set " & $mlaSeen.sorted &
-    " disagrees with the derived schedule " & $mlaDerived)
-  checkValue(biasKeys.len == cfg.numHiddenLayers - cfg.firstKDenseReplace,
-    "[ttt] censusDerivedSchedule: bias buffer count " & $biasKeys.len &
-    " disagrees with the routed layer count " &
-    $(cfg.numHiddenLayers - cfg.firstKDenseReplace))
-
-  let view = SafetensorsCollection.open(modelPath)
-  for name in biasKeys:
-    let bias = view.getTensorOwned(name, kCPU)
-    checkValue(bias.scalarType() == kFloat32,
-      "[ttt] censusDerivedSchedule: bias buffer " & $name & " is " &
-      $bias.scalarType() & ", expected f32")
-  for name in aLogKeys:
-    let aLog = view.getTensorOwned(name, kCPU)
-    checkValue(aLog.scalarType() == kFloat32,
-      "[ttt] censusDerivedSchedule: A_log " & $name & " is " &
-      $aLog.scalarType() & ", expected f32")
-  for name in dtBiasKeys:
-    let dtBias = view.getTensorOwned(name, kCPU)
-    checkValue(dtBias.scalarType() == kFloat32,
-      "[ttt] censusDerivedSchedule: dt_bias " & $name & " is " &
-      $dtBias.scalarType() & ", expected f32")
 
 static:
   # Register the Ling-3.0-tiny (bailing_hybrid) model in the registry

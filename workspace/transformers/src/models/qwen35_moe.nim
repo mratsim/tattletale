@@ -257,9 +257,6 @@ proc getDeviceKind(self: Qwen35MoeModel): DeviceKind =
   self.device
 
 proc loadQwen35MoeModelRaw(modelPath: string, device: DeviceKind): Qwen35MoeModel =
-  ## Weight scope: the model reads `model.language_model.*` only. Foreign
-  ## `model.visual.*` (vision tower) plus `mtp.*` (draft block) tensors
-  ## of the same checkpoint are never requested.
   let config = loadQwen35MoeConfig(modelPath / "config.json")
   checkValue(config.hiddenAct == "silu",
     "[ttt] loadQwen35MoeModelRaw: unsupported hidden_act \"" &

@@ -203,14 +203,6 @@ proc getDeviceKind(self: Glm47Model): DeviceKind =
   self.device
 
 proc loadGlm47ModelRaw(modelPath: string, device: DeviceKind): Glm47Model =
-  ## Weight scope: `model.*` over the main stack 0..num_hidden_layers-1
-  ## plus the untied `lm_head.weight`. The checkpoint carries ONE extra
-  ## layer past the main stack, the reference stack's
-  ## speculative-decoding draft block (MTP), present in the safetensors
-  ## with its own embedding, norms, projections, router and experts.
-  ## This loader does not implement speculative decoding: it loads the
-  ## main stack plus the lm_head and IGNORES the draft block's keys,
-  ## intentionally; the model runs complete without them.
   let config = loadGlm47Config(modelPath / "config.json")
   checkValue(config.modelType == "glm4_moe_lite",
     "[ttt] loadGlm47ModelRaw: model_type \"" & config.modelType &

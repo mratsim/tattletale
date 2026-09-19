@@ -197,9 +197,6 @@ proc getDeviceKind(self: Qwen35Model): DeviceKind =
   self.device
 
 proc loadQwen35ModelRaw(modelPath: string, device: DeviceKind): Qwen35Model =
-  ## The checkpoint file also carries foreign tensors: `model.visual.*`
-  ## (vision tower) and `mtp.*` (draft head). This model never requests
-  ## them, so the load skips them without error.
   let config = loadQwen35Config(modelPath / "config.json")
   let weightsPath = modelPath / "model.safetensors-00001-of-00001.safetensors"
   let weights = SafetensorsCollection.open(weightsPath)
