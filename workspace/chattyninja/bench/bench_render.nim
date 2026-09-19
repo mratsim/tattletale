@@ -21,6 +21,9 @@
 ##
 ## - release build, ms/render and renders/s per template x conversation shape, median
 ##   over 15 timed runs after 500 warm-up renders, spread-flagged when noisy
+## - release build, pull-window timing over the corpus anchor rows, median ms/render
+##   for 256 B and 4 KiB windows beside the one-shot render, plus pull-call counts
+##   and scratch-spill rows under a 256-byte scratch
 ## - benchAlloc build, parse-time and render-time allocations per render, warm-up
 ##   uncounted through `system.getAllocStats()`, plus spill counts and micro
 ##   attribution templates isolating loop machinery, emit stringification and JSON serialization
@@ -441,6 +444,116 @@ proc benchCorpus(): void =
       let flag = if bestSpread > 20.0: "  VARIANCE" else: ""
       echo &"  {suite:14} {mid:9.4f} ms/render all {rs.len} rows   spread {bestSpread:4.1f}%{flag}"
 
+# ── Pull-window timing ───────────────────────────────────────────────────────
+
+proc renderWindowN(m: Machine, t: Tables, ctx: Value, clock: float64, n,
+    windowSize: int): int =
+  ## Renders `n` times through a `windowSize`-byte stack window and returns the byte
+  ## count accumulated across renders, so the loop consumes every render.
+  var buf: array[4096, char]
+  for _ in 0 ..< n:
+    var d = newDriver(ctx, clock)
+    while true:
+      let got = pull(m, t, d, buf.toOpenArray(0, windowSize - 1))
+      if got == 0:
+        break
+      result += got
+
+proc pullCallsPerPass(m: Machine, t: Tables, rs: seq[Row], windowSize: int): int =
+  ## Pull calls that returned bytes, one untimed pass over every row.
+  var buf: array[4096, char]
+  for r in rs:
+    var d = newDriver(r.context, r.clock)
+    while true:
+      let got = pull(m, t, d, buf.toOpenArray(0, windowSize - 1))
+      if got == 0:
+        break
+      inc result
+
+proc scratchSpillRows(m: Machine, t: Tables, rs: seq[Row]): int =
+  ## Rows whose render raises `ScratchError` under a 256-byte scratch, one untimed
+  ## pass per row. Recovery follows the documented grow-and-repull:
+  ## - scratch quadruples on every breach up to 64 KiB, reattached to the same driver
+  ## - a row still breaching at the cap counts as spilled, the next row starts fresh
+  var buf: array[4096, char]
+  for r in rs:
+    var d = newDriver(r.context, r.clock)
+    var cap = 256
+    var spilled = false
+    var done = false
+    while not done:
+      var scr = newSeq[char](cap)
+      attachScratch(d, scr)
+      try:
+        while true:
+          let got = pull(m, t, d, buf.toOpenArray(0, 255))
+          if got == 0:
+            break
+        done = true
+      except ScratchError:
+        spilled = true
+        if cap >= 65536:
+          done = true
+        else:
+          cap *= 4
+    if spilled:
+      inc result
+
+proc timedCorpusPasses(m: Machine, t: Tables, rs: seq[Row], iters: int,
+    render: proc (m: Machine, t: Tables, ctx: Value, clock: float64): int):
+    tuple[mid, spread: float64] =
+  ## Rounds of 15 timed runs of `iters` full-corpus passes of `render`, method
+  ## identical to the corpus timing anchor:
+  ## - the first round whose spread stays within 20% is reported
+  ## - a busy machine gets up to 4 rounds
+  ## - a spread above 20% flags the sample
+  var best: seq[float64]
+  var bestSpread = 1e9
+  for _ in 0 ..< 4:
+    let samples = timedRuns(15, iters):
+      for _ in 0 ..< iters:
+        for r in rs:
+          discard render(m, t, r.context, r.clock)
+    let spread = (max(samples) - min(samples)) / median(samples) * 100.0
+    if spread < bestSpread:
+      bestSpread = spread
+      best = samples
+    if bestSpread <= 20.0:
+      break
+  (median(best), bestSpread)
+
+proc benchPullWindows(): void =
+  ## Pull-window timing over the corpus anchor rows, harness identical to the corpus
+  ## timing anchor:
+  ## - 500 warm-up renders, then median of 15 timed runs of `iters` full-corpus passes
+  ## - window sizes 256 B and 4 KiB sit beside the one-shot `pullAll` render
+  echo "pull-window timing anchor (median of 15 runs, warm-up uncounted)"
+  for (suite, iters) in [("deepseekv2lite", 400), ("qwen3", 150)]:
+    let rs = rows(suite)
+    let src = templateSource(suite)
+    let (nodes, tables) = parseTemplate(src)
+    let m = Machine(jinja: src, nodes: nodes)
+    discard renderN(m, tables, rs[0].context, rs[0].clock, 500) # warm-up pass, not counted
+    var line = &"  {suite:14} "
+    for windowSize in [256, 4096]:
+      let renderRow = proc (mm: Machine, tt: Tables, ctx: Value, clock: float64): int =
+        renderWindowN(mm, tt, ctx, clock, 1, windowSize)
+      let (mid, spread) = timedCorpusPasses(m, tables, rs, iters, renderRow)
+      let flag = if spread > 20.0: "  VARIANCE" else: ""
+      line.add &"win {windowSize:4} {mid:9.4f} ms/render  spread {spread:4.1f}%{flag}   "
+    let renderWhole = proc (mm: Machine, tt: Tables, ctx: Value, clock: float64): int =
+      renderOnce(mm, tt, ctx, clock).len
+    let (mid, spread) = timedCorpusPasses(m, tables, rs, iters, renderWhole)
+    let flag = if spread > 20.0: "  VARIANCE" else: ""
+    line.add &"one-shot {mid:9.4f} ms/render  spread {spread:4.1f}%{flag}"
+    echo line
+    let calls256 = pullCallsPerPass(m, tables, rs, 256)
+    let calls4k = pullCallsPerPass(m, tables, rs, 4096)
+    let spills = scratchSpillRows(m, tables, rs)
+    echo &"    pull calls per pass: 256 B {calls256} ({calls256 div rs.len}/render), " &
+        &"4 KiB {calls4k} ({calls4k div rs.len}/render), spills {spills} of {rs.len} rows " &
+        &"under a 256-byte scratch"
+
 proc main(): void =
   benchHf()
   when defined(benchAlloc):
@@ -449,5 +562,8 @@ proc main(): void =
     microAttribution(longShape(false, "long40-nt").ctx)
   echo ""
   benchCorpus()
+  when not defined(benchAlloc):
+    echo ""
+    benchPullWindows()
 
 main()
