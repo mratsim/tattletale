@@ -412,7 +412,6 @@ proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
   )
 
 proc loadLing3Model*(modelPath: string, device: DeviceKind): AnyModel =
-  ## Returns the loaded Ling-3.0-tiny model wrapped as an AnyModel.
   let ling3Model = loadLing3ModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   ling3Model.to(AnyModel)

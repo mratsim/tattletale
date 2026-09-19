@@ -292,15 +292,7 @@ proc parseKimiConfig(json: JsonNode): KimiConfig =
     "[ttt] KimiConfig: num_shared_experts is " & $result.nSharedExperts &
     ", the ungated shared tail serves exactly one shared expert")
 
-proc loadKimiConfig*(path: string): KimiConfig =
-  ## Config reader for the fixture suites.
-  ##
-  ## Returns the KimiConfig parsed from `path` plus the generation config beside it.
-  ## - `path` is the config.json path, the stop set comes from the generation_config.json.
-  ## - eos_token_id is a bare int on this checkpoint, the list reader's
-  ##   bare-int form handles the type.
-  ## - Special ids stay optional fields of the generation config and fall
-  ##   back to the config.json values.
+proc loadKimiConfig(path: string): KimiConfig =
   let raw = parseFile(path)
   result = raw.parseKimiConfig()
   let gen = loadGenerationConfig(parentDir(path) / "generation_config.json")
@@ -377,14 +369,7 @@ proc getTokenizer(self: KimiModel): BPETokenizer =
 proc getDeviceKind(self: KimiModel): DeviceKind =
   self.device
 
-proc loadKimiTokenizer*(modelPath: string): BPETokenizer =
-  ## Returns the BPETokenizer built from the checkpoint's tiktoken rank
-  ## file and the added_tokens_decoder block of tokenizer_config.json.
-  ## - Checkpoint pat_str is byte-identical to the Moonlight one, so
-  ##   MoonshotPatStrRegexp is reused directly.
-  ## - The special_tokens map spans 258 slots past the 163584 mergeable
-  ##   ranks and fills every empty decoder-block slot with the synthetic
-  ##   literal "<|reserved_token_N|>", ids ascending.
+proc loadKimiTokenizer(modelPath: string): BPETokenizer =
   let tokConfig = (modelPath / "tokenizer_config.json").parseFile()
   let decoder = tokConfig{"added_tokens_decoder"}
   checkValue(decoder.kind == JObject and decoder.len != 0,
@@ -525,7 +510,6 @@ proc loadKimiLinearModelRaw(modelPath: string, device: DeviceKind): KimiModel =
   )
 
 proc loadKimiLinearModel*(modelPath: string, device: DeviceKind): AnyModel =
-  ## Returns the loaded Kimi-Linear model wrapped as an AnyModel.
   let kimiModel = loadKimiLinearModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   kimiModel.to(AnyModel)
