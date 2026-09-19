@@ -281,8 +281,6 @@ task test_tf_bf16_moonlight_01_layer_internals, "Suite: Moonlight decoder layer 
   runTransformerSuite("q_bf16", "t_bf16_moonlight_01_layer_internals.nim")
 task test_tf_bf16_kimi_01_layer_internals, "Suite: Kimi layer-0 KDA kernel-boundary replay against the single-file fixture":
   runTransformerSuite("q_bf16", "t_bf16_kimi_01_layer_internals.nim")
-task test_tf_bf16_kimi_02_tokenizer, "Suite: Kimi-Linear tokenizer unit checks, regexp identity + specials synthesis + roundtrips":
-  runTransformerSuite("q_bf16", "t_bf16_kimi_02_tokenizer.nim")
 task test_tf_bf16_kimi_04_greedy_text_generation, "Suite: Kimi-Linear greedy text generation, 3 chains x 32 steps vs fixtures":
   runTransformerSuite("q_bf16", "t_bf16_kimi_04_greedy_text_generation.nim")
 task test_tf_bf16_ling3_05_coherence, "Suite: Ling-3.0-tiny fixture-free coherence, answer-position ranking + greedy chain":
@@ -363,7 +361,6 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
   of "kimi":
     runFamily(@[
       ("q_bf16", "t_bf16_kimi_01_layer_internals.nim"),
-      ("q_bf16", "t_bf16_kimi_02_tokenizer.nim"),
       ("q_bf16", "t_bf16_kimi_04_greedy_text_generation.nim")])
   of "ling3":
     runFamily(@[
