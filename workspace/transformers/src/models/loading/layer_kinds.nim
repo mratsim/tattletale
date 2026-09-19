@@ -21,6 +21,10 @@ type
     alkAttention     ## Softmax attention: GQA grouping, gating and rope
                      ## policy are config-derived properties of the layer,
                      ## not per-layer kinds
+    alkSlidingAttention
+                     ## Softmax attention under a sliding visibility band:
+                     ## the window width and the rope theta are config
+                     ## -derived properties of the layer kind
     alkGatedDeltaNet ## Linear attention: the Gated DeltaNet kind
     alkMla           ## Multi-head latent attention (DeepSeek, GLM-4.7-Flash).
                      ## TODO: pending a port with per-layer attention kinds,
@@ -37,6 +41,7 @@ proc parseAttnFromHfTransformers*(raw: string, source: string): AttentionLayerKi
   # TODO: pending a GGUF loader, map its kind tags into this catalogue.
   const keyNames = [
     ("full_attention", alkAttention),
+    ("sliding_attention", alkSlidingAttention),
     ("linear_attention", alkGatedDeltaNet),
   ]
   for entry in keyNames:

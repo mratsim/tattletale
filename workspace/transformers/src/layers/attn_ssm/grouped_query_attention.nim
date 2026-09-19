@@ -45,6 +45,10 @@ type
     o_proj: Linear
     gqa_attn: GroupedQueryAttention
     rotary: RotaryPositionEmbedding
+    window*: int
+      ## Visibility band of the layer kind.
+      ## A query attends to itself and the previous `window - 1` cached keys.
+      ## `FullVisibilityWindow` removes the band entirely.
     when QKNorm isnot void:
       q_norm: QKNorm
       k_norm: QKNorm
@@ -75,10 +79,58 @@ type
 #   and it has no positional role in the similarity computation.
 # =============================================================================
 
-func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
+const FullVisibilityWindow* = int.high
+  ## Sentinel of the windowed attention spelling.
+  ## The visibility band never binds, every key at or before the query stays
+  ## visible under the plain causal rule.
+
+proc windowedCausalMask*(qLen, kvLen, offset, window: int, dtype: F.ScalarKind, device: F.DeviceKind): Tensor =
+  ## Visibility-band causal mask of the windowed attention spelling.
+  ##
+  ## Expected input:
+  ##
+  ## - `qLen`, the query count of one forward pass
+  ## - `kvLen`, the gathered key count of one forward pass
+  ## - `offset`, the absolute position of the first query (kv_position)
+  ##
+  ## - `window`, the visibility band of the layer kind
+  ## - `dtype`, the query tensor's storage dtype
+  ## - `device`, the query tensor's device
+  ##
+  ## Output:
+  ##
+  ## - a `(1, 1, qLen, kvLen)` float mask
+  ## - `0` keeps a key visible, `-Inf` masks it
+  ## - the mask broadcasts over batch and heads
+  ##
+  ## Visibility rule, matching the reference sliding-window causal rule:
+  ##
+  ## - query row `i` covers absolute position `offset + i`
+  ## - key column `j` covers absolute position `j`
+  ## - a key stays visible iff `j <= offset + i` and `j > offset + i - window`
+  doAssert window > 0, "windowedCausalMask: the visibility band must be positive"
+  let opts = F.tensorOptions(F.kInt64, device)
+  let qPos = F.arange(offset, offset + qLen, opts).unsqueeze(1)
+  let kPos = F.arange(0, kvLen, opts).unsqueeze(0)
+  let distance = qPos - kPos   # (qLen, kvLen) query position minus key position
+  var mask = F.zeros(qLen, kvLen, F.tensorOptions(dtype, device))
+  mask.masked_fill_mut(distance <. Scalar(0.0'f64), Scalar(NegInf))
+  mask.masked_fill_mut(distance >=. Scalar(window.float64), Scalar(NegInf))
+  mask.unsqueeze(0).unsqueeze(0)
+
+func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int, softmaxScale = 0.0'f64): GroupedQueryAttention =
   ## Configure GQA over `num_qo_head` query heads and `num_kv_head` KV heads,
-  ## each of width `head_dim`. The softmax scale is `head_dim^-0.5`.
+  ## each of width `head_dim`.
+  ##
+  ## Softmax scale is `head_dim^-0.5` by default.
+  ##
+  ## `softmaxScale` overrides it when positive, for checkpoints that scale
+  ## attention by a pre-attention scalar.
+  ## Gemma-3 passes `query_pre_attn_scalar^-0.5` here.
   let num_kv_groups = num_qo_head div num_kv_head
+  let scale =
+    if softmaxScale > 0.0'f64: softmaxScale
+    else: 1.0'f64 / sqrt(head_dim.float64)
   GroupedQueryAttention(
     head_dim: head_dim,
     num_qo_head: num_qo_head,
@@ -86,7 +138,7 @@ func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: in
     num_kv_groups: num_kv_groups,
     qo_attn_dim: num_qo_head * head_dim,
     kv_attn_dim: num_kv_head * head_dim,
-    softmax_scale: 1.0'f64 / sqrt(head_dim.float64)
+    softmax_scale: scale
   )
 
 func forward*(
@@ -161,7 +213,8 @@ func initBase[QKNorm](
     name: string,
     q_proj, k_proj, v_proj, o_proj: Linear,
     num_qo_head, num_kv_head, head_dim: int,
-    rotary: RotaryPositionEmbedding): RopeGQAttention[QKNorm] =
+    rotary: RotaryPositionEmbedding,
+    window: int, softmaxScale: float64): RopeGQAttention[QKNorm] =
   checkValue(num_qo_head > 0,
     "[ttt] " & name & ": num_attention_heads is " & $num_qo_head &
     ", expected a positive count")
@@ -171,6 +224,9 @@ func initBase[QKNorm](
   checkValue(num_qo_head mod num_kv_head == 0,
     "[ttt] " & name & ": num_attention_heads (" & $num_qo_head &
     ") leaves a remainder under num_key_value_heads (" & $num_kv_head & ")")
+  checkValue(window > 0,
+    "[ttt] " & name & ": the visibility band is " & $window &
+    ", expected a positive count or FullVisibilityWindow")
   RopeGQAttention[QKNorm](
     layer_idx: layer_idx,
     name: name,
@@ -178,8 +234,10 @@ func initBase[QKNorm](
     k_proj: k_proj,
     v_proj: v_proj,
     o_proj: o_proj,
-    gqa_attn: GroupedQueryAttention.init(num_qo_head, num_kv_head, head_dim),
-    rotary: rotary
+    gqa_attn: GroupedQueryAttention.init(num_qo_head, num_kv_head, head_dim,
+      softmaxScale),
+    rotary: rotary,
+    window: window
   )
 
 func init*[QKNorm](
@@ -188,11 +246,17 @@ func init*[QKNorm](
     name: string,
     q_proj, k_proj, v_proj, o_proj: Linear,
     num_qo_head, num_kv_head, head_dim: int,
-    rotary: RotaryPositionEmbedding): RopeGQAttention[QKNorm] =
+    rotary: RotaryPositionEmbedding,
+    window: int = FullVisibilityWindow,
+    softmaxScale = 0.0'f64): RopeGQAttention[QKNorm] =
   ## Build the attention block with no qk-norms.
+  ##
+  ## `window` defaults to `FullVisibilityWindow`, plain causal attention.
+  ## A sliding-window layer kind passes its band width.
+  ## `softmaxScale` overrides the head-width scale when positive.
   initBase(RopeGQAttention[QKNorm], layer_idx, name,
     q_proj, k_proj, v_proj, o_proj,
-    num_qo_head, num_kv_head, head_dim, rotary)
+    num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale)
 
 func init*[QKNorm](
     _: type RopeGQAttention[QKNorm],
@@ -201,7 +265,9 @@ func init*[QKNorm](
     q_proj, k_proj, v_proj, o_proj: Linear,
     num_qo_head, num_kv_head, head_dim: int,
     rotary: RotaryPositionEmbedding,
-    q_norm, k_norm: QKNorm): RopeGQAttention[QKNorm] =
+    q_norm, k_norm: QKNorm,
+    window: int = FullVisibilityWindow,
+    softmaxScale = 0.0'f64): RopeGQAttention[QKNorm] =
   ## Initialize RopeGQAttention.
   ##
   ## Args:
@@ -214,12 +280,19 @@ func init*[QKNorm](
   ##   head_dim: Dimension per head
   ##   rotary: RoPE module (shared across layers)
   ##
+  ## `window` is the visibility band of the layer kind.
+  ## A query attends to itself and the previous `window - 1` cached keys.
+  ## `FullVisibilityWindow`, the default, removes the band.
+  ##
+  ## `softmaxScale` overrides the attention scale when positive.
+  ## Without it the scale is the head-width `head_dim^-0.5`.
+  ##
   ## Raises ValueError naming the layer key path for a non-positive head
   ## count, or for a query-head count not divisible by the KV-head count,
   ## before the GQA group division truncates it.
   result = initBase(RopeGQAttention[QKNorm], layer_idx, name,
     q_proj, k_proj, v_proj, o_proj,
-    num_qo_head, num_kv_head, head_dim, rotary)
+    num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale)
   when QKNorm isnot void:
     result.q_norm = q_norm
     result.k_norm = k_norm
@@ -364,8 +437,23 @@ proc forward[QKNorm](
   # GQA's forward permutes internally to (batch, kv_heads, seq, head_dim) for SDPA.
   # is_causal only makes sense when Q and K seq_lens are equal (prefill).
   # In decode mode (Q=1, K=N), causal mask would block K[1..N-1].
-  let doCausal = q_rot.size(1) == k_full.size(1)
-  let attn_out = self.gqa_attn.forward(q_rot, k_full, v_full, is_causal = doCausal)
+  #
+  # Mask dispatch of the visibility band:
+  # - band unbound, window >= gathered key count
+  #   prefill takes the causal path, decode sees the whole cached history
+  # - band bound
+  #   the windowed causal mask, query rows at absolute positions
+  #   offset .. offset + seqQ - 1, one -Inf per key outside the band
+  let kvSeqLen = k_full.size(1)
+  var attnMask = none(Tensor)
+  var doCausal = false
+  if self.window >= kvSeqLen:
+    doCausal = q_rot.size(1) == kvSeqLen
+  else:
+    attnMask = some(windowedCausalMask(q_rot.size(1), kvSeqLen, offset,
+      self.window, q_rot.scalarType(), q_rot.deviceType()))
+  let attn_out = self.gqa_attn.forward(q_rot, k_full, v_full,
+    is_causal = doCausal, attn_mask = attnMask)
 
   result = self.o_proj.forward(attn_out)
 
