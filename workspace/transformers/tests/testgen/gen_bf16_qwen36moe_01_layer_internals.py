@@ -154,7 +154,7 @@ MIN_FREE_BYTES = 8 * 1024 ** 3
 # - the SSM floor, about one fp32 ulp at the divergent element's magnitude,
 #   sub-linear in seq_len, about four orders of magnitude under bf16 rounding
 #
-# The cap below allows four fp32 ulps at the generated state's max magnitude.
+# The cap below allows eight fp32 ulps at the generated state's max magnitude.
 BLOCK_BAR = 1e-3
 SSM_ULP_MARGIN = 8.0
 

@@ -27,6 +27,7 @@ import
   std/importutils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/safetensors/src/collections,
   workspace/transformers/src/layers/linear,
@@ -48,7 +49,7 @@ const
   StatsPath = FixturePath & ".stats.json.zst"
   KdaPrefix = "model.layers.0.self_attn"
 
-proc main() =
+proc main(): bool =
   ## Replay contract of the layer-0 KDA kernel boundary:
   ##
   ## - the fixture carries the bare hidden input, the mixer surface
@@ -56,7 +57,6 @@ proc main() =
   ## - every recomputed surface point meets the recorded stats, the f32
   ##   records under the elementwise band, the conv outputs and recurrence
   ##   records under the reduction bands
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
   let dev = testDevice()
   echo "    devices: ", deviceName(dev)
   let cfgJson = (ModelDir / "config.json").parseFile()
@@ -117,5 +117,7 @@ proc main() =
   assertStats(stateRec, StatsPath, "kda.state_recurrent", kReduction,
     msg = "kda recurrent state")
 
+  result = true
+
 when isMainModule:
-  main()
+  runCppTest("kimilinear layer-0 internals", main)

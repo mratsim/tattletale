@@ -41,7 +41,6 @@ proc main() =
   # The chain replays on the device testDevice() resolves, Metal
   # is the auto default on macOS with a PyTorch fallback where
   # kernels are missing. TTT_TEST_ON=metal|cpu|cuda flips the device.
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
   # Recorded-chain replay against the committed decision frames, one
   # chain per fixture, the recorded tokens teacher-forced at every step.

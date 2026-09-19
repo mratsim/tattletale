@@ -43,10 +43,6 @@ const
   Layer0Router = Layer0Prefix & ".mlp.gate.weight"
 
 proc main() =
-  # The Metal backend falls back to the cpu kernels where the device
-  # kernels are missing, the mixtures replay on whatever testDevice()
-  # resolves without a hard device requirement.
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
   let dev = testDevice()
   echo "    devices: ", deviceName(dev)
   let cfgJson = (ModelDir / "config.json").parseFile()

@@ -43,7 +43,6 @@ const
                   "Big_blue_whales_eat_krill_32_steps"]
 
 proc main() =
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
   echo "Loading model..."
   let model = loadModel($ModelPath, testDevice())

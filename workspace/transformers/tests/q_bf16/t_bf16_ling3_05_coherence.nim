@@ -33,6 +33,7 @@ import
   std/strutils,
   std/times,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/toktoktok,
   workspace/transformers/src/models,
   workspace/transformers/src/models/ling3 {.all.},
@@ -52,13 +53,13 @@ type Prompt = object
   answer: string
   accepted, rivals: seq[string]
 
-proc main() =
+proc main(): bool =
   let model = loadModel($ModelPath, testDevice())
   let device = model.getDeviceKind()
   if device != testDevice():
-    raise newException(ValueError, # noqa, a CPU fallback ends the run here
-      "the checkpoint landed on " & deviceName(device) &
-      ", the suite device is " & deviceName(testDevice()))
+    echo "the checkpoint landed on " & deviceName(device) &
+      ", the suite device is " & deviceName(testDevice())
+    return false
 
   let tok = model.getTokenizer()
   let cfg = model.getConfig()
@@ -231,5 +232,7 @@ proc main() =
     raise newException(ValueError, # noqa, one failure site names every check
       $failures.len & " coherence check(s) failed, " & failures.join(" | "))
 
+  result = true
+
 when isMainModule:
-  main()
+  runCppTest("ling3 coherence", main)

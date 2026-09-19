@@ -82,106 +82,36 @@ fixtures:
 
 Recording runs torch-side on the recording box. Replay picks the device
 through `select_device`, GPU over CPU, Metal on m4max, CUDA on rtxpro6000.
-cpu remains the problem-fallback.
+cpu replay must not be automatic, a missing device kernel fails loudly
+and stays a finding.
 
-### Fixed quantile method and bucket spec
-
-- Quantiles take the exact order statistic of the ascending sort, index
-  `floor(p * (n - 1))`, no interpolation, computed in f64 indices over
-  values promoted from the native dtype to f32 for storage.
-  The fixed probabilities are 0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99,
-  plus min and max, stored as hex f32 bit patterns.
-- Histograms take binade-log soft buckets keyed by the recorded ulp
-  datatype's pattern:
-  - the bucket is (sign, binade -64..63, mantissa top 6 bits), 14-bit
-    keys in sparse sorted storage,
-    plus dedicated zero (65534) and subnormal (65535) bins
-  - soft bucketing gives each element (2 - low) toward its bucket,
-    low toward the neighbor bucket,
-    low being the dropped 8th mantissa bit, integer math,
-    identical across the python and Nim recorders
-  - the bucket width is 4 ulp
-  - NaN and +Inf raise an error, -Inf is whitelisted only through
-    allow_minus_inf, staying unbucketed (a quantile-only path)
-- The cross-implementation contract is carried by the committed stats
-  corpus tests/harness/stats-corpus, the harness selftest verifies it,
-  the python and Nim fingerprints agree value for value on the order
-  statistics and histograms, the total exact as the summation statistic.
-
-### Fixture classes and the family ladder
-
-- The fixture tree carries exactly two quant classes:
-  the bf16-* families and the exl3-* families, both under tests/fixtures/.
-- The bf16 and exl3 family prefixes climb one ladder, the number is the tier.
-- Tier 00:
-  codec and hadamard primitives, no layer context.
-- Tier 01:
-  one decoder layer, its internal operations.
-- Tier 02:
-  several decoder layers in sequence.
-- Tier 03:
-  the full forward pass, token ids to logits.
-- Tier 04:
-  autoregressive text generation.
-- Each tier contains the previous tier plus more:
-  a missing tier is simply not yet recorded.
-
-- Harness self-test material lives in tests/harness/, never under fixtures/:
-  the stats corpus sits at tests/harness/stats-corpus, the instrument-check
-  input of the harness machinery.
-
-### Single-file grammar
-
-Unit-tier families ship one fixture file per model and layer
-(`layer0-<Model>-00.safetensor`), never one file per mixture row.
-
-Mixture groups keep their roles across families, the mixer group named
-per family (`attn` on the MLA families, `gdn` on Qwen3.6, `kda` on Kimi).
-
-| group | role |
-| ----- | ---- |
-| mixer | the mixer op surface, named `attn`, `gdn` or `kda` per family |
-| layer | the full decoder block chain |
-| moe   | the routed block surface |
-
-- every family stores one bare bf16 driving tensor per group, the recorded
-  intermediates and outputs staying on the stats frame as fingerprints
-  (`attn.input`, `layer.layer_input`, `moe.h`, `gdn.input`, `kda.input`)
-- no raw op-surface tensor ships in the file, the rope rows and recorded
-  sdpa inputs included
-
-Stats keys carry the group prefix
-(`attn.*`, `layer.*`, `moe.*`), one assertStats block per group.
-One suite, one generator, one config task serves each family.
-
-- one execution path per op (prefill/batch), the prefill/decode axis
-  belongs to the `tests/layer_invariance/` property suites, tier-01
-  never records it
-- per-op mixture rows (tables, rope, norm, qchain, decode) are deleted,
-  the layer chain asserts those ops at block-output level
-- a reshape carries the recorded values unchanged and names
-  the new container in the commit body
+- PYTORCH_ENABLE_MPS_FALLBACK is banned everywhere, it re-enables
+  the automatic CPU fallback PR #104 removed, the device policy
+  linter (`tests/linters/lint_device_policy.py`) counts it
+- a `= kCPU` default device parameter is banned in transformers src,
+  callers pass the device explicitly
 
 ### Exl3 families
 
-- Rung 00 (codec, hadamard), packed trellis inputs plus metadata frames,
+- Tier 00 (codec, hadamard), packed trellis inputs plus metadata frames,
   the production-CUDA-kernel weight hash recorded inside the frame,
   bit-exactness the contract, no stats sidecars.
-- Rung 01 layer internals, fingerprint stats sidecars per payload,
-  quantile-only entries on the linear outputs and histogram entries
-  on the attention and block outputs, the margin-critical class. The suites compare
-  the per-op ulp rows on the recording device and the chain
-  checkpoint band elsewhere, elementwise plus stats.
-- Rung 01 block-02 trace, quantile-only stats entries per stage tensor,
-  chained stages accumulating drift linearly under the stage-indexed bound,
+- Tier 01 layer internals, fingerprint stats sidecars per payload,
+  quantile-only entries on the linear outputs, histogram entries
+  covering attention and block outputs, the margin-critical class.
+- Tier 01 block-02 trace, quantile-only stats entries per stage tensor,
+  chained stages accumulate drift linearly under the stage-indexed bound,
   the bit-exact input-layernorm reference resetting the count.
-- Rung 03 full forward, per-layer quantile-only stats entries beside the raw
+
+The suites compare the per-op ulp rows on the recording device,
+the chain checkpoint band elsewhere, elementwise plus stats.
+
+- Tier 03 full forward, per-layer stats entries beside the raw
   boundary payloads, the final logits argmax decision frame
-  (`ttt-tf-005-argmax-decisions`) plus the frozen quantile entry
-  of the retired raw tensor, the 1.7 MB raw logits tensor stays out
-  of the tree.
-- Rung 04 greedy, `ttt-tf-001-greedy-steps-h2` step records (top-32 set, argmax margin, tail probability),
+  (`ttt-tf-005-argmax-decisions`) and the frozen quantile entry.
+- Tier 04 greedy, `ttt-tf-001-greedy-steps-h2` step records,
   the suites replay with teacher-forced tie recovery.
+
 - Record-time sidecars come from the generators. The raw logits payload is
   the one frozen source. With it retired, the committed decision
   plus stats frames stay frozen data.

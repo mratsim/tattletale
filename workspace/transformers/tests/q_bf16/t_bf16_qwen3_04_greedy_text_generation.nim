@@ -38,10 +38,6 @@ const
     "bf16-04-greedy-text-generation" / "Qwen3-0.6B"
 
 proc main() =
-  # The Metal backend falls back to the cpu kernels where the device
-  # kernels are missing, the chains replay on whatever testDevice()
-  # resolves without a hard device requirement.
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
   # Recorded-chain replay against the committed decision frames, one
   # chain per fixture, the recorded tokens teacher-forced at every step.

@@ -90,7 +90,6 @@ def _load_sibling(filename: str):
 
 
 _moe_fixtures = _load_sibling("gen_bf16_moonlight_01_layer_internals.py")
-boundary_margins = _moe_fixtures.boundary_margins
 
 import transformers  # noqa: E402
 TRANSFORMERS_VERSION = transformers.__version__
@@ -372,6 +371,26 @@ def flip_experts(model, implementation: str, moe_layer_indices) -> None:
 def moe_layer_indices(model) -> list:
     """Indices of the routed layers, first_k_dense_replace onward."""
     return list(range(FIRST_K_DENSE_REPLACE, len(model.model.layers)))
+
+
+def boundary_margins(router_logits: torch.Tensor, bias: torch.Tensor,
+                     top_k: int) -> dict:
+    """Top-k selection margins under the NoauxTc sigmoid + bias scoring:
+    - boundary_min, the smallest positive Kth-vs-K+1th gap over all rows
+    - boundary_per_row, the per-row gap list, one margin per recorded token
+      - inner_gap_min, the smallest adjacent gap inside the top-k set,
+        the ambiguity floor of the recorded expert order"""
+    scores = router_logits.sigmoid()
+    scores_for_choice = scores + bias.unsqueeze(0)
+    sorted_choice = torch.sort(
+        scores_for_choice, dim=-1, descending=True).values
+    gaps = sorted_choice[:, top_k - 1] - sorted_choice[:, top_k]
+    inner = sorted_choice[:, : top_k - 1] - sorted_choice[:, 1:top_k]
+    return {
+        "boundary_min": gaps.min().item(),
+        "boundary_per_row": gaps.tolist(),
+        "inner_gap_min": inner.min().item(),
+    }
 
 
 def boundary_tie_count(router_logits: torch.Tensor, bias: torch.Tensor,

@@ -56,10 +56,6 @@ const
   WeightsPath = ModelPath / "model.safetensors-00001-of-00001.safetensors"
 
 proc main() =
-  # The Metal backend falls back to the cpu kernels where the device
-  # kernels are missing, the chain and the mixtures replay on whatever
-  # testDevice() resolves without a hard device requirement.
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
   let runDev = testDevice()
   echo "device pair: ", deviceName(runDev)
 

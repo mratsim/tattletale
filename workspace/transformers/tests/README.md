@@ -37,7 +37,12 @@ flowchart LR
 
 Replay resolves the device through `select_device`, GPU over CPU.
 Metal serves m4max, CUDA serves rtxpro6000.
-cpu remains the problem-fallback.
+cpu replay must not be automatic, a missing device kernel fails loudly.
+
+- PYTORCH_ENABLE_MPS_FALLBACK is banned, it defeats PR #104, the device
+  policy linter counts it
+- a `= kCPU` default device parameter is banned across transformers src,
+  callers pass the device explicitly
 
 ## Check ladder
 

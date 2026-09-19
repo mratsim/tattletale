@@ -32,6 +32,7 @@ import
   std/importutils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/safetensors/src/collections,
   workspace/transformers/src/layers/linear,
@@ -61,11 +62,7 @@ const
   Layer0Prefix = "model.layers.0.self_attn"
   Layer1Prefix = "model.layers.1.mlp"
 
-proc main() =
-  # The Metal backend falls back to the cpu kernels where the device
-  # kernels are missing, the mixtures replay on whatever testDevice()
-  # resolves without a hard device requirement.
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+proc main(): bool =
   let dev = testDevice()
   echo "    devices: ", deviceName(dev)
   let cfgJson = (ModelDir / "config.json").parseFile()
@@ -221,5 +218,7 @@ proc main() =
     assertStats(moeOutput, StatsPath, "moe.moe_output", kReduction,
       depth = 1, msg = "routed block output")
 
+  result = true
+
 when isMainModule:
-  main()
+  runCppTest("glm47flash layer-0 internals", main)

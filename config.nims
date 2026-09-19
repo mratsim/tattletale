@@ -385,7 +385,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("kvcache", "test_kvcache_lpm.nim"),
       ("kvcache", "test_codera020_batch_guard.nim")])
   else:
-    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness, sampler, moonlight, glm47flash, kimilinear, mla, router or kda"
+    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness, sampler, moonlight, glm47flash, kimilinear, ling3, mla, router or kda"
     quit(1)
 
 task test_transformers, "Test workspace/transformers (the full set, final verification)":

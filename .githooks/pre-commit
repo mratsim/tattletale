@@ -67,6 +67,9 @@ def route(path):
             and os.sep + "linters" + os.sep not in rel
             and os.sep + "testgen" + os.sep not in rel):
         picked.append(os.path.join(LINT_DIR, "lint_nim_fixtures_consumers.py"))
+    if (rel.startswith("workspace" + os.sep + "transformers" + os.sep)
+            and rel.endswith((".nim", ".py"))):
+        picked.append(os.path.join(LINT_DIR, "lint_device_policy.py"))
     return picked
 
 

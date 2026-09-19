@@ -49,7 +49,6 @@ const
                   "Big_blue_whales_eat_krill_32_steps"]
 
 proc main() =
-  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
   echo "Loading model..."
   let model = loadModel($ModelPath, testDevice())
@@ -61,8 +60,11 @@ proc main() =
   # Composed depth of one full-stack forward, used as the assertArgMax depth.
   # Moonlight is a pure MLA stack, every block runs one MLA mixer and one
   # hidden mixer, and the stage spelling follows the model's own 03 suites:
+  # Stage ledger per block class:
   # - each MLA mixer composes 3 accumulation stages
   # - each routed block output composes 2 stages, past the grouped_mm record
+  #
+  # Remaining stages:
   # - each leading dense block output composes 1 stage, the dense count is
   #   first_k_dense_replace in the checkpoint config
   # - the final norm and the head projection add 2 stages
