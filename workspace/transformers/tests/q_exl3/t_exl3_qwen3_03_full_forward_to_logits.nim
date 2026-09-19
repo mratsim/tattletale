@@ -18,6 +18,7 @@ import
   std/strutils,
   std/tables,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/safetensors/src/safetensors {.all.},
   workspace/transformers/src/layers,
@@ -40,7 +41,7 @@ const
     "exl3-03-full-forward-to-logits" / "Qwen3-0.6B-EXL3-5bpw"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
 
-proc main() =
+proc main(): bool =
   ## Replays the 28-block chain of the EXL3 checkpoint against the committed frames.
   ##
   ## Every layer boundary enforces through assertStats against its 004 stats frame.
@@ -115,6 +116,7 @@ proc main() =
     assertArgMax(finalLogits.narrow(1, pos.int64, 1), decisionsPath, pos,
       kReduction, flipCount, depth = model.layers.len,
       msg = "Qwen3-0.6B-EXL3-5bpw final logits position " & $pos)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen3 full forward to logits", main)

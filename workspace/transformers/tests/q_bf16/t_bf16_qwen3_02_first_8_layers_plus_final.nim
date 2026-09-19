@@ -19,6 +19,7 @@ import
   std/importutils,
   std/strutils,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/transformers/src/layers,
   workspace/transformers/src/stateful/inference_context,
@@ -40,7 +41,7 @@ const
     "bf16-02-first-8-layers-plus-final" / "Qwen3-0.6B"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
 
-proc main() =
+proc main(): bool =
   # The recorded chain contract of this fixture family is the reference
   # device replay, the fixtures were recorded on cpu. A cross-device run
   # names the tolerance class and skips, no device budget applies here.
@@ -120,6 +121,7 @@ proc main() =
   # RMSNorm and lm head.
   let tail = hidden + residual.get(hidden)
   assertStats(tail, FixtureDir / "tail.safetensor.stats", "pre_final_norm", kReduction, depth = numLayers, msg = "chain tail checkpoint at depth " & $numLayers)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen3 first 8 layers plus final", main)

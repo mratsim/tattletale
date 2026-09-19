@@ -20,6 +20,7 @@ import
   std/sequtils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/transformers/src/models/loading/layer_kinds,
   workspace/transformers/src/models,
   workspace/transformers/src/models/kimi_linear {.all.},
@@ -42,7 +43,7 @@ const
                   "The_capital_of_France_is_32_steps",
                   "Big_blue_whales_eat_krill_32_steps"]
 
-proc main() =
+proc main(): bool =
 
   echo "Loading model..."
   let model = loadModel($ModelPath, testDevice())
@@ -111,6 +112,7 @@ proc main() =
           F.toTensor([[chosen]]).to(device))
         orc.setKvPosition(ids.len)
         row = nextStepRow(stepLogits, 0)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("kimilinear greedy text generation", main)

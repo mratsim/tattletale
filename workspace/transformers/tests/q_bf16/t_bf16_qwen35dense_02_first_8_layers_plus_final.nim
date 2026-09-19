@@ -26,6 +26,7 @@ import
   std/strutils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/safetensors/src/collections,
   workspace/transformers/src/layers,
@@ -55,7 +56,7 @@ const
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3.5-0.8B"
   WeightsPath = ModelPath / "model.safetensors-00001-of-00001.safetensors"
 
-proc main() =
+proc main(): bool =
   let runDev = testDevice()
   echo "device pair: ", deviceName(runDev)
 
@@ -190,6 +191,7 @@ proc main() =
   # continuation and the one-shot vs step-decode replay on a synthetic
   # sequence. Neither case carries a recorded side, so no stats assert
   # expresses the contract on either case.
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen35dense first 8 layers plus final", main)

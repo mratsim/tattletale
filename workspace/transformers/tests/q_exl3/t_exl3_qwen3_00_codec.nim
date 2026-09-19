@@ -25,7 +25,7 @@ from workspace/transformers/tests/harness import zstdReadFixture
 const
   FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-00-codec" / "Qwen3-0.6B-EXL3-5bpw"
 
-proc main() =
+proc main(): bool =
   ## Replays the trellis decode of every recorded weight slice.
   ##
   ## The decode is a pure function of the recorded bytes, so the reconstructed
@@ -58,6 +58,7 @@ proc main() =
         "layer " & layerKey & " decode hash " & computedHash &
         " != recorded " & expectedHash)
     echo "layer " & layerKey & " matches the recorded kernel hash"
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("exl3 qwen3 codec", main)

@@ -21,6 +21,7 @@ import
   pkg/iface,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/zstd/zstd_highlevel,
   workspace/transformers/src/layers,
@@ -45,7 +46,7 @@ const
     "bf16-03-full-forward-to-logits" / "Qwen3.6-35B-A3B"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3.6-35B-A3B"
 
-proc main() =
+proc main(): bool =
   # The recorded chain contract of this fixture family is the reference
   # device replay, the fixtures were recorded on cpu. A cross-device run
   # names the tolerance class and skips, no device budget applies here.
@@ -127,6 +128,7 @@ proc main() =
     assertArgMax(logits.narrow(1, pos.int64, 1), decisionsPath, pos,
       kReduction, flipCount, depth = model.layers.len,
       msg = "Qwen3.6-35B-A3B final logits position " & $pos)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen36moe full forward to logits", main)

@@ -21,6 +21,7 @@ import
   std/strutils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/transformers/src/layers,
   workspace/transformers/src/stateful/inference_context,
   workspace/transformers/src/stateful/kvcache,
@@ -44,7 +45,7 @@ const
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B"
 
 
-proc main() =
+proc main(): bool =
   # The recorded chain contract of this fixture family is the reference
   # device replay, the fixtures were recorded on cpu. A cross-device run
   # names the tolerance class and skips, no device budget applies here.
@@ -115,6 +116,7 @@ proc main() =
     assertArgMax(finalLogits.narrow(1, pos.int64, 1), decisionsPath, pos,
       kReduction, flipCount, depth = model.layers.len,
       msg = "Qwen3-0.6B final logits position " & $pos)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen3 full forward to logits", main)

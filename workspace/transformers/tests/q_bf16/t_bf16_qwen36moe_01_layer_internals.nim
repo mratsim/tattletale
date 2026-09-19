@@ -21,6 +21,7 @@ import
   std/importutils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/safetensors/src/collections,
   workspace/transformers/src/layers,
@@ -42,7 +43,7 @@ const
   Layer0Prefix = "model.language_model.layers.0"
   Layer0Router = Layer0Prefix & ".mlp.gate.weight"
 
-proc main() =
+proc main(): bool =
   let dev = testDevice()
   echo "    devices: ", deviceName(dev)
   let cfgJson = (ModelDir / "config.json").parseFile()
@@ -119,6 +120,7 @@ proc main() =
       msg = "moe output")
     assertStats(topkIndices.to(kFloat32), StatsPath, "moe.topk_indices", kElementwise,
       msg = "topk expert ids")
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen36moe layer-0 internals", main)

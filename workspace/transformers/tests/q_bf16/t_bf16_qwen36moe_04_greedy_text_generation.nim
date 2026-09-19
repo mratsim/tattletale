@@ -28,6 +28,7 @@ import
   std/times,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/transformers/src/models,
   workspace/transformers/src/models/qwen35_moe {.all.},
   workspace/transformers/src/stateful/orchestrator,
@@ -48,7 +49,7 @@ const
     "Big_blue_whales_eat_krill_32_steps.json.zst",
   ]
 
-proc main() =
+proc main(): bool =
   # Decode context ceiling, one TokensPerPage page covers every
   # recorded chain comfortably above the prompt + horizon footprint.
   const MaxContextLen = 256
@@ -103,6 +104,7 @@ proc main() =
     # regressions visible per run.
     let chainWall = (getMonoTime() - chainStart).inNanoseconds.float64 * 1e-9
     echo &"    chain wall {chainWall:.3f} s ({horizon.float64 / chainWall:.3f} tok/s)"
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen36moe greedy text generation", main)

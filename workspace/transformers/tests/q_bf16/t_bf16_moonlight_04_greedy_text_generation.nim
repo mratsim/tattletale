@@ -27,6 +27,7 @@ import
   std/times,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/transformers/src/models,
   workspace/transformers/src/models/moonlight {.all.},
   workspace/transformers/src/stateful/orchestrator,
@@ -48,7 +49,7 @@ const
                   "The_capital_of_France_is_32_steps",
                   "Big_blue_whales_eat_krill_32_steps"]
 
-proc main() =
+proc main(): bool =
 
   echo "Loading model..."
   let model = loadModel($ModelPath, testDevice())
@@ -60,14 +61,11 @@ proc main() =
   # Composed depth of one full-stack forward, used as the assertArgMax depth.
   # Moonlight is a pure MLA stack, every block runs one MLA mixer and one
   # hidden mixer, and the stage spelling follows the model's own 03 suites:
-  # Stage ledger per block class:
   # - each MLA mixer composes 3 accumulation stages
   # - each routed block output composes 2 stages, past the grouped_mm record
-  #
-  # Remaining stages:
   # - each leading dense block output composes 1 stage, the dense count is
-  #   first_k_dense_replace in the checkpoint config
-  # - the final norm and the head projection add 2 stages
+  #   first_k_dense_replace in the checkpoint config, then the final norm
+  #   and head projection add 2 stages
   # This model's getConfig leaves layerKinds empty, the schedule carries no
   # per-layer entry to loop, so the depth derives from the layer count.
   # At first_k_dense_replace = 1 the sum is 3N + 2(N - 1) + 1 + 2 = 5N + 1,
@@ -134,6 +132,7 @@ proc main() =
     # regressions visible per run.
     let chainWall = (getMonoTime() - chainStart).inNanoseconds.float64 * 1e-9
     echo &"    chain wall {chainWall:.3f} s ({expected.len.float64 / chainWall:.3f} tok/s)"
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("moonlight greedy text generation", main)

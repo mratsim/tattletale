@@ -23,6 +23,7 @@ import
   std/sequtils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/transformers/src/models,
   workspace/transformers/src/stateful/orchestrator,
   workspace/transformers/tests/harness/harness,
@@ -37,7 +38,7 @@ const
   FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" /
     "bf16-04-greedy-text-generation" / "Qwen3.5-0.8B"
 
-proc main() =
+proc main(): bool =
   # The chain replays on the device testDevice() resolves, Metal
   # is the auto default on macOS with a PyTorch fallback where
   # kernels are missing. TTT_TEST_ON=metal|cpu|cuda flips the device.
@@ -80,6 +81,7 @@ proc main() =
           F.toTensor([[chosen]]).to(device))
         orc.setKvPosition(ids.len)
         row = nextStepRow(stepLogits, 0)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen35dense greedy text generation", main)
