@@ -24,6 +24,7 @@
 
 import std/[os, strutils]
 import cnj_types, cnj_values, cnj_parse, chattyninja
+import workspace/data_structures/src/small_seqs
 import rows
 
 type ArtifactDefect = ref object of CatchableError

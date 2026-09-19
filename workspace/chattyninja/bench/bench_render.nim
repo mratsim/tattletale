@@ -44,7 +44,8 @@
 ## No `doAssert` anywhere. A failing doAssert hangs under `-d:nimAllocStats`.
 
 import std/[algorithm, importutils, monotimes, os, strformat, strutils, times]
-import cnj_types, cnj_values, cnj_parse, chattyninja
+import cnj_errors, cnj_types, cnj_values, cnj_parse, chattyninja
+import workspace/data_structures/src/small_seqs
 import ../tests/rows
 
 when defined(benchAlloc) and not defined(nimAllocStats):

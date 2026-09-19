@@ -15,6 +15,7 @@
 
 import std/[os, strutils, sequtils]
 import cnj_types, cnj_parse
+import workspace/data_structures/src/small_seqs
 
 const root = currentSourcePath().parentDir.parentDir
 let src = readFile(root / "corpus" / "deepseekv2lite" / "deepseekv2lite.jinja")

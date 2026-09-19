@@ -22,8 +22,6 @@
 import std/unicode
 import cnj_errors, cnj_types, cnj_values, cnj_expr, cnj_parse
 
-export cnj_types, cnj_values, cnj_parse, cnj_errors
-
 type
   Step* = proc (m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.}
     ## One construct's step. Writes only through `d`, always leaving `d.curNode` on the node control enters next.

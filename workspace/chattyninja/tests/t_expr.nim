@@ -18,7 +18,7 @@
 ##   $ ./workspace/chattyninja/run_tests.sh t_expr
 
 import std/strutils
-import cnj_types, cnj_values, chattyninja
+import cnj_errors, cnj_types, cnj_values, chattyninja
 
 proc render(expr: string, ctx = Value(kind: vkUndefined)): string =
   ## Renders one expression through `renderToString`.

@@ -18,7 +18,7 @@
 ##   $ ./workspace/chattyninja/run_tests.sh t_scratch
 
 import std/[importutils, strutils]
-import cnj_types, cnj_values, cnj_parse, chattyninja
+import cnj_errors, cnj_types, cnj_values, cnj_parse, chattyninja
 import rows
 
 func bytesOf(buf: openArray[char], n: int): string =

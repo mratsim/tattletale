@@ -9,8 +9,6 @@
 import cnj_errors, cnj_strbuf, cnj_values
 import workspace/data_structures/src/small_seqs
 
-export cnj_errors, cnj_strbuf, cnj_values, small_seqs
-
 const
   noLink* = -1'i32
     ## Marks an absent link or absent span in every node payload slot.
