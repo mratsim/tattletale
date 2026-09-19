@@ -25,11 +25,11 @@ type
     ## | `nkFor`        | iterable span, body, loop name, filter span, interned target ids            |
     ## | `nkBreak`      | unwinds to the nearest for-frame, stopping at a macro-call boundary         |
     ## | `nkSet`        | single-target binding of an expression                                      |
-    ## | `nkSetNs`      | `ns.field = expr`, ns and field as interned name ids                        |
+    ## | `nkSetNamespace` | `ns.field = expr`, ns and field as interned name ids                        |
     ## | `nkSetBlock`   | capture body into a sink, bind on close                                     |
     ## | `nkGeneration` | marks the root-output span of the model's turn                              |
     ## | `nkMacroDef`   | binds a macro value, never executes                                         |
-    nkVerbatim, nkEmit, nkIf, nkFor, nkBreak, nkSet, nkSetNs, nkSetBlock, nkGeneration,
+    nkVerbatim, nkEmit, nkIf, nkFor, nkBreak, nkSet, nkSetNamespace, nkSetBlock, nkGeneration,
     nkMacroDef
 
   Node* = object
@@ -91,7 +91,7 @@ const
 # | `nkIf`       | 5 slots, `lo`, `hi`, `succ`, `child`, `alt`                                                     |
 # | `nkFor`      | 7 + one per target, `lo`, `hi`, `succ`, `child`, `loopName`, `filterLo`, `filterHi`, target ids |
 # | `nkSet`      | 4 slots, `lo`, `hi`, `succ`, interned target name id                                            |
-# | `nkSetNs`    | 5 slots, `lo`, `hi`, `succ`, `target`, `field`                                                  |
+# | `nkSetNamespace` | 5 slots, `lo`, `hi`, `succ`, `target`, `field`                                                  |
 # | `nkMacroDef` | 4 + 3 per parameter, `macroName`, filler, `succ`, `child` body, name and default-span triples   |
 #
 # `nkSetBlock` and `nkGeneration` are declared kinds the parser never builds, so they carry
@@ -151,11 +151,11 @@ template filterHi*(nd: Node): int32 =
   nd.slots[slotFilterHi]
 
 template target*(nd: Node): int32 =
-  ## Interned namespace name id of `nkSetNs`.
+  ## Interned namespace name id of `nkSetNamespace`.
   nd.slots[slotNsTarget]
 
 template field*(nd: Node): int32 =
-  ## Interned member name id of `nkSetNs`.
+  ## Interned member name id of `nkSetNamespace`.
   nd.slots[slotNsField]
 
 template macroName*(nd: Node): int32 =

@@ -31,7 +31,7 @@ Column notes:
   count of `{% macro %}` defs (37 total), the longest static call chain,
   and cycle presence, measured by string-stripped call-graph DFS per template
 - ns assign:
-  `ns.field = ...` change sites, the `nkSetNs` fixture demand. The `namespace(...)` creation appears
+  `ns.field = ...` change sites, the `nkSetNamespace` fixture demand. The `namespace(...)` creation appears
   alongside in the same templates
 - dict lit:
   `{`-opening literals inside expressions, 7 sites across 2 templates. `mistral7bv01` holds 5 within
@@ -73,7 +73,7 @@ Every corpus template loops over `messages`, so a byte-exact check here needs a 
 
 No cheaper honest option exists. The second-cheapest template, `moonlight` (527 B), has the same shape plus `loop.first`.
 
-**Stage 2 (for + set + setNs + loop). ling30** (6041 B, 5 ok rows). Cheapest template carrying `nkSetNs`
+**Stage 2 (for + set + setNs + loop). ling30** (6041 B, 5 ok rows). Cheapest template carrying `nkSetNamespace`
 (2 change sites, 2 `namespace()` creations) plus `for` (5 sites incl. 1 multi-target), `set` (17),
 `loop.index0/first/last`, `length`/`tojson` filters, `defined`/`string` tests, 7 string methods, zero macros and generation tags.
 

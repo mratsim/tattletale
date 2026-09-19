@@ -538,7 +538,7 @@ proc parseSet(p: var P): Head =
     let targetId = intern(p, p.src.toOpenArray(nsLo, nsHi - 1))
     let fieldId = intern(p, p.src.toOpenArray(fieldLo, fieldHi - 1))
     inc p.i
-    let idx = addNode(p, mkNode(nkSetNs, int32 v, t.tHi.int32, noLink, targetId, fieldId))
+    let idx = addNode(p, mkNode(nkSetNamespace, int32 v, t.tHi.int32, noLink, targetId, fieldId))
     return Head(head: idx, tails: @[idx])
   if j >= t.tHi or p.src[j] != '=':
     raise err("`{% set %}` needs a target and `=`")
