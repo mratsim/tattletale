@@ -287,14 +287,19 @@ proc loadLagunaModelRaw(modelPath: string, device: DeviceKind): LagunaModel =
     if routed:
       # Sigmoid top-k router at its degenerate grouping, the reference
       # router runs no group limiting, n_group 1 keeps the group mask
-      # all-ones inside the same op sequence.
+      # all-ones inside the same op sequence. The reference router scores
+      # F.linear at the hidden dtype and returns the unscaled renormalized
+      # bf16 weights, the routed scaling factor multiplies the routed sum
+      # before the shared expert joins, never the returned weights.
       let mlpPrefix = lp & "mlp"
       let router = NoAuxTopCorr.init(
         weights.getTensorOwned(mlpPrefix & ".gate.weight", device),
         weights.getTensorOwned(mlpPrefix & ".experts.e_score_correction_bias", device),
         config.num_experts_per_tok, 1, 1,
-        config.moe_routed_scaling_factor, config.norm_topk_prob)
-      let mlp = BlockSparseFFN.load(weights, cfgJson, mlpPrefix, router, device)
+        1.0, config.norm_topk_prob,
+        scalesWeights = false, scoreBf16 = true)
+      let mlp = BlockSparseFFN.load(weights, cfgJson, mlpPrefix, router, device,
+        routedOutputScale = config.moe_routed_scaling_factor)
       layers[i] = LagunaMoeLayer.init(
         input_layernorm = inputLN, sequence_mixer = attn,
         post_attention_layernorm = postLN,

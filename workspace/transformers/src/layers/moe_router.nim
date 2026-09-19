@@ -7,9 +7,9 @@
 
 ## MoE routers of the DeepSeek family, two typed forms plus one embedded-weight form.
 ##
-## - NoAuxTopCorr (noaux_tc family) sigmoid-scores f32 logits, the bias
-##   steers the pick only, groups bound the candidates, weights gather
-##   from the unbiased scores, renormalize per config, then scale.
+## - NoAuxTopCorr (noaux_tc family) sigmoid-scores, the bias steers only
+##   the pick, weights gather from the unbiased scores, then renormalize
+##   per config. Lineage spellings live in the `scalesWeights`/`scoreBf16` docs.
 ## - GreedyRouter softmax-scores, straight top-k, scaled, no renorm
 ##   and no bias.
 ## - `routeToExperts` (Qwen family) softmax-scores, renormalizes top-k weights at the hidden dtype, router weight on the FFN object.
@@ -47,6 +47,17 @@ type
     topkGroup: int
     routedScalingFactor: float64
     normTopkProb: bool
+    scalesWeights: bool
+      ## Placement of the routed scaling factor:
+      ##   - true carries the factor in the returned weights, the Moonlight
+      ##     reference router scales them itself
+      ##   - false applies the factor at the FFN routed output, the returned
+      ##     weights stay the unscaled renormalized scores (Laguna)
+    scoreBf16: bool
+      ## Scoring GEMM dtype:
+      ##   - true runs the GEMM at the checkpoint dtype, the logits upcast
+      ##     to f32 after (Laguna, F.linear on bf16 views)
+      ##   - false runs the GEMM on f32 upcasts (DeepSeek/glm lineage)
 
   GreedyRouter* = ref object
     ## Legacy greedy router (DeepSeek-V2-Lite family): softmax scores cover
@@ -62,10 +73,14 @@ func init*(
     routerWeight, expertBias: Tensor,
     topK, numGroup, topkGroup: int,
     routedScalingFactor: float64,
-    normTopkProb: bool
+    normTopkProb: bool,
+    scalesWeights: bool = true,
+    scoreBf16: bool = false
   ): NoAuxTopCorr =
   ## Builds the router from the checkpoint gate weight, bias buffer,
-  ## config routing constants.
+  ## config routing constants. `scalesWeights = false` pairs with an FFN
+  ## applying the routed scaling factor to the routed output, `scoreBf16 = true`
+  ## with a router reference scoring at the hidden dtype.
   ##
   ## Raises ValueError:
   ## - routerWeight is not rank 2
@@ -100,7 +115,9 @@ func init*(
     numGroup: numGroup,
     topkGroup: topkGroup,
     routedScalingFactor: routedScalingFactor,
-    normTopkProb: normTopkProb
+    normTopkProb: normTopkProb,
+    scalesWeights: scalesWeights,
+    scoreBf16: scoreBf16
   )
 
 func init*(
@@ -128,12 +145,19 @@ func init*(
 
 # ─── Routing forms ─────────────────────────────────────────────────────────
 
-proc routerLogits(routerWeight: Tensor, hidden: Tensor): Tensor =
-  ## Router scoring GEMM of the hidden rows against the router weight
-  ## transpose: the scoring input of both router forms. Routing math runs
-  ## in f32, weights and rows upcast first, matching the HF reference
-  ## module's F.linear on f32 views.
-  F.matmul(hidden.to(F.kFloat32), routerWeight.to(F.kFloat32).t())
+proc routerLogits(routerWeight, hidden: Tensor, scoreBf16: bool): Tensor =
+  ## Router scoring GEMM of the hidden rows against the transposed
+  ## router weight, the scoring input of both router forms.
+  ##
+  ## - f32 spelling, rows and weights upcast first, the HF reference
+  ##   module's F.linear on f32 views (DeepSeek/glm lineage)
+  ## - hidden-dtype spelling, the GEMM runs at the checkpoint dtype,
+  ##   the logits upcast after (Laguna), the bf16 rounding the recorded
+  ##   decision rows carry
+  if scoreBf16:
+    F.matmul(hidden, routerWeight.t()).to(F.kFloat32)
+  else:
+    F.matmul(hidden.to(F.kFloat32), routerWeight.to(F.kFloat32).t())
 
 proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   ## noaux_tc routing over rank-2 [T, H] hidden rows.
@@ -144,7 +168,8 @@ proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   ##   group scores   = sum of the top-2 biased scores per group
   ##   group mask     = topk_group winning groups, all-ones at n_group 1
   ##   indices        = topk(choice masked to -inf outside the winners)
-  ##   weights        = gather(scores, indices), renormed per config, scaled
+  ##   weights        = gather(scores, indices), renormed per config,
+  ##                    scaled when scalesWeights
   ##
   ## Ties at a top-k or group boundary take the kernel order
   ## of the sorted = false topk, fixture margins record the disambiguation.
@@ -152,7 +177,7 @@ proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   let numExperts = self.routerWeight.size(0)
   let expertsPerGroup = numExperts div self.numGroup
 
-  let logits = routerLogits(self.routerWeight, hidden)
+  let logits = routerLogits(self.routerWeight, hidden, self.scoreBf16)
   let scores = F.sigmoid(logits)
   var choice = scores + self.expertBias
 
@@ -177,7 +202,8 @@ proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   var weights = scores.gather(1, indices)
   if self.normTopkProb:
     weights = weights / (weights.sum(axis = -1, keepdim = true) + Scalar(1e-20))
-  weights = weights * Scalar(self.routedScalingFactor)
+  if self.scalesWeights:
+    weights = weights * Scalar(self.routedScalingFactor)
   result = (logits: logits, weights: weights, indices: indices)
 
 proc routeDecode*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
@@ -197,7 +223,7 @@ proc route*(self: GreedyRouter, hidden: Tensor): RouteDecision =
   ##   scores         = softmax(logits)
   ##   indices        = topk(scores, sorted = false)
   ##   weights        = topk values, scaled by the routed factor, no renorm
-  let logits = routerLogits(self.routerWeight, hidden)
+  let logits = routerLogits(self.routerWeight, hidden, false)
   let scores = F.softmax(logits, -1)
   let (topValues, topIndices) = scores.topk(self.topK, axis = -1, sorted = false)
   let weights = topValues * Scalar(self.routedScalingFactor)

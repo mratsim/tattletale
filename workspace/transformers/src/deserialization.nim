@@ -149,7 +149,8 @@ proc load*(_: type GatedBlockSparseFFN, view: SafetensorsCollection, cfg: JsonNo
 
 proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
            prefix: string, router: NoAuxTopCorr, device: DeviceKind,
-           vocab: static ExpertKeyVocab = ekvGateUpDown): BlockSparseFFN =
+           vocab: static ExpertKeyVocab = ekvGateUpDown,
+           routedOutputScale: float64 = 1.0): BlockSparseFFN =
   ## Loads the routed expert bodies plus the shared expert when the config
   ## routes to one.
   ##
@@ -261,7 +262,8 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
       to(device)
     let down = stack(collect(newSeq, for e in 0 ..< expertCount:
       view.getTensorView(prefix & ".experts." & $e & downKey))).to(device)
-    return BlockSparseFFN.init(gateUp, down, shared, router)
+    return BlockSparseFFN.init(gateUp, down, shared, router,
+      routedOutputScale = routedOutputScale)
   # Device request past kCPU: single-copy assembly. Both fused bodies
   # are allocated on the device at their final concatenated shapes
   # before the copies begin; each expert body then copies once from
@@ -291,7 +293,8 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
     gateUpSlice.narrow(0, 0, moeIntermediate).copyFrom(gateRow)
     gateUpSlice.narrow(0, moeIntermediate, moeIntermediate).copyFrom(upRow)
     down.narrow(0, e, 1).squeeze(0).copyFrom(downRow)
-  BlockSparseFFN.init(gateUp, down, shared, router)
+  BlockSparseFFN.init(gateUp, down, shared, router,
+    routedOutputScale = routedOutputScale)
 
 # ─── GatedDeltaNet ─────────────────────────────────────────────────────────
 

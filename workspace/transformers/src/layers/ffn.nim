@@ -522,6 +522,11 @@ type
     sharedExpert: Option[GatedDenseFFN]
       ## Ungated shared-expert tail, present when the checkpoint config routes to one
       ## (n_shared_experts / num_shared_experts > 0), absent otherwise.
+    routedOutputScale: float64
+      ## Post-expert routed scaling, the routed sum carries the factor
+      ## before the shared expert joins:
+      ##   - Laguna spells `experts(...) * routed_scaling_factor + shared`
+      ##   - 1.0 for the families whose router returns the scaled weights
 
 func init*(
     _: type BlockSparseFFN,
@@ -529,13 +534,16 @@ func init*(
     downProj: Tensor,
     sharedExpert: Option[GatedDenseFFN],
     router: NoAuxTopCorr,
-    activation: ActivationKind = kSilu
+    activation: ActivationKind = kSilu,
+    routedOutputScale: float64 = 1.0
   ): BlockSparseFFN =
   ## Create the routed FFN from the rank-3 fused expert weights, the optional shared expert and the typed noaux_tc router.
   ##
   ## - the router is a composed typed object, no router weight embedding
   ## - a present shared tail adds unchanged, an absent one routes the whole
   ##   output through the experts
+  ## - `routedOutputScale` past 1.0 scales the routed sum before the shared
+  ##   tail joins, the Laguna reference block spelling
   ##
   ## Raises ValueError:
   ## - gateUpProj or downProj is not rank 3
@@ -563,7 +571,8 @@ func init*(
     hiddenSize: h,
     activation: activation,
     router: router,
-    sharedExpert: sharedExpert
+    sharedExpert: sharedExpert,
+    routedOutputScale: routedOutputScale
   )
 
 proc expertForwardPrefillPlain(
@@ -673,11 +682,14 @@ proc forward*(self: BlockSparseFFN, hidden: Tensor): Tensor =
         hiddenStates, topkIndices, weights32, self.activation)
     else:
       expertForwardPrefillPlain(self, hiddenStates, topkIndices, weights32)
+  let routedScaled =
+    if self.routedOutputScale == 1.0: routed
+    else: routed * Scalar(self.routedOutputScale)
   let output =
     if self.sharedExpert.isSome():
-      routed + self.sharedExpert.unsafeGet().forward(hiddenStates)
+      routedScaled + self.sharedExpert.unsafeGet().forward(hiddenStates)
     else:
-      routed
+      routedScaled
 
   if hidden.dim() == 2:
     output
