@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Greedy-text-generation fixtures of the gemma-3-1b-it checkpoint, token
 chains argmax-decoded through the installed transformers modeling on torch
-bf16, recorded on CPU.
+bf16, recorded on Metal (mps).
 
 - fixture dir tests/fixtures/bf16-04-greedy-text-generation/gemma-3-1b-it/
 - consumer tests/q_bf16/t_bf16_gemma31b_04_greedy_text_generation.nim
@@ -26,9 +26,9 @@ steps run on the bounded sliding cache.
 
 Recording environment:
 
-- recorded_from defaults to m4max-cpu, the TTT_RECORD_FROM environment
+- recorded_from defaults to m4max-metal, the TTT_RECORD_FROM environment
   variable overrides it
-- recording runs on cpu, the replay device stays the consuming suite's call
+- recording runs on mps (Metal), the replay device stays the consuming suite's call
 
 Run from the worktree root
 
@@ -86,6 +86,9 @@ build_model = _ids.build_model
 load_tokenizer = _ids.load_tokenizer
 
 import torch  # noqa: E402
+
+# Recording box of this run, recording_env reads the variable at call time.
+os.environ.setdefault("TTT_RECORD_FROM", "m4max-metal")
 
 GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 FIXTURE_DIR = os.path.join(
@@ -147,7 +150,7 @@ def greedy_chain(model, token_ids: tuple, max_new_tokens: int) -> dict:
         eos_ids = []
     if isinstance(eos_ids, int):
         eos_ids = [eos_ids]
-    input_ids = torch.tensor([list(token_ids)], dtype=torch.long)
+    input_ids = torch.tensor([list(token_ids)], dtype=torch.long, device="mps")
     generated = []
     steps = []
     with torch.no_grad():
@@ -173,7 +176,7 @@ def greedy_chain(model, token_ids: tuple, max_new_tokens: int) -> dict:
                 "tail_probability": tail,
             })
             if step + 1 < max_new_tokens:
-                nxt = torch.tensor([[argmax_id]], dtype=torch.long)
+                nxt = torch.tensor([[argmax_id]], dtype=torch.long, device="mps")
                 out = model(nxt, past_key_values=cache, use_cache=True,
                             logits_to_keep=1)
                 cache = out.past_key_values
@@ -213,7 +216,7 @@ def main() -> None:
             "env": recording_env(
                 model=MODEL_NAME,
                 generator="testgen/gen_bf16_gemma31b_04_greedy_text_generation.py",
-                extra={"dtype": "bfloat16", "device": "cpu",
+                extra={"dtype": "bfloat16", "device": "mps",
                        "num_threads": NUM_THREADS,
                        "attn_implementation": model.config._attn_implementation}),
             "prompt": prompt_text,
