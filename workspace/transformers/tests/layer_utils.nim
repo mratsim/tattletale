@@ -26,6 +26,7 @@ import
   std/tables,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/positron,
   workspace/safetensors,
   workspace/safetensors/src/collections,
   workspace/safetensors/src/safetensors {.all.},
@@ -102,6 +103,39 @@ proc setupGatedDeltaNet*[Decay: static DecayAxis,
     t{"linear_key_head_dim"}.getInt(), t{"linear_value_head_dim"}.getInt(),
     t{"linear_conv_kernel_dim"}.getInt(), device)
 
+proc setupGemma3LayerFixture*(weights: SafetensorsCollection, cfg: JsonNode,
+    layerIdx: int, rotary: RotaryPositionEmbedding, window: int,
+    softmaxScale: float64, device: F.DeviceKind):
+    (RopeGQAttention[RmsNormOne], RmsNormOne, RmsNormOne, RmsNormOne,
+    GatedDenseFFN, RmsNormOne) =
+  ## Loads gemma-3 decoder layer `layerIdx` from the open `weights` view,
+  ## exactly as the gemma-3 model file wires it, the mixer plus the four
+  ## sandwich norms and the gelu_pytorch_tanh dense block.
+  ##
+  ## Expected input:
+  ## - cfg, the flat gemma-3 text config (no text_config nesting)
+  ## - rotary, the dual-theta table the caller selects per layer kind,
+  ##   the local 1e4 theta on sliding layers, the global 1e6 theta on full
+  ## - softmaxScale, the query_pre_attn_scalar^-0.5 attention scale
+  let lp = "model.layers." & $layerIdx & "."
+  let attn = RopeGQAttention[RmsNormOne].load(
+    weights, cfg, lp & "self_attn", layerIdx,
+    cfg{"num_attention_heads"}.getInt(),
+    cfg{"num_key_value_heads"}.getInt(),
+    cfg{"head_dim"}.getInt(),
+    rotary, device,
+    window = window, softmaxScale = softmaxScale)
+  let inputLN = RmsNormOne.load(weights, cfg, lp & "input_layernorm", device)
+  let postLN = RmsNormOne.load(
+    weights, cfg, lp & "post_attention_layernorm", device)
+  let preFF = RmsNormOne.load(
+    weights, cfg, lp & "pre_feedforward_layernorm", device)
+  let ffn = GatedDenseFFN.load(weights, cfg, lp & "mlp", device,
+    activation = kGeluTanh)
+  let postFF = RmsNormOne.load(
+    weights, cfg, lp & "post_feedforward_layernorm", device)
+  (attn, inputLN, postLN, preFF, ffn, postFF)
+
 func nextStepRow*(logits: F.Tensor, position: int): F.Tensor =
   ## Returns the [vocab] logit row at `position` of the sequence axis.
   ##
@@ -169,8 +203,7 @@ func mlaInterleaveLayout*(x: F.Tensor): F.Tensor =
   F.cat([even.unsqueeze(4), odd.unsqueeze(4)], 4).reshape(
     x.size(0), x.size(1), x.size(2), d)
 
-proc setupMlaDirect*[Pe](modelDir, prefix: string, layerIdx, maxSeq: int,
-    device = F.kCPU): MLAttention[void, Pe] =
+proc setupMlaDirect*[Pe](modelDir, prefix: string, layerIdx, maxSeq: int, device = F.kCPU): MLAttention[void, Pe] =
   ## Direct-Q MLAttention load of checkpoint layer `layerIdx`
   ## over the typed latent cache, wiring mirrored from the model files:
   ## - geometry off the flat config.json section
@@ -203,8 +236,7 @@ proc setupMlaDirect*[Pe](modelDir, prefix: string, layerIdx, maxSeq: int,
       cfgJson{"qk_rope_head_dim"}.getInt()),
     cache = cache)
 
-proc setupMlaCompressed*(modelDir, prefix: string, layerIdx, maxSeq: int,
-    device = F.kCPU): MLAttention[RmsNorm, FullRoPe] =
+proc setupMlaCompressed*(modelDir, prefix: string, layerIdx, maxSeq: int, device = F.kCPU): MLAttention[RmsNorm, FullRoPe] =
   ## Compressed-Q MLAttention load of checkpoint layer `layerIdx`
   ## over the typed latent cache, wiring mirrored from the model files:
   ## - q bottleneck plus both latent norms at the bottleneck eps
@@ -240,8 +272,7 @@ proc setupMlaCompressed*(modelDir, prefix: string, layerIdx, maxSeq: int,
       cfgJson{"qk_rope_head_dim"}.getInt()),
     cache = cache)
 
-proc setupMlaGated*(modelDir, prefix: string, layerIdx, maxSeq: int,
-    device = F.kCPU): HeadwiseGatedMLAttention[RmsNorm, FullRoPe] =
+proc setupMlaGated*(modelDir, prefix: string, layerIdx, maxSeq: int, device = F.kCPU): HeadwiseGatedMLAttention[RmsNorm, FullRoPe] =
   ## Head-wise gated MLAttention load of checkpoint layer `layerIdx`
   ## over the typed latent cache, wiring mirrored from the model files:
   ## - compressed-Q bottleneck, both latent norms at the bottleneck eps
