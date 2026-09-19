@@ -512,7 +512,7 @@ type
     numExperts: int
     hiddenSize: int
     activation: ActivationKind
-    router: NoauxTcRouter ## the typed routing decision source
+    router: NoAuxTopCorr ## the typed routing decision source
     sharedExpert: GatedDenseFFN
 
 func init*(
@@ -520,7 +520,7 @@ func init*(
     gateUpProj: Tensor,
     downProj: Tensor,
     sharedExpert: GatedDenseFFN,
-    router: NoauxTcRouter,
+    router: NoAuxTopCorr,
     activation: ActivationKind = kSilu
   ): BlockSparseFFN =
   ## Create the routed FFN from the rank-3 fused expert weights, the shared

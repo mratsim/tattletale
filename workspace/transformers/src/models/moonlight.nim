@@ -254,7 +254,7 @@ proc loadMoonlightModelRaw(modelPath: string, device: DeviceKind): MoonlightMode
     actDtype, device)
 
   var layers = newSeq[AnyDecoderLayer](config.numHiddenLayers)
-  var routers = newSeq[NoauxTcRouter](config.numHiddenLayers)
+  var routers = newSeq[NoAuxTopCorr](config.numHiddenLayers)
   for i in 0 ..< config.numHiddenLayers:
     let lp = "model.layers." & $i
     let mlpPrefix = lp & ".mlp"
@@ -292,7 +292,7 @@ proc loadMoonlightModelRaw(modelPath: string, device: DeviceKind): MoonlightMode
       let routerWeight = view.getTensorOwned(mlpPrefix & ".gate.weight", device)
       let expertBias = view.getTensorOwned(
         mlpPrefix & ".gate.e_score_correction_bias", device)
-      routers[i] = NoauxTcRouter.init(
+      routers[i] = NoAuxTopCorr.init(
         routerWeight, expertBias,
         config.numExpertsPerTok, config.nGroup, config.topkGroup,
         config.routedScalingFactor, config.normTopkProb)

@@ -5,19 +5,18 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## MoE routers of the DeepSeek family, two typed forms plus one
-## embedded-weight form:
-## - NoauxTcRouter: the noaux_tc family. Sigmoid scoring over f32 logits,
-##   a bias buffer that steers selection only, group limiting, weights
-##   gathered from the unbiased scores, renormalized per config and scaled
-##   by the routed scaling factor. One algorithm serves every noaux_tc
-##   checkpoint, degenerate grouping included: n_group 1 leaves the mask
-##   at all-ones inside the same op sequence, no runtime branch.
-## - GreedyRouter: the legacy greedy form. Softmax scores, straight
-##   top-k, scaled, no renorm and no bias.
-## - `routeToExperts` is the embedded-weight form of the Qwen family:
-##   the router weight lives on the FFN object, softmax scores,
-##   renormalized top-k weights at the hidden dtype.
+## MoE routers of the DeepSeek family, two typed forms plus one embedded-weight form.
+##
+## - NoAuxTopCorr (noaux_tc family) sigmoid-scores f32 logits, the bias
+##   steers the pick only, groups bound the candidates, weights gather
+##   from the unbiased scores, renormalize per config, then scale.
+## - GreedyRouter softmax-scores, straight top-k, scaled, no renorm
+##   and no bias.
+## - `routeToExperts` (Qwen family) softmax-scores, renormalizes top-k weights at the hidden dtype, router weight on the FFN object.
+##
+## One algorithm serves every noaux_tc checkpoint, degenerate grouping
+## included. n_group 1 leaves the mask at all-ones inside the same
+## op sequence, no runtime branch.
 ##
 ## Routing constants arrive from config: expert count, top-k, group counts,
 ## scaling factor and the bias values are all init arguments. Bias-buffer
@@ -37,7 +36,7 @@ type
     ## the decision projection, the hidden-dtype cast happens at the FFN
     ## boundary, one recorded rounding.
 
-  NoauxTcRouter* = ref object
+  NoAuxTopCorr* = ref object
     ## noaux_tc-family router, parameterized by config:
     ## scoring sigmoid, selection under the bias buffer, group limiting,
     ## optional renormalization, routed scaling factor last.
@@ -59,12 +58,12 @@ type
 # ─── Construction ──────────────────────────────────────────────────────────
 
 func init*(
-    _: type NoauxTcRouter,
+    _: type NoAuxTopCorr,
     routerWeight, expertBias: Tensor,
     topK, numGroup, topkGroup: int,
     routedScalingFactor: float64,
     normTopkProb: bool
-  ): NoauxTcRouter =
+  ): NoAuxTopCorr =
   ## Builds the router from the checkpoint gate weight, bias buffer,
   ## config routing constants.
   ##
@@ -74,27 +73,27 @@ func init*(
   ## - group counts degenerate past their bounds or miss the expert count
   let e = routerWeight.size(0)
   checkValue(routerWeight.dim() == 2,
-    "[ttt] NoauxTcRouter.init: router weight must be rank 2, found rank " &
+    "[ttt] NoAuxTopCorr.init: router weight must be rank 2, found rank " &
     $routerWeight.dim())
   checkValue(expertBias.numel() == e,
-    "[ttt] NoauxTcRouter.init: bias buffer holds " & $expertBias.numel() &
+    "[ttt] NoAuxTopCorr.init: bias buffer holds " & $expertBias.numel() &
     " entries, expected one per expert (" & $e & ")")
   checkValue(topK >= 1,
-    "[ttt] NoauxTcRouter.init: top_k must be positive, found " & $topK)
+    "[ttt] NoAuxTopCorr.init: top_k must be positive, found " & $topK)
   checkValue(topK <= e,
-    "[ttt] NoauxTcRouter.init: top_k " & $topK &
+    "[ttt] NoAuxTopCorr.init: top_k " & $topK &
     " exceeds the expert count " & $e)
   checkValue(topkGroup >= 1 and topkGroup <= numGroup,
-    "[ttt] NoauxTcRouter.init: topk_group " & $topkGroup &
+    "[ttt] NoAuxTopCorr.init: topk_group " & $topkGroup &
     " outside 1..num_group " & $numGroup)
   checkValue(e mod numGroup == 0,
-    "[ttt] NoauxTcRouter.init: " & $e & " experts do not split into " &
+    "[ttt] NoAuxTopCorr.init: " & $e & " experts do not split into " &
     $numGroup & " equal groups")
   checkValue(e >= 2 * numGroup,
-    "[ttt] NoauxTcRouter.init: group scores sum the top 2 biased scores" &
+    "[ttt] NoAuxTopCorr.init: group scores sum the top 2 biased scores" &
     " per group, " & $numGroup & " groups of " & $(e div numGroup) &
     " experts is below the 2-expert floor")
-  NoauxTcRouter(
+  NoAuxTopCorr(
     routerWeight: routerWeight,
     expertBias: expertBias.to(F.kFloat32),
     topK: topK,
@@ -136,7 +135,7 @@ proc routerLogits(routerWeight: Tensor, hidden: Tensor): Tensor =
   ## module's F.linear on f32 views.
   F.matmul(hidden.to(F.kFloat32), routerWeight.to(F.kFloat32).t())
 
-proc route*(self: NoauxTcRouter, hidden: Tensor): RouteDecision =
+proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   ## noaux_tc routing over rank-2 [T, H] hidden rows.
   ##
   ##   logits [T, E]  = f32 GEMM
@@ -181,13 +180,13 @@ proc route*(self: NoauxTcRouter, hidden: Tensor): RouteDecision =
   weights = weights * Scalar(self.routedScalingFactor)
   result = (logits: logits, weights: weights, indices: indices)
 
-proc routeDecode*(self: NoauxTcRouter, hidden: Tensor): RouteDecision =
+proc routeDecode*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   ## Batch-1 routing contract: one hidden row [1, H], the same f32 GEMM
   ## scoring as route, outputs sized [1, K] straight into the decode
   ## expert gather path. No reshape staging, no flag: the batch-1 shape
   ## is a contract, not a distinct kernel.
   checkValue(hidden.dim() == 2 and hidden.size(0) == 1,
-    "[ttt] NoauxTcRouter.routeDecode: hidden_states must be one row [1, H]," &
+    "[ttt] NoAuxTopCorr.routeDecode: hidden_states must be one row [1, H]," &
     " found shape (" & $hidden.size(0) & ", " & $hidden.size(1) & ")")
   route(self, hidden)
 
@@ -239,6 +238,6 @@ proc routeToExperts*(
   let routingWeights = renormFp32.to(hidden.scalarType())
   (topIndices, routingWeights)
 
-template `()`*(router: NoauxTcRouter | GreedyRouter, hidden: Tensor): untyped =
+template `()`*(router: NoAuxTopCorr | GreedyRouter, hidden: Tensor): untyped =
   ## Route-call sugar, both forms.
   route(router, hidden)

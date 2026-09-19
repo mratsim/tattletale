@@ -245,14 +245,14 @@ proc parseKimiConfig(json: JsonNode): KimiConfig =
   result.topkGroup = json{"topk_group"}.reqInt("topk_group")
   result.moeRenormalize = json{"moe_renormalize"}.getBool()
 
-  # NoauxTc derives from the checkpoint config keys.
+  # NoAuxTopCorr derives from the checkpoint config keys.
   # No topk_method field exists, the router class follows from the sigmoid
   # scoring and the grouped-topk flag. num_expert_group 1 leaves the group
   # limiting degenerate (one group of all experts, the mask stays all-ones).
   checkValue(json{"moe_router_activation_func"}.getStr("") == "sigmoid",
     "[ttt] KimiConfig: moe_router_activation_func is \"" &
     json{"moe_router_activation_func"}.getStr("") &
-    "\", only the sigmoid scoring derives a NoauxTcRouter on this template")
+    "\", only the sigmoid scoring derives a NoAuxTopCorr on this template")
   checkValue(json{"use_grouped_topk"}.getBool(false),
     "[ttt] KimiConfig: use_grouped_topk is false, the noaux_tc derivation" &
     " does not apply")
@@ -445,7 +445,7 @@ proc loadKimiLinearModelRaw(modelPath: string, device: DeviceKind): KimiModel =
       # it f32. bf16 -> f32 is exact, so the added bias equals the checkpoint
       # bit-for-bit. Routing weights gather from the UNBIASED f32 scores,
       # the bias only affects selection.
-      let router = NoauxTcRouter.init(
+      let router = NoAuxTopCorr.init(
         view.getTensorOwned(mlpPrefix & ".gate.weight", device),
         view.getTensorOwned(
           mlpPrefix & ".gate.e_score_correction_bias", device).to(kFloat32),

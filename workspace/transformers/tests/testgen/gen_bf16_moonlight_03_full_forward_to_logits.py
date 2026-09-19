@@ -375,7 +375,7 @@ def moe_layer_indices(model) -> list:
 
 def boundary_margins(router_logits: torch.Tensor, bias: torch.Tensor,
                      top_k: int) -> dict:
-    """Top-k selection margins under the NoauxTc sigmoid + bias scoring:
+    """Top-k selection margins under the NoAuxTopCorr sigmoid + bias scoring:
     - boundary_min, the smallest positive Kth-vs-K+1th gap over all rows
     - boundary_per_row, the per-row gap list, one margin per recorded token
       - inner_gap_min, the smallest adjacent gap inside the top-k set,

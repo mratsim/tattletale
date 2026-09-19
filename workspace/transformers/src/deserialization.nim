@@ -138,10 +138,10 @@ proc load*(_: type GatedBlockSparseFFN, view: SafetensorsCollection, cfg: JsonNo
 # ─── BlockSparseFFN (ungated shared expert) ────────────────────────────────
 
 proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
-           prefix: string, router: NoauxTcRouter, device: DeviceKind,
+           prefix: string, router: NoAuxTopCorr, device: DeviceKind,
            vocab: static ExpertKeyVocab = ekvGateUpDown): BlockSparseFFN =
   ## Loads the routed expert bodies and the ungated shared expert; the
-  ## router arrives composed (NoauxTcRouter), nothing router-related
+  ## router arrives composed (NoAuxTopCorr), nothing router-related
   ## loads here, bias-buffer key naming stays a model-load concern.
   ##
   ## Expert keys follow `vocab`: gate_proj/up_proj/down_proj or

@@ -318,7 +318,7 @@ proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
     actDtype, device)
 
   var layers = newSeq[AnyDecoderLayer](config.numHiddenLayers)
-  var routers = newSeq[NoauxTcRouter](config.numHiddenLayers)
+  var routers = newSeq[NoAuxTopCorr](config.numHiddenLayers)
   for i in 0 ..< config.numHiddenLayers:
     let lp = "model.layers." & $i
     let mlpPrefix = lp & ".mlp"
@@ -356,7 +356,7 @@ proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
       let routerWeight = view.getTensorOwned(mlpPrefix & ".gate.weight", device)
       let expertBias = view.getTensorOwned(mlpPrefix & ".gate.expert_bias", device)
         .to(kBFloat16).to(kFloat32)
-      routers[i] = NoauxTcRouter.init(
+      routers[i] = NoAuxTopCorr.init(
         routerWeight, expertBias,
         config.numExpertsPerTok, config.nGroup, config.topkGroup,
         config.routedScalingFactor, config.normTopkProb)
@@ -384,7 +384,7 @@ proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
         let routerWeight = view.getTensorOwned(mlpPrefix & ".gate.weight", device)
         let expertBias = view.getTensorOwned(
           mlpPrefix & ".gate.expert_bias", device).to(kBFloat16).to(kFloat32)
-        routers[i] = NoauxTcRouter.init(
+        routers[i] = NoAuxTopCorr.init(
           routerWeight, expertBias,
           config.numExpertsPerTok, config.nGroup, config.topkGroup,
           config.routedScalingFactor, config.normTopkProb)
