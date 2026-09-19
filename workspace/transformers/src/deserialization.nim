@@ -18,6 +18,7 @@ import
   pkg/packedjson,
   workspace/safetensors,
   workspace/libtorch,
+  workspace/positron,
   ./layers,
   ./layers/attn_ssm/gated_delta_net,
   ./models/loading/config_json,
@@ -118,11 +119,14 @@ proc load*(_: type Embedding, view: SafetensorsCollection, cfg: JsonNode, prefix
 # ─── GatedDenseFFN ─────────────────────────────────────────────────────────
 
 proc load*(_: type GatedDenseFFN, view: SafetensorsCollection, cfg: JsonNode,
-           prefix: string, device: DeviceKind): GatedDenseFFN =
+           prefix: string, device: DeviceKind,
+           activation: ActivationKind = kSilu): GatedDenseFFN =
+  ## `activation` names the branch activation of the checkpoint config,
+  ## kSilu (the SwiGLU default) or kGeluTanh (the gemma lineage).
   let gate = Linear.load(view, cfg, prefix & ".gate_proj", device)
   let up = Linear.load(view, cfg, prefix & ".up_proj", device)
   let down = Linear.load(view, cfg, prefix & ".down_proj", device)
-  GatedDenseFFN.init(gate, up, down)
+  GatedDenseFFN.init(gate, up, down, activation)
 
 # ─── GatedBlockSparseFFN ───────────────────────────────────────────────────
 
@@ -371,7 +375,15 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
                    cfg: JsonNode, prefix: string, layerIdx: int,
                    numQoHead, numKvHead, headDim: int,
                    rotary: RotaryPositionEmbedding,
-                   device: DeviceKind): RopeGQAttention[QKNorm] =
+                   device: DeviceKind,
+                   window: int = FullVisibilityWindow,
+                   softmaxScale = 0.0'f64): RopeGQAttention[QKNorm] =
+  ## Args:
+  ##   - `window` is the layer kind's visibility band, `FullVisibilityWindow`
+  ##     (the default) for plain causal attention, the sliding window width
+  ##     for a sliding layer kind
+  ##   - `softmaxScale` overrides the head-width attention scale when positive,
+  ##     for checkpoints that scale by the query pre-attention scalar
   let qProj = Linear.load(view, cfg, prefix & ".q_proj", device)
   let kProj = Linear.load(view, cfg, prefix & ".k_proj", device)
   let vProj = Linear.load(view, cfg, prefix & ".v_proj", device)
@@ -381,7 +393,8 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
   RopeGQAttention[QKNorm].init(layerIdx, prefix,
     qProj, kProj, vProj, oProj,
     numQoHead, numKvHead, headDim, rotary,
-    q_norm = qNorm, k_norm = kNorm)
+    q_norm = qNorm, k_norm = kNorm,
+    window = window, softmaxScale = softmaxScale)
 
 # ─── Gated Attention ───────────────────────────────────────────────────────
 

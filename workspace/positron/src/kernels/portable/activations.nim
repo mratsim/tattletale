@@ -5,11 +5,29 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import workspace/libtorch
+import
+  workspace/libtorch
 
 type
   ActivationKind* {.size: sizeof(int8).} = enum
     kSilu = 0
+    kGeluTanh
+      ## Tanh-approximate GELU, the `gelu_pytorch_tanh` activation of the gemma lineage checkpoints
+
+func gelu_tanh*(x: Tensor): Tensor =
+  ## Tanh-approximate GELU, the `gelu_pytorch_tanh` activation of the gemma lineage checkpoints.
+  ##
+  ## Formula:
+  ##   result = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+  ##
+  ## Returns:
+  ##   - A tensor with the shape and dtype of the input
+  ##   - Computed in f32, rounded once back to the input dtype, the same
+  ##     opmath shape as the reference `gelu(approximate="tanh")` kernel
+  ##     for bf16 activations
+  let x32 = x.to(kFloat32)
+  let inner = 0.7978845608028654'f32 * (x32 + 0.044715'f32 * x32 * x32 * x32)
+  result = (0.5'f32 * x32 * (Scalar(1.0'f32) + tanh(inner))).to(x.scalarType())
 
 func silu_and_mul*(x: Tensor): Tensor =
   ## Fused SiLU and Mul activation.

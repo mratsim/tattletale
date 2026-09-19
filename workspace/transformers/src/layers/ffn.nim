@@ -86,6 +86,7 @@ proc forward*(self: GatedDenseFFN, x: Tensor): Tensor =
   let act_out =
     case self.activation
     of kSilu: F.silu(gate_out) * up_out # TODO silu_and_mul fusion
+    of kGeluTanh: gelu_tanh(gate_out) * up_out
   result = self.down_proj(act_out)
 
 template `()`*(layer: GatedDenseFFN, x: Tensor): untyped =
@@ -228,6 +229,7 @@ proc expertBody(gateUpWeight, downWeight, currentStates: Tensor,
   let act =
     case activation
     of kSilu: F.silu(chunks[0]) * chunks[1]
+    of kGeluTanh: gelu_tanh(chunks[0]) * chunks[1]
   F.matmul(act, downWeight.t())
 
 type
@@ -333,6 +335,7 @@ proc expertForwardDecode*(policy: typedesc,
   let act =
     case activation
     of kSilu: F.silu(chunks[0]) * chunks[1]
+    of kGeluTanh: gelu_tanh(chunks[0]) * chunks[1]
   let downOut = F.matmul(act, gatheredDown.transpose(1, 2))
   result = weightedTerms(policy, downOut, topKWeights).sum(0)
     .to(hiddenStates.scalarType())
@@ -424,6 +427,7 @@ proc expertForwardPrefill(
     let act =
       case self.activation
       of kSilu: F.silu(gateChunk) * upChunk
+      of kGeluTanh: gelu_tanh(gateChunk) * upChunk
 
     let downWeight = self.downProj[e]
     let currentHiddenStates = F.matmul(act, downWeight.t())
