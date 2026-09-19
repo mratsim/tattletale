@@ -323,7 +323,7 @@ task test_tf_sampler, "Suite: samplers":
 task test_tf_block_sparse_batch_property, "Suite: block-sparse batch invariance":
   runTransformerSuite("layer_invariance", "t_blocksparse_batch_invariance.nim")
 
-task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|moonlight|glm47flash|kimi|ling3|mla|router|kda|kvcache)":
+task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|moonlight|glm47flash|kimilinear|ling3|mla|router|kda|kvcache)":
   case familyName()
   of "chain":
     runFamily(@[
@@ -358,7 +358,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
     runFamily(@[
       ("q_bf16", "t_bf16_glm47flash_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_glm47flash_03_full_forward_to_logits.nim")])
-  of "kimi":
+  of "kimilinear":
     runFamily(@[
       ("q_bf16", "t_bf16_kimi_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_kimi_04_greedy_text_generation.nim")])
@@ -385,7 +385,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("kvcache", "test_kvcache_lpm.nim"),
       ("kvcache", "test_codera020_batch_guard.nim")])
   else:
-    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness, sampler, moonlight, glm47flash, kimi, mla, router or kda"
+    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness, sampler, moonlight, glm47flash, kimilinear, mla, router or kda"
     quit(1)
 
 task test_transformers, "Test workspace/transformers (the full set, final verification)":
