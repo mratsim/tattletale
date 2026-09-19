@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Boundary-pair fixture file of the gemma-3-270m-it checkpoint, recorded
-with CPU torch bf16 under the installed reference modeling.
+with torch bf16 on Metal (mps) under the installed reference modeling.
 
 Single-file grammar with one fixture file per family layer, one bare bf16
 driving tensor per mixture, all recorded intermediates live on the stats
@@ -172,7 +172,7 @@ def check_ram() -> None:
 
 def load_model() -> Gemma3ForCausalLM:
     """Loads the full reference model through the installed from_pretrained,
-    bf16, eval, CPU.
+    bf16, eval, Metal (mps).
 
     Returns:
     - the model in eval mode, its layer 4 and layer 5 decoder layers plus
@@ -186,6 +186,7 @@ def load_model() -> Gemma3ForCausalLM:
     - the 512 sliding window
     """
     model = Gemma3ForCausalLM.from_pretrained(MODEL_DIR, dtype=torch.bfloat16)
+    model.to("mps")
     model.eval()
     cfg = model.config
     assert cfg.layer_types[SLIDING_LAYER_IDX] == "sliding_attention", (
@@ -346,10 +347,11 @@ def generate_sliding_mixture(model: Gemma3ForCausalLM, cfg) -> tuple:
     - captured, the stats-frame entries namespaced under sliding.
     """
     layer = model.model.layers[SLIDING_LAYER_IDX]
-    gen = torch.Generator(device="cpu")
+    gen = torch.Generator(device="mps")
     gen.manual_seed(SEED_SLIDING)
-    x = torch.randn(1, SEQ, cfg.hidden_size, generator=gen, dtype=torch.bfloat16)
-    pos_ids = torch.arange(SEQ).unsqueeze(0)
+    x = torch.randn(1, SEQ, cfg.hidden_size, generator=gen, dtype=torch.bfloat16,
+                    device="mps")
+    pos_ids = torch.arange(SEQ, device="mps").unsqueeze(0)
     cos, sin = model.model.rotary_emb(x, pos_ids, "sliding_attention")
     mask = build_mask(cfg, x, pos_ids, "sliding_attention")
     cap = layer_chain_capture(layer, x, cos, sin, mask, pos_ids)
@@ -399,10 +401,11 @@ def generate_full_mixture(model: Gemma3ForCausalLM, cfg) -> tuple:
     - captured, the stats-frame entries namespaced under full.
     """
     layer = model.model.layers[FULL_LAYER_IDX]
-    gen = torch.Generator(device="cpu")
+    gen = torch.Generator(device="mps")
     gen.manual_seed(SEED_FULL)
-    x = torch.randn(1, SEQ, cfg.hidden_size, generator=gen, dtype=torch.bfloat16)
-    pos_ids = torch.arange(SEQ).unsqueeze(0)
+    x = torch.randn(1, SEQ, cfg.hidden_size, generator=gen, dtype=torch.bfloat16,
+                    device="mps")
+    pos_ids = torch.arange(SEQ, device="mps").unsqueeze(0)
     cos, sin = model.model.rotary_emb(x, pos_ids, "full_attention")
     mask = build_mask(cfg, x, pos_ids, "full_attention")
     cap = layer_chain_capture(layer, x, cos, sin, mask, pos_ids)
@@ -451,10 +454,11 @@ def generate_boundary_mixture(model: Gemma3ForCausalLM, cfg) -> tuple:
     - payload, the single driving input tensor under its file name
     - captured, the stats-frame entries namespaced under boundary.
     """
-    gen = torch.Generator(device="cpu")
+    gen = torch.Generator(device="mps")
     gen.manual_seed(SEED_BOUNDARY)
-    x = torch.randn(1, SEQ, cfg.hidden_size, generator=gen, dtype=torch.bfloat16)
-    pos_ids = torch.arange(SEQ).unsqueeze(0)
+    x = torch.randn(1, SEQ, cfg.hidden_size, generator=gen, dtype=torch.bfloat16,
+                    device="mps")
+    pos_ids = torch.arange(SEQ, device="mps").unsqueeze(0)
     rotary = model.model.rotary_emb
     cos4, sin4 = rotary(x, pos_ids, "sliding_attention")
     mask4 = build_mask(cfg, x, pos_ids, "sliding_attention")
@@ -541,7 +545,7 @@ def save_fixture(metadata: dict, mixtures: list) -> None:
 
 def main() -> None:
     """Records the boundary-pair fixture file set after the RAM guard."""
-    recorded_from = os.environ.get("TTT_RECORD_FROM", "m4max-cpu")
+    recorded_from = os.environ.get("TTT_RECORD_FROM", "m4max-metal")
     check_ram()
 
     model = load_model()
@@ -560,7 +564,7 @@ def main() -> None:
         "torch_version": torch.__version__,
         "transformers_version": transformers.__version__,
         "recorded_from": recorded_from,
-        "device": "cpu",
+        "device": "mps",
         "hidden_size": cfg.hidden_size,
         "num_attention_heads": cfg.num_attention_heads,
         "num_key_value_heads": cfg.num_key_value_heads,
