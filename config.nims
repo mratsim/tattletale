@@ -275,8 +275,6 @@ task test_tf_bf16_qwen36moe_03_full_forward_to_logits, "Suite: Qwen3.6-35B-A3B i
   runTransformerSuite("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim")
 task test_tf_bf16_qwen36moe_04_greedy_text_generation, "Suite: Qwen3.6-35B-A3B greedy decoding":
   runTransformerSuite("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")
-task test_tf_bf16_kimi_01_layer_internals_mla, "Suite: Kimi-Linear NoPE MLA per-op reference-implementation fixtures, layer 3":
-  runTransformerSuite("q_bf16", "t_bf16_kimi_01_layer_internals_mla.nim")
 task test_tf_bf16_glm47flash_01_layer_internals_mla, "Suite: GLM-4.7-Flash MLA per-op reference-implementation fixtures, layer 0":
   runTransformerSuite("q_bf16", "t_bf16_glm47flash_01_layer_internals_mla.nim")
 task test_tf_bf16_moonlight_01_layer_internals_mla, "Suite: Moonlight MLA per-op reference-implementation fixtures, layer 0":
@@ -287,8 +285,8 @@ task test_tf_bf16_moonlight_01_layer_internals_moe, "Suite: Moonlight routed-blo
   runTransformerSuite("q_bf16", "t_bf16_moonlight_01_layer_internals_moe.nim")
 task test_tf_bf16_moonlight_01_layer_internals_router, "Suite: router per-op reference-implementation fixtures, Moonlight layer 1":
   runTransformerSuite("q_bf16", "t_bf16_moonlight_01_layer_internals_router.nim")
-task test_tf_bf16_kimi_01_layer_internals_kda, "Suite: KDA per-op reference-implementation fixtures, Kimi layer 0":
-  runTransformerSuite("q_bf16", "t_bf16_kimi_01_layer_internals_kda.nim")
+task test_tf_bf16_kimi_01_layer_internals, "Suite: Kimi layer-0 KDA kernel-boundary replay against the single-file fixture":
+  runTransformerSuite("q_bf16", "t_bf16_kimi_01_layer_internals.nim")
 task test_tf_bf16_kimi_02_tokenizer, "Suite: Kimi-Linear tokenizer unit checks, regexp identity + specials synthesis + roundtrips":
   runTransformerSuite("q_bf16", "t_bf16_kimi_02_tokenizer.nim")
 task test_tf_bf16_kimi_04_greedy_text_generation, "Suite: Kimi-Linear greedy text generation, 3 chains x 32 steps vs fixtures":
@@ -373,8 +371,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("q_bf16", "t_bf16_glm47flash_03_full_forward_to_logits.nim")])
   of "kimi":
     runFamily(@[
-      ("q_bf16", "t_bf16_kimi_01_layer_internals_mla.nim"),
-      ("q_bf16", "t_bf16_kimi_01_layer_internals_kda.nim"),
+      ("q_bf16", "t_bf16_kimi_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_kimi_02_tokenizer.nim"),
       ("q_bf16", "t_bf16_kimi_04_greedy_text_generation.nim")])
   of "ling3":
@@ -382,7 +379,6 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("q_bf16", "t_bf16_ling3_05_coherence.nim")])
   of "mla":
     runFamily(@[
-      ("q_bf16", "t_bf16_kimi_01_layer_internals_mla.nim"),
       ("q_bf16", "t_bf16_glm47flash_01_layer_internals_mla.nim"),
       ("q_bf16", "t_bf16_moonlight_01_layer_internals_mla.nim")])
   of "router":
@@ -390,7 +386,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("q_bf16", "t_bf16_moonlight_01_layer_internals_router.nim")])
   of "kda":
     runFamily(@[
-      ("q_bf16", "t_bf16_kimi_01_layer_internals_kda.nim")])
+      ("q_bf16", "t_bf16_kimi_01_layer_internals.nim")])
   of "kvcache":
     runFamily(@[
       ("kvcache", "test_kvcache.nim"),

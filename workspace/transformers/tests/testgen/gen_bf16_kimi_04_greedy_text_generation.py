@@ -61,14 +61,14 @@ def _load_sibling(filename: str):
 # config load, recurrent shim and dtype checks directly.
 # The layer-internals sibling supplies the zstd writer and the head check.
 # - determinism locks at import time through one intra-op torch thread
-_kimi01 = _load_sibling("gen_bf16_kimi_01_layer_internals_mla.py")
+_kimi01 = _load_sibling("gen_bf16_kimi_01_layer_internals.py")
 NUM_THREADS = _kimi01.NUM_THREADS
 GREEDY_STEPS_SCHEMA = "ttt-tf-001-greedy-steps-h2"
 MODEL_NAME = "Kimi-Linear-48B-A3B-Instruct"
 MODEL_DIR = _kimi01.MODEL_DIR
 INDEX_PATH = os.path.join(MODEL_DIR, "model.safetensors.index.json")
 FIXTURE_DIR = os.path.join(
-    _kimi01.TESTS_DIR, "fixtures", "bf16-04-greedy-text-generation", MODEL_NAME
+    _kimi01.GRANDPARENT_DIR, "fixtures", "bf16-04-greedy-text-generation", MODEL_NAME
 )
 write_json_zst = _kimi01.write_json_zst
 
