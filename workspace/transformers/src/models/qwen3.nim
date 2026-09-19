@@ -153,7 +153,7 @@ proc getTokenizer(self: Qwen3Model): BPETokenizer =
 proc getDeviceKind(self: Qwen3Model): DeviceKind =
   self.device
 
-proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
+proc loadQwen3ModelRaw(modelPath: string, device: DeviceKind): Qwen3Model =
   ## Load Qwen3 model — no quantization knowledge, all dispatched via
   ## deserialization.nim and QuantLoaderRegistry.
   let config = loadQwen3Config(modelPath / "config.json")
@@ -204,7 +204,9 @@ proc loadQwen3ModelRaw(modelPath: string, device = kCPU): Qwen3Model =
     device: device
   )
 
-proc loadQwen3Model*(modelPath: string, device = kCPU): AnyModel =
+proc loadQwen3Model*(modelPath: string, device: DeviceKind): AnyModel =
+  ## Loads the Qwen3 checkpoint directory from `modelPath` onto `device`,
+  ## wrapped as AnyModel.
   let qwen3Model = loadQwen3ModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   qwen3Model.to(AnyModel)

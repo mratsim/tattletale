@@ -431,7 +431,7 @@ proc loadKimiTokenizer*(modelPath: string): BPETokenizer =
     specialTokens[tokenText] = tokenId
   loadTiktokenizer(modelPath / "tiktoken.model", MoonshotPatStrRegexp, specialTokens)
 
-proc loadKimiLinearModelRaw(modelPath: string, device = kCPU): KimiModel =
+proc loadKimiLinearModelRaw(modelPath: string, device: DeviceKind): KimiModel =
   ## Loads the Kimi-Linear model weights from the checkpoint.
   ##
   ## Weight scope covers `model.*` over the main stack 0..num_hidden_layers-1
@@ -547,7 +547,7 @@ proc loadKimiLinearModelRaw(modelPath: string, device = kCPU): KimiModel =
     device: device,
   )
 
-proc loadKimiLinearModel*(modelPath: string, device = kCPU): AnyModel =
+proc loadKimiLinearModel*(modelPath: string, device: DeviceKind): AnyModel =
   ## Returns the loaded Kimi-Linear model wrapped as an AnyModel.
   let kimiModel = loadKimiLinearModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically

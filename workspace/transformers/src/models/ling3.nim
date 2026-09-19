@@ -303,7 +303,7 @@ proc getTokenizer(self: Ling3Model): BPETokenizer =
 proc getDeviceKind(self: Ling3Model): DeviceKind =
   self.device
 
-proc loadLing3ModelRaw(modelPath: string, device = kCPU): Ling3Model =
+proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
   ## Loads the Ling-3.0-tiny model weights from the checkpoint.
   ##
   ## Weight scope covers `model.*` over the main stack 0..num_hidden_layers-1
@@ -431,7 +431,7 @@ proc loadLing3ModelRaw(modelPath: string, device = kCPU): Ling3Model =
     device: device,
   )
 
-proc loadLing3Model*(modelPath: string, device = kCPU): AnyModel =
+proc loadLing3Model*(modelPath: string, device: DeviceKind): AnyModel =
   ## Returns the loaded Ling-3.0-tiny model wrapped as an AnyModel.
   let ling3Model = loadLing3ModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically

@@ -404,7 +404,7 @@ proc startSequence*(
 
 # TODO: review ownership and parameter passing of position parameter
 proc appendToken*(orc: var Orchestrator, position: int, token_id: uint32,
-                 device: DeviceKind | Device = kCPU) =
+                 device: DeviceKind | Device) =
   ## Prepare for a single decode step (one token).
   ##
   ## 1. Appends the token to input_tokens tracking.

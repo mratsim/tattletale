@@ -197,7 +197,7 @@ proc getTokenizer(self: Qwen35Model): BPETokenizer =
 proc getDeviceKind(self: Qwen35Model): DeviceKind =
   self.device
 
-proc loadQwen35ModelRaw(modelPath: string, device = kCPU): Qwen35Model =
+proc loadQwen35ModelRaw(modelPath: string, device: DeviceKind): Qwen35Model =
   ## The checkpoint file also carries foreign tensors: `model.visual.*`
   ## (vision tower) and `mtp.*` (draft head). This model never requests
   ## them, so the load skips them without error.
@@ -276,7 +276,9 @@ proc loadQwen35ModelRaw(modelPath: string, device = kCPU): Qwen35Model =
     device: device,
   )
 
-proc loadQwen35Model*(modelPath: string, device = kCPU): AnyModel =
+proc loadQwen35Model*(modelPath: string, device: DeviceKind): AnyModel =
+  ## Loads the Qwen3.5 checkpoint directory from `modelPath` onto `device`,
+  ## wrapped as AnyModel.
   let qwen35Model = loadQwen35ModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   qwen35Model.to(AnyModel)

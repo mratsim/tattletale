@@ -43,7 +43,7 @@ proc main() =
   let numExpertsPerTok = tc{"num_experts_per_tok"}.getInt()
   let hidden = tc{"hidden_size"}.getInt()
   let view = SafetensorsCollection.open(ModelDir)
-  let moe = GatedBlockSparseFFN.load(view, cfgJson, Layer0Prefix & ".mlp", numExpertsPerTok)
+  let moe = GatedBlockSparseFFN.load(view, cfgJson, Layer0Prefix & ".mlp", numExpertsPerTok, device)
 
   var failures = 0
   for t in [2, 5, 9]:

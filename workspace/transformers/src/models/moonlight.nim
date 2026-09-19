@@ -235,7 +235,7 @@ proc loadMoonlightTokenizer(modelPath: string): BPETokenizer =
     specialTokens[tokenText] = tokenId
   loadTiktokenizer(modelPath / "tiktoken.model", MoonshotPatStrRegexp, specialTokens)
 
-proc loadMoonlightModelRaw(modelPath: string, device = kCPU): MoonlightModel =
+proc loadMoonlightModelRaw(modelPath: string, device: DeviceKind): MoonlightModel =
   ## Weight scope: `model.*` plus the untied `lm_head.weight`; no
   ## vision tower and no draft block on this checkpoint.
   let config = loadMoonlightConfig(modelPath / "config.json")
@@ -327,7 +327,9 @@ proc loadMoonlightModelRaw(modelPath: string, device = kCPU): MoonlightModel =
     device: device,
   )
 
-proc loadMoonlightModel*(modelPath: string, device = kCPU): AnyModel =
+proc loadMoonlightModel*(modelPath: string, device: DeviceKind): AnyModel =
+  ## Loads the Moonlight (DeepseekV3) checkpoint directory from `modelPath` onto `device`,
+  ## wrapped as AnyModel.
   let moonlightModel = loadMoonlightModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   moonlightModel.to(AnyModel)

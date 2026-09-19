@@ -211,7 +211,7 @@ proc getTokenizer(self: Glm47Model): BPETokenizer =
 proc getDeviceKind(self: Glm47Model): DeviceKind =
   self.device
 
-proc loadGlm47ModelRaw(modelPath: string, device = kCPU): Glm47Model =
+proc loadGlm47ModelRaw(modelPath: string, device: DeviceKind): Glm47Model =
   ## Weight scope: `model.*` over the main stack 0..num_hidden_layers-1
   ## plus the untied `lm_head.weight`. The checkpoint carries ONE extra
   ## layer past the main stack, the reference stack's
@@ -322,7 +322,9 @@ proc loadGlm47ModelRaw(modelPath: string, device = kCPU): Glm47Model =
     device: device,
   )
 
-proc loadGlm47Model*(modelPath: string, device = kCPU): AnyModel =
+proc loadGlm47Model*(modelPath: string, device: DeviceKind): AnyModel =
+  ## Loads the GLM-4.7-Flash checkpoint directory from `modelPath` onto `device`,
+  ## wrapped as AnyModel.
   let glm47FlashModel = loadGlm47ModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   glm47FlashModel.to(AnyModel)

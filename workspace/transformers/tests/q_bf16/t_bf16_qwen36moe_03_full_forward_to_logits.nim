@@ -36,8 +36,8 @@ import
 {.experimental: "callOperator".}
 
 privateAccess(Qwen35MoeModel)
-privateAccess(DecoderLayer[GatedDeltaNet, GatedBlockSparseFFN, RmsNormOne])
-privateAccess(DecoderLayer[RopeElementWiseGatedAttention[RmsNormOne], GatedBlockSparseFFN, RmsNormOne])
+privateAccess(Qwen35MoeGdnDecoderLayer)
+privateAccess(Qwen35MoeAttnDecoderLayer)
 privateAccess(GatedBlockSparseFFN)
 
 const
@@ -92,10 +92,8 @@ proc main() =
     # Router parity against the recorded weights, the mixer output is
     # replayed through the layer's own components on the parity context,
     # the renormalized top-k weights compare under the elementwise model.
-    let gdnLayer = model.layers[layerIdx].to(
-      DecoderLayer[GatedDeltaNet, GatedBlockSparseFFN, RmsNormOne])
-    let attnLayer = model.layers[layerIdx].to(
-      DecoderLayer[RopeElementWiseGatedAttention[RmsNormOne], GatedBlockSparseFFN, RmsNormOne])
+    let gdnLayer = model.layers[layerIdx].to(Qwen35MoeGdnDecoderLayer)
+    let attnLayer = model.layers[layerIdx].to(Qwen35MoeAttnDecoderLayer)
     let inputNorm =
       if gdnLayer != nil: gdnLayer.input_layernorm
       else: attnLayer.input_layernorm

@@ -170,7 +170,7 @@ proc setPositionIds*(ctx: var InferenceContext, position_ids: Tensor) =
   ## Note: Called every forward pass (prefill + each decode step)
   ctx.position_ids = position_ids
 
-proc setPositionIdsArange*(ctx: var InferenceContext, seq_len: int, offset: int = 0, device: DeviceKind = kCPU) =
+proc setPositionIdsArange*(ctx: var InferenceContext, seq_len: int, offset: int = 0, device: DeviceKind) =
   ## Set position_ids to arange(offset, offset+seq_len), kInt64.
   ##
   ## Args:

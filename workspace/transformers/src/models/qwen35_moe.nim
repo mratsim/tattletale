@@ -261,7 +261,7 @@ proc getTokenizer(self: Qwen35MoeModel): BPETokenizer =
 proc getDeviceKind(self: Qwen35MoeModel): DeviceKind =
   self.device
 
-proc loadQwen35MoeModelRaw(modelPath: string, device = kCPU): Qwen35MoeModel =
+proc loadQwen35MoeModelRaw(modelPath: string, device: DeviceKind): Qwen35MoeModel =
   ## Weight scope: the model reads `model.language_model.*` only. Foreign
   ## `model.visual.*` (vision tower) plus `mtp.*` (draft block) tensors
   ## of the same checkpoint are never requested.
@@ -339,7 +339,9 @@ proc loadQwen35MoeModelRaw(modelPath: string, device = kCPU): Qwen35MoeModel =
     device: device,
   )
 
-proc loadQwen35MoeModel*(modelPath: string, device = kCPU): AnyModel =
+proc loadQwen35MoeModel*(modelPath: string, device: DeviceKind): AnyModel =
+  ## Loads the Qwen3.5-MoE checkpoint directory from `modelPath` onto `device`,
+  ## wrapped as AnyModel.
   let qwen35MoeModel = loadQwen35MoeModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   qwen35MoeModel.to(AnyModel)
