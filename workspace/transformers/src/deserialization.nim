@@ -70,8 +70,6 @@ proc getDeployDtype*(cfg: JsonNode): ScalarKind =
 # ─── Linear ─────────────────────────────────────────────────────────────
 
 proc load*(_: type Linear, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): Linear =
-  ## Loads a Linear under `prefix`, quantization dispatches on `cfg`,
-  ## the weights materialize on `device`.
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].linear
   checkValue(loader != nil, "[ttt] No linear loader for " & $quant)
@@ -89,14 +87,10 @@ proc loadRmsWeight(view: SafetensorsCollection, cfg: JsonNode, prefix: string,
   (quant: quant, weight: weight, eps: eps)
 
 proc load*(_: type RmsNorm, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNorm =
-  ## Loads an RMSNorm under `prefix` onto `device`, quantization dispatches
-  ## on `cfg`, `eps` comes from the config's rms_norm_eps.
   let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
   RmsNorm.init(weight, quant, eps)
 
 proc load*(_: type RmsNormOne, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNormOne =
-  ## Loads a unit-gain RMSNorm under `prefix` onto `device`, quantization
-  ## dispatches on `cfg`, `eps` comes from the config's rms_norm_eps.
   let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
   RmsNormOne.init(weight, quant, eps)
 
@@ -108,8 +102,6 @@ proc load*(_: type RmsNormGated, view: SafetensorsCollection, cfg: JsonNode, pre
 # ─── Embedding ──────────────────────────────────────────────────────────
 
 proc load*(_: type Embedding, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): Embedding =
-  ## Loads the token embedding table under `prefix` onto `device`,
-  ## shape-checked against the config's vocab and hidden sizes.
   let quant = detectQuantization(cfg)
   let weight = view.getTensorOwned(prefix & ".weight", device)
     .to(QuantLoaderRegistry[quant].deployDtype)
@@ -412,8 +404,6 @@ proc load*[QKNorm](_: type RopeElementWiseGatedAttention[QKNorm],
 # ─── LMHead ────────────────────────────────────────────────────────────────
 
 proc load*(_: type LMHead, view: SafetensorsCollection, cfg: JsonNode, embedTokens: Embedding, device: DeviceKind): LMHead =
-  ## Loads the LM head onto `device`, quantization dispatches on `cfg`,
-  ## a tied-head checkpoint reuses `embedTokens` weights.
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].lmHead
   checkValue(not loader.isNil(), "[ttt] No LMHead loader for " & $quant)

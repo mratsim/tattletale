@@ -323,8 +323,6 @@ proc loadGlm47ModelRaw(modelPath: string, device: DeviceKind): Glm47Model =
   )
 
 proc loadGlm47Model*(modelPath: string, device: DeviceKind): AnyModel =
-  ## Loads the GLM-4.7-Flash checkpoint directory from `modelPath` onto `device`,
-  ## wrapped as AnyModel.
   let glm47FlashModel = loadGlm47ModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   glm47FlashModel.to(AnyModel)

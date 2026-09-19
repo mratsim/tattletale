@@ -27,11 +27,6 @@ import ./samplers
 import ./instrumentation
 
 proc loadModel*(modelPath: string, device: DeviceKind): AnyModel =
-  ## Loads a checkpoint directory, dispatching on config.json's
-  ## `architectures` entry through the ModelRegistry.
-  ##
-  ## Contract:
-  ## - `device` is required, every weight and the KV pool land on it
   # Pass the compile-time -> runtime boundary
   # and make the var {.compiletime.} a const at runtime
   const registry = static(ModelRegistry)

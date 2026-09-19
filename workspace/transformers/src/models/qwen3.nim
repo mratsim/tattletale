@@ -205,8 +205,6 @@ proc loadQwen3ModelRaw(modelPath: string, device: DeviceKind): Qwen3Model =
   )
 
 proc loadQwen3Model*(modelPath: string, device: DeviceKind): AnyModel =
-  ## Loads the Qwen3 checkpoint directory from `modelPath` onto `device`,
-  ## wrapped as AnyModel.
   let qwen3Model = loadQwen3ModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   qwen3Model.to(AnyModel)

@@ -340,8 +340,6 @@ proc loadQwen35MoeModelRaw(modelPath: string, device: DeviceKind): Qwen35MoeMode
   )
 
 proc loadQwen35MoeModel*(modelPath: string, device: DeviceKind): AnyModel =
-  ## Loads the Qwen3.5-MoE checkpoint directory from `modelPath` onto `device`,
-  ## wrapped as AnyModel.
   let qwen35MoeModel = loadQwen35MoeModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   qwen35MoeModel.to(AnyModel)

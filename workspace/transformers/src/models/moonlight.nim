@@ -328,8 +328,6 @@ proc loadMoonlightModelRaw(modelPath: string, device: DeviceKind): MoonlightMode
   )
 
 proc loadMoonlightModel*(modelPath: string, device: DeviceKind): AnyModel =
-  ## Loads the Moonlight (DeepseekV3) checkpoint directory from `modelPath` onto `device`,
-  ## wrapped as AnyModel.
   let moonlightModel = loadMoonlightModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   moonlightModel.to(AnyModel)
