@@ -33,6 +33,19 @@ const
     ## the project root. Exact path resolution only, never written
 
 type
+  ChatRenderRequest* = object
+    ## One recorded render request, the HF-standard inputs in the engine's value model.
+    messages*: JinjaVal
+    tools*: JinjaVal
+      ## the none value when the recording passed no tools
+    documents*: JinjaVal
+      ## the none value when the recording passed no documents
+    addGenerationPrompt*: bool
+    kwargs*: DictVal
+      ## template kwargs in recording order, the renderer appending them after the standard keys
+    clockEpoch*: float64
+      ## the epoch `strftime_now` reads, 0 when the row carries none
+
   FixtureRow* = object
     ## One recorded golden row, ready to render and ready to compare.
     suite*: string
@@ -53,10 +66,10 @@ func jsonToValue(n: JsonNode): JinjaVal =
   ## the tiers the two-tier value model distinguishes.
   case n.kind
   of JObject:
-    var entries = newSeq[DictEntry]()
+    var d = DictVal()
     for key, child in n.fields:
-      entries.add (key, jsonToValue(child))
-    dictVal(entries)
+      dictSet(d, key, jsonToValue(child))
+    dictVal(d)
   of JArray:
     var items = newSeq[JinjaVal](n.len)
     var i = 0
@@ -68,13 +81,13 @@ func jsonToValue(n: JsonNode): JinjaVal =
   of JInt: intVal(n.getInt())
   of JFloat: floatVal(n.getFloat())
   of JBool: boolVal(n.getBool())
-  of JNull: nullVal()
+  of JNull: noneVal()
 
 func asList(n: JsonNode): JinjaVal =
   ## An optional list input. Absent key or null renders as the none value, the way the HF render
   ## path passes a missing tools or documents argument through as None.
   if n.isNil or n.kind == JNull:
-    nullVal()
+    noneVal()
   else:
     jsonToValue(n)
 
@@ -146,9 +159,9 @@ proc loadRow*(suite: string, row: string): FixtureRow =
   result.suite = suite
   result.row = row
   result.templateSha = sha
-  var kwargs = newSeq[DictEntry]()
+  var kwargs = DictVal()
   for key, child in pairs(frame["kwargs"]):
-    kwargs.add (key, jsonToValue(child))
+    dictSet(kwargs, key, jsonToValue(child))
   result.request = ChatRenderRequest(
     messages: jsonToValue(frame["messages"]),
     tools: asList(frame.getOrDefault("tools")),

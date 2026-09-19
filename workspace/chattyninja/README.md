@@ -7,9 +7,6 @@ Templates compile to a flat append-only `seq[Node]` arena, a POD of six
 `int32` fields. Dispatch runs through `const steps: array[NodeKind, Step]`,
 total over the enum.
 
-Control state lives in a driver owned by the `items` iterator. `Machine`
-is read-only after load, concurrently renderable.
-
 ## Layout
 
 | path            | contents                                                            |
@@ -18,8 +15,7 @@ is read-only after load, concurrently renderable.
 | `tests/`        | suites driven by the `test_chattyninja` task, plus the corpus       |
 | `tests/corpus/` | 18 model template suites, 106 recorded input frames, expected bytes |
 
-`python3 tests/check_corpus.py` verifies the extracted fixtures before any
-render test trusts them.
+`nim test_chattyninja` verifies the extracted fixtures before any render test trusts them.
 
 `tests/corpus/MANIFEST.md` records the feature burden and build targets of each
 suite. `tests/corpus/PROVENANCE.md` records how the ground truth was determined.
@@ -42,22 +38,25 @@ The corpus carries the ground truth, so no tokenizer or model call happens at te
 
 ## Pull API
 
-`pull(m, t, d, buf)` writes the render's next bytes into a caller-owned presized
+`parseTemplate(src)` compiles template text once into the shared render artifact,
+the `(CompiledTemplate, CompiledSymbols)` pair. The artifact borrows the template
+text and is read-only at render, so one pair serves any number of renders.
+
+`startRender(tmpl, sym, root, clock)` returns a fresh `Context` over the artifact,
+ready to render the context dict `root`. `clock` is the epoch `strftime_now` reads.
+
+`pull(context, buf)` writes the render's next bytes into a caller-owned presized
 buffer and returns the count written. `0` means the render is complete.
 
-Resumption state lives in the `Driver`, so consumers stop after any call and resume
-mid-piece from the same driver.
+Resumption state lives in the context's `RenderState`, so consumers stop after any
+call and resume mid-piece from the same context.
 
-Delivery and scratch ownership:
+Delivery contract:
 
+- A piece longer than the window drains across calls, delivery itself never raising
+  for a small window.
 - Window bytes written in a failing call are discarded and never re-delivered.
-- Scratch is caller-owned through `attachScratch(d, buf)` and must outlive the render.
-  Size it for the largest derived value, with the JSON of the largest context value
-  as the upper bound.
-- Underestimation is safe. `ScratchError` names the shortfall, so the caller grows
-  the buffer, reattaches it and repulls.
+- A cursor append that does not fit its borrowed scratch window raises `JinjaError`
+  with cause `ceScratch`, naming the shortfall.
 
-Composability:
-
-- One `Machine` serves many `Driver`s with byte-identical renders, the contract `tests/t_twodriver.nim` checks.
-- Bounded consumption composes through a ring-window machine over `pull`, a shape demonstrated in `tests/t_compose.nim`.
+`pullAll(context)` returns the whole render in one call.

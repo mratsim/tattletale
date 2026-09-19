@@ -483,7 +483,8 @@ arena[0].slots[0] = 99'i32
 doAssert arena[1].slots[0] == 7'i32, "an assignment must deep-copy a spilled payload"
 doAssert arena.len == 2, "the arena moved by assignment with no reference left behind"
 
-doAssert sizeof(RenderState) > 0, "RenderState is a plain value type"
+# Size locked, the RenderState layout contract.
+doAssert sizeof(RenderState) == 368, "RenderState is a plain value type"
 
 # The equality must reject a one-byte change, since a comparison that cannot fail makes
 # the corpus walk vacuous.
@@ -507,7 +508,7 @@ block corpusDelivery:
     var (m, tables) = parseTemplate(src)
     for r in rows(suite):
       if r.expectError:
-        # The recorded error, not a wrong success. The match compares the recorded message verbatim.
+        # Error outcome, not a wrong success. The match compares the recorded message verbatim.
         var raisedMsg = ""
         var wrongSuccess = ""
         try:

@@ -45,7 +45,7 @@ type
       ## kind of failure, `ceRaiseCall` a `raise_exception` call, `ceUnimplemented` a declared gap, `ceScratch` a render-scratch overflow
 
   Cursor* = object
-    ## Byte sink over a borrowed byte window. An append that does not fit raises `JinjaError`
+    ## Appends bytes into a borrowed window. An append that does not fit raises `JinjaError`
     ## with cause `ceScratch`, naming capacity and shortfall, never growing the window.
     ## Measuring mode counts bytes without writing, the presize pass of a two-pass render.
     buf*: openArray[char]

@@ -43,9 +43,9 @@
 ## No `doAssert` anywhere. A failing doAssert hangs under `-d:nimAllocStats`.
 
 import std/[algorithm, importutils, monotimes, os, strformat, strutils, times]
-import cnj_types, jinja_data_model, cnj_parse, cnj_engine
+import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, cnj_engine
 import workspace/data_structures/src/small_seqs
-import ../tests/rows
+import corpus/fixture_loader
 
 type
   Shape = object
@@ -54,16 +54,15 @@ type
     ctx: JinjaVal
 
   Compiled = object
-    ## One parsed template plus its bench label.
+    ## One parsed template plus its bench label, the parse pair of one `parseTemplate` call.
     ##
-    ## `Machine` is built from these fields at render time, not at parse time.
-    ##
-    ## `Machine.jinja` borrows the template text, so `src` must outlive every render
-    ## built from this record.
+    ## Borrow contract:
+    ## `CompiledTemplate.jinja` borrows the template text, so `src` must outlive
+    ## every render built from this record.
     label: string
     src: string
-    nodes: seq[Node]
-    t: Tables
+    tmpl: CompiledTemplate
+    sym: CompiledSymbols
 
 when defined(benchAlloc) and not defined(nimAllocStats):
   {.error: "build the allocation trace with -d:benchAlloc -d:nimAllocStats".}
@@ -179,18 +178,49 @@ const
               ("qwen36", "Qwen3.6-35B-A3B"), ("qwen35", "Qwen3.5-0.8B")]
     ## bench label and hf_models directory per template
 
+# ── Corpus anchor rows ───────────────────────────────────────────────────────
+#
+# Anchor rows come from the corpus fixture loader, one reading pass per suite
+# so the timed and counted passes never touch the fixture frames.
+
+func anchorContext(req: ChatRenderRequest): JinjaVal =
+  ## Render context of one recorded row, the standard keys in recording order,
+  ## then the row's kwargs.
+  var d = DictVal()
+  dictSet(d, "messages", req.messages)
+  dictSet(d, "tools", req.tools)
+  dictSet(d, "documents", req.documents)
+  dictSet(d, "add_generation_prompt", boolVal(req.addGenerationPrompt))
+  for k, key in req.kwargs.keys:
+    dictSet(d, key, req.kwargs.vals[k])
+  dictVal(d)
+
+type
+  AnchorRow = object
+    ## One corpus anchor row, the render inputs materialized once.
+    row: string
+    ctx: JinjaVal
+    clock: float64
+
+proc anchorRows(suite: string): seq[AnchorRow] =
+  ## Every recorded row of one suite, sorted row order, read once.
+  for name in suiteRowNames(suite):
+    let r = loadRow(suite, name)
+    result.add AnchorRow(row: r.row, ctx: anchorContext(r.request),
+        clock: r.request.clockEpoch)
+
 # ── Measurement ──────────────────────────────────────────────────────────────
 
-proc renderOnce(m: Machine, t: Tables, ctx: JinjaVal, clock = 0.0): string =
+proc renderOnce(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock = 0.0): string =
   ## Renders once, whole, through the pull interface, exactly as the test suites do.
-  var d = newDriver(ctx, clock)
-  pullAll(m, t, d)
+  var c = startRender(tmpl, sym, ctx, clock)
+  pullAll(c)
 
-proc renderN(m: Machine, t: Tables, ctx: JinjaVal, clock: float64, n: int): int =
+proc renderN(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64, n: int): int =
   ## Renders `n` times and returns the accumulated output byte count, so the loop
   ## consumes every render and nothing is optimized away.
   for _ in 0 ..< n:
-    result += renderOnce(m, t, ctx, clock).len
+    result += renderOnce(tmpl, sym, ctx, clock).len
 
 template timedRuns(runs, iters: int, body: untyped): seq[float64] =
   ## Runs `body` `iters` times per run, `runs` runs, and returns per-render
@@ -209,7 +239,7 @@ func median(xs: seq[float64]): float64 =
   let s = sorted(xs)
   s[s.len div 2]
 
-proc timeShape(m: Machine, t: Tables, ctx: JinjaVal, iters: int): string =
+proc timeShape(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, iters: int): string =
   ## Times one template x shape.
   ##
   ## 500 warm-up renders, then rounds of 15 timed runs of `iters` renders each.
@@ -217,12 +247,12 @@ proc timeShape(m: Machine, t: Tables, ctx: JinjaVal, iters: int): string =
   ## - the first round whose spread stays within 20% is reported
   ## - a busy machine gets up to 4 rounds and the most stable one is reported, still
   ##   flagged when its spread exceeds 20%, so noise is never silently averaged away
-  let warm = renderN(m, t, ctx, 0, 500)
+  let warm = renderN(tmpl, sym, ctx, 0, 500)
   var best: seq[float64]
   var bestSpread = 1e9
   for _ in 0 ..< 4:
     let samples = timedRuns(15, iters):
-      discard renderN(m, t, ctx, 0, iters)
+      discard renderN(tmpl, sym, ctx, 0, iters)
     let spread = (max(samples) - min(samples)) / median(samples) * 100.0
     when defined(benchDebug):
       echo "    samples: ", samples.mapIt(it.formatFloat(ffDecimal, 4)).join(" ")
@@ -260,13 +290,13 @@ when defined(benchAlloc):
       if byKind[kind] > 0:
         result.summary.add &"{kind}[{byKind[kind]}] "
 
-  proc allocShape(m: Machine, t: Tables, ctx: JinjaVal, iters: int): string =
+  proc allocShape(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, iters: int): string =
     ## Allocates per render for one template x shape.
     ## One warm-up render goes uncounted, then `iters` renders are counted via `getAllocStats()`.
-    discard renderOnce(m, t, ctx)
+    discard renderOnce(tmpl, sym, ctx)
     let a = allocsOf:
       for _ in 0 ..< iters:
-        discard renderOnce(m, t, ctx)
+        discard renderOnce(tmpl, sym, ctx)
     fmt"{a.float64 / iters.float64:8.2f} allocs/render"
 
   proc parseAllocs(src: string): string =
@@ -281,19 +311,19 @@ when defined(benchAlloc):
     ##
     ## - one full warm-up pass over every row, uncounted
     ## - then counted passes, reported per row and as the suite mean
-    let rs = rows(suite)
-    let src = templateSource(suite)
-    let (nodes, tables) = parseTemplate(src)
-    let m = Machine(jinja: src, nodes: nodes)
+    var m: CompiledTemplate
+    var sym: CompiledSymbols
+    (m, sym) = parseTemplate(suiteTemplateSource(suite))
+    let rs = anchorRows(suite)
     for _ in 0 ..< 3: # warm-up pass over every row, uncounted
       for r in rs:
-        discard renderOnce(m, tables, r.context, r.clock)
+        discard renderOnce(m, sym, r.ctx, r.clock)
     var perRow = ""
     var total = 0.0
     for r in rs:
       let a = allocsOf:
         for _ in 0 ..< iters:
-          discard renderOnce(m, tables, r.context, r.clock)
+          discard renderOnce(m, sym, r.ctx, r.clock)
       let per = a.float64 / iters.float64
       perRow.add &"{r.row}={per:.1f} "
       total += per
@@ -316,12 +346,13 @@ when defined(benchAlloc):
     for (name, src) in [("verbatim", tVerbatim), ("for-loop", tLoop),
                         ("for-empty", tLoopEmpty), ("emit", tEmit), ("emit x2", tEmit2),
                         ("emit-const", tEmitConst), ("if/else", tIf), ("tools|tojson", tJson)]:
-      let (nodes, tables) = parseTemplate(src)
-      let m = Machine(jinja: src, nodes: nodes)
-      discard renderOnce(m, tables, ctx) # warm-up render, not counted
+      var m: CompiledTemplate
+      var sym: CompiledSymbols
+      (m, sym) = parseTemplate(src)
+      discard renderOnce(m, sym, ctx) # warm-up render, not counted
       let a = allocsOf:
         for _ in 0 ..< iters:
-          discard renderOnce(m, tables, ctx)
+          discard renderOnce(m, sym, ctx)
       echo &"  micro {name:14} {a.float64 / iters.float64:8.2f} allocs/render"
     # Expression-shape matrix, per-emit cost by token shape, all against the same
     # for-loop baseline, separating punctuator, literal and lookup costs.
@@ -329,12 +360,13 @@ when defined(benchAlloc):
                         ("emit-int", "{% for m in messages %}{{ 1 }}{% endfor %}"),
                         ("emit-bracket", "{% for m in messages %}{{ m['content'] }}{% endfor %}"),
                         ("emit-concat", "{% for m in messages %}{{ m.role ~ 'x' }}{% endfor %}")]:
-      let (nodes, tables) = parseTemplate(src)
-      let m = Machine(jinja: src, nodes: nodes)
-      discard renderOnce(m, tables, ctx) # warm-up render, not counted
+      var m: CompiledTemplate
+      var sym: CompiledSymbols
+      (m, sym) = parseTemplate(src)
+      discard renderOnce(m, sym, ctx) # warm-up render, not counted
       let a = allocsOf:
         for _ in 0 ..< iters:
-          discard renderOnce(m, tables, ctx)
+          discard renderOnce(m, sym, ctx)
       echo &"  micro {name:14} {a.float64 / iters.float64:8.2f} allocs/render"
     # Direct stringifier costs over a representative message content.
     let content = strVal(
@@ -345,7 +377,7 @@ when defined(benchAlloc):
     echo &"  micro pyStr(msg content) {ps.float64 / 1000.0:5.2f} allocs/call"
     # Direct attribution of the emit path's two owning copies, through public fields.
     # One copy belongs to the context lookup that fills a `JinjaVal`.
-    # The other belongs to the pending-piece assignment that moves the string into driver storage.
+    # The other belongs to the pending-piece assignment that moves the string into render-state storage.
     let msgs = ctx.d.dictGet("messages")
     # Message 1 rather than the system message, whose content is a compile-time
     # constant. A literal-backed string makes both copies below buffer shares
@@ -355,12 +387,15 @@ when defined(benchAlloc):
       for _ in 0 ..< 1000:
         discard msg1.d.dictGet("content")
     echo &"  micro dictGet(content)   {dg.float64 / 1000.0:5.2f} allocs/call"
-    var drv = newDriver(ctx, 0.0)
+    var pm: CompiledTemplate
+    var psyms: CompiledSymbols
+    (pm, psyms) = parseTemplate("{{ m.content }}")
+    var pcx = startRender(pm, psyms, ctx, 0.0)
     let cv = msg1.d.dictGet("content")
     let pc = allocsOf:
       for _ in 0 ..< 1000:
-        drv.pend = Piece(pos: 0, kind: pkStr, s: cv.s)
-        drv.pend = Piece(kind: pkNone)
+        pcx.state.pend = Piece(pos: 0, kind: pkStr, s: cv.s)
+        pcx.state.pend = Piece(kind: pkNone)
     echo &"  micro pend piece copy    {pc.float64 / 1000.0:5.2f} allocs/call"
     let tj = allocsOf:
       for _ in 0 ..< 100:
@@ -386,14 +421,16 @@ proc compileHf(): seq[Compiled] =
       continue
     let path = HfModelsRoot / dir / "chat_template.jinja"
     let src = readFile(path)
-    let (nodes, tables) = parseTemplate(src)
+    var tmpl: CompiledTemplate
+    var sym: CompiledSymbols
+    (tmpl, sym) = parseTemplate(src)
     when defined(benchAlloc):
-      let census = spillCensus(nodes)
-      echo &"parse {label:11} OK    {nodes.len} nodes, {census.summary}, " &
+      let census = spillCensus(tmpl.nodes)
+      echo &"parse {label:11} OK    {tmpl.nodes.len} nodes, {census.summary}, " &
           &"maxSlots {census.maxSlots}, {parseAllocs(src)}"
     else:
-      echo &"parse {label:11} OK    {nodes.len} nodes"
-    result.add Compiled(label: label, src: src, nodes: nodes, t: tables)
+      echo &"parse {label:11} OK    {tmpl.nodes.len} nodes"
+    result.add Compiled(label: label, src: src, tmpl: tmpl, sym: sym)
 
 const renderGapShapes = [("qwen36", "long40"), ("qwen35", "long40")]
   ## Template and shape pairs the engine cannot render yet, the declared render gaps.
@@ -408,19 +445,18 @@ proc benchHf(): void =
   let shapes = benchShapes()
   for c in compiled.mitems:
     echo &"render {c.label}"
-    let m = Machine(jinja: c.src, nodes: c.nodes)
     for s in shapes:
       if (c.label, s.name) in renderGapShapes:
         echo &"  {s.name:10} SKIP   declared gap, skipped"
         continue
       when defined(benchAlloc):
-        echo &"  {s.name:10} {allocShape(m, c.t, s.ctx, 50)}"
+        echo &"  {s.name:10} {allocShape(c.tmpl, c.sym, s.ctx, 50)}"
       else:
         let iters = case s.name
             of "short2": 2000
             of "typical10": 800
             else: 200
-        echo &"  {s.name:10} {timeShape(m, c.t, s.ctx, iters)}"
+        echo &"  {s.name:10} {timeShape(c.tmpl, c.sym, s.ctx, iters)}"
     echo ""
 
 proc benchCorpus(): void =
@@ -433,18 +469,18 @@ proc benchCorpus(): void =
   else:
     echo "corpus timing anchor (median of 15 runs, warm-up uncounted)"
     for (suite, iters) in [("deepseekv2lite", 400), ("qwen3", 150)]:
-      let rs = rows(suite)
-      let src = templateSource(suite)
-      let (nodes, tables) = parseTemplate(src)
-      let m = Machine(jinja: src, nodes: nodes)
-      discard renderN(m, tables, rs[0].context, rs[0].clock, 500) # warm-up pass, not counted
+      var m: CompiledTemplate
+      var sym: CompiledSymbols
+      (m, sym) = parseTemplate(suiteTemplateSource(suite))
+      let rs = anchorRows(suite)
+      discard renderN(m, sym, rs[0].ctx, rs[0].clock, 500) # warm-up pass, not counted
       var best: seq[float64]
       var bestSpread = 1e9
       for _ in 0 ..< 4:
         let samples = timedRuns(15, iters):
           for _ in 0 ..< iters:
             for r in rs:
-              discard renderOnce(m, tables, r.context, r.clock)
+              discard renderOnce(m, sym, r.ctx, r.clock)
         let spread = (max(samples) - min(samples)) / median(samples) * 100.0
         if spread < bestSpread:
           bestSpread = spread
@@ -457,31 +493,33 @@ proc benchCorpus(): void =
 
 # ── Pull-window timing ───────────────────────────────────────────────────────
 
-proc renderWindowN(m: Machine, t: Tables, ctx: JinjaVal, clock: float64, n, windowSize: int): int =
+proc renderWindowN(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64, n, windowSize: int): int =
   ## Renders `n` times through a `windowSize`-byte stack window and returns the byte
   ## count accumulated across renders, so the loop consumes every render.
   var buf: array[4096, char]
   for _ in 0 ..< n:
-    var d = newDriver(ctx, clock)
+    var c = startRender(tmpl, sym, ctx, clock)
     while true:
-      let got = pull(m, t, d, buf.toOpenArray(0, windowSize - 1))
+      let got = pull(c, buf.toOpenArray(0, windowSize - 1))
       if got == 0:
         break
       result += got
 
-proc pullCallsPerPass(m: Machine, t: Tables, rs: seq[Row], windowSize: int): int =
+proc pullCallsPerPass(tmpl: CompiledTemplate, sym: var CompiledSymbols, rs: seq[AnchorRow], windowSize: int): int =
   ## Pull calls that returned bytes, one untimed pass over every row.
   var buf: array[4096, char]
   for r in rs:
-    var d = newDriver(r.context, r.clock)
+    var c = startRender(tmpl, sym, r.ctx, r.clock)
     while true:
-      let got = pull(m, t, d, buf.toOpenArray(0, windowSize - 1))
+      let got = pull(c, buf.toOpenArray(0, windowSize - 1))
       if got == 0:
         break
       inc result
 
-proc timedCorpusPasses(m: Machine, t: Tables, rs: seq[Row], iters: int,
-    render: proc (m: Machine, t: Tables, ctx: JinjaVal, clock: float64): int):
+proc timedCorpusPasses(tmpl: CompiledTemplate, sym: var CompiledSymbols,
+    rs: seq[AnchorRow], iters: int,
+    render: proc (tmpl: CompiledTemplate, sym: var CompiledSymbols,
+        ctx: JinjaVal, clock: float64): int):
     tuple[mid, spread: float64] =
   ## Rounds of 15 timed runs of `iters` full-corpus passes of `render`, method
   ## identical to the corpus timing anchor:
@@ -494,7 +532,7 @@ proc timedCorpusPasses(m: Machine, t: Tables, rs: seq[Row], iters: int,
     let samples = timedRuns(15, iters):
       for _ in 0 ..< iters:
         for r in rs:
-          discard render(m, t, r.context, r.clock)
+          discard render(tmpl, sym, r.ctx, r.clock)
     let spread = (max(samples) - min(samples)) / median(samples) * 100.0
     if spread < bestSpread:
       bestSpread = spread
@@ -510,26 +548,28 @@ proc benchPullWindows(): void =
   ## - window sizes 256 B and 4 KiB sit beside the one-shot `pullAll` render
   echo "pull-window timing anchor (median of 15 runs, warm-up uncounted)"
   for (suite, iters) in [("deepseekv2lite", 400), ("qwen3", 150)]:
-    let rs = rows(suite)
-    let src = templateSource(suite)
-    let (nodes, tables) = parseTemplate(src)
-    let m = Machine(jinja: src, nodes: nodes)
-    discard renderN(m, tables, rs[0].context, rs[0].clock, 500) # warm-up pass, not counted
+    var m: CompiledTemplate
+    var sym: CompiledSymbols
+    (m, sym) = parseTemplate(suiteTemplateSource(suite))
+    let rs = anchorRows(suite)
+    discard renderN(m, sym, rs[0].ctx, rs[0].clock, 500) # warm-up pass, not counted
     var line = &"  {suite:14} "
     for windowSize in [256, 4096]:
-      let renderRow = proc (mm: Machine, tt: Tables, ctx: JinjaVal, clock: float64): int =
-        renderWindowN(mm, tt, ctx, clock, 1, windowSize)
-      let (mid, spread) = timedCorpusPasses(m, tables, rs, iters, renderRow)
+      let renderRow = proc (mm: CompiledTemplate, sym: var CompiledSymbols,
+          ctx: JinjaVal, clock: float64): int =
+        renderWindowN(mm, sym, ctx, clock, 1, windowSize)
+      let (mid, spread) = timedCorpusPasses(m, sym, rs, iters, renderRow)
       let flag = if spread > 20.0: "  VARIANCE" else: ""
       line.add &"win {windowSize:4} {mid:9.4f} ms/render  spread {spread:4.1f}%{flag}   "
-    let renderWhole = proc (mm: Machine, tt: Tables, ctx: JinjaVal, clock: float64): int =
-      renderOnce(mm, tt, ctx, clock).len
-    let (mid, spread) = timedCorpusPasses(m, tables, rs, iters, renderWhole)
+    let renderWhole = proc (mm: CompiledTemplate, sym: var CompiledSymbols,
+        ctx: JinjaVal, clock: float64): int =
+      renderOnce(mm, sym, ctx, clock).len
+    let (mid, spread) = timedCorpusPasses(m, sym, rs, iters, renderWhole)
     let flag = if spread > 20.0: "  VARIANCE" else: ""
     line.add &"one-shot {mid:9.4f} ms/render  spread {spread:4.1f}%{flag}"
     echo line
-    let calls256 = pullCallsPerPass(m, tables, rs, 256)
-    let calls4k = pullCallsPerPass(m, tables, rs, 4096)
+    let calls256 = pullCallsPerPass(m, sym, rs, 256)
+    let calls4k = pullCallsPerPass(m, sym, rs, 4096)
     echo &"    pull calls per pass: 256 B {calls256} ({calls256 div rs.len}/render), " &
         &"4 KiB {calls4k} ({calls4k div rs.len}/render)"
 
