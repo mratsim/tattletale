@@ -249,7 +249,7 @@ proc stepMacroDef(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## through the caller's window, control continuing at the frame's return node.
   template nd: Node = m.nodes[n]
   if d.frames.len > 0 and d.frames[^1].kind == frMacro and d.frames[^1].node == n:
-    d.scopes.setLen(d.frames[^1].scopeAt)
+    d.scopes.setLen(d.frames[^1].scopeAt - 1)
     d.curNode = d.frames[^1].retNode
     d.frames.setLen(d.frames.len - 1)
     dec d.macroDepth

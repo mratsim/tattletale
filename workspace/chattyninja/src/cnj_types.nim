@@ -205,7 +205,8 @@ type
     ## matched against the node being entered, nothing about resumption living in the node.
     node*: int32
     scopeAt*: int
-      ## `scopes.len` at entry, the mark popped back to on close
+      ## One past the mark popped back to on close.
+      ## The entry scope occupies `scopes[scopeAt - 1]`, and close truncates to that mark
     case kind*: FrameKind
     of frFor:
       loop*: LoopState

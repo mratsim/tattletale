@@ -340,6 +340,19 @@ block macroBreachRepull:
   doAssert acc == want,
       "the repull after a macro-body breach differs from the single-shot render"
 
+# A streamed macro call resolves names against the caller's scopes only before the call
+# and against its own scopes only inside the body: the macro scope is popped on close.
+# ---------------------------------------------------------------------------
+block macroScopePop:
+  let leakCaller = "{% macro mm(q) %}[{{ q }}]{% endmacro %}" &
+      "{% set q = 'caller' %}{{ mm('inner') }}:{{ q }}"
+  doAssert renderToString(leakCaller, listCtx()) == "[inner]:caller",
+      "the macro body read a caller binding set after the call"
+
+  let leakBody = "{% macro mm() %}{% set z = 'body' %}{{ z }}{% endmacro %}{{ mm() }}:{{ z }}"
+  doAssert renderToString(leakBody, listCtx()) == "body:",
+      "a macro body binding leaked into the caller's name resolution"
+
 # `tojson` with `ensure_ascii` exercises every escape shape, control characters included,
 # plus the astral-codepoint surrogate pair. The recording environment never
 # passes `ensure_ascii`, so this pins the engine rendering with uppercase hex digits.
