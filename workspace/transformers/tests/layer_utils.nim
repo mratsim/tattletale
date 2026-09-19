@@ -8,10 +8,12 @@
 
 ## Standardized helpers for the fixture-replay suites.
 ##
-## One home for everything a suite repeats:
+## One home for everything a suite repeats, split by consumer:
+##
 ## - config document and weights shard of one model directory
 ## - rotary table geometry read off the config text section
 ## - the layer loads, composed over src/deserialization.nim
+##
 ## - the chain's plain input-tensor preparation of the 04 suites
 ## - per-layer fixture opens and checkpoint tensor counts of the 01/03 suites
 ## - deterministic bf16-grid stimulus tensors and tensor comparisons
@@ -78,18 +80,24 @@ proc setup*(cfg: JsonNode,
     t{"num_attention_heads"}.getInt(), t{"num_key_value_heads"}.getInt(),
     t{"head_dim"}.getInt(), rotary, device)
 
-proc setup*(cfg: JsonNode, T: typedesc[GatedDeltaNet],
+proc setupGatedDeltaNet*[Decay: static DecayAxis,
+    GateIn: FullRankGateIn | LowRankGateIn,
+    Form: static GateForm](cfg: JsonNode,
+    T: typedesc[GatedDeltaNet[Decay, GateIn, Form]],
     weights: SafetensorsCollection, layerStem: string, layerIdx: int,
-    device = F.kCPU): GatedDeltaNet =
+    device = F.kCPU): GatedDeltaNet[Decay, GateIn, Form] =
   ## Loads checkpoint layer `layerIdx` as a GatedDeltaNet, recurrent
   ## geometry read off the config text section.
   ##
   ## Expected input:
   ## - layerStem, the dot-terminated layer path stem, shaped
   ##   model.language_model.layers. (weights load under linear_attn)
+  ## - T, the concrete mixer variant, e.g.
+  ##   GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus]
+  ##   for the Qwen3.5-family GDN layers
   let t = if cfg.hasKey("text_config"): cfg{"text_config"} else: cfg
   let prefix = layerStem & $layerIdx & ".linear_attn"
-  GatedDeltaNet.load(weights, cfg, prefix, layerIdx,
+  GatedDeltaNet[Decay, GateIn, Form].load(weights, cfg, prefix, layerIdx,
     t{"linear_num_key_heads"}.getInt(), t{"linear_num_value_heads"}.getInt(),
     t{"linear_key_head_dim"}.getInt(), t{"linear_value_head_dim"}.getInt(),
     t{"linear_conv_kernel_dim"}.getInt(), device)

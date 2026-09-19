@@ -263,18 +263,12 @@ task test_tf_bf16_qwen35dense_03_full_forward_to_logits, "Suite: Qwen3.5-0.8B id
   runTransformerSuite("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim")
 task test_tf_bf16_qwen35dense_04_greedy_text_generation, "Suite: Qwen3.5-0.8B greedy decoding":
   runTransformerSuite("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim")
-task test_tf_bf16_qwen36moe_01_layer_internals_moe, "Suite: Qwen3.6-35B-A3B MoE expert math":
-  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim")
 
 task test_tf_layer_invariance_blocksparse, "Suite: layer invariance block-sparse FFN batch property":
   runTransformerSuite("layer_invariance", "t_blocksparse_batch_invariance.nim")
 
 task test_tf_layer_invariance_gdn, "Suite: layer invariance GDN prefill vs recurrence":
   runTransformerSuite("layer_invariance", "t_gated_delta_net_prefill_vs_recurrence_invariance.nim")
-task test_tf_bf16_qwen36moe_01_layer_internals_attn, "Suite: Qwen3.6-35B-A3B attention":
-  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim")
-task test_tf_bf16_qwen36moe_01_layer_internals_gdn, "Suite: Qwen3.6-35B-A3B Gated DeltaNet":
-  runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim")
 task test_tf_bf16_qwen36moe_01_layer_internals, "Suite: Qwen3.6-35B-A3B decoder layers":
   runTransformerSuite("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim")
 task test_tf_bf16_qwen36moe_03_full_forward_to_logits, "Suite: Qwen3.6-35B-A3B ids to logits inference":
@@ -357,9 +351,6 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
   of "moe":
     runFamily(@[
-      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
       ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
@@ -422,9 +413,6 @@ task test_transformers, "Test workspace/transformers (the full set, final verifi
       ("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim"),
       ("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim"),
       ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_moe.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_attn.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_01_layer_internals_gdn.nim"),
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
       ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim"),

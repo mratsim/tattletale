@@ -6,7 +6,13 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Chain suite for the Qwen3.5-0.8B dense stack, the 8 recorded prefix blocks
-## plus the depth-24 tail checkpoint against the committed fixtures.
+## plus the depth-24 tail checkpoint and the layer-0 GDN mixtures inside one
+## single fixture file, one assertion block per mixture.
+##
+## - the gdn_prefill and gdn_state mixtures of layer 0
+## - replay on testDevice(), Metal on this host, the fixture recording
+##   staying torch-side cpu
+##
 ## Requires the local model at tests/hf_models/Qwen3.5-0.8B (gitignored).
 ##
 ## Run:
@@ -35,26 +41,29 @@ import
 {.experimental: "callOperator".}
 
 privateAccess(Qwen35Model)
-privateAccess(DecoderLayer[GatedDeltaNet, GatedDenseFFN, RmsNormOne])
+privateAccess(DecoderLayer[GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus], GatedDenseFFN, RmsNormOne])
 privateAccess(DecoderLayer[RopeElementWiseGatedAttention[RmsNormOne], GatedDenseFFN, RmsNormOne])
-privateAccess(GatedDeltaNet)
+privateAccess(GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus])
 
 const
   FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" /
     "bf16-02-first-8-layers-plus-final" / "Qwen3.5-0.8B"
-  GdnFixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" /
-    "bf16-01-layer-internals" / "Qwen3.5-0.8B-layer-0"
+  GdnFixturePath = currentSourcePath().parentDir() / ".." / "fixtures" /
+    "bf16-01-layer-internals" / "Qwen3.5-0.8B-layer-0" /
+    "layer0-Qwen3.5-0.8B-00.safetensor"
+  GdnStatsPath = GdnFixturePath & ".stats.json.zst"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3.5-0.8B"
   WeightsPath = ModelPath / "model.safetensors-00001-of-00001.safetensors"
 
 proc main() =
-  # The recorded chain contract of this fixture family is the reference
-  # device replay, the fixtures were recorded on cpu. A cross-device run
-  # names the tolerance class and skips, no device budget applies here.
+  # The Metal backend falls back to the cpu kernels where the device
+  # kernels are missing, the chain and the mixtures replay on whatever
+  # testDevice() resolves without a hard device requirement.
+  putEnv("PYTORCH_ENABLE_MPS_FALLBACK", "1")
   let runDev = testDevice()
   echo "device pair: ", deviceName(runDev)
 
-  let model = loadQwen35ModelRaw(ModelPath, F.kCPU)
+  let model = loadQwen35ModelRaw(ModelPath, runDev)
   let numLayers = model.config.num_hidden_layers
 
   var (ctx, pool) = newKVContext(
@@ -65,12 +74,12 @@ proc main() =
   # The chain seeds on the recorded block-00 input, the fixture family
   # records no input ids.
   let st0 = Safetensor.open(FixtureDir / "block-00.safetensor")
-  var blockInput = st0.getTensorOwned("layer_input")
+  var blockInput = st0.getTensorOwned("layer_input", runDev)
   var hidden = blockInput
   var stream: Option[Tensor]
 
   ctx.position_ids = F.arange(hidden.size(1).int64,
-    F.tensorOptions(F.kInt64, F.kCPU))
+    F.tensorOptions(F.kInt64, runDev))
   ctx.setRopeForPositions(model.rotary)
 
   var prefixBlocks = 0
@@ -113,11 +122,12 @@ proc main() =
   block:
     let cfg = (ModelPath / "config.json").parseFile()
     var weights = SafetensorsCollection.open(WeightsPath)
-    let gdn = cfg.setup(GatedDeltaNet, weights,
-      "model.language_model.layers.", 0)
-    var st = Safetensor.open(GdnFixtureDir / "gdn-Qwen3.5-0.8B-00.safetensor")
+    let gdn = cfg.setupGatedDeltaNet(
+      GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus], weights,
+      "model.language_model.layers.", 0, device = runDev)
+    var st = Safetensor.open(GdnFixturePath)
 
-    let x = st.getTensorOwned("input")
+    let x = st.getTensorOwned("gdn_prefill.input", runDev)
     var (gdnCtx, gdnPool) = newKVContext(numLayers = numLayers,
       kvHeads = 2, headDim = 256)
     let output = gdn(gdnCtx, x)
@@ -125,7 +135,7 @@ proc main() =
     let seqLen = x.size(1)
 
     # The block output, the recurrence exercised end to end.
-    assertStats(output, GdnFixtureDir / "gdn-Qwen3.5-0.8B-00.safetensor" & ".stats", "output_chunked", kReduction, msg = "gdn block output vs the production recording")
+    assertStats(output, GdnStatsPath, "gdn_prefill.output_chunked", kReduction, msg = "gdn block output vs the production recording")
 
   # The layer-0 GDN state persistence case, the recorded
   # prefill-then-decode trajectory. The context carries the conv window
@@ -136,14 +146,15 @@ proc main() =
   block:
     let cfg = (ModelPath / "config.json").parseFile()
     var weights = SafetensorsCollection.open(WeightsPath)
-    let gdn = cfg.setup(GatedDeltaNet, weights,
-      "model.language_model.layers.", 0)
-    var st = Safetensor.open(GdnFixtureDir / "gdn-Qwen3.5-0.8B-01.safetensor")
+    let gdn = cfg.setupGatedDeltaNet(
+      GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus], weights,
+      "model.language_model.layers.", 0, device = runDev)
+    var st = Safetensor.open(GdnFixturePath)
 
-    let prefillX = st.getTensorOwned("prefill_x")
-    let decodeXd = st.getTensorOwned("decode_x_d")
-    let decodeXe = st.getTensorOwned("decode_x_e")
-    let oneShot = st.getTensorOwned("one_shot_block_output")
+    let prefillX = st.getTensorOwned("gdn_state.prefill_x", runDev)
+    let decodeXd = st.getTensorOwned("gdn_state.decode_x_d", runDev)
+    let decodeXe = st.getTensorOwned("gdn_state.decode_x_e", runDev)
+    let oneShot = st.getTensorOwned("gdn_state.one_shot_block_output", runDev)
 
     var (gdnCtx, gdnPool) = newKVContext(numLayers = numLayers,
       kvHeads = 2, headDim = 256)
@@ -151,32 +162,32 @@ proc main() =
     # Prefill [a, b, c] runs the first three positions of the recorded
     # one-shot trajectory, steps 0 to 2 of the one-shot block output.
     let outPrefill = gdn(gdnCtx, prefillX)
-    assertStats(outPrefill, GdnFixtureDir / "gdn-Qwen3.5-0.8B-01.safetensor.stats", "one_shot_block_output_steps0to2", kReduction, msg = "prefill output vs recorded one-shot steps 0..2")
+    assertStats(outPrefill, GdnStatsPath, "gdn_state.one_shot_block_output_steps0to2", kReduction, msg = "prefill output vs recorded one-shot steps 0..2")
     let convStatePrefill = gdnCtx.gdnConvState[0].clone()
 
     # Decode [d] continues the trajectory, the prefill conv window feeds
     # the recorded decode conv output recompute.
     let outD = gdn(gdnCtx, decodeXd)
-    assertStats(outD, GdnFixtureDir / "gdn-Qwen3.5-0.8B-01.safetensor.stats", "decode_output_d", kReduction, msg = "decode d output vs recording")
-    assertStats(outD, GdnFixtureDir / "gdn-Qwen3.5-0.8B-01.safetensor.stats", "one_shot_block_output_step3", kReduction, msg = "decode d output vs recorded one-shot step 3")
+    assertStats(outD, GdnStatsPath, "gdn_state.decode_output_d", kReduction, msg = "decode d output vs recording")
+    assertStats(outD, GdnStatsPath, "gdn_state.one_shot_block_output_step3", kReduction, msg = "decode d output vs recorded one-shot step 3")
     let mixedD = gdn.in_proj_qkv.forward(decodeXd).transpose(1, 2)
     let catInputD = F.cat([convStatePrefill.unsqueeze(0), mixedD], -1)
     let convD = F.conv1d(catInputD, gdn.conv1d_weight,
       padding = [0], groups = gdn.conv_dim)
     let convOutD = F.silu(convD.narrow(2, convD.size(2) - 1, 1))
-    assertStats(convOutD, GdnFixtureDir / "gdn-Qwen3.5-0.8B-01.safetensor.stats", "decode_conv_output_d", kElementwise, msg = "decode d ATen conv replay over the Nim conv state")
+    assertStats(convOutD, GdnStatsPath, "gdn_state.decode_conv_output_d", kElementwise, msg = "decode d ATen conv replay over the Nim conv state")
     let convStateAfterD = gdnCtx.gdnConvState[0].clone()
 
     # Decode [e] closes the trajectory against the recorded final states.
     let outE = gdn(gdnCtx, decodeXe)
-    assertStats(outE, GdnFixtureDir / "gdn-Qwen3.5-0.8B-01.safetensor.stats", "decode_output_e", kReduction, msg = "decode e output vs recording")
-    assertStats(outE, GdnFixtureDir / "gdn-Qwen3.5-0.8B-01.safetensor.stats", "one_shot_block_output_step4", kReduction, msg = "decode e output vs recorded one-shot step 4")
+    assertStats(outE, GdnStatsPath, "gdn_state.decode_output_e", kReduction, msg = "decode e output vs recording")
+    assertStats(outE, GdnStatsPath, "gdn_state.one_shot_block_output_step4", kReduction, msg = "decode e output vs recorded one-shot step 4")
     let mixedE = gdn.in_proj_qkv.forward(decodeXe).transpose(1, 2)
     let catInputE = F.cat([convStateAfterD.unsqueeze(0), mixedE], -1)
     let convE = F.conv1d(catInputE, gdn.conv1d_weight,
       padding = [0], groups = gdn.conv_dim)
     let convOutE = F.silu(convE.narrow(2, convE.size(2) - 1, 1))
-    assertStats(convOutE, GdnFixtureDir / "gdn-Qwen3.5-0.8B-01.safetensor.stats", "decode_conv_output_e", kElementwise, msg = "decode e ATen conv replay over the Nim conv state")
+    assertStats(convOutE, GdnStatsPath, "gdn_state.decode_conv_output_e", kElementwise, msg = "decode e ATen conv replay over the Nim conv state")
 
   # The order-equivalence cases of the fixture family compare two live
   # replays against each other. The two cases are the conv-history

@@ -10,7 +10,7 @@
 ## Measured instrument drift of this suite, the committed budgets
 ##
 ## | instrument       | measured                                 | budget                         | source of the difference                |
-## |------------------|------------------------------------------|--------------------------------|-----------------------------------------|
+## | ---------------- | ---------------------------------------- | ------------------------------ | --------------------------------------- |
 ## | conv context     | bit-equal (0.0)                          | must be exactly 0              | same 4-tap fp32 stencil both orders     |
 ## | block output     | 1.22e-4 (exactly 1 bf16 ulp at max 0.19) | 4 ulps (3.9e-3)                | batched-vs-per-token GEMM reassociation |
 ## | recurrence state | 2.98e-7 (~3 f32 ulps)                    | linear 70-step bound (1.67e-5) | f32 state carried 70 steps              |
@@ -39,17 +39,17 @@ proc main() =
     Layer0Prefix = "model.language_model.layers.0"
   let
     prefillSeq = 70
-    # Theory budget factors, never measured headroom.
+    # Output budget factors, never measured headroom:
     # - the output budget sits on the norm-wise backward error
     #   analysis of Wilkinson and Higham, bounding a reassociated
     #   fp32 GEMM within one relative machine eps of the exact product
     # - the bf16 storage round adds one eps per rounded channel
     # - five rounded input channels q, k, v, z and decay plus one
     #   norm rounding stage give six relative eps at 2^-8
-    # - the state budget sits on the nonexpansive delta-rule
-    #   propagator decay*(I - beta*k*k^T), the map stays contractive
-    #   (decay <= 1 and the correction contracts the key direction)
-    #   over the Banach flavor of nonexpansive iteration
+    # State budget factors:
+    # - the state budget sits on the nonexpansive delta-rule propagator
+    #   decay*(I - beta*k*k^T), contractive over nonexpansive iteration
+    #   because decay <= 1 and the correction contracts the key direction
     # - one relative eps of per-step injection lands on the update
     #   of that step alone
     # - the triangle inequality telescopes the drift to eps times
@@ -74,7 +74,8 @@ proc main() =
   let tc = cfgJson{"text_config"}
   let hidden = tc{"hidden_size"}.getInt()
   let view = SafetensorsCollection.open(ModelDir)
-  let gdn = cfgJson.setup(GatedDeltaNet, view,
+  let gdn = cfgJson.setupGatedDeltaNet(
+    GatedDeltaNet[perHead, FullRankGateIn, GateForm.softplus], view,
     "model.language_model.layers.", 0)
   let x = stimulus(prefillSeq, hidden)
 
