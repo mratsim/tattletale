@@ -13,6 +13,7 @@
 
 import
   std/algorithm,
+  std/options,
   std/sugar,
   std/tables,
   pkg/packedjson,
@@ -144,21 +145,27 @@ proc load*(_: type GatedBlockSparseFFN, view: SafetensorsCollection, cfg: JsonNo
 proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
            prefix: string, router: NoAuxTopCorr, device: DeviceKind,
            vocab: static ExpertKeyVocab = ekvGateUpDown): BlockSparseFFN =
-  ## Loads the routed expert bodies and the ungated shared expert; the
-  ## router arrives composed (NoAuxTopCorr), nothing router-related
-  ## loads here, bias-buffer key naming stays a model-load concern.
+  ## Loads the routed expert bodies plus the shared expert when the config
+  ## routes to one.
   ##
-  ## Expert keys follow `vocab`: gate_proj/up_proj/down_proj or
-  ## w1/w3/w2 (silu(w1) * w3 -> w2); both fuse to gate rows 0:I, up rows
-  ## I:2I of the [E, 2I, H] fused body, down [E, H, I]. The first
-  ## expert's views are shape-checked against the config widths, the
-  ## rest numel-checked at assembly.
+  ## - the router arrives composed (NoAuxTopCorr), nothing router-related
+  ##   loads here, bias-buffer key naming stays a model-load concern
   ##
-  ## Expert count reads n_routed_experts, falls back to num_experts;
-  ## the load refuses when neither is a positive count.
+  ## Contract:
   ##
-  ## Each expert body copies once from its mmap view to its final device
-  ## slot; a kCPU request assembles through stack/cat over the CPU views.
+  ## - expert keys follow `vocab`, the checkpoint spelling pair below
+  ##   - gate_proj/up_proj/down_proj
+  ##   - w1/w3/w2 (silu(w1) * w3 -> w2)
+  ##
+  ## - both spellings fuse to the [E, 2I, H] body, down [E, H, I]
+  ## - the first projection sits in rows 0:I, the second in rows I:2I
+  ## - the first expert's views are shape-checked against the config widths,
+  ##   the rest numel-checked at assembly
+  ##
+  ## - expert count reads n_routed_experts, falls back to num_experts,
+  ##   the load refuses when neither is a positive count
+  ## - each expert body copies once from its mmap view to its final device slot
+  ##   (a kCPU request assembles through stack/cat over the CPU views)
   let routedNode = cfg{"n_routed_experts"}
   let expertCount =
     if routedNode.kind == JInt:
@@ -178,7 +185,10 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
   let moeNode = textCfg{"moe_intermediate_size"}
   let moeIntermediate =
     if moeNode.kind == JInt: moeNode.reqPosInt("moe_intermediate_size")
-    else: cfg{"moe_intermediate_size"}.reqPosInt("moe_intermediate_size")
+    else:
+      # Checkpoints without a moe_intermediate_size row route at the dense intermediate_size
+      # (the cohere lineage spelling).
+      cfg{"intermediate_size"}.reqPosInt("intermediate_size")
   when vocab == ekvW1W3W2:
     let gateKey = ".w1.weight"
     let upKey = ".w3.weight"
@@ -205,6 +215,24 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
     "[ttt] BlockSparseFFN.load: " & first & downKey & " rows are [" &
     $downW.size(0) & ", " & $downW.size(1) & "], expected [" &
     $hiddenSize & ", " & $moeIntermediate & "]")
+  # The shared-expert tail is present when the config routes to one,
+  # absent on zero-shared-expert checkpoints.
+  #
+  # Count key spellings:
+  # - n_shared_experts, the DeepSeek lineage
+  # - num_shared_experts, the cohere lineage
+  let sharedCountNode = cfg{"n_shared_experts"}
+  let sharedCount =
+    if sharedCountNode.kind == JInt:
+      sharedCountNode.getInt().int
+    else:
+      cfg{"num_shared_experts"}.getInt(0)
+  let shared =
+    if sharedCount > 0:
+      some(GatedDenseFFN.load(view, cfg, prefix & ".shared_experts", device))
+    else:
+      none(GatedDenseFFN)
+
   if device == kCPU:
     # kCPU request: assemble through stack/cat over the CPU mmap views.
     let gateUp = stack(collect(newSeq, for e in 0 ..< expertCount:
@@ -213,7 +241,6 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
       to(device)
     let down = stack(collect(newSeq, for e in 0 ..< expertCount:
       view.getTensorView(prefix & ".experts." & $e & downKey))).to(device)
-    let shared = GatedDenseFFN.load(view, cfg, prefix & ".shared_experts", device)
     return BlockSparseFFN.init(gateUp, down, shared, router)
   # Device request past kCPU: single-copy assembly. Both fused bodies
   # are allocated on the device at their final concatenated shapes
@@ -244,7 +271,6 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
     gateUpSlice.narrow(0, 0, moeIntermediate).copyFrom(gateRow)
     gateUpSlice.narrow(0, moeIntermediate, moeIntermediate).copyFrom(upRow)
     down.narrow(0, e, 1).squeeze(0).copyFrom(downRow)
-  let shared = GatedDenseFFN.load(view, cfg, prefix & ".shared_experts", device)
   BlockSparseFFN.init(gateUp, down, shared, router)
 
 # ─── GatedDeltaNet ─────────────────────────────────────────────────────────
@@ -388,13 +414,21 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
   let kProj = Linear.load(view, cfg, prefix & ".k_proj", device)
   let vProj = Linear.load(view, cfg, prefix & ".v_proj", device)
   let oProj = Linear.load(view, cfg, prefix & ".o_proj", device)
-  let qNorm = QKNorm.load(view, cfg, prefix & ".q_norm", device)
-  let kNorm = QKNorm.load(view, cfg, prefix & ".k_norm", device)
-  RopeGQAttention[QKNorm].init(layerIdx, prefix,
-    qProj, kProj, vProj, oProj,
-    numQoHead, numKvHead, headDim, rotary,
-    q_norm = qNorm, k_norm = kNorm,
-    window = window, softmaxScale = softmaxScale)
+  when QKNorm is void:
+    # The no-qk-norm variant carries no norm weights, the projections
+    # alone compose the mixer.
+    RopeGQAttention[void].init(layerIdx, prefix,
+      qProj, kProj, vProj, oProj,
+      numQoHead, numKvHead, headDim, rotary,
+      window = window, softmaxScale = softmaxScale)
+  else:
+    let qNorm = QKNorm.load(view, cfg, prefix & ".q_norm", device)
+    let kNorm = QKNorm.load(view, cfg, prefix & ".k_norm", device)
+    RopeGQAttention[QKNorm].init(layerIdx, prefix,
+      qProj, kProj, vProj, oProj,
+      numQoHead, numKvHead, headDim, rotary,
+      q_norm = qNorm, k_norm = kNorm,
+      window = window, softmaxScale = softmaxScale)
 
 # ─── Gated Attention ───────────────────────────────────────────────────────
 

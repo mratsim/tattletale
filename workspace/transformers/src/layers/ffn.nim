@@ -10,6 +10,7 @@
 ## - GatedBlockSparseFFN: routed mixture-of-experts FFN with a shared expert
 
 import
+  std/options,
   workspace/libtorch as F,
   workspace/positron,
   workspace/transformers/src/instrumentation,
@@ -491,13 +492,14 @@ proc forward*(self: GatedBlockSparseFFN, hidden: Tensor): Tensor =
 
 type
   BlockSparseFFN* = ref object
-    ## Block-sparse mixture-of-experts FFN with an ungated shared expert
-    ## (the DeepSeek-V2/V3 form; Moonlight instantiates it). The shared
-    ## expert output adds unchanged to the routed contribution, no gate
-    ## multiplies it. The checkpoint carries no shared-expert gate
-    ## weight: the mandatory GatedBlockSparseFFN sigmoid gate has no
-    ## counterpart here, a distinct typed form, never a flag and never a
-    ## dummy gate.
+    ## Block-sparse mixture-of-experts FFN with an optional ungated shared expert
+    ## (the DeepSeek-V2/V3 form, Moonlight instantiates it, the cohere lineage ships none)
+    ##
+    ## - the shared expert output adds unchanged to the routed contribution,
+    ##   no multiplicative weight scales it
+    ## - the checkpoint carries no shared-expert scaling weight, this form
+    ##   carries no GatedBlockSparseFFN-style scale row, a distinct
+    ##   typed shape, never a flag nor a dummy weight
     ##
     ## Routed-expert bodies mirror the HF eager expert loop where
     ## the token count allows:
@@ -517,20 +519,23 @@ type
     hiddenSize: int
     activation: ActivationKind
     router: NoAuxTopCorr ## the typed routing decision source
-    sharedExpert: GatedDenseFFN
+    sharedExpert: Option[GatedDenseFFN]
+      ## Ungated shared-expert tail, present when the checkpoint config routes to one
+      ## (n_shared_experts / num_shared_experts > 0), absent otherwise.
 
 func init*(
     _: type BlockSparseFFN,
     gateUpProj: Tensor,
     downProj: Tensor,
-    sharedExpert: GatedDenseFFN,
+    sharedExpert: Option[GatedDenseFFN],
     router: NoAuxTopCorr,
     activation: ActivationKind = kSilu
   ): BlockSparseFFN =
-  ## Create the routed FFN from the rank-3 fused expert weights, the shared
-  ## expert and the typed noaux_tc router. No router weight embedding,
-  ## no shared gate: the router is a composed typed object, the shared
-  ## tail adds unchanged.
+  ## Create the routed FFN from the rank-3 fused expert weights, the optional shared expert and the typed noaux_tc router.
+  ##
+  ## - the router is a composed typed object, no router weight embedding
+  ## - a present shared tail adds unchanged, an absent one routes the whole
+  ##   output through the experts
   ##
   ## Raises ValueError:
   ## - gateUpProj or downProj is not rank 3
@@ -668,7 +673,11 @@ proc forward*(self: BlockSparseFFN, hidden: Tensor): Tensor =
         hiddenStates, topkIndices, weights32, self.activation)
     else:
       expertForwardPrefillPlain(self, hiddenStates, topkIndices, weights32)
-  let output = routed + self.sharedExpert.forward(hiddenStates)
+  let output =
+    if self.sharedExpert.isSome():
+      routed + self.sharedExpert.unsafeGet().forward(hiddenStates)
+    else:
+      routed
 
   if hidden.dim() == 2:
     output

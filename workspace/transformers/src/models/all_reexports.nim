@@ -10,6 +10,8 @@ import ./glm47_flash
 import ./kimi_linear
 import ./ling3
 import ./gemma3
+import ./mistral
+import ./north
 
 # Reexports
 # -----------------------------------------
@@ -23,3 +25,5 @@ export glm47_flash
 export kimi_linear
 export ling3
 export gemma3
+export mistral
+export north

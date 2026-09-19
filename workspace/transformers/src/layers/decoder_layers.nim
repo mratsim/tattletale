@@ -274,7 +274,8 @@ type
     ## The sandwich pattern normalizes each sublayer output alone, the stream
     ## joins after the norm.
     ##
-    ## The two shapes are not interchangeable, a checkpoint names its own placement.
+    ## The two shapes are not interchangeable, the checkpoint config names
+    ## the placement of its own blocks.
     input_layernorm: Norm
     sequence_mixer: SequenceMixer
     post_attention_layernorm: Norm
@@ -354,6 +355,94 @@ proc forward*[SequenceMixer, HiddenMixer, Norm](
 
 template `()`*[SequenceMixer, HiddenMixer, Norm](
     layer: SandwichDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+    ctx: var InferenceContext,
+    x: Tensor,
+    residual: Option[Tensor]): untyped =
+  layer.forward(ctx, x, residual)
+
+
+# ─── Parallel decoder layer generic ────────────────────────────────────────
+
+type
+  ParallelDecoderLayer*[SequenceMixer, HiddenMixer, Norm] = ref object
+    ## Decoder block with the parallel residual placement (cohere lineage):
+    ## ONE input norm feeds both mixers, the block output adds the two sublayer
+    ## contributions to the stream.
+    ##
+    ##     x ──► input_layernorm ──┬──► SequenceMixer ───┐
+    ##      ▲                      └──► HiddenMixer ─────┤
+    ##      └──────────────────────────── + ◄────────────┘   → block output
+    ##
+    ## DecoderLayer normalizes the mixer input of a sequential chain, one
+    ## norm per sublayer. The parallel shape normalizes once, both mixers
+    ## read the same normalized rows, `x + attn(hNorm) + mlp(hNorm)`.
+    ##
+    ## The two shapes are not interchangeable, the checkpoint config names
+    ## the placement of its own blocks.
+    input_layernorm: Norm
+    sequence_mixer: SequenceMixer
+    hidden_mixer: HiddenMixer
+
+func init*[SequenceMixer, HiddenMixer, Norm](
+    _: type ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+    input_layernorm: Norm,
+    sequence_mixer: SequenceMixer,
+    hidden_mixer: HiddenMixer
+): ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm] =
+  ## Take the one shared norm and the two mixers of one parallel decoder block.
+  ##
+  ## Contract:
+  ## - the block carries no layer identity
+  ## - the KV-cache layer index and the safetensors key prefix live on the mixers that need them
+  ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm](
+    input_layernorm: input_layernorm,
+    sequence_mixer: sequence_mixer,
+    hidden_mixer: hidden_mixer
+  )
+
+proc forward*[SequenceMixer, HiddenMixer, Norm](
+  self: ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+  ctx: var InferenceContext,
+  x: Tensor,
+  residual: Option[Tensor]
+): (Tensor, Tensor) =
+  ## Forward pass for one parallel decoder block on the long residual stream.
+  ##
+  ## Expected input:
+  ##
+  ## - `ctx`, the InferenceContext carrying page refs and RoPE rows (`ctx.pages`, `ctx.cos`, `ctx.sin`)
+  ## - `x`, the previous block's deferred contribution, shape `(batch, seq_len, hidden_size)`
+  ## - `residual`, the stream carried from the previous block,
+  ##   absent on the first block
+  ##
+  ## Returns:
+  ##
+  ## - the pair `(attn + mlp contributions, carried residual)`
+  ## - contribution + residual equals the block output, the reference
+  ##   parallel layer output `x + residual + attn(hNorm) + mlp(hNorm)`
+  ## - the caller adds the pair at the next block boundary or at the model
+  ##   final before the norm
+  ##
+  ## Chain:
+  ##
+  ## - `hNorm = input_layernorm(x + residual)` when a residual was carried
+  ## - `hNorm = input_layernorm(x)` otherwise, the carried residual is `x`
+  ## - `result = (sequence_mixer(ctx, hNorm) + hidden_mixer(hNorm), residual)`
+  ##
+  ## The sequence mixer owns positional and cache state.
+  ## RoPE, KV pages and recurrent state all travel through `ctx`.
+  let (hNorm, r) =
+    if residual.isSome():
+      self.input_layernorm(x, residual.unsafeGet())
+    else:
+      (self.input_layernorm(x), x)
+
+  let attnOut = self.sequence_mixer(ctx, hNorm)
+  let mlpOut = self.hidden_mixer(hNorm)
+  (attnOut + mlpOut, r)
+
+template `()`*[SequenceMixer, HiddenMixer, Norm](
+    layer: ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm],
     ctx: var InferenceContext,
     x: Tensor,
     residual: Option[Tensor]): untyped =
