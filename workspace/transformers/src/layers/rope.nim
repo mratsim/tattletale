@@ -6,7 +6,9 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
-  workspace/libtorch as F
+  std/math,
+  workspace/libtorch as F,
+  workspace/transformers/src/instrumentation
 
 type
   RotaryPositionEmbedding* = ref object
@@ -148,18 +150,73 @@ func applyRopeImpl(
     result = (F.cat([qRotated, qPass], -1).transpose(1, 2),
               F.cat([kRotated, kPass], -1).transpose(1, 2))
 
+proc yarnInvFreq(dim: int, theta, factor, betaFast, betaSlow: float64, originalMaxPos: int): Tensor =
+  ## Yarn-blended inverse frequencies over `dim div 2` pair entries
+  ## (the DeepSeek-V2-Lite lineage, HF `_compute_yarn_parameters` construction).
+  ##
+  ## The blend extrapolates below the correction range, ramps linearly inside
+  ## and interpolates (factor division) above.
+  ##
+  ## The correction range runs in f64 over the full `dim` width, floored,
+  ## ceiled and clamped to `0 ..< dim - 1` per the truncated range.
+  ##
+  ## Computation runs on CPU, the same home as the plain inv_freq path.
+  ## MPS carries no float64, only the cast cos/sin table reaches the device.
+  let half = dim div 2
+  let plain = F.pow(F.full(1, theta, kFloat64),
+    (F.arange(0, dim, 2).to(kFloat64) / dim.float64).neg())
+  let interpolated = plain / Scalar(factor)
+
+  let lowF = dim.float64 * ln(originalMaxPos.float64 / (betaFast * 2.0 * PI)) /
+    (2.0 * ln(theta))
+  let highF = dim.float64 * ln(originalMaxPos.float64 / (betaSlow * 2.0 * PI)) /
+    (2.0 * ln(theta))
+  let low = max(floor(lowF), 0.0)
+  let high = min(ceil(highF), dim.float64 - 1.0)
+
+  let rampIdx = F.arange(0, half, kFloat64)
+  let ramp =
+    if low == high:
+      F.full(half, 0.0, kFloat64)
+    else:
+      ((rampIdx - low) / (high - low)).clamp(0.0, 1.0)
+  let extrapWeight = 1.0 - ramp
+  plain * extrapWeight + interpolated * ramp
+
 func new*(_: type RotaryPositionEmbedding,
       head_dim, max_seq_len: int,
       rope_theta: float64,
       dtype: ScalarKind,
       device: DeviceKind,
-      rotary_dim = -1): RotaryPositionEmbedding =
+      rotary_dim = -1,
+      activePairs = -1,
+      yarnFactor = 0.0'f64,
+      yarnBetaFast = 32.0'f64,
+      yarnBetaSlow = 1.0'f64,
+      yarnOriginalMaxPos = 0,
+      attentionFactor = 1.0'f64): RotaryPositionEmbedding =
   ## Build RoPE lookup table for all positions `0..max_seq_len-1`.
   ##
-  ## `rotary_dim` defaults to `head_dim` (full rotation). Pass a smaller value
-  ## (e.g. 64 for Qwen3.5) to rotate only the first `rotary_dim` columns.
-  ## The cache is sized `(max_seq_len, rotary_dim)` so a partial rotation does
-  ## not allocate the full head_dim table.
+  ## `rotary_dim` defaults to `head_dim` (full rotation). A smaller value
+  ## (e.g. 64 for a partial factor 0.5 over head_dim 128) rotates only
+  ## the first `rotary_dim` columns.
+  ##
+  ## The cache is sized `(max_seq_len, rotary_dim)`, a partial rotation
+  ## never allocates the full head_dim table.
+  ##
+  ## `activePairs` bounds the rotating pair count of a proportional
+  ## checkpoint (gemma-4 lineage):
+  ##
+  ## The first `activePairs` pairs carry their theta angles, every
+  ## remaining pair stays at zero angle, an exact pass-through rotation.
+  ## The default -1 keeps every pair active.
+  ##
+  ## `yarnFactor > 1` yarn-blends the inverse frequencies over the rotary
+  ## table width, `yarnBetaFast`/`yarnBetaSlow`/`yarnOriginalMaxPos`
+  ## carry the checkpoint's correction-range parameters.
+  ##
+  ## `attentionFactor` scales the cos/sin rows after the trigonometry,
+  ## the checkpoint's attention_scaling (the yarn mscale by default).
   ##
   ## **Algorithm (NEOX-style)**:
   ##
@@ -167,16 +224,17 @@ func new*(_: type RotaryPositionEmbedding,
   ##     `inv_freq[d] = theta^(-d/rotary_dim)` for `d in {0, 2, 4, ..., rotary_dim-2}`
   ##     This gives `rotary_dim/2` unique frequencies.
   ##     Odd dimensions reuse the same frequency (pairwise repetition).
+  ##     Yarn checkpoints blend interpolation and extrapolation per pair,
+  ##     proportional checkpoints zero the pairs past `activePairs`.
   ##
   ##  2. For each position `p in {0, ..., max_seq_len-1}` and each
-  ##     unique dimension `d`, compute `cos(p * inv_freq[d])` and
-  ##     `sin(p * inv_freq[d])` in FP64 for precision.
+  ##     unique dimension `d`, compute `cos(p * inv_freq[d])` and `sin(p * inv_freq[d])` in FP64 for precision.
   ##
   ##  3. Duplicate the half table to cover all `rotary_dim` positions:
   ##     `[f0 .. f_{m-1}, f0 .. f_{m-1}]` (m = rotary_dim/2) by
   ##     concatenating the table with itself along the dimension axis.
   ##
-  ##  4. Cast result to `dtype` (e.g., BF16) and move to `device`.
+  ##  4. Scale by `attentionFactor`, cast to `dtype` (e.g., BF16), move to `device`.
   ##
   ## **Complexity**: O(max_seq_len * rotary_dim), done once per model load.
   ##
@@ -184,9 +242,26 @@ func new*(_: type RotaryPositionEmbedding,
   doAssert dim <= head_dim, "rotary_dim " & $dim & " exceeds head_dim " & $head_dim
   doAssert (dim mod 2) == 0, "rotary_dim must be even"
   let half_dim = dim div 2
-  let inv_freq = F.arange(0, dim, 2).to(kFloat64) / dim.float64
-  let inv_freq_final = F.pow(F.full([1], rope_theta, kFloat64), -inv_freq)  # theta^(-inv_freq), (rotary_dim/2,)
-  let angles = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq_final.unsqueeze(0)
+  var inv_freq =
+    if yarnFactor > 1.0:
+      checkValue(yarnOriginalMaxPos > 0,
+        "[ttt] RotaryPositionEmbedding: yarn needs original_max_position_embeddings")
+      yarnInvFreq(dim, rope_theta, yarnFactor, yarnBetaFast, yarnBetaSlow,
+        yarnOriginalMaxPos)
+    else:
+      F.pow(F.full(1, rope_theta, kFloat64),
+        (F.arange(0, dim, 2).to(kFloat64) / dim.float64).neg())
+  if activePairs >= 0:
+    checkValue(activePairs <= half_dim,
+      "[ttt] RotaryPositionEmbedding: activePairs " & $activePairs &
+      " exceeds the pair count " & $half_dim)
+    if activePairs < half_dim:
+      # A 0/1 pair mask multiplies in, the tail pairs keep a zero
+      # inv_freq and their rotation is the identity.
+      # The mask computes on CPU with the table, MPS carries no float64.
+      inv_freq = inv_freq * F.arange(0, half_dim, kFloat64)
+        .`<.`(Scalar(activePairs.float64)).to(kFloat64)
+  let angles = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq.unsqueeze(0)
   let cos_half = angles.cos()   # (max_seq_len, rotary_dim/2)
   let sin_half = angles.sin()   # (max_seq_len, rotary_dim/2)
   new(result)
@@ -195,8 +270,8 @@ func new*(_: type RotaryPositionEmbedding,
   result.max_seq_len = max_seq_len
   result.rope_theta = rope_theta
   # NEOX-style: [c0, c0, c1, c1, ...] to cover rotary_dim columns
-  result.cos_cache = F.cat([cos_half, cos_half], -1).to(dtype).to(device)
-  result.sin_cache = F.cat([sin_half, sin_half], -1).to(dtype).to(device)
+  result.cos_cache = (F.cat([cos_half, cos_half], -1) * Scalar(attentionFactor)).to(dtype).to(device)
+  result.sin_cache = (F.cat([sin_half, sin_half], -1) * Scalar(attentionFactor)).to(dtype).to(device)
 
 proc ropeByPositions*(self: RotaryPositionEmbedding, position_ids: Tensor): (Tensor, Tensor) =
   ## Slice cos/sin cache using position_ids.

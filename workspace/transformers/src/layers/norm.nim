@@ -282,3 +282,54 @@ proc forward*(self: FusedRmsNormGatedSigmoid, x: Tensor, gate: Tensor): Tensor =
 
 template `()`*(layer: FusedRmsNormGatedSigmoid, x, gate: Tensor): untyped =
   forward(layer, x, gate)
+
+type
+  FusedRmsNorm* = ref object
+    ## Single-rounding RMS norm with a plain learned per-dimension scale,
+    ## the gemma-4 lineage (Gemma4RMSNorm).
+    ##
+    ##   rstd   = (mean(x.f32^2) + eps)^-0.5
+    ##   output = (x.f32 * rstd * w.f32).to(x.dtype)
+    ##
+    ## Normalization, weight multiply and dtype cast each run exactly once,
+    ## no intermediate rounding at the normed product.
+    ## The two-rounding form is RmsNorm, the bias-one form is RmsNormOne.
+    weight*: Tensor
+    eps*: float64
+    hidden_size*: int
+    quant_format*: QuantFormatKind
+
+func init*(_: type FusedRmsNorm, weight: Tensor, quant_format: QuantFormatKind = qBF16, eps: SomeFloat = 1e-6): FusedRmsNorm =
+  ## Build one single-rounding RMS norm from a `[width]` weight.
+  let hidden_size = weight.size(0)
+  FusedRmsNorm(
+    weight: weight, eps: float64(eps),
+    hidden_size: hidden_size,
+    quant_format: quant_format,
+  )
+
+proc forward*(self: FusedRmsNorm, hidden_state: Tensor): Tensor =
+  ## Single-rounding RMS norm over the last dimension, FP32 intermediate:
+  ##   output = (x * rsqrt(mean(x^2) + eps) * w).to(x.dtype)
+  ##
+  ## Contract:
+  ##   - one rounding, at the cast
+  ##   - a ones weight leaves the norm unscaled, the multiply by 1.0
+  ##     exact (the with_scale=False v_norm spelling)
+  let input_dtype = hidden_state.scalarType()
+  let x = hidden_state.to(kFloat32)
+  let w = self.weight.to(kFloat32)
+  let variance = x.square().mean(axis = -1, keepdim = true)
+  let rstd = variance.add(Scalar(self.eps)).rsqrt()
+  return (x * rstd * w).to(input_dtype)
+
+template `()`*(layer: FusedRmsNorm, x: Tensor): untyped =
+  forward(layer, x)
+
+proc forward_with_residual(self: FusedRmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
+  ## Residual addition + single-rounding RMS norm.
+  let new_residual = hidden_state + residual
+  (self.forward(new_residual), new_residual)
+
+template `()`*(layer: FusedRmsNorm, x, residual: Tensor): untyped =
+  forward_with_residual(layer, x, residual)

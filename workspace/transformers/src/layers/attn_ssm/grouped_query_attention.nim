@@ -52,9 +52,30 @@ type
     when QKNorm isnot void:
       q_norm: QKNorm
       k_norm: QKNorm
-# =============================================================================
+    gProj: Option[Linear]
+      ## Per-head output gate for the per-head-gated layer kinds (Laguna),
+      ## none on the ungated kinds.
+      ##
+      ## Checkpoint spelling:
+      ## a `[hidden, heads]` projection of the attention input.
+      ##   - softplus computes in f32, one rounding back to the dtype
+      ##   - one scalar per head multiplies the attention output
+      ##     right before o_proj
+    kvSourceLayer: int
+      ## Layer index supplying this layer's K/V pages, the gemma-4
+      ## shared-kv spelling. A shared layer sits at or past
+      ## num_hidden_layers - num_kv_shared_layers, it projects no k/v.
+      ##
+      ## The shared layer gathers the source layer's post-rope pages
+      ## instead. `-1` keeps the self-cached default, the layer then
+      ## writes and reads its own pages.
+    vNorm: FusedRmsNorm
+      ## Value-path single-rounding norm applied to the reshaped v before
+      ## the cache write, the gemma-4 v_norm with_scale=False spelling
+      ## (a ones weight, no checkpoint tensor). Nil on layers without it.
+# -----------------------------------------------------------------------------
 # Data flow through RopeGQAttention
-# =============================================================================
+# -----------------------------------------------------------------------------
 #
 #   x (batch, seq, hidden)
 #   │
@@ -214,7 +235,10 @@ func initBase[QKNorm](
     q_proj, k_proj, v_proj, o_proj: Linear,
     num_qo_head, num_kv_head, head_dim: int,
     rotary: RotaryPositionEmbedding,
-    window: int, softmaxScale: float64): RopeGQAttention[QKNorm] =
+    window: int, softmaxScale: float64,
+    gProj: Option[Linear] = none(Linear),
+    kvSourceLayer = -1,
+    vNorm: FusedRmsNorm = nil): RopeGQAttention[QKNorm] =
   checkValue(num_qo_head > 0,
     "[ttt] " & name & ": num_attention_heads is " & $num_qo_head &
     ", expected a positive count")
@@ -237,7 +261,10 @@ func initBase[QKNorm](
     gqa_attn: GroupedQueryAttention.init(num_qo_head, num_kv_head, head_dim,
       softmaxScale),
     rotary: rotary,
-    window: window
+    window: window,
+    gProj: gProj,
+    kvSourceLayer: kvSourceLayer,
+    vNorm: vNorm
   )
 
 func init*[QKNorm](
@@ -248,7 +275,10 @@ func init*[QKNorm](
     num_qo_head, num_kv_head, head_dim: int,
     rotary: RotaryPositionEmbedding,
     window: int = FullVisibilityWindow,
-    softmaxScale = 0.0'f64): RopeGQAttention[QKNorm] =
+    softmaxScale = 0.0'f64,
+    gProj: Option[Linear] = none(Linear),
+    kvSourceLayer = -1,
+    vNorm: FusedRmsNorm = nil): RopeGQAttention[QKNorm] =
   ## Build the attention block with no qk-norms.
   ##
   ## `window` defaults to `FullVisibilityWindow`, plain causal attention.
@@ -256,7 +286,8 @@ func init*[QKNorm](
   ## `softmaxScale` overrides the head-width scale when positive.
   initBase(RopeGQAttention[QKNorm], layer_idx, name,
     q_proj, k_proj, v_proj, o_proj,
-    num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale)
+    num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale,
+    gProj, kvSourceLayer, vNorm)
 
 func init*[QKNorm](
     _: type RopeGQAttention[QKNorm],
@@ -267,7 +298,10 @@ func init*[QKNorm](
     rotary: RotaryPositionEmbedding,
     q_norm, k_norm: QKNorm,
     window: int = FullVisibilityWindow,
-    softmaxScale = 0.0'f64): RopeGQAttention[QKNorm] =
+    softmaxScale = 0.0'f64,
+    gProj: Option[Linear] = none(Linear),
+    kvSourceLayer = -1,
+    vNorm: FusedRmsNorm = nil): RopeGQAttention[QKNorm] =
   ## Initialize RopeGQAttention.
   ##
   ## Args:
@@ -292,7 +326,8 @@ func init*[QKNorm](
   ## before the GQA group division truncates it.
   result = initBase(RopeGQAttention[QKNorm], layer_idx, name,
     q_proj, k_proj, v_proj, o_proj,
-    num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale)
+    num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale,
+    gProj, kvSourceLayer, vNorm)
   when QKNorm isnot void:
     result.q_norm = q_norm
     result.k_norm = k_norm
@@ -332,11 +367,19 @@ proc writeKvPages(
       let seqRemaining = seq_len - t
       let chunkLen = min(chunkRemaining, seqRemaining)
       let chunkEnd = t + chunkLen
-      # Single copyFrom per page instead of one kernel per token
-      page.k_view[layer_idx, withinPage ..< withinPage + chunkLen].copyFrom(
-        k_rot[0, t ..< chunkEnd, _, _])
-      page.v_view[layer_idx, withinPage ..< withinPage + chunkLen].copyFrom(
-        v_reshaped[0, t ..< chunkEnd, _, _])
+      # Single copyFrom per page instead of one kernel per token.
+      # Dual-width pools carry the widest kv width in the slot, a narrower
+      # layer writes the leading head_dim channels through a narrowed view.
+      let kView = page.k_view[layer_idx, withinPage ..< withinPage + chunkLen]
+      let vView = page.v_view[layer_idx, withinPage ..< withinPage + chunkLen]
+      let kSrc = k_rot[0, t ..< chunkEnd, _, _]
+      let vSrc = v_reshaped[0, t ..< chunkEnd, _, _]
+      if kView.size(2) != kSrc.size(2):
+        kView.narrow(2, 0, kSrc.size(2)).copyFrom(kSrc)
+        vView.narrow(2, 0, vSrc.size(2)).copyFrom(vSrc)
+      else:
+        kView.copyFrom(kSrc)
+        vView.copyFrom(vSrc)
       t = chunkEnd
 
 proc gatherKv(
@@ -349,8 +392,10 @@ proc gatherKv(
 
   # Reuse pre-allocated buffers to avoid F.empty allocation per forward pass.
   # Allocate once at max_seq size, narrow to actual totalSeqLen each call.
-  # Pre-allocate gather buffers at max_seq to avoid F.empty per forward pass.
-  if ctx.k_gather_buf.isNil or ctx.k_gather_buf.size(1) < totalSeqLen:
+  # Dual-width layers share one context, a realloc is due whenever
+  # the stashed buffer width disagrees with this layer's head_dim too.
+  if ctx.k_gather_buf.isNil or ctx.k_gather_buf.size(1) < totalSeqLen or
+      ctx.k_gather_buf.size(3) != head_dim:
     let allocSize = max(totalSeqLen, ctx.max_seq)
     let kvOpts = F.tensorOptions(kvDtype, kvDevice)
     ctx.k_gather_buf = F.zeros(
@@ -363,8 +408,15 @@ proc gatherKv(
     let pageEnd = min(pageStart + TokensPerPage, totalSeqLen)
     let pageValidLen = pageEnd - pageStart
     let page = ctx.pages[p]
-    ctx.k_gather_buf[0, pageStart ..< pageEnd, _, _] = page.k_view[layer_idx, 0 ..< pageValidLen]
-    ctx.v_gather_buf[0, pageStart ..< pageEnd, _, _] = page.v_view[layer_idx, 0 ..< pageValidLen]
+    # A narrower layer reads the leading head_dim channels of its wide
+    # slot through a narrowed view.
+    let kSlot = page.k_view[layer_idx, 0 ..< pageValidLen]
+    let vSlot = page.v_view[layer_idx, 0 ..< pageValidLen]
+    let kvWidth = ctx.k_gather_buf.size(3)
+    ctx.k_gather_buf[0, pageStart ..< pageEnd, _, _] =
+      (if kSlot.size(2) != kvWidth: kSlot.narrow(2, 0, kvWidth) else: kSlot)
+    ctx.v_gather_buf[0, pageStart ..< pageEnd, _, _] =
+      (if vSlot.size(2) != kvWidth: vSlot.narrow(2, 0, kvWidth) else: vSlot)
 
   # Narrow pre-allocated buffers to actual sequence length for SDPA
   let k_full = ctx.k_gather_buf.narrow(1, 0, totalSeqLen)
@@ -385,14 +437,17 @@ proc forward[QKNorm](
   ##   Output tensor of shape (batch, seq, num_qo_head * head_dim)
   ##
   ## Computes:
-  ##   q = self.q_proj(x)
-  ##   k = self.k_proj(x)
-  ##   v = self.v_proj(x)
+  ##   q = self.q_proj(x);  (k, v = self.k_proj(x), self.v_proj(x))
   ##   (q_rot, k_rot) = self.rotary.applyRope(q, k, ctx.cos, ctx.sin)
   ##   Write k_rot, v_reshaped into ctx.pages page slots
   ##   Gather pages into contiguous k_full, v_full
   ##   attn_out = self.gqa_attn(q_rot, k_full, v_full)
+  ##   [gProj present] attn_out = attn_out * softplus(g_proj(x)) per head
   ##   return self.o_proj(attn_out)
+  ##
+  ## A kvSourceLayer >= 0 skips the k/v projection, norm, rope and write:
+  ## k_full/v_full gather straight from the source layer's pages, q ropes
+  ## on top of them.
   let batch = x.size(0)
 
   # Guard against batch_size > 1
@@ -405,33 +460,63 @@ proc forward[QKNorm](
 
   # Use separate Q, K, V projections (matching HF/Qwen3)
   let q = self.q_proj.forward(x)
-  let k = self.k_proj.forward(x)
-  let v = self.v_proj.forward(x)
 
   let seq_len = x.size(1)
   # Reshape to (batch, seq, heads, head_dim)
   let q_reshaped = q.reshape([batch, seq_len, self.gqa_attn.num_qo_head, self.gqa_attn.head_dim])
-  let k_reshaped = k.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
-  let v_reshaped = v.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
 
-  # Apply q/k norm (on reshaped tensor before RoPE)
-  let (q_norm_input, k_norm_input) =
+  # Apply q norm (on reshaped tensor before RoPE)
+  let q_norm_input =
     when QKNorm is void:
-      (q_reshaped, k_reshaped)
+      q_reshaped
     else:
-      (forward(self.q_norm, q_reshaped), forward(self.k_norm, k_reshaped))
-
-  # Apply RoPE using precomputed cos/sin
-  # Partial RoPE: the rotary ref's rotary_dim columns rotate
-  let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, ctx.cos, ctx.sin)
+      forward(self.q_norm, q_reshaped)
 
   let offset = ctx.kv_position
-  let kvDtype = v_reshaped.scalarType()
-  let kvDevice: F.DeviceKind = v_reshaped.deviceType()
-  writeKvPages(ctx, self.layer_idx, k_rot, v_reshaped, offset, seq_len)
-  let (k_full, v_full) = gatherKv(ctx, self.layer_idx,
-    self.gqa_attn.num_kv_head, self.gqa_attn.head_dim,
-    offset, seq_len, kvDtype, kvDevice)
+  let kvDtype = q_reshaped.scalarType()
+  let kvDevice: F.DeviceKind = q_reshaped.deviceType()
+
+  var q_rot: Tensor
+  var k_full, v_full: Tensor
+  if self.kvSourceLayer < 0:
+    let k = self.k_proj.forward(x)
+    let v = self.v_proj.forward(x)
+    let k_reshaped = k.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
+    var v_reshaped = v.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
+
+    # Apply k norm (on reshaped tensor before RoPE)
+    let k_norm_input =
+      when QKNorm is void:
+        k_reshaped
+      else:
+        forward(self.k_norm, k_reshaped)
+
+    # Apply RoPE using precomputed cos/sin.
+    # Partial RoPE rotates the leading rotary_dim columns only.
+    let (qRotated, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, ctx.cos, ctx.sin)
+    q_rot = qRotated
+
+    # The value-path norm applies before the cache write
+    let vWrite =
+      if self.vNorm != nil:
+        self.vNorm.forward(v_reshaped)
+      else:
+        v_reshaped
+
+    writeKvPages(ctx, self.layer_idx, k_rot, vWrite, offset, seq_len)
+    (k_full, v_full) = gatherKv(ctx, self.layer_idx,
+      self.gqa_attn.num_kv_head, self.gqa_attn.head_dim,
+      offset, seq_len, kvDtype, kvDevice)
+  else:
+    # A shared-kv layer (gemma-4 spelling) runs no k/v projection, norm,
+    # rope or cache write of its own. The k/v come from the source layer's
+    # post-rope full-length pages, the same rows the reference stack
+    # carries in its shared_kv_states dict.
+    let (qRotated, _) = self.rotary.applyRope(q_norm_input, q_norm_input, ctx.cos, ctx.sin)
+    q_rot = qRotated
+    (k_full, v_full) = gatherKv(ctx, self.kvSourceLayer,
+      self.gqa_attn.num_kv_head, self.gqa_attn.head_dim,
+      offset, seq_len, kvDtype, kvDevice)
 
   # k_full/v_full are already (batch, seq, kv_heads, head_dim) — the format GQA expects.
   # GQA's forward permutes internally to (batch, kv_heads, seq, head_dim) for SDPA.
@@ -452,8 +537,19 @@ proc forward[QKNorm](
   else:
     attnMask = some(windowedCausalMask(q_rot.size(1), kvSeqLen, offset,
       self.window, q_rot.scalarType(), q_rot.deviceType()))
-  let attn_out = self.gqa_attn.forward(q_rot, k_full, v_full,
+  var attn_out = self.gqa_attn.forward(q_rot, k_full, v_full,
     is_causal = doCausal, attn_mask = attnMask)
+
+  if self.gProj.isSome():
+    # Per-head output scaling, the Laguna checkpoint spelling.
+    # The g_proj projection runs on the attention input, softplus
+    # computes in f32, one rounding back to the attention dtype, one
+    # scalar per head multiplies the attention output before o_proj.
+    let gate = F.softplus(
+      self.gProj.unsafeGet().forward(x).to(kFloat32)).to(attn_out.scalarType())
+    attn_out = (attn_out.reshape(
+        [batch, seq_len, self.gqa_attn.num_qo_head, self.gqa_attn.head_dim]) *
+      gate.unsqueeze(-1)).reshape([batch, seq_len, self.gqa_attn.qo_attn_dim])
 
   result = self.o_proj.forward(attn_out)
 

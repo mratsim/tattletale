@@ -96,6 +96,11 @@ proc load*(_: type RmsNormOne, view: SafetensorsCollection, cfg: JsonNode, prefi
   let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
   RmsNormOne.init(weight, quant, eps)
 
+proc load*(_: type FusedRmsNorm, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): FusedRmsNorm =
+  ## Loads the single-rounding RMS norm, the plain-weight gemma-4 spelling.
+  let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
+  FusedRmsNorm.init(weight, quant, eps)
+
 proc load*(_: type RmsNormGated, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNormGated =
   ## Checkpoints store this weight as F32 and it deploys as the format's dtype.
   let (_, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
@@ -186,9 +191,12 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
   let moeIntermediate =
     if moeNode.kind == JInt: moeNode.reqPosInt("moe_intermediate_size")
     else:
-      # Checkpoints without a moe_intermediate_size row route at the dense intermediate_size
-      # (the cohere lineage spelling).
-      cfg{"intermediate_size"}.reqPosInt("intermediate_size")
+      let topMoeNode = cfg{"moe_intermediate_size"}
+      if topMoeNode.kind == JInt: topMoeNode.reqPosInt("moe_intermediate_size")
+      else:
+        # Checkpoints without a moe_intermediate_size row route at the dense intermediate_size
+        # (the cohere lineage spelling).
+        cfg{"intermediate_size"}.reqPosInt("intermediate_size")
   when vocab == ekvW1W3W2:
     let gateKey = ".w1.weight"
     let upKey = ".w3.weight"
@@ -222,14 +230,26 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
   # - n_shared_experts, the DeepSeek lineage
   # - num_shared_experts, the cohere lineage
   let sharedCountNode = cfg{"n_shared_experts"}
-  let sharedCount =
+  var sharedCount =
     if sharedCountNode.kind == JInt:
       sharedCountNode.getInt().int
     else:
       cfg{"num_shared_experts"}.getInt(0)
+  var sharedKey = prefix & ".shared_experts"
+  if sharedCount == 0 and cfg{"shared_expert_intermediate_size"}.getInt(0) > 0:
+    # The singular-key lineage (Laguna) seats one shared expert whose
+    # prefix is .shared_expert, its width row is
+    # shared_expert_intermediate_size and no count row is present.
+    # A checkpoint membership test discriminates the spelling.
+    checkValue(view.hasTensor(prefix & ".shared_expert.gate_proj.weight"),
+      "[ttt] BlockSparseFFN.load: shared_expert_intermediate_size is positive" &
+      " but neither a .shared_experts nor a .shared_expert body exists at " &
+      prefix)
+    sharedCount = 1
+    sharedKey = prefix & ".shared_expert"
   let shared =
     if sharedCount > 0:
-      some(GatedDenseFFN.load(view, cfg, prefix & ".shared_experts", device))
+      some(GatedDenseFFN.load(view, cfg, sharedKey, device))
     else:
       none(GatedDenseFFN)
 
@@ -403,32 +423,64 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
                    rotary: RotaryPositionEmbedding,
                    device: DeviceKind,
                    window: int = FullVisibilityWindow,
-                   softmaxScale = 0.0'f64): RopeGQAttention[QKNorm] =
+                   softmaxScale = 0.0'f64,
+                   kvSourceLayer = -1,
+                   perHeadGate = false,
+                   vNorm: FusedRmsNorm = nil): RopeGQAttention[QKNorm] =
   ## Args:
   ##   - `window` is the layer kind's visibility band, `FullVisibilityWindow`
   ##     (the default) for plain causal attention, the sliding window width
   ##     for a sliding layer kind
   ##   - `softmaxScale` overrides the head-width attention scale when positive,
   ##     for checkpoints that scale by the query pre-attention scalar
+  ##   - `kvSourceLayer` seats a gemma-4 shared-kv layer, one that loads
+  ##     no k_proj/v_proj/k_norm and whose checkpoint carries those keys
+  ##     dead or not at all
+  ##   - `perHeadGate` loads the per-head-gated kinds' `[hidden, heads]`
+  ##     g_proj weight (Laguna)
+  ##   - `vNorm` seats the value-path single-rounding norm, a ones-weight
+  ##     FusedRmsNorm the caller constructs, the with_scale=False spelling
+  ##     carries no checkpoint tensor
   let qProj = Linear.load(view, cfg, prefix & ".q_proj", device)
-  let kProj = Linear.load(view, cfg, prefix & ".k_proj", device)
-  let vProj = Linear.load(view, cfg, prefix & ".v_proj", device)
   let oProj = Linear.load(view, cfg, prefix & ".o_proj", device)
+  let gProj =
+    if perHeadGate:
+      some(Linear.load(view, cfg, prefix & ".g_proj", device))
+    else:
+      none(Linear)
+  let kProj =
+    if kvSourceLayer < 0:
+      Linear.load(view, cfg, prefix & ".k_proj", device)
+    else:
+      nil
+  let vProj =
+    if kvSourceLayer < 0:
+      Linear.load(view, cfg, prefix & ".v_proj", device)
+    else:
+      nil
   when QKNorm is void:
     # The no-qk-norm variant carries no norm weights, the projections
     # alone compose the mixer.
     RopeGQAttention[void].init(layerIdx, prefix,
       qProj, kProj, vProj, oProj,
       numQoHead, numKvHead, headDim, rotary,
-      window = window, softmaxScale = softmaxScale)
+      window = window, softmaxScale = softmaxScale,
+      gProj = gProj, kvSourceLayer = kvSourceLayer, vNorm = vNorm)
   else:
+    # q_norm loads on every layer, shared ones included.
+    # k_norm loads only where the layer projects its own k.
     let qNorm = QKNorm.load(view, cfg, prefix & ".q_norm", device)
-    let kNorm = QKNorm.load(view, cfg, prefix & ".k_norm", device)
+    let kNorm =
+      if kvSourceLayer < 0:
+        QKNorm.load(view, cfg, prefix & ".k_norm", device)
+      else:
+        nil
     RopeGQAttention[QKNorm].init(layerIdx, prefix,
       qProj, kProj, vProj, oProj,
       numQoHead, numKvHead, headDim, rotary,
       q_norm = qNorm, k_norm = kNorm,
-      window = window, softmaxScale = softmaxScale)
+      window = window, softmaxScale = softmaxScale,
+      gProj = gProj, kvSourceLayer = kvSourceLayer, vNorm = vNorm)
 
 # ─── Gated Attention ───────────────────────────────────────────────────────
 

@@ -161,8 +161,11 @@ template `+%`(p: pointer, offset: SomeInteger): pointer =
   cast[pointer](cast[uint](p) + uint(offset))
 
 func product(a: openArray[SomeInteger]): SomeInteger {.inline.} =
+  # A rank-0 shape names one scalar, the empty product is 1, the reference
+  # safetensors convention. Checkpoints carry rank-0 scalars, the gemma-4
+  # quantization calibration min/max rows.
   if unlikely(a.len == 0):
-    return 0
+    return 1
   result = 1
   for value in items(a):
     result *= value

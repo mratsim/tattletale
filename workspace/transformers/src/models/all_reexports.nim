@@ -12,6 +12,8 @@ import ./ling3
 import ./gemma3
 import ./mistral
 import ./north
+import ./laguna
+import ./gemma4e2b
 
 # Reexports
 # -----------------------------------------
@@ -27,3 +29,5 @@ export ling3
 export gemma3
 export mistral
 export north
+export laguna
+export gemma4e2b
