@@ -125,8 +125,8 @@ type
     ##
     ## `Machine` is built from these fields at render time, not at parse time.
     ##
-    ## `Machine.jinja` borrows the template text. Borrowing from a local would dangle,
-    ## because the local's buffer dies at the end of the parse loop iteration.
+    ## `Machine.jinja` borrows the template text, so `src` must outlive every render
+    ## built from this record.
     label: string
     src: string
     nodes: seq[Node]
@@ -368,30 +368,40 @@ when defined(benchAlloc):
 
 # ── Harness ──────────────────────────────────────────────────────────────────
 
+const parseGapLabels = ["glm53flash"]
+  ## hf_models templates the engine cannot parse yet, the declared parse gaps.
+  ## `glm53flash` trips the unimplemented `nkBreak` node, whose corpus demand the MANIFEST
+  ## records at 7 sites inside the macro `has_dup_tool_result_id`.
+
 proc compileHf(): seq[Compiled] =
-  ## Parses every hf_models template.
-  ## Parse failures are reported as coverage gaps and only the templates that parse
-  ## reach the measurement loop.
+  ## Parses every hf_models template into a `Compiled` record.
+  ## Templates in `parseGapLabels` are skipped with a note, any other parse
+  ## failure raises and fails the bench.
   when defined(benchAlloc):
     discard parseTemplate("{% if x %}a{% endif %}") # warm-up parse, uncounted
   for (label, dir) in HfModels:
+    if label in parseGapLabels:
+      echo &"parse {label:11} SKIP  declared gap, skipped"
+      continue
     let path = HfModelsRoot / dir / "chat_template.jinja"
     let src = readFile(path)
-    try:
-      let (nodes, tables) = parseTemplate(src)
-      when defined(benchAlloc):
-        let census = spillCensus(nodes)
-        echo &"parse {label:11} OK    {nodes.len} nodes, {census.summary}, " &
-            &"maxSlots {census.maxSlots}, {parseAllocs(src)}"
-      else:
-        echo &"parse {label:11} OK    {nodes.len} nodes"
-      result.add Compiled(label: label, src: src, nodes: nodes, t: tables)
-    except CatchableError as e:
-      echo &"parse {label:11} FAIL  coverage gap: {e.msg}"
+    let (nodes, tables) = parseTemplate(src)
+    when defined(benchAlloc):
+      let census = spillCensus(nodes)
+      echo &"parse {label:11} OK    {nodes.len} nodes, {census.summary}, " &
+          &"maxSlots {census.maxSlots}, {parseAllocs(src)}"
+    else:
+      echo &"parse {label:11} OK    {nodes.len} nodes"
+    result.add Compiled(label: label, src: src, nodes: nodes, t: tables)
+
+const renderGapShapes = [("qwen36", "long40"), ("qwen35", "long40")]
+  ## Template and shape pairs the engine cannot render yet, the declared render gaps.
+  ## Both raise on the `long40` tool round through the unimplemented `|items` filter.
 
 proc benchHf(): void =
   ## Times and traces every compiled template over every shape.
-  ## A shape the template cannot render is reported as a coverage gap.
+  ## Pairs in `renderGapShapes` are skipped with a note, any other raise
+  ## propagates and fails the bench.
   var compiled = compileHf()
   echo ""
   let shapes = benchShapes()
@@ -399,17 +409,17 @@ proc benchHf(): void =
     echo &"render {c.label}"
     let m = Machine(jinja: c.src, nodes: c.nodes)
     for s in shapes:
-      try:
-        when defined(benchAlloc):
-          echo &"  {s.name:10} {allocShape(m, c.t, s.ctx, 50)}"
-        else:
-          let iters = case s.name
-              of "short2": 2000
-              of "typical10": 800
-              else: 200
-          echo &"  {s.name:10} {timeShape(m, c.t, s.ctx, iters)}"
-      except CatchableError as e:
-        echo &"  {s.name:10} RAISES  coverage gap: {e.msg}"
+      if (c.label, s.name) in renderGapShapes:
+        echo &"  {s.name:10} SKIP   declared gap, skipped"
+        continue
+      when defined(benchAlloc):
+        echo &"  {s.name:10} {allocShape(m, c.t, s.ctx, 50)}"
+      else:
+        let iters = case s.name
+            of "short2": 2000
+            of "typical10": 800
+            else: 200
+        echo &"  {s.name:10} {timeShape(m, c.t, s.ctx, iters)}"
     echo ""
 
 proc benchCorpus(): void =
@@ -446,8 +456,7 @@ proc benchCorpus(): void =
 
 # ── Pull-window timing ───────────────────────────────────────────────────────
 
-proc renderWindowN(m: Machine, t: Tables, ctx: Value, clock: float64, n,
-    windowSize: int): int =
+proc renderWindowN(m: Machine, t: Tables, ctx: Value, clock: float64, n, windowSize: int): int =
   ## Renders `n` times through a `windowSize`-byte stack window and returns the byte
   ## count accumulated across renders, so the loop consumes every render.
   var buf: array[4096, char]
