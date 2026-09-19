@@ -165,10 +165,6 @@ proc forward*(self: MoonlightModel, ctx: var InferenceContext, input_ids: Tensor
   self.lmHead.forward(normed)
 
 proc getConfig(self: MoonlightModel): ModelConfigBase =
-  ## Minimal config behind the `generate()` entry point. The MLA fields
-  ## size the per-buffer pool: K the compressed latent, V the kpe plane,
-  ## both single-head. The shared fields carry the same K width
-  ## so context bookkeeping stays meaningful on a latent-cache checkpoint.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,

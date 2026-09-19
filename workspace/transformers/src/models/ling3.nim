@@ -268,15 +268,6 @@ proc forward*(self: Ling3Model, ctx: var InferenceContext, input_ids: Tensor): T
   self.lmHead.forward(normed)
 
 proc getConfig(self: Ling3Model): ModelConfigBase =
-  ## Minimal config behind the `generate()` entry point.
-  ##
-  ## The MLA fields size the per-buffer pool.
-  ## - K holds the compressed latent.
-  ## - V holds the kpe plane, both single-head.
-  ## - The KDA layers allocate their conv and SSM state slots on demand
-  ##   inside the same context.
-  ## - The stop set comes from the list field, the single-id field keeps
-  ##   the conversation-end id.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,

@@ -181,11 +181,6 @@ proc forward*(self: Glm47Model, ctx: var InferenceContext, input_ids: Tensor): T
   self.lmHead.forward(normed)
 
 proc getConfig(self: Glm47Model): ModelConfigBase =
-  ## Minimal config behind the `generate()` entry point. The MLA fields
-  ## size the per-buffer pool: K the compressed latent, V the kpe plane,
-  ## both single-head. The stop set comes from the list field, the
-  ## single-id field keeps the conversation-end-first id for callers of
-  ## the old shape.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,

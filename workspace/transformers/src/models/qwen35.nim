@@ -174,7 +174,6 @@ proc forward*(self: Qwen35Model, ctx: var InferenceContext, input_ids: Tensor): 
   result = self.lmHead(normed)
 
 proc getConfig(self: Qwen35Model): ModelConfigBase =
-  ## Minimal config for InferenceContext creation in `generate()`.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.model_type,

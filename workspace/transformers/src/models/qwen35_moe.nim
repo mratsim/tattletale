@@ -234,11 +234,6 @@ proc forward*(self: Qwen35MoeModel, ctx: var InferenceContext, input_ids: Tensor
   self.lmHead.forward(normed)
 
 proc getConfig(self: Qwen35MoeModel): ModelConfigBase =
-  ## Minimal config behind the `generate()` entry point, consumed when it
-  ## builds the InferenceContext and the Orchestrator.
-  ## `intermediate_size` holds `moe_intermediate_size`, the per-expert width
-  ## of the routed FFN, because this checkpoint family keeps the plain
-  ## `text_config.intermediate_size` key null.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,

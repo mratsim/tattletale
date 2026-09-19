@@ -354,15 +354,6 @@ proc forward*(self: KimiModel, ctx: var InferenceContext, input_ids: Tensor): Te
   self.lmHead.forward(normed)
 
 proc getConfig(self: KimiModel): ModelConfigBase =
-  ## Minimal config behind the `generate()` entry point.
-  ##
-  ## The MLA fields size the per-buffer pool.
-  ## - K holds the compressed latent.
-  ## - V holds the unrotated kpe plane, both single-head.
-  ## - The pool derives from max_position_embeddings 1048576, a budget
-  ##   that allocates about 1 GB of latent gather buffer plus about 31 GB
-  ##   of page pool on top of the 92 GB paged weights.
-  ## - Callers that cannot spend it pass maxContextLen explicitly, the greedy fixtures pass small overrides.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,
