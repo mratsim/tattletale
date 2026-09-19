@@ -132,9 +132,6 @@ proc parseHybridScheduleGroups(numLayers, layerGroupSize: int): seq[AttentionLay
     " leaves the LAST layer KDA, the template requires it to be an MLA layer")
 
 proc parseLing3Config(json: JsonNode): LingConfig =
-  ## Flat bailing_hybrid config layout. torch_dtype falls back to the bf16
-  ## deploy default. eos_token_id accepts a bare int or a list of ints
-  ## through the shared list reader, any other kind raises naming the key.
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")

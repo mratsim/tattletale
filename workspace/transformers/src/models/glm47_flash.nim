@@ -83,10 +83,6 @@ type
 ################################################################################
 
 proc parseGlm47Config(json: JsonNode): Glm47Config =
-  ## Flat glm4_moe_lite config layout; torch_dtype falls back to the
-  ## bf16 deploy default. eos_token_id accepts a bare int or a list of
-  ## ints through the shared list reader; any other kind raises naming
-  ## the key.
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")

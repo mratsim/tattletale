@@ -163,9 +163,6 @@ proc parseHybridScheduleExplicit(numLayers: int,
     " complement of the full_attn_layers set")
 
 proc parseKimiConfig(json: JsonNode): KimiConfig =
-  ## Flat kimi_linear config layout plus the nested linear_attn_config
-  ## block. Deploy dtype stays bf16, the parse refuses a checkpoint
-  ## carrying anything else. No exl3 or fp8 path exists here.
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")

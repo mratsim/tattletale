@@ -78,8 +78,6 @@ type
 ################################################################################
 
 proc parseMoonlightConfig(json: JsonNode): MoonlightConfig =
-  ## Flat DeepseekV3-style config layout; torch_dtype falls back to the
-  ## bf16 deploy default.
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")
