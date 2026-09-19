@@ -1,6 +1,4 @@
-# Tattletale
-# Copyright (c) 2026 Mamy Ratsimbazafy
-# Licensed and distributed under either of
+# Tattletale Copyright (c) 2026 Mamy Ratsimbazafy Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
@@ -10,14 +8,14 @@
 # Lifecycle:
 #
 # - tokenise:
-#   one scan splits the text into runs and tags, applying the whitespace policy in place so
-#   no leading or trailing whitespace reaches a node and no node carries a whitespace flag
+#   one scan splits the text into runs and tags, applying the whitespace policy
+#   in place, so no leading or trailing whitespace reaches a node and no node carries a whitespace flag
 # - emit:
-#   a recursive descent over the tag list appends nodes in source order, so arena order equals
-#   source order and `succ` stays a link field rather than a program counter
+#   a recursive descent over the tag list appends nodes in source order, so arena order
+#   equals source order and `succ` stays a link field rather than a program counter
 # - backpatch:
-#   each construct returns the nodes whose successor is unresolved, and the enclosing construct
-#   resolves them, which is how an `if` chain's bodies end up terminating past the whole chain
+#   each construct returns the nodes whose successor is unresolved and the enclosing
+#   construct resolves them, which is how an `if` chain's bodies terminate past the whole chain
 #
 # | Rule                 | Effect                                                                                            |
 # | -------------------- | ------------------------------------------------------------------------------------------------- |
@@ -126,17 +124,14 @@ proc tokenize(src: string, stop: int): seq[Tag] =
     var afterTag = stop # offset just past the tag's closing delimiter
     var isRaw = false
     if openAt < stop:
-      let marker = src[openAt ..< openAt + 2]
-      if marker == "{#":
+      if at(src, "{#", openAt):
         let c = findTagClose(src, openAt + 2, stop, "#}")
         if c < 0:
           raise err("unclosed comment opened at byte " & $openAt)
-        # The comment's own body is erased, but the text run before it is real output and must be emitted
-        # under the block tag's whitespace rules:
-        #   `{#-` strips the whitespace run before the tag
-        #   `lstrip_blocks` strips blanks preceding the tag on its line
-        #   `-#}` strips the whitespace run after the tag
-        #   trim_blocks drops one newline after the close
+        # The comment's own body is erased, but the text run before it is real output and must
+        # be emitted under the block tag's whitespace rules:
+        #   `{#-` strips the run before the tag, `lstrip_blocks` the blanks preceding it
+        #   on its line, `-#}` the run after the tag, and trim_blocks one newline after it
         let afterTag = c + 2
         var innerLo = openAt + 2
         var innerHi = c
@@ -164,7 +159,7 @@ proc tokenize(src: string, stop: int): seq[Tag] =
         runStart = i
         pendBr = true
         continue
-      let isVar = marker == "{{"
+      let isVar = at(src, "{{", openAt)
       # The close is the bare delimiter. `-%}` carries no space before `%}`, so a `" %}"` marker
       # would skip every whitespace-controlled tag.
       let close = if isVar: "}}" else: "%}"
@@ -243,9 +238,9 @@ proc tokenize(src: string, stop: int): seq[Tag] =
 # ---------------------------------------------------------------------------
 
 func intern(p: var P, name: openArray[char]): int32 =
-  ## Interns `name` in parse order. Scope lookup is then a byte compare against one interned name
-  ## instead of a string compare against a live string. A name the template already carries
-  ## allocates nothing, and a new one is copied exactly once into `Tables.names`.
+  ## Interns `name` in parse order, scope lookup then a byte compare against one interned name
+  ## instead of a string compare against a live string. A carried name allocates nothing, a new
+  ## one copying exactly once into `Tables.names`.
   let got = findName(p.tables, name)
   if got != noLink:
     return got
@@ -271,11 +266,11 @@ func tagKeyword(p: P, t: Tag): string =
   let start = i
   while i < t.tHi and p.src[i] in wsNameChars:
     inc i
-  p.src[start ..< i]
+  spanString(p.src.toOpenArray(start, i - 1))
 
 func afterKeyword(p: P, t: Tag, kwLen: int): int =
-  ## Returns the offset just past the tag's keyword and following whitespace. The `tLo` offset is
-  ## the inside of the delimiters, so the keyword itself may start after whitespace.
+  ## Returns the offset just past the tag's keyword and following whitespace, the `tLo` offset
+  ## being the inside of the delimiters, so the keyword itself may start after whitespace.
   var i = t.tLo
   while i < t.tHi and p.src[i] in wsSpace:
     inc i
@@ -291,8 +286,8 @@ func anyOf(src: openArray[char]; i: int; chars: string): bool =
   false
 
 func skipBalanced(p: P, at: int, stop: int, stopAt: string): int =
-  ## Returns the offset of any character of `stopAt` at bracket depth zero, skipping quoted
-  ## literals. Raises when the construct ends first.
+  ## Returns the offset of any character of `stopAt` at bracket depth zero, skipping quoted literals,
+  ## raising when the construct ends first.
   var i = at
   var depth = 0
   var q: char = '\0'
@@ -314,9 +309,9 @@ func skipBalanced(p: P, at: int, stop: int, stopAt: string): int =
   raise err("expected `" & stopAt & "` before byte " & $stop)
 
 func findKeyword(p: P, at, stop: int, word: string): int =
-  ## Returns the offset of the bare word `word` at bracket depth zero, or `stop` when the span holds no
-  ## such word. Quoted literals and bracketed subexpressions are skipped, so an `if` inside a string
-  ## or a call's argument list is not mistaken for the for-`if` clause.
+  ## Returns the offset of the bare word `word` at bracket depth zero, or `stop` when the span holds no such
+  ## word. Quoted literals and bracketed subexpressions are skipped, so an `if` inside a string or a call's
+  ## argument list is not mistaken for the for-`if` clause.
   var i = at
   var depth = 0
   var q: char = '\0'
@@ -342,11 +337,10 @@ proc parseBody(p: var P, stopKws: openArray[string]): Head
 proc parseConstruct(p: var P): Head
 
 proc parseMacroParams(p: var P, t: Tag, at: int, nodeIdx: int32) =
-  ## Parses `(a, b = expr, ...)` starting at the open paren and appends one payload triple
-  ## per parameter to the `nkMacroDef` node at `nodeIdx`, the interned name then the default
-  ## expression span, `noLink` when absent. Defaults stay template text.
-  ##
-  ## A call evaluates each default in the caller's scope, after the parameters bound before it.
+  ## Parses `(a, b = expr, ...)` starting at the open paren and appending one payload triple per
+  ## parameter to the `nkMacroDef` node at `nodeIdx`, the interned name then the default span,
+  ## `noLink` when absent, defaults staying template text, each evaluated per call after binding.
+  ## - evaluation happens after the parameters bind
   var i = at + 1 # past the open paren
   while true:
     while i < t.tHi and p.src[i] in wsSpace:
@@ -389,9 +383,9 @@ proc parseMacroParams(p: var P, t: Tag, at: int, nodeIdx: int32) =
     raise err("macro parameter list is not closed at byte " & $i)
 
 proc parseMacro(p: var P): Head =
-  ## `{% macro name(a, b = 1) %} body {% endmacro %}`. The definition binds a value and never runs
-  ## the body here. A macro's output is a string, so only a call can run it, and it runs to completion.
-  ## The body's terminators land back on this node, which is how a call detects its end.
+  ## `{% macro name(a, b = 1) %} body {% endmacro %}`. The definition binds a value and never
+  ## runs the body here. A macro's output is a string, so only a call can run it, to completion.
+  ## The body's terminators land back on this node, how a call detects its end.
   let t = p.tags[p.i]
   var i = afterKeyword(p, t, 5) # past the `macro` keyword
   let nameStart = i
@@ -526,8 +520,7 @@ proc parseSet(p: var P): Head =
     inc j
   if j < t.tHi and p.src[j] == '.':
     # `ns.field = expr`:
-    #   the namespace and field are recorded as a name pair, and the value span is
-    # still template text.
+    #   the namespace and field are recorded as a name pair, and the value span is still template text.
     let nsLo = nameStart
     let nsHi = i
     var k = j + 1
@@ -620,8 +613,7 @@ proc parseBody(p: var P, stopKws: openArray[string]): Head =
   Head(head: head, tails: open)
 
 proc parseTemplate*(src: string): (seq[Node], Tables) =
-  ## Compiles template text to the arena plus its `Tables`. Interned names are built in parse
-  ## order and read-only at render.
+  ## Compiles template text to the arena plus its `Tables`, interned names built in parse order and read-only at render.
   var p = P(src: src, tags: tokenize(src, src.len), i: 0, tables: Tables(), nodes: newSeq[Node]())
   let body = parseBody(p, [])
   for x in body.tails:

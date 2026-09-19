@@ -1,35 +1,25 @@
-# Tattletale
-# Copyright (c) 2026 Mamy Ratsimbazafy
-# Licensed and distributed under either of
+# Tattletale Copyright (c) 2026 Mamy Ratsimbazafy Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Fused expression walker of the chattyninja engine.
-# An expression is template text, and one `lo..hi` span of it is parsed and evaluated
-# in a single pass. No expression becomes a node.
-#
-# A dry pass advances tokens without evaluating. Three places need it, and all three are the same
-# mechanism:
+# One `lo..hi` span of template text is parsed and evaluated in a single pass, no expression
+# becomes a node. A dry pass advances tokens without evaluating, one mechanism three places use:
 #
 # - `and` and `or` skip the operand they do not evaluate
-# - a ternary is located by a dry scan so the condition can be evaluated first and exactly one
-#   branch then runs. Re-running a branch that holds `strftime_now` or `raise_exception` would
-#   change bytes or raise from the branch not taken
+# - a ternary is located by a dry scan, so the condition runs first and exactly one branch
+#   then runs. Re-running a branch holding `strftime_now` or `raise_exception` would change
+#   bytes or raise from the branch not taken
 # - skipped branches never reach the registries, so an unimplemented construct cannot fail
 #   a render from a branch Jinja would not have entered
 
-import std/[math, strbasics, strutils, times, unicode]
+import std/[math, parseutils, unicode]
 import cnj_errors, cnj_types, cnj_values
 
 type
   ExKind = enum
-    exEof
-    exName
-    exInt
-    exFloat
-    exStr
-    exPunct
+    exEof, exName, exInt, exFloat, exStr, exPunct
 
   ExTok = object
     kind: ExKind
@@ -41,8 +31,7 @@ type
 
   Cx = object
     ## Walker cursor:
-    ##   the half-open span it owns, one token of lookahead, the dry flag, the recursion depth,
-    ## and the macro body runner handed to nested calls.
+    ##   the half-open span it owns, a one-token lookahead, the dry flag, the recursion depth, the macro body runner handed to nested calls.
     pos, stop: int
     tok: ExTok
     dry: bool
@@ -50,18 +39,13 @@ type
     run: MacroRunner
 
   ArgKeyword = enum
-    ## A keyword name a builtin reads out of an argument list.
-    ## `akNone` is a positional argument or a keyword no builtin reads, and is the field's default.
-    akNone
-    akChars
-    akDefault
-    akEnsureAscii
-    akSeparators
+    ## A keyword name a builtin reads out of an argument list, `akNone` the field's default:
+    ## a positional argument or a keyword no builtin reads.
+    akNone, akChars, akDefault, akEnsureAscii, akSeparators
 
   Arg* = object
-    ## One call or filter argument, keyword-bound when `nameLo` is not `noLink`.
-    ## A keyword keeps its template span rather than becoming an interned id, because a call may name
-    ## anything and only a name the parser binds reaches `Tables.names`.
+    ## One call or filter argument, keyword-bound when `nameLo` is not `noLink`. A keyword keeps its template span rather than becoming
+    ## an interned id, because a call may name anything and only a name the parser binds reaches `Tables.names`.
     nameLo*, nameHi*: int32
       ## keyword name span into `Machine.jinja`, `noLink` in `nameLo` for a positional argument
     kw*: ArgKeyword
@@ -72,16 +56,12 @@ type
   TestProc* = proc (v: Value, args: seq[Arg]): bool {.nimcall.}
   MethodProc* = proc (v: Value, args: seq[Arg]): Value {.nimcall.}
   GlobalProc* = proc (m: Machine, args: seq[Arg], d: var Driver): Value {.nimcall.}
-    ## A call to a template global.
-    ## `namespace` and `dict` store a keyword name as a dict key, so the proc reads the artifact.
+    ## A call to a template global, `namespace` and `dict` storing a keyword name as a dict key.
 
   MacroRunner* = proc (m: Machine, t: Tables, d: var Driver, mc: MacroVal,
       args: seq[Arg]): string {.nimcall.}
-    ## Runs one macro body to completion and returns the captured text. The statement tier owns
-    ## the arena, so eval reaches it through this injected runner rather than by importing it.
-    ## `chattyninja` and `cnj_expr` cannot import each other, keeping the artifact proc-free.
-
-const wsChars = {' ', '\t', '\n', '\r', '\v', '\f'}
+    ## Runs one macro body to completion and returns the captured text, injected by the statement tier because `chattyninja` and `cnj_expr`
+    ## cannot import each other.
 
 # Lexer
 # ---------------------------------------------------------------------------
@@ -130,32 +110,44 @@ func decodeEscapes(s: openArray[char], lo, hi: int): string =
       result.add s[i]
     inc i
 
+func parseIntToken(s: string): int64 =
+  ## Returns the integer a number-literal token spells, ValueError on a malformed token.
+  var n: int64
+  if s.len == 0 or parseutils.parseBiggestInt(s, n, 0) != s.len:
+    raise newException(ValueError, "invalid integer: " & s)
+  n
+
+func parseFloatToken(s: string): float64 =
+  ## Returns the float a number-literal token spells, ValueError on a malformed token.
+  var f: float64
+  if s.len == 0 or parseutils.parseFloat(s, f, 0) != s.len:
+    raise newException(ValueError, "invalid float: " & s)
+  f
+
 func lexNumber(s: openArray[char], i: var int, hi: int): ExTok =
   let start = i
   var isFloat = false
-  while i < hi and s[i].isDigit():
+  while i < hi and s[i] in {'0' .. '9'}:
     inc i
-  if i + 1 < hi and s[i] == '.' and s[i + 1].isDigit():
+  if i + 1 < hi and s[i] == '.' and s[i + 1] in {'0' .. '9'}:
     isFloat = true
     inc i
-    while i < hi and s[i].isDigit():
+    while i < hi and s[i] in {'0' .. '9'}:
       inc i
   if i < hi and s[i] in {'e', 'E'}:
     var j = i + 1
     if j < hi and s[j] in {'+', '-'}:
       inc j
-    if j < hi and s[j].isDigit():
-      while j < hi and s[j].isDigit():
+    if j < hi and s[j] in {'0' .. '9'}:
+      while j < hi and s[j] in {'0' .. '9'}:
         inc j
       isFloat = true
       i = j
-  var text = ""
-  for k in start ..< i:
-    text.add s[k]
+  let text = spanString(s.toOpenArray(start, i - 1))
   if isFloat:
-    ExTok(kind: exFloat, lo: start, hi: i, f: parseFloat(text))
+    ExTok(kind: exFloat, lo: start, hi: i, f: parseFloatToken(text))
   else:
-    ExTok(kind: exInt, lo: start, hi: i, i: parseBiggestInt(text).int64)
+    ExTok(kind: exInt, lo: start, hi: i, i: parseIntToken(text))
 
 func lexString(s: openArray[char], i: var int, hi: int): ExTok =
   let q = s[i]
@@ -173,9 +165,8 @@ func lexString(s: openArray[char], i: var int, hi: int): ExTok =
   ExTok(kind: exStr, lo: start, hi: i, s: decodeEscapes(s, body, endBody))
 
 func punctAt(s: openArray[char], i, hi: int): tuple[c0, c1: char, len: int] =
-  ## Returns the punctuator matching at `i` as its two bytes and its byte length.
-  ## `c1 == '\0'` marks a one-byte punctuator. `//`, `**`, `<=`, `>=`, `==` and `!=`
-  ## are lexed so they are reported as rejected constructs rather than as two tokens.
+  ## Returns the punctuator matching at `i` as its two bytes and its byte length, `c1 == '\0'` marking a one-byte punctuator.
+  ## `//`, `**`, `<=`, `>=`, `==` and `!=` are lexed whole so they are reported as rejected constructs rather than as two tokens.
   if i + 1 < hi:
     case s[i]
     of '=':
@@ -205,7 +196,7 @@ func advance(m: Machine, cx: var Cx) =
   ## Loads the next token into the cursor, stopping at the cursor's own `stop`.
   let s = m.jinja
   var i = cx.pos
-  while i < cx.stop and s[i] in wsChars:
+  while i < cx.stop and s[i] in wsSpace:
     inc i
   if i >= cx.stop:
     cx.tok = ExTok(kind: exEof, lo: i, hi: i)
@@ -220,7 +211,7 @@ func advance(m: Machine, cx: var Cx) =
       lexNumber(s, i, cx.stop)
     of 'a' .. 'z', 'A' .. 'Z', '_':
       let start = i
-      while i < cx.stop and (s[i].isAlphaNumeric() or s[i] == '_'):
+      while i < cx.stop and (s[i] in {'a' .. 'z', 'A' .. 'Z', '0' .. '9'} or s[i] == '_'):
         inc i
       ExTok(kind: exName, lo: start, hi: i)
     else:
@@ -230,13 +221,13 @@ func advance(m: Machine, cx: var Cx) =
   cx.pos = i
 
 func isPunct(cx: Cx, p: string): bool =
-  ## Reports whether the lookahead is the punctuator `p`, one or two bytes, matched byte against
-  ## byte so no string is built per comparison.
+  ## Reports whether the lookahead is the punctuator `p`, matched byte against byte so no
+  ## string is built per comparison.
   cx.tok.kind == exPunct and cx.tok.p0 == p[0] and
     ((p.len == 1 and cx.tok.p1 == '\0') or (p.len == 2 and cx.tok.p1 == p[1]))
 
 func isWord(m: Machine, cx: Cx, w: string): bool =
-  ## Reports whether the lookahead is the bare identifier `w`, so keywords are matched without
+  ## Reports whether the lookahead is the bare identifier `w`, keywords matched without
   ## copying text out of the template.
   if cx.tok.kind != exName or cx.tok.hi - cx.tok.lo != w.len:
     return false
@@ -246,8 +237,8 @@ func isWord(m: Machine, cx: Cx, w: string): bool =
   true
 
 func wordSpan(m: Machine, lo, hi: int): openArray[char] =
-  ## Returns the template text in `lo ..< hi` as a view, so neither an identifier nor a registry
-  ## lookup allocates. `lo ..< hi` is the half-open span the token carries.
+  ## Returns the template text in `lo ..< hi` as a view, so neither an identifier nor a registry lookup allocates. `lo ..< hi`
+  ## is the half-open span the token carries.
   m.jinja.toOpenArray(lo, hi - 1)
 
 func wordSpan(m: Machine, cx: Cx): openArray[char] =
@@ -255,15 +246,13 @@ func wordSpan(m: Machine, cx: Cx): openArray[char] =
   wordSpan(m, cx.tok.lo, cx.tok.hi)
 
 func nameText(m: Machine, lo, hi: int): string =
-  ## Returns the template text in `lo ..< hi` as a fresh string.
-  ## Only an error message or a gap report copies, because the render path compares spans in place.
-  result = newString(hi - lo)
-  for i in lo ..< hi:
-    result[i - lo] = m.jinja[i]
+  ## Returns the template text in `lo ..< hi` as a fresh string, only an error message or a gap report copying, the render path comparing
+  ## spans in place.
+  spanString(m.jinja.toOpenArray(lo, hi - 1))
 
 func findIn[N: enum](names: array[N, string], n: openArray[char]): int =
-  ## Returns the index of `n` in a registry's name column, or -1 when the name is unknown.
-  ## Each entry is compared against the caller's bytes without building a string.
+  ## Returns the index of `n` in a registry's name column, or -1 when the name is unknown,
+  ## each entry compared against the caller's bytes without building a string.
   for k, v in names:
     if v == n:
       return k.ord
@@ -275,20 +264,18 @@ const
     ## Keyword names the builtins read, indexed by `ArgKeyword`.
 
 func argName*(m: Machine, a: Arg): openArray[char] =
-  ## Returns an argument's keyword name as a view into the template text.
-  ## `nameLo == noLink` marks a positional argument, which has no name to read.
+  ## Returns an argument's keyword name as a view into the template text, `nameLo == noLink`
+  ## marking a positional argument, which has no name to read.
   m.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
 
 proc argKey(m: Machine, a: Arg): string =
-  ## Returns the dict key one argument supplies to `namespace` or `dict`.
-  ## A keyword-bound argument gives the keyword text, a positional one gives its stringified value.
-  ## A key is stored in a `DictVal`, so this is where a keyword name becomes a string.
+  ## Returns the dict key one argument supplies to `namespace` or `dict`, a keyword-bound argument
+  ## giving the keyword text, a positional one its stringified value. A `DictVal` key is a string,
+  ## so this is where a keyword name becomes one.
   if a.nameLo == noLink:
     pyStr(a.val)
   else:
-    var k: string
-    k.add argName(m, a)
-    k
+    spanString(argName(m, a))
 
 func argKeyword(name: openArray[char]): ArgKeyword =
   ## Returns the builtin keyword `name` selects, `akNone` when no builtin reads that keyword.
@@ -310,25 +297,38 @@ func getArg(args: seq[Arg], pos: int, kw: ArgKeyword, default: Value): Value =
     return args[pos].val
   default
 
-func toRunes(s: string): seq[Rune] =
-  var r: seq[Rune]
-  for x in s.runes:
-    r.add x
-  r
+func runeOffset(s: string, k: int): int =
+  ## Returns the byte offset of the codepoint at index `k`, advancing by UTF-8 lead-byte strides, the same walk `runeLen`
+  ## and the `runes` iterator take.
+  var j = 0
+  for _ in 0 ..< k:
+    inc j, runeLenAt(s, j)
+  j
 
-func runeCount(s: string): int =
-  ## Returns the codepoint length, which is what `length` and slicing count.
-  var n = 0
-  for _ in s.runes:
-    inc n
-  n
+func runeSub(s: string, i: int): Rune =
+  ## Returns the codepoint at Python index `i`, a negative `i` counting from the end.
+  ## An ASCII codepoint answers by one byte read, a multibyte one decodes in place.
+  let n = runeLen(s)
+  let idx = if i < 0: n + i else: i
+  if idx < 0 or idx >= n:
+    raise err("string subscript " & $i & " is out of range")
+  let j = runeOffset(s, idx)
+  if s[j].ord < 0x80: Rune(s[j].ord) else: runeAt(s, j)
+
+func steppedSliceInto(s: string, sb: var StrBuf, a, b, by: int) =
+  ## Writes the stride-`by` codepoint slice into `sb`, visiting `a, a + by, ...`
+  ## while the stride keeps the walk inside the clamped bounds.
+  var k = a
+  while (by > 0 and k < b) or (by < 0 and k > b):
+    sb.addRune runeSub(s, k)
+    inc k, by
 
 # Registries
 # ---------------------------------------------------------------------------
 #
 # Filters, tests, methods and globals dispatch by name. `tojson` is one filter name exactly like
 # `trim`, never a construct. A nil entry is a declared name no template in the corpus uses,
-# and reaching it raises `NotImplementedError` rather than answering wrongly.
+# reaching it raising `NotImplementedError` rather than answering wrongly.
 
 type
   FilterName = enum
@@ -367,16 +367,13 @@ const
 
 func gapWhat(what: string, name: openArray[char]): void {.noreturn.} =
   ## Reports a declared registry name that no template in the corpus uses, so a gap is never
-  ## mistaken for a wrong answer.
-  ## Only this report quotes `name`, so the span is copied here and nowhere else.
-  var quoted = ""
-  quoted.add name
+  ## mistaken for a wrong answer. Only this report quotes `name`, so the span copies here alone.
+  let quoted = spanString(name)
   raise newImplementError(what & " `" & quoted & "` is not implemented; no template in the corpus uses it")
 
 proc tojsonFilter(v: Value, args: seq[Arg]): Value =
-  ## Renders JSON. `ensure_ascii` and `separators` are the only kwargs the corpus passes.
-  ## `ensure_ascii` defaults to false to match the recording environment, which emits
-  ## non-ASCII as raw UTF-8 rather than `\uXXXX` escapes.
+  ## Renders JSON. `ensure_ascii` and `separators` are the only kwargs the corpus passes, `ensure_ascii` defaulting to false to match
+  ## the recording environment, which emits non-ASCII as raw UTF-8 rather than `\uXXXX` escapes.
   var opts = JsonOpts()
   for a in args:
     case a.kw
@@ -395,7 +392,7 @@ proc tojsonFilter(v: Value, args: seq[Arg]): Value =
 
 proc lengthFilter(v: Value, args: seq[Arg]): Value =
   case v.kind
-  of vkStr: intVal(runeCount(v.s))
+  of vkStr: intVal(runeLen(v.s))
   of vkSeq: intVal(v.xs.items.len)
   of vkDict, vkNs: intVal(v.d.keys.len)
   else: raise err("`length` needs a string, sequence or mapping")
@@ -403,29 +400,33 @@ proc lengthFilter(v: Value, args: seq[Arg]): Value =
 proc trimFilter(v: Value, args: seq[Arg]): Value =
   if v.kind != vkStr:
     raise err("`trim` needs a string")
-  var chars = ""
   let a = getArg(args, 0, akChars, undefinedVal())
-  if a.kind == vkStr:
-    chars = a.s
-  strVal(pyStrip(v.s, chars, true, true))
+  strVal(pyStrip(v.s, if a.kind == vkStr: a.s else: "", true, true))
 
 proc defaultFilter(v: Value, args: seq[Arg]): Value =
   if v.kind == vkUndefined: getArg(args, 0, akDefault, noneVal()) else: v
 
+func asciiCased(s: string, upper: bool): string =
+  ## Returns `s` with ASCII letters cased per `upper`, other bytes verbatim.
+  result = newString(s.len)
+  for i, c in s:
+    let flip = upper and c in {'a' .. 'z'} or not upper and c in {'A' .. 'Z'}
+    result[i] = if flip: chr(ord(c) xor 0x20) else: c
+
 proc lowerFilter(v: Value, args: seq[Arg]): Value =
   if v.kind != vkStr:
     raise err("`lower` needs a string")
-  strVal(v.s.toLowerAscii())
+  strVal(asciiCased(v.s, false))
 
 proc upperFilter(v: Value, args: seq[Arg]): Value =
   if v.kind != vkStr:
     raise err("`upper` needs a string")
-  strVal(v.s.toUpperAscii())
+  strVal(asciiCased(v.s, true))
 
 proc capitalizeFilter(v: Value, args: seq[Arg]): Value =
   if v.kind != vkStr:
     raise err("`capitalize` needs a string")
-  var acc = v.s.toLowerAscii()
+  var acc = asciiCased(v.s, false)
   if acc.len > 0 and acc[0] in 'a' .. 'z':
     acc[0] = chr(ord(acc[0]) - 32)
   strVal(acc)
@@ -433,11 +434,7 @@ proc capitalizeFilter(v: Value, args: seq[Arg]): Value =
 proc listFilter(v: Value, args: seq[Arg]): Value =
   case v.kind
   of vkSeq: v
-  of vkStr:
-    var acc = newSeq[Value]()
-    for r in v.s.runes:
-      acc.add strVal($r)
-    seqVal(acc)
+  of vkStr: seqVal(codepointVals(v.s))
   else: raise err("`list` needs a string or sequence")
 
 proc safeFilter(v: Value, args: seq[Arg]): Value =
@@ -497,16 +494,13 @@ func loopAttr(v: Value, name: openArray[char]): Value =
 func sliceIndices(n: int, lo, hi, step: Value, hasLo, hasHi, hasStep: bool):
     tuple[start, stop, by: int] =
   ## Returns Python's `slice.indices(n)` for one slice:
-  ##   the walk bounds and the stride, plus the direction-dependent defaults and clamps applied.
-  ##
-  ## Defaults follow the stride's direction rather than sitting at the ends of the range, which is
-  ## what makes `x[::-1]` visit every element and `x[:2:-1]` stop at the head.
-  ##
+  ##   the walk bounds and the stride, direction-dependent defaults and clamps applied.
+  ## Defaults follow the stride's direction, not the range's ends, which is what makes
+  ## `x[::-1]` visit every element and `x[:2:-1]` stop at the head.
   ## - forward (`by > 0`):
-  ##   bounds clamp into `[0, n]`, defaults are `0` and `n`
+  ##   bounds clamp into `[0, n]`, defaults `0` and `n`
   ## - backward (`by < 0`):
-  ##   bounds clamp into `[-1, n - 1]`, defaults are `n - 1` and `-1`
-  ##
+  ##   bounds clamp into `[-1, n - 1]`, defaults `n - 1` and `-1`
   ## A backward stop of `-1` means "one past the head", so the walk includes index 0.
   var by = 1
   if hasStep:
@@ -528,7 +522,7 @@ func sliceIndices(n: int, lo, hi, step: Value, hasLo, hasHi, hasStep: bool):
   (clamp(a, low, high), clamp(b, low, high), by)
 
 proc subslice(v, lo, hi, step: Value, hasLo, hasHi, hasStep, isSlice: bool): Value =
-  ## Returns a subscript or a slice. `x[1:]` and `x[::-1]` are the slice shapes the corpus uses.
+  ## Returns a subscript or a slice, `x[1:]` and `x[::-1]` the slice shapes the corpus uses.
   if not isSlice:
     return case v.kind
     of vkSeq:
@@ -537,18 +531,14 @@ proc subslice(v, lo, hi, step: Value, hasLo, hasHi, hasStep, isSlice: bool): Val
       let n = v.xs.items.len
       let idx = if lo.i < 0: n + lo.i.int else: lo.i.int
       if idx < 0 or idx >= n:
-        raise err("subscript " & $lo.i & " is acc of range for a length-" & $n & " sequence")
+        raise err("subscript " & $lo.i & " is out of range for a length-" & $n & " sequence")
       v.xs.items[idx]
     of vkDict, vkNs:
       v.d.dictGet(pyStr(lo))
     of vkStr:
       if lo.kind != vkInt:
         raise err("string subscript needs an integer")
-      let runes = toRunes(v.s)
-      let idx = if lo.i < 0: runes.len + lo.i.int else: lo.i.int
-      if idx < 0 or idx >= runes.len:
-        raise err("string subscript " & $lo.i & " is acc of range")
-      strVal($runes[idx])
+      strVal($runeSub(v.s, lo.i.int))
     of vkUndefined:
       undefinedVal()
     else:
@@ -556,7 +546,7 @@ proc subslice(v, lo, hi, step: Value, hasLo, hasHi, hasStep, isSlice: bool): Val
   let n =
     case v.kind
     of vkSeq: v.xs.items.len
-    of vkStr: runeCount(v.s)
+    of vkStr: runeLen(v.s)
     else: raise err("a " & $v.kind & " is not sliceable")
   let (a, b, by) = sliceIndices(n, lo, hi, step, hasLo, hasHi, hasStep)
   return case v.kind
@@ -568,13 +558,15 @@ proc subslice(v, lo, hi, step: Value, hasLo, hasHi, hasStep, isSlice: bool): Val
       inc k, by
     seqVal(acc)
   else:
-    let runes = toRunes(v.s)
-    var acc = ""
-    var k = a
-    while (by > 0 and k < b) or (by < 0 and k > b):
-      acc.add $runes[k]
-      inc k, by
-    strVal(acc)
+    if by == 1:
+      strVal(spanString(v.s.toOpenArray(runeOffset(v.s, a), runeOffset(v.s, b) - 1)))
+    else:
+      var sb: StrBuf
+      steppedSliceInto(v.s, sb, a, b, by)
+      var win = newString(sb.len)
+      var dst = over(win)
+      steppedSliceInto(v.s, dst, a, b, by)
+      strVal(win)
 
 proc getMethod(v: Value, args: seq[Arg]): Value =
   ## `d.get(key, default)`. Absence yields the default, itself undefined when unsupplied.
@@ -613,56 +605,64 @@ proc valuesMethod(v: Value, args: seq[Arg]): Value =
   seqVal(v.d.vals)
 
 proc splitMethod(v: Value, args: seq[Arg]): Value =
+  ## `s.split(sep)` over non-overlapping separator occurrences, an empty separator splitting per codepoint.
   if v.kind != vkStr:
     raise err("`split` needs a string")
   let sep = pyStr(getArg(args, 0, akNone, strVal(" ")))
-  var acc = newSeq[Value]()
+  var acc: seq[Value]
   if sep.len == 0:
-    for r in v.s.runes:
-      acc.add strVal($r)
+    acc = codepointVals(v.s)
   else:
-    for piece in v.s.split(sep):
-      acc.add strVal(piece)
+    var pos = 0
+    var i = 0
+    while i + sep.len <= v.s.len:
+      if sep == v.s.toOpenArray(i, i + sep.len - 1):
+        acc.add strVal(spanString(v.s.toOpenArray(pos, i - 1)))
+        pos = i + sep.len
+        i = pos
+      else:
+        inc i
+    acc.add strVal(spanString(v.s.toOpenArray(pos, v.s.len - 1)))
   seqVal(acc)
 
-proc stripMethod(v: Value, args: seq[Arg]): Value =
+proc sideStrip(v: Value, args: seq[Arg], name: string, left, right: bool): Value =
+  ## `s.strip(chars)`, `s.lstrip(chars)` and `s.rstrip(chars)`:
+  ##   one body, the reported name and the stripped sides carried by the wrappers.
   if v.kind != vkStr:
-    raise err("`strip` needs a string")
-  strVal(pyStrip(v.s, pyStr(getArg(args, 0, akNone, strVal(""))), true, true))
+    raise err("`" & name & "` needs a string")
+  strVal(pyStrip(v.s, pyStr(getArg(args, 0, akNone, strVal(""))), left, right))
 
-proc lstripMethod(v: Value, args: seq[Arg]): Value =
-  if v.kind != vkStr:
-    raise err("`lstrip` needs a string")
-  strVal(pyStrip(v.s, pyStr(getArg(args, 0, akNone, strVal(""))), true, false))
+proc stripMethod(v: Value, args: seq[Arg]): Value = sideStrip(v, args, "strip", true, true)
+proc lstripMethod(v: Value, args: seq[Arg]): Value = sideStrip(v, args, "lstrip", true, false)
+proc rstripMethod(v: Value, args: seq[Arg]): Value = sideStrip(v, args, "rstrip", false, true)
 
-proc rstripMethod(v: Value, args: seq[Arg]): Value =
+proc edgeWith(v: Value, args: seq[Arg], name: string, tail: bool): Value =
+  ## `s.startswith(p)` and `s.endswith(p)`:
+  ##   one body, the reported name and the compared edge carried by the wrappers.
   if v.kind != vkStr:
-    raise err("`rstrip` needs a string")
-  strVal(pyStrip(v.s, pyStr(getArg(args, 0, akNone, strVal(""))), false, true))
+    raise err("`" & name & "` needs a string")
+  let p = pyStr(getArg(args, 0, akNone, strVal("")))
+  boolVal(p.len == 0 or (p.len <= v.s.len and
+      (if tail: p == v.s.toOpenArray(v.s.len - p.len, v.s.len - 1)
+       else: p == v.s.toOpenArray(0, p.len - 1))))
 
-proc startswithMethod(v: Value, args: seq[Arg]): Value =
-  if v.kind != vkStr:
-    raise err("`startswith` needs a string")
-  boolVal(v.s.startsWith(pyStr(getArg(args, 0, akNone, strVal("")))))
+proc startswithMethod(v: Value, args: seq[Arg]): Value = edgeWith(v, args, "startswith", false)
+proc endswithMethod(v: Value, args: seq[Arg]): Value = edgeWith(v, args, "endswith", true)
 
-proc endswithMethod(v: Value, args: seq[Arg]): Value =
-  if v.kind != vkStr:
-    raise err("`endswith` needs a string")
-  boolVal(v.s.endsWith(pyStr(getArg(args, 0, akNone, strVal("")))))
+proc argDict(m: Machine, args: seq[Arg]): DictVal =
+  ## Returns one mapping holding the call's arguments, keyword names as dict keys.
+  var dv = DictVal()
+  for a in args:
+    dv.dictSet(argKey(m, a), a.val)
+  dv
 
 proc namespaceGlobal(m: Machine, args: seq[Arg], d: var Driver): Value =
   ## `namespace(field=init, ...)`:
   ##   the mutable mapping `{% set ns.field = ... %}` mutates in place.
-  var dv = DictVal()
-  for a in args:
-    dv.dictSet(argKey(m, a), a.val)
-  nsVal(dv)
+  nsVal(argDict(m, args))
 
 proc dictGlobal(m: Machine, args: seq[Arg], d: var Driver): Value =
-  var dv = DictVal()
-  for a in args:
-    dv.dictSet(argKey(m, a), a.val)
-  dictVal(dv)
+  dictVal(argDict(m, args))
 
 proc rangeGlobal(m: Machine, args: seq[Arg], d: var Driver): Value =
   var a = 0'i64
@@ -687,11 +687,43 @@ proc rangeGlobal(m: Machine, args: seq[Arg], d: var Driver): Value =
     inc k, step
   seqVal(acc)
 
+func civilFromDays(z: int): tuple[y, m, d: int] =
+  ## Returns the civil date of `z` days since 1970-01-01, proleptic Gregorian.
+  let z2 = z + 719468
+  let era = floorDiv(z2, 146097)
+  let doe = z2 - era * 146097
+  let yoe = (doe - doe div 1460 + doe div 36524 - doe div 146096) div 365
+  let doy = doe - (365 * yoe + yoe div 4 - yoe div 100)
+  let mp = (5 * doy + 2) div 153
+  let mon = mp + (if mp < 10: 3 else: -9)
+  (yoe + era * 400 + ord(mon <= 2), mon, doy - (153 * mp + 2) div 5 + 1)
+
+const monthStart = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+
+func dayOfYear(y, m, d: int): int =
+  ## Returns the 1-based day of year, Gregorian leap rule with century handling.
+  monthStart[m - 1] + d + ord(m > 2 and y mod 4 == 0 and
+      (y mod 100 != 0 or y mod 400 == 0))
+
+func yearField(y: int): string =
+  ## Returns the `%Y` field, four digits zero-padded, non-positive years counting up
+  ## from one and years past four digits carrying a leading `+`.
+  result = $(if y <= 0: 1 - y else: y)
+  if y > 9999: return "+" & result
+  while result.len < 4:
+    result = '0' & result
+
+func twoDigits(n: int): string =
+  ## Returns `n` zero-padded to two digits.
+  if n < 10: "0" & $n else: $n
+
 proc strftimeGlobal(m: Machine, args: seq[Arg], d: var Driver): Value =
-  ## Renders the format against the driver's injected epoch. It never reads the wall clock, which is
+  ## Renders the format against the driver's injected epoch, never the wall clock, which is
   ## what keeps two drivers over one `Machine` byte-identical.
   let fmt = pyStr(getArg(args, 0, akNone, strVal("")))
-  let dt = initTime(d.clock.int64, 0).inZone(utc())
+  let secs = d.clock.int64
+  let tod = floorMod(secs.int, 86400)
+  let (yr, mo, dy) = civilFromDays(floorDiv(secs.int, 86400))
   var acc = ""
   var i = 0
   while i < fmt.len:
@@ -702,26 +734,21 @@ proc strftimeGlobal(m: Machine, args: seq[Arg], d: var Driver): Value =
     if i + 1 >= fmt.len:
       raise err("`strftime_now` format ends on a `%`")
     case fmt[i + 1]
-    of 'Y': acc.add dt.format("yyyy")
-    of 'm': acc.add dt.format("MM")
-    of 'd': acc.add dt.format("dd")
-    of 'H': acc.add dt.format("HH")
-    of 'M': acc.add dt.format("mm")
-    of 'S': acc.add dt.format("ss")
-    of 'j':
-      # Day of year, 1-based:
-      #   days in the completed months of this year, plus the monthday.
-      var doy = dt.monthday.int
-      for mo in 1 ..< ord(dt.month):
-        doy += getDaysInMonth(Month(mo), dt.year)
-      acc.add $doy
+    of 'Y': acc.add yearField(yr)
+    of 'm': acc.add twoDigits(mo)
+    of 'd': acc.add twoDigits(dy)
+    of 'H': acc.add twoDigits(tod div 3600)
+    of 'M': acc.add twoDigits((tod mod 3600) div 60)
+    of 'S': acc.add twoDigits(tod mod 60)
+    of 'j': acc.add $dayOfYear(yr, mo, dy)
     of '%': acc.add '%'
     else: gapWhat("`strftime_now` directive", "%" & fmt[i + 1])
     inc i, 2
   strVal(acc)
 
 proc raiseExceptionGlobal(m: Machine, args: seq[Arg], d: var Driver): Value =
-  ## Corpus `err_*` rows record exactly this raise. The class is `TemplateError` and the message passes through verbatim.
+  ## Corpus `err_*` rows record exactly this raise:
+  ##   class `TemplateError`, message verbatim.
   raise err(pyStr(getArg(args, 0, akNone, strVal(""))))
 
 const
@@ -748,8 +775,8 @@ const
 
 func lookupName(t: Tables, d: var Driver, name: openArray[char]): Value =
   ## Returns the binding of `name`, undefined when absent. Absence is a value, never an error:
-  ## that is what `is defined` tests and what makes a missing dict key behave like a missing name.
-  ## Interned-name scan and context lookup both read the caller's bytes in place.
+  ##   that is what `is defined` tests, what makes a missing dict key a missing name, scope scan
+  ##   and root lookup reading the caller's bytes in place.
   let id = findName(t, name)
   if id != noLink:
     for si in countdown(d.scopes.len - 1, 0):
@@ -781,27 +808,10 @@ proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0,
 proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value
 
 type Op = enum
-  ## Infix operator an expression token spells, word operators and punctuator spellings alike.
-  ## `opNone` is a token that opens no infix, and is the field's default.
-  opNone
-  opAnd
-  opOr
-  opIn
-  opNotIn
-  opEq
-  opNe
-  opLt
-  opGt
-  opLe
-  opGe
-  opConcat
-  opAdd
-  opSub
-  opMul
-  opDiv
-  opFloorDiv
-  opMod
-  opPow
+  ## Infix operator an expression token spells, word operators and punctuator spellings alike,
+  ## `opNone` a token that opens no infix and the field's default.
+  opNone, opAnd, opOr, opIn, opNotIn, opEq, opNe, opLt, opGt, opLe, opGe,
+  opConcat, opAdd, opSub, opMul, opDiv, opFloorDiv, opMod, opPow
 
 const opSpelling: array[Op, string] = [
   "", "and", "or", "in", "not in", "==", "!=", "<", ">", "<=", ">=", "~", "+", "-", "*",
@@ -810,9 +820,9 @@ const opSpelling: array[Op, string] = [
   ## Operator spellings for error text, indexed by `Op`. Error reporting is the only reader.
 
 func punctOp(c0, c1: char): Op =
-  ## Returns the infix operator the punctuator `(c0, c1)` spells, `opNone` when it is none.
-  ## A lone `=` is no infix in Jinja, so it yields `opNone` and the expression ends before it:
-  ## keyword arguments are detected in `argList` by `isPunct`, which never consults this map.
+  ## Returns the infix operator the punctuator `(c0, c1)` spells, `opNone` when it is none. A lone `=` is no infix in Jinja, so it yields
+  ## `opNone` and the expression ends before it:
+  ##   keyword arguments are detected in `argList` by `isPunct`, which never consults this map.
   if c1 == '\0':
     case c0
     of '<': opLt
@@ -836,10 +846,9 @@ func punctOp(c0, c1: char): Op =
     else: opNone
 
 func binPrec(op: Op): int =
-  ## Returns the left binding power of an infix operator, 0 when `op` is not infix.
-  ## Jinja orders operators ternary-lowest, then `or`, `and`, comparison and tests, `~`,
-  ## `+ -`, `* / // %`, `**`. A ternary binds loosest and never enters this table, because
-  ## `scanTernary` claims the ternary before precedence climbing runs.
+  ## Returns the left binding power of an infix operator, 0 when `op` is not infix. Jinja orders operators ternary-lowest, then `or`,
+  ## `and`, comparison and tests, `~`, `+ -`, `* / // %`, `**`. A ternary never enters this table, `scanTernary` claiming it before
+  ## precedence climbing runs.
   case op
   of opOr: 2
   of opAnd: 3
@@ -851,16 +860,15 @@ func binPrec(op: Op): int =
   of opNone: 0
 
 proc skipExpr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int) =
-  ## Advances the cursor over an expression without evaluating it, which is how `and`, `or`
-  ## and the ternary skip the text they do not run.
+  ## Advances the cursor over an expression without evaluating it, how `and`, `or` and the ternary skip the text they do not run.
   let wasDry = cx.dry
   cx.dry = true
   discard expr(m, t, d, cx, minPrec)
   cx.dry = wasDry
 
 proc argList(m: Machine, t: Tables, d: var Driver, cx: var Cx): seq[Arg] =
-  ## Parses a parenthesised argument list with `name = expr` keyword arguments. The opening paren is the lookahead.
-  ## A keyword keeps its span and gains a builtin keyword slot, so binding one costs no string.
+  ## Parses a parenthesised argument list with `name = expr` keyword arguments, the opening paren the lookahead. A keyword keeps its span
+  ## and gains a builtin keyword slot, so binding one costs no string.
   advance(m, cx)
   while not isPunct(cx, ")"):
     var nameLo = noLink
@@ -1032,9 +1040,9 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
       var bound = if cx.dry: undefinedVal() else: lookupName(t, d, name)
       let gi = findIn(globalNames, name)
       if bound.kind == vkUndefined and gi >= 0 and isPunct(cx, "("):
-        # A global is reached only when the name is unbound, which is Jinja's own precedence:
-        # context shadows globals, and a skipped branch never gets here. A dry walk still consumes
-        # the argument list, or the skipped text is left behind as trailing text.
+        # A global is reached only when the name is unbound, Jinja's own precedence:
+        #   context shadows globals, and a skipped branch never gets here. A dry walk still
+        #   consumes the argument list, so the skipped text is never left behind as trailing text.
         let a = argList(m, t, d, cx)
         if cx.dry:
           v = undefinedVal()
@@ -1125,8 +1133,8 @@ proc unary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
     primary(m, t, d, cx)
 
 func arith(op: Op, a, b: Value): Value =
-  ## Combines two numbers, or two strings and two sequences under `+`. `%` follows Python's floor rule,
-  ## where the result takes the sign of the divisor, so `-3 % 2` is `1`.
+  ## Combines two numbers, or two strings and two sequences under `+`.
+  ## `%` follows Python's floor rule, the result taking the divisor's sign, so `-3 % 2` is `1`.
   case op
   of opAdd:
     if a.kind == vkInt and b.kind == vkInt:
@@ -1180,8 +1188,8 @@ func cmpOne(op: Op, a, b: Value): Value =
   boolVal(r)
 
 proc binOp(m: Machine, t: Tables, d: var Driver, cx: var Cx, lhs: Value, op: Op): Value =
-  ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand
-  ## they do not evaluate. Every other infix evaluates both sides.
+  ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
+  ## infix evaluating both sides.
   case op
   of opAnd:
     if not cx.dry and not isTruthy(lhs):
@@ -1248,9 +1256,8 @@ type Ternary = object
   isTernary: bool
 
 proc scanTernary(m: Machine, t: Tables, d: var Driver, cx: var Cx, headLo: int): Ternary =
-  ## Measures the ternary spans starting at `headLo` and leaves the cursor on the token past
-  ## the whole ternary. When the walk does not land on a ternary the cursor is restored to the head,
-  ## so the caller evaluates the expression normally. Nothing is evaluated here.
+  ## Measures the ternary spans starting at `headLo`, leaving the cursor past the whole ternary. A walk that lands on no ternary restores
+  ## the cursor to the head, so the caller evaluates the expression normally. Nothing is evaluated here.
   let head = cx
   cx.pos = headLo
   advance(m, cx)
@@ -1284,7 +1291,6 @@ proc scanTernary(m: Machine, t: Tables, d: var Driver, cx: var Cx, headLo: int):
 proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value =
   ## Parses and evaluates one expression, Pratt-style:
   ##   a prefix, then infix while the operator binds at least `minPrec`.
-  ## Ternary handling:
   ## - a ternary binds loosest, and no other operator holds binding power 1, so the ternary is
   ##   resolved before its head runs
   ## - the condition is evaluated once and exactly one branch is, which keeps a branch holding
@@ -1339,9 +1345,8 @@ proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value
 
 proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0,
     run: MacroRunner = nil): Value =
-  ## Evaluates the expression held in `m.jinja[lo..<hi]` in its own cursor. `depth` seeds the nesting
-  ## counter so a sub-span reached through a ternary still counts toward `ExprDepthCap`, and `run`
-  ## carries the macro runner so a nested call can still run.
+  ## Evaluates the expression held in `m.jinja[lo..<hi]` in its own cursor. `depth` seeds the nesting counter so a sub-span reached through
+  ## a ternary still counts toward `ExprDepthCap`, `run` carrying the macro runner so a nested call can still run.
   var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth, run: run)
   advance(m, cx)
   result = expr(m, t, d, cx, 1)
@@ -1350,8 +1355,6 @@ proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0,
 
 proc evalSpan*(m: Machine, t: Tables, d: var Driver, lo, hi: int32,
     run: MacroRunner = nil): Value =
-  ## Evaluates the expression held in `m.jinja[lo..<hi]`, the entry every expression-bearing step uses.
-  ## Args:
-  ## - `run` is the macro body runner. A step that can meet a macro call passes its own runner,
-  ##   and a caller with no arena passes nil, which makes a macro call a reported gap.
+  ## Evaluates the expression held in `m.jinja[lo..<hi]`, the entry every expression-bearing step uses. `run` is the macro body runner:
+  ## a step that can meet a macro call passes its own runner, a caller with no arena passing nil, which makes a macro call a reported gap.
   evalRange(m, t, d, lo.int, hi.int, 0, run)

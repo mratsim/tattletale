@@ -24,9 +24,9 @@ proc render(expr: string, ctx = Value(kind: vkUndefined)): string =
   ## Renders one expression through `renderToString`.
   renderToString("{{ " & expr & " }}", ctx)
 
-proc renderStmt(stmt: string, ctx = Value(kind: vkUndefined)): string =
-  ## Renders one statement through `renderToString`.
-  renderToString(stmt, ctx)
+proc renderStmt(stmt: string, ctx = Value(kind: vkUndefined), clock = 0.0): string =
+  ## Renders one statement through `renderToString`, the clock the driver receives.
+  renderToString(stmt, ctx, clock)
 
 func ctx(pairs: varargs[(string, Value)]): Value =
   var d = DictVal()
@@ -59,6 +59,8 @@ doAssert render("people.tags[1]", withPeople) == "y"
 doAssert render("people.tags[-1]", withPeople) == "y"
 doAssert render("people.missing", withPeople) == "", "absence renders empty, it is not an error"
 doAssert render("people.tags[1:]", withPeople) == "['y']"
+doAssert render("'h\u00e9llo'[-1]") == "o", "a negative string subscript counts from the end"
+doAssert render("'h\u00e9llo'[1]") == "\u00e9", "a multibyte string subscript returns its codepoint"
 
 # Arithmetic and concatenation
 # ---------------------------------------------------------------------------
@@ -240,5 +242,25 @@ block zeroStepIsAnError:
 doAssert render("{'role': 'user'}['role']") == "user"
 doAssert render("{'role': 'user'}") == "{'role': 'user'}"
 doAssert render("[{'role': 'user'}] | length") == "1"
+
+# M4 hand-rolled replacements the corpus cannot pin
+# ---------------------------------------------------------------------------
+
+doAssert render("'h\u00e9llo'[1:3]") == "\u00e9l", "a step-1 string slice copies its byte window"
+doAssert render("'h\u00e9llo'[::-1]") == "oll\u00e9h", "a reversed string slice walks codepoints"
+doAssert render("'ab'.split('')") == "['a', 'b']", "an empty separator splits per codepoint"
+doAssert render("'a b c'.split()") == "['a', 'b', 'c']", "the default separator is one space"
+doAssert render("'\u00c9\u00c0'|lower") == "\u00c9\u00c0", "a non-ascii letter passes through lower unchanged"
+doAssert render("'\u00c9\u00c0'|upper") == "\u00c9\u00c0", "a non-ascii letter passes through upper unchanged"
+doAssert render("007") == "7", "a leading-zero literal parses as an integer"
+doAssert render("1.5e3") == "1500.0", "an exponent literal parses as a float"
+doAssert render("{'k': strVal}", ctx(("strVal", strVal("a'b\nc")))) == "{'k': 'a\\'b\\nc'}",
+    "a container repr escapes quotes and control characters"
+doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}") == "1970-01-01 00:00:00 1",
+    "the epoch renders through the hand-rolled civil conversion"
+doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}", undefinedVal(), 951782400.0) ==
+    "2000-02-29 00:00:00 60", "a leap-day epoch renders the day of year"
+doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}", undefinedVal(), 4107542400.0) ==
+    "2100-03-01 00:00:00 60", "a non-leap century renders the day of year"
 
 echo "t_expr: expression tier ok"

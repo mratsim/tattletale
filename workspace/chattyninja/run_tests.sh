@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Test gate for the chattyninja template engine: compiles and runs every tests/t_*.nim.
-# Exits nonzero on the first compile failure or test failure. Each suite is a plain
-# `nim c` build against `src/`, run through its own binary. Build artifacts go to
-# `build/chattyninja/` at the repo root, two levels up from this directory.
+# Builds use -d:release, so the allocstats suites count release-mode allocations. Exits nonzero
+# on the first compile failure or test failure. Each suite runs through its own binary. Build
+# artifacts go to `build/chattyninja/` at the repo root, two levels up from this directory.
 #
 # Usage: ./run_tests.sh            every suite
 #        ./run_tests.sh t_shape    one suite
@@ -15,7 +15,7 @@ bin_dir="$build_dir/bin"
 cache_dir="$build_dir/nimcache"
 mkdir -p "$bin_dir" "$cache_dir"
 
-flags=(--experimental:views --hints:off --warnings:off --path:src --outdir:"$bin_dir" --nimcache:"$cache_dir")
+flags=(--experimental:views --hints:off --warnings:off -d:release --path:src --outdir:"$bin_dir" --nimcache:"$cache_dir")
 
 if [ "$#" -gt 0 ]; then
   files=()

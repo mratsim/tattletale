@@ -1,6 +1,4 @@
-# Tattletale
-# Copyright (c) 2026 Mamy Ratsimbazafy
-# Licensed and distributed under either of
+# Tattletale Copyright (c) 2026 Mamy Ratsimbazafy Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
@@ -9,45 +7,34 @@
 # plus ordering, stringification, and the Python-repr/JSON renderings a template observes.
 # No dependency on the node arena, so the value tier is testable without a compiled template.
 
-import std/[strutils, unicode]
+import std/unicode
 import cnj_errors, cnj_strbuf
 
 type
   ValueKind* = enum
-    ## Jinja value tiers the corpus reaches. Float is carried for JSON fidelity only.
-    ## No template in the corpus does float arithmetic, so it is not implemented.
-    vkUndefined
-    vkNone
-    vkBool
-    vkInt
-    vkFloat
-    vkStr
-    vkSeq
-    vkDict
-    vkNs
-    vkLoop
-    vkMacro
+    ## Jinja value tiers the corpus reaches, float carried for JSON fidelity only,
+    ## no template in the corpus doing float arithmetic
+    vkUndefined, vkNone, vkBool, vkInt, vkFloat, vkStr, vkSeq, vkDict, vkNs, vkLoop, vkMacro
 
   SeqVal* = ref object
     ## Shared sequence of values, the `vkSeq` payload.
     items*: seq[Value]
 
   DictVal* = ref object
-    ## Insertion-ordered mapping. `vkNs` reuses it, and every holder observes changes because
+    ## Insertion-ordered mapping, `vkNs` reusing it, every holder observing changes because
     ## the object is shared by reference.
     keys*: seq[string]
     vals*: seq[Value]
 
   LoopState* = ref object
-    ## Materialized iterable plus the cursor `loop.*` reads. Shared between the driver's frame
-    ## and the `loop` value bound in the loop scope, so both readers see one cursor.
+    ## Materialized iterable plus the cursor `loop.*` reads, shared between the driver's frame
+    ## and the `loop` value bound in the loop scope, both readers seeing one cursor.
     items*: seq[Value]
     idx*: int
 
   MacroVal* = ref object
-    ## A bound macro. `node` is the `nkMacroDef` arena index and the body's terminators land
-    ## on it, so a call detects its end by arriving back there. Name and parameters are read
-    ## from the definition node's payload slots at call time.
+    ## A bound macro. `node` is the `nkMacroDef` arena index and the body's terminators land on it, so a call detects its end by arriving
+    ## back there, name and parameters read from the definition node's payload slots at call time.
     name*: int32
     body*: int32
     node*: int32
@@ -66,19 +53,18 @@ type
     of vkMacro: mc*: MacroVal
 
   JsonOpts* = object
-    ## `tojson` knobs the corpus passes, `ensure_ascii` and `separators`.
-    ## `ensureAscii` defaults to false to match the recording environment, which emits
-    ## non-ASCII as raw UTF-8 rather than `\uXXXX` escapes.
+    ## `tojson` knobs the corpus passes, `ensure_ascii` and `separators`. `ensureAscii` defaults to false to match the recording environment,
+    ## which emits non-ASCII as raw UTF-8 rather than `\uXXXX` escapes.
     ensureAscii*: bool = false
     itemSep*: string = ", "
     kvSep*: string = ": "
 
 func undefinedVal*(): Value =
-  ## Returns the absent-binding value, which renders empty, fails truthiness, and equals only itself.
+  ## Returns the absent-binding value, rendering empty, failing truthiness, equaling only itself.
   Value(kind: vkUndefined)
 
 func noneVal*(): Value =
-  ## Returns Python's `None`, which renders `None`, fails truthiness, and is distinct from undefined.
+  ## Returns Python's `None`, rendering `None`, failing truthiness, distinct from undefined.
   Value(kind: vkNone)
 
 func boolVal*(b: bool): Value = Value(kind: vkBool, b: b)
@@ -91,6 +77,13 @@ func dictVal*(d: DictVal): Value = Value(kind: vkDict, d: d)
 func nsVal*(d: DictVal): Value = Value(kind: vkNs, d: d)
 func loopVal*(lp: LoopState): Value = Value(kind: vkLoop, lp: lp)
 func macroVal*(mc: MacroVal): Value = Value(kind: vkMacro, mc: mc)
+
+func codepointVals*(s: string): seq[Value] =
+  ## Returns one single-codepoint string value per codepoint of `s`, in order.
+  var acc = newSeq[Value]()
+  for r in s.runes:
+    acc.add strVal($r)
+  acc
 
 func isTruthy*(v: Value): bool =
   ## Returns Jinja truthiness. Undefined, none, zero, empty text and empty containers are false.
@@ -106,9 +99,9 @@ func isTruthy*(v: Value): bool =
   of vkMacro: true
 
 func dictGet*(d: DictVal, key: openArray[char]): Value =
-  ## Returns the value under `key`, or undefined when absent. Absence is a value, never an error:
-  ## that is what makes `is defined` and `.get` fall back work.
-  ## Comparison reads `key` in place, so a lookup by template span materialises no string.
+  ## Returns the value under `key`, undefined when absent. Absence is a value, never an error:
+  ##   that is what makes `is defined` and `.get` fall back work. Comparison reads `key` in place,
+  ##   a span lookup allocating nothing.
   for i, k in d.keys:
     if k == key:
       return d.vals[i]
@@ -124,8 +117,8 @@ func dictSet*(d: DictVal, key: string, val: Value) =
   d.vals.add val
 
 func eqVal*(a, b: Value): bool =
-  ## Returns Jinja `==`. Numbers compare across tiers, containers compare element-wise, and undefined
-  ## equals only undefined.
+  ## Returns Jinja `==`:
+  ##   numbers compare across tiers, containers element-wise, undefined equals only undefined.
   if a.kind == vkUndefined or b.kind == vkUndefined:
     return a.kind == vkUndefined and b.kind == vkUndefined
   if a.kind == vkBool and b.kind == vkBool:
@@ -158,8 +151,8 @@ func eqVal*(a, b: Value): bool =
   of vkUndefined, vkBool, vkInt, vkFloat: false
 
 func cmpVal*(a, b: Value): int =
-  ## Returns -1, 0 or 1 for an ordering comparison. Numbers order numerically, text orders
-  ## by codepoint, and anything else is a template error, matching Jinja.
+  ## Returns -1, 0 or 1 for an ordering comparison, numbers ordering numerically, text ordering
+  ## by codepoint, anything else a template error, matching Jinja.
   if a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
     let ai = if a.kind == vkInt: float64 a.i else: a.f
     let bi = if b.kind == vkInt: float64 b.i else: b.f
@@ -167,6 +160,14 @@ func cmpVal*(a, b: Value): int =
   if a.kind == vkStr and b.kind == vkStr:
     return cmp(a.s, b.s)
   raise err("`<` and `>` need two numbers or two strings, got " & $a.kind & " and " & $b.kind)
+
+func substringOf(needle, haystack: string): bool =
+  ## Returns whether `needle` occurs in `haystack`, the empty needle always matching.
+  ## A needle longer than `haystack` leaves the scan range empty.
+  for i in 0 .. haystack.len - needle.len:
+    if haystack.toOpenArray(i, i + needle.len - 1) == needle:
+      return true
+  false
 
 func containsVal*(haystack, needle: Value): bool =
   ## Returns Jinja `in`:
@@ -180,13 +181,13 @@ func containsVal*(haystack, needle: Value): bool =
   of vkDict, vkNs:
     needle.kind == vkStr and haystack.d.dictGet(needle.s).kind != vkUndefined
   of vkStr:
-    needle.kind == vkStr and needle.s in haystack.s
+    needle.kind == vkStr and substringOf(needle.s, haystack.s)
   else:
     raise err("`in` needs a sequence, mapping or string on the right, got " & $haystack.kind)
 
 func pyStrip*(s, chars: string, left, right: bool): string =
   ## Returns `s` with leading and/or trailing characters in `chars` removed, the way Python's
-  ## `str.strip`, `lstrip` and `rstrip` do. Empty `chars` selects the whitespace set.
+  ## `str.strip`, `lstrip` and `rstrip` do, empty `chars` selecting the whitespace set.
   var cut: set[char]
   if chars.len == 0:
     cut = {' ', '\t', '\n', '\r', '\v', '\f'}
@@ -201,29 +202,26 @@ func pyStrip*(s, chars: string, left, right: bool): string =
   if right:
     while b > a and s[b - 1] in cut:
       dec b
-  s[a ..< b]
-
-proc pyFloat*(f: float64): string =
-  ## Returns Python's `str()` for a float:
-  ##   integral values keep one decimal place.
-  ## A few small allocations, because the measure pass and the render each run `$f`
-  ## inside `StrBuf.addFloat`, which float emits pay through scratch as well.
-  var sb: StrBuf
-  sb.addFloat f
-  result = newString(sb.len)
-  var dst = over(result)
-  dst.addFloat f
+  if a == b: "" else: spanString(s.toOpenArray(a, b - 1))
 
 proc pyRepr*(v: Value): string
 
 proc pyStrInto*(v: Value, sb: var StrBuf)
 proc pyReprInto(v: Value, sb: var StrBuf)
 
+proc materializeStr(write: proc (v: Value, sb: var StrBuf) {.nimcall.}, v: Value): string =
+  ## Returns one fresh string holding `write`'s rendering of `v`, a measuring pass presizing
+  ## and the render pass filling, one allocation bounded by the size.
+  var sb: StrBuf
+  write(v, sb)
+  result = newString(sb.len)
+  var dst = over(result)
+  write(v, dst)
+
 proc pyStrInto*(v: Value, sb: var StrBuf) =
   ## Writes the value as template output text into `sb`:
-  ## - strings pass through, scalars format in place
+  ## - strings pass through, scalars format in place, undefined renders empty
   ## - containers take their Python `repr()` form
-  ## - undefined renders empty
   ## Raises when `sb` cannot hold the rendering, never growing it.
   case v.kind
   of vkUndefined: discard
@@ -235,22 +233,15 @@ proc pyStrInto*(v: Value, sb: var StrBuf) =
   of vkSeq, vkDict, vkNs, vkLoop, vkMacro: pyReprInto(v, sb)
 
 proc pyStr*(v: Value): string =
-  ## Returns the value as template output text:
-  ##   strings pass through unchanged, everything else
-  ## takes its Python `str()` form, undefined renders empty.
-  ## Containers materialize one string, presized by a measuring pass.
-  result = case v.kind
-  of vkUndefined: ""
-  of vkNone: "None"
-  of vkBool: (if v.b: "True" else: "False")
-  of vkInt: $v.i
-  of vkFloat: pyFloat(v.f)
-  of vkStr: v.s
-  of vkSeq, vkDict, vkNs, vkLoop, vkMacro: pyRepr(v)
+  ## Returns the value as template output text. Strings pass through unchanged, everything else
+  ## takes its Python `str()` form, undefined rendering empty. One string is materialized, presized by a measuring pass.
+  if v.kind == vkStr:
+    return v.s
+  materializeStr(pyStrInto, v)
 
 func reprQuoted(sb: var StrBuf, s: string) =
   ## Writes Python's single-quoted repr of `s`, the form container reprs use for keys
-  ## and string items. Non-escaped bytes pass through raw.
+  ## and string items, non-escaped bytes passing through raw.
   sb.add '\''
   for c in s:
     case c
@@ -292,24 +283,17 @@ proc pyReprInto(v: Value, sb: var StrBuf) =
 
 proc pyRepr*(v: Value): string =
   ## Returns Python's `repr()`, the rendering a template sees when it stringifies a container.
-  ## One allocation, presized by a measuring pass over the writer.
-  var sb: StrBuf
-  pyReprInto(v, sb)
-  result = newString(sb.len)
-  var dst = over(result)
-  pyReprInto(v, dst)
+  materializeStr(pyReprInto, v)
 
 func hex4(sb: var StrBuf, c: int) =
   ## Appends `c` as four uppercase hex digits, the payload a `\uXXXX` escape carries.
   const digits = "0123456789ABCDEF"
-  sb.add digits[(c shr 12) and 0xF]
-  sb.add digits[(c shr 8) and 0xF]
-  sb.add digits[(c shr 4) and 0xF]
-  sb.add digits[c and 0xF]
+  for sh in countdown(12, 0, 4):
+    sb.add digits[(c shr sh) and 0xF]
 
 proc jsonEscapeInto(sb: var StrBuf, s: string, ensureAscii, html: bool) =
-  ## Writes the JSON string body of `s`, mirroring `json.dumps` escaping, ASCII-escaped
-  ## when `ensureAscii` is set. `html` additionally escapes `<`, `>`, `&` and `'`.
+  ## Writes the JSON string body of `s`, mirroring `json.dumps` escaping, ASCII-escaped when
+  ## `ensureAscii` is set, `html` additionally escaping `<`, `>`, `&` and `'`.
   for r in s.runes:
     let c = ord(r)
     if c == ord('"'):
@@ -390,11 +374,9 @@ proc toJsonBody(v: Value, sb: var StrBuf, opts: JsonOpts) =
     sb.add '"'
 
 proc toJson*(v: Value, opts = JsonOpts()): string =
-  ## Returns the `tojson` filter rendering.
-  ## - non-ASCII renders as raw UTF-8 unless the template passes `ensure_ascii`
-  ## - Jinja's HTML escaping applies, as the filter's post-pass
-  ## A tojson value materializes one string, one allocation bounded by the value size,
-  ## whether it is emitted, bound to a name or stored.
+  ## Returns the `tojson` filter rendering:
+  ##   non-ASCII raw UTF-8 unless the template passes `ensure_ascii`, Jinja's HTML escaping
+  ##   applied as the filter's post-pass, one string materialized bounded by the size.
   var sb: StrBuf
   toJsonBody(v, sb, opts)
   result = newString(sb.len)

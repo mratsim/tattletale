@@ -1,6 +1,4 @@
-# Tattletale
-# Copyright (c) 2026 Mamy Ratsimbazafy
-# Licensed and distributed under either of
+# Tattletale Copyright (c) 2026 Mamy Ratsimbazafy Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
@@ -9,17 +7,16 @@
 # (stringified containers, JSON, concatenations) into scratch instead of building
 # intermediate strings, so a derived value costs no per-part allocation.
 #
-# - an append that does not fit raises, reporting capacity and shortfall, and never
-#   grows or reallocates the buffer
-# - a nil backing pointer selects measure mode, where appends only advance `len`,
-#   letting a caller presize a result string in one pass before rendering into it
+# - an append that does not fit raises, reporting capacity and shortfall, never growing
+#   or reallocating the buffer
+# - a nil backing pointer selects measure mode, where appends only advance `len`, letting
+#   a caller presize a result string in one pass before rendering into it
 #
-# Sizing rule for render scratch. Scratch holds the largest single derived value any
-# template can produce, for which the JSON rendering of the largest context value is
-# the working upper bound. Underestimation is safe, because a too-small append raises
-# and the caller grows scratch and repulls. One caveat is that the repr of a string
-# holding many single quotes exceeds its JSON rendering, which keeps each
-# quote as one byte.
+# Scratch sizing:
+#   the JSON rendering of the largest context value is the working upper
+# bound for the largest single derived value. Underestimation is safe, a too-small append
+# raising and the caller growing scratch and repulling. The repr of a string holding many
+# single quotes exceeds its JSON rendering, which keeps each quote as one byte.
 
 import std/unicode
 import cnj_errors
@@ -34,12 +31,18 @@ type
       ## bytes appended so far, the measured length in measure mode
 
 func over*(s: var string): StrBuf =
-  ## Returns a buffer over `s`'s bytes, capacity the string's length. An empty string
-  ## yields measure mode, which a zero-length render target needs.
+  ## Returns a buffer over `s`'s bytes, capacity the string's length, an empty string
+  ## yielding measure mode, which a zero-length render target needs.
   if s.len == 0:
     StrBuf()
   else:
     StrBuf(buf: cast[ptr UncheckedArray[char]](addr s[0]), cap: s.len)
+
+func spanString*(s: openArray[char]): string =
+  ## Returns a fresh string holding the bytes of `s`, one allocation bounded by the span.
+  result = newString(s.len)
+  if s.len > 0:
+    copyMem(addr result[0], unsafeAddr s[0], s.len)
 
 proc scratchShort(sb: StrBuf, need: int) {.noreturn.} =
   ## Raises the typed overflow an unfitting append reports, naming capacity and shortfall.
@@ -89,8 +92,8 @@ proc addInt*(sb: var StrBuf, i: int64) =
     sb.add digits[j]
 
 proc addFloat*(sb: var StrBuf, f: float64) =
-  ## Appends Python's `str()` for a float, where integral values keep one decimal place.
-  ## The shortest float repr comes from `$f`, one allocation per append.
+  ## Appends Python's `str()` for a float, integral values keeping one decimal place,
+  ## the shortest float repr coming from `$f`, one allocation per append.
   let s = $f
   sb.add s
   if '.' notin s and 'e' notin s and 'E' notin s and 'n' notin s and 'i' notin s:
@@ -101,7 +104,7 @@ proc addRune*(sb: var StrBuf, r: Rune) =
   let c = ord(r)
   if c > 0x10FFFF:
     # Invalid UTF-8 decodes to out-of-range codepoints, whose `$` round-trip is not
-    # standard UTF-8. Defer to `toUTF8` so any input renders exactly as it did before.
+    # standard UTF-8, so defer to `toUTF8` and render exactly as before.
     sb.add toUTF8(r)
   elif c < 0x80:
     sb.add char(c)
