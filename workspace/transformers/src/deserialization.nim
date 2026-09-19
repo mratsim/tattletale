@@ -69,7 +69,7 @@ proc getDeployDtype*(cfg: JsonNode): ScalarKind =
 
 # ─── Linear ─────────────────────────────────────────────────────────────
 
-proc load*(_: type Linear, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device = kCPU): Linear =
+proc load*(_: type Linear, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): Linear =
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].linear
   checkValue(loader != nil, "[ttt] No linear loader for " & $quant)
@@ -86,22 +86,22 @@ proc loadRmsWeight(view: SafetensorsCollection, cfg: JsonNode, prefix: string,
   let eps = textCfg{"rms_norm_eps"}.getFloat(cfg{"rms_norm_eps"}.getFloat(1e-6))
   (quant: quant, weight: weight, eps: eps)
 
-proc load*(_: type RmsNorm, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device = kCPU): RmsNorm =
+proc load*(_: type RmsNorm, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNorm =
   let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
   RmsNorm.init(weight, quant, eps)
 
-proc load*(_: type RmsNormOne, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device = kCPU): RmsNormOne =
+proc load*(_: type RmsNormOne, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNormOne =
   let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
   RmsNormOne.init(weight, quant, eps)
 
-proc load*(_: type RmsNormGated, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device = kCPU): RmsNormGated =
+proc load*(_: type RmsNormGated, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNormGated =
   ## Checkpoints store this weight as F32 and it deploys as the format's dtype.
   let (_, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
   RmsNormGated.init(weight, eps)
 
 # ─── Embedding ──────────────────────────────────────────────────────────
 
-proc load*(_: type Embedding, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device = kCPU): Embedding =
+proc load*(_: type Embedding, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): Embedding =
   let quant = detectQuantization(cfg)
   let weight = view.getTensorOwned(prefix & ".weight", device)
     .to(QuantLoaderRegistry[quant].deployDtype)
@@ -118,7 +118,7 @@ proc load*(_: type Embedding, view: SafetensorsCollection, cfg: JsonNode, prefix
 # ─── GatedDenseFFN ─────────────────────────────────────────────────────────
 
 proc load*(_: type GatedDenseFFN, view: SafetensorsCollection, cfg: JsonNode,
-           prefix: string, device = kCPU): GatedDenseFFN =
+           prefix: string, device: DeviceKind): GatedDenseFFN =
   let gate = Linear.load(view, cfg, prefix & ".gate_proj", device)
   let up = Linear.load(view, cfg, prefix & ".up_proj", device)
   let down = Linear.load(view, cfg, prefix & ".down_proj", device)
@@ -127,7 +127,7 @@ proc load*(_: type GatedDenseFFN, view: SafetensorsCollection, cfg: JsonNode,
 # ─── GatedBlockSparseFFN ───────────────────────────────────────────────────
 
 proc load*(_: type GatedBlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
-           prefix: string, numExpertsPerTok: int, device = kCPU): GatedBlockSparseFFN =
+           prefix: string, numExpertsPerTok: int, device: DeviceKind): GatedBlockSparseFFN =
   let router = view.getTensorOwned(prefix & ".gate.weight", device)
   let gateUp = view.getTensorOwned(prefix & ".experts.gate_up_proj", device)
   let down = view.getTensorOwned(prefix & ".experts.down_proj", device)
@@ -138,7 +138,7 @@ proc load*(_: type GatedBlockSparseFFN, view: SafetensorsCollection, cfg: JsonNo
 # ─── BlockSparseFFN (ungated shared expert) ────────────────────────────────
 
 proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
-           prefix: string, router: NoauxTcRouter, device = kCPU,
+           prefix: string, router: NoauxTcRouter, device: DeviceKind,
            vocab: static ExpertKeyVocab = ekvGateUpDown): BlockSparseFFN =
   ## Loads the routed expert bodies and the ungated shared expert; the
   ## router arrives composed (NoauxTcRouter), nothing router-related
@@ -279,7 +279,7 @@ proc load*[Decay: static DecayAxis,
     view: SafetensorsCollection, cfg: JsonNode,
     prefix: string, layerIdx: int,
     numKHeads, numVHeads, headKDim, headVDim, convKernelSize: int,
-    device = kCPU, kdaLowerBound: float64 = 0.0): GatedDeltaNet[Decay, GateIn, Form] =
+    device: DeviceKind, kdaLowerBound: float64 = 0.0): GatedDeltaNet[Decay, GateIn, Form] =
   ## One gated delta-rule mixer off the checkpoint. The static
   ## parameters select the gate-input and output-norm variants.
   ## kdaLowerBound is the config reader's parsed kda_lower_bound, read
@@ -371,7 +371,7 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
                    cfg: JsonNode, prefix: string, layerIdx: int,
                    numQoHead, numKvHead, headDim: int,
                    rotary: RotaryPositionEmbedding,
-                   device = kCPU): RopeGQAttention[QKNorm] =
+                   device: DeviceKind): RopeGQAttention[QKNorm] =
   let qProj = Linear.load(view, cfg, prefix & ".q_proj", device)
   let kProj = Linear.load(view, cfg, prefix & ".k_proj", device)
   let vProj = Linear.load(view, cfg, prefix & ".v_proj", device)
@@ -389,7 +389,7 @@ proc load*[QKNorm](_: type RopeElementWiseGatedAttention[QKNorm],
                    view: SafetensorsCollection, cfg: JsonNode, prefix: string,
                    layerIdx: int, numQoHead, numKvHead, headDim: int,
                    rotary: RotaryPositionEmbedding,
-                   device = kCPU): RopeElementWiseGatedAttention[QKNorm] =
+                   device: DeviceKind): RopeElementWiseGatedAttention[QKNorm] =
   let qProj = Linear.load(view, cfg, prefix & ".q_proj", device)
   let kProj = Linear.load(view, cfg, prefix & ".k_proj", device)
   let vProj = Linear.load(view, cfg, prefix & ".v_proj", device)
@@ -403,7 +403,7 @@ proc load*[QKNorm](_: type RopeElementWiseGatedAttention[QKNorm],
 
 # ─── LMHead ────────────────────────────────────────────────────────────────
 
-proc load*(_: type LMHead, view: SafetensorsCollection, cfg: JsonNode, embedTokens: Embedding, device = kCPU): LMHead =
+proc load*(_: type LMHead, view: SafetensorsCollection, cfg: JsonNode, embedTokens: Embedding, device: DeviceKind): LMHead =
   let quant = detectQuantization(cfg)
   let loader = QuantLoaderRegistry[quant].lmHead
   checkValue(not loader.isNil(), "[ttt] No LMHead loader for " & $quant)

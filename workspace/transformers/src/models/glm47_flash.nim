@@ -83,10 +83,6 @@ type
 ################################################################################
 
 proc parseGlm47Config(json: JsonNode): Glm47Config =
-  ## Flat glm4_moe_lite config layout; torch_dtype falls back to the
-  ## bf16 deploy default. eos_token_id accepts a bare int or a list of
-  ## ints through the shared list reader; any other kind raises naming
-  ## the key.
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")
@@ -181,11 +177,6 @@ proc forward*(self: Glm47Model, ctx: var InferenceContext, input_ids: Tensor): T
   self.lmHead.forward(normed)
 
 proc getConfig(self: Glm47Model): ModelConfigBase =
-  ## Minimal config behind the `generate()` entry point. The MLA fields
-  ## size the per-buffer pool: K the compressed latent, V the kpe plane,
-  ## both single-head. The stop set comes from the list field, the
-  ## single-id field keeps the conversation-end-first id for callers of
-  ## the old shape.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,
@@ -211,15 +202,7 @@ proc getTokenizer(self: Glm47Model): BPETokenizer =
 proc getDeviceKind(self: Glm47Model): DeviceKind =
   self.device
 
-proc loadGlm47ModelRaw(modelPath: string, device = kCPU): Glm47Model =
-  ## Weight scope: `model.*` over the main stack 0..num_hidden_layers-1
-  ## plus the untied `lm_head.weight`. The checkpoint carries ONE extra
-  ## layer past the main stack, the reference stack's
-  ## speculative-decoding draft block (MTP), present in the safetensors
-  ## with its own embedding, norms, projections, router and experts.
-  ## This loader does not implement speculative decoding: it loads the
-  ## main stack plus the lm_head and IGNORES the draft block's keys,
-  ## intentionally; the model runs complete without them.
+proc loadGlm47ModelRaw(modelPath: string, device: DeviceKind): Glm47Model =
   let config = loadGlm47Config(modelPath / "config.json")
   checkValue(config.modelType == "glm4_moe_lite",
     "[ttt] loadGlm47ModelRaw: model_type \"" & config.modelType &
@@ -322,7 +305,7 @@ proc loadGlm47ModelRaw(modelPath: string, device = kCPU): Glm47Model =
     device: device,
   )
 
-proc loadGlm47Model*(modelPath: string, device = kCPU): AnyModel =
+proc loadGlm47Model*(modelPath: string, device: DeviceKind): AnyModel =
   let glm47FlashModel = loadGlm47ModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   glm47FlashModel.to(AnyModel)

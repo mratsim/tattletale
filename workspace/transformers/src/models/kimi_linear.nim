@@ -163,9 +163,6 @@ proc parseHybridScheduleExplicit(numLayers: int,
     " complement of the full_attn_layers set")
 
 proc parseKimiConfig(json: JsonNode): KimiConfig =
-  ## Flat kimi_linear config layout plus the nested linear_attn_config
-  ## block. Deploy dtype stays bf16, the parse refuses a checkpoint
-  ## carrying anything else. No exl3 or fp8 path exists here.
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")
@@ -295,15 +292,7 @@ proc parseKimiConfig(json: JsonNode): KimiConfig =
     "[ttt] KimiConfig: num_shared_experts is " & $result.nSharedExperts &
     ", the ungated shared tail serves exactly one shared expert")
 
-proc loadKimiConfig*(path: string): KimiConfig =
-  ## Config reader for the fixture suites.
-  ##
-  ## Returns the KimiConfig parsed from `path` plus the generation config beside it.
-  ## - `path` is the config.json path, the stop set comes from the generation_config.json.
-  ## - eos_token_id is a bare int on this checkpoint, the list reader's
-  ##   bare-int form handles the type.
-  ## - Special ids stay optional fields of the generation config and fall
-  ##   back to the config.json values.
+proc loadKimiConfig(path: string): KimiConfig =
   let raw = parseFile(path)
   result = raw.parseKimiConfig()
   let gen = loadGenerationConfig(parentDir(path) / "generation_config.json")
@@ -354,15 +343,6 @@ proc forward*(self: KimiModel, ctx: var InferenceContext, input_ids: Tensor): Te
   self.lmHead.forward(normed)
 
 proc getConfig(self: KimiModel): ModelConfigBase =
-  ## Minimal config behind the `generate()` entry point.
-  ##
-  ## The MLA fields size the per-buffer pool.
-  ## - K holds the compressed latent.
-  ## - V holds the unrotated kpe plane, both single-head.
-  ## - The pool derives from max_position_embeddings 1048576, a budget
-  ##   that allocates about 1 GB of latent gather buffer plus about 31 GB
-  ##   of page pool on top of the 92 GB paged weights.
-  ## - Callers that cannot spend it pass maxContextLen explicitly, the greedy fixtures pass small overrides.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,
@@ -389,14 +369,7 @@ proc getTokenizer(self: KimiModel): BPETokenizer =
 proc getDeviceKind(self: KimiModel): DeviceKind =
   self.device
 
-proc loadKimiTokenizer*(modelPath: string): BPETokenizer =
-  ## Returns the BPETokenizer built from the checkpoint's tiktoken rank
-  ## file and the added_tokens_decoder block of tokenizer_config.json.
-  ## - Checkpoint pat_str is byte-identical to the Moonlight one, so
-  ##   MoonshotPatStrRegexp is reused directly.
-  ## - The special_tokens map spans 258 slots past the 163584 mergeable
-  ##   ranks and fills every empty decoder-block slot with the synthetic
-  ##   literal "<|reserved_token_N|>", ids ascending.
+proc loadKimiTokenizer(modelPath: string): BPETokenizer =
   let tokConfig = (modelPath / "tokenizer_config.json").parseFile()
   let decoder = tokConfig{"added_tokens_decoder"}
   checkValue(decoder.kind == JObject and decoder.len != 0,
@@ -431,18 +404,7 @@ proc loadKimiTokenizer*(modelPath: string): BPETokenizer =
     specialTokens[tokenText] = tokenId
   loadTiktokenizer(modelPath / "tiktoken.model", MoonshotPatStrRegexp, specialTokens)
 
-proc loadKimiLinearModelRaw(modelPath: string, device = kCPU): KimiModel =
-  ## Loads the Kimi-Linear model weights from the checkpoint.
-  ##
-  ## Weight scope covers `model.*` over the main stack 0..num_hidden_layers-1
-  ## plus the untied `lm_head.weight`.
-  ## - Every weight loads as a device-resident owned copy under the shared
-  ##   loaders' device parameter.
-  ## - The router weights and the MLA weights call getTensorOwned directly.
-  ## - Router bias, A_log and dt_bias convert from the checkpoint bf16 grid
-  ##   to f32 explicitly.
-  ## - The safetensors collection releases at load end, CPU and device
-  ##   requests produce identical weight bytes on their named devices.
+proc loadKimiLinearModelRaw(modelPath: string, device: DeviceKind): KimiModel =
   let config = loadKimiConfig(modelPath / "config.json")
   checkValue(config.modelType == "kimi_linear",
     "[ttt] loadKimiLinearModelRaw: model_type \"" & config.modelType &
@@ -547,8 +509,7 @@ proc loadKimiLinearModelRaw(modelPath: string, device = kCPU): KimiModel =
     device: device,
   )
 
-proc loadKimiLinearModel*(modelPath: string, device = kCPU): AnyModel =
-  ## Returns the loaded Kimi-Linear model wrapped as an AnyModel.
+proc loadKimiLinearModel*(modelPath: string, device: DeviceKind): AnyModel =
   let kimiModel = loadKimiLinearModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   kimiModel.to(AnyModel)

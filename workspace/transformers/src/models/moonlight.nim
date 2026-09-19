@@ -78,8 +78,6 @@ type
 ################################################################################
 
 proc parseMoonlightConfig(json: JsonNode): MoonlightConfig =
-  ## Flat DeepseekV3-style config layout; torch_dtype falls back to the
-  ## bf16 deploy default.
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")
@@ -165,10 +163,6 @@ proc forward*(self: MoonlightModel, ctx: var InferenceContext, input_ids: Tensor
   self.lmHead.forward(normed)
 
 proc getConfig(self: MoonlightModel): ModelConfigBase =
-  ## Minimal config behind the `generate()` entry point. The MLA fields
-  ## size the per-buffer pool: K the compressed latent, V the kpe plane,
-  ## both single-head. The shared fields carry the same K width
-  ## so context bookkeeping stays meaningful on a latent-cache checkpoint.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,
@@ -235,9 +229,7 @@ proc loadMoonlightTokenizer(modelPath: string): BPETokenizer =
     specialTokens[tokenText] = tokenId
   loadTiktokenizer(modelPath / "tiktoken.model", MoonshotPatStrRegexp, specialTokens)
 
-proc loadMoonlightModelRaw(modelPath: string, device = kCPU): MoonlightModel =
-  ## Weight scope: `model.*` plus the untied `lm_head.weight`; no
-  ## vision tower and no draft block on this checkpoint.
+proc loadMoonlightModelRaw(modelPath: string, device: DeviceKind): MoonlightModel =
   let config = loadMoonlightConfig(modelPath / "config.json")
   checkValue(config.modelType == "deepseek_v3",
     "[ttt] loadMoonlightModelRaw: model_type \"" & config.modelType &
@@ -327,7 +319,7 @@ proc loadMoonlightModelRaw(modelPath: string, device = kCPU): MoonlightModel =
     device: device,
   )
 
-proc loadMoonlightModel*(modelPath: string, device = kCPU): AnyModel =
+proc loadMoonlightModel*(modelPath: string, device: DeviceKind): AnyModel =
   let moonlightModel = loadMoonlightModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   moonlightModel.to(AnyModel)

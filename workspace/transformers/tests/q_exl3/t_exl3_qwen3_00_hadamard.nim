@@ -13,6 +13,7 @@ import
   std/options,
   std/os,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/positron,
   workspace/transformers/tests/harness/harness
@@ -20,7 +21,7 @@ import
 const
   FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-00-codec" / "Qwen3-0.6B-EXL3-5bpw"
 
-proc main() =
+proc main(): bool =
   ## Replays hadamard_rotate_128 over the recorded block slices, each variant
   ## enforcing through assertStats against its recorded output tensor.
   ##
@@ -53,6 +54,7 @@ proc main() =
     assertStats(yPost, path & ".stats", "output_post", kReduction, msg = "Hadamard " & name & " post scale")
 
     echo "case " & name & " replayed under the recorded stats"
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("exl3 qwen3 hadamard", main)

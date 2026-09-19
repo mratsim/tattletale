@@ -17,6 +17,7 @@ import
   std/sequtils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/transformers/src/models,
   workspace/transformers/src/stateful/orchestrator,
   workspace/transformers/tests/harness/harness,
@@ -30,10 +31,11 @@ const
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
   FixtureDir = currentSourcePath().parentDir() / ".." / "fixtures" / "exl3-04-greedy-text-generation" / "Qwen3-0.6B-EXL3-5bpw"
 
-proc main() =
+proc main(): bool =
   ## Replays the greedy chains teacher-forced against the committed 005 decision frames, every step through assertArgMax.
   ##
   ## - teacher forcing at every step keeps the chain aligned with the recording
+
   # Recorded-chain replay against the committed decision frames, one
   # chain per fixture, the recorded tokens teacher-forced at every step.
   echo "Loading model..."
@@ -71,6 +73,7 @@ proc main() =
           F.toTensor([[chosen]]).to(device))
         orc.setKvPosition(ids.len)
         row = nextStepRow(stepLogits, 0)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen3 greedy text generation", main)

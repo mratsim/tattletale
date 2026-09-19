@@ -174,7 +174,6 @@ proc forward*(self: Qwen35Model, ctx: var InferenceContext, input_ids: Tensor): 
   result = self.lmHead(normed)
 
 proc getConfig(self: Qwen35Model): ModelConfigBase =
-  ## Minimal config for InferenceContext creation in `generate()`.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.model_type,
@@ -197,10 +196,7 @@ proc getTokenizer(self: Qwen35Model): BPETokenizer =
 proc getDeviceKind(self: Qwen35Model): DeviceKind =
   self.device
 
-proc loadQwen35ModelRaw(modelPath: string, device = kCPU): Qwen35Model =
-  ## The checkpoint file also carries foreign tensors: `model.visual.*`
-  ## (vision tower) and `mtp.*` (draft head). This model never requests
-  ## them, so the load skips them without error.
+proc loadQwen35ModelRaw(modelPath: string, device: DeviceKind): Qwen35Model =
   let config = loadQwen35Config(modelPath / "config.json")
   let weightsPath = modelPath / "model.safetensors-00001-of-00001.safetensors"
   let weights = SafetensorsCollection.open(weightsPath)
@@ -276,7 +272,7 @@ proc loadQwen35ModelRaw(modelPath: string, device = kCPU): Qwen35Model =
     device: device,
   )
 
-proc loadQwen35Model*(modelPath: string, device = kCPU): AnyModel =
+proc loadQwen35Model*(modelPath: string, device: DeviceKind): AnyModel =
   let qwen35Model = loadQwen35ModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   qwen35Model.to(AnyModel)

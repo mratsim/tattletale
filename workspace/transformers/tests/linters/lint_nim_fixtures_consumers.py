@@ -28,7 +28,7 @@ Rule table (rule | trigger | severity):
 | header-cap | the module doc block of a suite file over 10 content lines: tables, diagrams, bullet and numbered points, air lines, and the mandatory run command do not count | counted |
 | entry-point | not exactly one flat proc main() with a when isMainModule dispatcher in a suite file | counted |
 | only-main | a top-level proc other than main in a fixture consumer: the suite hosts only main, the repetitive = standardized helpers in layer_utils.nim | counted |
-| section-framework | a run*Test* section wrapper defined or called in a suite file | counted |
+| section-framework | a run*Test* section wrapper defined or called in a suite file, runCppTest exempt: the repository test entry wrapper | counted |
 | pass-emission | a PASS or PASSED string emitted in a suite file | counted |
 | try-discard | an except branch that only discards, or a discard inside try/except, in a suite file | counted |
 | proc-spacing | a top-level proc-family definition with no blank line before or after it | counted |
@@ -125,7 +125,7 @@ LAYER_INIT_RE = re.compile(
     r"\b(?:" + "|".join(LAYER_TYPES) + r")(?:\[[^\]]*\])?\.init\s*\(")
 CALL_RE = re.compile(r"\b(\w+)\s*\(")
 MAIN_GUARD_RE = re.compile(r"^when\s+isMainModule\s*:")
-SECTION_RE = re.compile(r"\brun\w*Test\w*\b")
+SECTION_RE = re.compile(r"\brun(?!Cpp)\w*Test\w*\b")
 PASS_STRING_RE = re.compile(r'"[^"]*\bPASS(?:ED)?\b[^"]*"')
 CONST_BLOCK_RE = re.compile(r"^const\b")
 NUMERIC_CONST_RE = re.compile(r"^\s*\*?\s*(\w+)\s*[^=]*=\s*(-?[\dxX][\w.xX+-]*)")

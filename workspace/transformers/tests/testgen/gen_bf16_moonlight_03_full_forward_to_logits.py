@@ -7,10 +7,12 @@ norm -> lm_head chain through installed transformers modeling on torch bf16:
 - fixture dir tests/fixtures/bf16-03-full-forward-to-logits/Moonlight-16B-A3B/
 - consumer tests/q_bf16/t_bf16_moonlight_03_full_forward_to_logits.nim
 
-- layer-<i>.safetensor, the chain boundary slices, layer_input_seq plus the topk and routing rows on MoE layers, the last layer output
-- .metadata.json.zst, the layer identity, the recorded dispatch bands and margins
-- .stats.json.zst, the ttt-tf-004-uniform-stats frame over the floating-point payload tensors
-- final_logits.decisions.json.zst, the ttt-tf-005-argmax-decisions frame, one record per position over the top-32 logits support
+| file                            | contents                                                                                                       |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| layer-<i>.safetensor            | the chain boundary slices, layer_input_seq plus the topk and routing rows on MoE layers, the last layer output |
+| .metadata.json.zst              | the layer identity, the recorded dispatch bands and margins                                                    |
+| .stats.json.zst                 | the ttt-tf-004-uniform-stats frame over the floating-point payload tensors                                     |
+| final_logits.decisions.json.zst | the ttt-tf-005-argmax-decisions frame, one record per position over the top-32 logits support                  |
 
 Dispatch contract of this run:
 - the reference runs the grouped_mm default
@@ -87,8 +89,7 @@ def _load_sibling(filename: str):
     return module
 
 
-_moe_fixtures = _load_sibling("gen_bf16_moonlight_01_layer_internals_moe.py")
-boundary_margins = _moe_fixtures.boundary_margins
+_moe_fixtures = _load_sibling("gen_bf16_moonlight_01_layer_internals.py")
 
 import transformers  # noqa: E402
 TRANSFORMERS_VERSION = transformers.__version__
@@ -232,9 +233,8 @@ def build_model(weight_map: dict) -> DeepseekV3ForCausalLM:
     - the expert dispatch stays at the default resolution, `grouped_mm`,
       the accumulation formulation the committed per-op MoE fixtures recorded
     - the per-layer expert configs are de-shared after load, each MoE layer
-      gets a shallow config copy so the eager-vs-grouped_mm band measurement
-      can flip one layer at a time, pure data movement, every copy carries
-      the resolved dispatch value
+      gets a shallow config copy, pure data movement, so the eager-vs-grouped_mm
+      band measurement flips one layer at a time, each copy carries the resolved dispatch value
     - raises SystemExit when head and embedding share storage or values,
       or when the resolved dispatch is not grouped_mm"""
     model = DeepseekV3ForCausalLM.from_pretrained(
@@ -371,6 +371,26 @@ def flip_experts(model, implementation: str, moe_layer_indices) -> None:
 def moe_layer_indices(model) -> list:
     """Indices of the routed layers, first_k_dense_replace onward."""
     return list(range(FIRST_K_DENSE_REPLACE, len(model.model.layers)))
+
+
+def boundary_margins(router_logits: torch.Tensor, bias: torch.Tensor,
+                     top_k: int) -> dict:
+    """Top-k selection margins under the NoauxTc sigmoid + bias scoring:
+    - boundary_min, the smallest positive Kth-vs-K+1th gap over all rows
+    - boundary_per_row, the per-row gap list, one margin per recorded token
+      - inner_gap_min, the smallest adjacent gap inside the top-k set,
+        the ambiguity floor of the recorded expert order"""
+    scores = router_logits.sigmoid()
+    scores_for_choice = scores + bias.unsqueeze(0)
+    sorted_choice = torch.sort(
+        scores_for_choice, dim=-1, descending=True).values
+    gaps = sorted_choice[:, top_k - 1] - sorted_choice[:, top_k]
+    inner = sorted_choice[:, : top_k - 1] - sorted_choice[:, 1:top_k]
+    return {
+        "boundary_min": gaps.min().item(),
+        "boundary_per_row": gaps.tolist(),
+        "inner_gap_min": inner.min().item(),
+    }
 
 
 def boundary_tie_count(router_logits: torch.Tensor, bias: torch.Tensor,

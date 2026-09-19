@@ -4,16 +4,22 @@
 bf16-04 greedy-text-generation records, token chains argmax-decoded
 through the reference modeling on torch bf16:
 - fixture dir tests/fixtures/bf16-04-greedy-text-generation/Kimi-Linear-48B-A3B-Instruct/
-- consumer tests/q_bf16/t_bf16_kimi_04_greedy_text_generation.nim
+- consumer tests/q_bf16/t_bf16_kimilinear_04_greedy_text_generation.nim
 
 - <prompt>_<horizon>_steps.json.zst, the ttt-tf-001-greedy-steps-h2 chain with the env frame
 - <prompt>_<horizon>_steps.decisions.json.zst, the ttt-tf-005-argmax-decisions frame over the same steps
 
 Chain contract:
-- hand-rolled single-token decode over the whole-prompt prefill, single unpadded chains, no batched pass backs the values
-- every KDA length runs the recurrent kernel class, the prefill via the forced recurrent spelling
-- the router e_score_correction_bias and the KDA A_log/dt_bias buffers assert bitwise against the checkpoint
-- a divergence is a near-tie iff the diverging pick equals the recorded runner-up id and the top-2 gap sits within a few bf16 ulps
+- hand-rolled single-token decode over the whole-prompt prefill,
+  single unpadded chains, no batched pass backs the values
+- every KDA length runs the recurrent kernel class, the prefill via
+  the forced recurrent spelling
+
+Bitwise and tie rules:
+- the router e_score_correction_bias and the KDA A_log/dt_bias buffers
+  assert bitwise against the checkpoint
+- a divergence is a near-tie iff the diverging pick equals the recorded
+  runner-up id and the top-2 gap sits within a few bf16 ulps
 
 Recording environment:
 - recorded_from defaults to m4max-cpu, the TTT_RECORD_FROM environment variable overrides it
@@ -21,7 +27,7 @@ Recording environment:
 
 Run from the worktree root, PYTHONPATH pointing at the kimi-linear reference
 worktree src carrying the torch fallback kernels:
-  PYTHONPATH=<kimi-linear-reference-worktree>/src uv run python workspace/transformers/tests/testgen/gen_bf16_kimi_04_greedy_text_generation.py
+  PYTHONPATH=<kimi-linear-reference-worktree>/src uv run python workspace/transformers/tests/testgen/gen_bf16_kimilinear_04_greedy_text_generation.py
 """
 import argparse
 import hashlib
@@ -61,14 +67,14 @@ def _load_sibling(filename: str):
 # config load, recurrent shim and dtype checks directly.
 # The layer-internals sibling supplies the zstd writer and the head check.
 # - determinism locks at import time through one intra-op torch thread
-_kimi01 = _load_sibling("gen_bf16_kimi_01_layer_internals_mla.py")
+_kimi01 = _load_sibling("gen_bf16_kimilinear_01_layer_internals.py")
 NUM_THREADS = _kimi01.NUM_THREADS
 GREEDY_STEPS_SCHEMA = "ttt-tf-001-greedy-steps-h2"
 MODEL_NAME = "Kimi-Linear-48B-A3B-Instruct"
 MODEL_DIR = _kimi01.MODEL_DIR
 INDEX_PATH = os.path.join(MODEL_DIR, "model.safetensors.index.json")
 FIXTURE_DIR = os.path.join(
-    _kimi01.TESTS_DIR, "fixtures", "bf16-04-greedy-text-generation", MODEL_NAME
+    _kimi01.GRANDPARENT_DIR, "fixtures", "bf16-04-greedy-text-generation", MODEL_NAME
 )
 write_json_zst = _kimi01.write_json_zst
 
@@ -123,7 +129,7 @@ def index_census(weight_map: dict) -> None:
     """Check the checkpoint index against the recorded counts, 20493 tensors, all under model.* except the untied lm_head.weight."""
     total = len(weight_map)
     assert total == TOTAL_KEYS, (
-        f"[gen_bf16_kimi_04] checkpoint index holds {total} keys, "
+        f"[gen_bf16_kimilinear_04] checkpoint index holds {total} keys, "
         f"expected {TOTAL_KEYS}")
     lm_head = sum(1 for key in weight_map if key == "lm_head.weight")
     assert lm_head == 1, "exactly one lm_head.weight entry expected"
@@ -190,10 +196,9 @@ def load_config() -> KimiLinearConfig:
 def build_model(cfg: KimiLinearConfig):
     """Full reference model from the real checkpoint through the installed
     `from_pretrained`, per-file streaming, mmap-backed, bf16, eval, CPU:
-    - raises SystemExit when a dtype-plan row moves:
-      the f32 A_log and dt_bias the reference creates with explicit
-      dtypes or the bf16 e_score_correction_bias buffer the reference
-      deploys without a round trip"""
+    - raises SystemExit when a dtype-plan row moves, the f32
+      dt_bias/A_log the reference creates with explicit dtypes or the bf16
+      e_score_correction_bias buffer it deploys without a round trip"""
     model = kimi_ref.KimiLinearForCausalLM.from_pretrained(
         MODEL_DIR, config=cfg, dtype=torch.bfloat16, device_map=None)
     model.eval()
@@ -377,10 +382,9 @@ class ConvDecodeRecorder:
     - wraps the branch conv fallbacks, causal_conv1d_update at decode
       and causal_conv1d_fn at prefill and replay, capturing the post-conv
       mixed_qkv rows beside the decode rows
-    - the kernels stay absent on this stack, the decorators resolve
-      to the fallback identities, the forward bodies look the conv
-      functions up in the module globals at call time, the same patch
-      surface the forced-recurrent shim uses"""
+    - the kernels stay absent on this stack, decorators resolve the fallback
+      conv functions in module globals at call time, the forced-recurrent
+      shim's patch surface"""
 
     def __init__(self, model):
         self.model = model
@@ -518,15 +522,15 @@ class ConvDecodeRecorder:
 def greedy_chain(model, token_ids: tuple[int, ...], max_new_tokens: int,
                  recorder: ConvDecodeRecorder) -> dict:
     """Greedy-decode one unpadded chain through the installed forward:
-    - the prefill covers the whole prompt over an explicit DynamicCache
-    - each step runs one single-token forward, the previous argmax id feeds back as the next input
+    - the prefill covers the whole prompt over an explicit DynamicCache,
+      each step runs one single-token forward, the previous argmax id
+      feeds back as the next input
     - every decode step runs the natural recurrent dispatch at the cached
-      one-token state, the recorder captures the per-layer decode rows for the conv-decode validation
-    - returns the generated ids and the per-step records of the deciding
-      last-position logits row, the top-32 ids with f32 logits, the argmax
-      margin and the softmax tail probability beyond the top-32 support
-    - exactly max_new_tokens argmax picks are recorded, the cache makes
-      each step one one-token forward"""
+      one-token state, the recorder captures the per-layer decode rows
+      for the conv-decode validation
+    - returns the generated ids and per-step decision records covering
+      argmax id, top-32 f32 logits, margin, tail probability, exactly
+      max_new_tokens picks per chain"""
     from transformers.cache_utils import DynamicCache
     input_ids = torch.tensor([list(token_ids)], dtype=torch.long, device=DEVICE)
     generated = []
@@ -637,7 +641,7 @@ def main() -> None:
             "model": MODEL_NAME,
             "env": recording_env(
                 model=MODEL_NAME,
-                generator="testgen/gen_bf16_kimi_04_greedy_text_generation.py",
+                generator="testgen/gen_bf16_kimilinear_04_greedy_text_generation.py",
                 extra={"dtype": "bfloat16", "device": DEVICE,
                        "num_threads": NUM_THREADS,
                        "recorded_from": os.environ.get("TTT_RECORD_FROM", "m4max-cpu")}),

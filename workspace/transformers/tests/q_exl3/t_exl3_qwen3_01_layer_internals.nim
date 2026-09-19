@@ -17,6 +17,7 @@ import
   std/strutils,
   std/importutils,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/transformers/src/layers,
   workspace/transformers/src/stateful/inference_context,
@@ -39,7 +40,7 @@ const
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3-0.6B-EXL3-5bpw"
   ModelName = "Qwen3-0.6B-EXL3-5bpw"
 
-proc main() =
+proc main(): bool =
   ## Replays the recorded layer-0 cases of the EXL3 checkpoint, every computed output
   ## enforced through assertStats against its committed 004 stats frame.
   ##
@@ -168,6 +169,7 @@ proc main() =
       assertStats(finalOutput, fixturePath & ".stats", "output", kReduction, depth = 23, msg = "block output case " & $caseNum)
       assertStats(finalOutputResidual, fixturePath & ".stats", "output_residual", kReduction, depth = 23, msg = "block output_residual case " & $caseNum)
       echo "block case " & $caseNum & " replayed under the recorded stats"
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("exl3 qwen3 layer internals", main)

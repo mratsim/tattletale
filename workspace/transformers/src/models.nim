@@ -26,7 +26,7 @@ import ./stateful/orchestrator
 import ./samplers
 import ./instrumentation
 
-proc loadModel*(modelPath: string, device = kCPU): AnyModel =
+proc loadModel*(modelPath: string, device: DeviceKind): AnyModel =
   # Pass the compile-time -> runtime boundary
   # and make the var {.compiletime.} a const at runtime
   const registry = static(ModelRegistry)

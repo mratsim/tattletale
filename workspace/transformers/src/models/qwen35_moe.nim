@@ -234,11 +234,6 @@ proc forward*(self: Qwen35MoeModel, ctx: var InferenceContext, input_ids: Tensor
   self.lmHead.forward(normed)
 
 proc getConfig(self: Qwen35MoeModel): ModelConfigBase =
-  ## Minimal config behind the `generate()` entry point, consumed when it
-  ## builds the InferenceContext and the Orchestrator.
-  ## `intermediate_size` holds `moe_intermediate_size`, the per-expert width
-  ## of the routed FFN, because this checkpoint family keeps the plain
-  ## `text_config.intermediate_size` key null.
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,
@@ -261,10 +256,7 @@ proc getTokenizer(self: Qwen35MoeModel): BPETokenizer =
 proc getDeviceKind(self: Qwen35MoeModel): DeviceKind =
   self.device
 
-proc loadQwen35MoeModelRaw(modelPath: string, device = kCPU): Qwen35MoeModel =
-  ## Weight scope: the model reads `model.language_model.*` only. Foreign
-  ## `model.visual.*` (vision tower) plus `mtp.*` (draft block) tensors
-  ## of the same checkpoint are never requested.
+proc loadQwen35MoeModelRaw(modelPath: string, device: DeviceKind): Qwen35MoeModel =
   let config = loadQwen35MoeConfig(modelPath / "config.json")
   checkValue(config.hiddenAct == "silu",
     "[ttt] loadQwen35MoeModelRaw: unsupported hidden_act \"" &
@@ -339,7 +331,7 @@ proc loadQwen35MoeModelRaw(modelPath: string, device = kCPU): Qwen35MoeModel =
     device: device,
   )
 
-proc loadQwen35MoeModel*(modelPath: string, device = kCPU): AnyModel =
+proc loadQwen35MoeModel*(modelPath: string, device: DeviceKind): AnyModel =
   let qwen35MoeModel = loadQwen35MoeModelRaw(modelPath, device)
   # iface generates to[AnyModel] converter automatically
   qwen35MoeModel.to(AnyModel)

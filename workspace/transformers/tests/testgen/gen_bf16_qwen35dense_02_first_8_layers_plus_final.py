@@ -13,12 +13,11 @@ the gdn-* state boundary references and the 8-block chain checkpoints.
 
 Generated fixtures:
 
-| file | contents |
-|---|---|
-| tests/fixtures/bf16-01-layer-internals/Qwen3.5-0.8B-layer-0/gdn-Qwen3.5-0.8B-00.safetensor | GDN block prefill T=5 with real layer-0 weights, the replay input; the 004 stats frame carries the sublayer intermediates and the sequential (0.00 reference) plus chunked (5e-3 reference) block outputs |
-| tests/fixtures/bf16-01-layer-internals/Qwen3.5-0.8B-layer-0/gdn-Qwen3.5-0.8B-01.safetensor | state trajectory driving inputs, the 3-token prefill, the 2 decode tokens and the 5-token sequential one-shot block output; the generator verifies the decode path against the one-shot path through the ulp-band instrument (two ulps of the dtype at each element), the 004 stats frame carries the per-step trajectory |
-| tests/fixtures/bf16-02-first-8-layers-plus-final/Qwen3.5-0.8B/block-00..07.safetensor | layers 0..7 run in sequence on a seeded T=4 input, the 8 prefix chain checkpoints (two full periods of the period-4 pattern, so the prefix is class-complete), each block saves the reference chunked chain (layer_input, layer_output) and the sequential-replay chain (layer_input_seq, layer_output_seq) |
-| tests/fixtures/bf16-02-first-8-layers-plus-final/Qwen3.5-0.8B/tail.safetensor | the full 24-layer chain tail taken pre-final-norm, the sequential chain output feeding the final RMSNorm (pre_final_norm) and the chunked chain output (pre_final_norm_chunked) |
+| file                                                                                          | contents                                              |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| tests/fixtures/bf16-01-layer-internals/Qwen3.5-0.8B-layer-0/layer0-Qwen3.5-0.8B-00.safetensor | the two GDN mixtures of layer 0, details below        |
+| tests/fixtures/bf16-02-first-8-layers-plus-final/Qwen3.5-0.8B/block-00..07.safetensor         | the 8 prefix chain checkpoints, details below         |
+| tests/fixtures/bf16-02-first-8-layers-plus-final/Qwen3.5-0.8B/tail.safetensor                 | the 24-layer chain tail pre-final-norm, details below |
 """
 
 import json
@@ -30,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fixture_stats import (  # noqa, the path insert precedes the import
     assert_path_equivalent,
+    write_stats_file,
     write_text_zst,
 )
 
@@ -59,6 +59,8 @@ GRANDPARENT_DIR = os.path.dirname(os.path.dirname(__file__))
 LAYER0_FIXTURE_DIR = os.path.join(
     GRANDPARENT_DIR, "fixtures", "bf16-01-layer-internals", f"{MODEL_NAME}-layer-0"
 )
+LAYER0_FIXTURE_STEM = f"layer0-{MODEL_NAME}-00"
+LAYER0_FIXTURE_PATH = os.path.join(LAYER0_FIXTURE_DIR, LAYER0_FIXTURE_STEM + ".safetensor")
 CHAIN_FIXTURE_DIR = os.path.join(
     GRANDPARENT_DIR, "fixtures", "bf16-02-first-8-layers-plus-final", MODEL_NAME
 )
@@ -99,27 +101,6 @@ def ensure_fixture_dirs() -> None:
     """Creates the fixture directories."""
     for d in (LAYER0_FIXTURE_DIR, CHAIN_FIXTURE_DIR):
         os.makedirs(d, exist_ok=True)
-
-
-def save_fixture(fixture_dir: str, layer_name: str, case_num: int, metadata: dict, tensors: dict) -> str:
-    """Save a fixture to safetensors with a separate deterministic metadata file."""
-    filename = f"{layer_name}-{MODEL_NAME}-{case_num:02d}.safetensor"
-    filepath = os.path.join(fixture_dir, filename)
-
-    sorted_tensors = OrderedDict(
-        (name, tensor.detach().cpu().contiguous())
-        for name, tensor in sorted(tensors.items())
-        if tensor is not None
-    )
-    serialized = st.save(sorted_tensors, metadata=None)
-    with open(filepath, "wb") as f:
-        f.write(serialized)
-
-    metadata_path = filepath + ".metadata.json.zst"
-    write_text_zst(metadata_path,
-                   json.dumps(metadata, sort_keys=True, indent=2)
-                   .encode("utf-8") + b"\n")
-    return filepath
 
 
 def load_file_tensors(prefix: str) -> dict:
@@ -366,8 +347,20 @@ def decoder_layer_forward_seq(
     return residual + h
 
 
-def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> None:
-    """GDN block prefill T=5, the sequential reference plus the chunked module output."""
+def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> tuple:
+    """GDN block prefill T=5, the sequential reference plus the chunked module output.
+
+    Args:
+    - block, the weighted layer-0 GatedDeltaNet module
+
+    Returns:
+    - meta, the mixture metadata
+    - payload, the single driving input tensor under its file name
+    - captured, the captured prefill intermediates for the stats frame
+
+    The chunked replay must match the module's own forward through the ulp-band instrument,
+    the caller asserts it. The sequential replay is the 0.00 reference for the Nim implementation.
+    """
     torch.manual_seed(SEED_GDN_PREFILL)
     x = torch.randn(1, PREFILL_SEQ, HIDDEN, dtype=torch.bfloat16)
 
@@ -384,29 +377,47 @@ def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> None:
     assert_path_equivalent(seq_replay["core_attn_out"], core_out,
                            "sequential replay core vs the trajectory")
 
-    save_fixture(
-        LAYER0_FIXTURE_DIR, "gdn", 0,
-        {
-            "model": MODEL_NAME,
-            "layer": "model.language_model.layers.0.linear_attn",
-            "case": "prefill_seq5",
-            "seq_len": PREFILL_SEQ,
-            "head_k_dim": block.head_k_dim,
-            "head_v_dim": block.head_v_dim,
-            "num_heads": block.num_k_heads,
-        },
-        {
-            # the suite-read driving input only, the sublayer intermediates
-            # and both block outputs stay on the 004 stats frame
-            "input": x,
-        },
-    )
-    print(f"Generated gdn prefill fixtures")
+    meta = {
+        "layer": "model.language_model.layers.0.linear_attn",
+        "case": "prefill_seq5",
+        "seq_len": PREFILL_SEQ,
+        "seed": SEED_GDN_PREFILL,
+        "head_k_dim": block.head_k_dim,
+        "head_v_dim": block.head_v_dim,
+        "num_heads": block.num_k_heads,
+    }
+    payload = {"gdn_prefill.input": x}
+    captured = {
+        "gdn_prefill.q": chunk_replay["query"],
+        "gdn_prefill.k": chunk_replay["key"],
+        "gdn_prefill.v": chunk_replay["value"],
+        "gdn_prefill.z": chunk_replay["z"],
+        "gdn_prefill.g": chunk_replay["g"],
+        "gdn_prefill.beta": chunk_replay["beta"],
+        "gdn_prefill.conv_output": chunk_replay["conv_output"],
+        "gdn_prefill.core_attn_out_seq": core_out,
+        "gdn_prefill.rmsnorm_gated_output": chunk_replay["normed"],
+        "gdn_prefill.output_seq": seq_replay["output"],
+        "gdn_prefill.output_chunked": module_output,
+    }
+    print("Generated gdn prefill mixture")
+    return meta, payload, captured
 
 
+def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> tuple:
+    """State trajectory mixture, a 5-token sequential one-shot plus a 2-step decode.
 
-def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
-    """State trajectory, a 5-token sequential one-shot plus a 2-step decode."""
+    Args:
+    - block, the weighted layer-0 GatedDeltaNet module
+
+    Returns:
+    - meta, the mixture metadata
+    - payload, the suite-read driving tensors under their file names
+    - captured, the per-step trajectory tensors for the stats frame
+
+    The cache starts from the sequential state over the 3-token prefill, every decode output
+    matching one-shot positions 3 and 4 through the ulp-band instrument.
+    """
     torch.manual_seed(SEED_STATE)
     prefill_x = torch.randn(1, PREFILL_STATE_TOKENS, HIDDEN, dtype=torch.bfloat16)
     decode_x_d = torch.randn(1, 1, HIDDEN, dtype=torch.bfloat16)
@@ -482,31 +493,66 @@ def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> None:
         "decode e ssm state diverged from the one-shot reference"
     )
 
-    save_fixture(
-        LAYER0_FIXTURE_DIR, "gdn", 1,
-        {
-            "model": MODEL_NAME,
-            "layer": "model.language_model.layers.0.linear_attn",
-            "case": "state_trajectory_3prefill_2decode",
-            "prefill_tokens": PREFILL_STATE_TOKENS,
-            "one_shot_tokens": PREFILL_STATE_TOKENS + 2,
-            "head_k_dim": block.head_k_dim,
-            "head_v_dim": block.head_v_dim,
-            "num_heads": block.num_k_heads,
-            "conv_kernel": block.conv_kernel_size,
-            "note": "conv_state_after_prefill/d/e are the 4-wide "
-                    "cache states. The _tail3 variants are the 3-wide tails",
-        },
-        {
-            # the suite-read driving tensors, the per-step trajectory stays
-            # on the 004 stats frame only
-            "prefill_x": prefill_x,
-            "decode_x_d": decode_x_d,
-            "decode_x_e": decode_x_e,
-            "one_shot_block_output": oneshot["output"],
-        },
-    )
-    print(f"Generated gdn state fixtures")
+    meta = {
+        "layer": "model.language_model.layers.0.linear_attn",
+        "case": "state_trajectory_3prefill_2decode",
+        "seed": SEED_STATE,
+        "prefill_tokens": PREFILL_STATE_TOKENS,
+        "one_shot_tokens": PREFILL_STATE_TOKENS + 2,
+        "head_k_dim": block.head_k_dim,
+        "head_v_dim": block.head_v_dim,
+        "num_heads": block.num_k_heads,
+        "conv_kernel": block.conv_kernel_size,
+    }
+    payload = {
+        "gdn_state.prefill_x": prefill_x,
+        "gdn_state.decode_x_d": decode_x_d,
+        "gdn_state.decode_x_e": decode_x_e,
+        "gdn_state.one_shot_block_output": oneshot["output"],
+    }
+    captured = {
+        "gdn_state.one_shot_input": one_shot_input,
+        "gdn_state.one_shot_block_output_steps0to2": oneshot["output"][:, 0:PREFILL_STATE_TOKENS],
+        "gdn_state.one_shot_block_output_step3": oneshot["output"][:, step_d:step_d + 1],
+        "gdn_state.one_shot_block_output_step4": oneshot["output"][:, step_e:step_e + 1],
+        "gdn_state.decode_output_d": decode_tensors["d"]["output"],
+        "gdn_state.decode_conv_output_d": decode_tensors["d"]["conv_output"],
+        "gdn_state.decode_output_e": decode_tensors["e"]["output"],
+        "gdn_state.decode_conv_output_e": decode_tensors["e"]["conv_output"],
+    }
+    print("Generated gdn state mixture")
+    return meta, payload, captured
+
+
+def save_layer0_fixture(metadata: dict, mixtures: list) -> None:
+    """Writes the layer-0 fixture file set, one safetensors payload carrying
+    every mixture as a named tensor group, one metadata sidecar and one
+    stats sidecar with keys namespaced by mixture.
+
+    Args:
+    - metadata, the merged metadata frame
+    - mixtures, one (payload, captured) pair per mixture, the payload
+      tensors carrying their file names, the captured tensors already
+      carrying their namespaced stats keys
+    """
+    file_tensors = OrderedDict()
+    stats_entries = []
+    for payload, captured in mixtures:
+        for name, tensor in payload.items():
+            file_tensors[name] = tensor.detach().cpu().contiguous()
+            stats_entries.append((name, file_tensors[name]))
+        for name, tensor in captured.items():
+            stats_entries.append((name, tensor.detach().cpu().contiguous()))
+
+    serialized = st.save(file_tensors, metadata=None)
+    with open(LAYER0_FIXTURE_PATH, "wb") as f:
+        f.write(serialized)
+
+    write_text_zst(LAYER0_FIXTURE_PATH + ".metadata.json.zst",
+                   json.dumps(metadata, sort_keys=True, indent=2)
+                   .encode("utf-8") + b"\n")
+    write_stats_file(LAYER0_FIXTURE_PATH + ".stats.json.zst",
+                     LAYER0_FIXTURE_STEM + ".safetensor", stats_entries)
 
 
 def generate_chain_fixture(layers, config: Qwen3_5TextConfig) -> None:
@@ -595,8 +641,8 @@ def generate_chain_fixture(layers, config: Qwen3_5TextConfig) -> None:
 
 
 def main() -> None:
-    """Generates the GDN, layer, and chain fixtures."""
-    print(f"Generating {MODEL_NAME} GDN / layer / chain fixtures")
+    """Generates the layer-0 fixture file and the chain fixtures."""
+    print(f"Generating {MODEL_NAME} layer-0 / chain fixtures")
     print("=" * 60)
     ensure_fixture_dirs()
 
@@ -606,8 +652,25 @@ def main() -> None:
         build_decoder_layer(config, i) for i in range(config.num_hidden_layers)
     ]
 
-    generate_gdn_prefill_fixture(block)
-    generate_state_fixture(block)
+    prefill_meta, prefill_payload, prefill_captured = \
+        generate_gdn_prefill_fixture(block)
+    state_meta, state_payload, state_captured = generate_state_fixture(block)
+    metadata = {
+        "model": MODEL_NAME,
+        "file": LAYER0_FIXTURE_STEM + ".safetensor",
+        "dtype": "bfloat16",
+        "hidden_size": HIDDEN,
+        "mixtures": {
+            "gdn_prefill": prefill_meta,
+            "gdn_state": state_meta,
+        },
+    }
+    save_layer0_fixture(metadata, [
+        (prefill_payload, prefill_captured),
+        (state_payload, state_captured),
+    ])
+    print(f"Saved: {LAYER0_FIXTURE_PATH}")
+
     generate_chain_fixture(chain_layers, config)
 
     print("=" * 60)

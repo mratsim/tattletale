@@ -25,6 +25,7 @@ import
   std/importutils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/safetensors/src/collections,
   workspace/transformers/src/layers,
@@ -50,7 +51,7 @@ const
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "Qwen3.5-0.8B"
 
 
-proc main() =
+proc main(): bool =
   # The recorded chain contract of this fixture family is the reference
   # device replay, the fixtures were recorded on cpu. A cross-device run
   # names the tolerance class and skips, no device budget applies here.
@@ -100,6 +101,7 @@ proc main() =
     assertArgMax(logits.narrow(1, pos.int64, 1), decisionsPath, pos,
       kReduction, flipCount, depth = model.layers.len,
       msg = "Qwen3.5-0.8B final logits position " & $pos)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("qwen35dense full forward to logits", main)

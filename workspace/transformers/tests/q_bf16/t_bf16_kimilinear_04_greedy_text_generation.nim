@@ -13,13 +13,14 @@
 ## - the bf16-04 greedy-text-generation fixture dir.
 ## Run:
 ##   nim cpp -r --hints:off --warnings:off --passC:"-std=c++20" \
-##     --outdir:build/wip --nimcache:nimcache/wip workspace/transformers/tests/q_bf16/t_bf16_kimi_04_greedy_text_generation.nim
+##     --outdir:build/wip --nimcache:nimcache/wip workspace/transformers/tests/q_bf16/t_bf16_kimilinear_04_greedy_text_generation.nim
 
 import
   std/os,
   std/sequtils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/transformers/src/models/loading/layer_kinds,
   workspace/transformers/src/models,
   workspace/transformers/src/models/kimi_linear {.all.},
@@ -42,7 +43,8 @@ const
                   "The_capital_of_France_is_32_steps",
                   "Big_blue_whales_eat_krill_32_steps"]
 
-proc main() =
+proc main(): bool =
+
   echo "Loading model..."
   let model = loadModel($ModelPath, testDevice())
   echo "Model loaded."
@@ -110,6 +112,7 @@ proc main() =
           F.toTensor([[chosen]]).to(device))
         orc.setKvPosition(ids.len)
         row = nextStepRow(stepLogits, 0)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("kimilinear greedy text generation", main)

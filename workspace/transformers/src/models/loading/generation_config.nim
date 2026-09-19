@@ -25,11 +25,6 @@ type
     padTokenId*: Option[int]
 
 proc parseGenerationConfig*(json: JsonNode): GenerationConfig =
-  ## Parse a generation_config.json body. Greedy decoding reads the stop set
-  ## and the special ids, so only those fields are parsed. Sampling parameters
-  ## in the file are ignored. Raises `ValueError` naming `eos_token_id`
-  ## when no stop id could be read: an absent key, a `null` and an empty list
-  ## all yield an empty seq. A wrong-typed value raises from the reader itself.
   result = new GenerationConfig
   result.eosTokenIds = json{"eos_token_id"}.parseIntList("eos_token_id")
   if result.eosTokenIds.len == 0:

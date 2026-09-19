@@ -21,6 +21,7 @@ import
   std/strutils,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/libtorch_testutils,
   workspace/safetensors,
   workspace/transformers/src/layers,
   workspace/transformers/src/layers/attn_ssm/multi_head_latent_attention,
@@ -42,7 +43,7 @@ const
     "bf16-03-full-forward-to-logits" / "GLM-4.7-Flash"
   ModelPath = currentSourcePath().parentDir() / ".." / "hf_models" / "GLM-4.7-Flash"
 
-proc main() =
+proc main(): bool =
   # The recorded chain contract of this fixture family is the reference
   # device replay, the fixtures were recorded on cpu. A cross-device run
   # names the tolerance class and skips, no device budget applies here.
@@ -132,6 +133,7 @@ proc main() =
     assertArgMax(logits.narrow(1, pos.int64, 1), decisionsPath, pos,
       kReduction, flipCount, depth = model.layers.len + 1,
       msg = "GLM-4.7-Flash final logits position " & $pos)
+  result = true
 
 when isMainModule:
-  main()
+  runCppTest("glm47flash full forward to logits", main)

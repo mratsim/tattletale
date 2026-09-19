@@ -35,18 +35,27 @@ flowchart LR
     F -->|no| H["a bug<br/>the report names the step"]
 ```
 
+Replay resolves the device through `select_device`, GPU over CPU.
+Metal serves m4max, CUDA serves rtxpro6000.
+cpu replay must not be automatic, a missing device kernel fails loudly.
+
+- PYTORCH_ENABLE_MPS_FALLBACK is banned, it defeats PR #104, the device
+  policy linter counts it
+- a `= kCPU` default device parameter is banned across transformers src,
+  callers pass the device explicitly
+
 ## Check ladder
 
-Each rung assumes the ones above it:
+Each tier assumes the ones above it:
 
-| rung | what it proves |
+| tier | what it proves |
 |---|---|
 | analytic unit cases | the math against in-process truth: closed forms, invariants |
-| per-op fixture records (01) | each kernel against the recorded reference, kinded bands |
+| unit tier (01) | one suite per model family against one fixture file, mixer op surface, layer chain, routed block, kinded bands, per-op rows are dead, the chain asserts the ops at block-output level |
 | chain records (02) | drift composes within the depth-scaled band, the scaling rule separates sqrt-shaped faults |
 | full forward (03) | the whole stack: boundaries as record sequences, routing ids exact, logits as decisions |
 | greedy decoding (04) | per-step decisions: argmax, top-k, margins, the flip behavior |
-| layer invariance | batched prefill equals step decode on identical inputs |
+| layer invariance | batched prefill equals step decode on identical inputs; this suite owns the prefill/decode axis, tier-01 records one path per op |
 | the HF fuzz (`t_vs_hf_Qwen3.5-0.8B.py`) | the ultimate end-to-end check: live HF against our model, seeded, whole model |
 
 ## Tree
@@ -125,7 +134,7 @@ Sparse corruption below the histogram sensitivity and single-element
 faults off the boundary elements stay outside deterministic reach.
 
 Floors are measured and published inside the selftest, and the HF
-fuzz bounds whatever slips past every rung.
+fuzz bounds whatever slips past every tier.
 
 ## Asserts
 
