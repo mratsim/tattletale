@@ -58,8 +58,10 @@ proc emitSpan(m: Machine, d: var Driver, lo, hi: int32) =
     return
   d.pend = Piece(pos: 0, kind: pkSpan, lo: lo, hi: hi)
 
-proc emitStr(d: var Driver, s: string) =
-  ## Makes a materialized string the pending piece, or appends it to the capture sink.
+proc emitStr(d: var Driver, s: sink string) =
+  ## Makes a materialized string the pending piece, moving it out of the caller's value so
+  ## a runtime-built emit string is never copied, or appends it to the capture sink.
+  ## An empty string queues nothing.
   if s.len == 0:
     return
   doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
@@ -105,8 +107,11 @@ proc stepVerbatim(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
 proc stepEmit(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Evaluates the expression span, stringifies it, and hands the result on as the pending piece.
   template nd: Node = m.nodes[n]
-  let v = evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody)
-  emitStr(d, if v.kind == vkStr: v.s else: pyStr(v))
+  var v = evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody)
+  if v.kind == vkStr:
+    emitStr(d, move v.s)
+  else:
+    emitStr(d, pyStr(v))
   d.curNode = nd.succ
 
 proc stepIf(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =

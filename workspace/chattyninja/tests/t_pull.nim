@@ -263,4 +263,74 @@ when defined(nimAllocStats):
     echo "t_pull alloc: full pull render ", pullAllocs, " allocs, string render ", strAllocs,
         " allocs"
 
+  # Micro attribution over a 10-message for-loop context:
+  # a warm-up render per template stays uncounted, then `getAllocStats()` deltas measure
+  # the counted renders. DictGet lookup floors are measured in the same run.
+  # Every assert below is an exact equality against a value this binary just measured:
+  # - an emit-role render costs nothing beyond the loop machinery, its lookups included
+  # - an emit-content render costs exactly one lookup copy per emit, the accepted residual
+  # - a punctuator evaluation and the pending-piece move of an emit string cost 0
+  block allocMicro:
+    const msgCount = 10
+    let iters = 50
+
+    func msgVal(role, content: string): Value =
+      ## Builds one chat message carrying the two keys the templates read.
+      var d = DictVal()
+      dictSet(d, "role", strVal(role))
+      dictSet(d, "content", strVal(content))
+      dictVal(d)
+
+    var msgs = newSeq[Value]()
+    for i in 0 ..< msgCount:
+      msgs.add msgVal(if i mod 2 == 0: "user" else: "assistant",
+          "Message " & $i & ": please continue the conversation and stay on topic.")
+    var cd = DictVal()
+    dictSet(cd, "messages", seqVal(msgs))
+    let ctx = dictVal(cd)
+
+    # Lookup floors over one message, each warmed by one uncounted call:
+    # `role` strings are literal-backed so a lookup copies nothing, `content` strings are
+    # runtime-built so a lookup copies once.
+    let msg1 = ctx.d.dictGet("messages").xs.items[1]
+    discard msg1.d.dictGet("role")
+    discard msg1.d.dictGet("content")
+    let dgRole = allocsOf:
+      discard msg1.d.dictGet("role")
+    let dgContent = allocsOf:
+      discard msg1.d.dictGet("content")
+
+    template countRenders(src: string, n: int): int =
+      ## Warms one pull render uncounted, then totals `n` pull renders through `getAllocStats()` deltas.
+      let (nodes, tables) = parseTemplate(src)
+      let m = Machine(jinja: src, nodes: nodes)
+      let want = renderToString(src, ctx, 0.0)
+      doAssert renderAllPull(m, tables, ctx, 0.0) == want,
+          "the micro pull render differs from the string render for " & src
+      allocsOf:
+        for _ in 0 ..< n:
+          discard renderAllPull(m, tables, ctx, 0.0)
+
+    let loopOnly = countRenders("{% for m in messages %}x{% endfor %}", iters)
+    let roleRenders = countRenders("{% for m in messages %}{{ m.role }}{% endfor %}", iters)
+    let contentRenders = countRenders("{% for m in messages %}{{ m.content }}{% endfor %}", iters)
+    let bothSrc = "{% for m in messages %}{{ m.role }}: {{ m.content }}\n{% endfor %}"
+    let bothRenders = countRenders(bothSrc, iters)
+
+    doAssert roleRenders == loopOnly + iters * msgCount * dgRole,
+        "the emit-role render cost " & $(roleRenders - loopOnly) &
+        " allocs beyond the loop baseline"
+    doAssert contentRenders == loopOnly + iters * msgCount * dgContent,
+        "the emit-content render cost " & $(contentRenders - loopOnly) &
+        " allocs beyond the loop baseline"
+    doAssert bothRenders == loopOnly + iters * msgCount * (dgRole + dgContent),
+        "the two-emit render cost " & $(bothRenders - loopOnly) &
+        " allocs beyond the loop baseline"
+    doAssert (roleRenders - loopOnly) div iters <= msgCount and
+        (contentRenders - loopOnly) div iters <= msgCount,
+        "an emit cost more than the accepted one-lookup residual"
+    echo "t_pull alloc: emit-role ", roleRenders, ", emit-content ", contentRenders,
+        ", emit both ", bothRenders, ", loop baseline ", loopOnly,
+        " allocs over ", iters, " renders each"
+
 echo "t_pull: corpus row, window shapes, value and span drains, all byte-exact"

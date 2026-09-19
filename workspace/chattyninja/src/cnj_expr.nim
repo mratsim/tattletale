@@ -36,7 +36,8 @@ type
     lo, hi: int # span into Machine.jinja
     i: int64 # payload of the exInt token
     f: float64 # payload of the exFloat token
-    s: string # decoded string literal, or punctuator text
+    s: string # decoded string literal
+    p0, p1: char # punctuator bytes, `p1 == '\0'` for a one-byte punctuator
 
   Cx = object
     ## Walker cursor:
@@ -171,31 +172,32 @@ func lexString(s: openArray[char], i: var int, hi: int): ExTok =
   inc i
   ExTok(kind: exStr, lo: start, hi: i, s: decodeEscapes(s, body, endBody))
 
-func punctAt(s: openArray[char], i, hi: int): (string, int) =
-  ## Returns the longest punctuator matching at `i` and its byte length. `//`, `**`, `<=`, `>=`,
-  ## `==` and `!=` are lexed so they are reported as rejected constructs rather than as two tokens.
+func punctAt(s: openArray[char], i, hi: int): tuple[c0, c1: char, len: int] =
+  ## Returns the punctuator matching at `i` as its two bytes and its byte length.
+  ## `c1 == '\0'` marks a one-byte punctuator. `//`, `**`, `<=`, `>=`, `==` and `!=`
+  ## are lexed so they are reported as rejected constructs rather than as two tokens.
   if i + 1 < hi:
     case s[i]
     of '=':
-      if s[i + 1] == '=': return ("==", 2)
+      if s[i + 1] == '=': return ('=', '=', 2)
     of '!':
-      if s[i + 1] == '=': return ("!=", 2)
+      if s[i + 1] == '=': return ('!', '=', 2)
       raise err("unexpected `!` in an expression at byte " & $i)
     of '<':
-      if s[i + 1] == '=': return ("<=", 2)
+      if s[i + 1] == '=': return ('<', '=', 2)
     of '>':
-      if s[i + 1] == '=': return (">=", 2)
+      if s[i + 1] == '=': return ('>', '=', 2)
     of '/':
-      if s[i + 1] == '/': return ("//", 2)
+      if s[i + 1] == '/': return ('/', '/', 2)
     of '*':
-      if s[i + 1] == '*': return ("**", 2)
+      if s[i + 1] == '*': return ('*', '*', 2)
     else:
       discard
   case s[i]
   of '+', '-', '*', '/', '%', '~', '(', ')', '[', ']', '{', '}', ',', ':', '.', '|', '<', '>':
-    ($s[i], 1)
+    (s[i], '\0', 1)
   of '=':
-    ("=", 1)
+    ('=', '\0', 1)
   else:
     raise err("unexpected character '" & s[i] & "' in an expression at byte " & $i)
 
@@ -222,13 +224,16 @@ func advance(m: Machine, cx: var Cx) =
         inc i
       ExTok(kind: exName, lo: start, hi: i)
     else:
-      let (text, len) = punctAt(s, i, cx.stop)
+      let (c0, c1, len) = punctAt(s, i, cx.stop)
       inc i, len
-      ExTok(kind: exPunct, lo: i - len, hi: i, s: text)
+      ExTok(kind: exPunct, lo: i - len, hi: i, p0: c0, p1: c1)
   cx.pos = i
 
 func isPunct(cx: Cx, p: string): bool =
-  cx.tok.kind == exPunct and cx.tok.s == p
+  ## Reports whether the lookahead is the punctuator `p`, one or two bytes, matched byte against
+  ## byte so no string is built per comparison.
+  cx.tok.kind == exPunct and cx.tok.p0 == p[0] and
+    ((p.len == 1 and cx.tok.p1 == '\0') or (p.len == 2 and cx.tok.p1 == p[1]))
 
 func isWord(m: Machine, cx: Cx, w: string): bool =
   ## Reports whether the lookahead is the bare identifier `w`, so keywords are matched without
@@ -775,20 +780,75 @@ proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0,
   run: MacroRunner = nil): Value
 proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value
 
-func binPrec(op: string): int =
+type Op = enum
+  ## Infix operator an expression token spells, word operators and punctuator spellings alike.
+  ## `opNone` is a token that opens no infix, and is the field's default.
+  opNone
+  opAnd
+  opOr
+  opIn
+  opNotIn
+  opEq
+  opNe
+  opLt
+  opGt
+  opLe
+  opGe
+  opConcat
+  opAdd
+  opSub
+  opMul
+  opDiv
+  opFloorDiv
+  opMod
+  opPow
+
+const opSpelling: array[Op, string] = [
+  "", "and", "or", "in", "not in", "==", "!=", "<", ">", "<=", ">=", "~", "+", "-", "*",
+  "/", "//", "%", "**"
+]
+  ## Operator spellings for error text, indexed by `Op`. Error reporting is the only reader.
+
+func punctOp(c0, c1: char): Op =
+  ## Returns the infix operator the punctuator `(c0, c1)` spells, `opNone` when it is none.
+  ## A lone `=` is no infix in Jinja, so it yields `opNone` and the expression ends before it:
+  ## keyword arguments are detected in `argList` by `isPunct`, which never consults this map.
+  if c1 == '\0':
+    case c0
+    of '<': opLt
+    of '>': opGt
+    of '=': opNone
+    of '~': opConcat
+    of '+': opAdd
+    of '-': opSub
+    of '*': opMul
+    of '/': opDiv
+    of '%': opMod
+    else: opNone
+  else:
+    case c0
+    of '=': opEq
+    of '!': opNe
+    of '<': opLe
+    of '>': opGe
+    of '/': opFloorDiv
+    of '*': opPow
+    else: opNone
+
+func binPrec(op: Op): int =
   ## Returns the left binding power of an infix operator, 0 when `op` is not infix.
   ## Jinja orders operators ternary-lowest, then `or`, `and`, comparison and tests, `~`,
-  ## `+ -`, `* / // %`, `**`.
+  ## `+ -`, `* / // %`, `**`. A ternary binds loosest and never enters this table, because
+  ## `scanTernary` claims the ternary before precedence climbing runs.
   case op
-  of "if": 1
-  of "or": 2
-  of "and": 3
-  of "==", "!=", "<", ">=", "<=", ">", "in", "not in": 5
-  of "~": 6
-  of "+", "-": 7
-  of "*", "/", "//", "%": 8
-  of "**": 9
-  else: 0
+  of opOr: 2
+  of opAnd: 3
+  of opEq, opNe, opLt, opGt, opLe, opGe, opIn, opNotIn: 5
+  of opConcat: 6
+  of opAdd, opSub: 7
+  of opMul, opDiv, opFloorDiv, opMod: 8
+  of opPow: 9
+  of opNone: 0
 
 proc skipExpr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int) =
   ## Advances the cursor over an expression without evaluating it, which is how `and`, `or`
@@ -986,8 +1046,8 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
       else:
         v = bound
   of exPunct:
-    case cx.tok.s
-    of "(":
+    case cx.tok.p0
+    of '(':
       advance(m, cx)
       var parts = newSeq[Value]()
       var isTuple = false
@@ -1004,7 +1064,7 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
         raise err("parenthesised expression is not closed")
       advance(m, cx)
       v = if parts.len == 0: seqVal(parts) elif isTuple: seqVal(parts) else: parts[0]
-    of "[":
+    of '[':
       advance(m, cx)
       var parts = newSeq[Value]()
       while not isPunct(cx, "]"):
@@ -1019,7 +1079,7 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
         raise err("array literal is not closed")
       advance(m, cx)
       v = seqVal(parts)
-    of "{":
+    of '{':
       advance(m, cx)
       var dv = DictVal()
       while not isPunct(cx, "}"):
@@ -1041,7 +1101,8 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
       advance(m, cx)
       v = dictVal(dv)
     else:
-      raise err("unexpected `" & cx.tok.s & "` starting an expression at byte " & $cx.tok.lo)
+      let spelled = $cx.tok.p0 & (if cx.tok.p1 != '\0': $cx.tok.p1 else: "")
+      raise err("unexpected `" & spelled & "` starting an expression at byte " & $cx.tok.lo)
   postfix(m, t, d, cx, v)
 
 proc unary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
@@ -1063,11 +1124,11 @@ proc unary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
   else:
     primary(m, t, d, cx)
 
-func arith(op: string, a, b: Value): Value =
+func arith(op: Op, a, b: Value): Value =
   ## Combines two numbers, or two strings and two sequences under `+`. `%` follows Python's floor rule,
   ## where the result takes the sign of the divisor, so `-3 % 2` is `1`.
   case op
-  of "+":
+  of opAdd:
     if a.kind == vkInt and b.kind == vkInt:
       intVal(a.i + b.i)
     elif a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
@@ -1079,7 +1140,7 @@ func arith(op: string, a, b: Value): Value =
       seqVal(a.xs.items & b.xs.items)
     else:
       raise err("`+` cannot combine a " & $a.kind & " with a " & $b.kind)
-  of "-":
+  of opSub:
     if a.kind == vkInt and b.kind == vkInt:
       intVal(a.i - b.i)
     elif a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
@@ -1087,7 +1148,7 @@ func arith(op: string, a, b: Value): Value =
           (if b.kind == vkInt: float64 b.i else: b.f))
     else:
       raise err("`-` needs numbers")
-  of "%":
+  of opMod:
     if a.kind == vkInt and b.kind == vkInt:
       if b.i == 0:
         raise err("`%` needs a non-zero divisor")
@@ -1104,53 +1165,50 @@ func arith(op: string, a, b: Value): Value =
     else:
       raise err("`%` needs numbers")
   else:
-    raise err("unknown arithmetic `" & op & "`")
+    raise err("unknown arithmetic `" & opSpelling[op] & "`")
 
-func cmpOne(op: string, a, b: Value): Value =
+func cmpOne(op: Op, a, b: Value): Value =
   let r =
     case op
-    of "==": eqVal(a, b)
-    of "!=": not eqVal(a, b)
-    else:
-      let c = cmpVal(a, b)
-      case op
-      of "<": c < 0
-      of ">": c > 0
-      of "<=": c <= 0
-      of ">=": c >= 0
-      else: raise err("unknown comparison `" & op & "`")
+    of opEq: eqVal(a, b)
+    of opNe: not eqVal(a, b)
+    of opLt: cmpVal(a, b) < 0
+    of opGt: cmpVal(a, b) > 0
+    of opLe: cmpVal(a, b) <= 0
+    of opGe: cmpVal(a, b) >= 0
+    else: raise err("unknown comparison `" & opSpelling[op] & "`")
   boolVal(r)
 
-proc binOp(m: Machine, t: Tables, d: var Driver, cx: var Cx, lhs: Value, op: string): Value =
+proc binOp(m: Machine, t: Tables, d: var Driver, cx: var Cx, lhs: Value, op: Op): Value =
   ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand
   ## they do not evaluate. Every other infix evaluates both sides.
   case op
-  of "and":
+  of opAnd:
     if not cx.dry and not isTruthy(lhs):
       skipExpr(m, t, d, cx, 4)
       return lhs
     expr(m, t, d, cx, 4)
-  of "or":
+  of opOr:
     if not cx.dry and isTruthy(lhs):
       skipExpr(m, t, d, cx, 3)
       return lhs
     expr(m, t, d, cx, 3)
-  of "in", "not in":
+  of opIn, opNotIn:
     let rhs = expr(m, t, d, cx, 6)
     if cx.dry:
       undefinedVal()
     else:
       let r = containsVal(rhs, lhs)
-      boolVal(if op == "in": r else: not r)
-  of "~":
+      boolVal(if op == opIn: r else: not r)
+  of opConcat:
     let rhs = expr(m, t, d, cx, 7)
     if cx.dry: undefinedVal() else: strVal(pyStr(lhs) & pyStr(rhs))
-  of "+", "-", "%":
+  of opAdd, opSub, opMod:
     let rhs = expr(m, t, d, cx, binPrec(op) + 1)
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs)
-  of "*", "/", "//", "**":
+  of opMul, opDiv, opFloorDiv, opPow:
     skipExpr(m, t, d, cx, binPrec(op) + 1)
-    gapWhat("operator", op)
+    gapWhat("operator", opSpelling[op])
   else:
     let rhs = expr(m, t, d, cx, binPrec(op) + 1)
     if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs)
@@ -1250,26 +1308,26 @@ proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value
       return undefinedVal()
   var v = unary(m, t, d, cx)
   while true:
-    var op = ""
+    var op = opNone
     if cx.tok.kind == exName:
       if isWord(m, cx, "and"):
-        op = "and"
+        op = opAnd
       elif isWord(m, cx, "or"):
-        op = "or"
+        op = opOr
       elif isWord(m, cx, "in"):
-        op = "in"
+        op = opIn
       elif isWord(m, cx, "not"):
         let save = cx
         advance(m, cx)
         if isWord(m, cx, "in"):
-          op = "not in"
+          op = opNotIn
         else:
           cx = save
           break
       else:
         break
     elif cx.tok.kind == exPunct:
-      op = cx.tok.s
+      op = punctOp(cx.tok.p0, cx.tok.p1)
     let prec = binPrec(op)
     if prec == 0 or prec < minPrec:
       break

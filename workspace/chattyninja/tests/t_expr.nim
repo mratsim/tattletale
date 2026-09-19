@@ -87,6 +87,22 @@ doAssert render("'z' not in ['a', 'b']") == "True"
 doAssert render("'name' in people", withPeople) == "True", "`in` over a mapping tests keys"
 doAssert render("'sub' in 'substring'") == "True", "`in` over a string is a substring test"
 
+# `~` binds tighter than any comparison, so the concatenation feeds the comparison operand
+# rather than stringifying its result. Both groupings are locked, so a precedence swap
+# toward either binding trips one of the two asserts.
+doAssert render("1 == 1 ~ 'x'") == "False", "`~` binds tighter than `==`"
+doAssert render("(1 == 1) ~ 'x'") == "Truex", "parentheses give the comparison to `~`"
+
+# A lone `=` spells no infix in Jinja, so the expression must end before it and the unclosed
+# tail is reported instead of comparing. Keyword arguments are matched in argument lists, not here.
+block loneEqualsIsAnError:
+  var reported = ""
+  try:
+    discard render("1 = 2")
+  except CatchableError as e:
+    reported = e.msg
+  doAssert "trailing text" in reported, reported
+
 # `and` / `or` skip the operand they do not evaluate
 # ---------------------------------------------------------------------------
 
@@ -142,6 +158,16 @@ doAssert render("'東京' | tojson") == "\"東京\"", "tojson keeps non-ASCII ve
 doAssert renderStmt("{#- hello -#}\nA{{ name }}",
     ctx(("name", strVal("B")))) == "AB", "comment `-` markers strip the surrounding whitespace runs"
 doAssert render("people.tags | join('-')", withPeople) == "x-y"
+doAssert render("[1, 2] | join(x == '-')",
+    ctx(("x", seqVal(@[strVal("a"), strVal("b")])))) == "1False2",
+    "`==` inside a call argument list compares, it is not read as a keyword `=`"
+block loneEqualsInCallArgsIsAnError:
+  var reported = ""
+  try:
+    discard render("[1, 2] | join(1 = '-')")
+  except CatchableError as e:
+    reported = e.msg
+  doAssert reported.len > 0, "a lone `=` inside a call argument list must raise, not render"
 doAssert render("'ab' | upper") == "AB"
 doAssert render("'AB' | lower") == "ab"
 doAssert render("'abc' | capitalize") == "Abc"
