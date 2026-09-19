@@ -282,8 +282,8 @@ block filterBreachRepull:
   doAssert growAcc == growWant,
       "the growing-concat repull differs from the single-shot render, bytes lost or re-handed"
 
-# A container emit inside a macro body materializes into the capture sink,
-# and the captured string matches the string render.
+# A macro call as a whole emit streams its body's pieces through the caller's window,
+# and the streamed bytes match the string render.
 # ---------------------------------------------------------------------------
 block captureSinkScratch:
   let ctx = listCtx()
@@ -298,8 +298,8 @@ block captureSinkScratch:
   doAssert pullAll(m, tables, d) == want,
       "the capture-sink scratch emit differs from the string render"
 
-# A scratch breach inside a macro body unwinds through the macro runner's `finally`,
-# and after growth the repull from the same driver is byte-exact.
+# A scratch breach inside a streamed macro body leaves the driver inside the body,
+# and the repull re-runs the failing body step and finishes it, byte-exact overall.
 # ---------------------------------------------------------------------------
 block macroBreachRepull:
   let ctx = listCtx()
@@ -311,19 +311,33 @@ block macroBreachRepull:
   var d = newDriver(ctx, 0.0)
   var tiny = newSeq[char](16)
   attachScratch(d, tiny)
+  var acc = ""
+  var win = newSeq[char](1)
   var raised = false
   var message = ""
   try:
-    discard pullAll(m, tables, d)
+    while true:
+      let n = pull(m, tables, d, win)
+      if n == 0:
+        break
+      acc.add bytesOf(win, n)
   except ScratchError as e:
     raised = true
     message = e.msg
   doAssert raised, "the macro-body breach did not raise"
   doAssert "vkDict" in message, "the error did not name the value kind: " & message
+  doAssert acc == "[",
+      "the bytes held at the breach are not exactly the streamed body prefix"
 
   var grown = newSeq[char](4096)
   attachScratch(d, grown)
-  doAssert pullAll(m, tables, d) == want,
+  var rest = newSeq[char](64)
+  while true:
+    let n = pull(m, tables, d, rest)
+    if n == 0:
+      break
+    acc.add bytesOf(rest, n)
+  doAssert acc == want,
       "the repull after a macro-body breach differs from the single-shot render"
 
 # `tojson` with `ensure_ascii` exercises every escape shape, control characters included,

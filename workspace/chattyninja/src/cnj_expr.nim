@@ -36,7 +36,7 @@ type
     tok: ExTok
     dry: bool
     depth: int
-    run: MacroRunner
+    force: MacroForcer
 
   ArgKeyword = enum
     ## A keyword name a builtin reads out of an argument list, `akNone` the field's default:
@@ -59,11 +59,10 @@ type
   GlobalProc* = proc (m: Machine, args: seq[Arg], d: var Driver): Value {.nimcall.}
     ## A call to a template global, `namespace` and `dict` storing a keyword name as a dict key.
 
-  MacroRunner* = proc (m: Machine, t: Tables, d: var Driver, mc: MacroVal,
-      args: seq[Arg]): string {.nimcall.}
-    ## Runs one macro body to completion and returns the captured text.
-    ## The statement tier injects this runner so `cnj_engine` and `cnj_expr`
-    ## stay free of an import cycle.
+  MacroForcer* = proc (m: Machine, t: Tables, d: var Driver, mc: MacroVal,
+      args: seq[CallArg]): string {.nimcall.}
+    ## Runs one macro body to completion and returns the captured text. The statement tier
+    ## injects the forcer, so `cnj_engine` and `cnj_expr` stay free of an import cycle.
 
 # Lexer
 # ---------------------------------------------------------------------------
@@ -271,6 +270,21 @@ func argName*(m: Machine, a: Arg): openArray[char] =
   ## Returns an argument's keyword name as a view into the template text, `nameLo == noLink`
   ## marking a positional argument, which has no name to read.
   m.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
+
+proc forceCall(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value =
+  ## Returns `v` rendered to its macro output text. Every expression consumer other than
+  ## the emit step reads a pending macro call in this form.
+  if cx.force.isNil:
+    raise err("a macro call result was consumed where no macro forcer was supplied")
+  strVal(cx.force(m, t, d, v.pc.mc, v.pc.args))
+
+proc evalItem(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value =
+  ## Returns `v`, rendering a pending macro call to text for the value containers and operators
+  ## that read a plain value. A dry walk returns `v` unevaluated.
+  if not cx.dry and v.kind == vkCall:
+    forceCall(m, t, d, cx, v)
+  else:
+    v
 
 proc argKey(m: Machine, a: Arg): string =
   ## Returns the dict key one argument supplies to `namespace` or `dict`, a keyword-bound argument
@@ -808,7 +822,7 @@ func lookupNameById*(t: Tables, d: var Driver, id: int32): Value =
 # The walker
 # ---------------------------------------------------------------------------
 
-proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0, run: MacroRunner = nil): Value
+proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0, force: MacroForcer = nil): Value
 proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value
 
 type Op = enum
@@ -888,7 +902,7 @@ proc argList(m: Machine, t: Tables, d: var Driver, cx: var Cx): seq[Arg] =
         advance(m, cx)
       else:
         cx = save
-    let v = expr(m, t, d, cx, 1)
+    let v = evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
     result.add Arg(nameLo: nameLo, nameHi: nameHi, kw: kw, val: v)
     if isPunct(cx, ","):
       advance(m, cx)
@@ -904,6 +918,11 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value 
   ## Applies attr, subscript, call, filter and test chains, which bind tighter than any operator.
   var v = v
   while true:
+    # An operator reading the chained value renders a pending macro call first.
+    # A call keeps the natural not-callable error for the rendered text.
+    if v.kind == vkCall and (isPunct(cx, ".") or isPunct(cx, "[") or isPunct(cx, "|") or
+        isWord(m, cx, "is")):
+      v = forceCall(m, t, d, cx, v)
     if isPunct(cx, "."):
       advance(m, cx)
       if cx.tok.kind != exName:
@@ -962,9 +981,10 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value 
         if cx.dry:
           undefinedVal()
         elif v.kind == vkMacro:
-          if cx.run.isNil:
-            raise err("a macro was called where no macro body runner was supplied")
-          strVal(cx.run(m, t, d, v.mc, a))
+          var cargs = newSeq[CallArg](a.len)
+          for i, arg in a:
+            cargs[i] = CallArg(nameLo: arg.nameLo, nameHi: arg.nameHi, val: arg.val)
+          callVal(PendingCallVal(mc: v.mc, args: cargs))
         else:
           raise err("only a macro is callable, this is a " & $v.kind)
     elif isPunct(cx, "|"):
@@ -1064,7 +1084,7 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
       var parts = newSeq[Value]()
       var isTuple = false
       while not isPunct(cx, ")"):
-        parts.add expr(m, t, d, cx, 1)
+        parts.add evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
         if isPunct(cx, ","):
           isTuple = true
           advance(m, cx)
@@ -1080,7 +1100,7 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
       advance(m, cx)
       var parts = newSeq[Value]()
       while not isPunct(cx, "]"):
-        parts.add expr(m, t, d, cx, 1)
+        parts.add evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
         if isPunct(cx, ","):
           advance(m, cx)
           if isPunct(cx, "]"):
@@ -1095,11 +1115,11 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
       advance(m, cx)
       var dv = DictVal()
       while not isPunct(cx, "}"):
-        let k = expr(m, t, d, cx, 1)
+        let k = evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
         if not isPunct(cx, ":"):
           raise err("dict literal entry needs a `:`")
         advance(m, cx)
-        let val = expr(m, t, d, cx, 1)
+        let val = evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
         if not cx.dry:
           dv.dictSet(pyStr(k), val)
         if isPunct(cx, ","):
@@ -1121,12 +1141,12 @@ proc unary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
   ## Parses `not`, unary `-` and `+`, then a primary.
   if isWord(m, cx, "not"):
     advance(m, cx)
-    let v = unary(m, t, d, cx)
+    let v = evalItem(m, t, d, cx, unary(m, t, d, cx))
     return boolVal(if cx.dry: false else: not isTruthy(v))
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
     advance(m, cx)
-    let v = unary(m, t, d, cx)
+    let v = evalItem(m, t, d, cx, unary(m, t, d, cx))
     if cx.dry:
       return undefinedVal()
     case v.kind
@@ -1206,23 +1226,23 @@ proc binOp(m: Machine, t: Tables, d: var Driver, cx: var Cx, lhs: Value, op: Op)
       return lhs
     expr(m, t, d, cx, 3)
   of opIn, opNotIn:
-    let rhs = expr(m, t, d, cx, 6)
+    let rhs = evalItem(m, t, d, cx, expr(m, t, d, cx, 6))
     if cx.dry:
       undefinedVal()
     else:
       let r = containsVal(rhs, lhs)
       boolVal(if op == opIn: r else: not r)
   of opConcat:
-    let rhs = expr(m, t, d, cx, 7)
+    let rhs = evalItem(m, t, d, cx, expr(m, t, d, cx, 7))
     if cx.dry: undefinedVal() else: strVal(concatVals(d, lhs, rhs))
   of opAdd, opSub, opMod:
-    let rhs = expr(m, t, d, cx, binPrec(op) + 1)
+    let rhs = evalItem(m, t, d, cx, expr(m, t, d, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs)
   of opMul, opDiv, opFloorDiv, opPow:
     skipExpr(m, t, d, cx, binPrec(op) + 1)
     gapWhat("operator", opSpelling[op])
   else:
-    let rhs = expr(m, t, d, cx, binPrec(op) + 1)
+    let rhs = evalItem(m, t, d, cx, expr(m, t, d, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs)
 
 func ifWordAhead(m: Machine, at, stop: int): bool =
@@ -1311,11 +1331,11 @@ proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value
     if shape.isTernary:
       if cx.dry:
         return undefinedVal()
-      let cond = evalRange(m, t, d, shape.cLo, shape.cHi, cx.depth)
+      let cond = evalRange(m, t, d, shape.cLo, shape.cHi, cx.depth, cx.force)
       if isTruthy(cond):
-        return evalRange(m, t, d, headLo, shape.aHi, cx.depth)
+        return evalRange(m, t, d, headLo, shape.aHi, cx.depth, cx.force)
       if shape.hasElse:
-        return evalRange(m, t, d, shape.bLo, shape.bHi, cx.depth)
+        return evalRange(m, t, d, shape.bLo, shape.bHi, cx.depth, cx.force)
       return undefinedVal()
   var v = unary(m, t, d, cx)
   while true:
@@ -1342,22 +1362,28 @@ proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value
     let prec = binPrec(op)
     if prec == 0 or prec < minPrec:
       break
+    if v.kind == vkCall:
+      v = forceCall(m, t, d, cx, v)
     advance(m, cx)
     v = binOp(m, t, d, cx, v, op)
   if not cx.dry:
     dec cx.depth
   v
 
-proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0, run: MacroRunner = nil): Value =
-  ## Evaluates the expression held in `m.jinja[lo..<hi]` in its own cursor. `depth` seeds the nesting counter so a sub-span reached through
-  ## a ternary still counts toward `ExprDepthCap`, `run` carrying the macro runner so a nested call can still run.
-  var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth, run: run)
+proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0, force: MacroForcer = nil): Value =
+  ## Evaluates the expression held in `m.jinja[lo..<hi]` in its own cursor.
+  ## - `depth` seeds the nesting counter, so a sub-span reached through a ternary still counts toward `ExprDepthCap`
+  ## - `force` carries the macro forcer, so a nested call can still run
+  var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth, force: force)
   advance(m, cx)
   result = expr(m, t, d, cx, 1)
   if cx.tok.kind != exEof:
     raise err("expression has trailing text at byte " & $cx.tok.lo)
 
-proc evalSpan*(m: Machine, t: Tables, d: var Driver, lo, hi: int32, run: MacroRunner = nil): Value =
-  ## Evaluates the expression held in `m.jinja[lo..<hi]`, the entry every expression-bearing step uses. `run` is the macro body runner:
-  ## a step that can meet a macro call passes its own runner, a caller with no arena passing nil, which makes a macro call a reported gap.
-  evalRange(m, t, d, lo.int, hi.int, 0, run)
+proc evalSpan*(m: Machine, t: Tables, d: var Driver, lo, hi: int32, force: MacroForcer = nil): Value =
+  ## Evaluates the expression held in `m.jinja[lo..<hi]`, the entry every expression-bearing step uses.
+  ## Contract:
+  ## - `force` is the macro forcer, passed by every step that can meet a macro call
+  ## - a nil `force` makes a consumed macro call a reported gap
+  ## - a macro call that is a whole expression returns pending, for the emit step to stream
+  evalRange(m, t, d, lo.int, hi.int, 0, force)

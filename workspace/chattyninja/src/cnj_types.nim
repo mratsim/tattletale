@@ -198,28 +198,31 @@ func findName*(t: Tables, name: openArray[char]): int32 =
 
 type
   FrameKind* = enum
-    frFor, frCapture, frGeneration
+    frFor, frCapture, frGeneration, frMacro
 
   Frame* = object
     ## Driver frame, the only place re-entry is discriminated. `node` is the frame's identity,
     ## matched against the node being entered, nothing about resumption living in the node.
     node*: int32
+    scopeAt*: int
+      ## `scopes.len` at entry, the mark popped back to on close
     case kind*: FrameKind
     of frFor:
       loop*: LoopState
         ## cursor over the materialized iterable
-      scopeAt*: int
-        ## `scopes.len` at entry, the mark popped back to on close
       filterLo*, filterHi*: int32
         ## for-`if` clause span, `noLink` when absent
     of frCapture:
-      sink*: int
-        ## index into the driver's capture stack
       target*: int32
-        ## interned name to bind on close, `noLink` for a macro body
+        ## interned name to bind on close, never built while `nkSetBlock` is a declared gap
     of frGeneration:
       spanStart*: int
         ## root-output byte position at span entry
+    of frMacro:
+      pc*: int32
+        ## body node the render enters next
+      retNode*: int32
+        ## node control returns to once the body ends
 
   Binding* = object
     ## One scope entry:
@@ -266,8 +269,6 @@ type
       ## scope 0 is the render context. For-frames push and pop above it
     root*: Value
       ## the render context dict (`messages`, `tools`, `kwargs`), the outermost lookup scope
-    sinks*: seq[string]
-      ## capture stack. Empty means output goes to the root stream
     spans*: seq[tuple[start, stop: int]]
       ## generation spans in root-output byte coordinates
     clock*: float64

@@ -120,8 +120,10 @@ proc addRune*(sb: var Cursor, r: Rune) =
 type
   ValueKind* = enum
     ## Jinja value tiers the corpus reaches, float carried for JSON fidelity only,
-    ## no template in the corpus doing float arithmetic
-    vkUndefined, vkNone, vkBool, vkInt, vkFloat, vkStr, vkSeq, vkDict, vkNs, vkLoop, vkMacro
+    ## no template in the corpus doing float arithmetic, `vkCall` holding a macro call
+    ## whose body has not run
+    vkUndefined, vkNone, vkBool, vkInt, vkFloat, vkStr, vkSeq, vkDict, vkNs, vkLoop, vkMacro,
+    vkCall
 
   SeqVal* = ref object
     ## Shared sequence of values, the `vkSeq` payload.
@@ -138,6 +140,21 @@ type
     ## and the `loop` value bound in the loop scope, both readers seeing one cursor.
     items*: seq[Value]
     idx*: int
+
+  CallArg* = object
+    ## One macro call argument, keyword-bound when `nameLo` is not `noLink`.
+    nameLo*, nameHi*: int32
+      ## keyword name span into the template text, `noLink` in `nameLo` for a positional argument
+    val*: Value
+
+  PendingCallVal* = ref object
+    ## A macro call whose body has not run. Holds the bound macro plus its evaluated arguments.
+    ## The emit step streams the body into the drain window. An expression consumer renders
+    ## the body to completion and reads the text.
+    mc*: MacroVal
+      ## the bound macro
+    args*: seq[CallArg]
+      ## evaluated arguments in call order
 
   MacroVal* = ref object
     ## A bound macro. `node` is the `nkMacroDef` arena index and the body's terminators land on it, so a call detects its end by arriving
@@ -158,6 +175,7 @@ type
     of vkDict, vkNs: d*: DictVal
     of vkLoop: lp*: LoopState
     of vkMacro: mc*: MacroVal
+    of vkCall: pc*: PendingCallVal
 
   JsonOpts* = object
     ## `tojson` knobs the corpus passes, `ensure_ascii` and `separators`.
@@ -184,6 +202,7 @@ func dictVal*(d: DictVal): Value = Value(kind: vkDict, d: d)
 func nsVal*(d: DictVal): Value = Value(kind: vkNs, d: d)
 func loopVal*(lp: LoopState): Value = Value(kind: vkLoop, lp: lp)
 func macroVal*(mc: MacroVal): Value = Value(kind: vkMacro, mc: mc)
+func callVal*(pc: PendingCallVal): Value = Value(kind: vkCall, pc: pc)
 
 func codepointVals*(s: string): seq[Value] =
   ## Returns one single-codepoint string value per codepoint of `s`, in order.
@@ -204,6 +223,7 @@ func isTruthy*(v: Value): bool =
   of vkDict, vkNs: v.d.keys.len != 0
   of vkLoop: v.lp.items.len != 0
   of vkMacro: true
+  of vkCall: raise err("a macro call result must be rendered before a truthiness test")
 
 func dictGet*(d: DictVal, key: openArray[char]): Value =
   ## Returns the value under `key`, undefined when absent. Absence is a value, never an error:
@@ -255,6 +275,7 @@ func eqVal*(a, b: Value): bool =
     true
   of vkLoop: a.lp == b.lp
   of vkMacro: a.mc == b.mc
+  of vkCall: raise err("a macro call result must be rendered before an equality test")
   of vkUndefined, vkBool, vkInt, vkFloat: false
 
 func cmpVal*(a, b: Value): int =
@@ -327,6 +348,7 @@ proc pyStrInto*(v: Value, sb: var Cursor) =
   of vkFloat: sb.addFloat v.f
   of vkStr: sb.add v.s
   of vkSeq, vkDict, vkNs, vkLoop, vkMacro: pyReprInto(v, sb)
+  of vkCall: raise err("a macro call result must be rendered before stringification")
 
 func reprQuoted(sb: var Cursor, s: string) =
   ## Writes Python's single-quoted repr of `s`, the form container reprs use for keys
@@ -594,6 +616,8 @@ proc serDispatch(js: var Ser) =
     js.blen = c.len
     js.bpos = 0
     serFinish(js)
+  of vkCall:
+    raise err("a macro call result must be rendered before serialization")
   of vkSeq:
     if v.xs.items.len == 0:
       serQueue(js, "[]")

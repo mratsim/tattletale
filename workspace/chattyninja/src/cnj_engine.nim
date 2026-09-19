@@ -26,61 +26,39 @@ type
   Step* = proc (m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.}
     ## One construct's step. Writes only through `d`, always leaving `d.curNode` on the node control enters next.
 
-proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Arg]): string
-  ## Runs one macro body to completion and returns the captured text.
-  ## Each step hands this runner to the expression tier as the macro runner,
-  ## and the runner is carried as a parameter so the compiled artifact stays read-only.
-  ## - a `Machine` field would hold mutable state in the read-only artifact
-  ## - `cnj_engine` and `cnj_expr` cannot import each other
+proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[CallArg]): string
+  ## Runs one macro body to completion and returns the captured text, the macro forcer
+  ## the expression tier receives. Carried as a parameter so the compiled artifact
+  ## stays read-only and `cnj_engine` and `cnj_expr` stay free of an import cycle.
+
+proc startMacro(m: Machine, t: Tables, d: var Driver, call: PendingCallVal, retNode: int32)
+  ## Opens a macro frame and enters the body, the body's output pieces draining through
+  ## the caller's window until the frame closes on the definition node.
 
 # Output
 # ---------------------------------------------------------------------------
 
 proc emitSpan(m: Machine, d: var Driver, lo, hi: int32) =
-  ## Makes a template-text span the pending piece, or appends it to the capture sink when one is open.
+  ## Makes a template-text span the pending piece.
   if hi <= lo:
     return
   # One piece is pending at a time, drained before the next dispatch, so a second
   # piece here would silently drop the first one's bytes.
   doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
-  if d.sinks.len > 0:
-    for i in lo ..< hi:
-      d.sinks[^1].add m.jinja[i]
-    return
   d.pend = Piece(pos: 0, kind: pkSpan, lo: lo, hi: hi)
 
 proc emitStr(d: var Driver, s: sink string) =
-  ## Makes a materialized string the pending piece, moving it out of the caller's value so a runtime-built emit string is never copied,
-  ## or appends it to the capture sink, an empty string queuing nothing.
+  ## Makes a materialized string the pending piece, moving it out of the caller's value so
+  ## a runtime-built emit string is never copied, an empty string queuing nothing.
   if s.len == 0:
     return
   doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
-  if d.sinks.len > 0:
-    d.sinks[^1].add s
-    return
   d.pend = Piece(pos: 0, kind: pkStr, s: s)
-
-proc emitScratch(d: var Driver, n: int) =
-  ## Makes scratch[0 ..< n] the pending piece, or appends the bytes to the capture sink when one is open, draining straight into the caller
-  ## buffer with no intermediate string, scratch bytes staying untouched until the drain.
-  if n == 0:
-    return
-  doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
-  if d.sinks.len > 0:
-    let at = d.sinks[^1].len
-    d.sinks[^1].setLen(at + n)
-    copyMem(addr d.sinks[^1][at], d.scratch, n)
-    return
-  d.pend = Piece(pos: 0, kind: pkScratch, shi: int32 n)
 
 proc emitValue(d: var Driver, v: Value) =
   ## Queues a derived value's rendering as the lazy piece, the serializer in `d.lazy`
   ## draining into the caller's window across pull calls, byte-exact with `pyStr`.
-  ## With a capture sink open, the rendering materializes into the sink instead.
   doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
-  if d.sinks.len > 0:
-    d.sinks[^1].add pyStr(v)
-    return
   serReset(d.lazy, v, smStr)
   d.pend = Piece(kind: pkLazy)
 
@@ -119,9 +97,14 @@ proc stepVerbatim(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   d.curNode = nd.succ
 
 proc stepEmit(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
-  ## Evaluates the expression span, stringifies it, and hands the result on as the pending piece.
+  ## Evaluates the expression span and hands the result on as the pending piece, or enters
+  ## a whole-expression macro call's body instead, the body's output pieces draining
+  ## through the caller's window until the frame closes.
   template nd: Node = m.nodes[n]
-  var v = evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody)
+  var v = evalSpan(m, t, d, nd.lo, nd.hi, forceMacro)
+  if v.kind == vkCall:
+    startMacro(m, t, d, v.pc, nd.succ)
+    return
   if v.kind == vkStr:
     emitStr(d, move v.s)
   else:
@@ -131,7 +114,7 @@ proc stepEmit(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
 proc stepIf(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Chooses a branch once, branch bodies terminating past the chain, so no frame exists for it.
   template nd: Node = m.nodes[n]
-  let v = evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody)
+  let v = evalSpan(m, t, d, nd.lo, nd.hi, forceMacro)
   if isTruthy(v):
     d.curNode = if nd.child == noLink: nd.succ else: nd.child
   elif nd.alt != noLink:
@@ -192,7 +175,7 @@ proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
     try:
       bindTargets(m, t, d, n, items[idx])
       if nd.filterLo != noLink:
-        let evaluated = evalSpan(m, t, d, nd.filterLo, nd.filterHi, runMacroBody)
+        let evaluated = evalSpan(m, t, d, nd.filterLo, nd.filterHi, forceMacro)
         keep = isTruthy(evaluated)
     except CatchableError:
       dec d.frames[fi].loop.idx
@@ -208,7 +191,7 @@ proc stepFor(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   if d.frames.len > 0 and d.frames[^1].kind == frFor and d.frames[^1].node == n:
     advanceFor(m, t, d, n)
     return
-  let items = materialize(evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody))
+  let items = materialize(evalSpan(m, t, d, nd.lo, nd.hi, forceMacro))
   if items.len == 0:
     d.curNode = nd.succ
     return
@@ -225,7 +208,7 @@ proc stepSet(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Single-target `{% set %}`, the target carried as an interned name id in the child slot,
   ## emitting nothing, the pending piece untouched.
   template nd: Node = m.nodes[n]
-  d.bindName(nd.child, evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody))
+  d.bindName(nd.child, evalSpan(m, t, d, nd.lo, nd.hi, forceMacro))
   d.curNode = nd.succ
 
 proc gap(kindName, corpusSite: string): void {.noreturn.} =
@@ -247,7 +230,7 @@ proc stepSetNs(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   if ns.kind != vkNs:
     raise err("`" & t.names[nd.target] & "` is not a namespace, so it has no `" &
         t.names[nd.field] & "` to set")
-  dictSet(ns.d, t.names[nd.field], evalSpan(m, t, d, nd.lo, nd.hi, runMacroBody))
+  dictSet(ns.d, t.names[nd.field], evalSpan(m, t, d, nd.lo, nd.hi, forceMacro))
   d.curNode = nd.succ
 
 proc stepSetBlock(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
@@ -261,9 +244,16 @@ proc stepGeneration(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} 
       "8 recorded rows carrying codepoint spans")
 
 proc stepMacroDef(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
-  ## Binds a macro value and emits nothing, the body never running here. A macro's output is
-  ## a string value, so only a call can run it, and a call runs it to completion.
+  ## Binds a macro value and emits nothing, the body never running here. A macro frame
+  ## arriving back on the definition node closes instead, the body's output pieces drained
+  ## through the caller's window, control continuing at the frame's return node.
   template nd: Node = m.nodes[n]
+  if d.frames.len > 0 and d.frames[^1].kind == frMacro and d.frames[^1].node == n:
+    d.scopes.setLen(d.frames[^1].scopeAt)
+    d.curNode = d.frames[^1].retNode
+    d.frames.setLen(d.frames.len - 1)
+    dec d.macroDepth
+    return
   d.bindName(nd.macroName, macroVal(
       MacroVal(name: nd.macroName, body: nd.child, node: n)))
   d.curNode = nd.succ
@@ -275,7 +265,7 @@ const
   ]
     ## Dispatch table, total over `NodeKind`, a new kind without a step a compile error.
 
-proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Arg]) =
+proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[CallArg]) =
   ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`,
   ## each parameter carrying its interned name id and default expression span in the node tail.
   ##
@@ -295,7 +285,8 @@ proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Arg
       break
     if not bound:
       for a in args:
-        if a.nameLo != noLink and argName(m, a) == t.names[nd.paramNameAt(k)]:
+        if a.nameLo != noLink and
+            m.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1) == t.names[nd.paramNameAt(k)]:
           val = a.val
           bound = true
           break
@@ -303,44 +294,80 @@ proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Arg
       if nd.paramDefLoAt(k) == noLink:
         val = undefinedVal()
       else:
-        val = evalSpan(m, t, d, nd.paramDefLoAt(k), nd.paramDefHiAt(k), runMacroBody)
+        val = evalSpan(m, t, d, nd.paramDefLoAt(k), nd.paramDefHiAt(k), forceMacro)
     d.bindName(nd.paramNameAt(k), val)
 
-proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Arg]): string =
-  ## Statement tier side of the macro runner. A macro body's output is a string value,
-  ## so the call runs the body to completion into a capture sink, never yielding a piece.
+proc capturePend(m: Machine, d: var Driver, outp: var string) =
+  ## Appends the pending piece's bytes to `outp` and retires the piece, the capture form
+  ## of a forced macro body whose output never reaches the caller's window.
+  case d.pend.kind
+  of pkNone:
+    discard
+  of pkSpan:
+    let at = outp.len
+    let n = int(d.pend.hi - d.pend.lo) - d.pend.pos
+    outp.setLen(at + n)
+    copyMem(addr outp[at], unsafeAddr m.jinja[int d.pend.lo + d.pend.pos], n)
+    d.pend = Piece(kind: pkNone)
+  of pkStr:
+    outp.add d.pend.s[d.pend.pos ..< d.pend.s.len]
+    d.pend = Piece(kind: pkNone)
+  of pkScratch:
+    let at = outp.len
+    let n = d.pend.shi.int - d.pend.pos
+    outp.setLen(at + n)
+    copyMem(addr outp[at], unsafeAddr d.scratch[d.pend.pos], n)
+    d.pend = Piece(kind: pkNone)
+  of pkLazy:
+    var buf: array[256, char]
+    while true:
+      let n = pullSer(d.lazy, buf)
+      if n == 0:
+        break
+      let at = outp.len
+      outp.setLen(at + n)
+      copyMem(addr outp[at], addr buf[0], n)
+    d.pend = Piece(kind: pkNone)
+
+proc startMacro(m: Machine, t: Tables, d: var Driver, call: PendingCallVal, retNode: int32) =
+  ## Opens a macro frame and enters the body.
   ## Contract:
-  ## - control state is driver-owned throughout, restored in a `finally`, so a raise
-  ##   inside the body leaves the caller's scopes, sinks, frames, program counter
-  ##   and depth untouched
-  ## - truncating the frame stack discards any for-frame a failed body left behind, so
-  ##   a repull never re-enters a dead loop
+  ## - the body's output pieces drain through the caller's window until the frame closes on the definition node
   ## - depth is capped, and a breach raises
   if d.macroDepth >= MacroDepthCap:
     raise err("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
-        t.names[mc.name] & "`")
+        t.names[call.mc.name] & "`")
   inc d.macroDepth
-  let scopeAt = d.scopes.len
-  let sinkAt = d.sinks.len
-  let framesAt = d.frames.len
-  let savedNode = d.curNode
   d.scopes.add @[]
-  d.sinks.add ""
-  try:
-    bindMacroArgs(m, t, d, mc.node, args)
-    var node = mc.body
-    while node != mc.node and node != noLink:
-      steps[m.nodes[node].kind](m, t, d, node)
-      node = d.curNode
-    result = d.sinks[sinkAt]
-  finally:
-    d.sinks.setLen(sinkAt)
-    d.scopes.setLen(scopeAt)
-    d.frames.setLen(framesAt)
-    d.curNode = savedNode
-    dec d.macroDepth
+  bindMacroArgs(m, t, d, call.mc.node, call.args)
+  d.frames.add Frame(node: call.mc.node, kind: frMacro, pc: call.mc.body,
+      retNode: retNode, scopeAt: d.scopes.len)
+  d.curNode = call.mc.body
 
-
+proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[CallArg]): string =
+  ## Statement tier side of the macro forcer.
+  ## Contract:
+  ## - the body runs on a copy of the driver, so the caller's scopes, frames, program counter,
+  ##   depth and pending piece are untouched by construction, and a raise inside the body
+  ##   abandons the copy wholesale
+  ## - the capture is transient, the copy discarded once its pieces drain into the result, shared dict writes staying visible
+  ## - depth is capped against the inherited depth, so the cap chains across nested forces, and a breach raises
+  doAssert d.pend.kind == pkNone,
+      "a macro body was forced while the driver still held a pending piece"
+  if d.macroDepth >= MacroDepthCap:
+    raise err("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
+        t.names[mc.name] & "`")
+  var d2 = d
+  inc d2.macroDepth
+  d2.scopes.add @[]
+  bindMacroArgs(m, t, d2, mc.node, args)
+  d2.curNode = mc.body
+  var node = mc.body
+  while node != mc.node and node != noLink:
+    steps[m.nodes[node].kind](m, t, d2, node)
+    node = d2.curNode
+    while d2.pend.kind != pkNone:
+      capturePend(m, d2, result)
 
 
 # Driver
