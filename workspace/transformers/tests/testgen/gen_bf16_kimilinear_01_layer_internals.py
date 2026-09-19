@@ -16,7 +16,7 @@ No Qwen3 analog exists to inherit:
 - the f32 log decay g and beta derive externally through the low-rank
   gate weights, the kernels feed directly
 
-Consumed by tests/q_bf16/t_bf16_kimi_01_layer_internals.nim, the suite
+Consumed by tests/q_bf16/t_bf16_kimilinear_01_layer_internals.nim, the suite
 computing the mixer forward from the bare hidden input.
 
 Emitted under tests/fixtures/bf16-01-layer-internals/Kimi-Linear-48B-A3B-Instruct-layer-0/:
@@ -62,7 +62,7 @@ Recording environment:
 
 Run from the worktree root, twice for byte determinism, PYTHONPATH carrying the branch worktree src:
 
-  PYTHONPATH=<kimi-linear-worktree>/src uv run python workspace/transformers/tests/testgen/gen_bf16_kimi_01_layer_internals.py
+  PYTHONPATH=<kimi-linear-worktree>/src uv run python workspace/transformers/tests/testgen/gen_bf16_kimilinear_01_layer_internals.py
 """
 import argparse
 import json
@@ -116,7 +116,7 @@ REFERENCE_NOTE = "branch worktree, torch fallback kernels"
 
 if BRANCH_MARKER not in kda_ref.__file__:
     raise SystemExit(
-        "[gen_bf16_kimi_01_layer_internals] the imported kimi_linear module resolves to "
+        "[gen_bf16_kimilinear_01_layer_internals] the imported kimi_linear module resolves to "
         f"{kda_ref.__file__}, not inside the {BRANCH_MARKER} worktree. Set "
         "PYTHONPATH to the branch worktree src, never to site-packages")
 
@@ -130,7 +130,7 @@ def branch_head() -> str:
     head = out.stdout.strip()
     if not head.startswith(REFERENCE_COMMIT):
         raise SystemExit(
-            f"[gen_bf16_kimi_01_layer_internals] branch worktree HEAD {head} does not "
+            f"[gen_bf16_kimilinear_01_layer_internals] branch worktree HEAD {head} does not "
             f"match the recorded reference commit {REFERENCE_COMMIT}")
     return head
 
@@ -188,7 +188,7 @@ def vm_page_size() -> int:
     for line in out.stdout.splitlines():
         if "page size of" in line:
             return int(line.split("page size of")[1].split()[0])
-    raise SystemExit("[gen_bf16_kimi_01_layer_internals] vm_stat gave no page size line")
+    raise SystemExit("[gen_bf16_kimilinear_01_layer_internals] vm_stat gave no page size line")
 
 
 def free_bytes() -> int:
@@ -199,7 +199,7 @@ def free_bytes() -> int:
         if line.startswith("Pages free:"):
             pages = int(line.split()[2].rstrip("."))
             return pages * page
-    raise SystemExit("[gen_bf16_kimi_01_layer_internals] vm_stat gave no 'Pages free' line")
+    raise SystemExit("[gen_bf16_kimilinear_01_layer_internals] vm_stat gave no 'Pages free' line")
 
 
 def ancestor_pids() -> set:
@@ -225,7 +225,7 @@ def check_ram() -> None:
     free = free_bytes()
     if free < MIN_FREE_BYTES:
         raise SystemExit(
-            f"[gen_bf16_kimi_01_layer_internals] free memory {free / 1024 ** 3:.1f} GiB below "
+            f"[gen_bf16_kimilinear_01_layer_internals] free memory {free / 1024 ** 3:.1f} GiB below "
             f"the {MIN_FREE_BYTES / 1024 ** 3:.0f} GiB floor, stop and retry when idle")
     out = subprocess.run(
         ["pgrep", "-f", r"python.*(torch|hf)"], capture_output=True, text=True)
@@ -233,7 +233,7 @@ def check_ram() -> None:
     stray = sorted(found - ancestor_pids())
     if stray:
         raise SystemExit(
-            f"[gen_bf16_kimi_01_layer_internals] other python/torch processes hold RAM: {stray}. "
+            f"[gen_bf16_kimilinear_01_layer_internals] other python/torch processes hold RAM: {stray}. "
             "Stop and retry when idle")
 
 
@@ -242,7 +242,7 @@ def shard_of(model_dir: str, key: str) -> str:
     with open(os.path.join(model_dir, "model.safetensors.index.json")) as f:
         weight_map = json.load(f)["weight_map"]
     if key not in weight_map:
-        raise SystemExit(f"[gen_bf16_kimi_01_layer_internals] key {key} missing from the weight map")
+        raise SystemExit(f"[gen_bf16_kimilinear_01_layer_internals] key {key} missing from the weight map")
     return weight_map[key]
 
 
@@ -311,13 +311,13 @@ def selfcheck_inputs(g: torch.Tensor, beta: torch.Tensor, label: str) -> None:
     gmax = g.max().item()
     if gmax > 0.0:
         raise SystemExit(
-            f"[gen_bf16_kimi_01_layer_internals] {label}: log decay max {gmax} is positive, "
+            f"[gen_bf16_kimilinear_01_layer_internals] {label}: log decay max {gmax} is positive, "
             "the input contract is violated")
     bmin = beta.min().item()
     bmax = beta.max().item()
     if not (0.0 < bmin and bmax < 1.0):
         raise SystemExit(
-            f"[gen_bf16_kimi_01_layer_internals] {label}: beta range ({bmin}, {bmax}) "
+            f"[gen_bf16_kimilinear_01_layer_internals] {label}: beta range ({bmin}, {bmax}) "
             "leaves the open unit interval")
 
 
@@ -328,11 +328,11 @@ def selfcheck_pair(o_rec, s_rec, o_chk, s_chk, label: str) -> dict:
     s_max = s_rec.abs().max().item()
     if s_diff > DRIFT_BAND_STATE:
         raise SystemExit(
-            f"[gen_bf16_kimi_01_layer_internals] {label}: recurrent-vs-chunked state drift "
+            f"[gen_bf16_kimilinear_01_layer_internals] {label}: recurrent-vs-chunked state drift "
             f"{s_diff:.3e} passes the {DRIFT_BAND_STATE:.1e} band")
     if o_diff > DRIFT_BAND_OUTPUT:
         raise SystemExit(
-            f"[gen_bf16_kimi_01_layer_internals] {label}: recurrent-vs-chunked output drift "
+            f"[gen_bf16_kimilinear_01_layer_internals] {label}: recurrent-vs-chunked output drift "
             f"{o_diff:.3e} passes the {DRIFT_BAND_OUTPUT:.1e} band")
     return {
         "output_drift": o_diff,
@@ -488,10 +488,10 @@ def main() -> None:
     branch_head()
     os.makedirs(FIXTURE_DIR, exist_ok=True)
     generate_kda_prefill_fixture()
-    print(f"[gen_bf16_kimi_01_layer_internals] torch {torch.__version__}")
-    print(f"[gen_bf16_kimi_01_layer_internals] reference {REFERENCE_BRANCH} "
+    print(f"[gen_bf16_kimilinear_01_layer_internals] torch {torch.__version__}")
+    print(f"[gen_bf16_kimilinear_01_layer_internals] reference {REFERENCE_BRANCH} "
           f"{REFERENCE_COMMIT} ({REFERENCE_NOTE})")
-    print(f"[gen_bf16_kimi_01_layer_internals] wrote {FIXTURE_ROOT}")
+    print(f"[gen_bf16_kimilinear_01_layer_internals] wrote {FIXTURE_ROOT}")
 
 
 if __name__ == "__main__":

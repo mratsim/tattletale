@@ -20,7 +20,7 @@
 ##
 ## Run:
 ##   nim cpp -r --hints:off --warnings:off --passC:"-std=c++20" \
-##     --outdir:build/wip --nimcache:nimcache/wip workspace/transformers/tests/q_bf16/t_bf16_kimi_01_layer_internals.nim
+##     --outdir:build/wip --nimcache:nimcache/wip workspace/transformers/tests/q_bf16/t_bf16_kimilinear_01_layer_internals.nim
 
 import
   std/os,

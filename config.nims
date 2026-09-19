@@ -279,10 +279,10 @@ task test_tf_bf16_glm47flash_01_layer_internals, "Suite: GLM-4.7-Flash decoder l
   runTransformerSuite("q_bf16", "t_bf16_glm47flash_01_layer_internals.nim")
 task test_tf_bf16_moonlight_01_layer_internals, "Suite: Moonlight decoder layer per-op fixtures, routed block and router":
   runTransformerSuite("q_bf16", "t_bf16_moonlight_01_layer_internals.nim")
-task test_tf_bf16_kimi_01_layer_internals, "Suite: Kimi layer-0 KDA kernel-boundary replay against the single-file fixture":
-  runTransformerSuite("q_bf16", "t_bf16_kimi_01_layer_internals.nim")
-task test_tf_bf16_kimi_04_greedy_text_generation, "Suite: Kimi-Linear greedy text generation, 3 chains x 32 steps vs fixtures":
-  runTransformerSuite("q_bf16", "t_bf16_kimi_04_greedy_text_generation.nim")
+task test_tf_bf16_kimilinear_01_layer_internals, "Suite: Kimi layer-0 KDA kernel-boundary replay against the single-file fixture":
+  runTransformerSuite("q_bf16", "t_bf16_kimilinear_01_layer_internals.nim")
+task test_tf_bf16_kimilinear_04_greedy_text_generation, "Suite: Kimi-Linear greedy text generation, 3 chains x 32 steps vs fixtures":
+  runTransformerSuite("q_bf16", "t_bf16_kimilinear_04_greedy_text_generation.nim")
 task test_tf_bf16_ling3_05_coherence, "Suite: Ling-3.0-tiny fixture-free coherence, answer-position ranking + greedy chain":
   runTransformerSuite("q_bf16", "t_bf16_ling3_05_coherence.nim")
 task test_tf_bf16_glm47flash_03_full_forward_to_logits, "Suite: GLM-4.7-Flash full forward to logits, 47 layers + final logits vs fixtures":
@@ -360,8 +360,8 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("q_bf16", "t_bf16_glm47flash_03_full_forward_to_logits.nim")])
   of "kimilinear":
     runFamily(@[
-      ("q_bf16", "t_bf16_kimi_01_layer_internals.nim"),
-      ("q_bf16", "t_bf16_kimi_04_greedy_text_generation.nim")])
+      ("q_bf16", "t_bf16_kimilinear_01_layer_internals.nim"),
+      ("q_bf16", "t_bf16_kimilinear_04_greedy_text_generation.nim")])
   of "ling3":
     runFamily(@[
       ("q_bf16", "t_bf16_ling3_05_coherence.nim")])
@@ -374,7 +374,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("q_bf16", "t_bf16_moonlight_01_layer_internals.nim")])
   of "kda":
     runFamily(@[
-      ("q_bf16", "t_bf16_kimi_01_layer_internals.nim")])
+      ("q_bf16", "t_bf16_kimilinear_01_layer_internals.nim")])
   of "kvcache":
     runFamily(@[
       ("kvcache", "test_kvcache.nim"),

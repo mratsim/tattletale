@@ -13,7 +13,7 @@
 ## - the bf16-04 greedy-text-generation fixture dir.
 ## Run:
 ##   nim cpp -r --hints:off --warnings:off --passC:"-std=c++20" \
-##     --outdir:build/wip --nimcache:nimcache/wip workspace/transformers/tests/q_bf16/t_bf16_kimi_04_greedy_text_generation.nim
+##     --outdir:build/wip --nimcache:nimcache/wip workspace/transformers/tests/q_bf16/t_bf16_kimilinear_04_greedy_text_generation.nim
 
 import
   std/os,
