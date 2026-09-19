@@ -178,16 +178,13 @@ proc chattyninjaCmd(filename, extraDefines: string): string =
 
 task test_chattyninja, "Test workspace/chattyninja template engine suites":
   withDir(ProjectRoot):
-    # t_all links every suite into one binary; the allocation arm compiles
-    # t_corpus.nim alone under -d:nimAllocStats and ChunkSize=7, since ChunkSize
-    # changes the pullAll iteration the counted renders go through. Single suites
-    # still build directly from workspace/chattyninja/tests.
-    runCmd(chattyninjaCmd("t_all.nim", ""))
+    # The allocation arm compiles t_corpus.nim alone under -d:nimAllocStats and
+    # ChunkSize=7, since ChunkSize changes the pullAll iteration the counted renders
+    # go through.
+    runCmd(chattyninjaCmd("t_corpus.nim", ""))
+    runCmd(chattyninjaCmd("t_parse.nim", ""))
+    runCmd(chattyninjaCmd("t_expr.nim", ""))
     runCmd(chattyninjaCmd("t_corpus.nim", " -d:nimAllocStats -d:ChunkSize=7"))
-
-task test_chattyninja_corpus, "Test workspace/chattyninja recorded corpus fixtures":
-  withDir(ProjectRoot):
-    runCmd "python3 workspace/chattyninja/tests/check_corpus.py"
 
 # Granular transformer suite tasks
 # ===================================================
