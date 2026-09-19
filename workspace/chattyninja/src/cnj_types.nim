@@ -6,11 +6,11 @@
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built side tables, and the render
 # driver. See cnj_engine.nim for the dispatch table and the `items` pull interface.
 
-import cnj_values
+import jinja_data_model
 import workspace/data_structures/src/small_seqs
 
 const
-  noLink* = -1'i32
+  NoLink* = -1'i32
     ## Marks an absent link or absent span in every node payload slot.
 
 type
@@ -35,7 +35,7 @@ type
   Node* = object
     ## POD node in one append-only arena, `kind` naming the construct, a node's executable
     ## meaning a pure function of `kind` through `steps`, so the artifact stays data.
-    ## Every payload reference is one int32 slot, `noLink` (-1) marking an absent link or span:
+    ## Every payload reference is one int32 slot, `NoLink` (-1) marking an absent link or span:
     ## - a span into `Machine.jinja`, an arena index, or an interned name id
     ## - slots `0`-`3` uniform across kinds, `4` and past kind-specific, see the accessors below
     kind*: NodeKind
@@ -75,7 +75,7 @@ const
   # compose with chunking.
   ChunkSize* {.intdefine.} = 4096
 
-  wsSpace* = {' ', '\t', '\n', '\r', '\v', '\f'}
+  Whitespace* = {' ', '\t', '\n', '\r', '\v', '\f'}
   wsNameChars* = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
 
 # Payload slot accessors
@@ -102,10 +102,10 @@ const
 const
   ## One slot position per construct role, plus the two variable-tail bases. Parse and render
   ## index through the same constants, so a slot-layout move is one shared edit.
-  slotLo* = 0
-  slotHi* = 1
-  slotSucc* = 2
-  slotChild* = 3
+  SlotLo* = 0
+  SlotHi* = 1
+  SlotSucc* = 2
+  SlotChild* = 3
   slotAlt* = 4
   slotLoopName* = 4
   slotFilterLo* = 5
@@ -121,22 +121,22 @@ const
 
 template lo*(nd: Node): int32 =
   ## Payload span start into `Machine.jinja`, or the `nkMacroDef` macro name id.
-  nd.slots[slotLo]
+  nd.slots[SlotLo]
 
 template hi*(nd: Node): int32 =
   ## Payload span end into `Machine.jinja`, exclusive.
-  nd.slots[slotHi]
+  nd.slots[SlotHi]
 
 template succ*(nd: Node): int32 =
-  ## Next node in program order by arena index, `noLink` once the artifact is exhausted.
-  nd.slots[slotSucc]
+  ## Next node in program order by arena index, `NoLink` once the artifact is exhausted.
+  nd.slots[SlotSucc]
 
 template child*(nd: Node): int32 =
   ## First node of the body by arena index, or the `nkSet` target name id.
-  nd.slots[slotChild]
+  nd.slots[SlotChild]
 
 template alt*(nd: Node): int32 =
-  ## Next `nkIf` level in the else/elif chain by arena index, `noLink` when the chain ends.
+  ## Next `nkIf` level in the else/elif chain by arena index, `NoLink` when the chain ends.
   nd.slots[slotAlt]
 
 template loopName*(nd: Node): int32 =
@@ -144,7 +144,7 @@ template loopName*(nd: Node): int32 =
   nd.slots[slotLoopName]
 
 template filterLo*(nd: Node): int32 =
-  ## `nkFor` filter clause span start into `Machine.jinja`, `noLink` when the header has no `if`.
+  ## `nkFor` filter clause span start into `Machine.jinja`, `NoLink` when the header has no `if`.
   nd.slots[slotFilterLo]
 
 template filterHi*(nd: Node): int32 =
@@ -180,21 +180,14 @@ template paramNameAt*(nd: Node, k: int): int32 =
   nd.slots[macroParamsBase + 3 * k]
 
 template paramDefLoAt*(nd: Node, k: int): int32 =
-  ## `nkMacroDef` parameter `k` default span start, `noLink` when the parameter has no default.
+  ## `nkMacroDef` parameter `k` default span start, `NoLink` when the parameter has no default.
   nd.slots[macroParamsBase + 3 * k + 1]
 
 template paramDefHiAt*(nd: Node, k: int): int32 =
   ## `nkMacroDef` parameter `k` default span end, exclusive, meaningful only while
-  ## `paramDefLoAt` is not `noLink`.
+  ## `paramDefLoAt` is not `NoLink`.
   nd.slots[macroParamsBase + 3 * k + 2]
 
-func findName*(t: Tables, name: openArray[char]): int32 =
-  ## Returns the interned id of `name`, or `noLink` when the template never names it, the comparison reading the caller's bytes in place so
-  ## an interned name allocates nothing.
-  for i, n in t.names:
-    if n == name:
-      return int32 i
-  noLink
 
 type
   FrameKind* = enum
@@ -212,7 +205,7 @@ type
       loop*: LoopState
         ## cursor over the materialized iterable
       filterLo*, filterHi*: int32
-        ## for-`if` clause span, `noLink` when absent
+        ## for-`if` clause span, `NoLink` when absent
     of frCapture:
       target*: int32
         ## interned name to bind on close, never built while `nkSetBlock` is a declared gap
@@ -229,7 +222,7 @@ type
     ## One scope entry:
     ##   an interned name bound to a value.
     name*: int32
-    val*: Value
+    val*: JinjaVal
 
   Scope* = seq[Binding]
 
@@ -255,7 +248,7 @@ type
     ## All render control state, owned by the `items` loop, nothing reachable from `Machine`,
     ## so two drivers over one artifact cannot interfere.
     curNode*: int32
-      ## node program counter, `noLink` once the artifact is exhausted
+      ## node program counter, `NoLink` once the artifact is exhausted
     cur*: int
       ## bytes of root output delivered so far, composed with the chunking window
     pend*: Piece
@@ -263,7 +256,7 @@ type
       ## re-entry stack holding for, capture and generation frames
     scopes*: seq[Scope]
       ## scope 0 is the render context. For-frames push and pop above it
-    root*: Value
+    root*: JinjaVal
       ## the render context dict (`messages`, `tools`, `kwargs`), the outermost lookup scope
     spans*: seq[tuple[start, stop: int]]
       ## generation spans in root-output byte coordinates
@@ -273,3 +266,10 @@ type
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
+func findName*(t: Tables, name: openArray[char]): int32 =
+  ## Returns the interned id of `name`, or `NoLink` when the template never names it, the comparison reading the caller's bytes in place so
+  ## an interned name allocates nothing.
+  for i, n in t.names:
+    if n == name:
+      return int32 i
+  NoLink

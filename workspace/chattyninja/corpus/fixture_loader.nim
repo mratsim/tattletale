@@ -44,12 +44,10 @@ type
     generationSpans*: seq[tuple[start, stop: int]]
       ## recorded codepoint spans, empty when the template has none
     expectError*: bool
-    errorKind*: string
-      ## recorded exception class name, e.g. the jinja TemplateError
     errorMessage*: string
       ## recorded message, carried verbatim into the comparison
 
-func jsonToValue(n: JsonNode): Value =
+func jsonToValue(n: JsonNode): JinjaVal =
   ## Recorded JSON into engine values. Objects keep their insertion order,
   ## numbers keep the int/float split, null becomes the none value, exactly
   ## the tiers the two-tier value model distinguishes.
@@ -60,7 +58,7 @@ func jsonToValue(n: JsonNode): Value =
       entries.add (key, jsonToValue(child))
     dictVal(entries)
   of JArray:
-    var items = newSeq[Value](n.len)
+    var items = newSeq[JinjaVal](n.len)
     var i = 0
     for child in n.items:
       items[i] = jsonToValue(child)
@@ -72,7 +70,7 @@ func jsonToValue(n: JsonNode): Value =
   of JBool: boolVal(n.getBool())
   of JNull: nullVal()
 
-func asList(n: JsonNode): Value =
+func asList(n: JsonNode): JinjaVal =
   ## An optional list input. Absent key or null renders as the none value, the way the HF render
   ## path passes a missing tools or documents argument through as None.
   if n.isNil or n.kind == JNull:
@@ -162,7 +160,6 @@ proc loadRow*(suite: string, row: string): FixtureRow =
       else: 0.0)
   if frame.hasKey("expected_error"):
     result.expectError = true
-    result.errorKind = frame["expected_error"]["exception"].getStr()
     result.errorMessage = frame["expected_error"]["message"].getStr()
   else:
     result.rendered = frame["rendered"].getStr()

@@ -21,7 +21,7 @@
 {.experimental: "views".}
 
 import std/[algorithm, importutils, macros, os, strutils, unicode]
-import cnj_errors, cnj_types, cnj_values, cnj_parse, cnj_engine
+import cnj_types, jinja_data_model, cnj_parse, cnj_engine
 import workspace/data_structures/src/small_seqs
 
 # Corpus row reader.
@@ -41,15 +41,13 @@ type
     suite*: string
     row*: string
     templateSha*: string
-    context*: Value
+    context*: JinjaVal
       ## the render context (`messages`, `tools`, `documents`, `add_generation_prompt`, then kwargs)
     rendered*: string
       ## recorded bytes, empty on an expected-error row
     spans*: seq[tuple[start, stop: int]]
       ## recorded generation spans, codepoint `[start, end)` ranges into `rendered`
     expectError*: bool
-    errorClass*: string
-      ## recorded exception class name, `TemplateError` on every err row
     errorMessage*: string
       ## recorded message, compared verbatim
     clock*: float64
@@ -71,6 +69,23 @@ type J = object
   ## Cursor over one JSON document.
   s: string
   i: int
+
+type RenderMismatch = ref object of CatchableError
+
+type PullChunks[N: static int] = object
+  ## Bounded pull windows over one chattyninja render, the ring-window machine shape
+  ## in `workspace/toktoktok/tests/pull_chunks.nim`, adapted to byte windows.
+  ##
+  ## Contract:
+  ## - the tail window carries the remainder when the render length is not a multiple of N
+  ## - a full drain equals the whole-render `pullAll`, the next pull after it reports 0
+  ## - partial consumption resumes from the driver's fields, no byte re-handed
+  ##
+  ## Machine and tables stay at the consumer's scope, `Machine.jinja` borrowing the template
+  ## text. A `Machine` embedded in another object loses the borrowed view, so the iterator
+  ## parameters carry them.
+  d: Driver
+  buf: array[N, char]
 
 func jsonError(msg: string): JsonParseError =
   ## Returns an unraised parse error. Every caller raises it.
@@ -154,7 +169,7 @@ proc jsonStr(j: var J): string =
     else: fail j, "unknown JSON escape"
   fail j, "JSON string is not closed"
 
-proc jsonValue(j: var J): Value =
+proc jsonValue(j: var J): JinjaVal =
   case peek(j)
   of '{':
     expect(j, '{')
@@ -172,7 +187,7 @@ proc jsonValue(j: var J): Value =
     dictVal(d)
   of '[':
     expect(j, '[')
-    var xs = newSeq[Value]()
+    var xs = newSeq[JinjaVal]()
     if peek(j) != ']':
       while true:
         xs.add jsonValue(j)
@@ -217,7 +232,7 @@ proc jsonValue(j: var J): Value =
     else:
       intVal(parseBiggestInt(text))
 
-proc jsonDoc*(src: string): Value =
+proc jsonDoc*(src: string): JinjaVal =
   ## Returns a whole JSON document as an engine value, mapping insertion order preserved.
   var j = J(s: src, i: 0)
   result = jsonValue(j)
@@ -228,16 +243,16 @@ proc jsonDoc*(src: string): Value =
 # Row reading
 # ---------------------------------------------------------------------------
 
-func field(v: Value, name: string): Value =
+func field(v: JinjaVal, name: string): JinjaVal =
   if v.kind != vkDict: undefinedVal() else: v.d.dictGet(name)
 
-func optList(v: Value, name: string): Value =
+func optList(v: JinjaVal, name: string): JinjaVal =
   ## An optional list input. An absent or null key becomes none, the way the recording
   ## path passes a missing `tools` or `documents` through as `None`.
   let got = field(v, name)
   if got.kind == vkUndefined or got.kind == vkNone: noneVal() else: got
 
-func spanList(v: Value): seq[tuple[start, stop: int]] =
+func spanList(v: JinjaVal): seq[tuple[start, stop: int]] =
   if v.kind != vkSeq:
     return
   for pair in v.xs.items:
@@ -245,7 +260,7 @@ func spanList(v: Value): seq[tuple[start, stop: int]] =
       raise jsonError("generation_spans entry is not a [start, end] pair")
     result.add (pair.xs.items[0].i.int, pair.xs.items[1].i.int)
 
-func clockOf(frame: Value): float64 =
+func clockOf(frame: JinjaVal): float64 =
   ## Returns the recorded epoch, 0 when the row carries none.
   let e = field(frame, "epoch")
   case e.kind
@@ -253,7 +268,7 @@ func clockOf(frame: Value): float64 =
   of vkFloat: e.f
   else: 0.0
 
-func contextOf(frame: Value): Value =
+func contextOf(frame: JinjaVal): JinjaVal =
   ## Builds the template context:
   ##   the standard keys in recording order, then the row's kwargs.
   var d = DictVal()
@@ -288,7 +303,6 @@ proc loadRow*(suite, row: string): Row =
       rendered: if err.kind == vkUndefined: pyStr(field(frame, "rendered")) else: "",
       spans: spanList(field(frame, "generation_spans")),
       expectError: err.kind != vkUndefined,
-      errorClass: if err.kind == vkDict: pyStr(field(err, "exception")) else: "",
       errorMessage: if err.kind == vkDict: pyStr(field(err, "message")) else: "",
       clock: clockOf(frame))
 
@@ -312,7 +326,6 @@ proc templateSource*(suite: string): string =
   ## Returns the recorded template bytes, `<suite>/<suite>.jinja`.
   readFile(CorpusRoot / suite / (suite & ".jinja"))
 
-type RenderMismatch = ref object of CatchableError
 
 proc fail(msg: string): void {.noreturn.} =
   var e = RenderMismatch()
@@ -355,7 +368,7 @@ func pieceRemaining(p: Piece): int =
   of pkStr: p.s.len - p.pos
   of pkLazy: 0
 
-proc renderPull(m: Machine, t: Tables, ctx: Value, clock: float64, cap: int): string =
+proc renderPull(m: Machine, t: Tables, ctx: JinjaVal, clock: float64, cap: int): string =
   ## Renders through `pull` with a `cap`-byte caller buffer, accumulating every fill.
   var d = newDriver(ctx, clock)
   var buf = newSeq[char](cap)
@@ -366,25 +379,11 @@ proc renderPull(m: Machine, t: Tables, ctx: Value, clock: float64, cap: int): st
     for i in 0 ..< n:
       result.add buf[i]
 
-proc renderAllPull(m: Machine, t: Tables, ctx: Value, clock: float64): string =
+proc renderAllPull(m: Machine, t: Tables, ctx: JinjaVal, clock: float64): string =
   ## Renders through `pullAll` with a fresh driver.
   var d = newDriver(ctx, clock)
   pullAll(m, t, d)
 
-type PullChunks[N: static int] = object
-  ## Bounded pull windows over one chattyninja render, the ring-window machine shape
-  ## in `workspace/toktoktok/tests/pull_chunks.nim`, adapted to byte windows.
-  ##
-  ## Contract:
-  ## - the tail window carries the remainder when the render length is not a multiple of N
-  ## - a full drain equals the whole-render `pullAll`, the next pull after it reports 0
-  ## - partial consumption resumes from the driver's fields, no byte re-handed
-  ##
-  ## Machine and tables stay at the consumer's scope, `Machine.jinja` borrowing the template
-  ## text. A `Machine` embedded in another object loses the borrowed view, so the iterator
-  ## parameters carry them.
-  d: Driver
-  buf: array[N, char]
 
 func pullChunks[N: static int](d: Driver): PullChunks[N] =
   ## Builds the windowed pull machine over the driver `d` of a compiled template.
@@ -400,7 +399,7 @@ iterator items[N: static int](p: var PullChunks[N], m: Machine, t: Tables): open
       break
     yield p.buf.toOpenArray(0, n - 1)
 
-proc renderChunked[N: static int](m: Machine, t: Tables, ctx: Value, clock: float64): string =
+proc renderChunked[N: static int](m: Machine, t: Tables, ctx: JinjaVal, clock: float64): string =
   ## Renders one row through `N`-byte windows, accumulating every window.
   var pc = pullChunks[N](newDriver(ctx, clock))
   for w in pc.items(m, t):
@@ -502,25 +501,16 @@ block corpusDelivery:
     let m = Machine(jinja: src, nodes: nodes)
     for r in rows(suite):
       if r.expectError:
-        # The recorded error, not a wrong success. Nim renders a CatchableError class
-        # name as `Name:ObjectType`, the corpus records the bare name.
-        var raisedName = ""
+        # The recorded error, not a wrong success. The match compares the recorded message verbatim.
         var raisedMsg = ""
         var wrongSuccess = ""
         try:
           wrongSuccess = renderAllPull(m, tables, r.context, r.clock)
-        except CatchableError as e:
-          raisedName = $e.name
-          raisedMsg = e.msg
-        let cls =
-          if ':' in raisedName: raisedName[0 ..< raisedName.find(':')]
-          else: raisedName
+        except JinjaError as e:
+          raisedMsg = e.what
         if wrongSuccess.len > 0:
-          fail(suite & "/" & r.row & ": expected " & r.errorClass & " `" & r.errorMessage &
+          fail(suite & "/" & r.row & ": expected `" & r.errorMessage &
               "` but the render produced " & $wrongSuccess.len & " bytes")
-        if cls != r.errorClass:
-          fail(suite & "/" & r.row & ": expected exception " & r.errorClass & ", got " & cls &
-              " (" & raisedMsg & ")")
         if raisedMsg != r.errorMessage:
           fail(suite & "/" & r.row & ": message mismatch\n   got  " & raisedMsg &
               "\n   want " & r.errorMessage)
@@ -533,14 +523,14 @@ block corpusDelivery:
       var whole = ""
       try:
         whole = renderAllPull(m, tables, r.context, r.clock)
-      except CatchableError as e:
-        # A declared gap surfaces as a gap, never as a wrong answer.
-        # An unimplemented construct raises NotImplementedError, an unimplemented filter
-        # raises TemplateError naming the filter. Any other raise fails the row.
-        if e of NotImplementedError or "unknown filter" in e.msg:
+      except JinjaError as e:
+        # A declared gap surfaces as a gap, never as a wrong answer:
+        # - declared constructs and unimplemented filter names raise with cause `ceUnimplemented`
+        # - any other raise fails the row
+        if e.cause == ceUnimplemented:
           inc gapRows
           continue
-        raised = $e.name & ": " & e.msg
+        raised = e.what
       if raised.len > 0:
         fail(suite & "/" & r.row & ": the whole render raised " & raised)
       if not sameBytes(whole, r.rendered):
@@ -647,7 +637,7 @@ block zeroCapacityBuffer:
   var d = newDriver(row.context, row.clock)
   var empty: array[0, char]
   doAssert pull(m, tables, d, empty) == 0, "a zero-capacity buffer did not report 0"
-  doAssert d.curNode != noLink, "a zero-capacity pull stepped the render to the end"
+  doAssert d.curNode != NoLink, "a zero-capacity pull stepped the render to the end"
   doAssert d.cur == 0, "a zero-capacity pull moved cur"
   doAssert d.pend.kind == pkNone, "a zero-capacity pull started a pending piece"
 
@@ -694,7 +684,7 @@ block partialConsumptionResumes:
     doAssert head & tail == r.rendered,
         suite & ": the resumed bytes overlapped or diverged from the recording"
 
-func listCtx(): Value =
+func listCtx(): JinjaVal =
   ## One context holding `m`, a mixed container whose serialization exceeds a tiny window.
   var inner = DictVal()
   dictSet(inner, "alpha", strVal("one"))
@@ -763,7 +753,7 @@ block valueBoundary:
   let longA = repeat("alpha-", 50)
   let longB = repeat("beta-", 40)
   let src = "{% for m in messages %}{{ m.content }}{% endfor %}"
-  var msgs = newSeq[Value]()
+  var msgs = newSeq[JinjaVal]()
   for c in [longA, longB]:
     var md = DictVal()
     dictSet(md, "content", strVal(c))
@@ -815,7 +805,7 @@ block spanDrain:
 # where every byte delivered before the failing call is already with the caller.
 # ---------------------------------------------------------------------------
 block filterRaiseRepull:
-  var msgs = newSeq[Value]()
+  var msgs = newSeq[JinjaVal]()
   msgs.add strVal("aa")
   msgs.add intVal(7)
   msgs.add strVal("ab")
@@ -831,8 +821,8 @@ block filterRaiseRepull:
   try:
     discard renderToString(src, ctx, 0.0)
     doAssert false, "the one-shot render did not propagate the failing filter"
-  except TemplateError as e:
-    doAssert "not subscriptable" in e.msg, e.msg
+  except JinjaError as e:
+    doAssert "not subscriptable" in e.what, e.what
 
   var d = newDriver(ctx, 0.0)
   var win1 = newSeq[char](1)
@@ -845,9 +835,9 @@ block filterRaiseRepull:
       if n == 0:
         break
       acc.add bytesOf(win1, n)
-  except CatchableError as e:
+  except JinjaError as e:
     raised = true
-    message = e.msg
+    message = e.what
   doAssert raised, "the failing filter did not raise"
   doAssert "not subscriptable" in message,
       "the error did not name the failed operation: " & message
@@ -998,14 +988,14 @@ when defined(nimAllocStats):
     const msgCount = 10
     let iters = 50
 
-    func msgVal(role, content: string): Value =
+    func msgVal(role, content: string): JinjaVal =
       ## Builds one chat message carrying the two keys the templates read.
       var d = DictVal()
       dictSet(d, "role", strVal(role))
       dictSet(d, "content", strVal(content))
       dictVal(d)
 
-    var msgs = newSeq[Value]()
+    var msgs = newSeq[JinjaVal]()
     for i in 0 ..< msgCount:
       msgs.add msgVal(if i mod 2 == 0: "user" else: "assistant",
           "Message " & $i & ": please continue the conversation and stay on topic.")
@@ -1060,7 +1050,7 @@ when defined(nimAllocStats):
   block allocSerializer:
     let iters = 50
 
-    func toolsVal(): Value =
+    func toolsVal(): JinjaVal =
       ## One function-tool definition, the bench tool schema shape.
       var cityProp = DictVal()
       dictSet(cityProp, "type", strVal("string"))
@@ -1126,7 +1116,7 @@ when defined(nimAllocStats):
 
     # A container emit costs one allocation per emit for the lookup copy plus one per
     # render for the serializer's container stack, over the loop machinery.
-    var msgs = newSeq[Value]()
+    var msgs = newSeq[JinjaVal]()
     for i in 0 ..< 10:
       var md = DictVal()
       dictSet(md, "n", strVal($i))

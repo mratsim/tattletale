@@ -18,17 +18,17 @@
 ##   $ nim test_chattyninja
 
 import std/strutils
-import cnj_errors, cnj_types, cnj_values, cnj_engine
+import cnj_types, jinja_data_model, cnj_engine
 
-proc render(expr: string, ctx = Value(kind: vkUndefined)): string =
+proc render(expr: string, ctx = JinjaVal(kind: vkUndefined)): string =
   ## Renders one expression through `renderToString`.
   renderToString("{{ " & expr & " }}", ctx)
 
-proc renderStmt(stmt: string, ctx = Value(kind: vkUndefined), clock = 0.0): string =
+proc renderStmt(stmt: string, ctx = JinjaVal(kind: vkUndefined), clock = 0.0): string =
   ## Renders one statement through `renderToString`, the clock the driver receives.
   renderToString(stmt, ctx, clock)
 
-func ctx(pairs: varargs[(string, Value)]): Value =
+func ctx(pairs: varargs[(string, JinjaVal)]): JinjaVal =
   var d = DictVal()
   for (k, v) in pairs:
     dictSet(d, k, v)
@@ -96,8 +96,8 @@ doAssert render("(1 == 1) ~ 'x'") == "Truex", "parentheses give the comparison t
 try:
   discard render("1 == 1 ~ 'x'")
   doAssert false, "a comparison over an unrendered concat did not raise"
-except TemplateError as e:
-  doAssert "emit position" in e.msg, e.msg
+except JinjaError as e:
+  doAssert "emit position" in e.what, e.what
 
 # A concat reads plain values in one place only, the argument list: `raise_exception`
 # names its message from the materialized text. Every other non-emit position raises,
@@ -106,30 +106,30 @@ block concatConsumption:
   try:
     discard render("{'k': 'a' ~ 'b'}")
     doAssert false, "a concat in a dict literal did not raise"
-  except TemplateError as e:
-    doAssert "emit position" in e.msg, e.msg
+  except JinjaError as e:
+    doAssert "emit position" in e.what, e.what
   try:
     discard renderStmt("{% if 'a' ~ 'b' %}x{% endif %}")
     doAssert false, "a concat in a condition did not raise"
-  except TemplateError as e:
-    doAssert "emit position" in e.msg, e.msg
+  except JinjaError as e:
+    doAssert "emit position" in e.what, e.what
   try:
     discard render("('a' ~ 'b') | tojson")
     doAssert false, "a concat under a filter did not raise"
-  except TemplateError as e:
-    doAssert "emit position" in e.msg, e.msg
+  except JinjaError as e:
+    doAssert "emit position" in e.what, e.what
   doAssert renderStmt("{% set q = 'a' ~ 'b' %}{{ q }}") == "ab",
       "a set-bound concat did not stream on its later emit"
   try:
     discard renderStmt("{% set q = 'a' ~ 'b' %}{% if q %}x{% endif %}")
     doAssert false, "a truthiness test over a set-bound concat did not raise"
-  except TemplateError as e:
-    doAssert "emit position" in e.msg, e.msg
+  except JinjaError as e:
+    doAssert "emit position" in e.what, e.what
   try:
     discard renderStmt("{{ raise_exception('boom ' ~ 'bang') }}")
     doAssert false, "raise_exception did not raise"
-  except TemplateError as e:
-    doAssert e.msg == "boom bang", e.msg
+  except JinjaError as e:
+    doAssert e.what == "boom bang", e.what
   doAssert render("(1 ~ 2) ~ 3") == "123", "a grouped concat flattens into its parent"
 
 # A lone `=` spells no infix in Jinja, so the expression must end before it and the unclosed
@@ -138,8 +138,8 @@ block loneEqualsIsAnError:
   var reported = ""
   try:
     discard render("1 = 2")
-  except CatchableError as e:
-    reported = e.msg
+  except JinjaError as e:
+    reported = e.what
   doAssert "trailing text" in reported, reported
 
 # `and` / `or` skip the operand they do not evaluate
@@ -204,8 +204,8 @@ block loneEqualsInCallArgsIsAnError:
   var reported = ""
   try:
     discard render("[1, 2] | join(1 = '-')")
-  except CatchableError as e:
-    reported = e.msg
+  except JinjaError as e:
+    reported = e.what
   doAssert reported.len > 0, "a lone `=` inside a call argument list must raise, not render"
 doAssert render("'ab' | upper") == "AB"
 doAssert render("'AB' | lower") == "ab"
@@ -237,8 +237,8 @@ block gapIsLoud:
   var reported = ""
   try:
     discard render("[2, 1] | map('int')")
-  except NotImplementedError as e:
-    reported = e.msg
+  except JinjaError as e:
+    reported = e.what
   doAssert "not implemented" in reported and "map" in reported, reported
 doAssert render("range(3)") == "[0, 1, 2]"
 
@@ -269,8 +269,8 @@ block zeroStepIsAnError:
   var reported = ""
   try:
     discard render("[1, 2, 3][::0]")
-  except CatchableError as e:
-    reported = e.msg
+  except JinjaError as e:
+    reported = e.what
   doAssert reported.len > 0, "a zero slice step must raise, not loop forever"
 
 # Dict literals inside an expression

@@ -28,11 +28,11 @@
 # - an expression stays template text:
 #   no expression becomes a node, and each `{{ x }}` leaves an `nkEmit` carrying the `x` span
 #
-# An unterminated construct is a `TemplateError` naming the construct and its byte offset, so
+# An unterminated construct is a `JinjaError` naming the construct and its byte offset, so
 # a truncated template fails at load instead of rendering short.
 
 import std/[strbasics, strutils]
-import cnj_errors, cnj_types, cnj_values
+import cnj_types, jinja_data_model
 import workspace/data_structures/src/small_seqs
 
 func at(s: openArray[char], prefix: openArray[char], i: int): bool =
@@ -70,7 +70,7 @@ type
 
 proc mkNode(kind: NodeKind, slots: varargs[int32]): Node =
   ## Builds one node, appending its payload slots in layout order. The enclosing construct
-  ## backpatches `succ` and `child` from `noLink` through `patch` or a direct slot write.
+  ## backpatches `succ` and `child` from `NoLink` through `patch` or a direct slot write.
   result.kind = kind
   for s in slots:
     result.slots.add s
@@ -133,7 +133,7 @@ proc tokenize(src: openArray[char], stop: int): seq[Tag] =
       if at(src, "{#", openAt):
         let c = findTagClose(src, openAt + 2, stop, "#}")
         if c < 0:
-          raise err("unclosed comment opened at byte " & $openAt)
+          raise jinjaErr("unclosed comment opened at byte " & $openAt, openAt)
         # The comment's own body is erased, but the text run before it is real output and must
         # be emitted under the block tag's whitespace rules:
         #   `{#-` strips the run before the tag, `lstrip_blocks` the blanks preceding it
@@ -148,7 +148,7 @@ proc tokenize(src: openArray[char], stop: int): seq[Tag] =
         if stripAfter:
           dec innerHi
         if stripBefore:
-          while lo < hi and src[hi - 1] in wsSpace:
+          while lo < hi and src[hi - 1] in cnj_types.Whitespace:
             dec hi
         elif atLineStart(src, openAt):
           while lo < hi and src[hi - 1] in {' ', '\t'}:
@@ -157,7 +157,7 @@ proc tokenize(src: openArray[char], stop: int): seq[Tag] =
           result.add Tag(kind: tkText, lo: int32 lo, hi: int32 hi, tLo: 0, tHi: 0)
         if stripAfter:
           var j = afterTag
-          while j < stop and src[j] in wsSpace:
+          while j < stop and src[j] in cnj_types.Whitespace:
             inc j
           i = j
         else:
@@ -172,7 +172,7 @@ proc tokenize(src: openArray[char], stop: int): seq[Tag] =
       let bodyStart = openAt + 2
       let c = findTagClose(src, bodyStart, stop, close)
       if c < 0:
-        raise err("unclosed " & (if isVar: "`{{`" else: "`{%`") & " opened at byte " & $openAt)
+        raise jinjaErr("unclosed " & (if isVar: "`{{`" else: "`{%`") & " opened at byte " & $openAt, openAt)
       afterTag = c + 2
       var innerLo = bodyStart
       var innerHi = c
@@ -184,7 +184,7 @@ proc tokenize(src: openArray[char], stop: int): seq[Tag] =
         dec innerHi
       if not isVar:
         var k = innerLo
-        while k < innerHi and src[k] in wsSpace:
+        while k < innerHi and src[k] in cnj_types.Whitespace:
           inc k
         isRaw = at(src, "raw", k) and (k + 3 >= innerHi or src[k + 3] notin wsNameChars)
       if isRaw:
@@ -192,7 +192,7 @@ proc tokenize(src: openArray[char], stop: int): seq[Tag] =
         #   one text run up to `{% endraw %}`.
         let e = findTagClose(src, c + 2, stop, "endraw %}")
         if e < 0:
-          raise err("unclosed `{% raw %}` opened at byte " & $openAt)
+          raise jinjaErr("unclosed `{% raw %}` opened at byte " & $openAt, openAt)
         var rawLo = c + 2
         var rawHi = e - 2
         if rawHi > rawLo and src[rawHi - 1] == '-':
@@ -209,7 +209,7 @@ proc tokenize(src: openArray[char], stop: int): seq[Tag] =
       tLo = innerLo
       tHi = innerHi
       if stripBefore:
-        while lo < hi and src[hi - 1] in wsSpace:
+        while lo < hi and src[hi - 1] in cnj_types.Whitespace:
           dec hi
       elif kind == tkBlock and atLineStart(src, openAt):
         while lo < hi and src[hi - 1] in {' ', '\t'}:
@@ -221,7 +221,7 @@ proc tokenize(src: openArray[char], stop: int): seq[Tag] =
     result.add Tag(kind: kind, lo: 0, hi: 0, tLo: int32 tLo, tHi: int32 tHi)
     if stripAfter:
       var j = afterTag
-      while j < stop and src[j] in wsSpace:
+      while j < stop and src[j] in cnj_types.Whitespace:
         inc j
       i = j
     else:
@@ -248,7 +248,7 @@ func intern(p: var P, name: openArray[char]): int32 =
   ## the one interned copy. A carried name allocates nothing, a new name copying
   ## exactly once into `Tables.names`.
   let got = findName(p.tables, name)
-  if got != noLink:
+  if got != NoLink:
     return got
   var interned: string
   interned.add name
@@ -261,14 +261,14 @@ func addNode(p: var P, n: sink Node): int32 =
   p.nodes.add n
 
 func patch(nodes: var seq[Node], idx, target: int32) =
-  ## Resolves one node's successor, the `slotSucc` position.
-  nodes[idx].slots[slotSucc] = target
+  ## Resolves one node's successor, the `SlotSucc` position.
+  nodes[idx].slots[SlotSucc] = target
 
 func keywordSpan(p: P, t: Tag): tuple[lo, hi: int] =
   ## Returns the half-open span of a `{% %}` tag's leading identifier, a view over `p.src`,
   ## so neither a dispatch nor a terminator test materializes the keyword.
   var i = t.tLo
-  while i < t.tHi and p.src[i] in wsSpace:
+  while i < t.tHi and p.src[i] in cnj_types.Whitespace:
     inc i
   let start = i
   while i < t.tHi and p.src[i] in wsNameChars:
@@ -291,10 +291,10 @@ func afterKeyword(p: P, t: Tag, kwLen: int): int =
   ## Returns the offset just past the tag's keyword and following whitespace, the `tLo` offset
   ## being the inside of the delimiters, so the keyword itself may start after whitespace.
   var i = t.tLo
-  while i < t.tHi and p.src[i] in wsSpace:
+  while i < t.tHi and p.src[i] in cnj_types.Whitespace:
     inc i
   inc i, kwLen
-  while i < t.tHi and p.src[i] in wsSpace:
+  while i < t.tHi and p.src[i] in cnj_types.Whitespace:
     inc i
   i
 
@@ -325,7 +325,7 @@ func skipBalanced(p: P, at: int, stop: int, stopAt: string): int =
     elif p.src[i] in {')', ']'}:
       dec depth
     inc i
-  raise err("expected `" & stopAt & "` before byte " & $stop)
+  raise jinjaErr("expected `" & stopAt & "` before byte " & $stop, stop)
 
 func findKeyword(p: P, at, stop: int, word: string): int =
   ## Returns the offset of the bare word `word` at bracket depth zero, or `stop` when the span holds no such
@@ -358,11 +358,11 @@ proc parseConstruct(p: var P): Head
 proc parseMacroParams(p: var P, t: Tag, at: int, nodeIdx: int32) =
   ## Parses `(a, b = expr, ...)` starting at the open paren and appending one payload triple per
   ## parameter to the `nkMacroDef` node at `nodeIdx`, the interned name then the default span,
-  ## `noLink` when absent, defaults staying template text, each evaluated per call after binding.
+  ## `NoLink` when absent, defaults staying template text, each evaluated per call after binding.
   ## - evaluation happens after the parameters bind
   var i = at + 1 # past the open paren
   while true:
-    while i < t.tHi and p.src[i] in wsSpace:
+    while i < t.tHi and p.src[i] in cnj_types.Whitespace:
       inc i
     if i < t.tHi and p.src[i] == ')':
       inc i
@@ -371,16 +371,16 @@ proc parseMacroParams(p: var P, t: Tag, at: int, nodeIdx: int32) =
     while i < t.tHi and p.src[i] in wsNameChars:
       inc i
     if i == nameStart:
-      raise err("macro parameter needs a name at byte " & $nameStart)
+      raise jinjaErr("macro parameter needs a name at byte " & $nameStart, nameStart)
     let name = intern(p, p.src.toOpenArray(nameStart, i - 1))
     var k = i
-    while k < t.tHi and p.src[k] in wsSpace:
+    while k < t.tHi and p.src[k] in cnj_types.Whitespace:
       inc k
-    var defLo = noLink
-    var defHi = noLink
+    var defLo = NoLink
+    var defHi = NoLink
     if k < t.tHi and p.src[k] == '=':
       inc k
-      while k < t.tHi and p.src[k] in wsSpace:
+      while k < t.tHi and p.src[k] in cnj_types.Whitespace:
         inc k
       defLo = int32 k
       defHi = int32 skipBalanced(p, k, t.tHi, ",)")
@@ -391,7 +391,7 @@ proc parseMacroParams(p: var P, t: Tag, at: int, nodeIdx: int32) =
     p.nodes[nodeIdx].slots.add defLo
     p.nodes[nodeIdx].slots.add defHi
     i = k
-    while i < t.tHi and p.src[i] in wsSpace:
+    while i < t.tHi and p.src[i] in cnj_types.Whitespace:
       inc i
     if i < t.tHi and p.src[i] == ',':
       inc i
@@ -399,7 +399,7 @@ proc parseMacroParams(p: var P, t: Tag, at: int, nodeIdx: int32) =
     if i < t.tHi and p.src[i] == ')':
       inc i
       break
-    raise err("macro parameter list is not closed at byte " & $i)
+    raise jinjaErr("macro parameter list is not closed at byte " & $i, i)
 
 proc parseMacro(p: var P): Head =
   ## `{% macro name(a, b = 1) %} body {% endmacro %}`. The definition binds a value and never
@@ -411,20 +411,20 @@ proc parseMacro(p: var P): Head =
   while i < t.tHi and p.src[i] in wsNameChars:
     inc i
   if i == nameStart:
-    raise err("`macro` needs a name at byte " & $nameStart)
+    raise jinjaErr("`macro` needs a name at byte " & $nameStart, nameStart)
   let name = intern(p, p.src.toOpenArray(nameStart, i - 1))
-  while i < t.tHi and p.src[i] in wsSpace:
+  while i < t.tHi and p.src[i] in cnj_types.Whitespace:
     inc i
   if i >= t.tHi or p.src[i] != '(':
-    raise err("`macro` parameters are not parenthesised at byte " & $i)
+    raise jinjaErr("`macro` parameters are not parenthesised at byte " & $i, i)
   inc p.i
-  let idx = addNode(p, mkNode(nkMacroDef, name, noLink, noLink, noLink))
+  let idx = addNode(p, mkNode(nkMacroDef, name, NoLink, NoLink, NoLink))
   parseMacroParams(p, t, i, idx)
   let body = parseBody(p, ["endmacro"])
   if p.i >= p.tags.len or not keywordIs(p, p.tags[p.i], "endmacro"):
-    raise err("`{% macro %}` has no `{% endmacro %}`")
+    raise jinjaErr("`{% macro %}` has no `{% endmacro %}`", t.tLo)
   inc p.i
-  p.nodes[idx].slots[slotChild] = body.head
+  p.nodes[idx].slots[SlotChild] = body.head
   for x in body.tails:
     patch(p.nodes, x, idx)
   Head(head: idx, tails: @[idx])
@@ -440,13 +440,13 @@ proc parseIf(p: var P): Head =
   # The node is reserved before its body is walked, so arena order stays source order and the arena
   # entry stays index 0:
   #   a construct cannot sit below the nodes it dispatches into.
-  let idx = addNode(p, mkNode(nkIf, condLo, condHi, noLink, noLink, noLink))
+  let idx = addNode(p, mkNode(nkIf, condLo, condHi, NoLink, NoLink, NoLink))
   let body = parseBody(p, ["elif", "else", "endif"])
-  p.nodes[idx].slots[slotChild] = body.head
+  p.nodes[idx].slots[SlotChild] = body.head
   var tails = @[idx]
   tails.add body.tails
   if p.i >= p.tags.len:
-    raise err("unclosed `{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}`")
+    raise jinjaErr("unclosed `{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}`", kwLo, kwHi - kwLo)
   let nxt = p.tags[p.i]
   if keywordIs(p, nxt, "elif"):
     let nested = parseIf(p)
@@ -458,12 +458,12 @@ proc parseIf(p: var P): Head =
     p.nodes[idx].slots[slotAlt] = eb.head
     tails.add eb.tails
     if p.i >= p.tags.len or not keywordIs(p, p.tags[p.i], "endif"):
-      raise err("`{% else %}` has no `{% endif %}`")
+      raise jinjaErr("`{% else %}` has no `{% endif %}`", nxt.tLo, nxt.tHi - nxt.tLo)
     inc p.i
   elif keywordIs(p, nxt, "endif"):
     inc p.i
   else:
-    raise err("`{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}` has no `{% endif %}`")
+    raise jinjaErr("`{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}` has no `{% endif %}`", kwLo, kwHi - kwLo)
   Head(head: idx, tails: tails)
 
 proc parseFor(p: var P): Head =
@@ -477,29 +477,29 @@ proc parseFor(p: var P): Head =
     while i < t.tHi and p.src[i] in wsNameChars:
       inc i
     if i == start:
-      raise err("`for` needs a target name at byte " & $start)
+      raise jinjaErr("`for` needs a target name at byte " & $start, start)
     names.add (lo: start, hi: i)
-    while i < t.tHi and p.src[i] in wsSpace:
+    while i < t.tHi and p.src[i] in cnj_types.Whitespace:
       inc i
     if i < t.tHi and p.src[i] == ',':
       inc i
-      while i < t.tHi and p.src[i] in wsSpace:
+      while i < t.tHi and p.src[i] in cnj_types.Whitespace:
         inc i
       continue
     break
   if not at(p.src, "in", i) or (i + 2 < t.tHi and p.src[i + 2] in wsNameChars):
-    raise err("`for` target is not followed by `in` at byte " & $i)
+    raise jinjaErr("`for` target is not followed by `in` at byte " & $i, i)
   var j = i + 2
-  while j < t.tHi and p.src[j] in wsSpace:
+  while j < t.tHi and p.src[j] in cnj_types.Whitespace:
     inc j
   let iterLo = j
   let filterAt = findKeyword(p, iterLo, t.tHi, "if")
   let iterHi = filterAt
-  var filterLo = noLink
-  var filterHi = noLink
+  var filterLo = NoLink
+  var filterHi = NoLink
   if filterAt < t.tHi:
     var k = filterAt + 2
-    while k < t.tHi and p.src[k] in wsSpace:
+    while k < t.tHi and p.src[k] in cnj_types.Whitespace:
       inc k
     filterLo = int32 k
     filterHi = int32 t.tHi
@@ -508,16 +508,16 @@ proc parseFor(p: var P): Head =
     targets[k] = intern(p, p.src.toOpenArray(n.lo, n.hi - 1))
   let loopId = intern(p, "loop")
   inc p.i
-  let idx = addNode(p, mkNode(nkFor, int32 iterLo, int32 iterHi, noLink, noLink, loopId,
+  let idx = addNode(p, mkNode(nkFor, int32 iterLo, int32 iterHi, NoLink, NoLink, loopId,
       filterLo, filterHi))
   # Target ids append after the fixed prefix, the tail `targetAt` reads from `forTargetsBase`.
   for tg in targets:
     p.nodes[idx].slots.add tg
   let body = parseBody(p, ["endfor"])
   if p.i >= p.tags.len or not keywordIs(p, p.tags[p.i], "endfor"):
-    raise err("`{% for %}` has no `{% endfor %}`")
+    raise jinjaErr("`{% for %}` has no `{% endfor %}`", t.tLo)
   inc p.i
-  p.nodes[idx].slots[slotChild] = body.head
+  p.nodes[idx].slots[SlotChild] = body.head
   for x in body.tails:
     patch(p.nodes, x, idx)
   Head(head: idx, tails: @[idx])
@@ -531,9 +531,9 @@ proc parseSet(p: var P): Head =
   while i < t.tHi and p.src[i] in wsNameChars:
     inc i
   if i >= t.tHi:
-    raise err("`set` needs a target at byte " & $t.tLo)
+    raise jinjaErr("`set` needs a target at byte " & $t.tLo, t.tLo)
   var j = i
-  while j < t.tHi and p.src[j] in wsSpace:
+  while j < t.tHi and p.src[j] in cnj_types.Whitespace:
     inc j
   if j < t.tHi and p.src[j] == '.':
     # `ns.field = expr`:
@@ -547,29 +547,29 @@ proc parseSet(p: var P): Head =
     let fieldHi = k
     k = skipBalanced(p, k, t.tHi, "=")
     if k >= t.tHi or p.src[k] != '=':
-      raise err("`{% set %}` needs a namespace member and `=`")
+      raise jinjaErr("`{% set %}` needs a namespace member and `=`", t.tLo)
     var v = k + 1
-    while v < t.tHi and p.src[v] in wsSpace:
+    while v < t.tHi and p.src[v] in cnj_types.Whitespace:
       inc v
     let targetId = intern(p, p.src.toOpenArray(nsLo, nsHi - 1))
     let fieldId = intern(p, p.src.toOpenArray(fieldLo, fieldHi - 1))
     inc p.i
-    let idx = addNode(p, mkNode(nkSetNamespace, int32 v, t.tHi.int32, noLink, targetId, fieldId))
+    let idx = addNode(p, mkNode(nkSetNamespace, int32 v, t.tHi.int32, NoLink, targetId, fieldId))
     return Head(head: idx, tails: @[idx])
   if j >= t.tHi or p.src[j] != '=':
-    raise err("`{% set %}` needs a target and `=`")
+    raise jinjaErr("`{% set %}` needs a target and `=`", t.tLo)
   var v = j + 1
-  while v < t.tHi and p.src[v] in wsSpace:
+  while v < t.tHi and p.src[v] in cnj_types.Whitespace:
     inc v
   let target = intern(p, p.src.toOpenArray(nameStart, i - 1))
   inc p.i
-  let idx = addNode(p, mkNode(nkSet, int32 v, t.tHi.int32, noLink, target))
+  let idx = addNode(p, mkNode(nkSet, int32 v, t.tHi.int32, NoLink, target))
   Head(head: idx, tails: @[idx])
 
 proc gap(what, corpusSite: string): Head =
   ## Reports a declared construct that is not implemented, stating what the corpus demands of it
   ## or that no template in the corpus demands it.
-  raise newImplementError(what & " is not implemented; " & corpusSite)
+  raise jinjaErr(what & " is not implemented; " & corpusSite, cause = ceUnimplemented)
 
 proc parseConstruct(p: var P): Head =
   ## Dispatches one `{% %}` tag to its construct parser.
@@ -587,13 +587,13 @@ proc parseConstruct(p: var P): Head =
     gap("nkBreak", "corpus demand is 8 sites: 7 in glm53flash.jinja inside the macro " &
         "has_dup_tool_result_id, 1 in northminicode10.jinja")
   elif keywordIn(p, t, ["endfor", "endif", "else", "elif", "endset"]):
-    raise err("`{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}` has no matching opener")
+    raise jinjaErr("`{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}` has no matching opener", kwLo, kwHi - kwLo)
   elif keywordIn(p, t, ["endmacro", "call", "filter", "block", "extends", "include",
       "import", "from"]):
     gap("`{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}`", "no template in the corpus uses " &
         "call, filter, block, endmacro without a matching macro, extends, include, import or from")
   else:
-    raise err("unknown `{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}` tag")
+    raise jinjaErr("unknown `{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}` tag", kwLo, kwHi - kwLo)
 
 proc parseBody(p: var P, stopKws: openArray[string]): Head =
   ## Emits nodes until a `{% %}` tag whose keyword is in `stopKws`, leaving the index on that tag.
@@ -601,20 +601,20 @@ proc parseBody(p: var P, stopKws: openArray[string]): Head =
   ## `open` holds every node whose successor is still unresolved. Each new entry point closes them,
   ## so a construct's exit links to its following sibling and only the body's last exits stay open
   ## for the enclosing construct to backpatch.
-  var head = noLink
+  var head = NoLink
   var open = newSeq[int32]()
   while p.i < p.tags.len:
     let t = p.tags[p.i]
-    var entry = noLink
+    var entry = NoLink
     var fresh = newSeq[int32]()
     case t.kind
     of tkText:
       inc p.i
-      entry = addNode(p, mkNode(nkVerbatim, int32 t.lo, int32 t.hi, noLink))
+      entry = addNode(p, mkNode(nkVerbatim, int32 t.lo, int32 t.hi, NoLink))
       fresh = @[entry]
     of tkVariable:
       inc p.i
-      entry = addNode(p, mkNode(nkEmit, int32 t.tLo, int32 t.tHi, noLink))
+      entry = addNode(p, mkNode(nkEmit, int32 t.tLo, int32 t.tHi, NoLink))
       fresh = @[entry]
     of tkBlock:
       if keywordIn(p, t, stopKws):
@@ -622,7 +622,7 @@ proc parseBody(p: var P, stopKws: openArray[string]): Head =
       let c = parseConstruct(p)
       entry = c.head
       fresh = c.tails
-    if head == noLink:
+    if head == NoLink:
       head = entry
     for x in open:
       patch(p.nodes, x, entry)
@@ -634,5 +634,5 @@ proc parseTemplate*(src: string): (seq[Node], Tables) =
   var p = P(src: src, tags: tokenize(src, src.len), i: 0, tables: Tables(), nodes: newSeq[Node]())
   let body = parseBody(p, [])
   for x in body.tails:
-    patch(p.nodes, x, noLink)
+    patch(p.nodes, x, NoLink)
   (p.nodes, p.tables)

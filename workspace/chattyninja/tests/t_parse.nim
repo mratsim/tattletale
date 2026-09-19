@@ -47,10 +47,10 @@ doAssert src[nodes[3].lo ..< nodes[3].hi].strip == "messages",
 # `child` only on the kinds that carry a body.
 for i, n in nodes:
   doAssert n.hi >= n.lo and n.hi <= src.len.int32, "node " & $i & " has a bad span"
-  doAssert n.succ == noLink or (n.succ >= 0'i32 and n.succ < nodes.len.int32),
+  doAssert n.succ == NoLink or (n.succ >= 0'i32 and n.succ < nodes.len.int32),
       "node " & $i & " has an out-of-range successor"
   if n.kind in {nkIf, nkFor}:
-    doAssert n.child == noLink or (n.child >= 0'i32 and n.child < nodes.len.int32),
+    doAssert n.child == NoLink or (n.child >= 0'i32 and n.child < nodes.len.int32),
         "node " & $i & " has an out-of-range body link"
 
 # An expression is never a node. Every `nkEmit` payload is one `lo..hi` span and nothing else,
@@ -68,7 +68,7 @@ for i, n in nodes:
   var cur = n.child
   var steps = 0
   while cur != n.succ:
-    doAssert cur != noLink and cur >= 0'i32 and cur < nodes.len.int32,
+    doAssert cur != NoLink and cur >= 0'i32 and cur < nodes.len.int32,
         "nkIf " & $i & " body does not terminate past the chain"
     doAssert cur != int32 i, "nkIf " & $i & " is re-entered by its own body path"
     doAssert steps <= nodes.len, "nkIf " & $i & " body walks a cycle"

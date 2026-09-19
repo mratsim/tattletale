@@ -43,9 +43,27 @@
 ## No `doAssert` anywhere. A failing doAssert hangs under `-d:nimAllocStats`.
 
 import std/[algorithm, importutils, monotimes, os, strformat, strutils, times]
-import cnj_errors, cnj_types, cnj_values, cnj_parse, cnj_engine
+import cnj_types, jinja_data_model, cnj_parse, cnj_engine
 import workspace/data_structures/src/small_seqs
 import ../tests/rows
+
+type
+  Shape = object
+    ## One conversation shape, a name plus the context it renders.
+    name: string
+    ctx: JinjaVal
+
+  Compiled = object
+    ## One parsed template plus its bench label.
+    ##
+    ## `Machine` is built from these fields at render time, not at parse time.
+    ##
+    ## `Machine.jinja` borrows the template text, so `src` must outlive every render
+    ## built from this record.
+    label: string
+    src: string
+    nodes: seq[Node]
+    t: Tables
 
 when defined(benchAlloc) and not defined(nimAllocStats):
   {.error: "build the allocation trace with -d:benchAlloc -d:nimAllocStats".}
@@ -59,14 +77,14 @@ const HfModelsRoot = currentSourcePath().parentDir.parentDir.parentDir /
     "transformers" / "tests" / "hf_models"
   ## the gitignored checkpoint links, `<root>/<model>/chat_template.jinja`
 
-func msgVal(role, content: string): Value =
+func msgVal(role, content: string): JinjaVal =
   ## One chat message with the two keys every corpus template reads.
   var d = DictVal()
   dictSet(d, "role", strVal(role))
   dictSet(d, "content", strVal(content))
   dictVal(d)
 
-func toolCallMsg(name: string, arguments: Value): Value =
+func toolCallMsg(name: string, arguments: JinjaVal): JinjaVal =
   ## One assistant tool-call message, `arguments` a mapping, matching GLM-4.7-Flash's `_args.items()` method.
   var fn = DictVal()
   dictSet(fn, "name", strVal(name))
@@ -79,7 +97,7 @@ func toolCallMsg(name: string, arguments: Value): Value =
   dictSet(d, "tool_calls", seqVal(@[dictVal(tc)]))
   dictVal(d)
 
-func toolRespMsg(id, content: string): Value =
+func toolRespMsg(id, content: string): JinjaVal =
   ## One tool-result message bound to its call id.
   var d = DictVal()
   dictSet(d, "role", strVal("tool"))
@@ -87,7 +105,7 @@ func toolRespMsg(id, content: string): Value =
   dictSet(d, "content", strVal(content))
   dictVal(d)
 
-func weatherTools(): Value =
+func weatherTools(): JinjaVal =
   ## One function-tool definition, the corpus tools fixture's schema.
   var cityProp = DictVal()
   dictSet(cityProp, "type", strVal("string"))
@@ -105,7 +123,7 @@ func weatherTools(): Value =
   dictSet(tool, "function", dictVal(fn))
   seqVal(@[dictVal(tool)])
 
-func contextOf(msgs: seq[Value], tools: Value): Value =
+func contextOf(msgs: seq[JinjaVal], tools: JinjaVal): JinjaVal =
   ## Render context holding `messages`, `tools` and `add_generation_prompt`.
   ## Template kwargs stay absent, the templates guard them with an `is defined` test.
   var d = DictVal()
@@ -114,23 +132,6 @@ func contextOf(msgs: seq[Value], tools: Value): Value =
   dictSet(d, "add_generation_prompt", boolVal(true))
   dictVal(d)
 
-type
-  Shape = object
-    ## One conversation shape, a name plus the context it renders.
-    name: string
-    ctx: Value
-
-  Compiled = object
-    ## One parsed template plus its bench label.
-    ##
-    ## `Machine` is built from these fields at render time, not at parse time.
-    ##
-    ## `Machine.jinja` borrows the template text, so `src` must outlive every render
-    ## built from this record.
-    label: string
-    src: string
-    nodes: seq[Node]
-    t: Tables
 
 func shortShape(): Shape =
   ## 2-message short conversation, no tools.
@@ -180,12 +181,12 @@ const
 
 # ── Measurement ──────────────────────────────────────────────────────────────
 
-proc renderOnce(m: Machine, t: Tables, ctx: Value, clock = 0.0): string =
+proc renderOnce(m: Machine, t: Tables, ctx: JinjaVal, clock = 0.0): string =
   ## Renders once, whole, through the pull interface, exactly as the test suites do.
   var d = newDriver(ctx, clock)
   pullAll(m, t, d)
 
-proc renderN(m: Machine, t: Tables, ctx: Value, clock: float64, n: int): int =
+proc renderN(m: Machine, t: Tables, ctx: JinjaVal, clock: float64, n: int): int =
   ## Renders `n` times and returns the accumulated output byte count, so the loop
   ## consumes every render and nothing is optimized away.
   for _ in 0 ..< n:
@@ -208,7 +209,7 @@ func median(xs: seq[float64]): float64 =
   let s = sorted(xs)
   s[s.len div 2]
 
-proc timeShape(m: Machine, t: Tables, ctx: Value, iters: int): string =
+proc timeShape(m: Machine, t: Tables, ctx: JinjaVal, iters: int): string =
   ## Times one template x shape.
   ##
   ## 500 warm-up renders, then rounds of 15 timed runs of `iters` renders each.
@@ -259,7 +260,7 @@ when defined(benchAlloc):
       if byKind[kind] > 0:
         result.summary.add &"{kind}[{byKind[kind]}] "
 
-  proc allocShape(m: Machine, t: Tables, ctx: Value, iters: int): string =
+  proc allocShape(m: Machine, t: Tables, ctx: JinjaVal, iters: int): string =
     ## Allocates per render for one template x shape.
     ## One warm-up render goes uncounted, then `iters` renders are counted via `getAllocStats()`.
     discard renderOnce(m, t, ctx)
@@ -298,7 +299,7 @@ when defined(benchAlloc):
       total += per
     fmt"suite mean {total / rs.len.float64:.1f} allocs/render over {rs.len} rows: {perRow}"
 
-  proc microAttribution(ctx: Value): void =
+  proc microAttribution(ctx: JinjaVal): void =
     ## Isolates render-time allocation sources with minimal templates over one shared
     ## context through the public render API.
     ## Deltas against the verbatim baseline give per-message and per-emit costs.
@@ -343,7 +344,7 @@ when defined(benchAlloc):
         discard pyStr(content)
     echo &"  micro pyStr(msg content) {ps.float64 / 1000.0:5.2f} allocs/call"
     # Direct attribution of the emit path's two owning copies, through public fields.
-    # One copy belongs to the context lookup that fills a `Value`.
+    # One copy belongs to the context lookup that fills a `JinjaVal`.
     # The other belongs to the pending-piece assignment that moves the string into driver storage.
     let msgs = ctx.d.dictGet("messages")
     # Message 1 rather than the system message, whose content is a compile-time
@@ -456,7 +457,7 @@ proc benchCorpus(): void =
 
 # ── Pull-window timing ───────────────────────────────────────────────────────
 
-proc renderWindowN(m: Machine, t: Tables, ctx: Value, clock: float64, n, windowSize: int): int =
+proc renderWindowN(m: Machine, t: Tables, ctx: JinjaVal, clock: float64, n, windowSize: int): int =
   ## Renders `n` times through a `windowSize`-byte stack window and returns the byte
   ## count accumulated across renders, so the loop consumes every render.
   var buf: array[4096, char]
@@ -480,7 +481,7 @@ proc pullCallsPerPass(m: Machine, t: Tables, rs: seq[Row], windowSize: int): int
       inc result
 
 proc timedCorpusPasses(m: Machine, t: Tables, rs: seq[Row], iters: int,
-    render: proc (m: Machine, t: Tables, ctx: Value, clock: float64): int):
+    render: proc (m: Machine, t: Tables, ctx: JinjaVal, clock: float64): int):
     tuple[mid, spread: float64] =
   ## Rounds of 15 timed runs of `iters` full-corpus passes of `render`, method
   ## identical to the corpus timing anchor:
@@ -516,12 +517,12 @@ proc benchPullWindows(): void =
     discard renderN(m, tables, rs[0].context, rs[0].clock, 500) # warm-up pass, not counted
     var line = &"  {suite:14} "
     for windowSize in [256, 4096]:
-      let renderRow = proc (mm: Machine, tt: Tables, ctx: Value, clock: float64): int =
+      let renderRow = proc (mm: Machine, tt: Tables, ctx: JinjaVal, clock: float64): int =
         renderWindowN(mm, tt, ctx, clock, 1, windowSize)
       let (mid, spread) = timedCorpusPasses(m, tables, rs, iters, renderRow)
       let flag = if spread > 20.0: "  VARIANCE" else: ""
       line.add &"win {windowSize:4} {mid:9.4f} ms/render  spread {spread:4.1f}%{flag}   "
-    let renderWhole = proc (mm: Machine, tt: Tables, ctx: Value, clock: float64): int =
+    let renderWhole = proc (mm: Machine, tt: Tables, ctx: JinjaVal, clock: float64): int =
       renderOnce(mm, tt, ctx, clock).len
     let (mid, spread) = timedCorpusPasses(m, tables, rs, iters, renderWhole)
     let flag = if spread > 20.0: "  VARIANCE" else: ""

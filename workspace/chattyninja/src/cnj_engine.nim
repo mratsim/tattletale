@@ -20,7 +20,7 @@
 #   from the repo root, `nim test_chattyninja` builds and runs every suite with its variants.
 
 import std/unicode
-import cnj_errors, cnj_types, cnj_values, cnj_expr, cnj_parse
+import cnj_types, jinja_data_model, cnj_expr, cnj_parse
 
 type
   Step* = proc (m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.}
@@ -55,7 +55,7 @@ proc emitStr(d: var Driver, s: sink string) =
   doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
   d.pend = Piece(pos: 0, kind: pkStr, s: s)
 
-proc emitValue(d: var Driver, v: Value) =
+proc emitValue(d: var Driver, v: JinjaVal) =
   ## Queues a derived value's rendering as the lazy piece, the serializer in `d.lazy`
   ## draining into the caller's window across pull calls, byte-exact with `pyStr`.
   doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
@@ -73,7 +73,7 @@ template pieceLen(p: Piece): int =
 # Binding
 # ---------------------------------------------------------------------------
 
-func bindName(d: var Driver, name: int32, val: Value) =
+func bindName(d: var Driver, name: int32, val: JinjaVal) =
   ## Binds a name in the innermost scope, replacing an existing binding there.
   var sc = d.scopes.len - 1
   for bi in 0 ..< d.scopes[sc].len:
@@ -115,29 +115,29 @@ proc stepIf(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   template nd: Node = m.nodes[n]
   let v = evalSpan(m, t, d, nd.lo, nd.hi, forceMacro)
   if isTruthy(v):
-    d.curNode = if nd.child == noLink: nd.succ else: nd.child
-  elif nd.alt != noLink:
+    d.curNode = if nd.child == NoLink: nd.succ else: nd.child
+  elif nd.alt != NoLink:
     d.curNode = nd.alt
   else:
     d.curNode = nd.succ
 
-func materialize(v: Value): seq[Value] =
+func materialize(v: JinjaVal): seq[JinjaVal] =
   ## Returns the iterable as a materialized sequence. `loop.previtem` and `loop.nextitem`
   ## need random access, so a lazy cursor would need a peek buffer anyway.
   case v.kind
   of vkSeq: v.xs.items
   of vkDict, vkNs:
-    var acc = newSeq[Value](v.d.keys.len)
+    var acc = newSeq[JinjaVal](v.d.keys.len)
     for i, k in v.d.keys:
       acc[i] = strVal(k)
     acc
   of vkStr: codepointVals(v.s)
   of vkUndefined:
-    raise err("cannot iterate an undefined value")
+    raise jinjaErr("cannot iterate an undefined value")
   else:
-    raise err("cannot iterate a " & $v.kind)
+    raise jinjaErr("cannot iterate a " & $v.kind)
 
-proc bindTargets(m: Machine, t: Tables, d: var Driver, n: int32, item: Value) =
+proc bindTargets(m: Machine, t: Tables, d: var Driver, n: int32, item: JinjaVal) =
   ## Binds the `nkFor` loop targets at `n`, more than one target unpacking a sequence, which
   ## is what `x.items()` feeds through `{% for k, v in x.items() %}`.
   template nd: Node = m.nodes[n]
@@ -146,7 +146,7 @@ proc bindTargets(m: Machine, t: Tables, d: var Driver, n: int32, item: Value) =
     d.bindName(nd.targetAt(0), item)
   else:
     if item.kind != vkSeq or item.xs.items.len != ntargets:
-      raise err("`for` unpacks " & $ntargets & " targets from a value that is not a " &
+      raise jinjaErr("`for` unpacks " & $ntargets & " targets from a value that is not a " &
           $ntargets & "-element sequence")
     for i in 0 ..< ntargets:
       d.bindName(nd.targetAt(i), item.xs.items[i])
@@ -171,9 +171,9 @@ proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
       d.frames.setLen(d.frames.len - 1)
       d.curNode = nd.succ
       return
-    var keep = nd.filterLo == noLink
+    var keep = nd.filterLo == NoLink
     bindTargets(m, t, d, n, items[idx])
-    if nd.filterLo != noLink:
+    if nd.filterLo != NoLink:
       let evaluated = evalSpan(m, t, d, nd.filterLo, nd.filterHi, forceMacro)
       keep = isTruthy(evaluated)
     if keep:
@@ -198,7 +198,7 @@ proc stepFor(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   d.frames[fi].loop.idx = 0
   bindTargets(m, t, d, n, items[0])
   d.bindName(nd.loopName, loopVal(d.frames[fi].loop))
-  d.curNode = if nd.child == noLink: nd.succ else: nd.child
+  d.curNode = if nd.child == NoLink: nd.succ else: nd.child
 
 proc stepSet(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Single-target `{% set %}`, the target carried as an interned name id in the child slot,
@@ -210,7 +210,7 @@ proc stepSet(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
 proc gap(kindName, corpusSite: string): void {.noreturn.} =
   ## Reports a declared construct that is not implemented, naming `kindName`
   ## and the corpus site that demands it.
-  raise newImplementError(kindName & " is not implemented; " & corpusSite)
+  raise jinjaErr(kindName & " is not implemented; " & corpusSite, cause = ceUnimplemented)
 
 proc stepBreak(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   ## Unwinds to the nearest for-frame and continues at its successor, stopping at a macro-call
@@ -224,7 +224,7 @@ proc stepSetNs(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   template nd: Node = m.nodes[n]
   let ns = lookupNameById(t, d, nd.target)
   if ns.kind != vkNs:
-    raise err("`" & t.names[nd.target] & "` is not a namespace, so it has no `" &
+    raise jinjaErr("`" & t.names[nd.target] & "` is not a namespace, so it has no `" &
         t.names[nd.field] & "` to set")
   dictSet(ns.d, t.names[nd.field], evalSpan(m, t, d, nd.lo, nd.hi, forceMacro))
   d.curNode = nd.succ
@@ -273,7 +273,7 @@ proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Cal
   for k in 0 ..< nparams:
     var val = undefinedVal()
     var bound = false
-    while pos < args.len and args[pos].nameLo == noLink:
+    while pos < args.len and args[pos].nameLo == NoLink:
       if pos == k:
         val = args[pos].val
         bound = true
@@ -281,13 +281,13 @@ proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Cal
       break
     if not bound:
       for a in args:
-        if a.nameLo != noLink and
+        if a.nameLo != NoLink and
             m.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1) == t.names[nd.paramNameAt(k)]:
           val = a.val
           bound = true
           break
     if not bound:
-      if nd.paramDefLoAt(k) == noLink:
+      if nd.paramDefLoAt(k) == NoLink:
         val = undefinedVal()
       else:
         val = evalSpan(m, t, d, nd.paramDefLoAt(k), nd.paramDefHiAt(k), forceMacro)
@@ -325,7 +325,7 @@ proc startMacro(m: Machine, t: Tables, d: var Driver, call: PendingCallVal, retN
   ## - the body's output pieces drain through the caller's window until the frame closes on the definition node
   ## - depth is capped, and a breach raises
   if d.macroDepth >= MacroDepthCap:
-    raise err("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
+    raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
         t.names[call.mc.name] & "`")
   inc d.macroDepth
   d.scopes.add @[]
@@ -345,7 +345,7 @@ proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Ca
   doAssert d.pend.kind == pkNone,
       "a macro body was forced while the driver still held a pending piece"
   if d.macroDepth >= MacroDepthCap:
-    raise err("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
+    raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
         t.names[mc.name] & "`")
   var d2 = d
   inc d2.macroDepth
@@ -353,7 +353,7 @@ proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Ca
   bindMacroArgs(m, t, d2, mc.node, args)
   d2.curNode = mc.body
   var node = mc.body
-  while node != mc.node and node != noLink:
+  while node != mc.node and node != NoLink:
     steps[m.nodes[node].kind](m, t, d2, node)
     node = d2.curNode
     while d2.pend.kind != pkNone:
@@ -363,7 +363,7 @@ proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Ca
 # Driver
 # ---------------------------------------------------------------------------
 
-func newDriver*(ctx: Value, clock = 0.0): Driver =
+func newDriver*(ctx: JinjaVal, clock = 0.0): Driver =
   ## Returns a driver ready to render `ctx`, the render context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
   ## `clock` is the epoch `strftime_now` reads, never `Machine` state, so one artifact renders reproducibly under different clocks.
   Driver(curNode: 0, cur: 0, pend: Piece(kind: pkNone), scopes: @[(default(Scope))], root: ctx,
@@ -381,7 +381,7 @@ proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int 
   ##   mid-drain and resumes never re-receives a byte
   ## - a piece longer than the window drains across calls, a lazy piece resuming
   ##   through the serializer in `d.lazy`
-  ## - 0 means the render is complete, nothing pending and `d.curNode == noLink`
+  ## - 0 means the render is complete, nothing pending and `d.curNode == NoLink`
   ##
   ## A raise discards the bytes already written into `buf` in the failing call, the caller
   ## never receiving them and the driver having advanced past their render, so a repull
@@ -426,7 +426,7 @@ proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int 
       if result == buf.len:
         return
       continue
-    if d.curNode == noLink:
+    if d.curNode == NoLink:
       return
     let n = d.curNode
     steps[m.nodes[n].kind](m, t, d, n)
@@ -455,7 +455,7 @@ proc pullAll*(m: Machine, t: Tables, d: var Driver): string =
     if n > 0:
       copyMem(addr result[at], unsafeAddr buf[0], n)
 
-proc renderToString*(src: string, ctx: Value, clock = 0.0): string =
+proc renderToString*(src: string, ctx: JinjaVal, clock = 0.0): string =
   ## Compiles and renders in one call, building `Machine` at the scope that owns `src`,
   ## the artifact borrowing the template text and never outliving it.
   let (nodes, tables) = parseTemplate(src)
