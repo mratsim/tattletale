@@ -245,7 +245,8 @@ func splitMethod(v: JinjaVal, args: Args): JinjaVal =
     var pos = 0
     var i = 0
     while i + sep.len <= v.s.len:
-      if sep == v.s.toOpenArray(i, i + sep.len - 1):
+      # A non-empty separator is guaranteed here, the empty one splitting per codepoint above.
+      if v.s[i] == sep[0] and sep == v.s.toOpenArray(i, i + sep.len - 1):
         acc.add strVal(spanString(v.s.toOpenArray(pos, i - 1)))
         pos = i + sep.len
         i = pos

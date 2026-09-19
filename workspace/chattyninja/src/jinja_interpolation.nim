@@ -301,30 +301,95 @@ func argKey(tmpl: CompiledTemplate, a: Arg): string =
     spanString(argName(tmpl, a))
 
 func runeOffset(s: string, k: int): int =
-  ## Returns the byte offset of the codepoint at index `k`, advancing by UTF-8 lead-byte strides, the same walk `runeLen`
-  ## and the `runes` iterator take.
+  ## Returns the byte offset of the codepoint at index `k`, advancing by UTF-8
+  ## lead-byte strides from the scan start, the same walk `runeLen` takes.
   var j = 0
   for _ in 0 ..< k:
     inc j, runeLenAt(s, j)
   j
 
+func runeOffsets(s: string, a, b: int): tuple[lo, hi: int] =
+  ## Returns the byte offsets bracketing the codepoint index span `a ..< b`, one forward
+  ## stride walk answering both ends. An empty span (`a >= b`) reports `hi == lo`.
+  var j = 0
+  result.lo = -1
+  var k = 0
+  while k < b and j < s.len:
+    if k == a:
+      result.lo = j
+    inc j, runeLenAt(s, j)
+    inc k
+  if result.lo < 0:
+    result.lo = j
+  result.hi = j
+
 func runeSub(s: string, i: int): Rune =
   ## Returns the codepoint at Python index `i`, a negative `i` counting from the end.
-  ## An ASCII codepoint answers by one byte read, a multibyte one decodes in place.
-  let n = runeLen(s)
-  let idx = if i < 0: n + i else: i
-  if idx < 0 or idx >= n:
-    raise jinjaErr("string subscript " & $i & " is out of range")
-  let j = runeOffset(s, idx)
+  ## One stride walk answers the read:
+  ## - `i >= 0` walks forward from the scan start
+  ## - `i < 0` walks backward over continuation bytes from the end
+  ## Never a full-string length scan. An ASCII codepoint answers by one byte read,
+  ## a multibyte one decodes in place.
+  var j: int
+  if i >= 0:
+    j = 0
+    var left = i
+    while left > 0 and j < s.len:
+      inc j, runeLenAt(s, j)
+      dec left
+    if left > 0 or j >= s.len:
+      raise jinjaErr("string subscript " & $i & " is out of range")
+  else:
+    j = s.len
+    var left = -i
+    while left > 0 and j > 0:
+      # A rune starts where the backward continuation-byte scan stops.
+      dec j
+      while j > 0 and (s[j].ord and 0xC0) == 0x80:
+        dec j
+      dec left
+    if left > 0:
+      raise jinjaErr("string subscript " & $i & " is out of range")
   if s[j].ord < 0x80: Rune(s[j].ord) else: runeAt(s, j)
 
 func steppedSliceInto(sb: var Cursor, s: string, a, b, by: int) =
   ## Writes the stride-`by` codepoint slice into `sb`, visiting `a, a + by, ...`
   ## while the stride keeps the walk inside the clamped bounds.
-  var k = a
-  while (by > 0 and k < b) or (by < 0 and k > b):
-    sb.addRune runeSub(s, k)
-    inc k, by
+  ## One byte walk answers the whole slice per pass:
+  ## - `by > 0` advances by lead-byte strides
+  ## - `by < 0` steps backward over continuation bytes
+  ## Every visited codepoint reads in place at its own offset, never a per-index rescan.
+  if by > 0:
+    if a >= b:
+      return
+    var j = runeOffset(s, a)
+    var k = a
+    while k < b:
+      let l = runeLenAt(s, j)
+      sb.add s.toOpenArray(j, j + l - 1)
+      inc k, by
+      if k < b:
+        # Step to the next visited codepoint, `by` runes ahead, `k + by < b` keeping
+        # every skipped stride in bounds.
+        inc j, l
+        for _ in 1 ..< by:
+          inc j, runeLenAt(s, j)
+  else:
+    if a <= b:
+      return
+    var j = runeOffset(s, a)
+    var k = a
+    while k > b:
+      let l = runeLenAt(s, j)
+      sb.add s.toOpenArray(j, j + l - 1)
+      inc k, by
+      if k > b:
+        # Step to the next visited codepoint, `|by|` runes back, `k + by > b >= -1`
+        # keeping every visited index non-negative.
+        for _ in 1 .. -by:
+          dec j
+          while j > 0 and (s[j].ord and 0xC0) == 0x80:
+            dec j
 
 # Registries:
 #
@@ -424,7 +489,11 @@ func subslice(v, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep, isSlice: bool): 
     seqVal(acc)
   else:
     if by == 1:
-      strVal(spanString(v.s.toOpenArray(runeOffset(v.s, a), runeOffset(v.s, b) - 1)))
+      let (lo, hi) = runeOffsets(v.s, a, b)
+      if hi > lo:
+        strVal(spanString(v.s.toOpenArray(lo, hi - 1)))
+      else:
+        strVal("")
     else:
       var sb = measureBuf()
       sb.steppedSliceInto(v.s, a, b, by)
@@ -964,6 +1033,9 @@ func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
   ## Reports whether a depth-zero `if` survives in `tmpl.jinja[at..<stop)`. Byte scan, not a parse.
   ## Guarantees:
   ## - quoted text and bracketed subexpressions are skipped, so the scan never misses a ternary
+  ## - the scan stops at the unit's own delimiters, a depth-zero `,`, `:`,
+  ##   or an unmatched closer, so an `if` past them belongs to an enclosing
+  ##   expression or to a sibling dict entry, never to this one
   ## - it can only over-report, costing one extra walk
   ##   while keeping the answer correct
   ## An expression holding no `if`, the corpus majority, is walked exactly once.
@@ -978,6 +1050,8 @@ func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
         q = '\0'
     elif tmpl.jinja[i] in {'\'', '"'}:
       q = tmpl.jinja[i]
+    elif depth == 0 and tmpl.jinja[i] in {')', ']', '}', ',', ':'}:
+      return false
     elif tmpl.jinja[i] in {'(', '[', '{'}:
       inc depth
     elif tmpl.jinja[i] in {')', ']', '}'}:

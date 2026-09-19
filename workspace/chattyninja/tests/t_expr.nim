@@ -88,6 +88,9 @@ doAssert render("'a' not in ['a', 'b']") == "False", "`not in` is `in` negated"
 doAssert render("'z' not in ['a', 'b']") == "True"
 doAssert render("'name' in people", withPeople) == "True", "`in` over a mapping tests keys"
 doAssert render("'sub' in 'substring'") == "True", "`in` over a string is a substring test"
+doAssert render("'ss' in 'substring'") == "False",
+    "a substring test whose first byte matches keeps scanning, absent stays absent"
+doAssert render("'ngs' in 'substring'") == "False", "an absent multi-byte-position needle stays absent"
 
 # `~` binds tighter than any comparison, so `1 == 1 ~ 'x'` compares against the unrendered
 # concatenation and raises. Parentheses hand the comparison result to `~`, and a precedence
@@ -162,6 +165,12 @@ doAssert render("raise_exception('then branch ran') if false else 'no'") == "no"
 doAssert render("'on' if people.active else 'off'", withPeople) == "on"
 doAssert render("'on' if people.missing else 'off'", withPeople) == "off"
 doAssert render("1 if 1 > 2 else 2 if 2 > 1 else 3") == "2", "a chained ternary takes one arm"
+doAssert render("range(1 if true else 2) | length") == "1",
+    "a ternary inside a call argument list takes one arm"
+doAssert render("{'k': 't' if true else 'f'}['k']") == "t",
+    "a ternary inside a dict literal value takes one arm"
+doAssert render("('t' if false else 'f')") == "f",
+    "a ternary inside a parenthesised group takes one arm"
 
 # `is defined` set-guard
 # ---------------------------------------------------------------------------
@@ -264,6 +273,8 @@ doAssert render("[1, 2, 3, 4][::-1]") == "[4, 3, 2, 1]"
 doAssert render("[1, 2, 3][::-2]") == "[3, 1]", "negative step visits every second item"
 doAssert render("[1, 2, 3][2:0:-1]") == "[3, 2]", "explicit bounds win over the reversal defaults"
 doAssert render("[][::-1]") == "[]", "a reversed empty sequence is empty"
+doAssert render("'abc'[2:1]") == "", "a string stop before the start is empty, not reversed"
+doAssert render("'h\u00e9llo'[99:]") == "", "a string start past the tail is empty"
 doAssert render("'abcdef'[1:5:2]") == "bd", "string slicing counts codepoints"
 block zeroStepIsAnError:
   var reported = ""
@@ -285,6 +296,10 @@ doAssert render("[{'role': 'user'}] | length") == "1"
 
 doAssert render("'h\u00e9llo'[1:3]") == "\u00e9l", "a step-1 string slice copies its byte window"
 doAssert render("'h\u00e9llo'[::-1]") == "oll\u00e9h", "a reversed string slice walks codepoints"
+doAssert render("'h\u00e9llo'[-2]") == "l", "a negative string subscript steps back over the multibyte rune"
+doAssert render("'h\u00e9llo'[::-2]") == "olh", "a negative string step visits every second codepoint"
+doAssert render("'a--b'.split('--')") == "['a', 'b']", "a multi-byte separator splits between occurrences"
+doAssert render("'a-b'.split('--')") == "['a-b']", "a first-byte match that is no separator keeps the part whole"
 doAssert render("'ab'.split('')") == "['a', 'b']", "an empty separator splits per codepoint"
 doAssert render("'a b c'.split()") == "['a', 'b', 'c']", "the default separator is one space"
 doAssert render("'\u00c9\u00c0'|lower") == "\u00c9\u00c0", "a non-ascii letter passes through lower unchanged"

@@ -425,9 +425,12 @@ func cmpVal*(a, b: JinjaVal): int =
 
 func substringOf(needle, haystack: string): bool =
   ## Returns whether `needle` occurs in `haystack`, the empty needle always matching.
-  ## A needle longer than `haystack` leaves the scan range empty.
+  ## A needle longer than `haystack` leaves the scan range empty. The first-byte guard
+  ## holds every non-matching position to one compare.
+  if needle.len == 0:
+    return true
   for i in 0 .. haystack.len - needle.len:
-    if haystack.toOpenArray(i, i + needle.len - 1) == needle:
+    if haystack[i] == needle[0] and haystack.toOpenArray(i, i + needle.len - 1) == needle:
       return true
   false
 

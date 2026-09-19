@@ -294,18 +294,6 @@ func start(p: var Parser) =
 
 # Emit:
 
-func intern(p: var Parser, name: openArray[char]): int32 =
-  ## Interns `name` in parse order, scope lookup first, then a byte compare against
-  ## the one interned copy. A carried name allocates nothing, a new name copying
-  ## exactly once into `CompiledSymbols.names`.
-  let got = findName(p.symbols, name)
-  if got != NoLink:
-    return got
-  var interned: string
-  interned.add name
-  result = int32 p.symbols.names.len
-  p.symbols.names.add interned
-
 func addNode(p: var Parser, n: sink Node): int32 =
   ## Appends one node and returns its arena index.
   result = int32 p.nodes.len
@@ -431,7 +419,7 @@ proc parseMacroParams(p: var Parser, t: Tag, at: int, nodeIdx: int32) =
       inc i
     if i == nameStart:
       raise jinjaErr("macro parameter needs a name at byte " & $nameStart, nameStart)
-    let name = p.intern(p.src.toOpenArray(nameStart, i - 1))
+    let name = p.symbols.internName(p.src.toOpenArray(nameStart, i - 1))
     var k = i
     while k < t.tHi and p.src[k] in cnj_types.Whitespace:
       inc k
@@ -471,7 +459,7 @@ proc parseMacro(p: var Parser): Head =
     inc i
   if i == nameStart:
     raise jinjaErr("`macro` needs a name at byte " & $nameStart, nameStart)
-  let name = p.intern(p.src.toOpenArray(nameStart, i - 1))
+  let name = p.symbols.internName(p.src.toOpenArray(nameStart, i - 1))
   while i < t.tHi and p.src[i] in cnj_types.Whitespace:
     inc i
   if i >= t.tHi or p.src[i] != '(':
@@ -539,7 +527,7 @@ proc parseFor(p: var Parser): Head =
       inc i
     if i == start:
       raise jinjaErr("`for` needs a target name at byte " & $start, start)
-    targets.add p.intern(p.src.toOpenArray(start, i - 1))
+    targets.add p.symbols.internName(p.src.toOpenArray(start, i - 1))
     while i < t.tHi and p.src[i] in cnj_types.Whitespace:
       inc i
     if i < t.tHi and p.src[i] == ',':
@@ -564,7 +552,7 @@ proc parseFor(p: var Parser): Head =
       inc k
     filterLo = int32 k
     filterHi = int32 t.tHi
-  let loopId = p.intern("loop")
+  let loopId = p.symbols.internName("loop")
   p.advance()
   let idx = addNode(p, mkNode(nkFor, int32 iterLo, int32 iterHi, NoLink, NoLink, loopId,
       filterLo, filterHi))
@@ -609,8 +597,8 @@ proc parseSet(p: var Parser): Head =
     var v = k + 1
     while v < t.tHi and p.src[v] in cnj_types.Whitespace:
       inc v
-    let targetId = p.intern(p.src.toOpenArray(nsLo, nsHi - 1))
-    let fieldId = p.intern(p.src.toOpenArray(fieldLo, fieldHi - 1))
+    let targetId = p.symbols.internName(p.src.toOpenArray(nsLo, nsHi - 1))
+    let fieldId = p.symbols.internName(p.src.toOpenArray(fieldLo, fieldHi - 1))
     p.advance()
     let idx = addNode(p, mkNode(nkSetNamespace, int32 v, t.tHi.int32, NoLink, targetId, fieldId))
     return Head(head: idx, tails: @[idx])
@@ -619,7 +607,7 @@ proc parseSet(p: var Parser): Head =
   var v = j + 1
   while v < t.tHi and p.src[v] in cnj_types.Whitespace:
     inc v
-  let target = p.intern(p.src.toOpenArray(nameStart, i - 1))
+  let target = p.symbols.internName(p.src.toOpenArray(nameStart, i - 1))
   p.advance()
   let idx = addNode(p, mkNode(nkSet, int32 v, t.tHi.int32, NoLink, target))
   Head(head: idx, tails: @[idx])
