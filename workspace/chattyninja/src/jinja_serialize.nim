@@ -59,7 +59,8 @@ type
     ## - queued literals and separators drain from the chunk buffer and `sep`, unquoted
     ##   string bodies copy straight from `s`
     ## - quoted string bodies, container brackets and entries advance through the phases
-    ## - a str-mode `~` tree flattens into `concatTail`, operands dispatching one after another
+    ## - a str-mode `~` tree flattens into `concatTail`, operands dispatching one after
+    ##   the other, and a lazy `range` renders its list form arithmetically, one element per index
     mode*: SerMode
     opts*: JsonOpts
       ## `tojson` knobs, read in `smJson` mode only
@@ -106,7 +107,7 @@ func pyStrInto*(sb: var Cursor, v: JinjaVal) =
   of vkInt: sb.addInt v.i
   of vkFloat: sb.addFloat v.f
   of vkStr: sb.add v.s
-  of vkSeq, vkDict, vkNs, vkLoop, vkMacro: sb.pyReprInto(v)
+  of vkSeq, vkDict, vkNs, vkLoop, vkMacro, vkRange: sb.pyReprInto(v)
   of vkCall: raise jinjaErr("a macro call result must be rendered before stringification")
   of vkConcat: raise jinjaErr("a concat must be rendered in emit position before stringification")
 
@@ -134,6 +135,13 @@ func pyReprInto(sb: var Cursor, v: JinjaVal) =
       if i > 0:
         sb.add ", "
       sb.pyReprInto(v.xs.items[i])
+    sb.add ']'
+  of vkRange:
+    sb.add '['
+    for i in 0 ..< v.r.rangeLen:
+      if i > 0:
+        sb.add ", "
+      sb.addInt(v.r.start + i.int64 * v.r.step)
     sb.add ']'
   of vkDict, vkNs:
     sb.add '{'
@@ -235,19 +243,26 @@ func serFinish(js: var Ser) =
     return
   inc js.stack[^1].idx
   let f = js.stack[^1]
-  let n = if f.val.kind == vkSeq: f.val.xs.items.len else: f.val.d.keys.len
+  let n = case f.val.kind
+    of vkSeq: f.val.xs.items.len
+    of vkRange: f.val.r.rangeLen
+    else: f.val.d.keys.len
   if f.idx < n:
     js.sep = if js.mode == smJson: js.opts.itemSep else: ", "
     js.sepos = 0
-    if f.val.kind == vkSeq:
+    case f.val.kind
+    of vkSeq:
       js.v = f.val.xs.items[f.idx]
+      js.nxt = nxDispatch
+    of vkRange:
+      js.v = f.val.r.rangeAt(f.idx)
       js.nxt = nxDispatch
     else:
       js.s = f.val.d.keys[f.idx]
       js.nxt = nxKey
     js.phase = spSep
   else:
-    js.closeSeq = f.val.kind == vkSeq
+    js.closeSeq = f.val.kind in {vkSeq, vkRange}
     discard js.stack.pop()
     js.phase = spClose
 
@@ -320,6 +335,14 @@ func serDispatch(js: var Ser) =
       js.stack.add(SerFrame(val: v, idx: 0))
       serQueue(js, "[")
       js.v = v.xs.items[0]
+  of vkRange:
+    if v.r.rangeLen == 0:
+      serQueue(js, "[]")
+      serFinish(js)
+    else:
+      js.stack.add(SerFrame(val: v, idx: 0))
+      serQueue(js, "[")
+      js.v = v.r.rangeAt(0)
   of vkDict, vkNs:
     if v.d.keys.len == 0:
       serQueue(js, "{}")

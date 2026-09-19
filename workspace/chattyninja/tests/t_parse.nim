@@ -19,7 +19,8 @@ import workspace/data_structures/src/small_seqs
 
 const root = currentSourcePath().parentDir
 let src = readFile(root / "corpus" / "deepseekv2lite" / "deepseekv2lite.jinja")
-let (nodes, tables) = parseTemplate(src)
+let (tmpl, symbols) = parseTemplate(src)
+let nodes = tmpl.nodes
 
 # Node count and the kind sequence in index order. A construct is appended after its body, so
 # an `if` or `for` node sits above the nodes it dispatches into. Arena index order is source order,
@@ -35,11 +36,11 @@ for i, k in wantKinds:
 
 # Names are interned rather than stored per node, and a for-header carries its bindings
 # inside its own payload slots past position 6.
-doAssert tables.names.len == 3, "interned names: " & $tables.names.len
+doAssert symbols.names.len == 3, "interned names: " & $symbols.names.len
 doAssert nodes[3].kind == nkFor and int(nodes[3].slots.len) == 8,
     "nkFor carries its seven fixed slots plus one target id"
-doAssert tables.names[nodes[3].loopName] == "loop", "nkFor binds the interned `loop` name"
-doAssert tables.names[nodes[3].slots[7]] == "message", "nkFor carries its target name id"
+doAssert symbols.names[nodes[3].loopName] == "loop", "nkFor binds the interned `loop` name"
+doAssert symbols.names[nodes[3].slots[7]] == "message", "nkFor carries its target name id"
 doAssert src[nodes[3].lo ..< nodes[3].hi].strip == "messages",
     "nkFor keeps the iterable as a text span"
 
@@ -97,7 +98,7 @@ doAssert nodes[0].kind == nkIf, "the template's outermost construct is the first
 const wsFixture = "A   {%- if x -%}\n   hello   \n{%- endif -%}   B\n"
 let (wn, _) = parseTemplate(wsFixture)
 var verbatim = newSeq[string]()
-for n in wn:
+for n in wn.nodes:
   doAssert n.kind == nkVerbatim or n.kind == nkIf, "unexpected kind " & $n.kind
   if n.kind == nkVerbatim:
     let t = wsFixture[n.lo ..< n.hi]
@@ -105,32 +106,32 @@ for n in wn:
     doAssert "{%" notin t and "{{" notin t and "{#" notin t,
         "nkVerbatim carries a delimiter: " & t.escape
 doAssert verbatim == @["A", "hello", "B"], "resolved verbatim: " & $verbatim
-doAssert wn.filterIt(it.kind == nkIf).len == 1, "one if node for one {% if %}"
+doAssert wn.nodes.filterIt(it.kind == nkIf).len == 1, "one if node for one {% if %}"
 
 # A comment leaves no node of its own, erasure rather than a construct.
 # Surrounding runs keep their own borrowed spans, so the arena points into the template
 # instead of copying merged text.
 const cSrc = "a{# dropped #}b"
 let (cn, _) = parseTemplate(cSrc)
-doAssert cn.allIt(it.kind == nkVerbatim), "a comment became a node kind"
-doAssert cn.mapIt(cSrc[it.lo ..< it.hi]).join == "ab",
-    "a comment is erased, not preserved: " & $cn.mapIt(cSrc[it.lo ..< it.hi])
+doAssert cn.nodes.allIt(it.kind == nkVerbatim), "a comment became a node kind"
+doAssert cn.nodes.mapIt(cSrc[it.lo ..< it.hi]).join == "ab",
+    "a comment is erased, not preserved: " & $cn.nodes.mapIt(cSrc[it.lo ..< it.hi])
 
 # A comment carries the block tag's whitespace rules. `lstrip_blocks` strips blanks before a plain
 # comment on its line, trim_blocks drops one newline after it, and `{#-` / `-#}` strip the whole
 # whitespace run before / after the comment.
 const cmSrc = "A\n   {# plain #}\nB{#- gone -#}  C"
 let (cmn, _) = parseTemplate(cmSrc)
-doAssert cmn.allIt(it.kind == nkVerbatim), "a comment became a node kind"
-doAssert cmn.mapIt(cmSrc[it.lo ..< it.hi]).join == "A\nBC",
-    "comment whitespace rules: " & $cmn.mapIt(cmSrc[it.lo ..< it.hi])
+doAssert cmn.nodes.allIt(it.kind == nkVerbatim), "a comment became a node kind"
+doAssert cmn.nodes.mapIt(cmSrc[it.lo ..< it.hi]).join == "A\nBC",
+    "comment whitespace rules: " & $cmn.nodes.mapIt(cmSrc[it.lo ..< it.hi])
 
 # Only a trailing newline is dropped, so interior and trailing spacing survive byte for byte:
 # final does not mean trimmed.
 const pSrc = "keep  me  "
 let (pn, _) = parseTemplate(pSrc)
-doAssert pn.len == 1 and pn[0].kind == nkVerbatim
-doAssert pSrc[pn[0].lo ..< pn[0].hi] == "keep  me  ",
-    "spacing must survive: " & pSrc[pn[0].lo ..< pn[0].hi].escape
+doAssert pn.nodes.len == 1 and pn.nodes[0].kind == nkVerbatim
+doAssert pSrc[pn.nodes[0].lo ..< pn.nodes[0].hi] == "keep  me  ",
+    "spacing must survive: " & pSrc[pn.nodes[0].lo ..< pn.nodes[0].hi].escape
 
-echo "t_parse: ", nodes.len, " nodes, ", tables.names.len, " interned names, verbatim spans final"
+echo "t_parse: ", nodes.len, " nodes, ", symbols.names.len, " interned names, verbatim spans final"

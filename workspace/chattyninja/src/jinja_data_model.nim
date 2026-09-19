@@ -6,10 +6,17 @@
 ## Data model of chat-template inputs and outputs, the Python-object subset Jinja templates observe.
 ## JSON shapes arrive as values, renderings leave as Python text or `tojson` JSON bytes.
 ## - values carry truthiness, equality, ordering and the stringification a template reads
-## - renderings stream through a byte cursor over a caller-owned window
-## - every failure raises `JinjaError`, carrying message, cause and template byte location
+## - one call's arguments travel in a fixed-capacity inline carrier (`Arg`, `Args`),
+##   never a per-call sequence
+## - renderings stream through a byte cursor over a caller-owned window, every failure
+##   raising `JinjaError` with message, cause and template byte location
 
 import std/unicode
+
+const
+  ArgsCap* = 8
+    ## Inline capacity of one call's argument carrier. The most arguments one corpus
+    ## call passes is 2. A call past the cap is a template error, reported at the call.
 
 const
   NoOffset* = -1
@@ -54,7 +61,7 @@ type
     ## no template in the corpus doing float arithmetic, `vkCall` holding a macro call
     ## whose body has not run, `vkConcat` holding a `~` tree awaiting its emit
     vkUndefined, vkNone, vkBool, vkInt, vkFloat, vkStr, vkSeq, vkDict, vkNs, vkLoop, vkMacro,
-    vkCall, vkConcat
+    vkCall, vkConcat, vkRange
 
   SeqVal* = ref object
     ## Shared sequence of values, the `vkSeq` payload.
@@ -66,17 +73,46 @@ type
     keys*: seq[string]
     vals*: seq[JinjaVal]
 
+  RangeVal* = ref object
+    ## Lazy `range(start, stop, step)` bounds. Elements compute per index, the range never
+    ## materializing. The serializer renders the list form arithmetically and a `for` over it
+    ## walks the same arithmetic through `LoopState.r`.
+    start*, stop*, step*: int64
+
   LoopState* = ref object
-    ## Materialized iterable plus the cursor `loop.*` reads, shared between the driver's frame
-    ## and the `loop` value bound in the loop scope, both readers seeing one cursor.
-    items*: seq[JinjaVal]
+    ## Cursor over the iterable a `for` walks, one cursor shared by the driver frame
+    ## and the `loop` value bound in the loop scope:
+    ## - `xs` borrows the sequence payload of a `vkSeq` iterable, or holds a materialized
+    ##   one for mappings and strings, whose elements are derived per index
+    ## - `r` holds a lazy range, nil unless the iterable is one, elements computing
+    ##   per index and never materializing
+    xs*: SeqVal
+    r*: RangeVal
+      ## lazy range bounds, nil unless the iterable is a range
     idx*: int
 
-  CallArg* = object
-    ## One macro call argument, keyword-bound when `nameLo` carries a template span.
+  ArgKeyword* = enum
+    ## A keyword name a builtin reads out of an argument list, `akNone` the field's default:
+    ## a positional argument or a keyword no builtin reads.
+    akNone, akChars, akDefault, akEnsureAscii, akSeparators
+
+  Arg* = object
+    ## One call or filter argument, keyword-bound when `nameLo` is not `NoLink`.
+    ## A keyword keeps its template span into `CompiledTemplate.jinja`, a keyword name
+    ## carrying no interned `CompiledSymbols.names` entry.
     nameLo*, nameHi*: int32
-      ## keyword name span into the template text, negative in `nameLo` for a positional argument
+      ## keyword name span into `CompiledTemplate.jinja`, `NoLink` in `nameLo` for a positional argument
+    kw*: ArgKeyword
+      ## keyword slot named by that span, `akNone` when no builtin reads that keyword
     val*: JinjaVal
+
+  Args* = object
+    ## Fixed-capacity inline carrier of one call's arguments in call order. `argList` fills it and every
+    ## callee reads it. No per-call sequence, the carrier living on the stack
+    ## at the call site and moving whole into a pending macro call.
+    n*: int
+      ## arguments carried, at most `ArgsCap`
+    vals*: array[ArgsCap, Arg]
 
   PendingCallVal* = ref object
     ## A macro call whose body has not run. Holds the bound macro plus its evaluated arguments.
@@ -84,7 +120,7 @@ type
     ## the body to completion and reads the text.
     mc*: MacroVal
       ## the bound macro
-    args*: seq[CallArg]
+    args*: Args
       ## evaluated arguments in call order
 
   MacroVal* = ref object
@@ -107,6 +143,7 @@ type
     of vkLoop: lp*: LoopState
     of vkMacro: mc*: MacroVal
     of vkCall: pc*: PendingCallVal
+    of vkRange: r*: RangeVal
 
   JsonOpts* = object
     ## `tojson` knobs the corpus passes, `ensure_ascii` and `separators`.
@@ -231,6 +268,57 @@ func nsVal*(d: DictVal): JinjaVal = JinjaVal(kind: vkNs, d: d)
 func loopVal*(lp: LoopState): JinjaVal = JinjaVal(kind: vkLoop, lp: lp)
 func macroVal*(mc: MacroVal): JinjaVal = JinjaVal(kind: vkMacro, mc: mc)
 func callVal*(pc: PendingCallVal): JinjaVal = JinjaVal(kind: vkCall, pc: pc)
+func rangeVal*(start, stop, step: int64): JinjaVal =
+  ## Returns the lazy range value over `start`, `stop` and `step`.
+  JinjaVal(kind: vkRange, r: RangeVal(start: start, stop: stop, step: step))
+
+func rangeLen*(r: RangeVal): int =
+  ## Returns the element count of the range, Python's `len(range(start, stop, step))`:
+  ## a step against the span's direction answers 0.
+  let span = r.stop - r.start
+  if r.step > 0:
+    int(max(0'i64, (span + r.step - 1) div r.step))
+  elif r.step < 0:
+    int(max(0'i64, (span + r.step + 1) div r.step))
+  else:
+    0
+
+func rangeAt*(r: RangeVal, i: int): JinjaVal =
+  ## Returns element `i` of the range, `i` in `0 ..< rangeLen(r)`.
+  intVal(r.start + i.int64 * r.step)
+
+func rangesEqual*(a, b: RangeVal): bool =
+  ## Returns Python's range equality, same length and the same element per index,
+  ## not the same bounds, so `range(0, 6, 2)` equals `range(0, 5, 2)`.
+  let n = rangeLen(a)
+  if n != rangeLen(b):
+    return false
+  for i in 0 ..< n:
+    if a.start + i.int64 * a.step != b.start + i.int64 * b.step:
+      return false
+  true
+
+func loopLen*(lp: LoopState): int =
+  ## Returns the element count the cursor walks, the lazy range's arithmetic count
+  ## or the borrowed-or-materialized sequence's length.
+  if lp.r != nil: lp.r.rangeLen else: lp.xs.items.len
+
+func loopItem*(lp: LoopState, i: int): JinjaVal =
+  ## Returns element `i` of the cursor's iterable, `i` in `0 ..< loopLen`,
+  ## computed from the bounds for a lazy range.
+  if lp.r != nil: lp.r.rangeAt(i) else: lp.xs.items[i]
+
+func addArg*(a: var Args, v: sink Arg) =
+  ## Appends one argument to the carrier, raising when the call would exceed `ArgsCap`.
+  if a.n >= ArgsCap:
+    raise jinjaErr("a call carries more than " & $ArgsCap & " arguments")
+  a.vals[a.n] = v
+  inc a.n
+
+iterator argItems*(a: Args): lent Arg =
+  ## Iterates the carrier's arguments in call order.
+  for i in 0 ..< a.n:
+    yield a.vals[i]
 
 func concatVal*(cl, cr: JinjaVal): JinjaVal =
   ## Returns the `~` of two values. The operands flatten into one list in render order,
@@ -263,7 +351,8 @@ func isTruthy*(v: JinjaVal): bool =
   of vkStr: v.s.len != 0
   of vkSeq: v.xs.items.len != 0
   of vkDict, vkNs: v.d.keys.len != 0
-  of vkLoop: v.lp.items.len != 0
+  of vkLoop: v.lp.loopLen != 0
+  of vkRange: rangeLen(v.r) != 0
   of vkMacro: true
   of vkCall: raise jinjaErr("a macro call result must be rendered before a truthiness test")
   of vkConcat: raise jinjaErr("a concat must be rendered in emit position before a truthiness test")
@@ -318,6 +407,7 @@ func eqVal*(a, b: JinjaVal): bool =
     true
   of vkLoop: a.lp == b.lp
   of vkMacro: a.mc == b.mc
+  of vkRange: a.r.rangesEqual(b.r)
   of vkCall: raise jinjaErr("a macro call result must be rendered before an equality test")
   of vkConcat: raise jinjaErr("a concat must be rendered in emit position before an equality test")
   of vkUndefined, vkBool, vkInt, vkFloat: false
@@ -354,12 +444,21 @@ func containsVal*(haystack, needle: JinjaVal): bool =
     needle.kind == vkStr and haystack.d.dictGet(needle.s).kind != vkUndefined
   of vkStr:
     needle.kind == vkStr and substringOf(needle.s, haystack.s)
+  of vkRange:
+    for i in 0 ..< haystack.r.rangeLen:
+      if haystack.r.rangeAt(i).eqVal(needle):
+        return true
+    false
   else:
     raise jinjaErr("`in` needs a sequence, mapping or string on the right, got " & $haystack.kind)
 
-func pyStrip*(s, chars: string, left, right: bool): string =
-  ## Returns `s` with leading and/or trailing characters in `chars` removed, the way Python's
-  ## `str.strip`, `lstrip` and `rstrip` do, empty `chars` selecting the whitespace set.
+func stripSpan*(s, chars: openArray[char], left, right: bool): tuple[a, b: int] =
+  ## Returns the byte range of `s` that survives stripping the leading and/or trailing
+  ## characters of `chars`, the way Python's `str.strip`, `lstrip` and `rstrip` cut.
+  ##
+  ## Contract:
+  ## - empty `chars` selects the whitespace set
+  ## - no byte is copied, the caller materializes the cut only where the result is stored
   var cut: set[char]
   if chars.len == 0:
     cut = {' ', '\t', '\n', '\r', '\v', '\f'}
@@ -374,4 +473,10 @@ func pyStrip*(s, chars: string, left, right: bool): string =
   if right:
     while b > a and s[b - 1] in cut:
       dec b
-  if a == b: "" else: spanString(s.toOpenArray(a, b - 1))
+  (a, b)
+
+func stripMaterialized*(s, chars: openArray[char], left, right: bool): JinjaVal =
+  ## Returns the stripped cut of `s` as a string value, the storage-boundary materialization
+  ## of `stripSpan`: one string for the kept bytes, none for an empty cut.
+  let (a, b) = stripSpan(s, chars, left, right)
+  strVal(if a == b: "" else: spanString(s.toOpenArray(a, b - 1)))

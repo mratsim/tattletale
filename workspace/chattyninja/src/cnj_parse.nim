@@ -4,7 +4,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Chat-template parser.
-# Template text in, a flat node arena plus interned-name tables out.
+# Template text in, the shared node arena plus interned-name arena out.
 #
 # Lifecycle:
 #
@@ -59,7 +59,7 @@ type
   Parser = object
     ## Parse state:
     ##   the current tag with a one-tag lookahead, the scan cursor into `src`,
-    ##   the arena under construction and the tables.
+    ##   the arena under construction and the symbol arena.
     src: string
     cur, nxt: Tag # `nxt` is the lookahead, `tkEnd` there marking the end of the stream
     pending: Tag # a tag row scanned together with the text run before it, delivered next
@@ -68,7 +68,7 @@ type
     done: bool # the scan reached the end of the template
     dropCur: bool # settle emptied `cur`, parseBody emits no node for it
     tagMark: int # arena length at the last tag pull, the back-trim walk stops here
-    tables: Tables
+    symbols: CompiledSymbols
     nodes: seq[Node]
 
   Head = object
@@ -297,14 +297,14 @@ func start(p: var Parser) =
 func intern(p: var Parser, name: openArray[char]): int32 =
   ## Interns `name` in parse order, scope lookup first, then a byte compare against
   ## the one interned copy. A carried name allocates nothing, a new name copying
-  ## exactly once into `Tables.names`.
-  let got = findName(p.tables, name)
+  ## exactly once into `CompiledSymbols.names`.
+  let got = findName(p.symbols, name)
   if got != NoLink:
     return got
   var interned: string
   interned.add name
-  result = int32 p.tables.names.len
-  p.tables.names.add interned
+  result = int32 p.symbols.names.len
+  p.symbols.names.add interned
 
 func addNode(p: var Parser, n: sink Node): int32 =
   ## Appends one node and returns its arena index.
@@ -694,11 +694,13 @@ proc parseBody(p: var Parser, stopKws: openArray[string]): Head =
     open = fresh
   Head(head: head, tails: open)
 
-proc parseTemplate*(src: string): (seq[Node], Tables) =
-  ## Compiles template text to the arena plus its `Tables`, interned names built in parse order and read-only at render.
-  var p = Parser(src: src, tables: Tables(), nodes: newSeq[Node]())
+proc parseTemplate*(src: string): (CompiledTemplate, CompiledSymbols) =
+  ## Compiles template text to the shared artifact plus its `CompiledSymbols`, interned
+  ## names built in parse order and read-only at render.
+  ## Returns the template borrowing `src`, so it must not outlive the caller's text.
+  var p = Parser(src: src, symbols: CompiledSymbols(), nodes: newSeq[Node]())
   p.start()
   let body = parseBody(p, [])
   for x in body.tails:
     patch(p.nodes, x, NoLink)
-  (p.nodes, p.tables)
+  (CompiledTemplate(jinja: src, nodes: p.nodes), p.symbols)

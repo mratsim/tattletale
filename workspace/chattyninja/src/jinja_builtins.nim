@@ -7,33 +7,19 @@
 ## Jinja filters, tests and methods as pure `(JinjaVal, args) -> JinjaVal` functions.
 ## - name registries (`FilterNames`, `TestNames`, `MethodNames`) with the proc tables
 ##   they index, dispatched by name in jinja_interpolation
+## Call arguments travel in the fixed-capacity inline carrier (`Arg`, `Args`) from jinja_data_model.
 ## - a nil table entry is a declared name no template in the corpus uses, reported
 ##   through `gapWhat` as a gap, never answered wrongly
-## - globals stay in jinja_interpolation, their signatures reading the render driver
-##   and the template text, which this module cannot see
+## - globals stay in jinja_interpolation, their signatures reading the template text
+##   and the injected ports, which this module cannot see
 
 import std/unicode
 import jinja_data_model, jinja_serialize
 
 type
-  ArgKeyword* = enum
-    ## A keyword name a builtin reads out of an argument list, `akNone` the field's default:
-    ## a positional argument or a keyword no builtin reads.
-    akNone, akChars, akDefault, akEnsureAscii, akSeparators
-
-  Arg* = object
-    ## One call or filter argument, keyword-bound when `nameLo` is not `NoLink`.
-    ## A keyword keeps its template span into `Machine.jinja`, a keyword name
-    ## carrying no interned `Tables.names` entry.
-    nameLo*, nameHi*: int32
-      ## keyword name span into `Machine.jinja`, `NoLink` in `nameLo` for a positional argument
-    kw*: ArgKeyword
-      ## keyword slot named by that span, `akNone` when no builtin reads that keyword
-    val*: JinjaVal
-
-  FilterProc* = proc (v: JinjaVal, args: seq[Arg]): JinjaVal {.nimcall.}
-  TestProc* = proc (v: JinjaVal, args: seq[Arg]): bool {.nimcall.}
-  MethodProc* = proc (v: JinjaVal, args: seq[Arg]): JinjaVal {.nimcall.}
+  FilterProc* = proc (v: JinjaVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+  TestProc* = proc (v: JinjaVal, args: Args): bool {.nimcall, noSideEffect.}
+  MethodProc* = proc (v: JinjaVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
   FilterName* = enum
     fTojson, fLength, fTrim, fDefault, fJoin, fLower, fUpper, fCapitalize, fList, fSafe, fDictsort,
     fMap, fSelect, fReject, fReplace, fIndent, fTruncate, fReverse, fWordcount, fSum, fMin, fMax,
@@ -73,14 +59,14 @@ func argKeyword*(name: openArray[char]): ArgKeyword =
 
 # Argument helpers:
 
-func getArg*(args: seq[Arg], pos: int, kw: ArgKeyword, default: JinjaVal): JinjaVal =
+func getArg*(args: Args, pos: int, kw: ArgKeyword, default: JinjaVal): JinjaVal =
   ## Returns the argument bound under `kw`, else the positional slot `pos`, else `default`.
   if kw != akNone:
-    for a in args:
+    for a in args.argItems:
       if a.kw == kw:
         return a.val
-  if pos < args.len and args[pos].nameLo == NoLink:
-    return args[pos].val
+  if pos < args.n and args.vals[pos].nameLo == NoLink:
+    return args.vals[pos].val
   default
 
 const
@@ -100,12 +86,12 @@ const
     "endswith", "lower", "upper", "title", "replace", "find", "count", "format", "pop", "update"
   ]
 
-func tojsonFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func tojsonFilter(v: JinjaVal, args: Args): JinjaVal =
   ## Renders JSON. `ensure_ascii` and `separators` are the only kwargs
   ## the corpus passes. `ensure_ascii` defaults to false, non-ASCII emitted
   ## as raw UTF-8.
   var opts = JsonOpts()
-  for a in args:
+  for a in args.argItems:
     case a.kw
     of akEnsureAscii:
       if a.val.kind == vkBool:
@@ -120,20 +106,21 @@ func tojsonFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
       gapWhat("tojson kwarg", $a.nameLo)
   strVal(toJson(v, opts))
 
-func lengthFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func lengthFilter(v: JinjaVal, args: Args): JinjaVal =
   case v.kind
   of vkStr: intVal(runeLen(v.s))
   of vkSeq: intVal(v.xs.items.len)
   of vkDict, vkNs: intVal(v.d.keys.len)
+  of vkRange: intVal(rangeLen(v.r))
   else: raise jinjaErr("`length` needs a string, sequence or mapping")
 
-func trimFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func trimFilter(v: JinjaVal, args: Args): JinjaVal =
   if v.kind != vkStr:
     raise jinjaErr("`trim` needs a string")
   let a = getArg(args, 0, akChars, undefinedVal())
-  strVal(pyStrip(v.s, if a.kind == vkStr: a.s else: "", true, true))
+  v.s.stripMaterialized(if a.kind == vkStr: a.s else: "", true, true)
 
-func defaultFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func defaultFilter(v: JinjaVal, args: Args): JinjaVal =
   if v.kind == vkUndefined: getArg(args, 0, akDefault, noneVal()) else: v
 
 func asciiCased(s: openArray[char], upper: bool): string =
@@ -145,17 +132,17 @@ func asciiCased(s: openArray[char], upper: bool): string =
     let flip = upper and c in {'a' .. 'z'} or not upper and c in {'A' .. 'Z'}
     result[i] = if flip: chr(ord(c) xor 0x20) else: c
 
-func lowerFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func lowerFilter(v: JinjaVal, args: Args): JinjaVal =
   if v.kind != vkStr:
     raise jinjaErr("`lower` needs a string")
   strVal(asciiCased(v.s, false))
 
-func upperFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func upperFilter(v: JinjaVal, args: Args): JinjaVal =
   if v.kind != vkStr:
     raise jinjaErr("`upper` needs a string")
   strVal(asciiCased(v.s, true))
 
-func capitalizeFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func capitalizeFilter(v: JinjaVal, args: Args): JinjaVal =
   if v.kind != vkStr:
     raise jinjaErr("`capitalize` needs a string")
   var acc = asciiCased(v.s, false)
@@ -163,17 +150,22 @@ func capitalizeFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
     acc[0] = chr(ord(acc[0]) - 32)
   strVal(acc)
 
-func listFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func listFilter(v: JinjaVal, args: Args): JinjaVal =
   case v.kind
   of vkSeq: v
   of vkStr: seqVal(codepointVals(v.s))
-  else: raise jinjaErr("`list` needs a string or sequence")
+  of vkRange:
+    var acc = newSeq[JinjaVal](rangeLen(v.r))
+    for i in 0 ..< rangeLen(v.r):
+      acc[i] = rangeAt(v.r, i)
+    seqVal(acc)
+  else: raise jinjaErr("`list` needs a string, sequence or range")
 
-func safeFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func safeFilter(v: JinjaVal, args: Args): JinjaVal =
   ## Autoescape is off in the upstream environment, so marking output safe changes no bytes.
   v
 
-func joinMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func joinMethod(v: JinjaVal, args: Args): JinjaVal =
   ## `x | join(sep)` and `x.join(sep)`:
   ##   concatenates the values of a sequence or mapping.
   let parts =
@@ -189,30 +181,30 @@ func joinMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
     acc.add pyStr(x)
   strVal(acc)
 
-func joinFilter(v: JinjaVal, args: seq[Arg]): JinjaVal = joinMethod(v, args)
+func joinFilter(v: JinjaVal, args: Args): JinjaVal = joinMethod(v, args)
 
-func stringTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkStr
-func definedTest(v: JinjaVal, args: seq[Arg]): bool = v.kind != vkUndefined
-func undefinedTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkUndefined
-func mappingTest(v: JinjaVal, args: seq[Arg]): bool = v.kind in {vkDict, vkNs}
-func sequenceTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkSeq
-func iterableTest(v: JinjaVal, args: seq[Arg]): bool = v.kind in {vkSeq, vkDict, vkNs, vkStr}
-func noneTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkNone
-func booleanTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkBool
-func trueTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkBool and v.b
-func falseTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkBool and not v.b
-func numberTest(v: JinjaVal, args: seq[Arg]): bool = v.kind in {vkInt, vkFloat}
-func integerTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkInt
-func floatTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkFloat
+func stringTest(v: JinjaVal, args: Args): bool = v.kind == vkStr
+func definedTest(v: JinjaVal, args: Args): bool = v.kind != vkUndefined
+func undefinedTest(v: JinjaVal, args: Args): bool = v.kind == vkUndefined
+func mappingTest(v: JinjaVal, args: Args): bool = v.kind in {vkDict, vkNs}
+func sequenceTest(v: JinjaVal, args: Args): bool = v.kind == vkSeq
+func iterableTest(v: JinjaVal, args: Args): bool = v.kind in {vkSeq, vkDict, vkNs, vkStr}
+func noneTest(v: JinjaVal, args: Args): bool = v.kind == vkNone
+func booleanTest(v: JinjaVal, args: Args): bool = v.kind == vkBool
+func trueTest(v: JinjaVal, args: Args): bool = v.kind == vkBool and v.b
+func falseTest(v: JinjaVal, args: Args): bool = v.kind == vkBool and not v.b
+func numberTest(v: JinjaVal, args: Args): bool = v.kind in {vkInt, vkFloat}
+func integerTest(v: JinjaVal, args: Args): bool = v.kind == vkInt
+func floatTest(v: JinjaVal, args: Args): bool = v.kind == vkFloat
 
-func getMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func getMethod(v: JinjaVal, args: Args): JinjaVal =
   ## `d.get(key, default)`. Absence yields the default, itself undefined when unsupplied.
   if v.kind notin {vkDict, vkNs}:
     raise jinjaErr("`get` needs a mapping")
   let got = v.d.dictGet(pyStr(getArg(args, 0, akNone, undefinedVal())))
   if got.kind == vkUndefined: getArg(args, 1, akDefault, undefinedVal()) else: got
 
-func itemsMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func itemsMethod(v: JinjaVal, args: Args): JinjaVal =
   ## `[key, value]` pairs in insertion order, the form `{% for k, v in x.items() %}` iterates.
   case v.kind
   of vkDict, vkNs:
@@ -228,7 +220,7 @@ func itemsMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
   else:
     raise jinjaErr("`items` needs a mapping or a sequence")
 
-func keysMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func keysMethod(v: JinjaVal, args: Args): JinjaVal =
   if v.kind notin {vkDict, vkNs}:
     raise jinjaErr("`keys` needs a mapping")
   var acc = newSeq[JinjaVal](v.d.keys.len)
@@ -236,12 +228,12 @@ func keysMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
     acc[i] = strVal(k)
   seqVal(acc)
 
-func valuesMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func valuesMethod(v: JinjaVal, args: Args): JinjaVal =
   if v.kind notin {vkDict, vkNs}:
     raise jinjaErr("`values` needs a mapping")
   seqVal(v.d.vals)
 
-func splitMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
+func splitMethod(v: JinjaVal, args: Args): JinjaVal =
   ## `s.split(sep)` over non-overlapping separator occurrences, an empty separator splitting per codepoint.
   if v.kind != vkStr:
     raise jinjaErr("`split` needs a string")
@@ -262,18 +254,18 @@ func splitMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
     acc.add strVal(spanString(v.s.toOpenArray(pos, v.s.len - 1)))
   seqVal(acc)
 
-func sideStrip(v: JinjaVal, args: seq[Arg], name: string, left, right: bool): JinjaVal =
+func sideStrip(v: JinjaVal, args: Args, name: string, left, right: bool): JinjaVal =
   ## `s.strip(chars)`, `s.lstrip(chars)` and `s.rstrip(chars)`:
   ##   one body, the reported name and the stripped sides carried by the wrappers.
   if v.kind != vkStr:
     raise jinjaErr("`" & name & "` needs a string")
-  strVal(pyStrip(v.s, pyStr(getArg(args, 0, akNone, strVal(""))), left, right))
+  v.s.stripMaterialized(pyStr(args.getArg(0, akNone, strVal(""))), left, right)
 
-func stripMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = sideStrip(v, args, "strip", true, true)
-func lstripMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = sideStrip(v, args, "lstrip", true, false)
-func rstripMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = sideStrip(v, args, "rstrip", false, true)
+func stripMethod(v: JinjaVal, args: Args): JinjaVal = sideStrip(v, args, "strip", true, true)
+func lstripMethod(v: JinjaVal, args: Args): JinjaVal = sideStrip(v, args, "lstrip", true, false)
+func rstripMethod(v: JinjaVal, args: Args): JinjaVal = sideStrip(v, args, "rstrip", false, true)
 
-func edgeWith(v: JinjaVal, args: seq[Arg], name: string, tail: bool): JinjaVal =
+func edgeWith(v: JinjaVal, args: Args, name: string, tail: bool): JinjaVal =
   ## `s.startswith(p)` and `s.endswith(p)`:
   ##   one body, the reported name and the compared edge carried by the wrappers.
   if v.kind != vkStr:
@@ -283,8 +275,8 @@ func edgeWith(v: JinjaVal, args: seq[Arg], name: string, tail: bool): JinjaVal =
       (if tail: p == v.s.toOpenArray(v.s.len - p.len, v.s.len - 1)
        else: p == v.s.toOpenArray(0, p.len - 1))))
 
-func startswithMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = edgeWith(v, args, "startswith", false)
-func endswithMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = edgeWith(v, args, "endswith", true)
+func startswithMethod(v: JinjaVal, args: Args): JinjaVal = edgeWith(v, args, "startswith", false)
+func endswithMethod(v: JinjaVal, args: Args): JinjaVal = edgeWith(v, args, "endswith", true)
 
 const
   FilterProcs*: array[FilterName, FilterProc] = [

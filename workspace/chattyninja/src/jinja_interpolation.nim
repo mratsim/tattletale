@@ -5,7 +5,10 @@
 
 # Fused expression walker of the chattyninja engine.
 # One `lo..hi` span of template text is parsed and evaluated in a single pass, no expression
-# becomes a node. A dry pass advances tokens without evaluating, one mechanism three places use:
+# becomes a node. The walker reads the render only through the injected `Ports` and never
+# touches the render state, which stays at the step tier. Lookup, clock and macro forcer
+# arrive as ports. A dry pass advances tokens without evaluating, one mechanism three
+# places use:
 #
 # - `and` and `or` skip the operand they do not evaluate
 # - a ternary is located by a dry scan, so the condition runs first and exactly one branch
@@ -23,7 +26,7 @@ type
 
   ExTok = object
     kind: ExKind
-    lo, hi: int # span into Machine.jinja
+    lo, hi: int # span into CompiledTemplate.jinja
     i: int64 # payload of the exInt token
     f: float64 # payload of the exFloat token
     s: string # decoded string literal
@@ -31,20 +34,17 @@ type
 
   Cx = object
     ## Walker cursor:
-    ##   the half-open span it owns, a one-token lookahead, the dry flag, the recursion depth, the macro body runner handed to nested calls.
+    ##   the half-open span it owns, a one-token lookahead, the dry flag, the recursion depth,
+    ##   the render ports handed to nested calls.
     pos, stop: int
     tok: ExTok
     dry: bool
     depth: int
-    force: MacroForcer
+    ports: Ports
 
-  GlobalProc* = proc (m: Machine, args: seq[Arg], d: var Driver): JinjaVal {.nimcall.}
+  GlobalProc* = proc (tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal {.nimcall, noSideEffect.}
     ## A call to a template global, `namespace` and `dict` storing a keyword name as a dict key.
-
-  MacroForcer* = proc (m: Machine, t: Tables, d: var Driver, mc: MacroVal,
-      args: seq[CallArg]): string {.nimcall.}
-    ## Runs one macro body to completion and returns the captured text. The statement tier
-    ## injects the forcer, so `cnj_engine` and `jinja_interpolation` stay free of an import cycle.
+    ## Globals read the template text they evaluate and the injected ports, never the render state.
 
   GlobalName = enum
     gNamespace, gRange, gStrftimeNow, gRaiseException, gDict, gLipsum, gCycler, gJoiner
@@ -199,9 +199,9 @@ func punctAt(s: openArray[char], i, hi: int): tuple[c0, c1: char, len: int] =
   else:
     raise jinjaErr("unexpected character '" & s[i] & "' in an expression at byte " & $i, i, 1)
 
-func advance(m: Machine, cx: var Cx) =
+func advance(tmpl: CompiledTemplate, cx: var Cx) =
   ## Loads the next token into the cursor, stopping at the cursor's own `stop`.
-  let s = m.jinja
+  let s = tmpl.jinja
   var i = cx.pos
   while i < cx.stop and s[i] in Whitespace:
     inc i
@@ -233,68 +233,72 @@ func isPunct(cx: Cx, p: string): bool =
   cx.tok.kind == exPunct and cx.tok.p0 == p[0] and
     ((p.len == 1 and cx.tok.p1 == '\0') or (p.len == 2 and cx.tok.p1 == p[1]))
 
-func isWord(m: Machine, cx: Cx, w: string): bool =
+func isWord(tmpl: CompiledTemplate, cx: Cx, w: string): bool =
   ## Reports whether the lookahead is the bare identifier `w`, keywords matched without
   ## copying text out of the template.
   if cx.tok.kind != exName or cx.tok.hi - cx.tok.lo != w.len:
     return false
   for k in 0 ..< w.len:
-    if m.jinja[cx.tok.lo + k] != w[k]:
+    if tmpl.jinja[cx.tok.lo + k] != w[k]:
       return false
   true
 
-func wordSpan(m: Machine, lo, hi: int): openArray[char] =
-  ## Returns the template text in `lo ..< hi` as a view, so neither an identifier nor a registry lookup allocates. `lo ..< hi`
-  ## is the half-open span the token carries.
-  m.jinja.toOpenArray(lo, hi - 1)
+template wordSpan(tmpl: CompiledTemplate, lo, hi: int): openArray[char] =
+  ## Returns the template text in `lo ..< hi` as a view, so neither an identifier nor
+  ## a registry lookup allocates. `lo ..< hi` is the half-open span the token carries.
+  ##
+  ## A template, since the views check rejects a helper return over the `ref` type
+  ## as a borrow of the whole artifact once any later step takes it.
+  tmpl.jinja.toOpenArray(lo, hi - 1)
 
-func wordSpan(m: Machine, cx: Cx): openArray[char] =
+template wordSpan(tmpl: CompiledTemplate, cx: Cx): openArray[char] =
   ## Returns the identifier of the lookahead token as a view into the template text.
-  wordSpan(m, cx.tok.lo, cx.tok.hi)
+  wordSpan(tmpl, cx.tok.lo, cx.tok.hi)
 
-func argName*(m: Machine, a: Arg): openArray[char] =
+func argName*(tmpl: CompiledTemplate, a: Arg): openArray[char] =
   ## Returns an argument's keyword name as a view into the template text, `nameLo == NoLink`
   ## marking a positional argument, which has no name to read.
-  m.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
+  tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
 
-proc forceCall(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: JinjaVal): JinjaVal =
-  ## Returns `v` rendered to its macro output text. Every expression consumer other than
+proc forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
+  ## Returns `v` forced to its macro output value. Every expression consumer other than
   ## the emit step reads a pending macro call in this form.
-  if cx.force.isNil:
-    raise jinjaErr("a macro call result was consumed where no macro forcer was supplied")
-  strVal(cx.force(m, t, d, v.pc.mc, v.pc.args))
+  if cx.ports.force.isNil:
+    raise jinjaErr("a macro call result was consumed where no macro forcer was supplied",
+        cx.tok.lo)
+  cx.ports.force(cx.ports.env, v.pc.mc, v.pc.args)
 
-proc evalItem(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: JinjaVal): JinjaVal =
+proc evalItem(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns `v`, rendering a pending macro call to text for the value containers and operators
   ## that read a plain value. A concat raises here, the argument list being its one
   ## plain-value reader. A dry walk returns `v` unevaluated.
   if not cx.dry and v.kind == vkCall:
-    forceCall(m, t, d, cx, v)
+    forceCall(ports, cx, v)
   elif not cx.dry and v.kind == vkConcat:
-    raise jinjaErr("a concat must be rendered in emit position")
+    raise jinjaErr("a concat must be rendered in emit position", cx.tok.lo)
   else:
     v
 
-proc argVal(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: JinjaVal): JinjaVal =
+proc argVal(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns one call argument's value, a pending macro call rendering to text and a concat
   ## materializing through the serializer's drain-and-grow form, arguments reading plain
   ## values only. A dry walk returns `v` unevaluated.
   if cx.dry:
     return v
   if v.kind == vkCall:
-    return forceCall(m, t, d, cx, v)
+    return forceCall(ports, cx, v)
   if v.kind == vkConcat:
     return strVal(pyStr(v))
   v
 
-func argKey(m: Machine, a: Arg): string =
+func argKey(tmpl: CompiledTemplate, a: Arg): string =
   ## Returns the dict key one argument supplies to `namespace` or `dict`, a keyword-bound argument
   ## giving the keyword text, a positional one its stringified value. A `DictVal` key is a string,
   ## so this is where a keyword name becomes one.
   if a.nameLo == NoLink:
     pyStr(a.val)
   else:
-    spanString(argName(m, a))
+    spanString(argName(tmpl, a))
 
 func runeOffset(s: string, k: int): int =
   ## Returns the byte offset of the codepoint at index `k`, advancing by UTF-8 lead-byte strides, the same walk `runeLen`
@@ -338,7 +342,7 @@ func loopAttr(v: JinjaVal, name: openArray[char]): JinjaVal =
   ## Returns a `loop.*` attribute, read through the driver frame's shared cursor. The attribute is
   ## selected by span compare, so an attribute inside a `{% for %}` body costs no string.
   let lp = v.lp
-  let n = lp.items.len
+  let n = lp.loopLen
   let i = lp.idx
   if name == "index": intVal(i + 1)
   elif name == "index0": intVal(i)
@@ -346,9 +350,9 @@ func loopAttr(v: JinjaVal, name: openArray[char]): JinjaVal =
   elif name == "last": boolVal(i == n - 1)
   elif name == "length": intVal(n)
   elif name == "previtem":
-    if i > 0: lp.items[i - 1] else: noneVal()
+    if i > 0: lp.loopItem(i - 1) else: noneVal()
   elif name == "nextitem":
-    if i + 1 < n: lp.items[i + 1] else: noneVal()
+    if i + 1 < n: lp.loopItem(i + 1) else: noneVal()
   else:
     gapWhat("`loop` attribute", name)
 
@@ -429,26 +433,30 @@ func subslice(v, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep, isSlice: bool): 
       dst.steppedSliceInto(v.s, a, b, by)
       strVal(win)
 
-func argDict(m: Machine, args: seq[Arg]): DictVal =
+func argDict(tmpl: CompiledTemplate, args: Args): DictVal =
   ## Returns one mapping holding the call's arguments, keyword names as dict keys.
   var dv = DictVal()
-  for a in args:
-    dv.dictSet(argKey(m, a), a.val)
+  for a in args.argItems:
+    dv.dictSet(argKey(tmpl, a), a.val)
   dv
 
-func namespaceGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
+func namespaceGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
   ## `namespace(field=init, ...)`:
   ##   the mutable mapping `{% set ns.field = ... %}` mutates in place.
-  nsVal(argDict(m, args))
+  nsVal(argDict(tmpl, args))
 
-func dictGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
-  dictVal(argDict(m, args))
+func dictGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
+  dictVal(argDict(tmpl, args))
 
-func rangeGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
+func rangeGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
+  ## `range(a, b, step)`:
+  ##   the lazy bounds value. Elements compute per index, the serializer rendering the list
+  ##   form arithmetically and a `for` walking the same arithmetic, so a range never materializes.
   var a = 0'i64
   var b = 0'i64
   var step = 1'i64
-  for i, x in args:
+  for i in 0 ..< args.n:
+    let x = args.vals[i]
     if x.val.kind != vkInt:
       raise jinjaErr("`range` needs integer bounds")
     case i
@@ -460,12 +468,7 @@ func rangeGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
     else: raise jinjaErr("`range` takes at most three arguments")
   if step == 0:
     raise jinjaErr("`range` step must not be zero")
-  var acc = newSeq[JinjaVal]()
-  var k = a
-  while (step > 0 and k < b) or (step < 0 and k > b):
-    acc.add intVal(k)
-    inc k, step
-  seqVal(acc)
+  rangeVal(a, b, step)
 
 func civilFromDays(z: int): tuple[y, m, d: int] =
   ## Returns the civil date of `z` days since 1970-01-01, proleptic Gregorian.
@@ -497,11 +500,11 @@ func twoDigits(n: int): string =
   ## Returns `n` zero-padded to two digits.
   if n < 10: "0" & $n else: $n
 
-func strftimeGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
-  ## Renders the format against the driver's injected epoch, never the wall clock, which is
-  ## what keeps two drivers over one `Machine` byte-identical.
+func strftimeGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
+  ## Renders the format against the epoch read through the clock port, never the wall clock,
+  ## which is what keeps two render instantiations over one artifact byte-identical.
   let fmt = pyStr(getArg(args, 0, akNone, strVal("")))
-  let secs = d.clock.int64
+  let secs = ports.clock(ports.env).int64
   let tod = floorMod(secs.int, 86400)
   let (yr, mo, dy) = civilFromDays(floorDiv(secs.int, 86400))
   var acc = ""
@@ -526,7 +529,7 @@ func strftimeGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
     inc i, 2
   strVal(acc)
 
-func raiseExceptionGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
+func raiseExceptionGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
   ## Corpus `err_*` rows record exactly this raise:
   ##   the message verbatim, cause `ceRaiseCall`.
   raise jinjaErr(pyStr(getArg(args, 0, akNone, strVal(""))), cause = ceRaiseCall)
@@ -538,37 +541,10 @@ const
 
 # Lookup:
 
-func lookupName(t: Tables, d: var Driver, name: openArray[char]): JinjaVal =
-  ## Returns the binding of `name`, undefined when absent. Absence is a value, never an error:
-  ##   that is what `is defined` tests, what makes a missing dict key a missing name, scope scan
-  ##   and root lookup reading the caller's bytes in place.
-  let id = findName(t, name)
-  if id != NoLink:
-    for si in countdown(d.scopes.len - 1, 0):
-      for b in d.scopes[si]:
-        if b.name == id:
-          return b.val
-  if d.root.kind == vkDict:
-    return d.root.d.dictGet(name)
-  undefinedVal()
-
-func lookupNameById*(t: Tables, d: var Driver, id: int32): JinjaVal =
-  ## Returns the binding of an interned name, undefined when absent. The scope key is the id, so no
-  ## string is rebuilt per lookup.
-  if id == NoLink:
-    return undefinedVal()
-  for si in countdown(d.scopes.len - 1, 0):
-    for b in d.scopes[si]:
-      if b.name == id:
-        return b.val
-  if d.root.kind == vkDict and id < t.names.len.int32:
-    return d.root.d.dictGet(t.names[id])
-  undefinedVal()
-
 # Walker:
 
-proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0, force: MacroForcer = nil): JinjaVal
-proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): JinjaVal
+proc evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): JinjaVal {.noSideEffect.}
+proc expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): JinjaVal {.noSideEffect.}
 
 
 const OpSpelling: array[Op, string] = [
@@ -617,69 +593,70 @@ func binPrec(op: Op): int =
   of opPow: 9
   of opNone: 0
 
-proc skipExpr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int) =
+proc skipExpr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int) =
   ## Advances the cursor over an expression without evaluating it, how `and`, `or` and the ternary skip the text they do not run.
   let wasDry = cx.dry
   cx.dry = true
-  discard expr(m, t, d, cx, minPrec)
+  discard expr(tmpl, ports, cx, minPrec)
   cx.dry = wasDry
 
-proc argList(m: Machine, t: Tables, d: var Driver, cx: var Cx): seq[Arg] =
+proc argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
   ## Parses a parenthesised argument list with `name = expr` keyword arguments, the opening paren the lookahead. A keyword keeps its span
-  ## and gains a builtin keyword slot, so binding one costs no string.
-  advance(m, cx)
+  ## and gains a builtin keyword slot, so binding one costs no string. Arguments fill the fixed-capacity
+  ## carrier in call order, no per-call sequence.
+  advance(tmpl, cx)
   while not isPunct(cx, ")"):
     var nameLo = NoLink
     var nameHi = NoLink
     var kw = akNone
     if cx.tok.kind == exName:
       let save = cx
-      advance(m, cx)
+      advance(tmpl, cx)
       if isPunct(cx, "="):
         nameLo = int32 save.tok.lo
         nameHi = int32 save.tok.hi
-        kw = argKeyword(wordSpan(m, save))
-        advance(m, cx)
+        kw = argKeyword(wordSpan(tmpl, save))
+        advance(tmpl, cx)
       else:
         cx = save
-    let v = argVal(m, t, d, cx, expr(m, t, d, cx, 1))
-    result.add Arg(nameLo: nameLo, nameHi: nameHi, kw: kw, val: v)
+    let v = argVal(ports, cx, expr(tmpl, ports, cx, 1))
+    result.addArg(Arg(nameLo: nameLo, nameHi: nameHi, kw: kw, val: v))
     if isPunct(cx, ","):
-      advance(m, cx)
+      advance(tmpl, cx)
       if isPunct(cx, ")"):
         break
       continue
     break
   if not isPunct(cx, ")"):
     raise jinjaErr("argument list is not closed", cx.tok.lo)
-  advance(m, cx)
+  advance(tmpl, cx)
 
-proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: JinjaVal): JinjaVal =
+proc postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Applies attr, subscript, call, filter and test chains, which bind tighter than any operator.
   var v = v
   while true:
     # An operator reading the chained value renders a pending macro call first.
     # A call keeps the natural not-callable error for the rendered text.
     if v.kind == vkCall and (isPunct(cx, ".") or isPunct(cx, "[") or isPunct(cx, "|") or
-        isWord(m, cx, "is")):
-      v = forceCall(m, t, d, cx, v)
+        isWord(tmpl, cx, "is")):
+      v = forceCall(ports, cx, v)
     if isPunct(cx, "."):
-      advance(m, cx)
+      advance(tmpl, cx)
       if cx.tok.kind != exName:
         raise jinjaErr("expected a name after `.`", cx.tok.lo)
       let (lo, hi) = (cx.tok.lo, cx.tok.hi)
-      advance(m, cx)
+      advance(tmpl, cx)
       if isPunct(cx, "("):
-        let a = argList(m, t, d, cx)
+        let a = argList(tmpl, ports, cx)
         if cx.dry:
           v = undefinedVal()
           continue
-        let mi = findIn(MethodNames, wordSpan(m, lo, hi))
+        let mi = findIn(MethodNames, wordSpan(tmpl, lo, hi))
         if mi < 0:
-          raise jinjaErr("unknown method `" & spanString(wordSpan(m, lo, hi)) & "`", lo, hi - lo)
+          raise jinjaErr("unknown method `" & spanString(wordSpan(tmpl, lo, hi)) & "`", lo, hi - lo)
         let mp = MethodProcs[MethodName mi]
         if mp.isNil:
-          gapWhat("method", wordSpan(m, lo, hi))
+          gapWhat("method", wordSpan(tmpl, lo, hi))
         v = mp(v, a)
       else:
         v =
@@ -687,93 +664,90 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: JinjaVal): Jin
             undefinedVal()
           else:
             case v.kind
-            of vkDict, vkNs: v.d.dictGet(wordSpan(m, lo, hi))
-            of vkLoop: loopAttr(v, wordSpan(m, lo, hi))
+            of vkDict, vkNs: v.d.dictGet(wordSpan(tmpl, lo, hi))
+            of vkLoop: loopAttr(v, wordSpan(tmpl, lo, hi))
             of vkUndefined: undefinedVal()
-            else: raise jinjaErr("`" & spanString(wordSpan(m, lo, hi)) &
+            else: raise jinjaErr("`" & spanString(wordSpan(tmpl, lo, hi)) &
                 "` is not an attribute of a " & $v.kind, lo, hi - lo)
     elif isPunct(cx, "["):
-      advance(m, cx)
+      advance(tmpl, cx)
       var lo, hi, step = undefinedVal()
       var hasLo, hasHi, hasStep, isSlice = false
       if not isPunct(cx, ":"):
-        lo = expr(m, t, d, cx, 1)
+        lo = expr(tmpl, ports, cx, 1)
         hasLo = true
       if isPunct(cx, ":"):
         isSlice = true
-        advance(m, cx)
+        advance(tmpl, cx)
         if not (isPunct(cx, ":") or isPunct(cx, "]")):
-          hi = expr(m, t, d, cx, 1)
+          hi = expr(tmpl, ports, cx, 1)
           hasHi = true
         if isPunct(cx, ":"):
-          advance(m, cx)
+          advance(tmpl, cx)
           if not isPunct(cx, "]"):
-            step = expr(m, t, d, cx, 1)
+            step = expr(tmpl, ports, cx, 1)
             hasStep = true
       if not isPunct(cx, "]"):
         raise jinjaErr("subscript is not closed", cx.tok.lo)
-      advance(m, cx)
+      advance(tmpl, cx)
       v = if cx.dry: undefinedVal() else:
         subslice(v, lo, hi, step, hasLo, hasHi, hasStep, isSlice)
     elif isPunct(cx, "("):
-      let a = argList(m, t, d, cx)
+      let a = argList(tmpl, ports, cx)
       v =
         if cx.dry:
           undefinedVal()
         elif v.kind == vkMacro:
-          var cargs = newSeq[CallArg](a.len)
-          for i, arg in a:
-            cargs[i] = CallArg(nameLo: arg.nameLo, nameHi: arg.nameHi, val: arg.val)
-          callVal(PendingCallVal(mc: v.mc, args: cargs))
+          callVal(PendingCallVal(mc: v.mc, args: a))
         else:
           raise jinjaErr("only a macro is callable, this is a " & $v.kind)
     elif isPunct(cx, "|"):
-      advance(m, cx)
+      advance(tmpl, cx)
       if cx.tok.kind != exName:
         raise jinjaErr("expected a filter name after `|`", cx.tok.lo)
       let (lo, hi) = (cx.tok.lo, cx.tok.hi)
-      advance(m, cx)
-      var a = newSeq[Arg]()
+      advance(tmpl, cx)
+      var a: Args
       if isPunct(cx, "("):
-        a = argList(m, t, d, cx)
+        a = argList(tmpl, ports, cx)
       if cx.dry:
         v = undefinedVal()
         continue
-      let fi = findIn(FilterNames, wordSpan(m, lo, hi))
+      let fi = findIn(FilterNames, wordSpan(tmpl, lo, hi))
       if fi < 0:
-        raise jinjaErr("unknown filter `" & spanString(wordSpan(m, lo, hi)) & "`", lo, hi - lo, cause = ceUnimplemented)
+        raise jinjaErr("unknown filter `" & spanString(wordSpan(tmpl, lo, hi)) & "`", lo, hi - lo, cause = ceUnimplemented)
       let fp = FilterProcs[FilterName fi]
       if fp.isNil:
-        gapWhat("filter", wordSpan(m, lo, hi))
+        gapWhat("filter", wordSpan(tmpl, lo, hi))
       v = fp(v, a)
-    elif isWord(m, cx, "is"):
-      advance(m, cx)
+    elif isWord(tmpl, cx, "is"):
+      advance(tmpl, cx)
       var negated = false
-      if isWord(m, cx, "not"):
+      if isWord(tmpl, cx, "not"):
         negated = true
-        advance(m, cx)
+        advance(tmpl, cx)
       if cx.tok.kind != exName:
         raise jinjaErr("expected a test name after `is`", cx.tok.lo)
       let (lo, hi) = (cx.tok.lo, cx.tok.hi)
-      advance(m, cx)
-      var a = newSeq[Arg]()
+      advance(tmpl, cx)
+      var a: Args
       if isPunct(cx, "("):
-        a = argList(m, t, d, cx)
+        a = argList(tmpl, ports, cx)
       if cx.dry:
         v = undefinedVal()
         continue
-      let ti = findIn(TestNames, wordSpan(m, lo, hi))
+      let ti = findIn(TestNames, wordSpan(tmpl, lo, hi))
       if ti < 0:
-        raise jinjaErr("unknown test `" & spanString(wordSpan(m, lo, hi)) & "`", lo, hi - lo)
+        raise jinjaErr("unknown test `" & spanString(wordSpan(tmpl, lo, hi)) & "`", lo, hi - lo)
       let tp = TestProcs[TestName ti]
       if tp.isNil:
-        gapWhat("test", wordSpan(m, lo, hi))
+        gapWhat("test", wordSpan(tmpl, lo, hi))
       v = boolVal(if negated: not tp(v, a) else: tp(v, a))
     else:
       break
   v
 
-proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): JinjaVal =
+proc primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   ## Parses a literal, a name, a parenthesised group, an array literal or a dict literal, then
   ## the postfix chain.
   var v: JinjaVal
@@ -782,17 +756,17 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): JinjaVal =
     raise jinjaErr("expression ends early at byte " & $cx.pos, cx.pos)
   of exInt:
     v = intVal(cx.tok.i)
-    advance(m, cx)
+    advance(tmpl, cx)
   of exFloat:
     v = floatVal(cx.tok.f)
-    advance(m, cx)
+    advance(tmpl, cx)
   of exStr:
     v = strVal(cx.tok.s)
-    advance(m, cx)
+    advance(tmpl, cx)
   of exName:
     let (lo, hi) = (cx.tok.lo, cx.tok.hi)
-    advance(m, cx)
-    let name = wordSpan(m, lo, hi)
+    advance(tmpl, cx)
+    let name = wordSpan(tmpl, lo, hi)
     # Literal spellings are compared as spans, the same test `case` applied to a copied string.
     if name == "true" or name == "True":
       v = boolVal(true)
@@ -801,92 +775,92 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): JinjaVal =
     elif name == "none" or name == "None":
       v = noneVal()
     else:
-      var bound = if cx.dry: undefinedVal() else: lookupName(t, d, name)
+      var bound = if cx.dry: undefinedVal() else: cx.ports.lookup(cx.ports.env, name)
       let gi = findIn(GlobalNames, name)
       if bound.kind == vkUndefined and gi >= 0 and isPunct(cx, "("):
         # A global is reached only when the name is unbound, Jinja's own precedence:
         #   context shadows globals, and a skipped branch never gets here. A dry walk still
         #   consumes the argument list, so the skipped text is never left behind as trailing text.
-        let a = argList(m, t, d, cx)
+        let a = argList(tmpl, ports, cx)
         if cx.dry:
           v = undefinedVal()
         else:
           let gp = GlobalProcs[GlobalName gi]
           if gp.isNil:
-            gapWhat("global", wordSpan(m, lo, hi))
-          v = gp(m, a, d)
+            gapWhat("global", wordSpan(tmpl, lo, hi))
+          v = gp(tmpl, a, ports)
       else:
         v = bound
   of exPunct:
     case cx.tok.p0
     of '(':
-      advance(m, cx)
+      advance(tmpl, cx)
       var parts = newSeq[JinjaVal]()
       var isTuple = false
       while not isPunct(cx, ")"):
-        parts.add expr(m, t, d, cx, 1)
+        parts.add expr(tmpl, ports, cx, 1)
         if isPunct(cx, ","):
           isTuple = true
-          advance(m, cx)
+          advance(tmpl, cx)
           if isPunct(cx, ")"):
             break
           continue
         break
       if not isPunct(cx, ")"):
         raise jinjaErr("parenthesised expression is not closed", cx.tok.lo)
-      advance(m, cx)
+      advance(tmpl, cx)
       v = if parts.len == 0: seqVal(parts) elif isTuple: seqVal(parts) else: parts[0]
     of '[':
-      advance(m, cx)
+      advance(tmpl, cx)
       var parts = newSeq[JinjaVal]()
       while not isPunct(cx, "]"):
-        parts.add evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
+        parts.add evalItem(ports, cx, expr(tmpl, ports, cx, 1))
         if isPunct(cx, ","):
-          advance(m, cx)
+          advance(tmpl, cx)
           if isPunct(cx, "]"):
             break
           continue
         break
       if not isPunct(cx, "]"):
         raise jinjaErr("array literal is not closed", cx.tok.lo)
-      advance(m, cx)
+      advance(tmpl, cx)
       v = seqVal(parts)
     of '{':
-      advance(m, cx)
+      advance(tmpl, cx)
       var dv = DictVal()
       while not isPunct(cx, "}"):
-        let k = evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
+        let k = evalItem(ports, cx, expr(tmpl, ports, cx, 1))
         if not isPunct(cx, ":"):
           raise jinjaErr("dict literal entry needs a `:`", cx.tok.lo)
-        advance(m, cx)
-        let val = evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
+        advance(tmpl, cx)
+        let val = evalItem(ports, cx, expr(tmpl, ports, cx, 1))
         if not cx.dry:
           dv.dictSet(pyStr(k), val)
         if isPunct(cx, ","):
-          advance(m, cx)
+          advance(tmpl, cx)
           if isPunct(cx, "}"):
             break
           continue
         break
       if not isPunct(cx, "}"):
         raise jinjaErr("dict literal is not closed", cx.tok.lo)
-      advance(m, cx)
+      advance(tmpl, cx)
       v = dictVal(dv)
     else:
       let spelled = $cx.tok.p0 & (if cx.tok.p1 != '\0': $cx.tok.p1 else: "")
       raise jinjaErr("unexpected `" & spelled & "` starting an expression at byte " & $cx.tok.lo, cx.tok.lo, cx.tok.hi - cx.tok.lo)
-  postfix(m, t, d, cx, v)
+  postfix(tmpl, ports, cx, v)
 
-proc unary(m: Machine, t: Tables, d: var Driver, cx: var Cx): JinjaVal =
+proc unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   ## Parses `not`, unary `-` and `+`, then a primary.
-  if isWord(m, cx, "not"):
-    advance(m, cx)
-    let v = evalItem(m, t, d, cx, unary(m, t, d, cx))
+  if isWord(tmpl, cx, "not"):
+    advance(tmpl, cx)
+    let v = evalItem(ports, cx, unary(tmpl, ports, cx))
     return boolVal(if cx.dry: false else: not isTruthy(v))
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
-    advance(m, cx)
-    let v = evalItem(m, t, d, cx, unary(m, t, d, cx))
+    advance(tmpl, cx)
+    let v = evalItem(ports, cx, unary(tmpl, ports, cx))
     if cx.dry:
       return undefinedVal()
     case v.kind
@@ -894,7 +868,7 @@ proc unary(m: Machine, t: Tables, d: var Driver, cx: var Cx): JinjaVal =
     of vkFloat: floatVal(if neg: -v.f else: v.f)
     else: raise jinjaErr("arithmetic needs a number, this is a " & $v.kind)
   else:
-    primary(m, t, d, cx)
+    primary(tmpl, ports, cx)
 
 func arith(op: Op, a, b: JinjaVal): JinjaVal =
   ## Combines two numbers, or two strings and two sequences under `+`.
@@ -951,43 +925,43 @@ func cmpOne(op: Op, a, b: JinjaVal): JinjaVal =
     else: raise jinjaErr("unknown comparison `" & OpSpelling[op] & "`")
   boolVal(r)
 
-proc binOp(m: Machine, t: Tables, d: var Driver, cx: var Cx, lhs: JinjaVal, op: Op): JinjaVal =
+proc binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: Op): JinjaVal =
   ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
   ## infix evaluating both sides.
   case op
   of opAnd:
     if not cx.dry and not isTruthy(lhs):
-      skipExpr(m, t, d, cx, 4)
+      skipExpr(tmpl, ports, cx, 4)
       return lhs
-    expr(m, t, d, cx, 4)
+    expr(tmpl, ports, cx, 4)
   of opOr:
     if not cx.dry and isTruthy(lhs):
-      skipExpr(m, t, d, cx, 3)
+      skipExpr(tmpl, ports, cx, 3)
       return lhs
-    expr(m, t, d, cx, 3)
+    expr(tmpl, ports, cx, 3)
   of opIn, opNotIn:
-    let rhs = evalItem(m, t, d, cx, expr(m, t, d, cx, 6))
+    let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, 6))
     if cx.dry:
       undefinedVal()
     else:
       let r = containsVal(rhs, lhs)
       boolVal(if op == opIn: r else: not r)
   of opConcat:
-    let rhs = expr(m, t, d, cx, 7)
+    let rhs = expr(tmpl, ports, cx, 7)
     if cx.dry: undefinedVal()
-    else: concatVal(lhs, if rhs.kind == vkCall: forceCall(m, t, d, cx, rhs) else: rhs)
+    else: concatVal(lhs, if rhs.kind == vkCall: forceCall(ports, cx, rhs) else: rhs)
   of opAdd, opSub, opMod:
-    let rhs = evalItem(m, t, d, cx, expr(m, t, d, cx, binPrec(op) + 1))
+    let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs)
   of opMul, opDiv, opFloorDiv, opPow:
-    skipExpr(m, t, d, cx, binPrec(op) + 1)
+    skipExpr(tmpl, ports, cx, binPrec(op) + 1)
     gapWhat("operator", OpSpelling[op])
   else:
-    let rhs = evalItem(m, t, d, cx, expr(m, t, d, cx, binPrec(op) + 1))
+    let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs)
 
-func ifWordAhead(m: Machine, at, stop: int): bool =
-  ## Reports whether a depth-zero `if` survives in `m.jinja[at..<stop)`. Byte scan, not a parse.
+func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
+  ## Reports whether a depth-zero `if` survives in `tmpl.jinja[at..<stop)`. Byte scan, not a parse.
   ## Guarantees:
   ## - quoted text and bracketed subexpressions are skipped, so the scan never misses a ternary
   ## - it can only over-report, costing one extra walk
@@ -998,45 +972,45 @@ func ifWordAhead(m: Machine, at, stop: int): bool =
   var q: char = '\0'
   while i < stop:
     if q != '\0':
-      if m.jinja[i] == '\\':
+      if tmpl.jinja[i] == '\\':
         inc i
-      elif m.jinja[i] == q:
+      elif tmpl.jinja[i] == q:
         q = '\0'
-    elif m.jinja[i] in {'\'', '"'}:
-      q = m.jinja[i]
-    elif m.jinja[i] in {'(', '[', '{'}:
+    elif tmpl.jinja[i] in {'\'', '"'}:
+      q = tmpl.jinja[i]
+    elif tmpl.jinja[i] in {'(', '[', '{'}:
       inc depth
-    elif m.jinja[i] in {')', ']', '}'}:
+    elif tmpl.jinja[i] in {')', ']', '}'}:
       dec depth
-    elif depth == 0 and m.jinja[i] == 'i' and stop - i >= 2 and m.jinja[i + 1] == 'f' and
-        (i + 2 >= stop or m.jinja[i + 2] notin wsNameChars) and
-        (i == at or m.jinja[i - 1] notin wsNameChars):
+    elif depth == 0 and tmpl.jinja[i] == 'i' and stop - i >= 2 and tmpl.jinja[i + 1] == 'f' and
+        (i + 2 >= stop or tmpl.jinja[i + 2] notin wsNameChars) and
+        (i == at or tmpl.jinja[i - 1] notin wsNameChars):
       return true
     inc i
   false
 
-proc scanTernary(m: Machine, t: Tables, d: var Driver, cx: var Cx, headLo: int): Ternary =
+proc scanTernary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, headLo: int): Ternary =
   ## Measures the ternary spans starting at `headLo`, leaving the cursor past the whole ternary. A walk that lands on no ternary restores
   ## the cursor to the head, so the caller evaluates the expression normally. Nothing is evaluated here.
   let head = cx
   cx.pos = headLo
-  advance(m, cx)
+  advance(tmpl, cx)
   let dry = cx.dry
   cx.dry = true
-  discard expr(m, t, d, cx, 2) # the then-branch text, unevaluated
+  discard expr(tmpl, ports, cx, 2) # the then-branch text, unevaluated
   result.aHi = cx.tok.lo
-  if not isWord(m, cx, "if"):
+  if not isWord(tmpl, cx, "if"):
     cx = head
     return
-  advance(m, cx)
+  advance(tmpl, cx)
   result.cLo = cx.tok.lo
-  discard expr(m, t, d, cx, 2) # the condition, unevaluated
+  discard expr(tmpl, ports, cx, 2) # the condition, unevaluated
   result.cHi = cx.tok.lo
-  if isWord(m, cx, "else"):
+  if isWord(tmpl, cx, "else"):
     result.hasElse = true
-    advance(m, cx)
+    advance(tmpl, cx)
     result.bLo = cx.tok.lo
-    discard expr(m, t, d, cx, 1) # the else-branch text, unevaluated
+    discard expr(tmpl, ports, cx, 1) # the else-branch text, unevaluated
     result.bHi = cx.tok.lo
   else:
     result.bLo = result.cHi
@@ -1044,11 +1018,11 @@ proc scanTernary(m: Machine, t: Tables, d: var Driver, cx: var Cx, headLo: int):
   let endPos = cx.tok.lo
   cx = head
   cx.pos = endPos
-  advance(m, cx)
+  advance(tmpl, cx)
   result.isTernary = true
   cx.dry = dry
 
-proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): JinjaVal =
+proc expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): JinjaVal {.noSideEffect.} =
   ## Parses and evaluates one expression, Pratt-style:
   ##   a prefix, then infix while the operator binds at least `minPrec`.
   ## - a ternary binds loosest, and no other operator holds binding power 1, so the ternary is
@@ -1061,31 +1035,31 @@ proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Jinja
     if cx.depth > ExprDepthCap:
       raise jinjaErr("expression nests deeper than ExprDepthCap = " & $ExprDepthCap)
   let headLo = cx.tok.lo
-  if minPrec <= 1 and cx.tok.kind != exEof and ifWordAhead(m, headLo, cx.stop):
-    let shape = scanTernary(m, t, d, cx, headLo)
+  if minPrec <= 1 and cx.tok.kind != exEof and ifWordAhead(tmpl, headLo, cx.stop):
+    let shape = scanTernary(tmpl, ports, cx, headLo)
     if shape.isTernary:
       if cx.dry:
         return undefinedVal()
-      let cond = evalRange(m, t, d, shape.cLo, shape.cHi, cx.depth, cx.force)
+      let cond = evalRange(tmpl, cx.ports, shape.cLo, shape.cHi, cx.depth)
       if isTruthy(cond):
-        return evalRange(m, t, d, headLo, shape.aHi, cx.depth, cx.force)
+        return evalRange(tmpl, cx.ports, headLo, shape.aHi, cx.depth)
       if shape.hasElse:
-        return evalRange(m, t, d, shape.bLo, shape.bHi, cx.depth, cx.force)
+        return evalRange(tmpl, cx.ports, shape.bLo, shape.bHi, cx.depth)
       return undefinedVal()
-  var v = unary(m, t, d, cx)
+  var v = unary(tmpl, ports, cx)
   while true:
     var op = opNone
     if cx.tok.kind == exName:
-      if isWord(m, cx, "and"):
+      if isWord(tmpl, cx, "and"):
         op = opAnd
-      elif isWord(m, cx, "or"):
+      elif isWord(tmpl, cx, "or"):
         op = opOr
-      elif isWord(m, cx, "in"):
+      elif isWord(tmpl, cx, "in"):
         op = opIn
-      elif isWord(m, cx, "not"):
+      elif isWord(tmpl, cx, "not"):
         let save = cx
-        advance(m, cx)
-        if isWord(m, cx, "in"):
+        advance(tmpl, cx)
+        if isWord(tmpl, cx, "in"):
           op = opNotIn
         else:
           cx = save
@@ -1098,27 +1072,27 @@ proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Jinja
     if prec == 0 or prec < minPrec:
       break
     if v.kind == vkCall:
-      v = forceCall(m, t, d, cx, v)
-    advance(m, cx)
-    v = binOp(m, t, d, cx, v, op)
+      v = forceCall(ports, cx, v)
+    advance(tmpl, cx)
+    v = binOp(tmpl, ports, cx, v, op)
   if not cx.dry:
     dec cx.depth
   v
 
-proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0, force: MacroForcer = nil): JinjaVal =
-  ## Evaluates the expression held in `m.jinja[lo..<hi]` in its own cursor.
+proc evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): JinjaVal {.noSideEffect.} =
+  ## Evaluates the expression held in `tmpl.jinja[lo..<hi]` in its own cursor.
   ## - `depth` seeds the nesting counter, so a sub-span reached through a ternary still counts toward `ExprDepthCap`
-  ## - `force` carries the macro forcer, so a nested call can still run
-  var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth, force: force)
-  advance(m, cx)
-  result = expr(m, t, d, cx, 1)
+  ## - `ports` carries the lookup, clock and macro-forcer services, so a nested call can still run
+  var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth, ports: ports)
+  advance(tmpl, cx)
+  result = expr(tmpl, ports, cx, 1)
   if cx.tok.kind != exEof:
     raise jinjaErr("expression has trailing text at byte " & $cx.tok.lo, cx.tok.lo)
 
-proc evalSpan*(m: Machine, t: Tables, d: var Driver, lo, hi: int32, force: MacroForcer = nil): JinjaVal =
-  ## Evaluates the expression held in `m.jinja[lo..<hi]`, the entry every expression-bearing step uses.
+proc evalSpan*(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): JinjaVal {.noSideEffect.} =
+  ## Evaluates the expression held in `tmpl.jinja[lo..<hi]`, the entry every expression-bearing step uses.
   ## Contract:
-  ## - `force` is the macro forcer, passed by every step that can meet a macro call
-  ## - a nil `force` makes a consumed macro call a reported gap
+  ## - `ports` carries the render services, a nil forcer in them making a consumed macro
+  ##   call a reported gap
   ## - a macro call that is a whole expression returns pending, for the emit step to stream
-  evalRange(m, t, d, lo.int, hi.int, 0, force)
+  evalRange(tmpl, ports, lo.int, hi.int, 0)

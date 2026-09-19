@@ -7,12 +7,13 @@
 #
 # | Step     | Behavior                                                                                                                                                      |
 # | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-# | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `Tables`                                              |
-# | load     | the caller builds `Machine` from the arena plus the borrowed template text, so the artifact holds no mutable state and cannot outlive the text it points into |
-# | render   | `pull` walks the arena through `steps`, all control state in a caller-supplied `Driver`, so two drivers over one `Machine` are independent                    |
+# | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                                     |
+# | load     | `parseTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into                     |
+# | render   | `startRender` opens a `Context` over the artifact and `pull` walks the arena through `steps`, all control state in the context's `RenderState`                |
 # | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                      |
+# | ports    | every dispatch builds the `PortEnv` adapter on the stack and hands the steps `Ports`, so the expression tier reads the render only through the injected ports |
 #
-# Resumption state for a re-entered step lives in the driver's frame stack, never in a node.
+# Resumption state for a re-entered step lives in the render state's frame stack, never in a node.
 # `nkFor`, `nkSetBlock` and `nkGeneration` are re-entered by their bodies, `nkIf`
 # single-entry, parse time backpatching its branch bodies past the whole chain.
 #
@@ -23,43 +24,100 @@ import std/unicode
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
 
 type
-  Step* = proc (m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.}
-    ## One construct's step. Writes only through `d`, always leaving `d.curNode` on the node control enters next.
+  Step* = proc (tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+      ports: Ports, n: int32) {.nimcall, noSideEffect.}
+    ## One construct's step. Writes only through `st`, always leaving `st.curNode` holding
+    ## the node control enters next. Expressions evaluate through `ports`, the injected
+    ## render services, so no expression proc ever sees the render state.
 
-proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[CallArg]): string
+  PortEnv = object
+    ## Adapter state one dispatch's ports read. Holds the artifact, the shared symbol arena,
+    ## the render state the trampolines serve. Built on the stack per dispatch,
+    ## never stored in the render state, so a copied `Context` never carries a dangling adapter.
+    tmpl: CompiledTemplate
+    sym: ptr CompiledSymbols
+    st: ptr RenderState
+
+proc forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal {.noSideEffect.}
   ## Runs one macro body to completion and returns the captured text, the macro forcer
-  ## the expression tier receives. Carried as a parameter so the compiled artifact
-  ## stays read-only and `cnj_engine` and `jinja_interpolation` stay free of an import cycle.
+  ## the expression tier receives through the ports. A parameter here keeps the compiled
+  ## artifact read-only and keeps both tiers clear of an import cycle.
 
-proc startMacro(m: Machine, t: Tables, d: var Driver, call: PendingCallVal, retNode: int32)
+proc startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+    ports: Ports, call: PendingCallVal, retNode: int32) {.noSideEffect.}
   ## Opens a macro frame and enters the body, the body's output pieces draining through
   ## the caller's window until the frame closes on the definition node.
 
+func scopeHas(st: RenderState, id: int32, val: var JinjaVal): bool =
+  ## Scope scan innermost first, returning true with `val` set when `id` is bound.
+  ## A binding to an undefined value is still a binding, so the root lookup never sees it.
+  for si in countdown(st.scopes.len - 1, 0):
+    for b in st.scopes[si]:
+      if b.name == id:
+        val = b.val
+        return true
+  false
+
+proc portLookup(env: pointer, name: openArray[char]): JinjaVal {.nimcall, noSideEffect.} =
+  ## Lookup port trampoline. Returns the binding of `name` in the scopes, else in the render
+  ## context root, else undefined. Absence is a value, never an error.
+  ## `is defined` tests for exactly that shape.
+  let e = cast[ptr PortEnv](env)
+  let id = e.sym[].findName(name)
+  var got: JinjaVal
+  if id != NoLink and e.st[].scopeHas(id, got):
+    return got
+  if e.st[].root.kind == vkDict:
+    return e.st[].root.d.dictGet(name)
+  undefinedVal()
+
+proc portClock(env: pointer): float64 {.nimcall, noSideEffect.} =
+  ## Clock port trampoline returning the render's injected epoch.
+  cast[ptr PortEnv](env)[].st[].clock
+
+proc portForce(env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.} =
+  ## Macro-forcer trampoline, running the body to completion on the adapter's render
+  ## state and returning the captured text value.
+  let e = cast[ptr PortEnv](env)
+  forceMacro(e.tmpl, e.sym, e.st[], mc, args)
+
+func lookupNameById*(sym: CompiledSymbols, st: var RenderState, id: int32): JinjaVal =
+  ## Returns the binding of an interned name, undefined when absent. The scope key is
+  ## the id, so no string is rebuilt per lookup.
+  if id == NoLink:
+    return undefinedVal()
+  var got: JinjaVal
+  if st.scopeHas(id, got):
+    return got
+  if st.root.kind == vkDict and id < sym.names.len.int32:
+    return st.root.d.dictGet(sym.names[id])
+  undefinedVal()
+
 # Output:
 
-proc emitSpan(m: Machine, d: var Driver, lo, hi: int32) =
+proc emitSpan(st: var RenderState, tmpl: CompiledTemplate, lo, hi: int32) {.noSideEffect.} =
   ## Makes a template-text span the pending piece.
   if hi <= lo:
     return
   # One piece is pending at a time, drained before the next dispatch, so a second
   # piece here would silently drop the first one's bytes.
-  doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
-  d.pend = Piece(pos: 0, kind: pkSpan, lo: lo, hi: hi)
+  doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
+  st.pend = Piece(pos: 0, kind: pkSpan, lo: lo, hi: hi)
 
-proc emitStr(d: var Driver, s: sink string) =
+proc emitStr(st: var RenderState, s: sink string) {.noSideEffect.} =
   ## Makes a materialized string the pending piece, moving it out of the caller's value so
   ## a runtime-built emit string is never copied, an empty string queuing nothing.
   if s.len == 0:
     return
-  doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
-  d.pend = Piece(pos: 0, kind: pkStr, s: s)
+  doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
+  st.pend = Piece(pos: 0, kind: pkStr, s: s)
 
-proc emitValue(d: var Driver, v: JinjaVal) =
-  ## Queues a derived value's rendering as the lazy piece, the serializer in `d.lazy`
+proc emitValue(st: var RenderState, v: JinjaVal) {.noSideEffect.} =
+  ## Queues a derived value's rendering as the lazy piece, the serializer in `st.lazy`
   ## draining into the caller's window across pull calls, byte-exact with `pyStr`.
-  doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
-  serReset(d.lazy, v, smStr)
-  d.pend = Piece(kind: pkLazy)
+  doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
+  serReset(st.lazy, v, smStr)
+  st.pend = Piece(kind: pkLazy)
 
 template pieceLen(p: Piece): int =
   ## Length in bytes of a pending piece, lazy pieces drained through the serializer instead.
@@ -71,14 +129,14 @@ template pieceLen(p: Piece): int =
 
 # Binding:
 
-func bindName(d: var Driver, name: int32, val: JinjaVal) =
+func bindName(st: var RenderState, name: int32, val: JinjaVal) =
   ## Binds a name in the innermost scope, replacing an existing binding there.
-  var sc = d.scopes.len - 1
-  for bi in 0 ..< d.scopes[sc].len:
-    if d.scopes[sc][bi].name == name:
-      d.scopes[sc][bi].val = val
+  var sc = st.scopes.len - 1
+  for bi in 0 ..< st.scopes[sc].len:
+    if st.scopes[sc][bi].name == name:
+      st.scopes[sc][bi].val = val
       return
-  d.scopes[sc].add Binding(name: name, val: val)
+  st.scopes[sc].add Binding(name: name, val: val)
 
 # Steps:
 #
@@ -86,69 +144,91 @@ func bindName(d: var Driver, name: int32, val: JinjaVal) =
 # textually onto the arena entry. Render code never binds a `Node` value, a binding running
 # SmallSeq's `=copy` and heap-allocating a spilled payload's block (7% of corpus nodes spill).
 
-proc stepVerbatim(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepVerbatim(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Streams the final text run, whose span already reflects every whitespace rule.
-  template nd: Node = m.nodes[n]
-  emitSpan(m, d, nd.lo, nd.hi)
-  d.curNode = nd.succ
+  template nd: Node = tmpl.nodes[n]
+  st.emitSpan(tmpl, nd.lo, nd.hi)
+  st.curNode = nd.succ
 
-proc stepEmit(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Evaluates the expression span and hands the result on as the pending piece, or enters
   ## a whole-expression macro call's body instead, the body's output pieces draining
   ## through the caller's window until the frame closes.
-  template nd: Node = m.nodes[n]
-  var v = evalSpan(m, t, d, nd.lo, nd.hi, forceMacro)
+  template nd: Node = tmpl.nodes[n]
+  var v = evalSpan(tmpl, ports, nd.lo, nd.hi)
   if v.kind == vkCall:
-    startMacro(m, t, d, v.pc, nd.succ)
+    startMacro(tmpl, sym, st, ports, v.pc, nd.succ)
     return
   if v.kind == vkStr:
-    emitStr(d, move v.s)
+    st.emitStr(move v.s)
   else:
-    emitValue(d, v)
-  d.curNode = nd.succ
+    st.emitValue(v)
+  st.curNode = nd.succ
 
-proc stepIf(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepIf(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Chooses a branch once, branch bodies terminating past the chain, so no frame exists for it.
-  template nd: Node = m.nodes[n]
-  let v = evalSpan(m, t, d, nd.lo, nd.hi, forceMacro)
+  template nd: Node = tmpl.nodes[n]
+  let v = evalSpan(tmpl, ports, nd.lo, nd.hi)
   if isTruthy(v):
-    d.curNode = if nd.child == NoLink: nd.succ else: nd.child
+    st.curNode = if nd.child == NoLink: nd.succ else: nd.child
   elif nd.alt != NoLink:
-    d.curNode = nd.alt
+    st.curNode = nd.alt
   else:
-    d.curNode = nd.succ
+    st.curNode = nd.succ
 
-func materialize(v: JinjaVal): seq[JinjaVal] =
-  ## Returns the iterable as a materialized sequence. `loop.previtem` and `loop.nextitem`
-  ## need random access, so a lazy cursor would need a peek buffer anyway.
-  case v.kind
-  of vkSeq: v.xs.items
-  of vkDict, vkNs:
-    var acc = newSeq[JinjaVal](v.d.keys.len)
-    for i, k in v.d.keys:
-      acc[i] = strVal(k)
-    acc
-  of vkStr: codepointVals(v.s)
-  of vkUndefined:
+func iterSeq(v: JinjaVal): LoopState =
+  ## Iterable leg for a sequence value, borrowing the shared payload without copying.
+  ## Sequence payloads never mutate in place at render time.
+  LoopState(xs: v.xs)
+
+func iterMapping(v: JinjaVal): LoopState =
+  ## Iterable leg for a mapping, materializing once the key strings the loop binds.
+  var acc = newSeq[JinjaVal](v.d.keys.len)
+  for i, k in v.d.keys:
+    acc[i] = strVal(k)
+  LoopState(xs: SeqVal(items: acc))
+
+func iterChars(v: JinjaVal): LoopState =
+  ## Iterable leg for a string, materializing one single-codepoint value per codepoint.
+  LoopState(xs: SeqVal(items: codepointVals(v.s)))
+
+func iterRange(v: JinjaVal): LoopState =
+  ## Iterable leg for a lazy range, the cursor carrying the bounds and elements computing
+  ## per index through `loopItem`.
+  LoopState(r: v.r)
+
+func notIterable(v: JinjaVal): void {.noreturn.} =
+  ## Shared raise leg of the iterable dispatch, one report for every kind no loop walks.
+  if v.kind == vkUndefined:
     raise jinjaErr("cannot iterate an undefined value")
-  else:
-    raise jinjaErr("cannot iterate a " & $v.kind)
+  raise jinjaErr("cannot iterate a " & $v.kind)
 
-proc bindTargets(m: Machine, t: Tables, d: var Driver, n: int32, item: JinjaVal) =
+func loopStateOf(v: JinjaVal): LoopState =
+  ## Dispatch at the loop's chain entry, one leg per iterable kind the corpus supports
+  ## and the shared raise leg for everything else. The cursor answers the random access
+  ## that `loop.previtem` and `loop.nextitem` need, per index.
+  case v.kind
+  of vkSeq: iterSeq(v)
+  of vkDict, vkNs: iterMapping(v)
+  of vkStr: iterChars(v)
+  of vkRange: iterRange(v)
+  else: notIterable(v)
+
+proc bindTargets(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, n: int32, item: JinjaVal) =
   ## Binds the `nkFor` loop targets at `n`, more than one target unpacking a sequence, which
   ## is what `x.items()` feeds through `{% for k, v in x.items() %}`.
-  template nd: Node = m.nodes[n]
+  template nd: Node = tmpl.nodes[n]
   let ntargets = int(nd.targetCount)
   if ntargets == 1:
-    d.bindName(nd.targetAt(0), item)
+    st.bindName(nd.targetAt(0), item)
   else:
     if item.kind != vkSeq or item.xs.items.len != ntargets:
       raise jinjaErr("`for` unpacks " & $ntargets & " targets from a value that is not a " &
-          $ntargets & "-element sequence")
+          $ntargets & "-element sequence", nd.lo.int, nd.hi.int - nd.lo.int)
     for i in 0 ..< ntargets:
-      d.bindName(nd.targetAt(i), item.xs.items[i])
+      st.bindName(nd.targetAt(i), item.xs.items[i])
 
-proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
+proc advanceFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) =
   ## Re-entry path. Moves the shared cursor to the next item passing the filter clause, re-enters
   ## the body, or closes the frame and continues past the loop.
   ##
@@ -157,99 +237,98 @@ proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
   ##   Corpus filters read `loop.index0` and friends through the shared cursor
   ## - a raise in either propagates to the caller per the pull contract. The bytes written
   ##   in the failing call are discarded and a repull resumes after the failed item
-  template nd: Node = m.nodes[n]
+  template nd: Node = tmpl.nodes[n]
   while true:
-    let fi = d.frames.len - 1
-    let items = d.frames[fi].loop.items
-    inc d.frames[fi].loop.idx
-    let idx = d.frames[fi].loop.idx
-    if idx >= items.len:
-      d.scopes.setLen(d.frames[fi].scopeAt - 1)
-      d.frames.setLen(d.frames.len - 1)
-      d.curNode = nd.succ
+    let fi = st.frames.len - 1
+    let lp = st.frames[fi].loop
+    inc lp.idx
+    let idx = lp.idx
+    if idx >= lp.loopLen:
+      st.scopes.setLen(st.frames[fi].scopeAt - 1)
+      st.frames.setLen(st.frames.len - 1)
+      st.curNode = nd.succ
       return
     var keep = nd.filterLo == NoLink
-    bindTargets(m, t, d, n, items[idx])
+    bindTargets(tmpl, sym, st, n, lp.loopItem(idx))
     if nd.filterLo != NoLink:
-      let evaluated = evalSpan(m, t, d, nd.filterLo, nd.filterHi, forceMacro)
+      let evaluated = evalSpan(tmpl, ports, nd.filterLo, nd.filterHi)
       keep = isTruthy(evaluated)
     if keep:
       break
-  d.curNode = nd.child
+  st.curNode = nd.child
 
-proc stepFor(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## `{% for %}`:
   ##   a matching frame on top of the stack means advance, anything else means set up the iteration.
-  template nd: Node = m.nodes[n]
-  if d.frames.len > 0 and d.frames[^1].kind == frFor and d.frames[^1].node == n:
-    advanceFor(m, t, d, n)
+  template nd: Node = tmpl.nodes[n]
+  if st.frames.len > 0 and st.frames[^1].kind == frFor and st.frames[^1].node == n:
+    advanceFor(tmpl, sym, st, ports, n)
     return
-  let items = materialize(evalSpan(m, t, d, nd.lo, nd.hi, forceMacro))
-  if items.len == 0:
-    d.curNode = nd.succ
+  let lp = loopStateOf(evalSpan(tmpl, ports, nd.lo, nd.hi))
+  if lp.loopLen == 0:
+    st.curNode = nd.succ
     return
-  d.scopes.add @[]
-  d.frames.add Frame(node: n, kind: frFor, loop: LoopState(items: items, idx: -1),
-      scopeAt: d.scopes.len, filterLo: nd.filterLo, filterHi: nd.filterHi)
-  let fi = d.frames.len - 1
-  d.frames[fi].loop.idx = 0
-  bindTargets(m, t, d, n, items[0])
-  d.bindName(nd.loopName, loopVal(d.frames[fi].loop))
-  d.curNode = if nd.child == NoLink: nd.succ else: nd.child
+  st.scopes.add @[]
+  st.frames.add Frame(node: n, kind: frFor, loop: lp,
+      scopeAt: st.scopes.len, filterLo: nd.filterLo, filterHi: nd.filterHi)
+  lp.idx = 0
+  bindTargets(tmpl, sym, st, n, lp.loopItem(0))
+  st.bindName(nd.loopName, loopVal(lp))
+  st.curNode = if nd.child == NoLink: nd.succ else: nd.child
 
-proc stepSet(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepSet(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Single-target `{% set %}`, the target carried as an interned name id in the child slot,
   ## emitting nothing, the pending piece untouched.
-  template nd: Node = m.nodes[n]
-  d.bindName(nd.child, evalSpan(m, t, d, nd.lo, nd.hi, forceMacro))
-  d.curNode = nd.succ
+  template nd: Node = tmpl.nodes[n]
+  st.bindName(nd.child, evalSpan(tmpl, ports, nd.lo, nd.hi))
+  st.curNode = nd.succ
 
 proc gap(kindName, corpusSite: string): void {.noreturn.} =
   ## Reports a declared construct that is not implemented, naming `kindName`
   ## and the corpus site that demands it.
   raise jinjaErr(kindName & " is not implemented; " & corpusSite, cause = ceUnimplemented)
 
-proc stepBreak(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Unwinds to the nearest for-frame and continues at its successor, stopping at a macro-call
   ## boundary so a break cannot cross out of its macro.
   gap("nkBreak", "corpus demand is 8 sites: 7 in glm53flash.jinja inside the macro " &
       "has_dup_tool_result_id, 1 in northminicode10.jinja")
 
-proc stepSetNs(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## `ns.field = expr`, mutating the shared namespace mapping in place, visible to every
   ## holder of the `DictVal` ref, and emitting nothing.
-  template nd: Node = m.nodes[n]
-  let ns = lookupNameById(t, d, nd.target)
+  template nd: Node = tmpl.nodes[n]
+  let ns = sym[].lookupNameById(st, nd.target)
   if ns.kind != vkNs:
-    raise jinjaErr("`" & t.names[nd.target] & "` is not a namespace, so it has no `" &
-        t.names[nd.field] & "` to set")
-  dictSet(ns.d, t.names[nd.field], evalSpan(m, t, d, nd.lo, nd.hi, forceMacro))
-  d.curNode = nd.succ
+    raise jinjaErr("`" & sym[].names[nd.target] & "` is not a namespace, so it has no `" &
+        sym[].names[nd.field] & "` to set", nd.lo.int, nd.hi.int - nd.lo.int)
+  dictSet(ns.d, sym[].names[nd.field], evalSpan(tmpl, ports, nd.lo, nd.hi))
+  st.curNode = nd.succ
 
-proc stepSetBlock(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepSetBlock(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Opens a capture sink for the body and, on re-entry, binds the capture to the target name.
   gap("nkSetBlock", "corpus demand is 2 sites: gemma4.jinja:322 and northminicode10.jinja:2")
 
-proc stepGeneration(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Records the root-output span of the model's turn:
   ##   the frame holds the opening position, and the re-entry closes it.
   gap("nkGeneration", "corpus demand is 2 sites: lagunaxs21.jinja:44 and lfm25.jinja:77, with " &
       "8 recorded rows carrying codepoint spans")
 
-proc stepMacroDef(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
+proc stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Binds a macro value and emits nothing, the body never running here. A macro frame
   ## arriving back on the definition node closes instead, the body's output pieces drained
   ## through the caller's window, control continuing at the frame's return node.
-  template nd: Node = m.nodes[n]
-  if d.frames.len > 0 and d.frames[^1].kind == frMacro and d.frames[^1].node == n:
-    d.scopes.setLen(d.frames[^1].scopeAt - 1)
-    d.curNode = d.frames[^1].retNode
-    d.frames.setLen(d.frames.len - 1)
-    dec d.macroDepth
+  template nd: Node = tmpl.nodes[n]
+  if st.frames.len > 0 and st.frames[^1].kind == frMacro and st.frames[^1].node == n:
+    st.scopes.setLen(st.frames[^1].scopeAt - 1)
+    st.curNode = st.frames[^1].retNode
+    st.frames.setLen(st.frames.len - 1)
+    dec st.macroDepth
     return
-  d.bindName(nd.macroName, macroVal(
+  st.bindName(nd.macroName, macroVal(
       MacroVal(name: nd.macroName, body: nd.child, node: n)))
-  d.curNode = nd.succ
+  st.curNode = nd.succ
 
 const
   Steps*: array[NodeKind, Step] = [
@@ -258,28 +337,28 @@ const
   ]
     ## Dispatch table, total over `NodeKind`, a new kind without a step a compile error.
 
-proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[CallArg]) =
+proc bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32, args: Args) =
   ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`,
   ## each parameter carrying its interned name id and default expression span in the node tail.
   ##
   ## Positionals bind first, then keywords, then defaults, each default evaluated after those
   ## before it are bound, inside the macro scope that a default sees in Jinja.
-  template nd: Node = m.nodes[n]
+  template nd: Node = tmpl.nodes[n]
   var pos = 0
   let nparams = int(nd.paramCount)
   for k in 0 ..< nparams:
     var val = undefinedVal()
     var bound = false
-    while pos < args.len and args[pos].nameLo == NoLink:
+    while pos < args.n and args.vals[pos].nameLo == NoLink:
       if pos == k:
-        val = args[pos].val
+        val = args.vals[pos].val
         bound = true
       inc pos
       break
     if not bound:
-      for a in args:
+      for a in args.argItems:
         if a.nameLo != NoLink and
-            m.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1) == t.names[nd.paramNameAt(k)]:
+            tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1) == sym[].names[nd.paramNameAt(k)]:
           val = a.val
           bound = true
           break
@@ -287,163 +366,188 @@ proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Cal
       if nd.paramDefLoAt(k) == NoLink:
         val = undefinedVal()
       else:
-        val = evalSpan(m, t, d, nd.paramDefLoAt(k), nd.paramDefHiAt(k), forceMacro)
-    d.bindName(nd.paramNameAt(k), val)
+        val = evalSpan(tmpl, ports, nd.paramDefLoAt(k), nd.paramDefHiAt(k))
+    st.bindName(nd.paramNameAt(k), val)
 
-proc capturePend(m: Machine, d: var Driver, outp: var string) =
+proc capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) =
   ## Appends the pending piece's bytes to `outp` and retires the piece, the capture form
   ## of a forced macro body whose output never reaches the caller's window.
-  case d.pend.kind
+  case st.pend.kind
   of pkNone:
     discard
   of pkSpan:
     let at = outp.len
-    let n = int(d.pend.hi - d.pend.lo) - d.pend.pos
+    let n = int(st.pend.hi - st.pend.lo) - st.pend.pos
     outp.setLen(at + n)
-    copyMem(addr outp[at], unsafeAddr m.jinja[int d.pend.lo + d.pend.pos], n)
-    d.pend = Piece(kind: pkNone)
+    copyMem(addr outp[at], unsafeAddr tmpl.jinja[int st.pend.lo + st.pend.pos], n)
+    st.pend = Piece(kind: pkNone)
   of pkStr:
-    outp.add d.pend.s[d.pend.pos ..< d.pend.s.len]
-    d.pend = Piece(kind: pkNone)
+    outp.add st.pend.s[st.pend.pos ..< st.pend.s.len]
+    st.pend = Piece(kind: pkNone)
   of pkLazy:
     var buf: array[256, char]
     while true:
-      let n = pullSer(d.lazy, buf)
+      let n = pullSer(st.lazy, buf)
       if n == 0:
         break
       let at = outp.len
       outp.setLen(at + n)
       copyMem(addr outp[at], addr buf[0], n)
-    d.pend = Piece(kind: pkNone)
+    st.pend = Piece(kind: pkNone)
 
-proc startMacro(m: Machine, t: Tables, d: var Driver, call: PendingCallVal, retNode: int32) =
+proc startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+    ports: Ports, call: PendingCallVal, retNode: int32) {.noSideEffect.} =
   ## Opens a macro frame and enters the body.
   ## Contract:
   ## - the body's output pieces drain through the caller's window until the frame closes on the definition node
   ## - depth is capped, and a breach raises
-  if d.macroDepth >= MacroDepthCap:
+  if st.macroDepth >= MacroDepthCap:
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
-        t.names[call.mc.name] & "`")
-  inc d.macroDepth
-  d.scopes.add @[]
-  bindMacroArgs(m, t, d, call.mc.node, call.args)
-  d.frames.add Frame(node: call.mc.node, kind: frMacro, pc: call.mc.body,
-      retNode: retNode, scopeAt: d.scopes.len)
-  d.curNode = call.mc.body
+        sym[].names[call.mc.name] & "`")
+  inc st.macroDepth
+  st.scopes.add @[]
+  bindMacroArgs(tmpl, sym, st, ports, call.mc.node, call.args)
+  st.frames.add Frame(node: call.mc.node, kind: frMacro, pc: call.mc.body,
+      retNode: retNode, scopeAt: st.scopes.len)
+  st.curNode = call.mc.body
 
-proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[CallArg]): string =
+proc forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+    mc: MacroVal, args: Args): JinjaVal {.noSideEffect.} =
   ## Statement tier side of the macro forcer.
   ## Contract:
   ## - the body runs on a copy of the driver, so the caller's scopes, frames, program counter,
   ##   depth and pending piece are untouched by construction, and a raise inside the body
   ##   abandons the copy wholesale
-  ## - the capture is transient, the copy discarded once its pieces drain into the result, shared dict writes staying visible
-  ## - depth is capped against the inherited depth, so the cap chains across nested forces, and a breach raises
-  doAssert d.pend.kind == pkNone,
+  ## - the capture is transient, the copy discarded once its pieces drain into the result
+  ##   value's string, shared dict writes staying visible
+  ##
+  ## Ports and depth:
+  ## - the body's expressions evaluate through ports over the copy, so a body binding
+  ##   or a nested streamed call resolves against the body's own scopes, never the caller's scopes
+  ## - depth is capped against the inherited depth, so the cap chains across nested forces,
+  ##   and a breach raises
+  doAssert st.pend.kind == pkNone,
       "a macro body was forced while the driver still held a pending piece"
-  if d.macroDepth >= MacroDepthCap:
+  if st.macroDepth >= MacroDepthCap:
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
-        t.names[mc.name] & "`")
-  var d2 = d
-  inc d2.macroDepth
-  d2.scopes.add @[]
-  bindMacroArgs(m, t, d2, mc.node, args)
-  d2.curNode = mc.body
+        sym[].names[mc.name] & "`")
+  var st2 = st
+  inc st2.macroDepth
+  st2.scopes.add @[]
+  var env2 = PortEnv(tmpl: tmpl, sym: sym, st: addr st2)
+  let ports2 = Ports(lookup: portLookup, clock: portClock, force: portForce, env: addr env2)
+  bindMacroArgs(tmpl, sym, st2, ports2, mc.node, args)
+  st2.curNode = mc.body
+  result = strVal("")
   var node = mc.body
   while node != mc.node and node != NoLink:
-    Steps[m.nodes[node].kind](m, t, d2, node)
-    node = d2.curNode
-    while d2.pend.kind != pkNone:
-      capturePend(m, d2, result)
+    Steps[tmpl.nodes[node].kind](tmpl, sym, st2, ports2, node)
+    node = st2.curNode
+    while st2.pend.kind != pkNone:
+      capturePend(tmpl, st2, result.s)
 
 
-# Driver:
+# Render driver:
 
-func newDriver*(ctx: JinjaVal, clock = 0.0): Driver =
-  ## Returns a driver ready to render `ctx`, the render context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
-  ## `clock` is the epoch `strftime_now` reads, never `Machine` state, so one artifact renders reproducibly under different clocks.
-  Driver(curNode: 0, cur: 0, pend: Piece(kind: pkNone), scopes: @[(default(Scope))], root: ctx,
-      clock: clock)
+proc startRender*(tmpl: CompiledTemplate, sym: var CompiledSymbols, root: JinjaVal, clock = 0.0): Context =
+  ## Returns a render context over the shared artifact, ready to render `root`, the render
+  ## context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
+  ##
+  ## Contract:
+  ## - `clock` is the epoch `strftime_now` reads, never artifact state, so one artifact
+  ##   renders reproducibly under different clocks
+  ## - `sym` is borrowed, the context's symbol pointer must not outlive the binding it was
+  ##   taken from, the same class of contract as the artifact's borrow of the template text
+  Context(tmpl: tmpl, symbols: addr sym,
+      state: RenderState(curNode: 0, cur: 0, pend: Piece(kind: pkNone),
+          scopes: @[(default(Scope))], root: root, clock: clock))
 
-proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int =
+proc pull*(c: var Context, buf: var openArray[char]): int =
   ## Returns the render's next bytes, written into `buf[0 ..< result]`.
   ##
   ## Ownership sits with the caller, whose buffer capacity is the delivery window.
-  ## Resumption state is the driver, so consumers over one `Machine` with separate drivers each
-  ## own their delivery position.
+  ## Resumption state is `c.state`, so consumers holding separate `Context` copies over one
+  ## artifact each own their delivery position.
   ##
   ## Delivery contract:
-  ## - `d.pend.pos` and `d.cur` advance before the call returns, so a consumer that stops
-  ##   mid-drain and resumes never re-receives a byte
+  ## - `c.state.pend.pos` and `c.state.cur` advance before the call returns, so a consumer
+  ##   that stops mid-drain and resumes never re-receives a byte
   ## - a piece longer than the window drains across calls, a lazy piece resuming
-  ##   through the serializer in `d.lazy`
-  ## - 0 means the render is complete, nothing pending and `d.curNode == NoLink`
+  ##   through the serializer in `c.state.lazy`
+  ## - 0 means the render is complete, nothing pending and `c.state.curNode == NoLink`
   ##
   ## A raise discards the bytes already written into `buf` in the failing call, the caller
-  ## never receiving them and the driver having advanced past their render, so a repull
+  ## never receiving them and the render state having advanced past their render, so a repull
   ## resumes after them:
   ## - a consumer that must hold every byte across a raise keeps the window at one byte,
   ##   which makes each delivered byte a returned byte
-  ## - span pieces copy out of `Machine.jinja`, string pieces out of driver storage,
-  ##   lazy pieces out of the serializer state in `d.lazy`
+  ## - span pieces copy out of `CompiledTemplate.jinja`, string pieces out of render-state
+  ##   storage and lazy pieces out of the serializer state in `c.state.lazy`
   ## - a zero-capacity buffer returns 0 without stepping the render
+  template tmpl: CompiledTemplate = c.tmpl
+  template sym: ptr CompiledSymbols = c.symbols
+  template st: RenderState = c.state
   if buf.len == 0:
     return 0
+  # Adapter lifetime is one dispatch. Every step this call runs evaluates expressions
+  # through ports over this env, and nothing escapes the call.
+  var env = PortEnv(tmpl: tmpl, sym: sym, st: addr st)
+  let ports = Ports(lookup: portLookup, clock: portClock, force: portForce, env: addr env)
   while true:
     # Retire a piece whose bytes are all delivered. A lazy piece completes when its serializer
     # is done, which a window-sized drain reports by leaving the piece queued.
-    if d.pend.kind == pkLazy:
-      if serDone(d.lazy):
-        d.pend = Piece(kind: pkNone)
-    elif d.pend.kind != pkNone and d.pend.pos >= pieceLen(d.pend):
-      d.pend = Piece(kind: pkNone)
-    if d.pend.kind == pkLazy:
-      let n = pullSer(d.lazy, toOpenArray(buf, result, buf.len - 1))
-      d.cur += n
+    if st.pend.kind == pkLazy:
+      if serDone(st.lazy):
+        st.pend = Piece(kind: pkNone)
+    elif st.pend.kind != pkNone and st.pend.pos >= pieceLen(st.pend):
+      st.pend = Piece(kind: pkNone)
+    if st.pend.kind == pkLazy:
+      let n = pullSer(st.lazy, toOpenArray(buf, result, buf.len - 1))
+      st.cur += n
       result += n
       if result == buf.len:
         return
       continue
-    if d.pend.kind != pkNone:
-      let take = min(buf.len - result, pieceLen(d.pend) - d.pend.pos)
-      let base = d.pend.pos
+    if st.pend.kind != pkNone:
+      let take = min(buf.len - result, pieceLen(st.pend) - st.pend.pos)
+      let base = st.pend.pos
       # Commit the delivery position before returning, not after. The caller may stop after any call,
       # so a post-return update would strand `pos` and `cur` at their pre-call values, re-handing bytes.
-      d.pend.pos += take
-      d.cur += take
-      case d.pend.kind
+      st.pend.pos += take
+      st.cur += take
+      case st.pend.kind
       of pkSpan:
-        copyMem(addr buf[result], unsafeAddr m.jinja[int d.pend.lo + base], take)
+        copyMem(addr buf[result], unsafeAddr tmpl.jinja[int st.pend.lo + base], take)
       of pkStr:
-        copyMem(addr buf[result], unsafeAddr d.pend.s[base], take)
+        copyMem(addr buf[result], unsafeAddr st.pend.s[base], take)
       of pkNone, pkLazy:
         discard
       result += take
       if result == buf.len:
         return
       continue
-    if d.curNode == NoLink:
+    if st.curNode == NoLink:
       return
-    let n = d.curNode
-    Steps[m.nodes[n].kind](m, t, d, n)
+    let n = st.curNode
+    Steps[tmpl.nodes[n].kind](tmpl, sym, st, ports, n)
 
-iterator items*(m: Machine, t: Tables, d: var Driver): openArray[char] =
+iterator items*(c: var Context): openArray[char] =
   ## Pulls the render in chunks of at most `ChunkSize` bytes, one `pull` call per chunk.
   ## - a chunk borrows the iterator's local window, so a consumer must finish with it before
   ##   advancing the loop
   ## - `cur` counts bytes handed out, so a stop mid-render resumes consistently
   var buf: array[ChunkSize, char]
   while true:
-    let n = pull(m, t, d, buf)
+    let n = pull(c, buf)
     if n == 0:
       break
     yield buf.toOpenArray(0, n - 1)
 
-proc pullAll*(m: Machine, t: Tables, d: var Driver): string =
+proc pullAll*(c: var Context): string =
   ## Returns every render byte, chunking composing with `cur`, so the two-pass counting contract needs no separate counting pass.
   var buf: array[ChunkSize, char]
   while true:
-    let n = pull(m, t, d, buf)
+    let n = pull(c, buf)
     if n == 0:
       break
     let at = result.len
@@ -451,10 +555,9 @@ proc pullAll*(m: Machine, t: Tables, d: var Driver): string =
     if n > 0:
       copyMem(addr result[at], unsafeAddr buf[0], n)
 
-proc renderToString*(src: string, ctx: JinjaVal, clock = 0.0): string =
-  ## Compiles and renders in one call, building `Machine` at the scope that owns `src`,
-  ## the artifact borrowing the template text and never outliving it.
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
-  var d = newDriver(ctx, clock)
-  pullAll(m, tables, d)
+proc renderToString*(src: string, root: JinjaVal, clock = 0.0): string =
+  ## Compiles and renders in one call, compiling at the scope that owns `src`, the artifact
+  ## borrowing the template text and never outliving it.
+  var (tmpl, sym) = parseTemplate(src)
+  var c = startRender(tmpl, sym, root, clock)
+  pullAll(c)

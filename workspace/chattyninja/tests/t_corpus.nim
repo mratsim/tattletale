@@ -81,10 +81,10 @@ type PullChunks[N: static int] = object
   ## - a full drain equals the whole-render `pullAll`, the next pull after it reports 0
   ## - partial consumption resumes from the driver's fields, no byte re-handed
   ##
-  ## Machine and tables stay at the consumer's scope, `Machine.jinja` borrowing the template
-  ## text. A `Machine` embedded in another object loses the borrowed view, so the iterator
-  ## parameters carry them.
-  d: Driver
+  ## The compiled template stays at the consumer's scope, `CompiledTemplate.jinja` borrowing
+  ## the template text. The template is a ref, so a `Context` embeds in another object
+  ## without losing the borrowed view.
+  c: Context
   buf: array[N, char]
 
 func jsonError(msg: string): JsonParseError =
@@ -368,52 +368,54 @@ func pieceRemaining(p: Piece): int =
   of pkStr: p.s.len - p.pos
   of pkLazy: 0
 
-proc renderPull(m: Machine, t: Tables, ctx: JinjaVal, clock: float64, cap: int): string =
+proc renderPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64, cap: int): string =
   ## Renders through `pull` with a `cap`-byte caller buffer, accumulating every fill.
-  var d = newDriver(ctx, clock)
+  var c = startRender(m, sym, ctx, clock)
   var buf = newSeq[char](cap)
   while true:
-    let n = pull(m, t, d, buf)
+    let n = pull(c, buf)
     if n == 0:
       break
     for i in 0 ..< n:
       result.add buf[i]
 
-proc renderAllPull(m: Machine, t: Tables, ctx: JinjaVal, clock: float64): string =
-  ## Renders through `pullAll` with a fresh driver.
-  var d = newDriver(ctx, clock)
-  pullAll(m, t, d)
+proc renderAllPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): string =
+  ## Renders through `pullAll` with a fresh render context.
+  var c = startRender(m, sym, ctx, clock)
+  pullAll(c)
 
 
-func pullChunks[N: static int](d: Driver): PullChunks[N] =
-  ## Builds the windowed pull machine over the driver `d` of a compiled template.
-  PullChunks[N](d: d)
+func pullChunks[N: static int](c: Context): PullChunks[N] =
+  ## Builds the windowed pull machine over the render context `c` of a compiled template.
+  PullChunks[N](c: c)
 
-iterator items[N: static int](p: var PullChunks[N], m: Machine, t: Tables): openArray[char] =
+iterator items[N: static int](p: var PullChunks[N]): openArray[char] =
   ## Yields the render as bounded windows:
   ## - one `pull` call fills the window, the view carries at most N bytes
   ## - the tail window closes the render, a 0 count ends the stream
   while true:
-    let n = pull(m, t, p.d, p.buf)
+    let n = pull(p.c, p.buf)
     if n == 0:
       break
     yield p.buf.toOpenArray(0, n - 1)
 
-proc renderChunked[N: static int](m: Machine, t: Tables, ctx: JinjaVal, clock: float64): string =
+proc renderChunked[N: static int](m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): string =
   ## Renders one row through `N`-byte windows, accumulating every window.
-  var pc = pullChunks[N](newDriver(ctx, clock))
-  for w in pc.items(m, t):
-    for c in w:
-      result.add c
+  var pc = pullChunks[N](startRender(m, sym, ctx, clock))
+  for w in pc.items():
+    for ch in w:
+      result.add ch
 
-# Compiled-form ABI over the node budget, the arena's POD status, the two-field
-# read-only `Machine` and dispatch totality.
+# Compiled-form ABI over the node budget, the arena's POD status, the shared
+# read-only `CompiledTemplate` and dispatch totality.
 # ---------------------------------------------------------------------------
 macro fieldNames(T: type): untyped =
   ## Returns the field names of an object type, in declaration order.
   var t = getTypeImpl(T)
   if t.kind == nnkBracketExpr:
     t = getTypeImpl(t[1])
+  while t.kind == nnkRefTy or t.kind == nnkSym:
+    t = getTypeImpl(t[0])
   expectKind t, nnkObjectTy
   let rec = t[2]
   expectKind rec, nnkRecList
@@ -430,7 +432,8 @@ macro fieldNames(T: type): untyped =
 
 const
   nodeFields: array[2, string] = fieldNames(Node)
-  machineFields: array[2, string] = fieldNames(Machine)
+  tmplFields: array[2, string] = fieldNames(CompiledTemplate)
+  contextFields: array[3, string] = fieldNames(Context)
 
 static:
   # The node vocabulary is the corpus-derived ten, in declaration order.
@@ -448,9 +451,13 @@ static:
   assert alignof(Node) == 8, "the payload tail pointer aligns the node to 8 bytes"
   assert not (Node is ref), "nodes are POD in one seq, never a ref box"
 
-  # Machine is the borrowed text plus the arena, two fields, so nothing render-mutable is
-  # reachable from the artifact and one artifact can serve several drivers.
-  assert machineFields == ["jinja", "nodes"], "Machine must be exactly {jinja, nodes}"
+  # CompiledTemplate is the borrowed text plus the arena, two fields, so nothing render-mutable
+  # is reachable from the artifact and one artifact can serve several render instantiations.
+  assert tmplFields == ["jinja", "nodes"], "CompiledTemplate must be exactly {jinja, nodes}"
+  assert CompiledTemplate is ref, "CompiledTemplate is a shared ref"
+
+  # Context bundles the shared artifact and symbols with the per-instantiation state.
+  assert contextFields == ["tmpl", "symbols", "state"], "Context must be exactly {tmpl, symbols, state}"
 
   # Dispatch is one array total over the enum. The array's type makes an uncovered kind
   # a compile error, and the length check keeps the table total across an enum rename.
@@ -476,7 +483,7 @@ arena[0].slots[0] = 99'i32
 doAssert arena[1].slots[0] == 7'i32, "an assignment must deep-copy a spilled payload"
 doAssert arena.len == 2, "the arena moved by assignment with no reference left behind"
 
-doAssert sizeof(Machine) == 32, "Machine layout: " & $sizeof(Machine)
+doAssert sizeof(RenderState) > 0, "RenderState is a plain value type"
 
 # The equality must reject a one-byte change, since a comparison that cannot fail makes
 # the corpus walk vacuous.
@@ -497,8 +504,7 @@ block corpusDelivery:
   var errRaised = 0
   for suite in parseable:
     let src = templateSource(suite)
-    let (nodes, tables) = parseTemplate(src)
-    let m = Machine(jinja: src, nodes: nodes)
+    var (m, tables) = parseTemplate(src)
     for r in rows(suite):
       if r.expectError:
         # The recorded error, not a wrong success. The match compares the recorded message verbatim.
@@ -551,8 +557,7 @@ block corpusDelivery:
   # Render invariance under fresh drivers:
   # the same compiled template rendered twice delivers byte-equal output.
   let srcKeep = templateSource("moonlight")
-  let (nodesKeep, tablesKeep) = parseTemplate(srcKeep)
-  let mKeep = Machine(jinja: srcKeep, nodes: nodesKeep)
+  var (mKeep, tablesKeep) = parseTemplate(srcKeep)
   let rowKeep = rows("moonlight")[0]
   doAssert renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock) ==
       renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock),
@@ -567,34 +572,33 @@ block corpusDelivery:
 # ---------------------------------------------------------------------------
 block boundaryShapes:
   let src = templateSource("deepseekv2lite")
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
+  var (m, tables) = parseTemplate(src)
   let row = loadRow("deepseekv2lite", "assistant_history")
   let want = row.rendered
 
   # A buffer larger than the whole render takes everything in one pull, then reports 0.
-  var dBig = newDriver(row.context, row.clock)
+  var dBig = startRender(m, tables, row.context, row.clock)
   var big = newSeq[char](want.len + 1)
-  let n1 = pull(m, tables, dBig, big)
+  let n1 = pull(dBig, big)
   doAssert n1 == want.len, "an oversized buffer took " & $n1 & " of " & $want.len & " bytes"
   doAssert bytesOf(big, n1) == want, "the one-pull render differs from the recorded bytes"
-  doAssert pull(m, tables, dBig, big) == 0, "a completed render kept returning bytes"
+  doAssert pull(dBig, big) == 0, "a completed render kept returning bytes"
 
   # A buffer exactly the render size also drains in one pull.
-  var dExact = newDriver(row.context, row.clock)
+  var dExact = startRender(m, tables, row.context, row.clock)
   var exact = newSeq[char](want.len)
-  let n2 = pull(m, tables, dExact, exact)
+  let n2 = pull(dExact, exact)
   doAssert n2 == want.len, "an exact-size buffer took " & $n2 & " of " & $want.len & " bytes"
   doAssert bytesOf(exact, n2) == want, "the exact-size render differs from the recorded bytes"
-  doAssert pull(m, tables, dExact, exact) == 0, "a completed render kept returning bytes"
+  doAssert pull(dExact, exact) == 0, "a completed render kept returning bytes"
 
   # A 1-byte buffer gives every byte its own pull, which forces mid-piece drains.
-  var dOne = newDriver(row.context, row.clock)
+  var dOne = startRender(m, tables, row.context, row.clock)
   var one: array[1, char]
   var acc = ""
   var calls = 0
   while true:
-    let n = pull(m, tables, dOne, one)
+    let n = pull(dOne, one)
     if n == 0:
       break
     doAssert n == 1, "a 1-byte buffer pull returned " & $n
@@ -604,22 +608,22 @@ block boundaryShapes:
   doAssert calls == want.len, "expected one pull per byte, got " & $calls & " of " & $want.len
 
   # A consumer that stops mid-drain and resumes never re-receives a byte.
-  var dStop = newDriver(row.context, row.clock)
+  var dStop = startRender(m, tables, row.context, row.clock)
   var window = newSeq[char](16)
   var head = ""
   block stopEarly:
     for _ in 0 ..< 3:
-      let n = pull(m, tables, dStop, window)
+      let n = pull(dStop, window)
       if n == 0:
         break
       head.add bytesOf(window, n)
   doAssert head.len > 0 and head.len < want.len, "the early stop covered the whole render"
   doAssert head == want[0 ..< head.len], "the bytes before the stop diverged from the recording"
-  doAssert dStop.cur == head.len, "cur is " & $dStop.cur & " but " & $head.len &
+  doAssert dStop.state.cur == head.len, "cur is " & $dStop.state.cur & " but " & $head.len &
       " bytes were received"
   var tail = ""
   while true:
-    let n = pull(m, tables, dStop, one)
+    let n = pull(dStop, one)
     if n == 0:
       break
     tail.add one[0]
@@ -630,22 +634,21 @@ block boundaryShapes:
 # ---------------------------------------------------------------------------
 block zeroCapacityBuffer:
   let src = templateSource("deepseekv2lite")
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
+  var (m, tables) = parseTemplate(src)
   let row = loadRow("deepseekv2lite", "assistant_history")
 
-  var d = newDriver(row.context, row.clock)
+  var d = startRender(m, tables, row.context, row.clock)
   var empty: array[0, char]
-  doAssert pull(m, tables, d, empty) == 0, "a zero-capacity buffer did not report 0"
-  doAssert d.curNode != NoLink, "a zero-capacity pull stepped the render to the end"
-  doAssert d.cur == 0, "a zero-capacity pull moved cur"
-  doAssert d.pend.kind == pkNone, "a zero-capacity pull started a pending piece"
+  doAssert pull(d, empty) == 0, "a zero-capacity buffer did not report 0"
+  doAssert d.state.curNode != NoLink, "a zero-capacity pull stepped the render to the end"
+  doAssert d.state.cur == 0, "a zero-capacity pull moved cur"
+  doAssert d.state.pend.kind == pkNone, "a zero-capacity pull started a pending piece"
 
   # the untouched driver still delivers the whole render byte-exact
   var acc = ""
   var window = newSeq[char](256)
   while true:
-    let n = pull(m, tables, d, window)
+    let n = pull(d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
@@ -657,16 +660,15 @@ block zeroCapacityBuffer:
 block partialConsumptionResumes:
   for suite in ["moonlight", "qwen3"]:
     let src = templateSource(suite)
-    let (nodes, tables) = parseTemplate(src)
-    let m = Machine(jinja: src, nodes: nodes)
+    var (m, tables) = parseTemplate(src)
     let r = rows(suite)[0]
-    var pc = pullChunks[7](newDriver(r.context, r.clock))
+    var pc = pullChunks[7](startRender(m, tables, r.context, r.clock))
     var head = ""
     var stoppedMidPiece = false
-    for w in pc.items(m, tables):
+    for w in pc.items():
       for c in w:
         head.add c
-      if pc.d.pend.kind != pkNone and pieceRemaining(pc.d.pend) > 0:
+      if pc.c.state.pend.kind != pkNone and pieceRemaining(pc.c.state.pend) > 0:
         stoppedMidPiece = true
         break
     doAssert stoppedMidPiece,
@@ -675,10 +677,10 @@ block partialConsumptionResumes:
         suite & ": the early stop covered the whole render"
     doAssert head == r.rendered[0 ..< head.len],
         suite & ": the bytes before the stop diverged from the recording"
-    doAssert pc.d.cur == head.len,
-        suite & ": cur is " & $pc.d.cur & " but " & $head.len & " bytes were received"
+    doAssert pc.c.state.cur == head.len,
+        suite & ": cur is " & $pc.c.state.cur & " but " & $head.len & " bytes were received"
     var tail = ""
-    for w in pc.items(m, tables):
+    for w in pc.items():
       for c in w:
         tail.add c
     doAssert head & tail == r.rendered,
@@ -703,17 +705,16 @@ const listRepr = "{'alpha': 'one', 'beta': 'two', 'gamma': ['x', 'y', 'z']}"
 block lazyWindowDrain:
   let ctx = listCtx()
   let src = "{{ m }}"
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
+  var (m, tables) = parseTemplate(src)
 
-  var d = newDriver(ctx, 0.0)
+  var d = startRender(m, tables, ctx, 0.0)
   var window = newSeq[char](8)
   var acc = ""
   var lazyPieces = 0
   while true:
-    if d.pend.kind == pkLazy:
+    if d.state.pend.kind == pkLazy:
       inc lazyPieces
-    let n = pull(m, tables, d, window)
+    let n = pull(d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
@@ -727,18 +728,17 @@ block lazyWindowDrain:
 block concatWindowDrain:
   let ctx = listCtx()
   let src = "{{ m ~ '::' ~ m }}"
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
+  var (m, tables) = parseTemplate(src)
   let want = listRepr & "::" & listRepr
 
-  var d = newDriver(ctx, 0.0)
+  var d = startRender(m, tables, ctx, 0.0)
   var window = newSeq[char](8)
   var acc = ""
   var lazyPulls = 0
   while true:
-    if d.pend.kind == pkLazy:
+    if d.state.pend.kind == pkLazy:
       inc lazyPulls
-    let n = pull(m, tables, d, window)
+    let n = pull(d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
@@ -762,8 +762,7 @@ block valueBoundary:
   dictSet(ctxd, "messages", seqVal(msgs))
   let ctx = dictVal(ctxd)
 
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
+  var (m, tables) = parseTemplate(src)
   let want = renderToString(src, ctx, 0.0)
   doAssert want == longA & longB, "the string render is not the contents concatenation"
 
@@ -772,7 +771,7 @@ block valueBoundary:
   let whole = renderAllPull(m, tables, ctx, 0.0)
   doAssert whole == want, "pullAll differs across the value boundary"
 
-# Span pieces copy out of `Machine.jinja` and drain across calls byte-exact.
+# Span pieces copy out of `CompiledTemplate.jinja` and drain across calls byte-exact.
 # ---------------------------------------------------------------------------
 block spanDrain:
   let verbatim = repeat("literal text ", 15)
@@ -780,20 +779,19 @@ block spanDrain:
   var ctxd = DictVal()
   dictSet(ctxd, "m", strVal("emit"))
   let ctx = dictVal(ctxd)
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
+  var (m, tables) = parseTemplate(src)
   let want = renderToString(src, ctx, 0.0)
   doAssert want == verbatim & "emit", "the string render is not the expected bytes"
 
   # A window far below the verbatim run forces span pieces through several pulls.
-  var d = newDriver(ctx, 0.0)
+  var d = startRender(m, tables, ctx, 0.0)
   var window = newSeq[char](8)
   var acc = ""
   var spanPulls = 0
   while true:
-    if d.pend.kind == pkSpan:
+    if d.state.pend.kind == pkSpan:
       inc spanPulls
-    let n = pull(m, tables, d, window)
+    let n = pull(d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
@@ -814,8 +812,7 @@ block filterRaiseRepull:
   let ctx = dictVal(cd)
   # `x[0]` raises on the integer item and passes the strings through the filter comparison.
   let src = "pre{% for x in xs if x[0] == 'a' %}[{{ x }}]{% endfor %}post"
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
+  var (m, tables) = parseTemplate(src)
   let want = "pre[aa][ab]post"
   # The one-shot render propagates the same raise, the filtered strings never reaching it.
   try:
@@ -824,14 +821,14 @@ block filterRaiseRepull:
   except JinjaError as e:
     doAssert "not subscriptable" in e.what, e.what
 
-  var d = newDriver(ctx, 0.0)
+  var d = startRender(m, tables, ctx, 0.0)
   var win1 = newSeq[char](1)
   var acc = ""
   var raised = false
   var message = ""
   try:
     while true:
-      let n = pull(m, tables, d, win1)
+      let n = pull(d, win1)
       if n == 0:
         break
       acc.add bytesOf(win1, n)
@@ -846,7 +843,7 @@ block filterRaiseRepull:
   # The repull skips nothing. The integer item stays consumed and the render completes.
   var rest = newSeq[char](64)
   while true:
-    let n = pull(m, tables, d, rest)
+    let n = pull(d, rest)
     if n == 0:
       break
     acc.add bytesOf(rest, n)
@@ -855,13 +852,13 @@ block filterRaiseRepull:
   # Wide window. The prefix and the failed item's evaluation land in one call, whose
   # window bytes are discarded and never reach the caller. The repull resumes after them,
   # discarded prefix included.
-  var dWide = newDriver(ctx, 0.0)
+  var dWide = startRender(m, tables, ctx, 0.0)
   var wide = newSeq[char](64)
   var wideAcc = ""
   var wideRaised = false
   try:
     while true:
-      let n = pull(m, tables, dWide, wide)
+      let n = pull(dWide, wide)
       if n == 0:
         break
       wideAcc.add bytesOf(wide, n)
@@ -871,7 +868,7 @@ block filterRaiseRepull:
   doAssert wideAcc == "", "the failing call returned bytes: <" & wideAcc & ">"
   var wideRest = ""
   while true:
-    let n = pull(m, tables, dWide, wide)
+    let n = pull(dWide, wide)
     if n == 0:
       break
     wideRest.add bytesOf(wide, n)
@@ -884,12 +881,11 @@ block filterRaiseRepull:
 block captureSink:
   let ctx = listCtx()
   let src = "{%- macro mm(v) -%}[{{ v }}]{%- endmacro -%}{{ mm(m) }}"
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
+  var (m, tables) = parseTemplate(src)
   let want = renderToString(src, ctx, 0.0)
 
-  var d = newDriver(ctx, 0.0)
-  doAssert pullAll(m, tables, d) == want,
+  var d = startRender(m, tables, ctx, 0.0)
+  doAssert pullAll(d) == want,
       "the capture-sink emit differs from the string render"
 
 # A streamed macro call resolves names against the caller's scopes only before the call
@@ -932,8 +928,7 @@ when defined(nimAllocStats):
 
   block allocDrainWindow:
     let src = templateSource("deepseekv2lite")
-    let (nodes, tables) = parseTemplate(src)
-    let m = Machine(jinja: src, nodes: nodes)
+    var (m, tables) = parseTemplate(src)
     let row = loadRow("deepseekv2lite", "assistant_history")
 
     # Warm-up renders, uncounted:
@@ -945,14 +940,14 @@ when defined(nimAllocStats):
 
     # A pull that enters on a pending piece with bytes left only drains it, no step runs,
     # so it must allocate nothing.
-    var d = newDriver(row.context, row.clock)
+    var d = startRender(m, tables, row.context, row.clock)
     var one: array[1, char]
     var acc = ""
     var drainCalls = 0
     while true:
-      let pending = d.pend.kind != pkNone and pieceRemaining(d.pend) > 0
+      let pending = d.state.pend.kind != pkNone and pieceRemaining(d.state.pend) > 0
       let before = getAllocStats()
-      let n = pull(m, tables, d, one)
+      let n = pull(d, one)
       let used = (getAllocStats() - before).allocCount
       if n == 0:
         break
@@ -967,9 +962,9 @@ when defined(nimAllocStats):
     # Whole-render comparison:
     # the pull path against the string path, whose count also covers parsing the template
     # and therefore bounds the pull total from above.
-    var dTotal = newDriver(row.context, row.clock)
+    var dTotal = startRender(m, tables, row.context, row.clock)
     let pullAllocs = allocsOf:
-      discard pullAll(m, tables, dTotal)
+      discard pullAll(dTotal)
     let strAllocs = allocsOf:
       discard renderToString(src, row.context, row.clock)
     doAssert pullAllocs <= strAllocs, "the pull render allocated " & $pullAllocs &
@@ -1016,8 +1011,7 @@ when defined(nimAllocStats):
 
     template countRenders(src: string, n: int): int =
       ## Warms one pull render uncounted, then totals `n` pull renders through `getAllocStats()` deltas.
-      let (nodes, tables) = parseTemplate(src)
-      let m = Machine(jinja: src, nodes: nodes)
+      var (m, tables) = parseTemplate(src)
       let want = renderToString(src, ctx, 0.0)
       doAssert renderAllPull(m, tables, ctx, 0.0) == want,
           "the micro pull render differs from the string render for " & src
@@ -1087,15 +1081,14 @@ when defined(nimAllocStats):
     var cd = DictVal()
     dictSet(cd, "tools", tools)
     let ctx = dictVal(cd)
-    let (nodes, tables) = parseTemplate(tJson)
-    let m = Machine(jinja: tJson, nodes: nodes)
+    var (m, tables) = parseTemplate(tJson)
     let want = renderToString(tJson, ctx, 0.0)
 
-    var dWarm = newDriver(ctx, 0.0)
+    var dWarm = startRender(m, tables, ctx, 0.0)
     var bufWarm = newSeq[char](256)
     var warm = ""
     while true:
-      let n = pull(m, tables, dWarm, bufWarm)
+      let n = pull(dWarm, bufWarm)
       if n == 0:
         break
       warm.add bytesOf(bufWarm, n)
@@ -1104,10 +1097,10 @@ when defined(nimAllocStats):
     var buf = newSeq[char](256)
     var renderAllocs = 0
     for _ in 0 ..< iters:
-      var di = newDriver(ctx, 0.0)
+      var di = startRender(m, tables, ctx, 0.0)
       let renderCost = allocsOf:
         while true:
-          let n = pull(m, tables, di, buf)
+          let n = pull(di, buf)
           if n == 0:
             break
       renderAllocs += renderCost
@@ -1128,25 +1121,24 @@ when defined(nimAllocStats):
     template countRenders(src: string, n: int): int =
       ## Warms one pull render uncounted, then totals `n` renders through
       ## `getAllocStats()` deltas with one driver per render, as above.
-      let (ns, ts) = parseTemplate(src)
-      let mm = Machine(jinja: src, nodes: ns)
+      var (mm, ts) = parseTemplate(src)
       let wantLocal = renderToString(src, loopCtx, 0.0)
-      var dWarm2 = newDriver(loopCtx, 0.0)
+      var dWarm2 = startRender(mm, ts, loopCtx, 0.0)
       var bufWarm2 = newSeq[char](256)
       var accWarm = ""
       while true:
-        let got = pull(mm, ts, dWarm2, bufWarm2)
+        let got = pull(dWarm2, bufWarm2)
         if got == 0:
           break
         accWarm.add bytesOf(bufWarm2, got)
       doAssert accWarm == wantLocal, "the micro render differs for " & src
       var total = 0
       for _ in 0 ..< n:
-        var di = newDriver(loopCtx, 0.0)
+        var di = startRender(mm, ts, loopCtx, 0.0)
         var bi = newSeq[char](256)
         let renderCost = allocsOf:
           while true:
-            let got = pull(mm, ts, di, bi)
+            let got = pull(di, bi)
             if got == 0:
               break
         total += renderCost

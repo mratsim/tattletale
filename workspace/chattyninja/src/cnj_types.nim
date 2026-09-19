@@ -3,8 +3,10 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# Core data of the chattyninja engine. Covers the compiled artifact, the parse-built side tables, and the render
-# driver. See cnj_engine.nim for the dispatch table and the `items` pull interface.
+# Core data of the chattyninja engine. Covers the compiled artifact, the parse-built
+# symbol arena, the per-instantiation render state, and the injected render ports
+# the expression tier reads the render through. See cnj_engine.nim for the dispatch table,
+# the render context bundle, the port adapter, and the `items` pull interface.
 
 import jinja_data_model, jinja_serialize
 import workspace/data_structures/src/small_seqs
@@ -33,7 +35,7 @@ type
     ## POD node in one append-only arena, `kind` naming the construct, a node's executable
     ## meaning a pure function of `kind` through `steps`, so the artifact stays data.
     ## Every payload reference is one int32 slot, `NoLink` (-1) marking an absent link or span:
-    ## - a span into `Machine.jinja`, an arena index, or an interned name id
+    ## - a span into `CompiledTemplate.jinja`, an arena index, or an interned name id
     ## - slots `0`-`3` uniform across kinds, `4` and past kind-specific, see the accessors below
     kind*: NodeKind
     slots*: SmallSeq[5, int32]
@@ -42,16 +44,20 @@ type
       ## - no node holds exactly 6, and the other 5 corpus templates raise declared gaps
       ## - only a variable `nkFor` or `nkMacroDef` payload spills, one heap block at parse time
 
-  Machine* = object
-    ## Read-only compiled template, two fields and no mutable state, so one artifact renders concurrently under separate drivers.
-    ## `jinja` is borrowed, so the artifact must not outlive the template text it
-    ## points into, and the caller builds `Machine` at the scope that owns the text.
+  CompiledTemplate* = ref object
+    ## Read-only compiled template, shared across renders with two fields and no mutable state,
+    ## so one artifact serves any number of render instantiations.
+    ##
+    ## Borrow contract:
+    ## - `jinja` is borrowed, so the artifact must not outlive the caller's template text
+    ## - the caller builds `CompiledTemplate` at the scope that owns the text
     jinja*: openArray[char]
     nodes*: seq[Node]
 
-  Tables* = object
-    ## Parse-built side arena, read-only at render, passed into the driver. Node int32 name
-    ## slots index into it, so a `Machine` is only meaningful together with its `Tables`.
+  CompiledSymbols* = object
+    ## Parse-built interned-name arena, read-only at render and shared by every render
+    ## over its artifact. Node int32 name slots index into it, so `CompiledTemplate` is
+    ## only meaningful together with the matching `CompiledSymbols`.
     names*: seq[string]
 
 const
@@ -117,11 +123,11 @@ const
     ## three slots in all.
 
 template lo*(nd: Node): int32 =
-  ## Payload span start into `Machine.jinja`, or the `nkMacroDef` macro name id.
+  ## Payload span start into `CompiledTemplate.jinja`, or the `nkMacroDef` macro name id.
   nd.slots[SlotLo]
 
 template hi*(nd: Node): int32 =
-  ## Payload span end into `Machine.jinja`, exclusive.
+  ## Payload span end into `CompiledTemplate.jinja`, exclusive.
   nd.slots[SlotHi]
 
 template succ*(nd: Node): int32 =
@@ -137,15 +143,15 @@ template alt*(nd: Node): int32 =
   nd.slots[slotAlt]
 
 template loopName*(nd: Node): int32 =
-  ## Interned `loop` name id of `nkFor`, bound so the driver never interns at render time.
+  ## Interned `loop` name id of `nkFor`, bound so render never interns at lookup time.
   nd.slots[slotLoopName]
 
 template filterLo*(nd: Node): int32 =
-  ## `nkFor` filter clause span start into `Machine.jinja`, `NoLink` when the header has no `if`.
+  ## `nkFor` filter clause span start into `CompiledTemplate.jinja`, `NoLink` when the header has no `if`.
   nd.slots[slotFilterLo]
 
 template filterHi*(nd: Node): int32 =
-  ## `nkFor` filter clause span end into `Machine.jinja`, exclusive.
+  ## `nkFor` filter clause span end into `CompiledTemplate.jinja`, exclusive.
   nd.slots[slotFilterHi]
 
 template target*(nd: Node): int32 =
@@ -191,8 +197,8 @@ type
     frFor, frCapture, frGeneration, frMacro
 
   Frame* = object
-    ## Driver frame, the only place re-entry is discriminated. `node` is the frame's identity,
-    ## matched against the node being entered, nothing about resumption living in the node.
+    ## Render-state frame, the only place re-entry is discriminated. `node` is the frame's
+    ## identity and matches the node being entered, nothing about resumption living in the node.
     node*: int32
     scopeAt*: int
       ## One past the mark popped back to on close.
@@ -227,9 +233,11 @@ type
     pkNone, pkSpan, pkStr, pkLazy
 
   Piece* = object
-    ## Pending output piece. Span pieces deliver straight out of `Machine.jinja`, string
-    ## pieces are materialized strings held by the driver, lazy pieces are a derived value
-    ## rendered by the serializer in `Driver.lazy` straight into the delivery window
+    ## Pending output piece:
+    ## - span pieces deliver straight out of `CompiledTemplate.jinja`
+    ## - string pieces are materialized strings held by the render state
+    ## - lazy pieces are a derived value the serializer in `RenderState.lazy` renders
+    ##   straight into the delivery window
     pos*: int
     case kind*: PieceKind
     of pkNone: nil
@@ -239,11 +247,12 @@ type
       s*: string
     of pkLazy:
       nil
-        ## rendered by the serializer in `Driver.lazy`, no payload here
+        ## rendered by the serializer in `RenderState.lazy`, no payload here
 
-  Driver* = object
-    ## All render control state, owned by the `items` loop, nothing reachable from `Machine`,
-    ## so two drivers over one artifact cannot interfere.
+  RenderState* = object
+    ## All per-instantiation render control state, owned by the pull consumer, nothing
+    ## reachable from `CompiledTemplate`, so two instantiations over one artifact cannot
+    ## interfere. Lives only at the step tier, the expression evaluator never seeing it.
     curNode*: int32
       ## node program counter, `NoLink` once the artifact is exhausted
     cur*: int
@@ -263,7 +272,39 @@ type
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
-func findName*(t: Tables, name: openArray[char]): int32 =
+  LookupPort* = proc (env: pointer, name: openArray[char]): JinjaVal {.nimcall, noSideEffect.}
+    ## Resolves one name of the enclosing render to its binding, undefined when absent.
+    ## `env` carries the adapter state the trampoline reads, owned by the pull consumer.
+
+  ClockPort* = proc (env: pointer): float64 {.nimcall, noSideEffect.}
+    ## Returns the render's injected epoch, `strftime_now`'s only time source.
+
+  MacroForcer* = proc (env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+    ## Runs one macro body to completion and returns the captured text as a string value.
+    ## The pull consumer injects the forcer, so the expression tier never reaches the statement
+    ## tier and no import cycle forms.
+
+  Ports* = object
+    ## Render services the expression tier reads, injected per dispatch. The adapter behind
+    ## `env` lives with the pull consumer and is rebuilt there, so a value a step carries
+    ## never outlives the call that built it.
+    lookup*: LookupPort
+    clock*: ClockPort
+    force*: MacroForcer
+    env*: pointer
+      ## adapter state the trampolines cast back, opaque here by construction
+
+  Context* = object
+    ## Object the caller holds, bundling the shared artifact, a borrowed symbol-arena pointer,
+    ## and one per-instantiation render state. Copies render independently.
+    ## A consumer that stops mid-render resumes through its own copy only.
+    tmpl*: CompiledTemplate
+    symbols*: ptr CompiledSymbols
+      ## borrowed, must not outlive the binding it was taken from, the same contract
+      ## class as the `jinja` borrow of the template text
+    state*: RenderState
+
+func findName*(t: CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `NoLink` when the template never names it, the comparison reading the caller's bytes in place so
   ## an interned name allocates nothing.
   for i, n in t.names:
