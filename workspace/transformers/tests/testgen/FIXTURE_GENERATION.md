@@ -47,6 +47,10 @@ tensors except the value-bearing slices:
   The record contract is the "verified re-record record" definition in ../README.md.
   Old raw payloads leave the tree only after the family successor passes.
 
+Any regeneration that changes the recorded fixture files names it
+in the commit body (values unchanged, container new by design), a silent
+byte change is a defect.
+
 ### Recording environment
 
 Fixture generation runs in the uv-synced environment:
@@ -76,6 +80,10 @@ fixtures:
 
 - the env frame additionally carries an explicit `device` row
 
+Recording runs torch-side on the recording box. Replay picks the device
+through `select_device`, GPU over CPU, Metal on m4max, CUDA on rtxpro6000.
+cpu remains the problem-fallback.
+
 ### Fixed quantile method and bucket spec
 
 - Quantiles take the exact order statistic of the ascending sort, index
@@ -104,22 +112,49 @@ fixtures:
 
 - The fixture tree carries exactly two quant classes:
   the bf16-* families and the exl3-* families, both under tests/fixtures/.
-- The bf16 and exl3 family prefixes climb one ladder, the number is the rung.
-- Rung 00:
+- The bf16 and exl3 family prefixes climb one ladder, the number is the tier.
+- Tier 00:
   codec and hadamard primitives, no layer context.
-- Rung 01:
+- Tier 01:
   one decoder layer, its internal operations.
-- Rung 02:
+- Tier 02:
   several decoder layers in sequence.
-- Rung 03:
+- Tier 03:
   the full forward pass, token ids to logits.
-- Rung 04:
+- Tier 04:
   autoregressive text generation.
-- Each rung contains the previous rung plus more:
-  a missing rung is simply not yet recorded.
+- Each tier contains the previous tier plus more:
+  a missing tier is simply not yet recorded.
+
 - Harness self-test material lives in tests/harness/, never under fixtures/:
   the stats corpus sits at tests/harness/stats-corpus, the instrument-check
   input of the harness machinery.
+
+### Single-file blob grammar
+
+Unit-tier families ship one fixture file per model and layer
+(`layer0-<Model>-00.safetensor`), never one file per mixture row.
+
+- exactly three blob tensors per file, one per mixture group,
+  `attn` the mixer op surface, `layer` the full decoder block chain,
+  `moe` the routed block surface
+- a family instantiates only what it has, Kimi carries one `kda` blob
+  holding nine op-surface segments
+- a blob packs mixed dtypes into one U8 byte tensor,
+  element-size-aligned offsets, the segment layout lives in the metadata
+  sidecar and suites unpack through `blobSegment` (`tests/layer_utils.nim`)
+
+Stats keys carry the group prefix
+(`attn.*`, `layer.*`, `moe.*`), one assertStats block per group.
+One suite, one generator, one config task serves each family.
+
+- one execution path per op (prefill/batch), the prefill/decode axis
+  belongs to the `tests/layer_invariance/` property suites, tier-01
+  never records it
+- per-op mixture rows (tables, rope, norm, qchain, decode) are deleted,
+  the layer chain asserts those ops at block-output level
+- a reshape carries the recorded values unchanged and names
+  the new container in the commit body
 
 ### Exl3 families
 
