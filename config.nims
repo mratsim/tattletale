@@ -178,16 +178,12 @@ proc chattyninjaCmd(filename, extraDefines: string): string =
 
 task test_chattyninja, "Test workspace/chattyninja template engine suites":
   withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/chattyninja/tests",
-        extraFlags = "--experimental:views --path:workspace/chattyninja/src --path:workspace/chattyninja/tests",
-        compiler = "nim cpp"):
-      runCmd(cmd)
-    # Variant builds: t_twodriver at ChunkSize=7 puts a chunk boundary inside
-    # every corpus render; the t_pull and t_scratch allocation probes compile
-    # out without -d:nimAllocStats, so only these builds exercise them.
-    runCmd(chattyninjaCmd("t_twodriver.nim", " -d:ChunkSize=7"))
-    runCmd(chattyninjaCmd("t_pull.nim", " -d:nimAllocStats"))
-    runCmd(chattyninjaCmd("t_scratch.nim", " -d:nimAllocStats"))
+    # t_all links every suite into one binary; t_all_allocstats links the two
+    # suites with allocation probes and runs them under -d:nimAllocStats and
+    # ChunkSize=7 in the same build. Single suites still build directly from
+    # workspace/chattyninja/tests.
+    runCmd(chattyninjaCmd("t_all.nim", ""))
+    runCmd(chattyninjaCmd("t_all_allocstats.nim", " -d:nimAllocStats -d:ChunkSize=7"))
 
 task test_chattyninja_corpus, "Test workspace/chattyninja recorded corpus fixtures":
   withDir(ProjectRoot):

@@ -16,8 +16,7 @@
 ##   and the artifact's bytes stay identical across rendering
 ## - chunking composes with `cur`, small chunks yield the same bytes as one pull
 ##
-## `-d:ChunkSize=7` forces chunk boundaries below the render length, which the default
-## 4096 never reaches on corpus renders.
+## Build with `-d:ChunkSize=7` to force chunk boundaries the default 4096 never reaches on corpus renders.
 ##
 ## Run:
 ##   $ nim test_chattyninja
@@ -195,8 +194,8 @@ block chunkSizeDoesNotChangeBytes:
   doAssert stepwise == whole, "chunk-by-chunk delivery differs from a single pull"
   doAssert whole == rowA.rendered
   when ChunkSize > 1:
-    # With the default chunk size every corpus render is one piece, so record that the small-chunk
-    # path is exercised by the `-d:ChunkSize=7` build in the `test_chattyninja` task rather than here.
+    # With the default chunk size every corpus render is one piece. The small-chunk path is
+    # exercised by building this suite directly with `-d:ChunkSize=7`.
     echo "t_twodriver: ChunkSize=", ChunkSize
 
 echo "t_twodriver: one artifact, several drivers, identical bytes; artifact unchanged by rendering"
