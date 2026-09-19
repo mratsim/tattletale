@@ -280,11 +280,26 @@ proc forceCall(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Valu
 
 proc evalItem(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value =
   ## Returns `v`, rendering a pending macro call to text for the value containers and operators
-  ## that read a plain value. A dry walk returns `v` unevaluated.
+  ## that read a plain value. A concat raises here, the argument list being its one
+  ## plain-value reader. A dry walk returns `v` unevaluated.
   if not cx.dry and v.kind == vkCall:
     forceCall(m, t, d, cx, v)
+  elif not cx.dry and v.kind == vkConcat:
+    raise err("a concat must be rendered in emit position")
   else:
     v
+
+proc argVal(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value =
+  ## Returns one call argument's value, a pending macro call rendering to text and a concat
+  ## materializing through the serializer's drain-and-grow form, arguments reading plain
+  ## values only. A dry walk returns `v` unevaluated.
+  if cx.dry:
+    return v
+  if v.kind == vkCall:
+    return forceCall(m, t, d, cx, v)
+  if v.kind == vkConcat:
+    return strVal(pyStr(v))
+  v
 
 proc argKey(m: Machine, a: Arg): string =
   ## Returns the dict key one argument supplies to `namespace` or `dict`, a keyword-bound argument
@@ -902,7 +917,7 @@ proc argList(m: Machine, t: Tables, d: var Driver, cx: var Cx): seq[Arg] =
         advance(m, cx)
       else:
         cx = save
-    let v = evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
+    let v = argVal(m, t, d, cx, expr(m, t, d, cx, 1))
     result.add Arg(nameLo: nameLo, nameHi: nameHi, kw: kw, val: v)
     if isPunct(cx, ","):
       advance(m, cx)
@@ -1084,7 +1099,7 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): Value =
       var parts = newSeq[Value]()
       var isTuple = false
       while not isPunct(cx, ")"):
-        parts.add evalItem(m, t, d, cx, expr(m, t, d, cx, 1))
+        parts.add expr(m, t, d, cx, 1)
         if isPunct(cx, ","):
           isTuple = true
           advance(m, cx)
@@ -1233,8 +1248,9 @@ proc binOp(m: Machine, t: Tables, d: var Driver, cx: var Cx, lhs: Value, op: Op)
       let r = containsVal(rhs, lhs)
       boolVal(if op == opIn: r else: not r)
   of opConcat:
-    let rhs = evalItem(m, t, d, cx, expr(m, t, d, cx, 7))
-    if cx.dry: undefinedVal() else: strVal(concatVals(d, lhs, rhs))
+    let rhs = expr(m, t, d, cx, 7)
+    if cx.dry: undefinedVal()
+    else: concatVal(lhs, if rhs.kind == vkCall: forceCall(m, t, d, cx, rhs) else: rhs)
   of opAdd, opSub, opMod:
     let rhs = evalItem(m, t, d, cx, expr(m, t, d, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs)

@@ -89,11 +89,48 @@ doAssert render("'z' not in ['a', 'b']") == "True"
 doAssert render("'name' in people", withPeople) == "True", "`in` over a mapping tests keys"
 doAssert render("'sub' in 'substring'") == "True", "`in` over a string is a substring test"
 
-# `~` binds tighter than any comparison, so the concatenation feeds the comparison operand
-# rather than stringifying its result. Both groupings are locked, so a precedence swap
-# toward either binding trips one of the two asserts.
-doAssert render("1 == 1 ~ 'x'") == "False", "`~` binds tighter than `==`"
+# `~` binds tighter than any comparison, so `1 == 1 ~ 'x'` compares against the unrendered
+# concatenation and raises. Parentheses hand the comparison result to `~`, and a precedence
+# swap toward `==` would render the second form's bytes for the first expression.
 doAssert render("(1 == 1) ~ 'x'") == "Truex", "parentheses give the comparison to `~`"
+try:
+  discard render("1 == 1 ~ 'x'")
+  doAssert false, "a comparison over an unrendered concat did not raise"
+except TemplateError as e:
+  doAssert "emit position" in e.msg, e.msg
+
+# A concat reads plain values in one place only, the argument list: `raise_exception`
+# names its message from the materialized text. Every other non-emit position raises,
+# and a set-bound concat streams when a later emit reaches it.
+block concatConsumption:
+  try:
+    discard render("{'k': 'a' ~ 'b'}")
+    doAssert false, "a concat in a dict literal did not raise"
+  except TemplateError as e:
+    doAssert "emit position" in e.msg, e.msg
+  try:
+    discard renderStmt("{% if 'a' ~ 'b' %}x{% endif %}")
+    doAssert false, "a concat in a condition did not raise"
+  except TemplateError as e:
+    doAssert "emit position" in e.msg, e.msg
+  try:
+    discard render("('a' ~ 'b') | tojson")
+    doAssert false, "a concat under a filter did not raise"
+  except TemplateError as e:
+    doAssert "emit position" in e.msg, e.msg
+  doAssert renderStmt("{% set q = 'a' ~ 'b' %}{{ q }}") == "ab",
+      "a set-bound concat did not stream on its later emit"
+  try:
+    discard renderStmt("{% set q = 'a' ~ 'b' %}{% if q %}x{% endif %}")
+    doAssert false, "a truthiness test over a set-bound concat did not raise"
+  except TemplateError as e:
+    doAssert "emit position" in e.msg, e.msg
+  try:
+    discard renderStmt("{{ raise_exception('boom ' ~ 'bang') }}")
+    doAssert false, "raise_exception did not raise"
+  except TemplateError as e:
+    doAssert e.msg == "boom bang", e.msg
+  doAssert render("(1 ~ 2) ~ 3") == "123", "a grouped concat flattens into its parent"
 
 # A lone `=` spells no infix in Jinja, so the expression must end before it and the unclosed
 # tail is reported instead of comparing. Keyword arguments are matched in argument lists, not here.

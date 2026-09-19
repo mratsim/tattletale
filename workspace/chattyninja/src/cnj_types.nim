@@ -6,7 +6,7 @@
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built side tables, and the render
 # driver. See cnj_engine.nim for the dispatch table and the `items` pull interface.
 
-import cnj_errors, cnj_values
+import cnj_values
 import workspace/data_structures/src/small_seqs
 
 const
@@ -234,14 +234,12 @@ type
   Scope* = seq[Binding]
 
   PieceKind* = enum
-    pkNone, pkSpan, pkStr, pkScratch, pkLazy
+    pkNone, pkSpan, pkStr, pkLazy
 
   Piece* = object
     ## Pending output piece. Span pieces deliver straight out of `Machine.jinja`, string
-    ## pieces are materialized strings held by the driver:
-    ## - scratch pieces are a derived value rendered into `Driver.scratch`, delivered in place
-    ## - lazy pieces are a derived value rendered by the serializer in `Driver.lazy` straight
-    ##   into the delivery window
+    ## pieces are materialized strings held by the driver, lazy pieces are a derived value
+    ## rendered by the serializer in `Driver.lazy` straight into the delivery window
     pos*: int
     case kind*: PieceKind
     of pkNone: nil
@@ -249,9 +247,6 @@ type
       lo*, hi*: int32
     of pkStr:
       s*: string
-    of pkScratch:
-      shi*: int32
-        ## end of the scratch window, the window starts at scratch byte 0
     of pkLazy:
       nil
         ## rendered by the serializer in `Driver.lazy`, no payload here
@@ -275,44 +270,6 @@ type
     clock*: float64
       ## injected epoch, `strftime_now`'s only time source, never the wall
     macroDepth*: int
-    scratch*: ptr UncheckedArray[char]
-      ## caller-owned render scratch, borrowed like `Machine.jinja`, nil when unattached, must outlive the render. A scratch-backed piece drains
-      ## before the next derived value is built, so one buffer reused from byte 0 serves every derived value.
-    scratchCap*: int
-      ## writable bytes behind `scratch`
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
-
-func scratchBuf*(d: Driver): Cursor =
-  ## Returns a cursor over scratch positioned at byte 0, ready for one derived value,
-  ## every build starting over from byte 0 once the previous scratch piece drained.
-  ## Unattached scratch yields a measuring cursor, an append then counting without writing.
-  if d.scratch == nil:
-    measureBuf()
-  else:
-    Cursor(buf: toOpenArray(d.scratch, 0, d.scratchCap - 1))
-
-func scratchString*(d: Driver, n: int): string =
-  ## Returns scratch[0 ..< n] as a fresh string, one allocation bounded by `n`, the bytes
-  ## staying untouched until the copy.
-  result = newString(n)
-  if n > 0:
-    copyMem(addr result[0], d.scratch, n)
-
-proc concatVals*(d: Driver, lhs, rhs: Value): string =
-  ## Returns the `~` concatenation of two values as template output text.
-  ## - with scratch, both sides stringify into scratch, the result materializing once,
-  ##   one allocation bounded by the result size
-  ## - without scratch, each side materializes its own string and `&` joins them
-  if d.scratch != nil:
-    var sb = scratchBuf(d)
-    try:
-      pyStrInto(lhs, sb)
-      pyStrInto(rhs, sb)
-    except ScratchError as e:
-      e.msg = "`~` concat of a " & $lhs.kind & " value, " & e.msg
-      raise e
-    scratchString(d, sb.len)
-  else:
-    pyStr(lhs) & pyStr(rhs)
 

@@ -2,16 +2,16 @@
 # Copyright (c) 2026 Mamy Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Scratch-window render proof for the chattyninja engine.
+## Window-contract render proof for the chattyninja engine.
 ##
-## Caller-owned scratch backs `~` concatenation, and derived emits drain as lazy pieces:
-## - every ok corpus row renders byte-exact through pull with scratch attached
-## - a container emit drains as a lazy piece across pull calls byte-exact
-## - an undersized scratch raises `ScratchError` from `~` concatenation naming the value
-##   kind and the capacity in force, and after growth the repull stays byte-exact
+## Derived values stream as lazy pieces straight into the caller's window:
+## - every ok corpus row renders byte-exact through pull
+## - a container emit and a `~` concat drain as lazy pieces across pull calls byte-exact
+## - a raise inside a for-filter propagates per the pull contract. The failing call's
+##   bytes are discarded and a repull resumes after the failed item
 ##
 ## Run:
 ##   $ nim test_chattyninja
@@ -26,7 +26,7 @@ func bytesOf(buf: openArray[char], n: int): string =
     result.add buf[i]
 
 func listCtx(): Value =
-  ## One context holding `m`, a mixed container whose repr exceeds a tiny scratch.
+  ## One context holding `m`, a mixed container whose serialization exceeds a tiny window.
   var inner = DictVal()
   dictSet(inner, "alpha", strVal("one"))
   dictSet(inner, "beta", strVal("two"))
@@ -35,9 +35,12 @@ func listCtx(): Value =
   dictSet(cd, "m", dictVal(inner))
   dictVal(cd)
 
-# Every ok corpus row through a pull render with scratch attached stays byte-exact.
+const listRepr = "{'alpha': 'one', 'beta': 'two', 'gamma': ['x', 'y', 'z']}"
+  ## Python `repr()` of the `m` value above, the independent byte truth for the drains.
+
+# Every ok corpus row through a pull render stays byte-exact.
 # ---------------------------------------------------------------------------
-block corpusRowsThroughScratch:
+block corpusRowsThroughPull:
   const parseable = ["deepseekv2lite", "gemma3", "glm47flash", "gptoss20b", "kimi",
       "ling30", "mimo25", "mistral7bv01", "moonlight", "qwen3", "qwen35", "qwen36",
       "qwen38flashnext"]
@@ -51,8 +54,6 @@ block corpusRowsThroughScratch:
       if r.expectError:
         continue
       var d = newDriver(r.context, r.clock)
-      var scr = newSeq[char](4096)
-      attachScratch(d, scr)
       var buf = newSeq[char](256)
       var got = ""
       var raised = false
@@ -63,10 +64,8 @@ block corpusRowsThroughScratch:
             break
           got.add bytesOf(buf, n)
       except CatchableError:
-        raised = true
-      if raised:
         # A declared engine gap raises before any bytes here. Classify it as a gap only
-        # when the string render raises the same way, so a scratch-only failure cannot
+        # when the string render raises the same way, so a window-only failure cannot
         # hide behind the skip.
         var dStr = newDriver(r.context, r.clock)
         try:
@@ -74,12 +73,12 @@ block corpusRowsThroughScratch:
         except CatchableError:
           raised = false
         doAssert not raised,
-            suite & "/" & r.row & ": the scratch render raised where the string render did not"
+            suite & "/" & r.row & ": the pull render raised where the string render did not"
         inc gapSkipped
-      else:
-        doAssert got == r.rendered,
-            suite & "/" & r.row & ": the scratch pull render differs from the recorded bytes"
-        inc checked
+        continue
+      doAssert got == r.rendered,
+          suite & "/" & r.row & ": the pull render differs from the recorded bytes"
+      inc checked
   doAssert checked == 55, "expected 55 rendered ok rows across 13 suites, checked " & $checked
   doAssert gapSkipped == 4, "expected 4 gap rows across 13 suites, skipped " & $gapSkipped
 
@@ -90,11 +89,8 @@ block lazyWindowDrain:
   let src = "{{ m }}"
   let (nodes, tables) = parseTemplate(src)
   let m = Machine(jinja: src, nodes: nodes)
-  let want = renderToString(src, ctx, 0.0)
 
   var d = newDriver(ctx, 0.0)
-  var scr = newSeq[char](4096)
-  attachScratch(d, scr)
   var window = newSeq[char](8)
   var acc = ""
   var lazyPieces = 0
@@ -105,110 +101,90 @@ block lazyWindowDrain:
     if n == 0:
       break
     acc.add bytesOf(window, n)
-  doAssert acc == want, "the lazy-piece drain differs from the string render"
+  doAssert acc == listRepr, "the lazy-piece drain differs from the container repr"
   doAssert lazyPieces > 0, "no pull observed a pending lazy piece"
 
-# An undersized scratch raises the typed error from `~` concatenation naming the value
-# kind and capacity, and after growth the repull from the same driver is byte-exact.
+# A `~` concat emit streams its operands through the lazy-piece machinery, left to right,
+# and an 8-byte window forces the drain across several pulls mid-value.
 # ---------------------------------------------------------------------------
-block scratchBreach:
+block concatWindowDrain:
   let ctx = listCtx()
-  let src = "{{ m ~ '' }}"
+  let src = "{{ m ~ '::' ~ m }}"
   let (nodes, tables) = parseTemplate(src)
   let m = Machine(jinja: src, nodes: nodes)
-  let want = renderToString(src, ctx, 0.0)
+  let want = listRepr & "::" & listRepr
 
   var d = newDriver(ctx, 0.0)
-  var tiny = newSeq[char](16)
-  attachScratch(d, tiny)
-  var window = newSeq[char](64)
-  var raised = false
-  var capacity = 0
-  var message = ""
-  try:
-    while true:
-      let n = pull(m, tables, d, window)
-      if n == 0:
-        break
-  except ScratchError as e:
-    raised = true
-    capacity = e.capacity
-    message = e.msg
-  doAssert raised, "an undersized scratch did not raise"
-  doAssert capacity == 16, "the error named capacity " & $capacity
-  doAssert "vkDict" in message, "the error did not name the value kind: " & message
-
-  # Grow scratch on the same driver and repull, no bytes lost, no item re-emitted.
-  var grown = newSeq[char](4096)
-  attachScratch(d, grown)
+  var window = newSeq[char](8)
   var acc = ""
+  var lazyPulls = 0
   while true:
+    if d.pend.kind == pkLazy:
+      inc lazyPulls
     let n = pull(m, tables, d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
-  doAssert acc == want, "the repull after growth differs from the single-shot render"
+  doAssert acc == want, "the concat drain differs from the expected operand order"
+  doAssert lazyPulls > 2, "the concat drained in fewer than three pulls, the " &
+      "mid-value drain is unobserved"
 
-# A scratch breach inside a for-filter rolls the loop candidate back, so the repull
-# re-evaluates the next item and skips nothing, and every byte returned before the raise
-# stays with the caller.
+# A raise inside a for-filter propagates per the pull contract. The loop cursor stays
+# committed past the failed item and a repull resumes after it. One-byte window first,
+# where every byte delivered before the failing call is already with the caller.
 # ---------------------------------------------------------------------------
-block filterBreachRepull:
-  let longA = repeat("aaaa-", 10)
+block filterRaiseRepull:
   var msgs = newSeq[Value]()
-  for i in 0 ..< 3:
-    var md = DictVal()
-    dictSet(md, "a", strVal(longA & $i))
-    dictSet(md, "b", strVal("tag" & $i))
-    msgs.add dictVal(md)
+  msgs.add strVal("aa")
+  msgs.add intVal(7)
+  msgs.add strVal("ab")
   var cd = DictVal()
-  dictSet(cd, "messages", seqVal(msgs))
+  dictSet(cd, "xs", seqVal(msgs))
   let ctx = dictVal(cd)
-  let src = "{% for m in messages if m.a ~ m.b %}[{{ m.a }}]{% endfor %}"
+  # `x[0]` raises on the integer item and passes the strings through the filter comparison.
+  let src = "pre{% for x in xs if x[0] == 'a' %}[{{ x }}]{% endfor %}post"
   let (nodes, tables) = parseTemplate(src)
   let m = Machine(jinja: src, nodes: nodes)
-  let want = renderToString(src, ctx, 0.0)
-  doAssert want == "[" & longA & "0][" & longA & "1][" & longA & "2]",
-      "the string render is not the expected three items"
+  let want = "pre[aa][ab]post"
+  # The one-shot render propagates the same raise, the filtered strings never reaching it.
+  try:
+    discard renderToString(src, ctx, 0.0)
+    doAssert false, "the one-shot render did not propagate the failing filter"
+  except TemplateError as e:
+    doAssert "not subscriptable" in e.msg, e.msg
 
-  # One-byte window. Item 0 renders before item 1's filter concat breaches, so the caller
-  # holds item 0's full body at the raise, and a repull from the same driver then yields
-  # the single-shot render exactly.
   var d = newDriver(ctx, 0.0)
-  var tiny = newSeq[char](8)
-  attachScratch(d, tiny)
+  var win1 = newSeq[char](1)
   var acc = ""
   var raised = false
-  var win1 = newSeq[char](1)
+  var message = ""
   try:
     while true:
       let n = pull(m, tables, d, win1)
       if n == 0:
         break
       acc.add bytesOf(win1, n)
-  except ScratchError:
+  except CatchableError as e:
     raised = true
-  doAssert raised, "the filter breach did not raise"
-  doAssert acc == "[" & longA & "0]",
-      "the caller-held bytes at the breach are not exactly item 0's body"
+    message = e.msg
+  doAssert raised, "the failing filter did not raise"
+  doAssert "not subscriptable" in message,
+      "the error did not name the failed operation: " & message
+  doAssert acc == "pre[aa]", "the caller-held bytes at the raise are not exactly the prefix"
 
-  var grown = newSeq[char](4096)
-  attachScratch(d, grown)
+  # The repull skips nothing. The integer item stays consumed and the render completes.
   var rest = newSeq[char](64)
   while true:
     let n = pull(m, tables, d, rest)
     if n == 0:
       break
     acc.add bytesOf(rest, n)
-  doAssert acc == want,
-      "the repull after a filter breach differs from the single-shot render, items skipped"
+  doAssert acc == want, "the repull after the raise differs from the single-shot render"
 
-  # Wide window. Item 0's body fits in the caller window, so the raise lands mid-call,
-  # where per the pull contract the bytes written into the window in the failing call
-  # are discarded and never reach the caller. A repull resumes after them.
+  # Wide window. The prefix and the failed item's evaluation land in one call, whose
+  # window bytes are discarded and never reach the caller. The repull resumes after them,
+  # discarded prefix included.
   var dWide = newDriver(ctx, 0.0)
-  var tinyWide = newSeq[char](8)
-  attachScratch(dWide, tinyWide)
   var wide = newSeq[char](64)
   var wideAcc = ""
   var wideRaised = false
@@ -218,74 +194,23 @@ block filterBreachRepull:
       if n == 0:
         break
       wideAcc.add bytesOf(wide, n)
-  except ScratchError:
+  except CatchableError:
     wideRaised = true
-  doAssert wideRaised, "the wide-window filter breach did not raise"
+  doAssert wideRaised, "the wide-window filter raise did not raise"
   doAssert wideAcc == "", "the failing call returned bytes: <" & wideAcc & ">"
-  var grownWide = newSeq[char](4096)
-  attachScratch(dWide, grownWide)
   var wideRest = ""
   while true:
     let n = pull(m, tables, dWide, wide)
     if n == 0:
       break
     wideRest.add bytesOf(wide, n)
-  doAssert wideRest == "[" & longA & "1][" & longA & "2]",
-      "the wide-window repull did not resume after the discarded item 0 bytes"
-
-  # Growing-concat shape. Here the filter concat length grows per item, so item 0
-  # renders with the tiny scratch while item 1's concat exceeds it.
-  # Caller-held bytes plus the repull equal the single-shot render, ruling out loss
-  # and re-handing of delivered bytes across the raise.
-  var msgsGrow = newSeq[Value]()
-  for i in 0 ..< 3:
-    var md = DictVal()
-    dictSet(md, "a", strVal(repeat("p", 2 + 6 * i)))
-    dictSet(md, "b", strVal("t" & $i))
-    msgsGrow.add dictVal(md)
-  var growCd = DictVal()
-  dictSet(growCd, "messages", seqVal(msgsGrow))
-  let growCtx = dictVal(growCd)
-  let growSrc = "[{% for m in messages if m.a ~ m.b %}[{{ m.a }}]{% endfor %}"
-  let (growNodes, growTables) = parseTemplate(growSrc)
-  let growM = Machine(jinja: growSrc, nodes: growNodes)
-  let growWant = renderToString(growSrc, growCtx, 0.0)
-  doAssert growWant == "[[pp][pppppppp][pppppppppppppp]",
-      "the growing-concat string render is not the expected three items"
-
-  var dGrow = newDriver(growCtx, 0.0)
-  var tinyGrow = newSeq[char](8)
-  attachScratch(dGrow, tinyGrow)
-  var growAcc = ""
-  var growRaised = false
-  var growWin1 = newSeq[char](1)
-  try:
-    while true:
-      let n = pull(growM, growTables, dGrow, growWin1)
-      if n == 0:
-        break
-      growAcc.add bytesOf(growWin1, n)
-  except ScratchError:
-    growRaised = true
-  doAssert growRaised, "the growing-concat filter breach did not raise"
-  doAssert growAcc == "[[pp]",
-      "the caller-held bytes at the breach are not exactly the leading span plus item 0"
-
-  var grownGrow = newSeq[char](4096)
-  attachScratch(dGrow, grownGrow)
-  var growRest = newSeq[char](64)
-  while true:
-    let n = pull(growM, growTables, dGrow, growRest)
-    if n == 0:
-      break
-    growAcc.add bytesOf(growRest, n)
-  doAssert growAcc == growWant,
-      "the growing-concat repull differs from the single-shot render, bytes lost or re-handed"
+  doAssert wideRest == "[ab]post",
+      "the wide-window repull did not resume after the discarded bytes"
 
 # A macro call as a whole emit streams its body's pieces through the caller's window,
 # and the streamed bytes match the string render.
 # ---------------------------------------------------------------------------
-block captureSinkScratch:
+block captureSink:
   let ctx = listCtx()
   let src = "{%- macro mm(v) -%}[{{ v }}]{%- endmacro -%}{{ mm(m) }}"
   let (nodes, tables) = parseTemplate(src)
@@ -293,52 +218,8 @@ block captureSinkScratch:
   let want = renderToString(src, ctx, 0.0)
 
   var d = newDriver(ctx, 0.0)
-  var scr = newSeq[char](4096)
-  attachScratch(d, scr)
   doAssert pullAll(m, tables, d) == want,
-      "the capture-sink scratch emit differs from the string render"
-
-# A scratch breach inside a streamed macro body leaves the driver inside the body,
-# and the repull re-runs the failing body step and finishes it, byte-exact overall.
-# ---------------------------------------------------------------------------
-block macroBreachRepull:
-  let ctx = listCtx()
-  let src = "{%- macro mm(v) -%}[{{ v ~ '' }}]{%- endmacro -%}{{ mm(m) }}"
-  let (nodes, tables) = parseTemplate(src)
-  let m = Machine(jinja: src, nodes: nodes)
-  let want = renderToString(src, ctx, 0.0)
-
-  var d = newDriver(ctx, 0.0)
-  var tiny = newSeq[char](16)
-  attachScratch(d, tiny)
-  var acc = ""
-  var win = newSeq[char](1)
-  var raised = false
-  var message = ""
-  try:
-    while true:
-      let n = pull(m, tables, d, win)
-      if n == 0:
-        break
-      acc.add bytesOf(win, n)
-  except ScratchError as e:
-    raised = true
-    message = e.msg
-  doAssert raised, "the macro-body breach did not raise"
-  doAssert "vkDict" in message, "the error did not name the value kind: " & message
-  doAssert acc == "[",
-      "the bytes held at the breach are not exactly the streamed body prefix"
-
-  var grown = newSeq[char](4096)
-  attachScratch(d, grown)
-  var rest = newSeq[char](64)
-  while true:
-    let n = pull(m, tables, d, rest)
-    if n == 0:
-      break
-    acc.add bytesOf(rest, n)
-  doAssert acc == want,
-      "the repull after a macro-body breach differs from the single-shot render"
+      "the capture-sink emit differs from the string render"
 
 # A streamed macro call resolves names against the caller's scopes only before the call
 # and against its own scopes only inside the body: the macro scope is popped on close.
@@ -413,7 +294,7 @@ when defined(nimAllocStats):
 
     # The same schema through the pull render, driver setup uncounted. The counted region
     # holds only the pull loop, and the render costs the filter's argument list plus
-    # toJson's buffer and container stack.
+    # the serializer's container stack.
     const tJson = "{{ tools|tojson }}"
     var cd = DictVal()
     dictSet(cd, "tools", tools)
@@ -422,9 +303,7 @@ when defined(nimAllocStats):
     let m = Machine(jinja: tJson, nodes: nodes)
     let want = renderToString(tJson, ctx, 0.0)
 
-    var scrWarm = newSeq[char](4096)
     var dWarm = newDriver(ctx, 0.0)
-    attachScratch(dWarm, scrWarm)
     var bufWarm = newSeq[char](256)
     var warm = ""
     while true:
@@ -432,16 +311,12 @@ when defined(nimAllocStats):
       if n == 0:
         break
       warm.add bytesOf(bufWarm, n)
-    doAssert warm == want, "the scratch pull render differs from the string render"
+    doAssert warm == want, "the pull render differs from the string render"
 
-    var scr = newSeq[char](4096)
-    var d = newDriver(ctx, 0.0)
-    attachScratch(d, scr)
     var buf = newSeq[char](256)
     var renderAllocs = 0
     for _ in 0 ..< iters:
       var di = newDriver(ctx, 0.0)
-      attachScratch(di, scr)
       let renderCost = allocsOf:
         while true:
           let n = pull(m, tables, di, buf)
@@ -451,8 +326,8 @@ when defined(nimAllocStats):
     doAssert renderAllocs == 3 * iters, "the tojson pull render cost " &
         $(renderAllocs div iters) & " allocations per render against the measured three"
 
-    # A container emit through scratch costs nothing beyond the loop machinery:
-    # the repr writes into scratch and drains as a scratch-window piece.
+    # A container emit costs one allocation per emit for the lookup copy plus one per
+    # render for the serializer's container stack, over the loop machinery.
     var msgs = newSeq[Value]()
     for i in 0 ..< 10:
       var md = DictVal()
@@ -462,15 +337,13 @@ when defined(nimAllocStats):
     dictSet(mcd, "messages", seqVal(msgs))
     let loopCtx = dictVal(mcd)
 
-    template countScratchRenders(src: string, n: int): int =
-      ## Warms one scratch pull render uncounted, then totals `n` renders through
+    template countRenders(src: string, n: int): int =
+      ## Warms one pull render uncounted, then totals `n` renders through
       ## `getAllocStats()` deltas with one driver per render, as above.
       let (ns, ts) = parseTemplate(src)
       let mm = Machine(jinja: src, nodes: ns)
       let wantLocal = renderToString(src, loopCtx, 0.0)
       var dWarm2 = newDriver(loopCtx, 0.0)
-      var scrWarm2 = newSeq[char](4096)
-      attachScratch(dWarm2, scrWarm2)
       var bufWarm2 = newSeq[char](256)
       var accWarm = ""
       while true:
@@ -478,12 +351,10 @@ when defined(nimAllocStats):
         if got == 0:
           break
         accWarm.add bytesOf(bufWarm2, got)
-      doAssert accWarm == wantLocal, "the micro scratch render differs for " & src
+      doAssert accWarm == wantLocal, "the micro render differs for " & src
       var total = 0
       for _ in 0 ..< n:
         var di = newDriver(loopCtx, 0.0)
-        var sci = newSeq[char](4096)
-        attachScratch(di, sci)
         var bi = newSeq[char](256)
         let renderCost = allocsOf:
           while true:
@@ -493,9 +364,9 @@ when defined(nimAllocStats):
         total += renderCost
       total
 
-    let loopOnly = countScratchRenders("{% for m in messages %}x{% endfor %}", iters)
-    let strEmits = countScratchRenders("{% for m in messages %}{{ m.n }}{% endfor %}", iters)
-    let dictEmits = countScratchRenders("{% for m in messages %}{{ m }}{% endfor %}", iters)
+    let loopOnly = countRenders("{% for m in messages %}x{% endfor %}", iters)
+    let strEmits = countRenders("{% for m in messages %}{{ m.n }}{% endfor %}", iters)
+    let dictEmits = countRenders("{% for m in messages %}{{ m }}{% endfor %}", iters)
     # The runtime-built message values keep the engine's one-lookup-copy residual per emit.
     doAssert strEmits == loopOnly + iters * 10, "the string emit cost " &
         $(strEmits - loopOnly) & " allocations beyond the loop baseline"
@@ -509,4 +380,4 @@ when defined(nimAllocStats):
         ", container emit ", (dictEmits - loopOnly) div iters,
         " allocs beyond the loop baseline over ", iters, " renders"
 
-echo "t_scratch: corpus rows, scratch drains, breaches and repulls all byte-exact"
+echo "t_scratch: corpus rows, lazy drains, the filter raise repull, all byte-exact"

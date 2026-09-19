@@ -16,7 +16,7 @@
 ## Checked here:
 ## - window sizes 7 and 256 deliver byte parity with the recorded bytes and the one-shot `pullAll` render of the same row
 ## - partial consumption stops mid-piece and resumption from the same driver loses and re-hands no byte
-## - scratch through `attachScratch` keeps every windowed render byte-exact
+## - a 1-byte window keeps every render byte-exact, derived values draining as lazy pieces
 ##
 ## Run:
 ##   $ nim test_chattyninja
@@ -68,7 +68,6 @@ func pieceRemaining(p: Piece): int =
   of pkNone: 0
   of pkSpan: int(p.hi - p.lo) - p.pos
   of pkStr: p.s.len - p.pos
-  of pkScratch: p.shi.int - p.pos
   of pkLazy: 0
 
 template checkWindow(size: static int) =
@@ -132,26 +131,22 @@ block partialConsumptionResumes:
     doAssert head & tail == r.rendered,
         suite & ": the resumed bytes overlapped or diverged from the recording"
 
-# Scratch attached through `attachScratch` keeps every windowed render byte-exact.
-# Corpus rows emit string values, which render as string pieces, so a derived container
-# emit forces the scratch-piece drain: a scratch smaller than the repr drains across pulls.
+# A 1-byte window keeps every corpus row byte-exact, and a derived container emit
+# drains as a lazy piece: a window smaller than the serialization drains across pulls.
 # ---------------------------------------------------------------------------
-block windowedScratch:
+block windowedLazy:
   for suite in ["moonlight", "qwen3"]:
     let src = templateSource(suite)
     let (nodes, tables) = parseTemplate(src)
     let m = Machine(jinja: src, nodes: nodes)
     for r in rows(suite):
-      # `scr` outlives the driver, the scratch pointer must stay valid through the render.
-      var scr = newSeq[char](4096)
       var pc = pullChunks[1](newDriver(r.context, r.clock))
-      attachScratch(pc.d, scr)
       var got = ""
       for w in pc.items(m, tables):
         for c in w:
           got.add c
       doAssert got == r.rendered,
-          suite & "/" & r.row & ": the 1-byte window render with scratch differs " &
+          suite & "/" & r.row & ": the 1-byte window render differs " &
           "from the recorded bytes"
 
   # A derived container emit through the windowed machine. The repr drains as a lazy piece,
@@ -167,9 +162,7 @@ block windowedScratch:
   let m = Machine(jinja: src, nodes: nodes)
   let want = renderToString(src, ctx, 0.0)
 
-  var scr = newSeq[char](4096)
   var pc = pullChunks[7](newDriver(ctx, 0.0))
-  attachScratch(pc.d, scr)
   var got = ""
   var lazyPulls = 0
   for w in pc.items(m, tables):
@@ -181,4 +174,4 @@ block windowedScratch:
   doAssert lazyPulls >= 3,
       "the lazy piece drained in fewer than three pulls, the mid-piece drain is unobserved"
 
-echo "t_compose: moonlight and qwen3 through window sizes 7, 256 and 1 with scratch, all byte-exact"
+echo "t_compose: moonlight and qwen3 through window sizes 7, 256 and 1, all byte-exact"

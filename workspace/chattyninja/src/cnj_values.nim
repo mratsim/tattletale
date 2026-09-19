@@ -121,9 +121,9 @@ type
   ValueKind* = enum
     ## Jinja value tiers the corpus reaches, float carried for JSON fidelity only,
     ## no template in the corpus doing float arithmetic, `vkCall` holding a macro call
-    ## whose body has not run
+    ## whose body has not run, `vkConcat` holding a `~` tree awaiting its emit
     vkUndefined, vkNone, vkBool, vkInt, vkFloat, vkStr, vkSeq, vkDict, vkNs, vkLoop, vkMacro,
-    vkCall
+    vkCall, vkConcat
 
   SeqVal* = ref object
     ## Shared sequence of values, the `vkSeq` payload.
@@ -171,7 +171,7 @@ type
     of vkInt: i*: int64
     of vkFloat: f*: float64
     of vkStr: s*: string
-    of vkSeq: xs*: SeqVal
+    of vkSeq, vkConcat: xs*: SeqVal
     of vkDict, vkNs: d*: DictVal
     of vkLoop: lp*: LoopState
     of vkMacro: mc*: MacroVal
@@ -204,6 +204,20 @@ func loopVal*(lp: LoopState): Value = Value(kind: vkLoop, lp: lp)
 func macroVal*(mc: MacroVal): Value = Value(kind: vkMacro, mc: mc)
 func callVal*(pc: PendingCallVal): Value = Value(kind: vkCall, pc: pc)
 
+func concatVal*(cl, cr: Value): Value =
+  ## Returns the `~` of two values. The operands flatten into one list in render order,
+  ## so the serializer streams them one after another and the parse never re-walks a tree.
+  var items: seq[Value]
+  if cl.kind == vkConcat:
+    items = cl.xs.items
+  else:
+    items = @[cl]
+  if cr.kind == vkConcat:
+    items.add cr.xs.items
+  else:
+    items.add cr
+  Value(kind: vkConcat, xs: SeqVal(items: items))
+
 func codepointVals*(s: string): seq[Value] =
   ## Returns one single-codepoint string value per codepoint of `s`, in order.
   var acc = newSeq[Value]()
@@ -224,6 +238,7 @@ func isTruthy*(v: Value): bool =
   of vkLoop: v.lp.items.len != 0
   of vkMacro: true
   of vkCall: raise err("a macro call result must be rendered before a truthiness test")
+  of vkConcat: raise err("a concat must be rendered in emit position before a truthiness test")
 
 func dictGet*(d: DictVal, key: openArray[char]): Value =
   ## Returns the value under `key`, undefined when absent. Absence is a value, never an error:
@@ -276,6 +291,7 @@ func eqVal*(a, b: Value): bool =
   of vkLoop: a.lp == b.lp
   of vkMacro: a.mc == b.mc
   of vkCall: raise err("a macro call result must be rendered before an equality test")
+  of vkConcat: raise err("a concat must be rendered in emit position before an equality test")
   of vkUndefined, vkBool, vkInt, vkFloat: false
 
 func cmpVal*(a, b: Value): int =
@@ -349,6 +365,7 @@ proc pyStrInto*(v: Value, sb: var Cursor) =
   of vkStr: sb.add v.s
   of vkSeq, vkDict, vkNs, vkLoop, vkMacro: pyReprInto(v, sb)
   of vkCall: raise err("a macro call result must be rendered before stringification")
+  of vkConcat: raise err("a concat must be rendered in emit position before stringification")
 
 func reprQuoted(sb: var Cursor, s: string) =
   ## Writes Python's single-quoted repr of `s`, the form container reprs use for keys
@@ -435,9 +452,10 @@ type
     ## Defunctional serializer for one `Value`, rendering byte by byte into the caller's
     ## window with every pause point in the fields below, so a drain resumed through the same
     ## `Ser` never re-emits a byte:
-    ## - queued literals and separators drain from the chunk buffer and `sep`
-    ## - unquoted string bodies copy straight from `s`
+    ## - queued literals and separators drain from the chunk buffer and `sep`, unquoted
+    ##   string bodies copy straight from `s`
     ## - quoted string bodies, container brackets and entries advance through the phases
+    ## - a str-mode `~` tree flattens into `concatTail`, operands dispatching one after another
     mode*: SerMode
     opts*: JsonOpts
       ## `tojson` knobs, read in `smJson` mode only
@@ -463,6 +481,9 @@ type
       ## queued bytes in `buf` and the read position
     stack*: seq[SerFrame]
       ## open containers, outermost first
+    concatTail*: seq[Value]
+      ## remaining operands of a str-mode `~` tree in render order, each dispatching when
+      ## the previous operand's rendering completes
     closeSeq*: bool
       ## the `spClose` phase writes a sequence bracket, else a mapping bracket
 
@@ -539,6 +560,10 @@ proc serFinish(js: var Ser) =
   ## Closes the value just rendered. The enclosing container advances to its next entry,
   ## nested containers closing outward, the rendering completing once the stack empties.
   if js.stack.len == 0:
+    if js.concatTail.len > 0:
+      js.v = js.concatTail.pop()
+      js.phase = spDispatch
+      return
     js.phase = spDone
     return
   inc js.stack[^1].idx
@@ -618,6 +643,8 @@ proc serDispatch(js: var Ser) =
     serFinish(js)
   of vkCall:
     raise err("a macro call result must be rendered before serialization")
+  of vkConcat:
+    raise err("a concat must be rendered in emit position before serialization")
   of vkSeq:
     if v.xs.items.len == 0:
       serQueue(js, "[]")
@@ -685,10 +712,6 @@ proc serStep(js: var Ser) =
   of spRaw, spDone:
     discard
 
-proc serValue*(v: Value, mode: SerMode, opts = JsonOpts()): Ser =
-  ## Returns a serializer positioned before the first byte of `v`'s rendering.
-  Ser(mode: mode, opts: opts, phase: spDispatch, v: v)
-
 proc serReset*(js: var Ser, v: Value, mode: SerMode, opts = JsonOpts()) =
   ## Repositions `js` before the first byte of `v`'s rendering, keeping the container
   ## stack's capacity for the next derived value rendered through it.
@@ -708,6 +731,19 @@ proc serReset*(js: var Ser, v: Value, mode: SerMode, opts = JsonOpts()) =
   js.bpos = 0
   js.closeSeq = false
   js.stack.setLen(0)
+  js.concatTail.setLen(0)
+  if mode == smStr and v.kind == vkConcat:
+    let leaves = v.xs.items
+    js.v = leaves[0]
+    js.concatTail = leaves[1 ..< leaves.len]
+    # reversed in place, so `pop` hands the operands over in render order
+    for i in 0 ..< (leaves.len - 1) div 2:
+      swap(js.concatTail[i], js.concatTail[leaves.len - 2 - i])
+
+proc serValue*(v: Value, mode: SerMode, opts = JsonOpts()): Ser =
+  ## Returns a serializer positioned before the first byte of `v`'s rendering.
+  result = Ser(mode: mode, opts: opts)
+  serReset(result, v, mode, opts)
 
 proc serDone*(js: Ser): bool =
   ## Returns whether the rendering is complete and every queued byte drained.

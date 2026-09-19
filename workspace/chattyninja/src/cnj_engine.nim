@@ -68,7 +68,6 @@ template pieceLen(p: Piece): int =
   of pkNone: 0
   of pkSpan: (p.hi - p.lo).int
   of pkStr: p.s.len
-  of pkScratch: p.shi.int
   of pkLazy: 0
 
 # Binding
@@ -153,11 +152,14 @@ proc bindTargets(m: Machine, t: Tables, d: var Driver, n: int32, item: Value) =
       d.bindName(nd.targetAt(i), item.xs.items[i])
 
 proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
-  ## Re-entry path. Move the shared cursor to the next item passing the filter clause, re-enter
-  ## the body, or close the frame and continue past the loop.
+  ## Re-entry path. Moves the shared cursor to the next item passing the filter clause, re-enters
+  ## the body, or closes the frame and continues past the loop.
   ##
-  ## A raise in `bindTargets` or the filter clause rolls the candidate back, so a caller growing
-  ## scratch and repulling re-evaluates the same item and skips nothing.
+  ## Contract:
+  ## - the cursor increment stays committed while `bindTargets` and the filter clause run.
+  ##   Corpus filters read `loop.index0` and friends through the shared cursor
+  ## - a raise in either propagates to the caller per the pull contract. The bytes written
+  ##   in the failing call are discarded and a repull resumes after the failed item
   template nd: Node = m.nodes[n]
   while true:
     let fi = d.frames.len - 1
@@ -169,17 +171,11 @@ proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
       d.frames.setLen(d.frames.len - 1)
       d.curNode = nd.succ
       return
-    # The increment stays committed while the filter runs, because corpus filters read `loop.index0` and friends through the shared cursor.
-    # Rolling the candidate back when a raise escapes keeps a repull from skipping that item.
     var keep = nd.filterLo == noLink
-    try:
-      bindTargets(m, t, d, n, items[idx])
-      if nd.filterLo != noLink:
-        let evaluated = evalSpan(m, t, d, nd.filterLo, nd.filterHi, forceMacro)
-        keep = isTruthy(evaluated)
-    except CatchableError:
-      dec d.frames[fi].loop.idx
-      raise
+    bindTargets(m, t, d, n, items[idx])
+    if nd.filterLo != noLink:
+      let evaluated = evalSpan(m, t, d, nd.filterLo, nd.filterHi, forceMacro)
+      keep = isTruthy(evaluated)
     if keep:
       break
   d.curNode = nd.child
@@ -312,12 +308,6 @@ proc capturePend(m: Machine, d: var Driver, outp: var string) =
   of pkStr:
     outp.add d.pend.s[d.pend.pos ..< d.pend.s.len]
     d.pend = Piece(kind: pkNone)
-  of pkScratch:
-    let at = outp.len
-    let n = d.pend.shi.int - d.pend.pos
-    outp.setLen(at + n)
-    copyMem(addr outp[at], unsafeAddr d.scratch[d.pend.pos], n)
-    d.pend = Piece(kind: pkNone)
   of pkLazy:
     var buf: array[256, char]
     while true:
@@ -373,16 +363,6 @@ proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Ca
 # Driver
 # ---------------------------------------------------------------------------
 
-proc attachScratch*(d: var Driver, buf: var openArray[char]) =
-  ## Attaches caller-owned scratch to the driver, which must outlive the render exactly like the template text behind `Machine.jinja`.
-  ## An empty buffer detaches, and the emit path then materializes one string per derived value.
-  if buf.len == 0:
-    d.scratch = nil
-    d.scratchCap = 0
-  else:
-    d.scratch = cast[ptr UncheckedArray[char]](addr buf[0])
-    d.scratchCap = buf.len
-
 func newDriver*(ctx: Value, clock = 0.0): Driver =
   ## Returns a driver ready to render `ctx`, the render context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
   ## `clock` is the epoch `strftime_now` reads, never `Machine` state, so one artifact renders reproducibly under different clocks.
@@ -408,7 +388,7 @@ proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int 
   ## resumes after them:
   ## - a consumer that must hold every byte across a raise keeps the window at one byte,
   ##   which makes each delivered byte a returned byte
-  ## - span pieces copy out of `Machine.jinja`, string and scratch pieces out of driver storage,
+  ## - span pieces copy out of `Machine.jinja`, string pieces out of driver storage,
   ##   lazy pieces out of the serializer state in `d.lazy`
   ## - a zero-capacity buffer returns 0 without stepping the render
   if buf.len == 0:
@@ -440,8 +420,6 @@ proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int 
         copyMem(addr buf[result], unsafeAddr m.jinja[int d.pend.lo + base], take)
       of pkStr:
         copyMem(addr buf[result], unsafeAddr d.pend.s[base], take)
-      of pkScratch:
-        copyMem(addr buf[result], unsafeAddr d.scratch[base], take)
       of pkNone, pkLazy:
         discard
       result += take

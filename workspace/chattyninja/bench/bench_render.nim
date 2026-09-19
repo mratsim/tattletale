@@ -23,7 +23,6 @@
 ##   over 15 timed runs after 500 warm-up renders, spread-flagged when noisy
 ## - release build, pull-window timing over the corpus anchor rows, median ms/render
 ##   for 256 B and 4 KiB windows beside the one-shot render, plus pull-call counts
-##   and scratch-spill rows under a 256-byte scratch
 ## - benchAlloc build, parse-time and render-time allocations per render, warm-up
 ##   uncounted through `system.getAllocStats()`, plus spill counts and micro
 ##   attribution templates isolating loop machinery, emit stringification and JSON serialization
@@ -471,35 +470,6 @@ proc pullCallsPerPass(m: Machine, t: Tables, rs: seq[Row], windowSize: int): int
         break
       inc result
 
-proc scratchSpillRows(m: Machine, t: Tables, rs: seq[Row]): int =
-  ## Rows whose render raises `ScratchError` under a 256-byte scratch, one untimed
-  ## pass per row. Recovery follows the documented grow-and-repull:
-  ## - scratch quadruples on every breach up to 64 KiB, reattached to the same driver
-  ## - a row still breaching at the cap counts as spilled, the next row starts fresh
-  var buf: array[4096, char]
-  for r in rs:
-    var d = newDriver(r.context, r.clock)
-    var cap = 256
-    var spilled = false
-    var done = false
-    while not done:
-      var scr = newSeq[char](cap)
-      attachScratch(d, scr)
-      try:
-        while true:
-          let got = pull(m, t, d, buf.toOpenArray(0, 255))
-          if got == 0:
-            break
-        done = true
-      except ScratchError:
-        spilled = true
-        if cap >= 65536:
-          done = true
-        else:
-          cap *= 4
-    if spilled:
-      inc result
-
 proc timedCorpusPasses(m: Machine, t: Tables, rs: seq[Row], iters: int,
     render: proc (m: Machine, t: Tables, ctx: Value, clock: float64): int):
     tuple[mid, spread: float64] =
@@ -550,10 +520,8 @@ proc benchPullWindows(): void =
     echo line
     let calls256 = pullCallsPerPass(m, tables, rs, 256)
     let calls4k = pullCallsPerPass(m, tables, rs, 4096)
-    let spills = scratchSpillRows(m, tables, rs)
     echo &"    pull calls per pass: 256 B {calls256} ({calls256 div rs.len}/render), " &
-        &"4 KiB {calls4k} ({calls4k div rs.len}/render), spills {spills} of {rs.len} rows " &
-        &"under a 256-byte scratch"
+        &"4 KiB {calls4k} ({calls4k div rs.len}/render)"
 
 proc main(): void =
   benchHf()
