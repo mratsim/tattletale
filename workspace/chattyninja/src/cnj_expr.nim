@@ -71,31 +71,31 @@ func digitVal(c: char): int =
   let d = ord(c) - ord('0')
   if d >= 0 and d <= 9: d else: (ord(c) or 32) - ord('a') + 10
 
-func decodeEscapes(s: openArray[char], lo, hi: int): string =
-  ## Returns a string literal with Python's escape set resolved.
-  result = newStringOfCap(hi - lo)
+func decodeEscapesInto(s: openArray[char], lo, hi: int, sb: var Cursor) =
+  ## Writes the string literal's bytes with Python's escape set resolved into `sb`,
+  ## raising when `sb` cannot hold the decoding.
   var i = lo
   while i < hi:
     if s[i] != '\\':
-      result.add s[i]
+      sb.add s[i]
       inc i
       continue
     inc i
     if i >= hi:
       raise err("truncated escape in a string literal")
     case s[i]
-    of 'n': result.add '\n'
-    of 't': result.add '\t'
-    of 'r': result.add '\r'
-    of '0': result.add '\0'
-    of 'a': result.add '\a'
-    of 'b': result.add '\b'
-    of 'f': result.add '\f'
-    of 'v': result.add '\v'
-    of 'e': result.add '\e'
-    of '\\': result.add '\\'
-    of '\'': result.add '\''
-    of '"': result.add '"'
+    of 'n': sb.add '\n'
+    of 't': sb.add '\t'
+    of 'r': sb.add '\r'
+    of '0': sb.add '\0'
+    of 'a': sb.add '\a'
+    of 'b': sb.add '\b'
+    of 'f': sb.add '\f'
+    of 'v': sb.add '\v'
+    of 'e': sb.add '\e'
+    of '\\': sb.add '\\'
+    of '\'': sb.add '\''
+    of '"': sb.add '"'
     of 'x', 'u':
       let digits = if s[i] == 'x': 2 else: 4
       var code = 0
@@ -106,23 +106,32 @@ func decodeEscapes(s: openArray[char], lo, hi: int): string =
         code = code * 16 + digitVal(s[i + k])
         inc k
       inc i, digits
-      result.add(Rune(code))
+      sb.addRune(Rune(code))
     else:
-      result.add s[i]
+      sb.add s[i]
     inc i
 
-func parseIntToken(s: string): int64 =
-  ## Returns the integer a number-literal token spells, ValueError on a malformed token.
+func decodeEscapes(s: openArray[char], lo, hi: int): string =
+  ## Returns the string literal with Python's escape set resolved as one fresh string,
+  ## sized exactly by the measuring cursor, never grown past its allocation.
+  var measure = measureBuf()
+  decodeEscapesInto(s, lo, hi, measure)
+  result = newString(measure.len)
+  var sb = over(result)
+  decodeEscapesInto(s, lo, hi, sb)
+
+func parseIntToken(s: openArray[char]): int64 =
+  ## Returns the integer the token bytes spell, ValueError on a malformed token.
   var n: int64
-  if s.len == 0 or parseutils.parseBiggestInt(s, n, 0) != s.len:
-    raise newException(ValueError, "invalid integer: " & s)
+  if s.len == 0 or parseutils.parseBiggestInt(s, n) != s.len:
+    raise newException(ValueError, "invalid integer: " & spanString(s))
   n
 
-func parseFloatToken(s: string): float64 =
-  ## Returns the float a number-literal token spells, ValueError on a malformed token.
+func parseFloatToken(s: openArray[char]): float64 =
+  ## Returns the float the token bytes spell, ValueError on a malformed token.
   var f: float64
-  if s.len == 0 or parseutils.parseFloat(s, f, 0) != s.len:
-    raise newException(ValueError, "invalid float: " & s)
+  if s.len == 0 or parseutils.parseFloat(s, f) != s.len:
+    raise newException(ValueError, "invalid float: " & spanString(s))
   f
 
 func lexNumber(s: openArray[char], i: var int, hi: int): ExTok =
@@ -144,7 +153,7 @@ func lexNumber(s: openArray[char], i: var int, hi: int): ExTok =
         inc j
       isFloat = true
       i = j
-  let text = spanString(s.toOpenArray(start, i - 1))
+  let text = s.toOpenArray(start, i - 1)
   if isFloat:
     ExTok(kind: exFloat, lo: start, hi: i, f: parseFloatToken(text))
   else:
@@ -247,11 +256,6 @@ func wordSpan(m: Machine, lo, hi: int): openArray[char] =
 func wordSpan(m: Machine, cx: Cx): openArray[char] =
   ## Returns the identifier of the lookahead token as a view into the template text.
   wordSpan(m, cx.tok.lo, cx.tok.hi)
-
-func nameText(m: Machine, lo, hi: int): string =
-  ## Returns the template text in `lo ..< hi` as a fresh string, only an error message or a gap report copying, the render path comparing
-  ## spans in place.
-  spanString(m.jinja.toOpenArray(lo, hi - 1))
 
 func findIn[N: enum](names: array[N, string], n: openArray[char]): int =
   ## Returns the index of `n` in a registry's name column, or -1 when the name is unknown,
@@ -440,10 +444,12 @@ proc trimFilter(v: Value, args: seq[Arg]): Value =
 proc defaultFilter(v: Value, args: seq[Arg]): Value =
   if v.kind == vkUndefined: getArg(args, 0, akDefault, noneVal()) else: v
 
-func asciiCased(s: string, upper: bool): string =
-  ## Returns `s` with ASCII letters cased per `upper`, other bytes verbatim.
+func asciiCased(s: openArray[char], upper: bool): string =
+  ## Returns the bytes of `s` with ASCII letters cased per `upper`, other bytes verbatim,
+  ## as one fresh string.
   result = newString(s.len)
-  for i, c in s:
+  for i in 0 ..< s.len:
+    let c = s[i]
     let flip = upper and c in {'a' .. 'z'} or not upper and c in {'A' .. 'Z'}
     result[i] = if flip: chr(ord(c) xor 0x20) else: c
 
@@ -951,7 +957,7 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value 
           continue
         let mi = findIn(methodNames, wordSpan(m, lo, hi))
         if mi < 0:
-          raise err("unknown method `" & nameText(m, lo, hi) & "`")
+          raise err("unknown method `" & spanString(wordSpan(m, lo, hi)) & "`")
         let mp = methodProcs[MethodName mi]
         if mp.isNil:
           gapWhat("method", wordSpan(m, lo, hi))
@@ -965,7 +971,7 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value 
             of vkDict, vkNs: v.d.dictGet(wordSpan(m, lo, hi))
             of vkLoop: loopAttr(v, wordSpan(m, lo, hi))
             of vkUndefined: undefinedVal()
-            else: raise err("`" & nameText(m, lo, hi) &
+            else: raise err("`" & spanString(wordSpan(m, lo, hi)) &
                 "` is not an attribute of a " & $v.kind)
     elif isPunct(cx, "["):
       advance(m, cx)
@@ -1016,7 +1022,7 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value 
         continue
       let fi = findIn(filterNames, wordSpan(m, lo, hi))
       if fi < 0:
-        raise err("unknown filter `" & nameText(m, lo, hi) & "`")
+        raise err("unknown filter `" & spanString(wordSpan(m, lo, hi)) & "`")
       let fp = filterProcs[FilterName fi]
       if fp.isNil:
         gapWhat("filter", wordSpan(m, lo, hi))
@@ -1039,7 +1045,7 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: Value): Value 
         continue
       let ti = findIn(testNames, wordSpan(m, lo, hi))
       if ti < 0:
-        raise err("unknown test `" & nameText(m, lo, hi) & "`")
+        raise err("unknown test `" & spanString(wordSpan(m, lo, hi)) & "`")
       let tp = testProcs[TestName ti]
       if tp.isNil:
         gapWhat("test", wordSpan(m, lo, hi))

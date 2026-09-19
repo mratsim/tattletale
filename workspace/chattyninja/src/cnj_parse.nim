@@ -35,9 +35,14 @@ import std/[strbasics, strutils]
 import cnj_errors, cnj_types, cnj_values
 import workspace/data_structures/src/small_seqs
 
-func at(s: string, prefix: string, i: int): bool =
-  ## Reports whether `prefix` occurs at `i`.
-  s.len - i >= prefix.len and cmpMem(s[i].addr, prefix[0].addr, prefix.len) == 0
+func at(s: openArray[char], prefix: openArray[char], i: int): bool =
+  ## Reports whether the bytes of `prefix` occur at `i`.
+  if s.len - i < prefix.len:
+    return false
+  for k in 0 ..< prefix.len:
+    if s[i + k] != prefix[k]:
+      return false
+  true
 
 type
   TagKind = enum
@@ -73,14 +78,14 @@ proc mkNode(kind: NodeKind, slots: varargs[int32]): Node =
 # Tokenise
 # ---------------------------------------------------------------------------
 
-func atLineStart(src: string, at: int): bool =
+func atLineStart(src: openArray[char], at: int): bool =
   ## Reports whether only spaces and tabs separate `at` from the preceding newline, the `lstrip_blocks` test.
   var i = at - 1
   while i >= 0 and (src[i] == ' ' or src[i] == '\t'):
     dec i
   i < 0 or src[i] == '\n'
 
-func findTagClose(src: string, at, stop: int, close: string): int =
+func findTagClose(src: openArray[char], at, stop: int, close: string): int =
   ## Returns the offset of `close` at or after `at`, skipping quoted literals so a closing marker
   ## inside a string does not end the construct. Raises when the construct is never closed.
   var i = at
@@ -98,7 +103,7 @@ func findTagClose(src: string, at, stop: int, close: string): int =
     inc i
   -1
 
-func nextOpen(src: string, at, stop: int): int =
+func nextOpen(src: openArray[char], at, stop: int): int =
   ## Returns the offset of the next `{{`, `{%` or `{#`, or `stop` when there is none.
   var i = at
   while i < stop:
@@ -107,7 +112,7 @@ func nextOpen(src: string, at, stop: int): int =
     inc i
   stop
 
-proc tokenize(src: string, stop: int): seq[Tag] =
+proc tokenize(src: openArray[char], stop: int): seq[Tag] =
   ## Splits the template into text runs and tags with every whitespace rule applied.
   var runStart = 0
   var i = 0
@@ -259,15 +264,28 @@ func patch(nodes: var seq[Node], idx, target: int32) =
   ## Resolves one node's successor, the `slotSucc` position.
   nodes[idx].slots[slotSucc] = target
 
-func tagKeyword(p: P, t: Tag): string =
-  ## Returns the leading identifier of a `{% %}` tag.
+func keywordSpan(p: P, t: Tag): tuple[lo, hi: int] =
+  ## Returns the half-open span of a `{% %}` tag's leading identifier, a view over `p.src`,
+  ## so neither a dispatch nor a terminator test materializes the keyword.
   var i = t.tLo
   while i < t.tHi and p.src[i] in wsSpace:
     inc i
   let start = i
   while i < t.tHi and p.src[i] in wsNameChars:
     inc i
-  spanString(p.src.toOpenArray(start, i - 1))
+  (start, i)
+
+func keywordIs(p: P, t: Tag, kw: string): bool =
+  ## Reports whether the tag's leading identifier is `kw`, compared in place.
+  let (lo, hi) = keywordSpan(p, t)
+  hi - lo == kw.len and at(p.src, kw, lo)
+
+func keywordIn(p: P, t: Tag, kws: openArray[string]): bool =
+  ## Reports whether the tag's leading identifier is one of `kws`, compared in place.
+  for kw in kws:
+    if keywordIs(p, t, kw):
+      return true
+  false
 
 func afterKeyword(p: P, t: Tag, kwLen: int): int =
   ## Returns the offset just past the tag's keyword and following whitespace, the `tLo` offset
@@ -403,7 +421,7 @@ proc parseMacro(p: var P): Head =
   let idx = addNode(p, mkNode(nkMacroDef, name, noLink, noLink, noLink))
   parseMacroParams(p, t, i, idx)
   let body = parseBody(p, ["endmacro"])
-  if p.i >= p.tags.len or tagKeyword(p, p.tags[p.i]) != "endmacro":
+  if p.i >= p.tags.len or not keywordIs(p, p.tags[p.i], "endmacro"):
     raise err("`{% macro %}` has no `{% endmacro %}`")
   inc p.i
   p.nodes[idx].slots[slotChild] = body.head
@@ -415,8 +433,8 @@ proc parseIf(p: var P): Head =
   ## `{% if %} … {% elif %} … {% else %} … {% endif %}`. One node per chain level, every branch body
   ## terminated past the whole chain, which is what makes the node single-entry and single-activation.
   let t = p.tags[p.i]
-  let kw = tagKeyword(p, t)
-  let condLo = int32 afterKeyword(p, t, kw.len)
+  let (kwLo, kwHi) = keywordSpan(p, t)
+  let condLo = int32 afterKeyword(p, t, kwHi - kwLo)
   let condHi = t.tHi.int32
   inc p.i
   # The node is reserved before its body is walked, so arena order stays source order and the arena
@@ -428,26 +446,24 @@ proc parseIf(p: var P): Head =
   var tails = @[idx]
   tails.add body.tails
   if p.i >= p.tags.len:
-    raise err("unclosed `{% " & kw & " %}`")
+    raise err("unclosed `{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}`")
   let nxt = p.tags[p.i]
-  let nk = tagKeyword(p, nxt)
-  case nk
-  of "elif":
+  if keywordIs(p, nxt, "elif"):
     let nested = parseIf(p)
     p.nodes[idx].slots[slotAlt] = nested.head
     tails.add nested.tails
-  of "else":
+  elif keywordIs(p, nxt, "else"):
     inc p.i
     let eb = parseBody(p, ["endif"])
     p.nodes[idx].slots[slotAlt] = eb.head
     tails.add eb.tails
-    if p.i >= p.tags.len or tagKeyword(p, p.tags[p.i]) != "endif":
+    if p.i >= p.tags.len or not keywordIs(p, p.tags[p.i], "endif"):
       raise err("`{% else %}` has no `{% endif %}`")
     inc p.i
-  of "endif":
+  elif keywordIs(p, nxt, "endif"):
     inc p.i
   else:
-    raise err("`{% " & kw & " %}` has no `{% endif %}`")
+    raise err("`{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}` has no `{% endif %}`")
   Head(head: idx, tails: tails)
 
 proc parseFor(p: var P): Head =
@@ -498,7 +514,7 @@ proc parseFor(p: var P): Head =
   for tg in targets:
     p.nodes[idx].slots.add tg
   let body = parseBody(p, ["endfor"])
-  if p.i >= p.tags.len or tagKeyword(p, p.tags[p.i]) != "endfor":
+  if p.i >= p.tags.len or not keywordIs(p, p.tags[p.i], "endfor"):
     raise err("`{% for %}` has no `{% endfor %}`")
   inc p.i
   p.nodes[idx].slots[slotChild] = body.head
@@ -558,26 +574,26 @@ proc gap(what, corpusSite: string): Head =
 proc parseConstruct(p: var P): Head =
   ## Dispatches one `{% %}` tag to its construct parser.
   let t = p.tags[p.i]
-  let kw = tagKeyword(p, t)
-  case kw
-  of "if":
+  let (kwLo, kwHi) = keywordSpan(p, t)
+  if keywordIs(p, t, "if"):
     parseIf(p)
-  of "for":
+  elif keywordIs(p, t, "for"):
     parseFor(p)
-  of "set":
+  elif keywordIs(p, t, "set"):
     parseSet(p)
-  of "macro":
+  elif keywordIs(p, t, "macro"):
     parseMacro(p)
-  of "break", "continue":
+  elif keywordIs(p, t, "break") or keywordIs(p, t, "continue"):
     gap("nkBreak", "corpus demand is 8 sites: 7 in glm53flash.jinja inside the macro " &
         "has_dup_tool_result_id, 1 in northminicode10.jinja")
-  of "endfor", "endif", "else", "elif", "endset":
-    raise err("`{% " & kw & " %}` has no matching opener")
-  of "endmacro", "call", "filter", "block", "extends", "include", "import", "from":
-    gap("`{% " & kw & " %}`", "no template in the corpus uses call, filter, block, endmacro " &
-        "without a matching macro, extends, include, import or from")
+  elif keywordIn(p, t, ["endfor", "endif", "else", "elif", "endset"]):
+    raise err("`{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}` has no matching opener")
+  elif keywordIn(p, t, ["endmacro", "call", "filter", "block", "extends", "include",
+      "import", "from"]):
+    gap("`{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}`", "no template in the corpus uses " &
+        "call, filter, block, endmacro without a matching macro, extends, include, import or from")
   else:
-    raise err("unknown `{% " & kw & " %}` tag")
+    raise err("unknown `{% " & spanString(p.src.toOpenArray(kwLo, kwHi - 1)) & " %}` tag")
 
 proc parseBody(p: var P, stopKws: openArray[string]): Head =
   ## Emits nodes until a `{% %}` tag whose keyword is in `stopKws`, leaving the index on that tag.
@@ -601,7 +617,7 @@ proc parseBody(p: var P, stopKws: openArray[string]): Head =
       entry = addNode(p, mkNode(nkEmit, int32 t.tLo, int32 t.tHi, noLink))
       fresh = @[entry]
     of tkBlock:
-      if tagKeyword(p, t) in stopKws:
+      if keywordIn(p, t, stopKws):
         break
       let c = parseConstruct(p)
       entry = c.head
