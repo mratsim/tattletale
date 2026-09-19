@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Test gate for the chattyninja template engine: compiles and runs every tests/t_*.nim.
 # Builds use -d:release, so the allocstats suites count release-mode allocations. Exits nonzero
-# on the first compile failure or test failure. Each suite runs through its own binary. Build
-# artifacts go to `build/chattyninja/` at the repo root, two levels up from this directory.
+# when any suite fails to compile or run. Each build runs through its own binary. Build artifacts
+# go to `build/chattyninja/` at the repo root, two levels up from this directory.
 #
-# Usage: ./run_tests.sh            every suite
-#        ./run_tests.sh t_shape    one suite
+# Usage: ./run_tests.sh            every suite, each with its variants
+#        ./run_tests.sh t_pull     one suite, with that suite's variants
 
 set -u
 cd "$(dirname "$0")"
@@ -17,126 +17,62 @@ mkdir -p "$bin_dir" "$cache_dir"
 
 flags=(--experimental:views --hints:off --warnings:off -d:release --path:src --outdir:"$bin_dir" --nimcache:"$cache_dir")
 
+# Variants: one per table row, `suite extra-defines output-name-suffix`, built whenever the base
+# suite runs. Rationale per row:
+# - t_twodriver at -d:ChunkSize=7 puts a chunk boundary inside every corpus render; the default
+#   4096 never reaches one, so the small-chunk delivery path is only exercised by this build.
+# - t_pull and t_scratch at -d:nimAllocStats enable their allocation probes, compiled out
+#   without the define, so only this build exercises them.
+variants=(
+  "t_twodriver -d:ChunkSize=7 chunk7"
+  "t_pull -d:nimAllocStats allocstats"
+  "t_scratch -d:nimAllocStats allocstats"
+)
+
 if [ "$#" -gt 0 ]; then
-  files=()
+  suites=()
   for a in "$@"; do
     case "$a" in
-      tests/*.nim) files+=("$a") ;;
-      *) files+=("tests/${a%.nim}.nim") ;;
+      tests/*.nim) suites+=("$a") ;;
+      *) suites+=("tests/${a%.nim}.nim") ;;
     esac
   done
 else
-  files=(tests/t_*.nim)
+  suites=(tests/t_*.nim)
 fi
 
-status=0
-for f in "${files[@]}"; do
-  [ -e "$f" ] || { echo "missing suite: $f"; status=1; continue; }
-  name=$(basename "$f" .nim)
-  log="$bin_dir/$name.log"
-  if ! nim c "${flags[@]}" "$f" >"$log" 2>&1; then
-    echo "FAIL compile  $f"
+# Compiles and runs one build of a suite, printing the FAIL compile, FAIL run or ok line with the
+# first lines of the build log or binary output. A failure marks the whole gate failed.
+run_build() {
+  local f="$1" name="$2" defs="$3" label=""
+  [ -n "$defs" ] && label=" ($defs)"
+  local log="$bin_dir/$name.log"
+  if ! nim c "${flags[@]}" $defs -o:"$bin_dir/$name" "$f" >"$log" 2>&1; then
+    echo "FAIL compile  $f$label"
     sed -n '1,25p' "$log"
     status=1
-    continue
+    return
   fi
   if ! "$bin_dir/$name" >"$bin_dir/$name.out" 2>&1; then
-    echo "FAIL run      $f"
+    echo "FAIL run      $f$label"
     sed -n '1,40p' "$bin_dir/$name.out"
     status=1
-    continue
+    return
   fi
-  echo "ok            $f"
+  echo "ok            $f$label"
   sed -n '1,20p' "$bin_dir/$name.out"
+}
+
+status=0
+for f in "${suites[@]}"; do
+  [ -e "$f" ] || { echo "missing suite: $f"; status=1; continue; }
+  name=$(basename "$f" .nim)
+  run_build "$f" "$name" ""
+  for v in "${variants[@]}"; do
+    read -r vbase vdefs vsuffix <<<"$v"
+    [ "$vbase" = "$name" ] && run_build "$f" "$name-$vsuffix" "$vdefs"
+  done
 done
-
-# `t_twodriver` also runs with a tiny chunk size, which puts a chunk boundary inside every
-# corpus render; the default 4096 never reaches one. The small-chunk delivery path is only
-# exercised by this build, so it ships as a second binary beside the plain one.
-run_chunk7=false
-if [ "$#" -eq 0 ]; then
-  run_chunk7=true
-else
-  for a in "$@"; do
-    [ "$(basename "${a%.nim}")" = "t_twodriver" ] && run_chunk7=true
-  done
-fi
-if [ "$run_chunk7" = true ]; then
-  f="tests/t_twodriver.nim"
-  name="t_twodriver-chunk7"
-  log="$bin_dir/$name.log"
-  if ! nim c "${flags[@]}" -d:ChunkSize=7 -o:"$bin_dir/$name" "$f" >"$log" 2>&1; then
-    echo "FAIL compile  $f (-d:ChunkSize=7)"
-    sed -n '1,25p' "$log"
-    status=1
-  elif ! "$bin_dir/$name" >"$bin_dir/$name.out" 2>&1; then
-    echo "FAIL run      $f (-d:ChunkSize=7)"
-    sed -n '1,40p' "$bin_dir/$name.out"
-    status=1
-  else
-    echo "ok            $f (-d:ChunkSize=7)"
-    sed -n '1,20p' "$bin_dir/$name.out"
-  fi
-fi
-
-# `t_pull` also runs with `-d:nimAllocStats`, which enables its allocation probe: pending-piece
-# drain calls must allocate 0, and the full pull render must not allocate more than the string
-# render. Without the define the probe is compiled out, so only this build exercises it.
-run_allocstats=false
-if [ "$#" -eq 0 ]; then
-  run_allocstats=true
-else
-  for a in "$@"; do
-    [ "$(basename "${a%.nim}")" = "t_pull" ] && run_allocstats=true
-  done
-fi
-if [ "$run_allocstats" = true ]; then
-  f="tests/t_pull.nim"
-  name="t_pull-allocstats"
-  log="$bin_dir/$name.log"
-  if ! nim c "${flags[@]}" -d:nimAllocStats -o:"$bin_dir/$name" "$f" >"$log" 2>&1; then
-    echo "FAIL compile  $f (-d:nimAllocStats)"
-    sed -n '1,25p' "$log"
-    status=1
-  elif ! "$bin_dir/$name" >"$bin_dir/$name.out" 2>&1; then
-    echo "FAIL run      $f (-d:nimAllocStats)"
-    sed -n '1,40p' "$bin_dir/$name.out"
-    status=1
-  else
-    echo "ok            $f (-d:nimAllocStats)"
-    sed -n '1,20p' "$bin_dir/$name.out"
-  fi
-fi
-
-# `t_scratch` also runs with `-d:nimAllocStats`, which enables its allocation checks: tojson of
-# the tool schema must cost one allocation per call, the full pull render must stay at its
-# measured total, and a container emit via scratch must add nothing beyond the loop baseline.
-# Without the define the checks are compiled out, so only this build exercises them.
-run_allocstats_scratch=false
-if [ "$#" -eq 0 ]; then
-  run_allocstats_scratch=true
-else
-  for a in "$@"; do
-    [ "$(basename "${a%.nim}")" = "t_scratch" ] && run_allocstats_scratch=true
-  done
-fi
-if [ "$run_allocstats_scratch" = true ]; then
-  f="tests/t_scratch.nim"
-  name="t_scratch-allocstats"
-  log="$bin_dir/$name.log"
-  if ! nim c "${flags[@]}" -d:nimAllocStats -o:"$bin_dir/$name" "$f" >"$log" 2>&1; then
-    echo "FAIL compile  $f (-d:nimAllocStats)"
-    sed -n '1,25p' "$log"
-    status=1
-  elif ! "$bin_dir/$name" >"$bin_dir/$name.out" 2>&1; then
-    echo "FAIL run      $f (-d:nimAllocStats)"
-    sed -n '1,40p' "$bin_dir/$name.out"
-    status=1
-  else
-    echo "ok            $f (-d:nimAllocStats)"
-    sed -n '1,20p' "$bin_dir/$name.out"
-  fi
-fi
 
 if [ "$status" -eq 0 ]; then
   echo "gate: PASS"
