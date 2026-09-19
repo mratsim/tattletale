@@ -41,6 +41,10 @@ Rule table (rule | trigger | severity):
 | test-header-command  | a test file header with no run command line                                                       | counted  |
 | missing-doc          | a public item with no doc comment (exported Nim proc or type, module-level Python def or class)   | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)            | advisory |
+| sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 140-char line          | counted  |
+| except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
+| try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
+| design-narration     | a doc comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -299,6 +303,8 @@ BANNED = [
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,
      "name the ladder tier, 00 codec, 01 per-op, 02 chain, 03 forward, 04 decode"),
+    (r"\bsubstrates?\b", None,
+     "use base, foundation, or name the component"),
     (r"\bRED\b|\bGREEN\b", None,
      "state the invariant in present tense"),
     (r"\boracles?\b", None, "use reference implementation"),
@@ -411,6 +417,14 @@ RULES = {
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
                              "a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)"),
+    "sig-wrap": Rule("sig-wrap", True,
+                     "a proc or func signature wrapped across lines while the joined form fits a 140-char line"),
+    "except-rewrap": Rule("except-rewrap", True,
+                          "an except clause re-raises the caught exception (rewrap; handle it or let it propagate)"),
+    "design-narration": Rule("design-narration", True,
+                             "a doc comment justifying the design choice instead of stating the contract (because, instead of, rather than, X and not Y, which is why, declared ahead)"),
+    "try-block": Rule("try-block", True,
+                      "a try/except or try/finally block catching exceptions as control flow outside the libtorch C++ boundary and tests folders"),
 }
 
 
@@ -1399,6 +1413,136 @@ def check_doc_above_type(path, text, findings):
                 "inside the body, above the fields it describes"))
 
 
+SIG_HEAD_RE = re.compile(r"^\s*(?:proc|func)\b")
+SIG_WRAP_MAX = 140
+
+
+def nim_sig_wrap_checks(path, text, findings):
+    """Flags a proc or func signature wrapped across lines while the joined
+    single-line form fits the 100-column code budget. Only the comma-join
+    shape counts, a first line ending on a comma and continuations that
+    complete the parameter list; a signature too long to join stays legal."""
+    lines = text.splitlines()
+    for i, raw in enumerate(lines):
+        if not SIG_HEAD_RE.match(raw) or not raw.rstrip().endswith(","):
+            continue
+        parts = [raw.strip()]
+        j = i + 1
+        while j < len(lines) and j <= i + 8:
+            seg = lines[j].strip()
+            if not seg:
+                break
+            parts.append(seg)
+            if not seg.endswith(","):
+                break
+            j += 1
+        if len(parts) < 2 or parts[-1].endswith(","):
+            continue
+        joined = " ".join(p for seg in parts for p in seg.split())
+        if len(joined) <= SIG_WRAP_MAX:
+            findings.append(Finding(
+                path, i + 1, "sig-wrap",
+                "the signature fits one %d-char line (%d joined), do not wrap"
+                % (SIG_WRAP_MAX, len(joined))))
+
+
+# The file where a try block is the sanctioned exception boundary: the libtorch
+# FFI translation seam. Tests folders are exempt wholesale (test harnesses,
+# fuzz loops, C++ capture).
+TRY_ALLOWLIST = (
+    "workspace/libtorch/src/tensors.nim",
+)
+TRY_RE = re.compile(r"^\s*try\s*:$")
+
+# Justification markers: a doc comment exists to state the contract a caller
+# must know, never to walk a reviewer through why the code reads as it does.
+DESIGN_NARRATION_RE = re.compile(
+    r"\b(?:because|instead of|rather than|which is why)\b"
+    r"|\b(?:declared|defined)\s+(?:ahead|before|after|above|below)\b"
+    r"|\band not\b|\bbut not\b", re.IGNORECASE)
+
+
+def nim_design_narration_checks(path, text, findings):
+    """Flags doc-comment lines that justify the design to the audience - the
+    because-clause, the X-and-not-Y contrast, the layout-position story
+    (declared ahead of the steps, defined above) - instead of stating the
+    contract. The caller's test for doc content: what can they do with it?
+    A layout decision answers nothing (the LSP shows the declaration), and
+    the why of a choice dies with the choice; only caller-visible
+    constraints survive in the contract."""
+    for i, raw in enumerate(text.splitlines()):
+        m = re.match(r"^\s*##(.*)$", raw)
+        if m and DESIGN_NARRATION_RE.search(m.group(1)):
+            findings.append(Finding(
+                path, i + 1, "design-narration",
+                "the doc justifies the design (because, instead of, X and "
+                "not Y) instead of stating the contract, state what the "
+                "caller must know"))
+
+
+def try_allowed(path):
+    norm = str(path).replace("\\", "/")
+    if norm.endswith(tuple(TRY_ALLOWLIST)) or norm in TRY_ALLOWLIST:
+        return True
+    parts = norm.split("/")
+    return "tests" in parts
+
+
+def nim_try_block_checks(path, text, findings):
+    """Flags every try/except or try/finally block outside the sanctioned
+    boundaries and tests folders. Raising exceptions is fine anywhere; the
+    ban is on catching them as control flow, which turns error paths into
+    hidden gotos - worst of all catching and re-raising the same exception
+    (zstd) or swallowing it (chattyninja filter). Only C++ FFI translation
+    (libtorch tensors.nim) legitimately catches."""
+    if try_allowed(path):
+        return
+    for i, raw in enumerate(text.splitlines()):
+        if TRY_RE.match(raw):
+            findings.append(Finding(
+                path, i + 1, "try-block",
+                "raising is fine, catching is not: no try/except or "
+                "try/finally as control flow outside the C++ boundary "
+                "(libtorch tensors.nim) and tests folders"))
+
+
+EXCEPT_RE = re.compile(r"^\s*except\b([^:]*):")
+EXCEPT_AS_RE = re.compile(r"\bas\s+(\w+)\s*$")
+RAISE_NAMED_RE = re.compile(r"^\s*raise\s+(\w+)\s*$")
+RAISE_BARE_RE = re.compile(r"^\s*raise\s*$")
+
+
+def nim_except_rewrap_checks(path, text, findings):
+    """Flags an except clause whose body re-raises the caught exception, the
+    rewrap shape that pays try/except cost in the hot path to rewrite a
+    message. Raising a different exception is translation and stays legal."""
+    lines = text.splitlines()
+    for i, raw in enumerate(lines):
+        m = EXCEPT_RE.match(raw)
+        if not m:
+            continue
+        name_m = EXCEPT_AS_RE.search(m.group(1))
+        name = name_m.group(1) if name_m else None
+        indent = len(raw) - len(raw.lstrip())
+        j = i + 1
+        while j < len(lines):
+            s = lines[j]
+            if not s.strip():
+                j += 1
+                continue
+            if len(s) - len(s.lstrip()) <= indent:
+                break
+            bare = RAISE_BARE_RE.match(s)
+            named = RAISE_NAMED_RE.match(s)
+            if bare or (name and named and named.group(1) == name):
+                findings.append(Finding(
+                    path, j + 1, "except-rewrap",
+                    "the except clause re-raises the caught exception, handle "
+                    "it or let it propagate, never rewrap in the hot path"))
+                break
+            j += 1
+
+
 def nim_structure_checks(path, text, header_nos, findings):
     """Runs the Nim structure rules over the declarations, the shapes
     stay conservative single-line forms.
@@ -1573,6 +1717,10 @@ def scan(path, text, findings):
                     header_nos = {e[0] for e in block}
                     break
             nim_structure_checks(path, text, header_nos, findings)
+            nim_sig_wrap_checks(path, text, findings)
+            nim_except_rewrap_checks(path, text, findings)
+            nim_try_block_checks(path, text, findings)
+            nim_design_narration_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
         if is_py and meta is not None:
             tree = None
@@ -1759,6 +1907,9 @@ def collect_files(paths):
     files = []
     for p in paths:
         pp = Path(p)
+        if not pp.exists():
+            sys.stderr.write("lint_docs: missing path: %s\n" % p)
+            sys.exit(2)
         if pp.is_dir():
             for ext in (".nim", ".py", ".md"):
                 files.extend(sorted(pp.rglob("*" + ext)))

@@ -36,9 +36,11 @@ flowchart LR
     F -->|no| H["a bug<br/>the report names the step"]
 ```
 
-Replay resolves the device through `select_device`, GPU over CPU.
+Recording and replay resolve the device through GPU over CPU.
+- recording runs on the box GPU
+- replay picks the device through `select_device`
 Metal serves m4max, CUDA serves rtxpro6000.
-cpu replay must not be automatic, a missing device kernel fails loudly.
+cpu must not be automatic on either side, a missing device kernel fails loudly.
 
 - PYTORCH_ENABLE_MPS_FALLBACK is banned, it defeats PR #104, the device
   policy linter counts it

@@ -70,20 +70,21 @@ The installed transformers (5.16.1) is the source of truth:
 
 ### Recording box
 
-`recorded_from` names the recording box plus device ("m4max-cpu", "rtxpro6000-cuda").
+`recorded_from` names the recording box plus device ("m4max-metal", "rtxpro6000-cuda").
 
-The default recording box stays m4max-cpu, a recording on another box sets
-`TTT_RECORD_FROM` in the environment.
+GPU over CPU governs recording and replay alike.
+- recording runs on the box GPU, Metal on m4max, CUDA on rtxpro6000
+- a CPU recording is never a default, `TTT_RECORD_FROM` names a recording on another box
 
 The value lands in the env frame of the greedy
 fixtures:
 
 - the env frame additionally carries an explicit `device` row
 
-Recording runs torch-side on the recording box. Replay picks the device
-through `select_device`, GPU over CPU, Metal on m4max, CUDA on rtxpro6000.
-cpu replay must not be automatic, a missing device kernel fails loudly
-and stays a finding.
+Recording runs torch-side on the recording box GPU.
+Replay picks the device through `select_device`.
+- cpu must not be automatic on either side, a missing device kernel fails
+  loudly and stays a finding
 
 - PYTORCH_ENABLE_MPS_FALLBACK is banned everywhere, it re-enables
   the automatic CPU fallback PR #104 removed, the device policy
