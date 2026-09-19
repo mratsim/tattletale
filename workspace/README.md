@@ -30,7 +30,7 @@ import workspace/transformers   # inference engine (models, generate, KV cache)
 import workspace/libtorch       # tensor layer
 import workspace/toktoktok      # BPE tokenizer
 import workspace/safetensors    # model I/O
-import workspace/data_structures # WAVL tree / longest-prefix-match
+import workspace/data_structures/wavl_trees # WAVL tree / longest-prefix-match
 import workspace/positron       # portable kernels
 ```
 
@@ -105,9 +105,9 @@ README; the source files are the reference.
 
 - **Data structures** — an intrusive WAVL (Weak AVL) tree with
   longest-prefix-match (radix) support, backing the KV cache.
-  - [`data_structures/data_structures.nim`](data_structures/data_structures.nim),
-    [`data_structures/src/wavl_tree.nim`](data_structures/src/wavl_tree.nim),
-    [`data_structures/src/wavl_tree.lean`](data_structures/src/wavl_tree.lean)
+  - Entry point [`data_structures/wavl_trees.nim`](data_structures/wavl_trees.nim)
+  - Implementation [`data_structures/src/wavl_trees.nim`](data_structures/src/wavl_trees.nim)
+  - Lean 4 proof [`data_structures/src/wavl_trees.lean`](data_structures/src/wavl_trees.lean)
 
 ## Utility
 
@@ -129,7 +129,7 @@ A differentiator: correctness-critical, stateful data structures are
 formalized in Lean4, and the specs are symlinked from [`formalities/`](../formalities/)
 (see [`formalities/README.md`](../formalities/README.md)).
 
-- [`data_structures/src/wavl_tree.lean`](data_structures/src/wavl_tree.lean) —
-  intrusive WAVL tree.
+- [`data_structures/src/wavl_trees.lean`](data_structures/src/wavl_trees.lean) proves the intrusive
+  WAVL tree in Lean 4.
 - [`transformers/src/stateful/kvcache.lean`](transformers/src/stateful/kvcache.lean) —
   PagedRadixTrie KV cache.
