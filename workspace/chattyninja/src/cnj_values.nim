@@ -21,8 +21,8 @@ type
     items*: seq[Value]
 
   DictVal* = ref object
-    ## Insertion-ordered mapping, `vkNs` reusing it, every holder observing changes because
-    ## the object is shared by reference.
+    ## Insertion-ordered mapping, `vkNs` reusing it. All holders share
+    ## one reference, so changes made through any holder reach the others.
     keys*: seq[string]
     vals*: seq[Value]
 
@@ -53,8 +53,8 @@ type
     of vkMacro: mc*: MacroVal
 
   JsonOpts* = object
-    ## `tojson` knobs the corpus passes, `ensure_ascii` and `separators`. `ensureAscii` defaults to false to match the recording environment,
-    ## which emits non-ASCII as raw UTF-8 rather than `\uXXXX` escapes.
+    ## `tojson` knobs the corpus passes, `ensure_ascii` and `separators`.
+    ## `ensureAscii` defaults to false, non-ASCII emitted as raw UTF-8.
     ensureAscii*: bool = false
     itemSep*: string = ", "
     kvSep*: string = ": "

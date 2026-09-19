@@ -14,7 +14,7 @@ type
     ## recorded on the corpus `err_*` rows.
 
   NotImplementedError* = ref object of CatchableError
-    ## A construct that is declared and dispatched but not implemented, so a gap
+    ## A construct the corpus demands while the engine leaves it unimplemented, so a gap
     ## surfaces as a gap and never as a wrong answer.
 
   ScratchError* = ref object of CatchableError

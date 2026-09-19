@@ -44,8 +44,9 @@ type
     akNone, akChars, akDefault, akEnsureAscii, akSeparators
 
   Arg* = object
-    ## One call or filter argument, keyword-bound when `nameLo` is not `noLink`. A keyword keeps its template span rather than becoming
-    ## an interned id, because a call may name anything and only a name the parser binds reaches `Tables.names`.
+    ## One call or filter argument, keyword-bound when `nameLo` is not `noLink`.
+    ## A keyword keeps its template span into `Machine.jinja`, a keyword name
+    ## carrying no interned `Tables.names` entry.
     nameLo*, nameHi*: int32
       ## keyword name span into `Machine.jinja`, `noLink` in `nameLo` for a positional argument
     kw*: ArgKeyword
@@ -60,8 +61,9 @@ type
 
   MacroRunner* = proc (m: Machine, t: Tables, d: var Driver, mc: MacroVal,
       args: seq[Arg]): string {.nimcall.}
-    ## Runs one macro body to completion and returns the captured text, injected by the statement tier because `cnj_engine` and `cnj_expr`
-    ## cannot import each other.
+    ## Runs one macro body to completion and returns the captured text.
+    ## The statement tier injects this runner so `cnj_engine` and `cnj_expr`
+    ## stay free of an import cycle.
 
 # Lexer
 # ---------------------------------------------------------------------------
@@ -165,8 +167,10 @@ func lexString(s: openArray[char], i: var int, hi: int): ExTok =
   ExTok(kind: exStr, lo: start, hi: i, s: decodeEscapes(s, body, endBody))
 
 func punctAt(s: openArray[char], i, hi: int): tuple[c0, c1: char, len: int] =
-  ## Returns the punctuator matching at `i` as its two bytes and its byte length, `c1 == '\0'` marking a one-byte punctuator.
-  ## `//`, `**`, `<=`, `>=`, `==` and `!=` are lexed whole so they are reported as rejected constructs rather than as two tokens.
+  ## Returns the punctuator matching at `i` as its two bytes and its byte length,
+  ## `c1 == '\0'` marking a one-byte punctuator.
+  ## - `//`, `**`, `<=`, `>=`, `==` and `!=` are lexed whole, each reported
+  ##   as one construct
   if i + 1 < hi:
     case s[i]
     of '=':
@@ -372,8 +376,9 @@ func gapWhat(what: string, name: openArray[char]): void {.noreturn.} =
   raise newImplementError(what & " `" & quoted & "` is not implemented; no template in the corpus uses it")
 
 proc tojsonFilter(v: Value, args: seq[Arg]): Value =
-  ## Renders JSON. `ensure_ascii` and `separators` are the only kwargs the corpus passes, `ensure_ascii` defaulting to false to match
-  ## the recording environment, which emits non-ASCII as raw UTF-8 rather than `\uXXXX` escapes.
+  ## Renders JSON. `ensure_ascii` and `separators` are the only kwargs
+  ## the corpus passes. `ensure_ascii` defaults to false, non-ASCII emitted
+  ## as raw UTF-8.
   var opts = JsonOpts()
   for a in args:
     case a.kw
@@ -803,8 +808,7 @@ func lookupNameById*(t: Tables, d: var Driver, id: int32): Value =
 # The walker
 # ---------------------------------------------------------------------------
 
-proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0,
-  run: MacroRunner = nil): Value
+proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0, run: MacroRunner = nil): Value
 proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value
 
 type Op = enum
@@ -1225,7 +1229,8 @@ func ifWordAhead(m: Machine, at, stop: int): bool =
   ## Reports whether a depth-zero `if` survives in `m.jinja[at..<stop)`. Byte scan, not a parse.
   ## Guarantees:
   ## - quoted text and bracketed subexpressions are skipped, so the scan never misses a ternary
-  ## - it can only over-report, which costs one extra walk rather than a wrong answer
+  ## - it can only over-report, costing one extra walk
+  ##   while keeping the answer correct
   ## An expression holding no `if`, the corpus majority, is walked exactly once.
   var i = at
   var depth = 0
@@ -1343,8 +1348,7 @@ proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): Value
     dec cx.depth
   v
 
-proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0,
-    run: MacroRunner = nil): Value =
+proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0, run: MacroRunner = nil): Value =
   ## Evaluates the expression held in `m.jinja[lo..<hi]` in its own cursor. `depth` seeds the nesting counter so a sub-span reached through
   ## a ternary still counts toward `ExprDepthCap`, `run` carrying the macro runner so a nested call can still run.
   var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth, run: run)
@@ -1353,8 +1357,7 @@ proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0,
   if cx.tok.kind != exEof:
     raise err("expression has trailing text at byte " & $cx.tok.lo)
 
-proc evalSpan*(m: Machine, t: Tables, d: var Driver, lo, hi: int32,
-    run: MacroRunner = nil): Value =
+proc evalSpan*(m: Machine, t: Tables, d: var Driver, lo, hi: int32, run: MacroRunner = nil): Value =
   ## Evaluates the expression held in `m.jinja[lo..<hi]`, the entry every expression-bearing step uses. `run` is the macro body runner:
   ## a step that can meet a macro call passes its own runner, a caller with no arena passing nil, which makes a macro call a reported gap.
   evalRange(m, t, d, lo.int, hi.int, 0, run)

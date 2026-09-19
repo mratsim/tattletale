@@ -239,9 +239,9 @@ proc tokenize(src: string, stop: int): seq[Tag] =
 # ---------------------------------------------------------------------------
 
 func intern(p: var P, name: openArray[char]): int32 =
-  ## Interns `name` in parse order, scope lookup then a byte compare against one interned name
-  ## instead of a string compare against a live string. A carried name allocates nothing, a new
-  ## one copying exactly once into `Tables.names`.
+  ## Interns `name` in parse order, scope lookup first, then a byte compare against
+  ## the one interned copy. A carried name allocates nothing, a new name copying
+  ## exactly once into `Tables.names`.
   let got = findName(p.tables, name)
   if got != noLink:
     return got
@@ -451,8 +451,8 @@ proc parseIf(p: var P): Head =
   Head(head: idx, tails: tails)
 
 proc parseFor(p: var P): Head =
-  ## `{% for a, b in expr if cond %} body {% endfor %}`. The header stays one span. Only the target
-  ## names and the filter clause are split out, because those are bindings, not computation.
+  ## `{% for a, b in expr if cond %} body {% endfor %}`. The header stays one span,
+  ## the target names and the filter clause split out as bindings.
   let t = p.tags[p.i]
   var i = afterKeyword(p, t, 3) # past the `for` keyword
   var names = newSeq[tuple[lo, hi: int]]()

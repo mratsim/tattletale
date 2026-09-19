@@ -26,12 +26,12 @@ type
   Step* = proc (m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.}
     ## One construct's step. Writes only through `d`, always leaving `d.curNode` on the node control enters next.
 
-proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal,
-    args: seq[Arg]): string
-  ## Runs one macro body to completion and returns the captured text, declared ahead of the steps because each one hands it
-  ## to the expression tier as the macro runner. A parameter and not a field:
-  ## - `cnj_engine` cannot import `cnj_expr` and be imported back
-  ## - a proc field would put mutable state in the read-only artifact
+proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Arg]): string
+  ## Runs one macro body to completion and returns the captured text.
+  ## Each step hands this runner to the expression tier as the macro runner,
+  ## and the runner is carried as a parameter so the compiled artifact stays read-only.
+  ## - a `Machine` field would hold mutable state in the read-only artifact
+  ## - `cnj_engine` and `cnj_expr` cannot import each other
 
 # Output
 # ---------------------------------------------------------------------------
@@ -233,7 +233,8 @@ proc stepSet(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   d.curNode = nd.succ
 
 proc gap(kindName, corpusSite: string): void {.noreturn.} =
-  ## Reports a declared construct that is not implemented, naming what the corpus demands of it rather than leaving the gap silent.
+  ## Reports a declared construct that is not implemented, naming `kindName`
+  ## and the corpus site that demands it.
   raise newImplementError(kindName & " is not implemented; " & corpusSite)
 
 proc stepBreak(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
@@ -310,11 +311,12 @@ proc bindMacroArgs(m: Machine, t: Tables, d: var Driver, n: int32, args: seq[Arg
     d.bindName(nd.paramNameAt(k), val)
 
 proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Arg]): string =
-  ## Statement tier side of the macro runner. A macro body cannot stream, because its output is
-  ## a string value, so the call runs the body to completion into a capture sink and never yields
-  ## a piece, which keeps this the engine's only render-time recursion.
-  ## Control state is driver-owned throughout, restored in a `finally`, so a raise inside
-  ## the body leaves the caller's scopes, sinks, frames, program counter and depth untouched.
+  ## Statement tier side of the macro runner. A macro body's output is a string value,
+  ## so the call runs the body to completion into a capture sink, never yielding a piece.
+  ## Contract:
+  ## - control state is driver-owned throughout, restored in a `finally`, so a raise
+  ##   inside the body leaves the caller's scopes, sinks, frames, program counter
+  ##   and depth untouched
   ## - truncating the frame stack discards any for-frame a failed body left behind, so
   ##   a repull never re-enters a dead loop
   ## - depth is capped, and a breach raises
@@ -437,8 +439,8 @@ proc pullAll*(m: Machine, t: Tables, d: var Driver): string =
       copyMem(addr result[at], unsafeAddr buf[0], n)
 
 proc renderToString*(src: string, ctx: Value, clock = 0.0): string =
-  ## Compiles and renders in one call, building `Machine` at the scope that owns `src`
-  ## because the artifact borrows the template text.
+  ## Compiles and renders in one call, building `Machine` at the scope that owns `src`,
+  ## the artifact borrowing the template text and never outliving it.
   let (nodes, tables) = parseTemplate(src)
   let m = Machine(jinja: src, nodes: nodes)
   var d = newDriver(ctx, clock)

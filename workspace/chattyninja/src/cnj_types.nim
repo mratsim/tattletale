@@ -17,18 +17,18 @@ type
   NodeKind* {.pure.} = enum
     ## Corpus-derived construct vocabulary, one entry per Step function.
     ##
-    ## | Kind           | Payload                                                                     |
-    ## | -------------- | --------------------------------------------------------------------------- |
-    ## | `nkVerbatim`   | final text run, whitespace already resolved                                 |
-    ## | `nkEmit`       | `{{ }}` span, evaluates the `lo..hi` span, stringifies, pending piece       |
-    ## | `nkIf`         | condition span, then-body, else-or-elif chain, bodies terminated past endif |
-    ## | `nkFor`        | iterable span, body, loop name, filter span, interned target ids            |
-    ## | `nkBreak`      | unwinds to the nearest for-frame, stopping at a macro-call boundary         |
-    ## | `nkSet`        | single-target binding of an expression                                      |
+    ## | Kind             | Payload                                                                     |
+    ## | ---------------- | --------------------------------------------------------------------------- |
+    ## | `nkVerbatim`     | final text run, whitespace already resolved                                 |
+    ## | `nkEmit`         | `{{ }}` span, evaluates the `lo..hi` span, stringifies, pending piece       |
+    ## | `nkIf`           | condition span, then-body, else-or-elif chain, bodies terminated past endif |
+    ## | `nkFor`          | iterable span, body, loop name, filter span, interned target ids            |
+    ## | `nkBreak`        | unwinds to the nearest for-frame, stopping at a macro-call boundary         |
+    ## | `nkSet`          | single-target binding of an expression                                      |
     ## | `nkSetNamespace` | `ns.field = expr`, ns and field as interned name ids                        |
-    ## | `nkSetBlock`   | capture body into a sink, bind on close                                     |
-    ## | `nkGeneration` | marks the root-output span of the model's turn                              |
-    ## | `nkMacroDef`   | binds a macro value, never executes                                         |
+    ## | `nkSetBlock`     | capture body into a sink, bind on close                                     |
+    ## | `nkGeneration`   | marks the root-output span of the model's turn                              |
+    ## | `nkMacroDef`     | binds a macro value, never executes                                         |
     nkVerbatim, nkEmit, nkIf, nkFor, nkBreak, nkSet, nkSetNamespace, nkSetBlock, nkGeneration,
     nkMacroDef
 
@@ -47,7 +47,8 @@ type
 
   Machine* = object
     ## Read-only compiled template, two fields and no mutable state, so one artifact renders concurrently under separate drivers.
-    ## `jinja` is borrowed, so the artifact must not outlive the template text it points into, which is why it is built at the caller's scope.
+    ## `jinja` is borrowed, so the artifact must not outlive the template text it
+    ## points into, and the caller builds `Machine` at the scope that owns the text.
     jinja*: openArray[char]
     nodes*: seq[Node]
 
@@ -84,15 +85,15 @@ const
 # to a slot read, so `nd.succ` on `m.nodes[n]` never copies the node. The per-accessor docs
 # below name each slot's meaning and kind. Slot layouts per kind:
 #
-# | Kind         | Slots                                                                                           |
-# |--------------|-------------------------------------------------------------------------------------------------|
-# | `nkVerbatim` | 3 slots, `lo`, `hi`, `succ`                                                                     |
-# | `nkEmit`     | 3 slots, `lo`, `hi`, `succ`                                                                     |
-# | `nkIf`       | 5 slots, `lo`, `hi`, `succ`, `child`, `alt`                                                     |
-# | `nkFor`      | 7 + one per target, `lo`, `hi`, `succ`, `child`, `loopName`, `filterLo`, `filterHi`, target ids |
-# | `nkSet`      | 4 slots, `lo`, `hi`, `succ`, interned target name id                                            |
+# | Kind             | Slots                                                                                           |
+# |------------------|-------------------------------------------------------------------------------------------------|
+# | `nkVerbatim`     | 3 slots, `lo`, `hi`, `succ`                                                                     |
+# | `nkEmit`         | 3 slots, `lo`, `hi`, `succ`                                                                     |
+# | `nkIf`           | 5 slots, `lo`, `hi`, `succ`, `child`, `alt`                                                     |
+# | `nkFor`          | 7 + one per target, `lo`, `hi`, `succ`, `child`, `loopName`, `filterLo`, `filterHi`, target ids |
+# | `nkSet`          | 4 slots, `lo`, `hi`, `succ`, interned target name id                                            |
 # | `nkSetNamespace` | 5 slots, `lo`, `hi`, `succ`, `target`, `field`                                                  |
-# | `nkMacroDef` | 4 + 3 per parameter, `macroName`, filler, `succ`, `child` body, name and default-span triples   |
+# | `nkMacroDef`     | 4 + 3 per parameter, `macroName`, filler, `succ`, `child` body, name and default-span triples   |
 #
 # `nkSetBlock` and `nkGeneration` are declared kinds the parser never builds, so they carry
 # no slot layout. `succ` shadows `system.succ`, still reachable for ordinal arguments because overload resolution
