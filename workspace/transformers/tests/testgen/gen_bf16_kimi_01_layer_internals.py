@@ -1,16 +1,42 @@
 #!/usr/bin/env python3
-"""Kimi KDA layer-0 fixtures for the Kimi-Linear-48B-A3B-Instruct checkpoint,
+"""Layer-0 fixture file of the Kimi-Linear-48B-A3B-Instruct checkpoint,
 recorded on CPU torch bf16 from safetensors over the kimi-linear branch
 worktree reference kernels.
 
-Single-file blob grammar, one fixture file per family layer. The layer-0 file
-carries one mixture group:
+Single-file grammar with one fixture file per family layer.
 
-- kda, the KDA kernel-boundary op surface, prefill T=5, head 0 over real layer-0 weights
-- one uint8 blob tensor packs the nine kernel-boundary tensors as raw
-  little-endian bytes, the segment layout recorded under `blobs`
-- the payload segments carry q/k/v post-conv, the externally derived f32 log decay g
-  and beta, plus both reference kernels' outputs and final states
+- the payload carries the suite-read driving tensor, every recorded
+  intermediate and output stays on the stats frame as fingerprints
+- one metadata sidecar and one stats sidecar serve the file
+
+No Qwen3 analog exists to inherit:
+
+- the Kimi Delta Attention mixer splits the q/k/v projections and conv
+  weights per branch
+- the f32 log decay g and beta derive externally through the low-rank
+  gate weights, the kernels feed directly
+
+Consumed by tests/q_bf16/t_bf16_kimi_01_layer_internals.nim, the suite
+computing the mixer forward from the bare hidden input.
+
+Emitted under tests/fixtures/bf16-01-layer-internals/Kimi-Linear-48B-A3B-Instruct-layer-0/:
+
+| file                                                                | contents                                                           |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| layer0-Kimi-Linear-48B-A3B-Instruct-00.safetensor                   | the bare driving tensor kda.input                                  |
+| layer0-Kimi-Linear-48B-A3B-Instruct-00.safetensor.metadata.json.zst | the mixture metadata                                               |
+| layer0-Kimi-Linear-48B-A3B-Instruct-00.safetensor.stats.json.zst    | keys namespaced by mixture, one uniform record per recorded tensor |
+
+Mixture seed and case:
+
+- kda.input drives the KDA kernel-boundary prefill T=5, head 0 over real
+  layer-0 weights, seed 421
+
+Mixture payload and stats entries:
+
+- kda, payload kda.input, stats entries over the kernel-boundary op surface
+  (q/k/v post-conv, the externally derived f32 log decay g and beta), plus
+  both reference kernels' outputs and final states
 
 Compute forms of the gated delta rule core:
 
@@ -232,56 +258,27 @@ def load_checkpoint_tensors(model_dir: str, keys: list) -> dict:
     return weights
 
 
-def pack_blob(segments: OrderedDict) -> tuple:
-    """Pack the named segments of one mixture into one uint8 blob tensor.
-
-    Args:
-    - segments, the (name, tensor) pairs in metadata order
-
-    Returns:
-    - the flat uint8 tensor over the packed little-endian bytes
-    - the segment layout for the metadata sidecar, per segment dtype, shape
-      and byte offset, every offset aligned to the element size
-    """
-    blob = bytearray()
-    layout = {}
-    for name, tensor in segments.items():
-        tensor = tensor.detach().cpu().contiguous()
-        itemsize = tensor.element_size()
-        while len(blob) % itemsize != 0:
-            blob.append(0)
-        layout[name] = {
-            "dtype": str(tensor.dtype).replace("torch.", ""),
-            "shape": list(tensor.shape),
-            "offset": len(blob),
-        }
-        blob.extend(tensor.view(torch.uint8).numpy().tobytes())
-    return torch.frombuffer(bytearray(blob), dtype=torch.uint8).clone(), layout
-
-
-def save_fixture(filepath: str, metadata: dict, segments: OrderedDict) -> None:
-    """Save one fixture safetensor carrying one uint8 blob tensor.
+def save_fixture(filepath: str, metadata: dict, input_tensor: torch.Tensor,
+                 segments: OrderedDict) -> None:
+    """Save one fixture safetensor carrying the bare driving tensor.
 
     Sidecars:
 
-    - one zstd metadata frame with the segment layout under `blobs`
-    - one 004 stats frame with mixture-namespaced keys"""
-    blob_tensor, layout = pack_blob(segments)
-    metadata["blobs"] = {
-        "kda": {
-            "dtype": "uint8",
-            "byte_size": blob_tensor.numel(),
-            "segments": layout,
-        },
-    }
-    serialized = st.save({"kda": blob_tensor}, metadata=None)
+    - one zstd metadata frame with the mixture rows
+    - one 004 stats frame with mixture-namespaced keys, the driving tensor
+      and the op-surface fingerprints"""
+    payload = {"kda.input": input_tensor.detach().cpu().contiguous()}
+    serialized = st.save(payload, metadata=None)
     with open(filepath, "wb") as f:
         f.write(serialized)
     write_json_zst(filepath + ".metadata.json.zst", metadata)
-    write_stats_file(filepath + ".stats.json.zst", os.path.basename(filepath), [
-        (f"kda.{name}", tensor) for name, tensor in segments.items()
-        if tensor.is_floating_point()
-    ])
+    stats_entries = [("kda.input", payload["kda.input"])]
+    stats_entries += [
+        (f"kda.{name}", tensor.detach().cpu().contiguous())
+        for name, tensor in segments.items()
+    ]
+    write_stats_file(filepath + ".stats.json.zst", os.path.basename(filepath),
+                     stats_entries)
 
 
 def ulp_fp32(m: float) -> float:
@@ -475,7 +472,7 @@ def generate_kda_prefill_fixture() -> None:
         },
     }
     filepath = os.path.join(FIXTURE_DIR, FIXTURE_STEM + ".safetensor")
-    save_fixture(filepath, metadata, segments)
+    save_fixture(filepath, metadata, x, segments)
     print(f"  wrote {filepath}")
 
 

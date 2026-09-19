@@ -135,20 +135,20 @@ cpu remains the problem-fallback.
 Unit-tier families ship one fixture file per model and layer
 (`layer0-<Model>-00.safetensor`), never one file per mixture row.
 
-Mixture groups keep their roles across families.
+Mixture groups keep their roles across families, the mixer group named
+per family (`attn` on the MLA families, `gdn` on Qwen3.6, `kda` on Kimi).
 
 | group | role |
 | ----- | ---- |
-| attn  | the mixer op surface |
+| mixer | the mixer op surface, named `attn`, `gdn` or `kda` per family |
 | layer | the full decoder block chain |
-| moe   | the routed block surface, Qwen naming its GDN mixer group `gdn` |
+| moe   | the routed block surface |
 
-- Qwen3.6, GLM-4.7-Flash and Moonlight store one bare bf16 driving tensor
-  per group (`attn.input`, `layer.layer_input`, `moe.h`), the recorded
+- every family stores one bare bf16 driving tensor per group, the recorded
   intermediates and outputs staying on the stats frame as fingerprints
-- no raw op-surface tensor ships in the file, the rope rows and the recorded sdpa inputs included
-- Kimi packs its driving segments into one `kda` blob, a mixed-dtype U8 byte tensor
-  with element-size-aligned offsets, its segment layout in the metadata sidecar, unpacked through `blobSegment` (`tests/layer_utils.nim`)
+  (`attn.input`, `layer.layer_input`, `moe.h`, `gdn.input`, `kda.input`)
+- no raw op-surface tensor ships in the file, the rope rows and recorded
+  sdpa inputs included
 
 Stats keys carry the group prefix
 (`attn.*`, `layer.*`, `moe.*`), one assertStats block per group.
