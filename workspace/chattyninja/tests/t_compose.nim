@@ -23,7 +23,7 @@
 
 {.experimental: "views".}
 
-import cnj_types, cnj_values, cnj_parse, chattyninja
+import cnj_types, cnj_values, cnj_parse, cnj_engine
 import rows
 
 type PullChunks[N: static int] = object

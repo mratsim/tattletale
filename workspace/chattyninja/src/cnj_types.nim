@@ -4,7 +4,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built side tables, and the render
-# driver. See chattyninja.nim for the dispatch table and the `items` pull interface.
+# driver. See cnj_engine.nim for the dispatch table and the `items` pull interface.
 
 import cnj_errors, cnj_strbuf, cnj_values
 import workspace/data_structures/src/small_seqs

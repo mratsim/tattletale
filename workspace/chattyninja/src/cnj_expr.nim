@@ -60,7 +60,7 @@ type
 
   MacroRunner* = proc (m: Machine, t: Tables, d: var Driver, mc: MacroVal,
       args: seq[Arg]): string {.nimcall.}
-    ## Runs one macro body to completion and returns the captured text, injected by the statement tier because `chattyninja` and `cnj_expr`
+    ## Runs one macro body to completion and returns the captured text, injected by the statement tier because `cnj_engine` and `cnj_expr`
     ## cannot import each other.
 
 # Lexer

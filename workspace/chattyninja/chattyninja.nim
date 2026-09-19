@@ -6,17 +6,17 @@
 ## Chattyninja package umbrella.
 ## The single re-export surface of `src/`. Nothing under `src/` re-exports.
 ##
-## | Module      | Surface                          |
-## | ----------- | -------------------------------- |
-## | chattyninja | render engine and pull interface |
-## | cnj_parse   | template parsing                 |
-## | cnj_types   | artifact and render driver       |
-## | cnj_values  | template values                  |
-## | cnj_errors  | error tier                       |
+## | Module     | Surface                          |
+## | ---------- | -------------------------------- |
+## | cnj_engine | render engine and pull interface |
+## | cnj_parse  | template parsing                 |
+## | cnj_types  | artifact and render driver       |
+## | cnj_values | template values                  |
+## | cnj_errors | error tier                       |
 ##
 ## `cnj_expr` and `cnj_strbuf` stay internal, no re-export.
 
-import ./src/chattyninja
+import ./src/cnj_engine
 import ./src/cnj_errors, ./src/cnj_types, ./src/cnj_values, ./src/cnj_parse
 
-export chattyninja, cnj_errors, cnj_types, cnj_values, cnj_parse
+export cnj_engine, cnj_errors, cnj_types, cnj_values, cnj_parse

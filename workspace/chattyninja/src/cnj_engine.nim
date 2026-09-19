@@ -30,7 +30,7 @@ proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal,
     args: seq[Arg]): string
   ## Runs one macro body to completion and returns the captured text, declared ahead of the steps because each one hands it
   ## to the expression tier as the macro runner. A parameter and not a field:
-  ## - `chattyninja` cannot import `cnj_expr` and be imported back
+  ## - `cnj_engine` cannot import `cnj_expr` and be imported back
   ## - a proc field would put mutable state in the read-only artifact
 
 # Output

@@ -23,7 +23,7 @@
 ##   $ ./workspace/chattyninja/run_tests.sh t_twodriver
 
 import std/[os, strutils]
-import cnj_types, cnj_values, cnj_parse, chattyninja
+import cnj_types, cnj_values, cnj_parse, cnj_engine
 import workspace/data_structures/src/small_seqs
 import rows
 
