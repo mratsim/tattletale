@@ -1,3 +1,10 @@
+# Tattletale
+# Copyright (c) 2026 Mamy Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
 # Umbrella chattyninja suite, one build, one link, one run over every suite.
 #
 # Build and run
@@ -6,7 +13,8 @@
 # Each suite stays individually runnable, e.g.
 #   $ nim c -r t_parse.nim
 #
-# The allocation-counting suites live in t_all_allocstats.nim, not here.
-import t_compose, t_expr, t_parse, t_pull, t_render, t_scratch, t_shape, t_twodriver
+# The allocation-counting build compiles t_corpus.nim alone under
+# `-d:nimAllocStats -d:ChunkSize=7`, not here.
+import t_corpus, t_expr, t_parse, t_twodriver
 
 echo "t_all: all suites green"
