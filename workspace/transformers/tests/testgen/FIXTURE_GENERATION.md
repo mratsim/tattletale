@@ -130,19 +130,25 @@ cpu remains the problem-fallback.
   the stats corpus sits at tests/harness/stats-corpus, the instrument-check
   input of the harness machinery.
 
-### Single-file blob grammar
+### Single-file grammar
 
 Unit-tier families ship one fixture file per model and layer
 (`layer0-<Model>-00.safetensor`), never one file per mixture row.
 
-- exactly three blob tensors per file, one per mixture group,
-  `attn` the mixer op surface, `layer` the full decoder block chain,
-  `moe` the routed block surface
-- a family instantiates only what it has, Kimi carries one `kda` blob
-  holding nine op-surface segments
-- a blob packs mixed dtypes into one U8 byte tensor,
-  element-size-aligned offsets, the segment layout lives in the metadata
-  sidecar and suites unpack through `blobSegment` (`tests/layer_utils.nim`)
+Mixture groups keep their roles across families.
+
+| group | role |
+| ----- | ---- |
+| attn  | the mixer op surface |
+| layer | the full decoder block chain |
+| moe   | the routed block surface, Qwen naming its GDN mixer group `gdn` |
+
+- Qwen3.6, GLM-4.7-Flash and Moonlight store one bare bf16 driving tensor
+  per group (`attn.input`, `layer.layer_input`, `moe.h`), the recorded
+  intermediates and outputs staying on the stats frame as fingerprints
+- no raw op-surface tensor ships in the file, the rope rows and the recorded sdpa inputs included
+- Kimi packs its driving segments into one `kda` blob, a mixed-dtype U8 byte tensor
+  with element-size-aligned offsets, its segment layout in the metadata sidecar, unpacked through `blobSegment` (`tests/layer_utils.nim`)
 
 Stats keys carry the group prefix
 (`attn.*`, `layer.*`, `moe.*`), one assertStats block per group.

@@ -7,10 +7,12 @@ norm -> lm_head chain through installed transformers modeling on torch bf16:
 - fixture dir tests/fixtures/bf16-03-full-forward-to-logits/Moonlight-16B-A3B/
 - consumer tests/q_bf16/t_bf16_moonlight_03_full_forward_to_logits.nim
 
-- layer-<i>.safetensor, the chain boundary slices, layer_input_seq plus the topk and routing rows on MoE layers, the last layer output
-- .metadata.json.zst, the layer identity, the recorded dispatch bands and margins
-- .stats.json.zst, the ttt-tf-004-uniform-stats frame over the floating-point payload tensors
-- final_logits.decisions.json.zst, the ttt-tf-005-argmax-decisions frame, one record per position over the top-32 logits support
+| file                            | contents                                                                                                       |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| layer-<i>.safetensor            | the chain boundary slices, layer_input_seq plus the topk and routing rows on MoE layers, the last layer output |
+| .metadata.json.zst              | the layer identity, the recorded dispatch bands and margins                                                    |
+| .stats.json.zst                 | the ttt-tf-004-uniform-stats frame over the floating-point payload tensors                                     |
+| final_logits.decisions.json.zst | the ttt-tf-005-argmax-decisions frame, one record per position over the top-32 logits support                  |
 
 Dispatch contract of this run:
 - the reference runs the grouped_mm default
@@ -87,7 +89,7 @@ def _load_sibling(filename: str):
     return module
 
 
-_moe_fixtures = _load_sibling("gen_bf16_moonlight_01_layer_internals_moe.py")
+_moe_fixtures = _load_sibling("gen_bf16_moonlight_01_layer_internals.py")
 boundary_margins = _moe_fixtures.boundary_margins
 
 import transformers  # noqa: E402
@@ -232,9 +234,8 @@ def build_model(weight_map: dict) -> DeepseekV3ForCausalLM:
     - the expert dispatch stays at the default resolution, `grouped_mm`,
       the accumulation formulation the committed per-op MoE fixtures recorded
     - the per-layer expert configs are de-shared after load, each MoE layer
-      gets a shallow config copy so the eager-vs-grouped_mm band measurement
-      can flip one layer at a time, pure data movement, every copy carries
-      the resolved dispatch value
+      gets a shallow config copy, pure data movement, so the eager-vs-grouped_mm
+      band measurement flips one layer at a time, each copy carries the resolved dispatch value
     - raises SystemExit when head and embedding share storage or values,
       or when the resolved dispatch is not grouped_mm"""
     model = DeepseekV3ForCausalLM.from_pretrained(
