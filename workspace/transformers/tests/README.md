@@ -6,7 +6,8 @@ the suites themselves stay honest.
 - writing rules live in [testing skill](../../../.agents/skills/testing/SKILL.md)
 - assert API in [harness README](./harness/README.md)
 - recording rules in [FIXTURE_GENERATION.md](./testgen/FIXTURE_GENERATION.md)
-- extension recipe in [ARCHITECTURE extension points](../ARCHITECTURE.md#extension-points)
+
+The extension recipe lives in the [ARCHITECTURE extension points](../ARCHITECTURE.md#extension-points) section.
 
 ## Stakes
 
@@ -35,14 +36,30 @@ flowchart LR
     F -->|no| H["a bug<br/>the report names the step"]
 ```
 
-Replay resolves the device through `select_device`, GPU over CPU.
+Recording and replay resolve the device through GPU over CPU.
+- recording runs on the box GPU
+- replay picks the device through `select_device`
 Metal serves m4max, CUDA serves rtxpro6000.
-cpu replay must not be automatic, a missing device kernel fails loudly.
+cpu must not be automatic on either side, a missing device kernel fails loudly.
 
 - PYTORCH_ENABLE_MPS_FALLBACK is banned, it defeats PR #104, the device
   policy linter counts it
 - a `= kCPU` default device parameter is banned across transformers src,
   callers pass the device explicitly
+
+## Test ladder objective
+
+Suites exist to triangulate, not to be exhaustive. Each tier isolates one
+layer of the stack, so if tier N fails while tier N-1 passes, the bug lives
+between them and the failing tier names the step.
+
+- every suite stays minimal, one row per mixer at tier 01, extra scenarios
+  only when they narrow a named issue
+- tests run on every change and every device class, their size is paid forever,
+  suites load GB to 100+GB checkpoints so the row count stays low deliberately
+- the codec suites sit below 01 as tier 00 (`exl3-00-codec`), isolating
+  the quantization algorithm, the one dependency every other tier treats
+  as given, so a green 00 and a red 01 localize the fault to the quant math
 
 ## Check ladder
 
@@ -142,6 +159,5 @@ Only assertStats and assertArgMax may enforce.
 
 Counted violations:
 - any other harness assert proc
-- any check* call
-- any verify*, ensure*, or require* call
+- any check*, verify*, ensure*, or require* call
 - the `runCppTest` sections
