@@ -315,6 +315,8 @@ task test_tf_bf16_north_01_layer_internals, "Suite: North-Mini-Code-1.0 parallel
   runTransformerSuite("q_bf16", "t_bf16_north_01_layer_internals.nim")
 task test_tf_bf16_north_03_full_forward_to_logits, "Suite: North-Mini-Code-1.0 full forward to logits, 49 layers + final logits vs fixtures":
   runTransformerSuite("q_bf16", "t_bf16_north_03_full_forward_to_logits.nim")
+task test_tf_bf16_north_05_coherence, "Suite: North-Mini-Code-1.0 fixture-free coherence, answer-position ranking + greedy chain":
+  runTransformerSuite("q_bf16", "t_bf16_north_05_coherence.nim")
 task test_tf_exl3_qwen3_00_codec, "Suite: EXL3 trellis decode vs production kernel hash":
   runTransformerSuite("q_exl3", "t_exl3_qwen3_00_codec.nim")
 task test_tf_exl3_qwen3_00_hadamard, "Suite: EXL3 hadamard vs production kernel":
@@ -402,7 +404,8 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
   of "north":
     runFamily(@[
       ("q_bf16", "t_bf16_north_01_layer_internals.nim"),
-      ("q_bf16", "t_bf16_north_03_full_forward_to_logits.nim")])
+      ("q_bf16", "t_bf16_north_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_north_05_coherence.nim")])
   of "ling3":
     runFamily(@[
       ("q_bf16", "t_bf16_ling3_05_coherence.nim")])
