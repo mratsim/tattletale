@@ -60,8 +60,7 @@ type
     hasElse: bool
     isTernary: bool
 
-# Lexer
-# ---------------------------------------------------------------------------
+# Lexer:
 
 func digitVal(c: char): int =
   let d = ord(c) - ord('0')
@@ -323,12 +322,11 @@ func steppedSliceInto(sb: var Cursor, s: string, a, b, by: int) =
     sb.addRune runeSub(s, k)
     inc k, by
 
-# Registries
-# ---------------------------------------------------------------------------
+# Registries:
 #
 # Filters, tests, methods and globals dispatch by name. `tojson` is one filter name exactly like
 # `trim`, never a construct. A nil entry is a declared name no template in the corpus uses,
-# reaching it raising `JinjaError` with cause `ceUnimplemented` rather than answering wrongly.
+# reaching it raising `JinjaError` with cause `ceUnimplemented`, never answering wrongly.
 
 
 const
@@ -538,8 +536,7 @@ const
     namespaceGlobal, rangeGlobal, strftimeGlobal, raiseExceptionGlobal, dictGlobal, nil, nil, nil
   ]
 
-# Lookup
-# ---------------------------------------------------------------------------
+# Lookup:
 
 func lookupName(t: Tables, d: var Driver, name: openArray[char]): JinjaVal =
   ## Returns the binding of `name`, undefined when absent. Absence is a value, never an error:
@@ -568,8 +565,7 @@ func lookupNameById*(t: Tables, d: var Driver, id: int32): JinjaVal =
     return d.root.d.dictGet(t.names[id])
   undefinedVal()
 
-# The walker
-# ---------------------------------------------------------------------------
+# Walker:
 
 proc evalRange(m: Machine, t: Tables, d: var Driver, lo, hi: int, depth = 0, force: MacroForcer = nil): JinjaVal
 proc expr(m: Machine, t: Tables, d: var Driver, cx: var Cx, minPrec: int): JinjaVal
@@ -797,7 +793,7 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): JinjaVal =
     let (lo, hi) = (cx.tok.lo, cx.tok.hi)
     advance(m, cx)
     let name = wordSpan(m, lo, hi)
-    # The literal spellings are compared as spans, the same test `case` applied to a copied string.
+    # Literal spellings are compared as spans, the same test `case` applied to a copied string.
     if name == "true" or name == "True":
       v = boolVal(true)
     elif name == "false" or name == "False":

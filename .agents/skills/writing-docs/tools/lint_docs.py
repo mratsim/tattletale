@@ -12,7 +12,7 @@ Rule table (rule | trigger | severity):
 | rule-id              | trigger                                                                                           | severity |
 | -------------------- | ------------------------------------------------------------------------------------------------- | -------- |
 | banned-vocab         | a blocklist word (EXAMPLES.md, plus operator-extended entries)                                    | counted  |
-| the-opener           | a doc comment or heading opens with the article "The"                                             | counted  |
+| the-opener           | a doc comment, maintainer comment or heading opens with the article "The"                         | counted  |
 | semicolon            | a semicolon in prose                                                                              | counted  |
 | em-dash              | an em-dash or en-dash in prose                                                                    | counted  |
 | line-length          | a prose line over 140 characters                                                                  | counted  |
@@ -44,7 +44,8 @@ Rule table (rule | trigger | severity):
 | sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 140-char line          | counted  |
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
-| design-narration     | a doc comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
+| design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
+| section-separator    | a whole-line `#` comment built from dashes (a layout-position marker)                             | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -363,7 +364,7 @@ RULES = {
     "banned-vocab": Rule("banned-vocab", True,
                          "a blocklist word (EXAMPLES.md, plus operator-extended entries)"),
     "the-opener": Rule("the-opener", True,
-                       "a doc comment or heading opens with the article \"The\""),
+                       "a doc comment, maintainer comment or heading opens with the article \"The\""),
     "semicolon": Rule("semicolon", True, "a semicolon in prose"),
     "em-dash": Rule("em-dash", True, "an em-dash or en-dash in prose"),
     "line-length": Rule("line-length", True, "a prose line over 140 characters"),
@@ -422,7 +423,9 @@ RULES = {
     "except-rewrap": Rule("except-rewrap", True,
                           "an except clause re-raises the caught exception (rewrap; handle it or let it propagate)"),
     "design-narration": Rule("design-narration", True,
-                             "a doc comment justifying the design choice instead of stating the contract (because, instead of, rather than, X and not Y, which is why, declared ahead)"),
+                             "a doc or maintainer comment justifying the design choice instead of stating the contract (because, instead of, rather than, X and not Y, which is why, declared ahead)"),
+    "section-separator": Rule("section-separator", True,
+                              "a whole-line # comment built from dashes (a layout-position marker; keep the title line, drop the rule)"),
     "try-block": Rule("try-block", True,
                       "a try/except or try/finally block catching exceptions as control flow outside the libtorch C++ boundary and tests folders"),
 }
@@ -1463,21 +1466,37 @@ DESIGN_NARRATION_RE = re.compile(
 
 
 def nim_design_narration_checks(path, text, findings):
-    """Flags doc-comment lines that justify the design to the audience - the
-    because-clause, the X-and-not-Y contrast, the layout-position story
-    (declared ahead of the steps, defined above) - instead of stating the
-    contract. The caller's test for doc content: what can they do with it?
-    A layout decision answers nothing (the LSP shows the declaration), and
-    the why of a choice dies with the choice; only caller-visible
-    constraints survive in the contract."""
+    """Flags doc-comment and whole-line maintainer-comment lines that justify
+    the design to the audience - the because-clause, the X-and-not-Y contrast,
+    the layout-position story (declared ahead of the steps, defined above) -
+    instead of stating the contract. The caller's test for doc content: what
+    can they do with it? A layout decision answers nothing (the LSP shows the
+    declaration), and the why of a choice dies with the choice; only
+    caller-visible constraints survive in the contract."""
     for i, raw in enumerate(text.splitlines()):
-        m = re.match(r"^\s*##(.*)$", raw)
+        m = re.match(r"^\s*##(.*)$", raw) or re.match(r"^\s*#(?!#)(.*)$", raw)
         if m and DESIGN_NARRATION_RE.search(m.group(1)):
             findings.append(Finding(
                 path, i + 1, "design-narration",
                 "the doc justifies the design (because, instead of, X and "
                 "not Y) instead of stating the contract, state what the "
                 "caller must know"))
+
+
+HASH_SEPARATOR_RE = re.compile(r"^\s*#\s*-+\s*$")
+
+
+def nim_section_separator_checks(path, text, findings):
+    """Flags whole-line `#` comments built from dashes. A dash rule is a
+    layout-position marker: it says where a section sits on the screen, not
+    anything a reader of the line needs, and it dies when the code moves.
+    The section title line above or below carries the same information."""
+    for i, raw in enumerate(text.splitlines()):
+        if HASH_SEPARATOR_RE.match(raw):
+            findings.append(Finding(
+                path, i + 1, "section-separator",
+                "a dash rule is a layout-position marker (keep the section "
+                "title, drop the rule)"))
 
 
 def try_allowed(path):
@@ -1721,6 +1740,7 @@ def scan(path, text, findings):
             nim_except_rewrap_checks(path, text, findings)
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)
+            nim_section_separator_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
         if is_py and meta is not None:
             tree = None
@@ -1740,12 +1760,13 @@ def scan(path, text, findings):
         check_bullets(path, block, findings)
         check_tables(path, block, findings)
         check_missing_diagram(path, block, findings)
-        first = next(((e[0], e[1]) for e in block if e[1] and e[2] != "heading"),
+        first = next(((e[0], e[1], e[2]) for e in block if e[1] and e[2] != "heading"),
                      None)
-        if first and block_is_doc and strip_backticks(first[1]).split()[:1] == ["The"]:
+        if first and (block_is_doc or first[2] == "hash") \
+                and strip_backticks(first[1]).split()[:1] == ["The"]:
             findings.append(Finding(
                 path, first[0], "the-opener",
-                "doc comment opens with The (open with a noun phrase or Returns ...)"))
+                "comment opens with The (open with a noun phrase or Returns ...)"))
         run = []
         air_run = []
         prev_bullet = False

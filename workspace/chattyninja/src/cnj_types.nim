@@ -61,11 +61,12 @@ const
   # a string value, so a call runs to completion synchronously into a capture sink.
   # Static cross-macro chain depth in the corpus is 3, two templates recur cyclically, and the shipped
   # `gemma4/tools_tool_response.json` drives the tools subtree to 6, with real depth set by the input.
-  # 16 bounds the stack on bad input, a breach raising instead of an overflow.
+  # 16 bounds the stack on bad input, a breach raising.
   MacroDepthCap* {.intdefine.} = 16
 
-  # The expression walker recurses on nesting. Deepest paren nesting measured over the corpus templates
-  # is 3 (`gemma4`, `lfm25`), so 24 clears the observed maximum with margin, far below the C stack overflow depth.
+  # Expression-walker recursion bound:
+  # deepest paren nesting measured over the corpus templates is 3 (`gemma4`, `lfm25`),
+  # 24 clears it with margin, far below the C stack overflow depth.
   ExprDepthCap* {.intdefine.} = 24
 
   # Output pieces reach the consumer in slices of at most this many bytes, which is what lets `cur`
@@ -76,7 +77,6 @@ const
   wsNameChars* = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
 
 # Payload slot accessors
-# ---------------------------------------------------------------------------
 #
 # One slot per construct role, uniform across the kinds that fill it. Each expands textually
 # to a slot read, so `nd.succ` on `m.nodes[n]` never copies the node. The per-accessor docs
@@ -93,8 +93,8 @@ const
 # | `nkMacroDef`     | 4 + 3 per parameter, `macroName`, filler, `succ`, `child` body, name and default-span triples   |
 #
 # `nkSetBlock` and `nkGeneration` are declared kinds the parser never builds, so they carry
-# no slot layout. `succ` shadows `system.succ`, still reachable for ordinal arguments because overload resolution
-# only sees a `Node` receiver in this module.
+# no slot layout. `succ` shadows `system.succ`, still reachable for ordinal arguments,
+# overload resolution only seeing a `Node` receiver in this module.
 
 const
   ## One slot position per construct role, plus the two variable-tail bases. Parse and render

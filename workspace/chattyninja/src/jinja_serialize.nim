@@ -291,7 +291,7 @@ func serDispatch(js: var Ser) =
       serQueue(js, if js.mode == smJson: "\"" else: "'")
       js.phase = spStr
   of vkLoop:
-    # The `<` and `>` of the context form carry the tojson filter's HTML escaping.
+    # `<` and `>` of the context form carry the tojson filter's HTML escaping.
     serQueue(js, if js.mode == smJson: "\"\\u003cLoopContext\\u003e\"" else: "<LoopContext>")
     serFinish(js)
   of vkMacro:

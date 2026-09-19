@@ -71,8 +71,7 @@ func argKeyword*(name: openArray[char]): ArgKeyword =
       return k
   akNone
 
-# Argument helpers
-# ---------------------------------------------------------------------------
+# Argument helpers:
 
 func getArg*(args: seq[Arg], pos: int, kw: ArgKeyword, default: JinjaVal): JinjaVal =
   ## Returns the argument bound under `kw`, else the positional slot `pos`, else `default`.

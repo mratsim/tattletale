@@ -14,7 +14,7 @@
 #
 # Resumption state for a re-entered step lives in the driver's frame stack, never in a node.
 # `nkFor`, `nkSetBlock` and `nkGeneration` are re-entered by their bodies, `nkIf`
-# single-entry because parse time backpatches its branch bodies past the whole chain.
+# single-entry, parse time backpatching its branch bodies past the whole chain.
 #
 # Run:
 #   from the repo root, `nim test_chattyninja` builds and runs every suite with its variants.
@@ -35,8 +35,7 @@ proc startMacro(m: Machine, t: Tables, d: var Driver, call: PendingCallVal, retN
   ## Opens a macro frame and enters the body, the body's output pieces draining through
   ## the caller's window until the frame closes on the definition node.
 
-# Output
-# ---------------------------------------------------------------------------
+# Output:
 
 proc emitSpan(m: Machine, d: var Driver, lo, hi: int32) =
   ## Makes a template-text span the pending piece.
@@ -70,8 +69,7 @@ template pieceLen(p: Piece): int =
   of pkStr: p.s.len
   of pkLazy: 0
 
-# Binding
-# ---------------------------------------------------------------------------
+# Binding:
 
 func bindName(d: var Driver, name: int32, val: JinjaVal) =
   ## Binds a name in the innermost scope, replacing an existing binding there.
@@ -82,8 +80,7 @@ func bindName(d: var Driver, name: int32, val: JinjaVal) =
       return
   d.scopes[sc].add Binding(name: name, val: val)
 
-# Steps
-# ---------------------------------------------------------------------------
+# Steps:
 #
 # Every step reads its node's payload through the `nd` slot-accessor templates, which expand
 # textually onto the arena entry. Render code never binds a `Node` value, a binding running
@@ -360,8 +357,7 @@ proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Ca
       capturePend(m, d2, result)
 
 
-# Driver
-# ---------------------------------------------------------------------------
+# Driver:
 
 func newDriver*(ctx: JinjaVal, clock = 0.0): Driver =
   ## Returns a driver ready to render `ctx`, the render context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
