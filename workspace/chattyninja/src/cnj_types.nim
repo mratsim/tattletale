@@ -6,7 +6,7 @@
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built side tables, and the render
 # driver. See cnj_engine.nim for the dispatch table and the `items` pull interface.
 
-import cnj_errors, cnj_strbuf, cnj_values
+import cnj_errors, cnj_values
 import workspace/data_structures/src/small_seqs
 
 const
@@ -274,10 +274,14 @@ type
     scratchCap*: int
       ## writable bytes behind `scratch`
 
-func scratchBuf*(d: Driver): StrBuf =
-  ## Returns a scratch buffer positioned at scratch byte 0, ready for one derived value,
+func scratchBuf*(d: Driver): Cursor =
+  ## Returns a cursor over scratch positioned at byte 0, ready for one derived value,
   ## every build starting over from byte 0 once the previous scratch piece drained.
-  StrBuf(buf: d.scratch, cap: d.scratchCap)
+  ## Unattached scratch yields a measuring cursor, an append then counting without writing.
+  if d.scratch == nil:
+    measureBuf()
+  else:
+    Cursor(buf: toOpenArray(d.scratch, 0, d.scratchCap - 1))
 
 func scratchString*(d: Driver, n: int): string =
   ## Returns scratch[0 ..< n] as a fresh string, one allocation bounded by `n`, the bytes

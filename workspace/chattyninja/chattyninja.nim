@@ -14,7 +14,7 @@
 ## | cnj_values | template values                  |
 ## | cnj_errors | error tier                       |
 ##
-## `cnj_expr` and `cnj_strbuf` stay internal, no re-export.
+## `cnj_expr` stays internal, no re-export.
 
 import ./src/cnj_engine
 import ./src/cnj_errors, ./src/cnj_types, ./src/cnj_values, ./src/cnj_parse

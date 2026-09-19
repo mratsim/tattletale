@@ -15,7 +15,7 @@
 #   a render from a branch Jinja would not have entered
 
 import std/[math, parseutils, unicode]
-import cnj_errors, cnj_strbuf, cnj_types, cnj_values
+import cnj_errors, cnj_types, cnj_values
 
 type
   ExKind = enum
@@ -319,7 +319,7 @@ func runeSub(s: string, i: int): Rune =
   let j = runeOffset(s, idx)
   if s[j].ord < 0x80: Rune(s[j].ord) else: runeAt(s, j)
 
-func steppedSliceInto(s: string, sb: var StrBuf, a, b, by: int) =
+func steppedSliceInto(s: string, sb: var Cursor, a, b, by: int) =
   ## Writes the stride-`by` codepoint slice into `sb`, visiting `a, a + by, ...`
   ## while the stride keeps the walk inside the clamped bounds.
   var k = a
@@ -500,8 +500,8 @@ func sliceIndices(n: int, lo, hi, step: Value, hasLo, hasHi, hasStep: bool):
     tuple[start, stop, by: int] =
   ## Returns Python's `slice.indices(n)` for one slice:
   ##   the walk bounds and the stride, direction-dependent defaults and clamps applied.
-  ## Defaults follow the stride's direction, not the range's ends, which is what makes
-  ## `x[::-1]` visit every element and `x[:2:-1]` stop at the head.
+  ## - defaults follow the stride's direction, not the range's ends, which is what
+  ##   makes `x[::-1]` visit every element and `x[:2:-1]` stop at the head
   ## - forward (`by > 0`):
   ##   bounds clamp into `[0, n]`, defaults `0` and `n`
   ## - backward (`by < 0`):
@@ -566,7 +566,7 @@ proc subslice(v, lo, hi, step: Value, hasLo, hasHi, hasStep, isSlice: bool): Val
     if by == 1:
       strVal(spanString(v.s.toOpenArray(runeOffset(v.s, a), runeOffset(v.s, b) - 1)))
     else:
-      var sb: StrBuf
+      var sb = measureBuf()
       steppedSliceInto(v.s, sb, a, b, by)
       var win = newString(sb.len)
       var dst = over(win)

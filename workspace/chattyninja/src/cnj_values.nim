@@ -8,7 +8,114 @@
 # No dependency on the node arena, so the value tier is testable without a compiled template.
 
 import std/unicode
-import cnj_errors, cnj_strbuf
+import cnj_errors
+
+# Byte sink over a caller-owned window. A derived value renders into an existing buffer, so rendering costs no per-part allocation.
+
+const emptyWindow: array[0, char] = []
+
+type
+  Cursor* = object
+    ## Byte sink over a borrowed byte window. An append that does not fit raises
+    ## `ScratchError` carrying the capacity and the shortfall, never growing the window.
+    ## Measuring mode counts bytes without writing, the presize pass of a two-pass render.
+    buf*: openArray[char]
+      ## borrowed window, `buf.len` the writable capacity in bytes
+    len*: int
+      ## bytes appended so far, the measured length in measuring mode
+    measuring*: bool
+      ## count-only mode, appends advancing `len` and touching no byte
+
+func over*(s: var string): Cursor =
+  ## Returns a cursor over the whole byte span of `s`, capacity the string's length.
+  Cursor(buf: toOpenArray(s, 0, s.len - 1))
+
+func measureBuf*(): Cursor =
+  ## Returns a measuring cursor, appends advancing `len` and touching no byte.
+  Cursor(buf: toOpenArray(emptyWindow, 0, -1), measuring: true)
+
+func spanString*(s: openArray[char]): string =
+  ## Returns a fresh string holding the bytes of `s`, one allocation bounded by the span.
+  result = newString(s.len)
+  if s.len > 0:
+    copyMem(addr result[0], unsafeAddr s[0], s.len)
+
+proc scratchShort(sb: Cursor, need: int) {.noreturn.} =
+  ## Raises the typed overflow an unfitting append reports, naming capacity and shortfall.
+  var e = ScratchError(capacity: sb.buf.len, shortfall: max(0, need - (sb.buf.len - sb.len)))
+  e.msg = "render scratch capacity " & $sb.buf.len & " exceeded, " & $e.shortfall &
+      " more bytes needed"
+  raise e
+
+proc add*(sb: var Cursor, c: char) =
+  ## Appends one byte, raising when the window cannot hold it.
+  if sb.measuring:
+    inc sb.len
+    return
+  if sb.len >= sb.buf.len:
+    scratchShort(sb, 1)
+  sb.buf[sb.len] = c
+  inc sb.len
+
+proc add*(sb: var Cursor, s: openArray[char]) =
+  ## Appends a byte span, reading `s` in place, raising when it does not fit.
+  if s.len == 0:
+    return
+  if sb.measuring:
+    sb.len += s.len
+    return
+  if sb.len + s.len > sb.buf.len:
+    scratchShort(sb, s.len)
+  copyMem(addr sb.buf[sb.len], unsafeAddr s[0], s.len)
+  sb.len += s.len
+
+proc addInt*(sb: var Cursor, i: int64) =
+  ## Appends the decimal form of `i`, matching `$i`.
+  var digits: array[20, char]
+  var n = 0
+  let neg = i < 0
+  # Two's-complement negation in unsigned space, so int64.low negates without overflow.
+  var u = if neg: 0'u64 - cast[uint64](i) else: cast[uint64](i)
+  while true:
+    digits[n] = char(ord('0') + int(u mod 10'u64))
+    inc n
+    u = u div 10'u64
+    if u == 0:
+      break
+  if neg:
+    sb.add '-'
+  for j in countdown(n - 1, 0):
+    sb.add digits[j]
+
+proc addFloat*(sb: var Cursor, f: float64) =
+  ## Appends Python's `str()` for a float, integral values keeping one decimal place,
+  ## the shortest float repr coming from `$f`, one allocation per append.
+  let s = $f
+  sb.add s
+  if '.' notin s and 'e' notin s and 'E' notin s and 'n' notin s and 'i' notin s:
+    sb.add ".0"
+
+proc addRune*(sb: var Cursor, r: Rune) =
+  ## Appends `r` as its UTF-8 bytes, matching `toUTF8` for every reachable codepoint.
+  let c = ord(r)
+  if c > 0x10FFFF:
+    # Invalid UTF-8 decodes to out-of-range codepoints, whose `$` round-trip is not
+    # standard UTF-8, so the bytes come from `toUTF8`.
+    sb.add toUTF8(r)
+  elif c < 0x80:
+    sb.add char(c)
+  elif c < 0x800:
+    sb.add char(0xC0 or (c shr 6))
+    sb.add char(0x80 or (c and 0x3F))
+  elif c < 0x10000:
+    sb.add char(0xE0 or (c shr 12))
+    sb.add char(0x80 or ((c shr 6) and 0x3F))
+    sb.add char(0x80 or (c and 0x3F))
+  else:
+    sb.add char(0xF0 or (c shr 18))
+    sb.add char(0x80 or ((c shr 12) and 0x3F))
+    sb.add char(0x80 or ((c shr 6) and 0x3F))
+    sb.add char(0x80 or (c and 0x3F))
 
 type
   ValueKind* = enum
@@ -206,19 +313,19 @@ func pyStrip*(s, chars: string, left, right: bool): string =
 
 proc pyRepr*(v: Value): string
 
-proc pyStrInto*(v: Value, sb: var StrBuf)
-proc pyReprInto(v: Value, sb: var StrBuf)
+proc pyStrInto*(v: Value, sb: var Cursor)
+proc pyReprInto(v: Value, sb: var Cursor)
 
-proc materializeStr(write: proc (v: Value, sb: var StrBuf) {.nimcall.}, v: Value): string =
+proc materializeStr(write: proc (v: Value, sb: var Cursor) {.nimcall.}, v: Value): string =
   ## Returns one fresh string holding `write`'s rendering of `v`, a measuring pass presizing
   ## and the render pass filling, one allocation bounded by the size.
-  var sb: StrBuf
+  var sb = measureBuf()
   write(v, sb)
   result = newString(sb.len)
   var dst = over(result)
   write(v, dst)
 
-proc pyStrInto*(v: Value, sb: var StrBuf) =
+proc pyStrInto*(v: Value, sb: var Cursor) =
   ## Writes the value as template output text into `sb`:
   ## - strings pass through, scalars format in place, undefined renders empty
   ## - containers take their Python `repr()` form
@@ -239,7 +346,7 @@ proc pyStr*(v: Value): string =
     return v.s
   materializeStr(pyStrInto, v)
 
-func reprQuoted(sb: var StrBuf, s: string) =
+func reprQuoted(sb: var Cursor, s: string) =
   ## Writes Python's single-quoted repr of `s`, the form container reprs use for keys
   ## and string items, non-escaped bytes passing through raw.
   sb.add '\''
@@ -253,7 +360,7 @@ func reprQuoted(sb: var StrBuf, s: string) =
     else: sb.add c
   sb.add '\''
 
-proc pyReprInto(v: Value, sb: var StrBuf) =
+proc pyReprInto(v: Value, sb: var Cursor) =
   ## Writes Python's `repr()` of `v` into `sb`, recursively.
   case v.kind
   of vkStr: reprQuoted(sb, v.s)
@@ -285,13 +392,13 @@ proc pyRepr*(v: Value): string =
   ## Returns Python's `repr()`, the rendering a template sees when it stringifies a container.
   materializeStr(pyReprInto, v)
 
-func hex4(sb: var StrBuf, c: int) =
+func hex4(sb: var Cursor, c: int) =
   ## Appends `c` as four uppercase hex digits, the payload a `\uXXXX` escape carries.
   const digits = "0123456789ABCDEF"
   for sh in countdown(12, 0, 4):
     sb.add digits[(c shr sh) and 0xF]
 
-proc jsonEscapeInto(sb: var StrBuf, s: string, ensureAscii, html: bool) =
+proc jsonEscapeInto(sb: var Cursor, s: string, ensureAscii, html: bool) =
   ## Writes the JSON string body of `s`, mirroring `json.dumps` escaping, ASCII-escaped when
   ## `ensureAscii` is set, `html` additionally escaping `<`, `>`, `&` and `'`.
   for r in s.runes:
@@ -333,7 +440,7 @@ proc jsonEscapeInto(sb: var StrBuf, s: string, ensureAscii, html: bool) =
     else:
       sb.addRune r
 
-proc toJsonBody(v: Value, sb: var StrBuf, opts: JsonOpts) =
+proc toJsonBody(v: Value, sb: var Cursor, opts: JsonOpts) =
   ## Writes the `tojson` rendering of `v` into `sb`, recursively.
   case v.kind
   of vkUndefined, vkNone: sb.add "null"
@@ -377,7 +484,7 @@ proc toJson*(v: Value, opts = JsonOpts()): string =
   ## Returns the `tojson` filter rendering:
   ##   non-ASCII raw UTF-8 unless the template passes `ensure_ascii`, Jinja's HTML escaping
   ##   applied as the filter's post-pass, one string materialized bounded by the size.
-  var sb: StrBuf
+  var sb = measureBuf()
   toJsonBody(v, sb, opts)
   result = newString(sb.len)
   var dst = over(result)
