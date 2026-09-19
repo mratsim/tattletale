@@ -8,10 +8,10 @@
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built side tables, and the render
 # driver. See chattyninja.nim for the dispatch table and the `items` pull interface.
 
-import cnj_errors, cnj_values
+import cnj_errors, cnj_strbuf, cnj_values
 import workspace/data_structures/src/small_seqs
 
-export cnj_errors, cnj_values, small_seqs
+export cnj_errors, cnj_strbuf, cnj_values, small_seqs
 
 const
   noLink* = -1'i32
@@ -257,10 +257,12 @@ type
     pkNone
     pkSpan
     pkStr
+    pkScratch
 
   Piece* = object
     ## Pending output piece. Span pieces are delivered straight out of `Machine.jinja`, string
-    ## pieces are materialized values (stringify, tojson, a captured body) held by the driver.
+    ## pieces are materialized values (stringify, tojson, a captured body) held by the driver,
+    ## scratch pieces are a derived value rendered into `Driver.scratch` and delivered in place.
     pos*: int
     case kind*: PieceKind
     of pkNone: nil
@@ -268,6 +270,9 @@ type
       lo*, hi*: int32
     of pkStr:
       s*: string
+    of pkScratch:
+      shi*: int32
+        ## end of the scratch window, the window starts at scratch byte 0
 
   Driver* = object
     ## All render control state, owned by the `items` loop. Nothing here is reachable from `Machine`, so
@@ -290,4 +295,40 @@ type
     clock*: float64
       ## injected epoch, `strftime_now`'s only time source, never the wall
     macroDepth*: int
+    scratch*: ptr UncheckedArray[char]
+      ## caller-owned render scratch, borrowed like `Machine.jinja`, nil when unattached.
+      ## Scratch must outlive the render. A scratch-backed piece drains before the next
+      ## derived value is built, so one buffer reused from byte 0 serves every derived value.
+    scratchCap*: int
+      ## writable bytes behind `scratch`
+
+func scratchBuf*(d: Driver): StrBuf =
+  ## Returns a scratch buffer positioned at scratch byte 0, ready for one derived value.
+  ## One pending piece is in force at a time, so a scratch-backed piece drains before
+  ## the next derived value is built and every build starts over from byte 0.
+  StrBuf(buf: d.scratch, cap: d.scratchCap)
+
+func scratchString*(d: Driver, n: int): string =
+  ## Returns scratch[0 ..< n] as a fresh string, one allocation bounded by `n`.
+  ## One pending piece is in force at a time, so the bytes stay untouched until the copy.
+  result = newString(n)
+  if n > 0:
+    copyMem(addr result[0], d.scratch, n)
+
+proc concatVals*(d: Driver, lhs, rhs: Value): string =
+  ## Returns the `~` concatenation of two values as template output text.
+  ## - with scratch, both sides stringify into scratch and the result materializes once,
+  ##   one allocation bounded by the result size
+  ## - without scratch, each side materializes its own string and `&` joins them
+  if d.scratch != nil:
+    var sb = scratchBuf(d)
+    try:
+      pyStrInto(lhs, sb)
+      pyStrInto(rhs, sb)
+    except ScratchError as e:
+      e.msg = "`~` concat of a " & $lhs.kind & " value, " & e.msg
+      raise e
+    scratchString(d, sb.len)
+  else:
+    pyStr(lhs) & pyStr(rhs)
 

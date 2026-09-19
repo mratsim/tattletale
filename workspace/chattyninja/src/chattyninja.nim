@@ -70,12 +70,45 @@ proc emitStr(d: var Driver, s: sink string) =
     return
   d.pend = Piece(pos: 0, kind: pkStr, s: s)
 
+proc emitScratch(d: var Driver, n: int) =
+  ## Makes scratch[0 ..< n] the pending piece, or appends the bytes to the capture sink
+  ## when one is open. A scratch piece drains straight into the caller buffer, no
+  ## intermediate string, and the scratch bytes stay untouched until it is drained.
+  if n == 0:
+    return
+  # One piece is pending at a time, and the pull loop drains it before dispatching again, so
+  # a second piece here would silently drop the first one's bytes.
+  doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
+  if d.sinks.len > 0:
+    let at = d.sinks[^1].len
+    d.sinks[^1].setLen(at + n)
+    copyMem(addr d.sinks[^1][at], d.scratch, n)
+    return
+  d.pend = Piece(pos: 0, kind: pkScratch, shi: int32 n)
+
+proc emitValue(d: var Driver, v: Value) =
+  ## Stringifies a non-string emit value and hands it on as the pending piece.
+  ## - with scratch attached, the rendering drains as a scratch-window piece, no intermediate string
+  ## - without scratch, it materializes one string bounded by the value size
+  ## - a scratch breach raises `ScratchError` naming the value kind, the caller repulls
+  if d.scratch == nil:
+    emitStr(d, pyStr(v))
+    return
+  var sb = scratchBuf(d)
+  try:
+    pyStrInto(v, sb)
+  except ScratchError as e:
+    e.msg = "emit of a " & $v.kind & " value, " & e.msg
+    raise e
+  emitScratch(d, sb.len)
+
 template pieceLen(p: Piece): int =
   ## Length in bytes of a pending piece.
   case p.kind
   of pkNone: 0
   of pkSpan: (p.hi - p.lo).int
   of pkStr: p.s.len
+  of pkScratch: p.shi.int
 
 # Binding
 # ---------------------------------------------------------------------------
@@ -111,7 +144,7 @@ proc stepEmit(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   if v.kind == vkStr:
     emitStr(d, move v.s)
   else:
-    emitStr(d, pyStr(v))
+    emitValue(d, v)
   d.curNode = nd.succ
 
 proc stepIf(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
@@ -164,6 +197,8 @@ proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
   ## Re-entry path. Move the shared cursor to the next item passing the filter clause and re-enter
   ## the body, or close the frame and continue past the loop. The frame index is re-read after every
   ## evaluation because a nested construct can grow the frame stack and move it.
+  ## A raise in `bindTargets` or the filter clause rolls the candidate back, so a caller
+  ## that grows scratch and repulls re-evaluates the same item and skips nothing.
   template nd: Node = m.nodes[n]
   while true:
     let fi = d.frames.len - 1
@@ -175,11 +210,20 @@ proc advanceFor(m: Machine, t: Tables, d: var Driver, n: int32) =
       d.frames.setLen(d.frames.len - 1)
       d.curNode = nd.succ
       return
-    bindTargets(m, t, d, n, items[idx])
-    if nd.filterLo == noLink:
-      break
-    let keep = evalSpan(m, t, d, nd.filterLo, nd.filterHi, runMacroBody)
-    if isTruthy(keep):
+    # The increment stays committed while the filter runs, because corpus filters read
+    # `loop.index0` and friends through the shared cursor. Rolling the candidate back
+    # when a raise escapes keeps a repull from skipping the item whose evaluation
+    # did not hold.
+    var keep = nd.filterLo == noLink
+    try:
+      bindTargets(m, t, d, n, items[idx])
+      if nd.filterLo != noLink:
+        let evaluated = evalSpan(m, t, d, nd.filterLo, nd.filterHi, runMacroBody)
+        keep = isTruthy(evaluated)
+    except CatchableError:
+      dec d.frames[fi].loop.idx
+      raise
+    if keep:
       break
   d.curNode = nd.child
 
@@ -302,34 +346,52 @@ proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[
   ## a string value, so the call runs the body to completion into a capture sink and never yields
   ## a piece. That keeps this the engine's only render-time recursion and makes it unsuspendable.
   ##
-  ## Control state is driver-owned throughout:
-  ##   a scope for the parameters, one capture sink, and the program counter, which is restored
-  ## on the way out. Depth is capped, and a breach raises.
+  ## Control state is driver-owned throughout, restored in a `finally`, so a raise inside
+  ## the body leaves the caller's scopes, sinks, frames, program counter and recursion depth
+  ## exactly as they were.
+  ## - truncating the frame stack discards any for-frame a failed body left behind, so
+  ##   a repull never re-enters a dead loop
+  ## - depth is capped, and a breach raises
   if d.macroDepth >= MacroDepthCap:
     raise err("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
         t.names[mc.name] & "`")
   inc d.macroDepth
   let scopeAt = d.scopes.len
   let sinkAt = d.sinks.len
+  let framesAt = d.frames.len
   let savedNode = d.curNode
   d.scopes.add @[]
   d.sinks.add ""
-  bindMacroArgs(m, t, d, mc.node, args)
-  var node = mc.body
-  while node != mc.node and node != noLink:
-    steps[m.nodes[node].kind](m, t, d, node)
-    node = d.curNode
-  result = d.sinks[sinkAt]
-  d.sinks.setLen(sinkAt)
-  d.scopes.setLen(scopeAt)
-  d.curNode = savedNode
-  dec d.macroDepth
+  try:
+    bindMacroArgs(m, t, d, mc.node, args)
+    var node = mc.body
+    while node != mc.node and node != noLink:
+      steps[m.nodes[node].kind](m, t, d, node)
+      node = d.curNode
+    result = d.sinks[sinkAt]
+  finally:
+    d.sinks.setLen(sinkAt)
+    d.scopes.setLen(scopeAt)
+    d.frames.setLen(framesAt)
+    d.curNode = savedNode
+    dec d.macroDepth
 
 
 
 
 # Driver
 # ---------------------------------------------------------------------------
+
+proc attachScratch*(d: var Driver, buf: var openArray[char]) =
+  ## Attaches caller-owned scratch to the driver.
+  ## - scratch must outlive the render, exactly like the template text behind `Machine.jinja`
+  ## - an empty buffer detaches, and the emit path then materializes one string per derived value
+  if buf.len == 0:
+    d.scratch = nil
+    d.scratchCap = 0
+  else:
+    d.scratch = cast[ptr UncheckedArray[char]](addr buf[0])
+    d.scratchCap = buf.len
 
 func newDriver*(ctx: Value, clock = 0.0): Driver =
   ## Returns a driver ready to render `ctx`, the render context dict with `messages`, `tools`,
@@ -356,6 +418,12 @@ proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int 
   ## - a value longer than the window drains across calls through the pending piece
   ## - 0 means the render is complete, nothing pending and `d.curNode == noLink`
   ##
+  ## A raise discards the bytes already written into `buf` in the failing call, because
+  ## the caller never received them and the driver has advanced past their render, so
+  ## a repull after a `ScratchError` resumes after them.
+  ## - a consumer that must hold every byte across a raise keeps the window at one byte,
+  ##   which makes each delivered byte a returned byte
+  ##
   ## Span pieces copy out of `Machine.jinja`, string pieces out of driver storage.
   ## A zero-capacity buffer returns 0 without stepping the render.
   if buf.len == 0:
@@ -376,6 +444,8 @@ proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int 
         copyMem(addr buf[result], unsafeAddr m.jinja[int d.pend.lo + base], take)
       of pkStr:
         copyMem(addr buf[result], unsafeAddr d.pend.s[base], take)
+      of pkScratch:
+        copyMem(addr buf[result], unsafeAddr d.scratch[base], take)
       of pkNone:
         discard
       result += take

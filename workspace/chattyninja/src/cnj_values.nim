@@ -10,7 +10,7 @@
 # No dependency on the node arena, so the value tier is testable without a compiled template.
 
 import std/[strutils, unicode]
-import cnj_errors
+import cnj_errors, cnj_strbuf
 
 type
   ValueKind* = enum
@@ -203,142 +203,200 @@ func pyStrip*(s, chars: string, left, right: bool): string =
       dec b
   s[a ..< b]
 
-func pyFloat*(f: float64): string =
+proc pyFloat*(f: float64): string =
   ## Returns Python's `str()` for a float:
   ##   integral values keep one decimal place.
-  let r = $f
-  if '.' notin r and 'e' notin r and 'E' notin r and 'n' notin r and 'i' notin r:
-    return r & ".0"
-  r
+  ## A few small allocations, because the measure pass and the render each run `$f`
+  ## inside `StrBuf.addFloat`, which float emits pay through scratch as well.
+  var sb: StrBuf
+  sb.addFloat f
+  result = newString(sb.len)
+  var dst = over(result)
+  dst.addFloat f
 
-func pyBool(b: bool): string =
-  if b: "True" else: "False"
+proc pyRepr*(v: Value): string
 
-func jsonBool(b: bool): string =
-  if b: "true" else: "false"
+proc pyStrInto*(v: Value, sb: var StrBuf)
+proc pyReprInto(v: Value, sb: var StrBuf)
 
-func pyRepr*(v: Value): string
+proc pyStrInto*(v: Value, sb: var StrBuf) =
+  ## Writes the value as template output text into `sb`:
+  ## - strings pass through, scalars format in place
+  ## - containers take their Python `repr()` form
+  ## - undefined renders empty
+  ## Raises when `sb` cannot hold the rendering, never growing it.
+  case v.kind
+  of vkUndefined: discard
+  of vkNone: sb.add "None"
+  of vkBool: sb.add(if v.b: "True" else: "False")
+  of vkInt: sb.addInt v.i
+  of vkFloat: sb.addFloat v.f
+  of vkStr: sb.add v.s
+  of vkSeq, vkDict, vkNs, vkLoop, vkMacro: pyReprInto(v, sb)
 
-func pyStr*(v: Value): string =
+proc pyStr*(v: Value): string =
   ## Returns the value as template output text:
   ##   strings pass through unchanged, everything else
   ## takes its Python `str()` form, undefined renders empty.
+  ## Containers materialize one string, presized by a measuring pass.
   result = case v.kind
   of vkUndefined: ""
   of vkNone: "None"
-  of vkBool: pyBool(v.b)
+  of vkBool: (if v.b: "True" else: "False")
   of vkInt: $v.i
   of vkFloat: pyFloat(v.f)
   of vkStr: v.s
   of vkSeq, vkDict, vkNs, vkLoop, vkMacro: pyRepr(v)
 
-func quotePy(s: string): string =
-  result = "'"
+func reprQuoted(sb: var StrBuf, s: string) =
+  ## Writes Python's single-quoted repr of `s`, the form container reprs use for keys
+  ## and string items. Non-escaped bytes pass through raw.
+  sb.add '\''
   for c in s:
     case c
-    of '\\': result.add "\\\\"
-    of '\'': result.add "\\'"
-    of '\n': result.add "\\n"
-    of '\r': result.add "\\r"
-    of '\t': result.add "\\t"
-    else: result.add c
-  result.add '\''
+    of '\\': sb.add "\\\\"
+    of '\'': sb.add "\\'"
+    of '\n': sb.add "\\n"
+    of '\r': sb.add "\\r"
+    of '\t': sb.add "\\t"
+    else: sb.add c
+  sb.add '\''
 
-func pyRepr*(v: Value): string =
-  ## Returns Python's `repr()`, the rendering a template sees when it stringifies a container.
+proc pyReprInto(v: Value, sb: var StrBuf) =
+  ## Writes Python's `repr()` of `v` into `sb`, recursively.
   case v.kind
-  of vkStr: result = quotePy(v.s)
+  of vkStr: reprQuoted(sb, v.s)
   of vkSeq:
-    result = "["
-    for i, x in v.xs.items:
+    sb.add '['
+    for i in 0 ..< v.xs.items.len:
       if i > 0:
-        result.add ", "
-      result.add pyRepr(x)
-    result.add "]"
+        sb.add ", "
+      pyReprInto(v.xs.items[i], sb)
+    sb.add ']'
   of vkDict, vkNs:
-    result = "{"
-    for i, k in v.d.keys:
+    sb.add '{'
+    for i in 0 ..< v.d.keys.len:
       if i > 0:
-        result.add ", "
-      result.add quotePy(k) & ": " & pyRepr(v.d.vals[i])
-    result.add "}"
-  of vkLoop:
-    result = "<LoopContext>"
+        sb.add ", "
+      reprQuoted(sb, v.d.keys[i])
+      sb.add ": "
+      pyReprInto(v.d.vals[i], sb)
+    sb.add '}'
+  of vkLoop: sb.add "<LoopContext>"
   of vkMacro:
-    result = "<macro " & $v.mc.name & ">"
+    sb.add "<macro "
+    sb.addInt v.mc.name.int64
+    sb.add '>'
   else:
-    result = pyStr(v)
+    pyStrInto(v, sb)
 
-func jsonEscape(s: string, ensureAscii: bool): string =
-  ## Returns a JSON string body, ASCII-escaped when `ensureAscii` is set and raw UTF-8 otherwise.
+proc pyRepr*(v: Value): string =
+  ## Returns Python's `repr()`, the rendering a template sees when it stringifies a container.
+  ## One allocation, presized by a measuring pass over the writer.
+  var sb: StrBuf
+  pyReprInto(v, sb)
+  result = newString(sb.len)
+  var dst = over(result)
+  pyReprInto(v, dst)
+
+func hex4(sb: var StrBuf, c: int) =
+  ## Appends `c` as four uppercase hex digits, the payload a `\uXXXX` escape carries.
+  const digits = "0123456789ABCDEF"
+  sb.add digits[(c shr 12) and 0xF]
+  sb.add digits[(c shr 8) and 0xF]
+  sb.add digits[(c shr 4) and 0xF]
+  sb.add digits[c and 0xF]
+
+proc jsonEscapeInto(sb: var StrBuf, s: string, ensureAscii, html: bool) =
+  ## Writes the JSON string body of `s`, mirroring `json.dumps` escaping, ASCII-escaped
+  ## when `ensureAscii` is set. `html` additionally escapes `<`, `>`, `&` and `'`.
   for r in s.runes:
     let c = ord(r)
     if c == ord('"'):
-      result.add "\\\""
+      sb.add "\\\""
     elif c == ord('\\'):
-      result.add "\\\\"
+      sb.add "\\\\"
     elif c == 10:
-      result.add "\\n"
+      sb.add "\\n"
     elif c == 13:
-      result.add "\\r"
+      sb.add "\\r"
     elif c == 9:
-      result.add "\\t"
+      sb.add "\\t"
     elif c == 8:
-      result.add "\\b"
+      sb.add "\\b"
     elif c == 12:
-      result.add "\\f"
+      sb.add "\\f"
     elif c < 32:
-      result.add "\\u" & toHex(c, 4)
+      sb.add "\\u"
+      hex4(sb, c)
     elif c > 127 and ensureAscii:
       if c > 0xFFFF:
         let u = c - 0x10000
-        result.add "\\u" & toHex(0xD800 + (u shr 10), 4)
-        result.add "\\u" & toHex(0xDC00 + (u and 0x3FF), 4)
+        sb.add "\\u"
+        hex4(sb, 0xD800 + (u shr 10))
+        sb.add "\\u"
+        hex4(sb, 0xDC00 + (u and 0x3FF))
       else:
-        result.add "\\u" & toHex(c, 4)
+        sb.add "\\u"
+        hex4(sb, c)
+    elif html:
+      case c
+      of ord('<'): sb.add "\\u003c"
+      of ord('>'): sb.add "\\u003e"
+      of ord('&'): sb.add "\\u0026"
+      of ord('\''): sb.add "\\u0027"
+      else: sb.addRune r
     else:
-      result.add $r
+      sb.addRune r
 
-func jsonEscapeHtml(s: string): string =
-  ## Applies Jinja's `tojson` post-pass, escaping the four HTML-significant characters
-  ## that `json.dumps` leaves literal.
-  for c in s:
-    case c
-    of '<': result.add "\\u003c"
-    of '>': result.add "\\u003e"
-    of '&': result.add "\\u0026"
-    of '\'': result.add "\\u0027"
-    else: result.add c
-
-func toJson*(v: Value, opts = JsonOpts()): string =
-  ## Returns the `tojson` filter rendering:
-  ##   non-ASCII renders as raw UTF-8 unless the template passes `ensure_ascii`,
-  ## then Jinja's HTML escaping.
+proc toJsonBody(v: Value, sb: var StrBuf, opts: JsonOpts) =
+  ## Writes the `tojson` rendering of `v` into `sb`, recursively.
   case v.kind
-  of vkUndefined, vkNone: result = "null"
-  of vkBool: result = jsonBool(v.b)
-  of vkInt: result = $v.i
-  of vkFloat: result = pyFloat(v.f)
-  of vkStr: result = jsonEscapeHtml("\"" & jsonEscape(v.s, opts.ensureAscii) & "\"")
+  of vkUndefined, vkNone: sb.add "null"
+  of vkBool: sb.add(if v.b: "true" else: "false")
+  of vkInt: sb.addInt v.i
+  of vkFloat: sb.addFloat v.f
+  of vkStr:
+    sb.add '"'
+    jsonEscapeInto(sb, v.s, opts.ensureAscii, true)
+    sb.add '"'
   of vkSeq:
     if v.xs.items.len == 0:
-      return "[]"
-    result = "["
-    for i, x in v.xs.items:
+      sb.add "[]"
+      return
+    sb.add '['
+    for i in 0 ..< v.xs.items.len:
       if i > 0:
-        result.add opts.itemSep
-      result.add toJson(x, opts)
-    result.add "]"
+        sb.add opts.itemSep
+      toJsonBody(v.xs.items[i], sb, opts)
+    sb.add ']'
   of vkDict, vkNs:
     if v.d.keys.len == 0:
-      return "{}"
-    result = "{"
-    for i, k in v.d.keys:
+      sb.add "{}"
+      return
+    sb.add '{'
+    for i in 0 ..< v.d.keys.len:
       if i > 0:
-        result.add opts.itemSep
-      result.add jsonEscapeHtml("\"" & jsonEscape(k, opts.ensureAscii) & "\"")
-      result.add opts.kvSep
-      result.add toJson(v.d.vals[i], opts)
-    result.add "}"
+        sb.add opts.itemSep
+      sb.add '"'
+      jsonEscapeInto(sb, v.d.keys[i], opts.ensureAscii, true)
+      sb.add '"'
+      sb.add opts.kvSep
+      toJsonBody(v.d.vals[i], sb, opts)
+    sb.add '}'
   of vkLoop, vkMacro:
-    result = jsonEscapeHtml("\"" & jsonEscape(pyStr(v), opts.ensureAscii) & "\"")
+    sb.add '"'
+    jsonEscapeInto(sb, pyStr(v), opts.ensureAscii, true)
+    sb.add '"'
+
+proc toJson*(v: Value, opts = JsonOpts()): string =
+  ## Returns the `tojson` filter rendering.
+  ## - non-ASCII renders as raw UTF-8 unless the template passes `ensure_ascii`
+  ## - Jinja's HTML escaping applies, as the filter's post-pass
+  ## A tojson value materializes one string, one allocation bounded by the value size,
+  ## whether it is emitted, bound to a name or stored.
+  var sb: StrBuf
+  toJsonBody(v, sb, opts)
+  result = newString(sb.len)
+  var dst = over(result)
+  toJsonBody(v, dst, opts)

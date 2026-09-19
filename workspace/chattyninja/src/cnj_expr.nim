@@ -279,7 +279,7 @@ func argName*(m: Machine, a: Arg): openArray[char] =
   ## `nameLo == noLink` marks a positional argument, which has no name to read.
   m.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
 
-func argKey(m: Machine, a: Arg): string =
+proc argKey(m: Machine, a: Arg): string =
   ## Returns the dict key one argument supplies to `namespace` or `dict`.
   ## A keyword-bound argument gives the keyword text, a positional one gives its stringified value.
   ## A key is stored in a `DictVal`, so this is where a keyword name becomes a string.
@@ -527,7 +527,7 @@ func sliceIndices(n: int, lo, hi, step: Value, hasLo, hasHi, hasStep: bool):
     b += n
   (clamp(a, low, high), clamp(b, low, high), by)
 
-func subslice(v, lo, hi, step: Value, hasLo, hasHi, hasStep, isSlice: bool): Value =
+proc subslice(v, lo, hi, step: Value, hasLo, hasHi, hasStep, isSlice: bool): Value =
   ## Returns a subscript or a slice. `x[1:]` and `x[::-1]` are the slice shapes the corpus uses.
   if not isSlice:
     return case v.kind
@@ -1202,7 +1202,7 @@ proc binOp(m: Machine, t: Tables, d: var Driver, cx: var Cx, lhs: Value, op: Op)
       boolVal(if op == opIn: r else: not r)
   of opConcat:
     let rhs = expr(m, t, d, cx, 7)
-    if cx.dry: undefinedVal() else: strVal(pyStr(lhs) & pyStr(rhs))
+    if cx.dry: undefinedVal() else: strVal(concatVals(d, lhs, rhs))
   of opAdd, opSub, opMod:
     let rhs = expr(m, t, d, cx, binPrec(op) + 1)
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs)

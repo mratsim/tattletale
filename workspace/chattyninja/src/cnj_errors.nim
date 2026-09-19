@@ -17,6 +17,16 @@ type
     ## A construct that is declared and dispatched but not implemented, so a gap
     ## surfaces as a gap and never as a wrong answer.
 
+  ScratchError* = ref object of CatchableError
+    ## Render scratch could not hold a derived value. Underestimation is safe:
+    ## - grow scratch, reattach it and repull
+    ## - no delivered byte is lost or re-handed
+    ## - bytes written into the caller window in the failing call are not delivered
+    capacity*: int
+      ## scratch capacity in force when the append failed
+    shortfall*: int
+      ## bytes the failed append could not place
+
 proc err*(msg: string): TemplateError =
   ## Returns an unraised template error.
   new(result)

@@ -209,6 +209,7 @@ when defined(nimAllocStats):
     of pkNone: 0
     of pkSpan: int(p.hi - p.lo) - p.pos
     of pkStr: p.s.len - p.pos
+    of pkScratch: p.shi.int - p.pos
 
   template allocsOf(body: untyped): int =
     ## Counts `alloc` calls made by `body`, with allocator state warmed by the caller.

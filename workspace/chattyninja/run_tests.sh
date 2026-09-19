@@ -108,6 +108,36 @@ if [ "$run_allocstats" = true ]; then
   fi
 fi
 
+# `t_scratch` also runs with `-d:nimAllocStats`, which enables its allocation checks: tojson of
+# the tool schema must cost one allocation per call, the full pull render must stay at its
+# measured total, and a container emit via scratch must add nothing beyond the loop baseline.
+# Without the define the checks are compiled out, so only this build exercises them.
+run_allocstats_scratch=false
+if [ "$#" -eq 0 ]; then
+  run_allocstats_scratch=true
+else
+  for a in "$@"; do
+    [ "$(basename "${a%.nim}")" = "t_scratch" ] && run_allocstats_scratch=true
+  done
+fi
+if [ "$run_allocstats_scratch" = true ]; then
+  f="tests/t_scratch.nim"
+  name="t_scratch-allocstats"
+  log="$bin_dir/$name.log"
+  if ! nim c "${flags[@]}" -d:nimAllocStats -o:"$bin_dir/$name" "$f" >"$log" 2>&1; then
+    echo "FAIL compile  $f (-d:nimAllocStats)"
+    sed -n '1,25p' "$log"
+    status=1
+  elif ! "$bin_dir/$name" >"$bin_dir/$name.out" 2>&1; then
+    echo "FAIL run      $f (-d:nimAllocStats)"
+    sed -n '1,40p' "$bin_dir/$name.out"
+    status=1
+  else
+    echo "ok            $f (-d:nimAllocStats)"
+    sed -n '1,20p' "$bin_dir/$name.out"
+  fi
+fi
+
 if [ "$status" -eq 0 ]; then
   echo "gate: PASS"
 else
