@@ -39,9 +39,8 @@ const
     "bf16-04-greedy-text-generation" / "Qwen3.5-0.8B"
 
 proc main(): bool =
-  # The chain replays on the device testDevice() resolves, Metal
-  # is the auto default on macOS with a PyTorch fallback where
-  # kernels are missing. TTT_TEST_ON=metal|cpu|cuda flips the device.
+  # The chain replays on the device testDevice() resolves,
+  # TTT_TEST_ON=metal|cpu|cuda flips the device.
 
   # Recorded-chain replay against the committed decision frames, one
   # chain per fixture, the recorded tokens teacher-forced at every step.
