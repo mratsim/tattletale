@@ -14,10 +14,10 @@
 ##   $ nim test_chattyninja
 
 import std/[os, strutils, sequtils]
-import cnj_types, cnj_parse
+import cnj_types, jinja_data_model, cnj_parse
 import workspace/data_structures/src/small_seqs
 
-const root = currentSourcePath().parentDir.parentDir
+const root = currentSourcePath().parentDir
 let src = readFile(root / "corpus" / "deepseekv2lite" / "deepseekv2lite.jinja")
 let (nodes, tables) = parseTemplate(src)
 

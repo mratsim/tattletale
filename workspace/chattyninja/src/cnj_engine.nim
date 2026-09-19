@@ -20,7 +20,7 @@
 #   from the repo root, `nim test_chattyninja` builds and runs every suite with its variants.
 
 import std/unicode
-import cnj_types, jinja_data_model, cnj_expr, cnj_parse
+import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
 
 type
   Step* = proc (m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.}
@@ -29,7 +29,7 @@ type
 proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[CallArg]): string
   ## Runs one macro body to completion and returns the captured text, the macro forcer
   ## the expression tier receives. Carried as a parameter so the compiled artifact
-  ## stays read-only and `cnj_engine` and `cnj_expr` stay free of an import cycle.
+  ## stays read-only and `cnj_engine` and `jinja_interpolation` stay free of an import cycle.
 
 proc startMacro(m: Machine, t: Tables, d: var Driver, call: PendingCallVal, retNode: int32)
   ## Opens a macro frame and enters the body, the body's output pieces draining through
@@ -255,7 +255,7 @@ proc stepMacroDef(m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.} =
   d.curNode = nd.succ
 
 const
-  steps*: array[NodeKind, Step] = [
+  Steps*: array[NodeKind, Step] = [
     stepVerbatim, stepEmit, stepIf, stepFor, stepBreak, stepSet, stepSetNs, stepSetBlock,
     stepGeneration, stepMacroDef
   ]
@@ -354,7 +354,7 @@ proc forceMacro(m: Machine, t: Tables, d: var Driver, mc: MacroVal, args: seq[Ca
   d2.curNode = mc.body
   var node = mc.body
   while node != mc.node and node != NoLink:
-    steps[m.nodes[node].kind](m, t, d2, node)
+    Steps[m.nodes[node].kind](m, t, d2, node)
     node = d2.curNode
     while d2.pend.kind != pkNone:
       capturePend(m, d2, result)
@@ -429,7 +429,7 @@ proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int 
     if d.curNode == NoLink:
       return
     let n = d.curNode
-    steps[m.nodes[n].kind](m, t, d, n)
+    Steps[m.nodes[n].kind](m, t, d, n)
 
 iterator items*(m: Machine, t: Tables, d: var Driver): openArray[char] =
   ## Pulls the render in chunks of at most `ChunkSize` bytes, one `pull` call per chunk.

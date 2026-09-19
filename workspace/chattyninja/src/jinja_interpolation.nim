@@ -15,7 +15,7 @@
 #   a render from a branch Jinja would not have entered
 
 import std/[math, parseutils, unicode]
-import cnj_types, jinja_data_model
+import cnj_types, jinja_data_model, jinja_serialize, jinja_builtins
 
 type
   ExKind = enum
@@ -38,43 +38,14 @@ type
     depth: int
     force: MacroForcer
 
-  ArgKeyword = enum
-    ## A keyword name a builtin reads out of an argument list, `akNone` the field's default:
-    ## a positional argument or a keyword no builtin reads.
-    akNone, akChars, akDefault, akEnsureAscii, akSeparators
-
-  Arg* = object
-    ## One call or filter argument, keyword-bound when `nameLo` is not `NoLink`.
-    ## A keyword keeps its template span into `Machine.jinja`, a keyword name
-    ## carrying no interned `Tables.names` entry.
-    nameLo*, nameHi*: int32
-      ## keyword name span into `Machine.jinja`, `NoLink` in `nameLo` for a positional argument
-    kw*: ArgKeyword
-      ## keyword slot named by that span, `akNone` when no builtin reads that keyword
-    val*: JinjaVal
-
-  FilterProc* = proc (v: JinjaVal, args: seq[Arg]): JinjaVal {.nimcall.}
-  TestProc* = proc (v: JinjaVal, args: seq[Arg]): bool {.nimcall.}
-  MethodProc* = proc (v: JinjaVal, args: seq[Arg]): JinjaVal {.nimcall.}
   GlobalProc* = proc (m: Machine, args: seq[Arg], d: var Driver): JinjaVal {.nimcall.}
     ## A call to a template global, `namespace` and `dict` storing a keyword name as a dict key.
 
   MacroForcer* = proc (m: Machine, t: Tables, d: var Driver, mc: MacroVal,
       args: seq[CallArg]): string {.nimcall.}
     ## Runs one macro body to completion and returns the captured text. The statement tier
-    ## injects the forcer, so `cnj_engine` and `cnj_expr` stay free of an import cycle.
+    ## injects the forcer, so `cnj_engine` and `jinja_interpolation` stay free of an import cycle.
 
-  FilterName = enum
-    fTojson, fLength, fTrim, fDefault, fJoin, fLower, fUpper, fCapitalize, fList, fSafe, fDictsort,
-    fMap, fSelect, fReject, fReplace, fIndent, fTruncate, fReverse, fWordcount, fSum, fMin, fMax,
-    fAbs, fRound, fBatch, fSlice, fUnique, fGroupby, fAttr, fCenter, fEscape, fTitle
-  TestName = enum
-    tString, tDefined, tUndefined, tMapping, tSequence, tIterable, tNone, tBoolean, tTrue, tFalse,
-    tNumber, tInteger, tFloat, tFilter, tTest, tSameas, tIn, tEqualTo, tDivisibleby, tEscaped,
-    tEven, tOdd, tLower, tUpper, tCallable
-  MethodName = enum
-    mGet, mItems, mKeys, mValues, mSplit, mStrip, mLstrip, mRstrip, mStartswith, mEndswith, mLower,
-    mUpper, mTitle, mReplace, mFind, mCount, mFormat, mPop, mUpdate
   GlobalName = enum
     gNamespace, gRange, gStrftimeNow, gRaiseException, gDict, gLipsum, gCycler, gJoiner
 
@@ -83,6 +54,11 @@ type
     ## `opNone` a token that opens no infix and the field's default.
     opNone, opAnd, opOr, opIn, opNotIn, opEq, opNe, opLt, opGt, opLe, opGe,
     opConcat, opAdd, opSub, opMul, opDiv, opFloorDiv, opMod, opPow
+  Ternary = object
+    ## Spans of `A if C else B`, measured by a dry walk before any of them runs.
+    aHi, cLo, cHi, bLo, bHi: int
+    hasElse: bool
+    isTernary: bool
 
 # Lexer
 # ---------------------------------------------------------------------------
@@ -91,7 +67,7 @@ func digitVal(c: char): int =
   let d = ord(c) - ord('0')
   if d >= 0 and d <= 9: d else: (ord(c) or 32) - ord('a') + 10
 
-func decodeEscapesInto(s: openArray[char], lo, hi: int, sb: var Cursor) =
+func decodeEscapesInto(sb: var Cursor, s: openArray[char], lo, hi: int) =
   ## Writes the string literal's bytes with Python's escape set resolved into `sb`,
   ## raising when `sb` cannot hold the decoding.
   var i = lo
@@ -135,10 +111,10 @@ func decodeEscapes(s: openArray[char], lo, hi: int): string =
   ## Returns the string literal with Python's escape set resolved as one fresh string,
   ## sized exactly by the measuring cursor, never grown past its allocation.
   var measure = measureBuf()
-  decodeEscapesInto(s, lo, hi, measure)
+  measure.decodeEscapesInto(s, lo, hi)
   result = newString(measure.len)
   var sb = over(result)
-  decodeEscapesInto(s, lo, hi, sb)
+  sb.decodeEscapesInto(s, lo, hi)
 
 func parseIntToken(s: openArray[char]): int64 =
   ## Returns the integer the token bytes spell, ValueError on a malformed token.
@@ -277,19 +253,6 @@ func wordSpan(m: Machine, cx: Cx): openArray[char] =
   ## Returns the identifier of the lookahead token as a view into the template text.
   wordSpan(m, cx.tok.lo, cx.tok.hi)
 
-func findIn[N: enum](names: array[N, string], n: openArray[char]): int =
-  ## Returns the index of `n` in a registry's name column, or -1 when the name is unknown,
-  ## each entry compared against the caller's bytes without building a string.
-  for k, v in names:
-    if v == n:
-      return k.ord
-  -1
-
-const
-  argKeywordNames: array[akChars .. akSeparators, string] = [
-    "chars", "default", "ensure_ascii", "separators"]
-    ## Keyword names the builtins read, indexed by `ArgKeyword`.
-
 func argName*(m: Machine, a: Arg): openArray[char] =
   ## Returns an argument's keyword name as a view into the template text, `nameLo == NoLink`
   ## marking a positional argument, which has no name to read.
@@ -325,7 +288,7 @@ proc argVal(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: JinjaVal): Jinj
     return strVal(pyStr(v))
   v
 
-proc argKey(m: Machine, a: Arg): string =
+func argKey(m: Machine, a: Arg): string =
   ## Returns the dict key one argument supplies to `namespace` or `dict`, a keyword-bound argument
   ## giving the keyword text, a positional one its stringified value. A `DictVal` key is a string,
   ## so this is where a keyword name becomes one.
@@ -333,26 +296,6 @@ proc argKey(m: Machine, a: Arg): string =
     pyStr(a.val)
   else:
     spanString(argName(m, a))
-
-func argKeyword(name: openArray[char]): ArgKeyword =
-  ## Returns the builtin keyword `name` selects, `akNone` when no builtin reads that keyword.
-  for k in akChars .. akSeparators:
-    if name == argKeywordNames[k]:
-      return k
-  akNone
-
-# Argument helpers
-# ---------------------------------------------------------------------------
-
-func getArg(args: seq[Arg], pos: int, kw: ArgKeyword, default: JinjaVal): JinjaVal =
-  ## Returns the argument bound under `kw`, else the positional slot `pos`, else `default`.
-  if kw != akNone:
-    for a in args:
-      if a.kw == kw:
-        return a.val
-  if pos < args.len and args[pos].nameLo == NoLink:
-    return args[pos].val
-  default
 
 func runeOffset(s: string, k: int): int =
   ## Returns the byte offset of the codepoint at index `k`, advancing by UTF-8 lead-byte strides, the same walk `runeLen`
@@ -372,7 +315,7 @@ func runeSub(s: string, i: int): Rune =
   let j = runeOffset(s, idx)
   if s[j].ord < 0x80: Rune(s[j].ord) else: runeAt(s, j)
 
-func steppedSliceInto(s: string, sb: var Cursor, a, b, by: int) =
+func steppedSliceInto(sb: var Cursor, s: string, a, b, by: int) =
   ## Writes the stride-`by` codepoint slice into `sb`, visiting `a, a + by, ...`
   ## while the stride keeps the walk inside the clamped bounds.
   var k = a
@@ -389,135 +332,9 @@ func steppedSliceInto(s: string, sb: var Cursor, a, b, by: int) =
 
 
 const
-  filterNames: array[FilterName, string] = [
-    "tojson", "length", "trim", "default", "join", "lower", "upper", "capitalize", "list", "safe",
-    "dictsort", "map", "select", "reject", "replace", "indent", "truncate", "reverse", "wordcount",
-    "sum", "min", "max", "abs", "round", "batch", "slice", "unique", "groupby", "attr", "center",
-    "escape", "title"
-  ]
-  testNames: array[TestName, string] = [
-    "string", "defined", "undefined", "mapping", "sequence", "iterable", "none", "boolean", "true",
-    "false", "number", "integer", "float", "filter", "test", "sameas", "in", "equalto",
-    "divisibleby", "escaped", "even", "odd", "lower", "upper", "callable"
-  ]
-  methodNames: array[MethodName, string] = [
-    "get", "items", "keys", "values", "split", "strip", "lstrip", "rstrip", "startswith",
-    "endswith", "lower", "upper", "title", "replace", "find", "count", "format", "pop", "update"
-  ]
-  globalNames: array[GlobalName, string] = [
+  GlobalNames: array[GlobalName, string] = [
     "namespace", "range", "strftime_now", "raise_exception", "dict", "lipsum", "cycler", "joiner"
   ]
-
-func gapWhat(what: string, name: openArray[char]): void {.noreturn.} =
-  ## Reports a declared registry name that no template in the corpus uses, so a gap is never
-  ## mistaken for a wrong answer. Only this report quotes `name`, so the span copies here alone.
-  let quoted = spanString(name)
-  raise jinjaErr(what & " `" & quoted & "` is not implemented; no template in the corpus uses it", cause = ceUnimplemented)
-
-proc tojsonFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  ## Renders JSON. `ensure_ascii` and `separators` are the only kwargs
-  ## the corpus passes. `ensure_ascii` defaults to false, non-ASCII emitted
-  ## as raw UTF-8.
-  var opts = JsonOpts()
-  for a in args:
-    case a.kw
-    of akEnsureAscii:
-      if a.val.kind == vkBool:
-        opts.ensureAscii = a.val.b
-    of akSeparators:
-      if a.val.kind == vkSeq and a.val.xs.items.len == 2:
-        opts.itemSep = a.val.xs.items[0].s
-        opts.kvSep = a.val.xs.items[1].s
-    of akNone, akChars, akDefault:
-      # Any argument outside the two keywords above is a gap, positional ones included, as before.
-      # A filter has no access to the template text, so the report names a keyword span by its bounds.
-      gapWhat("tojson kwarg", $a.nameLo)
-  strVal(toJson(v, opts))
-
-proc lengthFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  case v.kind
-  of vkStr: intVal(runeLen(v.s))
-  of vkSeq: intVal(v.xs.items.len)
-  of vkDict, vkNs: intVal(v.d.keys.len)
-  else: raise jinjaErr("`length` needs a string, sequence or mapping")
-
-proc trimFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  if v.kind != vkStr:
-    raise jinjaErr("`trim` needs a string")
-  let a = getArg(args, 0, akChars, undefinedVal())
-  strVal(pyStrip(v.s, if a.kind == vkStr: a.s else: "", true, true))
-
-proc defaultFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  if v.kind == vkUndefined: getArg(args, 0, akDefault, noneVal()) else: v
-
-func asciiCased(s: openArray[char], upper: bool): string =
-  ## Returns the bytes of `s` with ASCII letters cased per `upper`, other bytes verbatim,
-  ## as one fresh string.
-  result = newString(s.len)
-  for i in 0 ..< s.len:
-    let c = s[i]
-    let flip = upper and c in {'a' .. 'z'} or not upper and c in {'A' .. 'Z'}
-    result[i] = if flip: chr(ord(c) xor 0x20) else: c
-
-proc lowerFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  if v.kind != vkStr:
-    raise jinjaErr("`lower` needs a string")
-  strVal(asciiCased(v.s, false))
-
-proc upperFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  if v.kind != vkStr:
-    raise jinjaErr("`upper` needs a string")
-  strVal(asciiCased(v.s, true))
-
-proc capitalizeFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  if v.kind != vkStr:
-    raise jinjaErr("`capitalize` needs a string")
-  var acc = asciiCased(v.s, false)
-  if acc.len > 0 and acc[0] in 'a' .. 'z':
-    acc[0] = chr(ord(acc[0]) - 32)
-  strVal(acc)
-
-proc listFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  case v.kind
-  of vkSeq: v
-  of vkStr: seqVal(codepointVals(v.s))
-  else: raise jinjaErr("`list` needs a string or sequence")
-
-proc safeFilter(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  ## Autoescape is off in the upstream environment, so marking output safe changes no bytes.
-  v
-
-proc joinMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  ## `x | join(sep)` and `x.join(sep)`:
-  ##   concatenates the values of a sequence or mapping.
-  let parts =
-    case v.kind
-    of vkSeq: v.xs.items
-    of vkDict, vkNs: v.d.vals
-    else: raise jinjaErr("`join` needs a sequence")
-  let sep = pyStr(getArg(args, 0, akNone, strVal("")))
-  var acc = ""
-  for i, x in parts:
-    if i > 0:
-      acc.add sep
-    acc.add pyStr(x)
-  strVal(acc)
-
-proc joinFilter(v: JinjaVal, args: seq[Arg]): JinjaVal = joinMethod(v, args)
-
-proc stringTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkStr
-proc definedTest(v: JinjaVal, args: seq[Arg]): bool = v.kind != vkUndefined
-proc undefinedTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkUndefined
-proc mappingTest(v: JinjaVal, args: seq[Arg]): bool = v.kind in {vkDict, vkNs}
-proc sequenceTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkSeq
-proc iterableTest(v: JinjaVal, args: seq[Arg]): bool = v.kind in {vkSeq, vkDict, vkNs, vkStr}
-proc noneTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkNone
-proc booleanTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkBool
-proc trueTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkBool and v.b
-proc falseTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkBool and not v.b
-proc numberTest(v: JinjaVal, args: seq[Arg]): bool = v.kind in {vkInt, vkFloat}
-proc integerTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkInt
-proc floatTest(v: JinjaVal, args: seq[Arg]): bool = v.kind == vkFloat
 
 func loopAttr(v: JinjaVal, name: openArray[char]): JinjaVal =
   ## Returns a `loop.*` attribute, read through the driver frame's shared cursor. The attribute is
@@ -567,7 +384,7 @@ func sliceIndices(n: int, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep: bool):
     b += n
   (clamp(a, low, high), clamp(b, low, high), by)
 
-proc subslice(v, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep, isSlice: bool): JinjaVal =
+func subslice(v, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep, isSlice: bool): JinjaVal =
   ## Returns a subscript or a slice, `x[1:]` and `x[::-1]` the slice shapes the corpus uses.
   if not isSlice:
     return case v.kind
@@ -608,109 +425,28 @@ proc subslice(v, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep, isSlice: bool): 
       strVal(spanString(v.s.toOpenArray(runeOffset(v.s, a), runeOffset(v.s, b) - 1)))
     else:
       var sb = measureBuf()
-      steppedSliceInto(v.s, sb, a, b, by)
+      sb.steppedSliceInto(v.s, a, b, by)
       var win = newString(sb.len)
       var dst = over(win)
-      steppedSliceInto(v.s, dst, a, b, by)
+      dst.steppedSliceInto(v.s, a, b, by)
       strVal(win)
 
-proc getMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  ## `d.get(key, default)`. Absence yields the default, itself undefined when unsupplied.
-  if v.kind notin {vkDict, vkNs}:
-    raise jinjaErr("`get` needs a mapping")
-  let got = v.d.dictGet(pyStr(getArg(args, 0, akNone, undefinedVal())))
-  if got.kind == vkUndefined: getArg(args, 1, akDefault, undefinedVal()) else: got
-
-proc itemsMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  ## `[key, value]` pairs in insertion order, the form `{% for k, v in x.items() %}` iterates.
-  case v.kind
-  of vkDict, vkNs:
-    var acc = newSeq[JinjaVal](v.d.keys.len)
-    for i, k in v.d.keys:
-      acc[i] = seqVal(@[strVal(k), v.d.vals[i]])
-    seqVal(acc)
-  of vkSeq:
-    var acc = newSeq[JinjaVal](v.xs.items.len)
-    for i, x in v.xs.items:
-      acc[i] = seqVal(@[intVal(i), x])
-    seqVal(acc)
-  else:
-    raise jinjaErr("`items` needs a mapping or a sequence")
-
-proc keysMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  if v.kind notin {vkDict, vkNs}:
-    raise jinjaErr("`keys` needs a mapping")
-  var acc = newSeq[JinjaVal](v.d.keys.len)
-  for i, k in v.d.keys:
-    acc[i] = strVal(k)
-  seqVal(acc)
-
-proc valuesMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  if v.kind notin {vkDict, vkNs}:
-    raise jinjaErr("`values` needs a mapping")
-  seqVal(v.d.vals)
-
-proc splitMethod(v: JinjaVal, args: seq[Arg]): JinjaVal =
-  ## `s.split(sep)` over non-overlapping separator occurrences, an empty separator splitting per codepoint.
-  if v.kind != vkStr:
-    raise jinjaErr("`split` needs a string")
-  let sep = pyStr(getArg(args, 0, akNone, strVal(" ")))
-  var acc: seq[JinjaVal]
-  if sep.len == 0:
-    acc = codepointVals(v.s)
-  else:
-    var pos = 0
-    var i = 0
-    while i + sep.len <= v.s.len:
-      if sep == v.s.toOpenArray(i, i + sep.len - 1):
-        acc.add strVal(spanString(v.s.toOpenArray(pos, i - 1)))
-        pos = i + sep.len
-        i = pos
-      else:
-        inc i
-    acc.add strVal(spanString(v.s.toOpenArray(pos, v.s.len - 1)))
-  seqVal(acc)
-
-proc sideStrip(v: JinjaVal, args: seq[Arg], name: string, left, right: bool): JinjaVal =
-  ## `s.strip(chars)`, `s.lstrip(chars)` and `s.rstrip(chars)`:
-  ##   one body, the reported name and the stripped sides carried by the wrappers.
-  if v.kind != vkStr:
-    raise jinjaErr("`" & name & "` needs a string")
-  strVal(pyStrip(v.s, pyStr(getArg(args, 0, akNone, strVal(""))), left, right))
-
-proc stripMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = sideStrip(v, args, "strip", true, true)
-proc lstripMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = sideStrip(v, args, "lstrip", true, false)
-proc rstripMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = sideStrip(v, args, "rstrip", false, true)
-
-proc edgeWith(v: JinjaVal, args: seq[Arg], name: string, tail: bool): JinjaVal =
-  ## `s.startswith(p)` and `s.endswith(p)`:
-  ##   one body, the reported name and the compared edge carried by the wrappers.
-  if v.kind != vkStr:
-    raise jinjaErr("`" & name & "` needs a string")
-  let p = pyStr(getArg(args, 0, akNone, strVal("")))
-  boolVal(p.len == 0 or (p.len <= v.s.len and
-      (if tail: p == v.s.toOpenArray(v.s.len - p.len, v.s.len - 1)
-       else: p == v.s.toOpenArray(0, p.len - 1))))
-
-proc startswithMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = edgeWith(v, args, "startswith", false)
-proc endswithMethod(v: JinjaVal, args: seq[Arg]): JinjaVal = edgeWith(v, args, "endswith", true)
-
-proc argDict(m: Machine, args: seq[Arg]): DictVal =
+func argDict(m: Machine, args: seq[Arg]): DictVal =
   ## Returns one mapping holding the call's arguments, keyword names as dict keys.
   var dv = DictVal()
   for a in args:
     dv.dictSet(argKey(m, a), a.val)
   dv
 
-proc namespaceGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
+func namespaceGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
   ## `namespace(field=init, ...)`:
   ##   the mutable mapping `{% set ns.field = ... %}` mutates in place.
   nsVal(argDict(m, args))
 
-proc dictGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
+func dictGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
   dictVal(argDict(m, args))
 
-proc rangeGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
+func rangeGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
   var a = 0'i64
   var b = 0'i64
   var step = 1'i64
@@ -763,7 +499,7 @@ func twoDigits(n: int): string =
   ## Returns `n` zero-padded to two digits.
   if n < 10: "0" & $n else: $n
 
-proc strftimeGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
+func strftimeGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
   ## Renders the format against the driver's injected epoch, never the wall clock, which is
   ## what keeps two drivers over one `Machine` byte-identical.
   let fmt = pyStr(getArg(args, 0, akNone, strVal("")))
@@ -792,27 +528,13 @@ proc strftimeGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
     inc i, 2
   strVal(acc)
 
-proc raiseExceptionGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
+func raiseExceptionGlobal(m: Machine, args: seq[Arg], d: var Driver): JinjaVal =
   ## Corpus `err_*` rows record exactly this raise:
   ##   the message verbatim, cause `ceRaiseCall`.
   raise jinjaErr(pyStr(getArg(args, 0, akNone, strVal(""))), cause = ceRaiseCall)
 
 const
-  filterProcs: array[FilterName, FilterProc] = [
-    tojsonFilter, lengthFilter, trimFilter, defaultFilter, joinFilter, lowerFilter, upperFilter,
-    capitalizeFilter, listFilter, safeFilter, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-    nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil
-  ]
-  testProcs: array[TestName, TestProc] = [
-    stringTest, definedTest, undefinedTest, mappingTest, sequenceTest, iterableTest, noneTest,
-    booleanTest, trueTest, falseTest, numberTest, integerTest, floatTest, nil, nil, nil, nil, nil,
-    nil, nil, nil, nil, nil, nil, nil
-  ]
-  methodProcs: array[MethodName, MethodProc] = [
-    getMethod, itemsMethod, keysMethod, valuesMethod, splitMethod, stripMethod, lstripMethod,
-    rstripMethod, startswithMethod, endswithMethod, nil, nil, nil, nil, nil, nil, nil, nil, nil
-  ]
-  globalProcs: array[GlobalName, GlobalProc] = [
+  GlobalProcs: array[GlobalName, GlobalProc] = [
     namespaceGlobal, rangeGlobal, strftimeGlobal, raiseExceptionGlobal, dictGlobal, nil, nil, nil
   ]
 
@@ -956,10 +678,10 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: JinjaVal): Jin
         if cx.dry:
           v = undefinedVal()
           continue
-        let mi = findIn(methodNames, wordSpan(m, lo, hi))
+        let mi = findIn(MethodNames, wordSpan(m, lo, hi))
         if mi < 0:
           raise jinjaErr("unknown method `" & spanString(wordSpan(m, lo, hi)) & "`", lo, hi - lo)
-        let mp = methodProcs[MethodName mi]
+        let mp = MethodProcs[MethodName mi]
         if mp.isNil:
           gapWhat("method", wordSpan(m, lo, hi))
         v = mp(v, a)
@@ -1021,10 +743,10 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: JinjaVal): Jin
       if cx.dry:
         v = undefinedVal()
         continue
-      let fi = findIn(filterNames, wordSpan(m, lo, hi))
+      let fi = findIn(FilterNames, wordSpan(m, lo, hi))
       if fi < 0:
         raise jinjaErr("unknown filter `" & spanString(wordSpan(m, lo, hi)) & "`", lo, hi - lo, cause = ceUnimplemented)
-      let fp = filterProcs[FilterName fi]
+      let fp = FilterProcs[FilterName fi]
       if fp.isNil:
         gapWhat("filter", wordSpan(m, lo, hi))
       v = fp(v, a)
@@ -1044,10 +766,10 @@ proc postfix(m: Machine, t: Tables, d: var Driver, cx: var Cx, v: JinjaVal): Jin
       if cx.dry:
         v = undefinedVal()
         continue
-      let ti = findIn(testNames, wordSpan(m, lo, hi))
+      let ti = findIn(TestNames, wordSpan(m, lo, hi))
       if ti < 0:
         raise jinjaErr("unknown test `" & spanString(wordSpan(m, lo, hi)) & "`", lo, hi - lo)
-      let tp = testProcs[TestName ti]
+      let tp = TestProcs[TestName ti]
       if tp.isNil:
         gapWhat("test", wordSpan(m, lo, hi))
       v = boolVal(if negated: not tp(v, a) else: tp(v, a))
@@ -1084,7 +806,7 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): JinjaVal =
       v = noneVal()
     else:
       var bound = if cx.dry: undefinedVal() else: lookupName(t, d, name)
-      let gi = findIn(globalNames, name)
+      let gi = findIn(GlobalNames, name)
       if bound.kind == vkUndefined and gi >= 0 and isPunct(cx, "("):
         # A global is reached only when the name is unbound, Jinja's own precedence:
         #   context shadows globals, and a skipped branch never gets here. A dry walk still
@@ -1093,7 +815,7 @@ proc primary(m: Machine, t: Tables, d: var Driver, cx: var Cx): JinjaVal =
         if cx.dry:
           v = undefinedVal()
         else:
-          let gp = globalProcs[GlobalName gi]
+          let gp = GlobalProcs[GlobalName gi]
           if gp.isNil:
             gapWhat("global", wordSpan(m, lo, hi))
           v = gp(m, a, d)
@@ -1296,12 +1018,6 @@ func ifWordAhead(m: Machine, at, stop: int): bool =
       return true
     inc i
   false
-
-type Ternary = object
-  ## Spans of `A if C else B`, measured by a dry walk before any of them runs.
-  aHi, cLo, cHi, bLo, bHi: int
-  hasElse: bool
-  isTernary: bool
 
 proc scanTernary(m: Machine, t: Tables, d: var Driver, cx: var Cx, headLo: int): Ternary =
   ## Measures the ternary spans starting at `headLo`, leaving the cursor past the whole ternary. A walk that lands on no ternary restores

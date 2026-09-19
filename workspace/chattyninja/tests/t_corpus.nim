@@ -21,7 +21,7 @@
 {.experimental: "views".}
 
 import std/[algorithm, importutils, macros, os, strutils, unicode]
-import cnj_types, jinja_data_model, cnj_parse, cnj_engine
+import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, cnj_engine
 import workspace/data_structures/src/small_seqs
 
 # Corpus row reader.
@@ -55,7 +55,7 @@ type
 
   JsonParseError = ref object of CatchableError
 
-const CorpusRoot* = currentSourcePath().parentDir.parentDir / "corpus"
+const CorpusRoot* = currentSourcePath().parentDir / "corpus"
   ## the extracted corpus tree, read-only from a test's point of view
 
 const RenderRowSchema* = "chattyninja-chat-render-row-1"
@@ -454,13 +454,13 @@ static:
 
   # Dispatch is one array total over the enum. The array's type makes an uncovered kind
   # a compile error, and the length check keeps the table total across an enum rename.
-  assert steps.len == NodeKind.high.ord + 1, "steps must be total over NodeKind"
+  assert Steps.len == NodeKind.high.ord + 1, "steps must be total over NodeKind"
 
 # A nil step would be a hole in the table:
 #   a render would jump through a null pointer rather than
 # report the gap, so totality is checked over every kind, not merely counted.
 for k in NodeKind:
-  doAssert not steps[k].isNil, "steps has no entry for " & $k
+  doAssert not Steps[k].isNil, "steps has no entry for " & $k
 
 # A `Node` must move by assignment with no reference left behind:
 #   this is the property that lets the arena be one allocation. An assignment deep-copies

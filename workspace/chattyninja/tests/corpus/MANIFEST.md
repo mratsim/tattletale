@@ -1,6 +1,6 @@
 # Corpus manifest: 18 templates ordered by feature burden
 
-Survey run 2026-09-17 over the extracted `corpus/<model>/` tree. Counts come from string-stripped greps
+Survey run 2026-09-17 over the extracted `tests/corpus/<model>/` tree. Counts come from string-stripped greps
 of the template source, with the expression tier measured inside `{{ }}` and tag expressions only. The
 rows column counts fixture frames, split ok / err (`err_*` rows carry `expected_error`, no `rendered`).
 

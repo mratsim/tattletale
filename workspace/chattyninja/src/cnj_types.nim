@@ -6,12 +6,9 @@
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built side tables, and the render
 # driver. See cnj_engine.nim for the dispatch table and the `items` pull interface.
 
-import jinja_data_model
+import jinja_data_model, jinja_serialize
 import workspace/data_structures/src/small_seqs
 
-const
-  NoLink* = -1'i32
-    ## Marks an absent link or absent span in every node payload slot.
 
 type
   NodeKind* {.pure.} = enum

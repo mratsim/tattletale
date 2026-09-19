@@ -12,17 +12,17 @@ is read-only after load, concurrently renderable.
 
 ## Layout
 
-| path      | contents                                                           |
-|-----------|--------------------------------------------------------------------|
-| `src/`    | engine modules                                                     |
-| `tests/`  | suites driven by the `test_chattyninja` task, plus the corpus integrity script  |
-| `corpus/` | 18 model template suites, 106 recorded input frames, expected bytes |
+| path            | contents                                                            |
+|-----------------|---------------------------------------------------------------------|
+| `src/`          | engine modules                                                      |
+| `tests/`        | suites driven by the `test_chattyninja` task, plus the corpus       |
+| `tests/corpus/` | 18 model template suites, 106 recorded input frames, expected bytes |
 
 `python3 tests/check_corpus.py` verifies the extracted fixtures before any
 render test trusts them.
 
-`corpus/MANIFEST.md` records the feature burden and build targets of each
-suite. `corpus/PROVENANCE.md` records how the ground truth was determined.
+`tests/corpus/MANIFEST.md` records the feature burden and build targets of each
+suite. `tests/corpus/PROVENANCE.md` records how the ground truth was determined.
 
 ## Build
 

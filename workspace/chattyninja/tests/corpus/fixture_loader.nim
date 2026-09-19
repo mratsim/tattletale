@@ -27,7 +27,7 @@ const
     ## the fixtures tree this module lives inside, one step from the source
   FrameSuffix = ".json.zst"
   SidecarSuffix = ".meta.json"
-  ModelsDir* = joinPath(FixturesDir, "..", "..", "..", "..", "..", "..",
+  ModelsDir* = joinPath(FixturesDir, "..", "..", "..", "..", "..", "..", "..",
     "MODELS")
     ## the read-only roster copy the fixtures were recorded from. MODELS sits two levels above
     ## the project root. Exact path resolution only, never written
