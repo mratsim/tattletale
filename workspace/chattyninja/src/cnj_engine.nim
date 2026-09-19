@@ -17,7 +17,7 @@
 # single-entry because parse time backpatches its branch bodies past the whole chain.
 #
 # Run:
-#   `nim c --experimental:views -r tests/t_render.nim`, or `./run_tests.sh` for every suite.
+#   from the repo root, `nim test_chattyninja` builds and runs every suite with its variants.
 
 import std/unicode
 import cnj_errors, cnj_types, cnj_values, cnj_expr, cnj_parse

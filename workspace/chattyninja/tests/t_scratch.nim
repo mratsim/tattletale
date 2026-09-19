@@ -14,7 +14,7 @@
 ##   kind and the capacity in force, and after growth the repull stays byte-exact
 ##
 ## Run:
-##   $ ./workspace/chattyninja/run_tests.sh t_scratch
+##   $ nim test_chattyninja
 
 import std/[importutils, strutils]
 import cnj_errors, cnj_types, cnj_values, cnj_parse, cnj_engine

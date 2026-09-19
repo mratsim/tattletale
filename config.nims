@@ -169,9 +169,25 @@ task test_safetensors, "Test workspace/safetensors":
     for cmd in getTestCommands("workspace/safetensors/tests", compiler = "nim cpp"):
       runCmd(cmd)
 
+proc chattyninjaCmd(filename, extraDefines: string): string =
+  ## Build-and-run command of one chattyninja suite, with the views flag the
+  ## engine compiles under and the src/tests import paths.
+  testerCmd("workspace/chattyninja/tests/" & filename,
+    extraFlags = "--experimental:views --path:workspace/chattyninja/src --path:workspace/chattyninja/tests" & extraDefines,
+    compiler = "nim cpp")
+
 task test_chattyninja, "Test workspace/chattyninja template engine suites":
   withDir(ProjectRoot):
-    runCmd "./workspace/chattyninja/run_tests.sh"
+    for cmd in getTestCommands("workspace/chattyninja/tests",
+        extraFlags = "--experimental:views --path:workspace/chattyninja/src --path:workspace/chattyninja/tests",
+        compiler = "nim cpp"):
+      runCmd(cmd)
+    # Variant builds: t_twodriver at ChunkSize=7 puts a chunk boundary inside
+    # every corpus render; the t_pull and t_scratch allocation probes compile
+    # out without -d:nimAllocStats, so only these builds exercise them.
+    runCmd(chattyninjaCmd("t_twodriver.nim", " -d:ChunkSize=7"))
+    runCmd(chattyninjaCmd("t_pull.nim", " -d:nimAllocStats"))
+    runCmd(chattyninjaCmd("t_scratch.nim", " -d:nimAllocStats"))
 
 task test_chattyninja_corpus, "Test workspace/chattyninja recorded corpus fixtures":
   withDir(ProjectRoot):

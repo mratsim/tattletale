@@ -11,7 +11,7 @@
 ## fixtures carrying the whitespace-control and comment forms the corpus uses.
 ##
 ## Run:
-##   $ ./workspace/chattyninja/run_tests.sh t_parse
+##   $ nim test_chattyninja
 
 import std/[os, strutils, sequtils]
 import cnj_types, cnj_parse

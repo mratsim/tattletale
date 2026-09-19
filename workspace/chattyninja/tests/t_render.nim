@@ -18,7 +18,7 @@
 ## so a green run cannot come from an always-passing check.
 ##
 ## Run:
-##   $ ./workspace/chattyninja/run_tests.sh t_render
+##   $ nim test_chattyninja
 
 import std/[os, strutils]
 import cnj_types, cnj_values, cnj_parse, cnj_engine

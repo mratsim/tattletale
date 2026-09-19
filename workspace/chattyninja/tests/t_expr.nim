@@ -15,7 +15,7 @@
 ## raises it, which a value comparison cannot see.
 ##
 ## Run:
-##   $ ./workspace/chattyninja/run_tests.sh t_expr
+##   $ nim test_chattyninja
 
 import std/strutils
 import cnj_errors, cnj_types, cnj_values, cnj_engine

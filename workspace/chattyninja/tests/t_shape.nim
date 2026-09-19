@@ -9,7 +9,7 @@
 ## the arena's POD status, the two-field read-only `Machine`, and dispatch totality.
 ##
 ## Run:
-##   $ ./workspace/chattyninja/run_tests.sh t_shape
+##   $ nim test_chattyninja
 
 import std/macros
 import cnj_types, cnj_engine

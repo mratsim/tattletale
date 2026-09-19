@@ -14,7 +14,7 @@
 ## - template-text spans and emit values longer than the buffer drain across calls, still equal to the string render
 ##
 ## Run:
-##   $ ./workspace/chattyninja/run_tests.sh t_pull
+##   $ nim test_chattyninja
 
 import std/[importutils, strutils]
 import cnj_types, cnj_values, cnj_parse, cnj_engine

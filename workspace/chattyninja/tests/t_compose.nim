@@ -19,7 +19,7 @@
 ## - scratch through `attachScratch` keeps every windowed render byte-exact
 ##
 ## Run:
-##   $ ./workspace/chattyninja/run_tests.sh t_compose
+##   $ nim test_chattyninja
 
 {.experimental: "views".}
 

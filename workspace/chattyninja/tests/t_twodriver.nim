@@ -20,7 +20,7 @@
 ## 4096 never reaches on corpus renders.
 ##
 ## Run:
-##   $ ./workspace/chattyninja/run_tests.sh t_twodriver
+##   $ nim test_chattyninja
 
 import std/[os, strutils]
 import cnj_types, cnj_values, cnj_parse, cnj_engine
@@ -196,7 +196,7 @@ block chunkSizeDoesNotChangeBytes:
   doAssert whole == rowA.rendered
   when ChunkSize > 1:
     # With the default chunk size every corpus render is one piece, so record that the small-chunk
-    # path is exercised by the `-d:ChunkSize=7` build in `run_tests.sh` rather than here.
+    # path is exercised by the `-d:ChunkSize=7` build in the `test_chattyninja` task rather than here.
     echo "t_twodriver: ChunkSize=", ChunkSize
 
 echo "t_twodriver: one artifact, several drivers, identical bytes; artifact unchanged by rendering"

@@ -15,7 +15,7 @@ is read-only after load, concurrently renderable.
 | path      | contents                                                           |
 |-----------|--------------------------------------------------------------------|
 | `src/`    | engine modules                                                     |
-| `tests/`  | suites driven by `run_tests.sh`, plus the corpus integrity script  |
+| `tests/`  | suites driven by the `test_chattyninja` task, plus the corpus integrity script  |
 | `corpus/` | 18 model template suites, 106 recorded input frames, expected bytes |
 
 `python3 tests/check_corpus.py` verifies the extracted fixtures before any
