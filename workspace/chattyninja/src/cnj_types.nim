@@ -249,12 +249,13 @@ type
   Scope* = seq[Binding]
 
   PieceKind* = enum
-    pkNone, pkSpan, pkStr, pkLazy
+    pkNone, pkSpan, pkStr, pkCut, pkLazy
 
   Piece* = object
     ## Pending output piece:
     ## - span pieces deliver straight out of `CompiledTemplate.jinja`
     ## - string pieces are materialized strings held by the render state
+    ## - cut pieces are an owned string held by the render state, rendering its sub-span bytes
     ## - lazy pieces are a derived value the serializer in `RenderState.lazy` renders
     ##   straight into the delivery window
     pos*: int
@@ -264,6 +265,11 @@ type
       lo*, hi*: int32
     of pkStr:
       s*: string
+    of pkCut:
+      raw*: string
+        ## the cut's input string, moved in, the piece rendering its sub-span
+      clo*, chi*: int32
+        ## byte bounds of the sub-span, rendering as `raw[clo ..< chi]`
     of pkLazy:
       nil
         ## rendered by the serializer in `RenderState.lazy`, no payload here

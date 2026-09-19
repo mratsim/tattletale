@@ -71,6 +71,9 @@ type
       ## string body the `spStr` and `spRaw` phases write
     spos*: int
       ## bytes of `s` already written
+    send: int
+      ## exclusive end of the `s` body, `s.len` for a whole string, a cut's `hi` bound
+      ## when the raw phase streams only the cut's sub-span
     walk*: SerWalk
     quoted*: bool
       ## the `spStr` body sits between quotes the serializer itself writes
@@ -97,7 +100,8 @@ func pyReprInto(sb: var Cursor, v: JinjaVal)
 
 func pyStrInto*(sb: var Cursor, v: JinjaVal) =
   ## Writes the value as template output text into `sb`:
-  ## - strings pass through, scalars format in place, undefined renders empty
+  ## - strings pass through, cuts stream their surviving span, scalars format in place,
+  ##   undefined renders empty
   ## - containers take their Python `repr()` form
   ## Raises when `sb` cannot hold the rendering, never growing it.
   case v.kind
@@ -107,6 +111,7 @@ func pyStrInto*(sb: var Cursor, v: JinjaVal) =
   of vkInt: sb.addInt v.i
   of vkFloat: sb.addFloat v.f
   of vkStr: sb.add v.s
+  of vkCut: sb.add v.raw.toOpenArray(v.lo, v.hi - 1)
   of vkSeq, vkDict, vkNs, vkLoop, vkMacro, vkRange: sb.pyReprInto(v)
   of vkCall: raise jinjaErr("a macro call result must be rendered before stringification")
   of vkConcat: raise jinjaErr("a concat must be rendered in emit position before stringification")
@@ -129,6 +134,7 @@ func pyReprInto(sb: var Cursor, v: JinjaVal) =
   ## Writes Python's `repr()` of `v` into `sb`, recursively.
   case v.kind
   of vkStr: reprQuoted(sb, v.s)
+  of vkCut: reprQuoted(sb, materializeVal(v).s)
   of vkSeq:
     sb.add '['
     for i in 0 ..< v.xs.items.len:
@@ -294,6 +300,7 @@ func serDispatch(js: var Ser) =
     if js.mode == smStr and js.stack.len == 0:
       js.s = v.s
       js.spos = 0
+      js.send = v.s.len
       js.blen = 0
       js.bpos = 0
       js.phase = spRaw
@@ -305,6 +312,19 @@ func serDispatch(js: var Ser) =
       js.after = saValue
       serQueue(js, if js.mode == smJson: "\"" else: "'")
       js.phase = spStr
+  of vkCut:
+    if js.mode == smStr and js.stack.len == 0:
+      # Emit position streams the cut's surviving bytes straight from the shared buffer.
+      js.s = v.raw
+      js.spos = v.lo.int
+      js.send = v.hi.int
+      js.blen = 0
+      js.bpos = 0
+      js.phase = spRaw
+    else:
+      # Quoted forms (container reprs, tojson) re-compute the cut's string first.
+      js.v = materializeVal(v)
+      serDispatch(js)
   of vkLoop:
     # `<` and `>` of the context form carry the tojson filter's HTML escaping.
     serQueue(js, if js.mode == smJson: "\"\\u003cLoopContext\\u003e\"" else: "<LoopContext>")
@@ -402,15 +422,16 @@ func serStep(js: var Ser) =
   of spRaw, spDone:
     discard
 
-func serReset*(js: var Ser, v: JinjaVal, mode: SerMode, opts = JsonOpts()) =
-  ## Repositions `js` before the first byte of `v`'s rendering, keeping the container
-  ## stack's capacity for the next derived value rendered through it.
+func serReset*(js: var Ser, v: sink JinjaVal, mode: SerMode, opts = JsonOpts()) =
+  ## Repositions `js` before the first byte of `v`'s rendering:
+  ## - takes the value over from the caller for the drain
+  ## - keeps the container stack's capacity for the next derived value rendered through it
   js.mode = mode
   js.opts = opts
   js.phase = spDispatch
-  js.v = v
   js.s = ""
   js.spos = 0
+  js.send = 0
   js.walk = wkRune
   js.quoted = false
   js.after = saValue
@@ -429,6 +450,8 @@ func serReset*(js: var Ser, v: JinjaVal, mode: SerMode, opts = JsonOpts()) =
     # reversed in place, so `pop` hands the operands over in render order
     for i in 0 ..< (leaves.len - 1) div 2:
       swap(js.concatTail[i], js.concatTail[leaves.len - 2 - i])
+  else:
+    js.v = move v
 
 func serValue*(v: JinjaVal, mode: SerMode, opts = JsonOpts()): Ser =
   ## Returns a serializer positioned before the first byte of `v`'s rendering.
@@ -459,12 +482,12 @@ func pullSer*(js: var Ser, dst: var openArray[char]): int =
     elif js.phase == spDone:
       break
     elif js.phase == spRaw:
-      let n = min(dst.len - result, js.s.len - js.spos)
+      let n = min(dst.len - result, js.send - js.spos)
       if n > 0:
         copyMem(addr dst[result], unsafeAddr js.s[js.spos], n)
         inc js.spos, n
         inc result, n
-      if js.spos == js.s.len:
+      if js.spos == js.send:
         serFinish(js)
     else:
       serStep(js)

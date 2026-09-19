@@ -453,6 +453,7 @@ func sliceIndices(n: int, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep: bool):
 
 func subslice(v, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep, isSlice: bool): JinjaVal =
   ## Returns a subscript or a slice, `x[1:]` and `x[::-1]` the slice shapes the corpus uses.
+  let v = if v.kind == vkCut: materializeVal(v) else: v
   if not isSlice:
     return case v.kind
     of vkSeq:
@@ -951,6 +952,9 @@ func arith(op: Op, a, b: JinjaVal): JinjaVal =
           (if b.kind == vkInt: float64 b.i else: b.f))
     elif a.kind == vkStr and b.kind == vkStr:
       strVal(a.s & b.s)
+    elif a.kind in {vkStr, vkCut} and b.kind in {vkStr, vkCut}:
+      # A cut operand materializes once here, the re-computed position of `+`.
+      strVal(materializeVal(a).s & materializeVal(b).s)
     elif a.kind == vkSeq and b.kind == vkSeq:
       seqVal(a.xs.items & b.xs.items)
     else:

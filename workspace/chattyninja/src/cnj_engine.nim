@@ -112,9 +112,22 @@ proc emitStr(st: var RenderState, s: sink string) {.noSideEffect.} =
   doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
   st.pend = Piece(pos: 0, kind: pkStr, s: s)
 
-proc emitValue(st: var RenderState, v: JinjaVal) {.noSideEffect.} =
-  ## Queues a derived value's rendering as the lazy piece, the serializer in `st.lazy`
-  ## draining into the caller's window across pull calls, byte-exact with `pyStr`.
+proc emitCut(st: var RenderState, v: sink JinjaVal) {.noSideEffect.} =
+  ## Makes a cut value the pending piece, moving the value's string out of the caller's
+  ## value so the cut drains from render-state storage with no copy, an empty cut
+  ## queueing nothing, the same empty check `emitStr` applies.
+  if v.lo == v.hi:
+    return
+  doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
+  st.pend = Piece(pos: 0, kind: pkCut, raw: move v.raw, clo: v.lo, chi: v.hi)
+
+proc emitValue(st: var RenderState, v: sink JinjaVal) {.noSideEffect.} =
+  ## Makes a derived value the pending piece, taking over the caller's value so the engine
+  ## never copies an emit value, the serializer in `st.lazy` draining into the caller's
+  ## window across pull calls, byte-exact with `pyStr`.
+  ##
+  ## The caller routes `vkStr` to `emitStr` and `vkCut` to `emitCut` first, so the value
+  ## here never carries either kind.
   doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
   serReset(st.lazy, v, smStr)
   st.pend = Piece(kind: pkLazy)
@@ -125,6 +138,7 @@ template pieceLen(p: Piece): int =
   of pkNone: 0
   of pkSpan: (p.hi - p.lo).int
   of pkStr: p.s.len
+  of pkCut: (p.chi - p.clo).int
   of pkLazy: 0
 
 # Binding:
@@ -159,7 +173,9 @@ proc stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSt
   if v.kind == vkCall:
     startMacro(tmpl, sym, st, ports, v.pc, nd.succ)
     return
-  if v.kind == vkStr:
+  if v.kind == vkCut:
+    st.emitCut(move v)
+  elif v.kind == vkStr:
     st.emitStr(move v.s)
   else:
     st.emitValue(v)
@@ -190,6 +206,7 @@ func iterMapping(v: JinjaVal): LoopState =
 
 func iterChars(v: JinjaVal): LoopState =
   ## Iterable leg for a string, materializing one single-codepoint value per codepoint.
+  let v = if v.kind == vkCut: materializeVal(v) else: v
   LoopState(xs: SeqVal(items: codepointVals(v.s)))
 
 func iterRange(v: JinjaVal): LoopState =
@@ -210,7 +227,7 @@ func loopStateOf(v: JinjaVal): LoopState =
   case v.kind
   of vkSeq: iterSeq(v)
   of vkDict, vkNs: iterMapping(v)
-  of vkStr: iterChars(v)
+  of vkStr, vkCut: iterChars(v)
   of vkRange: iterRange(v)
   else: notIterable(v)
 
@@ -384,6 +401,9 @@ proc capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) 
   of pkStr:
     outp.add st.pend.s[st.pend.pos ..< st.pend.s.len]
     st.pend = Piece(kind: pkNone)
+  of pkCut:
+    outp.add st.pend.raw[st.pend.clo + st.pend.pos ..< st.pend.chi]
+    st.pend = Piece(kind: pkNone)
   of pkLazy:
     var buf: array[256, char]
     while true:
@@ -481,8 +501,8 @@ proc pull*(c: var Context, buf: var openArray[char]): int =
   ## resumes after them:
   ## - a consumer that must hold every byte across a raise keeps the window at one byte,
   ##   which makes each delivered byte a returned byte
-  ## - span pieces copy out of `CompiledTemplate.jinja`, string pieces out of render-state
-  ##   storage and lazy pieces out of the serializer state in `c.state.lazy`
+  ## - span pieces copy out of `CompiledTemplate.jinja`, string pieces and cut pieces copy
+  ##   out of render-state storage, lazy pieces out of the serializer state in `c.state.lazy`
   ## - a zero-capacity buffer returns 0 without stepping the render
   template tmpl: CompiledTemplate = c.tmpl
   template sym: ptr CompiledSymbols = c.symbols
@@ -520,6 +540,8 @@ proc pull*(c: var Context, buf: var openArray[char]): int =
         copyMem(addr buf[result], unsafeAddr tmpl.jinja[int st.pend.lo + base], take)
       of pkStr:
         copyMem(addr buf[result], unsafeAddr st.pend.s[base], take)
+      of pkCut:
+        copyMem(addr buf[result], unsafeAddr st.pend.raw[st.pend.clo + base], take)
       of pkNone, pkLazy:
         discard
       result += take

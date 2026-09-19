@@ -366,6 +366,7 @@ func pieceRemaining(p: Piece): int =
   of pkNone: 0
   of pkSpan: int(p.hi - p.lo) - p.pos
   of pkStr: p.s.len - p.pos
+  of pkCut: int(p.chi - p.clo) - p.pos
   of pkLazy: 0
 
 proc renderPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64, cap: int): string =
@@ -483,8 +484,12 @@ arena[0].slots[0] = 99'i32
 doAssert arena[1].slots[0] == 7'i32, "an assignment must deep-copy a spilled payload"
 doAssert arena.len == 2, "the arena moved by assignment with no reference left behind"
 
-# Size locked, the RenderState layout contract.
-doAssert sizeof(RenderState) == 368, "RenderState is a plain value type"
+# RenderState layout contract, size locked:
+# 392 = 368 + 8 for the JinjaVal cut variant,
+# 8 for the serializer's raw-body end bound, 8 for realignment,
+# 8 for the pending cut piece, whose string descriptor reuses the string branch's slot
+# and whose two byte bounds widen the variant payload to 24 bytes, +8 after realignment.
+doAssert sizeof(RenderState) == 400, "RenderState is a plain value type"
 
 # The equality must reject a one-byte change, since a comparison that cannot fail makes
 # the corpus walk vacuous.

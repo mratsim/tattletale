@@ -98,8 +98,8 @@ func tojsonFilter(v: JinjaVal, args: Args): JinjaVal =
         opts.ensureAscii = a.val.b
     of akSeparators:
       if a.val.kind == vkSeq and a.val.xs.items.len == 2:
-        opts.itemSep = a.val.xs.items[0].s
-        opts.kvSep = a.val.xs.items[1].s
+        opts.itemSep = pyStr(a.val.xs.items[0])
+        opts.kvSep = pyStr(a.val.xs.items[1])
     of akNone, akChars, akDefault:
       # Any argument outside the two keywords above is a gap, positional ones included, as before.
       # A filter has no access to the template text, so the report names a keyword span by its bounds.
@@ -109,16 +109,30 @@ func tojsonFilter(v: JinjaVal, args: Args): JinjaVal =
 func lengthFilter(v: JinjaVal, args: Args): JinjaVal =
   case v.kind
   of vkStr: intVal(runeLen(v.s))
+  of vkCut:
+    # Python's `len` counts codepoints, so the span walks per rune like a string's.
+    var n = 0
+    var i = v.lo.int
+    while i < v.hi.int:
+      var r: Rune
+      fastRuneAt(v.raw, i, r, true)
+      inc n
+    intVal(n)
   of vkSeq: intVal(v.xs.items.len)
   of vkDict, vkNs: intVal(v.d.keys.len)
   of vkRange: intVal(rangeLen(v.r))
   else: raise jinjaErr("`length` needs a string, sequence or mapping")
 
 func trimFilter(v: JinjaVal, args: Args): JinjaVal =
+  let v = if v.kind == vkCut: materializeVal(v) else: v
   if v.kind != vkStr:
     raise jinjaErr("`trim` needs a string")
   let a = getArg(args, 0, akChars, undefinedVal())
-  v.s.stripMaterialized(if a.kind == vkStr: a.s else: "", true, true)
+  let chars = if a.kind == vkStr: a.s
+              elif a.kind == vkCut: materializeVal(a).s
+              else: ""
+  let (lo, hi) = stripSpan(v.s, chars, true, true)
+  cutVal(v.s, lo.int32, hi.int32)
 
 func defaultFilter(v: JinjaVal, args: Args): JinjaVal =
   if v.kind == vkUndefined: getArg(args, 0, akDefault, noneVal()) else: v
@@ -133,16 +147,19 @@ func asciiCased(s: openArray[char], upper: bool): string =
     result[i] = if flip: chr(ord(c) xor 0x20) else: c
 
 func lowerFilter(v: JinjaVal, args: Args): JinjaVal =
+  let v = if v.kind == vkCut: materializeVal(v) else: v
   if v.kind != vkStr:
     raise jinjaErr("`lower` needs a string")
   strVal(asciiCased(v.s, false))
 
 func upperFilter(v: JinjaVal, args: Args): JinjaVal =
+  let v = if v.kind == vkCut: materializeVal(v) else: v
   if v.kind != vkStr:
     raise jinjaErr("`upper` needs a string")
   strVal(asciiCased(v.s, true))
 
 func capitalizeFilter(v: JinjaVal, args: Args): JinjaVal =
+  let v = if v.kind == vkCut: materializeVal(v) else: v
   if v.kind != vkStr:
     raise jinjaErr("`capitalize` needs a string")
   var acc = asciiCased(v.s, false)
@@ -153,7 +170,9 @@ func capitalizeFilter(v: JinjaVal, args: Args): JinjaVal =
 func listFilter(v: JinjaVal, args: Args): JinjaVal =
   case v.kind
   of vkSeq: v
-  of vkStr: seqVal(codepointVals(v.s))
+  of vkStr, vkCut:
+    let v = if v.kind == vkCut: materializeVal(v) else: v
+    seqVal(codepointVals(v.s))
   of vkRange:
     var acc = newSeq[JinjaVal](rangeLen(v.r))
     for i in 0 ..< rangeLen(v.r):
@@ -183,12 +202,12 @@ func joinMethod(v: JinjaVal, args: Args): JinjaVal =
 
 func joinFilter(v: JinjaVal, args: Args): JinjaVal = joinMethod(v, args)
 
-func stringTest(v: JinjaVal, args: Args): bool = v.kind == vkStr
+func stringTest(v: JinjaVal, args: Args): bool = v.kind in {vkStr, vkCut}
 func definedTest(v: JinjaVal, args: Args): bool = v.kind != vkUndefined
 func undefinedTest(v: JinjaVal, args: Args): bool = v.kind == vkUndefined
 func mappingTest(v: JinjaVal, args: Args): bool = v.kind in {vkDict, vkNs}
 func sequenceTest(v: JinjaVal, args: Args): bool = v.kind == vkSeq
-func iterableTest(v: JinjaVal, args: Args): bool = v.kind in {vkSeq, vkDict, vkNs, vkStr}
+func iterableTest(v: JinjaVal, args: Args): bool = v.kind in {vkSeq, vkDict, vkNs, vkStr, vkCut}
 func noneTest(v: JinjaVal, args: Args): bool = v.kind == vkNone
 func booleanTest(v: JinjaVal, args: Args): bool = v.kind == vkBool
 func trueTest(v: JinjaVal, args: Args): bool = v.kind == vkBool and v.b
@@ -235,6 +254,7 @@ func valuesMethod(v: JinjaVal, args: Args): JinjaVal =
 
 func splitMethod(v: JinjaVal, args: Args): JinjaVal =
   ## `s.split(sep)` over non-overlapping separator occurrences, an empty separator splitting per codepoint.
+  let v = if v.kind == vkCut: materializeVal(v) else: v
   if v.kind != vkStr:
     raise jinjaErr("`split` needs a string")
   let sep = pyStr(getArg(args, 0, akNone, strVal(" ")))
@@ -258,9 +278,11 @@ func splitMethod(v: JinjaVal, args: Args): JinjaVal =
 func sideStrip(v: JinjaVal, args: Args, name: string, left, right: bool): JinjaVal =
   ## `s.strip(chars)`, `s.lstrip(chars)` and `s.rstrip(chars)`:
   ##   one body, the reported name and the stripped sides carried by the wrappers.
+  let v = if v.kind == vkCut: materializeVal(v) else: v
   if v.kind != vkStr:
     raise jinjaErr("`" & name & "` needs a string")
-  v.s.stripMaterialized(pyStr(args.getArg(0, akNone, strVal(""))), left, right)
+  let (lo, hi) = stripSpan(v.s, pyStr(args.getArg(0, akNone, strVal(""))), left, right)
+  cutVal(v.s, lo.int32, hi.int32)
 
 func stripMethod(v: JinjaVal, args: Args): JinjaVal = sideStrip(v, args, "strip", true, true)
 func lstripMethod(v: JinjaVal, args: Args): JinjaVal = sideStrip(v, args, "lstrip", true, false)
@@ -269,6 +291,7 @@ func rstripMethod(v: JinjaVal, args: Args): JinjaVal = sideStrip(v, args, "rstri
 func edgeWith(v: JinjaVal, args: Args, name: string, tail: bool): JinjaVal =
   ## `s.startswith(p)` and `s.endswith(p)`:
   ##   one body, the reported name and the compared edge carried by the wrappers.
+  let v = if v.kind == vkCut: materializeVal(v) else: v
   if v.kind != vkStr:
     raise jinjaErr("`" & name & "` needs a string")
   let p = pyStr(getArg(args, 0, akNone, strVal("")))

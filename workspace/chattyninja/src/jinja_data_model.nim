@@ -58,10 +58,13 @@ type
 type
   ValueKind* = enum
     ## Jinja value tiers the corpus reaches, float carried for JSON fidelity only,
-    ## no template in the corpus doing float arithmetic, `vkCall` holding a macro call
-    ## whose body has not run, `vkConcat` holding a `~` tree awaiting its emit
+    ## no template in the corpus doing float arithmetic:
+    ## - `vkCall` holds a macro call whose body has not run
+    ## - `vkConcat` holds a `~` tree awaiting its emit
+    ## - `vkCut` holds a stripped span of a string, rendering as its sub-span bytes
+    ##   and materializing only where a consumer stores or re-computes it
     vkUndefined, vkNone, vkBool, vkInt, vkFloat, vkStr, vkSeq, vkDict, vkNs, vkLoop, vkMacro,
-    vkCall, vkConcat, vkRange
+    vkCall, vkConcat, vkRange, vkCut
 
   SeqVal* = ref object
     ## Shared sequence of values, the `vkSeq` payload.
@@ -144,6 +147,11 @@ type
     of vkMacro: mc*: MacroVal
     of vkCall: pc*: PendingCallVal
     of vkRange: r*: RangeVal
+    of vkCut:
+      raw*: string
+        ## the unstripped input, moved in, its buffer shared with the source value
+      lo*, hi*: int32
+        ## byte bounds of the surviving sub-span, rendering as `raw[lo ..< hi]`
 
   JsonOpts* = object
     ## `tojson` knobs the corpus passes, `ensure_ascii` and `separators`.
@@ -272,6 +280,27 @@ func rangeVal*(start, stop, step: int64): JinjaVal =
   ## Returns the lazy range value over `start`, `stop` and `step`.
   JinjaVal(kind: vkRange, r: RangeVal(start: start, stop: stop, step: step))
 
+func cutVal*(s: sink string, lo, hi: int32): JinjaVal =
+  ## Returns the stripped cut of `s`, rendering as the bytes of `s[lo ..< hi]`:
+  ## - `s` moves in, so the cut shares the source's buffer
+  ## - the cut materializes its string only where a consumer stores or re-computes it
+  ##
+  ##   let (a, b) = stripSpan(v.s, chars, true, true)
+  ##   cutVal(v.s, a.int32, b.int32)
+  JinjaVal(kind: vkCut, raw: s, lo: lo, hi: hi)
+
+func materializeVal*(v: JinjaVal): JinjaVal =
+  ## Returns the materialized form of `v`:
+  ## - a cut becomes its string value, one copy of the surviving bytes
+  ## - every other kind passes through unchanged
+  ##
+  ## Consumers that store or re-compute a value call this. The serializer streams
+  ## a cut in emit position without copying.
+  if v.kind == vkCut:
+    strVal(if v.lo == v.hi: "" else: spanString(v.raw.toOpenArray(v.lo.int, v.hi.int - 1)))
+  else:
+    v
+
 func rangeLen*(r: RangeVal): int =
   ## Returns the element count of the range, Python's `len(range(start, stop, step))`:
   ## a step against the span's direction answers 0.
@@ -349,6 +378,7 @@ func isTruthy*(v: JinjaVal): bool =
   of vkInt: v.i != 0
   of vkFloat: v.f != 0
   of vkStr: v.s.len != 0
+  of vkCut: v.lo != v.hi
   of vkSeq: v.xs.items.len != 0
   of vkDict, vkNs: v.d.keys.len != 0
   of vkLoop: v.lp.loopLen != 0
@@ -375,6 +405,15 @@ func dictSet*(d: DictVal, key: string, val: JinjaVal) =
   d.keys.add key
   d.vals.add val
 
+func sameBytes(x, y: openArray[char]): bool =
+  ## Returns whether two byte spans hold the same bytes, comparing in place.
+  if x.len != y.len:
+    return false
+  for i in 0 ..< x.len:
+    if x[i] != y[i]:
+      return false
+  true
+
 func eqVal*(a, b: JinjaVal): bool =
   ## Returns Jinja `==`:
   ##   numbers compare across tiers, containers element-wise, undefined equals only undefined.
@@ -386,6 +425,14 @@ func eqVal*(a, b: JinjaVal): bool =
     let ai = if a.kind == vkInt: float64 a.i else: a.f
     let bi = if b.kind == vkInt: float64 b.i else: b.f
     return ai == bi
+  if a.kind == vkCut or b.kind == vkCut:
+    # Text equality spans a cut's sub-span against the other side, comparing in place.
+    if a.kind == vkCut and b.kind == vkCut:
+      return a.hi - a.lo == b.hi - b.lo and
+          sameBytes(a.raw.toOpenArray(a.lo, a.hi - 1), b.raw.toOpenArray(b.lo, b.hi - 1))
+    if a.kind == vkCut:
+      return b.kind == vkStr and sameBytes(a.raw.toOpenArray(a.lo, a.hi - 1), b.s)
+    return a.kind == vkStr and sameBytes(a.s, b.raw.toOpenArray(b.lo, b.hi - 1))
   if a.kind != b.kind:
     return false
   result = case a.kind
@@ -410,6 +457,8 @@ func eqVal*(a, b: JinjaVal): bool =
   of vkRange: a.r.rangesEqual(b.r)
   of vkCall: raise jinjaErr("a macro call result must be rendered before an equality test")
   of vkConcat: raise jinjaErr("a concat must be rendered in emit position before an equality test")
+  # Unreachable leg, a cut returns above against the other side's sub-span compare.
+  of vkCut: false
   of vkUndefined, vkBool, vkInt, vkFloat: false
 
 func cmpVal*(a, b: JinjaVal): int =
@@ -419,7 +468,9 @@ func cmpVal*(a, b: JinjaVal): int =
     let ai = if a.kind == vkInt: float64 a.i else: a.f
     let bi = if b.kind == vkInt: float64 b.i else: b.f
     return if ai < bi: -1 elif ai > bi: 1 else: 0
-  if a.kind == vkStr and b.kind == vkStr:
+  if a.kind in {vkStr, vkCut} and b.kind in {vkStr, vkCut}:
+    if a.kind == vkCut or b.kind == vkCut:
+      return cmp(materializeVal(a).s, materializeVal(b).s)
     return cmp(a.s, b.s)
   raise jinjaErr("`<` and `>` need two numbers or two strings, got " & $a.kind & " and " & $b.kind)
 
@@ -437,6 +488,8 @@ func substringOf(needle, haystack: string): bool =
 func containsVal*(haystack, needle: JinjaVal): bool =
   ## Returns Jinja `in`:
   ##   membership for sequences, keys for mappings, substring for strings.
+  let haystack = if haystack.kind == vkCut: materializeVal(haystack) else: haystack
+  let needle = if needle.kind == vkCut: materializeVal(needle) else: needle
   result = case haystack.kind
   of vkSeq:
     for x in haystack.xs.items:
@@ -477,9 +530,3 @@ func stripSpan*(s, chars: openArray[char], left, right: bool): tuple[a, b: int] 
     while b > a and s[b - 1] in cut:
       dec b
   (a, b)
-
-func stripMaterialized*(s, chars: openArray[char], left, right: bool): JinjaVal =
-  ## Returns the stripped cut of `s` as a string value, the storage-boundary materialization
-  ## of `stripSpan`: one string for the kept bytes, none for an empty cut.
-  let (a, b) = stripSpan(s, chars, left, right)
-  strVal(if a == b: "" else: spanString(s.toOpenArray(a, b - 1)))
