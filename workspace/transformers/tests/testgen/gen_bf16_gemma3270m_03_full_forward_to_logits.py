@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Full-forward-to-logits fixtures of the gemma-3-270m-it checkpoint,
-recorded through the installed transformers modeling on torch bf16, CPU.
+recorded through the installed transformers modeling on torch bf16, Metal (mps).
 The chain covers embed, all 18 decoder layers, the final norm and lm_head.
 
 - fixture dir tests/fixtures/bf16-03-full-forward-to-logits/gemma-3-270m-it/
@@ -24,9 +24,9 @@ The tier-04 records carry the window behavior.
 
 Recording environment:
 
-- recorded_from defaults to m4max-cpu, the TTT_RECORD_FROM environment
+- recorded_from defaults to m4max-metal, the TTT_RECORD_FROM environment
   variable overrides it
-- recording runs on cpu, the replay device stays the consuming suite's call
+- recording runs on mps (Metal), the replay device stays the consuming suite's call
 
 Run from the worktree root
 
@@ -164,7 +164,7 @@ def load_tokenizer():
 
 def build_model() -> Gemma3ForCausalLM:
     """Loads the full reference model through the installed from_pretrained,
-    bf16, eval, CPU.
+    bf16, eval, Metal (mps).
 
     Returns:
     - the model in eval mode, the decoder layers carry the capture wrappers
@@ -177,6 +177,7 @@ def build_model() -> Gemma3ForCausalLM:
     - the 512 sliding window
     """
     model = Gemma3ForCausalLM.from_pretrained(MODEL_DIR, dtype=torch.bfloat16)
+    model.to("mps")
     model.eval()
     cfg = model.config
     assert cfg.layer_types[4] == "sliding_attention", (
@@ -278,7 +279,7 @@ def save_fixture(name: str, metadata: dict, tensors: dict) -> str:
 
 def main() -> None:
     """Records the full-forward fixture set after the RAM guard."""
-    recorded_from = os.environ.get("TTT_RECORD_FROM", "m4max-cpu")
+    recorded_from = os.environ.get("TTT_RECORD_FROM", "m4max-metal")
     check_ram()
     print(f"Generating {MODEL_NAME} bf16-03-full-forward-to-logits fixtures")
     print(f"transformers {transformers.__version__}")
@@ -288,7 +289,7 @@ def main() -> None:
     assert tokenizer_ids == PROMPT_IDS, (
         f"prompt ids {tokenizer_ids} disagree with the recorded corpus "
         f"{PROMPT_IDS}, the tokenizer path moved")
-    input_ids = torch.tensor([tokenizer_ids])
+    input_ids = torch.tensor([tokenizer_ids], device="mps")
     seq_len = input_ids.shape[1]
 
     model = build_model()
@@ -323,7 +324,7 @@ def main() -> None:
             "seq_len": seq_len,
             "num_threads": NUM_THREADS,
             "dtype": "bfloat16",
-            "device": "cpu",
+            "device": "mps",
             "recorded_from": recorded_from,
             "torch_version": torch.__version__,
             "transformers_version": transformers.__version__,
