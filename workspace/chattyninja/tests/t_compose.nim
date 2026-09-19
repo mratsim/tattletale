@@ -35,9 +35,9 @@ type PullChunks[N: static int] = object
   ## - a full drain equals the whole-render `pullAll`, the next pull after it reports 0
   ## - partial consumption resumes from the driver's fields, no byte re-handed
   ##
-  ## Machine and tables stay at the consumer's scope because `Machine.jinja` borrows
-  ## the template text behind the artifact. A `Machine` embedded in another object
-  ## loses the borrowed view, so the iterator parameters carry them instead.
+  ## Machine and tables stay at the consumer's scope, `Machine.jinja` borrowing the template
+  ## text behind the artifact. A `Machine` embedded in another object loses
+  ## the borrowed view, so the iterator parameters carry them.
   d: Driver
   buf: array[N, char]
 
@@ -55,8 +55,7 @@ iterator items[N: static int](p: var PullChunks[N], m: Machine, t: Tables): open
       break
     yield p.buf.toOpenArray(0, n - 1)
 
-proc renderChunked[N: static int](m: Machine, t: Tables, ctx: Value,
-    clock: float64): string =
+proc renderChunked[N: static int](m: Machine, t: Tables, ctx: Value, clock: float64): string =
   ## Renders one row through `N`-byte windows, accumulating every window.
   var pc = pullChunks[N](newDriver(ctx, clock))
   for w in pc.items(m, t):
@@ -64,12 +63,13 @@ proc renderChunked[N: static int](m: Machine, t: Tables, ctx: Value,
       result.add c
 
 func pieceRemaining(p: Piece): int =
-  ## Bytes of a pending piece not yet delivered.
+  ## Bytes of a pending piece not yet delivered, lazy pieces carrying no counted length.
   case p.kind
   of pkNone: 0
   of pkSpan: int(p.hi - p.lo) - p.pos
   of pkStr: p.s.len - p.pos
   of pkScratch: p.shi.int - p.pos
+  of pkLazy: 0
 
 template checkWindow(size: static int) =
   ## Checks one row's render through a `size`-byte window against the recorded bytes
@@ -154,8 +154,8 @@ block windowedScratch:
           suite & "/" & r.row & ": the 1-byte window render with scratch differs " &
           "from the recorded bytes"
 
-  # A derived container emit through the windowed machine. Scratch holds the repr,
-  # and the 7-byte window makes the scratch piece drain across several pulls mid-piece.
+  # A derived container emit through the windowed machine. The repr drains as a lazy piece,
+  # and the 7-byte window makes it drain across several pulls mid-piece.
   var inner = DictVal()
   dictSet(inner, "alpha", strVal("one"))
   dictSet(inner, "beta", seqVal(@[strVal("x"), strVal("y"), strVal("z")]))
@@ -171,14 +171,14 @@ block windowedScratch:
   var pc = pullChunks[7](newDriver(ctx, 0.0))
   attachScratch(pc.d, scr)
   var got = ""
-  var scratchPulls = 0
+  var lazyPulls = 0
   for w in pc.items(m, tables):
-    if pc.d.pend.kind == pkScratch:
-      inc scratchPulls
+    if pc.d.pend.kind == pkLazy:
+      inc lazyPulls
     for c in w:
       got.add c
-  doAssert got == want, "the windowed scratch-piece drain differs from the string render"
-  doAssert scratchPulls >= 3,
-      "the scratch piece drained in fewer than three pulls, the mid-piece drain is unobserved"
+  doAssert got == want, "the windowed lazy-piece drain differs from the string render"
+  doAssert lazyPulls >= 3,
+      "the lazy piece drained in fewer than three pulls, the mid-piece drain is unobserved"
 
 echo "t_compose: moonlight and qwen3 through window sizes 7, 256 and 1 with scratch, all byte-exact"

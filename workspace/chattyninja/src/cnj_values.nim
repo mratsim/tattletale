@@ -311,19 +311,8 @@ func pyStrip*(s, chars: string, left, right: bool): string =
       dec b
   if a == b: "" else: spanString(s.toOpenArray(a, b - 1))
 
-proc pyRepr*(v: Value): string
-
 proc pyStrInto*(v: Value, sb: var Cursor)
 proc pyReprInto(v: Value, sb: var Cursor)
-
-proc materializeStr(write: proc (v: Value, sb: var Cursor) {.nimcall.}, v: Value): string =
-  ## Returns one fresh string holding `write`'s rendering of `v`, a measuring pass presizing
-  ## and the render pass filling, one allocation bounded by the size.
-  var sb = measureBuf()
-  write(v, sb)
-  result = newString(sb.len)
-  var dst = over(result)
-  write(v, dst)
 
 proc pyStrInto*(v: Value, sb: var Cursor) =
   ## Writes the value as template output text into `sb`:
@@ -338,13 +327,6 @@ proc pyStrInto*(v: Value, sb: var Cursor) =
   of vkFloat: sb.addFloat v.f
   of vkStr: sb.add v.s
   of vkSeq, vkDict, vkNs, vkLoop, vkMacro: pyReprInto(v, sb)
-
-proc pyStr*(v: Value): string =
-  ## Returns the value as template output text. Strings pass through unchanged, everything else
-  ## takes its Python `str()` form, undefined rendering empty. One string is materialized, presized by a measuring pass.
-  if v.kind == vkStr:
-    return v.s
-  materializeStr(pyStrInto, v)
 
 func reprQuoted(sb: var Cursor, s: string) =
   ## Writes Python's single-quoted repr of `s`, the form container reprs use for keys
@@ -388,104 +370,390 @@ proc pyReprInto(v: Value, sb: var Cursor) =
   else:
     pyStrInto(v, sb)
 
-proc pyRepr*(v: Value): string =
-  ## Returns Python's `repr()`, the rendering a template sees when it stringifies a container.
-  materializeStr(pyReprInto, v)
-
 func hex4(sb: var Cursor, c: int) =
   ## Appends `c` as four uppercase hex digits, the payload a `\uXXXX` escape carries.
   const digits = "0123456789ABCDEF"
   for sh in countdown(12, 0, 4):
     sb.add digits[(c shr sh) and 0xF]
 
-proc jsonEscapeInto(sb: var Cursor, s: string, ensureAscii, html: bool) =
-  ## Writes the JSON string body of `s`, mirroring `json.dumps` escaping, ASCII-escaped when
-  ## `ensureAscii` is set, `html` additionally escaping `<`, `>`, `&` and `'`.
-  for r in s.runes:
-    let c = ord(r)
-    if c == ord('"'):
-      sb.add "\\\""
-    elif c == ord('\\'):
-      sb.add "\\\\"
-    elif c == 10:
-      sb.add "\\n"
-    elif c == 13:
-      sb.add "\\r"
-    elif c == 9:
-      sb.add "\\t"
-    elif c == 8:
-      sb.add "\\b"
-    elif c == 12:
-      sb.add "\\f"
-    elif c < 32:
-      sb.add "\\u"
-      hex4(sb, c)
-    elif c > 127 and ensureAscii:
-      if c > 0xFFFF:
-        let u = c - 0x10000
-        sb.add "\\u"
-        hex4(sb, 0xD800 + (u shr 10))
-        sb.add "\\u"
-        hex4(sb, 0xDC00 + (u and 0x3FF))
-      else:
-        sb.add "\\u"
-        hex4(sb, c)
-    elif html:
-      case c
-      of ord('<'): sb.add "\\u003c"
-      of ord('>'): sb.add "\\u003e"
-      of ord('&'): sb.add "\\u0026"
-      of ord('\''): sb.add "\\u0027"
-      else: sb.addRune r
-    else:
-      sb.addRune r
+type
+  SerMode* = enum
+    ## Mode of a serializer, `smStr` rendering Python `str()` and `repr()` output text,
+    ## `smJson` rendering the `tojson` filter form.
+    smStr, smJson
 
-proc toJsonBody(v: Value, sb: var Cursor, opts: JsonOpts) =
-  ## Writes the `tojson` rendering of `v` into `sb`, recursively.
+  SerWalk* = enum
+    ## Character unit a quoted string body advances by, whole runes for the `tojson` escaping
+    ## rules and single bytes for the Python repr escaping rules.
+    wkRune, wkByte
+
+  SerAfter* = enum
+    ## Activity following the string body being written, closing the value's quote or closing
+    ## a mapping key's quote before the separator and the entry value.
+    saValue, saKey
+
+  SerNext* = enum
+    ## Activity a finished separator hands to, rendering the value in `v` or the mapping key
+    ## in `s` as a quoted string body.
+    nxDispatch, nxKey
+
+  SerPhase* = enum
+    ## Pending activity of a serializer. Queued chunk bytes and the pending separator drain
+    ## before the phase advances.
+    spDispatch, spStr, spRaw, spSep, spClose, spDone
+
+  SerFrame* = object
+    ## One open container on the serializer's stack.
+    val*: Value
+      ## the container being rendered
+    idx*: int
+      ## entry the serializer writes next
+
+  Ser* = object
+    ## Defunctional serializer for one `Value`, rendering byte by byte into the caller's
+    ## window with every pause point in the fields below, so a drain resumed through the same
+    ## `Ser` never re-emits a byte:
+    ## - queued literals and separators drain from the chunk buffer and `sep`
+    ## - unquoted string bodies copy straight from `s`
+    ## - quoted string bodies, container brackets and entries advance through the phases
+    mode*: SerMode
+    opts*: JsonOpts
+      ## `tojson` knobs, read in `smJson` mode only
+    phase*: SerPhase
+    v*: Value
+      ## value the `spDispatch` phase renders
+    s*: string
+      ## string body the `spStr` and `spRaw` phases write
+    spos*: int
+      ## bytes of `s` already written
+    walk*: SerWalk
+    quoted*: bool
+      ## the `spStr` body sits between quotes the serializer itself writes
+    after*: SerAfter
+    nxt*: SerNext
+    sep*: string
+      ## separator the `spSep` phase writes
+    sepos*: int
+      ## bytes of `sep` already written
+    buf*: array[40, char]
+      ## literal queue draining byte by byte
+    blen*, bpos*: int
+      ## queued bytes in `buf` and the read position
+    stack*: seq[SerFrame]
+      ## open containers, outermost first
+    closeSeq*: bool
+      ## the `spClose` phase writes a sequence bracket, else a mapping bracket
+
+const serChunkCap = 40
+  ## Capacity of the literal queue, bounding every queued literal. The longest `tojson`
+  ## escape is the astral surrogate pair (12 bytes), the longest atom rendering a float repr
+  ## (26 bytes), the macro form `<macro ` plus one int64 plus `>` (30 bytes with quotes).
+
+proc serQueue(js: var Ser, s: string) =
+  ## Queues literal bytes for draining, `s` at most `serChunkCap` bytes long.
+  js.blen = s.len
+  js.bpos = 0
+  if s.len > 0:
+    copyMem(addr js.buf[0], unsafeAddr s[0], s.len)
+
+proc serQueueRune(js: var Ser, r: Rune) =
+  ## Queues one rune per the `tojson` escaping rules, the filter's HTML post-pass included.
+  var c = Cursor(buf: toOpenArray(js.buf, 0, js.buf.high), len: 0)
+  let x = ord(r)
+  if x == ord('"'):
+    c.add "\\\""
+  elif x == ord('\\'):
+    c.add "\\\\"
+  elif x == 10:
+    c.add "\\n"
+  elif x == 13:
+    c.add "\\r"
+  elif x == 9:
+    c.add "\\t"
+  elif x == 8:
+    c.add "\\b"
+  elif x == 12:
+    c.add "\\f"
+  elif x < 32:
+    c.add "\\u"
+    hex4(c, x)
+  elif x > 127 and js.opts.ensureAscii:
+    if x > 0xFFFF:
+      let u = x - 0x10000
+      c.add "\\u"
+      hex4(c, 0xD800 + (u shr 10))
+      c.add "\\u"
+      hex4(c, 0xDC00 + (u and 0x3FF))
+    else:
+      c.add "\\u"
+      hex4(c, x)
+  elif x == ord('<'):
+    c.add "\\u003c"
+  elif x == ord('>'):
+    c.add "\\u003e"
+  elif x == ord('&'):
+    c.add "\\u0026"
+  elif x == ord('\''):
+    c.add "\\u0027"
+  else:
+    c.addRune r
+  js.blen = c.len
+  js.bpos = 0
+
+proc serQueueByte(js: var Ser, c: char) =
+  ## Queues one byte of a Python-repr string body, escaping the five characters Python's `repr()` escapes.
+  case c
+  of '\\': serQueue(js, "\\\\")
+  of '\'': serQueue(js, "\\'")
+  of '\n': serQueue(js, "\\n")
+  of '\r': serQueue(js, "\\r")
+  of '\t': serQueue(js, "\\t")
+  else:
+    js.buf[0] = c
+    js.blen = 1
+    js.bpos = 0
+
+proc serFinish(js: var Ser) =
+  ## Closes the value just rendered. The enclosing container advances to its next entry,
+  ## nested containers closing outward, the rendering completing once the stack empties.
+  if js.stack.len == 0:
+    js.phase = spDone
+    return
+  inc js.stack[^1].idx
+  let f = js.stack[^1]
+  let n = if f.val.kind == vkSeq: f.val.xs.items.len else: f.val.d.keys.len
+  if f.idx < n:
+    js.sep = if js.mode == smJson: js.opts.itemSep else: ", "
+    js.sepos = 0
+    if f.val.kind == vkSeq:
+      js.v = f.val.xs.items[f.idx]
+      js.nxt = nxDispatch
+    else:
+      js.s = f.val.d.keys[f.idx]
+      js.nxt = nxKey
+    js.phase = spSep
+  else:
+    js.closeSeq = f.val.kind == vkSeq
+    discard js.stack.pop()
+    js.phase = spClose
+
+proc serDispatch(js: var Ser) =
+  ## Renders the value in `v`, one literal or string body at a time.
+  let v = js.v
   case v.kind
-  of vkUndefined, vkNone: sb.add "null"
-  of vkBool: sb.add(if v.b: "true" else: "false")
-  of vkInt: sb.addInt v.i
-  of vkFloat: sb.addFloat v.f
+  of vkUndefined:
+    if js.mode == smJson:
+      serQueue(js, "null")
+    serFinish(js)
+  of vkNone:
+    serQueue(js, if js.mode == smJson: "null" else: "None")
+    serFinish(js)
+  of vkBool:
+    serQueue(js, if js.mode == smJson: (if v.b: "true" else: "false")
+        else: (if v.b: "True" else: "False"))
+    serFinish(js)
+  of vkInt, vkFloat:
+    var c = Cursor(buf: toOpenArray(js.buf, 0, js.buf.high), len: 0)
+    if v.kind == vkInt:
+      c.addInt v.i
+    else:
+      c.addFloat v.f
+    js.blen = c.len
+    js.bpos = 0
+    serFinish(js)
   of vkStr:
-    sb.add '"'
-    jsonEscapeInto(sb, v.s, opts.ensureAscii, true)
-    sb.add '"'
+    if js.mode == smStr and js.stack.len == 0:
+      js.s = v.s
+      js.spos = 0
+      js.blen = 0
+      js.bpos = 0
+      js.phase = spRaw
+    else:
+      js.s = v.s
+      js.spos = 0
+      js.quoted = true
+      js.walk = if js.mode == smJson: wkRune else: wkByte
+      js.after = saValue
+      serQueue(js, if js.mode == smJson: "\"" else: "'")
+      js.phase = spStr
+  of vkLoop:
+    # The `<` and `>` of the context form carry the tojson filter's HTML escaping.
+    serQueue(js, if js.mode == smJson: "\"\\u003cLoopContext\\u003e\"" else: "<LoopContext>")
+    serFinish(js)
+  of vkMacro:
+    var c = Cursor(buf: toOpenArray(js.buf, 0, js.buf.high), len: 0)
+    if js.mode == smJson:
+      c.add "\"\\u003cmacro "
+    else:
+      c.add "<macro "
+    c.addInt v.mc.name.int64
+    if js.mode == smJson:
+      c.add "\\u003e\""
+    else:
+      c.add '>'
+    js.blen = c.len
+    js.bpos = 0
+    serFinish(js)
   of vkSeq:
     if v.xs.items.len == 0:
-      sb.add "[]"
-      return
-    sb.add '['
-    for i in 0 ..< v.xs.items.len:
-      if i > 0:
-        sb.add opts.itemSep
-      toJsonBody(v.xs.items[i], sb, opts)
-    sb.add ']'
+      serQueue(js, "[]")
+      serFinish(js)
+    else:
+      js.stack.add(SerFrame(val: v, idx: 0))
+      serQueue(js, "[")
+      js.v = v.xs.items[0]
   of vkDict, vkNs:
     if v.d.keys.len == 0:
-      sb.add "{}"
-      return
-    sb.add '{'
-    for i in 0 ..< v.d.keys.len:
-      if i > 0:
-        sb.add opts.itemSep
-      sb.add '"'
-      jsonEscapeInto(sb, v.d.keys[i], opts.ensureAscii, true)
-      sb.add '"'
-      sb.add opts.kvSep
-      toJsonBody(v.d.vals[i], sb, opts)
-    sb.add '}'
-  of vkLoop, vkMacro:
-    sb.add '"'
-    jsonEscapeInto(sb, pyStr(v), opts.ensureAscii, true)
-    sb.add '"'
+      serQueue(js, "{}")
+      serFinish(js)
+    else:
+      js.stack.add(SerFrame(val: v, idx: 0))
+      serQueue(js, if js.mode == smJson: "{\"" else: "{'")
+      js.s = v.d.keys[0]
+      js.spos = 0
+      js.quoted = true
+      js.walk = if js.mode == smJson: wkRune else: wkByte
+      js.after = saKey
+      js.phase = spStr
+
+proc serStep(js: var Ser) =
+  ## Advances one logical unit once the chunk buffer and the separator are drained.
+  case js.phase
+  of spDispatch:
+    serDispatch(js)
+  of spStr:
+    if js.spos < js.s.len:
+      if js.walk == wkByte:
+        let c = js.s[js.spos]
+        inc js.spos
+        serQueueByte(js, c)
+      else:
+        var r: Rune
+        fastRuneAt(js.s, js.spos, r, true)
+        serQueueRune(js, r)
+    else:
+      case js.after
+      of saValue:
+        if js.quoted:
+          serQueue(js, if js.mode == smJson: "\"" else: "'")
+        serFinish(js)
+      of saKey:
+        serQueue(js, if js.mode == smJson: "\"" else: "'")
+        js.sep = if js.mode == smJson: js.opts.kvSep else: ": "
+        js.sepos = 0
+        js.v = js.stack[^1].val.d.vals[js.stack[^1].idx]
+        js.nxt = nxDispatch
+        js.phase = spSep
+  of spClose:
+    serQueue(js, if js.closeSeq: "]" else: "}")
+    serFinish(js)
+  of spSep:
+    case js.nxt
+    of nxDispatch:
+      js.phase = spDispatch
+    of nxKey:
+      js.quoted = true
+      js.walk = if js.mode == smJson: wkRune else: wkByte
+      js.after = saKey
+      js.spos = 0
+      serQueue(js, if js.mode == smJson: "\"" else: "'")
+      js.phase = spStr
+  of spRaw, spDone:
+    discard
+
+proc serValue*(v: Value, mode: SerMode, opts = JsonOpts()): Ser =
+  ## Returns a serializer positioned before the first byte of `v`'s rendering.
+  Ser(mode: mode, opts: opts, phase: spDispatch, v: v)
+
+proc serReset*(js: var Ser, v: Value, mode: SerMode, opts = JsonOpts()) =
+  ## Repositions `js` before the first byte of `v`'s rendering, keeping the container
+  ## stack's capacity for the next derived value rendered through it.
+  js.mode = mode
+  js.opts = opts
+  js.phase = spDispatch
+  js.v = v
+  js.s = ""
+  js.spos = 0
+  js.walk = wkRune
+  js.quoted = false
+  js.after = saValue
+  js.nxt = nxDispatch
+  js.sep = ""
+  js.sepos = 0
+  js.blen = 0
+  js.bpos = 0
+  js.closeSeq = false
+  js.stack.setLen(0)
+
+proc serDone*(js: Ser): bool =
+  ## Returns whether the rendering is complete and every queued byte drained.
+  js.phase == spDone and js.bpos == js.blen and js.sepos == js.sep.len
+
+proc pullSer*(js: var Ser, dst: var openArray[char]): int =
+  ## Returns the rendering's next bytes, written into `dst[0 ..< result]`.
+  ## Resumable drain, every position advancing only past bytes already handed out, so a window
+  ## smaller than the rendering drains across calls through the same `js`:
+  ## - the rendering is complete when `serDone` holds
+  ## - a call with window room always writes at least one byte unless the rendering is done
+  while result < dst.len:
+    if js.bpos < js.blen:
+      let take = min(dst.len - result, js.blen - js.bpos)
+      copyMem(addr dst[result], addr js.buf[js.bpos], take)
+      inc js.bpos, take
+      inc result, take
+    elif js.sepos < js.sep.len:
+      let take = min(dst.len - result, js.sep.len - js.sepos)
+      copyMem(addr dst[result], unsafeAddr js.sep[js.sepos], take)
+      inc js.sepos, take
+      inc result, take
+    elif js.phase == spDone:
+      break
+    elif js.phase == spRaw:
+      let n = min(dst.len - result, js.s.len - js.spos)
+      if n > 0:
+        copyMem(addr dst[result], unsafeAddr js.s[js.spos], n)
+        inc js.spos, n
+        inc result, n
+      if js.spos == js.s.len:
+        serFinish(js)
+    else:
+      serStep(js)
+
+proc serString(js: var Ser): string =
+  ## Returns the rendering as one fresh string, the caller-side drain-and-grow form.
+  ## Buffer growth starts at 256 bytes and doubles until the rendering completes.
+  var cap = 256
+  result = newString(cap)
+  var written = 0
+  while true:
+    let n = pullSer(js, toOpenArray(result, written, cap - 1))
+    inc written, n
+    if serDone(js):
+      break
+    cap = cap * 2
+    result.setLen(cap)
+  result.setLen(written)
+
+proc pullJSON*(dst: var openArray[char], v: Value, opts = JsonOpts()): int =
+  ## Returns the count of `tojson` rendering bytes of `v` written into `dst`.
+  ## Window-sized, the count stopping at `dst.len` when the rendering does not fit:
+  ## - the unwritten tail is dropped, so a rendering that may exceed the window drains
+  ##   through `pullSer` over a held `Ser`
+  var js = serValue(v, smJson, opts)
+  pullSer(js, dst)
+
+proc pyStr*(v: Value): string =
+  ## Returns the value as template output text. Strings pass through unchanged, everything
+  ## else takes its Python `str()` form, undefined rendering empty.
+  ## Caller-side drain-and-grow over the serializer, one buffer doubling until done.
+  if v.kind == vkStr:
+    return v.s
+  var js = serValue(v, smStr)
+  serString(js)
 
 proc toJson*(v: Value, opts = JsonOpts()): string =
-  ## Returns the `tojson` filter rendering:
-  ##   non-ASCII raw UTF-8 unless the template passes `ensure_ascii`, Jinja's HTML escaping
-  ##   applied as the filter's post-pass, one string materialized bounded by the size.
-  var sb = measureBuf()
-  toJsonBody(v, sb, opts)
-  result = newString(sb.len)
-  var dst = over(result)
-  toJsonBody(v, dst, opts)
+  ## Returns the `tojson` filter rendering, non-ASCII as raw UTF-8 unless the template
+  ## passes `ensure_ascii`, Jinja's HTML escaping applied as the filter's post-pass.
+  ## Caller-side drain-and-grow over the serializer, no presize pass.
+  var js = serValue(v, smJson, opts)
+  serString(js)

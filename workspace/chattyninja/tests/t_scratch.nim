@@ -5,14 +5,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Scratch-window emit proof for the chattyninja engine.
+## Scratch-window render proof for the chattyninja engine.
 ##
-## Caller-owned scratch turns container stringification and `~` concatenation into renders
-## with no intermediate strings:
+## Caller-owned scratch backs `~` concatenation, and derived emits drain as lazy pieces:
 ## - every ok corpus row renders byte-exact through pull with scratch attached
-## - a scratch-window pending piece drains across pull calls byte-exact
-## - an undersized scratch raises `ScratchError` naming the value kind and the capacity
-##   in force, and after growth the repull stays byte-exact, a for-filter breach included
+## - a container emit drains as a lazy piece across pull calls byte-exact
+## - an undersized scratch raises `ScratchError` from `~` concatenation naming the value
+##   kind and the capacity in force, and after growth the repull stays byte-exact
 ##
 ## Run:
 ##   $ ./workspace/chattyninja/run_tests.sh t_scratch
@@ -84,9 +83,9 @@ block corpusRowsThroughScratch:
   doAssert checked == 55, "expected 55 rendered ok rows across 13 suites, checked " & $checked
   doAssert gapSkipped == 4, "expected 4 gap rows across 13 suites, skipped " & $gapSkipped
 
-# A container emit rendered into scratch drains across pull calls byte-exact.
+# A container emit drains as a lazy piece across pull calls byte-exact.
 # ---------------------------------------------------------------------------
-block scratchWindowDrain:
+block lazyWindowDrain:
   let ctx = listCtx()
   let src = "{{ m }}"
   let (nodes, tables) = parseTemplate(src)
@@ -98,23 +97,23 @@ block scratchWindowDrain:
   attachScratch(d, scr)
   var window = newSeq[char](8)
   var acc = ""
-  var scratchPieces = 0
+  var lazyPieces = 0
   while true:
-    if d.pend.kind == pkScratch:
-      inc scratchPieces
+    if d.pend.kind == pkLazy:
+      inc lazyPieces
     let n = pull(m, tables, d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
-  doAssert acc == want, "the scratch-window drain differs from the string render"
-  doAssert scratchPieces > 0, "no pull observed a pending scratch piece"
+  doAssert acc == want, "the lazy-piece drain differs from the string render"
+  doAssert lazyPieces > 0, "no pull observed a pending lazy piece"
 
-# An undersized scratch raises the typed error naming the value kind and capacity,
-# and after growth the repull from the same driver is byte-exact.
+# An undersized scratch raises the typed error from `~` concatenation naming the value
+# kind and capacity, and after growth the repull from the same driver is byte-exact.
 # ---------------------------------------------------------------------------
 block scratchBreach:
   let ctx = listCtx()
-  let src = "{{ m }}"
+  let src = "{{ m ~ '' }}"
   let (nodes, tables) = parseTemplate(src)
   let m = Machine(jinja: src, nodes: nodes)
   let want = renderToString(src, ctx, 0.0)
@@ -283,8 +282,8 @@ block filterBreachRepull:
   doAssert growAcc == growWant,
       "the growing-concat repull differs from the single-shot render, bytes lost or re-handed"
 
-# A container emit inside a macro body drains through the scratch emitter's
-# capture-sink branch, and the captured string matches the string render.
+# A container emit inside a macro body materializes into the capture sink,
+# and the captured string matches the string render.
 # ---------------------------------------------------------------------------
 block captureSinkScratch:
   let ctx = listCtx()
@@ -304,7 +303,7 @@ block captureSinkScratch:
 # ---------------------------------------------------------------------------
 block macroBreachRepull:
   let ctx = listCtx()
-  let src = "{%- macro mm(v) -%}[{{ v }}]{%- endmacro -%}{{ mm(m) }}"
+  let src = "{%- macro mm(v) -%}[{{ v ~ '' }}]{%- endmacro -%}{{ mm(m) }}"
   let (nodes, tables) = parseTemplate(src)
   let m = Machine(jinja: src, nodes: nodes)
   let want = renderToString(src, ctx, 0.0)
@@ -373,19 +372,21 @@ when defined(nimAllocStats):
   block allocProbe:
     let iters = 50
 
-    # Direct tojson of the tool schema. The writer renders into one presized string, so
-    # the whole serialization costs exactly one allocation per call.
+    # Direct tojson of the tool schema. The writer drains into a growable buffer with no
+    # presize pass, so a call costs one allocation for the buffer plus one for the stack
+    # behind the schema's two nested containers.
     let tools = toolsVal()
     # warm-up call, excluded from the counted region
     discard toJson(tools)
     let tjAllocs = allocsOf:
       for _ in 0 ..< iters:
         discard toJson(tools)
-    doAssert tjAllocs == iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
-        " allocations per call against the measured one"
+    doAssert tjAllocs == 2 * iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
+        " allocations per call against the measured two"
 
-    # The same schema through the pull render with adequate scratch, driver setup uncounted:
-    # the counted region holds only the pull loop, and the render costs two allocations.
+    # The same schema through the pull render, driver setup uncounted. The counted region
+    # holds only the pull loop, and the render costs the filter's argument list plus
+    # toJson's buffer and container stack.
     const tJson = "{{ tools|tojson }}"
     var cd = DictVal()
     dictSet(cd, "tools", tools)
@@ -420,8 +421,8 @@ when defined(nimAllocStats):
           if n == 0:
             break
       renderAllocs += renderCost
-    doAssert renderAllocs == 2 * iters, "the tojson pull render cost " &
-        $(renderAllocs div iters) & " allocations per render against the measured two"
+    doAssert renderAllocs == 3 * iters, "the tojson pull render cost " &
+        $(renderAllocs div iters) & " allocations per render against the measured three"
 
     # A container emit through scratch costs nothing beyond the loop machinery:
     # the repr writes into scratch and drains as a scratch-window piece.
@@ -466,12 +467,19 @@ when defined(nimAllocStats):
       total
 
     let loopOnly = countScratchRenders("{% for m in messages %}x{% endfor %}", iters)
+    let strEmits = countScratchRenders("{% for m in messages %}{{ m.n }}{% endfor %}", iters)
     let dictEmits = countScratchRenders("{% for m in messages %}{{ m }}{% endfor %}", iters)
-    doAssert dictEmits == loopOnly, "a container emit via scratch cost " &
-        $(dictEmits - loopOnly) & " allocations beyond the loop baseline"
+    # The runtime-built message values keep the engine's one-lookup-copy residual per emit.
+    doAssert strEmits == loopOnly + iters * 10, "the string emit cost " &
+        $(strEmits - loopOnly) & " allocations beyond the loop baseline"
+    # A container emit through the lazy piece costs one allocation per emit over the string
+    # emit and one per render for the serializer's container stack.
+    doAssert dictEmits == strEmits + iters * 11, "the container emit cost " &
+        $(dictEmits - strEmits) & " allocations beyond the string emit"
 
     echo "t_scratch alloc: tojson direct ", tjAllocs div iters, "/call, tojson render ",
-        renderAllocs div iters, "/render, container emit via scratch ",
-        dictEmits - loopOnly, " allocs beyond the loop baseline over ", iters, " renders"
+        renderAllocs div iters, "/render, string emit ", (strEmits - loopOnly) div iters,
+        ", container emit ", (dictEmits - loopOnly) div iters,
+        " allocs beyond the loop baseline over ", iters, " renders"
 
 echo "t_scratch: corpus rows, scratch drains, breaches and repulls all byte-exact"

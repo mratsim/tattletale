@@ -204,12 +204,13 @@ when defined(nimAllocStats):
   privateAccess(AllocStats)
 
   func pieceRemaining(p: Piece): int =
-    ## Bytes of a pending piece not yet delivered.
+    ## Bytes of a pending piece not yet delivered, lazy pieces carrying no counted length.
     case p.kind
     of pkNone: 0
     of pkSpan: int(p.hi - p.lo) - p.pos
     of pkStr: p.s.len - p.pos
     of pkScratch: p.shi.int - p.pos
+    of pkLazy: 0
 
   template allocsOf(body: untyped): int =
     ## Counts `alloc` calls made by `body`, with allocator state warmed by the caller.

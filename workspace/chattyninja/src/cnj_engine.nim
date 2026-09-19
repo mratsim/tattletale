@@ -74,28 +74,24 @@ proc emitScratch(d: var Driver, n: int) =
   d.pend = Piece(pos: 0, kind: pkScratch, shi: int32 n)
 
 proc emitValue(d: var Driver, v: Value) =
-  ## Stringifies a non-string emit value and hands it on as the pending piece.
-  ## - with scratch attached, the rendering drains as a scratch-window piece, no intermediate string
-  ## - without scratch, it materializes one string bounded by the value size, and a breach
-  ##   raises `ScratchError` naming the value kind, the caller repulls
-  if d.scratch == nil:
-    emitStr(d, pyStr(v))
+  ## Queues a derived value's rendering as the lazy piece, the serializer in `d.lazy`
+  ## draining into the caller's window across pull calls, byte-exact with `pyStr`.
+  ## With a capture sink open, the rendering materializes into the sink instead.
+  doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
+  if d.sinks.len > 0:
+    d.sinks[^1].add pyStr(v)
     return
-  var sb = scratchBuf(d)
-  try:
-    pyStrInto(v, sb)
-  except ScratchError as e:
-    e.msg = "emit of a " & $v.kind & " value, " & e.msg
-    raise e
-  emitScratch(d, sb.len)
+  serReset(d.lazy, v, smStr)
+  d.pend = Piece(kind: pkLazy)
 
 template pieceLen(p: Piece): int =
-  ## Length in bytes of a pending piece.
+  ## Length in bytes of a pending piece, lazy pieces drained through the serializer instead.
   case p.kind
   of pkNone: 0
   of pkSpan: (p.hi - p.lo).int
   of pkStr: p.s.len
   of pkScratch: p.shi.int
+  of pkLazy: 0
 
 # Binding
 # ---------------------------------------------------------------------------
@@ -372,23 +368,39 @@ proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int 
   ## Ownership sits with the caller, whose buffer capacity is the delivery window.
   ## Resumption state is the driver, so consumers over one `Machine` with separate drivers each
   ## own their delivery position.
+  ##
   ## Delivery contract:
   ## - `d.pend.pos` and `d.cur` advance before the call returns, so a consumer that stops
   ##   mid-drain and resumes never re-receives a byte
-  ## - a value longer than the window drains across calls through the pending piece
+  ## - a piece longer than the window drains across calls, a lazy piece resuming
+  ##   through the serializer in `d.lazy`
   ## - 0 means the render is complete, nothing pending and `d.curNode == noLink`
+  ##
   ## A raise discards the bytes already written into `buf` in the failing call, the caller
   ## never receiving them and the driver having advanced past their render, so a repull
-  ## after a `ScratchError` resumes after them.
+  ## resumes after them:
   ## - a consumer that must hold every byte across a raise keeps the window at one byte,
   ##   which makes each delivered byte a returned byte
-  ## - span pieces copy out of `Machine.jinja`, string and scratch pieces out of driver storage
+  ## - span pieces copy out of `Machine.jinja`, string and scratch pieces out of driver storage,
+  ##   lazy pieces out of the serializer state in `d.lazy`
   ## - a zero-capacity buffer returns 0 without stepping the render
   if buf.len == 0:
     return 0
   while true:
-    if d.pend.kind != pkNone and d.pend.pos >= pieceLen(d.pend):
+    # Retire a piece whose bytes are all delivered. A lazy piece completes when its serializer
+    # is done, which a window-sized drain reports by leaving the piece queued.
+    if d.pend.kind == pkLazy:
+      if serDone(d.lazy):
+        d.pend = Piece(kind: pkNone)
+    elif d.pend.kind != pkNone and d.pend.pos >= pieceLen(d.pend):
       d.pend = Piece(kind: pkNone)
+    if d.pend.kind == pkLazy:
+      let n = pullSer(d.lazy, toOpenArray(buf, result, buf.len - 1))
+      d.cur += n
+      result += n
+      if result == buf.len:
+        return
+      continue
     if d.pend.kind != pkNone:
       let take = min(buf.len - result, pieceLen(d.pend) - d.pend.pos)
       let base = d.pend.pos
@@ -403,7 +415,7 @@ proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int 
         copyMem(addr buf[result], unsafeAddr d.pend.s[base], take)
       of pkScratch:
         copyMem(addr buf[result], unsafeAddr d.scratch[base], take)
-      of pkNone:
+      of pkNone, pkLazy:
         discard
       result += take
       if result == buf.len:

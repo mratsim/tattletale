@@ -230,12 +230,14 @@ type
   Scope* = seq[Binding]
 
   PieceKind* = enum
-    pkNone, pkSpan, pkStr, pkScratch
+    pkNone, pkSpan, pkStr, pkScratch, pkLazy
 
   Piece* = object
     ## Pending output piece. Span pieces deliver straight out of `Machine.jinja`, string
-    ## pieces are materialized values (stringify, tojson, a captured body) held by the driver,
-    ## scratch pieces are a derived value rendered into `Driver.scratch` and delivered in place.
+    ## pieces are materialized strings held by the driver:
+    ## - scratch pieces are a derived value rendered into `Driver.scratch`, delivered in place
+    ## - lazy pieces are a derived value rendered by the serializer in `Driver.lazy` straight
+    ##   into the delivery window
     pos*: int
     case kind*: PieceKind
     of pkNone: nil
@@ -246,6 +248,9 @@ type
     of pkScratch:
       shi*: int32
         ## end of the scratch window, the window starts at scratch byte 0
+    of pkLazy:
+      nil
+        ## rendered by the serializer in `Driver.lazy`, no payload here
 
   Driver* = object
     ## All render control state, owned by the `items` loop, nothing reachable from `Machine`,
@@ -273,6 +278,8 @@ type
       ## before the next derived value is built, so one buffer reused from byte 0 serves every derived value.
     scratchCap*: int
       ## writable bytes behind `scratch`
+    lazy*: Ser
+      ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
 func scratchBuf*(d: Driver): Cursor =
   ## Returns a cursor over scratch positioned at byte 0, ready for one derived value,
