@@ -13,7 +13,7 @@
 # | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 # | parse    | `parseTemplate` reads template text and appends nodes in source order, resolving the whitespace policy and interning names into `Tables`                              |
 # | load     | the caller builds `Machine` from the arena plus the borrowed template text, so the artifact holds no mutable state and cannot outlive the text it points into         |
-# | render   | `items` walks the arena through `steps`, owning every piece of control state in a `Driver` passed in by the caller, so two drivers over one `Machine` are independent |
+# | render   | `pull` walks the arena through `steps`, owning every piece of control state in a `Driver` passed in by the caller, so two drivers over one `Machine` are independent |
 # | dispatch | `steps` is total over `NodeKind`, so the executable meaning of a node is a pure function of its kind and no node carries a proc field or program counter              |
 #
 # The re-entry contract. A step may be re-entered, and resumption state comes from the top
@@ -49,7 +49,7 @@ proc emitSpan(m: Machine, d: var Driver, lo, hi: int32) =
   ## Makes a template-text span the pending piece, or appends it to the capture sink when one is open.
   if hi <= lo:
     return
-  # One piece is pending at a time, and the `items` loop drains it before dispatching again, so
+  # One piece is pending at a time, and the pull loop drains it before dispatching again, so
   # a second piece here would silently drop the first one's bytes.
   doAssert d.pend.kind == pkNone, "a step queued a piece while one was still pending"
   if d.sinks.len > 0:
@@ -340,44 +340,71 @@ func append(a: var string, c: openArray[char]) =
   if c.len > 0:
     copyMem(addr a[at], unsafeAddr c[0], c.len)
 
-iterator items*(m: Machine, t: Tables, d: var Driver): openArray[char] =
-  ## Pulls the render in chunks of at most `ChunkSize` bytes. A chunk borrows template text for a span
-  ## piece and driver storage for a materialized one, so no output byte is copied on the way out.
+proc pull*(m: Machine, t: Tables, d: var Driver, buf: var openArray[char]): int =
+  ## Returns the render's next bytes, written into `buf[0 ..< result]`.
+  ##
+  ## Ownership sits with the caller, whose buffer capacity is the delivery window.
+  ## Resumption state is the driver, so consumers over one `Machine` with separate drivers are independent.
   ## Delivery contract:
-  ## - `cur` counts bytes handed out, so a consumer that stops mid-render and resumes leaves
-  ##   the driver's position consistent with what it received
+  ## - `d.pend.pos` and `d.cur` advance before the call returns, so a consumer that stops
+  ##   mid-drain and resumes never re-receives a byte
+  ## - a value longer than the window drains across calls through the pending piece
+  ## - 0 means the render is complete, nothing pending and `d.curNode == noLink`
+  ##
+  ## Span pieces copy out of `Machine.jinja`, string pieces out of driver storage.
+  ## A zero-capacity buffer returns 0 without stepping the render.
+  if buf.len == 0:
+    return 0
   while true:
     if d.pend.kind != pkNone and d.pend.pos >= pieceLen(d.pend):
       d.pend = Piece(kind: pkNone)
     if d.pend.kind != pkNone:
-      let total = pieceLen(d.pend)
-      let take = min(ChunkSize, total - d.pend.pos)
+      let take = min(buf.len - result, pieceLen(d.pend) - d.pend.pos)
       let base = d.pend.pos
-      # Commit the delivery position before `yield`, not after:
-      #   a consumer that leaves the loop through `break` never resumes the iterator, so a post-yield
-      # update strands `pos` and `cur` at their pre-yield values and re-hands the same chunk
-      # forever. A yielded slice aliases `pend.s`, so a fully delivered piece is reclaimed at the loop
-      # top above, never while its slice is live.
+      # Commit the delivery position before returning, not after:
+      #   the caller may stop after any call, so a post-return update would strand `pos`
+      #   and `cur` at their pre-call values and re-hand the same bytes.
       d.pend.pos += take
       d.cur += take
       case d.pend.kind
       of pkSpan:
-        yield m.jinja.toOpenArray(int d.pend.lo + base, int d.pend.lo + base + take - 1)
+        copyMem(addr buf[result], unsafeAddr m.jinja[int d.pend.lo + base], take)
       of pkStr:
-        yield d.pend.s.toOpenArray(base, base + take - 1)
+        copyMem(addr buf[result], unsafeAddr d.pend.s[base], take)
       of pkNone:
         discard
+      result += take
+      if result == buf.len:
+        return
       continue
     if d.curNode == noLink:
-      break
+      return
     let n = d.curNode
     steps[m.nodes[n].kind](m, t, d, n)
 
+iterator items*(m: Machine, t: Tables, d: var Driver): openArray[char] =
+  ## Pulls the render in chunks of at most `ChunkSize` bytes, one `pull` call per chunk.
+  ## Delivery contract:
+  ## - a chunk borrows the iterator's local window, so a consumer must finish with it before
+  ##   advancing the loop
+  ## - `cur` counts bytes handed out, so a consumer that stops mid-render and resumes leaves
+  ##   the driver's position consistent with what it received
+  var buf: array[ChunkSize, char]
+  while true:
+    let n = pull(m, t, d, buf)
+    if n == 0:
+      break
+    yield buf.toOpenArray(0, n - 1)
+
 proc pullAll*(m: Machine, t: Tables, d: var Driver): string =
-  ## Renders to completion and returns every byte. Chunking composes with `cur`, so the two-pass
-  ## counting contract needs no separate counting pass.
-  for c in items(m, t, d):
-    result.append c
+  ## Returns every render byte. Chunking composes with `cur`, so the two-pass counting contract
+  ## needs no separate counting pass.
+  var buf: array[ChunkSize, char]
+  while true:
+    let n = pull(m, t, d, buf)
+    if n == 0:
+      break
+    result.append buf.toOpenArray(0, n - 1)
 
 proc renderToString*(src: string, ctx: Value, clock = 0.0): string =
   ## Compiles and renders in one call. `Machine` is built here, at the scope that owns `src`, because

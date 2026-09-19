@@ -79,6 +79,35 @@ if [ "$run_chunk7" = true ]; then
   fi
 fi
 
+# `t_pull` also runs with `-d:nimAllocStats`, which enables its allocation probe: pending-piece
+# drain calls must allocate 0, and the full pull render must not allocate more than the string
+# render. Without the define the probe is compiled out, so only this build exercises it.
+run_allocstats=false
+if [ "$#" -eq 0 ]; then
+  run_allocstats=true
+else
+  for a in "$@"; do
+    [ "$(basename "${a%.nim}")" = "t_pull" ] && run_allocstats=true
+  done
+fi
+if [ "$run_allocstats" = true ]; then
+  f="tests/t_pull.nim"
+  name="t_pull-allocstats"
+  log="$bin_dir/$name.log"
+  if ! nim c "${flags[@]}" -d:nimAllocStats -o:"$bin_dir/$name" "$f" >"$log" 2>&1; then
+    echo "FAIL compile  $f (-d:nimAllocStats)"
+    sed -n '1,25p' "$log"
+    status=1
+  elif ! "$bin_dir/$name" >"$bin_dir/$name.out" 2>&1; then
+    echo "FAIL run      $f (-d:nimAllocStats)"
+    sed -n '1,40p' "$bin_dir/$name.out"
+    status=1
+  else
+    echo "ok            $f (-d:nimAllocStats)"
+    sed -n '1,20p' "$bin_dir/$name.out"
+  fi
+fi
+
 if [ "$status" -eq 0 ]; then
   echo "gate: PASS"
 else
