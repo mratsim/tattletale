@@ -304,6 +304,17 @@ task test_tf_bf16_gemma31b_03_full_forward_to_logits, "Suite: gemma-3-1b-it ids 
   runTransformerSuite("q_bf16", "t_bf16_gemma31b_03_full_forward_to_logits.nim")
 task test_tf_bf16_gemma31b_04_greedy_text_generation, "Suite: gemma-3-1b-it greedy decoding, 3 chains x 32 steps vs fixtures":
   runTransformerSuite("q_bf16", "t_bf16_gemma31b_04_greedy_text_generation.nim")
+
+task test_tf_bf16_mistral_01_layer_internals, "Suite: Mistral-7B-v0.1 all-sliding decoder layer internals":
+  runTransformerSuite("q_bf16", "t_bf16_mistral_01_layer_internals.nim")
+task test_tf_bf16_mistral_03_full_forward_to_logits, "Suite: Mistral-7B-v0.1 full forward to logits, 32 layers + final logits vs fixtures":
+  runTransformerSuite("q_bf16", "t_bf16_mistral_03_full_forward_to_logits.nim")
+task test_tf_bf16_mistral_04_greedy_text_generation, "Suite: Mistral-7B-v0.1 greedy decoding, 3 chains x 32 steps vs fixtures":
+  runTransformerSuite("q_bf16", "t_bf16_mistral_04_greedy_text_generation.nim")
+task test_tf_bf16_north_01_layer_internals, "Suite: North-Mini-Code-1.0 parallel decoder layers, routed blocks and router":
+  runTransformerSuite("q_bf16", "t_bf16_north_01_layer_internals.nim")
+task test_tf_bf16_north_03_full_forward_to_logits, "Suite: North-Mini-Code-1.0 full forward to logits, 49 layers + final logits vs fixtures":
+  runTransformerSuite("q_bf16", "t_bf16_north_03_full_forward_to_logits.nim")
 task test_tf_exl3_qwen3_00_codec, "Suite: EXL3 trellis decode vs production kernel hash":
   runTransformerSuite("q_exl3", "t_exl3_qwen3_00_codec.nim")
 task test_tf_exl3_qwen3_00_hadamard, "Suite: EXL3 hadamard vs production kernel":
@@ -336,7 +347,7 @@ task test_tf_sampler, "Suite: samplers":
 task test_tf_block_sparse_batch_property, "Suite: block-sparse batch invariance":
   runTransformerSuite("layer_invariance", "t_blocksparse_batch_invariance.nim")
 
-task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|moonlight|glm47flash|gemma3|kimilinear|ling3|mla|router|kda|kvcache)":
+task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|moonlight|glm47flash|gemma3|kimilinear|ling3|mistral|north|mla|router|kda|kvcache)":
   case familyName()
   of "chain":
     runFamily(@[
@@ -383,6 +394,15 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
     runFamily(@[
       ("q_bf16", "t_bf16_kimilinear_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_kimilinear_04_greedy_text_generation.nim")])
+  of "mistral":
+    runFamily(@[
+      ("q_bf16", "t_bf16_mistral_01_layer_internals.nim"),
+      ("q_bf16", "t_bf16_mistral_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_mistral_04_greedy_text_generation.nim")])
+  of "north":
+    runFamily(@[
+      ("q_bf16", "t_bf16_north_01_layer_internals.nim"),
+      ("q_bf16", "t_bf16_north_03_full_forward_to_logits.nim")])
   of "ling3":
     runFamily(@[
       ("q_bf16", "t_bf16_ling3_05_coherence.nim")])
@@ -406,7 +426,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("kvcache", "test_kvcache_lpm.nim"),
       ("kvcache", "test_codera020_batch_guard.nim")])
   else:
-    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness, sampler, moonlight, glm47flash, kimilinear, ling3, mla, router or kda"
+    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness, sampler, moonlight, glm47flash, kimilinear, ling3, mistral, north, mla, router or kda"
     quit(1)
 
 task test_transformers, "Test workspace/transformers (the full set, final verification)":
