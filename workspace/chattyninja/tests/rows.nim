@@ -18,9 +18,9 @@
 ## embeds `expected_error {exception, message}`. No HF or Python call is made at test time.
 
 import std/[algorithm, os, strutils, unicode]
-import cjn_types, cjn_values
+import cnj_types, cnj_values
 
-export cjn_types, cjn_values
+export cnj_types, cnj_values
 
 type
   Row* = object

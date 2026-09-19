@@ -8,10 +8,10 @@
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built side tables, and the render
 # driver. See chattyninja.nim for the dispatch table and the `items` pull interface.
 
-import cjn_errors, cjn_values
+import cnj_errors, cnj_values
 import workspace/data_structures/src/small_seqs
 
-export cjn_errors, cjn_values, small_seqs
+export cnj_errors, cnj_values, small_seqs
 
 const
   noLink* = -1'i32

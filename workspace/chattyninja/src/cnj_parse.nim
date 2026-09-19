@@ -34,7 +34,7 @@
 # a truncated template fails at load instead of rendering short.
 
 import std/[strbasics, strutils]
-import cjn_errors, cjn_types, cjn_values
+import cnj_errors, cnj_types, cnj_values
 
 func at(s: string, prefix: string, i: int): bool =
   ## Reports whether `prefix` occurs at `i`.

@@ -10,7 +10,7 @@
 # No dependency on the node arena, so the value tier is testable without a compiled template.
 
 import std/[strutils, unicode]
-import cjn_errors
+import cnj_errors
 
 type
   ValueKind* = enum

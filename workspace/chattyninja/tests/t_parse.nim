@@ -14,7 +14,7 @@
 ##   $ ./workspace/chattyninja/run_tests.sh t_parse
 
 import std/[os, strutils, sequtils]
-import cjn_types, cjn_parse
+import cnj_types, cnj_parse
 
 const root = currentSourcePath().parentDir.parentDir
 let src = readFile(root / "corpus" / "deepseekv2lite" / "deepseekv2lite.jinja")

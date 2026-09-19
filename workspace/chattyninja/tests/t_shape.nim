@@ -12,7 +12,7 @@
 ##   $ ./workspace/chattyninja/run_tests.sh t_shape
 
 import std/macros
-import cjn_types, chattyninja
+import cnj_types, chattyninja
 import workspace/data_structures/src/small_seqs
 
 macro fieldNames(T: type): untyped =

@@ -25,9 +25,9 @@
 #   `nim c --experimental:views -r tests/t_render.nim`, or `./run_tests.sh` for every suite.
 
 import std/unicode
-import cjn_errors, cjn_types, cjn_values, cjn_expr, cjn_parse
+import cnj_errors, cnj_types, cnj_values, cnj_expr, cnj_parse
 
-export cjn_types, cjn_values, cjn_parse, cjn_errors
+export cnj_types, cnj_values, cnj_parse, cnj_errors
 
 type
   Step* = proc (m: Machine, t: Tables, d: var Driver, n: int32) {.nimcall.}
@@ -39,7 +39,7 @@ proc runMacroBody(m: Machine, t: Tables, d: var Driver, mc: MacroVal,
   ## Runs one macro body to completion and returns the captured text. Declared ahead of the steps
   ## because each one hands it to the expression tier as the macro runner, and its own body drives `steps`.
   ## Why a parameter and not a field:
-  ## - `chattyninja` cannot import `cjn_expr` and be imported back
+  ## - `chattyninja` cannot import `cnj_expr` and be imported back
   ## - a proc in `Machine` or `Tables` would put a proc field in the read-only artifact
 
 # Output

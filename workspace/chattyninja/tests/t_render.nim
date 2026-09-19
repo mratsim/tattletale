@@ -21,7 +21,7 @@
 ##   $ ./workspace/chattyninja/run_tests.sh t_render
 
 import std/[os, strutils]
-import cjn_types, cjn_values, cjn_parse, chattyninja
+import cnj_types, cnj_values, cnj_parse, chattyninja
 import rows
 
 type RenderMismatch = ref object of CatchableError

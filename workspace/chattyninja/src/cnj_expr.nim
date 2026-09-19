@@ -20,7 +20,7 @@
 #   a render from a branch Jinja would not have entered
 
 import std/[math, strbasics, strutils, times, unicode]
-import cjn_errors, cjn_types, cjn_values
+import cnj_errors, cnj_types, cnj_values
 
 type
   ExKind = enum
@@ -78,7 +78,7 @@ type
       args: seq[Arg]): string {.nimcall.}
     ## Runs one macro body to completion and returns the captured text. The statement tier owns
     ## the arena, so eval reaches it through this injected runner rather than by importing it.
-    ## `chattyninja` and `cjn_expr` cannot import each other, keeping the artifact proc-free.
+    ## `chattyninja` and `cnj_expr` cannot import each other, keeping the artifact proc-free.
 
 const wsChars = {' ', '\t', '\n', '\r', '\v', '\f'}
 
