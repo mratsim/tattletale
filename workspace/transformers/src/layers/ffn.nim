@@ -186,12 +186,14 @@ func init*(
 # shared proc for every router type, the routing-weight rounding
 # selected at compile time by a policy type.
 #
-# Maintainer note, numerical contract for the prefill path: bitwise
-# fidelity with the HF reference expert body on CPU.
+# Maintainer note, numerical contract for the prefill path, a suite-band
+# spelling against the grouped_mm reference, the reference seat is
+# the groupedPairSum branch
 # - one fused GEMM per hit expert covers the full [2I, H] gate/up
 #   weight, narrow per-half GEMMs round differently
 # - experts visited in ascending index order, token groups disjoint,
-#   so each accumulator row takes exactly one addition per scatter_add call, matching the HF reference index_add loop
+#   so each accumulator row takes exactly one addition per scatter_add call, a suite-band spelling,
+#   the grouped_mm reference seats `groupedPairSum = true`
 # - weight values pass through unchanged, renormalization and dtype
 #   cast belong to the router
 #
@@ -243,10 +245,16 @@ proc expertBody(gateUpWeight, downWeight, currentStates: Tensor,
 type
   RoundAfterSum* = object
     ## Routing-weight rounding policy of the ungated shared-expert form
-    ## (noaux_tc):
-    ##   the routing weight stays f32, the f32 weight multiplies
-    ## the f32 expert output and the weighted sum rounds to the hidden dtype once at the accumulated sum, the HF reference
-    ## index_add_ rounding location.
+    ## (noaux_tc) decode path:
+    ##
+    ## - the routing weight stays f32, the f32 weight multiplies
+    ##   the f32 expert output, the weighted sum rounds to the hidden
+    ##   dtype once at the accumulated sum
+    ##
+    ## - a drift against the grouped_mm reference, whose pairs carry
+    ##   a bf16 weight product and an f32 token-sum single rounding,
+    ##   bounded by suite bands
+    ##
   RoundBeforeMultiply* = object
     ## Routing-weight rounding policy of the gated shared-expert form
     ## (Qwen):
@@ -511,18 +519,18 @@ type
     ##   carries no GatedBlockSparseFFN-style scale row, a distinct
     ##   typed shape, never a flag nor a dummy weight
     ##
-    ## Routed-expert bodies mirror the HF eager expert loop wherever
-    ## the token count allows it, `groupedPairSum` swaps both branches
-    ## to this transformers grouped_mm per-pair spelling:
+    ## On the non-grouped branches the routed-expert bodies run per hit
+    ## expert and `groupedPairSum` swaps both branches to the transformers
+    ## grouped_mm per-pair spelling of the HF reference:
     ## - prefill (T > 1):
     ##   fused gate_up GEMM per hit expert, SiLU on the gate half, down GEMM, then the f32 routing
-    ##   weight multiplies the bf16 expert output in f32, the product rounds to the hidden dtype at the accumulator join
+    ##   weight multiplies the bf16 expert output, per-term bf16 rounding on the scatter_add accumulator
     ## - gated form (Qwen):
     ##   the routing weight rounds to the hidden dtype BEFORE the multiply, the HF gated
     ##   router computes the routing weights at the hidden dtype
     ## - decode (T = 1):
-    ##   one routed expert run per top-k position, f32 accumulator, routing-order sum. The HF eager loop adds one
-    ##   contribution in ascending index order on a bf16 accumulator, one recorded evaluation-order drift, budgeted.
+    ##   one routed expert run per top-k position with an f32
+    ##   routing-order accumulator, a suite-band drift against the grouped_mm reference
     gateUpProj: Tensor   ## [E, 2I, H] fused: gate rows 0:I, up rows I:2I
     downProj: Tensor     ## [E, H, I]
     numExperts: int
@@ -604,12 +612,13 @@ proc expertForwardPrefillPlain(
     topKIndex: Tensor,
     topKWeights: Tensor
   ): Tensor =
-  ## Routed expert compute for multi-token inputs (T > 1), the HF
-  ## eager loop:
-  ##   per hit expert e in ascending index order, one expert body
-  ## on the token group of e, the f32 routing weight multiplies the expert
-  ## output in f32 and the product rounds to the hidden dtype when it joins
-  ## the bf16 accumulator.
+  ## Routed expert compute for multi-token inputs (T > 1), the per-hit-expert eager loop:
+  ##
+  ## - per hit expert e in ascending index order, one expert body
+  ##   runs on the token group of e
+  ## - the f32 routing weight multiplies the expert output in f32,
+  ##   the product rounds to the hidden dtype when it joins
+  ##   the bf16 accumulator
   ##
   ## Input:
   ##   - hiddenStates:
@@ -667,8 +676,9 @@ proc expertForwardPrefillPlain(
     let currentHiddenStates = expertBody(
       self.gateUpProj[e], self.downProj[e], currentStates, self.activation)
 
-    # f32 routing weight per (token, position) pair, the product stays f32 and rounds once at the accumulated sum
-    # on the bf16 accumulator, the HF reference index_add_ rounding location
+    # f32 routing weight per (token, position) pair, the product rounds to the hidden dtype per term
+    # and each scatter_add rounds into the bf16 accumulator, a suite-band spelling, the grouped_mm
+    # reference seat is the groupedPairSum branch
     var weightVals = newSeq[float32](n)
     for i in 0 ..< n:
       weightVals[i] = weights32[tokenIdx[i], topKPos[i]].item(float32)

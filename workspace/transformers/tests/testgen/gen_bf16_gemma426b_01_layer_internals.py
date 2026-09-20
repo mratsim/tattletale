@@ -742,9 +742,9 @@ def generate_moe_mixture(model: Gemma4ForConditionalGeneration,
         "router_input": "the driving input plays the post-attention residual "
             "role, the router reads it flat and the experts read its "
             "pre_feedforward_layernorm_2 output",
-        "expert_loop": "the eager per-expert loop over the hit experts with "
-            "the index_add scatter, the accumulation order the reference "
-            "module ran",
+        "expert_loop": "the grouped_mm per-pair spelling, expert-sorted "
+            "pairs with a bf16 weight product per pair and the token sum "
+            "in f32 with a single rounding",
     })
     payload = OrderedDict([("moe.h", h)])
     captured = {

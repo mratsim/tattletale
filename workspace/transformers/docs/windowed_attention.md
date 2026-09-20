@@ -1,9 +1,5 @@
 # Windowed attention: one spelling, per-layer-kind data
 
-Re-derived against master rope (`layers/rope.nim`) and deserialization (`deserialization.nim`).
-
-The old SWA branches are reference-only, nothing here is copied from them.
-
 ## One windowed spelling
 
 One windowed attention spelling serves every sliding-window family, `RopeGQAttention[QKNorm]`.
@@ -27,7 +23,7 @@ Their compiled forward path is unchanged, the sentinel never binds a mask.
 
 The visibility band builds a mask tensor at forward time, never a special-cased kernel.
 
-`windowedCausalMask` emits a `(1, 1, qLen, kvLen)` float mask, 0 keeps a key visible, -Inf masks it.
+`windowedCausalMask` emits a `(1, 1, qLen, kvLen)` bool mask, `true` keeps a key visible, `false` masks it.
 
 The mask follows the reference sliding-window causal rule `kv_idx <= q_idx` plus `kv_idx > q_idx - window`.
 
@@ -55,17 +51,17 @@ The model calls `ctx.setRopeForPositions` with the layer's table before each lay
 
 The attention layer stays theta-agnostic and consumes whatever rows the model wired into the context.
 
-## Axis coverage of the later ports
+## Family coverage
 
-| port | family axis                           | fit as data                                        |
-| ---- | ------------------------------------- | -------------------------------------------------- |
-| W2   | Mistral, all-sliding 32x window 4096  | window 4096 on every layer, one theta              |
-| W2   | North, f-first 4:1 pattern            | per-layer kind sequence, window and theta per kind |
-| W3   | Laguna, yarn + partial rotary 0.5     | partial width sits on the rotary table build       |
-| W4   | gemma-4, dual theta + partial 0.25    | two theta tables, rotary width per kind            |
-| W4   | gemma-4 KV tying (`attention_k_eq_v`) | K and V cache paths already separate               |
-| W3   | E2B PLE                               | model-level optimization, no attention axis        |
-| W3   | gpt-oss attention sinks               | not a datum of this spelling, parked               |
+| family                                | windowed datum               | fit as data                                                |
+| ------------------------------------- | ---------------------------- | ---------------------------------------------------------- |
+| Mistral                               | all-sliding 32x window 4096  | window 4096 on every layer, one theta                      |
+| North                                 | f-first 4:1 pattern          | per-layer kind sequence, window and theta per kind         |
+| Laguna                                | yarn + partial rotary 0.5    | partial width sits on the rotary table build               |
+| gemma-4                               | dual theta + partial 0.25    | two theta tables, rotary width per kind                    |
+| gemma-4 KV tying (`attention_k_eq_v`) | separate K and V cache paths | no tied-cache assumption, the pages write and gather apart |
+| gemma-4-E2B PLE                       | model-level construct        | no attention axis                                          |
+| gpt-oss attention sinks               | not a datum of this spelling | needs a new attention-call axis                            |
 
 ### Yarn (Laguna)
 
@@ -75,9 +71,7 @@ The windowed spelling consumes `ctx.cos` and `ctx.sin` rows and never derives th
 
 Yarn stays a `RotaryPositionEmbedding` construction concern, orthogonal to the spelling.
 
-The Laguna port (07) opens with a rope-parity replay against the reference.
-
-Should yarn fail to express as a table construction parameter, that port escalates.
+The Laguna port verifies yarn with a rope-parity replay against the reference rows.
 
 ### KV tying (gemma-4)
 
@@ -95,9 +89,9 @@ A per-head sink logit joins the softmax denominator without attending.
 
 No window, theta or mask datum expresses it, support needs a new attention-call axis.
 
-gpt-oss implementation is parked out of op scope.
+The gpt-oss port stays unbuilt, its fixture families stay recorded without a consuming suite.
 
-The decision to fork a second spelling belongs to the port that un-parks it.
+A gpt-oss spelling forks from this one if the sink axis joins the attention call.
 
 ## Seating
 

@@ -298,7 +298,7 @@ task test_tf_bf16_gemma3270m_01_layer_internals, "Suite: gemma-3-270m-it decoder
   runTransformerSuite("q_bf16", "t_bf16_gemma3270m_01_layer_internals.nim")
 task test_tf_bf16_gemma3270m_03_full_forward_to_logits, "Suite: gemma-3-270m-it ids to logits inference":
   runTransformerSuite("q_bf16", "t_bf16_gemma3270m_03_full_forward_to_logits.nim")
-task test_tf_bf16_gemma3270m_04_greedy_text_generation, "Suite: gemma-3-270m-it greedy decoding, 3 chains x 32 steps vs fixtures":
+task test_tf_bf16_gemma3270m_04_greedy_text_generation, "Suite: gemma-3-270m-it greedy decoding, 2 chains x 32 steps vs fixtures (the Fox chain stays unreplayed)":
   runTransformerSuite("q_bf16", "t_bf16_gemma3270m_04_greedy_text_generation.nim")
 task test_tf_bf16_gemma31b_01_layer_internals, "Suite: gemma-3-1b-it decoder layers, sliding/full/boundary pair":
   runTransformerSuite("q_bf16", "t_bf16_gemma31b_01_layer_internals.nim")

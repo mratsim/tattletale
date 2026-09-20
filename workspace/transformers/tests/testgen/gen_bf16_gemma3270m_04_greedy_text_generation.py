@@ -108,6 +108,10 @@ PROMPT_SPEC = [
     ("The quick brown fox jumps over the lazy dog. " * 62, 32,
      "Fox_story_prefill_crosses_512_window_32_steps"),
 ]
+
+# Fox fixture disposition, the Fox_story fixture rows stay recorded
+# and unconsumed, the consuming suite dropped the fox chain whose
+# bf16-chaotic prefill row stays unbindable, the fixture bytes remain as evidence.
 MAX_HORIZON = 32
 
 DECISION_ULP_DATATYPE = "bf16"

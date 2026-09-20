@@ -443,6 +443,8 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
   ##   - `kvSourceLayer` seats a gemma-4 shared-kv layer, one that loads
   ##     no k_proj/v_proj/k_norm and whose checkpoint carries those keys
   ##     dead or not at all
+  ##
+  ## Shared-kv and gated spellings:
   ##   - `perHeadGate` loads the per-head-gated kinds' `[hidden, heads]`
   ##     g_proj weight (Laguna)
   ##   - `vNorm` seats the value-path single-rounding norm, a ones-weight

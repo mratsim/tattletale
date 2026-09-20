@@ -645,9 +645,9 @@ def generate_moe_mixture(model: Cohere2MoeForCausalLM, cfg) -> tuple:
         "layer": f"model.layers.{MOE_LAYER_IDX}.mlp",
         "seq_len": SEQ,
         "hidden_dtype": "bfloat16",
-        "expert_loop": "the eager per-expert loop over the hit experts with "
-            "the index_add scatter, the accumulation order the reference "
-            "module ran",
+        "expert_loop": "the grouped_mm per-pair spelling, expert-sorted "
+            "pairs with a bf16 weight product per pair and the token sum "
+            "in f32 with a single rounding",
         "flip_budget_policy": routed_meta["flip_budget_policy"],
         "margin_floor": MARGIN_FLOOR,
         "topk_boundary_margin": margin,
