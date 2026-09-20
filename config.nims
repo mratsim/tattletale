@@ -331,6 +331,19 @@ task test_tf_bf16_gemma4e2b_03_full_forward_to_logits, "Suite: gemma-4-E2B-it fu
   runTransformerSuite("q_bf16", "t_bf16_gemma4e2b_03_full_forward_to_logits.nim")
 task test_tf_bf16_gemma4e2b_04_greedy_text_generation, "Suite: gemma-4-E2B-it greedy decoding, 3 chains x 32 steps vs fixtures":
   runTransformerSuite("q_bf16", "t_bf16_gemma4e2b_04_greedy_text_generation.nim")
+
+task test_tf_bf16_gemma412b_01_layer_internals, "Suite: gemma-4-12B-it decoder layers, one sliding and one full k_eq_v layer":
+  runTransformerSuite("q_bf16", "t_bf16_gemma412b_01_layer_internals.nim")
+task test_tf_bf16_gemma412b_03_full_forward_to_logits, "Suite: gemma-4-12B-it full forward to logits, 48 layers + decisions vs fixtures":
+  runTransformerSuite("q_bf16", "t_bf16_gemma412b_03_full_forward_to_logits.nim")
+task test_tf_bf16_gemma412b_04_greedy_text_generation, "Suite: gemma-4-12B-it greedy decoding, 3 chains x 32 steps vs fixtures":
+  runTransformerSuite("q_bf16", "t_bf16_gemma412b_04_greedy_text_generation.nim")
+task test_tf_bf16_gemma426b_01_layer_internals, "Suite: gemma-4-26B-A4B decoder layers, one sliding and one full k_eq_v layer with routed experts":
+  runTransformerSuite("q_bf16", "t_bf16_gemma426b_01_layer_internals.nim")
+task test_tf_bf16_gemma426b_03_full_forward_to_logits, "Suite: gemma-4-26B-A4B full forward to logits, 30 layers + decisions vs fixtures":
+  runTransformerSuite("q_bf16", "t_bf16_gemma426b_03_full_forward_to_logits.nim")
+task test_tf_bf16_gemma426b_04_greedy_text_generation, "Suite: gemma-4-26B-A4B greedy decoding, 3 chains x 32 steps vs fixtures":
+  runTransformerSuite("q_bf16", "t_bf16_gemma426b_04_greedy_text_generation.nim")
 task test_tf_exl3_qwen3_00_codec, "Suite: EXL3 trellis decode vs production kernel hash":
   runTransformerSuite("q_exl3", "t_exl3_qwen3_00_codec.nim")
 task test_tf_exl3_qwen3_00_hadamard, "Suite: EXL3 hadamard vs production kernel":
@@ -363,7 +376,7 @@ task test_tf_sampler, "Suite: samplers":
 task test_tf_block_sparse_batch_property, "Suite: block-sparse batch invariance":
   runTransformerSuite("layer_invariance", "t_blocksparse_batch_invariance.nim")
 
-task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|moonlight|glm47flash|gemma3|kimilinear|ling3|mistral|north|laguna|gemma4e2b|mla|router|kda|kvcache)":
+task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|moonlight|glm47flash|gemma3|kimilinear|ling3|mistral|north|laguna|gemma4e2b|gemma412b|gemma426b|mla|router|kda|kvcache)":
   case familyName()
   of "chain":
     runFamily(@[
@@ -430,6 +443,16 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("q_bf16", "t_bf16_gemma4e2b_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_gemma4e2b_03_full_forward_to_logits.nim"),
       ("q_bf16", "t_bf16_gemma4e2b_04_greedy_text_generation.nim")])
+  of "gemma412b":
+    runFamily(@[
+      ("q_bf16", "t_bf16_gemma412b_01_layer_internals.nim"),
+      ("q_bf16", "t_bf16_gemma412b_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_gemma412b_04_greedy_text_generation.nim")])
+  of "gemma426b":
+    runFamily(@[
+      ("q_bf16", "t_bf16_gemma426b_01_layer_internals.nim"),
+      ("q_bf16", "t_bf16_gemma426b_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_gemma426b_04_greedy_text_generation.nim")])
   of "ling3":
     runFamily(@[
       ("q_bf16", "t_bf16_ling3_05_coherence.nim")])
@@ -453,7 +476,7 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
       ("kvcache", "test_kvcache_lpm.nim"),
       ("kvcache", "test_codera020_batch_guard.nim")])
   else:
-    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness, sampler, moonlight, glm47flash, kimilinear, ling3, mistral, north, laguna, gemma4e2b, mla, router or kda"
+    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness, sampler, moonlight, glm47flash, kimilinear, ling3, mistral, north, laguna, gemma4e2b, gemma412b, gemma426b, mla, router or kda"
     quit(1)
 
 task test_transformers, "Test workspace/transformers (the full set, final verification)":
