@@ -305,25 +305,6 @@ func new*(_: type RotaryPositionEmbedding,
   doAssert dim <= head_dim, "rotary_dim " & $dim & " exceeds head_dim " & $head_dim
   doAssert (dim mod 2) == 0, "rotary_dim must be even"
   let half_dim = dim div 2
-  var inv_freq =
-    if yarnFactor > 1.0:
-      checkValue(yarnOriginalMaxPos > 0,
-        "[ttt] RotaryPositionEmbedding: yarn needs original_max_position_embeddings")
-      yarnInvFreq(dim, rope_theta, yarnFactor, yarnBetaFast, yarnBetaSlow,
-        yarnOriginalMaxPos)
-    else:
-      F.pow(F.full(1, rope_theta, kFloat64),
-        (F.arange(0, dim, 2).to(kFloat64) / dim.float64).neg())
-  if activePairs >= 0:
-    checkValue(activePairs <= half_dim,
-      "[ttt] RotaryPositionEmbedding: activePairs " & $activePairs &
-      " exceeds the pair count " & $half_dim)
-    if activePairs < half_dim:
-      # A 0/1 pair mask multiplies in, the tail pairs keep a zero
-      # inv_freq and their rotation is the identity.
-      # The mask computes on CPU with the table, MPS carries no float64.
-      inv_freq = inv_freq * F.arange(0, half_dim, kFloat64)
-        .`<.`(Scalar(activePairs.float64)).to(kFloat64)
   var cos_cache: Tensor
   var sin_cache: Tensor
   if f32Cache:
@@ -361,6 +342,28 @@ func new*(_: type RotaryPositionEmbedding,
     cos_cache = (emb.cos() * Scalar(attentionFactor)).to(dtype)
     sin_cache = (emb.sin() * Scalar(attentionFactor)).to(dtype)
   else:
+    # f64 spelling:
+    #   this branch alone reads the f64 inverse frequencies constructed below
+    #   (the f32Cache branch re-derives inv_freq32 separately)
+    var inv_freq =
+      if yarnFactor > 1.0:
+        checkValue(yarnOriginalMaxPos > 0,
+          "[ttt] RotaryPositionEmbedding: yarn needs original_max_position_embeddings")
+        yarnInvFreq(dim, rope_theta, yarnFactor, yarnBetaFast, yarnBetaSlow,
+          yarnOriginalMaxPos)
+      else:
+        F.pow(F.full(1, rope_theta, kFloat64),
+          (F.arange(0, dim, 2).to(kFloat64) / dim.float64).neg())
+    if activePairs >= 0:
+      checkValue(activePairs <= half_dim,
+        "[ttt] RotaryPositionEmbedding: activePairs " & $activePairs &
+        " exceeds the pair count " & $half_dim)
+      if activePairs < half_dim:
+        # A 0/1 pair mask multiplies in, the tail pairs keep a zero
+        # inv_freq and their rotation is the identity.
+        # The mask computes on CPU with the table, MPS carries no float64.
+        inv_freq = inv_freq * F.arange(0, half_dim, kFloat64)
+          .`<.`(Scalar(activePairs.float64)).to(kFloat64)
     let angles = F.arange(0, max_seq_len, kFloat64).unsqueeze(1) * inv_freq.unsqueeze(0)
     # angles (max_seq_len, rotary_dim/2), the cos/sin half tables match
     let cos_half = angles.cos()
