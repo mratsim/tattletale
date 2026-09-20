@@ -105,7 +105,7 @@ const FullVisibilityWindow* = int.high
   ## The visibility band never binds, every key at or before the query stays
   ## visible under the plain causal rule.
 
-proc windowedCausalMask*(qLen, kvLen, offset, window: int, dtype: F.ScalarKind, device: F.DeviceKind): Tensor =
+proc windowedCausalMask*(qLen, kvLen, offset, window: int, device: F.DeviceKind): Tensor =
   ## Visibility-band causal mask of the windowed attention spelling.
   ##
   ## Expected input:
@@ -115,13 +115,12 @@ proc windowedCausalMask*(qLen, kvLen, offset, window: int, dtype: F.ScalarKind, 
   ## - `offset`, the absolute position of the first query (kv_position)
   ##
   ## - `window`, the visibility band of the layer kind
-  ## - `dtype`, the query tensor's storage dtype
   ## - `device`, the query tensor's device
   ##
   ## Output:
   ##
-  ## - a `(1, 1, qLen, kvLen)` float mask
-  ## - `0` keeps a key visible, `-Inf` masks it
+  ## - a `(1, 1, qLen, kvLen)` bool mask
+  ## - `true` keeps a key visible, `false` masks it
   ## - the mask broadcasts over batch and heads
   ##
   ## Visibility rule, matching the reference sliding-window causal rule:
@@ -134,10 +133,10 @@ proc windowedCausalMask*(qLen, kvLen, offset, window: int, dtype: F.ScalarKind, 
   let qPos = F.arange(offset, offset + qLen, opts).unsqueeze(1)
   let kPos = F.arange(0, kvLen, opts).unsqueeze(0)
   let distance = qPos - kPos   # (qLen, kvLen) query position minus key position
-  var mask = F.zeros(qLen, kvLen, F.tensorOptions(dtype, device))
-  mask.masked_fill_mut(distance <. Scalar(0.0'f64), Scalar(NegInf))
-  mask.masked_fill_mut(distance >=. Scalar(window.float64), Scalar(NegInf))
-  mask.unsqueeze(0).unsqueeze(0)
+  # The two band inequalities as a 0/1 int64 product, cast to bool because
+  # the SDPA reference spelling consumes a bool mask.
+  let visible = (distance >=. Scalar(0.0'f64)) * (distance <. Scalar(window.float64))
+  visible.to(F.kBool).unsqueeze(0).unsqueeze(0)
 
 func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int, softmaxScale = 0.0'f64): GroupedQueryAttention =
   ## Configure GQA over `num_qo_head` query heads and `num_kv_head` KV heads,
@@ -207,13 +206,40 @@ func forward*(
   let q_final = q_attn.to(target_dtype)
   let k_final = k_attn.to(target_dtype)
 
+  # Masked SDPA spelling of the reference stack. K/V expand to the query
+  # head count with each KV head repeated for its query-head group while
+  # enable_gqa drops. The GQA path stays reserved for the mask-free kernel.
+  let useGqa = attn_mask.isNone and enable_gqa and self.num_kv_groups > 1
+  # Expansion requires KV-head-count keys (the repeat_kv precondition).
+  # Callers replaying already-expanded keys skip it.
+  let keysGrouped = k_final.size(1) == self.num_kv_head and
+    self.num_kv_groups > 1
+  let (k_sdpa, v_sdpa) =
+    if useGqa or not keysGrouped:
+      (k_final, v_attn)
+    else:
+      # Every expansion dim sizes from the KEY sequence length.
+      # The masked decode shape runs one query row against a gathered
+      # history longer than the window, and a sizing from the query
+      # length would collapse the key axis down to 1.
+      let kv_len = k_final.size(2)
+      let expanded = k_final.unsqueeze(2)
+        .expand(batch, self.num_kv_head, self.num_kv_groups, kv_len,
+          self.head_dim, implicit = false)
+        .reshape([batch, self.num_qo_head, kv_len, self.head_dim])
+      let vExpanded = v_attn.unsqueeze(2)
+        .expand(batch, self.num_kv_head, self.num_kv_groups, kv_len,
+          self.head_dim, implicit = false)
+        .reshape([batch, self.num_qo_head, kv_len, self.head_dim])
+      (expanded, vExpanded)
+
   let attn_out = F.scaled_dot_product_attention(
-    q_final, k_final, v_attn,
+    q_final, k_sdpa, v_sdpa,
     attn_mask = attn_mask,
     dropout_p = dropout_p,
     is_causal = is_causal,
     scale = some(self.softmax_scale),
-    enable_gqa = enable_gqa and self.num_kv_groups > 1
+    enable_gqa = useGqa
   )
 
   let attn_perm = attn_out.permute([0, 2, 1, 3])
@@ -534,9 +560,23 @@ proc forward[QKNorm](
   var doCausal = false
   if self.window >= kvSeqLen:
     doCausal = q_rot.size(1) == kvSeqLen
+  elif q_rot.size(1) == 1:
+    # Single-query decode past the window. The visibility band keeps
+    # exactly the newest `window` keys and every one of them is visible,
+    # each key j in the slice satisfies j > query_pos - window.
+    # The reference stack's sliding cache serves that same slice, so
+    # the gathered history truncates to it while the mask reduces
+    # to all-visible. Running the full history through the band mask
+    # prices a different SDPA kernel shape whose rounding drifts away
+    # from the reference.
+    let kvStart = kvSeqLen - self.window
+    k_full = k_full.narrow(1, kvStart, self.window)
+    v_full = v_full.narrow(1, kvStart, self.window)
+    attnMask = some(F.ones(1, 1, 1, self.window,
+      F.tensorOptions(F.kBool, q_rot.deviceType())))
   else:
     attnMask = some(windowedCausalMask(q_rot.size(1), kvSeqLen, offset,
-      self.window, q_rot.scalarType(), q_rot.deviceType()))
+      self.window, q_rot.deviceType()))
   var attn_out = self.gqa_attn.forward(q_rot, k_full, v_full,
     is_causal = doCausal, attn_mask = attnMask)
 

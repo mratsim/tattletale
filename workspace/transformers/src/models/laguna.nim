@@ -256,13 +256,15 @@ proc loadLagunaModelRaw(modelPath: string, device: DeviceKind): LagunaModel =
     yarnBetaFast = config.ropeFull.betaFast,
     yarnBetaSlow = config.ropeFull.betaSlow,
     yarnOriginalMaxPos = config.ropeFull.originalMaxPos,
-    attentionFactor = config.ropeFull.attentionFactor)
+    attentionFactor = config.ropeFull.attentionFactor,
+    f32Cache = true)
   let rotarySliding = RotaryPositionEmbedding.new(
     config.head_dim,
     config.max_position_embeddings,
     config.ropeSlidingTheta,
     actDtype,
-    device)
+    device,
+    f32Cache = true)
 
   var layers = newSeq[AnyDecoderLayer](config.num_hidden_layers)
 
@@ -297,9 +299,11 @@ proc loadLagunaModelRaw(modelPath: string, device: DeviceKind): LagunaModel =
         weights.getTensorOwned(mlpPrefix & ".experts.e_score_correction_bias", device),
         config.num_experts_per_tok, 1, 1,
         1.0, config.norm_topk_prob,
-        scalesWeights = false, scoreBf16 = true)
+        scalesWeights = false, scoreBf16 = true, weightsHiddenDtype = true,
+        sortedTopk = true)
       let mlp = BlockSparseFFN.load(weights, cfgJson, mlpPrefix, router, device,
-        routedOutputScale = config.moe_routed_scaling_factor)
+        routedOutputScale = config.moe_routed_scaling_factor,
+        groupedPairSum = true)
       layers[i] = LagunaMoeLayer.init(
         input_layernorm = inputLN, sequence_mixer = attn,
         post_attention_layernorm = postLN,

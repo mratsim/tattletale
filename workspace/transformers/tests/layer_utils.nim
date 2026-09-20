@@ -36,7 +36,10 @@ import
   workspace/transformers/src/layers/rope,
   workspace/transformers/src/layers/attn_ssm/gated_delta_net,
   workspace/transformers/src/layers/attn_ssm/multi_head_latent_attention,
-  workspace/transformers/src/quantizations/datatypes
+  workspace/transformers/src/quantizations/datatypes,
+  workspace/transformers/tests/harness/select_device
+
+export select_device.testDevice
 
 privateAccess(SafetensorObj)
 
@@ -183,6 +186,19 @@ proc ulpBf16*(m: float32): float32 {.inline.} =
   if m <= 0.0'f32:
     return 0.0'f32
   result = pow(2.0'f32, floor(log2(m)) - 7.0'f32)
+
+proc setupStimulusTensor*(rows, heads, width: int, offset: float32, device: F.DeviceKind): F.Tensor =
+  ## Deterministic bf16 stimulus of shape (1, rows, heads, width), values
+  ## sit on a 0.25-step grid anchored at the offset.
+  ##
+  ## Returns:
+  ## - the stimulus tensor, deterministic across reruns, so the invariance
+  ##   property sees no input rounding noise from the stimulus
+  var flat = newSeq[float32](rows * heads * width)
+  for i in 0 ..< flat.len:
+    flat[i] = offset + (float32(i mod 12) * 0.25'f32) - 1.25'f32
+  result = F.toTensor(flat).to(F.kBfloat16).to(device)
+    .reshape([1, rows, heads, width])
 
 # ── MLA (DeepSeek-style latent attention) ──────────────────────────────────
 

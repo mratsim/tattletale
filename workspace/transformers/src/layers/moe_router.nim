@@ -31,10 +31,15 @@ import
 
 type
   RouteDecision* = tuple[logits: Tensor, weights: Tensor, indices: Tensor]
-    ## Router output surface: f32 logits [T, E], f32 weights [T, K],
-    ## int64 expert ids [T, K] in selection order. F32 weights carry
-    ## the decision projection, the hidden-dtype cast happens at the FFN
-    ## boundary, one recorded rounding.
+    ## Router output surface:
+    ## - logits [T, E] f32
+    ## - weights [T, K], f32 or hidden dtype
+    ## - indices [T, K] int64 expert ids in selection order
+    ##
+    ## Contract:
+    ## - f32 weights carry the decision projection
+    ## - the hidden-dtype cast lands at the FFN boundary
+    ##   (weightsHiddenDtype casts them at the router instead)
 
   NoAuxTopCorr* = ref object
     ## noaux_tc-family router, parameterized by config:
@@ -58,6 +63,18 @@ type
       ##   - true runs the GEMM at the checkpoint dtype, the logits upcast
       ##     to f32 after (Laguna, F.linear on bf16 views)
       ##   - false runs the GEMM on f32 upcasts (DeepSeek/glm lineage)
+    sortedTopk: bool
+      ## Selection order of the returned expert ids:
+      ##   - true returns the ids sorted by biased score, the torch.topk
+      ##     default the Laguna reference selection carries, a pair-sum
+      ##     accumulation consumes the ids in this order
+      ##   - false returns the kernel selection order (sorted = false)
+    weightsHiddenDtype: bool
+      ## Returned-weights dtype contract:
+      ##   - true rounds the renormalized f32 weights to the hidden
+      ##     dtype at the router output (Laguna, bf16 weights)
+      ##   - false returns f32 weights of the DeepSeek/glm lineage,
+      ##     the FFN boundary then carries the hidden-dtype cast
 
   GreedyRouter* = ref object
     ## Legacy greedy router (DeepSeek-V2-Lite family): softmax scores cover
@@ -75,12 +92,20 @@ func init*(
     routedScalingFactor: float64,
     normTopkProb: bool,
     scalesWeights: bool = true,
-    scoreBf16: bool = false
+    scoreBf16: bool = false,
+    weightsHiddenDtype: bool = false,
+    sortedTopk: bool = false
   ): NoAuxTopCorr =
   ## Builds the router from the checkpoint gate weight, bias buffer,
-  ## config routing constants. `scalesWeights = false` pairs with an FFN
-  ## applying the routed scaling factor to the routed output, `scoreBf16 = true`
-  ## with a router reference scoring at the hidden dtype.
+  ## config routing constants.
+  ##
+  ## Wiring contracts:
+  ## - scalesWeights = false pairs with an FFN applying the routed
+  ##   scaling factor to the routed output
+  ## - scoreBf16 = true pairs with a router reference scoring at hidden dtype
+  ## - weightsHiddenDtype = true pairs with a reference router returning
+  ##   hidden-dtype routing weights, sortedTopk = true with a reference
+  ##   selection keeping the score-sorted id order
   ##
   ## Raises ValueError:
   ## - routerWeight is not rank 2
@@ -117,7 +142,9 @@ func init*(
     routedScalingFactor: routedScalingFactor,
     normTopkProb: normTopkProb,
     scalesWeights: scalesWeights,
-    scoreBf16: scoreBf16
+    scoreBf16: scoreBf16,
+    weightsHiddenDtype: weightsHiddenDtype,
+    sortedTopk: sortedTopk
   )
 
 func init*(
@@ -171,8 +198,12 @@ proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   ##   weights        = gather(scores, indices), renormed per config,
   ##                    scaled when scalesWeights
   ##
-  ## Ties at a top-k or group boundary take the kernel order
-  ## of the sorted = false topk, fixture margins record the disambiguation.
+  ## Ties at a top-k or group boundary follow the `sortedTopk` order
+  ## with fixture margins recording the resolution.
+  ##
+  ## Returns:
+  ##   - the RouteDecision surface, logits [T, E] f32, weights [T, K],
+  ##     indices [T, K]
   let numTokens = hidden.size(0)
   let numExperts = self.routerWeight.size(0)
   let expertsPerGroup = numExperts div self.numGroup
@@ -198,12 +229,14 @@ proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   choice.masked_fill_mut(scoreMask.eq(F.zeros(1,
       F.tensorOptions(F.kFloat32, device))), Scalar(NegInf))
 
-  let indices = choice.topk(self.topK, axis = -1, sorted = false).indices
+  let indices = choice.topk(self.topK, axis = -1, sorted = self.sortedTopk).indices
   var weights = scores.gather(1, indices)
   if self.normTopkProb:
     weights = weights / (weights.sum(axis = -1, keepdim = true) + Scalar(1e-20))
   if self.scalesWeights:
     weights = weights * Scalar(self.routedScalingFactor)
+  if self.weightsHiddenDtype:
+    weights = weights.to(hidden.scalarType())
   result = (logits: logits, weights: weights, indices: indices)
 
 proc routeDecode*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =

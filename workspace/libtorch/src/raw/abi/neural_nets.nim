@@ -61,7 +61,7 @@ import
 # Linear Layers
 # -------------------------------------------------------------------------
 
-func linear*(input, weight: TorchTensor): TorchTensor {.importcpp: "torch::nn::functional::linear(@)".}
+func linear*(input, weight: TorchTensor): TorchTensor {.importcpp: "at::linear(@)".}
   ## Applies a linear transformation to the incoming data:
   ##   y = input * transpose(weight)
   ##
@@ -70,7 +70,7 @@ func linear*(input, weight: TorchTensor): TorchTensor {.importcpp: "torch::nn::f
   ## Weight: (out_features,in_features)
   ## Output: (N,∗,out_features)
 
-func linear*(input, weight, bias: TorchTensor): TorchTensor {.importcpp: "torch::nn::functional::linear(@)".}
+func linear*(input, weight, bias: TorchTensor): TorchTensor {.importcpp: "at::linear(@)".}
   ## Applies a linear transformation to the incoming data:
   ##   y = input * transpose(weight) + bias
   ##

@@ -501,8 +501,9 @@ type
     ##   carries no GatedBlockSparseFFN-style scale row, a distinct
     ##   typed shape, never a flag nor a dummy weight
     ##
-    ## Routed-expert bodies mirror the HF eager expert loop where
-    ## the token count allows:
+    ## Routed-expert bodies mirror the HF eager expert loop wherever
+    ## the token count allows it, `groupedPairSum` swaps both branches
+    ## to this transformers grouped_mm per-pair spelling:
     ## - prefill (T > 1): fused gate/up GEMM per hit expert, SiLU gating,
     ##   down GEMM, then the f32 routing weight multiplies the bf16 expert
     ##   output in f32 and the product rounds to the hidden dtype when it
@@ -527,6 +528,17 @@ type
       ## before the shared expert joins:
       ##   - Laguna spells `experts(...) * routed_scaling_factor + shared`
       ##   - 1.0 for the families whose router returns the scaled weights
+    groupedPairSum: bool
+      ## Expert dispatch over every (token, top-k position) pair under
+      ## the transformers grouped_mm reference spelling.
+      ##
+      ## - one expert body runs per pair, the hidden-dtype routing
+      ##   weight multiplies per pair
+      ## - the K pairs of a token sum in f32 with a single rounding
+      ##
+      ## - true runs every token count through the grouped spelling
+      ## - false keeps the eager spelling, the batched decode gather
+      ##   deciding T = 1 with the per-expert prefill loop past it
 
 func init*(
     _: type BlockSparseFFN,
@@ -535,7 +547,8 @@ func init*(
     sharedExpert: Option[GatedDenseFFN],
     router: NoAuxTopCorr,
     activation: ActivationKind = kSilu,
-    routedOutputScale: float64 = 1.0
+    routedOutputScale: float64 = 1.0,
+    groupedPairSum: bool = false
   ): BlockSparseFFN =
   ## Create the routed FFN from the rank-3 fused expert weights, the optional shared expert and the typed noaux_tc router.
   ##
@@ -572,7 +585,8 @@ func init*(
     activation: activation,
     router: router,
     sharedExpert: sharedExpert,
-    routedOutputScale: routedOutputScale
+    routedOutputScale: routedOutputScale,
+    groupedPairSum: groupedPairSum
   )
 
 proc expertForwardPrefillPlain(
@@ -590,7 +604,8 @@ proc expertForwardPrefillPlain(
   ## Input:
   ##   - hiddenStates: [T, H] at the hidden dtype
   ##   - topKIndex: [T, K] int64 expert ids
-  ##   - topKWeights: [T, K] f32 decision weights, pre-cast never
+  ##   - topKWeights, [T, K] decision weights at f32 or hidden dtype,
+  ##     either one reading back through f32 exactly
   ##
   ## Output:
   ##   - [T, H], zero rows for unselected tokens
@@ -655,12 +670,104 @@ proc expertForwardPrefillPlain(
 
   result = finalHiddenStates
 
+proc expertForwardPairs(
+    gateUpProj, downProj: Tensor,
+    hiddenStates, topKIndex, topKWeights: Tensor,
+    activation: ActivationKind
+  ): Tensor =
+  ## Routed expert compute over every (token, top-k position) pair under
+  ## the transformers grouped_mm expert spelling.
+  ##
+  ## - the pairs sort by expert id, one grouped GEMM per projection stage
+  ##   runs all expert groups
+  ## - the routing weight multiplies at the hidden dtype
+  ## - the K weighted pairs of a token sum in f32 over the top-k axis
+  ##   with a single rounding to the hidden dtype
+  ##
+  ## Grouping plan:
+  ##
+  ## - the pair ids counting-sort on the host, pairs of one group keep
+  ##   their (token, position) order
+  ## - grouped-GEMM rows are independent, the within-group order never
+  ##   changes the values
+  ## - the pair rows restore to topKIndex column order before the sum
+  ##
+  ## Input:
+  ##   - gateUpProj, downProj, rank-3 fused expert weights [E, 2I, H]
+  ##     and [E, H, I]
+  ##   - hiddenStates, [T, H] at the hidden dtype
+  ##
+  ##   - topKIndex, [T, K] int64 expert ids
+  ##   - topKWeights, [T, K] at the hidden dtype, the pair products
+  ##     round where the reference multiplies hidden-dtype weights
+  ##
+  ## Output:
+  ##   - [T, H] at the hidden dtype
+  let t = hiddenStates.size(0)
+  let topK = topKIndex.size(1)
+  let numExperts = gateUpProj.size(0)
+  let hidden = downProj.size(1)
+  let pairs = t * topK
+  let device = hiddenStates.deviceType()
+
+  # Grouping plan on the host, one small ids read per call
+  let idsHost = topKIndex.reshape(pairs).to(F.kCPU)
+  let idsPtr = idsHost.data_ptr(int64)
+  var counts = newSeq[int](numExperts)
+  for p in 0 ..< pairs:
+    inc counts[idsPtr[p].int]
+  var cursor = newSeq[int](numExperts)
+  var running = 0
+  for e in 0 ..< numExperts:
+    cursor[e] = running
+    running += counts[e]
+  var perm = newSeq[int64](pairs)
+  var invPerm = newSeq[int64](pairs)
+  for p in 0 ..< pairs:
+    let e = idsPtr[p].int
+    perm[cursor[e]] = p.int64
+    invPerm[p] = cursor[e].int64
+    inc cursor[e]
+  var offsets = newSeq[int32](numExperts)
+  running = 0
+  for e in 0 ..< numExperts:
+    running += counts[e]
+    offsets[e] = running.int32
+
+  let permT = perm.toTensor().to(device)
+  let invPermT = invPerm.toTensor().to(device)
+  let offsT = offsets.toTensor().to(device)
+  var tokenOfPair = newSeq[int64](pairs)
+  for p in 0 ..< pairs:
+    tokenOfPair[p] = perm[p] div topK.int64
+  let tokenOfPairT = tokenOfPair.toTensor().to(device)
+
+  let groupedStates = F.index_select(hiddenStates, 0, tokenOfPairT)
+  let gateUpOut = F.grouped_mm(groupedStates, gateUpProj.transpose(1, 2), offsT)
+  let chunks = F.chunk(gateUpOut, 2, -1)
+  let act =
+    case activation
+    of kSilu: F.silu(chunks[0]) * chunks[1]
+    of kGeluTanh: gelu_tanh(chunks[0]) * chunks[1]
+  let downOut = F.grouped_mm(act, downProj.transpose(1, 2), offsT)
+
+  let weightsGrouped = topKWeights.to(hiddenStates.scalarType())
+    .reshape(pairs).index_select(0, permT)
+  let weighted = downOut * weightsGrouped.unsqueeze(1)
+  let restored = F.index_select(weighted, 0, invPermT)
+  let summed = restored.to(F.kFloat32)
+    .reshape(t, topK, hidden).sum(axis = 1)
+  result = summed.to(hiddenStates.scalarType())
+
 proc forward*(self: BlockSparseFFN, hidden: Tensor): Tensor =
   ## Routed FFN forward on the embedded noaux_tc router, the ungated
   ## shared-expert tail. Token rows flatten to [T, H], route, run the
-  ## expert bodies and the shared expert, reshape on output; the routed
-  ## contribution dispatches on the token count (T = 1 -> decode
-  ## RoundAfterSum, T > 1 -> prefill plain).
+  ## expert bodies and the shared expert, reshape on output.
+  ##
+  ## Routed-contribution dispatch on `groupedPairSum`:
+  ## - true runs the per-pair grouped sum at every token count
+  ## - false dispatches on the token count, T = 1 decode RoundAfterSum
+  ##   and T > 1 prefill plain
   checkValue(hidden.dim() == 2 or hidden.dim() == 3,
     "[ttt] BlockSparseFFN.forward: hidden_states must be rank 2 [T, H] or rank 3 [B, T, H], found rank " &
     $hidden.dim())
@@ -677,7 +784,10 @@ proc forward*(self: BlockSparseFFN, hidden: Tensor): Tensor =
       route(self.router, hiddenStates)
 
   let routed =
-    if batchTokens == 1:
+    if self.groupedPairSum:
+      expertForwardPairs(self.gateUpProj, self.downProj, hiddenStates,
+        topkIndices, weights32, self.activation)
+    elif batchTokens == 1:
       expertForwardDecode(RoundAfterSum, self.gateUpProj, self.downProj,
         hiddenStates, topkIndices, weights32, self.activation)
     else:

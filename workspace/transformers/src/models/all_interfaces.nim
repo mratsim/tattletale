@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import
@@ -47,6 +47,12 @@ type ModelConfigBase* = ref object
   # plane. Zero keeps the pool shape keyed on num_key_value_heads and head_dim.
   mlaKvLoraRank*: int
   mlaKpeWidth*: int
+  # Widest per-head KV width across the checkpoint's layer kinds, zero when
+  # every layer stores head_dim channels. A dual-width checkpoint, one
+  # whose sliding window sits narrower than the full-attention head dim,
+  # writes full-width rows in its full layers, the pool slots must carry
+  # the widest width.
+  kvHeadDimMax*: int
   layerKinds*: seq[AttentionLayerKind] = @[]
 
 iface *AnyModel:

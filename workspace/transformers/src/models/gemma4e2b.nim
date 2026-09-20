@@ -256,7 +256,8 @@ func getConfig(self: Gemma4E2BModel): ModelConfigBase =
     intermediate_size: self.config.intermediate_size,
     max_position_embeddings: self.config.max_position_embeddings,
     eosTokenIds: self.config.eos_token_ids,
-    layerKinds: self.config.layerKinds
+    layerKinds: self.config.layerKinds,
+    kvHeadDimMax: self.config.global_head_dim
   )
 
 func getTokenizer(self: Gemma4E2BModel): BPETokenizer =

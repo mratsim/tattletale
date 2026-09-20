@@ -924,6 +924,9 @@ func addmv*(
 ): TorchTensor {.importcpp: "#.addmv(@)".}
 func addmm*(t, mat1, mat2: TorchTensor, beta: Scalar = 1, alpha: Scalar = 1): TorchTensor {.importcpp: "#.addmm(@)".}
 func mm*(t, other: TorchTensor): TorchTensor {.importcpp: "#.mm(@)".}
+func grouped_mm*(a, mat2, offs: TorchTensor): TorchTensor {.importcpp: "at::_grouped_mm(@)".}
+  ## Grouped GEMM over row-grouped operands, expected input:
+  ## every row of `a` multiplies the weight slab its group selects
 func matmul*(t, other: TorchTensor): TorchTensor {.importcpp: "#.matmul(@)".}
 func bmm*(t, other: TorchTensor): TorchTensor {.importcpp: "#.bmm(@)".}
 

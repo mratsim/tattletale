@@ -511,6 +511,10 @@ wrapLibtorch:
   func addmm*(a, mat1, mat2: Tensor, beta, alpha: Scalar = 1): Tensor
   func mm*(a, other: Tensor): Tensor
   func matmul*(a, other: Tensor): Tensor
+  func grouped_mm*(a, mat2, offs: Tensor): Tensor
+    ## Grouped GEMM over row-grouped operands, expected input:
+    ## `offs` carries the ascending int32 group-end offsets of `a`'s rows
+
   func bmm*(a, other: Tensor): Tensor
   func luSolve*(a, data, pivots: Tensor): Tensor
 
