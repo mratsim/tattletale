@@ -512,8 +512,12 @@ wrapLibtorch:
   func mm*(a, other: Tensor): Tensor
   func matmul*(a, other: Tensor): Tensor
   func grouped_mm*(a, mat2, offs: Tensor): Tensor
-    ## Grouped GEMM over row-grouped operands, expected input:
-    ## `offs` carries the ascending int32 group-end offsets of `a`'s rows
+    ## Grouped GEMM over row-grouped operands.
+    ##
+    ## Contract:
+    ## - `a` is [rows, K] with the rows pre-sorted by group, `mat2` is [G, K, N] with one slab per group
+    ## - `offs` carries the ascending int32 group-end offsets, the last offset equals the row count
+    ## - group g's row block multiplies `mat2[g]`, the output is [rows, N], one output row per input row
 
   func bmm*(a, other: Tensor): Tensor
   func luSolve*(a, data, pivots: Tensor): Tensor

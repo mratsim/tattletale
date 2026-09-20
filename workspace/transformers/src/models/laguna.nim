@@ -166,8 +166,6 @@ type
       ## Rope table of the sliding_attention layers, the default theta.
     tokenizerPath: string
       ## Deferred tokenizer binding, the Laguna tokenizer is loaded on first `getTokenizer` use, never at model load.
-    tokenizer: BPETokenizer
-      ## Nil until the first successful `getTokenizer` call.
     device*: DeviceKind
 
 proc forward*(self: LagunaModel, ctx: var InferenceContext, input_ids: Tensor): Tensor =
@@ -217,19 +215,17 @@ func getConfig(self: LagunaModel): ModelConfigBase =
   )
 
 func getTokenizer(self: LagunaModel): BPETokenizer =
-  ## Checkpoint tokenizer, loaded on first use.
+  ## Checkpoint tokenizer binding, the Laguna tokenizer has no converter
+  ## in toktoktok yet, text tokenization is unavailable.
   ##
   ## Raises:
-  ##   - `ValueError` on every call, the Laguna tokenizer has no converter
-  ##     yet and text tokenization is unavailable
+  ##   - `ValueError` on every call
   ##
   ## The suites replay recorded token ids and never encode.
-  if self.tokenizer.isNil:
-    raise newException(ValueError,
-      "[ttt] LagunaModel: the Laguna tokenizer has no converter " &
-      "in toktoktok yet, text tokenization is unavailable for " &
-      self.tokenizerPath)
-  self.tokenizer
+  raise newException(ValueError,
+    "[ttt] LagunaModel: the Laguna tokenizer has no converter " &
+    "in toktoktok yet, text tokenization is unavailable for " &
+    self.tokenizerPath)
 
 func getDeviceKind(self: LagunaModel): DeviceKind =
   self.device

@@ -75,12 +75,6 @@ wrapLibtorch:
       wrapTorchTensor:
         F.tanh(input.raw)
 
-  proc tanh_mut*(input: var Tensor) {.inline.} =
-    ## In-place hyperbolic tangent, overwriting `input` elementwise.
-    convertLibTorchExceptions:
-      wrapTorchTensor:
-        F.tanh_mut(input.raw)
-
   func softplus*(input: Tensor, beta: float64 = 1.0, threshold: float64 = 20.0): Tensor
     ## Softplus activation: ``log(1 + exp(beta * x)) / beta``, linear above
     ## ``threshold``. Defaults match torch (beta = 1.0, threshold = 20.0).

@@ -116,6 +116,11 @@ const FullVisibilityWindow* = int.high
   ## The visibility band never binds, every key at or before the query stays
   ## visible under the plain causal rule.
 
+const GqaKernelMaxHeadDim = 256
+  ## Head-dim bound of the mask-free GQA SDPA kernel dispatch, larger
+  ## head dims route to the expanded spelling, whose fused kernel
+  ## rounds differently on rare elements
+
 proc windowedCausalMask*(qLen, kvLen, offset, window: int, device: F.DeviceKind): Tensor =
   ## Visibility-band causal mask of the windowed attention spelling.
   ##
@@ -221,12 +226,12 @@ func forward*(
   # Masked SDPA spelling of the reference stack. K/V expand to the query
   # head count with each KV head repeated for its query-head group while
   # enable_gqa drops. The GQA path stays reserved for the mask-free kernel
-  # at head_dim <= 256:
+  # at `GqaKernelMaxHeadDim`:
   #
   # - the reference stack routes larger head dims to the expanded spelling,
   #   whose fused kernel rounds differently on rare elements
   let useGqa = attn_mask.isNone and enable_gqa and self.num_kv_groups > 1 and
-    self.head_dim <= 256
+    self.head_dim <= GqaKernelMaxHeadDim
   # Expansion requires KV-head-count keys (the repeat_kv precondition).
   # Callers replaying already-expanded keys skip it.
   let keysGrouped = k_final.size(1) == self.num_kv_head and
@@ -609,8 +614,8 @@ proc forward[QKNorm](
     # Single-query decode past the window. The visibility band keeps
     # exactly the newest `window` keys and every one of them is visible,
     # each key j in the slice satisfies j > query_pos - window.
-    # The reference stack's sliding cache serves that same slice, so
-    # the gathered history truncates to it while the mask reduces
+    # The reference stack's sliding cache serves that same slice,
+    # so the gathered history truncates to it while the mask reduces
     # to all-visible. Running the full history through the band mask
     # prices a different SDPA kernel shape whose rounding drifts away
     # from the reference.

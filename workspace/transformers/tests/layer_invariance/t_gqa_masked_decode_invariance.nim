@@ -14,6 +14,10 @@
 ##   than the window, exercises the kv-expansion spelling at kvLen != qLen
 ## - the reference comparison locks the head order of the expansion
 ##   against an independent index_select spelling
+##
+## Scope note, this suite does not guard the sliding-window decode
+## truncation branch, the decode-truncation contract is fixture-verified
+## through the tier suites against the reference stack
 
 import
   std/options,

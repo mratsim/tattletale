@@ -395,10 +395,13 @@ proc expertForwardPrefill(
 
   # TODO:
   #   the grouping scan still syncs per routing cell via .item(),
-  # reading expert ids and weights on the host. A sync drains the whole device on hardware without unified memory
-  # (CUDA). A segment GEMM or grouped GEMM with device-side offsets removes them:
-  #   gather cost scales as T*K and prices
-  # this design out of large T.
+  # reading expert ids and weights on the host.
+  #
+  # A sync drains the whole device on hardware without unified memory
+  # (CUDA). A segment GEMM or grouped GEMM with device-side offsets
+  # removes them:
+  #
+  # - gather cost scales as T*K and prices this design out of large T
 
   # Expert id per (token, position), extracted once for the grouping scan
   var expertIds = newSeq[int64](t * topK)
@@ -545,6 +548,9 @@ type
       ## before the shared expert joins:
       ##   - Laguna spells `experts(...) * routed_scaling_factor + shared`
       ##   - 1.0 for the families whose router returns the scaled weights
+      ##
+      ## The exact 1.0 comparison is the no-scale dispatch sentinel, exact-default
+      ## detection by contract, no scaled family carries the value 1.0
     groupedPairSum: bool
       ## Expert dispatch over every (token, top-k position) pair under
       ## the transformers grouped_mm reference spelling.
@@ -817,7 +823,7 @@ proc forward*(self: BlockSparseFFN, hidden: Tensor): Tensor =
   let batchTokens = hidden.numel() div self.hiddenSize
   let hiddenStates = hidden.reshape(batchTokens, self.hiddenSize)
 
-  let (_, weights32, topkIndices) =
+  let (_, decisionWeights, topkIndices) =
     if batchTokens == 1:
       routeDecode(self.router, hiddenStates)
     else:
@@ -826,12 +832,12 @@ proc forward*(self: BlockSparseFFN, hidden: Tensor): Tensor =
   let routed =
     if self.groupedPairSum:
       expertForwardPairs(self.gateUpProj, self.downProj, hiddenStates,
-        topkIndices, weights32, self.activation)
+        topkIndices, decisionWeights, self.activation)
     elif batchTokens == 1:
       expertForwardDecode(RoundAfterSum, self.gateUpProj, self.downProj,
-        hiddenStates, topkIndices, weights32, self.activation)
+        hiddenStates, topkIndices, decisionWeights, self.activation)
     else:
-      expertForwardPrefillPlain(self, hiddenStates, topkIndices, weights32)
+      expertForwardPrefillPlain(self, hiddenStates, topkIndices, decisionWeights)
   let routedScaled =
     if self.routedOutputScale == 1.0: routed
     else: routed * Scalar(self.routedOutputScale)
