@@ -5,27 +5,32 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## MoE routers of the DeepSeek family, two typed forms plus one embedded-weight form.
+## MoE routers of the DeepSeek family, three typed forms plus one embedded-weight form.
 ##
 ## - NoAuxTopCorr (noaux_tc family) sigmoid-scores, the bias steers only
 ##   the pick, weights gather from the unbiased scores, then renormalize
 ##   per config. Lineage spellings live in the `scalesWeights`/`scoreBf16` docs.
 ## - GreedyRouter softmax-scores, straight top-k, scaled, no renorm
 ##   and no bias.
+## - SoftmaxTopkRouter softmax-scores over a shaped input, renormalizes
+##   the picked probabilities and applies the per-expert scale (gemma-4).
 ## - `routeToExperts` (Qwen family) softmax-scores, renormalizes top-k weights at the hidden dtype, router weight on the FFN object.
 ##
 ## One algorithm serves every noaux_tc checkpoint, degenerate grouping
 ## included. n_group 1 leaves the mask at all-ones inside the same
 ## op sequence, no runtime branch.
 ##
-## Routing constants arrive from config: expert count, top-k, group counts,
-## scaling factor and the bias values are all init arguments. Bias-buffer
-## key naming is a model-load concern, out of this module.
+## Routing constants arrive from config:
+##   expert count, top-k, group counts, scaling factor and the bias
+## values are all init arguments.
+##
+## Bias-buffer key naming is a model-load concern, out of this module.
 
 import
   std/math,
   workspace/libtorch as F,
-  workspace/transformers/src/instrumentation
+  workspace/transformers/src/instrumentation,
+  ./norm
 
 {.experimental: "callOperator".}
 
@@ -77,11 +82,31 @@ type
       ##     the FFN boundary then carries the hidden-dtype cast
 
   GreedyRouter* = ref object
-    ## Legacy greedy router (DeepSeek-V2-Lite family): softmax scores cover
+    ## Greedy router of the DeepSeek-V2-Lite family:
+    ##   softmax scores cover
     ## all experts, straight top-k, no renorm, scaled by the routed factor.
     routerWeight: Tensor ## [E, H]
     topK: int
     routedScalingFactor: float64
+
+  SoftmaxTopkRouter* = ref object
+    ## Softmax top-k router, the gemma-4 routed spelling.
+    ##
+    ## - the input shaping mirrors the reference module, an unscaled RMS
+    ##   norm (a ones-weight FusedRmsNorm, with_scale=False) plus the scale
+    ##   row and the hidden-size root
+    ## - scoring runs a hidden-dtype GEMM, softmax in f32, straight
+    ##   top-k in probability order
+    ## - the picked probabilities renormalize, the per-expert scale applies
+    ##
+    ## The decision weights stay f32 from the softmax through the FFN boundary, the expert
+    ## multiply consumes them without a hidden-dtype rounding.
+    inputNorm: FusedRmsNorm ## ones-weight unscaled norm over the hidden rows
+    scaleRow: Tensor        ## [H], checkpoint dtype
+    projWeight: Tensor      ## [E, H], checkpoint dtype
+    perExpertScale: Tensor  ## [E], checkpoint dtype
+    topK: int
+    hiddenSize: int
 
 # ─── Construction ──────────────────────────────────────────────────────────
 
@@ -170,6 +195,46 @@ func init*(
     routedScalingFactor: routedScalingFactor
   )
 
+func init*(
+    _: type SoftmaxTopkRouter,
+    projWeight, scaleRow, perExpertScale: Tensor,
+    topK: int,
+    eps: float64,
+    device: F.DeviceKind
+  ): SoftmaxTopkRouter =
+  ## Builds the router from the checkpoint projection weight [E, H], the scale row [H]
+  ## and the per-expert scale [E], all at the checkpoint dtype, plus
+  ## the routing constants.
+  ##
+  ## Raises ValueError:
+  ## - projWeight is not rank 2
+  ## - scaleRow misses the hidden width of the projection weight
+  ## - perExpertScale misses the expert count of the projection weight
+  let e = projWeight.size(0)
+  let h = projWeight.size(1)
+  checkValue(projWeight.dim() == 2,
+    "[ttt] SoftmaxTopkRouter.init: router weight must be rank 2, found rank " &
+    $projWeight.dim())
+  checkValue(scaleRow.numel() == h,
+    "[ttt] SoftmaxTopkRouter.init: scale row holds " & $scaleRow.numel() &
+    " entries, expected the hidden width " & $h)
+  checkValue(perExpertScale.numel() == e,
+    "[ttt] SoftmaxTopkRouter.init: per-expert scale holds " &
+    $perExpertScale.numel() & " entries, expected one per expert (" & $e & ")")
+  checkValue(topK >= 1 and topK <= e,
+    "[ttt] SoftmaxTopkRouter.init: top_k " & $topK &
+    " outside 1.." & $e)
+  let inputNorm = FusedRmsNorm.init(
+    F.ones(h, F.tensorOptions(F.kBFloat16, device)), eps = eps)
+  SoftmaxTopkRouter(
+    inputNorm: inputNorm,
+    scaleRow: scaleRow,
+    projWeight: projWeight,
+    perExpertScale: perExpertScale,
+    topK: topK,
+    hiddenSize: h
+  )
+
 # ─── Routing forms ─────────────────────────────────────────────────────────
 
 proc routerLogits(routerWeight, hidden: Tensor, scoreBf16: bool): Tensor =
@@ -240,10 +305,12 @@ proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   result = (logits: logits, weights: weights, indices: indices)
 
 proc routeDecode*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
-  ## Batch-1 routing contract: one hidden row [1, H], the same f32 GEMM
-  ## scoring as route, outputs sized [1, K] straight into the decode
-  ## expert gather path. No reshape staging, no flag: the batch-1 shape
-  ## is a contract, not a distinct kernel.
+  ## Batch-1 routing contract:
+  ##   one hidden row [1, H], the same f32 GEMM scoring as route,
+  ##   outputs sized [1, K] straight into the decode expert gather path.
+  ##
+  ## No reshape staging and no flag, the batch-1 shape is a contract,
+  ## not a distinct kernel.
   checkValue(hidden.dim() == 2 and hidden.size(0) == 1,
     "[ttt] NoAuxTopCorr.routeDecode: hidden_states must be one row [1, H]," &
     " found shape (" & $hidden.size(0) & ", " & $hidden.size(1) & ")")
@@ -270,6 +337,45 @@ proc routeDecode*(self: GreedyRouter, hidden: Tensor): RouteDecision =
     " found shape (" & $hidden.size(0) & ", " & $hidden.size(1) & ")")
   route(self, hidden)
 
+proc route*(self: SoftmaxTopkRouter, hidden: Tensor): RouteDecision =
+  ## Softmax top-k routing over rank-2 [T, H] hidden rows, the gemma-4
+  ## routed spelling:
+  ##
+  ##   shaped   = rmsnorm(hidden) * scaleRow * hiddenSize^-0.5
+  ##   scores   = shaped @ projWeight.T, the hidden dtype
+  ##
+  ##   probs    = softmax(scores f32)
+  ##   indices  = topk(probs, topK) in probability order
+  ##   weights  = probs gather / sum * perExpertScale gather, f32
+  ##
+  ## Returns:
+  ##   - the RouteDecision surface, `logits` carries the softmax
+  ##     probabilities [T, E] f32, `weights` [T, K] f32, `indices` [T, K]
+  let shaped = self.inputNorm.forward(hidden) *
+    self.scaleRow * Scalar(pow(self.hiddenSize.float64, -0.5))
+  let scores = F.matmul(shaped, self.projWeight.t())
+  let probs = F.softmax(scores.to(F.kFloat32), -1)
+  let picked = probs.topk(self.topK, axis = -1, sorted = true)
+  var weights = picked.values /
+    picked.values.sum(axis = -1, keepdim = true)
+  # The per-expert scale is a rank-1 [E] buffer, the gather rows travel
+  # through an expanded [T, E] view.
+  weights = weights *
+    self.perExpertScale.unsqueeze(0)
+      .expand(picked.indices.size(0), self.perExpertScale.numel(),
+        implicit = false)
+      .gather(1, picked.indices).to(F.kFloat32)
+  result = (logits: probs, weights: weights, indices: picked.indices)
+
+proc routeDecode*(self: SoftmaxTopkRouter, hidden: Tensor): RouteDecision =
+  ## Batch-1 routing contract:
+  ##   one hidden row [1, H], the same softmax scoring as route, outputs
+  ##   sized [1, K] straight into the decode expert gather path.
+  checkValue(hidden.dim() == 2 and hidden.size(0) == 1,
+    "[ttt] SoftmaxTopkRouter.routeDecode: hidden_states must be one row [1, H]," &
+    " found shape (" & $hidden.size(0) & ", " & $hidden.size(1) & ")")
+  route(self, hidden)
+
 # ─── Embedded-weight form (Qwen family) ───────────────────────────────────
 
 proc routeToExperts*(
@@ -278,8 +384,9 @@ proc routeToExperts*(
     numExpertsPerTok: int
   ): tuple[indices: Tensor, weights: Tensor] =
   ## Router selection over rank-2 hidden states [T, H], the embedded-weight
-  ## form: the router weight lives on the FFN object instead of a typed
-  ## router object. Softmax scores over the hidden-dtype logits,
+  ## form:
+  ##   the router weight lives on the FFN object, the call site passes
+  ## it in. Softmax scores over the hidden-dtype logits,
   ## renormalized top-k weights cast to the hidden dtype:
   ##
   ##   logits = matmul(hidden, routerWeight.T) → [T, E] at the hidden dtype
@@ -297,6 +404,7 @@ proc routeToExperts*(
   let routingWeights = renormFp32.to(hidden.scalarType())
   (topIndices, routingWeights)
 
-template `()`*(router: NoAuxTopCorr | GreedyRouter, hidden: Tensor): untyped =
-  ## Route-call sugar, both forms.
+template `()`*(router: NoAuxTopCorr | GreedyRouter | SoftmaxTopkRouter,
+              hidden: Tensor): untyped =
+  ## Route-call sugar, all three typed forms.
   route(router, hidden)

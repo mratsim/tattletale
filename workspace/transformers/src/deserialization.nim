@@ -432,7 +432,8 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
                    softmaxScale = 0.0'f64,
                    kvSourceLayer = -1,
                    perHeadGate = false,
-                   vNorm: FusedRmsNorm = nil): RopeGQAttention[QKNorm] =
+                   vNorm: FusedRmsNorm = nil,
+                   kEqV = false): RopeGQAttention[QKNorm] =
   ## Args:
   ##   - `window` is the layer kind's visibility band, `FullVisibilityWindow`
   ##     (the default) for plain causal attention, the sliding window width
@@ -447,6 +448,9 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
   ##   - `vNorm` seats the value-path single-rounding norm, a ones-weight
   ##     FusedRmsNorm the caller constructs, the with_scale=False spelling
   ##     carries no checkpoint tensor
+  ##   - `kEqV` seats the KV-tied spelling of the gemma-4 attention_k_eq_v
+  ##     full layers, where no v_proj weight loads and the value rows
+  ##     derive from the shared k projection at forward
   let qProj = Linear.load(view, cfg, prefix & ".q_proj", device)
   let oProj = Linear.load(view, cfg, prefix & ".o_proj", device)
   let gProj =
@@ -460,7 +464,7 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
     else:
       nil
   let vProj =
-    if kvSourceLayer < 0:
+    if kvSourceLayer < 0 and not kEqV:
       Linear.load(view, cfg, prefix & ".v_proj", device)
     else:
       nil
@@ -471,7 +475,8 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
       qProj, kProj, vProj, oProj,
       numQoHead, numKvHead, headDim, rotary,
       window = window, softmaxScale = softmaxScale,
-      gProj = gProj, kvSourceLayer = kvSourceLayer, vNorm = vNorm)
+      gProj = gProj, kvSourceLayer = kvSourceLayer, vNorm = vNorm,
+      kEqV = kEqV)
   else:
     # q_norm loads on every layer, shared ones included.
     # k_norm loads only where the layer projects its own k.
@@ -486,7 +491,8 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
       numQoHead, numKvHead, headDim, rotary,
       q_norm = qNorm, k_norm = kNorm,
       window = window, softmaxScale = softmaxScale,
-      gProj = gProj, kvSourceLayer = kvSourceLayer, vNorm = vNorm)
+      gProj = gProj, kvSourceLayer = kvSourceLayer, vNorm = vNorm,
+      kEqV = kEqV)
 
 # ─── Gated Attention ───────────────────────────────────────────────────────
 

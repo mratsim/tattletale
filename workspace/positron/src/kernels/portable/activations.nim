@@ -22,12 +22,10 @@ func gelu_tanh*(x: Tensor): Tensor =
   ##
   ## Returns:
   ##   - A tensor with the shape and dtype of the input
-  ##   - Computed in f32, rounded once back to the input dtype, the same
-  ##     opmath shape as the reference `gelu(approximate="tanh")` kernel
-  ##     for bf16 activations
-  let x32 = x.to(kFloat32)
-  let inner = 0.7978845608028654'f32 * (x32 + 0.044715'f32 * x32 * x32 * x32)
-  result = (0.5'f32 * x32 * (Scalar(1.0'f32) + tanh(inner))).to(x.scalarType())
+  ##   - Evaluated by the backend's fused tanh-approximate gelu kernel,
+  ##     the op the reference runtimes call for this activation, so bf16
+  ##     activations keep the fused kernel's rounding
+  gelu(x, "tanh")
 
 func silu_and_mul*(x: Tensor): Tensor =
   ## Fused SiLU and Mul activation.

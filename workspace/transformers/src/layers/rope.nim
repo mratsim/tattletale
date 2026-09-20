@@ -12,10 +12,13 @@ import
 
 type
   RotaryPositionEmbedding* = ref object
-    ## Rotary Position Embedding (RoPE): precomputed cosine/sine lookup table.
+    ## Rotary Position Embedding (RoPE):
+    ##   precomputed cosine/sine lookup table.
     ##
-    ## **LIFETIME**: Per-model. Created once by `new()` at model initialization;
-    ##   destroyed when the model (and its shared `rotary` ref) is dropped.
+    ## **LIFETIME**:
+    ##   Per-model. Created once by `new()` at model initialization.
+    ##   Destroyed when the model (and its shared `rotary` ref) is dropped.
+    ##
     ##   `cos_cache` and `sin_cache` are **immutable after init** — they are
     ##   **precomputed tables**, not mutable runtime state.
     ##
@@ -65,7 +68,8 @@ type
     ##    where `seq_len == position_ids.numel()`
     ##  - `applyRope` rotates only the first `rotary_dim` columns of head_dim.
     ##    The remaining columns pass through unchanged.
-    ##  - `applyRope` is pure: same inputs always produce same outputs
+    ##  - `applyRope` is pure:
+    ##    same inputs always produce same outputs
     ##
     ## **USAGE**:
     ##
@@ -89,8 +93,10 @@ type
     sin_cache*: Tensor     ## Precomputed (max_seq_len, rotary_dim). Immutable after init.
 
 func rotateHalf(x: Tensor): Tensor =
-  # Input/Output: (batch, head, seq, dim) with dim even.
-  # Pairwise split: [-x2, x1] over the last dimension.
+  # Input/Output:
+  #   (batch, head, seq, dim) with dim even.
+  # Pairwise split:
+  #   [-x2, x1] over the last dimension.
   let dim = x.size(3)
   let half_dim = dim div 2
   let x1 = x[_, _, _, 0..<half_dim]
@@ -104,17 +110,16 @@ func applyRopeImpl(
       sin: Tensor): (Tensor, Tensor) =
   ## Freestanding RoPE implementation.
   ##
-  ## **Contract:** cos and sin MUST be 2D `(seq, rotary_dim)`. The rotation
-  ## width is derived from `cos.size(-1)`. When it equals `head_dim` this is
-  ## the plain full-head_dim rotation.
+  ## **Contract:** cos and sin MUST be 2D `(seq, rotary_dim)`. The rotation width is derived
+  ## from `cos.size(-1)`. When it equals `head_dim` this is the plain full-head_dim rotation.
   ##
   ## Input q,k: (batch, seq, head, head_dim)
   ## Input cos, sin: (seq, rotary_dim)
   ## Output: (batch, seq, head, head_dim)
   ##
-  ## Only the first `rotary_dim` columns of head_dim rotate (`q_rot * cos +
-  ## rotateHalf(q_rot) * sin`, NEOX pairwise repetition). Columns
-  ## `rotary_dim ..< head_dim` pass through unchanged.
+  ## Only the first `rotary_dim` columns of head_dim rotate
+  ## (`q_rot * cos + rotateHalf(q_rot) * sin`, NEOX pairwise repetition).
+  ## Columns `rotary_dim ..< head_dim` pass through unchanged.
   doAssert cos.dim == 2, "applyRopeImpl: cos must be 2D (seq, rotary_dim), got " & $cos.dim & "D"
   doAssert sin.dim == 2, "applyRopeImpl: sin must be 2D (seq, rotary_dim), got " & $sin.dim & "D"
 
@@ -134,13 +139,15 @@ func applyRopeImpl(
   let sin = sin.unsqueeze(0).unsqueeze(0)
 
   if rotary_dim == head_dim:
-    # Full-head_dim rotation: qwen3 path (identity with the split when the
-    # pass-through slice is empty).
+    # Full-head_dim rotation:
+    #   qwen3 path, an identity with the split when the pass-through
+    #   slice is empty.
     let q_rot_t = q_t * cos + rotateHalf(q_t) * sin
     let k_rot_t = k_t * cos + rotateHalf(k_t) * sin
     result = (q_rot_t.transpose(1, 2), k_rot_t.transpose(1, 2))
   else:
-    # Partial rotation: rotate the first rotary_dim columns, keep the rest.
+    # Partial rotation:
+    #   rotate the first rotary_dim columns, keep the rest.
     let qRot = q_t[_, _, _, 0..<rotary_dim]
     let qPass = q_t[_, _, _, rotary_dim..<head_dim]
     let qRotated = qRot * cos + rotateHalf(qRot) * sin
@@ -259,16 +266,18 @@ func new*(_: type RotaryPositionEmbedding,
   ## `attentionFactor` scales the cos/sin rows after the trigonometry,
   ## the checkpoint's attention_scaling (the yarn mscale by default).
   ##
-  ## `f32Cache` builds the table in the reference f32 spelling, every
-  ## step on `device`:
+  ## `f32Cache` builds the table in the reference f32 spelling:
   ##
-  ## - f32 inverse frequencies
-  ## - f32 angle products
-  ## - f32 trigonometry and f32 attention scaling
+  ## - f32 inverse frequencies on the CPU, where the reference rotary
+  ##   module builds its buffer before it moves to the device
+  ## - f32 angle products, trigonometry and attention scaling on `device`
   ##
   ## Checkpoints whose reference implementation computes that table
-  ## with f32 arithmetic (Laguna) flip bf16 bits against the f64 table
-  ## of this port over long sequences, so they opt in.
+  ## with f32 arithmetic flip bf16 bits against the f64 port table over
+  ## long sequences, so they opt into `f32Cache`:
+  ##
+  ## - Laguna yarn tables
+  ## - the gemma-4 default and proportional spellings
   ##
   ## **Algorithm (NEOX-style)**:
   ##
@@ -284,12 +293,13 @@ func new*(_: type RotaryPositionEmbedding,
   ##     in FP64 for precision, or in f32 on the device under `f32Cache`.
   ##
   ##  3. Duplicate the half table to cover all `rotary_dim` positions:
-  ##     `[f0 .. f_{m-1}, f0 .. f_{m-1}]` (m = rotary_dim/2) by
-  ##     concatenating the table with itself along the dimension axis.
+  ##     `[f0 .. f_{m-1}, f0 .. f_{m-1}]` (m = rotary_dim/2) by concatenating the table with itself
+  ##     along the dimension axis.
   ##
   ##  4. Scale by `attentionFactor`, cast to `dtype` (e.g., BF16), move to `device`.
   ##
-  ## **Complexity**: O(max_seq_len * rotary_dim), done once per model load.
+  ## **Complexity**:
+  ##   O(max_seq_len * rotary_dim), done once per model load.
   ##
   let dim = if rotary_dim < 0: head_dim else: rotary_dim
   doAssert dim <= head_dim, "rotary_dim " & $dim & " exceeds head_dim " & $head_dim
@@ -317,27 +327,30 @@ func new*(_: type RotaryPositionEmbedding,
   var cos_cache: Tensor
   var sin_cache: Tensor
   if f32Cache:
-    # Reference f32 spelling. The inverse frequencies blend on the CPU
-    # in f32, where the reference builds its buffer at load.
-    # Every step afterwards runs in f32 on the target device too
-    # (angle products, trigonometry, attention scaling).
+    # Reference f32 spelling:
+    #   f32 inverse frequencies, f32 angle products,
+    # f32 trigonometry and f32 attention scaling. All three spellings build their inv_freq buffer
+    # on the CPU - the reference rotary module constructs without a device argument, so the int64 pair
+    # indices cast to f32 and the theta power round on the CPU and the finished buffer moves
+    # to the device - then run the angle outer product and trigonometry on the device.
     let cpuOpts = F.tensorOptions(F.kFloat32, F.kCPU)
-    var inv_freq32 =
-      if yarnFactor > 1.0:
-        checkValue(yarnOriginalMaxPos > 0,
-          "[ttt] RotaryPositionEmbedding: yarn needs original_max_position_embeddings")
-        yarnInvFreqF32(dim, rope_theta, yarnFactor, yarnBetaFast, yarnBetaSlow,
-          yarnOriginalMaxPos)
-      else:
-        F.full(1, 1.0, cpuOpts) / F.pow(F.full(1, rope_theta, cpuOpts),
-          F.arange(0, dim, 2, cpuOpts) / dim.float64)
-    if activePairs >= 0:
-      checkValue(activePairs <= half_dim,
-        "[ttt] RotaryPositionEmbedding: activePairs " & $activePairs &
-        " exceeds the pair count " & $half_dim)
+    var inv_freq32: Tensor
+    if yarnFactor > 1.0:
+      checkValue(yarnOriginalMaxPos > 0,
+        "[ttt] RotaryPositionEmbedding: yarn needs original_max_position_embeddings")
+      inv_freq32 = yarnInvFreqF32(dim, rope_theta, yarnFactor, yarnBetaFast,
+        yarnBetaSlow, yarnOriginalMaxPos)
+    elif activePairs >= 0:
+      inv_freq32 = F.full(1, 1.0, cpuOpts) / F.pow(F.full(1, rope_theta, cpuOpts),
+        F.arange(0, dim, 2, cpuOpts) / dim.float64)
       if activePairs < half_dim:
+        # A 0/1 pair mask multiplies in, the tail pairs keep a zero
+        # inv_freq and their rotation is the identity.
         inv_freq32 = inv_freq32 * F.arange(0, half_dim, cpuOpts)
           .`<.`(Scalar(activePairs.float64)).to(F.kFloat32)
+    else:
+      inv_freq32 = F.full(1, 1.0, cpuOpts) / F.pow(F.full(1, rope_theta, cpuOpts),
+        F.arange(0, dim, 2, cpuOpts) / dim.float64)
     # The angle is one f32 product per (position, pair), the reference
     # inv_freq @ position_ids outer product on the device.
     let freqs = F.matmul(inv_freq32.to(device).unsqueeze(0).unsqueeze(-1),
@@ -368,8 +381,10 @@ proc ropeByPositions*(self: RotaryPositionEmbedding, position_ids: Tensor): (Ten
   ##
   ## **input_ids vs position_ids — they are NOT the same**:
   ##
-  ##   - `input_ids`: Token IDs. *What* to compute (e.g., `[9707, 11, 1246]` = "Hello, how")
-  ##   - `position_ids`: Absolute positions in the sequence. *Where* each token goes
+  ##   - `input_ids`:
+  ##     Token IDs. *What* to compute (e.g., `[9707, 11, 1246]` = "Hello, how")
+  ##   - `position_ids`:
+  ##     Absolute positions in the sequence. *Where* each token goes
   ##
   ##   For the common case (prefill from 0, decode sequentially):
   ##     input_ids = `[9707, 11, 1246]`  →  position_ids = `[0, 1, 2]`
@@ -379,7 +394,8 @@ proc ropeByPositions*(self: RotaryPositionEmbedding, position_ids: Tensor): (Ten
   ##   prefix caching (skip cached tokens), and speculative decoding (non-contiguous).
   ##
   ## Args:
-  ##   position_ids: Tensor of shape (seq_len,) or (batch, seq_len)
+  ##   position_ids:
+  ##     Tensor of shape (seq_len,) or (batch, seq_len)
   ##
   ## Returns:
   ##   (cos, sin) of shape (seq_len, rotary_dim), sliced from cache
@@ -406,8 +422,10 @@ proc applyRope*(
   ## Apply RoPE using precomputed cos/sin.
   ##
   ## Args:
-  ##   q, k: Input tensors of shape (batch, seq, head, head_dim)
-  ##   cos, sin: Precomputed RoPE of shape (seq, rotary_dim)
+  ##   - q, k:
+  ##     input tensors of shape (batch, seq, head, head_dim)
+  ##   - cos, sin:
+  ##     precomputed RoPE tables of shape (seq, rotary_dim)
   ##
   ## Returns:
   ##   (q_rot, k_rot) of shape (batch, seq, head, head_dim)
@@ -427,32 +445,37 @@ type
     ## unrotated when the checkpoint carries one (Kimi-Linear MLA).
 
   FullRoPe* = object
-    ## Rope policy: the whole kpe plane rotates (DeepSeek-V2/V3, GLM).
+    ## Rope policy:
+    ##   the whole kpe plane rotates (DeepSeek-V2/V3, GLM).
 
   PartialRoPe*[rotaryDim: static int] = object
-    ## Rope policy: the first `rotaryDim` plane channels rotate,
-    ## remaining channels pass through. `rotaryDim` must be even,
-    ## never over the plane width, evenness enforced at compile time,
-    ## the over-plane width refused at layer init against the runtime
-    ## plane width.
+    ## Rope policy:
+    ##   the first `rotaryDim` plane channels rotate, the remaining
+    ##   channels pass through.
+    ##
+    ## `rotaryDim` must be even and never over the plane width, evenness
+    ## enforced at compile time, the over-plane width refused at layer
+    ## init against the runtime plane width.
 
 # ###########################################################################
 # Interleaved rotation kernel
 # ###########################################################################
 
 func rotateInterleaved(x: Tensor, cos, sin: Tensor): Tensor =
-  ## GPT-J interleaved rotation of the last dimension: the channel pair
+  ## GPT-J interleaved rotation of the last dimension:
+  ##   the channel pair
   ## (2i, 2i+1) rotates by the row-i angle.
   ##
   ## Args:
-  ##   x: (batch, seq, heads, plane), even plane
-  ##   cos, sin: (seq, plane div 2) f32 frequency tables
+  ##   - x:
+  ##     (batch, seq, heads, plane), even plane
+  ##   - cos, sin:
+  ##     (seq, plane div 2) f32 frequency tables
   ##
   ## Returns:
-  ##   Rotated tensor, same shape and dtype as `x`. The pair products
-  ##   and sums run in f32 and round once back to the storage dtype,
-  ##   the same arithmetic and rounding as the complex-multiply form
-  ##   produces.
+  ##   Rotated tensor, same shape and dtype as `x`. The pair products and sums run in f32 and round
+  ##   once back to the storage dtype, the same arithmetic and rounding
+  ##   as the complex-multiply form produces.
   let batch = x.size(0)
   let seq = x.size(1)
   let heads = x.size(2)
@@ -479,11 +502,13 @@ func rotateInterleaved(x: Tensor, cos, sin: Tensor): Tensor =
     .reshape([batch, seq, heads, plane]).to(x.scalarType())
 
 func applyRope*(qPe, kPe: Tensor, cos, sin: Tensor, R: typedesc[NoPe]): (Tensor, Tensor) =
-  ## NoPe rope: identity. Nothing is computed, the call compiles out.
+  ## NoPe rope:
+  ##   identity. Nothing is computed, the call compiles out.
   (qPe, kPe)
 
 func applyRope*(qPe, kPe: Tensor, cos, sin: Tensor, R: typedesc[FullRoPe]): (Tensor, Tensor) =
-  ## FullRoPe: rotate the whole plane of q and k.
+  ## FullRoPe:
+  ##   rotate the whole plane of q and k.
   (rotateInterleaved(qPe, cos, sin), rotateInterleaved(kPe, cos, sin))
 
 func applyRope*(qPe, kPe: Tensor, cos, sin: Tensor,

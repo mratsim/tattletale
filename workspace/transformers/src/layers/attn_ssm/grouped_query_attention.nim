@@ -73,6 +73,17 @@ type
       ## Value-path single-rounding norm applied to the reshaped v before
       ## the cache write, the gemma-4 v_norm with_scale=False spelling
       ## (a ones weight, no checkpoint tensor). Nil on layers without it.
+    kEqV: bool
+      ## KV-tied attention spelling of the gemma-4 attention_k_eq_v full layers
+      ##
+      ## Contract:
+      ##
+      ## - no v_proj weight loads, v_proj stays nil
+      ## - value rows are the unscaled v_norm of the k projection feeding
+      ##   the keys, the keys being its rotated k_norm rows
+      ## - the tying holds at the projection level only, the cache stores
+      ##   K and V as separate entries on both layer kinds, the page-pool
+      ##   geometry is unchanged
 # -----------------------------------------------------------------------------
 # Data flow through RopeGQAttention
 # -----------------------------------------------------------------------------
@@ -194,7 +205,8 @@ func forward*(
   ## Returns:
   ##   Attention output of shape (batch, seq, num_qo_head * head_dim)
 
-  # Backend: permute to (batch, head, seq, head_dim), ensure dtype, SDPA, reshape
+  # Backend:
+  #   permute to (batch, head, seq, head_dim), ensure dtype, SDPA, reshape
   let batch = q.size(0)
   let seq_len = q.size(1)
 
@@ -208,8 +220,13 @@ func forward*(
 
   # Masked SDPA spelling of the reference stack. K/V expand to the query
   # head count with each KV head repeated for its query-head group while
-  # enable_gqa drops. The GQA path stays reserved for the mask-free kernel.
-  let useGqa = attn_mask.isNone and enable_gqa and self.num_kv_groups > 1
+  # enable_gqa drops. The GQA path stays reserved for the mask-free kernel
+  # at head_dim <= 256:
+  #
+  # - the reference stack routes larger head dims to the expanded spelling,
+  #   whose fused kernel rounds differently on rare elements
+  let useGqa = attn_mask.isNone and enable_gqa and self.num_kv_groups > 1 and
+    self.head_dim <= 256
   # Expansion requires KV-head-count keys (the repeat_kv precondition).
   # Callers replaying already-expanded keys skip it.
   let keysGrouped = k_final.size(1) == self.num_kv_head and
@@ -264,7 +281,8 @@ func initBase[QKNorm](
     window: int, softmaxScale: float64,
     gProj: Option[Linear] = none(Linear),
     kvSourceLayer = -1,
-    vNorm: FusedRmsNorm = nil): RopeGQAttention[QKNorm] =
+    vNorm: FusedRmsNorm = nil,
+    kEqV = false): RopeGQAttention[QKNorm] =
   checkValue(num_qo_head > 0,
     "[ttt] " & name & ": num_attention_heads is " & $num_qo_head &
     ", expected a positive count")
@@ -277,6 +295,9 @@ func initBase[QKNorm](
   checkValue(window > 0,
     "[ttt] " & name & ": the visibility band is " & $window &
     ", expected a positive count or FullVisibilityWindow")
+  checkValue(not kEqV or v_proj.isNil,
+    "[ttt] " & name & ": the KV-tied spelling carries no v_proj weight, " &
+    "pass a nil v_proj with kEqV")
   RopeGQAttention[QKNorm](
     layer_idx: layer_idx,
     name: name,
@@ -290,7 +311,8 @@ func initBase[QKNorm](
     window: window,
     gProj: gProj,
     kvSourceLayer: kvSourceLayer,
-    vNorm: vNorm
+    vNorm: vNorm,
+    kEqV: kEqV
   )
 
 func init*[QKNorm](
@@ -304,7 +326,8 @@ func init*[QKNorm](
     softmaxScale = 0.0'f64,
     gProj: Option[Linear] = none(Linear),
     kvSourceLayer = -1,
-    vNorm: FusedRmsNorm = nil): RopeGQAttention[QKNorm] =
+    vNorm: FusedRmsNorm = nil,
+    kEqV = false): RopeGQAttention[QKNorm] =
   ## Build the attention block with no qk-norms.
   ##
   ## `window` defaults to `FullVisibilityWindow`, plain causal attention.
@@ -313,7 +336,7 @@ func init*[QKNorm](
   initBase(RopeGQAttention[QKNorm], layer_idx, name,
     q_proj, k_proj, v_proj, o_proj,
     num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale,
-    gProj, kvSourceLayer, vNorm)
+    gProj, kvSourceLayer, vNorm, kEqV)
 
 func init*[QKNorm](
     _: type RopeGQAttention[QKNorm],
@@ -327,7 +350,8 @@ func init*[QKNorm](
     softmaxScale = 0.0'f64,
     gProj: Option[Linear] = none(Linear),
     kvSourceLayer = -1,
-    vNorm: FusedRmsNorm = nil): RopeGQAttention[QKNorm] =
+    vNorm: FusedRmsNorm = nil,
+    kEqV = false): RopeGQAttention[QKNorm] =
   ## Initialize RopeGQAttention.
   ##
   ## Args:
@@ -353,7 +377,7 @@ func init*[QKNorm](
   result = initBase(RopeGQAttention[QKNorm], layer_idx, name,
     q_proj, k_proj, v_proj, o_proj,
     num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale,
-    gProj, kvSourceLayer, vNorm)
+    gProj, kvSourceLayer, vNorm, kEqV)
   when QKNorm isnot void:
     result.q_norm = q_norm
     result.k_norm = k_norm
@@ -394,18 +418,22 @@ proc writeKvPages(
       let chunkLen = min(chunkRemaining, seqRemaining)
       let chunkEnd = t + chunkLen
       # Single copyFrom per page instead of one kernel per token.
-      # Dual-width pools carry the widest kv width in the slot, a narrower
-      # layer writes the leading head_dim channels through a narrowed view.
+      # Dual-geometry layers narrow the slot to their own leading
+      # (kv_heads, head_dim) planes:
+      #
+      # - the slot row-major layout makes the narrowed view the contiguous
+      #   element prefix the layer owns, no layout change and no copy
       let kView = page.k_view[layer_idx, withinPage ..< withinPage + chunkLen]
       let vView = page.v_view[layer_idx, withinPage ..< withinPage + chunkLen]
       let kSrc = k_rot[0, t ..< chunkEnd, _, _]
       let vSrc = v_reshaped[0, t ..< chunkEnd, _, _]
-      if kView.size(2) != kSrc.size(2):
-        kView.narrow(2, 0, kSrc.size(2)).copyFrom(kSrc)
-        vView.narrow(2, 0, vSrc.size(2)).copyFrom(vSrc)
-      else:
-        kView.copyFrom(kSrc)
-        vView.copyFrom(vSrc)
+      checkValue(kSrc.size(1) <= kView.size(1) and kSrc.size(2) <= kView.size(2) and
+        vSrc.size(1) <= vView.size(1) and vSrc.size(2) <= vView.size(2),
+        "[ttt] writeKvPages: layer kv geometry (" & $kSrc.size(1) & ", " &
+        $kSrc.size(2) & ") exceeds the pool slot (" & $kView.size(1) & ", " &
+        $kView.size(2) & ")")
+      kView.narrow(1, 0, kSrc.size(1)).narrow(2, 0, kSrc.size(2)).copyFrom(kSrc)
+      vView.narrow(1, 0, vSrc.size(1)).narrow(2, 0, vSrc.size(2)).copyFrom(vSrc)
       t = chunkEnd
 
 proc gatherKv(
@@ -418,35 +446,46 @@ proc gatherKv(
 
   # Reuse pre-allocated buffers to avoid F.empty allocation per forward pass.
   # Allocate once at max_seq size, narrow to actual totalSeqLen each call.
-  # Dual-width layers share one context, a realloc is due whenever
-  # the stashed buffer width disagrees with this layer's head_dim too.
+  # Dual-geometry layers share one context:
+  #
+  # - the buffer carries the widest (kv_heads, head_dim) seen so far
+  # - a narrower layer reads and writes its leading planes
+  #   through narrowed views
+  # - a realloc is due only when the stashed buffer cannot host
+  #   this layer's kv geometry
   if ctx.k_gather_buf.isNil or ctx.k_gather_buf.size(1) < totalSeqLen or
-      ctx.k_gather_buf.size(3) != head_dim:
+      ctx.k_gather_buf.size(2) < num_kv_head or
+      ctx.k_gather_buf.size(3) < head_dim:
     let allocSize = max(totalSeqLen, ctx.max_seq)
     let kvOpts = F.tensorOptions(kvDtype, kvDevice)
+    let allocKvHeads = max(num_kv_head, ctx.kv_heads)
+    let allocHeadDim = max(head_dim, ctx.head_dim)
     ctx.k_gather_buf = F.zeros(
-      1, allocSize, num_kv_head, head_dim, kvOpts)
+      1, allocSize, allocKvHeads, allocHeadDim, kvOpts)
     ctx.v_gather_buf = F.zeros(
-      1, allocSize, num_kv_head, head_dim, kvOpts)
+      1, allocSize, allocKvHeads, allocHeadDim, kvOpts)
 
   for p in 0 ..< numPages:
     let pageStart = p * TokensPerPage
     let pageEnd = min(pageStart + TokensPerPage, totalSeqLen)
     let pageValidLen = pageEnd - pageStart
     let page = ctx.pages[p]
-    # A narrower layer reads the leading head_dim channels of its wide
-    # slot through a narrowed view.
+    # A narrower layer reads and writes the leading (kv_heads, head_dim)
+    # planes of its wide slot through narrowed views.
     let kSlot = page.k_view[layer_idx, 0 ..< pageValidLen]
+      .narrow(1, 0, num_kv_head).narrow(2, 0, head_dim)
     let vSlot = page.v_view[layer_idx, 0 ..< pageValidLen]
-    let kvWidth = ctx.k_gather_buf.size(3)
-    ctx.k_gather_buf[0, pageStart ..< pageEnd, _, _] =
-      (if kSlot.size(2) != kvWidth: kSlot.narrow(2, 0, kvWidth) else: kSlot)
-    ctx.v_gather_buf[0, pageStart ..< pageEnd, _, _] =
-      (if vSlot.size(2) != kvWidth: vSlot.narrow(2, 0, kvWidth) else: vSlot)
+      .narrow(1, 0, num_kv_head).narrow(2, 0, head_dim)
+    ctx.k_gather_buf[0, pageStart ..< pageEnd, _, _]
+      .narrow(1, 0, num_kv_head).narrow(2, 0, head_dim).copyFrom(kSlot)
+    ctx.v_gather_buf[0, pageStart ..< pageEnd, _, _]
+      .narrow(1, 0, num_kv_head).narrow(2, 0, head_dim).copyFrom(vSlot)
 
-  # Narrow pre-allocated buffers to actual sequence length for SDPA
+  # Narrow pre-allocated buffers to this layer's shape for SDPA
   let k_full = ctx.k_gather_buf.narrow(1, 0, totalSeqLen)
+    .narrow(2, 0, num_kv_head).narrow(3, 0, head_dim)
   let v_full = ctx.v_gather_buf.narrow(1, 0, totalSeqLen)
+    .narrow(2, 0, num_kv_head).narrow(3, 0, head_dim)
   (k_full, v_full)
 
 proc forward[QKNorm](
@@ -506,9 +545,15 @@ proc forward[QKNorm](
   var k_full, v_full: Tensor
   if self.kvSourceLayer < 0:
     let k = self.k_proj.forward(x)
-    let v = self.v_proj.forward(x)
     let k_reshaped = k.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
-    var v_reshaped = v.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
+    # The KV-tied spelling derives the value rows from the shared k projection, the raw
+    # reshaped output before k_norm and rope reach the key path.
+    let v_reshaped =
+      if self.kEqV:
+        k_reshaped
+      else:
+        self.v_proj.forward(x).reshape(
+          [batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
 
     # Apply k norm (on reshaped tensor before RoPE)
     let k_norm_input =
