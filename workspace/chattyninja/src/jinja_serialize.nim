@@ -19,6 +19,9 @@ const
     ## escape is the astral surrogate pair (12 bytes), the longest atom rendering a float repr
     ## (26 bytes), the macro form `<macro ` plus one int64 plus `>` (30 bytes with quotes).
 
+  SerStartCap = 256
+    ## First `serString` drain buffer, doubled by `setLen` until the rendering completes.
+
 type
   SerMode* = enum
     ## Mode of a serializer, `smStr` rendering Python `str()` and `repr()` output text,
@@ -83,15 +86,15 @@ type
       ## separator the `spSep` phase writes
     sepos*: int
       ## bytes of `sep` already written
-    buf*: array[40, char]
+    buf*: array[SerChunkCap, char]
       ## literal queue draining byte by byte
     blen*, bpos*: int
       ## queued bytes in `buf` and the read position
     stack*: seq[SerFrame]
       ## open containers, outermost first
     concatTail*: seq[JinjaVal]
-      ## remaining operands of a str-mode `~` tree in render order, each dispatching when
-      ## the previous operand's rendering completes
+      ## remaining operands of a str-mode `~` tree in render order, each dispatching
+      ## when the previous operand's rendering completes
     closeSeq*: bool
       ## the `spClose` phase writes a sequence bracket, else a mapping bracket
 
@@ -175,8 +178,12 @@ func hex4(sb: var Cursor, c: int) =
 
 func serQueue(js: var Ser, s: string) =
   ## Queues literal bytes for draining, `s` at most `SerChunkCap` bytes long.
+  ## A longer literal raises `JinjaError` naming the queue's capacity.
   js.blen = s.len
   js.bpos = 0
+  if s.len > SerChunkCap:
+    raise jinjaErr("serializer literal of " & $s.len & " bytes exceeds the " &
+        $SerChunkCap & "-byte queue")
   if s.len > 0:
     copyMem(addr js.buf[0], unsafeAddr s[0], s.len)
 
@@ -495,7 +502,7 @@ func pullSer*(js: var Ser, dst: var openArray[char]): int =
 func serString(js: var Ser): string =
   ## Returns the rendering as one fresh string, the caller-side drain-and-grow form.
   ## Buffer growth starts at 256 bytes and doubles until the rendering completes.
-  var cap = 256
+  var cap = SerStartCap
   result = newString(cap)
   var written = 0
   while true:

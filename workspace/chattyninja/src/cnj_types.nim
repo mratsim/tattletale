@@ -99,7 +99,7 @@ const
   ChunkSize* {.intdefine.} = 4096
 
   Whitespace* = {' ', '\t', '\n', '\r', '\v', '\f'}
-  wsNameChars* = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
+  WsNameChars* = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
 
 # Payload slot accessors
 #
@@ -128,16 +128,16 @@ const
   SlotHi* = 1
   SlotSucc* = 2
   SlotChild* = 3
-  slotAlt* = 4
-  slotLoopName* = 4
-  slotFilterLo* = 5
-  slotFilterHi* = 6
-  slotNsTarget* = 3
-  slotNsField* = 4
-  slotMacroName* = 0
-  forTargetsBase* = 7
+  SlotAlt* = 4
+  SlotLoopName* = 4
+  SlotFilterLo* = 5
+  SlotFilterHi* = 6
+  SlotNsTarget* = 3
+  SlotNsField* = 4
+  SlotMacroName* = 0
+  ForTargetsBase* = 7
     ## First `nkFor` target name id slot, directly after the fixed prefix.
-  macroParamsBase* = 4
+  MacroParamsBase* = 4
     ## First `nkMacroDef` parameter slot, each parameter one name id then its default span,
     ## three slots in all.
 
@@ -159,56 +159,56 @@ template child*(nd: Node): int32 =
 
 template alt*(nd: Node): int32 =
   ## Next `nkIf` level in the else/elif chain by arena index, `NoLink` when the chain ends.
-  nd.slots[slotAlt]
+  nd.slots[SlotAlt]
 
 template loopName*(nd: Node): int32 =
   ## Interned `loop` name id of `nkFor`, bound so render never interns at lookup time.
-  nd.slots[slotLoopName]
+  nd.slots[SlotLoopName]
 
 template filterLo*(nd: Node): int32 =
   ## `nkFor` filter clause span start into `CompiledTemplate.jinja`, `NoLink` when the header has no `if`.
-  nd.slots[slotFilterLo]
+  nd.slots[SlotFilterLo]
 
 template filterHi*(nd: Node): int32 =
   ## `nkFor` filter clause span end into `CompiledTemplate.jinja`, exclusive.
-  nd.slots[slotFilterHi]
+  nd.slots[SlotFilterHi]
 
 template target*(nd: Node): int32 =
   ## Interned namespace name id of `nkSetNamespace`.
-  nd.slots[slotNsTarget]
+  nd.slots[SlotNsTarget]
 
 template field*(nd: Node): int32 =
   ## Interned member name id of `nkSetNamespace`.
-  nd.slots[slotNsField]
+  nd.slots[SlotNsField]
 
 template macroName*(nd: Node): int32 =
   ## Interned macro name id that `nkMacroDef` binds.
-  nd.slots[slotMacroName]
+  nd.slots[SlotMacroName]
 
 template targetCount*(nd: Node): int32 =
   ## Number of `nkFor` target name ids in the payload tail.
-  nd.slots.len - forTargetsBase
+  nd.slots.len - ForTargetsBase
 
 template targetAt*(nd: Node, i: int): int32 =
   ## `nkFor` target name id `i`, `i` in `0 ..< nd.targetCount`.
-  nd.slots[forTargetsBase + i]
+  nd.slots[ForTargetsBase + i]
 
 template paramCount*(nd: Node): int32 =
   ## Number of `nkMacroDef` parameters in the payload tail.
-  (nd.slots.len - macroParamsBase) div 3
+  (nd.slots.len - MacroParamsBase) div 3
 
 template paramNameAt*(nd: Node, k: int): int32 =
   ## `nkMacroDef` parameter `k` interned name id, `k` in `0 ..< nd.paramCount`.
-  nd.slots[macroParamsBase + 3 * k]
+  nd.slots[MacroParamsBase + 3 * k]
 
 template paramDefLoAt*(nd: Node, k: int): int32 =
   ## `nkMacroDef` parameter `k` default span start, `NoLink` when the parameter has no default.
-  nd.slots[macroParamsBase + 3 * k + 1]
+  nd.slots[MacroParamsBase + 3 * k + 1]
 
 template paramDefHiAt*(nd: Node, k: int): int32 =
   ## `nkMacroDef` parameter `k` default span end, exclusive, meaningful only while
   ## `paramDefLoAt` is not `NoLink`.
-  nd.slots[macroParamsBase + 3 * k + 2]
+  nd.slots[MacroParamsBase + 3 * k + 2]
 
 
 type

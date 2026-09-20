@@ -167,8 +167,8 @@ func jinjaErr*(what: string, offset = NoOffset, span = 0, cause = ceNone): Jinja
   ##   raise jinjaErr("unclosed `{% raw %}` opened at byte " & $openAt, openAt)
   JinjaError(what: what, offset: offset, span: span, cause: cause)
 
-func over*(s: var string): Cursor =
-  ## Returns a cursor over the whole byte span of `s`, capacity the string's length.
+func over*(s: var openArray[char]): Cursor =
+  ## Returns a cursor over the whole byte span of `s`, capacity the span's length.
   Cursor(buf: toOpenArray(s, 0, s.len - 1))
 
 func measureBuf*(): Cursor =
@@ -474,7 +474,7 @@ func cmpVal*(a, b: JinjaVal): int =
     return cmp(a.s, b.s)
   raise jinjaErr("`<` and `>` need two numbers or two strings, got " & $a.kind & " and " & $b.kind)
 
-func substringOf(needle, haystack: string): bool =
+func substringOf(needle, haystack: openArray[char]): bool =
   ## Returns whether `needle` occurs in `haystack`, the empty needle always matching.
   ## A needle longer than `haystack` leaves the scan range empty. The first-byte guard
   ## holds every non-matching position to one compare.

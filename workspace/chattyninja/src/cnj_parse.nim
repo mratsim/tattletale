@@ -29,8 +29,8 @@
 # - an expression stays template text:
 #   no expression becomes a node, and each `{{ x }}` leaves an `nkEmit` carrying the `x` span
 #
-# An unterminated construct is a `JinjaError` naming the construct and its byte offset, so
-# a truncated template fails at load with that error, never renders short.
+# An unterminated construct is a `JinjaError` naming the construct and its byte offset,
+# so a truncated template fails at load with that error, never renders short.
 
 import std/[strbasics, strutils]
 import cnj_types, jinja_data_model
@@ -205,7 +205,7 @@ func splitTags(p: var Parser): Tag =
         var k = innerLo
         while k < innerHi and p.src[k] in cnj_types.Whitespace:
           inc k
-        isRaw = p.src.at("raw", k) and (k + 3 >= innerHi or p.src[k + 3] notin wsNameChars)
+        isRaw = p.src.at("raw", k) and (k + 3 >= innerHi or p.src[k + 3] notin WsNameChars)
       if isRaw:
         # `{% raw %}` holds its body verbatim:
         #   one text run up to `{% endraw %}`.
@@ -318,7 +318,7 @@ func keywordSpan(src: openArray[char], t: Tag): openArray[char] =
   while i < t.tHi and src[i] in cnj_types.Whitespace:
     inc i
   let start = i
-  while i < t.tHi and src[i] in wsNameChars:
+  while i < t.tHi and src[i] in WsNameChars:
     inc i
   result = src.toOpenArray(start, i - 1)
 
@@ -394,7 +394,7 @@ func findKeyword(src: openArray[char], at, stop: int, word: string): int =
     elif src[i] in {')', ']'}:
       dec depth
     elif depth == 0 and at(src, word, i) and
-        (i + word.len >= stop or src[i + word.len] notin wsNameChars):
+        (i + word.len >= stop or src[i + word.len] notin WsNameChars):
       return i
     inc i
   stop
@@ -415,7 +415,7 @@ proc parseMacroParams(p: var Parser, t: Tag, at: int, nodeIdx: int32) =
       inc i
       break
     let nameStart = i
-    while i < t.tHi and p.src[i] in wsNameChars:
+    while i < t.tHi and p.src[i] in WsNameChars:
       inc i
     if i == nameStart:
       raise jinjaErr("macro parameter needs a name at byte " & $nameStart, nameStart)
@@ -432,7 +432,7 @@ proc parseMacroParams(p: var Parser, t: Tag, at: int, nodeIdx: int32) =
       defLo = int32 k
       defHi = int32 p.src.skipBalanced(k, t.tHi, {',', ')'}, ",)")
       k = defHi.int
-    # One parameter per iteration, the triple `paramNameAt` reads from `macroParamsBase`,
+    # One parameter per iteration, the triple `paramNameAt` reads from `MacroParamsBase`,
     # name id first, then the default `lo`, then the default `hi`.
     p.nodes[nodeIdx].slots.add name
     p.nodes[nodeIdx].slots.add defLo
@@ -455,7 +455,7 @@ proc parseMacro(p: var Parser): Head =
   let t = p.cur
   var i = p.afterKeyword(t, 5) # past the `macro` keyword
   let nameStart = i
-  while i < t.tHi and p.src[i] in wsNameChars:
+  while i < t.tHi and p.src[i] in WsNameChars:
     inc i
   if i == nameStart:
     raise jinjaErr("`macro` needs a name at byte " & $nameStart, nameStart)
@@ -498,12 +498,12 @@ proc parseIf(p: var Parser): Head =
   let term = p.cur
   if p.src.keywordIs(term, "elif"):
     let nested = parseIf(p)
-    p.nodes[idx].slots[slotAlt] = nested.head
+    p.nodes[idx].slots[SlotAlt] = nested.head
     tails.add nested.tails
   elif p.src.keywordIs(term, "else"):
     p.advance()
     let eb = parseBody(p, ["endif"])
-    p.nodes[idx].slots[slotAlt] = eb.head
+    p.nodes[idx].slots[SlotAlt] = eb.head
     tails.add eb.tails
     if p.cur.kind == tkEnd or not p.src.keywordIs(p.cur, "endif"):
       raise jinjaErr("`{% else %}` has no `{% endif %}`", term.tLo, term.tHi - term.tLo)
@@ -523,7 +523,7 @@ proc parseFor(p: var Parser): Head =
   var targets = newSeq[int32]()
   while true:
     let start = i
-    while i < t.tHi and p.src[i] in wsNameChars:
+    while i < t.tHi and p.src[i] in WsNameChars:
       inc i
     if i == start:
       raise jinjaErr("`for` needs a target name at byte " & $start, start)
@@ -536,7 +536,7 @@ proc parseFor(p: var Parser): Head =
         inc i
       continue
     break
-  if not p.src.at("in", i) or (i + 2 < t.tHi and p.src[i + 2] in wsNameChars):
+  if not p.src.at("in", i) or (i + 2 < t.tHi and p.src[i + 2] in WsNameChars):
     raise jinjaErr("`for` target is not followed by `in` at byte " & $i, i)
   var j = i + 2
   while j < t.tHi and p.src[j] in cnj_types.Whitespace:
@@ -556,7 +556,7 @@ proc parseFor(p: var Parser): Head =
   p.advance()
   let idx = addNode(p, mkNode(nkFor, int32 iterLo, int32 iterHi, NoLink, NoLink, loopId,
       filterLo, filterHi))
-  # Target ids append after the fixed prefix, the tail `targetAt` reads from `forTargetsBase`.
+  # Target ids append after the fixed prefix, the tail `targetAt` reads from `ForTargetsBase`.
   for tg in targets:
     p.nodes[idx].slots.add tg
   let body = parseBody(p, ["endfor"])
@@ -574,7 +574,7 @@ proc parseSet(p: var Parser): Head =
   let t = p.cur
   var i = p.afterKeyword(t, 3) # past the `set` keyword
   let nameStart = i
-  while i < t.tHi and p.src[i] in wsNameChars:
+  while i < t.tHi and p.src[i] in WsNameChars:
     inc i
   if i >= t.tHi:
     raise jinjaErr("`set` needs a target at byte " & $t.tLo, t.tLo)
@@ -587,7 +587,7 @@ proc parseSet(p: var Parser): Head =
     let nsLo = nameStart
     let nsHi = i
     var k = j + 1
-    while k < t.tHi and p.src[k] in wsNameChars:
+    while k < t.tHi and p.src[k] in WsNameChars:
       inc k
     let fieldLo = j + 1
     let fieldHi = k

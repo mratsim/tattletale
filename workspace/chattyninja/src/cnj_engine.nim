@@ -354,6 +354,10 @@ proc stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rend
   st.curNode = nd.succ
 
 const
+  CaptureDrainCap = 256
+    ## Stack scratch `capturePend` hands to `pullSer` per drain call, sized to hold a whole
+    ## scalar rendering in the common case so the capture copies in one grow.
+
   Steps*: array[NodeKind, Step] = [
     stepVerbatim, stepEmit, stepIf, stepFor, stepBreak, stepSet, stepSetNs, stepSetBlock,
     stepGeneration, stepMacroDef
@@ -411,7 +415,7 @@ proc capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) 
     outp.add st.pend.raw[st.pend.clo + st.pend.pos ..< st.pend.chi]
     st.pend = Piece(kind: pkNone)
   of pkLazy:
-    var buf: array[256, char]
+    var buf: array[CaptureDrainCap, char]
     while true:
       let n = pullSer(st.lazy, buf)
       if n == 0:

@@ -133,7 +133,7 @@ BULLET_ITEM_MAX_LINES = 3
 
 ARTICLE_EOL = {"the", "a", "an", "this", "that", "its", "their", "both", "own"}
 CONNECTIVE_EOL = {"with", "of", "for", "to", "in", "and", "or", "on", "at",
-                  "by", "from", "as"}
+                  "by", "from", "as", "so", "then", "when"}
 ABBREVIATIONS = {"e.g", "i.e", "etc", "vs", "cf"}
 
 # Sentence starters that legitimately precede the bare word `newline`.

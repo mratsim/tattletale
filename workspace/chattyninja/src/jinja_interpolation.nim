@@ -255,7 +255,7 @@ template wordSpan(tmpl: CompiledTemplate, lo, hi: int): openArray[char] =
 
 template wordSpan(tmpl: CompiledTemplate, cx: Cx): openArray[char] =
   ## Returns the identifier of the lookahead token as a view into the template text.
-  wordSpan(tmpl, cx.tok.lo, cx.tok.hi)
+  tmpl.wordSpan(cx.tok.lo, cx.tok.hi)
 
 func argName*(tmpl: CompiledTemplate, a: Arg): openArray[char] =
   ## Returns an argument's keyword name as a view into the template text, `nameLo == NoLink`
@@ -687,7 +687,7 @@ proc argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
       if isPunct(cx, "="):
         nameLo = int32 save.tok.lo
         nameHi = int32 save.tok.hi
-        kw = argKeyword(wordSpan(tmpl, save))
+        kw = argKeyword(tmpl.wordSpan(save))
         advance(tmpl, cx)
       else:
         cx = save
@@ -723,12 +723,12 @@ proc postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
         if cx.dry:
           v = undefinedVal()
           continue
-        let mi = findIn(MethodNames, wordSpan(tmpl, lo, hi))
+        let mi = findIn(MethodNames, tmpl.wordSpan(lo, hi))
         if mi < 0:
-          raise jinjaErr("unknown method `" & spanString(wordSpan(tmpl, lo, hi)) & "`", lo, hi - lo)
+          raise jinjaErr("unknown method `" & spanString(tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo)
         let mp = MethodProcs[MethodName mi]
         if mp.isNil:
-          gapWhat("method", wordSpan(tmpl, lo, hi))
+          gapWhat("method", tmpl.wordSpan(lo, hi))
         v = mp(v, a)
       else:
         v =
@@ -736,10 +736,10 @@ proc postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
             undefinedVal()
           else:
             case v.kind
-            of vkDict, vkNs: v.d.dictGet(wordSpan(tmpl, lo, hi))
-            of vkLoop: loopAttr(v, wordSpan(tmpl, lo, hi))
+            of vkDict, vkNs: v.d.dictGet(tmpl.wordSpan(lo, hi))
+            of vkLoop: loopAttr(v, tmpl.wordSpan(lo, hi))
             of vkUndefined: undefinedVal()
-            else: raise jinjaErr("`" & spanString(wordSpan(tmpl, lo, hi)) &
+            else: raise jinjaErr("`" & spanString(tmpl.wordSpan(lo, hi)) &
                 "` is not an attribute of a " & $v.kind, lo, hi - lo)
     elif isPunct(cx, "["):
       advance(tmpl, cx)
@@ -786,12 +786,12 @@ proc postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       if cx.dry:
         v = undefinedVal()
         continue
-      let fi = findIn(FilterNames, wordSpan(tmpl, lo, hi))
+      let fi = findIn(FilterNames, tmpl.wordSpan(lo, hi))
       if fi < 0:
-        raise jinjaErr("unknown filter `" & spanString(wordSpan(tmpl, lo, hi)) & "`", lo, hi - lo, cause = ceUnimplemented)
+        raise jinjaErr("unknown filter `" & spanString(tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo, cause = ceUnimplemented)
       let fp = FilterProcs[FilterName fi]
       if fp.isNil:
-        gapWhat("filter", wordSpan(tmpl, lo, hi))
+        gapWhat("filter", tmpl.wordSpan(lo, hi))
       v = fp(v, a)
     elif isWord(tmpl, cx, "is"):
       advance(tmpl, cx)
@@ -809,20 +809,20 @@ proc postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       if cx.dry:
         v = undefinedVal()
         continue
-      let ti = findIn(TestNames, wordSpan(tmpl, lo, hi))
+      let ti = findIn(TestNames, tmpl.wordSpan(lo, hi))
       if ti < 0:
-        raise jinjaErr("unknown test `" & spanString(wordSpan(tmpl, lo, hi)) & "`", lo, hi - lo)
+        raise jinjaErr("unknown test `" & spanString(tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo)
       let tp = TestProcs[TestName ti]
       if tp.isNil:
-        gapWhat("test", wordSpan(tmpl, lo, hi))
+        gapWhat("test", tmpl.wordSpan(lo, hi))
       v = boolVal(if negated: not tp(v, a) else: tp(v, a))
     else:
       break
   v
 
 proc primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
-  ## Parses a literal, a name, a parenthesised group, an array literal or a dict literal, then
-  ## the postfix chain.
+  ## Parses a literal, a name, a parenthesised group, an array literal or a dict literal,
+  ## then the postfix chain.
   var v: JinjaVal
   case cx.tok.kind
   of exEof:
@@ -839,7 +839,7 @@ proc primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   of exName:
     let (lo, hi) = (cx.tok.lo, cx.tok.hi)
     advance(tmpl, cx)
-    let name = wordSpan(tmpl, lo, hi)
+    let name = tmpl.wordSpan(lo, hi)
     # Literal spellings are compared as spans, the same test `case` applied to a copied string.
     if name == "true" or name == "True":
       v = boolVal(true)
@@ -860,7 +860,7 @@ proc primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
         else:
           let gp = GlobalProcs[GlobalName gi]
           if gp.isNil:
-            gapWhat("global", wordSpan(tmpl, lo, hi))
+            gapWhat("global", tmpl.wordSpan(lo, hi))
           v = gp(tmpl, lo, hi, a, ports)
       else:
         v = bound
@@ -1066,8 +1066,8 @@ func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
     elif tmpl.jinja[i] in {')', ']', '}'}:
       dec depth
     elif depth == 0 and tmpl.jinja[i] == 'i' and stop - i >= 2 and tmpl.jinja[i + 1] == 'f' and
-        (i + 2 >= stop or tmpl.jinja[i + 2] notin wsNameChars) and
-        (i == at or tmpl.jinja[i - 1] notin wsNameChars):
+        (i + 2 >= stop or tmpl.jinja[i + 2] notin WsNameChars) and
+        (i == at or tmpl.jinja[i - 1] notin WsNameChars):
       return true
     inc i
   false
