@@ -22,6 +22,8 @@
   "kwargs": {},
   "expected_error": {
     "exception": "TemplateError",
-    "message": "Unexpected message role."
+    "message": "Unexpected message role.",
+    "offset": 8622,
+    "span": 15
   }
 }

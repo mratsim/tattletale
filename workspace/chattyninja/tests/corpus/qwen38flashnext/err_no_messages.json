@@ -13,6 +13,8 @@
   "kwargs": {},
   "expected_error": {
     "exception": "TemplateError",
-    "message": "No messages provided."
+    "message": "No messages provided.",
+    "offset": 1906,
+    "span": 15
   }
 }

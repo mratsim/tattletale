@@ -23,6 +23,8 @@
   "kwargs": {},
   "expected_error": {
     "exception": "TemplateError",
-    "message": "System message cannot contain images."
+    "message": "System message cannot contain images.",
+    "offset": 473,
+    "span": 15
   }
 }

@@ -42,9 +42,11 @@ type
     depth: int
     ports: Ports
 
-  GlobalProc* = proc (tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal {.nimcall, noSideEffect.}
+  GlobalProc* = proc (tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal {.nimcall, noSideEffect.}
     ## A call to a template global, `namespace` and `dict` storing a keyword name as a dict key.
-    ## Globals read the template text they evaluate and the injected ports, never the render state.
+    ## `lo` and `hi` bound the global's name token in the template text, the location the globals'
+    ## raise sites report. Globals read the template text they evaluate and the injected ports,
+    ## never the render state.
 
   GlobalName = enum
     gNamespace, gRange, gStrftimeNow, gRaiseException, gDict, gLipsum, gCycler, gJoiner
@@ -510,15 +512,15 @@ func argDict(tmpl: CompiledTemplate, args: Args): DictVal =
     dv.dictSet(argKey(tmpl, a), a.val)
   dv
 
-func namespaceGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
+func namespaceGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
   ## `namespace(field=init, ...)`:
   ##   the mutable mapping `{% set ns.field = ... %}` mutates in place.
   nsVal(argDict(tmpl, args))
 
-func dictGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
+func dictGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
   dictVal(argDict(tmpl, args))
 
-func rangeGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
+func rangeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
   ## `range(a, b, step)`:
   ##   the lazy bounds value. Elements compute per index, the serializer rendering the list
   ##   form arithmetically and a `for` walking the same arithmetic, so a range never materializes.
@@ -528,16 +530,16 @@ func rangeGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
   for i in 0 ..< args.n:
     let x = args.vals[i]
     if x.val.kind != vkInt:
-      raise jinjaErr("`range` needs integer bounds")
+      raise jinjaErr("`range` needs integer bounds", lo, hi - lo)
     case i
     of 0: b = x.val.i
     of 1:
       a = b
       b = x.val.i
     of 2: step = x.val.i
-    else: raise jinjaErr("`range` takes at most three arguments")
+    else: raise jinjaErr("`range` takes at most three arguments", lo, hi - lo)
   if step == 0:
-    raise jinjaErr("`range` step must not be zero")
+    raise jinjaErr("`range` step must not be zero", lo, hi - lo)
   rangeVal(a, b, step)
 
 func civilFromDays(z: int): tuple[y, m, d: int] =
@@ -570,7 +572,7 @@ func twoDigits(n: int): string =
   ## Returns `n` zero-padded to two digits.
   if n < 10: "0" & $n else: $n
 
-func strftimeGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
+func strftimeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
   ## Renders the format against the epoch read through the clock port, never the wall clock,
   ## which is what keeps two render instantiations over one artifact byte-identical.
   let fmt = pyStr(getArg(args, 0, akNone, strVal("")))
@@ -585,7 +587,7 @@ func strftimeGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal 
       inc i
       continue
     if i + 1 >= fmt.len:
-      raise jinjaErr("`strftime_now` format ends on a `%`")
+      raise jinjaErr("`strftime_now` format ends on a `%`", lo, hi - lo)
     case fmt[i + 1]
     of 'Y': acc.add yearField(yr)
     of 'm': acc.add twoDigits(mo)
@@ -599,10 +601,10 @@ func strftimeGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal 
     inc i, 2
   strVal(acc)
 
-func raiseExceptionGlobal(tmpl: CompiledTemplate, args: Args, ports: Ports): JinjaVal =
+func raiseExceptionGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
   ## Corpus `err_*` rows record exactly this raise:
-  ##   the message verbatim, cause `ceRaiseCall`.
-  raise jinjaErr(pyStr(getArg(args, 0, akNone, strVal(""))), cause = ceRaiseCall)
+  ##   the message verbatim, the raise call's name-token span as `offset` and `span`, cause `ceRaiseCall`.
+  raise jinjaErr(pyStr(getArg(args, 0, akNone, strVal(""))), lo, hi - lo, cause = ceRaiseCall)
 
 const
   GlobalProcs: array[GlobalName, GlobalProc] = [
@@ -763,6 +765,7 @@ proc postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       v = if cx.dry: undefinedVal() else:
         subslice(v, lo, hi, step, hasLo, hasHi, hasStep, isSlice)
     elif isPunct(cx, "("):
+      let callLo = cx.tok.lo
       let a = argList(tmpl, ports, cx)
       v =
         if cx.dry:
@@ -770,7 +773,7 @@ proc postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
         elif v.kind == vkMacro:
           callVal(PendingCallVal(mc: v.mc, args: a))
         else:
-          raise jinjaErr("only a macro is callable, this is a " & $v.kind)
+          raise jinjaErr("only a macro is callable, this is a " & $v.kind, callLo)
     elif isPunct(cx, "|"):
       advance(tmpl, cx)
       if cx.tok.kind != exName:
@@ -858,7 +861,7 @@ proc primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
           let gp = GlobalProcs[GlobalName gi]
           if gp.isNil:
             gapWhat("global", wordSpan(tmpl, lo, hi))
-          v = gp(tmpl, a, ports)
+          v = gp(tmpl, lo, hi, a, ports)
       else:
         v = bound
   of exPunct:
@@ -930,13 +933,15 @@ proc unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
     advance(tmpl, cx)
+    let operandLo = cx.tok.lo
     let v = evalItem(ports, cx, unary(tmpl, ports, cx))
     if cx.dry:
       return undefinedVal()
     case v.kind
     of vkInt: intVal(if neg: -v.i else: v.i)
     of vkFloat: floatVal(if neg: -v.f else: v.f)
-    else: raise jinjaErr("arithmetic needs a number, this is a " & $v.kind)
+    else: raise jinjaErr("arithmetic needs a number, this is a " & $v.kind,
+        operandLo, cx.tok.lo - operandLo)
   else:
     primary(tmpl, ports, cx)
 
@@ -1111,7 +1116,8 @@ proc expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
   if not cx.dry:
     inc cx.depth
     if cx.depth > ExprDepthCap:
-      raise jinjaErr("expression nests deeper than ExprDepthCap = " & $ExprDepthCap)
+      raise jinjaErr("expression nests deeper than ExprDepthCap = " & $ExprDepthCap,
+          cx.tok.lo)
   let headLo = cx.tok.lo
   if minPrec <= 1 and cx.tok.kind != exEof and ifWordAhead(tmpl, headLo, cx.stop):
     let shape = scanTernary(tmpl, ports, cx, headLo)

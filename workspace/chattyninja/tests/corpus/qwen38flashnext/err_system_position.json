@@ -22,6 +22,8 @@
   "kwargs": {},
   "expected_error": {
     "exception": "TemplateError",
-    "message": "System message must be at the beginning."
+    "message": "System message must be at the beginning.",
+    "offset": 5913,
+    "span": 15
   }
 }

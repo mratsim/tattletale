@@ -20,6 +20,8 @@
   },
   "expected_error": {
     "exception": "TemplateError",
-    "message": "Unexpected reasoning effort extreme. Supported types are xhigh (default), medium, and low."
+    "message": "Unexpected reasoning effort extreme. Supported types are xhigh (default), medium, and low.",
+    "offset": 2231,
+    "span": 15
   }
 }

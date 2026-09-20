@@ -23,6 +23,8 @@
   "kwargs": {},
   "expected_error": {
     "exception": "TemplateError",
-    "message": "System message cannot contain videos."
+    "message": "System message cannot contain videos.",
+    "offset": 1041,
+    "span": 15
   }
 }

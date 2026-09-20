@@ -23,7 +23,9 @@
   "kwargs": {},
   "expected_error": {
     "exception": "TemplateError",
-    "message": "Message has tool role, but there was no previous assistant message with a tool call!"
+    "message": "Message has tool role, but there was no previous assistant message with a tool call!",
+    "offset": 16215,
+    "span": 15
   },
   "epoch": 1789315200
 }

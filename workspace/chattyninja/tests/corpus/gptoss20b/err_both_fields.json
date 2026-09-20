@@ -54,7 +54,9 @@
   "kwargs": {},
   "expected_error": {
     "exception": "TemplateError",
-    "message": "Cannot pass both content and thinking in an assistant message with tool calls! Put the analysis message in one or the other, but not both."
+    "message": "Cannot pass both content and thinking in an assistant message with tool calls! Put the analysis message in one or the other, but not both.",
+    "offset": 14119,
+    "span": 15
   },
   "epoch": 1789315200
 }

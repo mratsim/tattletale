@@ -18,6 +18,8 @@
   "kwargs": {},
   "expected_error": {
     "exception": "TemplateError",
-    "message": "No user query found in messages."
+    "message": "No user query found in messages.",
+    "offset": 5658,
+    "span": 15
   }
 }

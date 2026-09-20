@@ -32,7 +32,8 @@ import workspace/data_structures/src/small_seqs
 # the order the recording captured.
 #
 # The ground truth is self-contained.
-# Every ok row embeds `rendered`. Every `err_*` row embeds `expected_error {exception, message}`.
+# Every ok row embeds `rendered`. Every `err_*` row embeds `expected_error
+# {exception, message, offset, span}`, the raise call's name-token span into the suite template.
 
 type
   Row* = object
@@ -50,6 +51,11 @@ type
     expectError*: bool
     errorMessage*: string
       ## recorded message, compared verbatim
+    errorOffset*: int
+      ## recorded byte offset of the offending construct into the suite template,
+      ## compared against the raised `JinjaError.offset`
+    errorSpan*: int
+      ## recorded byte length of the offending construct, compared when nonzero
     clock*: float64
       ## the epoch `strftime_now` reads, absent rows carry 0
 
@@ -285,7 +291,8 @@ func contextOf(frame: JinjaVal): JinjaVal =
 proc loadRow*(suite, row: string): Row =
   ## Reads `corpus/<suite>/<row>.json` and returns the render inputs plus the recorded
   ## outcome. The frame's `suite` and `row` fields must agree with the path components
-  ## naming the frame.
+  ## naming the frame. An err row's `expected_error` supplies the message, the byte
+  ## offset and the span the raise must report.
   let path = CorpusRoot / suite / (row & ".json")
   let frame = jsonDoc(readFile(path))
   if field(frame, "suite").kind == vkStr and field(frame, "suite").s != suite:
@@ -304,6 +311,16 @@ proc loadRow*(suite, row: string): Row =
       spans: spanList(field(frame, "generation_spans")),
       expectError: err.kind != vkUndefined,
       errorMessage: if err.kind == vkDict: pyStr(field(err, "message")) else: "",
+      errorOffset:
+        if err.kind == vkDict and field(err, "offset").kind == vkInt:
+          field(err, "offset").i.int
+        else:
+          NoOffset,
+      errorSpan:
+        if err.kind == vkDict and field(err, "span").kind == vkInt:
+          field(err, "span").i.int
+        else:
+          0,
       clock: clockOf(frame))
 
 proc rows*(suite: string): seq[Row] =
@@ -513,19 +530,31 @@ block corpusDelivery:
     var (m, tables) = parseTemplate(src)
     for r in rows(suite):
       if r.expectError:
-        # Error outcome, not a wrong success. The match compares the recorded message verbatim.
+        # Error outcome, not a wrong success. The match compares the recorded
+        # message verbatim, the recorded offset against the raised
+        # `JinjaError.offset`, and the recorded span when nonzero.
         var raisedMsg = ""
+        var raisedAt = NoOffset
+        var raisedSpan = 0
         var wrongSuccess = ""
         try:
           wrongSuccess = renderAllPull(m, tables, r.context, r.clock)
         except JinjaError as e:
           raisedMsg = e.what
+          raisedAt = e.offset
+          raisedSpan = e.span
         if wrongSuccess.len > 0:
           fail(suite & "/" & r.row & ": expected `" & r.errorMessage &
               "` but the render produced " & $wrongSuccess.len & " bytes")
         if raisedMsg != r.errorMessage:
           fail(suite & "/" & r.row & ": message mismatch\n   got  " & raisedMsg &
               "\n   want " & r.errorMessage)
+        if raisedAt != r.errorOffset:
+          fail(suite & "/" & r.row & ": offset mismatch: raised at byte " & $raisedAt &
+              ", recorded " & $r.errorOffset)
+        if r.errorSpan != 0 and raisedSpan != r.errorSpan:
+          fail(suite & "/" & r.row & ": span mismatch: raised " & $raisedSpan &
+              ", recorded " & $r.errorSpan)
         inc errRaised
         continue
 

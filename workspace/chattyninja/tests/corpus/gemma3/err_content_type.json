@@ -20,6 +20,8 @@
   },
   "expected_error": {
     "exception": "TemplateError",
-    "message": "Invalid content type"
+    "message": "Invalid content type",
+    "offset": 1350,
+    "span": 15
   }
 }

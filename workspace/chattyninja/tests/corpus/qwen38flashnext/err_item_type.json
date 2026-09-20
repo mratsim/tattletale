@@ -23,6 +23,8 @@
   "kwargs": {},
   "expected_error": {
     "exception": "TemplateError",
-    "message": "Unexpected item type in content."
+    "message": "Unexpected item type in content.",
+    "offset": 1591,
+    "span": 15
   }
 }

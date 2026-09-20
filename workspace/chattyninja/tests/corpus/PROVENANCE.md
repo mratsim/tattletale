@@ -31,8 +31,12 @@ The byte-level ground truth lives in the row payload itself, schema `chattyninja
   list of `[start, end)` **codepoint** ranges into `rendered`, present on all rows, non-empty on 8 rows
   (`lagunaxs21` x3, `lfm25` x5)
 - `expected_error`:
-  `{exception, message}` on the 16 `err_*` rows, which carry no `rendered` key. The counts are `gemma3` 2,
-  `gptoss20b` 4, `mistral7bv01` 1 and `qwen38flashnext` 9
+  `{exception, message, offset, span}` on the 16 `err_*` rows, which carry no `rendered` key.
+  `offset` is the byte offset of the row's `raise_exception` call's name token in the suite
+  `.jinja` source and `span` its length (15), the location reported alongside the message.
+  The counts are `gemma3` 2, `gptoss20b` 4, `mistral7bv01` 1 and `qwen38flashnext` 9.
+  The offsets live in the decompressed `.json` copies only, the kept `.json.zst`
+  originals predating the field.
 
 Span semantics were verified on `lagunaxs21/second_system.json` span `[94,162)`, where a Python string
 slice cuts the assistant turn exactly and a byte slice misaligns.

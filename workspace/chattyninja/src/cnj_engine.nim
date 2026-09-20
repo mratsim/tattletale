@@ -44,7 +44,7 @@ proc forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
   ## artifact read-only and keeps both tiers clear of an import cycle.
 
 proc startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
-    ports: Ports, call: PendingCallVal, retNode: int32) {.noSideEffect.}
+    ports: Ports, lo, hi: int, call: PendingCallVal, retNode: int32) {.noSideEffect.}
   ## Opens a macro frame and enters the body, the body's output pieces draining through
   ## the caller's window until the frame closes on the definition node.
 
@@ -171,7 +171,7 @@ proc stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSt
   template nd: Node = tmpl.nodes[n]
   var v = evalSpan(tmpl, ports, nd.lo, nd.hi)
   if v.kind == vkCall:
-    startMacro(tmpl, sym, st, ports, v.pc, nd.succ)
+    startMacro(tmpl, sym, st, ports, nd.lo.int, nd.hi.int, v.pc, nd.succ)
     return
   if v.kind == vkCut:
     st.emitCut(move v)
@@ -214,13 +214,14 @@ func iterRange(v: JinjaVal): LoopState =
   ## per index through `loopItem`.
   LoopState(r: v.r)
 
-func notIterable(v: JinjaVal): void {.noreturn.} =
+func notIterable(v: JinjaVal, lo, hi: int): void {.noreturn.} =
   ## Shared raise leg of the iterable dispatch, one report for every kind no loop walks.
+  ## `lo` and `hi` bound the iterable expression, the loop header the raise reports.
   if v.kind == vkUndefined:
-    raise jinjaErr("cannot iterate an undefined value")
-  raise jinjaErr("cannot iterate a " & $v.kind)
+    raise jinjaErr("cannot iterate an undefined value", lo, hi - lo)
+  raise jinjaErr("cannot iterate a " & $v.kind, lo, hi - lo)
 
-func loopStateOf(v: JinjaVal): LoopState =
+func loopStateOf(v: JinjaVal, lo, hi: int): LoopState =
   ## Dispatch at the loop's chain entry, one leg per iterable kind the corpus supports
   ## and the shared raise leg for everything else. The cursor answers the random access
   ## that `loop.previtem` and `loop.nextitem` need, per index.
@@ -229,7 +230,7 @@ func loopStateOf(v: JinjaVal): LoopState =
   of vkDict, vkNs: iterMapping(v)
   of vkStr, vkCut: iterChars(v)
   of vkRange: iterRange(v)
-  else: notIterable(v)
+  else: notIterable(v, lo, hi)
 
 proc bindTargets(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, n: int32, item: JinjaVal) =
   ## Binds the `nkFor` loop targets at `n`, more than one target unpacking a sequence, which
@@ -281,7 +282,7 @@ proc stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   if st.frames.len > 0 and st.frames[^1].kind == frFor and st.frames[^1].node == n:
     advanceFor(tmpl, sym, st, ports, n)
     return
-  let lp = loopStateOf(evalSpan(tmpl, ports, nd.lo, nd.hi))
+  let lp = loopStateOf(evalSpan(tmpl, ports, nd.lo, nd.hi), nd.lo.int, nd.hi.int)
   if lp.loopLen == 0:
     st.curNode = nd.succ
     return
@@ -300,16 +301,18 @@ proc stepSet(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   st.bindName(nd.child, evalSpan(tmpl, ports, nd.lo, nd.hi))
   st.curNode = nd.succ
 
-proc gap(kindName, corpusSite: string): void {.noreturn.} =
+proc gap(kindName, corpusSite: string, lo, hi: int): void {.noreturn.} =
   ## Reports a declared construct that is not implemented, naming `kindName`
-  ## and the corpus site that demands it.
-  raise jinjaErr(kindName & " is not implemented; " & corpusSite, cause = ceUnimplemented)
+  ## and the corpus site that demands it, `lo` and `hi` bounding the construct's node.
+  raise jinjaErr(kindName & " is not implemented; " & corpusSite, lo, hi - lo,
+      cause = ceUnimplemented)
 
 proc stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Unwinds to the nearest for-frame and continues at its successor, stopping at a macro-call
   ## boundary so a break cannot cross out of its macro.
+  template nd: Node = tmpl.nodes[n]
   gap("nkBreak", "corpus demand is 8 sites: 7 in glm53flash.jinja inside the macro " &
-      "has_dup_tool_result_id, 1 in northminicode10.jinja")
+      "has_dup_tool_result_id, 1 in northminicode10.jinja", nd.lo.int, nd.hi.int)
 
 proc stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## `ns.field = expr`, mutating the shared namespace mapping in place, visible to every
@@ -324,13 +327,16 @@ proc stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderS
 
 proc stepSetBlock(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Opens a capture sink for the body and, on re-entry, binds the capture to the target name.
-  gap("nkSetBlock", "corpus demand is 2 sites: gemma4.jinja:322 and northminicode10.jinja:2")
+  template nd: Node = tmpl.nodes[n]
+  gap("nkSetBlock", "corpus demand is 2 sites: gemma4.jinja:322 and northminicode10.jinja:2",
+      nd.lo.int, nd.hi.int)
 
 proc stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Records the root-output span of the model's turn:
   ##   the frame holds the opening position, and the re-entry closes it.
+  template nd: Node = tmpl.nodes[n]
   gap("nkGeneration", "corpus demand is 2 sites: lagunaxs21.jinja:44 and lfm25.jinja:77, with " &
-      "8 recorded rows carrying codepoint spans")
+      "8 recorded rows carrying codepoint spans", nd.lo.int, nd.hi.int)
 
 proc stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
   ## Binds a macro value and emits nothing, the body never running here. A macro frame
@@ -416,14 +422,14 @@ proc capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) 
     st.pend = Piece(kind: pkNone)
 
 proc startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
-    ports: Ports, call: PendingCallVal, retNode: int32) {.noSideEffect.} =
+    ports: Ports, lo, hi: int, call: PendingCallVal, retNode: int32) {.noSideEffect.} =
   ## Opens a macro frame and enters the body.
   ## Contract:
   ## - the body's output pieces drain through the caller's window until the frame closes on the definition node
-  ## - depth is capped, and a breach raises
+  ## - depth is capped, and a breach raises, `lo` and `hi` bounding the call's site
   if st.macroDepth >= MacroDepthCap:
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
-        sym[].names[call.mc.name] & "`")
+        sym[].names[call.mc.name] & "`", lo, hi - lo)
   inc st.macroDepth
   st.scopes.add @[]
   bindMacroArgs(tmpl, sym, st, ports, call.mc.node, call.args)

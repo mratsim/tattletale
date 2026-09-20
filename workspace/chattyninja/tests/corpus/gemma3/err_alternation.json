@@ -24,6 +24,8 @@
   },
   "expected_error": {
     "exception": "TemplateError",
-    "message": "Conversation roles must alternate user/assistant/user/assistant/..."
+    "message": "Conversation roles must alternate user/assistant/user/assistant/...",
+    "offset": 562,
+    "span": 15
   }
 }

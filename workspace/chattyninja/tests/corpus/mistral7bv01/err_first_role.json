@@ -21,6 +21,8 @@
   },
   "expected_error": {
     "exception": "TemplateError",
-    "message": "Conversation must start with a user message, got assistant."
+    "message": "Conversation must start with a user message, got assistant.",
+    "offset": 4550,
+    "span": 15
   }
 }
