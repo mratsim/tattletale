@@ -248,7 +248,7 @@ type
       target: int32
         ## interned name to bind on close, unused while `nkSetBlock` still raises its gap
     of frGeneration:
-      spanStart: int
+      spanStart*: int
         ## root-output byte position at span entry
     of frMacro:
       pc*: int32

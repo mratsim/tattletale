@@ -17,7 +17,7 @@
 ##   $ nim test_chattyninja
 
 import std/strutils
-import cnj_types, jinja_data_model, cnj_engine
+import cnj_types, jinja_data_model, cnj_parse, cnj_engine
 
 proc render(expr: string, ctx = JinjaVal(kind: vkUndefined)): string =
   ## Renders one expression through `renderToString`.
@@ -237,6 +237,36 @@ doAssert renderStmt(
     "{% macro m() %}{% for x in [1, 2] %}{% break %}{% endfor %}{% endmacro %}" &
     "{% if m() %}A{% else %}B{% endif %}") == "B",
     "a break inside a for inside a forced macro body unwinds that for"
+
+# A `{% generation %}` block renders its body byte-for-byte unchanged and records the span
+# of the output it produced, byte coordinates into the render, read after the drain.
+proc renderWithSpans(src: string): tuple[text: string, spans: seq[tuple[start, stop: int]]] =
+  ## Renders whole and returns the bytes plus the driver's recorded generation spans.
+  var (tmpl, sym) = parseTemplate(src)
+  var d = startRender(tmpl, sym, JinjaVal(kind: vkUndefined))
+  result.text = pullAll(d)
+  result.spans = d.generationSpans()
+
+doAssert renderWithSpans("{% generation %}A{% endgeneration %}").text == "A",
+    "the body renders unchanged"
+doAssert renderWithSpans("{% generation %}A{% endgeneration %}").spans == @[(start: 0, stop: 1)],
+    "one block, the span over its bytes"
+doAssert renderWithSpans("pre{% generation %}A{% endgeneration %}post").spans == @[(start: 3, stop: 4)],
+    "the span sits at the body's output position"
+block conditionalEntry:
+  doAssert renderWithSpans("{% if false %}{% generation %}A{% endgeneration %}{% endif %}").spans.len == 0,
+      "an untaken branch records no span"
+  doAssert renderWithSpans("{% if true %}{% generation %}A{% endgeneration %}{% endif %}").spans ==
+      @[(start: 0, stop: 1)], "a taken branch records one"
+  doAssert renderWithSpans("{% if false %}{% generation %}A{% endgeneration %}{% endif %}x").text == "x",
+      "the untaken branch emits nothing either"
+doAssert renderWithSpans(
+    "{% for x in [1, 2] %}{% generation %}{{ x }}{% endgeneration %}{% endfor %}").spans ==
+    @[(start: 0, stop: 1), (start: 1, stop: 2)], "one span per block, source order"
+doAssert renderWithSpans("{% generation %}{{ 'abc' }}{% endgeneration %}").spans ==
+    @[(start: 0, stop: 3)], "the closing position counts the body's bytes"
+doAssert renderWithSpans("{% generation %}{% endgeneration %}").spans == @[(start: 0, stop: 0)],
+    "an empty body records an empty span"
 
 # Registries: filters and tests dispatch by name
 # ---------------------------------------------------------------------------

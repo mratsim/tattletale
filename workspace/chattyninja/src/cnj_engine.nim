@@ -385,11 +385,31 @@ func stepSetBlock(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rend
       nd.lo.int, nd.hi.int)
 
 func stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
-  ## Records the root-output span of the model's turn:
-  ##   the row holds the opening position, and the re-entry closes it.
+  ## `{% generation %}` renders its body byte for byte as without it, the span of the model's turn recorded around it.
+  ##
+  ## Contract:
+  ## - entry → record the root-output position, re-entry → close the span at the position reached
+  ##   (every step dispatch runs with the pending piece retired, so the closing position counts the body's bytes exactly)
+  ## - the body adds no scope and pops none, bindings landing in the enclosing scope
+  ##
+  ## - an empty body records an empty span, no row opened for a body that never re-enters
+  ## - the body adds no scope and pops none, bindings landing in the enclosing scope
+  ## - spans accumulate in `RenderState.spans`, `generationSpans` surfacing them after the drain
   template nd: Node = tmpl.nodes[n]
-  gap("nkGeneration", "corpus demand is 2 sites: lagunaxs21.jinja:44 and lfm25.jinja:77, with " &
-      "8 recorded rows carrying codepoint spans", nd.lo.int, nd.hi.int)
+  if st.rows.len > 0 and st.rows[^1].kind == frGeneration and st.rows[^1].node == n:
+    st.spans.add (st.rows[^1].spanStart, st.cur)
+    st.rows.setLen(st.rows.len - 1)
+    st.curNode = nd.succ
+    return
+  if nd.child == NoLink:
+    # An empty body never re-enters, the span closing at once, empty.
+    st.spans.add (st.cur, st.cur)
+    st.curNode = nd.succ
+    return
+  var r = Row(node: n, kind: frGeneration, scopeAt: st.scopes.len)
+  r.spanStart = st.cur
+  st.rows.add r
+  st.curNode = nd.child
 
 func stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Binds a macro value and emits nothing, the body never running here. A macro row
@@ -638,6 +658,14 @@ func pullAll*(c: var Context): string =
     result.setLen(at + n)
     if n > 0:
       copyMem(addr result[at], unsafeAddr buf[0], n)
+
+func generationSpans*(c: Context): seq[tuple[start, stop: int]] =
+  ## Returns the render's recorded generation spans.
+  ## - one `[start, stop)` byte range per `{% generation %}` block the render ran
+  ## - root-output coordinates, source order
+  ## - complete once the render drained (`pull` reported 0), a raise keeping the spans
+  ##   recorded so far, a consumer reading this only after a full drain
+  c.state.spans
 
 proc renderToString*(src: string, root: JinjaVal, clock = 0.0): string =
   ## Compiles and renders in one call, compiling at the scope that owns `src`, the artifact

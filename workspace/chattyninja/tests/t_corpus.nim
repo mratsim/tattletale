@@ -402,6 +402,28 @@ iterator items[N: static int](p: var PullChunks[N]): openArray[char] =
       break
     yield p.buf.toOpenArray(0, n - 1)
 
+proc renderAllSpans(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): tuple[
+    text: string, spans: seq[tuple[start, stop: int]]] =
+  ## Renders one row whole and returns the bytes plus the driver's recorded generation spans,
+  ## byte coordinates into the bytes.
+  var d = startRender(m, sym, ctx, clock)
+  result.text = pullAll(d)
+  result.spans = d.generationSpans()
+
+func cpIndex(s: string, byteAt: int): int =
+  ## Codepoint index of a byte offset, one lead-byte stride walk to the offset.
+  var i = 0
+  var cp = 0
+  while i < byteAt:
+    inc cp
+    inc i, runeLenAt(s, i)
+  cp
+
+func asCodepointSpans(s: string, spans: seq[tuple[start, stop: int]]): seq[tuple[start, stop: int]] =
+  ## Converts engine byte spans to the recording's codepoint ranges over the same bytes.
+  for (a, b) in spans:
+    result.add (cpIndex(s, a), cpIndex(s, b))
+
 proc renderChunked[N: static int](m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): string =
   ## Renders one row through `N`-byte windows, accumulating every window.
   var pc = pullChunks[N](startRender(m, sym, ctx, clock))
@@ -544,11 +566,13 @@ block corpusDelivery:
         continue
 
       # Ok row. The whole render, a 256-byte buffered pull loop and 7-byte and 1-byte
-      # windowed consumers all deliver the recorded bytes. A declared gap raises loud.
+      # windowed consumers all deliver the recorded bytes, the recorded generation spans
+      # exact. A declared gap raises loud.
       var raised = ""
       var whole = ""
+      var gotSpans: seq[tuple[start, stop: int]]
       try:
-        whole = renderAllPull(m, tables, r.context, r.clock)
+        (whole, gotSpans) = renderAllSpans(m, tables, r.context, r.clock)
       except JinjaError as e:
         # A declared gap surfaces as a gap, never as a wrong answer:
         # - declared constructs and unimplemented filter names raise with cause `ceUnimplemented`
@@ -561,6 +585,11 @@ block corpusDelivery:
         fail(suite & "/" & r.row & ": the whole render raised " & raised)
       if not sameBytes(whole, r.rendered):
         fail(suite & "/" & r.row & ": the whole render differs: " & report(whole, r.rendered))
+      # Generation spans compare verbatim, engine byte coordinates mapped over the same
+      # bytes to the recording's codepoint ranges, empty against empty.
+      if asCodepointSpans(whole, gotSpans) != r.spans:
+        fail(suite & "/" & r.row & ": generation spans differ: got " & $asCodepointSpans(whole,
+            gotSpans) & ", want " & $r.spans)
       let buffered = renderPull(m, tables, r.context, r.clock, 256)
       if not sameBytes(buffered, r.rendered):
         fail(suite & "/" & r.row & ": the 256-byte pull render differs: " &
@@ -583,8 +612,8 @@ block corpusDelivery:
       renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock),
       "two renders of the same artifact through fresh drivers differed"
 
-  doAssert okExact == 69, "expected 69 rendered ok rows across 18 suites, checked " & $okExact
-  doAssert gapRows == 21, "expected 21 gap rows across 18 suites, skipped " & $gapRows
+  doAssert okExact == 77, "expected 77 rendered ok rows across 18 suites, checked " & $okExact
+  doAssert gapRows == 13, "expected 13 gap rows across 18 suites, skipped " & $gapRows
   doAssert errRaised == 16, "expected 16 err rows, checked " & $errRaised
 
 # Boundary shapes of the delivery window on one corpus row.
@@ -1180,5 +1209,5 @@ when defined(nimAllocStats):
         ", container emit ", (dictEmits - loopOnly) div iters,
         " allocs beyond the loop baseline over ", iters, " renders"
 
-echo "t_corpus: 69 ok rows byte-exact through pull, compose and render, 21 gap rows loud, " &
+echo "t_corpus: 77 ok rows byte-exact through pull, compose and render, 13 gap rows loud, " &
     "16 err rows raise the recorded error"
