@@ -4,7 +4,7 @@
 ##
 ## Ceramic dense linear suite, the kernel judged per element against the host reference
 ##
-##   Out[m][n] = sum_k X[m][k] * W[n][k]    over the row-major (N, K) weights
+## - Out[m][n] = sum_k X[m][k] · W[n][k] over the row-major (N, K) weights
 ##
 ## | subject     | contract                                                                                |
 ## | ----------- | --------------------------------------------------------------------------------------- |
@@ -12,12 +12,18 @@
 ## | accumulator | kernel and naive side both accumulate fp32, one RNE to the storage element at the store |
 ## | regimes     | the same kernel body at M = 1 (GEMV) and M > 32 (tail M-tile)                           |
 ##
-## | shape | M  | N   | K   | TileC | family     | cases |
-## | ----- | --- | --- | --- | ----- | ---------- | ----- |
-## | gemv  | 1  | 128 | 64  | 64    | bf16, fp16 | 32    |
-## | gemm  | 37 | 192 | 160 | 64    | bf16, fp16 | 16    |
+## | shape    | M  | N    | K    | TileC | family     | cases |
+## | -------- | --- | ---- | ---- | ----- | ---------- | ----- |
+## | gemv     | 1  | 128  | 64   | 64    | bf16, fp16 | 32    |
+## | gemm     | 37 | 192  | 160  | 64    | bf16, fp16 | 16    |
+## | out_proj | 1  | 4096 | 2048 | 64    | bf16       | 16    |
 ##
-## Band model, stated before measurement, u32 = 2⁻²⁴ fp32, u_fam = 2⁻⁸ bf16 / 2⁻¹¹ fp16:
+## | note     | content                                                                                                                                                                                                             |
+## | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | out_proj | the mega kernel's production binding, `dense_linear_tile_fwd[bfloat16, 2048, 4096, 64]` in the decode composition, a fresh monomorphization under the instantiation contract, so it carries a suite case of its own |
+## | N = 1    | the shared expert row GEMV cannot go through this kernel (N mod TileC), the router suite's shared-expert scalar entry covers it                                                                                     |
+##
+## Band model, stated before measurement, u32 = 2⁻²⁴ fp32, u_fam = 2⁻⁸ bf16 / 2⁻¹¹ fp16
 ##
 ## | bar        | bound                                          | covers                                  |
 ## | ---------- | ---------------------------------------------- | --------------------------------------- |
@@ -66,6 +72,11 @@ const DenseLinearMsl = metal:
       M, tx, ty: int32) {.global.} =
     dense_linear_tile_fwd[float16, 192, 160, 64](outp, x, w, M, tx, ty)
 
+  proc cer_dense_linear_bf16_outproj(
+      outp, x, w: ptr UncheckedArray[bfloat16],
+      M, tx, ty: int32) {.global.} =
+    dense_linear_tile_fwd[bfloat16, 4096, 2048, 64](outp, x, w, M, tx, ty)
+
 # ─── Host, family dtype helpers, the independent reference ────────────
 
 const
@@ -109,9 +120,10 @@ proc naiveLinearF64(fam: Family, x, w: seq[uint16]; M, N, K: int): seq[float64] 
       result[m * N + n] = acc
 
 proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
-    seed: uint64; label: string) =
+    seed: uint64; label: string; kernelName: string) =
   ## One (family dtype, shape) combination over `cases` independent seeded runs,
-  ## judged per element under the band, case 0 relaunched bit-identical.
+  ## judged per element under the band, case 0 relaunched bit-identical,
+  ## `kernelName` selects the static binding
   let nOut = M * N
   let nX = M * K
   let nW = N * K
@@ -123,10 +135,6 @@ proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
   var outPA = outB.pa()
   var xPA = xB.pa()
   var wPA = wB.pa()
-  let kernelName = if fam == famBf16:
-    (if M == 1: "cer_dense_linear_bf16_gemv" else: "cer_dense_linear_bf16_gemm")
-  else:
-    (if M == 1: "cer_dense_linear_f16_gemv" else: "cer_dense_linear_f16_gemm")
   let uFam = if fam == famBf16: 3.90625e-3 else: 4.8828125e-4
   let gridX = int32(N div TileC)
   let gridY = int32((M + 31) div 32)
@@ -227,10 +235,16 @@ proc main =
   echo "device: ", bkMetal.init().deviceName()
   var engine = bkMetal.init()
   engine.ingest(DenseLinearMsl)
-  runCombo(engine, famBf16, 1, 128, 64, 64, 32, 0xC04D0511'u64, "gemv")
-  runCombo(engine, famF16, 1, 128, 64, 64, 32, 0xC04D0512'u64, "gemv")
-  runCombo(engine, famBf16, 37, 192, 160, 64, 16, 0xC04D0513'u64, "gemm tail")
-  runCombo(engine, famF16, 37, 192, 160, 64, 16, 0xC04D0514'u64, "gemm tail")
+  runCombo(engine, famBf16, 1, 128, 64, 64, 32, 0xC04D0511'u64, "gemv",
+    "cer_dense_linear_bf16_gemv")
+  runCombo(engine, famF16, 1, 128, 64, 64, 32, 0xC04D0512'u64, "gemv",
+    "cer_dense_linear_f16_gemv")
+  runCombo(engine, famBf16, 37, 192, 160, 64, 16, 0xC04D0513'u64, "gemm tail",
+    "cer_dense_linear_bf16_gemm")
+  runCombo(engine, famF16, 37, 192, 160, 64, 16, 0xC04D0514'u64, "gemm tail",
+    "cer_dense_linear_f16_gemm")
+  runCombo(engine, famBf16, 1, 4096, 2048, 64, 16, 0xC04D0515'u64, "out_proj",
+    "cer_dense_linear_bf16_outproj")
   echo "CERAMIC DENSE_LINEAR VERDICT: all cases inside the stated per-element bars"
 
 main()

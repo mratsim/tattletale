@@ -14,11 +14,15 @@
 ##
 ## Shapes (Dv = 128 = the tile width, TileR = 8, grid (1, ceil(M/8)), 32 lanes):
 ##
-## | shape | M  | grid tail          | cases |
-## | ----- | --- | ------------------ | ----- |
-## | exact | 8  | one full tile      | 32    |
-## | tail  | 13 | 3 rows zero-filled | 32    |
-## | multi | 29 | 3 blocks, 2 tail   | 16    |
+## | shape  | M  | grid tail              | cases |
+## | ------ | --- | ---------------------- | ----- |
+## | exact  | 8  | one full tile          | 32    |
+## | tail   | 13 | 3 rows zero-filled     | 32    |
+## | multi  | 29 | 3 blocks, 2 tail       | 16    |
+## | single | 1  | one row, 7 zero-filled | 16    |
+##
+## The single row is the decode regime's M = 1 launch, the tile loads 7
+## zero-filled rows and stores exactly one.
 
 ##
 ## | check       | content                                                                    |
@@ -252,6 +256,7 @@ proc main =
   runCombo(engine, 8, 32, 0xC04D0501'u64, "exact one tile")
   runCombo(engine, 13, 32, 0xC04D0502'u64, "tail rows")
   runCombo(engine, 29, 16, 0xC04D0503'u64, "multi block tail")
+  runCombo(engine, 1, 16, 0xC04D0504'u64, "single row")
   echo "CERAMIC O_NORM_GATED VERDICT: all cases inside the stated per-element bars"
 
 main()

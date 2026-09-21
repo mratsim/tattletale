@@ -35,10 +35,14 @@
 ## | ------------ | ------------------------------ | ---------------------------------------------------- |
 ## | sum check    | 2·u32·abs(s64) + (H-1)·H·u32·M | the fp32 accumulation sits inside its rounding model |
 ##
-## | shape | fam  | E | H  | I  | P  | group sizes       |
-## | ----- | ---- | --- | --- | --- | --- | ----------------- |
-## | main  | bf16 | 8 | 64 | 48 | 40 | 3 0 7 1 12 5 0 12 |
-## | alt   | fp16 | 4 | 32 | 24 | 10 | 2 0 1 7           |
+## | shape      | fam  | E | H    | I  | P  | group sizes       |
+## | ---------- | ---- | --- | ---- | --- | --- | ----------------- |
+## | main       | bf16 | 8 | 64   | 48 | 40 | 3 0 7 1 12 5 0 12 |
+## | mega width | bf16 | 8 | 2048 | 16 | 12 | 1 0 2 0 3 3 2 1   |
+## | alt        | fp16 | 4 | 32   | 24 | 10 | 2 0 1 7           |
+##
+## The mega width is the grouped expert GEMV contraction the mega composition
+## runs at, the band model's H terms scaled to the production width.
 ##
 ## - the measured divergence justifies the model, never sets the bar
 ## - adjudicated with fresh seeded xorshift64 inputs
@@ -203,6 +207,18 @@ proc main =
         fillRandom(gmmBf16, rng, a, w)
         let offs = @[3'i32, 3, 10, 11, 23, 28, 28, 40].toSeq
         runBandCase(gmmBf16, rng, a, w, offs, &"band main case {caseId}")
+    block bf16MegaWidth:
+      # the mega composition's contraction width, the 2048-wide fp32
+      # accumulation of the grouped expert GEMVs
+      var rng = initNaiveRng(0xC04D0536'u64)
+      for caseId in 0 ..< 1:
+        var a = NaiveMat[uint16](rows: 12, cols: 2048)
+        var w = NaiveCube[uint16](planes: 8, rows: 16, cols: 2048)
+        a.data = newSeq[uint16](a.rows * a.cols)
+        w.data = newSeq[uint16](w.planes * w.rows * w.cols)
+        fillRandom(gmmBf16, rng, a, w)
+        let offs = @[1'i32, 1, 3, 3, 6, 9, 11, 12].toSeq
+        runBandCase(gmmBf16, rng, a, w, offs, &"band mega-width case {caseId}")
     block fp16Alt:
       var rng = initNaiveRng(0xC04D0534'u64)
       for caseId in 0 ..< 3:
