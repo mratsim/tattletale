@@ -100,7 +100,7 @@ type
       ## the `spClose` phase writes a sequence bracket, else a mapping bracket
 
 func pyStrInto(sb: var Cursor, v: JinjaVal)
-func pyReprInto(sb: var Cursor, v: JinjaVal)
+func pyReprInto(sb: var Cursor, v: JinjaVal, depth: int)
 
 func pyStrInto(sb: var Cursor, v: JinjaVal) =
   ## Writes the value as template output text into `sb`:
@@ -116,7 +116,7 @@ func pyStrInto(sb: var Cursor, v: JinjaVal) =
   of vkFloat: sb.addFloat v.f
   of vkStr: sb.add v.s
   of vkCut: sb.add v.raw.toOpenArray(v.lo, v.hi - 1)
-  of vkSeq, vkDict, vkNs, vkLoop, vkMacro, vkRange: sb.pyReprInto(v)
+  of vkSeq, vkDict, vkNs, vkLoop, vkMacro, vkRange: sb.pyReprInto(v, 0)
   of vkCall: raise jinjaErr("a macro call result must be rendered before stringification")
   of vkConcat: raise jinjaErr("a concat must be rendered in emit position before stringification")
 
@@ -134,8 +134,13 @@ func reprQuoted(sb: var Cursor, s: string) =
     else: sb.add c
   sb.add '\''
 
-func pyReprInto(sb: var Cursor, v: JinjaVal) =
-  ## Writes Python's `repr()` of `v` into `sb`, recursively.
+func pyReprInto(sb: var Cursor, v: JinjaVal, depth: int) =
+  ## Writes Python's `repr()` of `v` into `sb`, one level per container, `depth`
+  ## counting toward `ValueDepthCap` and raising located past it, which is what
+  ## closes deep and cyclic value graphs on the recursive repr path.
+  if depth > ValueDepthCap:
+    raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
+        " cannot be serialized")
   case v.kind
   of vkStr: reprQuoted(sb, v.s)
   of vkCut: reprQuoted(sb, materializeVal(v).s)
@@ -144,14 +149,14 @@ func pyReprInto(sb: var Cursor, v: JinjaVal) =
     for i in 0 ..< v.xs.items.len:
       if i > 0:
         sb.add ", "
-      sb.pyReprInto(v.xs.items[i])
+      sb.pyReprInto(v.xs.items[i], depth + 1)
     sb.add ']'
   of vkRange:
     sb.add '['
     for i in 0 ..< v.r.rangeLen:
       if i > 0:
         sb.add ", "
-      sb.addInt(v.r.start + i.int64 * v.r.step)
+      sb.addInt(rangeAt(v.r, i).i)
     sb.add ']'
   of vkDict, vkNs:
     sb.add '{'
@@ -160,7 +165,7 @@ func pyReprInto(sb: var Cursor, v: JinjaVal) =
         sb.add ", "
       reprQuoted(sb, v.d.keys[i])
       sb.add ": "
-      sb.pyReprInto(v.d.vals[i])
+      sb.pyReprInto(v.d.vals[i], depth + 1)
     sb.add '}'
   of vkLoop: sb.add "<LoopContext>"
   of vkMacro:
@@ -282,7 +287,16 @@ func serFinish(js: var Ser) =
 
 func serDispatch(js: var Ser) =
   ## Renders the value in `v`, one literal or string body at a time.
+  ## Each container frame pushed below counts the value-graph depth toward
+  ## `ValueDepthCap`, a breach raising located:
+  ## - deeply nested data raises a located `JinjaError` past the cap
+  ## - a cyclic graph, whose nesting is unbounded, raises the same way
   let v = js.v
+  template capDepth =
+    ## One open container frame per nesting level.
+    if js.stack.len >= ValueDepthCap:
+      raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
+          " cannot be serialized")
   case v.kind
   of vkUndefined:
     if js.mode == smJson:
@@ -360,6 +374,7 @@ func serDispatch(js: var Ser) =
       serQueue(js, "[]")
       serFinish(js)
     else:
+      capDepth
       js.stack.add(SerFrame(val: v, idx: 0))
       serQueue(js, "[")
       js.v = v.xs.items[0]
@@ -368,6 +383,7 @@ func serDispatch(js: var Ser) =
       serQueue(js, "[]")
       serFinish(js)
     else:
+      capDepth
       js.stack.add(SerFrame(val: v, idx: 0))
       serQueue(js, "[")
       js.v = v.r.rangeAt(0)
@@ -376,6 +392,7 @@ func serDispatch(js: var Ser) =
       serQueue(js, "{}")
       serFinish(js)
     else:
+      capDepth
       js.stack.add(SerFrame(val: v, idx: 0))
       serQueue(js, if js.mode == smJson: "{\"" else: "{'")
       js.s = v.d.keys[0]

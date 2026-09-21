@@ -540,7 +540,13 @@ func rangeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports):
     else: raise jinjaErr("`range` takes at most three arguments", lo, hi - lo)
   if step == 0:
     raise jinjaErr("`range` step must not be zero", lo, hi - lo)
-  rangeVal(a, b, step)
+  let v = rangeVal(a, b, step)
+  # One element count check at construction bounds every consumer, the count
+  # answering through the same arithmetic each consumer reads:
+  # - a range past `RangeElemCap` raises located at the range expression here
+  # - no loop, materialization, serializer or comparison ever sees one
+  discard rangeLen(v.r, lo, hi)
+  v
 
 func civilFromDays(z: int): tuple[y, m, d: int] =
   ## Returns the civil date of `z` days since 1970-01-01, proleptic Gregorian.

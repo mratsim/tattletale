@@ -19,6 +19,24 @@ const
     ## call passes is 2. A call past the cap is a template error, reported at the call.
 
 const
+  RangeElemCap* {.intdefine.} = 1_000_000
+    ## Element bound of one lazy `range`:
+    ## - the count answers wherever a consumer counts or drains, and eagerly
+    ##   at construction (`range` global), the one site holding a location
+    ## - chat-template ranges are small, the corpus topping out at a few
+    ##   hundred elements, 1_000_000 clearing legitimate use with margin
+    ## - every consumer stays bounded to a count or a materialization no larger
+    ##   than the cap, a breach raising a located `JinjaError`
+  ValueDepthCap* {.intdefine.} = 1000
+    ## Recursion bound over the value graph fed host-provided data:
+    ## - deepest corpus context nesting is single digits, 1000 clearing it
+    ##   with margin and staying far below the C stack depth
+    ## - every value-graph walker counts levels toward the cap and raises
+    ##   a located `JinjaError` on breach, the walkers being `eqVal`,
+    ##   `containsVal` and the serializer's container frames
+    ## - cyclic graphs raise the same way, their nesting unbounded
+
+const
   NoOffset* = -1
     ## `JinjaError.offset` marker for a raise site with no template location in scope
   NoLink* = -1'i32
@@ -302,31 +320,104 @@ func materializeVal*(v: JinjaVal): JinjaVal =
   else:
     v
 
-func rangeLen*(r: RangeVal): int =
+func rangeLen*(r: RangeVal, lo, hi: int): int =
   ## Returns the element count of the range, Python's `len(range(start, stop, step))`:
-  ## a step against the span's direction answers 0.
-  let span = r.stop - r.start
-  if r.step > 0:
-    int(max(0'i64, (span + r.step - 1) div r.step))
-  elif r.step < 0:
-    int(max(0'i64, (span + r.step + 1) div r.step))
-  else:
-    0
+  ## a step against the span's direction answers 0. A count past `RangeElemCap` raises
+  ## a `JinjaError` located at the range expression `lo ..< hi`. Callers with no
+  ## template location in scope pass `NoOffset`, the raise carrying none.
+  ##
+  ## The walk distance and the stride magnitude compute in unsigned space, where each
+  ## is exact, so the span arithmetic never wraps however extreme the bounds:
+  ##   rangeLen(rangeVal(0, 9223372036854775807, 1)) == 9223372036854775807 (capped)
+  if r.step == 0:
+    return 0
+  let fwd = r.step > 0
+  let d = if fwd:
+      if r.stop <= r.start: return 0
+      cast[uint64](r.stop) - cast[uint64](r.start)
+    else:
+      if r.start <= r.stop: return 0
+      cast[uint64](r.start) - cast[uint64](r.stop)
+  let s = if fwd: cast[uint64](r.step) else: 0'u64 - cast[uint64](r.step)
+  let n = (d - 1) div s + 1
+  if n > cast[uint64](RangeElemCap):
+    let what = "range of " & $n & " elements exceeds RangeElemCap = " & $RangeElemCap
+    if lo == NoOffset:
+      raise jinjaErr(what)
+    raise jinjaErr(what, lo, hi - lo)
+  int(n)
+
+func rangeLen*(r: RangeVal): int =
+  ## `rangeLen` from callers with no template location in scope, the raise unlocated.
+  rangeLen(r, NoOffset, 0)
 
 func rangeAt*(r: RangeVal, i: int): JinjaVal =
   ## Returns element `i` of the range, `i` in `0 ..< rangeLen(r)`.
-  intVal(r.start + i.int64 * r.step)
+  ## The element `start + i * step` computes in unsigned space, where the arithmetic
+  ## is exact, every element of a bounded, direction-consistent range lying in int64:
+  ## - nothing wraps, no overflow check, however extreme the bounds
+  let s = if r.step > 0: cast[uint64](r.step) else: 0'u64 - cast[uint64](r.step)
+  let e = if r.step > 0: cast[uint64](r.start) + cast[uint64](i) * s
+      else: cast[uint64](r.start) - cast[uint64](i) * s
+  intVal(cast[int64](e))
 
 func rangesEqual(a, b: RangeVal): bool =
-  ## Returns Python's range equality, same length and the same element per index,
-  ## not the same bounds, so `range(0, 6, 2)` equals `range(0, 5, 2)`.
+  ## Returns Python's range equality from the bounds and strides alone, no scan:
+  ## - same length, the first element and the stride coinciding
+  ##   (`range(0, 6, 2)` equals `range(0, 5, 2)`)
+  ## - empty ranges always compare equal
+  ## - singletons compare equal through the shared element alone
   let n = rangeLen(a)
   if n != rangeLen(b):
     return false
-  for i in 0 ..< n:
-    if a.start + i.int64 * a.step != b.start + i.int64 * b.step:
+  if n == 0:
+    return true
+  if a.start != b.start:
+    return false
+  n == 1 or a.step == b.step
+
+func rangeContains(r: RangeVal, needle: JinjaVal): bool =
+  ## Returns Python's range membership from the bounds and stride alone, no scan:
+  ## - an int needle lies inside the walked span on the stride's direction,
+  ##   splitting the stride exactly, the offset and the stride magnitude
+  ##   comparing in unsigned space so extreme bounds wrap nothing
+  ## - a float needle matches the element whose rounding equals it, the equality
+  ##   of the float cross-tier `==`, the match found by binary search over the
+  ##   monotone element rounding
+  ## - every other needle kind fails the element `==`, elements being ints
+  if needle.kind == vkInt:
+    if r.step == 0:
       return false
-  true
+    let d = if r.step > 0:
+        if r.start <= needle.i and needle.i < r.stop:
+          cast[uint64](needle.i) - cast[uint64](r.start)
+        else:
+          return false
+      else:
+        if r.stop < needle.i and needle.i <= r.start:
+          cast[uint64](r.start) - cast[uint64](needle.i)
+        else:
+          return false
+    let s = if r.step > 0: cast[uint64](r.step) else: 0'u64 - cast[uint64](r.step)
+    result = d mod s == 0 and d div s < cast[uint64](rangeLen(r))
+  elif needle.kind == vkFloat:
+    let n = rangeLen(r)
+    if n == 0:
+      return false
+    # Leftmost index whose element rounds to `needle.f` or beyond, valid since
+    # element rounding is nondecreasing in the index, a distinct int per element
+    # with a nonzero step.
+    var a = 0
+    var b = n
+    while a < b:
+      let m = (a + b) div 2
+      if rangeAt(r, m).i.float64 >= needle.f:
+        b = m
+      else:
+        a = m + 1
+    result = a < n and rangeAt(r, a).i.float64 == needle.f
+  else:
+    result = false
 
 func loopLen*(lp: LoopState): int =
   ## Returns the element count the cursor walks, the lazy range's arithmetic count
@@ -415,9 +506,15 @@ func sameBytes(x, y: openArray[char]): bool =
       return false
   true
 
-func eqVal*(a, b: JinjaVal): bool =
-  ## Returns Jinja `==`:
-  ##   numbers compare across tiers, containers element-wise, undefined equals only undefined.
+func eqValAt(a, b: JinjaVal, depth: int): bool =
+  ## `eqVal` recursion core, `depth` the container levels entered so far, counting
+  ## toward `ValueDepthCap` and raising a located `JinjaError` when the graph nests
+  ## past it:
+  ## - data deeper than the cap
+  ## - a value-graph cycle, whose comparison otherwise runs off the C stack
+  if depth > ValueDepthCap:
+    raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
+        " cannot be compared")
   if a.kind == vkUndefined or b.kind == vkUndefined:
     return a.kind == vkUndefined and b.kind == vkUndefined
   if a.kind == vkBool and b.kind == vkBool:
@@ -440,17 +537,23 @@ func eqVal*(a, b: JinjaVal): bool =
   of vkNone: true
   of vkStr: a.s == b.s
   of vkSeq:
+    # One shared sequence payload always equals itself, whatever it nests.
+    if a.xs == b.xs:
+      return true
     if a.xs.items.len != b.xs.items.len:
       return false
     for i, x in a.xs.items:
-      if not eqVal(x, b.xs.items[i]):
+      if not eqValAt(x, b.xs.items[i], depth + 1):
         return false
     true
   of vkDict, vkNs:
+    # One shared mapping payload always equals itself, cycles included.
+    if a.d == b.d:
+      return true
     if a.d.keys.len != b.d.keys.len:
       return false
     for i, k in a.d.keys:
-      if not eqVal(a.d.vals[i], b.d.dictGet(k)):
+      if not eqValAt(a.d.vals[i], b.d.dictGet(k), depth + 1):
         return false
     true
   of vkLoop: a.lp == b.lp
@@ -461,6 +564,15 @@ func eqVal*(a, b: JinjaVal): bool =
   # Unreachable leg, a cut returns above against the other side's sub-span compare.
   of vkCut: false
   of vkUndefined, vkBool, vkInt, vkFloat: false
+
+func eqVal*(a, b: JinjaVal): bool =
+  ## Returns Jinja `==`:
+  ## - numbers compare across tiers, containers element-wise, undefined
+  ##   equaling only undefined
+  ## - a shared container payload equals itself
+  ## - a value graph nesting past `ValueDepthCap` raises, never running off
+  ##   the C stack
+  eqValAt(a, b, 0)
 
 func cmpVal*(a, b: JinjaVal): int =
   ## Returns -1, 0 or 1 for an ordering comparison, numbers ordering numerically, text ordering
@@ -486,28 +598,36 @@ func substringOf(needle, haystack: openArray[char]): bool =
       return true
   false
 
-func containsVal*(haystack, needle: JinjaVal): bool =
-  ## Returns Jinja `in`:
-  ##   membership for sequences, keys for mappings, substring for strings.
+func containsValAt(haystack, needle: JinjaVal, depth: int): bool =
+  ## `containsVal` recursion core, `depth` counting toward `ValueDepthCap` exactly
+  ## as `eqValAt` does:
+  ## the scan enters each container level of the haystack through the element `==`.
+  if depth > ValueDepthCap:
+    raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
+        " cannot be scanned")
   let haystack = if haystack.kind == vkCut: materializeVal(haystack) else: haystack
   let needle = if needle.kind == vkCut: materializeVal(needle) else: needle
   result = case haystack.kind
   of vkSeq:
     for x in haystack.xs.items:
-      if eqVal(x, needle):
+      if eqValAt(x, needle, depth + 1):
         return true
     false
   of vkDict, vkNs:
     needle.kind == vkStr and haystack.d.dictGet(needle.s).kind != vkUndefined
   of vkStr:
     needle.kind == vkStr and substringOf(needle.s, haystack.s)
-  of vkRange:
-    for i in 0 ..< haystack.r.rangeLen:
-      if haystack.r.rangeAt(i).eqVal(needle):
-        return true
-    false
+  of vkRange: rangeContains(haystack.r, needle)
   else:
     raise jinjaErr("`in` needs a sequence, mapping or string on the right, got " & $haystack.kind)
+
+func containsVal*(haystack, needle: JinjaVal): bool =
+  ## Returns Jinja `in`:
+  ## - membership for sequences, keys for mappings, substring for strings
+  ## - arithmetic membership for a lazy range
+  ## - a value graph nesting past `ValueDepthCap` raises, never running off
+  ##   the C stack
+  containsValAt(haystack, needle, 0)
 
 func stripSpan*(s, chars: openArray[char], left, right: bool): tuple[a, b: int] =
   ## Returns the byte range of `s` that survives stripping the leading and/or trailing

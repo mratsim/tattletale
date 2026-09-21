@@ -104,8 +104,9 @@ const
   ChunkSize* {.intdefine.} = 4096
 
   # Step-dispatch bound of one `pull` call. One call dispatches at most this many steps,
-  # a breach raising located at the node the walk reached. The bound sits far above any
-  # call a terminating render makes, the full-corpus suite rendering complete below it.
+  # a breach raising located at the node the walk reached. The corpus suite completes
+  # with 240 and fails with 230, so no corpus pull dispatches past 240, and a 200x200
+  # nested loop test lands in the low thousands. 1_000_000 keeps ample headroom.
   StepBudget* {.intdefine.} = 1_000_000
 
   Whitespace* = {' ', '\t', '\n', '\r', '\v', '\f'}

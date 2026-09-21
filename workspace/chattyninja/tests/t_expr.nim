@@ -449,7 +449,7 @@ doAssert renderStmt("{# hi #}") == "", "a comment-only template renders empty"
 # An empty body completes a for at set-up, its row and scope closing exactly
 # as an exhausted loop closes them:
 #   the target and `loop` unbind with the scope, no row stays open for a break
-#   to unwind into, and a filter clause still runs per item.
+#   to unwind into, and a filter clause still runs per remaining item.
 doAssert renderStmt("A{% for x in [1] %}{% endfor %}B") == "AB",
     "an empty for at the top level advances past its successor"
 doAssert renderStmt("{% for x in [1] %}{% endfor %}{{ x }}") == "",
@@ -461,7 +461,7 @@ doAssert renderStmt(
     "{% macro m() %}{% for y in [1] %}{% endfor %}{% endmacro %}{{ m() }}A") == "A",
     "an empty for inside a macro body closes back on the definition node"
 doAssert renderStmt("{% for x in [1, 2, 3] if x > 1 %}{% endfor %}ok") == "ok",
-    "an empty body still runs its filter clause over every item"
+    "an empty body still runs its filter clause over every remaining item"
 try:
   discard renderStmt("{% for x in [1] %}{% endfor %}{% break %}")
   doAssert false, "a break after an empty for found a leaked for-row"
@@ -494,7 +494,7 @@ except JinjaError as e:
   doAssert "ExprDepthCap" in e.what, e.what
 
 # Ternaries leave no depth behind, only the real nesting depth spending budget:
-#   chained and sequenced ternaries render well past the shapes that once ran dry.
+#   chained and sequenced ternaries render well within the cap.
 var chained = ""
 for k in 1 .. 20:
   chained.add $k & " if z else "
@@ -508,5 +508,113 @@ for k in 1 .. 25:
   sequenced.add "(9 if z else 8)"
 doAssert render(sequenced) == "8".repeat(25),
     "25 ternaries sequenced on one cursor render within the cap"
+
+# Lazy range, one element bound at construction, so no consumer loops, materializes,
+# drains or scans past RangeElemCap, and the span arithmetic never wraps:
+#   range(0, int64 high) answers its count as a located raise, not an OverflowDefect.
+
+doAssert render("range(0, 1000000) | length") == "1000000",
+    "a range at the cap answers its count"
+try:
+  discard render("range(0, 1000001) | length")
+  doAssert false, "a range past the cap answered instead of raising"
+except JinjaError as e:
+  doAssert "RangeElemCap" in e.what, e.what
+try:
+  discard render("range(0, 9223372036854775807) | length")
+  doAssert false, "an overflow-scale range raised a defect instead of the cap"
+except JinjaError as e:
+  doAssert "RangeElemCap" in e.what, e.what
+try:
+  discard renderStmt("{% for x in range(0, 4611686018427387904) %}{{ x }}{% endfor %}")
+  doAssert false, "an unbounded range entered a for loop"
+except JinjaError as e:
+  doAssert "RangeElemCap" in e.what, e.what
+try:
+  discard render("range(0, 2000001) | list | length")
+  doAssert false, "a range past the cap materialized"
+except JinjaError as e:
+  doAssert "RangeElemCap" in e.what, e.what
+try:
+  discard render("range(0, 2000001) | tojson")
+  doAssert false, "a range past the cap drained to the serializer"
+except JinjaError as e:
+  doAssert "RangeElemCap" in e.what, e.what
+
+# Range membership and equality answer arithmetically, no scan:
+#   direction-aware bounds plus an exact stride split for ints, the element whose
+#   rounding matches a float needle, and progression identity for `==`.
+doAssert render("5 in range(0, 10)") == "True"
+doAssert render("5.0 in range(0, 10)") == "True", "a float needle matches by rounding"
+doAssert render("5 in range(0, 10, 2)") == "False", "an off-stride int is absent"
+doAssert render("5 in range(9, -1, -1)") == "True", "a backward range contains by its stride"
+doAssert render("0 in range(0, 0)") == "False", "an empty range contains nothing"
+doAssert render("range(0, 6, 2) == range(0, 5, 2)") == "True",
+    "equal progressions compare equal past their differing bounds"
+doAssert render("range(3, 2, -5) == range(3, 2, -1)") == "True",
+    "backward singletons compare equal by element, not stride"
+doAssert render("range(0, 6, 2) == range(0, 6, 3)") == "False",
+    "same bounds, different strides compare unequal"
+doAssert render("range(0, 3) == [0, 1, 2]") == "False",
+    "a range never equals a sequence of the same elements"
+doAssert render("range(0, 3) | list | length") == "3"
+doAssert render("range(0, 3) | tojson") == "[0, 1, 2]"
+doAssert renderStmt("{% for x in range(1, 4) %}{{ x }}{% endfor %}") == "123"
+
+# Hostile value depth raises located, from both container walkers:
+#   equality and membership count one level per container entered toward
+#   ValueDepthCap, so neither runs off the C stack.
+
+proc nestedVal(depth: int): JinjaVal =
+  var v = intVal(1)
+  for _ in 1 ..< depth:
+    v = seqVal(@[v])
+  v
+
+proc ctxPair(depth: int): JinjaVal =
+  var d = DictVal()
+  dictSet(d, "a", nestedVal(depth))
+  dictSet(d, "b", nestedVal(depth))
+  dictVal(d)
+
+try:
+  discard render("a == b", ctxPair(1200))
+  doAssert false, "deep data compared instead of raising"
+except JinjaError as e:
+  doAssert "ValueDepthCap" in e.what, e.what
+try:
+  discard render("b in a", ctxPair(1200))
+  doAssert false, "deep data scanned instead of raising"
+except JinjaError as e:
+  doAssert "ValueDepthCap" in e.what, e.what
+doAssert render("a == b", ctxPair(50)) == "True",
+    "data nesting well within the cap compares"
+
+# Cyclic value graphs raise located at both the walkers and the serializer,
+# rendering only shapes within the cap:
+#   a namespace holding itself is valid Jinja, its comparison and its rendering
+#   must terminate, deep-but-acyclic data still renders.
+
+doAssert renderStmt("{% set ns = namespace() %}{% set ns.a = ns %}{{ ns == ns }}") == "True",
+    "a namespace equals itself, the shared payload answering by identity"
+try:
+  discard renderStmt("{% set ns = namespace() %}{% set ns.a = ns %}{{ ns }}")
+  doAssert false, "a cyclic namespace rendered unbounded"
+except JinjaError as e:
+  doAssert "ValueDepthCap" in e.what, e.what
+try:
+  discard renderStmt("{% set ns = namespace() %}{% set ns.a = ns %}{{ ns | tojson }}")
+  doAssert false, "a cyclic namespace serialized unbounded"
+except JinjaError as e:
+  doAssert "ValueDepthCap" in e.what, e.what
+block:
+  var v = intVal(1)
+  for _ in 1 .. 500:
+    v = seqVal(@[v])
+  doAssert renderStmt("{{ v }}", (proc: JinjaVal =
+    var d = DictVal()
+    dictSet(d, "v", v)
+    dictVal(d))()) == ("[").repeat(500) & "1" & ("]").repeat(500),
+    "acyclic data within the cap renders"
 
 echo "t_expr: expression tier ok"
