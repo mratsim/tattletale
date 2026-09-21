@@ -69,6 +69,6 @@ semantics are version-sensitive.
 - `mistral7bv01/generated.json` records that `mistral7bv01.jinja` came from `mistral_common` 1.11.7 @
   `e224216f` (`build_chat_template`, config `v1, spm=True`), machine-generated rather than hand-written.
   It is a template-of-record provenance file, not a render row
-- `fixture_loader.nim` is the v1 Nim loader, a zstd plus JSON bridge with insertion-order-preserving
-  dicts because dict order is observable through `tojson` /`items`. Reading reference only, never
-  compiled here, because the engine ships its own loader
+- `fixture_loader.nim` is the zstd-plus-JSON loader used by the bench, keeping dict insertion
+  order because dict order is observable through `tojson` /`items`. Test suites read the frames
+  through their own reader in `t_corpus.nim`

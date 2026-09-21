@@ -10,9 +10,8 @@
 ## Every case renders through `{{ }}`, so stringification and the pending-piece
 ## path sit on the observed path. Expected values come from the expression text.
 ##
-## Feature-skipped branches are witnessed, not sampled. When `raise_exception`
-## sits in a branch the engine must not enter, a re-run or an un-skipped operand
-## raises it, which a value comparison cannot see.
+## Branches the engine must skip carry a `raise_exception` call, so a wrongly entered
+## branch raises the recorded error at that call.
 ##
 ## Run:
 ##   $ nim test_chattyninja
@@ -201,7 +200,7 @@ doAssert render("{'a': 1, 'b': 2} | tojson") == "{\"a\": 1, \"b\": 2}"
 doAssert render("[1, 2] | tojson") == "[1, 2]"
 doAssert render("'x' | tojson") == "\"x\""
 doAssert render("'<' | tojson") == "\"\\u003c\"", "tojson applies the Jinja HTML escape"
-# Plain `| tojson` renders non-ASCII as raw UTF-8, the recording environment's policy.
+# Plain `| tojson` renders non-ASCII as raw UTF-8, Jinja's default.
 doAssert render("'東京' | tojson") == "\"東京\"", "tojson keeps non-ASCII verbatim by default"
 doAssert renderStmt("{#- hello -#}\nA{{ name }}",
     ctx(("name", strVal("B")))) == "AB", "comment `-` markers strip the surrounding whitespace runs"
@@ -291,7 +290,7 @@ doAssert render("{'role': 'user'}['role']") == "user"
 doAssert render("{'role': 'user'}") == "{'role': 'user'}"
 doAssert render("[{'role': 'user'}] | length") == "1"
 
-# M4 hand-rolled replacements the corpus cannot pin
+# Multibyte string edge cases beyond the recorded template forms
 # ---------------------------------------------------------------------------
 
 doAssert render("'h\u00e9llo'[1:3]") == "\u00e9l", "a step-1 string slice copies its byte window"

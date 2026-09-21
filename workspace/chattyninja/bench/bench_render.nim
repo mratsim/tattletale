@@ -27,8 +27,8 @@
 ##   uncounted through `system.getAllocStats()`, plus spill counts and micro
 ##   attribution templates isolating loop machinery, emit stringification and JSON serialization
 ##
-## Both builds replay the recorded deepseekv2lite and qwen3 rows as a corpus anchor,
-## keeping the numbers here comparable with earlier corpus-row measurements.
+## Both builds replay the recorded deepseekv2lite and qwen3 rows as a corpus anchor.
+## The hf stimulus and the corpus anchor share one measurement method, so their numbers compare.
 ##
 ## Stimulus templates come from the gitignored hf_models links,
 ## `workspace/transformers/tests/hf_models/<model>/chat_template.jinja`, each link byte-identical
@@ -38,7 +38,6 @@
 ##
 ## - a template the engine cannot parse, or a construct a shape cannot render, is
 ##   reported as a coverage gap naming the construct
-## - the bench never modifies the engine to fit a stimulus
 ##
 ## No `doAssert` anywhere. A failing doAssert hangs under `-d:nimAllocStats`.
 
@@ -307,7 +306,7 @@ when defined(benchAlloc):
     fmt"{a:8d} allocs/parse"
 
   proc corpusAllocAnchor(suite: string, iters: int): string =
-    ## Replays one recorded suite's rows with the earlier corpus measurement's method.
+    ## Replays one recorded suite's rows, measured like the hf stimulus so the numbers compare.
     ##
     ## - one full warm-up pass over every row, uncounted
     ## - then counted passes, reported per row and as the suite mean
@@ -381,7 +380,7 @@ when defined(benchAlloc):
     let msgs = ctx.d.dictGet("messages")
     # Message 1 rather than the system message, whose content is a compile-time
     # constant. A literal-backed string makes both copies below buffer shares
-    # measuring 0, so message 1 carries the realistic runtime-built provenance.
+    # measuring 0, so message 1's content is runtime-built, matching the templates' real message strings.
     let msg1 = msgs.xs.items[1]
     let dg = allocsOf:
       for _ in 0 ..< 1000:
@@ -460,8 +459,8 @@ proc benchHf(): void =
     echo ""
 
 proc benchCorpus(): void =
-  ## Corpus anchor over the recorded deepseekv2lite and qwen3 rows, method identical
-  ## to the hf stimulus, so the numbers stay comparable with earlier corpus-row measurements.
+  ## Corpus anchor over the recorded deepseekv2lite and qwen3 rows, one measurement
+  ## method with the hf stimulus, so the numbers compare.
   when defined(benchAlloc):
     echo "corpus alloc anchor (warm-up uncounted)"
     echo "  deepseekv2lite " & corpusAllocAnchor("deepseekv2lite", 50)

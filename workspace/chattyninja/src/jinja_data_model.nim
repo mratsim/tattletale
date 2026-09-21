@@ -30,7 +30,7 @@ type
   JinjaCause* = enum
     ## Kind of failure a `JinjaError` reports. Suite gap detection reads `ceUnimplemented`
     ## to classify a declared construct, registry name or filter demand.
-    ceNone, ceRaiseCall, ceUnimplemented, ceScratch
+    ceNone, ceRaiseCall, ceUnimplemented, ceWindow
 
   JinjaError* = ref object of CatchableError
     ## Template-level failure, the one error type the engine raises.
@@ -42,11 +42,11 @@ type
     what*: string
       ## the failure message, the corpus `err_*` rows recording it verbatim
     cause*: JinjaCause
-      ## kind of failure, `ceRaiseCall` a `raise_exception` call, `ceUnimplemented` a declared gap, `ceScratch` a render-scratch overflow
+      ## kind of failure, `ceRaiseCall` a `raise_exception` call, `ceUnimplemented` a declared gap, `ceWindow` a window-capacity overflow
 
   Cursor* = object
     ## Appends bytes into a borrowed window. An append that does not fit raises `JinjaError`
-    ## with cause `ceScratch`, naming capacity and shortfall, never growing the window.
+    ## with cause `ceWindow`, naming capacity and shortfall, never growing the window.
     ## Measuring mode counts bytes without writing, the presize pass of a two-pass render.
     buf*: openArray[char]
       ## borrowed window, `buf.len` the writable capacity in bytes
@@ -181,11 +181,12 @@ func spanString*(s: openArray[char]): string =
   if s.len > 0:
     copyMem(addr result[0], unsafeAddr s[0], s.len)
 
-func scratchShort(sb: Cursor, need: int) {.noreturn.} =
-  ## Raises the overflow an unfitting append reports, the capacity and shortfall names in the message.
+func windowOverflow(sb: Cursor, need: int) {.noreturn.} =
+  ## Raises the overflow an append reports when the window cannot hold the bytes,
+  ## the capacity and shortfall named in the message.
   let shortfall = max(0, need - (sb.buf.len - sb.len))
-  raise jinjaErr("render scratch capacity " & $sb.buf.len & " exceeded, " & $shortfall &
-      " more bytes needed", cause = ceScratch)
+  raise jinjaErr("render window capacity " & $sb.buf.len & " exceeded, " & $shortfall &
+      " more bytes needed", cause = ceWindow)
 
 func add*(sb: var Cursor, c: char) =
   ## Appends one byte, raising when the window cannot hold it.
@@ -193,7 +194,7 @@ func add*(sb: var Cursor, c: char) =
     inc sb.len
     return
   if sb.len >= sb.buf.len:
-    scratchShort(sb, 1)
+    windowOverflow(sb, 1)
   sb.buf[sb.len] = c
   inc sb.len
 
@@ -205,7 +206,7 @@ func add*(sb: var Cursor, s: openArray[char]) =
     sb.len += s.len
     return
   if sb.len + s.len > sb.buf.len:
-    scratchShort(sb, s.len)
+    windowOverflow(sb, s.len)
   copyMem(addr sb.buf[sb.len], unsafeAddr s[0], s.len)
   sb.len += s.len
 

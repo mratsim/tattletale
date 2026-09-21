@@ -254,8 +254,8 @@ type
   Piece* = object
     ## Pending output piece:
     ## - span pieces deliver straight out of `CompiledTemplate.jinja`
-    ## - string pieces are materialized strings held by the render state
-    ## - cut pieces are an owned string held by the render state, rendering its sub-span bytes
+    ## - string and cut pieces are owned by the render state, the string materialized,
+    ##   the cut rendering its sub-span bytes
     ## - lazy pieces are a derived value the serializer in `RenderState.lazy` renders
     ##   straight into the delivery window
     pos*: int
@@ -299,7 +299,7 @@ type
 
   LookupPort = proc (env: pointer, name: openArray[char]): JinjaVal {.nimcall, noSideEffect.}
     ## Resolves one name of the enclosing render to its binding, undefined when absent.
-    ## `env` carries the adapter state the trampoline reads, owned by the pull consumer.
+    ## `env` carries the adapter state the port procs read, owned by the pull consumer.
 
   ClockPort = proc (env: pointer): float64 {.nimcall, noSideEffect.}
     ## Returns the render's injected epoch, `strftime_now`'s only time source.
@@ -317,7 +317,7 @@ type
     clock*: ClockPort
     force*: MacroForcer
     env*: pointer
-      ## adapter state the trampolines cast back, opaque here by construction
+      ## adapter state the port procs cast back, opaque here by construction
 
   Context* = object
     ## Object the caller holds, bundling the shared artifact, a borrowed symbol-arena pointer,

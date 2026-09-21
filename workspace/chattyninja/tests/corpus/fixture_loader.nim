@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Fixture loader for the integration suites. Reads the recorded golden frames under
-## tests/fixtures/<suite>/ and turns each one into a ready ChatRenderRequest plus the recorded
+## tests/corpus/<suite>/ and turns each one into a ready ChatRenderRequest plus the recorded
 ## ground truth (rendered bytes, generation codepoint spans, expected error).
 ##
 ## A suite is exactly its directory:
@@ -16,7 +16,7 @@
 ##
 ## The zstd reader is the workspace/zstd high-level one-shot decompress. The JSON bridge keeps
 ## insertion order because dict order is observable through tojson, items and plain iteration.
-## Recorded bytes are read-only here, no loader path writes into the fixtures tree.
+## Recorded bytes are read-only here, no loader path writes into the corpus tree.
 
 import std/[json, os, options, tables, algorithm, strutils]
 import workspace/zstd/zstd_highlevel
@@ -24,13 +24,9 @@ import workspace/chattyninja
 
 const
   FixturesDir* = currentSourcePath().parentDir()
-    ## the fixtures tree this module lives inside, one step from the source
+    ## the corpus tree this module lives in, tests/corpus
   FrameSuffix = ".json.zst"
   SidecarSuffix = ".meta.json"
-  ModelsDir* = joinPath(FixturesDir, "..", "..", "..", "..", "..", "..", "..",
-    "MODELS")
-    ## the read-only roster copy the fixtures were recorded from. MODELS sits two levels above
-    ## the project root. Exact path resolution only, never written
 
 type
   ChatRenderRequest* = object
@@ -109,28 +105,6 @@ proc suiteRowNames*(suite: string): seq[string] =
   for path in walkPattern(FixturesDir / suite / ("*" & FrameSuffix)):
     result.add stemOf(path, FrameSuffix)
   result.sort()
-
-proc firstSidecarSha(suite: string): string =
-  ## template_sha256 off the suite's first sidecar (sorted stems), the one
-  ## provenance field the sidecars keep.
-  var names: seq[string]
-  for path in walkPattern(FixturesDir / suite / ("*" & SidecarSuffix)):
-    names.add stemOf(path, SidecarSuffix)
-  if names.len == 0:
-    raise ValueError.newException(
-      "suite " & suite & ": no sidecar under " & (FixturesDir / suite))
-  names.sort()
-  parseFile(FixturesDir / suite / (names[0] & SidecarSuffix))["template_sha256"]
-    .getStr()
-
-proc suiteTemplateSha*(suite: string): string =
-  ## sha256 of the template bytes the suite was recorded from, read
-  ## from the row sidecars (every row of a suite carries the same one).
-  firstSidecarSha(suite)
-
-proc modelTokenizer*(modelDir: string): string =
-  ## Exact path of one roster checkpoint tokenizer json under MODELS.
-  joinPath(ModelsDir, modelDir, "tokenizer.json")
 
 proc suiteTemplateSource*(suite: string): string =
   ## Byte-exact template copy recorded beside the suite, the file name

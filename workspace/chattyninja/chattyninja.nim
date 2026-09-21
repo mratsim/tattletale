@@ -6,13 +6,13 @@
 ## Chattyninja package umbrella.
 ## The single re-export surface of `src/`. Nothing under `src/` re-exports.
 ##
-## | Module           | Surface                                  |
-## | ---------------- | ---------------------------------------- |
-## | cnj_engine       | render engine and pull interface         |
-## | cnj_parse        | template parsing                         |
-## | cnj_types        | artifact and render driver               |
-## | jinja_data_model | template values and JinjaError           |
-## | jinja_serialize  | Python str/repr and tojson serialization |
+## | Module           | Surface                                          |
+## | ---------------- | ------------------------------------------------ |
+## | cnj_engine       | render engine and pull interface                 |
+## | cnj_parse        | template parsing                                 |
+## | cnj_types        | compiled artifact, symbol arena and render state |
+## | jinja_data_model | template values and JinjaError                   |
+## | jinja_serialize  | Python str/repr and tojson serialization         |
 ##
 ## `jinja_interpolation` and `jinja_builtins` stay internal, no re-export.
 

@@ -43,10 +43,9 @@ type
     ports: Ports
 
   GlobalProc = proc (tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal {.nimcall, noSideEffect.}
-    ## A call to a template global, `namespace` and `dict` storing a keyword name as a dict key.
-    ## `lo` and `hi` bound the global's name token in the template text, the location the globals'
-    ## raise sites report. Globals read the template text they evaluate and the injected ports,
-    ## never the render state.
+    ## A call to a template global. `namespace` and `dict` store a keyword name as a dict key.
+    ## - `lo` and `hi` bound the global's name token, the location the raise sites report
+    ## - globals read the template text and the injected ports, never the render state
 
   GlobalName = enum
     gNamespace, gRange, gStrftimeNow, gRaiseException, gDict, gLipsum, gCycler, gJoiner
@@ -249,8 +248,9 @@ template wordSpan(tmpl: CompiledTemplate, lo, hi: int): openArray[char] =
   ## Returns the template text in `lo ..< hi` as a view, so neither an identifier nor
   ## a registry lookup allocates. `lo ..< hi` is the half-open span the token carries.
   ##
-  ## A template, since the views check rejects a helper return over the `ref` type
-  ## as a borrow of the whole artifact once any later step takes it.
+  ## The template wording is required for the compiler's view analysis under
+  ## `--experimental:views`, which rejects a helper returning a view over a field
+  ## of the `ref` type.
   tmpl.jinja.toOpenArray(lo, hi - 1)
 
 template wordSpan(tmpl: CompiledTemplate, cx: Cx): openArray[char] =

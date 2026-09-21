@@ -8,8 +8,8 @@
 ## - name registries (`FilterNames`, `TestNames`, `MethodNames`) with the proc tables
 ##   they index, dispatched by name in jinja_interpolation
 ## Call arguments travel in the fixed-capacity inline carrier (`Arg`, `Args`) from jinja_data_model.
-## - a nil table entry is a declared name no template in the corpus uses, reported
-##   through `gapWhat` as a gap, never answered wrongly
+## - a nil table entry raises `gapWhat`, a declared name the corpus does not use
+##   reported as an unimplemented demand
 ## - globals stay in jinja_interpolation, their signatures reading the template text
 ##   and the injected ports, which this module cannot see
 
@@ -45,8 +45,8 @@ func findIn*[N: enum](names: array[N, string], n: openArray[char]): int =
       return k.ord
   -1
 func gapWhat*(what: string, name: openArray[char]): void {.noreturn.} =
-  ## Reports a declared registry name that no template in the corpus uses, so a gap is never
-  ## mistaken for a wrong answer. Only this report quotes `name`, so the span copies here alone.
+  ## Reports a declared registry name that no template in the corpus uses.
+  ## Only this report quotes `name`, so the span copies here alone.
   let quoted = spanString(name)
   raise jinjaErr(what & " `" & quoted & "` is not implemented; no template in the corpus uses it", cause = ceUnimplemented)
 
@@ -102,7 +102,7 @@ func tojsonFilter(v: JinjaVal, args: Args): JinjaVal =
         opts.kvSep = pyStr(a.val.xs.items[1])
     of akNone, akChars, akDefault:
       # Any argument outside the two keywords above is a gap, positional ones included, as before.
-      # A filter has no access to the template text, so the report names a keyword span by its bounds.
+      # A filter has no access to the template text, so the report names the keyword's start offset.
       gapWhat("tojson kwarg", $a.nameLo)
   strVal(toJson(v, opts))
 

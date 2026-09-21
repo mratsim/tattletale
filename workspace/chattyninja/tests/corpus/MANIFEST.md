@@ -71,7 +71,7 @@ Column notes:
 `if` /`elif`, the `defined` test, string concatenation and the `is defined` set-guard.
 Every corpus template loops over `messages`, so a byte-exact check here needs a minimal `nkFor` /`nkSet` too.
 
-No cheaper honest option exists. The second-cheapest template, `moonlight` (527 B), has the same shape plus `loop.first`.
+The second-cheapest template, `moonlight` (527 B), has the same shape plus `loop.first`.
 
 **Stage 2 (for + set + setNs + loop). ling30** (6041 B, 5 ok rows). Cheapest template carrying `nkSetNamespace`
 (2 change sites, 2 `namespace()` creations) plus `for` (5 sites incl. 1 multi-target), `set` (17),

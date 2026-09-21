@@ -334,7 +334,7 @@ func serDispatch(js: var Ser) =
       js.v = materializeVal(v)
       serDispatch(js)
   of vkLoop:
-    # `<` and `>` of the context form carry the tojson filter's HTML escaping.
+    # tojson escapes the `<` and `>` of the `<LoopContext>` form.
     serQueue(js, if js.mode == smJson: "\"\\u003cLoopContext\\u003e\"" else: "<LoopContext>")
     serFinish(js)
   of vkMacro:

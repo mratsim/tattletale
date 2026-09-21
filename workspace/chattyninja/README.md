@@ -1,7 +1,7 @@
 # chattyninja
 
-Jinja-family chat-template engine, pure Nim over `nim c`, no torch, no GPU,
-no Python at test time.
+Jinja-family chat-template engine, pure Nim, built with `nim c`.
+The test suite verifies recorded corpus bytes without Python, a tokenizer or a model.
 
 Templates compile to a flat append-only `seq[Node]` arena, a POD of six
 `int32` fields. Dispatch runs through the total `NodeKind`-indexed `Steps` table.
@@ -55,7 +55,7 @@ Delivery contract:
 - A piece longer than the window drains across calls, delivery itself never raising
   for a small window.
 - Window bytes written in a failing call are discarded and never re-delivered.
-- A cursor append that does not fit its borrowed scratch window raises `JinjaError`
-  with cause `ceScratch`, naming the shortfall.
+- A cursor append that does not fit its borrowed cursor window raises `JinjaError`
+  with cause `ceWindow`, naming the shortfall.
 
 `pullAll(context)` returns the whole render in one call.

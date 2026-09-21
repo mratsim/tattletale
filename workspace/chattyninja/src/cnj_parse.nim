@@ -140,11 +140,11 @@ func splitTags(p: var Parser): Tag =
     var hi = openAt
     if p.pendBr and lo < hi and p.src[lo] == '\n':
       inc lo
-    var stripAfter = false
     var kind = tkText
     var tLo = 0
     var tHi = 0
-    var afterTag = stop # offset just past the tag's closing delimiter
+    var afterTag: int # offset just past the tag's closing delimiter, set in every tag branch
+    var stripAfter: bool
     var isRaw = false
     if openAt < stop:
       if p.src.at("{#", openAt):
@@ -157,11 +157,11 @@ func splitTags(p: var Parser): Tag =
         #   `lstrip_blocks` the blanks preceding it on its line
         #   `-#}` the run after the tag
         #   trim_blocks one newline after it
-        let afterTag = c + 2
+        afterTag = c + 2
         var innerLo = openAt + 2
         var innerHi = c
         let stripBefore = innerLo < innerHi and p.src[innerLo] == '-'
-        let stripAfter = innerHi > innerLo and p.src[innerHi - 1] == '-'
+        stripAfter = innerHi > innerLo and p.src[innerHi - 1] == '-'
         if stripBefore:
           inc innerLo
         if stripAfter:

@@ -12,7 +12,7 @@
 ## - byte-exact delivery of every ok row through `pullAll`, a buffered pull loop,
 ##   windowed consumers, every err row raising the recorded error, declared gaps loud
 ## - the window contract, the for-filter raise with repull-resume, the macro scope pop,
-##   the ensure_ascii escape shapes, the compiled-form ABI
+##   the ensure_ascii escape shapes, the compiled artifact layout
 ## - allocation counting under `-d:nimAllocStats`
 ##
 ## Run:
@@ -79,8 +79,7 @@ type J = object
 type RenderMismatch = ref object of CatchableError
 
 type PullChunks[N: static int] = object
-  ## Bounded pull windows over one chattyninja render, the ring-window machine shape
-  ## in `workspace/toktoktok/tests/pull_chunks.nim`, adapted to byte windows.
+  ## Bounded pull windows over one chattyninja render, a fixed `N`-byte window per pull.
   ##
   ## Contract:
   ## - the tail window carries the remainder when the render length is not a multiple of N
@@ -462,7 +461,7 @@ static:
   # Node is `{kind, slots}` and nothing else. `SmallSeq[5, int32]` measures 40 bytes,
   # the one-byte kind pads to the tail pointer's alignment, so the per-node budget is
   # 48 bytes. Only a proc, `string` or `seq` member would change `sizeof`, so this pair
-  # of assertions rules out a proc field and a heap box without naming each forbidden type.
+  # of assertions checks the field set and the size, which together fix the layout.
   assert nodeFields == ["kind", "slots"], "Node must be exactly {kind, slots}"
   assert sizeof(SmallSeq[5, int32]) == 40, "SmallSeq[5, int32] layout: " & $sizeof(SmallSeq[5, int32])
   assert sizeof(Node) == 48, "Node layout: " & $sizeof(Node)
@@ -937,17 +936,17 @@ block macroScopePop:
       "a macro body binding leaked into the caller's name resolution"
 
 # `tojson` with `ensure_ascii` exercises every escape shape, control characters included,
-# plus the astral-codepoint surrogate pair. The recording environment never
-# passes `ensure_ascii`, so this pins the engine rendering with uppercase hex digits.
+# plus the astral-codepoint surrogate pair. The corpus records `ensure_ascii`-off output,
+# so this suite checks the engine's escape set directly: uppercase hex digits and the surrogate pair.
 # ---------------------------------------------------------------------------
 block ensureAsciiEscapes:
   let raw = strVal("a\tb\rc\bd\x0Ce\x01f\"g\\h<i>j&k'lém😀n")
   doAssert toJson(raw, JsonOpts(ensureAscii: true)) ==
       "\"a\\tb\\rc\\bd\\fe\\u0001f\\\"g\\\\h\\u003ci\\u003ej\\u0026k\\u0027l\\u00E9m\\uD83D\\uDE00n\"",
-      "the ensure_ascii rendering differs from the pinned escapes"
+      "the ensure_ascii rendering differs from the expected escapes"
   doAssert toJson(raw) ==
       "\"a\\tb\\rc\\bd\\fe\\u0001f\\\"g\\\\h\\u003ci\\u003ej\\u0026k\\u0027lém😀n\"",
-      "the raw-utf8 rendering differs from the pinned escapes"
+      "the raw-utf8 rendering differs from the expected escapes"
 
 # Allocation counting. Compiled only under `-d:nimAllocStats`, and a failing doAssert
 # there hangs the run with no output instead of failing it.

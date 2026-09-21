@@ -55,7 +55,7 @@ for i, n in nodes:
         "node " & $i & " has an out-of-range body link"
 
 # An expression is never a node. Every `nkEmit` payload is one `lo..hi` span and nothing else,
-# the three-slot shape with no subgraph below it, which is the trampoline the design rejected.
+# the three-slot shape with no subgraph below it.
 for i, n in nodes:
   if n.kind == nkEmit:
     doAssert int(n.slots.len) == 3, "node " & $i & ": an expression must not become a node"

@@ -32,7 +32,7 @@ type
 
   PortEnv = object
     ## Adapter state one dispatch's ports read. Holds the artifact, the shared symbol arena,
-    ## the render state the trampolines serve. Built on the stack per dispatch,
+    ## the render state the port procs serve. Built on the stack per dispatch,
     ## never stored in the render state, so a copied `Context` never carries a dangling adapter.
     tmpl: CompiledTemplate
     sym: ptr CompiledSymbols
@@ -59,7 +59,7 @@ func scopeHas(st: RenderState, id: int32, val: var JinjaVal): bool =
   false
 
 func portLookup(env: pointer, name: openArray[char]): JinjaVal {.nimcall.} =
-  ## Lookup port trampoline. Returns the binding of `name` in the scopes, else in the render
+  ## Lookup port forwarder. Returns the binding of `name` in the scopes, else in the render
   ## context root, else undefined. Absence is a value, never an error.
   ## `is defined` tests for exactly that shape.
   let e = cast[ptr PortEnv](env)
@@ -72,11 +72,11 @@ func portLookup(env: pointer, name: openArray[char]): JinjaVal {.nimcall.} =
   undefinedVal()
 
 func portClock(env: pointer): float64 {.nimcall.} =
-  ## Clock port trampoline returning the render's injected epoch.
+  ## Clock port forwarder returning the render's injected epoch.
   cast[ptr PortEnv](env)[].st[].clock
 
 func portForce(env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall.} =
-  ## Macro-forcer trampoline, running the body to completion on the adapter's render
+  ## Macro-forcer port forwarder, running the body to completion on the adapter's render
   ## state and returning the captured text value.
   let e = cast[ptr PortEnv](env)
   forceMacro(e.tmpl, e.sym, e.st[], mc, args)
@@ -232,7 +232,7 @@ func loopStateOf(v: JinjaVal, lo, hi: int): LoopState =
   of vkRange: iterRange(v)
   else: notIterable(v, lo, hi)
 
-func bindTargets(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, n: int32, item: JinjaVal) =
+func bindTargets(tmpl: CompiledTemplate, st: var RenderState, n: int32, item: JinjaVal) =
   ## Binds the `nkFor` loop targets at `n`, more than one target unpacking a sequence, which
   ## is what `x.items()` feeds through `{% for k, v in x.items() %}`.
   template nd: Node = tmpl.nodes[n]
@@ -246,7 +246,7 @@ func bindTargets(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rende
     for i in 0 ..< ntargets:
       st.bindName(nd.targetAt(i), item.xs.items[i])
 
-func advanceFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) =
+func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: int32) =
   ## Re-entry path. Moves the shared cursor to the next item passing the filter clause, re-enters
   ## the body, or closes the frame and continues past the loop.
   ##
@@ -267,7 +267,7 @@ func advanceFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
       st.curNode = nd.succ
       return
     var keep = nd.filterLo == NoLink
-    bindTargets(tmpl, sym, st, n, lp.loopItem(idx))
+    bindTargets(tmpl, st, n, lp.loopItem(idx))
     if nd.filterLo != NoLink:
       let evaluated = evalSpan(tmpl, ports, nd.filterLo, nd.filterHi)
       keep = isTruthy(evaluated)
@@ -280,7 +280,7 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   ##   a matching frame on top of the stack means advance, anything else means set up the iteration.
   template nd: Node = tmpl.nodes[n]
   if st.frames.len > 0 and st.frames[^1].kind == frFor and st.frames[^1].node == n:
-    advanceFor(tmpl, sym, st, ports, n)
+    advanceFor(tmpl, st, ports, n)
     return
   let lp = loopStateOf(evalSpan(tmpl, ports, nd.lo, nd.hi), nd.lo.int, nd.hi.int)
   if lp.loopLen == 0:
@@ -290,7 +290,7 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   st.frames.add Frame(node: n, kind: frFor, loop: lp,
       scopeAt: st.scopes.len, filterLo: nd.filterLo, filterHi: nd.filterHi)
   lp.idx = 0
-  bindTargets(tmpl, sym, st, n, lp.loopItem(0))
+  bindTargets(tmpl, st, n, lp.loopItem(0))
   st.bindName(nd.loopName, loopVal(lp))
   st.curNode = if nd.child == NoLink: nd.succ else: nd.child
 
@@ -355,7 +355,7 @@ func stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rend
 
 const
   CaptureDrainCap = 256
-    ## Stack scratch `capturePend` hands to `pullSer` per drain call, sized to hold a whole
+    ## Stack buffer `capturePend` hands to `pullSer` per drain call, sized to hold a whole
     ## scalar rendering in the common case so the capture copies in one grow.
 
   Steps*: array[NodeKind, Step] = [
@@ -575,7 +575,8 @@ iterator items*(c: var Context): openArray[char] =
     yield buf.toOpenArray(0, n - 1)
 
 func pullAll*(c: var Context): string =
-  ## Returns every render byte, chunking composing with `cur`, so the two-pass counting contract needs no separate counting pass.
+  ## Returns the whole render in one call. Chunking composes with `cur`, so a consumer
+  ## that counts bytes first can redeliver from a fresh `Context` without a counting pass.
   var buf: array[ChunkSize, char]
   while true:
     let n = pull(c, buf)
