@@ -60,13 +60,19 @@ func argKeyword*(name: openArray[char]): ArgKeyword =
 # Argument helpers:
 
 func getArg*(args: Args, pos: int, kw: ArgKeyword, default: JinjaVal): JinjaVal =
-  ## Returns the argument bound under `kw`, else the positional slot `pos`, else `default`.
+  ## Returns the argument bound under `kw`, else the `pos`-th positional in call order,
+  ## else `default`. Positionals bind by their own count, so a keyword sitting earlier
+  ## in the carrier never shifts the positional sequence.
   if kw != akNone:
     for a in args.argItems:
       if a.kw == kw:
         return a.val
-  if pos < args.n and args.vals[pos].nameLo == NoLink:
-    return args.vals[pos].val
+  var seen = 0
+  for a in args.argItems:
+    if a.nameLo == NoLink:
+      if seen == pos:
+        return a.val
+      inc seen
   default
 
 const

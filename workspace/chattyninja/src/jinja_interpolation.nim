@@ -22,7 +22,7 @@ import cnj_types, jinja_data_model, jinja_serialize, jinja_builtins
 
 type
   ExKind = enum
-    exEof, exName, exInt, exFloat, exStr, exPunct
+    exEof, exName, exInt, exFloat, exStr, exPunct, exIntLow
 
   ExTok = object
     kind: ExKind
@@ -116,6 +116,24 @@ func decodeEscapes(s: openArray[char], lo, hi: int): string =
   var sb = over(result)
   sb.decodeEscapesInto(s, lo, hi)
 
+const
+  IntLowLit = "9223372036854775808"
+    ## Only digit spelling past int64 naming a representable value, the value int64.low
+    ## under a unary minus. The lexer emits a marker token for it, any other past-range
+    ## magnitude still raising in `parseIntToken`.
+
+func checkArgOrder(a: Args, lo, hi: int) =
+  ## Raises located at the filter, method or test call when a positional argument follows
+  ## a keyword one, the order `bindMacroArgs` already rejects for macros, a positional
+  ## past a keyword otherwise binding under no parameter and silently dropping.
+  var keywordSeen = false
+  for x in a.argItems:
+    if x.nameLo == NoLink:
+      if keywordSeen:
+        raise jinjaErr("a positional argument follows a keyword argument", lo, hi - lo)
+    else:
+      keywordSeen = true
+
 func parseIntToken(s: openArray[char], at: int): int64 =
   ## Returns the integer the token bytes spell, an int64-range magnitude breach
   ## raising a located `JinjaError` at the literal.
@@ -161,6 +179,8 @@ func lexNumber(s: openArray[char], i: var int, hi: int): ExTok =
   let text = s.toOpenArray(start, i - 1)
   if isFloat:
     ExTok(kind: exFloat, lo: start, hi: i, f: parseFloatToken(text))
+  elif text == IntLowLit:
+    ExTok(kind: exIntLow, lo: start, hi: i)
   else:
     ExTok(kind: exInt, lo: start, hi: i, i: parseIntToken(text, start))
 
@@ -777,6 +797,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
         let mi = findIn(MethodNames, tmpl.wordSpan(lo, hi))
         if mi < 0:
           raise jinjaErr("unknown method `" & spanString(tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo)
+        checkArgOrder(a, lo, hi)
         let mp = MethodProcs[MethodName mi]
         if mp.isNil:
           gapWhat("method", tmpl.wordSpan(lo, hi))
@@ -838,6 +859,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       let fi = findIn(FilterNames, tmpl.wordSpan(lo, hi))
       if fi < 0:
         raise jinjaErr("unknown filter `" & spanString(tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo, cause = ceUnimplemented)
+      checkArgOrder(a, lo, hi)
       let fp = FilterProcs[FilterName fi]
       if fp.isNil:
         gapWhat("filter", tmpl.wordSpan(lo, hi))
@@ -861,6 +883,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       let ti = findIn(TestNames, tmpl.wordSpan(lo, hi))
       if ti < 0:
         raise jinjaErr("unknown test `" & spanString(tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo)
+      checkArgOrder(a, lo, hi)
       let tp = TestProcs[TestName ti]
       if tp.isNil:
         gapWhat("test", tmpl.wordSpan(lo, hi))
@@ -879,6 +902,9 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   of exInt:
     v = intVal(cx.tok.i)
     advance(tmpl, cx)
+  of exIntLow:
+    raise jinjaErr("integer literal `" & IntLowLit & "` is outside the int64 range",
+        cx.tok.lo, cx.tok.hi - cx.tok.lo)
   of exFloat:
     v = floatVal(cx.tok.f)
     advance(tmpl, cx)
@@ -989,6 +1015,11 @@ func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
     advance(tmpl, cx)
+    if neg and cx.tok.kind == exIntLow:
+      # Digits spelling exactly 2^63 render negated as int64.low, Python's rendering.
+      # A re-negation or `+` reaches the raise through value or primary.
+      advance(tmpl, cx)
+      return intVal(int64.low)
     let operandLo = cx.tok.lo
     enterDepth(cx)
     let v = evalItem(ports, cx, unary(tmpl, ports, cx))

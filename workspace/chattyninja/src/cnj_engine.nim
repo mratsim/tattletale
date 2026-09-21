@@ -431,7 +431,12 @@ func stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderS
   if ns.kind != vkNs:
     raise jinjaErr("`" & sym[].names[nd.target] & "` is not a namespace, so it has no `" &
         sym[].names[nd.field] & "` to set", nd.lo.int, nd.hi.int - nd.lo.int)
-  dictSet(ns.d, sym[].names[nd.field], evalSpan(tmpl, ports, nd.lo, nd.hi))
+  var v = evalSpan(tmpl, ports, nd.lo, nd.hi)
+  if v.kind == vkCall:
+    # A macro call evaluates at its call site, its output bound, matching upstream:
+    # the body's side effects land once, never re-run by a later use.
+    v = forceCondCall(ports, v, nd.lo, nd.hi)
+  dictSet(ns.d, sym[].names[nd.field], v)
   st.curNode = nd.succ
 
 func stepSetBlock(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
@@ -496,7 +501,6 @@ func bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Ren
   ## - positionals bind by their own count, keywords by name, defaults last
   ## - each default is evaluated after those before it are bound, inside the macro
   ##   scope that a default sees in Jinja
-  ## - positionals bind by their own count, keywords by name, defaults last
   ## Raises located, `lo` and `hi` bounding the call site and `NoOffset` when the forcing
   ## side has none:
   ## - a positional past the parameter list

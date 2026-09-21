@@ -97,6 +97,25 @@ block integerOverflowRaisesLocated:
     reported = e.what
   doAssert "integer overflow in unary" in reported, reported
 
+# A digit spelling of exactly 2^63 renders as int64.low under an immediate unary `-`,
+# Python's rendering of `-9223372036854775808`. Every other past-int64 magnitude raises,
+# the positive spelling and a re-negated one, a `--` shape overflowing unary.
+doAssert render("-9223372036854775808") == "-9223372036854775808", "int64 low renders as its literal spelling"
+doAssert renderStmt("{% set q = -9223372036854775808 %}{{ q }}") == "-9223372036854775808",
+    "int64 low stays an int through a set"
+doAssert render("-9223372036854775808 == x", ctx(("x", intVal(int64.low)))) == "True",
+    "int64 low compares as the data's int64.low"
+try:
+  discard render("9223372036854775808")
+  doAssert false, "the positive 2^63 spelling did not raise"
+except JinjaError as e:
+  doAssert "outside the int64 range" in e.what, e.what
+try:
+  discard render("--9223372036854775808")
+  doAssert false, "the re-negated 2^63 spelling did not raise"
+except JinjaError as e:
+  doAssert "integer overflow in unary" in e.what, e.what
+
 # Comparison, membership
 # ---------------------------------------------------------------------------
 
@@ -243,9 +262,12 @@ doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% for x in [1, 2] if m() %
 
 # A macro call evaluates once at its call site, in `{% set %}` and the for-iterable
 # position like in a condition, matching upstream Jinja.
-doAssert renderStmt("{% set ns = namespace(c = 0) %}{% macro m() %}{% set ns.c = 1 %}{% endmacro %}" &
+doAssert renderStmt("{% set ns = namespace(c = 0) %}{% macro m() %}{% set ns.c = ns.c + 1 %}{% endmacro %}" &
     "{% set x = m() %}{{ ns.c }}") == "1",
-    "a macro call bound by `set` ran at the set"
+    "a macro call bound by `set` ran exactly once at the set"
+doAssert renderStmt("{% set ns = namespace(n = 0) %}{% macro m() %}{% set ns.n = ns.n + 1 %}X{% endmacro %}" &
+    "{% set ns.c = m() %}{{ ns.n }}{{ ns.c }}") == "1X",
+    "a namespace-attribute `set` of a macro call ran the body at the set"
 doAssert renderStmt("{% macro m() %}ab{% endmacro %}{% for c in m() %}[{{ c }}]{% endfor %}") == "[a][b]",
     "a macro call as the for iterable iterates its rendered bytes"
 
@@ -281,6 +303,24 @@ block macroArgBinding:
       "excess positional"
   doAssert renderStmt("{% macro m(x, y = 9) %}<{{ x }}{{ y }}>{% endmacro %}{{ m(1, y=2) }}") == "<12>",
       "positional, keyword and default binding still render"
+
+# Filter, method and test calls share the macro carrier's argument order, so a positional
+# after a keyword binds under no parameter and drops, the callee raising located.
+# `getArg` binds the pos-th positional by its own count, and the raise keeps a carrier
+# mis-ordered this way from ever reaching one.
+block calleeArgOrder:
+  proc reportedOf(src: string): string =
+    try:
+      discard renderStmt(src)
+      doAssert false, "a misplaced callee argument did not raise: " & src
+    except JinjaError as e:
+      result = e.what
+  doAssert "positional argument follows a keyword argument" in
+      reportedOf("{{ [1, 2, 3] | join(sep = ',', '-') }}"), "positional after keyword in a filter call"
+  doAssert "positional argument follows a keyword argument" in
+      reportedOf("{{ 'a,b,c'.split(sep = ',', 1) | join('|') }}"), "positional after keyword in a method call"
+  doAssert renderStmt("{{ [1, 2, 3] | join(',') }}") == "1,2,3",
+      "well-ordered filter arguments keep binding"
 # An integer constant after a dot subscripts, upstream's `m.content.0` spelling of `m.content[0]`.
 doAssert render("['a', 'b'].0") == "a"
 doAssert render("['a', 'b'].1") == "b"
