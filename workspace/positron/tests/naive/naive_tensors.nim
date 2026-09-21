@@ -135,3 +135,75 @@ proc widenF16*(c: NaiveCube[uint16]): NaiveCube[float32] =
 proc widenBf16*(c: NaiveCube[uint16]): NaiveCube[float32] =
   ## bfloat16 bit patterns → exact fp32 values.
   mapElemsCube(c, bf16ToF32)
+
+
+# fp64 tensor preparation for the delta-rule tier, fp64 spellings compare
+# against each other over the same widened inputs and per-run state copies
+
+proc widenF64*[T: float32|float64](m: NaiveMat[T]): NaiveMat[float64] =
+  ## Returns the exact fp64 widening of the matrix, element for element.
+  ## The f32 to f64 widening is lossless, so an fp32 run and an fp64 run
+  ## fed from this widening see identical values.
+  result.rows = m.rows
+  result.cols = m.cols
+  result.data = newSeq[float64](m.data.len)
+  for i in 0 ..< m.data.len:
+    result.data[i] = float64(m.data[i])
+
+proc widenF64*[T: float32|float64](t: NaiveCube[T]): NaiveCube[float64] =
+  ## Returns the exact fp64 widening of the cube, element for element.
+  result.planes = t.planes
+  result.rows = t.rows
+  result.cols = t.cols
+  result.data = newSeq[float64](t.data.len)
+  for i in 0 ..< t.data.len:
+    result.data[i] = float64(t.data[i])
+
+proc copyOf*[T](m: NaiveMat[T]): NaiveMat[T] =
+  ## Returns an independent copy of the matrix.
+  result.rows = m.rows
+  result.cols = m.cols
+  result.data = newSeq[T](m.data.len)
+  for i in 0 ..< m.data.len:
+    result.data[i] = m.data[i]
+
+proc copyOf*[T](t: NaiveCube[T]): NaiveCube[T] =
+  ## Returns an independent copy of the cube.
+  result.planes = t.planes
+  result.rows = t.rows
+  result.cols = t.cols
+  result.data = newSeq[T](t.data.len)
+  for i in 0 ..< t.data.len:
+    result.data[i] = t.data[i]
+
+# Run-width casts for suites that execute one comparison at fp32 and fp64
+
+proc castCube*[F: float32|float64](t: NaiveCube[float32]): NaiveCube[F] =
+  ## Returns the cube at the run's float width, an independent copy when
+  ## F is fp32 and the exact widening when F is fp64, so both dtype runs
+  ## of one comparison see identical values.
+  when F is float32:
+    result = t.copyOf()
+  else:
+    result = t.widenF64()
+
+proc castMat*[F: float32|float64](t: NaiveMat[float32]): NaiveMat[F] =
+  ## Returns the matrix at the run's float width, same contract as castCube.
+  when F is float32:
+    result = t.copyOf()
+  else:
+    result = t.widenF64()
+
+proc zerosCube*[F: float32|float64](p, r, c: int): NaiveCube[F] =
+  ## Returns a zero cube of the given shape at the run's float width.
+  NaiveCube[F](planes: p, rows: r, cols: c, data: newSeq[F](p * r * c))
+
+proc fillMat*[T](m: var NaiveMat[T]; value: T) =
+  ## Overwrites every matrix element with `value`.
+  for i in 0 ..< m.data.len:
+    m.data[i] = value
+
+proc fillCube*[T](t: var NaiveCube[T]; value: T) =
+  ## Overwrites every cube element with `value`.
+  for i in 0 ..< t.data.len:
+    t.data[i] = value

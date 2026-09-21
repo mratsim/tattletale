@@ -86,3 +86,27 @@ func snapshotSeq*[T](data: openArray[T]): seq[T] =
   result = newSeq[T](data.len)
   for i in 0 ..< data.len:
     result[i] = data[i]
+
+func worstDiffF64*(got, want: openArray[float64]): float64 =
+  ## Returns the largest |got[i] - want[i]| over the pair of fp64 sequences.
+  ##
+  ## Expected input:
+  ## - two equal-length f64 sequences, two empty sequences are equal
+  ##   by construction and the result is 0.0
+  ## - no NaN on either side, a NaN raises ValueError (a NaN difference reads back as zero)
+  doAssert got.len == want.len,
+    "sequence length mismatch: got " & $got.len & ", want " & $want.len
+  result = 0.0
+  for i in 0 ..< got.len:
+    let d = abs(got[i] - want[i])
+    if d.classify == fcNaN:
+      raise newException(ValueError,
+        "element " & $i & " of the compared pair is NaN")
+    if d > result: result = d
+
+func maxAbsF64*(vals: openArray[float64]): float64 =
+  ## Returns the largest |vals[i]|, 0.0 for an empty sequence.
+  result = 0.0
+  for i in 0 ..< vals.len:
+    let a = abs(vals[i])
+    if a > result: result = a
