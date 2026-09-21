@@ -1,54 +1,23 @@
 #!/usr/bin/env python3
-"""Greedy-text-generation fixtures of the gpt-oss-20b checkpoint, token
-chains argmax-decoded through the installed reference modeling on torch
-bf16, Metal (mps).
+"""Tier-04 greedy-text-generation fixture generator, gpt-oss-20b,
+token chains argmax-decoded through the installed reference modeling on Metal (mps),
+fixture-only family, the Nim port stays parked, no consumer exists yet.
 
-Fixture-only family, the Nim implementation stays parked. The chain rows
-carry the reference surfaces a later port consumes, no consumer exists yet.
+- <prompt>_<horizon>_steps.json.zst per prompt, the ttt-tf-001-greedy-steps-h2 chain
+- plus the ttt-tf-005-argmax-decisions frame over the same steps
+- hand-rolled single-token decode over the whole-prompt prefill, single unpadded chains, each record carries the argmax pick
 
-- fixture dir tests/fixtures/bf16-04-greedy-text-generation/gpt-oss-20b/
-- consumer tests/q_bf16/t_bf16_gptoss_04_greedy_text_generation.nim
+- the top-32 ids with f32 logits, the argmax margin and the softmax tail probability
+- a chain pick equal to a configured eos id (200002, 199999 or 200012) fails the run, every recorded pick stays a live argmax pick
+- the third prompt prefill-crosses the 128 sliding window, the sliding layers record the windowed-mask path over the grown cache
 
-| file                                        | contents                                                  |
-| ------------------------------------------- | --------------------------------------------------------- |
-| <prompt>_<horizon>_steps.json.zst           | the ttt-tf-001-greedy-steps-h2 chain with the env frame   |
-| <prompt>_<horizon>_steps.decisions.json.zst | the ttt-tf-005-argmax-decisions frame over the same steps |
+- recorded_from defaults to m4max-metal (TTT_RECORD_FROM overrides), `--chain N` records only chain N (0-based)
+- the run refuses the weight load under 64 GiB free+inactive+speculative pool, the dequantized weights sit near 40 GiB
+- other python/torch processes holding RAM block it
 
-Chain contract:
-
-- hand-rolled single-token decode over the whole-prompt prefill, single
-  unpadded chains, no batched pass backs the values
-- each step records the argmax pick, the top-32 ids with f32 logits,
-  the argmax margin and the softmax tail probability past the top-32 support
-- a chain pick that equals a configured eos id (200002, 199999 or 200012)
-  fails the run, every recorded step stays a live argmax pick
-
-The third prompt prefill-crosses the 128 sliding window.
-The sliding layers record the windowed-mask path over the grown cache,
-the full layers see the whole context.
-
-Recording environment:
-
-- recorded_from defaults to m4max-metal, the TTT_RECORD_FROM environment
-  variable overrides it
-- recording runs on mps (Metal), the replay device stays the consuming suite's call
-
-Chain staging:
-
-- the 24-layer routed decode runs a fraction of a second per step on Metal
-  and one chain fits the execution tool's per-command timeout, the chains
-  still record one invocation at a time
-- `--chain N` records only chain N (0-based), a bare run records all three
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_gptoss_04_greedy_text_generation.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 64 GiB (the dequantized weights sit near 40 GiB)
-- another python/torch process holding RAM also blocks the run
 """
 
 import hashlib
@@ -137,13 +106,11 @@ def prompt_token_ids(tokenizer, text: str) -> tuple:
 def greedy_chain(model, token_ids: tuple, max_new_tokens: int) -> dict:
     """Greedy-decodes one unpadded chain through the installed forward.
 
-    Args:
-    - model, token_ids, max_new_tokens, the prompt ids and the chain horizon
+    Takes the loaded reference model, the prompt ids and the chain horizon.
 
-    Returns:
-    - the generated ids plus one record per step over the deciding
-      last-position logits row, each record carrying the argmax pick, top-32
-      f32 logits, margin and tail probability
+    Returns the generated ids plus one record per step over the deciding
+    last-position logits row, each record carrying the argmax pick, top-32
+    f32 logits, margin and tail probability.
 
     The prefill covers the whole prompt and returns the past-key cache, each
     step runs one single-token forward over that cache, the previous argmax

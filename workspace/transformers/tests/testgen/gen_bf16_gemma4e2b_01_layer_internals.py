@@ -1,49 +1,23 @@
 #!/usr/bin/env python3
-"""Layer-internals fixture file of the gemma-4-E2B-it checkpoint, recorded
-with torch bf16 on Metal (mps) under the installed reference modeling.
+"""Tier-01 layer-internals fixture generator, gemma-4-E2B-it,
+torch bf16 on Metal (mps) under the installed reference modeling,
 
-Single-file grammar with one fixture file per family layer group, one bare bf16
-driving tensor per mixture, all recorded intermediates live on the stats
-frame as fingerprints.
+- consumer tests/q_bf16/t_bf16_gemma4e2b_01_layer_internals.nim
+- one bare bf16 driving tensor per mixture, recorded intermediates stay on the stats frame as fingerprints
+- the dual-dim PLE shape, 4:1 sliding/full layer pattern, window 512, sliding head_dim 256, full head_dim 512, 8 q heads over 1 kv head
 
-No Qwen3 analog exists for these tier-01 rows. Qwen3 runs one uniform
-full-attention kind over one head dim. This checkpoint is the dual-dim PLE shape:
+- layers 15 through 34 share kv, the stores sit at layers 13 and 14, the mlp is the dense double-wide kind, no routed block
 
-- 4 sliding_attention layers then 1 full_attention layer, repeating, window 512
-- sliding layers run head_dim 256, full layers run head_dim 512
-- layers 15 through 34 share the kv stored at layers 13 (sliding) and 14 (full)
+- the mixtures sit on layer 0, the layer chain over layers 13, 14, 15 and 19 in model order, the model-level PLE projection
+- at seq 6 both mask kinds skip to the sdpa is_causal path (mask None), the tier-04 records carry the window behavior
+- fixture dir tests/fixtures/bf16-01-layer-internals/gemma-4-E2B-it-layer-0-13-14-15-19/
 
-| mixture | row                                                                                          |
-| ------- | -------------------------------------------------------------------------------------------- |
-| layer0  | decoder layer 0, sliding attention with own kv plus the full PLE block, one seeded input     |
-| chain   | layers 13, 14, 15 and 19 in model order, the kv-sharing handoff both layer kinds consume     |
-| ple     | the model-level PLE pipeline over real token ids, token identity plus the context projection |
+- file layer0-13-14-15-19-gemma-4-E2B-it-00.safetensor
+- the run refuses the weight load under 32 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-| file                                                              | contents                                                        |
-| ----------------------------------------------------------------- | --------------------------------------------------------------- |
-| layer0-13-14-15-19-gemma-4-E2B-it-00.safetensor                   | layer0.input, layer0.ple_input, chain inputs, ple.inputs_embeds |
-| layer0-13-14-15-19-gemma-4-E2B-it-00.safetensor.metadata.json.zst | per-mixture metadata under the mixtures key                     |
-| layer0-13-14-15-19-gemma-4-E2B-it-00.safetensor.stats.json.zst    | one uniform record per recorded tensor                          |
-
-Stats keys carry the mixture-level `layer0.` / `chain.layer13.` prefixes,
-the PLE block rows sit under each layer's own `ple.` prefix.
-
-At seq 6 both mask kinds skip to the sdpa is_causal path (mask None)
-and the 512-token window does not constrain these rows, tier-04 carries
-the window behavior.
-
-Consumed by tests/q_bf16/t_bf16_gemma4e2b_01_layer_internals.nim, one
-assertion block per mixture.
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_gemma4e2b_01_layer_internals.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 32 GiB
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict
@@ -185,20 +159,17 @@ def check_ram() -> None:
 
 def load_model() -> Gemma4ForConditionalGeneration:
     """Loads the full reference model through the installed from_pretrained,
-    bf16, eval, Metal (mps).
+    bf16, eval, Metal (mps), asserting the dual-dim PLE shape identity.
 
-    Returns:
-    - the model in eval mode, the recorded decoder layers 0, 13, 14, 15 and 19
-      plus the per-layer-kind rotary feed every mixture consumes
-
-    Identity asserts of the checkpoint config, dual-dim PLE shape:
-
-    - 4 sliding_attention layers then 1 full_attention layer, repeating, window 512
+    - 4 sliding_attention layers over 1 full_attention layer repeating, window 512
     - sliding head_dim 256, full head_dim 512, 8 q heads over 1 kv head
     - layers 15 through 34 share kv, the stores sit at layers 13 and 14
 
-    The PLE pipeline carries width 256 over 35 layers, the mlp is the dense
-    double-wide kind with no routed block.
+    - the PLE projection carries width 256 over 35 layers, the mlp is
+    the dense double-wide kind with no routed block
+
+    Returns the model in eval mode, the recorded decoder layers 0, 13, 14, 15
+    and 19 plus the per-layer-kind rotary feed every mixture consumes.
     """
     model = Gemma4ForConditionalGeneration.from_pretrained(
         MODEL_DIR, dtype=torch.bfloat16)
@@ -549,16 +520,13 @@ def generate_chain_mixture(model: Gemma4ForConditionalGeneration, tcfg) -> tuple
 
 
 def generate_ple_mixture(model: Gemma4ForConditionalGeneration, tcfg) -> tuple:
-    """Records the model-level PLE pipeline over real token ids, the token
+    """Records the model-level PLE projection over real token ids, the token
     identity embedding plus the context projection and their combination.
 
-    Args:
-    - model, tcfg, the loaded reference model and its parsed text config
+    Takes the loaded reference model and its parsed text config.
 
-    Returns:
-    - meta, the mixture metadata
-    - payload, the driving input tensor under its file name
-    - captured, the stats-frame entries namespaced under ple.
+    Returns the mixture metadata, the driving input tensor under its file name,
+    and the stats-frame entries namespaced under ple.
     """
     lm = model.model.language_model
     ids = torch.tensor([PLE_TOKEN_IDS], device="mps")

@@ -1,62 +1,23 @@
 #!/usr/bin/env python3
-"""Layer-internals fixture file of the gemma-4-12B-it checkpoint, recorded
-with torch bf16 on Metal (mps) under the installed reference modeling.
+"""Tier-01 layer-internals fixture generator, gemma-4-12B-it,
+torch bf16 on Metal (mps) under the installed reference modeling,
 
-Single-file grammar with one fixture file per family layer group, one bare bf16
-driving tensor per mixture, all recorded intermediates live on the stats
-frame as fingerprints.
+- consumer tests/q_bf16/t_bf16_gemma412b_01_layer_internals.nim
+- one bare bf16 driving tensor per mixture, recorded intermediates stay on the stats frame as fingerprints
+- the 5:1 sliding/full layer pattern, window 1024, sliding head_dim 256 over 8 kv heads, full head_dim 512 over 1 kv head
 
-No Qwen3 analog exists for these tier-01 rows. Qwen3 runs one uniform
-full-attention kind over one head dim. This checkpoint is the dual-dim
-k_eq_v shape:
+- the mixtures sit on layer 0 (sliding, own kv, dense mlp) and layer 5 (full_attention, the k_eq_v cache boundary)
 
-- 5 sliding_attention layers then 1 full_attention layer, repeating, window 1024
-- sliding layers run head_dim 256 over 8 kv heads, full layers run head_dim 512
-  over 1 kv head
-- full layers carry attention_k_eq_v with no v_proj weight, the value rows
-  derive from the shared k projection through the unscaled v_norm
+- the full layers carry attention_k_eq_v with no v_proj weight, the value rows are v_norm applied to the shared k projection
+- layer5 records cache_k / cache_v beside the k_proj_output row the V derivation consumes
+- at seq 6 both mask kinds skip to the sdpa is_causal path (mask None), the tier-04 records carry the window behavior
 
-| mixture | row                                                                                  |
-| ------- | ------------------------------------------------------------------------------------ |
-| layer0  | decoder layer 0, sliding attention with own kv plus the dense mlp, one seeded input  |
-| layer5  | decoder layer 5, the k_eq_v full attention with its cache boundary, one seeded input |
+- fixture dir tests/fixtures/bf16-01-layer-internals/gemma-4-12B-it-layer-0-5/, file layer0-5-gemma-4-12B-it-00.safetensor
+- the run refuses the weight load under 48 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-| file                                                    | contents                                    |
-| ------------------------------------------------------- | ------------------------------------------- |
-| layer0-5-gemma-4-12B-it-00.safetensor                   | layer0.input, layer5.input                  |
-| layer0-5-gemma-4-12B-it-00.safetensor.metadata.json.zst | per-mixture metadata under the mixtures key |
-| layer0-5-gemma-4-12B-it-00.safetensor.stats.json.zst    | one uniform record per recorded tensor      |
-
-Stats keys carry the mixture-level `layer0.` / `layer5.` prefixes.
-
-The k_eq_v cache boundary, measured against the reference before recording.
-The reference does not store identical K and V tensors:
-
-- the full-layer value rows are v_norm applied to the same k projection
-  the keys consume, the keys are the rotated scaled k_norm of that projection
-- the reference DynamicCache keeps K and V as separate entries, the tying
-  lives at the projection level with no v_proj weight on the full layers
-
-The layer5 mixture records the cache-boundary rows the reference stores,
-`layer5.cache_k` / `layer5.cache_v`, beside the k projection source row
-`layer5.k_proj_output` the V derivation consumes.
-
-At seq 6 both mask kinds skip to the sdpa is_causal path (mask None)
-and the 1024-token window does not constrain these rows, tier-04 carries
-the window behavior.
-
-Consumed by tests/q_bf16/t_bf16_gemma412b_01_layer_internals.nim, one
-assertion block per mixture.
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_gemma412b_01_layer_internals.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 48 GiB
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict

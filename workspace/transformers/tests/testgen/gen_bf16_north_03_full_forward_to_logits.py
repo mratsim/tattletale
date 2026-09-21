@@ -1,48 +1,24 @@
 #!/usr/bin/env python3
-"""Full-forward-to-logits fixtures of the North-Mini-Code-1.0 checkpoint,
-recorded through the installed transformers modeling on torch bf16, Metal (mps).
-The chain covers embed, all 49 decoder layers, the final norm and lm_head.
+"""Tier-03 full-forward-to-logits fixture generator, North-Mini-Code-1.0,
+torch bf16 on Metal (mps) through the installed transformers modeling,
 
-- fixture dir tests/fixtures/bf16-03-full-forward-to-logits/North-Mini-Code-1.0/
 - consumer tests/q_bf16/t_bf16_north_03_full_forward_to_logits.nim
+- embed through all 49 decoder layers plus the final norm and lm_head, one boundary slice layer-<i>.safetensor per layer
+- the metadata rows carry the routed-decision margins
 
-| file                                   | contents                                                                       |
-| -------------------------------------- | ------------------------------------------------------------------------------ |
-| layer-<i>.safetensor                   | the chain boundary slice layer_input_seq, the routed layers also the topk rows |
-| layer-<i>.safetensor.metadata.json.zst | the layer identity, the layer kinds and the routed-decision margins            |
-| layer-<i>.safetensor.stats.json.zst    | the ttt-tf-004-uniform-stats frame over the floating-point payload tensors     |
-| final_logits.decisions.json.zst        | the ttt-tf-005-argmax-decisions frame, one record per input position           |
+- final_logits.decisions.json.zst carries the ttt-tf-005-argmax-decisions frame, one record per input position
 
-- the prompt token ids are hard-asserted against the recorded corpus ids,
-  a tokenizer drift fails the recording
-- the forward runs twice, every capture and the logits assert run-to-run
-  equal before anything is written
-- routed layers carry the topk_indices and routing_weights tensors plus
-  per-layer boundary margins of the sigmoid top-k selection, the expert ids
-  compare on the recorded margins, floor 1e-4
+- the prompt token ids are hard-asserted against the recorded corpus ids, a tokenizer drift fails the recording
+- the forward runs twice, every capture and the logits assert run-to-run equal before anything is written
+- recorded_from defaults to m4max-metal (TTT_RECORD_FROM overrides), replay stays on the consuming suite's call
 
-The reference runs the eager expert loop on both recording and replay
-sides alike, no dispatch band measurement exists for this family.
+- routed layers carry the topk_indices and routing_weights tensors, the expert ids compare on the recorded margins, floor 1e-4
+- the reference runs the eager expert loop on both the recording and the replay sides
+- the run refuses the weight load under 64 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-At the 6-token prompt length both mask kinds skip to the sdpa is_causal
-path (mask None). The 4096-token window does not constrain this prompt.
-The tier-04 records carry the window behavior.
-
-Recording environment:
-
-- recorded_from defaults to m4max-metal, the TTT_RECORD_FROM environment
-  variable overrides it
-- recording runs on mps (Metal), the replay device stays the consuming suite's call
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_north_03_full_forward_to_logits.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 64 GiB
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict

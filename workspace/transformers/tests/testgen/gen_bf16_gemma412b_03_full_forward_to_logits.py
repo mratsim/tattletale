@@ -1,42 +1,24 @@
 #!/usr/bin/env python3
-"""Full-forward-to-logits fixtures of the gemma-4-12B-it checkpoint,
-recorded through the installed transformers modeling on torch bf16, Metal (mps).
-The chain covers embed, all 48 decoder layers, the final norm and the softcapped lm_head.
+"""Tier-03 full-forward-to-logits fixture generator, gemma-4-12B-it,
+torch bf16 on Metal (mps) through the installed transformers modeling,
 
-- fixture dir tests/fixtures/bf16-03-full-forward-to-logits/gemma-4-12B-it/
 - consumer tests/q_bf16/t_bf16_gemma412b_03_full_forward_to_logits.nim
+- embed through all 48 decoder layers plus the final norm and lm_head, one boundary slice layer-<i>.safetensor per layer
+- the metadata rows carry the layer kind, the dual head dims and the k_eq_v row
 
-| file                                   | contents                                                                       |
-| -------------------------------------- | ------------------------------------------------------------------------------ |
-| layer-<i>.safetensor                   | the chain boundary slice layer_input_seq, the last layer also layer_output_seq |
-| layer-<i>.safetensor.metadata.json.zst | the layer identity, the layer kind, the dual head dims and the k_eq_v row      |
-| layer-<i>.safetensor.stats.json.zst    | the ttt-tf-004-uniform-stats frame over the payload tensors                    |
-| final_logits.decisions.json.zst        | the ttt-tf-005-argmax-decisions frame, one record per input position           |
+- final_logits.decisions.json.zst carries the ttt-tf-005-argmax-decisions frame, one record per input position
 
-- the prompt token ids are hard-asserted against the recorded corpus ids,
-  a tokenizer drift fails the recording
-- the forward runs twice, every capture and the logits assert run-to-run
-  equal before anything is written
+- the prompt token ids are hard-asserted against the recorded corpus ids, a tokenizer drift fails the recording
+- the forward runs twice, every capture and the logits assert run-to-run equal before anything is written
+- recorded_from defaults to m4max-metal (TTT_RECORD_FROM overrides), replay stays on the consuming suite's call
 
-The 3-token prompt stays inside the 1.5 MiB family dir budget over the 48 layers at the 3840
-hidden width. At that length both mask kinds skip to the sdpa is_causal path (mask None)
-and the 1024-token window does not constrain the rows, tier-04 carries the window behavior.
+- the final norm feeds the softcapped lm_head
+- the 3-token prompt keeps the per-layer payloads inside the 1.5 MiB family dir budget over the 48 layers
+- the run refuses the weight load under 48 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-Recording environment:
-
-- recorded_from defaults to m4max-metal, the TTT_RECORD_FROM environment
-  variable overrides it
-- recording runs on mps (Metal), the replay device stays the consuming suite's call
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_gemma412b_03_full_forward_to_logits.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 48 GiB
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict

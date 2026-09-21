@@ -1,44 +1,23 @@
 #!/usr/bin/env python3
-"""Greedy-text-generation fixtures of the gemma-3-270m-it checkpoint, token
-chains argmax-decoded through the installed transformers modeling on torch
-bf16, recorded on Metal (mps).
+"""Tier-04 greedy-text-generation fixture generator, gemma-3-270m-it,
+torch bf16 on Metal (mps), token chains argmax-decoded through the installed transformers modeling,
 
-- fixture dir tests/fixtures/bf16-04-greedy-text-generation/gemma-3-270m-it/
 - consumer tests/q_bf16/t_bf16_gemma3270m_04_greedy_text_generation.nim
+- <prompt>_<horizon>_steps.json.zst per prompt, the ttt-tf-001-greedy-steps-h2 chain
+- plus the ttt-tf-005-argmax-decisions frame over the same steps
 
-| file                                        | contents                                                  |
-| ------------------------------------------- | --------------------------------------------------------- |
-| <prompt>_<horizon>_steps.json.zst           | the ttt-tf-001-greedy-steps-h2 chain with the env frame   |
-| <prompt>_<horizon>_steps.decisions.json.zst | the ttt-tf-005-argmax-decisions frame over the same steps |
+- hand-rolled single-token decode over the whole-prompt prefill, single unpadded chains, each record carries the argmax pick
 
-Chain contract:
+- the top-32 ids with f32 logits, the argmax margin and the softmax tail probability
+- a chain pick equal to a configured eos id fails the recording, every recorded pick stays a live argmax pick
+- the third prompt prefill-crosses the 512 sliding window, 622 prompt tokens, the decode steps run on the bounded sliding cache
 
-- hand-rolled single-token decode over the whole-prompt prefill, single
-  unpadded chains, no batched pass backs the values
-- each step records the argmax pick, the top-32 ids with f32 logits,
-  the argmax margin and the softmax tail probability past the top-32 support
-- a chain pick that equals a configured eos id fails the recording, every
-  recorded step stays a live argmax pick
+- recorded_from defaults to m4max-metal (TTT_RECORD_FROM overrides), replay stays on the consuming suite's call
+- the run refuses the weight load under 8 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-The third prompt prefill-crosses the 512 sliding window (622 prompt tokens).
-The sliding_attention layers record the windowed-mask path, the decode
-steps run on the bounded sliding cache.
-
-Recording environment:
-
-- recorded_from defaults to m4max-metal, the TTT_RECORD_FROM environment
-  variable overrides it
-- recording runs on mps (Metal), the replay device stays the consuming suite's call
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_gemma3270m_04_greedy_text_generation.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 8 GiB
-- another python/torch process holding RAM also blocks the run
 """
 
 import hashlib
@@ -132,14 +111,11 @@ def prompt_token_ids(tokenizer, text: str) -> tuple:
 def greedy_chain(model, token_ids: tuple, max_new_tokens: int) -> dict:
     """Greedy-decodes one unpadded chain through the installed forward.
 
-    Args:
-    - model, the loaded reference model
-    - token_ids, max_new_tokens, the prompt ids and the chain horizon
+    Takes the loaded reference model, the prompt ids and the chain horizon.
 
-    Returns:
-    - the generated ids plus one record per step over the deciding
-      last-position logits row, each record carrying the argmax pick, top-32
-      f32 logits, margin and tail probability
+    Returns the generated ids plus one record per step over the deciding
+    last-position logits row, each record carrying the argmax pick, top-32
+    f32 logits, margin and tail probability.
 
     The prefill covers the whole prompt and returns the past-key cache, each
     step runs one single-token forward over that cache, the previous argmax

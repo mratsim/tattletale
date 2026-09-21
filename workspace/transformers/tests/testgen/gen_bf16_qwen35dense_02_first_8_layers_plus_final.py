@@ -350,16 +350,14 @@ def decoder_layer_forward_seq(
 def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> tuple:
     """GDN block prefill T=5, the sequential reference plus the chunked module output.
 
-    Args:
-    - block, the weighted layer-0 GatedDeltaNet module
+    Takes the weighted layer-0 GatedDeltaNet module.
 
-    Returns:
-    - meta, the mixture metadata
-    - payload, the single driving input tensor under its file name
-    - captured, the captured prefill intermediates for the stats frame
+    Returns the mixture metadata, the driving input tensor under its file name,
+    and the captured prefill intermediates for the stats frame.
 
-    The chunked replay must match the module's own forward through the ulp-band instrument,
-    the caller asserts it. The sequential replay is the 0.00 reference for the Nim implementation.
+    The chunked replay must equal the module's own forward, the caller
+    asserts it through the ulp-band instrument, the sequential replay is
+    the 0.00 reference for the Nim implementation.
     """
     torch.manual_seed(SEED_GDN_PREFILL)
     x = torch.randn(1, PREFILL_SEQ, HIDDEN, dtype=torch.bfloat16)
@@ -405,15 +403,12 @@ def generate_gdn_prefill_fixture(block: Qwen3_5GatedDeltaNet) -> tuple:
 
 
 def generate_state_fixture(block: Qwen3_5GatedDeltaNet) -> tuple:
-    """State trajectory mixture, a 5-token sequential one-shot plus a 2-step decode.
+    """State trajectory mixture, a 5-token sequential one-shot plus a 2-token decode.
 
-    Args:
-    - block, the weighted layer-0 GatedDeltaNet module
+    Takes the weighted layer-0 GatedDeltaNet module.
 
-    Returns:
-    - meta, the mixture metadata
-    - payload, the suite-read driving tensors under their file names
-    - captured, the per-step trajectory tensors for the stats frame
+    Returns the mixture metadata, the suite-read driving tensors
+    and the per-token trajectory tensors for the stats frame.
 
     The cache starts from the sequential state over the 3-token prefill, every decode output
     matching one-shot positions 3 and 4 through the ulp-band instrument.

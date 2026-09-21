@@ -1,47 +1,24 @@
 #!/usr/bin/env python3
-"""Full-forward-to-logits fixtures of the Laguna-XS-2.1 checkpoint,
-recorded through the installed transformers modeling on torch bf16, Metal
-(mps). The chain covers embed, all 40 decoder layers, the final norm and lm_head.
+"""Tier-03 full-forward-to-logits fixture generator, Laguna-XS-2.1,
+torch bf16 on Metal (mps) through the installed transformers modeling,
 
-Layer 0 is the dense prefix, the other 39 layers route.
-
-- fixture dir tests/fixtures/bf16-03-full-forward-to-logits/Laguna-XS-2.1/
 - consumer tests/q_bf16/t_bf16_laguna_03_full_forward_to_logits.nim
+- embed through all 40 decoder layers plus the final norm and lm_head, one boundary slice layer-<i>.safetensor per layer
+- the metadata rows carry the per-layer head count and the mlp kind
 
-| file                                   | contents                                                                       |
-| -------------------------------------- | ------------------------------------------------------------------------------ |
-| layer-<i>.safetensor                   | the chain boundary slice layer_input_seq, the last layer also layer_output_seq |
-| layer-<i>.safetensor.metadata.json.zst | the layer identity, the layer kind, the per-layer head count and the mlp kind  |
-| layer-<i>.safetensor.stats.json.zst    | the ttt-tf-004-uniform-stats frame over the payload tensors                    |
-| final_logits.decisions.json.zst        | the ttt-tf-005-argmax-decisions frame, one record per input position           |
+- final_logits.decisions.json.zst carries the ttt-tf-005-argmax-decisions frame, one record per input position
 
-- the prompt token ids are hard-asserted against the recorded corpus ids,
-  a tokenizer drift fails the recording
-- the forward runs twice, every capture and the logits assert run-to-run
-  equal before anything is written
+- the prompt token ids are hard-asserted against the recorded corpus ids, a tokenizer drift fails the recording
+- the forward runs twice, every capture and the logits assert run-to-run equal before anything is written
+- recorded_from defaults to m4max-metal (TTT_RECORD_FROM overrides), replay stays on the consuming suite's call
 
-The checkpoint tokenizer prepends the BOS id 2, the 6-token prompt ids
-carry it as their first row.
+- the checkpoint tokenizer prepends the BOS id 2, layer 0 is the dense prefix, the other 39 layers route
+- at the 6-token prompt both mask kinds skip to the sdpa is_causal path (mask None), the 512 window does not constrain it
+- the run refuses the weight load under 80 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-At the 6-token prompt length both mask kinds skip to the sdpa is_causal
-path (mask None). The 512-token window does not constrain the prompt.
-The tier-04 records carry the window behavior.
-
-Recording environment:
-
-- recorded_from defaults to m4max-metal, the TTT_RECORD_FROM environment
-  variable overrides it
-- recording runs on mps (Metal), the replay device stays the consuming suite's call
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_laguna_03_full_forward_to_logits.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 80 GiB (the checkpoint weighs 67 GiB)
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict

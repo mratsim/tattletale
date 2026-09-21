@@ -1,67 +1,26 @@
 #!/usr/bin/env python3
-"""Layer-0 fixture file of the GLM-4.7-Flash checkpoint, recorded on CPU
-torch bf16 with the installed reference modeling, from safetensors.
+"""Tier-01 layer-0 fixture generator, GLM-4.7-Flash,
+CPU torch bf16, installed reference modeling from safetensors,
 
-Single-file grammar with one fixture file per family layer, one bare
-bf16 driving tensor per mixture in the payload, every recorded
-intermediate and output a stats fingerprint.
+- consumer tests/q_bf16/t_bf16_glm47flash_01_layer_internals.nim
+- one bare bf16 driving tensor per mixture (attn.input, layer.layer_input, moe.h)
+- every recorded intermediate and output a stats fingerprint (single-file grammar)
 
-The layer-0 file carries three mixture groups under first_k_dense_replace:
+- the mixtures sit under first_k_dense_replace, the attention mixer op surface on the prefill path, the dense layer-0 chain
 
-- attn, the attention mixer op surface on the prefill path
-- layer, the full dense decoder layer 0 chain over one recorded hidden input
-- moe, the routed block surface of the first routed layer
+- the moe mixture records the routed block surface of the first routed layer
+- the routed mixture stands on a margin-clean seed, both the top-k boundary margin and the inner gap clear the 1e-4 floor
 
-- one bare bf16 driving tensor per mixture, attn.input, layer.layer_input
-  and moe.h, the only tensors the file stores
-- the rope rows and the recorded sdpa inputs stay on the stats frame,
-  fingerprints only, no raw op-surface tensor ships in the file
+- the rope rows are recorded f32 pre-cast, the rotated q channels of query_states sit in the reference half-split layout
 
-No Qwen3 analog exists, the Qwen3 and Qwen3.5 families are plain multi-head
-attention without a compressed-Q bottleneck and without a noaux_tc router.
+- recorded_from defaults to m4max-cpu (TTT_RECORD_FROM overrides), the replay device stays the consuming suite's call
+- the run refuses to start under the free+inactive+speculative pool floor (the expert-stack build clones layer-1 routed weights)
+- other python/torch processes holding RAM block it, its own process chain exempt
 
-Mixture payloads and stats entries:
-
-| mixture | payload           | stats entries over the recorded surface                                                                                               |
-| ------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| attn    | attn.input        | cos, sin, query_states, key_states, value_states, q_pe, latent_normed, latent_cached, kpe_cached, kpe_cached_interleaved, attn_output |
-| layer   | layer.layer_input | input_layernorm_output, attn_output, post_attention_layernorm_output, mlp_output, layer_output                                        |
-| moe     | moe.h             | router_logits, topk_weights, moe_output                                                                                               |
-
-Stats keys carry the mixture-level `attn.` / `layer.` / `moe.` prefixes,
-recorded expert ids live in the metadata (integer ids carry no stats record).
-
-Mixture seeds and scenarios:
-
-| mixture | scenario                                                       | seed         |
-| ------- | -------------------------------------------------------------- | ------------ |
-| attn    | latent-cache attention prefill at seq 4, positions 0 through 3 | 235          |
-| layer   | dense layer-0 chain over one recorded hidden input, seq 4      | 237          |
-| moe     | routed block of layer 1 on a margin-clean input, seq 6         | 236 + search |
-- the routed-block seed search advances one seed at a time until the top-k
-  boundary margin and the smallest inner gap clear the 1e-4
-  sigmoid-plus-bias choice floor
-- the rope rows are recorded f32 pre-cast, the reference rotation consumed
-  the bf16 cast of these rows and ran the multiply-add chain in bf16
-- the rotated q channels of query_states sit in the reference half-split
-  layout (cat of even and odd pair values), matching the recorded sdpa input
-
-Recording environment:
-
-- recorded_from defaults to m4max-cpu, the TTT_RECORD_FROM environment
-  variable overrides it
-- recording runs on cpu, the replay device stays the consuming suite's call
-
-Run from the worktree root, twice, cmp proves byte determinism:
+Regenerate from the worktree root, twice, cmp proves byte determinism:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_glm47flash_01_layer_internals.py
-
-RAM guards:
-
-- the expert-stack build clones the layer-1 routed weights, the script
-  refuses to run when the free+inactive+speculative pool sits below the floor
-- another python/torch process holding RAM also blocks the run
-- the process chain of this script stays excluded from that check"""
+"""
 
 from collections import OrderedDict
 import json

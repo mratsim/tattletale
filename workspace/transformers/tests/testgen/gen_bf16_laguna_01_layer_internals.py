@@ -1,61 +1,23 @@
 #!/usr/bin/env python3
-"""Layer-internals fixture file of the Laguna-XS-2.1 checkpoint, recorded
-with torch bf16 on Metal (mps) under the installed reference modeling.
+"""Tier-01 layer-internals fixture generator, Laguna-XS-2.1,
+torch bf16 on Metal (mps) under the installed reference modeling,
 
-Single-file grammar, one fixture file per family layer group, one bare bf16
-driving tensor per mixture, all recorded intermediates live on the stats
-frame as fingerprints.
+- consumer tests/q_bf16/t_bf16_laguna_01_layer_internals.nim
+- one bare bf16 driving tensor per mixture, recorded intermediates stay on the stats frame as fingerprints
+- full-first 1:3 layer shape, full_attention at layers 0, 4, ... 36 running 48 q heads, yarn theta 5e5 with partial factor 0.5
 
-No Qwen3 analog exists for these tier-01 rows. Qwen3 runs one uniform
-full-attention kind over one head count. This checkpoint instead runs
-its full-first 1:3 shape with per-layer head counts:
+- sliding_attention between (64 q heads, window 512, theta 1e4), 8 kv heads everywhere
 
-- full_attention layers sit at 0, 4, ... 36 with 48 q heads, the sliding
-  layers between run 64 q heads, window 512, 8 kv heads everywhere
 - layer 0 is the dense prefix (intermediate 8192), the other 39 layers route
-- the full layers rotate under yarn theta 5e5 with the partial factor 0.5,
-  the sliding layers run the default theta 1e4 over the full head dim
+- the attention output applies a per-head softplus weighting over g_proj before the o_proj
+- the routed mixtures stand on margin-clean seeds, the seed advances until the selection-score boundary margin clears the 1e-4 floor
 
-The attention output carries the per-head gated weighting, a softplus
-over the g_proj row applied per head before the o_proj.
+- fixture dir tests/fixtures/bf16-01-layer-internals/Laguna-XS-2.1-layer-0-1-4/, file layer0-1-4-Laguna-XS-2.1-00.safetensor
+- the run refuses the weight load under 80 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-| mixture | row                                                                                      |
-| ------- | ---------------------------------------------------------------------------------------- |
-| layer0  | decoder layer 0, full attention with yarn partial rope plus the dense prefix block       |
-| layer1  | decoder layer 1, sliding attention with rope plus the routed block                       |
-| layer4  | decoder layer 4, full attention with yarn partial rope plus the routed block             |
-| moe     | the routed block surface of layer 1, the router decision rows plus the eager expert loop |
-
-| file                                                     | contents                                        |
-| -------------------------------------------------------- | ----------------------------------------------- |
-| layer0-1-4-Laguna-XS-2.1-00.safetensor                   | layer0.input, layer1.input, layer4.input, moe.h |
-| layer0-1-4-Laguna-XS-2.1-00.safetensor.metadata.json.zst | per-mixture metadata under the mixtures key     |
-| layer0-1-4-Laguna-XS-2.1-00.safetensor.stats.json.zst    | one uniform record per recorded tensor          |
-
-Stats keys carry the mixture-level `layer0.` / `layer1.` / `layer4.` / `moe.`
-prefixes:
-
-- recorded expert ids live in the metadata, integer ids carry no stats record
-- every routed mixture stands on a margin-clean seed, the seed advances
-  one step at a time until the sigmoid-plus-bias selection-score boundary
-  margin clears the 1e-4 floor protecting the exact expert-id comparisons
-
-At seq 6 both mask kinds skip to the sdpa is_causal path (mask None)
-and the 512-token window does not constrain these rows, tier-04 carries
-the window behavior.
-
-Consumed by tests/q_bf16/t_bf16_laguna_01_layer_internals.nim, one
-assertion block per mixture.
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_laguna_01_layer_internals.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 80 GiB (the checkpoint weighs 67 GiB)
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict
@@ -430,16 +392,13 @@ def scores_for_selection_margin(router_logits: torch.Tensor,
 
 
 def margin_clean_input(seed: int, hidden_size: int, routed_block) -> tuple:
-    """Builds a margin-clean routed-block input, the seed advancing one step
+    """Builds a margin-clean routed-block input, the seed advancing one attempt
     at a time until the selection-score boundary margin clears the floor.
 
-    Args:
-    - seed, hidden_size, the first seed tried and the checkpoint width
-    - routed_block, the weighted routed block whose sigmoid router ranks
-      with the selection bias
+    Takes the first seed tried, the checkpoint width and the weighted routed
+    block whose sigmoid router ranks with the selection bias.
 
-    Returns:
-    - the bf16 input, the advancing seed, the achieved margin
+    Returns the bf16 input, the advancing seed and the achieved margin.
     """
     top_k = routed_block.gate.top_k
     margin = -1.0

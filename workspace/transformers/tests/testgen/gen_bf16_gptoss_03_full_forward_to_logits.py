@@ -1,57 +1,23 @@
 #!/usr/bin/env python3
-"""Full-forward-to-logits fixtures of the gpt-oss-20b checkpoint, recorded
-through the installed reference modeling on torch bf16, Metal (mps).
+"""Tier-03 full-forward-to-logits fixture generator, gpt-oss-20b,
+torch bf16 on Metal (mps), the installed transformers modeling,
+fixture-only family, the Nim port stays parked, no consumer exists yet.
 
-The chain covers embed, all 24 decoder layers, the final norm and the lm_head.
+- embed through all 24 decoder layers plus the final norm and lm_head, one boundary slice layer-<i>.safetensor per layer
+- the metadata rows carry the layer kind, rope theta, weight note
+- final_logits.decisions.json.zst carries the ttt-tf-005-argmax-decisions frame, one record per input position
 
-Fixture-only family, the Nim implementation stays parked. The chain rows
-carry the reference surfaces a later port consumes, no consumer exists yet.
+- the prompt token ids are hard-asserted against the recorded corpus ids, the checkpoint tokenizer adds no BOS
+- the forward runs twice, every capture and the logits assert run-to-run equal before anything is written
+- the weights ship as MXFP4, the reference quantizer dequantizes them to bf16 at load (mps has no MXFP4 kernel)
 
-- fixture dir tests/fixtures/bf16-03-full-forward-to-logits/gpt-oss-20b/
-- consumer tests/q_bf16/t_bf16_gptoss_03_full_forward_to_logits.nim
+- the 5-token prompt stays inside the 128 window, the eager attention path consumes an additive mask tensor
+- the run refuses the weight load under 64 GiB free+inactive+speculative pool, the dequantized weights sit near 40 GiB
+- other python/torch processes holding RAM block it
 
-| file                                   | contents                                                                       |
-| -------------------------------------- | ------------------------------------------------------------------------------ |
-| layer-<i>.safetensor                   | the chain boundary slice layer_input_seq, the last layer also layer_output_seq |
-| layer-<i>.safetensor.metadata.json.zst | the layer identity, the layer kind, the rope theta and the weight note         |
-| layer-<i>.safetensor.stats.json.zst    | the ttt-tf-004-uniform-stats frame over the payload tensors                    |
-| final_logits.decisions.json.zst        | the ttt-tf-005-argmax-decisions frame, one record per input position           |
-
-- the prompt token ids are hard-asserted against the recorded corpus ids,
-  a tokenizer drift fails the recording (the checkpoint tokenizer adds no BOS)
-- the forward runs twice, every capture and the logits assert run-to-run
-  equal before anything is written
-
-1:1 alternating shape:
-
-- sliding_attention layers sit at 0, 2, ... 22, the full_attention layers
-  sit between, window 128
-- 64 q heads over 8 kv heads, head_dim 64, one sink row per q head,
-  the routed block on every layer
-
-The eager attention path consumes an additive mask tensor, the 5-token
-prompt stays inside the 128 window and carries no window cutoff, tier-04
-carries the window behavior.
-
-The checkpoint weights ship as MXFP4, the reference quantizer dequantizes
-them to bf16 at load (mps has no MXFP4 kernel), every recorded tensor
-carries the bf16 rows.
-
-Recording environment:
-
-- recorded_from defaults to m4max-metal, the TTT_RECORD_FROM environment
-  variable overrides it
-- recording runs on mps (Metal), the replay device stays the consuming suite's call
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_gptoss_03_full_forward_to_logits.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 64 GiB (the dequantized weights sit near 40 GiB)
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict

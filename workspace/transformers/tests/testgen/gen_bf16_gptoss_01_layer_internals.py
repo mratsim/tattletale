@@ -1,74 +1,23 @@
 #!/usr/bin/env python3
-"""Layer-internals fixture file of the gpt-oss-20b checkpoint, recorded with torch bf16
-on Metal (mps) under the installed reference modeling.
+"""Tier-01 layer-internals fixture generator, gpt-oss-20b,
+torch bf16 on Metal (mps), the installed reference modeling,
+fixture-only family, the Nim port stays parked, no consumer exists yet.
 
-Fixture-only family, the Nim implementation stays parked. These rows carry
-the reference surfaces a later port consumes, no consumer exists yet.
+- one bare bf16 driving tensor per mixture, recorded intermediates stay on the stats frame as fingerprints
+- 1:1 alternating sliding/full layer pattern, window 128, 64 q heads over 8 kv heads, head_dim 64
+- the softmax denominator includes the per-head sink column, the value mix drops the sink
 
-Single-file grammar, one fixture file per family layer group, one bare bf16
-driving tensor per mixture, all recorded intermediates live on the stats
-frame as fingerprints.
+- every layer routes, 32 experts with top 4, the weights dequantized from MXFP4 to bf16 at load (mps has no MXFP4 kernel)
+- every routed mixture stands on a margin-clean seed, the seed advances until the top-k boundary margin clears the 1e-4 floor
+- the sink-aware rows sinks, attn_output_with_sink, attn_output_without_sink, sink_log_delta (f64 on cpu, recorded f32)
 
-No Qwen3 analog exists for these tier-01 rows. Qwen3 runs plain softmax
-attention without sinks and a dense FFN. This checkpoint is the 1:1
-alternating shape with sink attention and a routed block on every layer:
+- at seq 6 both mask kinds stay inside the 128-token window, no window cutoff, the tier-04 records carry the window behavior
+- the run refuses the weight load under 64 GiB free+inactive+speculative pool, the dequantized weights sit near 40 GiB
+- other python/torch processes holding RAM block it
 
-- sliding_attention layers sit at 0, 2, ... 22, the full_attention layers
-  sit between, window 128, 64 q heads over 8 kv heads, head_dim 64
-- every attention head carries a sink row, the softmax runs over the keys
-  plus the sink column and drops the sink before the value mix
-- every layer routes, 32 experts with top 4, softmax over the top-4 logits
-  under weights dequantized from MXFP4 to bf16 at load, the reference
-  quantizer runs the dequantize (mps has no MXFP4 kernel)
-
-| mixture | row                                                                                      |
-| ------- | ---------------------------------------------------------------------------------------- |
-| layer0  | decoder layer 0, sliding attention with the sink rows plus the routed block              |
-| layer1  | decoder layer 1, full attention with the sink rows plus the routed block                 |
-| moe     | the routed block surface of layer 0, the router decision rows plus the eager expert loop |
-
-| file                                                 | contents                                    |
-| ---------------------------------------------------- | ------------------------------------------- |
-| layer0-1-gpt-oss-20b-00.safetensor                   | layer0.input, layer1.input, moe.h           |
-| layer0-1-gpt-oss-20b-00.safetensor.metadata.json.zst | per-mixture metadata under the mixtures key |
-| layer0-1-gpt-oss-20b-00.safetensor.stats.json.zst    | one uniform record per recorded tensor      |
-
-Stats keys carry the mixture-level `layer0.` / `layer1.` / `moe.` prefixes.
-Sink-aware rows per layer:
-
-- sinks, the per-head sink row the softmax denominator includes
-- attn_output_with_sink, the module output through the sink softmax
-- attn_output_without_sink, the same path over a keys-only softmax showing
-  what the sink column moves
-
-The sink_log_delta row carries the log-space relative softmax-denominator
-delta (sink - m) - logsumexp(attn_weights - m) per head and position,
-computed f64 on cpu and recorded f32 (mps has no f64 storage).
-
-A negative row means the sink raises the denominator and moves probability
-mass off the keys.
-
-- recorded expert ids live in the metadata, integer ids carry no stats record
-- every routed mixture stands on a margin-clean seed, the seed advances one
-  step at a time until the top-k boundary margin clears the 1e-4 floor
-  protecting the exact expert-id comparisons in the consuming suite
-
-At seq 6 both mask kinds stay inside the 128-token window and the sliding
-mask carries no window cutoff, tier-04 carries the window behavior.
-
-Consumed by tests/q_bf16/t_bf16_gptoss_01_layer_internals.nim, one assertion
-block per mixture
-(the consumer lands with the port, the implementation stays parked).
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_gptoss_01_layer_internals.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 64 GiB (the dequantized weights sit near 40 GiB)
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict
@@ -465,15 +414,13 @@ def topk_boundary_margin(router_logits: torch.Tensor, top_k: int) -> float:
 
 
 def margin_clean_input(seed: int, hidden_size: int, routed_block) -> tuple:
-    """Builds a margin-clean routed-block input, the seed advancing one step
+    """Builds a margin-clean routed-block input, the seed advancing one attempt
     at a time until the top-k boundary margin clears the floor.
 
-    Args:
-    - seed, hidden_size, the first seed tried and the checkpoint width
-    - routed_block, the weighted routed block, its router ranks the logits
+    Takes the first seed tried, the checkpoint width and the weighted routed
+    block whose router ranks the raw logits.
 
-    Returns:
-    - the bf16 input, the advancing seed, the achieved margin
+    Returns the bf16 input, the advancing seed and the achieved margin.
     """
     top_k = routed_block.router.top_k
     margin = -1.0

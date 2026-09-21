@@ -1,46 +1,20 @@
 #!/usr/bin/env python3
-"""Boundary-pair fixture file of the gemma-3-270m-it checkpoint, recorded
-with torch bf16 on Metal (mps) under the installed reference modeling.
+"""Tier-01 boundary-pair fixture generator, gemma-3-270m-it,
+torch bf16 on Metal (mps) under the installed reference modeling,
 
-Single-file grammar with one fixture file per family layer, one bare bf16
-driving tensor per mixture, all recorded intermediates live on the stats
-frame as fingerprints.
+- consumer tests/q_bf16/t_bf16_gemma3270m_01_layer_internals.nim
+- one bare bf16 driving tensor per mixture, recorded intermediates stay on the stats frame as fingerprints
+- layer 4 sliding_attention over rope_local_base_freq 1e4, layer 5 full_attention over rope_theta 1e6, the 5:1 layer pattern
 
-No Qwen3 analog exists for these tier-01 rows. Qwen3 runs one uniform
-attention kind, this checkpoint interleaves two kinds under the 5:1 pattern.
+- the boundary mixture chains the layer-5 full block on the layer-4 output over one seeded input
 
-- sliding_attention layers rope with rope_local_base_freq 1e4
-- full_attention layers rope with rope_theta 1e6
-- the boundary pair (layer 4 sliding, layer 5 full) carries both kinds
+- at seq 6 both mask kinds skip to the sdpa is_causal path (mask None), the tier-04 records carry the window behavior
+- fixture dir tests/fixtures/bf16-01-layer-internals/gemma-3-270m-it-layer-4-5/, file layer4-5-gemma-3-270m-it-00.safetensor
+- the run refuses the weight load under 8 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-| mixture  | row                                                                                               |
-| -------- | ------------------------------------------------------------------------------------------------- |
-| sliding  | layer 4 (sliding_attention), attention op surface plus the full decoder-layer chain               |
-| full     | layer 5 (full_attention), attention op surface plus the full decoder-layer chain                  |
-| boundary | the layer-4 then layer-5 pair over one seeded input, the layer-5 chain runs on the layer-4 output |
-
-| file                                                     | contents                                                                             |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| layer4-5-gemma-3-270m-it-00.safetensor                   | sliding.input, full.input, boundary.input                                            |
-| layer4-5-gemma-3-270m-it-00.safetensor.metadata.json.zst | per-mixture metadata under the mixtures key                                          |
-| layer4-5-gemma-3-270m-it-00.safetensor.stats.json.zst    | one uniform record per recorded tensor, keys namespaced sliding. / full. / boundary. |
-
-At seq 6 both mask kinds skip to the sdpa is_causal path (mask None).
-The 512-token window does not constrain these rows, the tier-04 records
-carry the window behavior over a prompt whose prefill crosses 512.
-
-Consumed by tests/q_bf16/t_bf16_gemma3270m_01_layer_internals.nim, one
-assertion block per mixture.
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_gemma3270m_01_layer_internals.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 8 GiB
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict
@@ -442,17 +416,14 @@ def generate_full_mixture(model: Gemma3ForCausalLM, cfg) -> tuple:
 
 
 def generate_boundary_mixture(model: Gemma3ForCausalLM, cfg) -> tuple:
-    """Records the boundary pair, the layer-4 sliding chain then the layer-5
-    full chain over one seeded input, the layer-5 chain consumes the layer-4
+    """Records the boundary pair over one seeded input, the layer-4 sliding
+    chain and the layer-5 full chain, the layer-5 chain consumes the layer-4
     output as its input.
 
-    Args:
-    - model, cfg, the loaded reference model and its parsed config
+    Takes the loaded reference model and its parsed config.
 
-    Returns:
-    - meta, the mixture metadata
-    - payload, the single driving input tensor under its file name
-    - captured, the stats-frame entries namespaced under boundary.
+    Returns the mixture metadata, the driving input tensor under its file name,
+    and the stats-frame entries namespaced under boundary.
     """
     gen = torch.Generator(device="mps")
     gen.manual_seed(SEED_BOUNDARY)

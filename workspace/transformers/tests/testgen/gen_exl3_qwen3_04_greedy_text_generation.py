@@ -247,13 +247,10 @@ class EXL3Model:
                  eos_token_id: int = 151645) -> tuple:
         """Autoregressive greedy generation (temp=0).
 
-        Args:
-        - input_ids, the [1, seq_len] prompt token ids
-        - max_new_tokens, the maximum number of tokens to generate
-        - eos_token_id, the end-of-sequence token id
+        Takes the [1, seq_len] prompt token ids, the maximum number of tokens
+        to generate and the end-of-sequence token id.
 
-        Returns:
-        - (full_ids, prompt_ids, generated_ids, per_step_logits)
+        Returns (full_ids, prompt_ids, generated_ids, per_step_logits).
         """
         prompt_ids = input_ids[0].tolist()
         full_ids = input_ids.clone()

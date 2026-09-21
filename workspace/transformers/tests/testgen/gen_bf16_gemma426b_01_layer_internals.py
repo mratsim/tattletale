@@ -1,77 +1,24 @@
 #!/usr/bin/env python3
-"""Layer-internals fixture file of the gemma-4-26B-A4B checkpoint, recorded
-with torch bf16 on Metal (mps) under the installed reference modeling.
+"""Tier-01 layer-internals fixture generator, gemma-4-26B-A4B,
+torch bf16 on Metal (mps) under the installed reference modeling,
 
-Single-file grammar with one fixture file per family layer group, one bare bf16
-driving tensor per mixture, all recorded intermediates live on the stats
-frame as fingerprints.
+- consumer tests/q_bf16/t_bf16_gemma426b_01_layer_internals.nim
+- one bare bf16 driving tensor per mixture, recorded intermediates stay on the stats frame as fingerprints
+- the 5:1 sliding/full layer pattern, window 1024, sliding head_dim 256 over 8 kv heads, full head_dim 512 over 2 kv heads
 
-No Qwen3 analog exists for these tier-01 rows. Qwen3 runs one uniform
-full-attention kind over one head dim and one dense FFN. This checkpoint is
-the dual-dim k_eq_v shape with a routed block on every layer:
+- every layer pairs the dense mlp (intermediate 2112) with the routed block, 128 experts top 8 over moe_intermediate 704
 
-- 5 sliding_attention layers then 1 full_attention layer, repeating, window 1024
-- sliding layers run head_dim 256 over 8 kv heads, full layers run head_dim 512
-  over 2 kv heads
-- full layers carry attention_k_eq_v with no v_proj weight, the value rows
-  derive from the shared k projection through the unscaled v_norm
+- the mixtures sit on layer 0, layer 5 and the layer-0 routed block surface
+- attention_k_eq_v on the full layers, no v_proj weight, the value rows are v_norm applied to the shared k projection
+- layer5 records cache_k / cache_v beside the k_proj_output row the V derivation consumes
 
-Every decoder layer pairs the dense mlp (intermediate 2112) with the routed
-block over 128 experts with top 8, a softmax router feeding the eager
-per-expert loop over gate_up/down projections of moe_intermediate 704.
+- the routed mixtures stand on margin-clean seeds, the seed advances until the router margin clears the 1e-4 floor
+- fixture dir tests/fixtures/bf16-01-layer-internals/gemma-4-26B-A4B-layer-0-5/, file layer0-5-gemma-4-26B-A4B-00.safetensor
+- the run refuses the weight load under 64 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-| mixture | row                                                                                      |
-| ------- | ---------------------------------------------------------------------------------------- |
-| layer0  | decoder layer 0, sliding attention with own kv plus the dense mlp and the routed block   |
-| layer5  | decoder layer 5, the k_eq_v full attention with its cache boundary plus the routed block |
-| moe     | the routed block surface of layer 0, the router decision rows plus the eager expert loop |
-
-| file                                                     | contents                                    |
-| -------------------------------------------------------- | ------------------------------------------- |
-| layer0-5-gemma-4-26B-A4B-00.safetensor                   | layer0.input, layer5.input, moe.h           |
-| layer0-5-gemma-4-26B-A4B-00.safetensor.metadata.json.zst | per-mixture metadata under the mixtures key |
-| layer0-5-gemma-4-26B-A4B-00.safetensor.stats.json.zst    | one uniform record per recorded tensor      |
-
-Stats keys carry the mixture-level `layer0.` / `layer5.` / `moe.` prefixes.
-
-Recorded expert ids live in the metadata, integer ids carry no stats record.
-
-Every routed mixture stands on a margin-clean seed, the seed advances one
-step at a time until the top-k boundary margin clears the 1e-4 floor
-protecting the exact expert-id comparisons in the consuming suite.
-
-The layer mixtures search on the chain the router actually sees, the seed
-advances until the router margin over the post-attention residual
-clears the floor.
-
-The k_eq_v cache boundary, measured against the reference before recording.
-The reference does not store identical K and V tensors:
-
-- the full-layer value rows are v_norm applied to the same k projection
-  the keys consume, the keys are the rotated scaled k_norm of that projection
-- the reference DynamicCache keeps K and V as separate entries, the tying
-  lives at the projection level with no v_proj weight on the full layers
-
-The layer5 mixture records the cache-boundary rows the reference stores,
-`layer5.cache_k` / `layer5.cache_v`, beside the k projection source row
-`layer5.k_proj_output` the V derivation consumes.
-
-At seq 6 both mask kinds skip to the sdpa is_causal path (mask None)
-and the 1024-token window does not constrain these rows, tier-04 carries
-the window behavior.
-
-Consumed by tests/q_bf16/t_bf16_gemma426b_01_layer_internals.nim, one
-assertion block per mixture.
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_gemma426b_01_layer_internals.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 64 GiB
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict
@@ -535,17 +482,14 @@ def seeded_input(seed: int, shape: tuple) -> torch.Tensor:
 
 def margin_clean_layer_input(model: Gemma4ForConditionalGeneration, tcfg,
                              layer, seed: int, layer_idx: int) -> tuple:
-    """Builds a margin-clean layer input, the seed advancing step by step
-    until the router margin clears the recorded floor.
+    """Builds a margin-clean layer input, the seed advancing one attempt
+    at a time until the router margin clears the recorded floor.
 
-    Args:
-    - model, tcfg, the loaded reference model and its parsed text config
-    - layer, seed, layer_idx, the decoder layer, its index in the layer stack,
-      the first seed tried
+    Takes the loaded reference model, its parsed text config, the decoder layer,
+    its stack index and the first seed tried.
 
-    Returns:
-    - the bf16 input, the advancing seed, the achieved margin
-    - the position ids, position embeddings and mask of the winning seed
+    Returns the bf16 input, the advancing seed and the achieved margin,
+    plus the position ids, position embeddings and mask of the winning seed.
 
     The router sees the post-attention residual, so the margin search runs
     the whole chain per seed, the winning chain capture feeds the mixture.
@@ -590,15 +534,14 @@ def routed_meta(routed_topk_index: list, margin: float, seed: int) -> dict:
 
 
 def margin_clean_routed_input(layer, seed: int, tcfg) -> tuple:
-    """Builds a margin-clean routed-block input over one decoder layer's
-    router and experts, the seed advancing step by step until the top-k
+    """Builds a margin-clean routed-block input over one decoder layer's router
+    and experts, the seed advancing one attempt at a time until the top-k
     boundary margin clears the recorded floor.
 
-    Args:
-    - layer, seed, the decoder layer whose routed block replays, plus the first seed tried
+    Takes the decoder layer whose routed block replays and the first seed tried.
 
-    Returns:
-    - the bf16 input, the routed capture, the advancing seed and the achieved margin
+    Returns the bf16 input, the routed capture, the advancing seed
+    and the achieved margin.
     """
     for _ in range(MAX_SEED_TRIES):
         h = seeded_input(seed, (1, SEQ, tcfg.hidden_size))

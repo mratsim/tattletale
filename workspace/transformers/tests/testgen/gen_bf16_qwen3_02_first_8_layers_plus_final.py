@@ -1,29 +1,20 @@
 #!/usr/bin/env python3
-"""
-Proof and fixtures for the long residual stream invariant, recorded
-at the 8+1 chain checkpoints of Qwen3-0.6B.
+"""Tier-02 fixture generator, Qwen3-0.6B first-8-layers chain plus the final
+pre-norm tail, CPU torch bf16, the long residual stream invariant proof.
 
-  - the first 8 decoder blocks carry full per-block intermediates for the manual replay
-  - the tail checkpoint carries the decoder stack output taken pre-final-norm, the layer output feeding the final RMSNorm and lm_head
-  - the model has 28 uniform-attention layers, the 8-block prefix is
-    class-complete, every prefix block belongs to the one layer class the model has
-  - the tail checkpoint validates the depth extrapolation to the full 28-layer stack
+The first 8 decoder blocks carry full per-block intermediates, the tail
+checkpoint carries the decoder stack output pre-final-norm. The model has
+28 uniform-attention layers, the 8-block prefix is class-complete.
 
-Per block the fixtures record:
+- per block the fixtures record the HF local residual outputs (x_local) and the long residual stream outputs (mlp_out, r2)
+- the invariant mlp_out + r2 == x_local holds with exact equality (diff 0.0) at all 28 layer boundaries
 
-  - HF local residual outputs (x_local)
-  - long residual stream outputs (mlp_out, r2)
+- both paths use bf16 residual addition and fp32 RMSNorm internally (HF Qwen3RMSNorm)
+- one metadata.json sidecar per block fixture (model, layer, case, seq length), the tail carries the decoder stack depth
 
-The invariant mlp_out + r2 == x_local holds with EXACT equality
-(diff=0.0) at every one of the 28 layer boundaries when both paths use:
+Regenerate:
 
-  - BF16 addition for residuals (not FP32)
-  - FP32 RMSNorm internally (HF's Qwen3RMSNorm, not F.rms_norm)
-
-Each block fixture carries a metadata.json sidecar (model, layer, case, sequence length), the tail fixture carries the decoder stack depth.
-
-  - cd tattletale
-  - .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen3_02_first_8_layers_plus_final.py
+- .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen3_02_first_8_layers_plus_final.py
 """
 import json
 import os

@@ -1,55 +1,23 @@
 #!/usr/bin/env python3
-"""Layer-internals fixture file of the North-Mini-Code-1.0 checkpoint, recorded
-with torch bf16 on Metal (mps) under the installed reference modeling.
+"""Tier-01 layer-internals fixture generator, North-Mini-Code-1.0,
+torch bf16 on Metal (mps) under the installed reference modeling,
 
-Single-file grammar, one fixture file per family layer group, one bare bf16
-driving tensor per mixture, all recorded intermediates live on the stats
-frame as fingerprints.
+- consumer tests/q_bf16/t_bf16_north_01_layer_internals.nim
+- one bare bf16 driving tensor per mixture, recorded intermediates stay on the stats frame as fingerprints
+- f-first 4:1 layer shape, full_attention at layers 0, 4, ... 48, the rest slide under window 4096, layer 0 is the dense prefix
 
-No Qwen3 analog exists for these tier-01 rows. Qwen3 runs plain multi-head
-attention over a dense FFN. This checkpoint is the f-first 4:1 shape:
+- intermediate 3072 on the dense prefix, the other 48 layers route
 
-- full_attention layers sit at 0, 4, ... 48, the rest slide under window 4096
-- layer 0 is the dense prefix (intermediate 3072), the other 48 layers route
 - rope applies on the sliding layers plus layer 0, the full routed layers run unrotated
+- the mixtures sit on layer 0, layer 1, layer 4 and the layer-1 routed block surface
+- the routed mixtures stand on margin-clean seeds, the seed advances until the top-k boundary margin clears the 1e-4 floor
 
-| mixture | row                                                                                      |
-| ------- | ---------------------------------------------------------------------------------------- |
-| layer0  | decoder layer 0, full attention with forced rope plus the dense prefix block             |
-| layer1  | decoder layer 1, sliding attention with rope plus the routed block                       |
-| layer4  | decoder layer 4, full attention without rope plus the routed block                       |
-| moe     | the routed block surface of layer 1, the router decision rows plus the eager expert loop |
+- fixture dir tests/fixtures/bf16-01-layer-internals/North-Mini-Code-1.0-layer-0-1-4/, file layer0-1-4-North-Mini-Code-1.0-00.safetensor
+- the run refuses the weight load under 64 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-| file                                                           | contents                                        |
-| -------------------------------------------------------------- | ----------------------------------------------- |
-| layer0-1-4-North-Mini-Code-1.0-00.safetensor                   | layer0.input, layer1.input, layer4.input, moe.h |
-| layer0-1-4-North-Mini-Code-1.0-00.safetensor.metadata.json.zst | per-mixture metadata under the mixtures key     |
-| layer0-1-4-North-Mini-Code-1.0-00.safetensor.stats.json.zst    | one uniform record per recorded tensor          |
-
-Stats keys carry the mixture-level `layer0.` / `layer1.` / `layer4.` / `moe.`
-prefixes:
-
-- recorded expert ids live in the metadata, integer ids carry no stats record
-- every routed mixture stands on a margin-clean seed, the seed advances one
-  step at a time until the top-k boundary margin clears the 1e-4 floor
-  protecting the exact expert-id comparisons in the consuming suite
-
-At seq 6 both mask kinds skip to the sdpa is_causal path (mask None)
-and the 4096-token window does not constrain these rows, tier-04 carries
-the window behavior.
-
-Consumed by tests/q_bf16/t_bf16_north_01_layer_internals.nim, one
-assertion block per mixture.
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_north_01_layer_internals.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 64 GiB
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict
@@ -384,15 +352,13 @@ def topk_boundary_margin(router_logits: torch.Tensor, top_k: int) -> float:
 
 
 def margin_clean_input(seed: int, hidden_size: int, routed_block) -> tuple:
-    """Builds a margin-clean routed-block input, the seed advancing one step
+    """Builds a margin-clean routed-block input, the seed advancing one attempt
     at a time until the top-k boundary margin clears the recorded floor.
 
-    Args:
-    - seed, hidden_size, the first seed tried and the checkpoint width
-    - routed_block, the weighted routed block, its sigmoid router decides
+    Takes the first seed tried, the checkpoint width and the weighted routed
+    block whose sigmoid router decides.
 
-    Returns:
-    - the bf16 input, the advancing seed, the achieved margin
+    Returns the bf16 input, the advancing seed and the achieved margin.
     """
     top_k = routed_block.gate.top_k
     margin = -1.0

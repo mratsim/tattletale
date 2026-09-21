@@ -1,44 +1,20 @@
 #!/usr/bin/env python3
-"""Layer-0 fixture file of the Mistral-7B-v0.1 checkpoint, recorded
-with torch bf16 on Metal (mps) under the installed reference modeling.
+"""Tier-01 layer-0 fixture generator, Mistral-7B-v0.1,
+torch bf16 on Metal (mps) under the installed reference modeling,
 
-Single-file grammar with one fixture file per family layer, one bare bf16
-driving tensor per mixture, all recorded intermediates live on the stats
-frame as fingerprints.
+- consumer tests/q_bf16/t_bf16_mistral_01_layer_internals.nim
+- one bare bf16 driving tensor per mixture, recorded intermediates stay on the stats frame as fingerprints
+- the all-sliding shape, one global sliding_window, no layer_types row, every layer windows create_sliding_window_causal_mask
 
-No Qwen3 analog exists for these tier-01 rows. Qwen3 runs one uniform
-full-attention kind, this checkpoint is the all-sliding shape:
+- mixture sliding, layer 0, the one mixer variant the family instantiates, the attention op surface plus the full decoder-layer chain
 
-- the config carries one global sliding_window and no layer_types row
-- every decoder layer windows through create_sliding_window_causal_mask
+- at seq 6 the mask skips to the sdpa is_causal path (mask None), the tier-04 records carry the window behavior
+- fixture dir tests/fixtures/bf16-01-layer-internals/Mistral-7B-v0.1-layer-0/, file layer0-Mistral-7B-v0.1-00.safetensor
+- the run refuses the weight load under 32 GiB free+inactive+speculative pool, other python/torch processes holding RAM block it
 
-| mixture | row                                                                                  |
-| ------- | ------------------------------------------------------------------------------------ |
-| sliding | layer 0 (the single mixer variant the family instantiates), the attention op surface |
-|         | plus the full decoder-layer chain over one seeded input                              |
-
-| file                                                   | contents                                                         |
-| ------------------------------------------------------ | ---------------------------------------------------------------- |
-| layer0-Mistral-7B-v0.1-00.safetensor                   | sliding.input                                                    |
-| layer0-Mistral-7B-v0.1-00.safetensor.metadata.json.zst | per-mixture metadata under the mixtures key                      |
-| layer0-Mistral-7B-v0.1-00.safetensor.stats.json.zst    | one uniform record per recorded tensor, keys namespaced sliding. |
-
-At seq 6 the mask skips to the sdpa is_causal path (mask None)
-and the window does not constrain these rows, tier-04 carries
-the window behavior over a prompt whose prefill crosses 4096.
-
-Consumed by tests/q_bf16/t_bf16_mistral_01_layer_internals.nim, one
-assertion block per mixture.
-
-Run from the worktree root
+Regenerate from the worktree root:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_mistral_01_layer_internals.py
-
-RAM guard:
-
-- the script refuses the weight load when the free+inactive+speculative pool
-  sits below 32 GiB
-- another python/torch process holding RAM also blocks the run
 """
 
 from collections import OrderedDict
