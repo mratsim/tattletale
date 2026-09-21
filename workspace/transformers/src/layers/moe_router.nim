@@ -240,7 +240,7 @@ func init*(
 
 # ─── Routing forms ─────────────────────────────────────────────────────────
 
-proc routerLogits(routerWeight, hidden: Tensor, scoreBf16: bool): Tensor =
+func routerLogits(routerWeight, hidden: Tensor, scoreBf16: bool): Tensor =
   ## Router scoring GEMM of the hidden rows against the transposed
   ## router weight, the scoring input of both router forms.
   ##
@@ -254,7 +254,7 @@ proc routerLogits(routerWeight, hidden: Tensor, scoreBf16: bool): Tensor =
   else:
     F.matmul(hidden.to(F.kFloat32), routerWeight.to(F.kFloat32).t())
 
-proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
+func route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   ## noaux_tc routing over rank-2 [T, H] hidden rows.
   ##
   ##   logits [T, E]  = f32 GEMM
@@ -276,7 +276,7 @@ proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   let numExperts = self.routerWeight.size(0)
   let expertsPerGroup = numExperts div self.numGroup
 
-  let logits = routerLogits(self.routerWeight, hidden, self.scoreBf16)
+  let logits = self.routerWeight.routerLogits(hidden, self.scoreBf16)
   let scores = F.sigmoid(logits)
   var choice = scores + self.expertBias
 
@@ -307,7 +307,7 @@ proc route*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
     weights = weights.to(hidden.scalarType())
   result = (logits: logits, weights: weights, indices: indices)
 
-proc routeDecode*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
+func routeDecode*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
   ## Batch-1 routing contract:
   ##   one hidden row [1, H], the same f32 GEMM scoring as route,
   ##   outputs sized [1, K] straight into the decode expert gather path.
@@ -319,20 +319,20 @@ proc routeDecode*(self: NoAuxTopCorr, hidden: Tensor): RouteDecision =
     " found shape (" & $hidden.size(0) & ", " & $hidden.size(1) & ")")
   route(self, hidden)
 
-proc route*(self: GreedyRouter, hidden: Tensor): RouteDecision =
+func route*(self: GreedyRouter, hidden: Tensor): RouteDecision =
   ## Legacy greedy routing over rank-2 [T, H] hidden rows.
   ##
   ##   logits [T, E]  = f32 GEMM
   ##   scores         = softmax(logits)
   ##   indices        = topk(scores, sorted = false)
   ##   weights        = topk values, scaled by the routed factor, no renorm
-  let logits = routerLogits(self.routerWeight, hidden, false)
+  let logits = self.routerWeight.routerLogits(hidden, false)
   let scores = F.softmax(logits, -1)
   let (topValues, topIndices) = scores.topk(self.topK, axis = -1, sorted = false)
   let weights = topValues * Scalar(self.routedScalingFactor)
   result = (logits: logits, weights: weights, indices: topIndices)
 
-proc routeDecode*(self: GreedyRouter, hidden: Tensor): RouteDecision =
+func routeDecode*(self: GreedyRouter, hidden: Tensor): RouteDecision =
   ## Batch-1 greedy routing, one hidden row [1, H], one f32 GEMV, outputs
   ## sized [1, K].
   checkValue(hidden.dim() == 2 and hidden.size(0) == 1,
@@ -340,7 +340,7 @@ proc routeDecode*(self: GreedyRouter, hidden: Tensor): RouteDecision =
     " found shape (" & $hidden.size(0) & ", " & $hidden.size(1) & ")")
   route(self, hidden)
 
-proc route*(self: SoftmaxTopkRouter, hidden: Tensor): RouteDecision =
+func route*(self: SoftmaxTopkRouter, hidden: Tensor): RouteDecision =
   ## Softmax top-k routing over rank-2 [T, H] hidden rows, the gemma-4
   ## routed spelling:
   ##
@@ -370,7 +370,7 @@ proc route*(self: SoftmaxTopkRouter, hidden: Tensor): RouteDecision =
       .gather(1, picked.indices).to(F.kFloat32)
   result = (logits: probs, weights: weights, indices: picked.indices)
 
-proc routeDecode*(self: SoftmaxTopkRouter, hidden: Tensor): RouteDecision =
+func routeDecode*(self: SoftmaxTopkRouter, hidden: Tensor): RouteDecision =
   ## Batch-1 routing contract:
   ##   one hidden row [1, H], the same softmax scoring as route, outputs
   ##   sized [1, K] straight into the decode expert gather path.
@@ -381,7 +381,7 @@ proc routeDecode*(self: SoftmaxTopkRouter, hidden: Tensor): RouteDecision =
 
 # ─── Embedded-weight form (Qwen family) ───────────────────────────────────
 
-proc routeToExperts*(
+func routeToExperts*(
     hidden: Tensor,
     routerWeight: Tensor,
     numExpertsPerTok: int

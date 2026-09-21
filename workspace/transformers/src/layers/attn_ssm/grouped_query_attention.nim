@@ -24,9 +24,9 @@ type
     head_dim*: int
     num_qo_head*: int
     num_kv_head*: int
-    num_kv_groups*: int
+    num_kv_groups: int
     qo_attn_dim*: int
-    kv_attn_dim*: int
+    kv_attn_dim: int
     softmax_scale*: float64
 
   RopeGQAttention*[QKNorm] = ref object
@@ -37,15 +37,15 @@ type
     ##    `void` is the variant without qk-norm weights.
     ##  - The layer owns projections, norms and rotary only.
     ##    The KV cache arrives through the InferenceContext of forward.
-    layer_idx*: int             # Layer index for self-indexing KV cache
-    name*: string               # Safetensor key prefix (e.g., "model.layers.23.self_attn")
+    layer_idx: int             # Layer index for self-indexing KV cache
+    name: string               # Safetensor key prefix (e.g., "model.layers.23.self_attn")
     q_proj: Linear
     k_proj: Linear
     v_proj: Linear
     o_proj: Linear
     gqa_attn: GroupedQueryAttention
     rotary: RotaryPositionEmbedding
-    window*: int
+    window: int
       ## Visibility band of the layer kind.
       ## A query attends to itself and the previous `window - 1` cached keys.
       ## `FullVisibilityWindow` removes the band entirely.
@@ -121,7 +121,7 @@ const GqaKernelMaxHeadDim = 256
   ## head dims route to the expanded spelling, whose fused kernel
   ## rounds differently on rare elements
 
-proc windowedCausalMask*(qLen, kvLen, offset, window: int, device: F.DeviceKind): Tensor =
+func windowedCausalMask*(qLen, kvLen, offset, window: int, device: F.DeviceKind): Tensor =
   ## Visibility-band causal mask of the windowed attention spelling.
   ##
   ## Expected input:
@@ -387,7 +387,7 @@ func init*[QKNorm](
     result.q_norm = q_norm
     result.k_norm = k_norm
 
-proc writeKvPages(
+func writeKvPages(
     ctx: var InferenceContext, layer_idx: int,
     k_rot, v_reshaped: Tensor, offset, seq_len: int) =
   # ── Write new KV into page slots ──
@@ -441,7 +441,7 @@ proc writeKvPages(
       vView.narrow(1, 0, vSrc.size(1)).narrow(2, 0, vSrc.size(2)).copyFrom(vSrc)
       t = chunkEnd
 
-proc gatherKv(
+func gatherKv(
     ctx: var InferenceContext, layer_idx, num_kv_head, head_dim: int,
     offset, seq_len: int, kvDtype: F.ScalarKind,
     kvDevice: F.DeviceKind): (Tensor, Tensor) =
@@ -493,7 +493,7 @@ proc gatherKv(
     .narrow(2, 0, num_kv_head).narrow(3, 0, head_dim)
   (k_full, v_full)
 
-proc forward[QKNorm](
+func forward[QKNorm](
     self: RopeGQAttention[QKNorm],
     ctx: var InferenceContext,
     x: Tensor): Tensor =
@@ -580,7 +580,7 @@ proc forward[QKNorm](
         v_reshaped
 
     writeKvPages(ctx, self.layer_idx, k_rot, vWrite, offset, seq_len)
-    (k_full, v_full) = gatherKv(ctx, self.layer_idx,
+    (k_full, v_full) = ctx.gatherKv(self.layer_idx,
       self.gqa_attn.num_kv_head, self.gqa_attn.head_dim,
       offset, seq_len, kvDtype, kvDevice)
   else:
@@ -590,7 +590,7 @@ proc forward[QKNorm](
     # carries in its shared_kv_states dict.
     let (qRotated, _) = self.rotary.applyRope(q_norm_input, q_norm_input, ctx.cos, ctx.sin)
     q_rot = qRotated
-    (k_full, v_full) = gatherKv(ctx, self.kvSourceLayer,
+    (k_full, v_full) = ctx.gatherKv(self.kvSourceLayer,
       self.gqa_attn.num_kv_head, self.gqa_attn.head_dim,
       offset, seq_len, kvDtype, kvDevice)
 

@@ -85,12 +85,12 @@ type
     ##  # ... attention layers read ctx.cos, ctx.sin internally
     ##  ```
     ##
-    head_dim*: int
-    rotary_dim*: int
-    max_seq_len*: int
-    rope_theta*: float64
-    cos_cache*: Tensor     ## Precomputed (max_seq_len, rotary_dim). Immutable after init.
-    sin_cache*: Tensor     ## Precomputed (max_seq_len, rotary_dim). Immutable after init.
+    head_dim: int
+    rotary_dim: int
+    max_seq_len: int
+    rope_theta: float64
+    cos_cache: Tensor     ## Precomputed (max_seq_len, rotary_dim). Immutable after init.
+    sin_cache: Tensor     ## Precomputed (max_seq_len, rotary_dim). Immutable after init.
 
 func rotateHalf(x: Tensor): Tensor =
   # Input/Output:
@@ -157,7 +157,7 @@ func applyRopeImpl(
     result = (F.cat([qRotated, qPass], -1).transpose(1, 2),
               F.cat([kRotated, kPass], -1).transpose(1, 2))
 
-proc yarnInvFreq(dim: int, theta, factor, betaFast, betaSlow: float64, originalMaxPos: int): Tensor =
+func yarnInvFreq(dim: int, theta, factor, betaFast, betaSlow: float64, originalMaxPos: int): Tensor =
   ## Yarn-blended inverse frequencies over `dim div 2` pair entries
   ## (the DeepSeek-V2-Lite lineage, HF `_compute_yarn_parameters` construction).
   ##
@@ -190,7 +190,7 @@ proc yarnInvFreq(dim: int, theta, factor, betaFast, betaSlow: float64, originalM
   let extrapWeight = 1.0 - ramp
   plain * extrapWeight + interpolated * ramp
 
-proc yarnInvFreqF32(dim: int, theta, factor, betaFast, betaSlow: float64, originalMaxPos: int): Tensor =
+func yarnInvFreqF32(dim: int, theta, factor, betaFast, betaSlow: float64, originalMaxPos: int): Tensor =
   ## HF `_compute_yarn_parameters` spelling of the yarn blend, in f32 on CPU.
   ##
   ## Bitwise contract:
@@ -379,7 +379,7 @@ func new*(_: type RotaryPositionEmbedding,
   result.cos_cache = cos_cache
   result.sin_cache = sin_cache
 
-proc ropeByPositions*(self: RotaryPositionEmbedding, position_ids: Tensor): (Tensor, Tensor) =
+func ropeByPositions*(self: RotaryPositionEmbedding, position_ids: Tensor): (Tensor, Tensor) =
   ## Slice cos/sin cache using position_ids.
   ##
   ## **input_ids vs position_ids — they are NOT the same**:
@@ -417,7 +417,7 @@ proc ropeByPositions*(self: RotaryPositionEmbedding, position_ids: Tensor): (Ten
   # cos_cache[position_ids, :] → (seq_len, rotary_dim)
   result = (self.cos_cache.index_select(0, pos_ids), self.sin_cache.index_select(0, pos_ids))
 
-proc applyRope*(
+func applyRope*(
     self: RotaryPositionEmbedding,
     q: Tensor,
     k: Tensor,

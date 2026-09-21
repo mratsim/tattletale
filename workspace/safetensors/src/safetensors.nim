@@ -113,7 +113,7 @@ proc `=destroy`(st: var SafetensorObj) =
   if st.memFile.mem != nil:
     close(st.memFile)
 
-proc skipHook(T: typedesc[Safetensor], key: string): bool =
+func skipHook(T: typedesc[Safetensor], key: string): bool =
   key == "dataSectionOffset" or key == "memFile"
 
 const DtypeSize: array[ST_dtype, int] = [

@@ -40,35 +40,35 @@ func deriveGemma3LayerKinds(numLayers, pattern: int): seq[AttentionLayerKind] =
 
 type
   Gemma3Config* = ref object
-    architecture*: string
-    model_type*: string
+    architecture: string
+    model_type: string
     num_hidden_layers*: int
-    hidden_size*: int
-    vocab_size*: int
-    rms_norm_eps*: float
-    torch_dtype*: string
-    num_attention_heads*: int
+    hidden_size: int
+    vocab_size: int
+    rms_norm_eps: float
+    torch_dtype: string
+    num_attention_heads: int
     num_key_value_heads*: int
     head_dim*: int
-    intermediate_size*: int
-    hidden_activation*: string
-    max_position_embeddings*: int
-    rope_theta*: float64
+    intermediate_size: int
+    hidden_activation: string
+    max_position_embeddings: int
+    rope_theta: float64
       ## Global RoPE theta of the full_attention layers.
-    rope_local_base_freq*: float64
+    rope_local_base_freq: float64
       ## Local RoPE base of the sliding_attention layers.
-    query_pre_attn_scalar*: int
+    query_pre_attn_scalar: int
       ## Denominator of the attention softmax scale.
-    sliding_window*: int
+    sliding_window: int
       ## Visibility band of the sliding_attention layers.
-    sliding_window_pattern*: int
+    sliding_window_pattern: int
       ## Period of the sliding/full schedule for configs without a `layer_types` list.
     layerKinds*: seq[AttentionLayerKind]
       ## Per-layer attention kinds, parsed or derived at load.
-    bos_token_id*: int
-    eos_token_id*: int
+    bos_token_id: int
+    eos_token_id: int
       ## Stop token when the config ships a single eos id.
-    eos_token_ids*: seq[int]
+    eos_token_ids: seq[int]
       ## Stop set when the config ships an eos id list.
 
 func parseGemma3Config(json: JsonNode): Gemma3Config =
@@ -137,17 +137,17 @@ type
     layers: seq[Gemma3DecoderLayer]
     norm: RmsNormOne
     lmHead: LMHead
-    config*: Gemma3Config
-    rotaryFull*: RotaryPositionEmbedding
+    config: Gemma3Config
+    rotaryFull: RotaryPositionEmbedding
       ## RoPE table of the full_attention layers, the global rope_theta.
-    rotarySliding*: RotaryPositionEmbedding
+    rotarySliding: RotaryPositionEmbedding
       ## RoPE table of the sliding_attention layers, the local base freq.
     tokenizerPath: string
       ## Deferred tokenizer binding, the gemma-3 metaspace tokenizer is
       ## loaded on first `getTokenizer` use, never at model load.
     tokenizer: BPETokenizer
       ## Nil until the first successful `getTokenizer` call.
-    device*: DeviceKind
+    device: DeviceKind
 
 proc forward*(self: Gemma3Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   ## Full forward to logits over the input token ids.

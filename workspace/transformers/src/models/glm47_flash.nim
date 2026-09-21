@@ -32,43 +32,43 @@ import
 
 type
   Glm47Config* = ref object
-    architecture*: string
-    modelType*: string
-    transformersVersion*: string
+    architecture: string
+    modelType: string
+    transformersVersion: string
 
-    vocabSize*: int
-    hiddenSize*: int
+    vocabSize: int
+    hiddenSize: int
     numHiddenLayers*: int
-    numAttentionHeads*: int
+    numAttentionHeads: int
 
     # MLA shape: compressed-Q
-    qLoraRank*: int
+    qLoraRank: int
     kvLoraRank*: int
-    qkNopeHeadDim*: int
+    qkNopeHeadDim: int
     qkRopeHeadDim*: int
-    vHeadDim*: int
+    vHeadDim: int
 
     # Feed-forward blocks
-    firstKDenseReplace*: int
-    intermediateSize*: int
-    moeIntermediateSize*: int
-    nSharedExperts*: int
-    nRoutedExperts*: int
-    numExpertsPerTok*: int
-    routedScalingFactor*: float64
-    nGroup*: int
-    topkGroup*: int
-    normTopkProb*: bool
+    firstKDenseReplace: int
+    intermediateSize: int
+    moeIntermediateSize: int
+    nSharedExperts: int
+    nRoutedExperts: int
+    numExpertsPerTok: int
+    routedScalingFactor: float64
+    nGroup: int
+    topkGroup: int
+    normTopkProb: bool
 
     # Numerics and position handling
-    rmsNormEps*: float64
-    ropeTheta*: float64
-    maxPositionEmbeddings*: int
-    dtype*: string
+    rmsNormEps: float64
+    ropeTheta: float64
+    maxPositionEmbeddings: int
+    dtype: string
 
     # Token ids: the checkpoint config spells eos_token_id as a list,
     # the generator stop set lives in generation_config.json
-    eosTokenIds*: seq[int]
+    eosTokenIds: seq[int]
 
 type
   Glm47DenseLayer* = DecoderLayer[MLAttention[RmsNorm, FullRoPe], GatedDenseFFN, RmsNorm]
@@ -82,7 +82,7 @@ type
 #                          GLM-4.7-Flash Parsing                               #
 ################################################################################
 
-proc parseGlm47Config(json: JsonNode): Glm47Config =
+func parseGlm47Config(json: JsonNode): Glm47Config =
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")
@@ -157,9 +157,9 @@ type
     norm: RmsNorm
     lmHead: LMHead
     rotary: MlaRotary
-    config*: Glm47Config
-    tokenizer*: BPETokenizer
-    device*: DeviceKind
+    config: Glm47Config
+    tokenizer: BPETokenizer
+    device: DeviceKind
 
 proc forward*(self: Glm47Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   var x = self.embedTokens.forward(input_ids)
@@ -176,7 +176,7 @@ proc forward*(self: Glm47Model, ctx: var InferenceContext, input_ids: Tensor): T
   let normed = self.norm.forward(x + finalResidual)
   self.lmHead.forward(normed)
 
-proc getConfig(self: Glm47Model): ModelConfigBase =
+func getConfig(self: Glm47Model): ModelConfigBase =
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,
@@ -196,10 +196,10 @@ proc getConfig(self: Glm47Model): ModelConfigBase =
     mlaKpeWidth: self.config.qkRopeHeadDim
   )
 
-proc getTokenizer(self: Glm47Model): BPETokenizer =
+func getTokenizer(self: Glm47Model): BPETokenizer =
   self.tokenizer
 
-proc getDeviceKind(self: Glm47Model): DeviceKind =
+func getDeviceKind(self: Glm47Model): DeviceKind =
   self.device
 
 proc loadGlm47ModelRaw(modelPath: string, device: DeviceKind): Glm47Model =

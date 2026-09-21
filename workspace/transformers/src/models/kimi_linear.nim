@@ -42,58 +42,58 @@ import
 type
   ## Config parsed from the kimi_linear config.json.
   KimiConfig* = ref object
-    architecture*: string
-    modelType*: string
-    transformersVersion*: string
+    architecture: string
+    modelType: string
+    transformersVersion: string
 
-    vocabSize*: int
-    hiddenSize*: int
-    numHiddenLayers*: int
-    numAttentionHeads*: int
+    vocabSize: int
+    hiddenSize: int
+    numHiddenLayers: int
+    numAttentionHeads: int
 
     # MLA shape, direct-Q (q_lora_rank null on this template),
     # unrotated kpe plane
-    qLoraRankIsNone*: bool
-    kvLoraRank*: int
-    qkNopeHeadDim*: int
-    qkRopeHeadDim*: int
-    vHeadDim*: int
+    qLoraRankIsNone: bool
+    kvLoraRank: int
+    qkNopeHeadDim: int
+    qkRopeHeadDim: int
+    vHeadDim: int
 
     # Hybrid schedule, converted at parse time from the 1-indexed config
     # list to 0-based per-layer kinds
-    fullAttnLayers1Indexed*: seq[int]
-    kdaLayers1Indexed*: seq[int]
-    layerKinds*: seq[AttentionLayerKind]
+    fullAttnLayers1Indexed: seq[int]
+    kdaLayers1Indexed: seq[int]
+    layerKinds: seq[AttentionLayerKind]
 
     # Feed-forward blocks and the routed MoE
-    firstKDenseReplace*: int
-    intermediateSize*: int
-    moeIntermediateSize*: int
-    nSharedExperts*: int
-    nRoutedExperts*: int
-    numExpertsPerTok*: int
-    routedScalingFactor*: float64
-    numExpertGroup*: int
-    topkGroup*: int
-    moeRenormalize*: bool
+    firstKDenseReplace: int
+    intermediateSize: int
+    moeIntermediateSize: int
+    nSharedExperts: int
+    nRoutedExperts: int
+    numExpertsPerTok: int
+    routedScalingFactor: float64
+    numExpertGroup: int
+    topkGroup: int
+    moeRenormalize: bool
 
     # KDA mixer shape, low-rank gated derivation
-    kdaNumHeads*: int
-    kdaHeadDim*: int
-    shortConvKernelSize*: int
+    kdaNumHeads: int
+    kdaHeadDim: int
+    shortConvKernelSize: int
 
     # Numerics and position handling
-    rmsNormEps*: float64
-    ropeTheta*: float64
-    maxPositionEmbeddings*: int
-    dtype*: string
+    rmsNormEps: float64
+    ropeTheta: float64
+    maxPositionEmbeddings: int
+    dtype: string
 
     # Token ids:
     #   the stop set comes from generation_config.json
     # eos_token_id, a bare int on this checkpoint
-    eosTokenIds*: seq[int]
-    bosTokenId*: int
-    padTokenId*: int
+    eosTokenIds: seq[int]
+    bosTokenId: int
+    padTokenId: int
 
 type
   KimiMlaLayer* = DecoderLayer[MLAttention[void, NoPe],
@@ -116,8 +116,7 @@ type
 
 # Kimi-Linear config parsing
 
-proc parseHybridScheduleExplicit(numLayers: int,
-    fullAttnLayers1Indexed, kdaLayers1Indexed: seq[int]): seq[AttentionLayerKind] =
+func parseHybridScheduleExplicit(numLayers: int, fullAttnLayers1Indexed, kdaLayers1Indexed: seq[int]): seq[AttentionLayerKind] =
   ## Kimi's hybrid schedule from the 1-indexed checkpoint layer lists.
   ##
   ## Returns the 0-based per-layer kind sequence.
@@ -162,7 +161,7 @@ proc parseHybridScheduleExplicit(numLayers: int,
     "[ttt] KimiSchedule: the kda_layers set disagrees with the" &
     " complement of the full_attn_layers set")
 
-proc parseKimiConfig(json: JsonNode): KimiConfig =
+func parseKimiConfig(json: JsonNode): KimiConfig =
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")
@@ -318,9 +317,9 @@ type
     layers: seq[AnyDecoderLayer]
     norm: RmsNorm
     lmHead: LMHead
-    config*: KimiConfig
-    tokenizer*: BPETokenizer
-    device*: DeviceKind
+    config: KimiConfig
+    tokenizer: BPETokenizer
+    device: DeviceKind
 
 proc forward*(self: KimiModel, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   ## Returns the logits after a forward pass through the decoder stack.
@@ -342,7 +341,7 @@ proc forward*(self: KimiModel, ctx: var InferenceContext, input_ids: Tensor): Te
   let normed = self.norm.forward(x + finalResidual)
   self.lmHead.forward(normed)
 
-proc getConfig(self: KimiModel): ModelConfigBase =
+func getConfig(self: KimiModel): ModelConfigBase =
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,
@@ -363,10 +362,10 @@ proc getConfig(self: KimiModel): ModelConfigBase =
     layerKinds: self.config.layerKinds
   )
 
-proc getTokenizer(self: KimiModel): BPETokenizer =
+func getTokenizer(self: KimiModel): BPETokenizer =
   self.tokenizer
 
-proc getDeviceKind(self: KimiModel): DeviceKind =
+func getDeviceKind(self: KimiModel): DeviceKind =
   self.device
 
 proc loadKimiTokenizer(modelPath: string): BPETokenizer =

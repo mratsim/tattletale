@@ -29,51 +29,51 @@ import
 
 type
   LagunaConfig* = ref object
-    architecture*: string
-    model_type*: string
+    architecture: string
+    model_type: string
     num_hidden_layers*: int
-    hidden_size*: int
-    vocab_size*: int
+    hidden_size: int
+    vocab_size: int
     head_dim*: int
     num_key_value_heads*: int
-    rms_norm_eps*: float
-    torch_dtype*: string
-    intermediate_size*: int
+    rms_norm_eps: float
+    torch_dtype: string
+    intermediate_size: int
       ## FFN width of the dense layers.
-    moe_intermediate_size*: int
+    moe_intermediate_size: int
       ## Expert body width of the routed blocks.
-    num_experts*: int
-    num_experts_per_tok*: int
-    norm_topk_prob*: bool
-    moe_routed_scaling_factor*: float64
-    mlp_only_layers*: seq[int]
+    num_experts: int
+    num_experts_per_tok: int
+    norm_topk_prob: bool
+    moe_routed_scaling_factor: float64
+    mlp_only_layers: seq[int]
       ## Layer indices that stay dense.
-    decoder_sparse_step*: int
+    decoder_sparse_step: int
       ## Sparse-layer period outside `mlp_only_layers`.
-    sliding_window*: int
+    sliding_window: int
       ## Visibility band of the sliding_attention layers.
-    max_position_embeddings*: int
-    numAttentionHeadsPerLayer*: seq[int]
+    max_position_embeddings: int
+    numAttentionHeadsPerLayer: seq[int]
       ## Query-head count per layer, the checkpoint's per-layer schedule.
     layerKinds*: seq[AttentionLayerKind]
       ## Per-layer attention kinds, parsed from the `layer_types` list.
-    ropeFull*: LagunaRopeFull
+    ropeFull: LagunaRopeFull
       ## Yarn rope parameters of the full_attention layers.
-    ropeSlidingTheta*: float64
+    ropeSlidingTheta: float64
       ## Rope base of the sliding_attention layers.
-    bos_token_id*: int
-    eos_token_ids*: seq[int]
+    bos_token_id: int
+    eos_token_ids: seq[int]
       ## Stop set of the checkpoint config, an eos id list.
 
   LagunaRopeFull* = object
     ## Yarn rope parameters of the full_attention layers, the checkpoint's `rope_parameters.full_attention` block.
-    theta*: float64
-    factor*: float64
-    betaFast*: float64
-    betaSlow*: float64
-    originalMaxPos*: int
-    attentionFactor*: float64
-    rotaryDim*: int
+    theta: float64
+    factor: float64
+    betaFast: float64
+    betaSlow: float64
+    originalMaxPos: int
+    attentionFactor: float64
+    rotaryDim: int
       ## Rotating width, head_dim * partial_rotary_factor.
 
 func parseLagunaConfig(json: JsonNode): LagunaConfig =
@@ -159,14 +159,14 @@ type
       ## Dense layer 0 and routed blocks on one sequence.
     norm: RmsNorm
     lmHead: LMHead
-    config*: LagunaConfig
-    rotaryFull*: RotaryPositionEmbedding
+    config: LagunaConfig
+    rotaryFull: RotaryPositionEmbedding
       ## Yarn rope table of the full_attention layers.
-    rotarySliding*: RotaryPositionEmbedding
+    rotarySliding: RotaryPositionEmbedding
       ## Rope table of the sliding_attention layers, the default theta.
     tokenizerPath: string
       ## Deferred tokenizer binding, the Laguna tokenizer is loaded on first `getTokenizer` use, never at model load.
-    device*: DeviceKind
+    device: DeviceKind
 
 proc forward*(self: LagunaModel, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   ## Full forward to logits over the input token ids.

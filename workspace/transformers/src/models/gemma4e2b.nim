@@ -31,44 +31,44 @@ import
 
 type
   Gemma4E2BConfig* = ref object
-    architecture*: string
-    model_type*: string
+    architecture: string
+    model_type: string
     num_hidden_layers*: int
     hidden_size*: int
-    vocab_size*: int
-    rms_norm_eps*: float
-    torch_dtype*: string
-    head_dim*: int
+    vocab_size: int
+    rms_norm_eps: float
+    torch_dtype: string
+    head_dim: int
       ## Per-head width of the sliding_attention layers.
     global_head_dim*: int
       ## Per-head width of the full_attention layers.
-    num_attention_heads*: int
+    num_attention_heads: int
     num_key_value_heads*: int
-    num_kv_shared_layers*: int
+    num_kv_shared_layers: int
       ## Tail layer count that projects no k/v and gathers from the last
       ## same-kind layer before the sharing point.
-    intermediate_size*: int
+    intermediate_size: int
       ## FFN width of the self-cached layers.
-    use_double_wide_mlp*: bool
+    use_double_wide_mlp: bool
       ## Shared-kv layers widen the FFN to twice `intermediate_size`.
     hidden_size_per_layer_input*: int
       ## Per-layer embedding width (PLE), 0 disables the PLE tail.
-    sliding_window*: int
+    sliding_window: int
       ## Visibility band of the sliding_attention layers.
-    max_position_embeddings*: int
+    max_position_embeddings: int
     final_logit_softcapping*: float
       ## Logit tanh cap of the model forward, 0 disables the cap.
-    ropeFullTheta*: float64
-    ropeFullRotaryDim*: int
+    ropeFullTheta: float64
+    ropeFullRotaryDim: int
       ## Rotating width of the full_attention table, head_dim at the proportional spelling.
-    ropeFullActivePairs*: int
+    ropeFullActivePairs: int
       ## Active pair count of the proportional table,
       ## int(partial_rotary_factor * head_dim / 2).
-    ropeSlidingTheta*: float64
+    ropeSlidingTheta: float64
     layerKinds*: seq[AttentionLayerKind]
       ## Per-layer attention kinds, parsed from the text_config `layer_types` list.
-    bos_token_id*: int
-    eos_token_ids*: seq[int]
+    bos_token_id: int
+    eos_token_ids: seq[int]
       ## Stop set of the checkpoint config, an eos id list.
 
 func parseGemma4E2BConfig(json: JsonNode): Gemma4E2BConfig =
@@ -169,16 +169,16 @@ type
       ## Per-layer bf16 `[1]` output scale, real checkpoint buffers.
     norm: FusedRmsNorm
     lmHead: LMHead
-    config*: Gemma4E2BConfig
-    rotaryFull*: RotaryPositionEmbedding
+    config: Gemma4E2BConfig
+    rotaryFull: RotaryPositionEmbedding
       ## Proportional rope table of the full_attention layers, the zero-tail pair construction at the global head width.
-    rotarySliding*: RotaryPositionEmbedding
+    rotarySliding: RotaryPositionEmbedding
       ## Rope table of the sliding_attention layers, the default theta.
     tokenizerPath: string
       ## Deferred tokenizer binding, the gemma-4 tokenizer is loaded on first `getTokenizer` use, never at model load.
     tokenizer: BPETokenizer
       ## Nil until the first successful `getTokenizer` call.
-    device*: DeviceKind
+    device: DeviceKind
 
 proc forward*(self: Gemma4E2BModel, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   ## Full forward to logits over the input token ids.

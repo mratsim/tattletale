@@ -29,43 +29,43 @@ import
 
 type
   NorthConfig* = ref object
-    architecture*: string
-    model_type*: string
+    architecture: string
+    model_type: string
     num_hidden_layers*: int
-    hidden_size*: int
-    vocab_size*: int
-    rms_norm_eps*: float
-    torch_dtype*: string
-    num_attention_heads*: int
+    hidden_size: int
+    vocab_size: int
+    rms_norm_eps: float
+    torch_dtype: string
+    num_attention_heads: int
     num_key_value_heads*: int
     head_dim*: int
-    intermediate_size*: int
+    intermediate_size: int
       ## Expert body width of the routed blocks.
-    prefixDenseIntermediateSize*: int
+    prefixDenseIntermediateSize: int
       ## FFN width of the dense prefix layers.
-    firstKDenseReplace*: int
+    firstKDenseReplace: int
       ## Layer count of the dense prefix, every later layer routes.
-    prefixDenseSlidingWindowPattern*: int
+    prefixDenseSlidingWindowPattern: int
       ## Dense prefix forces rope when this is 1.
-    hidden_act*: string
-    max_position_embeddings*: int
-    rope_theta*: float64
+    hidden_act: string
+    max_position_embeddings: int
+    rope_theta: float64
       ## Single rope base of the checkpoint.
-    sliding_window*: int
+    sliding_window: int
       ## Visibility band of the sliding_attention layers.
-    num_experts*: int
-    num_experts_per_tok*: int
-    expert_selection_fn*: string
-    norm_topk_prob*: bool
-    attention_bias*: bool
-    use_qk_norm*: bool
-    use_parallel_block*: bool
+    num_experts: int
+    num_experts_per_tok: int
+    expert_selection_fn: string
+    norm_topk_prob: bool
+    attention_bias: bool
+    use_qk_norm: bool
+    use_parallel_block: bool
     logit_scale*: float
       ## Multiplier of the lm_head output.
-    layerKinds*: seq[AttentionLayerKind]
+    layerKinds: seq[AttentionLayerKind]
       ## Per-layer attention kinds, parsed from the `layer_types` list.
-    bos_token_id*: int
-    eos_token_id*: int
+    bos_token_id: int
+    eos_token_id: int
       ## Stop token of the checkpoint config.
 
 func parseNorthConfig(json: JsonNode): NorthConfig =
@@ -134,20 +134,20 @@ type
       ## both seated as FanoutDecoderLayer instantiations.
     norm: RmsNorm
     lmHead: LMHead
-    config*: NorthConfig
-    ropeApplied*: seq[bool]
+    config: NorthConfig
+    ropeApplied: seq[bool]
       ## Per-layer rope decision.
       ##
       ## - Sliding layers and the forced-rope dense prefix rotate
       ## - Full routed layers do not
-    rotary*: RotaryPositionEmbedding
+    rotary: RotaryPositionEmbedding
       ## Single rope table of the rotating layers.
     tokenizerPath: string
       ## Deferred tokenizer binding, the North-Mini tokenizer is loaded
       ## on first `getTokenizer` use, never at model load.
     tokenizer: BPETokenizer
       ## Nil until the first successful `getTokenizer` call.
-    device*: DeviceKind
+    device: DeviceKind
 
 proc loadRopePairedProjection(view: SafetensorsCollection, cfg: JsonNode,
     prefix: string, numHeads, headDim: int, device: DeviceKind): Linear =

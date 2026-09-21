@@ -98,7 +98,7 @@ template convertLibTorchExceptions(body: untyped): untyped =
 #
 # #######################################################################
 
-proc `$`*(t: Tensor): string =
+func `$`*(t: Tensor): string =
   "Tensor\n" & $(F.toCppString(t.raw))
 
 proc print*(t: Tensor) {.sideeffect, inline.} =

@@ -28,25 +28,25 @@ import
 
 type
   MistralConfig* = ref object
-    architecture*: string
-    model_type*: string
+    architecture: string
+    model_type: string
     num_hidden_layers*: int
-    hidden_size*: int
-    vocab_size*: int
-    rms_norm_eps*: float
-    torch_dtype*: string
-    num_attention_heads*: int
+    hidden_size: int
+    vocab_size: int
+    rms_norm_eps: float
+    torch_dtype: string
+    num_attention_heads: int
     num_key_value_heads*: int
     head_dim*: int
-    intermediate_size*: int
-    hidden_act*: string
-    max_position_embeddings*: int
-    rope_theta*: float64
+    intermediate_size: int
+    hidden_act: string
+    max_position_embeddings: int
+    rope_theta: float64
       ## Single rope base, the all-sliding shape ships one theta.
-    sliding_window*: int
+    sliding_window: int
       ## Visibility band of every layer, the all-sliding shape.
-    bos_token_id*: int
-    eos_token_id*: int
+    bos_token_id: int
+    eos_token_id: int
       ## Stop token of the checkpoint config.
 
 func parseMistralConfig(json: JsonNode): MistralConfig =
@@ -85,17 +85,17 @@ type
     layers: seq[MistralDecoderLayer]
     norm: RmsNorm
     lmHead: LMHead
-    config*: MistralConfig
-    layerKinds*: seq[AttentionLayerKind]
+    config: MistralConfig
+    layerKinds: seq[AttentionLayerKind]
       ## Per-layer attention kinds, all sliding_attention on this shape.
-    rotary*: RotaryPositionEmbedding
+    rotary: RotaryPositionEmbedding
       ## Single rope table, one theta over every layer.
     tokenizerPath: string
       ## Deferred tokenizer binding, the Mistral metaspace tokenizer is
       ## loaded on first `getTokenizer` use, never at model load.
     tokenizer: BPETokenizer
       ## Nil until the first successful `getTokenizer` call.
-    device*: DeviceKind
+    device: DeviceKind
 
 proc forward*(self: MistralModel, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   ## Full forward to logits over the input token ids.

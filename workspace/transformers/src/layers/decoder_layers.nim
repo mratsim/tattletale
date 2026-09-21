@@ -191,7 +191,7 @@ func init*[SequenceMixer, HiddenMixer, Norm](_: type DecoderLayer[SequenceMixer,
     hidden_mixer: hidden_mixer
   )
 
-proc forward*[SequenceMixer, HiddenMixer, Norm](
+func forward*[SequenceMixer, HiddenMixer, Norm](
   self: DecoderLayer[SequenceMixer, HiddenMixer, Norm],
   ctx: var InferenceContext,
   x: Tensor,
@@ -306,7 +306,7 @@ func init*[SequenceMixer, HiddenMixer, Norm](
     post_feedforward_layernorm: post_feedforward_layernorm
   )
 
-proc forward*[SequenceMixer, HiddenMixer, Norm](
+func forward*[SequenceMixer, HiddenMixer, Norm](
   self: SandwichDecoderLayer[SequenceMixer, HiddenMixer, Norm],
   ctx: var InferenceContext,
   x: Tensor,
@@ -400,7 +400,7 @@ func init*[SequenceMixer, HiddenMixer, Norm](
     hidden_mixer: hidden_mixer
   )
 
-proc forward*[SequenceMixer, HiddenMixer, Norm](
+func forward*[SequenceMixer, HiddenMixer, Norm](
   self: FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm],
   ctx: var InferenceContext,
   x: Tensor,
@@ -423,11 +423,11 @@ proc forward*[SequenceMixer, HiddenMixer, Norm](
   ## - the caller adds the pair at the next block boundary or at the model
   ##   final before the norm
   ##
-  ## Chain:
+  ## Dataflow:
   ##
-  ## - `hNorm = input_layernorm(x + residual)` when a residual was carried
-  ## - `hNorm = input_layernorm(x)` otherwise, the carried residual is `x`
-  ## - `result = (sequence_mixer(ctx, hNorm) + hidden_mixer(hNorm), residual)`
+  ##   x ─→ (carried residual ? x + residual : x) ─→ input_layernorm ─→ hNorm
+  ##   hNorm ─→ sequence_mixer(ctx, hNorm) ──┐
+  ##   hNorm ─→ hidden_mixer(hNorm) ─────────┴→ contribution ─→ (contribution, residual)
   ##
   ## The sequence mixer owns positional and cache state.
   ## RoPE, KV pages and recurrent state all travel through `ctx`.

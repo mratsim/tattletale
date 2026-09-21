@@ -45,7 +45,7 @@ proc loadModel*(modelPath: string, device: DeviceKind): AnyModel =
   let loader = registry[arch]
   loader(modelPath, device)
 
-proc parseTorchDtype(s: string): ScalarKind =
+func parseTorchDtype(s: string): ScalarKind =
   ## Parse dtype string from config.json to ScalarKind enum.
   ## Based on transformers dtype string format (lowercase).
   case s.toLowerAscii()

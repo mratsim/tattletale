@@ -51,7 +51,8 @@ type
 
 # ─── Quant method detection ────────────────────────────────────────────
 
-proc detectQuantization*(cfg: JsonNode): QuantFormatKind =
+func detectQuantization*(cfg: JsonNode): QuantFormatKind =
+  ## Quantization family of a checkpoint config, exl3 only, qBF16 otherwise.
   if cfg.hasKey("quantization_config"):
     let qm = cfg["quantization_config"]["quant_method"].getStr("")
     checkValue(qm == "exl3",
@@ -66,7 +67,8 @@ const QuantLoaderRegistry = static(QuantLoaderRegistry)
 
 # ─── Activations ────────────────────────────────────────────────────────
 
-proc getDeployDtype*(cfg: JsonNode): ScalarKind =
+func getDeployDtype*(cfg: JsonNode): ScalarKind =
+  ## Deployment dtype of a checkpoint config, resolved through the quant loader registry.
   QuantLoaderRegistry[detectQuantization(cfg)].deployDtype
 
 # ─── Linear ─────────────────────────────────────────────────────────────
@@ -89,21 +91,21 @@ proc loadRmsWeight(view: SafetensorsCollection, cfg: JsonNode, prefix: string,
   (quant: quant, weight: weight, eps: eps)
 
 proc load*(_: type RmsNorm, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNorm =
-  let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
+  let (quant, weight, eps) = view.loadRmsWeight(cfg, prefix, device)
   RmsNorm.init(weight, quant, eps)
 
 proc load*(_: type RmsNormOne, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNormOne =
-  let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
+  let (quant, weight, eps) = view.loadRmsWeight(cfg, prefix, device)
   RmsNormOne.init(weight, quant, eps)
 
 proc load*(_: type FusedRmsNorm, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): FusedRmsNorm =
   ## Loads the single-rounding RMS norm, the plain-weight gemma-4 spelling.
-  let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
+  let (quant, weight, eps) = view.loadRmsWeight(cfg, prefix, device)
   FusedRmsNorm.init(weight, quant, eps)
 
 proc load*(_: type RmsNormGated, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNormGated =
   ## Checkpoints store this weight as F32 and it deploys as the format's dtype.
-  let (_, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
+  let (_, weight, eps) = view.loadRmsWeight(cfg, prefix, device)
   RmsNormGated.init(weight, eps)
 
 # ─── Embedding ──────────────────────────────────────────────────────────
@@ -301,7 +303,7 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
 
 # ─── GatedDeltaNet ─────────────────────────────────────────────────────────
 
-func normalizeAGateLog*(key: string, aLog: Tensor, numHeads: int): Tensor =
+func normalizeAGateLog(key: string, aLog: Tensor, numHeads: int): Tensor =
   ## A_log normalized to (heads, 1) f32 from the checkpoint forms flat
   ## (heads), (heads, 1) or the (1, 1, heads, 1) rank-4 view. Raises
   ## ValueError naming `key` for any other form. Load-convention

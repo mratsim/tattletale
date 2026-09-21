@@ -32,41 +32,41 @@ import
 
 type
   MoonlightConfig* = ref object
-    architecture*: string
-    modelType*: string
-    transformersVersion*: string
+    architecture: string
+    modelType: string
+    transformersVersion: string
 
-    vocabSize*: int
-    hiddenSize*: int
+    vocabSize: int
+    hiddenSize: int
     numHiddenLayers*: int
-    numAttentionHeads*: int
+    numAttentionHeads: int
 
     # MLA shape
     kvLoraRank*: int
-    qkNopeHeadDim*: int
+    qkNopeHeadDim: int
     qkRopeHeadDim*: int
-    vHeadDim*: int
+    vHeadDim: int
 
     # Feed-forward blocks
-    firstKDenseReplace*: int
-    intermediateSize*: int
-    moeIntermediateSize*: int
-    nSharedExperts*: int
-    nRoutedExperts*: int
-    numExpertsPerTok*: int
-    routedScalingFactor*: float64
-    nGroup*: int
-    topkGroup*: int
-    normTopkProb*: bool
+    firstKDenseReplace: int
+    intermediateSize: int
+    moeIntermediateSize: int
+    nSharedExperts: int
+    nRoutedExperts: int
+    numExpertsPerTok: int
+    routedScalingFactor: float64
+    nGroup: int
+    topkGroup: int
+    normTopkProb: bool
 
     # Numerics and position handling
-    rmsNormEps*: float64
-    ropeTheta*: float64
-    maxPositionEmbeddings*: int
-    dtype*: string
+    rmsNormEps: float64
+    ropeTheta: float64
+    maxPositionEmbeddings: int
+    dtype: string
 
     # Token ids
-    textEosTokenId*: int
+    textEosTokenId: int
 
 type
   MoonlightDenseLayer* = DecoderLayer[MLAttention[void, FullRoPe], GatedDenseFFN, RmsNorm]
@@ -77,7 +77,7 @@ type
 #                          Moonlight Parsing                                   #
 ################################################################################
 
-proc parseMoonlightConfig(json: JsonNode): MoonlightConfig =
+func parseMoonlightConfig(json: JsonNode): MoonlightConfig =
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")
@@ -143,9 +143,9 @@ type
     norm: RmsNorm
     lmHead: LMHead
     rotary: MlaRotary
-    config*: MoonlightConfig
-    tokenizer*: BPETokenizer
-    device*: DeviceKind
+    config: MoonlightConfig
+    tokenizer: BPETokenizer
+    device: DeviceKind
 
 proc forward*(self: MoonlightModel, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   var x = self.embedTokens.forward(input_ids)
@@ -162,7 +162,7 @@ proc forward*(self: MoonlightModel, ctx: var InferenceContext, input_ids: Tensor
   let normed = self.norm.forward(x + finalResidual)
   self.lmHead.forward(normed)
 
-proc getConfig(self: MoonlightModel): ModelConfigBase =
+func getConfig(self: MoonlightModel): ModelConfigBase =
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,
@@ -181,10 +181,10 @@ proc getConfig(self: MoonlightModel): ModelConfigBase =
     mlaKpeWidth: self.config.qkRopeHeadDim
   )
 
-proc getTokenizer(self: MoonlightModel): BPETokenizer =
+func getTokenizer(self: MoonlightModel): BPETokenizer =
   self.tokenizer
 
-proc getDeviceKind(self: MoonlightModel): DeviceKind =
+func getDeviceKind(self: MoonlightModel): DeviceKind =
   self.device
 
 proc loadMoonlightTokenizer(modelPath: string): BPETokenizer =

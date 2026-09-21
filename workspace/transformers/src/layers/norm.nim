@@ -19,10 +19,10 @@ type
     ## Root-mean-square layer norm with a learned per-dimension scale.
     ##   `output = (x * rsqrt(mean(x^2) + eps)) * w`
     ## The bias-one variant is RmsNormOne.
-    weight*: Tensor
-    eps*: float64
+    weight: Tensor
+    eps: float64
     hidden_size*: int
-    quant_format*: QuantFormatKind
+    quant_format: QuantFormatKind
 
 func init*(_: type RmsNorm, weight: Tensor, quant_format: QuantFormatKind = qBF16,
            eps: SomeFloat = 1e-6): RmsNorm =
@@ -34,7 +34,7 @@ func init*(_: type RmsNorm, weight: Tensor, quant_format: QuantFormatKind = qBF1
     quant_format: quant_format,
   )
 
-proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
+func forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
   ## RMSNorm with FP32 intermediate.
   ##
   ## Forward pass with float32 upcasting for normalization:
@@ -85,7 +85,7 @@ proc forward*(self: RmsNorm, hidden_state: Tensor): Tensor =
     let rstd = variance.add(Scalar(self.eps)).rsqrt()
     return (x * rstd).to(input_dtype) * self.weight.to(input_dtype)
 
-proc forward_with_residual(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
+func forward_with_residual(self: RmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
   ## Fused residual addition + RMSNorm.
   let new_residual = hidden_state + residual
   (self.forward(new_residual), new_residual)
@@ -107,10 +107,10 @@ type
     ##
     ## The checkpoint stores the offset `w`.
     ## A stored zero leaves the norm unscaled.
-    weight*: Tensor
-    eps*: float64
+    weight: Tensor
+    eps: float64
     hidden_size*: int
-    quant_format*: QuantFormatKind
+    quant_format: QuantFormatKind
 
 func init*(_: type RmsNormOne, weight: Tensor, quant_format: QuantFormatKind = qBF16,
            eps: SomeFloat = 1e-6): RmsNormOne =
@@ -122,7 +122,7 @@ func init*(_: type RmsNormOne, weight: Tensor, quant_format: QuantFormatKind = q
     quant_format: quant_format,
   )
 
-proc forward*(self: RmsNormOne, hidden_state: Tensor): Tensor =
+func forward*(self: RmsNormOne, hidden_state: Tensor): Tensor =
   ## Bias-one RMSNorm over the last dimension, FP32 intermediate:
   ##   `output = (x * rsqrt(mean(x^2) + eps)) * (1 + w)`
   let input_dtype = hidden_state.scalarType()
@@ -132,7 +132,7 @@ proc forward*(self: RmsNormOne, hidden_state: Tensor): Tensor =
   let rstd = variance.add(Scalar(self.eps)).rsqrt()
   return (x * rstd * (Scalar(1.0) + w)).to(input_dtype)
 
-proc forward_with_residual(self: RmsNormOne, hidden_state, residual: Tensor): (Tensor, Tensor) =
+func forward_with_residual(self: RmsNormOne, hidden_state, residual: Tensor): (Tensor, Tensor) =
   ## Residual addition + bias-one RMSNorm.
   let new_residual = hidden_state + residual
   (self.forward(new_residual), new_residual)
@@ -165,7 +165,7 @@ func init*(_: type RmsNormGated, weight: Tensor, eps: SomeFloat = 1e-6): RmsNorm
     hidden_size: hidden_size,
   )
 
-proc forward*(self: RmsNormGated, x: Tensor, gate: Tensor): Tensor =
+func forward*(self: RmsNormGated, x: Tensor, gate: Tensor): Tensor =
   ## RmsNormGated over the last dimension of `x`, gated by `silu(gate)`.
   ##
   ## Args:
@@ -211,7 +211,7 @@ func init*(_: type RmsNormGatedSigmoid, weight: Tensor,
     hidden_size: hidden_size,
   )
 
-proc forward*(self: RmsNormGatedSigmoid, x: Tensor, gate: Tensor): Tensor =
+func forward*(self: RmsNormGatedSigmoid, x: Tensor, gate: Tensor): Tensor =
   ## RmsNormGatedSigmoid over the last dimension of `x`, sigmoid-gated
   ## by `sigmoid(gate)`.
   ##
@@ -260,7 +260,7 @@ func init*(_: type FusedRmsNormGatedSigmoid, weight: Tensor,
     hidden_size: hidden_size,
   )
 
-proc forward*(self: FusedRmsNormGatedSigmoid, x: Tensor, gate: Tensor): Tensor =
+func forward*(self: FusedRmsNormGatedSigmoid, x: Tensor, gate: Tensor): Tensor =
   ## The flash-linear-attention fused single-rounding form over the last
   ## dimension of `x`, sigmoid-gated.
   ##
@@ -294,10 +294,10 @@ type
     ## Normalization, weight multiply and dtype cast each run exactly once,
     ## no intermediate rounding at the normed product.
     ## The two-rounding form is RmsNorm, the bias-one form is RmsNormOne.
-    weight*: Tensor
-    eps*: float64
+    weight: Tensor
+    eps: float64
     hidden_size*: int
-    quant_format*: QuantFormatKind
+    quant_format: QuantFormatKind
 
 func init*(_: type FusedRmsNorm, weight: Tensor, quant_format: QuantFormatKind = qBF16, eps: SomeFloat = 1e-6): FusedRmsNorm =
   ## Build one single-rounding RMS norm from a `[width]` weight.
@@ -308,7 +308,7 @@ func init*(_: type FusedRmsNorm, weight: Tensor, quant_format: QuantFormatKind =
     quant_format: quant_format,
   )
 
-proc forward*(self: FusedRmsNorm, hidden_state: Tensor): Tensor =
+func forward*(self: FusedRmsNorm, hidden_state: Tensor): Tensor =
   ## Single-rounding RMS norm over the last dimension, FP32 intermediate:
   ##   output = (x * rsqrt(mean(x^2) + eps) * w).to(x.dtype)
   ##
@@ -326,7 +326,7 @@ proc forward*(self: FusedRmsNorm, hidden_state: Tensor): Tensor =
 template `()`*(layer: FusedRmsNorm, x: Tensor): untyped =
   forward(layer, x)
 
-proc forward_with_residual(self: FusedRmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
+func forward_with_residual(self: FusedRmsNorm, hidden_state, residual: Tensor): (Tensor, Tensor) =
   ## Residual addition + single-rounding RMS norm.
   let new_residual = hidden_state + residual
   (self.forward(new_residual), new_residual)

@@ -70,7 +70,7 @@ func init*(
     activation: activation
   )
 
-proc forward*(self: GatedDenseFFN, x: Tensor): Tensor =
+func forward*(self: GatedDenseFFN, x: Tensor): Tensor =
   ## Forward pass for inference.
   ##
   ## Args:
@@ -226,8 +226,7 @@ func init*(
 # while the batched gather copies the K expert bodies first, so the copy
 # traffic prices the gather out once the routed weight bytes outgrow the caches. MPS keeps the batched gather form.
 
-proc expertBody(gateUpWeight, downWeight, currentStates: Tensor,
-    activation: ActivationKind): Tensor =
+func expertBody(gateUpWeight, downWeight, currentStates: Tensor, activation: ActivationKind): Tensor =
   ## One routed expert body on the gathered token rows.
   ##
   ## - the fused gate_up GEMM covers the full [2I, H] weight, narrow
@@ -262,32 +261,28 @@ type
     ## - the routing weight rounds to the hidden dtype ahead of the multiply
     ## - the HF gated router computes the routing weights at the hidden dtype
 
-proc weightedTerms(policy: typedesc[RoundAfterSum],
-    downOut, topKWeights: Tensor): Tensor =
+func weightedTerms(policy: typedesc[RoundAfterSum], downOut, topKWeights: Tensor): Tensor =
   ## Weighted expert outputs per top-k position as [K, 1, H] f32, the product stays f32 and rounds to the hidden dtype
   ## once at the accumulated sum.
   let weightCol = topKWeights.transpose(0, 1).unsqueeze(2).to(F.kFloat32)
   downOut.to(F.kFloat32) * weightCol
 
-proc weightedTerms(policy: typedesc[RoundBeforeMultiply],
-    downOut, topKWeights: Tensor): Tensor =
+func weightedTerms(policy: typedesc[RoundBeforeMultiply], downOut, topKWeights: Tensor): Tensor =
   ## Weighted expert outputs per top-k position as [K, 1, H] at the expert output dtype, one rounding per weighted term.
   let weightCol = topKWeights.transpose(0, 1).unsqueeze(2)
     .to(downOut.scalarType())
   downOut * weightCol
 
-proc weightedTerm(policy: typedesc[RoundAfterSum],
-    downOut, topKWeights: Tensor, pos: int): Tensor =
+func weightedTerm(policy: typedesc[RoundAfterSum], downOut, topKWeights: Tensor, pos: int): Tensor =
   ## One weighted expert output inside the per-expert loop form, the f32 product joins the f32 accumulator unchanged.
   downOut.to(F.kFloat32) * topKWeights[0, pos].item(float32)
 
-proc weightedTerm(policy: typedesc[RoundBeforeMultiply],
-    downOut, topKWeights: Tensor, pos: int): Tensor =
+func weightedTerm(policy: typedesc[RoundBeforeMultiply], downOut, topKWeights: Tensor, pos: int): Tensor =
   ## One weighted expert output inside the per-expert loop form, one
   ## rounding per weighted term, the product joins the f32 accumulator.
   (downOut * topKWeights[0, pos]).to(F.kFloat32)
 
-proc expertForwardDecode*(policy: typedesc,
+func expertForwardDecode*(policy: typedesc,
     gateUpProj, downProj: Tensor,
     hiddenStates: Tensor,
     topKIndex: Tensor,
@@ -354,7 +349,7 @@ proc expertForwardDecode*(policy: typedesc,
   result = weightedTerms(policy, downOut, topKWeights).sum(0)
     .to(hiddenStates.scalarType())
 
-proc expertForwardPrefill(
+func expertForwardPrefill(
     self: GatedBlockSparseFFN,
     hiddenStates: Tensor,
     topKIndex: Tensor,
@@ -475,7 +470,7 @@ proc expertForwardPrefill(
 
   result = finalHiddenStates
 
-proc forward*(self: GatedBlockSparseFFN, hidden: Tensor): Tensor =
+func forward*(self: GatedBlockSparseFFN, hidden: Tensor): Tensor =
   ## Routed FFN forward on rank-2 [T, H] or rank-3 [B, T, H] hidden
   ## states, the FFN contribution at the input shape: routing from the
   ## embedded routerWeight, the sigmoid shared-expert gate, the routed
@@ -612,7 +607,7 @@ func init*(
     groupedPairSum: groupedPairSum
   )
 
-proc expertForwardPrefillPlain(
+func expertForwardPrefillPlain(
     self: BlockSparseFFN,
     hiddenStates: Tensor,
     topKIndex: Tensor,
@@ -697,7 +692,7 @@ proc expertForwardPrefillPlain(
 
   result = finalHiddenStates
 
-proc expertForwardPairs*(
+func expertForwardPairs*(
     gateUpProj, downProj: Tensor,
     hiddenStates, topKIndex, topKWeights: Tensor,
     activation: ActivationKind,
@@ -798,7 +793,7 @@ proc expertForwardPairs*(
     .reshape(t, topK, hidden).sum(axis = 1)
   result = summed.to(hiddenStates.scalarType())
 
-proc forward*(self: BlockSparseFFN, hidden: Tensor): Tensor =
+func forward*(self: BlockSparseFFN, hidden: Tensor): Tensor =
   ## Routed FFN forward on the embedded noaux_tc router, the ungated
   ## shared-expert tail. Token rows flatten to [T, H], route, run the
   ## expert bodies and the shared expert, reshape on output.
