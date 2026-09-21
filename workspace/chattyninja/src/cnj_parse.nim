@@ -28,7 +28,7 @@
 # - each construct body walk consumes at least one tag per pass, so arena growth stays bounded by the tag count
 #
 # - a find that misses reports `stop` or raises, never rescans
-# - construct nesting has a valve, `ParseNestingCap` bounding the dispatch recursion, a breach raising located at the tag
+# - construct nesting is capped at `ParseNestingCap`, the dispatch recursion bounded, a breach raising located at the tag
 # - the trailing-newline back-trim walk in `settle` decrements its arena index toward `tagMark`
 #
 # | Rule                 | Effect                                                                                            |
@@ -81,7 +81,7 @@ type
     done: bool # the scan reached the end of the template
     dropCur: bool # settle emptied `cur`, parseBody emits no node for it
     tagMark: int # arena length at the last tag pull, the back-trim walk stops here
-    nesting: int # body-carrying constructs under construction, the valve `parseNested` checks
+    nesting: int # body-carrying constructs under construction, `parseNested` caps the recursion on it
     loopDepth: int # enclosing `{% for %}` bodies under construction, 0 at top level
     macroDepth: int # enclosing `{% macro %}` bodies under construction, 0 at top level
     symbols: CompiledSymbols
@@ -421,9 +421,9 @@ proc parseBody(p: var Parser, stopKws: openArray[string]): Head
 proc parseConstruct(p: var Parser): Head
 
 template parseNested(p: var Parser, stopKws: openArray[string], t: Tag): Head =
-  ## One body walk of a construct, the parse recursion's valve. The nesting count rises per
-  ## body-carrying construct, a breach raising located at the tag, and falls once the body
-  ## returns. A raise past the valve aborts the whole parse, so the fall needs no finally.
+  ## One body walk of a construct, the recursion's nesting count rising at its entry,
+  ## falling once the body returns. The count is capped at `ParseNestingCap`, a breach
+  ## raising located at the tag. A raise aborts the whole parse, the parser value abandoned.
   inc p.nesting
   if p.nesting > ParseNestingCap:
     raise jinjaErr("template nests deeper than ParseNestingCap = " & $ParseNestingCap &

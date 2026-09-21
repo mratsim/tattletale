@@ -162,7 +162,7 @@ let (mo, _) = parseTemplate("{% macro m() %}{% break %}{% endmacro %}{% for x in
 doAssert mo.nodes.anyIt(it.kind == nkBreak),
     "a break inside a macro body parses, the call site deciding the enclosure"
 
-# Construct nesting has a parse valve, a template nested past ParseNestingCap raising located
+# Construct nesting is capped at ParseNestingCap, a template nested past it raising located
 # at the offending tag, never exhausting the dispatch stack. Nesting at the cap parses.
 block nestingValve:
   block:
@@ -178,15 +178,23 @@ block nestingValve:
     reported = e.what
     at = e.offset
   doAssert "ParseNestingCap" in reported, reported
-  doAssert at >= 0, "the valve raises located: offset " & $at
+  let tagStart = "{% if x %}".len * ParseNestingCap
+  doAssert at >= tagStart and at < tagStart + "{% if x %}".len,
+      "the cap raise located inside the offending tag: offset " & $at
 
 # Truncation is a located raise, never a spin. Every body walk consumes at least one tag,
 # an unterminated construct reaching the end sentinel, its close check reporting it.
 block truncationRaisesLocated:
-  for t in ["{% set x %}body", "{% generation %}body", "{% for x in xs %}{{ x }}",
-      "{% if x %}body", "{{ x", "{% x", "{# c", "{% raw %}body",
-      "{% macro f(a, b = 1 %}body{% endmacro %}", "{% macro f(, %}body{% endmacro %}",
-      "{% macro f %}body{% endmacro %}", "{% endfor %}", "{% elif x %}"]:
+  # Each test checks the raise offset inside the offending tag's span, so a raise
+  # at an unrelated byte fails the test.
+  for truncation in [("{% set x %}body", 0, 11), ("{% generation %}body", 0, 16),
+      ("{% for x in xs %}{{ x }}", 0, 17), ("{% if x %}body", 0, 10),
+      ("{{ x", 0, 4), ("{% x", 0, 4), ("{# c", 0, 4), ("{% raw %}body", 0, 9),
+      ("{% macro f(a, b = 1 %}body{% endmacro %}", 0, 22),
+      ("{% macro f(, %}body{% endmacro %}", 0, 15),
+      ("{% macro f %}body{% endmacro %}", 0, 13), ("{% endfor %}", 0, 12),
+      ("{% elif x %}", 0, 12)]:
+    let (t, tagLo, tagHi) = truncation
     var reported = ""
     var at = -1
     try:
@@ -196,7 +204,8 @@ block truncationRaisesLocated:
       reported = e.what
       at = e.offset
     doAssert reported.len > 0, "truncation raised nothing: " & t
-    doAssert at >= 0, "the truncation raise located: " & t & " at " & $at
+    doAssert at >= tagLo and at < tagHi,
+        "the truncation raise located inside the offending tag: " & t & " at " & $at
 
 # Declared-gap terminators (`endmacro` without a matching macro) raise the gap message,
 # which carries no location by the gap raise's contract.

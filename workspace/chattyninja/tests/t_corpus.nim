@@ -11,6 +11,7 @@
 ##
 ## - byte-exact delivery of every ok row through `pullAll`, a buffered pull loop,
 ##   windowed consumers, every err row raising the recorded error, declared gaps loud
+## - every ok row's generation spans asserted verbatim on every delivery path
 ## - the window contract, the for-filter raise with repull-resume, the macro scope pop,
 ##   the ensure_ascii escape shapes, the compiled artifact layout
 ## - allocation counting under `-d:nimAllocStats`
@@ -371,8 +372,11 @@ func pieceRemaining(p: Piece): int =
   of pkCut: int(p.chi - p.clo) - p.pos
   of pkLazy: 0
 
-proc renderPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64, cap: int): string =
+proc renderPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64, cap: int): tuple[
+    text: string, spans: seq[tuple[start, stop: int]]] =
   ## Renders through `pull` with a `cap`-byte caller buffer, accumulating every fill.
+  ## Returns the render bytes and the driver's recorded generation spans, byte coordinates
+  ## into the bytes.
   var c = startRender(m, sym, ctx, clock)
   var buf = newSeq[char](cap)
   while true:
@@ -380,7 +384,8 @@ proc renderPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, cl
     if n == 0:
       break
     for i in 0 ..< n:
-      result.add buf[i]
+      result.text.add buf[i]
+  result.spans = c.generationSpans()
 
 proc renderAllPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): string =
   ## Renders through `pullAll` with a fresh render context.
@@ -424,12 +429,16 @@ func asCodepointSpans(s: string, spans: seq[tuple[start, stop: int]]): seq[tuple
   for (a, b) in spans:
     result.add (cpIndex(s, a), cpIndex(s, b))
 
-proc renderChunked[N: static int](m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): string =
+proc renderChunked[N: static int](m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): tuple[
+    text: string, spans: seq[tuple[start, stop: int]]] =
   ## Renders one row through `N`-byte windows, accumulating every window.
+  ## Returns the render bytes and the driver's recorded generation spans, byte coordinates
+  ## into the bytes.
   var pc = pullChunks[N](startRender(m, sym, ctx, clock))
   for w in pc.items():
     for ch in w:
-      result.add ch
+      result.text.add ch
+  result.spans = pc.c.generationSpans()
 
 # Compiled-form ABI over the node budget, the arena's POD status, the shared
 # read-only `CompiledTemplate` and dispatch totality.
@@ -529,6 +538,31 @@ block corpusDelivery:
   const parseable = ["deepseekv2lite", "gemma3", "gemma4", "glm47flash", "glm53flash",
       "gptoss20b", "kimi", "lagunaxs21", "lfm25", "ling30", "mimo25", "mistral7bv01",
       "moonlight", "northminicode10", "qwen3", "qwen35", "qwen36", "qwen38flashnext"]
+  # Suite discovery is the const list, not the directory. A suite dir added under corpus/
+  # would walk zero rows silently, so the dir count is checked against the list.
+  var suiteDirs = 0
+  for entry in walkDir(CorpusRoot):
+    if entry.kind == pcDir:
+      inc suiteDirs
+  doAssert suiteDirs == parseable.len,
+      "corpus suite dirs: " & $suiteDirs & ", parseable list: " & $parseable.len
+  # Each gap row records the construct name its raise must carry. A gap naming
+  # another construct fails the name check before the count.
+  const gapNames = [
+    ("gemma4/channel_strip", "nkSetBlock"),
+    ("gemma4/default", "nkSetBlock"),
+    ("gemma4/enable_thinking_true", "nkSetBlock"),
+    ("gemma4/tools_tool_response", "dictsort"),
+    ("mimo25/tools_tool_response", "items"),
+    ("northminicode10/default", "nkSetBlock"),
+    ("northminicode10/documents_grounding", "nkSetBlock"),
+    ("northminicode10/reasoning_off", "nkSetBlock"),
+    ("northminicode10/tool_break", "nkSetBlock"),
+    ("northminicode10/tools_tool_response", "nkSetBlock"),
+    ("qwen35/tools_tool_response", "items"),
+    ("qwen36/tools_tool_response", "items"),
+    ("qwen38flashnext/tools_tool_response", "items"),
+  ]
   var okExact = 0
   var gapRows = 0
   var errRaised = 0
@@ -567,7 +601,7 @@ block corpusDelivery:
 
       # Ok row. The whole render, a 256-byte buffered pull loop and 7-byte and 1-byte
       # windowed consumers all deliver the recorded bytes, the recorded generation spans
-      # exact. A declared gap raises loud.
+      # exact on every path. A declared gap raises loud.
       var raised = ""
       var whole = ""
       var gotSpans: seq[tuple[start, stop: int]]
@@ -578,6 +612,15 @@ block corpusDelivery:
         # - declared constructs and unimplemented filter names raise with cause `ceUnimplemented`
         # - any other raise fails the row
         if e.cause == ceUnimplemented:
+          var want = ""
+          for g in gapNames:
+            if g[0] == suite & "/" & r.row:
+              want = g[1]
+          if want.len == 0:
+            fail(suite & "/" & r.row & ": a new gap row appeared, record its expected construct name")
+          if want notin e.what:
+            fail(suite & "/" & r.row & ": the gap raise does not name the recorded missing construct: got `" &
+                e.what & "`, want `" & want & "`")
           inc gapRows
           continue
         raised = e.what
@@ -590,18 +633,27 @@ block corpusDelivery:
       if asCodepointSpans(whole, gotSpans) != r.spans:
         fail(suite & "/" & r.row & ": generation spans differ: got " & $asCodepointSpans(whole,
             gotSpans) & ", want " & $r.spans)
-      let buffered = renderPull(m, tables, r.context, r.clock, 256)
+      let (buffered, bufSpans) = renderPull(m, tables, r.context, r.clock, 256)
       if not sameBytes(buffered, r.rendered):
         fail(suite & "/" & r.row & ": the 256-byte pull render differs: " &
             report(buffered, r.rendered))
-      let chunked7 = renderChunked[7](m, tables, r.context, r.clock)
+      if asCodepointSpans(buffered, bufSpans) != r.spans:
+        fail(suite & "/" & r.row & ": the 256-byte pull render's generation spans differ: got " &
+            $asCodepointSpans(buffered, bufSpans) & ", want " & $r.spans)
+      let (chunked7, spans7) = renderChunked[7](m, tables, r.context, r.clock)
       if not sameBytes(chunked7, r.rendered):
         fail(suite & "/" & r.row & ": the 7-byte window render differs: " &
             report(chunked7, r.rendered))
-      let chunked1 = renderChunked[1](m, tables, r.context, r.clock)
+      if asCodepointSpans(chunked7, spans7) != r.spans:
+        fail(suite & "/" & r.row & ": the 7-byte window render's generation spans differ: got " &
+            $asCodepointSpans(chunked7, spans7) & ", want " & $r.spans)
+      let (chunked1, spans1) = renderChunked[1](m, tables, r.context, r.clock)
       if not sameBytes(chunked1, r.rendered):
         fail(suite & "/" & r.row & ": the 1-byte window render differs: " &
             report(chunked1, r.rendered))
+      if asCodepointSpans(chunked1, spans1) != r.spans:
+        fail(suite & "/" & r.row & ": the 1-byte window render's generation spans differ: got " &
+            $asCodepointSpans(chunked1, spans1) & ", want " & $r.spans)
       inc okExact
   # Render invariance under fresh drivers:
   # the same compiled template rendered twice delivers byte-equal output.
@@ -815,7 +867,7 @@ block valueBoundary:
   let want = renderToString(src, ctx, 0.0)
   doAssert want == longA & longB, "the string render is not the contents concatenation"
 
-  let pulled = renderPull(m, tables, ctx, 0.0, 8)
+  let (pulled, _) = renderPull(m, tables, ctx, 0.0, 8)
   doAssert pulled == want, "the 8-byte pull render differs across the value boundary"
   let whole = renderAllPull(m, tables, ctx, 0.0)
   doAssert whole == want, "pullAll differs across the value boundary"

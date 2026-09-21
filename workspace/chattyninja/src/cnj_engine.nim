@@ -322,36 +322,48 @@ func gap(kindName, corpusSite: string, lo, hi: int): void {.noreturn.} =
   raise jinjaErr(kindName & " is not implemented; " & corpusSite, lo, hi - lo,
       cause = ceUnimplemented)
 
-func closeMacroRow(st: var RenderState, r: Row) =
-  ## Closes one macro row, the close both a body-end close and a break's boundary stop take.
+func outsideEveryFor(tmpl: CompiledTemplate, lo, hi: int32): void {.noreturn.} =
+  ## Raises the no-enclosing-`{% for %}` report for a break or continue,
+  ## `lo` and `hi` bounding the keyword.
+  raise jinjaErr("`{% " & spanString(tmpl.jinja.toOpenArray(int(lo), int(hi) - 1)) &
+      " %}` ran outside every `{% for %}`", int(lo), int(hi - lo))
+
+func closeMacroRow(st: var RenderState, at: int) =
+  ## Closes the macro row at index `at`, the close both a body-end close and a break's
+  ## boundary stop take, every row above the boundary dropped with the close.
   ## - scopes pop back to the row's mark, the depth count falling with them
   ## - control continues at the row's return node, queued pieces draining to the caller
-  st.scopes.setLen(r.scopeAt - 1)
-  st.curNode = r.retNode
-  st.rows.setLen(st.rows.len - 1)
+  st.scopes.setLen(st.rows[at].scopeAt - 1)
+  st.curNode = st.rows[at].retNode
+  st.rows.setLen(at)
   dec st.macroDepth
 
 func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Unwinds to the nearest for-row, stopping at a macro-call boundary so a break cannot cross out of its macro.
-  ## `{% continue %}` shares the node kind, the keyword's first byte discriminating the two.
+  ## `{% continue %}` shares the node kind, the keyword span discriminating the two.
   ## A continue leaves the for-row and its scope in place, the loop's advance step running next.
   ##
   ## Contract:
-  ## - capture and generation body rows above the for-row are abandoned on the walk, scopes
-  ##   popped with them, a capture sink never bound
-  ## - a break with no for-row above the next macro boundary ends that macro body early,
-  ##   output so far draining on, the same close a body-end close takes
+  ## - generation body rows above the for-row are abandoned on the walk, the partial span
+  ##   of each abandoned generation closing at the position reached, no scope popped
+  ##   (generation rows push none, a capture row carries its own close)
+  ## - a continue raises located at a macro-call boundary, a break with no for-row above
+  ##   the next macro boundary ends that macro body early, the same close a body-end close takes
   ## - the walk is bounded by the row-stack depth, one pass per row, a break reaching past
   ##   every row raising located
   template nd: Node = tmpl.nodes[n]
-  let cont = tmpl.jinja[nd.lo] == 'c'
+  # Continue discriminates from break over the keyword span, trailing whitespace trimmed.
+  var kwHi = int(nd.hi)
+  while kwHi > int(nd.lo) and tmpl.jinja[kwHi - 1] in Whitespace:
+    dec kwHi
+  let cont = tmpl.jinja.toOpenArray(int(nd.lo), kwHi - 1) == "continue"
   var k = st.rows.len - 1
   while k >= 0:
     let r = st.rows[k]
     if r.kind == frMacro:
-      # Keeps the macro row for `closeMacroRow` to pop, capture rows above it dropped.
-      st.rows.setLen(k + 1)
-      closeMacroRow(st, r)
+      if cont:
+        outsideEveryFor(tmpl, nd.lo, nd.hi)
+      closeMacroRow(st, k)
       return
     if r.kind == frFor:
       if cont:
@@ -362,10 +374,12 @@ func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderS
         st.rows.setLen(k)
         st.curNode = tmpl.nodes[r.node].succ
       return
-    st.scopes.setLen(r.scopeAt - 1)
+    if r.kind == frGeneration:
+      # An abandoned generation body still ran its bytes, the span closing at the position reached.
+      st.spans.add (r.spanStart, st.cur)
+    # Generation and capture rows push no scope, nothing to pop.
     dec k
-  raise jinjaErr("`{% " & spanString(tmpl.jinja.toOpenArray(int(nd.lo), int(nd.hi) - 1)) &
-      " %}` ran outside every `{% for %}`", int(nd.lo), int(nd.hi - nd.lo))
+  outsideEveryFor(tmpl, nd.lo, nd.hi)
 
 func stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## `ns.field = expr`, mutating the shared namespace mapping in place, visible to every
@@ -390,8 +404,6 @@ func stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Re
   ## Contract:
   ## - entry → record the root-output position, re-entry → close the span at the position reached
   ##   (every step dispatch runs with the pending piece retired, so the closing position counts the body's bytes exactly)
-  ## - the body adds no scope and pops none, bindings landing in the enclosing scope
-  ##
   ## - an empty body records an empty span, no row opened for a body that never re-enters
   ## - the body adds no scope and pops none, bindings landing in the enclosing scope
   ## - spans accumulate in `RenderState.spans`, `generationSpans` surfacing them after the drain
@@ -417,7 +429,7 @@ func stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rend
   ## through the caller's window, control continuing at the row's return node.
   template nd: Node = tmpl.nodes[n]
   if st.rows.len > 0 and st.rows[^1].kind == frMacro and st.rows[^1].node == n:
-    closeMacroRow(st, st.rows[^1])
+    closeMacroRow(st, st.rows.len - 1)
     return
   st.bindName(nd.macroName, macroVal(
       MacroVal(name: nd.macroName, body: nd.child, node: n)))

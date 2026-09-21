@@ -238,6 +238,39 @@ doAssert renderStmt(
     "{% if m() %}A{% else %}B{% endif %}") == "B",
     "a break inside a for inside a forced macro body unwinds that for"
 
+# A continue or break crossing a `{% generation %}` row must not disturb the scope stack:
+# the generation row records the enclosing scope's mark without pushing one, so the unwind
+# pops nothing for it and every binding below survives.
+block controlThroughGeneration:
+  doAssert renderStmt(
+      "{% set x = 'keep' %}{% for x in [1, 2] %}{% continue %}{% endfor %}{{ x }}") == "keep",
+      "control case, a plain continue keeps the outer binding"
+  doAssert renderStmt(
+      "{% set x = 'keep' %}{% for x in [1, 2] %}{% generation %}{% continue %}{% endgeneration %}" &
+      "{% endfor %}{{ x }}") == "keep",
+      "a continue crossing a generation row pops no scope, the outer binding intact"
+
+# A continue has no meaning at a macro-call boundary. A break stops there, a continue has
+# no loop to re-enter through the boundary, so it raises located like a no-for break.
+block continueAtMacroBoundary:
+  var reported = ""
+  var at = -1
+  try:
+    discard renderStmt("{% macro m() %}{% continue %}{% endmacro %}{{ m() }}")
+    doAssert false, "a continue inside a macro body closed the body instead of raising"
+  except JinjaError as e:
+    reported = e.what
+    at = e.offset
+  doAssert "continue" in reported and "outside every" in reported, reported
+  doAssert at >= 15 and at < 26, "the boundary raise located inside the continue tag: " & $at
+  try:
+    discard renderStmt(
+        "{% macro m() %}{% continue %}{% endmacro %}" &
+        "{% for x in [1, 2] %}{{ m() }}{% endfor %}")
+    doAssert false, "a continue inside a macro body crossed the boundary into the caller's loop"
+  except JinjaError as e:
+    doAssert "outside every" in e.what, e.what
+
 # A `{% generation %}` block renders its body byte-for-byte unchanged and records the span
 # of the output it produced, byte coordinates into the render, read after the drain.
 proc renderWithSpans(src: string): tuple[text: string, spans: seq[tuple[start, stop: int]]] =
@@ -267,6 +300,23 @@ doAssert renderWithSpans("{% generation %}{{ 'abc' }}{% endgeneration %}").spans
     @[(start: 0, stop: 3)], "the closing position counts the body's bytes"
 doAssert renderWithSpans("{% generation %}{% endgeneration %}").spans == @[(start: 0, stop: 0)],
     "an empty body records an empty span"
+
+# A break or continue abandoning a generation body still ran its bytes, the walk closing
+# the body's span at the position reached, the span never silently dropped.
+doAssert renderWithSpans(
+    "{% for x in [1, 2] %}{% generation %}{{ x }}{% continue %}{% endgeneration %}{% endfor %}"
+    ).text == "12", "a continue after the body's emit leaves the bytes on"
+doAssert renderWithSpans(
+    "{% for x in [1, 2] %}{% generation %}{{ x }}{% continue %}{% endgeneration %}{% endfor %}"
+    ).spans == @[(start: 0, stop: 1), (start: 1, stop: 2)],
+    "a continue abandoning a generation body closes its span at the position reached"
+doAssert renderWithSpans(
+    "{% for x in [1, 2] %}{% generation %}A{% if x == 2 %}{% break %}{% endif %}{% endgeneration %}" &
+    "{% endfor %}").text == "AA"
+doAssert renderWithSpans(
+    "{% for x in [1, 2] %}{% generation %}A{% if x == 2 %}{% break %}{% endif %}{% endgeneration %}" &
+    "{% endfor %}").spans == @[(start: 0, stop: 1), (start: 1, stop: 2)],
+    "a break abandoning a generation body closes its span at the position reached"
 
 # Registries: filters and tests dispatch by name
 # ---------------------------------------------------------------------------
