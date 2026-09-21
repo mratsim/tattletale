@@ -196,7 +196,9 @@ func stepIf(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderStat
   var v = evalSpan(tmpl, ports, nd.lo, nd.hi)
   if v.kind == vkCall:
     v = forceCondCall(ports, v, nd.lo, nd.hi)
-  if isTruthy(v):
+  elif v.kind == vkConcat:
+    v = strVal(pyStr(v))
+  if isTruthy(v, nd.lo):
     st.curNode = if nd.child == NoLink: nd.succ else: nd.child
   elif nd.alt != NoLink:
     st.curNode = nd.alt
@@ -234,7 +236,9 @@ func notIterable(v: JinjaVal, lo, hi: int): void {.noreturn.} =
 
 func loopStateOf(v: JinjaVal, lo, hi: int): LoopState =
   ## Dispatch at the loop's chain entry, one leg per iterable kind the corpus supports
-  ## and the shared raise leg for everything else. The cursor answers the random access
+  ## and the shared raise leg for everything else. The iterable arrives rendered where
+  ## it can hold a pending call or concat, `stepFor` coercing before the dispatch.
+  ## The cursor answers the random access
   ## that `loop.previtem` and `loop.nextitem` need, per index.
   case v.kind
   of vkSeq: iterSeq(v)
@@ -285,7 +289,9 @@ func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: in
       var evaluated = evalSpan(tmpl, ports, nd.filterLo, nd.filterHi)
       if evaluated.kind == vkCall:
         evaluated = forceCondCall(ports, evaluated, nd.filterLo, nd.filterHi)
-      keep = isTruthy(evaluated)
+      elif evaluated.kind == vkConcat:
+        evaluated = strVal(pyStr(evaluated))
+      keep = isTruthy(evaluated, nd.filterLo)
     if keep:
       break
   st.curNode = nd.child
@@ -304,7 +310,14 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   if st.rows.len > 0 and st.rows[^1].kind == frFor and st.rows[^1].node == n:
     advanceFor(tmpl, st, ports, n)
     return
-  let lp = loopStateOf(evalSpan(tmpl, ports, nd.lo, nd.hi), nd.lo.int, nd.hi.int)
+  var iterable = evalSpan(tmpl, ports, nd.lo, nd.hi)
+  if iterable.kind == vkCall:
+    # A macro call in the iterable position renders at its call site, its output
+    # what the loop walks, matching upstream.
+    iterable = forceCondCall(ports, iterable, nd.lo, nd.hi)
+  elif iterable.kind == vkConcat:
+    iterable = strVal(pyStr(iterable))
+  let lp = loopStateOf(iterable, nd.lo.int, nd.hi.int)
   if lp.loopLen == 0:
     st.curNode = nd.succ
     return
@@ -324,7 +337,9 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
         var evaluated = evalSpan(tmpl, ports, nd.filterLo, nd.filterHi)
         if evaluated.kind == vkCall:
           evaluated = forceCondCall(ports, evaluated, nd.filterLo, nd.filterHi)
-        discard isTruthy(evaluated)
+        elif evaluated.kind == vkConcat:
+          evaluated = strVal(pyStr(evaluated))
+        discard isTruthy(evaluated, nd.filterLo)
     st.scopes.setLen(st.rows[^1].scopeAt - 1)
     st.rows.setLen(st.rows.len - 1)
     st.curNode = nd.succ
@@ -335,7 +350,12 @@ func stepSet(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   ## Single-target `{% set %}`, the target carried as an interned name id in the child slot,
   ## emitting nothing, the pending piece untouched.
   template nd: Node = tmpl.nodes[n]
-  st.bindName(nd.child, evalSpan(tmpl, ports, nd.lo, nd.hi))
+  var v = evalSpan(tmpl, ports, nd.lo, nd.hi)
+  if v.kind == vkCall:
+    # A macro call evaluates at its call site, its output bound, matching upstream:
+    # the body's side effects land once, never re-run by a later use.
+    v = forceCondCall(ports, v, nd.lo, nd.hi)
+  st.bindName(nd.child, v)
   st.curNode = nd.succ
 
 func gap(kindName, corpusSite: string, lo, hi: int): void {.noreturn.} =
@@ -468,29 +488,63 @@ const
   ]
     ## Dispatch table, total over `NodeKind`, a new kind without a step a compile error.
 
-func bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32, args: Args) =
+func bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32, args: Args, lo, hi: int) =
   ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`,
   ## each parameter carrying its interned name id and default expression span in the node tail.
   ##
-  ## Positionals bind first, then keywords, then defaults, each default evaluated after those
-  ## before it are bound, inside the macro scope that a default sees in Jinja.
+  ## Binding order:
+  ## - positionals bind by their own count, keywords by name, defaults last
+  ## - each default is evaluated after those before it are bound, inside the macro
+  ##   scope that a default sees in Jinja
+  ## - positionals bind by their own count, keywords by name, defaults last
+  ## Raises located, `lo` and `hi` bounding the call site and `NoOffset` when the forcing
+  ## side has none:
+  ## - a positional past the parameter list
+  ## - a positional after a keyword argument
+  ## - a keyword naming no parameter or repeating one already bound
   template nd: Node = tmpl.nodes[n]
-  var pos = 0
+  template argErr(what: string) {.dirty.} =
+    if lo == NoOffset:
+      raise jinjaErr(what)
+    raise jinjaErr(what, lo, hi - lo)
   let nparams = int(nd.paramCount)
+  let macroName = sym[].names[nd.macroName]
+  template keywordName(a: Arg): untyped =
+    tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
+  var used: array[ArgsCap, bool]
+  var posCount = 0
+  var firstKeyword = -1
+  for i in 0 ..< args.n:
+    if args.vals[i].nameLo == NoLink:
+      inc posCount
+    elif firstKeyword < 0:
+      firstKeyword = i
+  if posCount > nparams:
+    argErr("macro `" & macroName & "` takes at most " & $nparams & " positional argument(s)")
+  if firstKeyword >= 0:
+    for i in firstKeyword + 1 ..< args.n:
+      if args.vals[i].nameLo == NoLink:
+        argErr("a positional argument follows a keyword argument in the call to `" &
+            macroName & "`")
   for k in 0 ..< nparams:
     var val = undefinedVal()
     var bound = false
-    while pos < args.n and args.vals[pos].nameLo == NoLink:
-      if pos == k:
-        val = args.vals[pos].val
-        bound = true
-      inc pos
-      break
-    if not bound:
-      for a in args.argItems:
-        if a.nameLo != NoLink and
-            tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1) == sym[].names[nd.paramNameAt(k)]:
-          val = a.val
+    if k < posCount:
+      var seen = 0
+      for i in 0 ..< args.n:
+        if args.vals[i].nameLo == NoLink:
+          if seen == k:
+            val = args.vals[i].val
+            used[i] = true
+            bound = true
+            break
+          inc seen
+    else:
+      for i in 0 ..< args.n:
+        if not used[i] and args.vals[i].nameLo != NoLink and
+            keywordName(args.vals[i]) == sym[].names[nd.paramNameAt(k)]:
+          val = args.vals[i].val
+          used[i] = true
           bound = true
           break
     if not bound:
@@ -499,6 +553,19 @@ func bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Ren
       else:
         val = evalSpan(tmpl, ports, nd.paramDefLoAt(k), nd.paramDefHiAt(k))
     st.bindName(nd.paramNameAt(k), val)
+  for i in 0 ..< args.n:
+    if used[i] or args.vals[i].nameLo == NoLink:
+      continue
+    var known = false
+    for k in 0 ..< nparams:
+      if keywordName(args.vals[i]) == sym[].names[nd.paramNameAt(k)]:
+        known = true
+        break
+    if known:
+      argErr("macro `" & macroName & "` got multiple values for argument `" &
+          spanString(keywordName(args.vals[i])) & "`")
+    argErr("macro `" & macroName & "` takes no keyword argument `" &
+        spanString(keywordName(args.vals[i])) & "`")
 
 func capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) =
   ## Appends the pending piece's bytes to `outp` and retires the piece, the capture form
@@ -534,16 +601,22 @@ func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
   ## Opens a macro row and enters the body.
   ## Contract:
   ## - the body's output pieces drain through the caller's window until the row closes on the definition node
+  ## - an empty body emits nothing, its row closing at once, the tail continuing at the return node
   ## - depth is capped, and a breach raises, `lo` and `hi` bounding the call's site
   if st.macroDepth >= MacroDepthCap:
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
         sym[].names[call.mc.name] & "`", lo, hi - lo)
   inc st.macroDepth
   st.scopes.add @[]
-  bindMacroArgs(tmpl, sym, st, ports, call.mc.node, call.args)
+  bindMacroArgs(tmpl, sym, st, ports, call.mc.node, call.args, lo, hi)
   st.rows.add Row(node: call.mc.node, kind: frMacro, pc: call.mc.body,
       retNode: retNode, scopeAt: st.scopes.len)
-  st.curNode = call.mc.body
+  if call.mc.body == NoLink:
+    # An empty body emits nothing, the row closing at once so the render tail
+    # continues at the call's return node
+    closeMacroRow(st, st.rows.len - 1)
+  else:
+    st.curNode = call.mc.body
 
 func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal =
   ## Statement tier side of the macro forcer.
@@ -571,7 +644,7 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
       retNode: mc.node, scopeAt: st2.scopes.len)
   var env2 = PortEnv(tmpl: tmpl, sym: sym, st: addr st2)
   let ports2 = Ports(lookup: portLookup, clock: portClock, force: portForce, env: addr env2)
-  bindMacroArgs(tmpl, sym, st2, ports2, mc.node, args)
+  bindMacroArgs(tmpl, sym, st2, ports2, mc.node, args, NoOffset, 0)
   st2.curNode = mc.body
   result = strVal("")
   var node = mc.body
@@ -669,6 +742,10 @@ func pull*(c: var Context, buf: var openArray[char]): int =
         return
       continue
     if st.curNode == NoLink:
+      if st.rows.len > 0:
+        let r = st.rows[^1]
+        raise jinjaErr("the render walk drained with an open `" & $r.kind & "` row",
+            tmpl.nodes[r.node].lo.int, tmpl.nodes[r.node].hi.int - tmpl.nodes[r.node].lo.int)
       return
     let n = st.curNode
     inc steps

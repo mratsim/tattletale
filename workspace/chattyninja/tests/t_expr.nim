@@ -72,6 +72,31 @@ doAssert render("-3 + 10") == "7"
 doAssert render("'a' ~ 1 ~ none") == "a1None", "`~` stringifies both sides"
 doAssert render("people.age + 1", withPeople) == "37"
 
+# Integer arithmetic checks its result, a value past int64 raising a located `JinjaError`,
+# never an uncatchable `OverflowDefect`.
+# Python answers with unbounded integers, a value kind without a slot in this tier.
+# The raise is the contract here.
+doAssert render("9223372036854775807") == "9223372036854775807", "int64 high renders"
+doAssert render("0 - 9223372036854775807") == "-9223372036854775807",
+    "int64 low renders through a subtraction"
+block integerOverflowRaisesLocated:
+  var reported = ""
+  try:
+    discard render("9223372036854775807 + 1")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "integer overflow" in reported, reported
+  try:
+    discard render("99999999999999999999")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "outside the int64 range" in reported, reported
+  try:
+    discard render("-x", ctx(("x", intVal(int64.low))))
+  except JinjaError as e:
+    reported = e.what
+  doAssert "integer overflow in unary" in reported, reported
+
 # Comparison, membership
 # ---------------------------------------------------------------------------
 
@@ -101,20 +126,18 @@ try:
 except JinjaError as e:
   doAssert "emit position" in e.what, e.what
 
-# A concat reads plain values in one place only, the argument list: `raise_exception`
-# names its message from the materialized text. Every other non-emit position raises,
-# and a set-bound concat streams when a later emit reaches it.
+# A concat reads plain values in two places, the argument list and a boolean position.
+#   `raise_exception` names its message from the materialized text, a condition reading
+#   the rendered bytes. Every other non-emit position raises, and a set-bound concat
+#   streams when a later emit reaches it.
 block concatConsumption:
   try:
     discard render("{'k': 'a' ~ 'b'}")
     doAssert false, "a concat in a dict literal did not raise"
   except JinjaError as e:
     doAssert "emit position" in e.what, e.what
-  try:
-    discard renderStmt("{% if 'a' ~ 'b' %}x{% endif %}")
-    doAssert false, "a concat in a condition did not raise"
-  except JinjaError as e:
-    doAssert "emit position" in e.what, e.what
+  doAssert renderStmt("{% if 'a' ~ 'b' %}x{% endif %}") == "x",
+      "a concat in a condition reads its rendered bytes"
   try:
     discard render("('a' ~ 'b') | tojson")
     doAssert false, "a concat under a filter did not raise"
@@ -122,11 +145,8 @@ block concatConsumption:
     doAssert "emit position" in e.what, e.what
   doAssert renderStmt("{% set q = 'a' ~ 'b' %}{{ q }}") == "ab",
       "a set-bound concat did not stream on its later emit"
-  try:
-    discard renderStmt("{% set q = 'a' ~ 'b' %}{% if q %}x{% endif %}")
-    doAssert false, "a truthiness test over a set-bound concat did not raise"
-  except JinjaError as e:
-    doAssert "emit position" in e.what, e.what
+  doAssert renderStmt("{% set q = 'a' ~ 'b' %}{% if q %}x{% endif %}") == "x",
+      "a set-bound concat reads its rendered bytes in a condition"
   try:
     discard renderStmt("{{ raise_exception('boom ' ~ 'bang') }}")
     doAssert false, "raise_exception did not raise"
@@ -153,6 +173,17 @@ doAssert render("true or raise_exception('left was truthy')") == "True",
     "`or` with a truthy left operand must not evaluate the right"
 doAssert render("true and 1 == 1") == "True"
 doAssert render("false or 2 > 1") == "True"
+
+# `not` binds looser than the comparisons and membership, tighter than `and`/`or`,
+# so `not a == 5` tests `a == 5`. Unary `-` and `+` keep their tighter binding.
+doAssert renderStmt("{% set a = 0 %}{% if not a == 5 %}Y{% else %}N{% endif %}") == "Y",
+    "`not` spans the comparison it negates"
+doAssert renderStmt("{% set xs = [1, 2] %}{% if not 3 in xs %}Y{% else %}N{% endif %}") == "Y",
+    "`not` spans the membership test it negates"
+doAssert renderStmt("{% set a = 0 %}{% if not a == 5 and true %}Y{% else %}N{% endif %}") == "Y",
+    "`and` still binds looser than `not`"
+doAssert renderStmt("{% set a = 5 %}{% if -a == -5 %}Y{% else %}N{% endif %}") == "Y",
+    "unary `-` keeps its tighter binding under a comparison"
 
 # Ternary: one condition evaluation, exactly one branch
 # ---------------------------------------------------------------------------
@@ -192,7 +223,7 @@ doAssert render("people.missing is defined", withPeople) == "False"
 doAssert render("people.name is defined", withPeople) == "True"
 
 # A macro call in a boolean condition renders to its output text, whose bytes then decide
-# the branch, matching upstream Jinja. A concat in a condition keeps raising (asserted above).
+# the branch, matching upstream Jinja.
 doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% if m() %}A{% else %}B{% endif %}") == "A",
     "a truthy macro call takes the if body"
 doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% if 0 %}X{% elif m() %}E{% else %}O{% endif %}") == "E",
@@ -209,6 +240,47 @@ doAssert renderStmt("{% macro m() %}yes{% endmacro %}{{ 'a' if m() else 'b' }}")
     "a ternary condition renders the macro call"
 doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% for x in [1, 2] if m() %}{{ x }}{% endfor %}") == "12",
     "a for-filter condition renders the macro call"
+
+# A macro call evaluates once at its call site, in `{% set %}` and the for-iterable
+# position like in a condition, matching upstream Jinja.
+doAssert renderStmt("{% set ns = namespace(c = 0) %}{% macro m() %}{% set ns.c = 1 %}{% endmacro %}" &
+    "{% set x = m() %}{{ ns.c }}") == "1",
+    "a macro call bound by `set` ran at the set"
+doAssert renderStmt("{% macro m() %}ab{% endmacro %}{% for c in m() %}[{{ c }}]{% endfor %}") == "[a][b]",
+    "a macro call as the for iterable iterates its rendered bytes"
+
+# An empty macro body emits nothing. Its streamed call closes at once, the whole render
+# tail delivering, and its forced capture is the empty string.
+doAssert renderStmt("{% macro m() %}{% endmacro %}A{{ m() }}B") == "AB",
+    "an empty macro body's streamed call delivers the render tail"
+doAssert renderStmt("{% macro m() %}{% endmacro %}A{% if m() %}X{% else %}B{% endif %}C") == "ABC",
+    "an empty macro body's forced capture is the empty string"
+
+# Macro-argument binding raises where upstream raises:
+#   a positional past the parameter list, a positional after a keyword,
+#   a keyword naming no parameter, a keyword repeating a bound one.
+# Well-formed positional, keyword and default binding keep rendering.
+block macroArgBinding:
+  proc reportedOf(src: string): string =
+    try:
+      discard renderStmt(src)
+      doAssert false, "a misplaced macro argument did not raise: " & src
+    except JinjaError as e:
+      result = e.what
+  doAssert "positional argument follows a keyword argument" in
+      reportedOf("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(x=1, 2) }}"),
+      "positional after keyword"
+  doAssert "takes no keyword argument" in
+      reportedOf("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(1, y=2) }}"),
+      "unknown keyword"
+  doAssert "got multiple values for argument" in
+      reportedOf("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(1, x=2) }}"),
+      "keyword repeating a positionally bound parameter"
+  doAssert "takes at most 1 positional argument" in
+      reportedOf("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(1, 2) }}"),
+      "excess positional"
+  doAssert renderStmt("{% macro m(x, y = 9) %}<{{ x }}{{ y }}>{% endmacro %}{{ m(1, y=2) }}") == "<12>",
+      "positional, keyword and default binding still render"
 # An integer constant after a dot subscripts, upstream's `m.content.0` spelling of `m.content[0]`.
 doAssert render("['a', 'b'].0") == "a"
 doAssert render("['a', 'b'].1") == "b"
@@ -409,6 +481,13 @@ block zeroStepIsAnError:
   except JinjaError as e:
     reported = e.what
   doAssert reported.len > 0, "a zero slice step must raise, not loop forever"
+
+# A step magnitude past the walk span visits the start element only, and the walk's
+# index arithmetic stays inside int64 however extreme the step, Python's own answer.
+doAssert render("'abcdef'[1::9223372036854775807]") == "b",
+    "a forward step past the walk span visits the start only"
+doAssert render("'abcdef'[:0:-9223372036854775807]") == "f",
+    "a backward step past the walk span visits the start only"
 
 # Dict literals inside an expression
 # ---------------------------------------------------------------------------

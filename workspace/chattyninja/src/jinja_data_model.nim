@@ -14,7 +14,7 @@
 import std/unicode
 
 const
-  ArgsCap = 8
+  ArgsCap* = 8
     ## Inline capacity of one call's argument carrier. The most arguments one corpus
     ## call passes is 2. A call past the cap is a template error, reported at the call.
 
@@ -466,8 +466,12 @@ func codepointVals*(s: string): seq[JinjaVal] =
     acc.add strVal($r)
   acc
 
-func isTruthy*(v: JinjaVal): bool =
-  ## Returns Jinja truthiness. Undefined, none, zero, empty text and empty containers are false.
+func isTruthy*(v: JinjaVal, at: int = NoOffset): bool =
+  ## Returns Jinja truthiness, undefined, none, zero, empty text and empty containers false.
+  ## `at` locates the raise a held call or concat carries when a caller tests one without
+  ## rendering it first:
+  ## - every boolean-position consumer coerces a call or concat to its rendered bytes
+  ##   before the test, so this raise is the contract guard, never the render path
   result = case v.kind
   of vkUndefined, vkNone: false
   of vkBool: v.b
@@ -480,8 +484,8 @@ func isTruthy*(v: JinjaVal): bool =
   of vkLoop: v.lp.loopLen != 0
   of vkRange: rangeLen(v.r) != 0
   of vkMacro: true
-  of vkCall: raise jinjaErr("a macro call result must be rendered before a truthiness test")
-  of vkConcat: raise jinjaErr("a concat must be rendered in emit position before a truthiness test")
+  of vkCall: raise jinjaErr("a macro call result must be rendered before a truthiness test", at)
+  of vkConcat: raise jinjaErr("a concat must be rendered in emit position before a truthiness test", at)
 
 func dictGet*(d: DictVal, key: openArray[char]): JinjaVal =
   ## Returns the value under `key`, undefined when absent. Absence is a value, never an error:

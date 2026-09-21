@@ -116,11 +116,20 @@ func decodeEscapes(s: openArray[char], lo, hi: int): string =
   var sb = over(result)
   sb.decodeEscapesInto(s, lo, hi)
 
-func parseIntToken(s: openArray[char]): int64 =
-  ## Returns the integer the token bytes spell, ValueError on a malformed token.
-  var n: int64
-  if s.len == 0 or parseutils.parseBiggestInt(s, n) != s.len:
-    raise newException(ValueError, "invalid integer: " & spanString(s))
+func parseIntToken(s: openArray[char], at: int): int64 =
+  ## Returns the integer the token bytes spell, an int64-range magnitude breach
+  ## raising a located `JinjaError` at the literal.
+  ## - Python renders such a literal as an unbounded integer, a value kind this tier
+  ##   has no slot for, so the raise is the contract here
+  ## - `parseutils.parseBiggestInt` itself raises on that magnitude, so the digits
+  ##   accumulate in checked arithmetic instead, never crossing int64
+  var n = 0'i64
+  for c in s:
+    let d = c.ord - '0'.ord
+    if n > (int64.high - d) div 10:
+      raise jinjaErr("integer literal `" & spanString(s) & "` is outside the int64 range",
+          at, s.len)
+    n = n * 10 + d
   n
 
 func parseFloatToken(s: openArray[char]): float64 =
@@ -153,7 +162,7 @@ func lexNumber(s: openArray[char], i: var int, hi: int): ExTok =
   if isFloat:
     ExTok(kind: exFloat, lo: start, hi: i, f: parseFloatToken(text))
   else:
-    ExTok(kind: exInt, lo: start, hi: i, i: parseIntToken(text))
+    ExTok(kind: exInt, lo: start, hi: i, i: parseIntToken(text, start))
 
 func lexString(s: openArray[char], i: var int, hi: int): ExTok =
   let q = s[i]
@@ -270,6 +279,19 @@ func forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
         cx.tok.lo)
   cx.ports.force(cx.ports.env, v.pc.mc, v.pc.args)
 
+func truthOperand(ports: Ports, cx: var Cx, v: JinjaVal, at: int): JinjaVal =
+  ## Returns a boolean-position operand, a dry walk returning `v` unevaluated:
+  ## - a pending macro call renders to its output value
+  ## - a concat renders to the text it emits
+  ## - everything else passes unchanged
+  ## `at` locates the raise of a forcing leg that finds no forcer.
+  if cx.dry:
+    return v
+  case v.kind
+  of vkCall: forceCall(ports, cx, v)
+  of vkConcat: strVal(pyStr(v))
+  else: v
+
 func evalItem(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns `v`, rendering a pending macro call to text for the value containers and operators
   ## that read a plain value. A concat raises here, the argument list being its one
@@ -361,9 +383,13 @@ func steppedSliceInto(sb: var Cursor, s: string, a, b, by: int) =
   ## - `by > 0` advances by lead-byte strides
   ## - `by < 0` steps backward over continuation bytes
   ## Every visited codepoint reads in place at its own offset, never a per-index rescan.
+  ## A stride beyond the walk span visits the start element only, so the stride clamps
+  ## to one step past the span and the index arithmetic stays inside int64 however
+  ## extreme the step value is.
   if by > 0:
     if a >= b:
       return
+    let by = min(by, b - a + 1)
     var j = runeOffset(s, a)
     var k = a
     while k < b:
@@ -379,6 +405,7 @@ func steppedSliceInto(sb: var Cursor, s: string, a, b, by: int) =
   else:
     if a <= b:
       return
+    let by = max(by, b - a - 1)
     var j = runeOffset(s, a)
     var k = a
     while k > b:
@@ -947,15 +974,18 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   postfix(tmpl, ports, cx, v)
 
 func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
-  ## Parses `not`, unary `-` and `+`, then a primary. The operator chain recurses here
-  ## without re-entering `expr`, so each recursion counts one level itself, `enterDepth`
-  ## at the leg's entry and a `dec` once the operand is evaluated.
+  ## Parses `not`, unary `-` and `+`, then a primary.
+  ## - `not` binds looser than the comparisons, its operand parsing at comparison
+  ##   binding power through `expr`, whose entry counts the operand walk toward
+  ##   `ExprDepthCap` however deep the chain, so `not a == 5` tests `a == 5`
+  ## - unary `-` and `+` bind tighter than any comparison, their chain recursing here
+  ##   without re-entering `expr`, so each recursion counts one level itself,
+  ##   `enterDepth` at the leg's entry and a `dec` once the operand is evaluated
   if isWord(tmpl, cx, "not"):
     advance(tmpl, cx)
-    enterDepth(cx)
-    let v = evalItem(ports, cx, unary(tmpl, ports, cx))
-    dec cx.depth
-    return boolVal(if cx.dry: false else: not isTruthy(v))
+    let operandLo = cx.tok.lo
+    let v = truthOperand(ports, cx, expr(tmpl, ports, cx, 5), operandLo)
+    return boolVal(if cx.dry: false else: not isTruthy(v, operandLo))
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
     advance(tmpl, cx)
@@ -966,19 +996,26 @@ func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
     if cx.dry:
       return undefinedVal()
     case v.kind
-    of vkInt: intVal(if neg: -v.i else: v.i)
+    of vkInt:
+      if neg and v.i == int64.low:
+        raise jinjaErr("integer overflow in unary `-`", operandLo, cx.tok.lo - operandLo)
+      intVal(if neg: -v.i else: v.i)
     of vkFloat: floatVal(if neg: -v.f else: v.f)
     else: raise jinjaErr("arithmetic needs a number, this is a " & $v.kind,
         operandLo, cx.tok.lo - operandLo)
   else:
     primary(tmpl, ports, cx)
 
-func arith(op: Op, a, b: JinjaVal): JinjaVal =
+func arith(op: Op, a, b: JinjaVal, opLo: int): JinjaVal =
   ## Combines two numbers, or two strings and two sequences under `+`.
   ## `%` follows Python's floor rule, the result taking the divisor's sign, so `-3 % 2` is `1`.
+  ## Integer `+` and `-` check their result, an overflow raising a located
+  ## `JinjaError` at the operator, never an uncatchable `OverflowDefect`.
   case op
   of opAdd:
     if a.kind == vkInt and b.kind == vkInt:
+      if (b.i > 0 and a.i > int64.high - b.i) or (b.i < 0 and a.i < int64.low - b.i):
+        raise jinjaErr("integer overflow in `+`", opLo)
       intVal(a.i + b.i)
     elif a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
       floatVal((if a.kind == vkInt: float64 a.i else: a.f) +
@@ -994,6 +1031,8 @@ func arith(op: Op, a, b: JinjaVal): JinjaVal =
       raise jinjaErr("`+` cannot combine a " & $a.kind & " with a " & $b.kind)
   of opSub:
     if a.kind == vkInt and b.kind == vkInt:
+      if (b.i > 0 and a.i < int64.low + b.i) or (b.i < 0 and a.i > int64.high + b.i):
+        raise jinjaErr("integer overflow in `-`", opLo)
       intVal(a.i - b.i)
     elif a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
       floatVal((if a.kind == vkInt: float64 a.i else: a.f) -
@@ -1038,14 +1077,14 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
   ## before the truth test, a boolean position reading the output's bytes.
   case op
   of opAnd:
-    let l = if not cx.dry and lhs.kind == vkCall: forceCall(ports, cx, lhs) else: lhs
-    if not cx.dry and not isTruthy(l):
+    let l = truthOperand(ports, cx, lhs, opLo)
+    if not cx.dry and not isTruthy(l, opLo):
       skipExpr(tmpl, ports, cx, 4)
       return l
     expr(tmpl, ports, cx, 4)
   of opOr:
-    let l = if not cx.dry and lhs.kind == vkCall: forceCall(ports, cx, lhs) else: lhs
-    if not cx.dry and isTruthy(l):
+    let l = truthOperand(ports, cx, lhs, opLo)
+    if not cx.dry and isTruthy(l, opLo):
       skipExpr(tmpl, ports, cx, 3)
       return l
     expr(tmpl, ports, cx, 3)
@@ -1062,7 +1101,7 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
     else: concatVal(lhs, if rhs.kind == vkCall: forceCall(ports, cx, rhs) else: rhs)
   of opAdd, opSub, opMod:
     let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
-    if cx.dry: undefinedVal() else: arith(op, lhs, rhs)
+    if cx.dry: undefinedVal() else: arith(op, lhs, rhs, opLo)
   of opMul, opDiv, opFloorDiv, opPow:
     skipExpr(tmpl, ports, cx, binPrec(op) + 1)
     gapWhat("operator", OpSpelling[op])
@@ -1160,7 +1199,7 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
         v = undefinedVal()
       else:
         let cond = evalRange(tmpl, cx.ports, shape.cLo, shape.cHi, cx.depth)
-        let tested = if cond.kind == vkCall: forceCall(cx.ports, cx, cond) else: cond
+        let tested = truthOperand(cx.ports, cx, cond, shape.cLo)
         if isTruthy(tested):
           v = evalRange(tmpl, cx.ports, headLo, shape.aHi, cx.depth)
         elif shape.hasElse:
