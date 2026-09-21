@@ -94,6 +94,11 @@ const
   # 24 clears it with margin, far below the C stack overflow depth.
   ExprDepthCap* {.intdefine.} = 24
 
+  # Parse-time nesting bound of the parser's dispatch recursion, one level per body-carrying
+  # construct. Corpus nesting tops out at 5 (`glm53flash`'s macro-in-for chain), so 64 clears it
+  # with margin and bounds the walk on adversarial input, a breach raising located at the tag.
+  ParseNestingCap* {.intdefine.} = 64
+
   # Output pieces reach the consumer in slices of at most this many bytes, which is what lets `cur`
   # compose with chunking.
   ChunkSize* {.intdefine.} = 4096

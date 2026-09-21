@@ -18,6 +18,19 @@
 #   each construct returns its unresolved-successor nodes and the enclosing construct
 #   resolves them, so an `if` chain's bodies terminate past the whole chain
 #
+# Termination:
+#
+# Every parse walk advances against a fixed bound, so no truncated or degenerate template
+# spins a loop and no input grows the walk without bound:
+#
+# - scan-to-bound loops (whitespace runs, name spans, marker finds) advance a byte cursor against a fixed source-span end
+# - the split's main loop returns one tag per pass, a tagless pass still moving the scan cursor past the tag it consumed
+# - each construct body walk consumes at least one tag per pass, so arena growth stays bounded by the tag count
+#
+# - a find that misses reports `stop` or raises, never rescans
+# - construct nesting has a valve, `ParseNestingCap` bounding the dispatch recursion, a breach raising located at the tag
+# - the trailing-newline back-trim walk in `settle` decrements its arena index toward `tagMark`
+#
 # | Rule                 | Effect                                                                                            |
 # | -------------------- | ------------------------------------------------------------------------------------------------- |
 # | `trim_blocks`        | one newline directly after a block or comment tag's close is dropped                              |
@@ -68,6 +81,7 @@ type
     done: bool # the scan reached the end of the template
     dropCur: bool # settle emptied `cur`, parseBody emits no node for it
     tagMark: int # arena length at the last tag pull, the back-trim walk stops here
+    nesting: int # body-carrying constructs under construction, the valve `parseNested` checks
     loopDepth: int # enclosing `{% for %}` bodies under construction, 0 at top level
     macroDepth: int # enclosing `{% macro %}` bodies under construction, 0 at top level
     symbols: CompiledSymbols
@@ -128,6 +142,8 @@ func splitTags(p: var Parser): Tag =
   ## - a tag row scanned together with the text run before it waits in `pending`, delivered
   ##   on the next call
   ## - the end of the template is the `tkEnd` sentinel
+  ## - every pass that returns no tag still moves the scan cursor past the tag it consumed,
+  ##   so the loop cannot revisit a tag, an unclosed construct raising instead
   ## - raises `JinjaError` on an unterminated comment, tag or raw body
   if p.pending.kind != tkEnd:
     result = p.pending
@@ -404,10 +420,24 @@ func findKeyword(src: openArray[char], at, stop: int, word: string): int =
 proc parseBody(p: var Parser, stopKws: openArray[string]): Head
 proc parseConstruct(p: var Parser): Head
 
+template parseNested(p: var Parser, stopKws: openArray[string], t: Tag): Head =
+  ## One body walk of a construct, the parse recursion's valve. The nesting count rises per
+  ## body-carrying construct, a breach raising located at the tag, and falls once the body
+  ## returns. A raise past the valve aborts the whole parse, so the fall needs no finally.
+  inc p.nesting
+  if p.nesting > ParseNestingCap:
+    raise jinjaErr("template nests deeper than ParseNestingCap = " & $ParseNestingCap &
+        " at byte " & $t.tLo, t.tLo, t.tHi - t.tLo)
+  let body = parseBody(p, stopKws)
+  dec p.nesting
+  body
+
 proc parseMacroParams(p: var Parser, t: Tag, at: int, nodeIdx: int32) =
   ## Parses `(a, b = expr, ...)` starting at the open paren and appending one payload triple per
   ## parameter to the `nkMacroDef` node at `nodeIdx`, the interned name then the default span,
   ## `NoLink` when absent, defaults staying template text, each evaluated per call after binding.
+  ## - each pass consumes a parameter name, a nameless position raising, so the walk is bounded
+  ##   by the tag's span
   ## - evaluation happens after the parameters bind
   var i = at + 1 # past the open paren
   while true:
@@ -470,7 +500,7 @@ proc parseMacro(p: var Parser): Head =
   let idx = addNode(p, mkNode(nkMacroDef, name, NoLink, NoLink, NoLink))
   parseMacroParams(p, t, i, idx)
   inc p.macroDepth
-  let body = parseBody(p, ["endmacro"])
+  let body = parseNested(p, ["endmacro"], t)
   dec p.macroDepth
   if p.cur.kind == tkEnd or not p.src.keywordIs(p.cur, "endmacro"):
     raise jinjaErr("`{% macro %}` has no `{% endmacro %}`", t.tLo)
@@ -492,7 +522,7 @@ proc parseIf(p: var Parser): Head =
   #   arena order stays source order, the arena entry stays index 0
   #   a construct cannot sit below the nodes it dispatches into
   let idx = addNode(p, mkNode(nkIf, condLo, condHi, NoLink, NoLink, NoLink))
-  let body = parseBody(p, ["elif", "else", "endif"])
+  let body = parseNested(p, ["elif", "else", "endif"], t)
   p.nodes[idx].slots[SlotChild] = body.head
   var tails = @[idx]
   tails.add body.tails
@@ -521,7 +551,8 @@ proc parseIf(p: var Parser): Head =
 
 proc parseFor(p: var Parser): Head =
   ## `{% for a, b in expr if cond %} body {% endfor %}`. The header stays one span,
-  ## the target names and the filter clause split out as bindings.
+  ## the target names and the filter clause split out as bindings. The target walk consumes
+  ## one name per pass, a nameless position raising, so it is bounded by the tag's span.
   let t = p.cur
   var i = p.afterKeyword(t, 3) # past the `for` keyword
   var targets = newSeq[int32]()
@@ -564,7 +595,7 @@ proc parseFor(p: var Parser): Head =
   for tg in targets:
     p.nodes[idx].slots.add tg
   inc p.loopDepth
-  let body = parseBody(p, ["endfor"])
+  let body = parseNested(p, ["endfor"], t)
   dec p.loopDepth
   if p.cur.kind == tkEnd or not p.src.keywordIs(p.cur, "endfor"):
     raise jinjaErr("`{% for %}` has no `{% endfor %}`", t.tLo)
@@ -616,7 +647,7 @@ proc parseSet(p: var Parser): Head =
     p.advance()
     let idx = addNode(p, mkNode(nkSetBlock, int32 p.src.keywordStart(t), int32 t.tHi,
         NoLink, NoLink, target))
-    let body = parseBody(p, ["endset"])
+    let body = parseNested(p, ["endset"], t)
     if p.cur.kind == tkEnd or not p.src.keywordIs(p.cur, "endset"):
       raise jinjaErr("`{% set %}` block assignment has no `{% endset %}`", t.tLo)
     p.advance()
@@ -664,7 +695,7 @@ proc parseConstruct(p: var Parser): Head =
     p.advance()
     let idx = addNode(p, mkNode(nkGeneration, int32 p.src.keywordStart(t), int32 t.tHi,
         NoLink, NoLink))
-    let body = parseBody(p, ["endgeneration"])
+    let body = parseNested(p, ["endgeneration"], t)
     if p.cur.kind == tkEnd or not p.src.keywordIs(p.cur, "endgeneration"):
       raise jinjaErr("`{% generation %}` has no `{% endgeneration %}`", t.tLo)
     p.advance()
@@ -690,6 +721,10 @@ proc parseBody(p: var Parser, stopKws: openArray[string]): Head =
   ## `open` holds every node whose successor is still unresolved. Each new entry point closes them,
   ## so a construct's exit links to its following sibling and only the body's last exits stay open
   ## for the enclosing construct to backpatch.
+  ##
+  ## Every pass consumes at least one tag. Text runs, emits and construct dispatches all
+  ## advance the stream or raise, so the walk is bounded by the tag count and truncation
+  ## ends it at the end sentinel or a close check's raise.
   var head = NoLink
   var open = newSeq[int32]()
   while p.cur.kind != tkEnd:

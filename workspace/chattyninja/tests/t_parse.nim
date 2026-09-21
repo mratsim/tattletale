@@ -162,6 +162,50 @@ let (mo, _) = parseTemplate("{% macro m() %}{% break %}{% endmacro %}{% for x in
 doAssert mo.nodes.anyIt(it.kind == nkBreak),
     "a break inside a macro body parses, the call site deciding the enclosure"
 
+# Construct nesting has a parse valve, a template nested past ParseNestingCap raising located
+# at the offending tag, never exhausting the dispatch stack. Nesting at the cap parses.
+block nestingValve:
+  block:
+    discard parseTemplate(repeat("{% if x %}", ParseNestingCap) & "y" &
+        repeat("{% endif %}", ParseNestingCap))
+  var reported = ""
+  var at = -1
+  try:
+    discard parseTemplate(repeat("{% if x %}", ParseNestingCap + 1) & "y" &
+        repeat("{% endif %}", ParseNestingCap + 1))
+    doAssert false, "nesting past the cap parsed instead of raising"
+  except JinjaError as e:
+    reported = e.what
+    at = e.offset
+  doAssert "ParseNestingCap" in reported, reported
+  doAssert at >= 0, "the valve raises located: offset " & $at
+
+# Truncation is a located raise, never a spin. Every body walk consumes at least one tag,
+# an unterminated construct reaching the end sentinel, its close check reporting it.
+block truncationRaisesLocated:
+  for t in ["{% set x %}body", "{% generation %}body", "{% for x in xs %}{{ x }}",
+      "{% if x %}body", "{{ x", "{% x", "{# c", "{% raw %}body",
+      "{% macro f(a, b = 1 %}body{% endmacro %}", "{% macro f(, %}body{% endmacro %}",
+      "{% macro f %}body{% endmacro %}", "{% endfor %}", "{% elif x %}"]:
+    var reported = ""
+    var at = -1
+    try:
+      discard parseTemplate(t)
+      doAssert false, "a truncated or degenerate template parsed: " & t
+    except JinjaError as e:
+      reported = e.what
+      at = e.offset
+    doAssert reported.len > 0, "truncation raised nothing: " & t
+    doAssert at >= 0, "the truncation raise located: " & t & " at " & $at
+
+# Declared-gap terminators (`endmacro` without a matching macro) raise the gap message,
+# which carries no location by the gap raise's contract.
+try:
+  discard parseTemplate("{% endmacro %}")
+  doAssert false, "a lone endmacro parsed"
+except JinjaError as e:
+  doAssert e.cause == ceUnimplemented and "endmacro" in e.what, e.what
+
 const setBlockSrc = "{% set x %}body{% endset %}"
 let (sn, ss) = parseTemplate(setBlockSrc)
 doAssert sn.nodes.mapIt($it.kind).join(",") == "nkSetBlock,nkVerbatim",
