@@ -127,6 +127,19 @@ func findTagClose(src: openArray[char], at, stop: int, close: string): int =
     inc i
   -1
 
+func findRun(src: openArray[char], at, stop: int, needle: string): int =
+  ## Returns the offset of `needle` at or after `at`, a plain byte scan with no
+  ## quote or bracket tracking.
+  ## - comment and `{% raw %}` bodies are verbatim runs, a `'` or `"` inside them
+  ##   must not defer the scan
+  ## - `findTagClose` is the quote-tracking form, reserved for expression spans
+  var i = at
+  while i + needle.len <= stop:
+    if at(src, needle, i):
+      return i
+    inc i
+  -1
+
 func nextOpen(src: openArray[char], at, stop: int): int =
   ## Returns the offset of the next `{{`, `{%` or `{#`, or `stop` when there is none.
   var i = at
@@ -166,7 +179,7 @@ func splitTags(p: var Parser): Tag =
     var isRaw = false
     if openAt < stop:
       if p.src.at("{#", openAt):
-        let c = p.src.findTagClose(openAt + 2, stop, "#}")
+        let c = p.src.findRun(openAt + 2, stop, "#}")
         if c < 0:
           raise jinjaErr("unclosed comment opened at byte " & $openAt, openAt)
         # A comment's body is erased, the run before it is real output under the block
@@ -226,19 +239,75 @@ func splitTags(p: var Parser): Tag =
         isRaw = p.src.at("raw", k) and (k + 3 >= innerHi or p.src[k + 3] notin WsNameChars)
       if isRaw:
         # `{% raw %}` holds its body verbatim:
-        #   one text run up to `{% endraw %}`.
-        let e = p.src.findTagClose(c + 2, stop, "endraw %}")
-        if e < 0:
+        #   one text run up to the next `{% endraw %}` tag, closed by a quote-blind
+        #   scan anchored on a tag-shaped `{%`, so a quote or a bare `endraw %}`
+        #   inside the body neither defers the scan nor ends the run early
+        # - the run's end is the matched tag's `{`, so no byte of the closing tag
+        #   joins the body
+        var endOpen = -1   # the closing tag's `{`
+        var endDash = false # the closing tag carries `{%-`
+        var endAfterTag = 0 # offset just past the closing tag's `%}`
+        var i = c + 2
+        while i < stop:
+          if p.src.at("{%", i):
+            var j = i + 2
+            var dash = false
+            if j < stop and p.src[j] == '-':
+              dash = true
+              inc j
+            while j < stop and p.src[j] in cnj_types.Whitespace:
+              inc j
+            if p.src.at("endraw", j) and (j + 6 >= stop or p.src[j + 6] notin WsNameChars):
+              var k = j + 6
+              var dashAfter = false
+              while k < stop and p.src[k] in cnj_types.Whitespace:
+                inc k
+              if k < stop and p.src[k] == '-':
+                dashAfter = true
+                inc k
+                while k < stop and p.src[k] in cnj_types.Whitespace:
+                  inc k
+              if k + 2 <= stop and p.src.at("%}", k):
+                endOpen = i
+                endDash = dash
+                endAfterTag = k + 2
+                stripAfter = dashAfter
+                break
+            # the `{%` was body text, the scan resumes past it
+            inc i, 2
+            continue
+          inc i
+        if endOpen < 0:
           raise jinjaErr("unclosed `{% raw %}` opened at byte " & $openAt, openAt)
         var rawLo = c + 2
-        var rawHi = e - 2
-        if rawHi > rawLo and p.src[rawHi - 1] == '-':
-          dec rawHi
+        var rawHi = endOpen
+        # `{%- endraw %}` strips the body's trailing whitespace run, the same
+        # whitespace policy every other tag boundary follows
+        if endDash:
+          while rawHi > rawLo and p.src[rawHi - 1] in cnj_types.Whitespace:
+            dec rawHi
         if rawLo < rawHi and p.src[rawLo] in {' ', '\t'} and p.src.atLineStart(rawLo):
           while rawLo < rawHi and p.src[rawLo] in {' ', '\t'}:
             inc rawLo
-        p.i = e + "endraw %}".len
+        if stripAfter:
+          var j = endAfterTag
+          while j < stop and p.src[j] in cnj_types.Whitespace:
+            inc j
+          p.i = j
+        else:
+          p.i = endAfterTag
         p.pendBr = true
+        # One text run before the raw tag is real output under the open tag's
+        # whitespace rules, delivered first, the body queueing in `pending` after it.
+        if stripBefore:
+          while lo < hi and p.src[hi - 1] in cnj_types.Whitespace:
+            dec hi
+        elif p.src.atLineStart(openAt):
+          while lo < hi and p.src[hi - 1] in {' ', '\t'}:
+            dec hi
+        if lo < hi:
+          p.pending = Tag(kind: tkText, lo: int32 rawLo, hi: int32 rawHi, tLo: 0, tHi: 0)
+          return Tag(kind: tkText, lo: int32 lo, hi: int32 hi, tLo: 0, tHi: 0)
         return Tag(kind: tkText, lo: int32 rawLo, hi: int32 rawHi, tLo: 0, tHi: 0)
       kind = if isVar: tkVariable else: tkBlock
       tLo = innerLo
@@ -412,6 +481,7 @@ func findKeyword(src: openArray[char], at, stop: int, word: string): int =
     elif src[i] in {')', ']'}:
       dec depth
     elif depth == 0 and at(src, word, i) and
+        (i == at or src[i - 1] notin WsNameChars) and
         (i + word.len >= stop or src[i + word.len] notin WsNameChars):
       return i
     inc i

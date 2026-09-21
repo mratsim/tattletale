@@ -126,6 +126,52 @@ doAssert cmn.nodes.allIt(it.kind == nkVerbatim), "a comment became a node kind"
 doAssert cmn.nodes.mapIt(cmSrc[it.lo ..< it.hi]).join == "A\nBC",
     "comment whitespace rules: " & $cmn.nodes.mapIt(cmSrc[it.lo ..< it.hi])
 
+# A `{% raw %}` body is a verbatim run, one `nkVerbatim` span per body:
+#   the closing tag's bytes never join the body, the body's end being the matched
+#   tag's `{`, and a bare `endraw %}` in the body cannot close the block.
+const rawShapes = [
+  ("{% raw %}X{% endraw %}", "X"),
+  ("{% raw %}B{%  endraw %}C", "BC"),
+  ("{% raw %}{% endraw %}", ""),
+  ("pre{% raw %}X{% endraw %}post", "preXpost"),
+  ("{% raw %}A endraw %} B{% endraw %}", "A endraw %} B"),
+  ("{% raw %}X{% endraw -%}  Y", "XY"),
+  ("{% raw %}X{%- endraw -%}Y", "XY"),
+  ("{% raw %}  X  {%- endraw %}", "  X"),
+  ("{% raw %}don't{% endraw %}", "don't"),
+  ("A{% raw %}X{% endraw %}B{% raw %}C{% endraw %}D", "AXBCD"),
+]
+for (rSrc, want) in rawShapes:
+  let (rn, _) = parseTemplate(rSrc)
+  doAssert rn.nodes.allIt(it.kind == nkVerbatim), "a raw body became a node kind: " & rSrc
+  doAssert rn.nodes.mapIt(rSrc[it.lo ..< it.hi]).join == want,
+      "raw body: " & rSrc.escape & " got " &
+      rn.nodes.mapIt(rSrc[it.lo ..< it.hi]).join.escape
+
+# A comment body is a verbatim byte run, its close scan quote-blind:
+#   an odd quote count in the body neither raises nor defers the scan into
+#   the template text after the comment
+const qSrc = "{# don't #}KEEPME{# it's fine #}"
+let (qn, _) = parseTemplate(qSrc)
+doAssert qn.nodes.mapIt(qSrc[it.lo ..< it.hi]).join == "KEEPME",
+    "comment close is quote-blind: " & $qn.nodes.mapIt(qSrc[it.lo ..< it.hi])
+
+# A for-iterable ending in `if` (motif, serif) is one word, the filter-clause
+# word scan matching only at a word boundary, the left side included.
+const motifSrc = "{% for m in motif %}{{ m }}{% endfor %}"
+let (mn, _) = parseTemplate(motifSrc)
+let mFor = mn.nodes[0]
+doAssert mFor.kind == nkFor, "the for node parses"
+doAssert motifSrc[mFor.lo ..< mFor.hi].strip == "motif",
+    "an `if`-suffixed iterable is not truncated: " & motifSrc[mFor.lo ..< mFor.hi]
+doAssert mFor.filterLo == NoLink and mFor.filterHi == NoLink,
+    "no filter clause is recorded for a name ending in `if`"
+const filterSrc = "{% for x in xs if x %}{% endfor %}"
+let (fnx, _) = parseTemplate(filterSrc)
+doAssert fnx.nodes[0].filterLo != NoLink and
+    filterSrc[fnx.nodes[0].filterLo ..< fnx.nodes[0].filterHi].strip == "x",
+    "a real filter clause still splits from the iterable"
+
 # Only a trailing newline is dropped, so interior and trailing spacing survive byte for byte:
 # final does not mean trimmed.
 const pSrc = "keep  me  "
