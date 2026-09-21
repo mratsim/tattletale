@@ -13,8 +13,9 @@
 ##
 ## Checks, all closed-form or model-bar assertions:
 ## - the g = 0, g -> -inf and beta = 0 anchors, fp32 and fp64 runs, exact
-## - the DIAGNOSTIC chunked-vs-per-token pair at the rounding-model bar
-## - the budget-ceiling pass at T = 256, Dk = 128
+## - the one-step equivalence at T = 1 (decode step vs walk), exact
+## - the DIAGNOSTIC chunked-vs-per-token pair at the rounding-model bar,
+##   plus the budget-ceiling pass at T = 256, Dk = 128
 ##
 ## Case contract:
 ## - every recurring (T > 1) case starts from a non-zero initial state
@@ -224,6 +225,82 @@ proc beta0AnchorCase[F: float32|float64](seed: uint64) =
     "beta = 0 final state diverged from the pure decay chain: worst " & $worstS &
     ", expected exactly 0.0"
 
+# ─── One-step equivalence ────────────────────────────────────────────
+
+proc oneStepEquivalenceCase[F: float32|float64](seed: uint64) =
+  ## One decode step at T = 1 against the per-token walk's single step,
+  ## both spellings from the same seeded inputs:
+  ##
+  ## Contract:
+  ## - the step and the walk share no code, so a divergence in either
+  ##   spelling is detected
+  ##
+  ## Exact bar, bitwise-identical outputs at T = 1:
+  ##
+  ## - both spellings apply the same operations in the same order
+  ##   (read → decay → kv read → update → y), the walk restates the step's arithmetic
+  ## - IEEE fp32/fp64 arithmetic is deterministic, so identical inputs
+  ##   give identical bits
+  const B = 1
+  const Hv = 4
+  const Hk = 2
+  const hkRatio = 2
+  const Dk = 16
+  const Dv = 16
+  const T = 1
+  checkShapeBudget(T, Dk)
+  var rng = initNaiveRng(seed)
+  let q32 = randomCube(rng, B * Hk, T, Dk, -0.5'f32, 0.5'f32)
+  let k32 = randomCube(rng, B * Hk, T, Dk, -0.5'f32, 0.5'f32)
+  let v32 = randomCube(rng, B * Hv, T, Dv, -0.5'f32, 0.5'f32)
+  let beta32 = randomMat(rng, B * Hv, T, 0.1'f32, 1.0'f32)
+  let g32 = randomMat(rng, B * Hv, T, -1.0'f32, -0.01'f32)
+  let s032 = randomCube(rng, B * Hv, Dv, Dk, -0.25'f32, 0.25'f32)  # non-zero initial state
+
+  # The walk, one step from the seeded initial state.
+  var sWalk = castCube[F](s032)
+  var yWalk = zerosCube[F](B * Hv, T, Dv)
+  gdnPrefillPerToken(sWalk, yWalk, castCube[F](q32), castCube[F](k32),
+    castCube[F](v32), castMat[F](beta32), castMat[F](g32), Hv, Hk, hkRatio)
+
+  # The step's inputs, token 0 of the same seeded tensors in the step
+  # signature's per-token forms.
+  var q1 = NaiveMat[F](rows: B * Hk, cols: Dk)
+  q1.data = newSeq[F](B * Hk * Dk)
+  var k1 = NaiveMat[F](rows: B * Hk, cols: Dk)
+  k1.data = newSeq[F](B * Hk * Dk)
+  var v1 = NaiveMat[F](rows: B * Hv, cols: Dv)
+  v1.data = newSeq[F](B * Hv * Dv)
+  var beta1 = newSeq[F](B * Hv)
+  var g1 = newSeq[F](B * Hv)
+  for hk in 0 ..< B * Hk:
+    for dkc in 0 ..< Dk:
+      q1.data[hk * Dk + dkc] = castCube[F](q32).data[(hk * T + 0) * Dk + dkc]
+      k1.data[hk * Dk + dkc] = castCube[F](k32).data[(hk * T + 0) * Dk + dkc]
+  for bh in 0 ..< B * Hv:
+    for row in 0 ..< Dv:
+      v1.data[bh * Dv + row] = castCube[F](v32).data[(bh * T + 0) * Dv + row]
+    beta1[bh] = castMat[F](beta32).data[bh * T + 0]
+    g1[bh] = castMat[F](g32).data[bh * T + 0]
+
+  var sStep = castCube[F](s032)
+  var yStep = NaiveMat[F](rows: B * Hv, cols: Dv)
+  yStep.data = newSeq[F](B * Hv * Dv)
+  gdnDecodeStep(sStep, yStep, q1, k1, v1, beta1, g1, Hv, Hk, hkRatio)
+
+  when F is float32:
+    let worstY = worstSeqDiff(yStep.data, yWalk.data)
+    let worstS = worstSeqDiff(sStep.data, sWalk.data)
+  else:
+    let worstY = worstDiffF64(yStep.data, yWalk.data)
+    let worstS = worstDiffF64(sStep.data, sWalk.data)
+  doAssert worstY == 0.0,
+    "decode step output diverged from the walk's step: worst " & $worstY &
+    ", expected exactly 0.0"
+  doAssert worstS == 0.0,
+    "decode step state diverged from the walk's step: worst " & $worstS &
+    ", expected exactly 0.0"
+
 # ─── DIAGNOSTIC intra-family pair ────────────────────────────────────
 
 proc gdnPairCase(seed: uint64; T, Hv, Hk, hkRatio, Dk, Dv, chunkLen: int;
@@ -311,6 +388,10 @@ proc main =
   runTimed "anchor beta=0 gives the pure decay chain (fp32 and fp64)":
     beta0AnchorCase[float32](0x5EEDC0DE'u64)
     beta0AnchorCase[float64](0x5EEDC0DE'u64)
+
+  runTimed "one-step equivalence: decode step at T=1 vs the walk (fp32 and fp64)":
+    oneStepEquivalenceCase[float32](0x7EA5EED'u64)
+    oneStepEquivalenceCase[float64](0x7EA5EED'u64)
 
   runTimed "DIAGNOSTIC intra-family pair GDN chunked vs per-token (fp64)":
     # T = 100 with chunkLen 32 gives blocks 32, 32, 32, 4: the tail block
