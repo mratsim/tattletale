@@ -702,12 +702,12 @@ except JinjaError as e:
 
 # Paren boundary sits exactly at the cap.
 # Every emit entry counts one level, each paren group one more:
-# 23 groups reach depth 24 and render.
-# 24 groups reach depth 25 and raise located.
-doAssert render("(".repeat(23) & "1" & ")".repeat(23)) == "1",
+# `ExprDepthCap - 1` groups reach the cap's last level and render,
+# `ExprDepthCap` groups reach one past it and raise located.
+doAssert render("(".repeat(ExprDepthCap - 1) & "1" & ")".repeat(ExprDepthCap - 1)) == "1",
     "paren nesting reaching the cap renders"
 try:
-  discard render("(".repeat(24) & "1" & ")".repeat(24))
+  discard render("(".repeat(ExprDepthCap) & "1" & ")".repeat(ExprDepthCap))
   doAssert false, "paren nesting one past the cap rendered instead of raising"
 except JinjaError as e:
   doAssert "ExprDepthCap" in e.what, e.what

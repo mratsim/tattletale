@@ -299,12 +299,11 @@ func forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
         cx.tok.lo)
   cx.ports.force(cx.ports.env, v.pc.mc, v.pc.args)
 
-func truthOperand(ports: Ports, cx: var Cx, v: JinjaVal, at: int): JinjaVal =
+func truthOperand(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns a boolean-position operand, a dry walk returning `v` unevaluated:
   ## - a pending macro call renders to its output value
   ## - a concat renders to the text it emits
   ## - everything else passes unchanged
-  ## `at` locates the raise of a forcing leg that finds no forcer.
   if cx.dry:
     return v
   case v.kind
@@ -1016,7 +1015,7 @@ func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   if isWord(tmpl, cx, "not"):
     advance(tmpl, cx)
     let operandLo = cx.tok.lo
-    let v = truthOperand(ports, cx, expr(tmpl, ports, cx, 5), operandLo)
+    let v = truthOperand(ports, cx, expr(tmpl, ports, cx, 5))
     return boolVal(if cx.dry: false else: not isTruthy(v, operandLo))
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
@@ -1046,6 +1045,7 @@ func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
 func arith(op: Op, a, b: JinjaVal, opLo: int): JinjaVal =
   ## Combines two numbers, or two strings and two sequences under `+`.
   ## `%` follows Python's floor rule, the result taking the divisor's sign, so `-3 % 2` is `1`.
+  ##
   ## Integer `+` and `-` check their result, an overflow raising a located
   ## `JinjaError` at the operator, never an uncatchable `OverflowDefect`.
   case op
@@ -1114,13 +1114,13 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
   ## before the truth test, a boolean position reading the output's bytes.
   case op
   of opAnd:
-    let l = truthOperand(ports, cx, lhs, opLo)
+    let l = truthOperand(ports, cx, lhs)
     if not cx.dry and not isTruthy(l, opLo):
       skipExpr(tmpl, ports, cx, 4)
       return l
     expr(tmpl, ports, cx, 4)
   of opOr:
-    let l = truthOperand(ports, cx, lhs, opLo)
+    let l = truthOperand(ports, cx, lhs)
     if not cx.dry and isTruthy(l, opLo):
       skipExpr(tmpl, ports, cx, 3)
       return l
@@ -1225,6 +1225,8 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
   ##   resolved before its head runs
   ## - the condition is evaluated once and exactly one branch is, which keeps a branch holding
   ##   `raise_exception` or `strftime_now` from acting while unelected
+  ##
+  ## Depth contract:
   ## - every entry counts one level toward `ExprDepthCap`, dry walks included, so skipped
   ##   operands and the ternary scan are bounded like evaluated ones
   ## - one exit decrements, the ternary legs included, so an entry is never left counted
@@ -1241,7 +1243,7 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
         v = undefinedVal()
       else:
         let cond = evalRange(tmpl, cx.ports, shape.cLo, shape.cHi, cx.depth)
-        let tested = truthOperand(cx.ports, cx, cond, shape.cLo)
+        let tested = truthOperand(cx.ports, cx, cond)
         if isTruthy(tested):
           v = evalRange(tmpl, cx.ports, headLo, shape.aHi, cx.depth)
         elif shape.hasElse:

@@ -289,6 +289,7 @@ func serFinish(js: var Ser) =
 
 func serDispatch(js: var Ser) =
   ## Renders the value in `v`, one literal or string body at a time.
+  ##
   ## Each container stack entry pushed below counts the value-graph depth toward
   ## `ValueDepthCap`, a breach raising a `JinjaError` with `NoOffset`, `Ser`
   ## carrying no template location:

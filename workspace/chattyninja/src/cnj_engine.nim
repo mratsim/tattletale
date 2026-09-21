@@ -236,10 +236,12 @@ func notIterable(v: JinjaVal, lo, hi: int): void {.noreturn.} =
 
 func loopStateOf(v: JinjaVal, lo, hi: int): LoopState =
   ## Dispatch at the loop's chain entry, one leg per iterable kind the corpus supports
-  ## and the shared raise leg for everything else. The iterable arrives rendered where
-  ## it can hold a pending call or concat, `stepFor` coercing before the dispatch.
-  ## The cursor answers the random access
-  ## that `loop.previtem` and `loop.nextitem` need, per index.
+  ## and the shared raise leg for everything else.
+  ##
+  ## - the iterable arrives rendered where it can hold a pending call or concat,
+  ##   `stepFor` coercing before the dispatch
+  ## - the cursor answers the random access
+  ##   `loop.previtem` and `loop.nextitem` give, per index
   case v.kind
   of vkSeq: iterSeq(v)
   of vkDict, vkNs: iterMapping(v)
@@ -260,6 +262,16 @@ func bindTargets(tmpl: CompiledTemplate, st: var RenderState, n: int32, item: Ji
           $ntargets & "-element sequence", nd.lo.int, nd.hi.int - nd.lo.int)
     for i in 0 ..< ntargets:
       st.bindName(nd.targetAt(i), item.xs.items[i])
+
+func filterKeep(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): bool =
+  ## Evaluates one filter clause in boolean position, a pending macro call rendering
+  ## to its output value and a concat to the text it emits, the result tested for truth.
+  var evaluated = evalSpan(tmpl, ports, lo, hi)
+  if evaluated.kind == vkCall:
+    evaluated = forceCondCall(ports, evaluated, lo, hi)
+  elif evaluated.kind == vkConcat:
+    evaluated = strVal(pyStr(evaluated))
+  isTruthy(evaluated, lo)
 
 func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: int32) =
   ## Re-entry path. Moves the shared cursor to the next item passing the filter clause, re-enters
@@ -286,12 +298,7 @@ func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: in
     var keep = nd.filterLo == NoLink
     bindTargets(tmpl, st, n, lp.loopItem(idx))
     if nd.filterLo != NoLink:
-      var evaluated = evalSpan(tmpl, ports, nd.filterLo, nd.filterHi)
-      if evaluated.kind == vkCall:
-        evaluated = forceCondCall(ports, evaluated, nd.filterLo, nd.filterHi)
-      elif evaluated.kind == vkConcat:
-        evaluated = strVal(pyStr(evaluated))
-      keep = isTruthy(evaluated, nd.filterLo)
+      keep = filterKeep(tmpl, ports, nd.filterLo, nd.filterHi)
     if keep:
       break
   st.curNode = nd.child
@@ -299,6 +306,7 @@ func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: in
 func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## `{% for %}`:
   ##   a matching row on top of the stack means advance, anything else means set up the iteration.
+  ##
   ## An empty body completes inline at set-up, its row and scope closing as the re-entry path
   ## closes them on exhaust.
   ## - with no filter clause the bindings are unobservable, the close popping the scope,
@@ -334,12 +342,7 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
         if lp.idx >= lp.loopLen:
           break
         bindTargets(tmpl, st, n, lp.loopItem(lp.idx))
-        var evaluated = evalSpan(tmpl, ports, nd.filterLo, nd.filterHi)
-        if evaluated.kind == vkCall:
-          evaluated = forceCondCall(ports, evaluated, nd.filterLo, nd.filterHi)
-        elif evaluated.kind == vkConcat:
-          evaluated = strVal(pyStr(evaluated))
-        discard isTruthy(evaluated, nd.filterLo)
+        discard filterKeep(tmpl, ports, nd.filterLo, nd.filterHi)
     st.scopes.setLen(st.rows[^1].scopeAt - 1)
     st.rows.setLen(st.rows.len - 1)
     st.curNode = nd.succ
@@ -640,7 +643,7 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
       "a macro body was forced while the driver still held a pending piece"
   if st.macroDepth >= MacroDepthCap:
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
-        sym[].names[mc.name] & "`")
+        sym[].names[mc.name] & "` (forced call)")
   var st2 = st
   inc st2.macroDepth
   st2.scopes.add @[]
@@ -705,6 +708,8 @@ func pull*(c: var Context, buf: var openArray[char]): int =
   ##   that stops mid-drain and resumes never re-receives a byte
   ## - a piece longer than the window drains across calls, a lazy piece resuming
   ##   through the serializer in `c.state.lazy`
+  ##
+  ## Termination and budget:
   ## - 0 means the render is complete, nothing pending and `c.state.curNode == NoLink`
   ## - one call dispatches at most `StepBudget` steps, a breach raising located at the reached node
   ##

@@ -31,10 +31,12 @@ const
     ## Recursion bound over the value graph fed host-provided data:
     ## - deepest corpus context nesting is single digits, 1000 clearing it
     ##   with margin and staying far below the C stack depth
+    ##
+    ## Raise contract, the walkers being `eqVal`, `containsVal` and the serializer's
+    ## container stack entries:
     ## - every value-graph walker counts levels toward the cap and raises a `JinjaError` on breach
     ## - `eqVal` and `containsVal` raise located at the caller's template position,
     ##   the serializer raising `NoOffset`, it carrying no template location
-    ## - the walkers are `eqVal`, `containsVal` and the serializer's container stack entries
     ## - cyclic graphs raise the same way, their nesting unbounded
 
 const
@@ -339,13 +341,17 @@ func materializeVal*(v: JinjaVal): JinjaVal =
 
 func rangeLen*(r: RangeVal, lo, hi: int): int =
   ## Returns the element count of the range, Python's `len(range(start, stop, step))`:
-  ## a step against the span's direction answers 0. A count past `RangeElemCap` raises
-  ## a `JinjaError` located at the range expression `lo ..< hi`. Callers with no
-  ## template location in scope pass `NoOffset`, the raise carrying none.
+  ## a step against the span's direction answers 0.
+  ##
+  ## A count past `RangeElemCap` raises a `JinjaError` located at the range
+  ## expression `lo ..< hi`. A caller with no template location in scope passes
+  ## `NoOffset` and the raise carries none.
   ##
   ## The walk distance and the stride magnitude compute in unsigned space, where each
   ## is exact, so the span arithmetic never wraps however extreme the bounds:
-  ##   rangeLen(rangeVal(0, 9223372036854775807, 1)) == 9223372036854775807 (capped)
+  ##
+  ##   rangeLen(rangeVal(0, 9223372036854775807, 1)) computes the walk distance exactly
+  ##   and the raise fires past `RangeElemCap`, before any consumer sees the count
   if r.step == 0:
     return 0
   let fwd = r.step > 0

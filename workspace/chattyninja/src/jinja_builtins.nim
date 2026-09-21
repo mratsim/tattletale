@@ -193,8 +193,9 @@ func safeFilter(v: JinjaVal, args: Args): JinjaVal =
 func joinMethod(v: JinjaVal, args: Args): JinjaVal =
   ## `x | join(sep)` and `x.join(sep)`:
   ##   concatenates a sequence's values, a mapping's keys.
-  # A mapping's join walks its keys, matching upstream, where the values are
-  # unreadable bytes and the keys the visible members.
+  ##
+  ## A mapping's join walks its keys, matching upstream, where the values are
+  ## unreadable bytes and the keys the visible members.
   let sep = pyStr(getArg(args, 0, akNone, strVal("")))
   var acc = ""
   case v.kind
