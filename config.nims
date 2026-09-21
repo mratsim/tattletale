@@ -546,6 +546,15 @@ task test_ceramic, "Test workspace/ceramic":
     for cmd in getTestCommands("workspace/ceramic/tests/gemm"):
       runCmd(cmd)
 
+# The positron naive reference tier, a fixture-free randomized
+# harness over the shared naive references in tests/naive.
+# No recorded blobs, no model checkpoints, the inputs come
+# from the seeded PRNG.
+task test_positron_naive, "Test workspace/positron naive reference tier":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/positron/tests/naive"):
+      runCmd(cmd)
+
 task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/nvrtc"):
