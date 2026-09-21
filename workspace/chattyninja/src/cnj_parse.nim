@@ -432,7 +432,7 @@ proc parseMacroParams(p: var Parser, t: Tag, at: int, nodeIdx: int32) =
       defLo = int32 k
       defHi = int32 p.src.skipBalanced(k, t.tHi, {',', ')'}, ",)")
       k = defHi.int
-    # One parameter per iteration, the triple `paramNameAt` reads from `MacroParamsBase`,
+    # One parameter per iteration, appending the triple `paramNameAt` reads:
     # name id first, then the default `lo`, then the default `hi`.
     p.nodes[nodeIdx].slots.add name
     p.nodes[nodeIdx].slots.add defLo
@@ -556,7 +556,7 @@ proc parseFor(p: var Parser): Head =
   p.advance()
   let idx = addNode(p, mkNode(nkFor, int32 iterLo, int32 iterHi, NoLink, NoLink, loopId,
       filterLo, filterHi))
-  # Target ids append after the fixed prefix, the tail `targetAt` reads from `ForTargetsBase`.
+  # Target ids append after the fixed prefix, forming the tail `targetAt` reads.
   for tg in targets:
     p.nodes[idx].slots.add tg
   let body = parseBody(p, ["endfor"])

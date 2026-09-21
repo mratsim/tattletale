@@ -7,14 +7,15 @@
 ## - `Ser` is the defunctional serializer, rendering byte by byte into a caller-owned
 ##   window with every pause point in its fields, so a drain resumed through the same
 ##   `Ser` never re-emits a byte
-## - `pyStrInto` and `pyReprInto` render a value into a caller-owned `Cursor`
-## - `pyStr`, `toJson`, `pullJSON` and `pullSer` are the consumer entry points
+## - the internal renderers `pyStrInto` and `pyReprInto` write a value into a caller-owned `Cursor`
+## - `serReset`, `serDone` and `pullSer` drive a held `Ser`, `pyStr`, `toJson` and `pullJSON`
+##   are the one-call consumer entry points
 
 import std/unicode
 import jinja_data_model
 
 const
-  SerChunkCap* = 40
+  SerChunkCap = 40
     ## Capacity of the literal queue, bounding every queued literal. The longest `tojson`
     ## escape is the astral surrogate pair (12 bytes), the longest atom rendering a float repr
     ## (26 bytes), the macro form `<macro ` plus one int64 plus `>` (30 bytes with quotes).
@@ -28,31 +29,31 @@ type
     ## `smJson` rendering the `tojson` filter form.
     smStr, smJson
 
-  SerWalk* = enum
+  SerWalk = enum
     ## Character unit a quoted string body advances by, whole runes for the `tojson` escaping
     ## rules and single bytes for the Python repr escaping rules.
     wkRune, wkByte
 
-  SerAfter* = enum
+  SerAfter = enum
     ## Activity following the string body being written, closing the value's quote or closing
     ## a mapping key's quote before the separator and the entry value.
     saValue, saKey
 
-  SerNext* = enum
+  SerNext = enum
     ## Activity a finished separator hands to, rendering the value in `v` or the mapping key
     ## in `s` as a quoted string body.
     nxDispatch, nxKey
 
-  SerPhase* = enum
+  SerPhase = enum
     ## Pending activity of a serializer. Queued chunk bytes and the pending separator drain
     ## before the phase advances.
     spDispatch, spStr, spRaw, spSep, spClose, spDone
 
-  SerFrame* = object
+  SerFrame = object
     ## One open container on the serializer's stack.
-    val*: JinjaVal
+    val: JinjaVal
       ## the container being rendered
-    idx*: int
+    idx: int
       ## entry the serializer writes next
 
   Ser* = object
@@ -64,44 +65,44 @@ type
     ## - quoted string bodies, container brackets and entries advance through the phases
     ## - a str-mode `~` tree flattens into `concatTail`, operands dispatching one after
     ##   the other, and a lazy `range` renders its list form arithmetically, one element per index
-    mode*: SerMode
-    opts*: JsonOpts
+    mode: SerMode
+    opts: JsonOpts
       ## `tojson` knobs, read in `smJson` mode only
-    phase*: SerPhase
-    v*: JinjaVal
+    phase: SerPhase
+    v: JinjaVal
       ## value the `spDispatch` phase renders
-    s*: string
+    s: string
       ## string body the `spStr` and `spRaw` phases write
-    spos*: int
+    spos: int
       ## bytes of `s` already written
     send: int
       ## exclusive end of the `s` body, `s.len` for a whole string, a cut's `hi` bound
       ## when the raw phase streams only the cut's sub-span
-    walk*: SerWalk
-    quoted*: bool
+    walk: SerWalk
+    quoted: bool
       ## the `spStr` body sits between quotes the serializer itself writes
-    after*: SerAfter
-    nxt*: SerNext
-    sep*: string
+    after: SerAfter
+    nxt: SerNext
+    sep: string
       ## separator the `spSep` phase writes
-    sepos*: int
+    sepos: int
       ## bytes of `sep` already written
-    buf*: array[SerChunkCap, char]
+    buf: array[SerChunkCap, char]
       ## literal queue draining byte by byte
-    blen*, bpos*: int
+    blen, bpos: int
       ## queued bytes in `buf` and the read position
-    stack*: seq[SerFrame]
+    stack: seq[SerFrame]
       ## open containers, outermost first
-    concatTail*: seq[JinjaVal]
+    concatTail: seq[JinjaVal]
       ## remaining operands of a str-mode `~` tree in render order, each dispatching
       ## when the previous operand's rendering completes
-    closeSeq*: bool
+    closeSeq: bool
       ## the `spClose` phase writes a sequence bracket, else a mapping bracket
 
-func pyStrInto*(sb: var Cursor, v: JinjaVal)
+func pyStrInto(sb: var Cursor, v: JinjaVal)
 func pyReprInto(sb: var Cursor, v: JinjaVal)
 
-func pyStrInto*(sb: var Cursor, v: JinjaVal) =
+func pyStrInto(sb: var Cursor, v: JinjaVal) =
   ## Writes the value as template output text into `sb`:
   ## - strings pass through, cuts stream their surviving span, scalars format in place,
   ##   undefined renders empty
@@ -460,7 +461,7 @@ func serReset*(js: var Ser, v: sink JinjaVal, mode: SerMode, opts = JsonOpts()) 
   else:
     js.v = move v
 
-func serValue*(v: JinjaVal, mode: SerMode, opts = JsonOpts()): Ser =
+func serValue(v: JinjaVal, mode: SerMode, opts = JsonOpts()): Ser =
   ## Returns a serializer positioned before the first byte of `v`'s rendering.
   result = Ser(mode: mode, opts: opts)
   serReset(result, v, mode, opts)

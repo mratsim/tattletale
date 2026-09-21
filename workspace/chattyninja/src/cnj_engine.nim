@@ -24,7 +24,7 @@ import std/unicode
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
 
 type
-  Step* = proc (tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+  Step = proc (tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
       ports: Ports, n: int32) {.nimcall, noSideEffect.}
     ## One construct's step. Writes only through `st`, always leaving `st.curNode` holding
     ## the node control enters next. Expressions evaluate through `ports`, the injected
@@ -38,13 +38,13 @@ type
     sym: ptr CompiledSymbols
     st: ptr RenderState
 
-proc forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal {.noSideEffect.}
+func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal
   ## Runs one macro body to completion and returns the captured text, the macro forcer
   ## the expression tier receives through the ports. A parameter here keeps the compiled
   ## artifact read-only and keeps both tiers clear of an import cycle.
 
-proc startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
-    ports: Ports, lo, hi: int, call: PendingCallVal, retNode: int32) {.noSideEffect.}
+func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+    ports: Ports, lo, hi: int, call: PendingCallVal, retNode: int32)
   ## Opens a macro frame and enters the body, the body's output pieces draining through
   ## the caller's window until the frame closes on the definition node.
 
@@ -58,7 +58,7 @@ func scopeHas(st: RenderState, id: int32, val: var JinjaVal): bool =
         return true
   false
 
-proc portLookup(env: pointer, name: openArray[char]): JinjaVal {.nimcall, noSideEffect.} =
+func portLookup(env: pointer, name: openArray[char]): JinjaVal {.nimcall.} =
   ## Lookup port trampoline. Returns the binding of `name` in the scopes, else in the render
   ## context root, else undefined. Absence is a value, never an error.
   ## `is defined` tests for exactly that shape.
@@ -71,17 +71,17 @@ proc portLookup(env: pointer, name: openArray[char]): JinjaVal {.nimcall, noSide
     return e.st[].root.d.dictGet(name)
   undefinedVal()
 
-proc portClock(env: pointer): float64 {.nimcall, noSideEffect.} =
+func portClock(env: pointer): float64 {.nimcall.} =
   ## Clock port trampoline returning the render's injected epoch.
   cast[ptr PortEnv](env)[].st[].clock
 
-proc portForce(env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.} =
+func portForce(env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall.} =
   ## Macro-forcer trampoline, running the body to completion on the adapter's render
   ## state and returning the captured text value.
   let e = cast[ptr PortEnv](env)
   forceMacro(e.tmpl, e.sym, e.st[], mc, args)
 
-func lookupNameById*(sym: CompiledSymbols, st: var RenderState, id: int32): JinjaVal =
+func lookupNameById(sym: CompiledSymbols, st: var RenderState, id: int32): JinjaVal =
   ## Returns the binding of an interned name, undefined when absent. The scope key is
   ## the id, so no string is rebuilt per lookup.
   if id == NoLink:
@@ -95,7 +95,7 @@ func lookupNameById*(sym: CompiledSymbols, st: var RenderState, id: int32): Jinj
 
 # Output:
 
-proc emitSpan(st: var RenderState, tmpl: CompiledTemplate, lo, hi: int32) {.noSideEffect.} =
+func emitSpan(st: var RenderState, tmpl: CompiledTemplate, lo, hi: int32) =
   ## Makes a template-text span the pending piece.
   if hi <= lo:
     return
@@ -104,7 +104,7 @@ proc emitSpan(st: var RenderState, tmpl: CompiledTemplate, lo, hi: int32) {.noSi
   doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
   st.pend = Piece(pos: 0, kind: pkSpan, lo: lo, hi: hi)
 
-proc emitStr(st: var RenderState, s: sink string) {.noSideEffect.} =
+func emitStr(st: var RenderState, s: sink string) =
   ## Makes a materialized string the pending piece, moving it out of the caller's value so
   ## a runtime-built emit string is never copied, an empty string queuing nothing.
   if s.len == 0:
@@ -112,7 +112,7 @@ proc emitStr(st: var RenderState, s: sink string) {.noSideEffect.} =
   doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
   st.pend = Piece(pos: 0, kind: pkStr, s: s)
 
-proc emitCut(st: var RenderState, v: sink JinjaVal) {.noSideEffect.} =
+func emitCut(st: var RenderState, v: sink JinjaVal) =
   ## Makes a cut value the pending piece, moving the value's string out of the caller's
   ## value so the cut drains from render-state storage with no copy, an empty cut
   ## queueing nothing, the same empty check `emitStr` applies.
@@ -121,7 +121,7 @@ proc emitCut(st: var RenderState, v: sink JinjaVal) {.noSideEffect.} =
   doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
   st.pend = Piece(pos: 0, kind: pkCut, raw: move v.raw, clo: v.lo, chi: v.hi)
 
-proc emitValue(st: var RenderState, v: sink JinjaVal) {.noSideEffect.} =
+func emitValue(st: var RenderState, v: sink JinjaVal) =
   ## Makes a derived value the pending piece, taking over the caller's value so the engine
   ## never copies an emit value, the serializer in `st.lazy` draining into the caller's
   ## window across pull calls, byte-exact with `pyStr`.
@@ -158,13 +158,13 @@ func bindName(st: var RenderState, name: int32, val: JinjaVal) =
 # textually onto the arena entry. Render code never binds a `Node` value, a binding running
 # SmallSeq's `=copy` and heap-allocating a spilled payload's block (7% of corpus nodes spill).
 
-proc stepVerbatim(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepVerbatim(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Streams the final text run, whose span already reflects every whitespace rule.
   template nd: Node = tmpl.nodes[n]
   st.emitSpan(tmpl, nd.lo, nd.hi)
   st.curNode = nd.succ
 
-proc stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Evaluates the expression span and hands the result on as the pending piece, or enters
   ## a whole-expression macro call's body instead, the body's output pieces draining
   ## through the caller's window until the frame closes.
@@ -181,7 +181,7 @@ proc stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSt
     st.emitValue(v)
   st.curNode = nd.succ
 
-proc stepIf(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepIf(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Chooses a branch once, branch bodies terminating past the chain, so no frame exists for it.
   template nd: Node = tmpl.nodes[n]
   let v = evalSpan(tmpl, ports, nd.lo, nd.hi)
@@ -232,7 +232,7 @@ func loopStateOf(v: JinjaVal, lo, hi: int): LoopState =
   of vkRange: iterRange(v)
   else: notIterable(v, lo, hi)
 
-proc bindTargets(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, n: int32, item: JinjaVal) =
+func bindTargets(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, n: int32, item: JinjaVal) =
   ## Binds the `nkFor` loop targets at `n`, more than one target unpacking a sequence, which
   ## is what `x.items()` feeds through `{% for k, v in x.items() %}`.
   template nd: Node = tmpl.nodes[n]
@@ -246,7 +246,7 @@ proc bindTargets(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rende
     for i in 0 ..< ntargets:
       st.bindName(nd.targetAt(i), item.xs.items[i])
 
-proc advanceFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) =
+func advanceFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) =
   ## Re-entry path. Moves the shared cursor to the next item passing the filter clause, re-enters
   ## the body, or closes the frame and continues past the loop.
   ##
@@ -275,7 +275,7 @@ proc advanceFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
       break
   st.curNode = nd.child
 
-proc stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## `{% for %}`:
   ##   a matching frame on top of the stack means advance, anything else means set up the iteration.
   template nd: Node = tmpl.nodes[n]
@@ -294,27 +294,27 @@ proc stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   st.bindName(nd.loopName, loopVal(lp))
   st.curNode = if nd.child == NoLink: nd.succ else: nd.child
 
-proc stepSet(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepSet(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Single-target `{% set %}`, the target carried as an interned name id in the child slot,
   ## emitting nothing, the pending piece untouched.
   template nd: Node = tmpl.nodes[n]
   st.bindName(nd.child, evalSpan(tmpl, ports, nd.lo, nd.hi))
   st.curNode = nd.succ
 
-proc gap(kindName, corpusSite: string, lo, hi: int): void {.noreturn.} =
+func gap(kindName, corpusSite: string, lo, hi: int): void {.noreturn.} =
   ## Reports a declared construct that is not implemented, naming `kindName`
   ## and the corpus site that demands it, `lo` and `hi` bounding the construct's node.
   raise jinjaErr(kindName & " is not implemented; " & corpusSite, lo, hi - lo,
       cause = ceUnimplemented)
 
-proc stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Unwinds to the nearest for-frame and continues at its successor, stopping at a macro-call
   ## boundary so a break cannot cross out of its macro.
   template nd: Node = tmpl.nodes[n]
   gap("nkBreak", "corpus demand is 8 sites: 7 in glm53flash.jinja inside the macro " &
       "has_dup_tool_result_id, 1 in northminicode10.jinja", nd.lo.int, nd.hi.int)
 
-proc stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## `ns.field = expr`, mutating the shared namespace mapping in place, visible to every
   ## holder of the `DictVal` ref, and emitting nothing.
   template nd: Node = tmpl.nodes[n]
@@ -325,20 +325,20 @@ proc stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderS
   dictSet(ns.d, sym[].names[nd.field], evalSpan(tmpl, ports, nd.lo, nd.hi))
   st.curNode = nd.succ
 
-proc stepSetBlock(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepSetBlock(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Opens a capture sink for the body and, on re-entry, binds the capture to the target name.
   template nd: Node = tmpl.nodes[n]
   gap("nkSetBlock", "corpus demand is 2 sites: gemma4.jinja:322 and northminicode10.jinja:2",
       nd.lo.int, nd.hi.int)
 
-proc stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Records the root-output span of the model's turn:
   ##   the frame holds the opening position, and the re-entry closes it.
   template nd: Node = tmpl.nodes[n]
   gap("nkGeneration", "corpus demand is 2 sites: lagunaxs21.jinja:44 and lfm25.jinja:77, with " &
       "8 recorded rows carrying codepoint spans", nd.lo.int, nd.hi.int)
 
-proc stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall, noSideEffect.} =
+func stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Binds a macro value and emits nothing, the body never running here. A macro frame
   ## arriving back on the definition node closes instead, the body's output pieces drained
   ## through the caller's window, control continuing at the frame's return node.
@@ -364,7 +364,7 @@ const
   ]
     ## Dispatch table, total over `NodeKind`, a new kind without a step a compile error.
 
-proc bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32, args: Args) =
+func bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32, args: Args) =
   ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`,
   ## each parameter carrying its interned name id and default expression span in the node tail.
   ##
@@ -396,7 +396,7 @@ proc bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Ren
         val = evalSpan(tmpl, ports, nd.paramDefLoAt(k), nd.paramDefHiAt(k))
     st.bindName(nd.paramNameAt(k), val)
 
-proc capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) =
+func capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) =
   ## Appends the pending piece's bytes to `outp` and retires the piece, the capture form
   ## of a forced macro body whose output never reaches the caller's window.
   case st.pend.kind
@@ -425,8 +425,8 @@ proc capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) 
       copyMem(addr outp[at], addr buf[0], n)
     st.pend = Piece(kind: pkNone)
 
-proc startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
-    ports: Ports, lo, hi: int, call: PendingCallVal, retNode: int32) {.noSideEffect.} =
+func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+    ports: Ports, lo, hi: int, call: PendingCallVal, retNode: int32) =
   ## Opens a macro frame and enters the body.
   ## Contract:
   ## - the body's output pieces drain through the caller's window until the frame closes on the definition node
@@ -441,8 +441,7 @@ proc startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
       retNode: retNode, scopeAt: st.scopes.len)
   st.curNode = call.mc.body
 
-proc forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
-    mc: MacroVal, args: Args): JinjaVal {.noSideEffect.} =
+func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal =
   ## Statement tier side of the macro forcer.
   ## Contract:
   ## - the body runs on a copy of the driver, so the caller's scopes, frames, program counter,
@@ -479,7 +478,7 @@ proc forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
 
 # Render driver:
 
-proc startRender*(tmpl: CompiledTemplate, sym: var CompiledSymbols, root: JinjaVal, clock = 0.0): Context =
+func startRender*(tmpl: CompiledTemplate, sym: var CompiledSymbols, root: JinjaVal, clock = 0.0): Context =
   ## Returns a render context over the shared artifact, ready to render `root`, the render
   ## context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
   ##
@@ -492,7 +491,7 @@ proc startRender*(tmpl: CompiledTemplate, sym: var CompiledSymbols, root: JinjaV
       state: RenderState(curNode: 0, cur: 0, pend: Piece(kind: pkNone),
           scopes: @[(default(Scope))], root: root, clock: clock))
 
-proc pull*(c: var Context, buf: var openArray[char]): int =
+func pull*(c: var Context, buf: var openArray[char]): int =
   ## Returns the render's next bytes, written into `buf[0 ..< result]`.
   ##
   ## Ownership sits with the caller, whose buffer capacity is the delivery window.
@@ -575,7 +574,7 @@ iterator items*(c: var Context): openArray[char] =
       break
     yield buf.toOpenArray(0, n - 1)
 
-proc pullAll*(c: var Context): string =
+func pullAll*(c: var Context): string =
   ## Returns every render byte, chunking composing with `cur`, so the two-pass counting contract needs no separate counting pass.
   var buf: array[ChunkSize, char]
   while true:

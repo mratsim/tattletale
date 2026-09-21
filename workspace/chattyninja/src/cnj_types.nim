@@ -23,7 +23,7 @@ const
 
 type
   NodeKind* {.pure.} = enum
-    ## Corpus-derived construct vocabulary, one entry per Step function.
+    ## Corpus-derived construct vocabulary, one entry per engine step.
     ##
     ## | Kind             | Payload                                                                     |
     ## | ---------------- | --------------------------------------------------------------------------- |
@@ -124,20 +124,20 @@ const
 const
   ## One slot position per construct role, plus the two variable-tail bases. Parse and render
   ## index through the same constants, so a slot-layout move is one shared edit.
-  SlotLo* = 0
+  SlotLo = 0
   SlotHi* = 1
   SlotSucc* = 2
   SlotChild* = 3
   SlotAlt* = 4
-  SlotLoopName* = 4
+  SlotLoopName = 4
   SlotFilterLo* = 5
   SlotFilterHi* = 6
-  SlotNsTarget* = 3
-  SlotNsField* = 4
-  SlotMacroName* = 0
-  ForTargetsBase* = 7
+  SlotNsTarget = 3
+  SlotNsField = 4
+  SlotMacroName = 0
+  ForTargetsBase = 7
     ## First `nkFor` target name id slot, directly after the fixed prefix.
-  MacroParamsBase* = 4
+  MacroParamsBase = 4
     ## First `nkMacroDef` parameter slot, each parameter one name id then its default span,
     ## three slots in all.
 
@@ -229,10 +229,10 @@ type
       filterLo*, filterHi*: int32
         ## for-`if` clause span, `NoLink` when absent
     of frCapture:
-      target*: int32
+      target: int32
         ## interned name to bind on close, never built while `nkSetBlock` is a declared gap
     of frGeneration:
-      spanStart*: int
+      spanStart: int
         ## root-output byte position at span entry
     of frMacro:
       pc*: int32
@@ -297,14 +297,14 @@ type
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
-  LookupPort* = proc (env: pointer, name: openArray[char]): JinjaVal {.nimcall, noSideEffect.}
+  LookupPort = proc (env: pointer, name: openArray[char]): JinjaVal {.nimcall, noSideEffect.}
     ## Resolves one name of the enclosing render to its binding, undefined when absent.
     ## `env` carries the adapter state the trampoline reads, owned by the pull consumer.
 
-  ClockPort* = proc (env: pointer): float64 {.nimcall, noSideEffect.}
+  ClockPort = proc (env: pointer): float64 {.nimcall, noSideEffect.}
     ## Returns the render's injected epoch, `strftime_now`'s only time source.
 
-  MacroForcer* = proc (env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+  MacroForcer = proc (env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
     ## Runs one macro body to completion and returns the captured text as a string value.
     ## The pull consumer injects the forcer, so the expression tier never reaches the statement
     ## tier and no import cycle forms.

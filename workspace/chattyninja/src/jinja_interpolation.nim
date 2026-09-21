@@ -42,7 +42,7 @@ type
     depth: int
     ports: Ports
 
-  GlobalProc* = proc (tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal {.nimcall, noSideEffect.}
+  GlobalProc = proc (tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal {.nimcall, noSideEffect.}
     ## A call to a template global, `namespace` and `dict` storing a keyword name as a dict key.
     ## `lo` and `hi` bound the global's name token in the template text, the location the globals'
     ## raise sites report. Globals read the template text they evaluate and the injected ports,
@@ -257,12 +257,12 @@ template wordSpan(tmpl: CompiledTemplate, cx: Cx): openArray[char] =
   ## Returns the identifier of the lookahead token as a view into the template text.
   tmpl.wordSpan(cx.tok.lo, cx.tok.hi)
 
-func argName*(tmpl: CompiledTemplate, a: Arg): openArray[char] =
+func argName(tmpl: CompiledTemplate, a: Arg): openArray[char] =
   ## Returns an argument's keyword name as a view into the template text, `nameLo == NoLink`
   ## marking a positional argument, which has no name to read.
   tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
 
-proc forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
+func forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns `v` forced to its macro output value. Every expression consumer other than
   ## the emit step reads a pending macro call in this form.
   if cx.ports.force.isNil:
@@ -270,7 +270,7 @@ proc forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
         cx.tok.lo)
   cx.ports.force(cx.ports.env, v.pc.mc, v.pc.args)
 
-proc evalItem(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
+func evalItem(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns `v`, rendering a pending macro call to text for the value containers and operators
   ## that read a plain value. A concat raises here, the argument list being its one
   ## plain-value reader. A dry walk returns `v` unevaluated.
@@ -281,7 +281,7 @@ proc evalItem(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   else:
     v
 
-proc argVal(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
+func argVal(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns one call argument's value, a pending macro call rendering to text and a concat
   ## materializing through the serializer's drain-and-grow form, arguments reading plain
   ## values only. A dry walk returns `v` unevaluated.
@@ -615,8 +615,8 @@ const
 
 # Walker:
 
-proc evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): JinjaVal {.noSideEffect.}
-proc expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): JinjaVal {.noSideEffect.}
+func evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): JinjaVal
+func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): JinjaVal
 
 
 const OpSpelling: array[Op, string] = [
@@ -665,14 +665,14 @@ func binPrec(op: Op): int =
   of opPow: 9
   of opNone: 0
 
-proc skipExpr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int) =
+func skipExpr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int) =
   ## Advances the cursor over an expression without evaluating it, how `and`, `or` and the ternary skip the text they do not run.
   let wasDry = cx.dry
   cx.dry = true
   discard expr(tmpl, ports, cx, minPrec)
   cx.dry = wasDry
 
-proc argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
+func argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
   ## Parses a parenthesised argument list with `name = expr` keyword arguments, the opening paren the lookahead. A keyword keeps its span
   ## and gains a builtin keyword slot, so binding one costs no string. Arguments fill the fixed-capacity
   ## carrier in call order, no per-call sequence.
@@ -703,7 +703,7 @@ proc argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
     raise jinjaErr("argument list is not closed", cx.tok.lo)
   advance(tmpl, cx)
 
-proc postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
+func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Applies attr, subscript, call, filter and test chains, which bind tighter than any operator.
   var v = v
   while true:
@@ -820,7 +820,7 @@ proc postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       break
   v
 
-proc primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
+func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   ## Parses a literal, a name, a parenthesised group, an array literal or a dict literal,
   ## then the postfix chain.
   var v: JinjaVal
@@ -924,7 +924,7 @@ proc primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
       raise jinjaErr("unexpected `" & spelled & "` starting an expression at byte " & $cx.tok.lo, cx.tok.lo, cx.tok.hi - cx.tok.lo)
   postfix(tmpl, ports, cx, v)
 
-proc unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
+func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   ## Parses `not`, unary `-` and `+`, then a primary.
   if isWord(tmpl, cx, "not"):
     advance(tmpl, cx)
@@ -1003,7 +1003,7 @@ func cmpOne(op: Op, a, b: JinjaVal): JinjaVal =
     else: raise jinjaErr("unknown comparison `" & OpSpelling[op] & "`")
   boolVal(r)
 
-proc binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: Op): JinjaVal =
+func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: Op): JinjaVal =
   ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
   ## infix evaluating both sides.
   case op
@@ -1072,7 +1072,7 @@ func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
     inc i
   false
 
-proc scanTernary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, headLo: int): Ternary =
+func scanTernary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, headLo: int): Ternary =
   ## Measures the ternary spans starting at `headLo`, leaving the cursor past the whole ternary. A walk that lands on no ternary restores
   ## the cursor to the head, so the caller evaluates the expression normally. Nothing is evaluated here.
   let head = cx
@@ -1105,7 +1105,7 @@ proc scanTernary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, headLo: int):
   result.isTernary = true
   cx.dry = dry
 
-proc expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): JinjaVal {.noSideEffect.} =
+func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): JinjaVal =
   ## Parses and evaluates one expression, Pratt-style:
   ##   a prefix, then infix while the operator binds at least `minPrec`.
   ## - a ternary binds loosest, and no other operator holds binding power 1, so the ternary is
@@ -1163,7 +1163,7 @@ proc expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
     dec cx.depth
   v
 
-proc evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): JinjaVal {.noSideEffect.} =
+func evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): JinjaVal =
   ## Evaluates the expression held in `tmpl.jinja[lo..<hi]` in its own cursor.
   ## - `depth` seeds the nesting counter, so a sub-span reached through a ternary still counts toward `ExprDepthCap`
   ## - `ports` carries the lookup, clock and macro-forcer services, so a nested call can still run
@@ -1173,7 +1173,7 @@ proc evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): Ji
   if cx.tok.kind != exEof:
     raise jinjaErr("expression has trailing text at byte " & $cx.tok.lo, cx.tok.lo)
 
-proc evalSpan*(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): JinjaVal {.noSideEffect.} =
+func evalSpan*(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): JinjaVal =
   ## Evaluates the expression held in `tmpl.jinja[lo..<hi]`, the entry every expression-bearing step uses.
   ## Contract:
   ## - `ports` carries the render services, a nil forcer in them making a consumed macro

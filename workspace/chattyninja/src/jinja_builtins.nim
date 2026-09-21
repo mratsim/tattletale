@@ -17,9 +17,9 @@ import std/unicode
 import jinja_data_model, jinja_serialize
 
 type
-  FilterProc* = proc (v: JinjaVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
-  TestProc* = proc (v: JinjaVal, args: Args): bool {.nimcall, noSideEffect.}
-  MethodProc* = proc (v: JinjaVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+  FilterProc = proc (v: JinjaVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+  TestProc = proc (v: JinjaVal, args: Args): bool {.nimcall, noSideEffect.}
+  MethodProc = proc (v: JinjaVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
   FilterName* = enum
     fTojson, fLength, fTrim, fDefault, fJoin, fLower, fUpper, fCapitalize, fList, fSafe, fDictsort,
     fMap, fSelect, fReject, fReplace, fIndent, fTruncate, fReverse, fWordcount, fSum, fMin, fMax,

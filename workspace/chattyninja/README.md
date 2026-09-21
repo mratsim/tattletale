@@ -4,8 +4,7 @@ Jinja-family chat-template engine, pure Nim over `nim c`, no torch, no GPU,
 no Python at test time.
 
 Templates compile to a flat append-only `seq[Node]` arena, a POD of six
-`int32` fields. Dispatch runs through `const steps: array[NodeKind, Step]`,
-total over the enum.
+`int32` fields. Dispatch runs through the total `NodeKind`-indexed `Steps` table.
 
 ## Layout
 

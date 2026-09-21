@@ -14,7 +14,7 @@
 import std/unicode
 
 const
-  ArgsCap* = 8
+  ArgsCap = 8
     ## Inline capacity of one call's argument carrier. The most arguments one corpus
     ## call passes is 2. A call past the cap is a template error, reported at the call.
 
@@ -52,7 +52,7 @@ type
       ## borrowed window, `buf.len` the writable capacity in bytes
     len*: int
       ## bytes appended so far, the measured length in measuring mode
-    measuring*: bool
+    measuring: bool
       ## count-only mode, appends advancing `len` and touching no byte
 
 type
@@ -76,7 +76,7 @@ type
     keys*: seq[string]
     vals*: seq[JinjaVal]
 
-  RangeVal* = ref object
+  RangeVal = ref object
     ## Lazy `range(start, stop, step)` bounds. Elements compute per index, the range never
     ## materializing. The serializer renders the list form arithmetically and a `for` over it
     ## walks the same arithmetic through `LoopState.r`.
@@ -316,7 +316,7 @@ func rangeAt*(r: RangeVal, i: int): JinjaVal =
   ## Returns element `i` of the range, `i` in `0 ..< rangeLen(r)`.
   intVal(r.start + i.int64 * r.step)
 
-func rangesEqual*(a, b: RangeVal): bool =
+func rangesEqual(a, b: RangeVal): bool =
   ## Returns Python's range equality, same length and the same element per index,
   ## not the same bounds, so `range(0, 6, 2)` equals `range(0, 5, 2)`.
   let n = rangeLen(a)
