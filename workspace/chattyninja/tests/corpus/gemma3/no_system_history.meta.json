@@ -1,7 +1,0 @@
-{
-  "row": "no_system_history",
-  "kwargs": {
-    "bos_token": "<bos>"
-  },
-  "template_sha256": "7de1c58e208eda46e9c7f86397df37ec49883aeece39fb961e0a6b24088dd3c4"
-}

@@ -1,7 +1,0 @@
-{
-  "row": "reasoning_effort_max",
-  "kwargs": {
-    "reasoning_effort": "max"
-  },
-  "template_sha256": "0c4099f3382d6c92700dfb99725025360966fd73032f0ecf32377c0d9e6309c5"
-}

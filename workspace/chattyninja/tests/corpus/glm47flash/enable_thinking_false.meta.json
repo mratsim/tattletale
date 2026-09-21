@@ -1,7 +1,0 @@
-{
-  "row": "enable_thinking_false",
-  "kwargs": {
-    "enable_thinking": false
-  },
-  "template_sha256": "d63ad536c3c81880043e22ec7fd08db42b4d8fb7c89c7138bc562bfa25281375"
-}

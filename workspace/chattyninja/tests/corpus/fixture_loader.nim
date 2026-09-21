@@ -10,9 +10,8 @@
 ## ground truth (rendered bytes, generation codepoint spans, expected error).
 ##
 ## A suite is exactly its directory:
-## - the `*.json.zst` stems are the rows
-## - the per-row `.meta.json` sidecar carries the row id and template sha256
-## - loadRow cross-checks both against the frame payload
+## - the `*.json.zst` stems are the rows, the stem naming its row
+## - the suite's `<suite>.jinja` is the template
 ##
 ## The zstd reader is the workspace/zstd high-level one-shot decompress. The JSON bridge keeps
 ## insertion order because dict order is observable through tojson, items and plain iteration.
@@ -26,7 +25,6 @@ const
   FixturesDir* = currentSourcePath().parentDir()
     ## the corpus tree this module lives in, tests/corpus
   FrameSuffix = ".json.zst"
-  SidecarSuffix = ".meta.json"
 
 type
   ChatRenderRequest* = object
@@ -46,7 +44,6 @@ type
     ## One recorded golden row, ready to render and ready to compare.
     suite*: string
     row*: string
-    templateSha*: string
     request*: ChatRenderRequest
     rendered*: string
       ## the recorded ground truth, empty on expected-error rows
@@ -101,7 +98,7 @@ proc stemOf(path: string, suffix: string): string =
   name[0 ..< name.len - suffix.len]
 
 proc suiteRowNames*(suite: string): seq[string] =
-  ## Row stems of one suite, the `*.json.zst` stems of the suite directory, sorted. The sidecar list mirrors it with one `.meta.json` per frame.
+  ## Row stems of one suite, the `*.json.zst` stems of the suite directory, sorted.
   for path in walkPattern(FixturesDir / suite / ("*" & FrameSuffix)):
     result.add stemOf(path, FrameSuffix)
   result.sort()
@@ -112,27 +109,15 @@ proc suiteTemplateSource*(suite: string): string =
   readFile(FixturesDir / suite / suite & ".jinja")
 
 proc loadRow*(suite: string, row: string): FixtureRow =
-  ## One frame in, one render-ready row out.
+  ## One frame in, one render-ready row out, the stem naming the row.
   ## Contract:
   ## - the frame decompresses to its recorded JSON payload
-  ## - the inputs build the request with the HF layering in mind, kwargs travel separately because
-  ##   the renderer appends them after the standard keys
-  ## - the sidecar is the row's provenance. Its row id and template sha256 must match the frame payload,
-  ##   and a disagreement is a corrupted fixture that stops the load
+  ## - kwargs travel as a separate dict, the renderer appends them after the standard keys
   let dir = FixturesDir / suite
-  let sidecar = parseFile(dir / (row & SidecarSuffix))
   let frame = parseJson(zstdDecompress(readFile(
       dir / (row & FrameSuffix)), string))
-  if sidecar["row"].getStr() != row or frame["row"].getStr() != row:
-    raise ValueError.newException(
-      "fixture " & suite & "/" & row & ": sidecar/frame row id mismatch")
-  let sha = sidecar["template_sha256"].getStr()
-  if frame["template"]["sha256"].getStr() != sha:
-    raise ValueError.newException(
-      "fixture " & suite & "/" & row & ": template sha mismatch")
   result.suite = suite
   result.row = row
-  result.templateSha = sha
   var kwargs = DictVal()
   for key, child in pairs(frame["kwargs"]):
     dictSet(kwargs, key, jsonToValue(child))

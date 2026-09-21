@@ -1,8 +1,0 @@
-{
-  "row": "chunked_content",
-  "kwargs": {
-    "bos_token": "<s>",
-    "eos_token": "</s>"
-  },
-  "template_sha256": "95643f3d5c9df0c880946b59b52b2317b7721713fb8b52781e521452a2e76b02"
-}

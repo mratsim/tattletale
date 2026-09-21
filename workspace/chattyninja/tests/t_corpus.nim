@@ -23,6 +23,7 @@
 import std/[algorithm, importutils, macros, os, strutils, unicode]
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, cnj_engine
 import workspace/data_structures/src/small_seqs
+import workspace/zstd/zstd_highlevel
 
 # Corpus row reader.
 # ---------------------------------------------------------------------------
@@ -41,7 +42,6 @@ type
     ##   the render inputs plus the expected outcome.
     suite*: string
     row*: string
-    templateSha*: string
     context*: JinjaVal
       ## the render context (`messages`, `tools`, `documents`, `add_generation_prompt`, then kwargs)
     rendered*: string
@@ -64,9 +64,8 @@ type
 const CorpusRoot* = currentSourcePath().parentDir / "corpus"
   ## the extracted corpus tree, read-only from a test's point of view
 
-const RenderRowSchema* = "chattyninja-chat-render-row-1"
-  ## the `schema` value every recorded render row carries. A suite also holds frames whose
-  ## schema differs (its generator metadata), which carry no render inputs and are skipped.
+const FrameSuffix = ".json.zst"
+  ## the recorded frame suffix, the corpus tree carrying one zstd frame per row
 
 # JSON reader
 # ---------------------------------------------------------------------------
@@ -288,23 +287,15 @@ func contextOf(frame: JinjaVal): JinjaVal =
   dictVal(d)
 
 proc loadRow*(suite, row: string): Row =
-  ## Reads `corpus/<suite>/<row>.json` and returns the render inputs plus the recorded
-  ## outcome. The frame's `suite` and `row` fields must agree with the path components
-  ## naming the frame. An err row's `expected_error` supplies the message, the byte
-  ## offset and the span the raise must report.
-  let path = CorpusRoot / suite / (row & ".json")
-  let frame = jsonDoc(readFile(path))
-  if field(frame, "suite").kind == vkStr and field(frame, "suite").s != suite:
-    raise jsonError(path & ": frame suite is " & field(frame, "suite").s)
-  if field(frame, "row").kind == vkStr and field(frame, "row").s != row:
-    raise jsonError(path & ": frame row is " & field(frame, "row").s)
-  let tmpl = field(frame, "template")
+  ## Decompresses `corpus/<suite>/<row>.json.zst` and returns the render inputs plus
+  ## the recorded outcome. The frame stem is the row id. An err row's `expected_error`
+  ## supplies the message, the byte offset and the span the raise must report.
+  let path = CorpusRoot / suite / (row & FrameSuffix)
+  let frame = jsonDoc(zstdDecompress(readFile(path), string))
   let err = field(frame, "expected_error")
   Row(
       suite: suite,
       row: row,
-      templateSha:
-        if tmpl.kind == vkDict: pyStr(field(tmpl, "sha256")) else: "",
       context: contextOf(frame),
       rendered: if err.kind == vkUndefined: pyStr(field(frame, "rendered")) else: "",
       spans: spanList(field(frame, "generation_spans")),
@@ -323,17 +314,12 @@ proc loadRow*(suite, row: string): Row =
       clock: clockOf(frame))
 
 proc rows*(suite: string): seq[Row] =
-  ## Every recorded row of one suite, in sorted row order. Frames whose `schema` differs
-  ## from `RenderRowSchema` (a suite's generator metadata) carry no render inputs and are skipped.
+  ## Every recorded row of one suite, in sorted row order, the `*.json.zst` stems
+  ## naming the rows.
   var stems = newSeq[string]()
-  for path in walkPattern(CorpusRoot / suite / "*.json"):
+  for path in walkPattern(CorpusRoot / suite / ("*" & FrameSuffix)):
     let name = lastPathPart(path)
-    if not name.endsWith(".json") or name.endsWith(".meta.json"):
-      continue
-    let schema = field(jsonDoc(readFile(path)), "schema")
-    if schema.kind == vkStr and schema.s != RenderRowSchema:
-      continue
-    stems.add name[0 ..< name.len - ".json".len]
+    stems.add name[0 ..< name.len - FrameSuffix.len]
   stems.sort
   for s in stems:
     result.add loadRow(suite, s)

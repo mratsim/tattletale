@@ -1,8 +1,0 @@
-{
-  "row": "preserve_thinking_true",
-  "kwargs": {
-    "bos_token": "<|startoftext|>",
-    "preserve_thinking": true
-  },
-  "template_sha256": "c5b67247c9f736f6c40eaa91ae1ef27dc67f5b041eedaadb97a1bea5030fb0ff"
-}

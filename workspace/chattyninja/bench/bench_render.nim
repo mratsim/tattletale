@@ -405,8 +405,8 @@ when defined(benchAlloc):
 
 const parseGapLabels = ["glm53flash"]
   ## hf_models templates the engine cannot parse yet, the declared parse gaps.
-  ## `glm53flash` trips the unimplemented `nkBreak` node, whose corpus demand the MANIFEST
-  ## records at 7 sites inside the macro `has_dup_tool_result_id`.
+  ## `glm53flash` trips the unimplemented `nkBreak` node, at 7 sites inside
+  ## the macro `has_dup_tool_result_id`.
 
 proc compileHf(): seq[Compiled] =
   ## Parses every hf_models template into a `Compiled` record.

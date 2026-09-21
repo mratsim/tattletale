@@ -16,9 +16,6 @@ Templates compile to a flat append-only `seq[Node]` arena, a POD of six
 
 `nim test_chattyninja` verifies the extracted fixtures before any render test trusts them.
 
-`tests/corpus/MANIFEST.md` records the feature burden and build targets of each
-suite. `tests/corpus/PROVENANCE.md` records how the ground truth was determined.
-
 ## Build
 
 ```bash
