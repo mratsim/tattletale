@@ -45,7 +45,7 @@ proc loadModel*(modelPath: string, device: DeviceKind): AnyModel =
   let loader = registry[arch]
   loader(modelPath, device)
 
-proc parseTorchDtype(s: string): ScalarKind =
+func parseTorchDtype(s: string): ScalarKind =
   ## Parse dtype string from config.json to ScalarKind enum.
   ## Based on transformers dtype string format (lowercase).
   case s.toLowerAscii()
@@ -88,8 +88,13 @@ proc generate*(
            1, cfg.mlaKvLoraRank, 1, cfg.mlaKpeWidth,
            maxCtx, numPoolPages, dtype, device)
     else:
+      # The pool slots carry the widest per-head KV width, kvHeadDimMax,
+      # zero when head_dim governs. A dual-width checkpoint's full
+      # layers write full-width rows into the shared pool.
+      let headDim =
+        if cfg.kvHeadDimMax > 0: cfg.kvHeadDimMax else: cfg.head_dim
       init(Orchestrator, cfg.num_hidden_layers, 1,
-           cfg.num_key_value_heads, maxCtx, cfg.head_dim,
+           cfg.num_key_value_heads, maxCtx, headDim,
            numPoolPages, dtype, device)
   defer: orc.endSequence()
 

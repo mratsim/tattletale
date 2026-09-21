@@ -26,6 +26,7 @@ import
   std/tables,
   pkg/packedjson,
   workspace/libtorch as F,
+  workspace/positron,
   workspace/safetensors,
   workspace/safetensors/src/collections,
   workspace/safetensors/src/safetensors {.all.},
@@ -35,7 +36,10 @@ import
   workspace/transformers/src/layers/rope,
   workspace/transformers/src/layers/attn_ssm/gated_delta_net,
   workspace/transformers/src/layers/attn_ssm/multi_head_latent_attention,
-  workspace/transformers/src/quantizations/datatypes
+  workspace/transformers/src/quantizations/datatypes,
+  workspace/transformers/tests/harness/select_device
+
+export select_device.testDevice
 
 privateAccess(SafetensorObj)
 
@@ -102,6 +106,39 @@ proc setupGatedDeltaNet*[Decay: static DecayAxis,
     t{"linear_key_head_dim"}.getInt(), t{"linear_value_head_dim"}.getInt(),
     t{"linear_conv_kernel_dim"}.getInt(), device)
 
+proc setupGemma3LayerFixture*(weights: SafetensorsCollection, cfg: JsonNode,
+    layerIdx: int, rotary: RotaryPositionEmbedding, window: int,
+    softmaxScale: float64, device: F.DeviceKind):
+    (RopeGQAttention[RmsNormOne], RmsNormOne, RmsNormOne, RmsNormOne,
+    GatedDenseFFN, RmsNormOne) =
+  ## Loads gemma-3 decoder layer `layerIdx` from the open `weights` view,
+  ## exactly as the gemma-3 model file wires it, the mixer plus the four
+  ## sandwich norms and the gelu_pytorch_tanh dense block.
+  ##
+  ## Expected input:
+  ## - cfg, the flat gemma-3 text config (no text_config nesting)
+  ## - rotary, the dual-theta table the caller selects per layer kind,
+  ##   the local 1e4 theta on sliding layers, the global 1e6 theta on full
+  ## - softmaxScale, the query_pre_attn_scalar^-0.5 attention scale
+  let lp = "model.layers." & $layerIdx & "."
+  let attn = RopeGQAttention[RmsNormOne].load(
+    weights, cfg, lp & "self_attn", layerIdx,
+    cfg{"num_attention_heads"}.getInt(),
+    cfg{"num_key_value_heads"}.getInt(),
+    cfg{"head_dim"}.getInt(),
+    rotary, device,
+    window = window, softmaxScale = softmaxScale)
+  let inputLN = RmsNormOne.load(weights, cfg, lp & "input_layernorm", device)
+  let postLN = RmsNormOne.load(
+    weights, cfg, lp & "post_attention_layernorm", device)
+  let preFF = RmsNormOne.load(
+    weights, cfg, lp & "pre_feedforward_layernorm", device)
+  let ffn = GatedDenseFFN.load(weights, cfg, lp & "mlp", device,
+    activation = kGeluTanh)
+  let postFF = RmsNormOne.load(
+    weights, cfg, lp & "post_feedforward_layernorm", device)
+  (attn, inputLN, postLN, preFF, ffn, postFF)
+
 func nextStepRow*(logits: F.Tensor, position: int): F.Tensor =
   ## Returns the [vocab] logit row at `position` of the sequence axis.
   ##
@@ -150,6 +187,19 @@ proc ulpBf16*(m: float32): float32 {.inline.} =
     return 0.0'f32
   result = pow(2.0'f32, floor(log2(m)) - 7.0'f32)
 
+proc setupStimulusTensor*(rows, heads, width: int, offset: float32, device: F.DeviceKind): F.Tensor =
+  ## Deterministic bf16 stimulus of shape (1, rows, heads, width), values
+  ## sit on a 0.25-step grid anchored at the offset.
+  ##
+  ## Returns:
+  ## - the stimulus tensor, deterministic across reruns, so the invariance
+  ##   property sees no input rounding noise from the stimulus
+  var flat = newSeq[float32](rows * heads * width)
+  for i in 0 ..< flat.len:
+    flat[i] = offset + (float32(i mod 12) * 0.25'f32) - 1.25'f32
+  result = F.toTensor(flat).to(F.kBfloat16).to(device)
+    .reshape([1, rows, heads, width])
+
 # ── MLA (DeepSeek-style latent attention) ──────────────────────────────────
 
 func mlaInterleaveLayout*(x: F.Tensor): F.Tensor =
@@ -169,8 +219,7 @@ func mlaInterleaveLayout*(x: F.Tensor): F.Tensor =
   F.cat([even.unsqueeze(4), odd.unsqueeze(4)], 4).reshape(
     x.size(0), x.size(1), x.size(2), d)
 
-proc setupMlaDirect*[Pe](modelDir, prefix: string, layerIdx, maxSeq: int,
-    device = F.kCPU): MLAttention[void, Pe] =
+proc setupMlaDirect*[Pe](modelDir, prefix: string, layerIdx, maxSeq: int, device = F.kCPU): MLAttention[void, Pe] =
   ## Direct-Q MLAttention load of checkpoint layer `layerIdx`
   ## over the typed latent cache, wiring mirrored from the model files:
   ## - geometry off the flat config.json section
@@ -203,8 +252,7 @@ proc setupMlaDirect*[Pe](modelDir, prefix: string, layerIdx, maxSeq: int,
       cfgJson{"qk_rope_head_dim"}.getInt()),
     cache = cache)
 
-proc setupMlaCompressed*(modelDir, prefix: string, layerIdx, maxSeq: int,
-    device = F.kCPU): MLAttention[RmsNorm, FullRoPe] =
+proc setupMlaCompressed*(modelDir, prefix: string, layerIdx, maxSeq: int, device = F.kCPU): MLAttention[RmsNorm, FullRoPe] =
   ## Compressed-Q MLAttention load of checkpoint layer `layerIdx`
   ## over the typed latent cache, wiring mirrored from the model files:
   ## - q bottleneck plus both latent norms at the bottleneck eps
@@ -240,8 +288,7 @@ proc setupMlaCompressed*(modelDir, prefix: string, layerIdx, maxSeq: int,
       cfgJson{"qk_rope_head_dim"}.getInt()),
     cache = cache)
 
-proc setupMlaGated*(modelDir, prefix: string, layerIdx, maxSeq: int,
-    device = F.kCPU): HeadwiseGatedMLAttention[RmsNorm, FullRoPe] =
+proc setupMlaGated*(modelDir, prefix: string, layerIdx, maxSeq: int, device = F.kCPU): HeadwiseGatedMLAttention[RmsNorm, FullRoPe] =
   ## Head-wise gated MLAttention load of checkpoint layer `layerIdx`
   ## over the typed latent cache, wiring mirrored from the model files:
   ## - compressed-Q bottleneck, both latent norms at the bottleneck eps

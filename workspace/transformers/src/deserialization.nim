@@ -13,11 +13,13 @@
 
 import
   std/algorithm,
+  std/options,
   std/sugar,
   std/tables,
   pkg/packedjson,
   workspace/safetensors,
   workspace/libtorch,
+  workspace/positron,
   ./layers,
   ./layers/attn_ssm/gated_delta_net,
   ./models/loading/config_json,
@@ -49,7 +51,8 @@ type
 
 # ─── Quant method detection ────────────────────────────────────────────
 
-proc detectQuantization*(cfg: JsonNode): QuantFormatKind =
+func detectQuantization*(cfg: JsonNode): QuantFormatKind =
+  ## Quantization family of a checkpoint config, exl3 only, qBF16 otherwise.
   if cfg.hasKey("quantization_config"):
     let qm = cfg["quantization_config"]["quant_method"].getStr("")
     checkValue(qm == "exl3",
@@ -64,7 +67,8 @@ const QuantLoaderRegistry = static(QuantLoaderRegistry)
 
 # ─── Activations ────────────────────────────────────────────────────────
 
-proc getDeployDtype*(cfg: JsonNode): ScalarKind =
+func getDeployDtype*(cfg: JsonNode): ScalarKind =
+  ## Deployment dtype of a checkpoint config, resolved through the quant loader registry.
   QuantLoaderRegistry[detectQuantization(cfg)].deployDtype
 
 # ─── Linear ─────────────────────────────────────────────────────────────
@@ -87,16 +91,21 @@ proc loadRmsWeight(view: SafetensorsCollection, cfg: JsonNode, prefix: string,
   (quant: quant, weight: weight, eps: eps)
 
 proc load*(_: type RmsNorm, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNorm =
-  let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
+  let (quant, weight, eps) = view.loadRmsWeight(cfg, prefix, device)
   RmsNorm.init(weight, quant, eps)
 
 proc load*(_: type RmsNormOne, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNormOne =
-  let (quant, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
+  let (quant, weight, eps) = view.loadRmsWeight(cfg, prefix, device)
   RmsNormOne.init(weight, quant, eps)
+
+proc load*(_: type FusedRmsNorm, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): FusedRmsNorm =
+  ## Loads the single-rounding RMS norm, the plain-weight gemma-4 spelling.
+  let (quant, weight, eps) = view.loadRmsWeight(cfg, prefix, device)
+  FusedRmsNorm.init(weight, quant, eps)
 
 proc load*(_: type RmsNormGated, view: SafetensorsCollection, cfg: JsonNode, prefix: string, device: DeviceKind): RmsNormGated =
   ## Checkpoints store this weight as F32 and it deploys as the format's dtype.
-  let (_, weight, eps) = loadRmsWeight(view, cfg, prefix, device)
+  let (_, weight, eps) = view.loadRmsWeight(cfg, prefix, device)
   RmsNormGated.init(weight, eps)
 
 # ─── Embedding ──────────────────────────────────────────────────────────
@@ -118,11 +127,14 @@ proc load*(_: type Embedding, view: SafetensorsCollection, cfg: JsonNode, prefix
 # ─── GatedDenseFFN ─────────────────────────────────────────────────────────
 
 proc load*(_: type GatedDenseFFN, view: SafetensorsCollection, cfg: JsonNode,
-           prefix: string, device: DeviceKind): GatedDenseFFN =
+           prefix: string, device: DeviceKind,
+           activation: ActivationKind = kSilu): GatedDenseFFN =
+  ## `activation` names the branch activation of the checkpoint config,
+  ## kSilu (the SwiGLU default) or kGeluTanh (the gemma lineage).
   let gate = Linear.load(view, cfg, prefix & ".gate_proj", device)
   let up = Linear.load(view, cfg, prefix & ".up_proj", device)
   let down = Linear.load(view, cfg, prefix & ".down_proj", device)
-  GatedDenseFFN.init(gate, up, down)
+  GatedDenseFFN.init(gate, up, down, activation)
 
 # ─── GatedBlockSparseFFN ───────────────────────────────────────────────────
 
@@ -138,23 +150,31 @@ proc load*(_: type GatedBlockSparseFFN, view: SafetensorsCollection, cfg: JsonNo
 # ─── BlockSparseFFN (ungated shared expert) ────────────────────────────────
 
 proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
-           prefix: string, router: NoauxTcRouter, device: DeviceKind,
-           vocab: static ExpertKeyVocab = ekvGateUpDown): BlockSparseFFN =
-  ## Loads the routed expert bodies and the ungated shared expert; the
-  ## router arrives composed (NoauxTcRouter), nothing router-related
-  ## loads here, bias-buffer key naming stays a model-load concern.
+           prefix: string, router: NoAuxTopCorr, device: DeviceKind,
+           vocab: static ExpertKeyVocab = ekvGateUpDown,
+           routedOutputScale: float64 = 1.0,
+           groupedPairSum: bool = false): BlockSparseFFN =
+  ## Loads the routed expert bodies plus the shared expert when the config
+  ## routes to one.
   ##
-  ## Expert keys follow `vocab`: gate_proj/up_proj/down_proj or
-  ## w1/w3/w2 (silu(w1) * w3 -> w2); both fuse to gate rows 0:I, up rows
-  ## I:2I of the [E, 2I, H] fused body, down [E, H, I]. The first
-  ## expert's views are shape-checked against the config widths, the
-  ## rest numel-checked at assembly.
+  ## - the router arrives composed (NoAuxTopCorr), nothing router-related
+  ##   loads here, bias-buffer key naming stays a model-load concern
   ##
-  ## Expert count reads n_routed_experts, falls back to num_experts;
-  ## the load refuses when neither is a positive count.
+  ## Contract:
   ##
-  ## Each expert body copies once from its mmap view to its final device
-  ## slot; a kCPU request assembles through stack/cat over the CPU views.
+  ## - expert keys follow `vocab`, the checkpoint spelling pair below
+  ##   - gate_proj/up_proj/down_proj
+  ##   - w1/w3/w2 (silu(w1) * w3 -> w2)
+  ##
+  ## - both spellings fuse to the [E, 2I, H] body, down [E, H, I]
+  ## - the first projection sits in rows 0:I, the second in rows I:2I
+  ## - the first expert's views are shape-checked against the config widths,
+  ##   the rest numel-checked at assembly
+  ##
+  ## - expert count reads n_routed_experts, falls back to num_experts,
+  ##   the load refuses when neither is a positive count
+  ## - each expert body copies once from its mmap view to its final device slot
+  ##   (a kCPU request assembles through stack/cat over the CPU views)
   let routedNode = cfg{"n_routed_experts"}
   let expertCount =
     if routedNode.kind == JInt:
@@ -174,7 +194,13 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
   let moeNode = textCfg{"moe_intermediate_size"}
   let moeIntermediate =
     if moeNode.kind == JInt: moeNode.reqPosInt("moe_intermediate_size")
-    else: cfg{"moe_intermediate_size"}.reqPosInt("moe_intermediate_size")
+    else:
+      let topMoeNode = cfg{"moe_intermediate_size"}
+      if topMoeNode.kind == JInt: topMoeNode.reqPosInt("moe_intermediate_size")
+      else:
+        # Checkpoints without a moe_intermediate_size row route at the dense intermediate_size
+        # (the cohere lineage spelling).
+        cfg{"intermediate_size"}.reqPosInt("intermediate_size")
   when vocab == ekvW1W3W2:
     let gateKey = ".w1.weight"
     let upKey = ".w3.weight"
@@ -201,6 +227,36 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
     "[ttt] BlockSparseFFN.load: " & first & downKey & " rows are [" &
     $downW.size(0) & ", " & $downW.size(1) & "], expected [" &
     $hiddenSize & ", " & $moeIntermediate & "]")
+  # The shared-expert tail is present when the config routes to one,
+  # absent on zero-shared-expert checkpoints.
+  #
+  # Count key spellings:
+  # - n_shared_experts, the DeepSeek lineage
+  # - num_shared_experts, the cohere lineage
+  let sharedCountNode = cfg{"n_shared_experts"}
+  var sharedCount =
+    if sharedCountNode.kind == JInt:
+      sharedCountNode.getInt().int
+    else:
+      cfg{"num_shared_experts"}.getInt(0)
+  var sharedKey = prefix & ".shared_experts"
+  if sharedCount == 0 and cfg{"shared_expert_intermediate_size"}.getInt(0) > 0:
+    # The singular-key lineage (Laguna) ships one shared expert whose
+    # prefix is .shared_expert, its width row is
+    # shared_expert_intermediate_size and no count row is present.
+    # A checkpoint membership test discriminates the spelling.
+    checkValue(view.hasTensor(prefix & ".shared_expert.gate_proj.weight"),
+      "[ttt] BlockSparseFFN.load: shared_expert_intermediate_size is positive" &
+      " but neither a .shared_experts nor a .shared_expert body exists at " &
+      prefix)
+    sharedCount = 1
+    sharedKey = prefix & ".shared_expert"
+  let shared =
+    if sharedCount > 0:
+      some(GatedDenseFFN.load(view, cfg, sharedKey, device))
+    else:
+      none(GatedDenseFFN)
+
   if device == kCPU:
     # kCPU request: assemble through stack/cat over the CPU mmap views.
     let gateUp = stack(collect(newSeq, for e in 0 ..< expertCount:
@@ -209,8 +265,9 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
       to(device)
     let down = stack(collect(newSeq, for e in 0 ..< expertCount:
       view.getTensorView(prefix & ".experts." & $e & downKey))).to(device)
-    let shared = GatedDenseFFN.load(view, cfg, prefix & ".shared_experts", device)
-    return BlockSparseFFN.init(gateUp, down, shared, router)
+    return BlockSparseFFN.init(gateUp, down, shared, router,
+      routedOutputScale = routedOutputScale,
+      groupedPairSum = groupedPairSum)
   # Device request past kCPU: single-copy assembly. Both fused bodies
   # are allocated on the device at their final concatenated shapes
   # before the copies begin; each expert body then copies once from
@@ -240,12 +297,13 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
     gateUpSlice.narrow(0, 0, moeIntermediate).copyFrom(gateRow)
     gateUpSlice.narrow(0, moeIntermediate, moeIntermediate).copyFrom(upRow)
     down.narrow(0, e, 1).squeeze(0).copyFrom(downRow)
-  let shared = GatedDenseFFN.load(view, cfg, prefix & ".shared_experts", device)
-  BlockSparseFFN.init(gateUp, down, shared, router)
+  BlockSparseFFN.init(gateUp, down, shared, router,
+    routedOutputScale = routedOutputScale,
+    groupedPairSum = groupedPairSum)
 
 # ─── GatedDeltaNet ─────────────────────────────────────────────────────────
 
-func normalizeAGateLog*(key: string, aLog: Tensor, numHeads: int): Tensor =
+func normalizeAGateLog(key: string, aLog: Tensor, numHeads: int): Tensor =
   ## A_log normalized to (heads, 1) f32 from the checkpoint forms flat
   ## (heads), (heads, 1) or the (1, 1, heads, 1) rank-4 view. Raises
   ## ValueError naming `key` for any other form. Load-convention
@@ -371,17 +429,74 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
                    cfg: JsonNode, prefix: string, layerIdx: int,
                    numQoHead, numKvHead, headDim: int,
                    rotary: RotaryPositionEmbedding,
-                   device: DeviceKind): RopeGQAttention[QKNorm] =
+                   device: DeviceKind,
+                   window: int = FullVisibilityWindow,
+                   softmaxScale = 0.0'f64,
+                   kvSourceLayer = -1,
+                   perHeadGate = false,
+                   vNorm: FusedRmsNorm = nil,
+                   kEqV = false): RopeGQAttention[QKNorm] =
+  ## Args:
+  ##   - `window` is the layer kind's visibility band, `FullVisibilityWindow`
+  ##     (the default) for plain causal attention, the sliding window width
+  ##     for a sliding layer kind
+  ##   - `softmaxScale` overrides the head-width attention scale when positive,
+  ##     for checkpoints that scale by the query pre-attention scalar
+  ##   - `kvSourceLayer` wires a gemma-4 shared-kv layer, one that loads
+  ##     no k_proj/v_proj/k_norm and whose checkpoint carries those keys
+  ##     zeroed or absent
+  ##
+  ## Shared-kv and gated spellings:
+  ##   - `perHeadGate` loads the per-head-gated kinds' `[hidden, heads]`
+  ##     g_proj weight (Laguna)
+  ##   - `vNorm` is the value-path single-rounding norm, a ones-weight
+  ##     FusedRmsNorm the caller constructs, the with_scale=False spelling
+  ##     carries no checkpoint tensor
+  ##   - `kEqV` selects the KV-tied spelling of the gemma-4 attention_k_eq_v
+  ##     full layers, where no v_proj weight loads and the value rows
+  ##     derive from the shared k projection at forward
   let qProj = Linear.load(view, cfg, prefix & ".q_proj", device)
-  let kProj = Linear.load(view, cfg, prefix & ".k_proj", device)
-  let vProj = Linear.load(view, cfg, prefix & ".v_proj", device)
   let oProj = Linear.load(view, cfg, prefix & ".o_proj", device)
-  let qNorm = QKNorm.load(view, cfg, prefix & ".q_norm", device)
-  let kNorm = QKNorm.load(view, cfg, prefix & ".k_norm", device)
-  RopeGQAttention[QKNorm].init(layerIdx, prefix,
-    qProj, kProj, vProj, oProj,
-    numQoHead, numKvHead, headDim, rotary,
-    q_norm = qNorm, k_norm = kNorm)
+  let gProj =
+    if perHeadGate:
+      some(Linear.load(view, cfg, prefix & ".g_proj", device))
+    else:
+      none(Linear)
+  let kProj =
+    if kvSourceLayer < 0:
+      Linear.load(view, cfg, prefix & ".k_proj", device)
+    else:
+      nil
+  let vProj =
+    if kvSourceLayer < 0 and not kEqV:
+      Linear.load(view, cfg, prefix & ".v_proj", device)
+    else:
+      nil
+  when QKNorm is void:
+    # The no-qk-norm variant carries no norm weights, the projections
+    # alone compose the mixer.
+    RopeGQAttention[void].init(layerIdx, prefix,
+      qProj, kProj, vProj, oProj,
+      numQoHead, numKvHead, headDim, rotary,
+      window = window, softmaxScale = softmaxScale,
+      gProj = gProj, kvSourceLayer = kvSourceLayer, vNorm = vNorm,
+      kEqV = kEqV)
+  else:
+    # q_norm loads on every layer, shared ones included.
+    # k_norm loads only where the layer projects its own k.
+    let qNorm = QKNorm.load(view, cfg, prefix & ".q_norm", device)
+    let kNorm =
+      if kvSourceLayer < 0:
+        QKNorm.load(view, cfg, prefix & ".k_norm", device)
+      else:
+        nil
+    RopeGQAttention[QKNorm].init(layerIdx, prefix,
+      qProj, kProj, vProj, oProj,
+      numQoHead, numKvHead, headDim, rotary,
+      q_norm = qNorm, k_norm = kNorm,
+      window = window, softmaxScale = softmaxScale,
+      gProj = gProj, kvSourceLayer = kvSourceLayer, vNorm = vNorm,
+      kEqV = kEqV)
 
 # ─── Gated Attention ───────────────────────────────────────────────────────
 

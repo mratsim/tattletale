@@ -1,66 +1,17 @@
 #!/usr/bin/env python3
-"""Layer-0 fixture file of the Kimi-Linear-48B-A3B-Instruct checkpoint,
-recorded on CPU torch bf16 from safetensors over the kimi-linear branch
-worktree reference kernels.
+"""Tier-01 layer-0 fixture generator, Kimi-Linear-48B-A3B-Instruct,
+CPU torch bf16 from safetensors over the kimi-linear branch worktree
+reference kernels, consumer tests/q_bf16/t_bf16_kimilinear_01_layer_internals.nim.
 
-Single-file grammar with one fixture file per family layer.
+- single-file grammar, the payload carries the suite-read driving tensor kda.input, every recorded intermediate a stats fingerprint
+- one KDA mixer scenario, the kernel-boundary prefill T=5, head 0 over real layer-0 weights, seed 421
+- out_recurrent is the bitwise reference for the Nim block, out_chunked is the chunked form, the drift lands in the metadata
 
-- the payload carries the suite-read driving tensor, every recorded
-  intermediate and output stays on the stats frame as fingerprints
-- one metadata sidecar and one stats sidecar serve the file
+- the f32 log decay g and beta derive externally through the low-rank projections, the kernels feed directly
+- recorded_from defaults to m4max-cpu (TTT_RECORD_FROM overrides), the --device argument fills the metadata device rows
 
-No Qwen3 analog exists to inherit:
-
-- the Kimi Delta Attention mixer splits the q/k/v projections and conv
-  weights per branch
-- the f32 log decay g and beta derive externally through the low-rank
-  gate weights, the kernels feed directly
-
-Consumed by tests/q_bf16/t_bf16_kimilinear_01_layer_internals.nim, the suite
-computing the mixer forward from the bare hidden input.
-
-Emitted under tests/fixtures/bf16-01-layer-internals/Kimi-Linear-48B-A3B-Instruct-layer-0/:
-
-| file                                                                | contents                                                           |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| layer0-Kimi-Linear-48B-A3B-Instruct-00.safetensor                   | the bare driving tensor kda.input                                  |
-| layer0-Kimi-Linear-48B-A3B-Instruct-00.safetensor.metadata.json.zst | the mixture metadata                                               |
-| layer0-Kimi-Linear-48B-A3B-Instruct-00.safetensor.stats.json.zst    | keys namespaced by mixture, one uniform record per recorded tensor |
-
-Mixture seed and case:
-
-- kda.input drives the KDA kernel-boundary prefill T=5, head 0 over real
-  layer-0 weights, seed 421
-
-Mixture payload and stats entries:
-
-- kda, payload kda.input, stats entries over the kernel-boundary op surface
-  (q/k/v post-conv, the externally derived f32 log decay g and beta), plus
-  both reference kernels' outputs and final states
-
-Compute forms of the gated delta rule core:
-
-- out_recurrent is the bitwise reference for the Nim block, matching
-  torch_recurrent_kda element for element
-- out_chunked is the chunked form, the drift between the two evaluation
-  orders lands in the metadata rows as the documented floor
-
-One scenario per mixer, the suite triangulating the kernel-boundary contract
-at the chunked-prefill scale T=5 unless a named issue needs another.
-
-Reference resolution:
-
-- the kimi_linear module resolves through PYTHONPATH at the branch worktree src,
-  never an installed package, the assertions below lock it
-- the recorded reference commit is asserted onto the branch worktree HEAD
-
-Recording environment:
-
-- recorded_from defaults to m4max-cpu, the TTT_RECORD_FROM environment
-  variable overrides it
-- the --device argument, cpu or mps, fills the device rows of the metadata
-
-Run from the worktree root, twice for byte determinism, PYTHONPATH carrying the branch worktree src:
+Regenerate from the worktree root, twice for byte determinism, PYTHONPATH
+carrying the branch worktree src:
 
   PYTHONPATH=<kimi-linear-worktree>/src uv run python workspace/transformers/tests/testgen/gen_bf16_kimilinear_01_layer_internals.py
 """

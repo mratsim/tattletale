@@ -1,47 +1,28 @@
 #!/usr/bin/env python3
-"""
-Qwen3.6-35B-A3B bf16-04 greedy fixtures, token chains argmax-decoded from the real checkpoint
-through the installed transformers modeling on CPU torch bf16, one JSON fixture per prompt.
+"""Tier-04 greedy-text-generation fixture generator, Qwen3.6-35B-A3B,
+token chains argmax-decoded from the real checkpoint through the installed transformers modeling, CPU torch bf16,
 
-Decode entry:
+- consumer tests/q_bf16/t_bf16_qwen36moe_04_greedy_text_generation.nim
+- <prompt>_<horizon>_steps.json per prompt, prompt_ids the checkpoint tokenizer ids, generated_ids the horizon greedy tokens
+- steps carries the ttt-tf-001-greedy-steps-h2 records, the argmax pick, the top-32 ids with f32 logits, the argmax margin
 
-  - generation starts from the prompt tokens directly (no bos)
-  - single unpadded chains, no padding and no batching, the serialized values are the single-chain values
-  - no batched pass backs them, the batched left-pad pass is a different reduction order in bf16, not a reference
+- each record also carries the softmax tail probability and the identity block
+- decode starts from the prompt tokens directly (no bos), single unpadded chains, no padding and no batching
+- the batched left-pad pass is a different reduction order in bf16, not a reference
 
-Generated under tests/fixtures/bf16-04-greedy-text-generation/Qwen3.6-35B-A3B/:
+- a token-chain divergence is a decode-argmax near-tie iff the diverging pick equals the recorded runner-up id
+- the top-2 gap sits within 2 bf16 ulps, past a within-band flip the chains diverge, the consumer stops comparing
 
-  - <prompt>_<horizon>_steps.json, one file per prompt
-  - prompt_ids carries the checkpoint tokenizer ids, no special tokens added
-  - generated_ids carries the horizon greedy tokens, the argmax of the last-position logits at every decode step
-  - steps carries the ttt-tf-001-greedy-steps-h2 per-step records
-  - each record holds chosen_token, top32_ids, top32_logits in f32, argmax_margin, tail_probability beyond the top-32 support
-  - the identity block keys (model, prompt text, horizon, the thread/eager/attn settings, and the torch / transformers versions)
+- the configuration locks intra-op threads to 1, the sdpa attention implementation and the `eager` expert dispatch
+- the default backend resolution picks `grouped_mm`, a different accumulation formulation
+- the model checks come shared from gen_bf16_qwen36moe_03_full_forward_to_logits.py
 
-Near-tie clause (recorded for the consumer):
+Regenerate from the worktree root, twice, both run bytes must agree:
 
-  - a token-chain divergence between two faithful CPU bf16 ports is a decode-argmax near-tie
-  - the condition is the diverging pick equal to the recorded runner-up id
-  - the recorded top-2 logit gap at that step is at most 2 bf16 ulps, the ulp scaled at the recorded max |logit| of the step's top-2 pair
-  - past such a within-band flip the two chains legitimately diverge, so the consumer stops comparing that prompt
-  - the top-2 pair is recorded at every step, so the consumer never needs a second rule
+  cd <worktree root> && .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen36moe_04_greedy_text_generation.py
 
-Locked configuration:
-
-  - intra-op threads = 1
-  - the expert dispatch locked to `eager` (the default backend resolution picks `grouped_mm`, a different accumulation formulation)
-  - the `_attn_implementation` setting of `sdpa`
-  - the model checks (loading, untied-head, per-layer eager asserts) come shared from gen_bf16_qwen36moe_03_full_forward_to_logits.py
-  - both generators verify the identical configuration, its error messages carry that module name
-
-  - run `cd <worktree root> && .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen36moe_04_greedy_text_generation.py` twice
-  - the bytes of both runs must be identical before the fixtures are installed
-
-One model-resident process globally:
-
-  - the script verifies a free+inactive+speculative pool above 32 GiB and no other python/torch process before it loads anything
-  - the floor is sized to the measured anonymous peak under the mmap-backed from_pretrained loader
-  - the 70 GB weight stack uses file-backed pages, the same measurement the bf16-03-full-forward-to-logits fixtures recorded
+The run verifies a free+inactive+speculative pool above 32 GiB and no
+other python/torch process before it loads anything.
 """
 
 import hashlib

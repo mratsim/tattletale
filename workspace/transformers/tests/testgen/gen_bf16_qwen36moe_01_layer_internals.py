@@ -1,65 +1,19 @@
 #!/usr/bin/env python3
-"""Layer-0 fixture file of the Qwen3.6-35B-A3B checkpoint, recorded on CPU
-torch bf16 with the installed reference modeling, from safetensors.
+"""Tier-01 layer-0 fixture generator, Qwen3.6-35B-A3B,
+CPU torch bf16, installed reference modeling from safetensors,
 
-Single-file grammar with one fixture file per family layer.
+- consumer tests/q_bf16/t_bf16_qwen36moe_01_layer_internals.nim
+- one bare bf16 driving tensor per mixture (gdn.input, layer.layer_input, moe.h), recorded intermediates stay on the stats frame
+- the GDN (GatedDeltaNet) mixer and the fused rank-3 routed experts have no Qwen3 analog
 
-- every mixture sits in the one file as a named tensor group, one metadata
-  sidecar and one stats sidecar serve the file
-- the payload carries the suite-read driving tensors, the recorded
-  intermediates and outputs stay on the stats frame as fingerprints
+- the chunked form is the installed forward at chunk_size 64, the recurrent form is the bitwise reference for the Nim block
 
-No Qwen3 analog exists to inherit, the GatedDeltaNet SSM mixer and the fused
-rank-3 routed experts match the Qwen3.5 family, both absent from Qwen3.
+- the routed mixtures stand on margin-clean seeds, the top-k boundary margin clears the floor protecting the expert-id comparisons
+- the run refuses the weight load under the free-memory floor, other python/torch processes block it, its own process chain exempt
 
-Consumed by tests/q_bf16/t_bf16_qwen36moe_01_layer_internals.nim, one
-assertion block per mixture.
-
-Emitted under tests/fixtures/bf16-01-layer-internals/Qwen3.6-35B-A3B-layer-0/:
-
-| file                                                   | contents                                                           |
-| ------------------------------------------------------ | ------------------------------------------------------------------ |
-| layer0-Qwen3.6-35B-A3B-00.safetensor                   | the three mixtures, gdn.input, layer.layer_input and moe.h         |
-| layer0-Qwen3.6-35B-A3B-00.safetensor.metadata.json.zst | per-mixture metadata under the mixtures key                        |
-| layer0-Qwen3.6-35B-A3B-00.safetensor.stats.json.zst    | keys namespaced by mixture, one uniform record per recorded tensor |
-
-Mixture seeds and cases:
-
-- gdn.input, the GDN block prefill T=5 with seed 71
-- layer.layer_input, the full decoder layer 0 (GDN mixer plus routed MoE)
-  prefill T=6, unambiguous-top-k seed search from 211
-- moe.h, the routed block on T=6 deterministic tokens, seed search from 71
-
-Mixture payloads and stats entries:
-
-- gdn, payload gdn.input, stats entries over the captured prefill
-  intermediates (conv output, q/k/v post-split, g, beta), the recurrent-rule
-  block output and the chunked module output
-- layer, payload layer.layer_input, stats entries over the recorded chain:
-  layernorm outputs, GDN block output under both core rules, router logits,
-  routing weights, shared expert gate and layer outputs
-- moe, payload moe.h, stats entries over the f32 router logits, top-k
-  expert ids as an f32 view, pre-cast fp32 renormalized values, dtype-cast
-  routing weights and the MoE output
-
-Compute forms of the gated delta rule core:
-
-- the chunked form is the installed forward,
-  torch_chunk_gated_delta_rule at chunk_size 64
-- the recurrent form is the bitwise reference for the Nim block, matching
-  torch_recurrent_gated_delta_rule element for element
-- the recurrent-to-chunked distance equals the reference floor between
-  chunked and recurrent forms
-
-Run from the worktree root, twice, cmp proves byte determinism:
+Regenerate from the worktree root, twice, cmp proves byte determinism:
 
   uv run python workspace/transformers/tests/testgen/gen_bf16_qwen36moe_01_layer_internals.py
-
-RAM guards:
-
-- the script refuses the weight load when free memory sits below the floor
-- another python/torch process holding RAM also blocks the run
-- the process chain of this script stays excluded from that check
 """
 
 import json
@@ -494,17 +448,14 @@ def moe_bands(capture: dict) -> dict:
 def generate_gdn_mixture(gdn) -> tuple:
     """GDN block prefill T=5, the recurrent reference plus the chunked module output.
 
-    Args:
-    - gdn, the weighted layer-0 GatedDeltaNet module
+    Takes the weighted layer-0 GatedDeltaNet module.
 
-    Returns:
-    - meta, the mixture metadata
-    - payload, the single driving input tensor under its file name
-    - captured, the captured prefill intermediates for the stats frame
+    Returns the mixture metadata, the driving input tensor under its file name,
+    and the captured prefill intermediates for the stats frame.
 
-    The chunked replay must match the module forward, the path-equivalence
-    instrument guards the replay and the recurrent-vs-chunked divergence
-    stays inside the documented floors.
+    The chunked replay must equal the module forward, the path-equivalence
+    instrument asserts the replay, the recurrent-vs-chunked divergence stays
+    inside the documented floors.
     """
     gen = torch.Generator(device="cpu")
     gen.manual_seed(SEED_GDN)

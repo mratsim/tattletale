@@ -191,7 +191,7 @@ func init*[SequenceMixer, HiddenMixer, Norm](_: type DecoderLayer[SequenceMixer,
     hidden_mixer: hidden_mixer
   )
 
-proc forward*[SequenceMixer, HiddenMixer, Norm](
+func forward*[SequenceMixer, HiddenMixer, Norm](
   self: DecoderLayer[SequenceMixer, HiddenMixer, Norm],
   ctx: var InferenceContext,
   x: Tensor,
@@ -253,3 +253,200 @@ template `()`*(layer: AnyDecoderLayer,
   layer.forward(ctx, x, residual)
 
 
+# Sandwich decoder layer generic
+# ------------------------------
+
+type
+  SandwichDecoderLayer*[SequenceMixer, HiddenMixer, Norm] = ref object
+    ## Decoder block with the sandwich norm placement (gemma lineage):
+    ## four norms bracket the two mixers and both post-norms normalize
+    ## their sublayer output alone, the stream adds after the norm.
+    ##
+    ##     x ──► input_layernorm ──► SequenceMixer ──► post_attention_layernorm ─┐
+    ##      ▲                                                                    │
+    ##      └──────────────────────────── + ◄────────────────────────────────────┘
+    ##      │ = h1
+    ##      ├──► pre_feedforward_layernorm ──► HiddenMixer
+    ##      │                                    │
+    ##      └── + ◄── post_feedforward_layernorm ┘   → block output
+    ##
+    ## DecoderLayer folds the residual inside both norms, `norm(x + residual)`.
+    ## The sandwich pattern normalizes each sublayer output alone, the stream
+    ## joins after the norm.
+    ##
+    ## The two shapes are not interchangeable, the checkpoint config names
+    ## the placement of its own blocks.
+    input_layernorm: Norm
+    sequence_mixer: SequenceMixer
+    post_attention_layernorm: Norm
+    pre_feedforward_layernorm: Norm
+    hidden_mixer: HiddenMixer
+    post_feedforward_layernorm: Norm
+
+func init*[SequenceMixer, HiddenMixer, Norm](
+    _: type SandwichDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+    input_layernorm: Norm,
+    sequence_mixer: SequenceMixer,
+    post_attention_layernorm: Norm,
+    pre_feedforward_layernorm: Norm,
+    hidden_mixer: HiddenMixer,
+    post_feedforward_layernorm: Norm
+): SandwichDecoderLayer[SequenceMixer, HiddenMixer, Norm] =
+  ## Take the four norms and the two mixers of one sandwich decoder block.
+  ##
+  ## Contract:
+  ## - the block carries no layer identity
+  ## - the KV-cache layer index and the safetensors key prefix live on the mixers that need them
+  SandwichDecoderLayer[SequenceMixer, HiddenMixer, Norm](
+    input_layernorm: input_layernorm,
+    sequence_mixer: sequence_mixer,
+    post_attention_layernorm: post_attention_layernorm,
+    pre_feedforward_layernorm: pre_feedforward_layernorm,
+    hidden_mixer: hidden_mixer,
+    post_feedforward_layernorm: post_feedforward_layernorm
+  )
+
+func forward*[SequenceMixer, HiddenMixer, Norm](
+  self: SandwichDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+  ctx: var InferenceContext,
+  x: Tensor,
+  residual: Option[Tensor]
+): (Tensor, Tensor) =
+  ## Forward pass for one sandwich decoder block on the long residual stream.
+  ##
+  ## Expected input:
+  ##
+  ## - `ctx`, the InferenceContext carrying page refs and RoPE rows (`ctx.pages`, `ctx.cos`, `ctx.sin`)
+  ## - `x`, the previous block's deferred contribution, shape `(batch, seq_len, hidden_size)`
+  ## - `residual`, the stream carried from the previous block
+  ##   absent on the first block
+  ##
+  ## Returns:
+  ##
+  ## - the pair `(post_feedforward_layernorm output, h1)`
+  ## - contribution + residual equals the block output
+  ## - the caller adds the pair at the next block boundary or at the model
+  ##   final before the final norm
+  ##
+  ## Chain:
+  ##
+  ## x, residual ─► input_layernorm ─► sequence_mixer ─► h + post_attention_layernorm ─► h1
+  ## h1 ─► pre_feedforward_layernorm ─► hidden_mixer ─► post_feedforward_layernorm ─► (result, h1)
+  ##
+  ## - `hPair = input_layernorm(x, residual)` when a residual was carried
+  ## - `hPair = (input_layernorm(x), x)` otherwise
+  ## - `mixerOut = sequence_mixer(ctx, hPair[0])`
+  ##
+  ## - `h1 = h + post_attention_layernorm(mixerOut)`
+  ## - `h2 = pre_feedforward_layernorm(h1)`
+  ## - `result = (post_feedforward_layernorm(hidden_mixer(h2)), h1)`
+  ##
+  ## The sequence mixer owns positional and cache state.
+  ## RoPE, KV pages and recurrent state all travel through `ctx`.
+  let (hNorm, h) =
+    if residual.isSome():
+      self.input_layernorm(x, residual.unsafeGet())
+    else:
+      (self.input_layernorm(x), x)
+
+  let mixerOut = self.sequence_mixer(ctx, hNorm)
+
+  let h1 = h + self.post_attention_layernorm(mixerOut)
+  let h2 = self.pre_feedforward_layernorm(h1)
+  let mlpOut = self.hidden_mixer(h2)
+  (self.post_feedforward_layernorm(mlpOut), h1)
+
+template `()`*[SequenceMixer, HiddenMixer, Norm](
+    layer: SandwichDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+    ctx: var InferenceContext,
+    x: Tensor,
+    residual: Option[Tensor]): untyped =
+  layer.forward(ctx, x, residual)
+
+
+# ─── Fanout decoder layer generic ──────────────────────────────────────────
+
+type
+  FanoutDecoderLayer*[SequenceMixer, HiddenMixer, Norm] = ref object
+    ## Decoder block with the fanout norm placement (cohere lineage):
+    ## ONE input norm feeds both mixers, the block output adds the two sublayer
+    ## contributions to the stream.
+    ##
+    ##     x ──► input_layernorm ──┬──► SequenceMixer ───┐
+    ##      ▲                      └──► HiddenMixer ─────┤
+    ##      └──────────────────────────── + ◄────────────┘   → block output
+    ##
+    ## DecoderLayer normalizes the mixer input of a sequential chain, one
+    ## norm per sublayer. The fanout shape normalizes once, both mixers
+    ## read the same normalized rows, `x + attn(hNorm) + mlp(hNorm)`.
+    ##
+    ## The two shapes are not interchangeable, the checkpoint config names
+    ## the placement of its own blocks.
+    input_layernorm: Norm
+    sequence_mixer: SequenceMixer
+    hidden_mixer: HiddenMixer
+
+func init*[SequenceMixer, HiddenMixer, Norm](
+    _: type FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+    input_layernorm: Norm,
+    sequence_mixer: SequenceMixer,
+    hidden_mixer: HiddenMixer
+): FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm] =
+  ## Take the one shared norm and the two mixers of one fanout decoder block.
+  ##
+  ## Contract:
+  ## - the block carries no layer identity
+  ## - the KV-cache layer index and the safetensors key prefix live on the mixers that need them
+  FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm](
+    input_layernorm: input_layernorm,
+    sequence_mixer: sequence_mixer,
+    hidden_mixer: hidden_mixer
+  )
+
+func forward*[SequenceMixer, HiddenMixer, Norm](
+  self: FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+  ctx: var InferenceContext,
+  x: Tensor,
+  residual: Option[Tensor]
+): (Tensor, Tensor) =
+  ## Forward pass for one fanout decoder block on the long residual stream.
+  ##
+  ## Expected input:
+  ##
+  ## - `ctx`, the InferenceContext carrying page refs and RoPE rows (`ctx.pages`, `ctx.cos`, `ctx.sin`)
+  ## - `x`, the previous block's deferred contribution, shape `(batch, seq_len, hidden_size)`
+  ## - `residual`, the stream carried from the previous block,
+  ##   absent on the first block
+  ##
+  ## Returns:
+  ##
+  ## - the pair `(attn + mlp contributions, carried residual)`
+  ## - contribution + residual equals the block output, the reference
+  ##   fanout layer output `x + residual + attn(hNorm) + mlp(hNorm)`
+  ## - the caller adds the pair at the next block boundary or at the model
+  ##   final before the norm
+  ##
+  ## Dataflow:
+  ##
+  ##   x ─→ (carried residual ? x + residual : x) ─→ input_layernorm ─→ hNorm
+  ##   hNorm ─→ sequence_mixer(ctx, hNorm) ──┐
+  ##   hNorm ─→ hidden_mixer(hNorm) ─────────┴→ contribution ─→ (contribution, residual)
+  ##
+  ## The sequence mixer owns positional and cache state.
+  ## RoPE, KV pages and recurrent state all travel through `ctx`.
+  let (hNorm, r) =
+    if residual.isSome():
+      self.input_layernorm(x, residual.unsafeGet())
+    else:
+      (self.input_layernorm(x), x)
+
+  let attnOut = self.sequence_mixer(ctx, hNorm)
+  let mlpOut = self.hidden_mixer(hNorm)
+  (attnOut + mlpOut, r)
+
+template `()`*[SequenceMixer, HiddenMixer, Norm](
+    layer: FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+    ctx: var InferenceContext,
+    x: Tensor,
+    residual: Option[Tensor]): untyped =
+  layer.forward(ctx, x, residual)

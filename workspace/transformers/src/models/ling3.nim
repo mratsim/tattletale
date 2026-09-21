@@ -40,56 +40,56 @@ import
 type
   ## Config parsed from the bailing_hybrid config.json.
   LingConfig* = ref object
-    architecture*: string
-    modelType*: string
-    transformersVersion*: string
+    architecture: string
+    modelType: string
+    transformersVersion: string
 
-    vocabSize*: int
-    hiddenSize*: int
-    numHiddenLayers*: int
-    numAttentionHeads*: int
+    vocabSize: int
+    hiddenSize: int
+    numHiddenLayers: int
+    numAttentionHeads: int
 
     # MLA shape:
     #   compressed-Q with a head-wise gated output
-    qLoraRank*: int
-    kvLoraRank*: int
-    qkNopeHeadDim*: int
-    qkRopeHeadDim*: int
-    qkHeadDim*: int
-    vHeadDim*: int
+    qLoraRank: int
+    kvLoraRank: int
+    qkNopeHeadDim: int
+    qkRopeHeadDim: int
+    qkHeadDim: int
+    vHeadDim: int
 
     # Hybrid schedule:
     #   MLA iff (layer_idx + 1) mod layerGroupSize == 0,
     # materialized into one typed per-layer-kind seq at parse
-    layerGroupSize*: int
-    layerKinds*: seq[AttentionLayerKind]
+    layerGroupSize: int
+    layerKinds: seq[AttentionLayerKind]
 
     # Feed-forward blocks and the routed MoE
-    firstKDenseReplace*: int
-    intermediateSize*: int
-    moeIntermediateSize*: int
-    moeSharedExpertIntermediateSize*: int
-    nSharedExperts*: int
-    nRoutedExperts*: int
-    numExpertsPerTok*: int
-    routedScalingFactor*: float64
-    nGroup*: int
-    topkGroup*: int
-    normTopkProb*: bool
+    firstKDenseReplace: int
+    intermediateSize: int
+    moeIntermediateSize: int
+    moeSharedExpertIntermediateSize: int
+    nSharedExperts: int
+    nRoutedExperts: int
+    numExpertsPerTok: int
+    routedScalingFactor: float64
+    nGroup: int
+    topkGroup: int
+    normTopkProb: bool
 
     # KDA mixer shape (lower-bound-sigmoid full-rank gate)
-    kdaHeadDim*: int
-    shortConvKernelSize*: int
-    kdaLowerBound*: float64
+    kdaHeadDim: int
+    shortConvKernelSize: int
+    kdaLowerBound: float64
 
     # Numerics and position handling
-    rmsNormEps*: float64
-    ropeTheta*: float64
-    maxPositionEmbeddings*: int
-    dtype*: string
+    rmsNormEps: float64
+    ropeTheta: float64
+    maxPositionEmbeddings: int
+    dtype: string
 
     # Token ids come from config.json alone.
-    eosTokenIds*: seq[int]
+    eosTokenIds: seq[int]
 
 type
   LingMlaLayer* = DecoderLayer[HeadwiseGatedMLAttention[RmsNorm, FullRoPe],
@@ -112,7 +112,7 @@ type
 
 # Ling-3.0-tiny config parsing
 
-proc parseHybridScheduleGroups(numLayers, layerGroupSize: int): seq[AttentionLayerKind] =
+func parseHybridScheduleGroups(numLayers, layerGroupSize: int): seq[AttentionLayerKind] =
   ## Ling's hybrid schedule from the layer_group_size rule.
   ##
   ## Returns the 0-based per-layer kind sequence.
@@ -131,7 +131,7 @@ proc parseHybridScheduleGroups(numLayers, layerGroupSize: int): seq[AttentionLay
     "[ttt] LingSchedule: layer_group_size " & $layerGroupSize &
     " leaves the LAST layer KDA, the template requires it to be an MLA layer")
 
-proc parseLing3Config(json: JsonNode): LingConfig =
+func parseLing3Config(json: JsonNode): LingConfig =
   let archs = json{"architectures"}
   checkValue(archs.kind == JArray and archs.len != 0,
     "[ttt] No architectures found in config.json")
@@ -244,9 +244,9 @@ type
     norm: RmsNorm
     lmHead: LMHead
     rotary: MlaRotary
-    config*: LingConfig
-    tokenizer*: BPETokenizer
-    device*: DeviceKind
+    config: LingConfig
+    tokenizer: BPETokenizer
+    device: DeviceKind
 
 proc forward*(self: Ling3Model, ctx: var InferenceContext, input_ids: Tensor): Tensor =
   ## Returns the logits after a forward pass through the decoder stack.
@@ -264,7 +264,7 @@ proc forward*(self: Ling3Model, ctx: var InferenceContext, input_ids: Tensor): T
   let normed = self.norm.forward(x + finalResidual)
   self.lmHead.forward(normed)
 
-proc getConfig(self: Ling3Model): ModelConfigBase =
+func getConfig(self: Ling3Model): ModelConfigBase =
   ModelConfigBase(
     architecture: self.config.architecture,
     model_type: self.config.modelType,
@@ -285,10 +285,10 @@ proc getConfig(self: Ling3Model): ModelConfigBase =
     layerKinds: self.config.layerKinds
   )
 
-proc getTokenizer(self: Ling3Model): BPETokenizer =
+func getTokenizer(self: Ling3Model): BPETokenizer =
   self.tokenizer
 
-proc getDeviceKind(self: Ling3Model): DeviceKind =
+func getDeviceKind(self: Ling3Model): DeviceKind =
   self.device
 
 proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
@@ -318,7 +318,7 @@ proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
     actDtype, device)
 
   var layers = newSeq[AnyDecoderLayer](config.numHiddenLayers)
-  var routers = newSeq[NoauxTcRouter](config.numHiddenLayers)
+  var routers = newSeq[NoAuxTopCorr](config.numHiddenLayers)
   for i in 0 ..< config.numHiddenLayers:
     let lp = "model.layers." & $i
     let mlpPrefix = lp & ".mlp"
@@ -356,7 +356,7 @@ proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
       let routerWeight = view.getTensorOwned(mlpPrefix & ".gate.weight", device)
       let expertBias = view.getTensorOwned(mlpPrefix & ".gate.expert_bias", device)
         .to(kBFloat16).to(kFloat32)
-      routers[i] = NoauxTcRouter.init(
+      routers[i] = NoAuxTopCorr.init(
         routerWeight, expertBias,
         config.numExpertsPerTok, config.nGroup, config.topkGroup,
         config.routedScalingFactor, config.normTopkProb)
@@ -384,7 +384,7 @@ proc loadLing3ModelRaw(modelPath: string, device: DeviceKind): Ling3Model =
         let routerWeight = view.getTensorOwned(mlpPrefix & ".gate.weight", device)
         let expertBias = view.getTensorOwned(
           mlpPrefix & ".gate.expert_bias", device).to(kBFloat16).to(kFloat32)
-        routers[i] = NoauxTcRouter.init(
+        routers[i] = NoAuxTopCorr.init(
           routerWeight, expertBias,
           config.numExpertsPerTok, config.nGroup, config.topkGroup,
           config.routedScalingFactor, config.normTopkProb)

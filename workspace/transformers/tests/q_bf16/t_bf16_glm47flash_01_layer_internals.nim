@@ -85,7 +85,7 @@ proc main(): bool =
   # wires it. Router constants arrive from the checkpoint config,
   # the expert stack and shared tail through the loader.
   let view = SafetensorsCollection.open(ModelDir)
-  let router = NoauxTcRouter.init(
+  let router = NoAuxTopCorr.init(
     view.getTensorOwned(Layer1Prefix & ".gate.weight", dev),
     view.getTensorOwned(Layer1Prefix & ".gate.e_score_correction_bias", dev),
     numExpertsPerTok, cfgJson{"n_group"}.getInt(),

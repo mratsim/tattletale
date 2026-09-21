@@ -61,7 +61,7 @@ import
 # Linear Layers
 # -------------------------------------------------------------------------
 
-func linear*(input, weight: TorchTensor): TorchTensor {.importcpp: "torch::nn::functional::linear(@)".}
+func linear*(input, weight: TorchTensor): TorchTensor {.importcpp: "at::linear(@)".}
   ## Applies a linear transformation to the incoming data:
   ##   y = input * transpose(weight)
   ##
@@ -70,7 +70,7 @@ func linear*(input, weight: TorchTensor): TorchTensor {.importcpp: "torch::nn::f
   ## Weight: (out_features,in_features)
   ## Output: (N,∗,out_features)
 
-func linear*(input, weight, bias: TorchTensor): TorchTensor {.importcpp: "torch::nn::functional::linear(@)".}
+func linear*(input, weight, bias: TorchTensor): TorchTensor {.importcpp: "at::linear(@)".}
   ## Applies a linear transformation to the incoming data:
   ##   y = input * transpose(weight) + bias
   ##
@@ -133,6 +133,18 @@ func leakyRelu_mut*(input: var TorchTensor) {.importcpp: "torch::leaky_relu_(@)"
 
 func gelu*(input: TorchTensor): TorchTensor {.importcpp: "torch::gelu(@)".}
 func gelu_mut*(input: var TorchTensor) {.importcpp: "torch::gelu_(@)".}
+
+func geluTanh*(input: TorchTensor): TorchTensor {.importcpp: "torch::gelu(@, \"tanh\")".}
+  ## Tanh-approximate GELU:
+  ##   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+  ##
+  ## C++ signature:
+  ##   at::Tensor at::gelu(const at::Tensor & self, c10::string_view approximate)
+  ##
+  ## Contract:
+  ## - approximate is always "tanh"
+  ## - dispatches to the backend's fused per-dtype kernel, bf16 activations
+  ##   keep the fused kernel's rounding
 
 func elu*(input: TorchTensor): TorchTensor {.importcpp: "torch::elu(@)".}
 func elu_mut*(input: var TorchTensor) {.importcpp: "torch::elu_(@)".}

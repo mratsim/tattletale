@@ -85,7 +85,7 @@ proc main(): bool =
   # Router constants arrive from the checkpoint config, the expert stack
   # through the loader.
   let view = SafetensorsCollection.open(ModelDir)
-  let router = NoauxTcRouter.init(
+  let router = NoAuxTopCorr.init(
     view.getTensorOwned(Layer1Prefix & ".gate.weight", dev),
     view.getTensorOwned(Layer1Prefix & ".gate.e_score_correction_bias", dev),
     numExpertsPerTok, cfgJson{"n_group"}.getInt(),
@@ -210,7 +210,7 @@ proc main(): bool =
     let hidden = h3d.reshape([h3d.numel() div hiddenSize, hiddenSize])
     let decision = router.route(hidden)
     # TODO(metal-drift) restore the router scoring check once the f32
-    # NoauxTcRouter reduction drift is resolved on Metal, p95 1.144e-05
+    # NoAuxTopCorr reduction drift is resolved on Metal, p95 1.144e-05
     # against the 7.629e-06 band (1.50x, T=6 scoring over 384 elements).
     # cpu drops the check with it, the recorded frame stays in the sidecar
     # for the reassert.

@@ -24,9 +24,8 @@ type
     head_dim*: int
     num_qo_head*: int
     num_kv_head*: int
-    num_kv_groups*: int
+    num_kv_groups: int
     qo_attn_dim*: int
-    kv_attn_dim*: int
     softmax_scale*: float64
 
   RopeGQAttention*[QKNorm] = ref object
@@ -37,20 +36,56 @@ type
     ##    `void` is the variant without qk-norm weights.
     ##  - The layer owns projections, norms and rotary only.
     ##    The KV cache arrives through the InferenceContext of forward.
-    layer_idx*: int             # Layer index for self-indexing KV cache
-    name*: string               # Safetensor key prefix (e.g., "model.layers.23.self_attn")
+    layer_idx: int             # Layer index for self-indexing KV cache
+    name: string               # Safetensor key prefix (e.g., "model.layers.23.self_attn")
     q_proj: Linear
     k_proj: Linear
     v_proj: Linear
     o_proj: Linear
     gqa_attn: GroupedQueryAttention
     rotary: RotaryPositionEmbedding
+    window: int
+      ## Visibility band of the layer kind.
+      ## A query attends to itself and the previous `window - 1` cached keys.
+      ## `FullVisibilityWindow` removes the band entirely.
     when QKNorm isnot void:
       q_norm: QKNorm
       k_norm: QKNorm
-# =============================================================================
+    gProj: Option[Linear]
+      ## Per-head output gate for the per-head-gated layer kinds (Laguna),
+      ## none on the ungated kinds.
+      ##
+      ## Checkpoint spelling:
+      ## a `[hidden, heads]` projection of the attention input.
+      ##   - softplus computes in f32, one rounding back to the dtype
+      ##   - one scalar per head multiplies the attention output
+      ##     right before o_proj
+    kvSourceLayer: int
+      ## Layer index supplying this layer's K/V pages, the gemma-4
+      ## shared-kv spelling. A shared layer sits at or past
+      ## num_hidden_layers - num_kv_shared_layers, it projects no k/v.
+      ##
+      ## The shared layer gathers the source layer's post-rope pages
+      ## instead. `-1` keeps the self-cached default, the layer then
+      ## writes and reads its own pages.
+    vNorm: FusedRmsNorm
+      ## Value-path single-rounding norm applied to the reshaped v before
+      ## the cache write, the gemma-4 v_norm with_scale=False spelling
+      ## (a ones weight, no checkpoint tensor). Nil on layers without it.
+    kEqV: bool
+      ## KV-tied attention spelling of the gemma-4 attention_k_eq_v full layers
+      ##
+      ## Contract:
+      ##
+      ## - no v_proj weight loads, v_proj stays nil
+      ## - value rows are the unscaled v_norm of the k projection feeding
+      ##   the keys, the keys being its rotated k_norm rows
+      ## - the tying holds at the projection level only, the cache stores
+      ##   K and V as separate entries on both layer kinds, the page-pool
+      ##   geometry is unchanged
+# -----------------------------------------------------------------------------
 # Data flow through RopeGQAttention
-# =============================================================================
+# -----------------------------------------------------------------------------
 #
 #   x (batch, seq, hidden)
 #   │
@@ -75,18 +110,69 @@ type
 #   and it has no positional role in the similarity computation.
 # =============================================================================
 
-func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int): GroupedQueryAttention =
+const FullVisibilityWindow* = int.high
+  ## Sentinel of the windowed attention spelling.
+  ## The visibility band never binds, every key at or before the query stays
+  ## visible under the plain causal rule.
+
+const GqaKernelMaxHeadDim = 256
+  ## Head-dim bound of the mask-free GQA SDPA kernel dispatch, larger
+  ## head dims route to the expanded spelling, whose fused kernel
+  ## rounds differently on rare elements
+
+func windowedCausalMask*(qLen, kvLen, offset, window: int, device: F.DeviceKind): Tensor =
+  ## Visibility-band causal mask of the windowed attention spelling.
+  ##
+  ## Expected input:
+  ##
+  ## - `qLen`, the query count of one forward pass
+  ## - `kvLen`, the gathered key count of one forward pass
+  ## - `offset`, the absolute position of the first query (kv_position)
+  ##
+  ## - `window`, the visibility band of the layer kind
+  ## - `device`, the query tensor's device
+  ##
+  ## Output:
+  ##
+  ## - a `(1, 1, qLen, kvLen)` bool mask
+  ## - `true` keeps a key visible, `false` masks it
+  ## - the mask broadcasts over batch and heads
+  ##
+  ## Visibility rule, matching the reference sliding-window causal rule:
+  ##
+  ## - query row `i` covers absolute position `offset + i`
+  ## - key column `j` covers absolute position `j`
+  ## - a key stays visible iff `j <= offset + i` and `j > offset + i - window`
+  doAssert window > 0, "windowedCausalMask: the visibility band must be positive"
+  let opts = F.tensorOptions(F.kInt64, device)
+  let qPos = F.arange(offset, offset + qLen, opts).unsqueeze(1)
+  let kPos = F.arange(0, kvLen, opts).unsqueeze(0)
+  let distance = qPos - kPos   # (qLen, kvLen) query position minus key position
+  # The two band inequalities as a 0/1 int64 product, cast to bool because
+  # the SDPA reference spelling consumes a bool mask.
+  let visible = (distance >=. Scalar(0.0'f64)) * (distance <. Scalar(window.float64))
+  visible.to(F.kBool).unsqueeze(0).unsqueeze(0)
+
+func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: int, softmaxScale = 0.0'f64): GroupedQueryAttention =
   ## Configure GQA over `num_qo_head` query heads and `num_kv_head` KV heads,
-  ## each of width `head_dim`. The softmax scale is `head_dim^-0.5`.
+  ## each of width `head_dim`.
+  ##
+  ## Softmax scale is `head_dim^-0.5` by default.
+  ##
+  ## `softmaxScale` overrides it when positive, for checkpoints that scale
+  ## attention by a pre-attention scalar.
+  ## Gemma-3 passes `query_pre_attn_scalar^-0.5` here.
   let num_kv_groups = num_qo_head div num_kv_head
+  let scale =
+    if softmaxScale > 0.0'f64: softmaxScale
+    else: 1.0'f64 / sqrt(head_dim.float64)
   GroupedQueryAttention(
     head_dim: head_dim,
     num_qo_head: num_qo_head,
     num_kv_head: num_kv_head,
     num_kv_groups: num_kv_groups,
     qo_attn_dim: num_qo_head * head_dim,
-    kv_attn_dim: num_kv_head * head_dim,
-    softmax_scale: 1.0'f64 / sqrt(head_dim.float64)
+    softmax_scale: scale
   )
 
 func forward*(
@@ -122,7 +208,8 @@ func forward*(
   ## Returns:
   ##   Attention output of shape (batch, seq, num_qo_head * head_dim)
 
-  # Backend: permute to (batch, head, seq, head_dim), ensure dtype, SDPA, reshape
+  # Backend:
+  #   permute to (batch, head, seq, head_dim), ensure dtype, SDPA, reshape
   let batch = q.size(0)
   let seq_len = q.size(1)
 
@@ -134,13 +221,45 @@ func forward*(
   let q_final = q_attn.to(target_dtype)
   let k_final = k_attn.to(target_dtype)
 
+  # Masked SDPA spelling of the reference stack. K/V expand to the query
+  # head count with each KV head repeated for its query-head group while
+  # enable_gqa drops. The GQA path stays reserved for the mask-free kernel
+  # at `GqaKernelMaxHeadDim`:
+  #
+  # - the reference stack routes larger head dims to the expanded spelling,
+  #   whose fused kernel rounds differently on rare elements
+  let useGqa = attn_mask.isNone and enable_gqa and self.num_kv_groups > 1 and
+    self.head_dim <= GqaKernelMaxHeadDim
+  # Expansion requires KV-head-count keys (the repeat_kv precondition).
+  # Callers replaying already-expanded keys skip it.
+  let keysGrouped = k_final.size(1) == self.num_kv_head and
+    self.num_kv_groups > 1
+  let (k_sdpa, v_sdpa) =
+    if useGqa or not keysGrouped:
+      (k_final, v_attn)
+    else:
+      # Every expansion dim sizes from the KEY sequence length.
+      # The masked decode shape runs one query row against a gathered
+      # history longer than the window, and a sizing from the query
+      # length would collapse the key axis down to 1.
+      let kv_len = k_final.size(2)
+      let expanded = k_final.unsqueeze(2)
+        .expand(batch, self.num_kv_head, self.num_kv_groups, kv_len,
+          self.head_dim, implicit = false)
+        .reshape([batch, self.num_qo_head, kv_len, self.head_dim])
+      let vExpanded = v_attn.unsqueeze(2)
+        .expand(batch, self.num_kv_head, self.num_kv_groups, kv_len,
+          self.head_dim, implicit = false)
+        .reshape([batch, self.num_qo_head, kv_len, self.head_dim])
+      (expanded, vExpanded)
+
   let attn_out = F.scaled_dot_product_attention(
-    q_final, k_final, v_attn,
+    q_final, k_sdpa, v_sdpa,
     attn_mask = attn_mask,
     dropout_p = dropout_p,
     is_causal = is_causal,
     scale = some(self.softmax_scale),
-    enable_gqa = enable_gqa and self.num_kv_groups > 1
+    enable_gqa = useGqa
   )
 
   let attn_perm = attn_out.permute([0, 2, 1, 3])
@@ -161,7 +280,12 @@ func initBase[QKNorm](
     name: string,
     q_proj, k_proj, v_proj, o_proj: Linear,
     num_qo_head, num_kv_head, head_dim: int,
-    rotary: RotaryPositionEmbedding): RopeGQAttention[QKNorm] =
+    rotary: RotaryPositionEmbedding,
+    window: int, softmaxScale: float64,
+    gProj: Option[Linear] = none(Linear),
+    kvSourceLayer = -1,
+    vNorm: FusedRmsNorm = nil,
+    kEqV = false): RopeGQAttention[QKNorm] =
   checkValue(num_qo_head > 0,
     "[ttt] " & name & ": num_attention_heads is " & $num_qo_head &
     ", expected a positive count")
@@ -171,6 +295,12 @@ func initBase[QKNorm](
   checkValue(num_qo_head mod num_kv_head == 0,
     "[ttt] " & name & ": num_attention_heads (" & $num_qo_head &
     ") leaves a remainder under num_key_value_heads (" & $num_kv_head & ")")
+  checkValue(window > 0,
+    "[ttt] " & name & ": the visibility band is " & $window &
+    ", expected a positive count or FullVisibilityWindow")
+  checkValue(not kEqV or v_proj.isNil,
+    "[ttt] " & name & ": the KV-tied spelling carries no v_proj weight, " &
+    "pass a nil v_proj with kEqV")
   RopeGQAttention[QKNorm](
     layer_idx: layer_idx,
     name: name,
@@ -178,8 +308,14 @@ func initBase[QKNorm](
     k_proj: k_proj,
     v_proj: v_proj,
     o_proj: o_proj,
-    gqa_attn: GroupedQueryAttention.init(num_qo_head, num_kv_head, head_dim),
-    rotary: rotary
+    gqa_attn: GroupedQueryAttention.init(num_qo_head, num_kv_head, head_dim,
+      softmaxScale),
+    rotary: rotary,
+    window: window,
+    gProj: gProj,
+    kvSourceLayer: kvSourceLayer,
+    vNorm: vNorm,
+    kEqV: kEqV
   )
 
 func init*[QKNorm](
@@ -188,11 +324,22 @@ func init*[QKNorm](
     name: string,
     q_proj, k_proj, v_proj, o_proj: Linear,
     num_qo_head, num_kv_head, head_dim: int,
-    rotary: RotaryPositionEmbedding): RopeGQAttention[QKNorm] =
+    rotary: RotaryPositionEmbedding,
+    window: int = FullVisibilityWindow,
+    softmaxScale = 0.0'f64,
+    gProj: Option[Linear] = none(Linear),
+    kvSourceLayer = -1,
+    vNorm: FusedRmsNorm = nil,
+    kEqV = false): RopeGQAttention[QKNorm] =
   ## Build the attention block with no qk-norms.
+  ##
+  ## `window` defaults to `FullVisibilityWindow`, plain causal attention.
+  ## A sliding-window layer kind passes its band width.
+  ## `softmaxScale` overrides the head-width scale when positive.
   initBase(RopeGQAttention[QKNorm], layer_idx, name,
     q_proj, k_proj, v_proj, o_proj,
-    num_qo_head, num_kv_head, head_dim, rotary)
+    num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale,
+    gProj, kvSourceLayer, vNorm, kEqV)
 
 func init*[QKNorm](
     _: type RopeGQAttention[QKNorm],
@@ -201,7 +348,13 @@ func init*[QKNorm](
     q_proj, k_proj, v_proj, o_proj: Linear,
     num_qo_head, num_kv_head, head_dim: int,
     rotary: RotaryPositionEmbedding,
-    q_norm, k_norm: QKNorm): RopeGQAttention[QKNorm] =
+    q_norm, k_norm: QKNorm,
+    window: int = FullVisibilityWindow,
+    softmaxScale = 0.0'f64,
+    gProj: Option[Linear] = none(Linear),
+    kvSourceLayer = -1,
+    vNorm: FusedRmsNorm = nil,
+    kEqV = false): RopeGQAttention[QKNorm] =
   ## Initialize RopeGQAttention.
   ##
   ## Args:
@@ -214,17 +367,25 @@ func init*[QKNorm](
   ##   head_dim: Dimension per head
   ##   rotary: RoPE module (shared across layers)
   ##
+  ## `window` is the visibility band of the layer kind.
+  ## A query attends to itself and the previous `window - 1` cached keys.
+  ## `FullVisibilityWindow`, the default, removes the band.
+  ##
+  ## `softmaxScale` overrides the attention scale when positive.
+  ## Without it the scale is the head-width `head_dim^-0.5`.
+  ##
   ## Raises ValueError naming the layer key path for a non-positive head
   ## count, or for a query-head count not divisible by the KV-head count,
   ## before the GQA group division truncates it.
   result = initBase(RopeGQAttention[QKNorm], layer_idx, name,
     q_proj, k_proj, v_proj, o_proj,
-    num_qo_head, num_kv_head, head_dim, rotary)
+    num_qo_head, num_kv_head, head_dim, rotary, window, softmaxScale,
+    gProj, kvSourceLayer, vNorm, kEqV)
   when QKNorm isnot void:
     result.q_norm = q_norm
     result.k_norm = k_norm
 
-proc writeKvPages(
+func writeKvPages(
     ctx: var InferenceContext, layer_idx: int,
     k_rot, v_reshaped: Tensor, offset, seq_len: int) =
   # ── Write new KV into page slots ──
@@ -259,14 +420,26 @@ proc writeKvPages(
       let seqRemaining = seq_len - t
       let chunkLen = min(chunkRemaining, seqRemaining)
       let chunkEnd = t + chunkLen
-      # Single copyFrom per page instead of one kernel per token
-      page.k_view[layer_idx, withinPage ..< withinPage + chunkLen].copyFrom(
-        k_rot[0, t ..< chunkEnd, _, _])
-      page.v_view[layer_idx, withinPage ..< withinPage + chunkLen].copyFrom(
-        v_reshaped[0, t ..< chunkEnd, _, _])
+      # Single copyFrom per page instead of one kernel per token.
+      # Dual-geometry layers narrow the slot to their own leading
+      # (kv_heads, head_dim) planes:
+      #
+      # - the slot row-major layout makes the narrowed view the contiguous
+      #   element prefix the layer owns, no layout change and no copy
+      let kView = page.k_view[layer_idx, withinPage ..< withinPage + chunkLen]
+      let vView = page.v_view[layer_idx, withinPage ..< withinPage + chunkLen]
+      let kSrc = k_rot[0, t ..< chunkEnd, _, _]
+      let vSrc = v_reshaped[0, t ..< chunkEnd, _, _]
+      checkValue(kSrc.size(1) <= kView.size(1) and kSrc.size(2) <= kView.size(2) and
+        vSrc.size(1) <= vView.size(1) and vSrc.size(2) <= vView.size(2),
+        "[ttt] writeKvPages: layer kv geometry (" & $kSrc.size(1) & ", " &
+        $kSrc.size(2) & ") exceeds the pool slot (" & $kView.size(1) & ", " &
+        $kView.size(2) & ")")
+      kView.narrow(1, 0, kSrc.size(1)).narrow(2, 0, kSrc.size(2)).copyFrom(kSrc)
+      vView.narrow(1, 0, vSrc.size(1)).narrow(2, 0, vSrc.size(2)).copyFrom(vSrc)
       t = chunkEnd
 
-proc gatherKv(
+func gatherKv(
     ctx: var InferenceContext, layer_idx, num_kv_head, head_dim: int,
     offset, seq_len: int, kvDtype: F.ScalarKind,
     kvDevice: F.DeviceKind): (Tensor, Tensor) =
@@ -276,29 +449,49 @@ proc gatherKv(
 
   # Reuse pre-allocated buffers to avoid F.empty allocation per forward pass.
   # Allocate once at max_seq size, narrow to actual totalSeqLen each call.
-  # Pre-allocate gather buffers at max_seq to avoid F.empty per forward pass.
-  if ctx.k_gather_buf.isNil or ctx.k_gather_buf.size(1) < totalSeqLen:
+  # Dual-geometry layers share one context:
+  #
+  # - the buffer carries the widest (kv_heads, head_dim) seen so far
+  # - a narrower layer reads and writes its leading planes
+  #   through narrowed views
+  # - a realloc is due only when the stashed buffer cannot host
+  #   this layer's kv geometry
+  if ctx.k_gather_buf.isNil or ctx.k_gather_buf.size(1) < totalSeqLen or
+      ctx.k_gather_buf.size(2) < num_kv_head or
+      ctx.k_gather_buf.size(3) < head_dim:
     let allocSize = max(totalSeqLen, ctx.max_seq)
     let kvOpts = F.tensorOptions(kvDtype, kvDevice)
+    let allocKvHeads = max(num_kv_head, ctx.kv_heads)
+    let allocHeadDim = max(head_dim, ctx.head_dim)
     ctx.k_gather_buf = F.zeros(
-      1, allocSize, num_kv_head, head_dim, kvOpts)
+      1, allocSize, allocKvHeads, allocHeadDim, kvOpts)
     ctx.v_gather_buf = F.zeros(
-      1, allocSize, num_kv_head, head_dim, kvOpts)
+      1, allocSize, allocKvHeads, allocHeadDim, kvOpts)
 
   for p in 0 ..< numPages:
     let pageStart = p * TokensPerPage
     let pageEnd = min(pageStart + TokensPerPage, totalSeqLen)
     let pageValidLen = pageEnd - pageStart
     let page = ctx.pages[p]
-    ctx.k_gather_buf[0, pageStart ..< pageEnd, _, _] = page.k_view[layer_idx, 0 ..< pageValidLen]
-    ctx.v_gather_buf[0, pageStart ..< pageEnd, _, _] = page.v_view[layer_idx, 0 ..< pageValidLen]
+    # A narrower layer reads and writes the leading (kv_heads, head_dim)
+    # planes of its wide slot through narrowed views.
+    let kSlot = page.k_view[layer_idx, 0 ..< pageValidLen]
+      .narrow(1, 0, num_kv_head).narrow(2, 0, head_dim)
+    let vSlot = page.v_view[layer_idx, 0 ..< pageValidLen]
+      .narrow(1, 0, num_kv_head).narrow(2, 0, head_dim)
+    ctx.k_gather_buf[0, pageStart ..< pageEnd, _, _]
+      .narrow(1, 0, num_kv_head).narrow(2, 0, head_dim).copyFrom(kSlot)
+    ctx.v_gather_buf[0, pageStart ..< pageEnd, _, _]
+      .narrow(1, 0, num_kv_head).narrow(2, 0, head_dim).copyFrom(vSlot)
 
-  # Narrow pre-allocated buffers to actual sequence length for SDPA
+  # Narrow pre-allocated buffers to this layer's shape for SDPA
   let k_full = ctx.k_gather_buf.narrow(1, 0, totalSeqLen)
+    .narrow(2, 0, num_kv_head).narrow(3, 0, head_dim)
   let v_full = ctx.v_gather_buf.narrow(1, 0, totalSeqLen)
+    .narrow(2, 0, num_kv_head).narrow(3, 0, head_dim)
   (k_full, v_full)
 
-proc forward[QKNorm](
+func forward[QKNorm](
     self: RopeGQAttention[QKNorm],
     ctx: var InferenceContext,
     x: Tensor): Tensor =
@@ -312,14 +505,17 @@ proc forward[QKNorm](
   ##   Output tensor of shape (batch, seq, num_qo_head * head_dim)
   ##
   ## Computes:
-  ##   q = self.q_proj(x)
-  ##   k = self.k_proj(x)
-  ##   v = self.v_proj(x)
+  ##   q = self.q_proj(x);  (k, v = self.k_proj(x), self.v_proj(x))
   ##   (q_rot, k_rot) = self.rotary.applyRope(q, k, ctx.cos, ctx.sin)
   ##   Write k_rot, v_reshaped into ctx.pages page slots
   ##   Gather pages into contiguous k_full, v_full
   ##   attn_out = self.gqa_attn(q_rot, k_full, v_full)
+  ##   [gProj present] attn_out = attn_out * softplus(g_proj(x)) per head
   ##   return self.o_proj(attn_out)
+  ##
+  ## A kvSourceLayer >= 0 skips the k/v projection, norm, rope and write:
+  ## k_full/v_full gather straight from the source layer's pages, q ropes
+  ## on top of them.
   let batch = x.size(0)
 
   # Guard against batch_size > 1
@@ -332,40 +528,116 @@ proc forward[QKNorm](
 
   # Use separate Q, K, V projections (matching HF/Qwen3)
   let q = self.q_proj.forward(x)
-  let k = self.k_proj.forward(x)
-  let v = self.v_proj.forward(x)
 
   let seq_len = x.size(1)
   # Reshape to (batch, seq, heads, head_dim)
   let q_reshaped = q.reshape([batch, seq_len, self.gqa_attn.num_qo_head, self.gqa_attn.head_dim])
-  let k_reshaped = k.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
-  let v_reshaped = v.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
 
-  # Apply q/k norm (on reshaped tensor before RoPE)
-  let (q_norm_input, k_norm_input) =
+  # Apply q norm (on reshaped tensor before RoPE)
+  let q_norm_input =
     when QKNorm is void:
-      (q_reshaped, k_reshaped)
+      q_reshaped
     else:
-      (forward(self.q_norm, q_reshaped), forward(self.k_norm, k_reshaped))
-
-  # Apply RoPE using precomputed cos/sin
-  # Partial RoPE: the rotary ref's rotary_dim columns rotate
-  let (q_rot, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, ctx.cos, ctx.sin)
+      forward(self.q_norm, q_reshaped)
 
   let offset = ctx.kv_position
-  let kvDtype = v_reshaped.scalarType()
-  let kvDevice: F.DeviceKind = v_reshaped.deviceType()
-  writeKvPages(ctx, self.layer_idx, k_rot, v_reshaped, offset, seq_len)
-  let (k_full, v_full) = gatherKv(ctx, self.layer_idx,
-    self.gqa_attn.num_kv_head, self.gqa_attn.head_dim,
-    offset, seq_len, kvDtype, kvDevice)
+  let kvDtype = q_reshaped.scalarType()
+  let kvDevice: F.DeviceKind = q_reshaped.deviceType()
+
+  var q_rot: Tensor
+  var k_full, v_full: Tensor
+  if self.kvSourceLayer < 0:
+    let k = self.k_proj.forward(x)
+    let k_reshaped = k.reshape([batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
+    # The KV-tied spelling derives the value rows from the shared k projection, the raw
+    # reshaped output before k_norm and rope reach the key path.
+    let v_reshaped =
+      if self.kEqV:
+        k_reshaped
+      else:
+        self.v_proj.forward(x).reshape(
+          [batch, seq_len, self.gqa_attn.num_kv_head, self.gqa_attn.head_dim])
+
+    # Apply k norm (on reshaped tensor before RoPE)
+    let k_norm_input =
+      when QKNorm is void:
+        k_reshaped
+      else:
+        forward(self.k_norm, k_reshaped)
+
+    # Apply RoPE using precomputed cos/sin.
+    # Partial RoPE rotates the leading rotary_dim columns only.
+    let (qRotated, k_rot) = self.rotary.applyRope(q_norm_input, k_norm_input, ctx.cos, ctx.sin)
+    q_rot = qRotated
+
+    # The value-path norm applies before the cache write
+    let vWrite =
+      if self.vNorm != nil:
+        self.vNorm.forward(v_reshaped)
+      else:
+        v_reshaped
+
+    writeKvPages(ctx, self.layer_idx, k_rot, vWrite, offset, seq_len)
+    (k_full, v_full) = ctx.gatherKv(self.layer_idx,
+      self.gqa_attn.num_kv_head, self.gqa_attn.head_dim,
+      offset, seq_len, kvDtype, kvDevice)
+  else:
+    # A shared-kv layer (gemma-4 spelling) runs no k/v projection, norm,
+    # rope or cache write of its own. The k/v come from the source layer's
+    # post-rope full-length pages, the same rows the reference stack
+    # carries in its shared_kv_states dict.
+    let (qRotated, _) = self.rotary.applyRope(q_norm_input, q_norm_input, ctx.cos, ctx.sin)
+    q_rot = qRotated
+    (k_full, v_full) = ctx.gatherKv(self.kvSourceLayer,
+      self.gqa_attn.num_kv_head, self.gqa_attn.head_dim,
+      offset, seq_len, kvDtype, kvDevice)
 
   # k_full/v_full are already (batch, seq, kv_heads, head_dim) — the format GQA expects.
   # GQA's forward permutes internally to (batch, kv_heads, seq, head_dim) for SDPA.
   # is_causal only makes sense when Q and K seq_lens are equal (prefill).
   # In decode mode (Q=1, K=N), causal mask would block K[1..N-1].
-  let doCausal = q_rot.size(1) == k_full.size(1)
-  let attn_out = self.gqa_attn.forward(q_rot, k_full, v_full, is_causal = doCausal)
+  #
+  # Mask dispatch of the visibility band:
+  # - band unbound, window >= gathered key count
+  #   prefill takes the causal path, decode sees the whole cached history
+  # - band bound
+  #   the windowed causal mask, query rows at absolute positions
+  #   offset .. offset + seqQ - 1, one -Inf per key outside the band
+  let kvSeqLen = k_full.size(1)
+  var attnMask = none(Tensor)
+  var doCausal = false
+  if self.window >= kvSeqLen:
+    doCausal = q_rot.size(1) == kvSeqLen
+  elif q_rot.size(1) == 1:
+    # Single-query decode past the window. The visibility band keeps
+    # exactly the newest `window` keys and every one of them is visible,
+    # each key j in the slice satisfies j > query_pos - window.
+    # The reference stack's sliding cache serves that same slice,
+    # so the gathered history truncates to it while the mask reduces
+    # to all-visible. Running the full history through the band mask
+    # prices a different SDPA kernel shape whose rounding drifts away
+    # from the reference.
+    let kvStart = kvSeqLen - self.window
+    k_full = k_full.narrow(1, kvStart, self.window)
+    v_full = v_full.narrow(1, kvStart, self.window)
+    attnMask = some(F.ones(1, 1, 1, self.window,
+      F.tensorOptions(F.kBool, q_rot.deviceType())))
+  else:
+    attnMask = some(windowedCausalMask(q_rot.size(1), kvSeqLen, offset,
+      self.window, q_rot.deviceType()))
+  var attn_out = self.gqa_attn.forward(q_rot, k_full, v_full,
+    is_causal = doCausal, attn_mask = attnMask)
+
+  if self.gProj.isSome():
+    # Per-head output scaling, the Laguna checkpoint spelling.
+    # The g_proj projection runs on the attention input, softplus
+    # computes in f32, one rounding back to the attention dtype, one
+    # scalar per head multiplies the attention output before o_proj.
+    let gate = F.softplus(
+      self.gProj.unsafeGet().forward(x).to(kFloat32)).to(attn_out.scalarType())
+    attn_out = (attn_out.reshape(
+        [batch, seq_len, self.gqa_attn.num_qo_head, self.gqa_attn.head_dim]) *
+      gate.unsqueeze(-1)).reshape([batch, seq_len, self.gqa_attn.qo_attn_dim])
 
   result = self.o_proj.forward(attn_out)
 

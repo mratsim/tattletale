@@ -1,57 +1,27 @@
 #!/usr/bin/env python3
-"""
-Qwen3.6-35B-A3B bf16-03 full-forward-to-logits fixtures, the complete
-embed -> 40 hybrid MoE decoder layers -> norm -> lm_head chain, recorded from the installed transformers modeling on CPU torch bf16.
+"""Tier-03 full-forward-to-logits fixture generator, Qwen3.6-35B-A3B,
+the complete embed through 40 hybrid MoE decoder layers plus norm and lm_head chain, CPU torch bf16,
 
-Generated under tests/fixtures/bf16-03-full-forward-to-logits/Qwen3.6-35B-A3B/:
+- consumer tests/q_bf16/t_bf16_qwen36moe_03_full_forward_to_logits.nim
+- no layer payload safetensor leaves the tree, the ttt-tf-004 stats frames carry the recorded surface
+- final_logits.decisions.json.zst carries the ttt-tf-005-argmax-decisions frame, one record per input position
 
-  - layer-{i:02d}.safetensor.metadata.json.zst, one per decoder layer i
-  - no layer payload safetensor leaves the tree, the 004 stats frames carry the recorded surface
-  - routing_weights records hold the sequential-run router renormalized routing weights ([seq_len, top_k], cast to the hidden dtype)
-  - the boundary input is the embedding output at layer 0, then the prior sequential layer output for layers 1+
-  - final_logits.decisions.json.zst carries the per-position decision records, the schema id lives in the `schema` key
-  - each decision record holds the argmax id, the top-32 set ids with f32 logits, the margin, the softmax tail probability
+- the routing_weights records hold the sequential-run router renormalized routing weights cast to the hidden dtype
 
-Run shape:
+- the chunked run is the installed forward, the sequential run swaps the GDN chunked rule for the recurrent rule
+- the expert dispatch is locked to `eager`, the Nim test asserts the routing_weights records and the projection decisions
+- every GDN layer recomputes value-identically from its recorded sequential input, the recorded norms and routed block
 
-  - the chunked run is the installed forward
-  - the sequential run replaces the GDN chunked rule with the installed recurrent rule at the modeling-module level
-  - so the whole chain runs the exact op sequence the Nim implementation mirrors
-  - the expert dispatch is locked to `eager`
-  - the default `from_pretrained` backend resolution picks `grouped_mm`, a different accumulation formulation
-  - the statistics-only emission keeps the metadata frames and the decisions frame
-  - every layer payload tensor is left under the FIXTURE_GENERATION.md tiering rules
-  - the Nim full-forward-to-logits test asserts the routing_weights records and the projection decisions
-  - the recorded seq-vs-chunked bands stay as metadata documentation
-  - the 0.8B full-forward fixtures of the same family keep the earlier shape
-  - run the command below twice, both run checksums must match before the fixtures are installed
+- `topk_margin_min` and the boundary-tie token count stay recorded metadata, never asserted positive
+- the out-of-scope prefixes `mtp.*` and `model.visual.*` are never read, `lm_head.weight` loads untied and asserted
+- the asserts prove embed_tokens and lm_head share no storage and no values
 
-Tolerances asserted here:
-
-  - the sequential run reproduces its records on a second execution
-  - every GDN layer recomputes value-identically from its recorded sequential input
-  - the recompute path is the installed norms, the recurrent core and routed block
-  - exact fp32 ties at the router top-k boundary are structural in this checkpoint, the tie order of `torch.topk` and sort disagrees
-  - `topk_margin_min` and the boundary-tie token count are recorded metadata, never asserted positive
-  - the sequential run records its `torch.topk` indices and routing weights as the recorded values
-  - the seq-vs-chunked bands stay inside the bounds below
-
-Weights flow through model.safetensors.index.json:
-
-  - the out-of-scope prefixes `mtp.*` (19 keys) and `model.visual.*` (333 keys) are never read
-  - `lm_head.weight` (file 26) loads as an independent untied parameter
-  - the assert suite below proves embed_tokens and lm_head share no storage and no values
+Regenerate from the worktree root, twice, both run checksums must agree:
 
   cd <worktree root> && .venv/bin/python workspace/transformers/tests/testgen/gen_bf16_qwen36moe_03_full_forward_to_logits.py
 
-One model-resident process globally:
-
-  - the full checkpoint carries about 70.2 GB of text-stack weights in bf16, plus the random-initialized draft and vision tower under 2 GB
-  - the script verifies a free+inactive+speculative pool above 32 GiB and that no other python/torch process runs before it loads anything
-  - weights materialize through the `from_pretrained` streaming loader, so the text stack never exists twice
-  - the floor formula (free + inactive + speculative) is the op RAM rule
-  - the constant is sized to the measured anonymous peak of this process
-  - the loader assigns mmap-backed storages, the 70 GB weight stack uses file-backed pages the OS evicts under pressure
+The run verifies a free+inactive+speculative pool above 32 GiB and no
+other python/torch process before it loads anything.
 """
 
 import json
@@ -173,25 +143,14 @@ LM_HEAD_KEYS = 1
 VISUAL_KEYS = 333
 MTP_KEYS = 19
 
-# GDN chunked-vs-recurrent band bounds:
+# GDN chunked-vs-recurrent band bounds, guards sized several times above
+# the measured seq-vs-chunked scale
 #
-# - on identical inputs the chunked and recurrent GDN cores agree within
-#   ~1e-8 f32, but through the bf16 layer boundaries the sub-ULP core
-#   differences flip bf16 rounding boundaries, then accumulate through the chain
-# - the accumulated band grows with the layer count and the hidden width, since the absolute bf16 ulp tracks residual stream magnitude
-# - the 24-layer, 1024-wide Qwen3.5-0.8B chain measured layer-level bands up to ~3.1e-2 and final logits up to ~0.17
-# - this 40-layer, 2048-wide chain runs about an order of magnitude higher
-# - first generation measured layer-level bands past 0.09 at layer 23, still growing
-# - the bounds below are guards sized several times above the expected scale,
-#   catching gross generator or checkpoint drift rather than the band itself,
-#   the true bands stay measured per run, recorded per layer in the metadata,
-#   with the Nim suite asserting against the recorded bands
-# - guard scale, measured first hand on the eager-experts evaluation
-#   run with the guards neutralized (stubbed saves), the seq-vs-chunked
-#   input band peaked 0.500000, the output band peaked 0.500000,
-#   the final logits band 0.8828125, both branches still on the bf16 grid
-# - the guards sit four to five times above the measured scale
-#   and the recorded per-layer bands stay the Nim-side contract
+# - the absolute bf16 ulp tracks the residual stream magnitude, the band
+#   grows with the layer count and the hidden width, the 40-layer
+#   2048-wide chain runs above the 24-layer Qwen3.5-0.8B bands
+# - the recorded per-layer bands stay the Nim-side contract, the guards
+#   catch gross generator or checkpoint drift, not the band itself
 INPUT_BAND_GUARD = 2.00
 OUTPUT_BAND_GUARD = 2.00
 LOGITS_BAND_GUARD = 4.00
@@ -199,11 +158,9 @@ LOGITS_BAND_GUARD = 4.00
 # Pool floor:
 #
 # - the floor formula stays the op RAM rule, free + inactive + speculative
-# - the constant is sized to the measured single-process footprint,
-#   this generator runs `from_pretrained` with mmap-backed storages, so
-#   the 70 GB weight stack sits on file-backed pages and the anonymous
-#   peak stays at a few GiB, measured at 2.2 GiB anon after load, before any forward
-# - 32 GiB keeps ample headroom beyond that measured peak
+# - the constant sits above the measured anonymous peak of this process
+#   (the mmap-backed `from_pretrained` loader keeps the 70 GB weight stack on file-backed pages)
+# - 32 GiB keeps ample headroom beyond that peak
 MIN_POOL_BYTES = 32 * 1024 ** 3
 
 
@@ -283,16 +240,14 @@ def load_wrapper_config() -> Qwen3_5MoeConfig:
 
 
 def build_model(cfg, weight_map: dict) -> Qwen3_5MoeForConditionalGeneration:
-    """Wrapper model from the real checkpoint of 26 safetensors files, bf16 eval on CPU, through the installed `from_pretrained` loader.
+    """Wrapper model from the real checkpoint of 26 safetensors files, bf16 eval
+    on CPU, through the installed `from_pretrained` loader.
 
-    - the loader streams per file with mmap-backed storages, weights
-      materialize per file, never the whole 70 GB twice
-    - the reference wrapper construction keeps its own lm_head at the outer
-      dtype and `from_pretrained` casts every checkpoint tensor
-      (all 1045 ship as bf16), so the untied head ends bf16 like the text stack
-    - the expert dispatch is locked to `eager`
-    - the rotary inv_freq buffers are restored in f32 after the blanket cast,
-      the reference rotary forward computes cos and sin in f32, bf16 storage would round the frequency values
+    - the loader streams per file with mmap-backed storages, weights materialize per file, never the whole 70 GB twice
+    - the reference wrapper construction keeps its own lm_head at the outer dtype, `from_pretrained` casts every checkpoint tensor
+    - all 1045 tensors ship as bf16, the untied head ends bf16 like the text stack
+
+    - the expert dispatch is locked to `eager`, the rotary inv_freq buffers are restored in f32 after the blanket cast
 
     Raises SystemExit when the head shares storage or values with the embedding,
     or when the loaded head disagrees with the raw file-26 `lm_head.weight` tensor.

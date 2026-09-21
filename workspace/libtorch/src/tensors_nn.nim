@@ -39,10 +39,41 @@ wrapLibtorch:
 
   proc silu_mut*(input: var Tensor)
 
+  func gelu*(input: Tensor, approximate: static string = "none"): Tensor {.inline.} =
+    ## GELU activation, fused-kernel rounding per mode:
+    ##
+    ## Args:
+    ## - `approximate` selects the formulation
+    ## - "none" (default) is the exact erf formulation ``x * Phi(x)``
+    ## - "tanh" is ``0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))``
+    ##
+    ## Both spellings call the backend's fused per-dtype kernel, the same op
+    ## the reference runtimes execute, so a bf16 input keeps fused kernel rounding.
+    ##
+    ## Example:
+    ##   let y = gelu(x, "tanh")
+    privateAccess(Tensor)
+    convertLibTorchExceptions:
+      when approximate == "none":
+        wrapTorchTensor:
+          F.gelu(input.raw)
+      elif approximate == "tanh":
+        wrapTorchTensor:
+          F.geluTanh(input.raw)
+      else:
+        {.error: "unsupported GELU approximation: " & approximate.}
+
   func sigmoid*(input: Tensor): Tensor
     ## Sigmoid activation function: ``1 / (1 + exp(-x))``
 
   proc sigmoid_mut*(input: var Tensor)
+
+  func tanh*(input: Tensor): Tensor {.inline.} =
+    ## Hyperbolic tangent of `input`, elementwise
+    ## ``(exp(x) - exp(-x)) / (exp(x) + exp(-x))``, preserving the shape.
+    convertLibTorchExceptions:
+      wrapTorchTensor:
+        F.tanh(input.raw)
 
   func softplus*(input: Tensor, beta: float64 = 1.0, threshold: float64 = 20.0): Tensor
     ## Softplus activation: ``log(1 + exp(beta * x)) / beta``, linear above
