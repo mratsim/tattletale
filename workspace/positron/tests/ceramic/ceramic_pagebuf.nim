@@ -22,8 +22,9 @@ const HostPageSize* = 16384  ## Metal no-copy binding alignment
 
 type PageBuf*[T] = object
   ## Page-aligned buffer over owned storage.
-  ## - `elems` is the stored element count, the byte extent rounds up to a `HostPageSize` multiple
-  ## - bytes past the logical extent stay untouched scratch by the kernel
+  ## - `elems` covers the requested extent plus the guaranteed tail page, the byte
+  ##   extent rounds up to a `HostPageSize` multiple
+  ## - the kernel's writes stay inside the caller's requested extent, bytes past the extent stay zero scratch
   data*: pointer
   elems*: int
 
@@ -32,8 +33,15 @@ proc posixMemalign(memptr: ptr pointer; alignment, size: csize_t): cint
 proc freeShared(p: pointer) {.importc: "free", header: "<stdlib.h>".}
 
 proc allocPageBuf*[T](elems: int): PageBuf[T] =
-  ## Page-aligned zero-filled buffer, byte extent rounded up to a `HostPageSize` multiple (posix_memalign does not zero).
-  let nbytes = elems * sizeof(T)
+  ## Page-aligned zero-filled buffer, byte extent rounded up to a `HostPageSize` multiple
+  ## (posix_memalign does not zero), plus one full page of zero tail beyond the extent.
+  ##
+  ## Contract:
+  ## - an extent that is itself page-exact would otherwise round to its own byte length,
+  ##   leaving `assertTailZero` an empty tail on exactly-page-sized buffers
+  ## - the tail page keeps the sentinel teeth without changing the kernel-visible addresses,
+  ##   the binding byte length stays a `HostPageSize` multiple
+  let nbytes = (elems + HostPageSize div sizeof(T)) * sizeof(T)
   let rounded = (nbytes + HostPageSize - 1) div HostPageSize * HostPageSize
   var p: pointer = nil
   doAssert posixMemalign(addr p, csize_t(HostPageSize), csize_t(rounded)) == 0

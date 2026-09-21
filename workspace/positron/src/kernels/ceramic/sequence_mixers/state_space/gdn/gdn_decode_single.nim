@@ -23,6 +23,10 @@
 ## | batch        | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                 |
 ## | decay / q̃   | exp2(g·log2e), log2e = 1.4426950408889634'f32, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
 ##
+## Design provenance:
+##   ported from the WIP spelling state_space/gdn/gdn_decode_single.nim
+##   in the 20260912-positron-taxonomy worktree, kernel design mined, test shapes not carried over
+##
 ## - Entries are consumer-side, a `metal:` block wraps the grid-driven proc with concrete
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
 ## - The engine's monomorphization key erases static bindings, calls sharing a call-site line collapse into one body

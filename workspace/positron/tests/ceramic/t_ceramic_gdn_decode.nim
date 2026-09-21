@@ -270,9 +270,8 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
           let dDelta = betaF[bh].float64 * (2.0 * dk.float64 * U32 * kvAbs) +
             2.0 * U32 * betaF[bh].float64 *
               (abs(vF[bh * Dv + r].float64) + abs(kvN)) + 2.0 * U32 * abs(d)
-          let deltaErr = betaF[bh].float64 * (kvProp + 2.0 * dk.float64 * U32 * kvAbs) +
-            2.0 * U32 * betaF[bh].float64 *
-              (abs(vF[bh * Dv + r].float64) + abs(kvN)) + 2.0 * U32 * abs(d)
+          # the chain recursion's carried-error term, |k_dkc|·β·Σ_c abs(k_c)·exp(g)·ΔS_t[r, c]
+          let deltaErr = betaF[bh].float64 * kvProp
           for c in 0 ..< dk:
             let idx = (bh * Dv + r) * dk + c
             let a = abs(gamma * stateN[idx].float64)
