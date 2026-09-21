@@ -54,6 +54,10 @@ proc main(): bool =
   let model = loadModel($ModelPath, testDevice())
   echo "Model loaded."
   let device = model.getDeviceKind()
+  # Composed depth of one full-stack forward, the depth the 03 suite
+  # carries for this model's final logits, the prefill row and every
+  # decode step alike.
+  let chainDepth = model.getConfig().num_hidden_layers
   for f in GreedyFixtureFiles:
     echo "Fixture: " & f
     let fixture = parseJson(zstdReadFixture(FixtureDir / f))
@@ -79,12 +83,8 @@ proc main(): bool =
     var row = nextStepRow(logits, ids.len - 1)
 
     for step in 0 ..< horizon:
-      # Step 0 decides off the whole-prompt prefill row, a head decision
-      # over the full chain, the allowance carries the layer count the way
-      # the tier-03 final-logits rows do, decode steps keep one pass.
-      let stepDepth = if step == 0: model.getConfig().num_hidden_layers else: 1
       assertArgMax(row, decisionsPath, step, kReduction, flipCount,
-        msg = name & " step " & $step, depth = stepDepth)
+        msg = name & " step " & $step, depth = chainDepth)
       # The recorded token is teacher-forced at every step, so a tie
       # flip stays recorded and every following check must re-converge.
       let chosen = expected[step]

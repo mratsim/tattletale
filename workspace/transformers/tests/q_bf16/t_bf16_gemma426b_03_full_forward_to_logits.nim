@@ -97,11 +97,12 @@ proc main(): bool =
     x = (h1 + post) * model.layerScalars[layerIdx]
 
     # The scaled layer output feeds the next block directly, the last
-    # layer's output is the recorded layer_output_seq.
+    # layer's output is the recorded layer_output_seq. Composed depth =
+    # the layers composed so far, N layers at the N-block boundary.
     if layerIdx < model.config.num_hidden_layers - 1:
-      assertStats(x, FixtureDir / ("layer-" & ($(layerIdx + 1)).align(2, '0') & ".safetensor.stats"), "layer_input_seq", kReduction, depth = 2, msg = "layer " & $layerIdx & " scaled output, chained input")
+      assertStats(x, FixtureDir / ("layer-" & ($(layerIdx + 1)).align(2, '0') & ".safetensor.stats"), "layer_input_seq", kReduction, depth = layerIdx + 1, msg = "layer " & $layerIdx & " scaled output, chained input")
     else:
-      assertStats(x, FixtureDir / ("layer-" & ($layerIdx).align(2, '0') & ".safetensor.stats"), "layer_output_seq", kReduction, depth = 2, msg = "layer " & $layerIdx & " scaled output")
+      assertStats(x, FixtureDir / ("layer-" & ($layerIdx).align(2, '0') & ".safetensor.stats"), "layer_output_seq", kReduction, depth = model.config.num_hidden_layers, msg = "layer " & $layerIdx & " scaled output")
 
   let normed = model.norm.forward(x)
   var finalLogits = model.lmHead.forward(normed)

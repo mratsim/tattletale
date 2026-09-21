@@ -87,7 +87,11 @@ proc main(): bool =
     # the layers 1+ inputs are the previous block output plus
     # its residual, a row fed by the whole composing chain, the reduction class.
     let inputKind = if layerIdx == 0: kElementwise else: kReduction
-    assertStats(nimInput, FixtureDir / ("layer-" & ($layerIdx).align(2, '0') & ".safetensor.stats"), "layer_input_seq", inputKind, msg = "layer " & $layerIdx & " boundary input")
+    # Composed depth = the layers composed so far, the boundary after N
+    # blocks carries N composed layers, the same derivation the tier-03
+    # dense suites carry.
+    assertStats(nimInput, FixtureDir / ("layer-" & ($layerIdx).align(2, '0') & ".safetensor.stats"), "layer_input_seq", inputKind,
+      depth = max(1, layerIdx), msg = "layer " & $layerIdx & " boundary input")
 
     ctx.kv_position = 0
     # Dual-theta rope, each layer kind ropes with its own table.
@@ -103,9 +107,11 @@ proc main(): bool =
     # layer's sum is the recorded layer_output_seq.
     let nimSum = output + newResidual
     if layerIdx < model.layers.len - 1:
-      assertStats(nimSum, FixtureDir / ("layer-" & ($(layerIdx + 1)).align(2, '0') & ".safetensor.stats"), "layer_input_seq", kReduction, msg = "layer " & $layerIdx & " output plus residual, chained input")
+      assertStats(nimSum, FixtureDir / ("layer-" & ($(layerIdx + 1)).align(2, '0') & ".safetensor.stats"), "layer_input_seq", kReduction,
+        depth = layerIdx + 1, msg = "layer " & $layerIdx & " output plus residual, chained input")
     else:
-      assertStats(nimSum, FixtureDir / ("layer-" & ($layerIdx).align(2, '0') & ".safetensor.stats"), "layer_output_seq", kReduction, msg = "layer " & $layerIdx & " output plus residual")
+      assertStats(nimSum, FixtureDir / ("layer-" & ($layerIdx).align(2, '0') & ".safetensor.stats"), "layer_output_seq", kReduction,
+        depth = model.layers.len, msg = "layer " & $layerIdx & " output plus residual")
 
     hidden = output
     residual = some(newResidual)
