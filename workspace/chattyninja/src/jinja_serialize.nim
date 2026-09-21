@@ -136,8 +136,8 @@ func reprQuoted(sb: var Cursor, s: string) =
 
 func pyReprInto(sb: var Cursor, v: JinjaVal, depth: int) =
   ## Writes Python's `repr()` of `v` into `sb`, one level per container, `depth`
-  ## counting toward `ValueDepthCap` and raising located past it, which is what
-  ## closes deep and cyclic value graphs on the recursive repr path.
+  ## counting toward `ValueDepthCap` and raising with `NoOffset` past it, which is
+  ## what closes deep and cyclic value graphs on the recursive repr path.
   if depth > ValueDepthCap:
     raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
         " cannot be serialized")
@@ -287,13 +287,14 @@ func serFinish(js: var Ser) =
 
 func serDispatch(js: var Ser) =
   ## Renders the value in `v`, one literal or string body at a time.
-  ## Each container frame pushed below counts the value-graph depth toward
-  ## `ValueDepthCap`, a breach raising located:
-  ## - deeply nested data raises a located `JinjaError` past the cap
+  ## Each container stack entry pushed below counts the value-graph depth toward
+  ## `ValueDepthCap`, a breach raising a `JinjaError` with `NoOffset`, `Ser`
+  ## carrying no template location:
+  ## - deeply nested data raises past the cap
   ## - a cyclic graph, whose nesting is unbounded, raises the same way
   let v = js.v
   template capDepth =
-    ## One open container frame per nesting level.
+    ## One open container stack entry per nesting level.
     if js.stack.len >= ValueDepthCap:
       raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
           " cannot be serialized")

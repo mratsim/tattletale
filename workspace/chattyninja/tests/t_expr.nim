@@ -548,6 +548,26 @@ doAssert render("5 in range(0, 10)") == "True"
 doAssert render("5.0 in range(0, 10)") == "True", "a float needle matches by rounding"
 doAssert render("5 in range(0, 10, 2)") == "False", "an off-stride int is absent"
 doAssert render("5 in range(9, -1, -1)") == "True", "a backward range contains by its stride"
+doAssert render("6.0 in range(9, -1, -1)") == "True",
+    "a float needle matches on a backward walk, its monotone direction honored"
+doAssert render("5.0 in range(9, -1, -1)") == "True", "a float needle hits a backward element"
+doAssert render("2.5 in range(9, -1, -1)") == "False",
+    "an off-stride float is absent from a backward range"
+try:
+  discard render("5 in range(0, 4611686018427387904)")
+  doAssert false, "an overflow-scale membership did not raise"
+except JinjaError as e:
+  doAssert "RangeElemCap" in e.what, e.what
+try:
+  discard render("range(0, 4611686018427387904) == range(0, 4611686018427387903)")
+  doAssert false, "an overflow-scale equality did not raise"
+except JinjaError as e:
+  doAssert "RangeElemCap" in e.what, e.what
+try:
+  discard render("range(-9223372036854775807, 0) | length")
+  doAssert false, "a negative-extreme span did not raise"
+except JinjaError as e:
+  doAssert "RangeElemCap" in e.what, e.what
 doAssert render("0 in range(0, 0)") == "False", "an empty range contains nothing"
 doAssert render("range(0, 6, 2) == range(0, 5, 2)") == "True",
     "equal progressions compare equal past their differing bounds"

@@ -31,9 +31,10 @@ const
     ## Recursion bound over the value graph fed host-provided data:
     ## - deepest corpus context nesting is single digits, 1000 clearing it
     ##   with margin and staying far below the C stack depth
-    ## - every value-graph walker counts levels toward the cap and raises
-    ##   a located `JinjaError` on breach, the walkers being `eqVal`,
-    ##   `containsVal` and the serializer's container frames
+    ## - every value-graph walker counts levels toward the cap and raises a `JinjaError` on breach
+    ## - `eqVal` and `containsVal` raise located at the caller's template position,
+    ##   the serializer raising `NoOffset`, it carrying no template location
+    ## - the walkers are `eqVal`, `containsVal` and the serializer's container stack entries
     ## - cyclic graphs raise the same way, their nesting unbounded
 
 const
@@ -382,8 +383,8 @@ func rangeContains(r: RangeVal, needle: JinjaVal): bool =
   ##   splitting the stride exactly, the offset and the stride magnitude
   ##   comparing in unsigned space so extreme bounds wrap nothing
   ## - a float needle matches the element whose rounding equals it, the equality
-  ##   of the float cross-tier `==`, the match found by binary search over the
-  ##   monotone element rounding
+  ##   of the float cross-tier `==`, the match found by a direction-aware binary
+  ##   search over the monotone element walk
   ## - every other needle kind fails the element `==`, elements being ints
   if needle.kind == vkInt:
     if r.step == 0:
@@ -404,14 +405,17 @@ func rangeContains(r: RangeVal, needle: JinjaVal): bool =
     let n = rangeLen(r)
     if n == 0:
       return false
-    # Leftmost index whose element rounds to `needle.f` or beyond, valid since
-    # element rounding is nondecreasing in the index, a distinct int per element
-    # with a nonzero step.
+    # Leftmost index whose element rounds onto the needle's side of the walk.
+    # Elements move monotonically with the step's direction, a distinct int per
+    # element with a nonzero step, so the search compares in the step's direction:
+    # - forward, the first element rounded at or above the needle
+    # - backward, the first element rounded at or below the needle
     var a = 0
     var b = n
     while a < b:
       let m = (a + b) div 2
-      if rangeAt(r, m).i.float64 >= needle.f:
+      let e = rangeAt(r, m).i.float64
+      if (e >= needle.f and r.step > 0) or (e <= needle.f and r.step < 0):
         b = m
       else:
         a = m + 1
@@ -506,15 +510,15 @@ func sameBytes(x, y: openArray[char]): bool =
       return false
   true
 
-func eqValAt(a, b: JinjaVal, depth: int): bool =
+func eqValAt(a, b: JinjaVal, depth: int, offset: int): bool =
   ## `eqVal` recursion core, `depth` the container levels entered so far, counting
-  ## toward `ValueDepthCap` and raising a located `JinjaError` when the graph nests
-  ## past it:
+  ## toward `ValueDepthCap`, the graph nesting past it raising a located
+  ## `JinjaError` at `offset`:
   ## - data deeper than the cap
   ## - a value-graph cycle, whose comparison otherwise runs off the C stack
   if depth > ValueDepthCap:
     raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
-        " cannot be compared")
+        " cannot be compared", offset)
   if a.kind == vkUndefined or b.kind == vkUndefined:
     return a.kind == vkUndefined and b.kind == vkUndefined
   if a.kind == vkBool and b.kind == vkBool:
@@ -543,7 +547,7 @@ func eqValAt(a, b: JinjaVal, depth: int): bool =
     if a.xs.items.len != b.xs.items.len:
       return false
     for i, x in a.xs.items:
-      if not eqValAt(x, b.xs.items[i], depth + 1):
+      if not eqValAt(x, b.xs.items[i], depth + 1, offset):
         return false
     true
   of vkDict, vkNs:
@@ -553,7 +557,7 @@ func eqValAt(a, b: JinjaVal, depth: int): bool =
     if a.d.keys.len != b.d.keys.len:
       return false
     for i, k in a.d.keys:
-      if not eqValAt(a.d.vals[i], b.d.dictGet(k), depth + 1):
+      if not eqValAt(a.d.vals[i], b.d.dictGet(k), depth + 1, offset):
         return false
     true
   of vkLoop: a.lp == b.lp
@@ -565,14 +569,14 @@ func eqValAt(a, b: JinjaVal, depth: int): bool =
   of vkCut: false
   of vkUndefined, vkBool, vkInt, vkFloat: false
 
-func eqVal*(a, b: JinjaVal): bool =
+func eqVal*(a, b: JinjaVal, offset = NoOffset): bool =
   ## Returns Jinja `==`:
   ## - numbers compare across tiers, containers element-wise, undefined
   ##   equaling only undefined
   ## - a shared container payload equals itself
-  ## - a value graph nesting past `ValueDepthCap` raises, never running off
-  ##   the C stack
-  eqValAt(a, b, 0)
+  ## - a value graph nesting past `ValueDepthCap` raises at `offset`,
+  ##   never running off the C stack
+  eqValAt(a, b, 0, offset)
 
 func cmpVal*(a, b: JinjaVal): int =
   ## Returns -1, 0 or 1 for an ordering comparison, numbers ordering numerically, text ordering
@@ -598,19 +602,19 @@ func substringOf(needle, haystack: openArray[char]): bool =
       return true
   false
 
-func containsValAt(haystack, needle: JinjaVal, depth: int): bool =
+func containsValAt(haystack, needle: JinjaVal, depth: int, offset: int): bool =
   ## `containsVal` recursion core, `depth` counting toward `ValueDepthCap` exactly
-  ## as `eqValAt` does:
-  ## the scan enters each container level of the haystack through the element `==`.
+  ## as `eqValAt` does, the breach raising a `JinjaError` located at `offset`.
+  ## Each container level of the haystack is entered through the element `==`.
   if depth > ValueDepthCap:
     raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
-        " cannot be scanned")
+        " cannot be scanned", offset)
   let haystack = if haystack.kind == vkCut: materializeVal(haystack) else: haystack
   let needle = if needle.kind == vkCut: materializeVal(needle) else: needle
   result = case haystack.kind
   of vkSeq:
     for x in haystack.xs.items:
-      if eqValAt(x, needle, depth + 1):
+      if eqValAt(x, needle, depth + 1, offset):
         return true
     false
   of vkDict, vkNs:
@@ -621,13 +625,13 @@ func containsValAt(haystack, needle: JinjaVal, depth: int): bool =
   else:
     raise jinjaErr("`in` needs a sequence, mapping or string on the right, got " & $haystack.kind)
 
-func containsVal*(haystack, needle: JinjaVal): bool =
+func containsVal*(haystack, needle: JinjaVal, offset = NoOffset): bool =
   ## Returns Jinja `in`:
   ## - membership for sequences, keys for mappings, substring for strings
   ## - arithmetic membership for a lazy range
-  ## - a value graph nesting past `ValueDepthCap` raises, never running off
-  ##   the C stack
-  containsValAt(haystack, needle, 0)
+  ## - a value graph nesting past `ValueDepthCap` raises at `offset`,
+  ##   never running off the C stack
+  containsValAt(haystack, needle, 0, offset)
 
 func stripSpan*(s, chars: openArray[char], left, right: bool): tuple[a, b: int] =
   ## Returns the byte range of `s` that survives stripping the leading and/or trailing

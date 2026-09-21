@@ -1019,11 +1019,12 @@ func arith(op: Op, a, b: JinjaVal): JinjaVal =
   else:
     raise jinjaErr("unknown arithmetic `" & OpSpelling[op] & "`")
 
-func cmpOne(op: Op, a, b: JinjaVal): JinjaVal =
+func cmpOne(op: Op, a, b: JinjaVal, at: int): JinjaVal =
+  ## `at` locates the depth-cap raise a container-heavy comparison can carry.
   let r =
     case op
-    of opEq: eqVal(a, b)
-    of opNe: not eqVal(a, b)
+    of opEq: eqVal(a, b, at)
+    of opNe: not eqVal(a, b, at)
     of opLt: cmpVal(a, b) < 0
     of opGt: cmpVal(a, b) > 0
     of opLe: cmpVal(a, b) <= 0
@@ -1031,7 +1032,7 @@ func cmpOne(op: Op, a, b: JinjaVal): JinjaVal =
     else: raise jinjaErr("unknown comparison `" & OpSpelling[op] & "`")
   boolVal(r)
 
-func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: Op): JinjaVal =
+func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
   ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
   ## infix evaluating both sides. `and` and `or` render a pending macro call on the left
   ## before the truth test, a boolean position reading the output's bytes.
@@ -1053,7 +1054,7 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
     if cx.dry:
       undefinedVal()
     else:
-      let r = containsVal(rhs, lhs)
+      let r = containsVal(rhs, lhs, opLo)
       boolVal(if op == opIn: r else: not r)
   of opConcat:
     let rhs = expr(tmpl, ports, cx, 7)
@@ -1067,7 +1068,7 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
     gapWhat("operator", OpSpelling[op])
   else:
     let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
-    if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs)
+    if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs, opLo)
 
 func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
   ## Reports whether a depth-zero `if` survives in `tmpl.jinja[at..<stop)`. Byte scan, not a parse.
@@ -1194,8 +1195,9 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
         break
       if v.kind == vkCall:
         v = forceCall(ports, cx, v)
+      let opLo = cx.tok.lo # the operator token, still current here
       advance(tmpl, cx)
-      v = binOp(tmpl, ports, cx, v, op)
+      v = binOp(tmpl, ports, cx, v, op, opLo)
   dec cx.depth
   v
 
