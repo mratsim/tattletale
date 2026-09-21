@@ -94,8 +94,9 @@ type
     stack: seq[SerFrame]
       ## open containers, outermost first
     concatTail: seq[JinjaVal]
-      ## remaining operands of a str-mode `~` tree in render order, each dispatching
-      ## when the previous operand's rendering completes
+      ## operands of a str-mode `~` tree, taken over whole at reset, never sliced
+    concatPos: int
+      ## index of the next `concatTail` operand after the leaf in `v`
     closeSeq: bool
       ## the `spClose` phase writes a sequence bracket, else a mapping bracket
 
@@ -254,8 +255,9 @@ func serFinish(js: var Ser) =
   ## Closes the value just rendered. The enclosing container advances to its next entry,
   ## nested containers closing outward, the rendering completing once the stack empties.
   if js.stack.len == 0:
-    if js.concatTail.len > 0:
-      js.v = js.concatTail.pop()
+    if js.concatPos < js.concatTail.len:
+      js.v = move js.concatTail[js.concatPos]
+      inc js.concatPos
       js.phase = spDispatch
       return
     js.phase = spDone
@@ -469,13 +471,14 @@ func serReset*(js: var Ser, v: sink JinjaVal, mode: SerMode, opts = JsonOpts()) 
   js.closeSeq = false
   js.stack.setLen(0)
   js.concatTail.setLen(0)
+  js.concatPos = 0
   if mode == smStr and v.kind == vkConcat:
-    let leaves = v.xs.items
-    js.v = leaves[0]
-    js.concatTail = leaves[1 ..< leaves.len]
-    # reversed in place, so `pop` hands the operands over in render order
-    for i in 0 ..< (leaves.len - 1) div 2:
-      swap(js.concatTail[i], js.concatTail[leaves.len - 2 - i])
+    # Operand stack taken over whole, the cursor walks it by index, leaf 0
+    # dispatched directly and 1 onward after each completion, render order
+    # with no sliced copy.
+    js.concatTail = v.xs.items
+    js.v = js.concatTail[0]
+    js.concatPos = 1
   else:
     js.v = move v
 

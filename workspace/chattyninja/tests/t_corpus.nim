@@ -521,8 +521,9 @@ doAssert arena.len == 2, "the arena moved by assignment with no reference left b
 # 400 = 368 + 8 for the JinjaVal cut variant,
 # 8 for the serializer's raw-body end bound, 8 for realignment,
 # 8 for the pending cut piece, whose string descriptor reuses the string branch's slot
-# and whose two byte bounds widen the variant payload to 24 bytes, +8 after realignment.
-doAssert sizeof(RenderState) == 400, "RenderState is a plain value type"
+# and whose two byte bounds widen the variant payload to 24 bytes, +8 after realignment,
+# 8 for the serializer's concat cursor over the moved operand stack.
+doAssert sizeof(RenderState) == 408, "RenderState is a plain value type"
 
 # The equality must reject a one-byte change, since a comparison that cannot fail makes
 # the corpus walk vacuous.

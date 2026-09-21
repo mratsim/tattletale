@@ -584,10 +584,10 @@ func capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) 
     copyMem(addr outp[at], unsafeAddr tmpl.jinja[int st.pend.lo + st.pend.pos], n)
     st.pend = Piece(kind: pkNone)
   of pkStr:
-    outp.add st.pend.s[st.pend.pos ..< st.pend.s.len]
+    addView(outp, st.pend.s.toOpenArray(st.pend.pos, st.pend.s.len - 1))
     st.pend = Piece(kind: pkNone)
   of pkCut:
-    outp.add st.pend.raw[st.pend.clo + st.pend.pos ..< st.pend.chi]
+    addView(outp, st.pend.raw.toOpenArray(st.pend.clo + st.pend.pos, st.pend.chi - 1))
     st.pend = Piece(kind: pkNone)
   of pkLazy:
     var buf: array[CaptureDrainCap, char]

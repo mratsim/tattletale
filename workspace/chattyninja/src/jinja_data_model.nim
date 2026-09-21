@@ -200,6 +200,22 @@ func spanString*(s: openArray[char]): string =
   if s.len > 0:
     copyMem(addr result[0], unsafeAddr s[0], s.len)
 
+func addView*(outp: var string, view: openArray[char]) =
+  ## Appends the bytes of `view` to `outp`, one grow and one copy, no intermediate
+  ## string. The string-side counterpart of `Cursor.add(openArray[char])`.
+  ##
+  ## Args:
+  ## - `view` is read where it lives, nothing materialized
+  ## - `outp` grows once, by `view.len`
+  ##
+  ## ``addView(acc, s.toOpenArray(lo, hi))`` appends the span `s` holds
+  ## between `lo` and `hi` without building a slice.
+  if view.len == 0:
+    return
+  let at = outp.len
+  outp.setLen(at + view.len)
+  copyMem(addr outp[at], unsafeAddr view[0], view.len)
+
 func windowOverflow(sb: Cursor, need: int) {.noreturn.} =
   ## Raises the overflow an append reports when the window cannot hold the bytes,
   ## the capacity and shortfall named in the message.
