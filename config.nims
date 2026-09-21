@@ -185,7 +185,7 @@ task test_chattyninja, "Test workspace/chattyninja template engine suites":
     runCmd(chattyninjaCmd("t_parse.nim", ""))
     runCmd(chattyninjaCmd("t_expr.nim", ""))
     runCmd(chattyninjaCmd("t_corpus.nim", " -d:nimAllocStats -d:ChunkSize=7"))
-    # The StepBudget arm: the suite's own `-d:StepBudget=32` block pins the
+    # The StepBudget arm: the suite's own `-d:StepBudget=32` block asserts the
     # step-counter backstop's raise and quits before the full tier runs.
     runCmd(chattyninjaCmd("t_expr.nim", " -d:StepBudget=32"))
 

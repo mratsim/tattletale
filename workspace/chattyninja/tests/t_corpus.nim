@@ -669,6 +669,33 @@ block corpusDelivery:
   doAssert gapRows == 13, "expected 13 gap rows across 18 suites, skipped " & $gapRows
   doAssert errRaised == 16, "expected 16 err rows, checked " & $errRaised
 
+# Window-capacity contract of the delivery `Cursor`:
+#   an append the window cannot hold raises the located `ceWindow` error naming
+#   capacity and shortfall, writing nothing
+# the measuring cursor counts without touching storage, no raise past any size
+block windowContract:
+  var small: array[4, char]
+  var sb = over(small)
+  try:
+    sb.add "hello"
+    doAssert false, "an append past the window capacity did not raise"
+  except JinjaError as e:
+    doAssert "render window capacity 4 exceeded, 1 more bytes needed" in e.what, e.what
+  doAssert sb.len == 0, "the overflowing append wrote nothing, the check preceding the copy"
+  # 4 bytes fit exactly, the whole capacity usable.
+  var sb2 = over(small)
+  sb2.add "abcd"
+  doAssert sb2.len == 4
+  try:
+    sb2.add 'e'
+    doAssert false, "a one-byte append at full capacity did not raise"
+  except JinjaError as e:
+    doAssert "render window capacity 4 exceeded, 1 more bytes needed" in e.what, e.what
+  # A measuring cursor answers the byte count without storage, no raise past any size.
+  var measure = measureBuf()
+  measure.add "hello"
+  doAssert measure.len == 5
+
 # Boundary shapes of the delivery window on one corpus row.
 # Oversized, exact-size, 1-byte and stop-then-resume windows all deliver the recorded bytes.
 # ---------------------------------------------------------------------------

@@ -37,8 +37,6 @@ func ctx(pairs: varargs[(string, JinjaVal)]): JinjaVal =
 # call past 32 dispatches raises located. This variant runs alone and quits.
 # Compilations without the define run a 1M budget, the full expression tier.
 when StepBudget == 32:
-  static:
-    doAssert StepBudget == 32
   var raised = ""
   try:
     discard renderStmt("{% for x in range(64) %}{{ x }}{% endfor %}")
@@ -46,7 +44,6 @@ when StepBudget == 32:
   except JinjaError as e:
     raised = e.what
   doAssert "StepBudget = 32" in raised, raised
-  doAssert raised != "" and raised.len > 0
 
   # A macro body forced for capture walks its own dispatch loop, so it carries
   # the same budget as `pull`, and a 64-iteration for inside a forced body
@@ -60,7 +57,7 @@ when StepBudget == 32:
     raised = e.what
   doAssert "StepBudget = 32" in raised, raised
   doAssert "macro force" in raised, raised
-  echo "t_expr: StepBudget bite pin ok"
+  echo "t_expr: the 32-step budget raise observed on pull and macro force"
   quit(0)
 
 let people = ctx(
@@ -317,6 +314,31 @@ doAssert renderStmt(
     "{% set r = m(2) %}{{ r }}") == "[2][1]!!",
     "a recursive same-macro emit call inside a forced capture keeps the outer body running"
 
+# Macro call nesting is capped at MacroDepthCap, a self-calling macro chaining one
+# depth level per call.
+# 16 nested calls render.
+# 17 nested calls raise on both entry paths:
+#   the streamed emit call, located at the call site
+#   the forced set call
+block macroDepthCap:
+  let emitChain = "{% macro m(n) %}{% if n > 0 %}{{ m(n - 1) }}{% endif %}!{% endmacro %}"
+  doAssert renderStmt(emitChain & "{{ m(15) }}") == "!".repeat(16),
+      "16 nested emit calls render within the cap"
+  try:
+    discard renderStmt(emitChain & "{{ m(16) }}")
+    doAssert false, "a 17-call emit chain stayed under MacroDepthCap"
+  except JinjaError as e:
+    doAssert "macro nesting reached MacroDepthCap = 16 on `m`" in e.what, e.what
+
+  let forceChain = "{% macro m(n) %}{% if n > 0 %}{% set r = m(n - 1) %}{% endif %}!{% endmacro %}"
+  doAssert renderStmt(forceChain & "{% set r = m(15) %}{{ r }}") == "!",
+      "16 nested forced calls render within the cap, the set binding one capture deep"
+  try:
+    discard renderStmt(forceChain & "{% set r = m(16) %}{{ r }}")
+    doAssert false, "a 17-call forced chain stayed under MacroDepthCap"
+  except JinjaError as e:
+    doAssert "macro nesting reached MacroDepthCap = 16 on `m`" in e.what, e.what
+
 # Macro-argument binding raises where upstream raises:
 #   a positional past the parameter list, a positional after a keyword,
 #   a keyword naming no parameter, a keyword repeating a bound one.
@@ -524,6 +546,21 @@ doAssert render("'abc'.endswith('bc')") == "True"
 doAssert render("'  x '.strip()") == "x"
 doAssert render("'  x'.lstrip()") == "x"
 doAssert render("'x  '.rstrip()") == "x"
+# A cut value, the deferred string span the strip family returns, routes through
+# every text consumer byte-exact with its materialized string.
+# Equality spans the sub-span in place.
+# Ordering, containment, subscript and tojson materialize.
+# Container reprs stream the surviving span.
+doAssert render("'  a  '.strip() == 'a'") == "True"
+doAssert render("'  a  '.strip() == '  b  '.strip()") == "False"
+doAssert render("'  a  '.strip() != 'b'") == "True"
+doAssert render("'  b  '.strip() > 'a'") == "True"
+doAssert render("'  a  '.strip() in 'xay'") == "True"
+doAssert render("'  abc  '.strip()[1]") == "b"
+doAssert renderStmt("{% for c in '  ab  '.strip() %}[{{ c }}]{% endfor %}") == "[a][b]",
+    "a for over a cut iterates its surviving span"
+doAssert render("['  a  '.strip()]") == "['a']", "a container repr streams a cut's span"
+doAssert render("'  x  '.strip() | tojson") == "\"x\""
 doAssert render("[3, 1, 2] | list") == "[3, 1, 2]"
 # `map` is a declared filter name with no corpus site, so reaching it must report the gap
 # rather than answer wrongly or silently.
@@ -662,6 +699,18 @@ except JinjaError as e:
 # Depth caps:
 #   every recursion leg counts toward ExprDepthCap, dry walks and unary chains included.
 #   Deep nesting raises located before the C stack runs out.
+
+# Paren boundary sits exactly at the cap.
+# Every emit entry counts one level, each paren group one more:
+# 23 groups reach depth 24 and render.
+# 24 groups reach depth 25 and raise located.
+doAssert render("(".repeat(23) & "1" & ")".repeat(23)) == "1",
+    "paren nesting reaching the cap renders"
+try:
+  discard render("(".repeat(24) & "1" & ")".repeat(24))
+  doAssert false, "paren nesting one past the cap rendered instead of raising"
+except JinjaError as e:
+  doAssert "ExprDepthCap" in e.what, e.what
 
 doAssert render("not not not not not not not not not not 1") == "True",
     "a unary chain within the cap renders"
