@@ -86,6 +86,82 @@ proc pinRouter() =
   doAssert got.w[1] == want1, &"w[1] {got.w[1]} want {want1}"
   echo "[router] ok"
 
+proc pinDenseLinear() =
+  ## N = 3, K = 2 exact rows: [1, 0] reads 1, [0, 1] reads 2,
+  ## [0.5, 0.5] reads 1.5, all sums exact in fp32 and in bf16.
+  let x = @[f32ToBf16(1.0'f32), f32ToBf16(2.0'f32)]
+  let w = @[
+    f32ToBf16(1.0'f32), f32ToBf16(0.0'f32),
+    f32ToBf16(0.0'f32), f32ToBf16(1.0'f32),
+    f32ToBf16(0.5'f32), f32ToBf16(0.5'f32)]
+  let got = naiveDenseLinear(x, w, 3, 2)
+  doAssert got[0] == f32ToBf16(1.0'f32), &"row 0 {got[0]}"
+  doAssert got[1] == f32ToBf16(2.0'f32), &"row 1 {got[1]}"
+  doAssert got[2] == f32ToBf16(1.5'f32), &"row 2 {got[2]}"
+  echo "[dense linear] ok"
+
+proc pinConvSiluStep() =
+  ## ConvDim = 2, kernel = 3, hand-computed taps and silu:
+  ## channel 0 acc = 1·1 + 0.5·0 + 2·1 = 3, channel 1 acc = 0·2 + 1·1 + 1·1 = 2,
+  ## each silu'd in fp32 then rounded bf16, the ring shifted down one slot.
+  let convW = @[f32ToBf16(1.0'f32), f32ToBf16(0.5'f32), f32ToBf16(2.0'f32),
+                f32ToBf16(0.0'f32), f32ToBf16(1.0'f32), f32ToBf16(1.0'f32)]
+  var ring = @[f32ToBf16(1.0'f32), f32ToBf16(0.0'f32),
+               f32ToBf16(2.0'f32), f32ToBf16(1.0'f32)]
+  let xCol = @[f32ToBf16(1.0'f32), f32ToBf16(1.0'f32)]
+  let got = naiveCausalConvSiluStep(convW, ring, xCol, 2, 3)
+  let want0 = f32ToBf16(3.0'f32 / (1.0'f32 + exp(-3.0'f32)))
+  let want1 = f32ToBf16(2.0'f32 / (1.0'f32 + exp(-2.0'f32)))
+  doAssert abs(bf16ToF32(got[0]) - bf16ToF32(want0)) < 2.0e-3'f32,
+    &"channel 0 {bf16ToF32(got[0])} want {bf16ToF32(want0)}"
+  doAssert abs(bf16ToF32(got[1]) - bf16ToF32(want1)) < 2.0e-3'f32,
+    &"channel 1 {bf16ToF32(got[1])} want {bf16ToF32(want1)}"
+  doAssert ring == @[f32ToBf16(0.0'f32), f32ToBf16(1.0'f32),
+                     f32ToBf16(1.0'f32), f32ToBf16(1.0'f32)],
+    &"ring shifted wrong: {ring}"
+  echo "[conv+silu] ok"
+
+proc pinSiluMulEl() =
+  ## g = 0 gives 0, g = 2, u = 1 gives bf16(silu(2)).
+  doAssert naiveSiluMulEl(0.0'f32, 1.0'f32) == 0'u16
+  let want = f32ToBf16(2.0'f32 / (1.0'f32 + exp(-2.0'f32)))
+  let got = naiveSiluMulEl(2.0'f32, 1.0'f32)
+  doAssert abs(bf16ToF32(got) - bf16ToF32(want)) < 2.0e-3'f32,
+    &"got {bf16ToF32(got)} want {bf16ToF32(want)}"
+  echo "[silu-mul] ok"
+
+proc pinSharedGate() =
+  ## x = [0, 0] gives logit 0, sigmoid 1/2; x = [1, 0], w = [1, 0] gives sigmoid(1).
+  let zero = @[f32ToBf16(0.0'f32), f32ToBf16(0.0'f32)]
+  let wOnes = @[f32ToBf16(1.0'f32), f32ToBf16(1.0'f32)]
+  doAssert naiveSharedGate(zero, wOnes, 2) == bf16ToF32(f32ToBf16(0.5'f32))
+  let one = @[f32ToBf16(1.0'f32), f32ToBf16(0.0'f32)]
+  let wSel = @[f32ToBf16(1.0'f32), f32ToBf16(0.0'f32)]
+  let want = bf16ToF32(f32ToBf16(1.0'f32 / (1.0'f32 + exp(-1.0'f32))))
+  doAssert abs(naiveSharedGate(one, wSel, 2) - want) < 2.0e-3'f32
+  echo "[shared gate] ok"
+
+proc pinMoeMerge() =
+  ## K = 1, H = 2, partial rows [0.5, 0.25] + [0.125, 0.0625],
+  ## the slot-ordered sums exact in fp32 and in bf16.
+  let partial = @[0.5'f32, 0.25'f32, 0.125'f32, 0.0625'f32]
+  let got = naiveMoeMerge(partial, 1, 2)
+  doAssert got[0] == f32ToBf16(0.625'f32), &"merge[0] {got[0]}"
+  doAssert got[1] == f32ToBf16(0.3125'f32), &"merge[1] {got[1]}"
+  echo "[moe merge] ok"
+
+proc pinRmsNormGated() =
+  ## Dv = 2, y = [1, 1], w = [1, 1], eps = 0: rstd = 1, normed = weighted = [1, 1],
+  ## z = [2, 2] gives out[d] = bf16(silu(2)).
+  let y = @[f32ToBf16(1.0'f32), f32ToBf16(1.0'f32)]
+  let z = @[f32ToBf16(2.0'f32), f32ToBf16(2.0'f32)]
+  let w = @[f32ToBf16(1.0'f32), f32ToBf16(1.0'f32)]
+  let got = naiveRmsNormGated(y, z, w, 2, 0.0'f32)
+  let want = f32ToBf16(2.0'f32 / (1.0'f32 + exp(-2.0'f32)))
+  doAssert abs(bf16ToF32(got[0]) - bf16ToF32(want)) < 2.0e-3'f32, &"got[0] {got[0]}"
+  doAssert abs(bf16ToF32(got[1]) - bf16ToF32(want)) < 2.0e-3'f32, &"got[1] {got[1]}"
+  echo "[rms-norm gated] ok"
+
 # ─── Full-geometry seeded walk ────────────────────────────────────────
 
 type LayerInputs = object
@@ -143,14 +219,10 @@ proc hashBits(s: openArray[uint16]): uint64 =
     result = (result xor uint64(h)) * 0x100000001b3'u64
 
 proc hashF32(s: openArray[float32]): uint64 =
-  ## FNV-1a over the fp32 bit patterns.
+  ## FNV-1a over the fp32 bit patterns, one uint32 per element.
   result = 0xcbf29ce484222325'u64
   for v in s:
-    let bits = cast[uint32](v)
-    result = (result xor uint64(bits and 0xFF'u32)) * 0x100000001b3'u64
-    result = (result xor uint64(bits shr 8 and 0xFF'u32)) * 0x100000001b3'u64
-    result = (result xor uint64(bits shr 16 and 0xFF'u32)) * 0x100000001b3'u64
-    result = (result xor uint64(bits shr 24 and 0xFF'u32)) * 0x100000001b3'u64
+    result = (result xor uint64(cast[uint32](v))) * 0x100000001b3'u64
 
 proc walk(inp: LayerInputs): LayerOut =
   ## One fresh layer walk from copied state and ring, the composition pure
@@ -173,11 +245,14 @@ proc outDigest(o: LayerOut): string =
   fold(o.a); fold(o.b); fold(o.conv); fold(o.qn); fold(o.kn)
   fold(o.beta); fold(o.y); fold(o.normed); fold(o.blockOut)
   fold(o.h1); fold(o.normed2); fold(o.moeOut)
+  h = h xor hashF32(o.g)
+  h = h * 0x9E3779B97F4A7C15'u64
   &"{h:016X}"
 
-const RecordedChecksum = "11D143A1EA5EB7C7"
+const RecordedChecksum = "EA11B4C6B6422876"
   ## Recorded checksum over the seed 0xC04D0601 walk's outputs,
-  ## taken from the first green run.
+  ## taken from the first green run. Re-recorded once when the recorded
+  ## outputs gained the fp32 g values, the walk itself unchanged.
 
 proc fullGeometryChecks() =
   ## Determinism across fresh walks, relaunch bit-identity, the recorded checksum.
@@ -196,6 +271,12 @@ pinRmsNormRes()
 pinL2Norm()
 pinGates()
 pinRouter()
+pinDenseLinear()
+pinConvSiluStep()
+pinSiluMulEl()
+pinSharedGate()
+pinMoeMerge()
+pinRmsNormGated()
 echo "full geometry:"
 fullGeometryChecks()
 echo "t_naive_qwen35_layer GREEN"

@@ -292,6 +292,16 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
     assertReadUnchanged(routerW, big.routerW)
     assertReadUnchanged(gateUpW, big.gateUpW)
     assertReadUnchanged(downW, big.downW)
+    assertReadUnchanged(qkvW, big.qkvW)
+    assertReadUnchanged(zW, big.zW)
+    assertReadUnchanged(aW, big.aW)
+    assertReadUnchanged(bW, big.bW)
+    assertReadUnchanged(outprojW, big.outprojW)
+    assertReadUnchanged(norm2W, big.norm2W)
+    assertReadUnchanged(sharedGW, big.sharedGW)
+    assertReadUnchanged(sharedUW, big.sharedUW)
+    assertReadUnchanged(sharedDW, big.sharedDW)
+    assertReadUnchanged(sharedGVW, big.sharedGVW)
     for h in 0 ..< NumVHeads:
       doAssert aLog.hostPtr[h] == big.aLog[h], "kernel-read buffer modified"
       doAssert dtBias.hostPtr[h] == big.dtBias[h], "kernel-read buffer modified"

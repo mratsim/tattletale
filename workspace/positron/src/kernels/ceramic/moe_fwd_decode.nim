@@ -180,6 +180,21 @@ proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
   ##
   ## Instantiation contract:
   ## - each static binding set of this core needs its own call-site line
+  ##
+  ## shape preconditions, each one a static assert below:
+  ##
+## | precondition  | a violated shape's failure                                             |
+## | ------------- | ---------------------------------------------------------------------- |
+## | H mod 16 == 0 | columns silently dropped from every mma dot                            |
+## | I mod 32 == 0 | h_scratch rows left unwritten, stale values re-read on the next launch |
+## | E mod 64 == 0 | the 64-expert router chunk mis-tiles                                   |
+  static:
+    doAssert H mod 16 == 0,
+      "moe_fwd_decode_at: H must be a multiple of the 16-wide K step"
+    doAssert I mod 32 == 0,
+      "moe_fwd_decode_at: I must be a multiple of the 32-wide output tile"
+    doAssert E mod 64 == 0,
+      "moe_fwd_decode_at: E must be a multiple of the 64-expert router chunk"
 
   let glX = x.gd(shape = (-1, -1, -1, -1), stride = (H, 0, H, 1))
   let glGu = gate_up_w.gd(shape = (-1, -1, -1, -1), stride = (2 * I * H, 0, H, 1))
