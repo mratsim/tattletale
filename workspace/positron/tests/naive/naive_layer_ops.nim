@@ -1,0 +1,275 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Naive stage references for the fused GDN decoder layer composition
+## (the qwen35_moe mega kernel's reference side), the stage ops the naive tier did not yet carry:
+##
+## the bias-one RMSNorm with residual add, the q/k l2 normalization, the causal conv + silu step,
+## the recurrence values, the dense GEMV, the softmax top-K router and the MoE activation chain.
+##
+## Storage contract, every proc here:
+##
+## | rule         | behavior                                                                                                                                                                                             |
+## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | storage      | bfloat16 operands and results are stored as their uint16 bit patterns (the naive tier's convention, `naive_tensors`), widened exactly to fp32 for arithmetic                                         |
+## | accumulation | fp32 sequential over the row, one RNE bf16 round at each storage handoff the kernel chain rounds at                                                                                                  |
+## | rsqrt        | the fp32 rsqrt is the correctly-rounded `1.0 / sqrt(x)`, the Metal approximate `rsqrt` builtin a different rounding class, that difference is a composition-band item, judged by the comparison tier |
+
+import std/math
+import naive_tensors
+
+# Host libm `log1pf`, std/math spells no log1p (the softplus tail form).
+proc log1pf(x: cfloat): cfloat {.importc: "log1pf", header: "<math.h>".}
+
+const Log2E* = 1.4426950408889634'f32
+
+func bf16Round*(x: float32): uint16 =
+  ## Returns the bf16 bit pattern of an fp32 value, round-to-nearest-even.
+  f32ToBf16(x)
+
+func softplus*(x: float32): float32 =
+  ## Softplus in the ATen `softplus(x, 1, 20)` shape, linear past the threshold, `log(1 + exp(x))` under it.
+  if x > 20.0'f32: x else: log1pf(exp(x))
+
+func sigmoid*(x: float32): float32 =
+  ## Returns `1 / (1 + exp(-x))` in fp32.
+  1.0'f32 / (1.0'f32 + exp(-x))
+
+# ─── Norm stages ─────────────────────────────────────────────────────
+
+proc naiveRmsNormRes*(xPrev, rPrev, w: seq[uint16]; H: int; eps: float32):
+    tuple[stream, normed: seq[uint16]] =
+  ## One bias-one RMSNorm pass over the residual add, both the decoder layer's
+  ## stage 1 and stage 11 (the same proc for each norm site).
+  ##
+  ## Returns:
+  ##
+## | output    | value                                             |
+## | --------- | ------------------------------------------------- |
+## | stream    | s[e] = bf16(x[e] + r[e]), the new residual stream |
+## | acc       | sum_e widen(s[e])², fp32 serial over the row      |
+## | rstd      | 1/sqrt(acc/H + eps), fp32, no round               |
+## | normed[e] | bf16(widen(s[e])·rstd·(widen(w[e]) + 1))          |
+  ##
+  ## Example (H = 2, exact small values)
+  ## x = [1.0, 0.0], r = [0.0, 0.0], w = [0.0, 0.0], eps = 0
+  ## gives s = [1.0, 0.0], acc = 1.0, rstd = sqrt(2), normed = [sqrt(2), 0.0] up to the store's bf16 round.
+  doAssert xPrev.len == H and rPrev.len == H and w.len == H
+  result.stream = newSeq[uint16](H)
+  result.normed = newSeq[uint16](H)
+  var acc = 0.0'f32
+  for e in 0 ..< H:
+    let s = bf16Round(bf16ToF32(xPrev[e]) + bf16ToF32(rPrev[e]))
+    result.stream[e] = s
+    acc += bf16ToF32(s) * bf16ToF32(s)
+  let rstd = 1.0'f32 / sqrt(acc / float32(H) + eps)
+  for e in 0 ..< H:
+    result.normed[e] = bf16Round(
+      bf16ToF32(result.stream[e]) * rstd * (bf16ToF32(w[e]) + 1.0'f32))
+
+proc naiveL2NormRow*(x: seq[uint16]; cols: int): seq[uint16] =
+  ## One l2-normalized row, the q/k normalization's rounding pipeline.
+  ##
+  ## Returns:
+  ## - acc    = sum_c bf16(widen(x[c])²), each square rounds to bf16 first
+  ## - inv    = bf16(1/sqrt(bf16(acc + 1e-6)))
+  ## - out[c] = bf16(widen(x[c])·widen(inv))
+  ##
+  ## The elementwise bf16 rounds before and inside the reduction belong
+  ## to the recorded chain, not the mathematical l2 norm.
+  doAssert x.len == cols
+  var acc = 0.0'f32
+  for c in 0 ..< cols:
+    let xi = bf16ToF32(x[c])
+    acc += bf16ToF32(bf16Round(xi * xi))
+  let inv = bf16Round(1.0'f32 /
+    sqrt(bf16ToF32(bf16Round(acc + 1.0e-6'f32))))
+  result = newSeq[uint16](cols)
+  for c in 0 ..< cols:
+    result[c] = bf16Round(bf16ToF32(x[c]) * bf16ToF32(inv))
+
+# ─── Convolutions and projections ────────────────────────────────────
+
+proc naiveDenseLinear*(x: seq[uint16]; w: seq[uint16]; N, K: int): seq[uint16] =
+  ## One row's dense projection, the GEMV form of an (N, K) row-major weight.
+  ##
+  ## Returns:
+  ## - out[n] = bf16(sum_k widen(x[k])·widen(w[n·K + k])), fp32 sequential
+  ##
+  ## The kernel's 16-wide mma chunk chain reassociates this sum, the reassociation
+  ## budget belongs to the comparison tier.
+  result = newSeq[uint16](N)
+  for n in 0 ..< N:
+    var acc = 0.0'f32
+    for k in 0 ..< K:
+      acc += bf16ToF32(x[k]) * bf16ToF32(w[n * K + k])
+    result[n] = bf16Round(acc)
+
+proc naiveCausalConvSiluStep*(convW: seq[uint16]; ring: var seq[uint16];
+    xCol: seq[uint16]; ConvDim, kernel: int): seq[uint16] =
+  ## One decode conv step over `ConvDim` channels at kernel width `kernel`,
+  ## the ring carrying the `kernel - 1` history taps.
+  ##
+  ## Returns:
+  ## - acc[c] = widen(convW[c·kernel + j])·widen(ring[c·(kernel-1) + j]) for j < kernel-1
+  ##   plus widen(convW[c·kernel + kernel-1])·widen(xCol[c])
+  ## - out[c] = bf16(silu(bf16(acc[c])))
+  ## - ring[c] is shifted down one slot in place, xCol[c] the newest tap
+  ##
+  ## The tapped dot rounds to bf16 once, the silu runs in fp32 over
+  ## the widened tapped value, one bf16 round at the output, per channel
+  ## independent of its neighbors.
+  let taps = kernel - 1
+  doAssert convW.len == ConvDim * kernel
+  doAssert ring.len == ConvDim * taps and xCol.len == ConvDim
+  result = newSeq[uint16](ConvDim)
+  for c in 0 ..< ConvDim:
+    var acc = 0.0'f32
+    for j in 0 ..< taps:
+      acc += bf16ToF32(convW[c * kernel + j]) *
+        bf16ToF32(ring[c * taps + j])
+    acc += bf16ToF32(convW[c * kernel + taps]) * bf16ToF32(xCol[c])
+    let tapped = bf16Round(acc)
+    result[c] = bf16Round(
+      bf16ToF32(tapped) / (1.0'f32 + exp(-bf16ToF32(tapped))))
+  for c in 0 ..< ConvDim:
+    for j in 0 ..< taps - 1:
+      ring[c * taps + j] = ring[c * taps + j + 1]
+    ring[c * taps + taps - 1] = xCol[c]
+
+# ─── Recurrence gates ────────────────────────────────────────────────
+
+proc naiveGdnGates*(aRow, bRow, dtBias: seq[uint16]; aLog: seq[float32]; H: int):
+    tuple[g: seq[float32], beta: seq[uint16]] =
+  ## Recurrence values over the H value heads, one head per index.
+  ##
+  ## Returns:
+  ## - g[h]    = -exp(A_log[h])·softplus(widen(a[h]) + widen(dtBias[h]))
+  ##   fp32 end to end, no round
+  ## - beta[h] = bf16(sigmoid(widen(b[h])))
+  doAssert aRow.len == H and bRow.len == H and dtBias.len == H and aLog.len == H
+  result.g = newSeq[float32](H)
+  result.beta = newSeq[uint16](H)
+  for h in 0 ..< H:
+    let x = bf16ToF32(aRow[h]) + bf16ToF32(dtBias[h])
+    result.g[h] = -exp(aLog[h]) * softplus(x)
+    result.beta[h] = bf16Round(sigmoid(bf16ToF32(bRow[h])))
+
+# ─── The MoE router and expert activation ────────────────────────────
+
+proc naiveSoftmaxTopKRouter*(x: seq[uint16]; routerW: seq[uint16];
+    E, H, K: int; scale: float32):
+    tuple[ids: seq[int32], w: seq[float32]] =
+  ## One token's top-K expert ids and routing weights, the softmax form.
+  ##
+  ## Returns:
+  ##
+## | step   | value                                                                 |
+## | ------ | --------------------------------------------------------------------- |
+## | logits | logits[e] = bf16(sum_k widen(x[k])·widen(routerW[e·H + k])), fp32 dot |
+## | p      | softmax over the widened logits, fp32                                 |
+## | top-K  | by score, the lowest index on a tie                                   |
+## | w      | w[slot] = bf16(p[id]/sum(p)·scale)                                    |
+  ##
+  ## Example (E = 4, K = 2, exact small values, all logits distinct):
+  ##   logits [3.0, 1.0, 2.0, 0.0] → p ∝ [e³, e¹, e², 1] → ids [0, 2],
+  ##   w = [e³/(e³+e²+e¹+1), e²/…], each rounded bf16.
+  doAssert routerW.len == E * H
+  var logits = newSeq[float32](E)
+  for e in 0 ..< E:
+    var acc = 0.0'f32
+    for k in 0 ..< H:
+      acc += bf16ToF32(x[k]) * bf16ToF32(routerW[e * H + k])
+    logits[e] = bf16ToF32(bf16Round(acc))
+  var p = newSeq[float32](E)
+  for e in 0 ..< E:
+    p[e] = exp(logits[e] - max(logits))
+  var sumP = 0.0'f32
+  for e in 0 ..< E:
+    sumP += p[e]
+  result.ids = newSeq[int32](K)
+  result.w = newSeq[float32](K)
+  var used = newSeq[bool](E)
+  for slot in 0 ..< K:
+    var best = -1
+    var bestP = -1.0'f32
+    for e in 0 ..< E:
+      if not used[e] and (best < 0 or p[e] > bestP):
+        bestP = p[e]
+        best = e
+    used[best] = true
+    result.ids[slot] = int32(best)
+    result.w[slot] = bf16ToF32(bf16Round(p[best] / sumP * scale))
+
+proc naiveSiluMulEl*(g, u: float32): uint16 =
+  ## MoE expert activation element, the mega chain's rounding form over the fp32 g/up accumulator operands.
+  ##
+  ## Returns:
+  ## - bf16(bf16(silu(g))·u)
+  ##
+  ## The silu result rounds to bf16 first, then the product with the fp32 up
+  ## operand rounds once at the store.
+  let s = g / (1.0'f32 + exp(-g))
+  bf16Round(bf16ToF32(bf16Round(s)) * u)
+
+proc naiveSharedGate*(x, sharedGateVecW: seq[uint16]; H: int): float32 =
+  ## One token's shared-expert scalar, the sigmoid of the raw fp32 scalar logit,
+  ## one bf16 round, returned widened.
+  ##
+  ## Returns:
+  ## - l32 = sum_k widen(x[k])·widen(sharedGateVecW[k]), fp32 sequential
+  ## - the returned value = bf16(sigmoid(l32))
+  doAssert sharedGateVecW.len == H
+  var l32 = 0.0'f32
+  for k in 0 ..< H:
+    l32 += bf16ToF32(x[k]) * bf16ToF32(sharedGateVecW[k])
+  bf16ToF32(bf16Round(sigmoid(l32)))
+
+# ─── The gated RMSNorm and the MoE merge ─────────────────────────────
+
+proc naiveRmsNormGated*(y, z, w: seq[uint16]; Dv: int; eps: float32): seq[uint16] =
+  ## One gated RMSNorm row, the o_norm epilogue's rounding chain.
+  ##
+  ## Returns:
+  ##
+## | step     | value                                                                 |
+## | -------- | --------------------------------------------------------------------- |
+## | rstd     | 1/sqrt(sum_d widen(y[d])²/Dv + eps), fp32 squares, fp32 sum, no round |
+## | normed   | normed[d] = bf16(widen(y[d])·rstd)                                    |
+## | weighted | weighted[d] = bf16(widen(w[d])·widen(normed[d]))                      |
+## | out[d]   | bf16(widen(weighted[d])·silu32(widen(z[d])))                          |
+  ##
+  ## The squares stay fp32 here (unlike the l2-normalized row's bf16 squares),
+  ## matching the o_norm tile core's fp32 square-and-reduce.
+  doAssert y.len == Dv and z.len == Dv and w.len == Dv
+  var sumSq = 0.0'f32
+  for d in 0 ..< Dv:
+    let yv = bf16ToF32(y[d])
+    sumSq += yv * yv
+  let rstd = 1.0'f32 / sqrt(sumSq / float32(Dv) + eps)
+  result = newSeq[uint16](Dv)
+  for d in 0 ..< Dv:
+    let normed = bf16Round(bf16ToF32(y[d]) * rstd)
+    let weighted = bf16Round(bf16ToF32(w[d]) * bf16ToF32(normed))
+    let g = bf16ToF32(z[d])
+    let silu = g / (1.0'f32 + exp(-g))
+    result[d] = bf16Round(bf16ToF32(weighted) * silu)
+
+proc naiveMoeMerge*(partial: seq[float32]; K, H: int): seq[uint16] =
+  ## One token's MoE merge, the fp32 partial rows summed in slot order
+  ## (the shared contribution last), one bf16 round at the store.
+  ##
+  ## Returns:
+  ## - out[e] = bf16(sum_slot widen(partial[slot·H + e])), slot order
+  doAssert partial.len == (K + 1) * H
+  result = newSeq[uint16](H)
+  for e in 0 ..< H:
+    var acc = 0.0'f32
+    for slot in 0 .. K:
+      acc += partial[slot * H + e]
+    result[e] = bf16Round(acc)
