@@ -9,13 +9,12 @@
 ## Every randomized input derives from an explicitly seeded `NaiveRng`,
 ## the single randomness source of the whole tier.
 ##
-## Generator:
-## - xorshift64*, defined by this module's own bit operations
-## - the same seed yields the same sequence on every Nim version,
-##   checked by t_naive_harness.nim
+## Generator, xorshift64* over this module's own bit operations:
+## - the sequence depends on the seed alone, never on the compiler,
+##   a given seed yields the same stream on every Nim version
+## - t_naive_harness.nim asserts exact golden stream values
 ## - std/random is excluded, its output sequence for a given seed is
-##   not stable across Nim compiler versions and the tier's inputs
-##   must be compiler-version-independent
+##   not stable across Nim compiler versions, unlike this module
 
 type
   NaiveRng* = object
@@ -48,8 +47,13 @@ proc nextF32*(rng: var NaiveRng; lo, hi: float32): float32 =
 
 proc nextInt*(rng: var NaiveRng; lo, hi: int): int =
   ## Returns a uniform int in [lo, hi), using the high 32 bits
-  ## of the next stream value. The harness shapes stay far below 2³²,
-  ## so the modulo over 32 bits introduces no measurable skew.
+  ## of the next stream value.
+  ## - the span `hi - lo` must stay at or below 2³², the width
+  ##   addressable by the sampled high bits
+  ## - a wider span leaves the upper part of the range unreachable,
+  ##   a caller bug the assert turns loud
   doAssert hi > lo, "empty range [" & $lo & ", " & $hi & ")"
   let span = uint64(hi - lo)
+  doAssert span <= 0xFFFF_FFFF'u64,
+    "nextInt span " & $span & " exceeds the 32-bit width of the sampled high bits"
   lo + int((rng.nextU64() shr 32) mod span)

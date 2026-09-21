@@ -19,7 +19,8 @@ func worstSeqDiff*(got, want: openArray[float32]): float64 =
   ## Returns the largest |got[i] - want[i]| over the pair.
   ##
   ## Expected input:
-  ## - two equal-length f32 sequences
+  ## - two equal-length f32 sequences, two empty sequences are equal
+  ##   by construction and the result is 0.0
   ## - no NaN on either side, a NaN raises ValueError (a NaN difference reads back as zero)
   doAssert got.len == want.len,
     "sequence length mismatch: got " & $got.len & ", want " & $want.len
