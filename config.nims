@@ -550,9 +550,13 @@ task test_ceramic, "Test workspace/ceramic":
 # harness over the shared naive references in tests/naive.
 # No recorded blobs, no model checkpoints, the inputs come
 # from the seeded PRNG.
+# tests/ceramic holds the ceramic-vs-naive kernel comparisons
+# against those references.
 task test_positron_naive, "Test workspace/positron naive reference tier":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/positron/tests/naive"):
+      runCmd(cmd)
+    for cmd in getTestCommands("workspace/positron/tests/ceramic"):
       runCmd(cmd)
 
 task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
