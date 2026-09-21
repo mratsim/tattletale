@@ -1,0 +1,292 @@
+# ──────────────────────  o_norm_gated (SiLU-gated RMSNorm, the GDN output norm)  ──────────────────────
+
+## SiLU-gated RMSNorm on the ceramic Tile API, the Gated DeltaNet output norm, the kernel
+## counterpart of RmsNormGated in workspace/transformers/src/layers/norm.nim.
+## Per row, rstd = rsqrt(mean(x²) + eps), then
+##
+##   out = bf16(bf16(w · bf16(x · rstd)) · silu(g))    silu(g) = g / (1 + exp2(−g·log2e))
+##
+##   chain:  x → x·rstd → bf16 → ·w → bf16 → ·silu(g) → bf16
+##
+## | contract       | value                                                                                                     |
+## | -------------- | --------------------------------------------------------------------------------------------------------- |
+## | tensors        | x, gate, out (M, Dv) bf16 row-major; w (Dv) bf16; eps runtime f32 (the recorded layer's 1e-6)             |
+## | M              | runtime arg, the layer tensors (b, T, Hv, Dv) flatten to rows, the layout permutation stays host-side     |
+## | tail rows      | rows >= M load zero-filled and skip the store, a tail tile needs no host padding                          |
+## | Dv             | static (128), equal to the tile width: one row_sum spans the tile, the whole row in threadgroup registers |
+## | geometry       | grid (1, ceil(M div TileR)) at 32 lanes, one TileR-row x Dv-col tile per threadgroup                      |
+## | rounding chain | normed, weighted and output each round to bf16, every multiply's operands stay f32 in between             |
+## | silu form      | f32 over the widened gated operand, the same 1-ulp-class exponential form as silu_and_mul                 |
+##
+## Fusion contract (the inline-tile property):
+## - {.device.} tile procs `rowRstd`, `rmsWeightElem`, `siluMulElem`, `rmsNormGatedElem`
+##   inline into any kernel that keeps the epilogue tiles in threadgroup registers
+## - the mega kernel composes the tile core `rmsNormGatedTileAt` inline, the fused
+##   entry `rmsNormGatedTile` computing the whole chain in one launch
+## - the composed pair `rmsWeightTile` + `siluMulTile` splits bit-exactly at the bf16
+##   weighted value, the f32/bf16 store/load round-trip through memory is exact
+
+import workspace/crucible
+import workspace/ceramic
+
+export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
+       ptr_arithmetic, tile_algebra
+
+# ─── Local device helpers ────────────────────────────────────────────
+# tile_io_rows is fp16-typed and the tile API has no bf16→f32 widen, so this module carries its own row-bounded bf16 io + widen.
+
+proc widenBf16[A, B: static MmaAtom; R, C: static int](
+    dst: var RtLeft[float32, R, C, A],
+    src: RtLeft[bfloat16, R, C, B]) {.device.} =
+  ## Exact bf16 → f32 widening, walking each tile's atom lane→element mapping.
+  ## Both atoms must share the 8×8×8 geometry class, the fragment indices then
+  ## agree elementwise across the two tiles.
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].float32
+
+proc zeroTailRows[R, C: static int; A: static MmaAtom; T](
+    tile: var RtLeft[T, R, C, A], r0, rowLimit: int32) {.device.} =
+  ## Zeroes the tile's rows from the `rowLimit` boundary up. Argument `r0` is the tile's
+  ## first plane row.
+  const M = A.getM()
+  const rowTiles = R div M
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  let lane = int(thread_index_in_threadgroup)
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let row = cell mod M
+  for n in 0 ..< rowTiles:
+    if r0 + int32(n * M + row) >= rowLimit:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          when T is bfloat16:
+            tile.frags[n][m].frag[v] = (0.0'f32).bfloat16
+          else:
+            tile.frags[n][m].frag[v] = 0'f32.to(T)
+
+proc loadTileRowsGated[R, C: static int; A: static MmaAtom; T](
+    tile: var RtLeft[T, R, C, A],
+    gl: GlView[T],
+    origin: tuple,
+    rowLimit: int32) {.device.} =
+  ## Row-bounded loadTile over a 2D view.
+  ## Plane rows at or above `rowLimit` load zero-filled, never read.
+  tile.loadTile(gl, origin)
+  let r0 = int32(origin[2]) * int32(R)
+  if r0 + int32(R) > rowLimit:
+    zeroTailRows(tile, r0, rowLimit)
+
+proc storeTailRows[R, C: static int; A: static MmaAtom; T](
+    gl: GlView[T],
+    tile: RtLeft[T, R, C, A],
+    origin: tuple,
+    r0, rowLimit: int32) {.device.} =
+  ## Row-wise store of the in-range rows of a straddling tile.
+  const M = A.getM()
+  const N = A.getN()
+  const rowTiles = R div M
+  const colTiles = C div N
+  const vpt = A.getVpt()
+  let lane = int(thread_index_in_threadgroup)
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let row = cell mod M
+  let col = cell div M
+  let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
+  var dst = local_tile_dyn(gl, R, C, o)
+  for n in 0 ..< rowTiles:
+    if r0 + int32(n * M + row) < rowLimit:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          dst[row + n * M, col + m * N + v] = tile.frags[n][m].frag[v]
+
+proc storeTileRowsGated[R, C: static int; A: static MmaAtom; T](
+    gl: GlView[T],
+    tile: RtLeft[T, R, C, A],
+    origin: tuple,
+    rowLimit: int32) {.device.} =
+  ## Row-bounded storeTile over a 2D view.
+  ## Rows at or above `rowLimit` are not written. The in-limit tile stores
+  ## through the facility and a straddling tile stores row-wise.
+  let r0 = int32(origin[2]) * int32(R)
+  if r0 + int32(R) <= rowLimit:
+    gl.storeTile(tile, origin)
+  else:
+    storeTailRows(gl, tile, origin, r0, rowLimit)
+
+# ─── Inline tile procs (the fusion contract) ─────────────────────────
+
+proc rowRstd[R, C: static int; A: static MmaAtom](
+    y: RtLeft[bfloat16, R, C, A], eps: float32): float32 {.device.} =
+  ## - Per-lane rstd = rsqrt(mean over the tile row of y² + eps).
+  ## - Each lane's fragments share one tile row, the atom's lane→element mapping,
+  ##   and C is the norm width, so the row reduction is one row_sum inside the tile.
+  var y32: rt_l(float32, R, C)
+  y32.widenBf16(y)
+  var sq: rt_l(float32, R, C)
+  sq.mul(y32, y32)
+  var sumVec: rv(float32, R, C)
+  sumVec.row_sum(sq)
+  result = rsqrt(sumVec.data[0] / float32(C) + eps)
+
+proc rmsWeightElem*[R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[bfloat16, R, C, A],
+    y, w: RtLeft[bfloat16, R, C, A],
+    eps: float32) {.device.} =
+  ## - Epilogue first half, recorded chain's first two rounds:
+  ## - `dst = bf16(w · bf16(y · rstd))`, the weighted RMSNorm output the silu stage multiplies.
+  let rstd = rowRstd(y, eps)
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        let normed = (y.frags[n][m].frag[v].float32 * rstd).bfloat16
+        dst.frags[n][m].frag[v] =
+          (w.frags[n][m].frag[v].float32 * normed.float32).bfloat16
+
+proc siluMulElem*[R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[bfloat16, R, C, A],
+    x, gate: RtLeft[bfloat16, R, C, A]) {.device.} =
+  ## - Epilogue second half, recorded chain's final round:
+  ## - `dst = bf16(x · silu(g))`, the silu in f32 over the widened gated operand, no intermediate bf16 round on the silu.
+  var x32: rt_l(float32, R, C)
+  x32.widenBf16(x)
+  var g32: rt_l(float32, R, C)
+  g32.widenBf16(gate)
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        let g = g32.frags[n][m].frag[v]
+        let silu32 = g / (1.0'f32 + exp2((-g) * 1.4426950408889634'f32))
+        dst.frags[n][m].frag[v] =
+          (x32.frags[n][m].frag[v] * silu32).bfloat16
+
+proc rmsNormGatedElem*[R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[bfloat16, R, C, A],
+    y, gate, w: RtLeft[bfloat16, R, C, A],
+    eps: float32) {.device.} =
+  ## - Whole epilogue in one register-tile walk:
+  ## - `dst = bf16(bf16(w · bf16(y · rstd)) · silu(g))`, the fused composition
+  ##   of rmsWeightElem and siluMulElem, the bf16 `weighted` intermediate
+  ##   held in registers with no memory round-trip.
+  let rstd = rowRstd(y, eps)
+  var g32: rt_l(float32, R, C)
+  g32.widenBf16(gate)
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        let normed = (y.frags[n][m].frag[v].float32 * rstd).bfloat16
+        let weighted =
+          (w.frags[n][m].frag[v].float32 * normed.float32).bfloat16
+        let g = g32.frags[n][m].frag[v]
+        let silu32 = g / (1.0'f32 + exp2((-g) * 1.4426950408889634'f32))
+        dst.frags[n][m].frag[v] =
+          (weighted.float32 * silu32).bfloat16
+
+# ─── Core tile proc (inline-tile property) ───────────────────────────
+
+proc rmsNormGatedTileAt*(
+    outp: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16 out
+    x: ptr UncheckedArray[bfloat16],     # (M, Dv) bf16, the norm input
+    gate: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16, the silu-gated operand
+    w: ptr UncheckedArray[bfloat16],     # (Dv) bf16, the norm weight
+    M: int32,
+    eps: float32,
+    rowBlk: int32,
+    Dv, TileR: static int) {.device.} =
+  ## Tile core contract:
+  ##   - One (TileR-row) tile of epilogue rows at the caller's row block, the full Dv-wide
+  ##     row in the tile.
+  ##   - Rows at or above M load zero-filled and stay unwritten on store.
+  ##   - The megakernel composes this core inline, `rmsNormGatedTile` is the grid-driven wrapper.
+  ##
+  ## Instantiation contract:
+  ##   - Each static binding set of this core needs its own call-site line.
+  ##   - The engine's monomorphization key erases generic static bindings, so calls sharing
+  ##     one call-site line all collapse into the first binding set's body.
+  let glX = x.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
+  let glG = gate.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
+  let glW = w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
+  let glO = outp.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
+
+  var xT: rt_l(bfloat16, TileR, Dv)
+  var gT: rt_l(bfloat16, TileR, Dv)
+  var wT: rt_l(bfloat16, TileR, Dv)
+  xT.loadTileRowsGated(glX, (0, 0, rowBlk, 0), M)
+  gT.loadTileRowsGated(glG, (0, 0, rowBlk, 0), M)
+  wT.loadTileRowsGated(glW, (0, 0, rowBlk, 0), M)
+
+  var oT: rt_l(bfloat16, TileR, Dv)
+  rmsNormGatedElem(oT, xT, gT, wT, eps)
+  glO.storeTileRowsGated(oT, (0, 0, rowBlk, 0), M)
+
+proc rmsNormGatedTile*(
+    outp: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16 out
+    x: ptr UncheckedArray[bfloat16],     # (M, Dv) bf16, the norm input
+    gate: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16, the silu-gated operand
+    w: ptr UncheckedArray[bfloat16],     # (Dv) bf16, the norm weight
+    M: int32,
+    eps: float32,
+    Dv, TileR: static int) {.device.} =
+  ##  Grid-driven form of `rmsNormGatedTileAt`: `grid`
+  ## (1, ceil(M div tileR)), one (TileR-row) tile per threadgroup.
+  let rowBlk = int32(threadgroup_position_in_grid.y)
+  rmsNormGatedTileAt(outp, x, gate, w, M, eps, rowBlk, Dv, TileR)
+
+proc rmsWeightTile*(
+    midp: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16 out, bf16(w·bf16(y·rstd))
+    x: ptr UncheckedArray[bfloat16],     # (M, Dv) bf16, the norm input
+    w: ptr UncheckedArray[bfloat16],     # (Dv) bf16, the norm weight
+    M: int32,
+    eps: float32,
+    Dv, TileR: static int) {.device.} =
+  ## Composed pair, first launch:
+  ## the RMSNorm + weight half, rows ≥ M bounded on load and store.
+  let rowBlk = int32(threadgroup_position_in_grid.y)
+  let glX = x.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
+  let glW = w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
+  let glM = midp.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
+
+  var xT: rt_l(bfloat16, TileR, Dv)
+  var wT: rt_l(bfloat16, TileR, Dv)
+  xT.loadTileRowsGated(glX, (0, 0, rowBlk, 0), M)
+  wT.loadTileRowsGated(glW, (0, 0, rowBlk, 0), M)
+
+  var mT: rt_l(bfloat16, TileR, Dv)
+  rmsWeightElem(mT, xT, wT, eps)
+  glM.storeTileRowsGated(mT, (0, 0, rowBlk, 0), M)
+
+proc siluMulTile*(
+    outp: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16 out
+    mid: ptr UncheckedArray[bfloat16],   # (M, Dv) bf16, the weighted input
+    gate: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16, the silu-gated operand
+    M: int32,
+    Dv, TileR: static int) {.device.} =
+  ## - Composed pair, second launch:
+  ## - multiplies the weighted RMSNorm by the f32 silu of the second operand.
+  ## - Rows ≥ M bound both the load and the store.
+  let rowBlk = int32(threadgroup_position_in_grid.y)
+  let glM = mid.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
+  let glG = gate.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
+  let glO = outp.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
+
+  var mT: rt_l(bfloat16, TileR, Dv)
+  var gT: rt_l(bfloat16, TileR, Dv)
+  mT.loadTileRowsGated(glM, (0, 0, rowBlk, 0), M)
+  gT.loadTileRowsGated(glG, (0, 0, rowBlk, 0), M)
+
+  var oT: rt_l(bfloat16, TileR, Dv)
+  siluMulElem(oT, mT, gT)
+  glO.storeTileRowsGated(oT, (0, 0, rowBlk, 0), M)
