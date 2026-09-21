@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Fixture loader for the integration suites. Reads the recorded golden frames under
+## Fixture loader for the integration suites. Reads the recorded corpus rows under
 ## tests/corpus/<suite>/ and turns each one into a ready ChatRenderRequest plus the recorded
 ## ground truth (rendered bytes, generation codepoint spans, expected error).
 ##
@@ -24,7 +24,7 @@ import workspace/chattyninja
 const
   FixturesDir* = currentSourcePath().parentDir()
     ## the corpus tree this module lives in, tests/corpus
-  FrameSuffix = ".json.zst"
+  RowSuffix = ".json.zst"
 
 type
   ChatRenderRequest* = object
@@ -99,8 +99,8 @@ proc stemOf(path: string, suffix: string): string =
 
 proc suiteRowNames*(suite: string): seq[string] =
   ## Row stems of one suite, the `*.json.zst` stems of the suite directory, sorted.
-  for path in walkPattern(FixturesDir / suite / ("*" & FrameSuffix)):
-    result.add stemOf(path, FrameSuffix)
+  for path in walkPattern(FixturesDir / suite / ("*" & RowSuffix)):
+    result.add stemOf(path, RowSuffix)
   result.sort()
 
 proc suiteTemplateSource*(suite: string): string =
@@ -109,33 +109,33 @@ proc suiteTemplateSource*(suite: string): string =
   readFile(FixturesDir / suite / suite & ".jinja")
 
 proc loadRow*(suite: string, row: string): FixtureRow =
-  ## One frame in, one render-ready row out, the stem naming the row.
+  ## One row payload in, one render-ready row out, the stem naming the row.
   ## Contract:
-  ## - the frame decompresses to its recorded JSON payload
+  ## - the row payload decompresses to its recorded JSON
   ## - kwargs travel as a separate dict, the renderer appends them after the standard keys
   let dir = FixturesDir / suite
-  let frame = parseJson(zstdDecompress(readFile(
-      dir / (row & FrameSuffix)), string))
+  let payload = parseJson(zstdDecompress(readFile(
+      dir / (row & RowSuffix)), string))
   result.suite = suite
   result.row = row
   var kwargs = DictVal()
-  for key, child in pairs(frame["kwargs"]):
+  for key, child in pairs(payload["kwargs"]):
     dictSet(kwargs, key, jsonToValue(child))
   result.request = ChatRenderRequest(
-    messages: jsonToValue(frame["messages"]),
-    tools: asList(frame.getOrDefault("tools")),
-    documents: asList(frame.getOrDefault("documents")),
-    addGenerationPrompt: frame["add_generation_prompt"].getBool(),
+    messages: jsonToValue(payload["messages"]),
+    tools: asList(payload.getOrDefault("tools")),
+    documents: asList(payload.getOrDefault("documents")),
+    addGenerationPrompt: payload["add_generation_prompt"].getBool(),
     kwargs: kwargs,
     clockEpoch:
-      if frame.hasKey("epoch"): float64(frame["epoch"].getFloat())
+      if payload.hasKey("epoch"): float64(payload["epoch"].getFloat())
       else: 0.0)
-  if frame.hasKey("expected_error"):
+  if payload.hasKey("expected_error"):
     result.expectError = true
-    result.errorMessage = frame["expected_error"]["message"].getStr()
+    result.errorMessage = payload["expected_error"]["message"].getStr()
   else:
-    result.rendered = frame["rendered"].getStr()
-    result.generationSpans = spanPairs(frame["generation_spans"])
+    result.rendered = payload["rendered"].getStr()
+    result.generationSpans = spanPairs(payload["generation_spans"])
 
 proc loadSuite*(suite: string): seq[FixtureRow] =
   ## Every recorded row of one suite, sorted row order.

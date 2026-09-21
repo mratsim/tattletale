@@ -83,7 +83,7 @@ type
     start*, stop*, step*: int64
 
   LoopState* = ref object
-    ## Cursor over the iterable a `for` walks, one cursor shared by the driver frame
+    ## Cursor over the iterable a `for` walks, one cursor shared by the for-row
     ## and the `loop` value bound in the loop scope:
     ## - `xs` borrows the sequence payload of a `vkSeq` iterable, or holds a materialized
     ##   one for mappings and strings, whose elements are derived per index

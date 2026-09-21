@@ -25,18 +25,18 @@ type
   NodeKind* {.pure.} = enum
     ## Corpus-derived construct vocabulary, one entry per engine step.
     ##
-    ## | Kind             | Payload                                                                     |
-    ## | ---------------- | --------------------------------------------------------------------------- |
-    ## | `nkVerbatim`     | final text run, whitespace already resolved                                 |
-    ## | `nkEmit`         | `{{ }}` span, evaluates the `lo..hi` span, stringifies, pending piece       |
-    ## | `nkIf`           | condition span, then-body, else-or-elif chain, bodies terminated past endif |
-    ## | `nkFor`          | iterable span, body, loop name, filter span, interned target ids            |
-    ## | `nkBreak`        | unwinds to the nearest for-frame, stopping at a macro-call boundary         |
-    ## | `nkSet`          | single-target binding of an expression                                      |
-    ## | `nkSetNamespace` | `ns.field = expr`, ns and field as interned name ids                        |
-    ## | `nkSetBlock`     | capture body into a sink, bind on close                                     |
-    ## | `nkGeneration`   | marks the root-output span of the model's turn                              |
-    ## | `nkMacroDef`     | binds a macro value, never executes                                         |
+    ## | Kind             | Payload                                                                     | |
+    ## | ---------------- | ----------------------------------------------------------------------------- |
+    ## | `nkVerbatim`     | final text run, whitespace already resolved                                 | |
+    ## | `nkEmit`         | `{{ }}` span, evaluates the `lo..hi` span, stringifies, pending piece       | |
+    ## | `nkIf`           | condition span, then-body, else-or-elif chain, bodies terminated past endif | |
+    ## | `nkFor`          | iterable span, body, loop name, filter span, interned target ids            | |
+    ## | `nkBreak`        | unwinds to the nearest for-row, stopping at a macro-call boundary          |  |
+    ## | `nkSet`          | single-target binding of an expression                                      | |
+    ## | `nkSetNamespace` | `ns.field = expr`, ns and field as interned name ids                        | |
+    ## | `nkSetBlock`     | capture body into a sink, bind on close                                     | |
+    ## | `nkGeneration`   | marks the root-output span of the model's turn                              | |
+    ## | `nkMacroDef`     | binds a macro value, never executes                                         | |
     nkVerbatim, nkEmit, nkIf, nkFor, nkBreak, nkSet, nkSetNamespace, nkSetBlock, nkGeneration,
     nkMacroDef
 
@@ -107,19 +107,24 @@ const
 # to a slot read, so `nd.succ` on `m.nodes[n]` never copies the node. The per-accessor docs
 # below name each slot's meaning and kind. Slot layouts per kind:
 #
-# | Kind             | Slots                                                                                           |
-# |------------------|-------------------------------------------------------------------------------------------------|
-# | `nkVerbatim`     | 3 slots, `lo`, `hi`, `succ`                                                                     |
-# | `nkEmit`         | 3 slots, `lo`, `hi`, `succ`                                                                     |
-# | `nkIf`           | 5 slots, `lo`, `hi`, `succ`, `child`, `alt`                                                     |
-# | `nkFor`          | 7 + one per target, `lo`, `hi`, `succ`, `child`, `loopName`, `filterLo`, `filterHi`, target ids |
-# | `nkSet`          | 4 slots, `lo`, `hi`, `succ`, interned target name id                                            |
-# | `nkSetNamespace` | 5 slots, `lo`, `hi`, `succ`, `target`, `field`                                                  |
-# | `nkMacroDef`     | 4 + 3 per parameter, `macroName`, filler, `succ`, `child` body, name and default-span triples   |
+# | Kind             | Slots                                                                                           | |
+# | ---------------- | ------------------------------------------------------------------------------------------------- |
+# | `nkVerbatim`     | 3 slots, `lo`, `hi`, `succ`                                                                     | |
+# | `nkEmit`         | 3 slots, `lo`, `hi`, `succ`                                                                     | |
+# | `nkIf`           | 5 slots, `lo`, `hi`, `succ`, `child`, `alt`                                                     | |
+# | `nkFor`          | 7 + one per target, `lo`, `hi`, `succ`, `child`, `loopName`, `filterLo`, `filterHi`, target ids | |
+# | `nkSet`          | 4 slots, `lo`, `hi`, `succ`, interned target name id                                            | |
+# | `nkSetNamespace` | 5 slots, `lo`, `hi`, `succ`, `target`, `field`                                                  | |
+# | `nkMacroDef`     | 4 + 3 per parameter, `macroName`, filler, `succ`, `child` body, name and default-span triples   | |
+# | `nkBreak`        | 3 slots, `lo`, `hi`, `succ`, the span naming the gap location                    |                |
+# | `nkSetBlock`     | 5 slots, `lo`, `hi`, `succ`, `child` capture body, target name id                |                |
+# | `nkGeneration`   | 4 slots, `lo`, `hi`, `succ`, `child` span body                                   |                |
 #
-# `nkSetBlock` and `nkGeneration` are declared kinds the parser never builds, so they carry
-# no slot layout. `succ` shadows `system.succ`, still reachable for ordinal arguments,
-# overload resolution only seeing a `Node` receiver in this module.
+# `nkBreak`, `nkSetBlock` and `nkGeneration` are declared-gap kinds, the parser building
+# them so the step raises `ceUnimplemented` when a row reaches the construct.
+#
+# `succ` shadows `system.succ`, reachable for ordinal arguments.
+# Overload resolution only sees a `Node` receiver in this module.
 
 const
   ## One slot position per construct role, plus the two variable-tail bases. Parse and render
@@ -130,6 +135,8 @@ const
   SlotChild* = 3
   SlotAlt* = 4
   SlotLoopName = 4
+  SlotSetTarget = 4
+    ## `nkSetBlock` interned target name id, the capture body binding it on close.
   SlotFilterLo* = 5
   SlotFilterHi* = 6
   SlotNsTarget = 3
@@ -181,6 +188,10 @@ template field*(nd: Node): int32 =
   ## Interned member name id of `nkSetNamespace`.
   nd.slots[SlotNsField]
 
+template setTarget*(nd: Node): int32 =
+  ## Interned target name id of `nkSetBlock`, the name the capture body binds on close.
+  nd.slots[SlotSetTarget]
+
 template macroName*(nd: Node): int32 =
   ## Interned macro name id that `nkMacroDef` binds.
   nd.slots[SlotMacroName]
@@ -212,17 +223,17 @@ template paramDefHiAt*(nd: Node, k: int): int32 =
 
 
 type
-  FrameKind* = enum
+  RowKind* = enum
     frFor, frCapture, frGeneration, frMacro
 
-  Frame* = object
-    ## Render-state frame, the only place re-entry is discriminated. `node` is the frame's
+  Row* = object
+    ## Render-state row, the only place re-entry is discriminated. `node` is the row's
     ## identity and matches the node being entered, nothing about resumption living in the node.
     node*: int32
     scopeAt*: int
       ## One past the mark popped back to on close.
       ## The entry scope occupies `scopes[scopeAt - 1]`, and close truncates to that mark
-    case kind*: FrameKind
+    case kind*: RowKind
     of frFor:
       loop*: LoopState
         ## cursor over the materialized iterable
@@ -230,7 +241,7 @@ type
         ## for-`if` clause span, `NoLink` when absent
     of frCapture:
       target: int32
-        ## interned name to bind on close, never built while `nkSetBlock` is a declared gap
+        ## interned name to bind on close, unused while `nkSetBlock` still raises its gap
     of frGeneration:
       spanStart: int
         ## root-output byte position at span entry
@@ -283,10 +294,10 @@ type
     cur*: int
       ## bytes of root output delivered so far, composed with the chunking window
     pend*: Piece
-    frames*: seq[Frame]
-      ## re-entry stack holding for, capture and generation frames
+    rows*: seq[Row]
+      ## re-entry stack holding for, capture and generation rows
     scopes*: seq[Scope]
-      ## scope 0 is the render context. For-frames push and pop above it
+      ## scope 0 is the render context. For-rows push and pop above it
     root*: JinjaVal
       ## the render context dict (`messages`, `tools`, `kwargs`), the outermost lookup scope
     spans*: seq[tuple[start, stop: int]]

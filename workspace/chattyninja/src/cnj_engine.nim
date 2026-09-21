@@ -13,7 +13,7 @@
 # | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                      |
 # | ports    | every dispatch builds the `PortEnv` adapter on the stack and hands the steps `Ports`, so the expression tier reads the render only through the injected ports |
 #
-# Resumption state for a re-entered step lives in the render state's frame stack, never in a node.
+# Resumption state for a re-entered step lives in the render state's row stack, never in a node.
 # `nkFor`, `nkSetBlock` and `nkGeneration` are re-entered by their bodies, `nkIf`
 # single-entry, parse time backpatching its branch bodies past the whole chain.
 #
@@ -45,8 +45,8 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
 
 func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
     ports: Ports, lo, hi: int, call: PendingCallVal, retNode: int32)
-  ## Opens a macro frame and enters the body, the body's output pieces draining through
-  ## the caller's window until the frame closes on the definition node.
+  ## Opens a macro row and enters the body, the body's output pieces draining through
+  ## the caller's window until the row closes on the definition node.
 
 func scopeHas(st: RenderState, id: int32, val: var JinjaVal): bool =
   ## Scope scan innermost first, returning true with `val` set when `id` is bound.
@@ -167,7 +167,7 @@ func stepVerbatim(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rend
 func stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Evaluates the expression span and hands the result on as the pending piece, or enters
   ## a whole-expression macro call's body instead, the body's output pieces draining
-  ## through the caller's window until the frame closes.
+  ## through the caller's window until the row closes.
   template nd: Node = tmpl.nodes[n]
   var v = evalSpan(tmpl, ports, nd.lo, nd.hi)
   if v.kind == vkCall:
@@ -182,7 +182,7 @@ func stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSt
   st.curNode = nd.succ
 
 func stepIf(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
-  ## Chooses a branch once, branch bodies terminating past the chain, so no frame exists for it.
+  ## Chooses a branch once, branch bodies terminating past the chain, so no row exists for it.
   template nd: Node = tmpl.nodes[n]
   let v = evalSpan(tmpl, ports, nd.lo, nd.hi)
   if isTruthy(v):
@@ -248,7 +248,7 @@ func bindTargets(tmpl: CompiledTemplate, st: var RenderState, n: int32, item: Ji
 
 func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: int32) =
   ## Re-entry path. Moves the shared cursor to the next item passing the filter clause, re-enters
-  ## the body, or closes the frame and continues past the loop.
+  ## the body, or closes the row and continues past the loop.
   ##
   ## Contract:
   ## - the cursor increment stays committed while `bindTargets` and the filter clause run.
@@ -257,13 +257,13 @@ func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: in
   ##   in the failing call are discarded and a repull resumes after the failed item
   template nd: Node = tmpl.nodes[n]
   while true:
-    let fi = st.frames.len - 1
-    let lp = st.frames[fi].loop
+    let fi = st.rows.len - 1
+    let lp = st.rows[fi].loop
     inc lp.idx
     let idx = lp.idx
     if idx >= lp.loopLen:
-      st.scopes.setLen(st.frames[fi].scopeAt - 1)
-      st.frames.setLen(st.frames.len - 1)
+      st.scopes.setLen(st.rows[fi].scopeAt - 1)
+      st.rows.setLen(st.rows.len - 1)
       st.curNode = nd.succ
       return
     var keep = nd.filterLo == NoLink
@@ -277,9 +277,9 @@ func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: in
 
 func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## `{% for %}`:
-  ##   a matching frame on top of the stack means advance, anything else means set up the iteration.
+  ##   a matching row on top of the stack means advance, anything else means set up the iteration.
   template nd: Node = tmpl.nodes[n]
-  if st.frames.len > 0 and st.frames[^1].kind == frFor and st.frames[^1].node == n:
+  if st.rows.len > 0 and st.rows[^1].kind == frFor and st.rows[^1].node == n:
     advanceFor(tmpl, st, ports, n)
     return
   let lp = loopStateOf(evalSpan(tmpl, ports, nd.lo, nd.hi), nd.lo.int, nd.hi.int)
@@ -287,7 +287,7 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
     st.curNode = nd.succ
     return
   st.scopes.add @[]
-  st.frames.add Frame(node: n, kind: frFor, loop: lp,
+  st.rows.add Row(node: n, kind: frFor, loop: lp,
       scopeAt: st.scopes.len, filterLo: nd.filterLo, filterHi: nd.filterHi)
   lp.idx = 0
   bindTargets(tmpl, st, n, lp.loopItem(0))
@@ -308,7 +308,7 @@ func gap(kindName, corpusSite: string, lo, hi: int): void {.noreturn.} =
       cause = ceUnimplemented)
 
 func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
-  ## Unwinds to the nearest for-frame and continues at its successor, stopping at a macro-call
+  ## Unwinds to the nearest for-row and continues at its successor, stopping at a macro-call
   ## boundary so a break cannot cross out of its macro.
   template nd: Node = tmpl.nodes[n]
   gap("nkBreak", "corpus demand is 8 sites: 7 in glm53flash.jinja inside the macro " &
@@ -333,20 +333,20 @@ func stepSetBlock(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rend
 
 func stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Records the root-output span of the model's turn:
-  ##   the frame holds the opening position, and the re-entry closes it.
+  ##   the row holds the opening position, and the re-entry closes it.
   template nd: Node = tmpl.nodes[n]
   gap("nkGeneration", "corpus demand is 2 sites: lagunaxs21.jinja:44 and lfm25.jinja:77, with " &
       "8 recorded rows carrying codepoint spans", nd.lo.int, nd.hi.int)
 
 func stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
-  ## Binds a macro value and emits nothing, the body never running here. A macro frame
+  ## Binds a macro value and emits nothing, the body never running here. A macro row
   ## arriving back on the definition node closes instead, the body's output pieces drained
-  ## through the caller's window, control continuing at the frame's return node.
+  ## through the caller's window, control continuing at the row's return node.
   template nd: Node = tmpl.nodes[n]
-  if st.frames.len > 0 and st.frames[^1].kind == frMacro and st.frames[^1].node == n:
-    st.scopes.setLen(st.frames[^1].scopeAt - 1)
-    st.curNode = st.frames[^1].retNode
-    st.frames.setLen(st.frames.len - 1)
+  if st.rows.len > 0 and st.rows[^1].kind == frMacro and st.rows[^1].node == n:
+    st.scopes.setLen(st.rows[^1].scopeAt - 1)
+    st.curNode = st.rows[^1].retNode
+    st.rows.setLen(st.rows.len - 1)
     dec st.macroDepth
     return
   st.bindName(nd.macroName, macroVal(
@@ -427,9 +427,9 @@ func capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) 
 
 func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
     ports: Ports, lo, hi: int, call: PendingCallVal, retNode: int32) =
-  ## Opens a macro frame and enters the body.
+  ## Opens a macro row and enters the body.
   ## Contract:
-  ## - the body's output pieces drain through the caller's window until the frame closes on the definition node
+  ## - the body's output pieces drain through the caller's window until the row closes on the definition node
   ## - depth is capped, and a breach raises, `lo` and `hi` bounding the call's site
   if st.macroDepth >= MacroDepthCap:
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
@@ -437,14 +437,14 @@ func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
   inc st.macroDepth
   st.scopes.add @[]
   bindMacroArgs(tmpl, sym, st, ports, call.mc.node, call.args)
-  st.frames.add Frame(node: call.mc.node, kind: frMacro, pc: call.mc.body,
+  st.rows.add Row(node: call.mc.node, kind: frMacro, pc: call.mc.body,
       retNode: retNode, scopeAt: st.scopes.len)
   st.curNode = call.mc.body
 
 func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal =
   ## Statement tier side of the macro forcer.
   ## Contract:
-  ## - the body runs on a copy of the driver, so the caller's scopes, frames, program counter,
+  ## - the body runs on a copy of the driver, so the caller's scopes, rows, program counter,
   ##   depth and pending piece are untouched by construction, and a raise inside the body
   ##   abandons the copy wholesale
   ## - the capture is transient, the copy discarded once its pieces drain into the result

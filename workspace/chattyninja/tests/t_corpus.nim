@@ -38,7 +38,7 @@ import workspace/zstd/zstd_highlevel
 
 type
   Row* = object
-    ## One recorded frame:
+    ## One recorded row:
     ##   the render inputs plus the expected outcome.
     suite*: string
     row*: string
@@ -64,8 +64,8 @@ type
 const CorpusRoot* = currentSourcePath().parentDir / "corpus"
   ## the extracted corpus tree, read-only from a test's point of view
 
-const FrameSuffix = ".json.zst"
-  ## the recorded frame suffix, the corpus tree carrying one zstd frame per row
+const RowSuffix = ".json.zst"
+  ## the recorded row suffix, the corpus tree carrying one zstd-compressed row per row id
 
 # JSON reader
 # ---------------------------------------------------------------------------
@@ -264,23 +264,23 @@ func spanList(v: JinjaVal): seq[tuple[start, stop: int]] =
       raise jsonError("generation_spans entry is not a [start, end] pair")
     result.add (pair.xs.items[0].i.int, pair.xs.items[1].i.int)
 
-func clockOf(frame: JinjaVal): float64 =
+func clockOf(payload: JinjaVal): float64 =
   ## Returns the recorded epoch, 0 when the row carries none.
-  let e = field(frame, "epoch")
+  let e = field(payload, "epoch")
   case e.kind
   of vkInt: float64 e.i
   of vkFloat: e.f
   else: 0.0
 
-func contextOf(frame: JinjaVal): JinjaVal =
+func contextOf(payload: JinjaVal): JinjaVal =
   ## Builds the template context:
   ##   the standard keys in recording order, then the row's kwargs.
   var d = DictVal()
-  dictSet(d, "messages", field(frame, "messages"))
-  dictSet(d, "tools", optList(frame, "tools"))
-  dictSet(d, "documents", optList(frame, "documents"))
-  dictSet(d, "add_generation_prompt", field(frame, "add_generation_prompt"))
-  let kw = field(frame, "kwargs")
+  dictSet(d, "messages", field(payload, "messages"))
+  dictSet(d, "tools", optList(payload, "tools"))
+  dictSet(d, "documents", optList(payload, "documents"))
+  dictSet(d, "add_generation_prompt", field(payload, "add_generation_prompt"))
+  let kw = field(payload, "kwargs")
   if kw.kind == vkDict:
     for k, key in kw.d.keys:
       dictSet(d, key, kw.d.vals[k])
@@ -288,17 +288,17 @@ func contextOf(frame: JinjaVal): JinjaVal =
 
 proc loadRow*(suite, row: string): Row =
   ## Decompresses `corpus/<suite>/<row>.json.zst` and returns the render inputs plus
-  ## the recorded outcome. The frame stem is the row id. An err row's `expected_error`
+  ## the recorded outcome. The stem is the row id. An err row's `expected_error`
   ## supplies the message, the byte offset and the span the raise must report.
-  let path = CorpusRoot / suite / (row & FrameSuffix)
-  let frame = jsonDoc(zstdDecompress(readFile(path), string))
-  let err = field(frame, "expected_error")
+  let path = CorpusRoot / suite / (row & RowSuffix)
+  let payload = jsonDoc(zstdDecompress(readFile(path), string))
+  let err = field(payload, "expected_error")
   Row(
       suite: suite,
       row: row,
-      context: contextOf(frame),
-      rendered: if err.kind == vkUndefined: pyStr(field(frame, "rendered")) else: "",
-      spans: spanList(field(frame, "generation_spans")),
+      context: contextOf(payload),
+      rendered: if err.kind == vkUndefined: pyStr(field(payload, "rendered")) else: "",
+      spans: spanList(field(payload, "generation_spans")),
       expectError: err.kind != vkUndefined,
       errorMessage: if err.kind == vkDict: pyStr(field(err, "message")) else: "",
       errorOffset:
@@ -311,15 +311,15 @@ proc loadRow*(suite, row: string): Row =
           field(err, "span").i.int
         else:
           0,
-      clock: clockOf(frame))
+      clock: clockOf(payload))
 
 proc rows*(suite: string): seq[Row] =
   ## Every recorded row of one suite, in sorted row order, the `*.json.zst` stems
   ## naming the rows.
   var stems = newSeq[string]()
-  for path in walkPattern(CorpusRoot / suite / ("*" & FrameSuffix)):
+  for path in walkPattern(CorpusRoot / suite / ("*" & RowSuffix)):
     let name = lastPathPart(path)
-    stems.add name[0 ..< name.len - FrameSuffix.len]
+    stems.add name[0 ..< name.len - RowSuffix.len]
   stems.sort
   for s in stems:
     result.add loadRow(suite, s)
@@ -504,9 +504,9 @@ block equalityRejectsChange:
 # Every recorded corpus row through the three delivery paths.
 # ---------------------------------------------------------------------------
 block corpusDelivery:
-  const parseable = ["deepseekv2lite", "gemma3", "glm47flash", "gptoss20b", "kimi",
-      "ling30", "mimo25", "mistral7bv01", "moonlight", "qwen3", "qwen35", "qwen36",
-      "qwen38flashnext"]
+  const parseable = ["deepseekv2lite", "gemma3", "gemma4", "glm47flash", "glm53flash",
+      "gptoss20b", "kimi", "lagunaxs21", "lfm25", "ling30", "mimo25", "mistral7bv01",
+      "moonlight", "northminicode10", "qwen3", "qwen35", "qwen36", "qwen38flashnext"]
   var okExact = 0
   var gapRows = 0
   var errRaised = 0
@@ -583,8 +583,8 @@ block corpusDelivery:
       renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock),
       "two renders of the same artifact through fresh drivers differed"
 
-  doAssert okExact == 55, "expected 55 rendered ok rows across 13 suites, checked " & $okExact
-  doAssert gapRows == 4, "expected 4 gap rows across 13 suites, skipped " & $gapRows
+  doAssert okExact == 64, "expected 64 rendered ok rows across 18 suites, checked " & $okExact
+  doAssert gapRows == 19, "expected 19 gap rows across 18 suites, skipped " & $gapRows
   doAssert errRaised == 16, "expected 16 err rows, checked " & $errRaised
 
 # Boundary shapes of the delivery window on one corpus row.
@@ -1180,5 +1180,5 @@ when defined(nimAllocStats):
         ", container emit ", (dictEmits - loopOnly) div iters,
         " allocs beyond the loop baseline over ", iters, " renders"
 
-echo "t_corpus: 55 ok rows byte-exact through pull, compose and render, 4 gap rows loud, " &
+echo "t_corpus: 64 ok rows byte-exact through pull, compose and render, 19 gap rows loud, " &
     "16 err rows raise the recorded error"

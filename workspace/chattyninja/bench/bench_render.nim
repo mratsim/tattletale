@@ -180,7 +180,7 @@ const
 # ── Corpus anchor rows ───────────────────────────────────────────────────────
 #
 # Anchor rows come from the corpus fixture loader, one reading pass per suite
-# so the timed and counted passes never touch the fixture frames.
+# so the timed and counted passes never touch the recorded rows.
 
 func anchorContext(req: ChatRenderRequest): JinjaVal =
   ## Render context of one recorded row, the standard keys in recording order,

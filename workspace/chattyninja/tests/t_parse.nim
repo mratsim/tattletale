@@ -79,7 +79,7 @@ for i, n in nodes:
 
 # `nkFor` is the re-entrant case, and the only one in this template:
 #   its body terminators come back
-# to the for node so iteration advances through the driver frame, never through a node field.
+# to the for node so iteration advances through the for-row, never through a node field.
 doAssert nodes[3].succ == 10'i32, "nkFor exits past endfor"
 var reentries = 0
 for n in nodes:
@@ -133,5 +133,52 @@ let (pn, _) = parseTemplate(pSrc)
 doAssert pn.nodes.len == 1 and pn.nodes[0].kind == nkVerbatim
 doAssert pSrc[pn.nodes[0].lo ..< pn.nodes[0].hi] == "keep  me  ",
     "spacing must survive: " & pSrc[pn.nodes[0].lo ..< pn.nodes[0].hi].escape
+
+# Declared-gap constructs parse into nodes:
+#   the gap raises at render when a row reaches the construct, per row, and the suite's parse
+#   stays alive. The step tier carries the gap for `nkBreak`, `nkSetBlock` and `nkGeneration`,
+#   the parse tier building the nodes with spans and links so that raise stays located.
+const breakSrc = "{% for x in xs %}{% break %}{% endfor %}"
+let (bn, _) = parseTemplate(breakSrc)
+doAssert bn.nodes.mapIt($it.kind).join(",") == "nkFor,nkBreak",
+    "nkBreak builds after its for: " & $bn.nodes.mapIt($it.kind)
+doAssert bn.nodes[1].lo.int == 20 and bn.nodes[1].hi.int == 26,
+    "nkBreak spans the keyword token"
+doAssert bn.nodes[1].succ == 0 and bn.nodes[0].child == 1,
+    "the break sits inside the for body, closing back on it"
+let (cnt, _) = parseTemplate("{% for x in xs %}{% continue %}{% endfor %}")
+doAssert cnt.nodes[1].kind == nkBreak, "`{% continue %}` parses to the same nkBreak node"
+
+# A break outside every macro and every for is malformed and raises located. A macro body
+# defers the check to its call site and parses.
+try:
+  discard parseTemplate("{% break %}")
+  doAssert false, "a top-level break parsed instead of raising"
+except JinjaError as e:
+  doAssert "`{% break %}` is outside any `{% for %}`" in e.what, e.what
+  doAssert e.offset == 3 and e.span == 5, "the raise locates the keyword: " &
+      $e.offset & "+" & $e.span
+let (mo, _) = parseTemplate("{% macro m() %}{% break %}{% endmacro %}{% for x in xs %}{{ m() }}{% endfor %}")
+doAssert mo.nodes.anyIt(it.kind == nkBreak),
+    "a break inside a macro body parses, the call site deciding the enclosure"
+
+const setBlockSrc = "{% set x %}body{% endset %}"
+let (sn, ss) = parseTemplate(setBlockSrc)
+doAssert sn.nodes.mapIt($it.kind).join(",") == "nkSetBlock,nkVerbatim",
+    "the set-block body is the capture body: " & $sn.nodes.mapIt($it.kind)
+doAssert sn.nodes[0].lo.int == 3 and sn.nodes[0].hi.int == 9,
+    "the set-block node spans the tag's keyword and target"
+doAssert ss.names[sn.nodes[0].setTarget] == "x", "the set-block target is interned"
+doAssert sn.nodes[0].child == 1 and sn.nodes[1].succ == 0,
+    "the set-block body ends back on the block node"
+
+const genSrc = "{% generation %}A{% endgeneration %}"
+let (gn, _) = parseTemplate(genSrc)
+doAssert gn.nodes.mapIt($it.kind).join(",") == "nkGeneration,nkVerbatim",
+    "the generation body is the span body: " & $gn.nodes.mapIt($it.kind)
+doAssert gn.nodes[0].lo.int == 3 and gn.nodes[0].hi.int == 14,
+    "the generation node spans the opening tag's keyword"
+doAssert gn.nodes[0].child == 1 and gn.nodes[1].succ == 0,
+    "the generation body ends back on the generation node"
 
 echo "t_parse: ", nodes.len, " nodes, ", symbols.names.len, " interned names, verbatim spans final"

@@ -406,7 +406,7 @@ const
   ]
 
 func loopAttr(v: JinjaVal, name: openArray[char]): JinjaVal =
-  ## Returns a `loop.*` attribute, read through the driver frame's shared cursor. The attribute is
+  ## Returns a `loop.*` attribute, read through the for-row's shared cursor. The attribute is
   ## selected by span compare, so an attribute inside a `{% for %}` body costs no string.
   let lp = v.lp
   let n = lp.loopLen

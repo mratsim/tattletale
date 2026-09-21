@@ -68,6 +68,8 @@ type
     done: bool # the scan reached the end of the template
     dropCur: bool # settle emptied `cur`, parseBody emits no node for it
     tagMark: int # arena length at the last tag pull, the back-trim walk stops here
+    loopDepth: int # enclosing `{% for %}` bodies under construction, 0 at top level
+    macroDepth: int # enclosing `{% macro %}` bodies under construction, 0 at top level
     symbols: CompiledSymbols
     nodes: seq[Node]
 
@@ -467,7 +469,9 @@ proc parseMacro(p: var Parser): Head =
   p.advance()
   let idx = addNode(p, mkNode(nkMacroDef, name, NoLink, NoLink, NoLink))
   parseMacroParams(p, t, i, idx)
+  inc p.macroDepth
   let body = parseBody(p, ["endmacro"])
+  dec p.macroDepth
   if p.cur.kind == tkEnd or not p.src.keywordIs(p.cur, "endmacro"):
     raise jinjaErr("`{% macro %}` has no `{% endmacro %}`", t.tLo)
   p.advance()
@@ -559,7 +563,9 @@ proc parseFor(p: var Parser): Head =
   # Target ids append after the fixed prefix, forming the tail `targetAt` reads.
   for tg in targets:
     p.nodes[idx].slots.add tg
+  inc p.loopDepth
   let body = parseBody(p, ["endfor"])
+  dec p.loopDepth
   if p.cur.kind == tkEnd or not p.src.keywordIs(p.cur, "endfor"):
     raise jinjaErr("`{% for %}` has no `{% endfor %}`", t.tLo)
   p.advance()
@@ -602,7 +608,23 @@ proc parseSet(p: var Parser): Head =
     p.advance()
     let idx = addNode(p, mkNode(nkSetNamespace, int32 v, t.tHi.int32, NoLink, targetId, fieldId))
     return Head(head: idx, tails: @[idx])
-  if j >= t.tHi or p.src[j] != '=':
+  if j >= t.tHi:
+    # `{% set target %}` block assignment:
+    #   the capture body parses like a construct body and the target binds on close,
+    #   the declared `nkSetBlock` gap raising at render when a row reaches the construct.
+    let target = p.symbols.internName(p.src.toOpenArray(nameStart, i - 1))
+    p.advance()
+    let idx = addNode(p, mkNode(nkSetBlock, int32 p.src.keywordStart(t), int32 t.tHi,
+        NoLink, NoLink, target))
+    let body = parseBody(p, ["endset"])
+    if p.cur.kind == tkEnd or not p.src.keywordIs(p.cur, "endset"):
+      raise jinjaErr("`{% set %}` block assignment has no `{% endset %}`", t.tLo)
+    p.advance()
+    p.nodes[idx].slots[SlotChild] = body.head
+    for x in body.tails:
+      patch(p.nodes, x, idx)
+    return Head(head: idx, tails: @[idx])
+  if p.src[j] != '=':
     raise jinjaErr("`{% set %}` needs a target and `=`", t.tLo)
   var v = j + 1
   while v < t.tHi and p.src[v] in cnj_types.Whitespace:
@@ -629,9 +651,28 @@ proc parseConstruct(p: var Parser): Head =
   elif p.src.keywordIs(t, "macro"):
     parseMacro(p)
   elif p.src.keywordIs(t, "break") or p.src.keywordIs(t, "continue"):
-    gap("nkBreak", "corpus demand is 8 sites: 7 in glm53flash.jinja inside the macro " &
-        "has_dup_tool_result_id, 1 in northminicode10.jinja")
-  elif p.src.keywordIn(t, ["endfor", "endif", "else", "elif", "endset"]):
+    let kw = p.src.keywordSpan(t)
+    if p.macroDepth == 0 and p.loopDepth == 0:
+      # A macro body defers the enclosure check to its call site, so only a break
+      # outside every macro and every for is malformed.
+      raise jinjaErr("`{% " & spanString(kw) & " %}` is outside any `{% for %}`",
+          p.src.keywordStart(t), kw.len)
+    let idx = addNode(p, mkNode(nkBreak, int32 p.src.keywordStart(t), int32 t.tHi, NoLink))
+    p.advance()
+    Head(head: idx, tails: @[idx])
+  elif p.src.keywordIs(t, "generation"):
+    p.advance()
+    let idx = addNode(p, mkNode(nkGeneration, int32 p.src.keywordStart(t), int32 t.tHi,
+        NoLink, NoLink))
+    let body = parseBody(p, ["endgeneration"])
+    if p.cur.kind == tkEnd or not p.src.keywordIs(p.cur, "endgeneration"):
+      raise jinjaErr("`{% generation %}` has no `{% endgeneration %}`", t.tLo)
+    p.advance()
+    p.nodes[idx].slots[SlotChild] = body.head
+    for x in body.tails:
+      patch(p.nodes, x, idx)
+    Head(head: idx, tails: @[idx])
+  elif p.src.keywordIn(t, ["endfor", "endif", "else", "elif", "endset", "endgeneration"]):
     let kw = p.src.keywordSpan(t)
     raise jinjaErr("`{% " & spanString(kw) & " %}` has no matching opener", p.src.keywordStart(t), kw.len)
   elif p.src.keywordIn(t, ["endmacro", "call", "filter", "block", "extends", "include",
