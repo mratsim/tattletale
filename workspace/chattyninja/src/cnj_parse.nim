@@ -238,6 +238,7 @@ func splitTags(p: var Parser): Tag =
           inc k
         isRaw = p.src.at("raw", k) and (k + 3 >= innerHi or p.src[k + 3] notin WsNameChars)
       if isRaw:
+        let openDash = stripAfter
         # `{% raw %}` holds its body verbatim:
         #   one text run up to the next `{% endraw %}` tag, closed by a quote-blind
         #   scan anchored on a tag-shaped `{%`, so a quote or a bare `endraw %}`
@@ -286,6 +287,10 @@ func splitTags(p: var Parser): Tag =
         if endDash:
           while rawHi > rawLo and p.src[rawHi - 1] in cnj_types.Whitespace:
             dec rawHi
+        # `-%}` on the open tag strips the body's leading whitespace run
+        if openDash:
+          while rawLo < rawHi and p.src[rawLo] in cnj_types.Whitespace:
+            inc rawLo
         if rawLo < rawHi and p.src[rawLo] in {' ', '\t'} and p.src.atLineStart(rawLo):
           while rawLo < rawHi and p.src[rawLo] in {' ', '\t'}:
             inc rawLo

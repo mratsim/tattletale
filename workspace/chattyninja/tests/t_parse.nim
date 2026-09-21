@@ -140,6 +140,12 @@ const rawShapes = [
   ("{% raw %}  X  {%- endraw %}", "  X"),
   ("{% raw %}don't{% endraw %}", "don't"),
   ("A{% raw %}X{% endraw %}B{% raw %}C{% endraw %}D", "AXBCD"),
+  # `-%}` on the open tag strips the body's leading whitespace run, `{% endraw -%}`
+  # the trailing one, the glued `endraw-%}` spelling the closer upstream accepts
+  ("A{% raw -%}  X  {% endraw %}B", "AX  B"),
+  ("X{% raw -%}\n  Y  {% endraw %}Z", "XY  Z"),
+  ("A{% raw %} X {% endraw-%}B", "A X B"),
+  ("A{% raw %}X{% endraw-%}\n  Y", "AXY"),
 ]
 for (rSrc, want) in rawShapes:
   let (rn, _) = parseTemplate(rSrc)
