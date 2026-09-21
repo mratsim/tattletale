@@ -13,10 +13,11 @@
 ##
 ## - Driver only, no `t_`/`test_` name and no test umbrella, the production kernel shape lands in `src/kernels/ceramic/sequence_mixers/`
 ## - One (bh, 8-row) state tile per threadgroup, all state arithmetic fp32, the family dtype only at the loads and at the one y rounding
+## - Kept as the band model's validation record, the core above is superseded by `src/kernels/ceramic/sequence_mixers/state_space/gdn/`
 ##
-## Both sides run the same fp32 state arithmetic. The spelling deltas are
-## the decay form (`exp(g)` vs `exp2(g·log2e)`, ≤ 4·2⁻²⁴ relative), the q̃
-## scale (divide by √Dk vs rsqrt-multiply, ≤ 2·2⁻²¹ relative) and the dot order
+## Both sides run the same fp32 state arithmetic, the spelling deltas are
+## the decay form (`exp(g)` vs `exp2(g·log2e)`, ≤ 4·2⁻²⁴ relative), the q̃ scale
+## (divide by √Dk vs rsqrt-multiply, ≤ 2·2⁻²¹ relative) and the dot order
 ##
 ## - Model stated before measurement and judged per element, u₃₂ = 2⁻²⁴ is the fp32 unit roundoff
 ##
@@ -54,7 +55,7 @@
 ## - One case per combination repeats with identical inputs and must stay bit-identical across launches
 ##
 ## - Every launch is followed by sentinel checks, kernel-written buffers inside their extents, kernel-read buffers bit-identical
-## - Total device work is 4 combinations × 41 launches of 4 threadgroups × 32 lanes
+## - Total device work is 4 combinations × 42 launches (40 + 2 determinism relaunches) of 4 threadgroups × 32 lanes
 ##
 ## Run (from the op worktree root):
 ##   nim c -r -d:release --hints:off --warnings:off -o:build/poc_gdn_step workspace/positron/tests/poc_ceramic_gdn_step.nim
@@ -161,9 +162,14 @@ proc gdnStepCoreBf16(
   let v32 = vT.frags[0][0].frag[0].float32
   let delta = beta[bh].float32 * (v32 - kvMem)
 
-  const rowTiles = TileR div 8
-  const colTiles = Dk div 8
-  const vpt = 2
+  const atom = getTileConfig(float32, float32)
+  static:
+    doAssert TileR == 8, "the y store maps one atom row block per column block"
+    doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
+    doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
+  const rowTiles = TileR div atom.getM()
+  const colTiles = Dk div atom.getN()
+  const vpt = atom.getVpt()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
@@ -238,9 +244,14 @@ proc gdnStepCoreF16(
   let v32 = vT.frags[0][0].frag[0].float32
   let delta = beta[bh].float32 * (v32 - kvMem)
 
-  const rowTiles = TileR div 8
-  const colTiles = Dk div 8
-  const vpt = 2
+  const atom = getTileConfig(float32, float32)
+  static:
+    doAssert TileR == 8, "the y store maps one atom row block per column block"
+    doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
+    doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
+  const rowTiles = TileR div atom.getM()
+  const colTiles = Dk div atom.getN()
+  const vpt = atom.getVpt()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
@@ -362,6 +373,8 @@ const
   RelQScale = 2.0 * 4.76837158203125e-7  # 2·2⁻²¹, rsqrt vs divide, relative
   UBf16 = 3.90625e-3                 # 2⁻⁸, the bf16 unit roundoff
   UF16 = 4.8828125e-4                # 2⁻¹¹, the fp16 unit roundoff
+  FloorSub = 2.9802322387695312e-8   # 2⁻²⁵, half the constant fp16 subnormal ulp,
+                                     # the rounding floor once |y| falls subnormal
 
 proc famUlp(fam: Family, v: float64): float64 =
   ## Width of one family-dtype ulp at a nonzero normal |v|.
@@ -538,7 +551,7 @@ proc runCombo(engine: HwEngine, fam: Family, dk: int, cases: int, seed: uint64) 
         let uFam = if fam == famBf16: UBf16 else: UF16
         let barY = 2.0 * uFam * abs(yN) +
           (2.0 * dk.float64 * U32 + RelQScale) * yAbs +
-          2.0 * U32 * abs(yN) + 2.0e-25
+          2.0 * U32 * abs(yN) + FloorSub
         let yGot = famWiden(fam, yB.hostPtr[bh * Dv + r]).float64
         let diff = abs(yGot - yN)
         doAssert diff <= barY,
@@ -547,7 +560,7 @@ proc runCombo(engine: HwEngine, fam: Family, dk: int, cases: int, seed: uint64) 
         let uAt = famUlp(fam, yN)
         if uAt > 0.0 and diff > 0.0:
           worstYUlp = max(worstYUlp, diff / uAt)
-        else:
+        if diff == 0.0:
           inc yExact
         inc yTotal
 
