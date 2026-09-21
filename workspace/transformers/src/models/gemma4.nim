@@ -36,7 +36,7 @@ proc loadGemma4Model(modelPath: string, device: DeviceKind): AnyModel =
   else:
     raise newException(ValueError,
       "[ttt] loadGemma4Model: the checkpoint carries neither per-layer " &
-      "embeddings nor a routed block, no port seats this Gemma4" &
+      "embeddings nor a routed block, no port instantiates this Gemma4" &
       "ForConditionalGeneration layout")
 
 static:

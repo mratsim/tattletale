@@ -15,9 +15,9 @@ Per-layer-kind data parameterizes it, the same typed implementation serves the w
 
 `FullVisibilityWindow` (`int.high`) removes the band, every key at or before the query stays visible.
 
-All pre-existing full-attention families instantiate the spelling at `FullVisibilityWindow`.
+Full-attention families instantiate the spelling at `FullVisibilityWindow`, the `window` parameter default.
 
-Their compiled forward path is unchanged, the sentinel never binds a mask.
+Their compiled forward path is the plain causal path, the sentinel never binds a mask.
 
 ## Mask as data
 
@@ -59,7 +59,7 @@ The attention layer stays theta-agnostic and consumes whatever rows the model wi
 | North                                 | f-first 4:1 pattern          | per-layer kind sequence, window and theta per kind         |
 | Laguna                                | yarn + partial rotary 0.5    | partial width sits on the rotary table build               |
 | gemma-4                               | dual theta + partial 0.25    | two theta tables, rotary width per kind                    |
-| gemma-4 KV tying (`attention_k_eq_v`) | separate K and V cache paths | no tied-cache assumption, the pages write and gather apart |
+| gemma-4 KV tying (`attention_k_eq_v`) | separate K and V cache paths | the pages write and gather apart                             |
 | gemma-4-E2B PLE                       | model-level construct        | no attention axis                                          |
 | gpt-oss attention sinks               | not a datum of this spelling | needs a new attention-call axis                            |
 
@@ -81,7 +81,7 @@ The cache stores K and V separately, no tied-cache tensor exists in the referenc
 
 The page cache already holds independent `k_view` and `v_view` pages.
 
-The spelling writes and gathers them separately, no tied-cache assumption exists in the path.
+The spelling writes and gathers K and V separately.
 
 ### Sinks (gpt-oss)
 

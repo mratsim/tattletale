@@ -10,7 +10,7 @@
 ## The parallel block normalizes once, both mixers read the same
 ## normalized rows, the block output adds both contributions.
 ##
-## - rope layers 0/1 seat the paired q/k projections, layer 4 is unrotated
+## - rope layers 0/1 load the paired q/k projections, layer 4 is unrotated
 ## - routed blocks replay the degenerate one-group sigmoid top-k router
 ## - the moe surfaces replay over the raw layer inputs
 ##
@@ -74,7 +74,7 @@ proc main(): bool =
 
   # The mixers load exactly as the North model file wires them.
   #
-  # - rope-carrying layers seat the evens-then-odds paired q/k projection
+  # - rope-carrying layers apply the evens-then-odds paired q/k projection
   #   rows over the plain load
   # - the unrotated layer 4 keeps the checkpoint rows as is
   let attn0 = RopeGQAttention[void].load(view, cfgJson,
@@ -123,7 +123,7 @@ proc main(): bool =
     F.tensorOptions(F.kInt64, dev)).unsqueeze(0)
 
   # The attention op surface over one normalized layer input, the rope
-  # rows the caller seats.
+  # rows the caller supplies.
   #
   # - the kv head repeat materializes through repeat_interleave
   # - sdpa runs is_causal

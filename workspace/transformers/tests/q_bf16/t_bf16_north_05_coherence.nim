@@ -11,7 +11,11 @@
 ## - the answer must be top-1, or inside top-8 while clearing every fixed rival by the stated margin
 ## - accepted answers and rivals come from code syntax and world knowledge, thresholds come from the logit scale
 ##
+## prompt ─► stack forward ─► answer-position rank ─► margin check over the fixed rivals
+##
 ## Secondary, one greedy chain over the bounded budget:
+##
+## prompt ids ─► forward ─► argmax append ─► finiteness and surface form checked per step
 ##
 ## - every step's logits stay finite and the accepted surface form must appear among the generated ids
 ## - the base checkpoint free-runs without an EOS, termination is reported aloud, not asserted

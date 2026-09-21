@@ -26,7 +26,6 @@ type
     num_kv_head*: int
     num_kv_groups: int
     qo_attn_dim*: int
-    kv_attn_dim: int
     softmax_scale*: float64
 
   RopeGQAttention*[QKNorm] = ref object
@@ -173,7 +172,6 @@ func init*(_: type GroupedQueryAttention, num_qo_head, num_kv_head, head_dim: in
     num_kv_head: num_kv_head,
     num_kv_groups: num_kv_groups,
     qo_attn_dim: num_qo_head * head_dim,
-    kv_attn_dim: num_kv_head * head_dim,
     softmax_scale: scale
   )
 

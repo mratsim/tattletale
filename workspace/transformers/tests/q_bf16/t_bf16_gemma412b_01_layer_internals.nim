@@ -5,17 +5,12 @@
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Layer 0/5 unit replay of the gemma-4-12B-it checkpoint, one sliding
-## layer and one full layer per the 5:1 sliding/full pattern.
+## Layer 0/5 unit replay of the gemma-4-12B-it checkpoint, one sliding layer and one full layer per the 5:1 sliding/full pattern.
 ##
 ## The sandwich block runs two norms around attention and FFN, the layer scalar scales the layer output:
 ##
-## - the full layers are KV-tied (attention_k_eq_v), no v_proj weight exists,
-##   the value rows are the unscaled value norm over the same k projection
-##   the keys consume, the raw projection source row is the recorded k_proj_output
-## - the reference cache keeps K and V as separate entries on both layer kinds,
-##   the paged write/gather round-trip over the shared pool replays the recorded
-##   cache_k/cache_v boundary rows
+## - the full layers are KV-tied (attention_k_eq_v), no v_proj weight exists, the value
+##   rows are the unscaled value norm over the k projection the keys consume
 ##
 ## Replay runs on testDevice(), Metal here, the fixture recording torch-side mps.
 ##

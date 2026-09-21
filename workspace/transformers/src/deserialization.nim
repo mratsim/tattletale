@@ -241,7 +241,7 @@ proc load*(_: type BlockSparseFFN, view: SafetensorsCollection, cfg: JsonNode,
       cfg{"num_shared_experts"}.getInt(0)
   var sharedKey = prefix & ".shared_experts"
   if sharedCount == 0 and cfg{"shared_expert_intermediate_size"}.getInt(0) > 0:
-    # The singular-key lineage (Laguna) seats one shared expert whose
+    # The singular-key lineage (Laguna) ships one shared expert whose
     # prefix is .shared_expert, its width row is
     # shared_expert_intermediate_size and no count row is present.
     # A checkpoint membership test discriminates the spelling.
@@ -442,17 +442,17 @@ proc load*[QKNorm](_: type RopeGQAttention[QKNorm], view: SafetensorsCollection,
   ##     for a sliding layer kind
   ##   - `softmaxScale` overrides the head-width attention scale when positive,
   ##     for checkpoints that scale by the query pre-attention scalar
-  ##   - `kvSourceLayer` seats a gemma-4 shared-kv layer, one that loads
+  ##   - `kvSourceLayer` wires a gemma-4 shared-kv layer, one that loads
   ##     no k_proj/v_proj/k_norm and whose checkpoint carries those keys
-  ##     dead or not at all
+  ##     zeroed or absent
   ##
   ## Shared-kv and gated spellings:
   ##   - `perHeadGate` loads the per-head-gated kinds' `[hidden, heads]`
   ##     g_proj weight (Laguna)
-  ##   - `vNorm` seats the value-path single-rounding norm, a ones-weight
+  ##   - `vNorm` is the value-path single-rounding norm, a ones-weight
   ##     FusedRmsNorm the caller constructs, the with_scale=False spelling
   ##     carries no checkpoint tensor
-  ##   - `kEqV` seats the KV-tied spelling of the gemma-4 attention_k_eq_v
+  ##   - `kEqV` selects the KV-tied spelling of the gemma-4 attention_k_eq_v
   ##     full layers, where no v_proj weight loads and the value rows
   ##     derive from the shared k projection at forward
   let qProj = Linear.load(view, cfg, prefix & ".q_proj", device)

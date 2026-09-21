@@ -81,7 +81,7 @@ func parseGemma4Text26BConfig(json: JsonNode): Gemma4Text26BConfig =
   result.model_type = json{"model_type"}.getStr()
 
   # The language stack lives under text_config, the multimodal wrappers
-  # carry their own towers this port does not seat.
+  # carry their own towers this port does not load.
   let tc = json{"text_config"}
   result.num_hidden_layers = tc{"num_hidden_layers"}.getInt().int
   result.hidden_size = tc{"hidden_size"}.getInt().int

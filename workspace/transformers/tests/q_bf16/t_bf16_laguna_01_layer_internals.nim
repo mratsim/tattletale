@@ -91,7 +91,7 @@ proc main(): bool =
   # Layer surfaces loading exactly as the Laguna model file wires them:
   #
   # - the attention mixer carries the per-head g_proj projection
-  # - the routed blocks seat the sigmoid top-k router with the selection
+  # - the routed blocks load the sigmoid top-k router with the selection
   #   bias over the hidden-dtype scoring GEMM
   # - the returned routing weights stay the unscaled renormalized scores,
   #   the routed scaling factor applies at the FFN routed output, layer 0

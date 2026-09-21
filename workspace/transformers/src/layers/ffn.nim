@@ -186,14 +186,14 @@ func init*(
 # shared proc for every router type, the routing-weight rounding
 # selected at compile time by a policy type.
 #
-# Maintainer note, numerical contract for the prefill path, a suite-band
-# spelling against the grouped_mm reference, the reference seat is
-# the groupedPairSum branch
+# Maintainer note, numerical contract for the prefill path, the spelling
+# differs from the grouped_mm reference in rounding sites only, inside
+# the suite tolerance
 # - one fused GEMM per hit expert covers the full [2I, H] gate/up
 #   weight, narrow per-half GEMMs round differently
 # - experts visited in ascending index order, token groups disjoint,
-#   so each accumulator row takes exactly one addition per scatter_add call, a suite-band spelling,
-#   the grouped_mm reference seats `groupedPairSum = true`
+#   so each accumulator row takes exactly one addition per scatter_add call,
+#   the grouped_mm reference sets `groupedPairSum = true`
 # - weight values pass through unchanged, renormalization and dtype
 #   cast belong to the router
 #
@@ -252,7 +252,7 @@ type
     ##
     ## - a drift against the grouped_mm reference, whose pairs carry
     ##   a bf16 weight product and an f32 token-sum single rounding,
-    ##   bounded by suite bands
+    ##   inside the suite tolerance
     ##
   RoundBeforeMultiply* = object
     ## Routing-weight rounding policy of the gated shared-expert form
@@ -520,6 +520,9 @@ type
     ## On the non-grouped branches the routed-expert bodies run per hit
     ## expert and `groupedPairSum` swaps both branches to the transformers
     ## grouped_mm per-pair spelling of the HF reference:
+    ##
+    ##   prefill ─► per-expert fused GEMMs ─► scatter_add in ascending expert order
+    ##   decode ─► batched gather ─► batched matmuls ─► routing-order sum
     ## - prefill (T > 1):
     ##   fused gate_up GEMM per hit expert, SiLU on the gate half, down GEMM, then the f32 routing
     ##   weight multiplies the bf16 expert output, per-term bf16 rounding on the scatter_add accumulator
@@ -527,8 +530,8 @@ type
     ##   the routing weight rounds to the hidden dtype BEFORE the multiply, the HF gated
     ##   router computes the routing weights at the hidden dtype
     ## - decode (T = 1):
-    ##   one routed expert run per top-k position with an f32
-    ##   routing-order accumulator, a suite-band drift against the grouped_mm reference
+    ##   one routed expert run per top-k position, an f32 routing-order accumulator
+    ##   with a rounding-site difference against the grouped_mm reference, inside the suite tolerance
     gateUpProj: Tensor   ## [E, 2I, H] fused: gate rows 0:I, up rows I:2I
     downProj: Tensor     ## [E, H, I]
     numExperts: int
@@ -544,8 +547,8 @@ type
       ##   - Laguna spells `experts(...) * routed_scaling_factor + shared`
       ##   - 1.0 for the families whose router returns the scaled weights
       ##
-      ## The exact 1.0 comparison is the no-scale dispatch sentinel, exact-default
-      ## detection by contract, no scaled family carries the value 1.0
+      ## The exact 1.0 comparison is the no-scale dispatch sentinel, no scaled
+      ## family carries the value 1.0
     groupedPairSum: bool
       ## Expert dispatch over every (token, top-k position) pair under
       ## the transformers grouped_mm reference spelling.
@@ -678,8 +681,8 @@ func expertForwardPrefillPlain(
       self.gateUpProj[e], self.downProj[e], currentStates, self.activation)
 
     # f32 routing weight per (token, position) pair, the product rounds to the hidden dtype per term
-    # and each scatter_add rounds into the bf16 accumulator, a suite-band spelling, the grouped_mm
-    # reference seat is the groupedPairSum branch
+    # and each scatter_add rounds into the bf16 accumulator, the grouped_mm
+    # reference spelling, the `groupedPairSum = true` branch
     var weightVals = newSeq[float32](n)
     for i in 0 ..< n:
       weightVals[i] = weights32[tokenIdx[i], topKPos[i]].item(float32)
@@ -709,6 +712,11 @@ func expertForwardPairs*(
   ##   with a single rounding to the hidden dtype
   ##
   ## Grouping plan:
+  ##
+  ##   pairs ─► counting-sort by expert id on the host
+  ##     ├─► grouped gate_up GEMM, activation, grouped down GEMM
+  ##     ├─► restore the pair rows to topKIndex column order
+  ##   └─► weighted f32 token sum over the top-k axis, one rounding to the hidden dtype
   ##
   ## - the pair ids counting-sort on the host, pairs of one group keep
   ##   their (token, position) order

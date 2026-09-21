@@ -7,7 +7,7 @@
 
 ## Full-forward-to-logits suite for the Laguna-XS-2.1 stack, the 40 plain
 ## local-residual blocks replayed layer by layer, dual-theta rope
-## re-selected per layer kind, the routed blocks seated per layer.
+## re-selected per layer kind, the routed blocks are per-layer instances.
 ##
 ## Requires the local model at tests/hf_models/Laguna-XS-2.1 (gitignored).
 ##

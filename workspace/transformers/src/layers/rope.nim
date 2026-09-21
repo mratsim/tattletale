@@ -12,78 +12,28 @@ import
 
 type
   RotaryPositionEmbedding* = ref object
-    ## Rotary Position Embedding (RoPE):
-    ##   precomputed cosine/sine lookup table.
+    ## Rotary Position Embedding (RoPE), a per-model precomputed cosine/sine
+    ## lookup table, immutable after init
     ##
-    ## **LIFETIME**:
-    ##   Per-model. Created once by `new()` at model initialization.
-    ##   Destroyed when the model (and its shared `rotary` ref) is dropped.
+    ## new(head_dim, max_seq_len, rope_theta, dtype, device, rotary_dim)
+    ##   ─► cos_cache, sin_cache, shape (max_seq_len, rotary_dim)
+    ## ctx.setRopeForPositions(rotary) ─► ropeByPositions(ctx.position_ids)
+    ##   ─► ctx.cos, ctx.sin, shape (seq_len, rotary_dim)
     ##
-    ##   `cos_cache` and `sin_cache` are **immutable after init** — they are
-    ##   **precomputed tables**, not mutable runtime state.
+    ## Ownership split:
+    ##  | Kind                | Lifetime    | Owner                     |
+    ##  | ------------------- | ----------- | ------------------------- |
+    ##  | Layer weights       | Per model   | Layer objects             |
+    ##  | Precomputed tables  | Per model   | Config objects (this one) |
+    ##  | Sliced cos/sin      | Per request | InferenceContext          |
+    ##  | Rope variant config | Per model   | Model (not orchestrator)  |
     ##
-    ## **DATA FLOW**:
-    ##
-    ## ```
-    ##  ┌─────────────────────────────────────────────────────────┐
-    ##  │  Model Init (once, per model)                           │
-    ##  │  new(head_dim, max_seq_len, rope_theta, dtype, device,  │
-    ##  │      rotary_dim = head_dim)                             │
-    ##  │  └─► fills cos_cache, sin_cache  (max_seq_len, rotary_dim)│
-    ##  └─────────────────────────────────────────────────────────┘
-    ##
-    ##  ┌─────────────────────────────────────────────────────────┐
-    ##  │  Each Forward Pass                                      │
-    ##  │  ropeByPositions(position_ids)                                  │
-    ##  │    └─► index_select on cache  (seq_len, rotary_dim)       │
-    ##  │        └─► ctx.setRopeForPositions(rotary)                     │
-    ##  │              └─► attention layers read ctx.cos, ctx.sin │
-    ##  └─────────────────────────────────────────────────────────┘
-    ## ```
-    ##
-    ## **WHY THE CACHE LIVES HERE (not the sliced cos/sin)**:
-    ##
-    ## The **cache** is **model config** (immutable after init). The **sliced cos/sin**
-    ## for each forward pass are **request state** and live in InferenceContext:
-    ##
-    ##  | Kind                  | Lifetime     | Owner                      |
-    ##  |-----------------------|--------------|------------------------------|
-    ##  | Layer weights         | Per model    | Layer objects              |
-    ##  | Precomputed tables    | Per model    | Config objects (this one)    |
-    ##  | Sliced cos/sin        | Per request  | InferenceContext             |
-    ##  | Rope variant config   | Per model    | Model (not orchestrator)     |
-    ##
-    ## `cos_cache`/`sin_cache` fall in the second category. They are derived
-    ## from `rope_theta` (model config) and reused across every forward pass
-    ## and every request on this model. The sliced cos/sin for each forward pass
-    ## are stored in InferenceContext via `ctx.setRopeForPositions(rotary)`.
-    ##
-    ## **INVARIANTS**:
-    ##
-    ##  - `cos_cache.shape == sin_cache.shape == (max_seq_len, rotary_dim)`,
-    ##    with `rotary_dim <= head_dim` and `max_seq_len == self.max_seq_len`
-    ##  - Each value `cos_cache[p, d]` equals `cos(p * rope_theta^(-d/rotary_dim))`
-    ##    (NEOX half-repeat: dim d and dim d + rotary_dim/2 share a frequency)
-    ##  - `ropeByPositions(position_ids)` returns tensors of shape `(seq_len, rotary_dim)`
-    ##    where `seq_len == position_ids.numel()`
-    ##  - `applyRope` rotates only the first `rotary_dim` columns of head_dim.
-    ##    The remaining columns pass through unchanged.
-    ##  - `applyRope` is pure:
-    ##    same inputs always produce same outputs
-    ##
-    ## **USAGE**:
-    ##
-    ##  ```nim
-    ##  # Model init (once)
-    ##  let rotary = RotaryPositionEmbedding.new(128, 8192, 1e6, kBFloat16, kCPU)
-    ##
-    ##  # Partial rotary: only the first 64 of 256 dims rotate (Qwen3.5)
-    ##  let rotary = RotaryPositionEmbedding.new(256, 262144, 1e7, kBFloat16, kCPU, rotary_dim = 64)
-    ##
-    ##  # Each forward pass: model calls ctx.setRopeForPositions(rotary)
-    ##  ctx.setRopeForPositions(rotary)
-    ##  # ... attention layers read ctx.cos, ctx.sin internally
-    ##  ```
+    ## Invariants:
+    ## - `cos_cache`/`sin_cache` shape `(max_seq_len, rotary_dim)`, `rotary_dim <= head_dim`
+    ## - `cos_cache[p, d] == cos(p * rope_theta^(-d/rotary_dim))`, the NEOX
+    ##   half-repeat, dim d and dim d + rotary_dim/2 share a frequency
+    ## - `applyRope` rotates the first `rotary_dim` columns, the remaining
+    ##   columns pass through unchanged, the rotation is pure
     ##
     head_dim: int
     rotary_dim: int

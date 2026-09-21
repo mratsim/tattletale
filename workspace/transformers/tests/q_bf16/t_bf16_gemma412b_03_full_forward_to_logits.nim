@@ -5,8 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Full-forward-to-logits suite for the gemma-4-12B-it stack, the 48
-## sandwich decoder blocks replayed layer by layer.
+## Full-forward-to-logits suite for the gemma-4-12B-it stack, the 48 sandwich decoder blocks replayed layer by layer.
 ##
 ## Dual-theta rope re-selects per layer kind, the KV-tied full layers
 ## derive their value rows from the shared k projection, the layer

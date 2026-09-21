@@ -96,8 +96,8 @@ func parseGemma3Config(json: JsonNode): Gemma3Config =
   result.bos_token_id = json{"bos_token_id"}.getInt().int
 
   # The attention schedule comes from an explicit `layer_types` list when
-  # the checkpoint ships one (the 270m-style config), otherwise the window
-  # pattern derives it (the 1b-style config).
+  # the checkpoint ships one (gemma-3-270m-it), otherwise the window
+  # pattern derives it (gemma-3-1b-it).
   if json.hasKey("layer_types"):
     var layerIdx = 0
     for entry in json{"layer_types"}.items():
@@ -111,7 +111,7 @@ func parseGemma3Config(json: JsonNode): Gemma3Config =
     result.layerKinds = deriveGemma3LayerKinds(
       result.num_hidden_layers, result.sliding_window_pattern)
 
-  # eos_token_id ships as an int or as a stop-set list, the 1b config
+  # eos_token_id ships as an int or as a stop-set list, gemma-3-1b-it
   # lists [1, 106].
   let eos = json{"eos_token_id"}
   if eos.kind == JArray:

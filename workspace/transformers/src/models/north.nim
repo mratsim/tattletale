@@ -131,7 +131,7 @@ type
     embedTokens: Embedding
     layers: seq[AnyDecoderLayer]
       ## Dense prefix block and routed blocks on one sequence,
-      ## both seated as FanoutDecoderLayer instantiations.
+      ## both instantiated as FanoutDecoderLayer blocks.
     norm: RmsNorm
     lmHead: LMHead
     config: NorthConfig
@@ -139,7 +139,7 @@ type
       ## Per-layer rope decision.
       ##
       ## - Sliding layers and the forced-rope dense prefix rotate
-      ## - Full routed layers do not
+      ## - Full routed layers stay unrotated
     rotary: RotaryPositionEmbedding
       ## Single rope table of the rotating layers.
     tokenizerPath: string
@@ -280,12 +280,12 @@ proc loadNorthModelRaw(modelPath: string, device: DeviceKind): NorthModel =
     "\", the port implements the silu checkpoint family only")
   checkValue(not config.attention_bias,
     "[ttt] NorthConfig: attention_bias checkpoints carry biases the port " &
-    "does not seat")
+    "does not implement")
   checkValue(not config.use_qk_norm,
     "[ttt] NorthConfig: use_qk_norm checkpoints carry q/k norms the port " &
-    "does not seat")
+    "does not implement")
   checkValue(config.use_parallel_block,
-    "[ttt] NorthConfig: the port seats the fanout residual block only")
+    "[ttt] NorthConfig: the port instantiates the fanout residual block only")
   checkValue(config.expert_selection_fn == "sigmoid",
     "[ttt] NorthConfig: expert_selection_fn is \"" &
     config.expert_selection_fn &

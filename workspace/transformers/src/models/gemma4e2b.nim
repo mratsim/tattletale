@@ -78,7 +78,7 @@ func parseGemma4E2BConfig(json: JsonNode): Gemma4E2BConfig =
   result.model_type = json{"model_type"}.getStr()
 
   # The language stack lives under text_config, the multimodal wrappers
-  # carry their own towers this port does not seat.
+  # carry their own towers this port does not load.
   let tc = json{"text_config"}
   result.num_hidden_layers = tc{"num_hidden_layers"}.getInt().int
   result.hidden_size = tc{"hidden_size"}.getInt().int
@@ -288,9 +288,9 @@ proc loadGemma4E2BModelRaw(modelPath: string, device: DeviceKind): Gemma4E2BMode
 
   checkValue(config.hidden_size_per_layer_input > 0,
     "[ttt] Gemma4E2BConfig: hidden_size_per_layer_input is 0, the port " &
-    "seats the per-layer-embedding checkpoint family only")
+    "implements the per-layer-embedding checkpoint family only")
   checkValue(config.use_double_wide_mlp,
-    "[ttt] Gemma4E2BConfig: use_double_wide_mlp is false, the port seats " &
+    "[ttt] Gemma4E2BConfig: use_double_wide_mlp is false, the port implements " &
     "the double-wide shared-layer checkpoint family only")
 
   # The language stack keys sit under the model.language_model prefix,

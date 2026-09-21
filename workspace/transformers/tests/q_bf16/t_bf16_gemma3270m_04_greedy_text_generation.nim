@@ -9,11 +9,11 @@
 ##
 ## - per step the argmax decision via assertArgMax (token, top-32 logits, KL, tail)
 ## - tie-eligible picks teacher-force the recorded token
-## - the Fox story chain stays unreplayed, its bf16-chaotic prefill row unbindable
+## - the Fox story chain stays unreplayed, its prefill row exceeds every device tolerance
 ##
-## The dropped Fox row evaluates top-1 6.4375 bf16-MPS, 4.59 bf16-CPU,
+## The excluded Fox row measures top-1 6.4375 bf16-MPS, 4.59 bf16-CPU,
 ## 5.859 f32, 4.75 Metal, tails 6.45e-4 to 0.0128, the argmax id 107
-## identical everywhere, the 1b suite replays it green at depth 1.
+## identical on every device, the gemma-3-1b tier 01 suite replays the chain.
 ##
 ## Requires the local model at tests/hf_models/gemma-3-270m-it (gitignored).
 ##

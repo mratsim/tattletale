@@ -330,6 +330,9 @@ func forward*[SequenceMixer, HiddenMixer, Norm](
   ##
   ## Chain:
   ##
+  ## x, residual ─► input_layernorm ─► sequence_mixer ─► h + post_attention_layernorm ─► h1
+  ## h1 ─► pre_feedforward_layernorm ─► hidden_mixer ─► post_feedforward_layernorm ─► (result, h1)
+  ##
   ## - `hPair = input_layernorm(x, residual)` when a residual was carried
   ## - `hPair = (input_layernorm(x), x)` otherwise
   ## - `mixerOut = sequence_mixer(ctx, hPair[0])`

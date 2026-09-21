@@ -5,13 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Full-forward-to-logits suite for the gemma-4-E2B-it stack, the 35
-## sandwich decoder blocks replayed layer by layer, the per-layer
-## embedding tail and the layer scalar between the blocks.
+## Full-forward-to-logits suite for the gemma-4-E2B-it stack, the 35 sandwich decoder
+## blocks replayed layer by layer, the per-layer embedding tail and the layer scalar between the blocks.
 ##
-## Dual-theta rope re-selects per layer kind, the kv-sharing layers
-## gather their keys and values through the page pool, the pool slots
-## carry the widest kv width.
+## Dual-theta rope re-selects per layer kind, the kv-sharing layers gather their keys
+## and values through the page pool, the pool slots carry the widest kv width.
 ##
 ## Requires the local model at tests/hf_models/gemma-4-E2B-it (gitignored).
 ##

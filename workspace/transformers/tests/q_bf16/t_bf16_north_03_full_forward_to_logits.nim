@@ -104,7 +104,7 @@ proc main(): bool =
         depth = 5 * layerIdx - 1,
         msg = "layer " & $layerIdx & " boundary input")
 
-    # Per-layer rope seating, the model file's own decision.
+    # Per-layer rope assignment, the model file's own decision.
     #
     # - rotating layers upcast the bf16-grid rows to f32
     # - the unrotated full routed layers consume zero-angle rows

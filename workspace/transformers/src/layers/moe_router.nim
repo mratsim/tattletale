@@ -8,9 +8,8 @@
 ## MoE routers of the DeepSeek family, three typed forms plus one embedded-weight form.
 ##
 ## Typed forms:
-## - NoAuxTopCorr (noaux_tc family) sigmoid-scores, the bias steers only
-##   the pick, weights gather from the unbiased scores, then renormalize
-##   per config. Lineage spellings live in the `scalesWeights`/`scoreBf16` docs.
+## - NoAuxTopCorr (noaux_tc family) sigmoid-scores, the bias steers only the pick,
+##   weights gather from the unbiased scores, renormalize per config
 ## - GreedyRouter softmax-scores, straight top-k, scaled, no renorm and no bias.
 ## - SoftmaxTopkRouter softmax-scores over a shaped input, renormalizes
 ##   the picked probabilities and applies the per-expert scale (gemma-4).
@@ -18,14 +17,6 @@
 ## Embedded-weight form:
 ## - `routeToExperts` (Qwen family) softmax-scores, renormalizes top-k weights
 ##   at the hidden dtype, router weight on the FFN object.
-##
-## One algorithm serves every noaux_tc checkpoint, degenerate grouping
-## included. n_group 1 leaves the mask at all-ones inside the same
-## op sequence, no runtime branch.
-##
-## Routing constants arrive from config:
-##   expert count, top-k, group counts, scaling factor and the bias
-## values are all init arguments.
 ##
 ## Bias-buffer key naming is a model-load concern, out of this module.
 
