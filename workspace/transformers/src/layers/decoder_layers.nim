@@ -361,11 +361,11 @@ template `()`*[SequenceMixer, HiddenMixer, Norm](
   layer.forward(ctx, x, residual)
 
 
-# ─── Parallel decoder layer generic ────────────────────────────────────────
+# ─── Fanout decoder layer generic ──────────────────────────────────────────
 
 type
-  ParallelDecoderLayer*[SequenceMixer, HiddenMixer, Norm] = ref object
-    ## Decoder block with the parallel residual placement (cohere lineage):
+  FanoutDecoderLayer*[SequenceMixer, HiddenMixer, Norm] = ref object
+    ## Decoder block with the fanout norm placement (cohere lineage):
     ## ONE input norm feeds both mixers, the block output adds the two sublayer
     ## contributions to the stream.
     ##
@@ -374,7 +374,7 @@ type
     ##      └──────────────────────────── + ◄────────────┘   → block output
     ##
     ## DecoderLayer normalizes the mixer input of a sequential chain, one
-    ## norm per sublayer. The parallel shape normalizes once, both mixers
+    ## norm per sublayer. The fanout shape normalizes once, both mixers
     ## read the same normalized rows, `x + attn(hNorm) + mlp(hNorm)`.
     ##
     ## The two shapes are not interchangeable, the checkpoint config names
@@ -384,29 +384,29 @@ type
     hidden_mixer: HiddenMixer
 
 func init*[SequenceMixer, HiddenMixer, Norm](
-    _: type ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+    _: type FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm],
     input_layernorm: Norm,
     sequence_mixer: SequenceMixer,
     hidden_mixer: HiddenMixer
-): ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm] =
-  ## Take the one shared norm and the two mixers of one parallel decoder block.
+): FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm] =
+  ## Take the one shared norm and the two mixers of one fanout decoder block.
   ##
   ## Contract:
   ## - the block carries no layer identity
   ## - the KV-cache layer index and the safetensors key prefix live on the mixers that need them
-  ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm](
+  FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm](
     input_layernorm: input_layernorm,
     sequence_mixer: sequence_mixer,
     hidden_mixer: hidden_mixer
   )
 
 proc forward*[SequenceMixer, HiddenMixer, Norm](
-  self: ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+  self: FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm],
   ctx: var InferenceContext,
   x: Tensor,
   residual: Option[Tensor]
 ): (Tensor, Tensor) =
-  ## Forward pass for one parallel decoder block on the long residual stream.
+  ## Forward pass for one fanout decoder block on the long residual stream.
   ##
   ## Expected input:
   ##
@@ -419,7 +419,7 @@ proc forward*[SequenceMixer, HiddenMixer, Norm](
   ##
   ## - the pair `(attn + mlp contributions, carried residual)`
   ## - contribution + residual equals the block output, the reference
-  ##   parallel layer output `x + residual + attn(hNorm) + mlp(hNorm)`
+  ##   fanout layer output `x + residual + attn(hNorm) + mlp(hNorm)`
   ## - the caller adds the pair at the next block boundary or at the model
   ##   final before the norm
   ##
@@ -442,7 +442,7 @@ proc forward*[SequenceMixer, HiddenMixer, Norm](
   (attnOut + mlpOut, r)
 
 template `()`*[SequenceMixer, HiddenMixer, Norm](
-    layer: ParallelDecoderLayer[SequenceMixer, HiddenMixer, Norm],
+    layer: FanoutDecoderLayer[SequenceMixer, HiddenMixer, Norm],
     ctx: var InferenceContext,
     x: Tensor,
     residual: Option[Tensor]): untyped =

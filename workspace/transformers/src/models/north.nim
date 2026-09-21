@@ -131,7 +131,7 @@ type
     embedTokens: Embedding
     layers: seq[AnyDecoderLayer]
       ## Dense prefix block and routed blocks on one sequence,
-      ## both seated as ParallelDecoderLayer instantiations.
+      ## both seated as FanoutDecoderLayer instantiations.
     norm: RmsNorm
     lmHead: LMHead
     config*: NorthConfig
@@ -285,7 +285,7 @@ proc loadNorthModelRaw(modelPath: string, device: DeviceKind): NorthModel =
     "[ttt] NorthConfig: use_qk_norm checkpoints carry q/k norms the port " &
     "does not seat")
   checkValue(config.use_parallel_block,
-    "[ttt] NorthConfig: the port seats the parallel residual block only")
+    "[ttt] NorthConfig: the port seats the fanout residual block only")
   checkValue(config.expert_selection_fn == "sigmoid",
     "[ttt] NorthConfig: expert_selection_fn is \"" &
     config.expert_selection_fn &
@@ -343,13 +343,13 @@ proc loadNorthModelRaw(modelPath: string, device: DeviceKind): NorthModel =
       config.head_dim, rotary,
       window = if sliding: config.sliding_window else: FullVisibilityWindow)
 
-    # The parallel block feeds both mixers the one input-norm output.
+    # The fanout block feeds both mixers the one input-norm output.
     # Dense prefix block below the first_k_dense_replace boundary,
     # routed block everywhere else.
     layers[i] =
       if i < config.firstKDenseReplace:
         let mlp = GatedDenseFFN.load(weights, cfgJson, lp & "mlp", device)
-        ParallelDecoderLayer[RopeGQAttention[void], GatedDenseFFN, RmsNorm].
+        FanoutDecoderLayer[RopeGQAttention[void], GatedDenseFFN, RmsNorm].
           init(inputLN, attn, mlp).to(AnyDecoderLayer)
       else:
         # Sigmoid top-k router at its degenerate grouping.
@@ -366,7 +366,7 @@ proc loadNorthModelRaw(modelPath: string, device: DeviceKind): NorthModel =
           1.0'f64,
           config.norm_topk_prob)
         let mlp = BlockSparseFFN.load(weights, cfgJson, lp & "mlp", router, device)
-        ParallelDecoderLayer[RopeGQAttention[void], BlockSparseFFN, RmsNorm].
+        FanoutDecoderLayer[RopeGQAttention[void], BlockSparseFFN, RmsNorm].
           init(inputLN, attn, mlp).to(AnyDecoderLayer)
 
   let norm = RmsNorm.load(weights, cfgJson, "model.norm", device)
