@@ -47,6 +47,19 @@ when StepBudget == 32:
     raised = e.what
   doAssert "StepBudget = 32" in raised, raised
   doAssert raised != "" and raised.len > 0
+
+  # A macro body forced for capture walks its own dispatch loop, so it carries
+  # the same budget as `pull`, and a 64-iteration for inside a forced body
+  # steps past 32.
+  raised = ""
+  try:
+    discard renderStmt("{% macro m() %}{% for x in range(64) %}{{ x }}{% endfor %}" &
+        "{% endmacro %}{% if m() %}A{% endif %}")
+    doAssert false, "a forced 64-iteration body stayed under the 32-step budget"
+  except JinjaError as e:
+    raised = e.what
+  doAssert "StepBudget = 32" in raised, raised
+  doAssert "macro force" in raised, raised
   echo "t_expr: StepBudget bite pin ok"
   quit(0)
 

@@ -655,9 +655,18 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
   # entered through, so node == mc.node alone cannot mean the body is done.
   #   - the outer row closed and dropped a row below the entry count
   #   - the flow reached mc.node with no row beyond the entry set open
+  # MacroDepthCap bounds nesting, not iterations, so the force walk keeps
+  # its own step counter with the budget `pull` enforces, a breach raising
+  # located at the node the walk reached.
   let baseRows = st2.rows.len
   var node = mc.body
+  var steps = 0
   while node != NoLink:
+    inc steps
+    if steps > StepBudget:
+      raise jinjaErr("one macro force stepped past StepBudget = " & $StepBudget &
+          ", the body walk is not terminating", tmpl.nodes[node].lo.int,
+          tmpl.nodes[node].hi.int - tmpl.nodes[node].lo.int)
     Steps[tmpl.nodes[node].kind](tmpl, sym, st2, ports2, node)
     node = st2.curNode
     while st2.pend.kind != pkNone:

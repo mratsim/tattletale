@@ -282,7 +282,6 @@ func splitMethod(v: JinjaVal, args: Args): JinjaVal =
   if sepArg.kind == vkUndefined:
     # No separator given, split on whitespace runs, dropping the empties,
     # leading and trailing whitespace yielding no part.
-    var pos = 0
     var i = 0
     var start = 0
     while i <= v.s.len:
