@@ -191,6 +191,36 @@ doAssert renderStmt("{% if not people is defined %}X{% else %}O{% endif %}",
 doAssert render("people.missing is defined", withPeople) == "False"
 doAssert render("people.name is defined", withPeople) == "True"
 
+# A macro call in a boolean condition renders to its output text, whose bytes then decide
+# the branch, matching upstream Jinja. A concat in a condition keeps raising (asserted above).
+doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% if m() %}A{% else %}B{% endif %}") == "A",
+    "a truthy macro call takes the if body"
+doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% if 0 %}X{% elif m() %}E{% else %}O{% endif %}") == "E",
+    "a truthy macro call takes the elif body"
+doAssert renderStmt("{% macro m() %}{% endmacro %}{% if m() %}A{% else %}B{% endif %}") == "B",
+    "an empty macro body renders falsy"
+doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% if not m() %}A{% else %}B{% endif %}") == "B"
+doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% if m() and 1 %}A{% else %}B{% endif %}") == "A"
+doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% if 0 or m() %}A{% else %}B{% endif %}") == "A"
+doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% if 1 or m() %}A{% else %}B{% endif %}") == "A",
+    "a short-circuit or skips the second operand's forcing"
+doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% if 0 and m() %}A{% else %}B{% endif %}") == "B"
+doAssert renderStmt("{% macro m() %}yes{% endmacro %}{{ 'a' if m() else 'b' }}") == "a",
+    "a ternary condition renders the macro call"
+doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% for x in [1, 2] if m() %}{{ x }}{% endfor %}") == "12",
+    "a for-filter condition renders the macro call"
+# An integer constant after a dot subscripts, upstream's `m.content.0` spelling of `m.content[0]`.
+doAssert render("['a', 'b'].0") == "a"
+doAssert render("['a', 'b'].1") == "b"
+doAssert render("'ab'.0") == "a", "a string's integer-constant subscript yields one codepoint"
+doAssert render("{'0': 'z'}.0") == "z", "a mapping's integer-constant subscript reads the key"
+doAssert render("people.tags.0", withPeople) == "x"
+try:
+  discard render("[1, 2].5")
+  doAssert false, "an out-of-range integer-constant subscript did not raise"
+except JinjaError as e:
+  doAssert "out of range" in e.what, e.what
+
 # Registries: filters and tests dispatch by name
 # ---------------------------------------------------------------------------
 

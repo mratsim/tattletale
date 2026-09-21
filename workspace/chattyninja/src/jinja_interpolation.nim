@@ -705,6 +705,8 @@ func argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
 
 func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Applies attr, subscript, call, filter and test chains, which bind tighter than any operator.
+  ## An integer constant after a dot is a subscript, `m.content.0` spelling
+  ## `m.content[0]` the way upstream Jinja does.
   var v = v
   while true:
     # An operator reading the chained value renders a pending macro call first.
@@ -714,6 +716,13 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       v = forceCall(ports, cx, v)
     if isPunct(cx, "."):
       advance(tmpl, cx)
+      if cx.tok.kind == exInt:
+        # `x.0` is upstream Jinja's spelling of `x[0]`, an integer-constant subscript.
+        let n = cx.tok.i
+        advance(tmpl, cx)
+        v = if cx.dry: undefinedVal() else:
+          subslice(v, intVal(n), undefinedVal(), undefinedVal(), true, false, false, false)
+        continue
       if cx.tok.kind != exName:
         raise jinjaErr("expected a name after `.`", cx.tok.lo)
       let (lo, hi) = (cx.tok.lo, cx.tok.hi)
@@ -738,9 +747,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
             case v.kind
             of vkDict, vkNs: v.d.dictGet(tmpl.wordSpan(lo, hi))
             of vkLoop: loopAttr(v, tmpl.wordSpan(lo, hi))
-            of vkUndefined: undefinedVal()
-            else: raise jinjaErr("`" & spanString(tmpl.wordSpan(lo, hi)) &
-                "` is not an attribute of a " & $v.kind, lo, hi - lo)
+            else: undefinedVal()
     elif isPunct(cx, "["):
       advance(tmpl, cx)
       var lo, hi, step = undefinedVal()
@@ -1005,17 +1012,20 @@ func cmpOne(op: Op, a, b: JinjaVal): JinjaVal =
 
 func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: Op): JinjaVal =
   ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
-  ## infix evaluating both sides.
+  ## infix evaluating both sides. `and` and `or` render a pending macro call on the left
+  ## before the truth test, a boolean position reading the output's bytes.
   case op
   of opAnd:
-    if not cx.dry and not isTruthy(lhs):
+    let l = if not cx.dry and lhs.kind == vkCall: forceCall(ports, cx, lhs) else: lhs
+    if not cx.dry and not isTruthy(l):
       skipExpr(tmpl, ports, cx, 4)
-      return lhs
+      return l
     expr(tmpl, ports, cx, 4)
   of opOr:
-    if not cx.dry and isTruthy(lhs):
+    let l = if not cx.dry and lhs.kind == vkCall: forceCall(ports, cx, lhs) else: lhs
+    if not cx.dry and isTruthy(l):
       skipExpr(tmpl, ports, cx, 3)
-      return lhs
+      return l
     expr(tmpl, ports, cx, 3)
   of opIn, opNotIn:
     let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, 6))
@@ -1125,7 +1135,8 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
       if cx.dry:
         return undefinedVal()
       let cond = evalRange(tmpl, cx.ports, shape.cLo, shape.cHi, cx.depth)
-      if isTruthy(cond):
+      let tested = if cond.kind == vkCall: forceCall(cx.ports, cx, cond) else: cond
+      if isTruthy(tested):
         return evalRange(tmpl, cx.ports, headLo, shape.aHi, cx.depth)
       if shape.hasElse:
         return evalRange(tmpl, cx.ports, shape.bLo, shape.bHi, cx.depth)

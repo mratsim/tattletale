@@ -81,6 +81,14 @@ func portForce(env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall.} =
   let e = cast[ptr PortEnv](env)
   forceMacro(e.tmpl, e.sym, e.st[], mc, args)
 
+func forceCondCall(ports: Ports, v: JinjaVal, lo, hi: int32): JinjaVal =
+  ## Renders a pending macro call read in a boolean position to its output value, the branch
+  ## test then reading the output's bytes, matching every other macro-call forcing leg.
+  ## `lo` and `hi` bound the boolean expression the raise reports when no forcer was supplied.
+  if ports.force.isNil:
+    raise jinjaErr("a macro call result was consumed where no macro forcer was supplied", lo, hi - lo)
+  ports.force(ports.env, v.pc.mc, v.pc.args)
+
 func lookupNameById(sym: CompiledSymbols, st: var RenderState, id: int32): JinjaVal =
   ## Returns the binding of an interned name, undefined when absent. The scope key is
   ## the id, so no string is rebuilt per lookup.
@@ -183,8 +191,11 @@ func stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSt
 
 func stepIf(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Chooses a branch once, branch bodies terminating past the chain, so no row exists for it.
+  ## A pending macro call in the condition renders to its output bytes before the test.
   template nd: Node = tmpl.nodes[n]
-  let v = evalSpan(tmpl, ports, nd.lo, nd.hi)
+  var v = evalSpan(tmpl, ports, nd.lo, nd.hi)
+  if v.kind == vkCall:
+    v = forceCondCall(ports, v, nd.lo, nd.hi)
   if isTruthy(v):
     st.curNode = if nd.child == NoLink: nd.succ else: nd.child
   elif nd.alt != NoLink:
@@ -253,6 +264,8 @@ func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: in
   ## Contract:
   ## - the cursor increment stays committed while `bindTargets` and the filter clause run.
   ##   Corpus filters read `loop.index0` and friends through the shared cursor
+  ## - a pending macro call in the filter condition renders to its output bytes
+  ##   before the test
   ## - a raise in either propagates to the caller per the pull contract. The bytes written
   ##   in the failing call are discarded and a repull resumes after the failed item
   template nd: Node = tmpl.nodes[n]
@@ -269,7 +282,9 @@ func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: in
     var keep = nd.filterLo == NoLink
     bindTargets(tmpl, st, n, lp.loopItem(idx))
     if nd.filterLo != NoLink:
-      let evaluated = evalSpan(tmpl, ports, nd.filterLo, nd.filterHi)
+      var evaluated = evalSpan(tmpl, ports, nd.filterLo, nd.filterHi)
+      if evaluated.kind == vkCall:
+        evaluated = forceCondCall(ports, evaluated, nd.filterLo, nd.filterHi)
       keep = isTruthy(evaluated)
     if keep:
       break

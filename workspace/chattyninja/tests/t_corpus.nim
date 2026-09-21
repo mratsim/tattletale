@@ -584,7 +584,7 @@ block corpusDelivery:
       "two renders of the same artifact through fresh drivers differed"
 
   doAssert okExact == 64, "expected 64 rendered ok rows across 18 suites, checked " & $okExact
-  doAssert gapRows == 19, "expected 19 gap rows across 18 suites, skipped " & $gapRows
+  doAssert gapRows == 26, "expected 26 gap rows across 18 suites, skipped " & $gapRows
   doAssert errRaised == 16, "expected 16 err rows, checked " & $errRaised
 
 # Boundary shapes of the delivery window on one corpus row.
@@ -1180,5 +1180,5 @@ when defined(nimAllocStats):
         ", container emit ", (dictEmits - loopOnly) div iters,
         " allocs beyond the loop baseline over ", iters, " renders"
 
-echo "t_corpus: 64 ok rows byte-exact through pull, compose and render, 19 gap rows loud, " &
+echo "t_corpus: 64 ok rows byte-exact through pull, compose and render, 26 gap rows loud, " &
     "16 err rows raise the recorded error"
