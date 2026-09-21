@@ -1465,6 +1465,25 @@ DESIGN_NARRATION_RE = re.compile(
     r"|\band not\b|\bbut not\b", re.IGNORECASE)
 
 
+def nim_block_comment_lines(text):
+    """Returns the set of 1-based line numbers inside `#[ ... ]#` block
+    comments. Raw-line checks consult the set so block-comment content is
+    never read as a line comment."""
+    out = set()
+    inside = False
+    for i, raw in enumerate(text.splitlines(), 1):
+        s = raw.strip()
+        if inside:
+            out.add(i)
+            if "]#" in s:
+                inside = False
+            continue
+        if s.startswith("#["):
+            out.add(i)
+            inside = "]#" not in s
+    return out
+
+
 def nim_design_narration_checks(path, text, findings):
     """Flags doc-comment and whole-line maintainer-comment lines that justify
     the design to the audience - the because-clause, the X-and-not-Y contrast,
@@ -1473,7 +1492,10 @@ def nim_design_narration_checks(path, text, findings):
     can they do with it? A layout decision answers nothing (the LSP shows the
     declaration), and the why of a choice dies with the choice; only
     caller-visible constraints survive in the contract."""
+    blocked = nim_block_comment_lines(text)
     for i, raw in enumerate(text.splitlines()):
+        if i + 1 in blocked:
+            continue
         m = re.match(r"^\s*##(.*)$", raw) or re.match(r"^\s*#(?!#)(.*)$", raw)
         if m and DESIGN_NARRATION_RE.search(m.group(1)):
             findings.append(Finding(
@@ -1491,7 +1513,10 @@ def nim_section_separator_checks(path, text, findings):
     layout-position marker: it says where a section sits on the screen, not
     anything a reader of the line needs, and it dies when the code moves.
     The section title line above or below carries the same information."""
+    blocked = nim_block_comment_lines(text)
     for i, raw in enumerate(text.splitlines()):
+        if i + 1 in blocked:
+            continue
         if HASH_SEPARATOR_RE.match(raw):
             findings.append(Finding(
                 path, i + 1, "section-separator",

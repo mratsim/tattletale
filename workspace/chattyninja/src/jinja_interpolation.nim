@@ -625,6 +625,12 @@ func twoDigits(n: int): string =
   ## Returns `n` zero-padded to two digits.
   if n < 10: "0" & $n else: $n
 
+func threeDigits(n: int): string =
+  ## Returns `n` zero-padded to three digits.
+  result = $n
+  while result.len < 3:
+    result = '0' & result
+
 func strftimeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
   ## Renders the format against the epoch read through the clock port, never the wall clock,
   ## which is what keeps two render instantiations over one artifact byte-identical.
@@ -648,7 +654,7 @@ func strftimeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Port
     of 'H': acc.add twoDigits(tod div 3600)
     of 'M': acc.add twoDigits((tod mod 3600) div 60)
     of 'S': acc.add twoDigits(tod mod 60)
-    of 'j': acc.add $dayOfYear(yr, mo, dy)
+    of 'j': acc.add threeDigits(dayOfYear(yr, mo, dy))
     of '%': acc.add '%'
     else: gapWhat("`strftime_now` directive", "%" & fmt[i + 1])
     inc i, 2
@@ -1135,7 +1141,12 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs, opLo)
   of opMul, opDiv, opFloorDiv, opPow:
     skipExpr(tmpl, ports, cx, binPrec(op) + 1)
-    gapWhat("operator", OpSpelling[op])
+    # A dry walk is only mapping the skipped-branch spans, no value is read,
+    # so the unimplemented operators surface only on a live evaluation.
+    if cx.dry:
+      undefinedVal()
+    else:
+      gapWhat("operator", OpSpelling[op])
   else:
     let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs, opLo)

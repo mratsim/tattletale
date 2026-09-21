@@ -33,6 +33,23 @@ func ctx(pairs: varargs[(string, JinjaVal)]): JinjaVal =
     dictSet(d, k, v)
   dictVal(d)
 
+# Compiled with `-d:StepBudget=32` (a dedicated runCmd in config.nims), one pull
+# call past 32 dispatches raises located. This variant runs alone and quits.
+# Compilations without the define run a 1M budget, the full expression tier.
+when StepBudget == 32:
+  static:
+    doAssert StepBudget == 32
+  var raised = ""
+  try:
+    discard renderStmt("{% for x in range(64) %}{{ x }}{% endfor %}")
+    doAssert false, "a 64-iteration loop stayed under the 32-step budget"
+  except JinjaError as e:
+    raised = e.what
+  doAssert "StepBudget = 32" in raised, raised
+  doAssert raised != "" and raised.len > 0
+  echo "t_expr: StepBudget bite pin ok"
+  quit(0)
+
 let people = ctx(
     ("name", strVal("ada")),
     ("age", intVal(36)),
@@ -278,6 +295,15 @@ doAssert renderStmt("{% macro m() %}{% endmacro %}A{{ m() }}B") == "AB",
 doAssert renderStmt("{% macro m() %}{% endmacro %}A{% if m() %}X{% else %}B{% endif %}C") == "ABC",
     "an empty macro body's forced capture is the empty string"
 
+# A macro body calling itself in emit position, inside a forced capture, keeps
+# running past the nested call:
+#   - the nested row closes through the steps
+#   - control lands back in the caller's body, both trailing `!` bytes delivering
+doAssert renderStmt(
+    "{% macro m(n) %}[{{ n }}]{% if n > 1 %}{{ m(n - 1) }}{% endif %}!{% endmacro %}" &
+    "{% set r = m(2) %}{{ r }}") == "[2][1]!!",
+    "a recursive same-macro emit call inside a forced capture keeps the outer body running"
+
 # Macro-argument binding raises where upstream raises:
 #   a positional past the parameter list, a positional after a keyword,
 #   a keyword naming no parameter, a keyword repeating a bound one.
@@ -321,6 +347,8 @@ block calleeArgOrder:
       reportedOf("{{ 'a,b,c'.split(sep = ',', 1) | join('|') }}"), "positional after keyword in a method call"
   doAssert renderStmt("{{ [1, 2, 3] | join(',') }}") == "1,2,3",
       "well-ordered filter arguments keep binding"
+doAssert renderStmt("{{ {'a': 1, 'b': 2} | join(', ') }}") == "a, b",
+    "a mapping's join walks its keys, upstream's visible members"
 # An integer constant after a dot subscripts, upstream's `m.content.0` spelling of `m.content[0]`.
 doAssert render("['a', 'b'].0") == "a"
 doAssert render("['a', 'b'].1") == "b"
@@ -472,13 +500,19 @@ doAssert render("people.values()", withPeople)[0 ..< 10] == "['ada', 36"
 doAssert render("people.get('name')", withPeople) == "ada"
 doAssert render("people.get('nope', 'fb')", withPeople) == "fb"
 doAssert render("'a b'.split(' ')") == "['a', 'b']"
+doAssert render("'a  b'.split()") == "['a', 'b']",
+    "a missing separator splits on whitespace runs, dropping the empties"
+doAssert render("' x '.split()") == "['x']",
+    "leading and trailing whitespace yield no split part"
+doAssert render("'a  b c'.split(' ')") == "['a', '', 'b', 'c']",
+    "an explicit separator keeps the empties"
 doAssert render("'abc'.startswith('ab')") == "True"
 doAssert render("'abc'.endswith('bc')") == "True"
 doAssert render("'  x '.strip()") == "x"
 doAssert render("'  x'.lstrip()") == "x"
 doAssert render("'x  '.rstrip()") == "x"
 doAssert render("[3, 1, 2] | list") == "[3, 1, 2]"
-# `replace` is a declared filter name with no corpus site, so reaching it must report the gap
+# `map` is a declared filter name with no corpus site, so reaching it must report the gap
 # rather than answer wrongly or silently.
 block gapIsLoud:
   var reported = ""
@@ -553,12 +587,29 @@ doAssert render("007") == "7", "a leading-zero literal parses as an integer"
 doAssert render("1.5e3") == "1500.0", "an exponent literal parses as a float"
 doAssert render("{'k': strVal}", ctx(("strVal", strVal("a'b\nc")))) == "{'k': 'a\\'b\\nc'}",
     "a container repr escapes quotes and control characters"
-doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}") == "1970-01-01 00:00:00 1",
-    "the epoch renders through the hand-rolled civil conversion"
+doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}") == "1970-01-01 00:00:00 001",
+    "the epoch renders through the hand-rolled civil conversion, the day zero-padded"
+doAssert renderStmt("{{ strftime_now('%j') }}", undefinedVal(), 345600.0) == "005",
+    "a single-digit day of year zero-pads to three digits"
+# A skipped branch never evaluates its operators, so an unimplemented operator
+# inside one raises nothing, both the ternary and short-circuit variants silent.
+doAssert renderStmt("{{ 1 if true else 2 * 3 }}") == "1",
+    "an unimplemented operator in the skipped ternary branch stays silent"
+doAssert renderStmt("{{ false and (2 * 3) }}") == "False",
+    "an unimplemented operator behind a falsy `and` stays silent"
+doAssert renderStmt("{{ true or (2 * 3) }}") == "True",
+    "an unimplemented operator behind a truthy `or` stays silent"
+try:
+  discard render("2 * 3")
+  doAssert false, "an unimplemented operator evaluated"
+except JinjaError as e:
+  doAssert "not implemented" in e.what, e.what
+doAssert renderStmt("{{ strftime_now('%j') }}", undefinedVal(), 28512000.0) == "331",
+    "a three-digit day of year pads nothing"
 doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}", undefinedVal(), 951782400.0) ==
-    "2000-02-29 00:00:00 60", "a leap-day epoch renders the day of year"
+    "2000-02-29 00:00:00 060", "a leap-day epoch renders the day of year"
 doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}", undefinedVal(), 4107542400.0) ==
-    "2100-03-01 00:00:00 60", "a non-leap century renders the day of year"
+    "2100-03-01 00:00:00 060", "a non-leap century renders the day of year"
 
 # Zero-node templates and empty for bodies
 

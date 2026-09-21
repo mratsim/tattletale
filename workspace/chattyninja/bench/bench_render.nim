@@ -486,7 +486,7 @@ proc benchCorpus(): void =
           best = samples
         if bestSpread <= 20.0:
           break
-      let mid = median(best)
+      let mid = median(best) / rs.len.float64 # a sample is ms/pass, reported per render
       let flag = if bestSpread > 20.0: "  VARIANCE" else: ""
       echo &"  {suite:14} {mid:9.4f} ms/render all {rs.len} rows   spread {bestSpread:4.1f}%{flag}"
 
@@ -525,6 +525,11 @@ proc timedCorpusPasses(tmpl: CompiledTemplate, sym: var CompiledSymbols,
   ## - the first round whose spread stays within 20% is reported
   ## - a busy machine gets up to 4 rounds
   ## - a spread above 20% flags the sample
+  ##
+  ## Returns the median in milliseconds per render, next to the per-render hf
+  ## stimulus numbers:
+  ##   - a timed run measures `iters` passes over all `rs` rows
+  ##   - the median is divided by `rs.len`
   var best: seq[float64]
   var bestSpread = 1e9
   for _ in 0 ..< 4:
@@ -538,7 +543,9 @@ proc timedCorpusPasses(tmpl: CompiledTemplate, sym: var CompiledSymbols,
       best = samples
     if bestSpread <= 20.0:
       break
-  (median(best), bestSpread)
+  # each timed run iterates `iters` full-corpus passes, a sample is
+  # milliseconds per pass, divided by the row count to report per render
+  (median(best) / rs.len.float64, bestSpread)
 
 proc benchPullWindows(): void =
   ## Pull-window timing over the corpus anchor rows, harness identical to the corpus

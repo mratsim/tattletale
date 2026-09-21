@@ -698,7 +698,8 @@ proc parseSet(p: var Parser): Head =
   let nameStart = i
   while i < t.tHi and p.src[i] in WsNameChars:
     inc i
-  if i >= t.tHi:
+  # An empty target name raises, `{% set = 3 %}` and a bare `{% set %}` included.
+  if i == nameStart:
     raise jinjaErr("`set` needs a target at byte " & $t.tLo, t.tLo)
   var j = i
   while j < t.tHi and p.src[j] in cnj_types.Whitespace:

@@ -14,7 +14,7 @@
 ##   and the injected ports, which this module cannot see
 
 import std/unicode
-import jinja_data_model, jinja_serialize
+import cnj_types, jinja_data_model, jinja_serialize
 
 type
   FilterProc = proc (v: JinjaVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
@@ -192,18 +192,30 @@ func safeFilter(v: JinjaVal, args: Args): JinjaVal =
 
 func joinMethod(v: JinjaVal, args: Args): JinjaVal =
   ## `x | join(sep)` and `x.join(sep)`:
-  ##   concatenates the values of a sequence or mapping.
-  let parts =
-    case v.kind
-    of vkSeq: v.xs.items
-    of vkDict, vkNs: v.d.vals
-    else: raise jinjaErr("`join` needs a sequence")
+  ##   concatenates a sequence's values, a mapping's keys.
+  # A mapping's join walks its keys, matching upstream, where the values are
+  # unreadable bytes and the keys the visible members.
   let sep = pyStr(getArg(args, 0, akNone, strVal("")))
   var acc = ""
-  for i, x in parts:
-    if i > 0:
-      acc.add sep
-    acc.add pyStr(x)
+  case v.kind
+  of vkSeq:
+    var first = true
+    for x in v.xs.items:
+      if first:
+        first = false
+      else:
+        acc.add sep
+      acc.add pyStr(x)
+  of vkDict, vkNs:
+    var first = true
+    for k in v.d.keys:
+      if first:
+        first = false
+      else:
+        acc.add sep
+      acc.add k
+  else:
+    raise jinjaErr("`join` needs a sequence")
   strVal(acc)
 
 func joinFilter(v: JinjaVal, args: Args): JinjaVal = joinMethod(v, args)
@@ -259,26 +271,42 @@ func valuesMethod(v: JinjaVal, args: Args): JinjaVal =
   seqVal(v.d.vals)
 
 func splitMethod(v: JinjaVal, args: Args): JinjaVal =
-  ## `s.split(sep)` over non-overlapping separator occurrences, an empty separator splitting per codepoint.
+  ## `s.split(sep)` over non-overlapping separator occurrences, an empty separator
+  ## splitting per codepoint, a missing separator splitting on whitespace runs
+  ## and dropping the empties.
   let v = if v.kind == vkCut: materializeVal(v) else: v
   if v.kind != vkStr:
     raise jinjaErr("`split` needs a string")
-  let sep = pyStr(getArg(args, 0, akNone, strVal(" ")))
+  let sepArg = getArg(args, 0, akNone, undefinedVal())
   var acc: seq[JinjaVal]
-  if sep.len == 0:
-    acc = codepointVals(v.s)
-  else:
+  if sepArg.kind == vkUndefined:
+    # No separator given, split on whitespace runs, dropping the empties,
+    # leading and trailing whitespace yielding no part.
     var pos = 0
     var i = 0
-    while i + sep.len <= v.s.len:
+    var start = 0
+    while i <= v.s.len:
+      if i == v.s.len or v.s[i] in Whitespace:
+        if i > start:
+          acc.add strVal(spanString(v.s.toOpenArray(start, i - 1)))
+        start = i + 1
+      inc i
+  else:
+    let sep = pyStr(sepArg)
+    if sep.len == 0:
+      acc = codepointVals(v.s)
+    else:
+      var pos = 0
+      var i = 0
+      while i + sep.len <= v.s.len:
       # A non-empty separator is guaranteed here, the empty one splitting per codepoint above.
-      if v.s[i] == sep[0] and sep == v.s.toOpenArray(i, i + sep.len - 1):
-        acc.add strVal(spanString(v.s.toOpenArray(pos, i - 1)))
-        pos = i + sep.len
-        i = pos
-      else:
-        inc i
-    acc.add strVal(spanString(v.s.toOpenArray(pos, v.s.len - 1)))
+        if v.s[i] == sep[0] and sep == v.s.toOpenArray(i, i + sep.len - 1):
+          acc.add strVal(spanString(v.s.toOpenArray(pos, i - 1)))
+          pos = i + sep.len
+          i = pos
+        else:
+          inc i
+      acc.add strVal(spanString(v.s.toOpenArray(pos, v.s.len - 1)))
   seqVal(acc)
 
 func sideStrip(v: JinjaVal, args: Args, name: string, left, right: bool): JinjaVal =

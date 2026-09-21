@@ -279,6 +279,24 @@ try:
 except JinjaError as e:
   doAssert e.cause == ceUnimplemented and "endmacro" in e.what, e.what
 
+# A `set` tag with no target name raises at the tag, matching upstream's
+# missing-name raise:
+#   - a bare `{% set %}`
+#   - `{% set = 3 %}` with no name at all
+# A name ending exactly at the tag end, `{% set x%}`, is a block assignment whose
+# body follows, so the raise there names the missing `{% endset %}`, never the target.
+for setNoName in ["{% set %}A", "{% set = 3 %}"]:
+  try:
+    discard parseTemplate(setNoName)
+    doAssert false, "a nameless set parsed: " & setNoName
+  except JinjaError as e:
+    doAssert "needs a target" in e.what, e.what
+try:
+  discard parseTemplate("{% set x%}3{{ x }}")
+  doAssert false, "a set with no endset parsed"
+except JinjaError as e:
+  doAssert "endset" in e.what, e.what
+
 const setBlockSrc = "{% set x %}body{% endset %}"
 let (sn, ss) = parseTemplate(setBlockSrc)
 doAssert sn.nodes.mapIt($it.kind).join(",") == "nkSetBlock,nkVerbatim",

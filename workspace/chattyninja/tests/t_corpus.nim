@@ -518,7 +518,7 @@ doAssert arena[1].slots[0] == 7'i32, "an assignment must deep-copy a spilled pay
 doAssert arena.len == 2, "the arena moved by assignment with no reference left behind"
 
 # RenderState layout contract, size locked:
-# 392 = 368 + 8 for the JinjaVal cut variant,
+# 400 = 368 + 8 for the JinjaVal cut variant,
 # 8 for the serializer's raw-body end bound, 8 for realignment,
 # 8 for the pending cut piece, whose string descriptor reuses the string branch's slot
 # and whose two byte bounds widen the variant payload to 24 bytes, +8 after realignment.

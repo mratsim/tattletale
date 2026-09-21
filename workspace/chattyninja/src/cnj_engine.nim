@@ -651,12 +651,19 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
   bindMacroArgs(tmpl, sym, st2, ports2, mc.node, args, NoOffset, 0)
   st2.curNode = mc.body
   result = strVal("")
+  # A nested streamed call flows back onto the same definition node this force
+  # entered through, so node == mc.node alone cannot mean the body is done.
+  #   - the outer row closed and dropped a row below the entry count
+  #   - the flow reached mc.node with no row beyond the entry set open
+  let baseRows = st2.rows.len
   var node = mc.body
-  while node != mc.node and node != NoLink:
+  while node != NoLink:
     Steps[tmpl.nodes[node].kind](tmpl, sym, st2, ports2, node)
     node = st2.curNode
     while st2.pend.kind != pkNone:
       capturePend(tmpl, st2, result.s)
+    if st2.rows.len < baseRows or (node == mc.node and st2.rows.len == baseRows):
+      break
 
 
 # Render driver:
