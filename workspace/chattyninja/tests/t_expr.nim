@@ -221,6 +221,23 @@ try:
 except JinjaError as e:
   doAssert "out of range" in e.what, e.what
 
+# A break unwinds to the nearest for-row and continues at its successor, the loop's after-node.
+# A continue shares the node kind and re-enters the loop instead, one item skipped.
+doAssert renderStmt("{% for x in [1, 2, 3] %}{{ x }}{% break %}{% endfor %}tail") == "1tail",
+    "a break ends the loop after the body ran, control resuming at the for's successor"
+doAssert renderStmt("{% for x in [1, 2, 3] %}{% if x == 2 %}{% break %}{% endif %}{{ x }}{% endfor %}") == "1",
+    "a break inside an if body unwinds the if, which carries no row, and ends the loop"
+doAssert renderStmt("{% for x in [1, 2, 3] %}{% if x == 2 %}{% continue %}{% endif %}{{ x }}{% endfor %}") == "13",
+    "a continue leaves the for-row in place and re-enters it, skipping one item"
+doAssert renderStmt(
+    "{% macro m() %}a{% break %}b{% endmacro %}" &
+    "{% for x in [1, 2] %}{{ m() }}{% endfor %}") == "aa",
+    "a break stops at the macro-call boundary, the body's output so far draining on each call"
+doAssert renderStmt(
+    "{% macro m() %}{% for x in [1, 2] %}{% break %}{% endfor %}{% endmacro %}" &
+    "{% if m() %}A{% else %}B{% endif %}") == "B",
+    "a break inside a for inside a forced macro body unwinds that for"
+
 # Registries: filters and tests dispatch by name
 # ---------------------------------------------------------------------------
 

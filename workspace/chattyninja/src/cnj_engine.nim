@@ -322,12 +322,50 @@ func gap(kindName, corpusSite: string, lo, hi: int): void {.noreturn.} =
   raise jinjaErr(kindName & " is not implemented; " & corpusSite, lo, hi - lo,
       cause = ceUnimplemented)
 
+func closeMacroRow(st: var RenderState, r: Row) =
+  ## Closes one macro row, the close both a body-end close and a break's boundary stop take.
+  ## - scopes pop back to the row's mark, the depth count falling with them
+  ## - control continues at the row's return node, queued pieces draining to the caller
+  st.scopes.setLen(r.scopeAt - 1)
+  st.curNode = r.retNode
+  st.rows.setLen(st.rows.len - 1)
+  dec st.macroDepth
+
 func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
-  ## Unwinds to the nearest for-row and continues at its successor, stopping at a macro-call
-  ## boundary so a break cannot cross out of its macro.
+  ## Unwinds to the nearest for-row, stopping at a macro-call boundary so a break cannot cross out of its macro.
+  ## `{% continue %}` shares the node kind, the keyword's first byte discriminating the two.
+  ## A continue leaves the for-row and its scope in place, the loop's advance step running next.
+  ##
+  ## Contract:
+  ## - capture and generation body rows above the for-row are abandoned on the walk, scopes
+  ##   popped with them, a capture sink never bound
+  ## - a break with no for-row above the next macro boundary ends that macro body early,
+  ##   output so far draining on, the same close a body-end close takes
+  ## - the walk is bounded by the row-stack depth, one pass per row, a break reaching past
+  ##   every row raising located
   template nd: Node = tmpl.nodes[n]
-  gap("nkBreak", "corpus demand is 8 sites: 7 in glm53flash.jinja inside the macro " &
-      "has_dup_tool_result_id, 1 in northminicode10.jinja", nd.lo.int, nd.hi.int)
+  let cont = tmpl.jinja[nd.lo] == 'c'
+  var k = st.rows.len - 1
+  while k >= 0:
+    let r = st.rows[k]
+    if r.kind == frMacro:
+      # Keeps the macro row for `closeMacroRow` to pop, capture rows above it dropped.
+      st.rows.setLen(k + 1)
+      closeMacroRow(st, r)
+      return
+    if r.kind == frFor:
+      if cont:
+        st.rows.setLen(k + 1)
+        st.curNode = r.node
+      else:
+        st.scopes.setLen(r.scopeAt - 1)
+        st.rows.setLen(k)
+        st.curNode = tmpl.nodes[r.node].succ
+      return
+    st.scopes.setLen(r.scopeAt - 1)
+    dec k
+  raise jinjaErr("`{% " & spanString(tmpl.jinja.toOpenArray(int(nd.lo), int(nd.hi) - 1)) &
+      " %}` ran outside every `{% for %}`", int(nd.lo), int(nd.hi - nd.lo))
 
 func stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## `ns.field = expr`, mutating the shared namespace mapping in place, visible to every
@@ -359,10 +397,7 @@ func stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rend
   ## through the caller's window, control continuing at the row's return node.
   template nd: Node = tmpl.nodes[n]
   if st.rows.len > 0 and st.rows[^1].kind == frMacro and st.rows[^1].node == n:
-    st.scopes.setLen(st.rows[^1].scopeAt - 1)
-    st.curNode = st.rows[^1].retNode
-    st.rows.setLen(st.rows.len - 1)
-    dec st.macroDepth
+    closeMacroRow(st, st.rows[^1])
     return
   st.bindName(nd.macroName, macroVal(
       MacroVal(name: nd.macroName, body: nd.child, node: n)))
@@ -478,6 +513,8 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
   var st2 = st
   inc st2.macroDepth
   st2.scopes.add @[]
+  st2.rows.add Row(node: mc.node, kind: frMacro, pc: mc.body,
+      retNode: mc.node, scopeAt: st2.scopes.len)
   var env2 = PortEnv(tmpl: tmpl, sym: sym, st: addr st2)
   let ports2 = Ports(lookup: portLookup, clock: portClock, force: portForce, env: addr env2)
   bindMacroArgs(tmpl, sym, st2, ports2, mc.node, args)
