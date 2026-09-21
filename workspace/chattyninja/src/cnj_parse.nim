@@ -420,14 +420,22 @@ func findKeyword(src: openArray[char], at, stop: int, word: string): int =
 proc parseBody(p: var Parser, stopKws: openArray[string]): Head
 proc parseConstruct(p: var Parser): Head
 
-template parseNested(p: var Parser, stopKws: openArray[string], t: Tag): Head =
-  ## One body walk of a construct, the recursion's nesting count rising at its entry,
-  ## falling once the body returns. The count is capped at `ParseNestingCap`, a breach
+template capNesting(p: var Parser, t: Tag) =
+  ## Counts one recursion level of the parse dispatch toward `ParseNestingCap`, a breach
   ## raising located at the tag. A raise aborts the whole parse, the parser value abandoned.
+  ##
+  ## Counted sites:
+  ## - body walks, at `parseNested`
+  ## - the `{% elif %}` chain, which recurses `parseIf` outside any body walk
   inc p.nesting
   if p.nesting > ParseNestingCap:
     raise jinjaErr("template nests deeper than ParseNestingCap = " & $ParseNestingCap &
         " at byte " & $t.tLo, t.tLo, t.tHi - t.tLo)
+
+template parseNested(p: var Parser, stopKws: openArray[string], t: Tag): Head =
+  ## One body walk of a construct, the recursion's nesting count rising at its entry,
+  ## falling once the body returns.
+  capNesting(p, t)
   let body = parseBody(p, stopKws)
   dec p.nesting
   body
@@ -531,7 +539,9 @@ proc parseIf(p: var Parser): Head =
     raise jinjaErr("unclosed `{% " & spanString(kwErr) & " %}`", p.src.keywordStart(t), kwErr.len)
   let term = p.cur
   if p.src.keywordIs(term, "elif"):
+    capNesting(p, t)
     let nested = parseIf(p)
+    dec p.nesting
     p.nodes[idx].slots[SlotAlt] = nested.head
     tails.add nested.tails
   elif p.src.keywordIs(term, "else"):

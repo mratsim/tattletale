@@ -293,6 +293,13 @@ func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: in
 func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## `{% for %}`:
   ##   a matching row on top of the stack means advance, anything else means set up the iteration.
+  ## An empty body completes inline at set-up, its row and scope closing as the re-entry path
+  ## closes them on exhaust.
+  ## - with no filter clause the bindings are unobservable, the close popping the scope,
+  ##   so the construct is a no-op past `succ`
+  ## - with a filter clause every remaining item still binds and runs it through
+  ##   the shared cursor, so a clause raising on data raises located exactly
+  ##   as the non-empty path would
   template nd: Node = tmpl.nodes[n]
   if st.rows.len > 0 and st.rows[^1].kind == frFor and st.rows[^1].node == n:
     advanceFor(tmpl, st, ports, n)
@@ -307,7 +314,22 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   lp.idx = 0
   bindTargets(tmpl, st, n, lp.loopItem(0))
   st.bindName(nd.loopName, loopVal(lp))
-  st.curNode = if nd.child == NoLink: nd.succ else: nd.child
+  if nd.child == NoLink:
+    if nd.filterLo != NoLink:
+      while true:
+        inc lp.idx
+        if lp.idx >= lp.loopLen:
+          break
+        bindTargets(tmpl, st, n, lp.loopItem(lp.idx))
+        var evaluated = evalSpan(tmpl, ports, nd.filterLo, nd.filterHi)
+        if evaluated.kind == vkCall:
+          evaluated = forceCondCall(ports, evaluated, nd.filterLo, nd.filterHi)
+        discard isTruthy(evaluated)
+    st.scopes.setLen(st.rows[^1].scopeAt - 1)
+    st.rows.setLen(st.rows.len - 1)
+    st.curNode = nd.succ
+    return
+  st.curNode = nd.child
 
 func stepSet(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
   ## Single-target `{% set %}`, the target carried as an interned name id in the child slot,
@@ -571,8 +593,11 @@ func startRender*(tmpl: CompiledTemplate, sym: var CompiledSymbols, root: JinjaV
   ##   renders reproducibly under different clocks
   ## - `sym` is borrowed, the context's symbol pointer must not outlive the binding it was
   ##   taken from, the same class of contract as the artifact's borrow of the template text
+  # A zero-node artifact (empty or comment-only text) dispatches nothing, its render
+  # completing on the first pull, so the program counter starts past the arena.
   Context(tmpl: tmpl, symbols: addr sym,
-      state: RenderState(curNode: 0, cur: 0, pend: Piece(kind: pkNone),
+      state: RenderState(curNode: (if tmpl.nodes.len == 0: NoLink else: 0), cur: 0,
+          pend: Piece(kind: pkNone),
           scopes: @[(default(Scope))], root: root, clock: clock))
 
 func pull*(c: var Context, buf: var openArray[char]): int =
@@ -588,6 +613,7 @@ func pull*(c: var Context, buf: var openArray[char]): int =
   ## - a piece longer than the window drains across calls, a lazy piece resuming
   ##   through the serializer in `c.state.lazy`
   ## - 0 means the render is complete, nothing pending and `c.state.curNode == NoLink`
+  ## - one call dispatches at most `StepBudget` steps, a breach raising located at the reached node
   ##
   ## A raise discards the bytes already written into `buf` in the failing call, the caller
   ## never receiving them and the render state having advanced past their render, so a repull
@@ -606,6 +632,7 @@ func pull*(c: var Context, buf: var openArray[char]): int =
   # through ports over this env, and nothing escapes the call.
   var env = PortEnv(tmpl: tmpl, sym: sym, st: addr st)
   let ports = Ports(lookup: portLookup, clock: portClock, force: portForce, env: addr env)
+  var steps = 0
   while true:
     # Retire a piece whose bytes are all delivered. A lazy piece completes when its serializer
     # is done, which a window-sized drain reports by leaving the piece queued.
@@ -644,6 +671,11 @@ func pull*(c: var Context, buf: var openArray[char]): int =
     if st.curNode == NoLink:
       return
     let n = st.curNode
+    inc steps
+    if steps > StepBudget:
+      raise jinjaErr("one pull call stepped past StepBudget = " & $StepBudget &
+          ", the render walk is not terminating", tmpl.nodes[n].lo.int,
+          tmpl.nodes[n].hi.int - tmpl.nodes[n].lo.int)
     Steps[tmpl.nodes[n].kind](tmpl, sym, st, ports, n)
 
 iterator items*(c: var Context): openArray[char] =

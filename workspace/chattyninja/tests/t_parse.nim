@@ -182,6 +182,18 @@ block nestingValve:
   doAssert at >= tagStart and at < tagStart + "{% if x %}".len,
       "the cap raise located inside the offending tag: offset " & $at
 
+# An `{% elif %}` chain recurses `parseIf` outside any body walk, so the chain depth counts
+# toward ParseNestingCap too. A modest chain parses, a chain past the cap raising located.
+block elifChainNesting:
+  discard parseTemplate("{% if z %}a" & repeat("{% elif z %}a", 10) & "{% endif %}")
+  var reported = ""
+  try:
+    discard parseTemplate("{% if z %}a" & repeat("{% elif z %}a", 20000) & "{% endif %}")
+    doAssert false, "an elif chain past the cap parsed instead of raising"
+  except JinjaError as e:
+    reported = e.what
+  doAssert "ParseNestingCap" in reported, reported
+
 # Truncation is a located raise, never a spin. Every body walk consumes at least one tag,
 # an unterminated construct reaching the end sentinel, its close check reporting it.
 block truncationRaisesLocated:

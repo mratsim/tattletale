@@ -665,6 +665,15 @@ func binPrec(op: Op): int =
   of opPow: 9
   of opNone: 0
 
+template enterDepth(cx: var Cx) =
+  ## Counts one recursion level of the expression walker toward `ExprDepthCap`, a breach
+  ## raising located, dry walks included. `expr` counts at its entry, and so does
+  ## every recursion leg that bypasses `expr`, the paired exit a `dec cx.depth`.
+  inc cx.depth
+  if cx.depth > ExprDepthCap:
+    raise jinjaErr("expression nests deeper than ExprDepthCap = " & $ExprDepthCap,
+        cx.tok.lo)
+
 func skipExpr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int) =
   ## Advances the cursor over an expression without evaluating it, how `and`, `or` and the ternary skip the text they do not run.
   let wasDry = cx.dry
@@ -932,16 +941,22 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   postfix(tmpl, ports, cx, v)
 
 func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
-  ## Parses `not`, unary `-` and `+`, then a primary.
+  ## Parses `not`, unary `-` and `+`, then a primary. The operator chain recurses here
+  ## without re-entering `expr`, so each recursion counts one level itself, `enterDepth`
+  ## at the leg's entry and a `dec` once the operand is evaluated.
   if isWord(tmpl, cx, "not"):
     advance(tmpl, cx)
+    enterDepth(cx)
     let v = evalItem(ports, cx, unary(tmpl, ports, cx))
+    dec cx.depth
     return boolVal(if cx.dry: false else: not isTruthy(v))
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
     advance(tmpl, cx)
     let operandLo = cx.tok.lo
+    enterDepth(cx)
     let v = evalItem(ports, cx, unary(tmpl, ports, cx))
+    dec cx.depth
     if cx.dry:
       return undefinedVal()
     case v.kind
@@ -1122,56 +1137,60 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
   ##   resolved before its head runs
   ## - the condition is evaluated once and exactly one branch is, which keeps a branch holding
   ##   `raise_exception` or `strftime_now` from acting while unelected
+  ## - every entry counts one level toward `ExprDepthCap`, dry walks included, so skipped
+  ##   operands and the ternary scan are bounded like evaluated ones
+  ## - one exit decrements, the ternary legs included, so an entry is never left counted
   ## A stray `if` ends the expression, and `evalRange` reports the tail text.
-  if not cx.dry:
-    inc cx.depth
-    if cx.depth > ExprDepthCap:
-      raise jinjaErr("expression nests deeper than ExprDepthCap = " & $ExprDepthCap,
-          cx.tok.lo)
+  enterDepth(cx)
+  var v: JinjaVal
+  var ranTernary = false
   let headLo = cx.tok.lo
   if minPrec <= 1 and cx.tok.kind != exEof and ifWordAhead(tmpl, headLo, cx.stop):
     let shape = scanTernary(tmpl, ports, cx, headLo)
     if shape.isTernary:
+      ranTernary = true
       if cx.dry:
-        return undefinedVal()
-      let cond = evalRange(tmpl, cx.ports, shape.cLo, shape.cHi, cx.depth)
-      let tested = if cond.kind == vkCall: forceCall(cx.ports, cx, cond) else: cond
-      if isTruthy(tested):
-        return evalRange(tmpl, cx.ports, headLo, shape.aHi, cx.depth)
-      if shape.hasElse:
-        return evalRange(tmpl, cx.ports, shape.bLo, shape.bHi, cx.depth)
-      return undefinedVal()
-  var v = unary(tmpl, ports, cx)
-  while true:
-    var op = opNone
-    if cx.tok.kind == exName:
-      if isWord(tmpl, cx, "and"):
-        op = opAnd
-      elif isWord(tmpl, cx, "or"):
-        op = opOr
-      elif isWord(tmpl, cx, "in"):
-        op = opIn
-      elif isWord(tmpl, cx, "not"):
-        let save = cx
-        advance(tmpl, cx)
-        if isWord(tmpl, cx, "in"):
-          op = opNotIn
-        else:
-          cx = save
-          break
+        v = undefinedVal()
       else:
+        let cond = evalRange(tmpl, cx.ports, shape.cLo, shape.cHi, cx.depth)
+        let tested = if cond.kind == vkCall: forceCall(cx.ports, cx, cond) else: cond
+        if isTruthy(tested):
+          v = evalRange(tmpl, cx.ports, headLo, shape.aHi, cx.depth)
+        elif shape.hasElse:
+          v = evalRange(tmpl, cx.ports, shape.bLo, shape.bHi, cx.depth)
+        else:
+          v = undefinedVal()
+  if not ranTernary:
+    v = unary(tmpl, ports, cx)
+    while true:
+      var op = opNone
+      if cx.tok.kind == exName:
+        if isWord(tmpl, cx, "and"):
+          op = opAnd
+        elif isWord(tmpl, cx, "or"):
+          op = opOr
+        elif isWord(tmpl, cx, "in"):
+          op = opIn
+        elif isWord(tmpl, cx, "not"):
+          let save = cx
+          advance(tmpl, cx)
+          if isWord(tmpl, cx, "in"):
+            op = opNotIn
+          else:
+            cx = save
+            break
+        else:
+          break
+      elif cx.tok.kind == exPunct:
+        op = punctOp(cx.tok.p0, cx.tok.p1)
+      let prec = binPrec(op)
+      if prec == 0 or prec < minPrec:
         break
-    elif cx.tok.kind == exPunct:
-      op = punctOp(cx.tok.p0, cx.tok.p1)
-    let prec = binPrec(op)
-    if prec == 0 or prec < minPrec:
-      break
-    if v.kind == vkCall:
-      v = forceCall(ports, cx, v)
-    advance(tmpl, cx)
-    v = binOp(tmpl, ports, cx, v, op)
-  if not cx.dry:
-    dec cx.depth
+      if v.kind == vkCall:
+        v = forceCall(ports, cx, v)
+      advance(tmpl, cx)
+      v = binOp(tmpl, ports, cx, v, op)
+  dec cx.depth
   v
 
 func evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): JinjaVal =

@@ -103,6 +103,11 @@ const
   # compose with chunking.
   ChunkSize* {.intdefine.} = 4096
 
+  # Step-dispatch bound of one `pull` call. One call dispatches at most this many steps,
+  # a breach raising located at the node the walk reached. The bound sits far above any
+  # call a terminating render makes, the full-corpus suite rendering complete below it.
+  StepBudget* {.intdefine.} = 1_000_000
+
   Whitespace* = {' ', '\t', '\n', '\r', '\v', '\f'}
   WsNameChars* = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
 

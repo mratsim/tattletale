@@ -441,4 +441,72 @@ doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}", undefinedVal()
 doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}", undefinedVal(), 4107542400.0) ==
     "2100-03-01 00:00:00 60", "a non-leap century renders the day of year"
 
+# Zero-node templates and empty for bodies
+
+doAssert renderStmt("") == "", "a template compiling to zero nodes renders empty"
+doAssert renderStmt("{# hi #}") == "", "a comment-only template renders empty"
+
+# An empty body completes a for at set-up, its row and scope closing exactly
+# as an exhausted loop closes them:
+#   the target and `loop` unbind with the scope, no row stays open for a break
+#   to unwind into, and a filter clause still runs per item.
+doAssert renderStmt("A{% for x in [1] %}{% endfor %}B") == "AB",
+    "an empty for at the top level advances past its successor"
+doAssert renderStmt("{% for x in [1] %}{% endfor %}{{ x }}") == "",
+    "an empty for unbinds its target with its scope, as an exhausted loop does"
+doAssert renderStmt(
+    "{% for x in [1, 2] %}{% for y in [1] %}{% endfor %}{% endfor %}Z") == "Z",
+    "an empty for nested in a for completes at set-up, the enclosing loop advancing"
+doAssert renderStmt(
+    "{% macro m() %}{% for y in [1] %}{% endfor %}{% endmacro %}{{ m() }}A") == "A",
+    "an empty for inside a macro body closes back on the definition node"
+doAssert renderStmt("{% for x in [1, 2, 3] if x > 1 %}{% endfor %}ok") == "ok",
+    "an empty body still runs its filter clause over every item"
+try:
+  discard renderStmt("{% for x in [1] %}{% endfor %}{% break %}")
+  doAssert false, "a break after an empty for found a leaked for-row"
+except JinjaError as e:
+  doAssert "`{% break %}` is outside any `{% for %}`" in e.what, e.what
+# A filter clause runs on the loop's advance path, item 0 bound at set-up and kept
+# unconditionally in either body shape, so a raising clause raises exactly where
+# a non-empty body's first advance would raise.
+try:
+  discard renderStmt("{% for x in [1, 0] if raise_exception('clause ran') %}{% endfor %}")
+  doAssert false, "an empty body skipped its filter clause"
+except JinjaError as e:
+  doAssert "clause ran" in e.what, e.what
+
+# Depth caps:
+#   every recursion leg counts toward ExprDepthCap, dry walks and unary chains included.
+#   Deep nesting raises located before the C stack runs out.
+
+doAssert render("not not not not not not not not not not 1") == "True",
+    "a unary chain within the cap renders"
+try:
+  discard render("not ".repeat(40000) & "1")
+  doAssert false, "a unary chain past the cap rendered instead of raising"
+except JinjaError as e:
+  doAssert "ExprDepthCap" in e.what, e.what
+try:
+  discard render("0 and " & "(".repeat(25000) & "1" & ")".repeat(25000))
+  doAssert false, "a dry walk over a skipped operand ran uncapped"
+except JinjaError as e:
+  doAssert "ExprDepthCap" in e.what, e.what
+
+# Ternaries leave no depth behind, only the real nesting depth spending budget:
+#   chained and sequenced ternaries render well past the shapes that once ran dry.
+var chained = ""
+for k in 1 .. 20:
+  chained.add $k & " if z else "
+chained.add "21"
+doAssert render(chained) == "21", "20 chained ternaries render within the cap"
+
+var sequenced = ""
+for k in 1 .. 25:
+  if k > 1:
+    sequenced.add " ~ "
+  sequenced.add "(9 if z else 8)"
+doAssert render(sequenced) == "8".repeat(25),
+    "25 ternaries sequenced on one cursor render within the cap"
+
 echo "t_expr: expression tier ok"
