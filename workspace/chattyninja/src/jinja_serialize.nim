@@ -120,7 +120,7 @@ func pyStrInto(sb: var Cursor, v: JinjaVal) =
   of vkSeq, vkDict, vkNs, vkLoop, vkMacro, vkRange: sb.pyReprInto(v, 0)
   of vkCall: raise jinjaErr("a macro call result must be rendered before stringification")
 
-func reprQuoted(sb: var Cursor, s: string) =
+func reprQuoted(sb: var Cursor, s: openArray[char]) =
   ## Writes Python's single-quoted repr of `s`, the form container reprs use for keys
   ## and string items, non-escaped bytes passing through raw.
   sb.add '\''
@@ -182,7 +182,7 @@ func hex4(sb: var Cursor, c: int) =
     sb.add Digits[(c shr sh) and 0xF]
 
 
-func serQueue(js: var Ser, s: string) =
+func serQueue(js: var Ser, s: openArray[char]) =
   ## Queues literal bytes for draining, `s` at most `SerChunkCap` bytes long.
   ## A longer literal raises `JinjaError` naming the queue's capacity.
   js.blen = s.len
