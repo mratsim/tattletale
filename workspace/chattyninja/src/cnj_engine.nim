@@ -254,7 +254,7 @@ func closeRow(st: var RenderState, at: int, next: int32) =
   ## - `scopeAt` is the scope state at row entry, so the pop removes exactly the range
   ##   the row opened, every enclosing row's bindings surviving the close
   ## - a raise abandons the render instead, no partial close running on the raise path
-  ##   (a forced macro body discards its driver copy wholesale)
+  ##   (a forced macro body discards its nested session wholesale)
   st.scopes.setLen(st.rows[at].scopeAt)
   st.curNode = next
   st.rows.setLen(at)
@@ -681,8 +681,8 @@ func pull*(c: JinjaRenderContext, buf: var openArray[char]): int =
   ## Returns the render's next bytes, written into `buf[0 ..< result]`.
   ##
   ## Ownership sits with the caller, whose buffer capacity is the delivery window.
-  ## Resumption state is `c.state`, so consumers holding separate `JinjaRenderContext` copies over one
-  ## artifact each own their delivery position.
+  ## Resumption state is `c.state`, so consumers over one artifact each hold a session
+  ## from `startRender` and own their delivery position.
   ##
   ## Delivery contract:
   ## - `c.state.pend.pos` and `c.state.cur` advance before the call returns, so a consumer
@@ -770,7 +770,7 @@ iterator items*(c: JinjaRenderContext): openArray[char] =
 
 func pullAll*(c: JinjaRenderContext): string =
   ## Returns the whole render in one call. Chunking composes with `cur`, so a consumer
-  ## that counts bytes first can redeliver from a fresh `JinjaRenderContext` without a counting pass.
+  ## that counts bytes first can redeliver from a fresh session without a counting pass.
   var buf: array[ChunkSize, char]
   while true:
     let n = pull(c, buf)

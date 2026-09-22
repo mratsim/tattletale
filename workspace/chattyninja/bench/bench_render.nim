@@ -68,8 +68,8 @@ when defined(benchAlloc) and not defined(nimAllocStats):
 
 # ── Stimulus builders ────────────────────────────────────────────────────────
 #
-# Contexts are built with the engine's value constructors, not `std/json`, because
-# template output observes dict insertion order.
+# Render contexts are built with the engine's dict constructors. Template output observes
+# dict insertion order, so the construction order the templates rely on is the engine's.
 
 const HfModelsRoot = currentSourcePath().parentDir.parentDir.parentDir /
     "transformers" / "tests" / "hf_models"
