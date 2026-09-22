@@ -124,7 +124,7 @@ proc rowRstd[R, C: static int; A: static MmaAtom](
   ## - eps must be > 0, an all-zero row makes the mean 0 and rsqrt(0) = +Inf,
   ##   the +Inf the store writes silently
   var y32: rt_l(float32, R, C)
-  y32.widenBf16(y)
+  y32.widen(y)
   var sq: rt_l(float32, R, C)
   sq.mul(y32, y32)
   var sumVec: rv(float32, R, C)
@@ -154,9 +154,9 @@ proc siluMulElem*[R, C: static int; A: static MmaAtom](
   ## - Epilogue second half, recorded chain's final round:
   ## - `dst = bf16(x · silu(g))`, the silu in f32 over the widened gated operand, no intermediate bf16 round on the silu.
   var x32: rt_l(float32, R, C)
-  x32.widenBf16(x)
+  x32.widen(x)
   var g32: rt_l(float32, R, C)
-  g32.widenBf16(gate)
+  g32.widen(gate)
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = A.getVpt()
@@ -178,7 +178,7 @@ proc rmsNormGatedElem*[R, C: static int; A: static MmaAtom](
   ##   held in registers with no memory round-trip.
   let rstd = rowRstd(y, eps)
   var g32: rt_l(float32, R, C)
-  g32.widenBf16(gate)
+  g32.widen(gate)
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = A.getVpt()

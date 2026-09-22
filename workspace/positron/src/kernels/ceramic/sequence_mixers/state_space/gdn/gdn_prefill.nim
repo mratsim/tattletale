@@ -70,7 +70,7 @@ from ../../../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
 
-from ../../../tile_widen import widenBf16, widenF16
+from ../../../tile_widen import widen
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
@@ -149,7 +149,7 @@ proc gdnPrefillChunkScanBf16At*(
       var kT: rt_l(bfloat16, TileR, Dk)
       kT.loadTile(glK, (kLinT, 0, 0, 0))
       var k32: rt_l(float32, TileR, Dk)
-      k32.widenBf16(kT)
+      k32.widen(kT)
 
       # G_t = exp(cumulogdecay[t])·(S_carry·k_t), the decayed carry read against the key
       var kProd: rt_l(float32, TileR, Dk)
@@ -168,7 +168,7 @@ proc gdnPrefillChunkScanBf16At*(
         var ksT: rt_l(bfloat16, TileR, Dk)
         ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var ks32: rt_l(float32, TileR, Dk)
-        ks32.widenBf16(ksT)
+        ks32.widen(ksT)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         var kkVec: rv(float32, TileR, Dk)
@@ -182,7 +182,7 @@ proc gdnPrefillChunkScanBf16At*(
       var qT: rt_l(bfloat16, TileR, Dk)
       qT.loadTile(glQ, (kLinT, 0, 0, 0))
       var q32: rt_l(float32, TileR, Dk)
-      q32.widenBf16(qT)
+      q32.widen(qT)
       for n in 0 ..< rowTiles:
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:
@@ -197,7 +197,7 @@ proc gdnPrefillChunkScanBf16At*(
         var ksT: rt_l(bfloat16, TileR, Dk)
         ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var ks32: rt_l(float32, TileR, Dk)
-        ks32.widenBf16(ksT)
+        ks32.widen(ksT)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         var qkVec: rv(float32, TileR, Dk)
@@ -217,7 +217,7 @@ proc gdnPrefillChunkScanBf16At*(
       var ksT: rt_l(bfloat16, TileR, Dk)
       ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var ks32: rt_l(float32, TileR, Dk)
-      ks32.widenBf16(ksT)
+      ks32.widen(ksT)
       for n in 0 ..< rowTiles:
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:
@@ -304,7 +304,7 @@ proc gdnPrefillChunkScanF16At*(
       var kT: rt_l(float16, TileR, Dk)
       kT.loadTile(glK, (kLinT, 0, 0, 0))
       var k32: rt_l(float32, TileR, Dk)
-      k32.widenF16(kT)
+      k32.widen(kT)
 
       # G_t = exp(cumulogdecay[t])·(S_carry·k_t), the decayed carry read against the key
       var kProd: rt_l(float32, TileR, Dk)
@@ -323,7 +323,7 @@ proc gdnPrefillChunkScanF16At*(
         var ksT: rt_l(float16, TileR, Dk)
         ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var ks32: rt_l(float32, TileR, Dk)
-        ks32.widenF16(ksT)
+        ks32.widen(ksT)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         var kkVec: rv(float32, TileR, Dk)
@@ -337,7 +337,7 @@ proc gdnPrefillChunkScanF16At*(
       var qT: rt_l(float16, TileR, Dk)
       qT.loadTile(glQ, (kLinT, 0, 0, 0))
       var q32: rt_l(float32, TileR, Dk)
-      q32.widenF16(qT)
+      q32.widen(qT)
       for n in 0 ..< rowTiles:
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:
@@ -352,7 +352,7 @@ proc gdnPrefillChunkScanF16At*(
         var ksT: rt_l(float16, TileR, Dk)
         ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var ks32: rt_l(float32, TileR, Dk)
-        ks32.widenF16(ksT)
+        ks32.widen(ksT)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         var qkVec: rv(float32, TileR, Dk)
@@ -372,7 +372,7 @@ proc gdnPrefillChunkScanF16At*(
       var ksT: rt_l(float16, TileR, Dk)
       ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var ks32: rt_l(float32, TileR, Dk)
-      ks32.widenF16(ksT)
+      ks32.widen(ksT)
       for n in 0 ..< rowTiles:
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:

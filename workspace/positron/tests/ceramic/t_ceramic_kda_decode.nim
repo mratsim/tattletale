@@ -137,14 +137,14 @@ const CeramicDecodeMsl = metal:
       y, k, q, v, beta: ptr UncheckedArray[float16],
       g: ptr UncheckedArray[float32],
       Hv, Hk, hkRatio: int32) {.global.} =
-    gdnDecodeStepTileF16(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, 32, 16, 8)
+    gdnDecodeStepTile(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, 32, 16, 8)
 
   proc cer_gdn_step_bf16_dk32(
       state: ptr UncheckedArray[float32],
       y, k, q, v, beta: ptr UncheckedArray[bfloat16],
       g: ptr UncheckedArray[float32],
       Hv, Hk, hkRatio: int32) {.global.} =
-    gdnDecodeStepTileBf16(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, 32, 16, 8)
+    gdnDecodeStepTile(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, 32, 16, 8)
 
 # ─── Host tolerance-model constants ───────────────────────────────────
 

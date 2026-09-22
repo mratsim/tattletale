@@ -463,7 +463,7 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     waveWait(counters, 5, 4)
     waveWait(counters, 4, 128)
     waveWait(counters, 6, 1)
-    gdnDecodeStepTileBf16At(state, (bfA +% sY), (bfA +% sKN), (bfA +% sQN),
+    gdnDecodeStepTileAt(state, (bfA +% sY), (bfA +% sKN), (bfA +% sQN),
       (bfA +% sConv +% (2 * NumKHeads * HeadKDim)), (f32A +% sG),
       (bfA +% sBeta), int32(NumVHeads), int32(NumKHeads), int32(HkRatio),
       local mod (HeadVDim div 8), local div (HeadVDim div 8),
