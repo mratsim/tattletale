@@ -313,7 +313,7 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
     &"{MegaWaitDeadlineSecMs.float / 1000.0:.0f} s)"
   doAssert deadlineWall < MegaWaitDeadlineSecMs.float / 1000.0,
     "the launch outlived the bounded wait's deadline"
-  when not defined(WaveResetSabotage):
+  when not WaveResetSabotage:
     countersZeroWhere("the deadline case's launch")
 
   # Continuation pre-image:
@@ -335,7 +335,7 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   let refF32 = readInto(f32A.hostPtr, F32ArenaLen)
   let refState = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let refRing = readInto(ring.hostPtr, ConvDim * RingWidth)
-  when not defined(WaveResetSabotage):
+  when not WaveResetSabotage:
     countersZeroWhere("the reference continuation launch")
 
   # Self-reset case:
@@ -343,11 +343,11 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   #   alone maintains the entry contract here, the output must be
   #   bit-identical to the reference continuation.
   restorePreimage(preBf, preF32, preState, preRing)
-  when not defined(WaveResetSabotage):
+  when not WaveResetSabotage:
     countersZeroWhere("before the self-reset relaunch")
   discard launch()
   runMegaBounded(launch, counters.hostPtr, StageNames)
-  when not defined(WaveResetSabotage):
+  when not WaveResetSabotage:
     let selfResetBf = readInto(bfA.hostPtr, BfArenaLen)
     let selfResetF32 = readInto(f32A.hostPtr, F32ArenaLen)
     doAssert bitDiffCount(selfResetBf, refBf) == 0,
@@ -369,7 +369,7 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
       "the sabotage build must leave the relaunch output off the reference " &
       "bits, the launch-end re-zero is compiled out and the stale counts " &
       "opened the waits early"
-  when not defined(WaveResetSabotage):
+  when not WaveResetSabotage:
     countersZeroWhere("the self-reset relaunch")
 
   # Stale-counter case:

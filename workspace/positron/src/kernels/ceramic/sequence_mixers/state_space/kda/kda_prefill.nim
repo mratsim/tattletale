@@ -103,6 +103,12 @@ const PairdecaySabotage* {.booldefine.} = false
   ## - the factorized form overflows exp2 once |cumg_s| > 128/log2e ≈ 88.7,
   ##   the Inf·dT product NaNs the state (see the per-site notes)
   ## - default builds leave the factorized spelling out
+  ##
+  ## Sabotage run:
+  ##   nim c -r -d:release -d:PairdecaySabotage --outdir:build/tests --nimcache:nimcache/red tests/ceramic/t_ceramic_kda_prefill.nim
+  ##
+  ## Red outcome:
+  ##   the overflow fixture's finiteness assert fires, y not finite at element 464 (fcNan)
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 

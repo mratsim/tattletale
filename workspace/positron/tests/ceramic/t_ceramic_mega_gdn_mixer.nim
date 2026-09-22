@@ -500,7 +500,7 @@ proc assertCounters(m: var MegaBuffers) =
   ## - the WaveResetSabotage build asserts the landed per-stage
   ##   threadgroup totals at stages 0..9, the stages 10..12 without
   ##   threadgroups stay zero
-  when defined(WaveResetSabotage):
+  when WaveResetSabotage:
     for i in 0 ..< 10:
       doAssert m.counters.hostPtr[i] == WaveCounts[i],
         &"stage counter {i} landed {m.counters.hostPtr[i]} " &
@@ -876,7 +876,7 @@ proc runMixerWalk(engine: HwEngine; w: Weights; carry0: Carry;
   let bars = walkBars(w, norm1, carry0, carry0, lo, snap)
   judgeAll(bars, snap, lo, usage)
 
-  when not defined(WaveResetSabotage):
+  when not WaveResetSabotage:
     # the relaunch, the carry restored to its pre-image, the judged
     # sections rewritten over the first launch's own outputs
     for i in 0 ..< NumVHeads * HeadVDim * HeadKDim:

@@ -203,6 +203,18 @@ static:
 
 # ─── Wave sync (device-memory counters, seq_cst fences) ──────────────
 
+const WaveResetSabotage* {.booldefine.} = false
+  ## Compile-time sabotage switch for the counter relaunch fixture,
+  ## the launch-end re-zero compiled out, the next launch's `waveWait` calls
+  ## passing instantly on the stale counts of the launch before.
+  ##
+  ## Sabotage run:
+  ##   nim c -r -d:release -d:WaveResetSabotage --outdir:build/tests --nimcache:nimcache/red tests/ceramic/t_ceramic_mega_gdn_gate.nim
+  ##
+  ## Red outcome:
+  ##   the relaunch's bit-identity assert fails, the relaunch suite's sabotage
+  ##   contract records the red
+
 proc waveAdd(counters: ptr UncheckedArray[uint32], idx: int32) {.device.} =
   ## One increment per threadgroup, lane 0 only, after the release
   ## fence that orders the stage's writes.
@@ -488,7 +500,7 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     when not HaveNorm:
       # Mixer entry's launch-end counter self-reset, the projection stage's
       # last threadgroup (tx 875) behind the stage's wait (see `waveReset`).
-      when not defined(WaveResetSabotage):
+      when not WaveResetSabotage:
         if tx == int32(EndStageOutProj) - 1:
           waveWait(counters, 9, 32)
           waveReset(counters, 13)
@@ -520,7 +532,7 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     # WaveResetSabotage restores the pre-self-reset spelling, the re-zero
     # compiled out, the next launch's waveWaits pass instantly on the stale
     # counts of the launch before (see `t_ceramic_mega_gdn_gate`'s sabotage build).
-    when not defined(WaveResetSabotage):
+    when not WaveResetSabotage:
       if tx == int32(EndStageMerge) - 1:
         waveWait(counters, 12, 64)
         waveReset(counters, 13)

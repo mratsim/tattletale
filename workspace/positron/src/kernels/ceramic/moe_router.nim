@@ -35,7 +35,13 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 const RenormSabotage* {.booldefine.} = false
   ## Compile-time sabotage switch for the poisoned-router fixture, the renorm
-  ## half of the pre-fix spelling restored, the unguarded zero-sum 0/0 division
+  ## half of the pre-fix spelling restored, the unguarded zero-sum 0/0 division.
+  ##
+  ## Sabotage run:
+  ##   nim c -r -d:release -d:RenormSabotage --outdir:build/tests --nimcache:nimcache/red tests/ceramic/t_ceramic_moe_router.nim
+  ##
+  ## Red outcome:
+  ##   the poisoned pass's weight-zero assert fires, slot 0 weight 0x7fc0 (NaN)
 
 const SentinelSabotage* {.booldefine.} = false
   ## Compile-time sabotage switch for the poisoned-router fixture, restoring
@@ -44,6 +50,12 @@ const SentinelSabotage* {.booldefine.} = false
   ## - the raw sentinel candidate (1 shl 30) stored as the expert id
   ## - downstream expert-row reads then run off the expert weight's end
   ## - default builds leave both pre-fix spellings out
+  ##
+  ## Sabotage run:
+  ##   nim c -r -d:release -d:SentinelSabotage --outdir:build/tests --nimcache:nimcache/red tests/ceramic/t_ceramic_moe_router.nim
+  ##
+  ## Red outcome:
+  ##   the poisoned pass's expert-id range assert fires, id 1073741824 (1 shl 30)
 
 # ─── Module-local bf16 row-bounded tile load ─────────────────────────
 # tile_io_rows ships fp16 variants only, the bf16 guard lives module-local
