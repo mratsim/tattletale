@@ -303,6 +303,9 @@ func forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
 func forceOperand(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns `v` with a pending macro call rendered to its output value, a concat rendered
   ## to the text it emits, the value-position forcing contract held in one proc.
+  ##
+  ## The `opConcat` rhs and the binary-operator boundary force only a call kind,
+  ## a concat nesting there.
   ## - reached from every truth test, `and`/`or` left operand, ternary condition,
   ##   call argument, postfix operator operand and binary-operator boundary
   ## - a consumed call with no macro forcer supplied raises at `cx.tok.lo`, a dry walk

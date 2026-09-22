@@ -266,9 +266,9 @@ func bindTargets(tmpl: CompiledTemplate, st: var RenderState, n: int32, item: Ji
 func filterKeep(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): bool =
   ## Evaluates one filter clause in boolean position, a pending macro call rendering
   ## to its output value and a concat to the text it emits, the result tested for truth.
-  ## Returns the keep decision:
-  ## - a caller draining an empty loop body discards it, the clause's raises and side
-  ##   effects the only observable behavior there
+  ## Returns the keep decision.
+  ## - a caller may discard it, walking every remaining item by the shared cursor
+  ## - the clause's raises and side effects are the only observable behavior there
   var evaluated = evalSpan(tmpl, ports, lo, hi)
   if evaluated.kind == vkCall:
     evaluated = forceCondCall(ports, evaluated, lo, hi)
@@ -278,10 +278,12 @@ func filterKeep(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): bool =
 
 func forStep(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: int32, lp: LoopState): bool =
   ## Per-item loop step shared by the re-entry advance and the empty-body drain.
-  ## Moves the shared cursor one item, binds the loop targets and runs the filter clause,
-  ## returning true on an item passing the clause, false past the last item.
+  ## Moves the shared cursor one item, binds the loop targets and runs the filter clause.
+  ##
+  ## Returns the keep decision, "advance into the body" in boolean position, never
+  ## "done walking", exhaustion read off the cursor, `lp.idx >= lp.loopLen`.
   ## - the cursor increment stays committed while `bindTargets` and the filter clause run,
-  ##   corpus filters reading `loop.index0` and friends through the shared cursor
+  ##   filters reading `loop.index0` and friends seeing the just-entered item
   ## - the clause runs at most once per item, through `filterKeep`'s contract
   ## - a raise in either propagates to the caller per the pull contract, bytes written
   ##   by the failing call discarded, a repull resuming after the failed item
@@ -345,9 +347,11 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   if nd.child == NoLink:
     if nd.filterLo != NoLink:
       # An empty body still runs the clause over every remaining item, the keep decision
-      # unused there, the clause's raises and side effects the observable behavior.
-      while forStep(tmpl, st, ports, n, lp):
-        discard
+      # discarded there, the clause's raises and side effects the observable behavior.
+      # Loop control reads the shared cursor, which every step commits, so a rejected
+      # item does not end the walk.
+      while lp.idx < lp.loopLen:
+        discard forStep(tmpl, st, ports, n, lp)
     st.scopes.setLen(st.rows[^1].scopeAt - 1)
     st.rows.setLen(st.rows.len - 1)
     st.curNode = nd.succ

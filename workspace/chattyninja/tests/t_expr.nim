@@ -704,6 +704,22 @@ try:
   doAssert false, "an empty body skipped its filter clause"
 except JinjaError as e:
   doAssert "clause ran" in e.what, e.what
+# A rejected item does not stop the drain.
+#   the clause still runs on every remaining item
+#   a raise on a later item still fires, located at that item
+try:
+  discard renderStmt(
+      "{% for x in [0, 1, 2] if raise_exception('late ' ~ x) if x == 2 else false %}{% endfor %}")
+  doAssert false, "the empty-body drain stopped before a raising later item"
+except JinjaError as e:
+  doAssert "late 2" in e.what, e.what
+# Side effects land per item past the set-up item, which keeps unconditionally.
+#   a macro call in the clause renders to an empty body, falsy for every item
+#   its set inside accumulates on a namespace
+doAssert renderStmt(
+    "{% set ns = namespace(v = '') %}{% macro note(x) %}{% set ns.v = ns.v ~ x %}{% endmacro %}" &
+    "{% for x in [0, 1, 2] if note(x) %}{% endfor %}{{ ns.v }}") == "12",
+    "the empty-body drain ran the clause on every remaining item"
 
 # Depth caps:
 #   every recursion leg counts toward ExprDepthCap, dry walks and unary chains included.
