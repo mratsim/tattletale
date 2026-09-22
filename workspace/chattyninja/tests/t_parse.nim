@@ -14,7 +14,7 @@
 ##   $ nim test_chattyninja
 
 import std/[os, strutils, sequtils]
-import cnj_types, jinja_data_model, cnj_parse
+import cnj_types, jinja_data_model, cnj_parse, cnj_engine
 import workspace/data_structures/src/small_seqs
 
 const root = currentSourcePath().parentDir
@@ -321,5 +321,41 @@ doAssert gn.nodes[0].lo.int == 3 and gn.nodes[0].hi.int == 14,
     "the generation node spans the opening tag's keyword"
 doAssert gn.nodes[0].child == 1 and gn.nodes[1].succ == 0,
     "the generation body ends back on the generation node"
+
+
+# Whitespace-rule sweep at the rendered bytes, one row per rule and branch
+# (`{% %}` block tag, `{{ }}` variable tag, comment, raw body, text run).
+#
+# | Rule            | Effect                                           |
+# | --------------- | ------------------------------------------------ |
+# | `trim_blocks`   | one newline after a block or comment tag's close |
+# | `lstrip_blocks` | the blanks of a block or comment tag's line      |
+# | `-` markers     | every whitespace run before or after their tag   |
+# | plain raw open  | one body newline consumed (mission-02 fix)       |
+#
+# Byte-locked shapes, a consolidation of the rule sites moving one byte failing here,
+# before the corpus ledger has to report it.
+const wsShapes = [
+  ("{% set y = 1 %}\nB", "B", "trim after a block tag's close"),
+  ("A\n{% set y = 1 %}\nB", "A\nB", "trim drops the newline after the close"),
+  ("A\n   {% set y = 1 %}\nB", "A\nB", "lstrip the blanks before a block tag"),
+  ("A\n   {{ 1 }}\nB", "A\n   1\nB", "lstrip leaves a variable tag's line alone"),
+  ("{{ 1 }}\nB", "1\nB", "trim leaves a variable tag's newline"),
+  ("A   {{- 1 -}}   B", "A1B", "dashes strip the runs around a variable tag"),
+  ("A   {%- set y = 1 -%}   B", "AB", "dashes strip the runs around a block tag"),
+  ("A\n   {# c #}\nB", "A\nB", "a plain comment carries lstrip and trim"),
+  ("A  {#- c -#}  B", "AB", "a dashed comment strips the runs"),
+  ("{#- c -#}\nB", "B", "a dashed comment at the start"),
+  ("A{% raw %}\nX{% endraw %}B", "AXB", "a plain raw opening consumes one newline"),
+  ("{% raw %}\nX{% endraw %}", "X", "the raw newline consume with no run before"),
+  ("A\n   {% raw %}\nX{% endraw %}\nB", "A\nXB", "raw under lstrip and trim"),
+  ("A{% raw -%}\n  X  {% endraw %}B", "AX  B", "a dashed raw opening strips the body's leading run"),
+  ("A{% raw %}\nX{% endraw -%}\nB", "AXB", "a dashed raw close strips the run after it"),
+  ("A\n", "A", "the final newline dropped"),
+  ("A\nB\n", "A\nB", "only the final newline dropped"),
+]
+for (wSrc, want, label) in wsShapes:
+  let got = renderToString(wSrc, JinjaVal(kind: vkUndefined))
+  doAssert got == want, label & ": " & wSrc.escape & " rendered " & got.escape & ", want " & want.escape
 
 echo "t_parse: ", nodes.len, " nodes, ", symbols.names.len, " interned names, verbatim spans final"
