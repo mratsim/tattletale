@@ -134,7 +134,7 @@ const KdaPrefillMsl = metal:
       k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanF16(state, y, k, q, cumulogdecay, v, beta, qScale,
+    kdaPrefillChunkScan(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 32, 16, 8, 32)
 
   proc cer_kda_prefill_fp16_c64(
@@ -143,7 +143,7 @@ const KdaPrefillMsl = metal:
       k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanF16(state, y, k, q, cumulogdecay, v, beta, qScale,
+    kdaPrefillChunkScan(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 32, 16, 8, 64)
 
   proc cer_kda_prefill_fp16_dk64_c32(
@@ -152,7 +152,7 @@ const KdaPrefillMsl = metal:
       k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanF16(state, y, k, q, cumulogdecay, v, beta, qScale,
+    kdaPrefillChunkScan(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 64, 16, 8, 32)
 
   proc cer_kda_prefill_bf16_c32(
@@ -161,7 +161,7 @@ const KdaPrefillMsl = metal:
       k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanBf16(state, y, k, q, cumulogdecay, v, beta, qScale,
+    kdaPrefillChunkScan(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 32, 16, 8, 32)
 
   proc cer_kda_prefill_bf16_c64(
@@ -170,7 +170,7 @@ const KdaPrefillMsl = metal:
       k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanBf16(state, y, k, q, cumulogdecay, v, beta, qScale,
+    kdaPrefillChunkScan(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 32, 16, 8, 64)
 
 # ─── Host tolerance-model constants ───────────────────────────────────
