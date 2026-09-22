@@ -292,18 +292,24 @@ func argName(tmpl: CompiledTemplate, a: Arg): openArray[char] =
   tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
 
 func forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
-  ## Returns `v` forced to its macro output value. Every expression consumer other than
-  ## the emit step reads a pending macro call in this form.
+  ## Renders one pending macro call to its output value, the primitive `forceOperand`
+  ## routes every value-position forcing through, the forcer itself carried by the ports.
+  ## Raises at `cx.tok.lo` when no macro forcer was supplied.
   if cx.ports.force.isNil:
     raise jinjaErr("a macro call result was consumed where no macro forcer was supplied",
         cx.tok.lo)
   cx.ports.force(cx.ports.env, v.pc.mc, v.pc.args)
 
-func truthOperand(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
-  ## Returns a boolean-position operand, a dry walk returning `v` unevaluated:
-  ## - a pending macro call renders to its output value
-  ## - a concat renders to the text it emits
-  ## - everything else passes unchanged
+func forceOperand(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
+  ## Returns `v` with a pending macro call rendered to its output value, a concat rendered
+  ## to the text it emits, the value-position forcing contract held in one proc.
+  ## - reached from every truth test, `and`/`or` left operand, ternary condition,
+  ##   call argument, postfix operator operand and binary-operator boundary
+  ## - a consumed call with no macro forcer supplied raises at `cx.tok.lo`, a dry walk
+  ##   returning `v` unevaluated, the skipped branch never running a body
+  ## - the emit step alone captures, a whole-expression macro call streaming its body there,
+  ##   a forced call's output drained from the engine's transient capture buffer into the returned string,
+  ##   the copy then discarded
   if cx.dry:
     return v
   case v.kind
@@ -312,27 +318,14 @@ func truthOperand(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   else: v
 
 func evalItem(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
-  ## Returns `v`, rendering a pending macro call to text for the value containers and operators
-  ## that read a plain value. A concat raises here, the argument list being its one
-  ## plain-value reader. A dry walk returns `v` unevaluated.
-  if not cx.dry and v.kind == vkCall:
-    forceCall(ports, cx, v)
-  elif not cx.dry and v.kind == vkConcat:
-    raise jinjaErr("a concat must be rendered in emit position", cx.tok.lo)
-  else:
-    v
-
-func argVal(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
-  ## Returns one call argument's value, a pending macro call rendering to text and a concat
-  ## materializing through the serializer's drain-and-grow form, arguments reading plain
-  ## values only. A dry walk returns `v` unevaluated.
+  ## Returns `v` for the operators that read a plain value:
+  ## - a concat raises here, the argument list being the one plain-value reader
+  ## - everything else routes through the forcing contract, a dry walk returning `v`
   if cx.dry:
     return v
-  if v.kind == vkCall:
-    return forceCall(ports, cx, v)
   if v.kind == vkConcat:
-    return strVal(pyStr(v))
-  v
+    raise jinjaErr("a concat must be rendered in emit position", cx.tok.lo)
+  forceOperand(ports, cx, v)
 
 func argKey(tmpl: CompiledTemplate, a: Arg): string =
   ## Returns the dict key one argument supplies to `namespace` or `dict`, a keyword-bound argument
@@ -758,7 +751,7 @@ func argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
         advance(tmpl, cx)
       else:
         cx = save
-    let v = argVal(ports, cx, expr(tmpl, ports, cx, 1))
+    let v = forceOperand(ports, cx, expr(tmpl, ports, cx, 1))
     result.addArg(Arg(nameLo: nameLo, nameHi: nameHi, kw: kw, val: v))
     if isPunct(cx, ","):
       advance(tmpl, cx)
@@ -776,11 +769,12 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
   ## `m.content[0]` the way upstream Jinja does.
   var v = v
   while true:
-    # An operator reading the chained value renders a pending macro call first.
-    # A call keeps the natural not-callable error for the rendered text.
+    # An operator reading the chained value renders a pending macro call first, through
+    # the forcing contract. A call produced by the call operator inside the chain is
+    # re-forced here the same way, its pending form never surviving past the next operator.
     if v.kind == vkCall and (isPunct(cx, ".") or isPunct(cx, "[") or isPunct(cx, "|") or
         isWord(tmpl, cx, "is")):
-      v = forceCall(ports, cx, v)
+      v = forceOperand(ports, cx, v)
     if isPunct(cx, "."):
       advance(tmpl, cx)
       if cx.tok.kind == exInt:
@@ -1015,7 +1009,7 @@ func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   if isWord(tmpl, cx, "not"):
     advance(tmpl, cx)
     let operandLo = cx.tok.lo
-    let v = truthOperand(ports, cx, expr(tmpl, ports, cx, 5))
+    let v = forceOperand(ports, cx, expr(tmpl, ports, cx, 5))
     return boolVal(if cx.dry: false else: not isTruthy(v, operandLo))
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
@@ -1114,13 +1108,13 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
   ## before the truth test, a boolean position reading the output's bytes.
   case op
   of opAnd:
-    let l = truthOperand(ports, cx, lhs)
+    let l = forceOperand(ports, cx, lhs)
     if not cx.dry and not isTruthy(l, opLo):
       skipExpr(tmpl, ports, cx, 4)
       return l
     expr(tmpl, ports, cx, 4)
   of opOr:
-    let l = truthOperand(ports, cx, lhs)
+    let l = forceOperand(ports, cx, lhs)
     if not cx.dry and isTruthy(l, opLo):
       skipExpr(tmpl, ports, cx, 3)
       return l
@@ -1135,7 +1129,7 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
   of opConcat:
     let rhs = expr(tmpl, ports, cx, 7)
     if cx.dry: undefinedVal()
-    else: concatVal(lhs, if rhs.kind == vkCall: forceCall(ports, cx, rhs) else: rhs)
+    else: concatVal(lhs, if rhs.kind == vkCall: forceOperand(ports, cx, rhs) else: rhs)
   of opAdd, opSub, opMod:
     let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs, opLo)
@@ -1243,7 +1237,7 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
         v = undefinedVal()
       else:
         let cond = evalRange(tmpl, cx.ports, shape.cLo, shape.cHi, cx.depth)
-        let tested = truthOperand(cx.ports, cx, cond)
+        let tested = forceOperand(cx.ports, cx, cond)
         if isTruthy(tested):
           v = evalRange(tmpl, cx.ports, headLo, shape.aHi, cx.depth)
         elif shape.hasElse:
@@ -1277,7 +1271,7 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
       if prec == 0 or prec < minPrec:
         break
       if v.kind == vkCall:
-        v = forceCall(ports, cx, v)
+        v = forceOperand(ports, cx, v)
       let opLo = cx.tok.lo # the operator token, still current here
       advance(tmpl, cx)
       v = binOp(tmpl, ports, cx, v, op, opLo)

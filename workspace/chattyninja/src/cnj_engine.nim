@@ -266,6 +266,9 @@ func bindTargets(tmpl: CompiledTemplate, st: var RenderState, n: int32, item: Ji
 func filterKeep(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): bool =
   ## Evaluates one filter clause in boolean position, a pending macro call rendering
   ## to its output value and a concat to the text it emits, the result tested for truth.
+  ## Returns the keep decision:
+  ## - a caller draining an empty loop body discards it, the clause's raises and side
+  ##   effects the only observable behavior there
   var evaluated = evalSpan(tmpl, ports, lo, hi)
   if evaluated.kind == vkCall:
     evaluated = forceCondCall(ports, evaluated, lo, hi)
@@ -273,34 +276,38 @@ func filterKeep(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): bool =
     evaluated = strVal(pyStr(evaluated))
   isTruthy(evaluated, lo)
 
+func forStep(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: int32, lp: LoopState): bool =
+  ## Per-item loop step shared by the re-entry advance and the empty-body drain.
+  ## Moves the shared cursor one item, binds the loop targets and runs the filter clause,
+  ## returning true on an item passing the clause, false past the last item.
+  ## - the cursor increment stays committed while `bindTargets` and the filter clause run,
+  ##   corpus filters reading `loop.index0` and friends through the shared cursor
+  ## - the clause runs at most once per item, through `filterKeep`'s contract
+  ## - a raise in either propagates to the caller per the pull contract, bytes written
+  ##   by the failing call discarded, a repull resuming after the failed item
+  template nd: Node = tmpl.nodes[n]
+  inc lp.idx
+  let idx = lp.idx
+  if idx >= lp.loopLen:
+    return false
+  result = nd.filterLo == NoLink
+  bindTargets(tmpl, st, n, lp.loopItem(idx))
+  if nd.filterLo != NoLink:
+    result = filterKeep(tmpl, ports, nd.filterLo, nd.filterHi)
+
 func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: int32) =
-  ## Re-entry path. Moves the shared cursor to the next item passing the filter clause, re-enters
-  ## the body, or closes the row and continues past the loop.
-  ##
-  ## Contract:
-  ## - the cursor increment stays committed while `bindTargets` and the filter clause run.
-  ##   Corpus filters read `loop.index0` and friends through the shared cursor
-  ## - a pending macro call in the filter condition renders to its output bytes
-  ##   before the test
-  ## - a raise in either propagates to the caller per the pull contract. The bytes written
-  ##   in the failing call are discarded and a repull resumes after the failed item
+  ## Re-entry path. Moves the shared cursor to the next item passing the filter clause,
+  ## re-enters the body, or closes the row and continues past the loop, the close popping
+  ## the scope to the row's entry mark.
   template nd: Node = tmpl.nodes[n]
   while true:
     let fi = st.rows.len - 1
-    let lp = st.rows[fi].loop
-    inc lp.idx
-    let idx = lp.idx
-    if idx >= lp.loopLen:
-      st.scopes.setLen(st.rows[fi].scopeAt - 1)
-      st.rows.setLen(st.rows.len - 1)
-      st.curNode = nd.succ
-      return
-    var keep = nd.filterLo == NoLink
-    bindTargets(tmpl, st, n, lp.loopItem(idx))
-    if nd.filterLo != NoLink:
-      keep = filterKeep(tmpl, ports, nd.filterLo, nd.filterHi)
-    if keep:
+    if forStep(tmpl, st, ports, n, st.rows[fi].loop):
       break
+    st.scopes.setLen(st.rows[fi].scopeAt - 1)
+    st.rows.setLen(st.rows.len - 1)
+    st.curNode = nd.succ
+    return
   st.curNode = nd.child
 
 func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
@@ -312,7 +319,7 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   ## - with no filter clause the bindings are unobservable, the close popping the scope,
   ##   so the construct is a no-op past `succ`
   ## - with a filter clause every remaining item still binds and runs it through
-  ##   the shared cursor, so a clause raising on data raises located exactly
+  ##   the shared per-item step, so a clause raising on data raises located exactly
   ##   as the non-empty path would
   template nd: Node = tmpl.nodes[n]
   if st.rows.len > 0 and st.rows[^1].kind == frFor and st.rows[^1].node == n:
@@ -337,12 +344,10 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   st.bindName(nd.loopName, loopVal(lp))
   if nd.child == NoLink:
     if nd.filterLo != NoLink:
-      while true:
-        inc lp.idx
-        if lp.idx >= lp.loopLen:
-          break
-        bindTargets(tmpl, st, n, lp.loopItem(lp.idx))
-        discard filterKeep(tmpl, ports, nd.filterLo, nd.filterHi)
+      # An empty body still runs the clause over every remaining item, the keep decision
+      # unused there, the clause's raises and side effects the observable behavior.
+      while forStep(tmpl, st, ports, n, lp):
+        discard
     st.scopes.setLen(st.rows[^1].scopeAt - 1)
     st.rows.setLen(st.rows.len - 1)
     st.curNode = nd.succ
