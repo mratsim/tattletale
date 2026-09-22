@@ -10,8 +10,8 @@
 ## Every recorded corpus row walks the delivery paths and the window contract:
 ##
 ## - byte-exact delivery of every ok row through `pullAll`, a buffered pull loop,
-##   windowed consumers, every err row raising the recorded error, declared gaps loud
-## - every ok row's generation spans asserted verbatim on every delivery path
+##   windowed consumers, every err row raising the recorded error, declared gaps loud,
+##   and every ok row's generation spans asserted verbatim on every delivery path
 ## - the window contract, the for-filter raise with repull-resume, the macro scope pop,
 ##   the ensure_ascii escape shapes, the compiled artifact layout
 ## - allocation counting under `-d:nimAllocStats`

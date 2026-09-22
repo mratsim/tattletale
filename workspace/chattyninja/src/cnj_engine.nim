@@ -30,13 +30,8 @@ type
     ##   reaching the statement tier only through `c.force`
 
 func forceMacro(c: var Context, mc: MacroVal, args: Args): JinjaVal
-  ## Runs one macro body to completion and returns the captured text, the handle
-  ## `startRender` binds into `Context.force`. The compiled artifact and the render
-  ## state both travel inside the context, keeping both tiers clear of an import cycle.
 
 func startMacro(c: var Context, lo, hi: int, call: PendingCallVal, retNode: int32)
-  ## Opens a macro row and enters the body, the body's output pieces draining through
-  ## the caller's window until the row closes on the definition node.
 
 func forceCondCall(c: var Context, v: JinjaVal, lo, hi: int32): JinjaVal =
   ## Renders a pending macro call read in a boolean position to its output value, the branch

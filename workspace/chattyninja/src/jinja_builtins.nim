@@ -11,7 +11,7 @@
 ## - a nil table entry raises `gapWhat`, a declared name the corpus does not use
 ##   reported as an unimplemented demand
 ## - globals stay in jinja_interpolation, their signatures reading the template text
-##   and the injected ports, which this module cannot see
+##   and the injected clock through the context, which this module cannot see
 
 import std/unicode
 import cnj_types, jinja_data_model, jinja_serialize
