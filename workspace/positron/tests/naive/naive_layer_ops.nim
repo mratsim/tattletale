@@ -76,19 +76,26 @@ proc naiveL2NormRow*(x: seq[uint16]; cols: int): seq[uint16] =
   ## One l2-normalized row, the q/k normalization's rounding pipeline.
   ##
   ## Returns:
-  ## - acc    = sum_c bf16(widen(x[c])²), each square rounds to bf16 first
-  ## - inv    = bf16(1/sqrt(bf16(acc + 1e-6)))
-  ## - out[c] = bf16(widen(x[c])·widen(inv))
   ##
-  ## The elementwise bf16 rounds before and inside the reduction belong
-  ## to the recorded chain, not the mathematical l2 norm.
+## | part  | value                                                                  |
+## | ----- | ---------------------------------------------------------------------- |
+## | acc   | sum_c bf16(widen(x[c])²), each square rounds to bf16 first             |
+## | sumBf | bf16(acc), the sum's own round at the model's bf16 `.sum` output dtype |
+## | inv   | bf16(1/sqrt(bf16(widen(sumBf) + 1e-6)))                                |
+## | out   | out[c] = bf16(widen(x[c])·widen(inv))                                  |
+  ##
+  ## Recorded-chain rounding, none of it belongs to the mathematical l2 norm:
+  ## - each square rounds to bf16 elementwise
+  ## - the fp32 sum rounds to bf16 at the model's `.sum` output dtype
+  ## - the eps add rounds to bf16 again before the reciprocal
   doAssert x.len == cols
   var acc = 0.0'f32
   for c in 0 ..< cols:
     let xi = bf16ToF32(x[c])
     acc += bf16ToF32(bf16Round(xi * xi))
+  let sumBf = bf16Round(acc)
   let inv = bf16Round(1.0'f32 /
-    sqrt(bf16ToF32(bf16Round(acc + 1.0e-6'f32))))
+    sqrt(bf16ToF32(bf16Round(bf16ToF32(sumBf) + 1.0e-6'f32))))
   result = newSeq[uint16](cols)
   for c in 0 ..< cols:
     result[c] = bf16Round(bf16ToF32(x[c]) * bf16ToF32(inv))
@@ -174,11 +181,12 @@ proc naiveSoftmaxTopKRouter*(x: seq[uint16]; routerW: seq[uint16];
 ## | logits | logits[e] = bf16(sum_k widen(x[k])·widen(routerW[e·H + k])), fp32 dot |
 ## | p      | softmax over the widened logits, fp32                                 |
 ## | top-K  | by score, the lowest index on a tie                                   |
-## | w      | w[slot] = bf16(p[id]/sum(p)·scale)                                    |
+## | w      | w[slot] = bf16(p[id]/sum(top-K p)·scale), renormalized over           |
+## |        | the selected set only, the model's routeToExperts contract            |
   ##
   ## Example (E = 4, K = 2, exact small values, all logits distinct):
   ##   logits [3.0, 1.0, 2.0, 0.0] → p ∝ [e³, e¹, e², 1] → ids [0, 2],
-  ##   w = [e³/(e³+e²+e¹+1), e²/…], each rounded bf16.
+  ##   w = [e³/(e³+e²), e²/(e³+e²)], each rounded bf16.
   doAssert routerW.len == E * H
   var logits = newSeq[float32](E)
   for e in 0 ..< E:
@@ -189,12 +197,11 @@ proc naiveSoftmaxTopKRouter*(x: seq[uint16]; routerW: seq[uint16];
   var p = newSeq[float32](E)
   for e in 0 ..< E:
     p[e] = exp(logits[e] - max(logits))
-  var sumP = 0.0'f32
-  for e in 0 ..< E:
-    sumP += p[e]
   result.ids = newSeq[int32](K)
   result.w = newSeq[float32](K)
   var used = newSeq[bool](E)
+  var topSum = 0.0'f32
+  var picked = newSeq[int](K)
   for slot in 0 ..< K:
     var best = -1
     var bestP = -1.0'f32
@@ -203,8 +210,12 @@ proc naiveSoftmaxTopKRouter*(x: seq[uint16]; routerW: seq[uint16];
         bestP = p[e]
         best = e
     used[best] = true
+    picked[slot] = best
     result.ids[slot] = int32(best)
-    result.w[slot] = bf16ToF32(bf16Round(p[best] / sumP * scale))
+    topSum += p[best]
+  # renormalize over the selected set only, then one bf16 round per weight
+  for slot in 0 ..< K:
+    result.w[slot] = bf16ToF32(bf16Round(p[picked[slot]] / topSum * scale))
 
 proc naiveSiluMulEl*(g, u: float32): uint16 =
   ## MoE expert activation element, the mega chain's rounding form over the fp32 g/up accumulator operands.

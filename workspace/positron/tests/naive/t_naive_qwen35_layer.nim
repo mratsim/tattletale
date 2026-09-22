@@ -57,6 +57,33 @@ proc pinL2Norm() =
     doAssert got[c] == inv, &"l2norm[{c}] {got[c]} want {inv}"
   echo "[l2norm] ok"
 
+proc pinL2NormSumRound() =
+  ## Sum-round discriminator over 16 bf16 columns, the recorded chain's
+  ## two rounds and the single round at acc + eps land a bf16 grid step
+  ## apart on this row:
+  ##
+  ## - acc = 7.65234375, sitting below the bf16 midpoint 7.71875 by less
+  ##   than the eps add
+  ## - the recorded chain bf16(acc) = 7.6875, the eps add stays there,
+  ##   inv = bf16(1/sqrt(7.6875)) = 0.361328125
+  ## - the single-round spelling rounds acc + 1e-6 to 7.71875, giving
+  ##   inv 0.359375, and every output element differs
+  ##
+  ## The wanted inv bits and the 16 wanted output elements are recorded
+  ## literals of the two-round chain.
+  let x = @[
+    0xBF7A'u16, 0x3F7C'u16, 0xBF64'u16, 0x3F2D'u16, 0x3F3C'u16, 0x3F07'u16,
+    0x3F39'u16, 0xBEAF'u16, 0xBF64'u16, 0x3F33'u16, 0x3F18'u16, 0x3E06'u16,
+    0x3EA4'u16, 0xBF6E'u16, 0xBF01'u16, 0x3EE8'u16]
+  let want = @[
+    0xBEB5'u16, 0x3EB6'u16, 0xBEA5'u16, 0x3E7A'u16, 0x3E88'u16, 0x3E43'u16,
+    0x3E86'u16, 0xBDFD'u16, 0xBEA5'u16, 0x3E81'u16, 0x3E5C'u16, 0x3D42'u16,
+    0x3DED'u16, 0xBEAC'u16, 0xBE3A'u16, 0x3E28'u16]
+  let got = naiveL2NormRow(x, 16)
+  for c in 0 ..< 16:
+    doAssert got[c] == want[c], &"l2norm sum-round [{c}] {got[c]} want {want[c]}"
+  echo "[l2norm sum-round] ok"
+
 proc pinGates() =
   ## a = 0, dtBias = 0 gives softplus(0) = ln 2, g = -exp(A_log)·ln 2,
   ## b = 0 gives beta = bf16(1/2).
@@ -78,10 +105,13 @@ proc pinRouter() =
     f32ToBf16(3.0'f32), f32ToBf16(1.0'f32), f32ToBf16(2.0'f32), f32ToBf16(0.0'f32)]
   let got = naiveSoftmaxTopKRouter(x, routerW, 4, 1, 2, 1.0'f32)
   doAssert got.ids == @[0'i32, 2'i32], &"ids {got.ids}"
-  let e3 = exp(3.0'f32); let e2 = exp(2.0'f32); let e1 = exp(1.0'f32)
-  let denom = e3 + e2 + e1 + 1.0'f32
-  let want0 = bf16ToF32(f32ToBf16(e3 / denom))
-  let want1 = bf16ToF32(f32ToBf16(e2 / denom))
+  # renormalized over the top-2 selected set, the routeToExperts
+  # contract. p is proportional to (1, e⁻²) after the max subtraction,
+  # w = p/(p₀+p₁)
+  let e0 = exp(0.0'f32); let e2 = exp(2.0'f32 - 3.0'f32)
+  let topSum = e0 + e2
+  let want0 = bf16ToF32(f32ToBf16(e0 / topSum))
+  let want1 = bf16ToF32(f32ToBf16(e2 / topSum))
   doAssert got.w[0] == want0, &"w[0] {got.w[0]} want {want0}"
   doAssert got.w[1] == want1, &"w[1] {got.w[1]} want {want1}"
   echo "[router] ok"
@@ -249,10 +279,14 @@ proc outDigest(o: LayerOut): string =
   h = h * 0x9E3779B97F4A7C15'u64
   &"{h:016X}"
 
-const RecordedChecksum = "EA11B4C6B6422876"
+const RecordedChecksum = "FEA2A8CEE67B24B8"
   ## Recorded checksum over the seed 0xC04D0601 walk's outputs,
-  ## taken from the first green run. Re-recorded once when the recorded
-  ## outputs gained the fp32 g values, the walk itself unchanged.
+  ## taken from the first green run.
+  ##
+  ## Re-recordings while keeping the walk itself unchanged:
+  ## - routing weights switched to renormalizing over the top-K
+  ##   selected set, the routeToExperts contract
+  ## - recorded outputs gained fp32 g values
 
 proc fullGeometryChecks() =
   ## Determinism across fresh walks, relaunch bit-identity, the recorded checksum.
@@ -269,6 +303,7 @@ proc fullGeometryChecks() =
 echo "worked examples:"
 pinRmsNormRes()
 pinL2Norm()
+pinL2NormSumRound()
 pinGates()
 pinRouter()
 pinDenseLinear()
