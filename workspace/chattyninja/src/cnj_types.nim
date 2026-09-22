@@ -28,7 +28,10 @@
 #     ├─ rows     pushed by step* entry, popped by closeRow, one close path
 #     ├─ scopes   owned by rows (scopeAt marks the base), trimmed on close
 #     ├─ pend     one Piece, set by emit steps, drained by pull or capturePend, reset to pkNone
-#     └─ force    the engine's macro forcer, bound per dispatch, borrowed by expressions
+#
+#   macro-force handle, a parameter threaded one call deep, no field anywhere holding it
+#     bound by the engine at its dispatch sites, expressions receiving it as a stateless value
+#     the render state it serves arriving as the caller's own `var RenderState` borrow
 
 import jinja_data_model, jinja_serialize
 import workspace/data_structures/src/small_seqs
