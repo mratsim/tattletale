@@ -6,7 +6,28 @@
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built
 # symbol arena, the per-instantiation render state, and the injected render ports
 # the expression tier reads the render through. See cnj_engine.nim for the dispatch table,
-# the render context bundle, the port adapter, and the `items` pull interface.
+# the render context bundle, the port forwarders, and the `items` pull interface.
+#
+# Dataflow of one render, the record types here shared across the module boundary
+#
+#   template bytes (borrowed, never copied at parse)
+#     │  cnj_parse splits tags, scans keywords, appends arena nodes, interns names once
+#     ▼
+#   CompiledTemplate + CompiledSymbols (read-only artifact + interned-name arena)
+#     │  cnj_engine dispatches pull() steps over the arena
+#     ▼
+#   RenderState (rows + scopes + pending Piece)
+#     │  evalSpan drives jinja_interpolation, expressions reading the render through Ports
+#     ▼
+#   Piece (pkSpan, pkStr, pkCut or pkLazy), drained into the caller's window
+#
+# Lifecycle and ownership of the render state and its ports
+#
+#   RenderState, one per render, owned by the caller's Context
+#     ├─ rows     pushed by step* entry, popped by closeRow, one close path
+#     ├─ scopes   owned by rows (scopeAt marks the base), trimmed on close
+#     ├─ pend     one Piece, set by emit steps, drained by pull or capturePend, reset to pkNone
+#     └─ ports    PortEnv built on the stack per dispatch, typed here, dead at dispatch end
 
 import jinja_data_model, jinja_serialize
 import workspace/data_structures/src/small_seqs
@@ -299,14 +320,24 @@ type
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
-  LookupPort = proc (env: pointer, name: openArray[char]): JinjaVal {.nimcall, noSideEffect.}
+  PortEnv* = object
+    ## Adapter state one dispatch's ports read:
+    ## - the artifact, the shared symbol arena, the render state the port procs serve
+    ## - built on the stack per dispatch, never stored in the render state, so a copied
+    ##   `Context` never carries a dangling adapter
+    ## - lives here with `Ports` so the port procs read it typed, no pointer cast
+    tmpl*: CompiledTemplate
+    sym*: ptr CompiledSymbols
+    st*: ptr RenderState
+
+  LookupPort = proc (env: ptr PortEnv, name: openArray[char]): JinjaVal {.nimcall, noSideEffect.}
     ## Resolves one name of the enclosing render to its binding, undefined when absent.
     ## `env` carries the adapter state the port procs read, owned by the pull consumer.
 
-  ClockPort = proc (env: pointer): float64 {.nimcall, noSideEffect.}
+  ClockPort = proc (env: ptr PortEnv): float64 {.nimcall, noSideEffect.}
     ## Returns the render's injected epoch, `strftime_now`'s only time source.
 
-  MacroForcer = proc (env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+  MacroForcer = proc (env: ptr PortEnv, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
     ## Runs one macro body to completion and returns the captured text as a string value.
     ## The pull consumer injects the forcer, so the expression tier never reaches the statement
     ## tier and no import cycle forms.
@@ -318,8 +349,8 @@ type
     lookup*: LookupPort
     clock*: ClockPort
     force*: MacroForcer
-    env*: pointer
-      ## adapter state the port procs cast back, opaque here by construction
+    env*: ptr PortEnv
+      ## adapter state the port procs read, typed here so no caller casts
 
   Context* = object
     ## Object the caller holds, bundling the shared artifact, a borrowed symbol-arena pointer,
@@ -330,6 +361,11 @@ type
       ## borrowed, must not outlive the binding it was taken from, the same contract
       ## class as the `jinja` borrow of the template text
     state*: RenderState
+
+func buildPorts*(lookup: LookupPort, clock: ClockPort, force: MacroForcer, env: ptr PortEnv): Ports =
+  ## Returns the one `Ports` value of a dispatch, the single constructor of the injected
+  ## render services, every dispatch building its own adapter and its own ports.
+  Ports(lookup: lookup, clock: clock, force: force, env: env)
 
 func findName*(t: CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `NoLink` when the template never names it.

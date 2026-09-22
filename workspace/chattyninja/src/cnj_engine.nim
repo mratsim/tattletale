@@ -4,14 +4,13 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Compiled chattyninja templates and their render driver.
-#
-# | Step     | Behavior                                                                                                                                                      |
-# | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-# | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                                     |
-# | load     | `parseTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into                     |
-# | render   | `startRender` opens a `Context` over the artifact and `pull` walks the arena through `steps`, all control state in the context's `RenderState`                |
-# | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                      |
-# | ports    | every dispatch builds the `PortEnv` adapter on the stack and hands the steps `Ports`, so the expression tier reads the render only through the injected ports |
+# | Step     | Behavior                                                                                                                                                                   |
+# | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+# | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                                                  |
+# | load     | `parseTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into                                  |
+# | render   | `startRender` opens a `Context` over the artifact and `pull` walks the arena through `steps`, all control state in the context's `RenderState`                             |
+# | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                                   |
+# | ports    | every dispatch builds its `PortEnv` adapter on the stack and `buildPorts` hands the steps `Ports`, so the expression tier reads the render only through the injected ports |
 #
 # Resumption state for a re-entered step lives in the render state's row stack, never in a node.
 # `nkFor`, `nkSetBlock` and `nkGeneration` are re-entered by their bodies, `nkIf`
@@ -29,14 +28,6 @@ type
     ## One construct's step. Writes only through `st`, always leaving `st.curNode` holding
     ## the node control enters next. Expressions evaluate through `ports`, the injected
     ## render services, so no expression proc ever sees the render state.
-
-  PortEnv = object
-    ## Adapter state one dispatch's ports read. Holds the artifact, the shared symbol arena,
-    ## the render state the port procs serve. Built on the stack per dispatch,
-    ## never stored in the render state, so a copied `Context` never carries a dangling adapter.
-    tmpl: CompiledTemplate
-    sym: ptr CompiledSymbols
-    st: ptr RenderState
 
 func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal
   ## Runs one macro body to completion and returns the captured text, the macro forcer
@@ -58,28 +49,26 @@ func scopeHas(st: RenderState, id: int32, val: var JinjaVal): bool =
         return true
   false
 
-func portLookup(env: pointer, name: openArray[char]): JinjaVal {.nimcall.} =
+func portLookup(env: ptr PortEnv, name: openArray[char]): JinjaVal {.nimcall.} =
   ## Lookup port forwarder. Returns the binding of `name` in the scopes, else in the render
   ## context root, else undefined. Absence is a value, never an error.
   ## `is defined` tests for exactly that shape.
-  let e = cast[ptr PortEnv](env)
-  let id = e.sym[].findName(name)
+  let id = env.sym[].findName(name)
   var got: JinjaVal
-  if id != NoLink and e.st[].scopeHas(id, got):
+  if id != NoLink and env.st[].scopeHas(id, got):
     return got
-  if e.st[].root.kind == vkDict:
-    return e.st[].root.d.dictGet(name)
+  if env.st[].root.kind == vkDict:
+    return env.st[].root.d.dictGet(name)
   undefinedVal()
 
-func portClock(env: pointer): float64 {.nimcall.} =
+func portClock(env: ptr PortEnv): float64 {.nimcall.} =
   ## Clock port forwarder returning the render's injected epoch.
-  cast[ptr PortEnv](env)[].st[].clock
+  env.st[].clock
 
-func portForce(env: pointer, mc: MacroVal, args: Args): JinjaVal {.nimcall.} =
+func portForce(env: ptr PortEnv, mc: MacroVal, args: Args): JinjaVal {.nimcall.} =
   ## Macro-forcer port forwarder, running the body to completion on the adapter's render
   ## state and returning the captured text value.
-  let e = cast[ptr PortEnv](env)
-  forceMacro(e.tmpl, e.sym, e.st[], mc, args)
+  forceMacro(env.tmpl, env.sym, env.st[], mc, args)
 
 func forceCondCall(ports: Ports, v: JinjaVal, lo, hi: int32): JinjaVal =
   ## Renders a pending macro call read in a boolean position to its output value, the branch
@@ -666,7 +655,7 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
   st2.rows.add Row(node: mc.node, kind: frMacro, pc: mc.body,
       retNode: mc.node, scopeAt: scopeBase)
   var env2 = PortEnv(tmpl: tmpl, sym: sym, st: addr st2)
-  let ports2 = Ports(lookup: portLookup, clock: portClock, force: portForce, env: addr env2)
+  let ports2 = buildPorts(portLookup, portClock, portForce, addr env2)
   bindMacroArgs(tmpl, sym, st2, ports2, mc.node, args, NoOffset, 0)
   st2.curNode = mc.body
   result = strVal("")
@@ -745,7 +734,7 @@ func pull*(c: var Context, buf: var openArray[char]): int =
   # Adapter lifetime is one dispatch. Every step this call runs evaluates expressions
   # through ports over this env, and nothing escapes the call.
   var env = PortEnv(tmpl: tmpl, sym: sym, st: addr st)
-  let ports = Ports(lookup: portLookup, clock: portClock, force: portForce, env: addr env)
+  let ports = buildPorts(portLookup, portClock, portForce, addr env)
   var steps = 0
   while true:
     # Retire a piece whose bytes are all delivered. A lazy piece completes when its serializer
