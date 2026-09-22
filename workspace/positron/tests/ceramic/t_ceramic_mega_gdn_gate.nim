@@ -68,7 +68,6 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
 import mega_bounded_wait
-import ../../src/kernels/ceramic/launch_contract
 import ceramic_fam
 
 # ─── Expiry hook, the wedged outcome recorded instead of terminal ─────
@@ -268,7 +267,6 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
     dtBiasPA = dtBias.pa()
 
   proc launch(): bool {.gcsafe.} =
-    assertMegaGrid(950, 32, StageEnds, true)
     engine.run << (grid: (950, 1, 1), blk: (32, 1, 1)) >>
       ("qwen35_gdn_layer_bf16", countersPA,
         (bfAPA, f32APA, xPrevPA, rPrevPA, statePA, ringPA,

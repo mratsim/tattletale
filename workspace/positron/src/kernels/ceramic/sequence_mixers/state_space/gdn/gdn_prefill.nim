@@ -28,11 +28,10 @@
 ## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                  |
 ## | decay / q̃   | exp2(g·log2e), log2e is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
 ##
-## | contract       | value                                                                                                                                                                               |
-## | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                                                  |
-## | g precondition | finite and ≤ 0 (−exp(A_log)·softplus ≤ 0 by construction), cumg inherits the sign, the kernel applies no clamp, a violating g explodes the persistent f32 state (assertDecayFinite) |
-## | index bound    | the head/sequence linear bases are int32, rows·T·dim < 2^31 (launch_contract.assertPrefillExtent32 at the launch site)                                                              |
+## | contract       | value                                                                                                                                                           |
+## | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | g precondition | finite and ≤ 0 (−exp(A_log)·softplus ≤ 0 by construction), cumg inherits the sign, the kernel applies no clamp, a violating g explodes the persistent f32 state |
+
 ##
 ## | provenance | source                                                                                                                                                    |
 ## | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -57,7 +56,6 @@
 ## Binding and state ABI:
 ## - hosts binding through the Metal engine's no-copy path get in-place state
 ##   updates and visible y writes from one run
-## - the path needs a page-aligned pointer and a page-multiple byte length, launch_contract.assertNocopyBinding asserts it
 ##
 ## - any other binding copies and the y writes are lost
 ## - `state` is the engine's output buffer, `y` is written by the kernel
@@ -101,7 +99,6 @@ proc gdnPrefillChunkScanBf16At*(
   ## - the u solve is sequential in t, the sums over s walk s ascending
   ##
   ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
-  ##   (launch_contract.assertHeadMapping at the launch site)
   ##
   ## `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block.
   ## Grid-driven wrapper, receiving the threadgroup coordinates from the grid.

@@ -21,8 +21,8 @@
 ## | head mapping   | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                           |
 ## | batch          | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                                     |
 ## | decay / q̃     | exp2(g·log2e), the log2e factor is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
-## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                     |
-## | g precondition | finite and ≤ 0 by construction, no kernel clamp, a violating g explodes the persistent f32 state (assertDecayFinite at the launch site)                |
+## | g precondition | finite and ≤ 0 by construction, no kernel clamp, a violating g explodes the persistent f32 state                                                       |
+
 ##
 ## - Entries are consumer-side, a `metal:` block wraps the grid-driven proc with concrete
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
@@ -32,7 +32,6 @@
 ## Binding and state ABI:
 ## - hosts binding through the Metal engine's no-copy path get in-place state
 ##   updates and visible y writes from one run
-## - the path needs a page-aligned pointer and a page-multiple byte length, launch_contract.assertNocopyBinding asserts it
 ##
 ## - any other binding copies and the y writes are lost
 ## - `state` is the engine's output buffer, `y` is written by the kernel
@@ -75,7 +74,6 @@ proc gdnDecodeStepTileBf16At*(
   ## Contract:
   ## - all state arithmetic is fp32, the state never rounds
   ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
-  ##   (launch_contract.assertHeadMapping at the launch site)
   ##
   ## - the decay applies before the kv read (the recurrence's step order)
   ## - the state stores in place, f32, no rounding

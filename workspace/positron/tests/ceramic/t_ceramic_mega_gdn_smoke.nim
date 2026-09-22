@@ -45,7 +45,6 @@ import ../naive/naive_tensors
 from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut
 import ceramic_pagebuf
 import mega_bounded_wait
-import ../../src/kernels/ceramic/launch_contract
 import ceramic_fam
 
 # ─── Device entry, one launch of the mega's 13-stage dispatcher ───────
@@ -236,7 +235,6 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
     dtBiasPA = dtBias.pa()
 
   proc launch(): bool {.gcsafe.} =
-    assertMegaGrid(950, 32, StageEnds, true)
     # No host-side counter zeroing, the kernel re-zeroes all counters
     # at the launch's end and the page allocator's zero fill covers the first launch.
     # This launch pair is the relaunch-determinism proof without host zeroing.

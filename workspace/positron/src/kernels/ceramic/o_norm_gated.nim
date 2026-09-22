@@ -122,7 +122,7 @@ proc rowRstd[R, C: static int; A: static MmaAtom](
   ## - Each lane's fragments share one tile row, the atom's lane→element mapping,
   ##   and C is the norm width, so the row reduction is one row_sum inside the tile.
   ## - eps must be > 0, an all-zero row makes the mean 0 and rsqrt(0) = +Inf,
-  ##   which the store writes silently, the launch site asserts it (launch_contract.assertEpsPositive)
+  ##   the +Inf the store writes silently
   var y32: rt_l(float32, R, C)
   y32.widenBf16(y)
   var sq: rt_l(float32, R, C)

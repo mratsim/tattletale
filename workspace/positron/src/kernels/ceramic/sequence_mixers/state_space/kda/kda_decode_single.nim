@@ -26,11 +26,10 @@
 ## | decay        | exp2(g·log2e) per channel, log2e is the shared `math_consts.Log2e` (Metal has no exp device builtin) |
 ## | q̃           | divides q per element by the runtime f32 `qScale`, the host's f64 √Dk cast to f32                    |
 ##
-## | contract            | value                                                                                                                                                |
-## | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | lanes               | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                   |
-## | g precondition      | finite and ≤ 0 per key channel (−exp(A_log)·softplus ≤ 0 by construction), no kernel clamp, a violating g explodes the f32 state (assertDecayFinite) |
-## | qScale precondition | finite and > 0, the device divides q per element by it (launch_contract.assertQScale at the launch site)                                             |
+## | contract       | value                                                                                                                            |
+## | -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+## | g precondition | finite and ≤ 0 per key channel (−exp(A_log)·softplus ≤ 0 by construction), no kernel clamp, a violating g explodes the f32 state |
+
 ##
 ## - the recorded contract keeps q/k/g/beta f32, this spelling's family axis covers v and y only
 ## - the bf16 core is the recorded Kimi spelling, the fp16 core follows the family dtype verdict
@@ -43,7 +42,6 @@
 ## Binding and state ABI:
 ## - hosts binding through the Metal engine's no-copy path get in-place state
 ##   updates and visible y writes from one run
-## - the path needs a page-aligned pointer and a page-multiple byte length, launch_contract.assertNocopyBinding asserts it
 ##
 ## - any other binding copies and the y writes are lost
 ## - `state` is the engine's output buffer, `y` is written by the kernel
@@ -85,8 +83,6 @@ proc kdaDecodeStepTileF16At*(
   ## - the state stores in place, f32, no rounding
   ##
   ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
-  ## - precondition, qScale finite and > 0, launch_contract.assertHeadMapping
-  ##   and launch_contract.assertQScale assert both at the launch site
   ##
   ##   kv_mem[row] = Σ_dkc decayed[row][dkc]·k[dkc]
   ##   delta[row] = β·(v[row] − kv_mem[row])

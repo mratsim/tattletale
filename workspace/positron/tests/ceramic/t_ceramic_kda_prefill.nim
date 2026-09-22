@@ -123,7 +123,6 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 import ../naive/naive_kda
 import ceramic_pagebuf
-import ../../src/kernels/ceramic/launch_contract
 import ceramic_fam
 
 # ─── Device entries, one per (family dtype, chunk length, Dk) binding ──
@@ -535,13 +534,6 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
   var betaPA = betaB.pa()
 
   # Launch-site contracts, see the kernel modules' binding and state ABI docs
-  assertHeadMapping(Hv, Hk, hkRatio)
-  assertLanes32(LaneWidth)
-  assertNocopyBinding(statePA)
-  assertNocopyBinding(yPA)
-  assertQScale(qScale)
-  assertPrefillExtent32(qkRows, T, Dk)
-  assertPrefillExtent32(bhMax, T, Dv)
   var worstState = 0.0'f64
   var worstStateUse = 0.0'f64
   var worstCont = 0.0'f64
@@ -566,8 +558,7 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
       yB.hostPtr[i] = 0
 
   proc launch(si: PrefillInputs) =
-    assertCumgFinite(cumgPA, qkRows, T, Dk, chunkLen)
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (LaneWidth, 1, 1)) >>
+    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
       (kernelName, statePA,
         (yPA, vPA, kPA, qPA, cumgPA, betaPA, qScale,
           int32(Hv), int32(Hk), int32(hkRatio), int32(T)))

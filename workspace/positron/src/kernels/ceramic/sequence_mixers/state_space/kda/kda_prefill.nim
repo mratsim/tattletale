@@ -31,12 +31,10 @@
 ## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state           |
 ## | decay / q̃   | exp2(cumg·log2e) per channel in-device, log2e is the shared `math_consts.Log2e`, q̃ = per-element division by the runtime f32 qScale |
 ##
-## | contract            | value                                                                                                                                        |
-## | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-## | lanes               | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                           |
-## | cumg precondition   | finite and monotone non-increasing per key per chunk (host prefix of g, terms ≤ 0), a rising cumg overflows the f32 state (assertCumgFinite) |
-## | qScale precondition | finite and > 0, the device divides q per element by it (launch_contract.assertQScale at the launch site)                                     |
-## | index bound         | the head/sequence linear bases are int32, rows·T·dim < 2^31 (launch_contract.assertPrefillExtent32 at the launch site)                       |
+## | contract          | value                                                                                                                     |
+## | ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
+## | cumg precondition | finite and monotone non-increasing per key per chunk (host prefix of g, terms ≤ 0), a rising cumg overflows the f32 state |
+
 ##
 ## | provenance | source                                                                                                                                                        |
 ## | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -77,7 +75,6 @@
 ## Binding and state ABI:
 ## - hosts binding through the Metal engine's no-copy path get in-place state
 ##   updates and visible y writes from one run
-## - the path needs a page-aligned pointer and a page-multiple byte length, launch_contract.assertNocopyBinding asserts it
 ##
 ## - any other binding copies and the y writes are lost
 ## - `state` is the engine's output buffer, `y` is written by the kernel
@@ -122,8 +119,6 @@ proc kdaPrefillChunkScanBf16At*(
   ## - the u solve is sequential in t, the sums over s walk s ascending
   ##
   ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
-  ## - precondition, qScale finite and > 0, launch_contract.assertHeadMapping
-  ##   and launch_contract.assertQScale assert both at the launch site
   ##
   ##   per token:   dT ─→ G_t, H_t reads ─→ u_t solve ─→ y_t store
   ##   chunk end   S ← dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) [x] u_s
