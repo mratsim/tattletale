@@ -238,6 +238,18 @@ proc main =
     doAssert hOut.data[0] == 1.0'f32 and hOut.data[1] == 1.0009765625'f32,
       "cube fp16 roundtrip wrong"
 
+  runTimed "f32ToBf16 non-finite passthrough":
+    # NaN keeps a NaN pattern, payload not preserved, the round-to-nearest
+    # increment must not carry across the Inf/NaN boundary.
+    doAssert (f32ToBf16(cast[float32](0x7FC00001'u32)) and 0x7FC0'u16) == 0x7FC0'u16,
+      "quiet NaN did not stay a NaN pattern"
+    doAssert f32ToBf16(cast[float32](0x7F800001'u32)) == 0x7FC0'u16,
+      "small-payload NaN rounded across the Inf/NaN boundary to Inf"
+    doAssert f32ToBf16(cast[float32](0xFF800001'u32)) == 0xFFC0'u16,
+      "negative small-payload NaN lost its sign and NaN pattern"
+    doAssert f32ToBf16(cast[float32](0x7F800000'u32)) == 0x7F80'u16,
+      "Inf did not pass through"
+
   runTimed "naive_metrics untouched region after a full write":
     # A reference writing every used element must leave the guarded
     # tail bit-identical end to end.

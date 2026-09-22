@@ -91,6 +91,7 @@ proc naiveGroupedMmSums*(fam: GmmFamily; a: NaiveMat[uint16]; w: NaiveCube[uint1
     offs: seq[int32]): NaiveMat[float32] =
   ## Returns the unrounded fp32 accumulations of `naiveGroupedMm`, same contract,
   ## for checks that need the pre-store value.
+  doAssert a.cols == w.cols, "the contraction dim must match the cube's H"
   let rows = a.rows
   doAssert offs.len == w.planes, "one offset per expert"
   doAssert offs[^1].int == rows, "the last offset must close the row range"

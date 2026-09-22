@@ -31,9 +31,16 @@ func bf16ToF32*(h: uint16): float32 =
 
 func f32ToBf16*(x: float32): uint16 =
   ## Returns the IEEE-754 binary32 → bfloat16 bit pattern of the value,
-  ## round-to-nearest-even. Zero, Inf and NaN pass through, a NaN input
-  ## keeping a NaN pattern, payload not preserved. Overflow rounds to Inf.
+  ## round-to-nearest-even. Zero and Inf pass through.
+  ##
+  ## A NaN input keeps a NaN pattern, the canonical quiet NaN.
+  ## Payload is not preserved, the sign is. Overflow rounds to Inf.
   let u = cast[uint32](x)
+  if (u and 0x7F800000'u32) == 0x7F800000'u32 and (u and 0x007FFFFF'u32) != 0:
+    # The round-to-nearest increment can carry across the Inf/NaN
+    # boundary (a small odd payload rounds a NaN to Inf), so a NaN
+    # short-circuits to the canonical quiet NaN, sign kept.
+    return if (u shr 31) == 1: 0xFFC0'u16 else: 0x7FC0'u16
   uint16((u + 0x7FFF'u32 + ((u shr 16) and 1)) shr 16)
 
 # Owned-storage tensor types

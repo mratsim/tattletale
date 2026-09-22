@@ -145,6 +145,19 @@ proc main =
     doAssert got.data[1] == f32ToBf16(0.0'f32),
       "0.5·1.0 + (-1.0)·0.5 must round to 0.0"
 
+  # Shape guard, the unrounded reference carries the same
+  # contraction-dim assert as the base reference.
+  #
+  # A mismatched call must raise, never silently validating a kernel
+  # against the wrong contract shape.
+  runTimed "contraction-dim guard raises on the unrounded reference":
+    var a = NaiveMat[uint16](rows: 2, cols: 4)
+    a.data = @[1'u16, 2, 3, 4, 5, 6, 7, 8]
+    var w = NaiveCube[uint16](planes: 1, rows: 1, cols: 2)
+    w.data = @[1'u16, 1]
+    doAssertRaises(AssertionDefect):
+      discard naiveGroupedMmSums(gmmBf16, a, w, @[2'i32])
+
   # Empty group and single-element group through the full call.
   runTimed "offsets boundaries, the empty group skips rows, the single-element group computes one dot":
     var a = NaiveMat[uint16](rows: 10, cols: 4)

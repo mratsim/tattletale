@@ -738,7 +738,10 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   result.state = newSeq[float64](NumVHeads * HeadVDim * HeadKDim)
   result.y = newSeq[float64](NumVHeads * HeadVDim)
   for bh in 0 ..< NumVHeads:
-    let kh = (bh mod NumVHeads) div HkRatio
+    # the kernel's head mapping, both terms kept live even at batch 1,
+    # where the sequence-offset term is zero, so the bar stays correct
+    # under GQA generalization
+    let kh = ((bh mod NumVHeads) div HkRatio) + ((bh div NumVHeads) * NumKHeads)
     let gamma = exp(g64M[bh])
     for r in 0 ..< HeadVDim:
       let rowBase = (bh * HeadVDim + r) * HeadKDim
