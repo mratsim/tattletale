@@ -31,6 +31,15 @@ import ./moe_router
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
+const StoreRaceSabotage* {.booldefine.} = false
+  ## Compile-time sabotage switch for the decode partial-row store fixture,
+  ## restoring the pre-fix store spelling with the row guard dropped, every
+  ## atom row's row-0 lane racing on the same destination element
+  ##
+  ## - the callers load with `rowLimit = 1`, the racing lanes carry
+  ##   exact-zero rows above row 0, the lost writes zero the contribution
+  ## - default builds keep the single-writer spelling
+
 # ─── Module-local bf16 row-bounded tile load/store ────────────────────
 # tile_io_rows ships fp16 variants only. The bf16 guards live
 # module-local (the silu_and_mul and paged_attn precedent).
@@ -139,6 +148,7 @@ proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
   ##
   ## - the store guard requires `row == 0`, exactly one lane per stored element
   ## - the GDN y store keeps the same single-writer spelling
+  ## - `StoreRaceSabotage` drops the row guard, the pre-fix racing spelling
   ##
   ## | element (c, v) of tile row n                       | written when                    |
   ## | -------------------------------------------------- | ------------------------------- |
@@ -157,7 +167,8 @@ proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
   let r = cell mod M
   let c = cell div M
   for n in 0 ..< rowTiles:
-    if rowIdx[n] >= 0 and r == 0:
+    let laneWrites = when StoreRaceSabotage: true else: r == 0
+    if rowIdx[n] >= 0 and laneWrites:
       for m in 0 ..< colTiles:
         for v in 0 ..< vpt:
           dst[int(rowIdx[n]) * int(rowStride) + int(colTile) * C +
