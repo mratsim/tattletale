@@ -385,7 +385,7 @@ proc renderPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock:
       break
     for i in 0 ..< n:
       result.text.add buf[i]
-  result.spans = c.generationSpans()
+  result.spans = c.state.spans
 
 proc renderAllPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64): string =
   ## Renders through `pullAll` with a fresh render context.
@@ -413,7 +413,7 @@ proc renderAllSpans(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, cl
   ## byte coordinates into the bytes.
   var d = startRender(m, sym, ctx, clock)
   result.text = pullAll(d)
-  result.spans = d.generationSpans()
+  result.spans = d.state.spans
 
 func cpIndex(s: string, byteAt: int): int =
   ## Codepoint index of a byte offset, one lead-byte stride walk to the offset.
@@ -438,7 +438,7 @@ proc renderChunked[N: static int](m: CompiledTemplate, sym: CompiledSymbols, ctx
   for w in pc.items():
     for ch in w:
       result.text.add ch
-  result.spans = pc.c.generationSpans()
+  result.spans = pc.c.state.spans
 
 # A nil step would be a hole in the table:
 #   a render would jump through a null pointer rather than

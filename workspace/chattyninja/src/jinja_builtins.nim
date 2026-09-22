@@ -219,8 +219,6 @@ func joinMethod(v: JinjaVal, args: Args): JinjaVal =
     raise jinjaErr("`join` needs a sequence")
   strVal(acc)
 
-func joinFilter(v: JinjaVal, args: Args): JinjaVal = joinMethod(v, args)
-
 func stringTest(v: JinjaVal, args: Args): bool = v.kind in {vkStr, vkCut}
 func definedTest(v: JinjaVal, args: Args): bool = v.kind != vkUndefined
 func undefinedTest(v: JinjaVal, args: Args): bool = v.kind == vkUndefined
@@ -349,7 +347,7 @@ const
     fLength: lengthFilter,
     fTrim: trimFilter,
     fDefault: defaultFilter,
-    fJoin: joinFilter,
+    fJoin: joinMethod,
     fLower: lowerFilter,
     fUpper: upperFilter,
     fCapitalize: capitalizeFilter,

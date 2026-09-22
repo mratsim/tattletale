@@ -431,7 +431,7 @@ func stepGeneration(c: var Context, n: int32) {.nimcall.} =
   ##
   ## - an empty body records an empty span, no row opened for a body that never re-enters
   ## - the body adds no scope and pops none, bindings landing in the enclosing scope
-  ## - spans accumulate in `RenderState.spans`, `generationSpans` surfacing them after the drain
+  ## - spans accumulate in `RenderState.spans`, readable once the render drained
   template nd: Node = c.tmpl.nodes[n]
   if c.state.rows.len > 0 and c.state.rows[^1].kind == frGeneration and c.state.rows[^1].node == n:
     c.state.spans.add (c.state.rows[^1].spanStart, c.state.cur)
@@ -771,14 +771,6 @@ func pullAll*(c: var Context): string =
     if n == 0:
       break
     addView(result, buf.toOpenArray(0, n - 1))
-
-func generationSpans*(c: Context): seq[tuple[start, stop: int]] =
-  ## Returns the render's recorded generation spans.
-  ## - one `[start, stop)` byte range per `{% generation %}` block the render ran
-  ## - root-output coordinates, source order
-  ## - complete once the render drained (`pull` reported 0), a raise keeping the spans
-  ##   recorded so far, a consumer reading this only after a full drain
-  c.state.spans
 
 proc renderToString*(src: string, root: JinjaVal, clock = 0.0): string =
   ## Compiles and renders in one call, compiling at the scope that owns `src`, the artifact

@@ -480,7 +480,7 @@ proc renderWithSpans(src: string): tuple[text: string, spans: seq[tuple[start, s
   let (tmpl, sym) = parseTemplate(src)
   var d = startRender(tmpl, sym, JinjaVal(kind: vkUndefined))
   result.text = pullAll(d)
-  result.spans = d.generationSpans()
+  result.spans = d.state.spans
 
 doAssert renderWithSpans("{% generation %}A{% endgeneration %}").text == "A",
     "the body renders unchanged"

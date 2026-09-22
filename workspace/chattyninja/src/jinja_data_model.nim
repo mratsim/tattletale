@@ -338,7 +338,7 @@ func materializeVal*(v: JinjaVal): JinjaVal =
   else:
     v
 
-func rangeLen*(r: RangeVal, lo, hi: int): int =
+func rangeLen*(r: RangeVal, lo = NoOffset, hi = 0): int =
   ## Returns the element count of the range, Python's `len(range(start, stop, step))`:
   ## a step against the span's direction answers 0.
   ##
@@ -368,10 +368,6 @@ func rangeLen*(r: RangeVal, lo, hi: int): int =
       raise jinjaErr(what)
     raise jinjaErr(what, lo, hi - lo)
   int(n)
-
-func rangeLen*(r: RangeVal): int =
-  ## `rangeLen` from callers with no template location in scope, the raise unlocated.
-  rangeLen(r, NoOffset, 0)
 
 func rangeAt*(r: RangeVal, i: int): JinjaVal =
   ## Returns element `i` of the range, `i` in `0 ..< rangeLen(r)`.
