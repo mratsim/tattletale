@@ -23,23 +23,23 @@ import std/unicode
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
 
 type
-  Step = proc (tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+  Step = proc (tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState,
       force: MacroForcer, n: int32) {.nimcall, noSideEffect.}
     ## One construct's step. Writes only through `st`, always leaving `st.curNode` holding
     ## the node control enters next. Expressions resolve names against `st`'s scopes,
     ## root and clock, reaching the statement tier only through `force`.
 
-func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal
+func forceMacro(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal
   ## Runs one macro body to completion and returns the captured text, the handle
   ## expressions receive for it. A parameter here keeps the compiled artifact
   ## read-only and keeps both tiers clear of an import cycle.
 
-func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+func startMacro(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState,
     force: MacroForcer, lo, hi: int, call: PendingCallVal, retNode: int32)
   ## Opens a macro row and enters the body, the body's output pieces draining through
   ## the caller's window until the row closes on the definition node.
 
-func forceCondCall(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+func forceCondCall(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState,
     force: MacroForcer, v: JinjaVal, lo, hi: int32): JinjaVal =
   ## Renders a pending macro call read in a boolean position to its output value, the branch
   ## test then reading the output's bytes, matching every other macro-call forcing leg.
@@ -125,13 +125,13 @@ func bindName(st: var RenderState, name: int32, val: JinjaVal) =
 # textually onto the arena entry. Render code never binds a `Node` value, a binding running
 # SmallSeq's `=copy` and heap-allocating a spilled payload's block (7% of corpus nodes spill).
 
-func stepVerbatim(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepVerbatim(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## Streams the final text run, whose span already reflects every whitespace rule.
   template nd: Node = tmpl.nodes[n]
   st.emitSpan(tmpl, nd.lo, nd.hi)
   st.curNode = nd.succ
 
-func stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepEmit(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## Evaluates the expression span and hands the result on as the pending piece, or enters
   ## a whole-expression macro call's body instead, the body's output pieces draining
   ## through the caller's window until the row closes.
@@ -148,7 +148,7 @@ func stepEmit(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSt
     st.emitValue(v)
   st.curNode = nd.succ
 
-func stepIf(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepIf(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## Chooses a branch once, branch bodies terminating past the chain, so no row exists for it.
   ## A pending macro call in the condition renders to its output bytes before the test.
   template nd: Node = tmpl.nodes[n]
@@ -220,7 +220,7 @@ func bindTargets(tmpl: CompiledTemplate, st: var RenderState, n: int32, item: Ji
     for i in 0 ..< ntargets:
       st.bindName(nd.targetAt(i), item.xs.items[i])
 
-func filterKeep(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int32): bool =
+func filterKeep(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int32): bool =
   ## Evaluates one filter clause in boolean position, a pending macro call rendering
   ## to its output value, the result tested for truth.
   ## Returns the keep decision.
@@ -231,7 +231,7 @@ func filterKeep(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
     evaluated = forceCondCall(tmpl, sym, st, force, evaluated, lo, hi)
   isTruthy(evaluated, lo)
 
-func forStep(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32, lp: LoopState): bool =
+func forStep(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32, lp: LoopState): bool =
   ## Per-item loop step shared by the re-entry advance and the empty-body drain.
   ## Moves the shared cursor one item, binds the loop targets and runs the filter clause.
   ##
@@ -264,7 +264,7 @@ func closeRow(st: var RenderState, at: int, next: int32) =
   st.curNode = next
   st.rows.setLen(at)
 
-func advanceFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) =
+func advanceFor(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) =
   ## Re-entry path. Moves the shared cursor to the next item passing the filter clause,
   ## re-enters the body, or closes the row and continues past the loop, the close popping
   ## the scope to the row's entry mark.
@@ -277,7 +277,7 @@ func advanceFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
     return
   st.curNode = nd.child
 
-func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepFor(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## `{% for %}`:
   ##   a matching row on top of the stack means advance, anything else means set up the iteration.
   ##
@@ -329,7 +329,7 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
       return
   st.curNode = nd.child
 
-func stepSet(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepSet(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## Single-target `{% set %}`, the target carried as an interned name id in the child slot,
   ## emitting nothing, the pending piece untouched.
   template nd: Node = tmpl.nodes[n]
@@ -361,7 +361,7 @@ func closeMacroRow(st: var RenderState, at: int, next: int32) =
   closeRow(st, at, next)
   dec st.macroDepth
 
-func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepBreak(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## Unwinds to the nearest for-row, stopping at a macro-call boundary so a break cannot cross out of its macro.
   ## `{% continue %}` shares the node kind, the keyword span discriminating the two.
   ## A continue leaves the for-row and its scope in place, the loop's advance step running next.
@@ -402,29 +402,29 @@ func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderS
     dec k
   outsideEveryFor(tmpl, nd.lo, nd.hi)
 
-func stepSetNs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepSetNs(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## `ns.field = expr`, mutating the shared namespace mapping in place, visible to every
   ## holder of the `DictVal` ref, and emitting nothing.
   template nd: Node = tmpl.nodes[n]
-  let ns = sym[].lookupNameById(st, nd.target)
+  let ns = sym.lookupNameById(st, nd.target)
   if ns.kind != vkNs:
-    raise jinjaErr("`" & sym[].names[nd.target] & "` is not a namespace, so it has no `" &
-        sym[].names[nd.field] & "` to set", nd.lo.int, nd.hi.int - nd.lo.int)
+    raise jinjaErr("`" & sym.names[nd.target] & "` is not a namespace, so it has no `" &
+        sym.names[nd.field] & "` to set", nd.lo.int, nd.hi.int - nd.lo.int)
   var v = evalSpan(tmpl, sym, st, force, nd.lo, nd.hi)
   if v.kind == vkCall:
     # A macro call evaluates at its call site, its output bound, matching upstream:
     # the body's side effects land once, never re-run by a later use.
     v = forceCondCall(tmpl, sym, st, force, v, nd.lo, nd.hi)
-  dictSet(ns.d, sym[].names[nd.field], v)
+  dictSet(ns.d, sym.names[nd.field], v)
   st.curNode = nd.succ
 
-func stepSetBlock(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepSetBlock(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## Opens a capture sink for the body and, on re-entry, binds the capture to the target name.
   template nd: Node = tmpl.nodes[n]
   gap("nkSetBlock", "corpus demand is 2 sites: gemma4.jinja:322 and northminicode10.jinja:2",
       nd.lo.int, nd.hi.int)
 
-func stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepGeneration(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## `{% generation %}` renders its body byte for byte as without it, the span of the model's turn recorded around it.
   ##
   ## Contract:
@@ -450,7 +450,7 @@ func stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Re
   st.rows.add r
   st.curNode = nd.child
 
-func stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
+func stepMacroDef(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32) {.nimcall.} =
   ## Binds a macro value and emits nothing, the body never running here. A macro row
   ## arriving back on the definition node closes instead, the body's output pieces drained
   ## through the caller's window, control continuing at the row's return node.
@@ -475,7 +475,7 @@ const
   ]
     ## Dispatch table, total over `NodeKind`, a new kind without a step a compile error.
 
-func bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32, args: Args, lo, hi: int) =
+func bindMacroArgs(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, n: int32, args: Args, lo, hi: int) =
   ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`,
   ## each parameter carrying its interned name id and default expression span in the node tail.
   ##
@@ -494,7 +494,7 @@ func bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Ren
       raise jinjaErr(what)
     raise jinjaErr(what, lo, hi - lo)
   let nparams = int(nd.paramCount)
-  let macroName = sym[].names[nd.macroName]
+  let macroName = sym.names[nd.macroName]
   template keywordName(a: Arg): untyped =
     tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
   var used: array[ArgsCap, bool]
@@ -528,7 +528,7 @@ func bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Ren
     else:
       for i in 0 ..< args.n:
         if not used[i] and args.vals[i].nameLo != NoLink and
-            keywordName(args.vals[i]) == sym[].names[nd.paramNameAt(k)]:
+            keywordName(args.vals[i]) == sym.names[nd.paramNameAt(k)]:
           val = args.vals[i].val
           used[i] = true
           bound = true
@@ -544,7 +544,7 @@ func bindMacroArgs(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Ren
       continue
     var known = false
     for k in 0 ..< nparams:
-      if keywordName(args.vals[i]) == sym[].names[nd.paramNameAt(k)]:
+      if keywordName(args.vals[i]) == sym.names[nd.paramNameAt(k)]:
         known = true
         break
     if known:
@@ -582,7 +582,7 @@ func capturePend(tmpl: CompiledTemplate, st: var RenderState, outp: var string) 
       copyMem(addr outp[at], addr buf[0], n)
     st.pend = Piece(kind: pkNone)
 
-func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+func startMacro(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState,
     force: MacroForcer, lo, hi: int, call: PendingCallVal, retNode: int32) =
   ## Opens a macro row and enters the body.
   ## Contract:
@@ -591,7 +591,7 @@ func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
   ## - depth is capped, and a breach raises, `lo` and `hi` bounding the call's site
   if st.macroDepth >= MacroDepthCap:
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
-        sym[].names[call.mc.name] & "`", lo, hi - lo)
+        sym.names[call.mc.name] & "`", lo, hi - lo)
   inc st.macroDepth
   let scopeBase = st.scopes.len
   st.scopes.add @[]
@@ -605,7 +605,7 @@ func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
   else:
     st.curNode = call.mc.body
 
-func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal =
+func forceMacro(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, mc: MacroVal, args: Args): JinjaVal =
   ## Statement tier side of the macro forcer.
   ## Contract:
   ## - the body runs on a copy of the driver, so the caller's scopes, rows, program counter,
@@ -623,7 +623,7 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
       "a macro body was forced while the driver still held a pending piece"
   if st.macroDepth >= MacroDepthCap:
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
-        sym[].names[mc.name] & "` (forced call)")
+        sym.names[mc.name] & "` (forced call)")
   var st2 = st
   inc st2.macroDepth
   let scopeBase = st2.scopes.len
@@ -659,18 +659,17 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
 
 # Render driver:
 
-func startRender*(tmpl: CompiledTemplate, sym: var CompiledSymbols, root: JinjaVal, clock = 0.0): Context =
+func startRender*(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, clock = 0.0): Context =
   ## Returns a render context over the shared artifact, ready to render `root`, the render
   ## context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
   ##
   ## Contract:
   ## - `clock` is the epoch `strftime_now` reads, never artifact state, so one artifact
   ##   renders reproducibly under different clocks
-  ## - `sym` is borrowed, the context's symbol pointer must not outlive the binding it was
-  ##   taken from, the same class of contract as the artifact's borrow of the template text
+  ## - `sym` is the parse-built arena by ref, every render over the artifact holding the same heap object, no borrow contract
   # A zero-node artifact (empty or comment-only text) dispatches nothing, its render
   # completing on the first pull, so the program counter starts past the arena.
-  Context(tmpl: tmpl, symbols: addr sym,
+  Context(tmpl: tmpl, symbols: sym,
       state: RenderState(curNode: (if tmpl.nodes.len == 0: NoLink else: 0), cur: 0,
           pend: Piece(kind: pkNone),
           scopes: @[(default(Scope))], root: root, clock: clock))
@@ -701,7 +700,7 @@ func pull*(c: var Context, buf: var openArray[char]): int =
   ##   out of render-state storage, lazy pieces out of the serializer state in `c.state.lazy`
   ## - a zero-capacity buffer returns 0 without stepping the render
   template tmpl: CompiledTemplate = c.tmpl
-  template sym: ptr CompiledSymbols = c.symbols
+  template sym: CompiledSymbols = c.symbols
   template st: RenderState = c.state
   if buf.len == 0:
     return 0

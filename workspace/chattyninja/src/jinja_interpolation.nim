@@ -293,7 +293,7 @@ func argName(tmpl: CompiledTemplate, a: Arg): openArray[char] =
   ## marking a positional argument, which has no name to read.
   tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
 
-func forceCall(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
+func forceCall(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Renders one pending macro call to its output value, the primitive `forceOperand`
   ## routes every value-position forcing through, the handle itself carried by the context.
   ## Raises at `cx.tok.lo` when no macro forcer was supplied.
@@ -302,7 +302,7 @@ func forceCall(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderS
         cx.tok.lo)
   cx.force(tmpl, sym, st, v.pc.mc, v.pc.args)
 
-func forceOperand(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
+func forceOperand(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns `v` with a pending macro call rendered to its output value, the value-position
   ## forcing contract held in one proc.
   ## - reached from every truth test, `and`/`or` left operand, ternary condition,
@@ -658,8 +658,8 @@ const
 
 # Walker:
 
-func evalRange(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int, depth = 0): JinjaVal
-func expr(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int): JinjaVal
+func evalRange(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int, depth = 0): JinjaVal
+func expr(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int): JinjaVal
 
 
 const OpSpelling: array[Op, string] = [
@@ -717,14 +717,14 @@ template enterDepth(cx: var Cx) =
     raise jinjaErr("expression nests deeper than ExprDepthCap = " & $ExprDepthCap,
         cx.tok.lo)
 
-func skipExpr(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int) =
+func skipExpr(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int) =
   ## Advances the cursor over an expression without evaluating it, how `and`, `or` and the ternary skip the text they do not run.
   let wasDry = cx.dry
   cx.dry = true
   discard expr(tmpl, sym, st, cx, minPrec)
   cx.dry = wasDry
 
-func argList(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx): Args =
+func argList(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx): Args =
   ## Parses a parenthesised argument list with `name = expr` keyword arguments, the opening paren the lookahead. A keyword keeps its span
   ## and gains a builtin keyword slot, so binding one costs no string. Arguments fill the fixed-capacity
   ## carrier in call order, no per-call sequence.
@@ -755,7 +755,7 @@ func argList(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
     raise jinjaErr("argument list is not closed", cx.tok.lo)
   advance(tmpl, cx)
 
-func postfix(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
+func postfix(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Applies attr, subscript, call, filter and test chains, which bind tighter than any operator.
   ## An integer constant after a dot is a subscript, `m.content.0` spelling
   ## `m.content[0]` the way upstream Jinja does.
@@ -883,7 +883,7 @@ func postfix(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
       break
   v
 
-func primary(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx): JinjaVal =
+func primary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx): JinjaVal =
   ## Parses a literal, a name, a parenthesised group, an array literal or a dict literal,
   ## then the postfix chain.
   var v: JinjaVal
@@ -914,7 +914,7 @@ func primary(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
     elif name == "none" or name == "None":
       v = noneVal()
     else:
-      var bound = if cx.dry: undefinedVal() else: lookupName(sym[], st, name)
+      var bound = if cx.dry: undefinedVal() else: lookupName(sym, st, name)
       let gi = findIn(GlobalNames, name)
       if bound.kind == vkUndefined and gi >= 0 and isPunct(cx, "("):
         # A global is reached only when the name is unbound, Jinja's own precedence:
@@ -990,7 +990,7 @@ func primary(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
       raise jinjaErr("unexpected `" & spelled & "` starting an expression at byte " & $cx.tok.lo, cx.tok.lo, cx.tok.hi - cx.tok.lo)
   postfix(tmpl, sym, st, cx, v)
 
-func unary(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx): JinjaVal =
+func unary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx): JinjaVal =
   ## Parses `not`, unary `-` and `+`, then a primary.
   ## - `not` binds looser than the comparisons, its operand parsing at comparison
   ##   binding power through `expr`, whose entry counts the operand walk toward
@@ -1094,7 +1094,7 @@ func cmpOne(op: Op, a, b: JinjaVal, at: int): JinjaVal =
     else: raise jinjaErr("unknown comparison `" & OpSpelling[op] & "`")
   boolVal(r)
 
-func binOp(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
+func binOp(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
   ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
   ## infix evaluating both sides. `and` and `or` render a pending macro call on the left
   ## before the truth test, a boolean position reading the output's bytes.
@@ -1203,7 +1203,7 @@ func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
     inc i
   false
 
-func scanTernary(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, headLo: int): Ternary =
+func scanTernary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, headLo: int): Ternary =
   ## Measures the ternary spans starting at `headLo`, leaving the cursor past the whole ternary. A walk that lands on no ternary restores
   ## the cursor to the head, so the caller evaluates the expression normally. Nothing is evaluated here.
   let head = cx
@@ -1236,7 +1236,7 @@ func scanTernary(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rende
   result.isTernary = true
   cx.dry = dry
 
-func expr(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int): JinjaVal =
+func expr(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int): JinjaVal =
   ## Parses and evaluates one expression, Pratt-style:
   ##   a prefix, then infix while the operator binds at least `minPrec`.
   ## - a ternary binds loosest, and no other operator holds binding power 1, so the ternary is
@@ -1302,8 +1302,7 @@ func expr(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
   dec cx.depth
   v
 
-func evalRange(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
-    force: MacroForcer, lo, hi: int, depth = 0): JinjaVal =
+func evalRange(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int, depth = 0): JinjaVal =
   ## Evaluates the expression held in `tmpl.jinja[lo..<hi]` in its own cursor.
   ## - `depth` seeds the nesting counter, so a sub-span reached through a ternary still counts toward `ExprDepthCap`
   ## - `sym` carries the render's name resolution, `st` its scopes, root and clock
@@ -1314,7 +1313,7 @@ func evalRange(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderS
   if cx.tok.kind != exEof:
     raise jinjaErr("expression has trailing text at byte " & $cx.tok.lo, cx.tok.lo)
 
-func evalSpan*(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int32): JinjaVal =
+func evalSpan*(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int32): JinjaVal =
   ## Evaluates the expression held in `tmpl.jinja[lo..<hi]`, the entry every expression-bearing step uses.
   ## Contract:
   ## - a nil forcer making a consumed macro call a reported gap

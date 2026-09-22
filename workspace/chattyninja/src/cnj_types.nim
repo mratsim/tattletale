@@ -78,7 +78,7 @@ type
     jinja*: openArray[char]
     nodes*: seq[Node]
 
-  CompiledSymbols* = object
+  CompiledSymbols* = ref object
     ## Parse-built interned-name arena, read-only at render and shared by every render
     ## over its artifact. Node int32 name slots index into it, so `CompiledTemplate` is
     ## only meaningful together with the matching `CompiledSymbols`.
@@ -324,7 +324,7 @@ type
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
-  MacroForcer* = proc (tmpl: CompiledTemplate, sym: ptr CompiledSymbols,
+  MacroForcer* = proc (tmpl: CompiledTemplate, sym: CompiledSymbols,
       st: var RenderState, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
     ## Runs one macro body to completion on the render state given, returning the captured
     ## text as a string value.
@@ -336,13 +336,12 @@ type
     ## - this handle is the one edge the tier split keeps, no import cycle crossing it
 
   Context* = object
-    ## Object the caller holds, bundling the shared artifact, a borrowed symbol-arena pointer,
+    ## Object the caller holds, bundling the shared artifact, its shared symbol-arena ref
     ## and one per-instantiation render state. Copies render independently.
     ## A consumer that stops mid-render resumes through its own copy only.
     tmpl*: CompiledTemplate
-    symbols*: ptr CompiledSymbols
-      ## borrowed, must not outlive the binding it was taken from, the same contract
-      ## class as the `jinja` borrow of the template text
+    symbols*: CompiledSymbols
+      ## the parse-built arena, shared by ref with the parse caller, no lifetime contract
     state*: RenderState
 
 func findName*(t: CompiledSymbols, name: openArray[char]): int32 =
@@ -377,7 +376,7 @@ func lookupName*(sym: CompiledSymbols, st: var RenderState, name: openArray[char
   undefinedVal()
 
 
-func internName*(t: var CompiledSymbols, name: openArray[char]): int32 =
+proc internName*(t: var CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, inserting the one arena copy when absent.
   ## - a carried name allocates nothing
   ## - a new name copies exactly once into `CompiledSymbols.names`

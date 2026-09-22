@@ -593,8 +593,7 @@ proc parseIf(p: var Parser): Head =
   ## `{% if %} … {% elif %} … {% else %} … {% endif %}`. One node per chain level, every branch body
   ## terminated past the whole chain, which is what makes the node single-entry and single-activation.
   let t = p.cur
-  let kw = p.src.keywordSpan(t)
-  let condLo = p.afterKeyword(t, kw.len).int32
+  let condLo = p.afterKeyword(t, p.src.keywordSpan(t).len).int32
   let condHi = t.tHi.int32
   p.advance()
   # Reserved before its body is walked:
@@ -843,7 +842,10 @@ proc parseBody(p: var Parser, stopKws: openArray[string]): Head =
 proc parseTemplate*(src: string): (CompiledTemplate, CompiledSymbols) =
   ## Compiles template text to the shared artifact plus its `CompiledSymbols`, interned
   ## names built in parse order and read-only at render.
-  ## Returns the template borrowing `src`, so it must not outlive the caller's text.
+  ##
+  ## - the arena is a heap object the parse allocates once, returned by ref
+  ## - every render over the artifact shares the same arena through that ref
+  ## - the template borrows `src`, so it must not outlive the caller's text
   var p = Parser(src: src, symbols: CompiledSymbols(), nodes: newSeq[Node]())
   p.start()
   let body = parseBody(p, [])
