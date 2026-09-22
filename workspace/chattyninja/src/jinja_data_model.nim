@@ -154,9 +154,11 @@ type
     args*: Args
       ## evaluated arguments in call order
 
-  MacroVal* = ref object
+  MacroVal* = object
     ## A bound macro. `node` is the `nkMacroDef` arena index and the body's terminators land on it, so a call detects its end by arriving
     ## back there, name and parameters read from the definition node's payload slots at call time.
+    ## A value type over three immutable arena indexes, one instance per
+    ## call-site read, nothing shared and nothing mutable.
     name*: int32
     body*: int32
     node*: int32
