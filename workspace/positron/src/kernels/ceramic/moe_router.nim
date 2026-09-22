@@ -216,22 +216,34 @@ proc topkScores[A: static MmaAtom; F, K: static int](
     cand = min(cand, simdShuffleDown(cand, 2'u32))
     cand = min(cand, simdShuffleDown(cand, 1'u32))
     cand = simdShuffle(cand, 0'u32)
-    ids[slot] = cand
+    if cand >= int32(8 * F):
+      # Unmatched top-K candidate:
+      # a NaN/Inf-poisoned score pass compares false against NaN everywhere,
+      # so no score equals the group max and the reduction keeps the sentinel.
+      # - the slot routes to the last expert (8·F − 1) with zero weight
+      # - the ids stay in [0, 8·F), the downstream expert-row reads stay in bounds
+      # - with every score poisoned all K slots take this branch
+      #   and the normalized weights sum to zero
+      ids[slot] = int32(8 * F - 1)
+      w[slot] = 0.0'f32
+    else:
+      ids[slot] = cand
     let mSel = cand div 64
     let rest = cand mod 64
     let rw = rest div 8
     let cw = rest mod 8
     let own = (cw div 2 mod 2) + 2 * (rw mod 2) + 4 * ((rw div 2) mod 2) +
               8 * (cw div 4 mod 2) + 16 * ((rw div 4) mod 2)
-    let w0 = simdShuffle(scores.frags[0][mSel].frag[0], uint32(own))
-    let w1 = simdShuffle(scores.frags[0][mSel].frag[1], uint32(own))
-    w[slot] = if (cw mod 2) == 0: w0 else: w1
-    for m in 0 ..< F div 8:
-      let e0 = int32(64 * m + 8 * r + c0)
-      if e0 == cand:
-        sel.frags[0][m].frag[0] = -3.402823466e38'f32
-      if e0 + 1 == cand:
-        sel.frags[0][m].frag[1] = -3.402823466e38'f32
+    if cand < int32(8 * F):
+      let w0 = simdShuffle(scores.frags[0][mSel].frag[0], uint32(own))
+      let w1 = simdShuffle(scores.frags[0][mSel].frag[1], uint32(own))
+      w[slot] = if (cw mod 2) == 0: w0 else: w1
+      for m in 0 ..< F div 8:
+        let e0 = int32(64 * m + 8 * r + c0)
+        if e0 == cand:
+          sel.frags[0][m].frag[0] = -3.402823466e38'f32
+        if e0 + 1 == cand:
+          sel.frags[0][m].frag[1] = -3.402823466e38'f32
 
 # ─── The router core ─────────────────────────────────────────────────
 
@@ -244,17 +256,22 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
   ## GEMV, the softmax form's score pass, the in-register top-K selection
   ## by lowest index. Register-only, no logits scratch.
   ##
+  ## The mega kernel composes this core in-group per slot group.
+  ##
   ## Contract:
   ##
   ## - the (8, E div 8) score tile assembles chunk by chunk, chunk cs's 64
   ##   row-0 logits land in col-frag cs
-  ## - the logits round to El once, the fp32 softmax runs over the widened values
-  ##   normalized weights round to El (the eager routing-weights cast)
-  ## - the mega kernel composes this core in-group per slot group
+  ## - the logits round to El once, the fp32 softmax runs over the widened values,
+  ##   the normalized weights round to El (the eager routing-weights cast)
+  ## - a poisoned score pass (NaN/Inf logits) leaves no candidate matching
+  ##   the group max, the slot routes to expert E−1 with zero weight
+  ##   (the ids stay in [0, E), the downstream expert-row reads stay in bounds)
   const F = E div 8
   static:
     doAssert E mod 64 == 0, "moeRoute: E must be a multiple of the 64-expert chunk"
     doAssert H mod 16 == 0, "moeRoute: H must be a multiple of the 16-wide K step"
+    doAssert K <= E, "moeRoute: the K slots need K distinct experts"
   let glX = x.gd(shape = (-1, -1, -1, -1), stride = (H, 0, H, 1))
   let glRouter = router_w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, H, 1))
 
