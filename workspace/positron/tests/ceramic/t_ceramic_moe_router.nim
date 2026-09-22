@@ -31,8 +31,9 @@
 ## | mega       | 8 | 2048         | 256               | 8 | 1.0   | bf16, fp16 | 8     |
 ## | mega s2    | 8 | 2048         | 256               | 8 | 2.0   | bf16       | 8     |
 ## | small      | 4 | 256          | 64                | 4 | 1.0   | bf16       | 8     |
-## | shared exp | 8 | 2048         | -                 | - | -     | bf16       | 8     |
+## | shared exp | 8 | 2048         | -                 | - | -     | bf16, fp16 | 8     |
 ## | merge      | 8 | 256 and 2048 | 8 routed + shared | 8 | 1.0   | bf16       | 8, 2  |
+## | merge f16  | 8 | 256          | 8 routed + shared | 8 | 1.0   | fp16       | 8     |
 ## | poisoned   | 1 | 2048         | 256               | 8 | 1.0   | bf16       | 1     |
 ##
 ## Band model, stated before measurement, u32 = 2⁻²⁴ fp32, u_fam = 2⁻⁸ bf16 / 2⁻¹¹ fp16
@@ -133,6 +134,19 @@ const MoeRouterMsl = metal:
       out_r: ptr UncheckedArray[bfloat16],
       partial: ptr UncheckedArray[float32]) {.global.} =
     moe_decode_merge[bfloat16, 256, 8](out_r, partial)
+
+  proc cer_moe_merge_f16(
+      out_r: ptr UncheckedArray[float16],
+      partial: ptr UncheckedArray[float32]) {.global.} =
+    moe_decode_merge[float16, 256, 8](out_r, partial)
+
+  proc cer_shared_gate_f16(
+      outp: ptr UncheckedArray[float32],
+      x, sgw: ptr UncheckedArray[float16]) {.global.} =
+    let t = int32(threadgroup_position_in_grid.x)
+    let v = sharedGateLogit[float16, 2048](x, sgw, t)
+    if int(thread_index_in_threadgroup) == 0:
+      outp[t] = v
 
 # ─── Host, the independent reference ─────────────────────────────────
 
@@ -476,10 +490,11 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
     &"worst bar usage {worstUse:.3f}, bit-exact {exactW}/{total}, " &
     &"tie-region swaps {totalSwaps}, reassociation use {reassocWorst:.3f}"
 
-proc runSharedGateCombo(engine: HwEngine; T, cases: int; seed: uint64;
-    label: string) =
-  ## Shared-expert scalar GEMV at the mega binding (bf16, H = 2048), one raw
-  ## fp32 logit per token against the (1, H) shared expert row weight
+proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
+    seed: uint64; label: string) =
+  ## Shared-expert scalar GEMV at the mega binding (H = 2048), one raw fp32
+  ## logit per token against the (1, H) shared expert row weight, the family
+  ## dtype selects the static binding
   ##
   ## - judged under the band against the naive sequential dot
   ## - case 0 relaunched bit-identical
@@ -500,13 +515,14 @@ proc runSharedGateCombo(engine: HwEngine; T, cases: int; seed: uint64;
   var launches = 0
 
   proc takeInputs(rng: var NaiveRng): tuple[x, sgw: seq[uint16]] =
-    ## Seeded inputs, bf16 bits for the activations and the (1, H) shared expert row weight.
+    ## Seeded inputs, family-dtype bits for the activations and the (1, H)
+    ## shared expert row weight.
     var xBits = newSeq[uint16](nX)
     var sgwBits = newSeq[uint16](H)
     for i in 0 ..< nX:
-      xBits[i] = f32ToBf16(rng.nextF32(-1.0'f32, 1.0'f32))
+      xBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
     for k in 0 ..< H:
-      sgwBits[k] = f32ToBf16(rng.nextF32(-1.0'f32, 1.0'f32))
+      sgwBits[k] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
     result = (xBits, sgwBits)
 
   proc load(bits: tuple[x, sgw: seq[uint16]]) =
@@ -522,8 +538,9 @@ proc runSharedGateCombo(engine: HwEngine; T, cases: int; seed: uint64;
     assertReadUnchanged(sgwB, bits.sgw)
 
   proc launch =
+    let kernelName = if fam == famBf16: "cer_shared_gate_bf16" else: "cer_shared_gate_f16"
     engine.run << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
-      ("cer_shared_gate_bf16", outPA, (xPA, sgwPA))
+      (kernelName, outPA, (xPA, sgwPA))
     inc launches
 
   proc snap(): seq[float32] =
@@ -546,8 +563,8 @@ proc runSharedGateCombo(engine: HwEngine; T, cases: int; seed: uint64;
       # the band covers both orders' fp32 forward error, the store is raw fp32
       var sumAbs = 0.0'f64
       for k in 0 ..< H:
-        sumAbs += abs(bf16ToF32(bits.x[t * H + k]).float64 *
-          bf16ToF32(bits.sgw[k]).float64)
+        sumAbs += abs(famWiden(fam, bits.x[t * H + k]).float64 *
+          famWiden(fam, bits.sgw[k]).float64)
       let bar = 2.0 * float64(H) * U32 * sumAbs + FloorSub
       let diff = abs(got[t].float64 - want[t].float64)
       doAssert diff <= bar,
@@ -570,11 +587,11 @@ proc runSharedGateCombo(engine: HwEngine; T, cases: int; seed: uint64;
     for t in 0 ..< T:
       doAssert again[t] == case0Snap[t], "shared gate logit differs run to run"
 
-  echo &"[{label} bf16] cases={cases} launches={launches} " &
+  echo &"[{label} {famName(fam)}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exact}/{cases * T}"
 
-proc runMergeCombo(engine: HwEngine; T, H, K, cases: int; seed: uint64;
-    kernelName: string) =
+proc runMergeCombo(engine: HwEngine; fam: Family; T, H, K, cases: int;
+    seed: uint64; kernelName: string) =
   ## fp32-partial merge, judged bit-exact against the same sequential fp32
   ## slot-order sum, one El round at the store on both sides, `kernelName`
   ## selects the static binding (H = 256 suite scale, H = 2048 the mega scale).
@@ -607,13 +624,13 @@ proc runMergeCombo(engine: HwEngine; T, H, K, cases: int; seed: uint64;
         var acc = 0.0'f32
         for y in 0 ..< K + 1:
           acc += partB.hostPtr[t * (K + 1) * H32 + y * H32 + col]
-        want[t * H32 + col] = f32ToBf16(acc)
+        want[t * H32 + col] = toFamBits(fam, acc)
     for i in 0 ..< nOut:
       doAssert outB.hostPtr[i] == want[i],
         &"merge output not bit-identical at element {i}, case {caseId}"
       if outB.hostPtr[i] == want[i]:
         inc exact
-  echo &"[merge bf16] cases={cases} launches={launches} bit-exact {exact}/{nOut*cases}"
+  echo &"[merge {famName(fam)}] cases={cases} launches={launches} bit-exact {exact}/{nOut*cases}"
 
 proc runPoisonedRouter(engine: HwEngine) =
   ## All-poisoned score pass, the router weight holding NaN bits, every logit
@@ -804,9 +821,11 @@ proc main =
     "router small")
   runCombo(engine, famBf16, 8, 2048, 256, 8, 8, 0xC04D0528'u64, 2.0'f32,
     "router mega scale 2")
-  runSharedGateCombo(engine, 8, 8, 0xC04D0527'u64, "shared gate")
-  runMergeCombo(engine, 8, 256, 8, 8, 0xC04D0524'u64, "cer_moe_merge_bf16")
-  runMergeCombo(engine, 8, 2048, 8, 2, 0xC04D0529'u64, "cer_moe_merge_bf16_mega")
+  runSharedGateCombo(engine, famBf16, 8, 8, 0xC04D0527'u64, "shared gate")
+  runSharedGateCombo(engine, famF16, 8, 8, 0xC04D0531'u64, "shared gate")
+  runMergeCombo(engine, famBf16, 8, 256, 8, 8, 0xC04D0524'u64, "cer_moe_merge_bf16")
+  runMergeCombo(engine, famF16, 8, 256, 8, 8, 0xC04D0532'u64, "cer_moe_merge_f16")
+  runMergeCombo(engine, famBf16, 8, 2048, 8, 2, 0xC04D0529'u64, "cer_moe_merge_bf16_mega")
   runPoisonedRouter(engine)
   checkReassociation(famBf16, 8, 2048, 256, 0xC04D0525'u64)
   checkReassociation(famF16, 8, 2048, 256, 0xC04D0526'u64)

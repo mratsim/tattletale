@@ -17,10 +17,14 @@
 ## | gemv     | 1  | 128  | 64   | 64    | bf16, fp16 | 32    |
 ## | gemm     | 37 | 192  | 160  | 64    | bf16, fp16 | 16    |
 ## | out_proj | 1  | 4096 | 2048 | 64    | bf16       | 16    |
+## | tilec32  | 1  | 32   | 2048 | 32    | bf16       | 16    |
+## | multi    | 65 | 192  | 160  | 64    | bf16, fp16 | 8     |
 ##
 ## | note     | content                                                                                                                                                                                                             |
 ## | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 ## | out_proj | the mega kernel's production binding, `dense_linear_tile_fwd[bfloat16, 2048, 4096, 64]` in the decode composition, a fresh monomorphization under the instantiation contract, so it carries a suite case of its own |
+## | tilec32  | the mega kernel's stage-4 a/b decay and beta GEMV binding, `dense_linear_tile_fwd[bfloat16, 32, 2048, 32]`, a fresh monomorphization at the TileC = 32 boundary, so it carries a suite case of its own              |
+## | multi    | the multi-M-tile regime (grid.y = 3, two consecutive full 32-row tiles plus a 1-row tail), the rowLimit composition across consecutive straddling tiles is the fragile path                                         |
 ## | N = 1    | the shared expert row GEMV cannot go through this kernel (N mod TileC), the router suite's shared-expert scalar entry covers it                                                                                     |
 ##
 ## Band model, stated before measurement, u32 = 2⁻²⁴ fp32, u_fam = 2⁻⁸ bf16 / 2⁻¹¹ fp16
@@ -77,6 +81,13 @@ const DenseLinearMsl = metal:
       outp, x, w: ptr UncheckedArray[bfloat16],
       M, tx, ty: int32) {.global.} =
     dense_linear_tile_fwd[bfloat16, 4096, 2048, 64](outp, x, w, M, tx, ty)
+
+  # the mega composition's stage-4 a/b decay and beta GEMV binding,
+  # N mod TileC == 0 at the exact TileC = 32 boundary
+  proc cer_dense_linear_bf16_tilec32(
+      outp, x, w: ptr UncheckedArray[bfloat16],
+      M, tx, ty: int32) {.global.} =
+    dense_linear_tile_fwd[bfloat16, 32, 2048, 32](outp, x, w, M, tx, ty)
 
 # ─── Host, the independent reference ─────────────────────────────────
 
@@ -235,6 +246,12 @@ proc main =
     "cer_dense_linear_f16_gemm")
   runCombo(engine, famBf16, 1, 4096, 2048, 64, 16, 0xC04D0515'u64, "out_proj",
     "cer_dense_linear_bf16_outproj")
+  runCombo(engine, famBf16, 1, 32, 2048, 32, 16, 0xC04D0516'u64, "tilec32",
+    "cer_dense_linear_bf16_tilec32")
+  runCombo(engine, famBf16, 65, 192, 160, 64, 8, 0xC04D0517'u64, "gemm multi-tile",
+    "cer_dense_linear_bf16_gemm")
+  runCombo(engine, famF16, 65, 192, 160, 64, 8, 0xC04D0518'u64, "gemm multi-tile",
+    "cer_dense_linear_f16_gemm")
   echo "CERAMIC DENSE_LINEAR VERDICT: all cases inside the stated per-element bars"
 
 main()

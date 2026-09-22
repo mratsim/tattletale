@@ -26,7 +26,7 @@
 ## | --------- | ---------------------------------------------------------------------------------------------------------------------- |
 ## | q, k      | l2-normalized per (head, token) row in fp32, then rounded to the family dtype, the kernel contract's post-l2norm shape |
 ## | v, state0 | [-1, 1), the initial state never zero                                                                                  |
-## | beta      | [0.2, 0.8)                                                                                                             |
+## | beta      | [0.2, 0.8), edge combos carry the exact-zero beta and the near-zero decay (g -> 0-) inside the same band               |
 ## | g         | [-0.5, -0.01) log-decay                                                                                                |
 ##
 ## - the q, k normalization also keeps the delta-rule recursion bounded over 256 tokens in fp16 y range
@@ -371,7 +371,7 @@ proc l2NormalizeRows(dst: var seq[uint16], fam: Family, rows, cols: int, rng: va
       dst[r * cols + c] = toFamBits(fam,
         (famWiden(fam, dst[r * cols + c]).float64 * inv).float32)
 
-proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk: int): PrefillInputs =
+proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk: int, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false): PrefillInputs =
   var qBits = newSeq[uint16](qkRows * T * Dk)
   var kBits = newSeq[uint16](qkRows * T * Dk)
   l2NormalizeRows(qBits, fam, qkRows * T, Dk, rng)
@@ -381,17 +381,21 @@ proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk: int): 
     vBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
   var betaBits = newSeq[uint16](bhMax * T)
   for i in 0 ..< bhMax * T:
-    betaBits[i] = toFamBits(fam, rng.nextF32(0.2'f32, 0.8'f32))
+    betaBits[i] = (if betaZero: toFamBits(fam, 0.0'f32)
+                   else: toFamBits(fam, rng.nextF32(0.2'f32, 0.8'f32)))
   var gVals = newSeq[float32](bhMax * T)
   for i in 0 ..< bhMax * T:
-    gVals[i] = rng.nextF32(-0.5'f32, -0.01'f32)
+    # the span overrides exist for the edge combos, gLo 0.0 is the sentinel
+    # meaning the suite's committed span
+    gVals[i] = rng.nextF32((if gLoOverride != 0.0'f32: gLoOverride else: -0.5'f32),
+      (if gLoOverride != 0.0'f32: gHiOverride else: -0.01'f32))
   var state0 = newSeq[float32](bhMax * Dv * Dk)
   for i in 0 ..< bhMax * Dv * Dk:
     state0[i] = rng.nextF32(-1.0'f32, 1.0'f32)
   result = PrefillInputs(qBits: qBits, kBits: kBits, vBits: vBits,
     betaBits: betaBits, gVals: gVals, state0: state0)
 
-proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int, seed: uint64, label: string) =
+proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
   ## One (family dtype, shape) combination, judged per element against the fp64 chunked
   ## reference and the fp64 per-token walk under the band model, relaunched bit-identical.
   const Dv = 16
@@ -594,13 +598,15 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
   var case0: tuple[st: seq[float32], y: seq[uint16]]
   const cases = 4
   for caseId in 0 ..< cases:
-    let si = takeInputs(fam, rng, bhMax, qkRows, T, Dv, Dk)
+    let si = takeInputs(fam, rng, bhMax, qkRows, T, Dv, Dk, gLoOverride,
+      gHiOverride, betaZero)
     judge(si, record = true)
     if caseId == 0: case0 = snap()
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
     var rng0 = initNaiveRng(seed)
-    let si = takeInputs(fam, rng0, bhMax, qkRows, T, Dv, Dk)
+    let si = takeInputs(fam, rng0, bhMax, qkRows, T, Dv, Dk, gLoOverride,
+      gHiOverride, betaZero)
     judge(si, record = false)
     let again = snap()
     for i in 0 ..< stateElems:
@@ -668,6 +674,20 @@ proc main =
       "gqa64 Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
+  proc secEdgeNearZeroG =
+    let t0 = epochTime()
+    runCase(engine, famF16, 1, 1, 1, 1, 64, 32, 0xC04D04A7'u64,
+      "edge g->0- Hk=1/Hv=1/B=1", -0.001'f32, 0.0'f32)
+    echo &"  wall clock {epochTime() - t0:.2f} s"
+
+  proc secEdgeBetaZero =
+    let t0 = epochTime()
+    runCase(engine, famBf16, 1, 1, 1, 1, 64, 32, 0xC04D04A8'u64,
+      "edge beta=0 Hk=1/Hv=1/B=1", betaZero = true)
+    echo &"  wall clock {epochTime() - t0:.2f} s"
+
+  secEdgeNearZeroG()
+  secEdgeBetaZero()
   secF16T8()
   secF16T64()
   secF16Gqa()

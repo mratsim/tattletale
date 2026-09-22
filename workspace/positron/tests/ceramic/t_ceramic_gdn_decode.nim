@@ -31,8 +31,9 @@
 ## | gqa      | 2  | 4  | 2     | 2       | fp16, bf16 | fp16  |
 ##
 ## - every case starts from a non-zero random initial state
-## - g spans -3 <= g < -0.1 in the single-step cases, -0.5 <= g < -0.01 in the chains
-## - the near-unitary decay stresses the chain recursion hardest
+## - g spans -3 <= g < -0.1 in the single-step cases, -0.5 <= g < -0.01 in the chains,
+##   the near-unitary decay stresses the chain recursion hardest
+## - edge combos carry the near-zero decay (g -> 0-) and the exact-zero beta inside the same band
 ##
 ## - fp16 is the family dtype under test, bf16 the range-robust fallback
 ## - the GQA shape keeps both mapping terms live, in-sequence ratio term plus sequence-offset term
@@ -131,7 +132,7 @@ type StepSnap = object
   state: seq[float32]
   y: seq[uint16]
 
-proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string) =
+proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
   ## One (family dtype, shape) combination over `cases` independent seeded
   ## runs of `steps` decode steps each, judged per element against the naive
   ## reference under the band model, case 0 relaunched bit-identical.
@@ -141,8 +142,12 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
   let qkRows = B * Hk
   let stateElems = bhMax * Dv * dk
   let kernelName = if fam == famF16: "cer_gdn_step_fp16_dk32" else: "cer_gdn_step_bf16_dk32"
-  let gLo = if steps == 1: -3.0'f32 else: -0.5'f32
-  let gHi = if steps == 1: -0.1'f32 else: -0.01'f32
+  # the span overrides exist for the edge combos, gLo 0.0 is the sentinel
+  # meaning derive the span from the step count (no edge case wants gLo = 0)
+  let gLo = if gLoOverride != 0.0'f32: gLoOverride
+            else: (if steps == 1: -3.0'f32 else: -0.5'f32)
+  let gHi = if gLoOverride != 0.0'f32: gHiOverride
+            else: (if steps == 1: -0.1'f32 else: -0.01'f32)
   let uFam = if fam == famBf16: UBf16 else: UF16
 
   var stateB = allocPageBuf[float32](stateElems)
@@ -354,7 +359,8 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
       for i in 0 ..< bhMax * Dv:
         vBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
       for h in 0 ..< bhMax:
-        betaBits[h] = toFamBits(fam, rng.nextF32(0.2'f32, 0.8'f32))
+        betaBits[h] = (if betaZero: toFamBits(fam, 0.0'f32)
+                       else: toFamBits(fam, rng.nextF32(0.2'f32, 0.8'f32)))
         gVals[h] = rng.nextF32(gLo, gHi)
       result.add(StepInputs(qBits: qBits, kBits: kBits, vBits: vBits,
         betaBits: betaBits, gVals: gVals))
@@ -435,6 +441,20 @@ proc main =
       "chain baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
+  proc secEdgeNearZeroG =
+    let t0 = epochTime()
+    runCombo(engine, famF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A7'u64,
+      "edge g->0- Hk=1/Hv=1/B=1", -0.001'f32, 0.0'f32)
+    echo &"  wall clock {epochTime() - t0:.2f} s"
+
+  proc secEdgeBetaZero =
+    let t0 = epochTime()
+    runCombo(engine, famBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A8'u64,
+      "edge beta=0 Hk=1/Hv=1/B=1", betaZero = true)
+    echo &"  wall clock {epochTime() - t0:.2f} s"
+
+  secEdgeNearZeroG()
+  secEdgeBetaZero()
   secF16Baseline()
   secF16Gqa()
   secBf16Baseline()
