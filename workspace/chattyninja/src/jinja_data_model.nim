@@ -100,7 +100,7 @@ type
     keys*: seq[string]
     vals*: seq[JinjaVal]
 
-  RangeVal = ref object
+  RangeVal* = ref object
     ## Lazy `range(start, stop, step)` bounds. Elements compute per index, the range never
     ## materializing. The serializer renders the list form arithmetically and a `for` over it
     ## walks the same arithmetic through `LoopState.r`.
