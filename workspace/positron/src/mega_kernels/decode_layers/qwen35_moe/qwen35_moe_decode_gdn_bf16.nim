@@ -11,7 +11,7 @@
 
 ## One-launch decode step of a Qwen3.5/3.6-35B-A3B GDN decoder layer on the ceramic Tile API.
 ## One token per launch, the 13 stages composed inline from the taxonomy kernels
-## (see the inline-tile-function property in `src/kernels/README.md`), no exit to the host between stages.
+## (see `workspace/positron/src/kernels/README.md`, the inline tile composition contract), no exit to the host between stages.
 ##
 ## Stage order, one launch = one token's layer pass, every consumer's producers preceding it:
 ##
@@ -84,71 +84,122 @@ const
   NumExperts* = 256
   Inter* = 512
   RowLaneSpan* = 64
-    ## Norm-stage elements per lane:
-    ##   2048 hidden / 32 lanes.
+    ## Norm-stage elements per lane.
 
 const
   sQkvCol* = 0
     ## bf16 arena:
     ##   the fused qkv projection column (the conv input).
-  sZ* = 8192
+  sZ* = sQkvCol + ConvDim
     ## o_norm z row (Hv·Dv).
-  sA* = 12288
+  sA* = sZ + NumVHeads * HeadVDim
     ## Decay projection row (Hv).
-  sB* = 12320
+  sB* = sA + NumVHeads
     ## Beta projection row (Hv).
-  sQN* = 12352
+  sQN* = sB + NumVHeads
     ## l2-normalized q heads (Hk·Dk).
-  sKN* = 14400
+  sKN* = sQN + NumKHeads * HeadKDim
     ## l2-normalized k heads (Hk·Dk).
-  sBeta* = 16448
+  sBeta* = sKN + NumKHeads * HeadKDim
     ## Beta values (Hv).
-  sY* = 16480
+  sY* = sBeta + NumVHeads
     ## GDN core output rows (Hv·Dv).
-  sNormed* = 20576
+  sNormed* = sY + NumVHeads * HeadVDim
     ## o_norm output rows, the out_proj input (Hv·Dv).
-  sConv* = 24672
+  sConv* = sNormed + NumVHeads * HeadVDim
     ## Conv output column (ConvDim), the split source.
-  sH* = 32864
+  sH* = sConv + ConvDim
     ## MoE routed h scratch (TopK·Inter).
-  sHs* = 36960
+  sHs* = sH + TopK * Inter
     ## MoE shared h scratch (Inter).
-  sMoeOut* = 37472
+  sMoeOut* = sHs + Inter
     ## Merged MoE output row (Hidden).
-  sH1* = 39520
+  sH1* = sMoeOut + Hidden
     ## Folded residual row (Hidden), the next layer's residual add.
-  sNormed2* = 41568
+  sNormed2* = sH1 + Hidden
     ## Post-LN normed row (Hidden), the MoE input.
-  sStream* = 43616
+  sStream* = sNormed2 + Hidden
     ## Residual stream row (Hidden), the out_proj fold's addend.
-  sNorm1* = 45664
+  sNorm1* = sStream + Hidden
     ## Norm1 output row (Hidden), the projection input.
-    ## The mixer entry's host preloads this section with the recorded chain's normed rows.
-  sBlockOut* = 47712
+    ## The mixer entry's host preloads this section with the naive chain's normed row.
+  sBlockOut* = sNorm1 + Hidden
     ## Out_proj row before the fold (Hidden), the mixer
     ## entry's block-output readback section.
-  BfArenaLen* = 49760
+  BfArenaLen* = sBlockOut + Hidden
     ## bf16 arena extent in elements (≈ 97 KiB).
 
 const
   sG* = 0
     ## f32 arena:
     ##   log-decay values (Hv).
-  sPartial* = 32
+  sPartial* = sG + NumVHeads
     ## MoE fp32 partials, (TopK+1)·Hidden.
-  F32ArenaLen* = 18464
+  F32ArenaLen* = sPartial + (TopK + 1) * Hidden
     ## f32 arena extent in elements (≈ 72 KiB).
 
-const WaveCounts*: array[13, uint32] = [1'u32, 128, 64, 2, 128, 4, 1, 512,
+const StageBlocks*: array[13, uint32] = [1'u32, 128, 64, 2, 128, 4, 1, 512,
     4, 32, 1, 9, 64]
-    ## Per-stage threadgroup totals, the stage counters' expected counts
-    ## summing to the 950-threadgroup grid.
+  ## One stage table, the 13 stages' threadgroup blocks in counter-index
+  ## order. The dispatcher's stage boundaries and the stage counters'
+  ## expected counts both derive from this table.
+const WaveCounts*: array[13, uint32] = StageBlocks
+  ## Per-stage threadgroup totals, the stage counters' expected counts
+  ## summing to the 950-threadgroup grid.
+
+func stageEndsOf(blocks: array[13, uint32]): array[13, uint32] =
+  var acc = 0'u32
+  for s in 0 ..< 13:
+    acc += blocks[s]
+    result[s] = acc
+
+const StageEnds*: array[13, uint32] = stageEndsOf(StageBlocks)
+  ## Dispatcher stage boundaries:
+  ##
+  ## - StageEnds[s] is one past stage s's last threadgroup
+  ## - stage 1's block is grid.x 0, stage 2's blocks are grid.x 1..128
+  ##
+  ## The device dispatcher reads the per-stage `EndStage*` scalar spellings
+  ## below. The MSL folds an explicitly cast const scalar, while a bare
+  ## const reference or a const-array element stays a symbolic identifier.
+const
+  EndStageQkv* = StageEnds[1]
+  EndStageZ* = StageEnds[2]
+  EndStageAbProj* = StageEnds[3]
+  EndStageConv* = StageEnds[4]
+  EndStageQkL2norm* = StageEnds[5]
+  EndStageGateValues* = StageEnds[6]
+  EndStageGdnState* = StageEnds[7]
+  EndStageONorm* = StageEnds[8]
+  EndStageOutProj* = StageEnds[9]
+  EndStageFoldNorm2* = StageEnds[10]
+  EndStageMoeDecode* = StageEnds[11]
+  EndStageMerge* = StageEnds[12]
+
 const StageNames*: array[13, string] = [
     "norm1+residual", "qkv-gemv", "z-gemv", "ab-proj", "conv", "qk-l2norm",
     "gate-values", "gdn-state", "o-norm", "out-proj", "fold+norm2",
     "moe-fwd", "moe-merge"]
   ## Stage labels for the bounded-wait expiry diagnostic, in counter-index
   ## order over the dispatcher's 13 stages.
+
+static:
+  var waveTotal = 0'u32
+  for c in WaveCounts:
+    waveTotal += c
+  doAssert waveTotal == 950'u32,
+    "WaveCounts must total the 950-threadgroup grid"
+  doAssert RowLaneSpan == Hidden div 32,
+    "RowLaneSpan must be the hidden row's per-lane share"
+  # the recorded stage boundaries and arena anchors, the reference the derivation must reproduce
+  doAssert StageEnds == [1'u32, 129, 193, 195, 323, 327, 328, 840, 844, 876,
+    877, 886, 950],
+    "StageEnds must reproduce the dispatcher's recorded stage boundaries"
+  doAssert sZ == 8192 and sH == 32864 and sMoeOut == 37472 and
+    sBlockOut == 47712, "bf16 arena anchors must match the recorded offsets"
+  doAssert BfArenaLen == 49760 and sPartial == 32 and F32ArenaLen == 18464,
+    "the arena extents must match the recorded lengths"
+
 
 # ─── Wave sync (device-memory counters, seq_cst fences) ──────────────
 
@@ -219,14 +270,14 @@ proc normRow(x, y, normW, stream, outp: ptr UncheckedArray[bfloat16], eps: float
   ## One threadgroup's pass over the (Hidden) norm row in the bias-one RmsNormOne
   ## spelling:
   ##
-## | aspect    | contract                                                                                         |
-## | --------- | ------------------------------------------------------------------------------------------------ |
-## | variance  | taken over the rounded row sums of squares, one bf16 round each                                  |
-## | multiply  | rstd-first order `(x·rstd)·(1+w)`, one bf16 round at the store                                   |
-## | lane walk | per lane the serial element walk of the RowLaneSpan block, the partial row-sum of squares in f32 |
-## | reduction | a 5-step lane butterfly with the rstd broadcast, per-lane serial f32 sums plus a lane butterfly  |
-## | barrier   | every lane re-reads only its own stored elements, no threadgroup barrier                         |
-## | rounding  | the rstd lands inside the recorded chain's bf16 band, the reference rows pricing the difference  |
+  ## | aspect    | contract                                                                                         |
+  ## | --------- | ------------------------------------------------------------------------------------------------ |
+  ## | variance  | taken over the rounded row sums of squares, one bf16 round each                                  |
+  ## | multiply  | rstd-first order `(x·rstd)·(1+w)`, one bf16 round at the store                                   |
+  ## | lane walk | per lane the serial element walk of the RowLaneSpan block, the partial row-sum of squares in f32 |
+  ## | reduction | a 5-step lane butterfly with the rstd broadcast, per-lane serial f32 sums plus a lane butterfly  |
+  ## | barrier   | every lane re-reads only its own stored elements, no threadgroup barrier                         |
+  ## | rounding  | the rstd lands inside the recorded chain's bf16 band, the reference rows pricing the difference  |
   let lane = int32(thread_index_in_threadgroup)
   let base = lane * RowLaneSpan
   var acc = 0.0'f32
@@ -283,12 +334,12 @@ proc f32InvSqrt(x: float32): float32 {.device.} =
 proc l2normRow(x, outp: ptr UncheckedArray[bfloat16], cols: int32) {.device.} =
   ## One l2-normalized row in the recorded chain's rounding pipeline:
   ##
-## | step                | rounding                                                             |
-## | ------------------- | -------------------------------------------------------------------- |
-## | elementwise squares | round to bf16                                                        |
-## | row sum             | f32 serial accumulation, the sum rounds to bf16                      |
-## | sum + eps, rsqrt    | the sum rounds to bf16, the rsqrt computes in f32 and rounds to bf16 |
-## | normalization       | the multiply rounds to bf16 per element                              |
+  ## | step                | rounding                                                             |
+  ## | ------------------- | -------------------------------------------------------------------- |
+  ## | elementwise squares | round to bf16                                                        |
+  ## | row sum             | f32 serial accumulation, the sum rounds to bf16                      |
+  ## | sum + eps, rsqrt    | the sum rounds to bf16, the rsqrt computes in f32 and rounds to bf16 |
+  ## | normalization       | the multiply rounds to bf16 per element                              |
   ##
   ## Every lane walks the whole row serially, all lanes compute identical sums,
   ## the lanes then scatter the multiply.
@@ -334,6 +385,11 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     aLog: ptr UncheckedArray[float32],
     dtBias: ptr UncheckedArray[bfloat16],
     eps: float32) {.device.} =
+  ## Decode regime, one token per launch:
+  ## - the MoE composition and the fold hardcode the token coordinate 0
+  ## - a multi-token pass needs a token axis this single-launch
+  ##   dispatcher does not carry
+  ##
   ## Role dispatch contract over grid.x, one stage branch per threadgroup block:
   ##
   ## | rule     | behavior                                                                                                                                                                 |
@@ -353,82 +409,87 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
       # consumes the rounded stream, the fold re-adds it downstream.
       normRow(xPrev, rPrev, norm1W, (bfA +% sStream), (bfA +% sNorm1), eps)
     waveAdd(counters, 0)
-  elif tx <= 128:
+  elif tx < int32(EndStageQkv):
     waveWait(counters, 0, 1)
     dense_linear_tile_fwd[bfloat16, 8192, 2048, 64](
       (bfA +% sQkvCol), (bfA +% sNorm1), qkvW, 1, tx - 1, 0)
     waveAdd(counters, 1)
-  elif tx <= 192:
+  elif tx < int32(EndStageZ):
     waveWait(counters, 0, 1)
     dense_linear_tile_fwd[bfloat16, 4096, 2048, 64](
-      (bfA +% sZ), (bfA +% sNorm1), zW, 1, tx - 129, 0)
+      (bfA +% sZ), (bfA +% sNorm1), zW, 1, tx - int32(EndStageQkv), 0)
     waveAdd(counters, 2)
-  elif tx <= 194:
+  elif tx < int32(EndStageAbProj):
     waveWait(counters, 0, 1)
-    if tx == 193:
+    if tx == int32(EndStageZ):
       dense_linear_tile_fwd[bfloat16, 32, 2048, 32](
         (bfA +% sA), (bfA +% sNorm1), aW, 1, 0, 0)
     else:
       dense_linear_tile_fwd[bfloat16, 32, 2048, 32](
         (bfA +% sB), (bfA +% sNorm1), bW, 1, 0, 0)
     waveAdd(counters, 3)
-  elif tx <= 322:
+  elif tx < int32(EndStageConv):
     waveWait(counters, 1, 128)
     convRingChannels(convW, ring, (bfA +% sQkvCol), (bfA +% sConv),
-      (tx - 195) * 64)
+      (tx - int32(EndStageAbProj)) * 64)
     waveAdd(counters, 4)
-  elif tx <= 326:
+  elif tx < int32(EndStageQkL2norm):
     # Stage 6:
     #   the q/k l2 normalization, 4 q rows then 4 k rows per threadgroup,
     # gathered straight from the conv column's head rows.
     waveWait(counters, 4, 128)
-    let row0 = (tx - 323) * 512
+    let row0 = (tx - int32(EndStageConv)) * 512
     for r in 0'i32 ..< 4:
       l2normRow((bfA +% sConv +% (row0 + r * 128)),
         (bfA +% sQN +% (row0 + r * 128)), 128)
     for r in 0'i32 ..< 4:
-      l2normRow((bfA +% sConv +% (2048 + row0 + r * 128)),
+      l2normRow((bfA +% sConv +% (NumKHeads * HeadKDim + row0 + r * 128)),
         (bfA +% sKN +% (row0 + r * 128)), 128)
     waveAdd(counters, 5)
-  elif tx == 327:
+  elif tx == int32(EndStageQkL2norm):
     waveWait(counters, 3, 2)
     gateValues((bfA +% sA), (bfA +% sB), dtBias, aLog,
       (f32A +% sG), (bfA +% sBeta))
     waveAdd(counters, 6)
-  elif tx <= 839:
+  elif tx < int32(EndStageGdnState):
     # Stage 8:
     #   the gated-delta-rule step, one (head, Dv block) state
     # tile per threadgroup, state updated in place. The value rows
     # read straight out of the conv column's value channels.
-    let local = tx - 328
+    let local = tx - int32(EndStageGateValues)
     waveWait(counters, 5, 4)
     waveWait(counters, 4, 128)
     waveWait(counters, 6, 1)
     gdnDecodeStepTileBf16At(state, (bfA +% sY), (bfA +% sKN), (bfA +% sQN),
       (bfA +% sConv +% (2 * NumKHeads * HeadKDim)), (f32A +% sG),
-      (bfA +% sBeta), 32, 16, 2,
+      (bfA +% sBeta), int32(NumVHeads), int32(NumKHeads), int32(HkRatio),
       local mod (HeadVDim div 8), local div (HeadVDim div 8),
       128, 128, 8)
     waveAdd(counters, 7)
-  elif tx <= 843:
+  elif tx < int32(EndStageONorm):
     waveWait(counters, 7, 512)
     waveWait(counters, 2, 64)
+    # o_norm weight binding
+    # - the checkpoint ships the per-head norm weights
+    # - head bh's row sits at onormW[bh·Dv ..< (bh + 1)·Dv] over the (Hv, Dv)
+    #   buffer (rmsNormGatedTilePerHeadAt's per-row weight layout)
+    # - the composition suites bind the same (Hv, Dv) geometry
     rmsNormGatedTilePerHeadAt((bfA +% sNormed), (bfA +% sY), (bfA +% sZ),
-      onormW, 32, eps, tx - 840, 128, 8)
+      onormW, 32, eps, tx - int32(EndStageGdnState), 128, 8)
     waveAdd(counters, 8)
-  elif tx <= 875:
+  elif tx < int32(EndStageOutProj):
     waveWait(counters, 8, 4)
     dense_linear_tile_fwd[bfloat16, 2048, 4096, 64](
-      (bfA +% sBlockOut), (bfA +% sNormed), outprojW, 1, tx - 844, 0)
+      (bfA +% sBlockOut), (bfA +% sNormed), outprojW, 1, tx - int32(EndStageONorm), 0)
     waveAdd(counters, 9)
     when not HaveNorm:
       # Mixer entry's launch-end counter self-reset, the projection stage's
       # last threadgroup (tx 875) behind the stage's wait (see `waveReset`).
       when not defined(WaveResetSabotage):
-        if tx == 875:
+        if tx == int32(EndStageOutProj) - 1:
           waveWait(counters, 9, 32)
           waveReset(counters, 13)
-  elif tx == 876:
+  elif tx == int32(EndStageOutProj):
     when HaveNorm:
       # Stage 11:
       #   the residual fold plus the bias-one post-LN norm,
@@ -438,18 +499,18 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
       normRow((bfA +% sStream), (bfA +% sBlockOut), norm2W,
         (bfA +% sH1), (bfA +% sNormed2), eps)
     waveAdd(counters, 10)
-  elif tx <= 885:
+  elif tx < int32(EndStageMoeDecode):
     when HaveNorm:
       waveWait(counters, 10, 1)
       moe_fwd_decode_at[2048, 256, 8, 512, 1.0'f32, true]((f32A +% sPartial), (bfA +% sNormed2), routerW, gateUpW,
         downW, sharedGW, sharedUW, sharedDW, sharedGVW,
-        (bfA +% sH), (bfA +% sHs), 0, tx - 877)
+        (bfA +% sH), (bfA +% sHs), 0, tx - int32(EndStageFoldNorm2))
     waveAdd(counters, 11)
   else:
     when HaveNorm:
       waveWait(counters, 11, 9)
       moe_decode_merge_at[bfloat16, 2048, 8](
-        (bfA +% sMoeOut), (f32A +% sPartial), 0, tx - 886)
+        (bfA +% sMoeOut), (f32A +% sPartial), 0, tx - int32(EndStageMoeDecode))
     waveAdd(counters, 12)
     # Launch-end counter self-reset, the merge's last threadgroup (tx 949)
     # behind the final stage's waveWait (see `waveReset`'s contract).
@@ -457,6 +518,6 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     # compiled out, the next launch's waveWaits pass instantly on the stale
     # counts of the launch before (see `t_ceramic_mega_gdn_gate`'s sabotage build).
     when not defined(WaveResetSabotage):
-      if tx == 949:
+      if tx == int32(EndStageMerge) - 1:
         waveWait(counters, 12, 64)
         waveReset(counters, 13)
