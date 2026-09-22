@@ -83,6 +83,9 @@ import ../naive/naive_gdn
 import ceramic_pagebuf
 import ../../src/kernels/ceramic/launch_contract
 
+const LaneWidth = 32
+  ## the launch geometry's threadgroup width, the lane→element walk's contract
+
 # ─── Device entries, one per (family dtype, Dk) binding ──────────────
 
 const GdnDecodeMsl = metal:
@@ -193,7 +196,7 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
 
   # Launch-site contracts, see the kernel modules' binding and state ABI docs
   assertHeadMapping(Hv, Hk, hkRatio)
-  assertLanes32(32)
+  assertLanes32(LaneWidth)
   assertNocopyBinding(statePA)
   assertNocopyBinding(yPA)
   var worstState = 0.0'f64
@@ -221,7 +224,8 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
       betaB.hostPtr[h] = si.betaBits[h]
 
   proc launch(si: StepInputs) =
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+    assertDecayFinite(gPA, bhMax)
+    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (LaneWidth, 1, 1)) >>
       (kernelName, statePA,
         (yPA, kPA, qPA, vPA, betaPA, gPA,
           int32(Hv), int32(Hk), int32(hkRatio)))

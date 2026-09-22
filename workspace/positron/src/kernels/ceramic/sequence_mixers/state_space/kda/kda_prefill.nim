@@ -31,12 +31,12 @@
 ## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state     |
 ## | decay / q̃   | exp2(cumg·log2e) per channel in-device, log2e = 1.4426950408889634'f32, q̃ = per-element division by the runtime f32 qScale    |
 ##
-## | contract            | value                                                                                                                                                                         |
-## | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | lanes               | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                                            |
-## | cumg precondition   | finite and monotone non-increasing in each key (host prefix of g, terms ≤ 0), monotonicity keeps the pairdecay argument ≤ 0, a rising cumg overflows the persistent f32 state |
-## | qScale precondition | finite and > 0, the device divides q per element by it (launch_contract.assertQScale at the launch site)                                                                      |
-## | index bound         | the head/sequence linear bases are int32, rows·T·dim < 2^31 (launch_contract.assertPrefillExtent32 at the launch site)                                                        |
+## | contract            | value                                                                                                                                        |
+## | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+## | lanes               | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                           |
+## | cumg precondition   | finite and monotone non-increasing per key per chunk (host prefix of g, terms ≤ 0), a rising cumg overflows the f32 state (assertCumgFinite) |
+## | qScale precondition | finite and > 0, the device divides q per element by it (launch_contract.assertQScale at the launch site)                                     |
+## | index bound         | the head/sequence linear bases are int32, rows·T·dim < 2^31 (launch_contract.assertPrefillExtent32 at the launch site)                       |
 ##
 ## | provenance | source                                                                                                                                                        |
 ## | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |

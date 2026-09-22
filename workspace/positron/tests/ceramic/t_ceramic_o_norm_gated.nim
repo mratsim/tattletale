@@ -65,6 +65,7 @@ import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/o_norm_gated
+import ../../src/kernels/ceramic/launch_contract
 import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
@@ -182,6 +183,7 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
       wB.hostPtr[c] = ci.wBits[c]
 
   proc launchFused(ci: CaseInputs) =
+    assertEpsPositive(eps)
     engine.run << (grid: (1, int(gridY), 1), blk: (32, 1, 1)) >>
       ("cer_o_norm_gated", outPA, (xPA, gatePA, wPA, int32(M), eps))
     inc launches
@@ -224,6 +226,7 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
         inc total
 
     # the composed pair, bit-identical to the fused entry on the same inputs
+    assertEpsPositive(eps)
     engine.run << (grid: (1, int(gridY), 1), blk: (32, 1, 1)) >>
       ("cer_o_norm_pair_w", midPA, (xPA, wPA, int32(M), eps))
     engine.run << (grid: (1, int(gridY), 1), blk: (32, 1, 1)) >>

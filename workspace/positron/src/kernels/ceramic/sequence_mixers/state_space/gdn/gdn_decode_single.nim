@@ -11,18 +11,18 @@
 ##
 ##   S ← S·exp2(g·log2e) + k ⊗ (β·(v − (S·exp2(g·log2e))·k))    y ← S'·(q·Dk^-0.5)
 ##
-## | contract       | value                                                                                                                                                     |
-## | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | state math     | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                                                                |
-## | q, k           | (B·Hk, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                                                   |
-## | v, beta        | (B·Hv, Dv) and (B·Hv,) family dtype, g is (B·Hv,) f32 log-decay                                                                                           |
-## | y              | (B·Hv, Dv) family dtype, one round-to-nearest-even                                                                                                        |
-## | family dtype   | fp16 primary (`gdnDecodeStepTileF16`), bf16 the range-robust fallback (`gdnDecodeStepTileBf16`)                                                           |
-## | head mapping   | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                              |
-## | batch          | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                                        |
-## | decay / q̃     | exp2(g·log2e), log2e = 1.4426950408889634'f32, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin)                        |
-## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                        |
-## | g precondition | finite and ≤ 0: g = −exp(A_log)·softplus(·) ≤ 0 by construction, the kernel applies no clamp, a g > 0 or a non-finite g explodes the persistent f32 state |
+## | contract       | value                                                                                                                                   |
+## | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+## | state math     | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                                              |
+## | q, k           | (B·Hk, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                                 |
+## | v, beta        | (B·Hv, Dv) and (B·Hv,) family dtype, g is (B·Hv,) f32 log-decay                                                                         |
+## | y              | (B·Hv, Dv) family dtype, one round-to-nearest-even                                                                                      |
+## | family dtype   | fp16 primary (`gdnDecodeStepTileF16`), bf16 the range-robust fallback (`gdnDecodeStepTileBf16`)                                         |
+## | head mapping   | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                            |
+## | batch          | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                      |
+## | decay / q̃     | exp2(g·log2e), log2e = 1.4426950408889634'f32, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin)      |
+## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                      |
+## | g precondition | finite and ≤ 0 by construction, no kernel clamp, a violating g explodes the persistent f32 state (assertDecayFinite at the launch site) |
 ##
 ## - design provenance, WIP spelling in the 20260912-positron-taxonomy worktree,
 ##   kernel design mined, test shapes not carried over

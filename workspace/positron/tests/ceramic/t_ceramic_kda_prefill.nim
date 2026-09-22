@@ -125,6 +125,9 @@ import ../naive/naive_kda
 import ceramic_pagebuf
 import ../../src/kernels/ceramic/launch_contract
 
+const LaneWidth = 32
+  ## the launch geometry's threadgroup width, the lane→element walk's contract
+
 # ─── Device entries, one per (family dtype, chunk length, Dk) binding ──
 
 const KdaPrefillMsl = metal:
@@ -563,7 +566,7 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
 
   # Launch-site contracts, see the kernel modules' binding and state ABI docs
   assertHeadMapping(Hv, Hk, hkRatio)
-  assertLanes32(32)
+  assertLanes32(LaneWidth)
   assertNocopyBinding(statePA)
   assertNocopyBinding(yPA)
   assertQScale(qScale)
@@ -593,7 +596,8 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
       yB.hostPtr[i] = 0
 
   proc launch(si: PrefillInputs) =
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+    assertCumgFinite(cumgPA, qkRows, T, Dk, chunkLen)
+    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (LaneWidth, 1, 1)) >>
       (kernelName, statePA,
         (yPA, vPA, kPA, qPA, cumgPA, betaPA, qScale,
           int32(Hv), int32(Hk), int32(hkRatio), int32(T)))

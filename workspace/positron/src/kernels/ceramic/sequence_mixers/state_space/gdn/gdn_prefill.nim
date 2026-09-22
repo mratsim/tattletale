@@ -28,11 +28,11 @@
 ## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state         |
 ## | decay / q̃   | exp2(g·log2e), log2e = 1.4426950408889634'f32, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
 ##
-## | contract       | value                                                                                                                                                                                     |
-## | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                                                        |
-## | g precondition | finite and ≤ 0 (−exp(A_log)·softplus(·) ≤ 0 by construction), the in-block cumg prefix inherits the sign, the kernel applies no clamp and a violating g explodes the persistent f32 state |
-## | index bound    | the head/sequence linear bases are int32, rows·T·dim < 2^31 (launch_contract.assertPrefillExtent32 at the launch site)                                                                    |
+## | contract       | value                                                                                                                                                                               |
+## | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                                                  |
+## | g precondition | finite and ≤ 0 (−exp(A_log)·softplus ≤ 0 by construction), cumg inherits the sign, the kernel applies no clamp, a violating g explodes the persistent f32 state (assertDecayFinite) |
+## | index bound    | the head/sequence linear bases are int32, rows·T·dim < 2^31 (launch_contract.assertPrefillExtent32 at the launch site)                                                              |
 ##
 ## | provenance | source                                                                                                                                                    |
 ## | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |

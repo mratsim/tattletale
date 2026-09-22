@@ -107,6 +107,9 @@ import ../naive/naive_gdn
 import ceramic_pagebuf
 import ../../src/kernels/ceramic/launch_contract
 
+const LaneWidth = 32
+  ## the launch geometry's threadgroup width, the lane→element walk's contract
+
 # ─── Device entries, one per (family dtype, Dk) binding ──────────────
 
 const CeramicDecodeMsl = metal:
@@ -240,7 +243,7 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
 
   # Launch-site contracts, see the kernel modules' binding and state ABI docs
   assertHeadMapping(Hv, Hk, hkRatio)
-  assertLanes32(32)
+  assertLanes32(LaneWidth)
   assertNocopyBinding(statePA)
   assertNocopyBinding(yPA)
   assertQScale(float32(sqrt(float64(dk))))
@@ -269,7 +272,8 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
       betaB.hostPtr[h] = si.betaVals[h]
 
   proc launch() =
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+    assertDecayFinite(gPA, qkRows * dk)
+    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (LaneWidth, 1, 1)) >>
       (kernelName, statePA,
         (yPA, kPA, qPA, vPA, gPA, betaPA,
           float32(sqrt(float64(dk))),
@@ -576,7 +580,8 @@ proc runCrossCheck(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, cases:
       yB.hostPtr[i] = 0
 
   proc launchKda() =
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+    assertDecayFinite(gMatPA, qkRows * dk)
+    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (LaneWidth, 1, 1)) >>
       (kdaName, statePA,
         (yPA, kF32PA, qF32PA, vPA, gMatPA, betaF32PA,
           float32(sqrt(float64(dk))),
@@ -584,7 +589,8 @@ proc runCrossCheck(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, cases:
     inc launches
 
   proc launchGdn() =
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+    assertDecayFinite(gHeadPA, bhMax)
+    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (LaneWidth, 1, 1)) >>
       (gdnName, statePA,
         (yPA, kFamPA, qFamPA, vPA, betaFamPA, gHeadPA,
           int32(Hv), int32(Hk), int32(hkRatio)))
