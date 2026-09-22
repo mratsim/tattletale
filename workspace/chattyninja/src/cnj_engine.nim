@@ -21,7 +21,6 @@
 # Public API:
 #   startRender, pull, pullAll and renderToString. Everything else is engine plumbing.
 
-import std/unicode
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
 
 type

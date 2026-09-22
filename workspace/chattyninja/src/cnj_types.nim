@@ -76,10 +76,11 @@ type
     ## - slots `0`-`3` uniform across kinds, `4` and past kind-specific, see the accessors below
     kind*: NodeKind
     slots*: SmallSeq[5, int32]
-      ## Payload slots, capacity 5 the measured corpus knee:
-      ## - 93% of the 1098 nodes of the 13 corpus templates that parse hold at most 5 slots
-      ## - no node holds exactly 6, and the other 5 corpus templates raise declared gaps
-      ## - only a variable `nkFor` or `nkMacroDef` payload spills, one heap block at parse time
+      ## Payload slots, capacity 5 the measured corpus knee, reproducible from the checked-in
+      ## `tests/corpus/<suite>/<suite>.jinja` templates:
+      ## - corpus nodes hold at most 5 slots, except a variable `nkFor` or `nkMacroDef` payload,
+      ##   which spills to one heap block at parse time
+      ## - no node holds exactly 6 slots, corpus templates that fail parse raise declared gaps
 
   CompiledTemplate* = ref object
     ## Read-only compiled template, shared across renders with two fields and no mutable state,
@@ -167,8 +168,6 @@ const
   SlotChild* = 3
   SlotAlt* = 4
   SlotLoopName = 4
-  SlotSetTarget = 4
-    ## `nkSetBlock` interned target name id, the capture body binding it on close.
   SlotFilterLo = 5
   SlotFilterHi = 6
   SlotNsTarget = 3
@@ -219,10 +218,6 @@ template target*(nd: Node): int32 =
 template field*(nd: Node): int32 =
   ## Interned member name id of `nkSetNamespace`.
   nd.slots[SlotNsField]
-
-template setTarget(nd: Node): int32 =
-  ## Interned target name id of `nkSetBlock`, the name the capture body binds on close.
-  nd.slots[SlotSetTarget]
 
 template macroName*(nd: Node): int32 =
   ## Interned macro name id that `nkMacroDef` binds.
