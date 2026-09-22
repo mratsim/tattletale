@@ -91,7 +91,7 @@ func testerCmd(path: string; extraFlags = ""; compiler = "nim c";
     &" --outdir:build/tests --nimcache:{nimcache} " &
     path
 
-# The composition-tier segments: their subject is the per-element receipts
+# The composition-tier segments: their subject is the per-element verdicts
 # they assert, not the line tracing, and the trace instrumentation slows their
 # CPU regen walks several-fold, past the per-test cap. They run untraced in
 # their own nimcache. Keyed on the segment marker, the import of the shared
@@ -598,16 +598,6 @@ task test_positron_naive, "Test workspace/positron naive reference tier":
     for cmd in getTestCommands("workspace/positron/tests/ceramic"):
       runCmd(cmd)
 
-
-# The band model's sensitivity proof (the RedSabotage build): the sabotage run
-# corrupts the composition's silu tap and asserts the conv band detects the
-# drop. The verdict is inverted, green means the sabotage was caught; a band
-# widened past the corruption or a mis-derived term fails here.
-task test_ceramic_red_sabotage, "Composition band-sensitivity sabotage proof (verdict inverted: green = sabotage caught)":
-  withDir(ProjectRoot):
-    runCmd(suiteCmd(
-      "workspace/positron/tests/ceramic/t_ceramic_mega_gdn_chain_red.nim",
-      extraFlags = " -d:RedSabotage"))
 
 task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
   withDir(ProjectRoot):

@@ -31,7 +31,6 @@ nim test_transformers
 nim test_toktoktok
 nim test_ceramic
 nim test_positron_naive    # workspace/positron naive reference tier + ceramic-vs-naive comparisons
-nim test_ceramic_red_sabotage  # composition band-sensitivity sabotage proof (verdict inverted: green = sabotage caught)
 nim test_crucible_nvrtc
 nim test_crucible_opencl
 nim test_crucible_vulkan

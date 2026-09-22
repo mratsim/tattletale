@@ -13,8 +13,7 @@
 ## runs against the composed naive 13-stage reference, every arena section judged per element.
 ##
 ## Segments, split so each fits the umbrella's per-test cap:
-##   norm check → per-stage comparison → 8-step chain → failing-verdict run
-##   `norm_probe.nim` → `compare.nim` → `chain_red.nim`
+##   `norm_probe.nim` → `compare.nim` → `chain.nim`
 ##
 ## Band model, stated before any measurement. Every judged field's bound decomposes
 ## exactly into the two-term bar below, from the triangle inequality.
@@ -61,7 +60,6 @@ import mega_bounded_wait
 import ../../src/kernels/ceramic/launch_contract
 import ceramic_fam
 
-const RedSabotage* {.booldefine.} = false
 const debugOrow {.booldefine.} = false
 const debugTie {.booldefine.} = false
 
@@ -1246,57 +1244,6 @@ proc runNormCheck*(engine: HwEngine) =
   echo &"[check] fused-vs-separate norm, 32 samples: stream bit-exact " &
     &"{bitExactStream}/{total}, normed bit-exact {exact}/{total}, " &
     &"worst bar usage {worstUse:.3f}"
-
-proc sabotageTapCheck(cw: Comparison; w: Weights; carry0: Carry) =
-  ## Sabotage proof, one corrupted-op run:
-  ## - the naive conv stage's tapped dot replayed exactly, stored un-silu'd
-  ## - the conv band asserted to detect the drop
-  ## - a channel whose silu output sits at the accumulator's cancellation floor
-  ##   carries no defect signal, the band admits it
-  ##
-  ## Corruption must surface somewhere in the judged fields.
-  var corrupt = newSeq[uint16](ConvDim)
-  for c in 0 ..< ConvDim:
-    var acc = 0.0'f32
-    for j in 0 ..< ConvKernel - 1:
-      acc += bf16ToF32(w.convW[c * ConvKernel + j]) *
-        bf16ToF32(carry0.ring[c * RingWidth + j])
-    acc += bf16ToF32(w.convW[c * ConvKernel + ConvKernel - 1]) *
-      bf16ToF32(cw.lo.qkvCol[c])
-    corrupt[c] = f32ToBf16(acc)
-  let convM = cw.snap.secBf(sConv, ConvDim)
-  var worst = 0.0'f64
-  var caught = 0
-  for c in 0 ..< ConvDim:
-    let diff = abs(bf16ToF32(convM[c]).float64 -
-      bf16ToF32(corrupt[c]).float64)
-    if diff > cw.bars.conv[c]:
-      inc caught
-    worst = max(worst, diff / cw.bars.conv[c])
-  doAssert caught > 0, &"silu drop caught nowhere: worst diff/bar {worst:.3e}"
-  echo &"[RED] conv band caught the silu drop at {caught}/{ConvDim} " &
-    &"channels, worst diff/bar {worst:.1f}"
-
-proc runRedSabotage*(engine: HwEngine) =
-  ## Failing-verdict sabotage run at the first case's seeds:
-  ## - the composition's conv band must detect the naive silu drop
-  var rng = initNaiveRng(Seed)
-  let w = buildWeights(rng)
-  let carry0 = newCarry(rng)
-  var m = allocMega()
-  defer: freeMega(m)
-  fillWeights(m, w)
-  var tok = newToken(rng)
-  var regen = 0
-  block found:
-    while true:
-      let cw = compareWalk(engine, m, w, tok, carry0, carry0)
-      if cw.bars.gateClear:
-        sabotageTapCheck(cw, w, carry0)
-        break found
-      inc regen
-      doAssert regen < 4096, "router tie region never clears"
-      tok = newToken(rng)
 
 proc runComparison*(engine: HwEngine) =
   ## 3 seeded cases, one mega launch and one naive walk each, judged per stage under

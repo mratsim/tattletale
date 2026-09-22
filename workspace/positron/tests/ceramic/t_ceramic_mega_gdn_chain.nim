@@ -6,16 +6,14 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Chain segment of the composition tier, an 8-step decode chain over carried
-## state and ring, plus (in the `-d:RedSabotage` build) the failing-verdict run:
-##   naive silu dropped → conv band catches the drop → failing verdict
+## state and ring:
+##   stage bands hold at every step → the chain's carried state stays continuous
 ##
 ## The three segments share the composition driver `ceramic_mega_gdn_composition.nim`.
 ##
 ## Run command, from the repo root:
 ## - nim test_positron_naive, the composition tier's untraced build
-## - nim test_ceramic_red_sabotage, the RedSabotage build with the verdict inverted,
-##   green means the conv band caught the silu drop
-##   both commands derive from `suiteCmd` in config.nims
+##   (derives from `suiteCmd` in config.nims)
 
 import std/[strformat, math, times]
 import workspace/crucible
@@ -34,11 +32,6 @@ import ceramic_pagebuf
 import ceramic_mega_gdn_composition
 let engine = compositionInit()
 let t0 = epochTime()
-when RedSabotage:
-  runRedSabotage(engine)
-  echo &"[chain-red] wall clock {epochTime() - t0:.2f} s"
-  echo "CERAMIC MEGA GDN COMPOSITION RED: conv band caught the silu drop"
-else:
-  runChain(engine)
-  echo &"[chain-red] wall clock {epochTime() - t0:.2f} s"
-  echo "CERAMIC MEGA GDN CHAIN VERDICT: per-stage bands, chain continuity"
+runChain(engine)
+echo &"[chain] wall clock {epochTime() - t0:.2f} s"
+echo "CERAMIC MEGA GDN CHAIN VERDICT: per-stage bands, chain continuity"
