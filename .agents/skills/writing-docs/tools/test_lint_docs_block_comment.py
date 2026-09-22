@@ -3,8 +3,7 @@
 
 Feeds a synthetic Nim source through `lint_text` and asserts two facts:
 - zero findings attributed to lines inside a block comment, whatever prose
-  violations the interior carries (the-opener, semicolon, banned vocabulary,
-  em-dash)
+  violations the interior carries (the-opener, semicolon, banned vocabulary, em-dash)
 - at least one finding on a real doc-comment line carrying the same violations,
   so the empty interior result is the exclusion working, not the rules idling
 
