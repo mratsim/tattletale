@@ -101,8 +101,13 @@
 ## | baseline | 1  | 1  | 1     | 1       | bf16   | 8   | 32    | 32 |
 ## | tail     | 1  | 1  | 1     | 1       | bf16   | 100 | 32    | 32 |
 ## | gqa64    | 2  | 4  | 2     | 2       | bf16   | 256 | 64    | 32 |
+## | overflow | 1  | 1  | 1     | 1       | fp16   | 64  | 64    | 32 |
+## | overflow | 1  | 1  | 1     | 1       | bf16   | 64  | 64    | 32 |
 ##
 ## - the T = 100 case carries a non-divisible tail chunk, 3 full chunks plus 4 tokens
+## - the overflow fixture's g ≈ −3 per token per channel, the 64-token chunk's
+##   |cumg| crosses the exp2 overflow bound 88.7 (log e units) inside the chunk
+##
 ## - every case starts from a non-zero random initial state
 ## - the GQA shape keeps both head-mapping terms live, sequence 1 holding independent key heads
 ##
@@ -197,6 +202,9 @@ const
                                      # the rounding floor once |y| falls subnormal,
                                      # also covering the bf16 subnormal grid
   U64 = 1.1102230246251565e-16       # 2⁻⁵³, the fp64 unit roundoff
+  Log2e = 1.4426950408889634'f64     # log2(e), the exp2 form's constant
+  FlushLog2 = 126.0                  # fp32 normal range's floor in log2 units,
+                                     # a flushed factor's error is its full magnitude
 
 proc famUlp(fam: Family, v: float64): float64 =
   ## Width of one family-dtype ulp at a nonzero normal |v|.
@@ -225,7 +233,14 @@ proc kdaChunkTraceBars(
     s0w: NaiveCube[float64], qw, kw, gw: NaiveCube[float64], vw: NaiveCube[float64],
     bw: NaiveMat[float64],
     Hv, Hk, hkRatio, T, chunkLen, Dv, Dk: int,
-    uFam: float64): TraceBars =
+    uFam: float64, underflowFloors = false): TraceBars =
+  ## `underflowFloors` adds the fp32 exp2 underflow floor to every decay
+  ## factor's relative bound
+  ##
+  ## - a factor whose exp2 argument drops past 126/log2e ≈ 87.3 hits fp32 zero,
+  ##   the flushed factor's error is its full true magnitude
+  ## - the fixture's factors all sit past the bound, the recorded model's
+  ##   relative bounds alone would underestimate there
   let bhMax = s0w.planes
   result.barY = newSeq[float64](bhMax * T * Dv)
   result.barS = newSeq[float64](bhMax * Dv * Dk)
@@ -271,6 +286,10 @@ proc kdaChunkTraceBars(
           # decay factor rel, f32 cumg drift + the log2e multiply + the exp2 form
           relT[i * Dk + dk] = float64(i + 1) * U32 * cmax[dk] +
             U32 * abs(cumgRef[i * Dk + dk]) + DecExp
+          if underflowFloors and -cumgRef[i * Dk + dk] * Log2e > FlushLog2:
+            # the per-token decay factor flushes to fp32 zero, the flushed
+            # factor's full magnitude joins the bound
+            relT[i * Dk + dk] += 1.0
       for t in 0 ..< cLen:
         let gt = c0 + t
         let betaT = bw.data[bh * T + gt]
@@ -289,7 +308,12 @@ proc kdaChunkTraceBars(
             let ks = kw.data[(hk * T + c0 + s) * Dk + dk]
             let qt = qw.data[(hk * T + gt) * Dk + dk] / qScale
             let pd = exp(cumgRef[t * Dk + dk] - cumgRef[s * Dk + dk])
-            let relPd = relT[t * Dk + dk] + relT[s * Dk + dk] + U32
+            var relPd = relT[t * Dk + dk] + relT[s * Dk + dk] + U32
+            if underflowFloors:
+              # the pair decay's argument is cumg_s − cumg_t ≥ 0, a pair past
+              # the flush bound loses its factor to fp32 zero entirely
+              if (cumgRef[s * Dk + dk] - cumgRef[t * Dk + dk]) * Log2e > FlushLog2:
+                relPd += 1.0
             let kkAbs = pd * abs(kt * ks)
             let qkAbs = pd * abs(qt * ks)
             aAbs += kkAbs
@@ -467,14 +491,18 @@ proc hostCumg(dst: var seq[float32], g: seq[float32], qkRows, T, Dk, chunkLen: i
         else:
           dst[gi] = dst[gi - Dk] + g[gi]
 
-proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkLen: int, betaZero: bool): PrefillInputs =
+proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkLen: int, betaZero: bool, overflowG = false): PrefillInputs =
+  ## `overflowG` generates the decay-overflow fixture's g, |g| ≈ 3 per token
+  ## per channel so the 64-token chunk's |cumg| crosses the exp2 overflow
+  ## bound 88.7 inside the chunk
   var qVals = newSeq[float32](qkRows * T * Dk)
   var kVals = newSeq[float32](qkRows * T * Dk)
   l2NormalizeRowsF32(qVals, qkRows * T, Dk, rng)
   l2NormalizeRowsF32(kVals, qkRows * T, Dk, rng)
   var gVals = newSeq[float32](qkRows * T * Dk)
   for i in 0 ..< qkRows * T * Dk:
-    gVals[i] = rng.nextF32(-0.5'f32, -0.01'f32)
+    gVals[i] = if overflowG: rng.nextF32(-3.2'f32, -2.8'f32)
+               else: rng.nextF32(-0.5'f32, -0.01'f32)
   var cumgVals = newSeq[float32](qkRows * T * Dk)
   hostCumg(cumgVals, gVals, qkRows, T, Dk, chunkLen)
   var vBits = newSeq[uint16](bhMax * T * Dv)
@@ -489,7 +517,15 @@ proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkL
   result = PrefillInputs(qVals: qVals, kVals: kVals, gVals: gVals,
     cumgVals: cumgVals, vBits: vBits, betaVals: betaVals, state0: state0)
 
-proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk: int, betaZero: bool, seed: uint64, label: string) =
+proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk: int, betaZero: bool, seed: uint64, label: string, overflowG = false) =
+  ## One (family dtype, shape) combination, judged per element against the fp64 chunked
+  ## reference and the fp64 per-token walk under the band model, relaunched bit-identical.
+  ##
+  ## `overflowG` runs the decay-overflow fixture, |cumg| past the exp2 overflow
+  ## bound 88.7 inside the first chunk
+  ##
+  ## - the judgment adds the exact NaN/Inf check on y and the carried state
+  ## - the band gains the underflow floors
   ## One (family dtype, shape) combination, judged per element against the fp64 chunked
   ## reference and the fp64 per-token walk under the band model, relaunched bit-identical.
   const Dv = 16
@@ -621,7 +657,8 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
         yPerGlobal[(b * Hv) * T * Dv + i] = yWalk.data[i]
 
     let bars = kdaChunkTraceBars(s0w, qw, kw, gw, vw, bw,
-      Hv, Hk, hkRatio, T, chunkLen, Dv, Dk, uFam)
+      Hv, Hk, hkRatio, T, chunkLen, Dv, Dk, uFam,
+      underflowFloors = overflowG)
 
     launch(si)
     sentinels(si)
@@ -643,6 +680,18 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
         2.0 * float64(T * Dk) * U64 * max(abs(sN[i]), abs(sPerSeq[i]))
 
     if record:
+      if overflowG:
+        # the fixture's exact finiteness check, one NaN or Inf in the y
+        # output or the carried state is a failure on its own, the bars
+        # would catch the same failure late
+        for i in 0 ..< yElems:
+          let yc = classify(famWiden(fam, yB.hostPtr[i]).float64)
+          doAssert yc notin {fcNan, fcInf, fcNegInf},
+            &"y not finite at element {i} (classify {yc})"
+        for i in 0 ..< stateElems:
+          let sc = classify(stateB.hostPtr[i].float64)
+          doAssert sc notin {fcNan, fcInf, fcNegInf},
+            &"carried state not finite at element {i} (classify {sc})"
       for bh in 0 ..< bhMax:
         let hk = (bh mod Hv) div hkRatio + (bh div Hv) * Hk
         doAssert hk >= 0 and hk < qkRows, "head mapping inside the key-head count"
@@ -685,21 +734,25 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
   var case0: tuple[st: seq[float32], y: seq[uint16]]
   const cases = 4
   for caseId in 0 ..< cases:
-    let si = takeInputs(fam, rng, bhMax, qkRows, T, Dv, Dk, chunkLen, betaZero)
+    let si = takeInputs(fam, rng, bhMax, qkRows, T, Dv, Dk, chunkLen, betaZero,
+      overflowG)
     judge(si, record = true)
     if caseId == 0: case0 = snap()
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
     var rng0 = initNaiveRng(seed)
-    let si = takeInputs(fam, rng0, bhMax, qkRows, T, Dv, Dk, chunkLen, betaZero)
+    let si = takeInputs(fam, rng0, bhMax, qkRows, T, Dv, Dk, chunkLen, betaZero,
+      overflowG)
     judge(si, record = false)
     let again = snap()
     for i in 0 ..< stateElems:
-      doAssert again.st[i] == case0.st[i], "state differs run to run"
+      if again.st[i] != case0.st[i]:
+        doAssert again.st[i] == case0.st[i], "state differs run to run"
     for i in 0 ..< yElems:
       doAssert again.y[i] == case0.y[i], "y differs run to run"
 
-  let betaTag = if betaZero: " beta=0" else: ""
+  let betaTag = (if betaZero: " beta=0" else: "") &
+    (if overflowG: " overflow-g" else: "")
   echo &"[{label} {famName(fam)} T={T} C={chunkLen} Dk={Dk}{betaTag}] " &
     &"cases={cases} launches={launches} | " &
     &"state worst |ΔS| {worstState:.3e}, worst bar usage {worstStateUse:.3f} | " &
@@ -783,6 +836,23 @@ proc main =
   secBf16T8()
   secBf16Tail()
   secBf16Gqa64()
+
+  proc secF16Overflow =
+    # the decay-overflow fixture, |cumg| crosses the exp2 overflow bound 88.7
+    # inside the first 64-token chunk (g ≈ −3 per token per channel)
+    let t0 = epochTime()
+    runCase(engine, famF16, 1, 1, 1, 1, 64, 64, 32, false, 0xC04D04BB'u64,
+      "overflow Hk=1/Hv=1/B=1", overflowG = true)
+    echo &"  wall clock {epochTime() - t0:.2f} s"
+
+  proc secBf16Overflow =
+    let t0 = epochTime()
+    runCase(engine, famBf16, 1, 1, 1, 1, 64, 64, 32, false, 0xC04D04BC'u64,
+      "overflow Hk=1/Hv=1/B=1", overflowG = true)
+    echo &"  wall clock {epochTime() - t0:.2f} s"
+
+  secF16Overflow()
+  secBf16Overflow()
   echo "CERAMIC KDA PREFILL VERDICT: all combinations inside the stated per-element bars"
 
 main()
