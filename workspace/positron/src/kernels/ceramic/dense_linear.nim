@@ -35,10 +35,6 @@
 ##   prefill reads them once per M-tile
 ## - no K-split for very wide K, the 16-wide chunk walk stays serial within a threadgroup
 ##
-## Design provenance:
-##   ported from the WIP spelling ffn/dense/dense_linear.nim of the taxonomy
-##   worktree 20260912-positron-taxonomy, kernel design mined, no test shape carried over
-
 import workspace/crucible
 import workspace/ceramic
 import ./tile_io_rows

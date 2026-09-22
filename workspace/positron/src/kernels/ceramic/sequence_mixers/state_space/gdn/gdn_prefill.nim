@@ -17,15 +17,15 @@
 ## | y_t             | exp(cumg[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s               |
 ## | carry           | S = exp(cumg[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s                       |
 ##
-## | contract     | value                                                                                                                              |
-## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                           |
-## | q, k         | (B·Hk, T, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                         |
-## | v, beta      | (B·Hv, T, Dv) and (B·Hv, T) family dtype, g is (B·Hv, T) f32 log-decay                                                             |
-## | y            | (B·Hv, T, Dv) family dtype, one round-to-nearest-even per element                                                                  |
-## | family dtype | fp16 primary (`gdnPrefillChunkScanF16`), bf16 the range-robust fallback (`gdnPrefillChunkScanBf16`)                                |
-## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                       |
-## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state         |
+## | contract     | value                                                                                                                                       |
+## | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                    |
+## | q, k         | (B·Hk, T, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                                  |
+## | v, beta      | (B·Hv, T, Dv) and (B·Hv, T) family dtype, g is (B·Hv, T) f32 log-decay                                                                      |
+## | y            | (B·Hv, T, Dv) family dtype, one round-to-nearest-even per element                                                                           |
+## | family dtype | fp16 primary (`gdnPrefillChunkScanF16`), bf16 the range-robust fallback (`gdnPrefillChunkScanBf16`)                                         |
+## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                |
+## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                  |
 ## | decay / q̃   | exp2(g·log2e), log2e is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
 ##
 ## | contract       | value                                                                                                                                                                               |
@@ -37,7 +37,6 @@
 ## | provenance | source                                                                                                                                                    |
 ## | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 ## | schedule   | the naive WY/UT reference `gdnPrefillChunked` in workspace/positron/tests/naive/naive_gdn.nim, the same cumg, pairdecay, solve and carry formulas at fp32 |
-## | tiles      | the WIP spelling state_space/gdn/gdn_prefill.nim (20260912-positron-taxonomy worktree), kernel design mined, test shapes not carried over                 |
 
 ##
 ## Implementation shape:
@@ -105,7 +104,7 @@ proc gdnPrefillChunkScanBf16At*(
   ##   (launch_contract.assertHeadMapping at the launch site)
   ##
   ## `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block.
-  ## The grid-driven wrapper passes the threadgroup coordinates.
+  ## Grid-driven wrapper, receiving the threadgroup coordinates from the grid.
   ## Generic only over the static shape, every (Dk, Dv, ChunkC) binding needs its own call-site line.
   const atom = getTileConfig(float32, float32)
   static:
@@ -261,7 +260,7 @@ proc gdnPrefillChunkScanF16At*(
   ## `gdnPrefillChunkScanBf16At` with the fp16 family dtype, the same fp32 state arithmetic,
   ## fp16 loads and one fp16 y rounding per element.
   ##
-  ## The 8×8×8 fp16 atom shares the bf16 lane→element geometry, tile walk, geometry contract and static asserts are identical.
+  ## Fp16 8×8×8 atom, the same bf16 lane→element geometry, tile walk, geometry contract and static asserts are identical.
   const atom = getTileConfig(float32, float32)
   static:
     doAssert TileR == 8, "the y store covers one atom row block per column block"

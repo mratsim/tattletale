@@ -8,7 +8,7 @@
 # ──────────────────  moe_router (the Qwen softmax routing op)  ──────────────────
 
 ## Qwen3.5/3.6 MoE router on the ceramic Tile API, the qwen35_moe mega decode kernel's softmax routing form.
-## The GLM sigmoid form stays inside master's `moe_fwd.nim`, out of contract here.
+## GLM sigmoid form stays in `moe_fwd.nim`, out of contract here.
 ##
 ## | contract    | value                                                                                                             |
 ## | ----------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -18,16 +18,13 @@
 ## | shapes      | E a multiple of the 64-expert chunk, H a multiple of the 16-wide K step and of the 32-wide merge lane tile        |
 ## | geometry    | `moe_route_fwd` grid (T, 1, 1) at 32 lanes, `moe_decode_merge` grid (T, H div 32, 1)                              |
 ##
-## Shared internals with master's `moe_fwd.nim`:
+## Shared internals with `moe_fwd.nim`:
 ##
 ## | aspect     | value                                                                                                                                    |
 ## | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 ## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees, the `own` fragment-cell mapping                                    |
 ## | extraction | none yet, the routers' score chains and atom layouts differing, a tree-only extraction would split each router's contract in two modules |
 ##
-## Design provenance, ported from the taxonomy worktree's WIP spelling
-## ffn/moe/moe_fwd.nim (20260912-positron-taxonomy), kernel design mined, no test shape carried over
-
 import math_consts
 import workspace/crucible
 import workspace/ceramic

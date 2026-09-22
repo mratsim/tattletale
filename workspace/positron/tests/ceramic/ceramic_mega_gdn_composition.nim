@@ -640,7 +640,7 @@ proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
   ## to the observed operand deviation.
   ##
   ## Returns with `gateClear` false when the router's tie region is hit.
-  ## The caller regenerates the token, the bars discarded.
+  ## Caller regenerates the token, the bars discarded.
   let
     streamM = snap.secBf(sStream, H)
     norm1M = snap.secBf(sNorm1, H)
@@ -1255,7 +1255,7 @@ proc sabotageTapCheck(cw: Comparison; w: Weights; carry0: Carry) =
   ## - a channel whose silu output sits at the accumulator's cancellation floor
   ##   carries no defect signal, the band admits it
   ##
-  ## The corruption must surface somewhere in the judged fields.
+  ## Corruption must surface somewhere in the judged fields.
   var corrupt = newSeq[uint16](ConvDim)
   for c in 0 ..< ConvDim:
     var acc = 0.0'f32

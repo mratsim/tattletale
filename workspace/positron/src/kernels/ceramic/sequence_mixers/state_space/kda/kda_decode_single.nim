@@ -15,16 +15,16 @@
 ## - g is a (B·Hk, Dk) matrix, one log-decay per KEY channel, decayed elementwise BEFORE the kv read
 ## - the kv read contracts the decayed state kᵀ·Diag(exp(g))·S, a post-contraction decay kᵀ·S·exp(g) is the GDN op
 ##
-## | contract     | value                                                                                              |
-## | ------------ | -------------------------------------------------------------------------------------------------- |
-## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync         |
-## | q, k, g, β   | (B·Hk, Dk) f32 q/k/g post-l2norm, (B·Hv,) f32 beta, never rounded to family                        |
-## | v, y         | (B·Hv, Dv) family dtype each, y gets one round-to-nearest-even                                     |
-## | family dtype | fp16 primary (`kdaDecodeStepTileF16`), bf16 the range-robust fallback (`kdaDecodeStepTileBf16`)    |
-## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk       |
-## | batch        | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs            |
+## | contract     | value                                                                                                |
+## | ------------ | ---------------------------------------------------------------------------------------------------- |
+## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync           |
+## | q, k, g, β   | (B·Hk, Dk) f32 q/k/g post-l2norm, (B·Hv,) f32 beta, never rounded to family                          |
+## | v, y         | (B·Hv, Dv) family dtype each, y gets one round-to-nearest-even                                       |
+## | family dtype | fp16 primary (`kdaDecodeStepTileF16`), bf16 the range-robust fallback (`kdaDecodeStepTileBf16`)      |
+## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk         |
+## | batch        | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs              |
 ## | decay        | exp2(g·log2e) per channel, log2e is the shared `math_consts.Log2e` (Metal has no exp device builtin) |
-## | q̃           | divides q per element by the runtime f32 `qScale`, the host's f64 √Dk cast to f32                  |
+## | q̃           | divides q per element by the runtime f32 `qScale`, the host's f64 √Dk cast to f32                    |
 ##
 ## | contract            | value                                                                                                                                                |
 ## | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -92,10 +92,10 @@ proc kdaDecodeStepTileF16At*(
   ##   delta[row] = β·(v[row] − kv_mem[row])
   ##   y[row] = Σ_dkc S'[row][dkc]·(q[dkc]/qScale), one fp16 round
   ##
-  ## The y write goes to the lanes whose fragment column is 0, one lane per state row.
+  ## Y write goes to the lanes whose fragment column is 0, one lane per state row.
   ##
   ## `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block.
-  ## The grid-driven wrapper passes the threadgroup coordinates.
+  ## Grid-driven wrapper, receiving the threadgroup coordinates from the grid.
   ## Generic only over the static shape, every (Dk, Dv, TileR) binding needs its own call-site line.
   const atom = getTileConfig(float32, float32)
   static:
@@ -203,7 +203,7 @@ proc kdaDecodeStepTileBf16At*(
   ## `kdaDecodeStepTileF16At` with the bf16 family dtype, the same fp32 state arithmetic,
   ## bf16 loads and one bf16 y rounding. This core is the recorded Kimi spelling.
   ##
-  ## The 8×8×8 fp16 atom shares the bf16 lane→element geometry, tile walk, geometry contract and static asserts are identical.
+  ## Fp16 8×8×8 atom, the same bf16 lane→element geometry, tile walk, geometry contract and static asserts are identical.
   const atom = getTileConfig(float32, float32)
   static:
     doAssert TileR == 8, "the y store covers one atom row block per column block"

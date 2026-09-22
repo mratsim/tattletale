@@ -13,16 +13,16 @@
 ## one (token, slot) threadgroup recomputing the router in-group,
 ## the expert's gate_up rows into `h_scratch`, the down projection into the fp32 partial row.
 ##
-## The slot groups plus the merge launch (in `moe_router`) compose
+## Slot groups plus the merge launch (in `moe_router`) compose
 ## the full MoE decode pass, the megakernel composes this core inline.
 ##
-  ## | contract   | value                                                                                                     |
-  ## | ---------- | --------------------------------------------------------------------------------------------------------- |
-  ## | router     | the landed `moeRoute` softmax form only, logits round to El, softmax + top-K in fp32, weights round to El |
-  ## | storage    | bfloat16, the decode composition's production dtype                                                       |
-  ## | partials   | row t·(K+1)+slot holds w[slot]·down(t, slot), slot < K, row t·(K+1)+K holds gateVal·shared_down           |
-  ## | partials 2 | the merge launch applies the single El round to the shared contribution                                   |
-  ## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                          |
+  ## | contract   | value                                                                                              |
+  ## | ---------- | -------------------------------------------------------------------------------------------------- |
+  ## | router     | the `moeRoute` softmax form only, logits round to El, softmax + top-K in fp32, weights round to El |
+  ## | storage    | bfloat16, the decode composition's production dtype                                                |
+  ## | partials   | row t·(K+1)+slot holds w[slot]·down(t, slot), slot < K, row t·(K+1)+K holds gateVal·shared_down    |
+  ## | partials 2 | the merge launch applies the single El round to the shared contribution                            |
+  ## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                   |
 
 import math_consts
 import workspace/crucible
@@ -120,7 +120,7 @@ proc siluMulElemEager[R, C: static int; A: static MmaAtom](
   ## the fp32 g/u accumulator operands. The frag walk follows the loadTile
   ## lane→element mapping, the operands agreeing elementwise.
   ##
-  ## The Eager name separates the two `siluMulElem` contracts.
+  ## Eager name separates the two `siluMulElem` contracts.
   ##
   ## | proc                               | silu operand at the multiply |
   ## | ---------------------------------- | ---------------------------- |

@@ -20,16 +20,16 @@
 ## | H_t       | Σ_dk exp(cumg[t, dk])·q̃_t[dk]·S_carry[r, dk]                                                  |
 ## | carry     | S[r, dk] = exp(cumg[end, dk])·S_carry[r, dk] + Σ_s pairdecay(end, s)[dk]·k_s[dk]·u_s[r]        |
 ##
-## | contract     | value                                                                                                                          |
-## | ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                       |
-## | q, k, g, β   | (B·Hk, T, Dk) f32 q/k/g post-l2norm and (B·Hv, T) f32 beta, never rounded to family (the recorded per-channel family contract) |
-## | cumg         | (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of g (the GateForm formula stays host-side)                |
-## | v, y         | (B·Hv, T, Dv) family dtype each, y gets one round-to-nearest-even per element                                                  |
-## | family dtype | fp16 primary (`kdaPrefillChunkScanF16`), bf16 the range-robust fallback (`kdaPrefillChunkScanBf16`)                            |
-## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                   |
-## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state     |
-## | decay / q̃   | exp2(cumg·log2e) per channel in-device, log2e is the shared `math_consts.Log2e`, q̃ = per-element division by the runtime f32 qScale    |
+## | contract     | value                                                                                                                                |
+## | ------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                             |
+## | q, k, g, β   | (B·Hk, T, Dk) f32 q/k/g post-l2norm and (B·Hv, T) f32 beta, never rounded to family (the recorded per-channel family contract)       |
+## | cumg         | (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of g (the GateForm formula stays host-side)                      |
+## | v, y         | (B·Hv, T, Dv) family dtype each, y gets one round-to-nearest-even per element                                                        |
+## | family dtype | fp16 primary (`kdaPrefillChunkScanF16`), bf16 the range-robust fallback (`kdaPrefillChunkScanBf16`)                                  |
+## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                         |
+## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state           |
+## | decay / q̃   | exp2(cumg·log2e) per channel in-device, log2e is the shared `math_consts.Log2e`, q̃ = per-element division by the runtime f32 qScale |
 ##
 ## | contract            | value                                                                                                                                        |
 ## | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -41,7 +41,7 @@
 ## | provenance | source                                                                                                                                                        |
 ## | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 ## | schedule   | the naive WY/UT reference `kdaPrefillChunked` in workspace/positron/tests/naive/naive_kda.nim, the same per-channel cumg, pairdecay, solve and carry formulas |
-## | tiles      | the WIP spelling state_space/kda/kda_prefill.nim (20260912-positron-taxonomy worktree) and the landed GDN chunk scan state_space/gdn/gdn_prefill.nim          |
+## | tiles      | the GDN chunk-scan tile schedule of state_space/gdn/gdn_prefill.nim, applied to the KDA per-channel decay chain                                               |
 
 ##
 ## Implementation shape:
@@ -138,7 +138,7 @@ proc kdaPrefillChunkScanBf16At*(
   ##   chunk end   S ← dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) [x] u_s
   ##
   ## `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block.
-  ## The grid-driven wrapper passes the threadgroup coordinates.
+  ## Grid-driven wrapper, receiving the threadgroup coordinates from the grid.
   ## Generic only over the static shape, every (Dk, Dv, ChunkC) binding needs its own call-site line.
   const atom = getTileConfig(float32, float32)
   static:
@@ -362,7 +362,7 @@ proc kdaPrefillChunkScanF16At*(
   ## `kdaPrefillChunkScanBf16At` with the fp16 family dtype, the same fp32 state arithmetic,
   ## fp16 loads and one fp16 y rounding per element.
   ##
-  ## The 8×8×8 fp16 atom shares the bf16 lane→element geometry, tile walk, geometry contract and static asserts are identical.
+  ## Fp16 8×8×8 atom, the same bf16 lane→element geometry, tile walk, geometry contract and static asserts are identical.
   const atom = getTileConfig(float32, float32)
   static:
     doAssert TileR == 8, "the y store covers one atom row block per column block"

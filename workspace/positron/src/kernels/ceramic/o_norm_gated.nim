@@ -295,7 +295,7 @@ proc rmsWeightTile*(
     eps: float32,
     Dv, TileR: static int) {.device.} =
   ## Composed pair, first launch.
-  ## The RMSNorm + weight half, rows >= M bounded on load and store.
+  ## RMSNorm + weight half, rows >= M bounded on load and store.
   let rowBlk = int32(threadgroup_position_in_grid.y)
   let glX = x.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
   let glW = w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))

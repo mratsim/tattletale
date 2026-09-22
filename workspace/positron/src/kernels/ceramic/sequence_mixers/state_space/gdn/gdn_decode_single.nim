@@ -11,18 +11,18 @@
 ##
 ##   S ← S·exp2(g·log2e) + k ⊗ (β·(v − (S·exp2(g·log2e))·k))    y ← S'·(q·Dk^-0.5)
 ##
-## | contract       | value                                                                                                                                      |
-## | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-## | state math     | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                                                 |
-## | q, k           | (B·Hk, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                                    |
-## | v, beta        | (B·Hv, Dv) and (B·Hv,) family dtype, g is (B·Hv,) f32 log-decay                                                                            |
-## | y              | (B·Hv, Dv) family dtype, one round-to-nearest-even                                                                                         |
-## | family dtype   | fp16 primary (`gdnDecodeStepTileF16`), bf16 the range-robust fallback (`gdnDecodeStepTileBf16`)                                            |
-## | head mapping   | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                               |
-## | batch          | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                         |
+## | contract       | value                                                                                                                                                  |
+## | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+## | state math     | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                                                             |
+## | q, k           | (B·Hk, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                                                |
+## | v, beta        | (B·Hv, Dv) and (B·Hv,) family dtype, g is (B·Hv,) f32 log-decay                                                                                        |
+## | y              | (B·Hv, Dv) family dtype, one round-to-nearest-even                                                                                                     |
+## | family dtype   | fp16 primary (`gdnDecodeStepTileF16`), bf16 the range-robust fallback (`gdnDecodeStepTileBf16`)                                                        |
+## | head mapping   | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                           |
+## | batch          | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                                     |
 ## | decay / q̃     | exp2(g·log2e), the log2e factor is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
-## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                         |
-## | g precondition | finite and ≤ 0 by construction, no kernel clamp, a violating g explodes the persistent f32 state (assertDecayFinite at the launch site)    |
+## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                     |
+## | g precondition | finite and ≤ 0 by construction, no kernel clamp, a violating g explodes the persistent f32 state (assertDecayFinite at the launch site)                |
 ##
 ## - Entries are consumer-side, a `metal:` block wraps the grid-driven proc with concrete
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
@@ -84,10 +84,10 @@ proc gdnDecodeStepTileBf16At*(
   ##   delta[row] = β·(v[row] − kv_mem[row])
   ##   y[row] = Σ_dk S'[row][dk]·(q[dk]·Dk^-0.5), one bf16 round
   ##
-  ## The y write goes to the lanes whose fragment column is 0, one lane per state row.
+  ## Y write goes to the lanes whose fragment column is 0, one lane per state row.
   ##
   ## `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block.
-  ## The grid-driven wrapper passes the threadgroup coordinates.
+  ## Grid-driven wrapper, receiving the threadgroup coordinates from the grid.
   ## Generic only over the static shape, every (Dk, Dv, TileR) binding needs its own call-site line.
   const atom = getTileConfig(float32, float32)
   static:
@@ -190,7 +190,7 @@ proc gdnDecodeStepTileF16At*(
   ## `gdnDecodeStepTileBf16At` with the fp16 family dtype, the same fp32 state arithmetic,
   ## fp16 loads and one fp16 y rounding.
   ##
-  ## The 8×8×8 fp16 atom shares the bf16 lane→element geometry, tile walk, geometry contract and static asserts are identical.
+  ## Fp16 8×8×8 atom, the same bf16 lane→element geometry, tile walk, geometry contract and static asserts are identical.
   const atom = getTileConfig(float32, float32)
   static:
     doAssert TileR == 8, "the y store covers one atom row block per column block"

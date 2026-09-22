@@ -10,7 +10,7 @@
 # ─────────────────────────────────────────────────────────────────────
 
 ## One-launch decode step of a Qwen3.5/3.6-35B-A3B GDN decoder layer on the ceramic Tile API.
-## One token per launch, the 13 stages composed inline from the taxonomy kernels
+## One token per launch, the 13 stages composed inline from the tile kernels under `workspace/positron/src/kernels/`
 ## (see `workspace/positron/src/kernels/README.md`, the inline tile composition contract), no exit to the host between stages.
 ##
 ## Stage order, one launch = one token's layer pass, every consumer's producers preceding it:
@@ -123,7 +123,7 @@ const
     ## Residual stream row (Hidden), the out_proj fold's addend.
   sNorm1* = sStream + Hidden
     ## Norm1 output row (Hidden), the projection input.
-    ## The mixer entry's host preloads this section with the naive chain's normed row.
+    ## Mixer entry, the host preloads this section with the naive chain's normed row.
   sBlockOut* = sNorm1 + Hidden
     ## Out_proj row before the fold (Hidden), the mixer
     ## entry's block-output readback section.
@@ -160,8 +160,7 @@ const StageEnds*: array[13, uint32] = stageEndsOf(StageBlocks)
   ## - StageEnds[s] is one past stage s's last threadgroup
   ## - stage 1's block is grid.x 0, stage 2's blocks are grid.x 1..128
   ##
-  ## The device dispatcher reads the per-stage `EndStage*` scalar spellings
-  ## below. The MSL folds an explicitly cast const scalar, while a bare
+  ## Device dispatcher, reading the per-stage `EndStage*` scalar spellings below. The MSL folds an explicitly cast const scalar, while a bare
   ## const reference or a const-array element stays a symbolic identifier.
 const
   EndStageQkv* = StageEnds[1]
@@ -208,7 +207,7 @@ proc waveAdd(counters: ptr UncheckedArray[uint32], idx: int32) {.device.} =
   ## One increment per threadgroup, lane 0 only, after the release
   ## fence that orders the stage's writes.
   ##
-  ## The toolchain spells no acquire/release loads or stores, the fences
+  ## Toolchain constraint, no acquire/release loads or stores are spelled, the fences
   ## carry the ordering and the increment stays relaxed.
   if thread_index_in_threadgroup != 0:
     return
@@ -395,7 +394,7 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
   ##
   ## | rule     | behavior                                                                                                                                                                 |
   ## | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  ## | producer | each branch waits its producers' stage counters, runs its taxonomy core (or stage proc) inline, adds its own counter                                                     |
+  ## | producer | each branch waits its producers' stage counters, runs its tile core (or stage proc) inline, adds its own counter                                                         |
   ## | reset    | the launch's final threadgroup re-zeroes all counters behind the final stage's waveWait, the next launch on the same buffer needs no host-side zeroing (see `waveReset`) |
   ## | HaveNorm | `false` compiles the norm bookends and the MoE tail out                                                                                                                  |
   ## | stage 0  | runs empty, its counter still increments                                                                                                                                 |

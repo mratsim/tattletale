@@ -5,7 +5,7 @@ The tile kernel modules under `src/kernels/` share three contracts.
 ## Inline tile composition
 
 - device tile procs compose inline into the calling kernel's body
-- a megakernel stage calls the taxonomy core at its own coordinates,
+- a megakernel stage calls the tile core at its own coordinates,
   no exit to the host between stages
 
 ## No-copy binding
