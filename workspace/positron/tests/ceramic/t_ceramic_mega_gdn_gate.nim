@@ -6,9 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run command, from the repo root:
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_gate.nim
-## - sabotage build, judgment contract at the bottom:
-##   nim c -r -d:release -d:WaveResetSabotage --outdir:build/tests --nimcache:nimcache/red tests/ceramic/t_ceramic_mega_gdn_gate.nim
+##   nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_gate.nim
 ##
 ## Megakernel launch suite for the bounded wait and the stage-counter entry contract, one seeded `qwen35_moe` mega kernel walk
 ## at grid (950, 1, 1).
@@ -47,20 +45,20 @@
 ##   the targets the late waiters spin on and the launch wedges, the expiry
 ##   diagnostic names the stuck stages
 ##
-## | check       | contract                                                                                   |
-## | ----------- | ------------------------------------------------------------------------------------------ |
-## | deadline    | every launch completes inside the bounded wait's default deadline, counters re-zeroed      |
-## | self-reset  | the relaunch over untouched counters is bit-identical to the host-zeroed reference launch  |
-## | stale count | garbage counters before a relaunch give the recorded broken outcome, corrupt or wedge      |
-## | sabotage    | the pre-self-reset spelling leaves the relaunch output off the reference continuation bits |
+## | check       | contract                                                                                  |
+## | ----------- | ----------------------------------------------------------------------------------------- |
+## | deadline    | every launch completes inside the bounded wait's default deadline, counters re-zeroed     |
+## | self-reset  | the relaunch over untouched counters is bit-identical to the host-zeroed reference launch |
+## | stale count | garbage counters before a relaunch give the recorded broken outcome, corrupt or wedge     |
 ##
-## WaveResetSabotage (`-d:WaveResetSabotage`):
+## Self-reset regression guard:
 ##
-## - restores the pre-self-reset spelling in the dispatcher, the launch-end
-##   re-zero compiled out
-## - the self-reset case relaunches over counters left at the launch
-##   before's stage totals, every `waveWait` passes instantly on the stale counts, the output leaves the reference bits
-##   and the bit-identity assert fails
+## - the pre-self-reset spelling (the launch-end re-zero compiled out)
+##   relaunched over counters left at the launch before's stage totals
+## - every `waveWait` passed instantly on the stale counts, the output
+##   left the reference bits, the bit-identity assert fired
+## - the launch-end self-reset spelling stands, this case its regression guard,
+##   the defect-run proof living in git history
 
 import std/[strformat, times]
 import workspace/crucible
@@ -315,8 +313,7 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
     &"{MegaWaitDeadlineSecMs.float / 1000.0:.0f} s)"
   doAssert deadlineWall < MegaWaitDeadlineSecMs.float / 1000.0,
     "the launch outlived the bounded wait's deadline"
-  when not WaveResetSabotage:
-    countersZeroWhere("the deadline case's launch")
+  countersZeroWhere("the deadline case's launch")
 
   # Continuation pre-image:
   #   the launch above advanced state and ring, the arenas hold its outputs, the next launches replay one decode step
@@ -337,42 +334,28 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   let refF32 = readInto(f32A.hostPtr, F32ArenaLen)
   let refState = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let refRing = readInto(ring.hostPtr, ConvDim * RingWidth)
-  when not WaveResetSabotage:
-    countersZeroWhere("the reference continuation launch")
+  countersZeroWhere("the reference continuation launch")
 
   # Self-reset case:
   #   the relaunch over untouched counters, the kernel's launch-end reset
   #   alone maintains the entry contract here, the output must be
   #   bit-identical to the reference continuation.
   restorePreimage(preBf, preF32, preState, preRing)
-  when not WaveResetSabotage:
-    countersZeroWhere("before the self-reset relaunch")
+  countersZeroWhere("before the self-reset relaunch")
   discard launch()
   runMegaBounded(launch, counters.hostPtr, StageNames)
-  when not WaveResetSabotage:
-    let selfResetBf = readInto(bfA.hostPtr, BfArenaLen)
-    let selfResetF32 = readInto(f32A.hostPtr, F32ArenaLen)
-    doAssert bitDiffCount(selfResetBf, refBf) == 0,
-      "the self-reset relaunch's bf arena left the reference continuation"
-    doAssert bitDiffCount(selfResetF32, refF32) == 0,
-      "the self-reset relaunch's f32 arena left the reference continuation"
-    for i in 0 ..< NumVHeads * HeadVDim * HeadKDim:
-      doAssert state.hostPtr[i] == refState[i], &"state differs at {i}"
-    for i in 0 ..< ConvDim * RingWidth:
-      doAssert ring.hostPtr[i] == refRing[i], &"ring differs at {i}"
-    echo "[mega gate] self-reset relaunch bit-identical to the reference"
-  else:
-    let sabotagedBf = readInto(bfA.hostPtr, BfArenaLen)
-    let sabotagedF32 = readInto(f32A.hostPtr, F32ArenaLen)
-    echo "[mega gate] sabotage relaunch bf arena mismatches " &
-      &"{bitDiffCount(sabotagedBf, refBf)}/{BfArenaLen}, " &
-      &"f32 arena mismatches {bitDiffCount(sabotagedF32, refF32)}/{F32ArenaLen}"
-    doAssert bitDiffCount(sabotagedBf, refBf) == 0,
-      "the sabotage build must leave the relaunch output off the reference " &
-      "bits, the launch-end re-zero is compiled out and the stale counts " &
-      "opened the waits early"
-  when not WaveResetSabotage:
-    countersZeroWhere("the self-reset relaunch")
+  let selfResetBf = readInto(bfA.hostPtr, BfArenaLen)
+  let selfResetF32 = readInto(f32A.hostPtr, F32ArenaLen)
+  doAssert bitDiffCount(selfResetBf, refBf) == 0,
+    "the self-reset relaunch's bf arena left the reference continuation"
+  doAssert bitDiffCount(selfResetF32, refF32) == 0,
+    "the self-reset relaunch's f32 arena left the reference continuation"
+  for i in 0 ..< NumVHeads * HeadVDim * HeadKDim:
+    doAssert state.hostPtr[i] == refState[i], &"state differs at {i}"
+  for i in 0 ..< ConvDim * RingWidth:
+    doAssert ring.hostPtr[i] == refRing[i], &"ring differs at {i}"
+  echo "[mega gate] self-reset relaunch bit-identical to the reference"
+  countersZeroWhere("the self-reset relaunch")
 
   # Stale-counter case:
   #   garbage written into the counters between launches, the contract boundary made loud, the stale counts open the waits before

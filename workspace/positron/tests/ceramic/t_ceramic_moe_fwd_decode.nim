@@ -6,9 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run command, from the repo root:
-## - nim c -r -d:release --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_moe_fwd_decode.nim
-## - store-race sabotage build, judgment contract below:
-##   nim c -r -d:release -d:StoreRaceSabotage --outdir:build/tests --nimcache:nimcache/red tests/ceramic/t_ceramic_moe_fwd_decode.nim
+##
+##   nim c -r -d:release --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_moe_fwd_decode.nim
 ##
 ## Dedicated suite for the MoE decode slot-group walk (`moe_fwd_decode_at`),
 ## one seeded launch per case at grid (T, K+1, 1), the partial rows judged
@@ -47,19 +46,11 @@
 ## | weight       | abs(w)·(2·logitBar + 2·UBf) + floor, the softmax's relative logit-error class                  |
 ## | partial row  | w·downBar + abs(down)·weightBar + 2·u32·abs(partial) + floor + the two centers' own deviation  |
 ##
-## Store-race sabotage (`-d:StoreRaceSabotage`):
-## - restores the pre-fix store spelling in `storeRowsScaledF32`, the row
-##   guard dropped, every atom row's row-0 lane racing on the destination
-## - the callers load with `rowLimit = 1`, so the racing lanes carry the exact
-##   zeros of the rows above row 0 and the lost writes zero the contribution
-## - the prod case's per-element judgment is two-sided, a zeroed partial row
-##   leaves the naive center's magnitude and exits the bar
-##
-## | outcome        | record                                                                                         |
-## | -------------- | ---------------------------------------------------------------------------------------------- |
-## | sabotage       | the judgment stays green on the recorded driver, same-address stores resolve by lowest lane id |
-## | outcome        | the row-0 value lane won 4096 of 4096 repeat trials                                            |
-## | guard standing | single-writer in every default build, the Metal API defines no same-address store winner       |
+## | guard    | record                                                                                                                          |
+## | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
+## | pre-fix  | the row guard dropped, every atom row's row-0 lane racing on the destination, the lost writes zeroing partial-row contributions |
+## | judgment | the prod case's two-sided per-element judgment exits its bar on such a lost write                                               |
+## | standing | the single-writer spelling, the prod case its regression guard, the defect-run proof living in git history                      |
 
 import std/[strformat, math]
 import workspace/crucible

@@ -8,9 +8,6 @@
 ## Run command, from the repo root:
 ## - nim test_positron_naive
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_mixer.nim
-## - sabotage build, the landed stage counters observable, the launch-end reset compiled out,
-##   `--warnings:off` as in the default run:
-##   nim c -r -d:release -d:WaveResetSabotage --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_mixer.nim
 ##
 ## Mixer-internals tier for the `qwen35_moe` fused GDN decoder layer.
 ##
@@ -30,7 +27,7 @@
 ## | preload     | the norm1 row is the shared operand of both sides, judged bit-identical     |
 ## | sentinels   | kernel-unread sections keep their poison bits through the launch            |
 ## | bands       | each field's bar is the stage's landed band at the mega's observed operands |
-## | counters    | 0..9 = `WaveCounts` landed (sabotage) or all zero post-launch (default)     |
+## | counters    | all 13 counters zero post-launch, the launch-end reset                      |
 ## | determinism | the relaunch over restored state and ring is bit-identical                  |
 ##
 ## No-copy binding:
@@ -495,23 +492,9 @@ proc launchMixer(engine: HwEngine; m: var MegaBuffers) =
   runMegaBounded(dispatch, m.counters.hostPtr, StageNames)
 
 proc assertCounters(m: var MegaBuffers) =
-  ## Stage counters, per the build:
-  ##
-  ## - the default build asserts the launch-end reset's zero state, all
-  ##   13 counters read zero exactly after the launch
-  ## - the WaveResetSabotage build asserts the landed per-stage
-  ##   threadgroup totals at stages 0..9, the stages 10..12 without
-  ##   threadgroups stay zero
-  when WaveResetSabotage:
-    for i in 0 ..< 10:
-      doAssert m.counters.hostPtr[i] == WaveCounts[i],
-        &"stage counter {i} landed {m.counters.hostPtr[i]} " &
-        &"want {WaveCounts[i]} (the sabotage build's landed total)"
-    for i in 10 ..< NumCounters:
-      doAssert m.counters.hostPtr[i] == 0'u32,
-        &"stage counter {i} landed {m.counters.hostPtr[i]} want 0"
-  else:
-    for i in 0 ..< NumCounters:
+  ## All 13 counters read zero exactly after the launch,
+  ## the launch-end reset's zero state.
+  for i in 0 ..< NumCounters:
       doAssert m.counters.hostPtr[i] == 0'u32,
         &"stage counter {i} is {m.counters.hostPtr[i]} want 0 " &
         &"(the launch-end reset)"
@@ -859,8 +842,7 @@ proc runMixerWalk(engine: HwEngine; w: Weights; carry0: Carry;
     norm1: seq[uint16]; caseId: int; usage: var Usage) =
   ## One case, fill → poison → launch → counters → sentinels → preload
   ## bit-identity → naive chain → per-element judgment, then the fresh
-  ## relaunch over the restored carry judged bit-identical
-  ## (default build only, the sabotage build leaves stale counters).
+  ## relaunch over the restored carry judged bit-identical.
   var m = allocMega()
   defer: freeMega(m)
   fillWeights(m, w)
@@ -878,30 +860,29 @@ proc runMixerWalk(engine: HwEngine; w: Weights; carry0: Carry;
   let bars = walkBars(w, norm1, carry0, carry0, lo, snap)
   judgeAll(bars, snap, lo, usage)
 
-  when not WaveResetSabotage:
-    # the relaunch, the carry restored to its pre-image, the judged
-    # sections rewritten over the first launch's own outputs
-    for i in 0 ..< NumVHeads * HeadVDim * HeadKDim:
-      m.state.hostPtr[i] = carry0.state[i]
-    for i in 0 ..< ConvDim * RingWidth:
-      m.ring.hostPtr[i] = carry0.ring[i]
-    launchMixer(engine, m)
-    assertCounters(m)
-    assertUntouched(m)
-    assertNorm1Unchanged(m, norm1)
-    let snapRel = snapMega(m)
-    doAssert snapRel.state == snap.state,
-      "the relaunch's state differs from the first launch's"
-    doAssert snapRel.ring == snap.ring,
-      "the relaunch's ring differs from the first launch's"
-    doAssert snapRel.qkv == snap.qkv and snapRel.z == snap.z and
-      snapRel.a == snap.a and snapRel.b == snap.b and
-      snapRel.conv == snap.conv and snapRel.qn == snap.qn and
-      snapRel.kn == snap.kn and snapRel.beta == snap.beta and
-      snapRel.y == snap.y and snapRel.normed == snap.normed and
-      snapRel.blockOut == snap.blockOut and snapRel.g == snap.g,
-      "the relaunch's judged sections differ from the first launch's"
-    echo &"[mixer case {caseId}] relaunch bit-identical"
+  # the relaunch, the carry restored to its pre-image, the judged
+  # sections rewritten over the first launch's own outputs
+  for i in 0 ..< NumVHeads * HeadVDim * HeadKDim:
+    m.state.hostPtr[i] = carry0.state[i]
+  for i in 0 ..< ConvDim * RingWidth:
+    m.ring.hostPtr[i] = carry0.ring[i]
+  launchMixer(engine, m)
+  assertCounters(m)
+  assertUntouched(m)
+  assertNorm1Unchanged(m, norm1)
+  let snapRel = snapMega(m)
+  doAssert snapRel.state == snap.state,
+    "the relaunch's state differs from the first launch's"
+  doAssert snapRel.ring == snap.ring,
+    "the relaunch's ring differs from the first launch's"
+  doAssert snapRel.qkv == snap.qkv and snapRel.z == snap.z and
+    snapRel.a == snap.a and snapRel.b == snap.b and
+    snapRel.conv == snap.conv and snapRel.qn == snap.qn and
+    snapRel.kn == snap.kn and snapRel.beta == snap.beta and
+    snapRel.y == snap.y and snapRel.normed == snap.normed and
+    snapRel.blockOut == snap.blockOut and snapRel.g == snap.g,
+    "the relaunch's judged sections differ from the first launch's"
+  echo &"[mixer case {caseId}] relaunch bit-identical"
 
 proc runMixer(engine: HwEngine) =
   ## 2 seeded cases, one mega launch and one naive chain each, judged
