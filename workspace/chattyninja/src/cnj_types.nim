@@ -324,25 +324,28 @@ type
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
-  MacroForcer* = proc (tmpl: CompiledTemplate, sym: CompiledSymbols,
-      st: var RenderState, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
-    ## Runs one macro body to completion on the render state given, returning the captured
-    ## text as a string value.
-    ## Contract:
-    ## - bound by the statement tier's engine at its dispatch sites, the expression tier
-    ##   receiving it as a plain stateless handle
-    ## - the render state arrives as a `var RenderState` borrow, the arena as the shared
-    ##   heap ref, so no adapter value and no erased pointer exists
-    ## - this handle is the one edge the tier split keeps, no import cycle crossing it
-
   Context* = object
-    ## Object the caller holds, bundling the shared artifact, its shared symbol-arena ref
-    ## and one per-instantiation render state. Copies render independently.
-    ## A consumer that stops mid-render resumes through its own copy only.
+    ## Object the caller holds:
+    ## - the shared artifact, its shared symbol-arena ref, one per-instantiation
+    ##   render state and the engine-bound macro-force handle
+    ## - copies render independently, a consumer that stops mid-render resuming
+    ##   through its own copy only
     tmpl*: CompiledTemplate
     symbols*: CompiledSymbols
       ## the parse-built arena, shared by ref with the parse caller, no lifetime contract
     state*: RenderState
+    force*: MacroForcer
+      ## the engine's macro-force handle, bound once at `startRender`, stateless,
+      ## so every `Context` copy carries the same callable
+
+  MacroForcer* = proc (c: var Context, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+    ## Runs one macro body to completion on a copy of the context given, the captured
+    ## text returned as a string value.
+    ## Contract:
+    ## - the engine binds it once at `startRender` into `Context.force`, the statement
+    ##   and expression tiers both reaching it through the context they already hold,
+    ##   no parameter threading and no import cycle crossing the tier split
+    ## - the body runs on the callee's own copy, the caller's context borrow untouched
 
 func findName*(t: CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `NoLink` when the template never names it.
@@ -363,16 +366,16 @@ func scopeHas*(st: var RenderState, id: int32, val: var JinjaVal): bool =
         return true
   false
 
-func lookupName*(sym: CompiledSymbols, st: var RenderState, name: openArray[char]): JinjaVal =
+func lookupName*(c: var Context, name: openArray[char]): JinjaVal =
   ## Returns the binding of `name` in one render, resolving the scopes innermost first,
   ## then the render context root dict, then undefined.
   ## Absence is a value, never an error, `is defined` testing for exactly that shape.
-  let id = sym.findName(name)
+  let id = c.symbols.findName(name)
   var got: JinjaVal
-  if id != NoLink and st.scopeHas(id, got):
+  if id != NoLink and c.state.scopeHas(id, got):
     return got
-  if st.root.kind == vkDict:
-    return st.root.d.dictGet(name)
+  if c.state.root.kind == vkDict:
+    return c.state.root.d.dictGet(name)
   undefinedVal()
 
 

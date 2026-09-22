@@ -35,19 +35,17 @@ type
 
   Cx = object
     ## Walker cursor:
-    ##   the half-open span it owns, a one-token lookahead, the dry flag, the recursion depth,
-    ##   the engine's macro-forcer handle handed to nested calls.
+    ##   the half-open span it owns, a one-token lookahead, the dry flag and the recursion depth.
+    ##   The macro-force handle lives on the context, not here.
     pos, stop: int
     tok: ExTok
     dry: bool
     depth: int
-    force: MacroForcer
 
-  GlobalProc = proc (tmpl: CompiledTemplate, lo, hi: int, args: Args,
-      st: var RenderState): JinjaVal {.nimcall, noSideEffect.}
+  GlobalProc = proc (c: var Context, lo, hi: int, args: Args): JinjaVal {.nimcall, noSideEffect.}
     ## A call to a template global. `namespace` and `dict` store a keyword name as a dict key.
     ## - `lo` and `hi` bound the global's name token, the location the raise sites report
-    ## - globals read the template text and the render state's clock, and write nothing
+    ## - globals read the template text and the context's clock, and write nothing
 
   GlobalName = enum
     gNamespace, gRange, gStrftimeNow, gRaiseException, gDict, gLipsum, gCycler, gJoiner
@@ -293,16 +291,16 @@ func argName(tmpl: CompiledTemplate, a: Arg): openArray[char] =
   ## marking a positional argument, which has no name to read.
   tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
 
-func forceCall(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
+func forceCall(c: var Context, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Renders one pending macro call to its output value, the primitive `forceOperand`
-  ## routes every value-position forcing through, the handle itself carried by the context.
+  ## routes every value-position forcing through, the handle carried by `c.force`.
   ## Raises at `cx.tok.lo` when no macro forcer was supplied.
-  if cx.force.isNil:
+  if c.force.isNil:
     raise jinjaErr("a macro call result was consumed where no macro forcer was supplied",
         cx.tok.lo)
-  cx.force(tmpl, sym, st, v.pc.mc, v.pc.args)
+  c.force(c, v.pc.mc, v.pc.args)
 
-func forceOperand(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
+func forceOperand(c: var Context, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns `v` with a pending macro call rendered to its output value, the value-position
   ## forcing contract held in one proc.
   ## - reached from every truth test, `and`/`or` left operand, ternary condition,
@@ -315,7 +313,7 @@ func forceOperand(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderSt
   if cx.dry:
     return v
   if v.kind == vkCall:
-    forceCall(tmpl, sym, st, cx, v)
+    forceCall(c, cx, v)
   else:
     v
 
@@ -543,15 +541,15 @@ func argDict(tmpl: CompiledTemplate, args: Args): DictVal =
     dv.dictSet(argKey(tmpl, a), a.val)
   dv
 
-func namespaceGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
+func namespaceGlobal(c: var Context, lo, hi: int, args: Args): JinjaVal =
   ## `namespace(field=init, ...)`:
   ##   the mutable mapping `{% set ns.field = ... %}` mutates in place.
-  nsVal(argDict(tmpl, args))
+  nsVal(argDict(c.tmpl, args))
 
-func dictGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
-  dictVal(argDict(tmpl, args))
+func dictGlobal(c: var Context, lo, hi: int, args: Args): JinjaVal =
+  dictVal(argDict(c.tmpl, args))
 
-func rangeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
+func rangeGlobal(c: var Context, lo, hi: int, args: Args): JinjaVal =
   ## `range(a, b, step)`:
   ##   the lazy bounds value. Elements compute per index, the serializer rendering the list
   ##   form arithmetically and a `for` walking the same arithmetic, so a range never materializes.
@@ -615,11 +613,11 @@ func threeDigits(n: int): string =
   while result.len < 3:
     result = '0' & result
 
-func strftimeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
+func strftimeGlobal(c: var Context, lo, hi: int, args: Args): JinjaVal =
   ## Renders the format against the render state's injected epoch, never the wall clock,
   ## which is what keeps two render instantiations over one artifact byte-identical.
   let fmt = pyStr(getArg(args, 0, akNone, strVal("")))
-  let secs = st.clock.int64
+  let secs = c.state.clock.int64
   let tod = floorMod(secs.int, 86400)
   let (yr, mo, dy) = civilFromDays(floorDiv(secs.int, 86400))
   var acc = ""
@@ -644,7 +642,7 @@ func strftimeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var Ren
     inc i, 2
   strVal(acc)
 
-func raiseExceptionGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
+func raiseExceptionGlobal(c: var Context, lo, hi: int, args: Args): JinjaVal =
   ## Corpus `err_*` rows record exactly this raise:
   ##   the message verbatim, the raise call's name-token span as `offset` and `span`, cause `ceRaiseCall`.
   raise jinjaErr(pyStr(getArg(args, 0, akNone, strVal(""))), lo, hi - lo, cause = ceRaiseCall)
@@ -658,8 +656,8 @@ const
 
 # Walker:
 
-func evalRange(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int, depth = 0): JinjaVal
-func expr(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int): JinjaVal
+func evalRange(c: var Context, lo, hi: int, depth = 0): JinjaVal
+func expr(c: var Context, cx: var Cx, minPrec: int): JinjaVal
 
 
 const OpSpelling: array[Op, string] = [
@@ -717,45 +715,45 @@ template enterDepth(cx: var Cx) =
     raise jinjaErr("expression nests deeper than ExprDepthCap = " & $ExprDepthCap,
         cx.tok.lo)
 
-func skipExpr(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int) =
+func skipExpr(c: var Context, cx: var Cx, minPrec: int) =
   ## Advances the cursor over an expression without evaluating it, how `and`, `or` and the ternary skip the text they do not run.
   let wasDry = cx.dry
   cx.dry = true
-  discard expr(tmpl, sym, st, cx, minPrec)
+  discard expr(c, cx, minPrec)
   cx.dry = wasDry
 
-func argList(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx): Args =
+func argList(c: var Context, cx: var Cx): Args =
   ## Parses a parenthesised argument list with `name = expr` keyword arguments, the opening paren the lookahead. A keyword keeps its span
   ## and gains a builtin keyword slot, so binding one costs no string. Arguments fill the fixed-capacity
   ## carrier in call order, no per-call sequence.
-  advance(tmpl, cx)
+  advance(c.tmpl, cx)
   while not isPunct(cx, ")"):
     var nameLo = NoLink
     var nameHi = NoLink
     var kw = akNone
     if cx.tok.kind == exName:
       let save = cx
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       if isPunct(cx, "="):
         nameLo = int32 save.tok.lo
         nameHi = int32 save.tok.hi
-        kw = argKeyword(tmpl.wordSpan(save))
-        advance(tmpl, cx)
+        kw = argKeyword(c.tmpl.wordSpan(save))
+        advance(c.tmpl, cx)
       else:
         cx = save
-    let v = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 1))
+    let v = forceOperand(c, cx, expr(c, cx, 1))
     result.addArg(Arg(nameLo: nameLo, nameHi: nameHi, kw: kw, val: v))
     if isPunct(cx, ","):
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       if isPunct(cx, ")"):
         break
       continue
     break
   if not isPunct(cx, ")"):
     raise jinjaErr("argument list is not closed", cx.tok.lo)
-  advance(tmpl, cx)
+  advance(c.tmpl, cx)
 
-func postfix(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
+func postfix(c: var Context, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Applies attr, subscript, call, filter and test chains, which bind tighter than any operator.
   ## An integer constant after a dot is a subscript, `m.content.0` spelling
   ## `m.content[0]` the way upstream Jinja does.
@@ -765,33 +763,33 @@ func postfix(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, 
     # the forcing contract. A call produced by the call operator inside the chain is
     # re-forced here the same way, its pending form never surviving past the next operator.
     if v.kind == vkCall and (isPunct(cx, ".") or isPunct(cx, "[") or isPunct(cx, "|") or
-        isWord(tmpl, cx, "is")):
-      v = forceOperand(tmpl, sym, st, cx, v)
+        isWord(c.tmpl, cx, "is")):
+      v = forceOperand(c, cx, v)
     if isPunct(cx, "."):
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       if cx.tok.kind == exInt:
         # `x.0` is upstream Jinja's spelling of `x[0]`, an integer-constant subscript.
         let n = cx.tok.i
-        advance(tmpl, cx)
+        advance(c.tmpl, cx)
         v = if cx.dry: undefinedVal() else:
           subslice(v, intVal(n), undefinedVal(), undefinedVal(), true, false, false, false)
         continue
       if cx.tok.kind != exName:
         raise jinjaErr("expected a name after `.`", cx.tok.lo)
       let (lo, hi) = (cx.tok.lo, cx.tok.hi)
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       if isPunct(cx, "("):
-        let a = argList(tmpl, sym, st, cx)
+        let a = argList(c, cx)
         if cx.dry:
           v = undefinedVal()
           continue
-        let mi = findIn(MethodNames, tmpl.wordSpan(lo, hi))
+        let mi = findIn(MethodNames, c.tmpl.wordSpan(lo, hi))
         if mi < 0:
-          raise jinjaErr("unknown method `" & spanString(tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo)
+          raise jinjaErr("unknown method `" & spanString(c.tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo)
         checkArgOrder(a, lo, hi)
         let mp = MethodProcs[MethodName mi]
         if mp.isNil:
-          gapWhat("method", tmpl.wordSpan(lo, hi))
+          gapWhat("method", c.tmpl.wordSpan(lo, hi))
         v = mp(v, a)
       else:
         v =
@@ -799,35 +797,35 @@ func postfix(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, 
             undefinedVal()
           else:
             case v.kind
-            of vkDict, vkNs: v.d.dictGet(tmpl.wordSpan(lo, hi))
-            of vkLoop: loopAttr(v, tmpl.wordSpan(lo, hi))
+            of vkDict, vkNs: v.d.dictGet(c.tmpl.wordSpan(lo, hi))
+            of vkLoop: loopAttr(v, c.tmpl.wordSpan(lo, hi))
             else: undefinedVal()
     elif isPunct(cx, "["):
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       var lo, hi, step = undefinedVal()
       var hasLo, hasHi, hasStep, isSlice = false
       if not isPunct(cx, ":"):
-        lo = expr(tmpl, sym, st, cx, 1)
+        lo = expr(c, cx, 1)
         hasLo = true
       if isPunct(cx, ":"):
         isSlice = true
-        advance(tmpl, cx)
+        advance(c.tmpl, cx)
         if not (isPunct(cx, ":") or isPunct(cx, "]")):
-          hi = expr(tmpl, sym, st, cx, 1)
+          hi = expr(c, cx, 1)
           hasHi = true
         if isPunct(cx, ":"):
-          advance(tmpl, cx)
+          advance(c.tmpl, cx)
           if not isPunct(cx, "]"):
-            step = expr(tmpl, sym, st, cx, 1)
+            step = expr(c, cx, 1)
             hasStep = true
       if not isPunct(cx, "]"):
         raise jinjaErr("subscript is not closed", cx.tok.lo)
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       v = if cx.dry: undefinedVal() else:
         subslice(v, lo, hi, step, hasLo, hasHi, hasStep, isSlice)
     elif isPunct(cx, "("):
       let callLo = cx.tok.lo
-      let a = argList(tmpl, sym, st, cx)
+      let a = argList(c, cx)
       v =
         if cx.dry:
           undefinedVal()
@@ -836,54 +834,54 @@ func postfix(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, 
         else:
           raise jinjaErr("only a macro is callable, this is a " & $v.kind, callLo)
     elif isPunct(cx, "|"):
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       if cx.tok.kind != exName:
         raise jinjaErr("expected a filter name after `|`", cx.tok.lo)
       let (lo, hi) = (cx.tok.lo, cx.tok.hi)
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       var a: Args
       if isPunct(cx, "("):
-        a = argList(tmpl, sym, st, cx)
+        a = argList(c, cx)
       if cx.dry:
         v = undefinedVal()
         continue
-      let fi = findIn(FilterNames, tmpl.wordSpan(lo, hi))
+      let fi = findIn(FilterNames, c.tmpl.wordSpan(lo, hi))
       if fi < 0:
-        raise jinjaErr("unknown filter `" & spanString(tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo, cause = ceUnimplemented)
+        raise jinjaErr("unknown filter `" & spanString(c.tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo, cause = ceUnimplemented)
       checkArgOrder(a, lo, hi)
       let fp = FilterProcs[FilterName fi]
       if fp.isNil:
-        gapWhat("filter", tmpl.wordSpan(lo, hi))
+        gapWhat("filter", c.tmpl.wordSpan(lo, hi))
       v = fp(v, a)
-    elif isWord(tmpl, cx, "is"):
-      advance(tmpl, cx)
+    elif isWord(c.tmpl, cx, "is"):
+      advance(c.tmpl, cx)
       var negated = false
-      if isWord(tmpl, cx, "not"):
+      if isWord(c.tmpl, cx, "not"):
         negated = true
-        advance(tmpl, cx)
+        advance(c.tmpl, cx)
       if cx.tok.kind != exName:
         raise jinjaErr("expected a test name after `is`", cx.tok.lo)
       let (lo, hi) = (cx.tok.lo, cx.tok.hi)
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       var a: Args
       if isPunct(cx, "("):
-        a = argList(tmpl, sym, st, cx)
+        a = argList(c, cx)
       if cx.dry:
         v = undefinedVal()
         continue
-      let ti = findIn(TestNames, tmpl.wordSpan(lo, hi))
+      let ti = findIn(TestNames, c.tmpl.wordSpan(lo, hi))
       if ti < 0:
-        raise jinjaErr("unknown test `" & spanString(tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo)
+        raise jinjaErr("unknown test `" & spanString(c.tmpl.wordSpan(lo, hi)) & "`", lo, hi - lo)
       checkArgOrder(a, lo, hi)
       let tp = TestProcs[TestName ti]
       if tp.isNil:
-        gapWhat("test", tmpl.wordSpan(lo, hi))
+        gapWhat("test", c.tmpl.wordSpan(lo, hi))
       v = boolVal(if negated: not tp(v, a) else: tp(v, a))
     else:
       break
   v
 
-func primary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx): JinjaVal =
+func primary(c: var Context, cx: var Cx): JinjaVal =
   ## Parses a literal, a name, a parenthesised group, an array literal or a dict literal,
   ## then the postfix chain.
   var v: JinjaVal
@@ -892,20 +890,20 @@ func primary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, 
     raise jinjaErr("expression ends early at byte " & $cx.pos, cx.pos)
   of exInt:
     v = intVal(cx.tok.i)
-    advance(tmpl, cx)
+    advance(c.tmpl, cx)
   of exIntLow:
     raise jinjaErr("integer literal `" & IntLowLit & "` is outside the int64 range",
         cx.tok.lo, cx.tok.hi - cx.tok.lo)
   of exFloat:
     v = floatVal(cx.tok.f)
-    advance(tmpl, cx)
+    advance(c.tmpl, cx)
   of exStr:
     v = strVal(cx.tok.s)
-    advance(tmpl, cx)
+    advance(c.tmpl, cx)
   of exName:
     let (lo, hi) = (cx.tok.lo, cx.tok.hi)
-    advance(tmpl, cx)
-    let name = tmpl.wordSpan(lo, hi)
+    advance(c.tmpl, cx)
+    let name = c.tmpl.wordSpan(lo, hi)
     # Literal spellings are compared as spans, the same test `case` applied to a copied string.
     if name == "true" or name == "True":
       v = boolVal(true)
@@ -914,83 +912,89 @@ func primary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, 
     elif name == "none" or name == "None":
       v = noneVal()
     else:
-      var bound = if cx.dry: undefinedVal() else: lookupName(sym, st, name)
       let gi = findIn(GlobalNames, name)
-      if bound.kind == vkUndefined and gi >= 0 and isPunct(cx, "("):
+      var isGlobal = false
+      if gi >= 0 and isPunct(cx, "("):
         # A global is reached only when the name is unbound, Jinja's own precedence:
         #   context shadows globals, and a skipped branch never gets here. A dry walk still
         #   consumes the argument list, so the skipped text is never left behind as trailing text.
-        let a = argList(tmpl, sym, st, cx)
+        # The name view is passed to each resolve inline, never held across a call
+        # taking the context as `var`. With a ref field in the context, a view over
+        # one field may not outlive a `var` borrow of the whole.
+        let bound = if cx.dry: undefinedVal() else: lookupName(c, c.tmpl.wordSpan(lo, hi))
+        isGlobal = bound.kind == vkUndefined
+      if isGlobal:
+        let a = argList(c, cx)
         if cx.dry:
           v = undefinedVal()
         else:
           let gp = GlobalProcs[GlobalName gi]
           if gp.isNil:
-            gapWhat("global", tmpl.wordSpan(lo, hi))
-          v = gp(tmpl, lo, hi, a, st)
+            gapWhat("global", c.tmpl.wordSpan(lo, hi))
+          v = gp(c, lo, hi, a)
       else:
-        v = bound
+        v = if cx.dry: undefinedVal() else: lookupName(c, c.tmpl.wordSpan(lo, hi))
   of exPunct:
     case cx.tok.p0
     of '(':
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       var parts = newSeq[JinjaVal]()
       var isTuple = false
       while not isPunct(cx, ")"):
-        parts.add expr(tmpl, sym, st, cx, 1)
+        parts.add expr(c, cx, 1)
         if isPunct(cx, ","):
           isTuple = true
-          advance(tmpl, cx)
+          advance(c.tmpl, cx)
           if isPunct(cx, ")"):
             break
           continue
         break
       if not isPunct(cx, ")"):
         raise jinjaErr("parenthesised expression is not closed", cx.tok.lo)
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       v = if parts.len == 0: seqVal(parts) elif isTuple: seqVal(parts) else: parts[0]
     of '[':
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       var parts = newSeq[JinjaVal]()
       while not isPunct(cx, "]"):
-        parts.add forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 1))
+        parts.add forceOperand(c, cx, expr(c, cx, 1))
         if isPunct(cx, ","):
-          advance(tmpl, cx)
+          advance(c.tmpl, cx)
           if isPunct(cx, "]"):
             break
           continue
         break
       if not isPunct(cx, "]"):
         raise jinjaErr("array literal is not closed", cx.tok.lo)
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       v = seqVal(parts)
     of '{':
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       var dv = DictVal()
       while not isPunct(cx, "}"):
-        let k = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 1))
+        let k = forceOperand(c, cx, expr(c, cx, 1))
         if not isPunct(cx, ":"):
           raise jinjaErr("dict literal entry needs a `:`", cx.tok.lo)
-        advance(tmpl, cx)
-        let val = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 1))
+        advance(c.tmpl, cx)
+        let val = forceOperand(c, cx, expr(c, cx, 1))
         if not cx.dry:
           dv.dictSet(pyStr(k), val)
         if isPunct(cx, ","):
-          advance(tmpl, cx)
+          advance(c.tmpl, cx)
           if isPunct(cx, "}"):
             break
           continue
         break
       if not isPunct(cx, "}"):
         raise jinjaErr("dict literal is not closed", cx.tok.lo)
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       v = dictVal(dv)
     else:
       let spelled = $cx.tok.p0 & (if cx.tok.p1 != '\0': $cx.tok.p1 else: "")
       raise jinjaErr("unexpected `" & spelled & "` starting an expression at byte " & $cx.tok.lo, cx.tok.lo, cx.tok.hi - cx.tok.lo)
-  postfix(tmpl, sym, st, cx, v)
+  postfix(c, cx, v)
 
-func unary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx): JinjaVal =
+func unary(c: var Context, cx: var Cx): JinjaVal =
   ## Parses `not`, unary `-` and `+`, then a primary.
   ## - `not` binds looser than the comparisons, its operand parsing at comparison
   ##   binding power through `expr`, whose entry counts the operand walk toward
@@ -998,22 +1002,22 @@ func unary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx
   ## - unary `-` and `+` bind tighter than any comparison, their chain recursing here
   ##   without re-entering `expr`, so each recursion counts one level itself,
   ##   `enterDepth` at the leg's entry and a `dec` once the operand is evaluated
-  if isWord(tmpl, cx, "not"):
-    advance(tmpl, cx)
+  if isWord(c.tmpl, cx, "not"):
+    advance(c.tmpl, cx)
     let operandLo = cx.tok.lo
-    let v = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 5))
+    let v = forceOperand(c, cx, expr(c, cx, 5))
     return boolVal(if cx.dry: false else: not isTruthy(v, operandLo))
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
-    advance(tmpl, cx)
+    advance(c.tmpl, cx)
     if neg and cx.tok.kind == exIntLow:
       # Digits spelling exactly 2^63 render negated as int64.low, Python's rendering.
       # A re-negation or `+` reaches the raise through value or primary.
-      advance(tmpl, cx)
+      advance(c.tmpl, cx)
       return intVal(int64.low)
     let operandLo = cx.tok.lo
     enterDepth(cx)
-    let v = forceOperand(tmpl, sym, st, cx, unary(tmpl, sym, st, cx))
+    let v = forceOperand(c, cx, unary(c, cx))
     dec cx.depth
     if cx.dry:
       return undefinedVal()
@@ -1026,7 +1030,7 @@ func unary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx
     else: raise jinjaErr("arithmetic needs a number, this is a " & $v.kind,
         operandLo, cx.tok.lo - operandLo)
   else:
-    primary(tmpl, sym, st, cx)
+    primary(c, cx)
 
 func arith(op: Op, a, b: JinjaVal, opLo: int): JinjaVal =
   ## Combines two numbers, or two strings and two sequences under `+`.
@@ -1094,25 +1098,25 @@ func cmpOne(op: Op, a, b: JinjaVal, at: int): JinjaVal =
     else: raise jinjaErr("unknown comparison `" & OpSpelling[op] & "`")
   boolVal(r)
 
-func binOp(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
+func binOp(c: var Context, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
   ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
   ## infix evaluating both sides. `and` and `or` render a pending macro call on the left
   ## before the truth test, a boolean position reading the output's bytes.
   case op
   of opAnd:
-    let l = forceOperand(tmpl, sym, st, cx, lhs)
+    let l = forceOperand(c, cx, lhs)
     if not cx.dry and not isTruthy(l, opLo):
-      skipExpr(tmpl, sym, st, cx, 4)
+      skipExpr(c, cx, 4)
       return l
-    expr(tmpl, sym, st, cx, 4)
+    expr(c, cx, 4)
   of opOr:
-    let l = forceOperand(tmpl, sym, st, cx, lhs)
+    let l = forceOperand(c, cx, lhs)
     if not cx.dry and isTruthy(l, opLo):
-      skipExpr(tmpl, sym, st, cx, 3)
+      skipExpr(c, cx, 3)
       return l
-    expr(tmpl, sym, st, cx, 3)
+    expr(c, cx, 3)
   of opIn, opNotIn:
-    let rhs = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 6))
+    let rhs = forceOperand(c, cx, expr(c, cx, 6))
     if cx.dry:
       undefinedVal()
     else:
@@ -1127,10 +1131,10 @@ func binOp(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx
     # First rhs parses here, the outer precedence loop leaving the first `~` consumed
     # when it enters this leg, the chain then continuing past it.
     var leaves = @[lhs]
-    leaves.add forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, binPrec(opConcat) + 1))
+    leaves.add forceOperand(c, cx, expr(c, cx, binPrec(opConcat) + 1))
     while isPunct(cx, "~"):
-      advance(tmpl, cx)
-      leaves.add forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, binPrec(opConcat) + 1))
+      advance(c.tmpl, cx)
+      leaves.add forceOperand(c, cx, expr(c, cx, binPrec(opConcat) + 1))
     if cx.dry:
       undefinedVal()
     else:
@@ -1155,10 +1159,10 @@ func binOp(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx
           inc pidx
       strVal(move acc)
   of opAdd, opSub, opMod:
-    let rhs = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, binPrec(op) + 1))
+    let rhs = forceOperand(c, cx, expr(c, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs, opLo)
   of opMul, opDiv, opFloorDiv, opPow:
-    skipExpr(tmpl, sym, st, cx, binPrec(op) + 1)
+    skipExpr(c, cx, binPrec(op) + 1)
     # A dry walk is only mapping the skipped-branch spans, no value is read,
     # so the unimplemented operators surface only on a live evaluation.
     if cx.dry:
@@ -1166,7 +1170,7 @@ func binOp(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx
     else:
       gapWhat("operator", OpSpelling[op])
   else:
-    let rhs = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, binPrec(op) + 1))
+    let rhs = forceOperand(c, cx, expr(c, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs, opLo)
 
 func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
@@ -1203,28 +1207,28 @@ func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
     inc i
   false
 
-func scanTernary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, headLo: int): Ternary =
+func scanTernary(c: var Context, cx: var Cx, headLo: int): Ternary =
   ## Measures the ternary spans starting at `headLo`, leaving the cursor past the whole ternary. A walk that lands on no ternary restores
   ## the cursor to the head, so the caller evaluates the expression normally. Nothing is evaluated here.
   let head = cx
   cx.pos = headLo
-  advance(tmpl, cx)
+  advance(c.tmpl, cx)
   let dry = cx.dry
   cx.dry = true
-  discard expr(tmpl, sym, st, cx, 2) # the then-branch text, unevaluated
+  discard expr(c, cx, 2) # the then-branch text, unevaluated
   result.aHi = cx.tok.lo
-  if not isWord(tmpl, cx, "if"):
+  if not isWord(c.tmpl, cx, "if"):
     cx = head
     return
-  advance(tmpl, cx)
+  advance(c.tmpl, cx)
   result.cLo = cx.tok.lo
-  discard expr(tmpl, sym, st, cx, 2) # the condition, unevaluated
+  discard expr(c, cx, 2) # the condition, unevaluated
   result.cHi = cx.tok.lo
-  if isWord(tmpl, cx, "else"):
+  if isWord(c.tmpl, cx, "else"):
     result.hasElse = true
-    advance(tmpl, cx)
+    advance(c.tmpl, cx)
     result.bLo = cx.tok.lo
-    discard expr(tmpl, sym, st, cx, 1) # the else-branch text, unevaluated
+    discard expr(c, cx, 1) # the else-branch text, unevaluated
     result.bHi = cx.tok.lo
   else:
     result.bLo = result.cHi
@@ -1232,11 +1236,11 @@ func scanTernary(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderSta
   let endPos = cx.tok.lo
   cx = head
   cx.pos = endPos
-  advance(tmpl, cx)
+  advance(c.tmpl, cx)
   result.isTernary = true
   cx.dry = dry
 
-func expr(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int): JinjaVal =
+func expr(c: var Context, cx: var Cx, minPrec: int): JinjaVal =
   ## Parses and evaluates one expression, Pratt-style:
   ##   a prefix, then infix while the operator binds at least `minPrec`.
   ## - a ternary binds loosest, and no other operator holds binding power 1, so the ternary is
@@ -1253,36 +1257,36 @@ func expr(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx:
   var v: JinjaVal
   var ranTernary = false
   let headLo = cx.tok.lo
-  if minPrec <= 1 and cx.tok.kind != exEof and ifWordAhead(tmpl, headLo, cx.stop):
-    let shape = scanTernary(tmpl, sym, st, cx, headLo)
+  if minPrec <= 1 and cx.tok.kind != exEof and ifWordAhead(c.tmpl, headLo, cx.stop):
+    let shape = scanTernary(c, cx, headLo)
     if shape.isTernary:
       ranTernary = true
       if cx.dry:
         v = undefinedVal()
       else:
-        let cond = evalRange(tmpl, sym, st, cx.force, shape.cLo, shape.cHi, cx.depth)
-        let tested = forceOperand(tmpl, sym, st, cx, cond)
+        let cond = evalRange(c, shape.cLo, shape.cHi, cx.depth)
+        let tested = forceOperand(c, cx, cond)
         if isTruthy(tested):
-          v = evalRange(tmpl, sym, st, cx.force, headLo, shape.aHi, cx.depth)
+          v = evalRange(c, headLo, shape.aHi, cx.depth)
         elif shape.hasElse:
-          v = evalRange(tmpl, sym, st, cx.force, shape.bLo, shape.bHi, cx.depth)
+          v = evalRange(c, shape.bLo, shape.bHi, cx.depth)
         else:
           v = undefinedVal()
   if not ranTernary:
-    v = unary(tmpl, sym, st, cx)
+    v = unary(c, cx)
     while true:
       var op = opNone
       if cx.tok.kind == exName:
-        if isWord(tmpl, cx, "and"):
+        if isWord(c.tmpl, cx, "and"):
           op = opAnd
-        elif isWord(tmpl, cx, "or"):
+        elif isWord(c.tmpl, cx, "or"):
           op = opOr
-        elif isWord(tmpl, cx, "in"):
+        elif isWord(c.tmpl, cx, "in"):
           op = opIn
-        elif isWord(tmpl, cx, "not"):
+        elif isWord(c.tmpl, cx, "not"):
           let save = cx
-          advance(tmpl, cx)
-          if isWord(tmpl, cx, "in"):
+          advance(c.tmpl, cx)
+          if isWord(c.tmpl, cx, "in"):
             op = opNotIn
           else:
             cx = save
@@ -1295,27 +1299,25 @@ func expr(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, cx:
       if prec == 0 or prec < minPrec:
         break
       if v.kind == vkCall:
-        v = forceOperand(tmpl, sym, st, cx, v)
+        v = forceOperand(c, cx, v)
       let opLo = cx.tok.lo # the operator token, still current here
-      advance(tmpl, cx)
-      v = binOp(tmpl, sym, st, cx, v, op, opLo)
+      advance(c.tmpl, cx)
+      v = binOp(c, cx, v, op, opLo)
   dec cx.depth
   v
 
-func evalRange(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int, depth = 0): JinjaVal =
-  ## Evaluates the expression held in `tmpl.jinja[lo..<hi]` in its own cursor.
+func evalRange(c: var Context, lo, hi: int, depth = 0): JinjaVal =
+  ## Evaluates the expression held in `c.tmpl.jinja[lo..<hi]` in its own cursor.
   ## - `depth` seeds the nesting counter, so a sub-span reached through a ternary still counts toward `ExprDepthCap`
-  ## - `sym` carries the render's name resolution, `st` its scopes, root and clock
-  ## - `force` is the engine's macro forcer, so a nested call can still run
-  var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth, force: force)
-  advance(tmpl, cx)
-  result = expr(tmpl, sym, st, cx, 1)
+  var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth)
+  advance(c.tmpl, cx)
+  result = expr(c, cx, 1)
   if cx.tok.kind != exEof:
     raise jinjaErr("expression has trailing text at byte " & $cx.tok.lo, cx.tok.lo)
 
-func evalSpan*(tmpl: CompiledTemplate, sym: CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int32): JinjaVal =
-  ## Evaluates the expression held in `tmpl.jinja[lo..<hi]`, the entry every expression-bearing step uses.
+func evalSpan*(c: var Context, lo, hi: int32): JinjaVal =
+  ## Evaluates the expression held in `c.tmpl.jinja[lo..<hi]`, the entry every expression-bearing step uses.
   ## Contract:
   ## - a nil forcer making a consumed macro call a reported gap
   ## - a macro call that is a whole expression returns pending, for the emit step to stream
-  evalRange(tmpl, sym, st, force, lo.int, hi.int, 0)
+  evalRange(c, lo.int, hi.int, 0)
