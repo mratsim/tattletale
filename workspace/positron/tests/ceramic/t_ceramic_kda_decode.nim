@@ -120,7 +120,7 @@ const CeramicDecodeMsl = metal:
       g, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio: int32) {.global.} =
-    kdaDecodeStepTileF16(state, y, k, q, v, g, beta, qScale, Hv, Hk, hkRatio, 32, 16, 8)
+    kdaDecodeStepTile(state, y, k, q, v, g, beta, qScale, Hv, Hk, hkRatio, 32, 16, 8)
 
   proc cer_kda_step_bf16_dk32(
       state: ptr UncheckedArray[float32],
@@ -130,7 +130,7 @@ const CeramicDecodeMsl = metal:
       g, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio: int32) {.global.} =
-    kdaDecodeStepTileBf16(state, y, k, q, v, g, beta, qScale, Hv, Hk, hkRatio, 32, 16, 8)
+    kdaDecodeStepTile(state, y, k, q, v, g, beta, qScale, Hv, Hk, hkRatio, 32, 16, 8)
 
   proc cer_gdn_step_fp16_dk32(
       state: ptr UncheckedArray[float32],
