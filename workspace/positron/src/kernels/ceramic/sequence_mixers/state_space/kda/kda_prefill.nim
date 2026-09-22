@@ -9,60 +9,60 @@
 
 ## Prefill (T > 1) of the Kimi Delta Attention recurrence (arXiv:2510.26692), one launch
 ## on the ceramic Tile API walking the tokens in chunks of ChunkC over the per-channel
-## cumulative log decay cumg (one decay per KEY channel):
+## cumulative log decay cumulogdecay (one decay per KEY channel):
 ##
-## | term      | formula                                                                                        |
-## | --------- | ---------------------------------------------------------------------------------------------- |
-## | pairdecay | exp2((cumg[t, dk] − cumg[s, dk])·log2e), per key channel dk (the difference form)              |
-## | u_t       | β_t·(v_t − G_t) − β_t·Σ_{s<t} A[t, s]·u_s, A[t, s] = Σ_dk pairdecay(t, s)[dk]·k_t[dk]·k_s[dk]  |
-## | G_t       | Σ_dk exp(cumg[t, dk])·k_t[dk]·S_carry[r, dk], the decayed carry read BEFORE the kv contraction |
-## | y_t       | H_t + Σ_{s≤t} B[t, s]·u_s[r], B[t, s] = Σ_dk pairdecay(t, s)[dk]·q̃_t[dk]·k_s[dk]              |
-## | H_t       | Σ_dk exp(cumg[t, dk])·q̃_t[dk]·S_carry[r, dk]                                                  |
-## | carry     | S[r, dk] = exp(cumg[end, dk])·S_carry[r, dk] + Σ_s pairdecay(end, s)[dk]·k_s[dk]·u_s[r]        |
+## | term      | formula                                                                                                |
+## | --------- | ------------------------------------------------------------------------------------------------------ |
+## | pairdecay | exp2((cumulogdecay[t, dk] − cumulogdecay[s, dk])·log2e), per key channel dk (the difference form)      |
+## | u_t       | β_t·(v_t − G_t) − β_t·Σ_{s<t} A[t, s]·u_s, A[t, s] = Σ_dk pairdecay(t, s)[dk]·k_t[dk]·k_s[dk]          |
+## | G_t       | Σ_dk exp(cumulogdecay[t, dk])·k_t[dk]·S_carry[r, dk], the decayed carry read BEFORE the kv contraction |
+## | y_t       | H_t + Σ_{s≤t} B[t, s]·u_s[r], B[t, s] = Σ_dk pairdecay(t, s)[dk]·q̃_t[dk]·k_s[dk]                      |
+## | H_t       | Σ_dk exp(cumulogdecay[t, dk])·q̃_t[dk]·S_carry[r, dk]                                                  |
+## | carry     | S[r, dk] = exp(cumulogdecay[end, dk])·S_carry[r, dk] + Σ_s pairdecay(end, s)[dk]·k_s[dk]·u_s[r]        |
 ##
-## | contract     | value                                                                                                                                |
-## | ------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                             |
-## | q, k, g, β   | (B·Hk, T, Dk) f32 q/k/g post-l2norm and (B·Hv, T) f32 beta, never rounded to family (the recorded per-channel family contract)       |
-## | cumg         | (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of g (the GateForm formula stays host-side)                      |
-## | v, y         | (B·Hv, T, Dv) family dtype each, y gets one round-to-nearest-even per element                                                        |
-## | family dtype | fp16 primary (`kdaPrefillChunkScanF16`), bf16 the range-robust fallback (`kdaPrefillChunkScanBf16`)                                  |
-## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                         |
-## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state           |
-## | decay / q̃   | exp2(cumg·log2e) per channel in-device, log2e is the shared `math_consts.Log2e`, q̃ = per-element division by the runtime f32 qScale |
+## | contract     | value                                                                                                                                        |
+## | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                     |
+## | q, k, g, β   | (B·Hk, T, Dk) f32 q/k/g post-l2norm and (B·Hv, T) f32 beta, never rounded to family (the recorded per-channel family contract)               |
+## | cumulogdecay | (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of g (the GateForm formula stays host-side)                              |
+## | v, y         | (B·Hv, T, Dv) family dtype each, y gets one round-to-nearest-even per element                                                                |
+## | family dtype | fp16 primary (`kdaPrefillChunkScanF16`), bf16 the range-robust fallback (`kdaPrefillChunkScanBf16`)                                          |
+## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                 |
+## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                   |
+## | decay / q̃   | exp2(cumulogdecay·log2e) per channel in-device, log2e is the shared `math_consts.Log2e`, q̃ = per-element division by the runtime f32 qScale |
 ##
-## | contract          | value                                                                                                                     |
-## | ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
-## | cumg precondition | finite and monotone non-increasing per key per chunk (host prefix of g, terms ≤ 0), a rising cumg overflows the f32 state |
+## | contract                  | value                                                                                                                             |
+## | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+## | cumulogdecay precondition | finite and monotone non-increasing per key per chunk (host prefix of g, terms ≤ 0), a rising cumulogdecay overflows the f32 state |
 
 ##
-## | provenance | source                                                                                                                                                        |
-## | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | schedule   | the naive WY/UT reference `kdaPrefillChunked` in workspace/positron/tests/naive/naive_kda.nim, the same per-channel cumg, pairdecay, solve and carry formulas |
-## | tiles      | the GDN chunk-scan tile schedule of state_space/gdn/gdn_prefill.nim, applied to the KDA per-channel decay chain                                               |
+## | provenance | source                                                                                                                                                                |
+## | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | schedule   | the naive WY/UT reference `kdaPrefillChunked` in workspace/positron/tests/naive/naive_kda.nim, the same per-channel cumulogdecay, pairdecay, solve and carry formulas |
+## | tiles      | the GDN chunk-scan tile schedule of state_space/gdn/gdn_prefill.nim, applied to the KDA per-channel decay chain                                                       |
 
 ##
 ## Implementation shape:
 ## - each lane computes its own state row's scalars (the solve, y, the u contributions),
 ##   so the u vectors live in a per-lane local array, no inter-threadgroup data movement needed
-## - the per-token decay dT = exp2(cumg_t·log2e) folds into the carry reads once
+## - the per-token decay dT = exp2(cumulogdecay_t·log2e) folds into the carry reads once
 ##   per token, over the same broadcast Tile ops as the per-channel factors
-## - the pair decay exp2((cumg_t − cumg_s)·log2e) folds into the A/B dots per
+## - the pair decay exp2((cumulogdecay_t − cumulogdecay_s)·log2e) folds into the A/B dots per
 ##   (t, s) pair, the chunk-end decay into the carry
 ##
 ## Pair decay's difference form removes the dT·invd_s overflow:
 ##
 ## - exp2(x)·exp2(y) = exp2(x + y)
-## - cumg decreases along t, so the argument is ≤ 0 and no intermediate exceeds 1
-## - the factorized spelling dT·invd_s overflows exp2 once |cumg_s| ≳ 88.7,
+## - cumulogdecay decreases along t, so the argument is ≤ 0 and no intermediate exceeds 1
+## - the factorized spelling dT·invd_s overflows exp2 once |cumulogdecay_s| ≳ 88.7,
 ##   the resulting Inf × dT → 0 product NaNs the carry and the persistent state
 ##
 ## - the k·k and q̃·k dot products run as one broadcast-tile pass per (t, s) pair,
 ##   every lane reads the same row-identical row sum, lanes agree bit-exactly
-## - the pair (t, s) passes reload the key and cumg tiles per pair, chunks of 64 stay inside
+## - the pair (t, s) passes reload the key and cumulogdecay tiles per pair, chunks of 64 stay inside
 ##   the register budget (per-lane state and u arrays are the only residents, no (ChunkC, Dk) working tile)
 ##
-##   per chunk:   cumg tiles ─→ per token t: dT, G_t read ─→ u_t solve ─→ y_t store
+##   per chunk:   cumulogdecay tiles ─→ per token t: dT, G_t read ─→ u_t solve ─→ y_t store
 ##                (t in token order)                           └─────────┐
 ##            └──→ S ← dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) [x] u_s
 ##
@@ -99,7 +99,7 @@ proc kdaPrefillChunkScanBf16At*(
     y: ptr UncheckedArray[bfloat16],      # (B·Hv, T, Dv) bf16
     k: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
     q: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
-    cumg: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
+    cumulogdecay: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
     v: ptr UncheckedArray[bfloat16],      # (B·Hv, T, Dv) bf16
     beta: ptr UncheckedArray[float32],    # (B·Hv, T) f32 beta
     qScale: float32,                      # √Dk, host-computed f64→f32 cast
@@ -144,7 +144,7 @@ proc kdaPrefillChunkScanBf16At*(
   let glState = state.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dk, 1))
   let glK = k.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
   let glQ = q.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
-  let glCumg = cumg.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
+  let glCumulogdecay = cumulogdecay.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
 
   var s: rt_l(float32, TileR, Dk)
   s.loadTile(glState, (headLin, 0, dvBlock, 0))
@@ -164,16 +164,16 @@ proc kdaPrefillChunkScanBf16At*(
       let kLinT = kHeadLin + gt * Dk
       var k32: rt_l(float32, TileR, Dk)
       k32.loadTile(glK, (kLinT, 0, 0, 0))
-      var cumgT: rt_l(float32, TileR, Dk)
-      cumgT.loadTile(glCumg, (kLinT, 0, 0, 0))
+      var cumulogdecayT: rt_l(float32, TileR, Dk)
+      cumulogdecayT.loadTile(glCumulogdecay, (kLinT, 0, 0, 0))
 
-      # Per-token decay dT = exp2(cumg_t·log2e), one factor per key channel,
+      # Per-token decay dT = exp2(cumulogdecay_t·log2e), one factor per key channel,
       # the exp2 form (see the module doc).
       var dT: rt_l(float32, TileR, Dk)
       for n in 0 ..< rowTiles:
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:
-            dT.frags[n][m].frag[f] = cumgT.frags[n][m].frag[f]
+            dT.frags[n][m].frag[f] = cumulogdecayT.frags[n][m].frag[f]
       dT.mul(dT, Log2e)
       exp2(dT, dT)
 
@@ -194,22 +194,22 @@ proc kdaPrefillChunkScanBf16At*(
       for sIdx in 0 ..< t:
         var ks32: rt_l(float32, TileR, Dk)
         ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-        var cumgS: rt_l(float32, TileR, Dk)
-        cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-        # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
-        # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
+        var cumulogdecayS: rt_l(float32, TileR, Dk)
+        cumulogdecayS.loadTile(glCumulogdecay, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+        # pairdecay(t, s)[dk] = exp2((cumulogdecay_t[dk] − cumulogdecay_s[dk])·log2e) per key channel,
+        # the difference form (dT·exp2(−cumulogdecay_s·log2e) in algebra).
         #
-        # - the argument stays ≤ 0 (cumg decreases along t), no intermediate
+        # - the argument stays ≤ 0 (cumulogdecay decreases along t), no intermediate
         #   exceeds 1, exp2 cannot overflow
-        # - the factorized spelling dT·exp2(−cumg_s·log2e) overflows exp2 once
-        #   |cumg_s| ≳ 88.7, the resulting Inf × dT → 0 product NaNs the carry
+        # - the factorized spelling dT·exp2(−cumulogdecay_s·log2e) overflows exp2 once
+        #   |cumulogdecay_s| ≳ 88.7, the resulting Inf × dT → 0 product NaNs the carry
         #   and the persistent state
         var pdT: rt_l(float32, TileR, Dk)
         for n in 0 ..< rowTiles:
           for m in 0 ..< colTiles:
             for f in 0 ..< vpt:
               pdT.frags[n][m].frag[f] = exp2(
-                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+                (cumulogdecayT.frags[n][m].frag[f] - cumulogdecayS.frags[n][m].frag[f]) * Log2e)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         kkProd.mul(kkProd, pdT)
@@ -236,16 +236,16 @@ proc kdaPrefillChunkScanBf16At*(
       for sIdx in 0 .. t:
         var ks32: rt_l(float32, TileR, Dk)
         ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-        var cumgS: rt_l(float32, TileR, Dk)
-        cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+        var cumulogdecayS: rt_l(float32, TileR, Dk)
+        cumulogdecayS.loadTile(glCumulogdecay, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var pdT: rt_l(float32, TileR, Dk)
-        # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
-        # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
+        # pairdecay(t, s)[dk] = exp2((cumulogdecay_t[dk] − cumulogdecay_s[dk])·log2e) per key channel,
+        # the difference form (dT·exp2(−cumulogdecay_s·log2e) in algebra).
         for n in 0 ..< rowTiles:
           for m in 0 ..< colTiles:
             for f in 0 ..< vpt:
               pdT.frags[n][m].frag[f] = exp2(
-                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+                (cumulogdecayT.frags[n][m].frag[f] - cumulogdecayS.frags[n][m].frag[f]) * Log2e)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         qkProd.mul(qkProd, pdT)
@@ -259,25 +259,25 @@ proc kdaPrefillChunkScanBf16At*(
     # Carry out of the chunk, per key channel:
     # S = dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) ⊗ u_s
     let gtEnd = c0 + int32(cLen - 1)
-    var cumgEnd: rt_l(float32, TileR, Dk)
-    cumgEnd.loadTile(glCumg, (kHeadLin + gtEnd * Dk, 0, 0, 0))
+    var cumulogdecayEnd: rt_l(float32, TileR, Dk)
+    cumulogdecayEnd.loadTile(glCumulogdecay, (kHeadLin + gtEnd * Dk, 0, 0, 0))
     var dEnd: rt_l(float32, TileR, Dk)
-    dEnd.mul(cumgEnd, Log2e)
+    dEnd.mul(cumulogdecayEnd, Log2e)
     exp2(dEnd, dEnd)
     s.mul(s, dEnd)
     for sIdx in 0 ..< cLen:
       var ks32: rt_l(float32, TileR, Dk)
       ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-      var cumgS: rt_l(float32, TileR, Dk)
-      cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-      # pairdecay(end, s)[dk] = exp2((cumg_end[dk] − cumg_s[dk])·log2e) per key channel,
+      var cumulogdecayS: rt_l(float32, TileR, Dk)
+      cumulogdecayS.loadTile(glCumulogdecay, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+      # pairdecay(end, s)[dk] = exp2((cumulogdecay_end[dk] − cumulogdecay_s[dk])·log2e) per key channel,
       # the difference form (the token pairdecay note carries the overflow bound)
       var pdEnd: rt_l(float32, TileR, Dk)
       for n in 0 ..< rowTiles:
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:
             pdEnd.frags[n][m].frag[f] = exp2(
-              (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+              (cumulogdecayEnd.frags[n][m].frag[f] - cumulogdecayS.frags[n][m].frag[f]) * Log2e)
       pdEnd.mul(pdEnd, ks32)
       let ws = uLoc[sIdx]
       for n in 0 ..< rowTiles:
@@ -293,7 +293,7 @@ proc kdaPrefillChunkScanBf16*(
     y: ptr UncheckedArray[bfloat16],      # (B·Hv, T, Dv) bf16
     k: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
     q: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
-    cumg: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
+    cumulogdecay: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
     v: ptr UncheckedArray[bfloat16],      # (B·Hv, T, Dv) bf16
     beta: ptr UncheckedArray[float32],    # (B·Hv, T) f32 beta
     qScale: float32,                      # √Dk, host-computed f64→f32 cast
@@ -303,7 +303,7 @@ proc kdaPrefillChunkScanBf16*(
   ## - grid (Dv div TileR, B·Hv), one (bh, TileR-row) state tile per threadgroup, TileR = 8
   let dvBlock = int32(threadgroup_position_in_grid.x)
   let bh = int32(threadgroup_position_in_grid.y)
-  kdaPrefillChunkScanBf16At(state, y, k, q, cumg, v, beta, qScale, Hv, Hk, hkRatio, T,
+  kdaPrefillChunkScanBf16At(state, y, k, q, cumulogdecay, v, beta, qScale, Hv, Hk, hkRatio, T,
     dvBlock, bh, Dk, Dv, TileR, ChunkC)
 
 proc kdaPrefillChunkScanF16At*(
@@ -311,7 +311,7 @@ proc kdaPrefillChunkScanF16At*(
     y: ptr UncheckedArray[float16],       # (B·Hv, T, Dv) fp16
     k: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
     q: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
-    cumg: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
+    cumulogdecay: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
     v: ptr UncheckedArray[float16],       # (B·Hv, T, Dv) fp16
     beta: ptr UncheckedArray[float32],    # (B·Hv, T) f32 beta
     qScale: float32,                      # √Dk, host-computed f64→f32 cast
@@ -340,7 +340,7 @@ proc kdaPrefillChunkScanF16At*(
   let glState = state.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dk, 1))
   let glK = k.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
   let glQ = q.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
-  let glCumg = cumg.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
+  let glCumulogdecay = cumulogdecay.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
 
   var s: rt_l(float32, TileR, Dk)
   s.loadTile(glState, (headLin, 0, dvBlock, 0))
@@ -360,16 +360,16 @@ proc kdaPrefillChunkScanF16At*(
       let kLinT = kHeadLin + gt * Dk
       var k32: rt_l(float32, TileR, Dk)
       k32.loadTile(glK, (kLinT, 0, 0, 0))
-      var cumgT: rt_l(float32, TileR, Dk)
-      cumgT.loadTile(glCumg, (kLinT, 0, 0, 0))
+      var cumulogdecayT: rt_l(float32, TileR, Dk)
+      cumulogdecayT.loadTile(glCumulogdecay, (kLinT, 0, 0, 0))
 
-      # Per-token decay dT = exp2(cumg_t·log2e), one factor per key channel,
+      # Per-token decay dT = exp2(cumulogdecay_t·log2e), one factor per key channel,
       # the exp2 form (see the module doc).
       var dT: rt_l(float32, TileR, Dk)
       for n in 0 ..< rowTiles:
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:
-            dT.frags[n][m].frag[f] = cumgT.frags[n][m].frag[f]
+            dT.frags[n][m].frag[f] = cumulogdecayT.frags[n][m].frag[f]
       dT.mul(dT, Log2e)
       exp2(dT, dT)
 
@@ -390,22 +390,22 @@ proc kdaPrefillChunkScanF16At*(
       for sIdx in 0 ..< t:
         var ks32: rt_l(float32, TileR, Dk)
         ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-        var cumgS: rt_l(float32, TileR, Dk)
-        cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-        # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
-        # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
+        var cumulogdecayS: rt_l(float32, TileR, Dk)
+        cumulogdecayS.loadTile(glCumulogdecay, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+        # pairdecay(t, s)[dk] = exp2((cumulogdecay_t[dk] − cumulogdecay_s[dk])·log2e) per key channel,
+        # the difference form (dT·exp2(−cumulogdecay_s·log2e) in algebra).
         #
-        # - the argument stays ≤ 0 (cumg decreases along t), no intermediate
+        # - the argument stays ≤ 0 (cumulogdecay decreases along t), no intermediate
         #   exceeds 1, exp2 cannot overflow
-        # - the factorized spelling dT·exp2(−cumg_s·log2e) overflows exp2 once
-        #   |cumg_s| ≳ 88.7, the resulting Inf × dT → 0 product NaNs the carry
+        # - the factorized spelling dT·exp2(−cumulogdecay_s·log2e) overflows exp2 once
+        #   |cumulogdecay_s| ≳ 88.7, the resulting Inf × dT → 0 product NaNs the carry
         #   and the persistent state
         var pdT: rt_l(float32, TileR, Dk)
         for n in 0 ..< rowTiles:
           for m in 0 ..< colTiles:
             for f in 0 ..< vpt:
               pdT.frags[n][m].frag[f] = exp2(
-                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+                (cumulogdecayT.frags[n][m].frag[f] - cumulogdecayS.frags[n][m].frag[f]) * Log2e)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         kkProd.mul(kkProd, pdT)
@@ -432,16 +432,16 @@ proc kdaPrefillChunkScanF16At*(
       for sIdx in 0 .. t:
         var ks32: rt_l(float32, TileR, Dk)
         ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-        var cumgS: rt_l(float32, TileR, Dk)
-        cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+        var cumulogdecayS: rt_l(float32, TileR, Dk)
+        cumulogdecayS.loadTile(glCumulogdecay, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var pdT: rt_l(float32, TileR, Dk)
-        # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
-        # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
+        # pairdecay(t, s)[dk] = exp2((cumulogdecay_t[dk] − cumulogdecay_s[dk])·log2e) per key channel,
+        # the difference form (dT·exp2(−cumulogdecay_s·log2e) in algebra).
         for n in 0 ..< rowTiles:
           for m in 0 ..< colTiles:
             for f in 0 ..< vpt:
               pdT.frags[n][m].frag[f] = exp2(
-                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+                (cumulogdecayT.frags[n][m].frag[f] - cumulogdecayS.frags[n][m].frag[f]) * Log2e)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         qkProd.mul(qkProd, pdT)
@@ -455,25 +455,25 @@ proc kdaPrefillChunkScanF16At*(
     # Carry out of the chunk, per key channel:
     # S = dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) ⊗ u_s
     let gtEnd = c0 + int32(cLen - 1)
-    var cumgEnd: rt_l(float32, TileR, Dk)
-    cumgEnd.loadTile(glCumg, (kHeadLin + gtEnd * Dk, 0, 0, 0))
+    var cumulogdecayEnd: rt_l(float32, TileR, Dk)
+    cumulogdecayEnd.loadTile(glCumulogdecay, (kHeadLin + gtEnd * Dk, 0, 0, 0))
     var dEnd: rt_l(float32, TileR, Dk)
-    dEnd.mul(cumgEnd, Log2e)
+    dEnd.mul(cumulogdecayEnd, Log2e)
     exp2(dEnd, dEnd)
     s.mul(s, dEnd)
     for sIdx in 0 ..< cLen:
       var ks32: rt_l(float32, TileR, Dk)
       ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-      var cumgS: rt_l(float32, TileR, Dk)
-      cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-      # pairdecay(end, s)[dk] = exp2((cumg_end[dk] − cumg_s[dk])·log2e) per key channel,
+      var cumulogdecayS: rt_l(float32, TileR, Dk)
+      cumulogdecayS.loadTile(glCumulogdecay, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+      # pairdecay(end, s)[dk] = exp2((cumulogdecay_end[dk] − cumulogdecay_s[dk])·log2e) per key channel,
       # the difference form (the token pairdecay note carries the overflow bound)
       var pdEnd: rt_l(float32, TileR, Dk)
       for n in 0 ..< rowTiles:
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:
             pdEnd.frags[n][m].frag[f] = exp2(
-              (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+              (cumulogdecayEnd.frags[n][m].frag[f] - cumulogdecayS.frags[n][m].frag[f]) * Log2e)
       pdEnd.mul(pdEnd, ks32)
       let ws = uLoc[sIdx]
       for n in 0 ..< rowTiles:
@@ -489,7 +489,7 @@ proc kdaPrefillChunkScanF16*(
     y: ptr UncheckedArray[float16],       # (B·Hv, T, Dv) fp16
     k: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
     q: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
-    cumg: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
+    cumulogdecay: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
     v: ptr UncheckedArray[float16],       # (B·Hv, T, Dv) fp16
     beta: ptr UncheckedArray[float32],    # (B·Hv, T) f32 beta
     qScale: float32,                      # √Dk, host-computed f64→f32 cast
@@ -499,5 +499,5 @@ proc kdaPrefillChunkScanF16*(
   ## - grid (Dv div TileR, B·Hv), one (bh, TileR-row) state tile per threadgroup, TileR = 8
   let dvBlock = int32(threadgroup_position_in_grid.x)
   let bh = int32(threadgroup_position_in_grid.y)
-  kdaPrefillChunkScanF16At(state, y, k, q, cumg, v, beta, qScale, Hv, Hk, hkRatio, T,
+  kdaPrefillChunkScanF16At(state, y, k, q, cumulogdecay, v, beta, qScale, Hv, Hk, hkRatio, T,
     dvBlock, bh, Dk, Dv, TileR, ChunkC)

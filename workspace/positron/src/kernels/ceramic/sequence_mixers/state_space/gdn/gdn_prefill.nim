@@ -8,14 +8,14 @@
 # ───────────────  GDN prefill (chunked scan over T tokens, one launch)  ───────────────
 
 ## Prefill (T > 1) of the gated delta-rule recurrence (arXiv:2412.06464), one launch
-## walking the tokens in chunks of ChunkC over the in-block cumulative log decay cumg:
+## walking the tokens in chunks of ChunkC over the in-block cumulative log decay cumulogdecay:
 ##
-## | term            | formula                                                                            |
-## | --------------- | ---------------------------------------------------------------------------------- |
-## | pairdecay(t, s) | exp2((cumg[t] − cumg[s])·log2e)                                                    |
-## | u_t             | β_t·(v_t − exp(cumg[t])·(S_carry·k_t)) − β_t·Σ_{s<t} pairdecay(t, s)·(k_t·k_s)·u_s |
-## | y_t             | exp(cumg[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s               |
-## | carry           | S = exp(cumg[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s                       |
+## | term            | formula                                                                                    |
+## | --------------- | ------------------------------------------------------------------------------------------ |
+## | pairdecay(t, s) | exp2((cumulogdecay[t] − cumulogdecay[s])·log2e)                                            |
+## | u_t             | β_t·(v_t − exp(cumulogdecay[t])·(S_carry·k_t)) − β_t·Σ_{s<t} pairdecay(t, s)·(k_t·k_s)·u_s |
+## | y_t             | exp(cumulogdecay[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s               |
+## | carry           | S = exp(cumulogdecay[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s                       |
 ##
 ## | contract     | value                                                                                                                                       |
 ## | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -28,14 +28,14 @@
 ## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                  |
 ## | decay / q̃   | exp2(g·log2e), log2e is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
 ##
-## | contract       | value                                                                                                                                                           |
-## | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | g precondition | finite and ≤ 0 (−exp(A_log)·softplus ≤ 0 by construction), cumg inherits the sign, the kernel applies no clamp, a violating g explodes the persistent f32 state |
+## | contract       | value                                                                                                                                                                   |
+## | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | g precondition | finite and ≤ 0 (−exp(A_log)·softplus ≤ 0 by construction), cumulogdecay inherits the sign, the kernel applies no clamp, a violating g explodes the persistent f32 state |
 
 ##
-## | provenance | source                                                                                                                                                    |
-## | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | schedule   | the naive WY/UT reference `gdnPrefillChunked` in workspace/positron/tests/naive/naive_gdn.nim, the same cumg, pairdecay, solve and carry formulas at fp32 |
+## | provenance | source                                                                                                                                                            |
+## | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | schedule   | the naive WY/UT reference `gdnPrefillChunked` in workspace/positron/tests/naive/naive_gdn.nim, the same cumulogdecay, pairdecay, solve and carry formulas at fp32 |
 
 ##
 ## Implementation shape:
@@ -108,7 +108,7 @@ proc gdnPrefillChunkScanBf16At*(
     doAssert TileR == 8, "the y store covers one atom row block per column block"
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
-    doAssert ChunkC <= 64, "the per-lane cumg/u local arrays are sized by ChunkC"
+    doAssert ChunkC <= 64, "the per-lane cumulogdecay/u local arrays are sized by ChunkC"
   const rowTiles = TileR div atom.getM()
   const colTiles = Dk div atom.getN()
   const vpt = atom.getVpt()
@@ -131,7 +131,7 @@ proc gdnPrefillChunkScanBf16At*(
   let colIn = cell div 8
   let scale = rsqrt(float32(Dk))
 
-  var cumg: array[ChunkC, float32]   # in-block cumulative log decay, identical on every lane
+  var cumulogdecay: array[ChunkC, float32]   # in-block cumulative log decay, identical on every lane
   var uLoc: array[ChunkC, float32]   # this lane's state row's solve vector u_s[rowIn]
 
   var c0 = int32(0)
@@ -141,7 +141,7 @@ proc gdnPrefillChunkScanBf16At*(
     var gsum = 0'f32
     for i in 0 ..< cLen:
       gsum += g[bh * T + c0 + int32(i)]
-      cumg[i] = gsum
+      cumulogdecay[i] = gsum
 
     for t in 0 ..< cLen:
       let gt = c0 + int32(t)
@@ -151,12 +151,12 @@ proc gdnPrefillChunkScanBf16At*(
       var k32: rt_l(float32, TileR, Dk)
       k32.widenBf16(kT)
 
-      # G_t = exp(cumg[t])·(S_carry·k_t), the decayed carry read against the key
+      # G_t = exp(cumulogdecay[t])·(S_carry·k_t), the decayed carry read against the key
       var kProd: rt_l(float32, TileR, Dk)
       kProd.mul(s, k32)
       var kVec: rv(float32, TileR, Dk)
       kVec.row_sum(kProd)
-      let decayT = exp2(cumg[t] * Log2e)
+      let decayT = exp2(cumulogdecay[t] * Log2e)
       let gRead = decayT * kVec.data[0]
 
       let bt = beta[bh * T + gt].float32
@@ -173,12 +173,12 @@ proc gdnPrefillChunkScanBf16At*(
         kkProd.mul(k32, ks32)
         var kkVec: rv(float32, TileR, Dk)
         kkVec.row_sum(kkProd)
-        let pdts = exp2((cumg[t] - cumg[sIdx]) * Log2e)
+        let pdts = exp2((cumulogdecay[t] - cumulogdecay[sIdx]) * Log2e)
         uacc += pdts * kkVec.data[0] * uLoc[sIdx]
       let ut = bt * (v32 - gRead) - bt * uacc
       uLoc[t] = ut
 
-      # y_t = exp(cumg[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s
+      # y_t = exp(cumulogdecay[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s
       var qT: rt_l(bfloat16, TileR, Dk)
       qT.loadTile(glQ, (kLinT, 0, 0, 0))
       var q32: rt_l(float32, TileR, Dk)
@@ -202,18 +202,18 @@ proc gdnPrefillChunkScanBf16At*(
         qkProd.mul(q32, ks32)
         var qkVec: rv(float32, TileR, Dk)
         qkVec.row_sum(qkProd)
-        let pdts = exp2((cumg[t] - cumg[sIdx]) * Log2e)
+        let pdts = exp2((cumulogdecay[t] - cumulogdecay[sIdx]) * Log2e)
         yVal += pdts * qkVec.data[0] * uLoc[sIdx]
 
       if colIn == 0:
         y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = yVal.bfloat16
 
     # Carry out of the chunk:
-    # S = exp(cumg[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s
-    let decayEnd = exp2(cumg[cLen - 1] * Log2e)
+    # S = exp(cumulogdecay[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s
+    let decayEnd = exp2(cumulogdecay[cLen - 1] * Log2e)
     s.mul(s, decayEnd)
     for sIdx in 0 ..< cLen:
-      let ws = exp2((cumg[cLen - 1] - cumg[sIdx]) * Log2e) * uLoc[sIdx]
+      let ws = exp2((cumulogdecay[cLen - 1] - cumulogdecay[sIdx]) * Log2e) * uLoc[sIdx]
       var ksT: rt_l(bfloat16, TileR, Dk)
       ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var ks32: rt_l(float32, TileR, Dk)
@@ -263,7 +263,7 @@ proc gdnPrefillChunkScanF16At*(
     doAssert TileR == 8, "the y store covers one atom row block per column block"
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
-    doAssert ChunkC <= 64, "the per-lane cumg/u local arrays are sized by ChunkC"
+    doAssert ChunkC <= 64, "the per-lane cumulogdecay/u local arrays are sized by ChunkC"
   const rowTiles = TileR div atom.getM()
   const colTiles = Dk div atom.getN()
   const vpt = atom.getVpt()
@@ -286,7 +286,7 @@ proc gdnPrefillChunkScanF16At*(
   let colIn = cell div 8
   let scale = rsqrt(float32(Dk))
 
-  var cumg: array[ChunkC, float32]   # in-block cumulative log decay, identical on every lane
+  var cumulogdecay: array[ChunkC, float32]   # in-block cumulative log decay, identical on every lane
   var uLoc: array[ChunkC, float32]   # this lane's state row's solve vector u_s[rowIn]
 
   var c0 = int32(0)
@@ -296,7 +296,7 @@ proc gdnPrefillChunkScanF16At*(
     var gsum = 0'f32
     for i in 0 ..< cLen:
       gsum += g[bh * T + c0 + int32(i)]
-      cumg[i] = gsum
+      cumulogdecay[i] = gsum
 
     for t in 0 ..< cLen:
       let gt = c0 + int32(t)
@@ -306,12 +306,12 @@ proc gdnPrefillChunkScanF16At*(
       var k32: rt_l(float32, TileR, Dk)
       k32.widenF16(kT)
 
-      # G_t = exp(cumg[t])·(S_carry·k_t), the decayed carry read against the key
+      # G_t = exp(cumulogdecay[t])·(S_carry·k_t), the decayed carry read against the key
       var kProd: rt_l(float32, TileR, Dk)
       kProd.mul(s, k32)
       var kVec: rv(float32, TileR, Dk)
       kVec.row_sum(kProd)
-      let decayT = exp2(cumg[t] * Log2e)
+      let decayT = exp2(cumulogdecay[t] * Log2e)
       let gRead = decayT * kVec.data[0]
 
       let bt = beta[bh * T + gt].float32
@@ -328,12 +328,12 @@ proc gdnPrefillChunkScanF16At*(
         kkProd.mul(k32, ks32)
         var kkVec: rv(float32, TileR, Dk)
         kkVec.row_sum(kkProd)
-        let pdts = exp2((cumg[t] - cumg[sIdx]) * Log2e)
+        let pdts = exp2((cumulogdecay[t] - cumulogdecay[sIdx]) * Log2e)
         uacc += pdts * kkVec.data[0] * uLoc[sIdx]
       let ut = bt * (v32 - gRead) - bt * uacc
       uLoc[t] = ut
 
-      # y_t = exp(cumg[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s
+      # y_t = exp(cumulogdecay[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s
       var qT: rt_l(float16, TileR, Dk)
       qT.loadTile(glQ, (kLinT, 0, 0, 0))
       var q32: rt_l(float32, TileR, Dk)
@@ -357,18 +357,18 @@ proc gdnPrefillChunkScanF16At*(
         qkProd.mul(q32, ks32)
         var qkVec: rv(float32, TileR, Dk)
         qkVec.row_sum(qkProd)
-        let pdts = exp2((cumg[t] - cumg[sIdx]) * Log2e)
+        let pdts = exp2((cumulogdecay[t] - cumulogdecay[sIdx]) * Log2e)
         yVal += pdts * qkVec.data[0] * uLoc[sIdx]
 
       if colIn == 0:
         y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = yVal.float16
 
     # Carry out of the chunk:
-    # S = exp(cumg[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s
-    let decayEnd = exp2(cumg[cLen - 1] * Log2e)
+    # S = exp(cumulogdecay[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s
+    let decayEnd = exp2(cumulogdecay[cLen - 1] * Log2e)
     s.mul(s, decayEnd)
     for sIdx in 0 ..< cLen:
-      let ws = exp2((cumg[cLen - 1] - cumg[sIdx]) * Log2e) * uLoc[sIdx]
+      let ws = exp2((cumulogdecay[cLen - 1] - cumulogdecay[sIdx]) * Log2e) * uLoc[sIdx]
       var ksT: rt_l(float16, TileR, Dk)
       ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var ks32: rt_l(float32, TileR, Dk)

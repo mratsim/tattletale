@@ -36,13 +36,13 @@
 ## Band model, stated before measurement and judged per element, u₃₂ = 2⁻²⁴ the fp32
 ## unit roundoff. The chunked scan reassociates the per-token recurrence:
 ##
-## | reassociation | structure                                                                                |
-## | ------------- | ---------------------------------------------------------------------------------------- |
-## | decay         | carried as the cumulative log decay cumg per chunk, pair decay from exponent differences |
-## | updates       | the token updates u_t solved in token order through the A-matrix recurrence              |
-## | carry         | one decayed carry read plus the u outer products, assembled once per chunk               |
+## | reassociation | structure                                                                                        |
+## | ------------- | ------------------------------------------------------------------------------------------------ |
+## | decay         | carried as the cumulative log decay cumulogdecay per chunk, pair decay from exponent differences |
+## | updates       | the token updates u_t solved in token order through the A-matrix recurrence                      |
+## | carry         | one decayed carry read plus the u outer products, assembled once per chunk                       |
 ##
-##   per chunk:   cumg ─→ per token t: G_t read ─→ u_t solve ─→ y_t store
+##   per chunk:   cumulogdecay ─→ per token t: G_t read ─→ u_t solve ─→ y_t store
 ##                (t in token order)                └─────────┐
 ##            └──→ S ← decayed carry read + Σ_s pd(end, s)·k_s [x] u_s
 ##
@@ -50,16 +50,16 @@
 ## - both naive spellings run fp64, the ceramic core runs fp32 state math with family-dtype handoffs
 ## - the judged divergence is the ceramic side's rounding against the fp64 chunked reference structure
 ##
-## | site             | bound                                                            |
-## | ---------------- | ---------------------------------------------------------------- |
-## | cumg             | per entry ≤ i·u₃₂·max abs(cumg), uniform per chunk cLen·u₃₂·cmax |
-## | decay factors    | relative ≤ cLen·u₃₂·cmax + 4·u₃₂ (log2e multiply, exp2 form)     |
-## | k·k / q̃·k dots  | relative ≤ Dk·u₃₂ (elementwise round plus row-sum tree)          |
-## | S·k / S·q̃ reads | Dk·u₃₂·Σ abs(S·k) plus the carried state error Σ abs(k)·ΔS       |
-## | q̃ scale         | relative ≤ 2·2⁻²¹ (rsqrt-multiply vs the naive divide)           |
-## | u solve          | β·(base error + Σ abs(A)·Δu + ΔA·abs(u) + t·u₃₂·Σ abs(A·u))      |
-## | chunk carry      | decayed old state + Σ abs(pd·k)·Δu + cLen·u₃₂·Σ abs(pd·k·u)      |
-## | y store          | one family RNE, u_fam·abs(y) plus the subnormal grid floor       |
+## | site             | bound                                                                    |
+## | ---------------- | ------------------------------------------------------------------------ |
+## | cumulogdecay     | per entry ≤ i·u₃₂·max abs(cumulogdecay), uniform per chunk cLen·u₃₂·cmax |
+## | decay factors    | relative ≤ cLen·u₃₂·cmax + 4·u₃₂ (log2e multiply, exp2 form)             |
+## | k·k / q̃·k dots  | relative ≤ Dk·u₃₂ (elementwise round plus row-sum tree)                  |
+## | S·k / S·q̃ reads | Dk·u₃₂·Σ abs(S·k) plus the carried state error Σ abs(k)·ΔS               |
+## | q̃ scale         | relative ≤ 2·2⁻²¹ (rsqrt-multiply vs the naive divide)                   |
+## | u solve          | β·(base error + Σ abs(A)·Δu + ΔA·abs(u) + t·u₃₂·Σ abs(A·u))              |
+## | chunk carry      | decayed old state + Σ abs(pd·k)·Δu + cLen·u₃₂·Σ abs(pd·k·u)              |
+## | y store          | one family RNE, u_fam·abs(y) plus the subnormal grid floor               |
 ##
 ## - the reassociation budget per chunk is C token terms per sum (solve, y, carry) and Dk terms per dot over T/C chunks
 ##
@@ -193,22 +193,22 @@ proc gdnChunkTraceBars(
     for r in 0 ..< Dv:
       for dk in 0 ..< Dk:
         carry[r * Dk + dk] = s0w.data[(bh * Dv + r) * Dk + dk]
-    var cumg = newSeq[float64](chunkLen)
+    var cumulogdecay = newSeq[float64](chunkLen)
     var uRef = newSeq[float64](chunkLen * Dv)
     var du = newSeq[float64](chunkLen * Dv)
     var c0 = 0
     while c0 < T:
       let cLen = min(chunkLen, T - c0)
       # cumulative log decay in fp64 reference values, the fp32 drift bound uniform per chunk
-      cumg[0] = gw.data[bh * T + c0]
-      var cmax = abs(cumg[0])
+      cumulogdecay[0] = gw.data[bh * T + c0]
+      var cmax = abs(cumulogdecay[0])
       for i in 1 ..< cLen:
-        cumg[i] = cumg[i - 1] + gw.data[bh * T + c0 + i]
-        cmax = max(cmax, abs(cumg[i]))
+        cumulogdecay[i] = cumulogdecay[i - 1] + gw.data[bh * T + c0 + i]
+        cmax = max(cmax, abs(cumulogdecay[i]))
       let decRel = float64(cLen) * U32 * cmax + DecExp
       for t in 0 ..< cLen:
         let gt = c0 + t
-        let pdT = exp(cumg[t])
+        let pdT = exp(cumulogdecay[t])
         let betaT = bw.data[bh * T + gt]
         # pair (t, s) dot magnitudes, shared across the state rows
         for s in 0 .. t:
@@ -224,7 +224,7 @@ proc gdnChunkTraceBars(
             kkAbs += abs(kt * ks)
             qkdot += qt * ks
             qkAbs += abs(qt * ks)
-          let pdRef = exp(cumg[t] - cumg[s])
+          let pdRef = exp(cumulogdecay[t] - cumulogdecay[s])
           kdotA[t * chunkLen + s] = kdot
           kkAbsA[t * chunkLen + s] = kkAbs
           pdRefA[t * chunkLen + s] = pdRef
@@ -291,7 +291,7 @@ proc gdnChunkTraceBars(
           result.barY[(bh * T + gt) * Dv + r] =
             dY + uFam * abs(yRef) + FloorSub
       # carry out of the chunk, the reference formula and its bound
-      let decayEnd = exp(cumg[cLen - 1])
+      let decayEnd = exp(cumulogdecay[cLen - 1])
       for r in 0 ..< Dv:
         for dk in 0 ..< Dk:
           let idx = r * Dk + dk
@@ -301,7 +301,7 @@ proc gdnChunkTraceBars(
           var sumAbs = 0.0'f64
           var sumErr = 0.0'f64
           for s in 0 ..< cLen:
-            let pdEnd = exp(cumg[cLen - 1] - cumg[s])
+            let pdEnd = exp(cumulogdecay[cLen - 1] - cumulogdecay[s])
             let ks = kw.data[(hk * T + c0 + s) * Dk + dk]
             let wAbs = abs(pdEnd * ks)
             let pTerm = pdEnd * ks * uRef[s * Dv + r]

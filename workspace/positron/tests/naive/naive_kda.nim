@@ -20,7 +20,7 @@
 ## - chunked, kdaPrefillChunked solves each block through the WY/UT transform with the per-channel pair decay
 ##
 ##   per token: read → decay → kv read → update → y, one step per token
-##   chunked: cumg → A → u solve → y and carry, one block per iteration
+##   chunked: cumulogdecay → A → u solve → y and carry, one block per iteration
 ##
 ## The intra-family comparison is a diagnostic self-check, its tolerance
 ## from the rounding model, the q scale an elementwise division by √Dk.
@@ -160,15 +160,15 @@ proc kdaPrefillChunked*(
   ##
   ## Contract:
   ##
-  ##   │ pairdecay  exp(cumg[t, dk] − cumg[s, dk]) computed from the log
+  ##   │ pairdecay  exp(cumulogdecay[t, dk] − cumulogdecay[s, dk]) computed from the log
   ##   │            sum, exact-zero decay channels staying defined
   ##   │ solve      A[t, s] = Σ_dk pairdecay(t, s)[dk]·k_t[dk]·k_s[dk]
   ##   │            u_t = β_t·(v_t − G_t) − β_t·Σ_{s<t} A[t, s]·u_s
-  ##   │            G_t[r] = Σ_dk exp(cumg[t, dk])·k_t[dk]·S_carry[r, dk]
+  ##   │            G_t[r] = Σ_dk exp(cumulogdecay[t, dk])·k_t[dk]·S_carry[r, dk]
   ##   │ outputs    y_t[r] = H_t[r] + Σ_{s≤t} B[t, s]·u_s[r]
   ##   │            B[t, s] = Σ_dk pairdecay(t, s)[dk]·q̃_t[dk]·k_s[dk]
-  ##   │            H_t[r] = Σ_dk exp(cumg[t, dk])·q̃_t[dk]·S_carry[r, dk]
-  ##   │ carry      S[r, dk] = exp(cumg[end, dk])·S_carry[r, dk] +
+  ##   │            H_t[r] = Σ_dk exp(cumulogdecay[t, dk])·q̃_t[dk]·S_carry[r, dk]
+  ##   │ carry      S[r, dk] = exp(cumulogdecay[end, dk])·S_carry[r, dk] +
   ##   │            Σ_s pairdecay(end, s)[dk]·k_s[dk]·u_s[r]
   ##
   ## The result equals the per-token walk up to fp64 reassociation.
@@ -190,7 +190,7 @@ proc kdaPrefillChunked*(
   let qScale = sqrt(float64(dk))
 
   var carry = newSeq[float64](dv * dk)
-  var cumg = newSeq[float64](chunkLen * dk)
+  var cumulogdecay = newSeq[float64](chunkLen * dk)
   var amat = newSeq[float64](chunkLen * chunkLen)
   var bmat = newSeq[float64](chunkLen * chunkLen)
   var uvec = newSeq[float64](dv * chunkLen)
@@ -206,26 +206,26 @@ proc kdaPrefillChunked*(
       let cLen = min(chunkLen, T - c0)
       # In-block cumulative log decay, one row per token.
       for dkc in 0 ..< dk:
-        cumg[dkc] = g.data[(hk * T + c0) * dk + dkc]
+        cumulogdecay[dkc] = g.data[(hk * T + c0) * dk + dkc]
       for i in 1 ..< cLen:
         for dkc in 0 ..< dk:
-          cumg[i * dk + dkc] = cumg[(i - 1) * dk + dkc] +
+          cumulogdecay[i * dk + dkc] = cumulogdecay[(i - 1) * dk + dkc] +
             g.data[(hk * T + c0 + i) * dk + dkc]
       # Update vectors, solved in token order.
       for t in 0 ..< cLen:
         let gt = c0 + t
-        # G_t[r] = Σ_dk exp(cumg[t, dk])·k_t[dk]·S_carry[r, dk]
+        # G_t[r] = Σ_dk exp(cumulogdecay[t, dk])·k_t[dk]·S_carry[r, dk]
         for row in 0 ..< dv:
           var acc: float64 = 0
           for dkc in 0 ..< dk:
-            acc += exp(cumg[t * dk + dkc]) * k.data[(hk * T + gt) * dk + dkc] *
+            acc += exp(cumulogdecay[t * dk + dkc]) * k.data[(hk * T + gt) * dk + dkc] *
               carry[row * dk + dkc]
           gread[row] = acc
         # A[t, s] for s < t.
         for s in 0 ..< t:
           var acc: float64 = 0
           for dkc in 0 ..< dk:
-            acc += exp(cumg[t * dk + dkc] - cumg[s * dk + dkc]) *
+            acc += exp(cumulogdecay[t * dk + dkc] - cumulogdecay[s * dk + dkc]) *
               k.data[(hk * T + gt) * dk + dkc] * k.data[(hk * T + c0 + s) * dk + dkc]
           amat[t * chunkLen + s] = acc
         # u_t = β_t·(v_t − G_t) − β_t·Σ_{s<t} A[t, s]·u_s
@@ -243,14 +243,14 @@ proc kdaPrefillChunked*(
         for s in 0 .. t:
           var acc: float64 = 0
           for dkc in 0 ..< dk:
-            acc += exp(cumg[t * dk + dkc] - cumg[s * dk + dkc]) *
+            acc += exp(cumulogdecay[t * dk + dkc] - cumulogdecay[s * dk + dkc]) *
               (q.data[(hk * T + gt) * dk + dkc] / qScale) *
               k.data[(hk * T + c0 + s) * dk + dkc]
           bmat[t * chunkLen + s] = acc
         for row in 0 ..< dv:
           var acc: float64 = 0
           for dkc in 0 ..< dk:
-            acc += exp(cumg[t * dk + dkc]) *
+            acc += exp(cumulogdecay[t * dk + dkc]) *
               (q.data[(hk * T + gt) * dk + dkc] / qScale) * carry[row * dk + dkc]
           hread[row] = acc
           var oacc = hread[row]
@@ -260,9 +260,9 @@ proc kdaPrefillChunked*(
       # Carry out of the block, per key channel.
       for row in 0 ..< dv:
         for dkc in 0 ..< dk:
-          var acc = exp(cumg[(cLen - 1) * dk + dkc]) * carry[row * dk + dkc]
+          var acc = exp(cumulogdecay[(cLen - 1) * dk + dkc]) * carry[row * dk + dkc]
           for s in 0 ..< cLen:
-            acc += exp(cumg[(cLen - 1) * dk + dkc] - cumg[s * dk + dkc]) *
+            acc += exp(cumulogdecay[(cLen - 1) * dk + dkc] - cumulogdecay[s * dk + dkc]) *
               k.data[(hk * T + c0 + s) * dk + dkc] * uvec[row * chunkLen + s]
           carry[row * dk + dkc] = acc
       c0 += cLen

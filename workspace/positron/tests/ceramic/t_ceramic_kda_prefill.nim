@@ -22,13 +22,13 @@
 ##
 ## Inputs, all seeded xorshift64, fixture-free:
 ##
-## | input     | rule                                                                                     |
-## | --------- | ---------------------------------------------------------------------------------------- |
-## | q, k      | l2-normalized per (head, token) row in fp32, the kernel contract's post-l2norm f32 shape |
-## | v, state0 | [-1, 1), the initial state never zero                                                    |
-## | beta      | [0.2, 0.8) f32                                                                           |
-## | g         | [-0.5, -0.01) f32 log-decay, one per KEY channel, (B·Hk, T, Dk)                          |
-## | cumg      | the per-channel f32 cumulative log decay within each chunk, host-computed from g         |
+## | input        | rule                                                                                     |
+## | ------------ | ---------------------------------------------------------------------------------------- |
+## | q, k         | l2-normalized per (head, token) row in fp32, the kernel contract's post-l2norm f32 shape |
+## | v, state0    | [-1, 1), the initial state never zero                                                    |
+## | beta         | [0.2, 0.8) f32                                                                           |
+## | g            | [-0.5, -0.01) f32 log-decay, one per KEY channel, (B·Hk, T, Dk)                          |
+## | cumulogdecay | the per-channel f32 cumulative log decay within each chunk, host-computed from g         |
 ##
 ## - the q, k normalization also keeps the delta-rule recursion bounded over 256 tokens in fp16 y range
 ## - the f32 inputs are the shared values, the naive sides widen them exactly, no input rounding divergence
@@ -37,13 +37,13 @@
 ## unit roundoff, a reassociation of the per-token recurrence over the per-channel
 ## decay γ_c = exp(g_c), one decay per KEY channel:
 ##
-## | reassociation | structure                                                                                  |
-## | ------------- | ------------------------------------------------------------------------------------------ |
-## | decay         | carried as the per-channel cumulative log decay cumg, pair decay dT·invd_s per key channel |
-## | updates       | the token updates u_t solved in token order through the A-matrix recurrence                |
-## | carry         | one per-channel decayed carry read plus the u outer products, assembled once per chunk     |
+## | reassociation | structure                                                                                          |
+## | ------------- | -------------------------------------------------------------------------------------------------- |
+## | decay         | carried as the per-channel cumulative log decay cumulogdecay, pair decay dT·invd_s per key channel |
+## | updates       | the token updates u_t solved in token order through the A-matrix recurrence                        |
+## | carry         | one per-channel decayed carry read plus the u outer products, assembled once per chunk             |
 ##
-##   per chunk:   cumg ─→ per token t: dT, G_t read ─→ u_t solve ─→ y_t store
+##   per chunk:   cumulogdecay ─→ per token t: dT, G_t read ─→ u_t solve ─→ y_t store
 ##                (t in token order)                          └─────────┐
 ##            └──→ S ← dEnd ⊙ carry read + Σ_s (dEnd·invd_s ⊙ k_s) [x] u_s
 ##
@@ -51,17 +51,17 @@
 ## - both naive spellings run fp64, the ceramic core runs fp32 state math with family-dtype handoffs
 ## - the judged divergence is the ceramic side's rounding against the fp64 chunked reference structure
 ##
-## | site              | bound                                                                                        |
-## | ----------------- | -------------------------------------------------------------------------------------------- |
-## | cumg (host f32)   | per entry ≤ (i+1)·u₃₂·cmax, cmax the chunk's max abs(cumg) per channel                       |
-## | decay factors     | relative ≤ cErr + u₃₂·abs(cumg) + 4·u₃₂ (log2e multiply, exp2 form)                          |
-## | pair decay        | relative ≤ relT[t] + relT[s] + u₃₂ (dT·invd_s, two exp2 forms plus the product)              |
-## | k·k / q̃·k dots   | Dk·u₃₂ of the absolute sum (elementwise round plus row-sum tree)                             |
-## | S·k̃ / S·q̃ reads | per-channel decay rel terms, Dk·u₃₂ of the absolute sum, the carried state error Σ abs(k)·ΔS |
-## | q̃ scale          | relative ≤ 4·u₃₂ (f32 qScale vs the naive f64 divide, plus the division rounding)            |
-## | u solve           | β·(base error + Σ abs(A)·Δu + ΔA·abs(u) + t·u₃₂·Σ abs(A·u))                                  |
-## | chunk carry       | decayed old state per channel + Σ abs(pd·k)·Δu + cLen·u₃₂·Σ abs(pd·k·u)                      |
-## | y store           | one family RNE, u_fam·abs(y) plus the subnormal grid floor                                   |
+## | site                    | bound                                                                                        |
+## | ----------------------- | -------------------------------------------------------------------------------------------- |
+## | cumulogdecay (host f32) | per entry ≤ (i+1)·u₃₂·cmax, cmax the chunk's max abs(cumulogdecay) per channel               |
+## | decay factors           | relative ≤ cErr + u₃₂·abs(cumulogdecay) + 4·u₃₂ (log2e multiply, exp2 form)                  |
+## | pair decay              | relative ≤ relT[t] + relT[s] + u₃₂ (dT·invd_s, two exp2 forms plus the product)              |
+## | k·k / q̃·k dots         | Dk·u₃₂ of the absolute sum (elementwise round plus row-sum tree)                             |
+## | S·k̃ / S·q̃ reads       | per-channel decay rel terms, Dk·u₃₂ of the absolute sum, the carried state error Σ abs(k)·ΔS |
+## | q̃ scale                | relative ≤ 4·u₃₂ (f32 qScale vs the naive f64 divide, plus the division rounding)            |
+## | u solve                 | β·(base error + Σ abs(A)·Δu + ΔA·abs(u) + t·u₃₂·Σ abs(A·u))                                  |
+## | chunk carry             | decayed old state per channel + Σ abs(pd·k)·Δu + cLen·u₃₂·Σ abs(pd·k·u)                      |
+## | y store                 | one family RNE, u_fam·abs(y) plus the subnormal grid floor                                   |
 ##
 ## - the exponent-sensitivity factors collapse (ln2·log2e = 1), a log-domain error cErr mapping to an equal relative error on exp2(c·log2e)
 ## - the reassociation budget per chunk is C token terms per sum (solve, y, carry) and Dk terms per dot over T/C chunks
@@ -106,7 +106,7 @@
 ##
 ## - the T = 100 case carries a non-divisible tail chunk, 3 full chunks plus 4 tokens
 ## - the overflow fixture's g ≈ −3 per token per channel, the 64-token chunk's
-##   |cumg| crosses the exp2 overflow bound 88.7 (log e units) inside the chunk
+##   |cumulogdecay| crosses the exp2 overflow bound 88.7 (log e units) inside the chunk
 ##
 ## - every case starts from a non-zero random initial state
 ## - the GQA shape keeps both head-mapping terms live, sequence 1 holding independent key heads
@@ -131,46 +131,46 @@ const KdaPrefillMsl = metal:
   proc cer_kda_prefill_fp16_c32(
       state: ptr UncheckedArray[float32],
       y, v: ptr UncheckedArray[float16],
-      k, q, cumg, beta: ptr UncheckedArray[float32],
+      k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanF16(state, y, k, q, cumg, v, beta, qScale,
+    kdaPrefillChunkScanF16(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 32, 16, 8, 32)
 
   proc cer_kda_prefill_fp16_c64(
       state: ptr UncheckedArray[float32],
       y, v: ptr UncheckedArray[float16],
-      k, q, cumg, beta: ptr UncheckedArray[float32],
+      k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanF16(state, y, k, q, cumg, v, beta, qScale,
+    kdaPrefillChunkScanF16(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 32, 16, 8, 64)
 
   proc cer_kda_prefill_fp16_dk64_c32(
       state: ptr UncheckedArray[float32],
       y, v: ptr UncheckedArray[float16],
-      k, q, cumg, beta: ptr UncheckedArray[float32],
+      k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanF16(state, y, k, q, cumg, v, beta, qScale,
+    kdaPrefillChunkScanF16(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 64, 16, 8, 32)
 
   proc cer_kda_prefill_bf16_c32(
       state: ptr UncheckedArray[float32],
       y, v: ptr UncheckedArray[bfloat16],
-      k, q, cumg, beta: ptr UncheckedArray[float32],
+      k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanBf16(state, y, k, q, cumg, v, beta, qScale,
+    kdaPrefillChunkScanBf16(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 32, 16, 8, 32)
 
   proc cer_kda_prefill_bf16_c64(
       state: ptr UncheckedArray[float32],
       y, v: ptr UncheckedArray[bfloat16],
-      k, q, cumg, beta: ptr UncheckedArray[float32],
+      k, q, cumulogdecay, beta: ptr UncheckedArray[float32],
       qScale: float32,
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    kdaPrefillChunkScanBf16(state, y, k, q, cumg, v, beta, qScale,
+    kdaPrefillChunkScanBf16(state, y, k, q, cumulogdecay, v, beta, qScale,
       Hv, Hk, hkRatio, T, 32, 16, 8, 64)
 
 # ─── Host tolerance-model constants ───────────────────────────────────
@@ -233,7 +233,7 @@ proc kdaChunkTraceBars(
     for r in 0 ..< Dv:
       for dk in 0 ..< Dk:
         carry[r * Dk + dk] = s0w.data[(bh * Dv + r) * Dk + dk]
-    var cumgRef = newSeq[float64](chunkLen * Dk)
+    var cumulogdecayRef = newSeq[float64](chunkLen * Dk)
     var relT = newSeq[float64](chunkLen * Dk)
     var uRef = newSeq[float64](chunkLen * Dv)
     var du = newSeq[float64](chunkLen * Dv)
@@ -241,25 +241,25 @@ proc kdaChunkTraceBars(
     while c0 < T:
       let cLen = min(chunkLen, T - c0)
       # reference cumulative log decay in fp64 from g, one row per token per channel,
-      # with the f32 host-cumg drift bound per channel
+      # with the f32 host-cumulogdecay drift bound per channel
       for dk in 0 ..< Dk:
-        cumgRef[dk] = gw.data[(hk * T + c0) * Dk + dk]
+        cumulogdecayRef[dk] = gw.data[(hk * T + c0) * Dk + dk]
       var cmax = newSeq[float64](Dk)
       for dk in 0 ..< Dk:
-        cmax[dk] = abs(cumgRef[dk])
+        cmax[dk] = abs(cumulogdecayRef[dk])
       for i in 1 ..< cLen:
         for dk in 0 ..< Dk:
-          cumgRef[i * Dk + dk] = cumgRef[(i - 1) * Dk + dk] +
+          cumulogdecayRef[i * Dk + dk] = cumulogdecayRef[(i - 1) * Dk + dk] +
             gw.data[(hk * T + c0 + i) * Dk + dk]
       for i in 0 ..< cLen:
         for dk in 0 ..< Dk:
-          cmax[dk] = max(cmax[dk], abs(cumgRef[i * Dk + dk]))
+          cmax[dk] = max(cmax[dk], abs(cumulogdecayRef[i * Dk + dk]))
       for i in 0 ..< cLen:
         for dk in 0 ..< Dk:
-          # decay factor rel, f32 cumg drift + the log2e multiply + the exp2 form
+          # decay factor rel, f32 cumulogdecay drift + the log2e multiply + the exp2 form
           relT[i * Dk + dk] = float64(i + 1) * U32 * cmax[dk] +
-            U32 * abs(cumgRef[i * Dk + dk]) + DecExp
-          if underflowFloors and -cumgRef[i * Dk + dk] * Log2e > FlushLog2:
+            U32 * abs(cumulogdecayRef[i * Dk + dk]) + DecExp
+          if underflowFloors and -cumulogdecayRef[i * Dk + dk] * Log2e > FlushLog2:
             # the per-token decay factor flushes to fp32 zero, the flushed
             # factor's full magnitude joins the bound
             relT[i * Dk + dk] += 1.0
@@ -280,12 +280,12 @@ proc kdaChunkTraceBars(
             let kt = kw.data[(hk * T + gt) * Dk + dk]
             let ks = kw.data[(hk * T + c0 + s) * Dk + dk]
             let qt = qw.data[(hk * T + gt) * Dk + dk] / qScale
-            let pd = exp(cumgRef[t * Dk + dk] - cumgRef[s * Dk + dk])
+            let pd = exp(cumulogdecayRef[t * Dk + dk] - cumulogdecayRef[s * Dk + dk])
             var relPd = relT[t * Dk + dk] + relT[s * Dk + dk] + U32
             if underflowFloors:
-              # the pair decay's argument is cumg_s − cumg_t ≥ 0, a pair past
+              # the pair decay's argument is cumulogdecay_s − cumulogdecay_t ≥ 0, a pair past
               # the flush bound loses its factor to fp32 zero entirely
-              if (cumgRef[s * Dk + dk] - cumgRef[t * Dk + dk]) * Log2e > FlushLog2:
+              if (cumulogdecayRef[s * Dk + dk] - cumulogdecayRef[t * Dk + dk]) * Log2e > FlushLog2:
                 relPd += 1.0
             let kkAbs = pd * abs(kt * ks)
             let qkAbs = pd * abs(qt * ks)
@@ -312,7 +312,7 @@ proc kdaChunkTraceBars(
           var kvRel = 0.0'f64
           var kvN = 0.0'f64
           for dk in 0 ..< Dk:
-            let dTk = exp(cumgRef[t * Dk + dk])
+            let dTk = exp(cumulogdecayRef[t * Dk + dk])
             let term = dTk * kw.data[(hk * T + gt) * Dk + dk] * carry[r * Dk + dk]
             kvN += term
             kvAbs += abs(term)
@@ -344,7 +344,7 @@ proc kdaChunkTraceBars(
           var qvRel = 0.0'f64
           var qvN = 0.0'f64
           for dk in 0 ..< Dk:
-            let dTk = exp(cumgRef[t * Dk + dk])
+            let dTk = exp(cumulogdecayRef[t * Dk + dk])
             let term = dTk * (qw.data[(hk * T + gt) * Dk + dk] / qScale) *
               carry[r * Dk + dk]
             qvN += term
@@ -374,14 +374,14 @@ proc kdaChunkTraceBars(
         for dk in 0 ..< Dk:
           let idx = r * Dk + dk
           let sOld = carry[idx]
-          let dEnd = exp(cumgRef[(cLen - 1) * Dk + dk])
+          let dEnd = exp(cumulogdecayRef[(cLen - 1) * Dk + dk])
           let relEnd = relT[(cLen - 1) * Dk + dk]
           let decTerm = dEnd * sOld
           var sumTerm = 0.0'f64
           var sumAbs = 0.0'f64
           var sumErr = 0.0'f64
           for s in 0 ..< cLen:
-            let pdEnd = exp(cumgRef[(cLen - 1) * Dk + dk] - cumgRef[s * Dk + dk])
+            let pdEnd = exp(cumulogdecayRef[(cLen - 1) * Dk + dk] - cumulogdecayRef[s * Dk + dk])
             let ks = kw.data[(hk * T + c0 + s) * Dk + dk]
             let relPdEnd = relT[(cLen - 1) * Dk + dk] + relT[s * Dk + dk] + U32
             let wAbs = abs(pdEnd * ks)
@@ -418,20 +418,20 @@ proc sliceMat[T](m: NaiveMat[T], row0, rows: int): NaiveMat[T] =
 
 type PrefillInputs = object
   ## One case's seeded inputs, the f32 values shared by the kernel and the naive
-  ## sides through their exact widenings, the per-channel cumg host-computed
+  ## sides through their exact widenings, the per-channel cumulogdecay host-computed
   ##
-  ## | field  | shape              |
-  ## | ------ | ------------------ |
-  ## | q, k   | (B·Hk, T, Dk) f32  |
-  ## | g      | (B·Hk, T, Dk) f32  |
-  ## | cumg   | (B·Hk, T, Dk) f32  |
-  ## | vBits  | (B·Hv, T, Dv)      |
-  ## | beta   | (B·Hv, T) f32      |
-  ## | state0 | (B·Hv, Dv, Dk) f32 |
+  ## | field        | shape              |
+  ## | ------------ | ------------------ |
+  ## | q, k         | (B·Hk, T, Dk) f32  |
+  ## | g            | (B·Hk, T, Dk) f32  |
+  ## | cumulogdecay | (B·Hk, T, Dk) f32  |
+  ## | vBits        | (B·Hv, T, Dv)      |
+  ## | beta         | (B·Hv, T) f32      |
+  ## | state0       | (B·Hv, Dv, Dk) f32 |
   qVals: seq[float32]
   kVals: seq[float32]
   gVals: seq[float32]
-  cumgVals: seq[float32]
+  cumulogdecayVals: seq[float32]
   vBits: seq[uint16]
   betaVals: seq[float32]
   state0: seq[float32]
@@ -451,10 +451,10 @@ proc l2NormalizeRowsF32(dst: var seq[float32], rows, cols: int, rng: var NaiveRn
     for c in 0 ..< cols:
       dst[r * cols + c] = (dst[r * cols + c].float64 * inv).float32
 
-proc hostCumg(dst: var seq[float32], g: seq[float32], qkRows, T, Dk, chunkLen: int) =
+proc hostCumulogdecay(dst: var seq[float32], g: seq[float32], qkRows, T, Dk, chunkLen: int) =
   ## Computes the per-channel f32 cumulative log decay, the chunk-relative prefix
   ## of g per (head, chunk, channel), the kernel's decay input, matching the
-  ## chunked reference's cumg structure.
+  ## chunked reference's cumulogdecay structure.
   for hk in 0 ..< qkRows:
     for t in 0 ..< T:
       for dk in 0 ..< Dk:
@@ -466,7 +466,7 @@ proc hostCumg(dst: var seq[float32], g: seq[float32], qkRows, T, Dk, chunkLen: i
 
 proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkLen: int, betaZero: bool, overflowG = false): PrefillInputs =
   ## `overflowG` generates the decay-overflow fixture's g, |g| ≈ 3 per token
-  ## per channel so the 64-token chunk's |cumg| crosses the exp2 overflow
+  ## per channel so the 64-token chunk's |cumulogdecay| crosses the exp2 overflow
   ## bound 88.7 inside the chunk
   var qVals = newSeq[float32](qkRows * T * Dk)
   var kVals = newSeq[float32](qkRows * T * Dk)
@@ -476,8 +476,8 @@ proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkL
   for i in 0 ..< qkRows * T * Dk:
     gVals[i] = if overflowG: rng.nextF32(-3.2'f32, -2.8'f32)
                else: rng.nextF32(-0.5'f32, -0.01'f32)
-  var cumgVals = newSeq[float32](qkRows * T * Dk)
-  hostCumg(cumgVals, gVals, qkRows, T, Dk, chunkLen)
+  var cumulogdecayVals = newSeq[float32](qkRows * T * Dk)
+  hostCumulogdecay(cumulogdecayVals, gVals, qkRows, T, Dk, chunkLen)
   var vBits = newSeq[uint16](bhMax * T * Dv)
   for i in 0 ..< bhMax * T * Dv:
     vBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
@@ -488,13 +488,13 @@ proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkL
   for i in 0 ..< bhMax * Dv * Dk:
     state0[i] = rng.nextF32(-1.0'f32, 1.0'f32)
   result = PrefillInputs(qVals: qVals, kVals: kVals, gVals: gVals,
-    cumgVals: cumgVals, vBits: vBits, betaVals: betaVals, state0: state0)
+    cumulogdecayVals: cumulogdecayVals, vBits: vBits, betaVals: betaVals, state0: state0)
 
 proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk: int, betaZero: bool, seed: uint64, label: string, overflowG = false) =
   ## One (family dtype, shape) combination, judged per element against the fp64 chunked
   ## reference and the fp64 per-token walk under the band model, relaunched bit-identical.
   ##
-  ## `overflowG` runs the decay-overflow fixture, |cumg| past the exp2 overflow
+  ## `overflowG` runs the decay-overflow fixture, |cumulogdecay| past the exp2 overflow
   ## bound 88.7 inside the first chunk
   ##
   ## - the judgment adds the exact NaN/Inf check on y and the carried state
@@ -519,17 +519,17 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
   var yB = allocPageBuf[uint16](yElems)
   var kB = allocPageBuf[float32](qkRows * T * Dk)
   var qB = allocPageBuf[float32](qkRows * T * Dk)
-  var cumgB = allocPageBuf[float32](qkRows * T * Dk)
+  var cumulogdecayB = allocPageBuf[float32](qkRows * T * Dk)
   var vB = allocPageBuf[uint16](bhMax * T * Dv)
   var betaB = allocPageBuf[float32](bhMax * T)
   defer:
     freePageBuf(stateB); freePageBuf(yB); freePageBuf(kB); freePageBuf(qB)
-    freePageBuf(cumgB); freePageBuf(vB); freePageBuf(betaB)
+    freePageBuf(cumulogdecayB); freePageBuf(vB); freePageBuf(betaB)
   var statePA = stateB.pa()
   var yPA = yB.pa()
   var kPA = kB.pa()
   var qPA = qB.pa()
-  var cumgPA = cumgB.pa()
+  var cumulogdecayPA = cumulogdecayB.pa()
   var vPA = vB.pa()
   var betaPA = betaB.pa()
 
@@ -547,7 +547,7 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
     for i in 0 ..< qkRows * T * Dk:
       kB.hostPtr[i] = si.kVals[i]
       qB.hostPtr[i] = si.qVals[i]
-      cumgB.hostPtr[i] = si.cumgVals[i]
+      cumulogdecayB.hostPtr[i] = si.cumulogdecayVals[i]
     for i in 0 ..< bhMax * T * Dv:
       vB.hostPtr[i] = si.vBits[i]
     for i in 0 ..< bhMax * T:
@@ -560,7 +560,7 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
   proc launch(si: PrefillInputs) =
     engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
       (kernelName, statePA,
-        (yPA, vPA, kPA, qPA, cumgPA, betaPA, qScale,
+        (yPA, vPA, kPA, qPA, cumulogdecayPA, betaPA, qScale,
           int32(Hv), int32(Hk), int32(hkRatio), int32(T)))
     inc launches
 
@@ -569,7 +569,7 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
     assertTailZero(stateB, stateElems)
     assertReadUnchanged(kB, si.kVals)
     assertReadUnchanged(qB, si.qVals)
-    assertReadUnchanged(cumgB, si.cumgVals)
+    assertReadUnchanged(cumulogdecayB, si.cumulogdecayVals)
     assertReadUnchanged(vB, si.vBits)
     assertReadUnchanged(betaB, si.betaVals)
 
@@ -809,7 +809,7 @@ proc main =
   secBf16Gqa64()
 
   proc secF16Overflow =
-    # the decay-overflow fixture, |cumg| crosses the exp2 overflow bound 88.7
+    # the decay-overflow fixture, |cumulogdecay| crosses the exp2 overflow bound 88.7
     # inside the first 64-token chunk (g ≈ −3 per token per channel)
     let t0 = epochTime()
     runCase(engine, famF16, 1, 1, 1, 1, 64, 64, 32, false, 0xC04D04BB'u64,
