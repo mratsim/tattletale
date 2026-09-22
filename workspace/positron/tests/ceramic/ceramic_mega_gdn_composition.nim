@@ -58,6 +58,7 @@ from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut,
     moeDecodeBody
 import ceramic_pagebuf
 import mega_bounded_wait
+import ../../src/kernels/ceramic/launch_contract
 import ceramic_fam
 
 const RedSabotage* {.booldefine.} = false
@@ -540,6 +541,7 @@ proc launchMega(engine: HwEngine; m: var MegaBuffers) =
   var alPA = m.aLog.pa()
   var dbPA = m.dtBias.pa()
   proc dispatch(): bool {.gcsafe.} =
+    assertMegaGrid(950, 32, StageEnds, true)
     engine.run << (grid: (950, 1, 1), blk: (32, 1, 1)) >>
       ("qwen35_gdn_layer_bf16", cPA,
         (bfAPA, f32APA, xPA, rPA, stPA, rgPA, n1PA, qkvPA, zPA, aPA,

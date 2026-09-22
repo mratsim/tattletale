@@ -20,10 +20,10 @@
 ##
 ## Shared internals with `moe_fwd.nim`:
 ##
-## | aspect     | value                                                                                                                                    |
-## | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees, the `own` fragment-cell mapping                                    |
-## | extraction | none yet, the routers' score chains and atom layouts differing, a tree-only extraction would split each router's contract in two modules |
+## | aspect     | value                                                                                                 |
+## | ---------- | ----------------------------------------------------------------------------------------------------- |
+## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees, the `own` fragment-cell mapping |
+## | extraction | the routers' score chains and atom layouts differ, the reduction trees stay module-local              |
 ##
 import math_consts
 import workspace/crucible

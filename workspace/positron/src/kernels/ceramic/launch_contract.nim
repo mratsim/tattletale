@@ -155,3 +155,24 @@ func assertCumgFinite*(cumg: PtrArg[float32], heads, tokens, channels, chunkLen:
           doAssert d <= prev,
             "cumg must be monotone non-increasing within the chunk, entry " & $d
           prev = d
+
+func assertMegaGrid*(gridX, blkX: SomeInteger, stageEnds: array[13, uint32], haveNorm: bool) {.inline.} =
+  ## Asserts the qwen35_moe megakernel launch's geometry against the kernel's
+  ## derived stage table.
+  ##
+  ## Contract:
+  ## - the grid is exactly the walk's threadgroup count, `stageEnds[12]` (950)
+  ##   with the residual+norm variant, `stageEnds[9]` (876) without
+  ## - `blkX` 32, `assertLanes32`'s contract
+  ##
+  ## A wrong grid literal launches extra threadgroups that the dispatcher's
+  ## stage bounds leave idle, or strands the trailing stages unlaunched,
+  ## silently in both cases
+  ##
+  ## Example:
+  ##   `assertMegaGrid(950, 32, StageEnds, true)` right before `engine.run`.
+  doAssert int(gridX) == (if haveNorm: int(stageEnds[12])
+                          else: int(stageEnds[9])),
+    "the mega walk's grid must equal the stage table's end (" &
+    (if haveNorm: "StageEnds[12]" else: "StageEnds[9]") & "), got " & $gridX
+  assertLanes32(blkX)

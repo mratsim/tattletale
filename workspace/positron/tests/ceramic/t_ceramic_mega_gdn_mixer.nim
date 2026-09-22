@@ -48,6 +48,7 @@ import ../naive/naive_gdn
 import ../naive/naive_layer_ops
 import ceramic_pagebuf
 import mega_bounded_wait
+import ../../src/kernels/ceramic/launch_contract
 import ceramic_fam
 
 # ─── Band-model constants (the composition tier's two-term model) ─────
@@ -484,6 +485,7 @@ proc launchMixer(engine: HwEngine; m: var MegaBuffers) =
   var alPA = m.aLog.pa()
   var dbPA = m.dtBias.pa()
   proc dispatch(): bool {.gcsafe.} =
+    assertMegaGrid(int(StageEnds[9]), 32, StageEnds, false)
     engine.run << (grid: (int(StageEnds[9]), 1, 1), blk: (32, 1, 1)) >>
       ("qwen35_gdn_mixer_bf16", cPA,
         (bfAPA, f32APA, xPA, rPA, stPA, rgPA, n1PA, qkvPA, zPA, aPA,
