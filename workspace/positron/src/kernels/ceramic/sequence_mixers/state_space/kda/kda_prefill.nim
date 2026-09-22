@@ -95,21 +95,6 @@ import workspace/ceramic
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
-const PairdecaySabotage* {.booldefine.} = false
-  ## Compile-time sabotage switch for the pairdecay overflow fixture
-  ##
-  ## - restores the factorized spelling dT·exp2(−cumg_s·log2e) at all six
-  ##   pairdecay sites, the two forms are algebraically identical
-  ## - the factorized form overflows exp2 once |cumg_s| > 128/log2e ≈ 88.7,
-  ##   the Inf·dT product NaNs the state (see the per-site notes)
-  ## - default builds leave the factorized spelling out
-  ##
-  ## Sabotage run:
-  ##   nim c -r -d:release -d:PairdecaySabotage --outdir:build/tests --nimcache:nimcache/red tests/ceramic/t_ceramic_kda_prefill.nim
-  ##
-  ## Red outcome:
-  ##   the overflow fixture's finiteness assert fires, y not finite at element 464 (fcNan)
-
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
 proc kdaPrefillChunkScanBf16At*(
@@ -225,20 +210,11 @@ proc kdaPrefillChunkScanBf16At*(
         #   |cumg_s| ≳ 88.7, the resulting Inf × dT → 0 product NaNs the carry
         #   and the persistent state
         var pdT: rt_l(float32, TileR, Dk)
-        when PairdecaySabotage:
-          # the factorized spelling dT·exp2(−cumg_s·log2e), exp2 gives Inf
-          # once |cumg_s| > 128/log2e ≈ 88.7, the Inf·dT product NaNs the state
-          for n in 0 ..< rowTiles:
-            for m in 0 ..< colTiles:
-              for f in 0 ..< vpt:
-                pdT.frags[n][m].frag[f] = dT.frags[n][m].frag[f] *
-                  exp2(-cumgS.frags[n][m].frag[f] * Log2e)
-        else:
-          for n in 0 ..< rowTiles:
-            for m in 0 ..< colTiles:
-              for f in 0 ..< vpt:
-                pdT.frags[n][m].frag[f] = exp2(
-                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+        for n in 0 ..< rowTiles:
+          for m in 0 ..< colTiles:
+            for f in 0 ..< vpt:
+              pdT.frags[n][m].frag[f] = exp2(
+                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         kkProd.mul(kkProd, pdT)
@@ -270,20 +246,11 @@ proc kdaPrefillChunkScanBf16At*(
         var pdT: rt_l(float32, TileR, Dk)
         # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
         # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
-        when PairdecaySabotage:
-          # the factorized spelling dT·exp2(−cumg_s·log2e), exp2 gives Inf
-          # once |cumg_s| > 128/log2e ≈ 88.7, the Inf·dT product NaNs the state
-          for n in 0 ..< rowTiles:
-            for m in 0 ..< colTiles:
-              for f in 0 ..< vpt:
-                pdT.frags[n][m].frag[f] = dT.frags[n][m].frag[f] *
-                  exp2(-cumgS.frags[n][m].frag[f] * Log2e)
-        else:
-          for n in 0 ..< rowTiles:
-            for m in 0 ..< colTiles:
-              for f in 0 ..< vpt:
-                pdT.frags[n][m].frag[f] = exp2(
-                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+        for n in 0 ..< rowTiles:
+          for m in 0 ..< colTiles:
+            for f in 0 ..< vpt:
+              pdT.frags[n][m].frag[f] = exp2(
+                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         qkProd.mul(qkProd, pdT)
@@ -311,20 +278,11 @@ proc kdaPrefillChunkScanBf16At*(
       # pairdecay(end, s)[dk] = exp2((cumg_end[dk] − cumg_s[dk])·log2e) per key channel,
       # the difference form (the token pairdecay note carries the overflow bound)
       var pdEnd: rt_l(float32, TileR, Dk)
-      when PairdecaySabotage:
-        # the factorized spelling dEnd·exp2(−cumg_s·log2e), the token
-        # pairdecay note carries the overflow bound
-        for n in 0 ..< rowTiles:
-          for m in 0 ..< colTiles:
-            for f in 0 ..< vpt:
-              pdEnd.frags[n][m].frag[f] = dEnd.frags[n][m].frag[f] *
-                exp2(-cumgS.frags[n][m].frag[f] * Log2e)
-      else:
-        for n in 0 ..< rowTiles:
-          for m in 0 ..< colTiles:
-            for f in 0 ..< vpt:
-              pdEnd.frags[n][m].frag[f] = exp2(
-                (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for f in 0 ..< vpt:
+            pdEnd.frags[n][m].frag[f] = exp2(
+              (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
       pdEnd.mul(pdEnd, ks32)
       let ws = uLoc[sIdx]
       for n in 0 ..< rowTiles:
@@ -448,20 +406,11 @@ proc kdaPrefillChunkScanF16At*(
         #   |cumg_s| ≳ 88.7, the resulting Inf × dT → 0 product NaNs the carry
         #   and the persistent state
         var pdT: rt_l(float32, TileR, Dk)
-        when PairdecaySabotage:
-          # the factorized spelling dT·exp2(−cumg_s·log2e), exp2 gives Inf
-          # once |cumg_s| > 128/log2e ≈ 88.7, the Inf·dT product NaNs the state
-          for n in 0 ..< rowTiles:
-            for m in 0 ..< colTiles:
-              for f in 0 ..< vpt:
-                pdT.frags[n][m].frag[f] = dT.frags[n][m].frag[f] *
-                  exp2(-cumgS.frags[n][m].frag[f] * Log2e)
-        else:
-          for n in 0 ..< rowTiles:
-            for m in 0 ..< colTiles:
-              for f in 0 ..< vpt:
-                pdT.frags[n][m].frag[f] = exp2(
-                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+        for n in 0 ..< rowTiles:
+          for m in 0 ..< colTiles:
+            for f in 0 ..< vpt:
+              pdT.frags[n][m].frag[f] = exp2(
+                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         kkProd.mul(kkProd, pdT)
@@ -493,20 +442,11 @@ proc kdaPrefillChunkScanF16At*(
         var pdT: rt_l(float32, TileR, Dk)
         # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
         # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
-        when PairdecaySabotage:
-          # the factorized spelling dT·exp2(−cumg_s·log2e), exp2 gives Inf
-          # once |cumg_s| > 128/log2e ≈ 88.7, the Inf·dT product NaNs the state
-          for n in 0 ..< rowTiles:
-            for m in 0 ..< colTiles:
-              for f in 0 ..< vpt:
-                pdT.frags[n][m].frag[f] = dT.frags[n][m].frag[f] *
-                  exp2(-cumgS.frags[n][m].frag[f] * Log2e)
-        else:
-          for n in 0 ..< rowTiles:
-            for m in 0 ..< colTiles:
-              for f in 0 ..< vpt:
-                pdT.frags[n][m].frag[f] = exp2(
-                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+        for n in 0 ..< rowTiles:
+          for m in 0 ..< colTiles:
+            for f in 0 ..< vpt:
+              pdT.frags[n][m].frag[f] = exp2(
+                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         qkProd.mul(qkProd, pdT)
@@ -534,20 +474,11 @@ proc kdaPrefillChunkScanF16At*(
       # pairdecay(end, s)[dk] = exp2((cumg_end[dk] − cumg_s[dk])·log2e) per key channel,
       # the difference form (the token pairdecay note carries the overflow bound)
       var pdEnd: rt_l(float32, TileR, Dk)
-      when PairdecaySabotage:
-        # the factorized spelling dEnd·exp2(−cumg_s·log2e), the token
-        # pairdecay note carries the overflow bound
-        for n in 0 ..< rowTiles:
-          for m in 0 ..< colTiles:
-            for f in 0 ..< vpt:
-              pdEnd.frags[n][m].frag[f] = dEnd.frags[n][m].frag[f] *
-                exp2(-cumgS.frags[n][m].frag[f] * Log2e)
-      else:
-        for n in 0 ..< rowTiles:
-          for m in 0 ..< colTiles:
-            for f in 0 ..< vpt:
-              pdEnd.frags[n][m].frag[f] = exp2(
-                (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for f in 0 ..< vpt:
+            pdEnd.frags[n][m].frag[f] = exp2(
+              (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
       pdEnd.mul(pdEnd, ks32)
       let ws = uLoc[sIdx]
       for n in 0 ..< rowTiles:

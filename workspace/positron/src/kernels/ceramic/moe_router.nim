@@ -33,30 +33,6 @@ import ./tile_io_rows
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
-const RenormSabotage* {.booldefine.} = false
-  ## Compile-time sabotage switch for the poisoned-router fixture, the renorm
-  ## half of the pre-fix spelling restored, the unguarded zero-sum 0/0 division.
-  ##
-  ## Sabotage run:
-  ##   nim c -r -d:release -d:RenormSabotage --outdir:build/tests --nimcache:nimcache/red tests/ceramic/t_ceramic_moe_router.nim
-  ##
-  ## Red outcome:
-  ##   the poisoned pass's weight-zero assert fires, slot 0 weight 0x7fc0 (NaN)
-
-const SentinelSabotage* {.booldefine.} = false
-  ## Compile-time sabotage switch for the poisoned-router fixture, restoring
-  ## the unmatched-branch half of the pre-fix spelling
-  ##
-  ## - the raw sentinel candidate (1 shl 30) stored as the expert id
-  ## - downstream expert-row reads then run off the expert weight's end
-  ## - default builds leave both pre-fix spellings out
-  ##
-  ## Sabotage run:
-  ##   nim c -r -d:release -d:SentinelSabotage --outdir:build/tests --nimcache:nimcache/red tests/ceramic/t_ceramic_moe_router.nim
-  ##
-  ## Red outcome:
-  ##   the poisoned pass's expert-id range assert fires, id 1073741824 (1 shl 30)
-
 # ─── Module-local bf16 row-bounded tile load ─────────────────────────
 # tile_io_rows ships fp16 variants only, the bf16 guard lives module-local
 # (the silu_and_mul and paged_attn precedent)
@@ -244,10 +220,7 @@ proc topkScores[A: static MmaAtom; F, K: static int](
       # - the ids stay in [0, 8·F), the downstream expert-row reads stay in bounds
       # - with every score poisoned all K slots take this branch
       #   and the normalized weights sum to zero
-      when SentinelSabotage:
-        ids[slot] = cand
-      else:
-        ids[slot] = int32(8 * F - 1)
+      ids[slot] = int32(8 * F - 1)
       w[slot] = 0.0'f32
     else:
       ids[slot] = cand
@@ -324,15 +297,12 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
   for slot in 0 ..< K:
     sumW += w[slot]
   for slot in 0 ..< K:
-    when RenormSabotage:
+    if sumW > 0.0'f32:
       w[slot] = w[slot] / sumW * Scale
     else:
-      if sumW > 0.0'f32:
-        w[slot] = w[slot] / sumW * Scale
-      else:
-        # every weight is zero (the poisoned pass) or the sum underflowed,
-        # a 0/0 store would NaN the weight and everything downstream
-        w[slot] = 0.0'f32
+      # every weight is zero (the poisoned pass) or the sum underflowed,
+      # a 0/0 store would NaN the weight and everything downstream
+      w[slot] = 0.0'f32
     when El is bfloat16:
       w[slot] = w[slot].bfloat16.float32
     else:
