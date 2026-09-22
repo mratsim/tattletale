@@ -1024,9 +1024,10 @@ when defined(nimAllocStats):
   # Micro attribution over a 10-message for-loop context:
   # a warm-up render per template stays uncounted, then `getAllocStats()` deltas measure
   # the counted renders. DictGet lookup floors are measured in the same run.
-  # Every assert below is an exact equality against a value this binary just measured:
+  # Every assert below is an upper bound against a value this binary just measured, keeping
+  # the frozen resource cap intact across an alloc-structure refactor:
   # - an emit-role render costs nothing beyond the loop machinery, its lookups included
-  # - an emit-content render costs exactly one lookup copy per emit, the accepted residual
+  # - an emit-content render costs at most one lookup copy per emit, the accepted residual
   # - a punctuator evaluation and the pending-piece move of an emit string cost 0
   block allocMicro:
     const msgCount = 10
@@ -1074,13 +1075,13 @@ when defined(nimAllocStats):
     let bothSrc = "{% for m in messages %}{{ m.role }}: {{ m.content }}\n{% endfor %}"
     let bothRenders = countRenders(bothSrc, iters)
 
-    doAssert roleRenders == loopOnly + iters * msgCount * dgRole,
+    doAssert roleRenders <= loopOnly + iters * msgCount * dgRole,
         "the emit-role render cost " & $(roleRenders - loopOnly) &
         " allocs beyond the loop baseline"
-    doAssert contentRenders == loopOnly + iters * msgCount * dgContent,
+    doAssert contentRenders <= loopOnly + iters * msgCount * dgContent,
         "the emit-content render cost " & $(contentRenders - loopOnly) &
         " allocs beyond the loop baseline"
-    doAssert bothRenders == loopOnly + iters * msgCount * (dgRole + dgContent),
+    doAssert bothRenders <= loopOnly + iters * msgCount * (dgRole + dgContent),
         "the two-emit render cost " & $(bothRenders - loopOnly) &
         " allocs beyond the loop baseline"
     doAssert (roleRenders - loopOnly) div iters <= msgCount and
@@ -1120,7 +1121,7 @@ when defined(nimAllocStats):
     let tjAllocs = allocsOf:
       for _ in 0 ..< iters:
         discard toJson(tools)
-    doAssert tjAllocs == 2 * iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
+    doAssert tjAllocs <= 2 * iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
         " allocations per call against the measured two"
 
     # The same schema through the pull render, driver setup uncounted. The counted region
@@ -1153,7 +1154,7 @@ when defined(nimAllocStats):
           if n == 0:
             break
       renderAllocs += renderCost
-    doAssert renderAllocs == 3 * iters, "the tojson pull render cost " &
+    doAssert renderAllocs <= 3 * iters, "the tojson pull render cost " &
         $(renderAllocs div iters) & " allocations per render against the measured three"
 
     # A container emit costs one allocation per emit for the lookup copy plus one per
@@ -1197,11 +1198,11 @@ when defined(nimAllocStats):
     let strEmits = countRenders("{% for m in messages %}{{ m.n }}{% endfor %}", iters)
     let dictEmits = countRenders("{% for m in messages %}{{ m }}{% endfor %}", iters)
     # The runtime-built message values keep the engine's one-lookup-copy residual per emit.
-    doAssert strEmits == loopOnly + iters * 10, "the string emit cost " &
+    doAssert strEmits <= loopOnly + iters * 10, "the string emit cost " &
         $(strEmits - loopOnly) & " allocations beyond the loop baseline"
     # A container emit through the lazy piece costs one allocation per emit over the string
     # emit and one per render for the serializer's container stack.
-    doAssert dictEmits == strEmits + iters * 11, "the container emit cost " &
+    doAssert dictEmits <= strEmits + iters * 11, "the container emit cost " &
         $(dictEmits - strEmits) & " allocations beyond the string emit"
 
     echo "t_corpus alloc: tojson direct ", tjAllocs div iters, "/call, tojson render ",
