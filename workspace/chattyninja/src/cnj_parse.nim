@@ -109,6 +109,45 @@ func atLineStart(src: openArray[char], at: int): bool =
     dec i
   i < 0 or src[i] == '\n'
 
+func tagBounds(src: openArray[char], innerLo, innerHi: int): (int, int, bool, bool) =
+  ## Splits a tag's inside against its `-` markers:
+  ## the marker-free span, plus the strip flags,
+  ## `stripBefore` for a `{%-`-shaped open, `stripAfter` for a `-%}`-shaped close.
+  var lo = innerLo
+  var hi = innerHi
+  let stripBefore = lo < hi and src[lo] == '-'
+  let stripAfter = hi > lo and src[hi - 1] == '-'
+  if stripBefore:
+    inc lo
+  if stripAfter:
+    dec hi
+  (lo, hi, stripBefore, stripAfter)
+
+func runBeforeTag(src: openArray[char], lo, hi, openAt: int, stripBefore, blockTag: bool): int =
+  ## Resolves the whitespace of the text run before a tag, returning the run's new end.
+  ##
+  ## - a `{%-`-shaped open strips every whitespace byte of the run's tail
+  ## - otherwise only blanks precede the tag on its line, `lstrip_blocks` stripping
+  ##   those blanks of a block or comment tag
+  result = hi
+  if stripBefore:
+    while result > lo and src[result - 1] in cnj_types.Whitespace:
+      dec result
+  elif blockTag and src.atLineStart(openAt):
+    while result > lo and src[result - 1] in {' ', '\t'}:
+      dec result
+
+func passTagClose(p: var Parser, afterTag: int, stripAfter, blockTag: bool) =
+  ## Steps the cursor past a tag's close and records the trim_blocks flag for the next run:
+  ## a `-%}`-shaped close skips the whitespace run after it, and one newline of the next
+  ## run is dropped when the tag is a block or comment tag.
+  var j = afterTag
+  if stripAfter:
+    while j < p.src.len and p.src[j] in cnj_types.Whitespace:
+      inc j
+  p.i = j
+  p.pendBr = blockTag
+
 func findTagClose(src: openArray[char], at, stop: int, close: string): int =
   ## Returns the offset of `close` at or after `at`, skipping quoted literals so a closing marker
   ## inside a string does not end the construct. Raises when the construct is never closed.
@@ -152,12 +191,13 @@ func nextOpen(src: openArray[char], at, stop: int): int =
 func splitTags(p: var Parser): Tag =
   ## Produces the next tag of the split, one call per tag:
   ## a whitespace-resolved text run or one `{%`/`{{` tag row, scanned from the parser's cursor.
-  ## - a tag row scanned together with the text run before it waits in `pending`, delivered
-  ##   on the next call
-  ## - the end of the template is the `tkEnd` sentinel
-  ## - every pass that returns no tag still moves the scan cursor past the tag it consumed,
-  ##   so the loop cannot revisit a tag, an unclosed construct raising instead
-  ## - raises `JinjaError` on an unterminated comment, tag or raw body
+  ##
+  ## | Property    | Contract                                                           |
+  ## | ----------- | ------------------------------------------------------------------ |
+  ## | pending     | a tag row scanned with the text run before it, delivered next call |
+  ## | end         | the `tkEnd` sentinel at the template's end                         |
+  ## | termination | a tagless pass still moves the scan cursor, an unclosed raise      |
+  ## | unclosed    | `JinjaError` on an unterminated comment, tag or raw body           |
   if p.pending.kind != tkEnd:
     result = p.pending
     p.pending = Tag()
@@ -189,28 +229,9 @@ func splitTags(p: var Parser): Tag =
         #   `-#}` the run after the tag
         #   trim_blocks one newline after it
         afterTag = c + 2
-        var innerLo = openAt + 2
-        var innerHi = c
-        let stripBefore = innerLo < innerHi and p.src[innerLo] == '-'
-        stripAfter = innerHi > innerLo and p.src[innerHi - 1] == '-'
-        if stripBefore:
-          inc innerLo
-        if stripAfter:
-          dec innerHi
-        if stripBefore:
-          while lo < hi and p.src[hi - 1] in cnj_types.Whitespace:
-            dec hi
-        elif p.src.atLineStart(openAt):
-          while lo < hi and p.src[hi - 1] in {' ', '\t'}:
-            dec hi
-        if stripAfter:
-          var j = afterTag
-          while j < stop and p.src[j] in cnj_types.Whitespace:
-            inc j
-          p.i = j
-        else:
-          p.i = afterTag
-        p.pendBr = true
+        let (_, _, stripBefore, stripAfter) = p.src.tagBounds(openAt + 2, c)
+        hi = p.src.runBeforeTag(lo, hi, openAt, stripBefore, true)
+        p.passTagClose(afterTag, stripAfter, true)
         if lo < hi:
           return Tag(kind: tkText, lo: int32 lo, hi: int32 hi, tLo: 0, tHi: 0)
         continue
@@ -224,14 +245,8 @@ func splitTags(p: var Parser): Tag =
       if c < 0:
         raise jinjaErr("unclosed " & (if isVar: "`{{`" else: "`{%`") & " opened at byte " & $openAt, openAt)
       afterTag = c + 2
-      var innerLo = bodyStart
-      var innerHi = c
-      let stripBefore = innerLo < innerHi and p.src[innerLo] == '-'
-      if stripBefore:
-        inc innerLo
-      stripAfter = innerHi > innerLo and p.src[innerHi - 1] == '-'
-      if stripAfter:
-        dec innerHi
+      let (innerLo, innerHi, stripBefore, tagStripAfter) = p.src.tagBounds(bodyStart, c)
+      stripAfter = tagStripAfter
       if not isVar:
         var k = innerLo
         while k < innerHi and p.src[k] in cnj_types.Whitespace:
@@ -248,6 +263,7 @@ func splitTags(p: var Parser): Tag =
         var endOpen = -1   # the closing tag's `{`
         var endDash = false # the closing tag carries `{%-`
         var endAfterTag = 0 # offset just past the closing tag's `%}`
+        var endStripAfter = false # the closing tag carries `- %}`
         var i = c + 2
         while i < stop:
           if p.src.at("{%", i):
@@ -272,7 +288,7 @@ func splitTags(p: var Parser): Tag =
                 endOpen = i
                 endDash = dash
                 endAfterTag = k + 2
-                stripAfter = dashAfter
+                endStripAfter = dashAfter
                 break
             # the `{%` was body text, the scan resumes past it
             inc i, 2
@@ -298,22 +314,10 @@ func splitTags(p: var Parser): Tag =
         # the body, the dashed opening's leading-whitespace strip covering it already
         if rawLo < rawHi and p.src[rawLo] == '\n':
           inc rawLo
-        if stripAfter:
-          var j = endAfterTag
-          while j < stop and p.src[j] in cnj_types.Whitespace:
-            inc j
-          p.i = j
-        else:
-          p.i = endAfterTag
-        p.pendBr = true
+        p.passTagClose(endAfterTag, endStripAfter, true)
         # One text run before the raw tag is real output under the open tag's
         # whitespace rules, delivered first, the body queueing in `pending` after it.
-        if stripBefore:
-          while lo < hi and p.src[hi - 1] in cnj_types.Whitespace:
-            dec hi
-        elif p.src.atLineStart(openAt):
-          while lo < hi and p.src[hi - 1] in {' ', '\t'}:
-            dec hi
+        hi = p.src.runBeforeTag(lo, hi, openAt, stripBefore, true)
         if lo < hi:
           p.pending = Tag(kind: tkText, lo: int32 rawLo, hi: int32 rawHi, tLo: 0, tHi: 0)
           return Tag(kind: tkText, lo: int32 lo, hi: int32 hi, tLo: 0, tHi: 0)
@@ -321,25 +325,13 @@ func splitTags(p: var Parser): Tag =
       kind = if isVar: tkVariable else: tkBlock
       tLo = innerLo
       tHi = innerHi
-      if stripBefore:
-        while lo < hi and p.src[hi - 1] in cnj_types.Whitespace:
-          dec hi
-      elif kind == tkBlock and p.src.atLineStart(openAt):
-        while lo < hi and p.src[hi - 1] in {' ', '\t'}:
-          dec hi
+      hi = p.src.runBeforeTag(lo, hi, openAt, stripBefore, kind == tkBlock)
     if openAt >= stop:
       p.done = true
       if lo < hi:
         return Tag(kind: tkText, lo: int32 lo, hi: int32 hi, tLo: 0, tHi: 0)
       return Tag()
-    if stripAfter:
-      var j = afterTag
-      while j < stop and p.src[j] in cnj_types.Whitespace:
-        inc j
-      p.i = j
-    else:
-      p.i = afterTag
-    p.pendBr = kind == tkBlock
+    p.passTagClose(afterTag, stripAfter, kind == tkBlock)
     if lo < hi:
       p.pending = Tag(kind: kind, lo: 0, hi: 0, tLo: int32 tLo, tHi: int32 tHi)
       return Tag(kind: tkText, lo: int32 lo, hi: int32 hi, tLo: 0, tHi: 0)
