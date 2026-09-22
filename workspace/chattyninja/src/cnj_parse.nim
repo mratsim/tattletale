@@ -45,6 +45,9 @@
 # An unterminated construct is a `JinjaError` naming the construct and its byte offset,
 # so a truncated template fails at load with that error, never renders short.
 
+# Public API:
+#   parseTemplate. Every other entry stays parse-tier plumbing between the src modules.
+
 import std/[strbasics, strutils]
 import cnj_types, jinja_data_model
 import workspace/data_structures/src/small_seqs

@@ -19,6 +19,9 @@
 # Run:
 #   from the repo root, `nim test_chattyninja` builds and runs every suite with its variants.
 
+# Public API:
+#   startRender, pull, pullAll and renderToString. Everything else is engine plumbing.
+
 import std/unicode
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
 
