@@ -57,6 +57,7 @@ import ../naive/naive_layer_ops
 from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut,
     moeDecodeBody
 import ceramic_pagebuf
+import mega_bounded_wait
 
 const RedSabotage* {.booldefine.} = false
 const debugOrow {.booldefine.} = false
@@ -514,10 +515,11 @@ proc fillWeights(m: var MegaBuffers; w: Weights) =
   fillF32(m.aLog, w.aLog)
 
 proc launchMega(engine: HwEngine; m: var MegaBuffers) =
-  ## One launch over the zeroed counters, the stage counters checked
-  ## against the recorded per-stage threadgroup totals.
-  for i in 0 ..< NumCounters:
-    m.counters.hostPtr[i] = 0
+  ## One launch, no host-side counter zeroing. The kernel re-zeroes
+  ## counters at the launch's end and the page allocator's zero fill covers
+  ## the first launch, so the post-launch counters read zero exactly.
+  ##
+  ## - the per-stage threadgroup totals stay statically recorded in `WaveCounts`
   var cPA = m.counters.pa()
   var bfAPA = m.bfA.pa()
   var f32APA = m.f32A.pa()
@@ -543,14 +545,17 @@ proc launchMega(engine: HwEngine; m: var MegaBuffers) =
   var gvPA = m.sharedGVW.pa()
   var alPA = m.aLog.pa()
   var dbPA = m.dtBias.pa()
-  engine.run << (grid: (950, 1, 1), blk: (32, 1, 1)) >>
-    ("qwen35_gdn_layer_bf16", cPA,
-      (bfAPA, f32APA, xPA, rPA, stPA, rgPA, n1PA, qkvPA, zPA, aPA,
-       bPA, cvPA, onPA, opPA, n2PA, rtPA, guPA, dnPA,
-       sgPA, suPA, sdPA, gvPA, alPA, dbPA, Eps))
+  proc dispatch(): bool {.gcsafe.} =
+    engine.run << (grid: (950, 1, 1), blk: (32, 1, 1)) >>
+      ("qwen35_gdn_layer_bf16", cPA,
+        (bfAPA, f32APA, xPA, rPA, stPA, rgPA, n1PA, qkvPA, zPA, aPA,
+         bPA, cvPA, onPA, opPA, n2PA, rtPA, guPA, dnPA,
+         sgPA, suPA, sdPA, gvPA, alPA, dbPA, Eps))
+    result = true
+  runMegaBounded(engine, dispatch, m.counters.hostPtr, StageNames)
   for i in 0 ..< NumCounters:
-    doAssert m.counters.hostPtr[i] == WaveCounts[i],
-      &"stage counter {i} {m.counters.hostPtr[i]} want {WaveCounts[i]}"
+    doAssert m.counters.hostPtr[i] == 0'u32,
+      &"stage counter {i} {m.counters.hostPtr[i]} want 0 (the launch-end reset)"
 proc snapMega(m: MegaBuffers): Snap =
   ## One launch's full snapshot.
   result.bf = readInto(m.bfA.hostPtr, BfArenaLen)

@@ -143,6 +143,12 @@ const WaveCounts*: array[13, uint32] = [1'u32, 128, 64, 2, 128, 4, 1, 512,
     4, 32, 1, 9, 64]
     ## Per-stage threadgroup totals, the stage counters' expected counts
     ## summing to the 950-threadgroup grid.
+const StageNames*: array[13, string] = [
+    "norm1+residual", "qkv-gemv", "z-gemv", "ab-proj", "conv", "qk-l2norm",
+    "gate-values", "gdn-state", "o-norm", "out-proj", "fold+norm2",
+    "moe-fwd", "moe-merge"]
+  ## Stage labels for the bounded-wait expiry diagnostic, in counter-index
+  ## order over the dispatcher's 13 stages.
 
 # ─── Wave sync (device-memory counters, seq_cst fences) ──────────────
 
@@ -170,6 +176,26 @@ proc waveWait(counters: ptr UncheckedArray[uint32], idx: int32, target: uint32) 
       memory_order_relaxed);
   } while (observed < `target`);
   atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, thread_scope_device);
+  """.}
+
+proc waveReset(counters: ptr UncheckedArray[uint32], n: int32) {.device.} =
+  ## Launch-end counter self-reset, zeroes the `n` stage counters so the next
+  ## launch on the same buffer needs no host-side zeroing. The page allocator's
+  ## zero fill covers the first launch.
+  ##
+  ## Soundness contract, the caller runs this behind a waveWait on the last
+  ## stage's counter:
+  ##
+  ## - that wait proves every threadgroup is past its reads
+  ## - each counter's waiters are the next stage's producers, whose adds precede
+  ##   the final stage's, and no threadgroup reads a counter after its own add
+  ## - the engine's launches serialize (each dispatch waits for completion), so
+  ##   the zero state is in place before the next launch's first read
+  {.emit: """
+  atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, thread_scope_device);
+  for (int i = 0; i < `n`; ++i) {
+    atomic_store_explicit(reinterpret_cast<volatile device atomic_uint*>(&`counters`[i]), 0U, memory_order_relaxed);
+  }
   """.}
 
 # ─── Local device helpers ────────────────────────────────────────────
@@ -310,12 +336,13 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     eps: float32) {.device.} =
   ## Role dispatch contract over grid.x, one stage branch per threadgroup block:
   ##
-## | rule     | behavior                                                                                                             |
-## | -------- | -------------------------------------------------------------------------------------------------------------------- |
-## | producer | each branch waits its producers' stage counters, runs its taxonomy core (or stage proc) inline, adds its own counter |
-## | HaveNorm | `false` compiles the norm bookends and the MoE tail out                                                              |
-## | stage 0  | runs empty, its counter still increments                                                                             |
-## | GEMV     | the stages read the host-preloaded normed row, the walk stopping after the out_proj row                              |
+  ## | rule     | behavior                                                                                                                                                                 |
+  ## | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  ## | producer | each branch waits its producers' stage counters, runs its taxonomy core (or stage proc) inline, adds its own counter                                                     |
+  ## | reset    | the launch's final threadgroup re-zeroes all counters behind the final stage's waveWait, the next launch on the same buffer needs no host-side zeroing (see `waveReset`) |
+  ## | HaveNorm | `false` compiles the norm bookends and the MoE tail out                                                                                                                  |
+  ## | stage 0  | runs empty, its counter still increments                                                                                                                                 |
+  ## | GEMV     | the stages read the host-preloaded normed row, the walk stopping after the out_proj row                                                                                  |
   let tx = int32(threadgroup_position_in_grid.x)
 
   if tx == 0:
@@ -394,6 +421,12 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     dense_linear_tile_fwd[bfloat16, 2048, 4096, 64](
       (bfA +% sBlockOut), (bfA +% sNormed), outprojW, 1, tx - 844, 0)
     waveAdd(counters, 9)
+    when not HaveNorm:
+      # Mixer entry's launch-end counter self-reset, the projection stage's
+      # last threadgroup (tx 875) behind the stage's wait (see `waveReset`).
+      if tx == 875:
+        waveWait(counters, 9, 32)
+        waveReset(counters, 13)
   elif tx == 876:
     when HaveNorm:
       # Stage 11:
@@ -417,3 +450,8 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
       moe_decode_merge_at[bfloat16, 2048, 8](
         (bfA +% sMoeOut), (f32A +% sPartial), 0, tx - 886)
     waveAdd(counters, 12)
+    # Launch-end counter self-reset, the merge's last threadgroup (tx 949)
+    # behind the final stage's waveWait (see `waveReset`'s contract).
+    if tx == 949:
+      waveWait(counters, 12, 64)
+      waveReset(counters, 13)

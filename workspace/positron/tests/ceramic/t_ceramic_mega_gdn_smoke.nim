@@ -44,6 +44,7 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut
 import ceramic_pagebuf
+import mega_bounded_wait
 
 # ─── Device entry, one launch of the mega's 13-stage dispatcher ───────
 
@@ -210,10 +211,6 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
   doAssert bfA.elems * sizeof(uint16) mod HostPageSize == 0
   doAssert f32A.elems * sizeof(float32) mod HostPageSize == 0
 
-  proc zeroCounters() =
-    for i in 0 ..< NumCounters:
-      counters.hostPtr[i] = 0
-
   var
     countersPA = counters.pa()
     bfAPA = bfA.pa()
@@ -241,8 +238,10 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
     aLogPA = aLog.pa()
     dtBiasPA = dtBias.pa()
 
-  proc launch() =
-    zeroCounters()
+  proc launch(): bool {.gcsafe.} =
+    # No host-side counter zeroing, the kernel re-zeroes all counters
+    # at the launch's end and the page allocator's zero fill covers the first launch.
+    # This launch pair is the relaunch-determinism proof without host zeroing.
     engine.run << (grid: (950, 1, 1), blk: (32, 1, 1)) >>
       ("qwen35_gdn_layer_bf16", countersPA,
         (bfAPA, f32APA, xPrevPA, rPrevPA, statePA, ringPA,
@@ -250,6 +249,10 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
          onormWPA, outprojWPA, norm2WPA, routerWPA, gateUpWPA,
          downWPA, sharedGWPA, sharedUWPA, sharedDWPA,
          sharedGVWPA, aLogPA, dtBiasPA, Eps))
+    result = true
+  # The bounded wait on every launch, a wedged waveWait spin reports
+  # the stuck stage's counters and exits, never an unbounded host spin.
+  runMegaBounded(engine, launch, counters.hostPtr, StageNames)
 
   # state and ring snapshots are the launch's pre-image,
   # the relaunch restores them
@@ -258,12 +261,13 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
   let stateSnap = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringSnap = readInto(ring.hostPtr, ConvDim * RingWidth)
 
-  launch()
+  discard launch()
 
   proc waveSyncCheck() =
+    ## Post-launch, the kernel's launch-end reset has re-zeroed the counters.
     for i in 0 ..< NumCounters:
-      doAssert counters.hostPtr[i] == WaveCounts[i],
-        &"stage counter {i} {counters.hostPtr[i]} want {WaveCounts[i]}"
+      doAssert counters.hostPtr[i] == 0'u32,
+        &"stage counter {i} {counters.hostPtr[i]} want 0 (the launch-end reset)"
 
   proc outputRanges() =
     let moeMax = bfRangeMax(bfA, sMoeOut, Hidden)
@@ -338,7 +342,7 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
   for i in 0 ..< F32ArenaLen: f32A.hostPtr[i] = f32Snap[i]
   for i in 0 ..< NumVHeads * HeadVDim * HeadKDim: state.hostPtr[i] = stateSnap[i]
   for i in 0 ..< ConvDim * RingWidth: ring.hostPtr[i] = ringSnap[i]
-  launch()
+  discard launch()
   waveSyncCheck()
   for i in 0 ..< BfArenaLen:
     doAssert bfA.hostPtr[i] == bfSnap[i], &"bf arena differs at {i}"
