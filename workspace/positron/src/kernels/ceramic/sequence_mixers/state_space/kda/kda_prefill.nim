@@ -13,7 +13,7 @@
 ##
 ## | term      | formula                                                                                        |
 ## | --------- | ---------------------------------------------------------------------------------------------- |
-## | pairdecay | exp2(cumg[t, dk]·log2e)·exp2(−cumg[s, dk]·log2e), per key channel dk                           |
+## | pairdecay | exp2((cumg[t, dk] − cumg[s, dk])·log2e), per key channel dk (the difference form)              |
 ## | u_t       | β_t·(v_t − G_t) − β_t·Σ_{s<t} A[t, s]·u_s, A[t, s] = Σ_dk pairdecay(t, s)[dk]·k_t[dk]·k_s[dk]  |
 ## | G_t       | Σ_dk exp(cumg[t, dk])·k_t[dk]·S_carry[r, dk], the decayed carry read BEFORE the kv contraction |
 ## | y_t       | H_t + Σ_{s≤t} B[t, s]·u_s[r], B[t, s] = Σ_dk pairdecay(t, s)[dk]·q̃_t[dk]·k_s[dk]              |
@@ -40,9 +40,17 @@
 ## Implementation shape:
 ## - each lane computes its own state row's scalars (the solve, y, the u contributions),
 ##   so the u vectors live in a per-lane local array, no inter-threadgroup data movement needed
-## - the per-channel decay factors are Tile ops over broadcast tiles, the per-token decay
-##   dT = exp2(cumg_t·log2e) folded into the carry reads once per token, the pair decay
-##   dT·invd_s folded into the A/B dots per (t, s) pair, the chunk-end decay into the carry
+## - the per-token decay dT = exp2(cumg_t·log2e) folds into the carry reads once
+##   per token, over the same broadcast Tile ops as the per-channel factors
+## - the pair decay exp2((cumg_t − cumg_s)·log2e) folds into the A/B dots per
+##   (t, s) pair, the chunk-end decay into the carry
+##
+## The pair decay's difference form removes the dT·invd_s overflow:
+##
+## - exp2(x)·exp2(y) = exp2(x + y)
+## - cumg decreases along t, so the argument is ≤ 0 and no intermediate exceeds 1
+## - the factorized spelling dT·invd_s overflows exp2 once |cumg_s| ≳ 88.7,
+##   the resulting Inf × dT → 0 product NaNs the carry and the persistent state
 ##
 ## - the k·k and q̃·k dot products run as one broadcast-tile pass per (t, s) pair,
 ##   every lane reads the same row-identical row sum, lanes agree bit-exactly
@@ -174,11 +182,20 @@ proc kdaPrefillChunkScanBf16At*(
         ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var cumgS: rt_l(float32, TileR, Dk)
         cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-        # pairdecay(t, s)[dk] = dT[dk]·exp2(−cumg_s[dk]·log2e), per key channel
+        # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
+        # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
+        #
+        # - the argument stays ≤ 0 (cumg decreases along t), no intermediate
+        #   exceeds 1, exp2 cannot overflow
+        # - the factorized spelling dT·exp2(−cumg_s·log2e) overflows exp2 once
+        #   |cumg_s| ≳ 88.7, the resulting Inf × dT → 0 product NaNs the carry
+        #   and the persistent state
         var pdT: rt_l(float32, TileR, Dk)
-        pdT.mul(cumgS, -log2e)
-        exp2(pdT, pdT)
-        pdT.mul(pdT, dT)
+        for n in 0 ..< rowTiles:
+          for m in 0 ..< colTiles:
+            for f in 0 ..< vpt:
+              pdT.frags[n][m].frag[f] = exp2(
+                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         kkProd.mul(kkProd, pdT)
@@ -235,10 +252,14 @@ proc kdaPrefillChunkScanBf16At*(
       ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var cumgS: rt_l(float32, TileR, Dk)
       cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+      # pairdecay(end, s)[dk] = exp2((cumg_end[dk] − cumg_s[dk])·log2e) per key channel,
+      # the difference form (the token pairdecay note carries the overflow bound)
       var pdEnd: rt_l(float32, TileR, Dk)
-      pdEnd.mul(cumgS, -log2e)
-      exp2(pdEnd, pdEnd)
-      pdEnd.mul(pdEnd, dEnd)
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for f in 0 ..< vpt:
+            pdEnd.frags[n][m].frag[f] = exp2(
+              (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
       pdEnd.mul(pdEnd, ks32)
       let ws = uLoc[sIdx]
       for n in 0 ..< rowTiles:
@@ -354,11 +375,20 @@ proc kdaPrefillChunkScanF16At*(
         ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var cumgS: rt_l(float32, TileR, Dk)
         cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
-        # pairdecay(t, s)[dk] = dT[dk]·exp2(−cumg_s[dk]·log2e), per key channel
+        # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
+        # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
+        #
+        # - the argument stays ≤ 0 (cumg decreases along t), no intermediate
+        #   exceeds 1, exp2 cannot overflow
+        # - the factorized spelling dT·exp2(−cumg_s·log2e) overflows exp2 once
+        #   |cumg_s| ≳ 88.7, the resulting Inf × dT → 0 product NaNs the carry
+        #   and the persistent state
         var pdT: rt_l(float32, TileR, Dk)
-        pdT.mul(cumgS, -log2e)
-        exp2(pdT, pdT)
-        pdT.mul(pdT, dT)
+        for n in 0 ..< rowTiles:
+          for m in 0 ..< colTiles:
+            for f in 0 ..< vpt:
+              pdT.frags[n][m].frag[f] = exp2(
+                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         kkProd.mul(kkProd, pdT)
@@ -415,10 +445,14 @@ proc kdaPrefillChunkScanF16At*(
       ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var cumgS: rt_l(float32, TileR, Dk)
       cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+      # pairdecay(end, s)[dk] = exp2((cumg_end[dk] − cumg_s[dk])·log2e) per key channel,
+      # the difference form (the token pairdecay note carries the overflow bound)
       var pdEnd: rt_l(float32, TileR, Dk)
-      pdEnd.mul(cumgS, -log2e)
-      exp2(pdEnd, pdEnd)
-      pdEnd.mul(pdEnd, dEnd)
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for f in 0 ..< vpt:
+            pdEnd.frags[n][m].frag[f] = exp2(
+              (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
       pdEnd.mul(pdEnd, ks32)
       let ws = uLoc[sIdx]
       for n in 0 ..< rowTiles:
