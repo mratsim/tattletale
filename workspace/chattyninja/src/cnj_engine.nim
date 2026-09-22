@@ -176,7 +176,7 @@ func iterChars(v: JinjaVal): LoopState =
 func iterRange(v: JinjaVal): LoopState =
   ## Iterable leg for a lazy range, the cursor carrying the bounds and elements computing
   ## per index through `loopItem`.
-  LoopState(r: v.r)
+  LoopState(r: v.r, isRange: true)
 
 func notIterable(v: JinjaVal, lo, hi: int): void {.noreturn.} =
   ## Shared raise leg of the iterable dispatch, one report for every kind no loop walks.

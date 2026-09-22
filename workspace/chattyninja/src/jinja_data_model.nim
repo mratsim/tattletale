@@ -100,12 +100,11 @@ type
     keys*: seq[string]
     vals*: seq[JinjaVal]
 
-  RangeVal* = ref object
-    ## ref for value size, not for sharing.
-    ##
+  RangeVal* = object
     ## Lazy `range(start, stop, step)` bounds. Elements compute per index, the range never
     ## materializing. The serializer renders the list form arithmetically and a `for` over it
-    ## walks the same arithmetic through `LoopState.r`.
+    ## walks the same arithmetic through `LoopState.r`, the bounds a 24-byte
+    ## immutable value inline in the range value, nothing shared, nothing mutable.
     start*, stop*, step*: int64
 
   LoopState* = ref object
@@ -117,7 +116,9 @@ type
     ##   per index and never materializing
     xs*: SeqVal
     r*: RangeVal
-      ## lazy range bounds, nil unless the iterable is a range
+      ## lazy range bounds, meaningful only when `isRange`
+    isRange*: bool
+      ## the iterable is a lazy range, `r` then carrying its bounds
     idx*: int
 
   ArgKeyword* = enum
@@ -139,6 +140,7 @@ type
     ## Fixed-capacity inline carrier of one call's arguments in call order. `argList` fills it and every
     ## callee reads it. No per-call sequence, the carrier living on the stack
     ## at the call site and moving whole into a pending macro call.
+    ## Move-only. Callees read or consume the carrier, a by-value pass fails to compile.
     n*: int
       ## arguments carried, at most `ArgsCap`
     vals*: array[ArgsCap, Arg]
@@ -191,6 +193,8 @@ type
     kvSep*: string = ": "
 
 
+
+func `=copy`(dst: var Args, src: Args) {.error: "Args moves whole, it is never copied".}
 func jinjaErr*(what: string, offset = NoOffset, span = 0, cause = ceNone): JinjaError =
   ## Returns an unraised template error. Raise sites with a template location in scope pass
   ## `offset`, plus `span` when the offending construct's length is known:
@@ -453,12 +457,12 @@ func rangeContains(r: RangeVal, needle: JinjaVal): bool =
 func loopLen*(lp: LoopState): int =
   ## Returns the element count the cursor walks, the lazy range's arithmetic count
   ## or the borrowed-or-materialized sequence's length.
-  if lp.r != nil: lp.r.rangeLen else: lp.xs.items.len
+  if lp.isRange: lp.r.rangeLen else: lp.xs.items.len
 
 func loopItem*(lp: LoopState, i: int): JinjaVal =
   ## Returns element `i` of the cursor's iterable, `i` in `0 ..< loopLen`,
   ## computed from the bounds for a lazy range.
-  if lp.r != nil: lp.r.rangeAt(i) else: lp.xs.items[i]
+  if lp.isRange: lp.r.rangeAt(i) else: lp.xs.items[i]
 
 func addArg*(a: var Args, v: sink Arg) =
   ## Appends one argument to the carrier, raising when the call would exceed `ArgsCap`.
