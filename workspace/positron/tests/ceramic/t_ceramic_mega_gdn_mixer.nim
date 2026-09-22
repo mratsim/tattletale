@@ -4,22 +4,17 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-
 ## Run command, from the repo root:
 ## - nim test_positron_naive
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_mixer.nim
 ##
 ## Mixer-internals tier for the `qwen35_moe` fused GDN decoder layer.
+## One launch of the static `HaveNorm = false` entry at grid (876, 1, 1) = `StageEnds[9]`,
+## the norm bookends and the MoE tail compiled out.
 ##
-## One launch of the static `HaveNorm = false` entry at grid
-## (876, 1, 1) = `StageEnds[9]`, stages 0..9 with the norm bookends
-## and the MoE tail compiled out.
-##
-## The projection stages read the host-preloaded normed row, the walk
-## stopping after the out_proj row.
-##
-## The conv, split, l2norm, g/beta, recurrence and out_proj anchors are
-## judged without the norm's reduction band compounding through them.
+## norm1 row → host preload → conv → split → l2norm → g/beta → recurrence → out_proj
+## The conv, split, l2norm, g/beta, recurrence and out_proj anchors are judged without
+## the norm's reduction band compounding through them.
 ##
 ## | check       | contract                                                                    |
 ## | ----------- | --------------------------------------------------------------------------- |
@@ -31,9 +26,10 @@
 ## | determinism | the relaunch over restored state and ring is bit-identical                  |
 ##
 ## No-copy binding:
+## - page-aligned pointers with page-multiple byte lengths, anything else copy-ins and the in-place writes are lost
 ##
-## - page-aligned pointers with page-multiple byte lengths
-## - anything else copy-ins, in-place writes are lost
+## No-copy binding:
+## - page-aligned pointers with page-multiple byte lengths, anything else copy-ins and the in-place writes are lost
 ##
 import std/[strformat, math, times]
 import workspace/crucible

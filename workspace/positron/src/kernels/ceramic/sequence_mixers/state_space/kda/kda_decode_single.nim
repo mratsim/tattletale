@@ -38,8 +38,11 @@
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
 ## - The engine's monomorphization key erases static bindings, calls sharing a call-site line collapse into one body
 ## - The decode mega kernel composes the tile cores `kdaDecodeStepTileF16At` and `kdaDecodeStepTileBf16At` inline instead
+## call site → `metal` block pins the statics (Dk, Dv, TileR) → monomorphization key erases them → one body per call-site line
 ##
 ## Binding and state ABI:
+## no-copy host binding → in-place state updates, visible y writes from one run
+## any other binding → the host pointer copies in, the y writes are lost
 ## - hosts binding through the Metal engine's no-copy path get in-place state
 ##   updates and visible y writes from one run
 ##

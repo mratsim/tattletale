@@ -5,6 +5,7 @@
 ## Ceramic dense linear suite, the kernel judged per element against the host reference
 ##
 ## - Out[m][n] = sum_k X[m][k] · W[n][k] over the row-major (N, K) weights
+## X (M, K) → fp32 dot over Wᵀ row n → fp32 accumulator → one RNE store to Out (M, N)
 ##
 ## | subject     | contract                                                                                |
 ## | ----------- | --------------------------------------------------------------------------------------- |

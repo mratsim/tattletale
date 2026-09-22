@@ -4,62 +4,26 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-
 ## Run command, from the repo root:
 ##   nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_gate.nim
 ##
-## Megakernel launch suite for the bounded wait and the stage-counter entry contract, one seeded `qwen35_moe` mega kernel walk
-## at grid (950, 1, 1).
+## Megakernel launch suite for the bounded wait and the stage-counter entry contract,
+## one seeded `qwen35_moe` mega kernel walk at grid (950, 1, 1).
 ##
-## Launch discipline:
+## launch → `waveReset` re-zeros the 13 counters at launch end → the next launch enters zeroed
+## garbage → a stale count passes the `waveWait` → consumers read stale buffers, the expiry diagnostic names the stuck stages
 ##
-## - every launch runs through the host-side bounded wait (`runMegaBounded`),
-##   its default 20 s deadline owns a wedged-grid report
+## - every launch runs through the host-side bounded wait (`runMegaBounded`), its default 20 s deadline owns a wedged-grid report
+## - the kernel's own `waveReset` re-zeros the 13 stage counters at launch end, the page allocator's zero fill covers the first launch
+## - the expiry diagnostic is proven on a short-deadline run against a never-completing grid, the stuck stage's counters named, exit nonzero
 ##
-## Bounded-wait expiry evidence, recorded facts:
+## | check             | contract                                                                                                                                                                                     |
+## | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | launch discipline | every launch runs through the bounded wait, one seeded walk at grid (950, 1, 1)                                                                                                              |
+## | zero entry        | the 13 stage counters must be zero at launch entry, the page allocator's zero fill covers the first launch                                                                                   |
+## | stale count       | garbage counters before a relaunch open the `waveWait` early so the consumers read the launch before's buffers, or wedge the launch mid-flight, the expiry diagnostic names the stuck stages |
+## | regression guard  | the pre-self-reset spelling launched over counters left at the launch before's stage totals and the bit-identity assert fired, the defect-run proof living in git history                    |
 ##
-## - the expiry diagnostic is proven on a short-deadline run against a grid
-##   that never completes, the stuck stage's counters named, exit nonzero
-## - before the wrapper existed, two unbounded megakernel runs spun at 96%
-##   and 93.6% CPU for 2m33s and 1m34s and were killed rc=137
-##
-## Stage-counter entry contract, the dispatcher's launch-end self-reset
-## via `waveReset`:
-##
-## - the 13 stage counters must be zero at launch entry
-## - the kernel's own reset maintains the zero state after a completed
-##   launch and the page allocator's zero fill covers the first launch
-## - garbage between launches violates the contract, a crashed or partial
-##   launch leaves mid-range counters with no kernel-side repair
-##
-## Stale-counter case, garbage written into the counters before a relaunch,
-## both consequences observed first-hand on the recorded driver:
-##
-## - a count past its stage's threadgroup total makes the `waveWait` pass
-##   instantly so the waits open before the producers run and the consumers
-##   read the launch before's buffers, the output leaves the reference bits
-## - the launch-end reset itself waits behind a `waveWait` on the last stage
-##   and the garbage count passes that wait too, so the re-zero lands
-##   mid-flight while threadgroups still run
-## - the in-flight adds land after the re-zero, their totals never re-reach
-##   the targets the late waiters spin on and the launch wedges, the expiry
-##   diagnostic names the stuck stages
-##
-## | check       | contract                                                                                  |
-## | ----------- | ----------------------------------------------------------------------------------------- |
-## | deadline    | every launch completes inside the bounded wait's default deadline, counters re-zeroed     |
-## | self-reset  | the relaunch over untouched counters is bit-identical to the host-zeroed reference launch |
-## | stale count | garbage counters before a relaunch give the recorded broken outcome, corrupt or wedge     |
-##
-## Self-reset regression guard:
-##
-## - the pre-self-reset spelling (the launch-end re-zero compiled out)
-##   relaunched over counters left at the launch before's stage totals
-## - every `waveWait` passed instantly on the stale counts, the output
-##   left the reference bits, the bit-identity assert fired
-## - the launch-end self-reset spelling stands, this case its regression guard,
-##   the defect-run proof living in git history
-
 import std/[strformat, times]
 import workspace/crucible
 import workspace/ceramic

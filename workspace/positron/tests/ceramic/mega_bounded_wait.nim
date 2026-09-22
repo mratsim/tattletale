@@ -52,6 +52,7 @@ proc runMegaBounded*[C: static int](
   ## - `counters` is the launch's host-visible counters page and `stageNames` gives the labels
   ##
   ## Expiry:
+  ## launch → worker thread → join → expiry reads the counters page, the stuck stage's counters named
   ##
   ## - the counters page is read as the wedged grid left it, the stuck
   ##   stage named per the given labels
