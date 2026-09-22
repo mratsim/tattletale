@@ -256,7 +256,7 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
   ## GEMV, the softmax form's score pass, the in-register top-K selection
   ## by lowest index. Register-only, no logits scratch.
   ##
-  ## The mega kernel composes this core in-group per slot group.
+  ## Composed in-group per slot group by the mega kernel.
   ##
   ## Contract:
   ##

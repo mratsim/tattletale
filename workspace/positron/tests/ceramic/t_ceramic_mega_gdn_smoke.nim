@@ -252,7 +252,7 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
     result = true
   # The bounded wait on every launch, a wedged waveWait spin reports
   # the stuck stage's counters and exits, never an unbounded host spin.
-  runMegaBounded(engine, launch, counters.hostPtr, StageNames)
+  runMegaBounded(launch, counters.hostPtr, StageNames)
 
   # state and ring snapshots are the launch's pre-image,
   # the relaunch restores them

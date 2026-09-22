@@ -45,7 +45,7 @@
 ## - the pair decay exp2((cumg_t − cumg_s)·log2e) folds into the A/B dots per
 ##   (t, s) pair, the chunk-end decay into the carry
 ##
-## The pair decay's difference form removes the dT·invd_s overflow:
+## Pair decay's difference form removes the dT·invd_s overflow:
 ##
 ## - exp2(x)·exp2(y) = exp2(x + y)
 ## - cumg decreases along t, so the argument is ≤ 0 and no intermediate exceeds 1
@@ -225,9 +225,13 @@ proc kdaPrefillChunkScanBf16At*(
         var cumgS: rt_l(float32, TileR, Dk)
         cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var pdT: rt_l(float32, TileR, Dk)
-        pdT.mul(cumgS, -log2e)
-        exp2(pdT, pdT)
-        pdT.mul(pdT, dT)
+        # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
+        # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
+        for n in 0 ..< rowTiles:
+          for m in 0 ..< colTiles:
+            for f in 0 ..< vpt:
+              pdT.frags[n][m].frag[f] = exp2(
+                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         qkProd.mul(qkProd, pdT)
@@ -418,9 +422,13 @@ proc kdaPrefillChunkScanF16At*(
         var cumgS: rt_l(float32, TileR, Dk)
         cumgS.loadTile(glCumg, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var pdT: rt_l(float32, TileR, Dk)
-        pdT.mul(cumgS, -log2e)
-        exp2(pdT, pdT)
-        pdT.mul(pdT, dT)
+        # pairdecay(t, s)[dk] = exp2((cumg_t[dk] − cumg_s[dk])·log2e) per key channel,
+        # the difference form (dT·exp2(−cumg_s·log2e) in algebra).
+        for n in 0 ..< rowTiles:
+          for m in 0 ..< colTiles:
+            for f in 0 ..< vpt:
+              pdT.frags[n][m].frag[f] = exp2(
+                (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         qkProd.mul(qkProd, pdT)

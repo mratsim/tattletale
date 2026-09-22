@@ -18,18 +18,17 @@
 ##   (the no-copy binding keeps the page host-visible while the grid runs)
 ##
 ## A wedged grid cannot be unwound in-process, so the diagnostic is terminal.
-## The default deadline comes from `-d:MegaWaitDeadlineSecMs=<n>`.
+## MegaWaitDeadlineSecMs=<n> gives the default deadline `-d:MegaWaitDeadlineSecMs=<n>`.
 
 import std/[monotimes, times, os, strformat]
 
 const MegaWaitDeadlineSecMs* {.intdefine.} = 20_000
   ## Default deadline in milliseconds, one config point.
 
-type LaunchCtx[E] = ref object
-  engine: E
+type LaunchCtx = ref object
   launch: proc(): bool {.gcsafe.}
 
-proc launchWorker[E](ctx: LaunchCtx[E]) {.thread.} =
+proc launchWorker(ctx: LaunchCtx) {.thread.} =
   ## Runs the caller's one-dispatch closure to completion, never returning early.
   ##
   ## Precondition:
@@ -37,7 +36,7 @@ proc launchWorker[E](ctx: LaunchCtx[E]) {.thread.} =
   ## never unwinds it.
   discard ctx.launch()
 
-proc runMegaBounded*[E; C: static int](engine: E;
+proc runMegaBounded*[C: static int](
     launch: proc(): bool {.gcsafe.};
     counters: ptr UncheckedArray[uint32];
     stageNames: array[C, string];
@@ -53,9 +52,9 @@ proc runMegaBounded*[E; C: static int](engine: E;
   ##
   ## On expiry the wrapper reads the counters page as the wedged grid left it,
   ## exits nonzero and names the stuck stage per the given labels.
-  var ctx = LaunchCtx[E](engine: engine, launch: launch)
-  var th: Thread[LaunchCtx[E]]
-  createThread(th, launchWorker[E], ctx)
+  var ctx = LaunchCtx(launch: launch)
+  var th: Thread[LaunchCtx]
+  createThread(th, launchWorker, ctx)
   let t0 = getMonoTime()
   while th.running:
     sleep 50

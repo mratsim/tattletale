@@ -134,7 +134,7 @@ proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
     colTile: int32) {.device.} =
   ## Per-row scaled fp32 store, each fp32 partial row at one uniform scale.
   ##
-  ## The callers load the operand rows with `rowLimit = 1`, so accumulator
+  ## Callers load the operand rows with `rowLimit = 1`, so accumulator
   ## row 0 carries the projection's value and the rows above it are exact zeros.
   ##
   ## - the store guard requires `row == 0`, exactly one lane per stored element

@@ -552,7 +552,7 @@ proc launchMega(engine: HwEngine; m: var MegaBuffers) =
          bPA, cvPA, onPA, opPA, n2PA, rtPA, guPA, dnPA,
          sgPA, suPA, sdPA, gvPA, alPA, dbPA, Eps))
     result = true
-  runMegaBounded(engine, dispatch, m.counters.hostPtr, StageNames)
+  runMegaBounded(dispatch, m.counters.hostPtr, StageNames)
   for i in 0 ..< NumCounters:
     doAssert m.counters.hostPtr[i] == 0'u32,
       &"stage counter {i} {m.counters.hostPtr[i]} want 0 (the launch-end reset)"
