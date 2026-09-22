@@ -17,13 +17,14 @@
 ## - w[t, slot] = El(p[ids[slot]] / sum(p[ids]) · Scale)
 ## - El = one round-to-nearest-even round in the family dtype
 ##
-## | subject    | contract                                                                                                |
-## | ---------- | ------------------------------------------------------------------------------------------------------- |
-## | naive side | host fp32 dot products over the exact widenings, then the same rounding chain in fp32                   |
-## | softmax    | both sides run the exp2 exponential form, so the top-K set is a function of the El-rounded logits       |
-## | top-K      | lowest expert id on equal scores, ids distinct and in [0, E), routing weights descending per token      |
-## | merge      | the fp32 partial-row merge sums in slot order, one El round, judged bit-exact against the same sum      |
-## | shared exp | the (1, H) shared-expert row GEMV returns the raw fp32 logit, the same 16-wide chunk walk as the router |
+## | subject    | contract                                                                                                 |
+## | ---------- | -------------------------------------------------------------------------------------------------------- |
+## | naive side | host fp32 dot products over the exact widenings, then the same rounding chain in fp32                    |
+## | softmax    | both sides run the exp2 exponential form, so the top-K set is a function of the El-rounded logits        |
+## | top-K      | lowest expert id on equal scores, ids distinct and in [0, E), routing weights descending per token       |
+## | merge      | the fp32 partial-row merge sums in slot order, one El round, judged bit-exact against the same sum       |
+## | poisoned   | the all-NaN router weight leaves every slot on the unmatched branch, ids E−1, zero weights, finite chain |
+## | shared exp | the (1, H) shared-expert row GEMV returns the raw fp32 logit, the same 16-wide chunk walk as the router  |
 ##
 ## | shape      | T | H            | E                 | K | Scale | family     | cases |
 ## | ---------- | --- | ------------ | ----------------- | --- | ----- | ---------- | ----- |
@@ -32,6 +33,7 @@
 ## | small      | 4 | 256          | 64                | 4 | 1.0   | bf16       | 8     |
 ## | shared exp | 8 | 2048         | -                 | - | -     | bf16       | 8     |
 ## | merge      | 8 | 256 and 2048 | 8 routed + shared | 8 | 1.0   | bf16       | 8, 2  |
+## | poisoned   | 1 | 2048         | 256               | 8 | 1.0   | bf16       | 1     |
 ##
 ## Band model, stated before measurement, u32 = 2⁻²⁴ fp32, u_fam = 2⁻⁸ bf16 / 2⁻¹¹ fp16
 ## - the reassociation check re-demonstrates per token per run that the 16-wide-chunk
@@ -66,6 +68,7 @@ import std/[strformat, math]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/moe_router
+import ../../src/kernels/ceramic/moe_fwd_decode
 import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
@@ -105,6 +108,17 @@ const MoeRouterMsl = metal:
       out_r: ptr UncheckedArray[bfloat16],
       partial: ptr UncheckedArray[float32]) {.global.} =
     moe_decode_merge[bfloat16, 2048, 8](out_r, partial)
+
+  proc cer_moe_fwd_bf16_mega(
+      partial: ptr UncheckedArray[float32],
+      x, router_w, gate_up_w, down_w: ptr UncheckedArray[bfloat16],
+      shared_gate_w, shared_up_w, shared_down_w,
+      shared_gate_vec_w: ptr UncheckedArray[bfloat16],
+      h_scratch, hs_scratch: ptr UncheckedArray[bfloat16]) {.global.} =
+    moe_fwd_decode[2048, 256, 8, 512, 1.0'f32, true](
+      partial, x, router_w, gate_up_w, down_w,
+      shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
+      h_scratch, hs_scratch)
 
   proc cer_shared_gate_bf16(
       outp: ptr UncheckedArray[float32],
@@ -615,6 +629,148 @@ proc runMergeCombo(engine: HwEngine; T, H, K, cases: int; seed: uint64;
         inc exact
   echo &"[merge bf16] cases={cases} launches={launches} bit-exact {exact}/{nOut*cases}"
 
+proc runPoisonedRouter(engine: HwEngine) =
+  ## All-poisoned score pass, the router weight holding NaN bits, every logit
+  ## NaNs, no score ever matches the group max, all K slots take the unmatched
+  ## branch. The expert walk and merge then run on the same poisoned routing
+  ##
+  ## | judged   | assertion                                                                           |
+  ## | -------- | ----------------------------------------------------------------------------------- |
+  ## | ids      | every slot's id is E−1, inside [0, E), the expert-row reads stay in bounds          |
+  ## | weights  | every slot's weight is the 0x0000 bit pattern, the renorm never NaNs a zero sum     |
+  ## | partials | routed rows exactly +0.0 (zero weight times a finite projection), shared row finite |
+  ## | merge    | the merged row holds no NaN or Inf bit pattern                                      |
+  ## | repeat   | the chain relaunched bit-identical                                                  |
+  const T = 1
+  const H = 2048
+  const E = 256
+  const K = 8
+  const I = 512
+  const Seed = 0xC04D0531'u64
+  let nIds = T * K
+  var idsB = allocPageBuf[int32](nIds)
+  var wB = allocPageBuf[uint16](nIds)
+  var xB = allocPageBuf[uint16](T * H)
+  var rWB = allocPageBuf[uint16](E * H)
+  var partB = allocPageBuf[float32](T * (K + 1) * H)
+  var hB = allocPageBuf[uint16](T * K * I)
+  var hsB = allocPageBuf[uint16](T * I)
+  var outB = allocPageBuf[uint16](T * H)
+  var guB = allocPageBuf[uint16](E * 2 * I * H)
+  var dWB = allocPageBuf[uint16](E * H * I)
+  var sgB = allocPageBuf[uint16](I * H)
+  var suB = allocPageBuf[uint16](I * H)
+  var sdB = allocPageBuf[uint16](H * I)
+  var gvB = allocPageBuf[uint16](H)
+  defer:
+    freePageBuf(idsB); freePageBuf(wB); freePageBuf(xB); freePageBuf(rWB)
+    freePageBuf(partB); freePageBuf(hB); freePageBuf(hsB); freePageBuf(outB)
+    freePageBuf(guB); freePageBuf(dWB); freePageBuf(sgB); freePageBuf(suB)
+    freePageBuf(sdB); freePageBuf(gvB)
+  var idsPA = idsB.pa()
+  var wPA = wB.pa()
+  var xPA = xB.pa()
+  var rWPA = rWB.pa()
+  var partPA = partB.pa()
+  var hPA = hB.pa()
+  var hsPA = hsB.pa()
+  var outPA = outB.pa()
+  var guPA = guB.pa()
+  var dWPA = dWB.pa()
+  var sgPA = sgB.pa()
+  var suPA = suB.pa()
+  var sdPA = sdB.pa()
+  var gvPA = gvB.pa()
+
+  # the poisoned pass, NaN bits across the router weight, the activations finite
+  var rng = initNaiveRng(Seed)
+  for e in 0 ..< E * H:
+    rWB.hostPtr[e] = 0x7FC0'u16
+  for i in 0 ..< T * H:
+    xB.hostPtr[i] = f32ToBf16(rng.nextF32(-1.0'f32, 1.0'f32))
+  # the expert and shared weights finite, expert E−1's rows live and in bounds
+  for i in 0 ..< E * 2 * I * H:
+    guB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+  for i in 0 ..< E * H * I:
+    dWB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+  for i in 0 ..< I * H:
+    sgB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    suB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+  for i in 0 ..< H * I:
+    sdB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+  for i in 0 ..< H:
+    gvB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+
+  proc loadSentinels() =
+    for i in 0 ..< nIds:
+      idsB.hostPtr[i] = -777
+      wB.hostPtr[i] = 0xBEEF
+    for i in 0 ..< T * (K + 1) * H:
+      partB.hostPtr[i] = 4.203895392974451e-45'f32
+
+  proc launchChain() =
+    engine.run << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
+      ("cer_moe_route_bf16_mega", idsPA, (wPA, xPA, rWPA, int32(T)))
+    engine.run << (grid: (T, K + 1, 1), blk: (32, 1, 1)) >>
+      ("cer_moe_fwd_bf16_mega", partPA,
+        (xPA, rWPA, guPA, dWPA, sgPA, suPA, sdPA, gvPA, hPA, hsPA))
+    engine.run << (grid: (T, H div 32, 1), blk: (32, 1, 1)) >>
+      ("cer_moe_merge_bf16_mega", outPA, partPA)
+
+  proc snap(): tuple[ids: seq[int32], w: seq[uint16], part: seq[float32], outRow: seq[uint16]] =
+    result.ids = newSeq[int32](nIds)
+    result.w = newSeq[uint16](nIds)
+    result.part = newSeq[float32](T * (K + 1) * H)
+    result.outRow = newSeq[uint16](T * H)
+    for i in 0 ..< nIds:
+      result.ids[i] = idsB.hostPtr[i]
+      result.w[i] = wB.hostPtr[i]
+    for i in 0 ..< T * (K + 1) * H:
+      result.part[i] = partB.hostPtr[i]
+    for i in 0 ..< T * H:
+      result.outRow[i] = outB.hostPtr[i]
+
+  loadSentinels()
+  launchChain()
+  let got = snap()
+  for t in 0 ..< T:
+    for slot in 0 ..< K:
+      let id = got.ids[t * K + slot]
+      doAssert id >= 0 and id < int32(E),
+        &"poisoned pass id out of range at slot {slot}: {id}"
+      doAssert id == int32(E - 1),
+        &"poisoned pass slot {slot} not on the unmatched branch's expert E−1: {id}"
+      doAssert got.w[t * K + slot] == 0x0000'u16,
+        &"poisoned pass weight not the zero pattern at slot {slot}: " &
+        &"0x{got.w[t * K + slot]:04x} = {bf16ToF32(got.w[t * K + slot])}"
+    # the routed partial rows, zero weight times a finite projection, exactly +0.0
+    for slot in 0 ..< K:
+      for e in 0 ..< H:
+        doAssert got.part[(t * (K + 1) + slot) * H + e] == 0.0'f32,
+          &"poisoned pass routed partial not exactly zero at (slot {slot}, col {e}): " &
+          &"{got.part[(t * (K + 1) + slot) * H + e]}"
+    # the shared row and the merge, finite everywhere, no NaN or Inf pattern
+    for e in 0 ..< H:
+      doAssert classify(got.part[(t * (K + 1) + K) * H + e]) notin {fcNan, fcInf},
+        &"poisoned pass shared partial not finite at col {e}"
+      let ob = bf16ToF32(got.outRow[t * H + e])
+      doAssert classify(ob) notin {fcNan, fcInf},
+        &"poisoned pass merged output not finite at col {e}"
+  # the relaunch, bit-identical ids, weights, partials and merged row
+  loadSentinels()
+  launchChain()
+  let again = snap()
+  for i in 0 ..< nIds:
+    doAssert again.ids[i] == got.ids[i], "poisoned pass ids differ run to run"
+    doAssert again.w[i] == got.w[i], "poisoned pass weights differ run to run"
+  for i in 0 ..< T * (K + 1) * H:
+    doAssert again.part[i] == got.part[i], "poisoned pass partials differ run to run"
+  for i in 0 ..< T * H:
+    doAssert again.outRow[i] == got.outRow[i], "poisoned pass merge differs run to run"
+  echo "[poisoned router bf16 mega] all K slots on the unmatched branch, " &
+    &"weights the zero pattern, routed partials exactly zero, " &
+    &"chain relaunched bit-identical"
+
 proc checkReassociation(fam: Family; T, H, E: int; seed: uint64) =
   ## Standalone reassociation check over fresh seeds beyond the committed combos
   ##
@@ -665,11 +821,13 @@ proc main =
   runSharedGateCombo(engine, 8, 8, 0xC04D0527'u64, "shared gate")
   runMergeCombo(engine, 8, 256, 8, 8, 0xC04D0524'u64, "cer_moe_merge_bf16")
   runMergeCombo(engine, 8, 2048, 8, 2, 0xC04D0529'u64, "cer_moe_merge_bf16_mega")
+  runPoisonedRouter(engine)
   checkReassociation(famBf16, 8, 2048, 256, 0xC04D0525'u64)
   checkReassociation(famF16, 8, 2048, 256, 0xC04D0526'u64)
   checkReassociation(famBf16, 4, 256, 64, 0xC04D0530'u64)
   echo "CERAMIC MOE_ROUTER VERDICT: ids judged under the reassociation tie " &
     &"region, reassociation check clean, weights inside the stated bands, " &
-    &"merge bit-exact"
+    &"merge bit-exact, the poisoned pass lands every slot on the " &
+    &"unmatched branch with finite outputs"
 
 main()

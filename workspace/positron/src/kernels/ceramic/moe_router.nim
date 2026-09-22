@@ -37,6 +37,18 @@ import ./tile_io_rows
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
+const RenormSabotage* {.booldefine.} = false
+  ## Compile-time sabotage switch for the poisoned-router fixture, the renorm
+  ## half of the pre-fix spelling restored, the unguarded zero-sum 0/0 division
+
+const SentinelSabotage* {.booldefine.} = false
+  ## Compile-time sabotage switch for the poisoned-router fixture, restoring
+  ## the unmatched-branch half of the pre-fix spelling
+  ##
+  ## - the raw sentinel candidate (1 shl 30) stored as the expert id
+  ## - downstream expert-row reads then run off the expert weight's end
+  ## - default builds leave both pre-fix spellings out
+
 # ─── Module-local bf16 row-bounded tile load ─────────────────────────
 # tile_io_rows ships fp16 variants only, the bf16 guard lives module-local
 # (the silu_and_mul and paged_attn precedent)
@@ -224,7 +236,10 @@ proc topkScores[A: static MmaAtom; F, K: static int](
       # - the ids stay in [0, 8·F), the downstream expert-row reads stay in bounds
       # - with every score poisoned all K slots take this branch
       #   and the normalized weights sum to zero
-      ids[slot] = int32(8 * F - 1)
+      when SentinelSabotage:
+        ids[slot] = cand
+      else:
+        ids[slot] = int32(8 * F - 1)
       w[slot] = 0.0'f32
     else:
       ids[slot] = cand
@@ -266,7 +281,11 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
   ##   the normalized weights round to El (the eager routing-weights cast)
   ## - a poisoned score pass (NaN/Inf logits) leaves no candidate matching
   ##   the group max, the slot routes to expert E−1 with zero weight
-  ##   (the ids stay in [0, E), the downstream expert-row reads stay in bounds)
+  ##
+  ## | poisoned pass | value                                                               |
+  ## | ------------- | ------------------------------------------------------------------- |
+  ## | ids           | expert E−1, in [0, E), the expert-row reads stay in bounds          |
+  ## | weights       | zero and kept zero by the renorm guard, the 0/0 sum never NaNs them |
   const F = E div 8
   static:
     doAssert E mod 64 == 0, "moeRoute: E must be a multiple of the 64-expert chunk"
@@ -297,7 +316,15 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
   for slot in 0 ..< K:
     sumW += w[slot]
   for slot in 0 ..< K:
-    w[slot] = w[slot] / sumW * Scale
+    when RenormSabotage:
+      w[slot] = w[slot] / sumW * Scale
+    else:
+      if sumW > 0.0'f32:
+        w[slot] = w[slot] / sumW * Scale
+      else:
+        # every weight is zero (the poisoned pass) or the sum underflowed,
+        # a 0/0 store would NaN the weight and everything downstream
+        w[slot] = 0.0'f32
     when El is bfloat16:
       w[slot] = w[slot].bfloat16.float32
     else:
