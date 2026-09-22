@@ -11,6 +11,10 @@
 ## - renderings stream through a byte cursor over a caller-owned window, every failure
 ##   raising `JinjaError` with message, cause and template byte location
 
+# Public API:
+#   JinjaVal with ValueKind, the value constructors, dictSet and dictGet over DictVal,
+#   JinjaError with cause and location, toJson and JsonOpts, and the value caps.
+
 import std/unicode
 
 const
@@ -507,7 +511,7 @@ func dictSet*(d: DictVal, key: string, val: JinjaVal) =
   d.keys.add key
   d.vals.add val
 
-func dictFind*(d: DictVal, key: openArray[char]): int =
+func dictFind(d: DictVal, key: openArray[char]): int =
   ## Returns the index of `key`, -1 when absent. Presence-aware lookups build
   ## on the scan, `dictGet` layers undefined-for-absence over the same walk.
   for i, k in d.keys:
