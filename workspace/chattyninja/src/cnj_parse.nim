@@ -113,12 +113,14 @@ func tagBounds(src: openArray[char], innerLo, innerHi: int): (int, int, bool, bo
   ## Splits a tag's inside against its `-` markers:
   ## the marker-free span, plus the strip flags,
   ## `stripBefore` for a `{%-`-shaped open, `stripAfter` for a `-%}`-shaped close.
+  ## The open marker leaves first, so a degenerate whole-dash interior (`{#-#}`)
+  ## keeps the close marker unstripped, matching the pre-consolidation order.
   var lo = innerLo
   var hi = innerHi
   let stripBefore = lo < hi and src[lo] == '-'
-  let stripAfter = hi > lo and src[hi - 1] == '-'
   if stripBefore:
     inc lo
+  let stripAfter = hi > lo and src[hi - 1] == '-'
   if stripAfter:
     dec hi
   (lo, hi, stripBefore, stripAfter)
