@@ -254,6 +254,8 @@ doAssert render("{'b': 1, 'a': 2} == {'a': 2, 'b': 1}") == "True",
 doAssert render("{} == none") == "False", "an empty mapping is not `none`"
 doAssert render("{'a': missing} == {'b': 1}") == "False",
     "an undefined value does not equal an absent key in the other mapping"
+doAssert render("{'a': missing} == {'a': missing}") == "True",
+    "two mappings each storing an undefined value compare equal"
 
 # `is defined` set-guard
 # ---------------------------------------------------------------------------

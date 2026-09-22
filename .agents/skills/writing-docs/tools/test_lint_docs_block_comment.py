@@ -24,10 +24,10 @@ proc render() =
   discard
 
 #[
+  ## The pins hold the line, because the tests demand it -- a design story.
   The interior comment below carries violations on purpose, the exclusion
   under test dropping them:
   ## The window holds the text; the interior is commented out -- one loop.
-  ## The pins hold the line, because the tests demand it -- a design story.
 ]#
 """
 

@@ -527,6 +527,14 @@ func dictSet*(d: DictVal, key: string, val: JinjaVal) =
   d.keys.add key
   d.vals.add val
 
+func dictFind*(d: DictVal, key: openArray[char]): int =
+  ## Returns the index of `key`, -1 when absent. Presence-aware lookups build
+  ## on the scan, `dictGet` layers undefined-for-absence over the same walk.
+  for i, k in d.keys:
+    if k == key:
+      return i
+  -1
+
 func sameBytes(x, y: openArray[char]): bool =
   ## Returns whether two byte spans hold the same bytes, comparing in place.
   if x.len != y.len:
@@ -586,14 +594,8 @@ func eqValAt(a, b: JinjaVal, depth: int, offset: int): bool =
     # equal to a key the other mapping lacks, dictGet handing undefined back
     # for absence otherwise equating `undefined == undefined`
     for i, k in a.d.keys:
-      var j = -1
-      for bi, bk in b.d.keys:
-        if bk == k:
-          j = bi
-          break
-      if j < 0:
-        return false
-      if not eqValAt(a.d.vals[i], b.d.vals[j], depth + 1, offset):
+      let j = b.d.dictFind(k)
+      if j < 0 or not eqValAt(a.d.vals[i], b.d.vals[j], depth + 1, offset):
         return false
     true
   of vkLoop: a.lp == b.lp
