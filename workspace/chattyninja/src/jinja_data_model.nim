@@ -101,6 +101,8 @@ type
     vals*: seq[JinjaVal]
 
   RangeVal* = ref object
+    ## ref for value size, not for sharing.
+    ##
     ## Lazy `range(start, stop, step)` bounds. Elements compute per index, the range never
     ## materializing. The serializer renders the list form arithmetically and a `for` over it
     ## walks the same arithmetic through `LoopState.r`.
@@ -142,6 +144,8 @@ type
     vals*: array[ArgsCap, Arg]
 
   PendingCallVal* = ref object
+    ## ref for value size, not for sharing.
+    ##
     ## A macro call whose body has not run. Holds the bound macro plus its evaluated arguments.
     ## The emit step streams the body into the drain window. An expression consumer renders
     ## the body to completion and reads the text.
