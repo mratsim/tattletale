@@ -34,26 +34,12 @@
 
 import workspace/crucible
 import workspace/ceramic
+import ./tile_widen
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
 # ─── Local device helpers ────────────────────────────────────────────
-# tile_io_rows is fp16-typed and the tile API has no bf16→f32 widen, so this module carries its own row-bounded bf16 io + widen.
-
-proc widenBf16[A, B: static MmaAtom; R, C: static int](
-    dst: var RtLeft[float32, R, C, A],
-    src: RtLeft[bfloat16, R, C, B]) {.device.} =
-  ## Exact bf16 → f32 widening, walking each tile's atom lane→element mapping.
-  ## Both atoms must share the 8×8×8 geometry class, the fragment indices then
-  ## agree elementwise across the two tiles.
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].float32
 
 proc zeroTailRows[R, C: static int; A: static MmaAtom; T](
     tile: var RtLeft[T, R, C, A], r0, rowLimit: int32) {.device.} =

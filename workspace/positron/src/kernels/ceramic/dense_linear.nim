@@ -125,6 +125,17 @@ proc roundStoreElem[El; R, C: static int; A: static MmaAtom](
   ## `dst[r][c] = El(src[r][c])`, one RNE round per storage write, the eager matmul's
   ## output round. The frag walk follows the loadTile lane→element mapping, the tiles
   ## agree element for element.
+  ##
+  ## Atom contract:
+  ## - the atom A is shared by both operands
+  ## - `rt_l`'s default atom is `getTileConfig(float32, T)` for every element T (tile_algebra/tiles.nim)
+  ## - so the fp32 accumulator tile and the storage tile always share one
+  ##   geometry class and the frag indices agree
+  ##
+  ## A mismatched-atom call site fails to infer A and does not compile.
+  static:
+    doAssert R mod A.getM() == 0 and C mod A.getN() == 0,
+      "roundStoreElem: the tile geometry must cover whole atom tiles"
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = A.getVpt()

@@ -40,6 +40,7 @@
 
 import workspace/crucible
 import workspace/ceramic
+import ../../../tile_widen
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
@@ -134,7 +135,7 @@ proc gdnDecodeStepTileBf16At*(
   # kv_mem[row] = Σ_dk decayed[row][dk]·k[dk] over the decayed state, the k
   # tile broadcasts one key vector over the tile rows, one row sum per lane
   var k32: rt_l(float32, TileR, Dk)
-  k32.gdnWidenBf16(kT)
+  k32.widenBf16(kT)
   var prod: rt_l(float32, TileR, Dk)
   prod.mul(s, k32)
   var kvVec: rv(float32, TileR, Dk)
@@ -155,7 +156,7 @@ proc gdnDecodeStepTileBf16At*(
 
   let scale = rsqrt(float32(Dk))
   var q32: rt_l(float32, TileR, Dk)
-  q32.gdnWidenBf16(qT)
+  q32.widenBf16(qT)
   var oProd: rt_l(float32, TileR, Dk)
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
@@ -234,7 +235,7 @@ proc gdnDecodeStepTileF16At*(
   s.mul(s, dec)
 
   var k32: rt_l(float32, TileR, Dk)
-  k32.gdnWidenF16(kT)
+  k32.widenF16(kT)
   var prod: rt_l(float32, TileR, Dk)
   prod.mul(s, k32)
   var kvVec: rv(float32, TileR, Dk)
@@ -255,7 +256,7 @@ proc gdnDecodeStepTileF16At*(
 
   let scale = rsqrt(float32(Dk))
   var q32: rt_l(float32, TileR, Dk)
-  q32.gdnWidenF16(qT)
+  q32.widenF16(qT)
   var oProd: rt_l(float32, TileR, Dk)
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
