@@ -197,15 +197,15 @@ proc reassocDelta(H: int, sumAbs: float64): float64 =
   ## - the mma intra-chunk order's 15-term bound on top
   (float64(H + H div 16 + 28) * U32) * sumAbs
 
-proc naiveSharedGateDot(x, sgw: seq[uint16]; T, H: int): seq[float32] =
+proc naiveSharedGateDot(fam: Family, x, sgw: seq[uint16]; T, H: int): seq[float32] =
   ## Host reference for the shared-expert scalar logit, a sequential fp32 dot over
-  ## the exact widenings, the kernel returning the raw fp32 logit too
+  ## the exact family widenings, the kernel returning the raw fp32 logit too
   ## No family round on either side.
   result = newSeq[float32](T)
   for t in 0 ..< T:
     var acc = 0.0'f32
     for k in 0 ..< H:
-      acc += bf16ToF32(x[t * H + k]) * bf16ToF32(sgw[k])
+      acc += famWiden(fam, x[t * H + k]) * famWiden(fam, sgw[k])
     result[t] = acc
 
 proc naiveRouter(fam: Family, x, w: seq[uint16]; T, H, E, K: int, Scale: float32):
@@ -552,7 +552,7 @@ proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
   var rng = initNaiveRng(seed)
   for caseId in 0 ..< cases:
     let bits = takeInputs(rng)
-    let want = naiveSharedGateDot(bits.x, bits.sgw, T, H)
+    let want = naiveSharedGateDot(fam, bits.x, bits.sgw, T, H)
     load(bits)
     launch()
     sentinels(bits)
