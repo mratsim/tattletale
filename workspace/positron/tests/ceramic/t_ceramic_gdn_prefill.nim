@@ -122,28 +122,28 @@ const GdnPrefillMsl = metal:
       y, k, q, v, beta: ptr UncheckedArray[float16],
       g: ptr UncheckedArray[float32],
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    gdnPrefillChunkScanF16(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T, 32, 16, 8, 32)
+    gdnPrefillChunkScan(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T, 32, 16, 8, 32)
 
   proc cer_gdn_prefill_fp16_c64(
       state: ptr UncheckedArray[float32],
       y, k, q, v, beta: ptr UncheckedArray[float16],
       g: ptr UncheckedArray[float32],
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    gdnPrefillChunkScanF16(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T, 32, 16, 8, 64)
+    gdnPrefillChunkScan(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T, 32, 16, 8, 64)
 
   proc cer_gdn_prefill_bf16_c32(
       state: ptr UncheckedArray[float32],
       y, k, q, v, beta: ptr UncheckedArray[bfloat16],
       g: ptr UncheckedArray[float32],
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    gdnPrefillChunkScanBf16(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T, 32, 16, 8, 32)
+    gdnPrefillChunkScan(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T, 32, 16, 8, 32)
 
   proc cer_gdn_prefill_bf16_c64(
       state: ptr UncheckedArray[float32],
       y, k, q, v, beta: ptr UncheckedArray[bfloat16],
       g: ptr UncheckedArray[float32],
       Hv, Hk, hkRatio, T: int32) {.global.} =
-    gdnPrefillChunkScanBf16(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T, 32, 16, 8, 64)
+    gdnPrefillChunkScan(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T, 32, 16, 8, 64)
 
 # ─── Host tolerance-model constants ───────────────────────────────────
 
