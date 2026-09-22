@@ -297,6 +297,18 @@ func forStep(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: int32
   if nd.filterLo != NoLink:
     result = filterKeep(tmpl, ports, nd.filterLo, nd.filterHi)
 
+func closeRow(st: var RenderState, at: int, next: int32) =
+  ## Leaves the current row's construct, truncating scopes to the row's `scopeAt` mark,
+  ## truncating rows to `at` (dropping the closed row and any abandoned rows above it)
+  ## and landing `st.curNode` on `next`, the caller's continuation node.
+  ## - `scopeAt` is the scope state at row entry, so the pop removes exactly the range
+  ##   the row opened, every enclosing row's bindings surviving the close
+  ## - a raise abandons the render instead, no partial close running on the raise path
+  ##   (a forced macro body discards its driver copy wholesale)
+  st.scopes.setLen(st.rows[at].scopeAt)
+  st.curNode = next
+  st.rows.setLen(at)
+
 func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: int32) =
   ## Re-entry path. Moves the shared cursor to the next item passing the filter clause,
   ## re-enters the body, or closes the row and continues past the loop, the close popping
@@ -306,9 +318,7 @@ func advanceFor(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: in
     let fi = st.rows.len - 1
     if forStep(tmpl, st, ports, n, st.rows[fi].loop):
       break
-    st.scopes.setLen(st.rows[fi].scopeAt - 1)
-    st.rows.setLen(st.rows.len - 1)
-    st.curNode = nd.succ
+    closeRow(st, fi, nd.succ)
     return
   st.curNode = nd.child
 
@@ -338,9 +348,10 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   if lp.loopLen == 0:
     st.curNode = nd.succ
     return
+  let scopeBase = st.scopes.len
   st.scopes.add @[]
   st.rows.add Row(node: n, kind: frFor, loop: lp,
-      scopeAt: st.scopes.len, filterLo: nd.filterLo, filterHi: nd.filterHi)
+      scopeAt: scopeBase, filterLo: nd.filterLo, filterHi: nd.filterHi)
   lp.idx = 0
   bindTargets(tmpl, st, n, lp.loopItem(0))
   st.bindName(nd.loopName, loopVal(lp))
@@ -352,9 +363,7 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
       # item does not end the walk.
       while lp.idx < lp.loopLen:
         discard forStep(tmpl, st, ports, n, lp)
-    st.scopes.setLen(st.rows[^1].scopeAt - 1)
-    st.rows.setLen(st.rows.len - 1)
-    st.curNode = nd.succ
+    closeRow(st, st.rows.len - 1, nd.succ)
     return
   st.curNode = nd.child
 
@@ -382,14 +391,13 @@ func outsideEveryFor(tmpl: CompiledTemplate, lo, hi: int32): void {.noreturn.} =
   raise jinjaErr("`{% " & spanString(tmpl.jinja.toOpenArray(int(lo), int(hi) - 1)) &
       " %}` ran outside every `{% for %}`", int(lo), int(hi - lo))
 
-func closeMacroRow(st: var RenderState, at: int) =
-  ## Closes the macro row at index `at`, the close both a body-end close and a break's
-  ## boundary stop take, every row above the boundary dropped with the close.
-  ## - scopes pop back to the row's mark, the depth count falling with them
-  ## - control continues at the row's return node, queued pieces draining to the caller
-  st.scopes.setLen(st.rows[at].scopeAt - 1)
-  st.curNode = st.rows[at].retNode
-  st.rows.setLen(at)
+func closeMacroRow(st: var RenderState, at: int, next: int32) =
+  ## Closes the macro row at index `at` through `closeRow`, the close both a body-end
+  ## close and a break's boundary stop take.
+  ## - every row above the boundary drops with the close, the depth count falling with it
+  ## - control continues at `next`, the row's return node, queued pieces draining to the caller
+  ## - control continues at `next`, the row's return node, queued pieces draining to the caller
+  closeRow(st, at, next)
   dec st.macroDepth
 
 func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =
@@ -400,7 +408,7 @@ func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderS
   ## Contract:
   ## - generation body rows above the for-row are abandoned on the walk, the partial span
   ##   of each abandoned generation closing at the position reached, no scope popped
-  ##   (generation rows push none, a capture row carries its own close)
+  ##   (generation rows push none)
   ## - a continue raises located at a macro-call boundary, a break with no for-row above
   ##   the next macro boundary ends that macro body early, the same close a body-end close takes
   ## - the walk is bounded by the row-stack depth, one pass per row, a break reaching past
@@ -417,21 +425,19 @@ func stepBreak(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderS
     if r.kind == frMacro:
       if cont:
         outsideEveryFor(tmpl, nd.lo, nd.hi)
-      closeMacroRow(st, k)
+      closeMacroRow(st, k, st.rows[k].retNode)
       return
     if r.kind == frFor:
       if cont:
         st.rows.setLen(k + 1)
         st.curNode = r.node
       else:
-        st.scopes.setLen(r.scopeAt - 1)
-        st.rows.setLen(k)
-        st.curNode = tmpl.nodes[r.node].succ
+        closeRow(st, k, tmpl.nodes[r.node].succ)
       return
     if r.kind == frGeneration:
       # An abandoned generation body still ran its bytes, the span closing at the position reached.
       st.spans.add (r.spanStart, st.cur)
-    # Generation and capture rows push no scope, nothing to pop.
+    # Generation rows push no scope, nothing to pop.
     dec k
   outsideEveryFor(tmpl, nd.lo, nd.hi)
 
@@ -469,14 +475,14 @@ func stepGeneration(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Re
   template nd: Node = tmpl.nodes[n]
   if st.rows.len > 0 and st.rows[^1].kind == frGeneration and st.rows[^1].node == n:
     st.spans.add (st.rows[^1].spanStart, st.cur)
-    st.rows.setLen(st.rows.len - 1)
-    st.curNode = nd.succ
+    closeRow(st, st.rows.len - 1, nd.succ)
     return
   if nd.child == NoLink:
     # An empty body never re-enters, the span closing at once, empty.
     st.spans.add (st.cur, st.cur)
     st.curNode = nd.succ
     return
+  # no scope of its own, the entry mark left untouched so the close pops nothing
   var r = Row(node: n, kind: frGeneration, scopeAt: st.scopes.len)
   r.spanStart = st.cur
   st.rows.add r
@@ -488,7 +494,7 @@ func stepMacroDef(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Rend
   ## through the caller's window, control continuing at the row's return node.
   template nd: Node = tmpl.nodes[n]
   if st.rows.len > 0 and st.rows[^1].kind == frMacro and st.rows[^1].node == n:
-    closeMacroRow(st, st.rows.len - 1)
+    closeMacroRow(st, st.rows.len - 1, st.rows[^1].retNode)
     return
   st.bindName(nd.macroName, macroVal(
       MacroVal(name: nd.macroName, body: nd.child, node: n)))
@@ -623,14 +629,15 @@ func startMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
         sym[].names[call.mc.name] & "`", lo, hi - lo)
   inc st.macroDepth
+  let scopeBase = st.scopes.len
   st.scopes.add @[]
   bindMacroArgs(tmpl, sym, st, ports, call.mc.node, call.args, lo, hi)
   st.rows.add Row(node: call.mc.node, kind: frMacro, pc: call.mc.body,
-      retNode: retNode, scopeAt: st.scopes.len)
+      retNode: retNode, scopeAt: scopeBase)
   if call.mc.body == NoLink:
     # An empty body emits nothing, the row closing at once so the render tail
     # continues at the call's return node
-    closeMacroRow(st, st.rows.len - 1)
+    closeMacroRow(st, st.rows.len - 1, retNode)
   else:
     st.curNode = call.mc.body
 
@@ -655,9 +662,10 @@ func forceMacro(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var Render
         sym[].names[mc.name] & "` (forced call)")
   var st2 = st
   inc st2.macroDepth
+  let scopeBase = st2.scopes.len
   st2.scopes.add @[]
   st2.rows.add Row(node: mc.node, kind: frMacro, pc: mc.body,
-      retNode: mc.node, scopeAt: st2.scopes.len)
+      retNode: mc.node, scopeAt: scopeBase)
   var env2 = PortEnv(tmpl: tmpl, sym: sym, st: addr st2)
   let ports2 = Ports(lookup: portLookup, clock: portClock, force: portForce, env: addr env2)
   bindMacroArgs(tmpl, sym, st2, ports2, mc.node, args, NoOffset, 0)

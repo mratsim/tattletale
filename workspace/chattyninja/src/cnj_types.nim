@@ -235,24 +235,21 @@ template paramDefHiAt*(nd: Node, k: int): int32 =
 
 type
   RowKind* = enum
-    frFor, frCapture, frGeneration, frMacro
+    frFor, frGeneration, frMacro
 
   Row* = object
     ## Render-state row, the only place re-entry is discriminated. `node` is the row's
     ## identity and matches the node being entered, nothing about resumption living in the node.
     node*: int32
     scopeAt*: int
-      ## One past the mark popped back to on close.
-      ## The entry scope occupies `scopes[scopeAt - 1]`, and close truncates to that mark
+      ## Scope state at row entry. A row close truncates scopes to this mark.
+      ## Bindings the row pushed or mutated live above it
     case kind*: RowKind
     of frFor:
       loop*: LoopState
         ## cursor over the materialized iterable
       filterLo*, filterHi*: int32
         ## for-`if` clause span, `NoLink` when absent
-    of frCapture:
-      target: int32
-        ## interned name to bind on close, unused while `nkSetBlock` still raises its gap
     of frGeneration:
       spanStart*: int
         ## root-output byte position at span entry
