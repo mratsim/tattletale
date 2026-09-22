@@ -13,8 +13,10 @@
 ## - the `*.json.zst` stems are the rows, the stem naming its row
 ## - the suite's `<suite>.jinja` is the template
 ##
-## The zstd reader is the workspace/zstd high-level one-shot decompress. The JSON bridge keeps
-## insertion order because dict order is observable through tojson, items and plain iteration.
+## The zstd reader is the workspace/zstd high-level one-shot decompress. The JSON bridge
+## preserves JSON object insertion order.
+##
+## Consumers observe dict order through tojson, items and plain iteration.
 ## Recorded bytes are read-only here, no loader path writes into the corpus tree.
 
 import std/[json, os, options, tables, algorithm, strutils]
