@@ -1133,23 +1133,23 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
     else:
       var parts: seq[string]
       var total = 0
-      for i, leaf in leaves:
+      for leaf in leaves:
         case leaf.kind
         of vkStr: total += leaf.s.len
         of vkCut: total += leaf.hi.int - leaf.lo.int
         else:
-          if parts.len == 0:
-            parts = newSeq[string](leaves.len)
-          parts[i] = pyStr(leaf)
-          total += parts[i].len
+          parts.add pyStr(leaf)
+          total += parts[^1].len
       var acc = newString(total)
       var outp = Cursor(buf: toOpenArray(acc, 0, acc.high), len: 0)
-      for i, leaf in leaves:
+      var pidx = 0
+      for leaf in leaves:
         case leaf.kind
         of vkStr: outp.add leaf.s
         of vkCut: outp.add leaf.raw.toOpenArray(leaf.lo, leaf.hi - 1)
-        else: outp.add parts[i]
-      acc.setLen(outp.len)
+        else:
+          outp.add parts[pidx]
+          inc pidx
       strVal(move acc)
   of opAdd, opSub, opMod:
     let rhs = forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
