@@ -72,6 +72,7 @@ import ../../src/kernels/ceramic/moe_fwd_decode
 import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
+import ceramic_fam
 
 # ─── Device entries, one per (family dtype, shape) binding ────────────
 
@@ -133,31 +134,16 @@ const MoeRouterMsl = metal:
       partial: ptr UncheckedArray[float32]) {.global.} =
     moe_decode_merge[bfloat16, 256, 8](out_r, partial)
 
-# ─── Host, family dtype helpers, the independent reference ────────────
+# ─── Host, the independent reference ─────────────────────────────────
 
 # libm exp2f, the crucible export table also carries an exp2 device builtin
 # whose host body is a discard, so std/math's exp2 cannot be called here
 proc exp2fHost(x: cfloat): cfloat {.importc: "exp2f", header: "<math.h>".}
 
 const
-  U32 = 5.9604644775390625e-8        # 2^-24, the fp32 unit roundoff
   FloorSub = 2.9802322387695312e-8   # 2^-25, half the fp16 subnormal ulp,
                                      # the rounding floor at tiny outputs
   Log2E = 1.4426950408889634'f32
-
-type Family = enum
-  famBf16, famF16
-
-proc toFamBits(fam: Family, x: float32): uint16 =
-  ## Returns the family-dtype round-to-nearest-even bit pattern of an fp32 value.
-  if fam == famBf16: f32ToBf16(x) else: fp32ToFp16(x)
-
-proc famWiden(fam: Family, h: uint16): float32 =
-  ## Returns the exact fp32 widening of a family dtype bit pattern.
-  if fam == famBf16: bf16ToF32(h) else: fp16ToFp32(h)
-
-proc famName(fam: Family): string =
-  if fam == famBf16: "bf16" else: "fp16"
 
 proc elRound(fam: Family, v: float32): float32 =
   ## One round-to-nearest-even round into the family dtype and back to fp32.

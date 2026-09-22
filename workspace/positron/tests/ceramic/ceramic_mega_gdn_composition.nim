@@ -58,6 +58,7 @@ from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut,
     moeDecodeBody
 import ceramic_pagebuf
 import mega_bounded_wait
+import ceramic_fam
 
 const RedSabotage* {.booldefine.} = false
 const debugOrow {.booldefine.} = false
@@ -66,7 +67,6 @@ const debugTie {.booldefine.} = false
 # ─── Band-model constants ─────────────────────────────────────────────
 
 const
-  U32 = 5.9604644775390625e-8'f64        # 2⁻²⁴, the fp32 unit roundoff
   UBf = 3.90625e-3'f64                   # 2⁻⁸, the bf16 unit roundoff
   RelRsqrt = 9.5367431640625e-7'f64      # 2·2⁻²¹, the approximate rsqrt class
   RelSilu = 4.76837158203125e-7'f64      # 8·u32, the exp2-form transcendental class
@@ -227,12 +227,6 @@ proc fillF32(buf: var PageBuf[float32], src: seq[float32]) =
     "no-copy binding needs a page-multiple byte length"
   for i in 0 ..< src.len:
     buf.hostPtr[i] = src[i]
-
-proc readInto[T](src: ptr UncheckedArray[T]; count: int): seq[T] =
-  ## A section snapshot, the bars' and sensitivity values' raw material.
-  result = newSeq[T](count)
-  for i in 0 ..< count:
-    result[i] = src[i]
 
 proc naiveWalk(w: Weights; tok: Token; carryIn: Carry):
     tuple[lo: LayerOut, carry: Carry] =

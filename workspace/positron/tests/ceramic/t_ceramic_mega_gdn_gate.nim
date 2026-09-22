@@ -70,6 +70,7 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
 import mega_bounded_wait
+import ceramic_fam
 
 # ─── Expiry hook, the wedged outcome recorded instead of terminal ─────
 
@@ -177,12 +178,6 @@ proc fillF32(buf: var PageBuf[float32], src: seq[float32]) =
     "no-copy binding needs a page-multiple byte length"
   for i in 0 ..< src.len:
     buf.hostPtr[i] = src[i]
-
-proc readInto[T](src: ptr UncheckedArray[T], count: int): seq[T] =
-  ## Host-side read of `count` elements out of a page buffer.
-  result = newSeq[T](count)
-  for i in 0 ..< count:
-    result[i] = src[i]
 
 proc bitDiffCount[T](mega, refSeq: seq[T]): int =
   ## Count of bitwise mismatches between two same-length reads.

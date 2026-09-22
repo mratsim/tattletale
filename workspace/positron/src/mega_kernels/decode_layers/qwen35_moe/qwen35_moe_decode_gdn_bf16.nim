@@ -268,7 +268,8 @@ proc softplusDev(x: float32): float32 {.device.} =
 
 proc normRow(x, y, normW, stream, outp: ptr UncheckedArray[bfloat16], eps: float32) {.device.} =
   ## One threadgroup's pass over the (Hidden) norm row in the bias-one RmsNormOne
-  ## spelling:
+  ## spelling. The scalar spelling stays local, rms_norm_res_in's fp16
+  ## exllamav3 residual+norm chain does not serve the recorded bf16 contract.
   ##
   ## | aspect    | contract                                                                                         |
   ## | --------- | ------------------------------------------------------------------------------------------------ |
@@ -332,7 +333,9 @@ proc f32InvSqrt(x: float32): float32 {.device.} =
   """.}
 
 proc l2normRow(x, outp: ptr UncheckedArray[bfloat16], cols: int32) {.device.} =
-  ## One l2-normalized row in the recorded chain's rounding pipeline:
+  ## One l2-normalized row in the recorded chain's rounding pipeline.
+  ## The scalar spelling stays local, qk_norm_rope's tile-op l2 chain
+  ## does not serve this rounding pipeline.
   ##
   ## | step                | rounding                                                             |
   ## | ------------------- | -------------------------------------------------------------------- |

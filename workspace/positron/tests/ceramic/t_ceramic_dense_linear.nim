@@ -48,6 +48,7 @@ import ../../src/kernels/ceramic/dense_linear
 import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
+import ceramic_fam
 
 # ─── Device entries, one per (family dtype, shape) binding ────────────
 
@@ -77,29 +78,18 @@ const DenseLinearMsl = metal:
       M, tx, ty: int32) {.global.} =
     dense_linear_tile_fwd[bfloat16, 4096, 2048, 64](outp, x, w, M, tx, ty)
 
-# ─── Host, family dtype helpers, the independent reference ────────────
+# ─── Host, the independent reference ─────────────────────────────────
 
 const
-  U32 = 5.9604644775390625e-8        # 2^-24, the fp32 unit roundoff
   FloorSub = 2.9802322387695312e-8   # 2^-25, half the fp16 subnormal ulp,
                                      # the rounding floor at tiny outputs
 
-type Family = enum
-  famBf16, famF16
-
-proc toFamBits(fam: Family, x: float32): uint16 =
-  ## Returns the family-dtype round-to-nearest-even bit pattern of an fp32 value.
-  if fam == famBf16: f32ToBf16(x) else: fp32ToFp16(x)
-
-proc famWiden(fam: Family, h: uint16): float32 =
-  ## Returns the exact fp32 widening of a family dtype bit pattern.
-  if fam == famBf16: bf16ToF32(h) else: fp16ToFp32(h)
-
-proc famName(fam: Family): string =
-  if fam == famBf16: "bf16" else: "fp16"
-
 proc naiveLinearF32(fam: Family, x, w: seq[uint16]; M, N, K: int): seq[float64] =
   ## Independent host reference at fp32 arithmetic over the exact widenings.
+  ## This is the exact-dot form.
+  ##
+  ## - the bf16-rounded output form lives in `naiveDenseLinear` (naive_layer_ops)
+  ## - both forms are judged against the kernel, each under its own band
   result = newSeq[float64](M * N)
   for m in 0 ..< M:
     for n in 0 ..< N:

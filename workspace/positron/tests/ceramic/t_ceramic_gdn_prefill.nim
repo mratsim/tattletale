@@ -113,9 +113,7 @@ import ../naive/naive_tensors
 import ../naive/naive_gdn
 import ceramic_pagebuf
 import ../../src/kernels/ceramic/launch_contract
-
-const LaneWidth = 32
-  ## the launch geometry's threadgroup width, the lane→element walk's contract
+import ceramic_fam
 
 # ─── Device entries, one per (family dtype, chunk length) binding ─────
 
@@ -148,28 +146,9 @@ const GdnPrefillMsl = metal:
       Hv, Hk, hkRatio, T: int32) {.global.} =
     gdnPrefillChunkScanBf16(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T, 32, 16, 8, 64)
 
-# ─── Host, family dtype helpers, the tolerance model ─────────────────
-
-type Family = enum
-  famBf16, famF16
-
-proc toFamBits(fam: Family, x: float32): uint16 =
-  ## Returns the family-dtype round-to-nearest-even bit pattern of an fp32 value.
-  if fam == famBf16: f32ToBf16(x) else: fp32ToFp16(x)
-
-proc famWiden(fam: Family, h: uint16): float32 =
-  ## Returns the exact fp32 widening of a family dtype bit pattern.
-  if fam == famBf16: bf16ToF32(h) else: fp16ToFp32(h)
-
-proc famWiden64(fam: Family, h: uint16): float64 =
-  ## Returns the exact fp64 widening of a family dtype bit pattern.
-  famWiden(fam, h).float64
-
-proc famName(fam: Family): string =
-  if fam == famBf16: "bf16" else: "fp16"
+# ─── Host tolerance-model constants ───────────────────────────────────
 
 const
-  U32 = 5.9604644775390625e-8        # 2⁻²⁴, the fp32 unit roundoff
   DecExp = 4.0 * U32                 # exp2(g·log2e) form relative bound, mul + exp2
   QScaleRel = 9.5367431640625e-7     # 2·2⁻²¹, rsqrt vs divide, relative
   UBf16 = 3.90625e-3                 # 2⁻⁸, the bf16 unit roundoff
@@ -178,15 +157,6 @@ const
                                      # the rounding floor once |y| falls subnormal,
                                      # also covering the bf16 subnormal grid
   U64 = 1.1102230246251565e-16       # 2⁻⁵³, the fp64 unit roundoff
-
-proc famUlp(fam: Family, v: float64): float64 =
-  ## Width of one family-dtype ulp at a nonzero normal |v|.
-  if v == 0.0: return 0.0
-  let (mant, exp10) = frexp(abs(v))
-  doAssert mant >= 0.5 and mant < 1.0
-  let floorExp = exp10 - 1           # floor(log2|v|), the binary exponent of |v|
-  let mantBits = if fam == famBf16: 7 else: 10
-  result = pow(2.0, float64(floorExp - mantBits))
 
 # ─── The bar helper, a magnitude trace over the chunked reference ────
 

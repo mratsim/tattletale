@@ -48,11 +48,11 @@ import ../naive/naive_gdn
 import ../naive/naive_layer_ops
 import ceramic_pagebuf
 import mega_bounded_wait
+import ceramic_fam
 
 # ─── Band-model constants (the composition tier's two-term model) ─────
 
 const
-  U32 = 5.9604644775390625e-8'f64        # 2⁻²⁴, the fp32 unit roundoff
   UBf = 3.90625e-3'f64                   # 2⁻⁸, the bf16 unit roundoff
   RelRsqrt = 9.5367431640625e-7'f64      # 2·2⁻²¹, the approximate rsqrt class
   RelSilu = 4.76837158203125e-7'f64      # 8·u32, the exp2-form transcendental class
@@ -428,12 +428,6 @@ proc assertUntouched(m: var MegaBuffers) =
     doAssert m.bfA.hostPtr[i] == PoisonBf, &"sHs was touched at {i}"
   for i in sPartial ..< sPartial + (TopK + 1) * Hidden:
     doAssert m.f32A.hostPtr[i] == 7.0e30'f32, &"sPartial was touched at {i}"
-
-proc readInto[T](src: ptr UncheckedArray[T]; count: int): seq[T] =
-  ## A section snapshot, the bit-identity compare's raw material.
-  result = newSeq[T](count)
-  for i in 0 ..< count:
-    result[i] = src[i]
 
 type Snap = object
   ## One launch's judged sections and carry, the bit-identity

@@ -45,6 +45,7 @@ import ../naive/naive_tensors
 from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut
 import ceramic_pagebuf
 import mega_bounded_wait
+import ceramic_fam
 
 # ─── Device entry, one launch of the mega's 13-stage dispatcher ───────
 
@@ -135,11 +136,6 @@ proc fillF32(buf: var PageBuf[float32], src: seq[float32]) =
     "no-copy binding needs a page-multiple byte length"
   for i in 0 ..< src.len:
     buf.hostPtr[i] = src[i]
-
-proc readInto[T](src: ptr UncheckedArray[T], count: int): seq[T] =
-  result = newSeq[T](count)
-  for i in 0 ..< count:
-    result[i] = src[i]
 
 proc bfRangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
   ## Widened magnitude maximum over one bf16 arena section.

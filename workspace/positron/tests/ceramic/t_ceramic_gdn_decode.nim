@@ -82,9 +82,7 @@ import ../naive/naive_tensors
 import ../naive/naive_gdn
 import ceramic_pagebuf
 import ../../src/kernels/ceramic/launch_contract
-
-const LaneWidth = 32
-  ## the launch geometry's threadgroup width, the lane→element walk's contract
+import ceramic_fam
 
 # ─── Device entries, one per (family dtype, Dk) binding ──────────────
 
@@ -103,39 +101,15 @@ const GdnDecodeMsl = metal:
       Hv, Hk, hkRatio: int32) {.global.} =
     gdnDecodeStepTileBf16(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, 32, 16, 8)
 
-# ─── Host, family dtype helpers, the tolerance model ─────────────────
-
-type Family = enum
-  famBf16, famF16
-
-proc toFamBits(fam: Family, x: float32): uint16 =
-  ## Returns the family-dtype round-to-nearest-even bit pattern of an fp32 value.
-  if fam == famBf16: f32ToBf16(x) else: fp32ToFp16(x)
-
-proc famWiden(fam: Family, h: uint16): float32 =
-  ## Returns the exact fp32 widening of a family dtype bit pattern.
-  if fam == famBf16: bf16ToF32(h) else: fp16ToFp32(h)
-
-proc famName(fam: Family): string =
-  if fam == famBf16: "bf16" else: "fp16"
+# ─── Host tolerance-model constants ───────────────────────────────────
 
 const
-  U32 = 5.9604644775390625e-8        # 2⁻²⁴, the fp32 unit roundoff
   RelDecay = 4.0 * U32               # exp vs exp2(g·log2e) relative bound
   RelQScale = 2.0 * 4.76837158203125e-7  # 2·2⁻²¹, rsqrt vs divide, relative
   UBf16 = 3.90625e-3                 # 2⁻⁸, the bf16 unit roundoff
   UF16 = 4.8828125e-4                # 2⁻¹¹, the fp16 unit roundoff
   FloorSub = 2.9802322387695312e-8   # 2⁻²⁵, half the constant fp16 subnormal ulp,
                                      # the rounding floor once |y| falls subnormal
-
-proc famUlp(fam: Family, v: float64): float64 =
-  ## Width of one family-dtype ulp at a nonzero normal |v|.
-  if v == 0.0: return 0.0
-  let (mant, exp10) = frexp(abs(v))
-  doAssert mant >= 0.5 and mant < 1.0
-  let floorExp = exp10 - 1           # floor(log2|v|), the binary exponent of |v|
-  let mantBits = if fam == famBf16: 7 else: 10
-  result = pow(2.0, float64(floorExp - mantBits))
 
 type StepInputs = object
   ## One decode step's seeded inputs, family-dtype bits shared by the kernel and the naive sides through their exact fp32 widenings:
@@ -156,11 +130,6 @@ type StepSnap = object
   ## Bit snapshots of one step's kernel-written buffers.
   state: seq[float32]
   y: seq[uint16]
-
-proc readInto[T](src: ptr UncheckedArray[T], count: int): seq[T] =
-  result = newSeq[T](count)
-  for i in 0 ..< count:
-    result[i] = src[i]
 
 proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string) =
   ## One (family dtype, shape) combination over `cases` independent seeded

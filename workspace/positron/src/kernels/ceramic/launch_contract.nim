@@ -14,6 +14,10 @@
 
 import workspace/crucible
 
+const LaneWidth* = 32
+  ## Ceramic tile kernels' launch geometry threadgroup width,
+  ## the lane→element walk's contract.
+
 const BindingPageSize* = 16384
   ## Metal no-copy binding alignment, the host page size.
   ##
