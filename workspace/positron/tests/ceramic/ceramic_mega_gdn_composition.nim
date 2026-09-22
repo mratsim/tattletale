@@ -7,12 +7,14 @@
 
 ## Run command, from the repo root:
 ## - nim test_positron_naive
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_composition.nim
+## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_compare.nim
+## Composition tier for the `qwen35_moe` fused GDN decoder layer, the shared
+## driver behind the three t_-prefixed segment tests. The one-launch mega kernel
+## runs against the composed naive 13-stage reference, every arena section judged per element.
 ##
-## Composition tier for the `qwen35_moe` fused GDN decoder layer. The one-launch mega kernel
-## against the composed naive 13-stage reference, every arena section judged per element.
-##
-##   norm check → per-stage comparison → 8-step decode chain (a `-d:RedSabotage` build drops the naive conv silu, the failing-verdict run)
+## Segments, split so each fits the umbrella's per-test cap:
+##   norm check → per-stage comparison → 8-step chain → failing-verdict run
+##   `norm_probe.nim` → `compare.nim` → `chain_red.nim`
 ##
 ## Band model, stated before any measurement. Every judged field's bound decomposes
 ## exactly into the two-term bar below, from the triangle inequality.
@@ -32,12 +34,11 @@
 ## | 2⁻¹²⁶    | bf16 subnormal floor | the smallest bf16 relative grid step                    |
 ## | 2⁻²⁵     | fp16 grid floor      | also covering the bf16 output grid, per the landed band |
 ##
-## - the mega's stage operands are host-readable, so the operand set x' is
-##   observed data, not a bound (the arena sections, the fp32 state, the bf16 ring)
-## - the router's expert ids are internal to the mega kernel, the tie-region band
-##   guaranteeing the ids when every adjacent top-K gap exceeds the pair's combined terms
-## - the stream is bit-exact by construction (both sides round the same fp32 add),
-##   asserted. The measured divergence justifies the model, never sets a bound
+## | fact       | content                                                                                                                                                           |
+## | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | operands   | the mega's stage operands are host-readable, so the operand set x' is observed data, not a bound (the arena sections, the fp32 state, the bf16 ring)              |
+## | router ids | the router's expert ids are internal to the mega kernel, the tie-region band guaranteeing the ids when every adjacent top-K gap exceeds the pair's combined terms |
+## | stream     | the stream is bit-exact by construction (both sides round the same fp32 add), asserted. The measured divergence justifies the model, never sets a bound           |
 ##
 ## | binding     | value                                                                                                                                |
 ## | ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -57,7 +58,7 @@ from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut,
     moeDecodeBody
 import ceramic_pagebuf
 
-const RedSabotage {.booldefine.} = false
+const RedSabotage* {.booldefine.} = false
 const debugOrow {.booldefine.} = false
 const debugTie {.booldefine.} = false
 
@@ -109,7 +110,7 @@ proc normRowCheck[H, Lanes, Span: static int](
   for e in base ..< base + int32(Span):
     outp[e] = (stream[e].float32 * rstd * (normW[e].float32 + 1.0'f32)).bfloat16
 
-const CompositionMsl = metal:
+const CompositionMsl* = metal:
   proc qwen35_gdn_layer_bf16(
       counters: ptr UncheckedArray[uint32],
       bfA: ptr UncheckedArray[bfloat16],
@@ -1177,10 +1178,11 @@ proc compareWalk(engine: HwEngine; m: var MegaBuffers; w: Weights;
   result.lo = nw.lo
   result.bars = walkBars(w, preM, preN, nw.carry, nw.lo, result.snap)
 
-proc runNormCheck(engine: HwEngine) =
-  ## Fused add+norm against the composed naive norm, 16 samples per shape over
-  ## (2048, 32×64) and (512, 8×64), judged per element under the norm stage's
-  ## band. The mega spelling is a test-local replica, the lane geometry parametrized
+proc runNormCheck*(engine: HwEngine) =
+  ## Fused add+norm against the composed naive norm:
+  ## - 16 samples per shape over (2048, 32×64) and (512, 8×64)
+  ## - judged per element under the norm stage's band
+  ## - the mega spelling is a test-local replica, the lane geometry parametrized
   const Samples = 16
   var worstUse = 0.0'f64
   var exact = 0
@@ -1238,16 +1240,63 @@ proc runNormCheck(engine: HwEngine) =
     &"{bitExactStream}/{total}, normed bit-exact {exact}/{total}, " &
     &"worst bar usage {worstUse:.3f}"
 
-proc runComparison(engine: HwEngine) =
+proc sabotageTapCheck(cw: Comparison; w: Weights; carry0: Carry) =
+  ## Sabotage proof, one corrupted-op run:
+  ## - the naive conv stage's tapped dot replayed exactly, stored un-silu'd
+  ## - the conv band asserted to detect the drop
+  ## - a channel whose silu output sits at the accumulator's cancellation floor
+  ##   carries no defect signal, the band admits it
+  ##
+  ## The corruption must surface somewhere in the judged fields.
+  var corrupt = newSeq[uint16](ConvDim)
+  for c in 0 ..< ConvDim:
+    var acc = 0.0'f32
+    for j in 0 ..< ConvKernel - 1:
+      acc += bf16ToF32(w.convW[c * ConvKernel + j]) *
+        bf16ToF32(carry0.ring[c * RingWidth + j])
+    acc += bf16ToF32(w.convW[c * ConvKernel + ConvKernel - 1]) *
+      bf16ToF32(cw.lo.qkvCol[c])
+    corrupt[c] = f32ToBf16(acc)
+  let convM = cw.snap.secBf(sConv, ConvDim)
+  var worst = 0.0'f64
+  var caught = 0
+  for c in 0 ..< ConvDim:
+    let diff = abs(bf16ToF32(convM[c]).float64 -
+      bf16ToF32(corrupt[c]).float64)
+    if diff > cw.bars.conv[c]:
+      inc caught
+    worst = max(worst, diff / cw.bars.conv[c])
+  doAssert caught > 0, &"silu drop caught nowhere: worst diff/bar {worst:.3e}"
+  echo &"[RED] conv band caught the silu drop at {caught}/{ConvDim} " &
+    &"channels, worst diff/bar {worst:.1f}"
+
+proc runRedSabotage*(engine: HwEngine) =
+  ## Failing-verdict sabotage run at the first case's seeds:
+  ## - the composition's conv band must detect the naive silu drop
+  var rng = initNaiveRng(Seed)
+  let w = buildWeights(rng)
+  let carry0 = newCarry(rng)
+  var m = allocMega()
+  defer: freeMega(m)
+  fillWeights(m, w)
+  var tok = newToken(rng)
+  var regen = 0
+  block found:
+    while true:
+      let cw = compareWalk(engine, m, w, tok, carry0, carry0)
+      if cw.bars.gateClear:
+        sabotageTapCheck(cw, w, carry0)
+        break found
+      inc regen
+      doAssert regen < 4096, "router tie region never clears"
+      tok = newToken(rng)
+
+proc runComparison*(engine: HwEngine) =
   ## 3 seeded cases, one mega launch and one naive walk each, judged per stage under
   ## the observed-operand bars, the usage table printed per field. The router's tie region
   ## clears by regenerating the token over the fixed weights
-  when RedSabotage:
-    const CasesToRun = 1
-  else:
-    const CasesToRun = NumCases
   var usage = Usage()
-  for caseId in 0 ..< CasesToRun:
+  for caseId in 0 ..< NumCases:
     var rng = initNaiveRng(Seed + uint64(caseId) * CaseSeedStep)
     let w = buildWeights(rng)
     let carry0 = newCarry(rng)
@@ -1260,41 +1309,10 @@ proc runComparison(engine: HwEngine) =
       while true:
         let cw = compareWalk(engine, m, w, tok, carry0, carry0)
         if cw.bars.gateClear:
-          when RedSabotage:
-            # the sabotage. The naive conv stage's silu is dropped, the tapped
-            # dot replayed exactly and stored un-silu'd
-            var corrupt = newSeq[uint16](ConvDim)
-            for c in 0 ..< ConvDim:
-              var acc = 0.0'f32
-              for j in 0 ..< ConvKernel - 1:
-                acc += bf16ToF32(w.convW[c * ConvKernel + j]) *
-                  bf16ToF32(carry0.ring[c * RingWidth + j])
-              acc += bf16ToF32(
-                w.convW[c * ConvKernel + ConvKernel - 1]) *
-                bf16ToF32(cw.lo.qkvCol[c])
-              corrupt[c] = f32ToBf16(acc)
-            let convM = cw.snap.secBf(sConv, ConvDim)
-            var worst = 0.0'f64
-            var caught = 0
-            for c in 0 ..< ConvDim:
-              let diff = abs(bf16ToF32(convM[c]).float64 -
-                bf16ToF32(corrupt[c]).float64)
-              # a channel whose silu output sits at the accumulator's
-              # cancellation floor carries no defect signal, the band admits
-              # it. The corruption must surface somewhere
-              if diff > cw.bars.conv[c]:
-                inc caught
-              worst = max(worst, diff / cw.bars.conv[c])
-            doAssert caught > 0,
-              &"silu drop caught nowhere: worst diff/bar {worst:.3e}"
-            echo &"[RED] conv band caught the silu drop at {caught}/{ConvDim} " &
-              &"channels, worst diff/bar {worst:.1f}"
-            return
-          else:
-            judgeAll(cw.bars, cw.snap, cw.postN, cw.lo, usage)
-            echo &"[comparison] case {caseId}: router gap " &
-              &"{cw.bars.minGap:.3e} > tie-region bar " &
-              &"{cw.bars.gapBar:.3e}, {regen} samples regenerated"
+          judgeAll(cw.bars, cw.snap, cw.postN, cw.lo, usage)
+          echo &"[comparison] case {caseId}: router gap " &
+            &"{cw.bars.minGap:.3e} > tie-region bar " &
+            &"{cw.bars.gapBar:.3e}, {regen} samples regenerated"
           break found
         inc regen
         doAssert regen < 4096, "router tie region never clears"
@@ -1305,10 +1323,11 @@ proc runComparison(engine: HwEngine) =
     worstAll = max(worstAll, usage.worst[f])
   echo &"[comparison] worst usage over all fields {worstAll:.3f}"
 
-proc runChain(engine: HwEngine) =
-  ## 8 decode steps over carried state and ring, the mega side launching
-  ## per step, the naive side walking per step, every field judged per
-  ## step under its bars, the carries advancing from the observed outputs.
+proc runChain*(engine: HwEngine) =
+  ## 8 decode steps over carried state and ring:
+  ## - the mega side launching per step, the naive side walking per step
+  ## - every field judged per step under its bars
+  ## - the carries advancing from the observed outputs
   var usage = Usage()
   var rng = initNaiveRng(ChainSeed)
   let w = buildWeights(rng)
@@ -1337,23 +1356,14 @@ proc runChain(engine: HwEngine) =
         tok = newToken(rng)
   printUsage(usage, "chain")
 
-proc main =
+proc compositionInit*(): HwEngine =
+  ## Device setup for every composition-segment test:
+  ## - the geometry asserts, the Metal engine, the composition MSL ingested
+  ## - each test file calls the proc once, then its segment's runner
   doAssert HeadKDim == 128 and HeadVDim == 128,
     "the composition's GDN binding is Dk = Dv = 128"
   doAssert TopK == 8 and NumExperts == 256 and Inter == 512,
     "the composition's MoE geometry is the Qwen decode class"
   echo "device: ", bkMetal.init().deviceName()
-  var engine = bkMetal.init()
-  engine.ingest(CompositionMsl)
-  let t0 = epochTime()
-  runNormCheck(engine)
-  runComparison(engine)
-  when not RedSabotage:
-    runChain(engine)
-  echo &"[composition] wall clock {epochTime() - t0:.2f} s"
-  when RedSabotage:
-    echo "CERAMIC MEGA GDN COMPOSITION RED: conv band caught the silu drop"
-  else:
-    echo "CERAMIC MEGA GDN COMPOSITION VERDICT: per-stage bands, chain continuity"
-
-main()
+  result = bkMetal.init()
+  result.ingest(CompositionMsl)

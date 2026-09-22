@@ -64,20 +64,52 @@ proc runCmd(cmd: string) =
   echo "=============================================================================================="
   exec cmd
 
-func testerCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
+func testerCmd(path: string; extraFlags = ""; compiler = "nim c";
+    traced = true; nimcache = "nimcache/tests"): string =
+  ## One test-suite build+run command.
+  ## - traced (the default): the line-trace instrumentation every suite runs
+  ##   under, the debugging aid for a failing suite's line-level trace
+  ## - untraced (traced = false): the instrumentation off. Nim's incremental
+  ##   cache is keyed by module, not by compile flags, so an untraced build
+  ##   sharing the traced cache silently reuses traced objects; the untraced
+  ##   suites take their own nimcache directory and recompile their module
+  ##   subgraph once
   let filename = path.extractFilename()
+  let traceFlags = if traced:
+      " --stackTrace:on --lineTrace:on --lineDir:on --debugger:native "
+    else:
+      " --stackTrace:off --lineTrace:off --lineDir:off "
   return
     compiler & " -r" &
     (if extraFlags.len > 0: " " & extraFlags else: "") &
-    " -d:release --stackTrace:on --lineTrace:on --lineDir:on " &
-    " --debugger:native " &
+    " -d:release" & traceFlags &
     " --hints:off --warnings:off " &
     # One shared nimcache for every suite: the torch/transformer stack compiles
     # to ~150 MB of C++, and a per-suite cache recompiles it for every task.
     # Cache entries are keyed by module path, so shared modules compile once
     # across suites and only each suite's own modules add incremental cost.
-    &" --outdir:build/tests --nimcache:nimcache/tests " &
+    &" --outdir:build/tests --nimcache:{nimcache} " &
     path
+
+# The composition-tier segments (t_ceramic_mega_gdn_norm_probe, _compare,
+# _chain_red): their subject is the per-element receipts they assert, not the
+# line tracing, and the trace instrumentation slows their CPU regen walks
+# several-fold, past the per-test cap. They run untraced in their own nimcache
+const CompositionSegments = [
+  "t_ceramic_mega_gdn_norm_probe.nim",
+  "t_ceramic_mega_gdn_compare.nim",
+  "t_ceramic_mega_gdn_chain_red.nim",
+]
+
+func suiteCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
+  ## The command a test suite runs under: traced for every suite except the
+  ## composition-tier segments
+  let filename = path.extractFilename()
+  if filename in CompositionSegments:
+    testerCmd(path, extraFlags = extraFlags, compiler = compiler,
+      traced = false, nimcache = "nimcache/tests_composition")
+  else:
+    testerCmd(path, extraFlags = extraFlags, compiler = compiler)
 
 
 func downloaderCmd(path: string): string =
@@ -153,7 +185,7 @@ iterator getTestCommands(path: string; extraFlags = ""; compiler = "nim c"): str
     if filename.endsWith(".nim") and (
       filename.startsWith("test_") or filename.startsWith("t_")
     ):
-      yield testerCmd(filepath, extraFlags = extraFlags, compiler = compiler)
+      yield suiteCmd(filepath, extraFlags = extraFlags, compiler = compiler)
 
 task test_libtorch, "Test workspace/libtorch":
   withDir(ProjectRoot):
