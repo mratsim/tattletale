@@ -134,12 +134,17 @@ proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
     colTile: int32) {.device.} =
   ## Per-row scaled fp32 store, each fp32 partial row at one uniform scale.
   ##
-## | element (c, v) of tile row n                       | written when       |
-## | -------------------------------------------------- | ------------------ |
-## | dst[rowIdx[n]·rowStride + colTile·C + m·N + c + v] | rowIdx[n] >= 0     |
-## | stored value                                       | rowS[n]·tile value |
-## | rows with rowIdx[n] < 0                            | not written        |
-
+  ## The callers load the operand rows with `rowLimit = 1`, so accumulator
+  ## row 0 carries the projection's value and the rows above it are exact zeros.
+  ##
+  ## - the store guard requires `row == 0`, exactly one lane per stored element
+  ## - the GDN y store keeps the same single-writer spelling
+  ##
+  ## | element (c, v) of tile row n                       | written when                    |
+  ## | -------------------------------------------------- | ------------------------------- |
+  ## | dst[rowIdx[n]·rowStride + colTile·C + m·N + c + v] | `row == 0` and `rowIdx[n] >= 0` |
+  ## | stored value                                       | rowS[n]·tile value              |
+  ## | rows with rowIdx[n] < 0                            | not written                     |
   static:
     doAssert RT == R div A.getM()
   const M = A.getM()
@@ -152,7 +157,7 @@ proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
   let r = cell mod M
   let c = cell div M
   for n in 0 ..< rowTiles:
-    if rowIdx[n] >= 0:
+    if rowIdx[n] >= 0 and r == 0:
       for m in 0 ..< colTiles:
         for v in 0 ..< vpt:
           dst[int(rowIdx[n]) * int(rowStride) + int(colTile) * C +
