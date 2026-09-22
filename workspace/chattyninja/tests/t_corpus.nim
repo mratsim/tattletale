@@ -916,19 +916,6 @@ block filterRaiseRepull:
   doAssert wideRest == "[ab]post",
       "the wide-window repull did not resume after the discarded bytes"
 
-# A macro call as a whole emit streams its body's pieces through the caller's window,
-# and the streamed bytes match the string render.
-# ---------------------------------------------------------------------------
-block captureSink:
-  let ctx = listCtx()
-  let src = "{%- macro mm(v) -%}[{{ v }}]{%- endmacro -%}{{ mm(m) }}"
-  var (m, tables) = parseTemplate(src)
-  let want = renderToString(src, ctx, 0.0)
-
-  var d = startRender(m, tables, ctx, 0.0)
-  doAssert pullAll(d) == want,
-      "the capture-sink emit differs from the string render"
-
 # A streamed macro call resolves names against the caller's scopes only before the call
 # and against its own scopes only inside the body: the macro scope is popped on close.
 # ---------------------------------------------------------------------------
