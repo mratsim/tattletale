@@ -69,6 +69,9 @@ const
   UBf = 3.90625e-3'f64                   # 2⁻⁸, the bf16 unit roundoff
   RelRsqrt = 9.5367431640625e-7'f64      # 2·2⁻²¹, the approximate rsqrt class
   RelSilu = 4.76837158203125e-7'f64      # 8·u32, the exp2-form transcendental class
+  # silu-derivative bound for the 1.1 factor below:
+  #   |silu'(x)| <= 1.0851, peak at x ~ 1.28 (tails e^-x / sigmoid),
+  # so the factor dominates the true maximum.
   FloorBf = 7.346879709099078e-39'f64    # 2⁻¹²⁶, the bf16 subnormal grid floor
   FloorSub = 2.9802322387695312e-8'f64   # 2⁻²⁵, the fp16 grid floor, also the bf16 output grid
 

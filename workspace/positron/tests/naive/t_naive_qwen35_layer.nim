@@ -62,8 +62,8 @@ proc pinL2NormSumRound() =
   ## two rounds and the single round at acc + eps land a bf16 grid step
   ## apart on this row:
   ##
-  ## - acc = 7.65234375, sitting below the bf16 midpoint 7.71875 by less
-  ##   than the eps add
+  ## - acc = 7.703125, exactly the bf16 midpoint between 7.6875 and 7.71875
+  ##   (RNE resolves the tie downward to 7.6875)
   ## - the recorded chain bf16(acc) = 7.6875, the eps add stays there,
   ##   inv = bf16(1/sqrt(7.6875)) = 0.361328125
   ## - the single-round spelling rounds acc + 1e-6 to 7.71875, giving
