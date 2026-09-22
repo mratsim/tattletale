@@ -526,8 +526,6 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
   ##
   ## - the judgment adds the exact NaN/Inf check on y and the carried state
   ## - the band gains the underflow floors
-  ## One (family dtype, shape) combination, judged per element against the fp64 chunked
-  ## reference and the fp64 per-token walk under the band model, relaunched bit-identical.
   const Dv = 16
   const TileR = 8
   let bhMax = B * Hv
@@ -746,8 +744,7 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
     judge(si, record = false)
     let again = snap()
     for i in 0 ..< stateElems:
-      if again.st[i] != case0.st[i]:
-        doAssert again.st[i] == case0.st[i], "state differs run to run"
+      doAssert again.st[i] == case0.st[i], "state differs run to run"
     for i in 0 ..< yElems:
       doAssert again.y[i] == case0.y[i], "y differs run to run"
 

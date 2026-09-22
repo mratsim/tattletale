@@ -59,7 +59,7 @@
 ## | -------------- | ---------------------------------------------------------------------------------------------- |
 ## | sabotage       | the judgment stays green on the recorded driver, same-address stores resolve by lowest lane id |
 ## | outcome        | the row-0 value lane won 4096 of 4096 repeat trials                                            |
-## | guard standing | correct by contract, no API defines a winner for a racing store                                |
+## | guard standing | single-writer in every default build, the Metal API defines no same-address store winner       |
 
 import std/[strformat, math]
 import workspace/crucible
