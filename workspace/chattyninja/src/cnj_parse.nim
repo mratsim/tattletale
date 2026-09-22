@@ -75,7 +75,7 @@ type
     ## Parse state:
     ##   the current tag with a one-tag lookahead, the scan cursor into `src`,
     ##   the arena under construction and the symbol arena.
-    src: string
+    src: openArray[char]
     cur, nxt: Tag # `nxt` is the lookahead, `tkEnd` there marking the end of the stream
     pending: Tag # a tag row scanned together with the text run before it, delivered next
     i: int # scan cursor, start of the run being split
