@@ -10,8 +10,8 @@
 ## comparison is trusted. The shared driver lives in `ceramic_mega_gdn_composition.nim`.
 ##
 ## Run command, from the repo root:
-## - nim test_positron_naive
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_norm_probe.nim
+## - nim test_positron_naive, the composition tier's untraced build,
+##   derived from `suiteCmd` in config.nims
 
 import std/[strformat, math, times]
 import workspace/crucible

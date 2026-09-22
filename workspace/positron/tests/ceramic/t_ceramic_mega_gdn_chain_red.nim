@@ -9,12 +9,13 @@
 ## state and ring, plus (in the `-d:RedSabotage` build) the failing-verdict run:
 ##   naive silu dropped → conv band catches the drop → failing verdict
 ##
-## The shared driver lives in `ceramic_mega_gdn_composition.nim`.
+## The three segments share the composition driver `ceramic_mega_gdn_composition.nim`.
 ##
 ## Run command, from the repo root:
-## - nim test_positron_naive
-## - nim c -r -d:release -d:RedSabotage --warnings:off \
-##     --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_chain_red.nim
+## - nim test_positron_naive, the composition tier's untraced build
+## - nim test_ceramic_red_sabotage, the RedSabotage build with the verdict inverted,
+##   green means the conv band caught the silu drop
+##   both commands derive from `suiteCmd` in config.nims
 
 import std/[strformat, math, times]
 import workspace/crucible

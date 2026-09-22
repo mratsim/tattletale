@@ -91,21 +91,22 @@ func testerCmd(path: string; extraFlags = ""; compiler = "nim c";
     &" --outdir:build/tests --nimcache:{nimcache} " &
     path
 
-# The composition-tier segments (t_ceramic_mega_gdn_norm_probe, _compare,
-# _chain_red): their subject is the per-element receipts they assert, not the
-# line tracing, and the trace instrumentation slows their CPU regen walks
-# several-fold, past the per-test cap. They run untraced in their own nimcache
-const CompositionSegments = [
-  "t_ceramic_mega_gdn_norm_probe.nim",
-  "t_ceramic_mega_gdn_compare.nim",
-  "t_ceramic_mega_gdn_chain_red.nim",
-]
+# The composition-tier segments: their subject is the per-element receipts
+# they assert, not the line tracing, and the trace instrumentation slows their
+# CPU regen walks several-fold, past the per-test cap. They run untraced in
+# their own nimcache. Keyed on the segment marker, the import of the shared
+# composition driver, not a file list: a renamed or newly added composition
+# segment keeps the untraced build, and a mega_gdn suite built on its own
+# driver (gate, mixer, smoke) keeps the traced one.
+proc isCompositionSegment(path: string): bool =
+  path.extractFilename().startsWith("t_ceramic_mega_gdn_") and
+    readFile(path).contains("import ceramic_mega_gdn_composition")
 
-func suiteCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
+proc suiteCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
   ## The command a test suite runs under: traced for every suite except the
-  ## composition-tier segments
-  let filename = path.extractFilename()
-  if filename in CompositionSegments:
+  ## composition-tier segments (the `t_ceramic_mega_gdn_*` suites built on
+  ## the shared `ceramic_mega_gdn_composition` driver)
+  if isCompositionSegment(path):
     testerCmd(path, extraFlags = extraFlags, compiler = compiler,
       traced = false, nimcache = "nimcache/tests_composition")
   else:
@@ -590,6 +591,17 @@ task test_positron_naive, "Test workspace/positron naive reference tier":
       runCmd(cmd)
     for cmd in getTestCommands("workspace/positron/tests/ceramic"):
       runCmd(cmd)
+
+
+# The band model's sensitivity proof (the RedSabotage build): the sabotage run
+# corrupts the composition's silu tap and asserts the conv band detects the
+# drop. The verdict is inverted, green means the sabotage was caught; a band
+# widened past the corruption or a mis-derived term fails here.
+task test_ceramic_red_sabotage, "Composition band-sensitivity sabotage proof (verdict inverted: green = sabotage caught)":
+  withDir(ProjectRoot):
+    runCmd(suiteCmd(
+      "workspace/positron/tests/ceramic/t_ceramic_mega_gdn_chain_red.nim",
+      extraFlags = " -d:RedSabotage"))
 
 task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
   withDir(ProjectRoot):
