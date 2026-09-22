@@ -353,6 +353,8 @@ const wsShapes = [
   ("A{% raw %}\nX{% endraw -%}\nB", "AXB", "a dashed raw close strips the run after it"),
   ("A\n", "A", "the final newline dropped"),
   ("A\nB\n", "A\nB", "only the final newline dropped"),
+  ("A {#-#}\n\nB", "AB", "a whole-dash comment interior loses both markers at once"),
+  ("{#-#}   \n\nB", "B", "a whole-dash comment strips nothing extra after the tag"),
 ]
 for (wSrc, want, label) in wsShapes:
   let got = renderToString(wSrc, JinjaVal(kind: vkUndefined))
