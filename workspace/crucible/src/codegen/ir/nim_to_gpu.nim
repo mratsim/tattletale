@@ -23,7 +23,8 @@ proc unwrapSingleStmt(n: NimNode): NimNode =
     n
 
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
-               staticValueMask: seq[int] = @[]): GpuAst
+               staticValueMask: seq[int] = @[],
+               inConstDef = false): GpuAst
 
 proc isTypeDescNode(n: NimNode): bool =
   ## True when the node is a TYPE used as a value: a generic type parameter
@@ -327,7 +328,8 @@ proc buildEmitStmt(ctx: var GpuContext, reg: var TypeRegistry, emitArg: NimNode)
       result.parts.add GpuEmitPart(kind: peExpr, expr: ctx.toGpuAst(reg, part))
 
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
-               staticValueMask: seq[int] = @[]): GpuAst =
+               staticValueMask: seq[int] = @[],
+               inConstDef = false): GpuAst =
   ## XXX: things still left to do:
   ## - support `result` variable? Currently not supported. Maybe we will won't
 
@@ -805,12 +807,10 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     # name an undeclared global, device kernel globals only carry the device
     # proc's own const sections lifted from the body. The value expression is
     # getImpl(node)[2]. Recursing on the whole def would loop, the name child
-    # is also the ident. The definition's own name ident reaches this branch
-    # too with symKind nskConst. The const section walker translates that one
-    # as a constexpr, so the inline fires only at reference sites.
-    # Reference test, an ident whose source position differs from the name
-    # position inside the definition.
-    if symKind(node) == nskConst:
+    # is also the ident. The const-def walker passes the definition's own name
+    # ident with `inConstDef = true`, so the inline fires only at reference
+    # sites. Symbol kind alone cannot distinguish the two.
+    if symKind(node) == nskConst and not inConstDef:
       let impl = getImpl(node)
       let nameIdent = if impl[0].kind == nnkPragmaExpr: impl[0][0] else: impl[0]
       if node.lineinfo != nameIdent.lineinfo:
@@ -1056,7 +1056,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
   of nnkConstDef:
     let identNode = if node[0].kind == nnkPragmaExpr: node[0][0] else: node[0]
     result = GpuAst(kind: gpuConstexpr,
-                    cIdent: ctx.toGpuAst(reg, identNode),
+                    cIdent: ctx.toGpuAst(reg, identNode, inConstDef = true),
                     cValue: ctx.toGpuAst(reg, node[2]),
                     cType: resolveType(reg, node))
     result.cIdent.symbol.typ = result.cType # also store the type in the symbol, for easier lookup later

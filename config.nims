@@ -99,8 +99,14 @@ func testerCmd(path: string; extraFlags = ""; compiler = "nim c";
 # segment keeps the untraced build, and a mega_gdn suite built on its own
 # driver (gate, mixer, smoke) keeps the traced one.
 proc isCompositionSegment(path: string): bool =
-  path.extractFilename().startsWith("t_ceramic_mega_gdn_") and
-    readFile(path).contains("import ceramic_mega_gdn_composition")
+  if not path.extractFilename().startsWith("t_ceramic_mega_gdn_"):
+    return false
+  for line in readFile(path).splitLines():
+    let s = line.strip()
+    if (s.startsWith("import ") or s.startsWith("from ")) and
+        s.contains("ceramic_mega_gdn_composition"):
+      return true
+  return false
 
 proc suiteCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
   ## The command a test suite runs under: traced for every suite except the
