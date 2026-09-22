@@ -315,8 +315,8 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   ## closes them on exhaust.
   ## - with no filter clause the bindings are unobservable, the close popping the scope,
   ##   so the construct is a no-op past `succ`
-  ## - with a filter clause every remaining item still binds and runs it through
-  ##   the shared per-item step, so a clause raising on data raises located exactly
+  ## - with a filter clause every item binds and runs it, item 0's clause before
+  ##   body entry, so a clause raising on data raises located exactly
   ##   as the non-empty path would
   template nd: Node = tmpl.nodes[n]
   if st.rows.len > 0 and st.rows[^1].kind == frFor and st.rows[^1].node == n:
@@ -340,14 +340,23 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
   st.bindName(nd.loopName, loopVal(lp))
   if nd.child == NoLink:
     if nd.filterLo != NoLink:
-      # An empty body still runs the clause over every remaining item, the keep decision
+      # Every item's clause runs, item 0's included, the keep decision
       # discarded there, the clause's raises and side effects the observable behavior.
       # Loop control reads the shared cursor, which every step commits, so a rejected
       # item does not end the walk.
+      discard filterKeep(tmpl, ports, nd.filterLo, nd.filterHi)
       while lp.idx < lp.loopLen:
         discard forStep(tmpl, st, ports, n, lp)
     closeRow(st, st.rows.len - 1, nd.succ)
     return
+  # Item 0's clause runs before body entry. A rejected item 0 takes the advance walk,
+  # the body entering on the first kept item or the row closing past the loop's end.
+  if nd.filterLo != NoLink and not filterKeep(tmpl, ports, nd.filterLo, nd.filterHi):
+    while true:
+      if forStep(tmpl, st, ports, n, lp):
+        break
+      closeRow(st, st.rows.len - 1, nd.succ)
+      return
   st.curNode = nd.child
 
 func stepSet(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, ports: Ports, n: int32) {.nimcall.} =

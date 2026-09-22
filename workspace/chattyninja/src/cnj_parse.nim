@@ -110,11 +110,11 @@ func atLineStart(src: openArray[char], at: int): bool =
   i < 0 or src[i] == '\n'
 
 func tagBounds(src: openArray[char], innerLo, innerHi: int): (int, int, bool, bool) =
-  ## Splits a tag's inside against its `-` markers:
-  ## the marker-free span, plus the strip flags,
-  ## `stripBefore` for a `{%-`-shaped open, `stripAfter` for a `-%}`-shaped close.
-  ## Both flags read the unadjusted span, so a degenerate whole-dash interior
-  ## (`{#-#}`) loses both markers at once.
+  ## Splits a tag's inside against its `-` markers, returning the marker-free span
+  ## plus the two strip flags:
+  ## - `stripBefore` reads a `{%-`-shaped open, `stripAfter` a `-%}`-shaped close
+  ## - both flags read the unadjusted span, a degenerate whole-dash interior
+  ##   (`{#-#}`) losing both markers at once
   var lo = innerLo
   var hi = innerHi
   let stripBefore = lo < hi and src[lo] == '-'

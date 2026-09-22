@@ -762,9 +762,8 @@ block lazyWindowDrain:
   doAssert lazyPieces >= 3, "the lazy piece drained in fewer than three pulls, " &
       "the mid-piece drain is unobserved"
 
-# A `~` concat emit accumulates its leaves into one string pending piece under
-# the eager form, the streaming operand machinery deleted. An 8-byte window
-# still forces the drain across several pulls mid-value.
+# A `~` concat emit accumulates its leaves into one string pending piece.
+# An 8-byte window still forces the drain across several pulls mid-value.
 # ---------------------------------------------------------------------------
 block concatWindowDrain:
   let ctx = listCtx()
@@ -1024,8 +1023,8 @@ when defined(nimAllocStats):
   # Micro attribution over a 10-message for-loop context:
   # a warm-up render per template stays uncounted, then `getAllocStats()` deltas measure
   # the counted renders. DictGet lookup floors are measured in the same run.
-  # Every assert below is an upper bound against a value this binary just measured, keeping
-  # the frozen resource cap intact across an alloc-structure refactor:
+  # Every assert below is an upper bound taken at this binary's measured value:
+  # allocation inflation fails the bound, a lower count passing it.
   # - an emit-role render costs nothing beyond the loop machinery, its lookups included
   # - an emit-content render costs at most one lookup copy per emit, the accepted residual
   # - a punctuator evaluation and the pending-piece move of an emit string cost 0

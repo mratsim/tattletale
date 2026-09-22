@@ -1122,7 +1122,8 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
     # before a byte is written, each leaf's bytes added where they live. A string leaf
     # passes through, a cut streams the span it survives, and every other leaf
     # renders by the `pyStr` form.
-    # The outer precedence loop consumed the first `~`, so the first rhs parses here before the chain continues past it.
+    # First rhs parses here, the outer precedence loop leaving the first `~` consumed
+    # when it enters this leg, the chain then continuing past it.
     var leaves = @[lhs]
     leaves.add forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(opConcat) + 1))
     while isPunct(cx, "~"):

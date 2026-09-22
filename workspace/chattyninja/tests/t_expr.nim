@@ -188,8 +188,8 @@ block concatConsumption:
     doAssert e.what == "boom bang", e.what
   doAssert render("(1 ~ 2) ~ 3") == "123", "a grouped concat flattens into its parent"
 
-# `~` positions that consume it, recorded before the eager-concatenation change, each
-# surviving behavior carrying its own evidence here.
+# Every position that reads a concat renders it first, each position's behavior
+# carrying its own evidence below.
 block concatContract:
   # Truth position reads the rendered bytes, several leaves deep.
   doAssert renderStmt("{% if 'a' ~ 1 ~ none %}y{% else %}n{% endif %}") == "y",
@@ -308,6 +308,11 @@ doAssert renderStmt("{% macro m() %}yes{% endmacro %}{{ 'a' if m() else 'b' }}")
     "a ternary condition renders the macro call"
 doAssert renderStmt("{% macro m() %}yes{% endmacro %}{% for x in [1, 2] if m() %}{{ x }}{% endfor %}") == "12",
     "a for-filter condition renders the macro call"
+doAssert renderStmt("{% for x in [1, 2, 3] if x != 1 %}{{ x }}{% endfor %}") == "23",
+    "a for-filter item failing its clause renders nothing for it"
+doAssert renderStmt("{% set n = namespace(c = 0) %}{% macro m() %}{% set n.c = n.c + 1 %}{% endmacro %}" &
+    "{% for x in [1, 2] if m() %}{% endfor %}{{ n.c }}") == "2",
+    "an empty-body for-filter runs the clause on item 0 too"
 
 # A macro call evaluates once at its call site, in `{% set %}` and the for-iterable
 # position like in a condition, matching upstream Jinja.
@@ -726,13 +731,12 @@ try:
   doAssert false, "the empty-body drain stopped before a raising later item"
 except JinjaError as e:
   doAssert "late 2" in e.what, e.what
-# Side effects land per item past the set-up item, which keeps unconditionally.
-#   a macro call in the clause renders to an empty body, falsy for every item
-#   its set inside accumulates on a namespace
+# A macro call in the clause renders to an empty body, every item's clause running,
+#   item 0's included, each call's set inside accumulating on a namespace
 doAssert renderStmt(
     "{% set ns = namespace(v = '') %}{% macro note(x) %}{% set ns.v = ns.v ~ x %}{% endmacro %}" &
-    "{% for x in [0, 1, 2] if note(x) %}{% endfor %}{{ ns.v }}") == "12",
-    "the empty-body drain ran the clause on every remaining item"
+    "{% for x in [0, 1, 2] if note(x) %}{% endfor %}{{ ns.v }}") == "012",
+    "the empty-body drain ran the clause on every item, item 0's included"
 
 # Depth caps:
 #   every recursion leg counts toward ExprDepthCap, dry walks and unary chains included.
