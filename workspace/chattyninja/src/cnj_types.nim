@@ -13,7 +13,7 @@
 #   template bytes (borrowed, never copied at parse)
 #     │  cnj_parse splits tags, scans keywords, appends arena nodes, interns names once
 #     ▼
-#   CompiledTemplate + CompiledSymbols (read-only artifact + interned-name arena)
+#   CompiledTemplate + CompiledSymbols (read-only artifact + heap-shared interned-name arena)
 #     │  cnj_engine dispatches pull() steps over the arena
 #     ▼
 #   RenderState (rows + scopes + pending Piece)
@@ -331,8 +331,8 @@ type
     ## Contract:
     ## - bound by the statement tier's engine at its dispatch sites, the expression tier
     ##   receiving it as a plain stateless handle
-    ## - every state a call serves arrives as a typed borrow on the call itself, so no
-    ##   adapter value and no erased pointer exists
+    ## - the render state arrives as a `var RenderState` borrow, the arena as the shared
+    ##   heap ref, so no adapter value and no erased pointer exists
     ## - this handle is the one edge the tier split keeps, no import cycle crossing it
 
   Context* = object

@@ -210,12 +210,12 @@ proc anchorRows(suite: string): seq[AnchorRow] =
 
 # ── Measurement ──────────────────────────────────────────────────────────────
 
-proc renderOnce(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock = 0.0): string =
+proc renderOnce(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock = 0.0): string =
   ## Renders once, whole, through the pull interface, exactly as the test suites do.
   var c = startRender(tmpl, sym, ctx, clock)
   pullAll(c)
 
-proc renderN(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64, n: int): int =
+proc renderN(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64, n: int): int =
   ## Renders `n` times and returns the accumulated output byte count, so the loop
   ## consumes every render and nothing is optimized away.
   for _ in 0 ..< n:
@@ -238,7 +238,7 @@ func median(xs: seq[float64]): float64 =
   let s = sorted(xs)
   s[s.len div 2]
 
-proc timeShape(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, iters: int): string =
+proc timeShape(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, iters: int): string =
   ## Times one template x shape.
   ##
   ## 500 warm-up renders, then rounds of 15 timed runs of `iters` renders each.
@@ -289,7 +289,7 @@ when defined(benchAlloc):
       if byKind[kind] > 0:
         result.summary.add &"{kind}[{byKind[kind]}] "
 
-  proc allocShape(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, iters: int): string =
+  proc allocShape(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, iters: int): string =
     ## Allocates per render for one template x shape.
     ## One warm-up render goes uncounted, then `iters` renders are counted via `getAllocStats()`.
     discard renderOnce(tmpl, sym, ctx)
@@ -310,9 +310,7 @@ when defined(benchAlloc):
     ##
     ## - one full warm-up pass over every row, uncounted
     ## - then counted passes, reported per row and as the suite mean
-    var m: CompiledTemplate
-    var sym: CompiledSymbols
-    (m, sym) = parseTemplate(suiteTemplateSource(suite))
+    let (m, sym) = parseTemplate(suiteTemplateSource(suite))
     let rs = anchorRows(suite)
     for _ in 0 ..< 3: # warm-up pass over every row, uncounted
       for r in rs:
@@ -345,9 +343,7 @@ when defined(benchAlloc):
     for (name, src) in [("verbatim", tVerbatim), ("for-loop", tLoop),
                         ("for-empty", tLoopEmpty), ("emit", tEmit), ("emit x2", tEmit2),
                         ("emit-const", tEmitConst), ("if/else", tIf), ("tools|tojson", tJson)]:
-      var m: CompiledTemplate
-      var sym: CompiledSymbols
-      (m, sym) = parseTemplate(src)
+      let (m, sym) = parseTemplate(src)
       discard renderOnce(m, sym, ctx) # warm-up render, not counted
       let a = allocsOf:
         for _ in 0 ..< iters:
@@ -359,9 +355,7 @@ when defined(benchAlloc):
                         ("emit-int", "{% for m in messages %}{{ 1 }}{% endfor %}"),
                         ("emit-bracket", "{% for m in messages %}{{ m['content'] }}{% endfor %}"),
                         ("emit-concat", "{% for m in messages %}{{ m.role ~ 'x' }}{% endfor %}")]:
-      var m: CompiledTemplate
-      var sym: CompiledSymbols
-      (m, sym) = parseTemplate(src)
+      let (m, sym) = parseTemplate(src)
       discard renderOnce(m, sym, ctx) # warm-up render, not counted
       let a = allocsOf:
         for _ in 0 ..< iters:
@@ -386,9 +380,7 @@ when defined(benchAlloc):
       for _ in 0 ..< 1000:
         discard msg1.d.dictGet("content")
     echo &"  micro dictGet(content)   {dg.float64 / 1000.0:5.2f} allocs/call"
-    var pm: CompiledTemplate
-    var psyms: CompiledSymbols
-    (pm, psyms) = parseTemplate("{{ m.content }}")
+    let (pm, psyms) = parseTemplate("{{ m.content }}")
     var pcx = startRender(pm, psyms, ctx, 0.0)
     let cv = msg1.d.dictGet("content")
     let pc = allocsOf:
@@ -420,9 +412,7 @@ proc compileHf(): seq[Compiled] =
       continue
     let path = HfModelsRoot / dir / "chat_template.jinja"
     let src = readFile(path)
-    var tmpl: CompiledTemplate
-    var sym: CompiledSymbols
-    (tmpl, sym) = parseTemplate(src)
+    let (tmpl, sym) = parseTemplate(src)
     when defined(benchAlloc):
       let census = spillCensus(tmpl.nodes)
       echo &"parse {label:11} OK    {tmpl.nodes.len} nodes, {census.summary}, " &
@@ -468,9 +458,7 @@ proc benchCorpus(): void =
   else:
     echo "corpus timing anchor (median of 15 runs, warm-up uncounted)"
     for (suite, iters) in [("deepseekv2lite", 400), ("qwen3", 150)]:
-      var m: CompiledTemplate
-      var sym: CompiledSymbols
-      (m, sym) = parseTemplate(suiteTemplateSource(suite))
+      let (m, sym) = parseTemplate(suiteTemplateSource(suite))
       let rs = anchorRows(suite)
       discard renderN(m, sym, rs[0].ctx, rs[0].clock, 500) # warm-up pass, not counted
       var best: seq[float64]
@@ -492,7 +480,7 @@ proc benchCorpus(): void =
 
 # ── Pull-window timing ───────────────────────────────────────────────────────
 
-proc renderWindowN(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64, n, windowSize: int): int =
+proc renderWindowN(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64, n, windowSize: int): int =
   ## Renders `n` times through a `windowSize`-byte stack window and returns the byte
   ## count accumulated across renders, so the loop consumes every render.
   var buf: array[4096, char]
@@ -504,7 +492,7 @@ proc renderWindowN(tmpl: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaV
         break
       result += got
 
-proc pullCallsPerPass(tmpl: CompiledTemplate, sym: var CompiledSymbols, rs: seq[AnchorRow], windowSize: int): int =
+proc pullCallsPerPass(tmpl: CompiledTemplate, sym: CompiledSymbols, rs: seq[AnchorRow], windowSize: int): int =
   ## Pull calls that returned bytes, one untimed pass over every row.
   var buf: array[4096, char]
   for r in rs:
@@ -515,9 +503,9 @@ proc pullCallsPerPass(tmpl: CompiledTemplate, sym: var CompiledSymbols, rs: seq[
         break
       inc result
 
-proc timedCorpusPasses(tmpl: CompiledTemplate, sym: var CompiledSymbols,
+proc timedCorpusPasses(tmpl: CompiledTemplate, sym: CompiledSymbols,
     rs: seq[AnchorRow], iters: int,
-    render: proc (tmpl: CompiledTemplate, sym: var CompiledSymbols,
+    render: proc (tmpl: CompiledTemplate, sym: CompiledSymbols,
         ctx: JinjaVal, clock: float64): int):
     tuple[mid, spread: float64] =
   ## Rounds of 15 timed runs of `iters` full-corpus passes of `render`, method
@@ -554,20 +542,18 @@ proc benchPullWindows(): void =
   ## - window sizes 256 B and 4 KiB sit beside the one-shot `pullAll` render
   echo "pull-window timing anchor (median of 15 runs, warm-up uncounted)"
   for (suite, iters) in [("deepseekv2lite", 400), ("qwen3", 150)]:
-    var m: CompiledTemplate
-    var sym: CompiledSymbols
-    (m, sym) = parseTemplate(suiteTemplateSource(suite))
+    let (m, sym) = parseTemplate(suiteTemplateSource(suite))
     let rs = anchorRows(suite)
     discard renderN(m, sym, rs[0].ctx, rs[0].clock, 500) # warm-up pass, not counted
     var line = &"  {suite:14} "
     for windowSize in [256, 4096]:
-      let renderRow = proc (mm: CompiledTemplate, sym: var CompiledSymbols,
+      let renderRow = proc (mm: CompiledTemplate, sym: CompiledSymbols,
           ctx: JinjaVal, clock: float64): int =
         renderWindowN(mm, sym, ctx, clock, 1, windowSize)
       let (mid, spread) = timedCorpusPasses(m, sym, rs, iters, renderRow)
       let flag = if spread > 20.0: "  VARIANCE" else: ""
       line.add &"win {windowSize:4} {mid:9.4f} ms/render  spread {spread:4.1f}%{flag}   "
-    let renderWhole = proc (mm: CompiledTemplate, sym: var CompiledSymbols,
+    let renderWhole = proc (mm: CompiledTemplate, sym: CompiledSymbols,
         ctx: JinjaVal, clock: float64): int =
       renderOnce(mm, sym, ctx, clock).len
     let (mid, spread) = timedCorpusPasses(m, sym, rs, iters, renderWhole)

@@ -787,6 +787,6 @@ func generationSpans*(c: Context): seq[tuple[start, stop: int]] =
 proc renderToString*(src: string, root: JinjaVal, clock = 0.0): string =
   ## Compiles and renders in one call, compiling at the scope that owns `src`, the artifact
   ## borrowing the template text and never outliving it.
-  var (tmpl, sym) = parseTemplate(src)
+  let (tmpl, sym) = parseTemplate(src)
   var c = startRender(tmpl, sym, root, clock)
   pullAll(c)

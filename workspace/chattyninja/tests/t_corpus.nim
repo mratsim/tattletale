@@ -372,7 +372,7 @@ func pieceRemaining(p: Piece): int =
   of pkCut: int(p.chi - p.clo) - p.pos
   of pkLazy: 0
 
-proc renderPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64, cap: int): tuple[
+proc renderPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64, cap: int): tuple[
     text: string, spans: seq[tuple[start, stop: int]]] =
   ## Renders through `pull` with a `cap`-byte caller buffer, accumulating every fill.
   ## Returns the render bytes and the driver's recorded generation spans, byte coordinates
@@ -387,7 +387,7 @@ proc renderPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, cl
       result.text.add buf[i]
   result.spans = c.generationSpans()
 
-proc renderAllPull(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): string =
+proc renderAllPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64): string =
   ## Renders through `pullAll` with a fresh render context.
   var c = startRender(m, sym, ctx, clock)
   pullAll(c)
@@ -407,7 +407,7 @@ iterator items[N: static int](p: var PullChunks[N]): openArray[char] =
       break
     yield p.buf.toOpenArray(0, n - 1)
 
-proc renderAllSpans(m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): tuple[
+proc renderAllSpans(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64): tuple[
     text: string, spans: seq[tuple[start, stop: int]]] =
   ## Renders one row whole and returns the bytes plus the driver's recorded generation spans,
   ## byte coordinates into the bytes.
@@ -429,7 +429,7 @@ func asCodepointSpans(s: string, spans: seq[tuple[start, stop: int]]): seq[tuple
   for (a, b) in spans:
     result.add (cpIndex(s, a), cpIndex(s, b))
 
-proc renderChunked[N: static int](m: CompiledTemplate, sym: var CompiledSymbols, ctx: JinjaVal, clock: float64): tuple[
+proc renderChunked[N: static int](m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64): tuple[
     text: string, spans: seq[tuple[start, stop: int]]] =
   ## Renders one row through `N`-byte windows, accumulating every window.
   ## Returns the render bytes and the driver's recorded generation spans, byte coordinates
@@ -490,7 +490,7 @@ block corpusDelivery:
   var errRaised = 0
   for suite in parseable:
     let src = templateSource(suite)
-    var (m, tables) = parseTemplate(src)
+    let (m, tables) = parseTemplate(src)
     for r in rows(suite):
       if r.expectError:
         # Error outcome, not a wrong success. The match compares the recorded
@@ -580,7 +580,7 @@ block corpusDelivery:
   # Render invariance under fresh drivers:
   # the same compiled template rendered twice delivers byte-equal output.
   let srcKeep = templateSource("moonlight")
-  var (mKeep, tablesKeep) = parseTemplate(srcKeep)
+  let (mKeep, tablesKeep) = parseTemplate(srcKeep)
   let rowKeep = rows("moonlight")[0]
   doAssert renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock) ==
       renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock),
@@ -622,7 +622,7 @@ block windowContract:
 # ---------------------------------------------------------------------------
 block boundaryShapes:
   let src = templateSource("deepseekv2lite")
-  var (m, tables) = parseTemplate(src)
+  let (m, tables) = parseTemplate(src)
   let row = loadRow("deepseekv2lite", "assistant_history")
   let want = row.rendered
 
@@ -679,7 +679,7 @@ block boundaryShapes:
 # ---------------------------------------------------------------------------
 block zeroCapacityBuffer:
   let src = templateSource("deepseekv2lite")
-  var (m, tables) = parseTemplate(src)
+  let (m, tables) = parseTemplate(src)
   let row = loadRow("deepseekv2lite", "assistant_history")
 
   var d = startRender(m, tables, row.context, row.clock)
@@ -702,7 +702,7 @@ block zeroCapacityBuffer:
 block partialConsumptionResumes:
   for suite in ["moonlight", "qwen3"]:
     let src = templateSource(suite)
-    var (m, tables) = parseTemplate(src)
+    let (m, tables) = parseTemplate(src)
     let r = rows(suite)[0]
     var pc = pullChunks[7](startRender(m, tables, r.context, r.clock))
     var head = ""
@@ -745,7 +745,7 @@ const listRepr = "{'alpha': 'one', 'beta': 'two', 'gamma': ['x', 'y', 'z']}"
 block lazyWindowDrain:
   let ctx = listCtx()
   let src = "{{ m }}"
-  var (m, tables) = parseTemplate(src)
+  let (m, tables) = parseTemplate(src)
 
   var d = startRender(m, tables, ctx, 0.0)
   var window = newSeq[char](8)
@@ -768,7 +768,7 @@ block lazyWindowDrain:
 block concatWindowDrain:
   let ctx = listCtx()
   let src = "{{ m ~ '::' ~ m }}"
-  var (m, tables) = parseTemplate(src)
+  let (m, tables) = parseTemplate(src)
   let want = listRepr & "::" & listRepr
 
   var d = startRender(m, tables, ctx, 0.0)
@@ -802,7 +802,7 @@ block valueBoundary:
   dictSet(ctxd, "messages", seqVal(msgs))
   let ctx = dictVal(ctxd)
 
-  var (m, tables) = parseTemplate(src)
+  let (m, tables) = parseTemplate(src)
   let want = renderToString(src, ctx, 0.0)
   doAssert want == longA & longB, "the string render is not the contents concatenation"
 
@@ -819,7 +819,7 @@ block spanDrain:
   var ctxd = DictVal()
   dictSet(ctxd, "m", strVal("emit"))
   let ctx = dictVal(ctxd)
-  var (m, tables) = parseTemplate(src)
+  let (m, tables) = parseTemplate(src)
   let want = renderToString(src, ctx, 0.0)
   doAssert want == verbatim & "emit", "the string render is not the expected bytes"
 
@@ -852,7 +852,7 @@ block filterRaiseRepull:
   let ctx = dictVal(cd)
   # `x[0]` raises on the integer item and passes the strings through the filter comparison.
   let src = "pre{% for x in xs if x[0] == 'a' %}[{{ x }}]{% endfor %}post"
-  var (m, tables) = parseTemplate(src)
+  let (m, tables) = parseTemplate(src)
   let want = "pre[aa][ab]post"
   # The one-shot render propagates the same raise, the filtered strings never reaching it.
   try:
@@ -976,7 +976,7 @@ when defined(nimAllocStats):
 
   block allocDrainWindow:
     let src = templateSource("deepseekv2lite")
-    var (m, tables) = parseTemplate(src)
+    let (m, tables) = parseTemplate(src)
     let row = loadRow("deepseekv2lite", "assistant_history")
 
     # Warm-up renders, uncounted:
@@ -1060,7 +1060,7 @@ when defined(nimAllocStats):
 
     template countRenders(src: string, n: int): int =
       ## Warms one pull render uncounted, then totals `n` pull renders through `getAllocStats()` deltas.
-      var (m, tables) = parseTemplate(src)
+      let (m, tables) = parseTemplate(src)
       let want = renderToString(src, ctx, 0.0)
       doAssert renderAllPull(m, tables, ctx, 0.0) == want,
           "the micro pull render differs from the string render for " & src
@@ -1130,7 +1130,7 @@ when defined(nimAllocStats):
     var cd = DictVal()
     dictSet(cd, "tools", tools)
     let ctx = dictVal(cd)
-    var (m, tables) = parseTemplate(tJson)
+    let (m, tables) = parseTemplate(tJson)
     let want = renderToString(tJson, ctx, 0.0)
 
     var dWarm = startRender(m, tables, ctx, 0.0)

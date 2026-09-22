@@ -477,7 +477,7 @@ block continueAtMacroBoundary:
 # of the output it produced, byte coordinates into the render, read after the drain.
 proc renderWithSpans(src: string): tuple[text: string, spans: seq[tuple[start, stop: int]]] =
   ## Renders whole and returns the bytes plus the driver's recorded generation spans.
-  var (tmpl, sym) = parseTemplate(src)
+  let (tmpl, sym) = parseTemplate(src)
   var d = startRender(tmpl, sym, JinjaVal(kind: vkUndefined))
   result.text = pullAll(d)
   result.spans = d.generationSpans()
