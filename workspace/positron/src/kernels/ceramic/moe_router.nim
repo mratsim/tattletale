@@ -18,14 +18,12 @@
 ## | shapes      | E a multiple of the 64-expert chunk, H a multiple of the 16-wide K step and of the 32-wide merge lane tile        |
 ## | geometry    | `moe_route_fwd` grid (T, 1, 1) at 32 lanes, `moe_decode_merge` grid (T, H div 32, 1)                              |
 ##
-## Mega-kernel composition interface (qwen35_moe_decode_gdn_bf16):
+## Shared internals with master's `moe_fwd.nim`:
 ##
-## - the MoE stage recomputes the router core `moeRoute` in-group per slot group,
-##   register-only, no logits scratch
-## - the merge stage sums the (K+1, H) fp32 partials through
-##   `moe_decode_merge_at`, routed slots in slot order, the shared
-##   contribution last, one El round at the store
-## - the shared-expert scalar logit comes from `sharedGateLogit`
+## | aspect     | value                                                                                                                                    |
+## | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees, the `own` fragment-cell mapping                                    |
+## | extraction | none yet, the routers' score chains and atom layouts differing, a tree-only extraction would split each router's contract in two modules |
 ##
 ## Design provenance, ported from the taxonomy worktree's WIP spelling
 ## ffn/moe/moe_fwd.nim (20260912-positron-taxonomy), kernel design mined, no test shape carried over
@@ -394,6 +392,9 @@ proc moe_decode_merge_at*[El; H, K: static int](
   ## - each static binding set of this core needs a distinct call-site line
   ## - the engine's monomorphization key erases generic static bindings,
   ##   calls that share one call-site line all collapse into a single body
+  static:
+    doAssert H mod 32 == 0,
+      "moe_decode_merge_at: H must be a multiple of the 32-wide lane tile"
   let lane = int32(thread_index_in_threadgroup)
   let col = nt * 32 + lane
   var acc = 0.0'f32

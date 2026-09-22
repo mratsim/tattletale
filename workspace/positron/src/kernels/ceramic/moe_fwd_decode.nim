@@ -16,13 +16,13 @@
 ## The slot groups plus the merge launch (in `moe_router`) compose
 ## the full MoE decode pass, the megakernel composes this core inline.
 ##
-## | contract   | value                                                                                                     |
-## | ---------- | --------------------------------------------------------------------------------------------------------- |
-## | router     | the landed `moeRoute` softmax form only, logits round to El, softmax + top-K in fp32, weights round to El |
-## | storage    | bfloat16, the decode composition's production dtype                                                       |
-## | partials   | row t·(K+1)+slot holds w[slot]·down(t, slot), slot < K, row t·(K+1)+K holds gateVal·shared_down           |
-## | partials 2 | the merge launch applies the single El round to the shared contribution                                   |
-## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                          |
+  ## | contract   | value                                                                                                     |
+  ## | ---------- | --------------------------------------------------------------------------------------------------------- |
+  ## | router     | the landed `moeRoute` softmax form only, logits round to El, softmax + top-K in fp32, weights round to El |
+  ## | storage    | bfloat16, the decode composition's production dtype                                                       |
+  ## | partials   | row t·(K+1)+slot holds w[slot]·down(t, slot), slot < K, row t·(K+1)+K holds gateVal·shared_down           |
+  ## | partials 2 | the merge launch applies the single El round to the shared contribution                                   |
+  ## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                          |
 
 import workspace/crucible
 import workspace/ceramic
@@ -112,12 +112,19 @@ proc storeRowsE[R, C: static int; A: static MmaAtom](
 
 # ─── Local device extensions: the activation and partial arithmetic ──
 
-proc siluMulElem[R, C: static int; A: static MmaAtom](
+proc siluMulElemEager[R, C: static int; A: static MmaAtom](
     dst: var RtLeft[bfloat16, R, C, A],
     gHalf, uHalf: RtLeft[float32, R, C, A]) {.device.} =
   ## Expert activation, `dst[r][c] = bf16(silu(gHalf[r][c]) · uHalf[r][c])` over
   ## the fp32 g/u accumulator operands. The frag walk follows the loadTile
   ## lane→element mapping, the operands agreeing elementwise.
+  ##
+  ## The Eager name separates the two `siluMulElem` contracts.
+  ##
+  ## | proc                               | silu operand at the multiply |
+  ## | ---------------------------------- | ---------------------------- |
+  ## | `siluMulElemEager` (this module)   | the bf16-rounded silu        |
+  ## | `o_norm_gated.nim`'s `siluMulElem` | the unrounded f32 silu       |
   ##
   ## Rounding, per storage element:
   ## - the silu result rounds to bf16 (RNE)
@@ -181,32 +188,37 @@ proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
     partial: ptr UncheckedArray[float32],  # (num_tokens, K+1, H) fp32 partials
     x, router_w, gate_up_w, down_w: ptr UncheckedArray[bfloat16],
     shared_gate_w, shared_up_w, shared_down_w: ptr UncheckedArray[bfloat16],
-    shared_gate_vec_w: ptr UncheckedArray[bfloat16], # (1, H), read only when SharedGate
+    shared_gate_vec_w: ptr UncheckedArray[bfloat16] = nil,
+        # (1, H), read only when SharedGate
+        # non-null is the caller's obligation whenever SharedGate is true
     h_scratch: ptr UncheckedArray[bfloat16],     # (num_tokens, K, I) working buffer
     hs_scratch: ptr UncheckedArray[bfloat16],    # (num_tokens, I) working buffer
     t, y: int32) {.device.} =
   ## One (token, slot) pair's decode walk, `t` the token, `y` the slot group, routed y < K, the shared group y = K.
   ## `moe_fwd_decode` is the grid-driven wrapper, the megakernel composes this core inline.
   ##
-## | stage        | behavior                                                                                                                                                   |
-## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | routed y < K | recompute the `moeRoute` router in-group, walk expert ids[y]'s gate_up rows into h_scratch[t, y] and the down projection, store the fp32 partial w[y]·down |
-## | shared y = K | recompute the shared-expert sigmoid scalar, walk the shared expert into hs_scratch[t], store gateVal·shared_down                                           |
-## | partials     | the module header's partial-buffer contract, the merge launch applies the single El round                                                                  |
+  ## | stage        | behavior                                                                                                                                                   |
+  ## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  ## | routed y < K | recompute the `moeRoute` router in-group, walk expert ids[y]'s gate_up rows into h_scratch[t, y] and the down projection, store the fp32 partial w[y]·down |
+  ## | shared y = K | recompute the shared-expert sigmoid scalar, walk the shared expert into hs_scratch[t], store gateVal·shared_down                                           |
+  ## | partials     | the module header's partial-buffer contract, the merge launch applies the single El round                                                                  |
   ##
   ## Instantiation contract:
   ## - each static binding set of this core needs its own call-site line
   ##
   ## shape preconditions, each one a static assert below:
   ##
-## | precondition  | a violated shape's failure                                             |
-## | ------------- | ---------------------------------------------------------------------- |
-## | H mod 16 == 0 | columns silently dropped from every mma dot                            |
-## | I mod 32 == 0 | h_scratch rows left unwritten, stale values re-read on the next launch |
-## | E mod 64 == 0 | the 64-expert router chunk mis-tiles                                   |
+  ## | precondition  | a violated shape's failure                                             |
+  ## | ------------- | ---------------------------------------------------------------------- |
+  ## | H mod 16 == 0 | columns silently dropped from every mma dot                            |
+  ## | H mod 32 == 0 | the down walk's 32-wide column tiles silently truncate H               |
+  ## | I mod 32 == 0 | h_scratch rows left unwritten, stale values re-read on the next launch |
+  ## | E mod 64 == 0 | the 64-expert router chunk mis-tiles                                   |
   static:
     doAssert H mod 16 == 0,
       "moe_fwd_decode_at: H must be a multiple of the 16-wide K step"
+    doAssert H mod 32 == 0,
+      "moe_fwd_decode_at: H must be a multiple of the 32-wide down walk"
     doAssert I mod 32 == 0,
       "moe_fwd_decode_at: I must be a multiple of the 32-wide output tile"
     doAssert E mod 64 == 0,
@@ -242,8 +254,15 @@ proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
         gHalf.mma_AB(a, b16)
         b16.loadTile(glGu, (ids[y], 0, nt + I div 32, kk))
         uHalf.mma_AB(a, b16)
-      h16.siluMulElem(gHalf, uHalf)
+      h16.siluMulElemEager(gHalf, uHalf)
       glH.storeRowsE(h16, (t * K + y, 0, 0, nt), 1)
+    # ── threadgroup barrier ──
+    # the down walk re-reads the whole threadgroup's stored scratch rows
+    # from device memory, the barrier ordering that cross-lane read
+    # after the stores (mem_device, the scratch rows in device memory)
+    {.emit: """
+    threadgroup_barrier(mem_flags::mem_device);
+    """.}
     # ── down walk -> partial[t, y] = w[y]·down ──
     for nt in 0'i32 ..< H div 32:
       d.zero()
@@ -271,8 +290,15 @@ proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
         gHalf.mma_AB(a, b16)
         b16.loadTile(glSu, (0, 0, nt, kk))
         uHalf.mma_AB(a, b16)
-      h16.siluMulElem(gHalf, uHalf)
+      h16.siluMulElemEager(gHalf, uHalf)
       glHs.storeRowsE(h16, (t, 0, 0, nt), 1)
+    # ── threadgroup barrier ──
+    # the down walk re-reads the whole threadgroup's stored scratch rows
+    # from device memory, the barrier ordering that cross-lane read
+    # after the stores (mem_device, the scratch rows in device memory)
+    {.emit: """
+    threadgroup_barrier(mem_flags::mem_device);
+    """.}
     # ── shared down walk -> partial[t, K] = gateVal·shared_down ──
     for nt in 0'i32 ..< H div 32:
       d.zero()
@@ -289,7 +315,9 @@ proc moe_fwd_decode*[H, E, K, I: static int; Scale: static float32;
     partial: ptr UncheckedArray[float32],  # (num_tokens, K+1, H) fp32 partials
     x, router_w, gate_up_w, down_w: ptr UncheckedArray[bfloat16],
     shared_gate_w, shared_up_w, shared_down_w: ptr UncheckedArray[bfloat16],
-    shared_gate_vec_w: ptr UncheckedArray[bfloat16], # (1, H), read only when SharedGate
+    shared_gate_vec_w: ptr UncheckedArray[bfloat16] = nil,
+        # (1, H), read only when SharedGate
+        # non-null is the caller's obligation whenever SharedGate is true
     h_scratch: ptr UncheckedArray[bfloat16],     # (num_tokens, K, I) working buffer
     hs_scratch: ptr UncheckedArray[bfloat16]) {.device.} =  # (num_tokens, I) buffer
   ##  Grid-driven form of `moe_fwd_decode_at`:
