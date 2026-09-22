@@ -4,8 +4,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Chattyninja package umbrella.
-## The explicit re-export list below is the whole package surface, nothing under
-## `src/` re-exports and a module's own `*` surface is Nim's cross-module plumbing, not API.
+## Explicit re-export list, the whole package surface. A module's own `*` surface is Nim's
+## cross-module plumbing, not API, and nothing under `src/` re-exports.
 ##
 ## - the render tier, `startRender`, `pull`, `pullAll` and `renderToString`, and `parseTemplate`
 ## - the data tier, `JinjaVal` with `ValueKind`, the constructors, `dictSet`/`dictGet`, `JinjaError`

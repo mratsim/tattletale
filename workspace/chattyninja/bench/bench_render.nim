@@ -6,40 +6,29 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Benchmark chattyninja template rendering over real chat templates plus the recorded corpus.
-##
 ## One stimulus, two builds, from `workspace/chattyninja`:
 ##
-##   nim c -d:release --experimental:views --hints:off --warnings:off --path:src --path:tests \
-##     --outdir:../../build/chattyninja/bin --nimcache:../../build/chattyninja/nimcache-bench \
-##     bench/bench_render.nim && ../../build/chattyninja/bin/bench_render
+## | Build   | Command                                                                                                                                                                                                                                            |
+## | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | release | nim c -d:release --experimental:views --hints:off --warnings:off --path:src --path:tests --outdir:../../build/chattyninja/bin --nimcache:../../build/chattyninja/nimcache-bench bench/bench_render.nim && ../../build/chattyninja/bin/bench_render |
+## | alloc   | nim c -d:release -d:benchAlloc -d:nimAllocStats --experimental:views --hints:off --warnings:off --path:src --path:tests -o:../../build/chattyninja/bin/bench_render_alloc bench/bench_render.nim && ../../build/chattyninja/bin/bench_render_alloc |
 ##
-##   nim c -d:release -d:benchAlloc -d:nimAllocStats --experimental:views --hints:off \
-##     --warnings:off --path:src --path:tests -o:../../build/chattyninja/bin/bench_render_alloc \
-##     bench/bench_render.nim && ../../build/chattyninja/bin/bench_render_alloc
+## - release build, ms/render and renders/s per template x conversation shape, median over
+##   15 timed runs after 500 warm-up renders, spread-flagged when noisy
+## - release build, pull-window timing over the corpus anchor rows, median ms/render beside
+##   the one-shot render for 256 B and 4 KiB windows, plus pull-call counts
+## - benchAlloc build, parse-time and render-time allocations per render, warm-up uncounted
+##   through `system.getAllocStats()`, plus spill counts and micro attribution templates
+##   isolating loop machinery, emit stringification and JSON serialization
 ##
-## Reports:
+## - both builds replay the recorded deepseekv2lite and qwen3 rows as a corpus anchor
+## - the hf stimulus and the corpus anchor share one measurement method, so their numbers compare
 ##
-## - release build, ms/render and renders/s per template x conversation shape, median
-##   over 15 timed runs after 500 warm-up renders, spread-flagged when noisy
-## - release build, pull-window timing over the corpus anchor rows, median ms/render
-##   for 256 B and 4 KiB windows beside the one-shot render, plus pull-call counts
-## - benchAlloc build, parse-time and render-time allocations per render, warm-up
-##   uncounted through `system.getAllocStats()`, plus spill counts and micro
-##   attribution templates isolating loop machinery, emit stringification and JSON serialization
-##
-## Both builds replay the recorded deepseekv2lite and qwen3 rows as a corpus anchor.
-## The hf stimulus and the corpus anchor share one measurement method, so their numbers compare.
-##
-## Stimulus templates come from the gitignored hf_models links,
-## `workspace/transformers/tests/hf_models/<model>/chat_template.jinja`, each link byte-identical
-## to the corpus suite it mirrors.
-##
-## Coverage:
-##
-## - a template the engine cannot parse, or a construct a shape cannot render, is
-##   reported as a coverage gap naming the construct
-##
-## No `doAssert` anywhere. A failing doAssert hangs under `-d:nimAllocStats`.
+## - stimulus templates come from the gitignored hf_models links, each byte-identical
+##   to the corpus suite it mirrors
+## - a template the engine cannot parse, or a construct a shape cannot render, is reported
+##   as a coverage gap naming the construct
+## - no `doAssert` anywhere, a failing doAssert hangs under `-d:nimAllocStats`
 
 import std/[algorithm, importutils, monotimes, os, strformat, strutils, times]
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, cnj_engine
