@@ -16,8 +16,8 @@
 #   CompiledTemplate + CompiledSymbols (read-only artifact + heap-shared interned-name arena)
 #     │  cnj_engine dispatches pull() steps over the arena
 #     ▼
-#   Context = the object every render call holds (tmpl + symbols + state + force)
-#     │  cnj_engine dispatches Steps[c.tmpl.nodes[n].kind](c, n), each step one `var Context` borrow
+#   JinjaRenderContext = the heap session every render call holds (tmpl + symbols + state + force)
+#     │  cnj_engine dispatches Steps[c.tmpl.nodes[n].kind](c, n), each step one ref borrow of the session
 #     ▼
 #   RenderState (rows + scopes + pending Piece), the context's per-instantiation third field
 #     │  evalSpan drives jinja_interpolation on the same context borrow, expressions reading
@@ -27,16 +27,23 @@
 #
 # Lifecycle and ownership inside the context
 #
-#   RenderState, one per render, owned by the caller's Context
+#   RenderState, one per render, owned by the caller's session object
 #     ├─ rows     pushed by step* entry, popped by closeRow, one close path
 #     ├─ scopes   owned by rows (scopeAt marks the base), trimmed on close
 #     ├─ pend     one Piece, set by emit steps, drained by pull or capturePend, reset to pkNone
 #
-#   force, the engine's macro-force handle, bound once at `startRender` into the context, stateless,
-#     so every `Context` copy carries the same callable
+#   force, the engine's macro-force handle, bound once at `startRender` into the session, stateless,
+#     every session carrying the same callable
+#
+#   A session is a ref by construction, one heap object per render, and cannot be copied.
+#   A second render over one artifact opens a second session through `startRender`.
+#
+#   A forced macro body runs on an explicitly constructed second session, over the same
+#   artifact refs and a snapshot of the caller's render state.
+#   The `forceMacro` contract in cnj_engine states the snapshot's exact shape.
 
 # Public API:
-#   Context, RenderState, the compiled artifact, the slot accessors,
+#   JinjaRenderContext, RenderState, the compiled artifact, the slot accessors,
 #   the name-resolution reads and the depth and window caps.
 
 import jinja_data_model, jinja_serialize
@@ -330,28 +337,31 @@ type
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
-  Context* = object
-    ## Object the caller holds:
+  JinjaRenderContext* = ref object
+    ## One heap session per render, opened by `startRender` and owned by the caller.
     ## - the shared artifact, its shared symbol-arena ref, one per-instantiation
     ##   render state and the engine-bound macro-force handle
-    ## - copies render independently, a consumer that stops mid-render resuming
-    ##   through its own copy only
+    ## - a session is a ref and is never copied, borrows are ref borrows, and there
+    ##   are no threads in the engine, so a field write through one borrow is
+    ##   visible to every other borrow of the same session
+    ## - a consumer that stops mid-render resumes through the same session object.
+    ##   A second render over the artifact opens a second session through `startRender`
     tmpl*: CompiledTemplate
     symbols*: CompiledSymbols
       ## the parse-built arena, shared by ref with the parse caller, no lifetime contract
     state*: RenderState
     force*: MacroForcer
       ## the engine's macro-force handle, bound once at `startRender`, stateless,
-      ## so every `Context` copy carries the same callable
+      ## every session carrying the same callable
 
-  MacroForcer* = proc (c: var Context, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
-    ## Runs one macro body to completion on a copy of the context given, the captured
-    ## text returned as a string value.
+  MacroForcer* = proc (c: JinjaRenderContext, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+    ## Runs one macro body to completion on a second session built over the caller's
+    ## artifact refs, the captured text returned as a string value.
     ## Contract:
-    ## - the engine binds it once at `startRender` into `Context.force`, the statement
-    ##   and expression tiers both reaching it through the context they already hold,
-    ##   no parameter threading and no import cycle crossing the tier split
-    ## - the body runs on the callee's own copy, the caller's context borrow untouched
+    ## - the engine binds it once at `startRender` into `JinjaRenderContext.force`, both tiers
+    ##   reaching it through the session they already hold, no parameter threading
+    ##   and no import cycle crossing the tier split
+    ## - the body runs on the callee's own session, the caller's session untouched
 
 func findName(t: CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `NoLink` when the template never names it.
@@ -372,7 +382,7 @@ func scopeHas*(st: var RenderState, id: int32, val: var JinjaVal): bool =
         return true
   false
 
-func lookupName*(c: var Context, name: openArray[char]): JinjaVal =
+func lookupName*(c: JinjaRenderContext, name: openArray[char]): JinjaVal =
   ## Returns the binding of `name` in one render, resolving the scopes innermost first,
   ## then the render context root dict, then undefined.
   ## Absence is a value, never an error, `is defined` testing for exactly that shape.

@@ -4,14 +4,13 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Compiled chattyninja templates and their render driver.
-# | Step     | Behavior                                                                                                                                       |
-# | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-# | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                      |
-# | load     | `parseTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into      |
-# | render   | `startRender` opens a `Context` over the artifact and `pull` walks the arena through `steps`, all control state in the context's `RenderState` |
-# | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter       |
-# | force    | `startRender` binds the macro forcer into the context, expressions reading the render state's scopes, root and clock directly                  |
-#
+# | Step     | Behavior                                                                                                                                                  |
+# | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+# | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                                 |
+# | load     | `parseTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into                 |
+# | render   | `startRender` opens a `JinjaRenderContext` over the artifact and `pull` walks the arena through `steps`, all control state in the context's `RenderState` |
+# | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                  |
+# | force    | `startRender` binds the macro forcer into the context, expressions reading the render state's scopes, root and clock directly                             |
 # Resumption state for a re-entered step lives in the render state's row stack, never in a node.
 # `nkFor`, `nkSetBlock` and `nkGeneration` are re-entered by their bodies, `nkIf`
 # single-entry, parse time backpatching its branch bodies past the whole chain.
@@ -26,17 +25,17 @@ import std/unicode
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
 
 type
-  Step = proc (c: var Context, n: int32) {.nimcall, noSideEffect.}
+  Step = proc (c: JinjaRenderContext, n: int32) {.nimcall, noSideEffect.}
     ## One construct's step.
     ## - writes only through `c.state`, leaving `c.state.curNode` on the node control enters next
     ## - expressions resolve names against the context's scopes, root and clock,
     ##   reaching the statement tier only through `c.force`
 
-func forceMacro(c: var Context, mc: MacroVal, args: Args): JinjaVal
+func forceMacro(c: JinjaRenderContext, mc: MacroVal, args: Args): JinjaVal
 
-func startMacro(c: var Context, lo, hi: int, call: PendingCallVal, retNode: int32)
+func startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNode: int32)
 
-func forceCondCall(c: var Context, v: JinjaVal, lo, hi: int32): JinjaVal =
+func forceCondCall(c: JinjaRenderContext, v: JinjaVal, lo, hi: int32): JinjaVal =
   ## Renders a pending macro call read in a boolean position to its output value, the branch
   ## test then reading the output's bytes, matching every other macro-call forcing leg.
   ## `lo` and `hi` bound the boolean expression the raise reports when no forcer was supplied.
@@ -44,7 +43,7 @@ func forceCondCall(c: var Context, v: JinjaVal, lo, hi: int32): JinjaVal =
     raise jinjaErr("a macro call result was consumed where no macro forcer was supplied", lo, hi - lo)
   c.force(c, v.pc.mc, v.pc.args)
 
-func lookupNameById(c: var Context, id: int32): JinjaVal =
+func lookupNameById(c: JinjaRenderContext, id: int32): JinjaVal =
   ## Returns the binding of an interned name, undefined when absent. The scope key is
   ## the id, no string rebuilt per lookup.
   if id == NoLink:
@@ -121,13 +120,13 @@ func bindName(st: var RenderState, name: int32, val: JinjaVal) =
 # textually onto the arena entry. Render code never binds a `Node` value, a binding running
 # SmallSeq's `=copy` and heap-allocating a spilled payload's block (7% of corpus nodes spill).
 
-func stepVerbatim(c: var Context, n: int32) {.nimcall.} =
+func stepVerbatim(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Streams the final text run, whose span already reflects every whitespace rule.
   template nd: Node = c.tmpl.nodes[n]
   c.state.emitSpan(nd.lo, nd.hi)
   c.state.curNode = nd.succ
 
-func stepEmit(c: var Context, n: int32) {.nimcall.} =
+func stepEmit(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Evaluates the expression span and hands the result on as the pending piece, or enters
   ## a whole-expression macro call's body instead, the body's output pieces draining
   ## through the caller's window until the row closes.
@@ -144,7 +143,7 @@ func stepEmit(c: var Context, n: int32) {.nimcall.} =
     c.state.emitValue(v)
   c.state.curNode = nd.succ
 
-func stepIf(c: var Context, n: int32) {.nimcall.} =
+func stepIf(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Chooses a branch once, branch bodies terminating past the chain, so no row exists for it.
   ## A pending macro call in the condition renders to its output bytes before the tec.state.
   template nd: Node = c.tmpl.nodes[n]
@@ -202,7 +201,7 @@ func loopStateOf(v: JinjaVal, lo, hi: int): LoopState =
   of vkRange: iterRange(v)
   else: notIterable(v, lo, hi)
 
-func bindTargets(c: var Context, n: int32, item: JinjaVal) =
+func bindTargets(c: JinjaRenderContext, n: int32, item: JinjaVal) =
   ## Binds the `nkFor` loop targets at `n`, more than one target unpacking a sequence, which
   ## is what `x.items()` feeds through `{% for k, v in x.items() %}`.
   template nd: Node = c.tmpl.nodes[n]
@@ -216,7 +215,7 @@ func bindTargets(c: var Context, n: int32, item: JinjaVal) =
     for i in 0 ..< ntargets:
       c.state.bindName(nd.targetAt(i), item.xs.items[i])
 
-func filterKeep(c: var Context, lo, hi: int32): bool =
+func filterKeep(c: JinjaRenderContext, lo, hi: int32): bool =
   ## Evaluates one filter clause in boolean position, a pending macro call rendering
   ## to its output value, the result tested for truth.
   ## Returns the keep decision.
@@ -227,7 +226,7 @@ func filterKeep(c: var Context, lo, hi: int32): bool =
     evaluated = forceCondCall(c, evaluated, lo, hi)
   isTruthy(evaluated, lo)
 
-func forStep(c: var Context, n: int32, lp: LoopState): bool =
+func forStep(c: JinjaRenderContext, n: int32, lp: LoopState): bool =
   ## Per-item loop step shared by the re-entry advance and the empty-body drain.
   ## Moves the shared cursor one item, binds the loop targets and runs the filter clause.
   ##
@@ -260,7 +259,7 @@ func closeRow(st: var RenderState, at: int, next: int32) =
   st.curNode = next
   st.rows.setLen(at)
 
-func advanceFor(c: var Context, n: int32) =
+func advanceFor(c: JinjaRenderContext, n: int32) =
   ## Re-entry path. Moves the shared cursor to the next item passing the filter clause,
   ## re-enters the body, or closes the row and continues past the loop, the close popping
   ## the scope to the row's entry mark.
@@ -273,7 +272,7 @@ func advanceFor(c: var Context, n: int32) =
     return
   c.state.curNode = nd.child
 
-func stepFor(c: var Context, n: int32) {.nimcall.} =
+func stepFor(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## `{% for %}`:
   ##   a matching row on top of the stack means advance, anything else means set up the iteration.
   ##
@@ -325,7 +324,7 @@ func stepFor(c: var Context, n: int32) {.nimcall.} =
       return
   c.state.curNode = nd.child
 
-func stepSet(c: var Context, n: int32) {.nimcall.} =
+func stepSet(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Single-target `{% set %}`, the target carried as an interned name id in the child slot,
   ## emitting nothing, the pending piece untouched.
   template nd: Node = c.tmpl.nodes[n]
@@ -357,7 +356,7 @@ func closeMacroRow(st: var RenderState, at: int, next: int32) =
   closeRow(st, at, next)
   dec st.macroDepth
 
-func stepBreak(c: var Context, n: int32) {.nimcall.} =
+func stepBreak(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Unwinds to the nearest for-row, stopping at a macro-call boundary so a break cannot cross out of its macro.
   ## `{% continue %}` shares the node kind, the keyword span discriminating the two.
   ## A continue leaves the for-row and its scope in place, the loop's advance step running next.
@@ -398,7 +397,7 @@ func stepBreak(c: var Context, n: int32) {.nimcall.} =
     dec k
   outsideEveryFor(c.tmpl, nd.lo, nd.hi)
 
-func stepSetNs(c: var Context, n: int32) {.nimcall.} =
+func stepSetNs(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## `ns.field = expr`, mutating the shared namespace mapping in place, visible to every
   ## holder of the `DictVal` ref, and emitting nothing.
   template nd: Node = c.tmpl.nodes[n]
@@ -414,13 +413,13 @@ func stepSetNs(c: var Context, n: int32) {.nimcall.} =
   dictSet(ns.d, c.symbols.names[nd.field], v)
   c.state.curNode = nd.succ
 
-func stepSetBlock(c: var Context, n: int32) {.nimcall.} =
+func stepSetBlock(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Opens a capture sink for the body and, on re-entry, binds the capture to the target name.
   template nd: Node = c.tmpl.nodes[n]
   gap("nkSetBlock", "corpus demand is 2 sites: gemma4.jinja:322 and northminicode10.jinja:2",
       nd.lo.int, nd.hi.int)
 
-func stepGeneration(c: var Context, n: int32) {.nimcall.} =
+func stepGeneration(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## `{% generation %}` renders its body byte for byte as without it, the span of the model's turn recorded around it.
   ##
   ## Contract:
@@ -446,7 +445,7 @@ func stepGeneration(c: var Context, n: int32) {.nimcall.} =
   c.state.rows.add r
   c.state.curNode = nd.child
 
-func stepMacroDef(c: var Context, n: int32) {.nimcall.} =
+func stepMacroDef(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Binds a macro value and emits nothing, the body never running here. A macro row
   ## arriving back on the definition node closes instead, the body's output pieces drained
   ## through the caller's window, control continuing at the row's return node.
@@ -471,7 +470,7 @@ const
   ]
     ## Dispatch table, total over `NodeKind`, a new kind without a step a compile error.
 
-func bindMacroArgs(c: var Context, n: int32, args: Args, lo, hi: int) =
+func bindMacroArgs(c: JinjaRenderContext, n: int32, args: Args, lo, hi: int) =
   ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`,
   ## each parameter carrying its interned name id and default expression span in the node tail.
   ##
@@ -549,7 +548,7 @@ func bindMacroArgs(c: var Context, n: int32, args: Args, lo, hi: int) =
     argErr("macro `" & macroName & "` takes no keyword argument `" &
         spanString(keywordName(args.vals[i])) & "`")
 
-func capturePend(c: var Context, outp: var string) =
+func capturePend(c: JinjaRenderContext, outp: var string) =
   ## Appends the pending piece's bytes to `outp` and retires the piece, the capture form
   ## of a forced macro body whose output never reaches the caller's window.
   case c.state.pend.kind
@@ -578,7 +577,7 @@ func capturePend(c: var Context, outp: var string) =
       copyMem(addr outp[at], addr buf[0], n)
     c.state.pend = Piece(kind: pkNone)
 
-func startMacro(c: var Context, lo, hi: int, call: PendingCallVal, retNode: int32) =
+func startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNode: int32) =
   ## Opens a macro row and enters the body.
   ## Contract:
   ## - the body's output pieces drain through the caller's window until the row closes on the definition node
@@ -600,18 +599,20 @@ func startMacro(c: var Context, lo, hi: int, call: PendingCallVal, retNode: int3
   else:
     c.state.curNode = call.mc.body
 
-func forceMacro(c: var Context, mc: MacroVal, args: Args): JinjaVal =
+func forceMacro(c: JinjaRenderContext, mc: MacroVal, args: Args): JinjaVal =
   ## Statement tier side of the macro forcer.
   ## Contract:
-  ## - the body runs on a copy of the context, so the caller's scopes, rows, program counter,
-  ##   depth and pending piece are untouched by construction, and a raise inside the body
-  ##   abandons the copy wholesale
-  ## - the capture is transient, the copy discarded once its pieces drain into the result
-  ##   value's string, shared dict writes staying visible
+  ## - the body runs on a second session constructed explicitly over the caller's
+  ##   artifact refs, so the caller's scopes, rows, program counter, depth and pending
+  ##   piece are untouched by construction, a raise abandoning the nested session
+
+  ## - the capture is transient, the nested session discarded once its pieces drain
+  ##   into the result value's string, shared dict writes staying visible
   ##
   ## Body state and depth:
-  ## - the body's expressions resolve against the copy's scopes, so a body binding
-  ##   or a nested streamed call never reads the caller's scopes
+  ## - the body's expressions resolve against the nested session's scopes, a snapshot
+  ##   of the caller's scope chain taken at the force point, so a body binding
+  ##   or a nested streamed call never mutates the caller's scopes
   ## - depth is capped against the inherited depth, so the cap chains across nested forces,
   ##   and a breach raises
   doAssert c.state.pend.kind == pkNone,
@@ -619,7 +620,14 @@ func forceMacro(c: var Context, mc: MacroVal, args: Args): JinjaVal =
   if c.state.macroDepth >= MacroDepthCap:
     raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
         c.symbols.names[mc.name] & "` (forced call)")
-  var c2 = c
+  # Nested-session shape, reproducing the field-copy semantics the corpus verifies:
+  # - the same artifact refs and the same stateless force handle
+  # - a snapshot of the caller's render state taken at the force point, the caller's
+  #   scopes staying visible to the body through the innermost-first scan
+  # - the body's bindings and rows accumulating on the snapshot, the whole session
+  #   abandoned once the capture drains
+  var c2 = JinjaRenderContext(tmpl: c.tmpl, symbols: c.symbols,
+      state: c.state, force: c.force)
   inc c2.state.macroDepth
   let scopeBase = c2.state.scopes.len
   c2.state.scopes.add @[]
@@ -654,7 +662,7 @@ func forceMacro(c: var Context, mc: MacroVal, args: Args): JinjaVal =
 
 # Render driver:
 
-func startRender*(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, clock = 0.0): Context =
+func startRender*(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, clock = 0.0): JinjaRenderContext =
   ## Returns a render context over the shared artifact, ready to render `root`, the render
   ## context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
   ##
@@ -664,16 +672,16 @@ func startRender*(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, 
   ## - `sym` is the parse-built arena by ref, every render over the artifact holding the same heap object, no borrow contract
   # A zero-node artifact (empty or comment-only text) dispatches nothing, its render
   # completing on the first pull, so the program counter starts past the arena.
-  Context(tmpl: tmpl, symbols: sym, force: forceMacro,
+  JinjaRenderContext(tmpl: tmpl, symbols: sym, force: forceMacro,
       state: RenderState(curNode: (if tmpl.nodes.len == 0: NoLink else: 0), cur: 0,
           pend: Piece(kind: pkNone),
           scopes: @[(default(Scope))], root: root, clock: clock))
 
-func pull*(c: var Context, buf: var openArray[char]): int =
+func pull*(c: JinjaRenderContext, buf: var openArray[char]): int =
   ## Returns the render's next bytes, written into `buf[0 ..< result]`.
   ##
   ## Ownership sits with the caller, whose buffer capacity is the delivery window.
-  ## Resumption state is `c.state`, so consumers holding separate `Context` copies over one
+  ## Resumption state is `c.state`, so consumers holding separate `JinjaRenderContext` copies over one
   ## artifact each own their delivery position.
   ##
   ## Delivery contract:
@@ -748,7 +756,7 @@ func pull*(c: var Context, buf: var openArray[char]): int =
           tmpl.nodes[n].hi.int - tmpl.nodes[n].lo.int)
     Steps[c.tmpl.nodes[n].kind](c, n)
 
-iterator items*(c: var Context): openArray[char] =
+iterator items*(c: JinjaRenderContext): openArray[char] =
   ## Pulls the render in chunks of at most `ChunkSize` bytes, one `pull` call per chunk.
   ## - a chunk borrows the iterator's local window, so a consumer must finish with it before
   ##   advancing the loop
@@ -760,9 +768,9 @@ iterator items*(c: var Context): openArray[char] =
       break
     yield buf.toOpenArray(0, n - 1)
 
-func pullAll*(c: var Context): string =
+func pullAll*(c: JinjaRenderContext): string =
   ## Returns the whole render in one call. Chunking composes with `cur`, so a consumer
-  ## that counts bytes first can redeliver from a fresh `Context` without a counting pass.
+  ## that counts bytes first can redeliver from a fresh `JinjaRenderContext` without a counting pass.
   var buf: array[ChunkSize, char]
   while true:
     let n = pull(c, buf)

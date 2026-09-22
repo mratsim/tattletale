@@ -87,9 +87,9 @@ type PullChunks[N: static int] = object
   ## - partial consumption resumes from the driver's fields, no byte re-handed
   ##
   ## The compiled template stays at the consumer's scope, `CompiledTemplate.jinja` borrowing
-  ## the template text. The template is a ref, so a `Context` embeds in another object
+  ## the template text. The template is a ref, so a `JinjaRenderContext` embeds in another object
   ## without losing the borrowed view.
-  c: Context
+  c: JinjaRenderContext
   buf: array[N, char]
 
 func jsonError(msg: string): JsonParseError =
@@ -393,7 +393,7 @@ proc renderAllPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clo
   pullAll(c)
 
 
-func pullChunks[N: static int](c: Context): PullChunks[N] =
+func pullChunks[N: static int](c: JinjaRenderContext): PullChunks[N] =
   ## Builds the windowed pull machine over the render context `c` of a compiled template.
   PullChunks[N](c: c)
 

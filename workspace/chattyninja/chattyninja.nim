@@ -9,7 +9,7 @@
 ##
 ## - the render tier, `startRender`, `pull`, `pullAll` and `renderToString`, and `parseTemplate`
 ## - the data tier, `JinjaVal` with `ValueKind`, the constructors, `dictSet`/`dictGet`, `JinjaError`
-## - the caller objects, `Context`, `RenderState` and the compiled artifact behind `parseTemplate`
+## - the caller objects, `JinjaRenderContext`, `RenderState` and the compiled artifact behind `parseTemplate`
 ##
 ## `jinja_interpolation` and `jinja_builtins` stay internal, no re-export.
 
@@ -21,7 +21,7 @@ export cnj_engine.startRender, cnj_engine.pull, cnj_engine.pullAll,
     cnj_engine.renderToString, cnj_parse.parseTemplate
 
 # Compiled artifact, render state and the caller's objects.
-export cnj_types.Context, cnj_types.RenderState, cnj_types.CompiledTemplate,
+export cnj_types.JinjaRenderContext, cnj_types.RenderState, cnj_types.CompiledTemplate,
     cnj_types.CompiledSymbols, cnj_types.Node, cnj_types.NodeKind,
     cnj_types.MacroForcer, cnj_types.Row, cnj_types.RowKind, cnj_types.Piece,
     cnj_types.PieceKind, cnj_types.Binding, cnj_types.Scope,
