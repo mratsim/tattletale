@@ -8,8 +8,11 @@
 ##   window with every pause point in its fields, so a drain resumed through the same
 ##   `Ser` never re-emits a byte
 ## - the internal renderers `pyStrInto` and `pyReprInto` write a value into a caller-owned `Cursor`
-## - `serReset`, `serDone` and `pullSer` drive a held `Ser`, `pyStr`, `toJson` and `pullJSON`
+## - `serReset`, `serDone` and `pullSer` drive a held `Ser`, `pyStr` and `toJson`
 ##   are the one-call consumer entry points
+
+# Public API:
+#   toJson with JsonOpts. Every other entry stays serializer plumbing between the src modules.
 
 import std/unicode
 import jinja_data_model
@@ -515,14 +518,6 @@ func serString(js: var Ser): string =
     cap = cap * 2
     result.setLen(cap)
   result.setLen(written)
-
-func pullJSON*(dst: var openArray[char], v: JinjaVal, opts = JsonOpts()): int =
-  ## Returns the count of `tojson` rendering bytes of `v` written into `dst`.
-  ## Window-sized, the count stopping at `dst.len` when the rendering does not fit:
-  ## - the unwritten tail is dropped, so a rendering that may exceed the window drains
-  ##   through `pullSer` over a held `Ser`
-  var js = serValue(v, smJson, opts)
-  pullSer(js, dst)
 
 func pyStr*(v: JinjaVal): string =
   ## Returns the value as template output text. Strings pass through unchanged, everything
