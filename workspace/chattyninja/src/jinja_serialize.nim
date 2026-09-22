@@ -63,8 +63,7 @@ type
     ## - queued literals and separators drain from the chunk buffer and `sep`, unquoted
     ##   string bodies copy straight from `s`
     ## - quoted string bodies, container brackets and entries advance through the phases
-    ## - a str-mode `~` tree flattens into `concatTail`, operands dispatching one after
-    ##   the other, and a lazy `range` renders its list form arithmetically, one element per index
+    ## - a lazy `range` renders its list form arithmetically, one element per index
     mode: SerMode
     opts: JsonOpts
       ## `tojson` knobs, read in `smJson` mode only
@@ -93,10 +92,6 @@ type
       ## queued bytes in `buf` and the read position
     stack: seq[SerFrame]
       ## open containers, outermost first
-    concatTail: seq[JinjaVal]
-      ## operands of a str-mode `~` tree, taken over whole at reset, never sliced
-    concatPos: int
-      ## index of the next `concatTail` operand after the leaf in `v`
     closeSeq: bool
       ## the `spClose` phase writes a sequence bracket, else a mapping bracket
 
@@ -119,7 +114,6 @@ func pyStrInto(sb: var Cursor, v: JinjaVal) =
   of vkCut: sb.add v.raw.toOpenArray(v.lo, v.hi - 1)
   of vkSeq, vkDict, vkNs, vkLoop, vkMacro, vkRange: sb.pyReprInto(v, 0)
   of vkCall: raise jinjaErr("a macro call result must be rendered before stringification")
-  of vkConcat: raise jinjaErr("a concat must be rendered in emit position before stringification")
 
 func reprQuoted(sb: var Cursor, s: string) =
   ## Writes Python's single-quoted repr of `s`, the form container reprs use for keys
@@ -255,11 +249,6 @@ func serFinish(js: var Ser) =
   ## Closes the value just rendered. The enclosing container advances to its next entry,
   ## nested containers closing outward, the rendering completing once the stack empties.
   if js.stack.len == 0:
-    if js.concatPos < js.concatTail.len:
-      js.v = move js.concatTail[js.concatPos]
-      inc js.concatPos
-      js.phase = spDispatch
-      return
     js.phase = spDone
     return
   inc js.stack[^1].idx
@@ -371,8 +360,6 @@ func serDispatch(js: var Ser) =
     serFinish(js)
   of vkCall:
     raise jinjaErr("a macro call result must be rendered before serialization")
-  of vkConcat:
-    raise jinjaErr("a concat must be rendered in emit position before serialization")
   of vkSeq:
     if v.xs.items.len == 0:
       serQueue(js, "[]")
@@ -471,17 +458,7 @@ func serReset*(js: var Ser, v: sink JinjaVal, mode: SerMode, opts = JsonOpts()) 
   js.bpos = 0
   js.closeSeq = false
   js.stack.setLen(0)
-  js.concatTail.setLen(0)
-  js.concatPos = 0
-  if mode == smStr and v.kind == vkConcat:
-    # Operand stack taken over whole, the cursor walks it by index, leaf 0
-    # dispatched directly and 1 onward after each completion, render order
-    # with no sliced copy.
-    js.concatTail = v.xs.items
-    js.v = js.concatTail[0]
-    js.concatPos = 1
-  else:
-    js.v = move v
+  js.v = move v
 
 func serValue(v: JinjaVal, mode: SerMode, opts = JsonOpts()): Ser =
   ## Returns a serializer positioned before the first byte of `v`'s rendering.

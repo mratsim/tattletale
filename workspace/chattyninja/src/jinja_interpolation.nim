@@ -301,11 +301,8 @@ func forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   cx.ports.force(cx.ports.env, v.pc.mc, v.pc.args)
 
 func forceOperand(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
-  ## Returns `v` with a pending macro call rendered to its output value, a concat rendered
-  ## to the text it emits, the value-position forcing contract held in one proc.
-  ##
-  ## The `opConcat` rhs and the binary-operator boundary force only a call kind,
-  ## a concat nesting there.
+  ## Returns `v` with a pending macro call rendered to its output value, the value-position
+  ## forcing contract held in one proc.
   ## - reached from every truth test, `and`/`or` left operand, ternary condition,
   ##   call argument, postfix operator operand and binary-operator boundary
   ## - a consumed call with no macro forcer supplied raises at `cx.tok.lo`, a dry walk
@@ -315,20 +312,10 @@ func forceOperand(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   ##   the copy then discarded
   if cx.dry:
     return v
-  case v.kind
-  of vkCall: forceCall(ports, cx, v)
-  of vkConcat: strVal(pyStr(v))
-  else: v
-
-func evalItem(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
-  ## Returns `v` for the operators that read a plain value:
-  ## - a concat raises here, the argument list being the one plain-value reader
-  ## - everything else routes through the forcing contract, a dry walk returning `v`
-  if cx.dry:
-    return v
-  if v.kind == vkConcat:
-    raise jinjaErr("a concat must be rendered in emit position", cx.tok.lo)
-  forceOperand(ports, cx, v)
+  if v.kind == vkCall:
+    forceCall(ports, cx, v)
+  else:
+    v
 
 func argKey(tmpl: CompiledTemplate, a: Arg): string =
   ## Returns the dict key one argument supplies to `namespace` or `dict`, a keyword-bound argument
@@ -964,7 +951,7 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
       advance(tmpl, cx)
       var parts = newSeq[JinjaVal]()
       while not isPunct(cx, "]"):
-        parts.add evalItem(ports, cx, expr(tmpl, ports, cx, 1))
+        parts.add forceOperand(ports, cx, expr(tmpl, ports, cx, 1))
         if isPunct(cx, ","):
           advance(tmpl, cx)
           if isPunct(cx, "]"):
@@ -979,11 +966,11 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
       advance(tmpl, cx)
       var dv = DictVal()
       while not isPunct(cx, "}"):
-        let k = evalItem(ports, cx, expr(tmpl, ports, cx, 1))
+        let k = forceOperand(ports, cx, expr(tmpl, ports, cx, 1))
         if not isPunct(cx, ":"):
           raise jinjaErr("dict literal entry needs a `:`", cx.tok.lo)
         advance(tmpl, cx)
-        let val = evalItem(ports, cx, expr(tmpl, ports, cx, 1))
+        let val = forceOperand(ports, cx, expr(tmpl, ports, cx, 1))
         if not cx.dry:
           dv.dictSet(pyStr(k), val)
         if isPunct(cx, ","):
@@ -1024,7 +1011,7 @@ func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
       return intVal(int64.low)
     let operandLo = cx.tok.lo
     enterDepth(cx)
-    let v = evalItem(ports, cx, unary(tmpl, ports, cx))
+    let v = forceOperand(ports, cx, unary(tmpl, ports, cx))
     dec cx.depth
     if cx.dry:
       return undefinedVal()
@@ -1123,18 +1110,49 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
       return l
     expr(tmpl, ports, cx, 3)
   of opIn, opNotIn:
-    let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, 6))
+    let rhs = forceOperand(ports, cx, expr(tmpl, ports, cx, 6))
     if cx.dry:
       undefinedVal()
     else:
       let r = containsVal(rhs, lhs, opLo)
       boolVal(if op == opIn: r else: not r)
   of opConcat:
-    let rhs = expr(tmpl, ports, cx, 7)
-    if cx.dry: undefinedVal()
-    else: concatVal(lhs, if rhs.kind == vkCall: forceOperand(ports, cx, rhs) else: rhs)
+    # `~` is eager string concatenation, minijinja's string_concat upgraded to buffer
+    # accumulation. The chain's leaves evaluate once in render order, the result sized
+    # before a byte is written, each leaf's bytes added where they live. A string leaf
+    # passes through, a cut streams the span it survives, and every other leaf
+    # renders by the `pyStr` form.
+    # The outer precedence loop consumed the first `~`, so the first rhs parses here before the chain continues past it.
+    var leaves = @[lhs]
+    leaves.add forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(opConcat) + 1))
+    while isPunct(cx, "~"):
+      advance(tmpl, cx)
+      leaves.add forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(opConcat) + 1))
+    if cx.dry:
+      undefinedVal()
+    else:
+      var parts: seq[string]
+      var total = 0
+      for i, leaf in leaves:
+        case leaf.kind
+        of vkStr: total += leaf.s.len
+        of vkCut: total += leaf.hi.int - leaf.lo.int
+        else:
+          if parts.len == 0:
+            parts = newSeq[string](leaves.len)
+          parts[i] = pyStr(leaf)
+          total += parts[i].len
+      var acc = newString(total)
+      var outp = Cursor(buf: toOpenArray(acc, 0, acc.high), len: 0)
+      for i, leaf in leaves:
+        case leaf.kind
+        of vkStr: outp.add leaf.s
+        of vkCut: outp.add leaf.raw.toOpenArray(leaf.lo, leaf.hi - 1)
+        else: outp.add parts[i]
+      acc.setLen(outp.len)
+      strVal(move acc)
   of opAdd, opSub, opMod:
-    let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
+    let rhs = forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs, opLo)
   of opMul, opDiv, opFloorDiv, opPow:
     skipExpr(tmpl, ports, cx, binPrec(op) + 1)
@@ -1145,7 +1163,7 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
     else:
       gapWhat("operator", OpSpelling[op])
   else:
-    let rhs = evalItem(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
+    let rhs = forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs, opLo)
 
 func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =

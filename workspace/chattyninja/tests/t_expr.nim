@@ -162,35 +162,23 @@ doAssert render("'ss' in 'substring'") == "False",
     "a substring test whose first byte matches keeps scanning, absent stays absent"
 doAssert render("'ngs' in 'substring'") == "False", "an absent multi-byte-position needle stays absent"
 
-# `~` binds tighter than any comparison, so `1 == 1 ~ 'x'` compares against the unrendered
-# concatenation and raises. Parentheses hand the comparison result to `~`, and a precedence
-# swap toward `==` would render the second form's bytes for the first expression.
+# `~` binds tighter than any comparison, so `1 == 1 ~ 'x'` compares `1` against
+# the accumulated string `1x`. Parentheses hand the comparison result to `~`, while
+# a precedence swap toward `==` would render the second form's bytes for the first expression.
 doAssert render("(1 == 1) ~ 'x'") == "Truex", "parentheses give the comparison to `~`"
-try:
-  discard render("1 == 1 ~ 'x'")
-  doAssert false, "a comparison over an unrendered concat did not raise"
-except JinjaError as e:
-  doAssert "emit position" in e.what, e.what
 
-# A concat reads plain values in two places, the argument list and a boolean position.
-#   `raise_exception` names its message from the materialized text, a condition reading
-#   the rendered bytes. Every other non-emit position raises, and a set-bound concat
-#   streams when a later emit reaches it.
+# `~` reads its leaves' rendered bytes in every position, a condition, a dict literal,
+# a filter chain, a set target later emitted or compared, and a macro argument whose
+# `raise_exception` names its message from the materialized text.
 block concatConsumption:
-  try:
-    discard render("{'k': 'a' ~ 'b'}")
-    doAssert false, "a concat in a dict literal did not raise"
-  except JinjaError as e:
-    doAssert "emit position" in e.what, e.what
+  doAssert render("{'k': 'a' ~ 'b'}") == "{'k': 'ab'}",
+      "a concat inside a dict literal reads its rendered text"
   doAssert renderStmt("{% if 'a' ~ 'b' %}x{% endif %}") == "x",
       "a concat in a condition reads its rendered bytes"
-  try:
-    discard render("('a' ~ 'b') | tojson")
-    doAssert false, "a concat under a filter did not raise"
-  except JinjaError as e:
-    doAssert "emit position" in e.what, e.what
+  doAssert render("('a' ~ 'b') | tojson") == "\"ab\"",
+      "a concat under a filter reads its rendered text"
   doAssert renderStmt("{% set q = 'a' ~ 'b' %}{{ q }}") == "ab",
-      "a set-bound concat did not stream on its later emit"
+      "a set-bound concat renders its accumulated text on the later emit"
   doAssert renderStmt("{% set q = 'a' ~ 'b' %}{% if q %}x{% endif %}") == "x",
       "a set-bound concat reads its rendered bytes in a condition"
   try:
@@ -199,6 +187,31 @@ block concatConsumption:
   except JinjaError as e:
     doAssert e.what == "boom bang", e.what
   doAssert render("(1 ~ 2) ~ 3") == "123", "a grouped concat flattens into its parent"
+
+# `~` positions that consume it, recorded before the eager-concatenation change, each
+# surviving behavior carrying its own evidence here.
+block concatContract:
+  # Truth position reads the rendered bytes, several leaves deep.
+  doAssert renderStmt("{% if 'a' ~ 1 ~ none %}y{% else %}n{% endif %}") == "y",
+      "a multi-leaf concat in a condition reads its rendered bytes"
+  # A `for` filter clause reads the rendered bytes per item.
+  doAssert renderStmt("{% for x in [1, 2] if 'a' ~ x %}{{ x }}{% endfor %}") == "12",
+      "a concat in a filter clause reads its rendered bytes per item"
+  # A set target emits its rendered bytes.
+  doAssert renderStmt("{% set q = 'a' ~ 1 ~ 'b' %}{{ q }}") == "a1b",
+      "a set-bound concat renders its accumulated text on the later emit"
+  # A whole-chain emit streams its leaves' bytes left to right.
+  # String leaves pass through, scalars stringify by the render.
+  doAssert render("people.name ~ '-' ~ people.age", withPeople) == "ada-36",
+      "a concat over data reads mixes strings and scalars in render order"
+
+# Eager `~` widens where the concatenated value reads as its rendered string.
+# A set-bound concat compares and iterates as rendered text.
+block concatEagerContract:
+  doAssert renderStmt("{% set q = 'a' ~ 'b' %}{{ q == 'ab' }}|{% for c in q %}{{ c }}{% endfor %}") == "True|ab",
+      "a set-bound concat compares and iterates as its rendered string"
+  doAssert render("1 == 1 ~ 'x'") == "False",
+      "a comparison over a concat compares the accumulated string"
 
 # A lone `=` spells no infix in Jinja, so the expression must end before it and the unclosed
 # tail is reported instead of comparing. Keyword arguments are matched in argument lists, not here.

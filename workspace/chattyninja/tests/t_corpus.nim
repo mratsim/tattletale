@@ -762,8 +762,9 @@ block lazyWindowDrain:
   doAssert lazyPieces >= 3, "the lazy piece drained in fewer than three pulls, " &
       "the mid-piece drain is unobserved"
 
-# A `~` concat emit streams its operands through the lazy-piece machinery, left to right,
-# and an 8-byte window forces the drain across several pulls mid-value.
+# A `~` concat emit accumulates its leaves into one string pending piece under
+# the eager form, the streaming operand machinery deleted. An 8-byte window
+# still forces the drain across several pulls mid-value.
 # ---------------------------------------------------------------------------
 block concatWindowDrain:
   let ctx = listCtx()
@@ -776,7 +777,7 @@ block concatWindowDrain:
   var acc = ""
   var lazyPulls = 0
   while true:
-    if d.state.pend.kind == pkLazy:
+    if d.state.pend.kind == pkStr:
       inc lazyPulls
     let n = pull(d, window)
     if n == 0:

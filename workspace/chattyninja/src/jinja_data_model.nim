@@ -81,11 +81,10 @@ type
     ## Jinja value tiers the corpus reaches, float carried for JSON fidelity only,
     ## no template in the corpus doing float arithmetic:
     ## - `vkCall` holds a macro call whose body has not run
-    ## - `vkConcat` holds a `~` tree awaiting its emit
     ## - `vkCut` holds a stripped span of a string, rendering as its sub-span bytes
     ##   and materializing only where a consumer stores or re-computes it
     vkUndefined, vkNone, vkBool, vkInt, vkFloat, vkStr, vkSeq, vkDict, vkNs, vkLoop, vkMacro,
-    vkCall, vkConcat, vkRange, vkCut
+    vkCall, vkRange, vkCut
 
   SeqVal* = ref object
     ## Shared sequence of values, the `vkSeq` payload.
@@ -162,7 +161,7 @@ type
     of vkInt: i*: int64
     of vkFloat: f*: float64
     of vkStr: s*: string
-    of vkSeq, vkConcat: xs*: SeqVal
+    of vkSeq: xs*: SeqVal
     of vkDict, vkNs: d*: DictVal
     of vkLoop: lp*: LoopState
     of vkMacro: mc*: MacroVal
@@ -467,20 +466,6 @@ iterator argItems*(a: Args): lent Arg =
   for i in 0 ..< a.n:
     yield a.vals[i]
 
-func concatVal*(cl, cr: JinjaVal): JinjaVal =
-  ## Returns the `~` of two values. The operands flatten into one list in render order,
-  ## so the serializer streams them one after another and the parse never re-walks a tree.
-  var items: seq[JinjaVal]
-  if cl.kind == vkConcat:
-    items = cl.xs.items
-  else:
-    items = @[cl]
-  if cr.kind == vkConcat:
-    items.add cr.xs.items
-  else:
-    items.add cr
-  JinjaVal(kind: vkConcat, xs: SeqVal(items: items))
-
 func codepointVals*(s: string): seq[JinjaVal] =
   ## Returns one single-codepoint string value per codepoint of `s`, in order.
   var acc = newSeq[JinjaVal]()
@@ -490,10 +475,10 @@ func codepointVals*(s: string): seq[JinjaVal] =
 
 func isTruthy*(v: JinjaVal, at: int = NoOffset): bool =
   ## Returns Jinja truthiness, undefined, none, zero, empty text and empty containers false.
-  ## `at` locates the raise a held call or concat carries when a caller tests one without
-  ## rendering it first:
-  ## - every boolean-position consumer coerces a call or concat to its rendered bytes
-  ##   before the test, so this raise is the contract guard, never the render path
+  ## `at` locates the raise a held call carries when a caller tests one without rendering it
+  ## first:
+  ## - every boolean-position consumer coerces a call to its rendered bytes before the test,
+  ##   so this raise is the contract guard, never the render path
   result = case v.kind
   of vkUndefined, vkNone: false
   of vkBool: v.b
@@ -507,7 +492,6 @@ func isTruthy*(v: JinjaVal, at: int = NoOffset): bool =
   of vkRange: rangeLen(v.r) != 0
   of vkMacro: true
   of vkCall: raise jinjaErr("a macro call result must be rendered before a truthiness test", at)
-  of vkConcat: raise jinjaErr("a concat must be rendered in emit position before a truthiness test", at)
 
 func dictGet*(d: DictVal, key: openArray[char]): JinjaVal =
   ## Returns the value under `key`, undefined when absent. Absence is a value, never an error:
@@ -602,7 +586,6 @@ func eqValAt(a, b: JinjaVal, depth: int, offset: int): bool =
   of vkMacro: a.mc == b.mc
   of vkRange: a.r.rangesEqual(b.r)
   of vkCall: raise jinjaErr("a macro call result must be rendered before an equality test")
-  of vkConcat: raise jinjaErr("a concat must be rendered in emit position before an equality test")
   # Unreachable leg, a cut returns above against the other side's sub-span compare.
   of vkCut: false
   of vkUndefined, vkBool, vkInt, vkFloat: false

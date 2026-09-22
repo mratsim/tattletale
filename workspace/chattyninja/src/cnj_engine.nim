@@ -185,8 +185,6 @@ func stepIf(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderStat
   var v = evalSpan(tmpl, ports, nd.lo, nd.hi)
   if v.kind == vkCall:
     v = forceCondCall(ports, v, nd.lo, nd.hi)
-  elif v.kind == vkConcat:
-    v = strVal(pyStr(v))
   if isTruthy(v, nd.lo):
     st.curNode = if nd.child == NoLink: nd.succ else: nd.child
   elif nd.alt != NoLink:
@@ -227,7 +225,7 @@ func loopStateOf(v: JinjaVal, lo, hi: int): LoopState =
   ## Dispatch at the loop's chain entry, one leg per iterable kind the corpus supports
   ## and the shared raise leg for everything else.
   ##
-  ## - the iterable arrives rendered where it can hold a pending call or concat,
+  ## - the iterable arrives rendered where it can hold a pending call,
   ##   `stepFor` coercing before the dispatch
   ## - the cursor answers the random access
   ##   `loop.previtem` and `loop.nextitem` give, per index
@@ -254,15 +252,13 @@ func bindTargets(tmpl: CompiledTemplate, st: var RenderState, n: int32, item: Ji
 
 func filterKeep(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): bool =
   ## Evaluates one filter clause in boolean position, a pending macro call rendering
-  ## to its output value and a concat to the text it emits, the result tested for truth.
+  ## to its output value, the result tested for truth.
   ## Returns the keep decision.
   ## - a caller may discard it, walking every remaining item by the shared cursor
   ## - the clause's raises and side effects are the only observable behavior there
   var evaluated = evalSpan(tmpl, ports, lo, hi)
   if evaluated.kind == vkCall:
     evaluated = forceCondCall(ports, evaluated, lo, hi)
-  elif evaluated.kind == vkConcat:
-    evaluated = strVal(pyStr(evaluated))
   isTruthy(evaluated, lo)
 
 func forStep(tmpl: CompiledTemplate, st: var RenderState, ports: Ports, n: int32, lp: LoopState): bool =
@@ -331,8 +327,6 @@ func stepFor(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderSta
     # A macro call in the iterable position renders at its call site, its output
     # what the loop walks, matching upstream.
     iterable = forceCondCall(ports, iterable, nd.lo, nd.hi)
-  elif iterable.kind == vkConcat:
-    iterable = strVal(pyStr(iterable))
   let lp = loopStateOf(iterable, nd.lo.int, nd.hi.int)
   if lp.loopLen == 0:
     st.curNode = nd.succ
