@@ -248,6 +248,13 @@ doAssert render("{'k': 't' if true else 'f'}['k']") == "t",
 doAssert render("('t' if false else 'f')") == "f",
     "a ternary inside a parenthesised group takes one arm"
 
+# Mapping equality reads key presence before the values
+doAssert render("{'b': 1, 'a': 2} == {'a': 2, 'b': 1}") == "True",
+    "mapping equality is order-insensitive"
+doAssert render("{} == none") == "False", "an empty mapping is not `none`"
+doAssert render("{'a': missing} == {'b': 1}") == "False",
+    "an undefined value does not equal an absent key in the other mapping"
+
 # `is defined` set-guard
 # ---------------------------------------------------------------------------
 

@@ -582,8 +582,18 @@ func eqValAt(a, b: JinjaVal, depth: int, offset: int): bool =
       return true
     if a.d.keys.len != b.d.keys.len:
       return false
+    # Key presence decides before the values, a stored undefined value is not
+    # equal to a key the other mapping lacks, dictGet handing undefined back
+    # for absence otherwise equating `undefined == undefined`
     for i, k in a.d.keys:
-      if not eqValAt(a.d.vals[i], b.d.dictGet(k), depth + 1, offset):
+      var j = -1
+      for bi, bk in b.d.keys:
+        if bk == k:
+          j = bi
+          break
+      if j < 0:
+        return false
+      if not eqValAt(a.d.vals[i], b.d.vals[j], depth + 1, offset):
         return false
     true
   of vkLoop: a.lp == b.lp

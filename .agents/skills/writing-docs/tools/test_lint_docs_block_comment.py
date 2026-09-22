@@ -35,7 +35,7 @@ proc render() =
 def main():
     """Runs the two assertions, printing nothing, exiting 0 on pass."""
     findings = lint_text(NIM_SRC, "fixture_block_comment.nim")
-    interior = [f for f in findings if 9 <= f.line <= 11]
+    interior = [f for f in findings if 6 <= f.line <= 11]
     assert not interior, "block-comment interior counted findings: %r" % interior
     counted = [f for f in findings if f.rule not in
                ("wall-of-text", "wall-no-air", "missing-diagram", "how-narration")]

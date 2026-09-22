@@ -294,6 +294,10 @@ func splitTags(p: var Parser): Tag =
         if rawLo < rawHi and p.src[rawLo] in {' ', '\t'} and p.src.atLineStart(rawLo):
           while rawLo < rawHi and p.src[rawLo] in {' ', '\t'}:
             inc rawLo
+        # trim_blocks drops the one newline a plain `{% raw %}` opening carries into
+        # the body, the dashed opening's leading-whitespace strip covering it already
+        if rawLo < rawHi and p.src[rawLo] == '\n':
+          inc rawLo
         if stripAfter:
           var j = endAfterTag
           while j < stop and p.src[j] in cnj_types.Whitespace:

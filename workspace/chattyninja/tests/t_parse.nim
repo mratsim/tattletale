@@ -146,6 +146,12 @@ const rawShapes = [
   ("X{% raw -%}\n  Y  {% endraw %}Z", "XY  Z"),
   ("A{% raw %} X {% endraw-%}B", "A X B"),
   ("A{% raw %}X{% endraw-%}\n  Y", "AXY"),
+  # trim_blocks drops the one newline a plain `{% raw %}` opening carries into
+  # the body, the dashed opening stripping the whole leading run already
+  ("{% raw %}\nX{% endraw %}", "X"),
+  ("{% raw %}\n\nX{% endraw %}", "\nX"),
+  ("{% raw %}\n  X{% endraw %}", "  X"),
+  ("A{% raw %}\nX{% endraw %}B", "AXB"),
 ]
 for (rSrc, want) in rawShapes:
   let (rn, _) = parseTemplate(rSrc)
