@@ -157,8 +157,8 @@ func longShape(withToolRound: bool, name: string): Shape =
 
 func benchShapes(): array[4, Shape] =
   ## short2 and typical10 are the canonical short and typical shapes.
-  ## long40 carries the tool round and long40-nt the same conversation without it, so
-  ## the tool round's cost and any construct gap it triggers separate cleanly.
+  ## long40 carries the tool round, long40-nt the same conversation without it,
+  ## the pair separating the tool round's cost and any construct gap it triggers.
   [shortShape(), typicalShape(), longShape(true, "long40"), longShape(false, "long40-nt")]
 
 const
@@ -361,9 +361,9 @@ when defined(benchAlloc):
     # One copy belongs to the context lookup that fills a `JinjaVal`.
     # The other belongs to the pending-piece assignment that moves the string into render-state storage.
     let msgs = ctx.d.dictGet("messages")
-    # Message 1 rather than the system message, whose content is a compile-time
-    # constant. A literal-backed string makes both copies below buffer shares
-    # measuring 0, so message 1's content is runtime-built, matching the templates' real message strings.
+    # Message 1's content is runtime-built, matching the templates' real message
+    # strings. The system message's content is a compile-time constant backed
+    # by a literal, measuring 0 buffer shares in both copies below.
     let msg1 = msgs.xs.items[1]
     let dg = allocsOf:
       for _ in 0 ..< 1000:

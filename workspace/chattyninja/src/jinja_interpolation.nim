@@ -1242,7 +1242,7 @@ func scanTernary(c: JinjaRenderContext, cx: var Cx, headLo: int): Ternary =
 
 func expr(c: JinjaRenderContext, cx: var Cx, minPrec: int): JinjaVal =
   ## Parses and evaluates one expression, Pratt-style:
-  ##   a prefix, then infix while the operator binds at least `minPrec`.
+  ##   prefix parse --> infix loop at binding power >= `minPrec` --> ternary scan
   ## - a ternary binds loosest, and no other operator holds binding power 1, so the ternary is
   ##   resolved before its head runs
   ## - the condition is evaluated once and exactly one branch is, which keeps a branch holding
