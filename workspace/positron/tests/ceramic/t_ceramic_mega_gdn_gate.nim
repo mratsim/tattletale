@@ -272,8 +272,8 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   let deadlineWall = epochTime() - t0
   echo &"[mega gate] deadline case wall {deadlineWall:.2f} s " &
     &"(the bounded wait's default deadline " &
-    &"{MegaWaitDeadlineSecMs.float / 1000.0:.0f} s)"
-  doAssert deadlineWall < MegaWaitDeadlineSecMs.float / 1000.0,
+    &"{TTT_MegaWaitDeadlineSecMs.float / 1000.0:.0f} s)"
+  doAssert deadlineWall < TTT_MegaWaitDeadlineSecMs.float / 1000.0,
     "the launch outlived the bounded wait's deadline"
   countersZeroWhere("the deadline case's launch")
 

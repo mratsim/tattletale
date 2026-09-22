@@ -136,23 +136,23 @@ proc builtin_prefetch*(p: pointer, rw: cint, locality: cint) {.importc: "__built
 ## target, so the off-arm64 fallback compiles.
 proc builtin_assume_aligned*(p: pointer, alignment: csize_t): pointer {.importc: "__builtin_assume_aligned", nodecl.}
 
-const simdArch {.strdefine.} = "auto"
+const TTT_SIMD_ARCH {.strdefine.} = "auto"
 
-when simdArch == "auto":
+when TTT_SIMD_ARCH == "auto":
   when defined(arm64):
     const resolvedArch = "sme"
   else:
     const resolvedArch = "generic"
-elif simdArch == "sme":
+elif TTT_SIMD_ARCH == "sme":
   when defined(arm64):
     const resolvedArch = "sme"
   else:
-    {.error: "simdArch='sme' requires an arm64 target with SME (Apple M4 or newer).".}
+    {.error: "TTT_SIMD_ARCH='sme' requires an arm64 target with SME (Apple M4 or newer).".}
 else:
   const resolvedArch = "generic"
 
 when resolvedArch == "generic":
-  {.warning: "SIMD arch is 'generic'. For SME acceleration compile with -d:simdArch=sme on arm64.".}
+  {.warning: "SIMD arch is 'generic'. For SME acceleration compile with -d:TTT_SIMD_ARCH=sme on arm64.".}
 
 proc simdArchString*(): string = resolvedArch
 

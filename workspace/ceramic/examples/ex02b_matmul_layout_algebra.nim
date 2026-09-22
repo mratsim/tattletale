@@ -111,9 +111,9 @@ proc autoTileParams(atom: static MmaAtom; T: typedesc; M, K: int): tuple[mc, kc:
 
 import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
 
-const simdArch {.strdefine.} = "auto"
+const TTT_SIMD_ARCH {.strdefine.} = "auto"
 
-when simdArch == "auto":
+when TTT_SIMD_ARCH == "auto":
   when defined(amd64):
     when defined(avx512f):
       import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx512
@@ -125,19 +125,19 @@ when simdArch == "auto":
       const resolvedArch = "generic"
   else:
     const resolvedArch = "generic"
-elif simdArch == "avx512":
+elif TTT_SIMD_ARCH == "avx512":
   import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx512
   const resolvedArch = "avx512"
-elif simdArch == "avx_fma":
+elif TTT_SIMD_ARCH == "avx_fma":
   import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx_fma_ex02b
   const resolvedArch = "avx_fma"
 else:
   const resolvedArch = "generic"
 
 when resolvedArch == "generic":
-  {.warning: "SIMD arch is 'generic'. For SIMD acceleration compile with -d:simdArch=avx_fma or -d:simdArch=avx512.".}
+  {.warning: "SIMD arch is 'generic'. For SIMD acceleration compile with -d:TTT_SIMD_ARCH=avx_fma or -d:TTT_SIMD_ARCH=avx512.".}
 
-when simdArch != "auto":
+when TTT_SIMD_ARCH != "auto":
   # Manual SIMD arch override — ensure C++ compiler gets the right flags
   when resolvedArch == "avx_fma":
     {.passC: "-mavx -mfma".}

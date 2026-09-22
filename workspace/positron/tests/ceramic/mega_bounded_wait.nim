@@ -18,11 +18,11 @@
 ##   (the no-copy binding keeps the page host-visible while the grid runs)
 ##
 ## A wedged grid cannot be unwound in-process, so the diagnostic is terminal.
-## MegaWaitDeadlineSecMs=<n> gives the default deadline `-d:MegaWaitDeadlineSecMs=<n>`.
+## TTT_MegaWaitDeadlineSecMs=<n> gives the default deadline `-d:TTT_MegaWaitDeadlineSecMs=<n>`.
 
 import std/[monotimes, times, os, strformat]
 
-const MegaWaitDeadlineSecMs* {.intdefine.} = 20_000
+const TTT_MegaWaitDeadlineSecMs* {.intdefine.} = 20_000
   ## Default deadline in milliseconds, one config point.
 
 type LaunchCtx = ref object
@@ -40,7 +40,7 @@ proc runMegaBounded*[C: static int](
     launch: proc(): bool {.gcsafe.};
     counters: ptr UncheckedArray[uint32];
     stageNames: array[C, string];
-    deadlineMs: float = MegaWaitDeadlineSecMs.float;
+    deadlineMs: float = TTT_MegaWaitDeadlineSecMs.float;
     onExpiry: proc(msg: string) {.gcsafe.} = nil) =
   ## One megakernel launch under a wall-clock deadline.
   ##

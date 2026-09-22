@@ -59,8 +59,8 @@ import ceramic_pagebuf
 import mega_bounded_wait
 import ceramic_fam
 
-const debugOrow {.booldefine.} = false
-const debugTie {.booldefine.} = false
+const TTT_DEBUG_OROW {.booldefine.} = false
+const TTT_DEBUG_TIE {.booldefine.} = false
 
 # ─── Band-model constants ─────────────────────────────────────────────
 
@@ -867,7 +867,7 @@ proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
     let denom = sumSq / float64(HeadVDim) + eps64
     let relRstd = float64(HeadVDim) * U32 * sumSqAbs / denom + RelRsqrt
     let relOut = relRstd + 4.0 * UBf + 2.0 * U32 + RelSilu
-    when debugOrow:
+    when TTT_DEBUG_OROW:
       if bh < 2:
         let normedMSec = snap.secBf(sNormed, NumVHeads * HeadVDim)
         var lineY = "[dbg] y  :"
@@ -947,7 +947,7 @@ proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
     result.gapBar = max(result.gapBar, pairBar)
     if gapP <= localP[i] + localP[j] or gapX <= sensE[i] + sensE[j]:
       result.gateClear = false
-      when debugTie:
+      when TTT_DEBUG_TIE:
         echo &"[tie] slot {s}: gapP {gapP:.3e} vs localP " &
           &"{localP[i]+localP[j]:.3e}, gapX {gapX:.3e} vs sensE " &
           &"{sensE[i]+sensE[j]:.3e}"
@@ -960,7 +960,7 @@ proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
   result.gapBar = max(result.gapBar, pairBarR)
   if gapPR <= localP[iR] + localP[jR] or gapXR <= sensE[iR] + sensE[jR]:
     result.gateClear = false
-    when debugTie:
+    when TTT_DEBUG_TIE:
       echo &"[tie] runner: gapP {gapPR:.3e} vs localP " &
         &"{localP[iR]+localP[jR]:.3e}, gapX {gapXR:.3e} vs sensE " &
         &"{sensE[iR]+sensE[jR]:.3e}"
