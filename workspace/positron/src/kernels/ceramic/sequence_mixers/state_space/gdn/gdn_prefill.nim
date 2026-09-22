@@ -26,7 +26,7 @@
 ## | family dtype | fp16 primary (`gdnPrefillChunkScanF16`), bf16 the range-robust fallback (`gdnPrefillChunkScanBf16`)                                |
 ## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                       |
 ## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state         |
-## | decay / q̃   | exp2(g·log2e), log2e = 1.4426950408889634'f32, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
+## | decay / q̃   | exp2(g·log2e), log2e is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
 ##
 ## | contract       | value                                                                                                                                                                               |
 ## | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -69,6 +69,7 @@
 ##   the host owns the layout and the lifetime
 ## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
 
+from ../../../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
 
@@ -112,7 +113,6 @@ proc gdnPrefillChunkScanBf16At*(
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
     doAssert ChunkC <= 64, "the per-lane cumg/u local arrays are sized by ChunkC"
-  const log2e = 1.4426950408889634'f32
   const rowTiles = TileR div atom.getM()
   const colTiles = Dk div atom.getN()
   const vpt = atom.getVpt()
@@ -160,7 +160,7 @@ proc gdnPrefillChunkScanBf16At*(
       kProd.mul(s, k32)
       var kVec: rv(float32, TileR, Dk)
       kVec.row_sum(kProd)
-      let decayT = exp2(cumg[t] * log2e)
+      let decayT = exp2(cumg[t] * Log2e)
       let gRead = decayT * kVec.data[0]
 
       let bt = beta[bh * T + gt].float32
@@ -177,7 +177,7 @@ proc gdnPrefillChunkScanBf16At*(
         kkProd.mul(k32, ks32)
         var kkVec: rv(float32, TileR, Dk)
         kkVec.row_sum(kkProd)
-        let pdts = exp2((cumg[t] - cumg[sIdx]) * log2e)
+        let pdts = exp2((cumg[t] - cumg[sIdx]) * Log2e)
         uacc += pdts * kkVec.data[0] * uLoc[sIdx]
       let ut = bt * (v32 - gRead) - bt * uacc
       uLoc[t] = ut
@@ -206,7 +206,7 @@ proc gdnPrefillChunkScanBf16At*(
         qkProd.mul(q32, ks32)
         var qkVec: rv(float32, TileR, Dk)
         qkVec.row_sum(qkProd)
-        let pdts = exp2((cumg[t] - cumg[sIdx]) * log2e)
+        let pdts = exp2((cumg[t] - cumg[sIdx]) * Log2e)
         yVal += pdts * qkVec.data[0] * uLoc[sIdx]
 
       if colIn == 0:
@@ -214,10 +214,10 @@ proc gdnPrefillChunkScanBf16At*(
 
     # Carry out of the chunk:
     # S = exp(cumg[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s
-    let decayEnd = exp2(cumg[cLen - 1] * log2e)
+    let decayEnd = exp2(cumg[cLen - 1] * Log2e)
     s.mul(s, decayEnd)
     for sIdx in 0 ..< cLen:
-      let ws = exp2((cumg[cLen - 1] - cumg[sIdx]) * log2e) * uLoc[sIdx]
+      let ws = exp2((cumg[cLen - 1] - cumg[sIdx]) * Log2e) * uLoc[sIdx]
       var ksT: rt_l(bfloat16, TileR, Dk)
       ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var ks32: rt_l(float32, TileR, Dk)
@@ -268,7 +268,6 @@ proc gdnPrefillChunkScanF16At*(
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
     doAssert ChunkC <= 64, "the per-lane cumg/u local arrays are sized by ChunkC"
-  const log2e = 1.4426950408889634'f32
   const rowTiles = TileR div atom.getM()
   const colTiles = Dk div atom.getN()
   const vpt = atom.getVpt()
@@ -316,7 +315,7 @@ proc gdnPrefillChunkScanF16At*(
       kProd.mul(s, k32)
       var kVec: rv(float32, TileR, Dk)
       kVec.row_sum(kProd)
-      let decayT = exp2(cumg[t] * log2e)
+      let decayT = exp2(cumg[t] * Log2e)
       let gRead = decayT * kVec.data[0]
 
       let bt = beta[bh * T + gt].float32
@@ -333,7 +332,7 @@ proc gdnPrefillChunkScanF16At*(
         kkProd.mul(k32, ks32)
         var kkVec: rv(float32, TileR, Dk)
         kkVec.row_sum(kkProd)
-        let pdts = exp2((cumg[t] - cumg[sIdx]) * log2e)
+        let pdts = exp2((cumg[t] - cumg[sIdx]) * Log2e)
         uacc += pdts * kkVec.data[0] * uLoc[sIdx]
       let ut = bt * (v32 - gRead) - bt * uacc
       uLoc[t] = ut
@@ -362,7 +361,7 @@ proc gdnPrefillChunkScanF16At*(
         qkProd.mul(q32, ks32)
         var qkVec: rv(float32, TileR, Dk)
         qkVec.row_sum(qkProd)
-        let pdts = exp2((cumg[t] - cumg[sIdx]) * log2e)
+        let pdts = exp2((cumg[t] - cumg[sIdx]) * Log2e)
         yVal += pdts * qkVec.data[0] * uLoc[sIdx]
 
       if colIn == 0:
@@ -370,10 +369,10 @@ proc gdnPrefillChunkScanF16At*(
 
     # Carry out of the chunk:
     # S = exp(cumg[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s
-    let decayEnd = exp2(cumg[cLen - 1] * log2e)
+    let decayEnd = exp2(cumg[cLen - 1] * Log2e)
     s.mul(s, decayEnd)
     for sIdx in 0 ..< cLen:
-      let ws = exp2((cumg[cLen - 1] - cumg[sIdx]) * log2e) * uLoc[sIdx]
+      let ws = exp2((cumg[cLen - 1] - cumg[sIdx]) * Log2e) * uLoc[sIdx]
       var ksT: rt_l(float16, TileR, Dk)
       ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var ks32: rt_l(float32, TileR, Dk)

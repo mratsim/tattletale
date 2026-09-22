@@ -32,6 +32,7 @@
 ##   layouts. The pair `rmsWeightElem` + `siluMulElem` splits bit-exactly at the bf16
 ##   weighted value, so the f32/bf16 memory round-trip is exact
 
+import math_consts
 import workspace/crucible
 import workspace/ceramic
 import ./tile_widen
@@ -163,7 +164,7 @@ proc siluMulElem*[R, C: static int; A: static MmaAtom](
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
         let g = g32.frags[n][m].frag[v]
-        let silu32 = g / (1.0'f32 + exp2((-g) * 1.4426950408889634'f32))
+        let silu32 = g / (1.0'f32 + exp2((-g) * Log2e))
         dst.frags[n][m].frag[v] =
           (x32.frags[n][m].frag[v] * silu32).bfloat16
 
@@ -188,7 +189,7 @@ proc rmsNormGatedElem*[R, C: static int; A: static MmaAtom](
         let weighted =
           (w.frags[n][m].frag[v].float32 * normed.float32).bfloat16
         let g = g32.frags[n][m].frag[v]
-        let silu32 = g / (1.0'f32 + exp2((-g) * 1.4426950408889634'f32))
+        let silu32 = g / (1.0'f32 + exp2((-g) * Log2e))
         dst.frags[n][m].frag[v] =
           (weighted.float32 * silu32).bfloat16
 

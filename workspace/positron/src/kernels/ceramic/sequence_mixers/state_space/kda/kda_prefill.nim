@@ -29,7 +29,7 @@
 ## | family dtype | fp16 primary (`kdaPrefillChunkScanF16`), bf16 the range-robust fallback (`kdaPrefillChunkScanBf16`)                            |
 ## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                   |
 ## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state     |
-## | decay / q̃   | exp2(cumg·log2e) per channel in-device, log2e = 1.4426950408889634'f32, q̃ = per-element division by the runtime f32 qScale    |
+## | decay / q̃   | exp2(cumg·log2e) per channel in-device, log2e is the shared `math_consts.Log2e`, q̃ = per-element division by the runtime f32 qScale    |
 ##
 ## | contract            | value                                                                                                                                        |
 ## | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -88,6 +88,7 @@
 ##   the host owns the layout and the lifetime
 ## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
 
+from ../../../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
 
@@ -145,7 +146,6 @@ proc kdaPrefillChunkScanBf16At*(
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
     doAssert ChunkC <= 64, "the per-lane u local array is sized by ChunkC"
-  const log2e = 1.4426950408889634'f32
   const rowTiles = TileR div atom.getM()
   const colTiles = Dk div atom.getN()
   const vpt = atom.getVpt()
@@ -188,7 +188,7 @@ proc kdaPrefillChunkScanBf16At*(
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:
             dT.frags[n][m].frag[f] = cumgT.frags[n][m].frag[f]
-      dT.mul(dT, log2e)
+      dT.mul(dT, Log2e)
       exp2(dT, dT)
 
       # G_t = Σ_dk dT[dk]·k_t[dk]·S_carry[row][dk], the decayed carry read
@@ -226,13 +226,13 @@ proc kdaPrefillChunkScanBf16At*(
             for m in 0 ..< colTiles:
               for f in 0 ..< vpt:
                 pdT.frags[n][m].frag[f] = dT.frags[n][m].frag[f] *
-                  exp2(-cumgS.frags[n][m].frag[f] * log2e)
+                  exp2(-cumgS.frags[n][m].frag[f] * Log2e)
         else:
           for n in 0 ..< rowTiles:
             for m in 0 ..< colTiles:
               for f in 0 ..< vpt:
                 pdT.frags[n][m].frag[f] = exp2(
-                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
+                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         kkProd.mul(kkProd, pdT)
@@ -271,13 +271,13 @@ proc kdaPrefillChunkScanBf16At*(
             for m in 0 ..< colTiles:
               for f in 0 ..< vpt:
                 pdT.frags[n][m].frag[f] = dT.frags[n][m].frag[f] *
-                  exp2(-cumgS.frags[n][m].frag[f] * log2e)
+                  exp2(-cumgS.frags[n][m].frag[f] * Log2e)
         else:
           for n in 0 ..< rowTiles:
             for m in 0 ..< colTiles:
               for f in 0 ..< vpt:
                 pdT.frags[n][m].frag[f] = exp2(
-                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
+                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         qkProd.mul(qkProd, pdT)
@@ -294,7 +294,7 @@ proc kdaPrefillChunkScanBf16At*(
     var cumgEnd: rt_l(float32, TileR, Dk)
     cumgEnd.loadTile(glCumg, (kHeadLin + gtEnd * Dk, 0, 0, 0))
     var dEnd: rt_l(float32, TileR, Dk)
-    dEnd.mul(cumgEnd, log2e)
+    dEnd.mul(cumgEnd, Log2e)
     exp2(dEnd, dEnd)
     s.mul(s, dEnd)
     for sIdx in 0 ..< cLen:
@@ -312,13 +312,13 @@ proc kdaPrefillChunkScanBf16At*(
           for m in 0 ..< colTiles:
             for f in 0 ..< vpt:
               pdEnd.frags[n][m].frag[f] = dEnd.frags[n][m].frag[f] *
-                exp2(-cumgS.frags[n][m].frag[f] * log2e)
+                exp2(-cumgS.frags[n][m].frag[f] * Log2e)
       else:
         for n in 0 ..< rowTiles:
           for m in 0 ..< colTiles:
             for f in 0 ..< vpt:
               pdEnd.frags[n][m].frag[f] = exp2(
-                (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
+                (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
       pdEnd.mul(pdEnd, ks32)
       let ws = uLoc[sIdx]
       for n in 0 ..< rowTiles:
@@ -369,7 +369,6 @@ proc kdaPrefillChunkScanF16At*(
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
     doAssert ChunkC <= 64, "the per-lane u local array is sized by ChunkC"
-  const log2e = 1.4426950408889634'f32
   const rowTiles = TileR div atom.getM()
   const colTiles = Dk div atom.getN()
   const vpt = atom.getVpt()
@@ -412,7 +411,7 @@ proc kdaPrefillChunkScanF16At*(
         for m in 0 ..< colTiles:
           for f in 0 ..< vpt:
             dT.frags[n][m].frag[f] = cumgT.frags[n][m].frag[f]
-      dT.mul(dT, log2e)
+      dT.mul(dT, Log2e)
       exp2(dT, dT)
 
       # G_t = Σ_dk dT[dk]·k_t[dk]·S_carry[row][dk], the decayed carry read
@@ -450,13 +449,13 @@ proc kdaPrefillChunkScanF16At*(
             for m in 0 ..< colTiles:
               for f in 0 ..< vpt:
                 pdT.frags[n][m].frag[f] = dT.frags[n][m].frag[f] *
-                  exp2(-cumgS.frags[n][m].frag[f] * log2e)
+                  exp2(-cumgS.frags[n][m].frag[f] * Log2e)
         else:
           for n in 0 ..< rowTiles:
             for m in 0 ..< colTiles:
               for f in 0 ..< vpt:
                 pdT.frags[n][m].frag[f] = exp2(
-                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
+                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         kkProd.mul(kkProd, pdT)
@@ -495,13 +494,13 @@ proc kdaPrefillChunkScanF16At*(
             for m in 0 ..< colTiles:
               for f in 0 ..< vpt:
                 pdT.frags[n][m].frag[f] = dT.frags[n][m].frag[f] *
-                  exp2(-cumgS.frags[n][m].frag[f] * log2e)
+                  exp2(-cumgS.frags[n][m].frag[f] * Log2e)
         else:
           for n in 0 ..< rowTiles:
             for m in 0 ..< colTiles:
               for f in 0 ..< vpt:
                 pdT.frags[n][m].frag[f] = exp2(
-                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
+                  (cumgT.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         qkProd.mul(qkProd, pdT)
@@ -518,7 +517,7 @@ proc kdaPrefillChunkScanF16At*(
     var cumgEnd: rt_l(float32, TileR, Dk)
     cumgEnd.loadTile(glCumg, (kHeadLin + gtEnd * Dk, 0, 0, 0))
     var dEnd: rt_l(float32, TileR, Dk)
-    dEnd.mul(cumgEnd, log2e)
+    dEnd.mul(cumgEnd, Log2e)
     exp2(dEnd, dEnd)
     s.mul(s, dEnd)
     for sIdx in 0 ..< cLen:
@@ -536,13 +535,13 @@ proc kdaPrefillChunkScanF16At*(
           for m in 0 ..< colTiles:
             for f in 0 ..< vpt:
               pdEnd.frags[n][m].frag[f] = dEnd.frags[n][m].frag[f] *
-                exp2(-cumgS.frags[n][m].frag[f] * log2e)
+                exp2(-cumgS.frags[n][m].frag[f] * Log2e)
       else:
         for n in 0 ..< rowTiles:
           for m in 0 ..< colTiles:
             for f in 0 ..< vpt:
               pdEnd.frags[n][m].frag[f] = exp2(
-                (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * log2e)
+                (cumgEnd.frags[n][m].frag[f] - cumgS.frags[n][m].frag[f]) * Log2e)
       pdEnd.mul(pdEnd, ks32)
       let ws = uLoc[sIdx]
       for n in 0 ..< rowTiles:

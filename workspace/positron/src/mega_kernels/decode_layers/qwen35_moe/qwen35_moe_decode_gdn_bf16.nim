@@ -51,6 +51,7 @@
 ## | geometry | the Qwen bf16 class: hidden 2048, convDim 8192, Hv 32, Hk 16, Dk = Dv = 128, conv kernel 4, router softmax top-8 over 256 experts, intermediate 512 |
 ## | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 
+from ../../../kernels/ceramic/math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
 import ../../../kernels/ceramic/dense_linear
@@ -316,7 +317,7 @@ proc convRingChannels(convW, ring, xCol, outCol: ptr UncheckedArray[bfloat16], c
     acc += convW[c * ConvKernel + RingWidth].float32 * xCol[c].float32
     let tapped = acc.bfloat16
     let sig = tapped.float32 /
-      (1.0'f32 + exp2((-tapped.float32) * 1.4426950408889634'f32))
+      (1.0'f32 + exp2((-tapped.float32) * Log2e))
     outCol[c] = sig.bfloat16
     ring[c * RingWidth + 0] = ring[c * RingWidth + 1]
     ring[c * RingWidth + 1] = ring[c * RingWidth + 2]
@@ -366,9 +367,9 @@ proc gateValues(aRow, bRow, dtBias: ptr UncheckedArray[bfloat16],
   ## - beta = sigmoid(b) with one bf16 round
   let h = int32(thread_index_in_threadgroup)
   let x = aRow[h].float32 + dtBias[h].float32
-  g[h] = -exp2(aLog[h] * 1.4426950408889634'f32) * softplusDev(x)
+  g[h] = -exp2(aLog[h] * Log2e) * softplusDev(x)
   beta[h] = (1.0'f32 / (1.0'f32 +
-      exp2((-bRow[h].float32) * 1.4426950408889634'f32))).bfloat16
+      exp2((-bRow[h].float32) * Log2e))).bfloat16
 
 # ─── The dispatcher ───────────────────────────────────────────────────
 

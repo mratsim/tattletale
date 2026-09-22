@@ -28,6 +28,7 @@
 ## Design provenance, ported from the taxonomy worktree's WIP spelling
 ## ffn/moe/moe_fwd.nim (20260912-positron-taxonomy), kernel design mined, no test shape carried over
 
+import math_consts
 import workspace/crucible
 import workspace/ceramic
 import ./tile_io_rows
@@ -162,7 +163,7 @@ proc softmaxScores[A: static MmaAtom; F: static int](
   var ls = 0.0'f32
   for m in 0 ..< colFrags:
     for v in 0 ..< vpt:
-      ls += exp2((scores.frags[0][m].frag[v] - lm) * 1.4426950408889634'f32)
+      ls += exp2((scores.frags[0][m].frag[v] - lm) * Log2e)
   ls += simdShuffleDown(ls, 16'u32)
   ls += simdShuffleDown(ls, 8'u32)
   ls += simdShuffleDown(ls, 4'u32)
@@ -172,7 +173,7 @@ proc softmaxScores[A: static MmaAtom; F: static int](
   for m in 0 ..< colFrags:
     for v in 0 ..< vpt:
       scores.frags[0][m].frag[v] =
-        exp2((scores.frags[0][m].frag[v] - lm) * 1.4426950408889634'f32) / ls
+        exp2((scores.frags[0][m].frag[v] - lm) * Log2e) / ls
 
 proc topkScores[A: static MmaAtom; F, K: static int](
     scores: RtLeft[float32, 8, F, A],

@@ -15,16 +15,16 @@
 ## - g is a (B·Hk, Dk) matrix, one log-decay per KEY channel, decayed elementwise BEFORE the kv read
 ## - the kv read contracts the decayed state kᵀ·Diag(exp(g))·S, a post-contraction decay kᵀ·S·exp(g) is the GDN op
 ##
-## | contract     | value                                                                                           |
-## | ------------ | ----------------------------------------------------------------------------------------------- |
-## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync      |
-## | q, k, g, β   | (B·Hk, Dk) f32 q/k/g post-l2norm, (B·Hv,) f32 beta, never rounded to family                     |
-## | v, y         | (B·Hv, Dv) family dtype each, y gets one round-to-nearest-even                                  |
-## | family dtype | fp16 primary (`kdaDecodeStepTileF16`), bf16 the range-robust fallback (`kdaDecodeStepTileBf16`) |
-## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk    |
-## | batch        | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs         |
-## | decay        | exp2(g·log2e) per channel, log2e = 1.4426950408889634'f32 (Metal has no exp device builtin)     |
-## | q̃           | divides q per element by the runtime f32 `qScale`, the host's f64 √Dk cast to f32               |
+## | contract     | value                                                                                              |
+## | ------------ | -------------------------------------------------------------------------------------------------- |
+## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync         |
+## | q, k, g, β   | (B·Hk, Dk) f32 q/k/g post-l2norm, (B·Hv,) f32 beta, never rounded to family                        |
+## | v, y         | (B·Hv, Dv) family dtype each, y gets one round-to-nearest-even                                     |
+## | family dtype | fp16 primary (`kdaDecodeStepTileF16`), bf16 the range-robust fallback (`kdaDecodeStepTileBf16`)    |
+## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk       |
+## | batch        | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs            |
+## | decay        | exp2(g·log2e) per channel, log2e is the shared `math_consts.Log2e` (Metal has no exp device builtin) |
+## | q̃           | divides q per element by the runtime f32 `qScale`, the host's f64 √Dk cast to f32                  |
 ##
 ## | contract            | value                                                                                                                                                |
 ## | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -34,9 +34,6 @@
 ##
 ## - the recorded contract keeps q/k/g/beta f32, this spelling's family axis covers v and y only
 ## - the bf16 core is the recorded Kimi spelling, the fp16 core follows the family dtype verdict
-##
-## - design provenance, WIP spelling in the 20260912-positron-taxonomy worktree,
-##   kernel design mined, test shapes not carried over
 ##
 ## - Entries are consumer-side, a `metal` block wraps the grid-driven proc with concrete
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
@@ -56,6 +53,7 @@
 ## - the f32 state buffer persists across steps and launches with no in-kernel reset,
 ##   the host owns the layout and the lifetime
 ## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
+from ../../../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
 
@@ -130,7 +128,7 @@ proc kdaDecodeStepTileF16At*(
   # The g tile broadcasts one key head's log-decay row over the tile rows,
   # the exp2 form (see the module doc), one tile mul into the state.
   # gT is dead past the decay, the output walk uses its own oProd tile.
-  gT.mul(gT, 1.4426950408889634'f32)
+  gT.mul(gT, Log2e)
   exp2(gT, gT)
   s.mul(s, gT)
 
@@ -233,7 +231,7 @@ proc kdaDecodeStepTileBf16At*(
   gT.loadTile(glG, (kLin, 0, 0, 0))
   vT.loadTile(glV, (yLin, 0, dvBlock, 0))
 
-  gT.mul(gT, 1.4426950408889634'f32)
+  gT.mul(gT, Log2e)
   exp2(gT, gT)
   s.mul(s, gT)
 

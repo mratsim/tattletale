@@ -24,6 +24,7 @@
   ## | partials 2 | the merge launch applies the single El round to the shared contribution                                   |
   ## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                          |
 
+import math_consts
 import workspace/crucible
 import workspace/ceramic
 import ./moe_router
@@ -137,7 +138,7 @@ proc siluMulElemEager[R, C: static int; A: static MmaAtom](
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
         let g = gHalf.frags[n][m].frag[v]
-        let s = g / (1.0'f32 + exp2(-g * 1.4426950408889634'f32))
+        let s = g / (1.0'f32 + exp2(-g * Log2e))
         dst.frags[n][m].frag[v] =
           (s.bfloat16.float32 * uHalf.frags[n][m].frag[v]).bfloat16
 
@@ -279,7 +280,7 @@ proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
     when SharedGate:
       let l32 = sharedGateLogit[bfloat16, H](x, shared_gate_vec_w, t)
       gateVal = (1.0'f32 / (1.0'f32 +
-        exp2(-l32 * 1.4426950408889634'f32))).bfloat16.float32
+        exp2(-l32 * Log2e))).bfloat16.float32
     # ── shared expert activation -> hs_scratch[t] ──
     for nt in 0'i32 ..< I div 32:
       gHalf.zero()

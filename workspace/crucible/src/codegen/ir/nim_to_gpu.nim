@@ -801,12 +801,20 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     # symbol `GpuAst` (of kind `gpuIdent`), which is set in the caller of this call.
     # For example in `nnkCall` nodes returning the value from the table automatically means the
     # `symbolKind` is local / function argument etc.
-    # Resolve `const _ = X()` inline: the constant value lives outside the cuda: block
-    # so emitting a GPU identifier would reference an undeclared name.
-    if sanitized == "_" and symKind(node) == nskConst:
-      # getImpl returns nnkConstDef. [2] is the value expression (e.g. X_marker())
-      # Using the whole def would recurse since the name child is also `_`.
-      return ctx.toGpuAst(reg, getImpl(node)[2])
+    # A constant reference resolves to its value inline. A GPU identifier would
+    # name an undeclared global, device kernel globals only carry the device
+    # proc's own const sections lifted from the body. The value expression is
+    # getImpl(node)[2]. Recursing on the whole def would loop, the name child
+    # is also the ident. The definition's own name ident reaches this branch
+    # too with symKind nskConst. The const section walker translates that one
+    # as a constexpr, so the inline fires only at reference sites.
+    # Reference test, an ident whose source position differs from the name
+    # position inside the definition.
+    if symKind(node) == nskConst:
+      let impl = getImpl(node)
+      let nameIdent = if impl[0].kind == nnkPragmaExpr: impl[0][0] else: impl[0]
+      if node.lineinfo != nameIdent.lineinfo:
+        return ctx.toGpuAst(reg, impl[2])
     if s notin ctx.sigTab:
       result = newGpuIdent()
       result.symbol.name = sanitized
